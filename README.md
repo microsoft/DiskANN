@@ -141,8 +141,6 @@ Parameters to get the index in Fig. 4/5 in [our paper](https://arxiv.org/abs/170
 		$nsg/tests/test_nsg_index gist.fvecs gist.100nngraph 150 70 gist.nsg  
 		
 For RAND4M and GAUSS5M, we build the kNN graph with Faiss for efficiency.
-Here, we use nn-descent to build the kNN Graph. If it cannot a good-quality graph (accuracy > 90%), you may turn to other solutions, such as Faiss or Efanna.  
-	    
 	
 		$nsg/tests/test_nsg_index rand4m.fvecs rand4m.200nngraph 400 200 rand4m.nsg        
 		$nsg/tests/test_nsg_index gauss5m.fvecs gauss5m.200nngraph 500 200 gauss5m.nsg   
