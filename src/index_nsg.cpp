@@ -504,7 +504,7 @@ void IndexNSG::findroot(boost::dynamic_bitset<> &flag, unsigned &root, const Par
   unsigned found = 0;
   for(unsigned i=0; i<pool.size(); i++){
     if(flag[pool[i].id]){
-      std::cout << pool[i].id << '\n';
+      //std::cout << pool[i].id << '\n';
       root = pool[i].id;
       found = 1;
       break;
@@ -515,7 +515,7 @@ void IndexNSG::findroot(boost::dynamic_bitset<> &flag, unsigned &root, const Par
       unsigned rid = rand() % nd_;
       if(flag[rid]){
         root = rid;
-        std::cout << root << '\n';
+        //std::cout << root << '\n';
         break;
       }
     }
@@ -529,10 +529,10 @@ void IndexNSG::tree_grow(const Parameters &parameter){
   unsigned unlinked_cnt = 0;
   while(unlinked_cnt < nd_){
     DFS(flags, root, unlinked_cnt);
-    std::cout << unlinked_cnt << '\n';
+    //std::cout << unlinked_cnt << '\n';
     if(unlinked_cnt >= nd_)break;
     findroot(flags, root, parameter);
-    std::cout << "new root"<<":"<<root << '\n';
+    //std::cout << "new root"<<":"<<root << '\n';
   }
 }
 

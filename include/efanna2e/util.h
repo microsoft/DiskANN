@@ -43,10 +43,10 @@ namespace efanna2e {
       #endif
       #endif
 
-      std::cout << "align with : "<<DATA_ALIGN_FACTOR << std::endl;
+      //std::cout << "align with : "<<DATA_ALIGN_FACTOR << std::endl;
       float* data_new=0;
       unsigned new_dim = (dim + DATA_ALIGN_FACTOR - 1) / DATA_ALIGN_FACTOR * DATA_ALIGN_FACTOR;
-      std::cout << "align to new dim: "<<new_dim << std::endl;
+      //std::cout << "align to new dim: "<<new_dim << std::endl;
       #ifdef __APPLE__
         data_new = new float[new_dim * point_num];
       #else

@@ -11,7 +11,7 @@ void load_data(char* filename, float*& data, unsigned& num,unsigned& dim){// loa
   std::ifstream in(filename, std::ios::binary);
   if(!in.is_open()){std::cout<<"open file error"<<std::endl;exit(-1);}
   in.read((char*)&dim,4);
-  std::cout<<"data dimension: "<<dim<<std::endl;
+  //std::cout<<"data dimension: "<<dim<<std::endl;
   in.seekg(0,std::ios::end);
   std::ios::pos_type ss = in.tellg();
   size_t fsize = (size_t)ss;
