@@ -277,6 +277,11 @@ void IndexNSG::Build(size_t n, const float *data, const Parameters &parameters) 
   avg /= nd_;
   std::cout << max << ":" << avg << ":" << min << ":" << cnt << "\n";
   tree_grow(parameters);
+  max = 0;
+  for (unsigned i = 0; i < nd_; i++) {
+      max = max < final_graph_[i].size() ? final_graph_[i].size() : max;
+  }
+  if(max > width)width = max;
   has_built = true;
 }
 
