@@ -73,8 +73,6 @@ How to use
 1. Compile    
 	Prerequisite : openmp, cmake, boost    
 	Compile:   
-	a) Go to the root directory of faiss, it's under the directory of extern_libraries aside of ours.    
-	b)    
 	
 		$ cd nsg/     
 		$ cmake .   
@@ -87,7 +85,7 @@ How to use
      
 	**a) Build a kNN graph**    
    
-    You can use [efanna\_graph](https://github.com/ZJULearning/efanna\_graph) to build the kNN graph, or you can build the kNN graph by yourself.
+    You can use [efanna\_graph](https://github.com/ZJULearning/efanna\_graph) or [kgraph](https://github.com/aaalgo/kgraph) to build the kNN graph, or you can build the kNN graph by yourself.
     	
     **b)Convert a kNN graph to a NSG**        
 	For example:  
@@ -134,13 +132,20 @@ The output format of the search results follows the same format of the **fvecs**
 
 Parameters to get the index in Fig. 4/5 in [our paper](https://arxiv.org/abs/1707.00143). (We use [efanna_graph](https://github.com/ZJULearning/efanna_graph) to build the kNN graph)      
 ------
+
+You need to usee the tool fvec2lshkit in the kgraph folder to convert the data in fvecs format to the data format kgraph program knows:
+
+        $kgraph/fvec2lshkit sift.fvecs sift.data
+
+Then you can use kgraph to build an approximate kNN graph. And then you can use nsg:
 		
 		$efanna_graph/tests/test_nndescent sift.fvecs sift.50nngraph 50 70 8 10 100     
 		$nsg/tests/test_nsg_index sift.fvecs sift.50nngraph 90 40 sift.nsg   
-		$efanna_graph/tests/test_nndescent gist.fvecs gist.100nngraph 100 120 10 15 100     
-		$nsg/tests/test_nsg_index gist.fvecs gist.100nngraph 150 70 gist.nsg  
+
+		$kgraph/index -I 15 -L 300 -S 20 -R 100 gist.data kgraph.result     
+        $nsg/tests/kgraph2ivec kgraph.result gist.300nngraph
+		$nsg/tests/test_nsg_index gist.fvecs gist.100nngraph 200 70 gist.nsg  
 		
-For RAND4M and GAUSS5M, we build the kNN graph with Faiss for efficiency.
 	
 		$nsg/tests/test_nsg_index rand4m.fvecs rand4m.200nngraph 400 200 rand4m.nsg        
 		$nsg/tests/test_nsg_index gauss5m.fvecs gauss5m.200nngraph 500 200 gauss5m.nsg   
