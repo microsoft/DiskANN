@@ -139,16 +139,16 @@ You need to usee the tool fvec2lshkit in the kgraph folder to convert the data i
 
 Then you can use kgraph to build an approximate kNN graph. And then you can use nsg:
 		
-		$efanna_graph/tests/test_nndescent sift.fvecs sift.50nngraph 50 70 8 10 100     
-		$nsg/tests/test_nsg_index sift.fvecs sift.50nngraph 90 40 sift.nsg   
+        $efanna_graph/tests/test_nndescent sift.fvecs sift.50nngraph 50 70 8 10 100     
+        $nsg/tests/test_nsg_index sift.fvecs sift.50nngraph 90 40 sift.nsg   
 
-		$kgraph/index -I 15 -L 300 -S 20 -R 100 gist.data kgraph.result     
+        $kgraph/index -I 15 -L 300 -S 20 -R 100 gist.data kgraph.result     
         $nsg/tests/kgraph2ivec kgraph.result gist.300nngraph
-		$nsg/tests/test_nsg_index gist.fvecs gist.100nngraph 200 70 gist.nsg  
+        $nsg/tests/test_nsg_index gist.fvecs gist.100nngraph 200 70 gist.nsg  
 		
 	
-		$nsg/tests/test_nsg_index rand4m.fvecs rand4m.200nngraph 400 200 rand4m.nsg        
-		$nsg/tests/test_nsg_index gauss5m.fvecs gauss5m.200nngraph 500 200 gauss5m.nsg   
+        $nsg/tests/test_nsg_index rand4m.fvecs rand4m.200nngraph 400 200 rand4m.nsg        
+        $nsg/tests/test_nsg_index gauss5m.fvecs gauss5m.200nngraph 500 200 gauss5m.nsg   
 		
 
 Performance on Taobao E-commerce data
