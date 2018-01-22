@@ -130,7 +130,7 @@ Output of NSG
 ------
 The output format of the search results follows the same format of the **fvecs** in [SIFT1M](http://corpus-texmex.irisa.fr/)     
 
-Parameters to get the index in Fig. 4/5 in [our paper](https://arxiv.org/abs/1707.00143). (We use [efanna_graph](https://github.com/ZJULearning/efanna_graph) to build the kNN graph)      
+Parameters to get the index in Fig. 4/5 in [our paper](https://arxiv.org/abs/1707.00143). (We use [kgraph](https://github.com/aaalgo/kgraph) to build the kNN graph)      
 ------
 
 You need to usee the tool fvec2lshkit in the kgraph folder to convert the data in fvecs format to the data format kgraph program knows:
