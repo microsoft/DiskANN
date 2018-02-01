@@ -147,9 +147,13 @@ Then you can use kgraph to build an approximate kNN graph. And then you can use 
         $nsg/tests/kgraph2ivec kgraph.result gist.300nngraph
         $nsg/tests/test_nsg_index gist.fvecs gist.300nngraph 200 70 gist.nsg  
 		
+        $kgraph/index -I 15 -L 300 -S 70 -R 100 rand4m.data kgraph.result     
+        $nsg/tests/kgraph2ivec kgraph.result rand4m.300nngraph
+        $nsg/tests/test_nsg_index rand4m.fvecs rand4m.300nngraph 2000 220 rand4m.nsg        
 	
-        $nsg/tests/test_nsg_index rand4m.fvecs rand4m.200nngraph 400 200 rand4m.nsg        
-        $nsg/tests/test_nsg_index gauss5m.fvecs gauss5m.200nngraph 500 200 gauss5m.nsg   
+        $kgraph/index -I 15 -L 300 -S 70 -R 100 gauss5m.data kgraph.result     
+        $nsg/tests/kgraph2ivec kgraph.result gauss5m.300nngraph
+        $nsg/tests/test_nsg_index gauss5m.fvecs gauss5m.300nngraph 2000 220 gauss5m.nsg   
 		
 
 Performance on Taobao E-commerce data
