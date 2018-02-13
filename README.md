@@ -1,6 +1,6 @@
-NSG : Navigating Spread-out Graph For Approximate Nearest Neighbor Search
+NSG : Navigating Spreading-out Graph For Approximate Nearest Neighbor Search
 ======
-NSG is a graph-based approximate nearest neighbor search (ANNS) algorithm. It provides a flexible and efficient solution for the metric-free large-scale ANNS on dense real vectors. It implements the algorithm of our paper, [Fast Approximate Nearest Neighbor Search With Navigating Spread-out Graphs.](https://arxiv.org/abs/1707.00143)   
+NSG is a graph-based approximate nearest neighbor search (ANNS) algorithm. It provides a flexible and efficient solution for the metric-free large-scale ANNS on dense real vectors. It implements the algorithm of our paper, [Fast Approximate Nearest Neighbor Search With The Navigating Spreading-out Graph.](https://arxiv.org/abs/1707.00143)   
 NSG has been intergrated into the search engine of Taobao (Alibaba Group) for billion scale ANNS in E-commerce scenario.   
 
 Benchmark data set
