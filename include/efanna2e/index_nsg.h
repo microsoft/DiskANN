@@ -57,7 +57,7 @@ class IndexNSG : public Index {
     void add_cnn(unsigned des, Neighbor p, unsigned range, LockGraph& cut_graph_);
     void sync_prune(unsigned q, std::vector<Neighbor>& pool, const Parameters &parameter, LockGraph& cut_graph_);
     void Link(const Parameters &parameters, LockGraph& cut_graph_);
-    void Load_nn_graph(const char *filename);
+    virtual void Load_nn_graph(const char *filename);
     void tree_grow(const Parameters &parameter);
     void DFS(boost::dynamic_bitset<> &flag, unsigned root, unsigned &cnt);
     void findroot(boost::dynamic_bitset<> &flag, unsigned &root, const Parameters &parameter);
