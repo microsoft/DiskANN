@@ -15,7 +15,7 @@ void load_data(char* filename, float*& data, unsigned& num,unsigned& dim){// loa
   std::ios::pos_type ss = in.tellg();
   size_t fsize = (size_t)ss;
   num = (unsigned)(fsize / (dim+1) / 4);
-  data = new float[num * dim * sizeof(float)];
+  data = new float[(size_t)num * (size_t)dim];
 
   in.seekg(0,std::ios::beg);
   for(size_t i = 0; i < num; i++){
@@ -34,7 +34,7 @@ int main(int argc, char** argv){
   unsigned L = (unsigned)atoi(argv[3]);
   unsigned R = (unsigned)atoi(argv[4]);
 
-  data_load = efanna2e::data_align(data_load, points_num, dim);//one must align the data before build
+  //data_load = efanna2e::data_align(data_load, points_num, dim);//one must align the data before build
   efanna2e::IndexNSG index(dim, points_num, efanna2e::L2, nullptr);
 
   auto s = std::chrono::high_resolution_clock::now();

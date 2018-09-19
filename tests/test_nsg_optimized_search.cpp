@@ -5,6 +5,7 @@
 #include <efanna2e/index_nsg.h>
 #include <efanna2e/util.h>
 #include <chrono>
+#include <string>
 
 
 void load_data(char* filename, float*& data, unsigned& num,unsigned& dim){// load data with sift10K pattern
@@ -16,7 +17,7 @@ void load_data(char* filename, float*& data, unsigned& num,unsigned& dim){// loa
   std::ios::pos_type ss = in.tellg();
   size_t fsize = (size_t)ss;
   num = (unsigned)(fsize / (dim+1) / 4);
-  data = new float[num * dim * sizeof(float)];
+  data = new float[(size_t)num * (size_t)dim];
 
   in.seekg(0,std::ios::beg);
   for(size_t i = 0; i < num; i++){
@@ -26,7 +27,7 @@ void load_data(char* filename, float*& data, unsigned& num,unsigned& dim){// loa
   in.close();
 }
 
-void save_result(char* filename, std::vector<std::vector<unsigned> > &results){
+void save_result(const char* filename, std::vector<std::vector<unsigned> > &results){
   std::ofstream out(filename, std::ios::binary | std::ios::out);
 
   for (unsigned i = 0; i < results.size(); i++) {
@@ -51,8 +52,8 @@ int main(int argc, char** argv){
 
   if(L < K){std::cout<< "search_L cannot be smaller than search_K!"<<std::endl; exit(-1);}
 
-  data_load = efanna2e::data_align(data_load, points_num, dim);//one must align the data before build
-  query_load = efanna2e::data_align(query_load, query_num, query_dim);
+  //data_load = efanna2e::data_align(data_load, points_num, dim);//one must align the data before build
+  //query_load = efanna2e::data_align(query_load, query_num, query_dim);
   efanna2e::IndexNSG index(dim, points_num, efanna2e::FAST_L2, nullptr);
   index.Load(argv[3]);
   index.OptimizeGraph(data_load);
@@ -72,8 +73,7 @@ int main(int argc, char** argv){
   std::chrono::duration<double> diff = e-s;
   std::cout << "search time: " << diff.count() << "\n";
 
-
   save_result(argv[6], res);
-
+  
   return 0;
 }

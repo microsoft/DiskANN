@@ -42,7 +42,7 @@ class IndexNSG : public Index {
 
   protected:
     typedef std::vector<std::vector<unsigned > > CompactGraph;
-    typedef std::vector<LockNeighbor > LockGraph;
+    typedef std::vector<SimpleNeighbors > LockGraph;
     typedef std::vector<nhood> KNNGraph;
 
     CompactGraph final_graph_;
@@ -54,10 +54,17 @@ class IndexNSG : public Index {
         const Parameters &parameter,
         std::vector<Neighbor> &retset,
         std::vector<Neighbor> &fullset);
-    void add_cnn(unsigned des, Neighbor p, unsigned range, LockGraph& cut_graph_);
-    void sync_prune(unsigned q, std::vector<Neighbor>& pool, const Parameters &parameter, LockGraph& cut_graph_);
-    void Link(const Parameters &parameters, LockGraph& cut_graph_);
-    virtual void Load_nn_graph(const char *filename);
+    void get_neighbors(
+        const float *query,
+        const Parameters &parameter,
+        boost::dynamic_bitset<>& flags,
+        std::vector<Neighbor> &retset,
+        std::vector<Neighbor> &fullset);
+    //void add_cnn(unsigned des, Neighbor p, unsigned range, LockGraph& cut_graph_);
+    void InterInsert(unsigned n, unsigned range, std::vector<std::mutex>& locks, SimpleNeighbor* cut_graph_);
+    void sync_prune(unsigned q, std::vector<Neighbor>& pool, const Parameters &parameter, boost::dynamic_bitset<>& flags, SimpleNeighbor* cut_graph_);
+    void Link(const Parameters &parameters, SimpleNeighbor* cut_graph_);
+    void Load_nn_graph(const char *filename);
     void tree_grow(const Parameters &parameter);
     void DFS(boost::dynamic_bitset<> &flag, unsigned root, unsigned &cnt);
     void findroot(boost::dynamic_bitset<> &flag, unsigned &root, const Parameters &parameter);

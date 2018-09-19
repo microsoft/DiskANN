@@ -36,7 +36,7 @@ struct nhood{
   std::vector<unsigned> nn_new;
   std::vector<unsigned> rnn_old;
   std::vector<unsigned> rnn_new;
-  
+
   nhood(){}
   nhood(unsigned l, unsigned s, std::mt19937 &rng, unsigned N){
     M = s;
@@ -84,9 +84,19 @@ struct nhood{
   }
 };
 
-struct LockNeighbor{
-  std::mutex lock;
-  std::vector<Neighbor> pool;
+struct SimpleNeighbor{
+  unsigned id;
+  float distance;
+
+  SimpleNeighbor() = default;
+  SimpleNeighbor(unsigned id, float distance) : id{id}, distance{distance}{}
+
+  inline bool operator<(const SimpleNeighbor &other) const {
+      return distance < other.distance;
+  }
+};
+struct SimpleNeighbors{
+  std::vector<SimpleNeighbor> pool;
 };
 
 static inline int InsertIntoPool (Neighbor *addr, unsigned K, Neighbor nn) {

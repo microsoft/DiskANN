@@ -1,6 +1,6 @@
-NSG : Navigating Spreading-out Graph For Approximate Nearest Neighbor Search
+NSG : Navigating Spread-out Graph For Approximate Nearest Neighbor Search
 ======
-NSG is a graph-based approximate nearest neighbor search (ANNS) algorithm. It provides a flexible and efficient solution for the metric-free large-scale ANNS on dense real vectors. It implements the algorithm of our paper, [Fast Approximate Nearest Neighbor Search With The Navigating Spreading-out Graph.](https://arxiv.org/abs/1707.00143)   
+NSG is a graph-based approximate nearest neighbor search (ANNS) algorithm. It provides a flexible and efficient solution for the metric-free large-scale ANNS on dense real vectors. It implements the algorithm of our paper, [Fast Approximate Nearest Neighbor Search With Navigating Spread-out Graphs.](https://arxiv.org/abs/1707.00143)   
 NSG has been intergrated into the search engine of Taobao (Alibaba Group) for billion scale ANNS in E-commerce scenario.   
 
 Benchmark data set
@@ -18,15 +18,15 @@ ANNS performance
 
 Graph-based ANNS algorithms:
 * [kGraph](http://www.kgraph.org)  
-* [FANNG](https://pdfs.semanticscholar.org/9ea6/5687a21c869fce7ecf17ca25ffcadbf77d69.pdf) : FANNG: Fast Approximate Nearest Neighbour Graphs     
-* [HNSW:code](https://github.com/searchivarius/nmslib),  [paper](https://arxiv.org/abs/1603.09320) : Efficient and robust approximate nearest neighbor search using Hierarchical Navigable Small World graphs      
-* [DPG:code](https://github.com/DBWangGroupUNSW/nns_benchmark),  [paper](https://arxiv.org/abs/1610.02455) : Approximate Nearest Neighbor Search on High Dimensional Data --- Experiments, Analyses, and Improvement (v1.0)     
-* [Efanna:code](https://github.com/fc731097343/efanna),  [paper](https://arxiv.org/abs/1609.07228) : EFANNA : An Extremely Fast Approximate Nearest Neighbor Search Algorithm Based on kNN Graph       
-* NSG-naive: a designed based-line, please refer to [our paper](https://arxiv.org/abs/1707.00143).     
+* [FANNG](https://pdfs.semanticscholar.org/9ea6/5687a21c869fce7ecf17ca25ffcadbf77d69.pdf) : *FANNG: Fast Approximate Nearest Neighbour Graphs*
+* [HNSW](https://arxiv.org/abs/1603.09320) ([code](https://github.com/searchivarius/nmslib)) : *Efficient and robust approximate nearest neighbor search using Hierarchical Navigable Small World graphs*
+* [DPG](https://arxiv.org/abs/1610.02455) ([code](https://github.com/DBWangGroupUNSW/nns_benchmark)) : *Approximate Nearest Neighbor Search on High Dimensional Data --- Experiments, Analyses, and Improvement (v1.0)*
+* [EFANNA](https://arxiv.org/abs/1609.07228) ([code](https://github.com/fc731097343/efanna)) : *EFANNA: An Extremely Fast Approximate Nearest Neighbor Search Algorithm Based on kNN Graph*
+* NSG-naive: a designed based-line, please refer to [our paper](https://arxiv.org/abs/1707.00143). 
 * NSG: This project, please refer to [our paper](https://arxiv.org/abs/1707.00143). 
 
 Other popular ANNS algorithms
-* [flann](http://www.cs.ubc.ca/research/flann/)       
+* [FLANN](http://www.cs.ubc.ca/research/flann/)       
 * [FALCONN](https://github.com/FALCONN-LIB/FALCONN)      
 * [Annoy](https://github.com/spotify/annoy)     
 * [Faiss](https://github.com/facebookresearch/faiss)    
@@ -68,29 +68,38 @@ Among all the ***graph-based algorithms***, NSG has ***the smallest index size**
 
 ![GAUSS5M-100NN-Graphs-Only](figures/gauss_graph.png)   
 
+**DEEP1B-100NN**
+
+![DEEP1B-100NN](figures/deep1b.png)
+
 How to use
 ------
-1. Compile    
+#### 1. Compile    
 	Prerequisite : openmp, cmake, boost    
 	Compile:   
+	a) Go to the root directory of faiss, it's under the directory of extern_libraries aside of ours.    
+	b)    
 	
 		$ cd nsg/     
-		$ cmake .   
-		$ make    
+		$ mkdir build/
+		$ cd build/
+		$ cmake ..   
+		$ make -j4
 		
 	
-2. Usage      
+#### 2. Usage      
 	The main interfaces and classes have its respective test codes under directory tests/      
 	Temporarilly several essential functions have been implemented. To use my algorithm, you should first build an index. It takes several steps as below:    
      
-	**a) Build a kNN graph**    
+**a) Build a kNN graph**    
    
-    You can use [efanna\_graph](https://github.com/ZJULearning/efanna\_graph) or [kgraph](https://github.com/aaalgo/kgraph) to build the kNN graph, or you can build the kNN graph by yourself.
+    You can use [efanna\_graph](https://github.com/ZJULearning/efanna\_graph) to build the kNN graph, or you can build the kNN graph by yourself.
     	
-    **b)Convert a kNN graph to a NSG**        
+**b) Convert a kNN graph to a NSG**        
+
 	For example:  
 	```
-	$ cd tests/ 	 
+	$ cd build/tests/ 	 
 	$ ./test_nsg_index data_path nn_graph_path L R save_graph_file     
 	```
 	**data\_path** is the path of the origin data.    
@@ -98,10 +107,11 @@ How to use
 	**L** controls the quality of the NSG, the larger the better, L > R.       
 	**R** controls the index size of the graph, the best R is related to the intrinsic dimension of the dataset.   
 	
-    **c) Use NSG for search**     
+**c) Use NSG for search**     
+
 	For example:     
 	```
-	$ cd tests/
+	$ cd build/tests/
 	$ ./test_nsg_optimized_search data_path query_path nsg_path search_L search_K result_path    
 	```
 	**data\_path** is the path of the origin data.     
@@ -130,41 +140,53 @@ Output of NSG
 ------
 The output format of the search results follows the same format of the **fvecs** in [SIFT1M](http://corpus-texmex.irisa.fr/)     
 
-Parameters to get the index in Fig. 4/5 in [our paper](https://arxiv.org/abs/1707.00143). (We use [kgraph](https://github.com/aaalgo/kgraph) to build the kNN graph)      
+Parameters to get the index in Fig. 4/5 in [our paper](https://arxiv.org/abs/1707.00143). (We use [efanna_graph](https://github.com/ZJULearning/efanna_graph) to build the kNN graph)      
 ------
-
-You need to usee the tool fvec2lshkit in the kgraph folder to convert the data in fvecs format to the data format kgraph program knows:
-
-        $kgraph/fvec2lshkit sift.fvecs sift.data
-
-Then you can use kgraph to build an approximate kNN graph. And then you can use nsg:
 		
-        $kgraph/index -I 14 -L 150 -S 10 -R 100 sift.data kgraph.result     
-        $nsg/tests/kgraph2ivec kgraph.result sift.150nngraph
-        $nsg/tests/test_nsg_index sift.fvecs sift.150nngraph 70 50 sift.nsg   
-
-        $kgraph/index -I 15 -L 300 -S 20 -R 100 gist.data kgraph.result     
-        $nsg/tests/kgraph2ivec kgraph.result gist.300nngraph
-        $nsg/tests/test_nsg_index gist.fvecs gist.300nngraph 200 70 gist.nsg  
+		$ efanna_graph/tests/test_nndescent sift.fvecs sift.50nngraph 50 70 8 10 100     
+		$ nsg/build/tests/test_nsg_index sift.fvecs sift.50nngraph 90 40 sift.nsg   
+		$ efanna_graph/tests/test_nndescent gist.fvecs gist.100nngraph 100 120 10 15 100     
+		$ nsg/build/tests/test_nsg_index gist.fvecs gist.100nngraph 150 70 gist.nsg  
 		
-        $kgraph/index -I 15 -L 300 -S 70 -R 100 rand4m.data kgraph.result     
-        $nsg/tests/kgraph2ivec kgraph.result rand4m.300nngraph
-        $nsg/tests/test_nsg_index rand4m.fvecs rand4m.300nngraph 2000 220 rand4m.nsg        
+For RAND4M and GAUSS5M, we build the kNN graph with Faiss for efficiency.
+Here, we use nn-descent to build the kNN Graph. If it cannot a good-quality graph (accuracy > 90%), you may turn to other solutions, such as Faiss or Efanna.  
+	    
 	
-        $kgraph/index -I 15 -L 300 -S 70 -R 100 gauss5m.data kgraph.result     
-        $nsg/tests/kgraph2ivec kgraph.result gauss5m.300nngraph
-        $nsg/tests/test_nsg_index gauss5m.fvecs gauss5m.300nngraph 2000 220 gauss5m.nsg   
+		$ nsg/build/tests/test_nsg_index rand4m.fvecs rand4m.200nngraph 400 200 rand4m.nsg        
+		$ nsg/build/tests/test_nsg_index gauss5m.fvecs gauss5m.200nngraph 500 200 gauss5m.nsg   
 		
 
 Performance on Taobao E-commerce data
 ------
-**Environments:**   
-Xeon E5-2630.      
-**Single thread test:**    
-Dataset:  10,000,000 128-dimension vectors.     
-Latency:  1ms (average) on 10,000 query.   
-**Distributed search test:**     
-Dataset:  45,000,000 128-dimension vectors.  
-Distribute:  randomly divide the dataset into 12 subsets and build 12 NSGs. Search in parallel and merge results.     
-Latency:  1ms (average) on 10,000 query.        
 
+**Environments:**   
++ Xeon E5-2630.
+
+**Single thread test:** 
+
++ **Dataset**:  10,000,000 128-dimension vectors.     
++ **Latency**:  1ms (average) on 10,000 query. 
+
+**Distributed search test:**
+
++ **Dataset**:  45,000,000 128-dimension vectors.  
+Distribute:  randomly divide the dataset into 12 subsets and build 12 NSGs. Search in parallel and merge results.
++ **Latency**:  1ms (average) on 10,000 query.        
+
+Reference
+------
+Reference to cite when you use NSG in a research paper:
+
+```
+@article{DBLP:journals/corr/FuWC17,
+  author    = {Cong Fu and Chao Xiang and Changxu Wang and Deng Cai},
+  title     = {Fast Approximate Nearest Neighbor Search With Navigating Spreading-out Graphs},
+  journal   = {CoRR},
+  volume    = {abs/1707.00143},
+  url       = {http://arxiv.org/abs/1707.00143},
+}
+```
+
+License
+-----
+NSG is MIT-licensed.
