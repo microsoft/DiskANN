@@ -260,9 +260,9 @@ void IndexNSG::sync_prune(unsigned q,
                           boost::dynamic_bitset<>& flags,
                           SimpleNeighbor* cut_graph_) {
   unsigned range = parameter.Get<unsigned>("R");
+  unsigned maxc = parameter.Get<unsigned>("C");
   width = range;
   unsigned start = 0;
-
 
   for (unsigned nn = 0; nn < final_graph_[q].size(); nn++) {
     unsigned id = final_graph_[q][nn];
@@ -276,7 +276,7 @@ void IndexNSG::sync_prune(unsigned q,
   if(pool[start].id == q)start++;
   result.push_back(pool[start]);
 
-  while (result.size() < range && (++start) < pool.size() /* TODO: && start < 500 */) {
+  while (result.size() < range && (++start) < pool.size() && start < maxc) {
     auto &p = pool[start];
     bool occlude = false;
     for (unsigned t = 0; t < result.size(); t++) {
@@ -399,7 +399,7 @@ void IndexNSG::Link(const Parameters &parameters, SimpleNeighbor* cut_graph_) {
     cnt++;
     if(cnt % step_size == 0){
       LockGuard g(progress_lock);
-      std::cout<<progress++ <<"/"<< percent << " completed" << ", "<<pool.size() <<std::endl;
+      std::cout<<progress++ <<"/"<< percent << " completed" << std::endl;
     }
   }
 
@@ -444,7 +444,7 @@ void IndexNSG::Build(size_t n, const float *data, const Parameters &parameters) 
     }
   }
   avg /= 1.0 * nd_;
-  std::cout << max << ":" << avg << ":" << min << ":" << cnt << "\n";
+  //std::cout << max << ":" << avg << ":" << min << ":" << cnt << "\n";
   //tree_grow(parameters);
   //max = 0;
   //for (unsigned i = 0; i < nd_; i++) {
