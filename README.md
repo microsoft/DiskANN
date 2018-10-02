@@ -75,7 +75,7 @@ Among all the ***graph-based algorithms***, NSG has ***the smallest index size**
 How to use
 ------
 #### 1. Compile    
-	Prerequisite : openmp, cmake, boost    
+	Prerequisite : openmp, cmake, boost, tcmalloc  
 	Compile:   
 	a) Go to the root directory of faiss, it's under the directory of extern_libraries aside of ours.    
 	b)    
