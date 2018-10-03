@@ -199,6 +199,19 @@ $ nsg/build/tests/test_nsg_index sift.fvecs sift_200nn.graph 40 50 500 sift.nsg	
 $ nsg/build/tests/test_nsg_index gist.fvecs gist_400nn.graph 60 70 500 gist.nsg		# GIST1M
 ```
 
+### Pre-built kNN Graph and NSG Index
+
+Here we also provide our pre-built kNN graph and NSG index files used in our papar's experiments.
+
+Those files are generated using the parameters and commands above.
+
+- kNN Graph:
+	+ SIFT1M - [sift_200nn.graph](http://downloads.zjulearning.org:8081/sift_200nn.graph)
+	+ GIST1M - [gist_400nn.graph](http://downloads.zjulearning.org:8081/gist_400nn.graph)
+- NSG Index:
+	+ SIFT1M - [sift.nsg](http://downloads.zjulearning.org:8081/sift.nsg)
+	+ GIST1M - [gist.nsg](http://downloads.zjulearning.org:8081/gist.nsg)
+
 ## Performance on Taobao's E-commerce Data
 
 **Environments:**
