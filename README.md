@@ -16,26 +16,29 @@ NSG has been intergrated into the search engine of Taobao (Alibaba Group) for bi
 
 ### Compared Algorithms
 
-- Graph-based ANNS algorithms:
-	+ [kGraph](http://www.kgraph.org)
-	+ [FANNG](https://pdfs.semanticscholar.org/9ea6/5687a21c869fce7ecf17ca25ffcadbf77d69.pdf) : *FANNG: Fast Approximate Nearest Neighbour Graphs*
-	+ [HNSW](https://arxiv.org/abs/1603.09320) ([code](https://github.com/searchivarius/nmslib)) : *Efficient and robust approximate nearest neighbor search using Hierarchical Navigable Small World graphs*
-	+ [DPG](https://arxiv.org/abs/1610.02455) ([code](https://github.com/DBWangGroupUNSW/nns_benchmark)) : *Approximate Nearest Neighbor Search on High Dimensional Data --- Experiments, Analyses, and Improvement (v1.0)*
-	+ [EFANNA](https://arxiv.org/abs/1609.07228) ([code](https://github.com/fc731097343/efanna)) : *EFANNA: An Extremely Fast Approximate Nearest Neighbor Search Algorithm Based on kNN Graph*
-	+ NSG-naive: a designed based-line, please refer to [our paper](https://arxiv.org/abs/1707.00143).
-	+ NSG: This project, please refer to [our paper](https://arxiv.org/abs/1707.00143).
-- Other popular ANNS algorithms:
-	+ [FLANN](http://www.cs.ubc.ca/research/flann/)
-	+ [FALCONN](https://github.com/FALCONN-LIB/FALCONN)
-	+ [Annoy](https://github.com/spotify/annoy)
-	+ [Faiss](https://github.com/facebookresearch/faiss)
+#### Graph-based ANNS algorithms:
+
++ [kGraph](http://www.kgraph.org)
++ [FANNG](https://pdfs.semanticscholar.org/9ea6/5687a21c869fce7ecf17ca25ffcadbf77d69.pdf) : *FANNG: Fast Approximate Nearest Neighbour Graphs*
++ [HNSW](https://arxiv.org/abs/1603.09320) ([code](https://github.com/searchivarius/nmslib)) : *Efficient and robust approximate nearest neighbor search using Hierarchical Navigable Small World graphs*
++ [DPG](https://arxiv.org/abs/1610.02455) ([code](https://github.com/DBWangGroupUNSW/nns_benchmark)) : *Approximate Nearest Neighbor Search on High Dimensional Data --- Experiments, Analyses, and Improvement (v1.0)*
++ [EFANNA](https://arxiv.org/abs/1609.07228) ([code](https://github.com/fc731097343/efanna)) : *EFANNA: An Extremely Fast Approximate Nearest Neighbor Search Algorithm Based on kNN Graph*
++ NSG-naive: a designed based-line, please refer to [our paper](https://arxiv.org/abs/1707.00143).
++ NSG: This project, please refer to [our paper](https://arxiv.org/abs/1707.00143).
+
+#### Other popular ANNS algorithms:
+
++ [FLANN](http://www.cs.ubc.ca/research/flann/)
++ [FALCONN](https://github.com/FALCONN-LIB/FALCONN)
++ [Annoy](https://github.com/spotify/annoy)
++ [Faiss](https://github.com/facebookresearch/faiss)
 
 ### Results
 
 NSG achieved the **best** search performance among all the compared algorithms on all the four datasets.
 Among all the ***graph-based algorithms***, NSG has ***the smallest index size*** and ***the best search performance***.
 
-***NOTE:** The performance was tested without parallelism.*
+***NOTE:** The performance was tested without parallelism (search one query at a time and no multi-threads)*
 
 **SIFT1M-100NN-All-Algorithms**
 
@@ -110,7 +113,7 @@ To use NSG for ANNS, an NSG index must be built first. Here are the instructions
 
 #### Step 1. Build kNN Graph
 
-Firstly, we need to prepare an approximate kNN graph.
+Firstly, we need to prepare an kNN graph.
 
 We suggest you use our [efanna\_graph](https://github.com/ZJULearning/efanna\_graph) to build this kNN graph. But you can also use any alternatives you like, such as KGraph or faiss.
 
@@ -126,11 +129,10 @@ $ ./test_nsg_index DATA_PATH KNNG_PATH L R C NSG_PATH
 
 + `DATA_PATH` is the path of the base data in `fvecs` format.
 + `KNNG_PATH` is the path of the pre-built kNN graph in *Step 1.*.
-+ `NSG_PATH` is the path of the generated NSG index.
-
 + `L` controls the quality of the NSG, the larger the better.
 + `R` controls the index size of the graph, the best R is related to the intrinsic dimension of the dataset.
 + `C` controls the maximum candidate pool size during NSG contruction.
++ `NSG_PATH` is the path of the generated NSG index.
 
 ### Searching via NSG Index
 
@@ -145,14 +147,11 @@ $ ./test_nsg_optimized_search DATA_PATH QUERY_PATH NSG_PATH SEARCH_L SEARCH_K RE
 + `DATA_PATH` is the path of the base data in `fvecs` format.
 + `QUERY_PATH` is the path of the query data in `fvecs` format.
 + `NSG_PATH` is the path of the pre-built NSG index in previous section.
-+ `RESULT_PATH` is the query results in `ivecs` format.
-
 + `SEARCH_L` controls the quality of the search results, the larger the better but slower. The `SEARCH_L` cannot be samller than the `SEARCH_K`
 + `SEARCH_K` controls the number of result neighbors we want to query.
++ `RESULT_PATH` is the query results in `ivecs` format.
 
 There is another program in `tests/` folder named `test_nsg_search`. The parameters of `test_nsg_search` are exactly same as `test_nsg_optimized_search`. `test_nsg_search` is slower than `test_nsg_optimized_search` but requires less memory. In the situations memory consumption is extremely important, one can use `test_nsg_search` instead of `test_nsg_optimized_search`.
-
-***NOTE:** We only provide interface for searching only one query at a time. And only single thread was used during performance test.*
 
 ***NOTE:** Only data-type int32 and float32 are supported for now.*
 
@@ -169,7 +168,7 @@ For example, if your features are of dimension 70, then it should be extend to d
 We use the following parameters to get the index in Fig. 6 of [our paper](https://arxiv.org/abs/1707.00143).
 (We use [efanna_graph](https://github.com/ZJULearning/efanna_graph) to build the kNN graph)
 
-#### Build kNN Graph
+#### Step 1. Build kNN Graph
 
 + Tool: [efanna_graph](https://github.com/ZJULearning/efanna_graph)
 + Parameters:
@@ -185,7 +184,7 @@ $ efanna_graph/tests/test_nndescent sift.fvecs sift_200nn.graph 200 200 10 10 10
 $ efanna_graph/tests/test_nndescent gist.fvecs gist_400nn.graph 400 400 12 15 100	# GIST1M
 ```
 
-#### Convert kNN Graph to NSG
+#### Step 2. Convert kNN Graph to NSG
 
 + Parameters:
 
