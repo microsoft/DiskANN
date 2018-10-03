@@ -113,7 +113,7 @@ $ ./test_nsg_index data_path nn_graph_path L R C save_graph_file
 
 + **data\_path** is the path of the origin data.
 + **nn\_graph\_path** is the path of the pre-built kNN graph.
-+ **L** controls the quality of the NSG, the larger the better, L > R.
++ **L** controls the quality of the NSG, the larger the better.
 + **R** controls the index size of the graph, the best R is related to the intrinsic dimension of the dataset.
 + **C** controls the maximum candidate pool size during NSG contruction.
 
@@ -153,23 +153,17 @@ Output of NSG
 ------
 The output format of the search results follows the same format of the **fvecs** in [SIFT1M](http://corpus-texmex.irisa.fr/)
 
-Parameters to get the index in Fig. 4/5 of [our paper](https://arxiv.org/abs/1707.00143). (We use [efanna_graph](https://github.com/ZJULearning/efanna_graph) to build the kNN graph)
+Parameters to get the index in Fig. 6 of [our paper](https://arxiv.org/abs/1707.00143). (We use [efanna_graph](https://github.com/ZJULearning/efanna_graph) to build the kNN graph)
 ------
 
 ```shell
-$ efanna_graph/tests/test_nndescent sift.fvecs sift.50nngraph 50 70 8 10 100
-$ nsg/build/tests/test_nsg_index sift.fvecs sift.50nngraph 80 40 500 sift.nsg
-$ efanna_graph/tests/test_nndescent gist.fvecs gist.100nngraph 100 120 10 15 100
-$ nsg/build/tests/test_nsg_index gist.fvecs gist.100nngraph 150 70 gist.nsg
+$ efanna_graph/tests/test_nndescent sift.fvecs sift.200nngraph 200 200 10 10 100
+$ nsg/build/tests/test_nsg_index sift.fvecs sift.200nngraph 40 50 500 sift.nsg
+
+$ efanna_graph/tests/test_nndescent gist.fvecs gist.400nngraph 400 400 12 15 100
+$ nsg/build/tests/test_nsg_index gist.fvecs gist.400nngraph 60 70 500 gist.nsg
 ```
 
-For RAND4M and GAUSS5M, we build the kNN graph with Faiss for efficiency.
-Here, we use nn-descent to build the kNN Graph. If it cannot a good-quality graph (accuracy > 90%), you may turn to other alternatives, such as Faiss or Efanna.
-
-```shell
-$ nsg/build/tests/test_nsg_index rand4m.fvecs rand4m.200nngraph 400 200 rand4m.nsg
-$ nsg/build/tests/test_nsg_index gauss5m.fvecs gauss5m.200nngraph 500 200 gauss5m.nsg
-```
 
 Performance on Taobao E-commerce data
 ------
