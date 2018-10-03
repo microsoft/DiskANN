@@ -5,9 +5,8 @@
 #include <efanna2e/index_nsg.h>
 #include <efanna2e/util.h>
 
-/// load data with sift10K pattern
 void load_data(char* filename, float*& data, unsigned& num,
-               unsigned& dim) {
+               unsigned& dim) {  // load data with sift10K pattern
   std::ifstream in(filename, std::ios::binary);
   if (!in.is_open()) {
     std::cout << "open file error" << std::endl;
