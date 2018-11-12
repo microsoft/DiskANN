@@ -5,6 +5,7 @@
 #include <efanna2e/index_nsg.h>
 #include <efanna2e/util.h>
 
+
 void load_data(char* filename, float*& data, unsigned& num,
                unsigned& dim) {  // load data with sift10K pattern
   std::ifstream in(filename, std::ios::binary);
@@ -36,6 +37,8 @@ int main(int argc, char** argv) {
   unsigned points_num, dim;
   load_data(argv[1], data_load, points_num, dim);
 
+  std::cout <<"data loaded \n ";
+  
   std::string nn_graph_path(argv[2]);
   unsigned L = (unsigned)atoi(argv[3]);
   unsigned R = (unsigned)atoi(argv[4]);
@@ -51,6 +54,7 @@ int main(int argc, char** argv) {
   paras.Set<unsigned>("R", R);
   paras.Set<unsigned>("C", C);
   paras.Set<std::string>("nn_graph_path", nn_graph_path);
+  std::cout <<"params set \n";
 
   index.Build(points_num, data_load, paras);
   auto e = std::chrono::high_resolution_clock::now();

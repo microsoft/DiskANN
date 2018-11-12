@@ -74,17 +74,22 @@ int main(int argc, char** argv) {
   efanna2e::Parameters paras;
   paras.Set<unsigned>("L_search", L);
   paras.Set<unsigned>("P_search", L);
+  unsigned long long int dist_comp = 0;
+  unsigned long long int dc =0;
 
   std::vector<std::vector<unsigned> > res(query_num);
   for (unsigned i = 0; i < query_num; i++) res[i].resize(K);
 
   auto s = std::chrono::high_resolution_clock::now();
   for (unsigned i = 0; i < query_num; i++) {
-    index.SearchWithOptGraph(query_load + i * dim, K, paras, res[i].data());
+    dc = index.SearchWithOptGraph(query_load + i * dim, K, paras, res[i].data());
+    dist_comp += dc;
   }
+  double avg_dist_comp = (1.0* (double) dist_comp)/(1.0* query_num);
   auto e = std::chrono::high_resolution_clock::now();
   std::chrono::duration<double> diff = e - s;
   std::cout << "search time: " << diff.count() << "\n";
+  std::cout << "average distance computations: " << avg_dist_comp << "\n";
 
   save_result(argv[6], res);
 

@@ -33,7 +33,7 @@ class IndexNSG : public Index {
       size_t k,
       const Parameters &parameters,
       unsigned *indices) override;
-  void SearchWithOptGraph(
+  unsigned long long int SearchWithOptGraph(
       const float *query,
       size_t K,
       const Parameters &parameters,

@@ -7,6 +7,8 @@
 #include <bitset>
 #include <cmath>
 
+
+
 namespace efanna2e {
 #define _CONTROL_NUM 100
 IndexNSG::IndexNSG(const size_t dimension, const size_t n, Metric m, Index *initializer) : Index(dimension, n, m),
@@ -519,7 +521,7 @@ void IndexNSG::Search(
   }
 }
 
-void IndexNSG::SearchWithOptGraph(
+unsigned long long int IndexNSG::SearchWithOptGraph(
     const float *query,
     size_t K,
     const Parameters &parameters,
@@ -533,6 +535,8 @@ void IndexNSG::SearchWithOptGraph(
   std::vector<unsigned> init_ids(L);
   //std::mt19937 rng(rand());
   //GenRandom(rng, init_ids.data(), L, (unsigned) nd_);
+
+  unsigned long long dist_comp = 0;
 
   boost::dynamic_bitset<> flags{nd_, 0};
   unsigned tmp_l = 0;
@@ -565,6 +569,7 @@ void IndexNSG::SearchWithOptGraph(
     float *x = (float*)(opt_graph_ + node_size * id);
     float norm_x = *x;x++;
     float dist = dist_fast->compare(x, query, norm_x, (unsigned) dimension_);
+    dist_comp++;
     retset[i] = Neighbor(id, dist, true);
     flags[id] = true;
     L++;
@@ -593,6 +598,7 @@ void IndexNSG::SearchWithOptGraph(
         float *data = (float*)(opt_graph_ + node_size * id);
         float norm = *data;data++;
         float dist = dist_fast->compare(query, data, norm, (unsigned) dimension_);
+	dist_comp++;
         if (dist >= retset[L - 1].distance)continue;
         Neighbor nn(id, dist, true);
         int r = InsertIntoPool(retset.data(), L, nn);
@@ -608,6 +614,7 @@ void IndexNSG::SearchWithOptGraph(
   for (size_t i = 0; i < K; i++) {
     indices[i] = retset[i].id;
   }
+  return dist_comp;
 }
 
 
