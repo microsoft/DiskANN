@@ -215,6 +215,7 @@ void IndexNSG::init_graph(const Parameters &parameters) {
     center[j] /= nd_;
   }
   std::vector <Neighbor> tmp, pool;
+  ep_ = rand() % nd_;   // random initialize ep_
   get_neighbors(center, parameters, tmp, pool);
   ep_ = tmp[0].id;
 }
