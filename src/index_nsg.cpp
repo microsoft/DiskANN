@@ -21,14 +21,20 @@ void IndexNSG::Save(const char *filename) {
   std::ofstream out(filename, std::ios::binary | std::ios::out);
   assert(final_graph_.size() == nd_);
 
+  long long total_gr_edges = 0;
   out.write((char *) &width, sizeof(unsigned));
   out.write((char *) &ep_, sizeof(unsigned));
   for (unsigned i = 0; i < nd_; i++) {
     unsigned GK = (unsigned) final_graph_[i].size();
     out.write((char *) &GK, sizeof(unsigned));
     out.write((char *) final_graph_[i].data(), GK * sizeof(unsigned));
+    total_gr_edges += GK;
   }
   out.close();
+
+  for (unsigned i = 0; i < 20; i++) 
+    std::cout << i << "\t" << final_graph_[i].size() << std::endl;
+  std::cout << "Avg degree: " << ((float)total_gr_edges)/((float)nd_) << std::endl;
 }
 
 void IndexNSG::Load(const char *filename) {
