@@ -39,36 +39,25 @@ data = new int [data_size];
   std::cout <<"data loaded \n";
 }
 
+typedef unsigned long long ull;
+
 int main(int argc, char** argv)
 {
   if(argc!=3){std::cout<< argv[0] <<" data_file1 data_file2"<<std::endl; exit(-1);}
   int* gold_std = NULL;
   int* our_results = NULL;
-  unsigned long long int points_num;
+  ull points_num;
   unsigned dim_gs;
   unsigned dim_or;
   load_data(argv[1], gold_std, points_num, dim_gs);
   load_data(argv[2], our_results, points_num, dim_or);
-  unsigned long long recall  =0;
-
-  for (unsigned long long int i = 0; i < points_num; i++)
-{
- for (int j1 = 0; j1 < dim_or; j1 ++)
-  {
-for (int j2 = 0; j2 < dim_or; j2 ++)
-{
-if (our_results[i*(unsigned long long)dim_or + j1] == gold_std[i*(unsigned long long)dim_gs + j2])
-{
-  if (i % 1000 == 0)
-{
-	std::cout << i <<"," << j1 << "," << j2 <<"," << our_results[i*dim_or + j1] <<"\n";
-}
-	recall ++;
-}
-}
-}
-
-}
+  ull recall  =0;
+  
+  for (ull i = 0; i < points_num; i++)
+    for (ull j1 = 0; j1 < dim_or; j1 ++)
+      for (ull j2 = 0; j2 < dim_or; j2 ++)
+	if (our_results[i*(ull)dim_or + j1] == gold_std[i*(ull)dim_gs + j2]) 
+	  recall ++;
 
 
 /*

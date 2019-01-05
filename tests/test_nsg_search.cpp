@@ -73,15 +73,21 @@ int main(int argc, char** argv) {
 
   auto s = std::chrono::high_resolution_clock::now();
   std::vector<std::vector<unsigned> > res;
+  long long total_hops=0; long long total_cmps=0;
   for (unsigned i = 0; i < query_num; i++) {
     std::vector<unsigned> tmp(K);
-    index.Search(query_load + i * dim, data_load, K, paras, tmp.data());
+    auto ret = index.Search(query_load + i * dim, data_load, K, paras, tmp.data());
+    total_hops += ret.first;
+    total_cmps += ret.second;
     res.push_back(tmp);
-  }
+  } 
   auto e = std::chrono::high_resolution_clock::now();
   std::chrono::duration<double> diff = e - s;
   std::cout << "search time: " << diff.count() << "\n";
 
+  std::cout << "Average hops: " << (float)total_hops/(float)query_num << std::endl
+	    << "Average cmps: " << (float)total_cmps/(float)query_num << std::endl;
+  
   save_result(argv[6], res);
 
   return 0;

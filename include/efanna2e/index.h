@@ -25,7 +25,7 @@ class Index {
 
   virtual void Build(size_t n, const float *data, const Parameters &parameters) = 0;
 
-  virtual void Search(
+  virtual std::pair<int,int> Search(
       const float *query,
       const float *x,
       size_t k,

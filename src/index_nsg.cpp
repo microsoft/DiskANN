@@ -462,12 +462,13 @@ void IndexNSG::Build(size_t n, const float *data, const Parameters &parameters) 
   has_built = true;
 }
 
-void IndexNSG::Search(
+std::pair<int, int> IndexNSG::Search(
     const float *query,
     const float *x,
     size_t K,
     const Parameters &parameters,
-    unsigned *indices) {
+    unsigned *indices)
+ {
   const unsigned L = parameters.Get<unsigned>("L_search");
   data_ = x;
   std::vector <Neighbor> retset(L + 1);
@@ -498,6 +499,7 @@ void IndexNSG::Search(
     //flags[id] = true;
   }
 
+  int hops = 0; int cmps=0;
   std::sort(retset.begin(), retset.begin() + L);
   int k = 0;
   while (k < (int) L) {
@@ -507,10 +509,12 @@ void IndexNSG::Search(
       retset[k].flag = false;
       unsigned n = retset[k].id;
 
+      hops++;
       for (unsigned m = 0; m < final_graph_[n].size(); ++m) {
         unsigned id = final_graph_[n][m];
         if (flags[id])continue;
         flags[id] = 1;
+	cmps++;
         float dist = distance_->compare(query, data_ + dimension_ * id, (unsigned) dimension_);
         if (dist >= retset[L - 1].distance)continue;
         Neighbor nn(id, dist, true);
@@ -525,6 +529,7 @@ void IndexNSG::Search(
   for (size_t i = 0; i < K; i++) {
     indices[i] = retset[i].id;
   }
+  return std::make_pair(hops, cmps);
 }
 
 unsigned long long int IndexNSG::SearchWithOptGraph(
