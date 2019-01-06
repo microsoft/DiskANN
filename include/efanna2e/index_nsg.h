@@ -14,31 +14,39 @@
 
 namespace efanna2e {
 
-class IndexNSG : public Index {
- public:
-  explicit IndexNSG(const size_t dimension, const size_t n, Metric m, Index *initializer);
+  class IndexNSG : public Index {
+  public:
+    explicit IndexNSG(const size_t dimension, const size_t n, Metric m, Index *initializer);
 
 
-  virtual ~IndexNSG();
+    virtual ~IndexNSG();
 
-  virtual void Save(const char *filename)override;
-  virtual void Load(const char *filename)override;
+    virtual void Save(const char *filename)override;
+    virtual void Load(const char *filename)override;
 
 
-  virtual void Build(size_t n, const float *data, const Parameters &parameters) override;
+    virtual void Build(size_t n, const float *data, const Parameters &parameters) override;
 
-  virtual std::pair<int,int> Search(
-      const float *query,
-      const float *x,
-      size_t k,
-      const Parameters &parameters,
-      unsigned *indices) override;
-  unsigned long long int SearchWithOptGraph(
-      const float *query,
-      size_t K,
-      const Parameters &parameters,
-      unsigned *indices);
-  void OptimizeGraph(float* data);
+    virtual std::pair<int,int> Search(
+			      const float *query,
+			      const float *x,
+			      size_t k,
+			      const Parameters &parameters,
+			      unsigned *indices) override;
+
+    std::pair<int,int> BeamSearch(
+				  const float *query,
+				  const float *x,
+				  size_t k,
+				  const Parameters &parameters,
+				  unsigned *indices);
+    
+    unsigned long long int SearchWithOptGraph(
+					      const float *query,
+					      size_t K,
+					      const Parameters &parameters,
+					      unsigned *indices);
+    void OptimizeGraph(float* data);
 
   protected:
     typedef std::vector<std::vector<unsigned > > CompactGraph;
@@ -50,16 +58,16 @@ class IndexNSG : public Index {
     Index *initializer_;
     void init_graph(const Parameters &parameters);
     void get_neighbors(
-        const float *query,
-        const Parameters &parameter,
-        std::vector<Neighbor> &retset,
-        std::vector<Neighbor> &fullset);
+		       const float *query,
+		       const Parameters &parameter,
+		       std::vector<Neighbor> &retset,
+		       std::vector<Neighbor> &fullset);
     void get_neighbors(
-        const float *query,
-        const Parameters &parameter,
-        boost::dynamic_bitset<>& flags,
-        std::vector<Neighbor> &retset,
-        std::vector<Neighbor> &fullset);
+		       const float *query,
+		       const Parameters &parameter,
+		       boost::dynamic_bitset<>& flags,
+		       std::vector<Neighbor> &retset,
+		       std::vector<Neighbor> &fullset);
     //void add_cnn(unsigned des, Neighbor p, unsigned range, LockGraph& cut_graph_);
     void InterInsert(unsigned n, unsigned range, std::vector<std::mutex>& locks, SimpleNeighbor* cut_graph_);
     void sync_prune(unsigned q, std::vector<Neighbor>& pool, const Parameters &parameter, boost::dynamic_bitset<>& flags, SimpleNeighbor* cut_graph_);
@@ -79,7 +87,7 @@ class IndexNSG : public Index {
     size_t data_len;
     size_t neighbor_len;
     KNNGraph nnd_graph;
-};
+  };
 }
 
 #endif //EFANNA2E_INDEX_NSG_H
