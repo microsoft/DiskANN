@@ -56,7 +56,10 @@ namespace efanna2e {
     CompactGraph final_graph_;
 
     Index *initializer_;
+    // version supplied by authors
     void init_graph(const Parameters &parameters);
+    // brute-force centroid + all-to-centroid distance computation
+    void init_graph_bf(const Parameters &parameters);
     void get_neighbors(
 		       const float *query,
 		       const Parameters &parameter,

@@ -225,6 +225,48 @@ namespace efanna2e {
     get_neighbors(center, parameters, tmp, pool);
     ep_ = tmp[0].id;
   }
+  
+  void IndexNSG::init_graph_bf(const Parameters &parameters) {
+    // allocate and init centroid
+    float *center = new float[dimension_]();
+    for (unsigned j = 0; j < dimension_; j++)
+      center[j] = 0;
+    for (unsigned i = 0; i < nd_; i++) {
+      for (unsigned j = 0; j < dimension_; j++) {
+        center[j] += data_[i * dimension_ + j];
+      }
+    }
+    for (unsigned j = 0; j < dimension_; j++) {
+      center[j] /= nd_;
+    }
+    
+    // compute all to one distance
+    float* distances = new float[nd_]();
+    #pragma omp parallel for schedule(static, 65536)
+    for(unsigned i=0;i<nd_;i++){
+      // extract point and distance reference
+      float &dist = distances[i];
+      const float* cur_vec = data_ + (i * dimension_);
+      dist = 0;
+      float diff = 0;
+      for(unsigned j=0;j<dimension_;j++){
+        diff = (center[j] - cur_vec[j]);
+        diff *= 2;
+        dist += diff;
+      }
+    }
+    // find imin
+    unsigned min_idx = 0;
+    float min_dist = distances[0];
+    for(unsigned i=1;i<nd_;i++){
+      if (distances[i] < min_dist){
+        min_idx = i;
+      }
+    }
+    ep_ = min_idx;
+    std::cout << "Medoid index = " << min_idx << std::endl;
+  }
+  
   /*
     void IndexNSG::add_cnn(unsigned des, Neighbor p, unsigned range, LockGraph &cut_graph_) {
     LockGuard guard(cut_graph_[des].lock);
@@ -421,7 +463,9 @@ namespace efanna2e {
     unsigned range = parameters.Get<unsigned>("R");
     Load_nn_graph(nn_graph_path.c_str());
     data_ = data;
-    init_graph(parameters);
+    // NOTE : using all-to-one (inefficient) distance computation to obtain medoid
+    // init_graph(parameters);
+    init_graph_bf(parameters);
     SimpleNeighbor* cut_graph_ = new SimpleNeighbor[nd_*(size_t)range];
     std::cout<<"memory allocated\n";
     Link(parameters, cut_graph_);
