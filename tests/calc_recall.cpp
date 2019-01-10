@@ -52,10 +52,26 @@ int main(int argc, char** argv)
   load_data(argv[1], gold_std, points_num, dim_gs);
   load_data(argv[2], our_results, points_num, dim_or);
   ull recall  =0;
-  
+
+  /*
+for (ull i = 0; i < 100; i++) {
+    int recall=0;
+      for (ull j1 = 0; j1 < dim_or; j1++)
+      for (ull j2 = 0; j2 < dim_or; j2++)
+	if (our_results[i*(ull)dim_or + j1] == gold_std[i*(ull)dim_gs + j2]) 
+	  recall ++;
+    
+      for (ull j1 = 0; j1 < 20; j1++)
+      std::cout << our_results[i*dim_or + j1] << " ";
+    std::cout << std::endl;
+    for (ull j1 = 0; j1 < 20; j1++)
+      std::cout << gold_std[i*dim_or + j1] << " ";
+    std::cout << std::endl << "Recall: " << recall << std::endl;
+  }*/
+    
   for (ull i = 0; i < points_num; i++)
-    for (ull j1 = 0; j1 < dim_or; j1 ++)
-      for (ull j2 = 0; j2 < dim_or; j2 ++)
+    for (ull j1 = 0; j1 < dim_or; j1++)
+      for (ull j2 = 0; j2 < dim_or; j2++)
 	if (our_results[i*(ull)dim_or + j1] == gold_std[i*(ull)dim_gs + j2]) 
 	  recall ++;
 

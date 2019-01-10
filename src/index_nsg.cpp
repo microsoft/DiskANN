@@ -490,13 +490,13 @@ namespace efanna2e {
       }
     }
     avg /= 1.0 * nd_;
-    //std::cout << max << ":" << avg << ":" << min << ":" << cnt << "\n";
-    //tree_grow(parameters);
-    //max = 0;
-    //for (unsigned i = 0; i < nd_; i++) {
-    //    max = max < final_graph_[i].size() ? final_graph_[i].size() : max;
-    //}
-    //if(max > width)width = max;
+    std::cout << max << ":" << avg << ":" << min << ":" << cnt << "\n";
+    tree_grow(parameters);
+    max = 0;
+    for (unsigned i = 0; i < nd_; i++) {
+        max = max < final_graph_[i].size() ? final_graph_[i].size() : max;
+    }
+    if(max > width)width = max;
     has_built = true;
   }
 
@@ -834,10 +834,10 @@ namespace efanna2e {
     unsigned unlinked_cnt = 0;
     while(unlinked_cnt < nd_){
       DFS(flags, root, unlinked_cnt);
-      //std::cout << unlinked_cnt << '\n';
+      std::cout << "Unlinked count: " << unlinked_cnt << std::endl;
       if(unlinked_cnt >= nd_)break;
       findroot(flags, root, parameter);
-      //std::cout << "new root"<<":"<<root << '\n';
+      std::cout << "new root"<<":"<<root << '\n';
     }
   }
 
