@@ -3,7 +3,7 @@
 #include <cstdlib>
 #include <vector>
 
-void add_point(std::ofstream& out, const int dim, std::vector<float>& fixed_vals, const std::vector<float>& vals)
+void add_point(std::ofstream& out, const int dim, std::vector<float>& fixed_vals, const std::vector<float>& vals, bool rand=1)
 {
   if (fixed_vals.size() == dim-1) {
     for(auto iter: vals) {
@@ -15,7 +15,7 @@ void add_point(std::ofstream& out, const int dim, std::vector<float>& fixed_vals
   }
   else {
     for(auto iter: vals) {
-      fixed_vals.push_back(iter);
+      fixed_vals.push_back(iter + 0.01 * std::rand()/RAND_MAX);
       add_point(out, dim, fixed_vals, vals);
       fixed_vals.pop_back();
     }
