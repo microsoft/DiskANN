@@ -21,7 +21,7 @@ void add_rand_unit_gaussian(std::ofstream& out, const int n, const int dim)
       norm += buf[d]*buf[d];
     }
     for (int d=0; d<dim; ++d)
-      buf[d] /= std::sqrt(norm);
+    buf[d] /= std::sqrt(norm);
     out.write((char*)buf, dim*sizeof(float));
   }
   delete[] buf;

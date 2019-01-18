@@ -556,12 +556,12 @@ namespace efanna2e {
 	  float dist = distance_->compare(query, data_ + dimension_ * id, (unsigned) dimension_);
 	  if (dist >= retset[L - 1].distance)continue;
 	  Neighbor nn(id, dist, true);
-	  int r = InsertIntoPool(retset.data(), L, nn);
+	  int r = InsertIntoPool(retset.data(), L, nn); // Return position in sorted list where nn inserted.
 
-	  if (r < nk)nk = r;
+	  if (r < nk)nk = r; // nk logs the best position in the retset that was updated due to neighbors of n. 
 	}
       }
-      if (nk <= k)k = nk;
+      if (nk <= k)k = nk; // k is the best position in retset updated in this round.
       else ++k;
     }
     for (size_t i = 0; i < K; i++) {
