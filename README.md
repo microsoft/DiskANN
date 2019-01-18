@@ -103,6 +103,22 @@ $ cmake -DCMAKE_BUILD_TYPE=Release ..
 $ make -j
 ```
 
+### (Optional) Docker Usage
+
+1. Build Docker Image
+
+```shell
+$ docker build -t nsg .
+```
+
+2. Run and log into Docker container
+
+```
+$ docker run -it --name nsg nsg bash
+```
+
+> You can modify the Dockerfile under the project as you need.
+
 ## Usage
 
 The main interfaces and classes have its respective test codes under directory `tests/`
