@@ -250,8 +250,7 @@ namespace efanna2e {
       dist = 0;
       float diff = 0;
       for(unsigned j=0;j<dimension_;j++){
-        diff = (center[j] - cur_vec[j]);
-        diff *= 2;
+        diff = std::pow(center[j] - cur_vec[j], 2);
         dist += diff;
       }
     }
@@ -261,6 +260,7 @@ namespace efanna2e {
     for(unsigned i=1;i<nd_;i++){
       if (distances[i] < min_dist){
         min_idx = i;
+        min_dist = distances[i];
       }
     }
     ep_ = min_idx;
