@@ -250,7 +250,7 @@ namespace efanna2e {
       dist = 0;
       float diff = 0;
       for(unsigned j=0;j<dimension_;j++){
-        diff = std::pow(center[j] - cur_vec[j], 2);
+        diff = (center[j] - cur_vec[j]) *(center[j] - cur_vec[j]);
         dist += diff;
       }
     }
