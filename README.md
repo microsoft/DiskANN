@@ -90,7 +90,7 @@ Among all the ***graph-based algorithms***, NSG has ***the smallest index size**
 1. Install Dependencies:
 
 ```shell
-$ sudo apt-get install g++ cmake libboost-dev google-perftools
+$ sudo apt-get install g++ cmake libboost-dev libgoogle-perftools-dev
 ```
 
 2. Compile NSG:
@@ -102,6 +102,22 @@ $ mkdir build/ && cd build/
 $ cmake -DCMAKE_BUILD_TYPE=Release ..
 $ make -j
 ```
+
+### (Optional) Docker Usage
+
+1. Build Docker Image
+
+```shell
+$ docker build -t nsg .
+```
+
+2. Run and log into Docker container
+
+```
+$ docker run -it --name nsg nsg bash
+```
+
+> You can modify the Dockerfile under the project as you need.
 
 ## Usage
 
