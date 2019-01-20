@@ -44,7 +44,7 @@ int main(int argc, char** argv) {
   unsigned R = (unsigned)atoi(argv[4]);
   unsigned C = (unsigned)atoi(argv[5]);
 
-  // data_load = efanna2e::data_align(data_load, points_num, dim);//one must
+  data_load = efanna2e::data_align(data_load, points_num, dim);//one must
   // align the data before build
   efanna2e::IndexNSG index(dim, points_num, efanna2e::L2, nullptr);
 

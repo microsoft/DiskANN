@@ -35,8 +35,6 @@ namespace efanna2e {
     }
     out.close();
     
-    for (unsigned i = 0; i < 20; i++) 
-      std::cout << i << "\t" << final_graph_[i].size() << std::endl;
     std::cout << "Avg degree: " << ((float)total_gr_edges)/((float)nd_) << std::endl;
   }
   
