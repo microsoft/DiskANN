@@ -9,7 +9,7 @@
 #include "efanna2e/exceptions.h"
 #include "efanna2e/parameters.h"
 
-
+#include "tsl/robin_set.h"
 
 namespace efanna2e {
 #define _CONTROL_NUM 100
@@ -491,20 +491,23 @@ namespace efanna2e {
     data_ = x;
     std::vector <Neighbor> retset(L + 1);
     std::vector<unsigned> init_ids(L);
-    boost::dynamic_bitset<> flags{nd_, 0};
+    // boost::dynamic_bitset<> flags{nd_, 0};
     //std::mt19937 rng(rand());
     //GenRandom(rng, init_ids.data(), L, (unsigned) nd_);
-
+    tsl::robin_set<unsigned> visited(10*L);
     unsigned tmp_l = 0;
     for(; tmp_l < L && tmp_l < final_graph_[ep_].size(); tmp_l++){
       init_ids[tmp_l] = final_graph_[ep_][tmp_l];
-      flags[init_ids[tmp_l]] = true;
+      visited.insert(init_ids[tmp_l]);
     }
 
     while(tmp_l < L) {
       unsigned id = rand() % nd_;
-      if(flags[id])continue;
-      flags[id] = true;
+      if (visited.find(id) != visited.end()){
+        continue;
+      }else{
+        visited.insert(id);
+      }
       init_ids[tmp_l] = id;
       tmp_l++;
     }
@@ -528,30 +531,32 @@ namespace efanna2e {
       frontier.clear();
       unsigned marker = k-1;
       while (++marker < (int) L && frontier.size() < beam_width) {
-	if (retset[marker].flag) {
-	  frontier.push_back(retset[marker].id);
-	  retset[marker].flag = false;
-	}
+        if (retset[marker].flag) {
+          frontier.push_back(retset[marker].id);
+          retset[marker].flag = false;
+        }
       }
       
       if (!frontier.empty()) hops++;
       for (auto n : frontier) {
-      // if (retset[k].flag) {
-	// retset[k].flag = false;
-	// unsigned n = retset[k].id;
-
-	for (unsigned m = 0; m < final_graph_[n].size(); ++m) {
-	  unsigned id = final_graph_[n][m];
-	  if (flags[id]) continue;
-	  flags[id] = 1;
-	  cmps++;
-	  float dist = distance_->compare(query, data_ + dimension_ * id, (unsigned) dimension_);
-	  if (dist >= retset[L - 1].distance) continue;
-	  Neighbor nn(id, dist, true);
-	  
-	  int r = InsertIntoPool(retset.data(), L, nn); // Return position in sorted list where nn inserted.
-	  if (r < nk) nk = r; // nk logs the best position in the retset that was updated due to neighbors of n. 
-	}
+        // if (retset[k].flag) {
+        // retset[k].flag = false;
+        // unsigned n = retset[k].id;
+        for (unsigned m = 0; m < final_graph_[n].size(); ++m) {
+          unsigned id = final_graph_[n][m];
+          if (visited.find(id) != visited.end()){
+            continue;
+          }else{
+            visited.insert(id);
+          }
+          cmps++;
+          float dist = distance_->compare(query, data_ + dimension_ * id, (unsigned) dimension_);
+          if (dist >= retset[L - 1].distance) continue;
+          Neighbor nn(id, dist, true);
+          
+          int r = InsertIntoPool(retset.data(), L, nn); // Return position in sorted list where nn inserted.
+          if (r < nk) nk = r; // nk logs the best position in the retset that was updated due to neighbors of n. 
+        }
       }
       if (nk <= k) k = nk; // k is the best position in retset updated in this round.
       else ++k;

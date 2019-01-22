@@ -4,6 +4,7 @@
 
 #include <efanna2e/index_nsg.h>
 #include <efanna2e/util.h>
+#include <omp.h>
 
 void load_data(char* filename, float*& data, unsigned& num,
                unsigned& dim) {  // load data with sift10K pattern
@@ -73,16 +74,19 @@ int main(int argc, char** argv) {
   paras.Set<unsigned>("P_search", L);
 
   auto s = std::chrono::high_resolution_clock::now();
-  std::vector<std::vector<unsigned> > res;
+  std::vector<std::vector<unsigned> > res(query_num, std::vector<unsigned>(K));
   long long total_hops=0; long long total_cmps=0;
+  std::vector<long long> hops(query_num), cmps(query_num);
+  #pragma omp parallel for
   for (unsigned i = 0; i < query_num; i++) {
-    std::vector<unsigned> tmp(K);
-    auto ret = index.BeamSearch(query_load + i * dim, data_load, K, paras, tmp.data(), beam_width);
+    std::vector<unsigned> &query_res = res[i];
+    auto ret = index.BeamSearch(query_load + i * dim, data_load, K, paras, query_res.data(), beam_width);
     //auto ret = index.Search(query_load + i * dim, data_load, K, paras, tmp.data());
-    total_hops += ret.first;
-    total_cmps += ret.second;
-    res.push_back(tmp);
+    hops[i] = ret.first;
+    cmps[i] = ret.second;
   } 
+  total_hops = std::accumulate(hops.begin(), hops.end(), 0L);
+  total_cmps = std::accumulate(cmps.begin(), cmps.end(), 0L);
   auto e = std::chrono::high_resolution_clock::now();
   std::chrono::duration<double> diff = e - s;
   std::cout << "search time: " << diff.count() << "\n";
