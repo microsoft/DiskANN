@@ -5,11 +5,11 @@
 #include "parameters.h"
 #include "neighbor.h"
 #include "index.h"
+#include "tsl/robin_set.h"
 #include <cassert>
 #include <unordered_map>
 #include <string>
 #include <sstream>
-#include <boost/dynamic_bitset.hpp>
 #include <stack>
 
 namespace efanna2e {
@@ -69,18 +69,17 @@ namespace efanna2e {
     void get_neighbors(
 		       const float *query,
 		       const Parameters &parameter,
-		       boost::dynamic_bitset<>& flags,
+		       tsl::robin_set<unsigned> &visited,
 		       std::vector<Neighbor> &retset,
 		       std::vector<Neighbor> &fullset);
     //void add_cnn(unsigned des, Neighbor p, unsigned range, LockGraph& cut_graph_);
     void InterInsert(unsigned n, unsigned range, std::vector<std::mutex>& locks, SimpleNeighbor* cut_graph_);
-    void sync_prune(unsigned q, std::vector<Neighbor>& pool, const Parameters &parameter, boost::dynamic_bitset<>& flags, SimpleNeighbor* cut_graph_);
+    void sync_prune(unsigned q, std::vector<Neighbor>& pool, const Parameters &parameter, tsl::robin_set<unsigned> &visited, SimpleNeighbor* cut_graph_);
     void Link(const Parameters &parameters, SimpleNeighbor* cut_graph_);
     void Load_nn_graph(const char *filename);
     void tree_grow(const Parameters &parameter);
-    void DFS(boost::dynamic_bitset<> &flag, unsigned root, unsigned &cnt);
-    void findroot(boost::dynamic_bitset<> &flag, unsigned &root, const Parameters &parameter);
-
+    void DFS(tsl::robin_set<unsigned> &visited, unsigned root, unsigned &cnt);
+    void findroot(tsl::robin_set<unsigned> &visited, unsigned &root, const Parameters &parameter);
 
   private:
     unsigned width;
