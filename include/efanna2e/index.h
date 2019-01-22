@@ -37,7 +37,8 @@ namespace efanna2e {
 					  const float *x,
 					  size_t k,
 					  const Parameters &parameters,
-					  unsigned *indices) = 0;
+					  unsigned *indices,
+					  int beam_width) = 0;
 
     
     virtual void Save(const char *filename) = 0;

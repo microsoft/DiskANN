@@ -39,9 +39,9 @@ void save_result(char* filename, std::vector<std::vector<unsigned> >& results) {
   out.close();
 }
 int main(int argc, char** argv) {
-  if (argc != 7) {
+  if (argc != 8) {
     std::cout << argv[0]
-              << " data_file query_file nsg_path search_L search_K result_path"
+              << " data_file query_file nsg_path search_L search_K result_path BeamWidth"
               << std::endl;
     exit(-1);
   }
@@ -55,6 +55,7 @@ int main(int argc, char** argv) {
 
   unsigned L = (unsigned)atoi(argv[4]);
   unsigned K = (unsigned)atoi(argv[5]);
+  int beam_width = atoi(argv[7]);
 
   if (L < K) {
     std::cout << "search_L cannot be smaller than search_K!" << std::endl;
@@ -76,7 +77,8 @@ int main(int argc, char** argv) {
   long long total_hops=0; long long total_cmps=0;
   for (unsigned i = 0; i < query_num; i++) {
     std::vector<unsigned> tmp(K);
-    auto ret = index.Search(query_load + i * dim, data_load, K, paras, tmp.data());
+    auto ret = index.BeamSearch(query_load + i * dim, data_load, K, paras, tmp.data(), beam_width);
+    //auto ret = index.Search(query_load + i * dim, data_load, K, paras, tmp.data());
     total_hops += ret.first;
     total_cmps += ret.second;
     res.push_back(tmp);

@@ -34,12 +34,13 @@ namespace efanna2e {
 			      const Parameters &parameters,
 			      unsigned *indices) override;
 
-    std::pair<int,int> BeamSearch(
+    virtual std::pair<int,int> BeamSearch(
 				  const float *query,
 				  const float *x,
 				  size_t k,
 				  const Parameters &parameters,
-				  unsigned *indices);
+				  unsigned *indices,
+				  int beam_width) override;
     
     unsigned long long int SearchWithOptGraph(
 					      const float *query,
