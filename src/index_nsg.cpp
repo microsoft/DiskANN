@@ -3,7 +3,7 @@
 #include <omp.h>
 #include <chrono>
 #include <cmath>
-
+#include <iterator>
 #include "efanna2e/exceptions.h"
 #include "efanna2e/parameters.h"
 
@@ -99,7 +99,7 @@ namespace efanna2e {
     }
     while (L < init_ids.size()) {
       unsigned id = rand() % nd_;
-      if(visited.find(id) != visited.end())
+      if (visited.find(id) != visited.end())
         continue;
       else
         visited.insert(id);
@@ -129,12 +129,13 @@ namespace efanna2e {
 
         for (unsigned m = 0; m < final_graph_[n].size(); ++m) {
           unsigned id = final_graph_[n][m];
-          if(visited.find(id) != visited.end())
+          if (visited.find(id) != visited.end())
             continue;
           else
             visited.insert(id);
 
-          float dist = distance_->compare(query, data_ + dimension_ * (size_t) id, (unsigned) dimension_);
+          float dist = distance_->compare(
+              query, data_ + dimension_ * (size_t) id, (unsigned) dimension_);
           Neighbor nn(id, dist, true);
           fullset.push_back(nn);
           if (dist >= retset[L - 1].distance)
@@ -156,8 +157,8 @@ namespace efanna2e {
 
   void IndexNSG::get_neighbors(const float *query, const Parameters &parameter,
                                tsl::robin_set<unsigned> &visited,
-                               std::vector<Neighbor> &  retset,
-                               std::vector<Neighbor> &  fullset) {
+                               std::vector<Neighbor> &   retset,
+                               std::vector<Neighbor> &   fullset) {
     unsigned L = parameter.Get<unsigned>("L");
 
     retset.resize(L + 1);
@@ -173,7 +174,7 @@ namespace efanna2e {
     }
     while (L < init_ids.size()) {
       unsigned id = rand() % nd_;
-      if(visited.find(id) != visited.end())
+      if (visited.find(id) != visited.end())
         continue;
       else
         visited.insert(id);
@@ -205,7 +206,7 @@ namespace efanna2e {
 
         for (unsigned m = 0; m < final_graph_[n].size(); ++m) {
           unsigned id = final_graph_[n][m];
-          if(visited.find(id) != visited.end())
+          if (visited.find(id) != visited.end())
             continue;
           else
             visited.insert(id);
@@ -292,9 +293,9 @@ namespace efanna2e {
   }
 
   void IndexNSG::sync_prune(unsigned q, std::vector<Neighbor> &pool,
-                            const Parameters &       parameter,
+                            const Parameters &        parameter,
                             tsl::robin_set<unsigned> &visited,
-                            SimpleNeighbor *         cut_graph_) {
+                            SimpleNeighbor *          cut_graph_) {
     unsigned range = parameter.Get<unsigned>("R");
     unsigned maxc = parameter.Get<unsigned>("C");
     width = range;
@@ -302,7 +303,7 @@ namespace efanna2e {
 
     for (unsigned nn = 0; nn < final_graph_[q].size(); nn++) {
       unsigned id = final_graph_[q][nn];
-      if(visited.find(id) != visited.end())
+      if (visited.find(id) != visited.end())
         continue;
       float dist = distance_->compare(data_ + dimension_ * (size_t) q,
                                       data_ + dimension_ * (size_t) id,
@@ -437,8 +438,8 @@ namespace efanna2e {
 
 #pragma omp parallel
     {
-      unsigned                cnt = 0;
-      std::vector<Neighbor>   pool, tmp;
+      unsigned                 cnt = 0;
+      std::vector<Neighbor>    pool, tmp;
       tsl::robin_set<unsigned> visited;
 #pragma omp for schedule(dynamic, 100)
       for (unsigned n = 0; n < nd_; ++n) {
@@ -553,6 +554,8 @@ namespace efanna2e {
     int                   hops = 0;
     int                   cmps = 0;
     std::vector<unsigned> frontier;
+    std::vector<unsigned> unique_nbrs;
+    unique_nbrs.reserve(10 * L);
     std::sort(retset.begin(), retset.begin() + L);
     int k = 0;
 
@@ -560,6 +563,7 @@ namespace efanna2e {
       int nk = L;
 
       frontier.clear();
+      unique_nbrs.clear();
       unsigned marker = k - 1;
       while (++marker < (int) L && frontier.size() < beam_width) {
         if (retset[marker].flag) {
@@ -581,6 +585,8 @@ namespace efanna2e {
           } else {
             visited.insert(id);
           }
+          unique_nbrs.push_back(id);
+          /*
           cmps++;
           float dist = distance_->compare(query, data_ + dimension_ * id,
                                           (unsigned) dimension_);
@@ -594,7 +600,25 @@ namespace efanna2e {
           if (r < nk)
             nk = r;  // nk logs the best position in the retset that was updated
                      // due to neighbors of n.
+                     */
         }
+      }
+      auto last_iter = std::unique(unique_nbrs.begin(), unique_nbrs.end());
+      for (auto iter = unique_nbrs.begin(); iter != last_iter; iter++) {
+        cmps++;
+        unsigned id = *iter;
+        float    dist = distance_->compare(query, data_ + dimension_ * id,
+                                        (unsigned) dimension_);
+        if (dist >= retset[L - 1].distance)
+          continue;
+        Neighbor nn(id, dist, true);
+
+        int r = InsertIntoPool(
+            retset.data(), L,
+            nn);  // Return position in sorted list where nn inserted.
+        if (r < nk)
+          nk = r;  // nk logs the best position in the retset that was updated
+                   // due to neighbors of n.
       }
       if (nk <= k)
         k = nk;  // k is the best position in retset updated in this round.
@@ -612,8 +636,8 @@ namespace efanna2e {
                                        unsigned *indices) {
     const unsigned L = parameters.Get<unsigned>("L_search");
     data_ = x;
-    std::vector<Neighbor>   retset(L + 1);
-    std::vector<unsigned>   init_ids(L);
+    std::vector<Neighbor>    retset(L + 1);
+    std::vector<unsigned>    init_ids(L);
     tsl::robin_set<unsigned> visited(10 * L);
     // std::mt19937 rng(rand());
     // GenRandom(rng, init_ids.data(), L, (unsigned) nd_);
@@ -626,7 +650,7 @@ namespace efanna2e {
 
     while (tmp_l < L) {
       unsigned id = rand() % nd_;
-      if(visited.find(id) != visited.end())
+      if (visited.find(id) != visited.end())
         continue;
       else
         visited.insert(id);
@@ -656,7 +680,7 @@ namespace efanna2e {
         hops++;
         for (unsigned m = 0; m < final_graph_[n].size(); ++m) {
           unsigned id = final_graph_[n][m];
-          if(visited.find(id) != visited.end())
+          if (visited.find(id) != visited.end())
             continue;
           else
             visited.insert(id);
@@ -696,8 +720,8 @@ namespace efanna2e {
     unsigned long long dist_comp = 0;
 
     tsl::robin_set<unsigned> visited;
-    unsigned                tmp_l = 0;
-    unsigned *              neighbors =
+    unsigned                 tmp_l = 0;
+    unsigned *               neighbors =
         (unsigned *) (opt_graph_ + node_size * ep_ + data_len);
     unsigned MaxM_ep = *neighbors;
     neighbors++;
@@ -709,7 +733,7 @@ namespace efanna2e {
 
     while (tmp_l < L) {
       unsigned id = rand() % nd_;
-      if(visited.find(id) != visited.end())
+      if (visited.find(id) != visited.end())
         continue;
       else
         visited.insert(id);
@@ -757,7 +781,7 @@ namespace efanna2e {
           _mm_prefetch(opt_graph_ + node_size * neighbors[m], _MM_HINT_T0);
         for (unsigned m = 0; m < MaxM; ++m) {
           unsigned id = neighbors[m];
-          if(visited.find(id) != visited.end())
+          if (visited.find(id) != visited.end())
             continue;
           else
             visited.insert(id);
@@ -820,7 +844,7 @@ namespace efanna2e {
     unsigned             tmp = root;
     std::stack<unsigned> s;
     s.push(root);
-    if(visited.find(root) == visited.end())
+    if (visited.find(root) == visited.end())
       cnt++;
     visited.insert(root);
     while (!s.empty()) {
@@ -885,9 +909,9 @@ namespace efanna2e {
   }
 
   void IndexNSG::tree_grow(const Parameters &parameter) {
-    unsigned                root = ep_;
+    unsigned                 root = ep_;
     tsl::robin_set<unsigned> visited;
-    unsigned                unlinked_cnt = 0;
+    unsigned                 unlinked_cnt = 0;
     while (unlinked_cnt < nd_) {
       DFS(visited, root, unlinked_cnt);
       std::cout << "Unlinked count: " << unlinked_cnt << std::endl;
