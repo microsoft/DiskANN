@@ -58,6 +58,7 @@ namespace efanna2e {
     cc /= nd_;
     // std::cout<<cc<<std::endl;
   }
+
   void IndexNSG::Load_nn_graph(const char *filename) {
     std::ifstream in(filename, std::ios::binary);
     unsigned      k;
