@@ -1,3 +1,4 @@
+#include <cmath>
 #include <cstring>
 #include <fstream>
 #include <iostream>
@@ -56,13 +57,22 @@ std::vector<size_t> optimize_and_write(
   std::vector<size_t> offsets;
   std::ofstream       writer(filename, std::ios::binary | std::ios::out);
   unsigned            max_degree = 0;
+  float               scale_factor = 127.0f;
+  float               max_abs = std::numeric_limits<float>::min();
+  for (size_t i = 0; i < (size_t) npts * (size_t) ndims; i++) {
+    max_abs = std::max(max_abs, std::abs(data[i]));
+  }
+  std::cout << "max absolute value = " << max_abs << std::endl;
+  scale_factor /= max_abs;
+  std::cout << "scale factor = " << scale_factor << std::endl;
   // iterate over each node and find max degree
   for (auto nhood : graph) {
     max_degree = std::max((size_t) max_degree, nhood.size());
   }
   // compute max output size per node
   unsigned max_write_per_blk =
-      max_degree * (sizeof(unsigned) + ndims * sizeof(float));
+      max_degree * (sizeof(unsigned) + ndims * sizeof(int8_t)) +
+      sizeof(unsigned);
   max_write_per_blk = ROUND_UP(max_write_per_blk, SECTOR_LEN);
   std::cout << "max_degree = " << max_degree << std::endl;
   std::cout << "max_write_per_blk = " << max_write_per_blk << std::endl;
@@ -71,10 +81,11 @@ std::vector<size_t> optimize_and_write(
   int8_t *  lower_prec = new int8_t[(size_t) npts * (size_t) ndims];
 #pragma omp parallel for schedule(dynamic, 1048576)
   for (size_t i = 0; i < (size_t) npts * (size_t) ndims; i++) {
-    lower_prec[i] = int8_t(data[i] * 127);
-    // handle overflow underflow
+    lower_prec[i] = int8_t(data[i] * scale_factor);
+    // handle underflow
     lower_prec[i] =
         data[i] < 0 && lower_prec[i] > 0 ? (int8_t) -127 : lower_prec[i];
+    // handle overflow
     lower_prec[i] =
         data[i] > 0 && lower_prec[i] < 0 ? (int8_t) 127 : lower_prec[i];
   }
@@ -99,8 +110,9 @@ std::vector<size_t> optimize_and_write(
     write_size = 0;
     // record starting point
     offsets.push_back(cur_offset);
-    memcpy(write_buf, (char*)&nnbrs, sizeof(unsigned));
-    memcpy(write_buf + sizeof(unsigned), nhood.data(), nnbrs * sizeof(unsigned));
+    memcpy(write_buf, (char *) &nnbrs, sizeof(unsigned));
+    memcpy(write_buf + sizeof(unsigned), nhood.data(),
+           nnbrs * sizeof(unsigned));
     write_size += ((nnbrs + 1) * sizeof(unsigned));
     for (unsigned nbr : nhood) {
       memcpy(write_buf + write_size, lower_prec + (nbr * ndims),
@@ -125,10 +137,9 @@ void write_offsets(char *filename, const std::vector<size_t> &offsets) {
 
 int main(int argc, char **argv) {
   if (argc != 5) {
-    std::cout
-        << argv[0]
-        << " data_file nsg_graph output_file output_file_offsets"
-        << std::endl;
+    std::cout << argv[0]
+              << " data_file nsg_graph output_file output_file_offsets"
+              << std::endl;
     exit(-1);
   }
 
