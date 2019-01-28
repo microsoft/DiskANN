@@ -4,15 +4,17 @@
 #include <limits>
 #include "efanna2e/util.h"
 
-void write_low_prec(char* filename, float* data, unsigned num, unsigned dim) {
+void write_low_prec(char* filename, float* data, unsigned num, unsigned dim,
+                    float scale_factor) {
   std::ofstream writer(filename, std::ios::binary | std::ios::out);
-  float         abs_max = std::numeric_limits<float>::min();
-  float         scale_factor = 127.0f;
-  for (size_t i = 0; i < (size_t) num * (size_t) dim; i++) {
-    abs_max = std::max(std::abs(data[i]), abs_max);
+  if (scale_factor == 127.0f) {
+    float abs_max = std::numeric_limits<float>::min();
+    for (size_t i = 0; i < (size_t) num * (size_t) dim; i++) {
+      abs_max = std::max(std::abs(data[i]), abs_max);
+    }
+    scale_factor /= abs_max;
   }
-  scale_factor /= abs_max;
-  std::cout << "Comptuted scale factor = " << scale_factor << std::endl;
+  std::cout << "Using scale factor = " << scale_factor << std::endl;
 #pragma omp parallel for schedule(static, 524288)
   for (size_t i = 0; i < (size_t) num * (size_t) dim; i++) {
     int8_t low_prec_val = (int8_t)(data[i] * scale_factor);
@@ -36,8 +38,9 @@ void write_low_prec(char* filename, float* data, unsigned num, unsigned dim) {
 }
 
 int main(int argc, char** argv) {
-  if (argc != 3) {
-    std::cout << argv[0] << " fp32_file int8_file" << std::endl;
+  if (argc != 3 && argc != 4) {
+    std::cout << argv[0] << " fp32_file int8_file scale_factor(optional)"
+              << std::endl;
     exit(-1);
   }
 
@@ -45,7 +48,11 @@ int main(int argc, char** argv) {
   unsigned npts, ndims;
   efanna2e::load_Tvecs<float>(argv[1], data, npts, ndims);
   std::cout << "Data loaded\n";
-  write_low_prec(argv[2], data, npts, ndims);
+  float scale_factor = 127.0f;
+  if (argc == 4) {
+    scale_factor = std::atof(argv[3]);
+  }
+  write_low_prec(argv[2], data, npts, ndims, scale_factor);
   std::cout << "Output file written\n";
   return 0;
 }
