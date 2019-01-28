@@ -80,10 +80,9 @@ std::vector<size_t> optimize_and_write(
   }
   std::cout << "converted data to int8_t" << std::endl;
 
-  // per node layout: [N][ID1][ID2][ID3]...[IDN][ID1 COORDS][ID2 COORDS]...[ID3
-  // COORDS]
-  // NOTE: ID COORDS stored as single precision floats; can change to half
-  // precision later
+  // per node layout:
+  // [N][ID1][ID2][ID3]...[IDN][ID1 COORDS][ID2 COORDS]...[IDN COORDS]
+  // NOTE: ID COORDS stored as int8_t
   char *write_buf = new char[max_write_per_blk];
 
   // write width, medoid
