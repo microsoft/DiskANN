@@ -80,7 +80,7 @@ std::vector<size_t> optimize_and_write(
   }
   std::cout << "converted data to int8_t" << std::endl;
 
-  // per node layout: [ID1][ID2][ID3]...[IDN][ID1 COORDS][ID2 COORDS]...[ID3
+  // per node layout: [N][ID1][ID2][ID3]...[IDN][ID1 COORDS][ID2 COORDS]...[ID3
   // COORDS]
   // NOTE: ID COORDS stored as single precision floats; can change to half
   // precision later
@@ -100,9 +100,9 @@ std::vector<size_t> optimize_and_write(
     write_size = 0;
     // record starting point
     offsets.push_back(cur_offset);
-
-    memcpy(write_buf, nhood.data(), nnbrs * sizeof(unsigned));
-    write_size += nnbrs * sizeof(unsigned);
+    memcpy(write_buf, (char*)&nnbrs, sizeof(unsigned));
+    memcpy(write_buf + sizeof(unsigned), nhood.data(), nnbrs * sizeof(unsigned));
+    write_size += ((nnbrs + 1) * sizeof(unsigned));
     for (unsigned nbr : nhood) {
       memcpy(write_buf + write_size, lower_prec + (nbr * ndims),
              ndims * sizeof(int8_t));
@@ -125,10 +125,10 @@ void write_offsets(char *filename, const std::vector<size_t> &offsets) {
 }
 
 int main(int argc, char **argv) {
-  if (argc != 6) {
+  if (argc != 5) {
     std::cout
         << argv[0]
-        << " data_file nsg_graph output_file output_file_offsets precision"
+        << " data_file nsg_graph output_file output_file_offsets"
         << std::endl;
     exit(-1);
   }
