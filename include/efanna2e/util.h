@@ -9,6 +9,7 @@
 #include <iostream>
 #include <fstream>
 #include <random>
+#include <cstdlib>
 #ifdef __APPLE__
 #else
 #include <malloc.h>
@@ -94,6 +95,13 @@ namespace efanna2e {
     }
 
     in.close();
+  }
+
+  void alloc_aligned(void** ptr, size_t size, size_t align) {
+    *ptr = nullptr;
+    assert(!(size % align));
+    *ptr = ::aligned_alloc(align, size);
+    assert(*ptr != nullptr);
   }
 }
 

@@ -38,7 +38,7 @@ class AlignedFileReader {
 
   // Open & close ops
   // Blocking calls
-  void open(const std::string &fname);
+  void open(const char* fname);
   void close();
 
   // process batch of aligned requests in parallel
