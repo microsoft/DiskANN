@@ -118,6 +118,7 @@ namespace efanna2e {
     assert(IS_ALIGNED(size, align));
     *ptr = ::aligned_alloc(align, size);
     assert(*ptr != nullptr);
+    // std::cout << "ALLOC_ALIGNED:: " << ptr << "->" << *ptr << "\n";
   }
 }
 

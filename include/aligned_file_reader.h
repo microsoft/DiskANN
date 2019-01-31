@@ -7,6 +7,8 @@
 #include <mutex>
 #include <thread>
 #include "tsl/robin_map.h"
+#include "efanna2e/util.h"
+#include <malloc.h>
 
 // NOTE :: all 3 fields must be 512-aligned
 struct AlignedRead {
@@ -19,6 +21,10 @@ struct AlignedRead {
 
   AlignedRead(uint64_t offset, uint64_t len, void *buf)
       : offset(offset), len(len), buf(buf) {
+        assert(IS_512_ALIGNED(offset));
+        assert(IS_512_ALIGNED(len));
+        assert(IS_512_ALIGNED(buf));
+        assert(malloc_usable_size(buf) >= len);
   }
 };
 

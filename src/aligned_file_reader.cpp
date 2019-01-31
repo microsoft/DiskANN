@@ -6,8 +6,9 @@
 #include <cstdio>
 #include <iostream>
 #include "tsl/robin_map.h"
+#include "efanna2e/util.h"
 
-#define MAX_EVENTS 256
+#define MAX_EVENTS 16
 
 namespace {
   typedef struct io_event io_event_t;
@@ -15,6 +16,12 @@ namespace {
 
   void execute_io(io_context_t ctx, int fd, std::vector<AlignedRead> &read_reqs,
                   uint64_t n_retries = 5) {
+    for(auto &req : read_reqs){
+      assert(IS_ALIGNED(req.len, 512));
+      // std::cout << "request:"<<req.offset<<":"<<req.len << std::endl;
+      assert(IS_ALIGNED(req.offset, 512));
+      assert(IS_ALIGNED(req.buf, 512));
+    }
     uint64_t                 n_ops = read_reqs.size();
     std::vector<iocb_t *>    cbs(n_ops, nullptr);
     std::vector<io_event_t>  evts(n_ops);
@@ -58,6 +65,15 @@ namespace {
       }
     }
     assert(n_tries != n_retries);
+    for(auto &req : read_reqs){
+      // corruption check
+      assert(malloc_usable_size(req.buf) >= req.len);
+    }
+    /*
+    for(unsigned i=0;i<64;i++){
+      std::cout << *((unsigned*)read_reqs[0].buf + i) << " ";
+    }
+    std::cout << std::endl;*/
   }
 }
 
@@ -99,8 +115,11 @@ io_context_t AlignedFileReader::get_ctx() {
 void AlignedFileReader::register_thread() {
   auto                         my_id = std::this_thread::get_id();
   std::unique_lock<std::mutex> lk(AlignedFileReader::ctx_mut);
-  assert(AlignedFileReader::ctx_map.find(my_id) ==
-         AlignedFileReader::ctx_map.end());
+  if(AlignedFileReader::ctx_map.find(my_id) !=
+         AlignedFileReader::ctx_map.end()){
+           std::cerr << "multiple calls to register_thread from the same thread" << std::endl;
+           return;
+         }
   io_context_t ctx = 0;
   int          ret = io_setup(MAX_EVENTS, &ctx);
   if (ret != 0) {

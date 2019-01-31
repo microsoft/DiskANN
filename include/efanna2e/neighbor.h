@@ -119,6 +119,12 @@ namespace efanna2e {
     float *   aligned_fp32_coords = nullptr;  // alloc'ed only when read into,
     // dimension aligned to multiple of 8
 
+    SimpleNhood(){
+      assert(buf == nullptr);
+      assert(aligned_fp32_coords == nullptr);
+      assert(int8_coords == nullptr);
+    }
+
     SimpleNhood(unsigned buf_size, unsigned dim) : dim(dim) {
       assert(buf == nullptr);
       assert(aligned_fp32_coords == nullptr);
@@ -126,6 +132,14 @@ namespace efanna2e {
       alloc_aligned(&buf, buf_size, 512);
     }
 
+    void init(unsigned buf_size, unsigned dim){
+      assert(buf == nullptr);
+      assert(aligned_fp32_coords == nullptr);
+      assert(int8_coords == nullptr);
+      this->dim = dim;
+      alloc_aligned(&buf, buf_size, 512);
+    }
+    
     ~SimpleNhood() {
       // clear up any unused mem
       if (buf != nullptr) {
@@ -149,12 +163,12 @@ namespace efanna2e {
 
       unsigned aligned_dim = ROUND_UP(dim, 8);
       alloc_aligned((void **) &aligned_fp32_coords,
-                    aligned_dim * nnbrs * sizeof(float), 256);
+                    aligned_dim * nnbrs * sizeof(float), 32);
       memset(aligned_fp32_coords, 0, aligned_dim * nnbrs * sizeof(float));
       for (unsigned i = 0; i < nnbrs; i++) {
         for (unsigned j = 0; j < dim; j++) {
           aligned_fp32_coords[i * aligned_dim + j] =
-              ((float) int8_coords[i * dim + j]) * scale_factor;
+              ((float) int8_coords[i * dim + j]) / scale_factor;
         }
       }
     }

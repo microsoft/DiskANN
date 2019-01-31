@@ -6,12 +6,13 @@
 #include <efanna2e/util.h>
 #include <omp.h>
 #include <cassert>
+#include <atomic>
 
 void load_data(char* filename, float*& data, unsigned& num,
                unsigned& dim) {  // load data with sift10K pattern
   std::ifstream in(filename, std::ios::binary);
   if (!in.is_open()) {
-    std::cout << "open file error" << std::endl;
+    std::cout << "open file error:" << filename << std::endl;
     exit(-1);
   }
   in.read((char*)&dim, 4);
@@ -41,7 +42,7 @@ void save_result(char* filename, std::vector<std::vector<unsigned> >& results) {
 }
 
 int main(int argc, char** argv) {
-  if (argc != 8) {
+  if (argc != 10) {
     std::cout << argv[0]
               << " embedded_index index_node_sizes n_base n_dims query_file search_L search_K result_path BeamWidth"
               << std::endl;
@@ -55,17 +56,19 @@ int main(int argc, char** argv) {
 
   // construct FlashNSGIndex
   efanna2e::FlashIndexNSG index(n_dims, n_pts, efanna2e::L2, nullptr);
+  std::cout << "main --- tid: " << std::this_thread::get_id() << std::endl;
+  index.graph_reader.register_thread();
   index.load_embedded_index(index_file, sizes_file);
 
   // load queries
   float* query_load = NULL;
   unsigned query_num, query_dim;
-  load_data(argv[2], query_load, query_num, query_dim);
+  load_data(argv[5], query_load, query_num, query_dim);
   assert(n_dims == query_dim);
 
-  unsigned L = (unsigned)atoi(argv[4]);
-  unsigned K = (unsigned)atoi(argv[5]);
-  int beam_width = atoi(argv[7]);
+  unsigned L = (unsigned)atoi(argv[6]);
+  unsigned K = (unsigned)atoi(argv[7]);
+  int beam_width = atoi(argv[9]);
 
   if (L < K) {
     std::cout << "search_L cannot be smaller than search_K!" << std::endl;
@@ -74,7 +77,6 @@ int main(int argc, char** argv) {
 
   // align query data
   query_load = efanna2e::data_align(query_load, query_num, query_dim);
-  index.Load(argv[3]);
 
   efanna2e::Parameters paras;
   paras.Set<unsigned>("L_search", L);
@@ -85,8 +87,14 @@ int main(int argc, char** argv) {
   long long total_hops=0; long long total_cmps=0;
   std::vector<long long> hops(query_num), cmps(query_num);
   bool has_init = false;
+  std::atomic<unsigned> qcounter;
+  qcounter.store(0);
   #pragma omp parallel for firstprivate(has_init)
   for (unsigned i = 0; i < query_num; i++) {
+    unsigned val = qcounter.fetch_add(1);
+    if(val % 1000 == 0){
+      std::cout << "Status: " << val << " queries done" << std::endl;
+    }
     if(!has_init){
       #pragma omp critical
       {
@@ -110,7 +118,7 @@ int main(int argc, char** argv) {
   std::cout << "Average hops: " << (float)total_hops/(float)query_num << std::endl
 	    << "Average cmps: " << (float)total_cmps/(float)query_num << std::endl;
   
-  save_result(argv[6], res);
+  save_result(argv[8], res);
 
   return 0;
 }
