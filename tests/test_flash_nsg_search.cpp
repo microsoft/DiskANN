@@ -90,6 +90,10 @@ int main(int argc, char** argv) {
   bool                               has_init = false;
   std::atomic<unsigned>              qcounter;
   qcounter.store(0);
+
+  std::atomic_ullong latency; // In micros.
+  latency.store(0.0);
+  
 #pragma omp parallel for firstprivate(has_init)
   for (unsigned i = 0; i < query_num; i++) {
     unsigned val = qcounter.fetch_add(1);
@@ -106,8 +110,14 @@ int main(int argc, char** argv) {
       }
     }
     std::vector<unsigned>& query_res = res[i];
+
+    auto before = std::chrono::high_resolution_clock::now(); 
     auto ret = index.BeamSearch(query_load + i * query_dim, nullptr, K, paras,
                                 query_res.data(), beam_width);
+    auto diff_time = std::chrono::high_resolution_clock::now() - before;
+    auto diff_micros = std::chrono::duration_cast<std::chrono::microseconds>(diff_time);    
+    latency.fetch_add((uint64_t)diff_micros.count());
+    
     // auto ret = index.Search(query_load + i * dim, data_load, K, paras,
     // tmp.data());
     hops[i] = ret.first;
@@ -124,6 +134,12 @@ int main(int argc, char** argv) {
             << "Average cmps: " << (float) total_cmps / (float) query_num
             << std::endl;
 
+  std::cout << "Average search latency: " << latency.load()/query_num << "micros"
+	    << std::endl
+	    << "QPS: " << (float)query_num/diff.count()
+	    << std::endl;
+
+  
   save_result(argv[8], res);
 
   return 0;
