@@ -132,9 +132,9 @@ void AlignedFileReader::deregister_thread() {
   lk.unlock();
 }
 
-void AlignedFileReader::open(const char* fname) {
+void AlignedFileReader::open(const std::string &fname) {
   int flags = O_DIRECT | O_RDONLY | O_LARGEFILE;
-  this->file_desc = ::open(fname, flags);
+  this->file_desc = ::open(fname.c_str(), flags);
   // error checks
   assert(this->file_desc != -1);
   std::cerr << "Opened file : " << fname << std::endl;
@@ -152,7 +152,7 @@ void AlignedFileReader::close() {
 }
 
 void AlignedFileReader::read(std::vector<AlignedRead> &read_reqs) {
-  assert(this->fd != -1);
+  assert(this->file_desc != -1);
   io_context_t ctx = get_ctx();
   execute_io(ctx, this->file_desc, read_reqs);
 }

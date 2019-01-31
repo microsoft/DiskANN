@@ -53,8 +53,8 @@ std::vector<size_t> optimize_and_write(
     char *filename, const std::vector<std::vector<unsigned>> &graph,
     const float *data, const unsigned width, const unsigned ep_,
     const unsigned npts, const unsigned ndims) {
-  // contains offsets into output file for each node
-  std::vector<size_t> offsets;
+  // contains sizes into output file for each node
+  std::vector<size_t> sizes;
   std::ofstream       writer(filename, std::ios::binary | std::ios::out);
   unsigned            max_degree = 0;
   float               scale_factor = 127.0f;
@@ -96,10 +96,11 @@ std::vector<size_t> optimize_and_write(
   // NOTE: ID COORDS stored as int8_t
   char *write_buf = new char[max_write_per_blk];
 
-  // write width, medoid
+  // write width, medoid, scale_factor in sector-0
   memcpy(write_buf, (char *) &width, sizeof(unsigned));
   memcpy(write_buf + sizeof(unsigned), (char *) &ep_, sizeof(unsigned));
-  unsigned write_size = ROUND_UP(2 * sizeof(unsigned), SECTOR_LEN);
+  memcpy(write_buf + 2*sizeof(unsigned), (char *) &scale_factor, sizeof(float));
+  unsigned write_size = ROUND_UP(2 * sizeof(unsigned) + sizeof(float), SECTOR_LEN);
   writer.write(write_buf, write_size);
 
   size_t cur_offset = write_size;
@@ -109,7 +110,6 @@ std::vector<size_t> optimize_and_write(
     unsigned    nnbrs = nhood.size();
     write_size = 0;
     // record starting point
-    offsets.push_back(cur_offset);
     memcpy(write_buf, (char *) &nnbrs, sizeof(unsigned));
     memcpy(write_buf + sizeof(unsigned), nhood.data(),
            nnbrs * sizeof(unsigned));
@@ -122,23 +122,24 @@ std::vector<size_t> optimize_and_write(
     // align to sector
     write_size = ROUND_UP(write_size, SECTOR_LEN);
     writer.write(write_buf, write_size);
+    sizes.push_back(write_size);
     cur_offset += write_size;
   }
   writer.close();
-  return offsets;
+  return sizes;
 }
 
-void write_offsets(char *filename, const std::vector<size_t> &offsets) {
+void write_sizes(char *filename, const std::vector<size_t> &sizes) {
   std::ofstream writer(filename, std::ios::binary | std::ios::out);
-  writer.write((char *) offsets.data(),
-               (size_t)(offsets.size() * sizeof(size_t)));
+  writer.write((char *) sizes.data(),
+               (size_t)(sizes.size() * sizeof(size_t)));
   writer.close();
 }
 
 int main(int argc, char **argv) {
   if (argc != 5) {
     std::cout << argv[0]
-              << " data_file nsg_graph output_file output_file_offsets"
+              << " data_file nsg_graph output_file output_file_sizes"
               << std::endl;
     exit(-1);
   }
@@ -151,9 +152,9 @@ int main(int argc, char **argv) {
   unsigned                           width, ep_;
   load_nsg(argv[2], nsg_graph, width, ep_);
   std::cout << "NSG loaded\n";
-  auto file_offsets =
+  auto file_sizes =
       optimize_and_write(argv[3], nsg_graph, data, width, ep_, npts, ndims);
   std::cout << "Output file written\n";
-  write_offsets(argv[4], file_offsets);
+  write_sizes(argv[4], file_sizes);
   return 0;
 }

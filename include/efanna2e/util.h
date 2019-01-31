@@ -10,10 +10,26 @@
 #include <fstream>
 #include <random>
 #include <cstdlib>
+#include <cassert>
 #ifdef __APPLE__
 #else
 #include <malloc.h>
 #endif
+
+
+// taken from https://github.com/Microsoft/BLAS-on-flash/blob/master/include/utils.h
+// round up X to the nearest multiple of Y
+#define ROUND_UP(X, Y) \
+  ((((uint64_t)(X) / (Y)) + ((uint64_t)(X) % (Y) != 0)) * (Y))
+
+// round down X to the nearest multiple of Y
+#define ROUND_DOWN(X, Y) (((uint64_t)(X) / (Y)) * (Y))
+
+// alignment tests
+#define IS_ALIGNED(X, Y) ((uint64_t)(X) % (uint64_t) (Y) == 0)
+#define IS_512_ALIGNED(X) IS_ALIGNED(X, 512)
+#define IS_4096_ALIGNED(X) IS_ALIGNED(X, 4096)
+
 namespace efanna2e {
 
   static void GenRandom(std::mt19937 &rng, unsigned *addr, unsigned size,
@@ -72,7 +88,7 @@ namespace efanna2e {
   }
 
   template<typename T>
-  void load_Tvecs(char *filename, T *&data, unsigned &num, unsigned &dim) {
+  inline void load_Tvecs(char *filename, T *&data, unsigned &num, unsigned &dim) {
     // check validity of file
     std::ifstream in(filename, std::ios::binary);
     if (!in.is_open()) {
@@ -97,9 +113,9 @@ namespace efanna2e {
     in.close();
   }
 
-  void alloc_aligned(void** ptr, size_t size, size_t align) {
+  inline void alloc_aligned(void** ptr, size_t size, size_t align) {
     *ptr = nullptr;
-    assert(!(size % align));
+    assert(IS_ALIGNED(size, align));
     *ptr = ::aligned_alloc(align, size);
     assert(*ptr != nullptr);
   }

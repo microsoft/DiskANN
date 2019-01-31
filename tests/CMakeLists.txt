@@ -6,6 +6,9 @@ target_link_libraries(test_nsg_index ${PROJECT_NAME} -ltcmalloc)
 add_executable(test_nsg_search test_nsg_search.cpp)
 target_link_libraries(test_nsg_search ${PROJECT_NAME})
 
+add_executable(test_flash_nsg_search test_flash_nsg_search.cpp)
+target_link_libraries(test_flash_nsg_search ${PROJECT_NAME})
+
 add_executable(test_nsg_optimized_search test_nsg_optimized_search.cpp)
 target_link_libraries(test_nsg_optimized_search ${PROJECT_NAME} -ltcmalloc)
 

@@ -13,6 +13,13 @@ struct AlignedRead {
   uint64_t offset;  // where to read from
   uint64_t len;     // how much to read
   void *   buf;     // where to read into
+
+  AlignedRead() : offset(0), len(0), buf(nullptr) {
+  }
+
+  AlignedRead(uint64_t offset, uint64_t len, void *buf)
+      : offset(offset), len(len), buf(buf) {
+  }
 };
 
 class AlignedFileReader {
@@ -38,7 +45,7 @@ class AlignedFileReader {
 
   // Open & close ops
   // Blocking calls
-  void open(const char* fname);
+  void open(const std::string &fname);
   void close();
 
   // process batch of aligned requests in parallel
