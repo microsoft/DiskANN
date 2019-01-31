@@ -23,36 +23,38 @@ void load_nsg(const char *filename, VecVec &graph, unsigned &width,
     in.read((char *) tmp.data(), k * sizeof(unsigned));
     graph.push_back(tmp);
   }
+  std::cout << "Total #nodes = " << graph.size() << std::endl;
 }
 
 void nsg_bfs(const VecVec &nsg, const unsigned ep_, VecSet &bfs_order) {
-  tsl::robin_set<unsigned> *cur_level;
-  tsl::robin_set<unsigned> *prev_level;
+  tsl::robin_set<unsigned> *cur_level = new tsl::robin_set<unsigned>();
+  tsl::robin_set<unsigned> *prev_level = new tsl::robin_set<unsigned>();
   prev_level->insert(ep_);
   unsigned level = 0;
 
   // set visited array to 0
   std::vector<bool> visited(nsg.size(), false);
-  while(true){
+  while (true) {
     // clear state
     cur_level->clear();
 
     // select candidates
-    for(auto id : *prev_level){
-      for(const auto &nbr : nsg[id]){
-        if(!visited[nbr]){
+    for (auto id : *prev_level) {
+      for (const auto &nbr : nsg[id]) {
+        if (!visited[nbr]) {
           cur_level->insert(nbr);
           visited[nbr] = true;
         }
       }
     }
 
-    if(cur_level->empty()){
+    if (cur_level->empty()) {
       break;
     }
 
-    std::cerr << "Level #" << level << " : " << cur_level->size() << " nodes" << std::endl;
-    
+    std::cerr << "Level #" << level << " : " << cur_level->size() << " nodes"
+              << std::endl;
+
     // create a new set
     tsl::robin_set<unsigned> add(cur_level->size());
     add.insert(cur_level->begin(), cur_level->end());
@@ -65,8 +67,27 @@ void nsg_bfs(const VecVec &nsg, const unsigned ep_, VecSet &bfs_order) {
   }
 
   // assert(visited[i] == true) for all nodes
-  for(const auto val : visited){
+  for (const auto val : visited) {
     assert(val);
+  }
+
+  // cleanup
+  delete cur_level;
+  delete prev_level;
+}
+
+void average_degree(const VecVec &nsg, const VecSet &bfs_order) {
+  unsigned level = 0;
+  double   lvl_degree = 0;
+  for (const auto &lvl : bfs_order) {
+    lvl_degree = 0;
+    for (const auto &id : lvl) {
+      lvl_degree += nsg[id].size();
+    }
+    std::cout << "Level #" << level
+              << " : Avg degree = " << lvl_degree / (double) lvl.size()
+              << std::endl;
+    level++;
   }
 }
 
@@ -76,12 +97,14 @@ int main(int argc, char **argv) {
     exit(-1);
   }
 
-  VecVec nsg;
-  VecSet bfs_order;
+  VecVec   nsg;
+  VecSet   bfs_order;
   unsigned ep_, width;
   load_nsg(argv[1], nsg, width, ep_);
-  
+
   nsg_bfs(nsg, ep_, bfs_order);
+
+  average_degree(nsg, bfs_order);
 
   return 0;
 }
