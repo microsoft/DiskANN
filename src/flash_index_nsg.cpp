@@ -3,8 +3,8 @@
 #include <omp.h>
 #include <chrono>
 #include <cmath>
-#include <thread>
 #include <iterator>
+#include <thread>
 #include "efanna2e/exceptions.h"
 #include "efanna2e/parameters.h"
 #include "efanna2e/util.h"
@@ -45,7 +45,8 @@ namespace efanna2e {
     first_sector[0].len = 512;
     efanna2e::alloc_aligned(&first_sector[0].buf, 512, 512);
 
-    std::cout << "FlashIndexNSG::load_embedded_index --- tid: " << std::this_thread::get_id() << std::endl;
+    std::cout << "FlashIndexNSG::load_embedded_index --- tid: "
+              << std::this_thread::get_id() << std::endl;
     // read first sector
     this->graph_reader.read(first_sector);
     this->width = *((unsigned *) first_sector[0].buf);
@@ -75,7 +76,8 @@ namespace efanna2e {
     // read in medoid
     if (this->node_sizes[this->ep_] > NSG_MEDOID_NHOOD_INIT_SIZE) {
       // if medoid nhood size is greater than preset size, re-init medoid nhood
-      std::cout << "De-alloc: " << NSG_MEDOID_NHOOD_INIT_SIZE << " , re-alloc: " << this->node_sizes[this->ep_] << std::endl;
+      std::cout << "De-alloc: " << NSG_MEDOID_NHOOD_INIT_SIZE
+                << " , re-alloc: " << this->node_sizes[this->ep_] << std::endl;
       free(this->ep_nhood.buf);
       alloc_aligned(&(this->ep_nhood.buf), this->node_sizes[this->ep_], 512);
     }
@@ -166,14 +168,15 @@ namespace efanna2e {
         frontier_nhoods.resize(frontier.size());
         frontier_read_reqs.resize(frontier.size());
         // alloc nhoods, read and construct fp32 variant
-        //std::cout << "k = " << k << '\n';
-        for (int i=0;i<frontier.size();i++) {
+        // std::cout << "k = " << k << '\n';
+        for (int i = 0; i < frontier.size(); i++) {
           unsigned id = frontier[i];
           frontier_nhoods[i].init(this->node_sizes[id], this->dimension_);
-          frontier_read_reqs[i] = AlignedRead(this->node_offsets[id],
-                                          this->node_sizes[id],
-                                          frontier_nhoods[i].buf);
-          // std::cout << "using buf = " << &(frontier_nhoods[i].buf) << std::endl;
+          frontier_read_reqs[i] =
+              AlignedRead(this->node_offsets[id], this->node_sizes[id],
+                          frontier_nhoods[i].buf);
+          // std::cout << "using buf = " << &(frontier_nhoods[i].buf) <<
+          // std::endl;
         }
         graph_reader.read(frontier_read_reqs);
         for (auto &nhood : frontier_nhoods) {
