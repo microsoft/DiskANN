@@ -408,26 +408,29 @@ namespace efanna2e {
     unsigned range = parameters.Get<unsigned>("R");
     std::vector<std::mutex> locks(nd_);
 
-#pragma omp parallel
+    //#pragma omp parallel
     {
-      unsigned cnt = 0;
-      std::vector <Neighbor> pool, tmp;
-      boost::dynamic_bitset<> flags{nd_, 0};
-#pragma omp for schedule(dynamic, 100)
+      //unsigned cnt = 0;
+
+#pragma omp for schedule(static, 65536)
       for (unsigned n = 0; n < nd_; ++n) {
+	std::vector <Neighbor> pool, tmp;
+	boost::dynamic_bitset<> flags{nd_, 0};
 	pool.clear();
 	tmp.clear();
 	flags.reset();
 	get_neighbors(data_ + dimension_ * n, parameters, flags, tmp, pool);
 	sync_prune(n, pool, parameters, flags, cut_graph_);
-	cnt++;
+	/*cnt++;
 	if(cnt % step_size == 0){
 	  LockGuard g(progress_lock);
 	  std::cout<<progress++ <<"/"<< percent << " completed" << std::endl;
-	}
+	  }*/
+	if (n % 10000 == 0)
+	  std::cout << n << std::endl;
       }
 
-#pragma omp for schedule(dynamic, 100)
+#pragma omp for schedule(static, 65536)
       for (unsigned n = 0; n < nd_; ++n) {
 	InterInsert(n, range, locks, cut_graph_);
       }
