@@ -412,7 +412,7 @@ namespace efanna2e {
     {
       //unsigned cnt = 0;
 
-#pragma omp for schedule(static, 65536)
+#pragma omp parallel for schedule(static, 65536)
       for (unsigned n = 0; n < nd_; ++n) {
 	std::vector <Neighbor> pool, tmp;
 	boost::dynamic_bitset<> flags{nd_, 0};
@@ -430,7 +430,7 @@ namespace efanna2e {
 	  std::cout << n << std::endl;
       }
 
-#pragma omp for schedule(static, 65536)
+#pragma omp parallel for schedule(static, 65536)
       for (unsigned n = 0; n < nd_; ++n) {
 	InterInsert(n, range, locks, cut_graph_);
       }
