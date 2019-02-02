@@ -50,7 +50,7 @@ namespace efanna2e {
       #ifdef __APPLE__
         data_new = new float[new_dim * point_num];
       #else
-        data_new = (float*)memalign(DATA_ALIGN_FACTOR * 4, point_num * new_dim * sizeof(float));
+        data_new = (float*)memalign(DATA_ALIGN_FACTOR * 4, (size_t) point_num * (size_t) new_dim * sizeof(float));
       #endif
 
       for(unsigned i=0; i<point_num; i++){
