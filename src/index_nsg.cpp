@@ -412,22 +412,27 @@ namespace efanna2e {
     {
       //unsigned cnt = 0;
 
-#pragma omp parallel for schedule(static, 65536)
-      for (unsigned n = 0; n < nd_; ++n) {
-	std::vector <Neighbor> pool, tmp;
-	boost::dynamic_bitset<> flags{nd_, 0};
-	pool.clear();
-	tmp.clear();
-	flags.reset();
-	get_neighbors(data_ + dimension_ * n, parameters, flags, tmp, pool);
-	sync_prune(n, pool, parameters, flags, cut_graph_);
-	/*cnt++;
-	if(cnt % step_size == 0){
-	  LockGuard g(progress_lock);
-	  std::cout<<progress++ <<"/"<< percent << " completed" << std::endl;
-	  }*/
-	if (n % 10000 == 0)
-	  std::cout << n << std::endl;
+      #define PAR_BLOCK_SZ 65536
+      int nblocks = nd_ % PAR_BLOCK_SZ == 0 ? nd_/PAR_BLOCK_SZ : (nd_/PAR_BLOCK_SZ) + 1;
+#pragma omp parallel for schedule(static, PAR_BLOCK_SZ)
+      for (int block = 0; block < nblocks; ++block) {
+        std::vector <Neighbor> pool, tmp;
+        boost::dynamic_bitset<> flags{nd_, 0};
+
+        for (unsigned n = block * PAR_BLOCK_SZ; n < nd_ && n < (block+1) * PAR_BLOCK_SZ; ++n) {       
+          pool.clear();
+          tmp.clear();
+          flags.reset();
+          get_neighbors(data_ + dimension_ * n, parameters, flags, tmp, pool);
+          sync_prune(n, pool, parameters, flags, cut_graph_);
+          /*cnt++;
+            if(cnt % step_size == 0){
+            LockGuard g(progress_lock);
+            std::cout<<progress++ <<"/"<< percent << " completed" << std::endl;
+            }*/
+          if (n % 10000 == 0)
+            std::cout << n << std::endl;
+        }
       }
 
 #pragma omp parallel for schedule(static, 65536)
