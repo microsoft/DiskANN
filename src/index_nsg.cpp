@@ -414,7 +414,7 @@ namespace efanna2e {
 
       #define PAR_BLOCK_SZ 65536
       int nblocks = nd_ % PAR_BLOCK_SZ == 0 ? nd_/PAR_BLOCK_SZ : (nd_/PAR_BLOCK_SZ) + 1;
-#pragma omp parallel for schedule(static, PAR_BLOCK_SZ)
+#pragma omp parallel for schedule(static, 1)
       for (int block = 0; block < nblocks; ++block) {
         std::vector <Neighbor> pool, tmp;
         boost::dynamic_bitset<> flags{nd_, 0};
@@ -476,7 +476,7 @@ namespace efanna2e {
       }
     }
 
-    tree_grow(parameters);
+    //tree_grow(parameters);
     
     avg /= 1.0 * nd_;
     std::cout << "Degree: max:" << max << "  avg:" << avg << "  min:" << min << "  count:" << cnt << "\n";
