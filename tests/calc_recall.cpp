@@ -18,8 +18,6 @@ void load_data(char* filename, int*& data, unsigned long long & num,unsigned & d
   unsigned long long int data_size = (unsigned long long) num * (unsigned long long) dim;
   std::cout<<"data dimension: "<<dim<<std::endl;
   std::cout<<"data num points: "<<num<<std::endl;
-  std::cout<<"file size " <<fsize<<" bytes \n";
-  std::cout<<"possibility 1 "<< data_size*4 + 4<<" or possibility 2 " << (unsigned long long) data_size*4 + (unsigned long long) num*4 + 4<< std::endl;  
 data = new int [data_size];
   
   int *tmp_dim = new int;
@@ -28,12 +26,6 @@ data = new int [data_size];
 //    in.seekg(4,std::ios::cur);
     in.read((char*) tmp_dim, 4);
     in.read((char*)(data+i*dim),dim*4);
-/*    if (i % 10000 == 0)
-    {
-	    std::cout<<"finished  "<<(i*1.0/num*1.0)*100<<" percent" << std::endl;
-	    std::cout<< "vector dim " << (int) *tmp_dim  << "first and last coords " << (int) (data + i*dim)[0] <<" "<< (int) (data + i*dim)[*tmp_dim - 1]<< std::endl;     
-	    std::cout <<" currently read " << i*dim*4 << "bytes out of "<< (1.0*num)*(1.0*dim)*(1.0*sizeof(float)) <<" bytes and file size is "<< fsize << "bytes and float size is "<<sizeof(float) <<" bytes \n"; 
-}   */ 
   }
   in.close();
   std::cout <<"data loaded \n";
@@ -52,58 +44,43 @@ int main(int argc, char** argv)
   load_data(argv[1], gold_std, points_num, dim_gs);
   load_data(argv[2], our_results, points_num, dim_or);
   ull recall  =0;
+  bool* all_recall = new bool[points_num];
+  for (unsigned i = 0;i < points_num; i++)
+	  all_recall[i] = false;
 
-  /*
-for (ull i = 0; i < 100; i++) {
-    int recall=0;
-      for (ull j1 = 0; j1 < dim_or; j1++)
-      for (ull j2 = 0; j2 < dim_or; j2++)
-	if (our_results[i*(ull)dim_or + j1] == gold_std[i*(ull)dim_gs + j2]) 
-	  recall ++;
-    
-      for (ull j1 = 0; j1 < 20; j1++)
-      std::cout << our_results[i*dim_or + j1] << " ";
-    std::cout << std::endl;
-    for (ull j1 = 0; j1 < 20; j1++)
-      std::cout << gold_std[i*dim_or + j1] << " ";
-    std::cout << std::endl << "Recall: " << recall << std::endl;
-  }*/
-    
-  for (ull i = 0; i < points_num; i++)
-    for (ull j1 = 0; j1 < dim_or; j1++)
-      for (ull j2 = 0; j2 < dim_or; j2++)
-	if (our_results[i*(ull)dim_or + j1] == gold_std[i*(ull)dim_gs + j2]) 
-	  recall ++;
-
-
-/*
-  for (int i = 0; i < points_num; i++)
-{
-std::cout << i <<" ;";
- for (int j1 = 0; j1 < dim_or; j1 ++)
+  std::cout<<"calculating recall "<<dim_gs<<" at "<<dim_or<<std::endl;
+  unsigned mind = dim_gs;
+  if(dim_or < mind)
   {
-std::cout << our_results[i*dim_or + j1] <<" ";
-}
-std::cout << "; ";
-for (int j2 = 0; j2 < dim_or; j2 ++)
-{
+	  std::cout<<"ground truth has size "<< dim_gs<<" and our set has only "<< dim_or<<" points. exiting \n";	
+	  return(1);
+  }
+		
 
-std::cout << gold_std[i*dim_gs + j2] <<" ";
-}
-std::cout << "\n ";
-}
-*/
-/*
-  for (unsigned long long int i = 0; i < points_num; i++)
-{
-std::cout << i <<" ;";
- for (int j1 = 0; j1 < dim_gs; j1 ++)
-  {
-std::cout << our_results[i*(unsigned long long)dim_gs + (unsigned long long)j1] <<" ";
-}
-std::cout << "\n ";
-}
- */
+    
+	bool* this_point = new bool[dim_gs];
+	for (ull i = 0; i < points_num; i++)
+	{
+		for(unsigned j=0;j<dim_gs;j++)
+			this_point[j] = false;
+
+		bool this_correct = true;
+		for (ull j1 = 0; j1 < dim_gs; j1++)
+			for (ull j2 = 0; j2 < dim_or; j2++)
+				if (gold_std[i*(ull)dim_gs + j1] == our_results[i*(ull)dim_or + j2]) 
+					this_point[j1] = true;
+		for(unsigned j1 = 0; j1 < dim_gs; j1++)
+			if(this_point[j1] == false)
+			{
+				this_correct = false;
+				break;
+			}
+		if(this_correct == true)
+			recall++;
+
+	}
+	
+
 double avg_recall = (recall*1.0)/(points_num*1.0);
-std::cout <<"avg. recall at "<< dim_or <<" is "<< avg_recall<<" \n";
+std::cout <<"avg. recall "<< dim_gs <<" at "<< dim_or<<" is "<< avg_recall<<" \n";
 } 
