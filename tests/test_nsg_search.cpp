@@ -28,7 +28,7 @@ void load_data(char* filename, float*& data, unsigned& num,
   in.close();
 }
 
-void save_result(char* filename, std::vector<std::vector<unsigned> >& results) {
+/*void save_result(char* filename, std::vector<std::vector<unsigned> >& results) {
   std::ofstream out(filename, std::ios::binary | std::ios::out);
 
   for (unsigned i = 0; i < results.size(); i++) {
@@ -37,7 +37,19 @@ void save_result(char* filename, std::vector<std::vector<unsigned> >& results) {
     out.write((char*)results[i].data(), GK * sizeof(unsigned));
   }
   out.close();
+}*/
+
+
+void save_result(char* filename, unsigned* results, unsigned nd, unsigned nr) {
+  std::ofstream out(filename, std::ios::binary | std::ios::out);
+
+  for (unsigned i = 0; i < nd; i++) {
+    out.write((char*)&nr, sizeof(unsigned));
+    out.write((char*) (results + i*nr), nr * sizeof(unsigned));
+  }
+  out.close();
 }
+
 int main(int argc, char** argv) {
   if (argc != 8) {
     std::cout << argv[0]
@@ -73,15 +85,21 @@ int main(int argc, char** argv) {
   paras.Set<unsigned>("P_search", L);
 
   auto s = std::chrono::high_resolution_clock::now();
-  std::vector<std::vector<unsigned> > res;
+//  std::vector<std::vector<unsigned> > res;
   long long total_hops=0; long long total_cmps=0;
+unsigned *res = new unsigned[size_t(query_num)*K];
+
+#pragma omp parallel for schedule(static, 1000)
   for (unsigned i = 0; i < query_num; i++) {
-    std::vector<unsigned> tmp(K);
-    auto ret = index.BeamSearch(query_load + i * dim, data_load, K, paras, tmp.data(), beam_width);
+	
+    auto ret = index.BeamSearch(query_load + i * dim, data_load, K, paras, res + ((size_t)i)*K, beam_width);
     //auto ret = index.Search(query_load + i * dim, data_load, K, paras, tmp.data());
+#pragma omp atomic
     total_hops += ret.first;
+#pragma omp atomic
     total_cmps += ret.second;
-    res.push_back(tmp);
+//    res.push_back(tmp);
+
   } 
   auto e = std::chrono::high_resolution_clock::now();
   std::chrono::duration<double> diff = e - s;
@@ -90,7 +108,7 @@ int main(int argc, char** argv) {
   std::cout << "Average hops: " << (float)total_hops/(float)query_num << std::endl
 	    << "Average cmps: " << (float)total_cmps/(float)query_num << std::endl;
   
-  save_result(argv[6], res);
+  save_result(argv[6], res, query_num, K);
 
   return 0;
 }

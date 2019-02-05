@@ -44,6 +44,7 @@ int main(int argc, char** argv)
   load_data(argv[1], gold_std, points_num, dim_gs);
   load_data(argv[2], our_results, points_num, dim_or);
   ull recall  =0;
+  ull total_recall = 0;
   bool* all_recall = new bool[points_num];
   for (unsigned i = 0;i < points_num; i++)
 	  all_recall[i] = false;
@@ -57,30 +58,35 @@ int main(int argc, char** argv)
   }
 		
 
-    
-	bool* this_point = new bool[dim_gs];
-	for (ull i = 0; i < points_num; i++)
-	{
-		for(unsigned j=0;j<dim_gs;j++)
-			this_point[j] = false;
 
-		bool this_correct = true;
-		for (ull j1 = 0; j1 < dim_gs; j1++)
-			for (ull j2 = 0; j2 < dim_or; j2++)
-				if (gold_std[i*(ull)dim_gs + j1] == our_results[i*(ull)dim_or + j2]) 
-					this_point[j1] = true;
-		for(unsigned j1 = 0; j1 < dim_gs; j1++)
-			if(this_point[j1] == false)
-			{
-				this_correct = false;
-				break;
-			}
-		if(this_correct == true)
-			recall++;
+  bool* this_point = new bool[dim_gs];
+  for (ull i = 0; i < points_num; i++)
+  {
+	  for(unsigned j=0;j<dim_gs;j++)
+		  this_point[j] = false;
 
-	}
-	
+	  bool this_correct = true;
+	  for (ull j1 = 0; j1 < dim_gs; j1++)
+		  for (ull j2 = 0; j2 < dim_or; j2++)
+			  if (gold_std[i*(ull)dim_gs + j1] == our_results[i*(ull)dim_or + j2])
+			  { 
+				  if(this_point[j1] == false)
+					  total_recall++;
+				  this_point[j1] = true;
+			  }
+	  for(unsigned j1 = 0; j1 < dim_gs; j1++)
+		  if(this_point[j1] == false)
+		  {
+			  this_correct = false;
+			  break;
+		  }
+	  if(this_correct == true)
+		  recall++;
 
-double avg_recall = (recall*1.0)/(points_num*1.0);
-std::cout <<"avg. recall "<< dim_gs <<" at "<< dim_or<<" is "<< avg_recall<<" \n";
+  }
+
+
+  double avg_recall = (recall*1.0)/(points_num*1.0);
+  std::cout <<"avg. recall "<< dim_gs <<" at "<< dim_or<<" is "<< avg_recall<<" \n";
+  std::cout<<"avg. number of nearest neighbors reported is "<<(total_recall*1.0)/points_num<<std::endl;
 } 
