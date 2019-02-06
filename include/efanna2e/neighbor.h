@@ -118,8 +118,9 @@ namespace efanna2e {
     void *    buf = nullptr;  // underlying buffer for nbrs, nnbrs int8_t coords
     float *   aligned_fp32_coords = nullptr;  // alloc'ed only when read into,
     // dimension aligned to multiple of 8
+    SimpleNhood *redir = nullptr;  // redirection to existing SimpleNhood
 
-    SimpleNhood(){
+    SimpleNhood() {
       assert(buf == nullptr);
       assert(aligned_fp32_coords == nullptr);
       assert(int8_coords == nullptr);
@@ -132,14 +133,14 @@ namespace efanna2e {
       alloc_aligned(&buf, buf_size, 512);
     }
 
-    void init(unsigned buf_size, unsigned dim){
+    void init(unsigned buf_size, unsigned dim) {
       assert(buf == nullptr);
       assert(aligned_fp32_coords == nullptr);
       assert(int8_coords == nullptr);
       this->dim = dim;
       alloc_aligned(&buf, buf_size, 512);
     }
-    
+
     ~SimpleNhood() {
       // clear up any unused mem
       if (buf != nullptr) {

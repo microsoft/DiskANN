@@ -10,6 +10,7 @@
 #include "efanna2e/util.h"
 #include <malloc.h>
 
+
 // NOTE :: all 3 fields must be 512-aligned
 struct AlignedRead {
   uint64_t offset;  // where to read from

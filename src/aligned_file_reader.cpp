@@ -22,52 +22,59 @@ namespace {
       assert(IS_ALIGNED(req.offset, 512));
       assert(IS_ALIGNED(req.buf, 512));
     }
-    uint64_t                 n_ops = read_reqs.size();
-    std::vector<iocb_t *>    cbs(n_ops, nullptr);
-    std::vector<io_event_t>  evts(n_ops);
-    std::vector<struct iocb> cb(n_ops);
-    for (uint64_t j = 0; j < n_ops; j++) {
-      io_prep_pread(cb.data() + j, fd, read_reqs[j].buf, read_reqs[j].len,
-                    read_reqs[j].offset);
-    }
-    // initialize `cbs` using `cb` array
-    for (uint64_t i = 0; i < n_ops; i++) {
-      cbs[i] = cb.data() + i;
-    }
 
-    uint64_t n_tries = 0;
-    while (n_tries < n_retries) {
-      // issue reads
-      int64_t ret = io_submit(ctx, (int64_t) n_ops, cbs.data());
-      // if requests didn't get accepted
-      if (ret != (int64_t) n_ops) {
-        std::cerr << "io_submit() failed; returned " << ret
-                  << ", expected=" << n_ops << ", ernno=" << errno << "="
-                  << ::strerror(errno) << ", try #" << n_tries + 1;
-        n_tries++;
-        // try again
-        continue;
-      } else {
-        // wait on io_getevents
-        ret = io_getevents(ctx, (int64_t) n_ops, (int64_t) n_ops, evts.data(),
-                           nullptr);
-        // if requests didn't complete
+    // break-up requests into chunks of size MAX_EVENTS each
+    uint64_t n_iters = ROUND_UP(read_reqs.size(), MAX_EVENTS);
+    for (uint64_t iter = 0; iter < n_iters; iter++) {
+      uint64_t n_ops = std::min((uint64_t) read_reqs.size() - iter * MAX_EVENTS,
+                                (uint64_t) MAX_EVENTS);
+      std::vector<iocb_t *>    cbs(n_ops, nullptr);
+      std::vector<io_event_t>  evts(n_ops);
+      std::vector<struct iocb> cb(n_ops);
+      for (uint64_t j = 0; j < n_ops; j++) {
+        io_prep_pread(cb.data() + j, fd, read_reqs[j + iter * MAX_EVENTS].buf,
+                      read_reqs[j + iter * MAX_EVENTS].len,
+                      read_reqs[j + iter * MAX_EVENTS].offset);
+      }
+      // initialize `cbs` using `cb` array
+      for (uint64_t i = 0; i < n_ops; i++) {
+        cbs[i] = cb.data() + i;
+      }
+
+      uint64_t n_tries = 0;
+      while (n_tries < n_retries) {
+        // issue reads
+        int64_t ret = io_submit(ctx, (int64_t) n_ops, cbs.data());
+        // if requests didn't get accepted
         if (ret != (int64_t) n_ops) {
-          std::cerr << "io_getevents() failed; returned " << ret
+          std::cerr << "io_submit() failed; returned " << ret
                     << ", expected=" << n_ops << ", ernno=" << errno << "="
                     << ::strerror(errno) << ", try #" << n_tries + 1;
           n_tries++;
           // try again
           continue;
         } else {
-          break;
+          // wait on io_getevents
+          ret = io_getevents(ctx, (int64_t) n_ops, (int64_t) n_ops, evts.data(),
+                             nullptr);
+          // if requests didn't complete
+          if (ret != (int64_t) n_ops) {
+            std::cerr << "io_getevents() failed; returned " << ret
+                      << ", expected=" << n_ops << ", ernno=" << errno << "="
+                      << ::strerror(errno) << ", try #" << n_tries + 1;
+            n_tries++;
+            // try again
+            continue;
+          } else {
+            break;
+          }
         }
       }
-    }
-    assert(n_tries != n_retries);
-    for (auto &req : read_reqs) {
-      // corruption check
-      assert(malloc_usable_size(req.buf) >= req.len);
+      assert(n_tries != n_retries);
+      for (auto &req : read_reqs) {
+        // corruption check
+        assert(malloc_usable_size(req.buf) >= req.len);
+      }
     }
     /*
     for(unsigned i=0;i<64;i++){

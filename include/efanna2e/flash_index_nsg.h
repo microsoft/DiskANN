@@ -36,6 +36,11 @@ namespace efanna2e {
                                        size_t k, const Parameters &parameters,
                                        unsigned *indices) override;
 
+    // implemented
+    void cache_bfs_levels(unsigned nlevels);
+    SimpleNhood *cache_check(unsigned id);
+
+    // implemented
     void load_embedded_index(const std::string &index_filename,
                              const std::string &node_size_fname);
 
@@ -45,12 +50,21 @@ namespace efanna2e {
                                            const Parameters &parameters,
                                            unsigned *        indices,
                                            int beam_width) override;
+    // implemented
+    std::pair<int, int> CachedBeamSearch(const float *query, const float *x,
+                                           size_t            k,
+                                           const Parameters &parameters,
+                                           unsigned *        indices,
+                                           int beam_width);
     AlignedFileReader graph_reader;
 
    private:
     std::vector<size_t> node_offsets;
     std::vector<size_t> node_sizes;
     Index *             initializer_;
+
+    // one hash-map per BFS level cached
+    std::vector<tsl::robin_map<unsigned, SimpleNhood>> nsg_cache;
 
     unsigned    width;
     unsigned    ep_;
