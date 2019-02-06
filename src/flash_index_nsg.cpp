@@ -1,4 +1,5 @@
 #include "efanna2e/flash_index_nsg.h"
+#include <malloc.h>
 
 #include <omp.h>
 #include <chrono>
@@ -73,9 +74,9 @@ namespace efanna2e {
     }
     graph_reader.read(read_reqs);
     for (auto &k_v : nsg_cache[0]) {
-      assert(k_v.second.nnbrs > 0);
       SimpleNhood &nhood = nsg_cache[0][k_v.first];
       nhood.construct(this->scale_factor);
+      assert(k_v.second.nnbrs > 0);
     }
     std::cerr << "Cached level-0; #nodes = " << read_reqs.size() << std::endl;
 
@@ -108,9 +109,9 @@ namespace efanna2e {
       // execute read-reqs and verify
       graph_reader.read(read_reqs);
       for (auto &k_v : nsg_cache[cur_level]) {
-        assert(k_v.second.nnbrs > 0);
         SimpleNhood &nhood = nsg_cache[cur_level][k_v.first];
         nhood.construct(this->scale_factor);
+        assert(k_v.second.nnbrs > 0);
       }
       std::cerr << "Cached level-" << cur_level
                 << "; #nodes = " << next_level_ids.size() << std::endl;
@@ -384,7 +385,7 @@ namespace efanna2e {
       if (!frontier.empty()) {
         hops++;
         frontier_nhoods.resize(frontier.size());
-        frontier_read_reqs.reserve(frontier.size());
+        frontier_read_reqs.clear();
         // alloc nhoods, read and construct fp32 variant
         // std::cout << "k = " << k << '\n';
         for (unsigned i = 0; i < frontier.size(); i++) {
@@ -392,9 +393,9 @@ namespace efanna2e {
           SimpleNhood *check = cache_check(id);
           if (check == nullptr) {
             frontier_nhoods[i].init(this->node_sizes[id], this->dimension_);
-            frontier_read_reqs.emplace_back(this->node_offsets[id],
-                                            this->node_sizes[id],
-                                            frontier_nhoods[i].buf);
+            frontier_read_reqs.push_back(AlignedRead(this->node_offsets[id],
+                                                     this->node_sizes[id],
+                                                     frontier_nhoods[i].buf));
           } else {
             // set frontier_nhoods[i].buf to nullptr to mark in-mem
             frontier_nhoods[i].aligned_fp32_coords = check->aligned_fp32_coords;
@@ -404,6 +405,8 @@ namespace efanna2e {
           // std::cout << "using buf = " << &(frontier_nhoods[i].buf) <<
           // std::endl;
         }
+        for (auto &req : frontier_read_reqs)
+          assert(malloc_usable_size(req.buf) > req.len);
         graph_reader.read(frontier_read_reqs);
         for (auto &nhood : frontier_nhoods) {
           // construct fp32 only if newly created SimpleNhood

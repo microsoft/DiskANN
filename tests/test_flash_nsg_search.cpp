@@ -116,7 +116,7 @@ int main(int argc, char** argv) {
     std::vector<unsigned>& query_res = res[i];
 
     auto before = std::chrono::high_resolution_clock::now();
-    auto ret = index.BeamSearch(query_load + i * query_dim, nullptr, K, paras,
+    auto ret = index.CachedBeamSearch(query_load + i * query_dim, nullptr, K, paras,
                                 query_res.data(), beam_width);
     auto diff_time = std::chrono::high_resolution_clock::now() - before;
     auto diff_micros =

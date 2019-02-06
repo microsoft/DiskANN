@@ -8,7 +8,7 @@
 #include "efanna2e/util.h"
 #include "tsl/robin_map.h"
 
-#define MAX_EVENTS 16
+#define MAX_EVENTS 1024
 
 namespace {
   typedef struct io_event io_event_t;
@@ -21,13 +21,15 @@ namespace {
       // std::cout << "request:"<<req.offset<<":"<<req.len << std::endl;
       assert(IS_ALIGNED(req.offset, 512));
       assert(IS_ALIGNED(req.buf, 512));
+      assert(malloc_usable_size(req.buf) >= req.len);
     }
 
     // break-up requests into chunks of size MAX_EVENTS each
-    uint64_t n_iters = ROUND_UP(read_reqs.size(), MAX_EVENTS);
+    uint64_t n_iters = ROUND_UP(read_reqs.size(), MAX_EVENTS) / MAX_EVENTS;
     for (uint64_t iter = 0; iter < n_iters; iter++) {
-      uint64_t n_ops = std::min((uint64_t) read_reqs.size() - iter * MAX_EVENTS,
-                                (uint64_t) MAX_EVENTS);
+      uint64_t n_ops =
+          std::min((uint64_t) read_reqs.size() - (iter * MAX_EVENTS),
+                   (uint64_t) MAX_EVENTS);
       std::vector<iocb_t *>    cbs(n_ops, nullptr);
       std::vector<io_event_t>  evts(n_ops);
       std::vector<struct iocb> cb(n_ops);
@@ -49,7 +51,7 @@ namespace {
         if (ret != (int64_t) n_ops) {
           std::cerr << "io_submit() failed; returned " << ret
                     << ", expected=" << n_ops << ", ernno=" << errno << "="
-                    << ::strerror(errno) << ", try #" << n_tries + 1;
+                    << ::strerror(-ret) << ", try #" << n_tries + 1;
           n_tries++;
           // try again
           continue;
@@ -61,7 +63,7 @@ namespace {
           if (ret != (int64_t) n_ops) {
             std::cerr << "io_getevents() failed; returned " << ret
                       << ", expected=" << n_ops << ", ernno=" << errno << "="
-                      << ::strerror(errno) << ", try #" << n_tries + 1;
+                      << ::strerror(-ret) << ", try #" << n_tries + 1;
             n_tries++;
             // try again
             continue;
