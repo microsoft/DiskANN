@@ -11,20 +11,23 @@
 
 #include "tsl/robin_set.h"
 
-#define NSG_MEDOID_NHOOD_INIT_SIZE 16384
-
 namespace efanna2e {
 #define _CONTROL_NUM 100
 
   // WARNING:: using 16KB as
   FlashIndexNSG::FlashIndexNSG(const size_t dimension, const size_t n, Metric m,
                                Index *initializer)
-      : Index(dimension, n, m), initializer_{initializer},
-        ep_nhood(NSG_MEDOID_NHOOD_INIT_SIZE, dimension) {
+      : Index(dimension, n, m), initializer_{initializer} {
     this->aligned_dim = ROUND_UP(dimension, 8);
   }
 
   FlashIndexNSG::~FlashIndexNSG() {
+    for (auto &lvl : nsg_cache) {
+      for (auto &k_v : lvl) {
+        lvl[k_v.first].cleanup();
+      }
+    }
+    ep_nhood.cleanup();
   }
 
   void FlashIndexNSG::Save(const char *filename) {
@@ -62,8 +65,8 @@ namespace efanna2e {
     std::vector<AlignedRead> read_reqs(ep_nhood.nnbrs);
     for (unsigned idx = 0; idx < ep_nhood.nnbrs; idx++) {
       unsigned node_id = ep_nhood.nbrs[idx];
-      nsg_cache[0][node_id] = SimpleNhood();
-      auto &nhood = nsg_cache[0][node_id];
+      nsg_cache[0].insert(std::make_pair(node_id, SimpleNhood()));
+      SimpleNhood &nhood = nsg_cache[0][node_id];
       nhood.init(node_sizes[node_id], this->dimension_);
       read_reqs[idx] =
           AlignedRead(node_offsets[node_id], node_sizes[node_id], nhood.buf);
@@ -94,8 +97,8 @@ namespace efanna2e {
       read_reqs.resize(next_level_ids.size());
       unsigned idx = 0;
       for (const auto &id : next_level_ids) {
-        nsg_cache[cur_level][id] = SimpleNhood();
-        auto &nhood = nsg_cache[cur_level][id];
+        nsg_cache[cur_level].insert(std::make_pair(id, SimpleNhood()));
+        SimpleNhood &nhood = nsg_cache[cur_level][id];
         nhood.init(node_sizes[id], this->dimension_);
         read_reqs[idx] =
             AlignedRead(node_offsets[id], node_sizes[id], nhood.buf);
@@ -153,13 +156,7 @@ namespace efanna2e {
               << " ) = " << this->node_offsets.back() << "B" << std::endl;
 
     // read in medoid
-    if (this->node_sizes[this->ep_] > NSG_MEDOID_NHOOD_INIT_SIZE) {
-      // if medoid nhood size is greater than preset size, re-init medoid nhood
-      std::cout << "De-alloc: " << NSG_MEDOID_NHOOD_INIT_SIZE
-                << " , re-alloc: " << this->node_sizes[this->ep_] << std::endl;
-      free(this->ep_nhood.buf);
-      alloc_aligned(&(this->ep_nhood.buf), this->node_sizes[this->ep_], 512);
-    }
+    ep_nhood.init(this->node_sizes[this->ep_], this->dimension_);
     std::vector<AlignedRead> ep_req;
     ep_req.emplace_back(this->node_offsets[this->ep_],
                         this->node_sizes[this->ep_], this->ep_nhood.buf);
@@ -276,21 +273,6 @@ namespace efanna2e {
           }
           id_vec_list.push_back(std::make_pair(
               id, frontier_nhood.aligned_fp32_coords + this->aligned_dim * m));
-          /*
-          cmps++;
-          float dist = distance_->compare(query, data_ + dimension_ * id,
-                                          (unsigned) dimension_);
-          if (dist >= retset[L - 1].distance)
-            continue;
-          Neighbor nn(id, dist, true);
-
-          int r = InsertIntoPool(
-              retset.data(), L,
-              nn);  // Return position in sorted list where nn inserted.
-          if (r < nk)
-            nk = r;  // nk logs the best position in the retset that was updated
-                     // due to neighbors of n.
-                     */
         }
       }
       auto last_iter = std::unique(id_vec_list.begin(), id_vec_list.end());
@@ -310,10 +292,16 @@ namespace efanna2e {
           nk = r;  // nk logs the best position in the retset that was updated
                    // due to neighbors of n.
       }
+
       if (nk <= k)
         k = nk;  // k is the best position in retset updated in this round.
       else
         ++k;
+
+      // clenup nhood objects
+      for (auto &nhood : frontier_nhoods) {
+        nhood.cleanup();
+      }
     }
     for (size_t i = 0; i < K; i++) {
       indices[i] = retset[i].id;
@@ -396,7 +384,7 @@ namespace efanna2e {
       if (!frontier.empty()) {
         hops++;
         frontier_nhoods.resize(frontier.size());
-        frontier_read_reqs.resize(frontier.size());
+        frontier_read_reqs.reserve(frontier.size());
         // alloc nhoods, read and construct fp32 variant
         // std::cout << "k = " << k << '\n';
         for (unsigned i = 0; i < frontier.size(); i++) {
@@ -404,11 +392,14 @@ namespace efanna2e {
           SimpleNhood *check = cache_check(id);
           if (check == nullptr) {
             frontier_nhoods[i].init(this->node_sizes[id], this->dimension_);
-            frontier_read_reqs[i] =
-                AlignedRead(this->node_offsets[id], this->node_sizes[id],
-                            frontier_nhoods[i].buf);
+            frontier_read_reqs.emplace_back(this->node_offsets[id],
+                                            this->node_sizes[id],
+                                            frontier_nhoods[i].buf);
           } else {
-            frontier_nhoods[i].redir = check;
+            // set frontier_nhoods[i].buf to nullptr to mark in-mem
+            frontier_nhoods[i].aligned_fp32_coords = check->aligned_fp32_coords;
+            frontier_nhoods[i].nnbrs = check->nnbrs;
+            frontier_nhoods[i].nbrs = check->nbrs;
           }
           // std::cout << "using buf = " << &(frontier_nhoods[i].buf) <<
           // std::endl;
@@ -416,36 +407,22 @@ namespace efanna2e {
         graph_reader.read(frontier_read_reqs);
         for (auto &nhood : frontier_nhoods) {
           // construct fp32 only if newly created SimpleNhood
-          if (nhood.nnbrs > 0) {
+          if (nhood.buf != nullptr) {
             nhood.construct(this->scale_factor);
           }
         }
       }
       // process each frontier nhood - extract id and coords of unvisited nodes
       for (auto &frontier_nhood : frontier_nhoods) {
-        // if (retset[k].flag) {
-        // retset[k].flag = false;
-        // unsigned n = retset[k].id;
-        unsigned nnbrs =
-            (frontier_nhood.redir == nullptr ? frontier_nhood.nnbrs
-                                             : frontier_nhood.redir->nnbrs);
-        unsigned *nbrs =
-            (frontier_nhood.redir == nullptr ? frontier_nhood.nbrs
-                                             : frontier_nhood.redir->nbrs);
-        float *aligned_fp32_coords =
-            (frontier_nhood.redir == nullptr
-                 ? frontier_nhood.aligned_fp32_coords
-                 : frontier_nhood.redir->aligned_fp32_coords);
-
-        for (unsigned m = 0; m < nnbrs; ++m) {
-          unsigned id = nbrs[m];
+        for (unsigned m = 0; m < frontier_nhood.nnbrs; ++m) {
+          unsigned id = frontier_nhood.nbrs[m];
           if (visited.find(id) != visited.end()) {
             continue;
           } else {
             visited.insert(id);
           }
-          id_vec_list.push_back(
-              std::make_pair(id, aligned_fp32_coords + this->aligned_dim * m));
+          id_vec_list.push_back(std::make_pair(
+              id, frontier_nhood.aligned_fp32_coords + this->aligned_dim * m));
         }
       }
       auto last_iter = std::unique(id_vec_list.begin(), id_vec_list.end());
@@ -465,10 +442,17 @@ namespace efanna2e {
           nk = r;  // nk logs the best position in the retset that was updated
                    // due to neighbors of n.
       }
+
       if (nk <= k)
         k = nk;  // k is the best position in retset updated in this round.
       else
         ++k;
+      // cleanup all temporary nhoods
+      for (auto &nhood : frontier_nhoods) {
+        if (nhood.buf != nullptr) {
+          nhood.cleanup();
+        }
+      }
     }
     for (size_t i = 0; i < K; i++) {
       indices[i] = retset[i].id;
