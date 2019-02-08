@@ -117,7 +117,7 @@ namespace efanna2e {
                 << "; #nodes = " << next_level_ids.size() << std::endl;
     }
   }
-  
+
   void FlashIndexNSG::smart_cache_bfs_levels(unsigned nlevels) {
     if (!nbrs_cache.empty()) {
       std::cerr << "Cache is not empty" << std::endl;
@@ -132,22 +132,25 @@ namespace efanna2e {
     unsigned aligned_dim = ROUND_UP(this->dimension_, 8);
 
     // cache ep_nhood
-    for(unsigned idx = 0; idx < ep_nhood.nnbrs;idx++){
+    for (unsigned idx = 0; idx < ep_nhood.nnbrs; idx++) {
       unsigned nbr_id = ep_nhood.nbrs[idx];
       cur_level->insert(nbr_id);
-      if(coords_cache.find(nbr_id) == coords_cache.end()){
+      if (coords_cache.find(nbr_id) == coords_cache.end()) {
         coords_cache.insert(std::make_pair(nbr_id, nullptr));
-        float* &nbr_coords = coords_cache[nbr_id];
-        nbr_coords = ep_nhood.aligned_fp32_coords + aligned_dim * idx;
+        float *&nbr_coords = coords_cache[nbr_id];
+        alloc_aligned((void **) &nbr_coords, aligned_dim * sizeof(float), 32);
+        memcpy(nbr_coords, ep_nhood.aligned_fp32_coords + aligned_dim * idx,
+               aligned_dim * sizeof(float));
       }
     }
 
     // insert ep_'s adjacency list into nbrs_cache
     nbrs_cache.insert(std::make_pair(ep_, nullptr));
     unsigned *&ep_nbrs = nbrs_cache[ep_];
-    ep_nbrs = ep_nhood.nbrs;
+    ep_nbrs = new unsigned[ep_nhood.nnbrs];
+    memcpy(ep_nbrs, ep_nhood.nbrs, ep_nhood.nnbrs * sizeof(unsigned));
 
-    for(unsigned lvl = 0; lvl < nlevels; lvl++){
+    for (unsigned lvl = 0; lvl < nlevels; lvl++) {
       // swap prev_level and cur_level
       std::swap(prev_level, cur_level);
       // clear cur_level
@@ -156,37 +159,42 @@ namespace efanna2e {
       // read in all pre_level nhoods
       std::vector<AlignedRead> read_reqs;
       std::vector<SimpleNhood> prev_nhoods;
-      
+      std::vector<unsigned>    prev_nhood_ids;
+
       // vector reserve for better perf
       read_reqs.reserve(prev_level->size());
       prev_nhoods.reserve(prev_level->size());
-      
-      for(const unsigned &id : *prev_level){
+      prev_nhood_ids.reserve(prev_level->size());
+
+      for (const unsigned &id : *prev_level) {
         // skip node if already read into
-        if(nbrs_cache.find(id) != nbrs_cache.end()){
+        if (nbrs_cache.find(id) != nbrs_cache.end()) {
           continue;
         }
+
         prev_nhoods.push_back(SimpleNhood());
         prev_nhoods.back().init(node_sizes[id], this->dimension_);
-        read_reqs.emplace_back(node_offsets[id], node_sizes[id], prev_nhoods.back().buf);
+        read_reqs.emplace_back(node_offsets[id], node_sizes[id],
+                               prev_nhoods.back().buf);
+        prev_nhood_ids
       }
-      std::cout << "Level : " << lvl << ", # nodes: " << read_reqs.size() << std::endl;
-      for(SimpleNhood &nhood : prev_nhoods){
+      std::cout << "Level : " << lvl << ", # nodes: " << read_reqs.size()
+                << std::endl;
+      for (SimpleNhood &nhood : prev_nhoods) {
         nhood.construct(this->scale_factor);
         assert(nhood.nnbrs > 0);
-        for(unsigned nbr_idx = 0; nbr_idx < nhood.nnbrs; nbr_idx++){
+        for (unsigned nbr_idx = 0; nbr_idx < nhood.nnbrs; nbr_idx++) {
           unsigned nbr = nhood.nbrs[nbr_idx];
-          float* nbr_coords = nhood.aligned_fp32_coords + aligned_dim * nbr_idx;
+          float *nbr_coords = nhood.aligned_fp32_coords + aligned_dim * nbr_idx;
           // process only if not processed before
-          if(coords_cache.find(nbr) == coords_cache.end()){
+          if (coords_cache.find(nbr) == coords_cache.end()) {
             coords_cache.insert(std::make_pair(nbr, nullptr));
-            float* &coords = coords_cache[nbr];
-            alloc_aligned((void**)&coords, aligned_dim * sizeof(float), 32);
+            float *&coords = coords_cache[nbr];
+            alloc_aligned((void **) &coords, aligned_dim * sizeof(float), 32);
             memcpy(coords, nbr_coords, aligned_dim * sizeof(float));
             cur_level->insert(nbr);
           }
         }
-        
       }
     }
     // first cache nhoods of each node in ep_nhood
