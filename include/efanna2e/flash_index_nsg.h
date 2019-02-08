@@ -39,6 +39,7 @@ namespace efanna2e {
     // implemented
     void cache_bfs_levels(unsigned nlevels);
     SimpleNhood *cache_check(unsigned id);
+    void smart_cache_bfs_levels(unsigned nlevels);
 
     // implemented
     void load_embedded_index(const std::string &index_filename,
@@ -65,6 +66,11 @@ namespace efanna2e {
 
     // one hash-map per BFS level cached
     std::vector<tsl::robin_map<unsigned, SimpleNhood>> nsg_cache;
+
+    // cache adjacency list for K-levels
+    tsl::robin_map<unsigned, unsigned*> nbrs_cache;
+    // cache coords for K+1 levels
+    tsl::robin_map<unsigned, float*> coords_cache;
 
     unsigned    width;
     unsigned    ep_;

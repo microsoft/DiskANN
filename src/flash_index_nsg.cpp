@@ -117,6 +117,133 @@ namespace efanna2e {
                 << "; #nodes = " << next_level_ids.size() << std::endl;
     }
   }
+  
+  void FlashIndexNSG::smart_cache_bfs_levels(unsigned nlevels) {
+    if (!nbrs_cache.empty()) {
+      std::cerr << "Cache is not empty" << std::endl;
+      return;
+    }
+
+    assert(nlevels > 1);
+
+    tsl::robin_set<unsigned> *cur_level, *prev_level;
+    cur_level = new tsl::robin_set<unsigned>();
+    prev_level = new tsl::robin_set<unsigned>();
+    unsigned aligned_dim = ROUND_UP(this->dimension_, 8);
+
+    // cache ep_nhood
+    for(unsigned idx = 0; idx < ep_nhood.nnbrs;idx++){
+      unsigned nbr_id = ep_nhood.nbrs[idx];
+      cur_level->insert(nbr_id);
+      if(coords_cache.find(nbr_id) == coords_cache.end()){
+        coords_cache.insert(std::make_pair(nbr_id, nullptr));
+        float* &nbr_coords = coords_cache[nbr_id];
+        nbr_coords = ep_nhood.aligned_fp32_coords + aligned_dim * idx;
+      }
+    }
+
+    // insert ep_'s adjacency list into nbrs_cache
+    nbrs_cache.insert(std::make_pair(ep_, nullptr));
+    unsigned *&ep_nbrs = nbrs_cache[ep_];
+    ep_nbrs = ep_nhood.nbrs;
+
+    for(unsigned lvl = 0; lvl < nlevels; lvl++){
+      // swap prev_level and cur_level
+      std::swap(prev_level, cur_level);
+      // clear cur_level
+      cur_level->clear();
+
+      // read in all pre_level nhoods
+      std::vector<AlignedRead> read_reqs;
+      std::vector<SimpleNhood> prev_nhoods;
+      
+      // vector reserve for better perf
+      read_reqs.reserve(prev_level->size());
+      prev_nhoods.reserve(prev_level->size());
+      
+      for(const unsigned &id : *prev_level){
+        // skip node if already read into
+        if(nbrs_cache.find(id) != nbrs_cache.end()){
+          continue;
+        }
+        prev_nhoods.push_back(SimpleNhood());
+        prev_nhoods.back().init(node_sizes[id], this->dimension_);
+        read_reqs.emplace_back(node_offsets[id], node_sizes[id], prev_nhoods.back().buf);
+      }
+      std::cout << "Level : " << lvl << ", # nodes: " << read_reqs.size() << std::endl;
+      for(SimpleNhood &nhood : prev_nhoods){
+        nhood.construct(this->scale_factor);
+        assert(nhood.nnbrs > 0);
+        for(unsigned nbr_idx = 0; nbr_idx < nhood.nnbrs; nbr_idx++){
+          unsigned nbr = nhood.nbrs[nbr_idx];
+          float* nbr_coords = nhood.aligned_fp32_coords + aligned_dim * nbr_idx;
+          // process only if not processed before
+          if(coords_cache.find(nbr) == coords_cache.end()){
+            coords_cache.insert(std::make_pair(nbr, nullptr));
+            float* &coords = coords_cache[nbr];
+            alloc_aligned((void**)&coords, aligned_dim * sizeof(float), 32);
+            memcpy(coords, nbr_coords, aligned_dim * sizeof(float));
+            cur_level->insert(nbr);
+          }
+        }
+        
+      }
+    }
+    // first cache nhoods of each node in ep_nhood
+    std::vector<AlignedRead> read_reqs(ep_nhood.nnbrs);
+    for (unsigned idx = 0; idx < ep_nhood.nnbrs; idx++) {
+      unsigned node_id = ep_nhood.nbrs[idx];
+      nsg_cache[0].insert(std::make_pair(node_id, SimpleNhood()));
+      SimpleNhood &nhood = nsg_cache[0][node_id];
+      nhood.init(node_sizes[node_id], this->dimension_);
+      read_reqs[idx] =
+          AlignedRead(node_offsets[node_id], node_sizes[node_id], nhood.buf);
+    }
+    graph_reader.read(read_reqs);
+    for (auto &k_v : nsg_cache[0]) {
+      SimpleNhood &nhood = nsg_cache[0][k_v.first];
+      nhood.construct(this->scale_factor);
+      assert(k_v.second.nnbrs > 0);
+    }
+    std::cerr << "Cached level-0; #nodes = " << read_reqs.size() << std::endl;
+
+    // cache subsequent levels
+    tsl::robin_set<unsigned> next_level_ids;
+    for (unsigned cur_level = 1; cur_level < nlevels; cur_level++) {
+      // clear old read reqs
+      read_reqs.clear();
+      next_level_ids.clear();
+
+      // collect all unique IDs in next level
+      for (auto &k_v : nsg_cache[cur_level - 1]) {
+        for (unsigned idx = 0; idx < k_v.second.nnbrs; idx++) {
+          next_level_ids.insert(k_v.second.nbrs[idx]);
+        }
+      }
+
+      // allocate mem and create read-reqs
+      read_reqs.resize(next_level_ids.size());
+      unsigned idx = 0;
+      for (const auto &id : next_level_ids) {
+        nsg_cache[cur_level].insert(std::make_pair(id, SimpleNhood()));
+        SimpleNhood &nhood = nsg_cache[cur_level][id];
+        nhood.init(node_sizes[id], this->dimension_);
+        read_reqs[idx] =
+            AlignedRead(node_offsets[id], node_sizes[id], nhood.buf);
+        idx++;
+      }
+
+      // execute read-reqs and verify
+      graph_reader.read(read_reqs);
+      for (auto &k_v : nsg_cache[cur_level]) {
+        SimpleNhood &nhood = nsg_cache[cur_level][k_v.first];
+        nhood.construct(this->scale_factor);
+        assert(k_v.second.nnbrs > 0);
+      }
+      std::cerr << "Cached level-" << cur_level
+                << "; #nodes = " << next_level_ids.size() << std::endl;
+    }
+  }
 
   void FlashIndexNSG::load_embedded_index(const std::string &index_filename,
                                           const std::string &node_size_fname) {
