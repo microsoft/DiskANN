@@ -39,86 +39,7 @@ namespace efanna2e {
     std::cerr << "FlashIndexNSG::Load not implemented" << std::endl;
   }
 
-  SimpleNhood *FlashIndexNSG::cache_check(unsigned id) {
-    for (auto &lvl : nsg_cache) {
-      auto ret = lvl.find(id);
-      if (ret != lvl.end()) {
-        return &(lvl[id]);
-      }
-    }
-
-    // not found in cache
-    return nullptr;
-  }
-
   void FlashIndexNSG::cache_bfs_levels(unsigned nlevels) {
-    if (!nsg_cache.empty()) {
-      std::cerr << "Cache is not empty" << std::endl;
-      return;
-    }
-
-    assert(nlevels > 1);
-
-    // create `nlevels` levels
-    nsg_cache.resize(nlevels);
-
-    // first cache nhoods of each node in ep_nhood
-    std::vector<AlignedRead> read_reqs(ep_nhood.nnbrs);
-    for (unsigned idx = 0; idx < ep_nhood.nnbrs; idx++) {
-      unsigned node_id = ep_nhood.nbrs[idx];
-      nsg_cache[0].insert(std::make_pair(node_id, SimpleNhood()));
-      SimpleNhood &nhood = nsg_cache[0][node_id];
-      nhood.init(node_sizes[node_id], this->dimension_);
-      read_reqs[idx] =
-          AlignedRead(node_offsets[node_id], node_sizes[node_id], nhood.buf);
-    }
-    graph_reader.read(read_reqs);
-    for (auto &k_v : nsg_cache[0]) {
-      SimpleNhood &nhood = nsg_cache[0][k_v.first];
-      nhood.construct(this->scale_factor);
-      assert(k_v.second.nnbrs > 0);
-    }
-    std::cerr << "Cached level-0; #nodes = " << read_reqs.size() << std::endl;
-
-    // cache subsequent levels
-    tsl::robin_set<unsigned> next_level_ids;
-    for (unsigned cur_level = 1; cur_level < nlevels; cur_level++) {
-      // clear old read reqs
-      read_reqs.clear();
-      next_level_ids.clear();
-
-      // collect all unique IDs in next level
-      for (auto &k_v : nsg_cache[cur_level - 1]) {
-        for (unsigned idx = 0; idx < k_v.second.nnbrs; idx++) {
-          next_level_ids.insert(k_v.second.nbrs[idx]);
-        }
-      }
-
-      // allocate mem and create read-reqs
-      read_reqs.resize(next_level_ids.size());
-      unsigned idx = 0;
-      for (const auto &id : next_level_ids) {
-        nsg_cache[cur_level].insert(std::make_pair(id, SimpleNhood()));
-        SimpleNhood &nhood = nsg_cache[cur_level][id];
-        nhood.init(node_sizes[id], this->dimension_);
-        read_reqs[idx] =
-            AlignedRead(node_offsets[id], node_sizes[id], nhood.buf);
-        idx++;
-      }
-
-      // execute read-reqs and verify
-      graph_reader.read(read_reqs);
-      for (auto &k_v : nsg_cache[cur_level]) {
-        SimpleNhood &nhood = nsg_cache[cur_level][k_v.first];
-        nhood.construct(this->scale_factor);
-        assert(k_v.second.nnbrs > 0);
-      }
-      std::cerr << "Cached level-" << cur_level
-                << "; #nodes = " << next_level_ids.size() << std::endl;
-    }
-  }
-
-  void FlashIndexNSG::smart_cache_bfs_levels(unsigned nlevels) {
     if (!nbrs_cache.empty()) {
       std::cerr << "Cache is not empty" << std::endl;
       return;
@@ -145,10 +66,10 @@ namespace efanna2e {
     }
 
     // insert ep_'s adjacency list into nbrs_cache
-    nbrs_cache.insert(std::make_pair(ep_, nullptr));
-    unsigned *&ep_nbrs = nbrs_cache[ep_];
-    ep_nbrs = new unsigned[ep_nhood.nnbrs];
-    memcpy(ep_nbrs, ep_nhood.nbrs, ep_nhood.nnbrs * sizeof(unsigned));
+    nbrs_cache.insert(
+        std::make_pair(ep_, std::vector<unsigned>(ep_nhood.nnbrs)));
+    std::vector<unsigned> &ep_nbrs = nbrs_cache[ep_];
+    memcpy(ep_nbrs.data(), ep_nhood.nbrs, ep_nhood.nnbrs * sizeof(unsigned));
 
     for (unsigned lvl = 0; lvl < nlevels; lvl++) {
       // swap prev_level and cur_level
@@ -158,13 +79,13 @@ namespace efanna2e {
 
       // read in all pre_level nhoods
       std::vector<AlignedRead> read_reqs;
+      std::vector<unsigned>    read_reqs_ids;
       std::vector<SimpleNhood> prev_nhoods;
-      std::vector<unsigned>    prev_nhood_ids;
 
       // vector reserve for better perf
       read_reqs.reserve(prev_level->size());
       prev_nhoods.reserve(prev_level->size());
-      prev_nhood_ids.reserve(prev_level->size());
+      read_reqs_ids.reserve(prev_level->size());
 
       for (const unsigned &id : *prev_level) {
         // skip node if already read into
@@ -176,13 +97,28 @@ namespace efanna2e {
         prev_nhoods.back().init(node_sizes[id], this->dimension_);
         read_reqs.emplace_back(node_offsets[id], node_sizes[id],
                                prev_nhoods.back().buf);
-        prev_nhood_ids
+        read_reqs_ids.push_back(id);
       }
-      std::cout << "Level : " << lvl << ", # nodes: " << read_reqs.size()
+      std::cout << "Level : " << lvl << ", # nodes: " << read_reqs_ids.size()
                 << std::endl;
-      for (SimpleNhood &nhood : prev_nhoods) {
+
+      // issue read requests
+      graph_reader.read(read_reqs);
+      for (unsigned idx = 0; idx < read_reqs.size(); idx++) {
+        SimpleNhood &nhood = prev_nhoods[idx];
+        unsigned     node_id = read_reqs_ids[idx];
         nhood.construct(this->scale_factor);
         assert(nhood.nnbrs > 0);
+
+        // add `node_id`'s nbrs to nbrs_cache
+        if (nbrs_cache.find(node_id) == nbrs_cache.end()) {
+          nbrs_cache.insert(
+              std::make_pair(node_id, std::vector<unsigned>(nhood.nnbrs)));
+          std::vector<unsigned> &nbrs = nbrs_cache[node_id];
+          memcpy(nbrs.data(), nhood.nbrs, nhood.nnbrs * sizeof(unsigned));
+        }
+
+        // add coords of nbrs to coords_cache
         for (unsigned nbr_idx = 0; nbr_idx < nhood.nnbrs; nbr_idx++) {
           unsigned nbr = nhood.nbrs[nbr_idx];
           float *nbr_coords = nhood.aligned_fp32_coords + aligned_dim * nbr_idx;
@@ -195,62 +131,15 @@ namespace efanna2e {
             cur_level->insert(nbr);
           }
         }
-      }
-    }
-    // first cache nhoods of each node in ep_nhood
-    std::vector<AlignedRead> read_reqs(ep_nhood.nnbrs);
-    for (unsigned idx = 0; idx < ep_nhood.nnbrs; idx++) {
-      unsigned node_id = ep_nhood.nbrs[idx];
-      nsg_cache[0].insert(std::make_pair(node_id, SimpleNhood()));
-      SimpleNhood &nhood = nsg_cache[0][node_id];
-      nhood.init(node_sizes[node_id], this->dimension_);
-      read_reqs[idx] =
-          AlignedRead(node_offsets[node_id], node_sizes[node_id], nhood.buf);
-    }
-    graph_reader.read(read_reqs);
-    for (auto &k_v : nsg_cache[0]) {
-      SimpleNhood &nhood = nsg_cache[0][k_v.first];
-      nhood.construct(this->scale_factor);
-      assert(k_v.second.nnbrs > 0);
-    }
-    std::cerr << "Cached level-0; #nodes = " << read_reqs.size() << std::endl;
 
-    // cache subsequent levels
-    tsl::robin_set<unsigned> next_level_ids;
-    for (unsigned cur_level = 1; cur_level < nlevels; cur_level++) {
-      // clear old read reqs
-      read_reqs.clear();
-      next_level_ids.clear();
-
-      // collect all unique IDs in next level
-      for (auto &k_v : nsg_cache[cur_level - 1]) {
-        for (unsigned idx = 0; idx < k_v.second.nnbrs; idx++) {
-          next_level_ids.insert(k_v.second.nbrs[idx]);
+        for (auto &nhood : prev_nhoods) {
+          nhood.cleanup();
         }
       }
-
-      // allocate mem and create read-reqs
-      read_reqs.resize(next_level_ids.size());
-      unsigned idx = 0;
-      for (const auto &id : next_level_ids) {
-        nsg_cache[cur_level].insert(std::make_pair(id, SimpleNhood()));
-        SimpleNhood &nhood = nsg_cache[cur_level][id];
-        nhood.init(node_sizes[id], this->dimension_);
-        read_reqs[idx] =
-            AlignedRead(node_offsets[id], node_sizes[id], nhood.buf);
-        idx++;
-      }
-
-      // execute read-reqs and verify
-      graph_reader.read(read_reqs);
-      for (auto &k_v : nsg_cache[cur_level]) {
-        SimpleNhood &nhood = nsg_cache[cur_level][k_v.first];
-        nhood.construct(this->scale_factor);
-        assert(k_v.second.nnbrs > 0);
-      }
-      std::cerr << "Cached level-" << cur_level
-                << "; #nodes = " << next_level_ids.size() << std::endl;
     }
+
+    delete cur_level;
+    delete prev_level;
   }
 
   void FlashIndexNSG::load_embedded_index(const std::string &index_filename,
@@ -364,7 +253,8 @@ namespace efanna2e {
       frontier_nhoods.clear();
       id_vec_list.clear();
       unsigned marker = k - 1;
-      while (++marker < (unsigned) L && frontier.size() < beam_width) {
+      while (++marker < (unsigned) L &&
+             frontier.size() < (unsigned) beam_width) {
         // if dummy init, don't process
         if (retset[marker].distance == std::numeric_limits<float>::max()) {
           continue;
@@ -480,12 +370,14 @@ namespace efanna2e {
       retset[i] = Neighbor(id, dist, true);
       // flags[id] = true;
     }
+
+    // set distance to +inf for dummy ids
     for (unsigned i = tmp_l; i < L; i++) {
       unsigned id = init_ids[i];
-      // set distance to +inf
-      float dist = std::numeric_limits<float>::max();
+      float    dist = std::numeric_limits<float>::max();
       retset[i] = Neighbor(id, dist, true);
     }
+
     std::sort(retset.begin(), retset.begin() + L);
 
     int hops = 0;
@@ -494,7 +386,7 @@ namespace efanna2e {
 
     // cleared every iteration
     std::vector<unsigned> frontier;
-    std::vector<std::pair<unsigned, float *>> id_vec_list;
+    tsl::robin_map<unsigned, float *> id_vec_map;
     std::vector<SimpleNhood> frontier_nhoods;
     std::vector<AlignedRead> frontier_read_reqs;
 
@@ -504,9 +396,10 @@ namespace efanna2e {
       // clear iteration state
       frontier.clear();
       frontier_nhoods.clear();
-      id_vec_list.clear();
+      id_vec_map.clear();
       unsigned marker = k - 1;
-      while (++marker < (unsigned) L && frontier.size() < beam_width) {
+      while (++marker < (unsigned) L &&
+             frontier.size() < (unsigned) beam_width) {
         // if dummy init, don't process
         if (retset[marker].distance == std::numeric_limits<float>::max()) {
           continue;
@@ -519,55 +412,61 @@ namespace efanna2e {
 
       if (!frontier.empty()) {
         hops++;
-        frontier_nhoods.resize(frontier.size());
+        frontier_nhoods.clear();
         frontier_read_reqs.clear();
         // alloc nhoods, read and construct fp32 variant
         // std::cout << "k = " << k << '\n';
-        for (unsigned i = 0; i < frontier.size(); i++) {
-          unsigned     id = frontier[i];
-          SimpleNhood *check = cache_check(id);
-          if (check == nullptr) {
-            frontier_nhoods[i].init(this->node_sizes[id], this->dimension_);
-            frontier_read_reqs.push_back(AlignedRead(this->node_offsets[id],
-                                                     this->node_sizes[id],
-                                                     frontier_nhoods[i].buf));
+        for (const unsigned &id : frontier) {
+          assert(visited.find(id) == visited.end());
+          auto iter = nbrs_cache.find(id);
+          // if nbrs of `id` was not cached, make a request
+          if (iter == nbrs_cache.end()) {
+            frontier_nhoods.push_back(SimpleNhood());
+            SimpleNhood &nhood = frontier_nhoods.back();
+            nhood.init(this->node_sizes[id], this->dimension_);
+            frontier_read_reqs.push_back(AlignedRead(
+                this->node_offsets[id], this->node_sizes[id], nhood.buf));
           } else {
-            // set frontier_nhoods[i].buf to nullptr to mark in-mem
-            frontier_nhoods[i].aligned_fp32_coords = check->aligned_fp32_coords;
-            frontier_nhoods[i].nnbrs = check->nnbrs;
-            frontier_nhoods[i].nbrs = check->nbrs;
+            // add cached coods from id list
+            for (const unsigned &nbr_id : iter->second) {
+              auto coord_iter = coords_cache.find(nbr_id);
+              assert(coord_iter != coords_cache.end());
+              id_vec_map.insert(std::make_pair(nbr_id, coord_iter->second));
+            }
           }
-          // std::cout << "using buf = " << &(frontier_nhoods[i].buf) <<
-          // std::endl;
         }
-        for (auto &req : frontier_read_reqs)
+
+        // prepare and execute reads
+        for (auto &req : frontier_read_reqs) {
           assert(malloc_usable_size(req.buf) > req.len);
+        }
         graph_reader.read(frontier_read_reqs);
+
         for (auto &nhood : frontier_nhoods) {
-          // construct fp32 only if newly created SimpleNhood
-          if (nhood.buf != nullptr) {
-            nhood.construct(this->scale_factor);
+          nhood.construct(this->scale_factor);
+          assert(nhood.nnbrs > 0);
+          for (unsigned nbr_idx = 0; nbr_idx < nhood.nnbrs; nbr_idx++) {
+            unsigned id = nhood.nbrs[nbr_idx];
+
+            // skip if already visited
+            if (visited.find(id) != visited.end()) {
+              continue;
+            }
+
+            // add if not visited
+            float *id_coords =
+                nhood.aligned_fp32_coords + nbr_idx * aligned_dim;
+            if (id_vec_map.find(id) == id_vec_map.end()) {
+              id_vec_map.insert(std::make_pair(id, id_coords));
+            }
           }
         }
       }
-      // process each frontier nhood - extract id and coords of unvisited nodes
-      for (auto &frontier_nhood : frontier_nhoods) {
-        for (unsigned m = 0; m < frontier_nhood.nnbrs; ++m) {
-          unsigned id = frontier_nhood.nbrs[m];
-          if (visited.find(id) != visited.end()) {
-            continue;
-          } else {
-            visited.insert(id);
-          }
-          id_vec_list.push_back(std::make_pair(
-              id, frontier_nhood.aligned_fp32_coords + this->aligned_dim * m));
-        }
-      }
-      auto last_iter = std::unique(id_vec_list.begin(), id_vec_list.end());
-      for (auto iter = id_vec_list.begin(); iter != last_iter; iter++) {
+
+      for (auto &k_v : id_vec_map) {
         cmps++;
-        unsigned id = iter->first;
-        float *  id_vec = iter->second;
+        unsigned id = k_v.first;
+        float *  id_vec = k_v.second;
         float    dist = distance_->compare(query, id_vec, this->aligned_dim);
         if (dist >= retset[L - 1].distance)
           continue;
@@ -585,16 +484,16 @@ namespace efanna2e {
         k = nk;  // k is the best position in retset updated in this round.
       else
         ++k;
+
       // cleanup all temporary nhoods
       for (auto &nhood : frontier_nhoods) {
-        if (nhood.buf != nullptr) {
-          nhood.cleanup();
-        }
+        nhood.cleanup();
       }
     }
     for (size_t i = 0; i < K; i++) {
       indices[i] = retset[i].id;
     }
+
     return std::make_pair(hops, cmps);
   }
 
@@ -602,5 +501,6 @@ namespace efanna2e {
                                             size_t            K,
                                             const Parameters &parameters,
                                             unsigned *        indices) {
+    return std::pair<int, int>();
   }
 }
