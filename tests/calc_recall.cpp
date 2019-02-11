@@ -86,7 +86,7 @@ int main(int argc, char** argv)
   }
 
 
-  double avg_recall = (recall*1.0)/(points_num*1.0);
-  std::cout <<"avg. recall "<< dim_gs <<" at "<< dim_or<<" is "<< avg_recall<<" \n";
-  std::cout<<"avg. number of nearest neighbors reported is "<<(total_recall*1.0)/points_num<<std::endl;
+  //  double avg_recall = (recall*1.0)/(points_num*1.0);
+  std::cout <<"avg. recall "<< dim_gs <<" at "<< dim_or<<" is "
+	    <<(total_recall*1.0)/points_num<<std::endl;
 } 
