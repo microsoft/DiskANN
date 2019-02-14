@@ -29,6 +29,9 @@ namespace efanna2e {
       }
     }
     ep_nhood.cleanup();
+    for (auto &k_v : coords_cache) {
+      free(k_v.second);
+    }
   }
 
   void FlashIndexNSG::Save(const char *filename) {
@@ -127,9 +130,6 @@ namespace efanna2e {
             cur_level->insert(nbr);
           }
         }
-      }
-
-      for (auto &nhood : prev_nhoods) {
         nhood.cleanup();
       }
     }
@@ -345,13 +345,9 @@ namespace efanna2e {
     }
 
     // cannot generate random init points
-    unsigned dummy_inits = (L - tmp_l);
-    while (dummy_inits > 0) {
-      // using std::numeric_limits<unsigned>::max as dummy init points, with inf
-      // distance
-      unsigned id = std::numeric_limits<unsigned>::max() - dummy_inits;
-      init_ids[tmp_l + dummy_inits] = id;
-      dummy_inits--;
+    for (unsigned idx = tmp_l; idx < L; idx++) {
+      unsigned id = std::numeric_limits<unsigned>::max() - idx;
+      init_ids[idx] = id;
     }
 
     for (unsigned i = 0; i < tmp_l; i++) {
@@ -437,7 +433,7 @@ namespace efanna2e {
 
         // prepare and execute reads
         for (auto &req : frontier_read_reqs) {
-          assert(malloc_usable_size(req.buf) > req.len);
+          assert(malloc_usable_size(req.buf) >= req.len);
         }
         graph_reader.read(frontier_read_reqs);
 

@@ -20,7 +20,7 @@ void load_data(char* filename, float*& data, unsigned& num,
   std::ios::pos_type ss = in.tellg();
   size_t             fsize = (size_t) ss;
   num = (unsigned) (fsize / (dim + 1) / 4);
-  data = new float[(size_t) num * (size_t) dim];
+  data = (float*) malloc((size_t) num * (size_t) dim * sizeof(float));
 
   in.seekg(0, std::ios::beg);
   for (size_t i = 0; i < num; i++) {
@@ -116,8 +116,8 @@ int main(int argc, char** argv) {
     std::vector<unsigned>& query_res = res[i];
 
     auto before = std::chrono::high_resolution_clock::now();
-    auto ret = index.CachedBeamSearch(query_load + i * query_dim, nullptr, K, paras,
-                                query_res.data(), beam_width);
+    auto ret = index.CachedBeamSearch(query_load + i * query_dim, nullptr, K,
+                                      paras, query_res.data(), beam_width);
     auto diff_time = std::chrono::high_resolution_clock::now() - before;
     auto diff_micros =
         std::chrono::duration_cast<std::chrono::microseconds>(diff_time);
