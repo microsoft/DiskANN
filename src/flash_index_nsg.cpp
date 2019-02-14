@@ -82,11 +82,6 @@ namespace efanna2e {
       std::vector<unsigned>    read_reqs_ids;
       std::vector<SimpleNhood> prev_nhoods;
 
-      // vector reserve for better perf
-      read_reqs.reserve(prev_level->size());
-      prev_nhoods.reserve(prev_level->size());
-      read_reqs_ids.reserve(prev_level->size());
-
       for (const unsigned &id : *prev_level) {
         // skip node if already read into
         if (nbrs_cache.find(id) != nbrs_cache.end()) {
@@ -94,9 +89,9 @@ namespace efanna2e {
         }
 
         prev_nhoods.push_back(SimpleNhood());
-        prev_nhoods.back().init(node_sizes[id], this->dimension_);
-        read_reqs.emplace_back(node_offsets[id], node_sizes[id],
-                               prev_nhoods.back().buf);
+        SimpleNhood &nhood = prev_nhoods.back();
+        nhood.init(node_sizes[id], this->dimension_);
+        read_reqs.emplace_back(node_offsets[id], node_sizes[id], nhood.buf);
         read_reqs_ids.push_back(id);
       }
       std::cout << "Level : " << lvl << ", # nodes: " << read_reqs_ids.size()
@@ -104,6 +99,7 @@ namespace efanna2e {
 
       // issue read requests
       graph_reader.read(read_reqs);
+
       for (unsigned idx = 0; idx < read_reqs.size(); idx++) {
         SimpleNhood &nhood = prev_nhoods[idx];
         unsigned     node_id = read_reqs_ids[idx];
@@ -131,10 +127,10 @@ namespace efanna2e {
             cur_level->insert(nbr);
           }
         }
+      }
 
-        for (auto &nhood : prev_nhoods) {
-          nhood.cleanup();
-        }
+      for (auto &nhood : prev_nhoods) {
+        nhood.cleanup();
       }
     }
 
@@ -231,7 +227,7 @@ namespace efanna2e {
       unsigned id = init_ids[i];
       // set distance to +inf
       float dist = std::numeric_limits<float>::max();
-      retset[i] = Neighbor(id, dist, true);
+      retset[i] = Neighbor(id, dist, false);
     }
     std::sort(retset.begin(), retset.begin() + L);
 
@@ -255,10 +251,6 @@ namespace efanna2e {
       unsigned marker = k - 1;
       while (++marker < (unsigned) L &&
              frontier.size() < (unsigned) beam_width) {
-        // if dummy init, don't process
-        if (retset[marker].distance == std::numeric_limits<float>::max()) {
-          continue;
-        }
         if (retset[marker].flag) {
           frontier.push_back(retset[marker].id);
           retset[marker].flag = false;
@@ -375,7 +367,7 @@ namespace efanna2e {
     for (unsigned i = tmp_l; i < L; i++) {
       unsigned id = init_ids[i];
       float    dist = std::numeric_limits<float>::max();
-      retset[i] = Neighbor(id, dist, true);
+      retset[i] = Neighbor(id, dist, false);
     }
 
     std::sort(retset.begin(), retset.begin() + L);
@@ -389,6 +381,8 @@ namespace efanna2e {
     tsl::robin_map<unsigned, float *> id_vec_map;
     std::vector<SimpleNhood> frontier_nhoods;
     std::vector<AlignedRead> frontier_read_reqs;
+    unsigned                 nbrs_cache_hits = 0;
+    unsigned                 coords_cache_hits = 0;
 
     while (k < (int) L) {
       int nk = L;
@@ -396,6 +390,7 @@ namespace efanna2e {
       // clear iteration state
       frontier.clear();
       frontier_nhoods.clear();
+      frontier_read_reqs.clear();
       id_vec_map.clear();
       unsigned marker = k - 1;
       while (++marker < (unsigned) L &&
@@ -412,12 +407,9 @@ namespace efanna2e {
 
       if (!frontier.empty()) {
         hops++;
-        frontier_nhoods.clear();
-        frontier_read_reqs.clear();
         // alloc nhoods, read and construct fp32 variant
         // std::cout << "k = " << k << '\n';
         for (const unsigned &id : frontier) {
-          assert(visited.find(id) == visited.end());
           auto iter = nbrs_cache.find(id);
           // if nbrs of `id` was not cached, make a request
           if (iter == nbrs_cache.end()) {
@@ -427,10 +419,17 @@ namespace efanna2e {
             frontier_read_reqs.push_back(AlignedRead(
                 this->node_offsets[id], this->node_sizes[id], nhood.buf));
           } else {
+            nbrs_cache_hits++;
             // add cached coods from id list
             for (const unsigned &nbr_id : iter->second) {
               auto coord_iter = coords_cache.find(nbr_id);
               assert(coord_iter != coords_cache.end());
+              // don't bother computing distance if already visited
+              if (visited.find(nbr_id) != visited.end()) {
+                continue;
+              }
+              visited.insert(nbr_id);
+              coords_cache_hits++;
               id_vec_map.insert(std::make_pair(nbr_id, coord_iter->second));
             }
           }
@@ -452,13 +451,12 @@ namespace efanna2e {
             if (visited.find(id) != visited.end()) {
               continue;
             }
-
+            visited.insert(id);
             // add if not visited
             float *id_coords =
                 nhood.aligned_fp32_coords + nbr_idx * aligned_dim;
-            if (id_vec_map.find(id) == id_vec_map.end()) {
-              id_vec_map.insert(std::make_pair(id, id_coords));
-            }
+            assert(id_vec_map.find(id) == id_vec_map.end());
+            id_vec_map.insert(std::make_pair(id, id_coords));
           }
         }
       }
@@ -493,7 +491,8 @@ namespace efanna2e {
     for (size_t i = 0; i < K; i++) {
       indices[i] = retset[i].id;
     }
-
+    // std::cout << "nbrs_cache_hits = " << nbrs_cache_hits
+    //          << ", coords_cache_hits = " << coords_cache_hits << std::endl;
     return std::make_pair(hops, cmps);
   }
 
