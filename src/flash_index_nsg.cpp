@@ -12,6 +12,8 @@
 
 #include "tsl/robin_set.h"
 
+#define SECTOR_LEN 4096
+
 namespace efanna2e {
 #define _CONTROL_NUM 100
 
@@ -145,8 +147,8 @@ namespace efanna2e {
     // create a request
     std::vector<AlignedRead> first_sector(1);
     first_sector[0].offset = 0;
-    first_sector[0].len = 512;
-    efanna2e::alloc_aligned(&first_sector[0].buf, 512, 512);
+    first_sector[0].len = SECTOR_LEN;
+    efanna2e::alloc_aligned(&first_sector[0].buf, SECTOR_LEN, SECTOR_LEN);
 
     std::cout << "FlashIndexNSG::load_embedded_index --- tid: "
               << std::this_thread::get_id() << std::endl;
@@ -168,7 +170,7 @@ namespace efanna2e {
     this->node_sizes.resize(this->nd_);
     sizes_reader.read((char *) this->node_sizes.data(),
                       this->nd_ * sizeof(size_t));
-    this->node_offsets.push_back(512);
+    this->node_offsets.push_back(SECTOR_LEN);
     for (unsigned i = 1; i < this->nd_; i++) {
       this->node_offsets.push_back(this->node_offsets[i - 1] +
                                    this->node_sizes[i - 1]);

@@ -8,7 +8,7 @@
 // round up X to the nearest multiple of Y
 #define ROUND_UP(X, Y) ((((size_t)(X) / (Y)) + ((size_t)(X) % (Y) != 0)) * (Y))
 
-#define SECTOR_LEN 512
+#define SECTOR_LEN 4096
 
 void load_nsg(const char *filename, std::vector<std::vector<unsigned>> &graph,
               unsigned &width, unsigned &ep_) {

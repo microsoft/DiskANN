@@ -23,12 +23,17 @@ void thread_fn(uint64_t size, uint64_t qlen, uint64_t filesize, uint64_t niters,
   std::mt19937_64 engine(rd());
   std::uniform_int_distribution<uint64_t> distr;
   uint64_t max_offset = filesize - size;
-  
+  for(auto &read_req : reads){
+      read_req.offset = ROUND_UP(distr(engine) % max_offset, 4096);
+    }
+
   auto iter_start = std::chrono::high_resolution_clock::now();
   for(uint64_t i=0;i < niters; i++){
+/*
     for(auto &read_req : reads){
       read_req.offset = ROUND_UP(distr(engine) % max_offset, 512);
     }
+*/
     reader.read(reads);
   }
   auto diff_time = std::chrono::high_resolution_clock::now() - iter_start;
@@ -72,7 +77,7 @@ int main(int argc, char** argv) {
   std::cout << "Spawning threads" << std::endl;
   std::vector<std::thread> threads;
   for(unsigned i=0;i<nthreads;i++){
-    std::thread th(thread_fn, read_size, qlen, filesize, niters, times[i]);
+    std::thread th(thread_fn, read_size, qlen, filesize, niters, std::ref(times[i]));
     threads.push_back(std::move(th));
   }
   // wait for threads to complete
