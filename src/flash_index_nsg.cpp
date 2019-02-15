@@ -22,18 +22,23 @@ namespace efanna2e {
                                Index *initializer)
       : Index(dimension, n, m), initializer_{initializer} {
     this->aligned_dim = ROUND_UP(dimension, 8);
+    coords_cache = new float*[n]();
+    nbrs_cache = new std::vector<unsigned>[n]();
   }
 
   FlashIndexNSG::~FlashIndexNSG() {
-    for (auto &lvl : nsg_cache) {
-      for (auto &k_v : lvl) {
-        lvl[k_v.first].cleanup();
+    ep_nhood.cleanup();
+    for(uint64_t i=0;i<nd_; i++){
+      if(coords_cache[i] != nullptr){
+        free(coords_cache[i]);
+      }
+      if(!nbrs_cache[i].empty()){
+        nbrs_cache[i].clear();
       }
     }
-    ep_nhood.cleanup();
-    for (auto &k_v : coords_cache) {
-      free(k_v.second);
-    }
+
+    delete[] coords_cache;
+    delete[] nbrs_cache;
   }
 
   void FlashIndexNSG::Save(const char *filename) {
@@ -45,11 +50,6 @@ namespace efanna2e {
   }
 
   void FlashIndexNSG::cache_bfs_levels(unsigned nlevels) {
-    if (!nbrs_cache.empty()) {
-      std::cerr << "Cache is not empty" << std::endl;
-      return;
-    }
-
     assert(nlevels > 1);
 
     tsl::robin_set<unsigned> *cur_level, *prev_level;
@@ -61,8 +61,7 @@ namespace efanna2e {
     for (unsigned idx = 0; idx < ep_nhood.nnbrs; idx++) {
       unsigned nbr_id = ep_nhood.nbrs[idx];
       cur_level->insert(nbr_id);
-      if (coords_cache.find(nbr_id) == coords_cache.end()) {
-        coords_cache.insert(std::make_pair(nbr_id, nullptr));
+      if (coords_cache[nbr_id] == nullptr) {
         float *&nbr_coords = coords_cache[nbr_id];
         alloc_aligned((void **) &nbr_coords, aligned_dim * sizeof(float), 32);
         memcpy(nbr_coords, ep_nhood.aligned_fp32_coords + aligned_dim * idx,
@@ -71,10 +70,8 @@ namespace efanna2e {
     }
 
     // insert ep_'s adjacency list into nbrs_cache
-    nbrs_cache.insert(
-        std::make_pair(ep_, std::vector<unsigned>(ep_nhood.nnbrs)));
-    std::vector<unsigned> &ep_nbrs = nbrs_cache[ep_];
-    memcpy(ep_nbrs.data(), ep_nhood.nbrs, ep_nhood.nnbrs * sizeof(unsigned));
+    nbrs_cache[ep_].resize(ep_nhood.nnbrs);
+    memcpy(nbrs_cache[ep_].data(), ep_nhood.nbrs, ep_nhood.nnbrs * sizeof(unsigned));
 
     for (unsigned lvl = 0; lvl < nlevels; lvl++) {
       // swap prev_level and cur_level
@@ -89,7 +86,7 @@ namespace efanna2e {
 
       for (const unsigned &id : *prev_level) {
         // skip node if already read into
-        if (nbrs_cache.find(id) != nbrs_cache.end()) {
+        if (!nbrs_cache[id].empty()){
           continue;
         }
 
@@ -112,11 +109,9 @@ namespace efanna2e {
         assert(nhood.nnbrs > 0);
 
         // add `node_id`'s nbrs to nbrs_cache
-        if (nbrs_cache.find(node_id) == nbrs_cache.end()) {
-          nbrs_cache.insert(
-              std::make_pair(node_id, std::vector<unsigned>(nhood.nnbrs)));
-          std::vector<unsigned> &nbrs = nbrs_cache[node_id];
-          memcpy(nbrs.data(), nhood.nbrs, nhood.nnbrs * sizeof(unsigned));
+        if (nbrs_cache[node_id].empty()) {
+          nbrs_cache[node_id].resize(nhood.nnbrs);
+          memcpy(nbrs_cache[node_id].data(), nhood.nbrs, nhood.nnbrs * sizeof(unsigned));
         }
 
         // add coords of nbrs to coords_cache
@@ -124,8 +119,7 @@ namespace efanna2e {
           unsigned nbr = nhood.nbrs[nbr_idx];
           float *nbr_coords = nhood.aligned_fp32_coords + aligned_dim * nbr_idx;
           // process only if not processed before
-          if (coords_cache.find(nbr) == coords_cache.end()) {
-            coords_cache.insert(std::make_pair(nbr, nullptr));
+          if (coords_cache[nbr] == nullptr){
             float *&coords = coords_cache[nbr];
             alloc_aligned((void **) &coords, aligned_dim * sizeof(float), 32);
             memcpy(coords, nbr_coords, aligned_dim * sizeof(float));
@@ -358,7 +352,6 @@ namespace efanna2e {
           this->ep_nhood.aligned_fp32_coords + this->aligned_dim * i, query,
           (unsigned) dimension_);
       retset[i] = Neighbor(id, dist, true);
-      // flags[id] = true;
     }
 
     // set distance to +inf for dummy ids
@@ -408,9 +401,8 @@ namespace efanna2e {
         // alloc nhoods, read and construct fp32 variant
         // std::cout << "k = " << k << '\n';
         for (const unsigned &id : frontier) {
-          auto iter = nbrs_cache.find(id);
           // if nbrs of `id` was not cached, make a request
-          if (iter == nbrs_cache.end()) {
+          if (nbrs_cache[id].empty()) {
             frontier_nhoods.push_back(SimpleNhood());
             SimpleNhood &nhood = frontier_nhoods.back();
             nhood.init(this->node_sizes[id], this->dimension_);
@@ -419,16 +411,15 @@ namespace efanna2e {
           } else {
             nbrs_cache_hits++;
             // add cached coods from id list
-            for (const unsigned &nbr_id : iter->second) {
-              auto coord_iter = coords_cache.find(nbr_id);
-              assert(coord_iter != coords_cache.end());
+            for (const unsigned &nbr_id : nbrs_cache[id]) {
+              assert(coords_cache[nbr_id] != nullptr);
               // don't bother computing distance if already visited
               if (visited.find(nbr_id) != visited.end()) {
                 continue;
               }
               visited.insert(nbr_id);
               coords_cache_hits++;
-              id_vec_map.insert(std::make_pair(nbr_id, coord_iter->second));
+              id_vec_map.insert(std::make_pair(nbr_id, coords_cache[nbr_id]));
             }
           }
         }

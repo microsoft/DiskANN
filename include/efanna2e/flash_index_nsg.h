@@ -60,14 +60,13 @@ namespace efanna2e {
     std::vector<size_t> node_sizes;
     Index *             initializer_;
 
-    // one hash-map per BFS level cached
-    std::vector<tsl::robin_map<unsigned, SimpleNhood>> nsg_cache;
-
     // cache adjacency list for K-levels
-    tsl::robin_map<unsigned, std::vector<unsigned>> nbrs_cache;
+    std::vector<unsigned> *nbrs_cache = nullptr;
+    // tsl::robin_map<unsigned, std::vector<unsigned>> nbrs_cache;
 
     // cache coords for K+1 levels
-    tsl::robin_map<unsigned, float *> coords_cache;
+    float** coords_cache = nullptr;
+    // tsl::robin_map<unsigned, float *> coords_cache;
 
     unsigned    width;
     unsigned    ep_;
