@@ -5,12 +5,12 @@
 #include <sstream>
 #include <stack>
 #include <string>
-#include <unordered_map>
 #include "aligned_file_reader.h"
 #include "index.h"
 #include "neighbor.h"
 #include "parameters.h"
 #include "tsl/robin_set.h"
+#include "tsl/robin_map.h"
 #include "util.h"
 
 namespace efanna2e {

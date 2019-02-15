@@ -98,7 +98,7 @@ int main(int argc, char** argv) {
   std::atomic_ullong latency;  // In micros.
   latency.store(0.0);
 
-#pragma omp parallel for firstprivate(has_init)
+#pragma omp parallel for schedule(dynamic, 128) firstprivate(has_init)
   for (unsigned i = 0; i < query_num; i++) {
     unsigned val = qcounter.fetch_add(1);
     if (val % 1000 == 0) {
