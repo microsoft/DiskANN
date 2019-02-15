@@ -82,7 +82,7 @@ namespace efanna2e {
 #ifdef __APPLE__
     delete[] data_ori;
 #else
-    free(data_ori);
+    delete[] data_ori;
 #endif
     return data_new;
   }

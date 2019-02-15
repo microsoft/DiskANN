@@ -7,10 +7,12 @@
 #include "efanna2e/exceptions.h"
 #include "efanna2e/parameters.h"
 
+#include <map>
 #include "tsl/robin_set.h"
 
 namespace efanna2e {
 #define _CONTROL_NUM 100
+#define MAX_START_POINTS 100
 
   IndexNSG::IndexNSG(const size_t dimension, const size_t n, Metric m,
                      Index *initializer)
@@ -154,6 +156,102 @@ namespace efanna2e {
       else
         ++k;
     }
+  }
+
+  void IndexNSG::reachable_bfs(const unsigned start_node,
+                               std::vector<tsl::robin_set<unsigned>> &bfs_order,
+                               bool *                                 visited) {
+    auto &                    nsg = final_graph_;
+    tsl::robin_set<unsigned> *cur_level = new tsl::robin_set<unsigned>();
+    tsl::robin_set<unsigned> *prev_level = new tsl::robin_set<unsigned>();
+    prev_level->insert(start_node);
+    visited[start_node] = true;
+    unsigned level = 0;
+    unsigned nsg_size = nsg.size();
+    while (true) {
+      // clear state
+      cur_level->clear();
+
+      // select candidates
+      for (auto id : *prev_level) {
+        for (const auto &nbr : nsg[id]) {
+          if (nbr >= nsg_size) {
+            std::cerr << "invalid" << std::endl;
+          }
+          if (!visited[nbr]) {
+            cur_level->insert(nbr);
+            visited[nbr] = true;
+          }
+        }
+      }
+
+      if (cur_level->empty()) {
+        break;
+      }
+
+      std::cerr << "Level #" << level << " : " << cur_level->size() << " nodes"
+                << std::endl;
+
+      // create a new set
+      tsl::robin_set<unsigned> add(cur_level->size());
+      add.insert(cur_level->begin(), cur_level->end());
+      bfs_order.push_back(add);
+
+      // swap cur_level and prev_level, increment level
+      prev_level->clear();
+      std::swap(prev_level, cur_level);
+      level++;
+    }
+
+    // cleanup
+    delete cur_level;
+    delete prev_level;
+  }
+
+  void IndexNSG::populate_start_points_bfs() {
+    // populate a visited array
+    // WARNING: DO NOT MAKE THIS A VECTOR
+    bool *visited = new bool[nd_]();
+    std::fill(visited, visited + nd_, false);
+    std::map<unsigned, std::vector<tsl::robin_set<unsigned>>> bfs_orders;
+    unsigned start_node = ep_;
+    bool     complete = false;
+    while (!complete) {
+      bfs_orders.insert(
+          std::make_pair(start_node, std::vector<tsl::robin_set<unsigned>>()));
+      auto &bfs_order = bfs_orders[start_node];
+      reachable_bfs(start_node, bfs_order, visited);
+
+      complete = true;
+      for (unsigned idx = 0; idx < nd_; idx++) {
+        if (!visited[idx]) {
+          complete = false;
+          start_node = idx;
+          break;
+        }
+      }
+    }
+    start_points.push_back(ep_);
+    // process each component, add one node from each level if more than one
+    // level, else ignore
+    for (auto &k_v : bfs_orders) {
+      if (k_v.second.size() > 1) {
+        std::cout << "Using start points in component with nav-node: "
+                  << k_v.first << std::endl;
+        // add one node from each level to `start_points`
+        for (auto &lvl : k_v.second) {
+          if (start_points.size() == MAX_START_POINTS) {
+            continue;
+          } else {
+            start_points.push_back(*(lvl.begin()));
+          }
+        }
+      }
+    }
+    std::cout << "Chose " << start_points.size() << " starting points"
+              << std::endl;
+
+    delete[] visited;
   }
 
   void IndexNSG::get_neighbors(const float *query, const Parameters &parameter,
@@ -528,8 +626,15 @@ namespace efanna2e {
     // GenRandom(rng, init_ids.data(), L, (unsigned) nd_);
     tsl::robin_set<unsigned> visited(10 * L);
     unsigned                 tmp_l = 0;
+    // ignore default init; use start_points for init
+    /*
     for (; tmp_l < L && tmp_l < final_graph_[ep_].size(); tmp_l++) {
       init_ids[tmp_l] = final_graph_[ep_][tmp_l];
+      visited.insert(init_ids[tmp_l]);
+    }
+    */
+    for (; tmp_l < L && tmp_l < start_points.size(); tmp_l++) {
+      init_ids[tmp_l] = start_points[tmp_l];
       visited.insert(init_ids[tmp_l]);
     }
 
