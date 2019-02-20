@@ -85,8 +85,8 @@ namespace efanna2e {
       in.read((char *) final_graph_[i].data(), k * sizeof(unsigned));
     }
     in.close();
-    std::cout << "Loading EFANNA graph: setting ep_=0" << std::endl;
     ep_ = 0;
+    std::cout << "Loaded EFANNA graph. Set ep_ to 0" << std::endl;
   }
 
   void IndexNSG::get_neighbors(const float *query, const Parameters &parameter,
@@ -533,7 +533,7 @@ namespace efanna2e {
 
   void IndexNSG::Link(const Parameters &parameters,
                       SimpleNeighbor *  cut_graph_) {
-    std::cout << " graph link" << std::endl;
+    std::cout << "Started NSG graph construction" << std::endl;
     unsigned                progress = 0;
     unsigned                percent = 100;
     unsigned                step_size = nd_ / percent;
@@ -561,7 +561,7 @@ namespace efanna2e {
           get_neighbors(data_ + dimension_ * n, parameters, visited, tmp, pool);
           sync_prune(n, pool, parameters, visited, cut_graph_);
 
-          if (n % 10000 == 0)
+          if (n % PAR_BLOCK_SZ == 0)
             std::cout << n << std::endl;
         }
       }
@@ -582,7 +582,7 @@ namespace efanna2e {
     // init_graph(parameters);
     init_graph_bf(parameters);
     SimpleNeighbor *cut_graph_ = new SimpleNeighbor[nd_ * (size_t) range];
-    std::cout << "memory allocated\n";
+    std::cout << "Memory allocated for NSG graph" << std::endl;
     Link(parameters, cut_graph_);
     final_graph_.resize(nd_);
 

@@ -37,7 +37,7 @@ int main(int argc, char** argv) {
   unsigned points_num, dim;
   load_data(argv[1], data_load, points_num, dim);
 
-  std::cout <<"data loaded \n ";
+  std::cout << "Data loaded" << std::endl;
   
   std::string nn_graph_path(argv[2]);
   unsigned L = (unsigned)atoi(argv[3]);
@@ -54,7 +54,7 @@ int main(int argc, char** argv) {
   paras.Set<unsigned>("R", R);
   paras.Set<unsigned>("C", C);
   paras.Set<std::string>("nn_graph_path", nn_graph_path);
-  std::cout <<"params set \n";
+  std::cout << "Params set" << std::endl;
 
   index.Build(points_num, data_load, paras);
   auto e = std::chrono::high_resolution_clock::now();
