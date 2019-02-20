@@ -10,8 +10,10 @@ if (OPENMP_FOUND)
 else()
     message(FATAL_ERROR "no OpenMP supprot")
 endif()
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fno-builtin-malloc -fno-builtin-calloc -fno-builtin-realloc -fno-builtin-free")
-add_definitions (-std=c++11 -O3 -lboost -march=native -Wall -Wl,--hugetlbfs-align -DINFO)
+
+set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -g -DDEBUG -O0 -fsanitize=address -fsanitize=leak -fsanitize=undefined")
+set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -Ofast -march=native -mtune=native -ftree-vectorize")
+add_compile_options(-std=c++14 -lboost -DINFO -march=native -Wall -fno-builtin-malloc -fno-builtin-calloc -fno-builtin-realloc -fno-builtin-free -fopenmp -Wfatal-errors)
 
 add_subdirectory(src)
 add_subdirectory(tests)
