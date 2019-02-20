@@ -85,6 +85,8 @@ namespace efanna2e {
       in.read((char *) final_graph_[i].data(), k * sizeof(unsigned));
     }
     in.close();
+    std::cout << "Loading EFANNA graph: setting ep_=0" << std::endl;
+    ep_ = 0;
   }
 
   void IndexNSG::get_neighbors(const float *query, const Parameters &parameter,
@@ -361,7 +363,7 @@ namespace efanna2e {
       center[j] = 0;
     for (size_t i = 0; i < nd_; i++) {
       for (size_t j = 0; j < dimension_; j++) {
-	center[j] += data_[i * dimension_ + j];
+        center[j] += data_[i * dimension_ + j];
       }
     }
     for (size_t j = 0; j < dimension_; j++) {
@@ -384,7 +386,7 @@ namespace efanna2e {
     }
     // find imin
     size_t min_idx = 0;
-    float min_dist = distances[0];
+    float  min_dist = distances[0];
     for (size_t i = 1; i < nd_; i++) {
       if (distances[i] < min_dist) {
         min_idx = i;
@@ -540,20 +542,22 @@ namespace efanna2e {
     std::vector<std::mutex> locks(nd_);
 
     {
-      #define PAR_BLOCK_SZ 65536
-      int nblocks = nd_ % PAR_BLOCK_SZ == 0 ? nd_/PAR_BLOCK_SZ : (nd_/PAR_BLOCK_SZ) + 1;
-      
+#define PAR_BLOCK_SZ 65536
+      int nblocks = nd_ % PAR_BLOCK_SZ == 0 ? nd_ / PAR_BLOCK_SZ
+                                            : (nd_ / PAR_BLOCK_SZ) + 1;
+
 #pragma omp parallel for schedule(static, 1)
       for (int block = 0; block < nblocks; ++block) {
-        std::vector <Neighbor> pool, tmp;
-        //boost::dynamic_bitset<> flags{nd_, 0};
-	tsl::robin_set<unsigned> visited;
+        std::vector<Neighbor> pool, tmp;
+        // boost::dynamic_bitset<> flags{nd_, 0};
+        tsl::robin_set<unsigned> visited;
 
-        for (unsigned n = block * PAR_BLOCK_SZ; n < nd_ && n < (block+1) * PAR_BLOCK_SZ; ++n) {       
+        for (unsigned n = block * PAR_BLOCK_SZ;
+             n < nd_ && n < (block + 1) * PAR_BLOCK_SZ; ++n) {
           pool.clear();
           tmp.clear();
           visited.clear();
-	  
+
           get_neighbors(data_ + dimension_ * n, parameters, visited, tmp, pool);
           sync_prune(n, pool, parameters, visited, cut_graph_);
 
@@ -605,7 +609,7 @@ namespace efanna2e {
       }
     }
 
-    //tree_grow(parameters);
+    // tree_grow(parameters);
 
     avg /= 1.0 * nd_;
     std::cout << "Degree: max:" << max << "  avg:" << avg << "  min:" << min
