@@ -85,8 +85,10 @@ int main(int argc, char** argv) {
 
   efanna2e::IndexNSG index(dim, points_num, efanna2e::L2, nullptr);
   index.Load(argv[3]);
-  index.populate_start_points_bfs();
   std::cout << "Index loaded" << std::endl;
+    
+  index.populate_start_points_bfs();
+  std::cout << "Initialized starting points based on BFS" << std::endl;
 
   efanna2e::Parameters paras;
   paras.Set<unsigned>("L_search", L);

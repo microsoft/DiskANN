@@ -46,16 +46,20 @@ namespace efanna2e {
     in.read((char *) &width, sizeof(unsigned));
     in.read((char *) &ep_, sizeof(unsigned));
     // width=100;
-    unsigned cc = 0;
+    size_t cc = 0; unsigned nodes=0;
     while (!in.eof()) {
       unsigned k;
       in.read((char *) &k, sizeof(unsigned));
       if (in.eof())
         break;
-      cc += k;
+      cc += k; ++nodes;
       std::vector<unsigned> tmp(k);
       in.read((char *) tmp.data(), k * sizeof(unsigned));
       final_graph_.push_back(tmp);
+
+      if(nodes % 1000000 == 0)
+	std::cout << "Loaded " << nodes << " nodes, and "
+		  << cc << " neighbors" << std::endl;
     }
     cc /= nd_;
     // std::cout<<cc<<std::endl;
