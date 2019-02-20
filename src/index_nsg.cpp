@@ -526,6 +526,8 @@ namespace efanna2e {
         LockGuard guard(locks[des]);
 	des_pool.push_back(sn);
       }
+      for (auto iter : des_pool)
+	assert(iter.id < nd_);
     }
   }
 
@@ -594,7 +596,7 @@ namespace efanna2e {
     unsigned max = 0, min = 1e6, avg = 0, cnt = 0;
     for (size_t i = 0; i < nd_; i++) {
       vecNgh& pool = cut_graph_[i];
-      unsigned pool_size = pool.size() + 1;
+      unsigned pool_size = pool.size();
       /*      for (unsigned j = 0; j < range; j++) {
         if (pool[j].distance == -1)
           break;
