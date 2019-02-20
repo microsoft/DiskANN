@@ -548,7 +548,7 @@ namespace efanna2e {
         for (unsigned n = block * PAR_BLOCK_SZ; n < nd_ && n < (block+1) * PAR_BLOCK_SZ; ++n) {       
           pool.clear();
           tmp.clear();
-          visited.reset();
+          visited.clear();
 	  
           get_neighbors(data_ + dimension_ * n, parameters, visited, tmp, pool);
           sync_prune(n, pool, parameters, visited, cut_graph_);
