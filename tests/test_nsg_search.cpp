@@ -54,9 +54,9 @@ void save_result(char* filename, unsigned* results, unsigned nd, unsigned nr) {
 }
 
 int main(int argc, char** argv) {
-  if (argc != 8) {
+  if (argc != 9) {
     std::cout << argv[0] << " data_file query_file nsg_path search_L search_K "
-                            "result_path BeamWidth"
+                            "result_path BeamWidth nsg=1/efanna=0"
               << std::endl;
     exit(-1);
   }
@@ -74,6 +74,7 @@ int main(int argc, char** argv) {
   unsigned L = (unsigned) atoi(argv[4]);
   unsigned K = (unsigned) atoi(argv[5]);
   int      beam_width = atoi(argv[7]);
+  int nsg_check = atoi(argv[8]);
 
   if (L < K) {
     std::cout << "search_L cannot be smaller than search_K!" << std::endl;
@@ -86,12 +87,14 @@ int main(int argc, char** argv) {
   // std::cout << "Data Aligned" << std::endl;
 
   efanna2e::IndexNSG index(dim, points_num, efanna2e::L2, nullptr);
-  index.Load(argv[3]);  // to load NSG
-  // index.Load_nn_graph(argv[3]);  // to load EFANNA
+  if(nsg_check == 1)
+	  index.Load(argv[3]);  // to load NSG
+  else
+	  index.Load_nn_graph(argv[3]);  // to load EFANNA
   std::cout << "Index loaded" << std::endl;
     
-  index.populate_start_points_bfs();
-  std::cout << "Initialized starting points based on BFS" << std::endl;
+//  index.populate_start_points_bfs();
+//  std::cout << "Initialized starting points based on BFS" << std::endl;
 
   efanna2e::Parameters paras;
   paras.Set<unsigned>("L_search", L);
