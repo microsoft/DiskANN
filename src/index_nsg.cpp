@@ -166,7 +166,8 @@ namespace efanna2e {
 
   void IndexNSG::reachable_bfs(const unsigned start_node,
                                std::vector<tsl::robin_set<unsigned>> &bfs_order,
-                               bool *                                 visited) {
+                               bool *visited)
+  {
     auto &                    nsg = final_graph_;
     tsl::robin_set<unsigned> *cur_level = new tsl::robin_set<unsigned>();
     tsl::robin_set<unsigned> *prev_level = new tsl::robin_set<unsigned>();
@@ -444,8 +445,12 @@ namespace efanna2e {
     }
 
     assert(cut_graph_[q].size() == 0);
-    for (auto n : result)
-      cut_graph_[q].push_back(SimpleNeighbor(n.id, n.distance));
+    for (auto iter : result)
+      cut_graph_[q].push_back(SimpleNeighbor(iter.id, iter.distance));
+
+    for (auto iter : cut_graph_[q])
+      assert(iter.id < nd_);
+    
     /*  SimpleNeighbor *des_pool = cut_graph_ + (size_t) q * (size_t) range;
     for (size_t t = 0; t < result.size(); t++) {
       des_pool[t].id = result[t].id;
