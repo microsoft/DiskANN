@@ -566,11 +566,16 @@ namespace efanna2e {
             std::cout << n << std::endl;
         }
       }
+      std::cout << "sync_prune completed" << std::endl;
 
-#pragma omp parallel for schedule(static, 65536)
+#pragma omp parallel for schedule(static, PAR_BLOCK_SZ)
       for (unsigned n = 0; n < nd_; ++n) {
         InterInsert(n, range, locks, cut_graph_);
+
+	if (n % PAR_BLOCK_SZ == 0)
+	  std::cout << n << std::endl;
       }
+      std::cout << "InterInsert completed" << std::endl;
     }
   }
 
