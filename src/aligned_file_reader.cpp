@@ -7,7 +7,7 @@
 #include <iostream>
 #include "efanna2e/util.h"
 #include "tsl/robin_map.h"
-#define MAX_EVENTS 64
+#define MAX_EVENTS 1024
 
 namespace {
   typedef struct io_event io_event_t;

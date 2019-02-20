@@ -65,7 +65,7 @@ int main(int argc, char** argv) {
   // load queries
   float*   query_load = NULL;
   unsigned query_num, query_dim;
-  load_data(argv[5], query_load, query_num, query_dim);
+  efanna2e::load_Tvecs<float>(argv[5], query_load, query_num, query_dim);
   assert(n_dims == query_dim);
 
   unsigned L = (unsigned) atoi(argv[6]);
@@ -80,7 +80,7 @@ int main(int argc, char** argv) {
   index.cache_bfs_levels(cache_nlevels);
 
   // align query data
-  query_load = efanna2e::data_align(query_load, query_num, query_dim);
+  // query_load = efanna2e::data_align(query_load, query_num, query_dim);
 
   efanna2e::Parameters paras;
   paras.Set<unsigned>("L_search", L);
