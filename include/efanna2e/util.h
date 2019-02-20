@@ -69,15 +69,15 @@ namespace efanna2e {
         (dim + DATA_ALIGN_FACTOR - 1) / DATA_ALIGN_FACTOR * DATA_ALIGN_FACTOR;
 // std::cout << "align to new dim: "<<new_dim << std::endl;
 #ifdef __APPLE__
-    data_new = new float[new_dim * point_num];
+    data_new = new float[(size_t)new_dim * (size_t)point_num];
 #else
     data_new = (float *) memalign(DATA_ALIGN_FACTOR * 4,
-                                  point_num * new_dim * sizeof(float));
+                                  (size_t)point_num * (size_t)new_dim * sizeof(float));
 #endif
 
-    for (unsigned i = 0; i < point_num; i++) {
-      memcpy(data_new + i * new_dim, data_ori + i * dim, dim * sizeof(float));
-      memset(data_new + i * new_dim + dim, 0, (new_dim - dim) * sizeof(float));
+    for (size_t i = 0; i < point_num; i++) {
+      memcpy(data_new + i * (size_t)new_dim, data_ori + i * (size_t)dim, dim * sizeof(float));
+      memset(data_new + i * (size_t)new_dim + dim, 0, (new_dim - dim) * sizeof(float));
     }
     dim = new_dim;
 #ifdef __APPLE__

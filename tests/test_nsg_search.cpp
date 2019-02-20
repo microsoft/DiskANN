@@ -68,6 +68,7 @@ int main(int argc, char** argv) {
   unsigned query_num, query_dim;
   load_data(argv[2], query_load, query_num, query_dim);
   assert(dim == query_dim);
+  std::cout << "Base and query data loaded" << std::endl;
 
   unsigned L = (unsigned) atoi(argv[4]);
   unsigned K = (unsigned) atoi(argv[5]);
@@ -94,7 +95,7 @@ int main(int argc, char** argv) {
   auto s = std::chrono::high_resolution_clock::now();
 
   long long total_hops=0; long long total_cmps=0;
-  unsigned *res = new unsigned[size_t(query_num)*K];
+  unsigned *res = new unsigned[(size_t)query_num * K];
 
 #pragma omp parallel for schedule(static, 1000)
   for (unsigned i = 0; i < query_num; i++) {	
