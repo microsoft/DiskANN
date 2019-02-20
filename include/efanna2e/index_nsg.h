@@ -23,6 +23,7 @@ namespace efanna2e {
 
     virtual void Save(const char *filename) override;
     virtual void Load(const char *filename) override;
+    void Load_nn_graph(const char *filename);
 
     virtual void Build(size_t n, const float *data,
                        const Parameters &parameters) override;
@@ -72,7 +73,6 @@ namespace efanna2e {
                     tsl::robin_set<unsigned> &visited,
                     SimpleNeighbor *          cut_graph_);
     void Link(const Parameters &parameters, SimpleNeighbor *cut_graph_);
-    void Load_nn_graph(const char *filename);
     void tree_grow(const Parameters &parameter);
     void DFS(tsl::robin_set<unsigned> &visited, unsigned root, unsigned &cnt);
     void findroot(tsl::robin_set<unsigned> &visited, unsigned &root,
