@@ -57,7 +57,7 @@ namespace efanna2e {
       in.read((char *) tmp.data(), k * sizeof(unsigned));
       final_graph_.push_back(tmp);
 
-      if(nodes % 1000000 == 0)
+      if(nodes % 5000000 == 0)
 	std::cout << "Loaded " << nodes << " nodes, and "
 		  << cc << " neighbors" << std::endl;
     }
@@ -179,8 +179,14 @@ namespace efanna2e {
       // clear state
       cur_level->clear();
 
+      size_t max_deg=0; size_t min_deg=0xffffffffffL; size_t sum_deg=0;
+      
       // select candidates
       for (auto id : *prev_level) {
+	max_deg = std::max(max_deg, nsg[id].size());
+	min_deg = std::min(min_deg, nsg[id].size());
+	sum_deg += nsg[id].size();
+	
         for (const auto &nbr : nsg[id]) {
           if (nbr >= nsg_size) {
             std::cerr << "invalid" << std::endl;
@@ -197,7 +203,9 @@ namespace efanna2e {
       }
 
       std::cerr << "Level #" << level << " : " << cur_level->size() << " nodes"
-                << std::endl;
+		<< "\tDegree max: " << max_deg
+		<< "  avg: " << (float)sum_deg/(float)prev_level->size()
+		<< "  min: " << min_deg << std::endl;
 
       // create a new set
       tsl::robin_set<unsigned> add(cur_level->size());
@@ -245,13 +253,19 @@ namespace efanna2e {
       if (k_v.second.size() > 1) {
         std::cout << "Using start points in component with nav-node: "
                   << k_v.first << std::endl;
-        // add one node from each level to `start_points`
+        // add nodes from each level to `start_points`
         for (auto &lvl : k_v.second) {
-          if (start_points.size() == MAX_START_POINTS) {
-            continue;
-          } else {
-            start_points.push_back(*(lvl.begin()));
-          }
+	  for (int i=0; i<10 && i<lvl.size() && start_points.size() < MAX_START_POINTS; ++i) {
+	    auto iter = lvl.begin();
+	    size_t rand_offset = rand() * rand() * rand() % lvl.size();
+	    for (size_t j=0; j<rand_offset; ++j) iter++;
+
+	    if (std::find(start_points.begin(), start_points.end(), *iter) == start_points.end())
+	      start_points.push_back(*iter);
+	  }
+
+	  if (start_points.size() == MAX_START_POINTS)
+	    break;
         }
       }
     }
