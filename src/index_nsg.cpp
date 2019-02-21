@@ -623,8 +623,7 @@ namespace efanna2e {
 
     // tree_grow(parameters);
 
-    avg /= 1.0 * nd_;
-    std::cout << "Degree: max:" << max << "  avg:" << avg << "  min:" << min << "  count:" << cnt << "\n";
+    std::cout << "Degree: max:" << max << "  avg:" << (float)avg/(float)nd_ << "  min:" << min << "  count:" << cnt << "\n";
 
     if (max > width)
       width = max;
