@@ -80,7 +80,7 @@ void open_linux_mmapped_file_handle(
 
 }
 
-  void Load_nn_graph(const char *filename, CompactGraph2 &final_graph_, unsigned &k, unsigned d_nn, unsigned d_rnd) {
+  void Load_and_truncate_nn_graph(const char *filename, CompactGraph2 &final_graph_, unsigned &k, unsigned d_nn, unsigned d_rnd) {
 
 
 	  char* buf;
@@ -200,7 +200,7 @@ int main(int argc, char** argv) {
   std::string nn_graph_path(argv[2]);
   unsigned d_nn = (unsigned)atoi(argv[3]);
   unsigned d_rnd = (unsigned)atoi(argv[4]);
-  Load_nn_graph(nn_graph_path.c_str(), final_graph_,k, d_nn, d_rnd); 
+  Load_and_truncate_nn_graph(nn_graph_path.c_str(), final_graph_,k, d_nn, d_rnd); 
 
   data_load = efanna2e::data_align(data_load, points_num, dim);//one must
   // align the data before build
