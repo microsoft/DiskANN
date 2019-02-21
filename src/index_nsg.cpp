@@ -166,7 +166,8 @@ namespace efanna2e {
 
   void IndexNSG::reachable_bfs(const unsigned start_node,
                                std::vector<tsl::robin_set<unsigned>> &bfs_order,
-                               bool *                                 visited) {
+                               bool *visited)
+  {
     auto &                    nsg = final_graph_;
     tsl::robin_set<unsigned> *cur_level = new tsl::robin_set<unsigned>();
     tsl::robin_set<unsigned> *prev_level = new tsl::robin_set<unsigned>();
@@ -397,10 +398,11 @@ namespace efanna2e {
     std::cout << "Medoid index = " << min_idx << std::endl;
   }
 
-  void IndexNSG::sync_prune(unsigned q, std::vector<Neighbor> &pool,
-                            const Parameters &        parameter,
-                            tsl::robin_set<unsigned> &visited,
-                            SimpleNeighbor *          cut_graph_) {
+  void IndexNSG::sync_prune(unsigned q,
+			    std::vector<Neighbor> &pool,
+                            const Parameters& parameter,
+                            tsl::robin_set<unsigned>& visited,
+                            vecNgh *cut_graph_) {
     unsigned range = parameter.Get<unsigned>("R");
     unsigned maxc = parameter.Get<unsigned>("C");
     width = range;
@@ -415,9 +417,9 @@ namespace efanna2e {
                                       (unsigned) dimension_);
       pool.push_back(Neighbor(id, dist, true));
     }
-
-    std::sort(pool.begin(), pool.end());
+    
     std::vector<Neighbor> result;
+    std::sort(pool.begin(), pool.end());
     if (pool[start].id == q)
       start++;
     result.push_back(pool[start]);
@@ -442,14 +444,22 @@ namespace efanna2e {
         result.push_back(p);
     }
 
-    SimpleNeighbor *des_pool = cut_graph_ + (size_t) q * (size_t) range;
+    assert(cut_graph_[q].size() == 0);
+    for (auto iter : result)
+      cut_graph_[q].push_back(SimpleNeighbor(iter.id, iter.distance));
+
+    for (auto iter : cut_graph_[q])
+      assert(iter.id < nd_);
+    
+    /*  SimpleNeighbor *des_pool = cut_graph_ + (size_t) q * (size_t) range;
     for (size_t t = 0; t < result.size(); t++) {
       des_pool[t].id = result[t].id;
       des_pool[t].distance = result[t].distance;
     }
     if (result.size() < range) {
       des_pool[result.size()].distance = -1;
-    }
+      }*/
+    
     // for (unsigned t = 0; t < result.size(); t++) {
     // add_cnn(q, result[t], range, cut_graph_);
     // add_cnn(result[t].id, Neighbor(q, result[t].distance, true), range,
@@ -459,28 +469,25 @@ namespace efanna2e {
 
   void IndexNSG::InterInsert(unsigned n, unsigned range,
                              std::vector<std::mutex> &locks,
-                             SimpleNeighbor *         cut_graph_) {
-    SimpleNeighbor *src_pool = cut_graph_ + (size_t) n * (size_t) range;
-    for (size_t i = 0; i < range; i++) {
-      if (src_pool[i].distance == -1)
-        break;
+                             vecNgh *cut_graph_) {
+    // SimpleNeighbor *src_pool = cut_graph_ + (size_t) n * (size_t) range;
+    vecNgh& src_pool = cut_graph_[n];
+    
+    for (auto desNode : src_pool) {
+      auto des = desNode.id;
+      SimpleNeighbor sn(n, desNode.distance);
+      vecNgh &des_pool = cut_graph_[des];
 
-      SimpleNeighbor  sn(n, src_pool[i].distance);
-      size_t          des = src_pool[i].id;
-      SimpleNeighbor *des_pool = cut_graph_ + des * (size_t) range;
-
-      std::vector<SimpleNeighbor> temp_pool;
-      int                         dup = 0;
+      vecNgh temp_pool;
+      int dup = 0;
       {
         LockGuard guard(locks[des]);
-        for (size_t j = 0; j < range; j++) {
-          if (des_pool[j].distance == -1)
-            break;
-          if (n == des_pool[j].id) {
+        for (auto nn : des_pool) {
+          if (n == nn.id) {
             dup = 1;
             break;
           }
-          temp_pool.push_back(des_pool[j]);
+          temp_pool.push_back(nn);
         }
       }
       if (dup)
@@ -513,26 +520,20 @@ namespace efanna2e {
         }
         {
           LockGuard guard(locks[des]);
-          for (unsigned t = 0; t < result.size(); t++) {
-            des_pool[t] = result[t];
-          }
+	  des_pool = result;
         }
       } else {
         LockGuard guard(locks[des]);
-        for (unsigned t = 0; t < range; t++) {
-          if (des_pool[t].distance == -1) {
-            des_pool[t] = sn;
-            if (t + 1 < range)
-              des_pool[t + 1].distance = -1;
-            break;
-          }
-        }
+	des_pool.push_back(sn);
       }
+      for (auto iter : des_pool)
+	assert(iter.id < nd_);
     }
   }
 
   void IndexNSG::Link(const Parameters &parameters,
-                      SimpleNeighbor *  cut_graph_) {
+                      vecNgh* cut_graph_)
+  {
     std::cout << "Started NSG graph construction" << std::endl;
     unsigned                progress = 0;
     unsigned                percent = 100;
@@ -565,11 +566,16 @@ namespace efanna2e {
             std::cout << n << std::endl;
         }
       }
+      std::cout << "sync_prune completed" << std::endl;
 
-#pragma omp parallel for schedule(static, 65536)
+#pragma omp parallel for schedule(static, PAR_BLOCK_SZ)
       for (unsigned n = 0; n < nd_; ++n) {
         InterInsert(n, range, locks, cut_graph_);
+
+	if (n % PAR_BLOCK_SZ == 0)
+	  std::cout << n << std::endl;
       }
+      std::cout << "InterInsert completed" << std::endl;
     }
   }
 
@@ -581,21 +587,27 @@ namespace efanna2e {
     data_ = data;
     // init_graph(parameters);
     init_graph_bf(parameters);
-    SimpleNeighbor *cut_graph_ = new SimpleNeighbor[nd_ * (size_t) range];
+
+    //SimpleNeighbor *cut_graph_ = new SimpleNeighbor[nd_ * (size_t) range];
+    auto cut_graph_ = new vecNgh[nd_];
+#pragma omp parallel for
+    for(size_t i=0; i<nd_; ++i)
+	  cut_graph_[i].reserve(64);
     std::cout << "Memory allocated for NSG graph" << std::endl;
+
     Link(parameters, cut_graph_);
     final_graph_.resize(nd_);
 
     unsigned max = 0, min = 1e6, avg = 0, cnt = 0;
     for (size_t i = 0; i < nd_; i++) {
-      SimpleNeighbor *pool = cut_graph_ + i * (size_t) range;
-      unsigned        pool_size = 0;
-      for (unsigned j = 0; j < range; j++) {
+      vecNgh& pool = cut_graph_[i];
+      unsigned pool_size = pool.size();
+      /*      for (unsigned j = 0; j < range; j++) {
         if (pool[j].distance == -1)
           break;
         pool_size = j;
       }
-      pool_size++;
+      pool_size++;*/
 
       max = max < pool_size ? pool_size : max;
       min = min > pool_size ? pool_size : min;
@@ -611,14 +623,9 @@ namespace efanna2e {
 
     // tree_grow(parameters);
 
-    avg /= 1.0 * nd_;
-    std::cout << "Degree: max:" << max << "  avg:" << avg << "  min:" << min
-              << "  count:" << cnt << "\n";
+    std::cout << "Degree: max:" << max << "  avg:" << (float)avg/(float)nd_
+	      << "  min:" << min << "  count(deg<2):" << cnt << "\n";
 
-    max = 0;
-    for (unsigned i = 0; i < nd_; i++) {
-      max = max < final_graph_[i].size() ? final_graph_[i].size() : max;
-    }
     if (max > width)
       width = max;
     has_built = true;

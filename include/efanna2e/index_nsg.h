@@ -64,15 +64,18 @@ namespace efanna2e {
                        tsl::robin_set<unsigned> &visited,
                        std::vector<Neighbor> &   retset,
                        std::vector<Neighbor> &   fullset);
-    // void add_cnn(unsigned des, Neighbor p, unsigned range, LockGraph&
-    // cut_graph_);
+    
+    // void add_cnn(unsigned des, Neighbor p, unsigned range, LockGraph& cut_graph_);
+
+    typedef std::vector<SimpleNeighbor> vecNgh;
     void InterInsert(unsigned n, unsigned range, std::vector<std::mutex> &locks,
-                     SimpleNeighbor *cut_graph_);
+                     vecNgh* cut_graph_);
     void sync_prune(unsigned q, std::vector<Neighbor> &pool,
                     const Parameters &        parameter,
                     tsl::robin_set<unsigned> &visited,
-                    SimpleNeighbor *          cut_graph_);
-    void Link(const Parameters &parameters, SimpleNeighbor *cut_graph_);
+                    vecNgh* cut_graph_);
+    void Link(const Parameters &parameters, vecNgh* cut_graph_);
+
     void tree_grow(const Parameters &parameter);
     void DFS(tsl::robin_set<unsigned> &visited, unsigned root, unsigned &cnt);
     void findroot(tsl::robin_set<unsigned> &visited, unsigned &root,
