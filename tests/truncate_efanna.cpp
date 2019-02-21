@@ -16,10 +16,10 @@
 float* data_ = NULL;
 size_t num;
 unsigned  dimension_;
+//#define EFANNA_NOT_SORTED 0 
 
 
-
-efanna2e::Distance* distance_;
+efanna2e::Distance* distance_ = new efanna2e::DistanceL2;
 
 typedef std::vector<std::vector<unsigned>> CompactGraph2;
 
@@ -112,8 +112,10 @@ void open_linux_mmapped_file_handle(
 		final_graph_[i].resize(k);
 		final_graph_[i].reserve(kk);
 		char* reader = buf + (i*(k+1)*sizeof(unsigned));
-		std::memcpy(final_graph_[i].data(), reader + sizeof(unsigned), k*sizeof(unsigned));
 
+		#ifdef EFANNA_NOT_SORTED
+
+		std::memcpy(final_graph_[i].data(), reader + sizeof(unsigned), k*sizeof(unsigned));
 
 		std::vector<efanna2e::Neighbor> pool;
 		for (unsigned nn = 0; nn < final_graph_[i].size(); nn++) {
@@ -124,11 +126,17 @@ void open_linux_mmapped_file_handle(
 			pool.push_back(efanna2e::Neighbor(id, dist, true));
 		}
     
+
 		std::sort(pool.begin(), pool.end());
 
 		for (unsigned nn = 0; nn < d_nn ; nn++) {
-			final_graph_[i][nn] = pool[i].id;
+			final_graph_[i][nn] = pool[nn].id;
 		}
+		#else
+		std::memcpy(final_graph_[i].data(), reader + sizeof(unsigned), d_nn*sizeof(unsigned));
+
+
+		#endif
 
 		for (unsigned nn = d_nn; nn < d_nn + d_rnd; nn++) {
 			final_graph_[i][nn] = rand()% num;
