@@ -451,15 +451,6 @@ namespace efanna2e {
     for (auto iter : cut_graph_[q])
       assert(iter.id < nd_);
     
-    /*  SimpleNeighbor *des_pool = cut_graph_ + (size_t) q * (size_t) range;
-    for (size_t t = 0; t < result.size(); t++) {
-      des_pool[t].id = result[t].id;
-      des_pool[t].distance = result[t].distance;
-    }
-    if (result.size() < range) {
-      des_pool[result.size()].distance = -1;
-      }*/
-    
     // for (unsigned t = 0; t < result.size(); t++) {
     // add_cnn(q, result[t], range, cut_graph_);
     // add_cnn(result[t].id, Neighbor(q, result[t].distance, true), range,
@@ -602,18 +593,10 @@ namespace efanna2e {
     for (size_t i = 0; i < nd_; i++) {
       vecNgh& pool = cut_graph_[i];
       unsigned pool_size = pool.size();
-      /*      for (unsigned j = 0; j < range; j++) {
-        if (pool[j].distance == -1)
-          break;
-        pool_size = j;
-      }
-      pool_size++;*/
-
       max = max < pool_size ? pool_size : max;
       min = min > pool_size ? pool_size : min;
       avg += pool_size;
-      if (pool_size < 2)
-        cnt++;
+      if (pool_size < 2) cnt++;
 
       final_graph_[i].resize(pool_size);
       for (unsigned j = 0; j < pool_size; j++) {
@@ -699,9 +682,6 @@ namespace efanna2e {
       if (!frontier.empty())
         hops++;
       for (auto n : frontier) {
-        // if (retset[k].flag) {
-        // retset[k].flag = false;
-        // unsigned n = retset[k].id;
         for (unsigned m = 0; m < final_graph_[n].size(); ++m) {
           unsigned id = final_graph_[n][m];
           if (visited.find(id) != visited.end()) {
@@ -710,21 +690,6 @@ namespace efanna2e {
             visited.insert(id);
           }
           unique_nbrs.push_back(id);
-          /*
-          cmps++;
-          float dist = distance_->compare(query, data_ + dimension_ * id,
-                                          (unsigned) dimension_);
-          if (dist >= retset[L - 1].distance)
-            continue;
-          Neighbor nn(id, dist, true);
-
-          int r = InsertIntoPool(
-              retset.data(), L,
-              nn);  // Return position in sorted list where nn inserted.
-          if (r < nk)
-            nk = r;  // nk logs the best position in the retset that was updated
-                     // due to neighbors of n.
-                     */
         }
       }
       auto last_iter = std::unique(unique_nbrs.begin(), unique_nbrs.end());
@@ -737,12 +702,9 @@ namespace efanna2e {
           continue;
         Neighbor nn(id, dist, true);
 
-        int r = InsertIntoPool(
-            retset.data(), L,
-            nn);  // Return position in sorted list where nn inserted.
+        int r = InsertIntoPool(retset.data(), L, nn);  // Return position in sorted list where nn inserted.
         if (r < nk)
-          nk = r;  // nk logs the best position in the retset that was updated
-                   // due to neighbors of n.
+          nk = r;  // nk logs the best position in the retset that was updated due to neighbors of n.
       }
       if (nk <= k)
         k = nk;  // k is the best position in retset updated in this round.
@@ -963,9 +925,10 @@ namespace efanna2e {
     CompactGraph().swap(final_graph_);
   }
 
-  void IndexNSG::DFS(tsl::robin_set<unsigned> &visited, unsigned root,
+  void IndexNSG::DFS(tsl::robin_set<unsigned> &visited,
+		     unsigned root,
                      unsigned &cnt) {
-    unsigned             tmp = root;
+    unsigned tmp = root;
     std::stack<unsigned> s;
     s.push(root);
     if (visited.find(root) == visited.end())
@@ -979,7 +942,6 @@ namespace efanna2e {
           break;
         }
       }
-      // std::cout << next <<":"<<cnt <<":"<<tmp <<":"<<s.size()<< '\n';
       if (next == (nd_ + 1)) {
         s.pop();
         if (s.empty())
