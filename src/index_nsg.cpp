@@ -6,7 +6,7 @@
 #include <iterator>
 #include "efanna2e/exceptions.h"
 #include "efanna2e/parameters.h"
-
+#include <ctime>
 #include <map>
 #include "tsl/robin_set.h"
 
@@ -546,6 +546,10 @@ namespace efanna2e {
     std::mutex              progress_lock;
     unsigned                range = parameters.Get<unsigned>("R");
     std::vector<std::mutex> locks(nd_);
+    unsigned* time_counter = new unsigned [100];
+    for (unsigned i=0;i<100;i++)
+	    time_counter[i] = 0;
+    time_t start_time = time(NULL);
 
     {
 #define PAR_BLOCK_SZ 65536
@@ -567,9 +571,15 @@ namespace efanna2e {
           get_neighbors(data_ + dimension_ * n, parameters, visited, tmp, pool);
           sync_prune(n, pool, parameters, visited, cut_graph_);
 
-          if (n % PAR_BLOCK_SZ == 0)
-            std::cout << n << std::endl;
-        }
+//          if (n % PAR_BLOCK_SZ == 0)
+//            std::cout << n << std::endl;
+	int thread_num = omp_get_thread_num();
+	if(time(NULL) - start_time > 30*time_counter[thread_num])
+	{
+		time_counter[thread_num] ++;
+		std::cout<<"Thread "<<thread_num<<" working on datapoint "<<n<<std::endl;
+	}
+	}
       }
       std::cout << "sync_prune completed" << std::endl;
 
