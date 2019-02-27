@@ -419,6 +419,8 @@ namespace efanna2e {
                             vecNgh *cut_graph_) {
     unsigned range = parameter.Get<unsigned>("R");
     unsigned maxc = parameter.Get<unsigned>("C");
+    float alpha = parameter.Get<float>("alpha");
+
     width = range;
     unsigned start = 0;
 
@@ -449,7 +451,7 @@ namespace efanna2e {
         float djk = distance_->compare(
             data_ + dimension_ * (size_t) result[t].id,
             data_ + dimension_ * (size_t) p.id, (unsigned) dimension_);
-        if (djk < p.distance /* dik */) {
+        if (alpha*djk < p.distance /* dik */) {
           occlude = true;
           break;
         }
@@ -475,6 +477,8 @@ namespace efanna2e {
   void IndexNSG::InterInsert(unsigned n, unsigned range,
                              std::vector<std::mutex> &locks,
                              vecNgh *cut_graph_) {
+
+    float alpha = parameter.Get<float>("alpha");
     // SimpleNeighbor *src_pool = cut_graph_ + (size_t) n * (size_t) range;
     vecNgh& src_pool = cut_graph_[n];
     
@@ -515,7 +519,7 @@ namespace efanna2e {
             float djk = distance_->compare(
                 data_ + dimension_ * (size_t) result[t].id,
                 data_ + dimension_ * (size_t) p.id, (unsigned) dimension_);
-            if (djk < p.distance /* dik */) {
+            if (alpha*djk < p.distance /* dik */) {
               occlude = true;
               break;
             }

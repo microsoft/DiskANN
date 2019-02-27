@@ -28,10 +28,15 @@ void load_data(char* filename, float*& data, unsigned& num,
   in.close();
 }
 int main(int argc, char** argv) {
-  if (argc != 7) {
+  if (argc !=8 && argc !=7) {
     std::cout << argv[0] << " data_file nn_graph_path L R C save_graph_file"
               << std::endl;
     exit(-1);
+  }
+  float alpha;
+  else if (argc == 7)
+  {
+	alpha = 1;
   }
   float* data_load = NULL;
   unsigned points_num, dim;
@@ -43,6 +48,7 @@ int main(int argc, char** argv) {
   unsigned L = (unsigned)atoi(argv[3]);
   unsigned R = (unsigned)atoi(argv[4]);
   unsigned C = (unsigned)atoi(argv[5]);
+  alpha = (float) atof(argv[7])
 
   data_load = efanna2e::data_align(data_load, points_num, dim);//one must
   // align the data before build
@@ -53,6 +59,7 @@ int main(int argc, char** argv) {
   paras.Set<unsigned>("L", L);
   paras.Set<unsigned>("R", R);
   paras.Set<unsigned>("C", C);
+  paras.Set<float>("alpha", alpha);
   paras.Set<std::string>("nn_graph_path", nn_graph_path);
   std::cout << "Params set" << std::endl;
 
