@@ -34,10 +34,11 @@ int main(int argc, char** argv) {
     exit(-1);
   }
   float alpha;
-  else if (argc == 7)
-  {
-	alpha = 1;
-  }
+  if (argc == 7)
+	  alpha = 1;
+  else
+	  alpha = (float) atof(argv[7]);
+	
   float* data_load = NULL;
   unsigned points_num, dim;
   load_data(argv[1], data_load, points_num, dim);
@@ -48,7 +49,6 @@ int main(int argc, char** argv) {
   unsigned L = (unsigned)atoi(argv[3]);
   unsigned R = (unsigned)atoi(argv[4]);
   unsigned C = (unsigned)atoi(argv[5]);
-  alpha = (float) atof(argv[7])
 
   data_load = efanna2e::data_align(data_load, points_num, dim);//one must
   // align the data before build

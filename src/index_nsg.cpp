@@ -475,7 +475,7 @@ namespace efanna2e {
   }
 
   void IndexNSG::InterInsert(unsigned n, unsigned range,
-                             std::vector<std::mutex> &locks,
+                             std::vector<std::mutex> &locks,  const Parameters& parameter,
                              vecNgh *cut_graph_) {
 
     float alpha = parameter.Get<float>("alpha");
@@ -589,7 +589,7 @@ namespace efanna2e {
 
 #pragma omp parallel for schedule(static, PAR_BLOCK_SZ)
       for (unsigned n = 0; n < nd_; ++n) {
-        InterInsert(n, range, locks, cut_graph_);
+        InterInsert(n, range, locks,parameters,  cut_graph_);
 
 	if (n % PAR_BLOCK_SZ == 0)
 	  std::cout << n << std::endl;
