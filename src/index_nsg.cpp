@@ -474,6 +474,8 @@ namespace efanna2e {
                             vecNgh *cut_graph_) {
     unsigned range = parameter.Get<unsigned>("R");
     unsigned maxc = parameter.Get<unsigned>("C");
+    float alpha = parameter.Get<float>("alpha");
+
     width = range;
     unsigned start = 0;
 
@@ -504,7 +506,7 @@ namespace efanna2e {
         float djk = distance_->compare(
             data_ + dimension_ * (size_t) result[t].id,
             data_ + dimension_ * (size_t) p.id, (unsigned) dimension_);
-        if (djk < p.distance /* dik */) {
+        if (alpha*djk < p.distance /* dik */) {
           occlude = true;
           break;
         }
@@ -528,8 +530,10 @@ namespace efanna2e {
   }
 
   void IndexNSG::InterInsert(unsigned n, unsigned range,
-                             std::vector<std::mutex> &locks,
+                             std::vector<std::mutex> &locks,  const Parameters& parameter,
                              vecNgh *cut_graph_) {
+
+    float alpha = parameter.Get<float>("alpha");
     // SimpleNeighbor *src_pool = cut_graph_ + (size_t) n * (size_t) range;
     vecNgh& src_pool = cut_graph_[n];
     
@@ -570,7 +574,7 @@ namespace efanna2e {
             float djk = distance_->compare(
                 data_ + dimension_ * (size_t) result[t].id,
                 data_ + dimension_ * (size_t) p.id, (unsigned) dimension_);
-            if (djk < p.distance /* dik */) {
+            if (alpha*djk < p.distance /* dik */) {
               occlude = true;
               break;
             }
@@ -607,7 +611,7 @@ namespace efanna2e {
     time_t start_time = time(NULL);
 
     {
-#define PAR_BLOCK_SZ 65536
+#define PAR_BLOCK_SZ 32768
       int nblocks = nd_ % PAR_BLOCK_SZ == 0 ? nd_ / PAR_BLOCK_SZ
                                             : (nd_ / PAR_BLOCK_SZ) + 1;
 
@@ -640,7 +644,7 @@ namespace efanna2e {
 
 #pragma omp parallel for schedule(static, PAR_BLOCK_SZ)
       for (unsigned n = 0; n < nd_; ++n) {
-        InterInsert(n, range, locks, cut_graph_);
+        InterInsert(n, range, locks,parameters,  cut_graph_);
 
 	if (n % PAR_BLOCK_SZ == 0)
 	  std::cout << n << std::endl;

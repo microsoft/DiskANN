@@ -28,11 +28,17 @@ void load_data(char* filename, float*& data, unsigned& num,
   in.close();
 }
 int main(int argc, char** argv) {
-  if (argc != 7) {
+  if (argc !=8 && argc !=7) {
     std::cout << argv[0] << " data_file nn_graph_path L R C save_graph_file"
               << std::endl;
     exit(-1);
   }
+  float alpha;
+  if (argc == 7)
+	  alpha = 1;
+  else
+	  alpha = (float) atof(argv[7]);
+	
   float* data_load = NULL;
   unsigned points_num, dim;
   load_data(argv[1], data_load, points_num, dim);
@@ -53,6 +59,7 @@ int main(int argc, char** argv) {
   paras.Set<unsigned>("L", L);
   paras.Set<unsigned>("R", R);
   paras.Set<unsigned>("C", C);
+  paras.Set<float>("alpha", alpha);
   paras.Set<std::string>("nn_graph_path", nn_graph_path);
   std::cout << "Params set" << std::endl;
 

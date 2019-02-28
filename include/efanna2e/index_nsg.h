@@ -68,7 +68,7 @@ namespace efanna2e {
     // void add_cnn(unsigned des, Neighbor p, unsigned range, LockGraph& cut_graph_);
 
     typedef std::vector<SimpleNeighbor> vecNgh;
-    void InterInsert(unsigned n, unsigned range, std::vector<std::mutex> &locks,
+    void InterInsert(unsigned n, unsigned range, std::vector<std::mutex> &locks,  const Parameters& parameter,
                      vecNgh* cut_graph_);
     void sync_prune(unsigned q, std::vector<Neighbor> &pool,
                     const Parameters &        parameter,
