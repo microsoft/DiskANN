@@ -10,6 +10,14 @@
 #include <map>
 #include "tsl/robin_set.h"
 
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <time.h>
+#include <cassert>
+
+
 namespace efanna2e {
 #define _CONTROL_NUM 100
 #define MAX_START_POINTS 100
@@ -65,7 +73,7 @@ namespace efanna2e {
     // std::cout<<cc<<std::endl;
   }
 
-  void IndexNSG::Load_nn_graph(const char *filename) {
+  /*void IndexNSG::Load_nn_graph(const char *filename) {
     std::ifstream in(filename, std::ios::binary);
     unsigned      k;
     in.read((char *) &k, sizeof(unsigned));
@@ -88,6 +96,53 @@ namespace efanna2e {
     ep_ = 0;
     std::cout << "Loaded EFANNA graph. Set ep_ to 0" << std::endl;
   }
+*/
+
+
+  void IndexNSG::Load_nn_graph(const char *filename) {
+
+
+	  char* buf;
+	  int fd;
+	  unsigned k;
+	  fd = open(filename, O_RDONLY);
+	  if (!(fd > 0)) {
+		  std::cerr << "Data file " << filename << " not found. Program will stop now." << std::endl;
+		  assert(false);
+	  }
+	  struct stat sb;
+	  int val=fstat(fd, &sb);
+	  if(val!=0) std::cout<<"FILE LOAD ERROR. CHECK!"<<std::endl;
+
+	  off_t fileSize = sb.st_size;
+	std::cout<<fileSize<<std::endl;
+	  buf = (char*) mmap(NULL, fileSize, PROT_READ, MAP_PRIVATE, fd, 0);
+
+	std::memcpy(&k, buf, sizeof(unsigned));
+	size_t num = (fileSize)/((k+1)*4);
+
+	std::cout<<"k is and num is "<<k<<" "<<num<<std::endl;
+	final_graph_.resize(num);
+	final_graph_.reserve(num);
+
+	unsigned kk = (k+3)/4*4;
+#pragma omp parallel for schedule(static, 65536)
+	for (size_t i =0; i <num; i++)
+	{
+		final_graph_[i].resize(k);
+		final_graph_[i].reserve(kk);
+		char* reader = buf + (i*(k+1)*sizeof(unsigned));
+		std::memcpy(final_graph_[i].data(), reader + sizeof(unsigned), k*sizeof(unsigned));
+	}
+	val = munmap(buf, fileSize);
+	close(fd);
+	ep_ = 0;
+	if(val!=0) std::cout<<"ERROR unmapping. CHECK!"<<std::endl;
+	std::cout << "Loaded EFANNA graph. Set ep_ to 0" << std::endl;
+}
+
+
+
 
   void IndexNSG::get_neighbors(const float *query, const Parameters &parameter,
                                std::vector<Neighbor> &retset,
