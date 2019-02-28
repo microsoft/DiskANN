@@ -27,11 +27,6 @@ void load_nsg(const char *filename, VecVec &graph, unsigned &width,
       break;
     std::vector<unsigned> tmp(k);
     in.read((char *) tmp.data(), k * sizeof(unsigned));
-    for(auto &id : tmp){
-      if(id == 67635444u){
-        std::cout << "found in nbr list of node #" << graph.size() << std::endl; 
-      }
-    }
     graph.push_back(tmp);
   }
   std::cout << "Total #nodes = " << graph.size() << std::endl;
