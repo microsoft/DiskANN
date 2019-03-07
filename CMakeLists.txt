@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 2.8)
 project(efanna2e)
 include_directories(${PROJECT_SOURCE_DIR}/include)
 
-set(CMAKE_CXX_COMPILER g++-7)
+set(CMAKE_CXX_COMPILER g++)
 set(CMAKE_STANDARD 14)
 
 #OpenMP
