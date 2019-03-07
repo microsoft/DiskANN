@@ -611,7 +611,7 @@ namespace efanna2e {
     time_t start_time = time(NULL);
 
     {
-#define PAR_BLOCK_SZ 32768
+      int PAR_BLOCK_SZ = nd_ > 1000000 ? 32768 : 2048;
       int nblocks = nd_ % PAR_BLOCK_SZ == 0 ? nd_ / PAR_BLOCK_SZ
                                             : (nd_ / PAR_BLOCK_SZ) + 1;
 
