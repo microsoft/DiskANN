@@ -657,6 +657,7 @@ namespace efanna2e {
                        const Parameters &parameters) 
   {
     std::cout << "Building small index with size " << n <<std::endl;
+    final_graph_.resize(n);
     for (size_t i = 0; i < n; i++) {
       final_graph_[i].reserve(n);
       for (size_t j = 0; j < n; j++)
