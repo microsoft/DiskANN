@@ -47,7 +47,7 @@ void sample_data(
     assert(picked_pts.size() == 0);
     picked_pts.reserve(dst_npoints);
 
-    std::set picked;
+    std::set<unsigned> picked;
     std::random_device rd; 
     std::mt19937 gen(rd());
     std::uniform_int_distribution<> dis(0, src_npoints);
