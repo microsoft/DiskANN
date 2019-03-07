@@ -68,7 +68,7 @@ void sample_data(
 int main(int argc, char** argv) 
 {
   if (argc != 9 && argc !=10) {
-    std::cout << argv[0] << " data_file nn_graph_path L R C L1 B1 save_graph_file"
+    std::cout << argv[0] << " data_file nn_graph_path L R C NS B1 save_graph_file"
               << std::endl;
     exit(-1);
   }
@@ -89,7 +89,7 @@ int main(int argc, char** argv)
   unsigned B1 = (unsigned)atoi(argv[7]);
 
 
-  float *data_sampled = new float[(size_t)L1 * dim]; 
+  float *data_sampled = new float[(size_t)NS * dim]; 
   std::vector<unsigned> picked_pts;
   sample_data(dim, data_load, points_num, data_sampled, NS, picked_pts);  // Sample and copy before 
   
