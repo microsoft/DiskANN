@@ -54,7 +54,7 @@ void sample_data(
 
     while (picked.size() < dst_npoints) {
         unsigned r = dis(gen);
-        if (!picked.contains(r))
+        if (picked.find(r) == picked.end())
             picked.insert(r);
     }
 
