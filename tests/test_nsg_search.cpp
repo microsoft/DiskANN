@@ -93,7 +93,7 @@ int main(int argc, char** argv) {
 	  index.Load_nn_graph(argv[3]);  // to load EFANNA
   std::cout << "Index loaded" << std::endl;
     
-  //index.populate_start_points_bfs();
+  index.populate_start_points_bfs();
 //  std::cout << "Initialized starting points based on BFS" << std::endl;
 
   efanna2e::Parameters paras;

@@ -59,8 +59,8 @@ void sample_data(
     }
 
     for (auto p : picked) {
-        memcpy((char*)dst + picked_pts.size() * dim * sizeof(T),
-            src + p * dim * sizeof(T), dim * sizeof(T));
+        memcpy(((char*)dst) + picked_pts.size() * dim * sizeof(T),
+            ((char*)src) + p * dim * sizeof(T), dim * sizeof(T));
         picked_pts.push_back(p);
     }
 }
@@ -88,13 +88,14 @@ int main(int argc, char** argv)
   unsigned NS = (unsigned)atoi(argv[6]);
   unsigned B1 = (unsigned)atoi(argv[7]);
 
-
   float *data_sampled = new float[(size_t)NS * dim]; 
   std::vector<unsigned> picked_pts;
   sample_data(dim, data_load, points_num, data_sampled, NS, picked_pts);  // Sample and copy before 
+  std::cout << "Data sampled" << std::endl;
   
   data_load = efanna2e::data_align(data_load, points_num, dim);
   data_sampled = efanna2e::data_align(data_sampled, NS, dim);
+  std::cout << "File data and sample data aligned" << std::endl;
 
   efanna2e::IndexNSG small_index(dim, NS, efanna2e::L2, nullptr);
   {
