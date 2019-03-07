@@ -656,8 +656,9 @@ namespace efanna2e {
   void IndexNSG::BuildFromAlltoAll(size_t n, const float *data,
                        const Parameters &parameters) 
   {
+    std::cout << "Building small index with size " << n <<std::endl;
     for (size_t i = 0; i < n; i++) {
-      final_graph_[i].resize(n - 1);
+      final_graph_[i].reserve(n);
       for (size_t j = 0; j < n; j++)
         if (i != j)
           final_graph_[i].push_back(j);
