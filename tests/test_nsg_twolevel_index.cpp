@@ -50,7 +50,7 @@ void sample_data(
     std::set<unsigned> picked;
     std::random_device rd; 
     std::mt19937 gen(rd());
-    std::uniform_int_distribution<> dis(0, src_npoints);
+    std::uniform_int_distribution<> dis(0, src_npoints-1);
 
     while (picked.size() < dst_npoints) {
         unsigned r = dis(gen);
@@ -86,7 +86,7 @@ int main(int argc, char** argv)
   unsigned R = (unsigned)atoi(argv[4]);
   unsigned C = (unsigned)atoi(argv[5]);
   unsigned NS = (unsigned)atoi(argv[6]);
-  unsigned B1 = (unsigned)atoi(argv[7]);
+  unsigned NR = (unsigned)atoi(argv[7]);
 
   float *data_sampled = new float[(size_t)NS * dim]; 
   std::vector<unsigned> picked_pts;
@@ -106,7 +106,7 @@ int main(int argc, char** argv)
     paras.Set<unsigned>("C", 20000);
     paras.Set<float>("alpha", alpha);
     std::cout << "Params set. Build start..." << std::endl;
-    small_index.BuildFromAlltoAll(NS, data_sampled, paras);
+    small_index.BuildFromAlltoAll(NS, NR, data_sampled, paras);
     auto e = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> diff = e - s;
     std::cout << "Small indexing time: " << diff.count() << "\n";
