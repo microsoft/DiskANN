@@ -28,6 +28,9 @@ namespace efanna2e {
     virtual void Build(size_t n, const float *data,
                        const Parameters &parameters) override;
 
+    void BuildFromAlltoAll(size_t n, const float *data,
+                       const Parameters &parameters);
+
     virtual std::pair<int, int> Search(const float *query, const float *x,
                                        size_t k, const Parameters &parameters,
                                        unsigned *indices) override;

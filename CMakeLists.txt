@@ -2,6 +2,10 @@ cmake_minimum_required(VERSION 2.8)
 
 project(efanna2e)
 include_directories(${PROJECT_SOURCE_DIR}/include)
+
+set(CMAKE_CXX_COMPILER g++-7)
+set(CMAKE_STANDARD 14)
+
 #OpenMP
 find_package(OpenMP)
 if (OPENMP_FOUND)
@@ -13,7 +17,7 @@ endif()
 
 set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -g -DDEBUG -O0 -fsanitize=address -fsanitize=leak -fsanitize=undefined")
 set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -Ofast -march=native -mtune=native -ftree-vectorize")
-add_compile_options(-std=c++14 -lboost -DINFO -march=native -Wall -fno-builtin-malloc -fno-builtin-calloc -fno-builtin-realloc -fno-builtin-free -fopenmp -Wfatal-errors)
+add_compile_options(-lboost -DINFO -march=native -Wall -fno-builtin-malloc -fno-builtin-calloc -fno-builtin-realloc -fno-builtin-free -fopenmp -Wfatal-errors)
 
 add_subdirectory(src)
 add_subdirectory(tests)
