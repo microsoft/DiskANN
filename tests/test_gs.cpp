@@ -29,25 +29,62 @@ data = new int [data_size];
   }
   in.close();
   std::cout <<"data loaded \n";
-	for (unsigned i = 0; i< 2; i++)
-{
-	for(unsigned j=0;j < dim; j++)
-		std::cout<<data[i*dim + j]<<" ";
-	std::cout<<std::endl;
-}
 		
 }
 
+
+
+void load_fdata(char* filename, float*& data, unsigned long long & num,unsigned & dim){// load data with sift10K pattern
+  std::ifstream in(filename, std::ios::binary);
+  if(!in.is_open()){std::cout<<"open file error"<<std::endl;exit(-1);}
+  in.read((char*)&dim,4);
+  in.seekg(0,std::ios::end);
+  std::ios::pos_type ss = in.tellg();
+  unsigned long long int fsize = (size_t)ss;
+  num = (unsigned)(fsize / (dim+1) / 4);
+  unsigned long long int data_size = (unsigned long long) num * (unsigned long long) dim;
+  std::cout<<"data dimension: "<<dim<<std::endl;
+  std::cout<<"data num points: "<<num<<std::endl;
+data = new float [data_size];
+  
+  int *tmp_dim = new int;
+  in.seekg(0,std::ios::beg);
+  for(size_t i = 0; i < num; i++){
+//    in.seekg(4,std::ios::cur);
+    in.read((char*) tmp_dim, 4);
+    in.read((char*)(data+i*dim),dim*4);
+  }
+  in.close();
+  std::cout <<"data loaded \n";
+		
+}
+ 
 typedef unsigned long long ull;
+
+float calc_dist(float* vec_1, float* vec_2, size_t dim){
+	float dist = 0;
+	for (size_t j = 0; j<dim; j++)
+	{
+		dist += (vec_1[j] - vec_2[j])* (vec_1[j] - vec_2[j]);
+	}
+	return dist;
+}
 
 int main(int argc, char** argv)
 {
-  if(argc!=3){std::cout<< argv[0] <<" data_file1 data_file2"<<std::endl; exit(-1);}
+  if(argc!=5){std::cout<< argv[0] <<"ground_truth_ivecs our_ivecs base_file query_file"<<std::endl; exit(-1);}
   int* gold_std = NULL;
   int* our_results = NULL;
   ull points_num;
   unsigned dim_gs;
   unsigned dim_or;
+  float* base = NULL;
+  unsigned dim_;
+  ull base_num;
+  ull queries_num;
+  float* query = NULL;
+  load_fdata(argv[3], base, base_num,  dim_);
+  load_fdata(argv[4], query, queries_num, dim_);
   load_data(argv[1], gold_std, points_num, dim_gs);
   load_data(argv[2], our_results, points_num, dim_or);
   ull recall  =0;
@@ -63,8 +100,32 @@ int main(int argc, char** argv)
 	  std::cout<<"ground truth has size "<< dim_gs<<" and our set has only "<< dim_or<<" points. exiting \n";	
 	  return(1);
   }
-		
 
+
+		
+	for (unsigned i = 0; i< 2; i++)
+	{
+		for(unsigned j=0;j < mind; j++)
+		{
+			size_t gtidx = gold_std[i*dim_gs + j];
+			float gt_dist = calc_dist(query + i*dim_, base + gtidx*dim_, dim_);
+
+			std::cout<<gtidx<<"("<<gt_dist<<") ";
+		}
+		std::cout<<std::endl;
+	}
+
+	for (unsigned i = 0; i< 2; i++)
+	{
+		for(unsigned j=0;j < mind; j++)
+		{
+			size_t oridx = our_results[i*dim_or + j];
+			float or_dist = calc_dist(query + i*dim_, base + oridx*dim_, dim_);
+
+			std::cout<<oridx<<"("<<or_dist<<") ";
+		}
+		std::cout<<std::endl;
+	}
 
   bool* this_point = new bool[dim_gs];
   for (ull i = 0; i < points_num; i++)
