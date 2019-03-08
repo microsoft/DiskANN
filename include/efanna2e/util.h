@@ -137,7 +137,7 @@ namespace efanna2e {
     assert(fd != -1);
 
 // parallel read each vector at the desired offset
-#pragma omp parallel for schedule(static, 32768) num_threads(32)
+#pragma omp parallel for schedule(static, 32768) 
     for (size_t i = 0; i < num; i++) {
       // computed using actual dimension
       uint64_t file_offset = (per_row * i) + sizeof(unsigned);
