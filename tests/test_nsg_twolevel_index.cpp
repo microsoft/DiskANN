@@ -101,15 +101,15 @@ int main(int argc, char** argv)
   {
     auto s = std::chrono::high_resolution_clock::now();
     efanna2e::Parameters paras;
-    paras.Set<unsigned>("L", 2000);
-    paras.Set<unsigned>("R", 500);
+    paras.Set<unsigned>("L", 300);
+    paras.Set<unsigned>("R", 64);
     paras.Set<unsigned>("C", 20000);
     paras.Set<float>("alpha", alpha);
     std::cout << "Params set. Build start..." << std::endl;
     small_index.BuildFromAlltoAll(NS, NR, data_sampled, paras);
     auto e = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> diff = e - s;
-    std::cout << "Small indexing time: " << diff.count() << "\n";
+    std::cout << "Small indexing time: " << diff.count() << std::endl;
   }
 
   efanna2e::IndexNSG index(dim, points_num, efanna2e::L2, nullptr);
@@ -125,7 +125,7 @@ int main(int argc, char** argv)
     index.Build(points_num, data_load, paras);
     auto e = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> diff = e - s;
-    std::cout << "Big indexing time: " << diff.count() << "\n";
+    std::cout << "Big indexing time: " << diff.count() << std::endl;
   }
 
   index.Save(argv[8]);
