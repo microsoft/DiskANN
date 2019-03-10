@@ -281,10 +281,12 @@ namespace efanna2e {
   }
 
 
-  void IndexNSG::get_neighbors(const float *query, const Parameters &parameter,
-	  tsl::robin_set<unsigned> &visited,
-	  std::vector<Neighbor> &   retset,
-	  std::vector<Neighbor> &   fullset) {
+  void IndexNSG::get_neighbors(const float *query,
+	  const Parameters &parameter,
+	  tsl::robin_set<unsigned>& visited,
+	  std::vector<Neighbor>& retset,
+	  std::vector<Neighbor>& fullset,
+	  std::vector<unsigned>* start_points) {
 
 	  const unsigned L = parameter.Get<unsigned>("L");
 
@@ -293,11 +295,28 @@ namespace efanna2e {
 	  init_ids.reserve(L);
 	  // initializer_->Search(query, nullptr, L, parameter, init_ids.data());
 
-	  for (auto iter : final_graph_[ep_]) {
-		  if (init_ids.size() >= L) break;
-		  init_ids.push_back(iter);
-		  visited.insert(iter);
+	  if (start_points == NULL)
+		  for (auto iter : final_graph_[ep_]) {
+			  if (init_ids.size() >= L) break;
+			  init_ids.push_back(iter);
+			  visited.insert(iter);
+		  }
+	  else {
+		  for (auto iter : *start_points) {
+			  if (init_ids.size() >= L) break;
+			  init_ids.push_back(iter);
+			  visited.insert(iter);
+		  }
+		  for (auto s : *start_points) {
+			  if (init_ids.size() == L) break;
+			  for (auto iter : final_graph_[s]) {
+				  if (init_ids.size() == L) break;
+				  init_ids.push_back(iter);
+				  visited.insert(iter);
+			  }
+		  }
 	  }
+
 	  while (init_ids.size() < L) {
 		  unsigned id = rand() % nd_;
 		  if (visited.find(id) != visited.end())
@@ -654,7 +673,7 @@ namespace efanna2e {
     //unsigned                progress = 0;
     //unsigned                percent = 100;
     //unsigned                step_size = nd_ / percent;
-    std::mutex              progress_lock;
+    //std::mutex              progress_lock;
     unsigned                range = parameters.Get<unsigned>("R");
     std::vector<std::mutex> locks(nd_);
     unsigned* time_counter = new unsigned [100];
@@ -702,7 +721,7 @@ namespace efanna2e {
     }
   }
 
-  void IndexNSG::BuildFromAlltoAll(
+  void IndexNSG::BuildFromER(
 	  size_t n, size_t nr, 
 	  const float *data,
 	  const Parameters &parameters) 
@@ -764,22 +783,24 @@ namespace efanna2e {
     unsigned    range = parameters.Get<unsigned>("R");
     Load_nn_graph(nn_graph_path.c_str());
     
+	auto cut_graph_ = new vecNgh[nd_];
+#pragma omp parallel for
+	for (size_t i = 0; i < nd_; ++i)
+		cut_graph_[i].reserve(range);
+	std::cout << "Memory allocated for NSG graph" << std::endl;
+
     data_ = data;
 	ep_ = picked_pts[small_index.get_start_node()];
 
 	assert(small_index.has_built);
-	for (size_t i = 0; i < picked_pts.size(); ++i) {
-		auto append = small_index.final_graph_[i];
-		auto p = picked_pts[i];
-		final_graph_[p].insert(final_graph_[p].end(), append.begin(), append.end());
+	{ // Method 1
+		for (size_t i = 0; i < picked_pts.size(); ++i) {
+			auto append = small_index.final_graph_[i];
+			auto p = picked_pts[i];
+			final_graph_[p].insert(final_graph_[p].end(), append.begin(), append.end());
+		}
+		Link(parameters, cut_graph_);
 	}
-
-    auto cut_graph_ = new vecNgh[nd_];
-#pragma omp parallel for
-	for (size_t i = 0; i < nd_; ++i)
-		cut_graph_[i].reserve(range);
-    std::cout << "Memory allocated for NSG graph" << std::endl;
-    Link(parameters, cut_graph_);
     
 	final_graph_.resize(nd_);
 #pragma omp parallel for

@@ -37,8 +37,8 @@ namespace efanna2e {
 						const IndexNSG& small_index,
 						const std::vector<unsigned>& picked_pts);
 
-    void BuildFromAlltoAll(size_t n, size_t nr, const float *data,
-                       const Parameters &parameters);
+    void BuildFromER(size_t n, size_t nr, const float *data,
+                     const Parameters &parameters);
 
     virtual std::pair<int, int> Search(const float *query, const float *x,
                                        size_t k, const Parameters &parameters,
@@ -79,7 +79,8 @@ namespace efanna2e {
     void get_neighbors(const float *query, const Parameters &parameter,
                        tsl::robin_set<unsigned> &visited,
                        std::vector<Neighbor> &   retset,
-                       std::vector<Neighbor> &   fullset);
+                       std::vector<Neighbor> &   fullset,
+                       std::vector<unsigned>* start_points=NULL);
     
     // void add_cnn(unsigned des, Neighbor p, unsigned range, LockGraph& cut_graph_);
 

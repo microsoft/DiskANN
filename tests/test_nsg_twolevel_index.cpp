@@ -106,7 +106,7 @@ int main(int argc, char** argv)
 		paras.Set<unsigned>("C", C);
 		paras.Set<float>("alpha", alpha);
 		std::cout << "Params set. Build start..." << std::endl;
-		small_index.BuildFromAlltoAll(NS, NR, data_sampled, paras);
+		small_index.BuildFromER(NS, NR, data_sampled, paras);
 		auto e = std::chrono::high_resolution_clock::now();
 		std::chrono::duration<double> diff = e - s;
 		std::cout << "Small indexing time: " << diff.count() << std::endl;
