@@ -611,47 +611,43 @@ namespace efanna2e {
     for (unsigned i=0;i<100;i++)
 	    time_counter[i] = 0;
     time_t start_time = time(NULL);
-
     {
-      int PAR_BLOCK_SZ = 32768;
+      int PAR_BLOCK_SZ = 1<<16;
       if (PAR_BLOCK_SZ * 8 > (int) nd_) PAR_BLOCK_SZ = ((int) nd_ + 8)/8;
 	  int nblocks = (int)nd_ / PAR_BLOCK_SZ;
 	  if ((int)nd_ % PAR_BLOCK_SZ > 0) nblocks++;
 
 #pragma omp parallel for schedule(static, 1)
-      for (int block = 0; block < nblocks; ++block) {
-        std::vector<Neighbor> pool, tmp;
-        // boost::dynamic_bitset<> flags{nd_, 0};
-        tsl::robin_set<unsigned> visited;
+	  for (int block = 0; block < nblocks; ++block) {
+		  std::vector<Neighbor> pool, tmp;
+		  // boost::dynamic_bitset<> flags{nd_, 0};
+		  tsl::robin_set<unsigned> visited;
 
-        for (size_t n = block * PAR_BLOCK_SZ;
-             n < nd_ && n < (block + 1) * (size_t)PAR_BLOCK_SZ; ++n) {
-          pool.clear();
-          tmp.clear();
-          visited.clear();
+		  for (size_t n = block * PAR_BLOCK_SZ;
+			  n < nd_ && n < (block + 1) * (size_t)PAR_BLOCK_SZ; ++n) {
+			  pool.clear();
+			  tmp.clear();
+			  visited.clear();
 
-          get_neighbors(data_ + dimension_ * n, parameters, visited, tmp, pool);
-          sync_prune(n, pool, parameters, visited, cut_graph_);
+			  get_neighbors(data_ + dimension_ * n, parameters, visited, tmp, pool);
+			  sync_prune(n, pool, parameters, visited, cut_graph_);
 
-//          if (n % PAR_BLOCK_SZ == 0)
-//            std::cout << n << std::endl;
-	int thread_num = omp_get_thread_num();
-	if(time(NULL) - start_time > 30*time_counter[thread_num])
-	{
-		time_counter[thread_num] ++;
-		std::cout<<"Thread "<<thread_num<<" working on datapoint "<<n<<std::endl;
-	}
-	}
-      }
+			  int thread_num = omp_get_thread_num();
+			  if (time(NULL) - start_time > 60 * time_counter[thread_num]) {
+				  time_counter[thread_num] ++;
+				  std::cout << "Thread " << thread_num << " working on datapoint " << n << std::endl;
+			  }
+		  }
+	  }
       std::cout << "sync_prune completed" << std::endl;
 
 #pragma omp parallel for schedule(static, PAR_BLOCK_SZ)
-      for (unsigned n = 0; n < nd_; ++n) {
-        InterInsert(n, range, locks,parameters,  cut_graph_);
+	  for (unsigned n = 0; n < nd_; ++n) {
+		  InterInsert(n, range, locks, parameters, cut_graph_);
 
-	if (n % PAR_BLOCK_SZ == 0)
-	  std::cout << n << std::endl;
-      }
+		  if (n % PAR_BLOCK_SZ == 0)
+			  std::cout << n << std::endl;
+	  }
       std::cout << "InterInsert completed" << std::endl;
     }
   }
