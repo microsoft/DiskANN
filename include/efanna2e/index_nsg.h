@@ -58,7 +58,7 @@ namespace efanna2e {
     void OptimizeGraph(float *data);
 
 	unsigned get_start_node() const;
-
+	void set_start_node(const unsigned s);
 
    protected:
     typedef std::vector<std::vector<unsigned>> CompactGraph;

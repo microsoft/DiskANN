@@ -5,7 +5,7 @@
 
 void add_point(std::ofstream& out, const int dim, std::vector<float>& fixed_vals, const std::vector<float>& vals, bool rand=1)
 {
-  if (fixed_vals.size() == dim-1) {
+  if (fixed_vals.size() == (size_t)dim-1) {
     for(auto iter: vals) {
       out.write((char*)&dim, sizeof(int));
       out.write((char*)(fixed_vals.data()), (dim-1)*sizeof(float));
