@@ -208,40 +208,38 @@ namespace efanna2e {
 	  std::cout << "Loaded EFANNA graph. Set ep_ to 0" << std::endl;
   }
 
+  // TODO: Get rid of code in this def and just call the other ::get_neighbor
   void IndexNSG::get_neighbors(const float *query, const Parameters &parameter,
                                std::vector<Neighbor> &retset,
                                std::vector<Neighbor> &fullset) {
     const unsigned L = parameter.Get<unsigned>("L");
 
     retset.resize(L + 1);
-    std::vector<unsigned> init_ids(L);
+    std::vector<unsigned> init_ids;
+	init_ids.reserve(L);
 	tsl::robin_set<unsigned> visited(10 * L);
     // initializer_->Search(query, nullptr, L, parameter, init_ids.data());
 
-    unsigned l = 0;
-    for (unsigned i = 0; i < init_ids.size() && i < final_graph_[ep_].size(); i++) {
-      init_ids[i] = final_graph_[ep_][i];
-      visited.insert(init_ids[i]);
-      l++;
-    }
-    while (l < init_ids.size()) {
-      unsigned id = rand() % nd_;
-      if (visited.find(id) != visited.end())
-        continue;
-      else
-        visited.insert(id);
-      init_ids[l] = id;
-      l++;
-    }
+	for (auto iter : final_graph_[ep_]) {
+		if (init_ids.size() >= L) break;
+		init_ids.push_back(iter);
+		visited.insert(iter);
+	}
+	while (init_ids.size() < L) {
+		unsigned id = rand() % nd_;
+		if (visited.find(id) != visited.end())
+			continue;
+		else
+			visited.insert(id);
+		init_ids.push_back(id);
+	}
 
-    l = 0;
-    for (unsigned i = 0; i < init_ids.size(); i++) {
-      unsigned id = init_ids[i];
-      if (id >= nd_)
-        continue;
+    unsigned l = 0;
+    for (auto id : init_ids) {
+      if (id >= nd_) continue;
       float dist = distance_->compare(data_ + dimension_ * (size_t) id, query,
                                       (unsigned) dimension_);
-      retset[i] = Neighbor(id, dist, true);
+      retset[l] = Neighbor(id, dist, true);
       l++;
     }
 
@@ -281,6 +279,81 @@ namespace efanna2e {
         ++k;
     }
   }
+
+
+  void IndexNSG::get_neighbors(const float *query, const Parameters &parameter,
+	  tsl::robin_set<unsigned> &visited,
+	  std::vector<Neighbor> &   retset,
+	  std::vector<Neighbor> &   fullset) {
+
+	  const unsigned L = parameter.Get<unsigned>("L");
+
+	  retset.resize(L + 1);
+	  std::vector<unsigned> init_ids;
+	  init_ids.reserve(L);
+	  // initializer_->Search(query, nullptr, L, parameter, init_ids.data());
+
+	  for (auto iter : final_graph_[ep_]) {
+		  if (init_ids.size() >= L) break;
+		  init_ids.push_back(iter);
+		  visited.insert(iter);
+	  }
+	  while (init_ids.size() < L) {
+		  unsigned id = rand() % nd_;
+		  if (visited.find(id) != visited.end())
+			  continue;
+		  else
+			  visited.insert(id);
+		  init_ids.push_back(id);
+	  }
+
+	  unsigned l = 0;
+	  for (auto id : init_ids) {
+		  if (id >= nd_) continue;
+		  float dist = distance_->compare(data_ + dimension_ * (size_t)id, query,
+			  (unsigned)dimension_);
+		  retset[l] = Neighbor(id, dist, true);
+		  fullset.push_back(retset[l]);
+		  l++;
+	  }
+
+	  std::sort(retset.begin(), retset.begin() + l);
+	  int k = 0;
+	  while (k < (int)l) {
+		  int nk = l;
+
+		  if (retset[k].flag) {
+			  retset[k].flag = false;
+			  unsigned n = retset[k].id;
+
+			  for (unsigned m = 0; m < final_graph_[n].size(); ++m) {
+				  unsigned id = final_graph_[n][m];
+				  if (visited.find(id) != visited.end())
+					  continue;
+				  else
+					  visited.insert(id);
+
+				  float dist = distance_->compare(
+					  query, data_ + dimension_ * (size_t)id, (unsigned)dimension_);
+				  Neighbor nn(id, dist, true);
+				  fullset.push_back(nn);
+				  if (dist >= retset[l - 1].distance)
+					  continue;
+				  int r = InsertIntoPool(retset.data(), l, nn);
+
+				  if (l + 1 < retset.size())
+					  ++l;
+				  if (r < nk)
+					  nk = r;
+			  }
+		  }
+		  if (nk <= k)
+			  k = nk;
+		  else
+			  ++k;
+	  }
+  }
+
 
   void IndexNSG::reachable_bfs(const unsigned start_node,
                                std::vector<tsl::robin_set<unsigned>> &bfs_order,
@@ -391,83 +464,6 @@ namespace efanna2e {
               << std::endl;
 
     delete[] visited;
-  }
-
-  void IndexNSG::get_neighbors(const float *query, const Parameters &parameter,
-                               tsl::robin_set<unsigned> &visited,
-                               std::vector<Neighbor> &   retset,
-                               std::vector<Neighbor> &   fullset) {
-    unsigned L = parameter.Get<unsigned>("L");
-
-    retset.resize(L + 1);
-    std::vector<unsigned> init_ids(L);
-    // initializer_->Search(query, nullptr, L, parameter, init_ids.data());
-
-    L = 0;
-    for (unsigned i = 0; i < init_ids.size() && i < final_graph_[ep_].size();
-         i++) {
-      init_ids[i] = final_graph_[ep_][i];
-      visited.insert(init_ids[i]);
-      L++;
-    }
-    while (L < init_ids.size()) {
-      unsigned id = rand() % nd_;
-      if (visited.find(id) != visited.end())
-        continue;
-      else
-        visited.insert(id);
-      init_ids[L] = id;
-      L++;
-    }
-
-    L = 0;
-    for (unsigned i = 0; i < init_ids.size(); i++) {
-      unsigned id = init_ids[i];
-      if (id >= nd_)
-        continue;
-      float dist = distance_->compare(data_ + dimension_ * (size_t) id, query,
-                                      (unsigned) dimension_);
-      retset[i] = Neighbor(id, dist, true);
-      fullset.push_back(retset[i]);
-      // flags[id] = 1;
-      L++;
-    }
-
-    std::sort(retset.begin(), retset.begin() + L);
-    int k = 0;
-    while (k < (int) L) {
-      int nk = L;
-
-      if (retset[k].flag) {
-        retset[k].flag = false;
-        unsigned n = retset[k].id;
-
-        for (unsigned m = 0; m < final_graph_[n].size(); ++m) {
-          unsigned id = final_graph_[n][m];
-          if (visited.find(id) != visited.end())
-            continue;
-          else
-            visited.insert(id);
-
-          float dist = distance_->compare(
-              query, data_ + dimension_ * (size_t) id, (unsigned) dimension_);
-          Neighbor nn(id, dist, true);
-          fullset.push_back(nn);
-          if (dist >= retset[L - 1].distance)
-            continue;
-          int r = InsertIntoPool(retset.data(), L, nn);
-
-          if (L + 1 < retset.size())
-            ++L;
-          if (r < nk)
-            nk = r;
-        }
-      }
-      if (nk <= k)
-        k = nk;
-      else
-        ++k;
-    }
   }
 
   void IndexNSG::init_graph(const Parameters &parameters) {
