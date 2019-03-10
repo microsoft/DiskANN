@@ -23,6 +23,10 @@ namespace efanna2e {
 
     virtual void Save(const char *filename) override;
     virtual void Load(const char *filename) override;
+
+	void LoadSmallIndex(const char *filename, std::vector<unsigned>& picked);
+	void SaveSmallIndex(const char *filename, std::vector<unsigned>& picked);
+	
     void Load_nn_graph(const char *filename);
 
     virtual void Build(size_t n, const float *data,

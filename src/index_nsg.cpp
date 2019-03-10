@@ -49,8 +49,58 @@ namespace efanna2e {
     }
     out.close();
 
-    std::cout << "Avg degree: " << ((float) total_gr_edges) / ((float) nd_)
-              << std::endl;
+    std::cout << "Avg degree: " << ((float) total_gr_edges) / ((float) nd_) << std::endl;
+  }
+
+  void IndexNSG::SaveSmallIndex(const char *filename, std::vector<unsigned>& picked) {
+	  std::ofstream out(std::string(filename) + ".small", std::ios::binary | std::ios::out);
+	  
+	  unsigned picked_size = picked.size();
+	  if (picked_size != final_graph_.size()) std::cerr << "Size mismatch in small index save" << std::endl;
+	  out.write((char*)&picked_size, sizeof(unsigned));
+	  out.write((char*)picked.data(), picked_size * sizeof(unsigned));
+
+	  long long total_gr_edges = 0;
+	  out.write((char *)&width, sizeof(unsigned));
+	  out.write((char *)&ep_, sizeof(unsigned));
+	  for (unsigned i = 0; i < nd_; i++) {
+		  unsigned GK = (unsigned)final_graph_[i].size();
+		  out.write((char *)&GK, sizeof(unsigned));
+		  out.write((char *)final_graph_[i].data(), GK * sizeof(unsigned));
+		  total_gr_edges += GK;
+	  }
+	  out.close();
+  }
+
+  void IndexNSG::LoadSmallIndex(const char *filename, std::vector<unsigned>& picked) {
+	  std::ifstream in(std::string(filename) + ".small", std::ios::binary);
+
+	  unsigned picked_size;
+	  in.read((char*)&picked_size, sizeof(unsigned));
+	  assert(picked.size() == 0);
+	  picked.reserve(picked_size);
+	  in.read((char*)picked.data(), picked_size * sizeof(unsigned));
+
+	  in.read((char *)&width, sizeof(unsigned));
+	  in.read((char *)&ep_, sizeof(unsigned));
+	  // width=100;
+	  size_t cc = 0; unsigned nodes = 0;
+	  while (!in.eof()) {
+		  unsigned k;
+		  in.read((char *)&k, sizeof(unsigned));
+		  if (in.eof())
+			  break;
+		  cc += k; ++nodes;
+		  std::vector<unsigned> tmp(k);
+		  in.read((char *)tmp.data(), k * sizeof(unsigned));
+		  final_graph_.push_back(tmp);
+
+		  if (nodes % 5000000 == 0)
+			  std::cout << "Loaded " << nodes << " nodes, and "
+			  << cc << " neighbors" << std::endl;
+	  }
+	  cc /= nd_;
+	  // std::cout<<cc<<std::endl;
   }
 
   void IndexNSG::Load(const char *filename) {
@@ -666,7 +716,7 @@ namespace efanna2e {
     for (size_t i = 0; i < n; i++) {
       final_graph_[i].reserve(nr);
       while(final_graph_[i].size() < nr) {
-        auto r = dis(gen);
+        size_t r = (size_t)dis(gen);
         if (r != i) final_graph_[i].push_back(r);
       }
     }
@@ -726,8 +776,8 @@ namespace efanna2e {
 
     auto cut_graph_ = new vecNgh[nd_];
 #pragma omp parallel for
-    for(size_t i=0; i<nd_; ++i)
-	  cut_graph_[i].reserve(range);
+	for (size_t i = 0; i < nd_; ++i)
+		cut_graph_[i].reserve(range);
     std::cout << "Memory allocated for NSG graph" << std::endl;
     Link(parameters, cut_graph_);
     
@@ -854,7 +904,7 @@ namespace efanna2e {
       frontier.clear();
       unique_nbrs.clear();
       unsigned marker = k - 1;
-      while (++marker < (int) L && frontier.size() < beam_width) {
+      while (++marker < L && frontier.size() < (size_t)beam_width) {
         if (retset[marker].flag) {
           frontier.push_back(retset[marker].id);
           retset[marker].flag = false;

@@ -67,13 +67,13 @@ void sample_data(
 
 int main(int argc, char** argv)
 {
-	if (argc != 11 && argc != 10) {
-		std::cout << argv[0] << " data_file nn_graph_path L R C NS B1 small_gr big_gr"
+	if (argc != 9 && argc != 10) {
+		std::cout << argv[0] << " data_file nn_graph_path L R C NS B1 output_graph_prefix"
 			<< std::endl;
 		exit(-1);
 	}
 	float alpha = 1;
-	if (argc == 11)  alpha = (float)atof(argv[10]);
+	if (argc == 11)  alpha = (float)atof(argv[9]);
 
 	float *data_load = NULL;
 	unsigned points_num, dim;
@@ -111,8 +111,7 @@ int main(int argc, char** argv)
 		std::chrono::duration<double> diff = e - s;
 		std::cout << "Small indexing time: " << diff.count() << std::endl;
 	}
-	index.Save(argv[8]);
-
+	small_index.SaveSmallIndex(argv[8], picked_pts);
 
 	efanna2e::IndexNSG index(dim, points_num, efanna2e::L2, nullptr);
 	{
@@ -131,7 +130,7 @@ int main(int argc, char** argv)
 		std::chrono::duration<double> diff = e - s;
 		std::cout << "Big indexing time: " << diff.count() << std::endl;
 	}
-	index.Save(argv[9]);
+	index.Save(argv[8]);
 
 	return 0;
 }
