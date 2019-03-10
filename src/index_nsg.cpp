@@ -170,76 +170,71 @@ namespace efanna2e {
 
   void IndexNSG::Load_nn_graph(const char *filename) {
 
-	  char* buf;
-	  int fd;
-	  unsigned k;
-	  fd = open(filename, O_RDONLY);
-	  if (!(fd > 0)) {
-		  std::cerr << "Data file " << filename << " not found. Program will stop now." << std::endl;
-		  assert(false);
+	  int fd = open(filename, O_RDONLY);
+	  if (fd <= 0) {
+		  std::cerr << "Data file " << filename << " not found. Program will exit." << std::endl;
+		  exit(-1);
 	  }
 	  struct stat sb;
-	  int val=fstat(fd, &sb);
-	  if(val!=0) std::cout<<"FILE LOAD ERROR. CHECK!"<<std::endl;
+	  if (fstat(fd, &sb) != 0) {
+		  std::cerr << "File load error. CHECK!" << std::endl;
+		  exit(-1);
+	  }
 
 	  off_t fileSize = sb.st_size;
-	std::cout<<fileSize<<std::endl;
-	  buf = (char*) mmap(NULL, fileSize, PROT_READ, MAP_PRIVATE, fd, 0);
+	  std::cout << fileSize << std::endl;
+	  char *buf = (char*) mmap(NULL, fileSize, PROT_READ, MAP_PRIVATE, fd, 0);
 
-	std::memcpy(&k, buf, sizeof(unsigned));
-	size_t num = (fileSize)/((k+1)*4);
+	  unsigned k;
+	  std::memcpy(&k, buf, sizeof(unsigned));
+	  size_t num = (fileSize) / ((k + 1) * 4);
 
-	std::cout<<"k is and num is "<<k<<" "<<num<<std::endl;
-	final_graph_.resize(num);
-	final_graph_.reserve(num);
+	  std::cout << "k is and num is " << k << " " << num << std::endl;
+	  final_graph_.resize(num);
+	  final_graph_.reserve(num);
 
-	unsigned kk = (k+3)/4*4;
+	  unsigned kk = (k + 3) / 4 * 4;
 #pragma omp parallel for schedule(static, 65536)
-	for (size_t i =0; i <num; i++)
-	{
-		final_graph_[i].resize(k);
-		final_graph_[i].reserve(kk);
-		char* reader = buf + (i*(k+1)*sizeof(unsigned));
-		std::memcpy(final_graph_[i].data(), reader + sizeof(unsigned), k*sizeof(unsigned));
-	}
-	val = munmap(buf, fileSize);
-	close(fd);
-	ep_ = 0;
-	if(val!=0) std::cout<<"ERROR unmapping. CHECK!"<<std::endl;
-	std::cout << "Loaded EFANNA graph. Set ep_ to 0" << std::endl;
-}
-
-
-
+	  for (size_t i = 0; i < num; i++) {
+		  final_graph_[i].resize(k);
+		  final_graph_[i].reserve(kk);
+		  char* reader = buf + (i*(k + 1) * sizeof(unsigned));
+		  std::memcpy(final_graph_[i].data(), reader + sizeof(unsigned), k * sizeof(unsigned));
+	  }
+	  if (munmap(buf, fileSize) != 0)
+		  std::cerr << "ERROR unmapping. CHECK!" << std::endl;
+	  close(fd);
+	  ep_ = 0;
+	  std::cout << "Loaded EFANNA graph. Set ep_ to 0" << std::endl;
+  }
 
   void IndexNSG::get_neighbors(const float *query, const Parameters &parameter,
                                std::vector<Neighbor> &retset,
                                std::vector<Neighbor> &fullset) {
-    unsigned L = parameter.Get<unsigned>("L");
+    const unsigned L = parameter.Get<unsigned>("L");
 
     retset.resize(L + 1);
     std::vector<unsigned> init_ids(L);
+	tsl::robin_set<unsigned> visited(10 * L);
     // initializer_->Search(query, nullptr, L, parameter, init_ids.data());
 
-    tsl::robin_set<unsigned> visited(10 * L);
-    L = 0;
-    for (unsigned i = 0; i < init_ids.size() && i < final_graph_[ep_].size();
-         i++) {
+    unsigned l = 0;
+    for (unsigned i = 0; i < init_ids.size() && i < final_graph_[ep_].size(); i++) {
       init_ids[i] = final_graph_[ep_][i];
       visited.insert(init_ids[i]);
-      L++;
+      l++;
     }
-    while (L < init_ids.size()) {
+    while (l < init_ids.size()) {
       unsigned id = rand() % nd_;
       if (visited.find(id) != visited.end())
         continue;
       else
         visited.insert(id);
-      init_ids[L] = id;
-      L++;
+      init_ids[l] = id;
+      l++;
     }
 
-    L = 0;
+    l = 0;
     for (unsigned i = 0; i < init_ids.size(); i++) {
       unsigned id = init_ids[i];
       if (id >= nd_)
@@ -247,13 +242,13 @@ namespace efanna2e {
       float dist = distance_->compare(data_ + dimension_ * (size_t) id, query,
                                       (unsigned) dimension_);
       retset[i] = Neighbor(id, dist, true);
-      L++;
+      l++;
     }
 
-    std::sort(retset.begin(), retset.begin() + L);
+    std::sort(retset.begin(), retset.begin() + l);
     int k = 0;
-    while (k < (int) L) {
-      int nk = L;
+    while (k < (int) l) {
+      int nk = l;
 
       if (retset[k].flag) {
         retset[k].flag = false;
@@ -270,12 +265,12 @@ namespace efanna2e {
               query, data_ + dimension_ * (size_t) id, (unsigned) dimension_);
           Neighbor nn(id, dist, true);
           fullset.push_back(nn);
-          if (dist >= retset[L - 1].distance)
+          if (dist >= retset[l - 1].distance)
             continue;
-          int r = InsertIntoPool(retset.data(), L, nn);
+          int r = InsertIntoPool(retset.data(), l, nn);
 
-          if (L + 1 < retset.size())
-            ++L;
+          if (l + 1 < retset.size())
+            ++l;
           if (r < nk)
             nk = r;
         }
@@ -691,7 +686,7 @@ namespace efanna2e {
 			  get_neighbors(data_ + dimension_ * n, parameters, visited, tmp, pool);
 			  sync_prune(n, pool, parameters, visited, cut_graph_);
 
-			  int thread_num = omp_get_thread_num();
+			  auto thread_num = omp_get_thread_num();
 			  if (time(NULL) - start_time > 120 * time_counter[thread_num]) {
 				  time_counter[thread_num] ++;
 				  std::cout << "sync_prune thr(" << thread_num << "): " << n << std::endl;

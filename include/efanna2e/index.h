@@ -20,7 +20,6 @@ namespace efanna2e {
   public:
     explicit Index(const size_t dimension, const size_t n, Metric metric);
 
-
     virtual ~Index();
 
     virtual void Build(size_t n, const float *data, const Parameters &parameters) = 0;
@@ -32,16 +31,7 @@ namespace efanna2e {
 				      const Parameters &parameters,
 				      unsigned *indices) = 0;
 
-    //virtual std::pair<int,int> BeamSearch(
-				//	  const float *query,
-				//	  const float *x,
-				//	  size_t k,
-				//	  const Parameters &parameters,
-				//	  unsigned *indices,
-				//	  int beam_width) = 0;
-
-    
-    virtual void Save(const char *filename) = 0;
+	virtual void Save(const char *filename) = 0;
 
     virtual void Load(const char *filename) = 0;
 
