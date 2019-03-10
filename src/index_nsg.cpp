@@ -687,12 +687,12 @@ namespace efanna2e {
     Link(parameters, cut_graph_);
     final_graph_.resize(nd_);
 
-    size_t max = 0, min = 1<<30, avg = 0, cnt = 0;
+    size_t max = 0, min = 1<<30, total = 0, cnt = 0;
     for (size_t i = 0; i < nd_; i++) {
       vecNgh& pool = cut_graph_[i];
 	  max = std::max(max, pool.size());
 	  min = std::min(min, pool.size());
-      avg += pool.size();
+      total += pool.size();
       if (pool.size() < 2) cnt++;
 	  
 	  final_graph_[i].clear();
@@ -700,7 +700,7 @@ namespace efanna2e {
 	  for (auto iter : pool)
 		  final_graph_[i].push_back(iter.id);
     }
-    std::cout << "Degree: max:" << max << "  avg:" << (float)avg/(float)nd_
+    std::cout << "Degree: max:" << max << "  avg:" << (float)total/(float)nd_
 	      << "  min:" << min << "  count(deg<2):" << cnt << "\n";
 
 	width = std::max((unsigned)max, width);
@@ -736,20 +736,23 @@ namespace efanna2e {
     Link(parameters, cut_graph_);
     
 	final_graph_.resize(nd_);
-	size_t max = 0, min = 1<<30, avg = 0, cnt = 0;
+#pragma omp parallel for
     for (size_t i = 0; i < nd_; i++) {
-      vecNgh& pool = cut_graph_[i];
-	  max = std::max(max, pool.size());
-	  min = std::min(min, pool.size());
-      avg += pool.size();
-      if (pool.size() < 2) cnt++;
-
 	  final_graph_[i].clear();
-      final_graph_[i].reserve(pool.size());
-      for (auto iter : pool)
+      final_graph_[i].reserve(cut_graph_[i].size());
+      for (auto iter : cut_graph_[i])
         final_graph_[i].push_back(iter.id);
     }
-    std::cout << "Degree: max:" << max << "  avg:" << (float)avg/(float)nd_
+
+	size_t max = 0, min = 1 << 30, total = 0, cnt = 0;
+	for (size_t i = 0; i < nd_; i++) {
+		vecNgh& pool = cut_graph_[i];
+		max = std::max(max, pool.size());
+		min = std::min(min, pool.size());
+		total += pool.size();
+		if (pool.size() < 2) cnt++;
+	}
+    std::cout << "Degree: max:" << max << "  avg:" << (float)total/(float)nd_
 	      << "  min:" << min << "  count(deg<2):" << cnt << "\n";
 
     width = std::max((unsigned)max, width);
@@ -776,12 +779,12 @@ namespace efanna2e {
     Link(parameters, cut_graph_);
 
     final_graph_.resize(nd_);
-	size_t max = 0, min = 1<<30, avg = 0, cnt = 0;
+	size_t max = 0, min = 1<<30, total = 0, cnt = 0;
     for (size_t i = 0; i < nd_; i++) {
       vecNgh& pool = cut_graph_[i];
 	  max = std::max(max, pool.size());
 	  min = std::min(min, pool.size());
-      avg += pool.size();
+      total += pool.size();
       if (pool.size() < 2) cnt++;
 
       final_graph_[i].resize(pool.size());
@@ -789,7 +792,7 @@ namespace efanna2e {
         final_graph_[i][j] = pool[j].id;
     }
     // tree_grow(parameters);
-    std::cout << "Degree: max:" << max << "  avg:" << (float)avg/(float)nd_
+    std::cout << "Degree: max:" << max << "  avg:" << (float)total/(float)nd_
 	      << "  min:" << min << "  count(deg<2):" << cnt << "\n";
 
 	width = std::max((unsigned)max, width);
