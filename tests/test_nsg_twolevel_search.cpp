@@ -102,23 +102,21 @@ int main(int argc, char** argv) {
 		small_index.Search(query_load + i * dim, small_data,
 			K, paras, res + ((size_t)i) * K);
 
-		auto ret = big_index.BeamSearch(query_load + i * dim, data_load, 
+	/*	auto ret = big_index.BeamSearch(query_load + i * dim, data_load, 
 			K, paras, res + ((size_t)i) * K, beam_width);
 
 #pragma omp atomic
 		total_hops += ret.first;
 #pragma omp atomic
-		total_cmps += ret.second;
+		total_cmps += ret.second;*/
 	}
 
-	auto                          e = std::chrono::high_resolution_clock::now();
+	auto e = std::chrono::high_resolution_clock::now();
 	std::chrono::duration<double> diff = e - s;
 	std::cout << "search time: " << diff.count() << "\n";
 
-	std::cout << "Average hops: " << (float)total_hops / (float)query_num
-		<< std::endl
-		<< "Average cmps: " << (float)total_cmps / (float)query_num
-		<< std::endl;
+	std::cout << "Average hops: " << (float)total_hops / (float)query_num << std::endl
+		<< "Average cmps: " << (float)total_cmps / (float)query_num << std::endl;
 
 	save_result(argv[6], res, query_num, K);
 

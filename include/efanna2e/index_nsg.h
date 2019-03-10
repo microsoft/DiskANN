@@ -44,13 +44,14 @@ namespace efanna2e {
                                        size_t k, const Parameters &parameters,
                                        unsigned *indices) override;
 
-    void populate_start_points_bfs();
+    void populate_start_points_bfs(std::vector<unsigned>& start_points);
 
-    virtual std::pair<int, int> BeamSearch(const float *query, const float *x,
-                                           size_t            k,
-                                           const Parameters &parameters,
-                                           unsigned *        indices,
-                                           int beam_width) override;
+    std::pair<int, int> BeamSearch(const float *query, const float *x,
+                                   size_t            k,
+                                   const Parameters &parameters,
+                                   unsigned *        indices,
+                                   int beam_width,
+								   const std::vector<unsigned>& start_points);
 
     unsigned long long int SearchWithOptGraph(const float *query, size_t K,
                                               const Parameters &parameters,
@@ -108,7 +109,6 @@ namespace efanna2e {
     size_t                  data_len;
     size_t                  neighbor_len;
     KNNGraph                nnd_graph;
-    std::vector<unsigned>   start_points;
   };
 }
 

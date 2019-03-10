@@ -32,13 +32,13 @@ namespace efanna2e {
 				      const Parameters &parameters,
 				      unsigned *indices) = 0;
 
-    virtual std::pair<int,int> BeamSearch(
-					  const float *query,
-					  const float *x,
-					  size_t k,
-					  const Parameters &parameters,
-					  unsigned *indices,
-					  int beam_width) = 0;
+    //virtual std::pair<int,int> BeamSearch(
+				//	  const float *query,
+				//	  const float *x,
+				//	  size_t k,
+				//	  const Parameters &parameters,
+				//	  unsigned *indices,
+				//	  int beam_width) = 0;
 
     
     virtual void Save(const char *filename) = 0;

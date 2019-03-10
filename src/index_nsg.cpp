@@ -346,7 +346,7 @@ namespace efanna2e {
     delete prev_level;
   }
 
-  void IndexNSG::populate_start_points_bfs() {
+  void IndexNSG::populate_start_points_bfs(std::vector<unsigned>& start_points) {
     // populate a visited array
     // WARNING: DO NOT MAKE THIS A VECTOR
     bool *visited = new bool[nd_]();
@@ -864,27 +864,26 @@ namespace efanna2e {
   std::pair<int, int> IndexNSG::BeamSearch(const float *query, const float *x,
                                            size_t            K,
                                            const Parameters &parameters,
-                                           unsigned *indices, int beam_width) {
+                                           unsigned *indices, int beam_width,
+										   const std::vector<unsigned>& start_points) {
     const unsigned L = parameters.Get<unsigned>("L_search");
     data_ = x;
     std::vector<Neighbor> retset(L + 1);
     std::vector<unsigned> init_ids(L);
     // boost::dynamic_bitset<> flags{nd_, 0};
-    // std::mt19937 rng(rand());
-    // GenRandom(rng, init_ids.data(), L, (unsigned) nd_);
     tsl::robin_set<unsigned> visited(10 * L);
     unsigned                 tmp_l = 0;
     // ignore default init; use start_points for init
-    /*
-    for (; tmp_l < L && tmp_l < final_graph_[ep_].size(); tmp_l++) {
-      init_ids[tmp_l] = final_graph_[ep_][tmp_l];
-      visited.insert(init_ids[tmp_l]);
-    }
-    */
-    for (; tmp_l < L && tmp_l < start_points.size(); tmp_l++) {
-      init_ids[tmp_l] = start_points[tmp_l];
-      visited.insert(init_ids[tmp_l]);
-    }
+	if (start_points.size() == 0)
+		for (; tmp_l < L && tmp_l < final_graph_[ep_].size(); tmp_l++) {
+			init_ids[tmp_l] = final_graph_[ep_][tmp_l];
+			visited.insert(init_ids[tmp_l]);
+		}
+	else
+		for (; tmp_l < L && tmp_l < start_points.size(); tmp_l++) {
+			init_ids[tmp_l] = start_points[tmp_l];
+			visited.insert(init_ids[tmp_l]);
+		}
 
     while (tmp_l < L) {
       unsigned id = rand() % nd_;
