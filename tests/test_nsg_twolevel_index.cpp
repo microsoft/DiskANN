@@ -101,9 +101,9 @@ int main(int argc, char** argv)
   {
     auto s = std::chrono::high_resolution_clock::now();
     efanna2e::Parameters paras;
-    paras.Set<unsigned>("L", 300);
-    paras.Set<unsigned>("R", 64);
-    paras.Set<unsigned>("C", 20000);
+    paras.Set<unsigned>("L", 4*L);
+    paras.Set<unsigned>("R", 4*R);
+    paras.Set<unsigned>("C", C);
     paras.Set<float>("alpha", alpha);
     std::cout << "Params set. Build start..." << std::endl;
     small_index.BuildFromAlltoAll(NS, NR, data_sampled, paras);
@@ -122,7 +122,9 @@ int main(int argc, char** argv)
     paras.Set<float>("alpha", alpha);
     paras.Set<std::string>("nn_graph_path", nn_graph_path);
     std::cout << "Params set. Build start..." << std::endl;
-    index.Build(points_num, data_load, paras);
+    index.BuildFromSmall(
+		points_num, data_load, paras,
+		small_index, picked_pts);
     auto e = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> diff = e - s;
     std::cout << "Big indexing time: " << diff.count() << std::endl;
