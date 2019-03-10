@@ -672,7 +672,7 @@ namespace efanna2e {
     time_t start_time = time(NULL);
     {
       int PAR_BLOCK_SZ = 1<<16;
-      if (PAR_BLOCK_SZ * 8 > (int) nd_) PAR_BLOCK_SZ = ((int) nd_ + 8)/8;
+      if (PAR_BLOCK_SZ * 16 > (int) nd_) PAR_BLOCK_SZ = ((int) nd_ + 16)/16;
 	  int nblocks = (int)nd_ / PAR_BLOCK_SZ;
 	  if ((int)nd_ % PAR_BLOCK_SZ > 0) nblocks++;
 
