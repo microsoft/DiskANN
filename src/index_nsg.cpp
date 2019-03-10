@@ -692,7 +692,7 @@ namespace efanna2e {
 			  sync_prune(n, pool, parameters, visited, cut_graph_);
 
 			  int thread_num = omp_get_thread_num();
-			  if (time(NULL) - start_time > 60 * time_counter[thread_num]) {
+			  if (time(NULL) - start_time > 120 * time_counter[thread_num]) {
 				  time_counter[thread_num] ++;
 				  std::cout << "sync_prune thr(" << thread_num << "): " << n << std::endl;
 			  }
