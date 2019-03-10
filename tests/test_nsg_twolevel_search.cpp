@@ -98,17 +98,20 @@ int main(int argc, char** argv) {
 	unsigned* res = new unsigned[(size_t)query_num * K];
 
 #pragma omp parallel for schedule(static, 1000)
-	for (unsigned i = 0; i < query_num; i++) {
+	for (size_t i = 0; i < query_num; i++) {
 		small_index.Search(query_load + i * dim, small_data,
-			K, paras, res + ((size_t)i) * K);
+			K, paras, res + i * K);
 
-	/*	auto ret = big_index.BeamSearch(query_load + i * dim, data_load, 
-			K, paras, res + ((size_t)i) * K, beam_width);
+		std::vector<unsigned> start_points;
+		for (unsigned k = 0; k < K; ++k)
+			start_points.push_back(picked[res[i * K + k]]);
+		auto ret = big_index.BeamSearch(query_load + i * dim, data_load, 
+			K, paras, res + ((size_t)i) * K, beam_width, start_points);
 
 #pragma omp atomic
 		total_hops += ret.first;
 #pragma omp atomic
-		total_cmps += ret.second;*/
+		total_cmps += ret.second;
 	}
 
 	auto e = std::chrono::high_resolution_clock::now();

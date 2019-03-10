@@ -534,8 +534,7 @@ namespace efanna2e {
 	delete[] center;
   }
 
-  void IndexNSG::sync_prune(unsigned q,
-			    std::vector<Neighbor> &pool,
+  void IndexNSG::sync_prune(unsigned q, std::vector<Neighbor> &pool,
                             const Parameters& parameter,
                             tsl::robin_set<unsigned>& visited,
                             vecNgh *cut_graph_) {
@@ -588,16 +587,11 @@ namespace efanna2e {
 
     for (auto iter : cut_graph_[q])
       assert(iter.id < nd_);
-    
-    // for (unsigned t = 0; t < result.size(); t++) {
-    // add_cnn(q, result[t], range, cut_graph_);
-    // add_cnn(result[t].id, Neighbor(q, result[t].distance, true), range,
-    // cut_graph_);
-    //}
   }
 
   void IndexNSG::InterInsert(unsigned n, unsigned range,
-                             std::vector<std::mutex> &locks,  const Parameters& parameter,
+                             std::vector<std::mutex> &locks, 
+	                         const Parameters& parameter,
                              vecNgh *cut_graph_) {
 
     float alpha = parameter.Get<float>("alpha");
@@ -700,7 +694,7 @@ namespace efanna2e {
 			  int thread_num = omp_get_thread_num();
 			  if (time(NULL) - start_time > 60 * time_counter[thread_num]) {
 				  time_counter[thread_num] ++;
-				  std::cout << "Thread " << thread_num << " working on datapoint " << n << std::endl;
+				  std::cout << "Sync_print thr(" << thread_num << "): " << n << std::endl;
 			  }
 		  }
 	  }
@@ -711,7 +705,7 @@ namespace efanna2e {
 		  InterInsert(n, range, locks, parameters, cut_graph_);
 
 		  if (n % PAR_BLOCK_SZ == 0)
-			  std::cout << n << std::endl;
+			  std::cout << "InterInsert " << n << std::endl;
 	  }
       std::cout << "InterInsert completed" << std::endl;
     }
