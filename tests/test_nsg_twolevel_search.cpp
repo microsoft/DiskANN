@@ -87,9 +87,13 @@ int main(int argc, char** argv) {
 	std::cout << "Big idex loaded" << std::endl;
 	big_index.set_start_node(picked[small_index.get_start_node()]);
 
-	efanna2e::Parameters paras;
-	paras.Set<unsigned>("L_search", L);
-	paras.Set<unsigned>("P_search", L);
+	efanna2e::Parameters small_params;
+	small_params.Set<unsigned>("L_search", 2*L);
+	small_params.Set<unsigned>("P_search", 2*L);
+
+	efanna2e::Parameters big_params;
+	big_params.Set<unsigned>("L_search", L);
+	big_params.Set<unsigned>("P_search", L);
 
 	auto s = std::chrono::high_resolution_clock::now();
 
@@ -100,13 +104,13 @@ int main(int argc, char** argv) {
 #pragma omp parallel for schedule(static, 1000)
 	for (size_t i = 0; i < query_num; i++) {
 		small_index.Search(query_load + i * dim, small_data,
-			K, paras, res + i * K);
+			K, small_params, res + i * K);
 
 		std::vector<unsigned> start_points;
 		for (unsigned k = 0; k < K; ++k)
 			start_points.push_back(picked[res[i * K + k]]);
 		auto ret = big_index.BeamSearch(query_load + i * dim, data_load, 
-			K, paras, res + ((size_t)i) * K, beam_width, start_points);
+			K, big_params, res + ((size_t)i) * K, beam_width, start_points);
 
 #pragma omp atomic
 		total_hops += ret.first;
