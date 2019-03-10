@@ -27,6 +27,11 @@ namespace efanna2e {
 
     virtual void Build(size_t n, const float *data,
                        const Parameters &parameters) override;
+	
+	virtual void BuildFromSmall(size_t n, const float *data,
+						const Parameters &parameters,
+						const IndexNSG& small_index,
+						const std::vector<unsigned>& picked_pts);
 
     void BuildFromAlltoAll(size_t n, size_t nr, const float *data,
                        const Parameters &parameters);
@@ -47,6 +52,9 @@ namespace efanna2e {
                                               const Parameters &parameters,
                                               unsigned *        indices);
     void OptimizeGraph(float *data);
+
+	unsigned get_start_node() const;
+
 
    protected:
     typedef std::vector<std::vector<unsigned>> CompactGraph;
