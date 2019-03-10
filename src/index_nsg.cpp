@@ -694,7 +694,7 @@ namespace efanna2e {
 			  int thread_num = omp_get_thread_num();
 			  if (time(NULL) - start_time > 60 * time_counter[thread_num]) {
 				  time_counter[thread_num] ++;
-				  std::cout << "Sync_print thr(" << thread_num << "): " << n << std::endl;
+				  std::cout << "sync_prune thr(" << thread_num << "): " << n << std::endl;
 			  }
 		  }
 	  }
