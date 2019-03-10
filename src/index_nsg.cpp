@@ -57,13 +57,18 @@ namespace efanna2e {
   }
 
   void IndexNSG::SaveSmallIndex(const char *filename, std::vector<unsigned>& picked) {
+
+	  if (picked.size() != this->nd_)
+		  std::cerr << "In small index save: picked.size() != this->nd_" << std::endl;
+	  if (picked.size() != final_graph_.size())
+		  std::cerr << "In small index save: picked.size() != final_graph_.size()" << std::endl;
+	  
 	  std::ofstream out(std::string(filename) + ".small", std::ios::binary | std::ios::out);
 	  
 	  out.write((char*)&(this->nd_), sizeof(size_t));
 	  out.write((char*)&(this->ep_), sizeof(unsigned));
 
 	  unsigned picked_size = picked.size();
-	  if (picked_size != final_graph_.size()) std::cerr << "Size mismatch in small index save" << std::endl;
 	  out.write((char*)&picked_size, sizeof(unsigned));
 	  out.write((char*)picked.data(), picked_size * sizeof(unsigned));
 
@@ -88,7 +93,7 @@ namespace efanna2e {
 	  unsigned picked_size;
 	  in.read((char*)&picked_size, sizeof(unsigned));
 	  assert(picked.size() == 0);
-	  picked.reserve(picked_size);
+	  picked.resize(picked_size);
 	  in.read((char*)picked.data(), picked_size * sizeof(unsigned));
 
 	  in.read((char *)&width, sizeof(unsigned));

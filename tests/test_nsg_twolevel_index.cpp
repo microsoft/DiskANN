@@ -68,7 +68,7 @@ void sample_data(
 int main(int argc, char** argv)
 {
 	if (argc != 9 && argc != 10) {
-		std::cout << argv[0] << " data_file nn_graph_path L R C NS B1 output_graph_prefix"
+		std::cout << argv[0] << " data_file nn_graph_path L R C NS NR output_graph_prefix"
 			<< std::endl;
 		exit(-1);
 	}
