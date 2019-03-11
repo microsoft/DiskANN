@@ -329,8 +329,7 @@ namespace efanna2e {
 	  unsigned l = 0;
 	  for (auto id : init_ids) {
 		  if (id >= nd_) continue;
-		  float dist = distance_->compare(data_ + dimension_ * (size_t)id, query,
-			  (unsigned)dimension_);
+		  float dist = distance_->compare(data_ + dimension_ * (size_t)id, query, (unsigned)dimension_);
 		  retset[l] = Neighbor(id, dist, true);
 		  fullset.push_back(retset[l]);
 		  l++;
@@ -601,7 +600,7 @@ namespace efanna2e {
 
   void IndexNSG::InterInsert(unsigned n, unsigned range,
                              std::vector<std::mutex> &locks, 
-	                         const Parameters& parameter,
+                             const Parameters& parameter,
                              vecNgh *cut_graph_) {
 
     float alpha = parameter.Get<float>("alpha");
@@ -643,8 +642,8 @@ namespace efanna2e {
               break;
             }
             float djk = distance_->compare(
-                data_ + dimension_ * (size_t) result[t].id,
-                data_ + dimension_ * (size_t) p.id, (unsigned) dimension_);
+              data_ + dimension_ * (size_t)result[t].id,
+              data_ + dimension_ * (size_t)p.id, (unsigned)dimension_);
             if (alpha*djk < p.distance /* dik */) {
               occlude = true;
               break;
@@ -655,70 +654,46 @@ namespace efanna2e {
         }
         {
           LockGuard guard(locks[des]);
-	  des_pool = result;
+          des_pool = result;
         }
-      } else {
+      }
+      else {
         LockGuard guard(locks[des]);
-	des_pool.push_back(sn);
+        des_pool.push_back(sn);
       }
       for (auto iter : des_pool)
-	assert(iter.id < nd_);
+        assert(iter.id < nd_);
     }
   }
 
-  void IndexNSG::Link(const Parameters &parameters,
-                      vecNgh* cut_graph_)
+  void IndexNSG::Link(const Parameters &parameters, vecNgh* cut_graph_)
   {
-    std::cout << "Started NSG graph construction" << std::endl;
-    //unsigned                progress = 0;
-    //unsigned                percent = 100;
-    //unsigned                step_size = nd_ / percent;
-    //std::mutex              progress_lock;
-    unsigned                range = parameters.Get<unsigned>("R");
-    std::vector<std::mutex> locks(nd_);
-    unsigned* time_counter = new unsigned [100];
-    for (unsigned i=0;i<100;i++)
-	    time_counter[i] = 0;
-    time_t start_time = time(NULL);
-    {
-      int PAR_BLOCK_SZ = 1<<16;
-      if (PAR_BLOCK_SZ * 16 > (int) nd_) PAR_BLOCK_SZ = ((int) nd_ + 16)/16;
-	  int nblocks = (int)nd_ / PAR_BLOCK_SZ;
-	  if ((int)nd_ % PAR_BLOCK_SZ > 0) nblocks++;
+    unsigned range = parameters.Get<unsigned>("R");
+    size_t PAR_BLOCK_SZ = nd_ > 1 << 20 ? 1 << 16 : (nd_ + 16) / 16;
+    size_t nblocks = nd_ % PAR_BLOCK_SZ == 0 ? nd_ / PAR_BLOCK_SZ : (nd_ / PAR_BLOCK_SZ) + 1;
 
 #pragma omp parallel for schedule(static, 1)
-	  for (int block = 0; block < nblocks; ++block) {
-		  std::vector<Neighbor> pool, tmp;
-		  // boost::dynamic_bitset<> flags{nd_, 0};
-		  tsl::robin_set<unsigned> visited;
+    for (size_t block = 0; block < nblocks; ++block) {
+      std::vector<Neighbor> pool, tmp;
+      tsl::robin_set<unsigned> visited;
 
-		  for (size_t n = block * PAR_BLOCK_SZ;
-			  n < nd_ && n < (block + 1) * (size_t)PAR_BLOCK_SZ; ++n) {
-			  pool.clear();
-			  tmp.clear();
-			  visited.clear();
-
-			  get_neighbors(data_ + dimension_ * n, parameters, visited, tmp, pool);
-			  sync_prune(n, pool, parameters, visited, cut_graph_);
-
-			  auto thread_num = omp_get_thread_num();
-			  if (time(NULL) - start_time > 120 * time_counter[thread_num]) {
-				  time_counter[thread_num] ++;
-				  std::cout << "sync_prune thr(" << thread_num << "): " << n << std::endl;
-			  }
-		  }
-	  }
-      std::cout << "sync_prune completed" << std::endl;
-
-#pragma omp parallel for schedule(static, PAR_BLOCK_SZ)
-	  for (unsigned n = 0; n < nd_; ++n) {
-		  InterInsert(n, range, locks, parameters, cut_graph_);
-
-		  if (n % PAR_BLOCK_SZ == 0)
-			  std::cout << "InterInsert " << n << std::endl;
-	  }
-      std::cout << "InterInsert completed" << std::endl;
+      for (size_t n = block * PAR_BLOCK_SZ; n < std::min(nd_, (block + 1) * PAR_BLOCK_SZ); ++n) {
+        pool.clear(); tmp.clear(); visited.clear();
+        get_neighbors(data_ + (size_t)dimension_ * n, parameters, visited, tmp, pool);
+        sync_prune(n, pool, parameters, visited, cut_graph_);
+      }
+      std::cout << "sync_prune " << std::min(nd_, (block + 1) * PAR_BLOCK_SZ) << std::endl;
     }
+    std::cout << "sync_prune completed" << std::endl;
+
+    std::vector<std::mutex> locks(nd_);
+#pragma omp parallel for schedule(static, PAR_BLOCK_SZ)
+    for (unsigned n = 0; n < nd_; ++n) {
+      InterInsert(n, range, locks, parameters, cut_graph_);
+      if (n % PAR_BLOCK_SZ == 0)
+        std::cout << "InterInsert " << n << std::endl;
+    }
+    std::cout << "InterInsert completed" << std::endl;
   }
 
   void IndexNSG::BuildFromER(
