@@ -286,8 +286,8 @@ namespace efanna2e {
 	  tsl::robin_set<unsigned>& visited,
 	  std::vector<Neighbor>& retset,
 	  std::vector<Neighbor>& fullset,
-	  std::vector<unsigned>* start_points) {
-
+	  const std::vector<unsigned>& start_points)
+  {
 	  const unsigned L = parameter.Get<unsigned>("L");
 
 	  retset.resize(L + 1);
@@ -295,19 +295,19 @@ namespace efanna2e {
 	  init_ids.reserve(L);
 	  // initializer_->Search(query, nullptr, L, parameter, init_ids.data());
 
-	  if (start_points == NULL)
+	  if (start_points.size() == 0)
 		  for (auto iter : final_graph_[ep_]) {
 			  if (init_ids.size() >= L) break;
 			  init_ids.push_back(iter);
 			  visited.insert(iter);
 		  }
 	  else {
-		  for (auto iter : *start_points) {
+		  for (auto iter : start_points) {
 			  if (init_ids.size() >= L) break;
 			  init_ids.push_back(iter);
 			  visited.insert(iter);
 		  }
-		  for (auto s : *start_points) {
+		  for (auto s : start_points) {
 			  if (init_ids.size() == L) break;
 			  for (auto iter : final_graph_[s]) {
 				  if (init_ids.size() == L) break;
@@ -696,6 +696,47 @@ namespace efanna2e {
     std::cout << "InterInsert completed" << std::endl;
   }
 
+  void IndexNSG::LinkFromSmall(const Parameters &parameters,
+                               vecNgh* cut_graph_,
+                               const IndexNSG& small_index,
+                               const std::vector<unsigned>& picked_pts)
+  {
+    unsigned range = parameters.Get<unsigned>("R");
+    size_t PAR_BLOCK_SZ = nd_ > 1 << 20 ? 1 << 16 : (nd_ + 16) / 16;
+    size_t nblocks = nd_ % PAR_BLOCK_SZ == 0 ? nd_ / PAR_BLOCK_SZ : (nd_ / PAR_BLOCK_SZ) + 1;
+
+    auto smallK = range;
+
+#pragma omp parallel for schedule(static, 1)
+    for (size_t block = 0; block < nblocks; ++block) {
+      std::vector<Neighbor> pool, tmp;
+      tsl::robin_set<unsigned> visited;
+      unsigned* res = new unsigned[smallK];
+      std::vector<unsigned> start_points;
+
+      for (size_t n = block * PAR_BLOCK_SZ; n < std::min(nd_, (block + 1) * PAR_BLOCK_SZ); ++n) {
+        pool.clear(); tmp.clear(); visited.clear(); start_points.clear();
+
+        small_index.Search(data_ + (size_t)dimension_ * n, small_index.GetDataset(), smallK, parameters, res);
+        for (unsigned r = 0; r < smallK; ++r) start_points.push_back(picked_pts[res[r]]);
+        get_neighbors(data_ + (size_t)dimension_ * n, parameters, visited, tmp, pool, start_points);
+        sync_prune(n, pool, parameters, visited, cut_graph_);
+      }
+      delete[] res;
+      std::cout << "sync_prune " << std::min(nd_, (block + 1) * PAR_BLOCK_SZ) << std::endl;
+    }
+    std::cout << "sync_prune completed" << std::endl;
+
+    std::vector<std::mutex> locks(nd_);
+#pragma omp parallel for schedule(static, PAR_BLOCK_SZ)
+    for (unsigned n = 0; n < nd_; ++n) {
+      InterInsert(n, range, locks, parameters, cut_graph_);
+      if (n % PAR_BLOCK_SZ == 0)
+        std::cout << "InterInsert " << n << std::endl;
+    }
+    std::cout << "InterInsert completed" << std::endl;
+  }
+
   void IndexNSG::BuildFromER(
 	  size_t n, size_t nr, 
 	  const float *data,
@@ -846,7 +887,8 @@ namespace efanna2e {
                                            size_t            K,
                                            const Parameters &parameters,
                                            unsigned *indices, int beam_width,
-										   const std::vector<unsigned>& start_points) {
+								                           const std::vector<unsigned>& start_points) 
+  {
     const unsigned L = parameters.Get<unsigned>("L_search");
     data_ = x;
     std::vector<Neighbor> retset(L + 1);
@@ -855,16 +897,16 @@ namespace efanna2e {
     tsl::robin_set<unsigned> visited(10 * L);
     unsigned                 tmp_l = 0;
     // ignore default init; use start_points for init
-	if (start_points.size() == 0)
-		for (; tmp_l < L && tmp_l < final_graph_[ep_].size(); tmp_l++) {
-			init_ids[tmp_l] = final_graph_[ep_][tmp_l];
-			visited.insert(init_ids[tmp_l]);
-		}
-	else
-		for (; tmp_l < L && tmp_l < start_points.size(); tmp_l++) {
-			init_ids[tmp_l] = start_points[tmp_l];
-			visited.insert(init_ids[tmp_l]);
-		}
+    if (start_points.size() == 0)
+      for (; tmp_l < L && tmp_l < final_graph_[ep_].size(); tmp_l++) {
+        init_ids[tmp_l] = final_graph_[ep_][tmp_l];
+        visited.insert(init_ids[tmp_l]);
+      }
+    else
+      for (; tmp_l < L && tmp_l < start_points.size(); tmp_l++) {
+        init_ids[tmp_l] = start_points[tmp_l];
+        visited.insert(init_ids[tmp_l]);
+      }
 
     while (tmp_l < L) {
       unsigned id = rand() % nd_;

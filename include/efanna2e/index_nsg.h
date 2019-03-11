@@ -46,12 +46,13 @@ namespace efanna2e {
 
     void populate_start_points_bfs(std::vector<unsigned>& start_points);
 
-    std::pair<int, int> BeamSearch(const float *query, const float *x,
-                                   size_t            k,
+    std::pair<int, int> BeamSearch(const float *query, 
+                                   const float *x,
+                                   size_t k,
                                    const Parameters &parameters,
-                                   unsigned *        indices,
+                                   unsigned* indices,
                                    int beam_width,
-								   const std::vector<unsigned>& start_points);
+                                   const std::vector<unsigned>& start_points);
 
     unsigned long long int SearchWithOptGraph(const float *query, size_t K,
                                               const Parameters &parameters,
@@ -76,11 +77,12 @@ namespace efanna2e {
     void get_neighbors(const float *query, const Parameters &parameter,
                        std::vector<Neighbor> &retset,
                        std::vector<Neighbor> &fullset);
+    static const std::vector<unsigned> emptyvec;
     void get_neighbors(const float *query, const Parameters &parameter,
                        tsl::robin_set<unsigned> &visited,
                        std::vector<Neighbor> &   retset,
                        std::vector<Neighbor> &   fullset,
-                       std::vector<unsigned>* start_points=NULL);
+                       const std::vector<unsigned>& start_points = emptyvec);
     
     // void add_cnn(unsigned des, Neighbor p, unsigned range, LockGraph& cut_graph_);
 
@@ -92,6 +94,11 @@ namespace efanna2e {
                     tsl::robin_set<unsigned> &visited,
                     vecNgh* cut_graph_);
     void Link(const Parameters &parameters, vecNgh* cut_graph_);
+
+    void LinkFromSmall(const Parameters &parameters,
+      vecNgh* cut_graph_,
+      const IndexNSG& small_index,
+      const std::vector<unsigned>& picked_pts);
 
     void tree_grow(const Parameters &parameter);
     void DFS(tsl::robin_set<unsigned> &visited, unsigned root, unsigned &cnt);
