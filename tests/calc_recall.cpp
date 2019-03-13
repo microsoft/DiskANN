@@ -59,7 +59,7 @@ int main(int argc, char** argv)
 
   std::cout<<"calculating recall "<<dim_gs<<" at "<<dim_or<<std::endl;
   unsigned mind = dim_gs;
-  if((dim_or < mind) || (recall_at > dim_gs))
+  if((dim_or < recall_at) || (recall_at > dim_gs))
   {
 	  std::cout<<"ground truth has size "<< dim_gs<<" and our set has only "<< dim_or<<" points. asking for recall "<<recall_at<<" also. exiting \n";	
 	  return(1);
