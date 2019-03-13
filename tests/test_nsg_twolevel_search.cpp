@@ -88,9 +88,9 @@ int main(int argc, char** argv) {
 	big_index.set_start_node(picked[small_index.get_start_node()]);
 
 	efanna2e::Parameters small_params;
-	small_params.Set<unsigned>("L_search", L);
-	small_params.Set<unsigned>("P_search", L);
-	auto smallK = K / 2;
+	small_params.Set<unsigned>("L_search", L/2);
+	small_params.Set<unsigned>("P_search", L/2);
+	auto smallK = L / 4;
 
 	efanna2e::Parameters big_params;
 	big_params.Set<unsigned>("L_search", L);
