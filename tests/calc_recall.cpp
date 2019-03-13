@@ -6,15 +6,15 @@
 #include <fstream>
 #include <iostream>
 
-void load_data(char* filename, int*& data, unsigned long long & num, unsigned & dim) {// load data with sift10K pattern
+void load_data(char* filename, int* &data, size_t &num, unsigned &dim) {// load data with sift10K pattern
 	std::ifstream in(filename, std::ios::binary);
 	if (!in.is_open()) { std::cout << "open file error" << std::endl; exit(-1); }
 	in.read((char*)&dim, 4);
 	in.seekg(0, std::ios::end);
 	std::ios::pos_type ss = in.tellg();
-	unsigned long long int fsize = (size_t)ss;
+	size_t fsize = (size_t)ss;
 	num = (unsigned)(fsize / (dim + 1) / 4);
-	unsigned long long int data_size = (unsigned long long) num * (unsigned long long) dim;
+	auto data_size = (size_t) num * (size_t) dim;
 	std::cout << "data dimension: " << dim << std::endl;
 	std::cout << "data num points: " << num << std::endl;
 	data = new int[data_size];
@@ -22,7 +22,6 @@ void load_data(char* filename, int*& data, unsigned long long & num, unsigned & 
 	int *tmp_dim = new int;
 	in.seekg(0, std::ios::beg);
 	for (size_t i = 0; i < num; i++) {
-		//    in.seekg(4,std::ios::cur);
 		in.read((char*)tmp_dim, 4);
 		in.read((char*)(data + i*dim), dim * 4);
 	}
@@ -34,7 +33,7 @@ typedef unsigned long long ull;
 
 int main(int argc, char** argv)
 {
-	if (argc != 3) { std::cout << argv[0] << " data_file1 data_file2" << std::endl; exit(-1); }
+	if (argc != 4) { std::cout << argv[0] << " data_file1 data_file2 r" << std::endl; exit(-1); }
 	int* gold_std = NULL;
 	int* our_results = NULL;
 	ull points_num;
@@ -42,27 +41,31 @@ int main(int argc, char** argv)
 	unsigned dim_or;
 	load_data(argv[1], gold_std, points_num, dim_gs);
 	load_data(argv[2], our_results, points_num, dim_or);
-	ull recall = 0;
-	ull total_recall = 0;
-	/*bool* all_recall = new bool[points_num];
+	size_t recall = 0;
+	size_t total_recall = 0;
+	uint32_t recall_at = std::atoi(argv[3]);
+
+	unsigned mind = dim_gs;
+	if ((dim_or < recall_at) || (recall_at > dim_gs)) {
+		std::cout << "ground truth has size " << dim_gs << "; our set has " << dim_or
+			<< " points. Asking for recall " << recall_at << std::endl;
+		return -1;
+	}
+	std::cout << "calculating recall " << recall_at << "@" << dim_or << std::endl;
+
+	auto all_recall = new bool[points_num];
 	for (unsigned i = 0; i < points_num; i++)
-		all_recall[i] = false;*/
+		all_recall[i] = false;
 
-	std::cout << "calculating recall@" << std::min(dim_gs, dim_or) << std::endl;
-	/*unsigned mind = dim_gs;
-	if (dim_or < mind) {
-		std::cout << "ground truth has size " << dim_gs << " and our set has only " << dim_or << " points. exiting \n";
-		return(1);
-	}*/
 
-	bool* this_point = new bool[dim_gs];
+	auto this_point = new bool[dim_gs];
 	for (ull i = 0; i < points_num; i++) {
 		for (unsigned j = 0; j < dim_gs; j++)
 			this_point[j] = false;
 
 		bool this_correct = true;
-		for (ull j1 = 0; j1 < std::min(dim_gs, dim_or); j1++)
-			for (ull j2 = 0; j2 < std::min(dim_gs, dim_or); j2++)
+		for (ull j1 = 0; j1 < recall_at; j1++)
+			for (ull j2 = 0; j2 < dim_or; j2++)
 				if (gold_std[i*(ull)dim_gs + j1] == our_results[i*(ull)dim_or + j2]) {
 					if (this_point[j1] == false)
 						total_recall++;
@@ -80,5 +83,5 @@ int main(int argc, char** argv)
 
 	//  double avg_recall = (recall*1.0)/(points_num*1.0);
 	std::cout << "avg. recall " << dim_gs << " at " << dim_or << " is "
-		<< (total_recall*1.0) / points_num << std::endl;
+		<< 1.0* (100.0 / recall_at)*((total_recall*1.0) / points_num) << std::endl;
 }

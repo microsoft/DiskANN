@@ -468,6 +468,49 @@ namespace efanna2e {
     ep_ = tmp[0].id;
   }
 
+
+	void IndexNSG:: init_graph_outside(const float *data)
+{
+	 data_ = data;
+    float *center = new float[dimension_]();
+    for (size_t j = 0; j < dimension_; j++)
+      center[j] = 0;
+    for (size_t i = 0; i < nd_; i++) {
+      for (size_t j = 0; j < dimension_; j++) {
+        center[j] += data_[i * dimension_ + j];
+      }
+    }
+    for (size_t j = 0; j < dimension_; j++) {
+      center[j] /= nd_;
+    }
+
+    // compute all to one distance
+    float * distances = new float[nd_]();
+#pragma omp parallel for schedule(static, 65536)
+    for (size_t i = 0; i < nd_; i++) {
+      // extract point and distance reference
+      float &      dist = distances[i];
+      const float *cur_vec = data_ + (i * (size_t) dimension_);
+      dist = 0;
+      float diff = 0;
+      for (size_t j = 0; j < dimension_; j++) {
+        diff = (center[j] - cur_vec[j]) * (center[j] - cur_vec[j]);
+        dist += diff;
+      }
+    }
+    // find imin
+    size_t min_idx = 0;
+    float  min_dist = distances[0];
+    for (size_t i = 1; i < nd_; i++) {
+      if (distances[i] < min_dist) {
+        min_idx = i;
+        min_dist = distances[i];
+      }
+    }
+    ep_ = min_idx;
+    std::cout << "Medoid index = " << min_idx << std::endl;
+}
+
   void IndexNSG::init_graph_bf(const Parameters &parameters) {
     // allocate and init centroid
     float *center = new float[dimension_]();
