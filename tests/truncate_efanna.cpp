@@ -109,8 +109,9 @@ void open_linux_mmapped_file_handle(
 #pragma omp parallel for schedule(static, 65536)
 	for (size_t i =0; i <num; i++)
 	{
-		final_graph_[i].resize(k);
-		final_graph_[i].reserve(kk);
+
+		final_graph_[i].resize(d_nn + d_rnd);
+		final_graph_[i].reserve(d_nn + d_rnd);
 		char* reader = buf + (i*(k+1)*sizeof(unsigned));
 
 		#ifdef EFANNA_NOT_SORTED

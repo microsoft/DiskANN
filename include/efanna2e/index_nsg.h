@@ -45,6 +45,7 @@ namespace efanna2e {
                                               unsigned *        indices);
     void OptimizeGraph(float *data);
 
+    void init_graph_outside(const float *data);
    protected:
     typedef std::vector<std::vector<unsigned>> CompactGraph;
     typedef std::vector<SimpleNeighbors>       LockGraph;
