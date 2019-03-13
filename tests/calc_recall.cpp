@@ -29,12 +29,12 @@ data = new int [data_size];
   }
   in.close();
   std::cout <<"data loaded \n";
-	for (unsigned i = 0; i< 2; i++)
+/*	for (unsigned i = 0; i< 2; i++)
 {
 	for(unsigned j=0;j < dim; j++)
 		std::cout<<data[i*dim + j]<<" ";
 	std::cout<<std::endl;
-}
+}*/
 		
 }
 
@@ -42,7 +42,7 @@ typedef unsigned long long ull;
 
 int main(int argc, char** argv)
 {
-  if(argc!=3){std::cout<< argv[0] <<" data_file1 data_file2"<<std::endl; exit(-1);}
+  if(argc!=4){std::cout<< argv[0] <<" data_file1 data_file2 r"<<std::endl; exit(-1);}
   int* gold_std = NULL;
   int* our_results = NULL;
   ull points_num;
@@ -55,12 +55,13 @@ int main(int argc, char** argv)
   bool* all_recall = new bool[points_num];
   for (unsigned i = 0;i < points_num; i++)
 	  all_recall[i] = false;
+  uint32_t recall_at = std::atoi(argv[3]);
 
   std::cout<<"calculating recall "<<dim_gs<<" at "<<dim_or<<std::endl;
   unsigned mind = dim_gs;
-  if(dim_or < mind)
+  if((dim_or < mind) || (recall_at > dim_gs))
   {
-	  std::cout<<"ground truth has size "<< dim_gs<<" and our set has only "<< dim_or<<" points. exiting \n";	
+	  std::cout<<"ground truth has size "<< dim_gs<<" and our set has only "<< dim_or<<" points. asking for recall "<<recall_at<<" also. exiting \n";	
 	  return(1);
   }
 		
@@ -73,7 +74,7 @@ int main(int argc, char** argv)
 		  this_point[j] = false;
 
 	  bool this_correct = true;
-	  for (ull j1 = 0; j1 < dim_gs; j1++)
+	  for (ull j1 = 0; j1 < recall_at; j1++)
 		  for (ull j2 = 0; j2 < dim_or; j2++)
 			  if (gold_std[i*(ull)dim_gs + j1] == our_results[i*(ull)dim_or + j2])
 			  { 
@@ -95,5 +96,5 @@ int main(int argc, char** argv)
 
   //  double avg_recall = (recall*1.0)/(points_num*1.0);
   std::cout <<"avg. recall "<< dim_gs <<" at "<< dim_or<<" is "
-	    <<(total_recall*1.0)/points_num<<std::endl;
+	    <<1.0* (100.0/recall_at)*((total_recall*1.0)/points_num)<<std::endl;
 } 

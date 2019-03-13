@@ -90,7 +90,10 @@ int main(int argc, char** argv) {
   if(nsg_check == 1)
 	  index.Load(argv[3]);  // to load NSG
   else
+	  {
 	  index.Load_nn_graph(argv[3]);  // to load EFANNA
+	  index.init_graph_outside(data_load);
+	  }
   std::cout << "Index loaded" << std::endl;
     
   //index.populate_start_points_bfs();
