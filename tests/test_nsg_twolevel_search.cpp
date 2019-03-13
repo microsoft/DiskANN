@@ -97,33 +97,40 @@ int main(int argc, char** argv) {
 
 	auto s = std::chrono::high_resolution_clock::now();
 
-	long long total_hops = 0;
-	long long total_cmps = 0;
+	long long big_hops = 0, big_cmps = 0;
+	long long small_hops = 0, small_cmps = 0;
 	unsigned* res = new unsigned[(size_t)query_num * K];
 
 #pragma omp parallel for schedule(static, 1000)
 	for (size_t i = 0; i < query_num; i++) {
-		small_index.Search(query_load + i * dim, small_data,
+		auto small_ret = small_index.Search(query_load + i * dim, small_data,
 			K, small_params, res + i * K);
+#pragma omp atomic
+		small_hops += small_ret.first;
+#pragma omp atomic
+		small_cmps += small_ret.second;
 
 		std::vector<unsigned> start_points;
 		for (unsigned k = 0; k < K; ++k)
 			start_points.push_back(picked[res[i * K + k]]);
-		auto ret = big_index.BeamSearch(query_load + i * dim, data_load, 
+		auto big_ret = big_index.BeamSearch(query_load + i * dim, data_load, 
 			K, big_params, res + ((size_t)i) * K, beam_width, start_points);
 
 #pragma omp atomic
-		total_hops += ret.first;
+		big_hops += big_ret.first;
 #pragma omp atomic
-		total_cmps += ret.second;
+		big_cmps += big_ret.second;
 	}
 
 	auto e = std::chrono::high_resolution_clock::now();
 	std::chrono::duration<double> diff = e - s;
 	std::cout << "search time: " << diff.count() << "\n";
 
-	std::cout << "Average hops: " << (float)total_hops / (float)query_num << std::endl
-		<< "Average cmps: " << (float)total_cmps / (float)query_num << std::endl;
+	std::cout << "Average small hops: " << (float)small_hops / (float)query_num << std::endl
+		<< "Average small cmps: " << (float)small_cmps / (float)query_num << std::endl;
+
+	std::cout << "Average big hops: " << (float)big_hops / (float)query_num << std::endl
+		<< "Average big cmps: " << (float)big_cmps / (float)query_num << std::endl;
 
 	save_result(argv[6], res, query_num, K);
 

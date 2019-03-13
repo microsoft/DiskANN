@@ -305,10 +305,10 @@ namespace efanna2e {
 
   void IndexNSG::get_neighbors(const float *query,
                                const Parameters &parameter,
-	                             std::vector<Neighbor>& retset,
-	                             std::vector<Neighbor>& fullset,
+	                           std::vector<Neighbor>& retset,
+	                           std::vector<Neighbor>& fullset,
                                tsl::robin_set<unsigned>& visited,
-	                             const std::vector<unsigned>& start_points)
+	                           const std::vector<unsigned>& start_points)
   {
 	  const unsigned L = parameter.Get<unsigned>("L");
 
@@ -321,11 +321,11 @@ namespace efanna2e {
       std::cerr << "Start point set can not be empty for get_neighbor." << std::endl;
       exit(-1);
     }
-	  for (auto iter : start_points) {
-			  if (init_ids.size() >= L) break;
-			  init_ids.push_back(iter);
-			  visited.insert(iter);
-		  }
+	for (auto iter : start_points) {
+		if (init_ids.size() >= L) break;
+		init_ids.push_back(iter);
+		visited.insert(iter);
+	}
     for (auto s : start_points) {
       if (init_ids.size() == L) break;
       for (auto iter : final_graph_[s]) {
