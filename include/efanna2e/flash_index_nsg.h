@@ -33,7 +33,8 @@ namespace efanna2e {
 
     // empty function
     virtual std::pair<int, int> Search(const float *query, const float *x,
-                                       size_t k, const Parameters &parameters,
+                                       const size_t K, 
+                                       const Parameters &parameters,
                                        unsigned *indices) override;
 
     // implemented
@@ -44,11 +45,11 @@ namespace efanna2e {
                              const std::string &node_size_fname);
 
     // implemented
-    virtual std::pair<int, int> BeamSearch(const float *query, const float *x,
-                                           size_t            k,
-                                           const Parameters &parameters,
-                                           unsigned *        indices,
-                                           int beam_width) override;
+    std::pair<int, int> BeamSearch(const float *query, const float *x,
+                                   size_t            k,
+                                   const Parameters &parameters,
+                                   unsigned *        indices,
+                                   int beam_width);
     // implemented
     std::pair<int, int> CachedBeamSearch(const float *query, const float *x,
                                          size_t k, const Parameters &parameters,

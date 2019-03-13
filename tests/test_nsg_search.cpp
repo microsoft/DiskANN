@@ -81,10 +81,9 @@ int main(int argc, char** argv) {
     exit(-1);
   }
 
-  // data_load = efanna2e::data_align(data_load, points_num, dim);  // one must
-  // align the data before build
-  // query_load = efanna2e::data_align(query_load, query_num, query_dim);
-  // std::cout << "Data Aligned" << std::endl;
+  data_load = efanna2e::data_align(data_load, points_num, dim);
+  query_load = efanna2e::data_align(query_load, query_num, query_dim);
+  std::cout << "Data Aligned" << std::endl;
 
   efanna2e::IndexNSG index(dim, points_num, efanna2e::L2, nullptr);
   if(nsg_check == 1)
@@ -93,8 +92,9 @@ int main(int argc, char** argv) {
 	  index.Load_nn_graph(argv[3]);  // to load EFANNA
   std::cout << "Index loaded" << std::endl;
     
-  //index.populate_start_points_bfs();
-//  std::cout << "Initialized starting points based on BFS" << std::endl;
+  std::vector<unsigned> start_points;
+  index.populate_start_points_bfs(start_points);
+  std::cout << "Initialized starting points based on BFS" << std::endl;
 
   efanna2e::Parameters paras;
   paras.Set<unsigned>("L_search", L);
@@ -108,10 +108,9 @@ int main(int argc, char** argv) {
 
 #pragma omp parallel for schedule(static, 1000)
   for (unsigned i = 0; i < query_num; i++) {
-    auto ret = index.BeamSearch(query_load + i * dim, data_load, K, paras,
-                                res + ((size_t) i) * K, beam_width);
-// auto ret = index.Search(query_load + i * dim, data_load, K, paras,
-// tmp.data());
+    auto ret = index.BeamSearch(query_load + i * dim, data_load, 
+		K, paras, res + ((size_t) i) * K, beam_width, start_points);
+// auto ret = index.Search(query_load + i * dim, data_load, K, paras, tmp.data());
 
 #pragma omp atomic
     total_hops += ret.first;
@@ -129,6 +128,9 @@ int main(int argc, char** argv) {
             << std::endl;
 
   save_result(argv[6], res, query_num, K);
+
+  delete[] data_load;
+  delete[] res;
 
   return 0;
 }
