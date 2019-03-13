@@ -33,7 +33,8 @@ namespace efanna2e {
 
     // empty function
     virtual std::pair<int, int> Search(const float *query, const float *x,
-                                       size_t k, const Parameters &parameters,
+                                       const size_t K, 
+                                       const Parameters &parameters,
                                        unsigned *indices) override;
 
     // implemented

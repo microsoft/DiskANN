@@ -208,44 +208,35 @@ namespace efanna2e {
 	  std::cout << "Loaded EFANNA graph. Set ep_ to 0" << std::endl;
   }
 
-  // TODO: Get rid of code in this def and just call the other ::get_neighbor
-  void IndexNSG::get_neighbors(const float *query, const Parameters &parameter,
-                               std::vector<Neighbor> &retset,
-                               std::vector<Neighbor> &fullset) {
+  void IndexNSG::iterate_to_fixed_point(const float *query, 
+                                       const Parameters &parameter,
+                                       std::vector<unsigned>& init_ids,
+                                       std::vector<Neighbor>& retset,
+                                       std::vector<Neighbor>& fullset, 
+                                       tsl::robin_set<unsigned>& visited)
+  {
     const unsigned L = parameter.Get<unsigned>("L");
 
-    retset.resize(L + 1);
-    std::vector<unsigned> init_ids;
-	init_ids.reserve(L);
-	tsl::robin_set<unsigned> visited(10 * L);
-    // initializer_->Search(query, nullptr, L, parameter, init_ids.data());
-
-	for (auto iter : final_graph_[ep_]) {
-		if (init_ids.size() >= L) break;
-		init_ids.push_back(iter);
-		visited.insert(iter);
-	}
-	while (init_ids.size() < L) {
-		unsigned id = rand() % nd_;
-		if (visited.find(id) != visited.end())
-			continue;
-		else
-			visited.insert(id);
-		init_ids.push_back(id);
-	}
+    while (init_ids.size() < L) {
+      unsigned id = rand() % nd_;
+      if (visited.find(id) != visited.end())
+        continue;
+      else
+        visited.insert(id);
+      init_ids.push_back(id);
+    }
 
     unsigned l = 0;
     for (auto id : init_ids) {
       if (id >= nd_) continue;
-      float dist = distance_->compare(data_ + dimension_ * (size_t) id, query,
-                                      (unsigned) dimension_);
+      float dist = distance_->compare(data_ + dimension_ * (size_t)id, query, dimension_);
       retset[l] = Neighbor(id, dist, true);
       l++;
     }
 
     std::sort(retset.begin(), retset.begin() + l);
     int k = 0;
-    while (k < (int) l) {
+    while (k < (int)l) {
       int nk = l;
 
       if (retset[k].flag) {
@@ -260,7 +251,7 @@ namespace efanna2e {
             visited.insert(id);
 
           float dist = distance_->compare(
-              query, data_ + dimension_ * (size_t) id, (unsigned) dimension_);
+            query, data_ + dimension_ * (size_t)id, (unsigned)dimension_);
           Neighbor nn(id, dist, true);
           fullset.push_back(nn);
           if (dist >= retset[l - 1].distance)
@@ -280,13 +271,44 @@ namespace efanna2e {
     }
   }
 
+  void IndexNSG::get_neighbors(const float *query, 
+                               const Parameters &parameter,
+                               std::vector<Neighbor> &retset,
+                               std::vector<Neighbor> &fullset)
+  {
+    const unsigned L = parameter.Get<unsigned>("L");
+    tsl::robin_set<unsigned> visited(10 * L);
+    get_neighbors(query, parameter, retset, fullset, visited);
+  }
+
+  void IndexNSG::get_neighbors(const float *query, 
+                               const Parameters &parameter,
+                               std::vector<Neighbor> &retset,
+                               std::vector<Neighbor> &fullset, 
+                               tsl::robin_set<unsigned>& visited)
+  {
+    const unsigned L = parameter.Get<unsigned>("L");
+
+    retset.resize(L + 1);
+    std::vector<unsigned> init_ids;
+    init_ids.reserve(L);
+    // initializer_->Search(query, nullptr, L, parameter, init_ids.data());
+
+    for (auto iter : final_graph_[ep_]) {
+      if (init_ids.size() >= L) break;
+      init_ids.push_back(iter);
+      visited.insert(iter);
+    }
+    iterate_to_fixed_point(query, parameter, init_ids, retset, fullset, visited);
+  }
+
 
   void IndexNSG::get_neighbors(const float *query,
-	  const Parameters &parameter,
-	  tsl::robin_set<unsigned>& visited,
-	  std::vector<Neighbor>& retset,
-	  std::vector<Neighbor>& fullset,
-	  const std::vector<unsigned>& start_points)
+                               const Parameters &parameter,
+	                             std::vector<Neighbor>& retset,
+	                             std::vector<Neighbor>& fullset,
+                               tsl::robin_set<unsigned>& visited,
+	                             const std::vector<unsigned>& start_points)
   {
 	  const unsigned L = parameter.Get<unsigned>("L");
 
@@ -295,81 +317,24 @@ namespace efanna2e {
 	  init_ids.reserve(L);
 	  // initializer_->Search(query, nullptr, L, parameter, init_ids.data());
 
-	  if (start_points.size() == 0)
-		  for (auto iter : final_graph_[ep_]) {
+    if (start_points.size() == 0) {
+      std::cerr << "Start point set can not be empty for get_neighbor." << std::endl;
+      exit(-1);
+    }
+	  for (auto iter : start_points) {
 			  if (init_ids.size() >= L) break;
 			  init_ids.push_back(iter);
 			  visited.insert(iter);
 		  }
-	  else {
-		  for (auto iter : start_points) {
-			  if (init_ids.size() >= L) break;
-			  init_ids.push_back(iter);
-			  visited.insert(iter);
-		  }
-		  for (auto s : start_points) {
-			  if (init_ids.size() == L) break;
-			  for (auto iter : final_graph_[s]) {
-				  if (init_ids.size() == L) break;
-				  init_ids.push_back(iter);
-				  visited.insert(iter);
-			  }
-		  }
-	  }
-
-	  while (init_ids.size() < L) {
-		  unsigned id = rand() % nd_;
-		  if (visited.find(id) != visited.end())
-			  continue;
-		  else
-			  visited.insert(id);
-		  init_ids.push_back(id);
-	  }
-
-	  unsigned l = 0;
-	  for (auto id : init_ids) {
-		  if (id >= nd_) continue;
-		  float dist = distance_->compare(data_ + dimension_ * (size_t)id, query, (unsigned)dimension_);
-		  retset[l] = Neighbor(id, dist, true);
-		  fullset.push_back(retset[l]);
-		  l++;
-	  }
-
-	  std::sort(retset.begin(), retset.begin() + l);
-	  int k = 0;
-	  while (k < (int)l) {
-		  int nk = l;
-
-		  if (retset[k].flag) {
-			  retset[k].flag = false;
-			  unsigned n = retset[k].id;
-
-			  for (unsigned m = 0; m < final_graph_[n].size(); ++m) {
-				  unsigned id = final_graph_[n][m];
-				  if (visited.find(id) != visited.end())
-					  continue;
-				  else
-					  visited.insert(id);
-
-				  float dist = distance_->compare(
-					  query, data_ + dimension_ * (size_t)id, (unsigned)dimension_);
-				  Neighbor nn(id, dist, true);
-				  fullset.push_back(nn);
-				  if (dist >= retset[l - 1].distance)
-					  continue;
-				  int r = InsertIntoPool(retset.data(), l, nn);
-
-				  if (l + 1 < retset.size())
-					  ++l;
-				  if (r < nk)
-					  nk = r;
-			  }
-		  }
-		  if (nk <= k)
-			  k = nk;
-		  else
-			  ++k;
-	  }
+    for (auto s : start_points) {
+      if (init_ids.size() == L) break;
+      for (auto iter : final_graph_[s]) {
+        if (init_ids.size() == L) break;
+        init_ids.push_back(iter);
+        visited.insert(iter);
+      }
+    }
+    iterate_to_fixed_point(query, parameter, init_ids, retset, fullset, visited);
   }
 
 
@@ -392,10 +357,10 @@ namespace efanna2e {
       
       // select candidates
       for (auto id : *prev_level) {
-	max_deg = std::max(max_deg, nsg[id].size());
-	min_deg = std::min(min_deg, nsg[id].size());
-	sum_deg += nsg[id].size();
-	
+        max_deg = std::max(max_deg, nsg[id].size());
+        min_deg = std::min(min_deg, nsg[id].size());
+        sum_deg += nsg[id].size();
+
         for (const auto &nbr : nsg[id]) {
           if (nbr >= nsg_size) {
             std::cerr << "invalid" << std::endl;
@@ -461,21 +426,21 @@ namespace efanna2e {
     for (auto &k_v : bfs_orders) {
       if (k_v.second.size() > 1) {
         std::cout << "Using start points in component with nav-node: "
-                  << k_v.first << std::endl;
+          << k_v.first << std::endl;
         // add nodes from each level to `start_points`
-		for (auto &lvl : k_v.second) {
-			for (size_t i = 0; i < 10 && i < lvl.size() && start_points.size() < MAX_START_POINTS; ++i) {
-				auto iter = lvl.begin();
-				size_t rand_offset = rand() * rand() * rand() % lvl.size();
-				for (size_t j = 0; j < rand_offset; ++j) iter++;
+        for (auto &lvl : k_v.second) {
+          for (size_t i = 0; i < 10 && i < lvl.size() && start_points.size() < MAX_START_POINTS; ++i) {
+            auto iter = lvl.begin();
+            size_t rand_offset = rand() * rand() * rand() % lvl.size();
+            for (size_t j = 0; j < rand_offset; ++j) iter++;
 
-				if (std::find(start_points.begin(), start_points.end(), *iter) == start_points.end())
-					start_points.push_back(*iter);
-			}
+            if (std::find(start_points.begin(), start_points.end(), *iter) == start_points.end())
+              start_points.push_back(*iter);
+          }
 
-			if (start_points.size() == MAX_START_POINTS)
-				break;
-		}
+          if (start_points.size() == MAX_START_POINTS)
+            break;
+        }
       }
     }
     std::cout << "Chose " << start_points.size() << " starting points"
@@ -520,7 +485,7 @@ namespace efanna2e {
     for (size_t i = 0; i < nd_; i++) {
       // extract point and distance reference
       float &      dist = distances[i];
-      const float *cur_vec = data_ + (i * (size_t) dimension_);
+      const float *cur_vec = data_ + (i * (size_t)dimension_);
       dist = 0;
       float diff = 0;
       for (size_t j = 0; j < dimension_; j++) {
@@ -539,14 +504,15 @@ namespace efanna2e {
     }
     ep_ = min_idx;
     std::cout << "Medoid index = " << min_idx << std::endl;
-	delete[] distances;
-	delete[] center;
+    delete[] distances;
+    delete[] center;
   }
 
   void IndexNSG::sync_prune(unsigned q, std::vector<Neighbor> &pool,
                             const Parameters& parameter,
                             tsl::robin_set<unsigned>& visited,
-                            vecNgh *cut_graph_) {
+                            vecNgh *cut_graph_) 
+  {
     unsigned range = parameter.Get<unsigned>("R");
     unsigned maxc = parameter.Get<unsigned>("C");
     float alpha = parameter.Get<float>("alpha");
@@ -579,8 +545,8 @@ namespace efanna2e {
           break;
         }
         float djk = distance_->compare(
-            data_ + dimension_ * (size_t) result[t].id,
-            data_ + dimension_ * (size_t) p.id, (unsigned) dimension_);
+          data_ + dimension_ * (size_t)result[t].id,
+          data_ + dimension_ * (size_t)p.id, (unsigned)dimension_);
         if (alpha*djk < p.distance /* dik */) {
           occlude = true;
           break;
@@ -601,8 +567,8 @@ namespace efanna2e {
   void IndexNSG::InterInsert(unsigned n, unsigned range,
                              std::vector<std::mutex> &locks, 
                              const Parameters& parameter,
-                             vecNgh *cut_graph_) {
-
+                             vecNgh *cut_graph_) 
+  {
     float alpha = parameter.Get<float>("alpha");
     // SimpleNeighbor *src_pool = cut_graph_ + (size_t) n * (size_t) range;
     vecNgh& src_pool = cut_graph_[n];
@@ -679,7 +645,7 @@ namespace efanna2e {
 
       for (size_t n = block * PAR_BLOCK_SZ; n < std::min(nd_, (block + 1) * PAR_BLOCK_SZ); ++n) {
         pool.clear(); tmp.clear(); visited.clear();
-        get_neighbors(data_ + (size_t)dimension_ * n, parameters, visited, tmp, pool);
+        get_neighbors(data_ + (size_t)dimension_ * n, parameters, tmp, pool, visited);
         sync_prune(n, pool, parameters, visited, cut_graph_);
       }
       std::cout << "sync_prune " << std::min(nd_, (block + 1) * PAR_BLOCK_SZ) << std::endl;
@@ -698,7 +664,7 @@ namespace efanna2e {
 
   void IndexNSG::LinkFromSmall(const Parameters &parameters,
                                vecNgh* cut_graph_,
-                               const IndexNSG& small_index,
+                               IndexNSG& small_index,
                                const std::vector<unsigned>& picked_pts)
   {
     unsigned range = parameters.Get<unsigned>("R");
@@ -706,20 +672,24 @@ namespace efanna2e {
     size_t nblocks = nd_ % PAR_BLOCK_SZ == 0 ? nd_ / PAR_BLOCK_SZ : (nd_ / PAR_BLOCK_SZ) + 1;
 
     auto smallK = range;
+    auto small_params = parameters;
+    small_params.Set<unsigned>("L_search", 2 * parameters.Get<unsigned>("L"));
 
 #pragma omp parallel for schedule(static, 1)
     for (size_t block = 0; block < nblocks; ++block) {
       std::vector<Neighbor> pool, tmp;
       tsl::robin_set<unsigned> visited;
-      unsigned* res = new unsigned[smallK];
+      auto res = new unsigned[smallK];
       std::vector<unsigned> start_points;
 
       for (size_t n = block * PAR_BLOCK_SZ; n < std::min(nd_, (block + 1) * PAR_BLOCK_SZ); ++n) {
-        pool.clear(); tmp.clear(); visited.clear(); start_points.clear();
-
-        small_index.Search(data_ + (size_t)dimension_ * n, small_index.GetDataset(), smallK, parameters, res);
-        for (unsigned r = 0; r < smallK; ++r) start_points.push_back(picked_pts[res[r]]);
-        get_neighbors(data_ + (size_t)dimension_ * n, parameters, visited, tmp, pool, start_points);
+        pool.clear(); tmp.clear(); visited.clear(); 
+        start_points.clear();
+        small_index.Search(data_ + (size_t)dimension_ * n,
+          small_index.GetDataset(), smallK, small_params, res);
+        for (unsigned r = 0; r < smallK; ++r)
+          start_points.push_back(picked_pts[res[r]]);
+        get_neighbors(data_ + (size_t)dimension_ * n, parameters, tmp, pool, visited, start_points);
         sync_prune(n, pool, parameters, visited, cut_graph_);
       }
       delete[] res;
@@ -737,10 +707,9 @@ namespace efanna2e {
     std::cout << "InterInsert completed" << std::endl;
   }
 
-  void IndexNSG::BuildFromER(
-	  size_t n, size_t nr, 
-	  const float *data,
-	  const Parameters &parameters) 
+  void IndexNSG::BuildFromER(size_t n, size_t nr, 
+	                           const float *data,
+	                           const Parameters &parameters) 
   {
     std::cout << "Building small index with size " << n <<std::endl;
 	unsigned    range = parameters.Get<unsigned>("R");
@@ -789,11 +758,10 @@ namespace efanna2e {
   }
 
   
-  void IndexNSG::BuildFromSmall(
-	  size_t n, const float *data,
-	  const Parameters &parameters,
-	  const IndexNSG& small_index,
-	  const std::vector<unsigned>& picked_pts) 
+  void IndexNSG::BuildFromSmall(size_t n, const float *data,
+	                              const Parameters &parameters,
+                                IndexNSG& small_index,
+	                              const std::vector<unsigned>& picked_pts) 
   {
     std::string nn_graph_path = parameters.Get<std::string>("nn_graph_path");
     unsigned    range = parameters.Get<unsigned>("R");
@@ -809,14 +777,17 @@ namespace efanna2e {
 	ep_ = picked_pts[small_index.get_start_node()];
 
 	assert(small_index.has_built);
-	{ // Method 1
+	/*{ // Method 1
 		for (size_t i = 0; i < picked_pts.size(); ++i) {
 			auto append = small_index.final_graph_[i];
 			auto p = picked_pts[i];
 			final_graph_[p].insert(final_graph_[p].end(), append.begin(), append.end());
 		}
 		Link(parameters, cut_graph_);
-	}
+	}*/
+  { // Method 2
+    LinkFromSmall(parameters, cut_graph_, small_index, picked_pts);
+  }
     
 	final_graph_.resize(nd_);
 #pragma omp parallel for
@@ -883,8 +854,9 @@ namespace efanna2e {
 	delete[] cut_graph_;
   }
 
-  std::pair<int, int> IndexNSG::BeamSearch(const float *query, const float *x,
-                                           size_t            K,
+  std::pair<int, int> IndexNSG::BeamSearch(const float *query, 
+                                           const float *x,
+                                           const size_t K,
                                            const Parameters &parameters,
                                            unsigned *indices, int beam_width,
 								                           const std::vector<unsigned>& start_points) 
@@ -986,9 +958,12 @@ namespace efanna2e {
     return std::make_pair(hops, cmps);
   }
 
-  std::pair<int, int> IndexNSG::Search(const float *query, const float *x,
-                                       size_t K, const Parameters &parameters,
-                                       unsigned *indices) {
+  std::pair<int, int> IndexNSG::Search(const float *query,
+                                       const float *x,
+                                       const size_t K,
+                                       const Parameters &parameters,
+                                       unsigned *indices) 
+  {
     const unsigned L = parameters.Get<unsigned>("L_search");
     data_ = x;
     std::vector<Neighbor>    retset(L + 1);
@@ -1061,9 +1036,10 @@ namespace efanna2e {
     return std::make_pair(hops, cmps);
   }
 
-  unsigned long long int IndexNSG::SearchWithOptGraph(
-      const float *query, size_t K, const Parameters &parameters,
-      unsigned *indices) {
+  unsigned long long IndexNSG::SearchWithOptGraph(const float *query, size_t K,
+                                                  const Parameters &parameters,
+                                                  unsigned *indices) 
+  {
     unsigned        L = parameters.Get<unsigned>("L_search");
     DistanceFastL2 *dist_fast = (DistanceFastL2 *) distance_;
 
@@ -1225,7 +1201,8 @@ namespace efanna2e {
     }
   }
 
-  void IndexNSG::findroot(tsl::robin_set<unsigned> &visited, unsigned &root,
+  void IndexNSG::findroot(tsl::robin_set<unsigned> &visited, 
+                          unsigned &root,
                           const Parameters &parameter) {
     unsigned id = nd_;
     for (unsigned i = 0; i < nd_; i++) {

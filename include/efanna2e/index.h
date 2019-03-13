@@ -24,12 +24,11 @@ namespace efanna2e {
 
     virtual void Build(size_t n, const float *data, const Parameters &parameters) = 0;
 
-    virtual std::pair<int,int> Search(
-				      const float *query,
-				      const float *x,
-				      size_t k,
-				      const Parameters &parameters,
-				      unsigned *indices) = 0;
+    virtual std::pair<int,int> Search(const float *query,
+				                              const float *x,
+				                              const size_t K,
+				                              const Parameters &parameters,
+				                              unsigned *indices) = 0;
 
 	virtual void Save(const char *filename) = 0;
 

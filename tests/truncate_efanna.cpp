@@ -60,7 +60,7 @@ void open_linux_mmapped_file_handle(
         assert(false);
     }
     struct stat sb;
-    int val = fstat(fd, &sb);
+    //int val = fstat(fd, &sb);
     off_t fileSize = sb.st_size;
     assert(sizeof(off_t) == 8);
 
