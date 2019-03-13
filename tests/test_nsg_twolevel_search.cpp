@@ -90,6 +90,7 @@ int main(int argc, char** argv) {
 	efanna2e::Parameters small_params;
 	small_params.Set<unsigned>("L_search", L);
 	small_params.Set<unsigned>("P_search", L);
+	auto smallK = K / 2;
 
 	efanna2e::Parameters big_params;
 	big_params.Set<unsigned>("L_search", L);

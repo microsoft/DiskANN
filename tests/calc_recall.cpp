@@ -29,14 +29,12 @@ void load_data(char* filename, int* &data, size_t &num, unsigned &dim) {// load 
 	std::cout << "data loaded \n";
 }
 
-typedef unsigned long long ull;
-
 int main(int argc, char** argv)
 {
 	if (argc != 4) { std::cout << argv[0] << " data_file1 data_file2 r" << std::endl; exit(-1); }
 	int* gold_std = NULL;
 	int* our_results = NULL;
-	ull points_num;
+	size_t points_num;
 	unsigned dim_gs;
 	unsigned dim_or;
 	load_data(argv[1], gold_std, points_num, dim_gs);
@@ -59,14 +57,14 @@ int main(int argc, char** argv)
 
 
 	auto this_point = new bool[dim_gs];
-	for (ull i = 0; i < points_num; i++) {
+	for (size_t i = 0; i < points_num; i++) {
 		for (unsigned j = 0; j < dim_gs; j++)
 			this_point[j] = false;
 
 		bool this_correct = true;
-		for (ull j1 = 0; j1 < recall_at; j1++)
-			for (ull j2 = 0; j2 < dim_or; j2++)
-				if (gold_std[i*(ull)dim_gs + j1] == our_results[i*(ull)dim_or + j2]) {
+		for (size_t j1 = 0; j1 < recall_at; j1++)
+			for (size_t j2 = 0; j2 < dim_or; j2++)
+				if (gold_std[i*(size_t)dim_gs + j1] == our_results[i*(size_t)dim_or + j2]) {
 					if (this_point[j1] == false)
 						total_recall++;
 					this_point[j1] = true;
