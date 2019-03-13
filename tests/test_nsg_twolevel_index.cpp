@@ -101,9 +101,9 @@ int main(int argc, char** argv)
 	{
 		auto s = std::chrono::high_resolution_clock::now();
 		efanna2e::Parameters paras;
-		paras.Set<unsigned>("L", 4 * L);
-		paras.Set<unsigned>("R", 4 * R);
-		paras.Set<unsigned>("C", C);
+		paras.Set<unsigned>("L", L/2);
+		paras.Set<unsigned>("R", R/2);
+		paras.Set<unsigned>("C", C/4);
 		paras.Set<float>("alpha", alpha);
 		std::cout << "Params set. Build start..." << std::endl;
 		small_index.BuildFromER(NS, NR, data_sampled, paras);

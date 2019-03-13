@@ -716,7 +716,7 @@ namespace efanna2e {
 
     auto smallK = range;
     auto small_params = parameters;
-    small_params.Set<unsigned>("L_search", 2 * parameters.Get<unsigned>("L"));
+    small_params.Set<unsigned>("L_search", parameters.Get<unsigned>("L")/2);
 
 #pragma omp parallel for schedule(static, 1)
     for (size_t block = 0; block < nblocks; ++block) {
