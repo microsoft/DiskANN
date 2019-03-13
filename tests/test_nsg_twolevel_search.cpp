@@ -88,8 +88,8 @@ int main(int argc, char** argv) {
 	big_index.set_start_node(picked[small_index.get_start_node()]);
 
 	efanna2e::Parameters small_params;
-	small_params.Set<unsigned>("L_search", 2*L);
-	small_params.Set<unsigned>("P_search", 2*L);
+	small_params.Set<unsigned>("L_search", L);
+	small_params.Set<unsigned>("P_search", L);
 
 	efanna2e::Parameters big_params;
 	big_params.Set<unsigned>("L_search", L);
@@ -104,14 +104,14 @@ int main(int argc, char** argv) {
 #pragma omp parallel for schedule(static, 1000)
 	for (size_t i = 0; i < query_num; i++) {
 		auto small_ret = small_index.Search(query_load + i * dim, small_data,
-			K, small_params, res + i * K);
+			smallK, small_params, res + i * K);
 #pragma omp atomic
 		small_hops += small_ret.first;
 #pragma omp atomic
 		small_cmps += small_ret.second;
 
 		std::vector<unsigned> start_points;
-		for (unsigned k = 0; k < K; ++k)
+		for (unsigned k = 0; k < smallK; ++k)
 			start_points.push_back(picked[res[i * K + k]]);
 		auto big_ret = big_index.BeamSearch(query_load + i * dim, data_load, 
 			K, big_params, res + ((size_t)i) * K, beam_width, start_points);
