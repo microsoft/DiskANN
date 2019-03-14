@@ -28,8 +28,8 @@ void load_data(char* filename, float*& data, unsigned& num,
   in.close();
 }
 int main(int argc, char** argv) {
-  if (argc !=8 && argc !=7) {
-    std::cout << argv[0] << " data_file nn_graph_path L R C save_graph_file"
+  if (argc !=9) {
+    std::cout << argv[0] << "format: data_file nn_graph_path L R C save_graph_file alpha (set to 1 if you dont know) is_nsg (set to 0 if running on efanna)"
               << std::endl;
     exit(-1);
   }
@@ -38,13 +38,9 @@ int main(int argc, char** argv) {
 //	  alpha = 1;
 //  else
 //	  alpha = (float) atof(argv[7]);
-  bool is_nsg; 
-  if(argc == 7)
-	  is_nsg = false;
-  else
-	  is_nsg = (bool) std::atoi(argv[7]);
+  bool is_nsg = (bool) std::atoi(argv[8]);
 
-  float alpha = 1;	
+  float alpha = (float) std::atof(argv[7]);	
   float* data_load = NULL;
   unsigned points_num, dim;
   load_data(argv[1], data_load, points_num, dim);
