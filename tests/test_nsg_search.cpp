@@ -91,13 +91,18 @@ int main(int argc, char** argv) {
   else
 	  {
 	  index.Load_nn_graph(argv[3]);  // to load EFANNA
-	  index.init_graph_outside(data_load);
+
+/* ravi-comment 
+//	  index.init_graph_outside(data_load);
+*/
 	  }
   std::cout << "Index loaded" << std::endl;
-    
+   
   std::vector<unsigned> start_points;
-  index.populate_start_points_bfs(start_points);
-  std::cout << "Initialized starting points based on BFS" << std::endl;
+/* ravi-comment 
+//  index.populate_start_points_bfs(start_points);
+//  std::cout << "Initialized starting points based on BFS" << std::endl;
+ravi-coomment */
 
   efanna2e::Parameters paras;
   paras.Set<unsigned>("L_search", L);
