@@ -862,11 +862,16 @@ namespace efanna2e {
   {
     std::string nn_graph_path = parameters.Get<std::string>("nn_graph_path");
     unsigned    range = parameters.Get<unsigned>("R");
-    Load_nn_graph(nn_graph_path.c_str());
+    bool is_nsg = parameters.Get<bool>("is_nsg");
+    if (is_nsg)
+      Load(nn_graph_path.c_str());
+    else {
+      Load_nn_graph(nn_graph_path.c_str());
+      init_graph_bf(parameters);
+    }
     
     data_ = data;
     // init_graph(parameters);
-    init_graph_bf(parameters);
 
     auto cut_graph_ = new vecNgh[nd_];
 #pragma omp parallel for

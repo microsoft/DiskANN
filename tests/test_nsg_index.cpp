@@ -33,12 +33,18 @@ int main(int argc, char** argv) {
               << std::endl;
     exit(-1);
   }
-  float alpha;
-  if (argc == 7)
-	  alpha = 1;
+//  float alpha;
+//  if (argc == 7)
+//	  alpha = 1;
+//  else
+//	  alpha = (float) atof(argv[7]);
+  bool is_nsg; 
+  if(argc == 7)
+	  is_nsg = false;
   else
-	  alpha = (float) atof(argv[7]);
-	
+	  is_nsg = (bool) std::atoi(argv[7]);
+
+  float alpha = 1;	
   float* data_load = NULL;
   unsigned points_num, dim;
   load_data(argv[1], data_load, points_num, dim);
@@ -60,7 +66,9 @@ int main(int argc, char** argv) {
   paras.Set<unsigned>("R", R);
   paras.Set<unsigned>("C", C);
   paras.Set<float>("alpha", alpha);
+  paras.Set<bool>("is_nsg", is_nsg);
   paras.Set<std::string>("nn_graph_path", nn_graph_path);
+
   std::cout << "Params set" << std::endl;
 
   index.Build(points_num, data_load, paras);
