@@ -190,28 +190,28 @@ void open_linux_mmapped_file_handle(
 
 int main(int argc, char** argv) {
   srand (time(NULL));
-  if (argc != 6) {
-    std::cout << argv[0] << " data_file nn_graph_path d_nn d_rnd save_graph_file"
+  if (argc != 5) {
+    std::cout << argv[0] << "nn_graph_path d_nn d_rnd save_graph_file"
               << std::endl;
     exit(-1);
   }
   float* data_load = NULL;
-  size_t points_num;
- unsigned  dim;
-  open_linux_mmapped_file_handle(argv[1], data_load, points_num, dim);
- data_ = data_load;
- dimension_ = dim;
- num = points_num;
+//  size_t points_num = std::atol(argv[2]);
+// unsigned  dim;
+//  open_linux_mmapped_file_handle(argv[1], data_load, points_num, dim);
+// data_ = data_load;
+// dimension_ = dim;
+// num = points_num;
 	
-  std::cout << "Data loaded" << std::endl;
+//  std::cout << "Data loaded" << std::endl;
   CompactGraph2 final_graph_; 
   unsigned k;
-  std::string nn_graph_path(argv[2]);
-  unsigned d_nn = (unsigned)atoi(argv[3]);
-  unsigned d_rnd = (unsigned)atoi(argv[4]);
+  std::string nn_graph_path(argv[1]);
+  unsigned d_nn = (unsigned)atoi(argv[2]);
+  unsigned d_rnd = (unsigned)atoi(argv[3]);
   Load_and_truncate_nn_graph(nn_graph_path.c_str(), final_graph_,k, d_nn, d_rnd); 
 
-  data_load = efanna2e::data_align(data_load, points_num, dim);//one must
+//  data_load = efanna2e::data_align(data_load, points_num, dim);//one must
   // align the data before build
 //  efanna2e::IndexNSG index(dim, points_num, efanna2e::L2, nullptr);
 
@@ -226,7 +226,7 @@ int main(int argc, char** argv) {
 //  auto e = std::chrono::high_resolution_clock::now();
 //  std::chrono::duration<double> diff = e - s;
  unsigned new_deg = d_nn + d_rnd;
-  Save_nn_graph(argv[5], final_graph_, new_deg);
+  Save_nn_graph(argv[4], final_graph_, new_deg);
 
   return 0;
 }
