@@ -74,7 +74,7 @@ int main(int argc, char** argv) {
   unsigned L = (unsigned) atoi(argv[4]);
   unsigned K = (unsigned) atoi(argv[5]);
   int      beam_width = atoi(argv[7]);
-  int nsg_check = atoi(argv[8]);
+  int      nsg_check = atoi(argv[8]);
 
   if (L < K) {
     std::cout << "search_L cannot be smaller than search_K!" << std::endl;
@@ -86,23 +86,22 @@ int main(int argc, char** argv) {
   std::cout << "Data Aligned" << std::endl;
 
   efanna2e::IndexNSG index(dim, points_num, efanna2e::L2, nullptr);
-  if(nsg_check == 1)
-	  index.Load(argv[3]);  // to load NSG
-  else
-	  {
-	  index.Load_nn_graph(argv[3]);  // to load EFANNA
+  if (nsg_check == 1)
+    index.Load(argv[3]);  // to load NSG
+  else {
+    index.Load_nn_graph(argv[3]);  // to load EFANNA
 
-/* ravi-comment 
-//	  index.init_graph_outside(data_load);
-*/
-	  }
+    /* ravi-comment
+    //	  index.init_graph_outside(data_load);
+    */
+  }
   std::cout << "Index loaded" << std::endl;
-   
+
   std::vector<unsigned> start_points;
-/* ravi-comment 
-//  index.populate_start_points_bfs(start_points);
-//  std::cout << "Initialized starting points based on BFS" << std::endl;
-ravi-coomment */
+  /* ravi-comment
+  //  index.populate_start_points_bfs(start_points);
+  //  std::cout << "Initialized starting points based on BFS" << std::endl;
+  ravi-coomment */
 
   efanna2e::Parameters paras;
   paras.Set<unsigned>("L_search", L);
@@ -116,9 +115,11 @@ ravi-coomment */
 
 #pragma omp parallel for schedule(static, 1000)
   for (unsigned i = 0; i < query_num; i++) {
-    auto ret = index.BeamSearch(query_load + i * dim, data_load, 
-		K, paras, res + ((size_t) i) * K, beam_width, start_points);
-// auto ret = index.Search(query_load + i * dim, data_load, K, paras, tmp.data());
+    auto ret =
+        index.BeamSearch(query_load + i * dim, data_load, K, paras,
+                         res + ((size_t) i) * K, beam_width, start_points);
+// auto ret = index.Search(query_load + i * dim, data_load, K, paras,
+// tmp.data());
 
 #pragma omp atomic
     total_hops += ret.first;

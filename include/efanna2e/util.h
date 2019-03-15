@@ -2,13 +2,12 @@
 // Created by 付聪 on 2017/6/21.
 //
 
-#ifndef EFANNA2E_UTIL_H
-#define EFANNA2E_UTIL_H
+#pragma once
+#include <fcntl.h>
+#include <unistd.h>
 #include <algorithm>
 #include <cassert>
-#include <unistd.h>
 #include <cstdlib>
-#include <fcntl.h>
 #include <cstring>
 #include <fstream>
 #include <iostream>
@@ -31,6 +30,15 @@
 #define IS_ALIGNED(X, Y) ((uint64_t)(X) % (uint64_t)(Y) == 0)
 #define IS_512_ALIGNED(X) IS_ALIGNED(X, 512)
 #define IS_4096_ALIGNED(X) IS_ALIGNED(X, 4096)
+
+typedef uint64_t _u64;
+typedef int64_t  _s64;
+typedef uint32_t _u32;
+typedef int32_t  _s32;
+typedef uint16_t _u16;
+typedef int16_t  _s16;
+typedef uint8_t  _u8;
+typedef int8_t   _s8;
 
 namespace efanna2e {
 
@@ -102,12 +110,60 @@ namespace efanna2e {
   }
 
   template<typename T>
-  inline void load_Tvecs(char *filename, T *&data, unsigned &num,
+  inline void load_Tvecs(const char *filename, T *&data, unsigned &num,
                          unsigned &dim) {
     // check validity of file
     std::ifstream in(filename, std::ios::binary);
     if (!in.is_open()) {
-      std::cout << "open file error" << std::endl;
+      std::cout << "Error opening file: " << filename << std::endl;
+      exit(-1);
+    }
+
+    in.read((char *) &dim, sizeof(unsigned));
+    in.seekg(0, std::ios::end);
+    std::ios::pos_type ss = in.tellg();
+    in.close();
+
+    // calculate vector size
+    size_t fsize = (size_t) ss;
+    size_t per_row = sizeof(unsigned) + dim * sizeof(T);
+    num = fsize / per_row;
+    std::cout << "# points = " << num << ", dimensions = " << dim << std::endl;
+
+    // data = new T[(size_t) num * (size_t) dim];
+    data = (T *) malloc((size_t) num * (size_t) dim * sizeof(T));
+    memset((void *) data, 0, (size_t) num * (size_t) dim * sizeof(T));
+
+    // open classical fd
+    int fd = open(filename, O_RDONLY);
+    assert(fd != -1);
+
+// parallel read each vector at the desired offset
+#pragma omp parallel for schedule(static, 32768)
+    for (size_t i = 0; i < num; i++) {
+      // computed using actual dimension
+      uint64_t file_offset = (per_row * i) + sizeof(unsigned);
+      // computed using aligned dimension
+      T * buf = data + i * dim;
+      int ret = pread(fd, (char *) buf, dim * sizeof(T), file_offset);
+      // std::cout << "ret = " << ret << "\n";
+      if ((size_t) ret != dim * sizeof(T)) {
+        std::cout << "read=" << ret << ", expected=" << dim * sizeof(T);
+        assert((size_t) ret == dim * sizeof(T));
+      }
+    }
+    std::cout << "Finished reading Tvecs" << std::endl;
+    close(fd);
+  }
+
+  // each row in returned matrix is aligned to 32-byte boundary
+  template<typename T>
+  inline void aligned_load_Tvecs(char *filename, T *&data, unsigned &num,
+                                 unsigned &dim) {
+    // check validity of file
+    std::ifstream in(filename, std::ios::binary);
+    if (!in.is_open()) {
+      std::cout << "Error opening file: " << filename << std::endl;
       exit(-1);
     }
 
@@ -124,35 +180,54 @@ namespace efanna2e {
               << std::endl;
 
     // create aligned buf
-    unsigned actual_dim = dim;
-    dim = ROUND_UP(dim, 8);
-    std::cout << "Aligned dimesion = " << dim << std::endl;
+    unsigned aligned_dim = ROUND_UP(dim, 8);
+    std::cout << "Aligned dimesion = " << aligned_dim << std::endl;
 
     // data = new T[(size_t) num * (size_t) dim];
-    alloc_aligned((void **) &data, (size_t) num * (size_t) dim * sizeof(T), 32);
-    memset((void *) data, 0, (size_t) num * (size_t) dim * sizeof(T));
+    alloc_aligned((void **) &data,
+                  (size_t) num * (size_t) aligned_dim * sizeof(T), 32);
+    memset((void *) data, 0, (size_t) num * (size_t) aligned_dim * sizeof(T));
 
     // open classical fd
     int fd = open(filename, O_RDONLY);
     assert(fd != -1);
 
-// parallel read each vector at the desired offset
-#pragma omp parallel for schedule(static, 32768) 
+    // parallel read each vector at the desired offset
+    // #pragma omp parallel for schedule(static, 32768)
     for (size_t i = 0; i < num; i++) {
       // computed using actual dimension
       uint64_t file_offset = (per_row * i) + sizeof(unsigned);
       // computed using aligned dimension
-      T * buf = data + i * dim;
-      int ret = pread(fd, (char *) buf, actual_dim * sizeof(T), file_offset);
+      T * buf = data + i * aligned_dim;
+      int ret = pread(fd, (char *) buf, dim * sizeof(T), file_offset);
       // std::cout << "ret = " << ret << "\n";
-      if (ret != actual_dim * sizeof(T)) {
-        std::cout << "read=" << ret << ", expected=" << actual_dim * sizeof(T);
-        assert(ret == actual_dim * sizeof(T));
+      if (ret != dim * sizeof(T)) {
+        std::cout << "read=" << ret << ", expected=" << dim * sizeof(T);
+        assert(ret == dim * sizeof(T));
       }
     }
     std::cout << "Finished reading Tvecs" << std::endl;
     close(fd);
   }
-}
 
-#endif  // EFANNA2E_UTIL_H
+  template<typename T>
+  inline void load_bin(const char *filename, T *&data, unsigned &npts,
+                       unsigned &ndims) {
+    std::ifstream reader(filename, std::ios::binary);
+    int           npts_i32, ndims_i32;
+    reader.read((char *) &npts_i32, sizeof(int));
+    reader.read((char *) &ndims_i32, sizeof(int));
+    npts = (unsigned) npts_i32;
+    ndims = (unsigned) ndims_i32;
+    _u64 npts_u64 = (_u64) npts;
+    _u64 ndims_u64 = (_u64) ndims;
+    std::cout << "Dataset: #pts = " << npts << ", #dims = " << ndims
+              << ", size = " << npts_u64 * ndims_u64 * sizeof(T) << "B"
+              << std::endl;
+
+    data = new T[npts_u64 * ndims_u64];
+    reader.read((char *) data, npts_u64 * ndims_u64 * sizeof(T));
+    reader.close();
+    std::cout << "Finished reading bin" << std::endl;
+  }
+}

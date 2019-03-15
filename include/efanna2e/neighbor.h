@@ -110,28 +110,29 @@ namespace efanna2e {
     std::vector<SimpleNeighbor> pool;
   };
 
-  struct SimpleNhood {
+  template<typename T>
+  struct DiskNhood {
     unsigned  nnbrs = 0;
     unsigned  dim = 0;
     unsigned *nbrs = nullptr;
-    int8_t *  int8_coords = nullptr;
-    void *    buf = nullptr;  // underlying buffer for nbrs, nnbrs int8_t coords
+    T *       disk_coords = nullptr;
+    void *    buf = nullptr;  // underlying buffer for nbrs, nnbrs <T> coords
     float *   aligned_fp32_coords = nullptr;  // alloc'ed only when read into,
     // dimension aligned to multiple of 8
 
-    SimpleNhood() {
+    DiskNhood() {
       assert(buf == nullptr);
       assert(aligned_fp32_coords == nullptr);
-      assert(int8_coords == nullptr);
+      assert(disk_coords == nullptr);
     }
 
     // alloc mem for buf
     void init(unsigned buf_size, unsigned dim) {
       assert(buf == nullptr);
       assert(aligned_fp32_coords == nullptr);
-      assert(int8_coords == nullptr);
+      assert(disk_coords == nullptr);
       this->dim = dim;
-      alloc_aligned(&buf, buf_size, 512);
+      alloc_aligned(&buf, buf_size, 4096);
     }
 
     // alloc mem, create fp32 coords
@@ -143,7 +144,16 @@ namespace efanna2e {
       nnbrs = *(unsigned *) buf;
       assert(nnbrs > 0);
       nbrs = (unsigned *) buf + 1;
-      int8_coords = (int8_t *) buf + (nnbrs + 1) * sizeof(unsigned);
+      /*
+      std::cout << "nnbrs: " << nnbrs << "\n";
+      for(unsigned i=0;i<nnbrs;i++){
+        if (!(nbrs[i] < 2953105)){
+          std::cout << "i: " << i << ", nbrs[i]: " << nbrs[i] << "\n";
+        }
+        assert(nbrs[i] < 2953105);
+      }
+      */
+      disk_coords = (T *) ((char *) buf + (nnbrs + 1) * sizeof(unsigned));
 
       unsigned aligned_dim = ROUND_UP(dim, 8);
       alloc_aligned((void **) &aligned_fp32_coords,
@@ -152,7 +162,7 @@ namespace efanna2e {
       for (unsigned i = 0; i < nnbrs; i++) {
         for (unsigned j = 0; j < dim; j++) {
           aligned_fp32_coords[i * aligned_dim + j] =
-              ((float) int8_coords[i * dim + j]) / scale_factor;
+              ((float) disk_coords[i * dim + j]) / scale_factor;
         }
       }
     }
@@ -171,7 +181,7 @@ namespace efanna2e {
       buf = nullptr;
       aligned_fp32_coords = nullptr;
       nbrs = nullptr;
-      int8_coords = nullptr;
+      disk_coords = nullptr;
       nnbrs = 0;
       dim = 0;
     }

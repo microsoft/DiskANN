@@ -3,6 +3,8 @@
 //
 
 #include <efanna2e/flash_index_nsg.h>
+#include <efanna2e/index.h>
+#include <efanna2e/neighbor.h>
 #include <efanna2e/util.h>
 #include <omp.h>
 #include <atomic>
@@ -31,6 +33,7 @@ void load_data(char* filename, float*& data, unsigned& num,
 }
 
 void save_result(char* filename, std::vector<std::vector<unsigned>>& results) {
+  std::cout << "Saving result to " << filename << std::endl;
   std::ofstream out(filename, std::ios::binary | std::ios::out);
 
   for (unsigned i = 0; i < results.size(); i++) {
@@ -42,38 +45,35 @@ void save_result(char* filename, std::vector<std::vector<unsigned>>& results) {
 }
 
 int main(int argc, char** argv) {
-  if (argc != 11) {
-    std::cout
-        << argv[0]
-        << " embedded_index index_node_sizes n_base n_dims "
-           "query_file search_L search_K result_path BeamWidth cache_nlevels"
-        << std::endl;
+  if (argc != 8) {
+    std::cout << argv[0]
+              << " embedded_index query_file_fvecs search_L search_K "
+                 "result_path BeamWidth cache_nlevels"
+              << std::endl;
     exit(-1);
   }
 
-  std::string index_file(argv[1]);
-  std::string sizes_file(argv[2]);
-  unsigned    n_pts = (unsigned) std::atoi(argv[3]);
-  unsigned    n_dims = (unsigned) std::atoi(argv[4]);
-
   // construct FlashNSGIndex
-  efanna2e::FlashIndexNSG index(n_dims, n_pts, efanna2e::L2, nullptr);
+  efanna2e::FlashNSG<int8_t, efanna2e::DiskNhood<int8_t>> index;
   std::cout << "main --- tid: " << std::this_thread::get_id() << std::endl;
-  index.graph_reader.register_thread();
-  index.load_embedded_index(index_file, sizes_file);
+  index.reader.register_thread();
+  index.load(argv[1]);
 
   // load queries
   float*   query_load = NULL;
   unsigned query_num, query_dim;
-  efanna2e::load_Tvecs<float>(argv[5], query_load, query_num, query_dim);
-  assert(n_dims == query_dim);
+  efanna2e::aligned_load_Tvecs<float>(argv[2], query_load, query_num,
+                                      query_dim);
+  std::cout << "query_dim = " << query_dim << std::endl;
+  _u64 aligned_dim = ROUND_UP(query_dim, 8);
+  assert(aligned_dim == index.aligned_dim);
 
-  unsigned L = (unsigned) atoi(argv[6]);
-  unsigned K = (unsigned) atoi(argv[7]);
-  int      beam_width = atoi(argv[9]);
-  unsigned cache_nlevels = (unsigned) atoi(argv[10]);
+  _u64 l_search = (_u64) atoi(argv[3]);
+  _u64 k_search = (_u64) atoi(argv[4]);
+  int  beam_width = atoi(argv[6]);
+  _u64 cache_nlevels = (_u64) atoi(argv[7]);
 
-  if (L < K) {
+  if (l_search < k_search) {
     std::cout << "search_L cannot be smaller than search_K!" << std::endl;
     exit(-1);
   }
@@ -82,24 +82,23 @@ int main(int argc, char** argv) {
   // align query data
   // query_load = efanna2e::data_align(query_load, query_num, query_dim);
 
-  efanna2e::Parameters paras;
-  paras.Set<unsigned>("L_search", L);
-  paras.Set<unsigned>("P_search", L);
-
   auto s = std::chrono::high_resolution_clock::now();
-  std::vector<std::vector<unsigned>> res(query_num, std::vector<unsigned>(K));
-  long long                          total_hops = 0;
-  long long                          total_cmps = 0;
-  std::vector<long long>             hops(query_num), cmps(query_num);
-  bool                               has_init = false;
-  std::atomic<unsigned>              qcounter;
+  std::vector<std::vector<unsigned>> res(query_num,
+                                         std::vector<unsigned>(k_search));
+  _u64                  total_hops = 0;
+  _u64                  total_cmps = 0;
+  std::vector<_u64>     hops(query_num), cmps(query_num);
+  bool                  has_init = false;
+  std::atomic<unsigned> qcounter;
   qcounter.store(0);
 
   std::atomic_ullong latency;  // In micros.
   latency.store(0.0);
+  efanna2e::QueryStats* stats = new efanna2e::QueryStats[query_num];
 
-#pragma omp parallel for schedule(dynamic, 128) firstprivate(has_init)
-  for (unsigned i = 0; i < query_num; i++) {
+#pragma omp parallel for schedule(dynamic, \
+                                  128) firstprivate(has_init) num_threads(16)
+  for (_u64 i = 0; i < query_num; i++) {
     unsigned val = qcounter.fetch_add(1);
     if (val % 1000 == 0) {
       std::cout << "Status: " << val << " queries done" << std::endl;
@@ -107,7 +106,7 @@ int main(int argc, char** argv) {
     if (!has_init) {
 #pragma omp critical
       {
-        index.graph_reader.register_thread();
+        index.reader.register_thread();
         std::cout << "Init complete for thread-" << omp_get_thread_num()
                   << std::endl;
         has_init = true;
@@ -116,8 +115,9 @@ int main(int argc, char** argv) {
     std::vector<unsigned>& query_res = res[i];
 
     auto before = std::chrono::high_resolution_clock::now();
-    auto ret = index.CachedBeamSearch(query_load + i * query_dim, nullptr, K,
-                                      paras, query_res.data(), beam_width);
+    auto ret = index.cached_beam_search(query_load + i * aligned_dim, k_search,
+                                        l_search, query_res.data(), beam_width,
+                                        stats + i);
     auto diff_time = std::chrono::high_resolution_clock::now() - before;
     auto diff_micros =
         std::chrono::duration_cast<std::chrono::microseconds>(diff_time);
@@ -143,7 +143,29 @@ int main(int argc, char** argv) {
             << "micros" << std::endl
             << "QPS: " << (float) query_num / diff.count() << std::endl;
 
-  save_result(argv[8], res);
+  efanna2e::percentile_stats(
+      stats, query_num, "Total us / query", "us",
+      [](const efanna2e::QueryStats& stats) { return stats.total_us; });
+  efanna2e::percentile_stats(
+      stats, query_num, "Total I/O us / query", "us",
+      [](const efanna2e::QueryStats& stats) { return stats.io_us; });
+  efanna2e::percentile_stats(
+      stats, query_num, "Total # I/O requests / query", "",
+      [](const efanna2e::QueryStats& stats) { return stats.n_ios; });
+  efanna2e::percentile_stats(
+      stats, query_num, "Total # 4kB requests / query", "",
+      [](const efanna2e::QueryStats& stats) { return stats.n_4k; });
+  efanna2e::percentile_stats(
+      stats, query_num, "Total # 8kB requests / query", "",
+      [](const efanna2e::QueryStats& stats) { return stats.n_8k; });
+  efanna2e::percentile_stats(
+      stats, query_num, "Total # 12kB requests / query", "",
+      [](const efanna2e::QueryStats& stats) { return stats.n_12k; });
+  efanna2e::percentile_stats(
+      stats, query_num, "Read Size / query", "",
+      [](const efanna2e::QueryStats& stats) { return stats.read_size; });
+
+  save_result(argv[5], res);
 
   return 0;
 }

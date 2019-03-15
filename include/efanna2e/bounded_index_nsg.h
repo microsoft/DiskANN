@@ -1,0 +1,105 @@
+#pragma once
+
+#include <cassert>
+#include <sstream>
+#include <stack>
+#include <string>
+#include <unordered_map>
+#include "index.h"
+#include "neighbor.h"
+#include "parameters.h"
+#include "tsl/robin_set.h"
+#include "util.h"
+
+namespace efanna2e {
+
+  class BoundedIndexNSG : public Index {
+   public:
+    explicit BoundedIndexNSG(const size_t dimension, const size_t n, Metric m,
+                             Index *initializer);
+
+    virtual ~BoundedIndexNSG();
+
+    virtual void Save(const char *filename) override;
+    virtual void Load(const char *filename) override;
+
+    virtual void Build(size_t n, const float *data,
+                       const Parameters &parameters) override;
+
+    virtual std::pair<int, int> Search(const float *query, const float *x,
+                                       size_t k, const Parameters &parameters,
+                                       unsigned *  indices,
+                                       QueryStats *stats = nullptr) override;
+
+    void populate_start_points_bfs();
+
+    virtual std::pair<int, int> BeamSearch(
+        const float *query, const float *x, size_t k,
+        const Parameters &parameters, unsigned *indices, int beam_width,
+        QueryStats *stats = nullptr) override;
+
+    unsigned long long int SearchWithOptGraph(const float *query, size_t K,
+                                              const Parameters &parameters,
+                                              unsigned *        indices);
+    void OptimizeGraph(float *data);
+
+   protected:
+    typedef std::vector<std::vector<unsigned>> CompactGraph;
+    typedef std::vector<SimpleNeighbors>       LockGraph;
+    typedef std::vector<nhood>                 KNNGraph;
+
+    CompactGraph final_graph_;
+
+    Index *initializer_;
+    // version supplied by authors
+    void init_graph(const Parameters &parameters);
+    // brute-force centroid + all-to-centroid distance computation
+    void init_graph_bf(const Parameters &parameters);
+    void get_neighbors(const float *query, const Parameters &parameter,
+                       std::vector<Neighbor> &retset,
+                       std::vector<Neighbor> &fullset);
+    void get_neighbors(const float *query, const Parameters &parameter,
+                       tsl::robin_set<unsigned> &visited,
+                       std::vector<Neighbor> &   retset,
+                       std::vector<Neighbor> &   fullset);
+
+    // void add_cnn(unsigned des, Neighbor p, unsigned range, LockGraph&
+    // cut_graph_);
+
+    typedef std::vector<SimpleNeighbor> vecNgh;
+    void InterInsert(unsigned n, unsigned range, std::vector<std::mutex> &locks,
+                     const Parameters &parameter, vecNgh *cut_graph_);
+    void sync_prune(unsigned q, std::vector<Neighbor> &pool,
+                    const Parameters &        parameter,
+                    tsl::robin_set<unsigned> &visited, vecNgh *cut_graph_);
+    void Link(const Parameters &parameters, vecNgh *cut_graph_);
+
+    void tree_grow(const Parameters &parameter);
+    void DFS(tsl::robin_set<unsigned> &visited, unsigned root, unsigned &cnt);
+    void findroot(tsl::robin_set<unsigned> &visited, unsigned &root,
+                  const Parameters &parameter);
+    void reachable_bfs(const unsigned                         start_node,
+                       std::vector<tsl::robin_set<unsigned>> &bfs_order,
+                       bool *                                 visited);
+
+   private:
+    unsigned                width;
+    unsigned                ep_;
+    std::vector<std::mutex> locks;
+    char *                  opt_graph_;
+    size_t                  node_size;
+    size_t                  data_len;
+    size_t                  neighbor_len;
+    KNNGraph                nnd_graph;
+    std::vector<unsigned>   start_points;
+
+    // composite nsg
+    unsigned **nsg = nullptr;
+    float **   nsg_dists = nullptr;
+    uint64_t * nnbrs = nullptr;
+
+    // underlying bufs for composite nsg
+    unsigned *base_nsg = nullptr;
+    float *   base_nsg_dists = nullptr;
+  };
+}

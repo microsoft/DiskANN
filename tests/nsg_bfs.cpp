@@ -1,8 +1,8 @@
+#include <algorithm>
 #include <cassert>
 #include <fstream>
 #include <iostream>
 #include <vector>
-#include <algorithm>
 #include "tsl/robin_map.h"
 #include "tsl/robin_set.h"
 
@@ -20,7 +20,7 @@ void load_nsg(const char *filename, VecVec &graph, unsigned &width,
     unsigned k;
     in.read((char *) &k, sizeof(unsigned));
     assert(k <= width);
-    if(k == 0){
+    if (k == 0) {
       std::cerr << "Detached node - id= " << graph.size() << std::endl;
     }
     if (in.eof())
@@ -32,7 +32,8 @@ void load_nsg(const char *filename, VecVec &graph, unsigned &width,
   std::cout << "Total #nodes = " << graph.size() << std::endl;
 }
 
-void nsg_bfs(const VecVec &nsg, const unsigned start_node, VecSet *bfs_order, bool* visited) {
+void nsg_bfs(const VecVec &nsg, const unsigned start_node, VecSet *bfs_order,
+             bool *visited) {
   tsl::robin_set<unsigned> *cur_level = new tsl::robin_set<unsigned>();
   tsl::robin_set<unsigned> *prev_level = new tsl::robin_set<unsigned>();
   prev_level->insert(start_node);
@@ -46,7 +47,7 @@ void nsg_bfs(const VecVec &nsg, const unsigned start_node, VecSet *bfs_order, bo
     // select candidates
     for (auto id : *prev_level) {
       for (const auto &nbr : nsg[id]) {
-        if(nbr >= nsg_size){
+        if (nbr >= nsg_size) {
           std::cerr << "invalid" << std::endl;
         }
         if (!visited[nbr]) {
@@ -100,26 +101,26 @@ int main(int argc, char **argv) {
     exit(-1);
   }
 
-  VecVec   nsg;
-  tsl::robin_map<unsigned, VecSet*>   bfs_orders;
+  VecVec nsg;
+  tsl::robin_map<unsigned, VecSet *> bfs_orders;
 
   unsigned ep_, width;
   load_nsg(argv[1], nsg, width, ep_);
   std::cout << "nsg.size() = " << nsg.size() << std::endl;
-  bool* visited = new bool[nsg.size()]();
+  bool *visited = new bool[nsg.size()]();
   std::fill(visited, visited + nsg.size(), false);
 
   unsigned start_node = ep_;
-  bool complete = false;
-  while(!complete){
+  bool     complete = false;
+  while (!complete) {
     VecSet *bfs_order = new VecSet();
     std::cout << "Start node: " << start_node << std::endl;
     nsg_bfs(nsg, start_node, bfs_order, visited);
     bfs_orders.insert(std::make_pair(start_node, bfs_order));
 
     complete = true;
-    for(unsigned idx = 0; idx < nsg.size(); idx++){
-      if (!visited[idx]){
+    for (unsigned idx = 0; idx < nsg.size(); idx++) {
+      if (!visited[idx]) {
         complete = false;
         start_node = idx;
         break;
@@ -127,12 +128,12 @@ int main(int argc, char **argv) {
     }
   }
 
-  for(auto &k_v : bfs_orders){
+  for (auto &k_v : bfs_orders) {
     std::cout << "Start node: " << k_v.first << std::endl;
     average_degree(nsg, *k_v.second);
   }
 
-  for(auto &k_v : bfs_orders){
+  for (auto &k_v : bfs_orders) {
     delete bfs_orders[k_v.first];
   }
   delete[] visited;
