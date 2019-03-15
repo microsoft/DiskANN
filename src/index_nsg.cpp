@@ -86,6 +86,10 @@ namespace efanna2e {
 
   void IndexNSG::LoadSmallIndex(const char *filename, std::vector<unsigned>& picked) {
 	  std::ifstream in(std::string(filename) + ".small", std::ios::binary);
+    if (in.fail()) {
+      std::cerr << "Small Index file: " << std::string(filename) << ".small not found." << std::endl;
+      exit(-1);
+    }
 
 	  in.read((char*)&(this->nd_), sizeof(size_t));
 	  in.read((char*)&(this->ep_), sizeof(unsigned));
