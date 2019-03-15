@@ -139,8 +139,8 @@ namespace efanna2e {
       final_graph_.push_back(tmp);
 
       if(nodes % 5000000 == 0)
-	std::cout << "Loaded " << nodes << " nodes, and "
-		  << cc << " neighbors" << std::endl;
+        std::cout << "Loaded " << nodes << " nodes, and "
+        << cc << " neighbors" << std::endl;
     }
     cc /= nd_;
     // std::cout<<cc<<std::endl;
@@ -309,10 +309,10 @@ namespace efanna2e {
 
   void IndexNSG::get_neighbors(const float *query,
                                const Parameters &parameter,
-	                           std::vector<Neighbor>& retset,
-	                           std::vector<Neighbor>& fullset,
+	                             std::vector<Neighbor>& retset,
+	                             std::vector<Neighbor>& fullset,
                                tsl::robin_set<unsigned>& visited,
-	                           const std::vector<unsigned>& start_points)
+	                             const std::vector<unsigned>& start_points)
   {
 	  const unsigned L = parameter.Get<unsigned>("L");
 
@@ -737,13 +737,9 @@ namespace efanna2e {
           small_index.GetDataset(), smallK, small_params, res);
         for (unsigned r = 0; r < smallK; ++r)
           start_points.push_back(picked_pts[res[r]]);
-
-        if (n%1000 == 0)
-        {
-          auto ds = distance_->compare(data_ + dimension_ * n, data_ + dimension_ * ep_, dimension_);
-          auto dres = distance_->compare(data_ + dimension_ * n, data_ + dimension_ * picked_pts[res[0]], dimension_);
-          std::cout << "q to start: " << ds << "  q to res: " << dres << std::endl;
-        }
+        
+        assert(distance_->compare(data_ + dimension_ * n, data_ + dimension_ * ep_, dimension_)
+          >= distance_->compare(data_ + dimension_ * n, data_ + dimension_ * picked_pts[res[0]], dimension_));
 
         get_neighbors(data_ + (size_t)dimension_ * n, parameters, tmp, pool, visited, start_points);
         sync_prune(n, pool, parameters, visited, cut_graph_);
