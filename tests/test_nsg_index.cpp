@@ -29,7 +29,7 @@ void load_data(char* filename, float*& data, unsigned& num,
 }
 int main(int argc, char** argv) {
   if (argc !=9) {
-    std::cout << argv[0] << "format: data_file nn_graph_path L R C save_graph_file alpha (set to 1 if you dont know) is_nsg (set to 0 if running on efanna)"
+    std::cout << argv[0] << "<index> data_file nn_graph L R C nsg_output alpha<1 if you dont know> is_nsg<0 on efanna>"
               << std::endl;
     exit(-1);
   }
