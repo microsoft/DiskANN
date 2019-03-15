@@ -737,6 +737,14 @@ namespace efanna2e {
           small_index.GetDataset(), smallK, small_params, res);
         for (unsigned r = 0; r < smallK; ++r)
           start_points.push_back(picked_pts[res[r]]);
+
+        if (n%1000 == 0)
+        {
+          auto ds = distance_->compare(data_ + dimension_ * n, data_ + dimension_ * ep_, dimension_);
+          auto dres = distance_->compare(data_ + dimension_ * n, data_ + dimension_ * picked_pts[res[0]], dimension_);
+          std::cout << "q to start: " << ds << "  q to res: " << dres << std::endl;
+        }
+
         get_neighbors(data_ + (size_t)dimension_ * n, parameters, tmp, pool, visited, start_points);
         sync_prune(n, pool, parameters, visited, cut_graph_);
       }
