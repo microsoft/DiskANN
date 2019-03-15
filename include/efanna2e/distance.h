@@ -8,7 +8,7 @@
 #include <efanna2e/util.h>
 #include <x86intrin.h>
 #include <iostream>
-namespace efanna2e {
+namespace NSG {
   enum Metric { L2 = 0, INNER_PRODUCT = 1, FAST_L2 = 2, PQ = 3 };
   class Distance {
    public:

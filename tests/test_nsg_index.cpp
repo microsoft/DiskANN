@@ -44,11 +44,11 @@ int main(int argc, char** argv) {
   load_data(argv[1], data_load, points_num, dim);
   std::cout << "Data loaded" << std::endl;
 
-  data_load = efanna2e::data_align(data_load, points_num, dim);
-  efanna2e::IndexNSG index(dim, points_num, efanna2e::L2, nullptr);
+  data_load = NSG::data_align(data_load, points_num, dim);
+  NSG::IndexNSG index(dim, points_num, NSG::L2, nullptr);
 
-  auto                 s = std::chrono::high_resolution_clock::now();
-  efanna2e::Parameters paras;
+  auto            s = std::chrono::high_resolution_clock::now();
+  NSG::Parameters paras;
   paras.Set<unsigned>("L", L);
   paras.Set<unsigned>("R", R);
   paras.Set<unsigned>("C", C);

@@ -8,6 +8,10 @@
 #include <efanna2e/index_nsg.h>
 #include <efanna2e/util.h>
 
+// Include Efanna for NNDescent
+//#include <efanna2e/index_graph.h>
+//#include <efanna2e/index_random.h>
+
 void load_data(char* filename, float*& data, unsigned& num,
                unsigned& dim) {  // load data with sift10K pattern
   std::ifstream in(filename, std::ios::binary);
@@ -84,14 +88,27 @@ int main(int argc, char** argv) {
               picked_pts);  // Sample and copy before
   std::cout << "Data sampled" << std::endl;
 
-  data_load = efanna2e::data_align(data_load, points_num, dim);
-  data_sampled = efanna2e::data_align(data_sampled, NS, dim);
+  data_load = NSG::data_align(data_load, points_num, dim);
+  data_sampled = NSG::data_align(data_sampled, NS, dim);
   std::cout << "File data and sample data aligned" << std::endl;
 
-  efanna2e::IndexNSG small_index(dim, NS, efanna2e::L2, nullptr);
+  /*{
+    NSG::Parameters ef_paras;
+    paras.Set<unsigned>("K", 50);
+    paras.Set<unsigned>("L", 100);
+    paras.Set<unsigned>("iter", 4);
+    paras.Set<unsigned>("S", 20);
+    paras.Set<unsigned>("R", 200);
+    NSG::IndexRandom init_index(dim, NS);
+    NSG::IndexGraph  index(dim, NS, NSG::L2,
+                               (NSG::Index*) (&init_index));
+    index.Build(NS, data_sampled, ef_paras);
+  }*/
+
+  NSG::IndexNSG small_index(dim, NS, NSG::L2, nullptr);
   {
-    auto                 s = std::chrono::high_resolution_clock::now();
-    efanna2e::Parameters paras;
+    auto            s = std::chrono::high_resolution_clock::now();
+    NSG::Parameters paras;
     paras.Set<unsigned>("L", L / 2);
     paras.Set<unsigned>("R", R / 2);
     paras.Set<unsigned>("C", C / 4);
@@ -104,10 +121,10 @@ int main(int argc, char** argv) {
   }
   small_index.SaveSmallIndex(argv[8], picked_pts);
 
-  efanna2e::IndexNSG index(dim, points_num, efanna2e::L2, nullptr);
+  NSG::IndexNSG index(dim, points_num, NSG::L2, nullptr);
   {
-    auto                 s = std::chrono::high_resolution_clock::now();
-    efanna2e::Parameters paras;
+    auto            s = std::chrono::high_resolution_clock::now();
+    NSG::Parameters paras;
     paras.Set<unsigned>("L", L);
     paras.Set<unsigned>("R", R);
     paras.Set<unsigned>("C", C);

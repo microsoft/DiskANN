@@ -67,11 +67,11 @@ int main(int argc, char** argv) {
   // data_load = efanna2e::data_align(data_load, points_num, dim);//one must
   // align the data before build query_load = efanna2e::data_align(query_load,
   // query_num, query_dim);
-  efanna2e::IndexNSG index(dim, points_num, efanna2e::FAST_L2, nullptr);
+  NSG::IndexNSG index(dim, points_num, NSG::FAST_L2, nullptr);
   index.Load(argv[3]);
   index.OptimizeGraph(data_load);
 
-  efanna2e::Parameters paras;
+  NSG::Parameters paras;
   paras.Set<unsigned>("L_search", L);
   paras.Set<unsigned>("P_search", L);
   unsigned long long int dist_comp = 0;

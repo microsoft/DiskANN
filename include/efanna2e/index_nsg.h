@@ -12,7 +12,7 @@
 #include "tsl/robin_set.h"
 #include "util.h"
 
-namespace efanna2e {
+namespace NSG {
   class IndexNSG : public Index {
    public:
     explicit IndexNSG(const size_t dimension, const size_t n, Metric m,

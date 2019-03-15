@@ -17,7 +17,7 @@
 #include <unistd.h>
 #include <cassert>
 
-namespace efanna2e {
+namespace NSG {
 #define _CONTROL_NUM 100
 #define MAX_START_POINTS 100
 

@@ -12,7 +12,7 @@
 #include <vector>
 #include "efanna2e/util.h"
 
-namespace efanna2e {
+namespace NSG {
 
   struct Neighbor {
     unsigned id;

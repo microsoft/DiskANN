@@ -63,11 +63,11 @@ int main(int argc, char** argv) {
   float*   data_load = NULL;
   unsigned points_num, dim;
   // load_data(argv[1], data_load, points_num, dim);
-  efanna2e::load_Tvecs<float>(argv[1], data_load, points_num, dim);
+  NSG::load_Tvecs<float>(argv[1], data_load, points_num, dim);
   float*   query_load = NULL;
   unsigned query_num, query_dim;
   // load_data(argv[2], query_load, query_num, query_dim);
-  efanna2e::load_Tvecs<float>(argv[2], query_load, query_num, query_dim);
+  NSG::load_Tvecs<float>(argv[2], query_load, query_num, query_dim);
   assert(dim == query_dim);
   std::cout << "Base and query data loaded" << std::endl;
 
@@ -81,11 +81,11 @@ int main(int argc, char** argv) {
     exit(-1);
   }
 
-  data_load = efanna2e::data_align(data_load, points_num, dim);
-  query_load = efanna2e::data_align(query_load, query_num, query_dim);
+  data_load = NSG::data_align(data_load, points_num, dim);
+  query_load = NSG::data_align(query_load, query_num, query_dim);
   std::cout << "Data Aligned" << std::endl;
 
-  efanna2e::IndexNSG index(dim, points_num, efanna2e::L2, nullptr);
+  NSG::IndexNSG index(dim, points_num, NSG::L2, nullptr);
   if (nsg_check == 1)
     index.Load(argv[3]);  // to load NSG
   else {
@@ -103,7 +103,7 @@ int main(int argc, char** argv) {
   //  std::cout << "Initialized starting points based on BFS" << std::endl;
   ravi-coomment */
 
-  efanna2e::Parameters paras;
+  NSG::Parameters paras;
   paras.Set<unsigned>("L_search", L);
   paras.Set<unsigned>("P_search", L);
 

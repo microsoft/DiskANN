@@ -198,7 +198,7 @@ void templated_load(const char *filename, void *&ptr, _u64 &npts, _u64 &ndims,
   if (format == "bin") {
     if (type == "int8") {
       int8_t *local_ptr = nullptr;
-      efanna2e::load_bin<int8_t>(filename, local_ptr, npts_u32, ndims_u32);
+      NSG::load_bin<int8_t>(filename, local_ptr, npts_u32, ndims_u32);
       ptr = (void *) local_ptr;
       npts = (_u64) npts_u32;
       ndims = (_u64) ndims_u32;
@@ -206,7 +206,7 @@ void templated_load(const char *filename, void *&ptr, _u64 &npts, _u64 &ndims,
       uint8_t *local_ptr = nullptr;
       unsigned npts_u32;
       unsigned ndims_u32;
-      efanna2e::load_bin<uint8_t>(filename, local_ptr, npts_u32, ndims_u32);
+      NSG::load_bin<uint8_t>(filename, local_ptr, npts_u32, ndims_u32);
       ptr = (void *) local_ptr;
       npts = (_u64) npts_u32;
       ndims = (_u64) ndims_u32;
@@ -214,7 +214,7 @@ void templated_load(const char *filename, void *&ptr, _u64 &npts, _u64 &ndims,
       int16_t *local_ptr = nullptr;
       unsigned npts_u32;
       unsigned ndims_u32;
-      efanna2e::load_bin<int16_t>(filename, local_ptr, npts_u32, ndims_u32);
+      NSG::load_bin<int16_t>(filename, local_ptr, npts_u32, ndims_u32);
       ptr = (void *) local_ptr;
       npts = (_u64) npts_u32;
       ndims = (_u64) ndims_u32;
@@ -222,7 +222,7 @@ void templated_load(const char *filename, void *&ptr, _u64 &npts, _u64 &ndims,
       float *  local_ptr = nullptr;
       unsigned npts_u32;
       unsigned ndims_u32;
-      efanna2e::load_bin<float>(filename, local_ptr, npts_u32, ndims_u32);
+      NSG::load_bin<float>(filename, local_ptr, npts_u32, ndims_u32);
       ptr = (void *) local_ptr;
       npts = (_u64) npts_u32;
       ndims = (_u64) ndims_u32;
@@ -233,7 +233,7 @@ void templated_load(const char *filename, void *&ptr, _u64 &npts, _u64 &ndims,
   } else if (format == "fvecs") {
     if (type == "int8") {
       int8_t *local_ptr = nullptr;
-      efanna2e::load_Tvecs<int8_t>(filename, local_ptr, npts_u32, ndims_u32);
+      NSG::load_Tvecs<int8_t>(filename, local_ptr, npts_u32, ndims_u32);
       ptr = (void *) local_ptr;
       npts = (_u64) npts_u32;
       ndims = (_u64) ndims_u32;
@@ -241,7 +241,7 @@ void templated_load(const char *filename, void *&ptr, _u64 &npts, _u64 &ndims,
       uint8_t *local_ptr = nullptr;
       unsigned npts_u32;
       unsigned ndims_u32;
-      efanna2e::load_Tvecs<uint8_t>(filename, local_ptr, npts_u32, ndims_u32);
+      NSG::load_Tvecs<uint8_t>(filename, local_ptr, npts_u32, ndims_u32);
       ptr = (void *) local_ptr;
       npts = (_u64) npts_u32;
       ndims = (_u64) ndims_u32;
@@ -249,7 +249,7 @@ void templated_load(const char *filename, void *&ptr, _u64 &npts, _u64 &ndims,
       int16_t *local_ptr = nullptr;
       unsigned npts_u32;
       unsigned ndims_u32;
-      efanna2e::load_Tvecs<int16_t>(filename, local_ptr, npts_u32, ndims_u32);
+      NSG::load_Tvecs<int16_t>(filename, local_ptr, npts_u32, ndims_u32);
       ptr = (void *) local_ptr;
       npts = (_u64) npts_u32;
       ndims = (_u64) ndims_u32;
@@ -257,7 +257,7 @@ void templated_load(const char *filename, void *&ptr, _u64 &npts, _u64 &ndims,
       float *  local_ptr = nullptr;
       unsigned npts_u32;
       unsigned ndims_u32;
-      efanna2e::load_Tvecs<float>(filename, local_ptr, npts_u32, ndims_u32);
+      NSG::load_Tvecs<float>(filename, local_ptr, npts_u32, ndims_u32);
       ptr = (void *) local_ptr;
       npts = (_u64) npts_u32;
       ndims = (_u64) ndims_u32;

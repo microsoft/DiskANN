@@ -40,7 +40,7 @@ typedef int16_t  _s16;
 typedef uint8_t  _u8;
 typedef int8_t   _s8;
 
-namespace efanna2e {
+namespace NSG {
 
   static void GenRandom(std::mt19937 &rng, unsigned *addr, unsigned size,
                         unsigned N) {

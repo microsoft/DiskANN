@@ -17,7 +17,7 @@ size_t   num;
 unsigned dimension_;
 //#define EFANNA_NOT_SORTED 0
 
-efanna2e::Distance* distance_ = new efanna2e::DistanceL2;
+NSG::Distance* distance_ = new NSG::DistanceL2;
 
 typedef std::vector<std::vector<unsigned>> CompactGraph2;
 
@@ -111,13 +111,13 @@ void Load_and_truncate_nn_graph(const char*    filename,
     std::memcpy(final_graph_[i].data(), reader + sizeof(unsigned),
                 k * sizeof(unsigned));
 
-    std::vector<efanna2e::Neighbor> pool;
+    std::vector<NSG::Neighbor> pool;
     for (unsigned nn = 0; nn < final_graph_[i].size(); nn++) {
       unsigned id = final_graph_[i][nn];
       float    dist = distance_->compare(data_ + dimension_ * (size_t) i,
                                       data_ + dimension_ * (size_t) id,
                                       (unsigned) dimension_);
-      pool.push_back(efanna2e::Neighbor(id, dist, true));
+      pool.push_back(NSG::Neighbor(id, dist, true));
     }
 
     std::sort(pool.begin(), pool.end());
@@ -205,11 +205,11 @@ int main(int argc, char** argv) {
   Load_and_truncate_nn_graph(nn_graph_path.c_str(), final_graph_, k, d_nn,
                              d_rnd);
 
-  //  data_load = efanna2e::data_align(data_load, points_num, dim);//one must
+  //  data_load = NSG::data_align(data_load, points_num, dim);//one must
   // align the data before build
-  //  efanna2e::IndexNSG index(dim, points_num, efanna2e::L2, nullptr);
+  //  NSG::IndexNSG index(dim, points_num, NSG::L2, nullptr);
 
-  //  efanna2e::Parameters paras;
+  //  NSG::Parameters paras;
   //  paras.Set<unsigned>("L", L);
   //  paras.Set<unsigned>("R", R);
   //  paras.Set<unsigned>("C", C);

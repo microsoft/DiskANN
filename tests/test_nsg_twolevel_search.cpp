@@ -47,11 +47,11 @@ int main(int argc, char** argv) {
   float*   data_load = NULL;
   unsigned points_num, dim;
   // load_data(argv[1], data_load, points_num, dim);
-  efanna2e::load_Tvecs<float>(argv[1], data_load, points_num, dim);
+  NSG::load_Tvecs<float>(argv[1], data_load, points_num, dim);
   float*   query_load = NULL;
   unsigned query_num, query_dim;
   // load_data(argv[2], query_load, query_num, query_dim);
-  efanna2e::load_Tvecs<float>(argv[2], query_load, query_num, query_dim);
+  NSG::load_Tvecs<float>(argv[2], query_load, query_num, query_dim);
   assert(dim == query_dim);
   std::cout << "Base and query data loaded" << std::endl;
 
@@ -64,12 +64,12 @@ int main(int argc, char** argv) {
     exit(-1);
   }
 
-  data_load = efanna2e::data_align(data_load, points_num, dim);
-  query_load = efanna2e::data_align(query_load, query_num, query_dim);
+  data_load = NSG::data_align(data_load, points_num, dim);
+  query_load = NSG::data_align(query_load, query_num, query_dim);
   std::cout << "Data Aligned" << std::endl;
 
   std::vector<unsigned> picked;
-  efanna2e::IndexNSG    small_index(dim, 0, efanna2e::L2, nullptr);
+  NSG::IndexNSG         small_index(dim, 0, NSG::L2, nullptr);
   small_index.LoadSmallIndex(argv[3], picked);  // to load higher level NSG
   std::cout << "Small idex loaded" << std::endl;
   if (picked.size() != small_index.GetSizeOfDataset()) {
@@ -82,17 +82,17 @@ int main(int argc, char** argv) {
     memcpy((char*) (small_data + (i++) * dim), (char*) (data_load + iter * dim),
            sizeof(float) * dim);
 
-  efanna2e::IndexNSG big_index(dim, points_num, efanna2e::L2, nullptr);
+  NSG::IndexNSG big_index(dim, points_num, NSG::L2, nullptr);
   big_index.Load(argv[3]);  // to load NSG
   std::cout << "Big idex loaded" << std::endl;
   big_index.set_start_node(picked[small_index.get_start_node()]);
 
-  efanna2e::Parameters small_params;
+  NSG::Parameters small_params;
   small_params.Set<unsigned>("L_search", L / 4);
   small_params.Set<unsigned>("P_search", L / 4);
   auto smallK = L / 4;
 
-  efanna2e::Parameters big_params;
+  NSG::Parameters big_params;
   big_params.Set<unsigned>("L_search", L);
   big_params.Set<unsigned>("P_search", L);
 

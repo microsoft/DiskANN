@@ -4,7 +4,7 @@
 // This source code is licensed under the MIT license.
 //
 #include <efanna2e/index.h>
-namespace efanna2e {
+namespace NSG {
   Index::Index(const size_t dimension, const size_t n, Metric metric = L2)
       : dimension_(dimension), nd_(n), has_built(false) {
     switch (metric) {

@@ -9,7 +9,7 @@
 
 #include <stdexcept>
 
-namespace efanna2e {
+namespace NSG {
 
   class NotImplementedException : public std::logic_error {
    public:

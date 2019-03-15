@@ -15,7 +15,7 @@ void thread_fn(uint64_t size, uint64_t qlen, uint64_t filesize, uint64_t niters,
   reader.register_thread();
   std::vector<AlignedRead> reads(qlen);
   for (auto &read_req : reads) {
-    efanna2e::alloc_aligned(&read_req.buf, size, 512);
+    NSG::alloc_aligned(&read_req.buf, size, 512);
     read_req.len = size;
   }
 

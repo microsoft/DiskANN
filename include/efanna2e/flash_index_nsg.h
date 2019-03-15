@@ -11,7 +11,7 @@
 #include "tsl/robin_set.h"
 #include "util.h"
 
-namespace efanna2e {
+namespace NSG {
 
   template<typename T, typename NhoodType>
   class FlashNSG {

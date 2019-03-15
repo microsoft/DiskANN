@@ -10,7 +10,8 @@
 #include <sstream>
 #include <typeinfo>
 #include <unordered_map>
-namespace efanna2e {
+
+namespace NSG {
 
   class Parameters {
    public:

@@ -123,7 +123,7 @@ int main(int argc, char** argv) {
   // read in bin
   _s8* data = nullptr;
   _u32 npts, ndims;
-  efanna2e::load_bin<_s8>(argv[1], data, npts, ndims);
+  NSG::load_bin<_s8>(argv[1], data, npts, ndims);
 
   // compute indices of unqiue points
   std::vector<_u64> unique_idxs;

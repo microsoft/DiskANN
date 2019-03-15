@@ -54,7 +54,7 @@ int main(int argc, char** argv) {
   }
 
   // construct FlashNSGIndex
-  efanna2e::FlashNSG<int8_t, efanna2e::DiskNhood<int8_t>> index;
+  NSG::FlashNSG<int8_t, NSG::DiskNhood<int8_t>> index;
   std::cout << "main --- tid: " << std::this_thread::get_id() << std::endl;
   index.reader.register_thread();
   index.load(argv[1]);
@@ -62,8 +62,7 @@ int main(int argc, char** argv) {
   // load queries
   float*   query_load = NULL;
   unsigned query_num, query_dim;
-  efanna2e::aligned_load_Tvecs<float>(argv[2], query_load, query_num,
-                                      query_dim);
+  NSG::aligned_load_Tvecs<float>(argv[2], query_load, query_num, query_dim);
   std::cout << "query_dim = " << query_dim << std::endl;
   _u64 aligned_dim = ROUND_UP(query_dim, 8);
   assert(aligned_dim == index.aligned_dim);
@@ -80,7 +79,7 @@ int main(int argc, char** argv) {
   index.cache_bfs_levels(cache_nlevels);
 
   // align query data
-  // query_load = efanna2e::data_align(query_load, query_num, query_dim);
+  // query_load = NSG::data_align(query_load, query_num, query_dim);
 
   auto s = std::chrono::high_resolution_clock::now();
   std::vector<std::vector<unsigned>> res(query_num,
@@ -94,7 +93,7 @@ int main(int argc, char** argv) {
 
   std::atomic_ullong latency;  // In micros.
   latency.store(0.0);
-  efanna2e::QueryStats* stats = new efanna2e::QueryStats[query_num];
+  NSG::QueryStats* stats = new NSG::QueryStats[query_num];
 
 #pragma omp parallel for schedule(dynamic, \
                                   128) firstprivate(has_init) num_threads(16)
@@ -143,27 +142,27 @@ int main(int argc, char** argv) {
             << "micros" << std::endl
             << "QPS: " << (float) query_num / diff.count() << std::endl;
 
-  efanna2e::percentile_stats(
+  NSG::percentile_stats(
       stats, query_num, "Total us / query", "us",
-      [](const efanna2e::QueryStats& stats) { return stats.total_us; });
-  efanna2e::percentile_stats(
+      [](const NSG::QueryStats& stats) { return stats.total_us; });
+  NSG::percentile_stats(
       stats, query_num, "Total I/O us / query", "us",
-      [](const efanna2e::QueryStats& stats) { return stats.io_us; });
-  efanna2e::percentile_stats(
+      [](const NSG::QueryStats& stats) { return stats.io_us; });
+  NSG::percentile_stats(
       stats, query_num, "Total # I/O requests / query", "",
-      [](const efanna2e::QueryStats& stats) { return stats.n_ios; });
-  efanna2e::percentile_stats(
+      [](const NSG::QueryStats& stats) { return stats.n_ios; });
+  NSG::percentile_stats(
       stats, query_num, "Total # 4kB requests / query", "",
-      [](const efanna2e::QueryStats& stats) { return stats.n_4k; });
-  efanna2e::percentile_stats(
+      [](const NSG::QueryStats& stats) { return stats.n_4k; });
+  NSG::percentile_stats(
       stats, query_num, "Total # 8kB requests / query", "",
-      [](const efanna2e::QueryStats& stats) { return stats.n_8k; });
-  efanna2e::percentile_stats(
+      [](const NSG::QueryStats& stats) { return stats.n_8k; });
+  NSG::percentile_stats(
       stats, query_num, "Total # 12kB requests / query", "",
-      [](const efanna2e::QueryStats& stats) { return stats.n_12k; });
-  efanna2e::percentile_stats(
+      [](const NSG::QueryStats& stats) { return stats.n_12k; });
+  NSG::percentile_stats(
       stats, query_num, "Read Size / query", "",
-      [](const efanna2e::QueryStats& stats) { return stats.read_size; });
+      [](const NSG::QueryStats& stats) { return stats.read_size; });
 
   save_result(argv[5], res);
 

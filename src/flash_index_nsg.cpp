@@ -16,7 +16,7 @@
 
 #define SECTOR_LEN 4096
 
-namespace efanna2e {
+namespace NSG {
   template<typename T, typename NhoodType>
   FlashNSG<T, NhoodType>::~FlashNSG() {
     medoid_nhood.cleanup();

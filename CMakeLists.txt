@@ -2,6 +2,7 @@ cmake_minimum_required(VERSION 2.8)
 
 project(efanna2e)
 include_directories(${PROJECT_SOURCE_DIR}/include)
+include_directories(${PROJECT_SOURCE_DIR}/efanna_graph/include)
 
 set(CMAKE_CXX_COMPILER g++)
 set(CMAKE_STANDARD 14)
