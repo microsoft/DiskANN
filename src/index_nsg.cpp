@@ -469,28 +469,25 @@ namespace efanna2e {
   }
 
 
-	void IndexNSG:: init_graph_outside(const float *data)
-{
-	 data_ = data;
+  void IndexNSG::init_graph_outside(const float *data)
+  {
+    data_ = data;
     float *center = new float[dimension_]();
     for (size_t j = 0; j < dimension_; j++)
       center[j] = 0;
-    for (size_t i = 0; i < nd_; i++) {
-      for (size_t j = 0; j < dimension_; j++) {
+    for (size_t i = 0; i < nd_; i++)
+      for (size_t j = 0; j < dimension_; j++)
         center[j] += data_[i * dimension_ + j];
-      }
-    }
-    for (size_t j = 0; j < dimension_; j++) {
+    for (size_t j = 0; j < dimension_; j++)
       center[j] /= nd_;
-    }
 
     // compute all to one distance
-    float * distances = new float[nd_]();
+    auto distances = new float[nd_]();
 #pragma omp parallel for schedule(static, 65536)
     for (size_t i = 0; i < nd_; i++) {
       // extract point and distance reference
       float &      dist = distances[i];
-      const float *cur_vec = data_ + (i * (size_t) dimension_);
+      const float *cur_vec = data_ + (i * (size_t)dimension_);
       dist = 0;
       float diff = 0;
       for (size_t j = 0; j < dimension_; j++) {
@@ -500,7 +497,7 @@ namespace efanna2e {
     }
     // find imin
     size_t min_idx = 0;
-    float  min_dist = distances[0];
+    float min_dist = distances[0];
     for (size_t i = 1; i < nd_; i++) {
       if (distances[i] < min_dist) {
         min_idx = i;
@@ -508,8 +505,9 @@ namespace efanna2e {
       }
     }
     ep_ = min_idx;
+    delete[] distances;
     std::cout << "Medoid index = " << min_idx << std::endl;
-}
+  }
 
   void IndexNSG::init_graph_bf(const Parameters &parameters) {
     // allocate and init centroid
@@ -517,12 +515,9 @@ namespace efanna2e {
     for (size_t j = 0; j < dimension_; j++)
       center[j] = 0;
 
-
-
     for (size_t i = 0; i < nd_; i++)
       for (size_t j = 0; j < dimension_; j++)
         center[j] += data_[i * dimension_ + j];
-
 
     for (size_t j = 0; j < dimension_; j++)
       center[j] /= nd_;
@@ -750,7 +745,7 @@ namespace efanna2e {
 #pragma omp parallel for schedule(static, PAR_BLOCK_SZ)
     for (unsigned n = 0; n < nd_; ++n) {
       InterInsert(n, range, locks, parameters, cut_graph_);
-      if (n % PAR_BLOCK_SZ == 0)
+      if (n % PAR_BLOCK_SZ == PAR_BLOCK_SZ-1)
         std::cout << "InterInsert " << n << std::endl;
     }
     std::cout << "InterInsert completed" << std::endl;
@@ -808,59 +803,74 @@ namespace efanna2e {
 
   
   void IndexNSG::BuildFromSmall(size_t n, const float *data,
-	                              const Parameters &parameters,
-                                IndexNSG& small_index,
-	                              const std::vector<unsigned>& picked_pts) 
+    const Parameters &parameters,
+    IndexNSG& small_index,
+    const std::vector<unsigned>& picked_pts)
   {
     std::string nn_graph_path = parameters.Get<std::string>("nn_graph_path");
     unsigned    range = parameters.Get<unsigned>("R");
     Load_nn_graph(nn_graph_path.c_str());
-    
-	auto cut_graph_ = new vecNgh[nd_];
+
+    auto cut_graph_ = new vecNgh[nd_];
 #pragma omp parallel for
-	for (size_t i = 0; i < nd_; ++i)
-		cut_graph_[i].reserve(range);
-	std::cout << "Memory allocated for NSG graph" << std::endl;
+    for (size_t i = 0; i < nd_; ++i)
+      cut_graph_[i].reserve(range);
+    std::cout << "Memory allocated for NSG graph" << std::endl;
 
     data_ = data;
-	ep_ = picked_pts[small_index.get_start_node()];
+    ep_ = picked_pts[small_index.get_start_node()];
 
-	assert(small_index.has_built);
-	/*{ // Method 1
-		for (size_t i = 0; i < picked_pts.size(); ++i) {
-			auto append = small_index.final_graph_[i];
-			auto p = picked_pts[i];
-			final_graph_[p].insert(final_graph_[p].end(), append.begin(), append.end());
-		}
-		Link(parameters, cut_graph_);
-	}*/
-  { // Method 2
-    LinkFromSmall(parameters, cut_graph_, small_index, picked_pts);
-  }
-    
-	final_graph_.resize(nd_);
+    assert(small_index.has_built);
+    { // Method 1
+      for (size_t i = 0; i < picked_pts.size(); ++i) {
+        auto append = small_index.final_graph_[i];
+        auto p = picked_pts[i];
+        final_graph_[p].insert(final_graph_[p].end(), append.begin(), append.end());
+      }
+      Link(parameters, cut_graph_);
+    }
+    { // Method 2
+      //LinkFromSmall(parameters, cut_graph_, small_index, picked_pts);
+    }
+
+    final_graph_.resize(nd_);
 #pragma omp parallel for
     for (size_t i = 0; i < nd_; i++) {
-	  final_graph_[i].clear();
+      final_graph_[i].clear();
       final_graph_[i].reserve(cut_graph_[i].size());
       for (auto iter : cut_graph_[i])
         final_graph_[i].push_back(iter.id);
     }
 
-	size_t max = 0, min = 1 << 30, total = 0, cnt = 0;
-	for (size_t i = 0; i < nd_; i++) {
-		vecNgh& pool = cut_graph_[i];
-		max = std::max(max, pool.size());
-		min = std::min(min, pool.size());
-		total += pool.size();
-		if (pool.size() < 2) cnt++;
-	}
-    std::cout << "Degree: max:" << max << "  avg:" << (float)total/(float)nd_
-	      << "  min:" << min << "  count(deg<2):" << cnt << "\n";
+    {
+      bool *visited = new bool[nd_];
+      std::vector<tsl::robin_set<unsigned>> bfs_order;
+      reachable_bfs(ep_, bfs_order, visited);
+      delete[] visited;
+
+      for (auto lvl : bfs_order) {
+        unsigned count = 0;
+        for (auto p : picked_pts)
+          if (lvl.find(p) != lvl.end())
+            count++;
+        std::cout << "#pts of small index at BFS level " << count << std::endl;
+      }
+    }
+
+    size_t max = 0, min = 1 << 30, total = 0, cnt = 0;
+    for (size_t i = 0; i < nd_; i++) {
+      vecNgh& pool = cut_graph_[i];
+      max = std::max(max, pool.size());
+      min = std::min(min, pool.size());
+      total += pool.size();
+      if (pool.size() < 2) cnt++;
+    }
+    std::cout << "Degree: max:" << max << "  avg:" << (float)total / (float)nd_
+      << "  min:" << min << "  count(deg<2):" << cnt << "\n";
 
     width = std::max((unsigned)max, width);
     has_built = true;
-	delete[] cut_graph_;
+    delete[] cut_graph_;
   }
 
   void IndexNSG::Build(size_t n, const float *data,
