@@ -704,7 +704,7 @@ namespace efanna2e {
 #pragma omp parallel for schedule(static, PAR_BLOCK_SZ)
     for (unsigned n = 0; n < nd_; ++n) {
       InterInsert(n, range, locks, parameters, cut_graph_);
-      if (n % PAR_BLOCK_SZ == 0)
+      if (n % PAR_BLOCK_SZ == PAR_BLOCK_SZ-1)
         std::cout << "InterInsert " << n << std::endl;
     }
     std::cout << "InterInsert completed" << std::endl;
