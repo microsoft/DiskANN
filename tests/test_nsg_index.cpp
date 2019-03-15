@@ -29,31 +29,23 @@ void load_data(char* filename, float*& data, unsigned& num,
 }
 int main(int argc, char** argv) {
   if (argc !=9) {
-    std::cout << argv[0] << "<index> data_file nn_graph L R C nsg_output alpha<1 if you dont know> is_nsg<0 on efanna>"
-              << std::endl;
+    std::cout << argv[0] << "<index> data_file nn_graph L R C nsg_output "
+      << "alpha<1 if you dont know> is_nsg<0 on efanna>" << std::endl;
     exit(-1);
   }
-//  float alpha;
-//  if (argc == 7)
-//	  alpha = 1;
-//  else
-//	  alpha = (float) atof(argv[7]);
-  bool is_nsg = (bool) std::atoi(argv[8]);
-
-  float alpha = (float) std::atof(argv[7]);	
-  float* data_load = NULL;
-  unsigned points_num, dim;
-  load_data(argv[1], data_load, points_num, dim);
-
-  std::cout << "Data loaded" << std::endl;
-  
   std::string nn_graph_path(argv[2]);
   unsigned L = (unsigned)atoi(argv[3]);
   unsigned R = (unsigned)atoi(argv[4]);
   unsigned C = (unsigned)atoi(argv[5]);
-
-  data_load = efanna2e::data_align(data_load, points_num, dim);//one must
-  // align the data before build
+  float alpha = (float)std::atof(argv[7]);
+  bool is_nsg = (bool)std::atoi(argv[8]);
+    
+  float* data_load = NULL;
+  unsigned points_num, dim;
+  load_data(argv[1], data_load, points_num, dim);
+  std::cout << "Data loaded" << std::endl;
+  
+  data_load = efanna2e::data_align(data_load, points_num, dim);
   efanna2e::IndexNSG index(dim, points_num, efanna2e::L2, nullptr);
 
   auto s = std::chrono::high_resolution_clock::now();
