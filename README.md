@@ -90,7 +90,7 @@ Among all the ***graph-based algorithms***, NSG has ***the smallest index size**
 1. Install Dependencies:
 
 ```shell
-$ sudo apt-get install g++ cmake libboost-dev libgoogle-perftools-dev
+$ sudo apt-get install g++ cmake libboost-dev libgoogle-perftools-dev clang-format-4.0
 ```
 
 2. Compile NSG:
