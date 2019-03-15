@@ -715,7 +715,7 @@ namespace efanna2e {
     size_t PAR_BLOCK_SZ = nd_ > 1 << 20 ? 1 << 16 : (nd_ + 16) / 16;
     size_t nblocks = nd_ % PAR_BLOCK_SZ == 0 ? nd_ / PAR_BLOCK_SZ : (nd_ / PAR_BLOCK_SZ) + 1;
 
-    auto smallK = range;
+    auto smallK = range/2;
     auto small_params = parameters;
     small_params.Set<unsigned>("L_search", parameters.Get<unsigned>("L")/2);
 
@@ -821,16 +821,16 @@ namespace efanna2e {
     ep_ = picked_pts[small_index.get_start_node()];
 
     assert(small_index.has_built);
-    { // Method 1
+    /* { // Method 1
       for (size_t i = 0; i < picked_pts.size(); ++i) {
         auto append = small_index.final_graph_[i];
         auto p = picked_pts[i];
         final_graph_[p].insert(final_graph_[p].end(), append.begin(), append.end());
       }
       Link(parameters, cut_graph_);
-    }
+    } */
     { // Method 2
-      //LinkFromSmall(parameters, cut_graph_, small_index, picked_pts);
+      LinkFromSmall(parameters, cut_graph_, small_index, picked_pts);
     }
 
     final_graph_.resize(nd_);
@@ -853,7 +853,7 @@ namespace efanna2e {
         for (auto p : picked_pts)
           if (lvl.find(p) != lvl.end())
             count++;
-        std::cout << "#pts of small index at BFS level " << count << std::endl;
+        std::cout << "#pts of small index at BFS level " << count << "/" << lvl.size() << std::endl;
       }
     }
 
