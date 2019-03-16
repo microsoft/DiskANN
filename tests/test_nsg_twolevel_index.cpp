@@ -129,7 +129,7 @@ int main(int argc, char** argv) {
   {
     NSG::Parameters paras;
     paras.Set<unsigned>("L", L / 2);
-    paras.Set<unsigned>("R", R / 2);
+    paras.Set<unsigned>("R", R);
     paras.Set<unsigned>("C", C / 2);
     paras.Set<float>("alpha", alpha);
     paras.Set<float>("is_nsg", true);
