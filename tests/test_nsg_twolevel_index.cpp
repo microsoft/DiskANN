@@ -11,6 +11,8 @@
 // Include Efanna for NNDescent
 //#include <efanna2e/index_graph.h>
 //#include <efanna2e/index_random.h>
+//#include <efanna2e/util.h>
+//#include <efanna2e/distance.h>
 
 void load_data(char* filename, float*& data, unsigned& num,
                unsigned& dim) {  // load data with sift10K pattern
@@ -93,29 +95,49 @@ int main(int argc, char** argv) {
   std::cout << "File data and sample data aligned" << std::endl;
 
   /*{
-    NSG::Parameters ef_paras;
+    efanna2e::Parameters ef_paras;
     paras.Set<unsigned>("K", 50);
     paras.Set<unsigned>("L", 100);
     paras.Set<unsigned>("iter", 4);
     paras.Set<unsigned>("S", 20);
     paras.Set<unsigned>("R", 200);
-    NSG::IndexRandom init_index(dim, NS);
-    NSG::IndexGraph  index(dim, NS, NSG::L2,
-                               (NSG::Index*) (&init_index));
+    efanna2e::IndexRandom init_index(dim, NS);
+    efanna2e::IndexGraph  index(dim, NS, efanna2e::L2,
+                               (efanna2e::Index*) (&init_index));
     index.Build(NS, data_sampled, ef_paras);
   }*/
 
-  NSG::IndexNSG small_index(dim, NS, NSG::L2, nullptr);
+   
+  NSG::IndexNSG rand_index(dim, NS, NSG::L2, nullptr);
   {
     auto            s = std::chrono::high_resolution_clock::now();
     NSG::Parameters paras;
     paras.Set<unsigned>("L", L / 2);
-    paras.Set<unsigned>("R", R / 2);
-    paras.Set<unsigned>("C", C / 4);
+    paras.Set<unsigned>("R", R);
+    paras.Set<unsigned>("C", C / 2);
     paras.Set<float>("alpha", alpha);
-    std::cout << "Params set. Build start..." << std::endl;
-    small_index.BuildFromER(NS, NR, data_sampled, paras);
-    auto                          e = std::chrono::high_resolution_clock::now();
+    std::cout << "Params set. Rand Build start..." << std::endl;
+    rand_index.BuildFromER(NS, NR, data_sampled, paras);
+    auto e = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double> diff = e - s;
+    std::cout << "Small indexing time: " << diff.count() << std::endl;
+  }
+  std::string rand_index_path = std::string(argv[8]) + std::string(".rand");
+  const char* rand_index_path_c = rand_index_path.c_str();
+  rand_index.Save(rand_index_path_c);
+  
+  NSG::IndexNSG small_index(dim, NS, NSG::L2, nullptr);
+  {
+    NSG::Parameters paras;
+    paras.Set<unsigned>("L", L / 2);
+    paras.Set<unsigned>("R", R);
+    paras.Set<unsigned>("C", C / 2);
+    paras.Set<float>("alpha", alpha);
+    paras.Set<std::string>("nn_graph_path", rand_index_path_c);
+    std::cout << "Params set. Small Build start..." << std::endl;
+    auto s = std::chrono::high_resolution_clock::now();
+    small_index.Build(NS, data_sampled, paras);
+    auto e = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> diff = e - s;
     std::cout << "Small indexing time: " << diff.count() << std::endl;
   }
@@ -123,7 +145,6 @@ int main(int argc, char** argv) {
 
   NSG::IndexNSG index(dim, points_num, NSG::L2, nullptr);
   {
-    auto            s = std::chrono::high_resolution_clock::now();
     NSG::Parameters paras;
     paras.Set<unsigned>("L", L);
     paras.Set<unsigned>("R", R);
@@ -131,8 +152,9 @@ int main(int argc, char** argv) {
     paras.Set<float>("alpha", alpha);
     paras.Set<std::string>("nn_graph_path", nn_graph_path);
     std::cout << "Params set. Build start..." << std::endl;
+    auto s = std::chrono::high_resolution_clock::now();
     index.BuildFromSmall(points_num, data_load, paras, small_index, picked_pts);
-    auto                          e = std::chrono::high_resolution_clock::now();
+    auto e = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> diff = e - s;
     std::cout << "Big indexing time: " << diff.count() << std::endl;
   }
