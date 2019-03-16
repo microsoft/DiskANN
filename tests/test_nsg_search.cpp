@@ -54,9 +54,9 @@ void save_result(char* filename, unsigned* results, unsigned nd, unsigned nr) {
 }
 
 int main(int argc, char** argv) {
-  if (argc != 9) {
+  if (argc != 10) {
     std::cout << argv[0] << " data_file query_file nsg_path search_L search_K "
-                            "result_path BeamWidth nsg=1/efanna=0"
+                            "result_path BeamWidth nsg=1/efanna=0 BFS-init=1/0"
               << std::endl;
     exit(-1);
   }
@@ -75,6 +75,7 @@ int main(int argc, char** argv) {
   unsigned K = (unsigned) atoi(argv[5]);
   int      beam_width = atoi(argv[7]);
   int      nsg_check = atoi(argv[8]);
+  int      bfs_init = atoi(argv[9]);
 
   if (L < K) {
     std::cout << "search_L cannot be smaller than search_K!" << std::endl;
@@ -91,17 +92,16 @@ int main(int argc, char** argv) {
   else {
     index.Load_nn_graph(argv[3]);  // to load EFANNA
 
-    /* ravi-comment
-    //	  index.init_graph_outside(data_load);
-    */
+    // ravi-comment
+    // index.init_graph_outside(data_load);
   }
   std::cout << "Index loaded" << std::endl;
 
   std::vector<unsigned> start_points;
-  /* ravi-comment
-  //  index.populate_start_points_bfs(start_points);
-  //  std::cout << "Initialized starting points based on BFS" << std::endl;
-  ravi-coomment */
+  if (bfs_init) {
+    index.populate_start_points_bfs(start_points);
+    std::cout << "Initialized starting points based on BFS" << std::endl;
+  }
 
   NSG::Parameters paras;
   paras.Set<unsigned>("L_search", L);

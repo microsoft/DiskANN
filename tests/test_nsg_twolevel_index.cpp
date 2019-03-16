@@ -107,7 +107,6 @@ int main(int argc, char** argv) {
     index.Build(NS, data_sampled, ef_paras);
   }*/
 
-   
   NSG::IndexNSG rand_index(dim, NS, NSG::L2, nullptr);
   {
     auto            s = std::chrono::high_resolution_clock::now();
@@ -118,14 +117,14 @@ int main(int argc, char** argv) {
     paras.Set<float>("alpha", alpha);
     std::cout << "Params set. Rand Build start..." << std::endl;
     rand_index.BuildFromER(NS, NR, data_sampled, paras);
-    auto e = std::chrono::high_resolution_clock::now();
+    auto                          e = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> diff = e - s;
     std::cout << "NSG(Rand) time: " << diff.count() << std::endl;
   }
   std::string rand_index_path = std::string(argv[8]) + std::string(".rand");
   const char* rand_index_path_c = rand_index_path.c_str();
   rand_index.Save(rand_index_path_c);
-  
+
   NSG::IndexNSG small_index(dim, NS, NSG::L2, nullptr);
   {
     NSG::Parameters paras;
@@ -138,7 +137,7 @@ int main(int argc, char** argv) {
     std::cout << "Params set. Small Build start..." << std::endl;
     auto s = std::chrono::high_resolution_clock::now();
     small_index.Build(NS, data_sampled, paras);
-    auto e = std::chrono::high_resolution_clock::now();
+    auto                          e = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> diff = e - s;
     std::cout << "NSG(NSG(Rand)) time: " << diff.count() << std::endl;
   }
@@ -155,7 +154,7 @@ int main(int argc, char** argv) {
     std::cout << "Params set. Build start..." << std::endl;
     auto s = std::chrono::high_resolution_clock::now();
     index.BuildFromSmall(points_num, data_load, paras, small_index, picked_pts);
-    auto e = std::chrono::high_resolution_clock::now();
+    auto                          e = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> diff = e - s;
     std::cout << "Big indexing time: " << diff.count() << std::endl;
   }

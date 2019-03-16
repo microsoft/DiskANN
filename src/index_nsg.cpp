@@ -421,7 +421,7 @@ namespace NSG {
     unsigned start_node = ep_;
     bool     complete = false;
     bfs_orders.insert(
-      std::make_pair(start_node, std::vector<tsl::robin_set<unsigned>>()));
+        std::make_pair(start_node, std::vector<tsl::robin_set<unsigned>>()));
     auto &bfs_order = bfs_orders[start_node];
     reachable_bfs(start_node, bfs_order, visited);
 
@@ -856,17 +856,17 @@ namespace NSG {
     ep_ = picked_pts[small_index.get_start_node()];
 
     assert(small_index.has_built);
-    /* { // Method 1
+    {  // Method 1
       for (size_t i = 0; i < picked_pts.size(); ++i) {
         auto append = small_index.final_graph_[i];
         auto p = picked_pts[i];
         final_graph_[p].insert(final_graph_[p].end(), append.begin(),
-    append.end());
+                               append.end());
       }
       Link(parameters, cut_graph_);
-    } */
+    }
     {  // Method 2
-      LinkFromSmall(parameters, cut_graph_, small_index, picked_pts);
+      // LinkFromSmall(parameters, cut_graph_, small_index, picked_pts);
     }
 
     final_graph_.resize(nd_);
