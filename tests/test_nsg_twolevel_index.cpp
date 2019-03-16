@@ -120,7 +120,7 @@ int main(int argc, char** argv) {
     rand_index.BuildFromER(NS, NR, data_sampled, paras);
     auto e = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> diff = e - s;
-    std::cout << "Small indexing time: " << diff.count() << std::endl;
+    std::cout << "NSG(Rand) time: " << diff.count() << std::endl;
   }
   std::string rand_index_path = std::string(argv[8]) + std::string(".rand");
   const char* rand_index_path_c = rand_index_path.c_str();
@@ -133,13 +133,14 @@ int main(int argc, char** argv) {
     paras.Set<unsigned>("R", R);
     paras.Set<unsigned>("C", C / 2);
     paras.Set<float>("alpha", alpha);
+    paras.Set<float>("is_nsg", true);
     paras.Set<std::string>("nn_graph_path", rand_index_path_c);
     std::cout << "Params set. Small Build start..." << std::endl;
     auto s = std::chrono::high_resolution_clock::now();
     small_index.Build(NS, data_sampled, paras);
     auto e = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> diff = e - s;
-    std::cout << "Small indexing time: " << diff.count() << std::endl;
+    std::cout << "NSG(NSG(Rand)) time: " << diff.count() << std::endl;
   }
   small_index.SaveSmallIndex(argv[8], picked_pts);
 
