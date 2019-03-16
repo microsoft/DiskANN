@@ -420,14 +420,21 @@ namespace NSG {
     std::map<unsigned, std::vector<tsl::robin_set<unsigned>>> bfs_orders;
     unsigned start_node = ep_;
     bool     complete = false;
+    bfs_orders.insert(
+      std::make_pair(start_node, std::vector<tsl::robin_set<unsigned>>()));
+    auto &bfs_order = bfs_orders[start_node];
+    reachable_bfs(start_node, bfs_order, visited);
+
+    start_node = 0;
+    std::map<unsigned, std::vector<tsl::robin_set<unsigned>>> other_bfs_orders;
     while (!complete) {
-      bfs_orders.insert(
+      other_bfs_orders.insert(
           std::make_pair(start_node, std::vector<tsl::robin_set<unsigned>>()));
-      auto &bfs_order = bfs_orders[start_node];
-      reachable_bfs(start_node, bfs_order, visited);
+      auto &other_bfs_order = bfs_orders[start_node];
+      reachable_bfs(start_node, other_bfs_order, visited);
 
       complete = true;
-      for (unsigned idx = 0; idx < nd_; idx++) {
+      for (unsigned idx = start_node; idx < nd_; idx++) {
         if (!visited[idx]) {
           complete = false;
           start_node = idx;
