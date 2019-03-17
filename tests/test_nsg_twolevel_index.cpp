@@ -67,7 +67,7 @@ int main(int argc, char** argv) {
               << std::endl;
     exit(-1);
   }
-  float alpha = 1;
+  float alpha = 1.0f;
   if (argc == 11)
     alpha = (float) atof(argv[9]);
 

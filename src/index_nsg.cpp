@@ -623,6 +623,41 @@ namespace NSG {
         result.push_back(p);
     }
 
+    if (alpha > 1.0) {
+      if (result.size() < range / 2) {
+        std::vector<Neighbor> result2;
+        unsigned              start2 = 0;
+        if (pool[start2].id == q)
+          start2++;
+        result2.push_back(pool[start2]);
+        while (result2.size() < range - result.size() &&
+               (++start2) < pool.size() && start2 < maxc) {
+          auto &p = pool[start2];
+          bool  occlude = false;
+          for (unsigned t = 0; t < result2.size(); t++) {
+            if (p.id == result2[t].id) {
+              occlude = true;
+              break;
+            }
+            float djk = distance_->compare(
+                data_ + dimension_ * (size_t) result2[t].id,
+                data_ + dimension_ * (size_t) p.id, (unsigned) dimension_);
+            if (alpha * djk < p.distance /* dik */) {
+              occlude = true;
+              break;
+            }
+          }
+          if (!occlude)
+            result2.push_back(p);
+        }
+        for (unsigned i = 0; i < result2.size(); i++) {
+          result.push_back(result2[i]);
+        }
+        std::set<Neighbor> s(result.begin(), result.end());
+        result.assign(s.begin(), s.end());
+      }
+    }
+
     assert(cut_graph_[q].size() == 0);
     for (auto iter : result)
       cut_graph_[q].push_back(SimpleNeighbor(iter.id, iter.distance));
