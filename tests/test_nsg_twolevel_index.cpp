@@ -111,9 +111,9 @@ int main(int argc, char** argv) {
   {
     auto            s = std::chrono::high_resolution_clock::now();
     NSG::Parameters paras;
-    paras.Set<unsigned>("L", L / 2);
-    paras.Set<unsigned>("R", R / 2);
-    paras.Set<unsigned>("C", C / 2);
+    paras.Set<unsigned>("L", L);
+    paras.Set<unsigned>("R", R);
+    paras.Set<unsigned>("C", C);
     paras.Set<float>("alpha", alpha);
     std::cout << "Params set. Rand Build start..." << std::endl;
     rand_index.BuildFromER(NS, NR, data_sampled, paras);
@@ -126,11 +126,12 @@ int main(int argc, char** argv) {
   rand_index.Save(rand_index_path_c);
 
   NSG::IndexNSG small_index(dim, NS, NSG::L2, nullptr);
+  small_index.set_start_node(rand_index.get_start_node());
   {
     NSG::Parameters paras;
-    paras.Set<unsigned>("L", L / 2);
+    paras.Set<unsigned>("L", L);
     paras.Set<unsigned>("R", R);
-    paras.Set<unsigned>("C", C / 2);
+    paras.Set<unsigned>("C", C);
     paras.Set<float>("alpha", alpha);
     paras.Set<float>("is_nsg", true);
     paras.Set<std::string>("nn_graph_path", rand_index_path_c);

@@ -842,26 +842,27 @@ namespace NSG {
                                 const Parameters &           parameters,
                                 IndexNSG &                   small_index,
                                 const std::vector<unsigned> &picked_pts) {
-    std::string nn_graph_path = parameters.Get<std::string>("nn_graph_path");
     unsigned    range = parameters.Get<unsigned>("R");
+    std::string nn_graph_path = parameters.Get<std::string>("nn_graph_path");
     Load_nn_graph(nn_graph_path.c_str());
+
+    data_ = data;
+    ep_ = picked_pts[small_index.get_start_node()];
 
     auto    cut_graph_ = new vecNgh[nd_];
 #pragma omp parallel for
     for (size_t i = 0; i < nd_; ++i)
       cut_graph_[i].reserve(range);
-    std::cout << "Memory allocated for NSG graph" << std::endl;
-
-    data_ = data;
-    ep_ = picked_pts[small_index.get_start_node()];
+    std::cout << "Memory allocated for NSG graph. Start node: " << ep_
+              << std::endl;
 
     assert(small_index.has_built);
     {  // Method 1
       for (size_t i = 0; i < picked_pts.size(); ++i) {
         auto append = small_index.final_graph_[i];
         auto p = picked_pts[i];
-        final_graph_[p].insert(final_graph_[p].end(), append.begin(),
-                               append.end());
+        for (auto d : small_index.final_graph_[i])
+          final_graph_[p].push_back(picked_pts[d]);
       }
       Link(parameters, cut_graph_);
     }
@@ -918,9 +919,10 @@ namespace NSG {
     unsigned    range = parameters.Get<unsigned>("R");
     bool        is_nsg = parameters.Get<bool>("is_nsg");
     data_ = data;
-    if (is_nsg)
+    if (is_nsg) {
       Load(nn_graph_path.c_str());
-    else {
+      // ? init_graph_bf(parameters);
+    } else {
       Load_nn_graph(nn_graph_path.c_str());
       init_graph_bf(parameters);
     }
@@ -930,7 +932,8 @@ namespace NSG {
 #pragma omp parallel for
     for (size_t i = 0; i < nd_; ++i)
       cut_graph_[i].reserve(range);
-    std::cout << "Memory allocated for NSG graph" << std::endl;
+    std::cout << "Memory allocated for NSG graph. Start node: " << ep_
+              << std::endl;
     Link(parameters, cut_graph_);
 
     final_graph_.resize(nd_);
