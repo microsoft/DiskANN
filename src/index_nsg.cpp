@@ -6,6 +6,7 @@
 #include <ctime>
 #include <iterator>
 #include <map>
+#include <set>
 #include "efanna2e/exceptions.h"
 #include "efanna2e/parameters.h"
 #include "tsl/robin_set.h"
