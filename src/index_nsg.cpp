@@ -859,7 +859,6 @@ namespace NSG {
     assert(small_index.has_built);
     {  // Method 1
       for (size_t i = 0; i < picked_pts.size(); ++i) {
-        auto append = small_index.final_graph_[i];
         auto p = picked_pts[i];
         for (auto d : small_index.final_graph_[i])
           final_graph_[p].push_back(picked_pts[d]);

@@ -90,8 +90,9 @@ int main(int argc, char** argv) {
               picked_pts);  // Sample and copy before
   std::cout << "Data sampled" << std::endl;
 
+  auto prev_dim = dim;
   data_load = NSG::data_align(data_load, points_num, dim);
-  data_sampled = NSG::data_align(data_sampled, NS, dim);
+  data_sampled = NSG::data_align(data_sampled, NS, prev_dim);
   std::cout << "File data and sample data aligned" << std::endl;
 
   /*{
