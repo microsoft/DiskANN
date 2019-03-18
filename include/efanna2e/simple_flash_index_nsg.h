@@ -56,5 +56,8 @@ namespace NSG {
     // medoid/start info
     _u64 medoid = 0;
     std::pair<_u64, unsigned *> medoid_nhood;
+
+    // cache
+    tsl::robin_map<_u64, std::pair<_u64, unsigned *>> nhood_cache;
   };
 }

@@ -26,6 +26,7 @@ namespace NSG {
     uint64_t io_us = 0;         // total time spent in IO
     uint64_t n_cmps_saved = 0;  // # cmps saved
     uint64_t n_cmps = 0;        // # cmps
+    uint64_t n_cache_hits = 0;  // # cache_hits
   };
 
   class Index {

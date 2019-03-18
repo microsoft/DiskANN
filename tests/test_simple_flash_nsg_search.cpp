@@ -127,17 +127,14 @@ int main(int argc, char** argv) {
       stats, query_num, "Total # 4kB requests / query", "",
       [](const NSG::QueryStats& stats) { return stats.n_4k; });
   NSG::percentile_stats(
-      stats, query_num, "Total # 8kB requests / query", "",
-      [](const NSG::QueryStats& stats) { return stats.n_8k; });
-  NSG::percentile_stats(
-      stats, query_num, "Total # 12kB requests / query", "",
-      [](const NSG::QueryStats& stats) { return stats.n_12k; });
-  NSG::percentile_stats(
       stats, query_num, "Read Size / query", "",
       [](const NSG::QueryStats& stats) { return stats.read_size; });
   NSG::percentile_stats(
       stats, query_num, "# cmps / query", "",
       [](const NSG::QueryStats& stats) { return stats.n_cmps; });
+  NSG::percentile_stats(
+      stats, query_num, "# cache hits / query", "",
+      [](const NSG::QueryStats& stats) { return stats.n_cache_hits; });
 
   save_result(argv[6], res);
 
