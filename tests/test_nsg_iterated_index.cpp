@@ -68,7 +68,6 @@ int main(int argc, char** argv) {
     paras.Set<unsigned>("R", R);
     paras.Set<unsigned>("C", C);
     paras.Set<float>("alpha", alpha);
-    std::cout << "Params set. Rand Build start..." << std::endl;
     auto s = std::chrono::high_resolution_clock::now();
     first_index.BuildFromER(points_num, R, data_load, paras);
     auto                          e = std::chrono::high_resolution_clock::now();
@@ -90,7 +89,6 @@ int main(int argc, char** argv) {
     paras.Set<float>("alpha", alpha);
     paras.Set<float>("is_nsg", true);
     paras.Set<std::string>("nn_graph_path", first_index_path_c);
-    std::cout << "Params set. Small Build start..." << std::endl;
     auto s = std::chrono::high_resolution_clock::now();
     second_index.Build(points_num, data_load, paras);
     auto                          e = std::chrono::high_resolution_clock::now();
@@ -112,7 +110,6 @@ int main(int argc, char** argv) {
     paras.Set<float>("alpha", alpha);
     paras.Set<float>("is_nsg", true);
     paras.Set<std::string>("nn_graph_path", second_index_path_c);
-    std::cout << "Params set. Small Build start..." << std::endl;
     auto s = std::chrono::high_resolution_clock::now();
     third_index.Build(points_num, data_load, paras);
     auto                          e = std::chrono::high_resolution_clock::now();
