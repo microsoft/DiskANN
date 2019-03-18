@@ -13,12 +13,14 @@
 
 namespace NSG {
   template<typename T, typename NhoodType>
-  class FlashNSG {
+  class SimpleFlashNSG {
    public:
-    ~FlashNSG();
 
-    // empty function
-    void load(const char *filename);
+    SimpleFlashNSG(Distance *dist_cmp);
+    ~SimpleFlashNSG();
+
+    // load data, but obtain handle to nsg file
+    void load(const char *data_file, const char *nsg_file);
 
     // implemented
     void cache_bfs_levels(_u64 nlevels);
@@ -54,7 +56,7 @@ namespace NSG {
     _u64  aligned_dim = 0;
 
     // distance comparator
-    DistanceL2 distance_cmp;
+    Distance *dist_cmp;
 
     // medoid/start info
     _u64      medoid = 0;

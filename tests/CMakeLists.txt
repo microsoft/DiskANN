@@ -18,6 +18,9 @@ target_link_libraries(test_nsg_search ${PROJECT_NAME})
 add_executable(test_flash_nsg_search test_flash_nsg_search.cpp)
 target_link_libraries(test_flash_nsg_search ${PROJECT_NAME} aio)
 
+add_executable(test_simple_flash_nsg_search test_simple_flash_nsg_search.cpp)
+target_link_libraries(test_simple_flash_nsg_search ${PROJECT_NAME} aio)
+
 add_executable(test_nsg_optimized_search test_nsg_optimized_search.cpp)
 target_link_libraries(test_nsg_optimized_search ${PROJECT_NAME} -ltcmalloc)
 
@@ -25,7 +28,7 @@ add_executable(calc_recall calc_recall.cpp)
 add_executable(gen_rand gen_rand.cpp)
 add_executable(gen_grid gen_grid.cpp)
 add_executable(opt_disk_graph opt_disk_graph.cpp)
-add_executable(opt_disk_graph_low_mem opt_disk_graph_low_mem.cpp)
+add_executable(simple_opt_disk_graph simple_opt_disk_graph.cpp)
 add_executable(verify_disk_opt verify_disk_opt.cpp)
 add_executable(dedup_fvecs dedup_fvecs.cpp)
 add_executable(dedup_int8_bin dedup_int8_bin.cpp)
