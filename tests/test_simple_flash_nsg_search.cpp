@@ -107,9 +107,9 @@ int main(int argc, char** argv) {
     }
     std::vector<unsigned>& query_res = res[i];
 
-    auto ret =
-        index.beam_search(query_load + i * aligned_dim, k_search, l_search,
-                          query_res.data(), beam_width, stats + i);
+    auto ret = index.cached_beam_search(query_load + i * aligned_dim, k_search,
+                                        l_search, query_res.data(), beam_width,
+                                        stats + i);
     // auto ret = index.Search(query_load + i * dim, data_load, K, paras,
     // tmp.data());
   }
@@ -137,6 +137,8 @@ int main(int argc, char** argv) {
       [](const NSG::QueryStats& stats) { return stats.n_cache_hits; });
 
   save_result(argv[6], res);
+  delete[] stats;
+  free(query_load);
 
   return 0;
 }

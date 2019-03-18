@@ -58,8 +58,6 @@ namespace NSG {
   }
 
   void SimpleFlashNSG::cache_bfs_levels(_u64 nlevels) {
-    std::cerr << "SimpleFlashNSG::cache_bfs_levels() not implemented"
-              << std::endl;
     assert(nlevels > 1);
 
     tsl::robin_set<unsigned> *cur_level, *prev_level;
@@ -127,10 +125,19 @@ namespace NSG {
         }
         free(nhood.second);
       }
+      std::cout << "Level: " << lvl << ", #nodes: " << nhoods.size()
+                << std::endl;
     }
 
     delete cur_level;
     delete prev_level;
+
+    // verify non-null
+    for (auto &k_v : nhood_cache) {
+      unsigned *nbrs = k_v.second.second;
+      _u64      nnbrs = k_v.second.first;
+      assert(malloc_usable_size(nbrs) >= nnbrs * sizeof(unsigned));
+    }
   }
 
   void SimpleFlashNSG::load(const char *data_bin, const char *nsg_file) {
@@ -380,6 +387,7 @@ namespace NSG {
       // clear iteration state
       frontier.clear();
       frontier_nhoods.clear();
+      frontier_read_reqs.clear();
       cached_nhoods.clear();
       _u64 marker = k - 1;
       while (++marker < l_search && frontier.size() < beam_width) {
@@ -392,8 +400,6 @@ namespace NSG {
       // read nhoods of frontier ids
       if (!frontier.empty()) {
         hops++;
-        frontier_nhoods.resize(frontier.size());
-        frontier_read_reqs.resize(frontier.size());
         for (_u64 i = 0; i < frontier.size(); i++) {
           unsigned id = frontier[i];
           auto     iter = nhood_cache.find(id);
@@ -403,12 +409,12 @@ namespace NSG {
               stats->n_cache_hits++;
             }
           } else {
-            frontier_nhoods[i].first = id;
-            alloc_aligned((void **) &frontier_nhoods[i].second, SECTOR_LEN,
-                          SECTOR_LEN);
-
-            frontier_read_reqs[i] = AlignedRead(
-                NHOOD_SECTOR_START(id), SECTOR_LEN, frontier_nhoods[i].second);
+            std::pair<_u64, char *> fnhood;
+            fnhood.first = id;
+            alloc_aligned((void **) &fnhood.second, SECTOR_LEN, SECTOR_LEN);
+            frontier_nhoods.push_back(fnhood);
+            frontier_read_reqs.emplace_back(NHOOD_SECTOR_START(id), SECTOR_LEN,
+                                            fnhood.second);
             if (stats != nullptr) {
               stats->n_4k++;
               stats->n_ios++;
