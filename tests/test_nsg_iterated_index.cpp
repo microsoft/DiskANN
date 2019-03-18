@@ -33,14 +33,14 @@ void load_data(char* filename, float*& data, unsigned& num,
 }
 
 int main(int argc, char** argv) {
-  if (argc != 9 && argc != 10) {
+  if (argc != 7 && argc != 8) {
     std::cout << argv[0] << " data_file L R C iters output_graph_prefix"
               << std::endl;
     exit(-1);
   }
   float alpha = 1.0f;
-  if (argc == 10)
-    alpha = (float) atof(argv[9]);
+  if (argc == 8)
+    alpha = (float)atof(argv[7]);
   // std::string nn_graph_path(argv[2]);
   unsigned L = (unsigned) atoi(argv[2]);
   unsigned R = (unsigned) atoi(argv[3]);
