@@ -16,46 +16,48 @@
 
 #define SECTOR_LEN 4096
 
+#define READ_U64(stream, val) stream.read((char *) &val, sizeof(_u64))
+#define READ_UNSIGNED(stream, val) stream.read((char *) &val, sizeof(unsigned))
+
+// sector # on disk where node_id is present
+#define NHOOD_SECTOR_NO(node_id) (node_id / nnodes_per_sector)
+
+// sector read offset on disk where node_id is present
+#define NHOOD_SECTOR_START(node_id) \
+  ((NHOOD_SECTOR_NO(node_id) + 1) * SECTOR_LEN)
+
+// offset into sector where node_id's nhood starts
+#define NHOOD_SECTOR_OFFSET(sector_buf, node_id) \
+  (unsigned *) (sector_buf + ((node_id % nnodes_per_sector) * max_node_len))
+
+namespace {
+  inline void int8_to_float(int8_t *int8_coords, float *float_coords,
+                            _u64 dim) {
+    for (_u64 idx = 0; idx < dim; idx++) {
+      float_coords[idx] = (float) int8_coords[idx];
+    }
+  }
+}  // namespace
+
 namespace NSG {
-  template<typename T, typename NhoodType>
-  SimpleFlashNSG<T, NhoodType>::SimpleFlashNSG(Distance *dist_cmp)
-      : dist_cmp(dist_cmp) {
+  SimpleFlashNSG::SimpleFlashNSG(Distance *dist_cmp) : dist_cmp(dist_cmp) {
+    medoid_nhood.second = nullptr;
   }
 
-  template<typename T, typename NhoodType>
-  SimpleFlashNSG<T, NhoodType>::~SimpleFlashNSG() {
-    medoid_nhood.cleanup();
-    if (coords_cache != nullptr) {
-      for (uint64_t i = 0; i < n_base; i++) {
-        if (coords_cache[i] != nullptr) {
-          free(coords_cache[i]);
-        }
-        if (!nbrs_cache[i].empty()) {
-          nbrs_cache[i].clear();
-        }
-      }
+  SimpleFlashNSG::~SimpleFlashNSG() {
+    if (data != nullptr) {
+      delete[] data;
     }
-    if (nbrs_cache != nullptr) {
-      for (uint64_t i = 0; i < n_base; i++) {
-        if (!nbrs_cache[i].empty()) {
-          nbrs_cache[i].clear();
-        }
-      }
+    if (medoid_nhood.second != nullptr) {
+      delete[] medoid_nhood.second;
     }
-
-    delete[] coords_cache;
-    delete[] nbrs_cache;
-
-    if (node_offsets != nullptr) {
-      delete[] node_offsets;
-    }
-    if (node_sizes != nullptr) {
-      delete[] node_sizes;
-    }
+    reader.close();
   }
 
-  template<typename T, typename NhoodType>
-  void SimpleFlashNSG<T, NhoodType>::cache_bfs_levels(_u64 nlevels) {
+  void SimpleFlashNSG::cache_bfs_levels(_u64 nlevels) {
+    std::cerr << "SimpleFlashNSG::cache_bfs_levels() not implemented"
+              << std::endl;
+    /*
     assert(nlevels > 1);
 
     nbrs_cache = new std::vector<_u32>[n_base];
@@ -143,78 +145,90 @@ namespace NSG {
 
     delete cur_level;
     delete prev_level;
+    */
   }
 
-  template<typename T, typename NhoodType>
-  void SimpleFlashNSG<T, NhoodType>::load(const char *filename) {
-    std::ifstream meta_reader(filename);
-
-    // read # base_pts, # dims
-    meta_reader.read((char *) &n_base, sizeof(_u64));
-    meta_reader.read((char *) &data_dim, sizeof(_u64));
+  void SimpleFlashNSG::load(const char *data_bin, const char *nsg_file) {
+    unsigned npts_u32, ndims_u32;
+    NSG::load_bin<int8_t>(data_bin, data, npts_u32, ndims_u32);
+    n_base = (_u64) npts_u32;
+    data_dim = (_u64) ndims_u32;
     aligned_dim = ROUND_UP(data_dim, 8);
-    std::cout << "Index File: " << filename << std::endl;
-    std::cout << "# base points: " << n_base << ", # data dims: " << data_dim
-              << ", aligned # dims: " << aligned_dim << std::endl;
 
-    // read medoid
-    meta_reader.read((char *) &medoid, sizeof(_u64));
+    // read nsg metadata
+    std::ifstream nsg_meta(nsg_file, std::ios::binary);
+    _u64          nnodes;
+    READ_U64(nsg_meta, nnodes);
+    assert(nnodes == n_base);
+    READ_U64(nsg_meta, medoid);
+    READ_U64(nsg_meta, max_node_len);
+    READ_U64(nsg_meta, nnodes_per_sector);
+    max_degree = (max_node_len / sizeof(unsigned)) - 1;
+
+    std::cout << "Index File: " << nsg_file << std::endl;
     std::cout << "Medoid: " << medoid << std::endl;
+    std::cout << "# nodes per sector: " << nnodes_per_sector << std::endl;
+    std::cout << "max node len: " << max_node_len << std::endl;
+    std::cout << "max node degree: " << max_degree << std::endl;
+    nsg_meta.close();
 
-    // read scale factor
-    meta_reader.read((char *) &scale_factor, sizeof(float));
-    std::cout << "Scale Factor: " << scale_factor << std::endl;
+    // open AlignedFileReader handle to nsg_file
+    std::string nsg_fname(nsg_file);
+    reader.open(nsg_fname);
 
-    // read node_sizes, compute node_offsets
-    node_sizes = new _u64[n_base];
-    meta_reader.read((char *) node_sizes, n_base * sizeof(_u64));
-    node_offsets = new _u64[n_base];
-    _u64 first_offset =
-        (3 * sizeof(_u64)) + sizeof(float) + (n_base * sizeof(_u64));
-    first_offset = ROUND_UP(first_offset, SECTOR_LEN);
-    std::cout << "First offset: " << first_offset << std::endl;
-    node_offsets[0] = first_offset;
-    for (_u64 i = 0; i < n_base - 1; i++) {
-      node_offsets[i + 1] = node_offsets[i] + node_sizes[i];
-    }
-    meta_reader.close();
-
-    // open file handle
-    reader.open(filename);
-
-    // read in medoid nhood
-    medoid_nhood.init(node_sizes[medoid], data_dim);
-    std::vector<AlignedRead> medoid_read;
-    medoid_read.emplace_back(node_offsets[medoid], node_sizes[medoid],
-                             medoid_nhood.buf);
+    // read medoid nhood
+    char *                   medoid_buf = new char[SECTOR_LEN];
+    _u64                     medoid_sector_no = NHOOD_SECTOR_NO(medoid);
+    std::vector<AlignedRead> medoid_read(1);
+    medoid_read[0].len = SECTOR_LEN;
+    medoid_read[0].buf = medoid_buf;
+    medoid_read[0].offset = NHOOD_SECTOR_START(medoid);
     reader.read(medoid_read);
-    medoid_nhood.construct(scale_factor);
-    std::cout << "Medoid out-degree: " << medoid_nhood.nnbrs << std::endl;
+
+    unsigned *medoid_nhood_buf = NHOOD_SECTOR_OFFSET(medoid_buf, medoid);
+    medoid_nhood.first = *(unsigned *) (medoid_nhood_buf);
+    std::cout << "Medoid degree: " << medoid_nhood.first << std::endl;
+    medoid_nhood.second = new unsigned[medoid_nhood.first];
+    memcpy(medoid_nhood.second, (medoid_nhood_buf + 1 + sizeof(unsigned)),
+           medoid_nhood.first * sizeof(unsigned));
+
+    delete[] medoid_buf;
+    std::cout << "Medoid nbrs: " << std::endl;
+    for (_u64 i = 0; i < medoid_nhood.first; i++) {
+      std::cout << medoid_nhood.second[i] << " ";
+    }
+    std::cout << std::endl;
   }
 
-  template<typename T, typename NhoodType>
-  std::pair<int, int> SimpleFlashNSG<T, NhoodType>::beam_search(
+  std::pair<int, int> SimpleFlashNSG::beam_search(
       const float *query, const _u64 k_search, const _u64 l_search,
       _u32 *indices, const _u64 beam_width, QueryStats *stats) {
-    std::vector<Neighbor>    retset(l_search + 1);
-    std::vector<unsigned>    init_ids(l_search);
-    tsl::robin_set<unsigned> visited(10 * l_search);
+    // scratch space to compute distances between FP32 Query and INT8 data
+    float *scratch = nullptr;
+    alloc_aligned((void **) &scratch, aligned_dim, 32);
+    memset(scratch, 0, aligned_dim);
 
-    unsigned tmp_l = 0;
+    std::vector<Neighbor> retset(l_search + 1);
+    std::vector<_u64>     init_ids(l_search);
+    tsl::robin_set<_u64>  visited(10 * l_search);
+
+    _u64 tmp_l = 0;
     // add each neighbor of medoid
-    for (; tmp_l < l_search && tmp_l < medoid_nhood.nnbrs; tmp_l++) {
-      unsigned id = medoid_nhood.nbrs[tmp_l];
+    for (; tmp_l < l_search && tmp_l < medoid_nhood.first; tmp_l++) {
+      _u64 id = medoid_nhood.second[tmp_l];
       init_ids[tmp_l] = id;
       visited.insert(id);
-      float dist = dist_cmp->compare(
-          medoid_nhood.aligned_fp32_coords + aligned_dim * tmp_l, query,
-          aligned_dim);
+      int8_to_float(data + id * data_dim, scratch, data_dim);
+      float dist = dist_cmp->compare(scratch, query, aligned_dim);
       retset[tmp_l] = Neighbor(id, dist, true);
+      if (stats != nullptr) {
+        stats->n_cmps++;
+      }
     }
 
-    // create dummy ids
+    // TODO:: create dummy ids
     for (; tmp_l < l_search; tmp_l++) {
-      unsigned id = std::numeric_limits<unsigned>::max() - tmp_l;
+      _u64 id = std::numeric_limits<unsigned>::max() - tmp_l;
       init_ids[tmp_l] = id;
       float dist = std::numeric_limits<float>::max();
       retset[tmp_l] = Neighbor(id, dist, false);
@@ -227,9 +241,8 @@ namespace NSG {
     _u64 k = 0;
 
     // cleared every iteration
-    std::vector<unsigned> frontier;
-    std::vector<std::pair<unsigned, float *>> id_vec_list;
-    std::vector<NhoodType>   frontier_nhoods;
+    std::vector<_u64> frontier;
+    std::vector<std::pair<_u64, char *>> frontier_nhoods;
     std::vector<AlignedRead> frontier_read_reqs;
 
     while (k < l_search) {
@@ -238,7 +251,6 @@ namespace NSG {
       // clear iteration state
       frontier.clear();
       frontier_nhoods.clear();
-      id_vec_list.clear();
       _u64 marker = k - 1;
       while (++marker < l_search && frontier.size() < beam_width) {
         if (retset[marker].flag) {
@@ -254,249 +266,245 @@ namespace NSG {
         frontier_read_reqs.resize(frontier.size());
         for (_u64 i = 0; i < frontier.size(); i++) {
           unsigned id = frontier[i];
-          frontier_nhoods[i].init(node_sizes[id], data_dim);
-          frontier_read_reqs[i] = AlignedRead(node_offsets[id], node_sizes[id],
-                                              frontier_nhoods[i].buf);
+          frontier_nhoods[i].first = id;
+          frontier_nhoods[i].second = new char[SECTOR_LEN];
+
+          frontier_read_reqs[i] = AlignedRead(
+              NHOOD_SECTOR_START(id), SECTOR_LEN, frontier_nhoods[i].second);
         }
         reader.read(frontier_read_reqs);
-        for (auto &nhood : frontier_nhoods) {
-          nhood.construct(this->scale_factor);
-        }
-
-        // process each frontier nhood - extract id and coords of unvisited
-        // nodes
+        // process each frontier nhood - compute distances to unvisited nodes
         for (auto &frontier_nhood : frontier_nhoods) {
           // if (retset[k].flag) {
           // retset[k].flag = false;
           // unsigned n = retset[k].id;
-          for (_u64 m = 0; m < frontier_nhood.nnbrs; ++m) {
-            unsigned id = frontier_nhood.nbrs[m];
+          unsigned *node_buf =
+              NHOOD_SECTOR_OFFSET(frontier_nhood.second, frontier_nhood.first);
+          _u64      nnbrs = (_u64)(*node_buf);
+          unsigned *node_nbrs = (node_buf + 1);
+          for (_u64 m = 0; m < nnbrs; ++m) {
+            unsigned id = node_nbrs[m];
             if (visited.find(id) != visited.end()) {
               continue;
             } else {
               visited.insert(id);
+              cmps++;
+              int8_to_float(data + id * data_dim, scratch, data_dim);
+              float dist = dist_cmp->compare(scratch, query, aligned_dim);
+              if (stats != nullptr) {
+                stats->n_cmps++;
+              }
+              if (dist >= retset[l_search - 1].distance)
+                continue;
+              Neighbor nn(id, dist, true);
+              _u64     r = InsertIntoPool(
+                  retset.data(), l_search,
+                  nn);  // Return position in sorted list where nn inserted.
+              if (r < nk)
+                nk = r;  // nk logs the best position in the retset that was
+                         // updated
+                         // due to neighbors of n.
             }
-            id_vec_list.push_back(std::make_pair(
-                id, frontier_nhood.aligned_fp32_coords + aligned_dim * m));
           }
         }
+        // cleanup for the round
+        for (auto &nhood : frontier_nhoods) {
+          delete[] nhood.second;
+        }
       }
-
-      // process each unvisited node
-      for (auto iter = id_vec_list.begin(); iter != id_vec_list.end(); iter++) {
-        cmps++;
-        unsigned id = iter->first;
-        float *  id_vec = iter->second;
-        float    dist = dist_cmp->compare(query, id_vec, this->aligned_dim);
-        if (dist >= retset[l_search - 1].distance)
-          continue;
-        Neighbor nn(id, dist, true);
-
-        _u64 r = InsertIntoPool(
-            retset.data(), l_search,
-            nn);  // Return position in sorted list where nn inserted.
-        if (r < nk)
-          nk = r;  // nk logs the best position in the retset that was updated
-                   // due to neighbors of n.
-      }
-
+      // update best inserted position
       if (nk <= k)
         k = nk;  // k is the best position in retset updated in this round.
       else
         ++k;
-
-      // clenup nhood objects
-      for (auto &nhood : frontier_nhoods) {
-        nhood.cleanup();
-      }
     }
     for (_u64 i = 0; i < k_search; i++) {
       indices[i] = retset[i].id;
     }
+
     return std::make_pair(hops, cmps);
   }
 
-  template<typename T, typename NhoodType>
-  std::pair<int, int> SimpleFlashNSG<T, NhoodType>::cached_beam_search(
+  std::pair<int, int> SimpleFlashNSG::cached_beam_search(
       const float *query, const _u64 k_search, const _u64 l_search,
       _u32 *indices, const _u64 beam_width, QueryStats *stats) {
-    if (nbrs_cache == nullptr || coords_cache == nullptr) {
-      std::cerr << "Run SimpleFlashNSG<T, NhoodType>::cache_bfs_levels before "
-                   "calling cached_beam_search()"
-                << std::endl;
-      return std::make_pair(0, 0);
+    /*
+if (nbrs_cache == nullptr || coords_cache == nullptr) {
+  std::cerr << "Run SimpleFlashNSG::cache_bfs_levels before "
+               "calling cached_beam_search()"
+            << std::endl;
+  return std::make_pair(0, 0);
+}
+
+Timer timer, io_timer;
+
+std::vector<Neighbor>    retset(l_search + 1);
+std::vector<unsigned>    init_ids(l_search);
+tsl::robin_set<unsigned> visited(10 * l_search);
+
+unsigned tmp_l = 0;
+// add each neighbor of medoid
+for (; tmp_l < l_search && tmp_l < medoid_nhood.nnbrs; tmp_l++) {
+  unsigned id = medoid_nhood.nbrs[tmp_l];
+  init_ids[tmp_l] = id;
+  visited.insert(id);
+  float dist = dist_cmp->compare(
+      medoid_nhood.aligned_fp32_coords + aligned_dim * tmp_l, query,
+      aligned_dim);
+  retset[tmp_l] = Neighbor(id, dist, true);
+}
+
+// create dummy ids
+for (; tmp_l < l_search; tmp_l++) {
+  unsigned id = std::numeric_limits<unsigned>::max() - l_search;
+  init_ids[tmp_l] = id;
+  float dist = std::numeric_limits<float>::max();
+  retset[tmp_l] = Neighbor(id, dist, false);
+}
+
+std::sort(retset.begin(), retset.begin() + l_search);
+
+_u64 hops = 0;
+_u64 cmps = 0;
+_u64 k = 0;
+
+// cleared every iteration
+std::vector<unsigned> frontier;
+tsl::robin_map<unsigned, float *> id_vec_map;
+std::vector<NhoodType>   frontier_nhoods;
+std::vector<AlignedRead> frontier_read_reqs;
+unsigned                 nbrs_cache_hits = 0;
+unsigned                 coords_cache_hits = 0;
+
+while (k < l_search) {
+  _u64 nk = l_search;
+
+  // clear iteration state
+  frontier.clear();
+  frontier_nhoods.clear();
+  frontier_read_reqs.clear();
+  id_vec_map.clear();
+
+  // populate beam
+  _u64 marker = k - 1;
+  while (++marker < l_search && frontier.size() < beam_width) {
+    if (retset[marker].flag) {
+      frontier.push_back(retset[marker].id);
+      retset[marker].flag = false;
     }
-
-    Timer timer, io_timer;
-
-    std::vector<Neighbor>    retset(l_search + 1);
-    std::vector<unsigned>    init_ids(l_search);
-    tsl::robin_set<unsigned> visited(10 * l_search);
-
-    unsigned tmp_l = 0;
-    // add each neighbor of medoid
-    for (; tmp_l < l_search && tmp_l < medoid_nhood.nnbrs; tmp_l++) {
-      unsigned id = medoid_nhood.nbrs[tmp_l];
-      init_ids[tmp_l] = id;
-      visited.insert(id);
-      float dist = dist_cmp->compare(
-          medoid_nhood.aligned_fp32_coords + aligned_dim * tmp_l, query,
-          aligned_dim);
-      retset[tmp_l] = Neighbor(id, dist, true);
-    }
-
-    // create dummy ids
-    for (; tmp_l < l_search; tmp_l++) {
-      unsigned id = std::numeric_limits<unsigned>::max() - l_search;
-      init_ids[tmp_l] = id;
-      float dist = std::numeric_limits<float>::max();
-      retset[tmp_l] = Neighbor(id, dist, false);
-    }
-
-    std::sort(retset.begin(), retset.begin() + l_search);
-
-    _u64 hops = 0;
-    _u64 cmps = 0;
-    _u64 k = 0;
-
-    // cleared every iteration
-    std::vector<unsigned> frontier;
-    tsl::robin_map<unsigned, float *> id_vec_map;
-    std::vector<NhoodType>   frontier_nhoods;
-    std::vector<AlignedRead> frontier_read_reqs;
-    unsigned                 nbrs_cache_hits = 0;
-    unsigned                 coords_cache_hits = 0;
-
-    while (k < l_search) {
-      _u64 nk = l_search;
-
-      // clear iteration state
-      frontier.clear();
-      frontier_nhoods.clear();
-      frontier_read_reqs.clear();
-      id_vec_map.clear();
-
-      // populate beam
-      _u64 marker = k - 1;
-      while (++marker < l_search && frontier.size() < beam_width) {
-        if (retset[marker].flag) {
-          frontier.push_back(retset[marker].id);
-          retset[marker].flag = false;
-        }
-      }
-
-      if (!frontier.empty()) {
-        hops++;
-
-        for (const unsigned &id : frontier) {
-          if (id >= n_base) {
-            std::cout << "Found id: " << id << std::endl;
-          }
-          // if nbrs of `id` was not cached, make a request
-          if (nbrs_cache[id].empty()) {
-            frontier_nhoods.push_back(NhoodType());
-            NhoodType &nhood = frontier_nhoods.back();
-            nhood.init(node_sizes[id], data_dim);
-            frontier_read_reqs.push_back(
-                AlignedRead(node_offsets[id], node_sizes[id], nhood.buf));
-            // std::cout << "Reading nhood id: " << id << std::endl;
-            if (stats != nullptr) {
-              stats->read_size += node_sizes[id];
-              stats->n_ios++;
-              if (node_sizes[id] == 4096) {
-                stats->n_4k++;
-              } else if (node_sizes[id] == 8192) {
-                stats->n_8k++;
-              } else if (node_sizes[id] == 12288) {
-                stats->n_12k++;
-              }
-            }
-          } else {
-            // if nbrs of `id` are cached, use it
-            nbrs_cache_hits++;
-            // add cached coods from id list
-            for (const unsigned &nbr_id : nbrs_cache[id]) {
-              assert(coords_cache[nbr_id] != nullptr);
-              // ignore if visited
-              if (visited.find(nbr_id) != visited.end()) {
-                continue;
-              } else {
-                visited.insert(nbr_id);
-              }
-              coords_cache_hits++;
-              // if nhood of `id` is cached, its nbrs coords are also cached
-              id_vec_map.insert(std::make_pair(nbr_id, coords_cache[nbr_id]));
-            }
-          }
-        }
-
-        // prepare and execute reads
-        for (auto &req : frontier_read_reqs) {
-          assert(malloc_usable_size(req.buf) >= req.len);
-        }
-        io_timer.reset();
-        reader.read(frontier_read_reqs);
-        if (stats != nullptr) {
-          stats->io_us += io_timer.elapsed();
-        }
-
-        for (auto &nhood : frontier_nhoods) {
-          nhood.construct(this->scale_factor);
-          assert(nhood.nnbrs > 0);
-          for (unsigned nbr_idx = 0; nbr_idx < nhood.nnbrs; nbr_idx++) {
-            unsigned id = nhood.nbrs[nbr_idx];
-
-            // skip if already visited
-            if (visited.find(id) != visited.end()) {
-              continue;
-            }
-            visited.insert(id);
-            // add if not visited
-            float *id_coords =
-                nhood.aligned_fp32_coords + nbr_idx * aligned_dim;
-            assert(id_vec_map.find(id) == id_vec_map.end());
-            id_vec_map.insert(std::make_pair(id, id_coords));
-          }
-        }
-      }
-
-      for (auto &k_v : id_vec_map) {
-        cmps++;
-        unsigned id = k_v.first;
-        float *  id_vec = k_v.second;
-        float    dist = dist_cmp->compare(query, id_vec, aligned_dim);
-        if (dist >= retset[l_search - 1].distance)
-          continue;
-        Neighbor nn(id, dist, true);
-
-        _u64 r = InsertIntoPool(
-            retset.data(), l_search,
-            nn);  // Return position in sorted list where nn inserted.
-        if (r < nk)
-          nk = r;  // nk logs the best position in the retset that was updated
-                   // due to neighbors of n.
-      }
-
-      if (nk <= k)
-        k = nk;  // k is the best position in retset updated in this round.
-      else
-        ++k;
-
-      // cleanup all temporary nhoods
-      for (auto &nhood : frontier_nhoods) {
-        nhood.cleanup();
-      }
-    }
-    for (_u64 i = 0; i < k_search; i++) {
-      indices[i] = retset[i].id;
-    }
-    // std::cout << "nbrs_cache_hits = " << nbrs_cache_hits
-    //          << ", coords_cache_hits = " << coords_cache_hits << std::endl;
-    if (stats != nullptr) {
-      stats->total_us = timer.elapsed();
-    }
-    return std::make_pair(hops, cmps);
   }
 
-  template class SimpleFlashNSG<int8_t, DiskNhood<int8_t>>;
+  if (!frontier.empty()) {
+    hops++;
+
+    for (const unsigned &id : frontier) {
+      if (id >= n_base) {
+        std::cout << "Found id: " << id << std::endl;
+      }
+      // if nbrs of `id` was not cached, make a request
+      if (nbrs_cache[id].empty()) {
+        frontier_nhoods.push_back(NhoodType());
+        NhoodType &nhood = frontier_nhoods.back();
+        nhood.init(node_sizes[id], data_dim);
+        frontier_read_reqs.push_back(
+            AlignedRead(node_offsets[id], node_sizes[id], nhood.buf));
+        // std::cout << "Reading nhood id: " << id << std::endl;
+        if (stats != nullptr) {
+          stats->read_size += node_sizes[id];
+          stats->n_ios++;
+          if (node_sizes[id] == 4096) {
+            stats->n_4k++;
+          } else if (node_sizes[id] == 8192) {
+            stats->n_8k++;
+          } else if (node_sizes[id] == 12288) {
+            stats->n_12k++;
+          }
+        }
+      } else {
+        // if nbrs of `id` are cached, use it
+        nbrs_cache_hits++;
+        // add cached coods from id list
+        for (const unsigned &nbr_id : nbrs_cache[id]) {
+          assert(coords_cache[nbr_id] != nullptr);
+          // ignore if visited
+          if (visited.find(nbr_id) != visited.end()) {
+            continue;
+          } else {
+            visited.insert(nbr_id);
+          }
+          coords_cache_hits++;
+          // if nhood of `id` is cached, its nbrs coords are also cached
+          id_vec_map.insert(std::make_pair(nbr_id, coords_cache[nbr_id]));
+        }
+      }
+    }
+
+    // prepare and execute reads
+    for (auto &req : frontier_read_reqs) {
+      assert(malloc_usable_size(req.buf) >= req.len);
+    }
+    io_timer.reset();
+    reader.read(frontier_read_reqs);
+    if (stats != nullptr) {
+      stats->io_us += io_timer.elapsed();
+    }
+
+    for (auto &nhood : frontier_nhoods) {
+      nhood.construct(this->scale_factor);
+      assert(nhood.nnbrs > 0);
+      for (unsigned nbr_idx = 0; nbr_idx < nhood.nnbrs; nbr_idx++) {
+        unsigned id = nhood.nbrs[nbr_idx];
+
+        // skip if already visited
+        if (visited.find(id) != visited.end()) {
+          continue;
+        }
+        visited.insert(id);
+        // add if not visited
+        float *id_coords =
+            nhood.aligned_fp32_coords + nbr_idx * aligned_dim;
+        assert(id_vec_map.find(id) == id_vec_map.end());
+        id_vec_map.insert(std::make_pair(id, id_coords));
+      }
+    }
+  }
+
+  for (auto &k_v : id_vec_map) {
+    cmps++;
+    unsigned id = k_v.first;
+    float *  id_vec = k_v.second;
+    float    dist = dist_cmp->compare(query, id_vec, aligned_dim);
+    if (dist >= retset[l_search - 1].distance)
+      continue;
+    Neighbor nn(id, dist, true);
+
+    _u64 r = InsertIntoPool(
+        retset.data(), l_search,
+        nn);  // Return position in sorted list where nn inserted.
+    if (r < nk)
+      nk = r;  // nk logs the best position in the retset that was updated
+               // due to neighbors of n.
+  }
+
+  if (nk <= k)
+    k = nk;  // k is the best position in retset updated in this round.
+  else
+    ++k;
+
+  // cleanup all temporary nhoods
+  for (auto &nhood : frontier_nhoods) {
+    nhood.cleanup();
+  }
+}
+for (_u64 i = 0; i < k_search; i++) {
+  indices[i] = retset[i].id;
+}
+// std::cout << "nbrs_cache_hits = " << nbrs_cache_hits
+//          << ", coords_cache_hits = " << coords_cache_hits << std::endl;
+if (stats != nullptr) {
+  stats->total_us = timer.elapsed();
+}
+return std::make_pair(hops, cmps);
+*/
+  }
 }
