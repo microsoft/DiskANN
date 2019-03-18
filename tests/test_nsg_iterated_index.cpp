@@ -35,17 +35,17 @@ void load_data(char* filename, float*& data, unsigned& num,
 int main(int argc, char** argv) {
   if (argc != 9 && argc != 10) {
     std::cout << argv[0] << " data_file L R C iters output_graph_prefix"
-      << std::endl;
+              << std::endl;
     exit(-1);
   }
   float alpha = 1.0f;
   if (argc == 10)
-    alpha = (float)atof(argv[9]);
+    alpha = (float) atof(argv[9]);
   // std::string nn_graph_path(argv[2]);
-  unsigned L = (unsigned)atoi(argv[2]);
-  unsigned R = (unsigned)atoi(argv[3]);
-  unsigned C = (unsigned)atoi(argv[4]);
-  unsigned iter = (unsigned)atoi(argv[5]);
+  unsigned L = (unsigned) atoi(argv[2]);
+  unsigned R = (unsigned) atoi(argv[3]);
+  unsigned C = (unsigned) atoi(argv[4]);
+  unsigned iter = (unsigned) atoi(argv[5]);
   if (iter > 3) {
     std::cout << "Please use iter = 1, 2, or 3." << std::endl;
     exit(-1);
@@ -62,7 +62,7 @@ int main(int argc, char** argv) {
   std::string first_index_path = std::string(argv[6]) + std::string(".iter.1");
   const char* first_index_path_c = first_index_path.c_str();
   {
-    NSG::IndexNSG first_index(dim, points_num, NSG::L2, nullptr);
+    NSG::IndexNSG   first_index(dim, points_num, NSG::L2, nullptr);
     NSG::Parameters paras;
     paras.Set<unsigned>("L", L);
     paras.Set<unsigned>("R", R);
@@ -82,7 +82,7 @@ int main(int argc, char** argv) {
   std::string second_index_path = std::string(argv[6]) + std::string(".iter.2");
   const char* second_index_path_c = second_index_path.c_str();
   {
-    NSG::IndexNSG second_index(dim, points_num, NSG::L2, nullptr);
+    NSG::IndexNSG   second_index(dim, points_num, NSG::L2, nullptr);
     NSG::Parameters paras;
     paras.Set<unsigned>("L", L);
     paras.Set<unsigned>("R", R);
@@ -104,7 +104,7 @@ int main(int argc, char** argv) {
   std::string third_index_path = std::string(argv[6]) + std::string(".iter.3");
   const char* third_index_path_c = third_index_path.c_str();
   {
-    NSG::IndexNSG third_index(dim, points_num, NSG::L2, nullptr);
+    NSG::IndexNSG   third_index(dim, points_num, NSG::L2, nullptr);
     NSG::Parameters paras;
     paras.Set<unsigned>("L", L);
     paras.Set<unsigned>("R", R);
