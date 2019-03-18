@@ -6,6 +6,7 @@
 #include <efanna2e/neighbor.h>
 #include <efanna2e/simple_flash_index_nsg.h>
 #include <efanna2e/util.h>
+#include <efanna2e/timer.h>
 #include <omp.h>
 #include <atomic>
 #include <cassert>
@@ -90,6 +91,7 @@ int main(int argc, char** argv) {
 
   NSG::QueryStats* stats = new NSG::QueryStats[query_num];
 
+	NSG::Timer timer;
 #pragma omp parallel for schedule(dynamic, 128) firstprivate(has_init)
   for (_u64 i = 0; i < query_num; i++) {
     unsigned val = qcounter.fetch_add(1);
@@ -113,6 +115,9 @@ int main(int argc, char** argv) {
     // auto ret = index.Search(query_load + i * dim, data_load, K, paras,
     // tmp.data());
   }
+	_u64 total_query_us = timer.elapsed();
+	double qps = (double)query_num / ((double) total_query_us / 1e6);
+	std::cout << "QPS: " << qps << std::endl;
 
   NSG::percentile_stats(
       stats, query_num, "Total us / query", "us",
