@@ -12,7 +12,6 @@
 #include "util.h"
 
 namespace NSG {
-  template<typename T, typename NhoodType>
   class SimpleFlashNSG {
    public:
 
@@ -40,26 +39,17 @@ namespace NSG {
     AlignedFileReader reader;
 
     // index info
-    _u64 *node_offsets = nullptr;
-    _u64 *node_sizes = nullptr;
+    _u64 max_node_len = 0, nnodes_per_sector = 0;
 
-    // cache adjacency list for K-levels
-    std::vector<_u32> *nbrs_cache = nullptr;
-
-    // cache coords for K+1 levels
-    float **coords_cache = nullptr;
-
-    // data statics
+    // data info
     _u64  n_base = 0;
     _u64  data_dim = 0;
-    float scale_factor = 1.0f;
-    _u64  aligned_dim = 0;
+    int8_t* data = nullptr;
 
     // distance comparator
     Distance *dist_cmp;
 
     // medoid/start info
     _u64      medoid = 0;
-    NhoodType medoid_nhood;
   };
 }

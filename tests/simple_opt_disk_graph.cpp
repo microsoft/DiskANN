@@ -24,28 +24,32 @@ void load_nsg(const char *filename, std::vector<std::vector<unsigned>> &nsg,
     std::vector<unsigned> tmp(k);
     in.read((char *) tmp.data(), k * sizeof(unsigned));
     nsg.push_back(tmp);
+    if (nsg.size() % 5000000 == 0){
+      std::cout << "Loaded " << nsg.size() << " nodes" << std::endl;
+    }
   }
   in.close();
 }
 
-void write_nsg(const char* filename, const std::vector<std::vector<unsigned>> &nsg, const _u64 medoid){
+void write_nsg(const char* filename, NSG::OneShotNSG& nsg){
   
   std::ofstream writer(filename, std::ios::binary);
   _u64 nnodes = nsg.size();
-  writer.write((char*)&nnodes, sizeof(_u64));
-  writer.write((char*)&medoid, sizeof(_u64));
+  writer.write((char*)&nsg.nnbrs, sizeof(_u64));
+  writer.write((char*)&nsg.medoid, sizeof(_u64));
 
-_u64 max_degree;
-  for (auto nhood : nsg) {
-    max_degree = std::max((size_t) max_degree, nhood.size());
+  _u64 max_degree = 0;
+  for (_u64 i=0;i<nsg.size();i++) {
+    max_degree = std::max((size_t) max_degree, nsg.size(i));
   }
+  std::cout << "max degree: " << max_degree << std::endl;
 
   _u64 max_node_len = (max_degree + 1)*sizeof(unsigned);
-  writer.write((char*)max_node_len, sizeof(_u64));
+  writer.write((char*)&max_node_len, sizeof(_u64));
   std::cout << "max write-per-node: " << max_node_len << "B" << std::endl;
 
   _u64 nnodes_per_sector = SECTOR_LEN / max_node_len;
-  writer.write((char*)nnodes_per_sector, sizeof(_u64));
+  writer.write((char*)&nnodes_per_sector, sizeof(_u64));
   std::cout << "# nodes per sector: " << nnodes_per_sector << std::endl;
 
   _u64 nsectors_per_blk = 65536;
@@ -56,6 +60,7 @@ _u64 max_degree;
 
   // buf for each block
   char* blk_buf = new char[nsectors_per_blk * SECTOR_LEN];
+  char* sector_buf, *node_buf;
   for(_u64 b = 0;b<nblks;b++){
     _u64 bstart = b * nnodes_per_blk;
     _u64 bend = std::min(nnodes, nnodes_per_blk * (b+1));
@@ -65,18 +70,19 @@ _u64 max_degree;
     memset(blk_buf, 0, nsectors_per_blk * SECTOR_LEN / sizeof(unsigned));
 
     // copy nsg blk to blk_buf
-    char* sector_buf = blk_buf;
     for(_u64 i = bstart; i<bend;i++){
-      _u64 j = i-bstart;
-      unsigned nhood_size = nsg[i].size();
+      unsigned nhood_size = nsg.size(i);
+      _u64 sector_no = i / nnodes_per_sector;
+      _u64 sector_off = (i % nnodes_per_sector) * max_node_len;
+      
+      //std::cout << "node : " << i << ", sector: " << sector_no ;
+      //std::cout<< ", sector_off: " << sector_off << std::endl;
 
-      // choose new sector if previous sector is exhausted
-      if (j % nnodes_per_sector == 0){
-        sector_buf = blk_buf + (j / nnodes_per_sector) * SECTOR_LEN ;
-      }
-      char* node_buf = (sector_buf + (j % nnodes_per_sector)*max_node_len);
-      *(unsigned*)node_buf = nhood_size;
-      const unsigned* nhood = nsg[i].data();
+      // get sector buf and node buf
+      sector_buf = blk_buf + (sector_no % nsectors_per_blk) * SECTOR_LEN ;
+      node_buf = sector_buf + sector_off;
+      *((unsigned*)node_buf) = nhood_size;
+      const unsigned* nhood = nsg.data(i);
       memcpy(node_buf + sizeof(unsigned), nhood, nhood_size * sizeof(unsigned));
     }
 
@@ -85,6 +91,7 @@ _u64 max_degree;
     std::cout << "Block #" << b << " written, # nodes: " << bsize << std::endl;
   }
   writer.close();
+  delete[] blk_buf;
 }
 
 int main(int argc, char **argv) {
@@ -94,14 +101,16 @@ int main(int argc, char **argv) {
               << std::endl;
     exit(-1);
   }
-
+/*
   std::vector<std::vector<unsigned>> nsg;
   _u64                               medoid;
   
   load_nsg(argv[1], nsg, medoid);
   std::cout << "NSG loaded\n";
-
-  write_nsg(argv[2], nsg, medoid);
+*/
+  NSG::OneShotNSG nsg;
+  nsg.read(argv[1]);
+  write_nsg(argv[2], nsg);
   std::cout << "Output file written\n";
   return 0;
 }

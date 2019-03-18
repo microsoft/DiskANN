@@ -230,4 +230,59 @@ namespace NSG {
     reader.close();
     std::cout << "Finished reading bin" << std::endl;
   }
+
+struct OneShotNSG {
+  _u64 medoid, width;
+  unsigned* nsg = nullptr;
+  std::vector<unsigned> nnbrs;
+  std::vector<_u64> offsets;
+  _u64 nnodes;
+
+  void read(char* filename){
+    std::ifstream reader(filename, std::ios::binary | std::ios::ate);
+    _u64 nsg_len = reader.tellg() - 2*sizeof(unsigned);
+    reader.seekg(0, std::ios::beg);
+    unsigned medoid_u32, width_u32;
+    reader.read((char*)&width_u32, sizeof(unsigned));
+    reader.read((char*)&medoid_u32, sizeof(unsigned));
+    medoid = (_u64) medoid_u32;
+    width = (_u64) width_u32;
+    std::cout << "Medoid: " << medoid << ", width: " << width << std::endl;
+    nsg = (unsigned*) (new char[nsg_len]);
+    reader.read((char*)nsg, nsg_len);
+
+    // compute # nodes
+    nnodes = 0;
+    _u64 cur_off = 0;
+    while(cur_off*sizeof(unsigned) < nsg_len){
+      nnodes++;
+      unsigned cur_nnbrs = *(nsg + cur_off);
+      // offset to start of node nhood
+      offsets.push_back(cur_off+1);
+      // # nbrs in nhood
+      nnbrs.push_back(cur_nnbrs);
+      // offset to start of next node nhood
+      cur_off += (cur_nnbrs + 1);
+    }
+    std::cout << "# nodes: " << nnodes << std::endl;
+  }
+
+  ~OneShotNSG(){
+    if (nsg != nullptr){
+      delete[] nsg;
+    }
+  }
+
+  unsigned* data(_u64 idx){
+    return (nsg + offsets[idx]);
+  }
+  
+  _u64 size(_u64 idx){
+    return nnbrs[idx];
+  }
+
+  _u64 size() {
+    return nnodes;
+  }
+};
 }
