@@ -178,8 +178,8 @@ namespace NSG {
     reader.open(nsg_fname);
 
     // read medoid nhood
-    char *                   medoid_buf = nullptr;
-    alloc_aligned((void**)&medoid_buf, SECTOR_LEN, SECTOR_LEN);
+    char *medoid_buf = nullptr;
+    alloc_aligned((void **) &medoid_buf, SECTOR_LEN, SECTOR_LEN);
     _u64                     medoid_sector_no = NHOOD_SECTOR_NO(medoid);
     std::vector<AlignedRead> medoid_read(1);
     medoid_read[0].len = SECTOR_LEN;
@@ -206,6 +206,7 @@ namespace NSG {
   std::pair<int, int> SimpleFlashNSG::beam_search(
       const float *query, const _u64 k_search, const _u64 l_search,
       _u32 *indices, const _u64 beam_width, QueryStats *stats) {
+    Timer query_timer, io_timer;
     // scratch space to compute distances between FP32 Query and INT8 data
     float *scratch = nullptr;
     alloc_aligned((void **) &scratch, aligned_dim * sizeof(float), 32);
@@ -270,12 +271,21 @@ namespace NSG {
         for (_u64 i = 0; i < frontier.size(); i++) {
           unsigned id = frontier[i];
           frontier_nhoods[i].first = id;
-          alloc_aligned((void**)&frontier_nhoods[i].second, SECTOR_LEN, SECTOR_LEN);
+          alloc_aligned((void **) &frontier_nhoods[i].second, SECTOR_LEN,
+                        SECTOR_LEN);
 
           frontier_read_reqs[i] = AlignedRead(
               NHOOD_SECTOR_START(id), SECTOR_LEN, frontier_nhoods[i].second);
+          if (stats != nullptr) {
+            stats->n_4k++;
+            stats->n_ios++;
+          }
         }
+        io_timer.reset();
         reader.read(frontier_read_reqs);
+        if (stats != nullptr) {
+          stats->io_us += io_timer.elapsed();
+        }
         // process each frontier nhood - compute distances to unvisited nodes
         for (auto &frontier_nhood : frontier_nhoods) {
           // if (retset[k].flag) {
@@ -283,7 +293,7 @@ namespace NSG {
           // unsigned n = retset[k].id;
           unsigned *node_buf =
               NHOOD_SECTOR_OFFSET(frontier_nhood.second, frontier_nhood.first);
-          _u64      nnbrs = (_u64)(*node_buf);
+          _u64 nnbrs = (_u64)(*node_buf);
           assert(nnbrs < 200);
           unsigned *node_nbrs = (node_buf + 1);
           for (_u64 m = 0; m < nnbrs; ++m) {
@@ -326,6 +336,9 @@ namespace NSG {
       indices[i] = retset[i].id;
     }
     free(scratch);
+    if (stats != nullptr) {
+      stats->total_us = query_timer.elapsed();
+    }
     return std::make_pair(hops, cmps);
   }
 

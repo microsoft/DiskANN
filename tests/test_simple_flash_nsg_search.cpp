@@ -90,8 +90,7 @@ int main(int argc, char** argv) {
 
   NSG::QueryStats* stats = new NSG::QueryStats[query_num];
 
-#pragma omp parallel for schedule(dynamic, \
-                                  128) firstprivate(has_init)
+#pragma omp parallel for schedule(dynamic, 128) firstprivate(has_init)
   for (_u64 i = 0; i < query_num; i++) {
     unsigned val = qcounter.fetch_add(1);
     if (val % 1000 == 0) {
