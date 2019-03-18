@@ -91,7 +91,7 @@ int main(int argc, char** argv) {
   NSG::QueryStats* stats = new NSG::QueryStats[query_num];
 
 #pragma omp parallel for schedule(dynamic, \
-                                  128) firstprivate(has_init) num_threads(16)
+                                  128) firstprivate(has_init)
   for (_u64 i = 0; i < query_num; i++) {
     unsigned val = qcounter.fetch_add(1);
     if (val % 1000 == 0) {
@@ -136,6 +136,9 @@ int main(int argc, char** argv) {
   NSG::percentile_stats(
       stats, query_num, "Read Size / query", "",
       [](const NSG::QueryStats& stats) { return stats.read_size; });
+  NSG::percentile_stats(
+      stats, query_num, "# cmps / query", "",
+      [](const NSG::QueryStats& stats) { return stats.n_cmps; });
 
   save_result(argv[6], res);
 

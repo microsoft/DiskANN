@@ -159,6 +159,7 @@ namespace NSG {
     std::ifstream nsg_meta(nsg_file, std::ios::binary);
     _u64          nnodes;
     READ_U64(nsg_meta, nnodes);
+    std::cout << "nnodes: " << nnodes << std::endl;
     assert(nnodes == n_base);
     READ_U64(nsg_meta, medoid);
     READ_U64(nsg_meta, max_node_len);
@@ -177,7 +178,8 @@ namespace NSG {
     reader.open(nsg_fname);
 
     // read medoid nhood
-    char *                   medoid_buf = new char[SECTOR_LEN];
+    char *                   medoid_buf = nullptr;
+    alloc_aligned((void**)&medoid_buf, SECTOR_LEN, SECTOR_LEN);
     _u64                     medoid_sector_no = NHOOD_SECTOR_NO(medoid);
     std::vector<AlignedRead> medoid_read(1);
     medoid_read[0].len = SECTOR_LEN;
@@ -187,12 +189,13 @@ namespace NSG {
 
     unsigned *medoid_nhood_buf = NHOOD_SECTOR_OFFSET(medoid_buf, medoid);
     medoid_nhood.first = *(unsigned *) (medoid_nhood_buf);
+    assert(medoid_nhood.first < 200);
     std::cout << "Medoid degree: " << medoid_nhood.first << std::endl;
     medoid_nhood.second = new unsigned[medoid_nhood.first];
     memcpy(medoid_nhood.second, (medoid_nhood_buf + 1 + sizeof(unsigned)),
            medoid_nhood.first * sizeof(unsigned));
 
-    delete[] medoid_buf;
+    free(medoid_buf);
     std::cout << "Medoid nbrs: " << std::endl;
     for (_u64 i = 0; i < medoid_nhood.first; i++) {
       std::cout << medoid_nhood.second[i] << " ";
@@ -205,7 +208,7 @@ namespace NSG {
       _u32 *indices, const _u64 beam_width, QueryStats *stats) {
     // scratch space to compute distances between FP32 Query and INT8 data
     float *scratch = nullptr;
-    alloc_aligned((void **) &scratch, aligned_dim, 32);
+    alloc_aligned((void **) &scratch, aligned_dim * sizeof(float), 32);
     memset(scratch, 0, aligned_dim);
 
     std::vector<Neighbor> retset(l_search + 1);
@@ -267,7 +270,7 @@ namespace NSG {
         for (_u64 i = 0; i < frontier.size(); i++) {
           unsigned id = frontier[i];
           frontier_nhoods[i].first = id;
-          frontier_nhoods[i].second = new char[SECTOR_LEN];
+          alloc_aligned((void**)&frontier_nhoods[i].second, SECTOR_LEN, SECTOR_LEN);
 
           frontier_read_reqs[i] = AlignedRead(
               NHOOD_SECTOR_START(id), SECTOR_LEN, frontier_nhoods[i].second);
@@ -281,6 +284,7 @@ namespace NSG {
           unsigned *node_buf =
               NHOOD_SECTOR_OFFSET(frontier_nhood.second, frontier_nhood.first);
           _u64      nnbrs = (_u64)(*node_buf);
+          assert(nnbrs < 200);
           unsigned *node_nbrs = (node_buf + 1);
           for (_u64 m = 0; m < nnbrs; ++m) {
             unsigned id = node_nbrs[m];
@@ -309,7 +313,7 @@ namespace NSG {
         }
         // cleanup for the round
         for (auto &nhood : frontier_nhoods) {
-          delete[] nhood.second;
+          free(nhood.second);
         }
       }
       // update best inserted position
@@ -321,7 +325,7 @@ namespace NSG {
     for (_u64 i = 0; i < k_search; i++) {
       indices[i] = retset[i].id;
     }
-
+    free(scratch);
     return std::make_pair(hops, cmps);
   }
 
