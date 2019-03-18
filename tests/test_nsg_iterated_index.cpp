@@ -65,11 +65,11 @@ int main(int argc, char** argv) {
     NSG::IndexNSG   first_index(dim, points_num, NSG::L2, nullptr);
     NSG::Parameters paras;
     paras.Set<unsigned>("L", L);
-    paras.Set<unsigned>("R", R);
-    paras.Set<unsigned>("C", C);
+    paras.Set<unsigned>("R", iter == 1 ? R : 2*R/3);
+    paras.Set<unsigned>("C", iter == 1 ? C : C/2);
     paras.Set<float>("alpha", alpha);
     auto s = std::chrono::high_resolution_clock::now();
-    first_index.BuildFromER(points_num, R, data_load, paras);
+    first_index.BuildFromER(points_num, R/2, data_load, paras);
     auto                          e = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> diff = e - s;
     std::cout << "NSG(Rand) time: " << diff.count() << std::endl;
