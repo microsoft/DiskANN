@@ -6,6 +6,9 @@ target_link_libraries(test_nsg_index ${PROJECT_NAME} -ltcmalloc)
 add_executable(test_nsg_twolevel_index test_nsg_twolevel_index.cpp)
 target_link_libraries(test_nsg_twolevel_index ${PROJECT_NAME} -ltcmalloc)
 
+add_executable(test_nsg_iterated_index test_nsg_iterated_index.cpp)
+target_link_libraries(test_nsg_iterated_index ${PROJECT_NAME} -ltcmalloc)
+
 add_executable(test_nsg_twolevel_search test_nsg_twolevel_search.cpp)
 target_link_libraries(test_nsg_twolevel_search ${PROJECT_NAME} -ltcmalloc)
 
