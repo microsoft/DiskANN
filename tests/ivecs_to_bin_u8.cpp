@@ -46,6 +46,7 @@ int main(int argc, char** argv) {
   for (_u64 i = 0; i < nblks; i++) {
     _u64 cblk_size = std::min(npts - i * blk_size, blk_size);
     block_convert(reader, writer, read_buf, write_buf, cblk_size, ndims);
+    std::cout << "Block #" << i << " written" << std::endl;
   }
 
   delete[] read_buf;
