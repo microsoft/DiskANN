@@ -37,28 +37,6 @@ namespace {
       float_coords[idx] = (float) int8_coords[idx];
     }
   }
-
-  // vec_in = _u8 * [n_chunks]
-  // vec_out = float* [ndims]
-  // pq_tabel = float* [[2^8 * [chunk_size]] * n_chunks]
-  // ndims = vector dimension
-  // n_chunks = # of chunks ndims is split into
-  // chunk_size = chunk isze of each dimension chunk
-  inline void pq_to_float(const _u8 *vec_in, float *vec_out,
-                          const float *pq_table, _u64 ndims, _u64 n_chunks,
-                          _u64 chunk_size) {
-    for (_u64 chunk = 0; chunk < n_chunks; chunk++) {
-      const float *chunk_table = pq_table + (256 * chunk_size * chunk);
-      float *      chunk_out = vec_out + chunk * chunk_size;
-      _u64 this_chunk_size = std::min(ndims - chunk * chunk_size, chunk_size);
-      const _u8    pq_idx = *(vec_in + chunk);
-      const float *chunk_vals = chunk_table + pq_idx * this_chunk_size;
-      // avoiding memcpy as chunk size is at most 10
-      for (_u64 i = 0; i < this_chunk_size; i++) {
-        *(chunk_out + i) = *(chunk_vals + i);
-      }
-    }
-  }
 }  // namespace
 
 namespace NSG {
@@ -75,6 +53,9 @@ namespace NSG {
     }
     for (auto &k_v : nhood_cache) {
       delete[] k_v.second.second;
+    }
+    if (pq_table != nullptr) {
+      delete pq_table;
     }
     reader.close();
   }
@@ -163,9 +144,10 @@ namespace NSG {
   }
 
   void PQFlashNSG::load(const char *data_bin, const char *nsg_file,
-                        const float *pq_tables, const _u64 chunk_size,
+                        const char *pq_tables_bin, const _u64 chunk_size,
                         const _u64 n_chunks, const _u64 data_dim) {
-    this->pq_tables = pq_tables;
+    pq_table = new FixedChunkPQTable(n_chunks, chunk_size);
+    pq_table->load_bin(pq_tables_bin);
     unsigned npts_u32, nchunks_u32;
     NSG::load_bin<_u8>(data_bin, data, npts_u32, nchunks_u32);
     n_base = (_u64) npts_u32;
@@ -173,6 +155,10 @@ namespace NSG {
     this->n_chunks = n_chunks;
     this->chunk_size = chunk_size;
     aligned_dim = ROUND_UP(data_dim, 8);
+    std::cout << "PQ Dataset: # chunks: " << n_chunks
+              << ", chunk_size: " << chunk_size << ", npts: " << n_base
+              << ", ndims: " << data_dim << ", aligned_dim: " << aligned_dim
+              << std::endl;
 
     // read nsg metadata
     std::ifstream nsg_meta(nsg_file, std::ios::binary);
@@ -242,8 +228,7 @@ namespace NSG {
       init_ids[tmp_l] = id;
       visited.insert(id);
       // inflate coords from PQ _u8 to FP32
-      ::pq_to_float(data + id * n_chunks, scratch, pq_tables, data_dim,
-                    n_chunks, chunk_size);
+      pq_table->convert(data + id * n_chunks, scratch);
       float dist = dist_cmp->compare(scratch, query, aligned_dim);
       retset[tmp_l] = Neighbor(id, dist, true);
       if (stats != nullptr) {
@@ -324,8 +309,7 @@ namespace NSG {
             } else {
               visited.insert(id);
               cmps++;
-              ::pq_to_float(data + id * n_chunks, scratch, pq_tables, data_dim,
-                            n_chunks, chunk_size);
+              pq_table->convert(data + id * n_chunks, scratch);
               float dist = dist_cmp->compare(scratch, query, aligned_dim);
               if (stats != nullptr) {
                 stats->n_cmps++;
@@ -383,8 +367,7 @@ namespace NSG {
       _u64 id = medoid_nhood.second[tmp_l];
       init_ids[tmp_l] = id;
       visited.insert(id);
-      ::pq_to_float(data + id * n_chunks, scratch, pq_tables, data_dim,
-                    n_chunks, chunk_size);
+      pq_table->convert(data + id * n_chunks, scratch);
       float dist = dist_cmp->compare(scratch, query, aligned_dim);
       retset[tmp_l] = Neighbor(id, dist, true);
       if (stats != nullptr) {
@@ -474,8 +457,7 @@ namespace NSG {
             } else {
               visited.insert(id);
               cmps++;
-              ::pq_to_float(data + id * n_chunks, scratch, pq_tables, data_dim,
-                            n_chunks, chunk_size);
+              pq_table->convert(data + id * n_chunks, scratch);
               float dist = dist_cmp->compare(scratch, query, aligned_dim);
               if (stats != nullptr) {
                 stats->n_cmps++;
@@ -509,8 +491,7 @@ namespace NSG {
             } else {
               visited.insert(id);
               cmps++;
-              ::pq_to_float(data + id * n_chunks, scratch, pq_tables, data_dim,
-                            n_chunks, chunk_size);
+              pq_table->convert(data + id * n_chunks, scratch);
               float dist = dist_cmp->compare(scratch, query, aligned_dim);
               if (stats != nullptr) {
                 stats->n_cmps++;

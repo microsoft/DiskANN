@@ -2,9 +2,9 @@
 // Created by 付聪 on 2017/6/21.
 //
 
-#include <efanna2e/flash_index_nsg.h>
 #include <efanna2e/index.h>
 #include <efanna2e/neighbor.h>
+#include <efanna2e/pq_flash_index_nsg.h>
 #include <efanna2e/timer.h>
 #include <efanna2e/util.h>
 #include <omp.h>
@@ -46,33 +46,37 @@ void save_result(char* filename, std::vector<std::vector<unsigned>>& results) {
 }
 
 int main(int argc, char** argv) {
-  if (argc != 9) {
-    std::cout << argv[0] << " data_bin pq_tables n_chunks chunk_size data_dim "
-                            "nsg_disk_opt query_file_fvecs search_L search_K "
-                            "result_path BeamWidth cache_nlevels"
+  if (argc != 13) {
+    std::cout << argv[0]
+              << " data_bin[1] pq_tables_bin[2] n_chunks[3] chunk_size[4] "
+                 "data_dim[5] nsg_disk_opt[6] query_file_fvecs[7] search_L[8] "
+                 "search_K[9] result_path[10] BeamWidth[11] cache_nlevels[12]"
               << std::endl;
     exit(-1);
   }
+  _u64 n_chunks = (_u64) std::atoi(argv[3]);
+  _u64 chunk_size = (_u64) std::atoi(argv[4]);
+  _u64 data_dim = (_u64) std::atoi(argv[5]);
 
   // construct FlashNSG
   NSG::DistanceL2 dist_cmp;
-  NSG::FlashNSG   index(&dist_cmp);
+  NSG::PQFlashNSG index(&dist_cmp);
   std::cout << "main --- tid: " << std::this_thread::get_id() << std::endl;
   index.reader.register_thread();
-  index.load(argv[1], argv[2]);
+  index.load(argv[1], argv[6], argv[2], chunk_size, n_chunks, data_dim);
 
   // load queries
   float*   query_load = NULL;
   unsigned query_num, query_dim;
-  NSG::aligned_load_Tvecs<float>(argv[3], query_load, query_num, query_dim);
+  NSG::aligned_load_Tvecs<float>(argv[7], query_load, query_num, query_dim);
   std::cout << "query_dim = " << query_dim << std::endl;
   _u64 aligned_dim = ROUND_UP(query_dim, 8);
   assert(aligned_dim == index.aligned_dim);
 
-  _u64 l_search = (_u64) atoi(argv[4]);
-  _u64 k_search = (_u64) atoi(argv[5]);
-  int  beam_width = atoi(argv[7]);
-  _u64 cache_nlevels = (_u64) atoi(argv[8]);
+  _u64 l_search = (_u64) atoi(argv[8]);
+  _u64 k_search = (_u64) atoi(argv[9]);
+  int  beam_width = atoi(argv[11]);
+  _u64 cache_nlevels = (_u64) atoi(argv[12]);
 
   if (l_search < k_search) {
     std::cout << "search_L cannot be smaller than search_K!" << std::endl;
@@ -141,7 +145,7 @@ int main(int argc, char** argv) {
       stats, query_num, "# cache hits / query", "",
       [](const NSG::QueryStats& stats) { return stats.n_cache_hits; });
 
-  save_result(argv[6], res);
+  save_result(argv[10], res);
   delete[] stats;
   free(query_load);
 

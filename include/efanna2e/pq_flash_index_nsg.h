@@ -7,21 +7,12 @@
 #include "index.h"
 #include "neighbor.h"
 #include "parameters.h"
+#include "pq_table.h"
 #include "tsl/robin_map.h"
 #include "tsl/robin_set.h"
 #include "util.h"
 
 namespace NSG {
-  struct PQTable {
-    float *tables;      // pq_tables = float* [[2^8 * [chunk_size]] * n_chunks]
-    _u64   n_chunks;    // n_chunks = # of chunks ndims is split into
-    _u64   chunk_size;  // chunk_size = chunk size of each dimension chunk
-    // data_dim = n_chunks * chunk_size;
-
-    void load_v1(const char *filename) {
-    }
-  };
-
   class PQFlashNSG {
    public:
     PQFlashNSG(Distance *dist_cmp);
@@ -29,7 +20,7 @@ namespace NSG {
 
     // load data, but obtain handle to nsg file
     void load(const char *data_bin, const char *nsg_file,
-              const float *pq_tables, const _u64 chunk_size,
+              const char *pq_tables_bin, const _u64 chunk_size,
               const _u64 n_chunks, const _u64 data_dim);
 
     // NOTE:: implemented
@@ -66,11 +57,10 @@ namespace NSG {
     // data: _u8 * n_chunks
     // chunk_size = chunk size of each dimension chunk
     // pq_tables = float* [[2^8 * [chunk_size]] * n_chunks]
-    _u8 *        data = nullptr;
-    _u64         chunk_size;
-    _u64         n_chunks;
-    const float *pq_tables;
-
+    _u8 *              data = nullptr;
+    _u64               chunk_size;
+    _u64               n_chunks;
+    FixedChunkPQTable *pq_table;
     // distance comparator
     Distance *dist_cmp;
 
