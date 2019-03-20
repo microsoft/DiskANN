@@ -136,9 +136,6 @@ int main(int argc, char** argv) {
       stats, query_num, "Total # 4kB requests / query", "",
       [](const NSG::QueryStats& stats) { return stats.n_4k; });
   NSG::percentile_stats(
-      stats, query_num, "Read Size / query", "",
-      [](const NSG::QueryStats& stats) { return stats.read_size; });
-  NSG::percentile_stats(
       stats, query_num, "# cmps / query", "",
       [](const NSG::QueryStats& stats) { return stats.n_cmps; });
   NSG::percentile_stats(

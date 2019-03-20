@@ -26,25 +26,38 @@ namespace NSG {
 
     void load_bin(const char* filename) override {
       // bin structure: [256][ndims][ndims(float)]
-      unsigned npts, ndims;
-      NSG::load_bin<float>(filename, tables, npts, ndims);
-      std::cout << "PQ Pivots: # ctrs: " << npts << ", # dims: " << ndims
-                << std::endl;
-      assert((_u64) ndims == n_chunks * chunk_size);
+      unsigned npts_u32, ndims_u32;
+      NSG::load_bin<float>(filename, tables, npts_u32, ndims_u32);
+      std::cout << "PQ Pivots: # ctrs: " << npts_u32
+                << ", # dims: " << ndims_u32 << std::endl;
+      ndims = n_chunks * chunk_size;
+      assert((_u64) ndims_u32 == n_chunks * chunk_size);
     }
 
     // in_vec = _u8 * [n_chunks]
     // out_vec = float* [ndims]
     virtual void convert(const _u8* in_vec, float* out_vec) override {
+      /*
+      std::cout << "Input: ";
+      for(_u64 i=0;i<n_chunks;i++)
+        std::cout << (unsigned)in_vec[i] << " ";
+      std::cout << "\n";
+      */
       for (_u64 chunk = 0; chunk < n_chunks; chunk++) {
         const _u8    pq_idx = *(in_vec + chunk);
-        const float* vals = tables + (ndims * pq_idx) + (chunk * n_chunks);
+        const float* vals = (tables + (ndims * pq_idx)) + (chunk * chunk_size);
         float*       chunk_out = out_vec + (chunk * chunk_size);
         // avoiding memcpy as chunk size is at most 10
         for (_u64 i = 0; i < chunk_size; i++) {
           *(chunk_out + i) = *(vals + i);
         }
       }
+      /*
+      std::cout << "Output: ";
+      for(_u64 i=0;i<ndims;i++)
+        std::cout << out_vec[i] << " ";
+      std::cout << "\n";
+      */
     }
   };
 }  // namespace NSG
