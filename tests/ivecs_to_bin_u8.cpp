@@ -29,7 +29,7 @@ int main(int argc, char** argv) {
   reader.read((char*) &ndims_u32, sizeof(unsigned));
   reader.seekg(0, std::ios::beg);
   _u64 ndims = (_u64) ndims_u32;
-  _u64 npts = fsize / (ndims + 1) * sizeof(unsigned);
+  _u64 npts = fsize / ((ndims + 1) * sizeof(unsigned));
   std::cout << "Dataset: #pts = " << npts << ", # dims = " << ndims
             << std::endl;
 
