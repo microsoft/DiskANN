@@ -3,9 +3,7 @@
 //
 // This source code is licensed under the MIT license.
 //
-
-#ifndef EFANNA2E_GRAPH_H
-#define EFANNA2E_GRAPH_H
+#pragma once
 
 #include <cstddef>
 #include <mutex>
@@ -111,7 +109,7 @@ namespace NSG {
   };
 
   template<typename T>
-  struct DiskNhood {
+  struct CompositeDiskNhood {
     unsigned  nnbrs = 0;
     unsigned  dim = 0;
     unsigned *nbrs = nullptr;
@@ -120,7 +118,7 @@ namespace NSG {
     float *   aligned_fp32_coords = nullptr;  // alloc'ed only when read into,
     // dimension aligned to multiple of 8
 
-    DiskNhood() {
+    CompositeDiskNhood() {
       assert(buf == nullptr);
       assert(aligned_fp32_coords == nullptr);
       assert(disk_coords == nullptr);
@@ -223,5 +221,3 @@ namespace NSG {
     return right;
   }
 }
-
-#endif  // EFANNA2E_GRAPH_H

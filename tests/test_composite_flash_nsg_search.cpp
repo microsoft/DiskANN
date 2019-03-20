@@ -2,10 +2,9 @@
 // Created by 付聪 on 2017/6/21.
 //
 
-#include <efanna2e/flash_index_nsg.h>
+#include <efanna2e/composite_flash_index_nsg.h>
 #include <efanna2e/index.h>
 #include <efanna2e/neighbor.h>
-#include <efanna2e/timer.h>
 #include <efanna2e/util.h>
 #include <omp.h>
 #include <atomic>
@@ -46,33 +45,32 @@ void save_result(char* filename, std::vector<std::vector<unsigned>>& results) {
 }
 
 int main(int argc, char** argv) {
-  if (argc != 9) {
+  if (argc != 8) {
     std::cout << argv[0]
-              << " data_bin nsg_disk_opt query_file_fvecs search_L search_K "
+              << " embedded_index query_file_fvecs search_L search_K "
                  "result_path BeamWidth cache_nlevels"
               << std::endl;
     exit(-1);
   }
 
-  // construct FlashNSG
-  NSG::DistanceL2 dist_cmp;
-  NSG::FlashNSG   index(&dist_cmp);
+  // load CompositeFlashNSG
+  NSG::CompositeFlashNSG<int8_t, NSG::CompositeDiskNhood<int8_t>> index;
   std::cout << "main --- tid: " << std::this_thread::get_id() << std::endl;
   index.reader.register_thread();
-  index.load(argv[1], argv[2]);
+  index.load(argv[1]);
 
   // load queries
   float*   query_load = NULL;
   unsigned query_num, query_dim;
-  NSG::aligned_load_Tvecs<float>(argv[3], query_load, query_num, query_dim);
+  NSG::aligned_load_Tvecs<float>(argv[2], query_load, query_num, query_dim);
   std::cout << "query_dim = " << query_dim << std::endl;
   _u64 aligned_dim = ROUND_UP(query_dim, 8);
   assert(aligned_dim == index.aligned_dim);
 
-  _u64 l_search = (_u64) atoi(argv[4]);
-  _u64 k_search = (_u64) atoi(argv[5]);
-  int  beam_width = atoi(argv[7]);
-  _u64 cache_nlevels = (_u64) atoi(argv[8]);
+  _u64 l_search = (_u64) atoi(argv[3]);
+  _u64 k_search = (_u64) atoi(argv[4]);
+  int  beam_width = atoi(argv[6]);
+  _u64 cache_nlevels = (_u64) atoi(argv[7]);
 
   if (l_search < k_search) {
     std::cout << "search_L cannot be smaller than search_K!" << std::endl;
@@ -83,16 +81,22 @@ int main(int argc, char** argv) {
   // align query data
   // query_load = NSG::data_align(query_load, query_num, query_dim);
 
+  auto s = std::chrono::high_resolution_clock::now();
   std::vector<std::vector<unsigned>> res(query_num,
                                          std::vector<unsigned>(k_search));
+  _u64                  total_hops = 0;
+  _u64                  total_cmps = 0;
+  std::vector<_u64>     hops(query_num), cmps(query_num);
   bool                  has_init = false;
   std::atomic<unsigned> qcounter;
   qcounter.store(0);
 
+  std::atomic_ullong latency;  // In micros.
+  latency.store(0.0);
   NSG::QueryStats* stats = new NSG::QueryStats[query_num];
 
-  NSG::Timer timer;
-#pragma omp  parallel for schedule(dynamic, 128) firstprivate(has_init)
+#pragma omp parallel for schedule(dynamic, \
+                                  128) firstprivate(has_init) num_threads(16)
   for (_u64 i = 0; i < query_num; i++) {
     unsigned val = qcounter.fetch_add(1);
     if (val % 1000 == 0) {
@@ -109,15 +113,34 @@ int main(int argc, char** argv) {
     }
     std::vector<unsigned>& query_res = res[i];
 
+    auto before = std::chrono::high_resolution_clock::now();
     auto ret = index.cached_beam_search(query_load + i * aligned_dim, k_search,
                                         l_search, query_res.data(), beam_width,
                                         stats + i);
+    auto diff_time = std::chrono::high_resolution_clock::now() - before;
+    auto diff_micros =
+        std::chrono::duration_cast<std::chrono::microseconds>(diff_time);
+    latency.fetch_add((uint64_t) diff_micros.count());
+
     // auto ret = index.Search(query_load + i * dim, data_load, K, paras,
     // tmp.data());
+    hops[i] = ret.first;
+    cmps[i] = ret.second;
   }
-  _u64   total_query_us = timer.elapsed();
-  double qps = (double) query_num / ((double) total_query_us / 1e6);
-  std::cout << "QPS: " << qps << std::endl;
+  total_hops = std::accumulate(hops.begin(), hops.end(), 0L);
+  total_cmps = std::accumulate(cmps.begin(), cmps.end(), 0L);
+  auto                          e = std::chrono::high_resolution_clock::now();
+  std::chrono::duration<double> diff = e - s;
+  std::cout << "search time: " << diff.count() << "\n";
+
+  std::cout << "Average hops: " << (float) total_hops / (float) query_num
+            << std::endl
+            << "Average cmps: " << (float) total_cmps / (float) query_num
+            << std::endl;
+
+  std::cout << "Average search latency: " << latency.load() / query_num
+            << "micros" << std::endl
+            << "QPS: " << (float) query_num / diff.count() << std::endl;
 
   NSG::percentile_stats(
       stats, query_num, "Total us / query", "us",
@@ -132,18 +155,16 @@ int main(int argc, char** argv) {
       stats, query_num, "Total # 4kB requests / query", "",
       [](const NSG::QueryStats& stats) { return stats.n_4k; });
   NSG::percentile_stats(
+      stats, query_num, "Total # 8kB requests / query", "",
+      [](const NSG::QueryStats& stats) { return stats.n_8k; });
+  NSG::percentile_stats(
+      stats, query_num, "Total # 12kB requests / query", "",
+      [](const NSG::QueryStats& stats) { return stats.n_12k; });
+  NSG::percentile_stats(
       stats, query_num, "Read Size / query", "",
       [](const NSG::QueryStats& stats) { return stats.read_size; });
-  NSG::percentile_stats(
-      stats, query_num, "# cmps / query", "",
-      [](const NSG::QueryStats& stats) { return stats.n_cmps; });
-  NSG::percentile_stats(
-      stats, query_num, "# cache hits / query", "",
-      [](const NSG::QueryStats& stats) { return stats.n_cache_hits; });
 
-  save_result(argv[6], res);
-  delete[] stats;
-  free(query_load);
+  save_result(argv[5], res);
 
   return 0;
 }

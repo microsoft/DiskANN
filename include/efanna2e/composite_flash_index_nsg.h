@@ -12,15 +12,15 @@
 #include "util.h"
 
 namespace NSG {
-  class FlashNSG {
+  template<typename T, typename NhoodType>
+  class CompositeFlashNSG {
    public:
-    FlashNSG(Distance *dist_cmp);
-    ~FlashNSG();
+    ~CompositeFlashNSG();
 
-    // load data, but obtain handle to nsg file
-    void load(const char *data_bin, const char *nsg_file);
+    // empty function
+    void load(const char *filename);
 
-    // NOTE:: not implemented
+    // implemented
     void cache_bfs_levels(_u64 nlevels);
 
     // implemented
@@ -29,7 +29,7 @@ namespace NSG {
                                     const _u64  beam_width,
                                     QueryStats *stats = nullptr);
 
-    // not implemented
+    // implemented
     std::pair<int, int> cached_beam_search(const float *query,
                                            const _u64 k_search,
                                            const _u64 l_search, _u32 *indices,
@@ -38,26 +38,26 @@ namespace NSG {
     AlignedFileReader reader;
 
     // index info
-    // nhood of node `i` is in sector: [i / nnodes_per_sector]
-    // offset in sector: [(i % nnodes_per_sector) * max_node_len]
-    // nnbrs of node `i`: *(unsigned*) (buf)
-    // nbrs of node `i`: ((unsigned*)buf) + 1
-    _u64 max_node_len = 0, nnodes_per_sector = 0, max_degree = 0;
+    _u64 *node_offsets = nullptr;
+    _u64 *node_sizes = nullptr;
 
-    // data info
-    _u64    n_base = 0;
-    _u64    data_dim = 0;
-    _u64    aligned_dim = 0;
-    int8_t *data = nullptr;
+    // cache adjacency list for K-levels
+    std::vector<_u32> *nbrs_cache = nullptr;
+
+    // cache coords for K+1 levels
+    float **coords_cache = nullptr;
+
+    // data statics
+    _u64  n_base = 0;
+    _u64  data_dim = 0;
+    float scale_factor = 1.0f;
+    _u64  aligned_dim = 0;
 
     // distance comparator
-    Distance *dist_cmp;
+    DistanceL2 distance_cmp;
 
     // medoid/start info
-    _u64 medoid = 0;
-    std::pair<_u64, unsigned *> medoid_nhood;
-
-    // cache
-    tsl::robin_map<_u64, std::pair<_u64, unsigned *>> nhood_cache;
+    _u64      medoid = 0;
+    NhoodType medoid_nhood;
   };
 }
