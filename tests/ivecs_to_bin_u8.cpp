@@ -17,7 +17,7 @@ void block_convert(std::ifstream& reader, std::ofstream& writer,
 }
 
 int main(int argc, char** argv) {
-  if (argc != 4) {
+  if (argc != 3) {
     std::cout << argv[0] << " input_ivecs output_bin" << std::endl;
     exit(-1);
   }
