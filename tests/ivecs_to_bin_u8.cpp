@@ -10,7 +10,7 @@ void block_convert(std::ifstream& reader, std::ofstream& writer,
     _u8*      out_vec = write_buf + i * ndims;
     unsigned* in_vec = (read_buf + i * (ndims + 1)) + 1;
     for (_u64 j = 0; j < ndims; j++) {
-      if (in_vec[j] > 256){
+      if (in_vec[j] > 256) {
         std::cerr << "unexpected: " << in_vec[j] << std::endl;
       }
       out_vec[j] = (_u8) in_vec[j];
