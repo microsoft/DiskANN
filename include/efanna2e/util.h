@@ -234,7 +234,7 @@ namespace NSG {
   struct OneShotNSG {
     _u64                  medoid, width;
     unsigned *            nsg = nullptr;
-    std::vector<unsigned> nnbrs;
+    std::vector<unsigned> nnbrs_;
     std::vector<_u64>     offsets;
     _u64                  nnodes;
 
@@ -256,13 +256,13 @@ namespace NSG {
       _u64 cur_off = 0;
       while (cur_off * sizeof(unsigned) < nsg_len) {
         nnodes++;
-        unsigned cur_nnbrs = *(nsg + cur_off);
+        unsigned cur_nnbrs_ = *(nsg + cur_off);
         // offset to start of node nhood
         offsets.push_back(cur_off + 1);
         // # nbrs in nhood
-        nnbrs.push_back(cur_nnbrs);
+        nnbrs_.push_back(cur_nnbrs_);
         // offset to start of next node nhood
-        cur_off += (cur_nnbrs + 1);
+        cur_off += (cur_nnbrs_ + 1);
       }
       std::cout << "# nodes: " << nnodes << std::endl;
     }
@@ -277,8 +277,8 @@ namespace NSG {
       return (nsg + offsets[idx]);
     }
 
-    _u64 size(_u64 idx) {
-      return nnbrs[idx];
+    _u64 nnbrs(_u64 idx) {
+      return nnbrs_[idx];
     }
 
     _u64 size() {
