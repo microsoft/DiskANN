@@ -615,7 +615,7 @@ namespace NSG {
         float djk = distance_->compare(
             data_ + dimension_ * (size_t) result[t].id,
             data_ + dimension_ * (size_t) p.id, (unsigned) dimension_);
-        if (alpha * djk < p.distance /* dik */) {
+        if (djk < p.distance /* dik */) {
           occlude = true;
           break;
         }
