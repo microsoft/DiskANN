@@ -6,6 +6,7 @@
 #include <iostream>
 #include <limits>
 #include <vector>
+#include <algorithm>
 
 void blk_load_nsg(std::ifstream &in, std::vector<std::vector<unsigned>> &nsg,
                   _u64 blk_size) {
@@ -48,6 +49,7 @@ void load_knng(const char *filename, std::vector<std::vector<unsigned>> &knng) {
 
 void augment(std::vector<unsigned> &nsg, std::vector<unsigned> &knn) {
   nsg.insert(nsg.end(), knn.begin(), knn.end());
+	std::sort(nsg.begin(), nsg.end());
   auto last = std::unique(nsg.begin(), nsg.end());
   nsg.erase(last, nsg.end());
 }
@@ -78,7 +80,7 @@ void augment_write_nsg(const char *nsg_in, const char *knng_in,
   nsg_writer.write((char *) &width, sizeof(unsigned));
   nsg_writer.write((char *) &medoid, sizeof(unsigned));
 
-  _u64                               blk_size = 1048576;
+  _u64                               blk_size = 262144;
   std::vector<std::vector<unsigned>> nsg, knng;
   std::cout << "Loading knng" << std::endl;
   load_knng(knng_in, knng);
