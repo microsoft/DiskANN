@@ -11,34 +11,41 @@
 #include <atomic>
 #include <cassert>
 
-void load_data(char* filename, float*& data, unsigned& num,
-               unsigned& dim) {  // load data with sift10K pattern
-  std::ifstream in(filename, std::ios::binary);
-  if (!in.is_open()) {
-    std::cout << "open file error:" << filename << std::endl;
-    exit(-1);
+void conv_s8_to_float(_s8* in, float* out, _u64 ndims) {
+  for (_u64 j = 0; j < ndims; j++) {
+    out[j] = (float) in[j];
   }
-  in.read((char*) &dim, 4);
-  in.seekg(0, std::ios::end);
-  std::ios::pos_type ss = in.tellg();
-  size_t             fsize = (size_t) ss;
-  num = (unsigned) (fsize / (dim + 1) / 4);
-  data = (float*) malloc((size_t) num * (size_t) dim * sizeof(float));
-
-  in.seekg(0, std::ios::beg);
-  for (size_t i = 0; i < num; i++) {
-    in.seekg(4, std::ios::cur);
-    in.read((char*) (data + i * dim), dim * 4);
-  }
-  in.close();
 }
 
-void save_result(char* filename, std::vector<std::vector<unsigned>>& results) {
+void rerank_query(float* query, _s8* data, NSG::FixedChunkPQTable* pq_table,
+                  NSG::Distance* dist_cmp, std::vector<unsigned>& results,
+                  float* scratch, _u64 data_dim, _u64 aligned_dim) {
+  std::vector<std::pair<unsigned, float>> id_dists;
+  memset(scratch, 0, aligned_dim);
+  for (const unsigned& id : results) {
+    _s8* id_vec = data + (data_dim * id);
+    conv_s8_to_float(id_vec, scratch, data_dim);
+    float dist = dist_cmp->compare(scratch, query, aligned_dim);
+    id_dists.push_back(std::make_pair(id, dist));
+  }
+
+  std::sort(id_dists.begin(), id_dists.end(),
+            [](const std::pair<unsigned, float>& left,
+               const std::pair<unsigned, float>& right) {
+              return left.second < right.second;
+            });
+  for (_u64 i = 0; i < results.size(); i++) {
+    results[i] = id_dists[i].first;
+  }
+}
+
+void save_result(char* filename, std::vector<std::vector<unsigned>>& results,
+                 _u64 k) {
   std::cout << "Saving result to " << filename << std::endl;
   std::ofstream out(filename, std::ios::binary | std::ios::out);
 
+  unsigned GK = (unsigned) k;
   for (unsigned i = 0; i < results.size(); i++) {
-    unsigned GK = (unsigned) results[i].size();
     out.write((char*) &GK, sizeof(unsigned));
     out.write((char*) results[i].data(), GK * sizeof(unsigned));
   }
@@ -46,11 +53,12 @@ void save_result(char* filename, std::vector<std::vector<unsigned>>& results) {
 }
 
 int main(int argc, char** argv) {
-  if (argc != 13) {
+  if (argc != 15) {
     std::cout << argv[0]
               << " data_bin[1] pq_tables_bin[2] n_chunks[3] chunk_size[4] "
                  "data_dim[5] nsg_disk_opt[6] query_file_fvecs[7] search_L[8] "
-                 "search_K[9] result_path[10] BeamWidth[11] cache_nlevels[12]"
+                 "search_K[9] result_path[10] BeamWidth[11] cache_nlevels[12] "
+                 "full_int8_coords_bin[13] k_save[14]"
               << std::endl;
     exit(-1);
   }
@@ -119,8 +127,27 @@ int main(int argc, char** argv) {
     // auto ret = index.Search(query_load + i * dim, data_load, K, paras,
     // tmp.data());
   }
+
   _u64   total_query_us = timer.elapsed();
   double qps = (double) query_num / ((double) total_query_us / 1e6);
+
+  std::cout << "Loading int8_t data" << std::endl;
+  _s8*     s8_data = nullptr;
+  unsigned npts_u32, ndims_u32;
+  NSG::load_bin<_s8>(argv[13], s8_data, npts_u32, ndims_u32);
+
+  // rerank results
+  std::cout << "Reranking results";
+  float* scratch = nullptr;
+  NSG::alloc_aligned((void**) &scratch, aligned_dim * sizeof(float), 32);
+  memset(scratch, 0, aligned_dim);
+  for (_u64 i = 0; i < query_num; i++) {
+    float*                 query = query_load + i * aligned_dim;
+    std::vector<unsigned>& query_results = res[i];
+    rerank_query(query, s8_data, index.pq_table, &dist_cmp, query_results,
+                 scratch, data_dim, aligned_dim);
+  }
+
   std::cout << "QPS: " << qps << std::endl;
 
   NSG::percentile_stats(
@@ -142,9 +169,12 @@ int main(int argc, char** argv) {
       stats, query_num, "# cache hits / query", "",
       [](const NSG::QueryStats& stats) { return stats.n_cache_hits; });
 
-  save_result(argv[10], res);
+  _u64 k_save = (_u64) std::atoi(argv[14]);
+  save_result(argv[10], res, k_save);
   delete[] stats;
+  delete[] s8_data;
   free(query_load);
+  free(scratch);
 
   return 0;
 }

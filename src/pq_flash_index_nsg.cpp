@@ -369,6 +369,8 @@ namespace NSG {
       visited.insert(id);
       pq_table->convert(data + id * n_chunks, scratch);
       float dist = dist_cmp->compare(scratch, query, aligned_dim);
+      // std::cout << "cmp: " << id << ", dist: " << dist << std::endl;
+      // std::cerr << "dist: " << dist << std::endl;
       retset[tmp_l] = Neighbor(id, dist, true);
       if (stats != nullptr) {
         stats->n_cmps++;
@@ -459,6 +461,8 @@ namespace NSG {
               cmps++;
               pq_table->convert(data + id * n_chunks, scratch);
               float dist = dist_cmp->compare(scratch, query, aligned_dim);
+              // std::cout << "cmp: " << id << ", dist: " << dist << std::endl;
+              // std::cerr << "dist: " << dist << std::endl;
               if (stats != nullptr) {
                 stats->n_cmps++;
               }
@@ -493,6 +497,8 @@ namespace NSG {
               cmps++;
               pq_table->convert(data + id * n_chunks, scratch);
               float dist = dist_cmp->compare(scratch, query, aligned_dim);
+              // std::cout << "cmp: " << id << ", dist: " << dist << std::endl;
+              // std::cerr << "dist: " << dist << std::endl;
               if (stats != nullptr) {
                 stats->n_cmps++;
               }

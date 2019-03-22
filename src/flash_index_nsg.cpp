@@ -357,6 +357,7 @@ namespace NSG {
       visited.insert(id);
       int8_to_float(data + id * data_dim, scratch, data_dim);
       float dist = dist_cmp->compare(scratch, query, aligned_dim);
+      // std::cout << "cmp: " << id << ", dist: " << dist << std::endl;
       retset[tmp_l] = Neighbor(id, dist, true);
       if (stats != nullptr) {
         stats->n_cmps++;
@@ -447,6 +448,7 @@ namespace NSG {
               cmps++;
               int8_to_float(data + id * data_dim, scratch, data_dim);
               float dist = dist_cmp->compare(scratch, query, aligned_dim);
+              // std::cout << "cmp: " << id << ", dist: " << dist << std::endl;
               if (stats != nullptr) {
                 stats->n_cmps++;
               }
@@ -481,6 +483,7 @@ namespace NSG {
               cmps++;
               int8_to_float(data + id * data_dim, scratch, data_dim);
               float dist = dist_cmp->compare(scratch, query, aligned_dim);
+              // std::cout << "cmp: " << id << ", dist: " << dist << std::endl;
               if (stats != nullptr) {
                 stats->n_cmps++;
               }
