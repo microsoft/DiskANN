@@ -1,4 +1,5 @@
 #include <efanna2e/util.h>
+#include <algorithm>
 #include <cassert>
 #include <cmath>
 #include <cstring>
@@ -6,7 +7,6 @@
 #include <iostream>
 #include <limits>
 #include <vector>
-#include <algorithm>
 #include "tsl/robin_set.h"
 
 void blk_load_nsg(std::ifstream &in, std::vector<std::vector<unsigned>> &nsg,
@@ -49,20 +49,22 @@ void load_knng(const char *filename, std::vector<std::vector<unsigned>> &knng) {
 }
 
 void augment(std::vector<unsigned> &nsg, std::vector<unsigned> &knn) {
-	_u64 nsg_size = nsg.size();
-	// std::cout << "nsg_size: " << nsg_size << ", knn_size: " << knn.size() << std::endl;
-	tsl::robin_set<unsigned> uniq;
-	for(unsigned id : nsg)
-		uniq.insert(id);
-	// std::cout << "nsg + uniq.size(): " << uniq.size() << std::endl;
-	//for(unsigned id : knn)
-	//	uniq.insert(id);
-	// std::cout << "nsg + knn + uniq.size(): " << uniq.size() << std::endl;
-	//if (nsg.size() > uniq.size())
-	//	std::cout << "nsg.size(): " << nsg.size() << ", uniq.size(): " << uniq.size() << std::endl;	
-	nsg.clear();
-	for(unsigned id : uniq)
-		nsg.push_back(id);
+  _u64 nsg_size = nsg.size();
+  // std::cout << "nsg_size: " << nsg_size << ", knn_size: " << knn.size() <<
+  // std::endl;
+  tsl::robin_set<unsigned> uniq;
+  for (unsigned id : nsg)
+    uniq.insert(id);
+  // std::cout << "nsg + uniq.size(): " << uniq.size() << std::endl;
+  // for(unsigned id : knn)
+  //	uniq.insert(id);
+  // std::cout << "nsg + knn + uniq.size(): " << uniq.size() << std::endl;
+  // if (nsg.size() > uniq.size())
+  //	std::cout << "nsg.size(): " << nsg.size() << ", uniq.size(): " <<
+  // uniq.size() << std::endl;
+  nsg.clear();
+  for (unsigned id : uniq)
+    nsg.push_back(id);
 }
 
 void block_augment_graph(std::vector<std::vector<unsigned>> &graph,

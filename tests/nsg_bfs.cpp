@@ -15,7 +15,7 @@ void load_nsg(const char *filename, VecVec &graph, unsigned &width,
   in.read((char *) &width, sizeof(unsigned));
   in.read((char *) &ep_, sizeof(unsigned));
   std::cout << "ep_ = " << ep_ << ", width = " << width << std::endl;
-	uint64_t n_dups = 0;
+  uint64_t n_dups = 0;
   // width=100;
   while (!in.eof()) {
     unsigned k;
@@ -26,21 +26,24 @@ void load_nsg(const char *filename, VecVec &graph, unsigned &width,
     }
     if (in.eof())
       break;
-    std::vector<unsigned> tmp(k);
-		tsl::robin_set<unsigned> tmp_set;
+    std::vector<unsigned>    tmp(k);
+    tsl::robin_set<unsigned> tmp_set;
     in.read((char *) tmp.data(), k * sizeof(unsigned));
-		for(unsigned id : tmp)
-			tmp_set.insert(id);
-		if ((graph.size() % 1000000) == 0)
-			std::cout << graph.size() << " nodes read" << std::endl;
-		/*
-		if (tmp_set.size() != k)
-			std::cout << "duplicate nbrs: " << tmp_set.size() << " vs " << k << std::endl;
-		*/
-		n_dups += (tmp.size() - tmp_set.size());
+    for (unsigned id : tmp)
+      tmp_set.insert(id);
+    if ((graph.size() % 1000000) == 0)
+      std::cout << graph.size() << " nodes read" << std::endl;
+    /*
+    if (tmp_set.size() != k)
+      std::cout << "duplicate nbrs: " << tmp_set.size() << " vs " << k <<
+    std::endl;
+    */
+    n_dups += (tmp.size() - tmp_set.size());
     graph.push_back(tmp);
   }
-	std::cout << "Total # of dups: " << n_dups << ", avg # of dups: " << (double)n_dups / (double)graph.size() << std::endl;
+  std::cout << "Total # of dups: " << n_dups
+            << ", avg # of dups: " << (double) n_dups / (double) graph.size()
+            << std::endl;
   std::cout << "Total #nodes = " << graph.size() << std::endl;
 }
 

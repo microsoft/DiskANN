@@ -96,7 +96,8 @@ void write_plain_nsg(const char *filename, NSG::OneShotNSG &nsg) {
 }
 
 // layout: [INT8 COORDS][UINT32 NHOOD]..[PADDING]..[INT8 COORDS]...
-void write_embedded_nsg(const char *filename, NSG::OneShotNSG &nsg, _s8* data, _u64 npts, _u64 ndims) {
+void write_embedded_nsg(const char *filename, NSG::OneShotNSG &nsg, _s8 *data,
+                        _u64 npts, _u64 ndims) {
   std::ofstream writer(filename, std::ios::binary);
   _u64          nnodes = nsg.nnodes;
   _u64          medoid = nsg.medoid;
@@ -109,7 +110,8 @@ void write_embedded_nsg(const char *filename, NSG::OneShotNSG &nsg, _s8* data, _
   }
   std::cout << "max degree: " << max_degree << std::endl;
 
-  _u64 max_node_len = (ndims * sizeof(_s8)) + (max_degree + 1) * sizeof(unsigned);
+  _u64 max_node_len =
+      (ndims * sizeof(_s8)) + (max_degree + 1) * sizeof(unsigned);
   writer.write((char *) &max_node_len, sizeof(_u64));
   std::cout << "max write-per-node: " << max_node_len << "B" << std::endl;
 
@@ -146,8 +148,8 @@ void write_embedded_nsg(const char *filename, NSG::OneShotNSG &nsg, _s8* data, _
       // get sector buf and node buf
       sector_buf = blk_buf + (sector_no % nsectors_per_blk) * SECTOR_LEN;
       node_buf = sector_buf + sector_off;
-      memcpy(node_buf, data + i*ndims, ndims * sizeof(_s8));
-      node_buf += ndims*sizeof(_s8);
+      memcpy(node_buf, data + i * ndims, ndims * sizeof(_s8));
+      node_buf += ndims * sizeof(_s8);
       *((unsigned *) node_buf) = nhood_size;
       const unsigned *nhood = nsg.data(i);
       memcpy(node_buf + sizeof(unsigned), nhood, nhood_size * sizeof(unsigned));
@@ -162,17 +164,17 @@ void write_embedded_nsg(const char *filename, NSG::OneShotNSG &nsg, _s8* data, _
 }
 
 int main(int argc, char **argv) {
-  if (argc != 3 || argc != 4) {
+  if (argc != 3 && argc != 4) {
     std::cout << argv[0] << " nsg_in nsg_out data_bin (optional)" << std::endl;
     exit(-1);
   }
   NSG::OneShotNSG nsg;
   nsg.read(argv[1]);
-  if (argc == 3){
+  if (argc == 3) {
     write_plain_nsg(argv[2], nsg);
-  } else{
-    unsigned npts_u32, ndims_u32;
-    _s8* data = nullptr;
+  } else {
+    unsigned npts, ndims;
+    _s8 *    data = nullptr;
     std::cout << "Embedding node coords with its nhood" << std::endl;
     NSG::load_bin<_s8>(argv[3], data, npts, ndims);
     write_embedded_nsg(argv[2], nsg, data, npts, ndims);
