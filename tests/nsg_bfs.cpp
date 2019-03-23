@@ -119,11 +119,18 @@ void average_in_degree(const VecMapCount &bfs_order) {
   double   lvl_degree = 0;
   for (const auto &lvl : bfs_order) {
     lvl_degree = 0;
+    std::vector<unsigned> in_degrees;
     for (const auto &id : lvl) {
       lvl_degree += id.second;
+      in_degrees.push_back(id.second);
     }
+    std::sort(in_degrees.begin(), in_degrees.end(), std::greater<unsigned>());
     std::cout << "Level #" << level
-      << " : Avg degree = " << lvl_degree / (double)lvl.size()
+      << " : Avg In degree = " << lvl_degree / (double)lvl.size()
+      << "  : 90pc = " << in_degrees[0.1 * in_degrees.size()]
+      << "  : 70pc = " << in_degrees[0.3 * in_degrees.size()]
+      << "  : 50pc = " << in_degrees[0.5 * in_degrees.size()]
+      << "  : 25pc = " << in_degrees[0.75 * in_degrees.size()]
       << std::endl;
     level++;
   }
