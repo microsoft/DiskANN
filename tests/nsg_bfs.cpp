@@ -72,7 +72,7 @@ void nsg_bfs(const VecVec &nsg, const unsigned start_node, VecMapCount *bfs_orde
           if (cur_level->find(nbr) == cur_level->end())
             cur_level->insert(std::make_pair(nbr, 1));
           else
-            (*cur_level)[nbr]++;
+            (*cur_level)[nbr] = 1 + (*cur_level)[nbr];
         }
       }
     }
