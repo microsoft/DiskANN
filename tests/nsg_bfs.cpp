@@ -127,6 +127,7 @@ void average_in_degree(const VecMapCount &bfs_order) {
       in_degrees.push_back(id.second);
     }
     std::sort(in_degrees.begin(), in_degrees.end(), std::greater<unsigned>());
+    unsigned univalent = in_degrees.end() - std::find(in_degrees.begin(), in_degrees.end(), 1);
     std::cout << "Level #" << level
       << " : Avg In degree = " << lvl_degree / (double)lvl.size()
       << "\tmax  = " << in_degrees[0]
@@ -134,7 +135,7 @@ void average_in_degree(const VecMapCount &bfs_order) {
       << "\t90pc = " << in_degrees[0.1 * in_degrees.size()]
       << "\t70pc = " << in_degrees[0.3 * in_degrees.size()]
       << "\t50pc = " << in_degrees[0.5 * in_degrees.size()]
-      << "\t25pc = " << in_degrees[0.75 * in_degrees.size()]
+      << "\tunivalent = " << univalent
       << std::endl;
     level++;
   }
