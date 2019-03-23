@@ -48,7 +48,7 @@ void load_nsg(const char *filename, VecVec &graph, unsigned &width,
   std::cout << "Total #nodes = " << graph.size() << std::endl;
 }
 
-// Do BFS and count in-degree for each node
+// Do BFS and count in-degree for each node from previous level
 void nsg_bfs(const VecVec &nsg, const unsigned start_node, VecMapCount *bfs_order,
              bool *visited) {
   auto cur_level = new MapCount();
@@ -67,11 +67,13 @@ void nsg_bfs(const VecVec &nsg, const unsigned start_node, VecMapCount *bfs_orde
         if (nbr >= nsg_size) {
           std::cerr << "invalid" << std::endl;
         }
+
         if (!visited[nbr]) {
           visited[nbr] = true;
-          if (cur_level->find(nbr) == cur_level->end())
-            cur_level->insert(std::make_pair(nbr, 1));
-          else
+          cur_level->insert(std::make_pair(nbr, 1));
+        }
+        else {
+          if (cur_level->find(nbr) != cur_level->end())
             (*cur_level)[nbr] = 1 + (*cur_level)[nbr];
         }
       }
