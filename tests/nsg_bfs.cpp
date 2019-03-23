@@ -52,7 +52,7 @@ void load_nsg(const char *filename, VecVec &graph, unsigned &width,
 }
 
 // Do BFS and count in-degree for each node from previous level
-void nsg_bfs(const VecVec &nsg, const unsigned start_node, VecMapCount *bfs_order,
+void nsg_bfs(const VecVec &nsg, const unsigned start_node, VecMapCount &bfs_order,
              bool *visited) {
   auto cur_level = new MapCount();
   auto prev_level = new MapCount();
@@ -91,7 +91,7 @@ void nsg_bfs(const VecVec &nsg, const unsigned start_node, VecMapCount *bfs_orde
     // create a new set
     MapCount add(cur_level->size());
     add.insert(cur_level->begin(), cur_level->end());
-    bfs_order->push_back(add);
+    bfs_order.push_back(add);
 
     // swap cur_level and prev_level, increment level
     prev_level->clear();
@@ -151,7 +151,7 @@ int main(int argc, char **argv) {
   }
 
   VecVec nsg;
-  tsl::robin_map<unsigned, VecMapCount*> bfs_orders;
+  //tsl::robin_map<unsigned, VecMapCount*> bfs_orders;
 
   unsigned ep_, width;
   load_nsg(argv[1], nsg, width, ep_);
@@ -160,31 +160,36 @@ int main(int argc, char **argv) {
   std::fill(visited, visited + nsg.size(), false);
 
   unsigned start_node = ep_;
+  unsigned previous_start = 0;
   bool     complete = false;
   while (!complete) {
-    auto bfs_order = new VecMapCount();
+    VecMapCount bfs_order;
     std::cout << "Start node: " << start_node << std::endl;
     nsg_bfs(nsg, start_node, bfs_order, visited);
-    bfs_orders.insert(std::make_pair(start_node, bfs_order));
+    //bfs_orders.insert(std::make_pair(start_node, bfs_order));
+   
+    average_out_degree(nsg, bfs_order);
+    average_in_degree(bfs_order);
 
     complete = true;
-    for (unsigned idx = 0; idx < nsg.size(); idx++) {
+    for (unsigned idx = previous_start; idx < nsg.size(); idx++) {
       if (!visited[idx]) {
         complete = false;
         start_node = idx;
         break;
       }
     }
+    previous_start = start_node + 1;
   }
 
-  for (auto &k_v : bfs_orders) {
-    std::cout << "Start node: " << k_v.first << std::endl;
-    average_out_degree(nsg, *k_v.second);
-    average_in_degree(*k_v.second);
-  }
+  //for (auto &k_v : bfs_orders) {
+  //  std::cout << "Start node: " << k_v.first << std::endl;
+  //  average_out_degree(nsg, *k_v.second);
+  //  average_in_degree(*k_v.second);
+  //}
 
-  for (auto &k_v : bfs_orders)
-    delete bfs_orders[k_v.first];
+  //for (auto &k_v : bfs_orders)
+  //  delete bfs_orders[k_v.first];
   delete[] visited;
 
   return 0;
