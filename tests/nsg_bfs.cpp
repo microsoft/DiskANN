@@ -9,6 +9,10 @@
 typedef std::vector<std::vector<unsigned>>    VecVec;
 typedef std::vector<tsl::robin_set<unsigned>> VecSet;
 
+typedef tsl::robin_map<unsigned, unsigned> MapCount;
+typedef std::vector<MapCount> VecMapCount;
+
+
 void load_nsg(const char *filename, VecVec &graph, unsigned &width,
               unsigned &ep_) {
   std::ifstream in(filename, std::ios::binary);
@@ -44,11 +48,12 @@ void load_nsg(const char *filename, VecVec &graph, unsigned &width,
   std::cout << "Total #nodes = " << graph.size() << std::endl;
 }
 
-void nsg_bfs(const VecVec &nsg, const unsigned start_node, VecSet *bfs_order,
+// Do BFS and count in-degree for each node
+void nsg_bfs(const VecVec &nsg, const unsigned start_node, VecMapCount *bfs_order,
              bool *visited) {
-  tsl::robin_set<unsigned> *cur_level = new tsl::robin_set<unsigned>();
-  tsl::robin_set<unsigned> *prev_level = new tsl::robin_set<unsigned>();
-  prev_level->insert(start_node);
+  auto cur_level = new MapCount();
+  auto prev_level = new MapCount();
+  prev_level->insert(std::make_pair(start_node,0));
   visited[start_node] = true;
   unsigned level = 0;
   unsigned nsg_size = nsg.size();
@@ -58,26 +63,28 @@ void nsg_bfs(const VecVec &nsg, const unsigned start_node, VecSet *bfs_order,
 
     // select candidates
     for (auto id : *prev_level) {
-      for (const auto &nbr : nsg[id]) {
+      for (const auto &nbr : nsg[id.first]) {
         if (nbr >= nsg_size) {
           std::cerr << "invalid" << std::endl;
         }
         if (!visited[nbr]) {
-          cur_level->insert(nbr);
           visited[nbr] = true;
+          if (cur_level->find(nbr) == cur_level->end())
+            cur_level->insert(std::make_pair(nbr, 1));
+          else
+            (*cur_level)[nbr]++;
         }
       }
     }
 
-    if (cur_level->empty()) {
+    if (cur_level->empty())
       break;
-    }
 
     std::cerr << "Level #" << level << " : " << cur_level->size() << " nodes"
               << std::endl;
 
     // create a new set
-    tsl::robin_set<unsigned> add(cur_level->size());
+    MapCount add(cur_level->size());
     add.insert(cur_level->begin(), cur_level->end());
     bfs_order->push_back(add);
 
@@ -92,17 +99,32 @@ void nsg_bfs(const VecVec &nsg, const unsigned start_node, VecSet *bfs_order,
   delete prev_level;
 }
 
-void average_degree(const VecVec &nsg, const VecSet &bfs_order) {
+void average_out_degree(const VecVec &nsg, const VecMapCount &bfs_order) {
   unsigned level = 0;
   double   lvl_degree = 0;
   for (const auto &lvl : bfs_order) {
     lvl_degree = 0;
     for (const auto &id : lvl) {
-      lvl_degree += nsg[id].size();
+      lvl_degree += nsg[id.first].size();
     }
     std::cout << "Level #" << level
               << " : Avg degree = " << lvl_degree / (double) lvl.size()
               << std::endl;
+    level++;
+  }
+}
+
+void average_in_degree(const VecMapCount &bfs_order) {
+  unsigned level = 0;
+  double   lvl_degree = 0;
+  for (const auto &lvl : bfs_order) {
+    lvl_degree = 0;
+    for (const auto &id : lvl) {
+      lvl_degree += id.second;
+    }
+    std::cout << "Level #" << level
+      << " : Avg degree = " << lvl_degree / (double)lvl.size()
+      << std::endl;
     level++;
   }
 }
@@ -114,7 +136,7 @@ int main(int argc, char **argv) {
   }
 
   VecVec nsg;
-  tsl::robin_map<unsigned, VecSet *> bfs_orders;
+  tsl::robin_map<unsigned, VecMapCount*> bfs_orders;
 
   unsigned ep_, width;
   load_nsg(argv[1], nsg, width, ep_);
@@ -125,7 +147,7 @@ int main(int argc, char **argv) {
   unsigned start_node = ep_;
   bool     complete = false;
   while (!complete) {
-    VecSet *bfs_order = new VecSet();
+    auto bfs_order = new VecMapCount();
     std::cout << "Start node: " << start_node << std::endl;
     nsg_bfs(nsg, start_node, bfs_order, visited);
     bfs_orders.insert(std::make_pair(start_node, bfs_order));
@@ -142,12 +164,12 @@ int main(int argc, char **argv) {
 
   for (auto &k_v : bfs_orders) {
     std::cout << "Start node: " << k_v.first << std::endl;
-    average_degree(nsg, *k_v.second);
+    average_out_degree(nsg, *k_v.second);
+    average_in_degree(*k_v.second);
   }
 
-  for (auto &k_v : bfs_orders) {
+  for (auto &k_v : bfs_orders)
     delete bfs_orders[k_v.first];
-  }
   delete[] visited;
 
   return 0;
