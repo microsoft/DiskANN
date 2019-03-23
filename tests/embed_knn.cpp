@@ -7,6 +7,7 @@
 #include <limits>
 #include <vector>
 #include <algorithm>
+#include "tsl/robin_set.h"
 
 void blk_load_nsg(std::ifstream &in, std::vector<std::vector<unsigned>> &nsg,
                   _u64 blk_size) {
@@ -48,10 +49,20 @@ void load_knng(const char *filename, std::vector<std::vector<unsigned>> &knng) {
 }
 
 void augment(std::vector<unsigned> &nsg, std::vector<unsigned> &knn) {
-  nsg.insert(nsg.end(), knn.begin(), knn.end());
-	std::sort(nsg.begin(), nsg.end());
-  auto last = std::unique(nsg.begin(), nsg.end());
-  nsg.erase(last, nsg.end());
+	_u64 nsg_size = nsg.size();
+	// std::cout << "nsg_size: " << nsg_size << ", knn_size: " << knn.size() << std::endl;
+	tsl::robin_set<unsigned> uniq;
+	for(unsigned id : nsg)
+		uniq.insert(id);
+	// std::cout << "nsg + uniq.size(): " << uniq.size() << std::endl;
+	//for(unsigned id : knn)
+	//	uniq.insert(id);
+	// std::cout << "nsg + knn + uniq.size(): " << uniq.size() << std::endl;
+	//if (nsg.size() > uniq.size())
+	//	std::cout << "nsg.size(): " << nsg.size() << ", uniq.size(): " << uniq.size() << std::endl;	
+	nsg.clear();
+	for(unsigned id : uniq)
+		nsg.push_back(id);
 }
 
 void block_augment_graph(std::vector<std::vector<unsigned>> &graph,
@@ -80,7 +91,7 @@ void augment_write_nsg(const char *nsg_in, const char *knng_in,
   nsg_writer.write((char *) &width, sizeof(unsigned));
   nsg_writer.write((char *) &medoid, sizeof(unsigned));
 
-  _u64                               blk_size = 262144;
+  _u64                               blk_size = 1048576;
   std::vector<std::vector<unsigned>> nsg, knng;
   std::cout << "Loading knng" << std::endl;
   load_knng(knng_in, knng);
