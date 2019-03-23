@@ -151,7 +151,6 @@ int main(int argc, char **argv) {
   }
 
   VecVec nsg;
-  //tsl::robin_map<unsigned, VecMapCount*> bfs_orders;
 
   unsigned ep_, width;
   load_nsg(argv[1], nsg, width, ep_);
@@ -166,7 +165,6 @@ int main(int argc, char **argv) {
     VecMapCount bfs_order;
     std::cout << "Start node: " << start_node << std::endl;
     nsg_bfs(nsg, start_node, bfs_order, visited);
-    //bfs_orders.insert(std::make_pair(start_node, bfs_order));
    
     average_out_degree(nsg, bfs_order);
     average_in_degree(bfs_order);
@@ -182,14 +180,6 @@ int main(int argc, char **argv) {
     previous_start = start_node + 1;
   }
 
-  //for (auto &k_v : bfs_orders) {
-  //  std::cout << "Start node: " << k_v.first << std::endl;
-  //  average_out_degree(nsg, *k_v.second);
-  //  average_in_degree(*k_v.second);
-  //}
-
-  //for (auto &k_v : bfs_orders)
-  //  delete bfs_orders[k_v.first];
   delete[] visited;
 
   return 0;
