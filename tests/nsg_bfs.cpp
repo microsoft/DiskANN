@@ -134,9 +134,9 @@ void average_in_degree(const VecMapCount &bfs_order) {
     std::cout << "Level #" << level
       << " : Avg In degree = " << lvl_degree / (double)lvl.size()
       << "\tmax = " << in_degrees[0]
+      << "\t99pc = " << in_degrees[0.01 * in_degrees.size()]
       << "\t95pc = " << in_degrees[0.05 * in_degrees.size()]
       << "\t90pc = " << in_degrees[0.1 * in_degrees.size()]
-      << "\t70pc = " << in_degrees[0.3 * in_degrees.size()]
       << "\t50pc = " << in_degrees[0.5 * in_degrees.size()]
       << "\t#ones = " << univalent
       << std::endl;
