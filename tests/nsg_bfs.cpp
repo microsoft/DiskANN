@@ -85,7 +85,7 @@ void nsg_bfs(const VecVec &nsg, const unsigned start_node, VecMapCount *bfs_orde
     if (cur_level->empty())
       break;
 
-    std::cerr << "Level #" << level << " : " << cur_level->size() << " nodes"
+    std::cout << "Level #" << level << " : " << cur_level->size() << " nodes"
               << std::endl;
 
     // create a new set
