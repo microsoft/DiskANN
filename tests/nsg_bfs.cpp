@@ -14,7 +14,7 @@ typedef std::vector<MapCount> VecMapCount;
 
 
 void load_nsg(const char *filename, VecVec &graph, unsigned &width,
-              unsigned &ep_) {
+              unsigned &ep_, const bool check_for_dup = true) {
   std::ifstream in(filename, std::ios::binary);
   in.read((char *) &width, sizeof(unsigned));
   in.read((char *) &ep_, sizeof(unsigned));
@@ -31,19 +31,18 @@ void load_nsg(const char *filename, VecVec &graph, unsigned &width,
     if (in.eof())
       break;
     std::vector<unsigned>    tmp(k);
-    tsl::robin_set<unsigned> tmp_set;
     in.read((char *) tmp.data(), k * sizeof(unsigned));
-    for (unsigned id : tmp)
-      tmp_set.insert(id);
+
+    if (check_for_dup) {
+      tsl::robin_set<unsigned> tmp_set;
+      for (unsigned id : tmp)
+        tmp_set.insert(id);
+      n_dups += (tmp.size() - tmp_set.size());
+    }
+    graph.push_back(tmp);
+
     if ((graph.size() % 1000000) == 0)
       std::cout << graph.size() << " nodes read" << std::endl;
-    /*
-    if (tmp_set.size() != k)
-      std::cout << "duplicate nbrs: " << tmp_set.size() << " vs " << k <<
-    std::endl;
-    */
-    n_dups += (tmp.size() - tmp_set.size());
-    graph.push_back(tmp);
   }
   std::cout << "Total # of dups: " << n_dups
             << ", avg # of dups: " << (double) n_dups / (double) graph.size()
@@ -132,7 +131,7 @@ void average_in_bfs_degree(const VecMapCount &bfs_order) {
     std::sort(in_degrees.begin(), in_degrees.end(), std::greater<unsigned>());
     unsigned univalent = in_degrees.end() - std::find(in_degrees.begin(), in_degrees.end(), 1);
     std::cout << "Level #" << level
-      << " : Avg In degree = " << lvl_degree / (double)lvl.size()
+      << " : Avg BFS In degree = " << lvl_degree / (double)lvl.size()
       << "\tmax = " << in_degrees[0]
       << "\t99pc = " << in_degrees[0.01 * in_degrees.size()]
       << "\t95pc = " << in_degrees[0.05 * in_degrees.size()]
@@ -188,7 +187,7 @@ int main(int argc, char **argv) {
   VecVec nsg;
 
   unsigned ep_, width;
-  load_nsg(argv[1], nsg, width, ep_);
+  load_nsg(argv[1], nsg, width, ep_, false);
   std::cout << "nsg.size() = " << nsg.size() << std::endl;
   bool *visited = new bool[nsg.size()]();
   std::fill(visited, visited + nsg.size(), false);
