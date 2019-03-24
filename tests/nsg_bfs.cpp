@@ -119,7 +119,7 @@ void average_out_degree(const VecVec &nsg, const VecMapCount &bfs_order) {
   }
 }
 
-void average_in_degree(const VecMapCount &bfs_order) {
+void average_in_bfs_degree(const VecMapCount &bfs_order) {
   unsigned level = 0;
   double   lvl_degree = 0;
   for (const auto &lvl : bfs_order) {
@@ -128,6 +128,41 @@ void average_in_degree(const VecMapCount &bfs_order) {
     for (const auto &id : lvl) {
       lvl_degree += id.second;
       in_degrees.push_back(id.second);
+    }
+    std::sort(in_degrees.begin(), in_degrees.end(), std::greater<unsigned>());
+    unsigned univalent = in_degrees.end() - std::find(in_degrees.begin(), in_degrees.end(), 1);
+    std::cout << "Level #" << level
+      << " : Avg In degree = " << lvl_degree / (double)lvl.size()
+      << "\tmax = " << in_degrees[0]
+      << "\t99pc = " << in_degrees[0.01 * in_degrees.size()]
+      << "\t95pc = " << in_degrees[0.05 * in_degrees.size()]
+      << "\t90pc = " << in_degrees[0.1 * in_degrees.size()]
+      << "\t50pc = " << in_degrees[0.5 * in_degrees.size()]
+      << "\t#ones = " << univalent
+      << std::endl;
+    level++;
+  }
+}
+
+void average_in_degree(const VecVec &nsg, const VecMapCount &bfs_order, std::vector<unsigned> &in_count) {
+  unsigned level = 0;
+  double   lvl_degree = 0;
+
+  assert(in_count.size() == nsg.size());
+  for (auto iter = in_count.begin(); iter != in_count.end(); ++iter)
+    *iter = 0;
+
+  for (const auto &lvl : bfs_order)
+    for (const auto &id : lvl)
+      for (const auto ngh : nsg[id.first])
+        in_count[ngh]++;
+
+  for (const auto &lvl : bfs_order) {
+    lvl_degree = 0;
+    std::vector<unsigned> in_degrees;
+    for (const auto &id : lvl) {
+      lvl_degree += in_count[id.first];
+      in_degrees.push_back(in_count[id.first]);
     }
     std::sort(in_degrees.begin(), in_degrees.end(), std::greater<unsigned>());
     unsigned univalent = in_degrees.end() - std::find(in_degrees.begin(), in_degrees.end(), 1);
@@ -161,13 +196,16 @@ int main(int argc, char **argv) {
   unsigned start_node = ep_;
   unsigned previous_start = 0;
   bool     complete = false;
+  std::vector<unsigned> in_count(nsg.size(), 0);
+
   while (!complete) {
     VecMapCount bfs_order;
     std::cout << "Start node: " << start_node << std::endl;
     nsg_bfs(nsg, start_node, bfs_order, visited);
    
     average_out_degree(nsg, bfs_order);
-    average_in_degree(bfs_order);
+    average_in_bfs_degree(bfs_order);
+    average_in_degree(nsg, bfs_order, in_count);
 
     complete = true;
     for (unsigned idx = previous_start; idx < nsg.size(); idx++) {
