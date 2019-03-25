@@ -68,9 +68,7 @@ namespace NSG {
     _u64 medoid = 0;
     std::pair<_u64, unsigned *> medoid_nhood;
 
-    // nhood cache for levels - 1-N
+    // cache
     tsl::robin_map<_u64, std::pair<_u64, unsigned *>> nhood_cache;
-    // coords cache for levels - 1-N
-    tsl::robin_map<_u64, _s8 *> coords_cache;
   };
 }
