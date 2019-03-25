@@ -70,5 +70,6 @@ namespace NSG {
 
     // cache
     tsl::robin_map<_u64, std::pair<_u64, unsigned *>> nhood_cache;
+    tsl::robin_map<_u64, _s8*> coord_cache;
   };
 }

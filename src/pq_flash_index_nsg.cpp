@@ -20,15 +20,23 @@
 #define READ_UNSIGNED(stream, val) stream.read((char *) &val, sizeof(unsigned))
 
 // sector # on disk where node_id is present
-#define NHOOD_SECTOR_NO(node_id) (node_id / nnodes_per_sector)
+#define NODE_SECTOR_NO(node_id) ((node_id / nnodes_per_sector) + 1)
 
-// sector read offset on disk where node_id is present
-#define NHOOD_SECTOR_START(node_id) \
-  ((NHOOD_SECTOR_NO(node_id) + 1) * SECTOR_LEN)
+
+// obtains region of sector containing node
+#define OFFSET_TO_NODE(sector_buf, node_id) ((char*)sector_buf + (node_id % nnodes_per_sector)*max_node_len)
 
 // offset into sector where node_id's nhood starts
-#define NHOOD_SECTOR_OFFSET(sector_buf, node_id) \
-  (unsigned *) (sector_buf + ((node_id % nnodes_per_sector) * max_node_len))
+#define NODE_SECTOR_OFFSET(sector_buf, node_id) \
+  ((char*)sector_buf + ((node_id % nnodes_per_sector) * max_node_len))
+
+// returns region of `node_buf` containing [NNBRS][NBR_ID(_u32)]
+#define OFFSET_TO_NODE_NHOOD(node_buf) \
+  (unsigned*)((char*)node_buf + data_dim * sizeof(_s8))
+
+// returns region of `node_buf` containing [COORD(_s8)]
+#define OFFSET_TO_NODE_COORDS(node_buf) \
+  (_s8*)(node_buf)
 
 namespace {
   inline void int8_to_float(int8_t *int8_coords, float *float_coords,
@@ -48,11 +56,17 @@ namespace NSG {
     if (data != nullptr) {
       delete[] data;
     }
-    if (medoid_nhood.second != nullptr) {
-      delete[] medoid_nhood.second;
-    }
     for (auto &k_v : nhood_cache) {
       delete[] k_v.second.second;
+    }
+    // delete medoid_nhood.second only if it's not going to be deleted in nhood_cache
+    if (nhood_cache.empty()){
+      if (medoid_nhood.second != nullptr) {
+        delete[] medoid_nhood.second;
+      }
+    }
+    for (auto &k_v : coord_cache) {
+      delete[] k_v.second;
     }
     if (pq_table != nullptr) {
       delete pq_table;
@@ -66,13 +80,6 @@ namespace NSG {
     tsl::robin_set<unsigned> *cur_level, *prev_level;
     cur_level = new tsl::robin_set<unsigned>();
     prev_level = new tsl::robin_set<unsigned>();
-
-    std::pair<_u64, unsigned *> med_nhood;
-    med_nhood.first = medoid_nhood.first;
-    med_nhood.second = new unsigned[med_nhood.first];
-    memcpy(med_nhood.second, medoid_nhood.second,
-           med_nhood.first * sizeof(unsigned));
-    nhood_cache.insert(std::make_pair(medoid, med_nhood));
 
     // add medoid nhood to cur_level
     for (_u64 idx = 0; idx < medoid_nhood.first; idx++) {
@@ -101,7 +108,7 @@ namespace NSG {
         AlignedRead read;
         read.len = SECTOR_LEN;
         read.buf = buf;
-        read.offset = NHOOD_SECTOR_START(id);
+        read.offset = NODE_SECTOR_NO(id) * SECTOR_LEN;
         read_reqs.push_back(read);
       }
 
@@ -111,11 +118,16 @@ namespace NSG {
       // process each nhood buf
       // TODO:: cache all nhoods in each sector instead of just one
       for (auto &nhood : nhoods) {
-        unsigned *node_buf = NHOOD_SECTOR_OFFSET(nhood.second, nhood.first);
-        _u64      nnbrs = (_u64) *node_buf;
-        unsigned *nbrs = node_buf + 1;
+        // insert node coord into coord_cache
+        char* node_buf = OFFSET_TO_NODE(nhood.second, nhood.first);
+        _s8* node_coords = OFFSET_TO_NODE_COORDS(node_buf);
+        _s8* cached_coords = new _s8[data_dim];
+        memcpy(cached_coords, node_coords, data_dim * sizeof(_s8));
 
-        // insert into cache
+        // insert node nhood into nhood_cache
+        unsigned *node_nhood = OFFSET_TO_NODE_NHOOD(node_buf);
+        _u64      nnbrs = (_u64) *node_nhood;
+        unsigned *nbrs = node_nhood + 1;
         std::pair<_u64, unsigned *> cnhood;
         cnhood.first = nnbrs;
         cnhood.second = new unsigned[nnbrs];
@@ -169,7 +181,7 @@ namespace NSG {
     READ_U64(nsg_meta, medoid);
     READ_U64(nsg_meta, max_node_len);
     READ_U64(nsg_meta, nnodes_per_sector);
-    max_degree = (max_node_len / sizeof(unsigned)) - 1;
+    max_degree = ((max_node_len - data_dim * sizeof(_s8)) / sizeof(unsigned)) - 1;
 
     std::cout << "Index File: " << nsg_file << std::endl;
     std::cout << "Medoid: " << medoid << std::endl;
@@ -185,22 +197,35 @@ namespace NSG {
     // read medoid nhood
     char *medoid_buf = nullptr;
     alloc_aligned((void **) &medoid_buf, SECTOR_LEN, SECTOR_LEN);
-    _u64                     medoid_sector_no = NHOOD_SECTOR_NO(medoid);
+    _u64                     medoid_sector_no = NODE_SECTOR_NO(medoid);
     std::vector<AlignedRead> medoid_read(1);
     medoid_read[0].len = SECTOR_LEN;
     medoid_read[0].buf = medoid_buf;
-    medoid_read[0].offset = NHOOD_SECTOR_START(medoid);
+    medoid_read[0].offset = NODE_SECTOR_NO(medoid) * SECTOR_LEN;
     reader.read(medoid_read);
 
-    unsigned *medoid_nhood_buf = NHOOD_SECTOR_OFFSET(medoid_buf, medoid);
+    // all data about medoid
+    char* medoid_node_buf = OFFSET_TO_NODE(medoid_buf, medoid);
+
+    // add medoid coords to `coord_cache`
+    _s8* medoid_coords = new _s8[data_dim];
+    _s8* medoid_disk_coords = OFFSET_TO_NODE_COORDS(medoid_node_buf);
+    memcpy(medoid_coords, medoid_disk_coords, data_dim * sizeof(_s8));
+    coord_cache.clear();
+    coord_cache.insert(std::make_pair(medoid, medoid_coords));
+    
+    // add medoid nhood to nhood_cache
+    unsigned *medoid_nhood_buf = OFFSET_TO_NODE_NHOOD(medoid_node_buf);
     medoid_nhood.first = *(unsigned *) (medoid_nhood_buf);
     assert(medoid_nhood.first < 200);
     std::cout << "Medoid degree: " << medoid_nhood.first << std::endl;
     medoid_nhood.second = new unsigned[medoid_nhood.first];
     memcpy(medoid_nhood.second, (medoid_nhood_buf + 1 + sizeof(unsigned)),
            medoid_nhood.first * sizeof(unsigned));
-
+    nhood_cache.insert(std::make_pair(medoid, medoid_nhood));
     free(medoid_buf);
+
+    // print medoid nbrs
     std::cout << "Medoid nbrs: " << std::endl;
     for (_u64 i = 0; i < medoid_nhood.first; i++) {
       std::cout << medoid_nhood.second[i] << " ";
@@ -208,6 +233,7 @@ namespace NSG {
     std::cout << std::endl;
   }
 
+  // IGNORED -- not ported to new disk format for re-ranking
   std::pair<int, int> PQFlashNSG::beam_search(
       const float *query, const _u64 k_search, const _u64 l_search,
       _u32 *indices, const _u64 beam_width, QueryStats *stats) {
@@ -281,7 +307,7 @@ namespace NSG {
                         SECTOR_LEN);
 
           frontier_read_reqs[i] = AlignedRead(
-              NHOOD_SECTOR_START(id), SECTOR_LEN, frontier_nhoods[i].second);
+              NODE_SECTOR_NO(id) * SECTOR_LEN, SECTOR_LEN, frontier_nhoods[i].second);
           if (stats != nullptr) {
             stats->n_4k++;
             stats->n_ios++;
@@ -297,8 +323,8 @@ namespace NSG {
           // if (retset[k].flag) {
           // retset[k].flag = false;
           // unsigned n = retset[k].id;
-          unsigned *node_buf =
-              NHOOD_SECTOR_OFFSET(frontier_nhood.second, frontier_nhood.first);
+          char* node_disk_buf = OFFSET_TO_NODE(frontier_nhood.second, frontier_nhood.first);
+          unsigned *node_buf = OFFSET_TO_NODE_NHOOD(node_disk_buf);
           _u64 nnbrs = (_u64)(*node_buf);
           assert(nnbrs < 200);
           unsigned *node_nbrs = (node_buf + 1);
@@ -360,6 +386,8 @@ namespace NSG {
     std::vector<Neighbor> retset(l_search + 1);
     std::vector<_u64>     init_ids(l_search);
     tsl::robin_set<_u64>  visited(10 * l_search);
+
+    tsl::robin_map<_u64, _s8*> fp_coords;
 
     _u64 tmp_l = 0;
     // add each neighbor of medoid
@@ -429,7 +457,7 @@ namespace NSG {
             fnhood.first = id;
             alloc_aligned((void **) &fnhood.second, SECTOR_LEN, SECTOR_LEN);
             frontier_nhoods.push_back(fnhood);
-            frontier_read_reqs.emplace_back(NHOOD_SECTOR_START(id), SECTOR_LEN,
+            frontier_read_reqs.emplace_back(NODE_SECTOR_NO(id)*SECTOR_LEN, SECTOR_LEN,
                                             fnhood.second);
             if (stats != nullptr) {
               stats->n_4k++;
@@ -445,12 +473,18 @@ namespace NSG {
         // process each frontier nhood - compute distances to unvisited nodes
         for (auto &frontier_nhood : frontier_nhoods) {
           // if (retset[k].flag) {
-          // retset[k].flag = false;
-          // unsigned n = retset[k].id;
+          //   retset[k].flag = false;
+          //   unsigned n = retset[k].id;
+          // }
+          char* node_disk_buf = OFFSET_TO_NODE(frontier_nhood.second, frontier_nhood.first);
           unsigned *node_buf =
-              NHOOD_SECTOR_OFFSET(frontier_nhood.second, frontier_nhood.first);
+              OFFSET_TO_NODE_NHOOD(node_disk_buf);
           _u64 nnbrs = (_u64)(*node_buf);
           assert(nnbrs < 200);
+          _s8* node_fp_coords = OFFSET_TO_NODE_COORDS(node_disk_buf);
+          _s8* node_fp_coords_copy = new _s8[data_dim];
+          memcpy(node_fp_coords_copy, node_fp_coords, data_dim * sizeof(_s8));
+          fp_coords.insert(std::make_pair(frontier_nhood.first, node_fp_coords_copy));
           unsigned *node_nbrs = (node_buf + 1);
           for (_u64 m = 0; m < nnbrs; ++m) {
             unsigned id = node_nbrs[m];
@@ -522,13 +556,44 @@ namespace NSG {
       else
         ++k;
     }
+
+    // RE-RANKING STEP
+    for(_u64 i=0;i<retset.size();i++){
+      _u64 idx = retset[i].id;
+      _s8* node_coords;
+      auto global_cache_iter = coord_cache.find(idx);
+      if (global_cache_iter == coord_cache.end()){
+        auto local_cache_iter = fp_coords.find(idx);
+        assert(local_cache_iter != fp_coords.end());
+        node_coords = local_cache_iter->second;
+      } else{
+        node_coords = global_cache_iter->second;
+      }
+      int8_to_float(node_coords, scratch, data_dim);
+      retset[i].distance = dist_cmp->compare(query, scratch, aligned_dim);
+      if (stats != nullptr){
+        stats->n_cmps++;
+      }
+    }
+
+    // re-sort by distance
+    std::sort(retset.begin(), retset.end(), [](const Neighbor& left, const Neighbor& right) {return left.distance < right.distance;});
+
+    // copy k_search values
     for (_u64 i = 0; i < k_search; i++) {
       indices[i] = retset[i].id;
     }
+    
     free(scratch);
     if (stats != nullptr) {
       stats->total_us = query_timer.elapsed();
     }
+
+    // clean up all cached coords
+    for(auto &k_v : fp_coords){
+      delete[] k_v.second;
+    }
+    
     return std::make_pair(hops, cmps);
   }
 }
