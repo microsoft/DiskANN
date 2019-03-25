@@ -12,6 +12,9 @@
 #include "tsl/robin_set.h"
 #include "util.h"
 
+#define MAX_N_CMPS 16384
+#define MAX_N_SECTOR_READS 16
+
 namespace NSG {
   class PQFlashNSG {
    public:
@@ -68,8 +71,12 @@ namespace NSG {
     _u64 medoid = 0;
     std::pair<_u64, unsigned *> medoid_nhood;
 
-    // cache
+    // nhood_cache
+    unsigned *nhood_cache_buf = nullptr;
     tsl::robin_map<_u64, std::pair<_u64, unsigned *>> nhood_cache;
-    tsl::robin_map<_u64, _s8*> coord_cache;
+
+    // coord_cache
+    _s8 *coord_cache_buf = nullptr;
+    tsl::robin_map<_u64, _s8 *> coord_cache;
   };
 }
