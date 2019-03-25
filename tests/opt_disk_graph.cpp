@@ -128,6 +128,7 @@ void write_embedded_nsg(const char *filename, NSG::OneShotNSG &nsg, _s8 *data,
   // buf for each block
   char *blk_buf = new char[nsectors_per_blk * SECTOR_LEN];
   char *sector_buf, *node_buf;
+  unsigned* node_nhood_buf;
   for (_u64 b = 0; b < nblks; b++) {
     _u64 bstart = b * nnodes_per_blk;
     _u64 bend = std::min(nnodes, nnodes_per_blk * (b + 1));
@@ -139,20 +140,23 @@ void write_embedded_nsg(const char *filename, NSG::OneShotNSG &nsg, _s8 *data,
     // copy nsg blk to blk_buf
     for (_u64 i = bstart; i < bend; i++) {
       unsigned nhood_size = nsg.nnbrs(i);
-      _u64     sector_no = i / nnodes_per_sector;
+
+      // global values
+      _u64     sector_no = (i / nnodes_per_sector);
       _u64     sector_off = (i % nnodes_per_sector) * max_node_len;
 
       // std::cout << "node : " << i << ", sector: " << sector_no ;
       // std::cout<< ", sector_off: " << sector_off << std::endl;
 
       // get sector buf and node buf
-      sector_buf = blk_buf + (sector_no % nsectors_per_blk) * SECTOR_LEN;
+      _u64 blk_sector_no = (sector_no % nsectors_per_blk);
+      sector_buf = blk_buf + (blk_sector_no * SECTOR_LEN);
       node_buf = sector_buf + sector_off;
       memcpy(node_buf, data + i * ndims, ndims * sizeof(_s8));
-      node_buf += ndims * sizeof(_s8);
-      *((unsigned *) node_buf) = nhood_size;
+      node_nhood_buf = (unsigned*) (node_buf + ndims * sizeof(_s8));
+      *node_nhood_buf = nhood_size;
       const unsigned *nhood = nsg.data(i);
-      memcpy(node_buf + sizeof(unsigned), nhood, nhood_size * sizeof(unsigned));
+      memcpy(node_nhood_buf + 1, nhood, nhood_size * sizeof(unsigned));
     }
 
     // write buf to disk
