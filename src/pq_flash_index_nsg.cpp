@@ -55,7 +55,7 @@ namespace NSG {
       delete[] k_v.second.second;
     }
     for (auto &k_v : coords_cache) {
-      delete[] k_v.second.second;
+      delete[] k_v.second;
     }
     if (pq_table != nullptr) {
       delete pq_table;
@@ -114,13 +114,15 @@ namespace NSG {
       // process each nhood buf
       // TODO:: cache all nhoods in each sector instead of just one
       for (auto &nhood : nhoods) {
-        char* node_buf = NHOOD_SECTOR_OFFSET(nhood.second, nhood.first);
-        if (coords_cache.find(nhood.first) == coords_cache.end()){
-          _s8* node_coords = new _s8[data_dim];
+        char *node_buf =
+            (char *) NHOOD_SECTOR_OFFSET(nhood.second, nhood.first);
+        if (coords_cache.find(nhood.first) == coords_cache.end()) {
+          _s8 *node_coords = new _s8[data_dim];
           memcpy(node_coords, node_buf, data_dim * sizeof(_s8));
           coords_cache.insert(std::make_pair(nhood.first, node_coords));
         }
-        unsigned* node_nhood_buf = (unsigned*)(node_buf + data_dim * sizeof(_s8));
+        unsigned *node_nhood_buf =
+            (unsigned *) (node_buf + data_dim * sizeof(_s8));
         _u64      nnbrs = (_u64) *node_nhood_buf;
         unsigned *nbrs = node_nhood_buf + 1;
 
@@ -201,14 +203,15 @@ namespace NSG {
     medoid_read[0].offset = NHOOD_SECTOR_START(medoid);
     reader.read(medoid_read);
 
-    char *medoid_buf_start = NHOOD_SECTOR_OFFSET(medoid_buf, medoid);
+    char *medoid_buf_start = (char *) NHOOD_SECTOR_OFFSET(medoid_buf, medoid);
     // add medoid coords to coords_cache
-    _s8* medoid_coords = new s8[data_dim];
+    _s8 *medoid_coords = new _s8[data_dim];
     memcpy(medoid_coords, medoid_buf, data_dim * sizeof(_s8));
     coords_cache.clear();
     coords_cache.insert(std::make_pair(medoid, medoid_coords));
     // add medoid nhood to nhood_cache
-    unsigned *medoid_nhood_buf = (unsigned*) (medoid_buf_start + data_dim * sizeof(_s8));
+    unsigned *medoid_nhood_buf =
+        (unsigned *) (medoid_buf_start + data_dim * sizeof(_s8));
     medoid_nhood.first = *(unsigned *) (medoid_nhood_buf);
     assert(medoid_nhood.first < 200);
     std::cout << "Medoid degree: " << medoid_nhood.first << std::endl;
@@ -236,6 +239,7 @@ namespace NSG {
     std::vector<Neighbor> retset(l_search + 1);
     std::vector<_u64>     init_ids(l_search);
     tsl::robin_set<_u64>  visited(10 * l_search);
+    tsl::robin_map<_u64, _s8 *> local_cache;
 
     _u64 tmp_l = 0;
     // add each neighbor of medoid
@@ -314,7 +318,9 @@ namespace NSG {
           // retset[k].flag = false;
           // unsigned n = retset[k].id;
           unsigned *node_buf =
-              NHOOD_SECTOR_OFFSET(frontier_nhood.second, frontier_nhood.first);
+              (unsigned *) ((char *) NHOOD_SECTOR_OFFSET(frontier_nhood.second,
+                                                         frontier_nhood.first) +
+                            data_dim * sizeof(_s8));
           _u64 nnbrs = (_u64)(*node_buf);
           assert(nnbrs < 200);
           unsigned *node_nbrs = (node_buf + 1);
@@ -464,7 +470,9 @@ namespace NSG {
           // retset[k].flag = false;
           // unsigned n = retset[k].id;
           unsigned *node_buf =
-              NHOOD_SECTOR_OFFSET(frontier_nhood.second, frontier_nhood.first);
+              (unsigned *) ((char *) NHOOD_SECTOR_OFFSET(frontier_nhood.second,
+                                                         frontier_nhood.first) +
+                            data_dim * sizeof(_s8));
           _u64 nnbrs = (_u64)(*node_buf);
           assert(nnbrs < 200);
           unsigned *node_nbrs = (node_buf + 1);

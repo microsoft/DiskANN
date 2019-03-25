@@ -12,7 +12,6 @@ typedef std::vector<tsl::robin_set<unsigned>> VecSet;
 typedef tsl::robin_map<unsigned, unsigned> MapCount;
 typedef std::vector<MapCount> VecMapCount;
 
-
 void load_nsg(const char *filename, VecVec &graph, unsigned &width,
               unsigned &ep_, const bool check_for_dup = true) {
   std::ifstream in(filename, std::ios::binary);
@@ -30,7 +29,7 @@ void load_nsg(const char *filename, VecVec &graph, unsigned &width,
     }
     if (in.eof())
       break;
-    std::vector<unsigned>    tmp(k);
+    std::vector<unsigned> tmp(k);
     in.read((char *) tmp.data(), k * sizeof(unsigned));
 
     if (check_for_dup) {
@@ -51,11 +50,11 @@ void load_nsg(const char *filename, VecVec &graph, unsigned &width,
 }
 
 // Do BFS and count in-degree for each node from previous level
-void nsg_bfs(const VecVec &nsg, const unsigned start_node, VecMapCount &bfs_order,
-             bool *visited) {
+void nsg_bfs(const VecVec &nsg, const unsigned start_node,
+             VecMapCount &bfs_order, bool *visited) {
   auto cur_level = new MapCount();
   auto prev_level = new MapCount();
-  prev_level->insert(std::make_pair(start_node,0));
+  prev_level->insert(std::make_pair(start_node, 0));
   visited[start_node] = true;
   unsigned level = 0;
   unsigned nsg_size = nsg.size();
@@ -73,8 +72,7 @@ void nsg_bfs(const VecVec &nsg, const unsigned start_node, VecMapCount &bfs_orde
         if (!visited[nbr]) {
           visited[nbr] = true;
           cur_level->insert(std::make_pair(nbr, 1));
-        }
-        else {
+        } else {
           if (cur_level->find(nbr) != cur_level->end())
             (*cur_level)[nbr] = 1 + (*cur_level)[nbr];
         }
@@ -129,21 +127,22 @@ void average_in_bfs_degree(const VecMapCount &bfs_order) {
       in_degrees.push_back(id.second);
     }
     std::sort(in_degrees.begin(), in_degrees.end(), std::greater<unsigned>());
-    unsigned univalent = in_degrees.end() - std::find(in_degrees.begin(), in_degrees.end(), 1);
+    unsigned univalent =
+        in_degrees.end() - std::find(in_degrees.begin(), in_degrees.end(), 1);
     std::cout << "Level #" << level
-      << " : Avg BFS In degree = " << lvl_degree / (double)lvl.size()
-      << "\tmax = " << in_degrees[0]
-      << "\t99pc = " << in_degrees[0.01 * in_degrees.size()]
-      << "\t95pc = " << in_degrees[0.05 * in_degrees.size()]
-      << "\t90pc = " << in_degrees[0.1 * in_degrees.size()]
-      << "\t50pc = " << in_degrees[0.5 * in_degrees.size()]
-      << "\t#ones = " << univalent
-      << std::endl;
+              << " : Avg BFS In degree = " << lvl_degree / (double) lvl.size()
+              << "\tmax = " << in_degrees[0]
+              << "\t99pc = " << in_degrees[0.01 * in_degrees.size()]
+              << "\t95pc = " << in_degrees[0.05 * in_degrees.size()]
+              << "\t90pc = " << in_degrees[0.1 * in_degrees.size()]
+              << "\t50pc = " << in_degrees[0.5 * in_degrees.size()]
+              << "\t#ones = " << univalent << std::endl;
     level++;
   }
 }
 
-void average_in_degree(const VecVec &nsg, const VecMapCount &bfs_order, std::vector<unsigned> &in_count) {
+void average_in_degree(const VecVec &nsg, const VecMapCount &bfs_order,
+                       std::vector<unsigned> &in_count) {
   unsigned level = 0;
   double   lvl_degree = 0;
 
@@ -164,16 +163,16 @@ void average_in_degree(const VecVec &nsg, const VecMapCount &bfs_order, std::vec
       in_degrees.push_back(in_count[id.first]);
     }
     std::sort(in_degrees.begin(), in_degrees.end(), std::greater<unsigned>());
-    unsigned univalent = in_degrees.end() - std::find(in_degrees.begin(), in_degrees.end(), 1);
+    unsigned univalent =
+        in_degrees.end() - std::find(in_degrees.begin(), in_degrees.end(), 1);
     std::cout << "Level #" << level
-      << " : Avg In degree = " << lvl_degree / (double)lvl.size()
-      << "\tmax = " << in_degrees[0]
-      << "\t99pc = " << in_degrees[0.01 * in_degrees.size()]
-      << "\t95pc = " << in_degrees[0.05 * in_degrees.size()]
-      << "\t90pc = " << in_degrees[0.1 * in_degrees.size()]
-      << "\t50pc = " << in_degrees[0.5 * in_degrees.size()]
-      << "\t#ones = " << univalent
-      << std::endl;
+              << " : Avg In degree = " << lvl_degree / (double) lvl.size()
+              << "\tmax = " << in_degrees[0]
+              << "\t99pc = " << in_degrees[0.01 * in_degrees.size()]
+              << "\t95pc = " << in_degrees[0.05 * in_degrees.size()]
+              << "\t90pc = " << in_degrees[0.1 * in_degrees.size()]
+              << "\t50pc = " << in_degrees[0.5 * in_degrees.size()]
+              << "\t#ones = " << univalent << std::endl;
     level++;
   }
 }
@@ -192,16 +191,16 @@ int main(int argc, char **argv) {
   bool *visited = new bool[nsg.size()]();
   std::fill(visited, visited + nsg.size(), false);
 
-  unsigned start_node = ep_;
-  unsigned previous_start = 0;
-  bool     complete = false;
+  unsigned              start_node = ep_;
+  unsigned              previous_start = 0;
+  bool                  complete = false;
   std::vector<unsigned> in_count(nsg.size(), 0);
 
   while (!complete) {
     VecMapCount bfs_order;
     std::cout << "Start node: " << start_node << std::endl;
     nsg_bfs(nsg, start_node, bfs_order, visited);
-   
+
     average_out_degree(nsg, bfs_order);
     average_in_bfs_degree(bfs_order);
     average_in_degree(nsg, bfs_order, in_count);

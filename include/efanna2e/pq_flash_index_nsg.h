@@ -71,6 +71,6 @@ namespace NSG {
     // nhood cache for levels - 1-N
     tsl::robin_map<_u64, std::pair<_u64, unsigned *>> nhood_cache;
     // coords cache for levels - 1-N
-    tsl::robin_map<_u64, _s8*> coords_cache;
+    tsl::robin_map<_u64, _s8 *> coords_cache;
   };
 }
