@@ -25,7 +25,7 @@ struct AlignedRead {
         assert(IS_512_ALIGNED(offset));
         assert(IS_512_ALIGNED(len));
         assert(IS_512_ALIGNED(buf));
-        assert(malloc_usable_size(buf) >= len);
+        // assert(malloc_usable_size(buf) >= len);
   }
 };
 

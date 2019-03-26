@@ -18,7 +18,7 @@ namespace {
       // std::cout << "request:"<<req.offset<<":"<<req.len << std::endl;
       assert(IS_ALIGNED(req.offset, 512));
       assert(IS_ALIGNED(req.buf, 512));
-      assert(malloc_usable_size(req.buf) >= req.len);
+      // assert(malloc_usable_size(req.buf) >= req.len);
     }
 
     // break-up requests into chunks of size MAX_EVENTS each
@@ -70,10 +70,13 @@ namespace {
         }
       }
       assert(n_tries != n_retries);
+      // disabled since req.buf could be an offset into another buf
+      /*
       for (auto &req : read_reqs) {
         // corruption check
         assert(malloc_usable_size(req.buf) >= req.len);
       }
+      */
     }
     /*
     for(unsigned i=0;i<64;i++){

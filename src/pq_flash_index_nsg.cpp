@@ -59,6 +59,7 @@ namespace NSG {
     // delete backing bufs for nhood and coord cache
     delete[] nhood_cache_buf;
     delete[] coord_cache_buf;
+    delete[] medoid_nhood.second;
 
     if (pq_table != nullptr) {
       delete pq_table;
@@ -160,7 +161,7 @@ namespace NSG {
     memset(nhood_cache_buf, 0, nhood_cache_buf_len);
     _u64 cur_off = 0;
     for (auto &k_v : nhood_cache) {
-      std::pair<_u64, unsigned *> val = nhood_cache[k_v.first];
+      std::pair<_u64, unsigned *> &val = nhood_cache[k_v.first];
       unsigned *&ptr = val.second;
       _u64       nnbrs = val.first;
       memcpy(nhood_cache_buf + cur_off, ptr, nnbrs * sizeof(unsigned));
@@ -256,11 +257,13 @@ namespace NSG {
     memcpy(medoid_nhood.second, (medoid_nhood_buf + 1),
            medoid_nhood.first * sizeof(unsigned));
     free(medoid_buf);
-    
+
     // make a copy and insert into nhood_cache
-    unsigned* medoid_nhood_copy = new unsigned[medoid_nhood.first];
-    memcpy(medoid_nhood_copy, medoid_nhood.second, medoid_nhood.first * sizeof(unsigned));
-    nhood_cache.insert(std::make_pair(medoid, std::make_pair(medoid_nhood.first, medoid_nhood_copy)));
+    unsigned *medoid_nhood_copy = new unsigned[medoid_nhood.first];
+    memcpy(medoid_nhood_copy, medoid_nhood.second,
+           medoid_nhood.first * sizeof(unsigned));
+    nhood_cache.insert(std::make_pair(
+        medoid, std::make_pair(medoid_nhood.first, medoid_nhood_copy)));
 
     // print medoid nbrs
     std::cout << "Medoid nbrs: " << std::endl;
@@ -437,13 +440,6 @@ namespace NSG {
     std::vector<_u64>     init_ids(l_search);
     tsl::robin_set<_u64>  visited(10 * l_search);
 
-    // --- DEBUG ---
-    tsl::robin_set<_u64> global_nodes, local_nodes;
-    for (auto &k_v : coord_cache) {
-      global_nodes.insert(k_v.first);
-    }
-    // std::cout << "CACHE: nhood_cache.size(): " << nhood_cache.size() << ",
-    // coord_cache.size(): " << coord_cache.size() << std::endl;
     tsl::robin_map<_u64, _s8 *> fp_coords;
 
     _u64 tmp_l = 0;
@@ -509,8 +505,6 @@ namespace NSG {
           auto     iter = nhood_cache.find(id);
           if (iter != nhood_cache.end()) {
             cached_nhoods.push_back(std::make_pair(id, iter->second));
-            // must be in global cache
-            assert(global_nodes.find(id) != global_nodes.end());
             if (stats != nullptr) {
               stats->n_cache_hits++;
             }
@@ -548,16 +542,12 @@ namespace NSG {
           assert(nnbrs < 200);
           _s8 *node_fp_coords = OFFSET_TO_NODE_COORDS(node_disk_buf);
           assert(data_buf_idx < MAX_N_CMPS);
-          _s8 *node_fp_coords_copy = data_buf + data_buf_idx * data_dim;
+          _s8 *node_fp_coords_copy = data_buf + (data_buf_idx * data_dim);
           data_buf_idx++;
           memcpy(node_fp_coords_copy, node_fp_coords, data_dim * sizeof(_s8));
 
           fp_coords.insert(
               std::make_pair(frontier_nhood.first, node_fp_coords_copy));
-          local_nodes.insert(frontier_nhood.first);
-
-          // must be locally cached for query
-          assert(local_nodes.find(frontier_nhood.first) != local_nodes.end());
 
           unsigned *node_nbrs = (node_buf + 1);
           for (_u64 m = 0; m < nnbrs; ++m) {
@@ -588,15 +578,9 @@ namespace NSG {
             }
           }
         }
-        // cleanup for the round
-        for (auto &nhood : frontier_nhoods) {
-          free(nhood.second);
-        }
 
         // process cached nhoods
         for (auto &cached_nhood : cached_nhoods) {
-          // must be in global cache
-          assert(global_nodes.find(cached_nhood.first) != global_nodes.end());
           _u64      nnbrs = cached_nhood.second.first;
           unsigned *node_nbrs = cached_nhood.second.second;
           for (_u64 m = 0; m < nnbrs; ++m) {
@@ -635,14 +619,6 @@ namespace NSG {
         ++k;
     }
 
-    for (_u64 i = 0; i < l_search; i++) {
-      auto ret = retset[i];
-      // broken if node coords not cached locally or globally BUT ONLY IF the
-      // node is visited
-      assert(global_nodes.find(ret.id) != global_nodes.end() ||
-             local_nodes.find(ret.id) != local_nodes.end());
-    }
-
     // RE-RANKING STEP
     for (_u64 i = 0; i < l_search; i++) {
       _u64 idx = retset[i].id;
@@ -673,14 +649,8 @@ namespace NSG {
       indices[i] = retset[i].id;
     }
 
-    free(scratch);
     if (stats != nullptr) {
       stats->total_us = query_timer.elapsed();
-    }
-
-    // clean up all cached coords
-    for (auto &k_v : fp_coords) {
-      delete[] k_v.second;
     }
 
     return std::make_pair(hops, cmps);
