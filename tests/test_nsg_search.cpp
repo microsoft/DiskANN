@@ -113,10 +113,10 @@ int main(int argc, char** argv) {
   NSG::Parameters paras;
 
   for (uint32_t test_id = 0; test_id < num_tests; test_id++) {
-    unsigned L = Lvec[test_id];
-    unsigned K = Kvec[test_id];
-    uint32_t beam_width = Bwvec[test_id];
-  unsigned*       res = new unsigned[(size_t) query_num * K];
+    unsigned  L = Lvec[test_id];
+    unsigned  K = Kvec[test_id];
+    uint32_t  beam_width = Bwvec[test_id];
+    unsigned* res = new unsigned[(size_t) query_num * K];
 
     paras.Set<unsigned>("L_search", L);
     paras.Set<unsigned>("P_search", L);
@@ -153,12 +153,12 @@ int main(int argc, char** argv) {
     std::string output_file = std::string(argv[4]);
     output_file += "_search-" + std::to_string(L) + "-" + std::to_string(K) +
                    "-" + std::to_string(beam_width) + ".ivecs";
-    char* out_file = new char[output_file.size()+1];
-out_file[output_file.size()] = 0;
-std::memcpy(out_file, output_file.c_str(), output_file.size());
+    char* out_file = new char[output_file.size() + 1];
+    out_file[output_file.size()] = 0;
+    std::memcpy(out_file, output_file.c_str(), output_file.size());
     save_result(out_file, res, query_num, K);
-  delete[] out_file;
-  delete[] res;
+    delete[] out_file;
+    delete[] res;
   }
   delete[] data_load;
 

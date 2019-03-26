@@ -222,6 +222,31 @@ namespace NSG {
     std::cout << "Loaded EFANNA graph. Set ep_ to 0" << std::endl;
   }
 
+  void IndexNSG::Init_rnd_nn_graph(size_t num_points, unsigned k) {
+    size_t num = num_points;
+    std::cout << "k is and num is " << k << " " << num << std::endl;
+    final_graph_.resize(num);
+    final_graph_.reserve(num);
+
+    std::random_device rd;  // Will be used to obtain a seed for the random number engine
+    size_t       x = rd();
+    std::mt19937 generator(x);
+    std::uniform_int_distribution<int> distribution(0, num_points - 1);
+    unsigned                           kk = (k + 3) / 4 * 4;
+#pragma omp parallel for schedule(static, 65536)
+    for (size_t i = 0; i < num; i++) {
+      if (i % 1000000 == 0)
+        std::cout << "Generated random neighbors for point " << i << std::endl;
+      final_graph_[i].resize(k);
+      final_graph_[i].reserve(kk);
+      for (unsigned j = 0; j < k; j++)
+        final_graph_[i].push_back(distribution(generator));
+    }
+    ep_ = 0;
+    std::cout << "Loaded Random graph. Set ep_ to 0" << std::endl;
+  }
+
+
   void IndexNSG::iterate_to_fixed_point(const float *             query,
                                         const Parameters &        parameter,
                                         std::vector<unsigned> &   init_ids,
@@ -659,7 +684,7 @@ namespace NSG {
       }
     }
 
-    assert(cut_graph_[q].size() == 0);
+    cut_graph_[q].clear();
     for (auto iter : result)
       cut_graph_[q].push_back(SimpleNeighbor(iter.id, iter.distance));
 
@@ -730,6 +755,141 @@ namespace NSG {
       for (auto iter : des_pool)
         assert(iter.id < nd_);
     }
+  }
+
+  void IndexNSG::LinkHierarchy(Parameters &parameters, vecNgh *cut_graph_) {
+    //    uint32_t       NUM_RNDS = 10;
+    //    uint32_t       NUM_HIER = 3;
+    const float    p_val = parameters.Get<float>("p_val");
+    const uint32_t NUM_RNDS = parameters.Get<unsigned>("num_syncs");
+    const uint32_t NUM_HIER = parameters.Get<unsigned>("num_hier");
+    const unsigned L = parameters.Get<unsigned>("L");
+    const unsigned range = parameters.Get<unsigned>("R");
+    const unsigned C = parameters.Get<unsigned>("C");
+    const unsigned innerL = 2 * L;
+    const unsigned innerC = 2 * C;
+    parameters.Set<unsigned>("L", innerL);
+    parameters.Set<unsigned>("C", innerC);
+
+    auto size_hierarchy = new size_t[NUM_HIER];
+    auto hierarchy_vertices = new std::vector<size_t>[NUM_HIER];
+
+    hierarchy_vertices[NUM_HIER - 1].resize(nd_);
+    std::iota(std::begin(hierarchy_vertices[NUM_HIER - 1]),
+              std::end(hierarchy_vertices[NUM_HIER - 1]),
+              0);  // Fill with 0, 1, ..., 99.
+    size_hierarchy[NUM_HIER - 1] = hierarchy_vertices[NUM_HIER - 1].size();
+
+    std::random_device               rd;
+    std::mt19937                     gen(rd());
+    std::uniform_real_distribution<> dis(0, 1);
+
+    for (int h = NUM_HIER - 2; h >= 0; h--) {
+      hierarchy_vertices[h].push_back(ep_);
+      for (size_t i = 0; i < hierarchy_vertices[h + 1].size(); i++) {
+        float candidate = dis(gen);
+        if (candidate < p_val && hierarchy_vertices[h + 1][i] != ep_)
+          hierarchy_vertices[h].push_back(hierarchy_vertices[h + 1][i]);
+      }
+      size_hierarchy[h] = hierarchy_vertices[h].size();
+      std::cout << "Generated random hierarchy level " << h << " of size "
+                << size_hierarchy[h] << std::endl;
+    }
+
+    final_graph_.resize(nd_);
+    std::vector<std::mutex> locks(nd_);
+
+    for (int h = 0; h < NUM_HIER; h++) {
+      std::cout << "Processing level " << h << " with " << size_hierarchy[h]
+                << " vertices " << std::endl;
+
+      if (h == NUM_HIER - 1) {
+        parameters.Set<unsigned>("L", L);
+        parameters.Set<unsigned>("C", C);
+      }
+
+#pragma omp parallel for schedule(static, (1 << 16))
+      for (size_t i = 0; i < nd_; i++) {
+        cut_graph_[i].clear();
+        for (auto id : final_graph_[i]) {
+          float dist = distance_->compare(data_ + dimension_ * (size_t) i,
+                                          data_ + dimension_ * (size_t) id,
+                                          (unsigned) dimension_);
+          cut_graph_[i].push_back(SimpleNeighbor(id, dist));
+        }
+      }
+
+      size_t round_size = size_hierarchy[h] % NUM_RNDS == 0
+                              ? size_hierarchy[h] / NUM_RNDS
+                              : size_hierarchy[h] / NUM_RNDS + 1;
+
+      for (uint32_t rnd_no = 0; rnd_no < NUM_RNDS; rnd_no++) {
+        size_t start_id = rnd_no * round_size;
+        size_t end_id = std::min(size_hierarchy[h], (rnd_no + 1) * round_size);
+        size_t round_size = end_id - start_id;
+        std::cout << "Round start: " << start_id << "  end: " << end_id
+                  << std::endl;
+
+        size_t PAR_BLOCK_SZ =
+            round_size > 1 << 20 ? 1 << 12 : (round_size + 64) / 64;
+        size_t nblocks = round_size % PAR_BLOCK_SZ == 0
+                             ? round_size / PAR_BLOCK_SZ
+                             : (round_size / PAR_BLOCK_SZ) + 1;
+
+#pragma omp parallel for schedule(static, 1)
+        for (size_t block = 0; block < nblocks; ++block) {
+          std::vector<Neighbor>    pool, tmp;
+          tsl::robin_set<unsigned> visited;
+
+          for (size_t n = start_id + block * PAR_BLOCK_SZ;
+               n < start_id + std::min(round_size, (block + 1) * PAR_BLOCK_SZ);
+               ++n) {
+            pool.clear();
+            tmp.clear();
+            visited.clear();
+            get_neighbors(
+                data_ + (size_t) dimension_ * hierarchy_vertices[h][n],
+                parameters, tmp, pool, visited);
+            sync_prune(hierarchy_vertices[h][n], pool, parameters, visited,
+                       cut_graph_);
+          }
+        }
+        std::cout << "sync_prune completed for (level: " << h
+                  << ", round: " << rnd_no << ")" << std::endl;
+
+#pragma omp parallel for schedule(static, PAR_BLOCK_SZ)
+        for (unsigned n = start_id; n < end_id; ++n) {
+          InterInsert(hierarchy_vertices[h][n], range, locks, parameters,
+                      cut_graph_);
+        }
+        std::cout << "InterInsert completed for (level: " << h
+                  << ", round: " << rnd_no << ")" << std::endl;
+
+        size_t max = 0, min = 1 << 30, total = 0, cnt = 0;
+
+#pragma omp parallel for schedule(static, 8192)
+        for (size_t i = 0; i < nd_; i++) {
+          vecNgh &pool = cut_graph_[i];
+          max = std::max(max, pool.size());
+          min = std::min(min, pool.size());
+          total += pool.size();
+          if (pool.size() < 2)
+            cnt++;
+
+          final_graph_[i].resize(pool.size());
+          for (unsigned j1 = 0; j1 < pool.size(); j1++)
+            final_graph_[i][j1] = pool[j1].id;
+        }
+
+        //      std::cout << "Level " << j << ":Degree: max:" << max
+        //              << "  avg:" << (float) total / (float) nd_
+        //            << "  min:" << min << "  count(deg<2):" << cnt << "\n";
+
+        width = std::max((unsigned) max, width);
+      }
+    }
+    delete[] size_hierarchy;
+    delete[] hierarchy_vertices;
   }
 
   void IndexNSG::Link(const Parameters &parameters, vecNgh *cut_graph_) {
@@ -933,6 +1093,50 @@ namespace NSG {
     size_t max = 0, min = 1 << 30, total = 0, cnt = 0;
     for (size_t i = 0; i < nd_; i++) {
       vecNgh &pool = cut_graph_[i];
+      max = std::max(max, pool.size());
+      min = std::min(min, pool.size());
+      total += pool.size();
+      if (pool.size() < 2)
+        cnt++;
+    }
+    std::cout << "Degree: max:" << max
+              << "  avg:" << (float) total / (float) nd_ << "  min:" << min
+              << "  count(deg<2):" << cnt << "\n";
+
+    width = std::max((unsigned) max, width);
+    has_built = true;
+    delete[] cut_graph_;
+  }
+
+  void IndexNSG::BuildRandomHierarchical(size_t n, const float *data,
+                                         Parameters &parameters) {
+    unsigned range = parameters.Get<unsigned>("R");
+    bool     is_nsg = parameters.Get<bool>("is_nsg");
+    bool     is_rnd_nn = parameters.Get<bool>("is_rnd_nn");
+    data_ = data;
+    if (is_nsg) {
+      std::string nn_graph_path = parameters.Get<std::string>("nn_graph_path");
+      Load(nn_graph_path.c_str());
+    } else {
+      if (!is_rnd_nn) {
+        std::string nn_graph_path =
+            parameters.Get<std::string>("nn_graph_path");
+        Load_nn_graph(nn_graph_path.c_str());
+      }
+      init_graph_bf(parameters);
+    }
+
+    auto    cut_graph_ = new vecNgh[nd_];
+#pragma omp parallel for
+    for (size_t i = 0; i < nd_; ++i) {
+      cut_graph_[i].reserve(range);
+    }
+    std::cout << "Memory allocated for NSG graph" << std::endl;
+    LinkHierarchy(parameters, cut_graph_);
+
+    size_t max = 0, min = 1 << 30, total = 0, cnt = 0;
+    for (size_t i = 0; i < nd_; i++) {
+      auto pool = final_graph_[i];
       max = std::max(max, pool.size());
       min = std::min(min, pool.size());
       total += pool.size();

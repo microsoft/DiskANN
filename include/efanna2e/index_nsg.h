@@ -28,8 +28,13 @@ namespace NSG {
 
     void Load_nn_graph(const char *filename);
 
+    void Init_rnd_nn_graph(size_t num_points, unsigned k);
+
     virtual void Build(size_t n, const float *data,
                        const Parameters &parameters) override;
+
+    void BuildRandomHierarchical(size_t n, const float *data,
+                                 Parameters &parameters);
 
     void BuildFromSmall(size_t n, const float *data,
                         const Parameters &parameters, IndexNSG &small_index,
@@ -101,7 +106,10 @@ namespace NSG {
     void sync_prune(unsigned q, std::vector<Neighbor> &pool,
                     const Parameters &        parameter,
                     tsl::robin_set<unsigned> &visited, vecNgh *cut_graph_);
+
     void Link(const Parameters &parameters, vecNgh *cut_graph_);
+
+    void LinkHierarchy(Parameters &parameters, vecNgh *cut_graph_);
 
     void LinkFromSmall(const Parameters &parameters, vecNgh *cut_graph_,
                        IndexNSG &                   small_index,
