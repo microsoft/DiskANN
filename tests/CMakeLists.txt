@@ -24,8 +24,8 @@ target_link_libraries(test_composite_flash_nsg_search ${PROJECT_NAME} aio)
 add_executable(test_pq_flash_nsg_search test_pq_flash_nsg_search.cpp)
 target_link_libraries(test_pq_flash_nsg_search ${PROJECT_NAME} aio)
 
-add_executable(test_pq_flash_nsg_search_rerank test_pq_flash_nsg_search_rerank.cpp)
-target_link_libraries(test_pq_flash_nsg_search_rerank ${PROJECT_NAME} aio)
+add_executable(test_ivfpq_flash_nsg_search test_ivfpq_flash_nsg_search.cpp)
+target_link_libraries(test_ivfpq_flash_nsg_search ${PROJECT_NAME} aio)
 
 add_executable(test_nsg_optimized_search test_nsg_optimized_search.cpp)
 target_link_libraries(test_nsg_optimized_search ${PROJECT_NAME} -ltcmalloc)

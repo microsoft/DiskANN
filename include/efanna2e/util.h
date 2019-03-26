@@ -285,4 +285,66 @@ namespace NSG {
       return nnodes;
     }
   };
+
+  template<typename Dtype, typename Mtype>
+  inline void block_load_convert_Tvecs(const char *filename, Mtype *&data,
+                                       _u64 &num, _u64 &dim) {
+    // check validity of file
+    std::ifstream in(filename, std::ios::binary);
+    if (!in.is_open()) {
+      std::cout << "Error opening file: " << filename << std::endl;
+      exit(-1);
+    }
+    _u32 dim_u32;
+    in.read((char *) &dim_u32, sizeof(unsigned));
+    in.seekg(0, std::ios::end);
+    std::ios::pos_type ss = in.tellg();
+    in.close();
+    dim = (_u64) dim_u32;
+
+    // calculate vector size
+    _u64 fsize = (_u64) ss;
+    _u64 per_row = sizeof(unsigned) + dim * sizeof(Dtype);
+    num = fsize / per_row;
+    std::cout << "# points = " << num << ", dimensions = " << dim << std::endl;
+
+    // data = new T[(size_t) num * (size_t) dim];
+    data = (Mtype *) malloc(num * dim * sizeof(Mtype));
+    memset((void *) data, 0, num * dim * sizeof(Mtype));
+
+    // block read buf
+    _u64  blk_size = 5 * 1048576;
+    char *block_read_buf = new char[per_row * blk_size];
+    _u64  n_blks = ROUND_UP(num, blk_size) / blk_size;
+    std::cout << "# blks: " << n_blks << ", blk_size: " << blk_size << "\n";
+
+    // open classical fd
+    int fd = open(filename, O_RDONLY);
+    assert(fd != -1);
+    for (_u64 blk = 0; blk < n_blks; blk++) {
+      // block stats
+      _u64 cur_blk_npts = std::min(num - blk * blk_size, blk_size);
+      _u64 cur_blk_offset = blk * blk_size * per_row;
+      _u64 cur_blk_size = cur_blk_npts * per_row;
+
+      // read blk into block_read_buf
+      int ret = pread(fd, block_read_buf, cur_blk_size, cur_blk_offset);
+      if ((_u64) ret != cur_blk_size) {
+        std::cout << "read=" << ret << ", expected=" << cur_blk_size;
+        exit(-1);
+      }
+#pragma omp parallel for schedule(static, 32768)
+      for (_u64 j = 0; j < cur_blk_npts; j++) {
+        Mtype *mem_vec = data + dim * (blk_size * blk + j);
+        Dtype *disk_vec =
+            (Dtype *) (block_read_buf + (per_row * j) + sizeof(unsigned));
+        for (_u64 d = 0; d < dim; d++) {
+          mem_vec[d] = (Mtype) disk_vec[d];
+        }
+      }
+      std::cout << "Block #" << blk << " read\n";
+    }
+    close(fd);
+    delete[] block_read_buf;
+  }
 }
