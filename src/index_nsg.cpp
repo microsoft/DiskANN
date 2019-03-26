@@ -882,6 +882,7 @@ namespace NSG {
           final_graph_[i].resize(pool.size());
           for (unsigned j1 = 0; j1 < pool.size(); j1++)
             final_graph_[i][j1] = pool[j1].id;
+          final_graph_[i].shrink_to_fit();
         }
 
         //      std::cout << "Level " << j << ":Degree: max:" << max
@@ -1001,6 +1002,7 @@ namespace NSG {
         if (r != i)
           final_graph_[i].push_back(r);
       }
+      final_graph_[i].shrink_to_fit();
     }
 
     data_ = data;
@@ -1028,6 +1030,7 @@ namespace NSG {
       final_graph_[i].reserve(pool.size());
       for (auto iter : pool)
         final_graph_[i].push_back(iter.id);
+      final_graph_[i].shrink_to_fit();
     }
     std::cout << "Degree: max:" << max
               << "  avg:" << (float) total / (float) nd_ << "  min:" << min
@@ -1191,6 +1194,7 @@ namespace NSG {
       final_graph_[i].resize(pool.size());
       for (unsigned j = 0; j < pool.size(); j++)
         final_graph_[i][j] = pool[j].id;
+      final_graph_[i].shrink_to_fit();
     }
     // tree_grow(parameters);
     std::cout << "Degree: max:" << max
