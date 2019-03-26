@@ -228,20 +228,29 @@ namespace NSG {
     final_graph_.resize(num);
     final_graph_.reserve(num);
 
-    std::random_device
-                                       rd;  // Will be used to obtain a seed for the random number engine
-    size_t                             x = rd();
-    std::mt19937                       generator(x);
-    std::uniform_int_distribution<int> distribution(0, num_points - 1);
-    unsigned                           kk = (k + 3) / 4 * 4;
-#pragma omp                            parallel for schedule(static, 65536)
-    for (size_t i = 0; i < num; i++) {
-      if (i % 1000000 == 0)
-        std::cout << "Generated random neighbors for point " << i << std::endl;
-      final_graph_[i].resize(k);
-      final_graph_[i].reserve(kk);
-      for (unsigned j = 0; j < k; j++)
-        final_graph_[i].push_back(distribution(generator));
+    size_t PAR_BLOCK_SZ = (1 << 16);
+    size_t nblocks = num_points / PAR_BLOCK_SZ;
+    if (num_points % PAR_BLOCK_SZ != 0)
+      nblocks++;
+
+#pragma omp parallel for schedule(static, 1)
+    for (size_t block = 0; block < nblocks; ++block) {
+      std::random_device                 rd;
+      size_t                             x = rd();
+      std::mt19937                       gen(x);
+      std::uniform_int_distribution<int> dis(0, num_points - 1);
+
+      for (size_t i = block * PAR_BLOCK_SZ;
+           i < (block + 1) * PAR_BLOCK_SZ && i < num_points; i++) {
+        final_graph_[i].resize(k);
+        for (unsigned j = 0; j < k; j++)
+          final_graph_[i].push_back(dis(gen));
+        final_graph_[i].shrink_to_fit();
+
+        if (i % 1000000 == 0)
+          std::cout << "Generated random neighbors for point " << i
+                    << std::endl;
+      }
     }
     ep_ = 0;
     std::cout << "Loaded Random graph. Set ep_ to 0" << std::endl;
@@ -687,7 +696,6 @@ namespace NSG {
     cut_graph_[q].clear();
     for (auto iter : result)
       cut_graph_[q].push_back(SimpleNeighbor(iter.id, iter.distance));
-    cut_graph_[q].shrink_to_fit();
 
     for (auto iter : cut_graph_[q])
       assert(iter.id < nd_);
@@ -753,7 +761,6 @@ namespace NSG {
         LockGuard guard(locks[des]);
         des_pool.push_back(sn);
       }
-      des_pool.shrink_to_fit();
       for (auto iter : des_pool)
         assert(iter.id < nd_);
     }
@@ -820,6 +827,7 @@ namespace NSG {
           cut_graph_[i].push_back(SimpleNeighbor(id, dist));
         }
         cut_graph_[i].shrink_to_fit();
+        cut_graph_[i].reserve(range);
       }
 
       size_t round_size = size_hierarchy[h] % NUM_RNDS == 0
