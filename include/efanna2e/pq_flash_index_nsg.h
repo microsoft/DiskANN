@@ -13,9 +13,21 @@
 #include "util.h"
 
 #define MAX_N_CMPS 16384
+#define SECTOR_LEN 4096
 #define MAX_N_SECTOR_READS 16
 
 namespace NSG {
+  struct QueryScratch {
+    _s8 *coord_scratch = nullptr;  // MUST BE AT LEAST [MAX_N_CMPS * data_dim]
+    _u64 coord_idx = 0;            // index of next [data_dim] scratch to use
+
+    char *sector_scratch =
+        nullptr;          // MUST BE AT LEAST [MAX_N_SECTOR_READS * SECTOR_LEN]
+    _u64 sector_idx = 0;  // index of next [SECTOR_LEN] scratch to use
+
+    float *aligned_scratch = nullptr;  // MUST BE AT LEAST [aligned_dim]
+  };
+
   class PQFlashNSG {
    public:
     PQFlashNSG(Distance *dist_cmp);
@@ -39,8 +51,9 @@ namespace NSG {
     std::pair<int, int> cached_beam_search(const float *query,
                                            const _u64 k_search,
                                            const _u64 l_search, _u32 *indices,
-                                           const _u64  beam_width,
-                                           QueryStats *stats = nullptr);
+                                           const _u64    beam_width,
+                                           QueryStats *  stats = nullptr,
+                                           QueryScratch *scratch = nullptr);
     AlignedFileReader reader;
 
     // index info

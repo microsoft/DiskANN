@@ -1,7 +1,3 @@
-//
-// Created by 付聪 on 2017/6/21.
-//
-
 #include <efanna2e/index.h>
 #include <efanna2e/neighbor.h>
 #include <efanna2e/pq_flash_index_nsg.h>
@@ -94,6 +90,17 @@ int main(int argc, char** argv) {
   qcounter.store(0);
 
   NSG::QueryStats* stats = new NSG::QueryStats[query_num];
+  _u64             n_threads = omp_get_max_threads();
+  std::cout << "Executing queries on " << n_threads << " threads\n";
+  std::vector<NSG::QueryScratch> thread_scratch(n_threads);
+  for (auto& scratch : thread_scratch) {
+    scratch.coord_scratch = new _s8[MAX_N_CMPS * data_dim];
+    NSG::alloc_aligned((void**) &scratch.sector_scratch,
+                       MAX_N_SECTOR_READS * SECTOR_LEN, SECTOR_LEN);
+    NSG::alloc_aligned((void**) &scratch.aligned_scratch, 256 * sizeof(float),
+                       256);
+    memset(scratch.aligned_scratch, 0, 256 * sizeof(float));
+  }
 
   NSG::Timer timer;
 #pragma omp  parallel for schedule(dynamic, 128) firstprivate(has_init)
@@ -112,10 +119,16 @@ int main(int argc, char** argv) {
       }
     }
     std::vector<unsigned>& query_res = res[i];
+    _u64                   thread_no = omp_get_thread_num();
+    NSG::QueryScratch*     local_scratch = &(thread_scratch[thread_no]);
+
+    // zero context
+    local_scratch->coord_idx = 0;
+    local_scratch->sector_idx = 0;
 
     auto ret = index.cached_beam_search(query_load + i * aligned_dim, k_search,
                                         l_search, query_res.data(), beam_width,
-                                        stats + i);
+                                        stats + i, local_scratch);
     // auto ret = index.Search(query_load + i * dim, data_load, K, paras,
     // tmp.data());
   }
@@ -144,6 +157,12 @@ int main(int argc, char** argv) {
 
   save_result(argv[10], res);
   delete[] stats;
+  std::cerr << "Clearing scratch" << std::endl;
+  for (auto& scratch : thread_scratch) {
+    delete[] scratch.coord_scratch;
+    free(scratch.sector_scratch);
+    free(scratch.aligned_scratch);
+  }
   free(query_load);
 
   return 0;

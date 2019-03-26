@@ -411,13 +411,24 @@ namespace NSG {
 
   std::pair<int, int> PQFlashNSG::cached_beam_search(
       const float *query, const _u64 k_search, const _u64 l_search,
-      _u32 *indices, const _u64 beam_width, QueryStats *stats) {
-    Timer query_timer, io_timer;
-    // scratch space to compute distances between FP32 Query and INT8 data
-    float *scratch = nullptr;
-    alloc_aligned((void **) &scratch, aligned_dim * sizeof(float), 32);
-    memset(scratch, 0, aligned_dim);
+      _u32 *indices, const _u64 beam_width, QueryStats *stats,
+      QueryScratch *query_scratch) {
+    // reset query scratch context
+    query_scratch->coord_idx = 0;
+    query_scratch->sector_idx = 0;
 
+    // scratch space to compute distances between FP32 Query and INT8 data
+    float *scratch = query_scratch->aligned_scratch;
+
+    // pointers to buffers for data
+    _s8 * data_buf = query_scratch->coord_scratch;
+    _u64 &data_buf_idx = query_scratch->coord_idx;
+
+    // sector scratch
+    char *sector_scratch = query_scratch->sector_scratch;
+    _u64 &sector_scratch_idx = query_scratch->sector_idx;
+
+    Timer                 query_timer, io_timer;
     std::vector<Neighbor> retset(l_search + 1);
     std::vector<_u64>     init_ids(l_search);
     tsl::robin_set<_u64>  visited(10 * l_search);
@@ -475,6 +486,7 @@ namespace NSG {
       frontier_nhoods.clear();
       frontier_read_reqs.clear();
       cached_nhoods.clear();
+      sector_scratch_idx = 0;
 
       // find new beam
       _u64 marker = k - 1;
@@ -501,7 +513,8 @@ namespace NSG {
           } else {
             std::pair<_u64, char *> fnhood;
             fnhood.first = id;
-            alloc_aligned((void **) &fnhood.second, SECTOR_LEN, SECTOR_LEN);
+            fnhood.second = sector_scratch + sector_scratch_idx * SECTOR_LEN;
+            sector_scratch_idx++;
             frontier_nhoods.push_back(fnhood);
             frontier_read_reqs.emplace_back(NODE_SECTOR_NO(id) * SECTOR_LEN,
                                             SECTOR_LEN, fnhood.second);
@@ -530,8 +543,11 @@ namespace NSG {
           _u64      nnbrs = (_u64)(*node_buf);
           assert(nnbrs < 200);
           _s8 *node_fp_coords = OFFSET_TO_NODE_COORDS(node_disk_buf);
-          _s8 *node_fp_coords_copy = new _s8[data_dim];
+          assert(data_buf_idx < MAX_N_CMPS);
+          _s8 *node_fp_coords_copy = data_buf + data_buf_idx * data_dim;
+          data_buf_idx++;
           memcpy(node_fp_coords_copy, node_fp_coords, data_dim * sizeof(_s8));
+
           fp_coords.insert(
               std::make_pair(frontier_nhood.first, node_fp_coords_copy));
           local_nodes.insert(frontier_nhood.first);
