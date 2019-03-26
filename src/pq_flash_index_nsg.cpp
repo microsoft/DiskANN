@@ -255,8 +255,12 @@ namespace NSG {
     medoid_nhood.second = new unsigned[medoid_nhood.first];
     memcpy(medoid_nhood.second, (medoid_nhood_buf + 1),
            medoid_nhood.first * sizeof(unsigned));
-    nhood_cache.insert(std::make_pair(medoid, medoid_nhood));
     free(medoid_buf);
+    
+    // make a copy and insert into nhood_cache
+    unsigned* medoid_nhood_copy = new unsigned[medoid_nhood.first];
+    memcpy(medoid_nhood_copy, medoid_nhood.second, medoid_nhood.first * sizeof(unsigned));
+    nhood_cache.insert(std::make_pair(medoid, std::make_pair(medoid_nhood.first, medoid_nhood_copy)));
 
     // print medoid nbrs
     std::cout << "Medoid nbrs: " << std::endl;
