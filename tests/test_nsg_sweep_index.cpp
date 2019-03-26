@@ -31,8 +31,7 @@ int main(int argc, char** argv) {
     std::cout << "Correct usage\n"
               << argv[0] << " data_file nn_graph_degree L R C "
               << "save_graph_file  alpha<1>   p_val<0.1> "
-              << "num_hier<1>   num_syncs<10>"
-              << std::endl;
+              << "num_hier<1>   num_syncs<10>" << std::endl;
     exit(-1);
   }
 

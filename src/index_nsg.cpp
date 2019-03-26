@@ -228,12 +228,13 @@ namespace NSG {
     final_graph_.resize(num);
     final_graph_.reserve(num);
 
-    std::random_device rd;  // Will be used to obtain a seed for the random number engine
-    size_t       x = rd();
-    std::mt19937 generator(x);
+    std::random_device
+                                       rd;  // Will be used to obtain a seed for the random number engine
+    size_t                             x = rd();
+    std::mt19937                       generator(x);
     std::uniform_int_distribution<int> distribution(0, num_points - 1);
     unsigned                           kk = (k + 3) / 4 * 4;
-#pragma omp parallel for schedule(static, 65536)
+#pragma omp                            parallel for schedule(static, 65536)
     for (size_t i = 0; i < num; i++) {
       if (i % 1000000 == 0)
         std::cout << "Generated random neighbors for point " << i << std::endl;
@@ -245,7 +246,6 @@ namespace NSG {
     ep_ = 0;
     std::cout << "Loaded Random graph. Set ep_ to 0" << std::endl;
   }
-
 
   void IndexNSG::iterate_to_fixed_point(const float *             query,
                                         const Parameters &        parameter,
@@ -687,6 +687,7 @@ namespace NSG {
     cut_graph_[q].clear();
     for (auto iter : result)
       cut_graph_[q].push_back(SimpleNeighbor(iter.id, iter.distance));
+    cut_graph_[q].shrink_to_fit();
 
     for (auto iter : cut_graph_[q])
       assert(iter.id < nd_);
@@ -697,7 +698,7 @@ namespace NSG {
                              const Parameters &parameter, vecNgh *cut_graph_) {
     float alpha = parameter.Get<float>("alpha");
     // SimpleNeighbor *src_pool = cut_graph_ + (size_t) n * (size_t) range;
-    vecNgh &src_pool = cut_graph_[n];
+    const vecNgh &src_pool = cut_graph_[n];
 
     for (auto desNode : src_pool) {
       auto           des = desNode.id;
@@ -752,6 +753,7 @@ namespace NSG {
         LockGuard guard(locks[des]);
         des_pool.push_back(sn);
       }
+      des_pool.shrink_to_fit();
       for (auto iter : des_pool)
         assert(iter.id < nd_);
     }
@@ -817,6 +819,7 @@ namespace NSG {
                                           (unsigned) dimension_);
           cut_graph_[i].push_back(SimpleNeighbor(id, dist));
         }
+        cut_graph_[i].shrink_to_fit();
       }
 
       size_t round_size = size_hierarchy[h] % NUM_RNDS == 0
