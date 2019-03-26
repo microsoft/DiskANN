@@ -63,7 +63,7 @@ int main(int argc, char** argv) {
   NSG::IVFPQFlashNSG index(&dist_cmp, &ivfpq_table);
   std::cout << "main --- tid: " << std::this_thread::get_id() << std::endl;
   index.reader.register_thread();
-  index.load(argv[7], n_pts, data_dim);
+  index.load(argv[8], n_pts, data_dim);
 
   // load queries
   float*   query_load = NULL;

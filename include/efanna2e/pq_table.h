@@ -105,19 +105,27 @@ namespace NSG {
       block_load_convert_Tvecs<_u32, _u16>(pq_data_ivecs, pq_data, pq_data_npts,
                                            pq_data_dim);
       std::cout << "PQ Data: # pts = " << pq_data_npts
-                << ", # chunks = " << pq_data_dim << "\n";
+                << ", # chunks = " << pq_data_dim
+                << ", chunk size = " << pq_chunk_size << "\n";
+      pq_nchunks = pq_data_dim;
     }
+
     ~IVFPQTable() {
-      delete[] ivf_pivots;
-      delete[] pq_pivots;
-      delete[] ivf_data;
-      delete[] pq_data;
+      free(ivf_pivots);
+      free(pq_pivots);
+      free(ivf_data);
+      free(pq_data);
     }
 
     void convert(const _u64 id, float* out_vec) {
       // extract PQ data for ID
       _u16* id_pq_data = pq_data + (pq_nchunks * id);
-
+      /*
+      std::cout << "Input: " << id << " -- PQ: ";
+      for(_u64 k=0;k<pq_nchunks;k++)
+        std::cout << id_pq_data[k] << " ";
+      std::cout << "\n";
+      */
       // construct residual vector for ID
       for (_u64 chunk = 0; chunk < pq_nchunks; chunk++) {
         _u16   chunk_val = id_pq_data[chunk];

@@ -339,6 +339,7 @@ namespace NSG {
         Dtype *disk_vec =
             (Dtype *) (block_read_buf + (per_row * j) + sizeof(unsigned));
         for (_u64 d = 0; d < dim; d++) {
+          assert(disk_vec[d] < 32768);
           mem_vec[d] = (Mtype) disk_vec[d];
         }
       }
