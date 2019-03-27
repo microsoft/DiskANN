@@ -887,7 +887,6 @@ namespace NSG {
           if (pool.size() < 2)
             cnt++;
 
-          final_graph_[i].resize(pool.size());
           for (unsigned j1 = 0; j1 < pool.size(); j1++)
             final_graph_[i][j1] = pool[j1].id;
           final_graph_[i].shrink_to_fit();
