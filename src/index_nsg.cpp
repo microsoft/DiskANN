@@ -826,8 +826,6 @@ namespace NSG {
                                           (unsigned) dimension_);
           cut_graph_[i].push_back(SimpleNeighbor(id, dist));
         }
-        cut_graph_[i].shrink_to_fit();
-        cut_graph_[i].reserve(range);
       }
 
       size_t round_size = size_hierarchy[h] % NUM_RNDS == 0
@@ -887,9 +885,9 @@ namespace NSG {
           if (pool.size() < 2)
             cnt++;
 
+          final_graph_[i].clear();
           for (unsigned j1 = 0; j1 < pool.size(); j1++)
-            final_graph_[i][j1] = pool[j1].id;
-          final_graph_[i].shrink_to_fit();
+            final_graph_[i].push_back(pool[j1].id);
         }
 
         //      std::cout << "Level " << j << ":Degree: max:" << max
