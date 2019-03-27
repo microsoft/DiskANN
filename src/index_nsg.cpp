@@ -242,7 +242,7 @@ namespace NSG {
 
       for (size_t i = block * PAR_BLOCK_SZ;
            i < (block + 1) * PAR_BLOCK_SZ && i < num_points; i++) {
-        final_graph_[i].resize(k);
+        final_graph_[i].reserve(k);
         for (unsigned j = 0; j < k; j++)
           final_graph_[i].push_back(dis(gen));
         final_graph_[i].shrink_to_fit();
