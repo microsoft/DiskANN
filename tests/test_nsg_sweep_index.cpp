@@ -55,6 +55,8 @@ int main(int argc, char** argv) {
   paras.Set<unsigned>("L", L);
   paras.Set<unsigned>("R", R);
   paras.Set<unsigned>("C", C);
+  paras.Set<unsigned>("innerL", 2 * L);
+  paras.Set<unsigned>("innerC", 2 * C);
   paras.Set<unsigned>("num_syncs", num_syncs);
   paras.Set<unsigned>("num_hier", num_hier);
   paras.Set<float>("alpha", alpha);

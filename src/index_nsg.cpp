@@ -775,8 +775,8 @@ namespace NSG {
     const unsigned L = parameters.Get<unsigned>("L");
     const unsigned range = parameters.Get<unsigned>("R");
     const unsigned C = parameters.Get<unsigned>("C");
-    const unsigned innerL = 2 * L;
-    const unsigned innerC = 2 * C;
+    const unsigned innerL = parameters.Get<unsigned>("innerL");
+    const unsigned innerC = parameters.Get<unsigned>("innerC");
     parameters.Set<unsigned>("L", innerL);
     parameters.Set<unsigned>("C", innerC);
 
