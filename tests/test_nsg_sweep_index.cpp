@@ -27,11 +27,12 @@ void load_data(char* filename, float*& data, unsigned& num,
   in.close();
 }
 int main(int argc, char** argv) {
-  if (argc != 12) {
+  if (argc != 14) {
     std::cout << "Correct usage\n"
               << argv[0] << " data_file nn_graph_degree L R C "
               << "save_graph_file  alpha<1>   p_val<0.1> "
-              << "num_hier<1>  num_syncs<10> second_pass<0>" << std::endl;
+              << "num_hier<1>  num_syncs<10> second_pass<0> innerL innerC"
+              << std::endl;
     exit(-1);
   }
 
@@ -45,6 +46,8 @@ int main(int argc, char** argv) {
   unsigned L = (unsigned) atoi(argv[3]);
   unsigned R = (unsigned) atoi(argv[4]);
   unsigned C = (unsigned) atoi(argv[5]);
+  unsigned innerL = (unsigned) atoi(argv[12]);
+  unsigned innerC = (unsigned) atoi(argv[13]);
   float    alpha = (float) std::atof(argv[7]);
   float    p_val = (float) std::atof(argv[8]);
   unsigned num_hier = (float) std::atof(argv[9]);
@@ -55,8 +58,8 @@ int main(int argc, char** argv) {
   paras.Set<unsigned>("L", L);
   paras.Set<unsigned>("R", R);
   paras.Set<unsigned>("C", C);
-  paras.Set<unsigned>("innerL", 2 * L);
-  paras.Set<unsigned>("innerC", 2 * C);
+  paras.Set<unsigned>("innerL", innerL);
+  paras.Set<unsigned>("innerC", innerC);
   paras.Set<unsigned>("num_syncs", num_syncs);
   paras.Set<unsigned>("num_hier", num_hier);
   paras.Set<float>("alpha", alpha);

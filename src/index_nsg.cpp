@@ -745,13 +745,49 @@ namespace NSG {
             float djk = distance_->compare(
                 data_ + dimension_ * (size_t) result[t].id,
                 data_ + dimension_ * (size_t) p.id, (unsigned) dimension_);
-            if (alpha * djk < p.distance /* dik */) {
+            if (djk < p.distance /* dik */) {
               occlude = true;
               break;
             }
           }
           if (!occlude)
             result.push_back(p);
+        }
+
+        if (result.size() < range / 2) {
+          std::vector<SimpleNeighbor> result2;
+          unsigned                    start2 = 0;
+          //		if (pool[start2].id == q)
+          //			start2++;
+          result2.push_back(temp_pool[start2]);
+          while (result2.size() < range - result.size() &&
+                 (++start2) < temp_pool.size()) {
+            auto &p = temp_pool[start2];
+            bool  occlude = false;
+            for (unsigned t = 0; t < result2.size(); t++) {
+              if (p.id == result2[t].id) {
+                occlude = true;
+                break;
+              }
+              float djk = distance_->compare(
+                  data_ + dimension_ * (size_t) result2[t].id,
+                  data_ + dimension_ * (size_t) p.id, (unsigned) dimension_);
+              if (alpha * djk < p.distance /* dik */) {
+                occlude = true;
+                break;
+              }
+            }
+            if (!occlude)
+              result2.push_back(p);
+          }
+          for (unsigned i = 0; i < result2.size(); i++) {
+            result.push_back(result2[i]);
+          }
+          std::set<SimpleNeighbor> s(result.begin(), result.end());
+          result.assign(s.begin(), s.end());
+          //		std::sort(result.begin(), result.end());
+          //		result.erase(unique(result.begin(), result.end()),
+          //result.end());
         }
         {
           LockGuard guard(locks[des]);
