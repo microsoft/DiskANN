@@ -1014,21 +1014,6 @@ namespace NSG {
       }
     }
 
-    size_t  max = 0, min = 1 << 30, total = 0, cnt = 0;
-#pragma omp parallel for schedule(static, (1 << 16))
-    for (size_t i = 0; i < nd_; ++i) {
-      auto &pool = final_graph_[i];
-      max = std::max(max, pool.size());
-      min = std::min(min, pool.size());
-      total += pool.size();
-      if (pool.size() < 2)
-        cnt++;
-    }
-    width = std::max((unsigned) max, width);
-    std::cout << "Degree: max:" << max
-              << "  avg:" << (float) total / (float) nd_ << "  min:" << min
-              << "  count(deg<2):" << cnt << "\n";
-
     delete[] cut_graph_;
     delete[] size_hierarchy;
     delete[] hierarchy_vertices;
@@ -1258,6 +1243,7 @@ namespace NSG {
     bool     is_nsg = parameters.Get<bool>("is_nsg");
     bool     is_rnd_nn = parameters.Get<bool>("is_rnd_nn");
     data_ = data;
+ 
     if (is_nsg) {
       std::string nn_graph_path = parameters.Get<std::string>("nn_graph_path");
       Load(nn_graph_path.c_str());
@@ -1274,12 +1260,11 @@ namespace NSG {
 
     size_t max = 0, min = 1 << 30, total = 0, cnt = 0;
     for (size_t i = 0; i < nd_; i++) {
-      auto pool = final_graph_[i];
+      auto& pool = final_graph_[i];
       max = std::max(max, pool.size());
       min = std::min(min, pool.size());
       total += pool.size();
-      if (pool.size() < 2)
-        cnt++;
+      if (pool.size() < 2) cnt++;
     }
     std::cout << "Degree: max:" << max
               << "  avg:" << (float) total / (float) nd_ << "  min:" << min
