@@ -27,11 +27,11 @@ void load_data(char* filename, float*& data, unsigned& num,
   in.close();
 }
 int main(int argc, char** argv) {
-  if (argc != 13) {
+  if (argc != 15) {
     std::cout << "Correct usage\n"
               << argv[0] << " data_file efanna/nsg_graph_path L R C "
               << "save_graph_file  alpha<1>   p_val<0.1> "
-              << "num_hier<1>  num_syncs<10> second_pass<0> is_nsg (1)"
+              << "num_hier<1>  num_syncs<10> second_pass<0> is_nsg (1) innerL (L) innerC (C)"
               << std::endl;
     exit(-1);
   }
@@ -52,11 +52,15 @@ int main(int argc, char** argv) {
   unsigned    num_syncs = (float) std::atof(argv[10]);
   bool        second_pass = (bool) std::atoi(argv[11]);
   bool        is_nsg = (bool) std::atoi(argv[12]);
+  unsigned    innerL = (unsigned) atoi(argv[13]);
+  unsigned    innerC = (unsigned) atoi(argv[14]);
 
   NSG::Parameters paras;
   paras.Set<unsigned>("L", L);
   paras.Set<unsigned>("R", R);
   paras.Set<unsigned>("C", C);
+  paras.Set<unsigned>("innerL", L);
+  paras.Set<unsigned>("innerC", C);
   paras.Set<std::string>("nn_graph_path", nn_graph_path);
   paras.Set<unsigned>("num_syncs", num_syncs);
   paras.Set<unsigned>("num_hier", num_hier);

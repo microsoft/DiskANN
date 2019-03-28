@@ -787,7 +787,7 @@ namespace NSG {
           result.assign(s.begin(), s.end());
           //		std::sort(result.begin(), result.end());
           //		result.erase(unique(result.begin(), result.end()),
-          //result.end());
+          // result.end());
         }
         {
           LockGuard guard(locks[des]);
@@ -844,6 +844,17 @@ namespace NSG {
     final_graph_.resize(nd_);
     std::vector<std::mutex> locks(nd_);
 
+#pragma omp parallel for schedule(static, (1 << 16))
+    for (size_t i = 0; i < nd_; i++) {
+      cut_graph_[i].clear();
+      for (auto id : final_graph_[i]) {
+        float dist = distance_->compare(data_ + dimension_ * (size_t) i,
+                                        data_ + dimension_ * (size_t) id,
+                                        (unsigned) dimension_);
+        cut_graph_[i].push_back(SimpleNeighbor(id, dist));
+      }
+    }
+
     for (int h = 0; h < NUM_HIER; h++) {
       std::cout << "Processing level " << h << " with " << size_hierarchy[h]
                 << " vertices " << std::endl;
@@ -851,17 +862,6 @@ namespace NSG {
       if (h == NUM_HIER - 1) {
         parameters.Set<unsigned>("L", L);
         parameters.Set<unsigned>("C", C);
-      }
-
-#pragma omp parallel for schedule(static, (1 << 16))
-      for (size_t i = 0; i < nd_; i++) {
-        cut_graph_[i].clear();
-        for (auto id : final_graph_[i]) {
-          float dist = distance_->compare(data_ + dimension_ * (size_t) i,
-                                          data_ + dimension_ * (size_t) id,
-                                          (unsigned) dimension_);
-          cut_graph_[i].push_back(SimpleNeighbor(id, dist));
-        }
       }
 
       size_t round_size = size_hierarchy[h] % NUM_RNDS == 0
