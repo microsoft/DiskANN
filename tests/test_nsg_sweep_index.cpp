@@ -51,8 +51,8 @@ int main(int argc, char** argv) {
   unsigned num_hier = (float) std::atof(argv[9]);
   unsigned num_syncs = (float) std::atof(argv[10]);
   bool     second_pass = (bool) std::atoi(argv[11]);
-  unsigned innerL = (unsigned)atoi(argv[12]);
-  unsigned innerC = (unsigned)atoi(argv[13]);
+  unsigned innerL = (unsigned) atoi(argv[12]);
+  unsigned innerC = (unsigned) atoi(argv[13]);
 
   if (nn_graph_deg > R) {
     std::cerr << "Error: nn_graph_degree must be <= R" << std::endl;

@@ -69,7 +69,7 @@ namespace NSG {
     typedef std::vector<std::vector<unsigned>> CompactGraph;
 
     CompactGraph final_graph_;
-    
+
     Index *initializer_;
 
     // version supplied by authors
@@ -98,6 +98,9 @@ namespace NSG {
     typedef std::vector<SimpleNeighbor> vecNgh;
     void InterInsert(unsigned n, unsigned range, std::vector<std::mutex> &locks,
                      const Parameters &parameter, vecNgh *cut_graph_);
+    void InterInsertHierarchy(unsigned n, std::vector<std::mutex> &locks,
+                              const Parameters &parameter);
+
     void sync_prune(unsigned q, std::vector<Neighbor> &pool,
                     const Parameters &        parameter,
                     tsl::robin_set<unsigned> &visited, vecNgh *cut_graph_);
@@ -126,7 +129,7 @@ namespace NSG {
     size_t                  node_size;
     size_t                  data_len;
     size_t                  neighbor_len;
-    //KNNGraph                nnd_graph;
+    // KNNGraph                nnd_graph;
   };
 }
 
