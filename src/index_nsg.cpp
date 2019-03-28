@@ -275,12 +275,12 @@ namespace NSG {
 
     unsigned l = 0;
     for (auto id : init_ids) {
-      if (id >= nd_)
-        continue;
-      float dist = distance_->compare(data_ + dimension_ * (size_t) id, query,
-                                      dimension_);
-      retset[l] = Neighbor(id, dist, true);
-      l++;
+      assert(id < nd_);
+      retset[l++] =
+          Neighbor(id,
+                   distance_->compare(data_ + dimension_ * (size_t) id, query,
+                                      dimension_),
+                   true);
     }
 
     std::sort(retset.begin(), retset.begin() + l);
@@ -292,12 +292,11 @@ namespace NSG {
         retset[k].flag = false;
         unsigned n = retset[k].id;
 
-        for (unsigned m = 0; m < final_graph_[n].size(); ++m) {
-          unsigned id = final_graph_[n][m];
-          if (visited.find(id) != visited.end())
-            continue;
-          else
+        for (auto id : final_graph_[n]) {
+          if (visited.find(id) == visited.end())
             visited.insert(id);
+          else
+            continue;
 
           float dist = distance_->compare(
               query, data_ + dimension_ * (size_t) id, (unsigned) dimension_);
@@ -1243,7 +1242,7 @@ namespace NSG {
     bool     is_nsg = parameters.Get<bool>("is_nsg");
     bool     is_rnd_nn = parameters.Get<bool>("is_rnd_nn");
     data_ = data;
- 
+
     if (is_nsg) {
       std::string nn_graph_path = parameters.Get<std::string>("nn_graph_path");
       Load(nn_graph_path.c_str());
@@ -1260,11 +1259,12 @@ namespace NSG {
 
     size_t max = 0, min = 1 << 30, total = 0, cnt = 0;
     for (size_t i = 0; i < nd_; i++) {
-      auto& pool = final_graph_[i];
+      auto &pool = final_graph_[i];
       max = std::max(max, pool.size());
       min = std::min(min, pool.size());
       total += pool.size();
-      if (pool.size() < 2) cnt++;
+      if (pool.size() < 2)
+        cnt++;
     }
     std::cout << "Degree: max:" << max
               << "  avg:" << (float) total / (float) nd_ << "  min:" << min
