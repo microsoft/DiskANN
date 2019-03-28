@@ -265,7 +265,7 @@ namespace NSG {
     const unsigned L = parameter.Get<unsigned>("L");
 
     while (init_ids.size() < L) {
-      unsigned id = rand() % nd_;
+      unsigned id = (rand() * rand() * rand()) % nd_;
       if (visited.find(id) != visited.end())
         continue;
       else
@@ -318,6 +318,7 @@ namespace NSG {
       else
         ++k;
     }
+    assert(!fullset.empty());
   }
 
   void IndexNSG::get_neighbors(const float *query, const Parameters &parameter,
@@ -620,10 +621,8 @@ namespace NSG {
     float    alpha = parameter.Get<float>("alpha");
 
     width = range;
-    unsigned start = 0;
 
-    for (unsigned nn = 0; nn < final_graph_[q].size(); nn++) {
-      unsigned id = final_graph_[q][nn];
+    for (auto id : final_graph_[q]) {
       if (visited.find(id) != visited.end())
         continue;
       float dist = distance_->compare(data_ + dimension_ * (size_t) q,
@@ -634,6 +633,7 @@ namespace NSG {
 
     std::vector<Neighbor> result;
     std::sort(pool.begin(), pool.end());
+    unsigned start = 0;
     if (pool[start].id == q)
       start++;
     result.push_back(pool[start]);
