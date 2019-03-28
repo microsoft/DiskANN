@@ -46,13 +46,18 @@ int main(int argc, char** argv) {
   unsigned L = (unsigned) atoi(argv[3]);
   unsigned R = (unsigned) atoi(argv[4]);
   unsigned C = (unsigned) atoi(argv[5]);
-  unsigned innerL = (unsigned) atoi(argv[12]);
-  unsigned innerC = (unsigned) atoi(argv[13]);
   float    alpha = (float) std::atof(argv[7]);
   float    p_val = (float) std::atof(argv[8]);
   unsigned num_hier = (float) std::atof(argv[9]);
   unsigned num_syncs = (float) std::atof(argv[10]);
   bool     second_pass = (bool) std::atoi(argv[11]);
+  unsigned innerL = (unsigned)atoi(argv[12]);
+  unsigned innerC = (unsigned)atoi(argv[13]);
+
+  if (nn_graph_deg > R) {
+    std::cerr << "Error: nn_graph_degree must be <= R" << std::endl;
+    exit(-1);
+  }
 
   NSG::Parameters paras;
   paras.Set<unsigned>("L", L);
