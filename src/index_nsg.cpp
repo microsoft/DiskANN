@@ -1328,7 +1328,7 @@ namespace NSG {
       const std::vector<unsigned> &start_points) {
     const unsigned L = parameters.Get<unsigned>("L_search");
     data_ = x;
-    std::vector<Neighbor> retset(L + 1);
+
     std::vector<unsigned> init_ids(L);
     // boost::dynamic_bitset<> flags{nd_, 0};
     tsl::robin_set<unsigned> visited(10 * L);
@@ -1346,23 +1346,21 @@ namespace NSG {
       }
 
     while (tmp_l < L) {
-      unsigned id = rand() % nd_;
-      if (visited.find(id) != visited.end()) {
-        continue;
-      } else {
+      unsigned id = (rand() * rand() * rand()) % nd_;
+      if (visited.find(id) == visited.end())
         visited.insert(id);
-      }
-      init_ids[tmp_l] = id;
-      tmp_l++;
+      else
+        continue;
+      init_ids[tmp_l++] = id;
     }
 
-    for (unsigned i = 0; i < init_ids.size(); i++) {
-      unsigned id = init_ids[i];
-      float    dist = distance_->compare(data_ + dimension_ * id, query,
-                                      (unsigned) dimension_);
-      retset[i] = Neighbor(id, dist, true);
-      // flags[id] = true;
-    }
+    std::vector<Neighbor> retset(L + 1);
+    size_t                i = 0;
+    for (auto id : init_ids)
+      retset[i++] = Neighbor(id,
+                             distance_->compare(data_ + dimension_ * id, query,
+                                                (unsigned) dimension_),
+                             true);
 
     int                   hops = 0;
     int                   cmps = 0;
@@ -1408,9 +1406,8 @@ namespace NSG {
           continue;
         Neighbor nn(id, dist, true);
 
-        int r = InsertIntoPool(
-            retset.data(), L,
-            nn);  // Return position in sorted list where nn inserted.
+        // Return position in sorted list where nn inserted.
+        int r = InsertIntoPool(retset.data(), L, nn);
         if (r < nk)
           nk = r;  // nk logs the best position in the retset that was updated
                    // due to neighbors of n.
