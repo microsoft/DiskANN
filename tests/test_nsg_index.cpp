@@ -31,7 +31,8 @@ int main(int argc, char** argv) {
     std::cout << "Correct usage\n"
               << argv[0] << " data_file efanna/nsg_graph_path L R C "
               << "save_graph_file  alpha<1>   p_val<0.1> "
-              << "num_hier<1>  num_syncs<10> second_pass<0> is_nsg (1) innerL (L) innerC (C)"
+              << "num_hier<1>  num_syncs<10> second_pass<0> is_nsg (1) innerL "
+                 "(L) innerC (C)"
               << std::endl;
     exit(-1);
   }
