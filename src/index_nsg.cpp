@@ -658,7 +658,7 @@ namespace NSG {
     }
 
     if (alpha > 1.0) {
-      if (result.size() < range / 2) {
+      if (result.size() < range) {
         std::vector<Neighbor> result2;
         unsigned              start2 = 0;
         if (pool[start2].id == q)
@@ -752,7 +752,7 @@ namespace NSG {
             result.push_back(p);
         }
 
-        if (result.size() < range / 2) {
+        if (result.size() < range) {
           std::vector<SimpleNeighbor> result2;
           unsigned                    start2 = 0;
           //		if (pool[start2].id == q)
@@ -859,7 +859,7 @@ namespace NSG {
             result.push_back(p);
         }
 
-        if (result.size() < range / 2) {
+        if (result.size() < range) {
           std::vector<SimpleNeighbor> result2;
           unsigned                    start2 = 0;
           //		if (pool[start2].id == q)
