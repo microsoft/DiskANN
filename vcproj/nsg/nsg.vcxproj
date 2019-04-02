@@ -19,23 +19,23 @@
     </ProjectConfiguration>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="..\src\pq_flash_index_nsg.cpp" />
-    <ClCompile Include="..\src\windows_aligned_file_reader.cpp" />
-    <ClCompile Include="..\tests\test_pq_flash_nsg_search.cpp" />
+    <ClCompile Include="..\..\src\pq_flash_index_nsg.cpp" />
+    <ClCompile Include="..\..\src\windows_aligned_file_reader.cpp" />
+    <ClCompile Include="..\..\tests\test_pq_flash_nsg_search.cpp" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="..\include\aligned_file_reader.h" />
-    <ClInclude Include="..\include\efanna2e\distance.h" />
-    <ClInclude Include="..\include\efanna2e\neighbor.h" />
-    <ClInclude Include="..\include\efanna2e\pq_flash_index_nsg.h" />
-    <ClInclude Include="..\include\efanna2e\pq_table.h" />
-    <ClInclude Include="..\include\efanna2e\timer.h" />
-    <ClInclude Include="..\include\efanna2e\util.h" />
-    <ClInclude Include="..\include\tsl\robin_growth_policy.h" />
-    <ClInclude Include="..\include\tsl\robin_hash.h" />
-    <ClInclude Include="..\include\tsl\robin_map.h" />
-    <ClInclude Include="..\include\tsl\robin_set.h" />
-    <ClInclude Include="FileAbstractions.h" />
+    <ClInclude Include="..\..\include\aligned_file_reader.h" />
+    <ClInclude Include="..\..\include\efanna2e\distance.h" />
+    <ClInclude Include="..\..\include\efanna2e\neighbor.h" />
+    <ClInclude Include="..\..\include\efanna2e\pq_flash_index_nsg.h" />
+    <ClInclude Include="..\..\include\efanna2e\pq_table.h" />
+    <ClInclude Include="..\..\include\efanna2e\timer.h" />
+    <ClInclude Include="..\..\include\efanna2e\util.h" />
+    <ClInclude Include="..\..\include\tsl\robin_growth_policy.h" />
+    <ClInclude Include="..\..\include\tsl\robin_hash.h" />
+    <ClInclude Include="..\..\include\tsl\robin_map.h" />
+    <ClInclude Include="..\..\include\tsl\robin_set.h" />
+    <ClInclude Include="..\..\include\FileAbstractions.h" />
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <VCProjectVersion>15.0</VCProjectVersion>
@@ -126,7 +126,7 @@
       <ConformanceMode>true</ConformanceMode>
       <PrecompiledHeaderFile>
       </PrecompiledHeaderFile>
-      <AdditionalIncludeDirectories>..\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\..\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
