@@ -169,11 +169,11 @@ namespace NSG {
     void cleanup() {
       // clear up any unused mem
       if (buf != nullptr) {
-        free(buf);
+        aligned_free(buf);
       }
 
       if (aligned_fp32_coords != nullptr) {
-        free(aligned_fp32_coords);
+        aligned_free(aligned_fp32_coords);
       }
 
       buf = nullptr;

@@ -160,10 +160,10 @@ int main(int argc, char** argv) {
   std::cerr << "Clearing scratch" << std::endl;
   for (auto& scratch : thread_scratch) {
     delete[] scratch.coord_scratch;
-    free(scratch.sector_scratch);
-    free(scratch.aligned_scratch);
+    NSG::aligned_free(scratch.sector_scratch);
+    NSG::aligned_free(scratch.aligned_scratch);
   }
-  free(query_load);
+  NSG::aligned_free(query_load);
 
   return 0;
 }

@@ -373,7 +373,7 @@ private:
         }
         else if(STORE_HASH && is_power_of_two_policy<GrowthPolicy>::value) {
             tsl_assert(bucket_count > 0);
-            return (bucket_count - 1) <= std::numeric_limits<truncated_hash_type>::max();
+            return (bucket_count - 1) <= (std::numeric_limits<truncated_hash_type>::max)();
         }
         else {
             return false;   
@@ -790,12 +790,12 @@ public:
         tsl_assert(ito_move_closer_value > icloser_bucket);
         
         const std::size_t ireturn_bucket = ito_move_closer_value - 
-                                           std::min(ito_move_closer_value - icloser_bucket, 
+                                           (std::min)(ito_move_closer_value - icloser_bucket, 
                                                     std::size_t(m_buckets[ito_move_closer_value].dist_from_ideal_bucket()));
         
         while(ito_move_closer_value < m_buckets.size() && m_buckets[ito_move_closer_value].dist_from_ideal_bucket() > 0) {
             icloser_bucket = ito_move_closer_value - 
-                             std::min(ito_move_closer_value - icloser_bucket, 
+                             (std::min)(ito_move_closer_value - icloser_bucket, 
                                       std::size_t(m_buckets[ito_move_closer_value].dist_from_ideal_bucket()));
             
             
@@ -960,7 +960,7 @@ public:
     }
     
     size_type max_bucket_count() const {
-        return std::min(GrowthPolicy::max_bucket_count(), m_buckets.max_size());
+        return (std::min)(GrowthPolicy::max_bucket_count(), m_buckets.max_size());
     }
     
     /*
@@ -979,12 +979,12 @@ public:
     }
     
     void max_load_factor(float ml) {
-        m_max_load_factor = std::max(0.1f, std::min(ml, 0.95f));
+        m_max_load_factor = (std::max)(0.1f, (std::min)(ml, 0.95f));
         m_load_threshold = size_type(float(bucket_count())*m_max_load_factor);
     }
     
     void rehash(size_type count) {
-        count = std::max(count, size_type(std::ceil(float(size())/max_load_factor())));
+        count = (std::max)(count, size_type(std::ceil(float(size())/max_load_factor())));
         rehash_impl(count);
     }
     

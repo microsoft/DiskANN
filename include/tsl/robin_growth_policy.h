@@ -128,7 +128,7 @@ public:
      */
     std::size_t max_bucket_count() const {
         // Largest power of two.
-        return (std::numeric_limits<std::size_t>::max() / 2) + 1;
+        return ((std::numeric_limits<std::size_t>::max)() / 2) + 1;
     }
     
     /**
@@ -222,7 +222,7 @@ private:
     static constexpr double REHASH_SIZE_MULTIPLICATION_FACTOR = 1.0 * GrowthFactor::num / GrowthFactor::den;
     static const std::size_t MAX_BUCKET_COUNT = 
             std::size_t(double(
-                    std::numeric_limits<std::size_t>::max() / REHASH_SIZE_MULTIPLICATION_FACTOR
+                    (std::numeric_limits<std::size_t>::max)() / REHASH_SIZE_MULTIPLICATION_FACTOR
             ));
             
     static_assert(REHASH_SIZE_MULTIPLICATION_FACTOR >= 1.1, "Growth factor should be >= 1.1.");
@@ -320,7 +320,7 @@ public:
 private:
     unsigned int m_iprime;
     
-    static_assert(std::numeric_limits<decltype(m_iprime)>::max() >= detail::PRIMES.size(), 
+    static_assert((std::numeric_limits<decltype(m_iprime)>::max)() >= detail::PRIMES.size(), 
                   "The type of m_iprime is not big enough.");
 }; 
 

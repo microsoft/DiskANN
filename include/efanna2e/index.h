@@ -10,6 +10,9 @@
 #include <cstdint>
 #include <fstream>
 #include <functional>
+#ifdef __NSG_WINDOWS__
+#include <numeric>
+#endif
 #include <string>
 #include <vector>
 #include "distance.h"
@@ -96,4 +99,4 @@ namespace NSG {
               << suffix << std::endl;
     vals.clear();
   }
-}
+}  // namespace NSG

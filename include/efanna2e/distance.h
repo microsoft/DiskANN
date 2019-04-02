@@ -6,7 +6,11 @@
 #define EFANNA2E_DISTANCE_H
 
 #include <efanna2e/util.h>
+#ifndef __NSG_WINDOWS__
 #include <x86intrin.h>
+#else
+#include <intrin.h>
+#endif
 #include <iostream>
 namespace NSG {
   enum Metric { L2 = 0, INNER_PRODUCT = 1, FAST_L2 = 2, PQ = 3 };
@@ -43,7 +47,11 @@ namespace NSG {
       const float *r = b;
       const float *e_l = l + DD;
       const float *e_r = r + DD;
+#if defined(_MSC_VER)
+      __declspec(align(32)) float unpack[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+#else
       float unpack[8] __attribute__((aligned(32))) = {0, 0, 0, 0, 0, 0, 0, 0};
+#endif
 
       sum = _mm256_loadu_ps(unpack);
       if (DR) {
@@ -151,7 +159,11 @@ namespace NSG {
       const float *r = b;
       const float *e_l = l + DD;
       const float *e_r = r + DD;
+#if defined(_MSC_VER)
+      __declspec(align(32)) float unpack[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+#else
       float unpack[8] __attribute__((aligned(32))) = {0, 0, 0, 0, 0, 0, 0, 0};
+#endif
 
       sum = _mm256_loadu_ps(unpack);
       if (DR) {
@@ -248,7 +260,11 @@ namespace NSG {
       unsigned     DD = D - DR;
       const float *l = a;
       const float *e_l = l + DD;
+#if defined(_MSC_VER)
+      __declspec(align(32)) float unpack[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+#else
       float unpack[8] __attribute__((aligned(32))) = {0, 0, 0, 0, 0, 0, 0, 0};
+#endif
 
       sum = _mm256_loadu_ps(unpack);
       if (DR) {
@@ -328,6 +344,6 @@ namespace NSG {
       return result;
     }
   };
-}
+}  // namespace NSG
 
 #endif  // EFANNA2E_DISTANCE_H

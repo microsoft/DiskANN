@@ -4,7 +4,14 @@
 
 #pragma once
 #include <fcntl.h>
+#ifndef __NSG_WINDOWS__
 #include <unistd.h>
+#else
+#include <Windows.h>
+#endif
+
+#include "FileAbstractions.h"
+
 #include <algorithm>
 #include <cassert>
 #include <cstdlib>
@@ -62,15 +69,19 @@ namespace NSG {
 
   inline float *data_align(float *data_ori, unsigned point_num, unsigned &dim) {
 #ifdef __GNUC__
-#ifdef __AVX__
-#define DATA_ALIGN_FACTOR 8
+	#ifdef __AVX__
+		#define DATA_ALIGN_FACTOR 8
+	#else
+		#ifdef __SSE2__
+			#define DATA_ALIGN_FACTOR 4
+		#else
+			#define DATA_ALIGN_FACTOR 1
+		#endif
+	#endif
 #else
-#ifdef __SSE2__
-#define DATA_ALIGN_FACTOR 4
-#else
-#define DATA_ALIGN_FACTOR 1
-#endif
-#endif
+	#ifdef __AVX__
+		#define DATA_ALIGN_FACTOR 8
+	#endif
 #endif
 
     // std::cout << "align with : "<<DATA_ALIGN_FACTOR << std::endl;
@@ -80,6 +91,10 @@ namespace NSG {
 // std::cout << "align to new dim: "<<new_dim << std::endl;
 #ifdef __APPLE__
     data_new = new float[(size_t) new_dim * (size_t) point_num];
+#elif __NSG_WINDOWS__
+    data_new = (float *) _aligned_malloc(
+        (size_t) point_num * (size_t) new_dim * sizeof(float),
+        DATA_ALIGN_FACTOR * 4);
 #else
     data_new = (float *) memalign(
         DATA_ALIGN_FACTOR * 4,
@@ -104,9 +119,27 @@ namespace NSG {
   inline void alloc_aligned(void **ptr, size_t size, size_t align) {
     *ptr = nullptr;
     assert(IS_ALIGNED(size, align));
+#ifndef __NSG_WINDOWS__
     *ptr = ::aligned_alloc(align, size);
+#else
+    *ptr = ::_aligned_malloc(size, align);  // note the swapped arguments!
+#endif
+
     assert(*ptr != nullptr);
     // std::cout << "ALLOC_ALIGNED:: " << ptr << "->" << *ptr << "\n";
+  }
+
+  inline void aligned_free(void* ptr) 
+  {
+	  //Gopal. Must have a check here if the pointer was actually allocated by _alloc_aligned
+	  if (ptr == nullptr) {
+		  return;
+	  }
+	  #ifndef __NSG_WINDOWS__
+		  free(ptr);
+	  #else
+		  ::_aligned_free(ptr);
+	  #endif
   }
 
   template<typename T>
@@ -135,8 +168,22 @@ namespace NSG {
     memset((void *) data, 0, (size_t) num * (size_t) dim * sizeof(T));
 
     // open classical fd
-    int fd = open(filename, O_RDONLY);
+    FileHandle fd;
+#ifndef __NSG_WINDOWS__
+    fd = open(filename, O_RDONLY);
     assert(fd != -1);
+#else
+    fd = CreateFileA(
+        filename,      // ASCII file name-hope this is not an issue
+        GENERIC_READ,  // Read only
+        0,             // No shared access
+        nullptr,  // No security attributes, no sharing with child processes
+        OPEN_EXISTING,            // assuming here that the file exists
+        FILE_FLAG_RANDOM_ACCESS,  // optimize for random seeks
+        nullptr                   // we are opening an existing file
+    );
+    assert(fd != nullptr);
+#endif
 
 // parallel read each vector at the desired offset
 #pragma omp parallel for schedule(static, 32768)
@@ -144,8 +191,25 @@ namespace NSG {
       // computed using actual dimension
       uint64_t file_offset = (per_row * i) + sizeof(unsigned);
       // computed using aligned dimension
-      T * buf = data + i * dim;
-      int ret = pread(fd, (char *) buf, dim * sizeof(T), file_offset);
+      T *buf = data + i * dim;
+
+      // Gopal. Assuming synchronous read.
+      DWORD ret = -1;
+#ifndef __NSG_WINDOWS__
+      ret = pread(fd, (char *) buf, dim * sizeof(T), file_offset);
+#else
+      OVERLAPPED overlapped;
+      memset(&overlapped, 0, sizeof(overlapped));
+      overlapped.OffsetHigh =
+          (uint32_t)((file_offset & 0xFFFFFFFF00000000LL) >> 32);
+      overlapped.Offset = (uint32_t)(file_offset & 0xFFFFFFFFLL);
+      if (!ReadFile(fd, (LPVOID) buf, dim * sizeof(T), &ret, &overlapped)) {
+        std::cout << "Read file returned error: " << GetLastError()
+                  << std::endl;
+      }
+
+#endif
+
       // std::cout << "ret = " << ret << "\n";
       if ((size_t) ret != dim * sizeof(T)) {
         std::cout << "read=" << ret << ", expected=" << dim * sizeof(T);
@@ -153,7 +217,12 @@ namespace NSG {
       }
     }
     std::cout << "Finished reading Tvecs" << std::endl;
+
+#ifndef __NSG_WINDOWS__
     close(fd);
+#else
+    CloseHandle(fd);
+#endif
   }
 
   // each row in returned matrix is aligned to 32-byte boundary
@@ -186,11 +255,18 @@ namespace NSG {
     // data = new T[(size_t) num * (size_t) dim];
     alloc_aligned((void **) &data,
                   (size_t) num * (size_t) aligned_dim * sizeof(T), 32);
+
     memset((void *) data, 0, (size_t) num * (size_t) aligned_dim * sizeof(T));
 
     // open classical fd
-    int fd = open(filename, O_RDONLY);
+    FileHandle fd;
+#ifndef __NSG_WINDOWS__
+    fd = open(filename, O_RDONLY);
     assert(fd != -1);
+#else
+    fd = CreateFileA(filename, GENERIC_READ, 0, nullptr, OPEN_EXISTING,
+                     FILE_FLAG_RANDOM_ACCESS, nullptr);
+#endif
 
     // parallel read each vector at the desired offset
     // #pragma omp parallel for schedule(static, 32768)
@@ -198,8 +274,22 @@ namespace NSG {
       // computed using actual dimension
       uint64_t file_offset = (per_row * i) + sizeof(unsigned);
       // computed using aligned dimension
-      T * buf = data + i * aligned_dim;
-      int ret = pread(fd, (char *) buf, dim * sizeof(T), file_offset);
+      T *   buf = data + i * aligned_dim;
+      DWORD ret = -1;
+#ifndef __NSG_WINDOWS__
+      ret = pread(fd, (char *) buf, dim * sizeof(T), file_offset);
+#else
+      OVERLAPPED overlapped;
+      memset(&overlapped, 0, sizeof(overlapped));
+      overlapped.OffsetHigh =
+          (uint32_t)((file_offset & 0xFFFFFFFF00000000LL) >> 32);
+      overlapped.Offset = (uint32_t)(file_offset & 0xFFFFFFFFLL);
+      if (!ReadFile(fd, (LPVOID) buf, dim * sizeof(T), &ret, &overlapped)) {
+        std::cout << "Read file returned error: " << GetLastError()
+                  << std::endl;
+      }
+#endif
+
       // std::cout << "ret = " << ret << "\n";
       if (ret != dim * sizeof(T)) {
         std::cout << "read=" << ret << ", expected=" << dim * sizeof(T);
@@ -207,7 +297,12 @@ namespace NSG {
       }
     }
     std::cout << "Finished reading Tvecs" << std::endl;
+
+#ifndef __NSG_WINDOWS__
     close(fd);
+#else
+    CloseHandle(fd);
+#endif
   }
 
   template<typename T>
@@ -240,7 +335,7 @@ namespace NSG {
 
     void read(char *filename) {
       std::ifstream reader(filename, std::ios::binary | std::ios::ate);
-      _u64          nsg_len = reader.tellg() - 2 * sizeof(unsigned);
+      _u64 nsg_len = reader.tellg() - (std::streamoff)(2 * sizeof(unsigned));
       reader.seekg(0, std::ios::beg);
       unsigned medoid_u32, width_u32;
       reader.read((char *) &width_u32, sizeof(unsigned));
@@ -319,16 +414,40 @@ namespace NSG {
     std::cout << "# blks: " << n_blks << ", blk_size: " << blk_size << "\n";
 
     // open classical fd
-    int fd = open(filename, O_RDONLY);
+    FileHandle fd;
+#ifndef __NSG_WINDOWS__
+    fd = open(filename, O_RDONLY);
     assert(fd != -1);
+#else
+    fd = CreateFileA(filename, GENERIC_READ,
+                     0,        // no sharing
+                     nullptr,  // default security
+                     OPEN_EXISTING, FILE_FLAG_RANDOM_ACCESS, nullptr);
+    assert(fd != nullptr);
+#endif
+
     for (_u64 blk = 0; blk < n_blks; blk++) {
       // block stats
-      _u64 cur_blk_npts = std::min(num - blk * blk_size, blk_size);
+      _u64 cur_blk_npts = (std::min)(num - blk * blk_size, blk_size);
       _u64 cur_blk_offset = blk * blk_size * per_row;
       _u64 cur_blk_size = cur_blk_npts * per_row;
 
       // read blk into block_read_buf
-      int ret = pread(fd, block_read_buf, cur_blk_size, cur_blk_offset);
+      DWORD ret = -1;
+#ifndef __NSG_WINDOWS__
+      ret = pread(fd, block_read_buf, cur_blk_size, cur_blk_offset);
+#else
+      OVERLAPPED overlapped;
+      memset(&overlapped, 0, sizeof(overlapped));
+      overlapped.OffsetHigh =
+          (uint32_t)((cur_blk_offset & 0xFFFFFFFF00000000LL) >> 32);
+      overlapped.Offset = (uint32_t)(cur_blk_offset & 0xFFFFFFFFLL);
+      if (!ReadFile(fd, (LPVOID) block_read_buf, cur_blk_size, &ret,
+                    &overlapped)) {
+        std::cout << "Read file returned error: " << GetLastError()
+                  << std::endl;
+      }
+#endif
       if ((_u64) ret != cur_blk_size) {
         std::cout << "read=" << ret << ", expected=" << cur_blk_size;
         exit(-1);
@@ -345,7 +464,11 @@ namespace NSG {
       }
       std::cout << "Block #" << blk << " read\n";
     }
+#ifndef __NSG_WINDOWS__
     close(fd);
+#else
+    CloseHandle(fd);
+#endif
     delete[] block_read_buf;
   }
-}
+}  // namespace NSG

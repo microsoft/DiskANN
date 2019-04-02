@@ -87,7 +87,7 @@ namespace NSG {
       cur_level->clear();
 
       // read in all pre_level nhoods
-      std::vector<AlignedRead> read_reqs;
+      std::vector<AlignedRead>             read_reqs;
       std::vector<std::pair<_u64, char *>> nhoods;
 
       for (const unsigned &id : *prev_level) {
@@ -134,7 +134,7 @@ namespace NSG {
         for (_u64 j = 0; j < nnbrs; j++) {
           cur_level->insert(nbrs[j]);
         }
-        free(nhood.second);
+        aligned_free(nhood.second);
       }
       std::cout << "Level: " << lvl << ", #nodes: " << nhoods.size()
                 << std::endl;
@@ -147,7 +147,11 @@ namespace NSG {
     for (auto &k_v : nhood_cache) {
       unsigned *nbrs = k_v.second.second;
       _u64      nnbrs = k_v.second.first;
+#ifndef __NSG_WINDOWS__
       assert(malloc_usable_size(nbrs) >= nnbrs * sizeof(unsigned));
+#else
+	  assert(_msize(nbrs) >= nnbrs * sizeof(unsigned));
+#endif
     }
 
     std::cerr << "Consolidating nhood_cache: # cached nhoods = "
@@ -162,8 +166,8 @@ namespace NSG {
     _u64 cur_off = 0;
     for (auto &k_v : nhood_cache) {
       std::pair<_u64, unsigned *> &val = nhood_cache[k_v.first];
-      unsigned *&ptr = val.second;
-      _u64       nnbrs = val.first;
+      unsigned *&                  ptr = val.second;
+      _u64                         nnbrs = val.first;
       memcpy(nhood_cache_buf + cur_off, ptr, nnbrs * sizeof(unsigned));
       delete[] ptr;
       ptr = nhood_cache_buf + cur_off;
@@ -256,7 +260,7 @@ namespace NSG {
     medoid_nhood.second = new unsigned[medoid_nhood.first];
     memcpy(medoid_nhood.second, (medoid_nhood_buf + 1),
            medoid_nhood.first * sizeof(unsigned));
-    free(medoid_buf);
+    aligned_free(medoid_buf);
 
     // make a copy and insert into nhood_cache
     unsigned *medoid_nhood_copy = new unsigned[medoid_nhood.first];
@@ -304,9 +308,9 @@ namespace NSG {
 
     // TODO:: create dummy ids
     for (; tmp_l < l_search; tmp_l++) {
-      _u64 id = std::numeric_limits<unsigned>::max() - tmp_l;
+      _u64 id = (std::numeric_limits<unsigned>::max)() - tmp_l;
       init_ids[tmp_l] = id;
-      float dist = std::numeric_limits<float>::max();
+      float dist = (std::numeric_limits<float>::max)();
       retset[tmp_l] = Neighbor(id, dist, false);
     }
 
@@ -317,9 +321,9 @@ namespace NSG {
     _u64 k = 0;
 
     // cleared every iteration
-    std::vector<_u64> frontier;
+    std::vector<_u64>                    frontier;
     std::vector<std::pair<_u64, char *>> frontier_nhoods;
-    std::vector<AlignedRead> frontier_read_reqs;
+    std::vector<AlignedRead>             frontier_read_reqs;
 
     while (k < l_search) {
       _u64 nk = l_search;
@@ -409,7 +413,7 @@ namespace NSG {
     for (_u64 i = 0; i < k_search; i++) {
       indices[i] = retset[i].id;
     }
-    free(scratch);
+    aligned_free(scratch);
     if (stats != nullptr) {
       stats->total_us = query_timer.elapsed();
     }
@@ -460,9 +464,9 @@ namespace NSG {
 
     // TODO:: create dummy ids
     for (; tmp_l < l_search; tmp_l++) {
-      _u64 id = std::numeric_limits<unsigned>::max() - tmp_l;
+      _u64 id = (std::numeric_limits<unsigned>::max)() - tmp_l;
       init_ids[tmp_l] = id;
-      float dist = std::numeric_limits<float>::max();
+      float dist = (std::numeric_limits<float>::max)();
       retset[tmp_l] = Neighbor(id, dist, false);
     }
 
@@ -473,9 +477,9 @@ namespace NSG {
     _u64 k = 0;
 
     // cleared every iteration
-    std::vector<_u64> frontier;
+    std::vector<_u64>                    frontier;
     std::vector<std::pair<_u64, char *>> frontier_nhoods;
-    std::vector<AlignedRead> frontier_read_reqs;
+    std::vector<AlignedRead>             frontier_read_reqs;
     std::vector<std::pair<_u64, std::pair<_u64, unsigned *>>> cached_nhoods;
 
     while (k < l_search) {
@@ -655,4 +659,4 @@ namespace NSG {
 
     return std::make_pair(hops, cmps);
   }
-}
+}  // namespace NSG

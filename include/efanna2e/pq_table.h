@@ -132,7 +132,7 @@ namespace NSG {
         float* chunk_residuals =
             pq_pivots + (data_dim * chunk_val) + (chunk * pq_chunk_size);
         _u64 chunk_size =
-            std::min(data_dim - (chunk * pq_chunk_size), pq_chunk_size);
+            (std::min)(data_dim - (chunk * pq_chunk_size), pq_chunk_size);
         float* chunk_out_vec = out_vec + (chunk * pq_chunk_size);
         // avoid memcpy for fast memcpy using loops
         for (_u64 d = 0; d < chunk_size; d++) {
