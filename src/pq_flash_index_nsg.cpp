@@ -150,7 +150,7 @@ namespace NSG {
 #ifndef __NSG_WINDOWS__
       assert(malloc_usable_size(nbrs) >= nnbrs * sizeof(unsigned));
 #else
-	  assert(_msize(nbrs) >= nnbrs * sizeof(unsigned));
+      assert(_msize(nbrs) >= nnbrs * sizeof(unsigned));
 #endif
     }
 
@@ -194,8 +194,10 @@ namespace NSG {
                         const char *pq_tables_bin, const _u64 chunk_size,
                         const _u64 n_chunks, const _u64 data_dim) {
     pq_table = new FixedChunkPQTable(n_chunks, chunk_size);
+    std::cout << "Loading PQ Tables from " << pq_tables_bin << "\n";
     pq_table->load_bin(pq_tables_bin);
     unsigned npts_u32, nchunks_u32;
+    std::cout << "Loading PQ compressed data from " << data_bin << std::endl;
     NSG::load_bin<_u8>(data_bin, data, npts_u32, nchunks_u32);
     n_base = (_u64) npts_u32;
     this->data_dim = data_dim;
@@ -526,7 +528,6 @@ namespace NSG {
             }
           }
         }
-
         io_timer.reset();
         reader.read(frontier_read_reqs);
         if (stats != nullptr) {

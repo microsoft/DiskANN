@@ -2,13 +2,11 @@
 // Created by 付聪 on 2017/6/21.
 //
 
+#define __NSG_WINDOWS__
+
 #pragma once
 #include <fcntl.h>
-#ifndef __NSG_WINDOWS__
-#include <unistd.h>
-#else
 #include <Windows.h>
-#endif
 
 #include "FileAbstractions.h"
 
@@ -67,6 +65,7 @@ namespace NSG {
     }
   }
 
+  /*
   inline float *data_align(float *data_ori, unsigned point_num, unsigned &dim) {
 #ifdef __GNUC__
 	#ifdef __AVX__
@@ -116,6 +115,7 @@ namespace NSG {
     return data_new;
   }
 
+  */
   inline void alloc_aligned(void **ptr, size_t size, size_t align) {
     *ptr = nullptr;
     assert(IS_ALIGNED(size, align));
@@ -186,7 +186,6 @@ namespace NSG {
 #endif
 
 // parallel read each vector at the desired offset
-#pragma omp parallel for schedule(static, 32768)
     for (size_t i = 0; i < num; i++) {
       // computed using actual dimension
       uint64_t file_offset = (per_row * i) + sizeof(unsigned);
@@ -453,7 +452,7 @@ namespace NSG {
         exit(-1);
       }
 #pragma omp parallel for schedule(static, 32768)
-      for (_u64 j = 0; j < cur_blk_npts; j++) {
+      for (_s64 j = 0; j < cur_blk_npts; j++) {
         Mtype *mem_vec = data + dim * (blk_size * blk + j);
         Dtype *disk_vec =
             (Dtype *) (block_read_buf + (per_row * j) + sizeof(unsigned));

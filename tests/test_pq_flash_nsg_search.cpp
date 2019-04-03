@@ -1,3 +1,4 @@
+#define __NSG_WINDOWS__
 #include <efanna2e/index.h>
 #include <efanna2e/neighbor.h>
 #include <efanna2e/pq_flash_index_nsg.h>
@@ -17,7 +18,7 @@ void load_data(char* filename, float*& data, unsigned& num,
   in.read((char*) &dim, 4);
   in.seekg(0, std::ios::end);
   std::ios::pos_type ss = in.tellg();
-  size_t             fsize = (size_t) ss;
+  size_t fsize = (size_t) ss;
   num = (unsigned) (fsize / (dim + 1) / 4);
   data = (float*) malloc((size_t) num * (size_t) dim * sizeof(float));
 
@@ -58,12 +59,15 @@ int main(int argc, char** argv) {
   NSG::DistanceL2 dist_cmp;
   NSG::PQFlashNSG index(&dist_cmp);
   std::cout << "main --- tid: " << std::this_thread::get_id() << std::endl;
-  index.reader.register_thread();
-  index.load(argv[1], argv[6], argv[2], chunk_size, n_chunks, data_dim);
+  // index.reader.register_thread();
+  std::cout << "Loading index from " << argv[1] << std::endl;
+  index.load(argv[1], argv[6], argv[2], chunk_size,
+                                  n_chunks, data_dim);
 
   // load queries
   float*   query_load = NULL;
   unsigned query_num, query_dim;
+  std::cout << "Loading Queries from " << argv[7] << std::endl;
   NSG::aligned_load_Tvecs<float>(argv[7], query_load, query_num, query_dim);
   std::cout << "query_dim = " << query_dim << std::endl;
   _u64 aligned_dim = ROUND_UP(query_dim, 8);
@@ -85,8 +89,8 @@ int main(int argc, char** argv) {
 
   std::vector<std::vector<unsigned>> res(query_num,
                                          std::vector<unsigned>(k_search));
-  bool                  has_init = false;
-  std::atomic<unsigned> qcounter;
+  bool                               has_init = false;
+  std::atomic<unsigned>              qcounter;
   qcounter.store(0);
 
   NSG::QueryStats* stats = new NSG::QueryStats[query_num];
@@ -103,8 +107,9 @@ int main(int argc, char** argv) {
   }
 
   NSG::Timer timer;
-#pragma omp  parallel for schedule(dynamic, 128) firstprivate(has_init)
-  for (_u64 i = 0; i < query_num; i++) {
+#pragma omp parallel for schedule(dynamic, 128) firstprivate(has_init) \
+    num_threads(2)
+  for (_s64 i = 0; i < query_num; i++) {
     unsigned val = qcounter.fetch_add(1);
     if (val % 1000 == 0) {
       std::cout << "Status: " << val << " queries done" << std::endl;
@@ -112,7 +117,7 @@ int main(int argc, char** argv) {
     if (!has_init) {
 #pragma omp critical
       {
-        index.reader.register_thread();
+        // index.reader.register_thread();
         std::cout << "Init complete for thread-" << omp_get_thread_num()
                   << std::endl;
         has_init = true;

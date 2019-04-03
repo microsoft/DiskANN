@@ -50,4 +50,4 @@ add_executable(read_fvecs read_fvecs.cpp)
 add_executable(nsg_bfs nsg_bfs.cpp)
 
 # formatter
-add_custom_command(TARGET calc_recall PRE_BUILD COMMAND clang-format-4.0 -i ../../include/efanna2e/*.h ../../src/*.cpp ../../tests/*.cpp)
+# add_custom_command(TARGET calc_recall PRE_BUILD COMMAND clang-format-4.0 -i ../../include/efanna2e/*.h ../../src/*.cpp ../../tests/*.cpp)

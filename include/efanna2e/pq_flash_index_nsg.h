@@ -3,7 +3,7 @@
 #include <sstream>
 #include <stack>
 #include <string>
-#include "aligned_file_reader.h"
+#include "windows_aligned_reader.h"
 #include "index.h"
 #include "neighbor.h"
 #include "parameters.h"
@@ -54,7 +54,7 @@ namespace NSG {
                                            const _u64    beam_width,
                                            QueryStats *  stats = nullptr,
                                            QueryScratch *scratch = nullptr);
-    AlignedFileReader reader;
+    WindowsAlignedReader reader;
 
     // index info
     // nhood of node `i` is in sector: [i / nnodes_per_sector]
