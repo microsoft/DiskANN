@@ -2,8 +2,6 @@
 // Created by 付聪 on 2017/6/21.
 //
 
-#define __NSG_WINDOWS__
-
 #pragma once
 #include <fcntl.h>
 #include <Windows.h>

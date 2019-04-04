@@ -1,4 +1,3 @@
-#define __NSG_WINDOWS__
 #include <efanna2e/index.h>
 #include <efanna2e/neighbor.h>
 #include <efanna2e/pq_flash_index_nsg.h>
@@ -108,7 +107,7 @@ int main(int argc, char** argv) {
 
   NSG::Timer timer;
 #pragma omp parallel for schedule(dynamic, 128) firstprivate(has_init) \
-    num_threads(2)
+    num_threads(8)
   for (_s64 i = 0; i < query_num; i++) {
     unsigned val = qcounter.fetch_add(1);
     if (val % 1000 == 0) {
