@@ -15,10 +15,17 @@
 class WindowsAlignedReader {
   public:
   uint64_t   file_sz;
-  HANDLE fh;
+   std::wstring        filename;
+  std::vector<HANDLE> handles;
+  
+  tsl::robin_map<std::thread::id, HANDLE> handle_map;
+  std::mutex handle_mut;
 
   WindowsAlignedReader() {};
   ~WindowsAlignedReader() {};
+
+  void register_thread();
+  HANDLE get_handle();
 
   // Open & close ops
   // Blocking calls

@@ -89,12 +89,11 @@ int main(int argc, char** argv) {
 
   std::vector<std::vector<unsigned>> res(query_num,
                                          std::vector<unsigned>(k_search));
-  bool                               has_init = false;
   std::atomic<unsigned>              qcounter;
   qcounter.store(0);
 
   NSG::QueryStats* stats = new NSG::QueryStats[query_num];
-  _u64             n_threads = omp_get_max_threads();
+  _u64             n_threads = 16;  //omp_get_max_threads();
   std::cout << "Executing queries on " << n_threads << " threads\n";
   std::vector<NSG::QueryScratch> thread_scratch(n_threads);
   for (auto& scratch : thread_scratch) {
@@ -107,21 +106,12 @@ int main(int argc, char** argv) {
   }
 
   NSG::Timer timer;
-#pragma omp parallel for schedule(dynamic, 128) firstprivate(has_init) \
-    num_threads(2)
+  std::vector<bool> has_inits(n_threads, false);
+#pragma omp parallel for schedule(dynamic, 128) num_threads(16)
   for (_s64 i = 0; i < query_num; i++) {
     unsigned val = qcounter.fetch_add(1);
     if (val % 1000 == 0) {
       std::cout << "Status: " << val << " queries done" << std::endl;
-    }
-    if (!has_init) {
-#pragma omp critical
-      {
-        // index.reader.register_thread();
-        std::cout << "Init complete for thread-" << omp_get_thread_num()
-                  << std::endl;
-        has_init = true;
-      }
     }
     std::vector<unsigned>& query_res = res[i];
     _u64                   thread_no = omp_get_thread_num();
@@ -130,6 +120,15 @@ int main(int argc, char** argv) {
     // zero context
     local_scratch->coord_idx = 0;
     local_scratch->sector_idx = 0;
+
+	// init if not init yet
+	if (!has_inits[thread_no]) {
+      index.reader.register_thread();
+#pragma omp critical
+      std::cout << "Init complete for thread-" << omp_get_thread_num()
+                << std::endl;
+      has_inits[thread_no] = true;
+    }
 
     auto ret = index.cached_beam_search(query_load + i * aligned_dim, k_search,
                                         l_search, query_res.data(), beam_width,
