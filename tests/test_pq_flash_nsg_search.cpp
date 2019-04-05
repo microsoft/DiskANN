@@ -1,4 +1,3 @@
-#define __NSG_WINDOWS__
 #include <efanna2e/index.h>
 #include <efanna2e/neighbor.h>
 #include <efanna2e/pq_flash_index_nsg.h>

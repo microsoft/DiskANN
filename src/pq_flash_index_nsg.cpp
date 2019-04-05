@@ -545,6 +545,9 @@ namespace NSG {
           unsigned *node_buf = OFFSET_TO_NODE_NHOOD(node_disk_buf);
           _u64      nnbrs = (_u64)(*node_buf);
           assert(nnbrs < 200);
+		  if (nnbrs >= 200) {
+			  std::cerr << "***Warning nnbrs = " << nnbrs << " greater than 200" << std::endl;
+		  }
           _s8 *node_fp_coords = OFFSET_TO_NODE_COORDS(node_disk_buf);
           assert(data_buf_idx < MAX_N_CMPS);
           _s8 *node_fp_coords_copy = data_buf + (data_buf_idx * data_dim);
