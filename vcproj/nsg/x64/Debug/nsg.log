@@ -1,1 +1,28 @@
-﻿
+﻿  test_pq_flash_nsg_search.cpp
+c:\users\t-sujs\source\repos\nsg\include\efanna2e\timer.h(21): warning C4244: 'return': conversion from '_Rep' to 'uint32_t', possible loss of data
+          with
+          [
+              _Rep=__int64
+          ]
+c:\users\t-sujs\source\repos\nsg\tests\test_pq_flash_nsg_search.cpp(109): warning C4244: 'argument': conversion from '_u64' to 'int', possible loss of data
+c:\users\t-sujs\source\repos\nsg\include\efanna2e\util.h(161): warning C4267: '=': conversion from 'size_t' to 'unsigned int', possible loss of data
+  c:\users\t-sujs\source\repos\nsg\include\efanna2e\pq_table.h(82): note: see reference to function template instantiation 'void NSG::load_Tvecs<float>(const char *,T *&,unsigned int &,unsigned int &)' being compiled
+          with
+          [
+              T=float
+          ]
+  c:\users\t-sujs\source\repos\nsg\include\tsl\robin_growth_policy.h(237): note: see reference to class template instantiation 'std::array<size_t,40>' being compiled
+c:\users\t-sujs\source\repos\nsg\include\efanna2e\util.h(442): warning C4244: 'argument': conversion from '_u64' to 'DWORD', possible loss of data
+  c:\users\t-sujs\source\repos\nsg\include\efanna2e\pq_table.h(91): note: see reference to function template instantiation 'void NSG::block_load_convert_Tvecs<_u32,_u16>(const char *,Mtype *&,_u64 &,_u64 &)' being compiled
+          with
+          [
+              Mtype=_u16
+          ]
+c:\users\t-sujs\source\repos\nsg\include\efanna2e\util.h(453): warning C4018: '<': signed/unsigned mismatch
+c:\users\t-sujs\source\repos\nsg\include\efanna2e\util.h(244): warning C4267: '=': conversion from 'size_t' to 'unsigned int', possible loss of data
+  c:\users\t-sujs\source\repos\nsg\tests\test_pq_flash_nsg_search.cpp(70): note: see reference to function template instantiation 'void NSG::aligned_load_Tvecs<float>(char *,T *&,unsigned int &,unsigned int &)' being compiled
+          with
+          [
+              T=float
+          ]
+  nsg.vcxproj -> C:\Users\t-sujs\source\repos\nsg\x64\Debug\nsg.exe

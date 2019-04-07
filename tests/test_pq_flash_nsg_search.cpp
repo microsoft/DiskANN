@@ -92,7 +92,7 @@ int main(int argc, char** argv) {
   qcounter.store(0);
 
   NSG::QueryStats* stats = new NSG::QueryStats[query_num];
-  _u64             n_threads = 8;  //omp_get_max_threads();
+  _u64             n_threads = 16;  //omp_get_max_threads();
   std::cout << "Executing queries on " << n_threads << " threads\n";
   std::vector<NSG::QueryScratch> thread_scratch(n_threads);
   for (auto& scratch : thread_scratch) {
@@ -106,7 +106,7 @@ int main(int argc, char** argv) {
 
   NSG::Timer timer;
   std::vector<bool> has_inits(n_threads, false);
-#pragma omp parallel for schedule(dynamic, 128) num_threads(8)
+#pragma omp parallel for schedule(dynamic, 128) num_threads(n_threads)
   for (_s64 i = 0; i < query_num; i++) {
     unsigned val = qcounter.fetch_add(1);
     if (val % 1000 == 0) {
