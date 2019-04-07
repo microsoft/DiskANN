@@ -3,7 +3,7 @@
 #include "efanna2e/util.h"
 
 #define SECTOR_LEN 4096
-#define MAX_IO_DEPTH 32
+#define MAX_IO_DEPTH 16
 
 void WindowsAlignedReader::open(const std::string& fname) {
   filename = std::wstring(fname.begin(), fname.end());
@@ -36,7 +36,7 @@ void WindowsAlignedReader::register_thread() {
   }
 
   // create IOCompletionPort
-  ctx.iocp = CreateIoCompletionPort(ctx.fhandle, ctx.iocp, 0, 1);
+  ctx.iocp = CreateIoCompletionPort(ctx.fhandle, ctx.iocp, 0, 0);
 
   // create MAX_DEPTH # of reqs
   for (_u64 i = 0; i < MAX_IO_DEPTH; i++) {
