@@ -1,7 +1,7 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
-    <LocalDebuggerCommandArguments>C:/spacevun/slice_IVF-0_PQ-256-50-2_compressed.bin  C:/spacevun/slice_IVF-0_PQ-256-50-2_piv.bin 50 2 100  C:/spacevun/spacevun_sweep_disk_opt.nsg C:/spacevun/un_vector_do.fvecs 20 5 C:/spacevun/small.res 4 3</LocalDebuggerCommandArguments>
+    <LocalDebuggerCommandArguments>E:/spacevun/slice_IVF-0_PQ-256-50-2_compressed.bin  E:/spacevun/slice_IVF-0_PQ-256-50-2_piv.bin 50 2 100  E:/spacevun/spacevun_sweep_disk_opt.nsg E:/spacevun/un_vector_do.fvecs 20 5 E:/spacevun/small.res 4 3</LocalDebuggerCommandArguments>
     <DebuggerFlavor>WindowsLocalDebugger</DebuggerFlavor>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">

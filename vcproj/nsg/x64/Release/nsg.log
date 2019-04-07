@@ -2,21 +2,21 @@
 cl : Command line warning D9025: overriding '/sdl' with '/GS-'
   pq_flash_index_nsg.cpp
 cl : Command line warning D9025: overriding '/sdl' with '/GS-'
-cl : Command line warning D9025: overriding '/sdl' with '/GS-'
   windows_aligned_reader.cpp
+c1xx : warning C4199: two-phase name lookup is not supported for C++/CLI, C++/CX, or OpenMP; use /Zc:twoPhase-
+c1xx : warning C4199: two-phase name lookup is not supported for C++/CLI, C++/CX, or OpenMP; use /Zc:twoPhase-
+cl : Command line warning D9025: overriding '/sdl' with '/GS-'
   test_pq_flash_nsg_search.cpp
-c1xx : warning C4199: two-phase name lookup is not supported for C++/CLI, C++/CX, or OpenMP; use /Zc:twoPhase-
-c1xx : warning C4199: two-phase name lookup is not supported for C++/CLI, C++/CX, or OpenMP; use /Zc:twoPhase-
 c1xx : warning C4199: two-phase name lookup is not supported for C++/CLI, C++/CX, or OpenMP; use /Zc:twoPhase-
 c:\program files (x86)\microsoft visual studio\2017\enterprise\vc\tools\msvc\14.16.27023\include\xlocale(319): warning C4530: C++ exception handler used, but unwind semantics are not enabled. Specify /EHsc (compiling source file ..\..\src\pq_flash_index_nsg.cpp)
 c:\program files (x86)\microsoft visual studio\2017\enterprise\vc\tools\msvc\14.16.27023\include\xlocale(319): warning C4530: C++ exception handler used, but unwind semantics are not enabled. Specify /EHsc (compiling source file ..\..\tests\test_pq_flash_nsg_search.cpp)
 c:\program files (x86)\microsoft visual studio\2017\enterprise\vc\tools\msvc\14.16.27023\include\xlocale(319): warning C4530: C++ exception handler used, but unwind semantics are not enabled. Specify /EHsc (compiling source file ..\..\src\windows_aligned_reader.cpp)
-c:\users\t-sujs\source\repos\nsg\src\windows_aligned_reader.cpp(71): warning C4244: 'argument': conversion from '_u64' to 'DWORD', possible loss of data
 c:\users\t-sujs\source\repos\nsg\include\efanna2e\timer.h(21): warning C4244: 'return': conversion from '_Rep' to 'uint32_t', possible loss of data
           with
           [
               _Rep=__int64
           ] (compiling source file ..\..\src\pq_flash_index_nsg.cpp)
+c:\users\t-sujs\source\repos\nsg\src\windows_aligned_reader.cpp(103): warning C4244: 'argument': conversion from '_u64' to 'DWORD', possible loss of data
 c:\users\t-sujs\source\repos\nsg\src\pq_flash_index_nsg.cpp(304): warning C4244: 'argument': conversion from '_u64' to 'unsigned int', possible loss of data
 c:\users\t-sujs\source\repos\nsg\src\pq_flash_index_nsg.cpp(305): warning C4244: 'argument': conversion from '_u64' to 'unsigned int', possible loss of data
 c:\users\t-sujs\source\repos\nsg\src\pq_flash_index_nsg.cpp(316): warning C4244: 'argument': conversion from '_u64' to 'unsigned int', possible loss of data
@@ -101,6 +101,6 @@ c:\users\t-sujs\source\repos\nsg\include\efanna2e\util.h(244): warning C4267: '=
               T=float
           ]
   Generating code
-  All 2313 functions were compiled because no usable IPDB/IOBJ from previous compilation was found.
+  All 2399 functions were compiled because no usable IPDB/IOBJ from previous compilation was found.
   Finished generating code
   nsg.vcxproj -> C:\Users\t-sujs\source\repos\nsg\x64\Release\nsg.exe

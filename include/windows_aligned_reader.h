@@ -1,31 +1,36 @@
 #pragma once
 
-#include <fcntl.h>
 #include <Windows.h>
-#include <minwinbase.h>
+#include <fcntl.h>
 #include <malloc.h>
+#include <minwinbase.h>
 
 #include <cstdio>
 #include <mutex>
 #include <thread>
+#include "aligned_file_reader.h"
 #include "efanna2e/util.h"
 #include "tsl/robin_map.h"
-#include "aligned_file_reader.h"
+
+typedef struct{
+  HANDLE                  fhandle = NULL;
+  HANDLE                  iocp = NULL;
+  std::vector<OVERLAPPED> reqs;
+}IOContext;
 
 class WindowsAlignedReader {
-  public:
-  uint64_t   file_sz;
-   std::wstring        filename;
-  std::vector<HANDLE> handles;
-  
-  tsl::robin_map<std::thread::id, HANDLE> handle_map;
-  std::mutex handle_mut;
+ public:
+  uint64_t            file_sz;
+  std::wstring        filename;
 
-  WindowsAlignedReader() {};
-  ~WindowsAlignedReader() {};
+  tsl::robin_map<std::thread::id, IOContext> ctx_map;
+  std::mutex                                 ctx_mut;
 
-  void register_thread();
-  HANDLE get_handle();
+  WindowsAlignedReader(){};
+  ~WindowsAlignedReader(){};
+
+  void   register_thread();
+  IOContext& get_ctx();
 
   // Open & close ops
   // Blocking calls
