@@ -69,6 +69,50 @@ namespace NSG {
                                 std::vector<unsigned> &picked) {
   }
 
+  void IndexNSG::Save_Inner_Vertices(const char *filename) {
+    std::string inner_file(filename);
+    inner_file += ".inner";
+    std::ofstream out(inner_file.c_str(), std::ios::binary | std::ios::out);
+    //    assert(final_graph_.size() == nd_);
+
+    //    long long total_gr_edges = 0;
+    out.write((char *) is_inner, nd_ * sizeof(bool));
+    out.close();
+
+    std::cout << "Saved inner vertices of higher degree " << std::endl;
+  }
+
+  void IndexNSG::Load_Inner_Vertices(const char *filename) {
+    std::string inner_file(filename);
+    inner_file += ".inner";
+
+    int fd = open(inner_file.c_str(), O_RDONLY);
+    if (fd <= 0) {
+      std::cerr << "Inner vertices file not found" << std::endl;
+      return;
+    }
+    struct stat sb;
+    if (fstat(fd, &sb) != 0) {
+      std::cerr << "Inner vertices file not dound. " << std::endl;
+      return;
+    }
+
+    off_t fileSize = sb.st_size;
+    std::cout << fileSize << std::endl;
+    char *buf = (char *) mmap(NULL, fileSize, PROT_READ, MAP_PRIVATE, fd, 0);
+    if (fileSize != sizeof(bool) * nd_) {
+      std::cout << "ERROR: Inner file size mismatch" << std::endl;
+      exit(-1);
+    }
+    std::memcpy((char *) is_inner, buf, nd_ * sizeof(bool));
+
+    if (munmap(buf, fileSize) != 0)
+      std::cerr << "ERROR unmapping. CHECK!" << std::endl;
+    close(fd);
+    //	  ep_ = 0;
+    std::cout << "Loaded inner vertices of higher degree" << std::endl;
+  }
+
   void IndexNSG::Load(const char *filename) {
     std::ifstream in(filename, std::ios::binary);
     in.read((char *) &width, sizeof(unsigned));
@@ -92,6 +136,8 @@ namespace NSG {
                   << std::endl;
     }
     cc /= nd_;
+
+    //    Load_Inner_Vertices(filename);
     // std::cout<<cc<<std::endl;
   }
 
@@ -132,7 +178,7 @@ namespace NSG {
     if (munmap(buf, fileSize) != 0)
       std::cerr << "ERROR unmapping. CHECK!" << std::endl;
     close(fd);
-    ep_ = 0;
+    //  ep_ = 0;
     std::cout << "Loaded EFANNA graph. Set ep_ to 0" << std::endl;
   }
 
@@ -868,6 +914,7 @@ namespace NSG {
     if (is_nsg) {
       std::string nn_graph_path = parameters.Get<std::string>("nn_graph_path");
       Load(nn_graph_path.c_str());
+      Load_Inner_Vertices(nn_graph_path.c_str());
     } else {
       if (!is_rnd_nn) {
         std::string nn_graph_path =

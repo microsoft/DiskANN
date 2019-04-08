@@ -26,6 +26,9 @@ namespace NSG {
     void LoadSmallIndex(const char *filename, std::vector<unsigned> &picked);
     void SaveSmallIndex(const char *filename, std::vector<unsigned> &picked);
 
+    void Load_Inner_Vertices(const char *filename);
+    void Save_Inner_Vertices(const char *filename);
+
     void Load_nn_graph(const char *filename);
 
     void Init_rnd_nn_graph(size_t num_points, unsigned k,
