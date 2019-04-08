@@ -63,75 +63,10 @@ namespace NSG {
 
   void IndexNSG::SaveSmallIndex(const char *           filename,
                                 std::vector<unsigned> &picked) {
-    if (picked.size() != this->nd_)
-      std::cerr << "In small index save: picked.size() != this->nd_"
-                << std::endl;
-    if (picked.size() != final_graph_.size())
-      std::cerr << "In small index save: picked.size() != final_graph_.size()"
-                << std::endl;
-
-    std::ofstream out(std::string(filename) + ".small",
-                      std::ios::binary | std::ios::out);
-
-    out.write((char *) &(this->nd_), sizeof(size_t));
-    out.write((char *) &(this->ep_), sizeof(unsigned));
-
-    unsigned picked_size = picked.size();
-    out.write((char *) &picked_size, sizeof(unsigned));
-    out.write((char *) picked.data(), picked_size * sizeof(unsigned));
-
-    long long total_gr_edges = 0;
-    out.write((char *) &width, sizeof(unsigned));
-    out.write((char *) &ep_, sizeof(unsigned));
-    for (unsigned i = 0; i < nd_; i++) {
-      unsigned GK = (unsigned) final_graph_[i].size();
-      out.write((char *) &GK, sizeof(unsigned));
-      out.write((char *) final_graph_[i].data(), GK * sizeof(unsigned));
-      total_gr_edges += GK;
-    }
-    out.close();
   }
 
   void IndexNSG::LoadSmallIndex(const char *           filename,
                                 std::vector<unsigned> &picked) {
-    std::ifstream in(std::string(filename) + ".small", std::ios::binary);
-    if (in.fail()) {
-      std::cerr << "Small Index file: " << std::string(filename)
-                << ".small not found." << std::endl;
-      exit(-1);
-    }
-
-    in.read((char *) &(this->nd_), sizeof(size_t));
-    in.read((char *) &(this->ep_), sizeof(unsigned));
-
-    unsigned picked_size;
-    in.read((char *) &picked_size, sizeof(unsigned));
-    assert(picked.size() == 0);
-    picked.resize(picked_size);
-    in.read((char *) picked.data(), picked_size * sizeof(unsigned));
-
-    in.read((char *) &width, sizeof(unsigned));
-    in.read((char *) &ep_, sizeof(unsigned));
-    // width=100;
-    size_t   cc = 0;
-    unsigned nodes = 0;
-    while (!in.eof()) {
-      unsigned k;
-      in.read((char *) &k, sizeof(unsigned));
-      if (in.eof())
-        break;
-      cc += k;
-      ++nodes;
-      std::vector<unsigned> tmp(k);
-      in.read((char *) tmp.data(), k * sizeof(unsigned));
-      final_graph_.push_back(tmp);
-
-      if (nodes % 5000000 == 0)
-        std::cout << "Loaded " << nodes << " nodes, and " << cc << " neighbors"
-                  << std::endl;
-    }
-    cc /= nd_;
-    // std::cout<<cc<<std::endl;
   }
 
   void IndexNSG::Load(const char *filename) {
@@ -159,31 +94,6 @@ namespace NSG {
     cc /= nd_;
     // std::cout<<cc<<std::endl;
   }
-
-  /*void IndexNSG::Load_nn_graph(const char *filename) {
-    std::ifstream in(filename, std::ios::binary);
-    unsigned      k;
-    in.read((char *) &k, sizeof(unsigned));
-    in.seekg(0, std::ios::end);
-    std::ios::pos_type ss = in.tellg();
-    size_t             fsize = (size_t) ss;
-    size_t             num = (unsigned) (fsize / (k + 1) / 4);
-    in.seekg(0, std::ios::beg);
-
-    final_graph_.resize(num);
-    final_graph_.reserve(num);
-    unsigned kk = (k + 3) / 4 * 4;
-    for (size_t i = 0; i < num; i++) {
-      in.seekg(4, std::ios::cur);
-      final_graph_[i].resize(k);
-      final_graph_[i].reserve(kk);
-      in.read((char *) final_graph_[i].data(), k * sizeof(unsigned));
-    }
-    in.close();
-    ep_ = 0;
-    std::cout << "Loaded EFANNA graph. Set ep_ to 0" << std::endl;
-  }
-*/
 
   void IndexNSG::Load_nn_graph(const char *filename) {
     int fd = open(filename, O_RDONLY);
@@ -519,61 +429,9 @@ namespace NSG {
   }
 
   void IndexNSG::init_graph(const Parameters &parameters) {
-    float *center = new float[dimension_];
-    for (unsigned j = 0; j < dimension_; j++)
-      center[j] = 0;
-    for (unsigned i = 0; i < nd_; i++) {
-      for (unsigned d = 0; d < dimension_; d++) {
-        center[d] += data_[i * dimension_ + d];
-      }
-    }
-    for (unsigned j = 0; j < dimension_; j++) {
-      center[j] /= nd_;
-    }
-
-    std::vector<Neighbor> tmp, pool;
-    ep_ = rand() % nd_;  // random initialize navigating point
-    get_neighbors(center, parameters, tmp, pool);
-    ep_ = tmp[0].id;
   }
 
   void IndexNSG::init_graph_outside(const float *data) {
-    data_ = data;
-    float *center = new float[dimension_]();
-    for (size_t j = 0; j < dimension_; j++)
-      center[j] = 0;
-    for (size_t i = 0; i < nd_; i++)
-      for (size_t j = 0; j < dimension_; j++)
-        center[j] += data_[i * dimension_ + j];
-    for (size_t j = 0; j < dimension_; j++)
-      center[j] /= nd_;
-
-    // compute all to one distance
-    auto    distances = new float[nd_]();
-#pragma omp parallel for schedule(static, 65536)
-    for (size_t i = 0; i < nd_; i++) {
-      // extract point and distance reference
-      float &      dist = distances[i];
-      const float *cur_vec = data_ + (i * (size_t) dimension_);
-      dist = 0;
-      float diff = 0;
-      for (size_t j = 0; j < dimension_; j++) {
-        diff = (center[j] - cur_vec[j]) * (center[j] - cur_vec[j]);
-        dist += diff;
-      }
-    }
-    // find imin
-    size_t min_idx = 0;
-    float  min_dist = distances[0];
-    for (size_t i = 1; i < nd_; i++) {
-      if (distances[i] < min_dist) {
-        min_idx = i;
-        min_dist = distances[i];
-      }
-    }
-    ep_ = min_idx;
-    delete[] distances;
-    std::cout << "Medoid index = " << min_idx << std::endl;
   }
 
   void IndexNSG::init_graph_bf(const Parameters &parameters) {
@@ -861,9 +719,10 @@ namespace NSG {
       hierarchy_vertices[h].push_back(ep_);
       for (size_t i = 0; i < hierarchy_vertices[h + 1].size(); i++) {
         float candidate = dis(gen);
-        if (candidate < p_val && hierarchy_vertices[h + 1][i] != ep_)
+        if (candidate < p_val && hierarchy_vertices[h + 1][i] != ep_) {
           hierarchy_vertices[h].push_back(hierarchy_vertices[h + 1][i]);
-        is_inner[hierarchy_vertices[h + 1][i]] = true;
+          is_inner[hierarchy_vertices[h + 1][i]] = true;
+        }
       }
       size_hierarchy[h] = hierarchy_vertices[h].size();
       std::cout << "Generated random hierarchy level " << h << " of size "
@@ -898,19 +757,20 @@ namespace NSG {
         size_t round_size = DIV_ROUND_UP(size_hierarchy[h], NUM_SYNCS);
 
         for (uint32_t rnd_no = 0; rnd_no < NUM_SYNCS; rnd_no++) {
-          std::string graph_file = "/mnt/rakri/nsg-vis/random2dcube" +
-                                   std::to_string(rnd_no) + ".adj";
+          /*      std::string graph_file = "/mnt/rakri/nsg-vis/random2dcube" +
+                                         std::to_string(rnd_no) + ".adj";
 
-          std::ofstream out(graph_file.c_str(), std::ofstream::binary);
+                std::ofstream out(graph_file.c_str(), std::ofstream::binary);
 
-          for (uint32_t i = 0; i < nd_; ++i) {
-            for (uint32_t j = 0; j < final_graph_[i].size(); ++j) {
-              uint32_t dest = final_graph_[i][j];
-              out.write((char *) &i, sizeof(uint32_t));
-              out.write((char *) &dest, sizeof(uint32_t));
-            }
-          }
-          out.close();
+                for (uint32_t i = 0; i < nd_; ++i) {
+                  for (uint32_t j = 0; j < final_graph_[i].size(); ++j) {
+                    uint32_t dest = final_graph_[i][j];
+                    out.write((char *) &i, sizeof(uint32_t));
+                    out.write((char *) &dest, sizeof(uint32_t));
+                  }
+                }
+                out.close();
+      */
 
           size_t start_id = rnd_no * round_size;
           size_t end_id =
