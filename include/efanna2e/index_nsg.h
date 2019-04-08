@@ -28,7 +28,8 @@ namespace NSG {
 
     void Load_nn_graph(const char *filename);
 
-    void Init_rnd_nn_graph(size_t num_points, unsigned k);
+    void Init_rnd_nn_graph(size_t num_points, unsigned k,
+                           std::vector<size_t> mapping = std::vector<size_t>());
 
     virtual void Build(size_t n, const float *data,
                        const Parameters &parameters) override;
@@ -69,6 +70,8 @@ namespace NSG {
     typedef std::vector<std::vector<unsigned>> CompactGraph;
 
     CompactGraph final_graph_;
+
+    bool *is_inner;
 
     Index *initializer_;
 

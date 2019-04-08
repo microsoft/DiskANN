@@ -31,7 +31,7 @@ int main(int argc, char** argv) {
     std::cout << "Correct usage\n"
               << argv[0] << " data_file nn_graph_degree L R C "
               << "save_graph_file  alpha<1>   p_val<0.1> "
-              << "num_hier<1>  num_syncs<10> second_pass<0> innerL innerC"
+              << "num_hier<1>  num_syncs<10> num_pass<1> innerL innerC"
               << std::endl;
     exit(-1);
   }
@@ -50,7 +50,7 @@ int main(int argc, char** argv) {
   float    p_val = (float) std::atof(argv[8]);
   unsigned num_hier = (float) std::atof(argv[9]);
   unsigned num_syncs = (float) std::atof(argv[10]);
-  bool     second_pass = (bool) std::atoi(argv[11]);
+  //  bool     second_pass = (bool) std::atoi(argv[11]);
   unsigned innerL = (unsigned) atoi(argv[12]);
   unsigned innerC = (unsigned) atoi(argv[13]);
 
@@ -71,42 +71,44 @@ int main(int argc, char** argv) {
   paras.Set<float>("p_val", p_val);
   paras.Set<bool>("is_nsg", 0);
   paras.Set<bool>("is_rnd_nn", 1);
+  paras.Set<unsigned>("num_rnds", (unsigned) std::atoi(argv[11]));
   //  paras.Set<std::string>("nn_graph_path", nn_graph_path);
   std::cout << "Params set" << std::endl;
 
   std::string intermediate_nsg_path(argv[6]);
-  intermediate_nsg_path.append(".round1");
+  //  intermediate_nsg_path.append(".round1");
 
   {
     NSG::IndexNSG index(dim, points_num, NSG::L2, nullptr);
-    index.Init_rnd_nn_graph(points_num, nn_graph_deg);
+    //    index.Init_rnd_nn_graph(points_num, nn_graph_deg);
     auto s = std::chrono::high_resolution_clock::now();
     index.BuildRandomHierarchical(points_num, data_load, paras);
     auto                          e = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> diff = e - s;
 
     std::cout << "indexing time: " << diff.count() << "\n";
-    if (second_pass)
-      index.Save(intermediate_nsg_path.c_str());
-    else
-      index.Save(argv[6]);
-  }
-
-  if (second_pass) {
-    paras.Set<bool>("is_nsg", 1);
-    paras.Set<bool>("is_rnd_nn", 0);
-    paras.Set<std::string>("nn_graph_path", intermediate_nsg_path.c_str());
-    paras.Set<unsigned>("num_hier", 1);
-
-    NSG::IndexNSG index(dim, points_num, NSG::L2, nullptr);
-    auto          s = std::chrono::high_resolution_clock::now();
-    index.BuildRandomHierarchical(points_num, data_load, paras);
-    auto                          e = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double> diff = e - s;
-
-    std::cout << "indexing time: " << diff.count() << "\n";
+    //    if (second_pass)
+    //      index.Save(intermediate_nsg_path.c_str());
+    //    else
     index.Save(argv[6]);
   }
 
+  /*  if (second_pass) {
+      paras.Set<bool>("is_nsg", 1);
+      paras.Set<bool>("is_rnd_nn", 0);
+      paras.Set<std::string>("nn_graph_path", intermediate_nsg_path.c_str());
+      paras.Set<unsigned>("num_hier", 1);
+
+      NSG::IndexNSG index(dim, points_num, NSG::L2, nullptr);
+      auto          s = std::chrono::high_resolution_clock::now();
+      index.BuildRandomHierarchical(points_num, data_load, paras);
+      auto                          e =
+    std::chrono::high_resolution_clock::now();
+      std::chrono::duration<double> diff = e - s;
+
+      std::cout << "indexing time: " << diff.count() << "\n";
+      index.Save(argv[6]);
+    }
+  */
   return 0;
 }
