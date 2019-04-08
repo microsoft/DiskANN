@@ -340,6 +340,7 @@ namespace NSG {
       medoid = (_u64) medoid_u32;
       width = (_u64) width_u32;
       std::cout << "Medoid: " << medoid << ", width: " << width << std::endl;
+      std::cout << "NSG Size: " << nsg_len << "B\n";
       nsg = (unsigned *) (new char[nsg_len]);
       reader.read((char *) nsg, nsg_len);
 

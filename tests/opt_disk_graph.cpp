@@ -41,7 +41,7 @@ void write_plain_nsg(const char *filename, NSG::OneShotNSG &nsg) {
 
   _u64 max_degree = 0;
   for (_u64 i = 0; i < nsg.size(); i++) {
-    max_degree = std::max((size_t) max_degree, nsg.nnbrs(i));
+    max_degree = max((size_t) max_degree, nsg.nnbrs(i));
   }
   std::cout << "max degree: " << max_degree << std::endl;
 
@@ -64,7 +64,7 @@ void write_plain_nsg(const char *filename, NSG::OneShotNSG &nsg) {
   char *sector_buf, *node_buf;
   for (_u64 b = 0; b < nblks; b++) {
     _u64 bstart = b * nnodes_per_blk;
-    _u64 bend = std::min(nnodes, nnodes_per_blk * (b + 1));
+    _u64 bend = min(nnodes, nnodes_per_blk * (b + 1));
     _u64 bsize = bend - bstart;
 
     // clear blk_buf
@@ -106,7 +106,7 @@ void write_embedded_nsg(const char *filename, NSG::OneShotNSG &nsg, _s8 *data,
 
   _u64 max_degree = 0;
   for (_u64 i = 0; i < nsg.size(); i++) {
-    max_degree = std::max((size_t) max_degree, nsg.nnbrs(i));
+    max_degree = max((size_t) max_degree, nsg.nnbrs(i));
   }
   std::cout << "max degree: " << max_degree << std::endl;
 
@@ -131,7 +131,7 @@ void write_embedded_nsg(const char *filename, NSG::OneShotNSG &nsg, _s8 *data,
   unsigned *node_nhood_buf;
   for (_u64 b = 0; b < nblks; b++) {
     _u64 bstart = b * nnodes_per_blk;
-    _u64 bend = std::min(nnodes, nnodes_per_blk * (b + 1));
+    _u64 bend = min(nnodes, nnodes_per_blk * (b + 1));
     _u64 bsize = bend - bstart;
 
     // clear blk_buf

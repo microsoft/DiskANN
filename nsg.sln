@@ -7,6 +7,8 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "nsg", "vcproj\nsg\nsg.vcxpr
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "test_recall", "vcproj\test_recall\test_recall.vcxproj", "{C639031F-E693-4ED7-AAC6-CDA29388A16F}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "opt_disk_graph", "vcproj\opt_disk_graph\opt_disk_graph.vcxproj", "{2555E3E3-8941-4AA2-985A-6687F0330E72}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|x64 = Debug|x64
@@ -31,6 +33,14 @@ Global
 		{C639031F-E693-4ED7-AAC6-CDA29388A16F}.Release|x64.Build.0 = Release|x64
 		{C639031F-E693-4ED7-AAC6-CDA29388A16F}.Release|x86.ActiveCfg = Release|Win32
 		{C639031F-E693-4ED7-AAC6-CDA29388A16F}.Release|x86.Build.0 = Release|Win32
+		{2555E3E3-8941-4AA2-985A-6687F0330E72}.Debug|x64.ActiveCfg = Debug|x64
+		{2555E3E3-8941-4AA2-985A-6687F0330E72}.Debug|x64.Build.0 = Debug|x64
+		{2555E3E3-8941-4AA2-985A-6687F0330E72}.Debug|x86.ActiveCfg = Debug|Win32
+		{2555E3E3-8941-4AA2-985A-6687F0330E72}.Debug|x86.Build.0 = Debug|Win32
+		{2555E3E3-8941-4AA2-985A-6687F0330E72}.Release|x64.ActiveCfg = Release|x64
+		{2555E3E3-8941-4AA2-985A-6687F0330E72}.Release|x64.Build.0 = Release|x64
+		{2555E3E3-8941-4AA2-985A-6687F0330E72}.Release|x86.ActiveCfg = Release|Win32
+		{2555E3E3-8941-4AA2-985A-6687F0330E72}.Release|x86.Build.0 = Release|Win32
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

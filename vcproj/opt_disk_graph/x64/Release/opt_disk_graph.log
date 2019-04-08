@@ -1,0 +1,7 @@
+﻿  opt_disk_graph.cpp
+c:\users\t-sujs\source\repos\nsg\tests\opt_disk_graph.cpp(75): warning C4244: 'initializing': conversion from '_u64' to 'unsigned int', possible loss of data
+c:\users\t-sujs\source\repos\nsg\tests\opt_disk_graph.cpp(142): warning C4244: 'initializing': conversion from '_u64' to 'unsigned int', possible loss of data
+  Generating code
+  All 280 functions were compiled because no usable IPDB/IOBJ from previous compilation was found.
+  Finished generating code
+  opt_disk_graph.vcxproj -> C:\Users\t-sujs\source\repos\nsg\x64\Release\opt_disk_graph.exe
