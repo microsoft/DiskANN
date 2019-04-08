@@ -796,7 +796,7 @@ namespace NSG {
       }
 
       for (int rnd_no = 0; rnd_no < NUM_RNDS; rnd_no++) {
-        if (rnd_no == NUM_RNDS - 1)
+        if ((rnd_no == NUM_RNDS - 1) || h < (NUM_HIER - 1))
           parameters.Set<float>("alpha", last_alpha);
         //      std::cout << "L R and C " << L << " " << range << " " << C <<
         //      std::endl;
