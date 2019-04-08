@@ -1,11 +1,1 @@
-﻿cl : Command line warning D9025: overriding '/sdl' with '/GS-'
-  windows_aligned_reader.cpp
-c1xx : warning C4199: two-phase name lookup is not supported for C++/CLI, C++/CX, or OpenMP; use /Zc:twoPhase-
-c:\program files (x86)\microsoft visual studio\2017\enterprise\vc\tools\msvc\14.16.27023\include\xlocale(319): warning C4530: C++ exception handler used, but unwind semantics are not enabled. Specify /EHsc
-c:\users\t-sujs\source\repos\nsg\src\windows_aligned_reader.cpp(103): warning C4244: 'argument': conversion from '_u64' to 'DWORD', possible loss of data
-  Generating code
-  47 of 2400 functions ( 2.0%) were compiled, the rest were copied from previous compilation.
-    0 functions were new in current compilation
-    25 functions had inline decision re-evaluated but remain unchanged
-  Finished generating code
-  nsg.vcxproj -> C:\Users\t-sujs\source\repos\nsg\x64\Release\nsg.exe
+﻿

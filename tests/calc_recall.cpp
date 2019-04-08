@@ -6,9 +6,10 @@
 #include <string>
 #include <vector>
 
-void load_data(char* filename, int*& data, size_t& num,
+void load_data(const char* filename, int*& data, size_t& num,
                unsigned& dim) {  // load data with sift10K pattern
-  std::ifstream in(filename, std::ios::binary);
+  std::ifstream in(std::string(filename), std::ios::binary);
+  std::cout << "Filename: " << filename << "\n";
   if (!in.is_open()) {
     std::cout << "open file error" << std::endl;
     exit(-1);

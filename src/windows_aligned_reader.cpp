@@ -42,7 +42,7 @@ void WindowsAlignedReader::register_thread() {
   for (_u64 i = 0; i < MAX_IO_DEPTH; i++) {
     OVERLAPPED os;
     memset(&os, 0, sizeof(OVERLAPPED));
-    os.hEvent = CreateEventA(NULL, TRUE, FALSE, NULL);
+    // os.hEvent = CreateEventA(NULL, TRUE, FALSE, NULL);
     ctx.reqs.push_back(os);
   }
   this->ctx_map.insert(std::make_pair(std::this_thread::get_id(), ctx));
@@ -74,10 +74,12 @@ void WindowsAlignedReader::read(std::vector<AlignedRead>& read_reqs) {
       memset(&os, 0, sizeof(os));
       os.hEvent = evt;
 
+	  /*
       if (ResetEvent(os.hEvent) == 0) {
         std::cerr << "ResetEvent failed\n";
         exit(-3);
       }
+	  */
     }
 
     // batch start/end
@@ -115,7 +117,7 @@ void WindowsAlignedReader::read(std::vector<AlignedRead>& read_reqs) {
     ULONG_PTR   completion_key = 0;
     OVERLAPPED* lp_os;
     while (n_complete < batch_size) {
-      if (GetQueuedCompletionStatus(ctx.iocp, &n_read, &completion_key, &lp_os, 0) != 0) {
+      if (GetQueuedCompletionStatus(ctx.iocp, &n_read, &completion_key, &lp_os, INFINITE) != 0) {
         // successfully dequeued a completed I/O
         n_complete++;
       } else {
