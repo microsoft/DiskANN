@@ -105,7 +105,7 @@ namespace NSG {
     void InterInsert(unsigned n, unsigned range, std::vector<std::mutex> &locks,
                      const Parameters &parameter, vecNgh *cut_graph_);
     void InterInsertHierarchy(unsigned n, std::vector<std::mutex> &locks,
-                              const Parameters &parameter);
+                              vecNgh *cut_graph_, const Parameters &parameter);
 
     void sync_prune(unsigned q, std::vector<Neighbor> &pool,
                     const Parameters &        parameter,

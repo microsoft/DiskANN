@@ -198,17 +198,17 @@ namespace NSG {
 
 #pragma omp parallel for schedule(static, 1)
     for (size_t block = 0; block < nblocks; ++block) {
-      std::random_device                 rd;
-      size_t                             x = rd();
-      std::mt19937                       gen(x);
-      std::uniform_int_distribution<int> dis(0, num_points - 1);
+      std::random_device                    rd;
+      size_t                                x = rd();
+      std::mt19937                          gen(x);
+      std::uniform_int_distribution<size_t> dis(0, num_points - 1);
 
       for (size_t i = block * PAR_BLOCK_SZ;
            i < (block + 1) * PAR_BLOCK_SZ && i < num_points; i++) {
         final_graph_[mapping[i]].reserve(k);
         for (unsigned j = 0; j < k; j++)
           final_graph_[mapping[i]].push_back(mapping[dis(gen)]);
-        final_graph_[mapping[i]].shrink_to_fit();
+        //        final_graph_[mapping[i]].shrink_to_fit();
 
         if (i % 1000000 == 0)
           std::cout << "Generated random neighbors for point " << i
@@ -587,7 +587,7 @@ namespace NSG {
           auto &p = pool[start2];
           bool  occlude = false;
           for (unsigned t = 0; t < result2.size(); t++) {
-            if (p.id == result2[t].id) {
+            if (p.id == result[t].id) {
               occlude = true;
               break;
             }
@@ -612,123 +612,174 @@ namespace NSG {
 
     //    std::cout << "here2" << std::flush;
     cut_graph_[q].clear();
+    if (result.size() > range)
+      std::cout << "result out of rang" << std::endl;
     for (auto iter : result)
       cut_graph_[q].push_back(SimpleNeighbor(iter.id, iter.distance));
 
     //    std::cout << "here1" << std::flush;
     for (auto iter : cut_graph_[q])
-      assert(iter.id < nd_);
+      if (!(iter.id < nd_)) {
+        std::cout << iter.id << " added to cut_graph[" << q << "]. error. "
+                  << std::endl;
+        exit(-1);
+      }
   }
 
   void IndexNSG::InterInsertHierarchy(unsigned                 n,
                                       std::vector<std::mutex> &locks,
+                                      vecNgh *                 cut_graph_,
                                       const Parameters &       parameter) {
-    float       alpha = parameter.Get<float>("alpha");
-    auto        range = parameter.Get<float>("R");
-    const auto  base_range = parameter.Get<float>("R");
-    const auto &src_pool = final_graph_[n];
-
-    for (auto des : src_pool) {
-      if (is_inner[des])
-        range = 4 * base_range;
-      auto &                des_pool = final_graph_[des];
-      std::vector<unsigned> graph_copy;
-      int                   dup = 0;
-      {
-        LockGuard guard(locks[des]);
-        for (auto nn : des_pool) {
-          if (n == nn) {
-            dup = 1;
-            break;
-          }
-          graph_copy.push_back(nn);
+    float      alpha = parameter.Get<float>("alpha");
+    auto       range = parameter.Get<float>("R");
+    const auto base_range = parameter.Get<float>("R");
+    const auto src_pool = cut_graph_[n];
+    if (src_pool.empty()) {
+      std::cerr << "Error! Empty source pool for inter insert" << std::endl;
+    }
+    //    std::cout << "1" << std::flush;
+    {
+      unsigned tmp_cnt = 0;
+      for (auto des : src_pool) {
+        tmp_cnt++;
+        if (des.id < 0 || des.id >= nd_) {
+          std::cout << "error! " << tmp_cnt << ": " << des.id
+                    << " out of bounds for interinsert(" << n << ")"
+                    << std::endl;
+          std::cout << src_pool.size() << " is size" << std::endl;
+          std::cout << is_inner[n] << " is inner_flag" << std::endl;
+          for (auto tmp : src_pool)
+            std::cout << tmp.id << " " << std::flush;
         }
-      }
-      if (dup)
-        continue;
-      else
-        graph_copy.push_back(n);
-
-      if (graph_copy.size() > range) {
-        vecNgh temp_pool;
-        for (auto node : graph_copy)
-          temp_pool.push_back(SimpleNeighbor(
-              node,
-              distance_->compare(data_ + dimension_ * (size_t) node,
-                                 data_ + dimension_ * (size_t) des,
-                                 (unsigned) dimension_)));
-
-        std::vector<SimpleNeighbor> result;
-        unsigned                    start = 0;
-        std::sort(temp_pool.begin(), temp_pool.end());
-        result.push_back(temp_pool[start]);
-        while (result.size() < range && (++start) < temp_pool.size()) {
-          auto &p = temp_pool[start];
-          bool  occlude = false;
-          for (unsigned t = 0; t < result.size(); t++) {
-            if (p.id == result[t].id) {
-              occlude = true;
+        //        LockGuard guard(locks[des.id]);
+        if (is_inner[des.id])
+          range = 4 * base_range;
+        auto &                des_pool = final_graph_[des.id];
+        std::vector<unsigned> graph_copy;
+        int                   dup = 0;
+        {
+          LockGuard guard(locks[des.id]);
+          for (auto nn : des_pool) {
+            if (n == nn) {
+              dup = 1;
               break;
             }
-            float djk = distance_->compare(
-                data_ + dimension_ * (size_t) result[t].id,
-                data_ + dimension_ * (size_t) p.id, (unsigned) dimension_);
-            if (djk < p.distance /* dik */) {
-              occlude = true;
-              break;
+            if (nn < 0 || nn >= nd_) {
+              std::cerr << "out f bounds error!" << std::endl;
+              exit(-1);
             }
+            graph_copy.push_back(nn);
           }
-          if (!occlude)
-            result.push_back(p);
-        }
+          if (dup)
+            continue;
+          else
+            graph_copy.push_back(n);
+          //      std::cout << "jere2" << std::flush;
+          if (graph_copy.size() <= range) {
+            {
+              if (des_pool.size() >= range)
+                std::cout << "at range des_pool" << std::endl;
+              //              LockGuard guard(locks[des.id]);
+              des_pool.push_back(n);
+            }
 
-        if (result.size() < range) {
-          std::vector<SimpleNeighbor> result2;
-          unsigned                    start2 = 0;
-          //		if (pool[start2].id == q)
-          //			start2++;
-          result2.push_back(temp_pool[start2]);
-          while (result2.size() < range - result.size() &&
-                 (++start2) < temp_pool.size()) {
-            auto &p = temp_pool[start2];
+            continue;
+          }
+        }
+        if (graph_copy.size() > range) {
+          vecNgh temp_pool;
+          for (auto node : graph_copy)
+            temp_pool.push_back(SimpleNeighbor(
+                node,
+                distance_->compare(data_ + dimension_ * (size_t) node,
+                                   data_ + dimension_ * (size_t) des.id,
+                                   (unsigned) dimension_)));
+
+          std::vector<SimpleNeighbor> result;
+          unsigned                    start = 0;
+          std::sort(temp_pool.begin(), temp_pool.end());
+          result.push_back(temp_pool[start]);
+          while (result.size() < range && (++start) < temp_pool.size()) {
+            auto &p = temp_pool[start];
             bool  occlude = false;
-            for (unsigned t = 0; t < result2.size(); t++) {
-              if (p.id == result2[t].id) {
+            for (unsigned t = 0; t < result.size(); t++) {
+              if (p.id == result[t].id) {
                 occlude = true;
                 break;
               }
               float djk = distance_->compare(
-                  data_ + dimension_ * (size_t) result2[t].id,
+                  data_ + dimension_ * (size_t) result[t].id,
                   data_ + dimension_ * (size_t) p.id, (unsigned) dimension_);
-              if (alpha * djk < p.distance /* dik */) {
+              if (djk < p.distance /* dik */) {
                 occlude = true;
                 break;
               }
             }
             if (!occlude)
-              result2.push_back(p);
+              result.push_back(p);
           }
-          for (unsigned i = 0; i < result2.size(); i++) {
-            result.push_back(result2[i]);
+          if (alpha > 1) {
+            //      std::cout << "jere3" << std::endl;
+            if (result.size() < range) {
+              //        std::cout << "jere4" << std::endl;
+              std::vector<SimpleNeighbor> result2;
+              unsigned                    start2 = 0;
+              //		if (pool[start2].id == q)
+              //			start2++;
+              result2.push_back(temp_pool[start2]);
+              while (result2.size() < range - result.size() &&
+                     (++start2) < temp_pool.size()) {
+                auto &p = temp_pool[start2];
+                bool  occlude = false;
+                for (unsigned t = 0; t < result2.size(); t++) {
+                  if (p.id == result2[t].id) {
+                    occlude = true;
+                    break;
+                  }
+                  float djk = distance_->compare(
+                      data_ + dimension_ * (size_t) result2[t].id,
+                      data_ + dimension_ * (size_t) p.id,
+                      (unsigned) dimension_);
+                  if (alpha * djk < p.distance /* dik */) {
+                    occlude = true;
+                    break;
+                  }
+                }
+                if (!occlude)
+                  result2.push_back(p);
+              }
+              for (unsigned i = 0; i < result2.size(); i++) {
+                result.push_back(result2[i]);
+              }
+              std::set<SimpleNeighbor> s(result.begin(), result.end());
+              result.assign(s.begin(), s.end());
+              //		std::sort(result.begin(), result.end());
+              //		result.erase(unique(result.begin(), result.end()),
+              // result.end());
+            }
           }
-          std::set<SimpleNeighbor> s(result.begin(), result.end());
-          result.assign(s.begin(), s.end());
-          //		std::sort(result.begin(), result.end());
-          //		result.erase(unique(result.begin(), result.end()),
-          // result.end());
+
+          //    std::cout << "jere5" << std::endl;
+          {
+            LockGuard guard(locks[des.id]);
+            des_pool.clear();
+            if (result.size() > range)
+              std::cout << "result size out of bounds " << std::endl;
+            for (auto iter : result) {
+              des_pool.push_back(iter.id);
+              if (iter.id >= nd_)
+                std::cerr << "adding out of bounds " << iter.id
+                          << "in interinsert(" << des.id << ")";
+            }
+          }
         }
-        {
-          LockGuard guard(locks[des]);
-          des_pool.clear();
-          for (auto iter : result)
-            des_pool.push_back(iter.id);
-        }
-      } else {
-        LockGuard guard(locks[des]);
-        des_pool.push_back(n);
+        for (auto iter : des_pool)
+          if (!(iter < nd_))
+            std::cout << iter << "out of bounds for final_graph of " << des.id
+                      << std::endl;
+        if (des_pool.size() > range)
+          std::cout << "graph out of range" << std::endl;
       }
-      for (auto iter : des_pool)
-        assert(iter < nd_);
     }
   }
 
@@ -795,32 +846,19 @@ namespace NSG {
         parameters.Set<unsigned>("C", C);
       }
 
-      for (int rnd_no = 0; rnd_no < NUM_RNDS; rnd_no++) {
+      parameters.Set<float>("alpha", 1);
+
+      for (uint32_t rnd_no = 0; rnd_no < NUM_RNDS; rnd_no++) {
         if ((rnd_no == NUM_RNDS - 1) || h < (NUM_HIER - 1))
           parameters.Set<float>("alpha", last_alpha);
         //      std::cout << "L R and C " << L << " " << range << " " << C <<
         //      std::endl;
         size_t round_size = DIV_ROUND_UP(size_hierarchy[h], NUM_SYNCS);
 
-        for (uint32_t rnd_no = 0; rnd_no < NUM_SYNCS; rnd_no++) {
-          /*      std::string graph_file = "/mnt/rakri/nsg-vis/random2dcube" +
-                                         std::to_string(rnd_no) + ".adj";
-
-                std::ofstream out(graph_file.c_str(), std::ofstream::binary);
-
-                for (uint32_t i = 0; i < nd_; ++i) {
-                  for (uint32_t j = 0; j < final_graph_[i].size(); ++j) {
-                    uint32_t dest = final_graph_[i][j];
-                    out.write((char *) &i, sizeof(uint32_t));
-                    out.write((char *) &dest, sizeof(uint32_t));
-                  }
-                }
-                out.close();
-      */
-
-          size_t start_id = rnd_no * round_size;
+        for (uint32_t sync_no = 0; sync_no < NUM_SYNCS; sync_no++) {
+          size_t start_id = sync_no * round_size;
           size_t end_id =
-              std::min(size_hierarchy[h], (rnd_no + 1) * round_size);
+              std::min(size_hierarchy[h], (sync_no + 1) * round_size);
           size_t round_size = end_id - start_id;
           std::cout << "Round start: " << start_id << "  end: " << end_id
                     << std::endl;
@@ -859,28 +897,50 @@ namespace NSG {
                          cut_graph_);
             }
           }
-          std::cout << "sync_prune completed for (level: " << h
-                    << ", round: " << rnd_no << ")" << std::endl;
 
 #pragma omp parallel for schedule(static, PAR_BLOCK_SZ)
           for (unsigned n = start_id; n < end_id; ++n) {
             auto node = hierarchy_vertices[h][n];
             final_graph_[node].clear();
-            final_graph_[node].reserve(range);
+            if (is_inner[node])
+              final_graph_[node].reserve(4 * range);
+            else
+              final_graph_[node].reserve(range);
             assert(!cut_graph_[node].empty());
-            for (auto link : cut_graph_[node])
+            for (auto link : cut_graph_[node]) {
               final_graph_[node].push_back(link.id);
-            cut_graph_[node].clear();
-            cut_graph_[node].shrink_to_fit();
+              if (link.id < 0 || link.id >= nd_)
+                std::cout << "error. adding " << link.id
+                          << " to final graph of " << node << std::endl;
+            }
+            //            cut_graph_[node].clear();
+            //            cut_graph_[node].shrink_to_fit();
+            if ((is_inner[node] && final_graph_[node].size() > 4 * range) ||
+                (!is_inner[node] && final_graph_[node].size() > range))
+              std::cout << node << " has more edges! "
+                        << final_graph_[node].size() << std::endl;
             assert(final_graph_[node].size() <= range);
           }
 
+          std::cout << "sync_prune completed for (level: " << h
+                    << ", round: " << sync_no << ")" << std::endl;
 #pragma omp parallel for schedule(static, PAR_BLOCK_SZ)
           for (unsigned n = start_id; n < end_id; ++n) {
-            InterInsertHierarchy(hierarchy_vertices[h][n], locks, parameters);
+            InterInsertHierarchy(hierarchy_vertices[h][n], locks, cut_graph_,
+                                 parameters);
           }
           std::cout << "InterInsert completed for (level: " << h
-                    << ", round: " << rnd_no << ")" << std::endl;
+                    << ", round: " << sync_no << ")" << std::endl;
+//          char c;
+//        std::cin >> c;
+
+#pragma omp parallel for schedule(static, PAR_BLOCK_SZ)
+          for (unsigned n = start_id; n < end_id; ++n) {
+            auto node = hierarchy_vertices[h][n];
+            assert(!cut_graph_[node].empty());
+            cut_graph_[node].clear();
+            cut_graph_[node].shrink_to_fit();
+          }
         }
       }
     }
