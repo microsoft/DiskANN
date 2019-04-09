@@ -3,7 +3,7 @@
 #include "efanna2e/util.h"
 
 #define SECTOR_LEN 4096
-#define MAX_IO_DEPTH 16
+#define MAX_IO_DEPTH 64
 
 void WindowsAlignedReader::open(const std::string& fname) {
   filename = std::wstring(fname.begin(), fname.end());
@@ -70,9 +70,9 @@ void WindowsAlignedReader::read(std::vector<AlignedRead>& read_reqs) {
   for (_u64 i = 0; i < n_batches; i++) {
     // reset all OVERLAPPED objects
     for (auto& os : ctx.reqs) {
-      HANDLE evt = os.hEvent;
+      // HANDLE evt = os.hEvent;
       memset(&os, 0, sizeof(os));
-      os.hEvent = evt;
+      // os.hEvent = evt;
 
 	  /*
       if (ResetEvent(os.hEvent) == 0) {
@@ -133,7 +133,9 @@ void WindowsAlignedReader::read(std::vector<AlignedRead>& read_reqs) {
           std::this_thread::sleep_for(5us);
         } else {
           // completion packet for failed IO dequeued
-          std::cerr << "I/O failed for lp_os = " << lp_os << std::endl;
+          auto op_idx = lp_os - ctx.reqs.data();
+          std::cerr << "I/O failed , offset: " << read_reqs[op_idx].offset
+                    << "with error code: " << GetLastError() << std::endl;
           exit(-4);
         }
       }
