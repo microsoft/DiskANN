@@ -856,7 +856,7 @@ namespace NSG {
         if (rnd_no == NUM_RNDS - 1 || h < NUM_HIER - 1)
           parameters.Set<float>("alpha", last_alpha);
 
-        size_t round_size = DIV_ROUND_UP(size_hierarchy[h], NUM_SYNCS);
+        size_t round_size = DIV_ROUND_UP(size_hierarchy[h], NUM_SYNCS - 1) - 1;
 
         for (uint32_t sync_no = 0; sync_no < NUM_SYNCS; sync_no++) {
           size_t start_id = sync_no * round_size;
