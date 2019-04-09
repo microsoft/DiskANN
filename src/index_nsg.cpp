@@ -532,7 +532,7 @@ namespace NSG {
     float    alpha = parameter.Get<float>("alpha");
 
     if (is_inner[q])
-      range = 4 * range;
+      range = 1 * range;
     width = range;
 
     if (!final_graph_[q].empty())
@@ -646,7 +646,7 @@ namespace NSG {
         assert(des.id < nd_);
 
         if (is_inner[des.id])
-          range = 4 * base_range;
+          range = 1 * base_range;
         auto &                des_pool = final_graph_[des.id];
         std::vector<unsigned> graph_copy;
         int                   dup = 0;
@@ -766,17 +766,18 @@ namespace NSG {
   void IndexNSG::LinkHierarchy(Parameters &parameters) {
     const float    p_val = parameters.Get<float>("p_val");
     const uint32_t NUM_SYNCS = parameters.Get<unsigned>("num_syncs");
-    const uint32_t NUM_RNDS = parameters.Get<unsigned>("num_rnds");
+    const uint32_t OUTER_NUM_RNDS = parameters.Get<unsigned>("num_rnds");
     const uint32_t NUM_HIER = parameters.Get<unsigned>("num_hier");
     const unsigned L = parameters.Get<unsigned>("L");
     const unsigned range = parameters.Get<unsigned>("R");
     const unsigned C = parameters.Get<unsigned>("C");
     const unsigned innerL = parameters.Get<unsigned>("innerL");
     const unsigned innerC = parameters.Get<unsigned>("innerC");
+    float          outer_alpha = parameters.Get<float>("alpha");
+
     parameters.Set<unsigned>("L", innerL);
     parameters.Set<unsigned>("C", innerC);
 
-    float last_alpha = parameters.Get<float>("alpha");
     parameters.Set<float>("alpha", 1);
 
     auto size_hierarchy = new size_t[NUM_HIER];
@@ -816,20 +817,26 @@ namespace NSG {
     assert(final_graph_.size() == nd_);
     std::vector<std::mutex> locks(nd_);
     auto                    cut_graph_ = new vecNgh[nd_];
+    unsigned                NUM_RNDS = 2;
+    float                   last_alpha = std::max((float) 1.2, outer_alpha);
 
-    for (int h = 0; h < NUM_HIER; h++) {
+    for (uint32_t h = 0; h < NUM_HIER; h++) {
       std::cout << "Processing level " << h << " with " << size_hierarchy[h]
                 << " vertices " << std::endl;
-      if (h == NUM_HIER - 1) {
-        parameters.Set<unsigned>("L", L);
-        parameters.Set<unsigned>("C", C);
-      }
 
       parameters.Set<float>("alpha", 1);
 
+      if (h == NUM_HIER - 1) {
+        parameters.Set<unsigned>("L", L);
+        parameters.Set<unsigned>("C", C);
+        NUM_RNDS = OUTER_NUM_RNDS;
+        last_alpha = outer_alpha;
+      }
+
       for (uint32_t rnd_no = 0; rnd_no < NUM_RNDS; rnd_no++) {
-        if ((rnd_no == NUM_RNDS - 1) || h < (NUM_HIER - 1))
+        if (rnd_no == NUM_RNDS - 1)
           parameters.Set<float>("alpha", last_alpha);
+
         size_t round_size = DIV_ROUND_UP(size_hierarchy[h], NUM_SYNCS);
 
         for (uint32_t sync_no = 0; sync_no < NUM_SYNCS; sync_no++) {
@@ -870,7 +877,7 @@ namespace NSG {
             auto node = hierarchy_vertices[h][n];
             final_graph_[node].clear();
             if (is_inner[node])
-              final_graph_[node].reserve(4 * range);
+              final_graph_[node].reserve(1 * range);
             else
               final_graph_[node].reserve(range);
             assert(!cut_graph_[node].empty());
