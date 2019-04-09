@@ -105,6 +105,10 @@ namespace NSG {
     inline bool operator<(const SimpleNeighbor &other) const {
       return distance < other.distance;
     }
+
+    inline bool operator==(const SimpleNeighbor &other) const {
+      return id == other.id;
+    }
   };
   struct SimpleNeighbors {
     std::vector<SimpleNeighbor> pool;

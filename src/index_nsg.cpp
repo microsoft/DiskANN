@@ -549,12 +549,21 @@ namespace NSG {
     std::vector<Neighbor> result;
     std::sort(pool.begin(), pool.end());
     unsigned start = 0;
-    if (pool[start].id == q)
+    auto     start_iter = pool.begin();
+
+    if (pool[start].id == q) {
       start++;
+      start_iter++;
+    }
+
     result.push_back(pool[start]);
 
     //    std::cout << "here4" << std::flush;
     while (result.size() < range && (++start) < pool.size() && start < maxc) {
+      start_iter++;
+      //      if (start_iter->id != pool[start].id)
+      //        std::cout << "error!" << std::endl;
+
       auto &p = pool[start];
       bool  occlude = false;
       for (unsigned t = 0; t < result.size(); t++) {
@@ -570,12 +579,16 @@ namespace NSG {
           break;
         }
       }
-      if (!occlude)
+      if (!occlude) {
         result.push_back(p);
+        //      if (alpha > 1) {
+        //          pool.erase(start_iter);
+        //        }
+      }
     }
 
     //    std::cout << "here3" << std::flush;
-    if (alpha > 1.0) {
+    if (alpha > 1.0 && !pool.empty()) {
       if (result.size() < range) {
         std::vector<Neighbor> result2;
         unsigned              start2 = 0;
@@ -687,9 +700,12 @@ namespace NSG {
 
           std::vector<SimpleNeighbor> result;
           unsigned                    start = 0;
+          auto                        start_iter = temp_pool.begin();
           std::sort(temp_pool.begin(), temp_pool.end());
           result.push_back(temp_pool[start]);
+
           while (result.size() < range && (++start) < temp_pool.size()) {
+            start_iter++;
             auto &p = temp_pool[start];
             bool  occlude = false;
             for (unsigned t = 0; t < result.size(); t++) {
@@ -705,8 +721,11 @@ namespace NSG {
                 break;
               }
             }
-            if (!occlude)
+            if (!occlude) {
               result.push_back(p);
+              if (alpha > 1)
+                temp_pool.erase(start_iter);
+            }
           }
           if (alpha > 1) {
             if (result.size() < range) {
@@ -834,7 +853,7 @@ namespace NSG {
       }
 
       for (uint32_t rnd_no = 0; rnd_no < NUM_RNDS; rnd_no++) {
-        if (rnd_no == NUM_RNDS - 1)
+        if (rnd_no == NUM_RNDS - 1 || h < NUM_HIER - 1)
           parameters.Set<float>("alpha", last_alpha);
 
         size_t round_size = DIV_ROUND_UP(size_hierarchy[h], NUM_SYNCS);
@@ -1365,4 +1384,4 @@ namespace NSG {
       }
     }
   }
-}
+}  // namespace NSG
