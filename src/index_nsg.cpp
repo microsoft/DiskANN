@@ -637,21 +637,14 @@ namespace NSG {
     if (src_pool.empty()) {
       std::cerr << "Error! Empty source pool for inter insert" << std::endl;
     }
-    //    std::cout << "1" << std::flush;
+
     {
       unsigned tmp_cnt = 0;
       for (auto des : src_pool) {
         tmp_cnt++;
-        if (des.id < 0 || des.id >= nd_) {
-          std::cout << "error! " << tmp_cnt << ": " << des.id
-                    << " out of bounds for interinsert(" << n << ")"
-                    << std::endl;
-          std::cout << src_pool.size() << " is size" << std::endl;
-          std::cout << is_inner[n] << " is inner_flag" << std::endl;
-          for (auto tmp : src_pool)
-            std::cout << tmp.id << " " << std::flush;
-        }
-        //        LockGuard guard(locks[des.id]);
+        assert(des.id >= 0);
+        assert(des.id < nd_);
+
         if (is_inner[des.id])
           range = 4 * base_range;
         auto &                des_pool = final_graph_[des.id];
@@ -674,18 +667,15 @@ namespace NSG {
             continue;
           else
             graph_copy.push_back(n);
-          //      std::cout << "jere2" << std::flush;
+
           if (graph_copy.size() <= range) {
-            {
-              if (des_pool.size() >= range)
-                std::cout << "at range des_pool" << std::endl;
-              //              LockGuard guard(locks[des.id]);
-              des_pool.push_back(n);
-            }
+            assert(des_pool.size() < range);
+            des_pool.push_back(n);
 
             continue;
           }
         }
+
         if (graph_copy.size() > range) {
           vecNgh temp_pool;
           for (auto node : graph_copy)
@@ -719,13 +709,10 @@ namespace NSG {
               result.push_back(p);
           }
           if (alpha > 1) {
-            //      std::cout << "jere3" << std::endl;
             if (result.size() < range) {
-              //        std::cout << "jere4" << std::endl;
               std::vector<SimpleNeighbor> result2;
               unsigned                    start2 = 0;
-              //		if (pool[start2].id == q)
-              //			start2++;
+
               result2.push_back(temp_pool[start2]);
               while (result2.size() < range - result.size() &&
                      (++start2) < temp_pool.size()) {
@@ -753,23 +740,16 @@ namespace NSG {
               }
               std::set<SimpleNeighbor> s(result.begin(), result.end());
               result.assign(s.begin(), s.end());
-              //		std::sort(result.begin(), result.end());
-              //		result.erase(unique(result.begin(), result.end()),
-              // result.end());
             }
           }
 
-          //    std::cout << "jere5" << std::endl;
           {
             LockGuard guard(locks[des.id]);
             des_pool.clear();
-            if (result.size() > range)
-              std::cout << "result size out of bounds " << std::endl;
+            assert(result.size() <= range);
             for (auto iter : result) {
               des_pool.push_back(iter.id);
-              if (iter.id >= nd_)
-                std::cerr << "adding out of bounds " << iter.id
-                          << "in interinsert(" << des.id << ")";
+              assert(iter.id < nd_);
             }
           }
         }
@@ -811,7 +791,6 @@ namespace NSG {
     std::mt19937                     gen(rd());
     std::uniform_real_distribution<> dis(0, 1);
 
-    std::cout << "Entry point is " << ep_ << std::endl;
     for (int h = NUM_HIER - 2; h >= 0; h--) {
       hierarchy_vertices[h].push_back(ep_);
       for (size_t i = 0; i < hierarchy_vertices[h + 1].size(); i++) {
@@ -851,8 +830,6 @@ namespace NSG {
       for (uint32_t rnd_no = 0; rnd_no < NUM_RNDS; rnd_no++) {
         if ((rnd_no == NUM_RNDS - 1) || h < (NUM_HIER - 1))
           parameters.Set<float>("alpha", last_alpha);
-        //      std::cout << "L R and C " << L << " " << range << " " << C <<
-        //      std::endl;
         size_t round_size = DIV_ROUND_UP(size_hierarchy[h], NUM_SYNCS);
 
         for (uint32_t sync_no = 0; sync_no < NUM_SYNCS; sync_no++) {
@@ -879,20 +856,10 @@ namespace NSG {
               pool.clear();
               tmp.clear();
               visited.clear();
-              //            if (h == NUM_HIER - 1)
-              //              std::cout << "getting nbrs for " <<
-              //              hierarchy_vertices[h][n]
-              //                        << std::endl;
+
               get_neighbors(
                   data_ + (size_t) dimension_ * hierarchy_vertices[h][n],
                   parameters, tmp, pool, visited);
-              //          if (h == NUM_HIER - 1)
-              //           std::cout << "id: Pool Size, Retset Size, Visited
-              //           Size:"
-              //                    << hierarchy_vertices[h][n] << ": " <<
-              //                    pool.size()
-              //                   << " " << tmp.size() << " " << visited.size()
-              //                  << std::endl;
               sync_prune(hierarchy_vertices[h][n], pool, parameters, visited,
                          cut_graph_);
             }
@@ -909,21 +876,14 @@ namespace NSG {
             assert(!cut_graph_[node].empty());
             for (auto link : cut_graph_[node]) {
               final_graph_[node].push_back(link.id);
-              if (link.id < 0 || link.id >= nd_)
-                std::cout << "error. adding " << link.id
-                          << " to final graph of " << node << std::endl;
+              assert(link.id >= 0);
+              assert(link.id < nd_);
             }
-            //            cut_graph_[node].clear();
-            //            cut_graph_[node].shrink_to_fit();
-            if ((is_inner[node] && final_graph_[node].size() > 4 * range) ||
-                (!is_inner[node] && final_graph_[node].size() > range))
-              std::cout << node << " has more edges! "
-                        << final_graph_[node].size() << std::endl;
             assert(final_graph_[node].size() <= range);
           }
-
           std::cout << "sync_prune completed for (level: " << h
                     << ", round: " << sync_no << ")" << std::endl;
+
 #pragma omp parallel for schedule(static, PAR_BLOCK_SZ)
           for (unsigned n = start_id; n < end_id; ++n) {
             InterInsertHierarchy(hierarchy_vertices[h][n], locks, cut_graph_,
@@ -931,8 +891,6 @@ namespace NSG {
           }
           std::cout << "InterInsert completed for (level: " << h
                     << ", round: " << sync_no << ")" << std::endl;
-//          char c;
-//        std::cin >> c;
 
 #pragma omp parallel for schedule(static, PAR_BLOCK_SZ)
           for (unsigned n = start_id; n < end_id; ++n) {
