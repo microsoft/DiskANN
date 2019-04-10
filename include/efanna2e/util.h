@@ -306,6 +306,7 @@ namespace NSG {
   inline void load_bin(const char *filename, T *&data, unsigned &npts,
                        unsigned &ndims) {
     std::ifstream reader(filename, std::ios::binary);
+    std::cout << "Reading bin: " << filename << "\n";
     int           npts_i32, ndims_i32;
     reader.read((char *) &npts_i32, sizeof(int));
     reader.read((char *) &ndims_i32, sizeof(int));
@@ -313,7 +314,7 @@ namespace NSG {
     ndims = (unsigned) ndims_i32;
     _u64 npts_u64 = (_u64) npts;
     _u64 ndims_u64 = (_u64) ndims;
-    std::cout << "Dataset: #pts = " << npts << ", #dims = " << ndims
+    std::cout << "bin: #pts = " << npts << ", #dims = " << ndims
               << ", size = " << npts_u64 * ndims_u64 * sizeof(T) << "B"
               << std::endl;
 

@@ -92,7 +92,7 @@ int main(int argc, char** argv) {
   qcounter.store(0);
 
   NSG::QueryStats* stats = new NSG::QueryStats[query_num];
-  _u64             n_threads = 16;  //omp_get_max_threads();
+  _u64             n_threads = 8;  //omp_get_max_threads();
   std::cout << "Executing queries on " << n_threads << " threads\n";
   std::vector<NSG::QueryScratch> thread_scratch(n_threads);
   for (auto& scratch : thread_scratch) {
