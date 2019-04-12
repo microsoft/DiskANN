@@ -46,12 +46,12 @@ void load_bvecs(const char* filename, float*& data, unsigned& num,
     assert(false);
   }
   struct stat sb;
-  assert(fstat(fd, &sb) == 0);
+  fstat(fd, &sb);
   off_t fileSize = sb.st_size;
-  assert(sizeof(off_t) == 8);
+  //  assert(sizeof(off_t) == 8);
 
   buf = (char*) mmap(NULL, fileSize, PROT_READ, MAP_PRIVATE, fd, 0);
-  assert(buf);
+  //  assert(buf);
   // size_t x=4;
   uint32_t file_dim;
   std::memcpy(&file_dim, buf, 4);
