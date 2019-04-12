@@ -43,17 +43,18 @@ int main(int argc, char** argv) {
   data_load = NSG::data_align(data_load, points_num, dim);
   std::cout << "Data loaded and aligned" << std::endl;
 
-  unsigned nn_graph_deg = (unsigned) atoi(argv[2]);
-  unsigned L = (unsigned) atoi(argv[3]);
-  unsigned R = (unsigned) atoi(argv[4]);
-  unsigned C = (unsigned) atoi(argv[5]);
-  float    alpha = (float) std::atof(argv[7]);
-  float    p_val = (float) std::atof(argv[8]);
-  unsigned num_hier = (float) std::atof(argv[9]);
-  unsigned num_syncs = (float) std::atof(argv[10]);
-  unsigned num_rnds = (unsigned) std::atoi(argv[11]);
-  unsigned innerL = (unsigned) atoi(argv[12]);
-  unsigned innerC = (unsigned) atoi(argv[13]);
+  unsigned    nn_graph_deg = (unsigned) atoi(argv[2]);
+  unsigned    L = (unsigned) atoi(argv[3]);
+  unsigned    R = (unsigned) atoi(argv[4]);
+  unsigned    C = (unsigned) atoi(argv[5]);
+  float       alpha = (float) std::atof(argv[7]);
+  float       p_val = (float) std::atof(argv[8]);
+  unsigned    num_hier = (float) std::atof(argv[9]);
+  unsigned    num_syncs = (float) std::atof(argv[10]);
+  unsigned    num_rnds = (unsigned) std::atoi(argv[11]);
+  unsigned    innerL = (unsigned) atoi(argv[12]);
+  unsigned    innerC = (unsigned) atoi(argv[13]);
+  std::string save_path(argv[6]);
 
   if (nn_graph_deg > R) {
     std::cerr << "Error: nn_graph_degree must be <= R" << std::endl;
@@ -73,6 +74,7 @@ int main(int argc, char** argv) {
   paras.Set<bool>("is_nsg", 0);
   paras.Set<bool>("is_rnd_nn", 1);
   paras.Set<unsigned>("num_rnds", num_rnds);
+  paras.Set<std::string>("save_path", save_path);
   //  paras.Set<std::string>("nn_graph_path", nn_graph_path);
   std::cout << "Params set" << std::endl;
 

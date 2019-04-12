@@ -532,7 +532,7 @@ namespace NSG {
     float    alpha = parameter.Get<float>("alpha");
 
     if (is_inner[q])
-      range = 1 * range;
+      range = 2 * range;
     width = range;
 
     if (!final_graph_[q].empty())
@@ -545,7 +545,6 @@ namespace NSG {
         pool.push_back(Neighbor(id, dist, true));
       }
 
-    //    std::cout << "here5" << std::flush;
     std::vector<Neighbor> result;
     std::sort(pool.begin(), pool.end());
     unsigned start = 0;
@@ -558,11 +557,8 @@ namespace NSG {
 
     result.push_back(pool[start]);
 
-    //    std::cout << "here4" << std::flush;
     while (result.size() < range && (++start) < pool.size() && start < maxc) {
       start_iter++;
-      //      if (start_iter->id != pool[start].id)
-      //        std::cout << "error!" << std::endl;
 
       auto &p = pool[start];
       bool  occlude = false;
@@ -581,13 +577,9 @@ namespace NSG {
       }
       if (!occlude) {
         result.push_back(p);
-        //      if (alpha > 1) {
-        //          pool.erase(start_iter);
-        //        }
       }
     }
 
-    //    std::cout << "here3" << std::flush;
     if (alpha > 1.0 && !pool.empty()) {
       if (result.size() < range) {
         std::vector<Neighbor> result2;
@@ -623,14 +615,12 @@ namespace NSG {
       }
     }
 
-    //    std::cout << "here2" << std::flush;
     cut_graph_[q].clear();
     if (result.size() > range)
       std::cout << "result out of rang" << std::endl;
     for (auto iter : result)
       cut_graph_[q].push_back(SimpleNeighbor(iter.id, iter.distance));
 
-    //    std::cout << "here1" << std::flush;
     for (auto iter : cut_graph_[q])
       if (!(iter.id < nd_)) {
         std::cout << iter.id << " added to cut_graph[" << q << "]. error. "
@@ -659,7 +649,7 @@ namespace NSG {
         assert(des.id < nd_);
 
         if (is_inner[des.id])
-          range = 1 * base_range;
+          range = 2 * base_range;
         auto &                des_pool = final_graph_[des.id];
         std::vector<unsigned> graph_copy;
         int                   dup = 0;
@@ -836,8 +826,9 @@ namespace NSG {
     assert(final_graph_.size() == nd_);
     std::vector<std::mutex> locks(nd_);
     auto                    cut_graph_ = new vecNgh[nd_];
-    unsigned                NUM_RNDS = 2;
-    float                   last_alpha = std::max((float) 1.2, outer_alpha);
+    //    unsigned                NUM_RNDS = 2;
+    unsigned NUM_RNDS = OUTER_NUM_RNDS;
+    float    last_alpha = std::max((float) 1.2, outer_alpha);
 
     for (uint32_t h = 0; h < NUM_HIER; h++) {
       std::cout << "Processing level " << h << " with " << size_hierarchy[h]
@@ -855,6 +846,9 @@ namespace NSG {
       for (uint32_t rnd_no = 0; rnd_no < NUM_RNDS; rnd_no++) {
         if (rnd_no == NUM_RNDS - 1 || h < NUM_HIER - 1)
           parameters.Set<float>("alpha", last_alpha);
+
+        if ((h == NUM_HIER - 1) && (rnd_no == NUM_RNDS - 1))
+          parameters.Set<unsigned>("L", (unsigned) std::min((int) L, (int) 50));
 
         size_t round_size = DIV_ROUND_UP(size_hierarchy[h], NUM_SYNCS - 1) - 1;
 
@@ -896,7 +890,7 @@ namespace NSG {
             auto node = hierarchy_vertices[h][n];
             final_graph_[node].clear();
             if (is_inner[node])
-              final_graph_[node].reserve(1 * range);
+              final_graph_[node].reserve(2 * range);
             else
               final_graph_[node].reserve(range);
             assert(!cut_graph_[node].empty());
@@ -905,7 +899,7 @@ namespace NSG {
               assert(link.id >= 0);
               assert(link.id < nd_);
             }
-            assert(final_graph_[node].size() <= range);
+            //            assert(final_graph_[node].size() <= range);
           }
           std::cout << "sync_prune completed for (level: " << h
                     << ", round: " << sync_no << ")" << std::endl;
@@ -926,6 +920,15 @@ namespace NSG {
             cut_graph_[node].shrink_to_fit();
           }
         }
+
+        /*        // save  nsg snapshot after each round
+                if (h == NUM_HIER - 1) {
+                  std::string rnd_path =
+           parameters.Get<std::string>("save_path");
+                  rnd_path += std::to_string(rnd_no);
+                  Save(rnd_path.c_str());
+                } */
+        // save code ends
       }
     }
 
