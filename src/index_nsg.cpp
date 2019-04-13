@@ -549,19 +549,10 @@ namespace NSG {
 
     std::vector<Neighbor> result;
     std::sort(pool.begin(), pool.end());
-    unsigned start = 0;
-    auto     start_iter = pool.begin();
-
-    if (pool[start].id == q) {
-      start++;
-      start_iter++;
-    }
-
+    unsigned start = (pool[0].id == q) ? 1 : 0;
     result.push_back(pool[start]);
 
     while (result.size() < range && (++start) < pool.size() && start < maxc) {
-      start_iter++;
-
       auto &p = pool[start];
       bool  occlude = false;
       for (unsigned t = 0; t < result.size(); t++) {
@@ -750,11 +741,9 @@ namespace NSG {
         }
       }
 
+      assert(des_pool.size() <= range);
       for (auto iter : des_pool)
         assert(iter < nd_);
-
-      if (des_pool.size() > range)
-        std::cout << "graph out of range" << std::endl;
     }
   }
 
