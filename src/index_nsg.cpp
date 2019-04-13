@@ -583,37 +583,36 @@ namespace NSG {
     }
 
     if (alpha > 1.0 && !pool.empty() && result.size() < range) {
-        std::vector<Neighbor> result2;
-        unsigned              start2 = 0;
-        if (pool[start2].id == q)
-          start2++;
-        result2.push_back(pool[start2]);
-        while (result2.size() < range - result.size() &&
-               (++start2) < pool.size() && start2 < maxc) {
-          auto &p = pool[start2];
-          bool  occlude = false;
-          for (unsigned t = 0; t < result2.size(); t++) {
-            if (p.id == result[t].id) {
-              occlude = true;
-              break;
-            }
-            float djk = distance_->compare(
-                data_ + dimension_ * (size_t) result2[t].id,
-                data_ + dimension_ * (size_t) p.id, (unsigned) dimension_);
-            if (alpha * djk < p.distance /* dik */) {
-              occlude = true;
-              break;
-            }
+      std::vector<Neighbor> result2;
+      unsigned              start2 = 0;
+      if (pool[start2].id == q)
+        start2++;
+      result2.push_back(pool[start2]);
+      while (result2.size() < range - result.size() &&
+             (++start2) < pool.size() && start2 < maxc) {
+        auto &p = pool[start2];
+        bool  occlude = false;
+        for (unsigned t = 0; t < result2.size(); t++) {
+          if (p.id == result[t].id) {
+            occlude = true;
+            break;
           }
-          if (!occlude)
-            result2.push_back(p);
+          float djk = distance_->compare(
+              data_ + dimension_ * (size_t) result2[t].id,
+              data_ + dimension_ * (size_t) p.id, (unsigned) dimension_);
+          if (alpha * djk < p.distance /* dik */) {
+            occlude = true;
+            break;
+          }
         }
-        for (unsigned i = 0; i < result2.size(); i++) {
-          result.push_back(result2[i]);
-        }
-        std::set<Neighbor> s(result.begin(), result.end());
-        result.assign(s.begin(), s.end());
+        if (!occlude)
+          result2.push_back(p);
       }
+      for (unsigned i = 0; i < result2.size(); i++) {
+        result.push_back(result2[i]);
+      }
+      std::set<Neighbor> s(result.begin(), result.end());
+      result.assign(s.begin(), s.end());
     }
 
     cut_graph_[q].clear();
