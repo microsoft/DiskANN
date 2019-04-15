@@ -40,14 +40,26 @@ namespace NSG {
       _mm_prefetch((char*) tables, 3);
       _mm_prefetch((char*) in_vec, 1);
       _mm_prefetch((char*) out_vec, 1);
-	  
+
       for (_u64 chunk = 0; chunk < n_chunks; chunk++) {
         const _u8    pq_idx = *(in_vec + chunk);
         const float* vals = (tables + (ndims * pq_idx)) + (chunk * chunk_size);
         float*       chunk_out = out_vec + (chunk * chunk_size);
         // avoiding memcpy as chunk size is at most 10
-        for (_u64 i = 0; i < chunk_size; i++) {
-          *(chunk_out + i) = *(vals + i);
+        switch (chunk_size) {
+          case 2:
+            *chunk_out++ = *vals++;
+            *chunk_out++ = *vals++;
+            break;
+          case 3:
+            *chunk_out++ = *vals++;
+            *chunk_out++ = *vals++;
+            *chunk_out++ = *vals++;
+            break;
+          default:
+            for (_u64 i = 0; i < chunk_size; i++) {
+              *(chunk_out + i) = *(vals + i);
+            }
         }
       }
     }

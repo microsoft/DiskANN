@@ -1,11 +1,11 @@
 ﻿cl : Command line warning D9025: overriding '/sdl' with '/GS-'
 cl : Command line warning D9025: overriding '/sdl' with '/GS-'
-  pq_flash_index_nsg.cpp
-c1xx : warning C4199: two-phase name lookup is not supported for C++/CLI, C++/CX, or OpenMP; use /Zc:twoPhase-
 cl : Command line warning D9025: overriding '/sdl' with '/GS-'
+  pq_flash_index_nsg.cpp
   windows_aligned_reader.cpp
 cl : Command line warning D9025: overriding '/sdl' with '/GS-'
   test_pq_flash_nsg_search.cpp
+c1xx : warning C4199: two-phase name lookup is not supported for C++/CLI, C++/CX, or OpenMP; use /Zc:twoPhase-
 c1xx : warning C4199: two-phase name lookup is not supported for C++/CLI, C++/CX, or OpenMP; use /Zc:twoPhase-
 c1xx : warning C4199: two-phase name lookup is not supported for C++/CLI, C++/CX, or OpenMP; use /Zc:twoPhase-
 c:\program files (x86)\microsoft visual studio\2017\enterprise\vc\tools\msvc\14.16.27023\include\xlocale(319): warning C4530: C++ exception handler used, but unwind semantics are not enabled. Specify /EHsc (compiling source file ..\..\src\pq_flash_index_nsg.cpp)
@@ -17,11 +17,6 @@ c:\users\t-sujs\source\repos\nsg\include\efanna2e\timer.h(21): warning C4244: 'r
           [
               _Rep=__int64
           ] (compiling source file ..\..\src\pq_flash_index_nsg.cpp)
-c:\users\t-sujs\source\repos\nsg\include\efanna2e\timer.h(21): warning C4244: 'return': conversion from '_Rep' to 'uint32_t', possible loss of data
-          with
-          [
-              _Rep=__int64
-          ] (compiling source file ..\..\tests\test_pq_flash_nsg_search.cpp)
 c:\users\t-sujs\source\repos\nsg\src\pq_flash_index_nsg.cpp(304): warning C4244: 'argument': conversion from '_u64' to 'unsigned int', possible loss of data
 c:\users\t-sujs\source\repos\nsg\src\pq_flash_index_nsg.cpp(305): warning C4244: 'argument': conversion from '_u64' to 'unsigned int', possible loss of data
 c:\users\t-sujs\source\repos\nsg\src\pq_flash_index_nsg.cpp(316): warning C4244: 'argument': conversion from '_u64' to 'unsigned int', possible loss of data
@@ -45,16 +40,20 @@ c:\users\t-sujs\source\repos\nsg\src\pq_flash_index_nsg.cpp(593): warning C4244:
 c:\users\t-sujs\source\repos\nsg\src\pq_flash_index_nsg.cpp(621): warning C4244: 'argument': conversion from '_u64' to 'unsigned int', possible loss of data
 c:\users\t-sujs\source\repos\nsg\src\pq_flash_index_nsg.cpp(631): warning C4244: 'argument': conversion from 'const _u64' to 'unsigned int', possible loss of data
 c:\users\t-sujs\source\repos\nsg\src\pq_flash_index_nsg.cpp(662): warning C4244: 'argument': conversion from '_u64' to 'unsigned int', possible loss of data
-c:\users\t-sujs\source\repos\nsg\tests\test_pq_flash_nsg_search.cpp(109): warning C4244: 'argument': conversion from '_u64' to 'int', possible loss of data
+c:\users\t-sujs\source\repos\nsg\include\efanna2e\timer.h(21): warning C4244: 'return': conversion from '_Rep' to 'uint32_t', possible loss of data
+          with
+          [
+              _Rep=__int64
+          ] (compiling source file ..\..\tests\test_pq_flash_nsg_search.cpp)
 c:\users\t-sujs\source\repos\nsg\include\efanna2e\util.h(161): warning C4267: '=': conversion from 'size_t' to 'unsigned int', possible loss of data (compiling source file ..\..\src\pq_flash_index_nsg.cpp)
-  c:\users\t-sujs\source\repos\nsg\include\efanna2e\pq_table.h(74): note: see reference to function template instantiation 'void NSG::load_Tvecs<float>(const char *,T *&,unsigned int &,unsigned int &)' being compiled
+  c:\users\t-sujs\source\repos\nsg\include\efanna2e\pq_table.h(86): note: see reference to function template instantiation 'void NSG::load_Tvecs<float>(const char *,T *&,unsigned int &,unsigned int &)' being compiled
           with
           [
               T=float
           ] (compiling source file ..\..\src\pq_flash_index_nsg.cpp)
   c:\users\t-sujs\source\repos\nsg\include\tsl\robin_growth_policy.h(237): note: see reference to class template instantiation 'std::array<size_t,40>' being compiled (compiling source file ..\..\src\pq_flash_index_nsg.cpp)
 c:\users\t-sujs\source\repos\nsg\include\efanna2e\util.h(444): warning C4244: 'argument': conversion from '_u64' to 'DWORD', possible loss of data (compiling source file ..\..\src\pq_flash_index_nsg.cpp)
-  c:\users\t-sujs\source\repos\nsg\include\efanna2e\pq_table.h(83): note: see reference to function template instantiation 'void NSG::block_load_convert_Tvecs<_u32,_u16>(const char *,Mtype *&,_u64 &,_u64 &)' being compiled
+  c:\users\t-sujs\source\repos\nsg\include\efanna2e\pq_table.h(95): note: see reference to function template instantiation 'void NSG::block_load_convert_Tvecs<_u32,_u16>(const char *,Mtype *&,_u64 &,_u64 &)' being compiled
           with
           [
               Mtype=_u16
@@ -80,15 +79,16 @@ c:\program files (x86)\microsoft visual studio\2017\enterprise\vc\tools\msvc\14.
           [
               _Ty2=int
           ] (compiling source file ..\..\src\pq_flash_index_nsg.cpp)
+c:\users\t-sujs\source\repos\nsg\tests\test_pq_flash_nsg_search.cpp(109): warning C4244: 'argument': conversion from '_u64' to 'int', possible loss of data
 c:\users\t-sujs\source\repos\nsg\include\efanna2e\util.h(161): warning C4267: '=': conversion from 'size_t' to 'unsigned int', possible loss of data (compiling source file ..\..\tests\test_pq_flash_nsg_search.cpp)
-  c:\users\t-sujs\source\repos\nsg\include\efanna2e\pq_table.h(74): note: see reference to function template instantiation 'void NSG::load_Tvecs<float>(const char *,T *&,unsigned int &,unsigned int &)' being compiled
+  c:\users\t-sujs\source\repos\nsg\include\efanna2e\pq_table.h(86): note: see reference to function template instantiation 'void NSG::load_Tvecs<float>(const char *,T *&,unsigned int &,unsigned int &)' being compiled
           with
           [
               T=float
           ] (compiling source file ..\..\tests\test_pq_flash_nsg_search.cpp)
   c:\users\t-sujs\source\repos\nsg\include\tsl\robin_growth_policy.h(237): note: see reference to class template instantiation 'std::array<size_t,40>' being compiled (compiling source file ..\..\tests\test_pq_flash_nsg_search.cpp)
 c:\users\t-sujs\source\repos\nsg\include\efanna2e\util.h(444): warning C4244: 'argument': conversion from '_u64' to 'DWORD', possible loss of data (compiling source file ..\..\tests\test_pq_flash_nsg_search.cpp)
-  c:\users\t-sujs\source\repos\nsg\include\efanna2e\pq_table.h(83): note: see reference to function template instantiation 'void NSG::block_load_convert_Tvecs<_u32,_u16>(const char *,Mtype *&,_u64 &,_u64 &)' being compiled
+  c:\users\t-sujs\source\repos\nsg\include\efanna2e\pq_table.h(95): note: see reference to function template instantiation 'void NSG::block_load_convert_Tvecs<_u32,_u16>(const char *,Mtype *&,_u64 &,_u64 &)' being compiled
           with
           [
               Mtype=_u16
