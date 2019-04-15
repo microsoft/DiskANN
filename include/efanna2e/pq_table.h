@@ -37,12 +37,10 @@ namespace NSG {
     // in_vec = _u8 * [n_chunks]
     // out_vec = float* [ndims]
     virtual void convert(const _u8* in_vec, float* out_vec) override {
-      /*
-      std::cout << "Input: ";
-      for(_u64 i=0;i<n_chunks;i++)
-        std::cout << (unsigned)in_vec[i] << " ";
-      std::cout << "\n";
-      */
+      _mm_prefetch((char*) tables, 3);
+      _mm_prefetch((char*) in_vec, 1);
+      _mm_prefetch((char*) out_vec, 1);
+	  
       for (_u64 chunk = 0; chunk < n_chunks; chunk++) {
         const _u8    pq_idx = *(in_vec + chunk);
         const float* vals = (tables + (ndims * pq_idx)) + (chunk * chunk_size);
@@ -52,12 +50,6 @@ namespace NSG {
           *(chunk_out + i) = *(vals + i);
         }
       }
-      /*
-      std::cout << "Output: ";
-      for(_u64 i=0;i<ndims;i++)
-        std::cout << out_vec[i] << " ";
-      std::cout << "\n";
-      */
     }
   };
 

@@ -376,6 +376,12 @@ namespace NSG {
           _u64      nnbrs = (_u64)(*node_buf);
           assert(nnbrs < 200);
           unsigned *node_nbrs = (node_buf + 1);
+          // issue prefetches
+		  for (_u64 m = 0; m < nnbrs; ++m) {
+			unsigned next_id = node_nbrs[m];
+			_mm_prefetch((char *) data + next_id * n_chunks, 2);
+          }
+		  // process data
           for (_u64 m = 0; m < nnbrs; ++m) {
             unsigned id = node_nbrs[m];
             if (visited.find(id) != visited.end()) {
@@ -545,9 +551,10 @@ namespace NSG {
           unsigned *node_buf = OFFSET_TO_NODE_NHOOD(node_disk_buf);
           _u64      nnbrs = (_u64)(*node_buf);
           assert(nnbrs < 200);
-		  if (nnbrs >= 200) {
-			  std::cerr << "***Warning nnbrs = " << nnbrs << " greater than 200" << std::endl;
-		  }
+          if (nnbrs >= 200) {
+            std::cerr << "***Warning nnbrs = " << nnbrs << " greater than 200"
+                      << std::endl;
+          }
           _s8 *node_fp_coords = OFFSET_TO_NODE_COORDS(node_disk_buf);
           assert(data_buf_idx < MAX_N_CMPS);
           _s8 *node_fp_coords_copy = data_buf + (data_buf_idx * data_dim);
@@ -558,6 +565,12 @@ namespace NSG {
               std::make_pair(frontier_nhood.first, node_fp_coords_copy));
 
           unsigned *node_nbrs = (node_buf + 1);
+          // issue prefetches
+          for (_u64 m = 0; m < nnbrs; ++m) {
+            unsigned next_id = node_nbrs[m];
+            _mm_prefetch((char *) data + next_id * n_chunks, 2);
+          }
+		  // process prefetch-ed nhood
           for (_u64 m = 0; m < nnbrs; ++m) {
             unsigned id = node_nbrs[m];
             assert(id < 130000000);
@@ -591,9 +604,14 @@ namespace NSG {
         for (auto &cached_nhood : cached_nhoods) {
           _u64      nnbrs = cached_nhood.second.first;
           unsigned *node_nbrs = cached_nhood.second.second;
+          // issue prefetches
+          for (_u64 m = 0; m < nnbrs; ++m) {
+            unsigned next_id = node_nbrs[m];
+            _mm_prefetch((char *) data + next_id * n_chunks, 2);
+          }
+		  // process prefetched nhood
           for (_u64 m = 0; m < nnbrs; ++m) {
             unsigned id = node_nbrs[m];
-            assert(id < 130000000);
             if (visited.find(id) != visited.end()) {
               continue;
             } else {
@@ -626,7 +644,8 @@ namespace NSG {
       else
         ++k;
     }
-
+	// prefetch coords backing buf
+    _mm_prefetch((char*)data_buf, 2);
     // RE-RANKING STEP
     for (_u64 i = 0; i < l_search; i++) {
       _u64 idx = retset[i].id;
