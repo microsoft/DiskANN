@@ -4,8 +4,6 @@
 
 #pragma once
 #include <fcntl.h>
-#include <Windows.h>
-
 
 #include <algorithm>
 #include <cassert>
@@ -20,6 +18,7 @@
 #endif
 
 #ifdef __NSG_WINDOWS__
+#include <Windows.h>
 typedef HANDLE FileHandle;
 #else 
 typedef int FileHandle;

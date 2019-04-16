@@ -5,7 +5,11 @@
 #pragma once
 
 #include <efanna2e/util.h>
+#ifdef __NSG_WINDOWS__
 #include <intrin.h>
+#else
+#include <xmmintrin.h>
+#endif
 #include <iostream>
 
 namespace {
