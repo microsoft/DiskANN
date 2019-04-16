@@ -22,7 +22,7 @@
     <ClCompile Include="..\..\src\pq_flash_index_nsg.cpp">
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
     </ClCompile>
-    <ClCompile Include="..\..\src\windows_aligned_reader.cpp" />
+    <ClCompile Include="..\..\src\windows_aligned_file_reader.cpp" />
     <ClCompile Include="..\..\tests\test_pq_flash_nsg_search.cpp">
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
     </ClCompile>
@@ -38,7 +38,6 @@
     <ClInclude Include="..\..\include\tsl\robin_hash.h" />
     <ClInclude Include="..\..\include\tsl\robin_map.h" />
     <ClInclude Include="..\..\include\tsl\robin_set.h" />
-    <ClInclude Include="..\..\include\FileAbstractions.h" />
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <VCProjectVersion>15.0</VCProjectVersion>
@@ -127,7 +126,7 @@
       <WarningLevel>Level3</WarningLevel>
       <Optimization>Disabled</Optimization>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>_DEBUG;_CONSOLE;__NSG_WINDOWS__;__AVX__;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>_DEBUG;_CONSOLE;__NSG_WINDOWS__;__AVX__;USE_AVX2;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <PrecompiledHeaderFile>
       </PrecompiledHeaderFile>

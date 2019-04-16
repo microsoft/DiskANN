@@ -12,24 +12,22 @@
 #include "efanna2e/util.h"
 #include "tsl/robin_map.h"
 
-typedef struct{
-  HANDLE                  fhandle = NULL;
-  HANDLE                  iocp = NULL;
-  std::vector<OVERLAPPED> reqs;
-}IOContext;
 
-class WindowsAlignedReader {
+
+class WindowsAlignedFileReader : public AlignedFileReader {
+
+  private:
+    uint64_t            file_sz;
+    std::wstring        filename;
+
  public:
-  uint64_t            file_sz;
-  std::wstring        filename;
 
-  tsl::robin_map<std::thread::id, IOContext> ctx_map;
-  std::mutex                                 ctx_mut;
 
-  WindowsAlignedReader(){};
-  ~WindowsAlignedReader(){};
+  WindowsAlignedFileReader(){};
+  ~WindowsAlignedFileReader(){};
 
   void   register_thread();
+  void	 deregister_thread(){}
   IOContext& get_ctx();
 
   // Open & close ops

@@ -14,6 +14,12 @@
 
 #include "tsl/robin_set.h"
 
+#ifdef __NSG_WINDOWS__
+#include "windows_aligned_file_reader.h"
+#else
+#include "linux_aligned_file_reader.h"
+#endif
+
 #define SECTOR_LEN 4096
 
 #define READ_U64(stream, val) stream.read((char *) &val, sizeof(_u64))
@@ -64,7 +70,8 @@ namespace NSG {
     if (pq_table != nullptr) {
       delete pq_table;
     }
-    reader.close();
+    reader->close();
+	delete reader;
   }
 
   void PQFlashNSG::cache_bfs_levels(_u64 nlevels) {
@@ -106,7 +113,7 @@ namespace NSG {
       }
 
       // issue read requests
-      reader.read(read_reqs);
+      reader->read(read_reqs);
 
       // process each nhood buf
       // TODO:: cache all nhoods in each sector instead of just one
@@ -230,7 +237,12 @@ namespace NSG {
 
     // open AlignedFileReader handle to nsg_file
     std::string nsg_fname(nsg_file);
-    reader.open(nsg_fname);
+#ifdef __NSG_WINDOWS__
+	reader = new WindowsAlignedFileReader();
+#else
+	reader = new LinuxAlignedFileReader();
+#endif
+    reader->open(nsg_fname);
 
     // read medoid nhood
     char *medoid_buf = nullptr;
@@ -242,7 +254,7 @@ namespace NSG {
     medoid_read[0].offset = NODE_SECTOR_NO(medoid) * SECTOR_LEN;
     std::cout << "Medoid offset: " << NODE_SECTOR_NO(medoid) * SECTOR_LEN
               << "\n";
-    reader.read(medoid_read);
+    reader->read(medoid_read);
 
     // all data about medoid
     char *medoid_node_buf = OFFSET_TO_NODE(medoid_buf, medoid);
@@ -361,7 +373,7 @@ namespace NSG {
           }
         }
         io_timer.reset();
-        reader.read(frontier_read_reqs);
+        reader->read(frontier_read_reqs);
         if (stats != nullptr) {
           stats->io_us += io_timer.elapsed();
         }
@@ -537,7 +549,7 @@ namespace NSG {
           }
         }
         io_timer.reset();
-        reader.read(frontier_read_reqs);
+        reader->read(frontier_read_reqs);
         if (stats != nullptr) {
           stats->io_us += io_timer.elapsed();
         }

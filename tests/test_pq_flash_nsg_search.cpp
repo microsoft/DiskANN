@@ -122,7 +122,7 @@ int main(int argc, char** argv) {
 
 	// init if not init yet
 	if (!has_inits[thread_no]) {
-      index.reader.register_thread();
+      index.reader->register_thread();
 #pragma omp critical
       std::cout << "Init complete for thread-" << omp_get_thread_num()
                 << std::endl;

@@ -1,4 +1,5 @@
-#include "aligned_file_reader.h"
+
+#include "linux_aligned_file_reader.h"
 
 
 #include <cassert>
@@ -87,11 +88,11 @@ namespace {
   }
 }
 
-AlignedFileReader::AlignedFileReader() {
+LinuxAlignedFileReader::LinuxAlignedFileReader() {
   this->file_desc = -1;
 }
 
-AlignedFileReader::~AlignedFileReader() {
+LinuxAlignedFileReader::~LinuxAlignedFileReader() {
   int64_t ret;
   // check to make sure file_desc is closed
   ret = ::fcntl(this->file_desc, F_GETFD);
@@ -109,24 +110,22 @@ AlignedFileReader::~AlignedFileReader() {
   }
 }
 
-io_context_t AlignedFileReader::get_ctx() {
-  std::unique_lock<std::mutex> lk(AlignedFileReader::ctx_mut);
+io_context_t LinuxAlignedFileReader::get_ctx() {
+  std::unique_lock<std::mutex> lk(ctx_mut);
   // perform checks only in DEBUG mode
-  if (AlignedFileReader::ctx_map.find(std::this_thread::get_id()) ==
-      AlignedFileReader::ctx_map.end()) {
+  if (ctx_map.find(std::this_thread::get_id()) == ctx_map.end()) {
     std::cerr << "bad thread access; returning -1 as io_context_t" << std::endl;
     return (io_context_t) -1;
   } else {
-    return AlignedFileReader::ctx_map[std::this_thread::get_id()];
+    return ctx_map[std::this_thread::get_id()];
   }
   lk.unlock();
 }
 
-void AlignedFileReader::register_thread() {
+void LinuxAlignedFileReader::register_thread() {
   auto                         my_id = std::this_thread::get_id();
-  std::unique_lock<std::mutex> lk(AlignedFileReader::ctx_mut);
-  if (AlignedFileReader::ctx_map.find(my_id) !=
-      AlignedFileReader::ctx_map.end()) {
+  std::unique_lock<std::mutex> lk(ctx_mut);
+  if (ctx_map.find(my_id) != ctx_map.end()) {
     std::cerr << "multiple calls to register_thread from the same thread"
               << std::endl;
     return;
@@ -141,28 +140,27 @@ void AlignedFileReader::register_thread() {
               << ":" << ::strerror(errno) << std::endl;
   } else {
     std::cerr << "allocating ctx to thread-id:" << my_id << std::endl;
-    AlignedFileReader::ctx_map[my_id] = ctx;
+    ctx_map[my_id] = ctx;
   }
   lk.unlock();
 }
 
-void AlignedFileReader::deregister_thread() {
+void LinuxAlignedFileReader::deregister_thread() {
   auto                         my_id = std::this_thread::get_id();
-  std::unique_lock<std::mutex> lk(AlignedFileReader::ctx_mut);
-  assert(AlignedFileReader::ctx_map.find(my_id) !=
-         AlignedFileReader::ctx_map.end());
+  std::unique_lock<std::mutex> lk(ctx_mut);
+  assert(ctx_map.find(my_id) != ctx_map.end());
 
   lk.unlock();
   io_context_t ctx = this->get_ctx();
   int          ret = io_destroy(ctx);
   assert(ret == 0);
   lk.lock();
-  AlignedFileReader::ctx_map.erase(my_id);
+  ctx_map.erase(my_id);
   std::cerr << "returned ctx from thread-id:" << my_id << std::endl;
   lk.unlock();
 }
 
-void AlignedFileReader::open(const std::string &fname) {
+void LinuxAlignedFileReader::open(const std::string &fname) {
   int flags = O_DIRECT | O_RDONLY | O_LARGEFILE;
   this->file_desc = ::open(fname.c_str(), flags);
   // error checks
@@ -170,7 +168,7 @@ void AlignedFileReader::open(const std::string &fname) {
   std::cerr << "Opened file : " << fname << std::endl;
 }
 
-void AlignedFileReader::close() {
+void LinuxAlignedFileReader::close() {
   int64_t ret;
 
   // check to make sure file_desc is closed
@@ -181,7 +179,7 @@ void AlignedFileReader::close() {
   assert(ret != -1);
 }
 
-void AlignedFileReader::read(std::vector<AlignedRead> &read_reqs) {
+void LinuxAlignedFileReader::read(std::vector<AlignedRead> &read_reqs) {
   assert(this->file_desc != -1);
   io_context_t ctx = get_ctx();
   execute_io(ctx, this->file_desc, read_reqs);

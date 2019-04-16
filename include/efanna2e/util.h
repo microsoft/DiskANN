@@ -6,7 +6,6 @@
 #include <fcntl.h>
 #include <Windows.h>
 
-#include "FileAbstractions.h"
 
 #include <algorithm>
 #include <cassert>
@@ -18,6 +17,12 @@
 #ifdef __APPLE__
 #else
 #include <malloc.h>
+#endif
+
+#ifdef __NSG_WINDOWS__
+typedef HANDLE FileHandle;
+#else 
+typedef int FileHandle;
 #endif
 
 // taken from
@@ -126,7 +131,6 @@ namespace NSG {
 #endif
 
     assert(*ptr != nullptr);
-    // std::cout << "ALLOC_ALIGNED:: " << ptr << "->" << *ptr << "\n";
   }
 
   inline void aligned_free(void* ptr) 
@@ -443,7 +447,7 @@ namespace NSG {
       overlapped.OffsetHigh =
           (uint32_t)((cur_blk_offset & 0xFFFFFFFF00000000LL) >> 32);
       overlapped.Offset = (uint32_t)(cur_blk_offset & 0xFFFFFFFFLL);
-      if (!ReadFile(fd, (LPVOID) block_read_buf, cur_blk_size, &ret,
+      if (!ReadFile(fd, (LPVOID) block_read_buf, (DWORD)cur_blk_size, &ret,
                     &overlapped)) {
         std::cout << "Read file returned error: " << GetLastError()
                   << std::endl;

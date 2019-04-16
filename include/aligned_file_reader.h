@@ -1,17 +1,23 @@
 #pragma once
 
-#include <fcntl.h>
+#include <vector>
 #ifndef __NSG_WINDOWS__
-#include <libaio.h>
-#include <unistd.h>
-typedef io_context_t Context;
+  #include <libaio.h>
+  #include <unistd.h>
+  #include <fcntl.h>
+  typedef io_context_t Context;
 #else
-#include <Windows.h>
-#include <minwinbase.h>
-typedef _OVERLAPPED IoContext;
+  #include <Windows.h>
+  #include <minwinbase.h>
+  typedef struct{
+    HANDLE                  fhandle = NULL;
+    HANDLE                  iocp = NULL;
+    std::vector<OVERLAPPED> reqs;
+  } IOContext;
 #endif
-#include <malloc.h>
 
+
+#include <malloc.h>
 #include <cstdio>
 #include <mutex>
 #include <thread>
@@ -23,14 +29,9 @@ struct AlignedRead {
   uint64_t offset;  // where to read from
   uint64_t len;     // how much to read
   void *   buf;     // where to read into
-#ifdef __NSG_WINDOWS__
-  OVERLAPPED overlapped; //Windows IO data structure
-#endif
+
 
   AlignedRead() : offset(0), len(0), buf(nullptr) {
-  #ifdef __NSG_WINDOWS__
-	  memset(&overlapped, 0, sizeof(overlapped));
-  #endif
   }
 
   AlignedRead(uint64_t offset, uint64_t len, void *buf)
@@ -43,32 +44,31 @@ struct AlignedRead {
 };
 
 class AlignedFileReader {
-  tsl::robin_map<std::thread::id, IoContext> ctx_map;
-  std::mutex                               ctx_mut;
+  protected:
+    tsl::robin_map<std::thread::id, IOContext> ctx_map;
+    std::mutex                                 ctx_mut;
 
-  // returns the thread-specific context
-  // returns (io_context_t)(-1) if thread is not registered
-  IoContext get_ctx();
+  public: 
 
- public:
-  uint64_t			file_sz;
-  FileHandle		file_desc;
+    // returns the thread-specific context
+    // returns (io_context_t)(-1) if thread is not registered
+    virtual IOContext& get_ctx() = 0;
+  
+	virtual ~AlignedFileReader() = 0 {};
 
-  AlignedFileReader();
-  ~AlignedFileReader();
+    // register thread-id for a context
+    virtual void register_thread() = 0;
+    // de-register thread-id for a context
+    virtual void deregister_thread() = 0;
+    
+    // Open & close ops
+    // Blocking calls  
+    virtual void open(const std::string&  fname) = 0;
+    virtual void close() = 0;
 
-  // register thread-id for a context
-  void register_thread();
-
-  // de-register thread-id for a context
-  void deregister_thread();
-
-  // Open & close ops
-  // Blocking calls
-  void open(const std::string &fname);
-  void close();
-
-  // process batch of aligned requests in parallel
-  // NOTE :: blocking call
-  void read(std::vector<AlignedRead> &read_reqs);
+    // process batch of aligned requests in parallel
+    // NOTE :: blocking call
+    virtual void read(std::vector<AlignedRead> &read_reqs) = 0;
 };
+
+
