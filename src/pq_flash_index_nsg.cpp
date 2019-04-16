@@ -438,22 +438,24 @@ namespace NSG {
 
     // scratch space to compute distances between FP32 Query and INT8 data
     float *scratch = query_scratch->aligned_scratch;
+    _mm_prefetch((char*) scratch, 1);
 
     // pointers to buffers for data
     _s8 * data_buf = query_scratch->coord_scratch;
     _u64 &data_buf_idx = query_scratch->coord_idx;
+    _mm_prefetch((char*)data_buf, 2);
 
     // sector scratch
     char *sector_scratch = query_scratch->sector_scratch;
     _u64 &sector_scratch_idx = query_scratch->sector_idx;
-
+	
     Timer                 query_timer, io_timer;
     std::vector<Neighbor> retset(l_search + 1);
     std::vector<_u64>     init_ids(l_search);
-    tsl::robin_set<_u64>  visited(10 * l_search);
+    tsl::robin_set<_u64>  visited(4096);
 
     tsl::robin_map<_u64, _s8 *> fp_coords;
-
+	
     _u64 tmp_l = 0;
     // add each neighbor of medoid
     for (; tmp_l < l_search && tmp_l < medoid_nhood.first; tmp_l++) {
@@ -573,7 +575,6 @@ namespace NSG {
 		  // process prefetch-ed nhood
           for (_u64 m = 0; m < nnbrs; ++m) {
             unsigned id = node_nbrs[m];
-            assert(id < 130000000);
             if (visited.find(id) != visited.end()) {
               continue;
             } else {

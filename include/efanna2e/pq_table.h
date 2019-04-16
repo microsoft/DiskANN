@@ -11,10 +11,10 @@ namespace NSG {
 
   class FixedChunkPQTable : PQTable<_u8> {
     // data_dim = n_chunks * chunk_size;
-    float* tables;      // pq_tables = float* [[2^8 * [chunk_size]] * n_chunks]
-    _u64   n_chunks;    // n_chunks = # of chunks ndims is split into
-    _u64   chunk_size;  // chunk_size = chunk size of each dimension chunk
-    _u64   ndims;       // ndims = chunk_size * n_chunks
+    float* tables;  // pq_tables = float* [[2^8 * [chunk_size]] * n_chunks]
+    _u64   n_chunks;       // n_chunks = # of chunks ndims is split into
+    _u64   chunk_size;     // chunk_size = chunk size of each dimension chunk
+    _u64   ndims;          // ndims = chunk_size * n_chunks
    public:
     FixedChunkPQTable(_u64 nchunks, _u64 chunksize)
         : n_chunks(nchunks), chunk_size(chunksize) {
@@ -37,9 +37,14 @@ namespace NSG {
     // in_vec = _u8 * [n_chunks]
     // out_vec = float* [ndims]
     virtual void convert(const _u8* in_vec, float* out_vec) override {
-      _mm_prefetch((char*) tables, 3);
+      // _mm_prefetch((char*) tables, 3);
       _mm_prefetch((char*) in_vec, 1);
-      _mm_prefetch((char*) out_vec, 1);
+      // prefetch full out_vec
+      _u64 n_floats_per_line = 16;
+      _u64 n_lines = ROUND_UP(ndims, n_floats_per_line) / n_floats_per_line;
+      for (_u64 line = 0; line < n_lines; line++) {
+        _mm_prefetch((char*) (out_vec + 16 * line), 1);
+      }
 
       for (_u64 chunk = 0; chunk < n_chunks; chunk++) {
         const _u8    pq_idx = *(in_vec + chunk);
