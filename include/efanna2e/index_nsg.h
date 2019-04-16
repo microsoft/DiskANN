@@ -26,10 +26,19 @@ namespace NSG {
     void LoadSmallIndex(const char *filename, std::vector<unsigned> &picked);
     void SaveSmallIndex(const char *filename, std::vector<unsigned> &picked);
 
+    void Load_Inner_Vertices(const char *filename);
+    void Save_Inner_Vertices(const char *filename);
+
     void Load_nn_graph(const char *filename);
+
+    void Init_rnd_nn_graph(size_t num_points, unsigned k,
+                           std::vector<size_t> mapping = std::vector<size_t>());
 
     virtual void Build(size_t n, const float *data,
                        const Parameters &parameters) override;
+
+    void BuildRandomHierarchical(size_t n, const float *data,
+                                 Parameters &parameters);
 
     void BuildFromSmall(size_t n, const float *data,
                         const Parameters &parameters, IndexNSG &small_index,
@@ -62,10 +71,10 @@ namespace NSG {
 
    protected:
     typedef std::vector<std::vector<unsigned>> CompactGraph;
-    typedef std::vector<SimpleNeighbors>       LockGraph;
-    typedef std::vector<nhood>                 KNNGraph;
 
     CompactGraph final_graph_;
+
+    bool *is_inner;
 
     Index *initializer_;
 
@@ -92,16 +101,19 @@ namespace NSG {
                        tsl::robin_set<unsigned> &   visited,
                        const std::vector<unsigned> &start_points);
 
-    // void add_cnn(unsigned des, Neighbor p, unsigned range, LockGraph&
-    // cut_graph_);
-
     typedef std::vector<SimpleNeighbor> vecNgh;
     void InterInsert(unsigned n, unsigned range, std::vector<std::mutex> &locks,
                      const Parameters &parameter, vecNgh *cut_graph_);
+    void InterInsertHierarchy(unsigned n, std::vector<std::mutex> &locks,
+                              vecNgh *cut_graph_, const Parameters &parameter);
+
     void sync_prune(unsigned q, std::vector<Neighbor> &pool,
                     const Parameters &        parameter,
                     tsl::robin_set<unsigned> &visited, vecNgh *cut_graph_);
+
     void Link(const Parameters &parameters, vecNgh *cut_graph_);
+
+    void LinkHierarchy(Parameters &parameters);
 
     void LinkFromSmall(const Parameters &parameters, vecNgh *cut_graph_,
                        IndexNSG &                   small_index,
@@ -123,7 +135,7 @@ namespace NSG {
     size_t                  node_size;
     size_t                  data_len;
     size_t                  neighbor_len;
-    KNNGraph                nnd_graph;
+    // KNNGraph                nnd_graph;
   };
 }
 
