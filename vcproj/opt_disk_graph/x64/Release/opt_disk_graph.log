@@ -1,6 +1,0 @@
-﻿cl : Command line warning D9025: overriding '/sdl' with '/GS-'
-  opt_disk_graph.cpp
-  Generating code
-  All 171 functions were compiled because no usable IPDB/IOBJ from previous compilation was found.
-  Finished generating code
-  opt_disk_graph.vcxproj -> C:\Users\t-sujs\source\repos\nsg\x64\Release\opt_disk_graph.exe
