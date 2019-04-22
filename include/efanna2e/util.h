@@ -179,13 +179,13 @@ namespace NSG {
       // computed using aligned dimension
       T *buf = data + i * dim;
 
-      // Gopal. Assuming synchronous read.
-      
+// Gopal. Assuming synchronous read.
+
 #ifndef __NSG_WINDOWS__
-      int  ret = -1;
+      int ret = -1;
       ret = pread(fd, (char *) buf, dim * sizeof(T), file_offset);
 #else
-      DWORD ret = -1;
+      DWORD      ret = -1;
       OVERLAPPED overlapped;
       memset(&overlapped, 0, sizeof(overlapped));
       overlapped.OffsetHigh =
@@ -262,13 +262,13 @@ namespace NSG {
       // computed using actual dimension
       uint64_t file_offset = (per_row * i) + sizeof(unsigned);
       // computed using aligned dimension
-      T * buf = data + i * aligned_dim;
-      
+      T *buf = data + i * aligned_dim;
+
 #ifndef __NSG_WINDOWS__
       int ret = -1;
       ret = pread(fd, (char *) buf, dim * sizeof(T), file_offset);
 #else
-      DWORD ret = -1;
+      DWORD      ret = -1;
       OVERLAPPED overlapped;
       memset(&overlapped, 0, sizeof(overlapped));
       overlapped.OffsetHigh =
@@ -424,12 +424,12 @@ namespace NSG {
       _u64 cur_blk_offset = blk * blk_size * per_row;
       _u64 cur_blk_size = cur_blk_npts * per_row;
 
-      // read blk into block_read_buf
+// read blk into block_read_buf
 #ifndef __NSG_WINDOWS__
       int ret = -1;
       ret = pread(fd, block_read_buf, cur_blk_size, cur_blk_offset);
 #else
-      DWORD ret = -1;
+      DWORD      ret = -1;
       OVERLAPPED overlapped;
       memset(&overlapped, 0, sizeof(overlapped));
       overlapped.OffsetHigh =
