@@ -1,4 +1,3 @@
-#include "cached_io.h"
 #include <efanna2e/util.h>
 #include <cmath>
 #include <cstring>
@@ -6,6 +5,7 @@
 #include <iostream>
 #include <limits>
 #include <vector>
+#include "cached_io.h"
 
 #define SECTOR_LEN 4096
 

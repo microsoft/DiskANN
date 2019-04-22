@@ -54,7 +54,7 @@ namespace NSG {
                                            const _u64    beam_width,
                                            QueryStats *  stats = nullptr,
                                            QueryScratch *scratch = nullptr);
-    AlignedFileReader* reader;
+    AlignedFileReader *reader;
 
     // index info
     // nhood of node `i` is in sector: [i / nnodes_per_sector]

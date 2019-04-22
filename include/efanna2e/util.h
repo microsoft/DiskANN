@@ -20,7 +20,8 @@
 #ifdef __NSG_WINDOWS__
 #include <Windows.h>
 typedef HANDLE FileHandle;
-#else 
+#else
+#include <unistd.h>
 typedef int FileHandle;
 #endif
 
@@ -69,24 +70,8 @@ namespace NSG {
     }
   }
 
-  /*
   inline float *data_align(float *data_ori, unsigned point_num, unsigned &dim) {
-#ifdef __GNUC__
-	#ifdef __AVX__
-		#define DATA_ALIGN_FACTOR 8
-	#else
-		#ifdef __SSE2__
-			#define DATA_ALIGN_FACTOR 4
-		#else
-			#define DATA_ALIGN_FACTOR 1
-		#endif
-	#endif
-#else
-	#ifdef __AVX__
-		#define DATA_ALIGN_FACTOR 8
-	#endif
-#endif
-
+#define DATA_ALIGN_FACTOR 8
     // std::cout << "align with : "<<DATA_ALIGN_FACTOR << std::endl;
     float *  data_new = 0;
     unsigned new_dim =
@@ -119,7 +104,6 @@ namespace NSG {
     return data_new;
   }
 
-  */
   inline void alloc_aligned(void **ptr, size_t size, size_t align) {
     *ptr = nullptr;
     assert(IS_ALIGNED(size, align));
@@ -132,17 +116,17 @@ namespace NSG {
     assert(*ptr != nullptr);
   }
 
-  inline void aligned_free(void* ptr) 
-  {
-	  //Gopal. Must have a check here if the pointer was actually allocated by _alloc_aligned
-	  if (ptr == nullptr) {
-		  return;
-	  }
-	  #ifndef __NSG_WINDOWS__
-		  free(ptr);
-	  #else
-		  ::_aligned_free(ptr);
-	  #endif
+  inline void aligned_free(void *ptr) {
+    // Gopal. Must have a check here if the pointer was actually allocated by
+    // _alloc_aligned
+    if (ptr == nullptr) {
+      return;
+    }
+#ifndef __NSG_WINDOWS__
+    free(ptr);
+#else
+    ::_aligned_free(ptr);
+#endif
   }
 
   template<typename T>
@@ -184,11 +168,11 @@ namespace NSG {
         OPEN_EXISTING,            // assuming here that the file exists
         FILE_FLAG_RANDOM_ACCESS,  // optimize for random seeks
         nullptr                   // we are opening an existing file
-    );
+        );
     assert(fd != nullptr);
 #endif
 
-// parallel read each vector at the desired offset
+    // parallel read each vector at the desired offset
     for (size_t i = 0; i < num; i++) {
       // computed using actual dimension
       uint64_t file_offset = (per_row * i) + sizeof(unsigned);
@@ -196,7 +180,7 @@ namespace NSG {
       T *buf = data + i * dim;
 
       // Gopal. Assuming synchronous read.
-      DWORD ret = -1;
+      int ret = -1;
 #ifndef __NSG_WINDOWS__
       ret = pread(fd, (char *) buf, dim * sizeof(T), file_offset);
 #else
@@ -276,8 +260,8 @@ namespace NSG {
       // computed using actual dimension
       uint64_t file_offset = (per_row * i) + sizeof(unsigned);
       // computed using aligned dimension
-      T *   buf = data + i * aligned_dim;
-      DWORD ret = -1;
+      T * buf = data + i * aligned_dim;
+      int ret = -1;
 #ifndef __NSG_WINDOWS__
       ret = pread(fd, (char *) buf, dim * sizeof(T), file_offset);
 #else
@@ -312,7 +296,7 @@ namespace NSG {
                        unsigned &ndims) {
     std::ifstream reader(filename, std::ios::binary);
     std::cout << "Reading bin: " << filename << "\n";
-    int           npts_i32, ndims_i32;
+    int npts_i32, ndims_i32;
     reader.read((char *) &npts_i32, sizeof(int));
     reader.read((char *) &ndims_i32, sizeof(int));
     npts = (unsigned) npts_i32;
@@ -437,7 +421,7 @@ namespace NSG {
       _u64 cur_blk_size = cur_blk_npts * per_row;
 
       // read blk into block_read_buf
-      DWORD ret = -1;
+      int ret = -1;
 #ifndef __NSG_WINDOWS__
       ret = pread(fd, block_read_buf, cur_blk_size, cur_blk_offset);
 #else
@@ -446,7 +430,7 @@ namespace NSG {
       overlapped.OffsetHigh =
           (uint32_t)((cur_blk_offset & 0xFFFFFFFF00000000LL) >> 32);
       overlapped.Offset = (uint32_t)(cur_blk_offset & 0xFFFFFFFFLL);
-      if (!ReadFile(fd, (LPVOID) block_read_buf, (DWORD)cur_blk_size, &ret,
+      if (!ReadFile(fd, (LPVOID) block_read_buf, (DWORD) cur_blk_size, &ret,
                     &overlapped)) {
         std::cout << "Read file returned error: " << GetLastError()
                   << std::endl;

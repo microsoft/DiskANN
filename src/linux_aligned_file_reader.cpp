@@ -1,7 +1,6 @@
 
 #include "linux_aligned_file_reader.h"
 
-
 #include <cassert>
 #include <cstdio>
 #include <iostream>
@@ -110,16 +109,15 @@ LinuxAlignedFileReader::~LinuxAlignedFileReader() {
   }
 }
 
-io_context_t LinuxAlignedFileReader::get_ctx() {
+io_context_t &LinuxAlignedFileReader::get_ctx() {
   std::unique_lock<std::mutex> lk(ctx_mut);
   // perform checks only in DEBUG mode
   if (ctx_map.find(std::this_thread::get_id()) == ctx_map.end()) {
     std::cerr << "bad thread access; returning -1 as io_context_t" << std::endl;
-    return (io_context_t) -1;
+    return this->bad_ctx;
   } else {
     return ctx_map[std::this_thread::get_id()];
   }
-  lk.unlock();
 }
 
 void LinuxAlignedFileReader::register_thread() {

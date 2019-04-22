@@ -71,7 +71,7 @@ namespace NSG {
       delete pq_table;
     }
     reader->close();
-	delete reader;
+    delete reader;
   }
 
   void PQFlashNSG::cache_bfs_levels(_u64 nlevels) {
@@ -94,7 +94,7 @@ namespace NSG {
       cur_level->clear();
 
       // read in all pre_level nhoods
-      std::vector<AlignedRead>             read_reqs;
+      std::vector<AlignedRead> read_reqs;
       std::vector<std::pair<_u64, char *>> nhoods;
 
       for (const unsigned &id : *prev_level) {
@@ -173,8 +173,8 @@ namespace NSG {
     _u64 cur_off = 0;
     for (auto &k_v : nhood_cache) {
       std::pair<_u64, unsigned *> &val = nhood_cache[k_v.first];
-      unsigned *&                  ptr = val.second;
-      _u64                         nnbrs = val.first;
+      unsigned *&ptr = val.second;
+      _u64       nnbrs = val.first;
       memcpy(nhood_cache_buf + cur_off, ptr, nnbrs * sizeof(unsigned));
       delete[] ptr;
       ptr = nhood_cache_buf + cur_off;
@@ -238,9 +238,9 @@ namespace NSG {
     // open AlignedFileReader handle to nsg_file
     std::string nsg_fname(nsg_file);
 #ifdef __NSG_WINDOWS__
-	reader = new WindowsAlignedFileReader();
+    reader = new WindowsAlignedFileReader();
 #else
-	reader = new LinuxAlignedFileReader();
+    reader = new LinuxAlignedFileReader();
 #endif
     reader->open(nsg_fname);
 
@@ -335,9 +335,9 @@ namespace NSG {
     _u64 k = 0;
 
     // cleared every iteration
-    std::vector<_u64>                    frontier;
+    std::vector<_u64> frontier;
     std::vector<std::pair<_u64, char *>> frontier_nhoods;
-    std::vector<AlignedRead>             frontier_read_reqs;
+    std::vector<AlignedRead> frontier_read_reqs;
 
     while (k < l_search) {
       _u64 nk = l_search;
@@ -389,11 +389,11 @@ namespace NSG {
           assert(nnbrs < 200);
           unsigned *node_nbrs = (node_buf + 1);
           // issue prefetches
-		  for (_u64 m = 0; m < nnbrs; ++m) {
-			unsigned next_id = node_nbrs[m];
-			_mm_prefetch((char *) data + next_id * n_chunks, 2);
+          for (_u64 m = 0; m < nnbrs; ++m) {
+            unsigned next_id = node_nbrs[m];
+            _mm_prefetch((char *) data + next_id * n_chunks, _MM_HINT_T1);
           }
-		  // process data
+          // process data
           for (_u64 m = 0; m < nnbrs; ++m) {
             unsigned id = node_nbrs[m];
             if (visited.find(id) != visited.end()) {
@@ -450,24 +450,24 @@ namespace NSG {
 
     // scratch space to compute distances between FP32 Query and INT8 data
     float *scratch = query_scratch->aligned_scratch;
-    _mm_prefetch((char*) scratch, 1);
+    _mm_prefetch((char *) scratch, _MM_HINT_T0);
 
     // pointers to buffers for data
     _s8 * data_buf = query_scratch->coord_scratch;
     _u64 &data_buf_idx = query_scratch->coord_idx;
-    _mm_prefetch((char*)data_buf, 2);
+    _mm_prefetch((char *) data_buf, _MM_HINT_T1);
 
     // sector scratch
     char *sector_scratch = query_scratch->sector_scratch;
     _u64 &sector_scratch_idx = query_scratch->sector_idx;
-	
+
     Timer                 query_timer, io_timer;
     std::vector<Neighbor> retset(l_search + 1);
     std::vector<_u64>     init_ids(l_search);
     tsl::robin_set<_u64>  visited(4096);
 
     tsl::robin_map<_u64, _s8 *> fp_coords;
-	
+
     _u64 tmp_l = 0;
     // add each neighbor of medoid
     for (; tmp_l < l_search && tmp_l < medoid_nhood.first; tmp_l++) {
@@ -499,9 +499,9 @@ namespace NSG {
     _u64 k = 0;
 
     // cleared every iteration
-    std::vector<_u64>                    frontier;
+    std::vector<_u64> frontier;
     std::vector<std::pair<_u64, char *>> frontier_nhoods;
-    std::vector<AlignedRead>             frontier_read_reqs;
+    std::vector<AlignedRead> frontier_read_reqs;
     std::vector<std::pair<_u64, std::pair<_u64, unsigned *>>> cached_nhoods;
 
     while (k < l_search) {
@@ -582,9 +582,9 @@ namespace NSG {
           // issue prefetches
           for (_u64 m = 0; m < nnbrs; ++m) {
             unsigned next_id = node_nbrs[m];
-            _mm_prefetch((char *) data + next_id * n_chunks, 2);
+            _mm_prefetch((char *) data + next_id * n_chunks, _MM_HINT_T1);
           }
-		  // process prefetch-ed nhood
+          // process prefetch-ed nhood
           for (_u64 m = 0; m < nnbrs; ++m) {
             unsigned id = node_nbrs[m];
             if (visited.find(id) != visited.end()) {
@@ -620,9 +620,9 @@ namespace NSG {
           // issue prefetches
           for (_u64 m = 0; m < nnbrs; ++m) {
             unsigned next_id = node_nbrs[m];
-            _mm_prefetch((char *) data + next_id * n_chunks, 2);
+            _mm_prefetch((char *) data + next_id * n_chunks, _MM_HINT_T1);
           }
-		  // process prefetched nhood
+          // process prefetched nhood
           for (_u64 m = 0; m < nnbrs; ++m) {
             unsigned id = node_nbrs[m];
             if (visited.find(id) != visited.end()) {
@@ -657,8 +657,8 @@ namespace NSG {
       else
         ++k;
     }
-	// prefetch coords backing buf
-    _mm_prefetch((char*)data_buf, 2);
+    // prefetch coords backing buf
+    _mm_prefetch((char *) data_buf, _MM_HINT_T1);
     // RE-RANKING STEP
     for (_u64 i = 0; i < l_search; i++) {
       _u64 idx = retset[i].id;

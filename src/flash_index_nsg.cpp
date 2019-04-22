@@ -1,6 +1,7 @@
 #include "efanna2e/flash_index_nsg.h"
 #include <malloc.h>
 #include "efanna2e/index.h"
+#include "linux_aligned_file_reader.h"
 
 #include <omp.h>
 #include <chrono>
@@ -54,7 +55,8 @@ namespace NSG {
     for (auto &k_v : nhood_cache) {
       delete[] k_v.second.second;
     }
-    reader.close();
+    reader->close();
+    delete reader;
   }
 
   void FlashNSG::cache_bfs_levels(_u64 nlevels) {
@@ -103,7 +105,7 @@ namespace NSG {
       }
 
       // issue read requests
-      reader.read(read_reqs);
+      reader->read(read_reqs);
 
       // process each nhood buf
       // TODO:: cache all nhoods in each sector instead of just one
@@ -167,7 +169,8 @@ namespace NSG {
 
     // open AlignedFileReader handle to nsg_file
     std::string nsg_fname(nsg_file);
-    reader.open(nsg_fname);
+    reader = new LinuxAlignedFileReader();
+    reader->open(nsg_fname);
 
     // read medoid nhood
     char *medoid_buf = nullptr;
@@ -177,7 +180,7 @@ namespace NSG {
     medoid_read[0].len = SECTOR_LEN;
     medoid_read[0].buf = medoid_buf;
     medoid_read[0].offset = NHOOD_SECTOR_START(medoid);
-    reader.read(medoid_read);
+    reader->read(medoid_read);
 
     unsigned *medoid_nhood_buf = NHOOD_SECTOR_OFFSET(medoid_buf, medoid);
     medoid_nhood.first = *(unsigned *) (medoid_nhood_buf);
@@ -276,7 +279,7 @@ namespace NSG {
           }
         }
         io_timer.reset();
-        reader.read(frontier_read_reqs);
+        reader->read(frontier_read_reqs);
         if (stats != nullptr) {
           stats->io_us += io_timer.elapsed();
         }
@@ -425,7 +428,7 @@ namespace NSG {
           }
         }
         io_timer.reset();
-        reader.read(frontier_read_reqs);
+        reader->read(frontier_read_reqs);
         if (stats != nullptr) {
           stats->io_us += io_timer.elapsed();
         }

@@ -5,7 +5,7 @@
   #include <libaio.h>
   #include <unistd.h>
   #include <fcntl.h>
-  typedef io_context_t Context;
+  typedef io_context_t IOContext;
 #else
   #include <Windows.h>
   #include <minwinbase.h>
@@ -54,7 +54,7 @@ class AlignedFileReader {
     // returns (io_context_t)(-1) if thread is not registered
     virtual IOContext& get_ctx() = 0;
   
-	virtual ~AlignedFileReader() = 0 {};
+	virtual ~AlignedFileReader() = 0;
 
     // register thread-id for a context
     virtual void register_thread() = 0;

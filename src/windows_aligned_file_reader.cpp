@@ -1,3 +1,4 @@
+#ifdef __NSG_WINDOWS__
 #include "windows_aligned_file_reader.h"
 #include <iostream>
 #include "efanna2e/util.h"
@@ -74,12 +75,12 @@ void WindowsAlignedFileReader::read(std::vector<AlignedRead>& read_reqs) {
       memset(&os, 0, sizeof(os));
       // os.hEvent = evt;
 
-	  /*
-      if (ResetEvent(os.hEvent) == 0) {
-        std::cerr << "ResetEvent failed\n";
-        exit(-3);
-      }
-	  */
+      /*
+        if (ResetEvent(os.hEvent) == 0) {
+          std::cerr << "ResetEvent failed\n";
+          exit(-3);
+        }
+      */
     }
 
     // batch start/end
@@ -117,7 +118,8 @@ void WindowsAlignedFileReader::read(std::vector<AlignedRead>& read_reqs) {
     ULONG_PTR   completion_key = 0;
     OVERLAPPED* lp_os;
     while (n_complete < batch_size) {
-      if (GetQueuedCompletionStatus(ctx.iocp, &n_read, &completion_key, &lp_os, INFINITE) != 0) {
+      if (GetQueuedCompletionStatus(ctx.iocp, &n_read, &completion_key, &lp_os,
+                                    INFINITE) != 0) {
         // successfully dequeued a completed I/O
         n_complete++;
       } else {
@@ -128,7 +130,7 @@ void WindowsAlignedFileReader::read(std::vector<AlignedRead>& read_reqs) {
             std::cerr << "GetQueuedCompletionStatus() failed with error = "
                       << error << "\n";
             exit(-4);
-		  }
+          }
           // no completion packet dequeued ==> sleep for 5us and try again
           std::this_thread::sleep_for(5us);
         } else {
@@ -142,3 +144,4 @@ void WindowsAlignedFileReader::read(std::vector<AlignedRead>& read_reqs) {
     }
   }
 }
+#endif

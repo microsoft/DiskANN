@@ -1,5 +1,5 @@
 #pragma once
-
+#ifdef __NSG_WINDOWS__
 #include <Windows.h>
 #include <fcntl.h>
 #include <malloc.h>
@@ -11,17 +11,11 @@
 #include "aligned_file_reader.h"
 #include "efanna2e/util.h"
 #include "tsl/robin_map.h"
-
-
-
 class WindowsAlignedFileReader : public AlignedFileReader {
-
   private:
     uint64_t            file_sz;
     std::wstring        filename;
-
  public:
-
 
   WindowsAlignedFileReader(){};
   ~WindowsAlignedFileReader(){};
@@ -39,3 +33,4 @@ class WindowsAlignedFileReader : public AlignedFileReader {
   // NOTE :: blocking call for the calling thread, but can thread-safe
   void read(std::vector<AlignedRead> &read_reqs);
 };
+#endif

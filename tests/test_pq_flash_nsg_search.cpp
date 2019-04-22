@@ -17,7 +17,7 @@ void load_data(char* filename, float*& data, unsigned& num,
   in.read((char*) &dim, 4);
   in.seekg(0, std::ios::end);
   std::ios::pos_type ss = in.tellg();
-  size_t fsize = (size_t) ss;
+  size_t             fsize = (size_t) ss;
   num = (unsigned) (fsize / (dim + 1) / 4);
   data = (float*) malloc((size_t) num * (size_t) dim * sizeof(float));
 
@@ -60,8 +60,7 @@ int main(int argc, char** argv) {
   std::cout << "main --- tid: " << std::this_thread::get_id() << std::endl;
   // index.reader.register_thread();
   std::cout << "Loading index from " << argv[1] << std::endl;
-  index.load(argv[1], argv[6], argv[2], chunk_size,
-                                  n_chunks, data_dim);
+  index.load(argv[1], argv[6], argv[2], chunk_size, n_chunks, data_dim);
 
   // load queries
   float*   query_load = NULL;
@@ -88,11 +87,11 @@ int main(int argc, char** argv) {
 
   std::vector<std::vector<unsigned>> res(query_num,
                                          std::vector<unsigned>(k_search));
-  std::atomic<unsigned>              qcounter;
+  std::atomic<unsigned> qcounter;
   qcounter.store(0);
 
   NSG::QueryStats* stats = new NSG::QueryStats[query_num];
-  _u64             n_threads = 16;  //omp_get_max_threads();
+  _u64             n_threads = 16;  // omp_get_max_threads();
   std::cout << "Executing queries on " << n_threads << " threads\n";
   std::vector<NSG::QueryScratch> thread_scratch(n_threads);
   for (auto& scratch : thread_scratch) {
@@ -104,9 +103,9 @@ int main(int argc, char** argv) {
     memset(scratch.aligned_scratch, 0, 256 * sizeof(float));
   }
 
-  NSG::Timer timer;
+  NSG::Timer        timer;
   std::vector<bool> has_inits(n_threads, false);
-#pragma omp parallel for schedule(dynamic, 1) num_threads(n_threads)
+#pragma omp         parallel for schedule(dynamic, 1) num_threads(n_threads)
   for (_s64 i = 0; i < query_num; i++) {
     unsigned val = qcounter.fetch_add(1);
     if (val % 1000 == 0) {
@@ -120,8 +119,8 @@ int main(int argc, char** argv) {
     local_scratch->coord_idx = 0;
     local_scratch->sector_idx = 0;
 
-	// init if not init yet
-	if (!has_inits[thread_no]) {
+    // init if not init yet
+    if (!has_inits[thread_no]) {
       index.reader->register_thread();
 #pragma omp critical
       std::cout << "Init complete for thread-" << omp_get_thread_num()
