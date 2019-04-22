@@ -8,7 +8,7 @@
 #ifdef __NSG_WINDOWS__
 #include <intrin.h>
 #else
-#include <xmmintrin.h>
+#include <immintrin.h>
 #endif
 #include <iostream>
 

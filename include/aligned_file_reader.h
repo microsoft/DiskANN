@@ -54,7 +54,7 @@ class AlignedFileReader {
     // returns (io_context_t)(-1) if thread is not registered
     virtual IOContext& get_ctx() = 0;
   
-	virtual ~AlignedFileReader() = 0;
+	  virtual ~AlignedFileReader() {};
 
     // register thread-id for a context
     virtual void register_thread() = 0;

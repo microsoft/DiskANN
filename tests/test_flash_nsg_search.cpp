@@ -58,7 +58,7 @@ int main(int argc, char** argv) {
   NSG::DistanceL2 dist_cmp;
   NSG::FlashNSG   index(&dist_cmp);
   std::cout << "main --- tid: " << std::this_thread::get_id() << std::endl;
-  index.reader.register_thread();
+  index.reader->register_thread();
   index.load(argv[1], argv[2]);
 
   // load queries
@@ -101,7 +101,7 @@ int main(int argc, char** argv) {
     if (!has_init) {
 #pragma omp critical
       {
-        index.reader.register_thread();
+        index.reader->register_thread();
         std::cout << "Init complete for thread-" << omp_get_thread_num()
                   << std::endl;
         has_init = true;
