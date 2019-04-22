@@ -243,6 +243,7 @@ namespace NSG {
     reader = new LinuxAlignedFileReader();
 #endif
     reader->open(nsg_fname);
+    reader->register_thread();
 
     // read medoid nhood
     char *medoid_buf = nullptr;
