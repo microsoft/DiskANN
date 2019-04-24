@@ -42,11 +42,11 @@ void save_result(char* filename, std::vector<std::vector<unsigned>>& results) {
 }
 
 int main(int argc, char** argv) {
-  if (argc != 13) {
+  if (argc != 14) {
     std::cout << argv[0]
               << " data_bin[1] pq_tables_bin[2] n_chunks[3] chunk_size[4] "
                  "data_dim[5] nsg_disk_opt[6] query_file_fvecs[7] search_L[8] "
-                 "search_K[9] result_path[10] BeamWidth[11] cache_nlevels[12]"
+                 "search_K[9] result_path[10] BeamWidth[11] cache_nlevels[12] nthreads[13]"
               << std::endl;
     exit(-1);
   }
@@ -91,7 +91,8 @@ int main(int argc, char** argv) {
   qcounter.store(0);
 
   NSG::QueryStats* stats = new NSG::QueryStats[query_num];
-  _u64             n_threads = omp_get_max_threads();
+  // _u64             n_threads = omp_get_max_threads();
+  _u64             n_threads = (_u64) atoi(argv[13]);
   std::cout << "Executing queries on " << n_threads << " threads\n";
   std::vector<NSG::QueryScratch> thread_scratch(n_threads);
   for (auto& scratch : thread_scratch) {
