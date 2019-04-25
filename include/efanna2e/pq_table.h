@@ -15,6 +15,7 @@ namespace NSG {
     _u64   n_chunks;    // n_chunks = # of chunks ndims is split into
     _u64   chunk_size;  // chunk_size = chunk size of each dimension chunk
     _u64   ndims;       // ndims = chunk_size * n_chunks
+    float* tables_T;    // same as pq_tables, but col-major
    public:
     FixedChunkPQTable(_u64 nchunks, _u64 chunksize)
         : n_chunks(nchunks), chunk_size(chunksize) {
@@ -22,6 +23,7 @@ namespace NSG {
 
     ~FixedChunkPQTable() {
       delete[] tables;
+      delete[] tables_T;
     }
 
     void load_bin(const char* filename) override {
@@ -32,6 +34,13 @@ namespace NSG {
                 << ", # dims: " << ndims_u32 << std::endl;
       ndims = n_chunks * chunk_size;
       assert((_u64) ndims_u32 == n_chunks * chunk_size);
+      // alloc and compute transpose
+      tables_T = new float[256 * ndims_u32];
+      for (_u64 i = 0; i < 256; i++) {
+        for (_u64 j = 0; j < ndims_u32; j++) {
+          tables_T[j * 256 + i] = tables[i * ndims_u32 + j];
+        }
+      }
     }
 
     // in_vec = _u8 * [n_chunks]
@@ -65,6 +74,23 @@ namespace NSG {
             for (_u64 i = 0; i < chunk_size; i++) {
               *(chunk_out + i) = *(vals + i);
             }
+        }
+      }
+    }
+
+    void populate_chunk_distances(const float* query_vec, float* dist_vec) {
+      memset(dist_vec, 0, 256 * n_chunks * sizeof(float));
+      // chunk wise distance computation
+      for (_u64 chunk = 0; chunk < n_chunks; chunk++) {
+        // sum (q-c)^2 for the dimensions associated with this chunk
+        float* chunk_dists = dist_vec + (256 * chunk);
+        for (_u64 j = 0; j < chunk_size; j++) {
+          _u64         dim_no = (chunk * chunk_size) + j;
+          const float* centers_dim_vec = tables_T + (256 * dim_no);
+          for (_u64 idx = 0; idx < 256; idx++) {
+            float diff = centers_dim_vec[idx] - query_vec[dim_no];
+            chunk_dists[idx] += (diff * diff);
+          }
         }
       }
     }

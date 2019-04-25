@@ -50,6 +50,26 @@ namespace {
       float_coords[idx] = (float) int8_coords[idx];
     }
   }
+
+  void aggregate_coords(const unsigned *ids, const _u64 n_ids,
+                        const _u8 *all_coords, const _u64 ndims, _u8 *out) {
+    for (_u64 i = 0; i < n_ids; i++) {
+      memcpy(out + i * ndims, all_coords + ids[i] * ndims, ndims * sizeof(_u8));
+    }
+  }
+
+  void pq_dist_lookup(const _u8 *pq_ids, const _u64 n_pts,
+                      const _u64 pq_nchunks, const float *pq_dists,
+                      float *dists_out) {
+    memset(dists_out, 0, n_pts * sizeof(float));
+    for (_u64 chunk = 0; chunk < pq_nchunks; chunk++) {
+      const float *chunk_dists = pq_dists + 256 * chunk;
+      for (_u64 idx = 0; idx < n_pts; idx++) {
+        _u8 pq_centerid = pq_ids[pq_nchunks * idx + chunk];
+        dists_out[idx] += chunk_dists[pq_centerid];
+      }
+    }
+  }
 }  // namespace
 
 namespace NSG {
@@ -462,6 +482,24 @@ namespace NSG {
     char *sector_scratch = query_scratch->sector_scratch;
     _u64 &sector_scratch_idx = query_scratch->sector_idx;
 
+#ifdef USE_ACCELERATED_PQ
+    // query <-> PQ chunk centers distances
+    float *pq_dists = query_scratch->aligned_pqtable_dist_scratch;
+    pq_table->populate_chunk_distances(query, pq_dists);
+
+    // query <-> neighbor list
+    float *dist_scratch = query_scratch->aligned_dist_scratch;
+    _u8 *  pq_coord_scratch = query_scratch->aligned_pq_coord_scratch;
+
+    // lambda to batch compute query<-> node distances in PQ space
+    auto compute_dists = [this, pq_coord_scratch, pq_dists](
+        const unsigned *ids, const _u64 n_ids, float *dists_out) {
+      ::aggregate_coords(ids, n_ids, this->data, this->n_chunks,
+                         pq_coord_scratch);
+      ::pq_dist_lookup(pq_coord_scratch, n_ids, this->n_chunks, pq_dists,
+                       dists_out);
+    };
+#endif
     Timer                 query_timer, io_timer;
     std::vector<Neighbor> retset(l_search + 1);
     std::vector<_u64>     init_ids(l_search);
@@ -469,14 +507,22 @@ namespace NSG {
 
     tsl::robin_map<_u64, _s8 *> fp_coords;
 
+// compute medoid nhood <-> query distances
+#ifdef USE_ACCELERATED_PQ
+    compute_dists(medoid_nhood.second, medoid_nhood.first, dist_scratch);
+#endif
     _u64 tmp_l = 0;
     // add each neighbor of medoid
     for (; tmp_l < l_search && tmp_l < medoid_nhood.first; tmp_l++) {
       _u64 id = medoid_nhood.second[tmp_l];
       init_ids[tmp_l] = id;
       visited.insert(id);
+#ifdef USE_ACCELERATED_PQ
+      float dist = dist_scratch[tmp_l];
+#else
       pq_table->convert(data + id * n_chunks, scratch);
       float dist = dist_cmp->compare(scratch, query, aligned_dim);
+#endif
       // std::cout << "cmp: " << id << ", dist: " << dist << std::endl;
       // std::cerr << "dist: " << dist << std::endl;
       retset[tmp_l] = Neighbor(id, dist, true);
@@ -580,11 +626,16 @@ namespace NSG {
               std::make_pair(frontier_nhood.first, node_fp_coords_copy));
 
           unsigned *node_nbrs = (node_buf + 1);
+#ifdef USE_ACCELERATED_PQ
+          // compute node_nbrs <-> query dist in PQ space
+          compute_dists(node_nbrs, nnbrs, dist_scratch);
+#else
           // issue prefetches
           for (_u64 m = 0; m < nnbrs; ++m) {
             unsigned next_id = node_nbrs[m];
             _mm_prefetch((char *) data + next_id * n_chunks, _MM_HINT_T1);
           }
+#endif
           // process prefetch-ed nhood
           for (_u64 m = 0; m < nnbrs; ++m) {
             unsigned id = node_nbrs[m];
@@ -593,8 +644,12 @@ namespace NSG {
             } else {
               visited.insert(id);
               cmps++;
+#ifdef USE_ACCELERATED_PQ
+              float dist = dist_scratch[m];
+#else
               pq_table->convert(data + id * n_chunks, scratch);
               float dist = dist_cmp->compare(scratch, query, aligned_dim);
+#endif
               // std::cout << "cmp: " << id << ", dist: " << dist << std::endl;
               // std::cerr << "dist: " << dist << std::endl;
               if (stats != nullptr) {
@@ -618,11 +673,16 @@ namespace NSG {
         for (auto &cached_nhood : cached_nhoods) {
           _u64      nnbrs = cached_nhood.second.first;
           unsigned *node_nbrs = cached_nhood.second.second;
+#ifdef USE_ACCELERATED_PQ
+          // compute node_nbrs <-> query dists in PQ space
+          compute_dists(node_nbrs, nnbrs, dist_scratch);
+#else
           // issue prefetches
           for (_u64 m = 0; m < nnbrs; ++m) {
             unsigned next_id = node_nbrs[m];
             _mm_prefetch((char *) data + next_id * n_chunks, _MM_HINT_T1);
           }
+#endif
           // process prefetched nhood
           for (_u64 m = 0; m < nnbrs; ++m) {
             unsigned id = node_nbrs[m];
@@ -631,8 +691,12 @@ namespace NSG {
             } else {
               visited.insert(id);
               cmps++;
+#ifdef USE_ACCELERATED_PQ
+              float dist = dist_scratch[m];
+#else
               pq_table->convert(data + id * n_chunks, scratch);
               float dist = dist_cmp->compare(scratch, query, aligned_dim);
+#endif
               // std::cout << "cmp: " << id << ", dist: " << dist << std::endl;
               // std::cerr << "dist: " << dist << std::endl;
               if (stats != nullptr) {

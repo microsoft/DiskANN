@@ -26,6 +26,11 @@ namespace NSG {
     _u64 sector_idx = 0;  // index of next [SECTOR_LEN] scratch to use
 
     float *aligned_scratch = nullptr;  // MUST BE AT LEAST [aligned_dim]
+    float *aligned_pqtable_dist_scratch =
+        nullptr;                            // MUST BE AT LEAST [256 * NCHUNKS]
+    float *aligned_dist_scratch = nullptr;  // MUST BE AT LEAST NSG MAX_DEGREE
+    _u8 *  aligned_pq_coord_scratch =
+        nullptr;  // MUST BE AT LEAST  [N_CHUNKS * MAX_DEGREE]
   };
 
   class PQFlashNSG {

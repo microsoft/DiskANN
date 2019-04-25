@@ -46,7 +46,8 @@ int main(int argc, char** argv) {
     std::cout << argv[0]
               << " data_bin[1] pq_tables_bin[2] n_chunks[3] chunk_size[4] "
                  "data_dim[5] nsg_disk_opt[6] query_file_fvecs[7] search_L[8] "
-                 "search_K[9] result_path[10] BeamWidth[11] cache_nlevels[12] nthreads[13]"
+                 "search_K[9] result_path[10] BeamWidth[11] cache_nlevels[12] "
+                 "nthreads[13]"
               << std::endl;
     exit(-1);
   }
@@ -92,7 +93,7 @@ int main(int argc, char** argv) {
 
   NSG::QueryStats* stats = new NSG::QueryStats[query_num];
   // _u64             n_threads = omp_get_max_threads();
-  _u64             n_threads = (_u64) atoi(argv[13]);
+  _u64 n_threads = (_u64) atoi(argv[13]);
   std::cout << "Executing queries on " << n_threads << " threads\n";
   std::vector<NSG::QueryScratch> thread_scratch(n_threads);
   for (auto& scratch : thread_scratch) {
@@ -101,6 +102,12 @@ int main(int argc, char** argv) {
                        MAX_N_SECTOR_READS * SECTOR_LEN, SECTOR_LEN);
     NSG::alloc_aligned((void**) &scratch.aligned_scratch, 256 * sizeof(float),
                        256);
+    NSG::alloc_aligned((void**) &scratch.aligned_pq_coord_scratch,
+                       16384 * sizeof(_u8), 256);
+    NSG::alloc_aligned((void**) &scratch.aligned_pqtable_dist_scratch,
+                       16384 * sizeof(float), 256);
+    NSG::alloc_aligned((void**) &scratch.aligned_dist_scratch,
+                       512 * sizeof(float), 256);
     memset(scratch.aligned_scratch, 0, 256 * sizeof(float));
   }
 
@@ -167,6 +174,9 @@ int main(int argc, char** argv) {
     delete[] scratch.coord_scratch;
     NSG::aligned_free(scratch.sector_scratch);
     NSG::aligned_free(scratch.aligned_scratch);
+    NSG::aligned_free(scratch.aligned_dist_scratch);
+    NSG::aligned_free(scratch.aligned_pq_coord_scratch);
+    NSG::aligned_free(scratch.aligned_pqtable_dist_scratch);
   }
   NSG::aligned_free(query_load);
 
