@@ -168,7 +168,7 @@
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>NDEBUG;_CONSOLE;__NSG_WINDOWS__;%(PreprocessorDefinitions); </PreprocessorDefinitions>
+      <PreprocessorDefinitions>NDEBUG;_CONSOLE;__NSG_WINDOWS__;%(PreprocessorDefinitions); USE_AVX2;USE_ACCELERATED_PQ</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <PrecompiledHeaderFile>
       </PrecompiledHeaderFile>
@@ -180,7 +180,7 @@
       <FloatingPointExceptions>false</FloatingPointExceptions>
       <AdditionalIncludeDirectories>..\..\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <EnableParallelCodeGeneration>true</EnableParallelCodeGeneration>
-      <EnableEnhancedInstructionSet>AdvancedVectorExtensions</EnableEnhancedInstructionSet>
+      <EnableEnhancedInstructionSet>AdvancedVectorExtensions2</EnableEnhancedInstructionSet>
       <OpenMPSupport>true</OpenMPSupport>
       <ExceptionHandling>false</ExceptionHandling>
       <StructMemberAlignment>16Bytes</StructMemberAlignment>
