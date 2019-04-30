@@ -63,6 +63,31 @@ void read_shard_id_maps(const std::vector<std::string> &    fnames,
   }
 }
 
+void rename_nsgs(std::vector<std::vector<unsigned>> &nsgs, std::vector<std::vector<unsigned>> &id_maps, std::vector<std::vector<_u64>> &node_sizes){
+  node_sizes.resize(nsgs.size());
+  #pragma omp parallel for schedule(dynamic, 1)
+  for(_u64 shard=0;shard < nsgs.size();shard++){
+    // rename medoid
+    auto &nsg = nsgs[shard];
+    auto &id_map = id_maps[shard];
+    auto &node_size = node_sizes[shard];
+    nsg[1] = id_map[nsg[1]];
+    // start going through the nsg
+    _u64 cur_off = 1;
+    while(cur_off < nsg.size()){
+      // obtain nnbrs
+      unsigned nnbrs = nsg[cur_off];
+      cur_off++;
+      node_size.push_back(nnbrs);
+      // rename next nnbrs values
+      for(_u64 j=0;j<nnbrs;j++){
+        nsg[cur_off] = id_map[nsg[cur_off]];
+        cur_off++;
+      }
+    }
+  }
+}
+
 void merge_nsgs(const std::vector<std::vector<unsigned>> &nsgs,
                 const std::vector<std::vector<unsigned>> &id_maps,
                 std::vector<unsigned> &                   final_nsg) {
