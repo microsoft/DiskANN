@@ -46,6 +46,7 @@ add_executable(ivecs_to_bin_u8 ivecs_to_bin_u8.cpp)
 add_executable(quantize quantize.cpp)
 add_executable(read_fvecs read_fvecs.cpp)
 add_executable(nsg_bfs nsg_bfs.cpp)
+add_executable(rename_merge_shards rename_merge_shards.cpp)
 
 # formatter
 add_custom_command(TARGET calc_recall PRE_BUILD COMMAND clang-format-4.0 -i ../../include/efanna2e/*.h ../../src/*.cpp ../../tests/*.cpp)
