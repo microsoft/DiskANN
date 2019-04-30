@@ -22,6 +22,20 @@ void read_nsg(const std::string &fname, std::vector<unsigned> &nsg) {
   reader.close();
 }
 
+void read_bad_ivecs(const std::string &fname, std::vector<unsigned> &ivecs) {
+  _u64 fsize = get_file_size(fname);
+  std::cout << "Reading bad ivecs: " << fname << ", size: " << fsize << "B\n";
+  std::vector<unsigned> local_vec;
+  local_vec.resize(fsize / sizeof(unsigned));
+  std::ifstream reader(fname, std::ios::binary);
+  reader.read((char *) local_vec.data(), fsize);
+  reader.close();
+  ivecs.resize(local_vec.size() / 2);
+ for(_u64 i=0; i < local_vec.size() / 2;i++){
+ ivecs[i] = local_vec[2*i + 1]; 
+}
+}
+
 void read_unsigned_ivecs(const std::string &    fname,
                          std::vector<unsigned> &ivecs) {
   std::ifstream reader(fname, std::ios::binary);
@@ -45,7 +59,7 @@ void read_nsgs(const std::vector<std::string> &    fnames,
 void read_shard_id_maps(const std::vector<std::string> &    fnames,
                         std::vector<std::vector<unsigned>> &id_maps) {
   for (_u64 i = 0; i < fnames.size(); i++) {
-    read_unsigned_ivecs(fnames[i], id_maps[i]);
+    read_bad_ivecs(fnames[i], id_maps[i]);
   }
 }
 
@@ -102,6 +116,7 @@ void merge_nsgs(const std::vector<std::vector<unsigned>> &nsgs,
   for (auto &id_map : id_maps) {
     nnodes += id_map.size();
   }
+  std::cout << "# of nodes: " << nnodes << "\n";
 
   // assign nodes to shards
   std::cout << "Assigning nodes to shards\n";
@@ -112,6 +127,7 @@ void merge_nsgs(const std::vector<std::vector<unsigned>> &nsgs,
               node_shard_id.data() + cur_pos + id_maps[shard].size(), shard);
     cur_pos += id_maps[shard].size();
   }
+  assert(node_shard_id[nshards-1] == nshards-1);
 
   // compute node sizes
   std::cout << "Computing node sizes\n";
@@ -119,7 +135,8 @@ void merge_nsgs(const std::vector<std::vector<unsigned>> &nsgs,
   unsigned *        scan_array = final_nsg.data() + header_size;
   for (_u64 i = 0; i < nnodes; i++) {
     node_sizes[i] = *scan_array;
-    scan_array += node_sizes[i];
+    assert(node_sizes[i] <= final_nsg[0]);
+    scan_array += (node_sizes[i] + 1);
   }
 
   // compute node offests in final nsg
@@ -129,16 +146,17 @@ void merge_nsgs(const std::vector<std::vector<unsigned>> &nsgs,
     node_offsets[i] = node_offsets[i - 1] + node_sizes[i - 1];
   }
 
-  std::cout << "Starting node re-name\n";
+  std::cout << "Starting node re-name for nnodes: "<< nnodes << "\n";
   std::atomic<_u64> nnodes_done;
   nnodes_done.store(0);
 #pragma omp parallel for schedule(dynamic, 262144)
   for (_u64 i = 0; i < nnodes; i++) {
-    unsigned *      node_nhood = final_nsg.data() + node_offsets[i];
+    unsigned *      node_nhood = (final_nsg.data() + node_offsets[i] + 1);
     unsigned        nnbrs = node_sizes[i];
     _u64            shard_id = node_shard_id[i];
     const unsigned *shard_id_map = id_maps[shard_id].data();
     for (unsigned nbr = 0; nbr < nnbrs; nbr++) {
+      assert(node_nhood[nbr] <= id_maps[shard_id].size());
       node_nhood[nbr] = shard_id_map[node_nhood[nbr]];
     }
     nnodes_done++;
