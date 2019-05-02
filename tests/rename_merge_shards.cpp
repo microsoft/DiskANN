@@ -140,6 +140,11 @@ int main(int argc, char **argv) {
     nsg_readers[shard].read((char *) &nnbrs, sizeof(unsigned));
     nsg_readers[shard].read((char *) nhood, nnbrs * sizeof(unsigned));
 
+    // rename nodes
+    for(_u64 j=0;j<nnbrs;j++){
+      nhood[j] = idmaps[shard][nhood[j]];
+    }
+
     // write into merged ofstream
     nsg_writer.write((char *) &nnbrs, sizeof(unsigned));
     nsg_writer.write((char *) nhood, nnbrs * sizeof(unsigned));
