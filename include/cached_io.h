@@ -28,9 +28,7 @@ class cached_ifstream {
     assert(cache_size > 0);
     cache_buf = new char[cache_size];
     reader.read(cache_buf, cache_size);
-    std::cout << "first 4B: " << *(unsigned*) cache_buf
-              << ", next 4B: " << *(unsigned*) (cache_buf + 4);
-	std::cout << "Opened: " << filename.c_str() << ", size: " << fsize
+	  std::cout << "Opened: " << filename.c_str() << ", size: " << fsize
               << ", cache_size: " << cache_size << "\n";
   }
 
