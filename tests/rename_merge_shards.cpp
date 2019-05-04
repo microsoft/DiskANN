@@ -105,9 +105,13 @@ int main(int argc, char **argv) {
     reader.read((char *) &width, sizeof(unsigned));
   }
   nsg_writer.write((char *) &width, sizeof(unsigned));
-  for (auto &reader : nsg_readers) {
+  for (_u64 shard=0;shard < nshards;shard++) {
     unsigned medoid;
-    reader.read((char *) &medoid, sizeof(unsigned));
+    // read medoid
+    nsg_readers[shard].read((char *) &medoid, sizeof(unsigned));
+    // rename medoid
+    medoid = idmaps[shard][medoid];
+    // write renamed medoid
     nsg_writer.write((char *) &medoid, sizeof(unsigned));
   }
 
