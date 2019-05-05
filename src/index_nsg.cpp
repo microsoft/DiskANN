@@ -534,7 +534,7 @@ namespace NSG {
     float    alpha = parameter.Get<float>("alpha");
 
     if (is_inner[q])
-      range = 2 * range;
+      range = 1 * range;
     width = range;
 
     if (!final_graph_[q].empty())
@@ -628,7 +628,7 @@ namespace NSG {
       assert(des.id >= 0 && des.id < nd_);
 
       int   dup = 0;
-      auto  range = is_inner[des.id] ? 2 * base_range : base_range;
+      auto  range = is_inner[des.id] ? 1 * base_range : base_range;
       auto &des_pool = final_graph_[des.id];
 
       std::vector<unsigned> graph_copy;
@@ -866,13 +866,13 @@ namespace NSG {
           for (unsigned n = start_id; n < end_id; ++n) {
             auto node = hierarchy_vertices[h][n];
             final_graph_[node].clear();
-            final_graph_[node].reserve(is_inner[node] ? 2 * range : range);
+            final_graph_[node].reserve(is_inner[node] ? 1 * range : range);
             assert(!cut_graph_[node].empty());
             for (auto link : cut_graph_[node]) {
               final_graph_[node].push_back(link.id);
               assert(link.id >= 0 && link.id < nd_);
             }
-            assert(final_graph_[node].size() <= is_inner[node] ? 2 * range
+            assert(final_graph_[node].size() <= is_inner[node] ? 1 * range
                                                                : range);
           }
           std::cout << "Copy cut_graph to final_graph completed for (level: "
