@@ -153,6 +153,7 @@
       <ControlFlowGuard>false</ControlFlowGuard>
       <OpenMPSupport>true</OpenMPSupport>
       <AdditionalIncludeDirectories>..\..\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <FavorSizeOrSpeed>Speed</FavorSizeOrSpeed>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
