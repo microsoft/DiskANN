@@ -12,11 +12,11 @@
 #include "tsl/robin_set.h"
 
 #include <fcntl.h>
-#include <sys/mman.h>
 #include <sys/stat.h>
 #include <time.h>
-#include <unistd.h>
+
 #include <cassert>
+#include "MemoryMapper.h"
 
 namespace NSG {
 #define _CONTROL_NUM 100
@@ -86,30 +86,15 @@ namespace NSG {
     std::string inner_file(filename);
     inner_file += ".inner";
 
-    int fd = open(inner_file.c_str(), O_RDONLY);
-    if (fd <= 0) {
-      std::cerr << "Inner vertices file not found" << std::endl;
-      return;
-    }
-    struct stat sb;
-    if (fstat(fd, &sb) != 0) {
-      std::cerr << "Inner vertices file not dound. " << std::endl;
-      return;
-    }
-
-    off_t fileSize = sb.st_size;
-    std::cout << fileSize << std::endl;
-    char *buf = (char *) mmap(NULL, fileSize, PROT_READ, MAP_PRIVATE, fd, 0);
-    if (fileSize != sizeof(bool) * nd_) {
-      std::cout << "ERROR: Inner file size mismatch" << std::endl;
+	NSG::MemoryMapper mapper(inner_file);
+	char *buf = mapper.getBuf();
+    
+	if (mapper.getFileSize() != sizeof(bool) * nd_) {
+      std::cerr << "ERROR: Inner file size mismatch" << std::endl;
       exit(-1);
     }
     std::memcpy((char *) is_inner, buf, nd_ * sizeof(bool));
 
-    if (munmap(buf, fileSize) != 0)
-      std::cerr << "ERROR unmapping. CHECK!" << std::endl;
-    close(fd);
-    //	  ep_ = 0;
     std::cout << "Loaded inner vertices of higher degree" << std::endl;
   }
 
@@ -142,25 +127,13 @@ namespace NSG {
   }
 
   void IndexNSG::Load_nn_graph(const char *filename) {
-    int fd = open(filename, O_RDONLY);
-    if (fd <= 0) {
-      std::cerr << "Data file " << filename << " not found. Program will exit."
-                << std::endl;
-      exit(-1);
-    }
-    struct stat sb;
-    if (fstat(fd, &sb) != 0) {
-      std::cerr << "File load error. CHECK!" << std::endl;
-      exit(-1);
-    }
 
-    off_t fileSize = sb.st_size;
-    std::cout << fileSize << std::endl;
-    char *buf = (char *) mmap(NULL, fileSize, PROT_READ, MAP_PRIVATE, fd, 0);
+	  MemoryMapper mapper(filename);
+	  char *buf = mapper.getBuf();
 
     unsigned k;
     std::memcpy(&k, buf, sizeof(unsigned));
-    size_t num = (fileSize) / ((k + 1) * 4);
+    size_t num = (mapper.getFileSize()) / ((k + 1) * 4);
 
     std::cout << "k is and num is " << k << " " << num << std::endl;
     final_graph_.resize(num);
@@ -168,17 +141,13 @@ namespace NSG {
 
     unsigned kk = (k + 3) / 4 * 4;
 #pragma omp  parallel for schedule(static, 65536)
-    for (size_t i = 0; i < num; i++) {
+    for (int i = 0; i < num; i++) { //GOPAL Changed from "size_t i" to "int i"
       final_graph_[i].resize(k);
       final_graph_[i].reserve(kk);
       char *reader = buf + (i * (k + 1) * sizeof(unsigned));
       std::memcpy(final_graph_[i].data(), reader + sizeof(unsigned),
                   k * sizeof(unsigned));
     }
-    if (munmap(buf, fileSize) != 0)
-      std::cerr << "ERROR unmapping. CHECK!" << std::endl;
-    close(fd);
-    //  ep_ = 0;
     std::cout << "Loaded EFANNA graph. Set ep_ to 0" << std::endl;
   }
 
@@ -195,7 +164,7 @@ namespace NSG {
     size_t nblocks = DIV_ROUND_UP(num_points, PAR_BLOCK_SZ);
 
 #pragma omp parallel for schedule(static, 1)
-    for (size_t block = 0; block < nblocks; ++block) {
+    for (int block = 0; block < nblocks; ++block) { //GOPAL Changed from "size_t block" to "int block"
       std::random_device rd;
       size_t             x = rd();
       std::mt19937       gen(x);
@@ -372,8 +341,8 @@ namespace NSG {
 
       // select candidates
       for (auto id : *prev_level) {
-        max_deg = std::max(max_deg, nsg[id].size());
-        min_deg = std::min(min_deg, nsg[id].size());
+        max_deg = (std::max)(max_deg, nsg[id].size());
+        min_deg = (std::min)(min_deg, nsg[id].size());
         sum_deg += nsg[id].size();
 
         for (const auto &nbr : nsg[id]) {
@@ -498,7 +467,7 @@ namespace NSG {
     // compute all to one distance
     float * distances = new float[nd_]();
 #pragma omp parallel for schedule(static, 65536)
-    for (size_t i = 0; i < nd_; i++) {
+    for (int i = 0; i < nd_; i++) {  //GOPAL Changed from "size_t i" to "int i"
       // extract point and distance reference
       float &      dist = distances[i];
       const float *cur_vec = data_ + (i * (size_t) dimension_);
@@ -584,7 +553,7 @@ namespace NSG {
         auto &p = pool[start2];
         bool  occlude = false;
         for (unsigned t = 0; t < result2.size(); t++) {
-          if (p.id == result[t].id) {
+          if (p.id == result2[t].id) { //GOPAL. Changed from result[t].id to result2[t].id
             occlude = true;
             break;
           }
@@ -803,7 +772,7 @@ namespace NSG {
     auto                    cut_graph_ = new vecNgh[nd_];
     //    unsigned                NUM_RNDS = 2;
     unsigned NUM_RNDS = OUTER_NUM_RNDS;
-    float    last_alpha = std::max((float) 1.2, outer_alpha);
+    float    last_alpha = (std::max)((float) 1.2, outer_alpha);
 
     for (uint32_t h = 0; h < NUM_HIER; h++) {
       std::cout << "Processing level " << h << " with " << size_hierarchy[h]
@@ -823,14 +792,14 @@ namespace NSG {
           parameters.Set<float>("alpha", last_alpha);
 
         if ((h == NUM_HIER - 1) && (rnd_no == NUM_RNDS - 1))
-          parameters.Set<unsigned>("L", (unsigned) std::min((int) L, (int) 50));
+          parameters.Set<unsigned>("L", (unsigned) (std::min)((int) L, (int) 50));
 
         size_t round_size = DIV_ROUND_UP(size_hierarchy[h], NUM_SYNCS - 1) - 1;
 
         for (uint32_t sync_no = 0; sync_no < NUM_SYNCS; sync_no++) {
           size_t start_id = sync_no * round_size;
           size_t end_id =
-              std::min(size_hierarchy[h], (sync_no + 1) * round_size);
+              (std::min)(size_hierarchy[h], (sync_no + 1) * round_size);
           size_t round_size = end_id - start_id;
           std::cout << "Round start: " << start_id << "  end: " << end_id
                     << std::endl;
@@ -839,14 +808,14 @@ namespace NSG {
               round_size > 1 << 20 ? 1 << 12 : (round_size + 64) / 64;
           size_t nblocks = DIV_ROUND_UP(round_size, PAR_BLOCK_SZ);
 
-#pragma omp parallel for schedule(static, 1)
-          for (size_t block = 0; block < nblocks; ++block) {
+#pragma omp parallel for schedule(static, 1) 
+          for (int block = 0; block < nblocks; ++block) { //GOPAL Changed from "size_t block" to "int block"
             std::vector<Neighbor>    pool, tmp;
             tsl::robin_set<unsigned> visited;
 
             for (size_t n = start_id + block * PAR_BLOCK_SZ;
                  n <
-                 start_id + std::min(round_size, (block + 1) * PAR_BLOCK_SZ);
+                 start_id + (std::min)(round_size, (block + 1) * PAR_BLOCK_SZ);
                  ++n) {
               pool.clear();
               tmp.clear();
@@ -863,7 +832,7 @@ namespace NSG {
                     << ", round: " << sync_no << ")" << std::endl;
 
 #pragma omp parallel for schedule(static, PAR_BLOCK_SZ)
-          for (unsigned n = start_id; n < end_id; ++n) {
+          for (int n = start_id; n < end_id; ++n) { //GOPAL Changed from "unsigned n" to "int n"
             auto node = hierarchy_vertices[h][n];
             final_graph_[node].clear();
             final_graph_[node].reserve(is_inner[node] ? 2 * range : range);
@@ -879,7 +848,7 @@ namespace NSG {
                     << h << ", round: " << sync_no << ")" << std::endl;
 
 #pragma omp parallel for schedule(static, PAR_BLOCK_SZ)
-          for (unsigned n = start_id; n < end_id; ++n) {
+          for (int n = start_id; n < end_id; ++n) {			//GOPAL Changed from "unsigned n" to "int n"
             InterInsertHierarchy(hierarchy_vertices[h][n], locks, cut_graph_,
                                  parameters);
           }
@@ -887,7 +856,7 @@ namespace NSG {
                     << ", round: " << sync_no << ")" << std::endl;
 
 #pragma omp parallel for schedule(static, PAR_BLOCK_SZ)
-          for (unsigned n = start_id; n < end_id; ++n) {
+          for (int n = start_id; n < end_id; ++n) {		//GOPAL Changed from "unsigned n" to "int n"
             auto node = hierarchy_vertices[h][n];
             assert(!cut_graph_[node].empty());
             cut_graph_[node].clear();
@@ -950,8 +919,8 @@ namespace NSG {
     size_t max = 0, min = 1 << 30, total = 0, cnt = 0;
     for (size_t i = 0; i < nd_; i++) {
       auto &pool = final_graph_[i];
-      max = std::max(max, pool.size());
-      min = std::min(min, pool.size());
+      max = (std::max)(max, pool.size());
+      min = (std::min)(min, pool.size());
       total += pool.size();
       if (pool.size() < 2)
         cnt++;
@@ -960,7 +929,7 @@ namespace NSG {
               << "  avg:" << (float) total / (float) nd_ << "  min:" << min
               << "  count(deg<2):" << cnt << "\n";
 
-    width = std::max((unsigned) max, width);
+    width = (std::max)((unsigned) max, width);
     has_built = true;
   }
 
