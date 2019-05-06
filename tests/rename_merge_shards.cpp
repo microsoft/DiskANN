@@ -96,22 +96,21 @@ int main(int argc, char **argv) {
   std::cout << "# nodes: " << nnodes << "\n";
 
   // compute inverse map: node -> shards
-  std::vector<std::vector<uint8_t>> node_shard_map(nnodes,
-                                                   std::vector<uint8_t>());
+  std::vector<std::pair<unsigned, unsigned>> node_shard;
+  node_shard.reserve(nelems);
   for (_u64 shard = 0; shard < nshards; shard++) {
 #pragma omp parallel for num_threads(16)
     for (_u64 idx = 0; idx < idmaps[shard].size(); idx++) {
       _u64 node_id = idmaps[shard][idx];
-      node_shard_map[node_id].push_back(shard);
+      node_shard.push_back(std::make_pair(node_id, shard));
     }
   }
+  std::sort(node_shard.begin(), node_shard.end(),
+            [](const auto &left, const auto &right) {
+              return left.first < right.first ||
+                     (left.first == right.first && left.second < right.second);
+            });
   std::cout << "Finished computing node -> shards map\n";
-
-  // compute replication factor
-  _u64 rep_factor = 1;
-  for (auto &map : node_shard_map) {
-    rep_factor = std::max(rep_factor, (_u64) map.size());
-  }
 
   // create cached nsg readers
   std::vector<cached_ifstream> nsg_readers(nshards);
@@ -128,8 +127,11 @@ int main(int argc, char **argv) {
   for (auto &reader : nsg_readers) {
     reader.read((char *) &width, sizeof(unsigned));
   }
+
+  _u64 rep_factor = (_u64)(std::round((float) nelems / (float) nnodes));
   std::cout << "Input width: " << width
             << ", output width: " << width * rep_factor << "\n";
+
   width *= rep_factor;
   nsg_writer.write((char *) &width, sizeof(unsigned));
   for (_u64 shard = 0; shard < nshards; shard++) {
@@ -139,43 +141,45 @@ int main(int argc, char **argv) {
     // rename medoid
     medoid = idmaps[shard][medoid];
     // write renamed medoid
-    //if (shard == (nshards - 1)) --> only uncomment if running hierarchical merge
+    // if (shard == (nshards - 1)) --> only uncomment if running hierarchical
+    // merge
     nsg_writer.write((char *) &medoid, sizeof(unsigned));
   }
 
   std::cout << "Starting merge\n";
   unsigned *nhood = new unsigned[32768];
-  unsigned  nnbrs, shard_nnbrs;
-  unsigned  id = 0;
-  for (const auto &map : node_shard_map) {
-    nnbrs = 0;
-    // read all nbrs of shard
-    for (const auto &shard_id : map) {
-      unsigned *shard_nhood = nhood + nnbrs;
-      // read from shard_id ifstream
-      nsg_readers[shard_id].read((char *) &shard_nnbrs, sizeof(unsigned));
-      nsg_readers[shard_id].read((char *) shard_nhood,
-                                 shard_nnbrs * sizeof(unsigned));
+  unsigned *shard_nhood = nhood;
 
-      // rename nodes
-      for (_u64 j = 0; j < shard_nnbrs; j++) {
-        shard_nhood[j] = idmaps[shard_id][shard_nhood[j]];
+  unsigned nnbrs, shard_nnbrs;
+  unsigned cur_id = 0;
+  for (const auto &id_shard : node_shard) {
+    unsigned node_id = id_shard.first;
+    unsigned shard_id = id_shard.second;
+    if (cur_id < node_id) {
+      cur_id = node_id;
+      nnbrs = 0;
+      shard_nhood = nhood;
+      // write into merged ofstream
+      nsg_writer.write((char *) &nnbrs, sizeof(unsigned));
+      nsg_writer.write((char *) nhood, nnbrs * sizeof(unsigned));
+      if (cur_id % 999999 == 1) {
+        std::cout << "Finished merging " << cur_id << " nodes\n";
       }
-
-      nnbrs += shard_nnbrs;
     }
-    
-    // sort nhood
-    std::sort(nhood, nhood + nnbrs);
+    // read from shard_id ifstream
+    nsg_readers[shard_id].read((char *) &shard_nnbrs, sizeof(unsigned));
+    nsg_readers[shard_id].read((char *) shard_nhood,
+                               shard_nnbrs * sizeof(unsigned));
 
-    // write into merged ofstream
-    nsg_writer.write((char *) &nnbrs, sizeof(unsigned));
-    nsg_writer.write((char *) nhood, nnbrs * sizeof(unsigned));
-    if (id % 999999 == 1) {
-      std::cout << "Finished merging " << id << " nodes\n";
+    // rename nodes
+    for (_u64 j = 0; j < shard_nnbrs; j++) {
+      shard_nhood[j] = idmaps[shard_id][shard_nhood[j]];
     }
-    id++;
+
+    nnbrs += shard_nnbrs;
+    shard_nhood += shard_nnbrs;
   }
+  
   std::cout << "Finished merge\n";
   delete[] nhood;
   return 0;
