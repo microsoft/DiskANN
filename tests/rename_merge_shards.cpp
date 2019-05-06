@@ -105,7 +105,7 @@ int main(int argc, char **argv) {
     reader.read((char *) &width, sizeof(unsigned));
   }
   nsg_writer.write((char *) &width, sizeof(unsigned));
-  for (_u64 shard=0;shard < nshards;shard++) {
+  for (_u64 shard = 0; shard < nshards; shard++) {
     unsigned medoid;
     // read medoid
     nsg_readers[shard].read((char *) &medoid, sizeof(unsigned));
@@ -145,7 +145,7 @@ int main(int argc, char **argv) {
     nsg_readers[shard].read((char *) nhood, nnbrs * sizeof(unsigned));
 
     // rename nodes
-    for(_u64 j=0;j<nnbrs;j++){
+    for (_u64 j = 0; j < nnbrs; j++) {
       nhood[j] = idmaps[shard][nhood[j]];
     }
 
