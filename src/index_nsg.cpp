@@ -584,7 +584,7 @@ namespace NSG {
         auto &p = pool[start2];
         bool  occlude = false;
         for (unsigned t = 0; t < result2.size(); t++) {
-          if (p.id == result[t].id) {
+          if (p.id == result2[t].id) {
             occlude = true;
             break;
           }
