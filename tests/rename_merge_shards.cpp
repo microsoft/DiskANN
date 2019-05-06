@@ -101,7 +101,8 @@ int main(int argc, char **argv) {
   for (_u64 shard = 0; shard < nshards; shard++) {
 #pragma omp parallel for num_threads(16)
     for (_u64 idx = 0; idx < idmaps[shard].size(); idx++) {
-      node_shard_map[idx].push_back(shard);
+      _u64 node_id = idmaps[shard][idx];
+      node_shard_map[node_id].push_back(shard);
     }
   }
   std::cout << "Finished computing node -> shards map\n";
@@ -115,12 +116,12 @@ int main(int argc, char **argv) {
   // create cached nsg readers
   std::vector<cached_ifstream> nsg_readers(nshards);
   for (_u64 i = 0; i < nshards; i++) {
-    nsg_readers[i].open(nsg_names[i], 256 * 1048576);
+    nsg_readers[i].open(nsg_names[i], 1024 * 1048576);
   }
 
   // create cached nsg writers
   std::string     final_nsg_name(argv[6]);
-  cached_ofstream nsg_writer(final_nsg_name, 256 * 1048576);
+  cached_ofstream nsg_writer(final_nsg_name, 1024 * 1048576);
 
   unsigned width;
   // read width from each nsg to advance buffer by sizeof(unsigned) bytes
@@ -138,6 +139,7 @@ int main(int argc, char **argv) {
     // rename medoid
     medoid = idmaps[shard][medoid];
     // write renamed medoid
+    //if (shard == (nshards - 1)) --> only uncomment if running hierarchical merge
     nsg_writer.write((char *) &medoid, sizeof(unsigned));
   }
 
