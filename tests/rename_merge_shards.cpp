@@ -64,6 +64,7 @@ int main(int argc, char **argv) {
               << std::endl;
     exit(-1);
   }
+
   _u64                     nshards = (_u64) std::atoi(argv[5]);
   std::vector<std::string> nsg_names(nshards);
   std::vector<std::string> idmaps_names(nshards);
@@ -82,6 +83,35 @@ int main(int argc, char **argv) {
   // read all id maps
   read_shard_id_maps(idmaps_names, idmaps);
 
+  // find max node id
+  _u64 nnodes = 0;
+  _u64 nelems = 0;
+  for (auto &idmap : idmaps) {
+    for (auto &id : idmap) {
+      nnodes = std::max(nnodes, (_u64) id);
+    }
+    nelems += idmap.size();
+  }
+  nnodes++;
+  std::cout << "# nodes: " << nnodes << "\n";
+
+  // compute inverse map: node -> shards
+  std::vector<std::vector<uint8_t>> node_shard_map(nnodes,
+                                                   std::vector<uint8_t>());
+  for (_u64 shard = 0; shard < nshards; shard++) {
+#pragma omp parallel for num_threads(16)
+    for (_u64 idx = 0; idx < idmaps[shard].size(); idx++) {
+      node_shard_map[idx].push_back(shard);
+    }
+  }
+  std::cout << "Finished computing node -> shards map\n";
+
+  // compute replication factor
+  _u64 rep_factor = 1;
+  for (auto &map : node_shard_map) {
+    rep_factor = std::max(rep_factor, (_u64) map.size());
+  }
+
   // create cached nsg readers
   std::vector<cached_ifstream> nsg_readers(nshards);
   for (_u64 i = 0; i < nshards; i++) {
@@ -92,18 +122,14 @@ int main(int argc, char **argv) {
   std::string     final_nsg_name(argv[6]);
   cached_ofstream nsg_writer(final_nsg_name, 256 * 1048576);
 
-  // compute nnodes
-  _u64 nnodes = 0;
-  for (auto &idmap : idmaps) {
-    nnodes += idmap.size();
-  }
-  std::cout << "# nodes : " << nnodes << "\n";
-
   unsigned width;
   // read width from each nsg to advance buffer by sizeof(unsigned) bytes
   for (auto &reader : nsg_readers) {
     reader.read((char *) &width, sizeof(unsigned));
   }
+  std::cout << "Input width: " << width
+            << ", output width: " << width * rep_factor << "\n";
+  width *= rep_factor;
   nsg_writer.write((char *) &width, sizeof(unsigned));
   for (_u64 shard = 0; shard < nshards; shard++) {
     unsigned medoid;
@@ -115,39 +141,30 @@ int main(int argc, char **argv) {
     nsg_writer.write((char *) &medoid, sizeof(unsigned));
   }
 
-  // compute shard ids
-  std::cout << "Computing shard<->id ordering\n";
-  std::vector<std::pair<unsigned, unsigned>> shard_ids;
-  shard_ids.reserve(nnodes);
-  {
-    unsigned shard = 0;
-    for (auto &idmap : idmaps) {
-      for (auto id : idmap) {
-        shard_ids.push_back(std::make_pair(shard, id));
-      }
-      shard++;
-    }
-  }
-  // sort by ids
-  std::sort(shard_ids.begin(), shard_ids.end(),
-            [](const auto &left, const auto &right) {
-              return left.second < right.second;
-            });
   std::cout << "Starting merge\n";
   unsigned *nhood = new unsigned[32768];
-  unsigned  nnbrs;
-  for (const auto &shard_id : shard_ids) {
-    unsigned shard = shard_id.first;
-    unsigned id = shard_id.second;
+  unsigned  nnbrs, shard_nnbrs;
+  unsigned  id = 0;
+  for (const auto &map : node_shard_map) {
+    nnbrs = 0;
+    // read all nbrs of shard
+    for (const auto &shard_id : map) {
+      unsigned *shard_nhood = nhood + nnbrs;
+      // read from shard_id ifstream
+      nsg_readers[shard_id].read((char *) &shard_nnbrs, sizeof(unsigned));
+      nsg_readers[shard_id].read((char *) shard_nhood,
+                                 shard_nnbrs * sizeof(unsigned));
 
-    // read from shard ifstream
-    nsg_readers[shard].read((char *) &nnbrs, sizeof(unsigned));
-    nsg_readers[shard].read((char *) nhood, nnbrs * sizeof(unsigned));
+      // rename nodes
+      for (_u64 j = 0; j < shard_nnbrs; j++) {
+        shard_nhood[j] = idmaps[shard_id][shard_nhood[j]];
+      }
 
-    // rename nodes
-    for (_u64 j = 0; j < nnbrs; j++) {
-      nhood[j] = idmaps[shard][nhood[j]];
+      nnbrs += shard_nnbrs;
     }
+    
+    // sort nhood
+    std::sort(nhood, nhood + nnbrs);
 
     // write into merged ofstream
     nsg_writer.write((char *) &nnbrs, sizeof(unsigned));
@@ -155,7 +172,9 @@ int main(int argc, char **argv) {
     if (id % 999999 == 1) {
       std::cout << "Finished merging " << id << " nodes\n";
     }
+    id++;
   }
   std::cout << "Finished merge\n";
+  delete[] nhood;
   return 0;
 }
