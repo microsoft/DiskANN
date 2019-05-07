@@ -99,7 +99,7 @@ int main(int argc, char **argv) {
   std::vector<std::pair<unsigned, unsigned>> node_shard;
   node_shard.reserve(nelems);
   for (_u64 shard = 0; shard < nshards; shard++) {
-		std::cout << "Creating inverse map -- shard #" << shard << "\n";
+    std::cout << "Creating inverse map -- shard #" << shard << "\n";
     for (_u64 idx = 0; idx < idmaps[shard].size(); idx++) {
       _u64 node_id = idmaps[shard][idx];
       node_shard.push_back(std::make_pair(node_id, shard));
@@ -150,7 +150,7 @@ int main(int argc, char **argv) {
   unsigned *nhood = new unsigned[32768];
   unsigned *shard_nhood = nhood;
 
-  unsigned nnbrs=0, shard_nnbrs;
+  unsigned nnbrs = 0, shard_nnbrs;
   unsigned cur_id = 0;
   for (const auto &id_shard : node_shard) {
     unsigned node_id = id_shard.first;
@@ -162,7 +162,7 @@ int main(int argc, char **argv) {
       if (cur_id % 999999 == 1) {
         std::cout << "Finished merging " << cur_id << " nodes\n";
       }
-cur_id = node_id;
+      cur_id = node_id;
       nnbrs = 0;
       shard_nhood = nhood;
     }
@@ -179,7 +179,7 @@ cur_id = node_id;
     nnbrs += shard_nnbrs;
     shard_nhood += shard_nnbrs;
   }
-  
+
   std::cout << "Finished merge\n";
   delete[] nhood;
   return 0;

@@ -530,11 +530,12 @@ namespace NSG {
                             tsl::robin_set<unsigned> &visited,
                             vecNgh *                  cut_graph_) {
     unsigned range = parameter.Get<unsigned>("R");
+    unsigned inner_range = parameter.Get<unsigned>("innerR");
     unsigned maxc = parameter.Get<unsigned>("C");
     float    alpha = parameter.Get<float>("alpha");
 
     if (is_inner[q])
-      range = 1 * range;
+      range = inner_range;
     width = range;
 
     if (!final_graph_[q].empty())
@@ -620,6 +621,7 @@ namespace NSG {
                                       const Parameters &       parameter) {
     float      alpha = parameter.Get<float>("alpha");
     const auto base_range = parameter.Get<float>("R");
+    unsigned   inner_range = parameter.Get<unsigned>("innerR");
     const auto src_pool = cut_graph_[n];
 
     assert(!src_pool.empty());
@@ -628,7 +630,7 @@ namespace NSG {
       assert(des.id >= 0 && des.id < nd_);
 
       int   dup = 0;
-      auto  range = is_inner[des.id] ? 1 * base_range : base_range;
+      auto  range = is_inner[des.id] ? inner_range : base_range;
       auto &des_pool = final_graph_[des.id];
 
       std::vector<unsigned> graph_copy;
@@ -761,6 +763,7 @@ namespace NSG {
 
     parameters.Set<unsigned>("L", innerL);
     parameters.Set<unsigned>("C", innerC);
+    is_inner[ep_] = true;
 
     parameters.Set<float>("alpha", 1);
 
@@ -775,6 +778,14 @@ namespace NSG {
     std::random_device               rd;
     std::mt19937                     gen(rd());
     std::uniform_real_distribution<> dis(0, 1);
+
+    if (NUM_HIER == 1) {
+      for (size_t i = 0; i < nd_; i++) {
+        float candidate = dis(gen);
+        if (candidate < p_val)
+          is_inner[i] = true;
+      }
+    }
 
     for (int h = NUM_HIER - 2; h >= 0; h--) {
       hierarchy_vertices[h].push_back(ep_);
@@ -823,11 +834,16 @@ namespace NSG {
           parameters.Set<float>("alpha", last_alpha);
 
         if ((h == NUM_HIER - 1) && (rnd_no == NUM_RNDS - 1))
-          parameters.Set<unsigned>("L", (unsigned) std::min((int) L, (int) 50));
+          parameters.Set<unsigned>("L", (unsigned) std::min((int) L, (int) 75));
 
         size_t round_size = DIV_ROUND_UP(size_hierarchy[h], NUM_SYNCS - 1) - 1;
 
-        for (uint32_t sync_no = 0; sync_no < NUM_SYNCS; sync_no++) {
+        for (uint32_t par_sync_no = 0; par_sync_no < NUM_SYNCS; par_sync_no++) {
+          // reverse the order of points for odd round numbers
+          uint32_t sync_no = par_sync_no;
+          //          if (rnd_no % 2 == 1)
+          //            sync_no = (NUM_SYNCS - 1 - par_sync_no);
+
           size_t start_id = sync_no * round_size;
           size_t end_id =
               std::min(size_hierarchy[h], (sync_no + 1) * round_size);
