@@ -38,15 +38,22 @@ namespace NSG {
 
   class DistanceL2 : public Distance {
    public:
-    float compare(const float *a, const float *b, unsigned size) const {
+    float compare(const float *a, const float *b, unsigned size) const
+        __attribute__((hot)) {
+      a = (const float *) __builtin_assume_aligned(a, 32);
+      b = (const float *) __builtin_assume_aligned(b, 32);
       float result = 0;
 #ifdef USE_AVX2
       // assume size is divisible by 8
-      _u64   niters = size / 8;
+      _u16   niters = size / 8;
       __m256 sum = _mm256_setzero_ps();
-      for (_u64 j = 0; j < niters; j++) {
+      for (_u16 j = 0; j < niters; j++) {
         // scope is a[8j:8j+7], b[8j:8j+7]
         // load a_vec
+        if (j < (niters - 1)) {
+          _mm_prefetch((char *) (a + 8 * (j + 1)), _MM_HINT_T0);
+          _mm_prefetch((char *) (b + 8 * (j + 1)), _MM_HINT_T0);
+        }
         __m256 a_vec = _mm256_load_ps(a + 8 * j);
         // load b_vec
         __m256 b_vec = _mm256_load_ps(b + 8 * j);
@@ -65,10 +72,9 @@ namespace NSG {
       // horizontal add sum
       result = _mm256_reduce_add_ps(sum);
 #else
-      // #pragma omp for simd reduction(+ : result)
-      for (unsigned i = 0; i < size; i++) {
-        float temp = (a[i] - b[i]);
-        result += temp * temp;
+#pragma omp simd reduction(+ : result) aligned(a, b : 32)
+      for (_s32 i = 0; i < size; i++) {
+        result += (a[i] - b[i]) * (a[i] - b[i]);
       }
 #endif
       return result;
