@@ -924,7 +924,6 @@ namespace NSG {
       }
     }
 
-
     delete[] cut_graph_;
     delete[] size_hierarchy;
     delete[] hierarchy_vertices;

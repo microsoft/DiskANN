@@ -3,6 +3,7 @@
 #include <cassert>
 #include <fstream>
 #include <iostream>
+#include <parallel/algorithm>
 #include <vector>
 #include "cached_io.h"
 #include "efanna2e/util.h"
@@ -105,11 +106,12 @@ int main(int argc, char **argv) {
       node_shard.push_back(std::make_pair(node_id, shard));
     }
   }
-  std::sort(node_shard.begin(), node_shard.end(),
-            [](const auto &left, const auto &right) {
-              return left.first < right.first ||
-                     (left.first == right.first && left.second < right.second);
-            });
+  __gnu_parallel::sort(
+      node_shard.begin(), node_shard.end(),
+      [](const auto &left, const auto &right) {
+        return left.first < right.first ||
+               (left.first == right.first && left.second < right.second);
+      });
   std::cout << "Finished computing node -> shards map\n";
 
   // create cached nsg readers
