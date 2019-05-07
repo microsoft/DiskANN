@@ -534,9 +534,10 @@ namespace NSG {
     unsigned maxc = parameter.Get<unsigned>("C");
     float    alpha = parameter.Get<float>("alpha");
 
-    if (is_inner[q])
+    if (is_inner[q]) {
       range = inner_range;
-    width = range;
+    }
+    width = std::max(width, range);
 
     if (!final_graph_[q].empty())
       for (auto id : final_graph_[q]) {
@@ -758,6 +759,7 @@ namespace NSG {
     const unsigned range = parameters.Get<unsigned>("R");
     const unsigned C = parameters.Get<unsigned>("C");
     const unsigned innerL = parameters.Get<unsigned>("innerL");
+    const unsigned inner_range = parameters.Get<unsigned>("innerR");
     const unsigned innerC = parameters.Get<unsigned>("innerC");
     float          outer_alpha = parameters.Get<float>("alpha");
 
@@ -882,13 +884,13 @@ namespace NSG {
           for (unsigned n = start_id; n < end_id; ++n) {
             auto node = hierarchy_vertices[h][n];
             final_graph_[node].clear();
-            final_graph_[node].reserve(is_inner[node] ? 1 * range : range);
+            final_graph_[node].reserve(is_inner[node] ? inner_range : range);
             assert(!cut_graph_[node].empty());
             for (auto link : cut_graph_[node]) {
               final_graph_[node].push_back(link.id);
               assert(link.id >= 0 && link.id < nd_);
             }
-            assert(final_graph_[node].size() <= is_inner[node] ? 1 * range
+            assert(final_graph_[node].size() <= is_inner[node] ? inner_range
                                                                : range);
           }
           std::cout << "Copy cut_graph to final_graph completed for (level: "
@@ -921,6 +923,7 @@ namespace NSG {
         // save code ends
       }
     }
+
 
     delete[] cut_graph_;
     delete[] size_hierarchy;
