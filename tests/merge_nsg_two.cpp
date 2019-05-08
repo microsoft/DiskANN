@@ -182,13 +182,14 @@ int main(int argc, char** argv) {
   size_t   dim;
   unsigned tmp_dim;
 
+  size_t num_pts_in_base = 0;
   //#pragma omp parallel for schedule(dynamic, 1)
   for (size_t i = 0; i < num_shards; i++) {
     std::string cur_nsg_file = nsg_prefix + std::to_string(i) + nsg_suffix;
     nsgs[i] = load_nsg(cur_nsg_file.c_str(), widths[i], eps[i]);
     std::string cur_renaming_file =
         base_prefix + std::to_string(i) + "_ids.ivecs";
-    std::string cur_base_file = base_prefix + std::to_string(i) + ".fvecs";
+ //   std::string cur_base_file = base_prefix + std::to_string(i) + ".fvecs";
     load_ivecs(cur_renaming_file.c_str(), renaming_ids[i], num_pts_in_shard[i],
                tmp_dim);
     std::cout << "loaded renaming ivecs for " << num_pts_in_shard[i]
@@ -201,11 +202,15 @@ int main(int argc, char** argv) {
 //              << dim << "dim \n";
 #pragma omp critical
     total_num_pts += num_pts_in_shard[i];
+if (i < base_num_shards) {
+#pragma omp critical
+num_pts_in_base += num_pts_in_shard[i];
+}
   }
 
   std::cout << "Loaded total of " << total_num_pts << "points \n";
 
-  size_t final_base_num_pts = total_num_pts;
+//  size_t final_base_num_pts = total_num_pts;
   //  base_data = new float[(total_num_pts) *dim];
 
   unsigned                           final_ep = eps[num_shards - 1];
@@ -214,7 +219,7 @@ int main(int argc, char** argv) {
   final_graph.resize(total_num_pts);
 
 #pragma omp parallel for schedule(dynamic, 1)
-  for (size_t i = 0; i < base_num_shards - 1; i++) {
+  for (size_t i = 0; i < base_num_shards; i++) {
     for (size_t j = 0; j < num_pts_in_shard[i]; j++) {
       //      std::memcpy(base_data + (size_t) renaming_ids[i][j] * dim,
       //                 shard_base_data[i] + j * dim, dim * 4);
