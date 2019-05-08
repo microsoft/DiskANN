@@ -153,18 +153,20 @@ std::vector<std::vector<unsigned>> load_nsg(const char* filename,
 }
 
 int main(int argc, char** argv) {
-  if ((argc != 6)) {
+  if ((argc != 7)) {
     std::cout << argv[0]
-              << ": num_shards nsg_prefix nsg_suffix base_prefix output_file"
+              << ": base_num_shards hier_num_shards nsg_prefix nsg_suffix base_prefix output_file"
               << std::endl;
     exit(-1);
   }
 
-  size_t      num_shards = std::atoi(argv[1]);
-  std::string nsg_prefix(argv[2]);
-  std::string nsg_suffix(argv[3]);
-  std::string base_prefix(argv[4]);
-  std::string output_file(argv[5]);
+  size_t      base_num_shards = std::atoi(argv[1]);
+  size_t      hier_num_shards = std::atoi(argv[2]);
+  size_t num_shards = base_num_shards + hier_num_shards;
+  std::string nsg_prefix(argv[3]);
+  std::string nsg_suffix(argv[4]);
+  std::string base_prefix(argv[5]);
+  std::string output_file(argv[6]);
   float*      base_data;
   float*      check_base;
 
@@ -211,8 +213,8 @@ int main(int argc, char** argv) {
   std::vector<std::vector<unsigned>> final_graph;
   final_graph.resize(total_num_pts);
 
-  #pragma omp parallel for schedule(dynamic, 1)
-  for (size_t i = 0; i < num_shards - 1; i++) {
+#pragma omp parallel for schedule(dynamic, 1)
+  for (size_t i = 0; i < base_num_shards - 1; i++) {
     for (size_t j = 0; j < num_pts_in_shard[i]; j++) {
       //      std::memcpy(base_data + (size_t) renaming_ids[i][j] * dim,
       //                 shard_base_data[i] + j * dim, dim * 4);
@@ -233,26 +235,30 @@ int main(int argc, char** argv) {
 
   std::cout << "max degree after base graphs " << final_width << std::endl;
 
-  for (size_t j = 0; j < num_pts_in_shard[num_shards - 1]; j++) {
+
+
+  for (size_t i = base_num_shards; i < num_shards; i++) {
+  for (size_t j = 0; j < num_pts_in_shard[i]; j++) {
     //    if (final_graph[renaming_ids[num_shards - 1][j]].size() > 48)
     //      std::cerr << "Error1! "
     //                << final_graph[renaming_ids[num_shards - 1][j]].size() <<
     //                "\n";
     //    if (nsgs[num_shards - 1][j].size() > 48)
     //      std::cerr << "Error2! \n";
-    for (size_t k = 0; k < nsgs[num_shards - 1][j].size(); k++)
-      if (std::find(final_graph[renaming_ids[num_shards - 1][j]].begin(),
-                    final_graph[renaming_ids[num_shards - 1][j]].end(),
-                    renaming_ids[num_shards - 1][nsgs[num_shards - 1][j][k]]) ==
-          final_graph[renaming_ids[num_shards - 1][j]].end())
-        final_graph[renaming_ids[num_shards - 1][j]].push_back(
-            renaming_ids[num_shards - 1][nsgs[num_shards - 1][j][k]]);
+    for (size_t k = 0; k < nsgs[i][j].size(); k++)
+      if (std::find(final_graph[renaming_ids[i][j]].begin(),
+                    final_graph[renaming_ids[i][j]].end(),
+                    renaming_ids[i][nsgs[i][j][k]]) ==
+          final_graph[renaming_ids[i][j]].end())
+        final_graph[renaming_ids[i][j]].push_back(
+            renaming_ids[i][nsgs[i][j][k]]);
 
     final_width =
-        final_width > final_graph[renaming_ids[num_shards - 1][j]].size()
+        final_width > final_graph[renaming_ids[i][j]].size()
             ? final_width
-            : final_graph[renaming_ids[num_shards - 1][j]].size();
+            : final_graph[renaming_ids[i][j]].size();
   }
+}
 
   /*  unsigned tmp_total_pts;
     load_fvecs("/mnt/SIFT1M/sift_base.fvecs", check_base, tmp_total_pts,
