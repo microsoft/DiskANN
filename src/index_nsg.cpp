@@ -858,7 +858,7 @@ namespace NSG {
               round_size > 1 << 20 ? 1 << 12 : (round_size + 64) / 64;
           size_t nblocks = DIV_ROUND_UP(round_size, PAR_BLOCK_SZ);
 
-#pragma omp parallel for schedule(static, 1)
+#pragma omp parallel for schedule(dynamic, 1)
           for (size_t block = 0; block < nblocks; ++block) {
             std::vector<Neighbor>    pool, tmp;
             tsl::robin_set<unsigned> visited;
@@ -881,7 +881,7 @@ namespace NSG {
 //          std::cout << "sync_prune completed for (level: " << h
 //                    << ", round: " << sync_no << ")" << std::endl;
 
-#pragma omp parallel for schedule(static, PAR_BLOCK_SZ)
+#pragma omp parallel for schedule(dynamic, PAR_BLOCK_SZ)
           for (unsigned n = start_id; n < end_id; ++n) {
             auto node = hierarchy_vertices[h][n];
             final_graph_[node].clear();
@@ -897,7 +897,7 @@ namespace NSG {
 //          std::cout << "Copy cut_graph to final_graph completed for (level: "
 //                    << h << ", round: " << sync_no << ")" << std::endl;
 
-#pragma omp parallel for schedule(static, PAR_BLOCK_SZ)
+#pragma omp parallel for schedule(dynamic, PAR_BLOCK_SZ)
           for (unsigned n = start_id; n < end_id; ++n) {
             InterInsertHierarchy(hierarchy_vertices[h][n], locks, cut_graph_,
                                  parameters);
@@ -908,7 +908,7 @@ namespace NSG {
                       << ", sync: " << sync_no << "/" << NUM_SYNCS << ")"
                       << std::endl;
 
-#pragma omp parallel for schedule(static, PAR_BLOCK_SZ)
+#pragma omp parallel for schedule(dynamic, PAR_BLOCK_SZ)
           for (unsigned n = start_id; n < end_id; ++n) {
             auto node = hierarchy_vertices[h][n];
             assert(!cut_graph_[node].empty());
