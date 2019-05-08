@@ -850,8 +850,9 @@ namespace NSG {
           size_t end_id =
               std::min(size_hierarchy[h], (sync_no + 1) * round_size);
           size_t round_size = end_id - start_id;
-          std::cout << "Round start: " << start_id << "  end: " << end_id
-                    << std::endl;
+          //          std::cout << "Round start: " << start_id << "  end: " <<
+          //          end_id
+          //                    << std::endl;
 
           size_t PAR_BLOCK_SZ =
               round_size > 1 << 20 ? 1 << 12 : (round_size + 64) / 64;
@@ -877,8 +878,8 @@ namespace NSG {
                          cut_graph_);
             }
           }
-          std::cout << "sync_prune completed for (level: " << h
-                    << ", round: " << sync_no << ")" << std::endl;
+//          std::cout << "sync_prune completed for (level: " << h
+//                    << ", round: " << sync_no << ")" << std::endl;
 
 #pragma omp parallel for schedule(static, PAR_BLOCK_SZ)
           for (unsigned n = start_id; n < end_id; ++n) {
@@ -893,16 +894,19 @@ namespace NSG {
             assert(final_graph_[node].size() <= is_inner[node] ? inner_range
                                                                : range);
           }
-          std::cout << "Copy cut_graph to final_graph completed for (level: "
-                    << h << ", round: " << sync_no << ")" << std::endl;
+//          std::cout << "Copy cut_graph to final_graph completed for (level: "
+//                    << h << ", round: " << sync_no << ")" << std::endl;
 
 #pragma omp parallel for schedule(static, PAR_BLOCK_SZ)
           for (unsigned n = start_id; n < end_id; ++n) {
             InterInsertHierarchy(hierarchy_vertices[h][n], locks, cut_graph_,
                                  parameters);
           }
-          std::cout << "InterInsert completed for (level: " << h
-                    << ", round: " << sync_no << ")" << std::endl;
+
+          if ((sync_no * 100) % NUM_SYNCS == 0)
+            std::cout << "Completed  (round: " << rnd_no
+                      << ", sync: " << sync_no << "/" << NUM_SYNCS << ")"
+                      << std::endl;
 
 #pragma omp parallel for schedule(static, PAR_BLOCK_SZ)
           for (unsigned n = start_id; n < end_id; ++n) {
