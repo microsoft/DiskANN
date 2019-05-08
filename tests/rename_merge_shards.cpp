@@ -143,9 +143,8 @@ int main(int argc, char **argv) {
     // rename medoid
     medoid = idmaps[shard][medoid];
     // write renamed medoid
-    // if (shard == (nshards - 1)) --> only uncomment if running hierarchical
-    // merge
-    nsg_writer.write((char *) &medoid, sizeof(unsigned));
+    if (shard == (nshards - 1))  //--> uncomment if running hierarchical
+      nsg_writer.write((char *) &medoid, sizeof(unsigned));
   }
 
   std::cout << "Starting merge\n";

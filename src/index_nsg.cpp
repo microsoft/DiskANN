@@ -836,7 +836,7 @@ namespace NSG {
           parameters.Set<float>("alpha", last_alpha);
 
         if ((h == NUM_HIER - 1) && (rnd_no == NUM_RNDS - 1))
-          parameters.Set<unsigned>("L", (unsigned) std::min((int) L, (int) 75));
+          parameters.Set<unsigned>("L", (unsigned) std::min((int) L, (int) 50));
 
         size_t round_size = DIV_ROUND_UP(size_hierarchy[h], NUM_SYNCS - 1) - 1;
 

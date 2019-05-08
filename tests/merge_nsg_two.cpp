@@ -154,15 +154,15 @@ std::vector<std::vector<unsigned>> load_nsg(const char* filename,
 
 int main(int argc, char** argv) {
   if ((argc != 7)) {
-    std::cout << argv[0]
-              << ": base_num_shards hier_num_shards nsg_prefix nsg_suffix base_prefix output_file"
+    std::cout << argv[0] << ": base_num_shards hier_num_shards nsg_prefix "
+                            "nsg_suffix base_prefix output_file"
               << std::endl;
     exit(-1);
   }
 
   size_t      base_num_shards = std::atoi(argv[1]);
   size_t      hier_num_shards = std::atoi(argv[2]);
-  size_t num_shards = base_num_shards + hier_num_shards;
+  size_t      num_shards = base_num_shards + hier_num_shards;
   std::string nsg_prefix(argv[3]);
   std::string nsg_suffix(argv[4]);
   std::string base_prefix(argv[5]);
@@ -189,7 +189,7 @@ int main(int argc, char** argv) {
     nsgs[i] = load_nsg(cur_nsg_file.c_str(), widths[i], eps[i]);
     std::string cur_renaming_file =
         base_prefix + std::to_string(i) + "_ids.ivecs";
- //   std::string cur_base_file = base_prefix + std::to_string(i) + ".fvecs";
+    //   std::string cur_base_file = base_prefix + std::to_string(i) + ".fvecs";
     load_ivecs(cur_renaming_file.c_str(), renaming_ids[i], num_pts_in_shard[i],
                tmp_dim);
     std::cout << "loaded renaming ivecs for " << num_pts_in_shard[i]
@@ -202,21 +202,21 @@ int main(int argc, char** argv) {
 //              << dim << "dim \n";
 #pragma omp critical
     total_num_pts += num_pts_in_shard[i];
-if (i < base_num_shards) {
+    if (i < base_num_shards) {
 #pragma omp critical
-num_pts_in_base += num_pts_in_shard[i];
-}
+      num_pts_in_base += num_pts_in_shard[i];
+    }
   }
 
-  std::cout << "Loaded total of " << total_num_pts << "points \n";
+  std::cout << "Loaded total of " << total_num_pts << "points and " << num_pts_in_base <<"base points \n";
 
-//  size_t final_base_num_pts = total_num_pts;
+  //  size_t final_base_num_pts = total_num_pts;
   //  base_data = new float[(total_num_pts) *dim];
 
   unsigned                           final_ep = eps[num_shards - 1];
   unsigned                           final_width = 0;
   std::vector<std::vector<unsigned>> final_graph;
-  final_graph.resize(total_num_pts);
+  final_graph.resize(num_pts_in_base);
 
 #pragma omp parallel for schedule(dynamic, 1)
   for (size_t i = 0; i < base_num_shards; i++) {
@@ -240,30 +240,28 @@ num_pts_in_base += num_pts_in_shard[i];
 
   std::cout << "max degree after base graphs " << final_width << std::endl;
 
-
-
   for (size_t i = base_num_shards; i < num_shards; i++) {
-  for (size_t j = 0; j < num_pts_in_shard[i]; j++) {
-    //    if (final_graph[renaming_ids[num_shards - 1][j]].size() > 48)
-    //      std::cerr << "Error1! "
-    //                << final_graph[renaming_ids[num_shards - 1][j]].size() <<
-    //                "\n";
-    //    if (nsgs[num_shards - 1][j].size() > 48)
-    //      std::cerr << "Error2! \n";
-    for (size_t k = 0; k < nsgs[i][j].size(); k++)
-      if (std::find(final_graph[renaming_ids[i][j]].begin(),
-                    final_graph[renaming_ids[i][j]].end(),
-                    renaming_ids[i][nsgs[i][j][k]]) ==
-          final_graph[renaming_ids[i][j]].end())
-        final_graph[renaming_ids[i][j]].push_back(
-            renaming_ids[i][nsgs[i][j][k]]);
+    for (size_t j = 0; j < num_pts_in_shard[i]; j++) {
+      //    if (final_graph[renaming_ids[num_shards - 1][j]].size() > 48)
+      //      std::cerr << "Error1! "
+      //                << final_graph[renaming_ids[num_shards - 1][j]].size()
+      //                <<
+      //                "\n";
+      //    if (nsgs[num_shards - 1][j].size() > 48)
+      //      std::cerr << "Error2! \n";
+      for (size_t k = 0; k < nsgs[i][j].size(); k++)
+        if (std::find(final_graph[renaming_ids[i][j]].begin(),
+                      final_graph[renaming_ids[i][j]].end(),
+                      renaming_ids[i][nsgs[i][j][k]]) ==
+            final_graph[renaming_ids[i][j]].end())
+          final_graph[renaming_ids[i][j]].push_back(
+              renaming_ids[i][nsgs[i][j][k]]);
 
-    final_width =
-        final_width > final_graph[renaming_ids[i][j]].size()
-            ? final_width
-            : final_graph[renaming_ids[i][j]].size();
+      final_width = final_width > final_graph[renaming_ids[i][j]].size()
+                        ? final_width
+                        : final_graph[renaming_ids[i][j]].size();
+    }
   }
-}
 
   /*  unsigned tmp_total_pts;
     load_fvecs("/mnt/SIFT1M/sift_base.fvecs", check_base, tmp_total_pts,
