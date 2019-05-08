@@ -208,7 +208,8 @@ int main(int argc, char** argv) {
     }
   }
 
-  std::cout << "Loaded total of " << total_num_pts << "points and " << num_pts_in_base <<"base points \n";
+  std::cout << "Loaded total of " << total_num_pts << "points and "
+            << num_pts_in_base << "base points \n";
 
   //  size_t final_base_num_pts = total_num_pts;
   //  base_data = new float[(total_num_pts) *dim];
