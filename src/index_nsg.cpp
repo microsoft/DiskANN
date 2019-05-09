@@ -189,8 +189,12 @@ namespace NSG {
     final_graph_.reserve(num);
     if (!mapping.empty())
       num_points = mapping.size();
-    std::cout << "k is and num is " << k << " " << num_points << std::endl;
+    else {
+      mapping.resize(num_points);
+      std::iota(std::begin(mapping), std::end(mapping), 0);
+    }
 
+    std::cout << "k is and num is " << k << " " << num_points << std::endl;
     size_t PAR_BLOCK_SZ = (1 << 16);
     size_t nblocks = DIV_ROUND_UP(num_points, PAR_BLOCK_SZ);
 
@@ -753,184 +757,123 @@ namespace NSG {
   void IndexNSG::LinkHierarchy(Parameters &parameters) {
     const float    p_val = parameters.Get<float>("p_val");
     const uint32_t NUM_SYNCS = parameters.Get<unsigned>("num_syncs");
-    const uint32_t OUTER_NUM_RNDS = parameters.Get<unsigned>("num_rnds");
-    const uint32_t NUM_HIER = parameters.Get<unsigned>("num_hier");
+    const uint32_t NUM_RNDS = parameters.Get<unsigned>("num_rnds");
     const unsigned L = parameters.Get<unsigned>("L");
     const unsigned range = parameters.Get<unsigned>("R");
     const unsigned C = parameters.Get<unsigned>("C");
-    const unsigned innerL = parameters.Get<unsigned>("innerL");
     const unsigned inner_range = parameters.Get<unsigned>("innerR");
-    const unsigned innerC = parameters.Get<unsigned>("innerC");
-    float          outer_alpha = parameters.Get<float>("alpha");
+    float          last_round_alpha = parameters.Get<float>("alpha");
 
-    parameters.Set<unsigned>("L", innerL);
-    parameters.Set<unsigned>("C", innerC);
+    parameters.Set<unsigned>("L", L);
+    parameters.Set<unsigned>("C", C);
     is_inner[ep_] = true;
-
     parameters.Set<float>("alpha", 1);
-
-    auto size_hierarchy = new size_t[NUM_HIER];
-    auto hierarchy_vertices = new std::vector<size_t>[NUM_HIER];
-
-    hierarchy_vertices[NUM_HIER - 1].resize(nd_);
-    std::iota(std::begin(hierarchy_vertices[NUM_HIER - 1]),
-              std::end(hierarchy_vertices[NUM_HIER - 1]), 0);
-    size_hierarchy[NUM_HIER - 1] = hierarchy_vertices[NUM_HIER - 1].size();
 
     std::random_device               rd;
     std::mt19937                     gen(rd());
     std::uniform_real_distribution<> dis(0, 1);
 
-    if (NUM_HIER == 1) {
-      for (size_t i = 0; i < nd_; i++) {
-        float candidate = dis(gen);
-        if (candidate < p_val)
-          is_inner[i] = true;
-      }
+    for (size_t i = 0; i < nd_; i++) {
+      float candidate = dis(gen);
+      if (candidate < p_val)
+        is_inner[i] = true;
     }
 
-    for (int h = NUM_HIER - 2; h >= 0; h--) {
-      hierarchy_vertices[h].push_back(ep_);
-      for (size_t i = 0; i < hierarchy_vertices[h + 1].size(); i++) {
-        float candidate = dis(gen);
-        if (candidate < p_val && hierarchy_vertices[h + 1][i] != ep_) {
-          hierarchy_vertices[h].push_back(hierarchy_vertices[h + 1][i]);
-          is_inner[hierarchy_vertices[h + 1][i]] = true;
-        }
-      }
-      size_hierarchy[h] = hierarchy_vertices[h].size();
-      std::cout << "Generated random hierarchy level " << h << " of size "
-                << size_hierarchy[h] << std::endl;
-    }
+    std::string inner_path = parameters.Get<std::string>("save_path");
+    Save_Inner_Vertices(inner_path.c_str());
 
-    bool is_nsg = parameters.Get<bool>("is_nsg");
-    bool is_rnd_nn = parameters.Get<bool>("is_rnd_nn");
-    if ((!is_nsg) && is_rnd_nn) {
-      std::cout << "Initializing random inner graph over " << size_hierarchy[0]
-                << " vertices " << std::endl;
-      Init_rnd_nn_graph(nd_, range, hierarchy_vertices[0]);
-    }
+    Init_rnd_nn_graph(nd_, range);
 
     assert(final_graph_.size() == nd_);
     std::vector<std::mutex> locks(nd_);
     auto                    cut_graph_ = new vecNgh[nd_];
-    //    unsigned                NUM_RNDS = 2;
-    unsigned NUM_RNDS = OUTER_NUM_RNDS;
-    float    last_alpha = std::max((float) 1.2, outer_alpha);
 
-    for (uint32_t h = 0; h < NUM_HIER; h++) {
-      std::cout << "Processing level " << h << " with " << size_hierarchy[h]
-                << " vertices " << std::endl;
-
-      parameters.Set<float>("alpha", 1);
-
-      if (h == NUM_HIER - 1) {
-        parameters.Set<unsigned>("L", L);
-        parameters.Set<unsigned>("C", C);
-        NUM_RNDS = OUTER_NUM_RNDS;
-        last_alpha = outer_alpha;
+    for (uint32_t rnd_no = 0; rnd_no < NUM_RNDS; rnd_no++) {
+      if (rnd_no == NUM_RNDS - 1) {
+        if (last_round_alpha > 1)
+          parameters.Set<unsigned>("L", (unsigned) std::min((int) L, (int) 50));
+        parameters.Set<float>("alpha", last_round_alpha);
       }
 
-      for (uint32_t rnd_no = 0; rnd_no < NUM_RNDS; rnd_no++) {
-        if (rnd_no == NUM_RNDS - 1 || h < NUM_HIER - 1)
-          parameters.Set<float>("alpha", last_alpha);
+      size_t round_size = DIV_ROUND_UP(nd_, NUM_SYNCS - 1) - 1;
 
-        if ((h == NUM_HIER - 1) && (rnd_no == NUM_RNDS - 1))
-          parameters.Set<unsigned>("L", (unsigned) std::min((int) L, (int) 50));
+      for (uint32_t par_sync_no = 0; par_sync_no < NUM_SYNCS; par_sync_no++) {
+        // reverse the order of points for odd round numbers
+        uint32_t sync_no = par_sync_no;
+        //          if (rnd_no % 2 == 1)
+        //            sync_no = (NUM_SYNCS - 1 - par_sync_no);
 
-        size_t round_size = DIV_ROUND_UP(size_hierarchy[h], NUM_SYNCS - 1) - 1;
+        size_t start_id = sync_no * round_size;
+        size_t end_id = std::min(nd_, (sync_no + 1) * round_size);
+        size_t round_size = end_id - start_id;
 
-        for (uint32_t par_sync_no = 0; par_sync_no < NUM_SYNCS; par_sync_no++) {
-          // reverse the order of points for odd round numbers
-          uint32_t sync_no = par_sync_no;
-          //          if (rnd_no % 2 == 1)
-          //            sync_no = (NUM_SYNCS - 1 - par_sync_no);
-
-          size_t start_id = sync_no * round_size;
-          size_t end_id =
-              std::min(size_hierarchy[h], (sync_no + 1) * round_size);
-          size_t round_size = end_id - start_id;
-          //          std::cout << "Round start: " << start_id << "  end: " <<
-          //          end_id
-          //                    << std::endl;
-
-          size_t PAR_BLOCK_SZ =
-              round_size > 1 << 20 ? 1 << 12 : (round_size + 64) / 64;
-          size_t nblocks = DIV_ROUND_UP(round_size, PAR_BLOCK_SZ);
+        size_t PAR_BLOCK_SZ =
+            round_size > 1 << 20 ? 1 << 12 : (round_size + 256) / 256;
+        size_t nblocks = DIV_ROUND_UP(round_size, PAR_BLOCK_SZ);
 
 #pragma omp parallel for schedule(dynamic, 1)
-          for (size_t block = 0; block < nblocks; ++block) {
-            std::vector<Neighbor>    pool, tmp;
-            tsl::robin_set<unsigned> visited;
+        for (size_t block = 0; block < nblocks; ++block) {
+          std::vector<Neighbor>    pool, tmp;
+          tsl::robin_set<unsigned> visited;
 
-            for (size_t n = start_id + block * PAR_BLOCK_SZ;
-                 n <
-                 start_id + std::min(round_size, (block + 1) * PAR_BLOCK_SZ);
-                 ++n) {
-              pool.clear();
-              tmp.clear();
-              visited.clear();
+          for (size_t n = start_id + block * PAR_BLOCK_SZ;
+               n < start_id + std::min(round_size, (block + 1) * PAR_BLOCK_SZ);
+               ++n) {
+            pool.clear();
+            tmp.clear();
+            visited.clear();
 
-              get_neighbors(
-                  data_ + (size_t) dimension_ * hierarchy_vertices[h][n],
-                  parameters, tmp, pool, visited);
-              sync_prune(hierarchy_vertices[h][n], pool, parameters, visited,
-                         cut_graph_);
-            }
-          }
-//          std::cout << "sync_prune completed for (level: " << h
-//                    << ", round: " << sync_no << ")" << std::endl;
-
-#pragma omp parallel for schedule(dynamic, PAR_BLOCK_SZ)
-          for (unsigned n = start_id; n < end_id; ++n) {
-            auto node = hierarchy_vertices[h][n];
-            final_graph_[node].clear();
-            final_graph_[node].reserve(is_inner[node] ? inner_range : range);
-            assert(!cut_graph_[node].empty());
-            for (auto link : cut_graph_[node]) {
-              final_graph_[node].push_back(link.id);
-              assert(link.id >= 0 && link.id < nd_);
-            }
-            assert(final_graph_[node].size() <= is_inner[node] ? inner_range
-                                                               : range);
-          }
-//          std::cout << "Copy cut_graph to final_graph completed for (level: "
-//                    << h << ", round: " << sync_no << ")" << std::endl;
-
-#pragma omp parallel for schedule(dynamic, PAR_BLOCK_SZ)
-          for (unsigned n = start_id; n < end_id; ++n) {
-            InterInsertHierarchy(hierarchy_vertices[h][n], locks, cut_graph_,
-                                 parameters);
-          }
-
-          if ((sync_no * 100) % NUM_SYNCS == 0)
-            std::cout << "Completed  (round: " << rnd_no
-                      << ", sync: " << sync_no << "/" << NUM_SYNCS << ")"
-                      << std::endl;
-
-#pragma omp parallel for schedule(dynamic, PAR_BLOCK_SZ)
-          for (unsigned n = start_id; n < end_id; ++n) {
-            auto node = hierarchy_vertices[h][n];
-            assert(!cut_graph_[node].empty());
-            cut_graph_[node].clear();
-            cut_graph_[node].shrink_to_fit();
+            get_neighbors(data_ + (size_t) dimension_ * n, parameters, tmp,
+                          pool, visited);
+            sync_prune(n, pool, parameters, visited, cut_graph_);
           }
         }
 
-        /*        // save  nsg snapshot after each round
-                if (h == NUM_HIER - 1) {
-                  std::string rnd_path =
-           parameters.Get<std::string>("save_path");
-                  rnd_path += std::to_string(rnd_no);
-                  Save(rnd_path.c_str());
-                } */
-        // save code ends
+#pragma omp parallel for schedule(static, PAR_BLOCK_SZ)
+        for (unsigned n = start_id; n < end_id; ++n) {
+          auto node = n;
+          final_graph_[node].clear();
+          final_graph_[node].reserve(is_inner[node] ? inner_range : range);
+          assert(!cut_graph_[node].empty());
+          for (auto link : cut_graph_[node]) {
+            final_graph_[node].push_back(link.id);
+            assert(link.id >= 0 && link.id < nd_);
+          }
+          assert(final_graph_[node].size() <= is_inner[node] ? inner_range
+                                                             : range);
+        }
+
+#pragma omp parallel for schedule(static, PAR_BLOCK_SZ)
+        for (unsigned n = start_id; n < end_id; ++n) {
+          InterInsertHierarchy(n, locks, cut_graph_, parameters);
+        }
+
+        if ((sync_no * 100) % NUM_SYNCS == 0)
+          std::cout << "Completed  (round: " << rnd_no << ", sync: " << sync_no
+                    << "/" << NUM_SYNCS
+                    << ") with L=" << parameters.Get<unsigned>("L")
+                    << ",alpha=" << parameters.Get<float>("alpha") << std::endl;
+
+#pragma omp parallel for schedule(static, PAR_BLOCK_SZ)
+        for (unsigned n = start_id; n < end_id; ++n) {
+          auto node = n;
+          assert(!cut_graph_[node].empty());
+          cut_graph_[node].clear();
+          cut_graph_[node].shrink_to_fit();
+        }
       }
+
+      /*        // save  nsg snapshot after each round
+              if (h == NUM_HIER - 1) {
+                std::string rnd_path =
+         parameters.Get<std::string>("save_path");
+                rnd_path += std::to_string(rnd_no);
+                Save(rnd_path.c_str());
+              } */
+      // save code ends
     }
 
     delete[] cut_graph_;
-    delete[] size_hierarchy;
-    delete[] hierarchy_vertices;
   }
 
   void IndexNSG::Build(size_t n, const float *data,
