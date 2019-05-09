@@ -183,7 +183,7 @@ int main(int argc, char** argv) {
 
     std::cout << "indexing time: " << diff.count() << "\n";
     index.Save(argv[5]);
-    index.Save_Inner_Vertices(argv[5]);
+//    index.Save_Inner_Vertices(argv[5]);
   }
 
   return 0;
