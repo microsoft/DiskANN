@@ -941,11 +941,15 @@ namespace NSG {
     tsl::robin_set<unsigned> visited(10 * L);
     unsigned                 tmp_l = 0;
     // ignore default init; use start_points for init
-    if (start_points.size() == 0)
-      for (; tmp_l < L && tmp_l < final_graph_[ep_].size(); tmp_l++) {
-        init_ids[tmp_l] = final_graph_[ep_][tmp_l];
-        visited.insert(init_ids[tmp_l]);
-      }
+    if (start_points.size() == 0) {
+      visited.insert(ep_);
+      init_ids[tmp_l] = ep_;
+      tmp_l++;
+    }
+    //      for (; tmp_l < L && tmp_l < final_graph_[ep_].size(); tmp_l++) {
+    //      init_ids[tmp_l] = final_graph_[ep_][tmp_l];
+    //     visited.insert(init_ids[tmp_l]);
+    //      }
     else
       for (; tmp_l < L && tmp_l < start_points.size(); tmp_l++) {
         init_ids[tmp_l] = start_points[tmp_l];

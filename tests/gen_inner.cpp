@@ -279,8 +279,8 @@ int main(int argc, char** argv) {
   for (size_t i = 0; i < num_shards; i++) {
     std::string cur_nsg_file = nsg_prefix + std::to_string(i) + nsg_suffix;
     std::cout << cur_nsg_file << std::endl;
-    eps[i] = get_nsg_ep(cur_nsg_file.c_str());
-    std::cout << "EP: " << eps[i] << std::endl;
+    //  eps[i] = get_nsg_ep(cur_nsg_file.c_str());
+    //  std::cout << "EP: " << eps[i] << std::endl;
     unsigned    tmp_dim;
     std::string cur_renaming_file =
         base_prefix + std::to_string(i) + "_ids.ivecs";
@@ -288,8 +288,8 @@ int main(int argc, char** argv) {
                tmp_dim);
     std::cout << "loaded renaming ivecs for " << num_pts_in_shard[i]
               << " points with " << tmp_dim << " dim \n";
-    std::cout << "Entry point " << i << ": " << renaming_ids[i][eps[i]]
-              << std::endl;
+//    std::cout << "Entry point " << i << ": " << renaming_ids[i][eps[i]]
+//              << std::endl;
 #pragma omp critical
     total_num_pts += num_pts_in_shard[i];
   }
