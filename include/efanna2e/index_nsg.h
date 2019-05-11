@@ -57,7 +57,7 @@ namespace NSG {
     std::pair<int, int> BeamSearch(const float *query, const float *x,
                                    const size_t K, const Parameters &parameters,
                                    unsigned *indices, int beam_width,
-                                   const std::vector<unsigned> &start_points);
+                                   std::vector<unsigned> &start_points);
 
     unsigned long long SearchWithOptGraph(const float *query, size_t K,
                                           const Parameters &parameters,
