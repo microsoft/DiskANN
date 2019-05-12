@@ -1033,7 +1033,7 @@ namespace NSG {
       // save code ends
     }
 
-    std::cout << "Checking inner degree violation for innerR = " << inner_range
+/*    std::cout << "Checking inner degree violation for innerR = " << inner_range
               << ".." << std::flush;
 #pragma omp parallel for schedule(static, 65536)
     for (unsigned n = 0; n < nd_; ++n) {
@@ -1041,7 +1041,7 @@ namespace NSG {
         std::cerr << "Error. inner degree violation " << final_graph_[n].size()
                   << " " << inner_range << std::endl;
     }
-    std::cout << "done." << std::endl;
+    std::cout << "done." << std::endl; */
     delete[] cut_graph_;
   }
 
