@@ -926,7 +926,7 @@ namespace NSG {
 
     parameters.Set<unsigned>("L", L);
     parameters.Set<unsigned>("C", C);
-    is_inner[ep_] = true;
+//    is_inner[ep_] = true;
     parameters.Set<float>("alpha", 1);
 
     std::random_device               rd;
@@ -1033,6 +1033,15 @@ namespace NSG {
       // save code ends
     }
 
+    std::cout << "Checking inner degree violation for innerR = " << inner_range
+              << ".." << std::flush;
+#pragma omp parallel for schedule(static, 65536)
+    for (unsigned n = 0; n < nd_; ++n) {
+      if (is_inner[n] && final_graph_[n].size() > inner_range)
+        std::cerr << "Error. inner degree violation " << final_graph_[n].size()
+                  << " " << inner_range << std::endl;
+    }
+    std::cout << "done." << std::endl;
     delete[] cut_graph_;
   }
 
