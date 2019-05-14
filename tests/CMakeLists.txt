@@ -18,6 +18,10 @@ target_link_libraries(test_nsg_twolevel_search ${PROJECT_NAME} -ltcmalloc)
 add_executable(truncate_efanna truncate_efanna.cpp)
 target_link_libraries(truncate_efanna ${PROJECT_NAME} -ltcmalloc)
 
+
+add_executable(test_nsg_shard_search test_nsg_shard_search.cpp)
+target_link_libraries(test_nsg_shard_search ${PROJECT_NAME})
+
 add_executable(test_nsg_search test_nsg_search.cpp)
 target_link_libraries(test_nsg_search ${PROJECT_NAME})
 
@@ -46,6 +50,7 @@ add_executable(ivecs_to_bin_u8 ivecs_to_bin_u8.cpp)
 add_executable(quantize quantize.cpp)
 add_executable(read_fvecs read_fvecs.cpp)
 add_executable(nsg_bfs nsg_bfs.cpp)
+add_executable(rename_merge_shards rename_merge_shards.cpp)
 
 # formatter
 add_custom_command(TARGET calc_recall PRE_BUILD COMMAND clang-format-4.0 -i ../../include/efanna2e/*.h ../../src/*.cpp ../../tests/*.cpp)

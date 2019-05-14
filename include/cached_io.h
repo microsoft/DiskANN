@@ -6,8 +6,21 @@
 // sequential cached reads
 class cached_ifstream {
  public:
+  cached_ifstream(){
+    
+  }
   cached_ifstream(const std::string& filename, _u64 cache_size)
       : cache_size(cache_size), cur_off(0) {
+        this->open(filename, cache_size);
+  }
+  ~cached_ifstream() {
+    delete[] cache_buf;
+    reader.close();
+  }
+
+  void open(const std::string& filename, _u64 cache_size){
+    this->cache_size = cache_size;
+    this->cur_off = 0;
     reader.open(filename, std::ios::binary | std::ios::ate);
     fsize = reader.tellg();
     reader.seekg(0, std::ios::beg);
@@ -15,14 +28,8 @@ class cached_ifstream {
     assert(cache_size > 0);
     cache_buf = new char[cache_size];
     reader.read(cache_buf, cache_size);
-    std::cout << "first 4B: " << *(unsigned*) cache_buf
-              << ", next 4B: " << *(unsigned*) (cache_buf + 4);
-	std::cout << "Opened: " << filename.c_str() << ", size: " << fsize
+	  std::cout << "Opened: " << filename.c_str() << ", size: " << fsize
               << ", cache_size: " << cache_size << "\n";
-  }
-  ~cached_ifstream() {
-    delete[] cache_buf;
-    reader.close();
   }
 
   void read(char* read_buf, _u64 n_bytes) {

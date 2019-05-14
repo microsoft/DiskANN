@@ -61,7 +61,7 @@ namespace {
   void pq_dist_lookup(const _u8 *pq_ids, const _u64 n_pts,
                       const _u64 pq_nchunks, const float *pq_dists,
                       float *dists_out) {
-    _mm_prefetch((char*)dists_out, _MM_HINT_T0);
+    _mm_prefetch((char *) dists_out, _MM_HINT_T0);
     _mm_prefetch((char *) pq_ids, _MM_HINT_T0);
     _mm_prefetch((char *) (pq_ids + 64), _MM_HINT_T0);
     _mm_prefetch((char *) (pq_ids + 128), _MM_HINT_T0);
