@@ -219,8 +219,8 @@ int main(int argc, char** argv) {
   std::vector<std::vector<unsigned>> final_graph;
   final_graph.resize(num_pts_in_base);
 
-#pragma omp parallel for schedule(dynamic, 1)
   for (size_t i = 0; i < base_num_shards; i++) {
+#pragma omp parallel for schedule(dynamic, 65536)
     for (size_t j = 0; j < num_pts_in_shard[i]; j++) {
       //      std::memcpy(base_data + (size_t) renaming_ids[i][j] * dim,
       //                 shard_base_data[i] + j * dim, dim * 4);
@@ -242,6 +242,8 @@ int main(int argc, char** argv) {
   std::cout << "max degree after base graphs " << final_width << std::endl;
 
   for (size_t i = base_num_shards; i < num_shards; i++) {
+
+#pragma omp parallel for schedule(dynamic, 65536)
     for (size_t j = 0; j < num_pts_in_shard[i]; j++) {
       //    if (final_graph[renaming_ids[num_shards - 1][j]].size() > 48)
       //      std::cerr << "Error1! "
@@ -257,7 +259,7 @@ int main(int argc, char** argv) {
             final_graph[renaming_ids[i][j]].end())
           final_graph[renaming_ids[i][j]].push_back(
               renaming_ids[i][nsgs[i][j][k]]);
-
+#pragma omp critical
       final_width = final_width > final_graph[renaming_ids[i][j]].size()
                         ? final_width
                         : final_graph[renaming_ids[i][j]].size();
