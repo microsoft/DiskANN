@@ -129,8 +129,8 @@ int main(int argc, char** argv) {
   if (argc != 11) {
     std::cout << "Correct usage\n"
               << argv[0] << " data_file L R C "
-              << "save_graph_file  alpha<1>   p_val<0.1>"
-              << " num_syncs<10> num_pass<1> innerR" << std::endl;
+              << "save_graph_file  alpha<1>  p_val<0.1> "
+              << "num_syncs <100> num_pass<1> innerR <R>" << std::endl;
     exit(-1);
   }
 
@@ -152,18 +152,18 @@ int main(int argc, char** argv) {
   std::cout << "Data loaded and aligned" << std::endl;
 
   //  unsigned    nn_graph_deg = (unsigned) atoi(argv[3]);
-  unsigned L = (unsigned) atoi(argv[2]);
-  unsigned R = (unsigned) atoi(argv[3]);
-  unsigned C = (unsigned) atoi(argv[4]);
-  float    alpha = (float) std::atof(argv[6]);
-  float    p_val = (float) std::atof(argv[7]);
+  unsigned    L = (unsigned) atoi(argv[2]);
+  unsigned    R = (unsigned) atoi(argv[3]);
+  unsigned    C = (unsigned) atoi(argv[4]);
+  std::string save_path(argv[5]);
+  float       alpha = (float) std::atof(argv[6]);
+  float       p_val = (float) std::atof(argv[7]);
   //  unsigned    num_hier = (float) std::atof(argv[8]);
   unsigned num_syncs = (float) std::atof(argv[8]);
   unsigned num_rnds = (unsigned) std::atoi(argv[9]);
   //  unsigned    innerL = (unsigned) atoi(argv[11]);
   unsigned innerR = (unsigned) atoi(argv[10]);
   //  unsigned    innerC = (unsigned) atoi(argv[13]);
-  std::string save_path(argv[5]);
 
   //  if (nn_graph_deg > R) {
   //    std::cerr << "Error: nn_graph_degree must be <= R" << std::endl;
