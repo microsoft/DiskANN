@@ -20,7 +20,6 @@
 
 #include "MemoryMapper.h"
 
-
 void load_data(char* filename, float*& data, unsigned& num,
                unsigned& dim) {  // load data with sift10K pattern
   std::ifstream in(filename, std::ios::binary);
@@ -28,12 +27,27 @@ void load_data(char* filename, float*& data, unsigned& num,
     std::cout << "open file error" << std::endl;
     exit(-1);
   }
+  std::cout << "Reading data from file: " << filename << std::endl;
   in.read((char*) &dim, 4);
   in.seekg(0, std::ios::end);
   std::ios::pos_type ss = in.tellg();
-  size_t             fsize = (size_t) ss;
+  size_t fsize = (size_t) ss;
+  std::cout << "fsize is: " << fsize << std::endl;
   num = (unsigned) (fsize / (dim + 1) / 4);
-  data = new float[(size_t) num * (size_t) dim];
+  std::cout << "num is: " << num << std::endl;
+  std::cout << "num * dim is: " << (size_t)num * (size_t)dim << std::endl;
+
+  uint64_t allocSize = ((uint64_t) num) * ((uint64_t) dim);
+
+  try {
+    std::cout << "Alloc size is " << allocSize << std::endl;
+    data = new float[allocSize];
+  } catch (const std::bad_alloc& ba)  {
+    std::cerr << "Failed to allocate memory " << ba.what() << std::endl;
+    exit(1);
+  }
+
+    std::cout << "Allocated " << num * dim << " bytes " << std::endl;
 
   in.seekg(0, std::ios::beg);
   for (size_t i = 0; i < num; i++) {
@@ -41,71 +55,72 @@ void load_data(char* filename, float*& data, unsigned& num,
     in.read((char*) (data + i * dim), dim * 4);
   }
   in.close();
+  std::cout << "Loaded data from file " << filename << std::endl;
 }
 
 void load_bvecs(const char* filename, float*& data, unsigned& num,
-	unsigned& dim) {
-	unsigned new_dim = 0;
-	char*    buf;
-	off_t fileSize = 0;
+                unsigned& dim) {
+  unsigned new_dim = 0;
+  char*    buf;
+  off_t    fileSize = 0;
 
-	NSG::MemoryMapper mapper(filename);
-	buf = mapper.getBuf();
-	//  assert(buf);
-	// size_t x=4;
-	uint32_t file_dim;
-	std::memcpy(&file_dim, buf, 4);
-	dim = file_dim;
-	if (new_dim == 0)
-		new_dim = dim;
+  NSG::MemoryMapper mapper(filename);
+  buf = mapper.getBuf();
+  //  assert(buf);
+  // size_t x=4;
+  uint32_t file_dim;
+  std::memcpy(&file_dim, buf, 4);
+  dim = file_dim;
+  if (new_dim == 0)
+    new_dim = dim;
 
-	if (new_dim < dim)
-		std::cout << "load_bvecs " << filename << ". Current Dimension: " << dim
-		<< ". New Dimension: First " << new_dim << " columns. "
-		<< std::flush;
-	else if (new_dim > dim)
-		std::cout << "load_bvecs " << filename << ". Current Dimension: " << dim
-		<< ". New Dimension: " << new_dim
-		<< " (added columns with 0 entries). " << std::flush;
-	else
-		std::cout << "load_bvecs " << filename << ". Dimension: " << dim << ". "
-		<< std::flush;
+  if (new_dim < dim)
+    std::cout << "load_bvecs " << filename << ". Current Dimension: " << dim
+              << ". New Dimension: First " << new_dim << " columns. "
+              << std::flush;
+  else if (new_dim > dim)
+    std::cout << "load_bvecs " << filename << ". Current Dimension: " << dim
+              << ". New Dimension: " << new_dim
+              << " (added columns with 0 entries). " << std::flush;
+  else
+    std::cout << "load_bvecs " << filename << ". Dimension: " << dim << ". "
+              << std::flush;
 
-	float* zeros = new float[new_dim];
-	for (size_t i = 0; i < new_dim; i++)
-		zeros[i] = 0;
+  float* zeros = new float[new_dim];
+  for (size_t i = 0; i < new_dim; i++)
+    zeros[i] = 0;
 
-	num = (unsigned)(fileSize / (dim + 4));
-	data = new float[(size_t)num * (size_t)new_dim];
+  num = (unsigned) (fileSize / (dim + 4));
+  data = new float[(size_t) num * (size_t) new_dim];
 
-	std::cout << "# Points: " << num << ".." << std::flush;
+  std::cout << "# Points: " << num << ".." << std::flush;
 
 #pragma omp parallel for schedule(static, 65536)
-	for (int64_t i = 0; i < num; i++) {	//GOPAL changing "size_t i" to "int i"
-		uint32_t row_dim;
-		char*    reader = buf + (i * (dim + 4));
-		std::memcpy((char*)&row_dim, reader, sizeof(uint32_t));
-		if (row_dim != dim)
-			std::cerr << "ERROR: row dim does not match" << std::endl;
-		std::memcpy(data + (i * new_dim), zeros, new_dim * sizeof(float));
-		if (new_dim > dim) {
-			//	std::memcpy(data + (i * new_dim), (reader + 4),
-			//		    dim * sizeof(float));
-			for (size_t j = 0; j < dim; j++) {
-				uint8_t cur;
-				std::memcpy((char*)&cur, (reader + 4 + j), sizeof(uint8_t));
-				data[i * new_dim + j] = (float)cur;
-			}
-		} else {
-			for (size_t j = 0; j < new_dim; j++) {
-				uint8_t cur;
-				std::memcpy((char*)&cur, (reader + 4 + j), sizeof(uint8_t));
-				data[i * new_dim + j] = (float)cur;
-				//	std::memcpy(data + (i * new_dim),
-				//(reader + 4), 		    new_dim * sizeof(float));
-			}
-		}
-	}
+  for (int64_t i = 0; i < num; i++) {  // GOPAL changing "size_t i" to "int i"
+    uint32_t row_dim;
+    char*    reader = buf + (i * (dim + 4));
+    std::memcpy((char*) &row_dim, reader, sizeof(uint32_t));
+    if (row_dim != dim)
+      std::cerr << "ERROR: row dim does not match" << std::endl;
+    std::memcpy(data + (i * new_dim), zeros, new_dim * sizeof(float));
+    if (new_dim > dim) {
+      //	std::memcpy(data + (i * new_dim), (reader + 4),
+      //		    dim * sizeof(float));
+      for (size_t j = 0; j < dim; j++) {
+        uint8_t cur;
+        std::memcpy((char*) &cur, (reader + 4 + j), sizeof(uint8_t));
+        data[i * new_dim + j] = (float) cur;
+      }
+    } else {
+      for (size_t j = 0; j < new_dim; j++) {
+        uint8_t cur;
+        std::memcpy((char*) &cur, (reader + 4 + j), sizeof(uint8_t));
+        data[i * new_dim + j] = (float) cur;
+        //	std::memcpy(data + (i * new_dim),
+        //(reader + 4), 		    new_dim * sizeof(float));
+      }
+    }
+  }
 
   std::cout << "done." << std::endl;
 }
@@ -113,7 +128,7 @@ void load_bvecs(const char* filename, float*& data, unsigned& num,
 int main(int argc, char** argv) {
   if (argc != 14) {
     std::cout << "Correct usage\n"
-              << argv[0] << " data_file nn_graph_degree L R C "
+              << argv[0] << " data_file nn_graph_degree L C "
               << "save_graph_file  alpha<1>   p_val<0.1> "
               << "num_hier<1>  num_syncs<10> num_pass<1> innerL innerC"
               << std::endl;
@@ -139,7 +154,7 @@ int main(int argc, char** argv) {
 
   unsigned    nn_graph_deg = (unsigned) atoi(argv[2]);
   unsigned    L = (unsigned) atoi(argv[3]);
-  unsigned    R = (unsigned) atoi(argv[4]);
+  unsigned    R = nn_graph_deg; //Gopal. As per discussion with Ravi.
   unsigned    C = (unsigned) atoi(argv[5]);
   float       alpha = (float) std::atof(argv[7]);
   float       p_val = (float) std::atof(argv[8]);

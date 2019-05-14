@@ -129,7 +129,7 @@ int main(int argc, char** argv) {
     std::cout << "NSG search using L = " << L << ", K = " << K
               << ", BeamWidth = " << beam_width << std::endl;
 #pragma omp parallel for schedule(static, 1000)
-    for (unsigned i = 0; i < query_num; i++) {
+    for (int i = 0; i < query_num; i++) {  //GOPAL renamed "unsigned i" to "int i"
       auto ret =
           index.BeamSearch(query_load + i * dim, data_load, K, paras,
                            res + ((size_t) i) * K, beam_width, start_points);
@@ -150,17 +150,25 @@ int main(int argc, char** argv) {
               << std::endl
               << "Average cmps: " << (float) total_cmps / (float) query_num
               << std::endl;
-    std::string output_file = std::string(argv[4]);
-    output_file += "_search-" + std::to_string(L) + "-" + std::to_string(K) +
-                   "-" + std::to_string(beam_width) + ".ivecs";
-    char* out_file = new char[output_file.size() + 1];
-    out_file[output_file.size()] = 0;
-    std::memcpy(out_file, output_file.c_str(), output_file.size());
-    save_result(out_file, res, query_num, K);
-    delete[] out_file;
+    
+	//GOPAL Commented the below lines to get this to work on aether.
+	//std::string output_file = std::string(argv[4]);
+	//output_file += "_search-" + std::to_string(L) + "-" + std::to_string(K) +
+    //               "-" + std::to_string(beam_width) + ".ivecs";
+    //char* out_file = new char[output_file.size() + 1];
+    //out_file[output_file.size()] = 0;
+    //std::memcpy(out_file, output_file.c_str(), output_file.size());
+    save_result(argv[4], res, query_num, K);
+    //delete[] out_file;
     delete[] res;
+	std::cout << "Wrote query stats and results to output file: " << argv[4] << std::endl;
   }
+#ifdef __NSG_WINDOWS__
+  _aligned_free(data_load);
+#else
   delete[] data_load;
+#endif
 
+  std::cout << "Closing program." << std::endl;
   return 0;
 }

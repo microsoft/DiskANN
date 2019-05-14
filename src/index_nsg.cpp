@@ -22,6 +22,21 @@ namespace NSG {
 #define _CONTROL_NUM 100
 #define MAX_START_POINTS 100
 
+	//UTILITY FUNCTIONS START
+	static std::string getDateTime() {
+		time_t currenttime = time(nullptr);
+		tm localtime;
+		localtime_s(&localtime, &currenttime);
+
+		std::stringstream outputStr;
+		outputStr << localtime.tm_year << "-" << localtime.tm_mon << "-" << localtime.tm_mday << " " << localtime.tm_hour << ":" << localtime.tm_min << ":" << localtime.tm_sec;
+
+		return outputStr.str(); //move semantics! 
+	}
+	//UTILITY FUNCTIONS END
+
+
+
   IndexNSG::IndexNSG(const size_t dimension, const size_t n, Metric m,
                      Index *initializer)
       : Index(dimension, n, m), initializer_{initializer} {
@@ -828,8 +843,10 @@ namespace NSG {
                          cut_graph_);
             }
           }
-          std::cout << "sync_prune completed for (level: " << h
-                    << ", round: " << sync_no << ")" << std::endl;
+
+		  std::string&& localtime = getDateTime();
+		  std::cout << "sync_prune completed for (level: " << h
+                    << ", round: " << sync_no << ")" << " at time " << localtime << std::endl;
 
 #pragma omp parallel for schedule(static, PAR_BLOCK_SZ)
           for (int n = start_id; n < end_id; ++n) { //GOPAL Changed from "unsigned n" to "int n"
@@ -844,16 +861,19 @@ namespace NSG {
             assert(final_graph_[node].size() <= is_inner[node] ? 2 * range
                                                                : range);
           }
+
+		  localtime = getDateTime();
           std::cout << "Copy cut_graph to final_graph completed for (level: "
-                    << h << ", round: " << sync_no << ")" << std::endl;
+                    << h << ", round: " << sync_no << ")" << " at time " << localtime <<  std::endl;
 
 #pragma omp parallel for schedule(static, PAR_BLOCK_SZ)
           for (int n = start_id; n < end_id; ++n) {			//GOPAL Changed from "unsigned n" to "int n"
             InterInsertHierarchy(hierarchy_vertices[h][n], locks, cut_graph_,
                                  parameters);
           }
+		  localtime = getDateTime();
           std::cout << "InterInsert completed for (level: " << h
-                    << ", round: " << sync_no << ")" << std::endl;
+                    << ", round: " << sync_no << ")" << " at time " << localtime << std::endl;
 
 #pragma omp parallel for schedule(static, PAR_BLOCK_SZ)
           for (int n = start_id; n < end_id; ++n) {		//GOPAL Changed from "unsigned n" to "int n"

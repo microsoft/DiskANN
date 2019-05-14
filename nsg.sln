@@ -11,6 +11,8 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "opt_disk_graph", "vcproj\op
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "nsg_sweep_index", "vcproj\nsg_sweep_index\nsg_sweep_index.vcxproj", "{CB7C582A-6970-4732-BFFB-2F21D1C8466B}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "test_nsg_search", "vcproj\test_nsg_search\test_nsg_search.vcxproj", "{4AE79A24-FAD6-436C-945E-4AE8A9A93612}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|x64 = Debug|x64
@@ -51,6 +53,14 @@ Global
 		{CB7C582A-6970-4732-BFFB-2F21D1C8466B}.Release|x64.Build.0 = Release|x64
 		{CB7C582A-6970-4732-BFFB-2F21D1C8466B}.Release|x86.ActiveCfg = Release|Win32
 		{CB7C582A-6970-4732-BFFB-2F21D1C8466B}.Release|x86.Build.0 = Release|Win32
+		{4AE79A24-FAD6-436C-945E-4AE8A9A93612}.Debug|x64.ActiveCfg = Debug|x64
+		{4AE79A24-FAD6-436C-945E-4AE8A9A93612}.Debug|x64.Build.0 = Debug|x64
+		{4AE79A24-FAD6-436C-945E-4AE8A9A93612}.Debug|x86.ActiveCfg = Debug|Win32
+		{4AE79A24-FAD6-436C-945E-4AE8A9A93612}.Debug|x86.Build.0 = Debug|Win32
+		{4AE79A24-FAD6-436C-945E-4AE8A9A93612}.Release|x64.ActiveCfg = Release|x64
+		{4AE79A24-FAD6-436C-945E-4AE8A9A93612}.Release|x64.Build.0 = Release|x64
+		{4AE79A24-FAD6-436C-945E-4AE8A9A93612}.Release|x86.ActiveCfg = Release|Win32
+		{4AE79A24-FAD6-436C-945E-4AE8A9A93612}.Release|x86.Build.0 = Release|Win32
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
