@@ -1,6 +1,6 @@
 #include "efanna2e/index_nsg.h"
-
 #include <omp.h>
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <ctime>
@@ -930,6 +930,11 @@ namespace NSG {
     //    is_inner[ep_] = true;
     parameters.Set<float>("alpha", 1);
 
+    std::vector<unsigned> rand_perm;
+    for (size_t i = 0; i < nd_; i++) {
+      rand_perm.push_back(i);
+    }
+
     std::random_device               rd;
     std::mt19937                     gen(rd());
     std::uniform_real_distribution<> dis(0, 1);
@@ -950,6 +955,8 @@ namespace NSG {
     auto                    cut_graph_ = new vecNgh[nd_];
 
     for (uint32_t rnd_no = 0; rnd_no < NUM_RNDS; rnd_no++) {
+      std::random_shuffle(rand_perm.begin(), rand_perm.end());
+
       if (rnd_no == NUM_RNDS - 1) {
         if (last_round_alpha > 1)
           parameters.Set<unsigned>("L", (unsigned) std::min((int) L, (int) 50));
@@ -1024,13 +1031,10 @@ namespace NSG {
         }
       }
 
-      /*        // save  nsg snapshot after each round
-              if (h == NUM_HIER - 1) {
-                std::string rnd_path =
-         parameters.Get<std::string>("save_path");
-                rnd_path += std::to_string(rnd_no);
-                Save(rnd_path.c_str());
-              } */
+      // save  nsg snapshot after each round
+      std::string rnd_path = parameters.Get<std::string>("save_path");
+      rnd_path += std::to_string(rnd_no);
+      Save(rnd_path.c_str());
       // save code ends
     }
 
