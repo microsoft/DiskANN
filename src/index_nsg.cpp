@@ -185,6 +185,7 @@ namespace NSG {
 
   void IndexNSG::Init_rnd_nn_graph(size_t num_points, unsigned k,
                                    std::vector<size_t> mapping) {
+    k = std::min(k, (unsigned) 32);
     size_t num = num_points;
     final_graph_.resize(num);
     final_graph_.reserve(num);

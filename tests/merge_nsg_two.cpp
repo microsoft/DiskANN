@@ -242,7 +242,6 @@ int main(int argc, char** argv) {
   std::cout << "max degree after base graphs " << final_width << std::endl;
 
   for (size_t i = base_num_shards; i < num_shards; i++) {
-
 #pragma omp parallel for schedule(dynamic, 65536)
     for (size_t j = 0; j < num_pts_in_shard[i]; j++) {
       //    if (final_graph[renaming_ids[num_shards - 1][j]].size() > 48)
