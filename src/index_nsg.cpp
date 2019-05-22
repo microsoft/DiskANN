@@ -403,18 +403,21 @@ namespace NSG {
       if (retset[k].flag) {
         retset[k].flag = false;
         unsigned n = retset[k].id;
-	
-	// prefetch final_graph_[n]
-	unsigned* nbrs = final_graph_[n].data();
-	unsigned nnbrs = final_graph_[n].size();
-	NSG::prefetch_vector((const float*)nbrs, nnbrs);
-        for (size_t m =0; m < nnbrs;m++){
-	  unsigned id = nbrs[m];
-	  if (m < (nnbrs - 1)) {
-		unsigned id_next = nbrs[m+1];
-		const float* vec_next = data_ + (size_t)id_next * dimension_;
-		NSG::prefetch_vector(vec_next, dimension_);
-	  }
+
+        // prefetch final_graph_[n]
+        unsigned *nbrs = final_graph_[n].data();
+        unsigned  nnbrs = final_graph_[n].size();
+        NSG::prefetch_vector((const float *) nbrs, nnbrs);
+        for (size_t m = 0; m < nnbrs; m++) {
+          unsigned id = nbrs[m];
+          if (m < (nnbrs - 1)) {
+            unsigned     id_next = nbrs[m + 1];
+            const float *vec_next1 = data_ + (size_t) id_next * dimension_;
+            //            NSG::prefetch_vector(vec_next1, dimension_);
+
+            for (size_t d = 0; d < dimension_; d += 16)
+              _mm_prefetch(vec_next1 + d, _MM_HINT_T0);
+          }
           if (visited.find(id) == visited.end())
             visited.insert(id);
           else
@@ -708,8 +711,8 @@ namespace NSG {
     //    unsigned inner_range = parameter.Get<unsigned>("innerR");
     unsigned inner_range = range;
 
-    //    unsigned maxc = parameter.Get<unsigned>("C");
-    unsigned int maxc = std::numeric_limits<unsigned int>::max();
+    unsigned maxc = parameter.Get<unsigned>("C");
+    // unsigned int maxc = std::numeric_limits<unsigned int>::max();
 
     float alpha = parameter.Get<float>("alpha");
 
@@ -1230,11 +1233,14 @@ namespace NSG {
       }
       auto last_iter = std::unique(unique_nbrs.begin(), unique_nbrs.end());
       for (auto iter = unique_nbrs.begin(); iter != last_iter; iter++) {
-	if (dimension_ == 128 && iter < (last_iter -1)){
-         unsigned id_next = *(iter + 1);
-         const float* vec = data_ + dimension_ * id_next;
-	 NSG::prefetch_vector(vec, dimension_);
-	}
+        if (iter < (last_iter - 1)) {
+          unsigned     id_next = *(iter + 1);
+          const float *vec1 = data_ + dimension_ * id_next;
+          //          NSG::prefetch_vector(vec1, dimension_);
+
+          for (size_t d = 0; d < dimension_; d += 16)
+            _mm_prefetch(vec1 + d, _MM_HINT_T0);
+        }
         cmps++;
         unsigned id = *iter;
         float    dist = distance_->compare(query, data_ + dimension_ * id,

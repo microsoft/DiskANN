@@ -464,10 +464,10 @@ namespace NSG {
 #endif
     delete[] block_read_buf;
   }
-  
+
   // NOTE :: good efficiency when total_vec_size is integral multiple of 64
-  inline void prefetch_vector(const float* vec, size_t dim){
-        for(size_t d=0;d<dim;d+=16)
-		_mm_prefetch(vec + d, _MM_HINT_T0);
+  inline void prefetch_vector(const float *vec, size_t dim) {
+    for (size_t d = 0; d < dim; d += 16)
+      _mm_prefetch(vec + d, _MM_HINT_T0);
   }
 }  // namespace NSG
