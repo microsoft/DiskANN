@@ -116,7 +116,7 @@ int main(int argc, char** argv) {
     std::cout << "Correct usage\n"
               << argv[0] << " data_file L R C "
               << "save_graph_file  alpha<1>  p_val<0.1> "
-              << "num_syncs <100> num_pass<1> innerR <R>" << std::endl;
+              << "num_syncs <100> num_pass<1> secondL <L>" << std::endl;
     exit(-1);
   }
 
@@ -148,7 +148,7 @@ int main(int argc, char** argv) {
   unsigned num_syncs = (float) std::atof(argv[8]);
   unsigned num_rnds = (unsigned) std::atoi(argv[9]);
   //  unsigned    innerL = (unsigned) atoi(argv[11]);
-  unsigned innerR = (unsigned) atoi(argv[10]);
+  unsigned secondL = (unsigned) atoi(argv[10]);
   //  unsigned    innerC = (unsigned) atoi(argv[13]);
 
   //  if (nn_graph_deg > R) {
@@ -167,7 +167,7 @@ int main(int argc, char** argv) {
   //  paras.Set<unsigned>("innerC", innerC);
   paras.Set<unsigned>("num_syncs", num_syncs);
   paras.Set<unsigned>("num_rnds", num_rnds);
-  paras.Set<unsigned>("innerR", innerR);
+  paras.Set<unsigned>("secondL", secondL);
   //  paras.Set<unsigned>("num_hier", num_hier);
   paras.Set<bool>("is_nsg", 0);
   paras.Set<bool>("is_rnd_nn", 1);

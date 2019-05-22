@@ -68,6 +68,7 @@ namespace NSG {
     void set_start_node(const unsigned s);
 
     void init_graph_outside(const float *data);
+    void prefetch_vector(unsigned id);
 
    protected:
     typedef std::vector<std::vector<unsigned>> CompactGraph;

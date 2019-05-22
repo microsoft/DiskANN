@@ -403,8 +403,18 @@ namespace NSG {
       if (retset[k].flag) {
         retset[k].flag = false;
         unsigned n = retset[k].id;
-
-        for (auto id : final_graph_[n]) {
+	
+	// prefetch final_graph_[n]
+	unsigned* nbrs = final_graph_[n].data();
+	unsigned nnbrs = final_graph_[n].size();
+	NSG::prefetch_vector((const float*)nbrs, nnbrs);
+        for (size_t m =0; m < nnbrs;m++){
+	  unsigned id = nbrs[m];
+	  if (m < (nnbrs - 1)) {
+		unsigned id_next = nbrs[m+1];
+		const float* vec_next = data_ + (size_t)id_next * dimension_;
+		NSG::prefetch_vector(vec_next, dimension_);
+	  }
           if (visited.find(id) == visited.end())
             visited.insert(id);
           else
@@ -695,9 +705,13 @@ namespace NSG {
                             tsl::robin_set<unsigned> &visited,
                             vecNgh *                  cut_graph_) {
     unsigned range = parameter.Get<unsigned>("R");
-    unsigned inner_range = parameter.Get<unsigned>("innerR");
-    unsigned maxc = parameter.Get<unsigned>("C");
-    float    alpha = parameter.Get<float>("alpha");
+    //    unsigned inner_range = parameter.Get<unsigned>("innerR");
+    unsigned inner_range = range;
+
+    //    unsigned maxc = parameter.Get<unsigned>("C");
+    unsigned int maxc = std::numeric_limits<unsigned int>::max();
+
+    float alpha = parameter.Get<float>("alpha");
 
     if (is_inner[q]) {
       range = inner_range;
@@ -787,7 +801,8 @@ namespace NSG {
                                       const Parameters &       parameter) {
     float      alpha = parameter.Get<float>("alpha");
     const auto base_range = parameter.Get<float>("R");
-    unsigned   inner_range = parameter.Get<unsigned>("innerR");
+    //    unsigned   inner_range = parameter.Get<unsigned>("innerR");
+    unsigned   inner_range = base_range;
     const auto src_pool = cut_graph_[n];
 
     assert(!src_pool.empty());
@@ -920,9 +935,11 @@ namespace NSG {
     const uint32_t NUM_SYNCS = parameters.Get<unsigned>("num_syncs");
     const uint32_t NUM_RNDS = parameters.Get<unsigned>("num_rnds");
     const unsigned L = parameters.Get<unsigned>("L");
+    const unsigned secondL = parameters.Get<unsigned>("secondL");
     const unsigned range = parameters.Get<unsigned>("R");
     const unsigned C = parameters.Get<unsigned>("C");
-    const unsigned inner_range = parameters.Get<unsigned>("innerR");
+    //    const unsigned inner_range = parameters.Get<unsigned>("innerR");
+    const unsigned inner_range = range;
     float          last_round_alpha = parameters.Get<float>("alpha");
 
     parameters.Set<unsigned>("L", L);
@@ -957,8 +974,8 @@ namespace NSG {
     for (uint32_t rnd_no = 0; rnd_no < NUM_RNDS; rnd_no++) {
       std::random_shuffle(rand_perm.begin(), rand_perm.end());
 
-      //      if (rnd_no > 0)
-      //        parameters.Set<unsigned>("L", (unsigned) secondL);
+      if (rnd_no > 0)
+        parameters.Set<unsigned>("L", (unsigned) secondL);
 
       if (rnd_no == NUM_RNDS - 1) {
         if (last_round_alpha > 1)
@@ -1213,6 +1230,11 @@ namespace NSG {
       }
       auto last_iter = std::unique(unique_nbrs.begin(), unique_nbrs.end());
       for (auto iter = unique_nbrs.begin(); iter != last_iter; iter++) {
+	if (dimension_ == 128 && iter < (last_iter -1)){
+         unsigned id_next = *(iter + 1);
+         const float* vec = data_ + dimension_ * id_next;
+	 NSG::prefetch_vector(vec, dimension_);
+	}
         cmps++;
         unsigned id = *iter;
         float    dist = distance_->compare(query, data_ + dimension_ * id,
