@@ -954,6 +954,8 @@ namespace NSG {
     for (size_t i = 0; i < nd_; i++) {
       rand_perm.push_back(i);
     }
+    std::vector<size_t> init_graph_vec;
+    init_graph_vec.push_back(ep_);
 
     std::random_device               rd;
     std::mt19937                     gen(rd());
@@ -961,14 +963,18 @@ namespace NSG {
 
     for (size_t i = 0; i < nd_; i++) {
       float candidate = dis(gen);
-      if (candidate < p_val)
+      if (candidate < p_val) {
         is_inner[i] = true;
+        if (i != ep_)
+          init_graph_vec.push_back(i);
+      }
     }
 
     std::string inner_path = parameters.Get<std::string>("save_path");
     Save_Inner_Vertices(inner_path.c_str());
 
-    Init_rnd_nn_graph(nd_, range);
+    //    Init_rnd_nn_graph(nd_, range);
+    Init_rnd_nn_graph(nd_, range, init_graph_vec);
 
     assert(final_graph_.size() == nd_);
     std::vector<std::mutex> locks(nd_);
