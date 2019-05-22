@@ -11,8 +11,8 @@
 #include <time.h>
 #include <unistd.h>
 
-void load_data(char* filename, float*& data, unsigned& num,
-               unsigned& dim) {  // load data with sift10K pattern
+void load_ivecs(char* filename, unsigned*& data, unsigned& num,
+                unsigned& dim) {  // load data with sift10K pattern
   std::ifstream in(filename, std::ios::binary);
   if (!in.is_open()) {
     std::cout << "open file error" << std::endl;
@@ -26,7 +26,7 @@ void load_data(char* filename, float*& data, unsigned& num,
   size_t fsize = (size_t) ss;
   num = (unsigned) (fsize / (dim + 1) / 4);
   std::cout << "Reading " << num << " points" << std::endl;
-  data = new float[(size_t) num * (size_t) dim];
+  data = new unsigned[(size_t) num * (size_t) dim];
 
   in.seekg(0, std::ios::beg);
   for (size_t i = 0; i < num; i++) {
@@ -34,6 +34,79 @@ void load_data(char* filename, float*& data, unsigned& num,
     in.read((char*) (data + i * dim), dim * 4);
   }
   in.close();
+}
+
+void load_fvecs(const char* filename, float*& data, unsigned& num,
+                unsigned& dim) {
+  unsigned new_dim = 0;
+  char*    buf;
+  int      fd;
+  fd = open(filename, O_RDONLY);
+  if (!(fd > 0)) {
+    std::cerr << "Data file " << filename
+              << " not found. Program will stop now." << std::endl;
+    assert(false);
+  }
+  struct stat sb;
+  fstat(fd, &sb);
+  off_t fileSize = sb.st_size;
+  //  assert(sizeof(off_t) == 8);
+
+  buf = (char*) mmap(NULL, fileSize, PROT_READ, MAP_PRIVATE, fd, 0);
+  //  assert(buf);
+  // size_t x=4;
+  uint32_t file_dim;
+  std::memcpy(&file_dim, buf, 4);
+  dim = file_dim;
+  size_t dim_t = dim;
+  if (new_dim == 0)
+    new_dim = dim;
+
+  if (new_dim < dim)
+    std::cout << "load_bvecs " << filename << ". Current Dimension: " << dim
+              << ". New Dimension: First " << new_dim << " columns. "
+              << std::flush;
+  else if (new_dim > dim)
+    std::cout << "load_bvecs " << filename << ". Current Dimension: " << dim
+              << ". New Dimension: " << new_dim
+              << " (added columns with 0 entries). " << std::flush;
+  else
+    std::cout << "load_bvecs " << filename << ". Dimension: " << dim << ". "
+              << std::flush;
+
+  float* zeros = new float[new_dim];
+  for (size_t i = 0; i < new_dim; i++)
+    zeros[i] = 0;
+
+  size_t num_t = (fileSize / (4 * dim_t + 4));
+  num = (unsigned) num_t;
+  data = new float[(size_t) num * (size_t) new_dim];
+
+  std::cout << "# Points: " << num << ".." << std::flush;
+
+#pragma omp parallel for schedule(static, 65536)
+  for (size_t i = 0; i < num; i++) {
+    uint32_t row_dim;
+    char*    reader = buf + (i * (4 * dim_t + 4));
+    std::memcpy((char*) &row_dim, reader, sizeof(uint32_t));
+    if (row_dim != dim)
+      std::cerr << "ERROR: row dim does not match" << std::endl;
+    std::memcpy(data + (i * new_dim), zeros,
+                ((size_t) new_dim) * sizeof(float));
+    if (new_dim > dim) {
+      std::memcpy(data + (i * new_dim), reader + 4, dim_t * sizeof(float));
+      //	std::memcpy(data + (i * new_dim), (reader + 4),
+      //		    dim * sizeof(float));
+    } else {
+      std::memcpy(data + (i * new_dim), reader + 4,
+                  ((size_t) new_dim) * sizeof(float));
+      //	std::memcpy(data + (i * new_dim),
+      //(reader + 4), 		    new_dim * sizeof(float));
+    }
+  }
+  int val = munmap(buf, fileSize);
+  close(fd);
+  std::cout << "done." << std::endl;
 }
 
 void load_bvecs(const char* filename, float*& data, unsigned& num,
@@ -113,17 +186,26 @@ void load_bvecs(const char* filename, float*& data, unsigned& num,
   std::cout << "done." << std::endl;
 }
 
-/*void save_result(char* filename, std::vector<std::vector<unsigned> >& results)
-{
-  std::ofstream out(filename, std::ios::binary | std::ios::out);
+float calc_recall(unsigned num_queries, unsigned* gold_std, unsigned dim_gs,
+                  unsigned* our_results, unsigned dim_or, unsigned recall_at) {
+  bool*    this_point = new bool[recall_at];
+  unsigned total_recall = 0;
 
-  for (unsigned i = 0; i < results.size(); i++) {
-    unsigned GK = (unsigned) results[i].size();
-    out.write((char*) &GK, sizeof(unsigned));
-    out.write((char*) results[i].data(), GK * sizeof(unsigned));
+  for (size_t i = 0; i < num_queries; i++) {
+    for (unsigned j = 0; j < recall_at; j++)
+      this_point[j] = false;
+    for (size_t j1 = 0; j1 < recall_at; j1++)
+      for (size_t j2 = 0; j2 < dim_or; j2++)
+        if (gold_std[i * (size_t) dim_gs + j1] ==
+            our_results[i * (size_t) dim_or + j2]) {
+          if (this_point[j1] == false)
+            total_recall++;
+          this_point[j1] = true;
+        }
   }
-  out.close();
-}*/
+  return ((float) total_recall) / ((float) num_queries) *
+         (100.0 / ((float) recall_at));
+}
 
 void save_result(char* filename, unsigned* results, unsigned nd, unsigned nr) {
   std::ofstream out(filename, std::ios::binary | std::ios::out);
@@ -136,45 +218,72 @@ void save_result(char* filename, unsigned* results, unsigned nd, unsigned nr) {
 }
 
 int main(int argc, char** argv) {
-  if ((argc < 9) || ((argc - 9) % 3 != 0)) {
-    std::cout << argv[0]
-              << " data_file query_file nsg_path "
-                 "result_path_prefix BFS-init=1/0 L1 K1 BW1 L2 K2 BW2 ..."
+  if ((argc != 8)) {
+    std::cout << argv[0] << " data_file query_file groundtruth nsg_path "
+                            "BFS-init=1/0 beamwidth recall@"
               << std::endl;
     exit(-1);
   }
 
-  int bfs_init = atoi(argv[5]);
+  int      bfs_init = atoi(argv[5]);
+  unsigned beam_width = atoi(argv[6]);
+  unsigned recall_at = atoi(argv[7]);
 
-  uint32_t  num_tests = (argc - 6) / 3;
-  unsigned* Lvec = new unsigned[num_tests];
-  unsigned* Kvec = new unsigned[num_tests];
-  uint32_t* Bwvec = new uint32_t[num_tests];
+  float*    data_load = NULL;
+  float*    query_load = NULL;
+  unsigned* gt_load = NULL;
+  unsigned  points_num, dim, query_num, query_dim;
+  unsigned  gt_num, gt_dim;
 
-  for (int i = 0; i < num_tests; i++) {
-    Lvec[i] = std::atoi(argv[6 + 3 * i]);
-    Kvec[i] = std::atoi(argv[6 + 3 * i + 1]);
-    Bwvec[i] = std::atoi(argv[6 + 3 * i + 2]);
-    if (Lvec[i] < Kvec[i]) {
-      std::cout << "search_L cannot be smaller than search_K!" << std::endl;
-      exit(-1);
-    }
+  std::vector<unsigned> Lvec;
+  unsigned              curL = 8;
+  while (curL < 2048) {
+    Lvec.push_back(curL);
+    if (curL < 16)
+      curL += 2;
+    else if (curL < 32)
+      curL += 4;
+    else if (curL < 64)
+      curL += 8;
+    else if (curL < 128)
+      curL += 16;
+    else if (curL < 256)
+      curL += 32;
+    else if (curL < 512)
+      curL += 64;
+    else if (curL < 1024)
+      curL += 128;
+    else
+      curL += 256;
   }
 
-  float*   data_load = NULL;
-  float*   query_load = NULL;
-  unsigned points_num, dim, query_num, query_dim;
+  std::cout.setf(std::ios_base::fixed, std::ios_base::floatfield);
+  std::cout.precision(2);
+  //  std::cout.precision(1);
+
   // load_data(argv[1], data_load, points_num, dim);
   std::string bvecs("bvecs");
   if (std::string(argv[1]).find(bvecs) != std::string::npos)
     load_bvecs(argv[1], data_load, points_num, dim);
   else
-    load_data(argv[1], data_load, points_num, dim);
+    load_fvecs(argv[1], data_load, points_num, dim);
 
   if (std::string(argv[2]).find(bvecs) != std::string::npos)
     load_bvecs(argv[2], query_load, query_num, query_dim);
   else
-    load_data(argv[2], query_load, query_num, query_dim);
+    load_fvecs(argv[2], query_load, query_num, query_dim);
+
+  load_ivecs(argv[3], gt_load, gt_num, gt_dim);
+  if (gt_num != query_num) {
+    std::cout << "Ground truth does not match number of queries. ";
+    exit(-1);
+  }
+
+  if (recall_at > gt_num) {
+    std::cout << "Ground truth has only " << gt_num
+              << " elements. Calculating recall at " << gt_num << std::endl;
+    recall_at = gt_num;
+  }
 
   assert(dim == query_dim);
   std::cout << "Base and query data loaded" << std::endl;
@@ -184,7 +293,7 @@ int main(int argc, char** argv) {
 
   NSG::IndexNSG index(dim, points_num, NSG::L2, nullptr);
   //  if (nsg_check == 1)
-  index.Load(argv[3]);  // to load NSG
+  index.Load(argv[4]);  // to load NSG
                         //  else {
                         //    index.Load_nn_graph(argv[3]);  // to load EFANNA
 
@@ -200,24 +309,26 @@ int main(int argc, char** argv) {
   }
 
   NSG::Parameters paras;
-
-  for (uint32_t test_id = 0; test_id < num_tests; test_id++) {
-    unsigned  L = Lvec[test_id];
-    unsigned  K = Kvec[test_id];
-    uint32_t  beam_width = Bwvec[test_id];
+  std::cout << "Ls\t\tLatency\t\tRecall@" << recall_at << "\tCmps\t\tHops"
+            << std::endl;
+  std::cout << "==============================================================="
+               "======="
+            << std::endl;
+  for (uint32_t test_id = 0; test_id < Lvec.size(); test_id++) {
+    unsigned L = Lvec[test_id];
+    if (L < recall_at)
+      continue;
+    unsigned  K = L;
     unsigned* res = new unsigned[(size_t) query_num * K];
 
     paras.Set<unsigned>("L_search", L);
     paras.Set<unsigned>("P_search", L);
 
-    auto s = std::chrono::high_resolution_clock::now();
-
     long long total_hops = 0;
     long long total_cmps = 0;
 
-    std::cout << "NSG search using L = " << L << ", K = " << K
-              << ", BeamWidth = " << beam_width << std::endl;
-#pragma omp parallel for schedule(static, 1000)
+    auto s = std::chrono::high_resolution_clock::now();
+    //#pragma omp parallel for schedule(static, 1)
     for (unsigned i = 0; i < query_num; i++) {
       auto ret =
           index.BeamSearch(query_load + i * dim, data_load, K, paras,
@@ -233,20 +344,16 @@ int main(int argc, char** argv) {
 
     auto                          e = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> diff = e - s;
-    std::cout << "search time: " << diff.count() << "\n";
-
-    std::cout << "Average hops: " << (float) total_hops / (float) query_num
-              << std::endl
-              << "Average cmps: " << (float) total_cmps / (float) query_num
-              << std::endl;
-    std::string output_file = std::string(argv[4]);
-    output_file += "_search-" + std::to_string(L) + "-" + std::to_string(K) +
-                   "-" + std::to_string(beam_width) + ".ivecs";
-    char* out_file = new char[output_file.size() + 1];
-    out_file[output_file.size()] = 0;
-    std::memcpy(out_file, output_file.c_str(), output_file.size());
-    save_result(out_file, res, query_num, K);
-    delete[] out_file;
+    //    std::cout << "search time: " << diff.count() << "\n";
+    float latency = (diff.count() / query_num) * (1000000);
+    float avg_hops = (float) total_hops / (float) query_num;
+    float avg_cmps = (float) total_cmps / (float) query_num;
+    float recall = calc_recall(query_num, gt_load, gt_dim, res, K, recall_at);
+    std::cout << L << "\t\t" << latency << "\t\t" << recall << "\t\t"
+              << avg_cmps << "\t\t" << avg_hops << std::endl;
+    if (recall > 99.5) {
+      break;
+    }
     delete[] res;
   }
   delete[] data_load;

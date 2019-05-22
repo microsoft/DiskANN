@@ -957,6 +957,9 @@ namespace NSG {
     for (uint32_t rnd_no = 0; rnd_no < NUM_RNDS; rnd_no++) {
       std::random_shuffle(rand_perm.begin(), rand_perm.end());
 
+      //      if (rnd_no > 0)
+      //        parameters.Set<unsigned>("L", (unsigned) secondL);
+
       if (rnd_no == NUM_RNDS - 1) {
         if (last_round_alpha > 1)
           parameters.Set<unsigned>("L", (unsigned) std::min((int) L, (int) 50));
