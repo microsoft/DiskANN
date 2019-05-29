@@ -2,7 +2,11 @@
 
 #ifndef __NSG_WINDOWS__
 #include <sys/mman.h>
+#include <sys/types.h>
+#include <sys/stat.h>
 #include <unistd.h>
+#include <fcntl.h>
+
 #else
 #include <Windows.h>
 #endif
