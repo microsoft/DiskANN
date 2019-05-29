@@ -14,6 +14,7 @@
 
 void load_fvecs(const char* filename, float*& data, unsigned& num,
                 unsigned& dim) {
+  unsigned new_dim = 0;
   char*    buf;
   int      fd;
   fd = open(filename, O_RDONLY);
@@ -33,23 +34,51 @@ void load_fvecs(const char* filename, float*& data, unsigned& num,
   uint32_t file_dim;
   std::memcpy(&file_dim, buf, 4);
   dim = file_dim;
+  size_t dim_t = dim;
+  if (new_dim == 0)
+    new_dim = dim;
 
-  std::cout << "Loading fvecs " << filename << ". Dimension: " << dim << ". "
-	  << std::flush;
+  if (new_dim < dim)
+    std::cout << "load_bvecs " << filename << ". Current Dimension: " << dim
+              << ". New Dimension: First " << new_dim << " columns. "
+              << std::flush;
+  else if (new_dim > dim)
+    std::cout << "load_bvecs " << filename << ". Current Dimension: " << dim
+              << ". New Dimension: " << new_dim
+              << " (added columns with 0 entries). " << std::flush;
+  else
+    std::cout << "load_bvecs " << filename << ". Dimension: " << dim << ". "
+              << std::flush;
 
-  num = (unsigned) (fileSize / (4*dim + 4));
-  data = new float[(size_t) num * (size_t) dim];
+  float* zeros = new float[new_dim];
+  for (size_t i = 0; i < new_dim; i++)
+    zeros[i] = 0;
+
+  size_t num_t = (fileSize / (4 * dim_t + 4));
+  num = (unsigned) num_t;
+  data = new float[(size_t) num * (size_t) new_dim];
 
   std::cout << "# Points: " << num << ".." << std::flush;
 
 #pragma omp parallel for schedule(static, 65536)
   for (size_t i = 0; i < num; i++) {
     uint32_t row_dim;
-    char*    reader = buf + (i * (4*dim + 4));
+    char*    reader = buf + (i * (4 * dim_t + 4));
     std::memcpy((char*) &row_dim, reader, sizeof(uint32_t));
     if (row_dim != dim)
       std::cerr << "ERROR: row dim does not match" << std::endl;
-        std::memcpy((char*) data + i * dim, reader + 4, dim*sizeof(uint32_t));
+    std::memcpy(data + (i * new_dim), zeros,
+                ((size_t) new_dim) * sizeof(float));
+    if (new_dim > dim) {
+      std::memcpy(data + (i * new_dim), reader + 4, dim_t * sizeof(float));
+      //	std::memcpy(data + (i * new_dim), (reader + 4),
+      //		    dim * sizeof(float));
+    } else {
+      std::memcpy(data + (i * new_dim), reader + 4,
+                  ((size_t) new_dim) * sizeof(float));
+      //	std::memcpy(data + (i * new_dim),
+      //(reader + 4), 		    new_dim * sizeof(float));
+    }
   }
   int val = munmap(buf, fileSize);
   close(fd);
@@ -58,6 +87,7 @@ void load_fvecs(const char* filename, float*& data, unsigned& num,
 
 void load_bvecs(const char* filename, float*& data, unsigned& num,
                 unsigned& dim) {
+  unsigned new_dim = 0;
   char*    buf;
   int      fd;
   fd = open(filename, O_RDONLY);
@@ -77,13 +107,27 @@ void load_bvecs(const char* filename, float*& data, unsigned& num,
   uint32_t file_dim;
   std::memcpy(&file_dim, buf, 4);
   dim = file_dim;
+  if (new_dim == 0)
+    new_dim = dim;
 
-    std::cout << "Loading bvecs " << filename << ". Dimension: " << dim << ". "
+  if (new_dim < dim)
+    std::cout << "load_bvecs " << filename << ". Current Dimension: " << dim
+              << ". New Dimension: First " << new_dim << " columns. "
+              << std::flush;
+  else if (new_dim > dim)
+    std::cout << "load_bvecs " << filename << ". Current Dimension: " << dim
+              << ". New Dimension: " << new_dim
+              << " (added columns with 0 entries). " << std::flush;
+  else
+    std::cout << "load_bvecs " << filename << ". Dimension: " << dim << ". "
               << std::flush;
 
+  float* zeros = new float[new_dim];
+  for (size_t i = 0; i < new_dim; i++)
+    zeros[i] = 0;
 
   num = (unsigned) (fileSize / (dim + 4));
-  data = new float[(size_t) num * (size_t) dim];
+  data = new float[(size_t) num * (size_t) new_dim];
 
   std::cout << "# Points: " << num << ".." << std::flush;
 
@@ -94,15 +138,28 @@ void load_bvecs(const char* filename, float*& data, unsigned& num,
     std::memcpy((char*) &row_dim, reader, sizeof(uint32_t));
     if (row_dim != dim)
       std::cerr << "ERROR: row dim does not match" << std::endl;
+    std::memcpy(data + (i * new_dim), zeros, new_dim * sizeof(float));
+    if (new_dim > dim) {
+      //	std::memcpy(data + (i * new_dim), (reader + 4),
+      //		    dim * sizeof(float));
       for (size_t j = 0; j < dim; j++) {
         uint8_t cur;
         std::memcpy((char*) &cur, (reader + 4 + j), sizeof(uint8_t));
-        data[i * dim + j] = (float) cur;
+        data[i * new_dim + j] = (float) cur;
       }
+    } else {
+      for (size_t j = 0; j < new_dim; j++) {
+        uint8_t cur;
+        std::memcpy((char*) &cur, (reader + 4 + j), sizeof(uint8_t));
+        data[i * new_dim + j] = (float) cur;
+        //	std::memcpy(data + (i * new_dim),
+        //(reader + 4), 		    new_dim * sizeof(float));
+      }
+    }
   }
   int val = munmap(buf, fileSize);
   close(fd);
-  std::cout << "done. Stored as float vectors" << std::endl;
+  std::cout << "done." << std::endl;
 }
 
 int main(int argc, char** argv) {

@@ -438,7 +438,8 @@ namespace NSG {
     return min_idx;
   }
 
-  /* This function tries to add as many diverse edges as possible from current node n to all the visited nodes obtained by running get_neighbors */
+  /* This function tries to add as many diverse edges as possible from current
+   * node n to all the visited nodes obtained by running get_neighbors */
 
   void IndexNSG::sync_prune(unsigned q, std::vector<Neighbor> &pool,
                             const Parameters &        parameter,
@@ -531,7 +532,7 @@ namespace NSG {
       for (unsigned i = 0; i < result2.size(); i++) {
         result.emplace_back(result2[i]);
       }
-      /* convert it into a set, so that duplicates are all removed. 
+      /* convert it into a set, so that duplicates are all removed.
       */
       std::set<Neighbor> s(result.begin(), result.end());
       result.assign(s.begin(), s.end());
@@ -549,7 +550,8 @@ namespace NSG {
   }
 
   /* InterInsertHierarchy():
-   * This function tries to add reverse links from all the visited nodes to the current node n.
+   * This function tries to add reverse links from all the visited nodes to the
+   * current node n.
    */
   void IndexNSG::InterInsertHierarchy(unsigned                 n,
                                       std::vector<std::mutex> &locks,
@@ -713,7 +715,9 @@ namespace NSG {
 
     parameters.Set<unsigned>("L", L);
     parameters.Set<unsigned>("C", C);
-    parameters.Set<float>("alpha", 1);  // alpha is hardcoded to 1 for the first pass, for last pass alone we will use the specified value
+    parameters.Set<float>("alpha", 1);  // alpha is hardcoded to 1 for the first
+                                        // pass, for last pass alone we will use
+                                        // the specified value
 
     /* rand_perm is a vector that is initialized to the entire graph */
     std::vector<unsigned> rand_perm;
@@ -750,9 +754,7 @@ namespace NSG {
         size_t round_size = end_id - start_id;
 
         size_t PAR_BLOCK_SZ =
-            round_size > 1 << 20
-                ? 1 << 12
-                : (round_size + 256) / 256;  
+            round_size > 1 << 20 ? 1 << 12 : (round_size + 256) / 256;
         size_t nblocks = DIV_ROUND_UP(round_size, PAR_BLOCK_SZ);
 
 #pragma omp parallel for schedule(dynamic, 1)
@@ -789,7 +791,7 @@ namespace NSG {
           auto node = n;
           final_graph_[node]
               .clear();  // clear all the neighbors of final_graph_[node]
-          final_graph_[node].reserve(range);  
+          final_graph_[node].reserve(range);
           assert(!cut_graph_[node].empty());
           for (auto link : cut_graph_[node]) {
             final_graph_[node].emplace_back(link.id);
