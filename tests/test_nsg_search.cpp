@@ -208,13 +208,10 @@ int main(int argc, char** argv) {
     std::cout << "NSG search using L = " << L << ", K = " << K
               << ", BeamWidth = " << beam_width << std::endl;
 #pragma omp parallel for schedule(static, 1000)
-    for (int i = 0; i < query_num;
-         i++) {  // GOPAL renamed "unsigned i" to "int i"
+    for (int i = 0; i < query_num; i++) {  // GOPAL renamed "unsigned i" to "int i"
       auto ret =
           index.BeamSearch(query_load + i * dim, data_load, K, paras,
                            res + ((size_t) i) * K, beam_width, start_points);
-      // auto ret = index.Search(query_load + i * dim, data_load, K, paras,
-      // tmp.data());
 
 #pragma omp atomic
       total_hops += ret.first;

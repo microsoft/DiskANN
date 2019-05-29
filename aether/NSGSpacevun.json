@@ -39,7 +39,7 @@
               "ValueType": 0,
               "AssignmentsToConcatenate": null,
               "Name": "RelativePath",
-              "Value": "data/bing_kann/spacevun/spacevun_base.fvecs"
+              "Value": "data/bing_kann/spacevun/spacevun_IVF-10_subshard-0.fvecs"
             },
             {
               "ValueType": 0,
@@ -59,7 +59,7 @@
         },
         {
           "Id": "d6a649ff",
-          "ModuleId": "d156e0b4-d2c3-423d-832b-7c6eb61c039f",
+          "ModuleId": "f89f2653-c50f-4171-aea9-799e05fa162f",
           "CloudPriority": 0,
           "DefaultDataRetentionHint": null,
           "ModuleParameters": [],
@@ -282,8 +282,8 @@
       "WorkspaceId": null,
       "Etag": null,
       "Tags": null,
-      "CreatedDate": "2019-05-08T23:04:38.308742+05:30",
-      "LastModifiedDate": "2019-05-08T23:04:38.308742+05:30",
+      "CreatedDate": "2019-05-28T16:33:46.45604+05:30",
+      "LastModifiedDate": "2019-05-28T16:33:46.45604+05:30",
       "EntityStatus": 0
     }
   },

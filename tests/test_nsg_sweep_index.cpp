@@ -126,11 +126,11 @@ void load_bvecs(const char* filename, float*& data, unsigned& num,
 }
 
 int main(int argc, char** argv) {
-  if (argc != 11) {
+  if (argc != 6) {
     std::cout << "Correct usage\n"
-              << argv[0] << " data_file L R C "
-              << "save_graph_file  alpha<1>  p_val<0.1> "
-              << "num_syncs <100> num_pass<1> innerR <R>" << std::endl;
+              << argv[0] << " data_file L R "
+              << "save_graph_file "
+              << "num_pass<1>" << std::endl;
     exit(-1);
   }
 
@@ -154,15 +154,15 @@ int main(int argc, char** argv) {
   //  unsigned    nn_graph_deg = (unsigned) atoi(argv[3]);
   unsigned    L = (unsigned) atoi(argv[2]);
   unsigned    R = (unsigned) atoi(argv[3]);
-  unsigned    C = (unsigned) atoi(argv[4]);
-  std::string save_path(argv[5]);
-  float       alpha = (float) std::atof(argv[6]);
-  float       p_val = (float) std::atof(argv[7]);
+  unsigned    C = 750; //(unsigned) atoi(argv[4]);
+  std::string save_path(argv[4]);
+  float       alpha = 1.2f; //(float) std::atof(argv[6]);
+  float       p_val = 0.05f; //(float) std::atof(argv[7]);
   //  unsigned    num_hier = (float) std::atof(argv[8]);
-  unsigned num_syncs = (float) std::atof(argv[8]);
-  unsigned num_rnds = (unsigned) std::atoi(argv[9]);
+  unsigned num_syncs = 150; //(float) std::atof(argv[8]);
+  unsigned num_rnds = (unsigned) std::atoi(argv[5]);
   //  unsigned    innerL = (unsigned) atoi(argv[11]);
-  unsigned innerR = (unsigned) atoi(argv[10]);
+  unsigned innerR = R; //(unsigned) atoi(argv[10]);
   //  unsigned    innerC = (unsigned) atoi(argv[13]);
 
   //  if (nn_graph_deg > R) {
@@ -196,7 +196,7 @@ int main(int argc, char** argv) {
     std::chrono::duration<double> diff = e - s;
 
     std::cout << "indexing time: " << diff.count() << "\n";
-    index.Save(argv[5]);
+    index.Save(argv[4]);
     //    index.Save_Inner_Vertices(argv[5]);
   }
 
