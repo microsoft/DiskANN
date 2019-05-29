@@ -701,7 +701,7 @@ namespace NSG {
    */
   void IndexNSG::LinkHierarchy(Parameters &parameters) {
     //    The graph will be updated periodically in NUM_SYNCS batches
-    const uint32_t NUM_SYNCS = nd_ > 1 << 20 ? 5 * (nd_ / (128 * 1024 * 5))
+    const uint32_t NUM_SYNCS = nd_ > 1 << 20 ?  (nd_ / (128 * 1024 * 5))
                                              : 20 * (nd_ / (128 * 1024 * 5));
     std::cout << "Number of syncs determinted to be " << NUM_SYNCS << std::endl;
     const uint32_t NUM_RNDS = parameters.Get<unsigned>(
