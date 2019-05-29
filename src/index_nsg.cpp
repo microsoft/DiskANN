@@ -1061,9 +1061,10 @@ namespace NSG {
       }
 
       // save  nsg snapshot after each round
-      std::string rnd_path = parameters.Get<std::string>("save_path");
+/*      std::string rnd_path = parameters.Get<std::string>("save_path");
       rnd_path += std::to_string(rnd_no);
       Save(rnd_path.c_str());
+*/
       // save code ends
     }
 

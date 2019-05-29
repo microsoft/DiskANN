@@ -240,21 +240,21 @@ int main(int argc, char** argv) {
   while (curL < 2048) {
     Lvec.push_back(curL);
     if (curL < 16)
-      curL += 2;
+      curL += 1;
     else if (curL < 32)
-      curL += 4;
+      curL += 2;
     else if (curL < 64)
-      curL += 8;
+      curL += 4;
     else if (curL < 128)
-      curL += 16;
+      curL += 8;
     else if (curL < 256)
-      curL += 32;
+      curL += 16;
     else if (curL < 512)
-      curL += 64;
+      curL += 32;
     else if (curL < 1024)
-      curL += 128;
+      curL += 64;
     else
-      curL += 256;
+      curL += 128;
   }
 
   std::cout.setf(std::ios_base::fixed, std::ios_base::floatfield);
@@ -328,7 +328,7 @@ int main(int argc, char** argv) {
     long long total_cmps = 0;
 
     auto s = std::chrono::high_resolution_clock::now();
-    //#pragma omp parallel for schedule(static, 1)
+    #pragma omp parallel for schedule(static, 1)
     for (unsigned i = 0; i < query_num; i++) {
       auto ret =
           index.BeamSearch(query_load + i * dim, data_load, K, paras,
