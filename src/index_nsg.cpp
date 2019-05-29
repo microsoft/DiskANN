@@ -23,16 +23,16 @@ namespace NSG {
 #define MAX_START_POINTS 100
 
 	//UTILITY FUNCTIONS START
-	static std::string getDateTime() {
-		time_t currenttime = time(nullptr);
-		tm localtime;
-		localtime_s(&localtime, &currenttime);
+	//static std::string getDateTime() {
+	//	time_t currenttime = time(nullptr);
+	//	tm localtime;
+	//	localtime_s(&localtime, &currenttime);
 
-		std::stringstream outputStr;
-		outputStr << localtime.tm_year << "-" << localtime.tm_mon << "-" << localtime.tm_mday << " " << localtime.tm_hour << ":" << localtime.tm_min << ":" << localtime.tm_sec;
+	//	std::stringstream outputStr;
+	//	outputStr << localtime.tm_year << "-" << localtime.tm_mon << "-" << localtime.tm_mday << " " << localtime.tm_hour << ":" << localtime.tm_min << ":" << localtime.tm_sec;
 
-		return outputStr.str(); //move semantics! 
-	}
+	//	return outputStr.str(); //move semantics! 
+	//}
 	//UTILITY FUNCTIONS END
 
 
