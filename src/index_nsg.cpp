@@ -260,8 +260,6 @@ namespace NSG {
      * all the neighbors of navigating node along with distance from query,
      * init_ids contains all the ids of the neighbors of ep_, visited also
      * contains all the ids of neighbors of ep_
-     * Why do you need to do this for each query? Just do it once and keep it
-     * around right?
      */
     iterate_to_fixed_point(query, parameter, init_ids, retset, fullset,
                            visited);
@@ -440,6 +438,8 @@ namespace NSG {
     return min_idx;
   }
 
+  /* This function tries to add as many diverse edges as possible from current node n to all the visited nodes obtained by running get_neighbors */
+
   void IndexNSG::sync_prune(unsigned q, std::vector<Neighbor> &pool,
                             const Parameters &        parameter,
                             tsl::robin_set<unsigned> &visited,
@@ -527,13 +527,11 @@ namespace NSG {
           result2.emplace_back(p);
       }
       /* add everything from result2 to result. This will lead to duplicates
-       * right? */
+       */
       for (unsigned i = 0; i < result2.size(); i++) {
         result.emplace_back(result2[i]);
       }
-      /* convert it into a set, so that duplicates are all removed. In this
-         case,
-         why did we do step 1 without the alpha thing?
+      /* convert it into a set, so that duplicates are all removed. 
       */
       std::set<Neighbor> s(result.begin(), result.end());
       result.assign(s.begin(), s.end());
@@ -551,8 +549,7 @@ namespace NSG {
   }
 
   /* InterInsertHierarchy():
-   * This function goes one level deeper in the hierarchy and adds the
-   * final neighbors to the neighbors of the node n. Why?
+   * This function tries to add reverse links from all the visited nodes to the current node n.
    */
   void IndexNSG::InterInsertHierarchy(unsigned                 n,
                                       std::vector<std::mutex> &locks,
@@ -701,13 +698,12 @@ namespace NSG {
    * The graph creation function.
    */
   void IndexNSG::LinkHierarchy(Parameters &parameters) {
-    //    const uint32_t NUM_SYNCS = parameters.Get<unsigned>("num_syncs"); //
-    //    num. of batches for creation
+    //    The graph will be updated periodically in NUM_SYNCS batches
     const uint32_t NUM_SYNCS = nd_ > 1 << 20 ? 5 * (nd_ / (128 * 1024 * 5))
                                              : 20 * (nd_ / (128 * 1024 * 5));
     std::cout << "Number of syncs determinted to be " << NUM_SYNCS << std::endl;
     const uint32_t NUM_RNDS = parameters.Get<unsigned>(
-        "num_rnds");  // num. of rounds for creation. def = 2
+        "num_rnds");  // num. of passes of overall algorithm
     const unsigned L = parameters.Get<unsigned>("L");  // Search list size
     const unsigned range =
         parameters.Get<unsigned>("R");                 // Max degree of graph
@@ -717,7 +713,7 @@ namespace NSG {
 
     parameters.Set<unsigned>("L", L);
     parameters.Set<unsigned>("C", C);
-    parameters.Set<float>("alpha", 1);  // alpha is hardcoded to 1
+    parameters.Set<float>("alpha", 1);  // alpha is hardcoded to 1 for the first pass, for last pass alone we will use the specified value
 
     /* rand_perm is a vector that is initialized to the entire graph */
     std::vector<unsigned> rand_perm;
@@ -745,12 +741,9 @@ namespace NSG {
         parameters.Set<float>("alpha", last_round_alpha);
       }
 
-      // round_size = nd_ / (NUM_SYNCS - 1) + nd_ % (NUM_SYNCS - 1)
       size_t round_size = DIV_ROUND_UP(nd_, NUM_SYNCS - 1) -
                           1;  // this gives the size of each batch
 
-      /* Why doing this in batches? Memory consumption? Also, doing iteratively,
-       * graph quality? */
       for (uint32_t sync_num = 0; sync_num < NUM_SYNCS; sync_num++) {
         size_t start_id = sync_num * round_size;
         size_t end_id = std::min(nd_, (sync_num + 1) * round_size);
@@ -759,7 +752,7 @@ namespace NSG {
         size_t PAR_BLOCK_SZ =
             round_size > 1 << 20
                 ? 1 << 12
-                : (round_size + 256) / 256;  // why this much block_size (4096)?
+                : (round_size + 256) / 256;  
         size_t nblocks = DIV_ROUND_UP(round_size, PAR_BLOCK_SZ);
 
 #pragma omp parallel for schedule(dynamic, 1)
@@ -796,7 +789,7 @@ namespace NSG {
           auto node = n;
           final_graph_[node]
               .clear();  // clear all the neighbors of final_graph_[node]
-          final_graph_[node].reserve(range);  // What is inner_range?
+          final_graph_[node].reserve(range);  
           assert(!cut_graph_[node].empty());
           for (auto link : cut_graph_[node]) {
             final_graph_[node].emplace_back(link.id);
@@ -807,7 +800,6 @@ namespace NSG {
 
 #pragma omp parallel for schedule(static, PAR_BLOCK_SZ)
         for (unsigned n = start_id; n < end_id; ++n) {
-          /* Add the correct neighbors to the neighbors of n. Why? */
           InterInsertHierarchy(n, locks, cut_graph_, parameters);
         }
 
@@ -928,7 +920,7 @@ namespace NSG {
     int cmps = 0;
     int k = 0;
 
-    /* Maximum L rounds take place to get nearest neighbor. Why? */
+    /* Maximum L rounds take place to get nearest neighbor.  */
     while (k < (int) L) {
       int nk = L;
 
