@@ -35,19 +35,19 @@ void load_data(char* filename, float*& data, unsigned& num,
   std::cout << "fsize is: " << fsize << std::endl;
   num = (unsigned) (fsize / (dim + 1) / 4);
   std::cout << "num is: " << num << std::endl;
-  std::cout << "num * dim is: " << (size_t)num * (size_t)dim << std::endl;
+  std::cout << "num * dim is: " << (size_t) num * (size_t) dim << std::endl;
 
   uint64_t allocSize = ((uint64_t) num) * ((uint64_t) dim);
 
   try {
     std::cout << "Alloc size is " << allocSize << std::endl;
     data = new float[allocSize];
-  } catch (const std::bad_alloc& ba)  {
+  } catch (const std::bad_alloc& ba) {
     std::cerr << "Failed to allocate memory " << ba.what() << std::endl;
     exit(1);
   }
 
-    std::cout << "Allocated " << num * dim << " bytes " << std::endl;
+  std::cout << "Allocated " << num * dim << " bytes " << std::endl;
 
   in.seekg(0, std::ios::beg);
   for (size_t i = 0; i < num; i++) {
@@ -154,15 +154,15 @@ int main(int argc, char** argv) {
   //  unsigned    nn_graph_deg = (unsigned) atoi(argv[3]);
   unsigned    L = (unsigned) atoi(argv[2]);
   unsigned    R = (unsigned) atoi(argv[3]);
-  unsigned    C = 750; //(unsigned) atoi(argv[4]);
+  unsigned    C = 750;  //(unsigned) atoi(argv[4]);
   std::string save_path(argv[4]);
-  float       alpha = 1.2f; //(float) std::atof(argv[6]);
-  float       p_val = 0.05f; //(float) std::atof(argv[7]);
+  float       alpha = 1.2f;   //(float) std::atof(argv[6]);
+  float       p_val = 0.05f;  //(float) std::atof(argv[7]);
   //  unsigned    num_hier = (float) std::atof(argv[8]);
-  unsigned num_syncs = 150; //(float) std::atof(argv[8]);
+  unsigned num_syncs = 150;  //(float) std::atof(argv[8]);
   unsigned num_rnds = (unsigned) std::atoi(argv[5]);
   //  unsigned    innerL = (unsigned) atoi(argv[11]);
-  unsigned innerR = R; //(unsigned) atoi(argv[10]);
+  unsigned innerR = R;  //(unsigned) atoi(argv[10]);
   //  unsigned    innerC = (unsigned) atoi(argv[13]);
 
   //  if (nn_graph_deg > R) {

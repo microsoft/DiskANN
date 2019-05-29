@@ -10,10 +10,9 @@
 #include <time.h>
 #include "MemoryMapper.h"
 
-
 void load_data(char* filename, float*& data, unsigned& num,
                unsigned& dim) {  // load data with sift10K pattern
-  std::ifstream   in(filename, std::ios::binary);
+  std::ifstreamin(filename, std::ios::binary);
   if (!in.is_open()) {
     std::cout << "open file error" << std::endl;
     exit(-1);
@@ -21,9 +20,9 @@ void load_data(char* filename, float*& data, unsigned& num,
   in.read((char*) &dim, 4);
   std::cout << "data dimension: " << dim << std::endl;
   in.seekg(0, std::ios::end);
-  std::ios::pos_type  ss = in.tellg();
+  std::ios::pos_typess = in.tellg();
 
-  size_t  fsize = (size_t) ss;
+  size_tfsize = (size_t) ss;
   num = (unsigned) (fsize / (dim + 1) / 4);
   std::cout << "Reading " << num << " points" << std::endl;
   data = new float[(size_t) num * (size_t) dim];
@@ -74,7 +73,7 @@ void load_bvecs(const char* filename, float*& data, unsigned& num,
   std::cout << "# Points: " << num << ".." << std::flush;
 
 #pragma omp parallel for schedule(static, 65536)
-  for (int64_t i = 0; i < num; i++) { //Gopal. changed from size_t to int64_t
+  for (int64_t i = 0; i < num; i++) {  // Gopal. changed from size_t to int64_t
     uint32_t row_dim;
     char*    reader = buf + (i * (dim + 4));
     std::memcpy((char*) &row_dim, reader, sizeof(uint32_t));
@@ -208,7 +207,8 @@ int main(int argc, char** argv) {
     std::cout << "NSG search using L = " << L << ", K = " << K
               << ", BeamWidth = " << beam_width << std::endl;
 #pragma omp parallel for schedule(static, 1000)
-    for (int i = 0; i < query_num; i++) {  // GOPAL renamed "unsigned i" to "int i"
+    for (int i = 0; i < query_num;
+         i++) {  // GOPAL renamed "unsigned i" to "int i"
       auto ret =
           index.BeamSearch(query_load + i * dim, data_load, K, paras,
                            res + ((size_t) i) * K, beam_width, start_points);

@@ -76,19 +76,21 @@ namespace NSG {
     float *  data_new = 0;
     unsigned new_dim =
         (dim + DATA_ALIGN_FACTOR - 1) / DATA_ALIGN_FACTOR * DATA_ALIGN_FACTOR;
+
 // std::cout << "align to new dim: "<<new_dim << std::endl;
 #ifdef __APPLE__
     data_new = new float[(size_t) new_dim * (size_t) point_num];
 #elif __NSG_WINDOWS__
-    data_new = (float *) _aligned_malloc(
-        (size_t) point_num * (size_t) new_dim * sizeof(float),
-        DATA_ALIGN_FACTOR * 4);
+	size_t allocSize = ((size_t)point_num) * ((size_t)new_dim) * sizeof(float);
+	std::cout << "Allocating aligned memory, " << allocSize << " bytes...";
+    data_new = (float *) _aligned_malloc(allocSize, DATA_ALIGN_FACTOR * 4);
+	std::cout << "done" << std::endl;
+
 #else
     data_new = (float *) memalign(
         DATA_ALIGN_FACTOR * 4,
         (size_t) point_num * (size_t) new_dim * sizeof(float));
 #endif
-
     for (size_t i = 0; i < point_num; i++) {
       memcpy(data_new + i * (size_t) new_dim, data_ori + i * (size_t) dim,
              dim * sizeof(float));
@@ -98,6 +100,8 @@ namespace NSG {
     dim = new_dim;
 #ifdef __APPLE__
     delete[] data_ori;
+#elif __NSG_WINDOWS__
+	delete[] data_ori;
 #else
     delete[] data_ori;
 #endif

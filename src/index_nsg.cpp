@@ -1,6 +1,6 @@
 #include "efanna2e/index_nsg.h"
-
 #include <omp.h>
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <ctime>
@@ -17,6 +17,10 @@
 
 #include <cassert>
 #include "MemoryMapper.h"
+
+#ifdef __NSG_WINDOWS__
+#include <xmmintrin.h>
+#endif
 
 namespace NSG {
 #define _CONTROL_NUM 100
@@ -40,22 +44,10 @@ namespace NSG {
   IndexNSG::IndexNSG(const size_t dimension, const size_t n, Metric m,
                      Index *initializer)
       : Index(dimension, n, m), initializer_{initializer} {
-    is_inner = new bool[nd_];
-    for (size_t i = 0; i < nd_; i++)
-      is_inner[i] = false;
     width = 0;
   }
 
   IndexNSG::~IndexNSG() {
-    delete[] is_inner;
-  }
-
-  unsigned IndexNSG::get_start_node() const {
-    return ep_;
-  }
-
-  void IndexNSG::set_start_node(const unsigned s) {
-    ep_ = s;
   }
 
   void IndexNSG::Save(const char *filename) {
@@ -77,43 +69,6 @@ namespace NSG {
               << std::endl;
   }
 
-  void IndexNSG::SaveSmallIndex(const char *           filename,
-                                std::vector<unsigned> &picked) {
-  }
-
-  void IndexNSG::LoadSmallIndex(const char *           filename,
-                                std::vector<unsigned> &picked) {
-  }
-
-  void IndexNSG::Save_Inner_Vertices(const char *filename) {
-    std::string inner_file(filename);
-    inner_file += ".inner";
-    std::ofstream out(inner_file.c_str(), std::ios::binary | std::ios::out);
-    //    assert(final_graph_.size() == nd_);
-
-    //    long long total_gr_edges = 0;
-    out.write((char *) is_inner, nd_ * sizeof(bool));
-    out.close();
-
-    std::cout << "Saved inner vertices of higher degree " << std::endl;
-  }
-
-  void IndexNSG::Load_Inner_Vertices(const char *filename) {
-    std::string inner_file(filename);
-    inner_file += ".inner";
-
-	NSG::MemoryMapper mapper(inner_file);
-	char *buf = mapper.getBuf();
-    
-	if (mapper.getFileSize() != sizeof(bool) * nd_) {
-      std::cerr << "ERROR: Inner file size mismatch" << std::endl;
-      exit(-1);
-    }
-    std::memcpy((char *) is_inner, buf, nd_ * sizeof(bool));
-
-    std::cout << "Loaded inner vertices of higher degree" << std::endl;
-  }
-
   void IndexNSG::Load(const char *filename) {
     std::ifstream in(filename, std::ios::binary);
     in.read((char *) &width, sizeof(unsigned));
@@ -130,57 +85,37 @@ namespace NSG {
       ++nodes;
       std::vector<unsigned> tmp(k);
       in.read((char *) tmp.data(), k * sizeof(unsigned));
-      final_graph_.push_back(tmp);
+      final_graph_.emplace_back(tmp);
 
       if (nodes % 5000000 == 0)
         std::cout << "Loaded " << nodes << " nodes, and " << cc << " neighbors"
                   << std::endl;
     }
     cc /= nd_;
-
-    //    Load_Inner_Vertices(filename);
-    // std::cout<<cc<<std::endl;
   }
 
-  void IndexNSG::Load_nn_graph(const char *filename) {
-
-	  MemoryMapper mapper(filename);
-	  char *buf = mapper.getBuf();
-
-    unsigned k;
-    std::memcpy(&k, buf, sizeof(unsigned));
-    size_t num = (mapper.getFileSize()) / ((k + 1) * 4);
-
-    std::cout << "k is and num is " << k << " " << num << std::endl;
-    final_graph_.resize(num);
-    final_graph_.reserve(num);
-
-    unsigned kk = (k + 3) / 4 * 4;
-#pragma omp  parallel for schedule(static, 65536)
-    for (int i = 0; i < num; i++) { //GOPAL Changed from "size_t i" to "int i"
-      final_graph_[i].resize(k);
-      final_graph_[i].reserve(kk);
-      char *reader = buf + (i * (k + 1) * sizeof(unsigned));
-      std::memcpy(final_graph_[i].data(), reader + sizeof(unsigned),
-                  k * sizeof(unsigned));
-    }
-    std::cout << "Loaded EFANNA graph. Set ep_ to 0" << std::endl;
-  }
-
+  /* init_rnd_nn_graph():
+   * num_points: Number of points in the dataset
+   * k: max degree of the graph
+   * mapping: initial vector of 10% of the points in the dataset
+   */
   void IndexNSG::Init_rnd_nn_graph(size_t num_points, unsigned k,
                                    std::vector<size_t> mapping) {
+    k = (std::min)(k, (unsigned) 32);
     size_t num = num_points;
     final_graph_.resize(num);
     final_graph_.reserve(num);
     if (!mapping.empty())
-      num_points = mapping.size();
+      num_points =
+          mapping.size();  // num_points now = 10% of the points in dataset
     else {
       mapping.resize(num_points);
       std::iota(std::begin(mapping), std::end(mapping), 0);
     }
 
-    std::cout << "k is and num is " << k << " " << num_points << std::endl;
-    size_t PAR_BLOCK_SZ = (1 << 16);
+    std::cout << "Generating random graph.." << std::flush;
+    // PAR_BLOCK_SZ gives the number of points that can fit in a single block
+    size_t PAR_BLOCK_SZ = (1 << 16);  // = 64KB
     size_t nblocks = DIV_ROUND_UP(num_points, PAR_BLOCK_SZ);
 
 #pragma omp parallel for schedule(static, 1)
@@ -191,6 +126,7 @@ namespace NSG {
 
       std::uniform_int_distribution<size_t> dis(0, num_points - 1);
 
+      /* Put random number points as neighbours to the 10% of the nodes */
       for (size_t i = block * PAR_BLOCK_SZ;
            i < (block + 1) * PAR_BLOCK_SZ && i < num_points; i++) {
         std::set<unsigned> rand_set;
@@ -199,158 +135,22 @@ namespace NSG {
 
         final_graph_[mapping[i]].reserve(k);
         for (auto s : rand_set)
-          final_graph_[mapping[i]].push_back(mapping[s]);
+          final_graph_[mapping[i]].emplace_back(mapping[s]);
         final_graph_[mapping[i]].shrink_to_fit();
-
-        if (i % 1000000 == 0)
-          std::cout << "Generated random neighbors for point " << i
-                    << std::endl;
       }
     }
-    std::cout << "Loaded Random graph." << std::endl;
+    ep_ = get_entry_point();
+    std::cout << "done. Entry point set to " << ep_ << "." << std::endl;
   }
 
-  /*  void IndexNSG::iterate_to_fixed_point(const float *             query,
-                                          const Parameters &        parameter,
-                                          std::vector<unsigned> &   init_ids,
-                                          std::vector<Neighbor> &   retset,
-                                          std::vector<Neighbor> &   fullset,
-                                          tsl::robin_set<unsigned> &visited) {
-      const unsigned L = parameter.Get<unsigned>("L");
-
-      while (init_ids.size() < L) {
-        unsigned id = (rand() * rand() * rand()) % nd_;
-        if (visited.find(id) != visited.end())
-          continue;
-        else
-          visited.insert(id);
-        init_ids.push_back(id);
-      }
-
-      std::priority_queue<Neighbor>        top_candidates;
-      std::priority_queue<Neighbor>        candidate_set;
-  //    dist_t dist = fstdistfunc_(data_point,
-  getDataByInternalId(enterpoint_id),
-   //                              dist_func_param_);
-
-      for (auto iter : init_ids) {
-  //    top_candidates.emplace(dist, enterpoint_id);
-      candidateSet.emplace(Neighbor(id, distance_->compare(
-                query, data_ + dimension_ * (size_t) id, (unsigned) dimension_),
-  true));
-      if(visited.find(id) == visited.end())
-       visited.insert(id);
-      }
-
-      float lowerBound;
-
-      while (!candidateSet.empty()) {
-        Neighbor curr_elt = candidateSet.top();
-
-        if ((-curr_el_pair.first) > lowerBound) {
-          break;
-        }
-        candidateSet.pop();
-
-        tableint curNodeNum = curr_el_pair.second;
-
-        std::unique_lock<std::mutex> lock(link_list_locks_[curNodeNum]);
-
-        int *data;  // = (int *)(linkList0_ + curNodeNum *
-                    // size_links_per_element0_);
-        if (layer == 0)
-          data = (int *) (data_level0_memory_ +
-                          curNodeNum * size_data_per_element_ + offsetLevel0_);
-        else
-          data = (int *) (linkLists_[curNodeNum] +
-                          (layer - 1) * size_links_per_element_);
-        int       size = *data;
-        tableint *datal = (tableint *) (data + 1);
-  #ifdef USE_SSE
-        _mm_prefetch((char *) (visited_array + *(data + 1)), _MM_HINT_T0);
-        _mm_prefetch((char *) (visited_array + *(data + 1) + 64), _MM_HINT_T0);
-        _mm_prefetch(getDataByInternalId(*datal), _MM_HINT_T0);
-        _mm_prefetch(getDataByInternalId(*(datal + 1)), _MM_HINT_T0);
-  #endif
-
-        for (int j = 0; j < size; j++) {
-          tableint candidate_id = *(datal + j);
-  #ifdef USE_SSE
-          _mm_prefetch((char *) (visited_array + *(datal + j + 1)),
-  _MM_HINT_T0);
-          _mm_prefetch(getDataByInternalId(*(datal + j + 1)), _MM_HINT_T0);
-  #endif
-          if (visited_array[candidate_id] == visited_array_tag)
-            continue;
-          visited_array[candidate_id] = visited_array_tag;
-          char *currObj1 = (getDataByInternalId(candidate_id));
-
-          dist_t dist1 = fstdistfunc_(data_point, currObj1, dist_func_param_);
-          if (top_candidates.top().first > dist1 ||
-              top_candidates.size() < ef_construction_) {
-            candidateSet.emplace(-dist1, candidate_id);
-  #ifdef USE_SSE
-            _mm_prefetch(getDataByInternalId(candidateSet.top().second),
-                         _MM_HINT_T0);
-  #endif
-            top_candidates.emplace(dist1, candidate_id);
-            if (top_candidates.size() > ef_construction_) {
-              top_candidates.pop();
-            }
-            lowerBound = top_candidates.top().first;
-          }
-        }
-      }
-      visited_list_pool_->releaseVisitedList(vl);
-
-      unsigned l = 0;
-      for (auto id : init_ids) {
-        assert(id < nd_);
-        retset[l++] =
-            Neighbor(id,
-                     distance_->compare(data_ + dimension_ * (size_t) id, query,
-                                        dimension_),
-                     true);
-      }
-
-      std::sort(retset.begin(), retset.begin() + l);
-      int k = 0;
-      while (k < (int) l) {
-        int nk = l;
-
-        if (retset[k].flag) {
-          retset[k].flag = false;
-          unsigned n = retset[k].id;
-
-          for (auto id : final_graph_[n]) {
-            if (visited.find(id) == visited.end())
-              visited.insert(id);
-            else
-              continue;
-
-            float dist = distance_->compare(
-                query, data_ + dimension_ * (size_t) id, (unsigned) dimension_);
-            Neighbor nn(id, dist, true);
-            fullset.push_back(nn);
-            if (dist >= retset[l - 1].distance)
-              continue;
-            int r = InsertIntoPool(retset.data(), l, nn);
-
-            if (l + 1 < retset.size())
-              ++l;
-            if (r < nk)
-              nk = r;
-          }
-        }
-        if (nk <= k)
-          k = nk;
-        else
-          ++k;
-      }
-      assert(!fullset.empty());
-    }
-  */
-
+  /* iterate_to_fixed_point():
+   * query : point whose neighbors to be found.
+   * init_ids : ids of neighbors of navigating node.
+   * retset : will contain the nearest neighbors of the query.
+   * fullset : will contain all the node ids and distances from query that are
+   * checked.
+   * visited : will contain all the nodes that are visited during search.
+   */
   void IndexNSG::iterate_to_fixed_point(const float *             query,
                                         const Parameters &        parameter,
                                         std::vector<unsigned> &   init_ids,
@@ -359,15 +159,20 @@ namespace NSG {
                                         tsl::robin_set<unsigned> &visited) {
     const unsigned L = parameter.Get<unsigned>("L");
 
+    /* put random L new ids into visited list and init_ids list */
     while (init_ids.size() < L) {
       unsigned id = (rand() * rand() * rand()) % nd_;
       if (visited.find(id) != visited.end())
         continue;
       else
         visited.insert(id);
-      init_ids.push_back(id);
+      init_ids.emplace_back(id);
     }
 
+    /* compare distance of all points in init_ids with query, and put the id
+     * with distance
+     * in retset
+     */
     unsigned l = 0;
     for (auto id : init_ids) {
       assert(id < nd_);
@@ -378,6 +183,7 @@ namespace NSG {
                    true);
     }
 
+    /* sort retset based on distance of each point to query */
     std::sort(retset.begin(), retset.begin() + l);
     int k = 0;
     while (k < (int) l) {
@@ -387,18 +193,37 @@ namespace NSG {
         retset[k].flag = false;
         unsigned n = retset[k].id;
 
-        for (auto id : final_graph_[n]) {
+        // prefetch final_graph_[n]
+        unsigned *nbrs = final_graph_[n].data();   // nbrs: data of neighbors
+        unsigned  nnbrs = final_graph_[n].size();  // nnbrs: number of neighbors
+        NSG::prefetch_vector((const float *) nbrs, nnbrs);
+        for (size_t m = 0; m < nnbrs; m++) {
+          unsigned id = nbrs[m];  // id = neighbor
+          if (m < (nnbrs - 1)) {
+            unsigned     id_next = nbrs[m + 1];  // id_next = next neighbor
+            const float *vec_next1 =
+                data_ +
+                (size_t) id_next *
+                    dimension_;  // vec_next1: data of next neighbor
+
+            for (size_t d = 0; d < dimension_; d += 16)
+              _mm_prefetch((const char*) vec_next1 + d,
+                           _MM_HINT_T0);  // prefetch the next neighbor and keep
+          }
           if (visited.find(id) == visited.end())
-            visited.insert(id);
+            visited.insert(id);  // if id is not in visited, add it to visited
           else
             continue;
 
+          // compare distance of id with query
           float dist = distance_->compare(
               query, data_ + dimension_ * (size_t) id, (unsigned) dimension_);
           Neighbor nn(id, dist, true);
-          fullset.push_back(nn);
+          fullset.emplace_back(nn);
           if (dist >= retset[l - 1].distance)
             continue;
+
+          // if distance is smaller than largest, add to retset, keep it sorted
           int r = InsertIntoPool(retset.data(), l, nn);
 
           if (l + 1 < retset.size())
@@ -432,19 +257,10 @@ namespace NSG {
     retset.resize(L + 1);
     std::vector<unsigned> init_ids;
     init_ids.reserve(L);
-    // initializer_->Search(query, nullptr, L, parameter, init_ids.data());
 
-    /*   for (auto iter : final_graph_[ep_]) {
-         if (init_ids.size() >= L)
-           break;
-         init_ids.push_back(iter);
-         visited.insert(iter);
-         //      fullset.insert(iter);
-       }
-   */
     std::vector<Neighbor> ep_neighbors;
     for (auto id : final_graph_[ep_]) {
-      ep_neighbors.push_back(
+      ep_neighbors.emplace_back(
           Neighbor(id,
                    distance_->compare(data_ + dimension_ * (size_t) id, query,
                                       dimension_),
@@ -455,51 +271,22 @@ namespace NSG {
     for (auto iter : ep_neighbors) {
       if (init_ids.size() >= L)
         break;
-      init_ids.push_back(iter.id);
+      init_ids.emplace_back(iter.id);
       visited.insert(iter.id);
     }
 
+    /* Before calling this function: ep_neighbors contains the list of
+     * all the neighbors of navigating node along with distance from query,
+     * init_ids contains all the ids of the neighbors of ep_, visited also
+     * contains all the ids of neighbors of ep_
+     */
     iterate_to_fixed_point(query, parameter, init_ids, retset, fullset,
                            visited);
   }
 
-  void IndexNSG::get_neighbors(const float *query, const Parameters &parameter,
-                               std::vector<Neighbor> &      retset,
-                               std::vector<Neighbor> &      fullset,
-                               tsl::robin_set<unsigned> &   visited,
-                               const std::vector<unsigned> &start_points) {
-    const unsigned L = parameter.Get<unsigned>("L");
-
-    retset.resize(L + 1);
-    std::vector<unsigned> init_ids;
-    init_ids.reserve(L);
-    // initializer_->Search(query, nullptr, L, parameter, init_ids.data());
-
-    if (start_points.size() == 0) {
-      std::cerr << "Start point set can not be empty for get_neighbor."
-                << std::endl;
-      exit(-1);
-    }
-    for (auto iter : start_points) {
-      if (init_ids.size() >= L)
-        break;
-      init_ids.push_back(iter);
-      visited.insert(iter);
-    }
-    for (auto s : start_points) {
-      if (init_ids.size() == L)
-        break;
-      for (auto iter : final_graph_[s]) {
-        if (init_ids.size() == L)
-          break;
-        init_ids.push_back(iter);
-        visited.insert(iter);
-      }
-    }
-    iterate_to_fixed_point(query, parameter, init_ids, retset, fullset,
-                           visited);
-  }
-
+  /* reachable_bfs():
+   * This function fills in the order to do bfs in bfs_order
+   */
   void IndexNSG::reachable_bfs(const unsigned start_node,
                                std::vector<tsl::robin_set<unsigned>> &bfs_order,
                                bool *                                 visited) {
@@ -547,7 +334,7 @@ namespace NSG {
       // create a new set
       tsl::robin_set<unsigned> add(cur_level->size());
       add.insert(cur_level->begin(), cur_level->end());
-      bfs_order.push_back(add);
+      bfs_order.emplace_back(add);
 
       // swap cur_level and prev_level, increment level
       prev_level->clear();
@@ -591,7 +378,7 @@ namespace NSG {
         }
       }
     }
-    start_points.push_back(ep_);
+    start_points.emplace_back(ep_);
     // process each component, add one node from each level if more than one
     // level, else ignore
     for (auto &k_v : bfs_orders) {
@@ -610,7 +397,7 @@ namespace NSG {
 
             if (std::find(start_points.begin(), start_points.end(), *iter) ==
                 start_points.end())
-              start_points.push_back(*iter);
+              start_points.emplace_back(*iter);
           }
 
           if (start_points.size() == MAX_START_POINTS)
@@ -624,13 +411,10 @@ namespace NSG {
     delete[] visited;
   }
 
-  void IndexNSG::init_graph(const Parameters &parameters) {
-  }
-
-  void IndexNSG::init_graph_outside(const float *data) {
-  }
-
-  void IndexNSG::init_graph_bf(const Parameters &parameters) {
+  /* This function finds out the navigating node, which is the medoid node
+   * in the graph.
+   */
+  unsigned IndexNSG::get_entry_point() {
     // allocate and init centroid
     float *center = new float[dimension_]();
     for (size_t j = 0; j < dimension_; j++)
@@ -666,27 +450,29 @@ namespace NSG {
         min_dist = distances[i];
       }
     }
-    ep_ = min_idx;
 
-    std::cout << "Medoid index = " << min_idx << std::endl;
+    //    std::cout << "Medoid index = " << min_idx << std::endl;
     delete[] distances;
     delete[] center;
+    return min_idx;
   }
+
+  /* This function tries to add as many diverse edges as possible from current
+   * node n to all the visited nodes obtained by running get_neighbors */
 
   void IndexNSG::sync_prune(unsigned q, std::vector<Neighbor> &pool,
                             const Parameters &        parameter,
                             tsl::robin_set<unsigned> &visited,
                             vecNgh *                  cut_graph_) {
     unsigned range = parameter.Get<unsigned>("R");
-    unsigned inner_range = parameter.Get<unsigned>("innerR");
     unsigned maxc = parameter.Get<unsigned>("C");
     float    alpha = parameter.Get<float>("alpha");
 
-    if (is_inner[q]) {
-      range = inner_range;
-    }
     width = (std::max)(width, range);
 
+    /* check the neighbors of the query that are not part of visited,
+     * check their distance to the query, and add it to pool.
+     */
     if (!final_graph_[q].empty())
       for (auto id : final_graph_[q]) {
         if (visited.find(id) != visited.end())
@@ -694,13 +480,15 @@ namespace NSG {
         float dist = distance_->compare(data_ + dimension_ * (size_t) q,
                                         data_ + dimension_ * (size_t) id,
                                         (unsigned) dimension_);
-        pool.push_back(Neighbor(id, dist, true));
+        pool.emplace_back(Neighbor(id, dist, true));
       }
 
     std::vector<Neighbor> result;
+    /* sort the pool based on distance to query */
     std::sort(pool.begin(), pool.end());
     unsigned start = (pool[0].id == q) ? 1 : 0;
-    result.push_back(pool[start]);
+    /* put the first node in start. This will be nearest neighbor to q */
+    result.emplace_back(pool[start]);
 
     while (result.size() < range && (++start) < pool.size() && start < maxc) {
       auto &p = pool[start];
@@ -710,6 +498,11 @@ namespace NSG {
           occlude = true;
           break;
         }
+        /* check the distance of p from all nodes in result. If distance is less
+         * than
+         * distance of p from the query, then don't add it to result, otherwise
+         * add
+         */
         float djk = distance_->compare(
             data_ + dimension_ * (size_t) result[t].id,
             data_ + dimension_ * (size_t) p.id, (unsigned) dimension_);
@@ -719,16 +512,20 @@ namespace NSG {
         }
       }
       if (!occlude) {
-        result.push_back(p);
+        result.emplace_back(p);
       }
     }
 
+    /* create a new array result2, which contains the the points according
+     * to the parameter alpha, which talks about how aggressively to keep nodes
+     * during pruning
+     */
     if (alpha > 1.0 && !pool.empty() && result.size() < range) {
       std::vector<Neighbor> result2;
       unsigned              start2 = 0;
       if (pool[start2].id == q)
         start2++;
-      result2.push_back(pool[start2]);
+      result2.emplace_back(pool[start2]);
       while (result2.size() < range - result.size() &&
              (++start2) < pool.size() && start2 < maxc) {
         auto &p = pool[start2];
@@ -747,39 +544,50 @@ namespace NSG {
           }
         }
         if (!occlude)
-          result2.push_back(p);
+          result2.emplace_back(p);
       }
+      /* add everything from result2 to result. This will lead to duplicates
+       */
       for (unsigned i = 0; i < result2.size(); i++) {
-        result.push_back(result2[i]);
+        result.emplace_back(result2[i]);
       }
+      /* convert it into a set, so that duplicates are all removed.
+      */
       std::set<Neighbor> s(result.begin(), result.end());
       result.assign(s.begin(), s.end());
     }
 
+    /* Add all the nodes in result into a variable called cut_graph_[q].
+     * So this contains all the neighbors of q
+     */
     cut_graph_[q].clear();
     assert(result.size() <= range);
     for (auto iter : result) {
       assert(iter.id < nd_);
-      cut_graph_[q].push_back(SimpleNeighbor(iter.id, iter.distance));
+      cut_graph_[q].emplace_back(SimpleNeighbor(iter.id, iter.distance));
     }
   }
 
+  /* InterInsertHierarchy():
+   * This function tries to add reverse links from all the visited nodes to the
+   * current node n.
+   */
   void IndexNSG::InterInsertHierarchy(unsigned                 n,
                                       std::vector<std::mutex> &locks,
                                       vecNgh *                 cut_graph_,
                                       const Parameters &       parameter) {
     float      alpha = parameter.Get<float>("alpha");
-    const auto base_range = parameter.Get<float>("R");
-    unsigned   inner_range = parameter.Get<unsigned>("innerR");
+    const auto range = parameter.Get<float>("R");
     const auto src_pool = cut_graph_[n];
 
     assert(!src_pool.empty());
 
     for (auto des : src_pool) {
+      /* des.id is the id of the neighbors of n */
       assert(des.id >= 0 && des.id < nd_);
 
-      int   dup = 0;
-      auto  range = is_inner[des.id] ? inner_range : base_range;
+      int dup = 0;
+      /* des_pool contains the neighbors of the neighbors of n */
       auto &des_pool = final_graph_[des.id];
 
       std::vector<unsigned> graph_copy;
@@ -796,30 +604,36 @@ namespace NSG {
           continue;
 
         if (des_pool.size() < range) {
-          des_pool.push_back(n);
+          des_pool.emplace_back(n);
           continue;
         }
 
         assert(des_pool.size() == range);
         graph_copy = des_pool;
-        graph_copy.push_back(n);
+        graph_copy.emplace_back(n);
+        /* at this point, graph_copy contains the neighbors of neighbor of n,
+         * and also contains n
+         */
       }  // des lock is released by this point
 
       assert(graph_copy.size() == 1 + range);
       {
         vecNgh temp_pool;
         for (auto node : graph_copy)
-          temp_pool.push_back(SimpleNeighbor(
+          /* temp_pool contains distance of each node in graph_copy, from
+           * neighbor of n */
+          temp_pool.emplace_back(SimpleNeighbor(
               node,
               distance_->compare(data_ + dimension_ * (size_t) node,
                                  data_ + dimension_ * (size_t) des.id,
                                  (unsigned) dimension_)));
+        /* sort temp_pool according to distance from neighbor of n */
         std::sort(temp_pool.begin(), temp_pool.end());
         for (auto iter = temp_pool.begin(); iter + 1 != temp_pool.end(); ++iter)
           assert(iter->id != (iter + 1)->id);
 
         std::vector<SimpleNeighbor> result;
-        result.push_back(temp_pool[0]);
+        result.emplace_back(temp_pool[0]);
 
         auto iter = temp_pool.begin();
         if (alpha > 1)
@@ -843,7 +657,7 @@ namespace NSG {
           }
 
           if (!occlude)
-            result.push_back(p);
+            result.emplace_back(p);
 
           if (!occlude && alpha > 1)
             iter = temp_pool.erase(iter);
@@ -853,7 +667,7 @@ namespace NSG {
 
         if (alpha > 1 && result.size() < range && !temp_pool.empty()) {
           std::vector<SimpleNeighbor> result2;
-          result2.push_back(temp_pool[0]);
+          result2.emplace_back(temp_pool[0]);
 
           auto iter = temp_pool.begin();
           while (result2.size() + result.size() < range &&
@@ -874,12 +688,12 @@ namespace NSG {
               }
             }
             if (!occlude)
-              result2.push_back(p);
+              result2.emplace_back(p);
           }
           for (auto r2 : result2) {
             for (auto r : result)
               assert(r.id != r2.id);
-            result.push_back(r2);
+            result.emplace_back(r2);
           }
         }
 
@@ -888,43 +702,51 @@ namespace NSG {
           assert(result.size() <= range);
           des_pool.clear();
           for (auto iter : result)
-            des_pool.push_back(iter.id);
+            des_pool.emplace_back(iter.id);
         }
       }
 
+      /* At the end of this, des_pool contains all the correct neighbors of the
+       * neighbors of the query node
+       */
       assert(des_pool.size() <= range);
       for (auto iter : des_pool)
         assert(iter < nd_);
     }
   }
 
+  /* LinkHierarchy():
+   * The graph creation function.
+   */
   void IndexNSG::LinkHierarchy(Parameters &parameters) {
-    const float    p_val = parameters.Get<float>("p_val");
-    const uint32_t NUM_SYNCS = parameters.Get<unsigned>("num_syncs");
-    const uint32_t NUM_RNDS = parameters.Get<unsigned>("num_rnds");
-    const unsigned L = parameters.Get<unsigned>("L");
-    const unsigned range = parameters.Get<unsigned>("R");
-    const unsigned C = parameters.Get<unsigned>("C");
-    const unsigned inner_range = parameters.Get<unsigned>("innerR");
-    float          last_round_alpha = parameters.Get<float>("alpha");
+    //    The graph will be updated periodically in NUM_SYNCS batches
+    const uint32_t NUM_SYNCS = nd_ > 1 << 20 ? (nd_ / (128 * 1024 * 5))
+                                             : 20 * (nd_ / (128 * 1024 * 5));
+    std::cout << "Number of syncs determinted to be " << NUM_SYNCS << std::endl;
+    const uint32_t NUM_RNDS = parameters.Get<unsigned>(
+        "num_rnds");  // num. of passes of overall algorithm
+    const unsigned L = parameters.Get<unsigned>("L");  // Search list size
+    const unsigned range =
+        parameters.Get<unsigned>("R");                 // Max degree of graph
+    const unsigned C = parameters.Get<unsigned>("C");  // Candidate list size
+    float          last_round_alpha =
+        parameters.Get<float>("alpha");  // Pruning parameter
 
     parameters.Set<unsigned>("L", L);
     parameters.Set<unsigned>("C", C);
-    //    is_inner[ep_] = true;
-    parameters.Set<float>("alpha", 1);
+    parameters.Set<float>("alpha", 1);  // alpha is hardcoded to 1 for the first
+                                        // pass, for last pass alone we will use
+                                        // the specified value
+
+    /* rand_perm is a vector that is initialized to the entire graph */
+    std::vector<unsigned> rand_perm;
+    for (size_t i = 0; i < nd_; i++) {
+      rand_perm.emplace_back(i);
+    }
 
     std::random_device               rd;
     std::mt19937                     gen(rd());
     std::uniform_real_distribution<> dis(0, 1);
-
-    for (size_t i = 0; i < nd_; i++) {
-      float candidate = dis(gen);
-      if (candidate < p_val)
-        is_inner[i] = true;
-    }
-
-    std::string inner_path = parameters.Get<std::string>("save_path");
-    Save_Inner_Vertices(inner_path.c_str());
 
     Init_rnd_nn_graph(nd_, range);
 
@@ -933,22 +755,21 @@ namespace NSG {
     auto                    cut_graph_ = new vecNgh[nd_];
 
     for (uint32_t rnd_no = 0; rnd_no < NUM_RNDS; rnd_no++) {
+      std::random_shuffle(rand_perm.begin(),
+                          rand_perm.end());  // Shuffle the dataset
+      unsigned progress_counter = 0;
       if (rnd_no == NUM_RNDS - 1) {
         if (last_round_alpha > 1)
           parameters.Set<unsigned>("L", (unsigned) (std::min)((int) L, (int) 50));
         parameters.Set<float>("alpha", last_round_alpha);
       }
 
-      size_t round_size = DIV_ROUND_UP(nd_, NUM_SYNCS - 1) - 1;
+      size_t round_size = DIV_ROUND_UP(nd_, NUM_SYNCS - 1) -
+                          1;  // this gives the size of each batch
 
-      for (uint32_t par_sync_no = 0; par_sync_no < NUM_SYNCS; par_sync_no++) {
-        // reverse the order of points for odd round numbers
-        uint32_t sync_no = par_sync_no;
-        //          if (rnd_no % 2 == 1)
-        //            sync_no = (NUM_SYNCS - 1 - par_sync_no);
-
-        size_t start_id = sync_no * round_size;
-        size_t end_id = (std::min)(nd_, (sync_no + 1) * round_size);
+      for (uint32_t sync_num = 0; sync_num < NUM_SYNCS; sync_num++) {
+        size_t start_id = sync_num * round_size;
+        size_t end_id = (std::min)(nd_, (sync_num + 1) * round_size);
         size_t round_size = end_id - start_id;
 
         size_t PAR_BLOCK_SZ =
@@ -967,8 +788,19 @@ namespace NSG {
             tmp.clear();
             visited.clear();
 
+            /* get nearest neighbors of n in tmp. pool contains all the points
+             * that were
+             * checked along with their distance from n. visited contains all
+             * the points
+             * visited, just the ids
+             */
             get_neighbors(data_ + (size_t) dimension_ * n, parameters, tmp,
                           pool, visited);
+            /* sync_prune will check the pool[] list, and remove some of the
+             * points and
+             * create a cut_graph_ array, which contains final neighbors for
+             * point n
+             */
             sync_prune(n, pool, parameters, visited, cut_graph_);
           }
         }
@@ -976,15 +808,15 @@ namespace NSG {
 #pragma omp parallel for schedule(static, PAR_BLOCK_SZ)
         for (int n = start_id; n < end_id; ++n) { //Gopal. from unsigned n to int n for openmp
           auto node = n;
-          final_graph_[node].clear();
-          final_graph_[node].reserve(is_inner[node] ? inner_range : range);
+          final_graph_[node]
+              .clear();  // clear all the neighbors of final_graph_[node]
+          final_graph_[node].reserve(range);
           assert(!cut_graph_[node].empty());
           for (auto link : cut_graph_[node]) {
-            final_graph_[node].push_back(link.id);
+            final_graph_[node].emplace_back(link.id);
             assert(link.id >= 0 && link.id < nd_);
           }
-          assert(final_graph_[node].size() <= is_inner[node] ? inner_range
-                                                             : range);
+          assert(final_graph_[node].size() <= range);
         }
 
 #pragma omp parallel for schedule(static, PAR_BLOCK_SZ)
@@ -992,11 +824,13 @@ namespace NSG {
           InterInsertHierarchy(n, locks, cut_graph_, parameters);
         }
 
-        if ((sync_no * 100) % NUM_SYNCS == 0)
-          std::cout << "Completed  (round: " << rnd_no << ", sync: " << sync_no
+        if ((sync_num * 100) / NUM_SYNCS > progress_counter) {
+          std::cout << "Completed  (round: " << rnd_no << ", sync: " << sync_num
                     << "/" << NUM_SYNCS
                     << ") with L=" << parameters.Get<unsigned>("L")
                     << ",alpha=" << parameters.Get<float>("alpha") << std::endl;
+          progress_counter += 5;
+        }
 
 #pragma omp parallel for schedule(static, PAR_BLOCK_SZ)
         for (int n = start_id; n < end_id; ++n) { //Gopal. from unsigned n to int n for openmp
@@ -1006,66 +840,17 @@ namespace NSG {
           cut_graph_[node].shrink_to_fit();
         }
       }
-
-      /*        // save  nsg snapshot after each round
-              if (h == NUM_HIER - 1) {
-                std::string rnd_path =
-         parameters.Get<std::string>("save_path");
-                rnd_path += std::to_string(rnd_no);
-                Save(rnd_path.c_str());
-              } */
-      // save code ends
     }
 
-    /*    std::cout << "Checking inner degree violation for innerR = " <<
-    inner_range
-                  << ".." << std::flush;
-    #pragma omp parallel for schedule(static, 65536)
-        for (unsigned n = 0; n < nd_; ++n) {
-          if (is_inner[n] && final_graph_[n].size() > inner_range)
-            std::cerr << "Error. inner degree violation " <<
-    final_graph_[n].size()
-                      << " " << inner_range << std::endl;
-        }
-        std::cout << "done." << std::endl; */
     delete[] cut_graph_;
-  }
-
-  void IndexNSG::Build(size_t n, const float *data,
-                       const Parameters &parameters) {
-  }
-
-  void IndexNSG::BuildFromER(size_t n, size_t nr, const float *data,
-                             const Parameters &parameters) {
-  }
-
-  void IndexNSG::BuildFromSmall(size_t n, const float *data,
-                                const Parameters &           parameters,
-                                IndexNSG &                   small_index,
-                                const std::vector<unsigned> &picked_pts) {
   }
 
   void IndexNSG::BuildRandomHierarchical(size_t n, const float *data,
                                          Parameters &parameters) {
     unsigned range = parameters.Get<unsigned>("R");
-    bool     is_nsg = parameters.Get<bool>("is_nsg");
-    bool     is_rnd_nn = parameters.Get<bool>("is_rnd_nn");
     data_ = data;
 
-    if (is_nsg) {
-      std::string nn_graph_path = parameters.Get<std::string>("nn_graph_path");
-      Load(nn_graph_path.c_str());
-      Load_Inner_Vertices(nn_graph_path.c_str());
-    } else {
-      if (!is_rnd_nn) {
-        std::string nn_graph_path =
-            parameters.Get<std::string>("nn_graph_path");
-        Load_nn_graph(nn_graph_path.c_str());
-      }
-      init_graph_bf(parameters);
-    }
-
-    LinkHierarchy(parameters);
+    LinkHierarchy(parameters);  // Primary func for creating nsg graph
 
     size_t max = 0, min = 1 << 30, total = 0, cnt = 0;
     for (size_t i = 0; i < nd_; i++) {
@@ -1097,60 +882,55 @@ namespace NSG {
     //    unsigned                 tmp_l = 0;
     // ignore default init; use start_points for init
     if (start_points.size() == 0)
-      start_points.push_back(ep_);
+      start_points.emplace_back(ep_);
 
+    /* ep_neighbors contains all the neighbors of navigating node, and
+     * their distance from the query node
+     */
     std::vector<Neighbor> ep_neighbors;
     for (auto curpt : start_points)
       for (auto id : final_graph_[curpt]) {
-        ep_neighbors.push_back(
+        ep_neighbors.emplace_back(
             Neighbor(id,
                      distance_->compare(data_ + dimension_ * (size_t) id, query,
                                         dimension_),
                      true));
       }
 
+    /* sort the ep_neighbors based on the distance from query node */
     std::sort(ep_neighbors.begin(), ep_neighbors.end());
     for (auto iter : ep_neighbors) {
       if (init_ids.size() >= L)
         break;
-      init_ids.push_back(iter.id);
-      visited.insert(iter.id);
+      init_ids.emplace_back(iter.id);  // Add the neighbors to init_ids
+      visited.insert(iter.id);         // Add the neighbors to visited list
     }
 
-    //      visited.insert(ep_);
-    //      init_ids[tmp_l] = ep_;
-    //      tmp_l++;
-    //   }
-    //      for (; tmp_l < L && tmp_l < final_graph_[ep_].size(); tmp_l++) {
-    //      init_ids[tmp_l] = final_graph_[ep_][tmp_l];
-    //     visited.insert(init_ids[tmp_l]);
-    //      }
-    //  else
-    //      for (; tmp_l < L && tmp_l < start_points.size(); tmp_l++) {
-    //        init_ids[tmp_l] = start_points[tmp_l];
-    //       visited.insert(init_ids[tmp_l]);
-    //     }
-
-    // fill up any remaining with same ID
-    //    for (; tmp_l < L; tmp_l++) {
-    //      init_ids[tmp_l] = init_ids[tmp_l - 1];
-    //    }
-
+    /* Add random nodes to fill in the L_SEARCH number of nodes
+     * in visited list as well as in the init_ids list
+     */
     while (init_ids.size() < L) {
       unsigned id = (rand() * rand() * rand()) % nd_;
       if (visited.find(id) == visited.end())
         visited.insert(id);
       else
         continue;
-      init_ids.push_back(id);
+      init_ids.emplace_back(id);
     }
     //    init_ids.resize(tmp_l);
     std::vector<Neighbor> retset(L + 1);
+
+    /* Find out the distances of all the neighbors of navigating node
+     * with the query and add it to retset. Actually not needed for all the
+     * neighbors. Only needed for the random ones added later
+     */
     for (size_t i = 0; i < init_ids.size(); i++)
       retset[i] = Neighbor(init_ids[i],
                            distance_->compare(data_ + dimension_ * init_ids[i],
                                               query, (unsigned) dimension_),
                            true);
+
+    /* Sort the retset based on distance of nodes from query */
     std::sort(retset.begin(), retset.begin() + L);
 
     std::vector<unsigned> frontier;
@@ -1161,6 +941,7 @@ namespace NSG {
     int cmps = 0;
     int k = 0;
 
+    /* Maximum L rounds take place to get nearest neighbor.  */
     while (k < (int) L) {
       int nk = L;
 
@@ -1169,7 +950,7 @@ namespace NSG {
       unsigned marker = k - 1;
       while (++marker < L && frontier.size() < (size_t) beam_width) {
         if (retset[marker].flag) {
-          frontier.push_back(retset[marker].id);
+          frontier.emplace_back(retset[marker].id);
           retset[marker].flag = false;
         }
       }
@@ -1177,21 +958,35 @@ namespace NSG {
       if (!frontier.empty())
         hops++;
       for (auto n : frontier) {
+        /* check neighbors of each node of frontier */
         for (unsigned m = 0; m < final_graph_[n].size(); ++m) {
           unsigned id = final_graph_[n][m];
           if (visited.find(id) != visited.end()) {
             continue;
           } else {
-            visited.insert(id);
+            visited.insert(id);  // Add each unique neighbor to visited
           }
-          unique_nbrs.push_back(id);
+          unique_nbrs.emplace_back(id);  // add each neighbor to unique_nbrs
         }
       }
       auto last_iter = std::unique(unique_nbrs.begin(), unique_nbrs.end());
       for (auto iter = unique_nbrs.begin(); iter != last_iter; iter++) {
+        //if (iter < (last_iter - 1)) {
+        //  unsigned     id_next = *(iter + 1);
+        //  const float *vec1 = data_ + dimension_ * id_next;
+        //  //          NSG::prefetch_vector(vec1, dimension_);
+
+        //  for (size_t d = 0; d < dimension_; d += 16)
+        //    _mm_prefetch(vec1 + d,
+        //                 _MM_HINT_T0);  // prefetch the next neighbor and keep
+        //}
         cmps++;
         unsigned id = *iter;
-        float    dist = distance_->compare(query, data_ + dimension_ * id,
+        /* compare distance of each neighbor with that of query. If the distance
+         * is less than
+         * largest distance in retset, add to retset and set flag to true
+         */
+        float dist = distance_->compare(query, data_ + dimension_ * id,
                                         (unsigned) dimension_);
         if (dist >= retset[L - 1].distance)
           continue;
@@ -1214,300 +1009,4 @@ namespace NSG {
     return std::make_pair(hops, cmps);
   }
 
-  std::pair<int, int> IndexNSG::Search(const float *query, const float *x,
-                                       const size_t      K,
-                                       const Parameters &parameters,
-                                       unsigned *        indices) {
-    const unsigned L = parameters.Get<unsigned>("L_search");
-    data_ = x;
-    std::vector<Neighbor>    retset(L + 1);
-    std::vector<unsigned>    init_ids(L);
-    tsl::robin_set<unsigned> visited(10 * L);
-    // std::mt19937 rng(rand());
-    // GenRandom(rng, init_ids.data(), L, (unsigned) nd_);
-
-    unsigned tmp_l = 0;
-    for (; tmp_l < L && tmp_l < final_graph_[ep_].size(); tmp_l++) {
-      init_ids[tmp_l] = final_graph_[ep_][tmp_l];
-      visited.insert(init_ids[tmp_l]);
-    }
-
-    while (tmp_l < L) {
-      unsigned id = rand() % nd_;
-      if (visited.find(id) != visited.end())
-        continue;
-      else
-        visited.insert(id);
-      init_ids[tmp_l] = id;
-      tmp_l++;
-    }
-
-    for (unsigned i = 0; i < init_ids.size(); i++) {
-      unsigned id = init_ids[i];
-      float    dist = distance_->compare(data_ + dimension_ * id, query,
-                                      (unsigned) dimension_);
-      retset[i] = Neighbor(id, dist, true);
-      // flags[id] = true;
-    }
-
-    int hops = 0;
-    int cmps = 0;
-    std::sort(retset.begin(), retset.begin() + L);
-    int k = 0;
-    while (k < (int) L) {
-      int nk = L;
-
-      if (retset[k].flag) {
-        retset[k].flag = false;
-        unsigned n = retset[k].id;
-
-        hops++;
-        for (unsigned m = 0; m < final_graph_[n].size(); ++m) {
-          unsigned id = final_graph_[n][m];
-          if (visited.find(id) != visited.end())
-            continue;
-          else
-            visited.insert(id);
-          cmps++;
-          float dist = distance_->compare(query, data_ + dimension_ * id,
-                                          (unsigned) dimension_);
-          if (dist >= retset[L - 1].distance)
-            continue;
-          Neighbor nn(id, dist, true);
-          int      r = InsertIntoPool(retset.data(), L, nn);
-
-          if (r < nk)
-            nk = r;
-        }
-      }
-      if (nk <= k)
-        k = nk;
-      else
-        ++k;
-    }
-    for (size_t i = 0; i < K; i++)
-      indices[i] = retset[i].id;
-    return std::make_pair(hops, cmps);
-  }
-
-  unsigned long long IndexNSG::SearchWithOptGraph(const float *query, size_t K,
-                                                  const Parameters &parameters,
-                                                  unsigned *        indices) {
-    unsigned        L = parameters.Get<unsigned>("L_search");
-    DistanceFastL2 *dist_fast = (DistanceFastL2 *) distance_;
-
-    std::vector<Neighbor> retset(L + 1);
-    std::vector<unsigned> init_ids(L);
-    // std::mt19937 rng(rand());
-    // GenRandom(rng, init_ids.data(), L, (unsigned) nd_);
-
-    unsigned long long dist_comp = 0;
-
-    tsl::robin_set<unsigned> visited;
-    unsigned                 tmp_l = 0;
-    unsigned *               neighbors =
-        (unsigned *) (opt_graph_ + node_size * ep_ + data_len);
-    unsigned MaxM_ep = *neighbors;
-    neighbors++;
-
-    for (; tmp_l < L && tmp_l < MaxM_ep; tmp_l++) {
-      init_ids[tmp_l] = neighbors[tmp_l];
-      visited.insert(init_ids[tmp_l]);
-    }
-
-    while (tmp_l < L) {
-      unsigned id = rand() % nd_;
-      if (visited.find(id) != visited.end())
-        continue;
-      else
-        visited.insert(id);
-      init_ids[tmp_l] = id;
-      tmp_l++;
-    }
-
-    for (unsigned i = 0; i < init_ids.size(); i++) {
-      unsigned id = init_ids[i];
-      if (id >= nd_)
-        continue;
-      _mm_prefetch(opt_graph_ + node_size * id, _MM_HINT_T0);
-    }
-    L = 0;
-    for (unsigned i = 0; i < init_ids.size(); i++) {
-      unsigned id = init_ids[i];
-      if (id >= nd_)
-        continue;
-      float *x = (float *) (opt_graph_ + node_size * id);
-      float  norm_x = *x;
-      x++;
-      float dist = dist_fast->compare(x, query, norm_x, (unsigned) dimension_);
-      dist_comp++;
-      retset[i] = Neighbor(id, dist, true);
-      visited.insert(id);
-      L++;
-    }
-    // std::cout<<L<<std::endl;
-
-    std::sort(retset.begin(), retset.begin() + L);
-    int k = 0;
-    while (k < (int) L) {
-      int nk = L;
-
-      if (retset[k].flag) {
-        retset[k].flag = false;
-        unsigned n = retset[k].id;
-
-        _mm_prefetch(opt_graph_ + node_size * n + data_len, _MM_HINT_T0);
-        unsigned *neighbors =
-            (unsigned *) (opt_graph_ + node_size * n + data_len);
-        unsigned MaxM = *neighbors;
-        neighbors++;
-        for (unsigned m = 0; m < MaxM; ++m)
-          _mm_prefetch(opt_graph_ + node_size * neighbors[m], _MM_HINT_T0);
-        for (unsigned m = 0; m < MaxM; ++m) {
-          unsigned id = neighbors[m];
-          if (visited.find(id) != visited.end())
-            continue;
-          else
-            visited.insert(id);
-          float *data = (float *) (opt_graph_ + node_size * id);
-          float  norm = *data;
-          data++;
-          float dist =
-              dist_fast->compare(query, data, norm, (unsigned) dimension_);
-          dist_comp++;
-          if (dist >= retset[L - 1].distance)
-            continue;
-          Neighbor nn(id, dist, true);
-          int      r = InsertIntoPool(retset.data(), L, nn);
-
-          // if(L+1 < retset.size()) ++L;
-          if (r < nk)
-            nk = r;
-        }
-      }
-      if (nk <= k)
-        k = nk;
-      else
-        ++k;
-    }
-    for (size_t i = 0; i < K; i++) {
-      indices[i] = retset[i].id;
-    }
-    return dist_comp;
-  }
-
-  void IndexNSG::OptimizeGraph(float *data) {  // use after build or load
-
-    data_ = data;
-    data_len = (dimension_ + 1) * sizeof(float);
-    neighbor_len = (width + 1) * sizeof(unsigned);
-    node_size = data_len + neighbor_len;
-    opt_graph_ = (char *) malloc(node_size * nd_);
-    DistanceFastL2 *dist_fast = (DistanceFastL2 *) distance_;
-    for (unsigned i = 0; i < nd_; i++) {
-      char *cur_node_offset = opt_graph_ + i * node_size;
-      float cur_norm = dist_fast->norm(data_ + i * dimension_, dimension_);
-      std::memcpy(cur_node_offset, &cur_norm, sizeof(float));
-      std::memcpy(cur_node_offset + sizeof(float), data_ + i * dimension_,
-                  data_len - sizeof(float));
-
-      cur_node_offset += data_len;
-      unsigned k = final_graph_[i].size();
-      std::memcpy(cur_node_offset, &k, sizeof(unsigned));
-      std::memcpy(cur_node_offset + sizeof(unsigned), final_graph_[i].data(),
-                  k * sizeof(unsigned));
-      std::vector<unsigned>().swap(final_graph_[i]);
-    }
-    free(data);
-    data_ = nullptr;
-    CompactGraph().swap(final_graph_);
-  }
-
-  void IndexNSG::DFS(tsl::robin_set<unsigned> &visited, unsigned root,
-                     unsigned &cnt) {
-    unsigned             tmp = root;
-    std::stack<unsigned> s;
-    s.push(root);
-    if (visited.find(root) == visited.end())
-      cnt++;
-    visited.insert(root);
-    while (!s.empty()) {
-      unsigned next = nd_ + 1;
-      for (unsigned i = 0; i < final_graph_[tmp].size(); i++) {
-        if (visited.find(final_graph_[tmp][i]) == visited.end()) {
-          next = final_graph_[tmp][i];
-          break;
-        }
-      }
-      if (next == (nd_ + 1)) {
-        s.pop();
-        if (s.empty())
-          break;
-        tmp = s.top();
-        continue;
-      }
-      tmp = next;
-      visited.insert(tmp);
-      s.push(tmp);
-      cnt++;
-    }
-  }
-
-  void IndexNSG::findroot(tsl::robin_set<unsigned> &visited, unsigned &root,
-                          const Parameters &parameter) {
-    unsigned id = nd_;
-    for (unsigned i = 0; i < nd_; i++) {
-      if (visited.find(i) == visited.end()) {
-        id = i;
-        break;
-      }
-    }
-
-    if (id == nd_)
-      return;  // No Unlinked Node
-
-    std::vector<Neighbor> tmp, pool;
-    get_neighbors(data_ + dimension_ * id, parameter, tmp, pool);
-    std::sort(pool.begin(), pool.end());
-
-    unsigned found = 0;
-    for (unsigned i = 0; i < pool.size(); i++) {
-      if (visited.find(pool[i].id) != visited.end()) {
-        // std::cout << pool[i].id << '\n';
-        root = pool[i].id;
-        found = 1;
-        break;
-      }
-    }
-    if (found == 0) {
-      while (true) {
-        unsigned rid = rand() % nd_;
-        if (visited.find(rid) != visited.end()) {
-          root = rid;
-          break;
-        }
-      }
-    }
-    final_graph_[root].push_back(id);
-  }
-
-  void IndexNSG::tree_grow(const Parameters &parameter) {
-    unsigned                 root = ep_;
-    tsl::robin_set<unsigned> visited;
-    unsigned                 unlinked_cnt = 0;
-    while (unlinked_cnt < nd_) {
-      DFS(visited, root, unlinked_cnt);
-      std::cout << "Unlinked count: " << unlinked_cnt << std::endl;
-      if (unlinked_cnt >= nd_)
-        break;
-      findroot(visited, root, parameter);
-      std::cout << "new root"
-                << ":" << root << '\n';
-    }
-    for (size_t i = 0; i < nd_; ++i) {
-      if (final_graph_[i].size() > width) {
-        width = final_graph_[i].size();
-      }
-    }
-  }
 }  // namespace NSG
