@@ -130,7 +130,7 @@ namespace NSG {
       ++nodes;
       std::vector<unsigned> tmp(k);
       in.read((char *) tmp.data(), k * sizeof(unsigned));
-      final_graph_.push_back(tmp);
+      final_graph_.emplace_back(tmp);
 
       if (nodes % 5000000 == 0)
         std::cout << "Loaded " << nodes << " nodes, and " << cc << " neighbors"
@@ -216,7 +216,7 @@ namespace NSG {
 
         final_graph_[mapping[i]].reserve(k);
         for (auto s : rand_set)
-          final_graph_[mapping[i]].push_back(mapping[s]);
+          final_graph_[mapping[i]].emplace_back(mapping[s]);
         final_graph_[mapping[i]].shrink_to_fit();
 
         if (i % 1000000 == 0)
@@ -241,7 +241,7 @@ namespace NSG {
           continue;
         else
           visited.insert(id);
-        init_ids.push_back(id);
+        init_ids.emplace_back(id);
       }
 
       std::priority_queue<Neighbor>        top_candidates;
@@ -348,7 +348,7 @@ namespace NSG {
             float dist = distance_->compare(
                 query, data_ + dimension_ * (size_t) id, (unsigned) dimension_);
             Neighbor nn(id, dist, true);
-            fullset.push_back(nn);
+            fullset.emplace_back(nn);
             if (dist >= retset[l - 1].distance)
               continue;
             int r = InsertIntoPool(retset.data(), l, nn);
@@ -382,7 +382,7 @@ namespace NSG {
         continue;
       else
         visited.insert(id);
-      init_ids.push_back(id);
+      init_ids.emplace_back(id);
     }
 
     unsigned l = 0;
@@ -426,7 +426,7 @@ namespace NSG {
           float dist = distance_->compare(
               query, data_ + dimension_ * (size_t) id, (unsigned) dimension_);
           Neighbor nn(id, dist, true);
-          fullset.push_back(nn);
+          fullset.emplace_back(nn);
           if (dist >= retset[l - 1].distance)
             continue;
           int r = InsertIntoPool(retset.data(), l, nn);
@@ -467,14 +467,14 @@ namespace NSG {
     /*   for (auto iter : final_graph_[ep_]) {
          if (init_ids.size() >= L)
            break;
-         init_ids.push_back(iter);
+         init_ids.emplace_back(iter);
          visited.insert(iter);
          //      fullset.insert(iter);
        }
    */
     std::vector<Neighbor> ep_neighbors;
     for (auto id : final_graph_[ep_]) {
-      ep_neighbors.push_back(
+      ep_neighbors.emplace_back(
           Neighbor(id,
                    distance_->compare(data_ + dimension_ * (size_t) id, query,
                                       dimension_),
@@ -485,7 +485,7 @@ namespace NSG {
     for (auto iter : ep_neighbors) {
       if (init_ids.size() >= L)
         break;
-      init_ids.push_back(iter.id);
+      init_ids.emplace_back(iter.id);
       visited.insert(iter.id);
     }
 
@@ -513,7 +513,7 @@ namespace NSG {
     for (auto iter : start_points) {
       if (init_ids.size() >= L)
         break;
-      init_ids.push_back(iter);
+      init_ids.emplace_back(iter);
       visited.insert(iter);
     }
     for (auto s : start_points) {
@@ -522,7 +522,7 @@ namespace NSG {
       for (auto iter : final_graph_[s]) {
         if (init_ids.size() == L)
           break;
-        init_ids.push_back(iter);
+        init_ids.emplace_back(iter);
         visited.insert(iter);
       }
     }
@@ -577,7 +577,7 @@ namespace NSG {
       // create a new set
       tsl::robin_set<unsigned> add(cur_level->size());
       add.insert(cur_level->begin(), cur_level->end());
-      bfs_order.push_back(add);
+      bfs_order.emplace_back(add);
 
       // swap cur_level and prev_level, increment level
       prev_level->clear();
@@ -621,7 +621,7 @@ namespace NSG {
         }
       }
     }
-    start_points.push_back(ep_);
+    start_points.emplace_back(ep_);
     // process each component, add one node from each level if more than one
     // level, else ignore
     for (auto &k_v : bfs_orders) {
@@ -640,7 +640,7 @@ namespace NSG {
 
             if (std::find(start_points.begin(), start_points.end(), *iter) ==
                 start_points.end())
-              start_points.push_back(*iter);
+              start_points.emplace_back(*iter);
           }
 
           if (start_points.size() == MAX_START_POINTS)
@@ -728,13 +728,13 @@ namespace NSG {
         float dist = distance_->compare(data_ + dimension_ * (size_t) q,
                                         data_ + dimension_ * (size_t) id,
                                         (unsigned) dimension_);
-        pool.push_back(Neighbor(id, dist, true));
+        pool.emplace_back(Neighbor(id, dist, true));
       }
 
     std::vector<Neighbor> result;
     std::sort(pool.begin(), pool.end());
     unsigned start = (pool[0].id == q) ? 1 : 0;
-    result.push_back(pool[start]);
+    result.emplace_back(pool[start]);
 
     while (result.size() < range && (++start) < pool.size() && start < maxc) {
       auto &p = pool[start];
@@ -753,7 +753,7 @@ namespace NSG {
         }
       }
       if (!occlude) {
-        result.push_back(p);
+        result.emplace_back(p);
       }
     }
 
@@ -762,7 +762,7 @@ namespace NSG {
       unsigned              start2 = 0;
       if (pool[start2].id == q)
         start2++;
-      result2.push_back(pool[start2]);
+      result2.emplace_back(pool[start2]);
       while (result2.size() < range - result.size() &&
              (++start2) < pool.size() && start2 < maxc) {
         auto &p = pool[start2];
@@ -781,10 +781,10 @@ namespace NSG {
           }
         }
         if (!occlude)
-          result2.push_back(p);
+          result2.emplace_back(p);
       }
       for (unsigned i = 0; i < result2.size(); i++) {
-        result.push_back(result2[i]);
+        result.emplace_back(result2[i]);
       }
       std::set<Neighbor> s(result.begin(), result.end());
       result.assign(s.begin(), s.end());
@@ -794,7 +794,7 @@ namespace NSG {
     assert(result.size() <= range);
     for (auto iter : result) {
       assert(iter.id < nd_);
-      cut_graph_[q].push_back(SimpleNeighbor(iter.id, iter.distance));
+      cut_graph_[q].emplace_back(SimpleNeighbor(iter.id, iter.distance));
     }
   }
 
@@ -831,20 +831,20 @@ namespace NSG {
           continue;
 
         if (des_pool.size() < range) {
-          des_pool.push_back(n);
+          des_pool.emplace_back(n);
           continue;
         }
 
         assert(des_pool.size() == range);
         graph_copy = des_pool;
-        graph_copy.push_back(n);
+        graph_copy.emplace_back(n);
       }  // des lock is released by this point
 
       assert(graph_copy.size() == 1 + range);
       {
         vecNgh temp_pool;
         for (auto node : graph_copy)
-          temp_pool.push_back(SimpleNeighbor(
+          temp_pool.emplace_back(SimpleNeighbor(
               node,
               distance_->compare(data_ + dimension_ * (size_t) node,
                                  data_ + dimension_ * (size_t) des.id,
@@ -854,7 +854,7 @@ namespace NSG {
           assert(iter->id != (iter + 1)->id);
 
         std::vector<SimpleNeighbor> result;
-        result.push_back(temp_pool[0]);
+        result.emplace_back(temp_pool[0]);
 
         auto iter = temp_pool.begin();
         if (alpha > 1)
@@ -878,7 +878,7 @@ namespace NSG {
           }
 
           if (!occlude)
-            result.push_back(p);
+            result.emplace_back(p);
 
           if (!occlude && alpha > 1)
             iter = temp_pool.erase(iter);
@@ -888,7 +888,7 @@ namespace NSG {
 
         if (alpha > 1 && result.size() < range && !temp_pool.empty()) {
           std::vector<SimpleNeighbor> result2;
-          result2.push_back(temp_pool[0]);
+          result2.emplace_back(temp_pool[0]);
 
           auto iter = temp_pool.begin();
           while (result2.size() + result.size() < range &&
@@ -909,12 +909,12 @@ namespace NSG {
               }
             }
             if (!occlude)
-              result2.push_back(p);
+              result2.emplace_back(p);
           }
           for (auto r2 : result2) {
             for (auto r : result)
               assert(r.id != r2.id);
-            result.push_back(r2);
+            result.emplace_back(r2);
           }
         }
 
@@ -923,7 +923,7 @@ namespace NSG {
           assert(result.size() <= range);
           des_pool.clear();
           for (auto iter : result)
-            des_pool.push_back(iter.id);
+            des_pool.emplace_back(iter.id);
         }
       }
 
@@ -952,10 +952,10 @@ namespace NSG {
 
     std::vector<unsigned> rand_perm;
     for (size_t i = 0; i < nd_; i++) {
-      rand_perm.push_back(i);
+      rand_perm.emplace_back(i);
     }
     std::vector<size_t> init_graph_vec;
-    init_graph_vec.push_back(ep_);
+    init_graph_vec.emplace_back(ep_);
 
     std::random_device               rd;
     std::mt19937                     gen(rd());
@@ -966,7 +966,7 @@ namespace NSG {
       if (candidate < p_val) {
         is_inner[i] = true;
         if (i != ep_)
-          init_graph_vec.push_back(i);
+          init_graph_vec.emplace_back(i);
       }
     }
 
@@ -1033,7 +1033,7 @@ namespace NSG {
           final_graph_[node].reserve(is_inner[node] ? inner_range : range);
           assert(!cut_graph_[node].empty());
           for (auto link : cut_graph_[node]) {
-            final_graph_[node].push_back(link.id);
+            final_graph_[node].emplace_back(link.id);
             assert(link.id >= 0 && link.id < nd_);
           }
           assert(final_graph_[node].size() <= is_inner[node] ? inner_range
@@ -1148,12 +1148,12 @@ namespace NSG {
     //    unsigned                 tmp_l = 0;
     // ignore default init; use start_points for init
     if (start_points.size() == 0)
-      start_points.push_back(ep_);
+      start_points.emplace_back(ep_);
 
     std::vector<Neighbor> ep_neighbors;
     for (auto curpt : start_points)
       for (auto id : final_graph_[curpt]) {
-        ep_neighbors.push_back(
+        ep_neighbors.emplace_back(
             Neighbor(id,
                      distance_->compare(data_ + dimension_ * (size_t) id, query,
                                         dimension_),
@@ -1164,7 +1164,7 @@ namespace NSG {
     for (auto iter : ep_neighbors) {
       if (init_ids.size() >= L)
         break;
-      init_ids.push_back(iter.id);
+      init_ids.emplace_back(iter.id);
       visited.insert(iter.id);
     }
 
@@ -1193,7 +1193,7 @@ namespace NSG {
         visited.insert(id);
       else
         continue;
-      init_ids.push_back(id);
+      init_ids.emplace_back(id);
     }
     //    init_ids.resize(tmp_l);
     std::vector<Neighbor> retset(L + 1);
@@ -1220,7 +1220,7 @@ namespace NSG {
       unsigned marker = k - 1;
       while (++marker < L && frontier.size() < (size_t) beam_width) {
         if (retset[marker].flag) {
-          frontier.push_back(retset[marker].id);
+          frontier.emplace_back(retset[marker].id);
           retset[marker].flag = false;
         }
       }
@@ -1235,7 +1235,7 @@ namespace NSG {
           } else {
             visited.insert(id);
           }
-          unique_nbrs.push_back(id);
+          unique_nbrs.emplace_back(id);
         }
       }
       auto last_iter = std::unique(unique_nbrs.begin(), unique_nbrs.end());
@@ -1547,7 +1547,7 @@ namespace NSG {
         }
       }
     }
-    final_graph_[root].push_back(id);
+    final_graph_[root].emplace_back(id);
   }
 
   void IndexNSG::tree_grow(const Parameters &parameter) {
