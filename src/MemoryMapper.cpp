@@ -20,7 +20,7 @@ MemoryMapper::MemoryMapper(const char* filename) {
 	}
 	_fileSize = sb.st_size;
 	std::cout << "File Size: " << _fileSize << std::endl;
-	_buf = (char*) mmap(NULL, _fileSize, PROT_READ, MAP_PRIVATE, fd, 0);
+	_buf = (char*) mmap(NULL, _fileSize, PROT_READ, MAP_PRIVATE, _fd, 0);
 #else 
 	_bareFile = CreateFileA(filename, GENERIC_READ, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
 	if (_bareFile == nullptr) {
