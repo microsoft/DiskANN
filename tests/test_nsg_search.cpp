@@ -327,8 +327,8 @@ int main(int argc, char** argv) {
     long long total_hops = 0;
     long long total_cmps = 0;
 
-    auto s = std::chrono::high_resolution_clock::now();
-    #pragma omp parallel for schedule(static, 1)
+    auto    s = std::chrono::high_resolution_clock::now();
+#pragma omp parallel for schedule(static, 1)
     for (unsigned i = 0; i < query_num; i++) {
       auto ret =
           index.BeamSearch(query_load + i * dim, data_load, K, paras,

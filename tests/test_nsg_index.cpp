@@ -59,18 +59,22 @@ int main(int argc, char** argv) {
   unsigned    innerC = (unsigned) atoi(argv[15]);
 
   NSG::Parameters paras;
-  paras.Set<unsigned>("L", L); // search list size during index construction
-  paras.Set<unsigned>("R", R); // max degree of the index
-  paras.Set<unsigned>("C", C); // candidate list size
+  paras.Set<unsigned>("L", L);  // search list size during index construction
+  paras.Set<unsigned>("R", R);  // max degree of the index
+  paras.Set<unsigned>("C", C);  // candidate list size
   paras.Set<unsigned>("innerL", L);
   paras.Set<unsigned>("innerR", R);
   paras.Set<unsigned>("innerC", C);
   paras.Set<std::string>("nn_graph_path", nn_graph_path);
-  paras.Set<unsigned>("num_syncs", num_syncs); // number of batches used for creating index
-  paras.Set<unsigned>("num_hier", num_hier); // ?
-  paras.Set<unsigned>("num_rnds", num_rnds); // number of rounds for creating index, usually 2 rounds
-  paras.Set<float>("alpha", alpha); // aggressiveness of adding edges in prune procedure
-  paras.Set<float>("p_val", p_val); // deprecated
+  paras.Set<unsigned>("num_syncs",
+                      num_syncs);  // number of batches used for creating index
+  paras.Set<unsigned>("num_hier", num_hier);  // ?
+  paras.Set<unsigned>(
+      "num_rnds",
+      num_rnds);  // number of rounds for creating index, usually 2 rounds
+  paras.Set<float>("alpha",
+                   alpha);  // aggressiveness of adding edges in prune procedure
+  paras.Set<float>("p_val", p_val);  // deprecated
   paras.Set<bool>("is_nsg", is_nsg);
   paras.Set<bool>("is_rnd_nn", 0);
   //  paras.Set<std::string>("nn_graph_path", nn_graph_path);
@@ -78,9 +82,9 @@ int main(int argc, char** argv) {
 
   {
     NSG::IndexNSG index(dim, points_num, NSG::L2, nullptr);
-    auto s = std::chrono::high_resolution_clock::now();
+    auto          s = std::chrono::high_resolution_clock::now();
     index.BuildRandomHierarchical(points_num, data_load, paras);
-    auto e = std::chrono::high_resolution_clock::now();
+    auto                          e = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> diff = e - s;
 
     std::cout << "indexing time: " << diff.count() << "\n";
