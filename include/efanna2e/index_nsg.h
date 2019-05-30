@@ -35,8 +35,6 @@ namespace NSG {
                                    unsigned *indices, int beam_width,
                                    std::vector<unsigned> &start_points);
 
-    void prefetch_vector(unsigned id);
-
    protected:
     typedef std::vector<std::vector<unsigned>> CompactGraph;
 

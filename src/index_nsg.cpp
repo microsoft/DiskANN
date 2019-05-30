@@ -10,6 +10,7 @@
 #include "efanna2e/exceptions.h"
 #include "efanna2e/parameters.h"
 #include "tsl/robin_set.h"
+#include "efanna2e/util.h"
 
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -971,15 +972,11 @@ namespace NSG {
       }
       auto last_iter = std::unique(unique_nbrs.begin(), unique_nbrs.end());
       for (auto iter = unique_nbrs.begin(); iter != last_iter; iter++) {
-        //if (iter < (last_iter - 1)) {
-        //  unsigned     id_next = *(iter + 1);
-        //  const float *vec1 = data_ + dimension_ * id_next;
-        //  //          NSG::prefetch_vector(vec1, dimension_);
-
-        //  for (size_t d = 0; d < dimension_; d += 16)
-        //    _mm_prefetch(vec1 + d,
-        //                 _MM_HINT_T0);  // prefetch the next neighbor and keep
-        //}
+        if (iter < (last_iter - 1)) {
+          unsigned     id_next = *(iter + 1);
+          const float *vec1 = data_ + dimension_ * id_next;
+          NSG::prefetch_vector(vec1, dimension_);
+        }
         cmps++;
         unsigned id = *iter;
         /* compare distance of each neighbor with that of query. If the distance
