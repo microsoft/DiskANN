@@ -12,7 +12,7 @@
 
 void load_data(char* filename, float*& data, unsigned& num,
                unsigned& dim) {  // load data with sift10K pattern
-  std::ifstreamin(filename, std::ios::binary);
+  std::ifstream in(filename, std::ios::binary);
   if (!in.is_open()) {
     std::cout << "open file error" << std::endl;
     exit(-1);
@@ -20,9 +20,9 @@ void load_data(char* filename, float*& data, unsigned& num,
   in.read((char*) &dim, 4);
   std::cout << "data dimension: " << dim << std::endl;
   in.seekg(0, std::ios::end);
-  std::ios::pos_typess = in.tellg();
+  std::ios::pos_type ss = in.tellg();
 
-  size_tfsize = (size_t) ss;
+  size_t fsize = (size_t) ss;
   num = (unsigned) (fsize / (dim + 1) / 4);
   std::cout << "Reading " << num << " points" << std::endl;
   data = new float[(size_t) num * (size_t) dim];
