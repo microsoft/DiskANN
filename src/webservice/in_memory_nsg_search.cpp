@@ -2,19 +2,13 @@
 #include <webservice/in_memory_nsg_search.h>
 
 namespace NSG {
-
-  static void load_data(const char* filename, float*& data, unsigned& num,
-                        unsigned& dim);
-  static std::vector<std::wstring> load_ids(const char* idsFile);
-
   const unsigned int DEFAULT_BEAM_WIDTH = 1;
   const unsigned int L_MULTIPLIER = 10;
   const unsigned int MAX_L = 300;
 
   InMemoryNSGSearch::InMemoryNSGSearch(const char* baseFile,
                                        const char* indexFile,
-                                       const char* idsFile, 
-										Metric m)
+                                       const char* idsFile, Metric m)
       : _baseVectors(nullptr) {
     unsigned int dimension, numPoints;
 
@@ -44,20 +38,20 @@ namespace NSG {
     // indices have the pointers to the results. Select the results from the
     // ids_vector.
     NSGSearchResult searchResult(K, duration);
-    std::for_each(indices, indices + K,
-                  [&](const int& index) { searchResult.addResult(_ids[index]); });
+    std::for_each(indices, indices + K, [&](const int& index) {
+      searchResult.addResult(_ids[index]);
+    });
 
-	return searchResult;
+    delete[] indices;
+    return searchResult;
   }
 
-  InMemoryNSGSearch::~InMemoryNSGSearch() 
-  {
+  InMemoryNSGSearch::~InMemoryNSGSearch() {
     delete[] _baseVectors;
-  
   }
 
-  static void load_data(const char* filename, float*& data, unsigned& num,
-                        unsigned& dim) {
+  void InMemoryNSGSearch::load_data(const char* filename, float*& data,
+                                    unsigned& num, unsigned& dim) {
     std::ifstream in(filename, std::ios::binary);
     if (!in.is_open()) {
       std::cerr << "Could not open data file " << filename << std::endl;
@@ -70,7 +64,7 @@ namespace NSG {
 
     size_t fsize = (size_t) ss;
     num = (unsigned) (fsize / (dim + 1) / 4);
-    std::cout << "Reading " << num << " points" << std::endl;
+    std::cout << "Reading " << num << " points...";
     data = new float[(size_t) num * (size_t) dim];
 
     in.seekg(0, std::ios::beg);
@@ -78,10 +72,11 @@ namespace NSG {
       in.seekg(4, std::ios::cur);
       in.read((char*) (data + i * dim), dim * 4);
     }
+    std::cout << "done." << std::endl;
     in.close();
   }
 
-  static std::vector<std::wstring> load_ids(const char* idsFile) {
+  std::vector<std::wstring> InMemoryNSGSearch::load_ids(const char* idsFile) {
     std::wifstream            in(idsFile);
     std::vector<std::wstring> ids;
 
@@ -94,6 +89,8 @@ namespace NSG {
       in >> id;
       ids.push_back(id);
     }
+
+    std::cout << "Loaded " << ids.size() << " from " << idsFile << std::endl;
     return ids;
   }
 

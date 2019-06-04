@@ -37,6 +37,11 @@ namespace NSG {
 
     virtual ~InMemoryNSGSearch();
 
+	static void load_data(const char* filename, float*& data, unsigned& num,
+                          unsigned& dim);
+
+    static std::vector<std::wstring> load_ids(const char* idsFile);
+
    private:
     float*                         _baseVectors;
     std::vector<std::wstring>      _ids;

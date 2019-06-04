@@ -1,15 +1,16 @@
-#include <string>
 #include <cpprest/base_uri.h>
 #include <webservice/server.h>
 #include <webservice/in_memory_nsg_search.h>
 
-
+#include <string>
 
 // Utility function declarations
-static web::json::value rsltIdsToJsonArray(const NSG::NSGSearchResult& srchRslt);
+static web::json::value rsltIdsToJsonArray(
+    const NSG::NSGSearchResult& srchRslt);
 
 const std::wstring VECTOR_KEY = L"query", K_KEY = L"k",
                    RESULTS_KEY = L"results",
+                   QUERY_ID_KEY = L"query_id",
                    TIME_TAKEN_KEY = L"time_taken_in_us";
 
 Server::Server(web::uri& uri, std::unique_ptr<NSG::InMemoryNSGSearch>& searcher)
@@ -33,11 +34,10 @@ pplx::task<void> Server::close() {
 
 void Server::handle_post(web::http::http_request message) {
   auto startTime = std::chrono::high_resolution_clock::now();
-  auto bodyTask = message.extract_string(true);
-
-  bodyTask.then([=](utility::string_t body) {
+  message.extract_string(true).then([=](utility::string_t body) {
     web::json::value val = web::json::value::parse(body);
     web::json::array queryArr = val.at(VECTOR_KEY).as_array();
+    long  queryId = val.at(QUERY_ID_KEY).as_number().to_int64();
     int              k = val.at(K_KEY).as_integer();
 
     assert(k > 0);
@@ -52,12 +52,14 @@ void Server::handle_post(web::http::http_request message) {
     web::json::value ids = rsltIdsToJsonArray(srchRslt);
 
     web::json::value response = web::json::value::object();
+    response[QUERY_ID_KEY] = queryId;
     response[K_KEY] = k;
     response[RESULTS_KEY] = ids;
     response[TIME_TAKEN_KEY] =
         std::chrono::duration_cast<std::chrono::microseconds>(
             std::chrono::high_resolution_clock::now() - startTime)
             .count();
+    std::wcout << "Returning response: " << response.serialize() << std::endl;
     message.reply(web::http::status_codes::OK, response);
   });
 }
