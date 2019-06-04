@@ -90,12 +90,12 @@
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>CPPREST_FORCE_HTTP_LISTENER_ASIO;NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>__NSG_WINDOWS__;CPPREST_FORCE_HTTP_LISTENER_ASIO;NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <PrecompiledHeaderFile>
       </PrecompiledHeaderFile>
       <PrecompiledHeaderOutputFile />
-      <AdditionalIncludeDirectories>..\..\include\webservice;E:\thirdparty\vcpkg\packages\cpprestsdk_x64-windows\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\..\include\;E:\thirdparty\vcpkg\packages\cpprestsdk_x64-windows\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -157,10 +157,14 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClInclude Include="..\..\include\webservice\in_memory_nsg_search.h" />
     <ClInclude Include="..\..\include\webservice\server.h" />
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="..\..\src\index.cpp" />
+    <ClCompile Include="..\..\src\index_nsg.cpp" />
     <ClCompile Include="..\..\src\webservice\main.cpp" />
+    <ClCompile Include="..\..\src\webservice\in_memory_nsg_search.cpp" />
     <ClCompile Include="..\..\src\webservice\server.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

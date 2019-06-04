@@ -870,11 +870,11 @@ namespace NSG {
     has_built = true;
   }
 
-  std::pair<int, int> IndexNSG::BeamSearch(
-      const float *query, const float *x, const size_t K,
-      const Parameters &parameters, unsigned *indices, int beam_width,
-      std::vector<unsigned> &start_points) {
-    const unsigned L = parameters.Get<unsigned>("L_search");
+  std::pair<int, int> IndexNSG::BeamSearch(const float *query, const float *x,
+                                           const size_t      K,
+                                           const unsigned int L,
+                                           unsigned *indices, int beam_width, std::vector<unsigned> &start_points) 
+  {
     data_ = x;
 
     std::vector<unsigned> init_ids;
@@ -1004,6 +1004,15 @@ namespace NSG {
       indices[i] = retset[i].id;
     }
     return std::make_pair(hops, cmps);
+  }
+
+  std::pair<int, int> IndexNSG::BeamSearch(
+      const float *query, const float *x, const size_t K,
+      const Parameters &parameters, unsigned *indices, int beam_width,
+      std::vector<unsigned> &start_points) 
+  {
+    const unsigned int L = parameters.Get<unsigned>("L_search");
+    return BeamSearch(query, x, K, L, indices, beam_width, start_points);
   }
 
 }  // namespace NSG

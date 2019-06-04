@@ -30,6 +30,13 @@ namespace NSG {
                                  Parameters &parameters);
     void populate_start_points_bfs(std::vector<unsigned> &start_points);
 
+	//Gopal. Added BeamSearch overload that takes L as parameter, so that we 
+	//can customize L on a per-query basis without tampering with "Parameters"
+	std::pair<int, int> BeamSearch(
+        const float *query, const float *x, const size_t K,
+        const unsigned int L, unsigned *indices, int beam_width,
+        std::vector<unsigned> &start_points);
+
     std::pair<int, int> BeamSearch(const float *query, const float *x,
                                    const size_t K, const Parameters &parameters,
                                    unsigned *indices, int beam_width,
