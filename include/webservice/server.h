@@ -16,6 +16,7 @@ class Server {
   void handle_post(web::http::http_request message);
 
  private:
+  bool                                                              _isDebug;
   std::unique_ptr<web::http::experimental::listener::http_listener> _listener;
   std::unique_ptr<NSG::InMemoryNSGSearch>&                          _searcher;
 };
