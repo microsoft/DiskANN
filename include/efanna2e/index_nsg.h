@@ -26,7 +26,7 @@ namespace NSG {
     void Init_rnd_nn_graph(size_t num_points, unsigned k,
                            std::vector<size_t> mapping = std::vector<size_t>());
 
-    void BuildRandomHierarchical(size_t n, const float *data,
+    void BuildRandomHierarchical(const float *data,
                                  Parameters &parameters);
     void populate_start_points_bfs(std::vector<unsigned> &start_points);
 

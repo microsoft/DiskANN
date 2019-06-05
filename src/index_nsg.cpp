@@ -870,7 +870,7 @@ namespace NSG {
     delete[] cut_graph_;
   }
 
-  void IndexNSG::BuildRandomHierarchical(size_t n, const float *data,
+  void IndexNSG::BuildRandomHierarchical(const float *data,
                                          Parameters &parameters) {
     unsigned range = parameters.Get<unsigned>("R");
     data_ = data;

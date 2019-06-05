@@ -4,6 +4,9 @@ set(CMAKE_CXX_STANDARD 14)
 add_executable(test_nsg_sweep_index test_nsg_sweep_index.cpp)
 target_link_libraries(test_nsg_sweep_index ${PROJECT_NAME} -ltcmalloc)
 
+add_executable(test_nsg_incr_index test_nsg_incr_index.cpp)
+target_link_libraries(test_nsg_incr_index ${PROJECT_NAME} -ltcmalloc)
+
 add_executable(test_nsg_shard_search test_nsg_shard_search.cpp)
 target_link_libraries(test_nsg_shard_search ${PROJECT_NAME})
 
