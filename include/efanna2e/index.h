@@ -34,7 +34,8 @@ namespace NSG {
 
   class Index {
    public:
-    explicit Index(const size_t dimension, const size_t n, Metric metric);
+    explicit Index(const size_t dimension, const size_t n, Metric metric = L2,
+                   const size_t max_points = 0);
 
     virtual ~Index();
 
@@ -62,6 +63,7 @@ namespace NSG {
     const size_t dimension_;
     const float *data_;
     size_t       nd_;
+    size_t       max_points_;
     bool         has_built;
     Distance *   distance_;
   };

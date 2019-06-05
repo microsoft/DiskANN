@@ -23,8 +23,8 @@ namespace NSG {
 #define MAX_START_POINTS 100
 
   IndexNSG::IndexNSG(const size_t dimension, const size_t n, Metric m,
-                     Index *initializer)
-      : Index(dimension, n, m), initializer_{initializer} {
+                     Index *initializer, const size_t max_points)
+      : Index(dimension, n, m, max_points), initializer_{initializer} {
     width = 0;
   }
 
@@ -33,7 +33,7 @@ namespace NSG {
 
   void IndexNSG::Save(const char *filename) {
     std::ofstream out(filename, std::ios::binary | std::ios::out);
-    assert(final_graph_.size() == nd_);
+    assert(final_graph_.size() == max_points_);
 
     long long total_gr_edges = 0;
     out.write((char *) &width, sizeof(unsigned));
@@ -265,6 +265,50 @@ namespace NSG {
                            visited);
   }
 
+  int IndexNSG::insert_point(const float *point, const Parameters &parameters) {
+    unsigned range = parameters.Get<unsigned>("R");
+    if (!has_built) {
+      std::cerr << "Can not insert with out building base index first."
+                << std::endl;
+      return -3;
+    }
+
+    LockGuard guard(incr_insert_lock);
+    if (nd_ == max_points_) {
+      std::cerr << "Can not insert more than " << max_points_ << " points."
+                << std::endl;
+      return -1;
+    } else if (nd_ > max_points_) {
+      std::cerr << "#points " << nd_
+                << " greater than max_points_: " << max_points_ << std::endl;
+      return -2;
+    }
+
+    auto offset_data = data_ + (size_t) dimension_ * nd_;
+    memcpy((void *) offset_data, point, sizeof(float) * dimension_);
+
+    std::vector<Neighbor>    pool, tmp;
+    tsl::robin_set<unsigned> visited;
+    vecNgh                   cut_graph;
+
+    get_neighbors(offset_data, parameters, tmp, pool, visited);
+    sync_prune(nd_, pool, parameters, visited, cut_graph);
+
+    assert(final_graph_.size() == nd_);
+    final_graph_[nd_].clear();
+    final_graph_[nd_].reserve(range);
+    assert(!cut_graph.empty());
+    for (auto link : cut_graph) {
+      final_graph_[nd_].emplace_back(link.id);
+      assert(link.id >= 0 && link.id < nd_);
+    }
+    assert(final_graph_[nd_].size() <= range);
+    InterInsertHierarchy(nd_, locks, cut_graph, parameters);
+
+    ++nd_;
+    return 0;
+  }
+
   /* reachable_bfs():
    * This function fills in the order to do bfs in bfs_order
    */
@@ -444,7 +488,7 @@ namespace NSG {
   void IndexNSG::sync_prune(unsigned q, std::vector<Neighbor> &pool,
                             const Parameters &        parameter,
                             tsl::robin_set<unsigned> &visited,
-                            vecNgh *                  cut_graph_) {
+                            vecNgh &                  cut_graph_q) {
     unsigned range = parameter.Get<unsigned>("R");
     unsigned maxc = parameter.Get<unsigned>("C");
     float    alpha = parameter.Get<float>("alpha");
@@ -538,14 +582,14 @@ namespace NSG {
       result.assign(s.begin(), s.end());
     }
 
-    /* Add all the nodes in result into a variable called cut_graph_[q].
+    /* Add all the nodes in result into a variable called cut_graph_q
      * So this contains all the neighbors of q
      */
-    cut_graph_[q].clear();
+    cut_graph_q.clear();
     assert(result.size() <= range);
     for (auto iter : result) {
       assert(iter.id < nd_);
-      cut_graph_[q].emplace_back(SimpleNeighbor(iter.id, iter.distance));
+      cut_graph_q.emplace_back(SimpleNeighbor(iter.id, iter.distance));
     }
   }
 
@@ -555,11 +599,11 @@ namespace NSG {
    */
   void IndexNSG::InterInsertHierarchy(unsigned                 n,
                                       std::vector<std::mutex> &locks,
-                                      vecNgh *                 cut_graph_,
+                                      vecNgh &                 cut_graph_n,
                                       const Parameters &       parameter) {
     float      alpha = parameter.Get<float>("alpha");
     const auto range = parameter.Get<float>("R");
-    const auto src_pool = cut_graph_[n];
+    const auto src_pool = cut_graph_n;
 
     assert(!src_pool.empty());
 
@@ -729,9 +773,9 @@ namespace NSG {
     std::mt19937                     gen(rd());
     std::uniform_real_distribution<> dis(0, 1);
 
-    Init_rnd_nn_graph(nd_, range);
+    Init_rnd_nn_graph(max_points_, range);
 
-    assert(final_graph_.size() == nd_);
+    assert(final_graph_.size() == max_points_);
     std::vector<std::mutex> locks(nd_);
     auto                    cut_graph_ = new vecNgh[nd_];
 
@@ -782,7 +826,7 @@ namespace NSG {
              * create a cut_graph_ array, which contains final neighbors for
              * point n
              */
-            sync_prune(n, pool, parameters, visited, cut_graph_);
+            sync_prune(n, pool, parameters, visited, cut_graph_[n]);
           }
         }
 
@@ -802,7 +846,7 @@ namespace NSG {
 
 #pragma omp parallel for schedule(static, PAR_BLOCK_SZ)
         for (unsigned n = start_id; n < end_id; ++n) {
-          InterInsertHierarchy(n, locks, cut_graph_, parameters);
+          InterInsertHierarchy(n, locks, cut_graph_[n], parameters);
         }
 
         if ((sync_num * 100) / NUM_SYNCS > progress_counter) {

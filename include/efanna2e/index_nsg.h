@@ -16,7 +16,7 @@ namespace NSG {
   class IndexNSG : public Index {
    public:
     explicit IndexNSG(const size_t dimension, const size_t n, Metric m,
-                      Index *initializer);
+                      Index *initializer, const size_t max_points = 0);
 
     virtual ~IndexNSG();
 
@@ -69,13 +69,15 @@ namespace NSG {
 
     typedef std::vector<SimpleNeighbor> vecNgh;
     void InterInsertHierarchy(unsigned n, std::vector<std::mutex> &locks,
-                              vecNgh *cut_graph_, const Parameters &parameter);
+                              vecNgh &cut_graph_, const Parameters &parameter);
 
     void sync_prune(unsigned q, std::vector<Neighbor> &pool,
                     const Parameters &        parameter,
-                    tsl::robin_set<unsigned> &visited, vecNgh *cut_graph_);
+                    tsl::robin_set<unsigned> &visited, vecNgh &cut_graph_);
 
     void LinkHierarchy(Parameters &parameters);
+
+    int insert_point(const float *point, const Parameters &parameter);
 
    private:
     unsigned                width;
@@ -86,6 +88,8 @@ namespace NSG {
     size_t                  data_len;
     size_t                  neighbor_len;
     // KNNGraph                nnd_graph;
+
+    std::mutex incr_insert_lock;  // Allow only one thread to insert.
   };
 }
 
