@@ -83,9 +83,8 @@ namespace NSG {
   void IndexNSG::Init_rnd_nn_graph(size_t num_points, unsigned k,
                                    std::vector<size_t> mapping) {
     k = std::min(k, (unsigned) 32);
-    size_t num = num_points;
-    final_graph_.resize(num);
-    final_graph_.reserve(num);
+    final_graph_.resize(max_points_);
+    final_graph_.reserve(max_points_);
     if (!mapping.empty())
       num_points =
           mapping.size();  // num_points now = 10% of the points in dataset
@@ -102,9 +101,7 @@ namespace NSG {
 #pragma omp parallel for schedule(static, 1)
     for (size_t block = 0; block < nblocks; ++block) {
       std::random_device rd;
-      size_t             x = rd();
-      std::mt19937       gen(x);
-
+      std::mt19937       gen(rd());
       std::uniform_int_distribution<size_t> dis(0, num_points - 1);
 
       /* Put random number points as neighbours to the 10% of the nodes */
@@ -773,7 +770,7 @@ namespace NSG {
     std::mt19937                     gen(rd());
     std::uniform_real_distribution<> dis(0, 1);
 
-    Init_rnd_nn_graph(max_points_, range);
+    Init_rnd_nn_graph(nd_, range);
 
     assert(final_graph_.size() == max_points_);
     std::vector<std::mutex> locks(nd_);

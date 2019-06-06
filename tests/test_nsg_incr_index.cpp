@@ -218,7 +218,7 @@ int main(int argc, char** argv) {
   }
 
   index.Save(save_path.c_str());
-  //    index.Save_Inner_Vertices(argv[5]);
+  // index.Save_Inner_Vertices(argv[5]);
 
   return 0;
 }
