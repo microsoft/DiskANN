@@ -732,7 +732,7 @@ namespace NSG {
        */
       assert(des_pool.size() <= range);
       for (auto iter : des_pool)
-        assert(iter < nd_);
+        assert(iter <= nd_); // Equality occurs when called from insert_point
     }
   }
 
