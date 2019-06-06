@@ -4,8 +4,8 @@
 
 #include <efanna2e/index_nsg.h>
 #include <efanna2e/util.h>
-#include <omp.h>
 
+#include <omp.h>
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
@@ -198,7 +198,7 @@ int main(int argc, char** argv) {
   paras.Set<float>("alpha", alpha);
   paras.Set<unsigned>("num_rnds", num_rnds);
 
-  unsigned num_incr = 100000;
+  unsigned num_incr = 10000;
 
   NSG::IndexNSG index(dim, points_num - num_incr, NSG::L2, nullptr, points_num);
   {
@@ -209,9 +209,14 @@ int main(int argc, char** argv) {
     std::cout << "Indexing time: " << diff.count() << "\n";
   }
   {
+    std::vector<NSG::Neighbor>       pool, tmp;
+    tsl::robin_set<unsigned>         visited;
+    std::vector<NSG::SimpleNeighbor> cut_graph;
+
     auto s = std::chrono::high_resolution_clock::now();
     for (unsigned i = points_num - num_incr; i < points_num; ++i)
-      index.insert_point(data_load + (size_t) i * (size_t) dim, paras);
+      index.insert_point(data_load + (size_t) i * (size_t) dim, paras, pool,
+                         tmp, visited, cut_graph);
     auto                          e = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> diff = e - s;
     std::cout << "Incremental time: " << diff.count() << "\n";

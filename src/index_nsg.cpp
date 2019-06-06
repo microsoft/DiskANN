@@ -263,7 +263,11 @@ namespace NSG {
                            visited);
   }
 
-  int IndexNSG::insert_point(const float *point, const Parameters &parameters) {
+  int IndexNSG::insert_point(const float *point, const Parameters &parameters,
+                             std::vector<Neighbor> &   pool,
+                             std::vector<Neighbor> &   tmp,
+                             tsl::robin_set<unsigned> &visited,
+                             vecNgh &                  cut_graph) {
     unsigned range = parameters.Get<unsigned>("R");
     if (!has_built) {
       std::cerr << "Can not insert with out building base index first."
@@ -285,9 +289,14 @@ namespace NSG {
     auto offset_data = data_ + (size_t) dimension_ * nd_;
     memcpy((void *) offset_data, point, sizeof(float) * dimension_);
 
-    std::vector<Neighbor>    pool, tmp;
-    tsl::robin_set<unsigned> visited;
-    vecNgh                   cut_graph;
+    // std::vector<Neighbor>    pool, tmp;
+    // tsl::robin_set<unsigned> visited;
+    // vecNgh                   cut_graph;
+
+    pool.clear();
+    tmp.clear();
+    cut_graph.clear();
+    visited.clear();
 
     get_neighbors(offset_data, parameters, tmp, pool, visited);
     sync_prune(nd_, pool, parameters, visited, cut_graph);

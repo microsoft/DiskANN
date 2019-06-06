@@ -28,7 +28,11 @@ namespace NSG {
 
     void BuildRandomHierarchical(const float *data, Parameters &parameters);
 
-    int insert_point(const float *point, const Parameters &parameter);
+    typedef std::vector<SimpleNeighbor> vecNgh;
+
+    int insert_point(const float *point, const Parameters &parameter,
+                     std::vector<Neighbor> &pool, std::vector<Neighbor> &tmp,
+                     tsl::robin_set<unsigned> &visited, vecNgh &cut_graph);
 
     void populate_start_points_bfs(std::vector<unsigned> &start_points);
 
@@ -69,7 +73,6 @@ namespace NSG {
                        std::vector<Neighbor> &   fullset,
                        tsl::robin_set<unsigned> &visited);
 
-    typedef std::vector<SimpleNeighbor> vecNgh;
     void InterInsertHierarchy(unsigned n, vecNgh &cut_graph_,
                               const Parameters &parameter);
 
