@@ -70,8 +70,8 @@ namespace NSG {
                        tsl::robin_set<unsigned> &visited);
 
     typedef std::vector<SimpleNeighbor> vecNgh;
-    void InterInsertHierarchy(unsigned n, std::vector<std::mutex> &locks,
-                              vecNgh &cut_graph_, const Parameters &parameter);
+    void InterInsertHierarchy(unsigned n, vecNgh &cut_graph_,
+                              const Parameters &parameter);
 
     void sync_prune(unsigned q, std::vector<Neighbor> &pool,
                     const Parameters &        parameter,

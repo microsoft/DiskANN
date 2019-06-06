@@ -25,6 +25,7 @@ namespace NSG {
   IndexNSG::IndexNSG(const size_t dimension, const size_t n, Metric m,
                      Index *initializer, const size_t max_points)
       : Index(dimension, n, m, max_points), initializer_{initializer} {
+    locks = std::vector<std::mutex>(max_points_);
     width = 0;
   }
 
@@ -300,7 +301,7 @@ namespace NSG {
       assert(link.id >= 0 && link.id < nd_);
     }
     assert(final_graph_[nd_].size() <= range);
-    InterInsertHierarchy(nd_, locks, cut_graph, parameters);
+    InterInsertHierarchy(nd_, cut_graph, parameters);
 
     ++nd_;
     return 0;
@@ -594,10 +595,8 @@ namespace NSG {
    * This function tries to add reverse links from all the visited nodes to the
    * current node n.
    */
-  void IndexNSG::InterInsertHierarchy(unsigned                 n,
-                                      std::vector<std::mutex> &locks,
-                                      vecNgh &                 cut_graph_n,
-                                      const Parameters &       parameter) {
+  void IndexNSG::InterInsertHierarchy(unsigned n, vecNgh &cut_graph_n,
+                                      const Parameters &parameter) {
     float      alpha = parameter.Get<float>("alpha");
     const auto range = parameter.Get<float>("R");
     const auto src_pool = cut_graph_n;
@@ -776,8 +775,8 @@ namespace NSG {
     Init_rnd_nn_graph(nd_, range);
 
     assert(final_graph_.size() == max_points_);
-    std::vector<std::mutex> locks(nd_);
-    auto                    cut_graph_ = new vecNgh[nd_];
+    // std::vector<std::mutex> locks(max_points_);
+    auto cut_graph_ = new vecNgh[nd_];
 
     for (uint32_t rnd_no = 0; rnd_no < NUM_RNDS; rnd_no++) {
       // Shuffle the dataset
@@ -830,10 +829,9 @@ namespace NSG {
         }
 
 #pragma omp parallel for schedule(static, PAR_BLOCK_SZ)
-        for (unsigned n = start_id; n < end_id; ++n) {
-          auto node = n;
-          final_graph_[node]
-              .clear();  // clear all the neighbors of final_graph_[node]
+        for (auto node = start_id; node < end_id; ++node) {
+          // clear all the neighbors of final_graph_[node]
+          final_graph_[node].clear();
           final_graph_[node].reserve(range);
           assert(!cut_graph_[node].empty());
           for (auto link : cut_graph_[node]) {
@@ -845,7 +843,7 @@ namespace NSG {
 
 #pragma omp parallel for schedule(static, PAR_BLOCK_SZ)
         for (unsigned n = start_id; n < end_id; ++n) {
-          InterInsertHierarchy(n, locks, cut_graph_[n], parameters);
+          InterInsertHierarchy(n, cut_graph_[n], parameters);
         }
 
         if ((sync_num * 100) / NUM_SYNCS > progress_counter) {
