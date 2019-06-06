@@ -100,8 +100,8 @@ namespace NSG {
 
 #pragma omp parallel for schedule(static, 1)
     for (size_t block = 0; block < nblocks; ++block) {
-      std::random_device rd;
-      std::mt19937       gen(rd());
+      std::random_device                    rd;
+      std::mt19937                          gen(rd());
       std::uniform_int_distribution<size_t> dis(0, num_points - 1);
 
       /* Put random number points as neighbours to the 10% of the nodes */
@@ -868,7 +868,7 @@ namespace NSG {
   }
 
   void IndexNSG::BuildRandomHierarchical(const float *data,
-                                         Parameters &parameters) {
+                                         Parameters & parameters) {
     unsigned range = parameters.Get<unsigned>("R");
     data_ = data;
 

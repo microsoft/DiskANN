@@ -26,8 +26,10 @@ namespace NSG {
     void Init_rnd_nn_graph(size_t num_points, unsigned k,
                            std::vector<size_t> mapping = std::vector<size_t>());
 
-    void BuildRandomHierarchical(const float *data,
-                                 Parameters &parameters);
+    void BuildRandomHierarchical(const float *data, Parameters &parameters);
+
+    int insert_point(const float *point, const Parameters &parameter);
+
     void populate_start_points_bfs(std::vector<unsigned> &start_points);
 
     std::pair<int, int> BeamSearch(const float *query, const float *x,
@@ -76,8 +78,6 @@ namespace NSG {
                     tsl::robin_set<unsigned> &visited, vecNgh &cut_graph_);
 
     void LinkHierarchy(Parameters &parameters);
-
-    int insert_point(const float *point, const Parameters &parameter);
 
    private:
     unsigned                width;

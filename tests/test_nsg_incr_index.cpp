@@ -198,20 +198,20 @@ int main(int argc, char** argv) {
   paras.Set<float>("alpha", alpha);
   paras.Set<unsigned>("num_rnds", num_rnds);
 
-  unsigned num_incr = 100000;
+  unsigned num_incr = 900000;
 
   NSG::IndexNSG index(dim, points_num - num_incr, NSG::L2, nullptr, points_num);
   {
-    auto          s = std::chrono::high_resolution_clock::now();
+    auto s = std::chrono::high_resolution_clock::now();
     index.BuildRandomHierarchical(data_load, paras);
     auto                          e = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> diff = e - s;
     std::cout << "Indexing time: " << diff.count() << "\n";
   }
   {
-    auto          s = std::chrono::high_resolution_clock::now();
+    auto s = std::chrono::high_resolution_clock::now();
     for (unsigned i = points_num - num_incr; i < points_num; ++i)
-      index.BuildRandomHierarchical(data_load + dim*i, paras);
+      index.insert_point(data_load + (size_t) i * (size_t) dim, paras);
     auto                          e = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> diff = e - s;
     std::cout << "Incremental time: " << diff.count() << "\n";
