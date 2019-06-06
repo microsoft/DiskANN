@@ -742,9 +742,12 @@ namespace NSG {
    */
   void IndexNSG::LinkHierarchy(Parameters &parameters) {
     //    The graph will be updated periodically in NUM_SYNCS batches
-    const uint32_t NUM_SYNCS = nd_ > 1 << 20 ? (nd_ / (128 * 1024 * 5))
-                                             : 20 * (nd_ / (128 * 1024 * 5));
-    std::cout << "Number of syncs determinted to be " << NUM_SYNCS << std::endl;
+    // const uint32_t NUM_SYNCS = nd_ > 1 << 20 ? (nd_ / (128 * 1024 * 5))
+    //                                         : 20 * (nd_ / (128 * 1024 * 5));
+    uint32_t NUM_SYNCS = DIV_ROUND_UP(nd_, (128 * 1024));
+    if (nd_ < (1 << 22))
+      NUM_SYNCS = 4 * NUM_SYNCS;
+    std::cout << "Number of syncs: " << NUM_SYNCS << std::endl;
     const uint32_t NUM_RNDS = parameters.Get<unsigned>(
         "num_rnds");  // num. of passes of overall algorithm
     const unsigned L = parameters.Get<unsigned>("L");  // Search list size
@@ -777,8 +780,8 @@ namespace NSG {
     auto                    cut_graph_ = new vecNgh[nd_];
 
     for (uint32_t rnd_no = 0; rnd_no < NUM_RNDS; rnd_no++) {
-      std::random_shuffle(rand_perm.begin(),
-                          rand_perm.end());  // Shuffle the dataset
+      // Shuffle the dataset
+      std::random_shuffle(rand_perm.begin(), rand_perm.end());
       unsigned progress_counter = 0;
       if (rnd_no == NUM_RNDS - 1) {
         if (last_round_alpha > 1)
@@ -786,8 +789,7 @@ namespace NSG {
         parameters.Set<float>("alpha", last_round_alpha);
       }
 
-      size_t round_size = DIV_ROUND_UP(nd_, NUM_SYNCS - 1) -
-                          1;  // this gives the size of each batch
+      size_t round_size = DIV_ROUND_UP(nd_, NUM_SYNCS);  // size of each batch
 
       for (uint32_t sync_num = 0; sync_num < NUM_SYNCS; sync_num++) {
         size_t start_id = sync_num * round_size;

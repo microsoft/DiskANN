@@ -39,15 +39,15 @@ void load_fvecs(const char* filename, float*& data, unsigned& num,
     new_dim = dim;
 
   if (new_dim < dim)
-    std::cout << "load_bvecs " << filename << ". Current Dimension: " << dim
+    std::cout << "load_fvecs " << filename << ". Current Dimension: " << dim
               << ". New Dimension: First " << new_dim << " columns. "
               << std::flush;
   else if (new_dim > dim)
-    std::cout << "load_bvecs " << filename << ". Current Dimension: " << dim
+    std::cout << "load_fvecs " << filename << ". Current Dimension: " << dim
               << ". New Dimension: " << new_dim
               << " (added columns with 0 entries). " << std::flush;
   else
-    std::cout << "load_bvecs " << filename << ". Dimension: " << dim << ". "
+    std::cout << "load_fvecs " << filename << ". Dimension: " << dim << ". "
               << std::flush;
 
   float* zeros = new float[new_dim];
