@@ -291,7 +291,7 @@ namespace NSG {
     get_neighbors(offset_data, parameters, tmp, pool, visited);
     sync_prune(nd_, pool, parameters, visited, cut_graph);
 
-    assert(final_graph_.size() == nd_);
+    assert(final_graph_.size() == max_points_);
     final_graph_[nd_].clear();
     final_graph_[nd_].reserve(range);
     assert(!cut_graph.empty());
