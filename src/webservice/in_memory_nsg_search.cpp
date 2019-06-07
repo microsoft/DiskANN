@@ -35,7 +35,7 @@ namespace NSG {
                         std::chrono::high_resolution_clock::now() - start_time)
                         .count();
 
-    // indices have the pointers to the results. Select the results from the
+    // indices has the pointers to the results. Select the results from the
     // ids_vector.
     NSGSearchResult searchResult(K, duration);
     std::for_each(indices, indices + K, [&](const int& index) {

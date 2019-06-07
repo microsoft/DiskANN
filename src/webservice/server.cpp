@@ -1,18 +1,22 @@
+#include <string>
 #include <cpprest/base_uri.h>
 #include <webservice/server.h>
 #include <webservice/in_memory_nsg_search.h>
 
-#include <string>
-
 // Utility function declarations
-static web::json::value rsltIdsToJsonArray(
-    const NSG::NSGSearchResult& srchRslt);
+static std::wstring     to_wstring(const char* str);
+static web::json::value rsltIdsToJsonArray(const NSG::NSGSearchResult& srchRslt);
+static void parseJson(const utility::string_t& body, int& k, long long& queryId, float*& queryVector);
+static web::json::value prepareResponse(const long long& queryId, const int k);
 
+
+// Constants
 const std::wstring VECTOR_KEY = L"query", K_KEY = L"k",
-                   RESULTS_KEY = L"results",
-                   QUERY_ID_KEY = L"query_id",
+                   RESULTS_KEY = L"results", QUERY_ID_KEY = L"query_id",
+                   ERROR_MESSAGE_KEY = L"error",
                    TIME_TAKEN_KEY = L"time_taken_in_us";
 
+//class Server
 Server::Server(web::uri& uri, std::unique_ptr<NSG::InMemoryNSGSearch>& searcher)
     : _searcher(searcher) {
   _listener = std::unique_ptr<web::http::experimental::listener::http_listener>(
@@ -35,33 +39,65 @@ pplx::task<void> Server::close() {
 void Server::handle_post(web::http::http_request message) {
   auto startTime = std::chrono::high_resolution_clock::now();
   message.extract_string(true).then([=](utility::string_t body) {
-    web::json::value val = web::json::value::parse(body);
-    web::json::array queryArr = val.at(VECTOR_KEY).as_array();
-    long  queryId = val.at(QUERY_ID_KEY).as_number().to_int64();
-    int              k = val.at(K_KEY).as_integer();
+    long long queryId = -1;
+    int       k = 0;
+    try {
+      float* queryVector = nullptr;
+      parseJson(body, k, queryId, queryVector);
 
-    assert(k > 0);
+      NSG::NSGSearchResult srchRslt =
+          _searcher->search(queryVector, (unsigned int) k);
 
-    float* query = new float[queryArr.size()];
-    for (int i = 0; i < queryArr.size(); i++) {
-      query[i] = (float) queryArr[i].as_double();
+      web::json::value response = prepareResponse(queryId, k);
+      web::json::value ids = rsltIdsToJsonArray(srchRslt);
+      response[RESULTS_KEY] = ids;
+      response[TIME_TAKEN_KEY] =
+          std::chrono::duration_cast<std::chrono::microseconds>(
+              std::chrono::high_resolution_clock::now() - startTime)
+              .count();
+
+      std::wcout << L"Responding to: " << queryId << std::endl;
+      message.reply(web::http::status_codes::OK, response).wait();
+    } catch (const std::exception& ex) {
+      std::cerr << "Exception while processing request: " << queryId << ":"
+                << ex.what() << std::endl;
+      web::json::value response = prepareResponse(queryId, k);
+      response[ERROR_MESSAGE_KEY] = web::json::value::string(to_wstring(ex.what()));
+      message.reply(web::http::status_codes::InternalError, response).wait();
     }
-
-    NSG::NSGSearchResult srchRslt = _searcher->search(query, (unsigned int) k);
-
-    web::json::value ids = rsltIdsToJsonArray(srchRslt);
-
-    web::json::value response = web::json::value::object();
-    response[QUERY_ID_KEY] = queryId;
-    response[K_KEY] = k;
-    response[RESULTS_KEY] = ids;
-    response[TIME_TAKEN_KEY] =
-        std::chrono::duration_cast<std::chrono::microseconds>(
-            std::chrono::high_resolution_clock::now() - startTime)
-            .count();
-    std::wcout << "Returning response: " << response.serialize() << std::endl;
-    message.reply(web::http::status_codes::OK, response);
   });
+}
+
+static web::json::value prepareResponse(const long long& queryId, const int k) {
+  web::json::value response = web::json::value::object();
+  response[QUERY_ID_KEY] = queryId;
+  response[K_KEY] = k;
+
+  return response;
+}
+
+static void parseJson(const utility::string_t& body, int& k, long long& queryId,
+                      float*& queryVector) {
+  web::json::value val = web::json::value::parse(body);
+  web::json::array queryArr = val.at(VECTOR_KEY).as_array();
+  queryId = val.has_field(QUERY_ID_KEY)
+                ? val.at(QUERY_ID_KEY).as_number().to_int64()
+                : -1;
+  k = val.at(K_KEY).as_integer();
+
+  if (k <= 0) {
+    throw new std::exception(
+        "Num of expected NN (k) must be greater than zero.");
+  }
+  if (queryArr.size() == 0) {
+    throw new std::exception("Query vector has zero elements.");
+  }
+
+  queryVector = new float[queryArr.size()];
+  for (int i = 0; i < queryArr.size(); i++) {
+    queryVector[i] = (float) queryArr[i].as_double();
+  }
+
 }
 
 // Utility functions
@@ -72,4 +108,12 @@ web::json::value rsltIdsToJsonArray(const NSG::NSGSearchResult& srchRslt) {
     rslts[i] = idVal;
   }
   return rslts;
+}
+
+static std::wstring to_wstring(const char* str) 
+{
+    wchar_t buffer[4096];
+    mbstowcs_s(nullptr, buffer, sizeof(buffer) / sizeof(buffer[0]),
+               str, sizeof(buffer) / sizeof(buffer[0]));
+    return std::wstring(buffer);
 }

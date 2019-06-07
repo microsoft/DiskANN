@@ -1,10 +1,9 @@
 // nsg_server.cpp : REST interface for NSG search.
 //
-
-#include <webservice/server.h>
-#include <webservice/in_memory_nsg_search.h>
 #include <codecvt>
 #include <iostream>
+#include <webservice/server.h>
+#include <webservice/in_memory_nsg_search.h>
 
 std::unique_ptr<Server>                 g_httpServer(nullptr);
 std::unique_ptr<NSG::InMemoryNSGSearch> g_inMemoryNSGSearch(nullptr);
@@ -13,7 +12,8 @@ void setup(const utility::string_t& address) {
   web::http::uri_builder uriBldr(address);
   auto                   uri = uriBldr.to_uri();
 
-  std::wcout << L"Attempting to start server on " << uri.to_string() << std::endl;
+  std::wcout << L"Attempting to start server on " << uri.to_string()
+             << std::endl;
   g_httpServer = std::unique_ptr<Server>(new Server(uri, g_inMemoryNSGSearch));
   g_httpServer->open().wait();
 
@@ -33,26 +33,31 @@ void loadIndex(const char* indexFile, const char* baseFile,
 
 std::wstring getHostingAddress(const char* hostNameAndPort) {
   wchar_t buffer[4096];
-  mbstowcs_s(nullptr, buffer, sizeof(buffer), hostNameAndPort, sizeof(buffer));
+  mbstowcs_s(nullptr, buffer, sizeof(buffer)/sizeof(buffer[0]), hostNameAndPort, sizeof(buffer)/sizeof(buffer[0]));
   return std::wstring(buffer);
 }
 
 int main(int argc, char* argv[]) {
   if (argc != 5) {
-    std::cout << "Usage: nsg_server <ip_addr_and_port> <index_file> <base_file> <ids_file> "
+    std::cout << "Usage: nsg_server <ip_addr_and_port> <index_file> "
+                 "<base_file> <ids_file> "
               << std::endl;
     exit(1);
   }
 
   auto address = getHostingAddress(argv[1]);
   loadIndex(argv[2], argv[3], argv[4]);
+  try {
+    setup(address);
+    std::cout << "Press ENTER to exit" << std::endl;
 
-  setup(address);
+    std::string line;
+    std::getline(std::cin, line);
 
-  std::cout << "Press ENTER to exit" << std::endl;
+    teardown(address);
 
-  std::string line;
-  std::getline(std::cin, line);
+  } catch (const std::exception& ex) {
+    std::cerr << "Error: " << ex.what() << std::endl;
+  }
 
-  teardown(address);
 }

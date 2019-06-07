@@ -165,6 +165,7 @@
   <ItemGroup>
     <ClInclude Include="..\..\include\webservice\in_memory_nsg_search.h" />
     <ClInclude Include="..\..\include\webservice\server.h" />
+    <ClInclude Include="..\..\include\webservice\stringutils.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="..\..\src\index.cpp" />
