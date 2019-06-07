@@ -43,6 +43,9 @@ namespace NSG {
 
     void prefetch_vector(unsigned id);
 
+    int enable_delete();
+    int disable_delete(const bool consolidate = false);
+
    protected:
     typedef std::vector<std::vector<unsigned>> CompactGraph;
 
@@ -90,9 +93,15 @@ namespace NSG {
     size_t                  node_size;
     size_t                  data_len;
     size_t                  neighbor_len;
-    // KNNGraph                nnd_graph;
 
-    std::mutex incr_insert_lock;  // Allow only one thread to insert.
+    typedef int tag_t;
+#define NULL_TAG -1
+
+    bool               can_delete;
+    bool               instantiated_tags;
+    bool               consolidated_order;
+    std::vector<tag_t> point_tags;
+    std::mutex         change_lock;  // Allow only one thread to insert.
   };
 }
 

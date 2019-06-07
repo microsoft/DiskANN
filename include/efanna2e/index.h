@@ -63,7 +63,7 @@ namespace NSG {
     const size_t dimension_;
     const float *data_;
     size_t       nd_;
-    size_t       max_points_;
+    const size_t max_points_;
     bool         has_built;
     Distance *   distance_;
   };

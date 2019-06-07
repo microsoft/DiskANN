@@ -24,12 +24,56 @@ namespace NSG {
 
   IndexNSG::IndexNSG(const size_t dimension, const size_t n, Metric m,
                      Index *initializer, const size_t max_points)
-      : Index(dimension, n, m, max_points), initializer_{initializer} {
+      : Index(dimension, n, m, max_points), initializer_{initializer},
+        can_delete(false), instantiated_tags(false), consolidated_order(true) {
     locks = std::vector<std::mutex>(max_points_);
     width = 0;
   }
 
   IndexNSG::~IndexNSG() {
+  }
+
+  int IndexNSG::enable_delete() {
+    if (can_delete) {
+      std::cerr << "Delete already enabled" << std::endl;
+      return -1;
+    }
+    if (!instantiated_tags) {
+      point_tags.resize(max_points_);
+      for (size_t i = 0; i < nd_; ++i)
+        point_tags[i] = i;
+      for (size_t i = nd_; i < max_points_; ++i)
+        point_tags[i] = NULL_TAG;
+    } else if (point_tags.size() != max_points_) {
+      std::cerr << "Point tags array wrong sized" << std::endl;
+      return -2;
+    }
+    can_delete = true;
+    instantiated_tags = true;
+    consolidated_order = false;
+  }
+
+  int IndexNSG::disable_delete(const bool consolidate) {
+    if (!can_delete) {
+      std::cerr << "Delete not currently enabled" << std::endl;
+      return -1;
+    }
+    if (!instantiated_tags) {
+      std::cerr << "Point tag array not instantiated" << std::endl;
+      exit(-1);
+    }
+    if (point_tags.size() != max_points_) {
+      std::cerr << "Point tags array wrong sized" << std::endl;
+      return -2;
+    }
+    if (consolidate) {
+      // Remove points, and create new links
+      // Consolidate tags
+      // Update nd_
+      consolidated_order = true;
+    }
+    can_delete = false;
+    return 0;
   }
 
   void IndexNSG::Save(const char *filename) {
@@ -275,7 +319,7 @@ namespace NSG {
       return -3;
     }
 
-    LockGuard guard(incr_insert_lock);
+    LockGuard guard(change_lock);
     if (nd_ == max_points_) {
       std::cerr << "Can not insert more than " << max_points_ << " points."
                 << std::endl;

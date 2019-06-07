@@ -221,6 +221,7 @@ int main(int argc, char** argv) {
     std::chrono::duration<double> diff = e - s;
     std::cout << "Incremental time: " << diff.count() << "\n";
   }
+  { index.enable_delete(); }
 
   index.Save(save_path.c_str());
   // index.Save_Inner_Vertices(argv[5]);
