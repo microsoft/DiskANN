@@ -312,10 +312,14 @@ namespace NSG {
                              vecNgh &cut_graph, const tag_t tag) {
     unsigned range = parameters.Get<unsigned>("R");
     assert(has_built);
-    if (tag != NULL_TAG)
-      assert(instantiated_tags);
+    if (enable_tags_)
+      assert(tag != NULL_TAG);
 
     LockGuard guard(change_lock_);
+
+    size_t location = reserve_location();
+    point_tags_[tag] = location;
+
     assert(nd_ <= max_points_);
     if (nd_ == max_points_) {
       std::cerr << "Can not insert more than " << max_points_ << " points."
@@ -323,7 +327,7 @@ namespace NSG {
       return -1;
     }
 
-    auto offset_data = data_ + (size_t) dimension_ * nd_;
+    auto offset_data = data_ + (size_t) dimension_ * location;
     memcpy((void *) offset_data, point, sizeof(float) * dimension_);
 
     pool.clear();
@@ -332,22 +336,31 @@ namespace NSG {
     visited.clear();
 
     get_neighbors(offset_data, parameters, tmp, pool, visited);
-    sync_prune(data_ + (size_t) dimension_ * nd_, nd_, pool, parameters,
-               visited, cut_graph);
+    sync_prune(data_ + (size_t) dimension_ * location, location, pool,
+               parameters, visited, cut_graph);
 
     assert(final_graph_.size() == max_points_);
-    final_graph_[nd_].clear();
-    final_graph_[nd_].reserve(range);
+    final_graph_[location].clear();
+    final_graph_[location].reserve(range);
     assert(!cut_graph.empty());
     for (auto link : cut_graph) {
-      final_graph_[nd_].emplace_back(link.id);
-      assert(link.id >= 0 && link.id < nd_);
+      final_graph_[location].emplace_back(link.id);
+      assert(link.id >= 0 && link.id < location);
     }
-    assert(final_graph_[nd_].size() <= range);
-    InterInsertHierarchy(nd_, cut_graph, parameters);
+    assert(final_graph_[location].size() <= range);
+    InterInsertHierarchy(location, cut_graph, parameters);
 
     ++nd_;
     return 0;
+  }
+
+  size_t IndexNSG::reserve_location() {
+    if (consolidated_order_)
+      return nd_;
+    else {
+      exit(-1);
+      // Implement me.
+    }
   }
 
   /* reachable_bfs():
@@ -782,12 +795,11 @@ namespace NSG {
    */
   void IndexNSG::LinkHierarchy(Parameters &parameters) {
     //    The graph will be updated periodically in NUM_SYNCS batches
-    // const uint32_t NUM_SYNCS = nd_ > 1 << 20 ? (nd_ / (128 * 1024 * 5))
-    //                                         : 20 * (nd_ / (128 * 1024 * 5));
     uint32_t NUM_SYNCS = DIV_ROUND_UP(nd_, (128 * 1024));
     if (nd_ < (1 << 22))
       NUM_SYNCS = 4 * NUM_SYNCS;
     std::cout << "Number of syncs: " << NUM_SYNCS << std::endl;
+
     const uint32_t NUM_RNDS = parameters.Get<unsigned>(
         "num_rnds");  // num. of passes of overall algorithm
     const unsigned L = parameters.Get<unsigned>("L");  // Search list size
@@ -908,11 +920,20 @@ namespace NSG {
     delete[] cut_graph_;
   }
 
-  void IndexNSG::BuildRandomHierarchical(const float *data,
-                                         Parameters & parameters) {
+  void IndexNSG::BuildRandomHierarchical(const float *             data,
+                                         Parameters &              parameters,
+                                         const std::vector<tag_t> &tags) {
     unsigned range = parameters.Get<unsigned>("R");
     data_ = data;
 
+    if (enable_tags_) {
+      if (tags.size() != nd_) {
+        std::cerr << "#Tags should be equal to #points" << std::endl;
+        exit(-1);
+      }
+      for (size_t i = 0; i < tags.size(); ++i)
+        point_tags_[tags[i]] = i;
+    }
     LinkHierarchy(parameters);  // Primary func for creating nsg graph
 
     size_t max = 0, min = 1 << 30, total = 0, cnt = 0;

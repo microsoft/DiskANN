@@ -15,6 +15,9 @@
 namespace NSG {
   class IndexNSG : public Index {
    public:
+    typedef int tag_t;
+#define NULL_TAG -1
+
     explicit IndexNSG(const size_t dimension, const size_t n, Metric m,
                       Index *initializer, const size_t max_points = 0,
                       const bool enable_tags = false);
@@ -27,7 +30,9 @@ namespace NSG {
     void Init_rnd_nn_graph(size_t num_points, unsigned k,
                            std::vector<size_t> mapping = std::vector<size_t>());
 
-    void BuildRandomHierarchical(const float *data, Parameters &parameters);
+    void BuildRandomHierarchical(
+        const float *data, Parameters &parameters,
+        const std::vector<tag_t> &tags = std::vector<tag_t>());
 
     void populate_start_points_bfs(std::vector<unsigned> &start_points);
 
@@ -39,8 +44,7 @@ namespace NSG {
     void prefetch_vector(unsigned id);
 
     /* Methods for inserting and deleting points from the databases*/
-    typedef int tag_t;
-#define NULL_TAG -1
+
     typedef std::vector<SimpleNeighbor> vecNgh;
 
     int insert_point(const float *point, const Parameters &parameter,
@@ -92,6 +96,8 @@ namespace NSG {
 
     void LinkHierarchy(Parameters &parameters);
 
+    size_t reserve_location();
+
    private:
     unsigned width;
     unsigned ep_;
@@ -101,13 +107,13 @@ namespace NSG {
     size_t   neighbor_len;
 
     std::vector<std::mutex> locks;  // Per node lock, cardinality=max_points_
+    std::mutex change_lock_;        // Allow only 1 thread to insert/delete
 
-    bool       can_delete_;
-    bool       enable_tags_;
-    bool       consolidated_order_;
-    std::mutex change_lock_;  // Allow only 1 thread to insert/delete
+    bool can_delete_;
+    bool enable_tags_;
+    bool consolidated_order_;
 
-    std::unordered_map<tag_t, unsigned> point_tags_;
+    std::unordered_map<tag_t, size_t> point_tags_;
   };
 }
 
