@@ -163,11 +163,13 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClInclude Include="..\..\include\cosine_similarity.h" />
     <ClInclude Include="..\..\include\webservice\in_memory_nsg_search.h" />
     <ClInclude Include="..\..\include\webservice\server.h" />
     <ClInclude Include="..\..\include\webservice\stringutils.h" />
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="..\..\src\cosine_similarity.cpp" />
     <ClCompile Include="..\..\src\index.cpp" />
     <ClCompile Include="..\..\src\index_nsg.cpp" />
     <ClCompile Include="..\..\src\webservice\main.cpp" />

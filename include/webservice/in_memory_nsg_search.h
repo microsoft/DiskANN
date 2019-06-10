@@ -14,10 +14,6 @@ namespace NSG {
       finalResults.reserve(k);
     }
 
-    NSGSearchResult(const std::vector<std::wstring>& results, int k,
-                    int elapsedTimeInMs)
-        : finalResults(results), K(k), searchTimeInMs(elapsedTimeInMs) {
-    }
 
     void addResult(const std::wstring& result) {
       finalResults.push_back(result);
@@ -26,6 +22,7 @@ namespace NSG {
     int                      K;
     int                      searchTimeInMs;
     std::vector<std::wstring> finalResults;
+    std::vector<float>        distances;
   };
 
   class InMemoryNSGSearch {
@@ -33,7 +30,7 @@ namespace NSG {
     InMemoryNSGSearch(const char* baseFile, const char* indexFile,
                       const char* idsFile, Metric m);
 
-    virtual NSGSearchResult search(const float* query, const unsigned int K);
+    virtual NSGSearchResult search(const float* query, const unsigned int dimensions, const unsigned int K);
 
     virtual ~InMemoryNSGSearch();
 
@@ -44,6 +41,8 @@ namespace NSG {
 
    private:
     float*                         _baseVectors;
+    unsigned int _dimensions, _numPoints;
+
     std::vector<std::wstring>      _ids;
     std::unique_ptr<NSG::IndexNSG> _nsgIndex;
   };

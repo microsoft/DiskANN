@@ -6,17 +6,17 @@
 // Utility function declarations
 static std::wstring     to_wstring(const char* str);
 static web::json::value rsltIdsToJsonArray(const NSG::NSGSearchResult& srchRslt);
-static void parseJson(const utility::string_t& body, int& k, long long& queryId, float*& queryVector);
+static web::json::value scoresToJsonArray(const NSG::NSGSearchResult& srchRslt);
+static void parseJson(const utility::string_t& body, int& k, long long& queryId, float*& queryVector, unsigned int& dimensions);
 static web::json::value prepareResponse(const long long& queryId, const int k);
-
 
 // Constants
 const std::wstring VECTOR_KEY = L"query", K_KEY = L"k",
-                   RESULTS_KEY = L"results", QUERY_ID_KEY = L"query_id",
-                   ERROR_MESSAGE_KEY = L"error",
+                   RESULTS_KEY = L"results", SCORES_KEY = L"scores",
+                   QUERY_ID_KEY = L"query_id", ERROR_MESSAGE_KEY = L"error",
                    TIME_TAKEN_KEY = L"time_taken_in_us";
 
-//class Server
+// class Server
 Server::Server(web::uri& uri, std::unique_ptr<NSG::InMemoryNSGSearch>& searcher)
     : _searcher(searcher) {
   _listener = std::unique_ptr<web::http::experimental::listener::http_listener>(
@@ -43,14 +43,17 @@ void Server::handle_post(web::http::http_request message) {
     int       k = 0;
     try {
       float* queryVector = nullptr;
-      parseJson(body, k, queryId, queryVector);
+      unsigned int    dimensions = 0;
+      parseJson(body, k, queryId, queryVector, dimensions);
 
       NSG::NSGSearchResult srchRslt =
-          _searcher->search(queryVector, (unsigned int) k);
+          _searcher->search(queryVector, dimensions, (unsigned int) k);
 
       web::json::value response = prepareResponse(queryId, k);
       web::json::value ids = rsltIdsToJsonArray(srchRslt);
       response[RESULTS_KEY] = ids;
+      web::json::value scores = scoresToJsonArray(srchRslt);
+      response[SCORES_KEY] = scores;
       response[TIME_TAKEN_KEY] =
           std::chrono::duration_cast<std::chrono::microseconds>(
               std::chrono::high_resolution_clock::now() - startTime)
@@ -62,7 +65,8 @@ void Server::handle_post(web::http::http_request message) {
       std::cerr << "Exception while processing request: " << queryId << ":"
                 << ex.what() << std::endl;
       web::json::value response = prepareResponse(queryId, k);
-      response[ERROR_MESSAGE_KEY] = web::json::value::string(to_wstring(ex.what()));
+      response[ERROR_MESSAGE_KEY] =
+          web::json::value::string(to_wstring(ex.what()));
       message.reply(web::http::status_codes::InternalError, response).wait();
     }
   });
@@ -77,7 +81,7 @@ static web::json::value prepareResponse(const long long& queryId, const int k) {
 }
 
 static void parseJson(const utility::string_t& body, int& k, long long& queryId,
-                      float*& queryVector) {
+                      float*& queryVector, unsigned int& dimensions) {
   web::json::value val = web::json::value::parse(body);
   web::json::array queryArr = val.at(VECTOR_KEY).as_array();
   queryId = val.has_field(QUERY_ID_KEY)
@@ -97,7 +101,7 @@ static void parseJson(const utility::string_t& body, int& k, long long& queryId,
   for (int i = 0; i < queryArr.size(); i++) {
     queryVector[i] = (float) queryArr[i].as_double();
   }
-
+  dimensions = queryArr.size();
 }
 
 // Utility functions
@@ -110,10 +114,17 @@ web::json::value rsltIdsToJsonArray(const NSG::NSGSearchResult& srchRslt) {
   return rslts;
 }
 
-static std::wstring to_wstring(const char* str) 
-{
-    wchar_t buffer[4096];
-    mbstowcs_s(nullptr, buffer, sizeof(buffer) / sizeof(buffer[0]),
-               str, sizeof(buffer) / sizeof(buffer[0]));
-    return std::wstring(buffer);
+web::json::value scoresToJsonArray(const NSG::NSGSearchResult& srchRslt) {
+  web::json::value scores = web::json::value::array();
+  for (int i = 0; i < srchRslt.distances.size(); i++) {
+    scores[i] = web::json::value::number(srchRslt.distances[i]);
+  }
+  return scores;
+}
+
+static std::wstring to_wstring(const char* str) {
+  wchar_t buffer[4096];
+  mbstowcs_s(nullptr, buffer, sizeof(buffer) / sizeof(buffer[0]), str,
+             sizeof(buffer) / sizeof(buffer[0]));
+  return std::wstring(buffer);
 }
