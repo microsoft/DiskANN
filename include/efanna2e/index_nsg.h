@@ -16,7 +16,8 @@ namespace NSG {
   class IndexNSG : public Index {
    public:
     explicit IndexNSG(const size_t dimension, const size_t n, Metric m,
-                      Index *initializer, const size_t max_points = 0);
+                      Index *initializer, const size_t max_points = 0,
+                      const bool enable_tags = false);
 
     virtual ~IndexNSG();
 
@@ -28,12 +29,6 @@ namespace NSG {
 
     void BuildRandomHierarchical(const float *data, Parameters &parameters);
 
-    typedef std::vector<SimpleNeighbor> vecNgh;
-
-    int insert_point(const float *point, const Parameters &parameter,
-                     std::vector<Neighbor> &pool, std::vector<Neighbor> &tmp,
-                     tsl::robin_set<unsigned> &visited, vecNgh &cut_graph);
-
     void populate_start_points_bfs(std::vector<unsigned> &start_points);
 
     std::pair<int, int> BeamSearch(const float *query, const float *x,
@@ -43,9 +38,21 @@ namespace NSG {
 
     void prefetch_vector(unsigned id);
 
+    /* Methods for inserting and deleting points from the databases*/
+    typedef int tag_t;
+#define NULL_TAG -1
+    typedef std::vector<SimpleNeighbor> vecNgh;
+
+    int insert_point(const float *point, const Parameters &parameter,
+                     std::vector<Neighbor> &pool, std::vector<Neighbor> &tmp,
+                     tsl::robin_set<unsigned> &visited, vecNgh &cut_graph,
+                     const tag_t tag = NULL_TAG);
+
     int enable_delete();
     int disable_delete(const bool consolidate = false);
+    int delete_by_tag(const tag_t tag);
 
+    /*  Internals of the library */
    protected:
     typedef std::vector<std::vector<unsigned>> CompactGraph;
 
@@ -79,29 +86,28 @@ namespace NSG {
     void InterInsertHierarchy(unsigned n, vecNgh &cut_graph_,
                               const Parameters &parameter);
 
-    void sync_prune(unsigned q, std::vector<Neighbor> &pool,
-                    const Parameters &        parameter,
-                    tsl::robin_set<unsigned> &visited, vecNgh &cut_graph_);
+    void sync_prune(const float *x, unsigned location,
+                    std::vector<Neighbor> &pool, const Parameters &parameter,
+                    tsl::robin_set<unsigned> &visited, vecNgh &cut_graph);
 
     void LinkHierarchy(Parameters &parameters);
 
    private:
-    unsigned                width;
-    unsigned                ep_;
-    std::vector<std::mutex> locks;
-    char *                  opt_graph_;
-    size_t                  node_size;
-    size_t                  data_len;
-    size_t                  neighbor_len;
+    unsigned width;
+    unsigned ep_;
+    char *   opt_graph_;
+    size_t   node_size;
+    size_t   data_len;
+    size_t   neighbor_len;
 
-    typedef int tag_t;
-#define NULL_TAG -1
+    std::vector<std::mutex> locks;  // Per node lock, cardinality=max_points_
 
-    bool               can_delete;
-    bool               instantiated_tags;
-    bool               consolidated_order;
-    std::vector<tag_t> point_tags;
-    std::mutex         change_lock;  // Allow only one thread to insert.
+    bool       can_delete_;
+    bool       enable_tags_;
+    bool       consolidated_order_;
+    std::mutex change_lock_;  // Allow only 1 thread to insert/delete
+
+    std::unordered_map<tag_t, unsigned> point_tags_;
   };
 }
 

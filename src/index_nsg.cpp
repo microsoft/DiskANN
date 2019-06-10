@@ -23,46 +23,44 @@ namespace NSG {
 #define MAX_START_POINTS 100
 
   IndexNSG::IndexNSG(const size_t dimension, const size_t n, Metric m,
-                     Index *initializer, const size_t max_points)
+                     Index *initializer, const size_t max_points,
+                     const bool enable_tags)
       : Index(dimension, n, m, max_points), initializer_{initializer},
-        can_delete(false), instantiated_tags(false), consolidated_order(true) {
+        can_delete_(false), enable_tags_(enable_tags),
+        consolidated_order_(true), width(0) {
     locks = std::vector<std::mutex>(max_points_);
-    width = 0;
   }
 
   IndexNSG::~IndexNSG() {
   }
 
   int IndexNSG::enable_delete() {
-    if (can_delete) {
+    if (can_delete_) {
       std::cerr << "Delete already enabled" << std::endl;
       return -1;
     }
-    if (!instantiated_tags) {
-      point_tags.resize(max_points_);
-      for (size_t i = 0; i < nd_; ++i)
-        point_tags[i] = i;
-      for (size_t i = nd_; i < max_points_; ++i)
-        point_tags[i] = NULL_TAG;
-    } else if (point_tags.size() != max_points_) {
+    if (!enable_tags_) {
+      std::cerr << "Tags must be instiated for deletions" << std::endl;
+      return -3;
+    } else if (point_tags_.size() != max_points_) {
       std::cerr << "Point tags array wrong sized" << std::endl;
       return -2;
     }
-    can_delete = true;
-    instantiated_tags = true;
-    consolidated_order = false;
+    can_delete_ = true;
+    enable_tags_ = true;
+    consolidated_order_ = false;
   }
 
   int IndexNSG::disable_delete(const bool consolidate) {
-    if (!can_delete) {
+    if (!can_delete_) {
       std::cerr << "Delete not currently enabled" << std::endl;
       return -1;
     }
-    if (!instantiated_tags) {
+    if (!enable_tags_) {
       std::cerr << "Point tag array not instantiated" << std::endl;
       exit(-1);
     }
-    if (point_tags.size() != max_points_) {
+    if (point_tags_.size() != max_points_) {
       std::cerr << "Point tags array wrong sized" << std::endl;
       return -2;
     }
@@ -70,9 +68,9 @@ namespace NSG {
       // Remove points, and create new links
       // Consolidate tags
       // Update nd_
-      consolidated_order = true;
+      consolidated_order_ = true;
     }
-    can_delete = false;
+    can_delete_ = false;
     return 0;
   }
 
@@ -311,31 +309,22 @@ namespace NSG {
                              std::vector<Neighbor> &   pool,
                              std::vector<Neighbor> &   tmp,
                              tsl::robin_set<unsigned> &visited,
-                             vecNgh &                  cut_graph) {
+                             vecNgh &cut_graph, const tag_t tag) {
     unsigned range = parameters.Get<unsigned>("R");
-    if (!has_built) {
-      std::cerr << "Can not insert with out building base index first."
-                << std::endl;
-      return -3;
-    }
+    assert(has_built);
+    if (tag != NULL_TAG)
+      assert(instantiated_tags);
 
-    LockGuard guard(change_lock);
+    LockGuard guard(change_lock_);
+    assert(nd_ <= max_points_);
     if (nd_ == max_points_) {
       std::cerr << "Can not insert more than " << max_points_ << " points."
                 << std::endl;
       return -1;
-    } else if (nd_ > max_points_) {
-      std::cerr << "#points " << nd_
-                << " greater than max_points_: " << max_points_ << std::endl;
-      return -2;
     }
 
     auto offset_data = data_ + (size_t) dimension_ * nd_;
     memcpy((void *) offset_data, point, sizeof(float) * dimension_);
-
-    // std::vector<Neighbor>    pool, tmp;
-    // tsl::robin_set<unsigned> visited;
-    // vecNgh                   cut_graph;
 
     pool.clear();
     tmp.clear();
@@ -343,7 +332,8 @@ namespace NSG {
     visited.clear();
 
     get_neighbors(offset_data, parameters, tmp, pool, visited);
-    sync_prune(nd_, pool, parameters, visited, cut_graph);
+    sync_prune(data_ + (size_t) dimension_ * nd_, nd_, pool, parameters,
+               visited, cut_graph);
 
     assert(final_graph_.size() == max_points_);
     final_graph_[nd_].clear();
@@ -536,10 +526,11 @@ namespace NSG {
   /* This function tries to add as many diverse edges as possible from current
    * node n to all the visited nodes obtained by running get_neighbors */
 
-  void IndexNSG::sync_prune(unsigned q, std::vector<Neighbor> &pool,
+  void IndexNSG::sync_prune(const float *x, unsigned location,
+                            std::vector<Neighbor> &   pool,
                             const Parameters &        parameter,
                             tsl::robin_set<unsigned> &visited,
-                            vecNgh &                  cut_graph_q) {
+                            vecNgh &                  cut_graph) {
     unsigned range = parameter.Get<unsigned>("R");
     unsigned maxc = parameter.Get<unsigned>("C");
     float    alpha = parameter.Get<float>("alpha");
@@ -549,12 +540,11 @@ namespace NSG {
     /* check the neighbors of the query that are not part of visited,
      * check their distance to the query, and add it to pool.
      */
-    if (!final_graph_[q].empty())
-      for (auto id : final_graph_[q]) {
+    if (!final_graph_[location].empty())
+      for (auto id : final_graph_[location]) {
         if (visited.find(id) != visited.end())
           continue;
-        float dist = distance_->compare(data_ + dimension_ * (size_t) q,
-                                        data_ + dimension_ * (size_t) id,
+        float dist = distance_->compare(x, data_ + dimension_ * (size_t) id,
                                         (unsigned) dimension_);
         pool.emplace_back(Neighbor(id, dist, true));
       }
@@ -562,7 +552,7 @@ namespace NSG {
     std::vector<Neighbor> result;
     /* sort the pool based on distance to query */
     std::sort(pool.begin(), pool.end());
-    unsigned start = (pool[0].id == q) ? 1 : 0;
+    unsigned start = (pool[0].id == location) ? 1 : 0;
     /* put the first node in start. This will be nearest neighbor to q */
     result.emplace_back(pool[start]);
 
@@ -574,10 +564,8 @@ namespace NSG {
           occlude = true;
           break;
         }
-        /* check the distance of p from all nodes in result. If distance is less
-         * than
-         * distance of p from the query, then don't add it to result, otherwise
-         * add
+        /* Check the distance of p from all nodes in result. If distance <
+         * distance of p from query, then don't add it to result, else, add
          */
         float djk = distance_->compare(
             data_ + dimension_ * (size_t) result[t].id,
@@ -599,7 +587,7 @@ namespace NSG {
     if (alpha > 1.0 && !pool.empty() && result.size() < range) {
       std::vector<Neighbor> result2;
       unsigned              start2 = 0;
-      if (pool[start2].id == q)
+      if (pool[start2].id == location)
         start2++;
       result2.emplace_back(pool[start2]);
       while (result2.size() < range - result.size() &&
@@ -633,14 +621,14 @@ namespace NSG {
       result.assign(s.begin(), s.end());
     }
 
-    /* Add all the nodes in result into a variable called cut_graph_q
-     * So this contains all the neighbors of q
+    /* Add all the nodes in result into a variable called cut_graph
+     * So this contains all the neighbors of id location
      */
-    cut_graph_q.clear();
+    cut_graph.clear();
     assert(result.size() <= range);
     for (auto iter : result) {
       assert(iter.id < nd_);
-      cut_graph_q.emplace_back(SimpleNeighbor(iter.id, iter.distance));
+      cut_graph.emplace_back(SimpleNeighbor(iter.id, iter.distance));
     }
   }
 
@@ -872,12 +860,12 @@ namespace NSG {
              */
             get_neighbors(data_ + (size_t) dimension_ * n, parameters, tmp,
                           pool, visited);
-            /* sync_prune will check the pool[] list, and remove some of the
-             * points and
-             * create a cut_graph_ array, which contains final neighbors for
+            /* sync_prune will check the pool list, and remove some of the
+             * points and create cut_graph, which contains neighbors for
              * point n
              */
-            sync_prune(n, pool, parameters, visited, cut_graph_[n]);
+            sync_prune(data_ + (size_t) dimension_ * n, n, pool, parameters,
+                       visited, cut_graph_[n]);
           }
         }
 
