@@ -35,23 +35,23 @@ namespace NSG {
   }
 
   int IndexNSG::enable_delete() {
+    LockGuard guard(change_lock_);
+    assert(!can_delete_);
+    assert(!enable_tags);
     if (can_delete_) {
       std::cerr << "Delete already enabled" << std::endl;
       return -1;
     }
     if (!enable_tags_) {
-      std::cerr << "Tags must be instiated for deletions" << std::endl;
-      return -3;
-    } else if (point_tags_.size() != max_points_) {
-      std::cerr << "Point tags array wrong sized" << std::endl;
+      std::cerr << "Tags must be instantiated for deletions" << std::endl;
       return -2;
     }
     can_delete_ = true;
-    enable_tags_ = true;
     consolidated_order_ = false;
   }
 
   int IndexNSG::disable_delete(const bool consolidate) {
+    LockGuard guard(change_lock_);
     if (!can_delete_) {
       std::cerr << "Delete not currently enabled" << std::endl;
       return -1;
@@ -68,10 +68,18 @@ namespace NSG {
       // Remove points, and create new links
       // Consolidate tags
       // Update nd_
+      // If start node is removed, replace it.
       consolidated_order_ = true;
+      delete_list_.clear();
     }
     can_delete_ = false;
     return 0;
+  }
+
+  int IndexNSG::delete_point(const tag_t tag) {
+    LockGuard guard(change_lock_);
+    delete_list_.insert(point_tags_[tag]);
+    point_tags_.erase(tag);
   }
 
   void IndexNSG::Save(const char *filename) {
@@ -317,15 +325,19 @@ namespace NSG {
 
     LockGuard guard(change_lock_);
 
-    size_t location = reserve_location();
-    point_tags_[tag] = location;
-
+    if (point_tags_.find(tag) != point_tags_.end()) {
+      std::cerr << "Entry with the same tag exists already" << std::endl;
+      return -1;
+    }
     assert(nd_ <= max_points_);
     if (nd_ == max_points_) {
       std::cerr << "Can not insert more than " << max_points_ << " points."
                 << std::endl;
       return -1;
     }
+
+    size_t location = reserve_location();
+    point_tags_[tag] = location;
 
     auto offset_data = data_ + (size_t) dimension_ * location;
     memcpy((void *) offset_data, point, sizeof(float) * dimension_);
@@ -354,7 +366,7 @@ namespace NSG {
     return 0;
   }
 
-  size_t IndexNSG::reserve_location() {
+  unsigned IndexNSG::reserve_location() {
     if (consolidated_order_)
       return nd_;
     else {
@@ -1024,9 +1036,10 @@ namespace NSG {
     int hops = 0;
     int cmps = 0;
     int k = 0;
+    int deleted = 0;
 
     /* Maximum L rounds take place to get nearest neighbor.  */
-    while (k < (int) L) {
+    while (k < (int) (L + deleted)) {
       int nk = L;
 
       frontier.clear();
@@ -1078,6 +1091,9 @@ namespace NSG {
 
         // Return position in sorted list where nn inserted.
         int r = InsertIntoPool(retset.data(), L, nn);
+
+        if (delete_list_.find(id) != delete_list_.end())
+          deleted++;
         if (r < nk)
           nk = r;  // nk logs the best position in the retset that was updated
                    // due to neighbors of n.

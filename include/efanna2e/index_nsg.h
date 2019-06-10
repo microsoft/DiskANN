@@ -12,12 +12,12 @@
 #include "tsl/robin_set.h"
 #include "util.h"
 
+typedef int tag_t;
+#define NULL_TAG -1
+
 namespace NSG {
   class IndexNSG : public Index {
    public:
-    typedef int tag_t;
-#define NULL_TAG -1
-
     explicit IndexNSG(const size_t dimension, const size_t n, Metric m,
                       Index *initializer, const size_t max_points = 0,
                       const bool enable_tags = false);
@@ -54,7 +54,7 @@ namespace NSG {
 
     int enable_delete();
     int disable_delete(const bool consolidate = false);
-    int delete_by_tag(const tag_t tag);
+    int delete_point(const tag_t tag);
 
     /*  Internals of the library */
    protected:
@@ -70,8 +70,7 @@ namespace NSG {
 
     Index *initializer_;
 
-    // version supplied by authors
-    // brute-force centroid + all-to-centroid distance computation
+    // entry point is centroid based on all-to-centroid distance computation
     unsigned get_entry_point();
 
     void iterate_to_fixed_point(const float *query, const Parameters &parameter,
@@ -96,7 +95,8 @@ namespace NSG {
 
     void LinkHierarchy(Parameters &parameters);
 
-    size_t reserve_location();
+    unsigned   reserve_location();
+    std::mutex change_lock_;  // Allow only 1 thread to insert/delete
 
    private:
     unsigned width;
@@ -107,13 +107,13 @@ namespace NSG {
     size_t   neighbor_len;
 
     std::vector<std::mutex> locks;  // Per node lock, cardinality=max_points_
-    std::mutex change_lock_;        // Allow only 1 thread to insert/delete
 
     bool can_delete_;
     bool enable_tags_;
     bool consolidated_order_;
 
-    std::unordered_map<tag_t, size_t> point_tags_;
+    std::unordered_map<tag_t, unsigned> point_tags_;
+    tsl::robin_set<unsigned> delete_list_;
   };
 }
 
