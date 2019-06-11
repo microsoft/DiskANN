@@ -95,8 +95,8 @@ namespace NSG {
 
     void LinkHierarchy(Parameters &parameters);
 
-    unsigned   reserve_location();
-    std::mutex change_lock_;  // Allow only 1 thread to insert/delete
+    unsigned reserve_location();
+    int      consolidate_deletes();
 
    private:
     unsigned width;
@@ -107,6 +107,7 @@ namespace NSG {
     size_t   neighbor_len;
 
     std::vector<std::mutex> locks;  // Per node lock, cardinality=max_points_
+    std::mutex change_lock_;        // Allow only 1 thread to insert/delete
 
     bool can_delete_;
     bool enable_tags_;
@@ -114,6 +115,7 @@ namespace NSG {
 
     std::unordered_map<tag_t, unsigned> point_tags_;
     tsl::robin_set<unsigned> delete_list_;
+    tsl::robin_set<unsigned> empty_slots_;
   };
 }
 

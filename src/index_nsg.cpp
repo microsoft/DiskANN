@@ -37,7 +37,7 @@ namespace NSG {
   int IndexNSG::enable_delete() {
     LockGuard guard(change_lock_);
     assert(!can_delete_);
-    assert(!enable_tags);
+    assert(!enable_tags_);
     if (can_delete_) {
       std::cerr << "Delete already enabled" << std::endl;
       return -1;
@@ -46,8 +46,56 @@ namespace NSG {
       std::cerr << "Tags must be instantiated for deletions" << std::endl;
       return -2;
     }
+
+    if (consolidated_order_) {
+      assert(empty_slots_.size() == 0);
+      for (unsigned slot = nd_; slot < max_points_; ++slot)
+        empty_slots_.insert(slot);
+      consolidated_order_ = false;
+    }
     can_delete_ = true;
-    consolidated_order_ = false;
+    return 0;
+  }
+
+  // Do not call reserve_location() if you have not locked change_lock_.
+  // It is not thread safe.
+  int IndexNSG::consolidate_deletes() {
+    assert(!consolidated_order_);
+    assert(can_delete_);
+    assert(enable_tags_);
+    assert(delete_list_.size() <= nd_);
+    assert(empty_slots_.size() + nd_ == max_points_);
+
+    std::vector<unsigned> new_ids;
+    new_ids.resize(max_points_, max_points_);
+    unsigned active = 0;
+    for (unsigned old = 0; old < max_points_; ++old) {
+      if (empty_slots_.find(old) == empty_slots_.end())
+        new_ids[old] = active++;
+    }
+    assert(active + empty_slots_.size() == max_points_);
+
+    for (auto i : delete_list_) {
+      // Remove points, and create new links
+      --nd_;
+
+      if (i == ep_) {
+        // If start node is removed, replace it.
+      }
+    }
+
+    // Renumber nodes to compact the order
+    for (unsigned old = 0; old < nd_; ++old)
+      for (size_t i = 0; i < final_graph_[old].size(); ++i) {
+        assert(new_ids[final_graph_[old][i]] < max_points_);
+        final_graph_[old][i] = new_ids[final_graph_[old][i]];
+      }
+    for (unsigned old = active; old < max_points_; ++old)
+      final_graph_[old].clear();
+
+    empty_slots_.clear();
+    delete_list_.clear();
+    consolidated_order_ = true;
   }
 
   int IndexNSG::disable_delete(const bool consolidate) {
@@ -64,14 +112,8 @@ namespace NSG {
       std::cerr << "Point tags array wrong sized" << std::endl;
       return -2;
     }
-    if (consolidate) {
-      // Remove points, and create new links
-      // Consolidate tags
-      // Update nd_
-      // If start node is removed, replace it.
-      consolidated_order_ = true;
-      delete_list_.clear();
-    }
+    if (consolidate)
+      consolidate_deletes();
     can_delete_ = false;
     return 0;
   }
@@ -326,14 +368,14 @@ namespace NSG {
     LockGuard guard(change_lock_);
 
     if (point_tags_.find(tag) != point_tags_.end()) {
-      std::cerr << "Entry with the same tag exists already" << std::endl;
+      std::cerr << "Entry with the same tag exists already." << std::endl;
       return -1;
     }
     assert(nd_ <= max_points_);
     if (nd_ == max_points_) {
-      std::cerr << "Can not insert more than " << max_points_ << " points."
-                << std::endl;
-      return -1;
+      std::cerr << "Can not insert, reached maximum(" << max_points_
+                << ") points." << std::endl;
+      return -2;
     }
 
     size_t location = reserve_location();
@@ -362,17 +404,28 @@ namespace NSG {
     assert(final_graph_[location].size() <= range);
     InterInsertHierarchy(location, cut_graph, parameters);
 
-    ++nd_;
     return 0;
   }
 
+  // Do not call reserve_location() if you have not locked change_lock_.
+  // It is not thread safe.
   unsigned IndexNSG::reserve_location() {
+    assert(nd_ < max_points_);
+
+    unsigned location;
     if (consolidated_order_)
-      return nd_;
+      location = nd_;
     else {
-      exit(-1);
-      // Implement me.
+      assert(empty_slots_.size() != 0);
+      assert(empty_slots_.size() + nd_ == max_points_);
+
+      auto iter = empty_slots_.begin();
+      location = *iter;
+      empty_slots_.erase(iter);
     }
+
+    ++nd_;
+    return location;
   }
 
   /* reachable_bfs():
@@ -969,6 +1022,8 @@ namespace NSG {
       const float *query, const float *x, const size_t K,
       const Parameters &parameters, unsigned *indices, int beam_width,
       std::vector<unsigned> &start_points) {
+    // Should BeamSearch lock on change_lock_ in concurrent mode?
+
     const unsigned L = parameters.Get<unsigned>("L_search");
     data_ = x;
 
