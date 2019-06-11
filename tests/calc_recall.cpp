@@ -3,10 +3,11 @@
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
+#include <set>
 #include <string>
 #include <vector>
 
-void load_data(const char* filename, int*& data, size_t& num,
+void load_data(const char* filename, unsigned*& data, size_t& num,
                unsigned& dim) {  // load data with sift10K pattern
   std::ifstream in(std::string(filename), std::ios::binary);
   std::cout << "Filename: " << filename << "\n";
@@ -22,9 +23,9 @@ void load_data(const char* filename, int*& data, size_t& num,
   auto data_size = (size_t) num * (size_t) dim;
   std::cout << "data dimension: " << dim << std::endl;
   std::cout << "data num points: " << num << std::endl;
-  data = new int[data_size];
+  data = new unsigned[data_size];
 
-  int* tmp_dim = new int;
+  unsigned* tmp_dim = new unsigned;
   in.seekg(0, std::ios::beg);
   for (size_t i = 0; i < num; i++) {
     in.read((char*) tmp_dim, 4);
@@ -33,22 +34,54 @@ void load_data(const char* filename, int*& data, size_t& num,
   in.close();
   std::cout << "data loaded \n";
 }
+float calc_recall_set(unsigned num_queries, unsigned* gold_std, unsigned dim_gs,
+                      unsigned* our_results, unsigned dim_or,
+                      unsigned recall_at, unsigned subset_size) {
+  std::cout << "dim_gs: " << dim_gs << ", dim_or: " << dim_or
+            << ", recall_at: " << recall_at << " num_queries = " << num_queries
+            << "\n";
+  unsigned           total_recall = 0;
+  std::set<unsigned> gt, res;
+
+  for (size_t i = 0; i < num_queries; i++) {
+    gt.clear();
+    res.clear();
+    unsigned* gt_vec = gold_std + dim_gs * i;
+    unsigned* res_vec = our_results + dim_or * i;
+    gt.insert(gt_vec, gt_vec + recall_at);
+    res.insert(res_vec, res_vec + subset_size);
+    unsigned cur_recall = 0;
+    for (auto& v : gt) {
+      if (res.find(v) != res.end()) {
+        cur_recall++;
+      }
+    }
+    // std::cout << " idx: " << i << ", interesection: " << cur_recall << "\n";
+    total_recall += cur_recall;
+  }
+  return ((float) total_recall) / ((float) num_queries) *
+         (100.0 / ((float) recall_at));
+}
 
 int main(int argc, char** argv) {
-  if (argc != 4) {
-    std::cout << argv[0] << " data_file1 data_file2 r" << std::endl;
+  if (argc != 4 && argc != 5) {
+    std::cout << argv[0] << " data_file1 data_file2 r r2(optonal, equal to 1)"
+              << std::endl;
     exit(-1);
   }
-  int*     gold_std = NULL;
-  int*     our_results = NULL;
-  size_t   points_num;
-  unsigned dim_gs;
-  unsigned dim_or;
+  unsigned* gold_std = NULL;
+  unsigned* our_results = NULL;
+  size_t    points_num;
+  unsigned  dim_gs;
+  unsigned  dim_or;
   load_data(argv[1], gold_std, points_num, dim_gs);
   load_data(argv[2], our_results, points_num, dim_or);
   size_t   recall = 0;
   size_t   total_recall = 0;
   uint32_t recall_at = std::atoi(argv[3]);
+  uint32_t subset_size = dim_or;
+  if (argc == 5)
+    subset_size = std::atoi(argv[4]);
 
   unsigned mind = dim_gs;
   if ((dim_or < recall_at) || (recall_at > dim_gs)) {
@@ -57,38 +90,12 @@ int main(int argc, char** argv) {
               << std::endl;
     return -1;
   }
-  std::cout << "calculating recall " << recall_at << "@" << dim_or << std::endl;
-
-  auto all_recall = new bool[points_num];
-  for (unsigned i = 0; i < points_num; i++)
-    all_recall[i] = false;
-
-  auto this_point = new bool[dim_gs];
-  for (size_t i = 0; i < points_num; i++) {
-    for (unsigned j = 0; j < dim_gs; j++)
-      this_point[j] = false;
-
-    bool this_correct = true;
-    for (size_t j1 = 0; j1 < recall_at; j1++)
-      for (size_t j2 = 0; j2 < dim_or; j2++)
-        if (gold_std[i * (size_t) dim_gs + j1] ==
-            our_results[i * (size_t) dim_or + j2]) {
-          if (this_point[j1] == false)
-            total_recall++;
-          this_point[j1] = true;
-        }
-    for (unsigned j1 = 0; j1 < dim_gs; j1++)
-      if (this_point[j1] == false) {
-        this_correct = false;
-        break;
-      }
-    if (this_correct == true)
-      recall++;
-  }
-  delete[] this_point;
+  std::cout << "calculating recall " << recall_at << "@" << subset_size
+            << std::endl;
+  float recall_val = calc_recall_set(points_num, gold_std, dim_gs, our_results,
+                                     dim_or, recall_at, subset_size);
 
   //  double avg_recall = (recall*1.0)/(points_num*1.0);
-  std::cout << "avg. recall " << dim_gs << " at " << dim_or << " is "
-            << 1.0 * (100.0 / recall_at) * ((total_recall * 1.0) / points_num)
-            << std::endl;
+  std::cout << "avg. recall " << recall_at << " at " << subset_size << " is "
+            << recall_val << "\n";
 }

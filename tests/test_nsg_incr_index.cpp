@@ -200,7 +200,8 @@ int main(int argc, char** argv) {
 
   unsigned num_incr = 100000;
 
-  NSG::IndexNSG index(dim, points_num - num_incr, NSG::L2, nullptr, points_num);
+  NSG::IndexNSG<float> index(dim, points_num - num_incr, NSG::L2, nullptr,
+                             points_num);
   {
     auto s = std::chrono::high_resolution_clock::now();
     index.BuildRandomHierarchical(data_load, paras);

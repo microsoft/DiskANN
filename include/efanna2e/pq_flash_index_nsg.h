@@ -35,7 +35,7 @@ namespace NSG {
 
   class PQFlashNSG {
    public:
-    PQFlashNSG(Distance *dist_cmp);
+    PQFlashNSG(Distance<float> *dist_cmp);
     ~PQFlashNSG();
 
     // load data, but obtain handle to nsg file
@@ -83,7 +83,7 @@ namespace NSG {
     _u64               n_chunks;
     FixedChunkPQTable *pq_table;
     // distance comparator
-    Distance *dist_cmp;
+    Distance<float> *dist_cmp;
 
     // medoid/start info
     _u64 medoid = 0;

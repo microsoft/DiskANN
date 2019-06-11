@@ -80,7 +80,7 @@ namespace {
 }  // namespace
 
 namespace NSG {
-  PQFlashNSG::PQFlashNSG(Distance *dist_cmp) : dist_cmp(dist_cmp) {
+  PQFlashNSG::PQFlashNSG(Distance<float> *dist_cmp) : dist_cmp(dist_cmp) {
     medoid_nhood.second = nullptr;
   }
 

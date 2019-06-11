@@ -237,7 +237,7 @@ int main(int argc, char** argv) {
   query_load = NSG::data_align(query_load, query_num, query_dim);
   std::cout << "Data Aligned" << std::endl;
 
-  NSG::IndexNSG index(dim, points_num, NSG::L2, nullptr);
+  NSG::IndexNSG<float> index(dim, points_num, NSG::L2, nullptr);
   //  if (nsg_check == 1)
   index.Load(argv[3]);  // to load NSG
                         //  else {

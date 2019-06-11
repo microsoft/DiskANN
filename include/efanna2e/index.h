@@ -32,6 +32,7 @@ namespace NSG {
     uint64_t n_cache_hits = 0;  // # cache_hits
   };
 
+  template<typename T>
   class Index {
    public:
     explicit Index(const size_t dimension, const size_t n, Metric metric = L2,
@@ -55,17 +56,16 @@ namespace NSG {
       return nd_;
     }
 
-    inline const float *GetDataset() const {
+    inline const T *GetDataset() const {
       return data_;
     }
 
-   protected:
     const size_t dimension_;
-    const float *data_;
+    const T *    data_;
     size_t       nd_;
     size_t       max_points_;
     bool         has_built;
-    Distance *   distance_;
+    Distance<T> *distance_;
   };
 
   inline void percentile_stats(

@@ -39,15 +39,15 @@ void load_fvecs(const char* filename, float*& data, unsigned& num,
     new_dim = dim;
 
   if (new_dim < dim)
-    std::cout << "load_fvecs " << filename << ". Current Dimension: " << dim
+    std::cout << "load_bvecs " << filename << ". Current Dimension: " << dim
               << ". New Dimension: First " << new_dim << " columns. "
               << std::flush;
   else if (new_dim > dim)
-    std::cout << "load_fvecs " << filename << ". Current Dimension: " << dim
+    std::cout << "load_bvecs " << filename << ". Current Dimension: " << dim
               << ". New Dimension: " << new_dim
               << " (added columns with 0 entries). " << std::flush;
   else
-    std::cout << "load_fvecs " << filename << ". Dimension: " << dim << ". "
+    std::cout << "load_bvecs " << filename << ". Dimension: " << dim << ". "
               << std::flush;
 
   float* zeros = new float[new_dim];
@@ -165,23 +165,19 @@ void load_bvecs(const char* filename, float*& data, unsigned& num,
 int main(int argc, char** argv) {
   if (argc != 8) {
     std::cout << "Correct usage: " << argv[0]
-              << " data_file L R C alpha num_rounds "
+              << " data_file[INT8] L R C alpha num_rounds "
               << "save_graph_file  " << std::endl;
     exit(-1);
   }
 
-  float*   data_load = NULL;
+  _s8*     data_load = NULL;
   unsigned points_num, dim;
 
   std::string bvecs(".bvecs");
   std::string base_file(argv[1]);
-  if (base_file.find(bvecs) == std::string::npos) {
-    load_fvecs(argv[1], data_load, points_num, dim);
-  } else {
-    load_bvecs(argv[1], data_load, points_num, dim);
-  }
+  NSG::load_Tvecs<_s8>(argv[1], data_load, points_num, dim);
 
-  data_load = NSG::data_align(data_load, points_num, dim);
+  data_load = NSG::data_align_byte<_s8>(data_load, points_num, dim);
   std::cout << "Data loaded and aligned" << std::endl;
 
   unsigned    L = (unsigned) atoi(argv[2]);
@@ -198,8 +194,8 @@ int main(int argc, char** argv) {
   paras.Set<float>("alpha", alpha);
   paras.Set<unsigned>("num_rnds", num_rnds);
 
-  NSG::IndexNSG<float> index(dim, points_num, NSG::L2, nullptr);
-  auto                 s = std::chrono::high_resolution_clock::now();
+  NSG::IndexNSG<_s8> index(dim, points_num, NSG::L2, nullptr);
+  auto               s = std::chrono::high_resolution_clock::now();
   index.BuildRandomHierarchical(data_load, paras);
   auto                          e = std::chrono::high_resolution_clock::now();
   std::chrono::duration<double> diff = e - s;

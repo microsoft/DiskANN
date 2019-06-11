@@ -28,15 +28,47 @@ namespace {
 
 namespace NSG {
   enum Metric { L2 = 0, INNER_PRODUCT = 1, FAST_L2 = 2, PQ = 3 };
+  template<typename T>
   class Distance {
    public:
-    virtual float compare(const float *a, const float *b,
-                          unsigned length) const = 0;
+    virtual float compare(const T *a, const T *b, unsigned length) const = 0;
     virtual ~Distance() {
     }
   };
 
-  class DistanceL2 : public Distance {
+  class DistanceL2Int8 : public Distance<int8_t> {
+   public:
+    float compare(const int8_t *a, const int8_t *b, unsigned size) const {
+      float result = 0.0;
+      for (_s32 i = 0; i < size; i++) {
+        float diff = ((float) a[i] - (float) b[i]);
+        // std::cout << "a: " << (float) a[i] << ", b: " << (float)b[i] << ",
+        // diff: " << diff << "\n";
+        result += diff * diff;
+      }
+      // std::cout << "a[0] --> " << (float) a[0] << ", a[size] --> " << (float)
+      // a[size] << ", dist: " << result << "\n";
+      return (float) result;
+    }
+  };
+
+  class DistanceL2UInt8 : public Distance<uint8_t> {
+   public:
+    float compare(const uint8_t *a, const uint8_t *b, unsigned size) const {
+      float result = 0.0;
+      for (_s32 i = 0; i < size; i++) {
+        float diff = ((float) a[i] - (float) b[i]);
+        // std::cout << "a: " << (float) a[i] << ", b: " << (float)b[i] << ",
+        // diff: " << diff << "\n";
+        result += diff * diff;
+      }
+      // std::cout << "a[0] --> " << (float) a[0] << ", a[size] --> " << (float)
+      // a[size] << ", dist: " << result << "\n";
+      return result;
+    }
+  };
+
+  class DistanceL2 : public Distance<float> {
    public:
     float compare(const float *a, const float *b, unsigned size) const
         __attribute__((hot)) {
@@ -76,12 +108,21 @@ namespace NSG {
       for (_s32 i = 0; i < size; i++) {
         result += (a[i] - b[i]) * (a[i] - b[i]);
       }
+//			for (_s32 i = 0; i < size; i++) {
+//				float diff = ((float) a[i] - (float) b[i]);
+//				std::cout << "a: " << (float) a[i] << ", b: " << (float) b[i] << ",
+// diff: " << diff << "\n";
+//        result += diff * diff;
+//      }
+
 #endif
+      //			std::cout << "a[0] --> " << a[0] << ", a[size] --> " << a[size] <<
+      //", dist: " << result << "\n";
       return result;
     }
   };
 
-  class DistanceInnerProduct : public Distance {
+  class DistanceInnerProduct : public Distance<float> {
    public:
     float compare(const float *a, const float *b, unsigned size) const {
       float result = 0;

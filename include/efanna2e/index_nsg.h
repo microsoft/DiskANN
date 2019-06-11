@@ -13,31 +13,32 @@
 #include "util.h"
 
 namespace NSG {
-  class IndexNSG : public Index {
+  template<typename T>
+  class IndexNSG : public Index<T> {
    public:
     explicit IndexNSG(const size_t dimension, const size_t n, Metric m,
-                      Index *initializer, const size_t max_points = 0);
+                      Index<T> *initializer, const size_t max_points = 0);
 
-    virtual ~IndexNSG();
+    ~IndexNSG();
 
-    virtual void Save(const char *filename) override;
-    virtual void Load(const char *filename) override;
+    void Save(const char *filename) override;
+    void Load(const char *filename) override;
 
     void Init_rnd_nn_graph(size_t num_points, unsigned k,
                            std::vector<size_t> mapping = std::vector<size_t>());
 
-    void BuildRandomHierarchical(const float *data, Parameters &parameters);
+    void BuildRandomHierarchical(const T *data, Parameters &parameters);
 
     typedef std::vector<SimpleNeighbor> vecNgh;
 
-    int insert_point(const float *point, const Parameters &parameter,
+    int insert_point(const T *point, const Parameters &parameter,
                      std::vector<Neighbor> &pool, std::vector<Neighbor> &tmp,
                      tsl::robin_set<unsigned> &visited, vecNgh &cut_graph);
 
     void populate_start_points_bfs(std::vector<unsigned> &start_points);
 
-    std::pair<int, int> BeamSearch(const float *query, const float *x,
-                                   const size_t K, const Parameters &parameters,
+    std::pair<int, int> BeamSearch(const T *query, const T *x, const size_t K,
+                                   const Parameters &parameters,
                                    unsigned *indices, int beam_width,
                                    std::vector<unsigned> &start_points);
 
@@ -54,21 +55,23 @@ namespace NSG {
 
     bool *is_inner;
 
-    Index *initializer_;
+    Index<T> *initializer_;
 
     // version supplied by authors
     // brute-force centroid + all-to-centroid distance computation
     unsigned get_entry_point();
 
-    void iterate_to_fixed_point(const float *query, const Parameters &parameter,
+    void iterate_to_fixed_point(const T *query, const Parameters &parameter,
                                 std::vector<unsigned> &   init_ids,
                                 std::vector<Neighbor> &   retset,
                                 std::vector<Neighbor> &   fullset,
                                 tsl::robin_set<unsigned> &visited);
-    void get_neighbors(const float *query, const Parameters &parameter,
+    void compute_distances_batch(const unsigned *ids, float *dists,
+                                 const unsigned n_pts);
+    void get_neighbors(const T *query, const Parameters &parameter,
                        std::vector<Neighbor> &retset,
                        std::vector<Neighbor> &fullset);
-    void get_neighbors(const float *query, const Parameters &parameter,
+    void get_neighbors(const T *query, const Parameters &parameter,
                        std::vector<Neighbor> &   retset,
                        std::vector<Neighbor> &   fullset,
                        tsl::robin_set<unsigned> &visited);
@@ -90,6 +93,13 @@ namespace NSG {
     size_t                  node_size;
     size_t                  data_len;
     size_t                  neighbor_len;
+
+    using Index<T>::dimension_;
+    using Index<T>::data_;
+    using Index<T>::nd_;
+    using Index<T>::has_built;
+    using Index<T>::distance_;
+    using Index<T>::max_points_;
     // KNNGraph                nnd_graph;
 
     std::mutex incr_insert_lock;  // Allow only one thread to insert.

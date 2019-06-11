@@ -1,7 +1,7 @@
 #pragma once
 #include <fstream>
 #include <iostream>
-#include "efanna2e/util.h"
+#include <cstring>
 
 // sequential cached reads
 class cached_ifstream {
@@ -9,7 +9,7 @@ class cached_ifstream {
   cached_ifstream(){
     
   }
-  cached_ifstream(const std::string& filename, _u64 cache_size)
+  cached_ifstream(const std::string& filename, uint64_t cache_size)
       : cache_size(cache_size), cur_off(0) {
         this->open(filename, cache_size);
   }
@@ -18,7 +18,7 @@ class cached_ifstream {
     reader.close();
   }
 
-  void open(const std::string& filename, _u64 cache_size){
+  void open(const std::string& filename, uint64_t cache_size){
     this->cache_size = cache_size;
     this->cur_off = 0;
     reader.open(filename, std::ios::binary | std::ios::ate);
@@ -32,7 +32,7 @@ class cached_ifstream {
               << ", cache_size: " << cache_size << "\n";
   }
 
-  void read(char* read_buf, _u64 n_bytes) {
+  void read(char* read_buf, uint64_t n_bytes) {
     assert(cache_buf != nullptr);
     assert(read_buf != nullptr);
     if (this->eof()) {
@@ -44,7 +44,7 @@ class cached_ifstream {
       cur_off += n_bytes;
     } else {
       // case 2: cache contains some data
-      _u64 cached_bytes = cache_size - cur_off;
+      uint64_t cached_bytes = cache_size - cur_off;
       memcpy(read_buf, cache_buf + cur_off, cached_bytes);
 
       // go to disk and fetch more data
@@ -68,19 +68,19 @@ class cached_ifstream {
   // underlying ifstream
   std::ifstream reader;
   // # bytes to cache in one shot read
-  _u64 cache_size = 0;
+  uint64_t cache_size = 0;
   // underlying buf for cache
   char* cache_buf = nullptr;
   // offset into cache_buf for cur_pos
-  _u64 cur_off = 0;
+  uint64_t cur_off = 0;
   // file size
-  _u64 fsize = 0;
+  uint64_t fsize = 0;
 };
 
 // sequential cached writes
 class cached_ofstream {
  public:
-  cached_ofstream(const std::string& filename, _u64 cache_size)
+  cached_ofstream(const std::string& filename, uint64_t cache_size)
       : cache_size(cache_size), cur_off(0) {
     writer.open(filename, std::ios::binary);
     assert(writer.is_open());
@@ -103,7 +103,7 @@ class cached_ofstream {
   }
 
   // writes n_bytes from write_buf to the underlying ofstream/cache
-  void write(char* write_buf, _u64 n_bytes) {
+  void write(char* write_buf, uint64_t n_bytes) {
     assert(cache_buf != nullptr);
     if (n_bytes <= (cache_size - cur_off)) {
       // case 1: cache can take all data
@@ -111,7 +111,7 @@ class cached_ofstream {
       cur_off += n_bytes;
     } else {
       // case 2: cache can take some data
-      _u64 cached_bytes = cache_size - cur_off;
+      uint64_t cached_bytes = cache_size - cur_off;
       memcpy(cache_buf + cur_off, write_buf, cached_bytes);
 
       // go to disk and write all cache data
@@ -136,12 +136,12 @@ class cached_ofstream {
   // underlying ofstream
   std::ofstream writer;
   // # bytes to cache for one shot write
-  _u64 cache_size = 0;
+  uint64_t cache_size = 0;
   // underlying buf for cache
   char* cache_buf = nullptr;
   // offset into cache_buf for cur_pos
-  _u64 cur_off = 0;
+  uint64_t cur_off = 0;
 
   // file size
-  _u64 fsize = 0;
+  uint64_t fsize = 0;
 };
