@@ -367,8 +367,9 @@ namespace NSG {
 
     LockGuard guard(change_lock_);
 
-    if (point_tags_.find(tag) != point_tags_.end()) {
-      std::cerr << "Entry with the same tag exists already." << std::endl;
+    if (enable_tags_ && (point_tags_.find(tag) != point_tags_.end())) {
+      std::cerr << "Entry with the same tag exists alreaoccludedy."
+                << std::endl;
       return -1;
     }
     assert(nd_ <= max_points_);
@@ -604,7 +605,39 @@ namespace NSG {
   /* This function tries to add as many diverse edges as possible from current
    * node n to all the visited nodes obtained by running get_neighbors */
 
-  void IndexNSG::sync_prune(const float *x, unsigned location,
+  void IndexNSG::occlude_list(const std::vector<Neighbor> &pool,
+                              const unsigned location, const float alpha,
+                              const unsigned degree, const unsigned maxc,
+                              std::vector<Neighbor> &result) {
+    assert(std::is_sorted(pool.begin(), pool.end()));
+    assert(!pool.empty());
+
+    unsigned start = (pool[0].id == location) ? 1 : 0;
+    /* put the first node in start. This will be nearest neighbor to q */
+    result.emplace_back(pool[start]);
+
+    while (result.size() < degree && (++start) < pool.size() && start < maxc) {
+      auto &p = pool[start];
+      bool  occlude = false;
+      for (unsigned t = 0; t < result.size(); t++) {
+        if (p.id == result[t].id) {
+          occlude = true;
+          break;
+        }
+        float djk = distance_->compare(
+            data_ + dimension_ * (size_t) result[t].id,
+            data_ + dimension_ * (size_t) p.id, (unsigned) dimension_);
+        if (alpha * djk < p.distance /* dik */) {
+          occlude = true;
+          break;
+        }
+      }
+      if (!occlude)
+        result.emplace_back(p);
+    }
+  }
+
+  void IndexNSG::sync_prune(const float *x, const unsigned location,
                             std::vector<Neighbor> &   pool,
                             const Parameters &        parameter,
                             tsl::robin_set<unsigned> &visited,
@@ -627,36 +660,40 @@ namespace NSG {
         pool.emplace_back(Neighbor(id, dist, true));
       }
 
-    std::vector<Neighbor> result;
     /* sort the pool based on distance to query */
     std::sort(pool.begin(), pool.end());
-    unsigned start = (pool[0].id == location) ? 1 : 0;
-    /* put the first node in start. This will be nearest neighbor to q */
-    result.emplace_back(pool[start]);
 
-    while (result.size() < range && (++start) < pool.size() && start < maxc) {
-      auto &p = pool[start];
-      bool  occlude = false;
-      for (unsigned t = 0; t < result.size(); t++) {
-        if (p.id == result[t].id) {
-          occlude = true;
-          break;
-        }
-        /* Check the distance of p from all nodes in result. If distance <
-         * distance of p from query, then don't add it to result, else, add
-         */
-        float djk = distance_->compare(
-            data_ + dimension_ * (size_t) result[t].id,
-            data_ + dimension_ * (size_t) p.id, (unsigned) dimension_);
-        if (djk < p.distance /* dik */) {
-          occlude = true;
-          break;
-        }
-      }
-      if (!occlude) {
-        result.emplace_back(p);
-      }
-    }
+    std::vector<Neighbor> result;
+    occlude_list(pool, location, 1.0, range, maxc, result);
+
+    // unsigned start = (pool[0].id == location) ? 1 : 0;
+    ///* put the first node in start. This will be nearest neighbor to q */
+    // result.emplace_back(pool[start]);
+
+    // while (result.size() < range && (++start) < pool.size() && start < maxc)
+    // {
+    //  auto &p = pool[start];
+    //  bool  occlude = false;
+    //  for (unsigned t = 0; t < result.size(); t++) {
+    //    if (p.id == result[t].id) {
+    //      occlude = true;
+    //      break;
+    //    }
+    //    /* Check the distance of p from all nodes in result. If distance <
+    //     * distance of p from query, then don't add it to result, else, add
+    //     */
+    //    float djk = distance_->compare(
+    //        data_ + dimension_ * (size_t) result[t].id,
+    //        data_ + dimension_ * (size_t) p.id, (unsigned) dimension_);
+    //    if (djk < p.distance /* dik */) {
+    //      occlude = true;
+    //      break;
+    //    }
+    //  }
+    //  if (!occlude) {
+    //    result.emplace_back(p);
+    //  }
+    //}
 
     /* create a new array result2, which contains the the points according
      * to the parameter alpha, which talks about how aggressively to keep nodes
@@ -664,30 +701,33 @@ namespace NSG {
      */
     if (alpha > 1.0 && !pool.empty() && result.size() < range) {
       std::vector<Neighbor> result2;
-      unsigned              start2 = 0;
-      if (pool[start2].id == location)
-        start2++;
-      result2.emplace_back(pool[start2]);
-      while (result2.size() < range - result.size() &&
-             (++start2) < pool.size() && start2 < maxc) {
-        auto &p = pool[start2];
-        bool  occlude = false;
-        for (unsigned t = 0; t < result2.size(); t++) {
-          if (p.id == result2[t].id) {
-            occlude = true;
-            break;
-          }
-          float djk = distance_->compare(
-              data_ + dimension_ * (size_t) result2[t].id,
-              data_ + dimension_ * (size_t) p.id, (unsigned) dimension_);
-          if (alpha * djk < p.distance /* dik */) {
-            occlude = true;
-            break;
-          }
-        }
-        if (!occlude)
-          result2.emplace_back(p);
-      }
+      occlude_list(pool, location, 1.2, range - result.size(), maxc, result2);
+
+      // unsigned              start2 = 0;
+      // if (pool[start2].id == location)
+      //  start2++;
+      // result2.emplace_back(pool[start2]);
+      // while (result2.size() < range - result.size() &&
+      //       (++start2) < pool.size() && start2 < maxc) {
+      //  auto &p = pool[start2];
+      //  bool  occlude = false;
+      //  for (unsigned t = 0; t < result2.size(); t++) {
+      //    if (p.id == result2[t].id) {
+      //      occlude = true;
+      //      break;
+      //    }
+      //    float djk = distance_->compare(
+      //        data_ + dimension_ * (size_t) result2[t].id,
+      //        data_ + dimension_ * (size_t) p.id, (unsigned) dimension_);
+      //    if (alpha * djk < p.distance /* dik */) {
+      //      occlude = true;
+      //      break;
+      //    }
+      //  }
+      //  if (!occlude)
+      //    result2.emplace_back(p);
+      //}
+
       /* add everything from result2 to result. This will lead to duplicates
        */
       for (unsigned i = 0; i < result2.size(); i++) {
@@ -1031,6 +1071,7 @@ namespace NSG {
     // boost::dynamic_bitset<> flags{nd_, 0};
     tsl::robin_set<unsigned> visited(10 * L);
     //    unsigned                 tmp_l = 0;
+
     // ignore default init; use start_points for init
     if (start_points.size() == 0)
       start_points.emplace_back(ep_);

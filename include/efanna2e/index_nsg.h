@@ -60,15 +60,13 @@ namespace NSG {
    protected:
     typedef std::vector<std::vector<unsigned>> CompactGraph;
 
+    CompactGraph final_graph_;
+
+    Index *initializer_;
+
     void reachable_bfs(const unsigned                         start_node,
                        std::vector<tsl::robin_set<unsigned>> &bfs_order,
                        bool *                                 visited);
-
-    CompactGraph final_graph_;
-
-    bool *is_inner;
-
-    Index *initializer_;
 
     // entry point is centroid based on all-to-centroid distance computation
     unsigned get_entry_point();
@@ -92,6 +90,11 @@ namespace NSG {
     void sync_prune(const float *x, unsigned location,
                     std::vector<Neighbor> &pool, const Parameters &parameter,
                     tsl::robin_set<unsigned> &visited, vecNgh &cut_graph);
+
+    void occlude_list(const std::vector<Neighbor> &pool,
+                      const unsigned location, const float alpha,
+                      const unsigned degree, const unsigned maxc,
+                      std::vector<Neighbor> &result);
 
     void LinkHierarchy(Parameters &parameters);
 
