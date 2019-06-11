@@ -1068,11 +1068,9 @@ namespace NSG {
     data_ = x;
 
     std::vector<unsigned> init_ids;
-    // boost::dynamic_bitset<> flags{nd_, 0};
     tsl::robin_set<unsigned> visited(10 * L);
-    //    unsigned                 tmp_l = 0;
 
-    // ignore default init; use start_points for init
+    // use start_points for init; ignore default init
     if (start_points.size() == 0)
       start_points.emplace_back(ep_);
 
@@ -1188,8 +1186,9 @@ namespace NSG {
         // Return position in sorted list where nn inserted.
         int r = InsertIntoPool(retset.data(), L, nn);
 
-        if (delete_list_.find(id) != delete_list_.end())
-          deleted++;
+		if (delete_list_.size() != 0)
+			if (delete_list_.find(id) != delete_list_.end())
+				deleted++;
         if (r < nk)
           nk = r;  // nk logs the best position in the retset that was updated
                    // due to neighbors of n.
@@ -1199,9 +1198,15 @@ namespace NSG {
       else
         ++k;
     }
-    for (size_t i = 0; i < K; i++) {
-      indices[i] = retset[i].id;
-    }
+	for (size_t i = 0; i < K; ) {
+		int deleted = 0;
+		auto id = retset[i + deleted].id;
+		if (delete_list_.size() > 0
+			&& delete_list_.find(id) != delete_list_.end())
+				deleted++;
+		else
+			indices[i++] = id;
+	}
     return std::make_pair(hops, cmps);
   }
 
