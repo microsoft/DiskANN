@@ -1063,7 +1063,7 @@ namespace NSG {
     }
     return std::make_pair(hops, cmps);
   }
-
+/*
   // INT8 specialization
   template<>
   void IndexNSG<_s8>::iterate_to_fixed_point(
@@ -1208,6 +1208,7 @@ namespace NSG {
     }
     assert(!fullset.empty());
   }
+  */
 
   template class IndexNSG<float>;
   template class IndexNSG<int8_t>;
