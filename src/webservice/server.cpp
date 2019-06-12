@@ -1,18 +1,30 @@
+#include <ctime>
+#include <functional>
+#include <iomanip>
 #include <string>
+
 #include <cpprest/base_uri.h>
 #include <webservice/server.h>
 #include <webservice/in_memory_nsg_search.h>
 
 // Utility function declarations
 static std::wstring     to_wstring(const char* str);
-static web::json::value rsltIdsToJsonArray(const NSG::NSGSearchResult& srchRslt);
+template<typename T>
+web::json::value toJsonArray(
+    const std::vector<T>&                     v,
+    std::function<web::json::value(const T&)> valConverter);
+
+static web::json::value rsltIdsToJsonArray(
+    const NSG::NSGSearchResult& srchRslt);
 static web::json::value scoresToJsonArray(const NSG::NSGSearchResult& srchRslt);
-static void parseJson(const utility::string_t& body, int& k, long long& queryId, float*& queryVector, unsigned int& dimensions);
+static void parseJson(const utility::string_t& body, int& k, long long& queryId,
+                      float*& queryVector, unsigned int& dimensions);
 static web::json::value prepareResponse(const long long& queryId, const int k);
 
 // Constants
 const std::wstring VECTOR_KEY = L"query", K_KEY = L"k",
                    RESULTS_KEY = L"results", SCORES_KEY = L"scores",
+                   INDICES_KEY = L"indices",
                    QUERY_ID_KEY = L"query_id", ERROR_MESSAGE_KEY = L"error",
                    TIME_TAKEN_KEY = L"time_taken_in_us";
 
@@ -42,8 +54,8 @@ void Server::handle_post(web::http::http_request message) {
     long long queryId = -1;
     int       k = 0;
     try {
-      float* queryVector = nullptr;
-      unsigned int    dimensions = 0;
+      float*       queryVector = nullptr;
+      unsigned int dimensions = 0;
       parseJson(body, k, queryId, queryVector, dimensions);
 
       NSG::NSGSearchResult srchRslt =
@@ -52,6 +64,11 @@ void Server::handle_post(web::http::http_request message) {
       web::json::value response = prepareResponse(queryId, k);
       web::json::value ids = rsltIdsToJsonArray(srchRslt);
       response[RESULTS_KEY] = ids;
+      web::json::value indices = toJsonArray<unsigned int>(srchRslt.finalResultIndices, [](const unsigned int& i){
+        return web::json::value::number(i);
+	  });
+      response[INDICES_KEY] = indices;
+
       web::json::value scores = scoresToJsonArray(srchRslt);
       response[SCORES_KEY] = scores;
       response[TIME_TAKEN_KEY] =
@@ -101,10 +118,23 @@ static void parseJson(const utility::string_t& body, int& k, long long& queryId,
   for (int i = 0; i < queryArr.size(); i++) {
     queryVector[i] = (float) queryArr[i].as_double();
   }
-  dimensions = queryArr.size();
+  dimensions = static_cast<unsigned int>(queryArr.size());
 }
 
 // Utility functions
+
+template<typename T>
+web::json::value toJsonArray(
+    const std::vector<T>&                     v,
+    std::function<web::json::value(const T&)> valConverter) {
+  web::json::value rslts = web::json::value::array();
+  for (int i = 0; i < v.size(); i++) {
+    auto jsonVal = valConverter(v[i]);
+    rslts[i] = jsonVal;
+  }
+  return rslts;
+}
+
 web::json::value rsltIdsToJsonArray(const NSG::NSGSearchResult& srchRslt) {
   web::json::value rslts = web::json::value::array();
   for (int i = 0; i < srchRslt.finalResults.size(); i++) {

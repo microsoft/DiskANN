@@ -9,18 +9,18 @@
 namespace NSG {
   class NSGSearchResult {
    public:
-    NSGSearchResult(int k, int elapsedTimeInMs)
+    NSGSearchResult(unsigned int k, unsigned int elapsedTimeInMs)
         : K(k), searchTimeInMs(elapsedTimeInMs) {
       finalResults.reserve(k);
     }
-
 
     void addResult(const std::wstring& result) {
       finalResults.push_back(result);
     }
 
-    int                      K;
-    int                      searchTimeInMs;
+    unsigned int                       K;
+    unsigned int                       searchTimeInMs;
+    std::vector<unsigned int> finalResultIndices;  // TEMPORARY FOR RECALL.
     std::vector<std::wstring> finalResults;
     std::vector<float>        distances;
   };
@@ -30,17 +30,19 @@ namespace NSG {
     InMemoryNSGSearch(const char* baseFile, const char* indexFile,
                       const char* idsFile, Metric m);
 
-    virtual NSGSearchResult search(const float* query, const unsigned int dimensions, const unsigned int K);
+    virtual NSGSearchResult search(const float*       query,
+                                   const unsigned int dimensions,
+                                   const unsigned int K);
 
     virtual ~InMemoryNSGSearch();
 
-	static void load_data(const char* filename, float*& data, unsigned& num,
+    static void load_data(const char* filename, float*& data, unsigned& num,
                           unsigned& dim);
 
     static std::vector<std::wstring> load_ids(const char* idsFile);
 
    private:
-    float*                         _baseVectors;
+    float*       _baseVectors;
     unsigned int _dimensions, _numPoints;
 
     std::vector<std::wstring>      _ids;

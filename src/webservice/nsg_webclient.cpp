@@ -4,11 +4,28 @@
 #include <cpprest/base_uri.h>
 #include <cpprest/http_client.h>
 #include <webservice/in_memory_nsg_search.h>
+#include <ctime>
+#include <iomanip>
 #include <iostream>
 
 const std::wstring VECTOR_KEY = L"query", K_KEY = L"k",
-                   RESULTS_KEY = L"results", QUERY_ID_KEY = L"query_id",
+                   RESULTS_KEY = L"results", INDICES_KEY = L"indices",
+                   QUERY_ID_KEY = L"query_id",
                    TIME_TAKEN_KEY = L"time_taken_in_us";
+
+std::mutex fileLock;
+
+void save_result(std::ostream& out, unsigned* results, unsigned nd,
+                 unsigned nr) {
+  fileLock.lock();
+  for (unsigned i = 0; i < nd; i++) {
+    out.write((char*) &nr, sizeof(unsigned));
+    out.write((char*) (results + i * nr), nr * sizeof(unsigned));
+  }
+  out.flush();
+  fileLock.unlock();
+}
+// TEMPORARY FOR IDENTIFYING RECALL ENDS
 
 std::wstring getHostAddress(const char* hostName) {
   size_t  numBytes;
@@ -36,11 +53,10 @@ web::json::value preparePostBody(int numResults, float* queryVec,
 std::vector<float> getQueryVector(
     const std::string& line,
     char
-        delimiter /* , std::function< T(const std::string&) >& conversionFn*/) 
-{
+        delimiter /* , std::function< T(const std::string&) >& conversionFn*/) {
   std::vector<float> extractedValues;
 
-  int findOffset = 0, extractStart = 0;
+  size_t findOffset = 0, extractStart = 0;
   do {
     findOffset = line.find(delimiter, findOffset);
 
@@ -52,7 +68,7 @@ std::vector<float> getQueryVector(
     } else {
       substr = line.substr(extractStart, std::string::npos);
     }
-    extractedValues.push_back(atof(substr.c_str()));
+    extractedValues.push_back(static_cast<float>(atof(substr.c_str())));
 
   } while (findOffset != std::string::npos);
 
@@ -83,7 +99,7 @@ void loadTextData(const std::string& fileName, float*& queries,
               << "v/s" << queryVector.size();
       throw std::exception(message.str().c_str());
     }
-    dimensions = queryVector.size();
+    dimensions = static_cast<unsigned int>(queryVector.size());
     allValues.insert(allValues.end(), queryVector.begin(), queryVector.end());
     numPoints++;
   }
@@ -107,10 +123,58 @@ void loadData(const std::string& fileName, float*& queries,
   }
 }
 
+void processResponse(const std::wstring& jsonStr, std::ostream& ivecStream) {
+    web::json::value        parsedResponse = web::json::value::parse(jsonStr);
+    const web::json::array& indicesArr = parsedResponse[INDICES_KEY].as_array();
+    unsigned int*           indices = new unsigned int[indicesArr.size()];
+    for (int i = 0; i < indicesArr.size(); i++) {
+      indices[i] = indicesArr.at(i).as_integer();
+    }
+
+    save_result(ivecStream, indices, 1,
+                static_cast<unsigned int>(indicesArr.size()));
+    delete[] indices;
+    std::cout << "Processed response for query "
+              << parsedResponse[QUERY_ID_KEY].as_integer() << std::endl;
+}
+
+pplx::task<void> runQuery(float* queries, unsigned int dimensions,
+                          unsigned int i, unsigned int numResults,
+                          const web::uri& serviceUri,
+                          std::ostream&   ivecStream) {
+  float* query = new float[dimensions];
+  std::copy(queries + i * dimensions, queries + i * dimensions + dimensions,
+            query);
+
+  std::cout << "******************" << std::endl
+            << "Firing query: " << i << std::endl;
+  web::json::value body = preparePostBody(numResults, query, dimensions, i);
+
+  web::http::client::http_client client(serviceUri);
+  auto                           responseTask =
+      client.request(web::http::methods::POST, L"", body)
+          .then([&](web::http::http_response response) {
+            try {
+              auto jsonStr = response.extract_string(true).get();
+              processResponse(jsonStr, ivecStream);
+              // std::wcout << jsonStr << std::endl;
+            } catch (const web::http::http_exception& hex) {
+              std::cout << "HTTP exception: " << hex.what() << std::endl;
+              throw;
+            } catch (const std::exception& ex) {
+              std::cout << "STD exception " << ex.what() << std::endl;
+              throw;
+            }
+          });
+
+  delete[] query;
+  return responseTask;
+}
+
 int main(int argc, char* argv[]) {
   if (argc < 4) {
     std::cerr << "Usage: nsg_webclient <service_addr> <query_file> "
-                 "<num_nns_per_query> [<output_file>]"
+                 "<num_nns_per_query> <ivecs_file> [<output_file>]"
               << std::endl;
     exit(1);
   }
@@ -120,45 +184,47 @@ int main(int argc, char* argv[]) {
   float*       queries = nullptr;
   unsigned int dimensions = 0, numPoints = 0;
   loadData(std::string(argv[2]), queries, numPoints, dimensions);
-  int              numResults = atoi(argv[3]);
+  int numResults = atoi(argv[3]);
+  std::ofstream ivecStream(argv[4], std::ios_base::binary | std::ios_base::out);
+  std::wostream& outputStream = (argc >= 6)
+                                    ? (std::wostream&) std::wcout
+                                    : (std::wostream&) std::wofstream(argv[5]);
   
-  std::wostream& outputStream = (argc == 4) ? (std::wostream&)std::wcout
-                                                  : (std::wostream&)std::wofstream(argv[4]);
+
+  std::cout << "Connecting to service: " << argv[1]
+            << " to run queries from file: " << argv[2]
+            << " num expected results: " << argv[3] << " writing output to "
+            << ((argc >= 5) ? argv[4] : "cout") << " and writing ivecs to "
+            << ((argc >= 6) ? argv[5] : "none") << std::endl;
 
   auto startTime = std::chrono::system_clock::now();
   std::vector<Concurrency::task<void>> runningTasks;
-  // each vector is float[0] -> float[dimensions]
-  for (int i = 0; i < numPoints; i++) {
-    float* query = new float[dimensions];
-    std::copy(queries + i * dimensions, queries + i * dimensions + dimensions,
-              query);
 
-    std::cout << "******************" << std::endl
-              << "Firing query: " << i << std::endl;
-    web::json::value body = preparePostBody(numResults, query, dimensions, i);
+  try {
+    // each vector is float[0] -> float[dimensions]
+    for (unsigned int i = 0; i < numPoints; i++) {
+      auto task = runQuery(queries, dimensions, i, numResults, bldr.to_uri(),
+                           ivecStream);
+      runningTasks.push_back(task);
+    }
 
-    web::http::client::http_client client(bldr.to_uri());
-    auto responseTask = client.request(web::http::methods::POST, L"", body)
-                            .then([&](web::http::http_response response) {
-                              std::wstring responseStr =
-                                  response.extract_string().get();
-                              outputStream << responseStr << std::endl;
-                            });
+    // wait for all tasks to complete.
+    std::for_each(runningTasks.begin(), runningTasks.end(),
+                  [](Concurrency::task<void> rtask) { rtask.get(); });
 
-    runningTasks.push_back(responseTask);
-    delete[] query;
+    outputStream.flush();
+    ivecStream.flush();
+  } catch (const web::http::http_exception& hex) {
+    std::cout << "Outer block HTTP Exception: " << hex.what() << std::endl;
+    throw;
+  } catch (const std::exception& ex) {
+    std::cout << "Outer block STD Exception: " << ex.what() << std::endl;
+    throw;
   }
-
-  outputStream.flush();
-
-  // wait for all tasks to complete.
-  std::for_each(runningTasks.begin(), runningTasks.end(),
-                [](Concurrency::task<void> rtask) { rtask.get(); });
 
   std::cout << "Completed " << numPoints << " queries in "
             << std::chrono::duration_cast<std::chrono::seconds>(
                    std::chrono::system_clock::now() - startTime)
                    .count()
-            << "s"
-            << std::endl;
+            << "s" << std::endl;
 }

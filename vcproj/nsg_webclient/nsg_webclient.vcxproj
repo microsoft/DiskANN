@@ -157,6 +157,7 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="..\..\src\cosine_similarity.cpp" />
     <ClCompile Include="..\..\src\index.cpp" />
     <ClCompile Include="..\..\src\index_nsg.cpp" />
     <ClCompile Include="..\..\src\webservice\in_memory_nsg_search.cpp" />

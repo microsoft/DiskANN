@@ -1,5 +1,7 @@
 #include <cosine_similarity.h>
 #include <webservice/in_memory_nsg_search.h>
+#include <ctime>
+#include <iomanip>
 
 namespace NSG {
   const unsigned int DEFAULT_BEAM_WIDTH = 8;
@@ -22,10 +24,10 @@ namespace NSG {
 
   NSGSearchResult InMemoryNSGSearch::search(const float*       query,
                                             const unsigned int dimensions,
-                                            const unsigned int K) 
-  {
+                                            const unsigned int K) {
     std::vector<unsigned int> start_points;
     unsigned int*             indices = new unsigned int[K];
+
 
     auto startTime = std::chrono::high_resolution_clock::now();
     auto queryMagnitude = NSG::vectorMagnitude(query, dimensions);
@@ -37,16 +39,19 @@ namespace NSG {
                         std::chrono::high_resolution_clock::now() - startTime)
                         .count();
 
-    // indices has the pointers to the results. Select the results from the
+    // indices has the indexes of the results. Select the results from the
     // ids_vector.
-    NSGSearchResult searchResult(K, duration);
-    std::for_each(indices, indices + K, [&](const int& index) {
+    NSGSearchResult searchResult(K, (unsigned int) duration);
+    std::for_each(indices, indices + K, [&](const unsigned int& index) {
       searchResult.addResult(_ids[index]);
+      searchResult.finalResultIndices.push_back(index); //TEMPORARY FOR IDENTIFYING RECALL
     });
 
     std::vector<float> similarityScores = NSG::compute_cosine_similarity(
         query, indices, _baseVectors, _dimensions, K, queryMagnitude);
     searchResult.distances = similarityScores;
+
+	//TEMPORARY FOR IDENTIFYING RECALL
 
     delete[] indices;
     return searchResult;
