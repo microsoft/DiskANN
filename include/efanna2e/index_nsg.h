@@ -53,7 +53,8 @@ namespace NSG {
                      const tag_t tag = NULL_TAG);
 
     int enable_delete();
-    int disable_delete(const bool consolidate = false);
+    int disable_delete(const Parameters &parameters,
+                       const bool        consolidate = false);
     int delete_point(const tag_t tag);
 
     /*  Internals of the library */
@@ -98,8 +99,11 @@ namespace NSG {
 
     void LinkHierarchy(Parameters &parameters);
 
+    // WARNING: Do not call reserve_location() without acquiring change_lock_
     unsigned reserve_location();
-    int      consolidate_deletes();
+
+    // WARNING: Do not call consolidate_deletes() without acquiring change_lock_
+    void consolidate_deletes(const Parameters &parameters);
 
    private:
     unsigned width;

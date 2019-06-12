@@ -57,14 +57,18 @@ namespace NSG {
     return 0;
   }
 
-  // Do not call reserve_location() if you have not locked change_lock_.
+  // Do not call consolidate_deletes() if you have not locked change_lock_.
   // It is not thread safe.
-  int IndexNSG::consolidate_deletes() {
+  void IndexNSG::consolidate_deletes(const Parameters &parameters) {
     assert(!consolidated_order_);
     assert(can_delete_);
     assert(enable_tags_);
     assert(delete_list_.size() <= nd_);
     assert(empty_slots_.size() + nd_ == max_points_);
+
+    unsigned range = parameters.Get<unsigned>("R");
+    unsigned maxc = parameters.Get<unsigned>("C");
+    float    alpha = parameters.Get<float>("alpha");
 
     std::vector<unsigned> new_ids;
     new_ids.resize(max_points_, max_points_);
@@ -76,11 +80,42 @@ namespace NSG {
     assert(active + empty_slots_.size() == max_points_);
 
     for (auto i : delete_list_) {
-      // Remove points, and create new links
+      tsl::robin_set<unsigned> candidate_set;
+      std::vector<Neighbor>    expanded_nghrs;
+      std::vector<Neighbor>    result;
+
+      // Remove point, and create new links from neighbors
+      for (auto ngh : final_graph_[i]) {
+        candidate_set.clear();
+        expanded_nghrs.clear();
+        result.clear();
+
+        // Add outgoing links from
+        for (auto j : final_graph_[ngh])
+          candidate_set.insert(j);
+        for (auto j : final_graph_[i])
+          candidate_set.insert(j);
+
+        for (auto j : candidate_set)
+          expanded_nghrs.push_back(
+              Neighbor(j,
+                       distance_->compare(data_ + dimension_ * (size_t) ngh,
+                                          data_ + dimension_ * (size_t) j,
+                                          (unsigned) dimension_),
+                       true));
+
+        occlude_list(expanded_nghrs, ngh, alpha, range, maxc, result);
+
+        final_graph_[ngh].clear();
+        for (auto j : result)
+          final_graph_[ngh].push_back(j.id);
+      }
+
+      // Decrement #points in index
       --nd_;
 
+      // If start node is removed, replace it.
       if (i == ep_) {
-        // If start node is removed, replace it.
       }
     }
 
@@ -98,7 +133,8 @@ namespace NSG {
     consolidated_order_ = true;
   }
 
-  int IndexNSG::disable_delete(const bool consolidate) {
+  int IndexNSG::disable_delete(const Parameters &parameters,
+                               const bool        consolidate) {
     LockGuard guard(change_lock_);
     if (!can_delete_) {
       std::cerr << "Delete not currently enabled" << std::endl;
@@ -113,7 +149,7 @@ namespace NSG {
       return -2;
     }
     if (consolidate)
-      consolidate_deletes();
+      consolidate_deletes(parameters);
     can_delete_ = false;
     return 0;
   }
@@ -1067,7 +1103,7 @@ namespace NSG {
     const unsigned L = parameters.Get<unsigned>("L_search");
     data_ = x;
 
-    std::vector<unsigned> init_ids;
+    std::vector<unsigned>    init_ids;
     tsl::robin_set<unsigned> visited(10 * L);
 
     // use start_points for init; ignore default init
@@ -1186,9 +1222,9 @@ namespace NSG {
         // Return position in sorted list where nn inserted.
         int r = InsertIntoPool(retset.data(), L, nn);
 
-		if (delete_list_.size() != 0)
-			if (delete_list_.find(id) != delete_list_.end())
-				deleted++;
+        if (delete_list_.size() != 0)
+          if (delete_list_.find(id) != delete_list_.end())
+            deleted++;
         if (r < nk)
           nk = r;  // nk logs the best position in the retset that was updated
                    // due to neighbors of n.
@@ -1198,15 +1234,16 @@ namespace NSG {
       else
         ++k;
     }
-	for (size_t i = 0; i < K; ) {
-		int deleted = 0;
-		auto id = retset[i + deleted].id;
-		if (delete_list_.size() > 0
-			&& delete_list_.find(id) != delete_list_.end())
-				deleted++;
-		else
-			indices[i++] = id;
-	}
+    assert(retset.size() >= L + deleted);
+    for (size_t i = 0; i < K;) {
+      int  deleted = 0;
+      auto id = retset[i + deleted].id;
+      if (delete_list_.size() > 0 &&
+          delete_list_.find(id) != delete_list_.end())
+        deleted++;
+      else
+        indices[i++] = id;
+    }
     return std::make_pair(hops, cmps);
   }
 
