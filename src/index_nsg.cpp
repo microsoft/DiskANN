@@ -119,12 +119,22 @@ namespace NSG {
       }
     }
 
-    // Renumber nodes to compact the order
-    for (unsigned old = 0; old < nd_; ++old)
-      for (size_t i = 0; i < final_graph_[old].size(); ++i) {
-        assert(new_ids[final_graph_[old][i]] < max_points_);
-        final_graph_[old][i] = new_ids[final_graph_[old][i]];
-      }
+	for (unsigned old = 0; old < nd_; ++old) {
+		// Renumber nodes to compact the order
+		for (size_t i = 0; i < final_graph_[old].size(); ++i) {
+			assert(new_ids[final_graph_[old][i]] < max_points_);
+			final_graph_[old][i] = new_ids[final_graph_[old][i]];
+		}
+
+		// Move the data to the correct position
+		memcpy((void*)(data_ + dimension_ * (size_t)new_ids[old]),
+			(void*)(data_ + dimension_ * (size_t)old),
+			dimension_ * sizeof(float));
+
+		// Update the location pointed to by tag 
+		for (auto iter : point_tags_)
+			iter.second = new_ids[iter.second];
+	}
     for (unsigned old = active; old < max_points_; ++old)
       final_graph_[old].clear();
 
