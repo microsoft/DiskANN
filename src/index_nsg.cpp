@@ -413,7 +413,7 @@ namespace NSG {
     LockGuard guard(change_lock_);
 
     if (enable_tags_ && (point_tags_.find(tag) != point_tags_.end())) {
-      std::cerr << "Entry with the same tag exists alreaoccludedy."
+      std::cerr << "Entry with the tag " << tag << " exists already"
                 << std::endl;
       return -1;
     }
