@@ -23,7 +23,7 @@ namespace NSG {
     for (size_t i = 0; i < npts; i++) {
       float        scalarProduct = 0.0;
       float        magnitudePoint = 0.0;
-      const float* point = all_data + (size_t)(indices[i] * ndims);
+      const float* point = all_data + (size_t)(indices[i]) * (size_t) (ndims);
       for (unsigned d = 0; d < ndims; d++) {
         scalarProduct += (point[d] * query[d]);
         magnitudePoint += (point[d] * point[d]);
