@@ -58,8 +58,8 @@ namespace NSG {
   }
 
   // Do not call consolidate_deletes() if you have not locked change_lock_.
-  // It is not thread safe.
-  void IndexNSG::consolidate_deletes(const Parameters &parameters) {
+  // Returns number of live points left after consolidation
+  size_t IndexNSG::consolidate_deletes(const Parameters &parameters) {
     assert(!consolidated_order_);
     assert(can_delete_);
     assert(enable_tags_);
@@ -131,6 +131,8 @@ namespace NSG {
     empty_slots_.clear();
     delete_list_.clear();
     consolidated_order_ = true;
+
+    return nd_;
   }
 
   int IndexNSG::disable_delete(const Parameters &parameters,
@@ -144,20 +146,27 @@ namespace NSG {
       std::cerr << "Point tag array not instantiated" << std::endl;
       exit(-1);
     }
-    if (point_tags_.size() != max_points_) {
+    if (point_tags_.size() != nd_ - delete_list_.size()) {
       std::cerr << "Point tags array wrong sized" << std::endl;
       return -2;
     }
-    if (consolidate)
-      consolidate_deletes(parameters);
+    if (consolidate) {
+      auto nd = consolidate_deletes(parameters);
+      std::cout << "#Points after consolidation: " << nd << std::endl;
+    }
     can_delete_ = false;
     return 0;
   }
 
-  void IndexNSG::delete_point(const tag_t tag) {
+  int IndexNSG::delete_point(const tag_t tag) {
     LockGuard guard(change_lock_);
+    if (point_tags_.find(tag) == point_tags_.end()) {
+      std::cerr << "Delete tag not found" << std::endl;
+      return -1;
+    }
     delete_list_.insert(point_tags_[tag]);
     point_tags_.erase(tag);
+    return 0;
   }
 
   void IndexNSG::Save(const char *filename) {

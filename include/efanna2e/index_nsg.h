@@ -55,7 +55,9 @@ namespace NSG {
     int enable_delete();
     int disable_delete(const Parameters &parameters,
                        const bool        consolidate = false);
-    void delete_point(const tag_t tag);
+
+    // Return -1 if tag not found, 0 if OK.
+    int delete_point(const tag_t tag);
 
     /*  Internals of the library */
    protected:
@@ -103,7 +105,8 @@ namespace NSG {
     unsigned reserve_location();
 
     // WARNING: Do not call consolidate_deletes() without acquiring change_lock_
-    void consolidate_deletes(const Parameters &parameters);
+    // Returns number of live points left after consolidation
+    size_t consolidate_deletes(const Parameters &parameters);
 
    private:
     unsigned width;

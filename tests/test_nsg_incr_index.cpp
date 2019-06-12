@@ -198,7 +198,7 @@ int main(int argc, char** argv) {
   paras.Set<float>("alpha", alpha);
   paras.Set<unsigned>("num_rnds", num_rnds);
 
-  unsigned num_incr = 10000;
+  unsigned num_incr = 100000;
 
   NSG::IndexNSG index(dim, points_num - num_incr, NSG::L2, nullptr, points_num,
                       true);
@@ -208,8 +208,8 @@ int main(int argc, char** argv) {
 
     auto s = std::chrono::high_resolution_clock::now();
     index.BuildRandomHierarchical(data_load, paras, tags);
-    auto                          e = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double> diff = e - s;
+    std::chrono::duration<double> diff =
+        std::chrono::high_resolution_clock::now() - s;
     std::cout << "Indexing time: " << diff.count() << "\n";
   }
 
@@ -222,8 +222,8 @@ int main(int argc, char** argv) {
     for (unsigned i = points_num - num_incr; i < points_num; ++i)
       index.insert_point(data_load + (size_t) i * (size_t) dim, paras, pool,
                          tmp, visited, cut_graph, i);
-    auto                          e = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double> diff = e - s;
+    std::chrono::duration<double> diff =
+        std::chrono::high_resolution_clock::now() - s;
     std::cout << "Incremental time: " << diff.count() << "\n";
   }
 
@@ -234,10 +234,18 @@ int main(int argc, char** argv) {
     delete_list.push_back((rand() * rand() * rand()) % points_num);
 
   {
+    auto s = std::chrono::high_resolution_clock::now();
     index.enable_delete();
     for (auto p : delete_list)
-      index.delete_point(p);
-    index.disable_delete(paras, true);
+      if (index.delete_point(p) != 0)
+        std::cerr << "Delete tag " << p << " not found" << std::endl;
+    if (index.disable_delete(paras, true) != 0) {
+      std::cerr << "Disable delete failed" << std::endl;
+      return -1;
+    }
+    std::chrono::duration<double> diff =
+        std::chrono::high_resolution_clock::now() - s;
+    std::cout << "Delete time: " << diff.count() << "\n";
   }
 
   {
@@ -245,8 +253,8 @@ int main(int argc, char** argv) {
     for (auto p : delete_list)
       index.insert_point(data_load + (size_t) p * (size_t) dim, paras, pool,
                          tmp, visited, cut_graph, p);
-    auto                          e = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double> diff = e - s;
+    std::chrono::duration<double> diff =
+        std::chrono::high_resolution_clock::now() - s;
     std::cout << "Re-Incremental time: " << diff.count() << "\n";
   }
 
