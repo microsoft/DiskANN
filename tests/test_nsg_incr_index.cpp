@@ -163,70 +163,92 @@ void load_bvecs(const char* filename, float*& data, unsigned& num,
 }
 
 int main(int argc, char** argv) {
-  if (argc != 8) {
-    std::cout << "Correct usage: " << argv[0]
-              << " data_file L R C alpha num_rounds "
-              << "save_graph_file  " << std::endl;
-    exit(-1);
-  }
+	if (argc != 8) {
+		std::cout << "Correct usage: " << argv[0]
+			<< " data_file L R C alpha num_rounds "
+			<< "save_graph_file  " << std::endl;
+		exit(-1);
+	}
 
-  float*   data_load = NULL;
-  unsigned points_num, dim;
+	float*   data_load = NULL;
+	unsigned points_num, dim;
 
-  std::string bvecs(".bvecs");
-  std::string base_file(argv[1]);
-  if (base_file.find(bvecs) == std::string::npos) {
-    load_fvecs(argv[1], data_load, points_num, dim);
-  } else {
-    load_bvecs(argv[1], data_load, points_num, dim);
-  }
+	std::string bvecs(".bvecs");
+	std::string base_file(argv[1]);
+	if (base_file.find(bvecs) == std::string::npos) {
+		load_fvecs(argv[1], data_load, points_num, dim);
+	}
+	else {
+		load_bvecs(argv[1], data_load, points_num, dim);
+	}
 
-  data_load = NSG::data_align(data_load, points_num, dim);
-  std::cout << "Data loaded and aligned" << std::endl;
+	data_load = NSG::data_align(data_load, points_num, dim);
+	std::cout << "Data loaded and aligned" << std::endl;
 
-  unsigned    L = (unsigned) atoi(argv[2]);
-  unsigned    R = (unsigned) atoi(argv[3]);
-  unsigned    C = (unsigned) atoi(argv[4]);
-  float       alpha = (float) std::atof(argv[5]);
-  unsigned    num_rnds = (unsigned) std::atoi(argv[6]);
-  std::string save_path(argv[7]);
+	unsigned    L = (unsigned)atoi(argv[2]);
+	unsigned    R = (unsigned)atoi(argv[3]);
+	unsigned    C = (unsigned)atoi(argv[4]);
+	float       alpha = (float)std::atof(argv[5]);
+	unsigned    num_rnds = (unsigned)std::atoi(argv[6]);
+	std::string save_path(argv[7]);
 
-  NSG::Parameters paras;
-  paras.Set<unsigned>("L", L);
-  paras.Set<unsigned>("R", R);
-  paras.Set<unsigned>("C", C);
-  paras.Set<float>("alpha", alpha);
-  paras.Set<unsigned>("num_rnds", num_rnds);
+	NSG::Parameters paras;
+	paras.Set<unsigned>("L", L);
+	paras.Set<unsigned>("R", R);
+	paras.Set<unsigned>("C", C);
+	paras.Set<float>("alpha", alpha);
+	paras.Set<unsigned>("num_rnds", num_rnds);
 
-  unsigned num_incr = 10000;
+	unsigned num_incr = 10000;
 
-  NSG::IndexNSG index(dim, points_num - num_incr, NSG::L2, nullptr, points_num);
-  {
-    auto s = std::chrono::high_resolution_clock::now();
-    index.BuildRandomHierarchical(data_load, paras);
-    auto                          e = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double> diff = e - s;
-    std::cout << "Indexing time: " << diff.count() << "\n";
-  }
-  {
-    std::vector<NSG::Neighbor>       pool, tmp;
-    tsl::robin_set<unsigned>         visited;
-    std::vector<NSG::SimpleNeighbor> cut_graph;
+	NSG::IndexNSG index(dim, points_num - num_incr, NSG::L2, nullptr, points_num, true);
+	{
+		auto s = std::chrono::high_resolution_clock::now();
+		index.BuildRandomHierarchical(data_load, paras);
+		auto                          e = std::chrono::high_resolution_clock::now();
+		std::chrono::duration<double> diff = e - s;
+		std::cout << "Indexing time: " << diff.count() << "\n";
+	}
 
-    auto s = std::chrono::high_resolution_clock::now();
-    for (unsigned i = points_num - num_incr; i < points_num; ++i)
-      index.insert_point(data_load + (size_t) i * (size_t) dim, paras, pool,
-                         tmp, visited, cut_graph);
-    auto                          e = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double> diff = e - s;
-    std::cout << "Incremental time: " << diff.count() << "\n";
-  }
-  {
-    // index.enable_delete();
-  }
+	std::vector<NSG::Neighbor>       pool, tmp;
+	tsl::robin_set<unsigned>         visited;
+	std::vector<NSG::SimpleNeighbor> cut_graph;
 
-  index.Save(save_path.c_str());
-  // index.Save_Inner_Vertices(argv[5]);
+	{
+		auto s = std::chrono::high_resolution_clock::now();
+		for (unsigned i = points_num - num_incr; i < points_num; ++i)
+			index.insert_point(data_load + (size_t)i * (size_t)dim, paras, pool,
+				tmp, visited, cut_graph, i);
+		auto                          e = std::chrono::high_resolution_clock::now();
+		std::chrono::duration<double> diff = e - s;
+		std::cout << "Incremental time: " << diff.count() << "\n";
+	}
 
-  return 0;
+	index.Save(save_path.c_str());
+
+	std::vector<unsigned> delete_list;
+	while (delete_list.size() < num_incr)
+		delete_list.push_back((rand()*rand()*rand()) % points_num);
+
+	{
+		index.enable_delete();
+		for (auto p : delete_list)
+			index.delete_point(p);
+		index.disable_delete(paras, true);
+	}
+
+	{
+		auto s = std::chrono::high_resolution_clock::now();
+		for (auto p : delete_list)
+			index.insert_point(data_load + (size_t)p * (size_t)dim, paras, pool,
+				tmp, visited, cut_graph, p);
+		auto                          e = std::chrono::high_resolution_clock::now();
+		std::chrono::duration<double> diff = e - s;
+		std::cout << "Re-Incremental time: " << diff.count() << "\n";
+	}
+
+	auto save_path_reinc = save_path + ".reinc";
+		index.Save(save_path_reinc.c_str());
+
+	return 0;
 }
