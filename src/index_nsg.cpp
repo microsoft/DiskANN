@@ -154,7 +154,7 @@ namespace NSG {
     return 0;
   }
 
-  int IndexNSG::delete_point(const tag_t tag) {
+  void IndexNSG::delete_point(const tag_t tag) {
     LockGuard guard(change_lock_);
     delete_list_.insert(point_tags_[tag]);
     point_tags_.erase(tag);

@@ -55,7 +55,7 @@ namespace NSG {
     int enable_delete();
     int disable_delete(const Parameters &parameters,
                        const bool        consolidate = false);
-    int delete_point(const tag_t tag);
+    void delete_point(const tag_t tag);
 
     /*  Internals of the library */
    protected:
