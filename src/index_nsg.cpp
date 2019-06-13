@@ -116,8 +116,10 @@ namespace NSG {
 
       // If start node is removed, replace it.
       if (i == ep_) {
+        std::cerr << "Start node is being deleted" << std::endl;
       }
     }
+    std::cout << "Contracted the index graph" << std::endl;
 
     for (unsigned old = 0; old < nd_; ++old) {
       // Renumber nodes to compact the order
@@ -133,9 +135,13 @@ namespace NSG {
 
       // Update the location pointed to by tag
       for (auto iter : tag_to_point_) {
+		  std::cout << iter.first << "  " << iter.second
+			  << "  " << point_to_tag_[iter.second] << std::endl;
         point_to_tag_.erase(iter.second);
         iter.second = new_ids[iter.second];
-        point_to_tag_[iter.second] = iter.second;
+        point_to_tag_[iter.second] = iter.first;
+		std::cout << iter.first << "  " << iter.second
+			<< "  " << point_to_tag_[iter.second] << std::endl;
       }
     }
     for (unsigned old = active; old < max_points_; ++old)
@@ -1275,6 +1281,21 @@ namespace NSG {
         indices[i++] = id;
     }
     return std::make_pair(hops, cmps);
+  }
+
+  std::pair<int, int> IndexNSG::BeamSearchTags(
+      const float *query, const float *x, const size_t K,
+      const Parameters &parameters, tag_t *tags, int beam_width,
+      std::vector<unsigned> &start_points, unsigned *indices_buffer) {
+    const bool alloc = indices_buffer == NULL;
+    auto       indices = alloc ? new unsigned[K] : indices_buffer;
+    auto       ret =
+        BeamSearch(query, x, K, parameters, indices, beam_width, start_points);
+    for (int i = 0; i < K; ++i)
+      tags[i] = point_to_tag_[indices[i]];
+    if (alloc)
+      delete[] indices;
+    return ret;
   }
 
 }  // namespace NSG

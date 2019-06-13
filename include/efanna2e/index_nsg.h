@@ -41,6 +41,13 @@ namespace NSG {
                                    unsigned *indices, int beam_width,
                                    std::vector<unsigned> &start_points);
 
+    std::pair<int, int> BeamSearchTags(const float *query, const float *x,
+                                       const size_t      K,
+                                       const Parameters &parameters,
+                                       tag_t *tags, int beam_width,
+                                       std::vector<unsigned> &start_points,
+                                       unsigned *indices_buffer = NULL);
+
     void prefetch_vector(unsigned id);
 
     /* Methods for inserting and deleting points from the databases*/

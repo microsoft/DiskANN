@@ -198,6 +198,7 @@ int main(int argc, char** argv) {
   paras.Set<float>("alpha", alpha);
   paras.Set<unsigned>("num_rnds", num_rnds);
 
+  /// unsigned num_points = 100000;
   unsigned num_incr = 10000;
 
   NSG::IndexNSG index(dim, points_num - num_incr, NSG::L2, nullptr, points_num,
@@ -232,6 +233,7 @@ int main(int argc, char** argv) {
   tsl::robin_set<unsigned> delete_list;
   while (delete_list.size() < num_incr)
     delete_list.insert((rand() * rand() * rand()) % points_num);
+  std::cout << "Deleting " << delete_list.size() << " elements" << std::endl;
 
   {
     auto s = std::chrono::high_resolution_clock::now();
@@ -239,6 +241,8 @@ int main(int argc, char** argv) {
     for (auto p : delete_list)
       if (index.delete_point(p) != 0)
         std::cerr << "Delete tag " << p << " not found" << std::endl;
+
+    std::cout << "Start consolidating deletes" << std::endl;
     if (index.disable_delete(paras, true) != 0) {
       std::cerr << "Disable delete failed" << std::endl;
       return -1;
