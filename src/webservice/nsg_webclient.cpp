@@ -7,23 +7,39 @@
 #include <ctime>
 #include <iomanip>
 #include <iostream>
+#include <set>
 
 const std::wstring VECTOR_KEY = L"query", K_KEY = L"k",
                    RESULTS_KEY = L"results", INDICES_KEY = L"indices",
                    QUERY_ID_KEY = L"query_id",
                    TIME_TAKEN_KEY = L"time_taken_in_us";
 
-std::mutex fileLock;
+class LessOperator {
+ public:
+  constexpr bool operator()(
+      const std::tuple<int, unsigned int*>& first,
+      const std::tuple<int, unsigned int*>& second) const {
+    return std::get<0>(first) < std::get<0>(second);
+  }
+};
+
+std::mutex                                             setLock;
+std::set<std::tuple<int, unsigned int*>, LessOperator> resultsSet;
+
+void addResult(int queryId, unsigned int* indices) {
+  auto tuple = std::make_tuple(queryId, indices);
+  setLock.lock();
+  resultsSet.emplace(tuple);
+  setLock.unlock();
+}
 
 void save_result(std::ostream& out, unsigned* results, unsigned nd,
                  unsigned nr) {
-  fileLock.lock();
   for (unsigned i = 0; i < nd; i++) {
     out.write((char*) &nr, sizeof(unsigned));
     out.write((char*) (results + i * nr), nr * sizeof(unsigned));
   }
   out.flush();
-  fileLock.unlock();
 }
 // TEMPORARY FOR IDENTIFYING RECALL ENDS
 
@@ -64,7 +80,7 @@ std::vector<float> getQueryVector(
     if (findOffset != std::string::npos) {
       substr = line.substr(extractStart, findOffset - extractStart);
       findOffset++;
-      extractStart++;
+      extractStart = findOffset;
     } else {
       substr = line.substr(extractStart, std::string::npos);
     }
@@ -124,18 +140,22 @@ void loadData(const std::string& fileName, float*& queries,
 }
 
 void processResponse(const std::wstring& jsonStr, std::ostream& ivecStream) {
-    web::json::value        parsedResponse = web::json::value::parse(jsonStr);
-    const web::json::array& indicesArr = parsedResponse[INDICES_KEY].as_array();
-    unsigned int*           indices = new unsigned int[indicesArr.size()];
+  web::json::value parsedResponse = web::json::value::parse(jsonStr);
+  if (parsedResponse[INDICES_KEY].is_array()) {
+    const web::json::array indicesArr = parsedResponse[INDICES_KEY].as_array();
+    unsigned int*          indices = new unsigned int[indicesArr.size()];
     for (int i = 0; i < indicesArr.size(); i++) {
       indices[i] = indicesArr.at(i).as_integer();
     }
 
-    save_result(ivecStream, indices, 1,
-                static_cast<unsigned int>(indicesArr.size()));
-    delete[] indices;
-    std::cout << "Processed response for query "
-              << parsedResponse[QUERY_ID_KEY].as_integer() << std::endl;
+    auto queryId = parsedResponse[QUERY_ID_KEY].as_integer();
+    addResult(queryId, indices);
+
+    std::cout << "Processed response for query " << queryId << std::endl;
+  } else {
+    std::cout << "ParsedResponse[\"indices\"] is not an array! but "
+              << parsedResponse[INDICES_KEY].type() << std::endl;
+  }
 }
 
 pplx::task<void> runQuery(float* queries, unsigned int dimensions,
@@ -143,11 +163,17 @@ pplx::task<void> runQuery(float* queries, unsigned int dimensions,
                           const web::uri& serviceUri,
                           std::ostream&   ivecStream) {
   float* query = new float[dimensions];
-  std::copy(queries + i * dimensions, queries + i * dimensions + dimensions,
+  // each vector is float[0] -> float[dimensions]
+  std::copy(queries + i * dimensions, (queries + i * dimensions) + dimensions,
             query);
 
   std::cout << "******************" << std::endl
             << "Firing query: " << i << std::endl;
+  // std::for_each(query, query + dimensions, [](const float value) {
+  //  std::cout << value << ",";
+  //});
+  // std::cout << std::endl;
+
   web::json::value body = preparePostBody(numResults, query, dimensions, i);
 
   web::http::client::http_client client(serviceUri);
@@ -179,17 +205,15 @@ int main(int argc, char* argv[]) {
     exit(1);
   }
 
-  web::uri_builder bldr(getHostAddress(argv[1]));
-
+  web::uri     serviceUri = web::uri_builder(getHostAddress(argv[1])).to_uri();
   float*       queries = nullptr;
   unsigned int dimensions = 0, numPoints = 0;
   loadData(std::string(argv[2]), queries, numPoints, dimensions);
-  int numResults = atoi(argv[3]);
+  int           numResults = atoi(argv[3]);
   std::ofstream ivecStream(argv[4], std::ios_base::binary | std::ios_base::out);
   std::wostream& outputStream = (argc >= 6)
                                     ? (std::wostream&) std::wcout
                                     : (std::wostream&) std::wofstream(argv[5]);
-  
 
   std::cout << "Connecting to service: " << argv[1]
             << " to run queries from file: " << argv[2]
@@ -201,16 +225,26 @@ int main(int argc, char* argv[]) {
   std::vector<Concurrency::task<void>> runningTasks;
 
   try {
-    // each vector is float[0] -> float[dimensions]
     for (unsigned int i = 0; i < numPoints; i++) {
-      auto task = runQuery(queries, dimensions, i, numResults, bldr.to_uri(),
-                           ivecStream);
+      auto task =
+          runQuery(queries, dimensions, i, numResults, serviceUri, ivecStream);
       runningTasks.push_back(task);
     }
 
     // wait for all tasks to complete.
     std::for_each(runningTasks.begin(), runningTasks.end(),
                   [](Concurrency::task<void> rtask) { rtask.get(); });
+
+    int lastId = -1;
+    std::for_each(resultsSet.begin(), resultsSet.end(),
+                  [&](const std::tuple<int, unsigned int*> entry) {
+                    if (lastId >= std::get<0>(entry)) {
+                      throw std::exception("Set is not ordered.");
+                    } else {
+                      lastId = std::get<0>(entry);
+					}
+                    save_result(ivecStream, std::get<1>(entry), 1, numResults);
+                  });
 
     outputStream.flush();
     ivecStream.flush();

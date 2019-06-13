@@ -7,6 +7,7 @@
 #include <webservice/server.h>
 #include <webservice/in_memory_nsg_search.h>
 
+
 // Utility function declarations
 static std::wstring     to_wstring(const char* str);
 template<typename T>
@@ -80,7 +81,7 @@ void Server::handle_post(web::http::http_request message) {
       message.reply(web::http::status_codes::OK, response).wait();
     } catch (const std::exception& ex) {
       std::cerr << "Exception while processing request: " << queryId << ":"
-                << ex.what() << std::endl;
+                << ex.what() <<  std::endl;
       web::json::value response = prepareResponse(queryId, k);
       response[ERROR_MESSAGE_KEY] =
           web::json::value::string(to_wstring(ex.what()));
@@ -114,11 +115,19 @@ static void parseJson(const utility::string_t& body, int& k, long long& queryId,
     throw new std::exception("Query vector has zero elements.");
   }
 
-  queryVector = new float[queryArr.size()];
+  dimensions = static_cast<unsigned int>(queryArr.size());
+  unsigned new_dim = dimensions / DATA_ALIGN_FACTOR;
+  if (dimensions % DATA_ALIGN_FACTOR > 0)
+    ++new_dim;
+  new_dim *= DATA_ALIGN_FACTOR;
+
+
+  queryVector = new float[new_dim];
+  memset(queryVector, 0, new_dim * sizeof(float));
   for (int i = 0; i < queryArr.size(); i++) {
     queryVector[i] = (float) queryArr[i].as_double();
   }
-  dimensions = static_cast<unsigned int>(queryArr.size());
+
 }
 
 // Utility functions

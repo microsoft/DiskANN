@@ -8,7 +8,7 @@
 
 void load_data(const char* filename, int*& data, size_t& num,
                unsigned& dim) {  // load data with sift10K pattern
-  std::ifstream in(std::string(filename), std::ios::binary);
+  std::ifstream  in(std::string(filename), std::ios::binary);
   std::cout << "Filename: " << filename << "\n";
   if (!in.is_open()) {
     std::cout << "open file error" << std::endl;
@@ -16,15 +16,15 @@ void load_data(const char* filename, int*& data, size_t& num,
   }
   in.read((char*) &dim, 4);
   in.seekg(0, std::ios::end);
-  std::ios::pos_type ss = in.tellg();
-  size_t             fsize = (size_t) ss;
+  std::ios::pos_type  ss = in.tellg();
+  size_t  fsize = (size_t) ss;
   num = (unsigned) (fsize / (dim + 1) / 4);
-  auto data_size = (size_t) num * (size_t) dim;
+  auto  data_size = (size_t) num * (size_t) dim;
   std::cout << "data dimension: " << dim << std::endl;
   std::cout << "data num points: " << num << std::endl;
   data = new int[data_size];
 
-  int* tmp_dim = new int;
+  int*tmp_dim = new int;
   in.seekg(0, std::ios::beg);
   for (size_t i = 0; i < num; i++) {
     in.read((char*) tmp_dim, 4);
@@ -32,6 +32,21 @@ void load_data(const char* filename, int*& data, size_t& num,
   }
   in.close();
   std::cout << "data loaded \n";
+}
+
+void print(int* data, int dim, int num_points, int num_lines) {
+  if (num_lines <= num_points) {
+    for (int i = 0; i < num_lines; i++) {
+      for (int j = 0; j < dim; j++) {
+        std::cout << *((data + i * dim) + j) << ",";
+      }
+      std::cout << std::endl;
+    }
+  } else {
+    std::cerr << "Num lines to print: " << num_lines
+              << " should be <= num_points(" << num_points << ")" << std::endl;
+  }
+   
 }
 
 int main(int argc, char** argv) {
@@ -46,6 +61,12 @@ int main(int argc, char** argv) {
   unsigned dim_or;
   load_data(argv[1], gold_std, points_num, dim_gs);
   load_data(argv[2], our_results, points_num, dim_or);
+
+  std::cout << "Gold standard: " << std::endl;
+  print(gold_std, dim_gs, points_num, 1);
+  std::cout << "Obtained results " << std::endl;
+  print(our_results, dim_gs, points_num, 1);
+
   size_t   recall = 0;
   size_t   total_recall = 0;
   uint32_t recall_at = std::atoi(argv[3]);

@@ -21,8 +21,8 @@ namespace NSG {
     cos_dists.reserve(npts);
 
     for (size_t i = 0; i < npts; i++) {
-      float        scalarProduct = 0.0;
-      float        magnitudePoint = 0.0;
+      double        scalarProduct = 0.0;
+      double        magnitudePoint = 0.0;
       const float* point = all_data + (size_t)(indices[i]) * (size_t) (ndims);
       for (unsigned d = 0; d < ndims; d++) {
         scalarProduct += (point[d] * query[d]);
@@ -30,7 +30,7 @@ namespace NSG {
       }
 
 	  auto cosDist = scalarProduct / (sqrtf(magnitudePoint) * queryMagnitude);
-      cos_dists.push_back(cosDist);
+      cos_dists.push_back(static_cast<float>(cosDist));
     }
     return cos_dists;
   }

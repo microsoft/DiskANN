@@ -2,6 +2,7 @@
 #include <webservice/in_memory_nsg_search.h>
 #include <ctime>
 #include <iomanip>
+#include "efanna2e/util.h"
 
 namespace NSG {
   const unsigned int DEFAULT_BEAM_WIDTH = 8;
@@ -9,11 +10,15 @@ namespace NSG {
   // const unsigned int MAX_L = 300;
   const unsigned int DEFAULT_L = 704;
 
+
   InMemoryNSGSearch::InMemoryNSGSearch(const char* baseFile,
                                        const char* indexFile,
                                        const char* idsFile, Metric m)
       : _baseVectors(nullptr) {
-    load_data(baseFile, _baseVectors, this->_numPoints, this->_dimensions);
+
+	  float* baseData;
+    load_data(baseFile, baseData, this->_numPoints, this->_dimensions);
+    _baseVectors = NSG::data_align(baseData, _numPoints, _dimensions); 
 
     _nsgIndex = std::unique_ptr<NSG::IndexNSG>(
         new NSG::IndexNSG(_dimensions, _numPoints, m, nullptr));
@@ -26,13 +31,14 @@ namespace NSG {
                                             const unsigned int dimensions,
                                             const unsigned int K) {
     std::vector<unsigned int> start_points;
+
     unsigned int*             indices = new unsigned int[K];
 
 
     auto startTime = std::chrono::high_resolution_clock::now();
     auto queryMagnitude = NSG::vectorMagnitude(query, dimensions);
 
-    _nsgIndex->BeamSearch(query, _baseVectors, K,
+	_nsgIndex->BeamSearch(query, _baseVectors, K,
                           /* (std::min)(K * L_MULTIPLIER, MAX_L)*/ DEFAULT_L,
                           indices, DEFAULT_BEAM_WIDTH, start_points);
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(
