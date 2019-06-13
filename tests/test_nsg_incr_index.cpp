@@ -230,10 +230,14 @@ int main(int argc, char** argv) {
 
   index.Save(save_path.c_str());
 
-  tsl::robin_set<unsigned> delete_list;
-  while (delete_list.size() < num_incr)
-    delete_list.insert((rand() * rand() * rand()) % points_num);
-  std::cout << "Deleting " << delete_list.size() << " elements" << std::endl;
+  tsl::robin_set<unsigned> delete_set;
+  while (delete_set.size() < num_incr)
+    delete_set.insert((rand() * rand() * rand()) % points_num);
+  std::cout << "Deleting " << delete_set.size() << " elements" << std::endl;
+  std::vector<unsigned> delete_list;
+  for (auto iter : delete_set)
+	  delete_list.push_back(iter);
+  std::sort(delete_list.begin(), delete_list.end());
 
   {
     auto s = std::chrono::high_resolution_clock::now();

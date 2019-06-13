@@ -135,13 +135,13 @@ namespace NSG {
 
       // Update the location pointed to by tag
       for (auto iter : tag_to_point_) {
-		  std::cout << iter.first << "  " << iter.second
-			  << "  " << point_to_tag_[iter.second] << std::endl;
+		/*  std::cout << iter.first << "  " << iter.second
+			  << "  " << point_to_tag_[iter.second] << std::endl;*/
         point_to_tag_.erase(iter.second);
         iter.second = new_ids[iter.second];
         point_to_tag_[iter.second] = iter.first;
-		std::cout << iter.first << "  " << iter.second
-			<< "  " << point_to_tag_[iter.second] << std::endl;
+		/*std::cout << iter.first << "  " << iter.second
+			<< "  " << point_to_tag_[iter.second] << std::endl;*/
       }
     }
     for (unsigned old = active; old < max_points_; ++old)
