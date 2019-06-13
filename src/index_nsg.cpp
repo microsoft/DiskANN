@@ -119,22 +119,25 @@ namespace NSG {
       }
     }
 
-	for (unsigned old = 0; old < nd_; ++old) {
-		// Renumber nodes to compact the order
-		for (size_t i = 0; i < final_graph_[old].size(); ++i) {
-			assert(new_ids[final_graph_[old][i]] < max_points_);
-			final_graph_[old][i] = new_ids[final_graph_[old][i]];
-		}
+    for (unsigned old = 0; old < nd_; ++old) {
+      // Renumber nodes to compact the order
+      for (size_t i = 0; i < final_graph_[old].size(); ++i) {
+        assert(new_ids[final_graph_[old][i]] < max_points_);
+        final_graph_[old][i] = new_ids[final_graph_[old][i]];
+      }
 
-		// Move the data to the correct position
-		memcpy((void*)(data_ + dimension_ * (size_t)new_ids[old]),
-			(void*)(data_ + dimension_ * (size_t)old),
-			dimension_ * sizeof(float));
+      // Move the data to the correct position
+      memcpy((void *) (data_ + dimension_ * (size_t) new_ids[old]),
+             (void *) (data_ + dimension_ * (size_t) old),
+             dimension_ * sizeof(float));
 
-		// Update the location pointed to by tag 
-		for (auto iter : point_tags_)
-			iter.second = new_ids[iter.second];
-	}
+      // Update the location pointed to by tag
+      for (auto iter : tag_to_point_) {
+        point_to_tag_.erase(iter.second);
+        iter.second = new_ids[iter.second];
+        point_to_tag_[iter.second] = iter.second;
+      }
+    }
     for (unsigned old = active; old < max_points_; ++old)
       final_graph_[old].clear();
 
@@ -156,9 +159,13 @@ namespace NSG {
       std::cerr << "Point tag array not instantiated" << std::endl;
       exit(-1);
     }
-    if (point_tags_.size() != nd_ - delete_list_.size()) {
-      std::cerr << "Point tags array wrong sized" << std::endl;
+    if (tag_to_point_.size() != nd_ - delete_list_.size()) {
+      std::cerr << "Tags to points array wrong sized" << std::endl;
       return -2;
+    }
+    if (point_to_tag_.size() != nd_ - delete_list_.size()) {
+      std::cerr << "Points to tags array wrong sized" << std::endl;
+      return -3;
     }
     if (consolidate) {
       auto nd = consolidate_deletes(parameters);
@@ -170,12 +177,13 @@ namespace NSG {
 
   int IndexNSG::delete_point(const tag_t tag) {
     LockGuard guard(change_lock_);
-    if (point_tags_.find(tag) == point_tags_.end()) {
+    if (tag_to_point_.find(tag) == tag_to_point_.end()) {
       std::cerr << "Delete tag not found" << std::endl;
       return -1;
     }
-    delete_list_.insert(point_tags_[tag]);
-    point_tags_.erase(tag);
+    delete_list_.insert(tag_to_point_[tag]);
+    point_to_tag_.erase(tag_to_point_[tag]);
+    tag_to_point_.erase(tag);
     return 0;
   }
 
@@ -422,7 +430,7 @@ namespace NSG {
 
     LockGuard guard(change_lock_);
 
-    if (enable_tags_ && (point_tags_.find(tag) != point_tags_.end())) {
+    if (enable_tags_ && (tag_to_point_.find(tag) != tag_to_point_.end())) {
       std::cerr << "Entry with the tag " << tag << " exists already"
                 << std::endl;
       return -1;
@@ -435,7 +443,8 @@ namespace NSG {
     }
 
     size_t location = reserve_location();
-    point_tags_[tag] = location;
+    tag_to_point_[tag] = location;
+    point_to_tag_[location] = tag;
 
     auto offset_data = data_ + (size_t) dimension_ * location;
     memcpy((void *) offset_data, point, sizeof(float) * dimension_);
@@ -1091,8 +1100,10 @@ namespace NSG {
         std::cerr << "#Tags should be equal to #points" << std::endl;
         exit(-1);
       }
-      for (size_t i = 0; i < tags.size(); ++i)
-        point_tags_[tags[i]] = i;
+      for (size_t i = 0; i < tags.size(); ++i) {
+        tag_to_point_[tags[i]] = i;
+        point_to_tag_[i] = tags[i];
+      }
     }
     LinkHierarchy(parameters);  // Primary func for creating nsg graph
 
