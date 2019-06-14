@@ -236,7 +236,7 @@ int main(int argc, char** argv) {
   std::cout << "Deleting " << delete_set.size() << " elements" << std::endl;
   std::vector<unsigned> delete_list;
   for (auto iter : delete_set)
-	  delete_list.push_back(iter);
+    delete_list.push_back(iter);
   std::sort(delete_list.begin(), delete_list.end());
 
   {

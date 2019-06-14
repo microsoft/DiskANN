@@ -73,11 +73,11 @@ namespace NSG {
     std::vector<unsigned> new_ids;
     new_ids.resize(max_points_, max_points_);
     unsigned active = 0;
-    for (unsigned old = 0; old < max_points_; ++old) {
-      if (empty_slots_.find(old) == empty_slots_.end())
+    for (unsigned old = 0; old < max_points_; ++old)
+      if (empty_slots_.find(old) == empty_slots_.end() &&
+          delete_list_.find(old) == delete_list_.end())
         new_ids[old] = active++;
-    }
-    assert(active + empty_slots_.size() == max_points_);
+    assert(active + empty_slots_.size() + delete_list_.size() == max_points_);
 
     for (auto i : delete_list_) {
       tsl::robin_set<unsigned> candidate_set;
@@ -116,11 +116,12 @@ namespace NSG {
 
       // If start node is removed, replace it.
       if (i == ep_) {
-        std::cerr << "Start node is being deleted" << std::endl;
+        std::cerr << "Start node is being deleted." << std::endl;
       }
     }
-    std::cout << "Contracted the index graph" << std::endl;
 
+    std::cout << "Re-numbering graph connections and contracted data..."
+              << std::endl;
     for (unsigned old = 0; old < nd_; ++old) {
       // Renumber nodes to compact the order
       for (size_t i = 0; i < final_graph_[old].size(); ++i) {
@@ -132,24 +133,29 @@ namespace NSG {
       memcpy((void *) (data_ + dimension_ * (size_t) new_ids[old]),
              (void *) (data_ + dimension_ * (size_t) old),
              dimension_ * sizeof(float));
-
-      // Update the location pointed to by tag
-      for (auto iter : tag_to_point_) {
-		/*  std::cout << iter.first << "  " << iter.second
-			  << "  " << point_to_tag_[iter.second] << std::endl;*/
-        point_to_tag_.erase(iter.second);
-        iter.second = new_ids[iter.second];
-        point_to_tag_[iter.second] = iter.first;
-		/*std::cout << iter.first << "  " << iter.second
-			<< "  " << point_to_tag_[iter.second] << std::endl;*/
-      }
     }
+
+    std::cout << "Updating hash map to lookup tags and ids..." << std::endl;
+    // Update the location pointed to by tag
+    for (auto iter : tag_to_point_) {
+      auto tag = iter.first;
+      auto old_id = iter.second;
+      auto new_id = new_ids[old_id];
+
+      iter.second = new_id;
+      point_to_tag_.erase(old_id);
+      point_to_tag_[new_id] = tag;
+
+      // std::cout << tag << "  "  << old_id << "  " << new_id << std::endl;
+    }
+
     for (unsigned old = active; old < max_points_; ++old)
       final_graph_[old].clear();
 
     empty_slots_.clear();
     delete_list_.clear();
     consolidated_order_ = true;
+    std::cout << "Consolidated the index" << std::endl;
 
     return nd_;
   }
@@ -177,6 +183,7 @@ namespace NSG {
       auto nd = consolidate_deletes(parameters);
       std::cout << "#Points after consolidation: " << nd << std::endl;
     }
+
     can_delete_ = false;
     return 0;
   }
