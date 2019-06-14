@@ -7,30 +7,25 @@
 #include <omp.h>
 
 #include <string.h>
+
+#ifndef __NSG_WINDOWS__
 #include <sys/mman.h>
-#include <sys/stat.h>
-#include <time.h>
 #include <unistd.h>
+#else
+#include <Windows.h>
+#endif
+
+#include "MemoryMapper.h"
 
 void load_fvecs(const char* filename, float*& data, unsigned& num,
-                unsigned& dim) {
+                unsigned& dim) 
+{
   unsigned new_dim = 0;
   char*    buf;
-  int      fd;
-  fd = open(filename, O_RDONLY);
-  if (!(fd > 0)) {
-    std::cerr << "Data file " << filename
-              << " not found. Program will stop now." << std::endl;
-    assert(false);
-  }
-  struct stat sb;
-  fstat(fd, &sb);
-  off_t fileSize = sb.st_size;
-  //  assert(sizeof(off_t) == 8);
 
-  buf = (char*) mmap(NULL, fileSize, PROT_READ, MAP_PRIVATE, fd, 0);
-  //  assert(buf);
-  // size_t x=4;
+  NSG::MemoryMapper mapper(filename);
+  buf = mapper.getBuf();
+
   uint32_t file_dim;
   std::memcpy(&file_dim, buf, 4);
   dim = file_dim;
@@ -54,14 +49,14 @@ void load_fvecs(const char* filename, float*& data, unsigned& num,
   for (size_t i = 0; i < new_dim; i++)
     zeros[i] = 0;
 
-  size_t num_t = (fileSize / (4 * dim_t + 4));
+  size_t num_t = (mapper.getFileSize() / (4 * dim_t + 4));
   num = (unsigned) num_t;
   data = new float[(size_t) num * (size_t) new_dim];
 
   std::cout << "# Points: " << num << ".." << std::flush;
 
 #pragma omp parallel for schedule(static, 65536)
-  for (size_t i = 0; i < num; i++) {
+  for (int64_t i = 0; i < num; i++) {
     uint32_t row_dim;
     char*    reader = buf + (i * (4 * dim_t + 4));
     std::memcpy((char*) &row_dim, reader, sizeof(uint32_t));
@@ -80,28 +75,55 @@ void load_fvecs(const char* filename, float*& data, unsigned& num,
       //(reader + 4), 		    new_dim * sizeof(float));
     }
   }
-  int val = munmap(buf, fileSize);
-  close(fd);
   std::cout << "done." << std::endl;
 }
+
+//void load_data(char* filename, float*& data, unsigned& num,
+//               unsigned& dim) {  // load data with sift10K pattern
+//  std::ifstream in(filename, std::ios::binary);
+//  if (!in.is_open()) {
+//    std::cout << "open file error" << std::endl;
+//    exit(-1);
+//  }
+//  std::cout << "Reading data from file: " << filename << std::endl;
+//  in.read((char*) &dim, 4);
+//  in.seekg(0, std::ios::end);
+//  std::ios::pos_type ss = in.tellg();
+//  size_t fsize = (size_t) ss;
+//  std::cout << "fsize is: " << fsize << std::endl;
+//  num = (unsigned) (fsize / (dim + 1) / 4);
+//  std::cout << "num is: " << num << std::endl;
+//  std::cout << "num * dim is: " << (size_t) num * (size_t) dim << std::endl;
+//
+//  uint64_t allocSize = ((uint64_t) num) * ((uint64_t) dim);
+//
+//  try {
+//    std::cout << "Alloc size is " << allocSize << std::endl;
+//    data = new float[allocSize];
+//  } catch (const std::bad_alloc& ba) {
+//    std::cerr << "Failed to allocate memory " << ba.what() << std::endl;
+//    exit(1);
+//  }
+//
+//  std::cout << "Allocated " << num * dim << " bytes " << std::endl;
+//
+//  in.seekg(0, std::ios::beg);
+//  for (size_t i = 0; i < num; i++) {
+//    in.seekg(4, std::ios::cur);
+//    in.read((char*) (data + i * dim), dim * 4);
+//  }
+//  in.close();
+//  std::cout << "Loaded data from file " << filename << std::endl;
+//}
 
 void load_bvecs(const char* filename, float*& data, unsigned& num,
                 unsigned& dim) {
   unsigned new_dim = 0;
   char*    buf;
-  int      fd;
-  fd = open(filename, O_RDONLY);
-  if (!(fd > 0)) {
-    std::cerr << "Data file " << filename
-              << " not found. Program will stop now." << std::endl;
-    assert(false);
-  }
-  struct stat sb;
-  fstat(fd, &sb);
-  off_t fileSize = sb.st_size;
-  //  assert(sizeof(off_t) == 8);
+  off_t    fileSize = 0;
 
-  buf = (char*) mmap(NULL, fileSize, PROT_READ, MAP_PRIVATE, fd, 0);
+  NSG::MemoryMapper mapper(filename);
+  buf = mapper.getBuf();
   //  assert(buf);
   // size_t x=4;
   uint32_t file_dim;
@@ -132,7 +154,7 @@ void load_bvecs(const char* filename, float*& data, unsigned& num,
   std::cout << "# Points: " << num << ".." << std::flush;
 
 #pragma omp parallel for schedule(static, 65536)
-  for (size_t i = 0; i < num; i++) {
+  for (int64_t i = 0; i < num; i++) {  // GOPAL changing "size_t i" to "int i"
     uint32_t row_dim;
     char*    reader = buf + (i * (dim + 4));
     std::memcpy((char*) &row_dim, reader, sizeof(uint32_t));
@@ -157,18 +179,19 @@ void load_bvecs(const char* filename, float*& data, unsigned& num,
       }
     }
   }
-  int val = munmap(buf, fileSize);
-  close(fd);
+
   std::cout << "done." << std::endl;
 }
 
 int main(int argc, char** argv) {
-  if (argc != 8) {
-    std::cout << "Correct usage: " << argv[0]
-              << " data_file L R C alpha num_rounds "
-              << "save_graph_file  " << std::endl;
+  if (argc != 6) {
+    std::cout << "Correct usage\n"
+              << argv[0] << " data_file L R "
+              << "save_graph_file "
+              << "num_pass<1>" << std::endl;
     exit(-1);
   }
+
 
   float*   data_load = NULL;
   unsigned points_num, dim;
@@ -176,26 +199,46 @@ int main(int argc, char** argv) {
   std::string bvecs(".bvecs");
   std::string base_file(argv[1]);
   if (base_file.find(bvecs) == std::string::npos) {
+    //		std::cout << "Loading base set as fvecs" << std::endl;
     load_fvecs(argv[1], data_load, points_num, dim);
   } else {
+    //		std::cout << "Loading training set as bvecs" << std::endl;
     load_bvecs(argv[1], data_load, points_num, dim);
   }
 
+  //  load_data(argv[1], data_load, points_num, dim);
   data_load = NSG::data_align(data_load, points_num, dim);
   std::cout << "Data loaded and aligned" << std::endl;
 
+  //  unsigned    nn_graph_deg = (unsigned) atoi(argv[3]);
   unsigned    L = (unsigned) atoi(argv[2]);
   unsigned    R = (unsigned) atoi(argv[3]);
-  unsigned    C = (unsigned) atoi(argv[4]);
-  float       alpha = (float) std::atof(argv[5]);
-  unsigned    num_rnds = (unsigned) std::atoi(argv[6]);
-  std::string save_path(argv[7]);
+  unsigned    C = 750;  //(unsigned) atoi(argv[4]);
+  std::string save_path(argv[4]);
+  float       alpha = 1.2f;   //(float) std::atof(argv[6]);
+  float       p_val = 0.05f;  //(float) std::atof(argv[7]);
+  //  unsigned    num_hier = (float) std::atof(argv[8]);
+  unsigned num_syncs = 150;  //(float) std::atof(argv[8]);
+  unsigned num_rnds = (unsigned) std::atoi(argv[5]);
+  //  unsigned    innerL = (unsigned) atoi(argv[11]);
+  unsigned innerR = R;  //(unsigned) atoi(argv[10]);
+  //  unsigned    innerC = (unsigned) atoi(argv[13]);
+
+  //  if (nn_graph_deg > R) {
+  //    std::cerr << "Error: nn_graph_degree must be <= R" << std::endl;
+  //    exit(-1);
+  //  }
 
   NSG::Parameters paras;
   paras.Set<unsigned>("L", L);
   paras.Set<unsigned>("R", R);
   paras.Set<unsigned>("C", C);
+  paras.Set<std::string>("save_path", save_path);
   paras.Set<float>("alpha", alpha);
+  paras.Set<float>("p_val", p_val);
+  //  paras.Set<unsigned>("innerL", innerL);
+  //  paras.Set<unsigned>("innerC", innerC);
+  paras.Set<unsigned>("num_syncs", num_syncs);
   paras.Set<unsigned>("num_rnds", num_rnds);
 
   NSG::IndexNSG<float> index(dim, points_num, NSG::L2, nullptr);
@@ -206,7 +249,6 @@ int main(int argc, char** argv) {
 
   std::cout << "Indexing time: " << diff.count() << "\n";
   index.Save(save_path.c_str());
-  //    index.Save_Inner_Vertices(argv[5]);
 
   return 0;
 }

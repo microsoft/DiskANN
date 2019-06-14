@@ -1,19 +1,20 @@
-//
-// Created by 付聪 on 2017/6/21.
-//
-
 #include <efanna2e/index_nsg.h>
 #include <efanna2e/util.h>
 #include <omp.h>
 #include <string.h>
+
+#ifndef __NSG_WINDOWS__
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
+#endif
+
+#include "MemoryMapper.h"
 
 void load_ivecs(char* filename, unsigned*& data, unsigned& num,
                 unsigned& dim) {  // load data with sift10K pattern
-  std::ifstream in(filename, std::ios::binary);
+  std::ifstream   in(filename, std::ios::binary);
   if (!in.is_open()) {
     std::cout << "open file error" << std::endl;
     exit(-1);
@@ -21,7 +22,7 @@ void load_ivecs(char* filename, unsigned*& data, unsigned& num,
   in.read((char*) &dim, 4);
   std::cout << "data dimension: " << dim << std::endl;
   in.seekg(0, std::ios::end);
-  std::ios::pos_type ss = in.tellg();
+  std::ios::pos_type  ss = in.tellg();
 
   size_t fsize = (size_t) ss;
   num = (unsigned) (fsize / (dim + 1) / 4);
@@ -40,19 +41,11 @@ void load_fvecs(const char* filename, float*& data, unsigned& num,
                 unsigned& dim) {
   unsigned new_dim = 0;
   char*    buf;
-  int      fd;
-  fd = open(filename, O_RDONLY);
-  if (!(fd > 0)) {
-    std::cerr << "Data file " << filename
-              << " not found. Program will stop now." << std::endl;
-    assert(false);
-  }
-  struct stat sb;
-  fstat(fd, &sb);
-  off_t fileSize = sb.st_size;
-  //  assert(sizeof(off_t) == 8);
 
-  buf = (char*) mmap(NULL, fileSize, PROT_READ, MAP_PRIVATE, fd, 0);
+  NSG::MemoryMapper mapper(filename);
+  buf = mapper.getBuf();
+
+
   //  assert(buf);
   // size_t x=4;
   uint32_t file_dim;
@@ -78,14 +71,14 @@ void load_fvecs(const char* filename, float*& data, unsigned& num,
   for (size_t i = 0; i < new_dim; i++)
     zeros[i] = 0;
 
-  size_t num_t = (fileSize / (4 * dim_t + 4));
+  size_t num_t = (mapper.getFileSize() / (4 * dim_t + 4));
   num = (unsigned) num_t;
   data = new float[(size_t) num * (size_t) new_dim];
 
   std::cout << "# Points: " << num << ".." << std::flush;
 
 #pragma omp parallel for schedule(static, 65536)
-  for (size_t i = 0; i < num; i++) {
+  for (int64_t i = 0; i < num; i++) {
     uint32_t row_dim;
     char*    reader = buf + (i * (4 * dim_t + 4));
     std::memcpy((char*) &row_dim, reader, sizeof(uint32_t));
@@ -104,28 +97,17 @@ void load_fvecs(const char* filename, float*& data, unsigned& num,
       //(reader + 4), 		    new_dim * sizeof(float));
     }
   }
-  int val = munmap(buf, fileSize);
-  close(fd);
   std::cout << "done." << std::endl;
 }
 
 void load_bvecs(const char* filename, float*& data, unsigned& num,
                 unsigned& dim) {
-  unsigned new_dim = 0;
-  char*    buf;
-  int      fd;
-  fd = open(filename, O_RDONLY);
-  if (!(fd > 0)) {
-    std::cerr << "Data file " << filename
-              << " not found. Program will stop now." << std::endl;
-    assert(false);
-  }
-  struct stat sb;
-  fstat(fd, &sb);
-  off_t fileSize = sb.st_size;
-  //  assert(sizeof(off_t) == 8);
+  unsigned          new_dim = 0;
+  char*             buf;
 
-  buf = (char*) mmap(NULL, fileSize, PROT_READ, MAP_PRIVATE, fd, 0);
+
+  NSG::MemoryMapper mapper(filename);
+  buf = mapper.getBuf();
   //  assert(buf);
   // size_t x=4;
   uint32_t file_dim;
@@ -150,13 +132,13 @@ void load_bvecs(const char* filename, float*& data, unsigned& num,
   for (size_t i = 0; i < new_dim; i++)
     zeros[i] = 0;
 
-  num = (unsigned) (fileSize / (dim + 4));
+  num = (unsigned) (mapper.getFileSize() / (dim + 4));
   data = new float[(size_t) num * (size_t) new_dim];
 
   std::cout << "# Points: " << num << ".." << std::flush;
 
 #pragma omp parallel for schedule(static, 65536)
-  for (size_t i = 0; i < num; i++) {
+  for (int64_t i = 0; i < num; i++) {
     uint32_t row_dim;
     char*    reader = buf + (i * (dim + 4));
     std::memcpy((char*) &row_dim, reader, sizeof(uint32_t));
@@ -181,8 +163,7 @@ void load_bvecs(const char* filename, float*& data, unsigned& num,
       }
     }
   }
-  int val = munmap(buf, fileSize);
-  close(fd);
+
   std::cout << "done." << std::endl;
 }
 
@@ -219,8 +200,9 @@ void save_result(char* filename, unsigned* results, unsigned nd, unsigned nr) {
 
 int main(int argc, char** argv) {
   if ((argc != 8)) {
-    std::cout << argv[0] << " data_file query_file groundtruth nsg_path "
-                            "BFS-init=1/0 beamwidth recall@"
+    std::cout << argv[0]
+              << " data_file query_file groundtruth nsg_path "
+                 "BFS-init=1/0 beamwidth recall@"
               << std::endl;
     exit(-1);
   }
@@ -319,14 +301,14 @@ int main(int argc, char** argv) {
     long long total_hops = 0;
     long long total_cmps = 0;
 
-    auto    s = std::chrono::high_resolution_clock::now();
+    auto s = std::chrono::high_resolution_clock::now();
 #pragma omp parallel for schedule(static, 1)
-    for (unsigned i = 0; i < query_num; i++) {
+    for (int i = 0; i < query_num; i++) {
       auto ret =
           index.BeamSearch(query_load + i * dim, data_load, K, paras,
                            res + ((size_t) i) * K, beam_width, start_points);
-// auto ret = index.Search(query_load + i * dim, data_load, K, paras,
-// tmp.data());
+      // auto ret = index.Search(query_load + i * dim, data_load, K, paras,
+      // tmp.data());
 
 #pragma omp atomic
       total_hops += ret.first;

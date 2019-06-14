@@ -42,7 +42,13 @@ namespace NSG {
                                    unsigned *indices, int beam_width,
                                    std::vector<unsigned> &start_points);
 
-    void prefetch_vector(unsigned id);
+	//Gopal. Added BeamSearch overload that takes L as parameter, so that we 
+	//can customize L on a per-query basis without tampering with "Parameters"
+	std::pair<int, int> BeamSearch(
+        const T* query, const T* x, const size_t K,
+        const unsigned int L, unsigned *indices, int beam_width,
+        std::vector<unsigned> &start_points);
+
 
    protected:
     typedef std::vector<std::vector<unsigned>> CompactGraph;
@@ -66,8 +72,8 @@ namespace NSG {
                                 std::vector<Neighbor> &   retset,
                                 std::vector<Neighbor> &   fullset,
                                 tsl::robin_set<unsigned> &visited);
-    void compute_distances_batch(const unsigned *ids, float *dists,
-                                 const unsigned n_pts);
+    //void compute_distances_batch(const unsigned *ids, float *dists,
+    //                             const unsigned n_pts);
     void get_neighbors(const T *query, const Parameters &parameter,
                        std::vector<Neighbor> &retset,
                        std::vector<Neighbor> &fullset);

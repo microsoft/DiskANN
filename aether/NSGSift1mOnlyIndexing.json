@@ -1,0 +1,138 @@
+{
+  "VisualGraph": {
+    "Graph": {
+      "ModuleNodes": [
+        {
+          "Id": "12cfeae3",
+          "ModuleId": "371789ef-6495-4d48-be10-852caeddd123",
+          "CloudPriority": 0,
+          "DefaultDataRetentionHint": null,
+          "ModuleParameters": [],
+          "ModuleMetadataParameters": null,
+          "ModuleOutputSettings": null,
+          "ComplianceCluster": "",
+          "EuclidWorkspaceId": null,
+          "AttachedModules": null,
+          "AcceptableMachineClusters": [
+            "ElasticExePoolD14"
+          ],
+          "CustomDataLocationId": null,
+          "AlertTimeoutDuration": null
+        },
+        {
+          "Id": "bf89b554",
+          "ModuleId": "05d248c7-c8b0-45fc-b8a9-ed0ccf1f9911",
+          "CloudPriority": 0,
+          "DefaultDataRetentionHint": null,
+          "ModuleParameters": [],
+          "ModuleMetadataParameters": null,
+          "ModuleOutputSettings": null,
+          "ComplianceCluster": "",
+          "EuclidWorkspaceId": null,
+          "AttachedModules": null,
+          "AcceptableMachineClusters": [],
+          "CustomDataLocationId": null,
+          "AlertTimeoutDuration": null
+        }
+      ],
+      "DatasetNodes": [
+        {
+          "Id": "77871488",
+          "DatasetId": "67d02977-9717-4ef3-b708-bd3b2fe205bc",
+          "DataPathParameterName": null,
+          "DataSetDefinition": null
+        }
+      ],
+      "SubGraphNodes": [],
+      "Edges": [
+        {
+          "SourceOutputPort": {
+            "NodeId": "77871488",
+            "PortName": "",
+            "GraphPortName": null,
+            "IsParameter": false
+          },
+          "DestinationInputPort": {
+            "NodeId": "12cfeae3",
+            "PortName": "FVecsFile",
+            "GraphPortName": null,
+            "IsParameter": false
+          }
+        },
+        {
+          "SourceOutputPort": {
+            "NodeId": "12cfeae3",
+            "PortName": "NsgFile",
+            "GraphPortName": null,
+            "IsParameter": false
+          },
+          "DestinationInputPort": {
+            "NodeId": "bf89b554",
+            "PortName": "InputNSGIndex",
+            "GraphPortName": null,
+            "IsParameter": false
+          }
+        }
+      ],
+      "Id": null,
+      "WorkspaceId": null,
+      "Etag": null,
+      "Tags": null,
+      "CreatedDate": "1970-01-01T00:00:00",
+      "LastModifiedDate": "1970-01-01T00:00:00",
+      "EntityStatus": 0
+    },
+    "Layout": {
+      "NodeLayouts": {
+        "12cfeae3": {
+          "X": 469.5,
+          "Y": 124.41333,
+          "Width": 200.0,
+          "Height": 60.0
+        },
+        "77871488": {
+          "X": 219.5,
+          "Y": 27.4133339,
+          "Width": 200.0,
+          "Height": 60.0
+        },
+        "bf89b554": {
+          "X": 284.5,
+          "Y": 257.41333,
+          "Width": 479.0,
+          "Height": 60.0
+        }
+      },
+      "CommentThreads": {},
+      "Id": null,
+      "WorkspaceId": null,
+      "Etag": null,
+      "Tags": null,
+      "CreatedDate": "1970-01-01T00:00:00",
+      "LastModifiedDate": "1970-01-01T00:00:00",
+      "EntityStatus": 0
+    },
+    "Aliases": {
+      "AliasedValues": null,
+      "NodeAliases": {},
+      "Id": null,
+      "WorkspaceId": null,
+      "Etag": null,
+      "Tags": null,
+      "CreatedDate": "2019-05-07T19:54:52.303295+05:30",
+      "LastModifiedDate": "2019-05-07T19:54:52.303295+05:30",
+      "EntityStatus": 0
+    }
+  },
+  "Interface": {
+    "Parameters": [],
+    "Ports": {
+      "Inputs": [],
+      "Outputs": []
+    },
+    "ParameterNamesByGroups": [],
+    "MetadataParameters": null,
+    "DataPathParameters": null,
+    "DataPathParameterList": null
+  }
+}

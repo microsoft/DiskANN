@@ -9,7 +9,7 @@
 
 void load_data(const char* filename, unsigned*& data, size_t& num,
                unsigned& dim) {  // load data with sift10K pattern
-  std::ifstream in(std::string(filename), std::ios::binary);
+  std::ifstream  in(std::string(filename), std::ios::binary);
   std::cout << "Filename: " << filename << "\n";
   if (!in.is_open()) {
     std::cout << "open file error" << std::endl;
@@ -17,13 +17,14 @@ void load_data(const char* filename, unsigned*& data, size_t& num,
   }
   in.read((char*) &dim, 4);
   in.seekg(0, std::ios::end);
-  std::ios::pos_type ss = in.tellg();
-  size_t             fsize = (size_t) ss;
+  std::ios::pos_type  ss = in.tellg();
+  size_t  fsize = (size_t) ss;
   num = (unsigned) (fsize / (dim + 1) / 4);
-  auto data_size = (size_t) num * (size_t) dim;
+  auto  data_size = (size_t) num * (size_t) dim;
   std::cout << "data dimension: " << dim << std::endl;
   std::cout << "data num points: " << num << std::endl;
   data = new unsigned[data_size];
+
 
   unsigned* tmp_dim = new unsigned;
   in.seekg(0, std::ios::beg);
@@ -63,6 +64,21 @@ float calc_recall_set(unsigned num_queries, unsigned* gold_std, unsigned dim_gs,
          (100.0 / ((float) recall_at));
 }
 
+void print(int* data, int dim, int num_points, int num_lines) {
+  if (num_lines <= num_points) {
+    for (int i = 0; i < num_lines; i++) {
+      for (int j = 0; j < dim; j++) {
+        std::cout << *((data + i * dim) + j) << ",";
+      }
+      std::cout << std::endl;
+    }
+  } else {
+    std::cerr << "Num lines to print: " << num_lines
+              << " should be <= num_points(" << num_points << ")" << std::endl;
+  }
+   
+}
+
 int main(int argc, char** argv) {
   if (argc != 4 && argc != 5) {
     std::cout << argv[0] << " data_file1 data_file2 r r2(optonal, equal to 1)"
@@ -76,6 +92,7 @@ int main(int argc, char** argv) {
   unsigned  dim_or;
   load_data(argv[1], gold_std, points_num, dim_gs);
   load_data(argv[2], our_results, points_num, dim_or);
+
   size_t   recall = 0;
   size_t   total_recall = 0;
   uint32_t recall_at = std::atoi(argv[3]);

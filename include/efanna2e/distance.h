@@ -70,10 +70,15 @@ namespace NSG {
 
   class DistanceL2 : public Distance<float> {
    public:
+#ifndef __NSG_WINDOWS__
     float compare(const float *a, const float *b, unsigned size) const
         __attribute__((hot)) {
       a = (const float *) __builtin_assume_aligned(a, 32);
       b = (const float *) __builtin_assume_aligned(b, 32);
+#else
+    float compare(const float *a, const float *b, unsigned size) const {
+#endif
+
       float result = 0;
 #ifdef USE_AVX2
       // assume size is divisible by 8
@@ -108,19 +113,10 @@ namespace NSG {
       for (_s32 i = 0; i < size; i++) {
         result += (a[i] - b[i]) * (a[i] - b[i]);
       }
-//			for (_s32 i = 0; i < size; i++) {
-//				float diff = ((float) a[i] - (float) b[i]);
-//				std::cout << "a: " << (float) a[i] << ", b: " << (float) b[i] << ",
-// diff: " << diff << "\n";
-//        result += diff * diff;
-//      }
-
 #endif
-      //			std::cout << "a[0] --> " << a[0] << ", a[size] --> " << a[size] <<
-      //", dist: " << result << "\n";
       return result;
     }
-  };
+  };  // namespace NSG
 
   class DistanceInnerProduct : public Distance<float> {
    public:

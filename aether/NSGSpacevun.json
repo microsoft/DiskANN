@@ -1,0 +1,301 @@
+{
+  "VisualGraph": {
+    "Graph": {
+      "ModuleNodes": [
+        {
+          "Id": "6f561e76",
+          "ModuleId": "e0391be8-ce52-4b52-aaca-06d65c15e4fd",
+          "CloudPriority": 0,
+          "DefaultDataRetentionHint": null,
+          "ModuleParameters": [],
+          "ModuleMetadataParameters": null,
+          "ModuleOutputSettings": null,
+          "ComplianceCluster": null,
+          "EuclidWorkspaceId": null,
+          "AttachedModules": null,
+          "AcceptableMachineClusters": [],
+          "CustomDataLocationId": null,
+          "AlertTimeoutDuration": null
+        },
+        {
+          "Id": "f9e35be4",
+          "ModuleId": "42e4a63c-ffb0-4b11-8e21-50857cd89969",
+          "CloudPriority": 0,
+          "DefaultDataRetentionHint": null,
+          "ModuleParameters": [
+            {
+              "ValueType": 0,
+              "AssignmentsToConcatenate": null,
+              "Name": "AccountName",
+              "Value": "kannstorage"
+            },
+            {
+              "ValueType": 0,
+              "AssignmentsToConcatenate": null,
+              "Name": "BlobContainer",
+              "Value": "maincontainer"
+            },
+            {
+              "ValueType": 0,
+              "AssignmentsToConcatenate": null,
+              "Name": "RelativePath",
+              "Value": "data/bing_kann/spacevun/spacevun_IVF-10_subshard-0.fvecs"
+            },
+            {
+              "ValueType": 0,
+              "AssignmentsToConcatenate": null,
+              "Name": "SasToken",
+              "Value": "?sv=2018-03-28&ss=bfqt&srt=sco&sp=rwdlacup&se=2019-05-31T01:57:21Z&st=2019-05-07T17:57:21Z&spr=https&sig=4wYCZVIPtIkSzF0cMRLvpBFYoNQjwAOdp0jLOZzA%2Bik%3D"
+            }
+          ],
+          "ModuleMetadataParameters": null,
+          "ModuleOutputSettings": null,
+          "ComplianceCluster": null,
+          "EuclidWorkspaceId": null,
+          "AttachedModules": null,
+          "AcceptableMachineClusters": [],
+          "CustomDataLocationId": null,
+          "AlertTimeoutDuration": null
+        },
+        {
+          "Id": "d6a649ff",
+          "ModuleId": "f89f2653-c50f-4171-aea9-799e05fa162f",
+          "CloudPriority": 0,
+          "DefaultDataRetentionHint": null,
+          "ModuleParameters": [],
+          "ModuleMetadataParameters": null,
+          "ModuleOutputSettings": null,
+          "ComplianceCluster": "",
+          "EuclidWorkspaceId": null,
+          "AttachedModules": null,
+          "AcceptableMachineClusters": [
+            "ElasticExePoolD14"
+          ],
+          "CustomDataLocationId": null,
+          "AlertTimeoutDuration": null
+        },
+        {
+          "Id": "2d65ef72",
+          "ModuleId": "05d248c7-c8b0-45fc-b8a9-ed0ccf1f9911",
+          "CloudPriority": 0,
+          "DefaultDataRetentionHint": null,
+          "ModuleParameters": [],
+          "ModuleMetadataParameters": null,
+          "ModuleOutputSettings": null,
+          "ComplianceCluster": "",
+          "EuclidWorkspaceId": null,
+          "AttachedModules": null,
+          "AcceptableMachineClusters": [],
+          "CustomDataLocationId": null,
+          "AlertTimeoutDuration": null
+        },
+        {
+          "Id": "92289e42",
+          "ModuleId": "42e4a63c-ffb0-4b11-8e21-50857cd89969",
+          "CloudPriority": 0,
+          "DefaultDataRetentionHint": null,
+          "ModuleParameters": [
+            {
+              "ValueType": 0,
+              "AssignmentsToConcatenate": null,
+              "Name": "AccountName",
+              "Value": "kannstorage"
+            },
+            {
+              "ValueType": 0,
+              "AssignmentsToConcatenate": null,
+              "Name": "BlobContainer",
+              "Value": "maincontainer"
+            },
+            {
+              "ValueType": 0,
+              "AssignmentsToConcatenate": null,
+              "Name": "RelativePath",
+              "Value": "data/bing_kann/spacevun/spacevun_base_int8.bin "
+            },
+            {
+              "ValueType": 0,
+              "AssignmentsToConcatenate": null,
+              "Name": "SasToken",
+              "Value": "?sv=2018-03-28&ss=bfqt&srt=sco&sp=rwdlacup&se=2019-05-31T01:57:21Z&st=2019-05-07T17:57:21Z&spr=https&sig=4wYCZVIPtIkSzF0cMRLvpBFYoNQjwAOdp0jLOZzA%2Bik%3D"
+            }
+          ],
+          "ModuleMetadataParameters": null,
+          "ModuleOutputSettings": null,
+          "ComplianceCluster": null,
+          "EuclidWorkspaceId": null,
+          "AttachedModules": null,
+          "AcceptableMachineClusters": [],
+          "CustomDataLocationId": null,
+          "AlertTimeoutDuration": null
+        },
+        {
+          "Id": "4c0db730",
+          "ModuleId": "e0391be8-ce52-4b52-aaca-06d65c15e4fd",
+          "CloudPriority": 0,
+          "DefaultDataRetentionHint": null,
+          "ModuleParameters": [],
+          "ModuleMetadataParameters": null,
+          "ModuleOutputSettings": null,
+          "ComplianceCluster": null,
+          "EuclidWorkspaceId": null,
+          "AttachedModules": null,
+          "AcceptableMachineClusters": [],
+          "CustomDataLocationId": null,
+          "AlertTimeoutDuration": null
+        }
+      ],
+      "DatasetNodes": [],
+      "SubGraphNodes": [],
+      "Edges": [
+        {
+          "SourceOutputPort": {
+            "NodeId": "f9e35be4",
+            "PortName": "AzureBlobPathOut",
+            "GraphPortName": null,
+            "IsParameter": false
+          },
+          "DestinationInputPort": {
+            "NodeId": "6f561e76",
+            "PortName": "InFile",
+            "GraphPortName": null,
+            "IsParameter": false
+          }
+        },
+        {
+          "SourceOutputPort": {
+            "NodeId": "6f561e76",
+            "PortName": "OutFile",
+            "GraphPortName": null,
+            "IsParameter": false
+          },
+          "DestinationInputPort": {
+            "NodeId": "d6a649ff",
+            "PortName": "FVecsFile",
+            "GraphPortName": null,
+            "IsParameter": false
+          }
+        },
+        {
+          "SourceOutputPort": {
+            "NodeId": "d6a649ff",
+            "PortName": "NsgFile",
+            "GraphPortName": null,
+            "IsParameter": false
+          },
+          "DestinationInputPort": {
+            "NodeId": "2d65ef72",
+            "PortName": "InputNSGIndex",
+            "GraphPortName": null,
+            "IsParameter": false
+          }
+        },
+        {
+          "SourceOutputPort": {
+            "NodeId": "4c0db730",
+            "PortName": "OutFile",
+            "GraphPortName": null,
+            "IsParameter": false
+          },
+          "DestinationInputPort": {
+            "NodeId": "2d65ef72",
+            "PortName": "DataBinaryFile",
+            "GraphPortName": null,
+            "IsParameter": false
+          }
+        },
+        {
+          "SourceOutputPort": {
+            "NodeId": "92289e42",
+            "PortName": "AzureBlobPathOut",
+            "GraphPortName": null,
+            "IsParameter": false
+          },
+          "DestinationInputPort": {
+            "NodeId": "4c0db730",
+            "PortName": "InFile",
+            "GraphPortName": null,
+            "IsParameter": false
+          }
+        }
+      ],
+      "Id": null,
+      "WorkspaceId": null,
+      "Etag": null,
+      "Tags": null,
+      "CreatedDate": "1970-01-01T00:00:00",
+      "LastModifiedDate": "1970-01-01T00:00:00",
+      "EntityStatus": 0
+    },
+    "Layout": {
+      "NodeLayouts": {
+        "6f561e76": {
+          "X": 209.166672,
+          "Y": 211.873337,
+          "Width": 200.0,
+          "Height": 60.0
+        },
+        "f9e35be4": {
+          "X": 291.833344,
+          "Y": 55.206665,
+          "Width": 214.666672,
+          "Height": 89.3333359
+        },
+        "d6a649ff": {
+          "X": 233.833328,
+          "Y": 354.54,
+          "Width": 200.0,
+          "Height": 60.0
+        },
+        "2d65ef72": {
+          "X": 370.5,
+          "Y": 492.706665,
+          "Width": 200.0,
+          "Height": 60.0
+        },
+        "92289e42": {
+          "X": 595.8333,
+          "Y": 32.9533348,
+          "Width": 200.0,
+          "Height": 110.666664
+        },
+        "4c0db730": {
+          "X": 667.3083,
+          "Y": 202.953339,
+          "Width": 200.0,
+          "Height": 60.0
+        }
+      },
+      "CommentThreads": {},
+      "Id": null,
+      "WorkspaceId": null,
+      "Etag": null,
+      "Tags": null,
+      "CreatedDate": "1970-01-01T00:00:00",
+      "LastModifiedDate": "1970-01-01T00:00:00",
+      "EntityStatus": 0
+    },
+    "Aliases": {
+      "AliasedValues": null,
+      "NodeAliases": {},
+      "Id": null,
+      "WorkspaceId": null,
+      "Etag": null,
+      "Tags": null,
+      "CreatedDate": "2019-05-28T16:33:46.45604+05:30",
+      "LastModifiedDate": "2019-05-28T16:33:46.45604+05:30",
+      "EntityStatus": 0
+    }
+  },
+  "Interface": {
+    "Parameters": [],
+    "Ports": {
+      "Inputs": [],
+      "Outputs": []
+    },
+    "ParameterNamesByGroups": [],
+    "MetadataParameters": null,
+    "DataPathParameters": null,
+    "DataPathParameterList": null
+  }
+}

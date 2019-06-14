@@ -134,7 +134,11 @@ namespace NSG {
       assert(aligned_fp32_coords == nullptr);
       assert(disk_coords == nullptr);
       this->dim = dim;
+#ifndef __NSG_WINDOWS__
       alloc_aligned(&buf, buf_size, 4096);
+#else
+      buf = _aligned_malloc(buf_size, 4096);
+#endif
     }
 
     // alloc mem, create fp32 coords
@@ -173,11 +177,19 @@ namespace NSG {
     void cleanup() {
       // clear up any unused mem
       if (buf != nullptr) {
+#ifndef __NSG_WINDOWS__
         aligned_free(buf);
+#else
+        _aligned_free(buf);
+#endif
       }
 
       if (aligned_fp32_coords != nullptr) {
+#ifndef __NSG_WINDOWS__
         aligned_free(aligned_fp32_coords);
+#else
+        _aligned_free(buf);
+#endif
       }
 
       buf = nullptr;
@@ -224,4 +236,4 @@ namespace NSG {
     addr[right] = nn;
     return right;
   }
-}
+}  // namespace NSG
