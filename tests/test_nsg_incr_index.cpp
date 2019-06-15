@@ -229,10 +229,9 @@ int main(int argc, char** argv) {
   }
   index.Save(save_path.c_str());
 
-
   tsl::robin_set<unsigned> delete_list;
   while (delete_list.size() < num_incr)
-    delete_set.insert((rand() * rand() * rand()) % points_num);
+    delete_list.insert((rand() * rand() * rand()) % points_num);
   std::cout << "Deleting " << delete_list.size() << " elements" << std::endl;
 
   {
