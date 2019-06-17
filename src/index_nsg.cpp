@@ -60,6 +60,7 @@ namespace NSG {
   // Do not call consolidate_deletes() if you have not locked change_lock_.
   // Returns number of live points left after consolidation
   size_t IndexNSG::consolidate_deletes(const Parameters &parameters) {
+
     assert(!consolidated_order_);
     assert(can_delete_);
     assert(enable_tags_);
@@ -110,32 +111,32 @@ namespace NSG {
         for (auto j : result)
           final_graph_[ngh].push_back(j.id);
       }
+      --nd_;       // Decrement #points in index
 
-      // Decrement #points in index
-      --nd_;
-
-      // If start node is removed, replace it.
-      if (i == ep_) {
+      if (i == ep_) { // If start node is removed, replace it.
         std::cerr << "Start node is being deleted." << std::endl;
       }
     }
 
-    std::cout << "Re-numbering graph connections and contracted data..."
+    std::cout << "Re-numbering nodes and edges and consolidating data..."
               << std::endl;
     for (unsigned old = 0; old < nd_; ++old) {
-      // Renumber nodes to compact the order
-      for (size_t i = 0; i < final_graph_[old].size(); ++i) {
-        assert(new_ids[final_graph_[old][i]] < max_points_);
-        final_graph_[old][i] = new_ids[final_graph_[old][i]];
-      }
+      if (new_ids[old] < max_points_) { // If point continues to exist
 
-      // Move the data to the correct position
-      memcpy((void *) (data_ + dimension_ * (size_t) new_ids[old]),
-             (void *) (data_ + dimension_ * (size_t) old),
-             dimension_ * sizeof(float));
+        // Renumber nodes to compact the order
+        for (size_t i = 0; i < final_graph_[old].size(); ++i) {
+          assert(new_ids[final_graph_[old][i]] < max_points_);
+          final_graph_[old][i] = new_ids[final_graph_[old][i]];
+        }
+
+        // Move the data to the correct position
+        memcpy((void *) (data_ + dimension_ * (size_t) new_ids[old]),
+               (void *) (data_ + dimension_ * (size_t) old),
+               dimension_ * sizeof(float));
+      }
     }
 
-    std::cout << "Updating hash map to lookup tags and ids..." << std::endl;
+    std::cout << "Updating mapping between tags and ids..." << std::endl;
     // Update the location pointed to by tag
     for (auto iter : tag_to_point_) {
       auto tag = iter.first;
@@ -246,7 +247,7 @@ namespace NSG {
   /* init_rnd_nn_graph():
    * num_points: Number of points in the dataset
    * k: max degree of the graph
-   * mapping: initial vector of 10% of the points in the dataset
+   * mapping: initial vector of a sample of the points in the dataset
    */
   void IndexNSG::Init_rnd_nn_graph(size_t num_points, unsigned k,
                                    std::vector<size_t> mapping) {
@@ -254,14 +255,14 @@ namespace NSG {
     final_graph_.resize(max_points_);
     final_graph_.reserve(max_points_);
     if (!mapping.empty())
-      num_points =
-          mapping.size();  // num_points now = 10% of the points in dataset
+      num_points = mapping.size();
     else {
       mapping.resize(num_points);
       std::iota(std::begin(mapping), std::end(mapping), 0);
     }
 
-    std::cout << "Generating random graph.." << std::flush;
+    std::cout << "Generating random graph with " << num_points
+		<< " points... " ;
     // PAR_BLOCK_SZ gives the number of points that can fit in a single block
     size_t PAR_BLOCK_SZ = (1 << 16);  // = 64KB
     size_t nblocks = DIV_ROUND_UP(num_points, PAR_BLOCK_SZ);
@@ -286,7 +287,7 @@ namespace NSG {
       }
     }
     ep_ = get_entry_point();
-    std::cout << "done. Entry point set to " << ep_ << "." << std::endl;
+    std::cout << "done.\n" << "Entry point set to " << ep_ << "." << std::endl;
   }
 
   /* iterate_to_fixed_point():

@@ -4,6 +4,7 @@
 
 #include <efanna2e/index_nsg.h>
 #include <efanna2e/util.h>
+#include <efanna2e/timer.h>
 
 #include <omp.h>
 #include <string.h>
@@ -171,17 +172,17 @@ int main(int argc, char** argv) {
   }
 
   float*   data_load = NULL;
-  unsigned points_num, dim;
+  unsigned num_points, dim;
 
   std::string bvecs(".bvecs");
   std::string base_file(argv[1]);
   if (base_file.find(bvecs) == std::string::npos) {
-    load_fvecs(argv[1], data_load, points_num, dim);
+    load_fvecs(argv[1], data_load, num_points, dim);
   } else {
-    load_bvecs(argv[1], data_load, points_num, dim);
+    load_bvecs(argv[1], data_load, num_points, dim);
   }
 
-  data_load = NSG::data_align(data_load, points_num, dim);
+  data_load = NSG::data_align(data_load, num_points, dim);
   std::cout << "Data loaded and aligned" << std::endl;
 
   unsigned    L = (unsigned) atoi(argv[2]);
@@ -198,20 +199,18 @@ int main(int argc, char** argv) {
   paras.Set<float>("alpha", alpha);
   paras.Set<unsigned>("num_rnds", num_rnds);
 
-  //unsigned num_points = 100000;
+  num_points = 300000;
   unsigned num_incr = 10000;
 
-  NSG::IndexNSG index(dim, points_num - num_incr, NSG::L2, nullptr, points_num,
+  NSG::IndexNSG index(dim, num_points - num_incr, NSG::L2, nullptr, num_points,
                       true);
   {
-    std::vector<tag_t> tags(points_num - num_incr);
+    std::vector<tag_t> tags(num_points - num_incr);
     std::iota(tags.begin(), tags.end(), 0);
 
-    auto s = std::chrono::high_resolution_clock::now();
+    NSG::Timer timer;
     index.BuildRandomHierarchical(data_load, paras, tags);
-    std::chrono::duration<double> diff =
-        std::chrono::high_resolution_clock::now() - s;
-    std::cout << "Indexing time: " << diff.count() << "\n";
+    std::cout << "Index time: " << timer.elapsed() / 1000 << "ms\n";
   }
 
   std::vector<NSG::Neighbor>       pool, tmp;
@@ -219,23 +218,21 @@ int main(int argc, char** argv) {
   std::vector<NSG::SimpleNeighbor> cut_graph;
 
   {
-    auto s = std::chrono::high_resolution_clock::now();
-    for (unsigned i = points_num - num_incr; i < points_num; ++i)
+    NSG::Timer timer;
+    for (unsigned i = num_points - num_incr; i < num_points; ++i)
       index.insert_point(data_load + (size_t) i * (size_t) dim, paras, pool,
                          tmp, visited, cut_graph, i);
-    std::chrono::duration<double> diff =
-        std::chrono::high_resolution_clock::now() - s;
-    std::cout << "Incremental time: " << diff.count() << "\n";
+    std::cout << "Incremental time: " << timer.elapsed() / 1000 << "ms\n";
   }
   index.Save(save_path.c_str());
 
   tsl::robin_set<unsigned> delete_list;
   while (delete_list.size() < num_incr)
-    delete_list.insert((rand() * rand() * rand()) % points_num);
+    delete_list.insert((rand() * rand() * rand()) % num_points);
   std::cout << "Deleting " << delete_list.size() << " elements" << std::endl;
 
   {
-    auto s = std::chrono::high_resolution_clock::now();
+    NSG::Timer timer;
     index.enable_delete();
     for (auto p : delete_list)
       if (index.delete_point(p) != 0)
@@ -246,19 +243,15 @@ int main(int argc, char** argv) {
       std::cerr << "Disable delete failed" << std::endl;
       return -1;
     }
-    std::chrono::duration<double> diff =
-        std::chrono::high_resolution_clock::now() - s;
-    std::cout << "Delete time: " << diff.count() << "\n";
+    std::cout << "Delete time: " << timer.elapsed() / 1000 << "ms\n";
   }
 
   {
-    auto s = std::chrono::high_resolution_clock::now();
+    NSG::Timer timer;
     for (auto p : delete_list)
       index.insert_point(data_load + (size_t) p * (size_t) dim, paras, pool,
                          tmp, visited, cut_graph, p);
-    std::chrono::duration<double> diff =
-        std::chrono::high_resolution_clock::now() - s;
-    std::cout << "Re-Incremental time: " << diff.count() << "\n";
+    std::cout << "Re-incremental time: " << timer.elapsed() / 1000 << "ms\n";
   }
 
   auto save_path_reinc = save_path + ".reinc";

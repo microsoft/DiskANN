@@ -15,7 +15,7 @@ namespace NSG {
     }
 
     // returns elapsed time in `us`
-    uint32_t elapsed() const {
+    long long elapsed() const {
       return std::chrono::duration_cast<std::chrono::microseconds>(
                  clock_::now() - m_beg)
           .count();
