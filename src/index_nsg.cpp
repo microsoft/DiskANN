@@ -79,11 +79,11 @@ namespace NSG {
         new_ids[old] = active++;
     assert(active + empty_slots_.size() + delete_list_.size() == max_points_);
 
-    for (auto i : delete_list_) {
-      tsl::robin_set<unsigned> candidate_set;
-      std::vector<Neighbor>    expanded_nghrs;
-      std::vector<Neighbor>    result;
+    tsl::robin_set<unsigned> candidate_set;
+    std::vector<Neighbor>    expanded_nghrs;
+    std::vector<Neighbor>    result;
 
+    for (auto i : delete_list_) {
       // Remove point, and create new links from neighbors
       for (auto ngh : final_graph_[i]) {
         candidate_set.clear();
@@ -97,6 +97,8 @@ namespace NSG {
         for (auto j : final_graph_[i])
           if (delete_list_.find(j) == delete_list_.end())
             candidate_set.insert(j);
+        for (auto iter : candidate_set)
+          assert(empty_slots_.find(iter) == empty_slots_.end());
 
         for (auto j : candidate_set)
           expanded_nghrs.push_back(
@@ -106,23 +108,38 @@ namespace NSG {
                                           (unsigned) dimension_),
                        true));
 
-		std::sort(expanded_nghrs.begin(), expanded_nghrs.end());
+        std::sort(expanded_nghrs.begin(), expanded_nghrs.end());
         occlude_list(expanded_nghrs, ngh, alpha, range, maxc, result);
 
         final_graph_[ngh].clear();
         for (auto j : result)
           final_graph_[ngh].push_back(j.id);
 
-		for (auto iter : final_graph_[ngh]) {
+        for (auto iter : final_graph_[ngh]) {
           assert(delete_list_.find(iter) == delete_list_.end());
           assert(empty_slots_.find(iter) == empty_slots_.end());
         }
       }
       --nd_;  // Decrement #points in index
 
-      if (i == ep_) {              // If start node is removed, replace it.
-        ep_ = final_graph_[i][0];  // First neighbor of old start node
-        std::cerr << "Start node is being deleted." << std::endl;
+      // If start node is removed, replace it.
+      if (i == ep_) {
+        std::cerr << "Replacing start node which has been deleted... "
+                  << std::flush;
+        // First active neighbor of old start node is new start node
+        for (auto iter : final_graph_[i])
+          if (delete_list_.find(iter) != delete_list_.end()) {
+            ep_ = iter;
+            break;
+          }
+        if (ep_ == i) {
+          std::cerr << "ERROR: Did not find a replacement for start node."
+                    << std::endl;
+          exit(-1);
+        } else {
+          assert(delete_list_.find(ep_) == delete_list_.end());
+          std::cout << "New start node is " << ep_ << std::endl;
+        }
       }
     }
 
@@ -130,7 +147,9 @@ namespace NSG {
               << std::flush;
     unsigned copied = 0;
     for (unsigned old = 0; old < max_points_; ++old) {
-      if (new_ids[old] < max_points_) {  // If point continues to exist
+      if (empty_slots_.find(old) == empty_slots_.end() &&
+          delete_list_.find(old) == delete_list_.end()) {
+        assert(new_ids[old] < max_points_);  // If point continues to exist
         ++copied;
 
         // Renumber nodes to compact the order
@@ -587,8 +606,8 @@ namespace NSG {
     bool *visited = new bool[nd_]();
     std::fill(visited, visited + nd_, false);
     std::map<unsigned, std::vector<tsl::robin_set<unsigned>>> bfs_orders;
-    unsigned start_node = ep_;
-    bool     complete = false;
+    unsigned                                                  start_node = ep_;
+    bool                                                      complete = false;
     bfs_orders.insert(
         std::make_pair(start_node, std::vector<tsl::robin_set<unsigned>>()));
     auto &bfs_order = bfs_orders[start_node];
@@ -661,7 +680,7 @@ namespace NSG {
       center[j] /= nd_;
 
     // compute all to one distance
-    float * distances = new float[nd_]();
+    float *distances = new float[nd_]();
 #pragma omp parallel for schedule(static, 65536)
     for (size_t i = 0; i < nd_; i++) {
       // extract point and distance reference
@@ -823,7 +842,7 @@ namespace NSG {
         result.emplace_back(result2[i]);
       }
       /* convert it into a set, so that duplicates are all removed.
-      */
+       */
       std::set<Neighbor> s(result.begin(), result.end());
       result.assign(s.begin(), s.end());
     }
@@ -890,10 +909,9 @@ namespace NSG {
           /* temp_pool contains distance of each node in graph_copy, from
            * neighbor of n */
           temp_pool.emplace_back(SimpleNeighbor(
-              node,
-              distance_->compare(data_ + dimension_ * (size_t) node,
-                                 data_ + dimension_ * (size_t) des.id,
-                                 (unsigned) dimension_)));
+              node, distance_->compare(data_ + dimension_ * (size_t) node,
+                                       data_ + dimension_ * (size_t) des.id,
+                                       (unsigned) dimension_)));
         /* sort temp_pool according to distance from neighbor of n */
         std::sort(temp_pool.begin(), temp_pool.end());
         for (auto iter = temp_pool.begin(); iter + 1 != temp_pool.end(); ++iter)
