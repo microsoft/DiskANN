@@ -116,15 +116,15 @@ namespace NSG {
     size_t consolidate_deletes(const Parameters &parameters);
 
    private:
-    unsigned width;
+    unsigned width_;
     unsigned ep_;
     char *   opt_graph_;
     size_t   node_size;
     size_t   data_len;
     size_t   neighbor_len;
 
-    std::vector<std::mutex> locks;  // Per node lock, cardinality=max_points_
-    std::mutex change_lock_;        // Allow only 1 thread to insert/delete
+    std::vector<std::mutex> locks_;  // Per node lock, cardinality=max_points_
+    std::mutex change_lock_;         // Allow only 1 thread to insert/delete
 
     bool can_delete_;
     bool enable_tags_;

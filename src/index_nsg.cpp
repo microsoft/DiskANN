@@ -26,9 +26,9 @@ namespace NSG {
                      Index *initializer, const size_t max_points,
                      const bool enable_tags)
       : Index(dimension, n, m, max_points), initializer_{initializer},
-        can_delete_(false), enable_tags_(enable_tags),
-        consolidated_order_(true), width(0) {
-    locks = std::vector<std::mutex>(max_points_);
+        width_(0), can_delete_(false), enable_tags_(enable_tags),
+        consolidated_order_(true) {
+    locks_ = std::vector<std::mutex>(max_points_);
   }
 
   IndexNSG::~IndexNSG() {
@@ -37,7 +37,7 @@ namespace NSG {
   int IndexNSG::enable_delete() {
     LockGuard guard(change_lock_);
     assert(!can_delete_);
-    assert(!enable_tags_);
+    assert(enable_tags_);
     if (can_delete_) {
       std::cerr << "Delete already enabled" << std::endl;
       return -1;
@@ -66,9 +66,9 @@ namespace NSG {
     assert(delete_list_.size() <= nd_);
     assert(empty_slots_.size() + nd_ == max_points_);
 
-    unsigned range = parameters.Get<unsigned>("R");
-    unsigned maxc = parameters.Get<unsigned>("C");
-    float    alpha = parameters.Get<float>("alpha");
+    const unsigned range = parameters.Get<unsigned>("R");
+    const unsigned maxc = parameters.Get<unsigned>("C");
+    const float    alpha = parameters.Get<float>("alpha");
 
     std::vector<unsigned> new_ids;
     new_ids.resize(max_points_, max_points_);
@@ -205,7 +205,7 @@ namespace NSG {
     assert(final_graph_.size() == max_points_);
 
     long long total_gr_edges = 0;
-    out.write((char *) &width, sizeof(unsigned));
+    out.write((char *) &width_, sizeof(unsigned));
     out.write((char *) &ep_, sizeof(unsigned));
     for (unsigned i = 0; i < nd_; i++) {
       unsigned GK = (unsigned) final_graph_[i].size();
@@ -221,9 +221,8 @@ namespace NSG {
 
   void IndexNSG::Load(const char *filename) {
     std::ifstream in(filename, std::ios::binary);
-    in.read((char *) &width, sizeof(unsigned));
+    in.read((char *) &width_, sizeof(unsigned));
     in.read((char *) &ep_, sizeof(unsigned));
-    // width=100;
     size_t   cc = 0;
     unsigned nodes = 0;
     while (!in.eof()) {
@@ -723,7 +722,7 @@ namespace NSG {
     unsigned maxc = parameter.Get<unsigned>("C");
     float    alpha = parameter.Get<float>("alpha");
 
-    width = std::max(width, range);
+    width_ = (std::max)(width_, range);
 
     /* check the neighbors of the query that are not part of visited,
      * check their distance to the query, and add it to pool.
@@ -849,7 +848,7 @@ namespace NSG {
 
       std::vector<unsigned> graph_copy;
       {
-        LockGuard guard(locks[des.id]);
+        LockGuard guard(locks_[des.id]);
         for (auto nn : des_pool) {
           assert(nn >= 0 && nn < nd_);
           if (n == nn) {
@@ -868,9 +867,7 @@ namespace NSG {
         assert(des_pool.size() == range);
         graph_copy = des_pool;
         graph_copy.emplace_back(n);
-        /* at this point, graph_copy contains the neighbors of neighbor of n,
-         * and also contains n
-         */
+        // at this point, graph_copy contains n and neighbors of neighbor of n
       }  // des lock is released by this point
 
       assert(graph_copy.size() == 1 + range);
@@ -947,15 +944,12 @@ namespace NSG {
             if (!occlude)
               result2.emplace_back(p);
           }
-          for (auto r2 : result2) {
-            for (auto r : result)
-              assert(r.id != r2.id);
+          for (auto r2 : result2)
             result.emplace_back(r2);
-          }
         }
 
         {
-          LockGuard guard(locks[des.id]);
+          LockGuard guard(locks_[des.id]);
           assert(result.size() <= range);
           des_pool.clear();
           for (auto iter : result)
@@ -982,20 +976,16 @@ namespace NSG {
       NUM_SYNCS = 4 * NUM_SYNCS;
     std::cout << "Number of syncs: " << NUM_SYNCS << std::endl;
 
-    const uint32_t NUM_RNDS = parameters.Get<unsigned>(
+    const unsigned NUM_RNDS = parameters.Get<unsigned>(
         "num_rnds");  // num. of passes of overall algorithm
     const unsigned L = parameters.Get<unsigned>("L");  // Search list size
-    const unsigned range =
-        parameters.Get<unsigned>("R");                 // Max degree of graph
-    const unsigned C = parameters.Get<unsigned>("C");  // Candidate list size
-    float          last_round_alpha =
-        parameters.Get<float>("alpha");  // Pruning parameter
 
-    parameters.Set<unsigned>("L", L);
-    parameters.Set<unsigned>("C", C);
-    parameters.Set<float>("alpha", 1);  // alpha is hardcoded to 1 for the first
-                                        // pass, for last pass alone we will use
-                                        // the specified value
+    // Max degree of graph
+    const unsigned range = parameters.Get<unsigned>("R");
+    // Pruning parameter
+    const float last_round_alpha = parameters.Get<float>("alpha");
+    // Set alpha=1 for the first pass; use specified alpha for last pass
+    parameters.Set<float>("alpha", 1);
 
     /* rand_perm is a vector that is initialized to the entire graph */
     std::vector<unsigned> rand_perm;
@@ -1010,7 +1000,6 @@ namespace NSG {
     Init_rnd_nn_graph(nd_, range);
 
     assert(final_graph_.size() == max_points_);
-    // std::vector<std::mutex> locks(max_points_);
     auto cut_graph_ = new vecNgh[nd_];
 
     for (uint32_t rnd_no = 0; rnd_no < NUM_RNDS; rnd_no++) {
@@ -1105,7 +1094,6 @@ namespace NSG {
   void IndexNSG::BuildRandomHierarchical(const float *             data,
                                          Parameters &              parameters,
                                          const std::vector<tag_t> &tags) {
-    unsigned range = parameters.Get<unsigned>("R");
     data_ = data;
 
     if (enable_tags_) {
@@ -1133,7 +1121,7 @@ namespace NSG {
               << "  avg:" << (float) total / (float) nd_ << "  min:" << min
               << "  count(deg<2):" << cnt << "\n";
 
-    width = std::max((unsigned) max, width);
+    width_ = (std::max)((unsigned) max, width_);
     has_built = true;
   }
 
@@ -1298,7 +1286,7 @@ namespace NSG {
     auto       indices = alloc ? new unsigned[K] : indices_buffer;
     auto       ret =
         BeamSearch(query, x, K, parameters, indices, beam_width, start_points);
-    for (int i = 0; i < K; ++i)
+    for (int i = 0; i < (int) K; ++i)
       tags[i] = point_to_tag_[indices[i]];
     if (alloc)
       delete[] indices;

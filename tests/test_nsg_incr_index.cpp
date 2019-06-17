@@ -198,7 +198,7 @@ int main(int argc, char** argv) {
   paras.Set<float>("alpha", alpha);
   paras.Set<unsigned>("num_rnds", num_rnds);
 
-  /// unsigned num_points = 100000;
+  //unsigned num_points = 100000;
   unsigned num_incr = 10000;
 
   NSG::IndexNSG index(dim, points_num - num_incr, NSG::L2, nullptr, points_num,
