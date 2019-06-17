@@ -199,8 +199,7 @@ int main(int argc, char** argv) {
   paras.Set<float>("alpha", alpha);
   paras.Set<unsigned>("num_rnds", num_rnds);
 
-  num_points = 100000;
-  unsigned num_incr = 1000;
+  unsigned num_incr = 100000;
 
   auto data_copy = new float[num_points * dim];
   memcpy((void*) data_copy, (void*) data_load,

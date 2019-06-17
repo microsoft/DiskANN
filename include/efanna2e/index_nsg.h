@@ -133,7 +133,7 @@ namespace NSG {
     std::unordered_map<tag_t, unsigned> tag_to_point_;
     std::unordered_map<unsigned, tag_t> point_to_tag_;
 
-    tsl::robin_set<unsigned> delete_list_;
+    tsl::robin_set<unsigned> delete_set_;
     tsl::robin_set<unsigned> empty_slots_;
   };
 }
