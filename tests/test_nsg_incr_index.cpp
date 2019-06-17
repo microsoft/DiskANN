@@ -3,8 +3,8 @@
 //
 
 #include <efanna2e/index_nsg.h>
-#include <efanna2e/util.h>
 #include <efanna2e/timer.h>
+#include <efanna2e/util.h>
 
 #include <omp.h>
 #include <string.h>
@@ -238,7 +238,6 @@ int main(int argc, char** argv) {
       if (index.delete_point(p) != 0)
         std::cerr << "Delete tag " << p << " not found" << std::endl;
 
-    std::cout << "Start consolidating deletes" << std::endl;
     if (index.disable_delete(paras, true) != 0) {
       std::cerr << "Disable delete failed" << std::endl;
       return -1;
