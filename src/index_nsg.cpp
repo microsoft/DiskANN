@@ -92,9 +92,11 @@ namespace NSG {
 
         // Add outgoing links from
         for (auto j : final_graph_[ngh])
-          candidate_set.insert(j);
+          if (delete_list_.find(j) == delete_list_.end())
+            candidate_set.insert(j);
         for (auto j : final_graph_[i])
-          candidate_set.insert(j);
+          if (delete_list_.find(j) == delete_list_.end())
+            candidate_set.insert(j);
 
         for (auto j : candidate_set)
           expanded_nghrs.push_back(
@@ -104,11 +106,17 @@ namespace NSG {
                                           (unsigned) dimension_),
                        true));
 
+		std::sort(expanded_nghrs.begin(), expanded_nghrs.end());
         occlude_list(expanded_nghrs, ngh, alpha, range, maxc, result);
 
         final_graph_[ngh].clear();
         for (auto j : result)
           final_graph_[ngh].push_back(j.id);
+
+		for (auto iter : final_graph_[ngh]) {
+          assert(delete_list_.find(iter) == delete_list_.end());
+          assert(empty_slots_.find(iter) == empty_slots_.end());
+        }
       }
       --nd_;  // Decrement #points in index
 
@@ -175,11 +183,11 @@ namespace NSG {
       std::cerr << "Point tag array not instantiated" << std::endl;
       exit(-1);
     }
-    if (tag_to_point_.size() != nd_ - delete_list_.size()) {
+    if (tag_to_point_.size() + delete_list_.size() != nd_) {
       std::cerr << "Tags to points array wrong sized" << std::endl;
       return -2;
     }
-    if (point_to_tag_.size() != nd_ - delete_list_.size()) {
+    if (point_to_tag_.size() + delete_list_.size() != nd_) {
       std::cerr << "Points to tags array wrong sized" << std::endl;
       return -3;
     }
@@ -325,7 +333,7 @@ namespace NSG {
      */
     unsigned l = 0;
     for (auto id : init_ids) {
-      assert(id < nd_);
+      assert(id < max_points_);
       retset[l++] =
           Neighbor(id,
                    distance_->compare(data_ + dimension_ * (size_t) id, query,
@@ -350,11 +358,10 @@ namespace NSG {
         for (size_t m = 0; m < nnbrs; m++) {
           unsigned id = nbrs[m];  // id = neighbor
           if (m < (nnbrs - 1)) {
-            unsigned     id_next = nbrs[m + 1];  // id_next = next neighbor
-            const float *vec_next1 =
-                data_ +
-                (size_t) id_next *
-                    dimension_;  // vec_next1: data of next neighbor
+            // id_next = next neighbor
+            unsigned id_next = nbrs[m + 1];
+            // vec_next1: data of next neighbor
+            const float *vec_next1 = data_ + (size_t) id_next * dimension_;
 
             for (size_t d = 0; d < dimension_; d += 16)
               _mm_prefetch(vec_next1 + d,
@@ -459,6 +466,7 @@ namespace NSG {
     }
 
     size_t location = reserve_location();
+    std::cout << location << std::endl;
     tag_to_point_[tag] = location;
     point_to_tag_[location] = tag;
 
@@ -683,8 +691,9 @@ namespace NSG {
   }
 
   /* This function tries to add as many diverse edges as possible from current
-   * node n to all the visited nodes obtained by running get_neighbors */
-
+   * node n to all the visited nodes obtained by running get_neighbors.
+   * Assumes that pool is sorted in order of increasing distance.
+   */
   void IndexNSG::occlude_list(const std::vector<Neighbor> &pool,
                               const unsigned location, const float alpha,
                               const unsigned degree, const unsigned maxc,
@@ -844,7 +853,7 @@ namespace NSG {
 
     for (auto des : src_pool) {
       /* des.id is the id of the neighbors of n */
-      assert(des.id >= 0 && des.id < nd_);
+      assert(des.id >= 0 && des.id < max_points_);
 
       int dup = 0;
       /* des_pool contains the neighbors of the neighbors of n */

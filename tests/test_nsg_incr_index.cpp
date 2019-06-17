@@ -199,8 +199,12 @@ int main(int argc, char** argv) {
   paras.Set<float>("alpha", alpha);
   paras.Set<unsigned>("num_rnds", num_rnds);
 
-  num_points = 300000;
-  unsigned num_incr = 10000;
+  num_points = 100000;
+  unsigned num_incr = 1000;
+
+  auto data_copy = new float[num_points * dim];
+  memcpy((void*) data_copy, (void*) data_load,
+         num_points * dim * sizeof(float));
 
   NSG::IndexNSG index(dim, num_points - num_incr, NSG::L2, nullptr, num_points,
                       true);
@@ -209,7 +213,7 @@ int main(int argc, char** argv) {
     std::iota(tags.begin(), tags.end(), 0);
 
     NSG::Timer timer;
-    index.BuildRandomHierarchical(data_load, paras, tags);
+    index.BuildRandomHierarchical(data_copy, paras, tags);
     std::cout << "Index time: " << timer.elapsed() / 1000 << "ms\n";
   }
 
@@ -255,6 +259,9 @@ int main(int argc, char** argv) {
 
   auto save_path_reinc = save_path + ".reinc";
   index.Save(save_path_reinc.c_str());
+
+  delete[] data_copy;
+  delete[] data_load;
 
   return 0;
 }
