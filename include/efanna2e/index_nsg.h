@@ -115,6 +115,9 @@ namespace NSG {
     // Returns number of live points left after consolidation
     size_t consolidate_deletes(const Parameters &parameters);
 
+    // Computes the in edges of each node, from the out graph
+    void compute_in_edges();
+
    private:
     unsigned width_;
     unsigned ep_;
@@ -135,6 +138,8 @@ namespace NSG {
 
     tsl::robin_set<unsigned> delete_set_;
     tsl::robin_set<unsigned> empty_slots_;
+
+    CompactGraph in_graph_;
   };
 }
 

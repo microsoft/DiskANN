@@ -34,6 +34,34 @@ namespace NSG {
   IndexNSG::~IndexNSG() {
   }
 
+  void IndexNSG::compute_in_edges() {
+    std::cout << "Computing in edges" << std::endl;
+    if (in_graph_.size() == 0)
+      in_graph_.resize(max_points_);
+    else
+      assert(in_graph_.size() == max_points_);
+    for (auto &vec : in_graph_)
+      vec.clear();
+
+    for (unsigned i = 0; i < max_points_; ++i) {
+      if (delete_set_.find(i) == delete_set_.end() &&
+          empty_slots_.find(i) == empty_slots_.end()) {
+        for (auto ngh : final_graph_[i])
+          in_graph_[ngh].push_back(i);
+      }
+    }
+
+    size_t max = 0, min = SIZE_MAX, sum = 0;
+    for (const auto &vec : in_graph_) {
+      max = (std::max)(max, vec.size());
+      min = (std::min)(min, vec.size());
+      sum += vec.size();
+    }
+    std::cout << "Max in-degree: " << max << "   Min in-degree: " << min
+              << "   Avg. in-degree: " << (float) (sum) / (float) (nd_)
+              << std::endl;
+  }
+
   int IndexNSG::enable_delete() {
     LockGuard guard(change_lock_);
     assert(!can_delete_);
@@ -54,6 +82,7 @@ namespace NSG {
       consolidated_order_ = false;
     }
     can_delete_ = true;
+	//compute_in_edges();
     return 0;
   }
 
@@ -144,11 +173,12 @@ namespace NSG {
     }
 
     std::cout << "Replacing edges to deleted links... " << std::endl;
-    unsigned deleted_links = 0, loops_to_start=0;
+    unsigned deleted_links = 0, loops_to_start = 0;
     for (unsigned old = 0; old < max_points_; ++old) {
-      if (new_ids[old] < max_points_) {
+      if (new_ids[old] < max_points_) {  // Point still exists
         for (size_t pos = 0; pos < final_graph_[old].size(); ++pos) {
-          auto link = final_graph_[old][pos];
+        //for (size_t pos = 0; pos < in_graph_[old].size(); ++pos) {
+		  auto link = final_graph_[old][pos];
           if (new_ids[link] >= max_points_) {
             ++deleted_links;
             for (auto twohop : final_graph_[link]) {
@@ -166,7 +196,8 @@ namespace NSG {
       }
     }
     std::cout << "Replaced " << deleted_links << " links." << std::endl;
-    std::cout << "Couldn't replace " << loops_to_start << " deleted out edge with 2-hop link. Linked them to start."
+    std::cout << "Couldn't replace " << loops_to_start
+              << " deleted out edge with 2-hop link. Linked them to start."
               << std::endl;
 
     std::cout << "Re-numbering nodes and edges and consolidating data... "
