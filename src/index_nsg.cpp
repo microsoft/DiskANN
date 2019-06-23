@@ -179,8 +179,8 @@ namespace NSG {
     unsigned deleted_links = 0, loops_to_start = 0;
     for (unsigned old = 0; old < max_points_; ++old) {
       if (new_ids[old] < max_points_) {  // Point still exists
-        for (size_t pos = 0; pos < final_graph_[old].size(); ++pos) {
-          // for (size_t pos = 0; pos < in_graph_[old].size(); ++pos) {
+        //for (size_t pos = 0; pos < final_graph_[old].size(); ++pos) {
+        for (size_t pos = 0; pos < in_graph_[old].size(); ++pos) {
           auto link = final_graph_[old][pos];
           if (new_ids[link] >= max_points_) {
             ++deleted_links;
