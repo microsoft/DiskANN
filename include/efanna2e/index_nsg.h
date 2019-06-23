@@ -116,7 +116,7 @@ namespace NSG {
     size_t consolidate_deletes(const Parameters &parameters);
 
     // Computes the in edges of each node, from the out graph
-    void compute_in_edges();
+    void compute_in_degree_stats();
 
    private:
     unsigned width_;
@@ -138,8 +138,6 @@ namespace NSG {
 
     tsl::robin_set<unsigned> delete_set_;
     tsl::robin_set<unsigned> empty_slots_;
-
-    CompactGraph in_graph_;
   };
 }
 
