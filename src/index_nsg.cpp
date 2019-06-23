@@ -61,7 +61,7 @@ namespace NSG {
     }
     std::cout << "Max in-degree: " << max << "   Min in-degree: " << min
               << "   Avg. in-degree: " << (float) (sum) / (float) (nd_)
-              << "   Avg. in-degree: " << (float) (out_sum) / (float) (nd_)
+              << "   Avg. out-degree: " << (float) (out_sum) / (float) (nd_)
               << std::endl;
   }
 
@@ -115,9 +115,146 @@ namespace NSG {
     std::vector<Neighbor>    expanded_nghrs;
     std::vector<Neighbor>    result;
 
+    for (unsigned i = 0; i < max_points_; ++i) {
+      if (new_ids[i] < max_points_) {
+        candidate_set.clear();
+        expanded_nghrs.clear();
+        result.clear();
+
+        bool modify = false;
+        for (auto ngh : final_graph_[i]) {
+          if (new_ids[ngh] >= max_points_) {
+            modify = true;
+
+            // Add outgoing links from
+            for (auto j : final_graph_[ngh])
+              if (delete_set_.find(j) == delete_set_.end())
+                candidate_set.insert(j);
+          } else {
+            candidate_set.insert(ngh);
+          }
+        }
+
+        if (modify) {
+          for (auto j : candidate_set)
+            expanded_nghrs.push_back(
+                Neighbor(j,
+                         distance_->compare(data_ + dimension_ * (size_t) i,
+                                            data_ + dimension_ * (size_t) j,
+                                            (unsigned) dimension_),
+                         true));
+          std::sort(expanded_nghrs.begin(), expanded_nghrs.end());
+          occlude_list(expanded_nghrs, i, alpha, range, maxc, result);
+
+          final_graph_[i].clear();
+          for (auto j : result)
+            final_graph_[i].push_back(j.id);
+
+          for (auto iter : final_graph_[i]) {
+            assert(delete_set_.find(iter) == delete_set_.end());
+            assert(empty_slots_.find(iter) == empty_slots_.end());
+          }
+        }
+      }
+    }
+
+    // If start node is removed, replace it.
+    if (delete_set_.find(ep_) == delete_set_.end()) {
+      std::cerr << "Replacing start node which has been deleted... "
+                << std::flush;
+      auto old_ep = ep_;
+      // First active neighbor of old start node is new start node
+      for (auto iter : final_graph_[ep_])
+        if (delete_set_.find(iter) != delete_set_.end()) {
+          ep_ = iter;
+          break;
+        }
+      if (ep_ == old_ep) {
+        std::cerr << "ERROR: Did not find a replacement for start node."
+                  << std::endl;
+        exit(-1);
+      } else {
+        assert(delete_set_.find(ep_) == delete_set_.end());
+        std::cout << "New start node is " << ep_ << std::endl;
+      }
+    }
+
+	nd_ -= delete_set_.size();
+
+    std::cout << "Re-numbering nodes and edges and consolidating data... "
+              << std::flush;
+    for (unsigned old = 0; old < max_points_; ++old) {
+      if (new_ids[old] < max_points_) {  // If point continues to exist
+
+        // Renumber nodes to compact the order
+        for (size_t i = 0; i < final_graph_[old].size(); ++i) {
+          assert(new_ids[final_graph_[old][i]] < max_points_);
+          final_graph_[old][i] = new_ids[final_graph_[old][i]];
+        }
+
+        // Move the data to the correct position
+        memcpy((void *) (data_ + dimension_ * (size_t) new_ids[old]),
+               (void *) (data_ + dimension_ * (size_t) old),
+               dimension_ * sizeof(float));
+      }
+    }
+    std::cout << "done." << std::endl;
+
+    std::cout << "Updating mapping between tags and ids... " << std::flush;
+    // Update the location pointed to by tag
+    for (auto iter : tag_to_point_) {
+      auto tag = iter.first;
+      auto old_id = iter.second;
+      auto new_id = new_ids[old_id];
+
+      iter.second = new_id;
+      point_to_tag_.erase(old_id);
+      point_to_tag_[new_id] = tag;
+    }
+    std::cout << "done." << std::endl;
+
+    for (unsigned old = active; old < max_points_; ++old)
+      final_graph_[old].clear();
+
+    empty_slots_.clear();
+    delete_set_.clear();
+    consolidated_order_ = true;
+    std::cout << "Consolidated the index" << std::endl;
+
+    return nd_;
+  }
+
+  /*
+  // Do not call consolidate_deletes() if you have not locked change_lock_.
+  // Returns number of live points left after consolidation
+  size_t IndexNSG::consolidate_deletes_old(const Parameters &parameters) {
+    assert(!consolidated_order_);
+    assert(can_delete_);
+    assert(enable_tags_);
+    assert(delete_set_.size() <= nd_);
+    assert(empty_slots_.size() + nd_ == max_points_);
+
+    const unsigned range = parameters.Get<unsigned>("R");
+    const unsigned maxc = parameters.Get<unsigned>("C");
+    const float    alpha = parameters.Get<float>("alpha");
+
+    std::vector<unsigned> new_ids;
+    new_ids.resize(max_points_, max_points_);
+    unsigned active = 0;
+    for (unsigned old = 0; old < max_points_; ++old)
+      if (empty_slots_.find(old) == empty_slots_.end() &&
+          delete_set_.find(old) == delete_set_.end())
+        new_ids[old] = active++;
+    assert(active + empty_slots_.size() + delete_set_.size() == max_points_);
+
+    tsl::robin_set<unsigned> candidate_set;
+    std::vector<Neighbor>    expanded_nghrs;
+    std::vector<Neighbor>    result;
+
     for (auto i : delete_set_) {
       // Remove point, and create new links from neighbors
-      for (auto ngh : final_graph_[i]) {
+      // for (auto ngh : final_graph_[i]) {
+      for (auto ngh : in_graph_[i]) {
         candidate_set.clear();
         expanded_nghrs.clear();
         result.clear();
@@ -179,8 +316,7 @@ namespace NSG {
     unsigned deleted_links = 0, loops_to_start = 0;
     for (unsigned old = 0; old < max_points_; ++old) {
       if (new_ids[old] < max_points_) {  // Point still exists
-        //for (size_t pos = 0; pos < final_graph_[old].size(); ++pos) {
-        for (size_t pos = 0; pos < in_graph_[old].size(); ++pos) {
+        for (size_t pos = 0; pos < final_graph_[old].size(); ++pos) {
           auto link = final_graph_[old][pos];
           if (new_ids[link] >= max_points_) {
             ++deleted_links;
@@ -245,6 +381,7 @@ namespace NSG {
 
     return nd_;
   }
+  */
 
   int IndexNSG::disable_delete(const Parameters &parameters,
                                const bool        consolidate) {
