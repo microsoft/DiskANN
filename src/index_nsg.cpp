@@ -43,9 +43,11 @@ namespace NSG {
     for (auto &vec : in_graph_)
       vec.clear();
 
+    size_t out_sum = 0;
     for (unsigned i = 0; i < max_points_; ++i) {
       if (delete_set_.find(i) == delete_set_.end() &&
           empty_slots_.find(i) == empty_slots_.end()) {
+        out_sum += final_graph_[i].size();
         for (auto ngh : final_graph_[i])
           in_graph_[ngh].push_back(i);
       }
@@ -59,6 +61,7 @@ namespace NSG {
     }
     std::cout << "Max in-degree: " << max << "   Min in-degree: " << min
               << "   Avg. in-degree: " << (float) (sum) / (float) (nd_)
+              << "   Avg. in-degree: " << (float) (out_sum) / (float) (nd_)
               << std::endl;
   }
 
@@ -82,7 +85,7 @@ namespace NSG {
       consolidated_order_ = false;
     }
     can_delete_ = true;
-	//compute_in_edges();
+    compute_in_edges();
     return 0;
   }
 
@@ -177,8 +180,8 @@ namespace NSG {
     for (unsigned old = 0; old < max_points_; ++old) {
       if (new_ids[old] < max_points_) {  // Point still exists
         for (size_t pos = 0; pos < final_graph_[old].size(); ++pos) {
-        //for (size_t pos = 0; pos < in_graph_[old].size(); ++pos) {
-		  auto link = final_graph_[old][pos];
+          // for (size_t pos = 0; pos < in_graph_[old].size(); ++pos) {
+          auto link = final_graph_[old][pos];
           if (new_ids[link] >= max_points_) {
             ++deleted_links;
             for (auto twohop : final_graph_[link]) {
@@ -656,8 +659,8 @@ namespace NSG {
     bool *visited = new bool[nd_]();
     std::fill(visited, visited + nd_, false);
     std::map<unsigned, std::vector<tsl::robin_set<unsigned>>> bfs_orders;
-    unsigned start_node = ep_;
-    bool     complete = false;
+    unsigned                                                  start_node = ep_;
+    bool                                                      complete = false;
     bfs_orders.insert(
         std::make_pair(start_node, std::vector<tsl::robin_set<unsigned>>()));
     auto &bfs_order = bfs_orders[start_node];
@@ -730,7 +733,7 @@ namespace NSG {
       center[j] /= nd_;
 
     // compute all to one distance
-    float * distances = new float[nd_]();
+    float *distances = new float[nd_]();
 #pragma omp parallel for schedule(static, 65536)
     for (size_t i = 0; i < nd_; i++) {
       // extract point and distance reference
@@ -958,10 +961,9 @@ namespace NSG {
           /* temp_pool contains distance of each node in graph_copy, from
            * neighbor of n */
           temp_pool.emplace_back(SimpleNeighbor(
-              node,
-              distance_->compare(data_ + dimension_ * (size_t) node,
-                                 data_ + dimension_ * (size_t) des.id,
-                                 (unsigned) dimension_)));
+              node, distance_->compare(data_ + dimension_ * (size_t) node,
+                                       data_ + dimension_ * (size_t) des.id,
+                                       (unsigned) dimension_)));
         /* sort temp_pool according to distance from neighbor of n */
         std::sort(temp_pool.begin(), temp_pool.end());
         for (auto iter = temp_pool.begin(); iter + 1 != temp_pool.end(); ++iter)

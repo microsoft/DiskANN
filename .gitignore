@@ -3,3 +3,6 @@ build/*
 /vcproj/test_recall/x64/Debug/test_recall.Build.CppClean.log
 /vcproj/test_recall/test_recall.vcxproj.user
 /.vs
+/data/SIFT1M
+/out/build/x64-Debug
+/src/#index_nsg.cpp#
