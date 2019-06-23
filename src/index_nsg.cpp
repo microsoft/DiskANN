@@ -159,7 +159,7 @@ namespace NSG {
     }
 
     // If start node is removed, replace it.
-    if (delete_set_.find(ep_) == delete_set_.end()) {
+    if (delete_set_.find(ep_) != delete_set_.end()) {
       std::cerr << "Replacing start node which has been deleted... "
                 << std::flush;
       auto old_ep = ep_;
