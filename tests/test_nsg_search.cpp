@@ -14,7 +14,7 @@
 
 void load_ivecs(char* filename, unsigned*& data, unsigned& num,
                 unsigned& dim) {  // load data with sift10K pattern
-  std::ifstream   in(filename, std::ios::binary);
+  std::ifstream in(filename, std::ios::binary);
   if (!in.is_open()) {
     std::cout << "open file error" << std::endl;
     exit(-1);
@@ -22,7 +22,7 @@ void load_ivecs(char* filename, unsigned*& data, unsigned& num,
   in.read((char*) &dim, 4);
   std::cout << "data dimension: " << dim << std::endl;
   in.seekg(0, std::ios::end);
-  std::ios::pos_type  ss = in.tellg();
+  std::ios::pos_type ss = in.tellg();
 
   size_t fsize = (size_t) ss;
   num = (unsigned) (fsize / (dim + 1) / 4);
@@ -44,7 +44,6 @@ void load_fvecs(const char* filename, float*& data, unsigned& num,
 
   NSG::MemoryMapper mapper(filename);
   buf = mapper.getBuf();
-
 
   //  assert(buf);
   // size_t x=4;
@@ -102,9 +101,8 @@ void load_fvecs(const char* filename, float*& data, unsigned& num,
 
 void load_bvecs(const char* filename, float*& data, unsigned& num,
                 unsigned& dim) {
-  unsigned          new_dim = 0;
-  char*             buf;
-
+  unsigned new_dim = 0;
+  char*    buf;
 
   NSG::MemoryMapper mapper(filename);
   buf = mapper.getBuf();
@@ -200,9 +198,8 @@ void save_result(char* filename, unsigned* results, unsigned nd, unsigned nr) {
 
 int main(int argc, char** argv) {
   if ((argc != 8)) {
-    std::cout << argv[0]
-              << " data_file query_file groundtruth nsg_path "
-                 "BFS-init=1/0 beamwidth recall@"
+    std::cout << argv[0] << " data_file query_file groundtruth nsg_path "
+                            "BFS-init=1/0 beamwidth recall@"
               << std::endl;
     exit(-1);
   }
@@ -301,14 +298,14 @@ int main(int argc, char** argv) {
     long long total_hops = 0;
     long long total_cmps = 0;
 
-    auto s = std::chrono::high_resolution_clock::now();
+    auto    s = std::chrono::high_resolution_clock::now();
 #pragma omp parallel for schedule(static, 1)
     for (int i = 0; i < query_num; i++) {
       auto ret =
           index.BeamSearch(query_load + i * dim, data_load, K, paras,
                            res + ((size_t) i) * K, beam_width, start_points);
-      // auto ret = index.Search(query_load + i * dim, data_load, K, paras,
-      // tmp.data());
+// auto ret = index.Search(query_load + i * dim, data_load, K, paras,
+// tmp.data());
 
 #pragma omp atomic
       total_hops += ret.first;

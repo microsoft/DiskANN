@@ -6,11 +6,11 @@ target_link_libraries(test_nsg_incr_index ${PROJECT_NAME} -ltcmalloc)
 add_executable(test_nsg_sweep_index test_nsg_sweep_index.cpp)
 target_link_libraries(test_nsg_sweep_index ${PROJECT_NAME} -ltcmalloc)
 
-add_executable(test_nsg_sweep_index_int8 test_nsg_sweep_index_int8.cpp)
-target_link_libraries(test_nsg_sweep_index_int8 ${PROJECT_NAME} -ltcmalloc)
+#add_executable(test_nsg_sweep_index_int8 test_nsg_sweep_index_int8.cpp)
+#target_link_libraries(test_nsg_sweep_index_int8 ${PROJECT_NAME} -ltcmalloc)
 
-add_executable(test_nsg_sweep_index_uint8 test_nsg_sweep_index_uint8.cpp)
-target_link_libraries(test_nsg_sweep_index_uint8 ${PROJECT_NAME} -ltcmalloc)
+#add_executable(test_nsg_sweep_index_uint8 test_nsg_sweep_index_uint8.cpp)
+#target_link_libraries(test_nsg_sweep_index_uint8 ${PROJECT_NAME} -ltcmalloc)
 
 add_executable(test_nsg_shard_search test_nsg_shard_search.cpp)
 target_link_libraries(test_nsg_shard_search ${PROJECT_NAME})
@@ -18,11 +18,11 @@ target_link_libraries(test_nsg_shard_search ${PROJECT_NAME})
 add_executable(test_nsg_search test_nsg_search.cpp)
 target_link_libraries(test_nsg_search ${PROJECT_NAME})
 
-add_executable(test_nsg_search_int8 test_nsg_search_int8.cpp)
-target_link_libraries(test_nsg_search_int8 ${PROJECT_NAME})
+#add_executable(test_nsg_search_int8 test_nsg_search_int8.cpp)
+#target_link_libraries(test_nsg_search_int8 ${PROJECT_NAME})
 
-add_executable(test_nsg_search_uint8 test_nsg_search_uint8.cpp)
-target_link_libraries(test_nsg_search_uint8 ${PROJECT_NAME})
+#add_executable(test_nsg_search_uint8 test_nsg_search_uint8.cpp)
+#target_link_libraries(test_nsg_search_uint8 ${PROJECT_NAME})
 
 add_executable(test_pq_flash_nsg_search test_pq_flash_nsg_search.cpp)
 target_link_libraries(test_pq_flash_nsg_search ${PROJECT_NAME} aio)

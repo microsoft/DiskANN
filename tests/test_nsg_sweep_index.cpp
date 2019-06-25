@@ -18,8 +18,7 @@
 #include "MemoryMapper.h"
 
 void load_fvecs(const char* filename, float*& data, unsigned& num,
-                unsigned& dim) 
-{
+                unsigned& dim) {
   unsigned new_dim = 0;
   char*    buf;
 
@@ -78,7 +77,7 @@ void load_fvecs(const char* filename, float*& data, unsigned& num,
   std::cout << "done." << std::endl;
 }
 
-//void load_data(char* filename, float*& data, unsigned& num,
+// void load_data(char* filename, float*& data, unsigned& num,
 //               unsigned& dim) {  // load data with sift10K pattern
 //  std::ifstream in(filename, std::ios::binary);
 //  if (!in.is_open()) {
@@ -191,7 +190,6 @@ int main(int argc, char** argv) {
               << "num_pass<1>" << std::endl;
     exit(-1);
   }
-
 
   float*   data_load = NULL;
   unsigned points_num, dim;

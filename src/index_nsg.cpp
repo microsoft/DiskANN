@@ -203,8 +203,9 @@ namespace NSG {
           if (m < (nnbrs - 1)) {
             unsigned id_next = nbrs[m + 1];  // id_next = next neighbor
             const T *vec_next1 =
-                data_ + (size_t) id_next *
-                            dimension_;  // vec_next1: data of next neighbor
+                data_ +
+                (size_t) id_next *
+                    dimension_;  // vec_next1: data of next neighbor
             NSG::prefetch_vector((const char *) vec_next1,
                                  dimension_ * sizeof(T));
           }
@@ -411,8 +412,8 @@ namespace NSG {
     bool *visited = new bool[nd_]();
     std::fill(visited, visited + nd_, false);
     std::map<unsigned, std::vector<tsl::robin_set<unsigned>>> bfs_orders;
-    unsigned                                                  start_node = ep_;
-    bool                                                      complete = false;
+    unsigned start_node = ep_;
+    bool     complete = false;
     bfs_orders.insert(
         std::make_pair(start_node, std::vector<tsl::robin_set<unsigned>>()));
     auto &bfs_order = bfs_orders[start_node];
@@ -486,7 +487,7 @@ namespace NSG {
       center[j] /= nd_;
 
     // compute all to one distance
-    float *distances = new float[nd_]();
+    float * distances = new float[nd_]();
 #pragma omp parallel for schedule(static, 65536)
     for (int i = 0; i < nd_; i++) {  // GOPAL Changed from "size_t i" to "int i"
       // extract point and distance reference
@@ -682,9 +683,10 @@ namespace NSG {
           /* temp_pool contains distance of each node in graph_copy, from
            * neighbor of n */
           temp_pool.emplace_back(SimpleNeighbor(
-              node, distance_->compare(data_ + dimension_ * (size_t) node,
-                                       data_ + dimension_ * (size_t) des.id,
-                                       (unsigned) dimension_)));
+              node,
+              distance_->compare(data_ + dimension_ * (size_t) node,
+                                 data_ + dimension_ * (size_t) des.id,
+                                 (unsigned) dimension_)));
         /* sort temp_pool according to distance from neighbor of n */
         std::sort(temp_pool.begin(), temp_pool.end());
         for (auto iter = temp_pool.begin(); iter + 1 != temp_pool.end(); ++iter)

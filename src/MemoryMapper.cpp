@@ -24,8 +24,8 @@ MemoryMapper::MemoryMapper(const char* filename) {
   std::cout << "File Size: " << _fileSize << std::endl;
   _buf = (char*) mmap(NULL, _fileSize, PROT_READ, MAP_PRIVATE, _fd, 0);
 #else
-  _bareFile = CreateFileA(filename, GENERIC_READ | GENERIC_EXECUTE, 0, NULL, OPEN_EXISTING,
-                          FILE_ATTRIBUTE_NORMAL, NULL);
+  _bareFile = CreateFileA(filename, GENERIC_READ | GENERIC_EXECUTE, 0, NULL,
+                          OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
   if (_bareFile == nullptr) {
     std::cerr << "Could not open file" << filename << std::endl;
   }
