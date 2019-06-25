@@ -5,10 +5,14 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <ctime>
+#include <iostream>
 #include <iterator>
 #include <map>
 #include <set>
+#include <sstream>
+#include <string>
 #include "efanna2e/exceptions.h"
 #include "efanna2e/parameters.h"
 #include "efanna2e/util.h"
@@ -25,13 +29,46 @@
 #include <xmmintrin.h>
 #endif
 
+void gen_random_slice(float *base_data, size_t points_num, size_t dim,
+                      const char *outputfile,
+                      size_t      slice_size) {  // load data with fvecs pattern
+  std::cout << "Generating random sample of base data to use as training.."
+            << std::flush;
+  uint32_t unsigned_dim = dim;
 
+  bool *flag = new bool[points_num];
+  for (size_t i = 0; i < points_num; i++) {
+    flag[i] = false;
+  }
 
-int generate_pq_pivots(const char* train_file, size_t num_centers,
+  std::ofstream out(outputfile, std::ios::binary | std::ios::out);
+
+  std::random_device
+               rd;  // Will be used to obtain a seed for the random number engine
+  size_t       x = rd();
+  std::mt19937 generator(
+      x);  // Standard mersenne_twister_engine seeded with rd()
+  std::uniform_int_distribution<size_t> distribution(0, points_num - 1);
+
+  size_t tmp_pivot;
+  for (size_t i = 0; i < slice_size; i++) {
+    tmp_pivot = distribution(generator);
+    while (flag[tmp_pivot] == true) {
+      tmp_pivot = distribution(generator);
+    }
+    flag[tmp_pivot] = true;
+    out.write((char *) &unsigned_dim, 4);
+    out.write((char *) (base_data + (tmp_pivot * dim)), dim * 4);
+  }
+  out.close();
+  std::cout << "done." << std::endl;
+}
+
+int generate_pq_pivots(const char *train_file, size_t num_centers,
                        size_t num_chunks, size_t max_k_means_reps,
-                       const char* working_prefix_file) {
+                       const char *working_prefix_file) {
   size_t num_train, dim;
-  float* train_data;
+  float *train_data;
   load_file_into_data<float>(train_file, train_data, num_train, dim);
 
   if (num_chunks > dim) {
@@ -40,23 +77,41 @@ int generate_pq_pivots(const char* train_file, size_t num_centers,
   }
 
   size_t    chunk_size = std::floor((double) dim / (double) num_chunks);
-  float*    pivot_data;
-  uint32_t* ivf_closest_center = new uint32_t[num_train];
-  float*    full_pivot_data = new float[num_centers * dim];
-  size_t corrected_num_chunks = DIV_ROUND_UP(dim, chunk_size);
+  float *   pivot_data;
+  uint32_t *ivf_closest_center = new uint32_t[num_train];
+  float *   full_pivot_data;
+  size_t    corrected_num_chunks = DIV_ROUND_UP(dim, chunk_size);
 
-  std::cout<<"Corrected number of chunks "<< corrected_num_chunks << std::endl;
+  std::cout << "Corrected number of chunks " << corrected_num_chunks
+            << std::endl;
 
-  std::string cur_working_path(working_prefix_file);
+  std::string pivot_file_path = std::string(working_prefix_file) + "_PQ-" +
+                                std::to_string(num_centers) + "-" +
+                                std::to_string(num_chunks) + ".piv";
+
+  if (file_exists(pivot_file_path)) {
+    size_t file_dim, file_num_centers;
+    load_Tvecs_plain<float, float>(pivot_file_path.c_str(), full_pivot_data,
+                                   file_num_centers, file_dim);
+    if (file_dim == dim && file_num_centers == num_centers) {
+      std::cout << "PQ pivot file exists. Not generating again" << std::endl;
+      delete[] full_pivot_data;
+      return 1;
+    }
+  }
+
+  full_pivot_data = new float[num_centers * dim];
 
   for (size_t i = 0; i < corrected_num_chunks; i++) {
     size_t cur_chunk_size =
         chunk_size < (dim - i * chunk_size) ? chunk_size : dim - i * chunk_size;
-    float*    cur_pivot_data = new float[num_centers * cur_chunk_size];
-    float*    cur_data = new float[num_train * cur_chunk_size];
-    uint32_t* closest_center = new uint32_t[num_train];
+    float *   cur_pivot_data = new float[num_centers * cur_chunk_size];
+    float *   cur_data = new float[num_train * cur_chunk_size];
+    uint32_t *closest_center = new uint32_t[num_train];
 
-    std::cout << "Processing chunk " << i << " with dimensions [" << i*chunk_size << ", " << i*chunk_size + cur_chunk_size <<")" << std::endl;
+    std::cout << "Processing chunk " << i << " with dimensions ["
+              << i * chunk_size << ", " << i * chunk_size + cur_chunk_size
+              << ")" << std::endl;
 #pragma omp parallel for schedule(static, 65536)
     for (uint64_t j = 0; j < num_train; j++) {
       std::memcpy(cur_data + j * cur_chunk_size,
@@ -83,72 +138,94 @@ int generate_pq_pivots(const char* train_file, size_t num_centers,
     delete[] closest_center;
   }
 
-  cur_working_path = cur_working_path + "_PQ-" + std::to_string(num_centers) +
-                     "-" + std::to_string(num_chunks) + ".piv";
-  save_Tvecs<float>(cur_working_path.c_str(), full_pivot_data,
+  save_Tvecs<float>(pivot_file_path.c_str(), full_pivot_data,
                     (size_t) num_centers, dim);
   return 0;
 }
 
-
-int generate_pq_data_from_pivots(const char* base_file, size_t num_centers, size_t num_chunks, const char* working_prefix_file) {
-
-
-  size_t      dim;
-  size_t      num_points;
-//  float*      data_load;
-  float*      base_data;
-  load_file_into_data<float> (base_file, base_data, num_points, dim);
+int generate_pq_data_from_pivots(const char *base_file, size_t num_centers,
+                                 size_t      num_chunks,
+                                 const char *working_prefix_file) {
+  size_t dim;
+  size_t num_points;
+  //  float*      data_load;
+  float *base_data;
+  load_file_into_data<float>(base_file, base_data, num_points, dim);
   std::cout << "Base Loaded\n";
 
   if (num_chunks > dim) {
     std::cout << " Error: number of chunks more than dimension" << std::endl;
     return -1;
   }
-  size_t    chunk_size = std::floor((double) dim / (double) num_chunks);
+  size_t chunk_size = std::floor((double) dim / (double) num_chunks);
   size_t corrected_num_chunks = DIV_ROUND_UP(dim, chunk_size);
 
-  float* full_pivot_data = new float[num_centers * dim];
-  uint32_t* compressed_base = new uint32_t[num_points * corrected_num_chunks];
+  uint32_t *compressed_base;
 
-  std::string working_file_path(working_prefix_file); 
-  working_file_path += + "_PQ-" + std::to_string(num_centers) + "-" +
-                std::to_string(num_chunks);
-  std::string cur_file(working_file_path);
-cur_file += ".piv";
+  std::string compressed_file_path =
+      std::string(working_prefix_file) + "_PQ-" + std::to_string(num_centers) +
+      "-" + std::to_string(num_chunks) + "_compressed.ivecs";
 
-  if (!file_exists(cur_file)) {
+  std::string lossy_fvecs_path = std::string(working_prefix_file) + "_PQ-" +
+                                 std::to_string(num_centers) + "-" +
+                                 std::to_string(num_chunks) + "_lossy.fvecs";
+
+  std::string pivot_file_path = std::string(working_prefix_file) + "_PQ-" +
+                                std::to_string(num_centers) + "-" +
+                                std::to_string(num_chunks) + ".piv";
+
+  if (file_exists(compressed_file_path)) {
+    size_t file_dim, file_num_points;
+    load_Tvecs_plain<uint32_t, uint32_t>(compressed_file_path.c_str(),
+                                         compressed_base, file_num_points,
+                                         file_dim);
+std::cout<<"Here " << file_num_points<< " " << file_dim <<std::endl;
+    if (file_dim == corrected_num_chunks && file_num_points == num_points) {
+      std::cout << "Compressed base file exists. Not generating again"
+                << std::endl;
+      delete[] compressed_base;
+      return 1;
+    }
+  }
+
+  float *full_pivot_data = new float[num_centers * dim];
+  compressed_base = new uint32_t[num_points * corrected_num_chunks];
+
+  if (!file_exists(pivot_file_path)) {
     // Process Global k-means for IVF Step
     std::cout << "ERROR: PQ k-means pivot file not found" << std::endl;
     return -1;
   } else {
     size_t file_num_centers;
     size_t file_dim;
-    load_Tvecs_plain<float,float>(cur_file.c_str(), full_pivot_data, file_num_centers,
-                      file_dim);
+    load_Tvecs_plain<float, float>(pivot_file_path.c_str(), full_pivot_data,
+                                   file_num_centers, file_dim);
     if (file_num_centers != num_centers) {
-      std::cout << "ERROR: file number of PQ centers " << file_num_centers << " does "
-                   "not match input argument " << num_centers 
-                << std::endl;
+      std::cout << "ERROR: file number of PQ centers " << file_num_centers
+                << " does "
+                   "not match input argument "
+                << num_centers << std::endl;
       return -1;
     }
-    if (file_dim != dim) { 
+    if (file_dim != dim) {
       std::cout << "ERROR: PQ pivot dimension does "
                    "not match base file dimension"
                 << std::endl;
       return -1;
     }
-    std::cout<<"Loaded PQ pivot information"<<std::endl;
+    std::cout << "Loaded PQ pivot information" << std::endl;
   }
 
   for (size_t i = 0; i < corrected_num_chunks; i++) {
     size_t cur_chunk_size =
         chunk_size < (dim - i * chunk_size) ? chunk_size : dim - i * chunk_size;
-    float*    cur_pivot_data = new float[num_centers * cur_chunk_size];
-    float*    cur_data = new float[num_points * cur_chunk_size];
-    uint32_t* closest_center = new uint32_t[num_points];
+    float *   cur_pivot_data = new float[num_centers * cur_chunk_size];
+    float *   cur_data = new float[num_points * cur_chunk_size];
+    uint32_t *closest_center = new uint32_t[num_points];
 
-    std::cout << "Processing chunk " << i << " with dimensions [" << i*chunk_size << ", " << i*chunk_size + cur_chunk_size <<")" << std::endl;
+    std::cout << "Processing chunk " << i << " with dimensions ["
+              << i * chunk_size << ", " << i * chunk_size + cur_chunk_size
+              << ")" << std::endl;
 #pragma omp parallel for schedule(static, 8192)
     for (uint64_t j = 0; j < num_points; j++) {
       std::memcpy(cur_data + j * cur_chunk_size,
@@ -180,14 +257,12 @@ cur_file += ".piv";
     delete[] closest_center;
   }
 
+  save_Tvecs_plain<uint32_t>(compressed_file_path.c_str(), compressed_base,
+                             (size_t) num_points, corrected_num_chunks);
 
-  cur_file = working_file_path + "_compressed.ivecs";
-  save_Tvecs_plain<uint32_t>(cur_file.c_str(), compressed_base,
-                       (size_t) num_points, num_chunks);
+  save_Tvecs_plain<float>(lossy_fvecs_path.c_str(), base_data,
+                          (size_t) num_points, dim);
 
-  cur_file = working_file_path + "_compressed.fvecs";
-  save_Tvecs_plain<float>(cur_file.c_str(), base_data,
-                       (size_t) num_points, dim);
   delete[] base_data;
 }
 
@@ -1532,3 +1607,69 @@ namespace NSG {
   template class IndexNSG<uint8_t>;
 
 }  // namespace NSG
+
+bool BuildIndex(const char *dataFilePath, const char *indexFilePath,
+                const char *indexBuildParameters) {
+  std::stringstream        parser(std::string(indexBuildParameters));
+  std::string              cur_param;
+  std::vector<std::string> param_list;
+  //    while(parser>>cur_param)
+  //       param_list.push_back(cur_param);
+
+  if (param_list.size() != 4) {
+    std::cout << "Correct usage of parameters is L (indexing search list size) "
+                 "R (max degree) C (visited list maximum size) B (approximate "
+                 "compressed number of bytes per datapoint to store in "
+                 "memory) ";
+    return -1;
+  }
+
+  float *data_load = NULL;
+  size_t points_num, dim;
+
+  load_file_into_data<float>(dataFilePath, data_load, points_num, dim);
+  data_load = NSG::data_align(data_load, points_num, dim);
+  std::cout << "Data loaded and aligned" << std::endl;
+
+  auto        s = std::chrono::high_resolution_clock::now();
+  std::string working_file_prefix(indexFilePath);
+  std::string train_file = working_file_prefix + "_train.fvecs";
+  if (!file_exists(train_file)) {
+    gen_random_slice(data_load, points_num, dim, train_file.c_str(),
+                     (size_t) 2000000);
+  } else
+    std::cout << "Train file exists. Using it" << std::endl;
+
+  //  unsigned    nn_graph_deg = (unsigned) atoi(argv[3]);
+  unsigned L = (unsigned) atoi(param_list[0].c_str());
+  unsigned R = (unsigned) atoi(param_list[1].c_str());
+  unsigned C = (unsigned) atoi(param_list[2].c_str());
+  size_t   num_chunks = (size_t) atoi(param_list[3].c_str());
+
+  generate_pq_pivots(train_file.c_str(), 256, num_chunks, 15,
+                     working_file_prefix.c_str());
+
+  generate_pq_data_from_pivots(train_file.c_str(), 256, num_chunks,
+                               working_file_prefix.c_str());
+
+  NSG::Parameters paras;
+  paras.Set<unsigned>("L", L);
+  paras.Set<unsigned>("R", R);
+  paras.Set<unsigned>("C", C);
+  paras.Set<float>("alpha", 1.2);
+  paras.Set<unsigned>("num_rnds", 2);
+  paras.Set<std::string>("save_path",
+                         std::string(working_file_prefix + "_degree-" +
+                                     std::to_string(R) + ".rnsg"));
+  NSG::IndexNSG<float> index(dim, points_num, NSG::L2, nullptr);
+  index.BuildRandomHierarchical(data_load, paras);
+  auto                          e = std::chrono::high_resolution_clock::now();
+  std::chrono::duration<double> diff = e - s;
+
+  std::cout << "Indexing time: " << diff.count() << "\n";
+  index.Save(std::string(working_file_prefix + "_degree-" + std::to_string(R) +
+                         ".rnsg")
+                 .c_str());
+
+  return 0;
+}

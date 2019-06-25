@@ -6,7 +6,6 @@
 #include <math_utils.h>
 #include <utils.h>
 
-
 int main(int argc, char** argv) {
   if (argc != 5) {
     std::cout << argv[0] << "format: base_set "
@@ -16,8 +15,7 @@ int main(int argc, char** argv) {
     exit(-1);
   }
 
-  size_t      num_centers = (size_t) strtol(argv[2], NULL, 10);
-  size_t      num_chunks = (size_t) strtol(argv[3], NULL, 10);
-generate_pq_data_from_pivots(argv[1], num_centers, num_chunks, argv[4]);
+  size_t num_centers = (size_t) strtol(argv[2], NULL, 10);
+  size_t num_chunks = (size_t) strtol(argv[3], NULL, 10);
+  generate_pq_data_from_pivots(argv[1], num_centers, num_chunks, argv[4]);
 }
-
