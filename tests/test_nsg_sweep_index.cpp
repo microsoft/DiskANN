@@ -5,8 +5,8 @@
 #include <efanna2e/index_nsg.h>
 #include <efanna2e/util.h>
 #include <omp.h>
-
 #include <string.h>
+#include <utils.h>
 
 #ifndef __NSG_WINDOWS__
 #include <sys/mman.h>
@@ -16,66 +16,6 @@
 #endif
 
 #include "MemoryMapper.h"
-
-void load_fvecs(const char* filename, float*& data, unsigned& num,
-                unsigned& dim) {
-  unsigned new_dim = 0;
-  char*    buf;
-
-  NSG::MemoryMapper mapper(filename);
-  buf = mapper.getBuf();
-
-  uint32_t file_dim;
-  std::memcpy(&file_dim, buf, 4);
-  dim = file_dim;
-  size_t dim_t = dim;
-  if (new_dim == 0)
-    new_dim = dim;
-
-  if (new_dim < dim)
-    std::cout << "load_fvecs " << filename << ". Current Dimension: " << dim
-              << ". New Dimension: First " << new_dim << " columns. "
-              << std::flush;
-  else if (new_dim > dim)
-    std::cout << "load_fvecs " << filename << ". Current Dimension: " << dim
-              << ". New Dimension: " << new_dim
-              << " (added columns with 0 entries). " << std::flush;
-  else
-    std::cout << "load_fvecs " << filename << ". Dimension: " << dim << ". "
-              << std::flush;
-
-  float* zeros = new float[new_dim];
-  for (size_t i = 0; i < new_dim; i++)
-    zeros[i] = 0;
-
-  size_t num_t = (mapper.getFileSize() / (4 * dim_t + 4));
-  num = (unsigned) num_t;
-  data = new float[(size_t) num * (size_t) new_dim];
-
-  std::cout << "# Points: " << num << ".." << std::flush;
-
-#pragma omp parallel for schedule(static, 65536)
-  for (int64_t i = 0; i < num; i++) {
-    uint32_t row_dim;
-    char*    reader = buf + (i * (4 * dim_t + 4));
-    std::memcpy((char*) &row_dim, reader, sizeof(uint32_t));
-    if (row_dim != dim)
-      std::cerr << "ERROR: row dim does not match" << std::endl;
-    std::memcpy(data + (i * new_dim), zeros,
-                ((size_t) new_dim) * sizeof(float));
-    if (new_dim > dim) {
-      std::memcpy(data + (i * new_dim), reader + 4, dim_t * sizeof(float));
-      //	std::memcpy(data + (i * new_dim), (reader + 4),
-      //		    dim * sizeof(float));
-    } else {
-      std::memcpy(data + (i * new_dim), reader + 4,
-                  ((size_t) new_dim) * sizeof(float));
-      //	std::memcpy(data + (i * new_dim),
-      //(reader + 4), 		    new_dim * sizeof(float));
-    }
-  }
-  std::cout << "done." << std::endl;
-}
 
 // void load_data(char* filename, float*& data, unsigned& num,
 //               unsigned& dim) {  // load data with sift10K pattern
@@ -115,111 +55,33 @@ void load_fvecs(const char* filename, float*& data, unsigned& num,
 //  std::cout << "Loaded data from file " << filename << std::endl;
 //}
 
-void load_bvecs(const char* filename, float*& data, unsigned& num,
-                unsigned& dim) {
-  unsigned new_dim = 0;
-  char*    buf;
-  off_t    fileSize = 0;
-
-  NSG::MemoryMapper mapper(filename);
-  buf = mapper.getBuf();
-  //  assert(buf);
-  // size_t x=4;
-  uint32_t file_dim;
-  std::memcpy(&file_dim, buf, 4);
-  dim = file_dim;
-  if (new_dim == 0)
-    new_dim = dim;
-
-  if (new_dim < dim)
-    std::cout << "load_bvecs " << filename << ". Current Dimension: " << dim
-              << ". New Dimension: First " << new_dim << " columns. "
-              << std::flush;
-  else if (new_dim > dim)
-    std::cout << "load_bvecs " << filename << ". Current Dimension: " << dim
-              << ". New Dimension: " << new_dim
-              << " (added columns with 0 entries). " << std::flush;
-  else
-    std::cout << "load_bvecs " << filename << ". Dimension: " << dim << ". "
-              << std::flush;
-
-  float* zeros = new float[new_dim];
-  for (size_t i = 0; i < new_dim; i++)
-    zeros[i] = 0;
-
-  num = (unsigned) (fileSize / (dim + 4));
-  data = new float[(size_t) num * (size_t) new_dim];
-
-  std::cout << "# Points: " << num << ".." << std::flush;
-
-#pragma omp parallel for schedule(static, 65536)
-  for (int64_t i = 0; i < num; i++) {  // GOPAL changing "size_t i" to "int i"
-    uint32_t row_dim;
-    char*    reader = buf + (i * (dim + 4));
-    std::memcpy((char*) &row_dim, reader, sizeof(uint32_t));
-    if (row_dim != dim)
-      std::cerr << "ERROR: row dim does not match" << std::endl;
-    std::memcpy(data + (i * new_dim), zeros, new_dim * sizeof(float));
-    if (new_dim > dim) {
-      //	std::memcpy(data + (i * new_dim), (reader + 4),
-      //		    dim * sizeof(float));
-      for (size_t j = 0; j < dim; j++) {
-        uint8_t cur;
-        std::memcpy((char*) &cur, (reader + 4 + j), sizeof(uint8_t));
-        data[i * new_dim + j] = (float) cur;
-      }
-    } else {
-      for (size_t j = 0; j < new_dim; j++) {
-        uint8_t cur;
-        std::memcpy((char*) &cur, (reader + 4 + j), sizeof(uint8_t));
-        data[i * new_dim + j] = (float) cur;
-        //	std::memcpy(data + (i * new_dim),
-        //(reader + 4), 		    new_dim * sizeof(float));
-      }
-    }
-  }
-
-  std::cout << "done." << std::endl;
-}
-
 int main(int argc, char** argv) {
   if (argc != 6) {
     std::cout << "Correct usage\n"
-              << argv[0] << " data_file L R "
-              << "save_graph_file "
-              << "num_pass<1>" << std::endl;
+              << argv[0] << " data_file L R C "
+              << "save_graph_file " << std::endl;
     exit(-1);
   }
 
-  float*   data_load = NULL;
-  unsigned points_num, dim;
+  float* data_load = NULL;
+  size_t points_num, dim;
 
-  std::string bvecs(".bvecs");
-  std::string base_file(argv[1]);
-  if (base_file.find(bvecs) == std::string::npos) {
-    //		std::cout << "Loading base set as fvecs" << std::endl;
-    load_fvecs(argv[1], data_load, points_num, dim);
-  } else {
-    //		std::cout << "Loading training set as bvecs" << std::endl;
-    load_bvecs(argv[1], data_load, points_num, dim);
-  }
-
-  //  load_data(argv[1], data_load, points_num, dim);
+  load_file_into_data<float>(argv[1], data_load, points_num, dim);
   data_load = NSG::data_align(data_load, points_num, dim);
   std::cout << "Data loaded and aligned" << std::endl;
 
   //  unsigned    nn_graph_deg = (unsigned) atoi(argv[3]);
   unsigned    L = (unsigned) atoi(argv[2]);
   unsigned    R = (unsigned) atoi(argv[3]);
-  unsigned    C = 750;  //(unsigned) atoi(argv[4]);
-  std::string save_path(argv[4]);
-  float       alpha = 1.2f;   //(float) std::atof(argv[6]);
-  float       p_val = 0.05f;  //(float) std::atof(argv[7]);
+  unsigned    C = (unsigned) atoi(argv[4]);
+  std::string save_path(argv[5]);
+  float       alpha = 1.2f;  //(float) std::atof(argv[6]);
+  //  float       p_val = 0.05f;  //(float) std::atof(argv[7]);
   //  unsigned    num_hier = (float) std::atof(argv[8]);
-  unsigned num_syncs = 150;  //(float) std::atof(argv[8]);
-  unsigned num_rnds = (unsigned) std::atoi(argv[5]);
+  //  unsigned num_syncs = 150;  //(float) std::atof(argv[8]);
+  unsigned num_rnds = 2;
   //  unsigned    innerL = (unsigned) atoi(argv[11]);
-  unsigned innerR = R;  //(unsigned) atoi(argv[10]);
+  //  unsigned innerR = R;  //(unsigned) atoi(argv[10]);
   //  unsigned    innerC = (unsigned) atoi(argv[13]);
 
   //  if (nn_graph_deg > R) {
@@ -231,13 +93,13 @@ int main(int argc, char** argv) {
   paras.Set<unsigned>("L", L);
   paras.Set<unsigned>("R", R);
   paras.Set<unsigned>("C", C);
-  paras.Set<std::string>("save_path", save_path);
   paras.Set<float>("alpha", alpha);
-  paras.Set<float>("p_val", p_val);
+  paras.Set<unsigned>("num_rnds", num_rnds);
+  paras.Set<std::string>("save_path", save_path);
+  //  paras.Set<float>("p_val", p_val);
   //  paras.Set<unsigned>("innerL", innerL);
   //  paras.Set<unsigned>("innerC", innerC);
-  paras.Set<unsigned>("num_syncs", num_syncs);
-  paras.Set<unsigned>("num_rnds", num_rnds);
+  //  paras.Set<unsigned>("num_syncs", num_syncs);
 
   NSG::IndexNSG<float> index(dim, points_num, NSG::L2, nullptr);
   auto                 s = std::chrono::high_resolution_clock::now();

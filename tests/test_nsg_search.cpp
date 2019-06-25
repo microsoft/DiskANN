@@ -8,162 +8,10 @@
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
+#include <utils.h>
 #endif
 
 #include "MemoryMapper.h"
-
-void load_ivecs(char* filename, unsigned*& data, unsigned& num,
-                unsigned& dim) {  // load data with sift10K pattern
-  std::ifstream in(filename, std::ios::binary);
-  if (!in.is_open()) {
-    std::cout << "open file error" << std::endl;
-    exit(-1);
-  }
-  in.read((char*) &dim, 4);
-  std::cout << "data dimension: " << dim << std::endl;
-  in.seekg(0, std::ios::end);
-  std::ios::pos_type ss = in.tellg();
-
-  size_t fsize = (size_t) ss;
-  num = (unsigned) (fsize / (dim + 1) / 4);
-  std::cout << "Reading " << num << " points" << std::endl;
-  data = new unsigned[(size_t) num * (size_t) dim];
-
-  in.seekg(0, std::ios::beg);
-  for (size_t i = 0; i < num; i++) {
-    in.seekg(4, std::ios::cur);
-    in.read((char*) (data + i * dim), dim * 4);
-  }
-  in.close();
-}
-
-void load_fvecs(const char* filename, float*& data, unsigned& num,
-                unsigned& dim) {
-  unsigned new_dim = 0;
-  char*    buf;
-
-  NSG::MemoryMapper mapper(filename);
-  buf = mapper.getBuf();
-
-  //  assert(buf);
-  // size_t x=4;
-  uint32_t file_dim;
-  std::memcpy(&file_dim, buf, 4);
-  dim = file_dim;
-  size_t dim_t = dim;
-  if (new_dim == 0)
-    new_dim = dim;
-
-  if (new_dim < dim)
-    std::cout << "load_bvecs " << filename << ". Current Dimension: " << dim
-              << ". New Dimension: First " << new_dim << " columns. "
-              << std::flush;
-  else if (new_dim > dim)
-    std::cout << "load_bvecs " << filename << ". Current Dimension: " << dim
-              << ". New Dimension: " << new_dim
-              << " (added columns with 0 entries). " << std::flush;
-  else
-    std::cout << "load_bvecs " << filename << ". Dimension: " << dim << ". "
-              << std::flush;
-
-  float* zeros = new float[new_dim];
-  for (size_t i = 0; i < new_dim; i++)
-    zeros[i] = 0;
-
-  size_t num_t = (mapper.getFileSize() / (4 * dim_t + 4));
-  num = (unsigned) num_t;
-  data = new float[(size_t) num * (size_t) new_dim];
-
-  std::cout << "# Points: " << num << ".." << std::flush;
-
-#pragma omp parallel for schedule(static, 65536)
-  for (int64_t i = 0; i < num; i++) {
-    uint32_t row_dim;
-    char*    reader = buf + (i * (4 * dim_t + 4));
-    std::memcpy((char*) &row_dim, reader, sizeof(uint32_t));
-    if (row_dim != dim)
-      std::cerr << "ERROR: row dim does not match" << std::endl;
-    std::memcpy(data + (i * new_dim), zeros,
-                ((size_t) new_dim) * sizeof(float));
-    if (new_dim > dim) {
-      std::memcpy(data + (i * new_dim), reader + 4, dim_t * sizeof(float));
-      //	std::memcpy(data + (i * new_dim), (reader + 4),
-      //		    dim * sizeof(float));
-    } else {
-      std::memcpy(data + (i * new_dim), reader + 4,
-                  ((size_t) new_dim) * sizeof(float));
-      //	std::memcpy(data + (i * new_dim),
-      //(reader + 4), 		    new_dim * sizeof(float));
-    }
-  }
-  std::cout << "done." << std::endl;
-}
-
-void load_bvecs(const char* filename, float*& data, unsigned& num,
-                unsigned& dim) {
-  unsigned new_dim = 0;
-  char*    buf;
-
-  NSG::MemoryMapper mapper(filename);
-  buf = mapper.getBuf();
-  //  assert(buf);
-  // size_t x=4;
-  uint32_t file_dim;
-  std::memcpy(&file_dim, buf, 4);
-  dim = file_dim;
-  if (new_dim == 0)
-    new_dim = dim;
-
-  if (new_dim < dim)
-    std::cout << "load_bvecs " << filename << ". Current Dimension: " << dim
-              << ". New Dimension: First " << new_dim << " columns. "
-              << std::flush;
-  else if (new_dim > dim)
-    std::cout << "load_bvecs " << filename << ". Current Dimension: " << dim
-              << ". New Dimension: " << new_dim
-              << " (added columns with 0 entries). " << std::flush;
-  else
-    std::cout << "load_bvecs " << filename << ". Dimension: " << dim << ". "
-              << std::flush;
-
-  float* zeros = new float[new_dim];
-  for (size_t i = 0; i < new_dim; i++)
-    zeros[i] = 0;
-
-  num = (unsigned) (mapper.getFileSize() / (dim + 4));
-  data = new float[(size_t) num * (size_t) new_dim];
-
-  std::cout << "# Points: " << num << ".." << std::flush;
-
-#pragma omp parallel for schedule(static, 65536)
-  for (int64_t i = 0; i < num; i++) {
-    uint32_t row_dim;
-    char*    reader = buf + (i * (dim + 4));
-    std::memcpy((char*) &row_dim, reader, sizeof(uint32_t));
-    if (row_dim != dim)
-      std::cerr << "ERROR: row dim does not match" << std::endl;
-    std::memcpy(data + (i * new_dim), zeros, new_dim * sizeof(float));
-    if (new_dim > dim) {
-      //	std::memcpy(data + (i * new_dim), (reader + 4),
-      //		    dim * sizeof(float));
-      for (size_t j = 0; j < dim; j++) {
-        uint8_t cur;
-        std::memcpy((char*) &cur, (reader + 4 + j), sizeof(uint8_t));
-        data[i * new_dim + j] = (float) cur;
-      }
-    } else {
-      for (size_t j = 0; j < new_dim; j++) {
-        uint8_t cur;
-        std::memcpy((char*) &cur, (reader + 4 + j), sizeof(uint8_t));
-        data[i * new_dim + j] = (float) cur;
-        //	std::memcpy(data + (i * new_dim),
-        //(reader + 4), 		    new_dim * sizeof(float));
-      }
-    }
-  }
-
-  std::cout << "done." << std::endl;
-}
 
 float calc_recall(unsigned num_queries, unsigned* gold_std, unsigned dim_gs,
                   unsigned* our_results, unsigned dim_or, unsigned recall_at) {
@@ -186,33 +34,23 @@ float calc_recall(unsigned num_queries, unsigned* gold_std, unsigned dim_gs,
          (100.0 / ((float) recall_at));
 }
 
-void save_result(char* filename, unsigned* results, unsigned nd, unsigned nr) {
-  std::ofstream out(filename, std::ios::binary | std::ios::out);
-
-  for (unsigned i = 0; i < nd; i++) {
-    out.write((char*) &nr, sizeof(unsigned));
-    out.write((char*) (results + i * nr), nr * sizeof(unsigned));
-  }
-  out.close();
-}
-
 int main(int argc, char** argv) {
-  if ((argc != 8)) {
+  if ((argc != 6)) {
     std::cout << argv[0] << " data_file query_file groundtruth nsg_path "
-                            "BFS-init=1/0 beamwidth recall@"
+                            "recall@"
               << std::endl;
     exit(-1);
   }
 
-  int      bfs_init = atoi(argv[5]);
-  unsigned beam_width = atoi(argv[6]);
-  unsigned recall_at = atoi(argv[7]);
+  int      bfs_init = 1;
+  unsigned beam_width = 1;
+  unsigned recall_at = atoi(argv[5]);
 
   float*    data_load = NULL;
   float*    query_load = NULL;
   unsigned* gt_load = NULL;
-  unsigned  points_num, dim, query_num, query_dim;
-  unsigned  gt_num, gt_dim;
+  size_t    points_num, dim, query_num, query_dim;
+  size_t    gt_num, gt_dim;
 
   std::vector<unsigned> Lvec;
   unsigned              curL = 8;
@@ -241,12 +79,19 @@ int main(int argc, char** argv) {
   //  std::cout.precision(1);
 
   // load_data(argv[1], data_load, points_num, dim);
-  NSG::load_Tvecs<float>(argv[1], data_load, points_num, dim);
-  NSG::load_Tvecs<float>(argv[2], query_load, query_num, query_dim);
 
-  NSG::load_Tvecs<unsigned>(argv[3], gt_load, gt_num, gt_dim);
+  load_file_into_data<float>(argv[1], data_load, points_num, dim);
+  load_file_into_data<float>(argv[2], query_load, query_num, query_dim);
+  load_file_into_data<unsigned>(argv[3], gt_load, gt_num, gt_dim);
+
+  if (dim != query_dim) {
+    std::cout << "Base and query files dimension mismatch: base dim is " << dim
+              << ", query dim is " << query_dim << std::endl;
+    exit(-1);
+  }
+
   if (gt_num != query_num) {
-    std::cout << "Ground truth does not match number of queries. ";
+    std::cout << "Ground truth does not match number of queries. " << std::endl;
     exit(-1);
   }
 
@@ -257,10 +102,9 @@ int main(int argc, char** argv) {
   }
 
   assert(dim == query_dim);
-  std::cout << "Base and query data loaded" << std::endl;
   data_load = NSG::data_align(data_load, points_num, dim);
   query_load = NSG::data_align(query_load, query_num, query_dim);
-  std::cout << "Data Aligned" << std::endl;
+  std::cout << "Base and query data loaded and aligned" << std::endl;
 
   NSG::IndexNSG<float> index(dim, points_num, NSG::L2, nullptr);
   //  if (nsg_check == 1)

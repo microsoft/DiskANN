@@ -3,6 +3,16 @@ set(CMAKE_CXX_STANDARD 14)
 add_executable(test_nsg_incr_index test_nsg_incr_index.cpp)
 target_link_libraries(test_nsg_incr_index ${PROJECT_NAME} -ltcmalloc)
 
+add_executable(test_pq test_pq.cpp)
+target_link_libraries(test_pq ${PROJECT_NAME} -ltcmalloc)
+
+
+add_executable(test_pq_from_pivots test_pq_from_pivots.cpp)
+target_link_libraries(test_pq_from_pivots ${PROJECT_NAME} -ltcmalloc)
+
+add_executable(test_partitioning test_partitioning.cpp)
+target_link_libraries(test_partitioning ${PROJECT_NAME} -ltcmalloc)
+
 add_executable(test_nsg_sweep_index test_nsg_sweep_index.cpp)
 target_link_libraries(test_nsg_sweep_index ${PROJECT_NAME} -ltcmalloc)
 

@@ -72,11 +72,11 @@ namespace NSG {
     }
   }
 
-  inline float *data_align(float *data_ori, unsigned point_num, unsigned &dim) {
+  inline float *data_align(float *data_ori, size_t point_num, size_t &dim) {
 #define DATA_ALIGN_FACTOR 8
     // std::cout << "align with : "<<DATA_ALIGN_FACTOR << std::endl;
-    float *  data_new = 0;
-    unsigned new_dim =
+    float *data_new = 0;
+    size_t new_dim =
         (dim + DATA_ALIGN_FACTOR - 1) / DATA_ALIGN_FACTOR * DATA_ALIGN_FACTOR;
 
 // std::cout << "align to new dim: "<<new_dim << std::endl;
