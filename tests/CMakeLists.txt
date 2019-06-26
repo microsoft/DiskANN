@@ -16,8 +16,8 @@ target_link_libraries(test_partitioning ${PROJECT_NAME} -ltcmalloc)
 add_executable(test_nsg_sweep_index test_nsg_sweep_index.cpp)
 target_link_libraries(test_nsg_sweep_index ${PROJECT_NAME} -ltcmalloc)
 
-#add_executable(test_nsg_sweep_index_int8 test_nsg_sweep_index_int8.cpp)
-#target_link_libraries(test_nsg_sweep_index_int8 ${PROJECT_NAME} -ltcmalloc)
+add_executable(test_nsg_sweep_index_int8 test_nsg_sweep_index_int8.cpp)
+target_link_libraries(test_nsg_sweep_index_int8 ${PROJECT_NAME} -ltcmalloc)
 
 #add_executable(test_nsg_sweep_index_uint8 test_nsg_sweep_index_uint8.cpp)
 #target_link_libraries(test_nsg_sweep_index_uint8 ${PROJECT_NAME} -ltcmalloc)
