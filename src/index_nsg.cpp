@@ -29,6 +29,8 @@
 #include <xmmintrin.h>
 #endif
 
+#define TRAINING_SET_SIZE 2000000
+
 void gen_random_slice(float *base_data, size_t points_num, size_t dim,
                       const char *outputfile,
                       size_t      slice_size) {  // load data with fvecs pattern
@@ -179,7 +181,7 @@ int generate_pq_data_from_pivots(const char *base_file, size_t num_centers,
     load_Tvecs_plain<uint32_t, uint32_t>(compressed_file_path.c_str(),
                                          compressed_base, file_num_points,
                                          file_dim);
-std::cout<<"Here " << file_num_points<< " " << file_dim <<std::endl;
+    std::cout << "Here " << file_num_points << " " << file_dim << std::endl;
     if (file_dim == corrected_num_chunks && file_num_points == num_points) {
       std::cout << "Compressed base file exists. Not generating again"
                 << std::endl;
@@ -1610,17 +1612,19 @@ namespace NSG {
 
 bool BuildIndex(const char *dataFilePath, const char *indexFilePath,
                 const char *indexBuildParameters) {
-  std::stringstream        parser(std::string(indexBuildParameters));
+  std::stringstream parser;
+  parser << std::string(indexBuildParameters);
   std::string              cur_param;
   std::vector<std::string> param_list;
-  //    while(parser>>cur_param)
-  //       param_list.push_back(cur_param);
+  while (parser >> cur_param)
+    param_list.push_back(cur_param);
 
   if (param_list.size() != 4) {
     std::cout << "Correct usage of parameters is L (indexing search list size) "
                  "R (max degree) C (visited list maximum size) B (approximate "
                  "compressed number of bytes per datapoint to store in "
-                 "memory) ";
+                 "memory) "
+              << std::endl;
     return -1;
   }
 
@@ -1630,15 +1634,21 @@ bool BuildIndex(const char *dataFilePath, const char *indexFilePath,
   load_file_into_data<float>(dataFilePath, data_load, points_num, dim);
   data_load = NSG::data_align(data_load, points_num, dim);
   std::cout << "Data loaded and aligned" << std::endl;
+  std::string train_file;
 
   auto        s = std::chrono::high_resolution_clock::now();
   std::string working_file_prefix(indexFilePath);
-  std::string train_file = working_file_prefix + "_train.fvecs";
-  if (!file_exists(train_file)) {
-    gen_random_slice(data_load, points_num, dim, train_file.c_str(),
-                     (size_t) 2000000);
-  } else
-    std::cout << "Train file exists. Using it" << std::endl;
+
+  if (points_num > 2 * TRAINING_SET_SIZE) {
+    train_file = working_file_prefix + "_train.fvecs";
+    if (!file_exists(train_file)) {
+      gen_random_slice(data_load, points_num, dim, train_file.c_str(),
+                       (size_t) TRAINING_SET_SIZE);
+    } else
+      std::cout << "Train file exists. Using it" << std::endl;
+  } else {
+    train_file = std::string(dataFilePath);
+  }
 
   //  unsigned    nn_graph_deg = (unsigned) atoi(argv[3]);
   unsigned L = (unsigned) atoi(param_list[0].c_str());

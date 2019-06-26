@@ -17,44 +17,6 @@
 
 #include "MemoryMapper.h"
 
-// void load_data(char* filename, float*& data, unsigned& num,
-//               unsigned& dim) {  // load data with sift10K pattern
-//  std::ifstream in(filename, std::ios::binary);
-//  if (!in.is_open()) {
-//    std::cout << "open file error" << std::endl;
-//    exit(-1);
-//  }
-//  std::cout << "Reading data from file: " << filename << std::endl;
-//  in.read((char*) &dim, 4);
-//  in.seekg(0, std::ios::end);
-//  std::ios::pos_type ss = in.tellg();
-//  size_t fsize = (size_t) ss;
-//  std::cout << "fsize is: " << fsize << std::endl;
-//  num = (unsigned) (fsize / (dim + 1) / 4);
-//  std::cout << "num is: " << num << std::endl;
-//  std::cout << "num * dim is: " << (size_t) num * (size_t) dim << std::endl;
-//
-//  uint64_t allocSize = ((uint64_t) num) * ((uint64_t) dim);
-//
-//  try {
-//    std::cout << "Alloc size is " << allocSize << std::endl;
-//    data = new float[allocSize];
-//  } catch (const std::bad_alloc& ba) {
-//    std::cerr << "Failed to allocate memory " << ba.what() << std::endl;
-//    exit(1);
-//  }
-//
-//  std::cout << "Allocated " << num * dim << " bytes " << std::endl;
-//
-//  in.seekg(0, std::ios::beg);
-//  for (size_t i = 0; i < num; i++) {
-//    in.seekg(4, std::ios::cur);
-//    in.read((char*) (data + i * dim), dim * 4);
-//  }
-//  in.close();
-//  std::cout << "Loaded data from file " << filename << std::endl;
-//}
-
 int main(int argc, char** argv) {
   if (argc != 6) {
     std::cout << "Correct usage\n"
