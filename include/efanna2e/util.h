@@ -104,7 +104,6 @@ namespace NSG {
 
 	size_t new_dim = ROUND_UP(dim, 8);
 	size_t  allocSize = point_num * new_dim * sizeof(T);
-
     std::cout << "Allocating aligned memory, " << allocSize << " bytes...";
     alloc_aligned( ((void **)&data_new), allocSize, 512);
     std::cout << "done" << std::endl;
@@ -120,9 +119,6 @@ namespace NSG {
 
 	return data_new;
   }
-
-
-
 
 
   /********* templated load functions *********/
