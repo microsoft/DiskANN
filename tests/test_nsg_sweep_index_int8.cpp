@@ -173,9 +173,20 @@ int main(int argc, char** argv) {
   _s8*     data_load = NULL;
   unsigned points_num, dim;
 
-  std::string bvecs(".bvecs");
+  std::string bvecs_string(".bvecs");
+  std::string bin_string(".bin");
   std::string base_file(argv[1]);
-  NSG::load_Tvecs<_s8>(argv[1], data_load, points_num, dim);
+  if (base_file.find(bvecs_string) != std::string::npos) {
+    std::cout << "Treating base as bvecs." << std::flush;
+    NSG::load_Tvecs<_s8>(argv[1], data_load, points_num, dim);
+  } else if (base_file.find(bin_string) != std::string::npos) {
+    std::cout << "Treating base as bin." << std::flush;
+    NSG::load_bin<_s8>(argv[1], data_load, points_num, dim);
+  } else {
+    std::cout << "Unrecognized base format. Use .bvecs or .bin extension"
+              << std::endl;
+    return -1;
+  }
 
   data_load = NSG::data_align_byte<_s8>(data_load, points_num, dim);
   std::cout << "Data loaded and aligned" << std::endl;

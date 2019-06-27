@@ -829,16 +829,19 @@ namespace NSG {
       // Shuffle the dataset
       std::random_shuffle(rand_perm.begin(), rand_perm.end());
       unsigned progress_counter = 0;
-      if (rnd_no == NUM_RNDS - 1) {
-        if (last_round_alpha > 1)
-          parameters.Set<unsigned>("L",
-                                   (unsigned) (std::min)((int) L, (int) 50));
-        parameters.Set<float>("alpha", last_round_alpha);
-      }
 
       size_t round_size = DIV_ROUND_UP(nd_, NUM_SYNCS);  // size of each batch
 
       for (uint32_t sync_num = 0; sync_num < NUM_SYNCS; sync_num++) {
+        if (rnd_no == NUM_RNDS - 1) {
+          if (last_round_alpha > 1)
+            parameters.Set<unsigned>(
+                "L", (unsigned) (std::min)(
+                         (int) L, (int) (L -
+                                         (L - 30) * ((float) sync_num /
+                                                     (float) NUM_SYNCS))));
+          parameters.Set<float>("alpha", last_round_alpha);
+        }
         size_t start_id = sync_num * round_size;
         size_t end_id = (std::min)(nd_, (sync_num + 1) * round_size);
         size_t round_size = end_id - start_id;

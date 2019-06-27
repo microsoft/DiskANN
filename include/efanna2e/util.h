@@ -1,4 +1,4 @@
-//
+﻿//
 // Created by 付聪 on 2017/6/21.
 //
 
@@ -121,42 +121,8 @@ namespace NSG {
 	return data_new;
   }
 
-  //  template<typename T>
-  //  inline T *data_align_byte(T *data_ori, unsigned point_num, unsigned &dim)
-  //  {
-  //#define DATA_ALIGN_FACTOR 32
-  //    // std::cout << "align with : "<<DATA_ALIGN_FACTOR << std::endl;
-  //    T *      data_new = 0;
-  //    unsigned new_dim =
-  //        (dim + DATA_ALIGN_FACTOR - 1) / DATA_ALIGN_FACTOR *
-  //        DATA_ALIGN_FACTOR;
-  //// std::cout << "align to new dim: "<<new_dim << std::endl;
-  //#ifdef __APPLE__
-  //    data_new = new T[(size_t) new_dim * (size_t) point_num];
-  //#elif __NSG_WINDOWS__
-  //    data_new = (T *) _aligned_malloc(
-  //        (size_t) point_num * (size_t) new_dim * sizeof(T),
-  //        DATA_ALIGN_FACTOR);
-  //#else
-  //    data_new = (T *) memalign(
-  //        DATA_ALIGN_FACTOR, (size_t) point_num * (size_t) new_dim *
-  //        sizeof(T));
-  //#endif
-  //
-  //    for (size_t i = 0; i < point_num; i++) {
-  //      memcpy(data_new + i * (size_t) new_dim, data_ori + i * (size_t) dim,
-  //             dim * sizeof(T));
-  //      memset(data_new + i * (size_t) new_dim + dim, 0,
-  //             (new_dim - dim) * sizeof(T));
-  //    }
-  //    dim = new_dim;
-  //#ifdef __APPLE__
-  //    delete[] data_ori;
-  //#else
-  //    delete[] data_ori;
-  //#endif
-  //    return data_new;
-  //  }
+
+
 
 
   /********* templated load functions *********/

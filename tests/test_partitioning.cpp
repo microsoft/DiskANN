@@ -3,8 +3,8 @@
 #include <efanna2e/index_nsg.h>
 #include <efanna2e/util.h>
 #include <math_utils.h>
-#include <utils.h>
 #include <partitionAndPQ.h>
+#include <utils.h>
 
 int main(int argc, char** argv) {
   auto s = std::chrono::high_resolution_clock::now();
