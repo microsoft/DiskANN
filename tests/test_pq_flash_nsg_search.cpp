@@ -59,8 +59,7 @@ void aux_main(int argc, char** argv) {
   _u64 data_dim = (_u64) std::atoi(argv[5]);
 
   // construct FlashNSG
-  NSG::DistanceL2UInt8 dist_cmp;
-  NSG::PQFlashNSG<T>   index(&dist_cmp);
+  NSG::PQFlashNSG<T>   index;
   std::cout << "main --- tid: " << std::this_thread::get_id() << std::endl;
   std::cout << "Loading index from " << argv[1] << std::endl;
   index.load(argv[1], argv[6], argv[2], chunk_size, n_chunks, data_dim);
