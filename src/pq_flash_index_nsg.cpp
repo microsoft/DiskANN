@@ -11,6 +11,7 @@
 #include "efanna2e/parameters.h"
 #include "efanna2e/timer.h"
 #include "efanna2e/util.h"
+#include "utils.h"
 
 #include "tsl/robin_set.h"
 
@@ -233,7 +234,7 @@ namespace NSG {
     unsigned npts_u32, nchunks_u32;
     size_t   npts_u64, nchunks_u64;
     std::cout << "Loading PQ compressed data from " << data_bin << std::endl;
-    NSG::load_bin<_u8>(data_bin, data, npts_u64, nchunks_u64);
+    load_bin_plain<_u32, _u8>(data_bin, data, npts_u64, nchunks_u64);
     npts_u32 = npts_u64;
     nchunks_u32 = nchunks_u64;
     n_base = (_u64) npts_u32;

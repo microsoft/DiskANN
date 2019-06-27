@@ -20,10 +20,10 @@ int main(int argc, char** argv) {
     exit(-1);
   }
 
-  _s8*     data_load = NULL;
+  _s8*   data_load = NULL;
   size_t points_num, dim;
 
-    NSG::load_bin<_s8>(argv[1], data_load, points_num, dim);
+  NSG::load_bin<_s8>(argv[1], data_load, points_num, dim);
 
   size_t dim64 = dim;
   data_load = NSG::data_align(data_load, (size_t) points_num, dim64);

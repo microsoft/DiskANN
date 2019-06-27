@@ -3,9 +3,11 @@
 #include <efanna2e/index_nsg.h>
 #include <efanna2e/util.h>
 #include <math_utils.h>
+#include <partitionAndPQ.h>
 #include <utils.h>
-#include<partitionAndPQ.h>
-#define TRAINING_SET_SIZE 2000000
+
+// #define TRAINING_SET_SIZE 2000000
+#define TRAINING_SET_SIZE 20000
 
 template<typename T>
 bool testBuildIndex(const char* dataFilePath, const char* indexFilePath,
@@ -69,7 +71,8 @@ bool testBuildIndex(const char* dataFilePath, const char* indexFilePath,
 
   //  unsigned    nn_graph_deg = (unsigned) atoi(argv[3]);
 
-  generate_pq_pivots<T>(train_file_path, 256, num_pq_chunks, 15, pq_pivots_path);
+  generate_pq_pivots<T>(train_file_path, 256, num_pq_chunks, 15,
+                        pq_pivots_path);
   generate_pq_data_from_pivots<T>(data_load, points_num, dim, 256,
                                   num_pq_chunks, pq_pivots_path,
                                   pq_compressed_vectors_path);
@@ -93,6 +96,6 @@ bool testBuildIndex(const char* dataFilePath, const char* indexFilePath,
 }
 
 int main(int argc, char** argv) {
-  testBuildIndex<float>("/mnt/rakri/sift100k.fvecs",
-                        "/mnt/rakri/sift100k/sift100k", "50 64 750 32");
+  testBuildIndex<float>("/nvme/data/sift1m_u8/base.bin",
+                        "/nvme/data/sift1m_u8/test_build", "50 64 750 32");
 }

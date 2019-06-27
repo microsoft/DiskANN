@@ -265,7 +265,7 @@ namespace NSG {
                        size_t ndims) {
     std::ofstream writer(filename, std::ios::binary | std::ios::out);
     std::cout << "Writing bin: " << filename << "\n";
-    int npts_i32, ndims_i32;
+    int npts_i32 = (int) npts, ndims_i32 = (int) ndims;
     writer.write((char *) &npts_i32, sizeof(int));
     writer.write((char *) &ndims_i32, sizeof(int));
     std::cout << "bin: #pts = " << npts << ", #dims = " << ndims

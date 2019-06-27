@@ -117,7 +117,7 @@ void load_Tvecs_plain(const char* filename, OutType* &data, size_t &npts, size_t
 
 	// allocate storage + zero
 	data = new OutType[npts * ndims];
-InType *temp_vec = new InType[ndims];
+	InType *temp_vec = new InType[ndims];
 	memset(data, 0, npts * ndims * sizeof(OutType));
 
 	// start reading
@@ -135,6 +135,39 @@ InType *temp_vec = new InType[ndims];
   delete[] temp_vec;
 }
 
+// plain loads data as npts X ndims array from filename -> data (after conversion)
+template<typename InType, typename OutType>
+void load_bin_plain(const char* filename, OutType* &data, size_t &npts, size_t &ndims){
+	typedef uint64_t _u64;
+	typedef uint32_t _u32;
+	std::string fname(filename);
+
+	cached_ifstream reader(fname, 128 * 1048576l);
+	int npts_i32, ndims_i32;
+	reader.read((char*)&npts_i32, sizeof(int32_t));
+	reader.read((char*)&ndims_i32, sizeof(int32_t));
+
+	npts = (size_t) npts_i32;
+	ndims = (size_t) ndims_i32;
+	
+	std::cout << "npts: " << npts << ", ndims: " << ndims << '\n';
+
+	// allocate storage + zero
+	data = new OutType[npts * ndims];
+	InType *temp_vec = new InType[ndims];
+	memset(data, 0, npts * ndims * sizeof(OutType));
+
+	// start reading
+	for(_u64 i=0;i<npts;i++){
+		// get cur point in data
+		OutType* cur_pt = data + i*ndims;
+		reader.read((char*)temp_vec, ndims * sizeof(InType));
+    for(_u64 d=0;d<ndims;d++)
+       cur_pt[d] = (OutType) temp_vec[d];
+	}
+
+  delete[] temp_vec;
+}
 
 void load_bvecs(const char* filename, float*& data, size_t& num, size_t& dim,
 		size_t new_dim = 0); 

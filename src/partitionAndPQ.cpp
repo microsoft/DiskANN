@@ -74,7 +74,7 @@ void gen_random_slice(T *base_data, size_t points_num, size_t dim,
   std::cout << "done." << std::endl;
 }
 
-template <typename T>
+template<typename T>
 int generate_pq_pivots(std::string train_file_path, size_t num_centers,
                        size_t num_pq_chunks, size_t max_k_means_reps,
                        std::string pq_pivots_path) {
@@ -399,38 +399,41 @@ template void gen_random_slice<uint8_t>(uint8_t *base_data, size_t points_num,
                                         size_t dim, const char *outputfile,
                                         size_t slice_size);
 /*
-template int partition<int8_t> (const char *base_file, const char *train_file, size_t num_centers,
+template int partition<int8_t> (const char *base_file, const char *train_file,
+size_t num_centers,
               size_t max_k_means_reps, const char *prefix_dir, size_t k_base);
-template int partition<uint8_t> (const char *base_file, const char *train_file, size_t num_centers,
+template int partition<uint8_t> (const char *base_file, const char *train_file,
+size_t num_centers,
               size_t max_k_means_reps, const char *prefix_dir, size_t k_base);
-template int partition<float> (const char *base_file, const char *train_file, size_t num_centers,
+template int partition<float> (const char *base_file, const char *train_file,
+size_t num_centers,
               size_t max_k_means_reps, const char *prefix_dir, size_t k_base);
 */
 
-template int generate_pq_pivots<int8_t> (std::string train_file_path, size_t num_centers,
-                       size_t num_pq_chunks, size_t max_k_means_reps,
-                       std::string pq_pivots_path);
-template int generate_pq_pivots<uint8_t> (std::string train_file_path, size_t num_centers,
-                       size_t num_pq_chunks, size_t max_k_means_reps,
-                       std::string pq_pivots_path);
-template int generate_pq_pivots<float> (std::string train_file_path, size_t num_centers,
-                       size_t num_pq_chunks, size_t max_k_means_reps,
-                       std::string pq_pivots_path);
+template int generate_pq_pivots<int8_t>(std::string train_file_path,
+                                        size_t      num_centers,
+                                        size_t      num_pq_chunks,
+                                        size_t      max_k_means_reps,
+                                        std::string pq_pivots_path);
+template int generate_pq_pivots<uint8_t>(std::string train_file_path,
+                                         size_t      num_centers,
+                                         size_t      num_pq_chunks,
+                                         size_t      max_k_means_reps,
+                                         std::string pq_pivots_path);
+template int generate_pq_pivots<float>(std::string train_file_path,
+                                       size_t num_centers, size_t num_pq_chunks,
+                                       size_t      max_k_means_reps,
+                                       std::string pq_pivots_path);
 
-
-
-template int generate_pq_data_from_pivots<int8_t>(const int8_t *base_data, size_t num_points,
-                                 size_t dim, size_t num_centers,
-                                 size_t      num_pq_chunks,
-                                 std::string pq_pivots_path,
-                                 std::string pq_compressed_vectors_path);
-template int generate_pq_data_from_pivots<uint8_t>(const uint8_t *base_data, size_t num_points,
-                                 size_t dim, size_t num_centers,
-                                 size_t      num_pq_chunks,
-                                 std::string pq_pivots_path,
-                                 std::string pq_compressed_vectors_path);
-template int generate_pq_data_from_pivots<float>(const float *base_data, size_t num_points,
-                                 size_t dim, size_t num_centers,
-                                 size_t      num_pq_chunks,
-                                 std::string pq_pivots_path,
-                                 std::string pq_compressed_vectors_path);
+template int generate_pq_data_from_pivots<int8_t>(
+    const int8_t *base_data, size_t num_points, size_t dim, size_t num_centers,
+    size_t num_pq_chunks, std::string pq_pivots_path,
+    std::string pq_compressed_vectors_path);
+template int generate_pq_data_from_pivots<uint8_t>(
+    const uint8_t *base_data, size_t num_points, size_t dim, size_t num_centers,
+    size_t num_pq_chunks, std::string pq_pivots_path,
+    std::string pq_compressed_vectors_path);
+template int generate_pq_data_from_pivots<float>(
+    const float *base_data, size_t num_points, size_t dim, size_t num_centers,
+    size_t num_pq_chunks, std::string pq_pivots_path,
+    std::string pq_compressed_vectors_path);
