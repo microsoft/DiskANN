@@ -32,7 +32,7 @@
 namespace NSG {
 #define _CONTROL_NUM 100
 #define MAX_START_POINTS 100
-#define TRAINING_SET_SIZE 2000000
+
 
   template<typename T>
   IndexNSG<T>::IndexNSG(const size_t dimension, const size_t n, Metric m,
@@ -1244,76 +1244,3 @@ namespace NSG {
 
 }  // namespace NSG
 
-bool BuildIndex(const char *dataFilePath, const char *indexFilePath,
-                const char *indexBuildParameters) {
-  std::stringstream parser;
-  parser << std::string(indexBuildParameters);
-  std::string              cur_param;
-  std::vector<std::string> param_list;
-  while (parser >> cur_param)
-    param_list.push_back(cur_param);
-
-  if (param_list.size() != 4) {
-    std::cout << "Correct usage of parameters is L (indexing search list size) "
-                 "R (max degree) C (visited list maximum size) B (approximate "
-                 "compressed number of bytes per datapoint to store in "
-                 "memory) "
-              << std::endl;
-    return -1;
-  }
-
-  float *data_load = NULL;
-  size_t points_num, dim;
-
-  load_file_into_data<float>(dataFilePath, data_load, points_num, dim);
-  data_load = NSG::data_align(data_load, points_num, dim);
-  std::cout << "Data loaded and aligned" << std::endl;
-  std::string train_file;
-
-  auto        s = std::chrono::high_resolution_clock::now();
-  std::string working_file_prefix(indexFilePath);
-
-  if (points_num > 2 * TRAINING_SET_SIZE) {
-    train_file = working_file_prefix + "_train.fvecs";
-    if (!file_exists(train_file)) {
-      gen_random_slice(data_load, points_num, dim, train_file.c_str(),
-                       (size_t) TRAINING_SET_SIZE);
-    } else
-      std::cout << "Train file exists. Using it" << std::endl;
-  } else {
-    train_file = std::string(dataFilePath);
-  }
-
-  //  unsigned    nn_graph_deg = (unsigned) atoi(argv[3]);
-  unsigned L = (unsigned) atoi(param_list[0].c_str());
-  unsigned R = (unsigned) atoi(param_list[1].c_str());
-  unsigned C = (unsigned) atoi(param_list[2].c_str());
-  size_t   num_chunks = (size_t) atoi(param_list[3].c_str());
-
-  generate_pq_pivots(train_file.c_str(), 256, num_chunks, 15,
-                     working_file_prefix.c_str());
-
-  generate_pq_data_from_pivots(train_file.c_str(), 256, num_chunks,
-                               working_file_prefix.c_str());
-
-  NSG::Parameters paras;
-  paras.Set<unsigned>("L", L);
-  paras.Set<unsigned>("R", R);
-  paras.Set<unsigned>("C", C);
-  paras.Set<float>("alpha", 1.2);
-  paras.Set<unsigned>("num_rnds", 2);
-  paras.Set<std::string>("save_path",
-                         std::string(working_file_prefix + "_degree-" +
-                                     std::to_string(R) + ".rnsg"));
-  NSG::IndexNSG<float> index(dim, points_num, NSG::L2, nullptr);
-  index.BuildRandomHierarchical(data_load, paras);
-  auto                          e = std::chrono::high_resolution_clock::now();
-  std::chrono::duration<double> diff = e - s;
-
-  std::cout << "Indexing time: " << diff.count() << "\n";
-  index.Save(std::string(working_file_prefix + "_degree-" + std::to_string(R) +
-                         ".rnsg")
-                 .c_str());
-
-  return 0;
-}

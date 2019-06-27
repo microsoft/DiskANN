@@ -9,6 +9,7 @@
 #include <iostream>
 #include <set>
 
+
 const std::wstring VECTOR_KEY = L"query", K_KEY = L"k",
                    RESULTS_KEY = L"results", INDICES_KEY = L"indices",
                    QUERY_ID_KEY = L"query_id",
@@ -176,8 +177,11 @@ pplx::task<void> runQuery(float* queries, unsigned int dimensions,
 
   web::json::value body = preparePostBody(numResults, query, dimensions, i);
 
-  web::http::client::http_client client(serviceUri);
-  auto                           responseTask =
+  web::http::client::http_client_config config;
+  config.set_timeout<std::chrono::seconds>(std::chrono::seconds(10));
+  web::http::client::http_client client(serviceUri, config);
+
+  auto responseTask =
       client.request(web::http::methods::POST, L"", body)
           .then([&](web::http::http_response response) {
             try {
@@ -229,6 +233,10 @@ int main(int argc, char* argv[]) {
       auto task =
           runQuery(queries, dimensions, i, numResults, serviceUri, ivecStream);
       runningTasks.push_back(task);
+
+      if (runningTasks.size() % 100 == 0) {
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+	  }
     }
 
     // wait for all tasks to complete.
@@ -242,7 +250,7 @@ int main(int argc, char* argv[]) {
                       throw std::exception("Set is not ordered.");
                     } else {
                       lastId = std::get<0>(entry);
-					}
+                    }
                     save_result(ivecStream, std::get<1>(entry), 1, numResults);
                   });
 

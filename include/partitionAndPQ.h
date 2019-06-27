@@ -11,7 +11,8 @@
 #include "tsl/robin_set.h"
 #include "efanna2e/util.h"
 
-void gen_random_slice(float *base_data, size_t points_num, size_t dim,
+template <typename T>
+void gen_random_slice(T *base_data, size_t points_num, size_t dim,
                       const char *outputfile, size_t slice_size);
 int partition(const char *base_file, const char *train_file, size_t num_centers,
               size_t max_k_means_reps, const char *prefix_dir, size_t k_base);

@@ -29,12 +29,13 @@
 #include <xmmintrin.h>
 #endif
 
-void gen_random_slice(float *base_data, size_t points_num, size_t dim,
+template <typename T>
+void gen_random_slice(T *base_data, size_t points_num, size_t dim,
                       const char *outputfile,
                       size_t      slice_size) {  // load data with fvecs pattern
   std::cout << "Generating random sample of base data to use as training.."
             << std::flush;
-  uint32_t unsigned_dim = dim;
+  uint32_t unsigned_dim = static_cast<uint32_t>(dim);
 
   bool *flag = new bool[points_num];
   for (size_t i = 0; i < points_num; i++) {
@@ -58,7 +59,7 @@ void gen_random_slice(float *base_data, size_t points_num, size_t dim,
     }
     flag[tmp_pivot] = true;
     out.write((char *) &unsigned_dim, 4);
-    out.write((char *) (base_data + (tmp_pivot * dim)), dim * 4);
+    out.write((char *) (base_data + (tmp_pivot * dim)), dim * sizeof(T));
   }
   out.close();
   std::cout << "done." << std::endl;
@@ -77,7 +78,6 @@ int generate_pq_pivots(const char *train_file, size_t num_centers,
   }
 
   size_t    chunk_size = std::floor((double) dim / (double) num_chunks);
-  float *   pivot_data;
   uint32_t *ivf_closest_center = new uint32_t[num_train];
   float *   full_pivot_data;
   size_t    corrected_num_chunks = DIV_ROUND_UP(dim, chunk_size);
@@ -113,7 +113,7 @@ int generate_pq_pivots(const char *train_file, size_t num_centers,
               << i * chunk_size << ", " << i * chunk_size + cur_chunk_size
               << ")" << std::endl;
 #pragma omp parallel for schedule(static, 65536)
-    for (uint64_t j = 0; j < num_train; j++) {
+    for (int64_t j = 0; j < num_train; j++) {
       std::memcpy(cur_data + j * cur_chunk_size,
                   train_data + j * dim + i * chunk_size,
                   cur_chunk_size * sizeof(float));
@@ -138,7 +138,7 @@ int generate_pq_pivots(const char *train_file, size_t num_centers,
     delete[] closest_center;
   }
 
-  save_Tvecs<float>(pivot_file_path.c_str(), full_pivot_data,
+  save_Tvecs_plain<float>(pivot_file_path.c_str(), full_pivot_data,
                     (size_t) num_centers, dim);
   return 0;
 }
@@ -227,14 +227,14 @@ int generate_pq_data_from_pivots(const char *base_file, size_t num_centers,
               << i * chunk_size << ", " << i * chunk_size + cur_chunk_size
               << ")" << std::endl;
 #pragma omp parallel for schedule(static, 8192)
-    for (uint64_t j = 0; j < num_points; j++) {
+    for (int64_t j = 0; j < num_points; j++) {
       std::memcpy(cur_data + j * cur_chunk_size,
                   base_data + j * dim + i * chunk_size,
                   cur_chunk_size * sizeof(float));
     }
 
 #pragma omp parallel for schedule(static, 1)
-    for (uint64_t j = 0; j < num_centers; j++) {
+    for (int64_t j = 0; j < num_centers; j++) {
       std::memcpy(cur_pivot_data + j * cur_chunk_size,
                   full_pivot_data + j * dim + i * chunk_size,
                   cur_chunk_size * sizeof(float));
@@ -245,7 +245,7 @@ int generate_pq_data_from_pivots(const char *base_file, size_t num_centers,
                                         closest_center);
 
 #pragma omp parallel for schedule(static, 8192)
-    for (uint64_t j = 0; j < num_points; j++) {
+    for (int64_t j = 0; j < num_points; j++) {
       std::memcpy(base_data + j * dim + i * chunk_size,
                   cur_pivot_data + closest_center[j] * cur_chunk_size,
                   cur_chunk_size * sizeof(float));
@@ -264,6 +264,7 @@ int generate_pq_data_from_pivots(const char *base_file, size_t num_centers,
                           (size_t) num_points, dim);
 
   delete[] base_data;
+  return 0;
 }
 
 int partition(const char *base_file, const char *train_file, size_t num_centers,
@@ -354,11 +355,11 @@ int partition(const char *base_file, const char *train_file, size_t num_centers,
   bool *inverted_index = new bool[num_points * num_centers];
 
 #pragma omp parallel for schedule(static, 8192)
-  for (size_t i = 0; i < num_points; i++)
+  for (int64_t i = 0; i < num_points; i++)
     for (size_t j = 0; j < num_centers; j++)
       inverted_index[i * num_centers + j] = false;
 #pragma omp parallel for schedule(static, 8192)
-  for (size_t i = 0; i < num_points; i++)
+  for (int64_t i = 0; i < num_points; i++)
     for (size_t j = 0; j < k_base; j++)
       inverted_index[i * num_centers + base_closest_centers[i * k_base + j]] =
           true;
@@ -393,3 +394,12 @@ int partition(const char *base_file, const char *train_file, size_t num_centers,
   delete[] base_data;
   delete[] inverted_index;
 }
+
+template void gen_random_slice<int8_t>(int8_t *base_data, size_t points_num, size_t dim,
+                               const char *outputfile, size_t slice_size);
+template void gen_random_slice<float>(float *base_data, size_t points_num,
+                                       size_t dim, const char *outputfile,
+                                       size_t slice_size);
+template void gen_random_slice<uint8_t>(uint8_t *base_data, size_t points_num,
+                                       size_t dim, const char *outputfile,
+                                       size_t slice_size);

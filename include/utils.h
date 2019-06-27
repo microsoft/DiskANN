@@ -32,57 +32,6 @@ void print_test_vec(testType* data, size_t dim, size_t num) {
 	}
 }
 
-// Only 4 byte data can be saved
-// given data of dimension num * dim in row major, save it as fvecs with new_dim
-// dimension by adding 0s or truncating it to the first new_dim dimensions
-template <class saveType>
-void save_Tvecs(const char* filename, saveType*& data, size_t num, size_t dim,
-		size_t new_dim = 0) {
-	char* buf;
-	int fd;
-	fd = open(filename, O_RDWR | O_CREAT | O_TRUNC, 0666);
-	if (!(fd > 0)) {
-		std::cerr << "ERROR: " << filename
-			  << " not found. Program will stop now." << std::endl;
-		assert(false);
-	}
-
-	if (new_dim == 0) new_dim = dim;
-	if (new_dim < dim)
-		std::cout << "save_fvecs/ivecs "<<filename<<". Current Dimension: "<<dim<<". New Dimension: First "<<new_dim<<" columns. "<<std::flush;
-	else if (new_dim > dim)
-		std::cout << "save_fvecs/ivecs "<<filename<<". Current Dimension: "<<dim<<". New Dimension: "<<new_dim<<" (added columns with 0 entries). "<<std::flush;
-	else std::cout << "save_fvecs/ivecs "<<filename<<". Dimension: "<<dim<<". "<<std::flush;
-
-	std::cout<<"# Points: "<<num<<".."<<std::flush;
-
-	size_t fileSize = num * (4 * (new_dim + 1));
-	ftruncate(fd, fileSize);
-	buf = (char*)mmap(NULL, fileSize, PROT_WRITE, MAP_SHARED, fd, 0);
-	assert(buf);
-	uint32_t x = new_dim;
-
-	float* zeros = new float[new_dim];
-	for (size_t i = 0; i < new_dim; i++) zeros[i] = 0;
-
-#pragma omp parallel for schedule(static, 65536)
-	for (size_t i = 0; i < num; i++) {
-		char* reader = buf + (i * (4 * new_dim + 4));
-		std::memcpy(reader, &x, sizeof(uint32_t));
-		reader = reader + 4;
-		if (new_dim <= dim)
-			std::memcpy(reader, data + i * dim,
-				    new_dim * sizeof(float));
-		else {
-			std::memcpy(reader, zeros, new_dim * sizeof(float));
-			std::memcpy(reader, data + i * dim,
-				    dim * sizeof(float));
-		}
-	}
-	int val = munmap(buf, fileSize);
-	close(fd);
-	std::cout<<"done."<<std::endl;
-}
 
 // plain saves data as npts X ndims array into filename
 template<typename T>
@@ -186,67 +135,6 @@ InType *temp_vec = new InType[ndims];
   delete[] temp_vec;
 }
 
-// Only fvecs (4 byte data) can be loaded
-// given fvecs file, allocate memory for data and store fvecs fils as num *
-// new_dim in row major. Appropriately truncate or expand 0s if dimension !=
-// new_dim.
-
-template <class loadType>
-void load_Tvecs(const char* filename, loadType*& data, size_t& num,
-		size_t& dim, size_t new_dim = 0) {
-	char* buf;
-	int fd;
-	fd = open(filename, O_RDONLY);
-	if (!(fd > 0)) {
-		std::cerr << "ERROR: " << filename
-			  << " not found. Program will stop now." << std::endl;
-		assert(false);
-	}
-	struct stat sb;
-	assert(fstat(fd, &sb) == 0);
-	off_t fileSize = sb.st_size;
-	assert(sizeof(off_t) == 8);
-
-	buf = (char*)mmap(NULL, fileSize, PROT_READ, MAP_PRIVATE, fd, 0);
-	assert(buf);
-	// size_t x=4;
-	uint32_t file_dim;
-	std::memcpy(&file_dim, buf, 4);
-	dim = file_dim;
-	if (new_dim == 0) new_dim = dim;
-
-	if (new_dim < dim)
-		std::cout << "load_fvecs/ivecs "<<filename<<". Current Dimension: "<<dim<<". New Dimension: First "<<new_dim<<" columns. "<<std::flush;
-	else if (new_dim > dim)
-		std::cout << "load_fvecs/ivecs "<<filename<<". Current Dimension: "<<dim<<". New Dimension: "<<new_dim<<" (added columns with 0 entries). "<<std::flush;
-	else std::cout << "load_fvecs/ivecs "<<filename<<". Dimension: "<<dim<<". "<<std::flush;
-
-
-	float* zeros = new float[new_dim];
-	for (size_t i = 0; i < new_dim; i++) zeros[i] = 0;
-
-	num = (size_t)(fileSize / (dim + 1) / 4);
-	data = new loadType[(size_t)num * (size_t)new_dim];
-
-	std::cout<<"# Points: "<<num<<".."<<std::flush;
-
-#pragma omp parallel for schedule(static, 65536)
-	for (size_t i = 0; i < num; i++) {
-		char* reader = buf + (i * (dim + 1) * 4);
-		std::memcpy(data + (i * new_dim), zeros,
-			    new_dim * sizeof(float));
-		if (new_dim > dim)
-			std::memcpy(data + (i * new_dim), (reader + 4),
-				    dim * sizeof(float));
-		else
-			std::memcpy(data + (i * new_dim), (reader + 4),
-				    new_dim * sizeof(float));
-	}
-
-	int val = munmap(buf, fileSize);
-	close(fd);
-	std::cout<<"done."<<std::endl;
-}
 
 void load_bvecs(const char* filename, float*& data, size_t& num, size_t& dim,
 		size_t new_dim = 0); 

@@ -7,13 +7,15 @@
 #include <fcntl.h>
 #include <fstream>
 #include <iostream>
-#include <mkl.h>
-#include<queue>
-#include<random>
+#include <queue>
+#include <random>
 #include <string.h>
-#include <sys/mman.h>
+//#include <sys/mman.h>
 #include <sys/stat.h>
 #include <time.h>
-#include <unistd.h>
+//#include <unistd.h>
 #include <vector>
+#include <mkl.h>
+
+
 

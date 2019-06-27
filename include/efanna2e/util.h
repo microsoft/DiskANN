@@ -54,6 +54,31 @@ typedef int8_t   _s8;
 
 namespace NSG {
 
+	inline void alloc_aligned(void **ptr, size_t size, size_t align) {
+    *ptr = nullptr;
+    assert(IS_ALIGNED(size, align));
+#ifndef __NSG_WINDOWS__
+    *ptr = ::aligned_alloc(align, size);
+#else
+    *ptr = ::_aligned_malloc(size, align);  // note the swapped arguments!
+#endif
+    assert(*ptr != nullptr);
+  }
+
+  inline void aligned_free(void *ptr) {
+    // Gopal. Must have a check here if the pointer was actually allocated by
+    // _alloc_aligned
+    if (ptr == nullptr) {
+      return;
+    }
+#ifndef __NSG_WINDOWS__
+    free(ptr);
+#else
+    ::_aligned_free(ptr);
+#endif
+  }
+
+
   static void GenRandom(std::mt19937 &rng, unsigned *addr, unsigned size,
                         unsigned N) {
     for (unsigned i = 0; i < size; ++i) {
@@ -72,43 +97,28 @@ namespace NSG {
     }
   }
 
-  inline float *data_align(float *data_ori, size_t point_num, size_t &dim) {
-#define DATA_ALIGN_FACTOR 8
-    // std::cout << "align with : "<<DATA_ALIGN_FACTOR << std::endl;
-    float *data_new = 0;
-    size_t new_dim =
-        (dim + DATA_ALIGN_FACTOR - 1) / DATA_ALIGN_FACTOR * DATA_ALIGN_FACTOR;
+  template <typename T>
+  inline T* data_align(T *data_ori, size_t point_num, size_t &dim) 
+  {
+    T *data_new = nullptr;
 
-// std::cout << "align to new dim: "<<new_dim << std::endl;
-#ifdef __APPLE__
-    data_new = new float[(size_t) new_dim * (size_t) point_num];
-#elif __NSG_WINDOWS__
-    size_t  allocSize =
-        ((size_t) point_num) * ((size_t) new_dim) * sizeof(float);
+	size_t new_dim = ROUND_UP(dim, 8);
+	size_t  allocSize = point_num * new_dim * sizeof(T);
+
     std::cout << "Allocating aligned memory, " << allocSize << " bytes...";
-    data_new = (float *) _aligned_malloc(allocSize, DATA_ALIGN_FACTOR * 4);
+    alloc_aligned( ((void **)&data_new), allocSize, 512);
     std::cout << "done" << std::endl;
-
-#else
-    data_new = (float *) memalign(
-        DATA_ALIGN_FACTOR * 4,
-        (size_t) point_num * (size_t) new_dim * sizeof(float));
-#endif
-    for (size_t i = 0; i < point_num; i++) {
+    
+	for (size_t i = 0; i < point_num; i++) {
       memcpy(data_new + i * (size_t) new_dim, data_ori + i * (size_t) dim,
              dim * sizeof(float));
       memset(data_new + i * (size_t) new_dim + dim, 0,
              (new_dim - dim) * sizeof(float));
     }
     dim = new_dim;
-#ifdef __APPLE__
     delete[] data_ori;
-#elif __NSG_WINDOWS__
-    delete[] data_ori;
-#else
-    delete[] data_ori;
-#endif
-    return data_new;
+
+	return data_new;
   }
 
   //  template<typename T>
@@ -148,30 +158,6 @@ namespace NSG {
   //    return data_new;
   //  }
 
-  inline void alloc_aligned(void **ptr, size_t size, size_t align) {
-    *ptr = nullptr;
-    assert(IS_ALIGNED(size, align));
-#ifndef __NSG_WINDOWS__
-    *ptr = ::aligned_alloc(align, size);
-#else
-    *ptr = ::_aligned_malloc(size, align);  // note the swapped arguments!
-#endif
-
-    assert(*ptr != nullptr);
-  }
-
-  inline void aligned_free(void *ptr) {
-    // Gopal. Must have a check here if the pointer was actually allocated by
-    // _alloc_aligned
-    if (ptr == nullptr) {
-      return;
-    }
-#ifndef __NSG_WINDOWS__
-    free(ptr);
-#else
-    ::_aligned_free(ptr);
-#endif
-  }
 
   /********* templated load functions *********/
   template<typename T>
