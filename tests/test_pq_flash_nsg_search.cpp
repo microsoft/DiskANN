@@ -6,6 +6,7 @@
 #include <omp.h>
 #include <atomic>
 #include <cassert>
+#include "utils.h"
 
 void load_data(char* filename, float*& data, unsigned& num,
                unsigned& dim) {  // load data with sift10K pattern
@@ -17,7 +18,7 @@ void load_data(char* filename, float*& data, unsigned& num,
   in.read((char*) &dim, 4);
   in.seekg(0, std::ios::end);
   std::ios::pos_type ss = in.tellg();
-  size_t             fsize = (size_t) ss;
+  size_t fsize = (size_t) ss;
   num = (unsigned) (fsize / (dim + 1) / 4);
   data = (float*) malloc((size_t) num * (size_t) dim * sizeof(float));
 
@@ -41,7 +42,8 @@ void save_result(char* filename, std::vector<std::vector<unsigned>>& results) {
   out.close();
 }
 
-int main(int argc, char** argv) {
+template<typename T>
+void aux_main(int argc, char** argv) {
   if (argc != 14) {
     std::cout << argv[0]
               << " data_bin[1] pq_tables_bin[2] n_chunks[3] chunk_size[4] "
@@ -51,23 +53,24 @@ int main(int argc, char** argv) {
               << std::endl;
     exit(-1);
   }
+
   _u64 n_chunks = (_u64) std::atoi(argv[3]);
   _u64 chunk_size = (_u64) std::atoi(argv[4]);
   _u64 data_dim = (_u64) std::atoi(argv[5]);
 
   // construct FlashNSG
-  NSG::DistanceL2 dist_cmp;
-  NSG::PQFlashNSG index(&dist_cmp);
+  NSG::DistanceL2UInt8 dist_cmp;
+  NSG::PQFlashNSG<T>   index(&dist_cmp);
   std::cout << "main --- tid: " << std::this_thread::get_id() << std::endl;
   std::cout << "Loading index from " << argv[1] << std::endl;
   index.load(argv[1], argv[6], argv[2], chunk_size, n_chunks, data_dim);
   index.reader->register_thread();
 
   // load queries
-  float*   query_load = NULL;
-  unsigned query_num, query_dim;
+  T*       query_load = NULL;
+  size_t query_num, query_dim;
   std::cout << "Loading Queries from " << argv[7] << std::endl;
-  NSG::aligned_load_Tvecs<float>(argv[7], query_load, query_num, query_dim);
+  load_Tvecs_plain<float, T>(argv[7], query_load, query_num, query_dim);
   std::cout << "query_dim = " << query_dim << std::endl;
   _u64 aligned_dim = ROUND_UP(query_dim, 8);
   assert(aligned_dim == index.aligned_dim);
@@ -88,16 +91,16 @@ int main(int argc, char** argv) {
 
   std::vector<std::vector<unsigned>> res(query_num,
                                          std::vector<unsigned>(k_search));
-  std::atomic<unsigned> qcounter;
+  std::atomic<unsigned>              qcounter;
   qcounter.store(0);
 
   NSG::QueryStats* stats = new NSG::QueryStats[query_num];
   // _u64             n_threads = omp_get_max_threads();
   _u64 n_threads = (_u64) atoi(argv[13]);
   std::cout << "Executing queries on " << n_threads << " threads\n";
-  std::vector<NSG::QueryScratch> thread_scratch(n_threads);
+  std::vector<NSG::QueryScratch<T>> thread_scratch(n_threads);
   for (auto& scratch : thread_scratch) {
-    scratch.coord_scratch = new _s8[MAX_N_CMPS * data_dim];
+    scratch.coord_scratch = new T[MAX_N_CMPS * data_dim];
     NSG::alloc_aligned((void**) &scratch.sector_scratch,
                        MAX_N_SECTOR_READS * SECTOR_LEN, SECTOR_LEN);
     NSG::alloc_aligned((void**) &scratch.aligned_scratch, 256 * sizeof(float),
@@ -113,7 +116,7 @@ int main(int argc, char** argv) {
 
   NSG::Timer            timer;
   std::vector<unsigned> has_inits(n_threads, 0);
-#pragma omp             parallel for schedule(dynamic, 1) num_threads(n_threads)
+#pragma omp parallel for schedule(dynamic, 1) num_threads(n_threads)
   for (_s64 i = 0; i < query_num; i++) {
     unsigned val = qcounter.fetch_add(1);
     if (val % 1000 == 0) {
@@ -121,7 +124,7 @@ int main(int argc, char** argv) {
     }
     std::vector<unsigned>& query_res = res[i];
     _u64                   thread_no = omp_get_thread_num();
-    NSG::QueryScratch*     local_scratch = &(thread_scratch[thread_no]);
+    NSG::QueryScratch<T>*  local_scratch = &(thread_scratch[thread_no]);
 
     // zero context
     local_scratch->coord_idx = 0;
@@ -138,7 +141,7 @@ int main(int argc, char** argv) {
       }
     }
 
-    auto ret = index.cached_beam_search(query_load + i * aligned_dim, k_search,
+    index.cached_beam_search(query_load + i * aligned_dim, k_search,
                                         l_search, query_res.data(), beam_width,
                                         stats + i, local_scratch);
     // auto ret = index.Search(query_load + i * dim, data_load, K, paras,
@@ -179,6 +182,9 @@ int main(int argc, char** argv) {
     NSG::aligned_free(scratch.aligned_pqtable_dist_scratch);
   }
   NSG::aligned_free(query_load);
+}
 
+int main(int argc, char** argv) {
+  aux_main<_u8>(argc, argv);
   return 0;
 }

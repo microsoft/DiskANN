@@ -1,22 +1,20 @@
 #pragma once
 #include "IANNIndex.h"
-#include "efanna2e/distance.h"
+#include "efanna2e/pq_flash_index_nsg.h"
 
 namespace NSG {
 
   template<typename T>
   class IndexNSG;
 
-  
-  template <typename T>
+  template<typename T>
   class NSGInterface : public ANNIndex::IANNIndex {
    public:
 #ifdef __NSG_WINDOWS__
     __declspec(dllexport) __cdecl
 #endif
-       NSGInterface(
-            unsigned __int32       dimension,
-            ANNIndex::DistanceType distanceType);
+        NSGInterface(unsigned __int32       dimension,
+                     ANNIndex::DistanceType distanceType);
 
 #ifdef __NSG_WINDOWS__
     __declspec(dllexport)
@@ -56,8 +54,10 @@ namespace NSG {
     ANNIndex::DistanceType m_distanceType;
 
    private:
-    std::string                           _nsgPathPrefix;
-    std::unique_ptr<NSG::IndexNSG<T>>	  _pNsgIndex;
-    NSG::Metric                           _compareMetric;
+    std::string                       _nsgPathPrefix;
+    std::unique_ptr<NSG::IndexNSG<T>> _pNsgIndex;
+    NSG::Metric                       _compareMetric;
+
+	std::unique_ptr<PQFlashNSG<T>>	  _pFlashIndex;
   };
 }  // namespace NSG

@@ -14,12 +14,10 @@
 namespace NSG {
 
 #define TRAINING_SET_SIZE 2000000
- template <typename T>
+  template<typename T>
   __cdecl NSGInterface<T>::NSGInterface(unsigned __int32       dimension,
-                             ANNIndex::DistanceType distanceType)
-      : ANNIndex::IANNIndex(dimension, distanceType),
-        _pNsgIndex(nullptr) 
-  {
+                                        ANNIndex::DistanceType distanceType)
+      : ANNIndex::IANNIndex(dimension, distanceType), _pNsgIndex(nullptr) {
     if (distanceType == ANNIndex::DT_L2) {
       _compareMetric = NSG::Metric::L2;
     } else if (distanceType == ANNIndex::DT_InnerProduct) {
@@ -34,11 +32,11 @@ namespace NSG {
   NSGInterface<T>::~NSGInterface<T>() {
   }
 
-  template <typename T>
+  template<typename T>
   // In implementation, the file path can be a file or folder.
   bool NSGInterface<T>::BuildIndex(const char* dataFilePath,
-                                const char* indexFilePath,
-                                const char* indexBuildParameters) {
+                                   const char* indexFilePath,
+                                   const char* indexBuildParameters) {
     std::stringstream parser;
     parser << std::string(indexBuildParameters);
     std::string              cur_param;
@@ -60,50 +58,55 @@ namespace NSG {
     std::string index_params_path = index_prefix_path + "_params.bin";
     std::string train_file_path = index_prefix_path + "_training_set_float.bin";
     std::string pq_pivots_path = index_prefix_path + "_pq_pivots.bin";
-    std::string pq_compressed_vectors_path = index_prefix_path + "_compressed_uint32.bin";
+    std::string pq_compressed_vectors_path =
+        index_prefix_path + "_compressed_uint32.bin";
     std::string randnsg_path = index_prefix_path + "_unopt.rnsg";
 
     unsigned L = (unsigned) atoi(param_list[0].c_str());
     unsigned R = (unsigned) atoi(param_list[1].c_str());
     unsigned C = (unsigned) atoi(param_list[2].c_str());
     size_t   num_pq_chunks = (size_t) atoi(param_list[3].c_str());
-    
 
-uint32_t* params_array = new uint32_t[4];
-    params_array[0] =  (uint32_t)  L;
-    params_array[1] =  (uint32_t)  R;
-    params_array[2] =  (uint32_t)  C;
-    params_array[3] =  (uint32_t)  num_pq_chunks;
-    NSG::save_bin<uint32_t> (index_params_file_path.c_str(), params_array, 4, 1);
-
-
-
+    uint32_t* params_array = new uint32_t[4];
+    params_array[0] = (uint32_t) L;
+    params_array[1] = (uint32_t) R;
+    params_array[2] = (uint32_t) C;
+    params_array[3] = (uint32_t) num_pq_chunks;
+    NSG::save_bin<uint32_t>(index_params_path.c_str(), params_array, 4, 1);
 
     T* data_load = NULL;
+
     size_t points_num, dim;
 
     NSG::load_bin<T>(dataFilePath, data_load, points_num, dim);
     data_load = NSG::data_align(data_load, points_num, dim);
     std::cout << "Data loaded and aligned" << std::endl;
 
-    auto        s = std::chrono::high_resolution_clock::now();
+    auto s = std::chrono::high_resolution_clock::now();
 
     if (points_num > 2 * TRAINING_SET_SIZE) {
-        gen_random_slice(data_load, points_num, dim, train_file_path.c_str(),
-                         (size_t) TRAINING_SET_SIZE);
+      gen_random_slice(data_load, points_num, dim, train_file_path.c_str(),
+                       (size_t) TRAINING_SET_SIZE);
     } else {
-     float* float_data = new float[points_num*dim];
-     for (size_t i = 0; i < points_num; i++)
-for (size_t j=0; j < dim; j++)
-float_data[i*dim + j] = data_load[i*dim + j];
-NSG::save_bin<float> (train_file_path.c_str(), float_data, points_num, dim);
-delete[] float_data;
+      float* float_data = new float[points_num * dim];
+      for (size_t i = 0; i < points_num; i++) {
+        for (size_t j = 0; j < dim; j++) {
+          float_data[i * dim + j] = data_load[i * dim + j];
+        }
+      }
+
+      NSG::save_bin<float>(train_file_path.c_str(), float_data, points_num,
+                           dim);
+      delete[] float_data;
     }
 
     //  unsigned    nn_graph_deg = (unsigned) atoi(argv[3]);
 
-    generate_pq_pivots(train_file_path, 256, num_pq_chunks, 15, pq_pivots_path);
- generate_pq_data_from_pivots<T>(data_load, points_num, dim, 256, num_pq_chunks, pq_pivots_path, pq_compressed_vectors_path);
+    generate_pq_pivots<T>(train_file_path, 256, num_pq_chunks, 15,
+                          pq_pivots_path);
+    generate_pq_data_from_pivots<T>(data_load, points_num, dim, 256,
+                                    num_pq_chunks, pq_pivots_path,
+                                    pq_compressed_vectors_path);
 
     NSG::Parameters paras;
     paras.Set<unsigned>("L", L);
@@ -113,21 +116,63 @@ delete[] float_data;
     paras.Set<unsigned>("num_rnds", 2);
     paras.Set<std::string>("save_path", randnsg_path);
 
-    _pNsgIndex = std::unique_ptr<NSG::IndexNSG<T> >(new NSG::IndexNSG<T>(dim, points_num, _compareMetric, nullptr));
+    _pNsgIndex = std::unique_ptr<NSG::IndexNSG<T>>(
+        new NSG::IndexNSG<T>(dim, points_num, _compareMetric, nullptr));
     _pNsgIndex->BuildRandomHierarchical(data_load, paras);
     auto                          e = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> diff = e - s;
 
     std::cout << "Indexing time: " << diff.count() << "\n";
+
     _pNsgIndex->Save(randnsg_path.c_str());
+
     return 0;
   }
 
-  template <typename T>
+  template<typename T>
   // Load index form file.
   bool NSGInterface<T>::LoadIndex(const char* indexFilePath,
-                               const char* queryParameters) 
-  {
+                                  const char* queryParameters) {
+    std::stringstream parser;
+    parser << std::string(queryParameters);
+    std::string              cur_param;
+    std::vector<std::string> param_list;
+    while (parser >> cur_param)
+      param_list.push_back(cur_param);
+
+    if (param_list.size() != 8) {
+      std::cout << "Correct usage of parameters is \ndata_bin[1] "
+                   "pq_tables_bin[2] n_chunks[3] chunk_size[4] "
+                   "nsg_disk_opt[5] BeamWidth[6] cache_nlevels[7] nthreads[8]"
+                << std::endl;
+      return 1;
+    }
+
+    // convert strs into params
+    std::string data_bin = param_list[0];
+    std::string pq_tables_bin = param_list[1];
+    _u64        n_chunks = (_u64) std::atoi(param_list[2].c_str());
+    _u64        chunk_size = (_u64) std::atoi(param_list[3].c_str());
+    std::string nsg_disk_opt = param_list[4];
+    _u64        beam_width = (_u64) std::atoi(param_list[5].c_str());
+    _u64        cache_nlevels = (_u64) std::atoi(param_list[6].c_str());
+    _u64        nthreads = (_u64) std::atoi(param_list[7].c_str());
+    _u64        data_dim = n_chunks * chunk_size;
+
+    std::cout << "argparse PQ -- n_chunks: " << n_chunks
+              << ", chunk_size: " << chunk_size << ", data_dim: " << data_dim
+              << "\n";
+
+    // create object
+    _pFlashIndex.reset(new PQFlashNSG<T>());
+
+    // load index
+    _pFlashIndex->load(data_bin.c_str(), nsg_disk_opt.c_str(),
+                       pq_tables_bin.c_str(), chunk_size, n_chunks, data_dim);
+
+    // cache bfs levels
+    _pFlashIndex->cache_bfs_levels(cache_nlevels);
+
     return 0;
   }
 
@@ -137,16 +182,14 @@ delete[] float_data;
   // than queryCount * neighborCount.
   template<typename T>
   void NSGInterface<T>::SearchIndex(const char*       vector,
-                                 unsigned __int64  queryCount,
-                                 unsigned __int64  neighborCount,
-                                 float*            distances,
-                                 unsigned __int64* ids) const 
-  {
+                                    unsigned __int64  queryCount,
+                                    unsigned __int64  neighborCount,
+                                    float*            distances,
+                                    unsigned __int64* ids) const {
   }
 
   template class NSGInterface<int8_t>;
   template class NSGInterface<float>;
   template class NSGInterface<uint8_t>;
-
 
 }  // namespace NSG

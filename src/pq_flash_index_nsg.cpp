@@ -7,6 +7,7 @@
 #include <cmath>
 #include <iterator>
 #include <thread>
+#include "efanna2e/distance.h"
 #include "efanna2e/exceptions.h"
 #include "efanna2e/parameters.h"
 #include "efanna2e/timer.h"
@@ -39,19 +40,12 @@
 
 // returns region of `node_buf` containing [NNBRS][NBR_ID(_u32)]
 #define OFFSET_TO_NODE_NHOOD(node_buf) \
-  (unsigned *) ((char *) node_buf + data_dim * sizeof(_s8))
+  (unsigned *) ((char *) node_buf + data_dim * sizeof(T))
 
-// returns region of `node_buf` containing [COORD(_s8)]
-#define OFFSET_TO_NODE_COORDS(node_buf) (_s8 *) (node_buf)
+// returns region of `node_buf` containing [COORD(T)]
+#define OFFSET_TO_NODE_COORDS(node_buf) (T *) (node_buf)
 
 namespace {
-  inline void int8_to_float(int8_t *int8_coords, float *float_coords,
-                            _u64 dim) {
-    for (_u64 idx = 0; idx < dim; idx++) {
-      float_coords[idx] = (float) int8_coords[idx];
-    }
-  }
-
   void aggregate_coords(const unsigned *ids, const _u64 n_ids,
                         const _u8 *all_coords, const _u64 ndims, _u8 *out) {
     for (_u64 i = 0; i < n_ids; i++) {
@@ -81,11 +75,26 @@ namespace {
 }  // namespace
 
 namespace NSG {
-  PQFlashNSG::PQFlashNSG(Distance<float> *dist_cmp) : dist_cmp(dist_cmp) {
+  template<>
+  PQFlashNSG<_u8>::PQFlashNSG() {
+    this->dist_cmp = new DistanceL2UInt8();
     medoid_nhood.second = nullptr;
   }
 
-  PQFlashNSG::~PQFlashNSG() {
+  template<>
+  PQFlashNSG<_s8>::PQFlashNSG() {
+    this->dist_cmp = new DistanceL2Int8();
+    medoid_nhood.second = nullptr;
+  }
+
+  template<>
+  PQFlashNSG<float>::PQFlashNSG() {
+    this->dist_cmp = new DistanceL2();
+    medoid_nhood.second = nullptr;
+  }
+
+  template<typename T>
+  PQFlashNSG<T>::~PQFlashNSG() {
     if (data != nullptr) {
       delete[] data;
     }
@@ -100,9 +109,12 @@ namespace NSG {
     }
     reader->close();
     delete reader;
+
+    delete this->dist_cmp;
   }
 
-  void PQFlashNSG::cache_bfs_levels(_u64 nlevels) {
+  template<typename T>
+  void PQFlashNSG<T>::cache_bfs_levels(_u64 nlevels) {
     assert(nlevels > 1);
 
     tsl::robin_set<unsigned> *cur_level, *prev_level;
@@ -122,7 +134,7 @@ namespace NSG {
       cur_level->clear();
 
       // read in all pre_level nhoods
-      std::vector<AlignedRead> read_reqs;
+      std::vector<AlignedRead>             read_reqs;
       std::vector<std::pair<_u64, char *>> nhoods;
 
       for (const unsigned &id : *prev_level) {
@@ -148,9 +160,9 @@ namespace NSG {
       for (auto &nhood : nhoods) {
         // insert node coord into coord_cache
         char *node_buf = OFFSET_TO_NODE(nhood.second, nhood.first);
-        _s8 * node_coords = OFFSET_TO_NODE_COORDS(node_buf);
-        _s8 * cached_coords = new _s8[data_dim];
-        memcpy(cached_coords, node_coords, data_dim * sizeof(_s8));
+        T *   node_coords = OFFSET_TO_NODE_COORDS(node_buf);
+        T *   cached_coords = new T[data_dim];
+        memcpy(cached_coords, node_coords, data_dim * sizeof(T));
         coord_cache.insert(std::make_pair(nhood.first, cached_coords));
 
         // insert node nhood into nhood_cache
@@ -201,8 +213,8 @@ namespace NSG {
     _u64 cur_off = 0;
     for (auto &k_v : nhood_cache) {
       std::pair<_u64, unsigned *> &val = nhood_cache[k_v.first];
-      unsigned *&ptr = val.second;
-      _u64       nnbrs = val.first;
+      unsigned *&                  ptr = val.second;
+      _u64                         nnbrs = val.first;
       memcpy(nhood_cache_buf + cur_off, ptr, nnbrs * sizeof(unsigned));
       delete[] ptr;
       ptr = nhood_cache_buf + cur_off;
@@ -213,22 +225,23 @@ namespace NSG {
               << coord_cache.size() << "\n";
     // consolidate coord_cache down to single buf
     _u64 coord_cache_buf_len = coord_cache.size() * data_dim;
-    coord_cache_buf = new _s8[coord_cache_buf_len];
+    coord_cache_buf = new T[coord_cache_buf_len];
     memset(coord_cache_buf, 0, coord_cache_buf_len / sizeof(int));
     cur_off = 0;
     for (auto &k_v : coord_cache) {
-      _s8 *&val = coord_cache[k_v.first];
-      memcpy(coord_cache_buf + cur_off, val, data_dim * sizeof(_s8));
+      T *&val = coord_cache[k_v.first];
+      memcpy(coord_cache_buf + cur_off, val, data_dim * sizeof(T));
       delete[] val;
       val = coord_cache_buf + cur_off;
       cur_off += data_dim;
     }
   }
 
-  void PQFlashNSG::load(const char *data_bin, const char *nsg_file,
-                        const char *pq_tables_bin, const _u64 chunk_size,
-                        const _u64 n_chunks, const _u64 data_dim) {
-    pq_table = new FixedChunkPQTable(n_chunks, chunk_size);
+  template<typename T>
+  void PQFlashNSG<T>::load(const char *data_bin, const char *nsg_file,
+                           const char *pq_tables_bin, const _u64 chunk_size,
+                           const _u64 n_chunks, const _u64 data_dim) {
+    pq_table = new FixedChunkPQTable<T>(n_chunks, chunk_size);
     std::cout << "Loading PQ Tables from " << pq_tables_bin << "\n";
     pq_table->load_bin(pq_tables_bin);
     unsigned npts_u32, nchunks_u32;
@@ -256,8 +269,7 @@ namespace NSG {
     READ_U64(nsg_meta, medoid);
     READ_U64(nsg_meta, max_node_len);
     READ_U64(nsg_meta, nnodes_per_sector);
-    max_degree =
-        ((max_node_len - data_dim * sizeof(_s8)) / sizeof(unsigned)) - 1;
+    max_degree = ((max_node_len - data_dim * sizeof(T)) / sizeof(unsigned)) - 1;
 
     std::cout << "Index File: " << nsg_file << std::endl;
     std::cout << "Medoid: " << medoid << std::endl;
@@ -292,16 +304,15 @@ namespace NSG {
     char *medoid_node_buf = OFFSET_TO_NODE(medoid_buf, medoid);
 
     // add medoid coords to `coord_cache`
-    _s8 *medoid_coords = new _s8[data_dim];
-    _s8 *medoid_disk_coords = OFFSET_TO_NODE_COORDS(medoid_node_buf);
-    memcpy(medoid_coords, medoid_disk_coords, data_dim * sizeof(_s8));
+    T *medoid_coords = new T[data_dim];
+    T *medoid_disk_coords = OFFSET_TO_NODE_COORDS(medoid_node_buf);
+    memcpy(medoid_coords, medoid_disk_coords, data_dim * sizeof(T));
     coord_cache.clear();
     coord_cache.insert(std::make_pair(medoid, medoid_coords));
 
     // add medoid nhood to nhood_cache
     unsigned *medoid_nhood_buf = OFFSET_TO_NODE_NHOOD(medoid_node_buf);
     medoid_nhood.first = *(unsigned *) (medoid_nhood_buf);
-    assert(medoid_nhood.first < 200);
     std::cout << "Medoid degree: " << medoid_nhood.first << std::endl;
     medoid_nhood.second = new unsigned[medoid_nhood.first];
     memcpy(medoid_nhood.second, (medoid_nhood_buf + 1),
@@ -323,159 +334,12 @@ namespace NSG {
     std::cout << std::endl;
   }
 
-  // IGNORED -- not ported to new disk format for re-ranking
-  std::pair<int, int> PQFlashNSG::beam_search(
-      const float *query, const _u64 k_search, const _u64 l_search,
-      _u32 *indices, const _u64 beam_width, QueryStats *stats) {
-    Timer query_timer, io_timer;
-    // scratch space to compute distances between FP32 Query and INT8 data
-    float *scratch = nullptr;
-    alloc_aligned((void **) &scratch, aligned_dim * sizeof(float), 32);
-    memset(scratch, 0, aligned_dim);
-
-    std::vector<Neighbor> retset(l_search + 1);
-    std::vector<_u64>     init_ids(l_search);
-    tsl::robin_set<_u64>  visited(10 * l_search);
-
-    _u64 tmp_l = 0;
-    // add each neighbor of medoid
-    for (; tmp_l < l_search && tmp_l < medoid_nhood.first; tmp_l++) {
-      _u64 id = medoid_nhood.second[tmp_l];
-      init_ids[tmp_l] = id;
-      visited.insert(id);
-      // inflate coords from PQ _u8 to FP32
-      pq_table->convert(data + id * n_chunks, scratch);
-      float dist = dist_cmp->compare(scratch, query, aligned_dim);
-      retset[tmp_l] = Neighbor(id, dist, true);
-      if (stats != nullptr) {
-        stats->n_cmps++;
-      }
-    }
-
-    // TODO:: create dummy ids
-    for (; tmp_l < l_search; tmp_l++) {
-      _u64 id = (std::numeric_limits<unsigned>::max)() - tmp_l;
-      init_ids[tmp_l] = id;
-      float dist = (std::numeric_limits<float>::max)();
-      retset[tmp_l] = Neighbor(id, dist, false);
-    }
-
-    std::sort(retset.begin(), retset.begin() + l_search);
-
-    _u64 hops = 0;
-    _u64 cmps = 0;
-    _u64 k = 0;
-
-    // cleared every iteration
-    std::vector<_u64> frontier;
-    std::vector<std::pair<_u64, char *>> frontier_nhoods;
-    std::vector<AlignedRead> frontier_read_reqs;
-
-    while (k < l_search) {
-      _u64 nk = l_search;
-
-      // clear iteration state
-      frontier.clear();
-      frontier_nhoods.clear();
-      _u64 marker = k - 1;
-      while (++marker < l_search && frontier.size() < beam_width) {
-        if (retset[marker].flag) {
-          frontier.push_back(retset[marker].id);
-          retset[marker].flag = false;
-        }
-      }
-
-      // read nhoods of frontier ids
-      if (!frontier.empty()) {
-        hops++;
-        frontier_nhoods.resize(frontier.size());
-        frontier_read_reqs.resize(frontier.size());
-        for (_u64 i = 0; i < frontier.size(); i++) {
-          unsigned id = frontier[i];
-          frontier_nhoods[i].first = id;
-          alloc_aligned((void **) &frontier_nhoods[i].second, SECTOR_LEN,
-                        SECTOR_LEN);
-
-          frontier_read_reqs[i] =
-              AlignedRead(NODE_SECTOR_NO(id) * SECTOR_LEN, SECTOR_LEN,
-                          frontier_nhoods[i].second);
-          if (stats != nullptr) {
-            stats->n_4k++;
-            stats->n_ios++;
-          }
-        }
-        io_timer.reset();
-        reader->read(frontier_read_reqs);
-        if (stats != nullptr) {
-          stats->io_us += io_timer.elapsed();
-        }
-        // process each frontier nhood - compute distances to unvisited nodes
-        for (auto &frontier_nhood : frontier_nhoods) {
-          // if (retset[k].flag) {
-          // retset[k].flag = false;
-          // unsigned n = retset[k].id;
-          char *node_disk_buf =
-              OFFSET_TO_NODE(frontier_nhood.second, frontier_nhood.first);
-          unsigned *node_buf = OFFSET_TO_NODE_NHOOD(node_disk_buf);
-          _u64      nnbrs = (_u64)(*node_buf);
-          assert(nnbrs < 200);
-          unsigned *node_nbrs = (node_buf + 1);
-          // issue prefetches
-          for (_u64 m = 0; m < nnbrs; ++m) {
-            unsigned next_id = node_nbrs[m];
-            _mm_prefetch((char *) data + next_id * n_chunks, _MM_HINT_T1);
-          }
-          // process data
-          for (_u64 m = 0; m < nnbrs; ++m) {
-            unsigned id = node_nbrs[m];
-            if (visited.find(id) != visited.end()) {
-              continue;
-            } else {
-              visited.insert(id);
-              cmps++;
-              pq_table->convert(data + id * n_chunks, scratch);
-              float dist = dist_cmp->compare(scratch, query, aligned_dim);
-              if (stats != nullptr) {
-                stats->n_cmps++;
-              }
-              if (dist >= retset[l_search - 1].distance)
-                continue;
-              Neighbor nn(id, dist, true);
-              _u64     r = InsertIntoPool(
-                  retset.data(), l_search,
-                  nn);  // Return position in sorted list where nn inserted.
-              if (r < nk)
-                nk = r;  // nk logs the best position in the retset that was
-                         // updated
-                         // due to neighbors of n.
-            }
-          }
-        }
-        // cleanup for the round
-        for (auto &nhood : frontier_nhoods) {
-          free(nhood.second);
-        }
-      }
-      // update best inserted position
-      if (nk <= k)
-        k = nk;  // k is the best position in retset updated in this round.
-      else
-        ++k;
-    }
-    for (_u64 i = 0; i < k_search; i++) {
-      indices[i] = retset[i].id;
-    }
-    aligned_free(scratch);
-    if (stats != nullptr) {
-      stats->total_us = query_timer.elapsed();
-    }
-    return std::make_pair(hops, cmps);
-  }
-
-  std::pair<int, int> PQFlashNSG::cached_beam_search(
-      const float *query, const _u64 k_search, const _u64 l_search,
-      _u32 *indices, const _u64 beam_width, QueryStats *stats,
-      QueryScratch *query_scratch) {
+  template<typename T>
+  void PQFlashNSG<T>::cached_beam_search(const T *query, const _u64 k_search,
+                                         const _u64 l_search, _u32 *indices,
+                                         const _u64       beam_width,
+                                         QueryStats *     stats,
+                                         QueryScratch<T> *query_scratch) {
     // reset query scratch context
     query_scratch->coord_idx = 0;
     query_scratch->sector_idx = 0;
@@ -485,7 +349,7 @@ namespace NSG {
     _mm_prefetch((char *) scratch, _MM_HINT_T0);
 
     // pointers to buffers for data
-    _s8 * data_buf = query_scratch->coord_scratch;
+    T *   data_buf = query_scratch->coord_scratch;
     _u64 &data_buf_idx = query_scratch->coord_idx;
     _mm_prefetch((char *) data_buf, _MM_HINT_T1);
 
@@ -503,8 +367,9 @@ namespace NSG {
     _u8 *  pq_coord_scratch = query_scratch->aligned_pq_coord_scratch;
 
     // lambda to batch compute query<-> node distances in PQ space
-    auto compute_dists = [this, pq_coord_scratch, pq_dists](
-        const unsigned *ids, const _u64 n_ids, float *dists_out) {
+    auto compute_dists = [this, pq_coord_scratch, pq_dists](const unsigned *ids,
+                                                            const _u64 n_ids,
+                                                            float *dists_out) {
       ::aggregate_coords(ids, n_ids, this->data, this->n_chunks,
                          pq_coord_scratch);
       ::pq_dist_lookup(pq_coord_scratch, n_ids, this->n_chunks, pq_dists,
@@ -516,7 +381,7 @@ namespace NSG {
     std::vector<_u64>     init_ids(l_search);
     tsl::robin_set<_u64>  visited(4096);
 
-    tsl::robin_map<_u64, _s8 *> fp_coords;
+    tsl::robin_map<_u64, T *> fp_coords;
 
 // compute medoid nhood <-> query distances
 #ifdef USE_ACCELERATED_PQ
@@ -557,9 +422,9 @@ namespace NSG {
     _u64 k = 0;
 
     // cleared every iteration
-    std::vector<_u64> frontier;
+    std::vector<_u64>                    frontier;
     std::vector<std::pair<_u64, char *>> frontier_nhoods;
-    std::vector<AlignedRead> frontier_read_reqs;
+    std::vector<AlignedRead>             frontier_read_reqs;
     std::vector<std::pair<_u64, std::pair<_u64, unsigned *>>> cached_nhoods;
 
     while (k < l_search) {
@@ -627,11 +492,11 @@ namespace NSG {
             std::cerr << "***Warning nnbrs = " << nnbrs << " greater than 200"
                       << std::endl;
           }
-          _s8 *node_fp_coords = OFFSET_TO_NODE_COORDS(node_disk_buf);
+          T *node_fp_coords = OFFSET_TO_NODE_COORDS(node_disk_buf);
           assert(data_buf_idx < MAX_N_CMPS);
-          _s8 *node_fp_coords_copy = data_buf + (data_buf_idx * data_dim);
+          T *node_fp_coords_copy = data_buf + (data_buf_idx * data_dim);
           data_buf_idx++;
-          memcpy(node_fp_coords_copy, node_fp_coords, data_dim * sizeof(_s8));
+          memcpy(node_fp_coords_copy, node_fp_coords, data_dim * sizeof(T));
 
           fp_coords.insert(
               std::make_pair(frontier_nhood.first, node_fp_coords_copy));
@@ -733,12 +598,13 @@ namespace NSG {
       else
         ++k;
     }
+
     // prefetch coords backing buf
     _mm_prefetch((char *) data_buf, _MM_HINT_T1);
     // RE-RANKING STEP
     for (_u64 i = 0; i < l_search; i++) {
       _u64 idx = retset[i].id;
-      _s8 *node_coords;
+      T *  node_coords;
       auto global_cache_iter = coord_cache.find(idx);
       if (global_cache_iter == coord_cache.end()) {
         auto local_cache_iter = fp_coords.find(idx);
@@ -747,8 +613,8 @@ namespace NSG {
       } else {
         node_coords = global_cache_iter->second;
       }
-      int8_to_float(node_coords, scratch, data_dim);
-      retset[i].distance = dist_cmp->compare(query, scratch, aligned_dim);
+
+      retset[i].distance = dist_cmp->compare(query, node_coords, aligned_dim);
       if (stats != nullptr) {
         stats->n_cmps++;
       }
@@ -768,7 +634,10 @@ namespace NSG {
     if (stats != nullptr) {
       stats->total_us = query_timer.elapsed();
     }
-
-    return std::make_pair(hops, cmps);
   }
+
+  // instantiations
+  template class PQFlashNSG<_u8>;
+  template class PQFlashNSG<_s8>;
+  template class PQFlashNSG<float>;
 }  // namespace NSG

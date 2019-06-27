@@ -17,8 +17,9 @@
 #define MAX_N_SECTOR_READS 16
 
 namespace NSG {
+	template<typename T>
   struct QueryScratch {
-    _s8 *coord_scratch = nullptr;  // MUST BE AT LEAST [MAX_N_CMPS * data_dim]
+    T *coord_scratch = nullptr;  // MUST BE AT LEAST [MAX_N_CMPS * data_dim]
     _u64 coord_idx = 0;            // index of next [data_dim] scratch to use
 
     char *sector_scratch =
@@ -33,9 +34,10 @@ namespace NSG {
         nullptr;  // MUST BE AT LEAST  [N_CHUNKS * MAX_DEGREE]
   };
 
+template<typename T>
   class PQFlashNSG {
    public:
-    PQFlashNSG(Distance<float> *dist_cmp);
+    PQFlashNSG();
     ~PQFlashNSG();
 
     // load data, but obtain handle to nsg file
@@ -47,18 +49,12 @@ namespace NSG {
     void cache_bfs_levels(_u64 nlevels);
 
     // implemented
-    std::pair<int, int> beam_search(const float *query, const _u64 k_search,
-                                    const _u64 l_search, _u32 *indices,
-                                    const _u64  beam_width,
-                                    QueryStats *stats = nullptr);
-
-    // implemented
-    std::pair<int, int> cached_beam_search(const float *query,
+    void cached_beam_search(const T *query,
                                            const _u64 k_search,
                                            const _u64 l_search, _u32 *indices,
                                            const _u64    beam_width,
                                            QueryStats *  stats = nullptr,
-                                           QueryScratch *scratch = nullptr);
+                                           QueryScratch<T> *scratch = nullptr);
     AlignedFileReader *reader;
 
     // index info
@@ -81,9 +77,10 @@ namespace NSG {
     _u8 *              data = nullptr;
     _u64               chunk_size;
     _u64               n_chunks;
-    FixedChunkPQTable *pq_table;
+    FixedChunkPQTable<T> *pq_table;
+
     // distance comparator
-    Distance<float> *dist_cmp;
+    Distance<T> *dist_cmp;
 
     // medoid/start info
     _u64 medoid = 0;
@@ -94,7 +91,7 @@ namespace NSG {
     tsl::robin_map<_u64, std::pair<_u64, unsigned *>> nhood_cache;
 
     // coord_cache
-    _s8 *coord_cache_buf = nullptr;
-    tsl::robin_map<_u64, _s8 *> coord_cache;
+    T *coord_cache_buf = nullptr;
+    tsl::robin_map<_u64, T*> coord_cache;
   };
 }
