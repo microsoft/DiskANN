@@ -134,7 +134,7 @@ namespace NSG {
       cur_level->clear();
 
       // read in all pre_level nhoods
-      std::vector<AlignedRead>             read_reqs;
+      std::vector<AlignedRead> read_reqs;
       std::vector<std::pair<_u64, char *>> nhoods;
 
       for (const unsigned &id : *prev_level) {
@@ -213,8 +213,8 @@ namespace NSG {
     _u64 cur_off = 0;
     for (auto &k_v : nhood_cache) {
       std::pair<_u64, unsigned *> &val = nhood_cache[k_v.first];
-      unsigned *&                  ptr = val.second;
-      _u64                         nnbrs = val.first;
+      unsigned *&ptr = val.second;
+      _u64       nnbrs = val.first;
       memcpy(nhood_cache_buf + cur_off, ptr, nnbrs * sizeof(unsigned));
       delete[] ptr;
       ptr = nhood_cache_buf + cur_off;
@@ -367,9 +367,8 @@ namespace NSG {
     _u8 *  pq_coord_scratch = query_scratch->aligned_pq_coord_scratch;
 
     // lambda to batch compute query<-> node distances in PQ space
-    auto compute_dists = [this, pq_coord_scratch, pq_dists](const unsigned *ids,
-                                                            const _u64 n_ids,
-                                                            float *dists_out) {
+    auto compute_dists = [this, pq_coord_scratch, pq_dists](
+        const unsigned *ids, const _u64 n_ids, float *dists_out) {
       ::aggregate_coords(ids, n_ids, this->data, this->n_chunks,
                          pq_coord_scratch);
       ::pq_dist_lookup(pq_coord_scratch, n_ids, this->n_chunks, pq_dists,
@@ -422,9 +421,9 @@ namespace NSG {
     _u64 k = 0;
 
     // cleared every iteration
-    std::vector<_u64>                    frontier;
+    std::vector<_u64> frontier;
     std::vector<std::pair<_u64, char *>> frontier_nhoods;
-    std::vector<AlignedRead>             frontier_read_reqs;
+    std::vector<AlignedRead> frontier_read_reqs;
     std::vector<std::pair<_u64, std::pair<_u64, unsigned *>>> cached_nhoods;
 
     while (k < l_search) {

@@ -18,7 +18,7 @@ void load_data(char* filename, float*& data, unsigned& num,
   in.read((char*) &dim, 4);
   in.seekg(0, std::ios::end);
   std::ios::pos_type ss = in.tellg();
-  size_t fsize = (size_t) ss;
+  size_t             fsize = (size_t) ss;
   num = (unsigned) (fsize / (dim + 1) / 4);
   data = (float*) malloc((size_t) num * (size_t) dim * sizeof(float));
 
@@ -59,14 +59,14 @@ void aux_main(int argc, char** argv) {
   _u64 data_dim = (_u64) std::atoi(argv[5]);
 
   // construct FlashNSG
-  NSG::PQFlashNSG<T>   index;
+  NSG::PQFlashNSG<T> index;
   std::cout << "main --- tid: " << std::this_thread::get_id() << std::endl;
   std::cout << "Loading index from " << argv[1] << std::endl;
   index.load(argv[1], argv[6], argv[2], chunk_size, n_chunks, data_dim);
   index.reader->register_thread();
 
   // load queries
-  T*       query_load = NULL;
+  T*     query_load = NULL;
   size_t query_num, query_dim;
   std::cout << "Loading Queries from " << argv[7] << std::endl;
   load_Tvecs_plain<float, T>(argv[7], query_load, query_num, query_dim);
@@ -90,7 +90,7 @@ void aux_main(int argc, char** argv) {
 
   std::vector<std::vector<unsigned>> res(query_num,
                                          std::vector<unsigned>(k_search));
-  std::atomic<unsigned>              qcounter;
+  std::atomic<unsigned> qcounter;
   qcounter.store(0);
 
   NSG::QueryStats* stats = new NSG::QueryStats[query_num];
@@ -115,7 +115,7 @@ void aux_main(int argc, char** argv) {
 
   NSG::Timer            timer;
   std::vector<unsigned> has_inits(n_threads, 0);
-#pragma omp parallel for schedule(dynamic, 1) num_threads(n_threads)
+#pragma omp             parallel for schedule(dynamic, 1) num_threads(n_threads)
   for (_s64 i = 0; i < query_num; i++) {
     unsigned val = qcounter.fetch_add(1);
     if (val % 1000 == 0) {
@@ -140,9 +140,9 @@ void aux_main(int argc, char** argv) {
       }
     }
 
-    index.cached_beam_search(query_load + i * aligned_dim, k_search,
-                                        l_search, query_res.data(), beam_width,
-                                        stats + i, local_scratch);
+    index.cached_beam_search(query_load + i * aligned_dim, k_search, l_search,
+                             query_res.data(), beam_width, stats + i,
+                             local_scratch);
     // auto ret = index.Search(query_load + i * dim, data_load, K, paras,
     // tmp.data());
   }

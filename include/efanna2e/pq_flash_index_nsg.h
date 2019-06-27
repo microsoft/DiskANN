@@ -17,9 +17,9 @@
 #define MAX_N_SECTOR_READS 16
 
 namespace NSG {
-	template<typename T>
+  template<typename T>
   struct QueryScratch {
-    T *coord_scratch = nullptr;  // MUST BE AT LEAST [MAX_N_CMPS * data_dim]
+    T *  coord_scratch = nullptr;  // MUST BE AT LEAST [MAX_N_CMPS * data_dim]
     _u64 coord_idx = 0;            // index of next [data_dim] scratch to use
 
     char *sector_scratch =
@@ -34,7 +34,7 @@ namespace NSG {
         nullptr;  // MUST BE AT LEAST  [N_CHUNKS * MAX_DEGREE]
   };
 
-template<typename T>
+  template<typename T>
   class PQFlashNSG {
    public:
     PQFlashNSG();
@@ -49,12 +49,10 @@ template<typename T>
     void cache_bfs_levels(_u64 nlevels);
 
     // implemented
-    void cached_beam_search(const T *query,
-                                           const _u64 k_search,
-                                           const _u64 l_search, _u32 *indices,
-                                           const _u64    beam_width,
-                                           QueryStats *  stats = nullptr,
-                                           QueryScratch<T> *scratch = nullptr);
+    void cached_beam_search(const T *query, const _u64 k_search,
+                            const _u64 l_search, _u32 *indices,
+                            const _u64 beam_width, QueryStats *stats = nullptr,
+                            QueryScratch<T> *scratch = nullptr);
     AlignedFileReader *reader;
 
     // index info
@@ -74,9 +72,9 @@ template<typename T>
     // data: _u8 * n_chunks
     // chunk_size = chunk size of each dimension chunk
     // pq_tables = float* [[2^8 * [chunk_size]] * n_chunks]
-    _u8 *              data = nullptr;
-    _u64               chunk_size;
-    _u64               n_chunks;
+    _u8 *                 data = nullptr;
+    _u64                  chunk_size;
+    _u64                  n_chunks;
     FixedChunkPQTable<T> *pq_table;
 
     // distance comparator
@@ -92,6 +90,6 @@ template<typename T>
 
     // coord_cache
     T *coord_cache_buf = nullptr;
-    tsl::robin_map<_u64, T*> coord_cache;
+    tsl::robin_map<_u64, T *> coord_cache;
   };
 }

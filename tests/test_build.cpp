@@ -96,6 +96,6 @@ bool testBuildIndex(const char* dataFilePath, const char* indexFilePath,
 }
 
 int main(int argc, char** argv) {
-  testBuildIndex<float>("/nvme/data/sift1m_u8/base.bin",
-                        "/nvme/data/sift1m_u8/test_build", "50 64 750 32");
+  testBuildIndex<uint8_t>("/nvme/data/sift1m_u8/base_u8.bin",
+                          "/nvme/data/sift1m_u8/test_build_u8", "50 64 750 32");
 }
