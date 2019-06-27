@@ -33,7 +33,6 @@ namespace NSG {
 #define _CONTROL_NUM 100
 #define MAX_START_POINTS 100
 
-
   template<typename T>
   IndexNSG<T>::IndexNSG(const size_t dimension, const size_t n, Metric m,
                         Index<T> *initializer, const size_t max_points)
@@ -1246,4 +1245,3 @@ namespace NSG {
   template class IndexNSG<uint8_t>;
 
 }  // namespace NSG
-

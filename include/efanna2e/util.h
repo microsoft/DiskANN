@@ -54,7 +54,7 @@ typedef int8_t   _s8;
 
 namespace NSG {
 
-	inline void alloc_aligned(void **ptr, size_t size, size_t align) {
+  inline void alloc_aligned(void **ptr, size_t size, size_t align) {
     *ptr = nullptr;
     assert(IS_ALIGNED(size, align));
 #ifndef __NSG_WINDOWS__
@@ -78,7 +78,6 @@ namespace NSG {
 #endif
   }
 
-
   static void GenRandom(std::mt19937 &rng, unsigned *addr, unsigned size,
                         unsigned N) {
     for (unsigned i = 0; i < size; ++i) {
@@ -97,18 +96,17 @@ namespace NSG {
     }
   }
 
-  template <typename T>
-  inline T* data_align(T *data_ori, size_t point_num, size_t &dim) 
-  {
+  template<typename T>
+  inline T *data_align(T *data_ori, size_t point_num, size_t &dim) {
     T *data_new = nullptr;
 
-	size_t new_dim = ROUND_UP(dim, 8);
-	size_t  allocSize = point_num * new_dim * sizeof(T);
+    size_t new_dim = ROUND_UP(dim, 8);
+    size_t allocSize = point_num * new_dim * sizeof(T);
     std::cout << "Allocating aligned memory, " << allocSize << " bytes...";
-    alloc_aligned( ((void **)&data_new), allocSize, 512);
+    alloc_aligned(((void **) &data_new), allocSize, 512);
     std::cout << "done" << std::endl;
-    
-	for (size_t i = 0; i < point_num; i++) {
+
+    for (size_t i = 0; i < point_num; i++) {
       memcpy(data_new + i * (size_t) new_dim, data_ori + i * (size_t) dim,
              dim * sizeof(float));
       memset(data_new + i * (size_t) new_dim + dim, 0,
@@ -117,9 +115,8 @@ namespace NSG {
     dim = new_dim;
     delete[] data_ori;
 
-	return data_new;
+    return data_new;
   }
-
 
   /********* templated load functions *********/
   template<typename T>
@@ -242,8 +239,8 @@ namespace NSG {
   }
 
   template<typename T>
-  inline void load_bin(const char *filename, T *&data, unsigned &npts,
-                       unsigned &ndims) {
+  inline void load_bin(const char *filename, T *&data, size_t &npts,
+                       size_t &ndims) {
     std::ifstream reader(filename, std::ios::binary);
     std::cout << "Reading bin: " << filename << "\n";
     int npts_i32, ndims_i32;
@@ -261,6 +258,24 @@ namespace NSG {
     reader.read((char *) data, npts_u64 * ndims_u64 * sizeof(T));
     reader.close();
     std::cout << "Finished reading bin" << std::endl;
+  }
+
+  template<typename T>
+  inline void save_bin(const char *filename, T *data, size_t npts,
+                       size_t ndims) {
+    std::ofstream writer(filename, std::ios::binary | std::ios::out);
+    std::cout << "Writing bin: " << filename << "\n";
+    int npts_i32, ndims_i32;
+    writer.write((char *) &npts_i32, sizeof(int));
+    writer.write((char *) &ndims_i32, sizeof(int));
+    std::cout << "bin: #pts = " << npts << ", #dims = " << ndims
+              << ", size = " << npts * ndims * sizeof(T) + 2 * sizeof(int)
+              << "B" << std::endl;
+
+    //    data = new T[npts_u64 * ndims_u64];
+    writer.write((char *) data, npts * ndims * sizeof(T));
+    writer.close();
+    std::cout << "Finished writing bin" << std::endl;
   }
 
   struct OneShotNSG {

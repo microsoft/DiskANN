@@ -481,9 +481,9 @@ namespace kmeans {
 
 #pragma omp parallel for schedule(static, 8192)
       for (int64_t i = 0; i < num_points; i++) {
-        dist[i] =
-            (std::min)(dist[i], math_utils::calc_distance(
-                                  data + i * dim, data + tmp_pivot * dim, dim));
+        dist[i] = (std::min)(
+            dist[i], math_utils::calc_distance(data + i * dim,
+                                               data + tmp_pivot * dim, dim));
       }
       num_picked++;
       if (num_picked % 32 == 0)

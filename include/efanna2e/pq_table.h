@@ -29,7 +29,10 @@ namespace NSG {
     void load_bin(const char* filename) override {
       // bin structure: [256][ndims][ndims(float)]
       unsigned npts_u32, ndims_u32;
-      NSG::load_bin<float>(filename, tables, npts_u32, ndims_u32);
+      size_t   npts_u64, ndims_u64;
+      NSG::load_bin<float>(filename, tables, npts_u64, ndims_u64);
+      npts_u32 = npts_u64;
+      ndims_u32 = ndims_u64;
       std::cout << "PQ Pivots: # ctrs: " << npts_u32
                 << ", # dims: " << ndims_u32 << std::endl;
       ndims = n_chunks * chunk_size;
