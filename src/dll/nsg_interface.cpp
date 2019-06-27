@@ -13,7 +13,7 @@
 
 namespace NSG {
 
-#define TRAINING_SET_SIZE 2000000
+#define TRAINING_SET_SIZE 20000
   template<typename T>
   __cdecl NSGInterface<T>::NSGInterface(unsigned __int32       dimension,
                                         ANNIndex::DistanceType distanceType)
@@ -61,6 +61,7 @@ namespace NSG {
     std::string pq_compressed_vectors_path =
         index_prefix_path + "_compressed_uint32.bin";
     std::string randnsg_path = index_prefix_path + "_unopt.rnsg";
+    std::string diskopt_path = index_prefix_path + "_diskopt.rnsg";
 
     unsigned L = (unsigned) atoi(param_list[0].c_str());
     unsigned R = (unsigned) atoi(param_list[1].c_str());
@@ -125,6 +126,8 @@ namespace NSG {
     std::cout << "Indexing time: " << diff.count() << "\n";
 
     _pNsgIndex->Save(randnsg_path.c_str());
+
+    _pNsgIndex->save_disk_opt_graph(diskopt_path.c_str());
 
     return 0;
   }

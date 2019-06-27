@@ -209,9 +209,8 @@ namespace NSG {
           if (m < (nnbrs - 1)) {
             unsigned id_next = nbrs[m + 1];  // id_next = next neighbor
             const T *vec_next1 =
-                data_ +
-                (size_t) id_next *
-                    dimension_;  // vec_next1: data of next neighbor
+                data_ + (size_t) id_next *
+                            dimension_;  // vec_next1: data of next neighbor
             NSG::prefetch_vector((const char *) vec_next1,
                                  dimension_ * sizeof(T));
           }
@@ -418,8 +417,8 @@ namespace NSG {
     bool *visited = new bool[nd_]();
     std::fill(visited, visited + nd_, false);
     std::map<unsigned, std::vector<tsl::robin_set<unsigned>>> bfs_orders;
-    unsigned start_node = ep_;
-    bool     complete = false;
+    unsigned                                                  start_node = ep_;
+    bool                                                      complete = false;
     bfs_orders.insert(
         std::make_pair(start_node, std::vector<tsl::robin_set<unsigned>>()));
     auto &bfs_order = bfs_orders[start_node];
@@ -493,7 +492,7 @@ namespace NSG {
       center[j] /= nd_;
 
     // compute all to one distance
-    float * distances = new float[nd_]();
+    float *distances = new float[nd_]();
 #pragma omp parallel for schedule(static, 65536)
     for (int i = 0; i < nd_; i++) {  // GOPAL Changed from "size_t i" to "int i"
       // extract point and distance reference
@@ -689,10 +688,9 @@ namespace NSG {
           /* temp_pool contains distance of each node in graph_copy, from
            * neighbor of n */
           temp_pool.emplace_back(SimpleNeighbor(
-              node,
-              distance_->compare(data_ + dimension_ * (size_t) node,
-                                 data_ + dimension_ * (size_t) des.id,
-                                 (unsigned) dimension_)));
+              node, distance_->compare(data_ + dimension_ * (size_t) node,
+                                       data_ + dimension_ * (size_t) des.id,
+                                       (unsigned) dimension_)));
         /* sort temp_pool according to distance from neighbor of n */
         std::sort(temp_pool.begin(), temp_pool.end());
         for (auto iter = temp_pool.begin(); iter + 1 != temp_pool.end(); ++iter)
@@ -836,9 +834,8 @@ namespace NSG {
           if (last_round_alpha > 1)
             parameters.Set<unsigned>(
                 "L", (unsigned) (std::min)(
-                         (int) L, (int) (L -
-                                         (L - 30) * ((float) sync_num /
-                                                     (float) NUM_SYNCS))));
+                         (int) L, (int) (L - (L - 30) * ((float) sync_num /
+                                                         (float) NUM_SYNCS))));
           parameters.Set<float>("alpha", last_round_alpha);
         }
         size_t start_id = sync_num * round_size;
@@ -1239,6 +1236,92 @@ namespace NSG {
       assert(!fullset.empty());
     }
     */
+
+  template<typename T>
+  void IndexNSG<T>::save_disk_opt_graph(const char *diskopt_path) {
+    const _u64 SECTOR_LEN = 4096;
+    std::cout << "Embedding node coords with its nhood" << std::endl;
+    size_t npts_u64 = nd_, ndims_u64 = dimension_;
+
+    // amount to write in one shot
+    _u64 write_blk_size = 256l * 1024l * 1024l;
+
+    // create cached reader + writer
+    cached_ofstream nsg_writer(diskopt_path, write_blk_size);
+
+    // compute
+    _u64 max_node_len, nnodes_per_sector;
+    max_node_len =
+        (((_u64) width + 1) * sizeof(unsigned)) + (ndims_u64 * sizeof(T));
+    nnodes_per_sector = SECTOR_LEN / max_node_len;
+
+    std::cout << "medoid: " << ep_ << "B\n";
+    std::cout << "max_node_len: " << max_node_len << "B\n";
+    std::cout << "nnodes_per_sector: " << nnodes_per_sector << "B\n";
+
+    // SECTOR_LEN buffer for each sector
+    char *    sector_buf = new char[SECTOR_LEN];
+    char *    node_buf = new char[max_node_len];
+    unsigned &nnbrs = *(unsigned *) (node_buf + ndims_u64 * sizeof(T));
+    unsigned *nhood_buf =
+        (unsigned *) (node_buf + (ndims_u64 * sizeof(T)) + sizeof(unsigned));
+
+    // write first sector with metadata
+    *(_u64 *) sector_buf = npts_u64;
+    *(_u64 *) (sector_buf + sizeof(_u64)) = (_u64) ep_;
+    *(_u64 *) (sector_buf + 2 * sizeof(_u64)) = max_node_len;
+    *(_u64 *) (sector_buf + 3 * sizeof(_u64)) = nnodes_per_sector;
+    nsg_writer.write(sector_buf, SECTOR_LEN);
+
+    _u64 n_sectors = ROUND_UP(npts_u64, nnodes_per_sector) / nnodes_per_sector;
+    std::cout << "# sectors: " << n_sectors << "\n";
+
+    _u64 cur_node_id = 0;
+    for (_u64 sector = 0; sector < n_sectors; sector++) {
+      if (sector % 100000 == 0) {
+        std::cout << "Sector #" << sector << "written\n";
+      }
+
+      memset(sector_buf, 0, SECTOR_LEN);
+      
+	  for (_u64 sector_node_id = 0; sector_node_id < nnodes_per_sector; sector_node_id++) {
+        // set cur node's nnbrs
+        nnbrs = final_graph_[cur_node_id].size();
+        
+		// sanity checks on nnbrs
+        assert(nnbrs > 0);
+        assert(nnbrs <= width_u32);
+
+        // set cur node's nhood
+        nhood_buf = final_graph_[cur_node_id].data();
+
+        // write coords of node first
+        const T *node_coords = data_ + ((_u64) ndims_u64 * cur_node_id);
+        memcpy(node_buf, node_coords, ndims_u64 * sizeof(T));
+
+        // write nnbrs
+        *(unsigned *) (node_buf + ndims_u64 * sizeof(T)) = nnbrs;
+
+        // write nhood next
+        memcpy(node_buf + (ndims_u64 * sizeof(T)) + sizeof(unsigned), nhood_buf, nnbrs * sizeof(unsigned));
+
+        // get offset into sector_buf
+        char *sector_node_buf = sector_buf + (sector_node_id * max_node_len);
+
+        // copy node buf into sector_node_buf
+        memcpy(sector_node_buf, node_buf, max_node_len);
+        cur_node_id++;
+      }
+
+      // flush sector to disk
+      nsg_writer.write(sector_buf, SECTOR_LEN);
+    }
+
+    delete[] sector_buf;
+    delete[] node_buf;
+
+    std::cout << "Diskopt NSG written to " << diskopt_path << "\n";
+  }
 
   template class IndexNSG<float>;
   template class IndexNSG<int8_t>;
