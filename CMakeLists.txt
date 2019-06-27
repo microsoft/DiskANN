@@ -18,7 +18,7 @@ endif()
 
 
 #MKL Config
-set(INTEL_ROOT /opt/intel/compilers_and_libraries_2019/linux)
+set(INTEL_ROOT /opt/intel/compilers_and_libraries/linux)
 set(MKL_ROOT ${INTEL_ROOT}/mkl)
 add_definitions(-DMKL_ILP64)
 add_compile_options(-m64 -Wl,--no-as-needed)
