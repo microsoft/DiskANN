@@ -43,7 +43,7 @@ namespace NSG {
   template<typename T>
   struct ThreadData {
     QueryScratch<T> scratch;
-    IOContext *     ctx_ptr = nullptr;
+    IOContext       ctx;
   };
 
   template<typename T>
@@ -110,5 +110,6 @@ namespace NSG {
 
     // thread-specific scratch
     ConcurrentQueue<ThreadData<T>> thread_data;
+    _u64                           max_nthreads;
   };
 }

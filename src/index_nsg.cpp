@@ -1294,7 +1294,7 @@ namespace NSG {
 
         // sanity checks on nnbrs
         assert(nnbrs > 0);
-        assert(nnbrs <= width_u32);
+        assert(nnbrs <= width);
 
         // set cur node's nhood
         nhood_buf = final_graph_[cur_node_id].data();

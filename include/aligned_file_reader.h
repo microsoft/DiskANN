@@ -67,5 +67,5 @@ class AlignedFileReader {
 
     // process batch of aligned requests in parallel
     // NOTE :: blocking call
-    virtual void read(std::vector<AlignedRead> &read_reqs, IOContext* ctx_ptr = nullptr) = 0;
+    virtual void read(std::vector<AlignedRead> &read_reqs, IOContext ctx) = 0;
 };

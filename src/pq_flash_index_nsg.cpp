@@ -124,7 +124,8 @@ namespace NSG {
 #pragma omp critical
       {
         this->reader->register_thread();
-        IOContext *     ctx_ptr = &this->reader->get_ctx();
+        IOContext ctx = this->reader->get_ctx();
+        std::cout << "ctx: " << ctx << "\n";
         QueryScratch<T> scratch;
         scratch.coord_scratch = new T[MAX_N_CMPS * this->data_dim];
         NSG::alloc_aligned((void **) &scratch.sector_scratch,
@@ -139,7 +140,7 @@ namespace NSG {
                            512 * sizeof(float), 256);
         memset(scratch.aligned_scratch, 0, 256 * sizeof(float));
         ThreadData<T> data;
-        data.ctx_ptr = ctx_ptr;
+        data.ctx = ctx;
         data.scratch = scratch;
         this->thread_data.push(data);
       }
@@ -149,9 +150,14 @@ namespace NSG {
   template<typename T>
   void PQFlashNSG<T>::destroy_thread_data() {
     std::cerr << "Clearing scratch" << std::endl;
+    assert(this->thread_data.size() == this->max_nthreads);
     while (this->thread_data.size() > 0) {
       ThreadData<T> data = this->thread_data.pop();
-      auto &        scratch = data.scratch;
+      while (data.scratch.sector_scratch == nullptr) {
+        this->thread_data.wait_for_push_notify();
+        data = this->thread_data.pop();
+      }
+      auto &scratch = data.scratch;
 
       delete[] scratch.coord_scratch;
       NSG::aligned_free((void *) scratch.sector_scratch);
@@ -168,8 +174,12 @@ namespace NSG {
 
     // borrow thread data
     ThreadData<T> this_thread_data = this->thread_data.pop();
-    IOContext *   ctx_ptr = this_thread_data.ctx_ptr;
-    assert(ctx_ptr != nullptr);
+    while (this_thread_data.scratch.sector_scratch == nullptr) {
+      this->thread_data.wait_for_push_notify();
+      this_thread_data = this->thread_data.pop();
+    }
+
+    IOContext ctx = this_thread_data.ctx;
 
     tsl::robin_set<unsigned> *cur_level, *prev_level;
     cur_level = new tsl::robin_set<unsigned>();
@@ -207,7 +217,7 @@ namespace NSG {
       }
 
       // issue read requests
-      reader->read(read_reqs, ctx_ptr);
+      reader->read(read_reqs, ctx);
 
       // process each nhood buf
       // TODO:: cache all nhoods in each sector instead of just one
@@ -346,11 +356,15 @@ namespace NSG {
     reader->open(nsg_fname);
 
     this->setup_thread_data(max_nthreads);
+    this->max_nthreads = max_nthreads;
 
     // borrow ctx
     ThreadData<T> data = this->thread_data.pop();
-    IOContext *   ctx_ptr = data.ctx_ptr;
-    assert(ctx_ptr != nullptr);
+    while (data.scratch.sector_scratch == nullptr) {
+      this->thread_data.wait_for_push_notify();
+      data = this->thread_data.pop();
+    }
+    IOContext ctx = data.ctx;
 
     // read medoid nhood
     char *medoid_buf = nullptr;
@@ -362,10 +376,11 @@ namespace NSG {
     medoid_read[0].offset = NODE_SECTOR_NO(medoid) * SECTOR_LEN;
     std::cout << "Medoid offset: " << NODE_SECTOR_NO(medoid) * SECTOR_LEN
               << "\n";
-    reader->read(medoid_read, ctx_ptr);
+    reader->read(medoid_read, ctx);
 
     // return ctx
     this->thread_data.push(data);
+    this->thread_data.push_notify_all();
 
     // all data about medoid
     char *medoid_node_buf = OFFSET_TO_NODE(medoid_buf, medoid);
@@ -407,9 +422,14 @@ namespace NSG {
                                          const _u64  beam_width,
                                          QueryStats *stats) {
     ThreadData<T> data = this->thread_data.pop();
-    auto          query_scratch = &(data.scratch);
-    auto          ctx_ptr = data.ctx_ptr;
-    assert(ctx_ptr != nullptr);
+    while (data.scratch.sector_scratch == nullptr) {
+      this->thread_data.wait_for_push_notify();
+      data = this->thread_data.pop();
+    }
+
+    IOContext ctx = data.ctx;
+    auto      query_scratch = &(data.scratch);
+    assert(IS_ALIGNED((_u64) ctx, 4096));
 
     // reset query
     query_scratch->reset();
@@ -541,7 +561,7 @@ namespace NSG {
           }
         }
         io_timer.reset();
-        reader->read(frontier_read_reqs, ctx_ptr);
+        reader->read(frontier_read_reqs, ctx);
         if (stats != nullptr) {
           stats->io_us += io_timer.elapsed();
         }
@@ -701,6 +721,7 @@ namespace NSG {
     }
 
     this->thread_data.push(data);
+    this->thread_data.push_notify_all();
 
     if (stats != nullptr) {
       stats->total_us = query_timer.elapsed();

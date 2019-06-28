@@ -30,7 +30,7 @@ private:
 
   // process batch of aligned requests in parallel
   // NOTE :: blocking call
-  void read(std::vector<AlignedRead> &read_reqs, IOContext* ctx_ptr = nullptr);
+  void read(std::vector<AlignedRead> &read_reqs, IOContext ctx);
 };
 
 #endif

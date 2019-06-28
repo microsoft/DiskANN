@@ -141,6 +141,6 @@ void aux_main(int argc, char** argv) {
 }
 
 int main(int argc, char** argv) {
-  aux_main<float>(argc, argv);
+  aux_main<_u8>(argc, argv);
   return 0;
 }
