@@ -120,12 +120,12 @@ namespace NSG {
               << nthreads << "\n";
 // omp parallel for to generate unique thread IDs
 #pragma omp parallel for
-    for (_u64 thread = 0; thread < nthreads; thread++) {
+    for (_s64 thread = 0; thread < nthreads; thread++) {
 #pragma omp critical
       {
         this->reader->register_thread();
         IOContext ctx = this->reader->get_ctx();
-        std::cout << "ctx: " << ctx << "\n";
+        // std::cout << "ctx: " << ctx << "\n";
         QueryScratch<T> scratch;
         scratch.coord_scratch = new T[MAX_N_CMPS * this->data_dim];
         NSG::alloc_aligned((void **) &scratch.sector_scratch,
@@ -232,7 +232,6 @@ namespace NSG {
         // insert node nhood into nhood_cache
         unsigned *node_nhood = OFFSET_TO_NODE_NHOOD(node_buf);
         _u64      nnbrs = (_u64) *node_nhood;
-        assert(nnbrs < 200);
         unsigned *nbrs = node_nhood + 1;
         // std::cerr << "CACHE: nnbrs = " << nnbrs << "\n";
         std::pair<_u64, unsigned *> cnhood;
@@ -429,7 +428,6 @@ namespace NSG {
 
     IOContext ctx = data.ctx;
     auto      query_scratch = &(data.scratch);
-    assert(IS_ALIGNED((_u64) ctx, 4096));
 
     // reset query
     query_scratch->reset();
@@ -576,11 +574,6 @@ namespace NSG {
               OFFSET_TO_NODE(frontier_nhood.second, frontier_nhood.first);
           unsigned *node_buf = OFFSET_TO_NODE_NHOOD(node_disk_buf);
           _u64      nnbrs = (_u64)(*node_buf);
-          assert(nnbrs < 200);
-          if (nnbrs >= 200) {
-            std::cerr << "***Warning nnbrs = " << nnbrs << " greater than 200"
-                      << std::endl;
-          }
           T *node_fp_coords = OFFSET_TO_NODE_COORDS(node_disk_buf);
           assert(data_buf_idx < MAX_N_CMPS);
           T *node_fp_coords_copy = data_buf + (data_buf_idx * data_dim);

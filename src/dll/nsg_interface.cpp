@@ -164,14 +164,14 @@ namespace NSG {
 
     std::cout << "argparse PQ -- n_chunks: " << n_chunks
               << ", chunk_size: " << chunk_size << ", data_dim: " << data_dim
-              << "\n";
+              << ", nthreads: " << nthreads <<"\n";
 
     // create object
     _pFlashIndex.reset(new PQFlashNSG<T>());
 
     // load index
     _pFlashIndex->load(data_bin.c_str(), nsg_disk_opt.c_str(),
-                       pq_tables_bin.c_str(), chunk_size, n_chunks, data_dim);
+                       pq_tables_bin.c_str(), chunk_size, n_chunks, data_dim, nthreads);
 
     // cache bfs levels
     _pFlashIndex->cache_bfs_levels(cache_nlevels);
@@ -181,8 +181,8 @@ namespace NSG {
 
   // Search several vectors, return their neighbors' distance and ids.
   // Both distances & ids are returned arraies of neighborCount elements,
-  // And need to be allocated by invoker, which capicity should be greater
-  // than queryCount * neighborCount.
+  // And need to be allocated by invoker, which capacity should be greater
+  // than [queryCount * neighborCount].
   template<typename T>
   void NSGInterface<T>::SearchIndex(const char*       vector,
                                     unsigned __int64  queryCount,
