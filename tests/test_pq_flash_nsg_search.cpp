@@ -18,7 +18,7 @@ void load_data(char* filename, float*& data, unsigned& num,
   in.read((char*) &dim, 4);
   in.seekg(0, std::ios::end);
   std::ios::pos_type ss = in.tellg();
-  size_t fsize = (size_t) ss;
+  size_t             fsize = (size_t) ss;
   num = (unsigned) (fsize / (dim + 1) / 4);
   data = (float*) malloc((size_t) num * (size_t) dim * sizeof(float));
 
@@ -93,20 +93,22 @@ void aux_main(int argc, char** argv) {
   // query_load = NSG::data_align(query_load, query_num, query_dim);
 
   _u64*                 res = new _u64[query_num * k_search];
+  float*                res_dist = new float[query_num * k_search];
   std::atomic<unsigned> qcounter;
   qcounter.store(0);
 
   NSG::QueryStats* stats = new NSG::QueryStats[query_num];
 
   NSG::Timer timer;
-#pragma omp parallel for schedule(dynamic, 1) num_threads(n_threads)
+#pragma omp  parallel for schedule(dynamic, 1) num_threads(n_threads)
   for (_s64 i = 0; i < query_num; i++) {
     unsigned val = qcounter.fetch_add(1);
     if (val % 1000 == 0) {
       std::cout << "Status: " << val << " queries done" << std::endl;
     }
     index.cached_beam_search(query_load + i * aligned_dim, k_search, l_search,
-                             res + (i * k_search), beam_width, stats + i);
+                             res + (i * k_search), res_dist + (i * k_search),
+                             beam_width, stats + i);
   }
 
   _u64   total_query_us = timer.elapsed();
@@ -135,6 +137,7 @@ void aux_main(int argc, char** argv) {
   write_Tvecs_unsigned(argv[10], res, query_num, k_search);
   delete[] stats;
   delete[] res;
+  delete[] res_dist;
   NSG::aligned_free(query_load);
 }
 

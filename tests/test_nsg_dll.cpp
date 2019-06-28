@@ -4,7 +4,6 @@
 #include "dll/IANNIndex.h"
 #include "utils.h"
 
-
 template<typename T>
 int aux_main(int argc, char** argv) {
   // argv[1]: data file
@@ -29,14 +28,14 @@ int aux_main(int argc, char** argv) {
     intf->LoadIndex(argv[2], "4 4 16");
 
     // load query fvecs
-    T*   query = nullptr;
+    T*       query = nullptr;
     unsigned nqueries, ndims;
     NSG::aligned_load_Tvecs<T>(argv[3], query, nqueries, ndims);
     ndims = ROUND_UP(ndims, 8);
 
     // query params/output
-    _u64 k = 5, L = 30;
-    _u64* query_res = new _u64[k * nqueries];
+    _u64   k = 5, L = 30;
+    _u64*  query_res = new _u64[k * nqueries];
     float* query_dists = new float[k * nqueries];
 
     // execute queries

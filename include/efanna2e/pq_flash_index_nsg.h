@@ -67,8 +67,9 @@ namespace NSG {
 
     // implemented
     void cached_beam_search(const T *query, const _u64 k_search,
-                            const _u64 l_search, _u64 *res_ids, float* res_dists,
-                            const _u64 beam_width, QueryStats *stats = nullptr);
+                            const _u64 l_search, _u64 *res_ids,
+                            float *res_dists, const _u64 beam_width,
+                            QueryStats *stats = nullptr);
     AlignedFileReader *reader;
 
     // index info

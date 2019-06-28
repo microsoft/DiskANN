@@ -40,7 +40,7 @@ namespace NSG {
    public:
     float compare(const int8_t *a, const int8_t *b, unsigned size) const {
       float result = 0.0;
-// #pragma omp simd
+      // #pragma omp simd
       for (_s32 i = 0; i < size; i++) {
         float diff = ((float) a[i] - (float) b[i]);
         // std::cout << "a: " << (float) a[i] << ", b: " << (float)b[i] << ",

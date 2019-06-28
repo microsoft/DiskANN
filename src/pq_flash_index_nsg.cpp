@@ -417,7 +417,8 @@ namespace NSG {
 
   template<typename T>
   void PQFlashNSG<T>::cached_beam_search(const T *query, const _u64 k_search,
-                                         const _u64 l_search, _u64 *indices, float* distances,
+                                         const _u64 l_search, _u64 *indices,
+                                         float *     distances,
                                          const _u64  beam_width,
                                          QueryStats *stats) {
     ThreadData<T> data = this->thread_data.pop();
@@ -574,7 +575,7 @@ namespace NSG {
               OFFSET_TO_NODE(frontier_nhood.second, frontier_nhood.first);
           unsigned *node_buf = OFFSET_TO_NODE_NHOOD(node_disk_buf);
           _u64      nnbrs = (_u64)(*node_buf);
-          T *node_fp_coords = OFFSET_TO_NODE_COORDS(node_disk_buf);
+          T *       node_fp_coords = OFFSET_TO_NODE_COORDS(node_disk_buf);
           assert(data_buf_idx < MAX_N_CMPS);
           T *node_fp_coords_copy = data_buf + (data_buf_idx * data_dim);
           data_buf_idx++;
