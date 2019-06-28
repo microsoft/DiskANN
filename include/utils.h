@@ -54,6 +54,18 @@ void save_Tvecs_plain(const char* filename, T* data, size_t npts, size_t ndims){
 	}
 }
 
+
+inline void write_Tvecs_unsigned(const char* fname, uint64_t* input,
+                                 uint64_t npts, uint64_t ndims) {
+  unsigned* out = new unsigned[npts * ndims];
+  for (uint64_t i = 0; i < npts * ndims; i++) {
+    out[i] = (unsigned) input[i];
+  }
+
+  save_Tvecs_plain<unsigned>(fname, out, npts, ndims);
+  delete[] out;
+}
+
 // plain loads data as npts X ndims array from filename -> data
 template<typename T>
 void load_Tvecs_plain(const char* filename, T* &data, size_t &npts, size_t &ndims){

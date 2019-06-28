@@ -209,17 +209,13 @@ namespace NSG {
                                     unsigned __int64* ids) const {
     _u64      L = 6 * neighborCount;
     const T*  query_load = (const T*) vector;
-    unsigned* out_ids = new unsigned[queryCount * neighborCount];
 #pragma omp parallel for schedule(dynamic, 1)
     for (_s64 i = 0; i < queryCount; i++) {
       _pFlashIndex->cached_beam_search(
           query_load + (i * m_dimension), neighborCount, L,
-          out_ids + (i * neighborCount), this->beam_width);
+          ids + (i * neighborCount), distances + (i * neighborCount),
+          this->beam_width);
     }
-    for (_s64 i = 0; i < queryCount * neighborCount; i++) {
-      ids[i] = (unsigned) out_ids[i];
-	}
-    delete[] out_ids;
   }
 
   template class NSGInterface<int8_t>;

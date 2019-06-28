@@ -4,16 +4,6 @@
 #include "dll/IANNIndex.h"
 #include "utils.h"
 
-void write_Tvecs_unsigned(std::string fname, _u64* input, _u64 npts,
-                          _u64 ndims) {
-  unsigned* out = new unsigned[npts * ndims];
-  for (_u64 i = 0; i < npts * ndims; i++) {
-    out[i] = (unsigned) input[i];
-  }
-
-  save_Tvecs_plain<unsigned>(fname.c_str(), out, npts, ndims);
-  delete[] out;
-}
 
 template<typename T>
 int aux_main(int argc, char** argv) {
@@ -53,7 +43,7 @@ int aux_main(int argc, char** argv) {
     intf->SearchIndex((const char*) query, nqueries, k, query_dists, query_res);
 
     // compute recall
-    write_Tvecs_unsigned(std::string(argv[4]), query_res, nqueries, k);
+    write_Tvecs_unsigned(argv[4], query_res, nqueries, k);
 
     NSG::aligned_free(query);
     delete[] query_res;
@@ -63,5 +53,5 @@ int aux_main(int argc, char** argv) {
 }
 
 int main(int argc, char** argv) {
-  return aux_main<float>(argc, argv);
+  return aux_main<_u8>(argc, argv);
 }

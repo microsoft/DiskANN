@@ -417,7 +417,7 @@ namespace NSG {
 
   template<typename T>
   void PQFlashNSG<T>::cached_beam_search(const T *query, const _u64 k_search,
-                                         const _u64 l_search, _u32 *indices,
+                                         const _u64 l_search, _u64 *indices, float* distances,
                                          const _u64  beam_width,
                                          QueryStats *stats) {
     ThreadData<T> data = this->thread_data.pop();
@@ -711,6 +711,7 @@ namespace NSG {
     // copy k_search values
     for (_u64 i = 0; i < k_search; i++) {
       indices[i] = retset[i].id;
+      distances[i] = retset[i].distance;
     }
 
     this->thread_data.push(data);
