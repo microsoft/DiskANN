@@ -36,8 +36,6 @@ void print_test_vec(testType* data, size_t dim, size_t num) {
 // plain saves data as npts X ndims array into filename
 template<typename T>
 void save_Tvecs_plain(const char* filename, T* data, size_t npts, size_t ndims){
-	typedef uint64_t _u64;
-	typedef uint32_t _u32;
 	std::string fname(filename);
 
 	// create cached ofstream with 64MB cache
@@ -46,7 +44,7 @@ void save_Tvecs_plain(const char* filename, T* data, size_t npts, size_t ndims){
 	unsigned dims_u32 = (unsigned) ndims;
 
 	// start writing
-	for(_u64 i=0;i<npts;i++){
+	for(uint64_t i=0;i<npts;i++){
 		// write dims in u32
 		writer.write((char*)&dims_u32, sizeof(unsigned));
 

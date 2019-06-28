@@ -30,7 +30,6 @@ struct AlignedRead {
   uint64_t len;     // how much to read
   void *   buf;     // where to read into
 
-
   AlignedRead() : offset(0), len(0), buf(nullptr) {
   }
 
@@ -60,7 +59,7 @@ class AlignedFileReader {
     virtual void register_thread() = 0;
     // de-register thread-id for a context
     virtual void deregister_thread() = 0;
-    
+
     // Open & close ops
     // Blocking calls  
     virtual void open(const std::string&  fname) = 0;
@@ -68,7 +67,5 @@ class AlignedFileReader {
 
     // process batch of aligned requests in parallel
     // NOTE :: blocking call
-    virtual void read(std::vector<AlignedRead> &read_reqs) = 0;
+    virtual void read(std::vector<AlignedRead> &read_reqs, IOContext* ctx_ptr = nullptr) = 0;
 };
-
-

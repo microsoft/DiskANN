@@ -57,12 +57,15 @@ void aux_main(int argc, char** argv) {
   _u64 n_chunks = (_u64) std::atoi(argv[3]);
   _u64 chunk_size = (_u64) std::atoi(argv[4]);
   _u64 data_dim = (_u64) std::atoi(argv[5]);
+  // _u64             n_threads = omp_get_max_threads();
+  _u64 n_threads = (_u64) atoi(argv[13]);
 
   // construct FlashNSG
   NSG::PQFlashNSG<T> index;
   std::cout << "main --- tid: " << std::this_thread::get_id() << std::endl;
   std::cout << "Loading index from " << argv[1] << std::endl;
-  index.load(argv[1], argv[6], argv[2], chunk_size, n_chunks, data_dim);
+  index.load(argv[1], argv[6], argv[2], chunk_size, n_chunks, data_dim,
+             n_threads);
   index.reader->register_thread();
 
   // load queries
@@ -83,6 +86,7 @@ void aux_main(int argc, char** argv) {
     std::cout << "search_L cannot be smaller than search_K!" << std::endl;
     exit(-1);
   }
+
   index.cache_bfs_levels(cache_nlevels);
 
   // align query data
@@ -94,58 +98,20 @@ void aux_main(int argc, char** argv) {
   qcounter.store(0);
 
   NSG::QueryStats* stats = new NSG::QueryStats[query_num];
-  // _u64             n_threads = omp_get_max_threads();
-  _u64 n_threads = (_u64) atoi(argv[13]);
-  std::cout << "Executing queries on " << n_threads << " threads\n";
-  std::vector<NSG::QueryScratch<T>> thread_scratch(n_threads);
-  for (auto& scratch : thread_scratch) {
-    scratch.coord_scratch = new T[MAX_N_CMPS * data_dim];
-    NSG::alloc_aligned((void**) &scratch.sector_scratch,
-                       MAX_N_SECTOR_READS * SECTOR_LEN, SECTOR_LEN);
-    NSG::alloc_aligned((void**) &scratch.aligned_scratch, 256 * sizeof(float),
-                       256);
-    NSG::alloc_aligned((void**) &scratch.aligned_pq_coord_scratch,
-                       16384 * sizeof(_u8), 256);
-    NSG::alloc_aligned((void**) &scratch.aligned_pqtable_dist_scratch,
-                       16384 * sizeof(float), 256);
-    NSG::alloc_aligned((void**) &scratch.aligned_dist_scratch,
-                       512 * sizeof(float), 256);
-    memset(scratch.aligned_scratch, 0, 256 * sizeof(float));
-  }
 
-  NSG::Timer            timer;
-  std::vector<unsigned> has_inits(n_threads, 0);
-#pragma omp             parallel for schedule(dynamic, 1) num_threads(n_threads)
+  NSG::Timer timer;
+#pragma omp  parallel for schedule(dynamic, 1) num_threads(n_threads)
   for (_s64 i = 0; i < query_num; i++) {
     unsigned val = qcounter.fetch_add(1);
     if (val % 1000 == 0) {
       std::cout << "Status: " << val << " queries done" << std::endl;
     }
     std::vector<unsigned>& query_res = res[i];
-    _u64                   thread_no = omp_get_thread_num();
-    NSG::QueryScratch<T>*  local_scratch = &(thread_scratch[thread_no]);
-
-    // zero context
-    local_scratch->coord_idx = 0;
-    local_scratch->sector_idx = 0;
-
-    // init if not init yet
-    if (!has_inits[thread_no]) {
-      index.reader->register_thread();
-#pragma omp critical
-      {
-        std::cout << "Init complete for thread-" << omp_get_thread_num()
-                  << std::endl;
-        has_inits[thread_no] = 1;
-      }
-    }
 
     index.cached_beam_search(query_load + i * aligned_dim, k_search, l_search,
-                             query_res.data(), beam_width, stats + i,
-                             local_scratch);
-    // auto ret = index.Search(query_load + i * dim, data_load, K, paras,
-    // tmp.data());
+                             query_res.data(), beam_width, stats + i);
   }
+
   _u64   total_query_us = timer.elapsed();
   double qps = (double) query_num / ((double) total_query_us / 1e6);
   std::cout << "QPS: " << qps << std::endl;
@@ -171,19 +137,10 @@ void aux_main(int argc, char** argv) {
 
   save_result(argv[10], res);
   delete[] stats;
-  std::cerr << "Clearing scratch" << std::endl;
-  for (auto& scratch : thread_scratch) {
-    delete[] scratch.coord_scratch;
-    NSG::aligned_free(scratch.sector_scratch);
-    NSG::aligned_free(scratch.aligned_scratch);
-    NSG::aligned_free(scratch.aligned_dist_scratch);
-    NSG::aligned_free(scratch.aligned_pq_coord_scratch);
-    NSG::aligned_free(scratch.aligned_pqtable_dist_scratch);
-  }
   NSG::aligned_free(query_load);
 }
 
 int main(int argc, char** argv) {
-  aux_main<_u8>(argc, argv);
+  aux_main<float>(argc, argv);
   return 0;
 }

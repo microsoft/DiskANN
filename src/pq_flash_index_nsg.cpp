@@ -111,11 +111,65 @@ namespace NSG {
     delete reader;
 
     delete this->dist_cmp;
+    this->destroy_thread_data();
+  }
+
+  template<typename T>
+  void PQFlashNSG<T>::setup_thread_data(_u64 nthreads) {
+    std::cout << "Setting up thread-specific contexts for nthreads: "
+              << nthreads << "\n";
+// omp parallel for to generate unique thread IDs
+#pragma omp parallel for
+    for (_u64 thread = 0; thread < nthreads; thread++) {
+#pragma omp critical
+      {
+        this->reader->register_thread();
+        IOContext *     ctx_ptr = &this->reader->get_ctx();
+        QueryScratch<T> scratch;
+        scratch.coord_scratch = new T[MAX_N_CMPS * this->data_dim];
+        NSG::alloc_aligned((void **) &scratch.sector_scratch,
+                           MAX_N_SECTOR_READS * SECTOR_LEN, SECTOR_LEN);
+        NSG::alloc_aligned((void **) &scratch.aligned_scratch,
+                           256 * sizeof(float), 256);
+        NSG::alloc_aligned((void **) &scratch.aligned_pq_coord_scratch,
+                           16384 * sizeof(_u8), 256);
+        NSG::alloc_aligned((void **) &scratch.aligned_pqtable_dist_scratch,
+                           16384 * sizeof(float), 256);
+        NSG::alloc_aligned((void **) &scratch.aligned_dist_scratch,
+                           512 * sizeof(float), 256);
+        memset(scratch.aligned_scratch, 0, 256 * sizeof(float));
+        ThreadData<T> data;
+        data.ctx_ptr = ctx_ptr;
+        data.scratch = scratch;
+        this->thread_data.push(data);
+      }
+    }
+  }
+
+  template<typename T>
+  void PQFlashNSG<T>::destroy_thread_data() {
+    std::cerr << "Clearing scratch" << std::endl;
+    while (this->thread_data.size() > 0) {
+      ThreadData<T> data = this->thread_data.pop();
+      auto &        scratch = data.scratch;
+
+      delete[] scratch.coord_scratch;
+      NSG::aligned_free((void *) scratch.sector_scratch);
+      NSG::aligned_free((void *) scratch.aligned_scratch);
+      NSG::aligned_free((void *) scratch.aligned_pq_coord_scratch);
+      NSG::aligned_free((void *) scratch.aligned_pqtable_dist_scratch);
+      NSG::aligned_free((void *) scratch.aligned_dist_scratch);
+    }
   }
 
   template<typename T>
   void PQFlashNSG<T>::cache_bfs_levels(_u64 nlevels) {
     assert(nlevels > 1);
+
+    // borrow thread data
+    ThreadData<T> this_thread_data = this->thread_data.pop();
+    IOContext *   ctx_ptr = this_thread_data.ctx_ptr;
+    assert(ctx_ptr != nullptr);
 
     tsl::robin_set<unsigned> *cur_level, *prev_level;
     cur_level = new tsl::robin_set<unsigned>();
@@ -153,7 +207,7 @@ namespace NSG {
       }
 
       // issue read requests
-      reader->read(read_reqs);
+      reader->read(read_reqs, ctx_ptr);
 
       // process each nhood buf
       // TODO:: cache all nhoods in each sector instead of just one
@@ -186,6 +240,9 @@ namespace NSG {
       std::cout << "Level: " << lvl << ", #nodes: " << nhoods.size()
                 << std::endl;
     }
+
+    // return thread data
+    this->thread_data.push(this_thread_data);
 
     delete cur_level;
     delete prev_level;
@@ -240,7 +297,8 @@ namespace NSG {
   template<typename T>
   void PQFlashNSG<T>::load(const char *data_bin, const char *nsg_file,
                            const char *pq_tables_bin, const _u64 chunk_size,
-                           const _u64 n_chunks, const _u64 data_dim) {
+                           const _u64 n_chunks, const _u64 data_dim,
+                           const _u64 max_nthreads) {
     pq_table = new FixedChunkPQTable<T>(n_chunks, chunk_size);
     std::cout << "Loading PQ Tables from " << pq_tables_bin << "\n";
     pq_table->load_bin(pq_tables_bin);
@@ -286,7 +344,13 @@ namespace NSG {
     reader = new LinuxAlignedFileReader();
 #endif
     reader->open(nsg_fname);
-    reader->register_thread();
+
+    this->setup_thread_data(max_nthreads);
+
+    // borrow ctx
+    ThreadData<T> data = this->thread_data.pop();
+    IOContext *   ctx_ptr = data.ctx_ptr;
+    assert(ctx_ptr != nullptr);
 
     // read medoid nhood
     char *medoid_buf = nullptr;
@@ -298,7 +362,10 @@ namespace NSG {
     medoid_read[0].offset = NODE_SECTOR_NO(medoid) * SECTOR_LEN;
     std::cout << "Medoid offset: " << NODE_SECTOR_NO(medoid) * SECTOR_LEN
               << "\n";
-    reader->read(medoid_read);
+    reader->read(medoid_read, ctx_ptr);
+
+    // return ctx
+    this->thread_data.push(data);
 
     // all data about medoid
     char *medoid_node_buf = OFFSET_TO_NODE(medoid_buf, medoid);
@@ -337,12 +404,15 @@ namespace NSG {
   template<typename T>
   void PQFlashNSG<T>::cached_beam_search(const T *query, const _u64 k_search,
                                          const _u64 l_search, _u32 *indices,
-                                         const _u64       beam_width,
-                                         QueryStats *     stats,
-                                         QueryScratch<T> *query_scratch) {
-    // reset query scratch context
-    query_scratch->coord_idx = 0;
-    query_scratch->sector_idx = 0;
+                                         const _u64  beam_width,
+                                         QueryStats *stats) {
+    ThreadData<T> data = this->thread_data.pop();
+    auto          query_scratch = &(data.scratch);
+    auto          ctx_ptr = data.ctx_ptr;
+    assert(ctx_ptr != nullptr);
+
+    // reset query
+    query_scratch->reset();
 
     // scratch space to compute distances between FP32 Query and INT8 data
     float *scratch = query_scratch->aligned_scratch;
@@ -471,7 +541,7 @@ namespace NSG {
           }
         }
         io_timer.reset();
-        reader->read(frontier_read_reqs);
+        reader->read(frontier_read_reqs, ctx_ptr);
         if (stats != nullptr) {
           stats->io_us += io_timer.elapsed();
         }
@@ -629,6 +699,8 @@ namespace NSG {
     for (_u64 i = 0; i < k_search; i++) {
       indices[i] = retset[i].id;
     }
+
+    this->thread_data.push(data);
 
     if (stats != nullptr) {
       stats->total_us = query_timer.elapsed();

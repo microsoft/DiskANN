@@ -61,10 +61,15 @@ IOContext& WindowsAlignedFileReader::get_ctx() {
   return ctx;
 }
 
-void WindowsAlignedFileReader::read(std::vector<AlignedRead>& read_reqs) {
+void WindowsAlignedFileReader::read(std::vector<AlignedRead>& read_reqs,
+                                    IOContext*                ctx_ptr) {
   using namespace std::chrono_literals;
   // execute each request sequentially
-  IOContext& ctx = get_ctx();
+  if (ctx_ptr == nullptr) {
+    ctx_ptr = &get_ctx();
+  }
+
+  IOContext& ctx = *ctx_ptr;
 
   _u64 n_reqs = read_reqs.size();
   _u64 n_batches = ROUND_UP(n_reqs, MAX_IO_DEPTH) / MAX_IO_DEPTH;

@@ -209,8 +209,9 @@ namespace NSG {
           if (m < (nnbrs - 1)) {
             unsigned id_next = nbrs[m + 1];  // id_next = next neighbor
             const T *vec_next1 =
-                data_ + (size_t) id_next *
-                            dimension_;  // vec_next1: data of next neighbor
+                data_ +
+                (size_t) id_next *
+                    dimension_;  // vec_next1: data of next neighbor
             NSG::prefetch_vector((const char *) vec_next1,
                                  dimension_ * sizeof(T));
           }
@@ -417,8 +418,8 @@ namespace NSG {
     bool *visited = new bool[nd_]();
     std::fill(visited, visited + nd_, false);
     std::map<unsigned, std::vector<tsl::robin_set<unsigned>>> bfs_orders;
-    unsigned                                                  start_node = ep_;
-    bool                                                      complete = false;
+    unsigned start_node = ep_;
+    bool     complete = false;
     bfs_orders.insert(
         std::make_pair(start_node, std::vector<tsl::robin_set<unsigned>>()));
     auto &bfs_order = bfs_orders[start_node];
@@ -492,7 +493,7 @@ namespace NSG {
       center[j] /= nd_;
 
     // compute all to one distance
-    float *distances = new float[nd_]();
+    float * distances = new float[nd_]();
 #pragma omp parallel for schedule(static, 65536)
     for (int i = 0; i < nd_; i++) {  // GOPAL Changed from "size_t i" to "int i"
       // extract point and distance reference
@@ -688,9 +689,10 @@ namespace NSG {
           /* temp_pool contains distance of each node in graph_copy, from
            * neighbor of n */
           temp_pool.emplace_back(SimpleNeighbor(
-              node, distance_->compare(data_ + dimension_ * (size_t) node,
-                                       data_ + dimension_ * (size_t) des.id,
-                                       (unsigned) dimension_)));
+              node,
+              distance_->compare(data_ + dimension_ * (size_t) node,
+                                 data_ + dimension_ * (size_t) des.id,
+                                 (unsigned) dimension_)));
         /* sort temp_pool according to distance from neighbor of n */
         std::sort(temp_pool.begin(), temp_pool.end());
         for (auto iter = temp_pool.begin(); iter + 1 != temp_pool.end(); ++iter)
@@ -834,8 +836,9 @@ namespace NSG {
           if (last_round_alpha > 1)
             parameters.Set<unsigned>(
                 "L", (unsigned) (std::min)(
-                         (int) L, (int) (L - (L - 30) * ((float) sync_num /
-                                                         (float) NUM_SYNCS))));
+                         (int) L, (int) (L -
+                                         (L - 30) * ((float) sync_num /
+                                                     (float) NUM_SYNCS))));
           parameters.Set<float>("alpha", last_round_alpha);
         }
         size_t start_id = sync_num * round_size;
@@ -1283,12 +1286,13 @@ namespace NSG {
       }
 
       memset(sector_buf, 0, SECTOR_LEN);
-      
-	  for (_u64 sector_node_id = 0; sector_node_id < nnodes_per_sector; sector_node_id++) {
+
+      for (_u64 sector_node_id = 0; sector_node_id < nnodes_per_sector;
+           sector_node_id++) {
         // set cur node's nnbrs
         nnbrs = final_graph_[cur_node_id].size();
-        
-		// sanity checks on nnbrs
+
+        // sanity checks on nnbrs
         assert(nnbrs > 0);
         assert(nnbrs <= width_u32);
 
@@ -1303,7 +1307,8 @@ namespace NSG {
         *(unsigned *) (node_buf + ndims_u64 * sizeof(T)) = nnbrs;
 
         // write nhood next
-        memcpy(node_buf + (ndims_u64 * sizeof(T)) + sizeof(unsigned), nhood_buf, nnbrs * sizeof(unsigned));
+        memcpy(node_buf + (ndims_u64 * sizeof(T)) + sizeof(unsigned), nhood_buf,
+               nnbrs * sizeof(unsigned));
 
         // get offset into sector_buf
         char *sector_node_buf = sector_buf + (sector_node_id * max_node_len);

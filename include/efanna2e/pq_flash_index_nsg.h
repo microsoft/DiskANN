@@ -4,6 +4,7 @@
 #include <stack>
 #include <string>
 #include "aligned_file_reader.h"
+#include "concurrent_queue.h"
 #include "index.h"
 #include "neighbor.h"
 #include "parameters.h"
@@ -32,6 +33,17 @@ namespace NSG {
     float *aligned_dist_scratch = nullptr;  // MUST BE AT LEAST NSG MAX_DEGREE
     _u8 *  aligned_pq_coord_scratch =
         nullptr;  // MUST BE AT LEAST  [N_CHUNKS * MAX_DEGREE]
+
+    void reset() {
+      coord_idx = 0;
+      sector_idx = 0;
+    }
+  };
+
+  template<typename T>
+  struct ThreadData {
+    QueryScratch<T> scratch;
+    IOContext *     ctx_ptr = nullptr;
   };
 
   template<typename T>
@@ -43,16 +55,20 @@ namespace NSG {
     // load data, but obtain handle to nsg file
     void load(const char *data_bin, const char *nsg_file,
               const char *pq_tables_bin, const _u64 chunk_size,
-              const _u64 n_chunks, const _u64 data_dim);
+              const _u64 n_chunks, const _u64 data_dim,
+              const _u64 max_nthreads);
 
     // NOTE:: implemented
     void cache_bfs_levels(_u64 nlevels);
 
+    // setting up thread-specific data
+    void setup_thread_data(_u64 nthreads);
+    void destroy_thread_data();
+
     // implemented
     void cached_beam_search(const T *query, const _u64 k_search,
                             const _u64 l_search, _u32 *indices,
-                            const _u64 beam_width, QueryStats *stats = nullptr,
-                            QueryScratch<T> *scratch = nullptr);
+                            const _u64 beam_width, QueryStats *stats = nullptr);
     AlignedFileReader *reader;
 
     // index info
@@ -91,5 +107,8 @@ namespace NSG {
     // coord_cache
     T *coord_cache_buf = nullptr;
     tsl::robin_map<_u64, T *> coord_cache;
+
+    // thread-specific scratch
+    ConcurrentQueue<ThreadData<T>> thread_data;
   };
 }

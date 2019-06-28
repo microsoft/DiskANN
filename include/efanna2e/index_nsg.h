@@ -49,7 +49,7 @@ namespace NSG {
                                    int                    beam_width,
                                    std::vector<unsigned> &start_points);
 
-	void save_disk_opt_graph(const char *diskopt_path);
+    void save_disk_opt_graph(const char *diskopt_path);
 
    protected:
     typedef std::vector<std::vector<unsigned>> CompactGraph;

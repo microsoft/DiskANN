@@ -177,8 +177,11 @@ void LinuxAlignedFileReader::close() {
   assert(ret != -1);
 }
 
-void LinuxAlignedFileReader::read(std::vector<AlignedRead> &read_reqs) {
+void LinuxAlignedFileReader::read(std::vector<AlignedRead> &read_reqs,
+                                  io_context_t *            ctx_ptr) {
   assert(this->file_desc != -1);
-  io_context_t ctx = get_ctx();
-  execute_io(ctx, this->file_desc, read_reqs);
+  if (ctx_ptr == nullptr) {
+    ctx_ptr = &get_ctx();
+  }
+  execute_io(*ctx_ptr, this->file_desc, read_reqs);
 }
