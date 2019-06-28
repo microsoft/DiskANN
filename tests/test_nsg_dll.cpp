@@ -17,15 +17,23 @@ int aux_main(int argc, char** argv) {
   ANNIndex::IANNIndex* intf = new NSG::NSGInterface<T>(0, ANNIndex::DT_L2);
 
   // for indexing
-  //{
-  //  // just construct index
-  //  intf->BuildIndex(argv[1], argv[2], "50 64 200 32");
-  //}
+  {
+    // just construct index
+    bool res = intf->BuildIndex(argv[1], argv[2], "50 64 200 32");
+	// ERROR CHECK
+    if (res == 1) {
+      exit(-1);
+    }
+  }
 
   // for query search
   {
     // load the index
-    intf->LoadIndex(argv[2], "4 4 16");
+    bool res = intf->LoadIndex(argv[2], "4 4 16");
+    // ERROR CHECK
+    if (res == 1) {
+      exit(-1);
+    }
 
     // load query fvecs
     T*       query = nullptr;

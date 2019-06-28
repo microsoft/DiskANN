@@ -146,7 +146,7 @@ namespace NSG {
       param_list.push_back(cur_param);
 
     if (param_list.size() != 3) {
-      std::cout << "Correct usage of parameters is \n"
+      std::cerr << "Correct usage of parameters is \n"
                    "BeamWidth[1] cache_nlevels[2] nthreads[3]"
                 << std::endl;
       return 1;
