@@ -58,6 +58,10 @@ namespace NSG {
     std::unique_ptr<NSG::IndexNSG<T>> _pNsgIndex;
     NSG::Metric                       _compareMetric;
 
-	std::unique_ptr<PQFlashNSG<T>>	  _pFlashIndex;
+    // flash stuff
+    std::unique_ptr<PQFlashNSG<T>> _pFlashIndex;
+    _u64                           n_chunks;
+    _u64                           chunk_size;
+    _u64                           beam_width;
   };
 }  // namespace NSG

@@ -68,13 +68,6 @@ namespace NSG {
     unsigned C = (unsigned) atoi(param_list[2].c_str());
     size_t   num_pq_chunks = (size_t) atoi(param_list[3].c_str());
 
-    uint32_t* params_array = new uint32_t[4];
-    params_array[0] = (uint32_t) L;
-    params_array[1] = (uint32_t) R;
-    params_array[2] = (uint32_t) C;
-    params_array[3] = (uint32_t) num_pq_chunks;
-    NSG::save_bin<uint32_t>(index_params_path.c_str(), params_array, 4, 1);
-
     T* data_load = NULL;
 
     size_t points_num, dim;
@@ -82,6 +75,15 @@ namespace NSG {
     NSG::load_bin<T>(dataFilePath, data_load, points_num, dim);
     data_load = NSG::data_align(data_load, points_num, dim);
     std::cout << "Data loaded and aligned" << std::endl;
+
+    uint32_t* params_array = new uint32_t[5];
+    params_array[0] = (uint32_t) L;
+    params_array[1] = (uint32_t) R;
+    params_array[2] = (uint32_t) C;
+    params_array[3] = (uint32_t) dim;
+    params_array[4] = (uint32_t) num_pq_chunks;
+    NSG::save_bin<uint32_t>(index_params_path.c_str(), params_array, 5, 1);
+    std::cout << "Saving params to " << index_params_path << "\n";
 
     auto s = std::chrono::high_resolution_clock::now();
 
@@ -143,35 +145,51 @@ namespace NSG {
     while (parser >> cur_param)
       param_list.push_back(cur_param);
 
-    if (param_list.size() != 8) {
-      std::cout << "Correct usage of parameters is \ndata_bin[1] "
-                   "pq_tables_bin[2] n_chunks[3] chunk_size[4] "
-                   "nsg_disk_opt[5] BeamWidth[6] cache_nlevels[7] nthreads[8]"
+    if (param_list.size() != 3) {
+      std::cout << "Correct usage of parameters is \n"
+                   "BeamWidth[1] cache_nlevels[2] nthreads[3]"
                 << std::endl;
       return 1;
     }
 
-    // convert strs into params
-    std::string data_bin = param_list[0];
-    std::string pq_tables_bin = param_list[1];
-    _u64        n_chunks = (_u64) std::atoi(param_list[2].c_str());
-    _u64        chunk_size = (_u64) std::atoi(param_list[3].c_str());
-    std::string nsg_disk_opt = param_list[4];
-    _u64        beam_width = (_u64) std::atoi(param_list[5].c_str());
-    _u64        cache_nlevels = (_u64) std::atoi(param_list[6].c_str());
-    _u64        nthreads = (_u64) std::atoi(param_list[7].c_str());
-    _u64        data_dim = n_chunks * chunk_size;
+    const std::string index_prefix_path(indexFilePath);
 
-    std::cout << "argparse PQ -- n_chunks: " << n_chunks
-              << ", chunk_size: " << chunk_size << ", data_dim: " << data_dim
-              << ", nthreads: " << nthreads <<"\n";
+    // convert strs into params
+    std::string data_bin = index_prefix_path + "_compressed_uint32.bin";
+    std::string pq_tables_bin = index_prefix_path + "_pq_pivots.bin";
+
+    // determine nchunks
+    std::string params_path = index_prefix_path + "_params.bin";
+    uint32_t*   params;
+    size_t      nargs, one;
+    load_bin<uint32_t>(params_path.c_str(), params, nargs, one);
+
+    // infer chunk_size
+    this->m_dimension = (_u64) params[3];
+    this->n_chunks = (_u64) params[4];
+    this->chunk_size = (_u64)(this->m_dimension/ n_chunks);
+
+    std::string nsg_disk_opt = index_prefix_path + "_diskopt.rnsg";
+
+    this->beam_width = (_u64) std::atoi(param_list[0].c_str());
+    _u64        cache_nlevels = (_u64) std::atoi(param_list[1].c_str());
+    _u64        nthreads = (_u64) std::atoi(param_list[2].c_str());
+    std::string stars(40, '*');
+    std::cout << stars << "\nPQ -- n_chunks: " << n_chunks
+              << ", chunk_size: " << chunk_size << ", data_dim: " << this->m_dimension
+              << "\n";
+    std::cout << "Search meta-params -- beam_width: " << beam_width
+              << ", cache_nlevels: " << cache_nlevels
+              << ", nthreads: " << nthreads << "\n"
+              << stars << "\n";
 
     // create object
     _pFlashIndex.reset(new PQFlashNSG<T>());
 
     // load index
     _pFlashIndex->load(data_bin.c_str(), nsg_disk_opt.c_str(),
-                       pq_tables_bin.c_str(), chunk_size, n_chunks, data_dim, nthreads);
+                       pq_tables_bin.c_str(), chunk_size, n_chunks, this->m_dimension,
+                       nthreads);
 
     // cache bfs levels
     _pFlashIndex->cache_bfs_levels(cache_nlevels);
@@ -189,6 +207,19 @@ namespace NSG {
                                     unsigned __int64  neighborCount,
                                     float*            distances,
                                     unsigned __int64* ids) const {
+    _u64      L = 6 * neighborCount;
+    const T*  query_load = (const T*) vector;
+    unsigned* out_ids = new unsigned[queryCount * neighborCount];
+#pragma omp parallel for schedule(dynamic, 1)
+    for (_s64 i = 0; i < queryCount; i++) {
+      _pFlashIndex->cached_beam_search(
+          query_load + (i * m_dimension), neighborCount, L,
+          out_ids + (i * neighborCount), this->beam_width);
+    }
+    for (_s64 i = 0; i < queryCount * neighborCount; i++) {
+      ids[i] = (unsigned) out_ids[i];
+	}
+    delete[] out_ids;
   }
 
   template class NSGInterface<int8_t>;
