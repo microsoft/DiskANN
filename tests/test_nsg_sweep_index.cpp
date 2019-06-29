@@ -2,11 +2,10 @@
 // Created by 付聪 on 2017/6/21.
 //
 
-#include <efanna2e/index_nsg.h>
-#include <efanna2e/util.h>
+#include <index_nsg.h>
 #include <omp.h>
 #include <string.h>
-#include <utils.h>
+#include "util.h"
 
 #ifndef __NSG_WINDOWS__
 #include <sys/mman.h>

@@ -6,10 +6,9 @@
 #include <vector>
 
 #include "dll/nsg_interface.h"
-#include "efanna2e/index_nsg.h"
-#include "efanna2e/util.h"
+#include "index_nsg.h"
+#include "util.h"
 #include "partitionAndPQ.h"
-#include "utils.h"
 
 namespace NSG {
 

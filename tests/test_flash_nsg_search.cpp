@@ -2,12 +2,12 @@
 // Created by 付聪 on 2017/6/21.
 //
 
-#include <efanna2e/flash_index_nsg.h>
-#include <efanna2e/index.h>
-#include <efanna2e/neighbor.h>
-#include <efanna2e/timer.h>
-#include <efanna2e/util.h>
+#include <flash_index_nsg.h>
+#include <index.h>
+#include <neighbor.h>
 #include <omp.h>
+#include <timer.h>
+#include <util.h>
 #include <atomic>
 #include <cassert>
 

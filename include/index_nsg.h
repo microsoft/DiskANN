@@ -1,5 +1,4 @@
-#ifndef EFANNA2E_INDEX_NSG_H
-#define EFANNA2E_INDEX_NSG_H
+#pragma once
 
 #include <cassert>
 #include <sstream>
@@ -115,4 +114,3 @@ namespace NSG {
 
 bool BuildIndex(const char *dataFilePath, const char *indexFilePath,
                 const char *indexBuildParameters);
-#endif  // EFANNA2E_INDEX_NSG_H

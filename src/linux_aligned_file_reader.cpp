@@ -4,8 +4,8 @@
 #include <cassert>
 #include <cstdio>
 #include <iostream>
-#include "efanna2e/util.h"
 #include "tsl/robin_map.h"
+#include "util.h"
 #define MAX_EVENTS 1024
 
 namespace {

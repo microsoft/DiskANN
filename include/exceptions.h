@@ -4,9 +4,7 @@
 // This source code is licensed under the MIT license.
 //
 
-#ifndef EFANNA2E_EXCEPTIONS_H
-#define EFANNA2E_EXCEPTIONS_H
-
+#pragma once
 #include <stdexcept>
 
 namespace NSG {
@@ -18,5 +16,3 @@ namespace NSG {
     }
   };
 }
-
-#endif  // EFANNA2E_EXCEPTIONS_H

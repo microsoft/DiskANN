@@ -1,9 +1,9 @@
-#include <efanna2e/index.h>
-#include <efanna2e/ivfpq_flash_index_nsg.h>
-#include <efanna2e/neighbor.h>
-#include <efanna2e/timer.h>
-#include <efanna2e/util.h>
+#include <index.h>
+#include <ivfpq_flash_index_nsg.h>
+#include <neighbor.h>
 #include <omp.h>
+#include <timer.h>
+#include <util.h>
 #include <atomic>
 #include <cassert>
 

@@ -9,20 +9,21 @@
 #include <mutex>
 #include <thread>
 #include "aligned_file_reader.h"
-#include "efanna2e/util.h"
 #include "tsl/robin_map.h"
+#include "util.h"
 class WindowsAlignedFileReader : public AlignedFileReader {
-  private:
-    uint64_t            file_sz;
-    std::wstring        filename;
- public:
+ private:
+  uint64_t     file_sz;
+  std::wstring filename;
 
+ public:
   WindowsAlignedFileReader(){};
   ~WindowsAlignedFileReader(){};
 
-  void   register_thread();
-  void	 deregister_thread(){}
-  IOContext& get_ctx();
+  void register_thread();
+  void deregister_thread() {
+  }
+  IOContext &get_ctx();
 
   // Open & close ops
   // Blocking calls

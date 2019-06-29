@@ -1,4 +1,3 @@
-#include <efanna2e/util.h>
 #include <fcntl.h>
 #include <tsl/robin_map.h>
 #include <unistd.h>
@@ -6,6 +5,7 @@
 #include <cstdint>
 #include <cstring>
 #include <iostream>
+#include "util.h"
 
 // hash_fn: https://github.com/Microsoft/BLAS-on-flash/blob/master/src/utils.cpp
 _u64 fnv64a(const char* str, const _u64 n_bytes) {

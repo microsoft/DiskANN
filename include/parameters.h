@@ -4,9 +4,7 @@
 // This source code is licensed under the MIT license.
 //
 
-#ifndef EFANNA2E_PARAMETERS_H
-#define EFANNA2E_PARAMETERS_H
-
+#pragma once
 #include <sstream>
 #include <typeinfo>
 #include <unordered_map>
@@ -59,5 +57,3 @@ namespace NSG {
     }
   };
 }
-
-#endif  // EFANNA2E_PARAMETERS_H

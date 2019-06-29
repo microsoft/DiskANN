@@ -3,7 +3,7 @@
 #include <limits>
 #include <parallel/algorithm>
 #include <vector>
-#include "efanna2e/util.h"
+#include "util.h"
 
 double quantize(int16_t input, double* map, double* bounds) {
   double*  pos = std::lower_bound(bounds, bounds + 256, (double) input);

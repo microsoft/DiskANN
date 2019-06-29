@@ -1,14 +1,14 @@
-#include <efanna2e/index_nsg.h>
-#include <efanna2e/util.h>
+#include <index_nsg.h>
 #include <omp.h>
 #include <string.h>
+#include <util.h>
+#include "util.h"
 
 #ifndef __NSG_WINDOWS__
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
-#include <utils.h>
 #endif
 
 #include "MemoryMapper.h"

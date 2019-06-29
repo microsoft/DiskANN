@@ -1,18 +1,17 @@
-#include "efanna2e/pq_flash_index_nsg.h"
+#include "pq_flash_index_nsg.h"
 #include <malloc.h>
-#include "efanna2e/index.h"
+#include "index.h"
 
 #include <omp.h>
 #include <chrono>
 #include <cmath>
 #include <iterator>
 #include <thread>
-#include "efanna2e/distance.h"
-#include "efanna2e/exceptions.h"
-#include "efanna2e/parameters.h"
-#include "efanna2e/timer.h"
-#include "efanna2e/util.h"
-#include "utils.h"
+#include "distance.h"
+#include "exceptions.h"
+#include "parameters.h"
+#include "timer.h"
+#include "util.h"
 
 #include "tsl/robin_set.h"
 

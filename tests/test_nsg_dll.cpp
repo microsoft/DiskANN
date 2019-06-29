@@ -2,7 +2,7 @@
 
 #include <dll/nsg_interface.h>
 #include "dll/IANNIndex.h"
-#include "utils.h"
+#include "util.h"
 
 template<typename T>
 int aux_main(int argc, char** argv) {

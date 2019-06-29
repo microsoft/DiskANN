@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <efanna2e/util.h>
+#include <util.h>
 #ifdef __NSG_WINDOWS__
 #include <intrin.h>
 #else

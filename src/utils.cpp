@@ -2,8 +2,8 @@
 #pragma once
 
 #include <math_utils.h>
-#include <utils.h>
 #include <cstring>
+#include "util.h"
 
 void debug_code(size_t* closest_center, size_t* test_set, size_t num_points,
                 size_t dim, float* cur_pivot_data, float* cur_data) {

@@ -1,4 +1,4 @@
-#include <efanna2e/util.h>
+#include <util.h>
 #include <algorithm>
 #include <cassert>
 #include <cmath>

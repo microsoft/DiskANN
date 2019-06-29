@@ -58,4 +58,4 @@ add_executable(nsg_bfs nsg_bfs.cpp)
 add_executable(rename_merge_shards rename_merge_shards.cpp)
 
 # formatter
-add_custom_command(TARGET calc_recall PRE_BUILD COMMAND clang-format-4.0 -i ../../include/efanna2e/*.h ../../src/*.cpp ../../tests/*.cpp)
+add_custom_command(TARGET calc_recall PRE_BUILD COMMAND clang-format-4.0 -i ../../include/*.h ../../src/*.cpp ../../tests/*.cpp)

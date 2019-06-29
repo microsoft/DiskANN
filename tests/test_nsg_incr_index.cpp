@@ -2,8 +2,7 @@
 // Created by 付聪 on 2017/6/21.
 //
 
-#include <efanna2e/index_nsg.h>
-#include <efanna2e/util.h>
+#include <index_nsg.h>
 
 #include <omp.h>
 #include <string.h>
@@ -11,7 +10,7 @@
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
-#include <utils.h>
+#include "util.h"
 
 int main(int argc, char** argv) {
   if (argc != 8) {

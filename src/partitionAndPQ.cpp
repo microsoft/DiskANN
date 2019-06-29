@@ -1,6 +1,5 @@
 #include <math_utils.h>
 #include <omp.h>
-#include <utils.h>
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -12,11 +11,11 @@
 #include <set>
 #include <sstream>
 #include <string>
-#include "efanna2e/exceptions.h"
-#include "efanna2e/index_nsg.h"
-#include "efanna2e/parameters.h"
-#include "efanna2e/util.h"
+#include "exceptions.h"
+#include "index_nsg.h"
+#include "parameters.h"
 #include "tsl/robin_set.h"
+#include "util.h"
 
 #include <fcntl.h>
 #include <sys/stat.h>

@@ -1,5 +1,5 @@
 #pragma once
-#include "efanna2e/util.h"
+#include "util.h"
 
 namespace NSG {
   template<typename T>

@@ -1,11 +1,10 @@
 //#include <distances.h>
 //#include <indexing.h>
-#include <efanna2e/index_nsg.h>
-#include <efanna2e/pq_flash_index_nsg.h>
-#include <efanna2e/util.h>
+#include <index_nsg.h>
 #include <math_utils.h>
 #include <partitionAndPQ.h>
-#include "utils.h"
+#include <pq_flash_index_nsg.h>
+#include "util.h"
 
 // #define TRAINING_SET_SIZE 2000000
 #define TRAINING_SET_SIZE 2000000
@@ -61,7 +60,7 @@ bool LoadIndex(const char* indexFilePath, const char* queryParameters,
   // create object
 
   _pFlashIndex = new NSG::PQFlashNSG<T>();
-//  _pFlashIndex->reset(new NSG::PQFlashNSG<T>());
+  //  _pFlashIndex->reset(new NSG::PQFlashNSG<T>());
 
   // load index
   _pFlashIndex->load(data_bin.c_str(), nsg_disk_opt.c_str(),
@@ -79,8 +78,8 @@ bool LoadIndex(const char* indexFilePath, const char* queryParameters,
 // than [queryCount * neighborCount].
 template<typename T>
 void SearchIndex(NSG::PQFlashNSG<T>* _pFlashIndex, const char* vector,
-                 uint64_t queryCount, uint64_t neighborCount,
-                 float* distances, uint64_t* ids) {
+                 uint64_t queryCount, uint64_t neighborCount, float* distances,
+                 uint64_t* ids) {
   _u64     L = 6 * neighborCount;
   const T* query_load = (const T*) vector;
   // #pragma omp parallel for schedule(dynamic, 1)
@@ -120,8 +119,8 @@ int aux_main(int argc, char** argv) {
     float* query_dists = new float[k * nqueries];
 
     // execute queries
-    SearchIndex(_pFlashIndex, (const char*) query, nqueries, k,
-                      query_dists, query_res);
+    SearchIndex(_pFlashIndex, (const char*) query, nqueries, k, query_dists,
+                query_res);
 
     // compute recall
     write_Tvecs_unsigned(argv[4], query_res, nqueries, k);

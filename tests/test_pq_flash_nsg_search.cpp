@@ -1,12 +1,11 @@
-#include <efanna2e/index.h>
-#include <efanna2e/neighbor.h>
-#include <efanna2e/pq_flash_index_nsg.h>
-#include <efanna2e/timer.h>
-#include <efanna2e/util.h>
+#include <index.h>
+#include <neighbor.h>
 #include <omp.h>
+#include <pq_flash_index_nsg.h>
+#include <timer.h>
 #include <atomic>
 #include <cassert>
-#include "utils.h"
+#include "util.h"
 
 void load_data(char* filename, float*& data, unsigned& num,
                unsigned& dim) {  // load data with sift10K pattern

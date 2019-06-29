@@ -1,13 +1,12 @@
 //#include <distances.h>
 //#include <indexing.h>
-#include <efanna2e/index_nsg.h>
-#include <efanna2e/util.h>
+#include <index_nsg.h>
 #include <math_utils.h>
 #include <partitionAndPQ.h>
-#include <utils.h>
+#include "util.h"
 
 // #define TRAINING_SET_SIZE 2000000
-#define TRAINING_SET_SIZE 2000000
+//#define TRAINING_SET_SIZE 2000000
 
 template<typename T>
 bool testBuildIndex(const char* dataFilePath, const char* indexFilePath,
@@ -19,11 +18,11 @@ bool testBuildIndex(const char* dataFilePath, const char* indexFilePath,
   while (parser >> cur_param)
     param_list.push_back(cur_param);
 
-  if (param_list.size() != 4) {
+  if (param_list.size() != 5) {
     std::cout << "Correct usage of parameters is L (indexing search list size) "
                  "R (max degree) C (visited list maximum size) B (approximate "
                  "compressed number of bytes per datapoint to store in "
-                 "memory) "
+                 "memory) TRAINING_SIZE"
               << std::endl;
     return 1;
   }
@@ -41,6 +40,7 @@ bool testBuildIndex(const char* dataFilePath, const char* indexFilePath,
   unsigned R = (unsigned) atoi(param_list[1].c_str());
   unsigned C = (unsigned) atoi(param_list[2].c_str());
   size_t   num_pq_chunks = (size_t) atoi(param_list[3].c_str());
+  size_t TRAINING_SET_SIZE = (size_t) atoi(param_list[4].c_str());
 
   T* data_load = NULL;
 
@@ -110,15 +110,15 @@ bool testBuildIndex(const char* dataFilePath, const char* indexFilePath,
 }
 
 int main(int argc, char** argv) {
-  if (argc != 8) {
+  if (argc != 9) {
     std::cout << "Usage: " << argv[0]
               << " data_file[bin] data_type [float/uint8/int8] index_prefix L "
-                 "R C N_CHUNKS"
+                 "R C N_CHUNKS TRAINING_SIZE"
               << std::endl;
   } else {
     std::string params = std::string(argv[4]) + " " + std::string(argv[5]) +
                          " " + std::string(argv[6]) + " " +
-                         std::string(argv[7]);
+                         std::string(argv[7]) + " " +  std::string(argv[8]);
     if (std::string(argv[2]) == std::string("float"))
       testBuildIndex<float>(argv[1], argv[3], params.c_str());
     else if (std::string(argv[2]) == std::string("int8"))

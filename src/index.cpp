@@ -3,7 +3,7 @@
 //
 // This source code is licensed under the MIT license.
 //
-#include <efanna2e/index.h>
+#include <index.h>
 namespace NSG {
   template<>
   Index<float>::Index(const size_t dimension, const size_t n, Metric metric,

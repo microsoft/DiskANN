@@ -1,11 +1,10 @@
 //#include <distances.h>
 //#include <indexing.h>
 
-#include <efanna2e/index_nsg.h>
-#include <efanna2e/util.h>
+#include <index_nsg.h>
 #include <math_utils.h>
 #include <partitionAndPQ.h>
-#include <utils.h>
+#include "util.h"
 
 int main(int argc, char** argv) {
   if (argc != 5) {
