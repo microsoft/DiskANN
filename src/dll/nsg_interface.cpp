@@ -13,7 +13,7 @@
 
 namespace NSG {
 
-#define TRAINING_SET_SIZE 20000
+#define TRAINING_SET_SIZE 2000000
   template<typename T>
   __cdecl NSGInterface<T>::NSGInterface(unsigned __int32       dimension,
                                         ANNIndex::DistanceType distanceType)

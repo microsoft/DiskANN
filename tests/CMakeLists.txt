@@ -29,7 +29,9 @@ target_link_libraries(test_nsg_search ${PROJECT_NAME})
 
 
 add_executable(test_build test_build.cpp)
-target_link_libraries(test_build ${PROJECT_NAME} -ltcmalloc)
+target_link_libraries(test_build ${PROJECT_NAME})
+add_executable(test_search test_search.cpp)
+target_link_libraries(test_search ${PROJECT_NAME} aio)
 
 
 #add_executable(test_nsg_search_int8 test_nsg_search_int8.cpp)
@@ -48,7 +50,7 @@ add_executable(opt_disk_graph opt_disk_graph.cpp)
 #add_executable(dedup_fvecs dedup_fvecs.cpp)
 #add_executable(embed_knn embed_knn.cpp)
 #add_executable(dedup_int8_bin dedup_int8_bin.cpp)
-#add_executable(fvecs_to_bin fvecs_to_bin.cpp)
+add_executable(fvecs_to_bin fvecs_to_bin.cpp)
 #add_executable(ivecs_to_bin_u8 ivecs_to_bin_u8.cpp)
 add_executable(quantize quantize.cpp)
 #add_executable(read_fvecs read_fvecs.cpp)

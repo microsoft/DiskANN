@@ -7,7 +7,7 @@
 #include <utils.h>
 
 // #define TRAINING_SET_SIZE 2000000
-#define TRAINING_SET_SIZE 20000
+#define TRAINING_SET_SIZE 2000000
 
 template<typename T>
 bool testBuildIndex(const char* dataFilePath, const char* indexFilePath,
@@ -35,25 +35,28 @@ bool testBuildIndex(const char* dataFilePath, const char* indexFilePath,
   std::string pq_compressed_vectors_path =
       index_prefix_path + "_compressed_uint32.bin";
   std::string randnsg_path = index_prefix_path + "_unopt.rnsg";
+  std::string diskopt_path = index_prefix_path + "_diskopt.rnsg";
 
   unsigned L = (unsigned) atoi(param_list[0].c_str());
   unsigned R = (unsigned) atoi(param_list[1].c_str());
   unsigned C = (unsigned) atoi(param_list[2].c_str());
   size_t   num_pq_chunks = (size_t) atoi(param_list[3].c_str());
 
-  uint32_t* params_array = new uint32_t[4];
-  params_array[0] = (uint32_t) L;
-  params_array[1] = (uint32_t) R;
-  params_array[2] = (uint32_t) C;
-  params_array[3] = (uint32_t) num_pq_chunks;
-  NSG::save_bin<uint32_t>(index_params_path.c_str(), params_array, 4, 1);
+  T* data_load = NULL;
 
-  T*     data_load = NULL;
   size_t points_num, dim;
 
   NSG::load_bin<T>(dataFilePath, data_load, points_num, dim);
-  data_load = NSG::data_align(data_load, points_num, dim);
-  std::cout << "Data loaded and aligned" << std::endl;
+  std::cout << "Data loaded" << std::endl;
+
+  uint32_t* params_array = new uint32_t[5];
+  params_array[0] = (uint32_t) L;
+  params_array[1] = (uint32_t) R;
+  params_array[2] = (uint32_t) C;
+  params_array[3] = (uint32_t) dim;
+  params_array[4] = (uint32_t) num_pq_chunks;
+  NSG::save_bin<uint32_t>(index_params_path.c_str(), params_array, 5, 1);
+  std::cout << "Saving params to " << index_params_path << "\n";
 
   auto s = std::chrono::high_resolution_clock::now();
 
@@ -62,9 +65,12 @@ bool testBuildIndex(const char* dataFilePath, const char* indexFilePath,
                      (size_t) TRAINING_SET_SIZE);
   } else {
     float* float_data = new float[points_num * dim];
-    for (size_t i = 0; i < points_num; i++)
-      for (size_t j = 0; j < dim; j++)
+    for (size_t i = 0; i < points_num; i++) {
+      for (size_t j = 0; j < dim; j++) {
         float_data[i * dim + j] = data_load[i * dim + j];
+      }
+    }
+
     NSG::save_bin<float>(train_file_path.c_str(), float_data, points_num, dim);
     delete[] float_data;
   }
@@ -85,17 +91,41 @@ bool testBuildIndex(const char* dataFilePath, const char* indexFilePath,
   paras.Set<unsigned>("num_rnds", 2);
   paras.Set<std::string>("save_path", randnsg_path);
 
-  NSG::IndexNSG<T> _pNsgIndex(dim, points_num, NSG::L2, nullptr);
-  _pNsgIndex.BuildRandomHierarchical(data_load, paras);
+  data_load = NSG::data_align(data_load, points_num, dim);
+  std::cout << "Base data aligned for optimized Rand-NSG execution."
+            << std::endl;
+  NSG::IndexNSG<T>* _pNsgIndex =
+      new NSG::IndexNSG<T>(dim, points_num, NSG::L2, nullptr);
+  _pNsgIndex->BuildRandomHierarchical(data_load, paras);
+
+  _pNsgIndex->Save(randnsg_path.c_str());
+
+  _pNsgIndex->save_disk_opt_graph(diskopt_path.c_str());
   auto                          e = std::chrono::high_resolution_clock::now();
   std::chrono::duration<double> diff = e - s;
 
   std::cout << "Indexing time: " << diff.count() << "\n";
-  _pNsgIndex.Save(randnsg_path.c_str());
+
   return 0;
 }
 
 int main(int argc, char** argv) {
-  testBuildIndex<uint8_t>("/nvme/data/sift1m_u8/base_u8.bin",
-                          "/nvme/data/sift1m_u8/test_build_u8", "50 64 750 32");
+  if (argc != 8) {
+    std::cout << "Usage: " << argv[0]
+              << " data_file[bin] data_type [float/uint8/int8] index_prefix L "
+                 "R C N_CHUNKS"
+              << std::endl;
+  } else {
+    std::string params = std::string(argv[4]) + " " + std::string(argv[5]) +
+                         " " + std::string(argv[6]) + " " +
+                         std::string(argv[7]);
+    if (std::string(argv[2]) == std::string("float"))
+      testBuildIndex<float>(argv[1], argv[3], params.c_str());
+    else if (std::string(argv[2]) == std::string("int8"))
+      testBuildIndex<int8_t>(argv[1], argv[3], params.c_str());
+    else if (std::string(argv[2]) == std::string("uint8"))
+      testBuildIndex<uint8_t>(argv[1], argv[3], params.c_str());
+    else
+      std::cout << "Error. wrong file type" << std::endl;
+  }
 }

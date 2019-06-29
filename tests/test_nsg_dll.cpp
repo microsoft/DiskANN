@@ -20,7 +20,7 @@ int aux_main(int argc, char** argv) {
   {
     // just construct index
     bool res = intf->BuildIndex(argv[1], argv[2], "50 64 200 32");
-	// ERROR CHECK
+    // ERROR CHECK
     if (res == 1) {
       exit(-1);
     }
