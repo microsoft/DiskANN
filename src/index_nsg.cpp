@@ -921,6 +921,11 @@ namespace NSG {
   }
 
   template<typename T>
+  void IndexNSG<T>::SetData(const T* data) {
+  data_ = data;
+  }
+
+  template<typename T>
   void IndexNSG<T>::BuildRandomHierarchical(const T *   data,
                                             Parameters &parameters) {
     unsigned range = parameters.Get<unsigned>("R");

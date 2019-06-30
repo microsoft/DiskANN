@@ -40,7 +40,7 @@ bool testBuildIndex(const char* dataFilePath, const char* indexFilePath,
   unsigned R = (unsigned) atoi(param_list[1].c_str());
   unsigned C = (unsigned) atoi(param_list[2].c_str());
   size_t   num_pq_chunks = (size_t) atoi(param_list[3].c_str());
-  size_t TRAINING_SET_SIZE = (size_t) atoi(param_list[4].c_str());
+  size_t   TRAINING_SET_SIZE = (size_t) atoi(param_list[4].c_str());
 
   T* data_load = NULL;
 
@@ -49,14 +49,6 @@ bool testBuildIndex(const char* dataFilePath, const char* indexFilePath,
   NSG::load_bin<T>(dataFilePath, data_load, points_num, dim);
   std::cout << "Data loaded" << std::endl;
 
-  uint32_t* params_array = new uint32_t[5];
-  params_array[0] = (uint32_t) L;
-  params_array[1] = (uint32_t) R;
-  params_array[2] = (uint32_t) C;
-  params_array[3] = (uint32_t) dim;
-  params_array[4] = (uint32_t) num_pq_chunks;
-  NSG::save_bin<uint32_t>(index_params_path.c_str(), params_array, 5, 1);
-  std::cout << "Saving params to " << index_params_path << "\n";
 
   auto s = std::chrono::high_resolution_clock::now();
 
@@ -96,11 +88,27 @@ bool testBuildIndex(const char* dataFilePath, const char* indexFilePath,
             << std::endl;
   NSG::IndexNSG<T>* _pNsgIndex =
       new NSG::IndexNSG<T>(dim, points_num, NSG::L2, nullptr);
+  if(file_exists(randnsg_path.c_str())) {
+	  _pNsgIndex->SetData(data_load);
+	  _pNsgIndex->Load(randnsg_path.c_str());
+  }
+  else {
   _pNsgIndex->BuildRandomHierarchical(data_load, paras);
-
   _pNsgIndex->Save(randnsg_path.c_str());
+  }
 
   _pNsgIndex->save_disk_opt_graph(diskopt_path.c_str());
+
+
+  uint32_t* params_array = new uint32_t[5];
+  params_array[0] = (uint32_t) L;
+  params_array[1] = (uint32_t) R;
+  params_array[2] = (uint32_t) C;
+  params_array[3] = (uint32_t) dim;
+  params_array[4] = (uint32_t) num_pq_chunks;
+  NSG::save_bin<uint32_t>(index_params_path.c_str(), params_array, 5, 1);
+  std::cout << "Saving params to " << index_params_path << "\n";
+
   auto                          e = std::chrono::high_resolution_clock::now();
   std::chrono::duration<double> diff = e - s;
 
@@ -118,7 +126,7 @@ int main(int argc, char** argv) {
   } else {
     std::string params = std::string(argv[4]) + " " + std::string(argv[5]) +
                          " " + std::string(argv[6]) + " " +
-                         std::string(argv[7]) + " " +  std::string(argv[8]);
+                         std::string(argv[7]) + " " + std::string(argv[8]);
     if (std::string(argv[2]) == std::string("float"))
       testBuildIndex<float>(argv[1], argv[3], params.c_str());
     else if (std::string(argv[2]) == std::string("int8"))

@@ -34,6 +34,14 @@ float calc_recall(unsigned num_queries, unsigned* gold_std, unsigned dim_gs,
          (100.0 / ((float) recall_at));
 }
 
+void int8_to_float(int8_t* srcmat, float* destmat, size_t npts, size_t dim) {
+  for (size_t i = 0; i < npts; i++) {
+    for (size_t j = 0; j < dim; j++) {
+      destmat[i * dim + j] = srcmat[i * dim + j];
+    }
+  }
+}
+
 int main(int argc, char** argv) {
   if ((argc != 6)) {
     std::cout << argv[0] << " data_file query_file groundtruth nsg_path "
@@ -42,8 +50,8 @@ int main(int argc, char** argv) {
     exit(-1);
   }
 
-  int      bfs_init = 1;
-  unsigned beam_width = 1;
+  int      bfs_init = 0;
+  unsigned beam_width = 4;
   unsigned recall_at = atoi(argv[5]);
 
   float*    data_load = NULL;
@@ -80,9 +88,23 @@ int main(int argc, char** argv) {
 
   // load_data(argv[1], data_load, points_num, dim);
 
-  load_file_into_data<float>(argv[1], data_load, points_num, dim);
-  load_file_into_data<float>(argv[2], query_load, query_num, query_dim);
-  load_file_into_data<unsigned>(argv[3], gt_load, gt_num, gt_dim);
+  NSG::load_Tvecs<float>(argv[1], data_load, points_num, dim);
+  NSG::load_Tvecs<float>(argv[2], query_load, query_num, query_dim);
+  //
+//  int8_t* data_int8;
+//  NSG::load_bin<int8_t>(argv[1], data_int8, points_num, dim);
+//  data_load = new float[points_num * dim];
+//  NSG::convert_types(data_int8, data_load, points_num, dim);
+//  delete[] data_int8;
+
+  //  load_file_into_data<float>(argv[2], query_load, query_num, query_dim);
+  //
+//  int8_t* query_int8;
+//  NSG::load_bin<int8_t>(argv[2], query_int8, query_num, query_dim);
+//  query_load = new float[query_num * dim];
+//  int8_to_float(query_int8, query_load, query_num, dim);
+
+  NSG::load_Tvecs<unsigned>(argv[3], gt_load, gt_num, gt_dim);
 
   if (dim != query_dim) {
     std::cout << "Base and query files dimension mismatch: base dim is " << dim
@@ -142,12 +164,13 @@ int main(int argc, char** argv) {
     long long total_hops = 0;
     long long total_cmps = 0;
 
-    auto    s = std::chrono::high_resolution_clock::now();
-#pragma omp parallel for schedule(static, 1)
+    auto s = std::chrono::high_resolution_clock::now();
+    //#pragma omp parallel for schedule(static, 1)
     for (int i = 0; i < query_num; i++) {
       auto ret =
           index.BeamSearch(query_load + i * dim, data_load, K, paras,
                            res + ((size_t) i) * K, beam_width, start_points);
+//      std::cout<<"Search done for query "<<i<<std::endl;
 // auto ret = index.Search(query_load + i * dim, data_load, K, paras,
 // tmp.data());
 
@@ -161,7 +184,9 @@ int main(int argc, char** argv) {
     std::chrono::duration<double> diff = e - s;
     unsigned                      nthreads = omp_get_max_threads();
     //    std::cout << "search time: " << diff.count() << "\n";
-    float latency = (diff.count() / query_num) * (1000000) * (float) nthreads;
+    float latency = (diff.count() / query_num) * (1000000);
+    //    float latency = (diff.count() / query_num) * (1000000) * (float)
+    //    nthreads;
     float avg_hops = (float) total_hops / (float) query_num;
     float avg_cmps = (float) total_cmps / (float) query_num;
     float recall = calc_recall(query_num, gt_load, gt_dim, res, K, recall_at);

@@ -50,6 +50,8 @@ namespace NSG {
 
     void save_disk_opt_graph(const char *diskopt_path);
 
+    void SetData(const T* data);
+
    protected:
     typedef std::vector<std::vector<unsigned>> CompactGraph;
 
@@ -90,6 +92,7 @@ namespace NSG {
                     tsl::robin_set<unsigned> &visited, vecNgh &cut_graph_);
 
     void LinkHierarchy(Parameters &parameters);
+
 
    private:
     unsigned                width;

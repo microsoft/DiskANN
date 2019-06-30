@@ -86,7 +86,7 @@ void SearchIndex(NSG::PQFlashNSG<T>* _pFlashIndex, const char* vector,
   for (_s64 i = 0; i < queryCount; i++) {
     _pFlashIndex->cached_beam_search(
         query_load + (i * _pFlashIndex->data_dim), neighborCount, L,
-        ids + (i * neighborCount), distances + (i * neighborCount), 5);
+        ids + (i * neighborCount), distances + (i * neighborCount), 4);
   }
 }
 
@@ -114,7 +114,7 @@ int aux_main(int argc, char** argv) {
     ndims = ROUND_UP(ndims, 8);
 
     // query params/output
-    _u64   k = 5, L = 30;
+    _u64   k = 5, L = 12;
     _u64*  query_res = new _u64[k * nqueries];
     float* query_dists = new float[k * nqueries];
 
@@ -123,7 +123,7 @@ int aux_main(int argc, char** argv) {
                 query_res);
 
     // compute recall
-    write_Tvecs_unsigned(argv[4], query_res, nqueries, k);
+    NSG::write_Tvecs_unsigned(argv[4], query_res, nqueries, k);
 
     NSG::aligned_free(query);
     delete[] query_res;

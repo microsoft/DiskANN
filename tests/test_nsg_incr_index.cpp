@@ -23,7 +23,8 @@ int main(int argc, char** argv) {
   float* data_load = NULL;
   size_t points_num, dim;
 
-  load_file_into_data<float>(argv[1], data_load, points_num, dim);
+  //  load_file_into_data<float>(argv[1], data_load, points_num, dim);
+  NSG::load_Tvecs<float>(argv[1], data_load, points_num, dim);
   data_load = NSG::data_align(data_load, points_num, dim);
   std::cout << "Data loaded and aligned" << std::endl;
 
