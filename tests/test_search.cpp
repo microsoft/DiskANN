@@ -98,7 +98,18 @@ int aux_main(int argc, char** argv) {
 
   //  ANNIndex::IANNIndex* intf = new NSG::NSGInterface<T>(0, ANNIndex::DT_L2);
   NSG::PQFlashNSG<T>* _pFlashIndex;
-  // for query search
+
+
+    // load query bin
+    T*       query = nullptr;
+    size_t nqueries, ndims;
+//    NSG::aligned_load_Tvecs<T>(argv[3], query, nqueries, ndims);
+    NSG::load_bin<T> (argv[3], query, nqueries, ndims);
+  query =  NSG::data_align<T>(query, nqueries, ndims); 
+//    ndims = ROUND_UP(ndims, 8);
+  
+
+// for query search
   {
     // load the index
     bool res = LoadIndex(argv[1], "4 4 16", _pFlashIndex);
@@ -108,11 +119,6 @@ int aux_main(int argc, char** argv) {
       exit(-1);
     }
 
-    // load query fvecs
-    T*       query = nullptr;
-    unsigned nqueries, ndims;
-    NSG::aligned_load_Tvecs<T>(argv[3], query, nqueries, ndims);
-    ndims = ROUND_UP(ndims, 8);
 
     // query params/output
     _u64   k = 5, L = 12;
