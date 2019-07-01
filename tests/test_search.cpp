@@ -80,7 +80,8 @@ template<typename T>
 void SearchIndex(NSG::PQFlashNSG<T>* _pFlashIndex, const char* vector,
                  uint64_t queryCount, uint64_t neighborCount, float* distances,
                  uint64_t* ids) {
-  _u64     L = 6 * neighborCount;
+//  _u64     L = 6 * neighborCount;
+  _u64     L = 12;
   const T* query_load = (const T*) vector;
   // #pragma omp parallel for schedule(dynamic, 1)
   for (_s64 i = 0; i < queryCount; i++) {

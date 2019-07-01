@@ -38,13 +38,13 @@ int main(int argc, char** argv) {
   unsigned    R = (unsigned) atoi(argv[3]);
   unsigned    C = (unsigned) atoi(argv[4]);
   std::string save_path(argv[5]);
-//  float       alpha = 1.2f;  //(float) std::atof(argv[6]);
-  float       alpha = 1;  //(float) std::atof(argv[6]);
+  float       alpha = 1.2f;  //(float) std::atof(argv[6]);
+ // float       alpha = 1;  //(float) std::atof(argv[6]);
   //  float       p_val = 0.05f;  //(float) std::atof(argv[7]);
   //  unsigned    num_hier = (float) std::atof(argv[8]);
   //  unsigned num_syncs = 150;  //(float) std::atof(argv[8]);
   //unsigned num_rnds = 2;
-  unsigned num_rnds = 1;
+  unsigned num_rnds = 2;
   //  unsigned    innerL = (unsigned) atoi(argv[11]);
   //  unsigned innerR = R;  //(unsigned) atoi(argv[10]);
   //  unsigned    innerC = (unsigned) atoi(argv[13]);
