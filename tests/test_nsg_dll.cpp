@@ -29,7 +29,7 @@ int aux_main(int argc, char** argv) {
   // for query search
   {
     // load the index
-    bool res = intf->LoadIndex(argv[2], "4 4 16");
+    bool res = intf->LoadIndex(argv[2], "12 4 4 16");
     // ERROR CHECK
     if (res == 1) {
       exit(-1);

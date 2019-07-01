@@ -63,5 +63,6 @@ namespace NSG {
     _u64                           n_chunks;
     _u64                           chunk_size;
     _u64                           beam_width;
+    _u64                           Lsearch;
   };
 }  // namespace NSG

@@ -145,9 +145,9 @@ namespace NSG {
     while (parser >> cur_param)
       param_list.push_back(cur_param);
 
-    if (param_list.size() != 3) {
+    if (param_list.size() != 4) {
       std::cerr << "Correct usage of parameters is \n"
-                   "BeamWidth[1] cache_nlevels[2] nthreads[3]"
+                   "Lsearch[1] BeamWidth[2] cache_nlevels[3] nthreads[4]"
                 << std::endl;
       return 1;
     }
@@ -171,9 +171,10 @@ namespace NSG {
 
     std::string nsg_disk_opt = index_prefix_path + "_diskopt.rnsg";
 
-    this->beam_width = (_u64) std::atoi(param_list[0].c_str());
-    _u64        cache_nlevels = (_u64) std::atoi(param_list[1].c_str());
-    _u64        nthreads = (_u64) std::atoi(param_list[2].c_str());
+    this->Lsearch = (_u64) std::atoi(param_list[0].c_str());
+    this->beam_width = (_u64) std::atoi(param_list[1].c_str());
+    _u64        cache_nlevels = (_u64) std::atoi(param_list[2].c_str());
+    _u64        nthreads = (_u64) std::atoi(param_list[3].c_str());
     std::string stars(40, '*');
     std::cout << stars << "\nPQ -- n_chunks: " << n_chunks
               << ", chunk_size: " << chunk_size << ", data_dim: " << this->m_dimension
@@ -207,12 +208,12 @@ namespace NSG {
                                     unsigned __int64  neighborCount,
                                     float*            distances,
                                     unsigned __int64* ids) const {
-    _u64      L = 6 * neighborCount;
+//    _u64      L = 6 * neighborCount;
     const T*  query_load = (const T*) vector;
 // #pragma omp parallel for schedule(dynamic, 1)
     for (_s64 i = 0; i < queryCount; i++) {
       _pFlashIndex->cached_beam_search(
-          query_load + (i * m_dimension), neighborCount, L,
+          query_load + (i * m_dimension), neighborCount, this->Lsearch,
           ids + (i * neighborCount), distances + (i * neighborCount),
           this->beam_width);
     }
