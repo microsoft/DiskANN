@@ -81,7 +81,7 @@ template<typename T>
 void SearchIndex(NSG::PQFlashNSG<T>* _pFlashIndex, const char* vector,
                  uint64_t queryCount, uint64_t neighborCount, float* distances,
                  uint64_t* ids) {
-  _u64     L = 6 * neighborCount;
+  _u64     L = 12;
   const T* query_load = (const T*) vector;
   // #pragma omp parallel for schedule(dynamic, 1)
   for (_s64 i = 0; i < queryCount; i++) {
@@ -109,9 +109,11 @@ int aux_main(int argc, char** argv) {
     }
 
     // load query fvecs
-    T*       query = nullptr;
-    unsigned nqueries, ndims;
-    NSG::aligned_load_Tvecs<T>(argv[3], query, nqueries, ndims);
+    T*     query = nullptr;
+    size_t nqueries, ndims;
+    //    NSG::aligned_load_Tvecs<T>(argv[3], query, nqueries, ndims);
+    NSG::load_bin<T>(argv[3], query, nqueries, ndims);
+    query = NSG::data_align(query, nqueries, ndims);
     ndims = ROUND_UP(ndims, 8);
 
     // query params/output

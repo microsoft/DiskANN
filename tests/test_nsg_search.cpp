@@ -2,6 +2,7 @@
 #include <efanna2e/util.h>
 #include <omp.h>
 #include <string.h>
+#include <cstring>
 
 #ifndef __NSG_WINDOWS__
 #include <sys/mman.h>
@@ -34,23 +35,47 @@ float calc_recall(unsigned num_queries, unsigned* gold_std, unsigned dim_gs,
          (100.0 / ((float) recall_at));
 }
 
-int main(int argc, char** argv) {
-  if ((argc != 6)) {
-    std::cout << argv[0] << " data_file query_file groundtruth nsg_path "
+template<typename T>
+int aux_main(int argc, char** argv) {
+  if ((argc != 7)) {
+    std::cout << argv[0] << " data_type [int8/uint8/float] data_bin_file "
+                            "query_bin_file groundtruth_bin nsg_path "
                             "recall@"
               << std::endl;
     exit(-1);
   }
 
-  int      bfs_init = 1;
-  unsigned beam_width = 1;
-  unsigned recall_at = atoi(argv[5]);
+  int      bfs_init = 0;
+  unsigned beam_width = 4;
 
-  float*    data_load = NULL;
-  float*    query_load = NULL;
+  T*        data_load = NULL;
+  T*        query_load = NULL;
   unsigned* gt_load = NULL;
   size_t    points_num, dim, query_num, query_dim;
   size_t    gt_num, gt_dim;
+
+  NSG::load_bin<T>(argv[2], data_load, points_num, dim);
+  NSG::load_bin<T>(argv[3], query_load, query_num, query_dim);
+  NSG::load_bin<unsigned>(argv[4], gt_load, gt_num, gt_dim);
+  std::string rand_nsg_path(argv[5]);
+  unsigned    recall_at = atoi(argv[6]);
+
+  if (dim != query_dim) {
+    std::cout << "Base and query files dimension mismatch: base dim is " << dim
+              << ", query dim is " << query_dim << std::endl;
+    exit(-1);
+  }
+
+  if (gt_num != query_num) {
+    std::cout << "Ground truth does not match number of queries. " << std::endl;
+    exit(-1);
+  }
+
+  if (recall_at > gt_num) {
+    std::cout << "Ground truth has only " << gt_num
+              << " elements. Calculating recall at " << gt_num << std::endl;
+    recall_at = gt_num;
+  }
 
   std::vector<unsigned> Lvec;
   unsigned              curL = 8;
@@ -76,38 +101,13 @@ int main(int argc, char** argv) {
 
   std::cout.setf(std::ios_base::fixed, std::ios_base::floatfield);
   std::cout.precision(2);
-  //  std::cout.precision(1);
 
-  // load_data(argv[1], data_load, points_num, dim);
-
-  load_file_into_data<float>(argv[1], data_load, points_num, dim);
-  load_file_into_data<float>(argv[2], query_load, query_num, query_dim);
-  load_file_into_data<unsigned>(argv[3], gt_load, gt_num, gt_dim);
-
-  if (dim != query_dim) {
-    std::cout << "Base and query files dimension mismatch: base dim is " << dim
-              << ", query dim is " << query_dim << std::endl;
-    exit(-1);
-  }
-
-  if (gt_num != query_num) {
-    std::cout << "Ground truth does not match number of queries. " << std::endl;
-    exit(-1);
-  }
-
-  if (recall_at > gt_num) {
-    std::cout << "Ground truth has only " << gt_num
-              << " elements. Calculating recall at " << gt_num << std::endl;
-    recall_at = gt_num;
-  }
-
-  assert(dim == query_dim);
   data_load = NSG::data_align(data_load, points_num, dim);
   query_load = NSG::data_align(query_load, query_num, query_dim);
   std::cout << "Base and query data loaded and aligned" << std::endl;
 
-  NSG::IndexNSG<float> index(dim, points_num, NSG::L2, nullptr);
-  index.load(argv[4]);
+  NSG::IndexNSG<T> index(dim, points_num, NSG::L2, nullptr);
+  index.load(rand_nsg_path.c_str());  // to load NSG
   std::cout << "Index loaded" << std::endl;
 
   std::vector<unsigned> start_points;
@@ -126,7 +126,7 @@ int main(int argc, char** argv) {
     unsigned L = Lvec[test_id];
     if (L < recall_at)
       continue;
-    unsigned  K = L;
+    unsigned  K = recall_at;
     unsigned* res = new unsigned[(size_t) query_num * K];
 
     paras.Set<unsigned>("L_search", L);
@@ -135,18 +135,16 @@ int main(int argc, char** argv) {
     long long total_hops = 0;
     long long total_cmps = 0;
 
-    auto    s = std::chrono::high_resolution_clock::now();
-#pragma omp parallel for schedule(static, 1)
+    auto s = std::chrono::high_resolution_clock::now();
+    //#pragma omp parallel for schedule(static, 1)
     for (int i = 0; i < query_num; i++) {
       auto ret =
           index.beam_search(query_load + i * dim, data_load, K, paras,
                             res + ((size_t) i) * K, beam_width, start_points);
-// auto ret = index.Search(query_load + i * dim, data_load, K, paras,
-// tmp.data());
 
-#pragma omp atomic
+      //#pragma omp atomic
       total_hops += ret.first;
-#pragma omp atomic
+      //#pragma omp atomic
       total_cmps += ret.second;
     }
 
@@ -168,4 +166,22 @@ int main(int argc, char** argv) {
   delete[] data_load;
 
   return 0;
+}
+
+int main(int argc, char** argv) {
+  if ((argc != 7)) {
+    std::cout << argv[0] << " data_type [int8/uint8/float] data_bin_file "
+                            "query_bin_file groundtruth_bin nsg_path "
+                            "recall@"
+              << std::endl;
+    exit(-1);
+  }
+  if (std::string(argv[1]) == std::string("int8"))
+    aux_main<int8_t>(argc, argv);
+  else if (std::string(argv[1]) == std::string("uint8"))
+    aux_main<uint8_t>(argc, argv);
+  else if (std::string(argv[1]) == std::string("float"))
+    aux_main<float>(argc, argv);
+  else
+    std::cout << "Unsupported type. Use float/int8/uint8" << std::endl;
 }
