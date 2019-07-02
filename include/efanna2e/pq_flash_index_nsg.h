@@ -4,6 +4,7 @@
 #include <stack>
 #include <string>
 #include "aligned_file_reader.h"
+#include "concurrent_queue.h"
 #include "index.h"
 #include "neighbor.h"
 #include "parameters.h"
@@ -17,8 +18,9 @@
 #define MAX_N_SECTOR_READS 16
 
 namespace NSG {
+  template<typename T>
   struct QueryScratch {
-    _s8 *coord_scratch = nullptr;  // MUST BE AT LEAST [MAX_N_CMPS * data_dim]
+    T *  coord_scratch = nullptr;  // MUST BE AT LEAST [MAX_N_CMPS * data_dim]
     _u64 coord_idx = 0;            // index of next [data_dim] scratch to use
 
     char *sector_scratch =
@@ -31,34 +33,43 @@ namespace NSG {
     float *aligned_dist_scratch = nullptr;  // MUST BE AT LEAST NSG MAX_DEGREE
     _u8 *  aligned_pq_coord_scratch =
         nullptr;  // MUST BE AT LEAST  [N_CHUNKS * MAX_DEGREE]
+
+    void reset() {
+      coord_idx = 0;
+      sector_idx = 0;
+    }
   };
 
+  template<typename T>
+  struct ThreadData {
+    QueryScratch<T> scratch;
+    IOContext       ctx;
+  };
+
+  template<typename T>
   class PQFlashNSG {
    public:
-    PQFlashNSG(Distance *dist_cmp);
+    PQFlashNSG();
     ~PQFlashNSG();
 
     // load data, but obtain handle to nsg file
     void load(const char *data_bin, const char *nsg_file,
               const char *pq_tables_bin, const _u64 chunk_size,
-              const _u64 n_chunks, const _u64 data_dim);
+              const _u64 n_chunks, const _u64 data_dim,
+              const _u64 max_nthreads);
 
     // NOTE:: implemented
     void cache_bfs_levels(_u64 nlevels);
 
-    // implemented
-    std::pair<int, int> beam_search(const float *query, const _u64 k_search,
-                                    const _u64 l_search, _u32 *indices,
-                                    const _u64  beam_width,
-                                    QueryStats *stats = nullptr);
+    // setting up thread-specific data
+    void setup_thread_data(_u64 nthreads);
+    void destroy_thread_data();
 
     // implemented
-    std::pair<int, int> cached_beam_search(const float *query,
-                                           const _u64 k_search,
-                                           const _u64 l_search, _u32 *indices,
-                                           const _u64    beam_width,
-                                           QueryStats *  stats = nullptr,
-                                           QueryScratch *scratch = nullptr);
+    void cached_beam_search(const T *query, const _u64 k_search,
+                            const _u64 l_search, _u64 *res_ids,
+                            float *res_dists, const _u64 beam_width,
+                            QueryStats *stats = nullptr);
     AlignedFileReader *reader;
 
     // index info
@@ -78,12 +89,13 @@ namespace NSG {
     // data: _u8 * n_chunks
     // chunk_size = chunk size of each dimension chunk
     // pq_tables = float* [[2^8 * [chunk_size]] * n_chunks]
-    _u8 *              data = nullptr;
-    _u64               chunk_size;
-    _u64               n_chunks;
-    FixedChunkPQTable *pq_table;
+    _u8 *                 data = nullptr;
+    _u64                  chunk_size;
+    _u64                  n_chunks;
+    FixedChunkPQTable<T> *pq_table;
+
     // distance comparator
-    Distance *dist_cmp;
+    Distance<T> *dist_cmp;
 
     // medoid/start info
     _u64 medoid = 0;
@@ -94,7 +106,11 @@ namespace NSG {
     tsl::robin_map<_u64, std::pair<_u64, unsigned *>> nhood_cache;
 
     // coord_cache
-    _s8 *coord_cache_buf = nullptr;
-    tsl::robin_map<_u64, _s8 *> coord_cache;
+    T *coord_cache_buf = nullptr;
+    tsl::robin_map<_u64, T *> coord_cache;
+
+    // thread-specific scratch
+    ConcurrentQueue<ThreadData<T>> thread_data;
+    _u64                           max_nthreads;
   };
 }

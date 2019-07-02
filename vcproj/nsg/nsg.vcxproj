@@ -38,6 +38,7 @@
     <ClInclude Include="..\..\include\tsl\robin_hash.h" />
     <ClInclude Include="..\..\include\tsl\robin_map.h" />
     <ClInclude Include="..\..\include\tsl\robin_set.h" />
+    <ClInclude Include="..\..\include\utils.h" />
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <VCProjectVersion>15.0</VCProjectVersion>
@@ -72,6 +73,8 @@
     <PlatformToolset>v141</PlatformToolset>
     <WholeProgramOptimization>true</WholeProgramOptimization>
     <CharacterSet>Unicode</CharacterSet>
+    <UseIntelMKL>Parallel</UseIntelMKL>
+    <UseILP64Interfaces>true</UseILP64Interfaces>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
   <ImportGroup Label="ExtensionSettings">
@@ -168,7 +171,7 @@
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>NDEBUG;_CONSOLE;__NSG_WINDOWS__;%(PreprocessorDefinitions); USE_AVX2;USE_ACCELERATED_PQ</PreprocessorDefinitions>
+      <PreprocessorDefinitions>NDEBUG;_CONSOLE;__NSG_WINDOWS__;USE_AVX2;%(PreprocessorDefinitions); USE_AVX2;USE_ACCELERATED_PQ</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <PrecompiledHeaderFile>
       </PrecompiledHeaderFile>
@@ -182,12 +185,12 @@
       <EnableParallelCodeGeneration>true</EnableParallelCodeGeneration>
       <EnableEnhancedInstructionSet>AdvancedVectorExtensions2</EnableEnhancedInstructionSet>
       <OpenMPSupport>true</OpenMPSupport>
-      <ExceptionHandling>false</ExceptionHandling>
+      <ExceptionHandling>Sync</ExceptionHandling>
       <StructMemberAlignment>16Bytes</StructMemberAlignment>
       <BufferSecurityCheck>false</BufferSecurityCheck>
       <ControlFlowGuard>false</ControlFlowGuard>
       <LanguageStandard>stdcpp14</LanguageStandard>
-      <AdditionalOptions>/Qvec-report:1 /Qalign-loops:32 %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalOptions>/Qvec-report:1 /Qalign-loops:32 /Zc:twoPhase- %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>

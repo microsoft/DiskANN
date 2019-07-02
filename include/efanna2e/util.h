@@ -1,4 +1,4 @@
-//
+﻿//
 // Created by 付聪 on 2017/6/21.
 //
 
@@ -24,6 +24,8 @@ typedef HANDLE FileHandle;
 #include <unistd.h>
 typedef int FileHandle;
 #endif
+
+#include "cached_io.h"
 
 // taken from
 // https://github.com/Microsoft/BLAS-on-flash/blob/master/include/utils.h
@@ -52,6 +54,30 @@ typedef int8_t   _s8;
 
 namespace NSG {
 
+  inline void alloc_aligned(void **ptr, size_t size, size_t align) {
+    *ptr = nullptr;
+    assert(IS_ALIGNED(size, align));
+#ifndef __NSG_WINDOWS__
+    *ptr = ::aligned_alloc(align, size);
+#else
+    *ptr = ::_aligned_malloc(size, align);  // note the swapped arguments!
+#endif
+    assert(*ptr != nullptr);
+  }
+
+  inline void aligned_free(void *ptr) {
+    // Gopal. Must have a check here if the pointer was actually allocated by
+    // _alloc_aligned
+    if (ptr == nullptr) {
+      return;
+    }
+#ifndef __NSG_WINDOWS__
+    free(ptr);
+#else
+    ::_aligned_free(ptr);
+#endif
+  }
+
   static void GenRandom(std::mt19937 &rng, unsigned *addr, unsigned size,
                         unsigned N) {
     for (unsigned i = 0; i < size; ++i) {
@@ -70,24 +96,15 @@ namespace NSG {
     }
   }
 
-  inline float *data_align(float *data_ori, unsigned point_num, unsigned &dim) {
-#define DATA_ALIGN_FACTOR 8
-    // std::cout << "align with : "<<DATA_ALIGN_FACTOR << std::endl;
-    float *  data_new = 0;
-    unsigned new_dim =
-        (dim + DATA_ALIGN_FACTOR - 1) / DATA_ALIGN_FACTOR * DATA_ALIGN_FACTOR;
-// std::cout << "align to new dim: "<<new_dim << std::endl;
-#ifdef __APPLE__
-    data_new = new float[(size_t) new_dim * (size_t) point_num];
-#elif __NSG_WINDOWS__
-    data_new = (float *) _aligned_malloc(
-        (size_t) point_num * (size_t) new_dim * sizeof(float),
-        DATA_ALIGN_FACTOR * 4);
-#else
-    data_new = (float *) memalign(
-        DATA_ALIGN_FACTOR * 4,
-        (size_t) point_num * (size_t) new_dim * sizeof(float));
-#endif
+  template<typename T>
+  inline T *data_align(T *data_ori, size_t point_num, size_t &dim) {
+    T *data_new = nullptr;
+
+    size_t new_dim = ROUND_UP(dim, 8);
+    size_t allocSize = point_num * new_dim * sizeof(T);
+    std::cout << "Allocating aligned memory, " << allocSize << " bytes...";
+    alloc_aligned(((void **) &data_new), allocSize, 512);
+    std::cout << "done" << std::endl;
 
     for (size_t i = 0; i < point_num; i++) {
       memcpy(data_new + i * (size_t) new_dim, data_ori + i * (size_t) dim,
@@ -96,121 +113,47 @@ namespace NSG {
              (new_dim - dim) * sizeof(float));
     }
     dim = new_dim;
-#ifdef __APPLE__
     delete[] data_ori;
-#else
-    delete[] data_ori;
-#endif
+
     return data_new;
   }
 
-  inline void alloc_aligned(void **ptr, size_t size, size_t align) {
-    *ptr = nullptr;
-    assert(IS_ALIGNED(size, align));
-#ifndef __NSG_WINDOWS__
-    *ptr = ::aligned_alloc(align, size);
-#else
-    *ptr = ::_aligned_malloc(size, align);  // note the swapped arguments!
-#endif
-
-    assert(*ptr != nullptr);
-  }
-
-  inline void aligned_free(void *ptr) {
-    // Gopal. Must have a check here if the pointer was actually allocated by
-    // _alloc_aligned
-    if (ptr == nullptr) {
-      return;
-    }
-#ifndef __NSG_WINDOWS__
-    free(ptr);
-#else
-    ::_aligned_free(ptr);
-#endif
-  }
-
+  /********* templated load functions *********/
   template<typename T>
-  inline void load_Tvecs(const char *filename, T *&data, unsigned &num,
-                         unsigned &dim) {
+  void load_Tvecs(const char *filename, T *&data, unsigned &num,
+                  unsigned &dim) {
     // check validity of file
-    std::ifstream in(filename, std::ios::binary);
+    std::ifstream in(filename, std::ios::binary | std::ios::ate);
     if (!in.is_open()) {
       std::cout << "Error opening file: " << filename << std::endl;
       exit(-1);
     }
-
+    _u64 fsize = in.tellg();
+    in.seekg(0, std::ios::beg);
     in.read((char *) &dim, sizeof(unsigned));
-    in.seekg(0, std::ios::end);
-    std::ios::pos_type ss = in.tellg();
     in.close();
 
-    // calculate vector size
-    size_t fsize = (size_t) ss;
-    size_t per_row = sizeof(unsigned) + dim * sizeof(T);
-    num = fsize / per_row;
-    std::cout << "# points = " << num << ", dimensions = " << dim << std::endl;
+    _u64 ndims = (_u64) dim;
+    _u64 disk_vec_size = ndims * sizeof(T) + sizeof(unsigned);
+    _u64 mem_vec_size = ndims * sizeof(T);
+    _u64 npts = fsize / disk_vec_size;
+    num = (unsigned) npts;
+    std::cout << "Tvecs: " << filename << ", npts: " << npts
+              << ", ndims: " << ndims << "\n";
+    // allocate memory
+    data = new T[npts * ndims];
 
-    // data = new T[(size_t) num * (size_t) dim];
-    data = (T *) malloc((size_t) num * (size_t) dim * sizeof(T));
-    memset((void *) data, 0, (size_t) num * (size_t) dim * sizeof(T));
+    cached_ifstream reader(std::string(filename), 256 * 1024 * 1024);
+    unsigned        dummy_ndims;
+    for (_u64 i = 0; i < npts; i++) {
+      T *cur_vec = data + (i * ndims);
+      // read and ignore dummy ndims
+      reader.read((char *) &dummy_ndims, sizeof(unsigned));
 
-    // open classical fd
-    FileHandle fd;
-#ifndef __NSG_WINDOWS__
-    fd = open(filename, O_RDONLY);
-    assert(fd != -1);
-#else
-    fd = CreateFileA(
-        filename,      // ASCII file name-hope this is not an issue
-        GENERIC_READ,  // Read only
-        0,             // No shared access
-        nullptr,  // No security attributes, no sharing with child processes
-        OPEN_EXISTING,            // assuming here that the file exists
-        FILE_FLAG_RANDOM_ACCESS,  // optimize for random seeks
-        nullptr                   // we are opening an existing file
-        );
-    assert(fd != nullptr);
-#endif
-
-    // parallel read each vector at the desired offset
-    for (size_t i = 0; i < num; i++) {
-      // computed using actual dimension
-      uint64_t file_offset = (per_row * i) + sizeof(unsigned);
-      // computed using aligned dimension
-      T *buf = data + i * dim;
-
-// Gopal. Assuming synchronous read.
-
-#ifndef __NSG_WINDOWS__
-      int ret = -1;
-      ret = pread(fd, (char *) buf, dim * sizeof(T), file_offset);
-#else
-      DWORD      ret = -1;
-      OVERLAPPED overlapped;
-      memset(&overlapped, 0, sizeof(overlapped));
-      overlapped.OffsetHigh =
-          (uint32_t)((file_offset & 0xFFFFFFFF00000000LL) >> 32);
-      overlapped.Offset = (uint32_t)(file_offset & 0xFFFFFFFFLL);
-      if (!ReadFile(fd, (LPVOID) buf, dim * sizeof(T), &ret, &overlapped)) {
-        std::cout << "Read file returned error: " << GetLastError()
-                  << std::endl;
-      }
-
-#endif
-
-      // std::cout << "ret = " << ret << "\n";
-      if ((size_t) ret != dim * sizeof(T)) {
-        std::cout << "read=" << ret << ", expected=" << dim * sizeof(T);
-        assert((size_t) ret == dim * sizeof(T));
-      }
+      // read vec
+      reader.read((char *) cur_vec, mem_vec_size);
     }
-    std::cout << "Finished reading Tvecs" << std::endl;
-
-#ifndef __NSG_WINDOWS__
-    close(fd);
-#else
-    CloseHandle(fd);
-#endif
+    return;
   }
 
   // each row in returned matrix is aligned to 32-byte boundary
@@ -296,8 +239,8 @@ namespace NSG {
   }
 
   template<typename T>
-  inline void load_bin(const char *filename, T *&data, unsigned &npts,
-                       unsigned &ndims) {
+  inline void load_bin(const char *filename, T *&data, size_t &npts,
+                       size_t &ndims) {
     std::ifstream reader(filename, std::ios::binary);
     std::cout << "Reading bin: " << filename << "\n";
     int npts_i32, ndims_i32;
@@ -315,6 +258,24 @@ namespace NSG {
     reader.read((char *) data, npts_u64 * ndims_u64 * sizeof(T));
     reader.close();
     std::cout << "Finished reading bin" << std::endl;
+  }
+
+  template<typename T>
+  inline void save_bin(const char *filename, T *data, size_t npts,
+                       size_t ndims) {
+    std::ofstream writer(filename, std::ios::binary | std::ios::out);
+    std::cout << "Writing bin: " << filename << "\n";
+    int npts_i32 = (int) npts, ndims_i32 = (int) ndims;
+    writer.write((char *) &npts_i32, sizeof(int));
+    writer.write((char *) &ndims_i32, sizeof(int));
+    std::cout << "bin: #pts = " << npts << ", #dims = " << ndims
+              << ", size = " << npts * ndims * sizeof(T) + 2 * sizeof(int)
+              << "B" << std::endl;
+
+    //    data = new T[npts_u64 * ndims_u64];
+    writer.write((char *) data, npts * ndims * sizeof(T));
+    writer.close();
+    std::cout << "Finished writing bin" << std::endl;
   }
 
   struct OneShotNSG {
@@ -466,8 +427,16 @@ namespace NSG {
   }
 
   // NOTE :: good efficiency when total_vec_size is integral multiple of 64
-  inline void prefetch_vector(const float *vec, size_t dim) {
-    for (size_t d = 0; d < dim; d += 16)
-      _mm_prefetch(vec + d, _MM_HINT_T0);
+  inline void prefetch_vector(const char *vec, size_t vecsize) {
+    size_t max_prefetch_size = (vecsize / 64) * 64;
+    for (size_t d = 0; d < max_prefetch_size; d += 64)
+      _mm_prefetch((const char *) vec + d, _MM_HINT_T0);
+  }
+
+  // NOTE :: good efficiency when total_vec_size is integral multiple of 64
+  inline void prefetch_vector_l2(const char *vec, size_t vecsize) {
+    size_t max_prefetch_size = (vecsize / 64) * 64;
+    for (size_t d = 0; d < max_prefetch_size; d += 64)
+      _mm_prefetch((const char *) vec + d, _MM_HINT_T1);
   }
 }  // namespace NSG

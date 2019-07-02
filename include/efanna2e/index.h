@@ -32,6 +32,7 @@ namespace NSG {
     uint64_t n_cache_hits = 0;  // # cache_hits
   };
 
+  template<typename T>
   class Index {
    public:
     explicit Index(const size_t dimension, const size_t n, Metric metric = L2,
@@ -39,33 +40,32 @@ namespace NSG {
 
     virtual ~Index();
 
-    virtual void Save(const char *filename) = 0;
+    virtual void save(const char *filename) = 0;
 
-    virtual void Load(const char *filename) = 0;
+    virtual void load(const char *filename) = 0;
 
-    inline bool HasBuilt() const {
-      return has_built;
+    inline bool has_built() const {
+      return _has_built;
     }
 
-    inline size_t GetDimension() const {
-      return dimension_;
+    inline size_t get_dimension() const {
+      return _dim;
     };
 
-    inline size_t GetSizeOfDataset() const {
-      return nd_;
+    inline size_t get_size_of_dataset() const {
+      return _nd;
     }
 
-    inline const float *GetDataset() const {
-      return data_;
+    inline const T *get_data_set() const {
+      return _data;
     }
 
-   protected:
-    const size_t dimension_;
-    const float *data_;
-    size_t       nd_;
-    const size_t max_points_;
-    bool         has_built;
-    Distance *   distance_;
+    const size_t _dim;
+    const T *    _data;
+    size_t       _nd;
+    size_t       _max_points;
+    bool         _has_built;
+    Distance<T> *_distance;
   };
 
   inline void percentile_stats(

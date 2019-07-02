@@ -17,7 +17,10 @@ int main(int argc, char **argv) {
   unsigned npts, ndims;
   _s8 *    data = nullptr;
   std::cout << "Embedding node coords with its nhood" << std::endl;
-  NSG::load_bin<_s8>(argv[3], data, npts, ndims);
+  size_t npts_64, ndims_64;
+  NSG::load_bin<_s8>(argv[3], data, npts_64, ndims_64);
+  npts = npts_64;
+  ndims = ndims_64;
 
   // amount to read in one shot
   _u64 read_blk_size = 64 * 1024 * 1024;

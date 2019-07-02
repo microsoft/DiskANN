@@ -31,6 +31,6 @@ class WindowsAlignedFileReader : public AlignedFileReader {
 
   // process batch of aligned requests in parallel
   // NOTE :: blocking call for the calling thread, but can thread-safe
-  void read(std::vector<AlignedRead> &read_reqs);
+  void read(std::vector<AlignedRead> &read_reqs, IOContext ctx);
 };
 #endif

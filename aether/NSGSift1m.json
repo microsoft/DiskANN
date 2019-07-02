@@ -1,0 +1,244 @@
+{
+  "VisualGraph": {
+    "Graph": {
+      "ModuleNodes": [
+        {
+          "Id": "e041aab6",
+          "ModuleId": "9771a474-4f2a-425f-87f9-39eb4bfad129",
+          "CloudPriority": 0,
+          "DefaultDataRetentionHint": null,
+          "ModuleParameters": [],
+          "ModuleMetadataParameters": null,
+          "ModuleOutputSettings": null,
+          "ComplianceCluster": "",
+          "EuclidWorkspaceId": null,
+          "AttachedModules": null,
+          "AcceptableMachineClusters": [],
+          "CustomDataLocationId": null,
+          "AlertTimeoutDuration": null
+        },
+        {
+          "Id": "00f9d7f5",
+          "ModuleId": "958ab9d1-a09f-4020-b805-b958dfdf7763",
+          "CloudPriority": 0,
+          "DefaultDataRetentionHint": null,
+          "ModuleParameters": [],
+          "ModuleMetadataParameters": null,
+          "ModuleOutputSettings": null,
+          "ComplianceCluster": "",
+          "EuclidWorkspaceId": null,
+          "AttachedModules": null,
+          "AcceptableMachineClusters": [],
+          "CustomDataLocationId": null,
+          "AlertTimeoutDuration": null
+        },
+        {
+          "Id": "4208c779",
+          "ModuleId": "bf3fbeb7-f648-4b26-8105-52c4643fe440",
+          "CloudPriority": 0,
+          "DefaultDataRetentionHint": null,
+          "ModuleParameters": [
+            {
+              "ValueType": 0,
+              "AssignmentsToConcatenate": null,
+              "Name": "Recall",
+              "Value": "1"
+            }
+          ],
+          "ModuleMetadataParameters": null,
+          "ModuleOutputSettings": null,
+          "ComplianceCluster": null,
+          "EuclidWorkspaceId": null,
+          "AttachedModules": null,
+          "AcceptableMachineClusters": [],
+          "CustomDataLocationId": null,
+          "AlertTimeoutDuration": null
+        }
+      ],
+      "DatasetNodes": [
+        {
+          "Id": "b84239e9",
+          "DatasetId": "e978cb98-718d-4453-91dd-34d621ec8225",
+          "DataPathParameterName": null,
+          "DataSetDefinition": null
+        },
+        {
+          "Id": "6f9293bc",
+          "DatasetId": "d1c4b6b8-47eb-485e-ae02-6f4e46890685",
+          "DataPathParameterName": null,
+          "DataSetDefinition": null
+        },
+        {
+          "Id": "7b820c68",
+          "DatasetId": "e978cb98-718d-4453-91dd-34d621ec8225",
+          "DataPathParameterName": null,
+          "DataSetDefinition": null
+        }
+      ],
+      "SubGraphNodes": [],
+      "Edges": [
+        {
+          "SourceOutputPort": {
+            "NodeId": "b84239e9",
+            "PortName": "",
+            "GraphPortName": null,
+            "IsParameter": false
+          },
+          "DestinationInputPort": {
+            "NodeId": "e041aab6",
+            "PortName": "FVecsFile",
+            "GraphPortName": null,
+            "IsParameter": false
+          }
+        },
+        {
+          "SourceOutputPort": {
+            "NodeId": "b84239e9",
+            "PortName": "",
+            "GraphPortName": null,
+            "IsParameter": false
+          },
+          "DestinationInputPort": {
+            "NodeId": "00f9d7f5",
+            "PortName": "SIFTInputFile",
+            "GraphPortName": null,
+            "IsParameter": false
+          }
+        },
+        {
+          "SourceOutputPort": {
+            "NodeId": "6f9293bc",
+            "PortName": "",
+            "GraphPortName": null,
+            "IsParameter": false
+          },
+          "DestinationInputPort": {
+            "NodeId": "00f9d7f5",
+            "PortName": "SIFTQueryFile",
+            "GraphPortName": null,
+            "IsParameter": false
+          }
+        },
+        {
+          "SourceOutputPort": {
+            "NodeId": "e041aab6",
+            "PortName": "NsgFile",
+            "GraphPortName": null,
+            "IsParameter": false
+          },
+          "DestinationInputPort": {
+            "NodeId": "00f9d7f5",
+            "PortName": "SIFT NSG File",
+            "GraphPortName": null,
+            "IsParameter": false
+          }
+        },
+        {
+          "SourceOutputPort": {
+            "NodeId": "7b820c68",
+            "PortName": "",
+            "GraphPortName": null,
+            "IsParameter": false
+          },
+          "DestinationInputPort": {
+            "NodeId": "4208c779",
+            "PortName": "GroundTruthIVecsFile",
+            "GraphPortName": null,
+            "IsParameter": false
+          }
+        },
+        {
+          "SourceOutputPort": {
+            "NodeId": "00f9d7f5",
+            "PortName": "ResultsFile",
+            "GraphPortName": null,
+            "IsParameter": false
+          },
+          "DestinationInputPort": {
+            "NodeId": "4208c779",
+            "PortName": "QueryResultsFile",
+            "GraphPortName": null,
+            "IsParameter": false
+          }
+        }
+      ],
+      "Id": null,
+      "WorkspaceId": null,
+      "Etag": null,
+      "Tags": null,
+      "CreatedDate": "1970-01-01T00:00:00",
+      "LastModifiedDate": "1970-01-01T00:00:00",
+      "EntityStatus": 0
+    },
+    "Layout": {
+      "NodeLayouts": {
+        "e041aab6": {
+          "X": 188.0,
+          "Y": 100.0,
+          "Width": 200.0,
+          "Height": 60.0
+        },
+        "00f9d7f5": {
+          "X": 210.5,
+          "Y": 200.0,
+          "Width": 377.0,
+          "Height": 60.0
+        },
+        "4208c779": {
+          "X": 598.0,
+          "Y": 300.0,
+          "Width": 200.0,
+          "Height": 60.0
+        },
+        "b84239e9": {
+          "X": 299.0,
+          "Y": 0.0,
+          "Width": 200.0,
+          "Height": 60.0
+        },
+        "6f9293bc": {
+          "X": 584.0,
+          "Y": 40.0,
+          "Width": 200.0,
+          "Height": 60.0
+        },
+        "7b820c68": {
+          "X": 730.0,
+          "Y": 136.0,
+          "Width": 200.0,
+          "Height": 60.0
+        }
+      },
+      "CommentThreads": {},
+      "Id": null,
+      "WorkspaceId": null,
+      "Etag": null,
+      "Tags": null,
+      "CreatedDate": "1970-01-01T00:00:00",
+      "LastModifiedDate": "1970-01-01T00:00:00",
+      "EntityStatus": 0
+    },
+    "Aliases": {
+      "AliasedValues": null,
+      "NodeAliases": {},
+      "Id": null,
+      "WorkspaceId": null,
+      "Etag": null,
+      "Tags": null,
+      "CreatedDate": "2019-05-07T19:21:38.0634908+05:30",
+      "LastModifiedDate": "2019-05-07T19:21:38.0634908+05:30",
+      "EntityStatus": 0
+    }
+  },
+  "Interface": {
+    "Parameters": [],
+    "Ports": {
+      "Inputs": [],
+      "Outputs": []
+    },
+    "ParameterNamesByGroups": [],
+    "MetadataParameters": null,
+    "DataPathParameters": null,
+    "DataPathParameterList": null
+  }
+}
