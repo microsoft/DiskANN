@@ -107,14 +107,7 @@ int main(int argc, char** argv) {
   std::cout << "Base and query data loaded and aligned" << std::endl;
 
   NSG::IndexNSG<float> index(dim, points_num, NSG::L2, nullptr);
-  //  if (nsg_check == 1)
-  index.Load(argv[4]);  // to load NSG
-                        //  else {
-                        //    index.Load_nn_graph(argv[3]);  // to load EFANNA
-
-  // ravi-comment
-  // index.init_graph_outside(data_load);
-  //  }
+  index.load(argv[4]);
   std::cout << "Index loaded" << std::endl;
 
   std::vector<unsigned> start_points;
@@ -146,8 +139,8 @@ int main(int argc, char** argv) {
 #pragma omp parallel for schedule(static, 1)
     for (int i = 0; i < query_num; i++) {
       auto ret =
-          index.BeamSearch(query_load + i * dim, data_load, K, paras,
-                           res + ((size_t) i) * K, beam_width, start_points);
+          index.beam_search(query_load + i * dim, data_load, K, paras,
+                            res + ((size_t) i) * K, beam_width, start_points);
 // auto ret = index.Search(query_load + i * dim, data_load, K, paras,
 // tmp.data());
 

@@ -96,9 +96,9 @@ bool testBuildIndex(const char* dataFilePath, const char* indexFilePath,
             << std::endl;
   NSG::IndexNSG<T>* _pNsgIndex =
       new NSG::IndexNSG<T>(dim, points_num, NSG::L2, nullptr);
-  _pNsgIndex->BuildRandomHierarchical(data_load, paras);
+  _pNsgIndex->build(data_load, paras);
 
-  _pNsgIndex->Save(randnsg_path.c_str());
+  _pNsgIndex->save(randnsg_path.c_str());
 
   _pNsgIndex->save_disk_opt_graph(diskopt_path.c_str());
   auto                          e = std::chrono::high_resolution_clock::now();

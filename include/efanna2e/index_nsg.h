@@ -21,13 +21,13 @@ namespace NSG {
 
     ~IndexNSG();
 
-    void Save(const char *filename) override;
-    void Load(const char *filename) override;
+    void save(const char *filename) override;
+    void load(const char *filename) override;
 
-    void Init_rnd_nn_graph(size_t num_points, unsigned k,
+    void init_random_graph(size_t num_points, unsigned k,
                            std::vector<size_t> mapping = std::vector<size_t>());
 
-    void BuildRandomHierarchical(const T *data, Parameters &parameters);
+    void build(const T *data, Parameters &parameters);
 
     typedef std::vector<SimpleNeighbor> vecNgh;
 
@@ -37,17 +37,17 @@ namespace NSG {
 
     void populate_start_points_bfs(std::vector<unsigned> &start_points);
 
-    std::pair<int, int> BeamSearch(const T *query, const T *x, const size_t K,
-                                   const Parameters &parameters,
-                                   unsigned *indices, int beam_width,
-                                   std::vector<unsigned> &start_points);
+    std::pair<int, int> beam_search(const T *query, const T *x, const size_t K,
+                                    const Parameters &parameters,
+                                    unsigned *indices, int beam_width,
+                                    std::vector<unsigned> &start_points);
 
     // Gopal. Added BeamSearch overload that takes L as parameter, so that we
     // can customize L on a per-query basis without tampering with "Parameters"
-    std::pair<int, int> BeamSearch(const T *query, const T *x, const size_t K,
-                                   const unsigned int L, unsigned *indices,
-                                   int                    beam_width,
-                                   std::vector<unsigned> &start_points);
+    std::pair<int, int> beam_search(const T *query, const T *x, const size_t K,
+                                    const unsigned int L, unsigned *indices,
+                                    int                    beam_width,
+                                    std::vector<unsigned> &start_points);
 
     void save_disk_opt_graph(const char *diskopt_path);
 
@@ -58,11 +58,11 @@ namespace NSG {
                        std::vector<tsl::robin_set<unsigned>> &bfs_order,
                        bool *                                 visited);
 
-    CompactGraph final_graph_;
+    CompactGraph _final_graph;
 
-    bool *is_inner;
+    bool *_is_inner;
 
-    Index<T> *initializer_;
+    Index<T> *_initializer;
 
     // version supplied by authors
     // brute-force centroid + all-to-centroid distance computation
@@ -83,33 +83,33 @@ namespace NSG {
                        std::vector<Neighbor> &   fullset,
                        tsl::robin_set<unsigned> &visited);
 
-    void InterInsertHierarchy(unsigned n, vecNgh &cut_graph_,
-                              const Parameters &parameter);
+    void inter_insert(unsigned n, vecNgh &cut_graph,
+                      const Parameters &parameter);
 
     void sync_prune(unsigned q, std::vector<Neighbor> &pool,
                     const Parameters &        parameter,
-                    tsl::robin_set<unsigned> &visited, vecNgh &cut_graph_);
+                    tsl::robin_set<unsigned> &visited, vecNgh &cut_graph);
 
-    void LinkHierarchy(Parameters &parameters);
+    void link(Parameters &parameters);
 
    private:
-    unsigned                width;
-    unsigned                ep_;
-    std::vector<std::mutex> locks;
-    char *                  opt_graph_;
-    size_t                  node_size;
-    size_t                  data_len;
-    size_t                  neighbor_len;
+    unsigned                _width;
+    unsigned                _ep;
+    std::vector<std::mutex> _locks;
+    char *                  _opt_graph;
+    size_t                  _node_size;
+    size_t                  _data_len;
+    size_t                  _neighbor_len;
 
-    using Index<T>::dimension_;
-    using Index<T>::data_;
-    using Index<T>::nd_;
-    using Index<T>::has_built;
-    using Index<T>::distance_;
-    using Index<T>::max_points_;
+    using Index<T>::_dim;
+    using Index<T>::_data;
+    using Index<T>::_nd;
+    using Index<T>::_has_built;
+    using Index<T>::_distance;
+    using Index<T>::_max_points;
     // KNNGraph                nnd_graph;
 
-    std::mutex incr_insert_lock;  // Allow only one thread to insert.
+    std::mutex _incr_insert_lock;  // Allow only one thread to insert.
   };
 }
 

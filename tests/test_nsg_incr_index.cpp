@@ -48,7 +48,7 @@ int main(int argc, char** argv) {
                              points_num);
   {
     auto s = std::chrono::high_resolution_clock::now();
-    index.BuildRandomHierarchical(data_load, paras);
+    index.build(data_load, paras);
     auto                          e = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> diff = e - s;
     std::cout << "Indexing time: " << diff.count() << "\n";
@@ -67,7 +67,7 @@ int main(int argc, char** argv) {
     std::cout << "Incremental time: " << diff.count() << "\n";
   }
 
-  index.Save(save_path.c_str());
+  index.save(save_path.c_str());
   // index.Save_Inner_Vertices(argv[5]);
 
   return 0;
