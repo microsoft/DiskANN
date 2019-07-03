@@ -12,11 +12,8 @@
 #include "tsl/robin_set.h"
 #include "util.h"
 
-typedef int tag_t;
-#define NULL_TAG -1
-
 namespace NSG {
-  template<typename T>
+  template<typename T, typename TagT = int>
   class IndexNSG : public Index<T> {
    public:
     explicit IndexNSG(const size_t dimension, const size_t n, Metric m,
@@ -32,7 +29,7 @@ namespace NSG {
                            std::vector<size_t> mapping = std::vector<size_t>());
 
     void build(const T *data, Parameters &parameters,
-               const std::vector<tag_t> &tags = std::vector<tag_t>());
+               const std::vector<TagT> &tags = std::vector<TagT>());
 
     typedef std::vector<SimpleNeighbor> vecNgh;
 
@@ -46,7 +43,7 @@ namespace NSG {
     std::pair<int, int> beam_search_tags(const T *query, const T *x,
                                          const size_t      K,
                                          const Parameters &parameters,
-                                         tag_t *tags, int beam_width,
+                                         TagT *tags, int beam_width,
                                          std::vector<unsigned> &start_points,
                                          unsigned *indices_buffer = NULL);
 
@@ -66,14 +63,14 @@ namespace NSG {
     int insert_point(const T *point, const Parameters &parameter,
                      std::vector<Neighbor> &pool, std::vector<Neighbor> &tmp,
                      tsl::robin_set<unsigned> &visited, vecNgh &cut_graph,
-                     const tag_t tag = NULL_TAG);
+                     const TagT tag = TagT(-1));
 
     int enable_delete();
     int disable_delete(const Parameters &parameters,
                        const bool        consolidate = false);
 
     // Return -1 if tag not found, 0 if OK.
-    int delete_point(const tag_t tag);
+    int delete_point(const TagT tag);
 
     /*  Internals of the library */
    protected:
@@ -144,11 +141,11 @@ namespace NSG {
     bool _enable_tags;
     bool _consolidated_order;
 
-    std::unordered_map<tag_t, unsigned> _tag_to_point;
-    std::unordered_map<unsigned, tag_t> _point_to_tag;
+    std::unordered_map<TagT, unsigned> _tag_to_point;
+    std::unordered_map<unsigned, TagT> _point_to_tag;
 
-    tsl::robin_set<unsigned> delete_set_;
-    tsl::robin_set<unsigned> empty_slots_;
+    tsl::robin_set<unsigned> _delete_set;
+    tsl::robin_set<unsigned> _empty_slots;
 
     std::mutex _change_lock;  // Allow only 1 thread to insert/delete
 

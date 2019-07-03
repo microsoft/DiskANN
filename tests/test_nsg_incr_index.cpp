@@ -49,10 +49,12 @@ int main(int argc, char** argv) {
   memcpy((void*) data_copy, (void*) data_load,
          num_points * dim * sizeof(float));
 
-  NSG::IndexNSG<float> index(dim, num_points - num_incr, NSG::L2, nullptr,
-                             num_points, true);
+  typedef int TagT;
+
+  NSG::IndexNSG<float, TagT> index(dim, num_points - num_incr, NSG::L2, nullptr,
+                                   num_points, true);
   {
-    std::vector<tag_t> tags(num_points - num_incr);
+    std::vector<TagT> tags(num_points - num_incr);
     std::iota(tags.begin(), tags.end(), 0);
 
     NSG::Timer timer;
