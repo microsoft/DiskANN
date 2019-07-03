@@ -40,32 +40,32 @@ namespace NSG {
 
     virtual ~Index();
 
-    virtual void Save(const char *filename) = 0;
+    virtual void save(const char *filename) = 0;
 
-    virtual void Load(const char *filename) = 0;
+    virtual void load(const char *filename) = 0;
 
-    inline bool HasBuilt() const {
-      return has_built;
+    inline bool has_built() const {
+      return _has_built;
     }
 
-    inline size_t GetDimension() const {
-      return dimension_;
+    inline size_t get_dimension() const {
+      return _dim;
     };
 
-    inline size_t GetSizeOfDataset() const {
-      return nd_;
+    inline size_t get_size_of_dataset() const {
+      return _nd;
     }
 
-    inline const T *GetDataset() const {
-      return data_;
+    inline const T *get_data_set() const {
+      return _data;
     }
 
-    const size_t dimension_;
-    const T *    data_;
-    size_t       nd_;
-    size_t       max_points_;
-    bool         has_built;
-    Distance<T> *distance_;
+    const size_t _dim;
+    const T *    _data;
+    size_t       _nd;
+    size_t       _max_points;
+    bool         _has_built;
+    Distance<T> *_distance;
   };
 
   inline void percentile_stats(

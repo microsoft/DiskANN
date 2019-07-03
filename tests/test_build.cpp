@@ -40,7 +40,7 @@ bool testBuildIndex(const char* dataFilePath, const char* indexFilePath,
   unsigned R = (unsigned) atoi(param_list[1].c_str());
   unsigned C = (unsigned) atoi(param_list[2].c_str());
   size_t   num_pq_chunks = (size_t) atoi(param_list[3].c_str());
-  size_t TRAINING_SET_SIZE = (size_t) atoi(param_list[4].c_str());
+  size_t   TRAINING_SET_SIZE = (size_t) atoi(param_list[4].c_str());
 
   T* data_load = NULL;
 
@@ -96,9 +96,9 @@ bool testBuildIndex(const char* dataFilePath, const char* indexFilePath,
             << std::endl;
   NSG::IndexNSG<T>* _pNsgIndex =
       new NSG::IndexNSG<T>(dim, points_num, NSG::L2, nullptr);
-  _pNsgIndex->BuildRandomHierarchical(data_load, paras);
+  _pNsgIndex->build(data_load, paras);
 
-  _pNsgIndex->Save(randnsg_path.c_str());
+  _pNsgIndex->save(randnsg_path.c_str());
 
   _pNsgIndex->save_disk_opt_graph(diskopt_path.c_str());
   auto                          e = std::chrono::high_resolution_clock::now();
@@ -112,19 +112,19 @@ bool testBuildIndex(const char* dataFilePath, const char* indexFilePath,
 int main(int argc, char** argv) {
   if (argc != 9) {
     std::cout << "Usage: " << argv[0]
-              << " data_file[bin] data_type [float/uint8/int8] index_prefix L "
+              << "data_type [float/uint8/int8]  data_file[bin] index_prefix_path L "
                  "R C N_CHUNKS TRAINING_SIZE"
               << std::endl;
   } else {
     std::string params = std::string(argv[4]) + " " + std::string(argv[5]) +
                          " " + std::string(argv[6]) + " " +
-                         std::string(argv[7]) + " " +  std::string(argv[8]);
-    if (std::string(argv[2]) == std::string("float"))
-      testBuildIndex<float>(argv[1], argv[3], params.c_str());
-    else if (std::string(argv[2]) == std::string("int8"))
-      testBuildIndex<int8_t>(argv[1], argv[3], params.c_str());
-    else if (std::string(argv[2]) == std::string("uint8"))
-      testBuildIndex<uint8_t>(argv[1], argv[3], params.c_str());
+                         std::string(argv[7]) + " " + std::string(argv[8]);
+    if (std::string(argv[1]) == std::string("float"))
+      testBuildIndex<float>(argv[2], argv[3], params.c_str());
+    else if (std::string(argv[1]) == std::string("int8"))
+      testBuildIndex<int8_t>(argv[2], argv[3], params.c_str());
+    else if (std::string(argv[1]) == std::string("uint8"))
+      testBuildIndex<uint8_t>(argv[2], argv[3], params.c_str());
     else
       std::cout << "Error. wrong file type" << std::endl;
   }

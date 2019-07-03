@@ -100,7 +100,7 @@ int aux_main(int argc, char** argv) {
   // for query search
   {
     // load the index
-    bool res = LoadIndex(argv[1], "4 4 16", _pFlashIndex);
+    bool res = LoadIndex(argv[2], "4 4 16", _pFlashIndex);
     // ERROR CHECK
     if (res == 1) {
       std::cout << "Error detected loading the index" << std::endl;
@@ -108,9 +108,11 @@ int aux_main(int argc, char** argv) {
     }
 
     // load query fvecs
-    T*       query = nullptr;
-    unsigned nqueries, ndims;
-    NSG::aligned_load_Tvecs<T>(argv[3], query, nqueries, ndims);
+    T*     query = nullptr;
+    size_t nqueries, ndims;
+    //    NSG::aligned_load_Tvecs<T>(argv[3], query, nqueries, ndims);
+    NSG::load_bin<T>(argv[3], query, nqueries, ndims);
+    query = NSG::data_align(query, nqueries, ndims);
     ndims = ROUND_UP(ndims, 8);
 
     // query params/output
@@ -135,16 +137,16 @@ int aux_main(int argc, char** argv) {
 int main(int argc, char** argv) {
   if (argc != 5) {
     std::cout << "Usage: " << argv[0]
-              << " <index_file_prefix> [bin] <index_type> [float/int8/uint8] "
-                 "<query_Tvecs> <query_res>"
+              << " <index_type> [float/int8/uint8] index_prefix_path "
+                 "<query_bin> <query_res_ivecs_file_path>"
               << std::endl;
     exit(-1);
   }
-  if (std::string(argv[2]) == std::string("float"))
+  if (std::string(argv[1]) == std::string("float"))
     aux_main<float>(argc, argv);
-  else if (std::string(argv[2]) == std::string("int8"))
+  else if (std::string(argv[1]) == std::string("int8"))
     aux_main<int8_t>(argc, argv);
-  else if (std::string(argv[2]) == std::string("uint8"))
+  else if (std::string(argv[1]) == std::string("uint8"))
     aux_main<uint8_t>(argc, argv);
   else
     std::cout << "Unsupported index type. Use float or int8 or uint8"

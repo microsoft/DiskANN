@@ -239,7 +239,7 @@ int main(int argc, char** argv) {
 
   NSG::IndexNSG<float> index(dim, points_num, NSG::L2, nullptr);
   //  if (nsg_check == 1)
-  index.Load(argv[3]);  // to load NSG
+  index.load(argv[3]);  // to load NSG
                         //  else {
                         //    index.Load_nn_graph(argv[3]);  // to load EFANNA
 
@@ -279,8 +279,8 @@ int main(int argc, char** argv) {
       start_points.push_back(medoids[start_shard]);
 
       auto ret =
-          index.BeamSearch(query_load + i * dim, data_load, K, paras,
-                           res + ((size_t) i) * K, beam_width, start_points);
+          index.beam_search(query_load + i * dim, data_load, K, paras,
+                            res + ((size_t) i) * K, beam_width, start_points);
 // auto ret = index.Search(query_load + i * dim, data_load, K, paras,
 // tmp.data());
 
