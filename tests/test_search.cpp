@@ -127,10 +127,13 @@ int aux_main(int argc, char** argv) {
                 query_res);
 
     // compute recall
-    NSG::write_Tvecs_unsigned(argv[4], query_res, nqueries, k);
+_u32* query_res32 = new _u32[nqueries*k];
+NSG::convert_types<_u64, _u32>(query_res, query_res32, nqueries, k);
+    NSG::save_bin(argv[4], query_res32, nqueries, k);
 
     NSG::aligned_free(query);
     delete[] query_res;
+    delete[] query_res32;
     delete[] query_dists;
   }
   return 0;

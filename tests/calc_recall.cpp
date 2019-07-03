@@ -1,4 +1,3 @@
-
 #include <cstddef>
 #include <cstdlib>
 #include <fstream>
@@ -6,34 +5,8 @@
 #include <set>
 #include <string>
 #include <vector>
+#include "util.h"
 
-void load_data(const char* filename, unsigned*& data, size_t& num,
-               unsigned& dim) {  // load data with sift10K pattern
-  std::ifstream in(std::string(filename), std::ios::binary);
-  std::cout << "Filename: " << filename << "\n";
-  if (!in.is_open()) {
-    std::cout << "open file error" << std::endl;
-    exit(-1);
-  }
-  in.read((char*) &dim, 4);
-  in.seekg(0, std::ios::end);
-  std::ios::pos_type ss = in.tellg();
-  size_t             fsize = (size_t) ss;
-  num = (unsigned) (fsize / (dim + 1) / 4);
-  auto data_size = (size_t) num * (size_t) dim;
-  std::cout << "data dimension: " << dim << std::endl;
-  std::cout << "data num points: " << num << std::endl;
-  data = new unsigned[data_size];
-
-  unsigned* tmp_dim = new unsigned;
-  in.seekg(0, std::ios::beg);
-  for (size_t i = 0; i < num; i++) {
-    in.read((char*) tmp_dim, 4);
-    in.read((char*) (data + i * dim), dim * 4);
-  }
-  in.close();
-  std::cout << "data loaded \n";
-}
 float calc_recall_set(unsigned num_queries, unsigned* gold_std, unsigned dim_gs,
                       unsigned* our_results, unsigned dim_or,
                       unsigned recall_at, unsigned subset_size) {
@@ -63,33 +36,31 @@ float calc_recall_set(unsigned num_queries, unsigned* gold_std, unsigned dim_gs,
          (100.0 / ((float) recall_at));
 }
 
-void print(int* data, int dim, int num_points, int num_lines) {
-  if (num_lines <= num_points) {
-    for (int i = 0; i < num_lines; i++) {
-      for (int j = 0; j < dim; j++) {
-        std::cout << *((data + i * dim) + j) << ",";
-      }
-      std::cout << std::endl;
-    }
-  } else {
-    std::cerr << "Num lines to print: " << num_lines
-              << " should be <= num_points(" << num_points << ")" << std::endl;
-  }
-}
-
 int main(int argc, char** argv) {
   if (argc != 4 && argc != 5) {
-    std::cout << argv[0] << " data_file1 data_file2 r r2(optonal, equal to 1)"
+    std::cout << argv[0]
+              << " ground_truth_bin rand-nsg_result_bin  r1 r2 (to calculate "
+                 "recall r1@r2). By default, r2 will be set to r1."
               << std::endl;
     exit(-1);
   }
   unsigned* gold_std = NULL;
   unsigned* our_results = NULL;
-  size_t    points_num;
-  unsigned  dim_gs;
-  unsigned  dim_or;
-  load_data(argv[1], gold_std, points_num, dim_gs);
-  load_data(argv[2], our_results, points_num, dim_or);
+  size_t    points_num, points_num_gs, points_num_or;
+  size_t    dim_gs;
+  size_t    dim_or;
+  //  load_data(argv[1], gold_std, points_num, dim_gs);
+  //  load_data(argv[2], our_results, points_num, dim_or);
+  NSG::load_bin<unsigned>(argv[1], gold_std, points_num_gs, dim_gs);
+  NSG::load_bin<unsigned>(argv[2], our_results, points_num_or, dim_or);
+
+  if (points_num_gs != points_num_or) {
+    std::cout
+        << "Error. Number of queries mismatch in ground truth and our results"
+        << std::endl;
+    return -1;
+  }
+  points_num = points_num_gs;
 
   size_t   recall = 0;
   size_t   total_recall = 0;

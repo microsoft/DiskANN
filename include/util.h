@@ -314,16 +314,16 @@ namespace NSG {
     }
   }
 
-  inline void write_Tvecs_unsigned(const char *fname, uint64_t *input,
-                                   uint64_t npts, uint64_t ndims) {
-    unsigned *out = new unsigned[npts * ndims];
-    for (uint64_t i = 0; i < npts * ndims; i++) {
-      out[i] = (unsigned) input[i];
-    }
-
-    save_Tvecs<unsigned>(fname, out, npts, ndims);
-    delete[] out;
-  }
+//  inline void write_Tvecs_unsigned(const char *fname, uint64_t *input,
+//                                   uint64_t npts, uint64_t ndims) {
+//    unsigned *out = new unsigned[npts * ndims];
+//    for (uint64_t i = 0; i < npts * ndims; i++) {
+//      out[i] = (unsigned) input[i];
+//    }
+//
+//    save_Tvecs<unsigned>(fname, out, npts, ndims);
+//    delete[] out;
+//  }
 
   struct OneShotNSG {
     _u64                  medoid, width;
