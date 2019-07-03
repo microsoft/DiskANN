@@ -49,15 +49,6 @@ bool testBuildIndex(const char* dataFilePath, const char* indexFilePath,
   NSG::load_bin<T>(dataFilePath, data_load, points_num, dim);
   std::cout << "Data loaded" << std::endl;
 
-  uint32_t* params_array = new uint32_t[5];
-  params_array[0] = (uint32_t) L;
-  params_array[1] = (uint32_t) R;
-  params_array[2] = (uint32_t) C;
-  params_array[3] = (uint32_t) dim;
-  params_array[4] = (uint32_t) num_pq_chunks;
-  NSG::save_bin<uint32_t>(index_params_path.c_str(), params_array, 5, 1);
-  std::cout << "Saving params to " << index_params_path << "\n";
-
   auto s = std::chrono::high_resolution_clock::now();
 
   if (points_num > 2 * TRAINING_SET_SIZE) {
@@ -96,11 +87,25 @@ bool testBuildIndex(const char* dataFilePath, const char* indexFilePath,
             << std::endl;
   NSG::IndexNSG<T>* _pNsgIndex =
       new NSG::IndexNSG<T>(dim, points_num, NSG::L2, nullptr);
-  _pNsgIndex->build(data_load, paras);
-
-  _pNsgIndex->save(randnsg_path.c_str());
+  if (file_exists(randnsg_path.c_str())) {
+    _pNsgIndex->set_data(data_load);
+    _pNsgIndex->load(randnsg_path.c_str());
+  } else {
+    _pNsgIndex->build(data_load, paras);
+    _pNsgIndex->save(randnsg_path.c_str());
+  }
 
   _pNsgIndex->save_disk_opt_graph(diskopt_path.c_str());
+
+  uint32_t* params_array = new uint32_t[5];
+  params_array[0] = (uint32_t) L;
+  params_array[1] = (uint32_t) R;
+  params_array[2] = (uint32_t) C;
+  params_array[3] = (uint32_t) dim;
+  params_array[4] = (uint32_t) num_pq_chunks;
+  NSG::save_bin<uint32_t>(index_params_path.c_str(), params_array, 5, 1);
+  std::cout << "Saving params to " << index_params_path << "\n";
+
   auto                          e = std::chrono::high_resolution_clock::now();
   std::chrono::duration<double> diff = e - s;
 
@@ -111,10 +116,11 @@ bool testBuildIndex(const char* dataFilePath, const char* indexFilePath,
 
 int main(int argc, char** argv) {
   if (argc != 9) {
-    std::cout << "Usage: " << argv[0]
-              << "data_type [float/uint8/int8]  data_file[bin] index_prefix_path L "
-                 "R C N_CHUNKS TRAINING_SIZE"
-              << std::endl;
+    std::cout
+        << "Usage: " << argv[0]
+        << "data_type [float/uint8/int8]  data_file[bin] index_prefix_path L "
+           "R C N_CHUNKS TRAINING_SIZE"
+        << std::endl;
   } else {
     std::string params = std::string(argv[4]) + " " + std::string(argv[5]) +
                          " " + std::string(argv[6]) + " " +

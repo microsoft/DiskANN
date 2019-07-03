@@ -18,6 +18,8 @@ target_link_libraries(test_nsg_sweep_index ${PROJECT_NAME} -ltcmalloc)
 add_executable(test_nsg_search test_nsg_search.cpp)
 target_link_libraries(test_nsg_search ${PROJECT_NAME})
 
+add_executable(int8_bin_to_fvecs int8_bin_to_fvecs.cpp)
+target_link_libraries(int8_bin_to_fvecs ${PROJECT_NAME})
 
 add_executable(test_build test_build.cpp)
 target_link_libraries(test_build ${PROJECT_NAME})

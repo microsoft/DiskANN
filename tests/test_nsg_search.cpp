@@ -151,7 +151,9 @@ int aux_main(int argc, char** argv) {
     std::chrono::duration<double> diff = e - s;
     unsigned                      nthreads = omp_get_max_threads();
     //    std::cout << "search time: " << diff.count() << "\n";
-    float latency = (diff.count() / query_num) * (1000000) * (float) nthreads;
+    float latency = (diff.count() / query_num) * (1000000);
+    //    float latency = (diff.count() / query_num) * (1000000) * (float)
+    //    nthreads;
     float avg_hops = (float) total_hops / (float) query_num;
     float avg_cmps = (float) total_cmps / (float) query_num;
     float recall = calc_recall(query_num, gt_load, gt_dim, res, K, recall_at);

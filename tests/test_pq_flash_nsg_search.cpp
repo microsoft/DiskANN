@@ -7,40 +7,6 @@
 #include <cassert>
 #include "util.h"
 
-void load_data(char* filename, float*& data, unsigned& num,
-               unsigned& dim) {  // load data with sift10K pattern
-  std::ifstream in(filename, std::ios::binary);
-  if (!in.is_open()) {
-    std::cout << "open file error:" << filename << std::endl;
-    exit(-1);
-  }
-  in.read((char*) &dim, 4);
-  in.seekg(0, std::ios::end);
-  std::ios::pos_type ss = in.tellg();
-  size_t             fsize = (size_t) ss;
-  num = (unsigned) (fsize / (dim + 1) / 4);
-  data = (float*) malloc((size_t) num * (size_t) dim * sizeof(float));
-
-  in.seekg(0, std::ios::beg);
-  for (size_t i = 0; i < num; i++) {
-    in.seekg(4, std::ios::cur);
-    in.read((char*) (data + i * dim), dim * 4);
-  }
-  in.close();
-}
-
-void save_result(char* filename, std::vector<std::vector<unsigned>>& results) {
-  std::cout << "Saving result to " << filename << std::endl;
-  std::ofstream out(filename, std::ios::binary | std::ios::out);
-
-  for (unsigned i = 0; i < results.size(); i++) {
-    unsigned GK = (unsigned) results[i].size();
-    out.write((char*) &GK, sizeof(unsigned));
-    out.write((char*) results[i].data(), GK * sizeof(unsigned));
-  }
-  out.close();
-}
-
 template<typename T>
 void aux_main(int argc, char** argv) {
   if (argc != 14) {
@@ -71,7 +37,13 @@ void aux_main(int argc, char** argv) {
   T*     query_load = NULL;
   size_t query_num, query_dim;
   std::cout << "Loading Queries from " << argv[7] << std::endl;
-  load_Tvecs_plain<float, T>(argv[7], query_load, query_num, query_dim);
+  float* query_load_float;
+  NSG::load_Tvecs<float>(argv[7], query_load_float, query_num, query_dim);
+  query_load = new T[query_num * query_dim];
+  NSG::convert_types<float, T>(query_load_float, query_load, query_num,
+                               query_dim);
+  delete[] query_load_float;
+
   std::cout << "query_dim = " << query_dim << std::endl;
   _u64 aligned_dim = ROUND_UP(query_dim, 8);
   assert(aligned_dim == index.aligned_dim);
@@ -133,7 +105,7 @@ void aux_main(int argc, char** argv) {
       stats, query_num, "# cache hits / query", "",
       [](const NSG::QueryStats& stats) { return stats.n_cache_hits; });
 
-  write_Tvecs_unsigned(argv[10], res, query_num, k_search);
+  NSG::write_Tvecs_unsigned(argv[10], res, query_num, k_search);
   delete[] stats;
   delete[] res;
   delete[] res_dist;

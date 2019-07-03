@@ -80,13 +80,14 @@ template<typename T>
 void SearchIndex(NSG::PQFlashNSG<T>* _pFlashIndex, const char* vector,
                  uint64_t queryCount, uint64_t neighborCount, float* distances,
                  uint64_t* ids) {
-  _u64     L = 6 * neighborCount;
+  //  _u64     L = 6 * neighborCount;
+  _u64     L = 12;
   const T* query_load = (const T*) vector;
   // #pragma omp parallel for schedule(dynamic, 1)
   for (_s64 i = 0; i < queryCount; i++) {
     _pFlashIndex->cached_beam_search(
         query_load + (i * _pFlashIndex->data_dim), neighborCount, L,
-        ids + (i * neighborCount), distances + (i * neighborCount), 5);
+        ids + (i * neighborCount), distances + (i * neighborCount), 4);
   }
 }
 
@@ -97,6 +98,15 @@ int aux_main(int argc, char** argv) {
 
   //  ANNIndex::IANNIndex* intf = new NSG::NSGInterface<T>(0, ANNIndex::DT_L2);
   NSG::PQFlashNSG<T>* _pFlashIndex;
+
+  // load query bin
+  T*     query = nullptr;
+  size_t nqueries, ndims;
+  //    NSG::aligned_load_Tvecs<T>(argv[3], query, nqueries, ndims);
+  NSG::load_bin<T>(argv[3], query, nqueries, ndims);
+  query = NSG::data_align<T>(query, nqueries, ndims);
+  ndims = ROUND_UP(ndims, 8);
+
   // for query search
   {
     // load the index
@@ -107,16 +117,8 @@ int aux_main(int argc, char** argv) {
       exit(-1);
     }
 
-    // load query fvecs
-    T*     query = nullptr;
-    size_t nqueries, ndims;
-    //    NSG::aligned_load_Tvecs<T>(argv[3], query, nqueries, ndims);
-    NSG::load_bin<T>(argv[3], query, nqueries, ndims);
-    query = NSG::data_align(query, nqueries, ndims);
-    ndims = ROUND_UP(ndims, 8);
-
     // query params/output
-    _u64   k = 5, L = 30;
+    _u64   k = 5, L = 12;
     _u64*  query_res = new _u64[k * nqueries];
     float* query_dists = new float[k * nqueries];
 
@@ -125,7 +127,7 @@ int aux_main(int argc, char** argv) {
                 query_res);
 
     // compute recall
-    write_Tvecs_unsigned(argv[4], query_res, nqueries, k);
+    NSG::write_Tvecs_unsigned(argv[4], query_res, nqueries, k);
 
     NSG::aligned_free(query);
     delete[] query_res;

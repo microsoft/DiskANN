@@ -1291,6 +1291,11 @@ namespace NSG {
   }
 
   template<typename T, typename TagT>
+  void IndexNSG<T, TagT>::set_data(const T *data) {
+    _data = data;
+  }
+
+  template<typename T, typename TagT>
   void IndexNSG<T, TagT>::build(const T *data, Parameters &parameters,
                                 const std::vector<TagT> &tags) {
     unsigned range = parameters.Get<unsigned>("R");

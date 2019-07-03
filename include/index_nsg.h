@@ -72,6 +72,8 @@ namespace NSG {
     int delete_point(const TagT tag);
 
     /*  Internals of the library */
+    void set_data(const T *data);
+
    protected:
     typedef std::vector<std::vector<unsigned>> CompactGraph;
 

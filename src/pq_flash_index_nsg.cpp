@@ -313,7 +313,11 @@ namespace NSG {
     unsigned npts_u32, nchunks_u32;
     size_t   npts_u64, nchunks_u64;
     std::cout << "Loading PQ compressed data from " << data_bin << std::endl;
-    load_bin_plain<_u32, _u8>(data_bin, data, npts_u64, nchunks_u64);
+    _u32 *data_u32;
+    NSG::load_bin<_u32>(data_bin, data_u32, npts_u64, nchunks_u64);
+    data = new _u8[npts_u64 * nchunks_u64];
+    NSG::convert_types<_u32, _u8>(data_u32, data, npts_u64, nchunks_u64);
+    delete[] data_u32;
     npts_u32 = npts_u64;
     nchunks_u32 = nchunks_u64;
     n_base = (_u64) npts_u32;
