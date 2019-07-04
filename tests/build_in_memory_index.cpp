@@ -46,7 +46,7 @@ int aux_main(int argc, char** argv) {
   paras.Set<unsigned>("num_rnds", num_rnds);
   paras.Set<float>("alpha", alpha);
 
-  NSG::IndexNSG<T> index(dim, points_num, NSG::L2, nullptr);
+  NSG::IndexNSG<T> index(dim, points_num, NSG::L2);
   auto             s = std::chrono::high_resolution_clock::now();
   index.build(data_load, paras);
   auto                          e = std::chrono::high_resolution_clock::now();

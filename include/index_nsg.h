@@ -13,16 +13,15 @@
 
 namespace NSG {
   template<typename T, typename TagT = int>
-  class IndexNSG : public Index<T> {
+  class IndexNSG {
    public:
-    explicit IndexNSG(const size_t dimension, const size_t n, Metric m,
-                      Index<T> *initializer, const size_t max_points = 0,
-                      const bool enable_tags = false);
+    IndexNSG(const size_t dimension, const size_t n, Metric m,
+             const size_t max_points = 0, const bool enable_tags = false);
 
     ~IndexNSG();
 
-    void save(const char *filename) override;
-    void load(const char *filename) override;
+    void save(const char *filename);
+    void load(const char *filename);
 
     void init_random_graph(size_t num_points, unsigned k,
                            std::vector<size_t> mapping = std::vector<size_t>());
@@ -150,11 +149,11 @@ namespace NSG {
 
     std::mutex _change_lock;  // Allow only 1 thread to insert/delete
 
-    using Index<T>::_dim;
-    using Index<T>::_data;
-    using Index<T>::_nd;
-    using Index<T>::_has_built;
-    using Index<T>::_distance;
-    using Index<T>::_max_points;
+    const size_t _dim;
+    const T *    _data;
+    size_t       _nd;
+    size_t       _max_points;
+    bool         _has_built;
+    Distance<T> *_distance;
   };
 }

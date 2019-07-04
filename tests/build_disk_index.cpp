@@ -85,8 +85,7 @@ bool testBuildIndex(const char* dataFilePath, const char* indexFilePath,
   data_load = NSG::data_align(data_load, points_num, dim);
   std::cout << "Base data aligned for optimized Rand-NSG execution."
             << std::endl;
-  NSG::IndexNSG<T>* _pNsgIndex =
-      new NSG::IndexNSG<T>(dim, points_num, NSG::L2, nullptr);
+  NSG::IndexNSG<T>* _pNsgIndex = new NSG::IndexNSG<T>(dim, points_num, NSG::L2);
   if (file_exists(randnsg_path.c_str())) {
     _pNsgIndex->set_data(data_load);
     _pNsgIndex->load(randnsg_path.c_str());

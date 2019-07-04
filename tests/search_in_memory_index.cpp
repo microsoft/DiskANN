@@ -106,7 +106,7 @@ int aux_main(int argc, char** argv) {
   query_load = NSG::data_align(query_load, query_num, query_dim);
   std::cout << "Base and query data loaded and aligned" << std::endl;
 
-  NSG::IndexNSG<T> index(dim, points_num, NSG::L2, nullptr);
+  NSG::IndexNSG<T> index(dim, points_num, NSG::L2);
   index.load(rand_nsg_path.c_str());  // to load NSG
   std::cout << "Index loaded" << std::endl;
 

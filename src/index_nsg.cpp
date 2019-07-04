@@ -28,31 +28,53 @@
 #include <xmmintrin.h>
 #endif
 
+namespace {
+  template<typename T>
+  NSG::Distance<T> *get_distance_function();
+
+  template<>
+  NSG::Distance<float> *get_distance_function() {
+    return new NSG::DistanceL2();
+  }
+
+  template<>
+  NSG::Distance<int8_t> *get_distance_function() {
+    return new NSG::DistanceL2Int8();
+  }
+
+  template<>
+  NSG::Distance<uint8_t> *get_distance_function() {
+    return new NSG::DistanceL2UInt8();
+  }
+}
+
 namespace NSG {
 #define _CONTROL_NUM 100
 #define MAX_START_POINTS 100
 
   template<typename T, typename TagT>
   IndexNSG<T, TagT>::IndexNSG(const size_t dimension, const size_t n, Metric m,
-                              Index<T> *initializer, const size_t max_points,
-                              const bool enable_tags)
-      : Index<T>(dimension, n, m, max_points), _initializer{initializer},
-        _width(0), _can_delete(false), _enable_tags(enable_tags),
-        _consolidated_order(true) {
+                              const size_t max_points, const bool enable_tags)
+      : _width(0), _can_delete(false), _enable_tags(enable_tags),
+        _dim(dimension), _consolidated_order(true) {
+    this->_distance = ::get_distance_function<T>();
     _locks = std::vector<std::mutex>(_max_points);
     _width = 0;
   }
 
   template<>
   IndexNSG<float>::~IndexNSG() {
+    delete this->_distance;
   }
 
   template<>
   IndexNSG<_s8>::~IndexNSG() {
+    delete this->_distance;
   }
 
   template<>
   IndexNSG<_u8>::~IndexNSG() {
+    delete this->_distance;
   }
 
   template<typename T, typename TagT>

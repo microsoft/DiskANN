@@ -50,7 +50,7 @@ int main(int argc, char** argv) {
 
   typedef int TagT;
 
-  NSG::IndexNSG<float, TagT> index(dim, num_points - num_incr, NSG::L2, nullptr,
+  NSG::IndexNSG<float, TagT> index(dim, num_points - num_incr, NSG::L2,
                                    num_points, true);
   {
     std::vector<TagT> tags(num_points - num_incr);
