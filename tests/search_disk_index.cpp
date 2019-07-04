@@ -2,24 +2,22 @@
 //#include <indexing.h>
 #include <index_nsg.h>
 #include <math_utils.h>
+#include <omp.h>
 #include <partitionAndPQ.h>
 #include <pq_flash_index_nsg.h>
-#include "util.h"
-#include <omp.h>
-#include <iomanip>
-#include <time.h>
 #include <string.h>
+#include <time.h>
 #include <cstring>
+#include <iomanip>
+#include "util.h"
 #ifndef __NSG_WINDOWS__
 #include <sys/mman.h>
 #include <sys/stat.h>
-#include "timer.h"
 #include <unistd.h>
+#include "timer.h"
 #endif
 
 #include "MemoryMapper.h"
-
-
 
 float calc_recall(unsigned num_queries, unsigned* gold_std, unsigned dim_gs,
                   unsigned* our_results, unsigned dim_or, unsigned recall_at) {
@@ -44,7 +42,7 @@ float calc_recall(unsigned num_queries, unsigned* gold_std, unsigned dim_gs,
 
 template<typename T>
 bool load_index(const char* indexFilePath, const char* queryParameters,
-               NSG::PQFlashNSG<T>*& _pFlashIndex) {
+                NSG::PQFlashNSG<T>*& _pFlashIndex) {
   std::stringstream parser;
   parser << std::string(queryParameters);
   std::string              cur_param;
@@ -110,38 +108,38 @@ bool load_index(const char* indexFilePath, const char* queryParameters,
 // And need to be allocated by invoker, which capacity should be greater
 // than [query_num * neighborCount].
 template<typename T>
-std::tuple<float,float,float> search_index(NSG::PQFlashNSG<T>* _pFlashIndex, const char* vector,
-                 uint64_t query_num, uint64_t neighborCount, float* distances,
-                 uint64_t* ids, _u64 L) {
+std::tuple<float, float, float> search_index(
+    NSG::PQFlashNSG<T>* _pFlashIndex, const char* vector, uint64_t query_num,
+    uint64_t neighborCount, float* distances, uint64_t* ids, _u64 L) {
   //  _u64     L = 6 * neighborCount;
-//  _u64     L = 12;
+  //  _u64     L = 12;
   const T* query_load = (const T*) vector;
-
 
   NSG::QueryStats* stats = new NSG::QueryStats[query_num];
 
   NSG::Timer timer;
-  #pragma omp parallel for schedule(dynamic, 1) num_threads(16)
+#pragma omp  parallel for schedule(dynamic, 1) num_threads(16)
   for (_s64 i = 0; i < query_num; i++) {
     _pFlashIndex->cached_beam_search(
         query_load + (i * _pFlashIndex->data_dim), neighborCount, L,
-        ids + (i * neighborCount), distances + (i * neighborCount), 4, stats + i);
+        ids + (i * neighborCount), distances + (i * neighborCount), 4,
+        stats + i);
   }
 
-  _u64   total_query_us = timer.elapsed();
-//  double qps = (double) query_num / ((double) total_query_us / 1e6);
-//  std::cout << "QPS: " << qps << std::endl;
+  _u64 total_query_us = timer.elapsed();
+  //  double qps = (double) query_num / ((double) total_query_us / 1e6);
+  //  std::cout << "QPS: " << qps << std::endl;
 
   float mean_latency = NSG::get_percentile_stats(
-      stats, query_num, 0.5, 
+      stats, query_num, 0.5,
       [](const NSG::QueryStats& stats) { return stats.total_us; });
 
   float latency_99 = NSG::get_percentile_stats(
-      stats, query_num, 0.99, 
+      stats, query_num, 0.99,
       [](const NSG::QueryStats& stats) { return stats.total_us; });
 
   float mean_io = NSG::get_percentile_stats(
-      stats, query_num, 0.5, 
+      stats, query_num, 0.5,
       [](const NSG::QueryStats& stats) { return stats.n_ios; });
 
   delete[] stats;
@@ -153,17 +151,15 @@ int aux_main(int argc, char** argv) {
   NSG::PQFlashNSG<T>* _pFlashIndex;
 
   // load query bin
-  T*     query = nullptr;
-  size_t query_num, ndims;
+  T*        query = nullptr;
+  size_t    query_num, ndims;
   uint32_t* gt_load;
-  size_t query_num_gt, gt_num;
+  size_t    query_num_gt, gt_num;
   NSG::load_bin<T>(argv[3], query, query_num, ndims);
-  NSG::load_bin<uint32_t> (argv[4], gt_load, query_num_gt, gt_num);
+  NSG::load_bin<uint32_t>(argv[4], gt_load, query_num_gt, gt_num);
 
-
-std::string recall_string =  std::string("Recall@") + std::string(argv[5]);
-_u64 recall_at = std::atoi(argv[5]);
-
+  std::string recall_string = std::string("Recall@") + std::string(argv[5]);
+  _u64        recall_at = std::atoi(argv[5]);
 
   if (query_num_gt != query_num) {
     std::cout << "Ground truth does not match number of queries. " << std::endl;
@@ -175,9 +171,6 @@ _u64 recall_at = std::atoi(argv[5]);
               << " elements. Calculating recall at " << gt_num << std::endl;
     recall_at = gt_num;
   }
-
-
-
 
   query = NSG::data_align<T>(query, query_num, ndims);
   ndims = ROUND_UP(ndims, 8);
@@ -194,68 +187,67 @@ _u64 recall_at = std::atoi(argv[5]);
       exit(-1);
     }
 
+    std::vector<_u64> Lvec;
+    _u64              curL = 8;
+    while (curL < 2048) {
+      Lvec.push_back(curL);
+      if (curL < 16)
+        curL += 1;
+      else if (curL < 32)
+        curL += 2;
+      else if (curL < 64)
+        curL += 4;
+      else if (curL < 128)
+        curL += 8;
+      else if (curL < 256)
+        curL += 16;
+      else if (curL < 512)
+        curL += 32;
+      else if (curL < 1024)
+        curL += 64;
+      else
+        curL += 128;
+    }
 
+    std::cout.setf(std::ios_base::fixed, std::ios_base::floatfield);
+    std::cout.precision(2);
 
-  std::vector<_u64> Lvec;
-  _u64              curL = 8;
-  while (curL < 2048) {
-    Lvec.push_back(curL);
-    if (curL < 16)
-      curL += 1;
-    else if (curL < 32)
-      curL += 2;
-    else if (curL < 64)
-      curL += 4;
-    else if (curL < 128)
-      curL += 8;
-    else if (curL < 256)
-      curL += 16;
-    else if (curL < 512)
-      curL += 32;
-    else if (curL < 1024)
-      curL += 64;
-    else
-      curL += 128;
-  }
-
-  std::cout.setf(std::ios_base::fixed, std::ios_base::floatfield);
-  std::cout.precision(2);
-
-
-  std::cout << std::setw(8) << "Ls" << std::setw(16) << recall_string << std::setw(16) << "Avg Latency" << std::setw(16) << "99 Latency" << std::setw(16) <<"Avg Disk I/Os"
-            << std::endl;
-  std::cout << "========================================================================="
-               "======="
-            << std::endl;
+    std::cout << std::setw(8) << "Ls" << std::setw(16) << recall_string
+              << std::setw(16) << "Avg Latency" << std::setw(16) << "99 Latency"
+              << std::setw(16) << "Avg Disk I/Os" << std::endl;
+    std::cout << "============================================================="
+                 "============"
+                 "======="
+              << std::endl;
     _u64*  query_res = new _u64[recall_at * query_num];
-    _u32* query_res32 = new _u32[query_num * recall_at];
+    _u32*  query_res32 = new _u32[query_num * recall_at];
     float* query_dists = new float[recall_at * query_num];
 
-  for (uint32_t test_id = 0; test_id < Lvec.size(); test_id++) {
-    _u64 L = Lvec[test_id];
-    if (L < recall_at)
-      continue;
+    for (uint32_t test_id = 0; test_id < Lvec.size(); test_id++) {
+      _u64 L = Lvec[test_id];
+      if (L < recall_at)
+        continue;
 
-    // execute queries
-    auto s = std::chrono::high_resolution_clock::now();
-std::tuple<float,float,float> q_stats;
-    q_stats = search_index(_pFlashIndex, (const char*) query, query_num, recall_at, query_dists,
-                query_res, L);
-    auto e = std::chrono::high_resolution_clock::now();
-    
+      // execute queries
+      auto s = std::chrono::high_resolution_clock::now();
+      std::tuple<float, float, float> q_stats;
+      q_stats = search_index(_pFlashIndex, (const char*) query, query_num,
+                             recall_at, query_dists, query_res, L);
+      auto e = std::chrono::high_resolution_clock::now();
 
-    std::chrono::duration<double> diff = e - s;
-    unsigned                      nthreads = omp_get_max_threads();
-    //    std::cout << "search time: " << diff.count() << "\n";
-    float latency = (diff.count() / query_num) * (1000000);
+      std::chrono::duration<double> diff = e - s;
+      unsigned                      nthreads = omp_get_max_threads();
+      //    std::cout << "search time: " << diff.count() << "\n";
+      float latency = (diff.count() / query_num) * (1000000);
 
-
-    // compute recall
-NSG::convert_types(query_res, query_res32, query_num, recall_at);
-    float recall = calc_recall(query_num, gt_load, gt_num, query_res32, recall_at, recall_at);
-  std::cout << std::setw(8) << L << std::setw(16) << recall << std::setw(16) << std::get<0>(q_stats) << std::setw(16) << std::get<1>(q_stats) << std::setw(16) << std::get<2>(q_stats)
-            << std::endl;
-}
+      // compute recall
+      NSG::convert_types(query_res, query_res32, query_num, recall_at);
+      float recall = calc_recall(query_num, gt_load, gt_num, query_res32,
+                                 recall_at, recall_at);
+      std::cout << std::setw(8) << L << std::setw(16) << recall << std::setw(16)
+                << std::get<0>(q_stats) << std::setw(16) << std::get<1>(q_stats)
+                << std::setw(16) << std::get<2>(q_stats) << std::endl;
+    }
 
     NSG::aligned_free(query);
     delete[] query_res;

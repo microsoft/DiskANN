@@ -19,10 +19,10 @@
 template<typename T>
 int aux_main(int argc, char** argv) {
   if (argc != 9) {
-    std::cout << "Correct usage: "
-              << argv[0]
-              << " data_type [float/int8/uint8] data_file L R C num_rounds alpha"
-              << "save_graph_file " << std::endl;
+    std::cout
+        << "Correct usage: " << argv[0]
+        << " data_type [float/int8/uint8] data_file L R C num_rounds alpha"
+        << "save_graph_file " << std::endl;
     exit(-1);
   }
   T*     data_load = NULL;
@@ -61,8 +61,7 @@ int aux_main(int argc, char** argv) {
 int main(int argc, char** argv) {
   if (argc != 9) {
     std::cout
-        << "Correct usage: "
-        << argv[0]
+        << "Correct usage: " << argv[0]
         << " data_type[int8/uint8/float] data_bin_file L R C num_rounds alpha "
         << "save_graph_file " << std::endl;
     exit(-1);

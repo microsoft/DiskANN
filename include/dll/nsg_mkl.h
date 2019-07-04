@@ -15,5 +15,3 @@
 #define _MKL_API(rtype, name, arg) extern rtype MKL_CALL_CONV name arg;
 
 #include "mkl_cblas.h"
-
-

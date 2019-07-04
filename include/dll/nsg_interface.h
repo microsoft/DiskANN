@@ -21,7 +21,7 @@ namespace NSG {
 #endif
         virtual ~NSGInterface();
 
-    // In implementation, the file path can be a file or folder.
+// In implementation, the file path can be a file or folder.
 #ifdef __NSG_WINDOWS__
     __declspec(dllexport)
 #endif
@@ -29,17 +29,17 @@ namespace NSG {
                                 const char* indexFilePath,
                                 const char* indexBuildParameters);
 
-    // Load index form file.
+// Load index form file.
 #ifdef __NSG_WINDOWS__
     __declspec(dllexport)
 #endif
         virtual bool LoadIndex(const char* indexFilePath,
                                const char* queryParameters);
 
-    // Search several vectors, return their neighbors' distance and ids.
-    // Both distances & ids are returned arraies of neighborCount elements,
-    // And need to be allocated by invoker, which capicity should be greater
-    // than queryCount * neighborCount.
+// Search several vectors, return their neighbors' distance and ids.
+// Both distances & ids are returned arraies of neighborCount elements,
+// And need to be allocated by invoker, which capicity should be greater
+// than queryCount * neighborCount.
 #ifdef __NSG_WINDOWS__
     __declspec(dllexport)
 #endif

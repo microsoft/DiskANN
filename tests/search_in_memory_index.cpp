@@ -2,8 +2,8 @@
 #include <omp.h>
 #include <string.h>
 #include <cstring>
-#include "util.h"
 #include <iomanip>
+#include "util.h"
 #ifndef __NSG_WINDOWS__
 #include <sys/mman.h>
 #include <sys/stat.h>
@@ -58,7 +58,7 @@ int aux_main(int argc, char** argv) {
   NSG::load_bin<unsigned>(argv[4], gt_load, gt_num, gt_dim);
   std::string rand_nsg_path(argv[5]);
   unsigned    recall_at = atoi(argv[6]);
-std::string recall_string =  std::string("Recall@") + std::string(argv[6]);
+  std::string recall_string = std::string("Recall@") + std::string(argv[6]);
 
   if (dim != query_dim) {
     std::cout << "Base and query files dimension mismatch: base dim is " << dim
@@ -117,9 +117,11 @@ std::string recall_string =  std::string("Recall@") + std::string(argv[6]);
   }
 
   NSG::Parameters paras;
-  std::cout << std::setw(8) << "Ls" << std::setw(16) << recall_string << std::setw(16) << "Latency" << std::setw(16) << "Cmps" << std::setw(16) << "Hops"
-            << std::endl;
-  std::cout << "============================================================================"
+  std::cout << std::setw(8) << "Ls" << std::setw(16) << recall_string
+            << std::setw(16) << "Latency" << std::setw(16) << "Cmps"
+            << std::setw(16) << "Hops" << std::endl;
+  std::cout << "==============================================================="
+               "============="
                "======="
             << std::endl;
   for (uint32_t test_id = 0; test_id < Lvec.size(); test_id++) {
@@ -135,8 +137,8 @@ std::string recall_string =  std::string("Recall@") + std::string(argv[6]);
     long long total_hops = 0;
     long long total_cmps = 0;
 
-    auto s = std::chrono::high_resolution_clock::now();
-    #pragma omp parallel for schedule(static, 1)
+    auto    s = std::chrono::high_resolution_clock::now();
+#pragma omp parallel for schedule(static, 1)
     for (int i = 0; i < query_num; i++) {
       auto ret =
           index.beam_search(query_load + i * dim, data_load, K, paras,
@@ -159,8 +161,9 @@ std::string recall_string =  std::string("Recall@") + std::string(argv[6]);
     float avg_cmps = (float) total_cmps / (float) query_num;
     float recall = calc_recall(query_num, gt_load, gt_dim, res, K, recall_at);
 
-  std::cout << std::setw(8) << L << std::setw(16) << recall << std::setw(16) << latency << std::setw(16) << avg_cmps << std::setw(16) << avg_hops
-            << std::endl;
+    std::cout << std::setw(8) << L << std::setw(16) << recall << std::setw(16)
+              << latency << std::setw(16) << avg_cmps << std::setw(16)
+              << avg_hops << std::endl;
     if (recall > 99.5) {
       break;
     }

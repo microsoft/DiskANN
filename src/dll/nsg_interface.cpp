@@ -7,8 +7,8 @@
 
 #include "dll/nsg_interface.h"
 #include "index_nsg.h"
-#include "util.h"
 #include "partitionAndPQ.h"
+#include "util.h"
 
 namespace NSG {
 
@@ -166,7 +166,7 @@ namespace NSG {
     // infer chunk_size
     this->m_dimension = (_u64) params[3];
     this->n_chunks = (_u64) params[4];
-    this->chunk_size = (_u64)(this->m_dimension/ n_chunks);
+    this->chunk_size = (_u64)(this->m_dimension / n_chunks);
 
     std::string nsg_disk_opt = index_prefix_path + "_diskopt.rnsg";
 
@@ -176,8 +176,8 @@ namespace NSG {
     _u64        nthreads = (_u64) std::atoi(param_list[3].c_str());
     std::string stars(40, '*');
     std::cout << stars << "\nPQ -- n_chunks: " << n_chunks
-              << ", chunk_size: " << chunk_size << ", data_dim: " << this->m_dimension
-              << "\n";
+              << ", chunk_size: " << chunk_size
+              << ", data_dim: " << this->m_dimension << "\n";
     std::cout << "Search meta-params -- beam_width: " << beam_width
               << ", cache_nlevels: " << cache_nlevels
               << ", nthreads: " << nthreads << "\n"
@@ -188,8 +188,8 @@ namespace NSG {
 
     // load index
     _pFlashIndex->load(data_bin.c_str(), nsg_disk_opt.c_str(),
-                       pq_tables_bin.c_str(), chunk_size, n_chunks, this->m_dimension,
-                       nthreads);
+                       pq_tables_bin.c_str(), chunk_size, n_chunks,
+                       this->m_dimension, nthreads);
 
     // cache bfs levels
     _pFlashIndex->cache_bfs_levels(cache_nlevels);
@@ -207,9 +207,9 @@ namespace NSG {
                                     unsigned __int64  neighborCount,
                                     float*            distances,
                                     unsigned __int64* ids) const {
-//    _u64      L = 6 * neighborCount;
-    const T*  query_load = (const T*) vector;
-// #pragma omp parallel for schedule(dynamic, 1)
+    //    _u64      L = 6 * neighborCount;
+    const T* query_load = (const T*) vector;
+    // #pragma omp parallel for schedule(dynamic, 1)
     for (_s64 i = 0; i < queryCount; i++) {
       _pFlashIndex->cached_beam_search(
           query_load + (i * m_dimension), neighborCount, this->Lsearch,
