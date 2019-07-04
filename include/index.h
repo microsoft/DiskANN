@@ -68,7 +68,26 @@ namespace NSG {
     Distance<T> *_distance;
   };
 
-  inline void percentile_stats(
+  inline float get_percentile_stats(
+      QueryStats *stats, uint64_t len, float percentile, 
+      const std::function<uint64_t(const QueryStats &)> &member_fn) {
+    std::vector<uint64_t> vals(len);
+    for (uint64_t i = 0; i < len; i++) {
+      vals[i] = member_fn(stats[i]);
+    }
+
+    std::sort(vals.begin(), vals.end(),
+              [](const uint64_t &left, const uint64_t &right) {
+                return left < right;
+              });
+
+    uint64_t sum_vals = std::accumulate(vals.begin(), vals.end(), (uint64_t) 0);
+
+    vals.clear();
+    return vals[(uint64_t)(percentile * len)];
+  }
+
+/*  inline void percentile_stats(
       QueryStats *stats, uint64_t len, const char *name, const char *suffix,
       const std::function<uint64_t(const QueryStats &)> &member_fn) {
     std::vector<uint64_t> vals(len);
@@ -92,5 +111,5 @@ namespace NSG {
     std::cout << suffix << ", 99.9pc: " << vals[(uint64_t)(0.999 * len)]
               << suffix << std::endl;
     vals.clear();
-  }
+  } */
 }  // namespace NSG

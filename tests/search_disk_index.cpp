@@ -13,7 +13,7 @@
 #ifndef __NSG_WINDOWS__
 #include <sys/mman.h>
 #include <sys/stat.h>
-#include <time.h>
+#include "timer.h"
 #include <unistd.h>
 #endif
 
@@ -108,20 +108,44 @@ bool load_index(const char* indexFilePath, const char* queryParameters,
 // Search several vectors, return their neighbors' distance and ids.
 // Both distances & ids are returned arraies of neighborCount elements,
 // And need to be allocated by invoker, which capacity should be greater
-// than [queryCount * neighborCount].
+// than [query_num * neighborCount].
 template<typename T>
-void search_index(NSG::PQFlashNSG<T>* _pFlashIndex, const char* vector,
-                 uint64_t queryCount, uint64_t neighborCount, float* distances,
+std::tuple<float,float,float> search_index(NSG::PQFlashNSG<T>* _pFlashIndex, const char* vector,
+                 uint64_t query_num, uint64_t neighborCount, float* distances,
                  uint64_t* ids, _u64 L) {
   //  _u64     L = 6 * neighborCount;
 //  _u64     L = 12;
   const T* query_load = (const T*) vector;
-  #pragma omp parallel for schedule(dynamic, 1)
-  for (_s64 i = 0; i < queryCount; i++) {
+
+
+  NSG::QueryStats* stats = new NSG::QueryStats[query_num];
+
+  NSG::Timer timer;
+  #pragma omp parallel for schedule(dynamic, 1) num_threads(16)
+  for (_s64 i = 0; i < query_num; i++) {
     _pFlashIndex->cached_beam_search(
         query_load + (i * _pFlashIndex->data_dim), neighborCount, L,
-        ids + (i * neighborCount), distances + (i * neighborCount), 4);
+        ids + (i * neighborCount), distances + (i * neighborCount), 4, stats + i);
   }
+
+  _u64   total_query_us = timer.elapsed();
+//  double qps = (double) query_num / ((double) total_query_us / 1e6);
+//  std::cout << "QPS: " << qps << std::endl;
+
+  float mean_latency = NSG::get_percentile_stats(
+      stats, query_num, 0.5, 
+      [](const NSG::QueryStats& stats) { return stats.total_us; });
+
+  float latency_99 = NSG::get_percentile_stats(
+      stats, query_num, 0.99, 
+      [](const NSG::QueryStats& stats) { return stats.total_us; });
+
+  float mean_io = NSG::get_percentile_stats(
+      stats, query_num, 0.5, 
+      [](const NSG::QueryStats& stats) { return stats.n_ios; });
+
+  delete[] stats;
+  return std::make_tuple(mean_latency, latency_99, mean_io);
 }
 
 template<typename T>
@@ -200,7 +224,7 @@ _u64 recall_at = std::atoi(argv[5]);
 
   std::cout << std::setw(8) << "Ls" << std::setw(16) << recall_string << std::setw(16) << "Avg Latency" << std::setw(16) << "99 Latency" << std::setw(16) <<"Avg Disk I/Os"
             << std::endl;
-  std::cout << "===================================================================================="
+  std::cout << "========================================================================="
                "======="
             << std::endl;
     _u64*  query_res = new _u64[recall_at * query_num];
@@ -214,7 +238,8 @@ _u64 recall_at = std::atoi(argv[5]);
 
     // execute queries
     auto s = std::chrono::high_resolution_clock::now();
-    search_index(_pFlashIndex, (const char*) query, query_num, recall_at, query_dists,
+std::tuple<float,float,float> q_stats;
+    q_stats = search_index(_pFlashIndex, (const char*) query, query_num, recall_at, query_dists,
                 query_res, L);
     auto e = std::chrono::high_resolution_clock::now();
     
@@ -228,7 +253,7 @@ _u64 recall_at = std::atoi(argv[5]);
     // compute recall
 NSG::convert_types(query_res, query_res32, query_num, recall_at);
     float recall = calc_recall(query_num, gt_load, gt_num, query_res32, recall_at, recall_at);
-  std::cout << std::setw(8) << L << std::setw(16) << recall << std::setw(16) << latency << std::setw(16) << "---" << std::setw(16) <<"---"
+  std::cout << std::setw(8) << L << std::setw(16) << recall << std::setw(16) << std::get<0>(q_stats) << std::setw(16) << std::get<1>(q_stats) << std::setw(16) << std::get<2>(q_stats)
             << std::endl;
 }
 

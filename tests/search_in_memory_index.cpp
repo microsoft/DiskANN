@@ -117,9 +117,9 @@ std::string recall_string =  std::string("Recall@") + std::string(argv[6]);
   }
 
   NSG::Parameters paras;
-  std::cout << std::setw(8) << "Ls" << std::setw(16) << "Latency" << std::setw(16) << recall_string << std::setw(16) << "Cmps" << std::setw(16) << "Hops"
+  std::cout << std::setw(8) << "Ls" << std::setw(16) << recall_string << std::setw(16) << "Latency" << std::setw(16) << "Cmps" << std::setw(16) << "Hops"
             << std::endl;
-  std::cout << "================================================================================"
+  std::cout << "============================================================================"
                "======="
             << std::endl;
   for (uint32_t test_id = 0; test_id < Lvec.size(); test_id++) {
@@ -159,7 +159,7 @@ std::string recall_string =  std::string("Recall@") + std::string(argv[6]);
     float avg_cmps = (float) total_cmps / (float) query_num;
     float recall = calc_recall(query_num, gt_load, gt_dim, res, K, recall_at);
 
-  std::cout << std::setw(8) << L << std::setw(16) << latency << std::setw(16) << recall << std::setw(16) << avg_cmps << std::setw(16) << avg_hops
+  std::cout << std::setw(8) << L << std::setw(16) << recall << std::setw(16) << latency << std::setw(16) << avg_cmps << std::setw(16) << avg_hops
             << std::endl;
     if (recall > 99.5) {
       break;
