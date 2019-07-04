@@ -7,7 +7,7 @@
 
 #include "dll/nsg_interface.h"
 #include "index_nsg.h"
-#include "partitionAndPQ.h"
+#include "partition_and_pq.h"
 #include "util.h"
 
 namespace NSG {

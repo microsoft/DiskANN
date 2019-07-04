@@ -21,9 +21,9 @@
 #include <sys/stat.h>
 #include <time.h>
 
-#include <partitionAndPQ.h>
 #include <cassert>
 #include "MemoryMapper.h"
+#include "partition_and_pq.h"
 #ifdef __NSG_WINDOWS__
 #include <xmmintrin.h>
 #endif

@@ -3,12 +3,12 @@
 #include <index_nsg.h>
 #include <math_utils.h>
 #include <omp.h>
-#include <partitionAndPQ.h>
 #include <pq_flash_index_nsg.h>
 #include <string.h>
 #include <time.h>
 #include <cstring>
 #include <iomanip>
+#include "partition_and_pq.h"
 #include "util.h"
 #ifndef __NSG_WINDOWS__
 #include <sys/mman.h>

@@ -3,7 +3,7 @@
 
 #include <index_nsg.h>
 #include <math_utils.h>
-#include <partitionAndPQ.h>
+#include "partition_and_pq.h"
 #include "util.h"
 
 // DEPRECATED: NEED TO REPROGRAM
