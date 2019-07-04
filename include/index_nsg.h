@@ -158,6 +158,3 @@ namespace NSG {
     using Index<T>::_max_points;
   };
 }
-
-bool BuildIndex(const char *dataFilePath, const char *indexFilePath,
-                const char *indexBuildParameters);

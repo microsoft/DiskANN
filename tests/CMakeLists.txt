@@ -12,26 +12,21 @@ target_link_libraries(test_nsg_incr_index ${PROJECT_NAME} -ltcmalloc)
 #add_executable(test_partitioning test_partitioning.cpp)
 #target_link_libraries(test_partitioning ${PROJECT_NAME} -ltcmalloc)
 
-add_executable(test_nsg_sweep_index test_nsg_sweep_index.cpp)
-target_link_libraries(test_nsg_sweep_index ${PROJECT_NAME} -ltcmalloc)
+add_executable(build_in_memory_index build_in_memory_index.cpp)
+target_link_libraries(build_in_memory_index ${PROJECT_NAME} -ltcmalloc)
 
-add_executable(test_nsg_search test_nsg_search.cpp)
-target_link_libraries(test_nsg_search ${PROJECT_NAME})
+add_executable(build_disk_index build_disk_index.cpp)
+target_link_libraries(build_disk_index ${PROJECT_NAME} -ltcmalloc)
 
-add_executable(int8_bin_to_fvecs int8_bin_to_fvecs.cpp)
-target_link_libraries(int8_bin_to_fvecs ${PROJECT_NAME})
 
-add_executable(test_build test_build.cpp)
-target_link_libraries(test_build ${PROJECT_NAME})
+add_executable(search_in_memory_index search_in_memory_index.cpp)
+target_link_libraries(search_in_memory_index ${PROJECT_NAME})
 
-add_executable(test_search test_search.cpp)
-target_link_libraries(test_search ${PROJECT_NAME} aio)
-
+add_executable(search_disk_index search_disk_index.cpp)
+target_link_libraries(search_disk_index ${PROJECT_NAME} aio)
 
 add_executable(calc_recall calc_recall.cpp)
-
 add_executable(opt_disk_graph opt_disk_graph.cpp)
-
 add_executable(fvecs_to_bin fvecs_to_bin.cpp)
 add_executable(ivecs_to_bin ivecs_to_bin.cpp)
 add_executable(nsg_bfs nsg_bfs.cpp)
