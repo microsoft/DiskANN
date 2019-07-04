@@ -6,6 +6,8 @@
 #include <partitionAndPQ.h>
 #include "util.h"
 
+// DEPRECATED: NEED TO REPROGRAM
+
 int main(int argc, char** argv) {
   if (argc != 6) {
     std::cout << argv[0] << " format: train_set "

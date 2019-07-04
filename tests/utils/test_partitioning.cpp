@@ -6,6 +6,8 @@
 #include <util.h>
 #include "util.h"
 
+// DEPRECATED: NEED TO REPROGRAM
+
 int main(int argc, char** argv) {
   auto s = std::chrono::high_resolution_clock::now();
 

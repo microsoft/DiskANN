@@ -5,7 +5,6 @@
 #include <stack>
 #include <string>
 #include <unordered_map>
-#include "index.h"
 #include "neighbor.h"
 #include "parameters.h"
 #include "tsl/robin_set.h"

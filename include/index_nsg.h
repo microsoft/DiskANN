@@ -5,7 +5,7 @@
 #include <stack>
 #include <string>
 #include <unordered_map>
-#include "index.h"
+#include "distance.h"
 #include "neighbor.h"
 #include "parameters.h"
 #include "tsl/robin_set.h"
@@ -80,8 +80,6 @@ namespace NSG {
 
     bool *_is_inner;
 
-    Index<T> *_initializer;
-
     void reachable_bfs(const unsigned                         start_node,
                        std::vector<tsl::robin_set<unsigned>> &bfs_order,
                        bool *                                 visited);
@@ -129,6 +127,12 @@ namespace NSG {
     void compute_in_degree_stats();
 
    private:
+    const size_t            _dim;
+    const T *               _data;
+    size_t                  _nd;
+    size_t                  _max_points;
+    bool                    _has_built;
+    Distance<T> *           _distance;
     unsigned                _width;
     unsigned                _ep;
     std::vector<std::mutex> _locks;  // Per node lock, cardinality=max_points_
@@ -148,12 +152,5 @@ namespace NSG {
     tsl::robin_set<unsigned> _empty_slots;
 
     std::mutex _change_lock;  // Allow only 1 thread to insert/delete
-
-    const size_t _dim;
-    const T *    _data;
-    size_t       _nd;
-    size_t       _max_points;
-    bool         _has_built;
-    Distance<T> *_distance;
   };
 }

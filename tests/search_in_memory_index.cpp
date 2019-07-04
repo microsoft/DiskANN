@@ -144,19 +144,17 @@ int aux_main(int argc, char** argv) {
           index.beam_search(query_load + i * dim, data_load, K, paras,
                             res + ((size_t) i) * K, beam_width, start_points);
 
-      //#pragma omp atomic
+#pragma omp atomic
       total_hops += ret.first;
-      //#pragma omp atomic
+#pragma omp atomic
       total_cmps += ret.second;
     }
+    auto e = std::chrono::high_resolution_clock::now();
 
-    auto                          e = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> diff = e - s;
-    unsigned                      nthreads = omp_get_max_threads();
-    //    std::cout << "search time: " << diff.count() << "\n";
-    float latency = (diff.count() / query_num) * (1000000);
-    //    float latency = (diff.count() / query_num) * (1000000) * (float)
-    //    nthreads;
+    float                         latency =
+        omp_get_max_threads() * (diff.count() / query_num) * (1000000);
+
     float avg_hops = (float) total_hops / (float) query_num;
     float avg_cmps = (float) total_cmps / (float) query_num;
     float recall = calc_recall(query_num, gt_load, gt_dim, res, K, recall_at);

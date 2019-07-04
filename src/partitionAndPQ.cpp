@@ -86,10 +86,9 @@ int generate_pq_pivots(std::string train_file_path, size_t num_centers,
     return -1;
   }
 
-  size_t    chunk_size = std::floor((double) dim / (double) num_pq_chunks);
-  uint32_t *ivf_closest_center = new uint32_t[num_train];
-  float *   full_pivot_data;
-  size_t    corrected_num_pq_chunks = DIV_ROUND_UP(dim, chunk_size);
+  size_t chunk_size = std::floor((double) dim / (double) num_pq_chunks);
+  float *full_pivot_data;
+  size_t corrected_num_pq_chunks = DIV_ROUND_UP(dim, chunk_size);
 
   std::cout << "Corrected number of chunks " << corrected_num_pq_chunks
             << std::endl;
@@ -127,10 +126,8 @@ int generate_pq_pivots(std::string train_file_path, size_t num_centers,
     kmeans::kmeanspp_selecting_pivots(cur_data, num_train, cur_chunk_size,
                                       cur_pivot_data, num_centers);
 
-    float residual = 0;
-    residual =
-        kmeans::run_lloyds(cur_data, num_train, cur_chunk_size, cur_pivot_data,
-                           num_centers, max_k_means_reps, NULL, closest_center);
+    kmeans::run_lloyds(cur_data, num_train, cur_chunk_size, cur_pivot_data,
+                       num_centers, max_k_means_reps, NULL, closest_center);
 
     for (uint64_t j = 0; j < num_centers; j++) {
       std::memcpy(full_pivot_data + j * dim + i * chunk_size,

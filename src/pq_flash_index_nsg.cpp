@@ -1,6 +1,6 @@
 #include "pq_flash_index_nsg.h"
 #include <malloc.h>
-#include "index.h"
+#include "percentile_stats.h"
 
 #include <omp.h>
 #include <chrono>

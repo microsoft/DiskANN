@@ -55,8 +55,15 @@ namespace NSG {
   template<typename T, typename TagT>
   IndexNSG<T, TagT>::IndexNSG(const size_t dimension, const size_t n, Metric m,
                               const size_t max_points, const bool enable_tags)
-      : _width(0), _can_delete(false), _enable_tags(enable_tags),
-        _dim(dimension), _consolidated_order(true) {
+      : _dim(dimension), _nd(n), _has_built(false), _width(0),
+        _can_delete(false), _enable_tags(enable_tags),
+        _consolidated_order(true) {
+    _max_points = (max_points > 0) ? max_points : n;
+    if (_max_points < n) {
+      std::cerr << "max_points must be >= n; max_points: " << _max_points
+                << "  n: " << _nd << std::endl;
+      exit(-1);
+    }
     this->_distance = ::get_distance_function<T>();
     _locks = std::vector<std::mutex>(_max_points);
     _width = 0;
@@ -188,10 +195,10 @@ namespace NSG {
           for (auto j : result)
             _final_graph[i].push_back(j.id);
 
-          for (auto iter : _final_graph[i]) {
-            assert(_delete_set.find(iter) == _delete_set.end());
-            assert(_empty_slots.find(iter) == _empty_slots.end());
-          }
+          //          for (auto iter : _final_graph[i]) {
+          //            assert(_delete_set.find(iter) == _delete_set.end());
+          //            assert(_empty_slots.find(iter) == _empty_slots.end());
+          //          }
         }
       }
     }
@@ -1177,8 +1184,9 @@ namespace NSG {
        * the neighbors of the query node
        */
       assert(des_pool.size() <= range);
-      for (auto iter : des_pool)
-        assert(iter <= _nd);  // Equality occurs when called from insert_point
+      //      for (auto iter : des_pool)
+      //        assert(iter <= _nd);  // Equality occurs when called from
+      //        insert_point
     }
   }
 
@@ -1320,7 +1328,6 @@ namespace NSG {
   template<typename T, typename TagT>
   void IndexNSG<T, TagT>::build(const T *data, Parameters &parameters,
                                 const std::vector<TagT> &tags) {
-    unsigned range = parameters.Get<unsigned>("R");
     _data = data;
 
     if (_enable_tags) {

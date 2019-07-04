@@ -126,7 +126,7 @@ std::tuple<float, float, float> search_index(
         stats + i);
   }
 
-  _u64 total_query_us = timer.elapsed();
+  //  _u64 total_query_us = timer.elapsed();
   //  double qps = (double) query_num / ((double) total_query_us / 1e6);
   //  std::cout << "QPS: " << qps << std::endl;
 
@@ -229,16 +229,9 @@ int aux_main(int argc, char** argv) {
         continue;
 
       // execute queries
-      auto s = std::chrono::high_resolution_clock::now();
       std::tuple<float, float, float> q_stats;
       q_stats = search_index(_pFlashIndex, (const char*) query, query_num,
                              recall_at, query_dists, query_res, L);
-      auto e = std::chrono::high_resolution_clock::now();
-
-      std::chrono::duration<double> diff = e - s;
-      unsigned                      nthreads = omp_get_max_threads();
-      //    std::cout << "search time: " << diff.count() << "\n";
-      float latency = (diff.count() / query_num) * (1000000);
 
       // compute recall
       NSG::convert_types(query_res, query_res32, query_num, recall_at);

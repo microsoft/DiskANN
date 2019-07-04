@@ -62,14 +62,11 @@ int main(int argc, char** argv) {
   }
   points_num = points_num_gs;
 
-  size_t   recall = 0;
-  size_t   total_recall = 0;
   uint32_t recall_at = std::atoi(argv[3]);
   uint32_t subset_size = dim_or;
   if (argc == 5)
     subset_size = std::atoi(argv[4]);
 
-  unsigned mind = dim_gs;
   if ((dim_or < recall_at) || (recall_at > dim_gs)) {
     std::cout << "ground truth has size " << dim_gs << "; our set has "
               << dim_or << " points. Asking for recall " << recall_at
