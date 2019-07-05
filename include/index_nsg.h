@@ -56,12 +56,13 @@ namespace NSG {
 
     void save_disk_opt_graph(const char *diskopt_path);
 
-    /* Methods for inserting and deleting points from the databases*/
+/* Methods for inserting and deleting points from the databases*/
+#define NULL_TAG (TagT(-1))
 
     int insert_point(const T *point, const Parameters &parameter,
                      std::vector<Neighbor> &pool, std::vector<Neighbor> &tmp,
                      tsl::robin_set<unsigned> &visited, vecNgh &cut_graph,
-                     const TagT tag = TagT(-1));
+                     const TagT tag = NULL_TAG);
 
     int enable_delete();
     int disable_delete(const Parameters &parameters,

@@ -471,10 +471,20 @@ namespace NSG {
 
   template<typename T, typename TagT>
   void IndexNSG<T, TagT>::save(const char *filename) {
+    long long     total_gr_edges = 0;
     std::ofstream out(filename, std::ios::binary | std::ios::out);
-    assert(_final_graph.size() == _max_points);
 
-    long long total_gr_edges = 0;
+    assert(_final_graph.size() == _max_points);
+    if (_enable_tags) {
+      _change_lock.lock();
+      if (_can_delete || !_consolidated_order) {
+        std::cerr
+            << "Disable deletes and consolidated order before saving index"
+            << std::endl;
+        exit(-1);
+      }
+    }
+
     out.write((char *) &_width, sizeof(unsigned));
     out.write((char *) &_ep, sizeof(unsigned));
     for (unsigned i = 0; i < _nd; i++) {
@@ -484,6 +494,15 @@ namespace NSG {
       total_gr_edges += GK;
     }
     out.close();
+
+    if (_enable_tags) {
+      std::ofstream out_tags(std::string(filename) + std::string(".tags"));
+      for (unsigned i = 0; i < _nd; i++) {
+        out_tags << _point_to_tag[i] << "\n";
+      }
+      out_tags.close();
+      _change_lock.unlock();
+    }
 
     std::cout << "Avg degree: " << ((float) total_gr_edges) / ((float) _nd)
               << std::endl;

@@ -67,9 +67,9 @@ int main(int argc, char** argv) {
 
   {
     NSG::Timer timer;
-    for (unsigned i = num_points - num_incr; i < num_points; ++i)
-      index.insert_point(data_load + (size_t) i * (size_t) dim, paras, pool,
-                         tmp, visited, cut_graph, i);
+    for (size_t i = num_points - num_incr; i < num_points; ++i)
+      index.insert_point(data_load + i * dim, paras, pool, tmp, visited,
+                         cut_graph, i);
     std::cout << "Incremental time: " << timer.elapsed() / 1000 << "ms\n";
   }
   index.save(save_path.c_str());
