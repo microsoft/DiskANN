@@ -12,7 +12,7 @@
 #include "util.h"
 
 namespace NSG {
-  template<typename T, typename TagT = int>
+  template<typename T, typename TagT = unsigned>
   class IndexNSG {
    public:
     IndexNSG(const size_t dimension, const size_t n, Metric m,
@@ -21,7 +21,7 @@ namespace NSG {
     ~IndexNSG();
 
     void save(const char *filename);
-    void load(const char *filename);
+    void load(const char *filename, const bool load_tags = false);
 
     void init_random_graph(size_t num_points, unsigned k,
                            std::vector<size_t> mapping = std::vector<size_t>());

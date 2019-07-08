@@ -509,11 +509,26 @@ namespace NSG {
   }
 
   template<typename T, typename TagT>
-  void IndexNSG<T, TagT>::load(const char *filename) {
+  void IndexNSG<T, TagT>::load(const char *filename, const bool load_tags) {
     std::ifstream in(filename, std::ios::binary);
     in.read((char *) &_width, sizeof(unsigned));
     in.read((char *) &_ep, sizeof(unsigned));
     std::cout << "NSG -- width: " << _width << ", _ep: " << _ep << "\n";
+
+    if (load_tags) {
+      if (_enable_tags == false)
+        std::cout << "Enabling tags." << std::endl;
+      _enable_tags = true;
+      std::ifstream tag_file(std::string(filename) + std::string(".tags"));
+      unsigned      id = 0;
+      TagT          tag;
+      while (tag_file >> tag) {
+        _point_to_tag[id] = tag;
+        _tag_to_point[tag] = id++;
+      }
+      tag_file.close();
+      assert(id == _nd);
+    }
 
     size_t   cc = 0;
     unsigned nodes = 0;
@@ -532,7 +547,8 @@ namespace NSG {
         std::cout << "Loaded " << nodes << " nodes, and " << cc << " neighbors"
                   << std::endl;
     }
-    cc /= _nd;
+    std::cout << "Loaded " << nodes << " nodes, and " << cc << " neighbors"
+              << std::endl;
   }
 
   /* init_random_graph():
@@ -1390,9 +1406,7 @@ namespace NSG {
       const T *query, const T *x, const size_t K, const unsigned L,
       unsigned *indices, int beam_width, std::vector<unsigned> &start_points) {
     _data = x;
-
-    std::vector<unsigned> init_ids;
-
+    std::vector<unsigned>    init_ids;
     tsl::robin_set<unsigned> visited(10 * L);
 
     // use start_points for init; ignore default init

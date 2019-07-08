@@ -36,14 +36,6 @@ float calc_recall(unsigned num_queries, unsigned* gold_std, unsigned dim_gs,
 
 template<typename T>
 int aux_main(int argc, char** argv) {
-  if ((argc != 7)) {
-    std::cout << argv[0] << " data_type [int8/uint8/float] data_bin_file "
-                            "query_bin_file groundtruth_bin nsg_path "
-                            "recall@"
-              << std::endl;
-    exit(-1);
-  }
-
   int      bfs_init = 0;
   unsigned beam_width = 4;
 
@@ -59,6 +51,7 @@ int aux_main(int argc, char** argv) {
   std::string rand_nsg_path(argv[5]);
   unsigned    recall_at = atoi(argv[6]);
   std::string recall_string = std::string("Recall@") + std::string(argv[6]);
+  const bool  tags = atoi(argv[7]);
 
   if (dim != query_dim) {
     std::cout << "Base and query files dimension mismatch: base dim is " << dim
@@ -107,7 +100,7 @@ int aux_main(int argc, char** argv) {
   std::cout << "Base and query data loaded and aligned" << std::endl;
 
   NSG::IndexNSG<T> index(dim, points_num, NSG::L2);
-  index.load(rand_nsg_path.c_str());  // to load NSG
+  index.load(rand_nsg_path.c_str(), tags);  // to load NSG
   std::cout << "Index loaded" << std::endl;
 
   std::vector<unsigned> start_points;
@@ -140,9 +133,13 @@ int aux_main(int argc, char** argv) {
     auto    s = std::chrono::high_resolution_clock::now();
 #pragma omp parallel for schedule(static, 1)
     for (int i = 0; i < query_num; i++) {
-      auto ret =
-          index.beam_search(query_load + i * dim, data_load, K, paras,
-                            res + ((size_t) i) * K, beam_width, start_points);
+      auto ret = tags
+                     ? index.beam_search_tags(query_load + i * dim, data_load,
+                                              K, paras, res + ((size_t) i) * K,
+                                              beam_width, start_points)
+                     : index.beam_search(query_load + i * dim, data_load, K,
+                                         paras, res + ((size_t) i) * K,
+                                         beam_width, start_points);
 
 #pragma omp atomic
       total_hops += ret.first;
@@ -173,10 +170,10 @@ int aux_main(int argc, char** argv) {
 }
 
 int main(int argc, char** argv) {
-  if ((argc != 7)) {
-    std::cout << argv[0] << " data_type [int8/uint8/float] data_bin_file "
-                            "query_bin_file groundtruth_bin nsg_path "
-                            "recall@"
+  if ((argc != 8)) {
+    std::cout << argv[0] << " data_type<int8/uint8/float>  data_bin_file  "
+                            "query_bin_file  groundtruth_bin  nsg_path "
+                            "recall@  tags[0/1]"
               << std::endl;
     exit(-1);
   }

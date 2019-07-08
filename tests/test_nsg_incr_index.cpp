@@ -42,13 +42,13 @@ int main(int argc, char** argv) {
   paras.Set<float>("alpha", alpha);
   paras.Set<unsigned>("num_rnds", num_rnds);
 
-  unsigned num_incr = 10000;
+  unsigned num_incr = 00000;
 
   auto data_copy = new float[num_points * dim];
   memcpy((void*) data_copy, (void*) data_load,
          num_points * dim * sizeof(float));
 
-  typedef int TagT;
+  typedef unsigned TagT;
 
   NSG::IndexNSG<float, TagT> index(dim, num_points - num_incr, NSG::L2,
                                    num_points, true);
