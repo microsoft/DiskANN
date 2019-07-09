@@ -252,7 +252,7 @@ int generate_pq_data_from_pivots(const T *base_data, size_t num_points,
   return 0;
 }
 
-/*template<typename T>
+template<typename T>
 int partition(const char *base_file, const char *train_file, size_t num_centers,
               size_t max_k_means_reps, const char *prefix_dir, size_t k_base) {
   size_t    dim;
@@ -260,12 +260,19 @@ int partition(const char *base_file, const char *train_file, size_t num_centers,
   size_t    num_points;
   size_t    num_train;
   T *       base_data;
-  float *   train_data;
+  T *   train_data;
+  float* train_data_float;
+  float* base_data_float;
   float *   pivot_data;
   uint32_t *base_closest_centers;
 
-  NSG::load_bin<float>(train_file, train_data, num_train, train_dim);
+  NSG::load_bin<T>(train_file, train_data, num_train, train_dim);
+  train_data_float = new float[num_train* train_dim];
+  NSG::convert_types<T, float> (train_data, train_data_float, num_train, train_dim);
+
   NSG::load_bin<T>(base_file, base_data, num_points, dim);
+  base_data_float = new float[num_points * dim];
+  NSG::convert_types<T, float> (base_data, base_data_float, num_points, dim);
 
   if (train_dim != dim) {
     std::cout << "Error: training and base dimensions dont match" << std::endl;
@@ -288,11 +295,11 @@ int partition(const char *base_file, const char *train_file, size_t num_centers,
     // Process Global k-means for kmeans_partitioning Step
     std::cout << "Processing global k-means (kmeans_partitioning Step)"
               << std::endl;
-    kmeans::kmeanspp_selecting_pivots(train_data, num_train, dim, pivot_data,
+    kmeans::kmeanspp_selecting_pivots(train_data_float, num_train, dim, pivot_data,
                                       num_centers);
 
     float residual = 0;
-    residual = kmeans::run_lloyds(train_data, num_train, dim, pivot_data,
+    residual = kmeans::run_lloyds(train_data_float, num_train, dim, pivot_data,
                                   num_centers, max_k_means_reps, NULL, NULL);
 
     std::cout << "Saving global k-center pivots" << std::endl;
@@ -311,6 +318,8 @@ int partition(const char *base_file, const char *train_file, size_t num_centers,
       return -1;
     }
   }
+	delete[] train_data;
+	delete[] train_data_float;
 
   output_file = cur_file + "_nn-" + std::to_string(k_base) + "_uint32.bin";
 
@@ -318,7 +327,7 @@ int partition(const char *base_file, const char *train_file, size_t num_centers,
     std::cout << "Closest centers file does not exist. Computing..."
               << std::flush;
     base_closest_centers = new uint32_t[num_points * k_base];
-    math_utils::compute_closest_centers(base_data, num_points, dim, pivot_data,
+    math_utils::compute_closest_centers(base_data_float, num_points, dim, pivot_data,
                                         num_centers, k_base,
                                         base_closest_centers);
     std::cout << "done. Now saving file..." << std::flush;
@@ -353,7 +362,7 @@ int partition(const char *base_file, const char *train_file, size_t num_centers,
           true;
 
   size_t    total_count = 0;
-  T *       cur_base = new float[num_points * dim];
+  T *       cur_base = new T[num_points * dim];
   uint32_t *cur_ids = new uint32_t[num_points];
   //#pragma omp parallel for schedule(static, 1)
   for (size_t i = 0; i < num_centers; i++) {
@@ -379,11 +388,11 @@ int partition(const char *base_file, const char *train_file, size_t num_centers,
   delete[] cur_base;
   delete[] cur_ids;
   delete[] base_closest_centers;
-  delete[] train_data;
   delete[] base_data;
+  delete[] base_data_float;
   delete[] inverted_index;
 }
-*/
+
 
 template void gen_random_slice<int8_t>(int8_t *base_data, size_t points_num,
                                        size_t dim, const char *outputfile,
@@ -394,7 +403,7 @@ template void gen_random_slice<float>(float *base_data, size_t points_num,
 template void gen_random_slice<uint8_t>(uint8_t *base_data, size_t points_num,
                                         size_t dim, const char *outputfile,
                                         size_t slice_size);
-/*
+
 template int partition<int8_t> (const char *base_file, const char *train_file,
 size_t num_centers,
               size_t max_k_means_reps, const char *prefix_dir, size_t k_base);
@@ -404,7 +413,7 @@ size_t num_centers,
 template int partition<float> (const char *base_file, const char *train_file,
 size_t num_centers,
               size_t max_k_means_reps, const char *prefix_dir, size_t k_base);
-*/
+
 
 template int generate_pq_pivots<int8_t>(std::string train_file_path,
                                         size_t      num_centers,

@@ -1,6 +1,9 @@
 set(CMAKE_CXX_STANDARD 14)
 
 
+add_executable(test_partitioning test_partitioning.cpp)
+target_link_libraries(test_partitioning ${PROJECT_NAME} -ltcmalloc)
+
 add_executable(calc_recall calc_recall.cpp)
 add_executable(opt_disk_graph opt_disk_graph.cpp)
 add_executable(fvecs_to_bin fvecs_to_bin.cpp)
