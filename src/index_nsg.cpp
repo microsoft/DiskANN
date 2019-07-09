@@ -555,19 +555,19 @@ namespace NSG {
 
     std::cout << "Generating random graph with " << num_points << " points... ";
     // PAR_BLOCK_SZ gives the number of points that can fit in a single block
-    size_t PAR_BLOCK_SZ = (1 << 16);  // = 64KB
-    size_t nblocks = DIV_ROUND_UP(num_points, PAR_BLOCK_SZ);
+    _s64 PAR_BLOCK_SZ = (1 << 16);  // = 64KB
+    _s64 nblocks = DIV_ROUND_UP((_s64) num_points, PAR_BLOCK_SZ);
 
 #pragma omp parallel for schedule(static, 1)
-    for (int64_t block = 0; block < nblocks;
+    for (_s64 block = 0; block < nblocks;
          ++block) {  // GOPAL Changed from "size_t block" to "int block"
       std::random_device                    rd;
       std::mt19937                          gen(rd());
       std::uniform_int_distribution<size_t> dis(0, num_points - 1);
 
       /* Put random number points as neighbours to the 10% of the nodes */
-      for (size_t i = block * PAR_BLOCK_SZ;
-           i < (block + 1) * PAR_BLOCK_SZ && i < num_points; i++) {
+      for (_s64 i = block * PAR_BLOCK_SZ;
+           i < (block + 1) * PAR_BLOCK_SZ && i < (_s64) num_points; i++) {
         std::set<unsigned> ra_ndset;
         while (ra_ndset.size() < k)
           ra_ndset.insert(dis(gen));
@@ -945,7 +945,8 @@ namespace NSG {
     // compute all to one distance
     float * distances = new float[_nd]();
 #pragma omp parallel for schedule(static, 65536)
-    for (int i = 0; i < _nd; i++) {  // GOPAL Changed from "size_t i" to "int i"
+    for (_s64 i = 0; i < (_s64) _nd;
+         i++) {  // GOPAL Changed from "size_t i" to "int i"
       // extract point and distance reference
       float &  dist = distances[i];
       const T *cur_vec = _data + (i * (size_t) _dim);
@@ -1272,8 +1273,8 @@ namespace NSG {
         size_t nblocks = DIV_ROUND_UP(round_size, PAR_BLOCK_SZ);
 
 #pragma omp parallel for schedule(dynamic, 1)
-        for (int64_t block = 0; block < nblocks;
-             ++block) {  // Gopal. changed from size_t to int64_t
+        for (_s64 block = 0; block < (_s64) nblocks;
+             ++block) {  // Gopal. changed from size_t to _s64
           std::vector<Neighbor>    pool, tmp;
           tsl::robin_set<unsigned> visited;
 
@@ -1300,7 +1301,7 @@ namespace NSG {
 
 #pragma omp parallel for schedule(static, PAR_BLOCK_SZ)
 
-        for (int node = start_id; node < end_id; ++node) {
+        for (_s64 node = (_s64) start_id; node < (_s64) end_id; ++node) {
           // clear all the neighbors of _final_graph[node]
           _final_graph[node].clear();
           _final_graph[node].reserve(range);
@@ -1313,7 +1314,7 @@ namespace NSG {
         }
 
 #pragma omp parallel for schedule(static, PAR_BLOCK_SZ)
-        for (int n = start_id; n < end_id; ++n) {
+        for (_s64 n = start_id; n < (_s64) end_id; ++n) {
           inter_insert(n, cut_graph_[n], parameters);
         }
 
@@ -1326,7 +1327,7 @@ namespace NSG {
         }
 
 #pragma omp parallel for schedule(static, PAR_BLOCK_SZ)
-        for (int n = start_id; n < end_id;
+        for (_s64 n = start_id; n < (_s64) end_id;
              ++n) {  // Gopal. from unsigned n to int n for openmp
           auto node = n;
           assert(!cut_graph_[node].empty());

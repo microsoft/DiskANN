@@ -117,7 +117,7 @@ int generate_pq_pivots(std::string train_file_path, size_t num_centers,
               << i * chunk_size << ", " << i * chunk_size + cur_chunk_size
               << ")" << std::endl;
 #pragma omp parallel for schedule(static, 65536)
-    for (int64_t j = 0; j < num_train; j++) {
+    for (int64_t j = 0; j < (_s64) num_train; j++) {
       std::memcpy(cur_data + j * cur_chunk_size,
                   train_data + j * dim + i * chunk_size,
                   cur_chunk_size * sizeof(float));
@@ -216,14 +216,14 @@ int generate_pq_data_from_pivots(const T *base_data, size_t num_points,
               << i * chunk_size << ", " << i * chunk_size + cur_chunk_size
               << ")" << std::endl;
 #pragma omp parallel for schedule(static, 8192)
-    for (int64_t j = 0; j < num_points; j++) {
+    for (int64_t j = 0; j < (_s64) num_points; j++) {
       for (uint64_t k = 0; k < cur_chunk_size; k++)
         cur_data[j * cur_chunk_size + k] =
             base_data[j * dim + i * chunk_size + k];
     }
 
 #pragma omp parallel for schedule(static, 1)
-    for (int64_t j = 0; j < num_centers; j++) {
+    for (int64_t j = 0; j < (_s64) num_centers; j++) {
       std::memcpy(cur_pivot_data + j * cur_chunk_size,
                   full_pivot_data + j * dim + i * chunk_size,
                   cur_chunk_size * sizeof(float));
@@ -234,7 +234,7 @@ int generate_pq_data_from_pivots(const T *base_data, size_t num_points,
                                         closest_center);
 
 #pragma omp parallel for schedule(static, 8192)
-    for (int64_t j = 0; j < num_points; j++) {
+    for (int64_t j = 0; j < (_s64) num_points; j++) {
       compressed_base[j * corrected_num_pq_chunks + i] = closest_center[j];
     }
 

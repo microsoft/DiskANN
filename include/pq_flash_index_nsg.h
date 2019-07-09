@@ -89,10 +89,10 @@ namespace NSG {
     // data: _u8 * n_chunks
     // chunk_size = chunk size of each dimension chunk
     // pq_tables = float* [[2^8 * [chunk_size]] * n_chunks]
-    _u8 *                 data = nullptr;
-    _u64                  chunk_size;
-    _u64                  n_chunks;
-    FixedChunkPQTable<T> *pq_table;
+    _u8 *                data = nullptr;
+    _u64                 chunk_size;
+    _u64                 n_chunks;
+    FixedChunkPQTable<T> pq_table;
 
     // distance comparator
     Distance<T> *dist_cmp;

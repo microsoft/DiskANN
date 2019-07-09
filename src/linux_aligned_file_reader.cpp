@@ -14,6 +14,7 @@ namespace {
 
   void execute_io(io_context_t ctx, int fd, std::vector<AlignedRead> &read_reqs,
                   uint64_t n_retries = 0) {
+#ifdef DEBUG
     for (auto &req : read_reqs) {
       assert(IS_ALIGNED(req.len, 512));
       // std::cout << "request:"<<req.offset<<":"<<req.len << std::endl;
@@ -21,6 +22,7 @@ namespace {
       assert(IS_ALIGNED(req.buf, 512));
       // assert(malloc_usable_size(req.buf) >= req.len);
     }
+#endif
 
     // break-up requests into chunks of size MAX_EVENTS each
     uint64_t n_iters = ROUND_UP(read_reqs.size(), MAX_EVENTS) / MAX_EVENTS;

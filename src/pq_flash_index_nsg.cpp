@@ -103,9 +103,6 @@ namespace NSG {
     delete[] coord_cache_buf;
     delete[] medoid_nhood.second;
 
-    if (pq_table != nullptr) {
-      delete pq_table;
-    }
     reader->close();
     delete reader;
 
@@ -119,7 +116,7 @@ namespace NSG {
               << nthreads << "\n";
 // omp parallel for to generate unique thread IDs
 #pragma omp parallel for
-    for (_s64 thread = 0; thread < nthreads; thread++) {
+    for (_s64 thread = 0; thread < (_s64) nthreads; thread++) {
 #pragma omp critical
       {
         this->reader->register_thread();
@@ -254,7 +251,7 @@ namespace NSG {
 
     delete cur_level;
     delete prev_level;
-
+#ifdef DEBUG
     // verify non-null
     for (auto &k_v : nhood_cache) {
       unsigned *nbrs = k_v.second.second;
@@ -265,6 +262,7 @@ namespace NSG {
       assert(_msize(nbrs) >= nnbrs * sizeof(unsigned));
 #endif
     }
+#endif
 
     std::cerr << "Consolidating nhood_cache: # cached nhoods = "
               << nhood_cache.size() << "\n";
@@ -307,20 +305,17 @@ namespace NSG {
                            const char *pq_tables_bin, const _u64 chunk_size,
                            const _u64 n_chunks, const _u64 data_dim,
                            const _u64 max_nthreads) {
-    pq_table = new FixedChunkPQTable<T>(n_chunks, chunk_size);
     std::cout << "Loading PQ Tables from " << pq_tables_bin << "\n";
-    pq_table->load_bin(pq_tables_bin);
-    unsigned npts_u32, nchunks_u32;
-    size_t   npts_u64, nchunks_u64;
+    pq_table.load_bin(pq_tables_bin, n_chunks, chunk_size);
+    size_t npts_u64, nchunks_u64;
     std::cout << "Loading PQ compressed data from " << data_bin << std::endl;
     _u32 *data_u32;
     NSG::load_bin<_u32>(data_bin, data_u32, npts_u64, nchunks_u64);
     data = new _u8[npts_u64 * nchunks_u64];
     NSG::convert_types<_u32, _u8>(data_u32, data, npts_u64, nchunks_u64);
     delete[] data_u32;
-    npts_u32 = npts_u64;
-    nchunks_u32 = nchunks_u64;
-    n_base = (_u64) npts_u32;
+
+    n_base = npts_u64;
     this->data_dim = data_dim;
     this->n_chunks = n_chunks;
     this->chunk_size = chunk_size;
@@ -376,8 +371,7 @@ namespace NSG {
     medoid_read[0].len = SECTOR_LEN;
     medoid_read[0].buf = medoid_buf;
     medoid_read[0].offset = NODE_SECTOR_NO(medoid) * SECTOR_LEN;
-    std::cout << "Medoid offset: " << NODE_SECTOR_NO(medoid) * SECTOR_LEN
-              << "\n";
+    std::cout << "Medoid offset: " << medoid_sector_no * SECTOR_LEN << "\n";
     reader->read(medoid_read, ctx);
 
     // return ctx
@@ -452,7 +446,7 @@ namespace NSG {
 #ifdef USE_ACCELERATED_PQ
     // query <-> PQ chunk centers distances
     float *pq_dists = query_scratch->aligned_pqtable_dist_scratch;
-    pq_table->populate_chunk_distances(query, pq_dists);
+    pq_table.populate_chunk_distances(query, pq_dists);
 
     // query <-> neighbor list
     float *dist_scratch = query_scratch->aligned_dist_scratch;
@@ -487,7 +481,7 @@ namespace NSG {
 #ifdef USE_ACCELERATED_PQ
       float dist = dist_scratch[tmp_l];
 #else
-      pq_table->convert(data + id * n_chunks, scratch);
+      pq_table.convert(data + id * n_chunks, scratch);
       float dist = dist_cmp->compare(scratch, query, aligned_dim);
 #endif
       // std::cout << "cmp: " << id << ", dist: " << dist << std::endl;
@@ -609,7 +603,7 @@ namespace NSG {
 #ifdef USE_ACCELERATED_PQ
               float dist = dist_scratch[m];
 #else
-              pq_table->convert(data + id * n_chunks, scratch);
+              pq_table.convert(data + id * n_chunks, scratch);
               float dist = dist_cmp->compare(scratch, query, aligned_dim);
 #endif
               // std::cout << "cmp: " << id << ", dist: " << dist << std::endl;
@@ -656,7 +650,7 @@ namespace NSG {
 #ifdef USE_ACCELERATED_PQ
               float dist = dist_scratch[m];
 #else
-              pq_table->convert(data + id * n_chunks, scratch);
+              pq_table.convert(data + id * n_chunks, scratch);
               float dist = dist_cmp->compare(scratch, query, aligned_dim);
 #endif
               // std::cout << "cmp: " << id << ", dist: " << dist << std::endl;

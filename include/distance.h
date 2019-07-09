@@ -40,8 +40,10 @@ namespace NSG {
    public:
     float compare(const int8_t *a, const int8_t *b, unsigned size) const {
       float result = 0.0;
-      // #pragma omp simd
-      for (_s32 i = 0; i < size; i++) {
+#ifndef __NSG_WINDOWS__
+#pragma omp simd
+#endif
+      for (_s32 i = 0; i < (_s32) size; i++) {
         float diff = ((float) a[i] - (float) b[i]);
         // std::cout << "a: " << (float) a[i] << ", b: " << (float)b[i] << ",
         // diff: " << diff << "\n";
@@ -57,7 +59,10 @@ namespace NSG {
    public:
     float compare(const uint8_t *a, const uint8_t *b, unsigned size) const {
       float result = 0.0;
-      for (_s32 i = 0; i < size; i++) {
+#ifndef __NSG_WINDOWS__
+#pragma omp simd
+#endif
+      for (_s32 i = 0; i < (_s32) size; i++) {
         float diff = ((float) a[i] - (float) b[i]);
         // std::cout << "a: " << (float) a[i] << ", b: " << (float)b[i] << ",
         // diff: " << diff << "\n";
@@ -110,8 +115,10 @@ namespace NSG {
       // horizontal add sum
       result = _mm256_reduce_add_ps(sum);
 #else
+#ifndef __NSG_WINDOWS__
 #pragma omp simd reduction(+ : result) aligned(a, b : 32)
-      for (_s32 i = 0; i < size; i++) {
+#endif
+      for (_s32 i = 0; i < (_s32) size; i++) {
         result += (a[i] - b[i]) * (a[i] - b[i]);
       }
 #endif

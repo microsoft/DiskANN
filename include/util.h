@@ -79,7 +79,7 @@ namespace NSG {
 #endif
   }
 
-  static void GenRandom(std::mt19937 &rng, unsigned *addr, unsigned size,
+  inline void GenRandom(std::mt19937 &rng, unsigned *addr, unsigned size,
                         unsigned N) {
     for (unsigned i = 0; i < size; ++i) {
       addr[i] = rng() % (N - size);
@@ -125,7 +125,7 @@ namespace NSG {
   void convert_types(const InType *srcmat, OutType *destmat, size_t npts,
                      size_t dim) {
 #pragma omp parallel for schedule(static, 65536)
-    for (int64_t i = 0; i < npts; i++) {
+    for (int64_t i = 0; i < (_s64) npts; i++) {
       for (uint64_t j = 0; j < dim; j++) {
         destmat[i * dim + j] = srcmat[i * dim + j];
       }
