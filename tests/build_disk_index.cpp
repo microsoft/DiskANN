@@ -57,7 +57,9 @@ bool testBuildIndex(const char* dataFilePath, const char* indexFilePath,
 
   gen_random_slice<T>(dataFilePath, p_val, train_data, train_size);
   std::cout<<"Generated sample of "<<train_size<< "points" <<std::endl;
+
   NSG::save_bin<float> (train_file_path.c_str(), train_data, train_size, dim);
+  delete[] train_data;
   //  unsigned    nn_graph_deg = (unsigned) atoi(argv[3]);
 
   generate_pq_pivots<T>(train_file_path, 256, num_pq_chunks, 15,

@@ -72,43 +72,30 @@ namespace NSG {
     size_t points_num, dim;
 
     NSG::load_bin<T>(dataFilePath, data_load, points_num, dim);
-    data_load = NSG::data_align(data_load, points_num, dim);
-    std::cout << "Data loaded and aligned" << std::endl;
 
-    uint32_t* params_array = new uint32_t[5];
-    params_array[0] = (uint32_t) L;
-    params_array[1] = (uint32_t) R;
-    params_array[2] = (uint32_t) C;
-    params_array[3] = (uint32_t) dim;
-    params_array[4] = (uint32_t) num_pq_chunks;
-    NSG::save_bin<uint32_t>(index_params_path.c_str(), params_array, 5, 1);
-    std::cout << "Saving params to " << index_params_path << "\n";
 
     auto s = std::chrono::high_resolution_clock::now();
 
-    if (points_num > 2 * TRAINING_SET_SIZE) {
-      gen_random_slice(data_load, points_num, dim, train_file_path.c_str(),
-                       (size_t) TRAINING_SET_SIZE);
-    } else {
-      float* float_data = new float[points_num * dim];
-      for (size_t i = 0; i < points_num; i++) {
-        for (size_t j = 0; j < dim; j++) {
-          float_data[i * dim + j] = data_load[i * dim + j];
-        }
-      }
 
-      NSG::save_bin<float>(train_file_path.c_str(), float_data, points_num,
-                           dim);
-      delete[] float_data;
-    }
+  float p_val = ((float) TRAINING_SET_SIZE)/ ((float)points_num);
+  size_t train_size;
+  float* train_data;
 
+  gen_random_slice<T>(dataFilePath, p_val, train_data, train_size);
+  std::cout<<"Generated sample of "<<train_size<< "points" <<std::endl;
+  NSG::save_bin<float> (train_file_path.c_str(), train_data, train_size, dim);
+  delete[] train_data;
     //  unsigned    nn_graph_deg = (unsigned) atoi(argv[3]);
 
     generate_pq_pivots<T>(train_file_path, 256, num_pq_chunks, 15,
                           pq_pivots_path);
     generate_pq_data_from_pivots<T>(data_load, points_num, dim, 256,
                                     num_pq_chunks, pq_pivots_path,
-                                    pq_compressed_vectors_path);
+				    pq_compressed_vectors_path);
+
+// Data aligned to multiple of 8 for optimized NSG code
+    data_load = NSG::data_align(data_load, points_num, dim);
+    std::cout << "Data loaded and aligned" << std::endl;
 
     NSG::Parameters paras;
     paras.Set<unsigned>("L", L);
@@ -129,6 +116,16 @@ namespace NSG {
     _pNsgIndex->Save(randnsg_path.c_str());
 
     _pNsgIndex->save_disk_opt_graph(diskopt_path.c_str());
+
+
+    uint32_t* params_array = new uint32_t[5];
+    params_array[0] = (uint32_t) L;
+    params_array[1] = (uint32_t) R;
+    params_array[2] = (uint32_t) C;
+    params_array[3] = (uint32_t) dim;
+    params_array[4] = (uint32_t) num_pq_chunks;
+    NSG::save_bin<uint32_t>(index_params_path.c_str(), params_array, 5, 1);
+    std::cout << "Saving params to " << index_params_path << "\n";
 
     return 0;
   }
