@@ -51,21 +51,13 @@ bool testBuildIndex(const char* dataFilePath, const char* indexFilePath,
 
   auto s = std::chrono::high_resolution_clock::now();
 
-  if (points_num > 2 * TRAINING_SET_SIZE) {
-    gen_random_slice(data_load, points_num, dim, train_file_path.c_str(),
-                     (size_t) TRAINING_SET_SIZE);
-  } else {
-    float* float_data = new float[points_num * dim];
-    for (size_t i = 0; i < points_num; i++) {
-      for (size_t j = 0; j < dim; j++) {
-        float_data[i * dim + j] = data_load[i * dim + j];
-      }
-    }
+  float p_val = ((float) TRAINING_SET_SIZE)/ ((float)points_num);
+  size_t train_size;
+  float* train_data;
 
-    NSG::save_bin<float>(train_file_path.c_str(), float_data, points_num, dim);
-    delete[] float_data;
-  }
-
+  gen_random_slice<T>(dataFilePath, p_val, train_data, train_size);
+  std::cout<<"Generated sample of "<<train_size<< "points" <<std::endl;
+  NSG::save_bin<float> (train_file_path.c_str(), train_data, train_size, dim);
   //  unsigned    nn_graph_deg = (unsigned) atoi(argv[3]);
 
   generate_pq_pivots<T>(train_file_path, 256, num_pq_chunks, 15,

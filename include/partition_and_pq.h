@@ -10,6 +10,10 @@
 #include "tsl/robin_set.h"
 #include "util.h"
 
+
+template<typename T>
+void gen_random_slice(const char* inputfile, float p_val, float* &sampled_data, size_t &slice_size);
+
 template<typename T>
 void gen_random_slice(T *base_data, size_t points_num, size_t dim,
                       const char *outputfile, size_t slice_size);

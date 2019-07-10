@@ -29,49 +29,60 @@
 #include <xmmintrin.h>
 #endif
 
+#define BLOCK_SIZE 10000000
+
+
 template<typename T>
-void gen_random_slice(T *base_data, size_t points_num, size_t dim,
-                      const char *outputfile, size_t slice_size) {
-  std::cout << "Generating random sample of base data to use as training.."
-            << std::flush;
+void gen_random_slice(const char* inputfile, float p_val, float* &sampled_data, size_t &slice_size) {
 
-  if (slice_size > points_num) {
-    std::cout << "Error generating randomr slice. Slice size is greater than "
-                 "number of points"
-              << std::endl;
-    return;
-  }
+  size_t npts, ndims;
+  uint32_t npts32, ndims32;
+  std::vector<std::vector<float>> sampled_vectors;
+  T* cur_vector_T;
 
-  float *sampled_data = new float[slice_size * dim];
-  size_t counter = 0;
+// amount to read in one shot
+  _u64 read_blk_size = 64 * 1024 * 1024;
+  // create cached reader + writer
+  cached_ifstream base_reader(inputfile, read_blk_size);
 
-  //  std::ofstream out(outputfile, std::ios::binary | std::ios::out);
+  // metadata: npts, ndims
+  base_reader.read((char *) &npts32, sizeof(unsigned));
+  base_reader.read((char *) &ndims32, sizeof(unsigned));
+  npts = npts32;
+  ndims = ndims32;
+
+  cur_vector_T = new T[ndims];
+  p_val = p_val < 1? p_val : 1;
 
   std::random_device
                rd;  // Will be used to obtain a seed for the random number engine
   size_t       x = rd();
-  std::mt19937 generator(
-      x);  // Standard mersenne_twister_engine seeded with rd()
-  std::uniform_int_distribution<size_t> distribution(0, points_num - 1);
+  std::mt19937 generator(x);  // Standard mersenne_twister_engine seeded with rd()
+  std::uniform_real_distribution<float> distribution(0, 1);
 
-  size_t            tmp_pivot;
-  std::vector<bool> flag(points_num, 0);
 
-  for (size_t i = 0; i < slice_size; i++) {
-    tmp_pivot = distribution(generator);
-    while (flag[tmp_pivot] == true) {
-      tmp_pivot = distribution(generator);
-    }
-    flag[tmp_pivot] = true;
-    for (size_t iterdim = 0; iterdim < dim; iterdim++)
-      sampled_data[counter * dim + iterdim] =
-          base_data[tmp_pivot * dim + iterdim];
-    counter++;
+  for (size_t i =0; i < npts; i++) {
+base_reader.read((char *) cur_vector_T, ndims*sizeof(T));
+	float rnd_val = distribution(generator);
+	if (rnd_val < p_val) {
+			std::vector<float> cur_vector_float;
+		for (size_t d=0; d < ndims; d++)
+			cur_vector_float.push_back(cur_vector_T[d]);
+		sampled_vectors.push_back(cur_vector_float);
+	}
+
   }
+	slice_size = sampled_vectors.size();
+	sampled_data = new float[slice_size*ndims];
+	for (size_t i=0; i < slice_size; i++) {
+		for (size_t j = 0; j< ndims; j++) {
+			sampled_data[i*ndims + j] = sampled_vectors[i][j];
+		}
+	}
 
-  NSG::save_bin<float>(outputfile, sampled_data, slice_size, dim);
-  std::cout << "done." << std::endl;
+	delete[] cur_vector_T;
 }
+
 
 template<typename T>
 int generate_pq_pivots(std::string train_file_path, size_t num_centers,
@@ -270,14 +281,6 @@ int partition(const char *base_file, const char *train_file, size_t num_centers,
   train_data_float = new float[num_train* train_dim];
   NSG::convert_types<T, float> (train_data, train_data_float, num_train, train_dim);
 
-  NSG::load_bin<T>(base_file, base_data, num_points, dim);
-  base_data_float = new float[num_points * dim];
-  NSG::convert_types<T, float> (base_data, base_data_float, num_points, dim);
-
-  if (train_dim != dim) {
-    std::cout << "Error: training and base dimensions dont match" << std::endl;
-    return -1;
-  }
 
   std::string cur_file = std::string(prefix_dir);
   std::string output_file;
@@ -290,27 +293,27 @@ int partition(const char *base_file, const char *train_file, size_t num_centers,
   output_file = cur_file + "_pivots_float.bin";
 
   if (!file_exists(output_file)) {
-    pivot_data = new float[num_centers * dim];
+    pivot_data = new float[num_centers * train_dim];
 
     // Process Global k-means for kmeans_partitioning Step
     std::cout << "Processing global k-means (kmeans_partitioning Step)"
               << std::endl;
-    kmeans::kmeanspp_selecting_pivots(train_data_float, num_train, dim, pivot_data,
+    kmeans::kmeanspp_selecting_pivots(train_data_float, num_train, train_dim, pivot_data,
                                       num_centers);
 
     float residual = 0;
-    residual = kmeans::run_lloyds(train_data_float, num_train, dim, pivot_data,
+    residual = kmeans::run_lloyds(train_data_float, num_train, train_dim, pivot_data,
                                   num_centers, max_k_means_reps, NULL, NULL);
 
     std::cout << "Saving global k-center pivots" << std::endl;
     NSG::save_bin<float>(output_file.c_str(), pivot_data, (size_t) num_centers,
-                         dim);
+                         train_dim);
   } else {
     size_t file_num_centers;
     size_t file_dim;
     NSG::load_bin<float>(output_file.c_str(), pivot_data, file_num_centers,
                          file_dim);
-    if (file_num_centers != num_centers || file_dim != dim) {
+    if (file_num_centers != num_centers || file_dim != train_dim) {
       std::cout << "ERROR: file number of kmeans_partitioning centers does "
                    "not match input argument (or) file "
                    "dimension does not match real dimension"
@@ -318,91 +321,105 @@ int partition(const char *base_file, const char *train_file, size_t num_centers,
       return -1;
     }
   }
-	delete[] train_data;
-	delete[] train_data_float;
 
-  output_file = cur_file + "_nn-" + std::to_string(k_base) + "_uint32.bin";
+  delete[] train_data;
+  delete[] train_data_float;
 
-  if (!file_exists(output_file)) {
-    std::cout << "Closest centers file does not exist. Computing..."
-              << std::flush;
-    base_closest_centers = new uint32_t[num_points * k_base];
-    math_utils::compute_closest_centers(base_data_float, num_points, dim, pivot_data,
+
+
+// now pivots are ready. need to stream base points and assign them to closest clusters.
+  
+  _u64 read_blk_size = 64 * 1024 * 1024;
+  _u64 write_blk_size = 64 * 1024 * 1024;
+  // create cached reader + writer
+  cached_ifstream base_reader(base_file, read_blk_size);
+  _u32 npts32;
+  _u32 basedim32;
+  base_reader.read((char*) &npts32, sizeof(uint32_t));
+  base_reader.read((char*) &basedim32, sizeof(uint32_t));
+  num_points = npts32;
+  dim = basedim32;
+  if (basedim32 != train_dim) {
+	  std::cout<<"Error. dimensions dont match for train set and base set" <<std::endl;
+	  return -1;
+  }
+
+  
+  size_t * shard_counts = new size_t[num_centers];
+  std::vector<std::ofstream> shard_data_writer(num_centers);
+  std::vector<std::ofstream> shard_idmap_writer(num_centers);
+  _u32 dummy_size = 0;
+  _u32 const_one = 1;
+
+  for (size_t i =0;  i < num_centers; i++) {
+	  std::string data_filename = cur_file + "_subshard-" + std::to_string(i) + ".bin";
+     std::string idmap_filename = cur_file + "_subshard-" + std::to_string(i) + "_ids_uint32.bin";
+     shard_data_writer[i] = std::ofstream(data_filename.c_str(), std::ios::binary);
+     shard_idmap_writer[i] = std::ofstream(idmap_filename.c_str(), std::ios::binary);
+     shard_data_writer[i].write((char*) &dummy_size, sizeof(uint32_t));
+     shard_data_writer[i].write((char*) &basedim32, sizeof(uint32_t));
+     shard_idmap_writer[i].write((char*) &dummy_size, sizeof(uint32_t));
+     shard_idmap_writer[i].write((char*) &const_one, sizeof(uint32_t));
+     shard_counts[i]=0;
+  }
+
+  _u32* block_closest_centers = new _u32 [BLOCK_SIZE * k_base];
+  T* block_data_T = new T [BLOCK_SIZE * dim];
+  float* block_data_float = new float [BLOCK_SIZE * dim];
+
+  size_t num_blocks = DIV_ROUND_UP(num_points, BLOCK_SIZE);
+
+  for (size_t block = 0; block < num_blocks; block++) {
+
+	  size_t start_id = block*BLOCK_SIZE;
+	  size_t end_id = (std::min) ((block+1)*BLOCK_SIZE, num_points);
+	  size_t cur_blk_size = end_id - start_id;
+
+	  base_reader.read((char *) block_data_T, sizeof(T) * (cur_blk_size * dim));
+	  NSG::convert_types<T, float> (block_data_T, block_data_float, cur_blk_size, dim);
+
+	    math_utils::compute_closest_centers(block_data_float, cur_blk_size, dim, pivot_data,
                                         num_centers, k_base,
-                                        base_closest_centers);
-    std::cout << "done. Now saving file..." << std::flush;
-    NSG::save_bin<uint32_t>(output_file.c_str(), base_closest_centers,
-                            num_points, k_base);
-    std::cout << "done." << std::endl;
-  } else {
-    size_t file_num;
-    size_t file_d;
-    NSG::load_bin<uint32_t>(output_file.c_str(), base_closest_centers, file_num,
-                            file_d);
-    if (file_num != num_points || file_d != k_base) {
-      std::cout << "ERROR: kmeans_partitioning nearest neighbor file does "
-                   "not match in parameters. "
-                << std::endl;
-      return -1;
-    }
-    std::cout << "Loaded kmeans_partitioning nearest neighbors from file."
-              << std::endl;
+                                        block_closest_centers);
+
+	   for (size_t p = 0; p < cur_blk_size; p++) {
+		   for (size_t p1 = 0; p1 < k_base; p1++) {
+			   size_t shard_id = block_closest_centers[p*k_base + p1];
+			   _u32 original_point_map_id = start_id + p;
+			   shard_data_writer[shard_id].write((char *) (block_data_T + p*dim), sizeof(T)*dim);
+			   shard_idmap_writer[shard_id].write((char *) &original_point_map_id, sizeof(uint32_t));
+			   shard_counts[shard_id]++;
+		   }
+		
+	   }
+  }	   
+
+  size_t total_count = 0;
+	    
+  for (size_t i =0;  i < num_centers; i++) {
+     _u32 cur_shard_count = shard_counts[i];
+     total_count += cur_shard_count;
+     shard_data_writer[i].seekp(0);
+     shard_data_writer[i].write((char*) &cur_shard_count, sizeof(uint32_t));
   }
 
-  bool *inverted_index = new bool[num_points * num_centers];
-
-#pragma omp parallel for schedule(static, 8192)
-  for (int64_t i = 0; i < num_points; i++)
-    for (size_t j = 0; j < num_centers; j++)
-      inverted_index[i * num_centers + j] = false;
-#pragma omp parallel for schedule(static, 8192)
-  for (int64_t i = 0; i < num_points; i++)
-    for (size_t j = 0; j < k_base; j++)
-      inverted_index[i * num_centers + base_closest_centers[i * k_base + j]] =
-          true;
-
-  size_t    total_count = 0;
-  T *       cur_base = new T[num_points * dim];
-  uint32_t *cur_ids = new uint32_t[num_points];
-  //#pragma omp parallel for schedule(static, 1)
-  for (size_t i = 0; i < num_centers; i++) {
-    size_t cur_count = 0;
-    for (size_t j = 0; j < num_points; j++) {
-      if (inverted_index[j * num_centers + i] == true) {
-        std::memcpy(cur_base + cur_count * dim, base_data + j * dim,
-                    dim * sizeof(T));
-        cur_ids[cur_count] = j;
-        cur_count++;
-      }
-    }
-    total_count += cur_count;
-
-    output_file = cur_file + "_subshard-" + std::to_string(i) + ".bin";
-    NSG::save_bin<T>(output_file.c_str(), cur_base, cur_count, dim);
-    output_file =
-        cur_file + "_subshard-" + std::to_string(i) + "_ids_uint32.bin";
-    NSG::save_bin<uint32_t>(output_file.c_str(), cur_ids, cur_count, 1);
-  }
-  std::cout << "saved all files totalling " << total_count << " points out of "
-            << num_points << " points" << std::endl;
-  delete[] cur_base;
-  delete[] cur_ids;
-  delete[] base_closest_centers;
-  delete[] base_data;
-  delete[] base_data_float;
-  delete[] inverted_index;
+  std::cout<<"Partitioned " << num_points <<" with replication factor "<< k_base <<" to get " << total_count<<" points across "<< num_centers<<" shards " <<std::endl;
+delete[] pivot_data;
+delete[] shard_counts;
+delete[] block_closest_centers;
+delete[] block_data_T;
+delete[] block_data_float;
+return 0;
 }
 
 
-template void gen_random_slice<int8_t>(int8_t *base_data, size_t points_num,
-                                       size_t dim, const char *outputfile,
-                                       size_t slice_size);
-template void gen_random_slice<float>(float *base_data, size_t points_num,
-                                      size_t dim, const char *outputfile,
-                                      size_t slice_size);
-template void gen_random_slice<uint8_t>(uint8_t *base_data, size_t points_num,
-                                        size_t dim, const char *outputfile,
-                                        size_t slice_size);
+
+
+template void gen_random_slice<float>(const char* inputfile, float p_val, float* &sampled_data, size_t &slice_size);
+template void gen_random_slice<int8_t>(const char* inputfile, float p_val, float* &sampled_data, size_t &slice_size);
+template void gen_random_slice<uint8_t>(const char* inputfile, float p_val, float* &sampled_data, size_t &slice_size);
+
+
 
 template int partition<int8_t> (const char *base_file, const char *train_file,
 size_t num_centers,
