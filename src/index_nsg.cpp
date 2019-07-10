@@ -234,7 +234,7 @@ namespace NSG {
 
         // Move the data to the correct position
         memcpy((void *) (_data + _dim * (size_t) new_location[old]),
-               (void *) (_data + _dim * (size_t) old), _dim * sizeof(float));
+               (void *) (_data + _dim * (size_t) old), _dim * sizeof(T));
       }
     }
     std::cout << "done." << std::endl;
@@ -511,6 +511,10 @@ namespace NSG {
         std::cout << "Enabling tags." << std::endl;
       _enable_tags = true;
       std::ifstream tag_file(std::string(filename) + std::string(".tags"));
+      if (!tag_file.is_open()) {
+        std::cerr << "Tag file not found." << std::endl;
+        exit(-1);
+      }
       unsigned      id = 0;
       TagT          tag;
       while (tag_file >> tag) {
@@ -759,7 +763,7 @@ namespace NSG {
     _location_to_tag[location] = tag;
 
     auto offset_data = _data + (size_t) _dim * location;
-    memcpy((void *) offset_data, point, sizeof(float) * _dim);
+    memcpy((void *) offset_data, point, sizeof(T) * _dim);
 
     pool.clear();
     tmp.clear();
