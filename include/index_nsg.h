@@ -146,8 +146,8 @@ namespace NSG {
     bool _enable_tags;
     bool _consolidated_order;
 
-    std::unordered_map<TagT, unsigned> _tag_to_point;
-    std::unordered_map<unsigned, TagT> _point_to_tag;
+    std::unordered_map<TagT, unsigned> _tag_to_location;
+    std::unordered_map<unsigned, TagT> _location_to_tag;
 
     tsl::robin_set<unsigned> _delete_set;
     tsl::robin_set<unsigned> _empty_slots;
