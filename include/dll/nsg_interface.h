@@ -4,7 +4,7 @@
 
 namespace NSG {
 
-  template<typename T>
+  template<typename T, typename TagT = int>
   class IndexNSG;
 
   template<typename T>

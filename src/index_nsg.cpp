@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <ctime>
 #include <iostream>
+#include <numeric>
 #include <iterator>
 #include <map>
 #include <set>

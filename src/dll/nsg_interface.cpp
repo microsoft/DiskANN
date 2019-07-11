@@ -106,14 +106,14 @@ namespace NSG {
     paras.Set<std::string>("save_path", randnsg_path);
 
     _pNsgIndex = std::unique_ptr<NSG::IndexNSG<T>>(
-        new NSG::IndexNSG<T>(dim, points_num, _compareMetric, nullptr));
-    _pNsgIndex->BuildRandomHierarchical(data_load, paras);
+        new NSG::IndexNSG<T>(dim, points_num, _compareMetric));
+    _pNsgIndex->build(data_load, paras);
     auto                          e = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> diff = e - s;
 
     std::cout << "Indexing time: " << diff.count() << "\n";
 
-    _pNsgIndex->Save(randnsg_path.c_str());
+    _pNsgIndex->save(randnsg_path.c_str());
 
     _pNsgIndex->save_disk_opt_graph(diskopt_path.c_str());
 

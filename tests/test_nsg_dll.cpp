@@ -4,6 +4,17 @@
 #include "dll/IANNIndex.h"
 #include "util.h"
 
+void write_Tvecs_unsigned(std::string fname, _u64* input, _u64 npts,
+                          _u64 ndims) {
+  unsigned* out = new unsigned[npts * ndims];
+  for (_u64 i = 0; i < npts * ndims; i++) {
+    out[i] = (unsigned) input[i];
+  }
+
+  NSG::save_Tvecs<unsigned>(fname.c_str(), out, npts, ndims);
+  delete[] out;
+}
+
 template<typename T>
 int aux_main(int argc, char** argv) {
   // argv[1]: data file

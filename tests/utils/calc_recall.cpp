@@ -51,8 +51,8 @@ int main(int argc, char** argv) {
   size_t    dim_or;
   //  load_data(argv[1], gold_std, points_num, dim_gs);
   //  load_data(argv[2], our_results, points_num, dim_or);
-  NSG::load_bin<unsigned>(argv[1], gold_std, points_num_gs, dim_gs);
-  NSG::load_bin<unsigned>(argv[2], our_results, points_num_or, dim_or);
+  NSG::load_Tvecs<unsigned>(argv[1], gold_std, points_num_gs, dim_gs);
+  NSG::load_Tvecs<unsigned>(argv[2], our_results, points_num_or, dim_or);
 
   if (points_num_gs != points_num_or) {
     std::cout

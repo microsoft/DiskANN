@@ -21,11 +21,10 @@
   <ItemGroup>
     <ClCompile Include="..\..\src\dll\dllmain.cpp" />
     <ClCompile Include="..\..\src\dll\nsg_interface.cpp" />
-    <ClCompile Include="..\..\src\index.cpp" />
     <ClCompile Include="..\..\src\index_nsg.cpp" />
     <ClCompile Include="..\..\src\math_utils.cpp" />
-    <ClCompile Include="..\..\src\MemoryMapper.cpp" />
-    <ClCompile Include="..\..\src\partitionAndPQ.cpp" />
+    <ClCompile Include="..\..\src\memory_mapper.cpp" />
+    <ClCompile Include="..\..\src\partition_and_pq.cpp" />
     <ClCompile Include="..\..\src\pq_flash_index_nsg.cpp" />
     <ClCompile Include="..\..\src\windows_aligned_file_reader.cpp" />
   </ItemGroup>
@@ -108,7 +107,7 @@
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <SDLCheck>false</SDLCheck>
-      <PreprocessorDefinitions>__NSG_WINDOWS__;USE_AVX2;USE_ACCELERATED_PQ;NDEBUG;NSGDLL_EXPORTS;_WINDOWS;_USRDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>__NSG_WINDOWS__;USE_AVX2;USE_ACCELERATED_PQ;NDEBUG;NSGDLL_EXPORTS;_WINDOWS;_USRDLL;NOMINMAX;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <AdditionalIncludeDirectories>..\..\dependencies\windows\mkl\include;..\..\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PrecompiledHeaderFile />
