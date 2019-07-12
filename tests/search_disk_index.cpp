@@ -73,6 +73,9 @@ bool load_index(const char* indexFilePath, const char* queryParameters,
   _u64 m_dimension = (_u64) params[3];
   _u64 n_chunks = (_u64) params[4];
   _u64 chunk_size = (_u64)(m_dimension / n_chunks);
+  // corrected n_chnks in case it is dimension is not divisible by original
+  // num_chunks
+  n_chunks = DIV_ROUND_UP(m_dimension, chunk_size);
 
   std::string nsg_disk_opt = index_prefix_path + "_diskopt.rnsg";
 

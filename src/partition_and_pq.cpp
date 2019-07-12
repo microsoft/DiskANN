@@ -31,7 +31,8 @@
 
 #define BLOCK_SIZE 10000000
 
-//streams data from the file, and samples each vector with probability p_val and returns a matrix of size slice_size* ndims.
+// streams data from the file, and samples each vector with probability p_val
+// and returns a matrix of size slice_size* ndims.
 // the slice_size and ndims are set inside the function.
 
 template<typename T>
@@ -88,7 +89,7 @@ int generate_pq_pivots(const float *train_data, size_t num_train, size_t dim,
                        size_t num_centers, size_t num_pq_chunks,
                        size_t max_k_means_reps, std::string pq_pivots_path) {
   //  size_t num_train, dim;
-  
+
   for (int t = 0; t < 104; t++) {
     std::cout << train_data[t] << " ";
   }
@@ -442,7 +443,8 @@ template int partition<float>(const char *base_file, const char *train_file,
                               size_t num_centers, size_t max_k_means_reps,
                               const char *prefix_dir, size_t k_base);
 /*
-template int generate_pq_pivots<int8_t>(const int8_t* train_data_T, size_t num_train, size_t dim, 
+template int generate_pq_pivots<int8_t>(const int8_t* train_data_T, size_t
+num_train, size_t dim,
                                         size_t      num_centers,
                                         size_t      num_pq_chunks,
                                         size_t      max_k_means_reps,

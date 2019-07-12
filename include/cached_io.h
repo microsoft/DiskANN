@@ -132,7 +132,7 @@ class cached_ofstream {
   }
 
   void reset() {
-	  writer.seekp(0);
+    writer.seekp(0);
   }
 
  private:

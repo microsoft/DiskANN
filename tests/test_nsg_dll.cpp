@@ -76,7 +76,7 @@ int aux_main(int argc, char** argv) {
     //    NSG::aligned_load_Tvecs<T>(argv[3], query, nqueries, ndims);
     ndims = ROUND_UP(ndims, 8);
 
-	std::cout << "Loading ground truth..." << std::flush;
+    std::cout << "Loading ground truth..." << std::flush;
     // load ground truth
     _u32* ground_truth = nullptr;
     _u64  ngt, kgt;
@@ -95,18 +95,18 @@ int aux_main(int argc, char** argv) {
     float* query_dists = new float[k * nqueries];
 
     if (kgt < k) {
-      std::cout << "number of ground truth < k"
-                << std::endl;
+      std::cout << "number of ground truth < k" << std::endl;
       return -1;
     }
     std::cout << "done." << std::endl;
     // execute queries
     intf->SearchIndex((const char*) query, nqueries, k, query_dists, query_res);
-    float avg_recall = calc_recall(nqueries, ground_truth, kgt, query_res, k, k);
+    float avg_recall =
+        calc_recall(nqueries, ground_truth, kgt, query_res, k, k);
     std::cout << "Recall@" << k << " when searching with L = " << L << " is "
-              << avg_recall<<std::endl;
+              << avg_recall << std::endl;
     //  save results into ivecs
-    //write_Tvecs_unsigned(argv[4], query_res, nqueries, k);
+    // write_Tvecs_unsigned(argv[4], query_res, nqueries, k);
 
     NSG::aligned_free(query);
     delete[] ground_truth;

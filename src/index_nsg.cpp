@@ -7,9 +7,9 @@
 #include <cstdio>
 #include <ctime>
 #include <iostream>
-#include <numeric>
 #include <iterator>
 #include <map>
+#include <numeric>
 #include <set>
 #include <sstream>
 #include <string>
@@ -1729,8 +1729,8 @@ namespace NSG {
 
       memset(sector_buf, 0, SECTOR_LEN);
 
-      for (_u64 sector_node_id = 0; sector_node_id < nnodes_per_sector;
-           sector_node_id++) {
+      for (_u64 sector_node_id = 0; sector_node_id < nnodes_per_sector && cur_node_id < npts_u64;
+           sector_node_id++ ) {
         // set cur node's nnbrs
         nnbrs = _final_graph[cur_node_id].size();
 

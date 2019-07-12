@@ -71,14 +71,16 @@ namespace NSG {
 
     size_t points_num, dim;
     NSG::load_bin<T>(dataFilePath, data_load, points_num, dim);
-    // initialize aligned_dim to dim for base and training set. will get reset in data_align.
-    size_t aligned_dim = dim; 
-	size_t train_dim;
+    // initialize aligned_dim to dim for base and training set. will get reset
+    // in data_align.
+    size_t aligned_dim = dim;
+    size_t train_dim;
 
-	data_load = NSG::data_align(data_load, points_num, aligned_dim);
-    std::cout << "Data loaded and aligned to dimension " << aligned_dim <<  std::endl;
-    
-	auto s = std::chrono::high_resolution_clock::now();
+    data_load = NSG::data_align(data_load, points_num, aligned_dim);
+    std::cout << "Data loaded and aligned to dimension " << aligned_dim
+              << std::endl;
+
+    auto s = std::chrono::high_resolution_clock::now();
 
     float  p_val = ((float) TRAINING_SET_SIZE) / ((float) points_num);
     size_t train_size;
@@ -88,16 +90,16 @@ namespace NSG {
 
     size_t aligned_train_dim = train_dim;
     train_data = NSG::data_align(train_data, train_size, aligned_train_dim);
-    std::cout << "Training loaded of size " << train_size << " in dim "<< aligned_train_dim << std::endl;
-    
+    std::cout << "Training loaded of size " << train_size << " in dim "
+              << aligned_train_dim << std::endl;
 
     //  unsigned    nn_graph_deg = (unsigned) atoi(argv[3]);
 
-    generate_pq_pivots(train_data, train_size, aligned_train_dim, 256, num_pq_chunks, 5,
-                          pq_pivots_path);
+    generate_pq_pivots(train_data, train_size, aligned_train_dim, 256,
+                       num_pq_chunks, 15, pq_pivots_path);
     std::cout << "here" << std::endl;
     std::cout << "here" << std::endl;
-	generate_pq_data_from_pivots<T>(data_load, points_num, aligned_dim, 256,
+    generate_pq_data_from_pivots<T>(data_load, points_num, aligned_dim, 256,
                                     num_pq_chunks, pq_pivots_path,
                                     pq_compressed_vectors_path);
 
@@ -114,7 +116,7 @@ namespace NSG {
     _pNsgIndex = std::unique_ptr<NSG::IndexNSG<T>>(
         new NSG::IndexNSG<T>(aligned_dim, points_num, _compareMetric));
 
-	  if (file_exists(randnsg_path.c_str())) {
+    if (file_exists(randnsg_path.c_str())) {
       _pNsgIndex->set_data(data_load);
       _pNsgIndex->load(randnsg_path.c_str());
     } else {
@@ -122,14 +124,13 @@ namespace NSG {
       _pNsgIndex->save(randnsg_path.c_str());
     }
 
-	
-//	_pNsgIndex->build(data_load, paras);
+    //	_pNsgIndex->build(data_load, paras);
     auto                          e = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> diff = e - s;
 
     std::cout << "Indexing time: " << diff.count() << "\n";
 
-//    _pNsgIndex->save(randnsg_path.c_str());
+    //    _pNsgIndex->save(randnsg_path.c_str());
 
     _pNsgIndex->save_disk_opt_graph(diskopt_path.c_str());
 
