@@ -70,32 +70,38 @@ namespace NSG {
     T* data_load = NULL;
 
     size_t points_num, dim;
-
     NSG::load_bin<T>(dataFilePath, data_load, points_num, dim);
+    // initialize aligned_dim to dim for base and training set. will get reset in data_align.
+    size_t aligned_dim = dim; 
+	size_t train_dim;
 
+	data_load = NSG::data_align(data_load, points_num, aligned_dim);
+    std::cout << "Data loaded and aligned to dimension " << aligned_dim <<  std::endl;
+    
+	auto s = std::chrono::high_resolution_clock::now();
 
-    auto s = std::chrono::high_resolution_clock::now();
+    float  p_val = ((float) TRAINING_SET_SIZE) / ((float) points_num);
+    size_t train_size;
+    float* train_data;
 
+    gen_random_slice<T>(dataFilePath, p_val, train_data, train_size, train_dim);
 
-  float p_val = ((float) TRAINING_SET_SIZE)/ ((float)points_num);
-  size_t train_size;
-  float* train_data;
+    size_t aligned_train_dim = train_dim;
+    train_data = NSG::data_align(train_data, train_size, aligned_train_dim);
+    std::cout << "Training loaded of size " << train_size << " in dim "<< aligned_train_dim << std::endl;
+    
 
-  gen_random_slice<T>(dataFilePath, p_val, train_data, train_size);
-  std::cout<<"Generated sample of "<<train_size<< "points" <<std::endl;
-  NSG::save_bin<float> (train_file_path.c_str(), train_data, train_size, dim);
-  delete[] train_data;
     //  unsigned    nn_graph_deg = (unsigned) atoi(argv[3]);
 
-    generate_pq_pivots<T>(train_file_path, 256, num_pq_chunks, 15,
+    generate_pq_pivots(train_data, train_size, aligned_train_dim, 256, num_pq_chunks, 5,
                           pq_pivots_path);
-    generate_pq_data_from_pivots<T>(data_load, points_num, dim, 256,
+    std::cout << "here" << std::endl;
+    std::cout << "here" << std::endl;
+	generate_pq_data_from_pivots<T>(data_load, points_num, aligned_dim, 256,
                                     num_pq_chunks, pq_pivots_path,
-				    pq_compressed_vectors_path);
+                                    pq_compressed_vectors_path);
 
-// Data aligned to multiple of 8 for optimized NSG code
-    data_load = NSG::data_align(data_load, points_num, dim);
-    std::cout << "Data loaded and aligned" << std::endl;
+    // Data aligned to multiple of 8 for optimized NSG code
 
     NSG::Parameters paras;
     paras.Set<unsigned>("L", L);
@@ -106,24 +112,34 @@ namespace NSG {
     paras.Set<std::string>("save_path", randnsg_path);
 
     _pNsgIndex = std::unique_ptr<NSG::IndexNSG<T>>(
-        new NSG::IndexNSG<T>(dim, points_num, _compareMetric));
-    _pNsgIndex->build(data_load, paras);
+        new NSG::IndexNSG<T>(aligned_dim, points_num, _compareMetric));
+
+	  if (file_exists(randnsg_path.c_str())) {
+      _pNsgIndex->set_data(data_load);
+      _pNsgIndex->load(randnsg_path.c_str());
+    } else {
+      _pNsgIndex->build(data_load, paras);
+      _pNsgIndex->save(randnsg_path.c_str());
+    }
+
+	
+//	_pNsgIndex->build(data_load, paras);
     auto                          e = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> diff = e - s;
 
     std::cout << "Indexing time: " << diff.count() << "\n";
 
-    _pNsgIndex->save(randnsg_path.c_str());
+//    _pNsgIndex->save(randnsg_path.c_str());
 
     _pNsgIndex->save_disk_opt_graph(diskopt_path.c_str());
-
 
     uint32_t* params_array = new uint32_t[5];
     params_array[0] = (uint32_t) L;
     params_array[1] = (uint32_t) R;
     params_array[2] = (uint32_t) C;
-    params_array[3] = (uint32_t) dim;
+    params_array[3] = (uint32_t) aligned_dim;
     params_array[4] = (uint32_t) num_pq_chunks;
+
     NSG::save_bin<uint32_t>(index_params_path.c_str(), params_array, 5, 1);
     std::cout << "Saving params to " << index_params_path << "\n";
 
@@ -163,7 +179,9 @@ namespace NSG {
     // infer chunk_size
     this->m_dimension = (_u64) params[3];
     this->n_chunks = (_u64) params[4];
-    this->chunk_size = (_u64)(this->m_dimension / n_chunks);
+    this->chunk_size = (_u64)(this->m_dimension / this->n_chunks);
+    // corrected number of chunks
+    this->n_chunks = DIV_ROUND_UP(this->m_dimension, this->chunk_size);
 
     std::string nsg_disk_opt = index_prefix_path + "_diskopt.rnsg";
 
@@ -172,10 +190,10 @@ namespace NSG {
     _u64        cache_nlevels = (_u64) std::atoi(param_list[2].c_str());
     _u64        nthreads = (_u64) std::atoi(param_list[3].c_str());
     std::string stars(40, '*');
-    std::cout << stars << "\nPQ -- n_chunks: " << n_chunks
-              << ", chunk_size: " << chunk_size
+    std::cout << stars << "\nPQ -- n_chunks: " << this->n_chunks
+              << ", chunk_size: " << this->chunk_size
               << ", data_dim: " << this->m_dimension << "\n";
-    std::cout << "Search meta-params -- beam_width: " << beam_width
+    std::cout << "Search meta-params -- beam_width: " << this->beam_width
               << ", cache_nlevels: " << cache_nlevels
               << ", nthreads: " << nthreads << "\n"
               << stars << "\n";
@@ -185,7 +203,7 @@ namespace NSG {
 
     // load index
     _pFlashIndex->load(data_bin.c_str(), nsg_disk_opt.c_str(),
-                       pq_tables_bin.c_str(), chunk_size, n_chunks,
+                       pq_tables_bin.c_str(), this->chunk_size, this->n_chunks,
                        this->m_dimension, nthreads);
 
     // cache bfs levels
