@@ -1415,7 +1415,7 @@ namespace NSG {
   template<typename T, typename TagT>
   std::pair<int, int> IndexNSG<T, TagT>::beam_search(
       const T *query, const size_t K, const Parameters &parameters,
-      unsigned *indices, int beam_width, std::vector<unsigned> &start_points) {
+      unsigned *indices, int beam_width, std::vector<unsigned> start_points) {
     const unsigned int L = parameters.Get<unsigned>("L_search");
     return beam_search(query, K, L, indices, beam_width, start_points);
   }
