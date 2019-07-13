@@ -120,7 +120,6 @@ void gen_random_slice(const T *inputdata, size_t npts, size_t ndims, float p_val
     }
   }
 
-  delete[] cur_vector_T;
 }
 
 
@@ -313,12 +312,11 @@ int partition(const char *base_file, const char *train_file, size_t num_centers,
   size_t    train_dim;
   size_t    num_points;
   size_t    num_train;
-  T *       base_data;
   T *       train_data;
   float *   train_data_float;
-  float *   base_data_float;
+//  float *   base_data_float;
   float *   pivot_data;
-  uint32_t *base_closest_centers;
+//  uint32_t *base_closest_centers;
 
   NSG::load_bin<T>(train_file, train_data, num_train, train_dim);
   train_data_float = new float[num_train * train_dim];
@@ -344,9 +342,7 @@ int partition(const char *base_file, const char *train_file, size_t num_centers,
     kmeans::kmeanspp_selecting_pivots(train_data_float, num_train, train_dim,
                                       pivot_data, num_centers);
 
-    float residual = 0;
-    residual =
-        kmeans::run_lloyds(train_data_float, num_train, train_dim, pivot_data,
+    kmeans::run_lloyds(train_data_float, num_train, train_dim, pivot_data,
                            num_centers, max_k_means_reps, NULL, NULL);
 
     std::cout << "Saving global k-center pivots" << std::endl;
@@ -373,7 +369,7 @@ int partition(const char *base_file, const char *train_file, size_t num_centers,
   // clusters.
 
   _u64 read_blk_size = 64 * 1024 * 1024;
-  _u64 write_blk_size = 64 * 1024 * 1024;
+//  _u64 write_blk_size = 64 * 1024 * 1024;
   // create cached reader + writer
   cached_ifstream base_reader(base_file, read_blk_size);
   _u32            npts32;

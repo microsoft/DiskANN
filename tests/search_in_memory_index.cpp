@@ -47,10 +47,9 @@ int aux_main(int argc, char** argv) {
   int      bfs_init = 0;
   unsigned beam_width = 4;
 
-  T*        data_load = NULL;
   T*        query_load = NULL;
   unsigned* gt_load = NULL;
-  size_t    points_num, dim, query_num, query_dim;
+  size_t    query_num, query_dim;
   size_t    gt_num, gt_dim;
 
 //  NSG::load_bin<T>(argv[2], data_load, points_num, dim);
@@ -133,12 +132,11 @@ int aux_main(int argc, char** argv) {
     long long total_cmps = 0;
 
     auto    s = std::chrono::high_resolution_clock::now();
-//#pragma omp parallel for schedule(static, 1)
+//#pragma omp parallel for schedule(static, 100)
     for (int i = 0; i < query_num; i++) {
       auto ret =
           index.beam_search(query_load + i * query_dim,  K, paras,
                             res + ((size_t) i) * K, beam_width, start_points);
-
 #pragma omp atomic
       total_hops += ret.first;
 #pragma omp atomic
