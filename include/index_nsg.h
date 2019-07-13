@@ -15,8 +15,8 @@ namespace NSG {
   template<typename T, typename TagT = int>
   class IndexNSG {
    public:
-    IndexNSG(Metric m, const char* filename,
-             const size_t max_points = 0, const bool enable_tags = false);
+    IndexNSG(Metric m, const char *filename, const size_t max_points = 0,
+             const bool enable_tags = false);
 
     ~IndexNSG();
 
@@ -26,7 +26,7 @@ namespace NSG {
     void init_random_graph(size_t num_points, unsigned k,
                            std::vector<size_t> mapping = std::vector<size_t>());
 
-    void build(Parameters &parameters,
+    void build(Parameters &             parameters,
                const std::vector<TagT> &tags = std::vector<TagT>());
 
     typedef std::vector<SimpleNeighbor> vecNgh;
@@ -38,8 +38,7 @@ namespace NSG {
                                     unsigned *indices, int beam_width,
                                     std::vector<unsigned> &start_points);
 
-    std::pair<int, int> beam_search_tags(const T *query, 
-                                         const size_t      K,
+    std::pair<int, int> beam_search_tags(const T *query, const size_t K,
                                          const Parameters &parameters,
                                          TagT *tags, int beam_width,
                                          std::vector<unsigned> &start_points,
@@ -49,7 +48,7 @@ namespace NSG {
 
     // Gopal. Added beam_search overload that takes L as parameter, so that we
     // can customize L on a per-query basis without tampering with "Parameters"
-    std::pair<int, int> beam_search(const T *query,  const size_t K,
+    std::pair<int, int> beam_search(const T *query, const size_t K,
                                     const unsigned int L, unsigned *indices,
                                     int                    beam_width,
                                     std::vector<unsigned> &start_points);
@@ -72,7 +71,7 @@ namespace NSG {
     int delete_point(const TagT tag);
 
     /*  Internals of the library */
-//    void set_data(const T *data);
+    //    void set_data(const T *data);
 
    protected:
     typedef std::vector<std::vector<unsigned>> CompactGraph;
@@ -128,9 +127,9 @@ namespace NSG {
     void compute_in_degree_stats();
 
    private:
-    size_t            _dim;
-    size_t            _aligned_dim;
-    T *               _data;
+    size_t                  _dim;
+    size_t                  _aligned_dim;
+    T *                     _data;
     size_t                  _nd;
     size_t                  _max_points;
     bool                    _has_built;

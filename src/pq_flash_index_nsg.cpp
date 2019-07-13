@@ -100,7 +100,7 @@ namespace NSG {
 
     // delete backing bufs for nhood and coord cache
     delete[] nhood_cache_buf;
-    delete[] coord_cache_buf;
+    NSG::aligned_free(coord_cache_buf);
     delete[] medoid_nhood.second;
 
     reader->close();
@@ -123,7 +123,10 @@ namespace NSG {
         IOContext ctx = this->reader->get_ctx();
         // std::cout << "ctx: " << ctx << "\n";
         QueryScratch<T> scratch;
-        scratch.coord_scratch = new T[MAX_N_CMPS * this->data_dim];
+        _u64 coord_alloc_size = ROUND_UP(MAX_N_CMPS * this->aligned_dim, 256);
+        NSG::alloc_aligned((void **) &scratch.coord_scratch, coord_alloc_size,
+                           256);
+        scratch.coord_scratch = new T[MAX_N_CMPS * this->aligned_dim];
         NSG::alloc_aligned((void **) &scratch.sector_scratch,
                            MAX_N_SECTOR_READS * SECTOR_LEN, SECTOR_LEN);
         NSG::alloc_aligned((void **) &scratch.aligned_scratch,
@@ -154,8 +157,7 @@ namespace NSG {
         data = this->thread_data.pop();
       }
       auto &scratch = data.scratch;
-
-      delete[] scratch.coord_scratch;
+      NSG::aligned_free((void *) scratch.coord_scratch);
       NSG::aligned_free((void *) scratch.sector_scratch);
       NSG::aligned_free((void *) scratch.aligned_scratch);
       NSG::aligned_free((void *) scratch.aligned_pq_coord_scratch);
@@ -287,16 +289,17 @@ namespace NSG {
     std::cerr << "Consolidating coord_cache: # cached coords = "
               << coord_cache.size() << "\n";
     // consolidate coord_cache down to single buf
-    _u64 coord_cache_buf_len = coord_cache.size() * data_dim;
-    coord_cache_buf = new T[coord_cache_buf_len];
-    memset(coord_cache_buf, 0, coord_cache_buf_len / sizeof(int));
+    _u64 coord_cache_buf_len = coord_cache.size() * aligned_dim;
+    NSG::alloc_aligned((void **) &coord_cache_buf,
+                       coord_cache_buf_len * sizeof(T), 256);
+    memset(coord_cache_buf, 0, coord_cache_buf_len * sizeof(T));
     cur_off = 0;
     for (auto &k_v : coord_cache) {
       T *&val = coord_cache[k_v.first];
       memcpy(coord_cache_buf + cur_off, val, data_dim * sizeof(T));
       delete[] val;
       val = coord_cache_buf + cur_off;
-      cur_off += data_dim;
+      cur_off += aligned_dim;
     }
   }
 
@@ -574,7 +577,7 @@ namespace NSG {
           _u64      nnbrs = (_u64)(*node_buf);
           T *       node_fp_coords = OFFSET_TO_NODE_COORDS(node_disk_buf);
           assert(data_buf_idx < MAX_N_CMPS);
-          T *node_fp_coords_copy = data_buf + (data_buf_idx * data_dim);
+          T *node_fp_coords_copy = data_buf + (data_buf_idx * aligned_dim);
           data_buf_idx++;
           memcpy(node_fp_coords_copy, node_fp_coords, data_dim * sizeof(T));
 
@@ -694,11 +697,13 @@ namespace NSG {
         node_coords = global_cache_iter->second;
       }
 
+      // std::cout << "left: " << query << ", right: " << node_coords << "\n";
       retset[i].distance = dist_cmp->compare(query, node_coords, aligned_dim);
       if (stats != nullptr) {
         stats->n_cmps++;
       }
     }
+    // std::cout << "end\n";
 
     // re-sort by distance
     std::sort(retset.begin(), retset.begin() + l_search,

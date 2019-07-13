@@ -42,31 +42,30 @@ bool testBuildIndex(const char* dataFilePath, const char* indexFilePath,
   size_t   num_pq_chunks = (size_t) atoi(param_list[3].c_str());
   size_t   TRAINING_SET_SIZE = (size_t) atoi(param_list[4].c_str());
 
-
-
   std::cout << "loading data.." << std::endl;
   T* data_load = NULL;
 
- size_t points_num, dim;
+  size_t points_num, dim;
 
   NSG::load_bin<T>(dataFilePath, data_load, points_num, dim);
-  std::cout<<"done."<<std::endl;
+  std::cout << "done." << std::endl;
 
   auto s = std::chrono::high_resolution_clock::now();
 
   size_t train_size;
   float* train_data;
 
-  float  p_val = ((float) TRAINING_SET_SIZE/ (float) points_num); 
-  //generates random sample and sets it to train_data and updates train_size
-  gen_random_slice<T>(data_load, points_num, dim, p_val, train_data, train_size);
+  float p_val = ((float) TRAINING_SET_SIZE / (float) points_num);
+  // generates random sample and sets it to train_data and updates train_size
+  gen_random_slice<T>(data_load, points_num, dim, p_val, train_data,
+                      train_size);
 
   std::cout << "Training loaded of size " << train_size << std::endl;
 
   //  unsigned    nn_graph_deg = (unsigned) atoi(argv[3]);
 
-  generate_pq_pivots(train_data, train_size, dim, 256,
-                     num_pq_chunks, 15, pq_pivots_path);
+  generate_pq_pivots(train_data, train_size, dim, 256, num_pq_chunks, 15,
+                     pq_pivots_path);
   generate_pq_data_from_pivots<T>(data_load, points_num, dim, 256,
                                   num_pq_chunks, pq_pivots_path,
                                   pq_compressed_vectors_path);
@@ -82,8 +81,7 @@ bool testBuildIndex(const char* dataFilePath, const char* indexFilePath,
   paras.Set<unsigned>("num_rnds", 2);
   paras.Set<std::string>("save_path", randnsg_path);
 
-  NSG::IndexNSG<T>* _pNsgIndex =
-      new NSG::IndexNSG<T>(NSG::L2,dataFilePath);
+  NSG::IndexNSG<T>* _pNsgIndex = new NSG::IndexNSG<T>(NSG::L2, dataFilePath);
   if (file_exists(randnsg_path.c_str())) {
     _pNsgIndex->load(randnsg_path.c_str());
   } else {

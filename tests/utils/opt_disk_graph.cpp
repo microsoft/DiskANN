@@ -69,7 +69,8 @@ int main(int argc, char **argv) {
       std::cout << "Sector #" << sector << "written\n";
     }
     memset(sector_buf, 0, SECTOR_LEN);
-    for (_u64 sector_node_id = 0; sector_node_id < nnodes_per_sector && cur_node_id < nnodes;
+    for (_u64 sector_node_id = 0;
+         sector_node_id < nnodes_per_sector && cur_node_id < nnodes;
          sector_node_id++) {
       memset(node_buf, 0, max_node_len);
       // read cur node's nnbrs

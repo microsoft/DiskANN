@@ -85,13 +85,11 @@ void gen_random_slice(const char *inputfile, float p_val, float *&sampled_data,
   delete[] cur_vector_T;
 }
 
-
-
 template<typename T>
-void gen_random_slice(const T *inputdata, size_t npts, size_t ndims, float p_val, float *&sampled_data,
-                      size_t &slice_size) {
+void gen_random_slice(const T *inputdata, size_t npts, size_t ndims,
+                      float p_val, float *&sampled_data, size_t &slice_size) {
   std::vector<std::vector<float>> sampled_vectors;
-  const T *                             cur_vector_T;
+  const T *                       cur_vector_T;
 
   p_val = p_val < 1 ? p_val : 1;
 
@@ -103,7 +101,7 @@ void gen_random_slice(const T *inputdata, size_t npts, size_t ndims, float p_val
   std::uniform_real_distribution<float> distribution(0, 1);
 
   for (size_t i = 0; i < npts; i++) {
-    cur_vector_T = inputdata + ndims* i;
+    cur_vector_T = inputdata + ndims * i;
     float rnd_val = distribution(generator);
     if (rnd_val < p_val) {
       std::vector<float> cur_vector_float;
@@ -119,9 +117,7 @@ void gen_random_slice(const T *inputdata, size_t npts, size_t ndims, float p_val
       sampled_data[i * ndims + j] = sampled_vectors[i][j];
     }
   }
-
 }
-
 
 int generate_pq_pivots(const float *train_data, size_t num_train, size_t dim,
                        size_t num_centers, size_t num_pq_chunks,
@@ -308,15 +304,15 @@ int generate_pq_data_from_pivots(const T *base_data, size_t num_points,
 template<typename T>
 int partition(const char *base_file, const char *train_file, size_t num_centers,
               size_t max_k_means_reps, const char *prefix_dir, size_t k_base) {
-  size_t    dim;
-  size_t    train_dim;
-  size_t    num_points;
-  size_t    num_train;
-  T *       train_data;
-  float *   train_data_float;
-//  float *   base_data_float;
-  float *   pivot_data;
-//  uint32_t *base_closest_centers;
+  size_t dim;
+  size_t train_dim;
+  size_t num_points;
+  size_t num_train;
+  T *    train_data;
+  float *train_data_float;
+  //  float *   base_data_float;
+  float *pivot_data;
+  //  uint32_t *base_closest_centers;
 
   NSG::load_bin<T>(train_file, train_data, num_train, train_dim);
   train_data_float = new float[num_train * train_dim];
@@ -343,7 +339,7 @@ int partition(const char *base_file, const char *train_file, size_t num_centers,
                                       pivot_data, num_centers);
 
     kmeans::run_lloyds(train_data_float, num_train, train_dim, pivot_data,
-                           num_centers, max_k_means_reps, NULL, NULL);
+                       num_centers, max_k_means_reps, NULL, NULL);
 
     std::cout << "Saving global k-center pivots" << std::endl;
     NSG::save_bin<float>(output_file.c_str(), pivot_data, (size_t) num_centers,
@@ -369,7 +365,7 @@ int partition(const char *base_file, const char *train_file, size_t num_centers,
   // clusters.
 
   _u64 read_blk_size = 64 * 1024 * 1024;
-//  _u64 write_blk_size = 64 * 1024 * 1024;
+  //  _u64 write_blk_size = 64 * 1024 * 1024;
   // create cached reader + writer
   cached_ifstream base_reader(base_file, read_blk_size);
   _u32            npts32;
@@ -468,15 +464,17 @@ template void gen_random_slice<uint8_t>(const char *inputfile, float p_val,
                                         float *&sampled_data,
                                         size_t &slice_size, size_t &ndims);
 
-
-template void gen_random_slice<float>(const float *inputdata, size_t npts, size_t ndims, float p_val, float *&sampled_data,
-                      size_t &slice_size);
-template void gen_random_slice<uint8_t>(const uint8_t *inputdata, size_t npts, size_t ndims, float p_val, float *&sampled_data,
-                      size_t &slice_size);
-template void gen_random_slice<int8_t>(const int8_t *inputdata, size_t npts, size_t ndims, float p_val, float *&sampled_data,
-                      size_t &slice_size);
-
-
+template void gen_random_slice<float>(const float *inputdata, size_t npts,
+                                      size_t ndims, float p_val,
+                                      float *&sampled_data, size_t &slice_size);
+template void gen_random_slice<uint8_t>(const uint8_t *inputdata, size_t npts,
+                                        size_t ndims, float p_val,
+                                        float *&sampled_data,
+                                        size_t &slice_size);
+template void gen_random_slice<int8_t>(const int8_t *inputdata, size_t npts,
+                                       size_t ndims, float p_val,
+                                       float *&sampled_data,
+                                       size_t &slice_size);
 
 template int partition<int8_t>(const char *base_file, const char *train_file,
                                size_t num_centers, size_t max_k_means_reps,
