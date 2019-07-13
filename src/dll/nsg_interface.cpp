@@ -167,7 +167,8 @@ namespace NSG {
 
     // infer chunk_size
     this->m_dimension = (_u64) params[3];
-    this->n_chunks = (_u64) params[4];
+
+	this->n_chunks = (_u64) params[4];
     this->chunk_size = (_u64)(this->m_dimension / this->n_chunks);
     // corrected number of chunks
     this->n_chunks = DIV_ROUND_UP(this->m_dimension, this->chunk_size);
@@ -212,11 +213,14 @@ namespace NSG {
                                     float*            distances,
                                     unsigned __int64* ids) const {
     //    _u64      L = 6 * neighborCount;
+
+    _u64 aligned_data_dim = ROUND_UP(this->m_dimension, 8);
+
     const T* query_load = (const T*) vector;
-    // #pragma omp parallel for schedule(dynamic, 1)
+ #pragma omp parallel for schedule(dynamic, 1)
     for (_s64 i = 0; i < queryCount; i++) {
       _pFlashIndex->cached_beam_search(
-          query_load + (i * m_dimension), neighborCount, this->Lsearch,
+          query_load + (i * aligned_data_dim), neighborCount, this->Lsearch,
           ids + (i * neighborCount), distances + (i * neighborCount),
           this->beam_width);
     }
