@@ -121,7 +121,7 @@ std::tuple<float, float, float> search_index(
   NSG::QueryStats* stats = new NSG::QueryStats[query_num];
 
   NSG::Timer timer;
-  //#pragma omp  parallel for schedule(dynamic, 1) num_threads(16)
+#pragma omp  parallel for schedule(dynamic, 1) num_threads(16)
   for (_s64 i = 0; i < query_num; i++) {
     _pFlashIndex->cached_beam_search(
         query_load + (i * _pFlashIndex->aligned_dim), neighborCount, L,
