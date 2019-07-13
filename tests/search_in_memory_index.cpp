@@ -53,18 +53,13 @@ int aux_main(int argc, char** argv) {
   size_t    points_num, dim, query_num, query_dim;
   size_t    gt_num, gt_dim;
 
-  NSG::load_bin<T>(argv[2], data_load, points_num, dim);
+//  NSG::load_bin<T>(argv[2], data_load, points_num, dim);
   NSG::load_bin<T>(argv[3], query_load, query_num, query_dim);
   NSG::load_bin<unsigned>(argv[4], gt_load, gt_num, gt_dim);
   std::string rand_nsg_path(argv[5]);
   unsigned    recall_at = atoi(argv[6]);
   std::string recall_string = std::string("Recall@") + std::string(argv[6]);
 
-  if (dim != query_dim) {
-    std::cout << "Base and query files dimension mismatch: base dim is " << dim
-              << ", query dim is " << query_dim << std::endl;
-    exit(-1);
-  }
 
   if (gt_num != query_num) {
     std::cout << "Ground truth does not match number of queries. " << std::endl;
@@ -102,11 +97,11 @@ int aux_main(int argc, char** argv) {
   std::cout.setf(std::ios_base::fixed, std::ios_base::floatfield);
   std::cout.precision(2);
 
-  data_load = NSG::data_align(data_load, points_num, dim);
+//  data_load = NSG::data_align(data_load, points_num, dim);
   query_load = NSG::data_align(query_load, query_num, query_dim);
-  std::cout << "Base and query data loaded and aligned" << std::endl;
+  std::cout << "query data loaded and aligned" << std::endl;
 
-  NSG::IndexNSG<T> index(dim, points_num, NSG::L2);
+  NSG::IndexNSG<T> index(NSG::L2,argv[2]);
   index.load(rand_nsg_path.c_str());  // to load NSG
   std::cout << "Index loaded" << std::endl;
 
@@ -124,12 +119,12 @@ int aux_main(int argc, char** argv) {
                "============="
                "======="
             << std::endl;
+    unsigned  K = recall_at;
+    unsigned* res = new unsigned[(size_t) query_num * K];
   for (uint32_t test_id = 0; test_id < Lvec.size(); test_id++) {
     unsigned L = Lvec[test_id];
     if (L < recall_at)
       continue;
-    unsigned  K = recall_at;
-    unsigned* res = new unsigned[(size_t) query_num * K];
 
     paras.Set<unsigned>("L_search", L);
     paras.Set<unsigned>("P_search", L);
@@ -138,10 +133,10 @@ int aux_main(int argc, char** argv) {
     long long total_cmps = 0;
 
     auto    s = std::chrono::high_resolution_clock::now();
-#pragma omp parallel for schedule(static, 1)
+//#pragma omp parallel for schedule(static, 1)
     for (int i = 0; i < query_num; i++) {
       auto ret =
-          index.beam_search(query_load + i * dim, data_load, K, paras,
+          index.beam_search(query_load + i * query_dim,  K, paras,
                             res + ((size_t) i) * K, beam_width, start_points);
 
 #pragma omp atomic
@@ -165,9 +160,7 @@ int aux_main(int argc, char** argv) {
     if (recall > 99.5) {
       break;
     }
-    delete[] res;
   }
-  delete[] data_load;
 
   return 0;
 }

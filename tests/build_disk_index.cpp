@@ -22,7 +22,7 @@ bool testBuildIndex(const char* dataFilePath, const char* indexFilePath,
     std::cout << "Correct usage of parameters is L (indexing search list size) "
                  "R (max degree) C (visited list maximum size) B (approximate "
                  "compressed number of bytes per datapoint to store in "
-                 "memory) TRAINING_SIZE"
+                 "memory) sample_size (for PQ generation)"
               << std::endl;
     return 1;
   }
@@ -42,42 +42,37 @@ bool testBuildIndex(const char* dataFilePath, const char* indexFilePath,
   size_t   num_pq_chunks = (size_t) atoi(param_list[3].c_str());
   size_t   TRAINING_SET_SIZE = (size_t) atoi(param_list[4].c_str());
 
+
+
+  std::cout << "loading data.." << std::endl;
   T* data_load = NULL;
 
-  size_t points_num, dim;
+ size_t points_num, dim;
 
   NSG::load_bin<T>(dataFilePath, data_load, points_num, dim);
-  // initialize aligned_dim to dim for base and training set. will get reset in
-  // data_align.
-  size_t aligned_dim = dim;
-  size_t train_dim;
-
-  data_load = NSG::data_align(data_load, points_num, aligned_dim);
-  std::cout << "Data loaded and aligned to dimension " << aligned_dim
-            << std::endl;
+  std::cout<<"done."<<std::endl;
 
   auto s = std::chrono::high_resolution_clock::now();
 
-  float  p_val = ((float) TRAINING_SET_SIZE) / ((float) points_num);
   size_t train_size;
   float* train_data;
 
-  gen_random_slice<T>(dataFilePath, p_val, train_data, train_size, train_dim);
+  float  p_val = ((float) TRAINING_SET_SIZE/ (float) points_num); 
+  //generates random sample and sets it to train_data and updates train_size
+  gen_random_slice<T>(data_load, points_num, dim, p_val, train_data, train_size);
 
-  size_t aligned_train_dim = train_dim;
-  train_data = NSG::data_align(train_data, train_size, aligned_train_dim);
-  std::cout << "Training loaded of size " << train_size << " in dim "
-            << aligned_train_dim << std::endl;
+  std::cout << "Training loaded of size " << train_size << std::endl;
 
   //  unsigned    nn_graph_deg = (unsigned) atoi(argv[3]);
 
-  generate_pq_pivots(train_data, train_size, aligned_train_dim, 256,
+  generate_pq_pivots(train_data, train_size, dim, 256,
                      num_pq_chunks, 15, pq_pivots_path);
-  std::cout << "here" << std::endl;
-  std::cout << "here" << std::endl;
-  generate_pq_data_from_pivots<T>(data_load, points_num, aligned_dim, 256,
+  generate_pq_data_from_pivots<T>(data_load, points_num, dim, 256,
                                   num_pq_chunks, pq_pivots_path,
                                   pq_compressed_vectors_path);
+
+  delete[] data_load;
+  delete[] train_data;
 
   NSG::Parameters paras;
   paras.Set<unsigned>("L", L);
@@ -88,12 +83,11 @@ bool testBuildIndex(const char* dataFilePath, const char* indexFilePath,
   paras.Set<std::string>("save_path", randnsg_path);
 
   NSG::IndexNSG<T>* _pNsgIndex =
-      new NSG::IndexNSG<T>(aligned_dim, points_num, NSG::L2);
+      new NSG::IndexNSG<T>(NSG::L2,dataFilePath);
   if (file_exists(randnsg_path.c_str())) {
-    _pNsgIndex->set_data(data_load);
     _pNsgIndex->load(randnsg_path.c_str());
   } else {
-    _pNsgIndex->build(data_load, paras);
+    _pNsgIndex->build(paras);
     _pNsgIndex->save(randnsg_path.c_str());
   }
 
@@ -103,7 +97,7 @@ bool testBuildIndex(const char* dataFilePath, const char* indexFilePath,
   params_array[0] = (uint32_t) L;
   params_array[1] = (uint32_t) R;
   params_array[2] = (uint32_t) C;
-  params_array[3] = (uint32_t) aligned_dim;
+  params_array[3] = (uint32_t) dim;
   params_array[4] = (uint32_t) num_pq_chunks;
   NSG::save_bin<uint32_t>(index_params_path.c_str(), params_array, 5, 1);
   std::cout << "Saving params to " << index_params_path << "\n";

@@ -15,8 +15,8 @@ void gen_random_slice(const char *inputfile, float p_val, float *&sampled_data,
                       size_t &slice_size, size_t &ndims);
 
 template<typename T>
-void gen_random_slice(T *base_data, size_t points_num, size_t dim,
-                      const char *outputfile, size_t slice_size);
+void gen_random_slice(const T *inputdata, size_t npts, size_t ndims, float p_val, float *&sampled_data,
+                      size_t &slice_size);
 
 template<typename T>
 int partition(const char *base_file, const char *train_file, size_t num_centers,

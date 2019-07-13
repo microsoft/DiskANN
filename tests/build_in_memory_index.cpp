@@ -28,9 +28,9 @@ int aux_main(int argc, char** argv) {
   T*     data_load = NULL;
   size_t points_num, dim;
 
-  NSG::load_bin<T>(argv[2], data_load, points_num, dim);
-  data_load = NSG::data_align<T>(data_load, points_num, dim);
-  std::cout << "Data loaded and aligned" << std::endl;
+//  NSG::load_bin<T>(argv[2], data_load, points_num, dim);
+//  data_load = NSG::data_align<T>(data_load, points_num, dim);
+//  std::cout << "Data loaded and aligned" << std::endl;
 
   unsigned    L = (unsigned) atoi(argv[3]);
   unsigned    R = (unsigned) atoi(argv[4]);
@@ -46,9 +46,9 @@ int aux_main(int argc, char** argv) {
   paras.Set<unsigned>("num_rnds", num_rnds);
   paras.Set<float>("alpha", alpha);
 
-  NSG::IndexNSG<T> index(dim, points_num, NSG::L2);
+  NSG::IndexNSG<T> index(NSG::L2,argv[2]);
   auto             s = std::chrono::high_resolution_clock::now();
-  index.build(data_load, paras);
+  index.build(paras);
   auto                          e = std::chrono::high_resolution_clock::now();
   std::chrono::duration<double> diff = e - s;
 
