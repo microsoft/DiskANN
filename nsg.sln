@@ -3,7 +3,7 @@ Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio 15
 VisualStudioVersion = 15.0.28307.329
 MinimumVisualStudioVersion = 10.0.40219.1
-Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "nsg_disk_search", "vcproj\nsg\nsg.vcxproj", "{E2B234D7-0EB1-4F35-B2D4-C313A20941C8}"
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "search_disk_index", "vcproj\nsg\nsg.vcxproj", "{E2B234D7-0EB1-4F35-B2D4-C313A20941C8}"
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "test_recall", "vcproj\test_recall\test_recall.vcxproj", "{C639031F-E693-4ED7-AAC6-CDA29388A16F}"
 EndProject
@@ -20,6 +20,8 @@ EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "nsg_dll", "vcproj\nsg_dll\nsg_dll.vcxproj", "{9B7BF292-F0D7-41D9-9BFD-EECD18C0B48B}"
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "test_nsg_dll", "vcproj\test_nsg_dll\test_nsg_dll.vcxproj", "{FA1ECBFE-B257-4B5D-9F80-AEB107AC57BE}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "nsg_disk_webclient", "vcproj\nsg_disk_webclient\nsg_disk_webclient.vcxproj", "{520672AD-23CF-4B5F-BBF9-720B14514A35}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -101,6 +103,14 @@ Global
 		{FA1ECBFE-B257-4B5D-9F80-AEB107AC57BE}.Release|x64.Build.0 = Release|x64
 		{FA1ECBFE-B257-4B5D-9F80-AEB107AC57BE}.Release|x86.ActiveCfg = Release|Win32
 		{FA1ECBFE-B257-4B5D-9F80-AEB107AC57BE}.Release|x86.Build.0 = Release|Win32
+		{520672AD-23CF-4B5F-BBF9-720B14514A35}.Debug|x64.ActiveCfg = Debug|x64
+		{520672AD-23CF-4B5F-BBF9-720B14514A35}.Debug|x64.Build.0 = Debug|x64
+		{520672AD-23CF-4B5F-BBF9-720B14514A35}.Debug|x86.ActiveCfg = Debug|Win32
+		{520672AD-23CF-4B5F-BBF9-720B14514A35}.Debug|x86.Build.0 = Debug|Win32
+		{520672AD-23CF-4B5F-BBF9-720B14514A35}.Release|x64.ActiveCfg = Release|x64
+		{520672AD-23CF-4B5F-BBF9-720B14514A35}.Release|x64.Build.0 = Release|x64
+		{520672AD-23CF-4B5F-BBF9-720B14514A35}.Release|x86.ActiveCfg = Release|Win32
+		{520672AD-23CF-4B5F-BBF9-720B14514A35}.Release|x86.Build.0 = Release|Win32
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
