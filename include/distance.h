@@ -10,6 +10,7 @@
 #else
 #include <immintrin.h>
 #endif
+
 #include <iostream>
 
 namespace {
@@ -33,6 +34,13 @@ namespace NSG {
    public:
     virtual float compare(const T *a, const T *b, unsigned length) const = 0;
     virtual ~Distance() {
+    }
+  };
+
+  template<typename T>
+  class DistanceCosine : public Distance<T> {
+    float compare(const T *a, const T *b, unsigned length) const {
+      return NSG::compute_cosine_similarity<T>(a, b, length);
     }
   };
 
@@ -317,6 +325,7 @@ namespace NSG {
 #endif
       return result;
     }
+
     using DistanceInnerProduct::compare;
     float compare(const float *a, const float *b, float norm,
                   unsigned size) const {  // not implement
@@ -324,5 +333,11 @@ namespace NSG {
       result += norm;
       return result;
     }
+
+    class DistanceCosine : public Distance<float> {
+     public:
+      float compare(const float *a, const float *b, unsigned size) const {
+      }
+    };
   };
 }  // namespace NSG

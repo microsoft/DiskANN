@@ -30,7 +30,6 @@ namespace NSG {
     unsigned int*             indices = new unsigned int[K];
 
     auto startTime = std::chrono::high_resolution_clock::now();
-    auto queryMagnitude = NSG::vectorMagnitude(query, dimensions);
 
 	_nsgIndex->beam_search(query, K,
                           /* (std::min)(K * L_MULTIPLIER, MAX_L)*/ DEFAULT_L,
@@ -47,8 +46,8 @@ namespace NSG {
       searchResult.finalResultIndices.push_back(index); //TEMPORARY FOR IDENTIFYING RECALL
     });
 
-    std::vector<float> similarityScores = NSG::compute_cosine_similarity(
-        query, indices, _baseVectors, _dimensions, K, queryMagnitude);
+    std::vector<float> similarityScores = NSG::compute_cosine_similarity_batch(
+        query, indices, _baseVectors, _dimensions, K);
     searchResult.distances = similarityScores;
 
 	//TEMPORARY FOR IDENTIFYING RECALL
