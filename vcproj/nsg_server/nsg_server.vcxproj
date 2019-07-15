@@ -51,6 +51,8 @@
     <PlatformToolset>v141</PlatformToolset>
     <WholeProgramOptimization>true</WholeProgramOptimization>
     <CharacterSet>Unicode</CharacterSet>
+    <UseIntelMKL>Sequential</UseIntelMKL>
+    <UseILP64Interfaces>true</UseILP64Interfaces>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
   <ImportGroup Label="ExtensionSettings">
@@ -170,7 +172,6 @@
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="..\..\src\cosine_similarity.cpp" />
-    <ClCompile Include="..\..\src\index.cpp" />
     <ClCompile Include="..\..\src\index_nsg.cpp" />
     <ClCompile Include="..\..\src\webservice\main.cpp" />
     <ClCompile Include="..\..\src\webservice\in_memory_nsg_search.cpp" />

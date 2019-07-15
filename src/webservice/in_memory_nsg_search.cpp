@@ -15,14 +15,9 @@ namespace NSG {
                                        const char* indexFile,
                                        const char* idsFile, Metric m)
       : _baseVectors(nullptr) {
-
-	  float* baseData;
-    load_data(baseFile, baseData, this->_numPoints, this->_dimensions);
-    _baseVectors = NSG::data_align(baseData, _numPoints, _dimensions); 
-
     _nsgIndex = std::unique_ptr<NSG::IndexNSG<float>>(
-        new NSG::IndexNSG<float>(_dimensions, _numPoints, m, nullptr));
-    _nsgIndex->Load(indexFile);
+        new NSG::IndexNSG<float>(m, baseFile, 0, false));
+    _nsgIndex->load(indexFile);
 
     _ids = load_ids(idsFile);
   }
@@ -34,11 +29,10 @@ namespace NSG {
 
     unsigned int*             indices = new unsigned int[K];
 
-
     auto startTime = std::chrono::high_resolution_clock::now();
     auto queryMagnitude = NSG::vectorMagnitude(query, dimensions);
 
-	_nsgIndex->BeamSearch(query, _baseVectors, K,
+	_nsgIndex->beam_search(query, K,
                           /* (std::min)(K * L_MULTIPLIER, MAX_L)*/ DEFAULT_L,
                           indices, DEFAULT_BEAM_WIDTH, start_points);
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -64,7 +58,6 @@ namespace NSG {
   }
 
   InMemoryNSGSearch::~InMemoryNSGSearch() {
-    delete[] _baseVectors;
   }
 
   void InMemoryNSGSearch::load_data(const char* filename, float*& data,
