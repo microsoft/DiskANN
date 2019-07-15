@@ -11,7 +11,7 @@
 #include <unistd.h>
 #endif
 
-#include "MemoryMapper.h"
+#include "memory_mapper.h"
 
 float calc_recall(unsigned num_queries, unsigned* gold_std, unsigned dim_gs,
                   unsigned* our_results, unsigned dim_or, unsigned recall_at) {
@@ -130,8 +130,8 @@ int aux_main(int argc, char** argv) {
     long long total_hops = 0;
     long long total_cmps = 0;
 
-    auto s = std::chrono::high_resolution_clock::now();
-    #pragma omp parallel for schedule(dynamic, 1)
+    auto    s = std::chrono::high_resolution_clock::now();
+#pragma omp parallel for schedule(dynamic, 1)
     for (int i = 0; i < query_num; i++) {
       auto ret =
           index.beam_search(query_load + i * query_dim, K, paras,

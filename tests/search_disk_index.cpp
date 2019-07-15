@@ -10,14 +10,15 @@
 #include <iomanip>
 #include "partition_and_pq.h"
 #include "util.h"
+#include "timer.h"
+
 #ifndef __NSG_WINDOWS__
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
-#include "timer.h"
 #endif
 
-#include "MemoryMapper.h"
+#include "memory_mapper.h"
 
 float calc_recall(unsigned num_queries, unsigned* gold_std, unsigned dim_gs,
                   unsigned* our_results, unsigned dim_or, unsigned recall_at) {
