@@ -43,7 +43,7 @@ std::wstring getHostingAddress(const char* hostNameAndPort) {
 
 
 int main(int argc, char* argv[]) {
-  if (argc != 5) {
+  if (argc != 6) {
     std::cout << "Usage: nsg_server <ip_addr_and_port> <prefix> "
                  "<ids_file> <cache_nlevels> <nthreads>"
               << std::endl;
