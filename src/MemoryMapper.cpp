@@ -27,7 +27,11 @@ MemoryMapper::MemoryMapper(const char* filename) {
   _bareFile = CreateFileA(filename, GENERIC_READ | GENERIC_EXECUTE, 0, NULL,
                           OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
   if (_bareFile == nullptr) {
-    std::cerr << "Could not open file" << filename << std::endl;
+    std::ostringstream message;
+    message << "CreateFileA(" << filename << ") failed with error "
+            << GetLastError() << std::endl;
+    std::cerr << message.str();
+    throw std::exception(message.str().c_str());
   }
 
   _fd = CreateFileMapping(_bareFile, NULL, PAGE_EXECUTE_READ, 0, 0, NULL);
