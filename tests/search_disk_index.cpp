@@ -9,8 +9,8 @@
 #include <cstring>
 #include <iomanip>
 #include "partition_and_pq.h"
-#include "util.h"
 #include "timer.h"
+#include "util.h"
 
 #ifndef __NSG_WINDOWS__
 #include <sys/mman.h>

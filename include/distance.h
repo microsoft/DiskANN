@@ -11,6 +11,7 @@
 #include <immintrin.h>
 #endif
 
+#include <cosine_similarity.h>
 #include <iostream>
 
 namespace {

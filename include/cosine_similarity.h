@@ -1,8 +1,10 @@
 #pragma once
+#include <cmath>
+#include <cstdint>
 #include <vector>
 
 namespace NSG {
-	template<typename T>
+  template<typename T>
   inline float compute_l2_norm(const T* vector, uint64_t ndims) {
     float norm = 0.0f;
     for (uint64_t i = 0; i < ndims; i++) {
@@ -32,7 +34,8 @@ namespace NSG {
 
     for (size_t i = 0; i < npts; i++) {
       const float* point = all_data + (size_t)(indices[i]) * (size_t)(ndims);
-      cos_dists.push_back(compute_cosine_similarity<float>(point, query, ndims));
+      cos_dists.push_back(
+          compute_cosine_similarity<float>(point, query, ndims));
     }
     return cos_dists;
   }
