@@ -57,13 +57,24 @@ namespace NSG {
   // (bin), and initialize max_points
   template<typename T, typename TagT>
   IndexNSG<T, TagT>::IndexNSG(Metric m, const char *filename,
-                              const size_t max_points, const bool enable_tags)
+                              const size_t max_points, const size_t nd,
+                              const bool enable_tags)
       : _has_built(false), _width(0), _can_delete(false),
         _enable_tags(enable_tags), _consolidated_order(true) {
     std::cout << "Loading " << filename << "..." << std::flush;
     load_bin<T>(filename, _data, _nd, _dim);
-    std::cout << ".complete. #points: " << _nd << ", dim: " << _dim << ". "
-              << std::flush;
+    std::cout << ".complete. #points in file: " << _nd << ", dim: " << _dim
+              << ". " << std::endl;
+
+    if (nd > 0) {
+      if (_nd < nd) {
+        std::cerr << "Error: Driver requests loading " << _nd
+                  << " points, while file has " << nd << "points" << std::endl;
+        exit(-1);
+      } else
+        _nd = nd;
+    }
+
     _max_points = (max_points > 0) ? max_points : _nd;
     if (_max_points < _nd) {
       std::cerr << "ERROR: max_points must be >= data size; max_points: "

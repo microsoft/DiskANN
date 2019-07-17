@@ -42,22 +42,19 @@ int main(int argc, char** argv) {
   paras.Set<float>("alpha", alpha);
   paras.Set<unsigned>("num_rnds", num_rnds);
 
-  unsigned num_incr = 10000;
-
-  auto data_copy = new float[num_points * dim];
-  memcpy((void*) data_copy, (void*) data_load,
-         num_points * dim * sizeof(float));
+  num_points = 10000;
+  unsigned num_incr = 1000;
 
   typedef int TagT;
 
-  NSG::IndexNSG<float, TagT> index(dim, num_points - num_incr, NSG::L2,
-                                   num_points, true);
+  NSG::IndexNSG<float, TagT> index(NSG::L2, argv[1], num_points,
+                                   num_points - num_incr, true);
   {
     std::vector<TagT> tags(num_points - num_incr);
     std::iota(tags.begin(), tags.end(), 0);
 
     NSG::Timer timer;
-    index.build(data_copy, paras, tags);
+    index.build(paras, tags);
     std::cout << "Index time: " << timer.elapsed() / 1000 << "ms\n";
   }
 
@@ -104,7 +101,6 @@ int main(int argc, char** argv) {
   auto save_path_reinc = save_path + ".reinc";
   index.save(save_path_reinc.c_str());
 
-  delete[] data_copy;
   delete[] data_load;
 
   return 0;
