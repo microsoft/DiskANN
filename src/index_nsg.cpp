@@ -61,10 +61,8 @@ namespace NSG {
                               const bool enable_tags)
       : _has_built(false), _width(0), _can_delete(false),
         _enable_tags(enable_tags), _consolidated_order(true) {
-    std::cout << "Loading " << filename << "..." << std::flush;
     load_bin<T>(filename, _data, _nd, _dim);
-    std::cout << ".complete. #points in file: " << _nd << ", dim: " << _dim
-              << ". " << std::endl;
+    std::cout << "#points in file: " << _nd << ", dim: " << _dim << std::endl;
 
     if (nd > 0) {
       if (_nd < nd) {
@@ -778,7 +776,7 @@ namespace NSG {
       assert(tag != NULL_TAG);
 
     LockGuard guard(_change_lock);
-
+    std::cout << "got lock" << std::endl;
     if (_enable_tags && (_tag_to_point.find(tag) != _tag_to_point.end())) {
       std::cerr << "Entry with the tag " << tag << " exists already"
                 << std::endl;
@@ -1405,6 +1403,7 @@ namespace NSG {
         _point_to_tag[i] = tags[i];
       }
     }
+    std::cout << "Starting index build..." << std::endl;
     link(parameters);  // Primary func for creating nsg graph
 
     size_t max = 0, min = 1 << 30, total = 0, cnt = 0;
@@ -1418,7 +1417,8 @@ namespace NSG {
     }
     std::cout << "Degree: max:" << max
               << "  avg:" << (float) total / (float) _nd << "  min:" << min
-              << "  count(deg<2):" << cnt << "\n";
+              << "  count(deg<2):" << cnt << "\n"
+              << "Index built." << std::endl;
     _width = (std::max)((unsigned) max, _width);
     _has_built = true;
   }

@@ -1,7 +1,3 @@
-//
-// Created by 付聪 on 2017/6/21.
-//
-
 #include <index_nsg.h>
 #include <timer.h>
 
@@ -26,7 +22,6 @@ int main(int argc, char** argv) {
 
   NSG::load_bin<float>(argv[1], data_load, num_points, dim);
   data_load = NSG::data_align(data_load, num_points, dim);
-  std::cout << "Data loaded and aligned" << std::endl;
 
   unsigned    L = (unsigned) atoi(argv[2]);
   unsigned    R = (unsigned) atoi(argv[3]);
@@ -42,7 +37,7 @@ int main(int argc, char** argv) {
   paras.Set<float>("alpha", alpha);
   paras.Set<unsigned>("num_rnds", num_rnds);
 
-  num_points = 10000;
+  num_points = 20000;
   unsigned num_incr = 1000;
 
   typedef int TagT;
@@ -55,7 +50,7 @@ int main(int argc, char** argv) {
 
     NSG::Timer timer;
     index.build(paras, tags);
-    std::cout << "Index time: " << timer.elapsed() / 1000 << "ms\n";
+    std::cout << "Index build time: " << timer.elapsed() / 1000 << "ms\n";
   }
 
   std::vector<NSG::Neighbor>       pool, tmp;
@@ -64,12 +59,14 @@ int main(int argc, char** argv) {
 
   {
     NSG::Timer timer;
-    for (size_t i = num_points - num_incr; i < num_points; ++i)
+    for (size_t i = num_points - num_incr; i < num_points; ++i) {
       index.insert_point(data_load + i * dim, paras, pool, tmp, visited,
                          cut_graph, i);
+      std::cout << i << std::endl;
+    }
     std::cout << "Incremental time: " << timer.elapsed() / 1000 << "ms\n";
+    index.save(save_path.c_str());
   }
-  index.save(save_path.c_str());
 
   tsl::robin_set<unsigned> delete_list;
   while (delete_list.size() < num_incr)
@@ -96,10 +93,9 @@ int main(int argc, char** argv) {
       index.insert_point(data_load + (size_t) p * (size_t) dim, paras, pool,
                          tmp, visited, cut_graph, p);
     std::cout << "Re-incremental time: " << timer.elapsed() / 1000 << "ms\n";
+    auto save_path_reinc = save_path + ".reinc";
+    index.save(save_path_reinc.c_str());
   }
-
-  auto save_path_reinc = save_path + ".reinc";
-  index.save(save_path_reinc.c_str());
 
   delete[] data_load;
 
