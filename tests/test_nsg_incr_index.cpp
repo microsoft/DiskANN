@@ -24,7 +24,7 @@ int main(int argc, char** argv) {
   float* data_load = NULL;
   size_t num_points, dim;
 
-  NSG::load_Tvecs<float>(argv[1], data_load, num_points, dim);
+  NSG::load_bin<float>(argv[1], data_load, num_points, dim);
   data_load = NSG::data_align(data_load, num_points, dim);
   std::cout << "Data loaded and aligned" << std::endl;
 
