@@ -2,8 +2,8 @@
 // Created by 付聪 on 2017/6/21.
 //
 
-#include <efanna2e/index_nsg.h>
-#include <efanna2e/util.h>
+#include <index_nsg.h>
+#include <timer.h>
 
 #include <omp.h>
 #include <string.h>
@@ -11,7 +11,7 @@
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
-#include <utils.h>
+#include "util.h"
 
 int main(int argc, char** argv) {
   if (argc != 8) {
@@ -22,10 +22,10 @@ int main(int argc, char** argv) {
   }
 
   float* data_load = NULL;
-  size_t points_num, dim;
+  size_t num_points, dim;
 
-  load_file_into_data<float>(argv[1], data_load, points_num, dim);
-  data_load = NSG::data_align(data_load, points_num, dim);
+  NSG::load_Tvecs<float>(argv[1], data_load, num_points, dim);
+  data_load = NSG::data_align(data_load, num_points, dim);
   std::cout << "Data loaded and aligned" << std::endl;
 
   unsigned    L = (unsigned) atoi(argv[2]);
@@ -42,33 +42,70 @@ int main(int argc, char** argv) {
   paras.Set<float>("alpha", alpha);
   paras.Set<unsigned>("num_rnds", num_rnds);
 
-  unsigned num_incr = 100000;
+  unsigned num_incr = 10000;
 
-  NSG::IndexNSG<float> index(dim, points_num - num_incr, NSG::L2, nullptr,
-                             points_num);
-  {
-    auto s = std::chrono::high_resolution_clock::now();
-    index.BuildRandomHierarchical(data_load, paras);
-    auto                          e = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double> diff = e - s;
-    std::cout << "Indexing time: " << diff.count() << "\n";
-  }
-  {
-    std::vector<NSG::Neighbor>       pool, tmp;
-    tsl::robin_set<unsigned>         visited;
-    std::vector<NSG::SimpleNeighbor> cut_graph;
+  auto data_copy = new float[num_points * dim];
+  memcpy((void*) data_copy, (void*) data_load,
+         num_points * dim * sizeof(float));
 
-    auto s = std::chrono::high_resolution_clock::now();
-    for (unsigned i = points_num - num_incr; i < points_num; ++i)
-      index.insert_point(data_load + (size_t) i * (size_t) dim, paras, pool,
-                         tmp, visited, cut_graph);
-    auto                          e = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double> diff = e - s;
-    std::cout << "Incremental time: " << diff.count() << "\n";
+  typedef int TagT;
+
+  NSG::IndexNSG<float, TagT> index(dim, num_points - num_incr, NSG::L2,
+                                   num_points, true);
+  {
+    std::vector<TagT> tags(num_points - num_incr);
+    std::iota(tags.begin(), tags.end(), 0);
+
+    NSG::Timer timer;
+    index.build(data_copy, paras, tags);
+    std::cout << "Index time: " << timer.elapsed() / 1000 << "ms\n";
   }
 
-  index.Save(save_path.c_str());
-  // index.Save_Inner_Vertices(argv[5]);
+  std::vector<NSG::Neighbor>       pool, tmp;
+  tsl::robin_set<unsigned>         visited;
+  std::vector<NSG::SimpleNeighbor> cut_graph;
+
+  {
+    NSG::Timer timer;
+    for (size_t i = num_points - num_incr; i < num_points; ++i)
+      index.insert_point(data_load + i * dim, paras, pool, tmp, visited,
+                         cut_graph, i);
+    std::cout << "Incremental time: " << timer.elapsed() / 1000 << "ms\n";
+  }
+  index.save(save_path.c_str());
+
+  tsl::robin_set<unsigned> delete_list;
+  while (delete_list.size() < num_incr)
+    delete_list.insert((rand() * rand() * rand()) % num_points);
+  std::cout << "Deleting " << delete_list.size() << " elements" << std::endl;
+
+  {
+    NSG::Timer timer;
+    index.enable_delete();
+    for (auto p : delete_list)
+      if (index.delete_point(p) != 0)
+        std::cerr << "Delete tag " << p << " not found" << std::endl;
+
+    if (index.disable_delete(paras, true) != 0) {
+      std::cerr << "Disable delete failed" << std::endl;
+      return -1;
+    }
+    std::cout << "Delete time: " << timer.elapsed() / 1000 << "ms\n";
+  }
+
+  {
+    NSG::Timer timer;
+    for (auto p : delete_list)
+      index.insert_point(data_load + (size_t) p * (size_t) dim, paras, pool,
+                         tmp, visited, cut_graph, p);
+    std::cout << "Re-incremental time: " << timer.elapsed() / 1000 << "ms\n";
+  }
+
+  auto save_path_reinc = save_path + ".reinc";
+  index.save(save_path_reinc.c_str());
+
+  delete[] data_copy;
+  delete[] data_load;
 
   return 0;
 }

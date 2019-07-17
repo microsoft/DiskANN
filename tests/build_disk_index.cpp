@@ -1,0 +1,131 @@
+//#include <distances.h>
+//#include <indexing.h>
+#include <index_nsg.h>
+#include <math_utils.h>
+#include "partition_and_pq.h"
+#include "util.h"
+
+// #define TRAINING_SET_SIZE 2000000
+//#define TRAINING_SET_SIZE 2000000
+
+template<typename T>
+bool testBuildIndex(const char* dataFilePath, const char* indexFilePath,
+                    const char* indexBuildParameters) {
+  std::stringstream parser;
+  parser << std::string(indexBuildParameters);
+  std::string              cur_param;
+  std::vector<std::string> param_list;
+  while (parser >> cur_param)
+    param_list.push_back(cur_param);
+
+  if (param_list.size() != 5) {
+    std::cout << "Correct usage of parameters is L (indexing search list size) "
+                 "R (max degree) C (visited list maximum size) B (approximate "
+                 "compressed number of bytes per datapoint to store in "
+                 "memory) sample_size (for PQ generation)"
+              << std::endl;
+    return 1;
+  }
+
+  std::string index_prefix_path(indexFilePath);
+  std::string index_params_path = index_prefix_path + "_params.bin";
+  std::string train_file_path = index_prefix_path + "_training_set_float.bin";
+  std::string pq_pivots_path = index_prefix_path + "_pq_pivots.bin";
+  std::string pq_compressed_vectors_path =
+      index_prefix_path + "_compressed_uint32.bin";
+  std::string randnsg_path = index_prefix_path + "_unopt.rnsg";
+  std::string diskopt_path = index_prefix_path + "_diskopt.rnsg";
+
+  unsigned L = (unsigned) atoi(param_list[0].c_str());
+  unsigned R = (unsigned) atoi(param_list[1].c_str());
+  unsigned C = (unsigned) atoi(param_list[2].c_str());
+  size_t   num_pq_chunks = (size_t) atoi(param_list[3].c_str());
+  size_t   TRAINING_SET_SIZE = (size_t) atoi(param_list[4].c_str());
+
+  std::cout << "loading data.." << std::endl;
+  T* data_load = NULL;
+
+  size_t points_num, dim;
+
+  NSG::load_bin<T>(dataFilePath, data_load, points_num, dim);
+  std::cout << "done." << std::endl;
+
+  auto s = std::chrono::high_resolution_clock::now();
+
+  size_t train_size;
+  float* train_data;
+
+  float p_val = ((float) TRAINING_SET_SIZE / (float) points_num);
+  // generates random sample and sets it to train_data and updates train_size
+  gen_random_slice<T>(data_load, points_num, dim, p_val, train_data,
+                      train_size);
+
+  std::cout << "Training loaded of size " << train_size << std::endl;
+
+  //  unsigned    nn_graph_deg = (unsigned) atoi(argv[3]);
+
+  generate_pq_pivots(train_data, train_size, dim, 256, num_pq_chunks, 15,
+                     pq_pivots_path);
+  generate_pq_data_from_pivots<T>(data_load, points_num, dim, 256,
+                                  num_pq_chunks, pq_pivots_path,
+                                  pq_compressed_vectors_path);
+
+  delete[] data_load;
+  delete[] train_data;
+
+  NSG::Parameters paras;
+  paras.Set<unsigned>("L", L);
+  paras.Set<unsigned>("R", R);
+  paras.Set<unsigned>("C", C);
+  paras.Set<float>("alpha", 1.2f);
+  paras.Set<unsigned>("num_rnds", 2);
+  paras.Set<std::string>("save_path", randnsg_path);
+
+  NSG::IndexNSG<T>* _pNsgIndex = new NSG::IndexNSG<T>(NSG::L2, dataFilePath);
+  if (file_exists(randnsg_path.c_str())) {
+    _pNsgIndex->load(randnsg_path.c_str());
+  } else {
+    _pNsgIndex->build(paras);
+    _pNsgIndex->save(randnsg_path.c_str());
+  }
+
+  _pNsgIndex->save_disk_opt_graph(diskopt_path.c_str());
+
+  uint32_t* params_array = new uint32_t[5];
+  params_array[0] = (uint32_t) L;
+  params_array[1] = (uint32_t) R;
+  params_array[2] = (uint32_t) C;
+  params_array[3] = (uint32_t) dim;
+  params_array[4] = (uint32_t) num_pq_chunks;
+  NSG::save_bin<uint32_t>(index_params_path.c_str(), params_array, 5, 1);
+  std::cout << "Saving params to " << index_params_path << "\n";
+
+  auto                          e = std::chrono::high_resolution_clock::now();
+  std::chrono::duration<double> diff = e - s;
+
+  std::cout << "Indexing time: " << diff.count() << "\n";
+
+  return 0;
+}
+
+int main(int argc, char** argv) {
+  if (argc != 9) {
+    std::cout
+        << "Usage: " << argv[0]
+        << " data_type [float/uint8/int8]  data_file[bin] index_prefix_path L "
+           "R C N_CHUNKS TRAINING_SIZE"
+        << std::endl;
+  } else {
+    std::string params = std::string(argv[4]) + " " + std::string(argv[5]) +
+                         " " + std::string(argv[6]) + " " +
+                         std::string(argv[7]) + " " + std::string(argv[8]);
+    if (std::string(argv[1]) == std::string("float"))
+      testBuildIndex<float>(argv[2], argv[3], params.c_str());
+    else if (std::string(argv[1]) == std::string("int8"))
+      testBuildIndex<int8_t>(argv[2], argv[3], params.c_str());
+    else if (std::string(argv[1]) == std::string("uint8"))
+      testBuildIndex<uint8_t>(argv[2], argv[3], params.c_str());
+    else
+      std::cout << "Error. wrong file type" << std::endl;
+  }
+}

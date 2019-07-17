@@ -4,8 +4,8 @@
 #include <cassert>
 #include <cstdio>
 #include <iostream>
-#include "efanna2e/util.h"
 #include "tsl/robin_map.h"
+#include "util.h"
 #define MAX_EVENTS 1024
 
 namespace {
@@ -13,7 +13,8 @@ namespace {
   typedef struct iocb     iocb_t;
 
   void execute_io(io_context_t ctx, int fd, std::vector<AlignedRead> &read_reqs,
-                  uint64_t n_retries = 5) {
+                  uint64_t n_retries = 0) {
+#ifdef DEBUG
     for (auto &req : read_reqs) {
       assert(IS_ALIGNED(req.len, 512));
       // std::cout << "request:"<<req.offset<<":"<<req.len << std::endl;
@@ -21,6 +22,7 @@ namespace {
       assert(IS_ALIGNED(req.buf, 512));
       // assert(malloc_usable_size(req.buf) >= req.len);
     }
+#endif
 
     // break-up requests into chunks of size MAX_EVENTS each
     uint64_t n_iters = ROUND_UP(read_reqs.size(), MAX_EVENTS) / MAX_EVENTS;
@@ -42,7 +44,7 @@ namespace {
       }
 
       uint64_t n_tries = 0;
-      while (n_tries < n_retries) {
+      while (n_tries <= n_retries) {
         // issue reads
         int64_t ret = io_submit(ctx, (int64_t) n_ops, cbs.data());
         // if requests didn't get accepted
@@ -50,9 +52,8 @@ namespace {
           std::cerr << "io_submit() failed; returned " << ret
                     << ", expected=" << n_ops << ", ernno=" << errno << "="
                     << ::strerror(-ret) << ", try #" << n_tries + 1;
-          n_tries++;
-          // try again
-          continue;
+          std::cout << "ctx: " << ctx << "\n";
+          exit(-1);
         } else {
           // wait on io_getevents
           ret = io_getevents(ctx, (int64_t) n_ops, (int64_t) n_ops, evts.data(),
@@ -62,15 +63,12 @@ namespace {
             std::cerr << "io_getevents() failed; returned " << ret
                       << ", expected=" << n_ops << ", ernno=" << errno << "="
                       << ::strerror(-ret) << ", try #" << n_tries + 1;
-            n_tries++;
-            // try again
-            continue;
+            exit(-1);
           } else {
             break;
           }
         }
       }
-      assert(n_tries != n_retries);
       // disabled since req.buf could be an offset into another buf
       /*
       for (auto &req : read_reqs) {
@@ -137,7 +135,8 @@ void LinuxAlignedFileReader::register_thread() {
     std::cerr << "io_setup() failed; returned " << ret << ", errno=" << errno
               << ":" << ::strerror(errno) << std::endl;
   } else {
-    std::cerr << "allocating ctx to thread-id:" << my_id << std::endl;
+    std::cerr << "allocating ctx: " << ctx << " to thread-id:" << my_id
+              << std::endl;
     ctx_map[my_id] = ctx;
   }
   lk.unlock();
@@ -177,8 +176,11 @@ void LinuxAlignedFileReader::close() {
   assert(ret != -1);
 }
 
-void LinuxAlignedFileReader::read(std::vector<AlignedRead> &read_reqs) {
+void LinuxAlignedFileReader::read(std::vector<AlignedRead> &read_reqs,
+                                  io_context_t              ctx) {
   assert(this->file_desc != -1);
-  io_context_t ctx = get_ctx();
+  //#pragma omp critical
+  //	std::cout << "thread: " << std::this_thread::get_id() << ", crtx: " << ctx
+  //<< "\n";
   execute_io(ctx, this->file_desc, read_reqs);
 }

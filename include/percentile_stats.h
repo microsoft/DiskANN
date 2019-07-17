@@ -1,0 +1,54 @@
+//
+// Copyright (c) 2017 ZJULearning. All rights reserved.
+//
+// This source code is licensed under the MIT license.
+//
+
+#pragma once
+
+#include <cstddef>
+#include <cstdint>
+#include <fstream>
+#include <functional>
+#ifdef __NSG_WINDOWS__
+#include <numeric>
+#endif
+#include <string>
+#include <vector>
+#include "distance.h"
+#include "parameters.h"
+
+namespace NSG {
+  struct QueryStats {
+    uint64_t total_us = 0;      // total time to process query in micros
+    uint64_t n_4k = 0;          // # of 4kB reads
+    uint64_t n_8k = 0;          // # of 8kB reads
+    uint64_t n_12k = 0;         // # of 12kB reads
+    uint64_t n_ios = 0;         // total # of IOs issued
+    uint64_t read_size = 0;     // total # of bytes read
+    uint64_t io_us = 0;         // total time spent in IO
+    uint64_t n_cmps_saved = 0;  // # cmps saved
+    uint64_t n_cmps = 0;        // # cmps
+    uint64_t n_cache_hits = 0;  // # cache_hits
+  };
+
+  inline float get_percentile_stats(
+      QueryStats *stats, uint64_t len, float percentile,
+      const std::function<uint64_t(const QueryStats &)> &member_fn) {
+    std::vector<uint64_t> vals(len);
+    for (uint64_t i = 0; i < len; i++) {
+      vals[i] = member_fn(stats[i]);
+    }
+
+    std::sort(vals.begin(), vals.end(),
+              [](const uint64_t &left, const uint64_t &right) {
+                return left < right;
+              });
+
+    //    uint64_t sum_vals = std::accumulate(vals.begin(), vals.end(),
+    //    (uint64_t) 0);
+
+    vals.clear();
+    return vals[(uint64_t)(percentile * len)];
+  }
+}

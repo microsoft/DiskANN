@@ -3,8 +3,8 @@
 #include <string>
 #include <vector>
 
-#include <efanna2e/distance.h>
-#include <efanna2e/index_nsg.h>
+#include <distance.h>
+#include <index_nsg.h>
 
 namespace NSG {
   class NSGSearchResult {

@@ -1,24 +1,23 @@
 #pragma once
+#include <cstring>
 #include <fstream>
 #include <iostream>
-#include <cstring>
 
 // sequential cached reads
 class cached_ifstream {
  public:
-  cached_ifstream(){
-    
+  cached_ifstream() {
   }
   cached_ifstream(const std::string& filename, uint64_t cache_size)
       : cache_size(cache_size), cur_off(0) {
-        this->open(filename, cache_size);
+    this->open(filename, cache_size);
   }
   ~cached_ifstream() {
     delete[] cache_buf;
     reader.close();
   }
 
-  void open(const std::string& filename, uint64_t cache_size){
+  void open(const std::string& filename, uint64_t cache_size) {
     this->cache_size = cache_size;
     this->cur_off = 0;
     reader.open(filename, std::ios::binary | std::ios::ate);
@@ -28,7 +27,7 @@ class cached_ifstream {
     assert(cache_size > 0);
     cache_buf = new char[cache_size];
     reader.read(cache_buf, cache_size);
-	  std::cout << "Opened: " << filename.c_str() << ", size: " << fsize
+    std::cout << "Opened: " << filename.c_str() << ", size: " << fsize
               << ", cache_size: " << cache_size << "\n";
   }
 
@@ -130,6 +129,10 @@ class cached_ofstream {
       // increment cur_off
       cur_off = n_bytes - cached_bytes;
     }
+  }
+
+  void reset() {
+    writer.seekp(0);
   }
 
  private:

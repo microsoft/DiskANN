@@ -2,7 +2,7 @@
 #include <webservice/in_memory_nsg_search.h>
 #include <ctime>
 #include <iomanip>
-#include "efanna2e/util.h"
+#include "util.h"
 
 namespace NSG {
   const unsigned int DEFAULT_BEAM_WIDTH = 8;

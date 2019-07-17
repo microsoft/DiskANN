@@ -1,7 +1,7 @@
 #ifdef __NSG_WINDOWS__
 #include "windows_aligned_file_reader.h"
 #include <iostream>
-#include "efanna2e/util.h"
+#include "util.h"
 
 #define SECTOR_LEN 4096
 #define MAX_IO_DEPTH 64
@@ -61,11 +61,10 @@ IOContext& WindowsAlignedFileReader::get_ctx() {
   return ctx;
 }
 
-void WindowsAlignedFileReader::read(std::vector<AlignedRead>& read_reqs) {
+void WindowsAlignedFileReader::read(std::vector<AlignedRead>& read_reqs,
+                                    IOContext                 ctx) {
   using namespace std::chrono_literals;
   // execute each request sequentially
-  IOContext& ctx = get_ctx();
-
   _u64 n_reqs = read_reqs.size();
   _u64 n_batches = ROUND_UP(n_reqs, MAX_IO_DEPTH) / MAX_IO_DEPTH;
   for (_u64 i = 0; i < n_batches; i++) {
@@ -85,7 +84,8 @@ void WindowsAlignedFileReader::read(std::vector<AlignedRead>& read_reqs) {
 
     // batch start/end
     _u64 batch_start = MAX_IO_DEPTH * i;
-    _u64 batch_size = min((_u64)(n_reqs - batch_start), (_u64) MAX_IO_DEPTH);
+    _u64 batch_size =
+        std::min((_u64)(n_reqs - batch_start), (_u64) MAX_IO_DEPTH);
 
     // fill OVERLAPPED and issue them
     for (_u64 j = 0; j < batch_size; j++) {
