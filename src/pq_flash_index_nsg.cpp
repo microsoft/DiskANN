@@ -291,7 +291,8 @@ namespace NSG {
     // consolidate coord_cache down to single buf
     _u64 coord_cache_buf_len = coord_cache.size() * aligned_dim;
     NSG::alloc_aligned((void **) &coord_cache_buf,
-                       coord_cache_buf_len * sizeof(T), 256);
+                       coord_cache_buf_len * sizeof(T),
+                       aligned_dim * sizeof(T));
     memset(coord_cache_buf, 0, coord_cache_buf_len * sizeof(T));
     cur_off = 0;
     for (auto &k_v : coord_cache) {

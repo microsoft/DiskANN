@@ -105,9 +105,8 @@ namespace NSG {
     size_t allocSize = point_num * new_dim * sizeof(T);
     std::cout << "Allocating aligned memory, " << allocSize << " bytes..."
               << std::flush;
-    alloc_aligned(((void **) &data_new), allocSize, 512);
-    std::cout << "done." << std::endl
-              << "Copying data to aligned memory..." << std::flush;
+    alloc_aligned(((void **) &data_new), allocSize, 8 * sizeof(T));
+    std::cout << "done. Copying data to aligned memory..." << std::flush;
 
     for (size_t i = 0; i < point_num; i++) {
       memcpy(data_new + i * (size_t) new_dim, data_ori + i * (size_t) dim,
