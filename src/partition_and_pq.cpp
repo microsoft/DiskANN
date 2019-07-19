@@ -124,11 +124,6 @@ int generate_pq_pivots(const float *train_data, size_t num_train, size_t dim,
                        size_t max_k_means_reps, std::string pq_pivots_path) {
   //  size_t num_train, dim;
 
-  for (int t = 0; t < 104; t++) {
-    std::cout << train_data[t] << " ";
-  }
-  std::cout << std::endl;
-
   if (num_pq_chunks > dim) {
     std::cout << " Error: number of chunks more than dimension" << std::endl;
     return -1;

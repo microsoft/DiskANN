@@ -415,10 +415,11 @@ namespace kmeans {
   void kmeanspp_selecting_pivots(float* data, size_t num_points, size_t dim,
                                  float* pivot_data, size_t num_centers) {
     if (num_points > 1 << 23) {
-      std::cout
-          << "ERROR: Currently not supported. Falling back to random pivot "
-             "selection."
-          << std::endl;
+      std::cout << "ERROR: n_pts " << num_points
+                << " currently not supported for k-means++, maximum is "
+                   "8388608. Falling back to random pivot "
+                   "selection."
+                << std::endl;
       selecting_pivots(data, num_points, dim, pivot_data, num_centers);
       return;
     }

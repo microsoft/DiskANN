@@ -1304,7 +1304,7 @@ namespace NSG {
             parameters.Set<unsigned>(
                 "L", (unsigned) (std::min)(
                          (int) L, (int) (L -
-                                         (L - 30) * ((float) sync_num /
+                                         (L - 50) * ((float) sync_num /
                                                      (float) NUM_SYNCS))));
           parameters.Set<float>("alpha", last_round_alpha);
         }
