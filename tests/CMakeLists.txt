@@ -3,6 +3,9 @@ set(CMAKE_CXX_STANDARD 14)
 add_executable(test_nsg_incr_index test_nsg_incr_index.cpp)
 target_link_libraries(test_nsg_incr_index ${PROJECT_NAME} -ltcmalloc)
 
+add_executable(test_permuted_inserts test_permuted_inserts.cpp)
+target_link_libraries(test_permuted_inserts ${PROJECT_NAME} -ltcmalloc)
+
 #add_executable(test_pq test_pq.cpp)
 #target_link_libraries(test_pq ${PROJECT_NAME} -ltcmalloc)
 

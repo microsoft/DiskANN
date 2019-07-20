@@ -54,10 +54,11 @@ namespace NSG {
 
   template<typename T, typename TagT>
   IndexNSG<T, TagT>::IndexNSG(const size_t dimension, const size_t n, Metric m,
-                              const size_t max_points, const bool enable_tags)
+                              const size_t max_points, const bool enable_tags,
+                              const bool store_data)
       : _dim(dimension), _nd(n), _has_built(false), _width(0),
         _can_delete(false), _enable_tags(enable_tags),
-        _consolidated_order(true), _is_data_modified(false) {
+        _consolidated_order(true), _store_data(store_data) {
     _max_points = (max_points > 0) ? max_points : n;
     if (_max_points < n) {
       std::cerr << "max_points must be >= n; max_points: " << _max_points
@@ -238,7 +239,7 @@ namespace NSG {
       }
     }
     std::cout << "done." << std::endl;
-    _is_data_modified = true;
+    _store_data = true;
 
     std::cout << "Updating mapping between tags and ids... " << std::flush;
     // Update the location pointed to by tag
@@ -496,7 +497,7 @@ namespace NSG {
       _change_lock.unlock();
     }
 
-    if (_is_data_modified) {
+    if (_store_data) {
       std::ofstream out_data(std::string(filename) + std::string(".data"),
                              std::ios::binary);
       out_data.write((char *) &_nd, sizeof(_s32));
@@ -774,7 +775,7 @@ namespace NSG {
 
     auto offset_data = _data + (size_t) _dim * location;
     memcpy((void *) offset_data, point, sizeof(T) * _dim);
-    _is_data_modified = true;
+    _store_data = true;
 
     pool.clear();
     tmp.clear();

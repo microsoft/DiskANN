@@ -16,7 +16,8 @@ namespace NSG {
   class IndexNSG {
    public:
     IndexNSG(const size_t dimension, const size_t n, Metric m,
-             const size_t max_points = 0, const bool enable_tags = false);
+             const size_t max_points = 0, const bool enable_tags = false,
+             const bool store_data = false);
 
     ~IndexNSG();
 
@@ -142,7 +143,7 @@ namespace NSG {
     bool _can_delete;
     bool _enable_tags;
     bool _consolidated_order;
-    bool _is_data_modified;
+    bool _store_data;
 
     std::unordered_map<TagT, unsigned> _tag_to_location;
     std::unordered_map<unsigned, TagT> _location_to_tag;
