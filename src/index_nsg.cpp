@@ -242,7 +242,7 @@ namespace NSG {
     std::cout << "Updating mapping between tags and ids... " << std::flush;
     // Update the location pointed to by tag
     _tag_to_location.clear();
-    for (auto iter : _location_to_tag) 
+    for (auto iter : _location_to_tag)
       _tag_to_location[iter.second] = new_location[iter.first];
     _location_to_tag.clear();
     for (auto iter : _tag_to_location)
@@ -515,8 +515,8 @@ namespace NSG {
         std::cerr << "Tag file not found." << std::endl;
         exit(-1);
       }
-      unsigned      id = 0;
-      TagT          tag;
+      unsigned id = 0;
+      TagT     tag;
       while (tag_file >> tag) {
         _location_to_tag[id] = tag;
         _tag_to_location[tag] = id++;
@@ -870,6 +870,13 @@ namespace NSG {
     // cleanup
     delete cur_level;
     delete prev_level;
+  }
+
+  template<typename T, typename TagT>
+  void IndexNSG<T, TagT>::populate_start_points_ep(
+      std::vector<unsigned> &start_points) {
+    assert(start_points.size() == 0);
+    start_points.push_back(_ep);
   }
 
   template<typename T, typename TagT>
@@ -1392,7 +1399,8 @@ namespace NSG {
   template<typename T, typename TagT>
   std::pair<int, int> IndexNSG<T, TagT>::beam_search(
       const T *query, const T *x, const size_t K, const Parameters &parameters,
-      unsigned *indices, int beam_width, std::vector<unsigned> &start_points) {
+      unsigned *indices, int beam_width,
+      const std::vector<unsigned> &start_points) {
     const unsigned int L = parameters.Get<unsigned>("L_search");
     return beam_search(query, x, K, L, indices, beam_width, start_points);
   }
@@ -1400,14 +1408,17 @@ namespace NSG {
   template<typename T, typename TagT>
   std::pair<int, int> IndexNSG<T, TagT>::beam_search(
       const T *query, const T *x, const size_t K, const unsigned L,
-      unsigned *indices, int beam_width, std::vector<unsigned> &start_points) {
+      unsigned *indices, int beam_width,
+      const std::vector<unsigned> &start_points) {
     _data = x;
     std::vector<unsigned>    init_ids;
     tsl::robin_set<unsigned> visited(10 * L);
 
-    // use start_points for init; ignore default init
-    if (start_points.size() == 0)
-      start_points.emplace_back(_ep);
+    if (start_points.size() == 0) {
+      std::cerr << "Error: starting points must be populated for search"
+                << std::endl;
+      exit(-1);
+    }
 
     /* ep_neighbors contains all the neighbors of navigating node, and
      * their distance from the query node
@@ -1543,6 +1554,23 @@ namespace NSG {
     }
     return std::make_pair(hops, cmps);
   }
+
+  template<typename T, typename TagT>
+  std::pair<int, int> IndexNSG<T, TagT>::beam_search_tags(
+      const T *query, const T *x, const size_t K, const Parameters &parameters,
+      TagT *tags, int beam_width, const std::vector<unsigned> &start_points,
+      unsigned *indices_buffer) {
+    const bool alloc = indices_buffer == NULL;
+    auto       indices = alloc ? new unsigned[K] : indices_buffer;
+    auto       ret =
+        beam_search(query, x, K, parameters, indices, beam_width, start_points);
+    for (int i = 0; i < (int) K; ++i)
+      tags[i] = _location_to_tag[indices[i]];
+    if (alloc)
+      delete[] indices;
+    return ret;
+  }
+
   /*
     // INT8 specialization
     template<>
@@ -1781,21 +1809,5 @@ namespace NSG {
   template class IndexNSG<float>;
   template class IndexNSG<int8_t>;
   template class IndexNSG<uint8_t>;
-
-  template<typename T, typename TagT>
-  std::pair<int, int> IndexNSG<T, TagT>::beam_search_tags(
-      const T *query, const T *x, const size_t K, const Parameters &parameters,
-      TagT *tags, int beam_width, std::vector<unsigned> &start_points,
-      unsigned *indices_buffer) {
-    const bool alloc = indices_buffer == NULL;
-    auto       indices = alloc ? new unsigned[K] : indices_buffer;
-    auto       ret =
-        beam_search(query, x, K, parameters, indices, beam_width, start_points);
-    for (int i = 0; i < (int) K; ++i)
-      tags[i] = _location_to_tag[indices[i]];
-    if (alloc)
-      delete[] indices;
-    return ret;
-  }
 
 }  // namespace NSG

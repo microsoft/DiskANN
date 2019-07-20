@@ -107,6 +107,8 @@ int aux_main(int argc, char** argv) {
   if (bfs_init) {
     index.populate_start_points_bfs(start_points);
     std::cout << "Initialized starting points based on BFS" << std::endl;
+  } else {
+    index.populate_start_points_ep(start_points);
   }
 
   NSG::Parameters paras;

@@ -31,28 +31,28 @@ namespace NSG {
 
     typedef std::vector<SimpleNeighbor> vecNgh;
 
+    void populate_start_points_ep(std::vector<unsigned> &start_points);
     void populate_start_points_bfs(std::vector<unsigned> &start_points);
-
-    std::pair<int, int> beam_search(const T *query, const T *x, const size_t K,
-                                    const Parameters &parameters,
-                                    unsigned *indices, int beam_width,
-                                    std::vector<unsigned> &start_points);
-
-    std::pair<int, int> beam_search_tags(const T *query, const T *x,
-                                         const size_t      K,
-                                         const Parameters &parameters,
-                                         TagT *tags, int beam_width,
-                                         std::vector<unsigned> &start_points,
-                                         unsigned *indices_buffer = NULL);
-
-    void prefetch_vector(unsigned id);
 
     // Gopal. Added beam_search overload that takes L as parameter, so that we
     // can customize L on a per-query basis without tampering with "Parameters"
     std::pair<int, int> beam_search(const T *query, const T *x, const size_t K,
                                     const unsigned int L, unsigned *indices,
-                                    int                    beam_width,
-                                    std::vector<unsigned> &start_points);
+                                    int                          beam_width,
+                                    const std::vector<unsigned> &start_points);
+
+    std::pair<int, int> beam_search(const T *query, const T *x, const size_t K,
+                                    const Parameters &parameters,
+                                    unsigned *indices, int beam_width,
+                                    const std::vector<unsigned> &start_points);
+
+    std::pair<int, int> beam_search_tags(
+        const T *query, const T *x, const size_t K,
+        const Parameters &parameters, TagT *tags, int beam_width,
+        const std::vector<unsigned> &start_points,
+        unsigned *                   indices_buffer = NULL);
+
+    void prefetch_vector(unsigned id);
 
     void save_disk_opt_graph(const char *diskopt_path);
 
@@ -79,7 +79,7 @@ namespace NSG {
 
     CompactGraph _final_graph;
 
-    bool *_is_inner;
+    // bool *_is_inner;
 
     void reachable_bfs(const unsigned                         start_node,
                        std::vector<tsl::robin_set<unsigned>> &bfs_order,
