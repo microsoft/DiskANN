@@ -76,17 +76,14 @@ namespace NSG {
 
    protected:
     typedef std::vector<std::vector<unsigned>> CompactGraph;
-
     CompactGraph _final_graph;
-
-    // bool *_is_inner;
 
     void reachable_bfs(const unsigned                         start_node,
                        std::vector<tsl::robin_set<unsigned>> &bfs_order,
                        bool *                                 visited);
 
     // entry point is centroid based on all-to-centroid distance computation
-    unsigned get_entry_point();
+    unsigned calculate_entry_point();
 
     void iterate_to_fixed_point(const T *query, const Parameters &parameter,
                                 std::vector<unsigned> &   init_ids,
@@ -145,6 +142,7 @@ namespace NSG {
     bool _can_delete;
     bool _enable_tags;
     bool _consolidated_order;
+    bool _is_data_modified;
 
     std::unordered_map<TagT, unsigned> _tag_to_location;
     std::unordered_map<unsigned, TagT> _location_to_tag;

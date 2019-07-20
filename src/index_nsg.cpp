@@ -57,7 +57,7 @@ namespace NSG {
                               const size_t max_points, const bool enable_tags)
       : _dim(dimension), _nd(n), _has_built(false), _width(0),
         _can_delete(false), _enable_tags(enable_tags),
-        _consolidated_order(true) {
+        _consolidated_order(true), _is_data_modified(false) {
     _max_points = (max_points > 0) ? max_points : n;
     if (_max_points < n) {
       std::cerr << "max_points must be >= n; max_points: " << _max_points
@@ -238,6 +238,7 @@ namespace NSG {
       }
     }
     std::cout << "done." << std::endl;
+    _is_data_modified = true;
 
     std::cout << "Updating mapping between tags and ids... " << std::flush;
     // Update the location pointed to by tag
@@ -470,7 +471,7 @@ namespace NSG {
     if (_enable_tags) {
       _change_lock.lock();
       if (_can_delete || !_consolidated_order) {
-        std::cerr << "Disable deletes and consolidate before saving index"
+        std::cerr << "Disable deletes and consolidate index before saving."
                   << std::endl;
         exit(-1);
       }
@@ -493,6 +494,14 @@ namespace NSG {
       }
       out_tags.close();
       _change_lock.unlock();
+    }
+
+    if (_is_data_modified) {
+      std::ofstream out_data(std::string(filename) + std::string(".data"), std::ios::binary);
+      out_data.write((char*)& _nd, sizeof(_s32));
+      out_data.write((char*)& _dim, sizeof(_s32));
+      out_data.write((char*)_data, _nd * _dim * sizeof(T));
+      out_data.close();
     }
 
     std::cout << "Avg degree: " << ((float) total_gr_edges) / ((float) _nd)
@@ -589,7 +598,7 @@ namespace NSG {
         _final_graph[mapping[i]].shrink_to_fit();
       }
     }
-    _ep = get_entry_point();
+    _ep = calculate_entry_point();
     std::cout << "done. Entry point set to " << _ep << "." << std::endl;
   }
 
@@ -764,6 +773,7 @@ namespace NSG {
 
     auto offset_data = _data + (size_t) _dim * location;
     memcpy((void *) offset_data, point, sizeof(T) * _dim);
+    _is_data_modified = true;
 
     pool.clear();
     tmp.clear();
@@ -948,7 +958,7 @@ namespace NSG {
    * in the graph.
    */
   template<typename T, typename TagT>
-  unsigned IndexNSG<T, TagT>::get_entry_point() {
+  unsigned IndexNSG<T, TagT>::calculate_entry_point() {
     // allocate and init centroid
     float *center = new float[_dim]();
     for (size_t j = 0; j < _dim; j++)
