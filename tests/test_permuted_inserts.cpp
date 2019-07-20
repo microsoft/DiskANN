@@ -1,20 +1,20 @@
 #include <index_nsg.h>
 #include <timer.h>
 
-#include <random>
 #include <omp.h>
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
+#include <random>
 #include "util.h"
 
 int main(int argc, char** argv) {
   if (argc != 8) {
     std::cout << "Correct usage: " << argv[0]
-      << " data_file L R C alpha num_rounds "
-      << "save_graph_file  " << std::endl;
+              << " data_file L R C alpha num_rounds "
+              << "save_graph_file  " << std::endl;
     exit(-1);
   }
 
@@ -25,11 +25,11 @@ int main(int argc, char** argv) {
   data_load = NSG::data_align(data_load, num_points, dim);
   std::cout << "Data loaded and aligned" << std::endl;
 
-  unsigned    L = (unsigned)atoi(argv[2]);
-  unsigned    R = (unsigned)atoi(argv[3]);
-  unsigned    C = (unsigned)atoi(argv[4]);
-  float       alpha = (float)std::atof(argv[5]);
-  unsigned    num_rnds = (unsigned)std::atoi(argv[6]);
+  unsigned    L = (unsigned) atoi(argv[2]);
+  unsigned    R = (unsigned) atoi(argv[3]);
+  unsigned    C = (unsigned) atoi(argv[4]);
+  float       alpha = (float) std::atof(argv[5]);
+  unsigned    num_rnds = (unsigned) std::atoi(argv[6]);
   std::string save_path(argv[7]);
 
   NSG::Parameters paras;
@@ -39,16 +39,16 @@ int main(int argc, char** argv) {
   paras.Set<float>("alpha", alpha);
   paras.Set<unsigned>("num_rnds", num_rnds);
 
-  unsigned num_incr = 10000;
+  unsigned num_incr = 90000;
 
   auto data_copy = new float[num_points * dim];
-  memcpy((void*)data_copy, (void*)data_load,
-    num_points * dim * sizeof(float));
+  memcpy((void*) data_copy, (void*) data_load,
+         num_points * dim * sizeof(float));
 
   typedef unsigned TagT;
 
   NSG::IndexNSG<float, TagT> index(dim, num_points - num_incr, NSG::L2,
-    num_points, true, true);
+                                   num_points, true, true);
   {
     std::vector<TagT> tags(num_points - num_incr);
     std::iota(tags.begin(), tags.end(), 0);
@@ -61,17 +61,17 @@ int main(int argc, char** argv) {
   std::vector<unsigned> order(num_incr);
   std::iota(order.begin(), order.end(), num_points - num_incr);
   std::random_device rd;
-  std::mt19937 g(rd());
+  std::mt19937       g(rd());
   std::shuffle(order.begin(), order.end(), g);
 
   {
     std::vector<NSG::Neighbor>       pool, tmp;
     tsl::robin_set<unsigned>         visited;
     std::vector<NSG::SimpleNeighbor> cut_graph;
-    NSG::Timer timer;
+    NSG::Timer                       timer;
     for (auto id : order)
       index.insert_point(data_load + id * dim, paras, pool, tmp, visited,
-        cut_graph, id);
+                         cut_graph, id);
     std::cout << "Incremental time: " << timer.elapsed() / 1000 << "ms\n";
     index.save(save_path.c_str());
   }
