@@ -497,10 +497,11 @@ namespace NSG {
     }
 
     if (_is_data_modified) {
-      std::ofstream out_data(std::string(filename) + std::string(".data"), std::ios::binary);
-      out_data.write((char*)& _nd, sizeof(_s32));
-      out_data.write((char*)& _dim, sizeof(_s32));
-      out_data.write((char*)_data, _nd * _dim * sizeof(T));
+      std::ofstream out_data(std::string(filename) + std::string(".data"),
+                             std::ios::binary);
+      out_data.write((char *) &_nd, sizeof(_s32));
+      out_data.write((char *) &_dim, sizeof(_s32));
+      out_data.write((char *) _data, _nd * _dim * sizeof(T));
       out_data.close();
     }
 

@@ -76,7 +76,7 @@ namespace NSG {
 
    protected:
     typedef std::vector<std::vector<unsigned>> CompactGraph;
-    CompactGraph _final_graph;
+    CompactGraph                               _final_graph;
 
     void reachable_bfs(const unsigned                         start_node,
                        std::vector<tsl::robin_set<unsigned>> &bfs_order,
