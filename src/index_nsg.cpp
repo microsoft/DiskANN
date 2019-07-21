@@ -233,9 +233,10 @@ namespace NSG {
           _final_graph[old][i] = new_location[_final_graph[old][i]];
         }
 
-        // Move the data to the correct position
+        // Move the data and adj list to the correct position
         if (new_location[old] != old) {
           assert(new_location[old] < old);
+          _final_graph[new_location[old]].swap(_final_graph[old]);
           memcpy((void*)(_data + _dim * (size_t)new_location[old]),
             (void*)(_data + _dim * (size_t)old), _dim * sizeof(T));
         }
