@@ -10,10 +10,10 @@
 #include "util.h"
 
 int main(int argc, char** argv) {
-  if (argc != 8) {
+  if (argc != 9) {
     std::cout << "Correct usage: " << argv[0]
               << " data_file L R C alpha num_rounds "
-              << "save_graph_file  " << std::endl;
+              << "save_graph_file #incr_points" << std::endl;
     exit(-1);
   }
 
@@ -30,6 +30,7 @@ int main(int argc, char** argv) {
   float       alpha = (float) std::atof(argv[5]);
   unsigned    num_rnds = (unsigned) std::atoi(argv[6]);
   std::string save_path(argv[7]);
+  unsigned num_incr = (unsigned)atoi(argv[8]);
 
   NSG::Parameters paras;
   paras.Set<unsigned>("L", L);
@@ -37,8 +38,6 @@ int main(int argc, char** argv) {
   paras.Set<unsigned>("C", C);
   paras.Set<float>("alpha", alpha);
   paras.Set<unsigned>("num_rnds", num_rnds);
-
-  unsigned num_incr = 1;
 
   auto data_copy = new float[num_points * dim];
   memcpy((void*) data_copy, (void*) data_load,
