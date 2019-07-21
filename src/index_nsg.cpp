@@ -183,6 +183,7 @@ namespace NSG {
         }
 
         if (modify) {
+          std::cout << "Modify: " << i << std::endl;
           for (auto j : candidate_set)
             expanded_nghrs.push_back(Neighbor(
                 j,
@@ -229,13 +230,16 @@ namespace NSG {
 
         // Renumber nodes to compact the order
         for (size_t i = 0; i < _final_graph[old].size(); ++i) {
-          assert(new_location[_final_graph[old][i]] < _max_points);
+          assert(new_location[_final_graph[old][i]] <= _final_graph[old][i]);
           _final_graph[old][i] = new_location[_final_graph[old][i]];
         }
 
         // Move the data to the correct position
-        memcpy((void *) (_data + _dim * (size_t) new_location[old]),
-               (void *) (_data + _dim * (size_t) old), _dim * sizeof(T));
+        if (new_location[old] != old) {
+          assert(new_location[old] < old);
+          memcpy((void*)(_data + _dim * (size_t)new_location[old]),
+            (void*)(_data + _dim * (size_t)old), _dim * sizeof(T));
+        }
       }
     }
     std::cout << "done." << std::endl;
