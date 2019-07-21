@@ -183,7 +183,6 @@ namespace NSG {
         }
 
         if (modify) {
-          std::cout << "Modify: " << i << std::endl;
           for (auto j : candidate_set)
             expanded_nghrs.push_back(Neighbor(
                 j,
