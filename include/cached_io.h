@@ -47,14 +47,22 @@ class cached_ifstream {
       memcpy(read_buf, cache_buf + cur_off, cached_bytes);
 
       // go to disk and fetch more data
-      reader.read(cache_buf, cache_size);
+      reader.read(read_buf + cached_bytes, n_bytes - cached_bytes);
       // reset cur off
-      cur_off = 0;
+      cur_off = cache_size;
+
+      uint64_t size_left = fsize - reader.tellg();
+
+      if (size_left >= cache_size) {
+        reader.read(cache_buf, cache_size);
+        cur_off = 0;
+      }
+
       // copy remaining data to read_buf
-      memcpy(read_buf + cached_bytes, cache_buf, n_bytes - cached_bytes);
+      // memcpy(read_buf + cached_bytes, cache_buf, n_bytes - cached_bytes);
 
       // increment cur_off
-      cur_off = n_bytes - cached_bytes;
+      // cur_off = n_bytes - cached_bytes;
     }
   }
 
