@@ -293,7 +293,7 @@ namespace NSG {
     _u64 coord_cache_buf_len = coord_cache.size() * aligned_dim;
     NSG::alloc_aligned((void **) &coord_cache_buf,
                        coord_cache_buf_len * sizeof(T),
-                       aligned_dim * sizeof(T));
+                       8 * sizeof(T));
     memset(coord_cache_buf, 0, coord_cache_buf_len * sizeof(T));
     cur_off = 0;
     for (auto &k_v : coord_cache) {
