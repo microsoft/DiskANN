@@ -105,7 +105,7 @@ namespace NSG {
     size_t allocSize = point_num * new_dim * sizeof(T);
     std::cout << "Allocating aligned memory, " << allocSize << " bytes..."
               << std::flush;
-    alloc_aligned(((void **) &data_new), allocSize, 512);
+    alloc_aligned(((void **) &data_new), allocSize, 8 * sizeof(T));
     std::cout << "done. Copying data to aligned memory..." << std::flush;
 
     for (size_t i = 0; i < point_num; i++) {
@@ -257,7 +257,7 @@ namespace NSG {
   inline void load_bin(const char *filename, T *&data, size_t &npts,
                        size_t &ndims) {
     std::ifstream reader(filename, std::ios::binary);
-    std::cout << "Reading bin: " << filename << "\n";
+    std::cout << "Reading bin file " << filename << " ...\n";
     int npts_i32, ndims_i32;
     reader.read((char *) &npts_i32, sizeof(int));
     reader.read((char *) &ndims_i32, sizeof(int));
@@ -265,14 +265,14 @@ namespace NSG {
     ndims = (unsigned) ndims_i32;
     _u64 npts_u64 = (_u64) npts;
     _u64 ndims_u64 = (_u64) ndims;
-    std::cout << "bin: #pts = " << npts << ", #dims = " << ndims
+    std::cout << "#pts = " << npts << ", #dims = " << ndims
               << ", size = " << npts_u64 * ndims_u64 * sizeof(T) << "B"
               << std::endl;
 
     data = new T[npts_u64 * ndims_u64];
     reader.read((char *) data, npts_u64 * ndims_u64 * sizeof(T));
     reader.close();
-    std::cout << "Finished reading bin" << std::endl;
+    std::cout << "Finished reading bin file." << std::endl;
   }
 
   template<typename T>

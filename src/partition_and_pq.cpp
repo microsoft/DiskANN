@@ -23,7 +23,7 @@
 #include <typeinfo>
 
 #include <cassert>
-#include "MemoryMapper.h"
+#include "memory_mapper.h"
 #include "partition_and_pq.h"
 #ifdef __NSG_WINDOWS__
 #include <xmmintrin.h>
@@ -123,11 +123,6 @@ int generate_pq_pivots(const float *train_data, size_t num_train, size_t dim,
                        size_t num_centers, size_t num_pq_chunks,
                        size_t max_k_means_reps, std::string pq_pivots_path) {
   //  size_t num_train, dim;
-
-  for (int t = 0; t < 104; t++) {
-    std::cout << train_data[t] << " ";
-  }
-  std::cout << std::endl;
 
   if (num_pq_chunks > dim) {
     std::cout << " Error: number of chunks more than dimension" << std::endl;

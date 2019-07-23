@@ -5,7 +5,7 @@
 
 #include <distance.h>
 #include <index_nsg.h>
-
+#include <cosine_similarity.h>
 namespace NSG {
   class NSGSearchResult {
    public:

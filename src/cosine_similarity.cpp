@@ -1,5 +1,6 @@
 #include <cosine_similarity.h>
 #include <cmath>
+#include <cstdint>
 #include <iostream>
 #include <vector>
 
