@@ -138,6 +138,7 @@ namespace NSG {
         NSG::alloc_aligned((void **) &scratch.aligned_dist_scratch,
                            512 * sizeof(float), 256);
         memset(scratch.aligned_scratch, 0, 256 * sizeof(float));
+        memset(scratch.coord_scratch, 0, MAX_N_CMPS * this->aligned_dim);
         ThreadData<T> data;
         data.ctx = ctx;
         data.scratch = scratch;
@@ -471,6 +472,8 @@ namespace NSG {
     std::vector<_u64>     init_ids(l_search);
     tsl::robin_set<_u64>  visited(4096);
 
+    std::vector<Neighbor> full_retset;
+    full_retset.reserve(4096);
     tsl::robin_map<_u64, T *> fp_coords;
 
 // compute medoid nhood <-> query distances
@@ -583,8 +586,14 @@ namespace NSG {
           data_buf_idx++;
           memcpy(node_fp_coords_copy, node_fp_coords, data_dim * sizeof(T));
 
-          fp_coords.insert(
-              std::make_pair(frontier_nhood.first, node_fp_coords_copy));
+          float cur_expanded_dist =
+              dist_cmp->compare(query, node_fp_coords_copy, aligned_dim);
+          full_retset.push_back(
+              Neighbor(frontier_nhood.first, cur_expanded_dist, true));
+
+          //          fp_coords.insert(
+          //             std::make_pair(frontier_nhood.first,
+          //             node_fp_coords_copy));
 
           unsigned *node_nbrs = (node_buf + 1);
 #ifdef USE_ACCELERATED_PQ
@@ -632,6 +641,13 @@ namespace NSG {
 
         // process cached nhoods
         for (auto &cached_nhood : cached_nhoods) {
+          auto  global_cache_iter = coord_cache.find(cached_nhood.first);
+          T *   node_fp_coords_copy = global_cache_iter->second;
+          float cur_expanded_dist =
+              dist_cmp->compare(query, node_fp_coords_copy, aligned_dim);
+          full_retset.push_back(
+              Neighbor(cached_nhood.first, cur_expanded_dist, true));
+
           _u64      nnbrs = cached_nhood.second.first;
           unsigned *node_nbrs = cached_nhood.second.second;
 #ifdef USE_ACCELERATED_PQ
@@ -683,50 +699,53 @@ namespace NSG {
       else
         ++k;
     }
+    /*
+        // prefetch coords backing buf
+        _mm_prefetch((char *) data_buf, _MM_HINT_T1);
+        // RE-RANKING STEP
+        for (_u64 i = 0; i < l_search; i++) {
+          _u64 idx = retset[i].id;
+          T *  node_coords;
+          auto global_cache_iter = coord_cache.find(idx);
+          if (global_cache_iter == coord_cache.end()) {
+            auto local_cache_iter = fp_coords.find(idx);
+            assert(local_cache_iter != fp_coords.end());
+            node_coords = local_cache_iter->second;
+          } else {
+            node_coords = global_cache_iter->second;
+          }
 
-    // prefetch coords backing buf
-    _mm_prefetch((char *) data_buf, _MM_HINT_T1);
-    // RE-RANKING STEP
-    for (_u64 i = 0; i < l_search; i++) {
-      _u64 idx = retset[i].id;
-      T *  node_coords;
-      auto global_cache_iter = coord_cache.find(idx);
-      if (global_cache_iter == coord_cache.end()) {
-        auto local_cache_iter = fp_coords.find(idx);
-        assert(local_cache_iter != fp_coords.end());
-        node_coords = local_cache_iter->second;
-      } else {
-        node_coords = global_cache_iter->second;
-      }
+          // std::cout << "left: " << query << ", right: " << node_coords <<
+       "\n";
 
-      // std::cout << "left: " << query << ", right: " << node_coords << "\n";
+          // USE different distance function for final ranking -- like L2 for
+       search
+          // and cosine for ranking
+          if (output_dist_func != nullptr) {
+            retset[i].distance =
+                output_dist_func->compare(query, node_coords, aligned_dim);
+          } else {
+            retset[i].distance = dist_cmp->compare(query, node_coords,
+       aligned_dim);
+          }
 
-      // USE different distance function for final ranking -- like L2 for search
-      // and cosine for ranking
-      if (output_dist_func != nullptr) {
-        retset[i].distance =
-            output_dist_func->compare(query, node_coords, aligned_dim);
-      } else {
-        retset[i].distance = dist_cmp->compare(query, node_coords, aligned_dim);
-      }
-
-      if (stats != nullptr) {
-        stats->n_cmps++;
-      }
-    }
-    // std::cout << "end\n";
-
+          if (stats != nullptr) {
+            stats->n_cmps++;
+          }
+        }
+        // std::cout << "end\n";
+    */
     // re-sort by distance
-    std::sort(retset.begin(), retset.begin() + l_search,
+    std::sort(full_retset.begin(), full_retset.end(),
               [](const Neighbor &left, const Neighbor &right) {
                 return left.distance < right.distance;
               });
 
     // copy k_search values
     for (_u64 i = 0; i < k_search; i++) {
-      indices[i] = retset[i].id;
+      indices[i] = full_retset[i].id;
       if (distances != nullptr) {
-        distances[i] = retset[i].distance;
+        distances[i] = full_retset[i].distance;
       }
     }
 

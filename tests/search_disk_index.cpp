@@ -21,14 +21,29 @@
 #include "memory_mapper.h"
 
 float calc_recall(unsigned num_queries, unsigned* gold_std, unsigned dim_gs,
-                  unsigned* our_results, unsigned dim_or, unsigned recall_at) {
-  bool*    this_point = new bool[recall_at];
+                  unsigned* our_results, unsigned dim_or, unsigned recall_at,
+                  float* gold_std_dist) {
+  bool*    this_point = new bool[dim_gs];
   unsigned total_recall = 0;
 
   for (size_t i = 0; i < num_queries; i++) {
-    for (unsigned j = 0; j < recall_at; j++)
+    for (unsigned j = 0; j < dim_gs; j++)
       this_point[j] = false;
-    for (size_t j1 = 0; j1 < recall_at; j1++)
+
+    size_t cur_pt_recall_threshold = recall_at;
+    while (cur_pt_recall_threshold < dim_gs &&
+           gold_std_dist[i * dim_gs + cur_pt_recall_threshold - 1] ==
+               gold_std_dist[i * dim_gs + cur_pt_recall_threshold]) {
+      //      std::cout << i << " " << cur_pt_recall_threshold << " "
+      //                << gold_std_dist[i * dim_gs + cur_pt_recall_threshold -
+      //                1]
+      //                << " " << gold_std_dist[i * dim_gs +
+      //                cur_pt_recall_threshold]
+      //                << std::endl;
+      cur_pt_recall_threshold++;
+    }
+
+    for (size_t j1 = 0; j1 < cur_pt_recall_threshold; j1++)
       for (size_t j2 = 0; j2 < dim_or; j2++)
         if (gold_std[i * (size_t) dim_gs + j1] ==
             our_results[i * (size_t) dim_or + j2]) {
@@ -159,22 +174,30 @@ int aux_main(int argc, char** argv) {
   T*        query = nullptr;
   size_t    query_num, ndims;
   uint32_t* gt_load;
-  size_t    query_num_gt, gt_num;
+  float*    gt_dist;
+  size_t    gt_num, gt_dim;
+  size_t    gt_num_dist, gt_dim_dist;
   NSG::load_bin<T>(argv[3], query, query_num, ndims);
-  NSG::load_bin<uint32_t>(argv[4], gt_load, query_num_gt, gt_num);
+  NSG::load_bin<uint32_t>(argv[4], gt_load, gt_num, gt_dim);
+  NSG::load_bin<float>(argv[5], gt_dist, gt_num_dist, gt_dim_dist);
 
-  std::string recall_string = std::string("Recall@") + std::string(argv[5]);
-  _u64        recall_at = std::atoi(argv[5]);
+  std::string recall_string = std::string("Recall@") + std::string(argv[6]);
+  _u64        recall_at = std::atoi(argv[6]);
 
-  if (query_num_gt != query_num) {
+  if (gt_num != gt_num_dist || gt_dim != gt_dim_dist) {
+    std::cout << "Ground truth idx and dist dimension mismatch. " << std::endl;
+    return -1;
+  }
+
+  if (gt_num != query_num) {
     std::cout << "Ground truth does not match number of queries. " << std::endl;
     return -1;
   }
 
-  if (recall_at > gt_num) {
-    std::cout << "Ground truth has only " << gt_num
-              << " elements. Calculating recall at " << gt_num << std::endl;
-    recall_at = gt_num;
+  if (recall_at > gt_dim) {
+    std::cout << "Ground truth has only " << gt_dim
+              << " elements. Calculating recall at " << gt_dim << std::endl;
+    recall_at = gt_dim;
   }
 
   query = NSG::data_align<T>(query, query_num, ndims);
@@ -240,8 +263,8 @@ int aux_main(int argc, char** argv) {
 
       // compute recall
       NSG::convert_types(query_res, query_res32, query_num, recall_at);
-      float recall = calc_recall(query_num, gt_load, gt_num, query_res32,
-                                 recall_at, recall_at);
+      float recall = calc_recall(query_num, gt_load, gt_dim, query_res32,
+                                 recall_at, recall_at, gt_dist);
       std::cout << std::setw(8) << L << std::setw(16) << recall << std::setw(16)
                 << std::get<0>(q_stats) << std::setw(16) << std::get<1>(q_stats)
                 << std::setw(16) << std::get<2>(q_stats) << std::endl;
@@ -256,11 +279,12 @@ int aux_main(int argc, char** argv) {
 }
 
 int main(int argc, char** argv) {
-  if (argc != 6) {
-    std::cout << "Usage: " << argv[0]
-              << " <index_type> [float/int8/uint8] index_prefix_path "
-                 "<query_bin> ground_truth_bin recall@"
-              << std::endl;
+  if (argc != 7) {
+    std::cout
+        << "Usage: " << argv[0]
+        << " <index_type> [float/int8/uint8] index_prefix_path "
+           "<query_bin> ground_truth_idx_bin ground_truth_dist_bin recall@"
+        << std::endl;
     exit(-1);
   }
   if (std::string(argv[1]) == std::string("float"))
