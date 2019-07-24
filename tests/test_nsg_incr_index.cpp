@@ -30,7 +30,7 @@ int main(int argc, char** argv) {
   float       alpha = (float) std::atof(argv[5]);
   unsigned    num_rnds = (unsigned) std::atoi(argv[6]);
   std::string save_path(argv[7]);
-  unsigned num_incr = (unsigned)atoi(argv[8]);
+  unsigned    num_incr = (unsigned) atoi(argv[8]);
 
   NSG::Parameters paras;
   paras.Set<unsigned>("L", L);

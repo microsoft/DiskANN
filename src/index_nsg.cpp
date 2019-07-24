@@ -237,8 +237,8 @@ namespace NSG {
         if (new_location[old] != old) {
           assert(new_location[old] < old);
           _final_graph[new_location[old]].swap(_final_graph[old]);
-          memcpy((void*)(_data + _dim * (size_t)new_location[old]),
-            (void*)(_data + _dim * (size_t)old), _dim * sizeof(T));
+          memcpy((void *) (_data + _dim * (size_t) new_location[old]),
+                 (void *) (_data + _dim * (size_t) old), _dim * sizeof(T));
         }
       }
     }
@@ -420,7 +420,8 @@ namespace NSG {
       std::iota(std::begin(mapping), std::end(mapping), 0);
     }
 
-    std::cout << "Generating random graph with " << num_points << " points... ";
+    std::cout << "Generating random graph with " << num_points << " points... "
+              << std::flush;
     // PAR_BLOCK_SZ gives the number of points that can fit in a single block
     size_t PAR_BLOCK_SZ = (1 << 16);  // = 64KB
     size_t nblocks = DIV_ROUND_UP(num_points, PAR_BLOCK_SZ);
@@ -436,7 +437,7 @@ namespace NSG {
       for (size_t i = block * PAR_BLOCK_SZ;
            i < (block + 1) * PAR_BLOCK_SZ && i < num_points; i++) {
         std::set<unsigned> ra_ndset;
-        while (ra_ndset.size() < k)
+        while (ra_ndset.size() < k && ra_ndset.size() < num_points)
           ra_ndset.insert(dis(gen));
 
         _final_graph[mapping[i]].reserve(k);
@@ -465,7 +466,7 @@ namespace NSG {
     const unsigned L = parameter.Get<unsigned>("L");
 
     /* put random L new ids into visited list and init_ids list */
-    while (init_ids.size() < L) {
+    while (init_ids.size() < L && init_ids.size() < _nd - 1) {
       unsigned id = (rand() * rand() * rand()) % _nd;
       if (visited.find(id) != visited.end())
         continue;
@@ -484,6 +485,7 @@ namespace NSG {
       retset[l++] = Neighbor(
           id, _distance->compare(_data + _dim * (size_t) id, query, _dim),
           true);
+      fullset.emplace_back(retset[l - 1]);
     }
 
     /* sort retset based on distance of each point to query */
@@ -1094,6 +1096,9 @@ namespace NSG {
     uint32_t NUM_SYNCS = DIV_ROUND_UP(_nd, (128 * 1024));
     if (_nd < (1 << 22))
       NUM_SYNCS = 4 * NUM_SYNCS;
+    if (_nd < NUM_SYNCS) {
+      NUM_SYNCS = _nd;
+    }
     std::cout << "Number of syncs: " << NUM_SYNCS << std::endl;
 
     const unsigned NUM_RNDS = parameters.Get<unsigned>(
@@ -1152,7 +1157,6 @@ namespace NSG {
              ++block) {  // Gopal. changed from size_t to int64_t
           std::vector<Neighbor>    pool, tmp;
           tsl::robin_set<unsigned> visited;
-
           for (size_t n = start_id + block * PAR_BLOCK_SZ;
                n <
                start_id + (std::min)(round_size, (block + 1) * PAR_BLOCK_SZ);
