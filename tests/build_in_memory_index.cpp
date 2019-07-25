@@ -14,7 +14,7 @@
 #include <Windows.h>
 #endif
 
-#include "MemoryMapper.h"
+#include "memory_mapper.h"
 
 template<typename T>
 int aux_main(int argc, char** argv) {

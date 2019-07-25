@@ -4,16 +4,14 @@
 #include <string>
 
 #include <cpprest/base_uri.h>
-#include <webservice/server.h>
-#include <webservice/in_memory_nsg_search.h>
-
+#include <webservice/disk_nsg_search.h>
+#include <webservice/disk_server.h>
 
 // Utility function declarations
-static std::wstring     to_wstring(const char* str);
+static std::wstring to_wstring(const char* str);
 template<typename T>
-web::json::value toJsonArray(
-    const std::vector<T>&                     v,
-    std::function<web::json::value(const T&)> valConverter);
+web::json::value toJsonArray(const std::vector<T>& v,
+							 std::function<web::json::value(const T&)> valConverter);
 
 static web::json::value rsltIdsToJsonArray(
     const NSG::NSGSearchResult& srchRslt);
@@ -25,31 +23,32 @@ static web::json::value prepareResponse(const long long& queryId, const int k);
 // Constants
 const std::wstring VECTOR_KEY = L"query", K_KEY = L"k",
                    RESULTS_KEY = L"results", SCORES_KEY = L"scores",
-                   INDICES_KEY = L"indices",
-                   QUERY_ID_KEY = L"query_id", ERROR_MESSAGE_KEY = L"error",
+                   INDICES_KEY = L"indices", QUERY_ID_KEY = L"query_id",
+                   ERROR_MESSAGE_KEY = L"error",
                    TIME_TAKEN_KEY = L"time_taken_in_us";
 
 // class Server
-Server::Server(web::uri& uri, std::unique_ptr<NSG::InMemoryNSGSearch>& searcher)
+DiskServer::DiskServer(web::uri&                            uri,
+                       std::unique_ptr<NSG::DiskNSGSearch>& searcher)
     : _searcher(searcher) {
   _listener = std::unique_ptr<web::http::experimental::listener::http_listener>(
       new web::http::experimental::listener::http_listener(uri));
   _listener->support(
       web::http::methods::POST,
-      std::bind(&Server::handle_post, this, std::placeholders::_1));
+      std::bind(&DiskServer::handle_post, this, std::placeholders::_1));
 }
 
-Server::~Server() {
+DiskServer::~DiskServer() {
 }
 
-pplx::task<void> Server::open() {
+pplx::task<void> DiskServer::open() {
   return _listener->open();
 }
-pplx::task<void> Server::close() {
+pplx::task<void> DiskServer::close() {
   return _listener->close();
 }
 
-void Server::handle_post(web::http::http_request message) {
+void DiskServer::handle_post(web::http::http_request message) {
   auto startTime = std::chrono::high_resolution_clock::now();
   message.extract_string(true).then([=](utility::string_t body) {
     long long queryId = -1;
@@ -57,6 +56,8 @@ void Server::handle_post(web::http::http_request message) {
     try {
       float*       queryVector = nullptr;
       unsigned int dimensions = 0;
+
+	  // call allocates an aligned vector for 
       parseJson(body, k, queryId, queryVector, dimensions);
 
       NSG::NSGSearchResult srchRslt =
@@ -66,9 +67,9 @@ void Server::handle_post(web::http::http_request message) {
       web::json::value response = prepareResponse(queryId, k);
       web::json::value ids = rsltIdsToJsonArray(srchRslt);
       response[RESULTS_KEY] = ids;
-      web::json::value indices = toJsonArray<unsigned int>(srchRslt.finalResultIndices, [](const unsigned int& i){
-        return web::json::value::number(i);
-	  });
+      web::json::value indices = toJsonArray<unsigned int>(
+          srchRslt.finalResultIndices,
+          [](const unsigned int& i) { return web::json::value::number(i); });
       response[INDICES_KEY] = indices;
 
       web::json::value scores = scoresToJsonArray(srchRslt);
@@ -78,11 +79,11 @@ void Server::handle_post(web::http::http_request message) {
               std::chrono::high_resolution_clock::now() - startTime)
               .count();
 
-      std::wcout << L"Responding to: " << queryId << std::endl;
+      std::cout << "Responding to: " << queryId << std::endl;
       message.reply(web::http::status_codes::OK, response).wait();
     } catch (const std::exception& ex) {
       std::cerr << "Exception while processing request: " << queryId << ":"
-                << ex.what() <<  std::endl;
+                << ex.what() << std::endl;
       web::json::value response = prepareResponse(queryId, k);
       response[ERROR_MESSAGE_KEY] =
           web::json::value::string(to_wstring(ex.what()));
@@ -126,7 +127,6 @@ static void parseJson(const utility::string_t& body, int& k, long long& queryId,
 }
 
 // Utility functions
-
 template<typename T>
 web::json::value toJsonArray(
     const std::vector<T>&                     v,
