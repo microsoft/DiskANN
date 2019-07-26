@@ -292,8 +292,7 @@ namespace NSG {
     // consolidate coord_cache down to single buf
     _u64 coord_cache_buf_len = coord_cache.size() * aligned_dim;
     NSG::alloc_aligned((void **) &coord_cache_buf,
-                       coord_cache_buf_len * sizeof(T),
-                       8 * sizeof(T));
+                       coord_cache_buf_len * sizeof(T), 8 * sizeof(T));
     memset(coord_cache_buf, 0, coord_cache_buf_len * sizeof(T));
     cur_off = 0;
     for (auto &k_v : coord_cache) {
@@ -314,11 +313,11 @@ namespace NSG {
     pq_table.load_bin(pq_tables_bin, n_chunks, chunk_size);
     size_t npts_u64, nchunks_u64;
     std::cout << "Loading PQ compressed data from " << data_bin << std::endl;
-    _u32 *data_u32;
-    NSG::load_bin<_u32>(data_bin, data_u32, npts_u64, nchunks_u64);
-    data = new _u8[npts_u64 * nchunks_u64];
-    NSG::convert_types<_u32, _u8>(data_u32, data, npts_u64, nchunks_u64);
-    delete[] data_u32;
+    //    _u32 *data_u32;
+    NSG::load_bin<_u8>(data_bin, data, npts_u64, nchunks_u64);
+    //    data = new _u8[npts_u64 * nchunks_u64];
+    //    NSG::convert_types<_u32, _u8>(data_u32, data, npts_u64, nchunks_u64);
+    //    delete[] data_u32;
 
     n_base = npts_u64;
     this->data_dim = data_dim;
