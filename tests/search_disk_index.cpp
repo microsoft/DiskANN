@@ -94,6 +94,7 @@ bool load_index(const char* indexFilePath, const char* queryParameters,
   n_chunks = DIV_ROUND_UP(m_dimension, chunk_size);
 
   std::string nsg_disk_opt = index_prefix_path + "_diskopt.rnsg";
+  std::string medoids_file = index_prefix_path + "_medoids.bin";
 
   _u64        beam_width = (_u64) std::atoi(param_list[0].c_str());
   _u64        cache_nlevels = (_u64) std::atoi(param_list[1].c_str());
@@ -115,7 +116,7 @@ bool load_index(const char* indexFilePath, const char* queryParameters,
   // load index
   _pFlashIndex->load(data_bin.c_str(), nsg_disk_opt.c_str(),
                      pq_tables_bin.c_str(), chunk_size, n_chunks, m_dimension,
-                     nthreads);
+                     nthreads, medoids_file.c_str());
 
   // cache bfs levels
   _pFlashIndex->cache_bfs_levels(cache_nlevels);
@@ -206,7 +207,7 @@ int aux_main(int argc, char** argv) {
   // for query search
   {
     // load the index
-    bool res = load_index(argv[2], "8 4 16", _pFlashIndex);
+    bool res = load_index(argv[2], "8 3 16", _pFlashIndex);
     omp_set_num_threads(16);
 
     // ERROR CHECK
