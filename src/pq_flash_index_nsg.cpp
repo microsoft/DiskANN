@@ -397,54 +397,54 @@ else
     IOContext ctx = data.ctx;
     
 
-    for (uint64_t cur_m = 0; cur_m < num_medoids; cur_m++) {
-    _u64 medoid = (_u64) medoids[cur_m];
-    // read medoid nhood
-    char *medoid_buf = nullptr;
-    alloc_aligned((void **) &medoid_buf, SECTOR_LEN, SECTOR_LEN);
-    _u64                     medoid_sector_no = NODE_SECTOR_NO(medoid);
-    std::vector<AlignedRead> medoid_read(1);
-    medoid_read[0].len = SECTOR_LEN;
-    medoid_read[0].buf = medoid_buf;
-    medoid_read[0].offset = NODE_SECTOR_NO(medoid) * SECTOR_LEN;
-    std::cout << "Medoid offset: " << medoid_sector_no * SECTOR_LEN << "\n";
-    reader->read(medoid_read, ctx);
-
-
-    // all data about medoid
-    char *medoid_node_buf = OFFSET_TO_NODE(medoid_buf, medoid);
-
-    // add medoid coords to `coord_cache`
-    T *medoid_coords = new T[data_dim];
-    T *medoid_disk_coords = OFFSET_TO_NODE_COORDS(medoid_node_buf);
-    memcpy(medoid_coords, medoid_disk_coords, data_dim * sizeof(T));
-    memcpy(medoid_full_precs + cur_m * aligned_dim, medoid_coords, data_dim*sizeof(T));
-
     coord_cache.clear();
-    coord_cache.insert(std::make_pair(medoid, medoid_coords));
+    for (uint64_t cur_m = 0; cur_m < num_medoids; cur_m++) {
+	    _u64 medoid = (_u64) medoids[cur_m];
+	    // read medoid nhood
+	    char *medoid_buf = nullptr;
+	    alloc_aligned((void **) &medoid_buf, SECTOR_LEN, SECTOR_LEN);
+	    _u64                     medoid_sector_no = NODE_SECTOR_NO(medoid);
+	    std::vector<AlignedRead> medoid_read(1);
+	    medoid_read[0].len = SECTOR_LEN;
+	    medoid_read[0].buf = medoid_buf;
+	    medoid_read[0].offset = NODE_SECTOR_NO(medoid) * SECTOR_LEN;
+	    std::cout << "Medoid offset: " << medoid_sector_no * SECTOR_LEN << "\n";
+	    reader->read(medoid_read, ctx);
 
-    // add medoid nhood to nhood_cache
-    unsigned *medoid_nhood_buf = OFFSET_TO_NODE_NHOOD(medoid_node_buf);
-    medoid_nhoods[cur_m].first = *(unsigned *) (medoid_nhood_buf);
-    std::cout << "Medoid degree: " << medoid_nhoods[cur_m].first << std::endl;
-    medoid_nhoods[cur_m].second = new unsigned[medoid_nhoods[cur_m].first];
-    memcpy(medoid_nhoods[cur_m].second, (medoid_nhood_buf + 1),
-           medoid_nhoods[cur_m].first * sizeof(unsigned));
-    aligned_free(medoid_buf);
 
-    // make a copy and insert into nhood_cache
-    unsigned *medoid_nhood_copy = new unsigned[medoid_nhoods[cur_m].first];
-    memcpy(medoid_nhood_copy, medoid_nhoods[cur_m].second,
-           medoid_nhoods[cur_m].first * sizeof(unsigned));
-    nhood_cache.insert(std::make_pair(
-        medoid, std::make_pair(medoid_nhoods[cur_m].first, medoid_nhood_copy)));
+	    // all data about medoid
+	    char *medoid_node_buf = OFFSET_TO_NODE(medoid_buf, medoid);
 
-    // print medoid nbrs
-    std::cout << "Medoid nbrs of  " << medoid << ": " << std::flush;
-    for (_u64 i = 0; i < medoid_nhoods[cur_m].first; i++) {
-      std::cout << medoid_nhoods[cur_m].second[i] << " ";
-    }
-    std::cout << std::endl;
+	    // add medoid coords to `coord_cache`
+	    T *medoid_coords = new T[data_dim];
+	    T *medoid_disk_coords = OFFSET_TO_NODE_COORDS(medoid_node_buf);
+	    memcpy(medoid_coords, medoid_disk_coords, data_dim * sizeof(T));
+	    memcpy(medoid_full_precs + cur_m * aligned_dim, medoid_coords, data_dim*sizeof(T));
+
+	    coord_cache.insert(std::make_pair(medoid, medoid_coords));
+
+	    // add medoid nhood to nhood_cache
+	    unsigned *medoid_nhood_buf = OFFSET_TO_NODE_NHOOD(medoid_node_buf);
+	    medoid_nhoods[cur_m].first = *(unsigned *) (medoid_nhood_buf);
+	    std::cout << "Medoid degree: " << medoid_nhoods[cur_m].first << std::endl;
+	    medoid_nhoods[cur_m].second = new unsigned[medoid_nhoods[cur_m].first];
+	    memcpy(medoid_nhoods[cur_m].second, (medoid_nhood_buf + 1),
+		   medoid_nhoods[cur_m].first * sizeof(unsigned));
+	    aligned_free(medoid_buf);
+
+	    // make a copy and insert into nhood_cache
+	    unsigned *medoid_nhood_copy = new unsigned[medoid_nhoods[cur_m].first];
+	    memcpy(medoid_nhood_copy, medoid_nhoods[cur_m].second,
+		   medoid_nhoods[cur_m].first * sizeof(unsigned));
+	    nhood_cache.insert(std::make_pair(
+		medoid, std::make_pair(medoid_nhoods[cur_m].first, medoid_nhood_copy)));
+
+	    // print medoid nbrs
+	    std::cout << "Medoid nbrs of  " << medoid << ": " << std::flush;
+	    for (_u64 i = 0; i < medoid_nhoods[cur_m].first; i++) {
+		      std::cout << medoid_nhoods[cur_m].second[i] << " ";
+	    }
+	    std::cout << std::endl;
     }
 
     // return ctx
@@ -523,6 +523,7 @@ else
     }
     }
 
+unsigned counter = 0;
 
 // compute medoid nhood <-> query distances
 #ifdef USE_ACCELERATED_PQ
@@ -547,6 +548,7 @@ else
         stats->n_cmps++;
       }
     }
+
 
     // TODO:: create dummy ids
     for (; tmp_l < l_search; tmp_l++) {
@@ -630,6 +632,7 @@ else
           _u64      nnbrs = (_u64)(*node_buf);
           T *       node_fp_coords = OFFSET_TO_NODE_COORDS(node_disk_buf);
           assert(data_buf_idx < MAX_N_CMPS);
+
           T *node_fp_coords_copy = data_buf + (data_buf_idx * aligned_dim);
           data_buf_idx++;
           memcpy(node_fp_coords_copy, node_fp_coords, data_dim * sizeof(T));
@@ -698,6 +701,7 @@ else
 
           _u64      nnbrs = cached_nhood.second.first;
           unsigned *node_nbrs = cached_nhood.second.second;
+
 #ifdef USE_ACCELERATED_PQ
           // compute node_nbrs <-> query dists in PQ space
           compute_dists(node_nbrs, nnbrs, dist_scratch);
@@ -742,11 +746,14 @@ else
         }
       }
       // update best inserted position
+      //
+      
       if (nk <= k)
         k = nk;  // k is the best position in retset updated in this round.
       else
         ++k;
     }
+
     /*
         // prefetch coords backing buf
         _mm_prefetch((char *) data_buf, _MM_HINT_T1);
