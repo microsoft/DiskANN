@@ -70,6 +70,7 @@ namespace NSG {
     // Return -1 if tag not found, 0 if OK.
     int delete_point(const TagT tag);
 
+    void truncate_degree(Parameters &parameters, unsigned new_degree);
     /*  Internals of the library */
     //    void set_data(const T *data);
 

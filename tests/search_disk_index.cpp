@@ -143,7 +143,7 @@ std::tuple<float, float, float> search_index(
   for (_s64 i = 0; i < query_num; i++) {
     _pFlashIndex->cached_beam_search(
         query_load + (i * _pFlashIndex->aligned_dim), neighborCount, L,
-        ids + (i * neighborCount), distances + (i * neighborCount), 4,
+        ids + (i * neighborCount), distances + (i * neighborCount), 6,
         stats + i);
   }
 

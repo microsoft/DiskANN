@@ -1,6 +1,9 @@
 set(CMAKE_CXX_STANDARD 14)
 
 
+add_executable(truncate_rnsg truncate_rnsg.cpp)
+target_link_libraries(truncate_rnsg ${PROJECT_NAME} -ltcmalloc)
+
 add_executable(test_partitioning test_partitioning.cpp)
 target_link_libraries(test_partitioning ${PROJECT_NAME} -ltcmalloc)
 

@@ -1254,6 +1254,89 @@ namespace NSG {
     }
   }
 
+  /*truncate degree of rand-nsg index */
+  template<typename T, typename TagT>
+  void IndexNSG<T, TagT>::truncate_degree(Parameters &parameters,
+                                          unsigned new_degree) {
+    //    The graph will be updated periodically in NUM_SYNCS batches
+    uint32_t NUM_SYNCS = DIV_ROUND_UP(_nd, (128 * 1024));
+    if (_nd < (1 << 22))
+      NUM_SYNCS = 4 * NUM_SYNCS;
+    std::cout << "Number of syncs: " << NUM_SYNCS << std::endl;
+
+    auto cut_graph_ = new vecNgh[_nd];
+
+    unsigned progress_counter = 0;
+    //    unsigned old_degree = parameters.Get<unsigned>("R");
+    parameters.Set<unsigned>("R", new_degree);
+    unsigned range = new_degree;
+    _width = new_degree;
+
+    size_t round_size = DIV_ROUND_UP(_nd, NUM_SYNCS);  // size of each batch
+
+    for (uint32_t sync_num = 0; sync_num < NUM_SYNCS; sync_num++) {
+      size_t start_id = sync_num * round_size;
+      size_t end_id = (std::min)(_nd, (sync_num + 1) * round_size);
+      size_t round_size = end_id - start_id;
+
+      size_t PAR_BLOCK_SZ =
+          round_size > 1 << 20 ? 1 << 12 : (round_size + 256) / 256;
+      size_t nblocks = DIV_ROUND_UP(round_size, PAR_BLOCK_SZ);
+
+#pragma omp parallel for schedule(dynamic, 1)
+      for (_s64 block = 0; block < (_s64) nblocks;
+           ++block) {  // Gopal. changed from size_t to _s64
+        std::vector<Neighbor>    pool, tmp;
+        tsl::robin_set<unsigned> visited;
+
+        for (size_t n = start_id + block * PAR_BLOCK_SZ;
+             n < start_id + (std::min)(round_size, (block + 1) * PAR_BLOCK_SZ);
+             ++n) {
+          pool.clear();
+          tmp.clear();
+          visited.clear();
+
+          // sync_prune will check pool, and remove some of the points and
+          // create a cut_graph, which contains neighbors for point n
+          sync_prune(_data + (size_t) _aligned_dim * n, n, pool, parameters,
+                     visited, cut_graph_[n]);
+        }
+      }
+
+#pragma omp parallel for schedule(static, PAR_BLOCK_SZ)
+
+      for (_s64 node = (_s64) start_id; node < (_s64) end_id; ++node) {
+        // clear all the neighbors of _final_graph[node]
+        _final_graph[node].clear();
+        _final_graph[node].reserve(range);
+        assert(!cut_graph_[node].empty());
+        for (auto link : cut_graph_[node]) {
+          _final_graph[node].emplace_back(link.id);
+          assert(link.id >= 0 && link.id < _nd);
+        }
+        assert(_final_graph[node].size() <= range);
+      }
+
+      if ((sync_num * 100) / NUM_SYNCS > progress_counter) {
+        std::cout << "Completed  (sync: " << sync_num << "/" << NUM_SYNCS
+                  << ") with alpha=" << parameters.Get<float>("alpha")
+                  << std::endl;
+        progress_counter += 5;
+      }
+
+#pragma omp parallel for schedule(static, PAR_BLOCK_SZ)
+      for (_s64 n = start_id; n < (_s64) end_id;
+           ++n) {  // Gopal. from unsigned n to int n for openmp
+        auto node = n;
+        assert(!cut_graph_[node].empty());
+        cut_graph_[node].clear();
+        cut_graph_[node].shrink_to_fit();
+      }
+    }
+
+    delete[] cut_graph_;
+  }
+
   /* LinkHierarchy():
    * The graph creation function.
    */

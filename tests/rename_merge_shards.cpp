@@ -27,14 +27,14 @@ void read_nsg(const std::string &fname, std::vector<unsigned> &nsg) {
 void read_bad_ivecs(const std::string &fname, std::vector<unsigned> &ivecs) {
   _u64 fsize = get_file_size(fname);
   std::cout << "Reading bad ivecs: " << fname << ", size: " << fsize << "B\n";
-  uint32_t npts32,dummy;
+  uint32_t      npts32, dummy;
   std::ifstream reader(fname.c_str(), std::ios::binary);
   reader.read((char *) &npts32, sizeof(uint32_t));
   reader.read((char *) &dummy, sizeof(uint32_t));
-  npts32 = fsize/sizeof(unsigned) - 2;
-  std::cout<<"Points = " <<npts32<<std::endl;
+  npts32 = fsize / sizeof(unsigned) - 2;
+  std::cout << "Points = " << npts32 << std::endl;
   ivecs.resize(npts32);
-  reader.read((char *) ivecs.data(), npts32*sizeof(uint32_t));
+  reader.read((char *) ivecs.data(), npts32 * sizeof(uint32_t));
   reader.close();
 }
 
@@ -74,7 +74,7 @@ int main(int argc, char **argv) {
   std::string              idmaps_prefix(argv[3]);
   std::string              idmaps_suffix(argv[4]);
   std::string              output_nsg(argv[6]);
-  std::string			medoid_file = output_nsg + "_medoids.bin";
+  std::string              medoid_file = output_nsg + "_medoids.bin";
 
   for (_u64 shard = 0; shard < nshards; shard++) {
     nsg_names[shard] = nsg_prefix + std::to_string(shard) + nsg_suffix;
@@ -139,10 +139,10 @@ int main(int argc, char **argv) {
   width *= rep_factor;
   nsg_writer.write((char *) &width, sizeof(unsigned));
   std::ofstream medoid_writer(medoid_file.c_str(), std::ios::binary);
- _u32 nshards_u32 = nshards;
- _u32 one_val = 1;
- medoid_writer.write((char *) &nshards_u32, sizeof(uint32_t));
- medoid_writer.write((char *) &one_val, sizeof(uint32_t));
+  _u32          nshards_u32 = nshards;
+  _u32          one_val = 1;
+  medoid_writer.write((char *) &nshards_u32, sizeof(uint32_t));
+  medoid_writer.write((char *) &one_val, sizeof(uint32_t));
 
   for (_u64 shard = 0; shard < nshards; shard++) {
     unsigned medoid;
@@ -151,7 +151,7 @@ int main(int argc, char **argv) {
     // rename medoid
     medoid = idmaps[shard][medoid];
 
- medoid_writer.write((char *) &medoid, sizeof(uint32_t));
+    medoid_writer.write((char *) &medoid, sizeof(uint32_t));
     // write renamed medoid
     if (shard == (nshards - 1))  //--> uncomment if running hierarchical
       nsg_writer.write((char *) &medoid, sizeof(unsigned));
@@ -191,8 +191,8 @@ int main(int argc, char **argv) {
     nnbrs += shard_nnbrs;
     shard_nhood += shard_nnbrs;
   }
-      nsg_writer.write((char *) &nnbrs, sizeof(unsigned));
-      nsg_writer.write((char *) nhood, nnbrs * sizeof(unsigned));
+  nsg_writer.write((char *) &nnbrs, sizeof(unsigned));
+  nsg_writer.write((char *) nhood, nnbrs * sizeof(unsigned));
 
   std::cout << "Finished merge\n";
   delete[] nhood;
