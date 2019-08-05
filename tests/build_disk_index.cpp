@@ -112,7 +112,7 @@ int main(int argc, char** argv) {
   if (argc != 9) {
     std::cout
         << "Usage: " << argv[0]
-        << " data_type [float/uint8/int8]  data_file[bin] index_prefix_path L "
+        << "  <data_type[float/uint8/int8]>   <data_file[.bin]>  <index_prefix_path>  L "
            "R C N_CHUNKS TRAINING_SIZE"
         << std::endl;
   } else {
