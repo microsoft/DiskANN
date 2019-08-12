@@ -22,8 +22,8 @@ bool generate_pq(const std::string& data_path,
   // generates random sample and sets it to train_data and updates train_size
   size_t train_size, train_dim;
   float* train_data;
- gen_random_slice<float>(data_path, sampling_rate, train_data,
-                      train_size, train_dim);
+  gen_random_slice<float>(data_path, sampling_rate, train_data, train_size,
+                          train_dim);
   std::cout << "For computing pivots, loaded sample data of size " << train_size
             << std::endl;
 

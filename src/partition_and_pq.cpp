@@ -36,8 +36,8 @@
 // the slice_size and ndims are set inside the function.
 
 template<typename T>
-void gen_random_slice(const std::string data_file, float p_val, float *&sampled_data,
-                      size_t &slice_size, size_t &ndims) {
+void gen_random_slice(const std::string data_file, float p_val,
+                      float *&sampled_data, size_t &slice_size, size_t &ndims) {
   size_t                          npts;
   uint32_t                        npts32, ndims32;
   std::vector<std::vector<float>> sampled_vectors;
@@ -301,19 +301,19 @@ int generate_pq_data_from_pivots(const T *base_data, size_t num_points,
 }
 
 template<typename T>
-int partition(const std::string data_file, const float sampling_rate, size_t num_centers,
-              size_t max_k_means_reps, const std::string prefix_path, size_t k_base) {
+int partition(const std::string data_file, const float sampling_rate,
+              size_t num_centers, size_t max_k_means_reps,
+              const std::string prefix_path, size_t k_base) {
   size_t dim;
   size_t train_dim;
   size_t num_points;
   size_t num_train;
   float *train_data_float;
 
-  gen_random_slice<T>(data_file, sampling_rate, train_data_float,
-                      num_train, train_dim);
+  gen_random_slice<T>(data_file, sampling_rate, train_data_float, num_train,
+                      train_dim);
 
   float *pivot_data;
-
 
   std::string cur_file = std::string(prefix_path);
   std::string output_file;
@@ -440,7 +440,6 @@ int partition(const std::string data_file, const float sampling_rate, size_t num
     shard_idmap_writer[i].close();
   }
 
-
   std::cout << "Partitioned " << num_points << " with replication factor "
             << k_base << " to get " << total_count << " points across "
             << num_centers << " shards " << std::endl;
@@ -458,8 +457,8 @@ template void gen_random_slice<float>(const std::string data_file, float p_val,
 template void gen_random_slice<int8_t>(const std::string data_file, float p_val,
                                        float *&sampled_data, size_t &slice_size,
                                        size_t &ndims);
-template void gen_random_slice<uint8_t>(const std::string data_file, float p_val,
-                                        float *&sampled_data,
+template void gen_random_slice<uint8_t>(const std::string data_file,
+                                        float p_val, float *&sampled_data,
                                         size_t &slice_size, size_t &ndims);
 
 template void gen_random_slice<float>(const float *inputdata, size_t npts,
@@ -474,15 +473,18 @@ template void gen_random_slice<int8_t>(const int8_t *inputdata, size_t npts,
                                        float *&sampled_data,
                                        size_t &slice_size);
 
-
- 
-
-template int partition<int8_t>(const std::string data_file, const float sampling_rate, size_t num_centers,
-              size_t max_k_means_reps, const std::string prefix_path, size_t k_base);
-template int partition<uint8_t>(const std::string data_file, const float sampling_rate, size_t num_centers,
-              size_t max_k_means_reps, const std::string prefix_path, size_t k_base);
-template int partition<float>(const std::string data_file, const float sampling_rate, size_t num_centers,
-              size_t max_k_means_reps, const std::string prefix_path, size_t k_base);
+template int partition<int8_t>(const std::string data_file,
+                               const float sampling_rate, size_t num_centers,
+                               size_t            max_k_means_reps,
+                               const std::string prefix_path, size_t k_base);
+template int partition<uint8_t>(const std::string data_file,
+                                const float sampling_rate, size_t num_centers,
+                                size_t            max_k_means_reps,
+                                const std::string prefix_path, size_t k_base);
+template int partition<float>(const std::string data_file,
+                              const float sampling_rate, size_t num_centers,
+                              size_t            max_k_means_reps,
+                              const std::string prefix_path, size_t k_base);
 
 template int generate_pq_data_from_pivots<int8_t>(
     const int8_t *base_data, size_t num_points, size_t dim, size_t num_centers,

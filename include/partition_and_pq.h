@@ -11,16 +11,17 @@
 #include "utils.h"
 
 template<typename T>
-void gen_random_slice(const std::string data_file, float p_val, float *&sampled_data,
-                      size_t &slice_size, size_t &ndims);
+void gen_random_slice(const std::string data_file, float p_val,
+                      float *&sampled_data, size_t &slice_size, size_t &ndims);
 
 template<typename T>
 void gen_random_slice(const T *inputdata, size_t npts, size_t ndims,
                       float p_val, float *&sampled_data, size_t &slice_size);
 
 template<typename T>
-int partition(const std::string data_file, const float sampling_rate, size_t num_centers,
-              size_t max_k_means_reps, const std::string prefix_path, size_t k_base);
+int partition(const std::string data_file, const float sampling_rate,
+              size_t num_centers, size_t max_k_means_reps,
+              const std::string prefix_path, size_t k_base);
 
 int generate_pq_pivots(const float *train_data, size_t num_train, size_t dim,
                        size_t num_centers, size_t num_pq_chunks,
