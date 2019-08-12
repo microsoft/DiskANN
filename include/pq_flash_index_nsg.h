@@ -55,8 +55,8 @@ namespace NSG {
     // load data, but obtain handle to nsg file
     void load(const char *data_bin, const char *nsg_file,
               const char *pq_tables_bin, const _u64 chunk_size,
-              const _u64 n_chunks, const _u64 data_dim,
-              const _u64 max_nthreads);
+              const _u64 n_chunks, const _u64 data_dim, const _u64 max_nthreads,
+              const char *medoids_file = nullptr);
 
     // NOTE:: implemented
     void cache_bfs_levels(_u64 nlevels);
@@ -99,8 +99,10 @@ namespace NSG {
     Distance<T> *dist_cmp;
 
     // medoid/start info
-    _u64 medoid = 0;
-    std::pair<_u64, unsigned *> medoid_nhood;
+    uint32_t *medoids;
+    std::vector<std::pair<_u64, unsigned *>> medoid_nhoods;
+    size_t num_medoids;
+    T *    medoid_full_precs;
 
     // nhood_cache
     unsigned *nhood_cache_buf = nullptr;

@@ -77,19 +77,19 @@ namespace NSG {
   template<>
   PQFlashNSG<_u8>::PQFlashNSG() {
     this->dist_cmp = new DistanceL2UInt8();
-    medoid_nhood.second = nullptr;
+    //    medoid_nhood.second = nullptr;
   }
 
   template<>
   PQFlashNSG<_s8>::PQFlashNSG() {
     this->dist_cmp = new DistanceL2Int8();
-    medoid_nhood.second = nullptr;
+    //    medoid_nhood.second = nullptr;
   }
 
   template<>
   PQFlashNSG<float>::PQFlashNSG() {
     this->dist_cmp = new DistanceL2();
-    medoid_nhood.second = nullptr;
+    //    medoid_nhood.second = nullptr;
   }
 
   template<typename T>
@@ -101,7 +101,8 @@ namespace NSG {
     // delete backing bufs for nhood and coord cache
     delete[] nhood_cache_buf;
     NSG::aligned_free(coord_cache_buf);
-    delete[] medoid_nhood.second;
+    for (auto m : medoid_nhoods)
+      delete[] m.second;
 
     reader->close();
     delete reader;
@@ -185,9 +186,11 @@ namespace NSG {
     prev_level = new tsl::robin_set<unsigned>();
 
     // add medoid nhood to cur_level
-    for (_u64 idx = 0; idx < medoid_nhood.first; idx++) {
-      unsigned nbr_id = medoid_nhood.second[idx];
-      cur_level->insert(nbr_id);
+    for (_u64 miter = 0; miter < medoid_nhoods.size(); miter++) {
+      for (_u64 idx = 0; idx < medoid_nhoods[miter].first; idx++) {
+        unsigned nbr_id = medoid_nhoods[miter].second[idx];
+        cur_level->insert(nbr_id);
+      }
     }
 
     for (_u64 lvl = 1; lvl < nlevels; lvl++) {
@@ -308,7 +311,7 @@ namespace NSG {
   void PQFlashNSG<T>::load(const char *data_bin, const char *nsg_file,
                            const char *pq_tables_bin, const _u64 chunk_size,
                            const _u64 n_chunks, const _u64 data_dim,
-                           const _u64 max_nthreads) {
+                           const _u64 max_nthreads, const char *medoids_file) {
     std::cout << "Loading PQ Tables from " << pq_tables_bin << "\n";
     pq_table.load_bin(pq_tables_bin, n_chunks, chunk_size);
     size_t npts_u64, nchunks_u64;
@@ -335,13 +338,35 @@ namespace NSG {
     READ_U64(nsg_meta, nnodes);
     std::cout << "nnodes: " << nnodes << std::endl;
     assert(nnodes == n_base);
-    READ_U64(nsg_meta, medoid);
+
+    size_t medoid_id_on_file;
+
+    std::ifstream file_exists(medoids_file);
+    if (!file_exists) {
+      file_exists.close();
+      num_medoids = 1;
+      medoids = new uint32_t[1];
+      READ_U64(nsg_meta, medoid_id_on_file);
+      medoids[0] = (_u32)(medoid_id_on_file);
+    } else {
+      file_exists.close();
+      size_t tmp_dim;
+      load_bin<uint32_t>(medoids_file, medoids, num_medoids, tmp_dim);
+      READ_U64(nsg_meta, medoid_id_on_file);
+    }
+
+    medoid_nhoods = std::vector<std::pair<_u64, unsigned *>>(num_medoids);
+    medoid_full_precs = new T[num_medoids * aligned_dim];
+    memset((void *) medoid_full_precs, 0,
+           num_medoids * aligned_dim * sizeof(T));
+
     READ_U64(nsg_meta, max_node_len);
     READ_U64(nsg_meta, nnodes_per_sector);
     max_degree = ((max_node_len - data_dim * sizeof(T)) / sizeof(unsigned)) - 1;
 
     std::cout << "Index File: " << nsg_file << std::endl;
-    std::cout << "Medoid: " << medoid << std::endl;
+    std::cout << "Number of medoids: " << num_medoids
+              << ", first medoid: " << medoids[0] << std::endl;
     std::cout << "# nodes per sector: " << nnodes_per_sector << std::endl;
     std::cout << "max node len: " << max_node_len << std::endl;
     std::cout << "max node degree: " << max_degree << std::endl;
@@ -367,53 +392,60 @@ namespace NSG {
     }
     IOContext ctx = data.ctx;
 
-    // read medoid nhood
-    char *medoid_buf = nullptr;
-    alloc_aligned((void **) &medoid_buf, SECTOR_LEN, SECTOR_LEN);
-    _u64                     medoid_sector_no = NODE_SECTOR_NO(medoid);
-    std::vector<AlignedRead> medoid_read(1);
-    medoid_read[0].len = SECTOR_LEN;
-    medoid_read[0].buf = medoid_buf;
-    medoid_read[0].offset = NODE_SECTOR_NO(medoid) * SECTOR_LEN;
-    std::cout << "Medoid offset: " << medoid_sector_no * SECTOR_LEN << "\n";
-    reader->read(medoid_read, ctx);
+    coord_cache.clear();
+    for (uint64_t cur_m = 0; cur_m < num_medoids; cur_m++) {
+      _u64 medoid = (_u64) medoids[cur_m];
+      // read medoid nhood
+      char *medoid_buf = nullptr;
+      alloc_aligned((void **) &medoid_buf, SECTOR_LEN, SECTOR_LEN);
+      _u64                     medoid_sector_no = NODE_SECTOR_NO(medoid);
+      std::vector<AlignedRead> medoid_read(1);
+      medoid_read[0].len = SECTOR_LEN;
+      medoid_read[0].buf = medoid_buf;
+      medoid_read[0].offset = NODE_SECTOR_NO(medoid) * SECTOR_LEN;
+      std::cout << "Medoid offset: " << medoid_sector_no * SECTOR_LEN << "\n";
+      reader->read(medoid_read, ctx);
+
+      // all data about medoid
+      char *medoid_node_buf = OFFSET_TO_NODE(medoid_buf, medoid);
+
+      // add medoid coords to `coord_cache`
+      T *medoid_coords = new T[data_dim];
+      T *medoid_disk_coords = OFFSET_TO_NODE_COORDS(medoid_node_buf);
+      memcpy(medoid_coords, medoid_disk_coords, data_dim * sizeof(T));
+      memcpy(medoid_full_precs + cur_m * aligned_dim, medoid_coords,
+             data_dim * sizeof(T));
+
+      coord_cache.insert(std::make_pair(medoid, medoid_coords));
+
+      // add medoid nhood to nhood_cache
+      unsigned *medoid_nhood_buf = OFFSET_TO_NODE_NHOOD(medoid_node_buf);
+      medoid_nhoods[cur_m].first = *(unsigned *) (medoid_nhood_buf);
+      std::cout << "Medoid degree: " << medoid_nhoods[cur_m].first << std::endl;
+      medoid_nhoods[cur_m].second = new unsigned[medoid_nhoods[cur_m].first];
+      memcpy(medoid_nhoods[cur_m].second, (medoid_nhood_buf + 1),
+             medoid_nhoods[cur_m].first * sizeof(unsigned));
+      aligned_free(medoid_buf);
+
+      // make a copy and insert into nhood_cache
+      unsigned *medoid_nhood_copy = new unsigned[medoid_nhoods[cur_m].first];
+      memcpy(medoid_nhood_copy, medoid_nhoods[cur_m].second,
+             medoid_nhoods[cur_m].first * sizeof(unsigned));
+      nhood_cache.insert(std::make_pair(
+          medoid,
+          std::make_pair(medoid_nhoods[cur_m].first, medoid_nhood_copy)));
+
+      // print medoid nbrs
+      std::cout << "Medoid nbrs of  " << medoid << ": " << std::flush;
+      for (_u64 i = 0; i < medoid_nhoods[cur_m].first; i++) {
+        std::cout << medoid_nhoods[cur_m].second[i] << " ";
+      }
+      std::cout << std::endl;
+    }
 
     // return ctx
     this->thread_data.push(data);
     this->thread_data.push_notify_all();
-
-    // all data about medoid
-    char *medoid_node_buf = OFFSET_TO_NODE(medoid_buf, medoid);
-
-    // add medoid coords to `coord_cache`
-    T *medoid_coords = new T[data_dim];
-    T *medoid_disk_coords = OFFSET_TO_NODE_COORDS(medoid_node_buf);
-    memcpy(medoid_coords, medoid_disk_coords, data_dim * sizeof(T));
-    coord_cache.clear();
-    coord_cache.insert(std::make_pair(medoid, medoid_coords));
-
-    // add medoid nhood to nhood_cache
-    unsigned *medoid_nhood_buf = OFFSET_TO_NODE_NHOOD(medoid_node_buf);
-    medoid_nhood.first = *(unsigned *) (medoid_nhood_buf);
-    std::cout << "Medoid degree: " << medoid_nhood.first << std::endl;
-    medoid_nhood.second = new unsigned[medoid_nhood.first];
-    memcpy(medoid_nhood.second, (medoid_nhood_buf + 1),
-           medoid_nhood.first * sizeof(unsigned));
-    aligned_free(medoid_buf);
-
-    // make a copy and insert into nhood_cache
-    unsigned *medoid_nhood_copy = new unsigned[medoid_nhood.first];
-    memcpy(medoid_nhood_copy, medoid_nhood.second,
-           medoid_nhood.first * sizeof(unsigned));
-    nhood_cache.insert(std::make_pair(
-        medoid, std::make_pair(medoid_nhood.first, medoid_nhood_copy)));
-
-    // print medoid nbrs
-    std::cout << "Medoid nbrs: " << std::endl;
-    for (_u64 i = 0; i < medoid_nhood.first; i++) {
-      std::cout << medoid_nhood.second[i] << " ";
-    }
-    std::cout << std::endl;
   }
 
   template<typename T>
@@ -475,14 +507,29 @@ namespace NSG {
     full_retset.reserve(4096);
     tsl::robin_map<_u64, T *> fp_coords;
 
+    _u32  best_medoid = 0;
+    float best_dist = (std::numeric_limits<float>::max)();
+    for (_u64 cur_m = 0; cur_m < num_medoids; cur_m++) {
+      float cur_expanded_dist = dist_cmp->compare(
+          query, medoid_full_precs + aligned_dim * cur_m, aligned_dim);
+      if (cur_expanded_dist < best_dist) {
+        best_medoid = cur_m;
+        best_dist = cur_expanded_dist;
+      }
+    }
+
+    unsigned counter = 0;
+
 // compute medoid nhood <-> query distances
 #ifdef USE_ACCELERATED_PQ
-    compute_dists(medoid_nhood.second, medoid_nhood.first, dist_scratch);
+    compute_dists(medoid_nhoods[best_medoid].second,
+                  medoid_nhoods[best_medoid].first, dist_scratch);
 #endif
     _u64 tmp_l = 0;
     // add each neighbor of medoid
-    for (; tmp_l < l_search && tmp_l < medoid_nhood.first; tmp_l++) {
-      _u64 id = medoid_nhood.second[tmp_l];
+    for (; tmp_l < l_search && tmp_l < medoid_nhoods[best_medoid].first;
+         tmp_l++) {
+      _u64 id = medoid_nhoods[best_medoid].second[tmp_l];
       init_ids[tmp_l] = id;
       visited.insert(id);
 #ifdef USE_ACCELERATED_PQ
@@ -581,6 +628,7 @@ namespace NSG {
           _u64      nnbrs = (_u64)(*node_buf);
           T *       node_fp_coords = OFFSET_TO_NODE_COORDS(node_disk_buf);
           assert(data_buf_idx < MAX_N_CMPS);
+
           T *node_fp_coords_copy = data_buf + (data_buf_idx * aligned_dim);
           data_buf_idx++;
           memcpy(node_fp_coords_copy, node_fp_coords, data_dim * sizeof(T));
@@ -649,6 +697,7 @@ namespace NSG {
 
           _u64      nnbrs = cached_nhood.second.first;
           unsigned *node_nbrs = cached_nhood.second.second;
+
 #ifdef USE_ACCELERATED_PQ
           // compute node_nbrs <-> query dists in PQ space
           compute_dists(node_nbrs, nnbrs, dist_scratch);
@@ -693,11 +742,14 @@ namespace NSG {
         }
       }
       // update best inserted position
+      //
+
       if (nk <= k)
         k = nk;  // k is the best position in retset updated in this round.
       else
         ++k;
     }
+
     /*
         // prefetch coords backing buf
         _mm_prefetch((char *) data_buf, _MM_HINT_T1);
