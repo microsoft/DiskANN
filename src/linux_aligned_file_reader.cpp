@@ -38,7 +38,10 @@ namespace {
                       read_reqs[j + iter * MAX_EVENTS].len,
                       read_reqs[j + iter * MAX_EVENTS].offset);
       }
+
       // initialize `cbs` using `cb` array
+      //
+
       for (uint64_t i = 0; i < n_ops; i++) {
         cbs[i] = cb.data() + i;
       }
@@ -77,6 +80,7 @@ namespace {
       }
       */
     }
+
     /*
     for(unsigned i=0;i<64;i++){
       std::cout << *((unsigned*)read_reqs[0].buf + i) << " ";

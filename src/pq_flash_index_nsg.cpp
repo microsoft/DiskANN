@@ -3,6 +3,7 @@
 #include "percentile_stats.h"
 
 #include <omp.h>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <iterator>
@@ -164,6 +165,103 @@ namespace NSG {
       NSG::aligned_free((void *) scratch.aligned_pq_coord_scratch);
       NSG::aligned_free((void *) scratch.aligned_pqtable_dist_scratch);
       NSG::aligned_free((void *) scratch.aligned_dist_scratch);
+    }
+  }
+
+  template<typename T>
+  _u64 PQFlashNSG<T>::get_num_points() {
+    return n_base;
+  }
+
+  template<typename T>
+  void PQFlashNSG<T>::cache_visited_nodes(_u64 *node_list, _u64 num_nodes) {
+    // borrow thread data
+    ThreadData<T> this_thread_data = this->thread_data.pop();
+    while (this_thread_data.scratch.sector_scratch == nullptr) {
+      this->thread_data.wait_for_push_notify();
+      this_thread_data = this->thread_data.pop();
+    }
+
+    IOContext ctx = this_thread_data.ctx;
+
+    std::vector<AlignedRead> read_reqs;
+    std::vector<std::pair<_u64, char *>> nhoods;
+    AlignedRead read;
+
+    for (_u64 node_idx = 0; node_idx < num_nodes; node_idx++) {
+      char *buf = nullptr;
+      alloc_aligned((void **) &buf, SECTOR_LEN, SECTOR_LEN);
+      nhoods.push_back(std::make_pair(node_list[node_idx], buf));
+      read.len = SECTOR_LEN;
+      read.buf = buf;
+      read.offset = NODE_SECTOR_NO(node_list[node_idx]) * SECTOR_LEN;
+      read_reqs.push_back(read);
+    }
+
+    reader->read(read_reqs, ctx);
+    read_reqs.clear();
+
+    std::cout << "pausing" << std::endl;
+    pause();
+    reader->close();
+
+    for (auto &nhood : nhoods) {
+      char *node_buf = OFFSET_TO_NODE(nhood.second, nhood.first);
+      T *   node_coords = OFFSET_TO_NODE_COORDS(node_buf);
+      T *   cached_coords = new T[data_dim];
+      memcpy(cached_coords, node_coords, data_dim * sizeof(T));
+      coord_cache.insert(std::make_pair(nhood.first, cached_coords));
+
+      // insert node nhood into nhood_cache
+      unsigned *node_nhood = OFFSET_TO_NODE_NHOOD(node_buf);
+      _u64      nnbrs = (_u64) *node_nhood;
+      unsigned *nbrs = node_nhood + 1;
+      // std::cerr << "CACHE: nnbrs = " << nnbrs << "\n";
+      std::pair<_u64, unsigned *> cnhood;
+      cnhood.first = nnbrs;
+      cnhood.second = new unsigned[nnbrs];
+      memcpy(cnhood.second, nbrs, nnbrs * sizeof(unsigned));
+      nhood_cache.insert(std::make_pair(nhood.first, cnhood));
+      aligned_free(nhood.second);
+    }
+
+    // return thread data
+    this->thread_data.push(this_thread_data);
+
+    std::cerr << "Consolidating nhood_cache: # cached nhoods = "
+              << nhood_cache.size() << "\n";
+    // consolidate nhood_cache down to single buf
+    _u64 nhood_cache_buf_len = 0;
+    for (auto &k_v : nhood_cache) {
+      nhood_cache_buf_len += k_v.second.first;
+    }
+    nhood_cache_buf = new unsigned[nhood_cache_buf_len];
+    memset(nhood_cache_buf, 0, nhood_cache_buf_len);
+    _u64 cur_off = 0;
+    for (auto &k_v : nhood_cache) {
+      std::pair<_u64, unsigned *> &val = nhood_cache[k_v.first];
+      unsigned *&ptr = val.second;
+      _u64       nnbrs = val.first;
+      memcpy(nhood_cache_buf + cur_off, ptr, nnbrs * sizeof(unsigned));
+      delete[] ptr;
+      ptr = nhood_cache_buf + cur_off;
+      cur_off += nnbrs;
+    }
+
+    std::cerr << "Consolidating coord_cache: # cached coords = "
+              << coord_cache.size() << "\n";
+    // consolidate coord_cache down to single buf
+    _u64 coord_cache_buf_len = coord_cache.size() * aligned_dim;
+    NSG::alloc_aligned((void **) &coord_cache_buf,
+                       coord_cache_buf_len * sizeof(T), 8 * sizeof(T));
+    memset(coord_cache_buf, 0, coord_cache_buf_len * sizeof(T));
+    cur_off = 0;
+    for (auto &k_v : coord_cache) {
+      T *&val = coord_cache[k_v.first];
+      memcpy(coord_cache_buf + cur_off, val, data_dim * sizeof(T));
+      delete[] val;
+      val = coord_cache_buf + cur_off;
+      cur_off += aligned_dim;
     }
   }
 
@@ -423,6 +521,17 @@ namespace NSG {
                                          const _u64   beam_width,
                                          QueryStats * stats,
                                          Distance<T> *output_dist_func) {
+    std::vector<std::pair<_u64, std::atomic<unsigned>>> node_visit_counter(0);
+    cached_beam_search(query, k_search, l_search, indices, distances,
+                       beam_width, node_visit_counter, stats, output_dist_func);
+  }
+
+  template<typename T>
+  void PQFlashNSG<T>::cached_beam_search(
+      const T *query, const _u64 k_search, const _u64 l_search, _u64 *indices,
+      float *distances, const _u64                         beam_width,
+      std::vector<std::pair<_u64, std::atomic<unsigned>>> &node_visit_counter,
+      QueryStats *stats, Distance<T> *output_dist_func) {
     ThreadData<T> data = this->thread_data.pop();
     while (data.scratch.sector_scratch == nullptr) {
       this->thread_data.wait_for_push_notify();
@@ -479,6 +588,10 @@ namespace NSG {
 #ifdef USE_ACCELERATED_PQ
     compute_dists(medoid_nhood.second, medoid_nhood.first, dist_scratch);
 #endif
+    if (node_visit_counter.size() > 0) {
+      node_visit_counter[medoid_nhood.first].second++;
+    }
+
     _u64 tmp_l = 0;
     // add each neighbor of medoid
     for (; tmp_l < l_search && tmp_l < medoid_nhood.first; tmp_l++) {
@@ -543,7 +656,12 @@ namespace NSG {
         hops++;
         for (_u64 i = 0; i < frontier.size(); i++) {
           unsigned id = frontier[i];
-          auto     iter = nhood_cache.find(id);
+
+          if (node_visit_counter.size() > 0) {
+            node_visit_counter[id].second++;
+          }
+
+          auto iter = nhood_cache.find(id);
           if (iter != nhood_cache.end()) {
             cached_nhoods.push_back(std::make_pair(id, iter->second));
             if (stats != nullptr) {
@@ -575,6 +693,8 @@ namespace NSG {
           //   retset[k].flag = false;
           //   unsigned n = retset[k].id;
           // }
+          //
+
           char *node_disk_buf =
               OFFSET_TO_NODE(frontier_nhood.second, frontier_nhood.first);
           unsigned *node_buf = OFFSET_TO_NODE_NHOOD(node_disk_buf);

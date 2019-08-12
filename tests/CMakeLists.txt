@@ -22,6 +22,9 @@ target_link_libraries(build_disk_index ${PROJECT_NAME} -ltcmalloc)
 add_executable(search_in_memory_index search_in_memory_index.cpp)
 target_link_libraries(search_in_memory_index ${PROJECT_NAME})
 
+add_executable(create_visited_cache create_visited_cache.cpp)
+target_link_libraries(create_visited_cache ${PROJECT_NAME} aio)
+
 add_executable(search_disk_index search_disk_index.cpp)
 target_link_libraries(search_disk_index ${PROJECT_NAME} aio)
 

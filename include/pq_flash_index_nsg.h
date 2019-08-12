@@ -60,10 +60,13 @@ namespace NSG {
 
     // NOTE:: implemented
     void cache_bfs_levels(_u64 nlevels);
+    void cache_visited_nodes(_u64 *node_list, _u64 num_nodes);
 
     // setting up thread-specific data
     void setup_thread_data(_u64 nthreads);
     void destroy_thread_data();
+
+    _u64 get_num_points();
 
     // implemented
     void cached_beam_search(const T *query, const _u64 k_search,
@@ -71,6 +74,12 @@ namespace NSG {
                             float *res_dists, const _u64 beam_width,
                             QueryStats * stats = nullptr,
                             Distance<T> *output_dist_func = nullptr);
+
+    void cached_beam_search(
+        const T *query, const _u64 k_search, const _u64 l_search, _u64 *res_ids,
+        float *res_dists, const _u64                         beam_width,
+        std::vector<std::pair<_u64, std::atomic<unsigned>>> &node_visit_counter,
+        QueryStats *stats = nullptr, Distance<T> *output_dist_func = nullptr);
     AlignedFileReader *reader;
 
     // index info

@@ -6,6 +6,7 @@
 #include <pq_flash_index_nsg.h>
 #include <string.h>
 #include <time.h>
+#include <atomic>
 #include <cstring>
 #include <iomanip>
 #include "partition_and_pq.h"
@@ -58,7 +59,7 @@ float calc_recall(unsigned num_queries, unsigned* gold_std, unsigned dim_gs,
 
 template<typename T>
 bool load_index(const char* indexFilePath, const char* queryParameters,
-                NSG::PQFlashNSG<T>*& _pFlashIndex) {
+                NSG::PQFlashNSG<T>*& _pFlashIndex, int use_visit_cache) {
   std::stringstream parser;
   parser << std::string(queryParameters);
   std::string              cur_param;
@@ -81,9 +82,16 @@ bool load_index(const char* indexFilePath, const char* queryParameters,
 
   // determine nchunks
   std::string params_path = index_prefix_path + "_params.bin";
-  uint32_t*   params;
-  size_t      nargs, one;
+  std::string node_visit_bin = index_prefix_path + "_visit_ctr.bin";
+
+  uint32_t* params;
+  _u64*     node_visit_list;
+  size_t    nargs, one, num_cache_nodes;
   NSG::load_bin<uint32_t>(params_path.c_str(), params, nargs, one);
+
+  if (use_visit_cache)
+    NSG::load_bin<_u64>(node_visit_bin.c_str(), node_visit_list,
+                        num_cache_nodes, one);
 
   // infer chunk_size
   _u64 m_dimension = (_u64) params[3];
@@ -118,8 +126,17 @@ bool load_index(const char* indexFilePath, const char* queryParameters,
                      nthreads);
 
   // cache bfs levels
-  _pFlashIndex->cache_bfs_levels(cache_nlevels);
+  if (use_visit_cache)
+    _pFlashIndex->cache_visited_nodes(node_visit_list, num_cache_nodes);
+  else
+    _pFlashIndex->cache_bfs_levels(cache_nlevels);
+
   return 0;
+}
+
+bool custom_sort_func(std::pair<_u64, unsigned> left,
+                      std::pair<_u64, unsigned> right) {
+  return (left.second > right.second);
 }
 
 // Search several vectors, return their neighbors' distance and ids.
@@ -133,18 +150,18 @@ std::tuple<float, float, float> search_index(
   //  _u64     L = 6 * neighborCount;
   //  _u64     L = 12;
   const T* query_load = (const T*) vector;
+  _u64     num_points = _pFlashIndex->get_num_points();
 
   NSG::QueryStats* stats = new NSG::QueryStats[query_num];
 
   NSG::Timer timer;
 // std::cout<<"aligned dim: " << _pFlashIndex->aligned_dim<<std::endl;
 #pragma omp parallel for schedule(dynamic, 1) num_threads(16)
-  for (_s64 i = 0; i < query_num; i++) {
+  for (_s64 i = 0; i < query_num; i++)
     _pFlashIndex->cached_beam_search(
         query_load + (i * _pFlashIndex->aligned_dim), neighborCount, L,
-        ids + (i * neighborCount), distances + (i * neighborCount), 4,
+        ids + (i * neighborCount), distances + (i * neighborCount), 6,
         stats + i);
-  }
 
   //  _u64 total_query_us = timer.elapsed();
   //  double qps = (double) query_num / ((double) total_query_us / 1e6);
@@ -177,9 +194,15 @@ int aux_main(int argc, char** argv) {
   float*    gt_dist;
   size_t    gt_num, gt_dim;
   size_t    gt_num_dist, gt_dim_dist;
+  int       use_visit_cache = 0;
   NSG::load_bin<T>(argv[3], query, query_num, ndims);
   NSG::load_bin<uint32_t>(argv[4], gt_load, gt_num, gt_dim);
   NSG::load_bin<float>(argv[5], gt_dist, gt_num_dist, gt_dim_dist);
+
+  if (std::atoi(argv[7]) == 0)
+    use_visit_cache = 0;
+  else
+    use_visit_cache = 1;
 
   std::string recall_string = std::string("Recall@") + std::string(argv[6]);
   _u64        recall_at = std::atoi(argv[6]);
@@ -206,7 +229,7 @@ int aux_main(int argc, char** argv) {
   // for query search
   {
     // load the index
-    bool res = load_index(argv[2], "8 4 16", _pFlashIndex);
+    bool res = load_index(argv[2], "8 3 16", _pFlashIndex, use_visit_cache);
     omp_set_num_threads(16);
 
     // ERROR CHECK
@@ -279,12 +302,12 @@ int aux_main(int argc, char** argv) {
 }
 
 int main(int argc, char** argv) {
-  if (argc != 7) {
-    std::cout
-        << "Usage: " << argv[0]
-        << " <index_type[float/int8/uint8]>  <index_prefix_path>  "
-           "<query_bin>  <ground_truth_idx_bin>  <ground_truth_dist_bin>  recall@"
-        << std::endl;
+  if (argc != 8) {
+    std::cout << "Usage: " << argv[0]
+              << " <index_type[float/int8/uint8]>  <index_prefix_path>  "
+                 "<query_bin>  <ground_truth_idx_bin>  <ground_truth_dist_bin> "
+                 "recall@  <use_node_visit_cache[0/1]>"
+              << std::endl;
     exit(-1);
   }
   if (std::string(argv[1]) == std::string("float"))
