@@ -7,7 +7,7 @@ template<typename T>
 bool generate_pq(const std::string& data_path,
                  const std::string& index_prefix_path,
                  const size_t num_pq_centers, const size_t num_pq_chunks,
-                 const size_t sample_size) {
+                 const float sampling_rate) {
   std::string train_file_path = index_prefix_path + "_training_set_float.bin";
   std::string pq_pivots_path = index_prefix_path + "_pq_pivots.bin";
   std::string pq_compressed_vectors_path =
@@ -20,11 +20,10 @@ bool generate_pq(const std::string& data_path,
   std::cout << "done." << std::endl;
 
   // generates random sample and sets it to train_data and updates train_size
-  size_t train_size;
+  size_t train_size, train_dim;
   float* train_data;
-  float  p_val = ((float) sample_size / (float) points_num);
-  gen_random_slice<T>(data_load, points_num, dim, p_val, train_data,
-                      train_size);
+ gen_random_slice<float>(data_path, sampling_rate, train_data,
+                      train_size, train_dim);
   std::cout << "For computing pivots, loaded sample data of size " << train_size
             << std::endl;
 

@@ -36,7 +36,7 @@
 // the slice_size and ndims are set inside the function.
 
 template<typename T>
-void gen_random_slice(const char *inputfile, float p_val, float *&sampled_data,
+void gen_random_slice(const std::string data_file, float p_val, float *&sampled_data,
                       size_t &slice_size, size_t &ndims) {
   size_t                          npts;
   uint32_t                        npts32, ndims32;
@@ -46,7 +46,7 @@ void gen_random_slice(const char *inputfile, float p_val, float *&sampled_data,
   // amount to read in one shot
   _u64 read_blk_size = 64 * 1024 * 1024;
   // create cached reader + writer
-  cached_ifstream base_reader(inputfile, read_blk_size);
+  cached_ifstream base_reader(data_file.c_str(), read_blk_size);
 
   // metadata: npts, ndims
   base_reader.read((char *) &npts32, sizeof(unsigned));
@@ -301,27 +301,22 @@ int generate_pq_data_from_pivots(const T *base_data, size_t num_points,
 }
 
 template<typename T>
-int partition(const char *base_file, const char *train_file, size_t num_centers,
-              size_t max_k_means_reps, const char *prefix_dir, size_t k_base) {
+int partition(const std::string data_file, const float sampling_rate, size_t num_centers,
+              size_t max_k_means_reps, const std::string prefix_path, size_t k_base) {
   size_t dim;
   size_t train_dim;
   size_t num_points;
   size_t num_train;
-  T *    train_data;
   float *train_data_float;
-  //  float *   base_data_float;
+
+  gen_random_slice<T>(data_file, sampling_rate, train_data_float,
+                      num_train, train_dim);
+
   float *pivot_data;
-  //  uint32_t *base_closest_centers;
 
-  NSG::load_bin<T>(train_file, train_data, num_train, train_dim);
-  train_data_float = new float[num_train * train_dim];
-  NSG::convert_types<T, float>(train_data, train_data_float, num_train,
-                               train_dim);
 
-  std::string cur_file = std::string(prefix_dir);
+  std::string cur_file = std::string(prefix_path);
   std::string output_file;
-
-  // Random rotation before kmeans_partitioning
 
   // kmeans_partitioning on training data
 
@@ -357,7 +352,6 @@ int partition(const char *base_file, const char *train_file, size_t num_centers,
     }
   }
 
-  delete[] train_data;
   delete[] train_data_float;
 
   // now pivots are ready. need to stream base points and assign them to
@@ -366,7 +360,7 @@ int partition(const char *base_file, const char *train_file, size_t num_centers,
   _u64 read_blk_size = 64 * 1024 * 1024;
   //  _u64 write_blk_size = 64 * 1024 * 1024;
   // create cached reader + writer
-  cached_ifstream base_reader(base_file, read_blk_size);
+  cached_ifstream base_reader(data_file, read_blk_size);
   _u32            npts32;
   _u32            basedim32;
   base_reader.read((char *) &npts32, sizeof(uint32_t));
@@ -440,7 +434,12 @@ int partition(const char *base_file, const char *train_file, size_t num_centers,
     total_count += cur_shard_count;
     shard_data_writer[i].seekp(0);
     shard_data_writer[i].write((char *) &cur_shard_count, sizeof(uint32_t));
+    shard_data_writer[i].close();
+    shard_idmap_writer[i].seekp(0);
+    shard_idmap_writer[i].write((char *) &cur_shard_count, sizeof(uint32_t));
+    shard_idmap_writer[i].close();
   }
+
 
   std::cout << "Partitioned " << num_points << " with replication factor "
             << k_base << " to get " << total_count << " points across "
@@ -453,13 +452,13 @@ int partition(const char *base_file, const char *train_file, size_t num_centers,
   return 0;
 }
 
-template void gen_random_slice<float>(const char *inputfile, float p_val,
+template void gen_random_slice<float>(const std::string data_file, float p_val,
                                       float *&sampled_data, size_t &slice_size,
                                       size_t &ndims);
-template void gen_random_slice<int8_t>(const char *inputfile, float p_val,
+template void gen_random_slice<int8_t>(const std::string data_file, float p_val,
                                        float *&sampled_data, size_t &slice_size,
                                        size_t &ndims);
-template void gen_random_slice<uint8_t>(const char *inputfile, float p_val,
+template void gen_random_slice<uint8_t>(const std::string data_file, float p_val,
                                         float *&sampled_data,
                                         size_t &slice_size, size_t &ndims);
 
@@ -475,38 +474,15 @@ template void gen_random_slice<int8_t>(const int8_t *inputdata, size_t npts,
                                        float *&sampled_data,
                                        size_t &slice_size);
 
-template int partition<int8_t>(const char *base_file, const char *train_file,
-                               size_t num_centers, size_t max_k_means_reps,
-                               const char *prefix_dir, size_t k_base);
-template int partition<uint8_t>(const char *base_file, const char *train_file,
-                                size_t num_centers, size_t max_k_means_reps,
-                                const char *prefix_dir, size_t k_base);
-template int partition<float>(const char *base_file, const char *train_file,
-                              size_t num_centers, size_t max_k_means_reps,
-                              const char *prefix_dir, size_t k_base);
-/*
-template int generate_pq_pivots<int8_t>(const int8_t* train_data_T, size_t
-num_train, size_t dim,
-                                        size_t      num_centers,
-                                        size_t      num_pq_chunks,
-                                        size_t      max_k_means_reps,
-                                        std::string pq_pivots_path);
-template int generate_pq_pivots<uint8_t>(const uint8_t *train_data_T,
-                                         size_t num_train, size_t dim,
-                                         size_t      num_centers,
-                                         size_t      num_pq_chunks,
-                                         size_t      max_k_means_reps,
-                                         std::string pq_pivots_path);
-template int generate_pq_pivots<float>(const float *train_data_T,
-                                       size_t num_train, size_t dim,
-                                       size_t num_centers, size_t
-num_pq_chunks, size_t      max_k_means_reps, std::string pq_pivots_path);
 
-int generate_pq_pivots(const float *train_data,
-                                       size_t num_train, size_t dim,
-                                       size_t num_centers, size_t
-num_pq_chunks, size_t      max_k_means_reps, std::string pq_pivots_path);
-*/
+ 
+
+template int partition<int8_t>(const std::string data_file, const float sampling_rate, size_t num_centers,
+              size_t max_k_means_reps, const std::string prefix_path, size_t k_base);
+template int partition<uint8_t>(const std::string data_file, const float sampling_rate, size_t num_centers,
+              size_t max_k_means_reps, const std::string prefix_path, size_t k_base);
+template int partition<float>(const std::string data_file, const float sampling_rate, size_t num_centers,
+              size_t max_k_means_reps, const std::string prefix_path, size_t k_base);
 
 template int generate_pq_data_from_pivots<int8_t>(
     const int8_t *base_data, size_t num_points, size_t dim, size_t num_centers,
