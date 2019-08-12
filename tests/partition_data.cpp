@@ -7,8 +7,6 @@
 // DEPRECATED: NEED TO REPROGRAM
 
 int main(int argc, char** argv) {
-  auto s = std::chrono::high_resolution_clock::now();
-
   if (argc != 7) {
     std::cout << "Usage:\n"
               << argv[0] << "  datatype<int8/uint8/float>  <data_path>"
@@ -20,7 +18,7 @@ int main(int argc, char** argv) {
 
   const std::string data_path(argv[2]);
   const std::string prefix_path(argv[3]);
-  const float      sampling_rate = atof(argv[4]);
+  const float       sampling_rate = atof(argv[4]);
   const size_t      num_partitions = (size_t) std::atoi(argv[5]);
   const size_t      max_reps = 15;
   const size_t      k_index = (size_t) std::atoi(argv[6]);

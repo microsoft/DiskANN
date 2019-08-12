@@ -147,7 +147,7 @@ int aux_main(int argc, char** argv) {
 
     auto    s = std::chrono::high_resolution_clock::now();
 #pragma omp parallel for schedule(dynamic, 1)
-    for (int i = 0; i < query_num; i++) {
+    for (int i = 0; i < (int32_t) query_num; i++) {
       auto ret =
           index.beam_search(query_load + i * query_dim, K, paras,
                             res + ((size_t) i) * K, beam_width, start_points);

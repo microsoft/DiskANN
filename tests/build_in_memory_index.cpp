@@ -20,9 +20,6 @@ template<typename T>
 int aux_main(const std::string& data_path, const unsigned L, const unsigned R,
              const unsigned C, const unsigned num_rnds, const float alpha,
              const std::string& save_path) {
-  T*     data_load = NULL;
-  size_t points_num, dim;
-
   NSG::Parameters paras;
   paras.Set<unsigned>("L", L);
   paras.Set<unsigned>("R", R);

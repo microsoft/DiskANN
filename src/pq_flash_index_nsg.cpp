@@ -518,8 +518,6 @@ namespace NSG {
       }
     }
 
-    unsigned counter = 0;
-
 // compute medoid nhood <-> query distances
 #ifdef USE_ACCELERATED_PQ
     compute_dists(medoid_nhoods[best_medoid].second,

@@ -76,22 +76,29 @@ bool load_index(const char* indexFilePath, const char* queryParameters,
   const std::string index_prefix_path(indexFilePath);
 
   // convert strs into params
-  std::string data_bin = index_prefix_path + "_compressed_uint32.bin";
+  std::string data_bin = index_prefix_path + "_compressed.bin";
   std::string pq_tables_bin = index_prefix_path + "_pq_pivots.bin";
 
-  // determine nchunks
-  std::string params_path = index_prefix_path + "_params.bin";
-  uint32_t*   params;
-  size_t      nargs, one;
-  NSG::load_bin<uint32_t>(params_path.c_str(), params, nargs, one);
+  _u32 dim32, num_points32, num_chunks32, num_centers32, chunk_size32;
+
+  std::ifstream pq_meta_reader(pq_tables_bin, std::ios::binary);
+  pq_meta_reader.read((char*) &num_centers32, sizeof(uint32_t));
+  pq_meta_reader.read((char*) &dim32, sizeof(uint32_t));
+  pq_meta_reader.close();
+
+  std::ifstream compressed_meta_reader(data_bin, std::ios::binary);
+  compressed_meta_reader.read((char*) &num_points32, sizeof(uint32_t));
+  compressed_meta_reader.read((char*) &num_chunks32, sizeof(uint32_t));
+  compressed_meta_reader.close();
+
+  chunk_size32 = DIV_ROUND_UP(dim32, num_chunks32);
 
   // infer chunk_size
-  _u64 m_dimension = (_u64) params[3];
-  _u64 n_chunks = (_u64) params[4];
-  _u64 chunk_size = (_u64)(m_dimension / n_chunks);
+  _u64 m_dimension = (_u64) dim32;
+  _u64 n_chunks = (_u64) num_chunks32;
+  _u64 chunk_size = chunk_size32;
   // corrected n_chnks in case it is dimension is not divisible by original
   // num_chunks
-  n_chunks = DIV_ROUND_UP(m_dimension, chunk_size);
 
   std::string nsg_disk_opt = index_prefix_path + "_diskopt.rnsg";
   std::string medoids_file = index_prefix_path + "_medoids.bin";
@@ -140,7 +147,7 @@ std::tuple<float, float, float> search_index(
   NSG::Timer timer;
 // std::cout<<"aligned dim: " << _pFlashIndex->aligned_dim<<std::endl;
 #pragma omp parallel for schedule(dynamic, 1) num_threads(16)
-  for (_s64 i = 0; i < query_num; i++) {
+  for (_s64 i = 0; i < (int32_t) query_num; i++) {
     _pFlashIndex->cached_beam_search(
         query_load + (i * _pFlashIndex->aligned_dim), neighborCount, L,
         ids + (i * neighborCount), distances + (i * neighborCount), 6,
