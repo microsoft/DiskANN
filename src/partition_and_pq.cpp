@@ -32,7 +32,7 @@
 #define BLOCK_SIZE 5000000
 
 // streams data from the file, and samples each vector with probability p_val
-// and returns a matrix of size slice_size* ndims.
+// and returns a matrix of size slice_size* ndims as floating point type.
 // the slice_size and ndims are set inside the function.
 
 template<typename T>
@@ -85,6 +85,8 @@ void gen_random_slice(const std::string data_file, float p_val,
   delete[] cur_vector_T;
 }
 
+
+// same as above, but samples from the matrix inputdata instead of a file of npts*ndims to return sampled_data of size slice_size*ndims.
 template<typename T>
 void gen_random_slice(const T *inputdata, size_t npts, size_t ndims,
                       float p_val, float *&sampled_data, size_t &slice_size) {
@@ -119,10 +121,11 @@ void gen_random_slice(const T *inputdata, size_t npts, size_t ndims,
   }
 }
 
+
+//given training data in train_data of dimensions num_train * dim, generate PQ pivots using k-means algorithm to partition the co-ordinates into num_pq_chunks (if it divides dimension, else rounded) chunks, and runs k-means in each chunk to compute the PQ pivots and stores in bin format in file pq_pivots_path as a s num_centers*dim floating point binary file
 int generate_pq_pivots(const float *train_data, size_t num_train, size_t dim,
                        size_t num_centers, size_t num_pq_chunks,
                        size_t max_k_means_reps, std::string pq_pivots_path) {
-  //  size_t num_train, dim;
 
   if (num_pq_chunks > dim) {
     std::cout << " Error: number of chunks more than dimension" << std::endl;
@@ -183,21 +186,20 @@ int generate_pq_pivots(const float *train_data, size_t num_train, size_t dim,
     delete[] closest_center;
   }
 
-  //  save_Tvecs_plain<float>(pq_pivots_path.c_str(), full_pivot_data,
-  //                          (size_t) num_centers, dim);
   NSG::save_bin<float>(pq_pivots_path.c_str(), full_pivot_data,
                        (size_t) num_centers, dim);
   return 0;
 }
 
+
+//streams the base file (data_file), and computes the closest centers in each chunk to generate the compressed data_file and stores it in pq_compressed_vectors_path. 
+//If the numbber of centers is < 256, it stores as byte vector, else as 4-byte vector in binary format.
 template<typename T>
 int generate_pq_data_from_pivots(const std::string data_file,
                                  size_t num_centers, size_t num_pq_chunks,
                                  std::string pq_pivots_path,
                                  std::string pq_compressed_vectors_path) {
   _u64 read_blk_size = 64 * 1024 * 1024;
-  //  _u64 write_blk_size = 64 * 1024 * 1024;
-  // create cached reader + writer
   cached_ifstream base_reader(data_file, read_blk_size);
   _u32            npts32;
   _u32            basedim32;
@@ -212,7 +214,6 @@ int generate_pq_data_from_pivots(const std::string data_file,
   float *full_pivot_data = new float[num_centers * dim];
 
   if (!file_exists(pq_pivots_path)) {
-    // Process Global k-means for kmeans_partitioning Step
     std::cout << "ERROR: PQ k-means pivot file not found" << std::endl;
     return -1;
   } else {
@@ -325,9 +326,14 @@ int generate_pq_data_from_pivots(const std::string data_file,
   return 0;
 }
 
+
+// partitions a large base file into many shards using k-means hueristic
+// on a random sample generated using sampling_rate probability. After this, it assignes each base point to the closest k_base nearest centers and creates the shards.
+// The total number of points across all shards will be k_base * num_points.
+
 template<typename T>
 int partition(const std::string data_file, const float sampling_rate,
-              size_t num_centers, size_t max_k_means_reps,
+              size_t num_parts, size_t max_k_means_reps,
               const std::string prefix_path, size_t k_base) {
   size_t dim;
   size_t train_dim;
@@ -345,29 +351,29 @@ int partition(const std::string data_file, const float sampling_rate,
 
   // kmeans_partitioning on training data
 
-  cur_file = cur_file + "_kmeans_partitioning-" + std::to_string(num_centers);
+  cur_file = cur_file + "_kmeans_partitioning-" + std::to_string(num_parts);
   output_file = cur_file + "_pivots_float.bin";
 
   if (!file_exists(output_file)) {
-    pivot_data = new float[num_centers * train_dim];
+    pivot_data = new float[num_parts * train_dim];
 
     // Process Global k-means for kmeans_partitioning Step
     std::cout << "Processing global k-means (kmeans_partitioning Step)"
               << std::endl;
     kmeans::kmeanspp_selecting_pivots(train_data_float, num_train, train_dim,
-                                      pivot_data, num_centers);
+                                      pivot_data, num_parts);
 
     kmeans::run_lloyds(train_data_float, num_train, train_dim, pivot_data,
-                       num_centers, max_k_means_reps, NULL, NULL);
+                       num_parts, max_k_means_reps, NULL, NULL);
 
     std::cout << "Saving global k-center pivots" << std::endl;
-    NSG::save_bin<float>(output_file.c_str(), pivot_data, (size_t) num_centers,
+    NSG::save_bin<float>(output_file.c_str(), pivot_data, (size_t) num_parts,
                          train_dim);
   } else {
-    size_t file_num_centers;
+    size_t file_num_parts;
     size_t file_dim;
-    NSG::load_bin<float>(output_file, pivot_data, file_num_centers, file_dim);
-    if (file_num_centers != num_centers || file_dim != train_dim) {
+    NSG::load_bin<float>(output_file, pivot_data, file_num_parts, file_dim);
+    if (file_num_parts != num_parts || file_dim != train_dim) {
       std::cout << "ERROR: file number of kmeans_partitioning centers does "
                    "not match input argument (or) file "
                    "dimension does not match real dimension"
@@ -397,13 +403,13 @@ int partition(const std::string data_file, const float sampling_rate,
     return -1;
   }
 
-  size_t *                   shard_counts = new size_t[num_centers];
-  std::vector<std::ofstream> shard_data_writer(num_centers);
-  std::vector<std::ofstream> shard_idmap_writer(num_centers);
+  size_t *                   shard_counts = new size_t[num_parts];
+  std::vector<std::ofstream> shard_data_writer(num_parts);
+  std::vector<std::ofstream> shard_idmap_writer(num_parts);
   _u32                       dummy_size = 0;
   _u32                       const_one = 1;
 
-  for (size_t i = 0; i < num_centers; i++) {
+  for (size_t i = 0; i < num_parts; i++) {
     std::string data_filename =
         cur_file + "_subshard-" + std::to_string(i) + ".bin";
     std::string idmap_filename =
@@ -435,7 +441,7 @@ int partition(const std::string data_file, const float sampling_rate,
                                  dim);
 
     math_utils::compute_closest_centers(block_data_float, cur_blk_size, dim,
-                                        pivot_data, num_centers, k_base,
+                                        pivot_data, num_parts, k_base,
                                         block_closest_centers);
 
     for (size_t p = 0; p < cur_blk_size; p++) {
@@ -453,7 +459,7 @@ int partition(const std::string data_file, const float sampling_rate,
 
   size_t total_count = 0;
 
-  for (size_t i = 0; i < num_centers; i++) {
+  for (size_t i = 0; i < num_parts; i++) {
     _u32 cur_shard_count = shard_counts[i];
     total_count += cur_shard_count;
     shard_data_writer[i].seekp(0);
@@ -466,7 +472,7 @@ int partition(const std::string data_file, const float sampling_rate,
 
   std::cout << "Partitioned " << num_points << " with replication factor "
             << k_base << " to get " << total_count << " points across "
-            << num_centers << " shards " << std::endl;
+            << num_parts << " shards " << std::endl;
   delete[] pivot_data;
   delete[] shard_counts;
   delete[] block_closest_centers;
@@ -474,6 +480,11 @@ int partition(const std::string data_file, const float sampling_rate,
   delete[] block_data_float;
   return 0;
 }
+
+
+
+
+// Instantations of supported templates
 
 template void gen_random_slice<float>(const std::string data_file, float p_val,
                                       float *&sampled_data, size_t &slice_size,
