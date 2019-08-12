@@ -273,7 +273,7 @@ namespace NSG {
   }
 
   template<typename T>
-  inline void save_bin(const char *filename, T *data, size_t npts,
+  inline void save_bin(const std::string &filename, T *data, size_t npts,
                        size_t ndims) {
     std::ofstream writer(filename, std::ios::binary | std::ios::out);
     std::cout << "Writing bin: " << filename << "\n";

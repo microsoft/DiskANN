@@ -56,7 +56,7 @@ namespace NSG {
   // Initialize an index with metric m, load the data of type T with filename
   // (bin), and initialize max_points
   template<typename T, typename TagT>
-  IndexNSG<T, TagT>::IndexNSG(Metric m, const char *filename,
+  IndexNSG<T, TagT>::IndexNSG(Metric m, const std::string &filename,
                               const size_t max_points, const size_t nd,
                               const bool enable_tags)
       : _has_built(false), _width(0), _can_delete(false),
@@ -498,7 +498,7 @@ namespace NSG {
   }
 
   template<typename T, typename TagT>
-  void IndexNSG<T, TagT>::save(const char *filename) {
+  void IndexNSG<T, TagT>::save(const std::string &filename) {
     long long     total_gr_edges = 0;
     std::ofstream out(filename, std::ios::binary | std::ios::out);
 
@@ -538,7 +538,7 @@ namespace NSG {
 
   // load the SNG index if pre-computed
   template<typename T, typename TagT>
-  void IndexNSG<T, TagT>::load(const char *filename) {
+  void IndexNSG<T, TagT>::load(const std::string &filename) {
     std::ifstream in(filename, std::ios::binary);
     in.read((char *) &_width, sizeof(unsigned));
     in.read((char *) &_ep, sizeof(unsigned));
@@ -1817,7 +1817,7 @@ namespace NSG {
     */
 
   template<typename T, typename TagT>
-  void IndexNSG<T, TagT>::save_disk_opt_graph(const char *diskopt_path) {
+  void IndexNSG<T, TagT>::save_disk_opt_graph(const std::string &diskopt_path) {
     const _u64 SECTOR_LEN = 4096;
     std::cout << "Embedding node coords with its nhood" << std::endl;
     size_t npts_u64 = _nd, ndims_u64 = _dim;
