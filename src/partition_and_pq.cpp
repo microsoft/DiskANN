@@ -287,13 +287,17 @@ int generate_pq_data_from_pivots(const T *base_data, size_t num_points,
     delete[] closest_center;
   }
 
-  NSG::save_bin<uint32_t>(pq_compressed_vectors_path.c_str(), compressed_base,
-                          (size_t) num_points, corrected_num_pq_chunks);
-
-  //  save_bin<float>(lossy_vectors_float_bin_path.c_str(), base_data,
-  //                          (size_t) num_points, dim);
-
-  return 0;
+  if (num_centers > 256) {
+    NSG::save_bin<uint32_t>(pq_compressed_vectors_path.c_str(), compressed_base,
+                            (size_t) num_points, corrected_num_pq_chunks);
+  } else {
+    uint8_t *pVec = new uint8_t[num_points * corrected_num_pq_chunks];
+    NSG::convert_types<uint32_t, uint8_t>(compressed_base, pVec, num_points,
+                                          corrected_num_pq_chunks);
+    NSG::save_bin<uint8_t>(pq_compressed_vectors_path.c_str(), pVec,
+                            (size_t) num_points, corrected_num_pq_chunks);
+    delete[] pVec;
+  }
 }
 
 template<typename T>
@@ -356,8 +360,8 @@ int partition(const char *base_file, const char *train_file, size_t num_centers,
   delete[] train_data;
   delete[] train_data_float;
 
-  // now pivots are ready. need to stream base points and assign them to closest
-  // clusters.
+  // now pivots are ready. need to stream base points and assign them to
+  // closest clusters.
 
   _u64 read_blk_size = 64 * 1024 * 1024;
   //  _u64 write_blk_size = 64 * 1024 * 1024;
@@ -495,15 +499,13 @@ template int generate_pq_pivots<uint8_t>(const uint8_t *train_data_T,
                                          std::string pq_pivots_path);
 template int generate_pq_pivots<float>(const float *train_data_T,
                                        size_t num_train, size_t dim,
-                                       size_t num_centers, size_t num_pq_chunks,
-                                       size_t      max_k_means_reps,
-                                       std::string pq_pivots_path);
+                                       size_t num_centers, size_t
+num_pq_chunks, size_t      max_k_means_reps, std::string pq_pivots_path);
 
 int generate_pq_pivots(const float *train_data,
                                        size_t num_train, size_t dim,
-                                       size_t num_centers, size_t num_pq_chunks,
-                                       size_t      max_k_means_reps,
-                                       std::string pq_pivots_path);
+                                       size_t num_centers, size_t
+num_pq_chunks, size_t      max_k_means_reps, std::string pq_pivots_path);
 */
 
 template int generate_pq_data_from_pivots<int8_t>(
