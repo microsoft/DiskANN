@@ -1,7 +1,7 @@
 #ifdef __NSG_WINDOWS__
 #include "windows_aligned_file_reader.h"
 #include <iostream>
-#include "util.h"
+#include "utils.h"
 
 #define SECTOR_LEN 4096
 #define MAX_IO_DEPTH 64

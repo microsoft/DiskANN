@@ -1,10 +1,6 @@
-//
-// Created by 付聪 on 2017/6/21.
-//
-
 #pragma once
 
-#include <util.h>
+#include <utils.h>
 #ifdef __NSG_WINDOWS__
 #include <intrin.h>
 #else

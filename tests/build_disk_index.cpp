@@ -3,7 +3,7 @@
 #include <index_nsg.h>
 #include <math_utils.h>
 #include "partition_and_pq.h"
-#include "util.h"
+#include "utils.h"
 
 // #define TRAINING_SET_SIZE 2000000
 //#define TRAINING_SET_SIZE 2000000

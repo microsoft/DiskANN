@@ -16,6 +16,9 @@ target_link_libraries(search_in_memory_index ${PROJECT_NAME})
 add_executable(search_disk_index search_disk_index.cpp)
 target_link_libraries(search_disk_index ${PROJECT_NAME} aio)
 
+add_executable(generate_pq generate_pq.cpp)
+target_link_libraries(generate_pq ${PROJECT_NAME})
+
 add_executable(rename_merge_shards rename_merge_shards.cpp)
 
 # formatter

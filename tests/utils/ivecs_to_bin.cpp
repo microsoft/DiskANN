@@ -1,5 +1,5 @@
 #include <iostream>
-#include "util.h"
+#include "utils.h"
 
 void block_convert(std::ifstream& reader, std::ofstream& writer, _u32* read_buf,
                    _u32* write_buf, _u64 npts, _u64 ndims) {

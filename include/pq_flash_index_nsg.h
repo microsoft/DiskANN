@@ -11,7 +11,7 @@
 #include "pq_table.h"
 #include "tsl/robin_map.h"
 #include "tsl/robin_set.h"
-#include "util.h"
+#include "utils.h"
 
 #define MAX_N_CMPS 16384
 #define SECTOR_LEN 4096

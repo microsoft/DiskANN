@@ -10,7 +10,7 @@
 #include <thread>
 #include "aligned_file_reader.h"
 #include "tsl/robin_map.h"
-#include "util.h"
+#include "utils.h"
 class WindowsAlignedFileReader : public AlignedFileReader {
  private:
   uint64_t     file_sz;

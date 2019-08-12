@@ -2,7 +2,7 @@
 
 #include <dll/nsg_interface.h>
 #include "dll/IANNIndex.h"
-#include "util.h"
+#include "utils.h"
 
 float calc_recall(_u64 num_queries, unsigned* gold_std, _u64 dim_gs,
                   _u64* our_results, _u64 dim_or, _u64 recall_at) {

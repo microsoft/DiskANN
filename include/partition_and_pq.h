@@ -8,7 +8,7 @@
 #include "neighbor.h"
 #include "parameters.h"
 #include "tsl/robin_set.h"
-#include "util.h"
+#include "utils.h"
 
 template<typename T>
 void gen_random_slice(const char *inputfile, float p_val, float *&sampled_data,

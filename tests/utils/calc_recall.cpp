@@ -5,7 +5,7 @@
 #include <set>
 #include <string>
 #include <vector>
-#include "util.h"
+#include "utils.h"
 
 float calc_recall_set(unsigned num_queries, unsigned* gold_std, unsigned dim_gs,
                       unsigned* our_results, unsigned dim_or,

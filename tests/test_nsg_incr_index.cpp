@@ -7,7 +7,7 @@
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
-#include "util.h"
+#include "utils.h"
 
 int main(int argc, char** argv) {
   if (argc != 8) {

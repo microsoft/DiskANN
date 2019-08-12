@@ -6,7 +6,7 @@
 #include <parallel/algorithm>
 #include <vector>
 #include "cached_io.h"
-#include "util.h"
+#include "utils.h"
 
 _u64 get_file_size(const std::string &fname) {
   std::ifstream reader(fname, std::ios::binary | std::ios::ate);

@@ -10,7 +10,7 @@
 #include <iomanip>
 #include "partition_and_pq.h"
 #include "timer.h"
-#include "util.h"
+#include "utils.h"
 
 #ifndef __NSG_WINDOWS__
 #include <sys/mman.h>

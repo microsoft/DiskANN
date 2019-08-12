@@ -9,7 +9,7 @@
 #include "neighbor.h"
 #include "parameters.h"
 #include "tsl/robin_set.h"
-#include "util.h"
+#include "utils.h"
 
 namespace NSG {
   template<typename T, typename TagT = int>

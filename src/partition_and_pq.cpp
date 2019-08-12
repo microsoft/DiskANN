@@ -15,7 +15,7 @@
 #include "index_nsg.h"
 #include "parameters.h"
 #include "tsl/robin_set.h"
-#include "util.h"
+#include "utils.h"
 
 #include <fcntl.h>
 #include <sys/stat.h>
