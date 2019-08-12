@@ -32,7 +32,7 @@ bool testBuildIndex(const char* dataFilePath, const char* indexFilePath,
   std::string train_file_path = index_prefix_path + "_training_set_float.bin";
   std::string pq_pivots_path = index_prefix_path + "_pq_pivots.bin";
   std::string pq_compressed_vectors_path =
-      index_prefix_path + "_compressed_uint32.bin";
+      index_prefix_path + "_compressed.bin";
   std::string randnsg_path = index_prefix_path + "_unopt.rnsg";
   std::string diskopt_path = index_prefix_path + "_diskopt.rnsg";
 
@@ -66,7 +66,7 @@ bool testBuildIndex(const char* dataFilePath, const char* indexFilePath,
 
   generate_pq_pivots(train_data, train_size, dim, 256, num_pq_chunks, 15,
                      pq_pivots_path);
-  generate_pq_data_from_pivots<T>(data_load, points_num, dim, 256,
+  generate_pq_data_from_pivots<T>(dataFilePath, 256,
                                   num_pq_chunks, pq_pivots_path,
                                   pq_compressed_vectors_path);
 
