@@ -19,6 +19,9 @@ target_link_libraries(search_disk_index ${PROJECT_NAME} aio)
 add_executable(generate_pq generate_pq.cpp)
 target_link_libraries(generate_pq ${PROJECT_NAME})
 
+add_executable(partition_data partition_data.cpp)
+target_link_libraries(partition_data ${PROJECT_NAME} -ltcmalloc)
+
 add_executable(rename_merge_shards rename_merge_shards.cpp)
 
 # formatter
