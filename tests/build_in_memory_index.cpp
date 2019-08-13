@@ -20,9 +20,6 @@ template<typename T>
 int aux_main(const std::string& data_path, const unsigned L, const unsigned R,
              const unsigned C, const unsigned num_rnds, const float alpha,
              const std::string& save_path) {
-  T*     data_load = NULL;
-  size_t points_num, dim;
-
   NSG::Parameters paras;
   paras.Set<unsigned>("L", L);
   paras.Set<unsigned>("R", R);
@@ -57,7 +54,7 @@ int main(int argc, char** argv) {
   const unsigned    C = (unsigned) atoi(argv[5]);
   const unsigned    num_rnds = (unsigned) atoi(argv[6]);
   const float       alpha = (float) atof(argv[7]);
-  const std::string save_path = std::string(argv[8]) + std::string(".nsg");
+  const std::string save_path = std::string(argv[8]) + std::string("_unopt.rnsg");
 
   if (std::string(argv[1]) == std::string("int8"))
     aux_main<int8_t>(data_path, L, R, C, num_rnds, alpha, save_path);

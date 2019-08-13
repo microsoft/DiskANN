@@ -24,4 +24,7 @@ target_link_libraries(partition_data ${PROJECT_NAME} -ltcmalloc)
 
 add_executable(merge_shards merge_shards.cpp)
 
+
+add_executable(opt_disk_graph opt_disk_graph.cpp)
+
 # formatter

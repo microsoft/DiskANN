@@ -29,10 +29,10 @@
 #include <xmmintrin.h>
 #endif
 
-#define BLOCK_SIZE 10000000
+#define BLOCK_SIZE 5000000
 
 // streams data from the file, and samples each vector with probability p_val
-// and returns a matrix of size slice_size* ndims.
+// and returns a matrix of size slice_size* ndims as floating point type.
 // the slice_size and ndims are set inside the function.
 
 template<typename T>
@@ -85,6 +85,8 @@ void gen_random_slice(const std::string data_file, float p_val,
   delete[] cur_vector_T;
 }
 
+
+// same as above, but samples from the matrix inputdata instead of a file of npts*ndims to return sampled_data of size slice_size*ndims.
 template<typename T>
 void gen_random_slice(const T *inputdata, size_t npts, size_t ndims,
                       float p_val, float *&sampled_data, size_t &slice_size) {
@@ -119,10 +121,11 @@ void gen_random_slice(const T *inputdata, size_t npts, size_t ndims,
   }
 }
 
+
+//given training data in train_data of dimensions num_train * dim, generate PQ pivots using k-means algorithm to partition the co-ordinates into num_pq_chunks (if it divides dimension, else rounded) chunks, and runs k-means in each chunk to compute the PQ pivots and stores in bin format in file pq_pivots_path as a s num_centers*dim floating point binary file
 int generate_pq_pivots(const float *train_data, size_t num_train, size_t dim,
                        size_t num_centers, size_t num_pq_chunks,
                        size_t max_k_means_reps, std::string pq_pivots_path) {
-  //  size_t num_train, dim;
 
   if (num_pq_chunks > dim) {
     std::cout << " Error: number of chunks more than dimension" << std::endl;
@@ -138,8 +141,8 @@ int generate_pq_pivots(const float *train_data, size_t num_train, size_t dim,
 
   if (file_exists(pq_pivots_path)) {
     size_t file_dim, file_num_centers;
-    NSG::load_bin<float>(pq_pivots_path.c_str(), full_pivot_data,
-                         file_num_centers, file_dim);
+    NSG::load_bin<float>(pq_pivots_path, full_pivot_data, file_num_centers,
+                         file_dim);
     if (file_dim == dim && file_num_centers == num_centers) {
       std::cout << "PQ pivot file exists. Not generating again" << std::endl;
       delete[] full_pivot_data;
@@ -183,55 +186,41 @@ int generate_pq_pivots(const float *train_data, size_t num_train, size_t dim,
     delete[] closest_center;
   }
 
-  //  save_Tvecs_plain<float>(pq_pivots_path.c_str(), full_pivot_data,
-  //                          (size_t) num_centers, dim);
   NSG::save_bin<float>(pq_pivots_path.c_str(), full_pivot_data,
                        (size_t) num_centers, dim);
   return 0;
 }
 
+
+//streams the base file (data_file), and computes the closest centers in each chunk to generate the compressed data_file and stores it in pq_compressed_vectors_path. 
+//If the numbber of centers is < 256, it stores as byte vector, else as 4-byte vector in binary format.
 template<typename T>
-int generate_pq_data_from_pivots(const T *base_data, size_t num_points,
-                                 size_t dim, size_t num_centers,
-                                 size_t      num_pq_chunks,
+int generate_pq_data_from_pivots(const std::string data_file,
+                                 size_t num_centers, size_t num_pq_chunks,
                                  std::string pq_pivots_path,
                                  std::string pq_compressed_vectors_path) {
-  std::cout << "here" << std::endl;
-  if (num_pq_chunks > dim) {
-    std::cout << " Error: number of chunks more than dimension" << std::endl;
-    return -1;
-  }
+  _u64 read_blk_size = 64 * 1024 * 1024;
+  cached_ifstream base_reader(data_file, read_blk_size);
+  _u32            npts32;
+  _u32            basedim32;
+  base_reader.read((char *) &npts32, sizeof(uint32_t));
+  base_reader.read((char *) &basedim32, sizeof(uint32_t));
+  size_t num_points = npts32;
+  size_t dim = basedim32;
+
   size_t chunk_size = std::floor((double) dim / (double) num_pq_chunks);
   size_t corrected_num_pq_chunks = DIV_ROUND_UP(dim, chunk_size);
 
-  uint32_t *compressed_base;
-
-  std::string lossy_vectors_float_bin_path = "_lossy_vectors_float.bin";
-
-  if (file_exists(pq_compressed_vectors_path)) {
-    size_t file_dim, file_num_points;
-    NSG::load_bin<uint32_t>(pq_compressed_vectors_path.c_str(), compressed_base,
-                            file_num_points, file_dim);
-    if (file_dim == corrected_num_pq_chunks && file_num_points == num_points) {
-      std::cout << "Compressed base file exists. Not generating again"
-                << std::endl;
-      delete[] compressed_base;
-      return -1;
-    }
-  }
-
   float *full_pivot_data = new float[num_centers * dim];
-  compressed_base = new uint32_t[num_points * corrected_num_pq_chunks];
 
   if (!file_exists(pq_pivots_path)) {
-    // Process Global k-means for kmeans_partitioning Step
     std::cout << "ERROR: PQ k-means pivot file not found" << std::endl;
     return -1;
   } else {
     size_t file_num_centers;
     size_t file_dim;
-    NSG::load_bin<float>(pq_pivots_path.c_str(), full_pivot_data,
-                         file_num_centers, file_dim);
+    NSG::load_bin<float>(pq_pivots_path, full_pivot_data, file_num_centers,
+                         file_dim);
 
     if (file_num_centers != num_centers) {
       std::cout << "ERROR: file number of PQ centers " << file_num_centers
@@ -249,60 +238,102 @@ int generate_pq_data_from_pivots(const T *base_data, size_t num_points,
     std::cout << "Loaded PQ pivot information" << std::endl;
   }
 
-  for (size_t i = 0; i < corrected_num_pq_chunks; i++) {
-    size_t cur_chunk_size =
-        chunk_size < (dim - i * chunk_size) ? chunk_size : dim - i * chunk_size;
-    float *   cur_pivot_data = new float[num_centers * cur_chunk_size];
-    float *   cur_data = new float[num_points * cur_chunk_size];
-    uint32_t *closest_center = new uint32_t[num_points];
+  std::ofstream compressed_file_writer(pq_compressed_vectors_path,
+                                       std::ios::binary);
+  _u32 corrected_num_pq_chunks_u32 = corrected_num_pq_chunks;
 
-    std::cout << "Processing chunk " << i << " with dimensions ["
-              << i * chunk_size << ", " << i * chunk_size + cur_chunk_size
-              << ")" << std::endl;
+  compressed_file_writer.write((char *) &num_points, sizeof(uint32_t));
+  compressed_file_writer.write((char *) &corrected_num_pq_chunks_u32,
+                               sizeof(uint32_t));
+
+  _u32 * block_compressed_base = new _u32[BLOCK_SIZE * corrected_num_pq_chunks];
+  T *    block_data_T = new T[BLOCK_SIZE * dim];
+  float *block_data_float = new float[BLOCK_SIZE * dim];
+
+  size_t num_blocks = DIV_ROUND_UP(num_points, BLOCK_SIZE);
+
+  for (size_t block = 0; block < num_blocks; block++) {
+    size_t start_id = block * BLOCK_SIZE;
+    size_t end_id = (std::min)((block + 1) * BLOCK_SIZE, num_points);
+    size_t cur_blk_size = end_id - start_id;
+
+    base_reader.read((char *) block_data_T, sizeof(T) * (cur_blk_size * dim));
+    NSG::convert_types<T, float>(block_data_T, block_data_float, cur_blk_size,
+                                 dim);
+
+    std::cout << "Processing points  [" << start_id << ", " << end_id << ").."
+              << std::flush;
+
+    for (size_t i = 0; i < corrected_num_pq_chunks; i++) {
+      size_t cur_chunk_size = chunk_size < (dim - i * chunk_size)
+                                  ? chunk_size
+                                  : dim - i * chunk_size;
+      float *   cur_pivot_data = new float[num_centers * cur_chunk_size];
+      float *   cur_data = new float[cur_blk_size * cur_chunk_size];
+      uint32_t *closest_center = new uint32_t[cur_blk_size];
+
 #pragma omp parallel for schedule(static, 8192)
-    for (int64_t j = 0; j < (_s64) num_points; j++) {
-      for (uint64_t k = 0; k < cur_chunk_size; k++)
-        cur_data[j * cur_chunk_size + k] =
-            base_data[j * dim + i * chunk_size + k];
-    }
+      for (int64_t j = 0; j < (_s64) cur_blk_size; j++) {
+        for (uint64_t k = 0; k < cur_chunk_size; k++)
+          cur_data[j * cur_chunk_size + k] =
+              block_data_float[j * dim + i * chunk_size + k];
+      }
 
 #pragma omp parallel for schedule(static, 1)
-    for (int64_t j = 0; j < (_s64) num_centers; j++) {
-      std::memcpy(cur_pivot_data + j * cur_chunk_size,
-                  full_pivot_data + j * dim + i * chunk_size,
-                  cur_chunk_size * sizeof(float));
-    }
+      for (int64_t j = 0; j < (_s64) num_centers; j++) {
+        std::memcpy(cur_pivot_data + j * cur_chunk_size,
+                    full_pivot_data + j * dim + i * chunk_size,
+                    cur_chunk_size * sizeof(float));
+      }
 
-    math_utils::compute_closest_centers(cur_data, num_points, cur_chunk_size,
-                                        cur_pivot_data, num_centers, 1,
-                                        closest_center);
+      math_utils::compute_closest_centers(cur_data, cur_blk_size,
+                                          cur_chunk_size, cur_pivot_data,
+                                          num_centers, 1, closest_center);
 
 #pragma omp parallel for schedule(static, 8192)
-    for (int64_t j = 0; j < (_s64) num_points; j++) {
-      compressed_base[j * corrected_num_pq_chunks + i] = closest_center[j];
+      for (int64_t j = 0; j < (_s64) cur_blk_size; j++) {
+        block_compressed_base[j * corrected_num_pq_chunks + i] =
+            closest_center[j];
+      }
+
+      delete[] cur_data;
+      delete[] cur_pivot_data;
+      delete[] closest_center;
     }
 
-    delete[] cur_data;
-    delete[] cur_pivot_data;
-    delete[] closest_center;
-  }
+    if (num_centers > 256) {
+      compressed_file_writer.write(
+          (char *) block_compressed_base,
+          cur_blk_size * corrected_num_pq_chunks * sizeof(uint32_t));
+    } else {
+      uint8_t *pVec = new uint8_t[cur_blk_size * corrected_num_pq_chunks];
+      NSG::convert_types<uint32_t, uint8_t>(
+          block_compressed_base, pVec, cur_blk_size, corrected_num_pq_chunks);
+      compressed_file_writer.write(
+          (char *) pVec,
+          cur_blk_size * corrected_num_pq_chunks * sizeof(uint8_t));
+      delete[] pVec;
+    }
 
-  if (num_centers > 256) {
-    NSG::save_bin<uint32_t>(pq_compressed_vectors_path.c_str(), compressed_base,
-                            (size_t) num_points, corrected_num_pq_chunks);
-  } else {
-    uint8_t *pVec = new uint8_t[num_points * corrected_num_pq_chunks];
-    NSG::convert_types<uint32_t, uint8_t>(compressed_base, pVec, num_points,
-                                          corrected_num_pq_chunks);
-    NSG::save_bin<uint8_t>(pq_compressed_vectors_path.c_str(), pVec,
-                           (size_t) num_points, corrected_num_pq_chunks);
-    delete[] pVec;
+    std::cout << ".done." << std::endl;
   }
+  delete[] block_data_float;
+  delete[] block_data_T;
+  delete[] block_compressed_base;
+  delete[] full_pivot_data;
+
+  compressed_file_writer.close();
+  return 0;
 }
+
+
+// partitions a large base file into many shards using k-means hueristic
+// on a random sample generated using sampling_rate probability. After this, it assignes each base point to the closest k_base nearest centers and creates the shards.
+// The total number of points across all shards will be k_base * num_points.
 
 template<typename T>
 int partition(const std::string data_file, const float sampling_rate,
-              size_t num_centers, size_t max_k_means_reps,
+              size_t num_parts, size_t max_k_means_reps,
               const std::string prefix_path, size_t k_base) {
   size_t dim;
   size_t train_dim;
@@ -320,30 +351,29 @@ int partition(const std::string data_file, const float sampling_rate,
 
   // kmeans_partitioning on training data
 
-  cur_file = cur_file + "_kmeans_partitioning-" + std::to_string(num_centers);
+  cur_file = cur_file + "_kmeans_partitioning-" + std::to_string(num_parts);
   output_file = cur_file + "_pivots_float.bin";
 
   if (!file_exists(output_file)) {
-    pivot_data = new float[num_centers * train_dim];
+    pivot_data = new float[num_parts * train_dim];
 
     // Process Global k-means for kmeans_partitioning Step
     std::cout << "Processing global k-means (kmeans_partitioning Step)"
               << std::endl;
     kmeans::kmeanspp_selecting_pivots(train_data_float, num_train, train_dim,
-                                      pivot_data, num_centers);
+                                      pivot_data, num_parts);
 
     kmeans::run_lloyds(train_data_float, num_train, train_dim, pivot_data,
-                       num_centers, max_k_means_reps, NULL, NULL);
+                       num_parts, max_k_means_reps, NULL, NULL);
 
     std::cout << "Saving global k-center pivots" << std::endl;
-    NSG::save_bin<float>(output_file.c_str(), pivot_data, (size_t) num_centers,
+    NSG::save_bin<float>(output_file.c_str(), pivot_data, (size_t) num_parts,
                          train_dim);
   } else {
-    size_t file_num_centers;
+    size_t file_num_parts;
     size_t file_dim;
-    NSG::load_bin<float>(output_file.c_str(), pivot_data, file_num_centers,
-                         file_dim);
-    if (file_num_centers != num_centers || file_dim != train_dim) {
+    NSG::load_bin<float>(output_file, pivot_data, file_num_parts, file_dim);
+    if (file_num_parts != num_parts || file_dim != train_dim) {
       std::cout << "ERROR: file number of kmeans_partitioning centers does "
                    "not match input argument (or) file "
                    "dimension does not match real dimension"
@@ -373,13 +403,13 @@ int partition(const std::string data_file, const float sampling_rate,
     return -1;
   }
 
-  size_t *                   shard_counts = new size_t[num_centers];
-  std::vector<std::ofstream> shard_data_writer(num_centers);
-  std::vector<std::ofstream> shard_idmap_writer(num_centers);
+  size_t *                   shard_counts = new size_t[num_parts];
+  std::vector<std::ofstream> shard_data_writer(num_parts);
+  std::vector<std::ofstream> shard_idmap_writer(num_parts);
   _u32                       dummy_size = 0;
   _u32                       const_one = 1;
 
-  for (size_t i = 0; i < num_centers; i++) {
+  for (size_t i = 0; i < num_parts; i++) {
     std::string data_filename =
         cur_file + "_subshard-" + std::to_string(i) + ".bin";
     std::string idmap_filename =
@@ -411,7 +441,7 @@ int partition(const std::string data_file, const float sampling_rate,
                                  dim);
 
     math_utils::compute_closest_centers(block_data_float, cur_blk_size, dim,
-                                        pivot_data, num_centers, k_base,
+                                        pivot_data, num_parts, k_base,
                                         block_closest_centers);
 
     for (size_t p = 0; p < cur_blk_size; p++) {
@@ -429,7 +459,7 @@ int partition(const std::string data_file, const float sampling_rate,
 
   size_t total_count = 0;
 
-  for (size_t i = 0; i < num_centers; i++) {
+  for (size_t i = 0; i < num_parts; i++) {
     _u32 cur_shard_count = shard_counts[i];
     total_count += cur_shard_count;
     shard_data_writer[i].seekp(0);
@@ -442,7 +472,7 @@ int partition(const std::string data_file, const float sampling_rate,
 
   std::cout << "Partitioned " << num_points << " with replication factor "
             << k_base << " to get " << total_count << " points across "
-            << num_centers << " shards " << std::endl;
+            << num_parts << " shards " << std::endl;
   delete[] pivot_data;
   delete[] shard_counts;
   delete[] block_closest_centers;
@@ -450,6 +480,11 @@ int partition(const std::string data_file, const float sampling_rate,
   delete[] block_data_float;
   return 0;
 }
+
+
+
+
+// Instantations of supported templates
 
 template void gen_random_slice<float>(const std::string data_file, float p_val,
                                       float *&sampled_data, size_t &slice_size,
@@ -487,14 +522,11 @@ template int partition<float>(const std::string data_file,
                               const std::string prefix_path, size_t k_base);
 
 template int generate_pq_data_from_pivots<int8_t>(
-    const int8_t *base_data, size_t num_points, size_t dim, size_t num_centers,
-    size_t num_pq_chunks, std::string pq_pivots_path,
-    std::string pq_compressed_vectors_path);
+    const std::string data_file, size_t num_centers, size_t num_pq_chunks,
+    std::string pq_pivots_path, std::string pq_compressed_vectors_path);
 template int generate_pq_data_from_pivots<uint8_t>(
-    const uint8_t *base_data, size_t num_points, size_t dim, size_t num_centers,
-    size_t num_pq_chunks, std::string pq_pivots_path,
-    std::string pq_compressed_vectors_path);
+    const std::string data_file, size_t num_centers, size_t num_pq_chunks,
+    std::string pq_pivots_path, std::string pq_compressed_vectors_path);
 template int generate_pq_data_from_pivots<float>(
-    const float *base_data, size_t num_points, size_t dim, size_t num_centers,
-    size_t num_pq_chunks, std::string pq_pivots_path,
-    std::string pq_compressed_vectors_path);
+    const std::string data_file, size_t num_centers, size_t num_pq_chunks,
+    std::string pq_pivots_path, std::string pq_compressed_vectors_path);

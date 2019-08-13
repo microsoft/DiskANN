@@ -7,8 +7,6 @@
 // DEPRECATED: NEED TO REPROGRAM
 
 int main(int argc, char** argv) {
-  auto s = std::chrono::high_resolution_clock::now();
-
   if (argc != 7) {
     std::cout << "Usage:\n"
               << argv[0] << "  datatype<int8/uint8/float>  <data_path>"
