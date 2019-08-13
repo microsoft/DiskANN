@@ -295,7 +295,7 @@ int generate_pq_data_from_pivots(const T *base_data, size_t num_points,
     NSG::convert_types<uint32_t, uint8_t>(compressed_base, pVec, num_points,
                                           corrected_num_pq_chunks);
     NSG::save_bin<uint8_t>(pq_compressed_vectors_path.c_str(), pVec,
-                            (size_t) num_points, corrected_num_pq_chunks);
+                           (size_t) num_points, corrected_num_pq_chunks);
     delete[] pVec;
   }
 }

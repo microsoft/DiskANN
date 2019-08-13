@@ -281,11 +281,11 @@ int aux_main(int argc, char** argv) {
 
 int main(int argc, char** argv) {
   if (argc != 7) {
-    std::cout
-        << "Usage: " << argv[0]
-        << " <index_type[float/int8/uint8]>  <index_prefix_path>  "
-           "<query_bin>  <ground_truth_idx_bin>  <ground_truth_dist_bin>  recall@"
-        << std::endl;
+    std::cout << "Usage: " << argv[0]
+              << " <index_type[float/int8/uint8]>  <index_prefix_path>  "
+                 "<query_bin>  <ground_truth_idx_bin>  <ground_truth_dist_bin> "
+                 " recall@"
+              << std::endl;
     exit(-1);
   }
   if (std::string(argv[1]) == std::string("float"))

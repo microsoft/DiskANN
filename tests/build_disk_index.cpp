@@ -110,11 +110,11 @@ bool testBuildIndex(const char* dataFilePath, const char* indexFilePath,
 
 int main(int argc, char** argv) {
   if (argc != 9) {
-    std::cout
-        << "Usage: " << argv[0]
-        << "  <data_type[float/uint8/int8]>   <data_file[.bin]>  <index_prefix_path>  L "
-           "R C N_CHUNKS TRAINING_SIZE"
-        << std::endl;
+    std::cout << "Usage: " << argv[0]
+              << "  <data_type[float/uint8/int8]>   <data_file[.bin]>  "
+                 "<index_prefix_path>  L "
+                 "R C N_CHUNKS TRAINING_SIZE"
+              << std::endl;
   } else {
     std::string params = std::string(argv[4]) + " " + std::string(argv[5]) +
                          " " + std::string(argv[6]) + " " +
