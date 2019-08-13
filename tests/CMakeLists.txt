@@ -22,6 +22,6 @@ target_link_libraries(generate_pq ${PROJECT_NAME})
 add_executable(partition_data partition_data.cpp)
 target_link_libraries(partition_data ${PROJECT_NAME} -ltcmalloc)
 
-add_executable(rename_merge_shards rename_merge_shards.cpp)
+add_executable(merge_shards merge_shards.cpp)
 
 # formatter
