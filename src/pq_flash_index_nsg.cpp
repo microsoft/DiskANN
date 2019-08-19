@@ -580,7 +580,8 @@ namespace NSG {
         if (retset[marker].flag) {
           auto iter = nhood_cache.find(retset[marker].id);
           if (iter != nhood_cache.end()) {
-            cached_nhoods.push_back(std::make_pair(retset[marker].id, iter->second));
+            cached_nhoods.push_back(
+                std::make_pair(retset[marker].id, iter->second));
             if (stats != nullptr) {
               stats->n_cache_hits++;
             }
@@ -602,10 +603,10 @@ namespace NSG {
           sector_scratch_idx++;
           frontier_nhoods.push_back(fnhood);
           frontier_read_reqs.emplace_back(NODE_SECTOR_NO(id) * SECTOR_LEN,
-                  SECTOR_LEN, fnhood.second);
+                                          SECTOR_LEN, fnhood.second);
           if (stats != nullptr) {
-              stats->n_4k++;
-              stats->n_ios++;
+            stats->n_4k++;
+            stats->n_ios++;
           }
         }
         io_timer.reset();
@@ -683,59 +684,59 @@ namespace NSG {
             }
           }
         }
+      }
 
-        // process cached nhoods
-        for (auto &cached_nhood : cached_nhoods) {
-          auto  global_cache_iter = coord_cache.find(cached_nhood.first);
-          T *   node_fp_coords_copy = global_cache_iter->second;
-          float cur_expanded_dist =
-              dist_cmp->compare(query, node_fp_coords_copy, aligned_dim);
-          full_retset.push_back(
-              Neighbor(cached_nhood.first, cur_expanded_dist, true));
+      // process cached nhoods
+      for (auto &cached_nhood : cached_nhoods) {
+        auto  global_cache_iter = coord_cache.find(cached_nhood.first);
+        T *   node_fp_coords_copy = global_cache_iter->second;
+        float cur_expanded_dist =
+            dist_cmp->compare(query, node_fp_coords_copy, aligned_dim);
+        full_retset.push_back(
+                Neighbor(cached_nhood.first, cur_expanded_dist, true));
 
-          _u64      nnbrs = cached_nhood.second.first;
-          unsigned *node_nbrs = cached_nhood.second.second;
+        _u64      nnbrs = cached_nhood.second.first;
+        unsigned *node_nbrs = cached_nhood.second.second;
 
 #ifdef USE_ACCELERATED_PQ
-          // compute node_nbrs <-> query dists in PQ space
-          compute_dists(node_nbrs, nnbrs, dist_scratch);
+        // compute node_nbrs <-> query dists in PQ space
+        compute_dists(node_nbrs, nnbrs, dist_scratch);
 #else
-          // issue prefetches
-          for (_u64 m = 0; m < nnbrs; ++m) {
-            unsigned next_id = node_nbrs[m];
-            _mm_prefetch((char *) data + next_id * n_chunks, _MM_HINT_T1);
-          }
+        // issue prefetches
+        for (_u64 m = 0; m < nnbrs; ++m) {
+          unsigned next_id = node_nbrs[m];
+          _mm_prefetch((char *) data + next_id * n_chunks, _MM_HINT_T1);
+        }
 #endif
-          // process prefetched nhood
-          for (_u64 m = 0; m < nnbrs; ++m) {
-            unsigned id = node_nbrs[m];
-            if (visited.find(id) != visited.end()) {
-              continue;
-            } else {
-              visited.insert(id);
-              cmps++;
+        // process prefetched nhood
+        for (_u64 m = 0; m < nnbrs; ++m) {
+          unsigned id = node_nbrs[m];
+          if (visited.find(id) != visited.end()) {
+            continue;
+          } else {
+            visited.insert(id);
+            cmps++;
 #ifdef USE_ACCELERATED_PQ
-              float dist = dist_scratch[m];
+            float dist = dist_scratch[m];
 #else
-              pq_table.convert(data + id * n_chunks, scratch);
-              float dist = dist_cmp->compare(scratch, query, aligned_dim);
+            pq_table.convert(data + id * n_chunks, scratch);
+            float dist = dist_cmp->compare(scratch, query, aligned_dim);
 #endif
-              // std::cout << "cmp: " << id << ", dist: " << dist << std::endl;
-              // std::cerr << "dist: " << dist << std::endl;
-              if (stats != nullptr) {
-                stats->n_cmps++;
-              }
-              if (dist >= retset[l_search - 1].distance)
-                continue;
-              Neighbor nn(id, dist, true);
-              _u64     r = InsertIntoPool(
-                  retset.data(), l_search,
-                  nn);  // Return position in sorted list where nn inserted.
-              if (r < nk)
-                nk = r;  // nk logs the best position in the retset that was
-                         // updated
-                         // due to neighbors of n.
+            // std::cout << "cmp: " << id << ", dist: " << dist << std::endl;
+            // std::cerr << "dist: " << dist << std::endl;
+            if (stats != nullptr) {
+              stats->n_cmps++;
             }
+            if (dist >= retset[l_search - 1].distance)
+              continue;
+            Neighbor nn(id, dist, true);
+            _u64     r = InsertIntoPool(
+                    retset.data(), l_search,
+                    nn);  // Return position in sorted list where nn inserted.
+            if (r < nk)
+              nk = r;  // nk logs the best position in the retset that was
+            // updated
+            // due to neighbors of n.
           }
         }
       }

@@ -85,8 +85,8 @@ void gen_random_slice(const std::string data_file, float p_val,
   delete[] cur_vector_T;
 }
 
-
-// same as above, but samples from the matrix inputdata instead of a file of npts*ndims to return sampled_data of size slice_size*ndims.
+// same as above, but samples from the matrix inputdata instead of a file of
+// npts*ndims to return sampled_data of size slice_size*ndims.
 template<typename T>
 void gen_random_slice(const T *inputdata, size_t npts, size_t ndims,
                       float p_val, float *&sampled_data, size_t &slice_size) {
@@ -121,12 +121,14 @@ void gen_random_slice(const T *inputdata, size_t npts, size_t ndims,
   }
 }
 
-
-//given training data in train_data of dimensions num_train * dim, generate PQ pivots using k-means algorithm to partition the co-ordinates into num_pq_chunks (if it divides dimension, else rounded) chunks, and runs k-means in each chunk to compute the PQ pivots and stores in bin format in file pq_pivots_path as a s num_centers*dim floating point binary file
+// given training data in train_data of dimensions num_train * dim, generate PQ
+// pivots using k-means algorithm to partition the co-ordinates into
+// num_pq_chunks (if it divides dimension, else rounded) chunks, and runs
+// k-means in each chunk to compute the PQ pivots and stores in bin format in
+// file pq_pivots_path as a s num_centers*dim floating point binary file
 int generate_pq_pivots(const float *train_data, size_t num_train, size_t dim,
                        size_t num_centers, size_t num_pq_chunks,
                        size_t max_k_means_reps, std::string pq_pivots_path) {
-
   if (num_pq_chunks > dim) {
     std::cout << " Error: number of chunks more than dimension" << std::endl;
     return -1;
@@ -191,15 +193,17 @@ int generate_pq_pivots(const float *train_data, size_t num_train, size_t dim,
   return 0;
 }
 
-
-//streams the base file (data_file), and computes the closest centers in each chunk to generate the compressed data_file and stores it in pq_compressed_vectors_path. 
-//If the numbber of centers is < 256, it stores as byte vector, else as 4-byte vector in binary format.
+// streams the base file (data_file), and computes the closest centers in each
+// chunk to generate the compressed data_file and stores it in
+// pq_compressed_vectors_path.
+// If the numbber of centers is < 256, it stores as byte vector, else as 4-byte
+// vector in binary format.
 template<typename T>
 int generate_pq_data_from_pivots(const std::string data_file,
                                  size_t num_centers, size_t num_pq_chunks,
                                  std::string pq_pivots_path,
                                  std::string pq_compressed_vectors_path) {
-  _u64 read_blk_size = 64 * 1024 * 1024;
+  _u64            read_blk_size = 64 * 1024 * 1024;
   cached_ifstream base_reader(data_file, read_blk_size);
   _u32            npts32;
   _u32            basedim32;
@@ -326,9 +330,10 @@ int generate_pq_data_from_pivots(const std::string data_file,
   return 0;
 }
 
-
 // partitions a large base file into many shards using k-means hueristic
-// on a random sample generated using sampling_rate probability. After this, it assignes each base point to the closest k_base nearest centers and creates the shards.
+// on a random sample generated using sampling_rate probability. After this, it
+// assignes each base point to the closest k_base nearest centers and creates
+// the shards.
 // The total number of points across all shards will be k_base * num_points.
 
 template<typename T>
@@ -480,9 +485,6 @@ int partition(const std::string data_file, const float sampling_rate,
   delete[] block_data_float;
   return 0;
 }
-
-
-
 
 // Instantations of supported templates
 
