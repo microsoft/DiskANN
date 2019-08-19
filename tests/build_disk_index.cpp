@@ -66,9 +66,8 @@ bool testBuildIndex(const char* dataFilePath, const char* indexFilePath,
 
   generate_pq_pivots(train_data, train_size, dim, 256, num_pq_chunks, 15,
                      pq_pivots_path);
-  generate_pq_data_from_pivots<T>(dataFilePath, 256,
-                                  num_pq_chunks, pq_pivots_path,
-                                  pq_compressed_vectors_path);
+  generate_pq_data_from_pivots<T>(dataFilePath, 256, num_pq_chunks,
+                                  pq_pivots_path, pq_compressed_vectors_path);
 
   delete[] data_load;
   delete[] train_data;
