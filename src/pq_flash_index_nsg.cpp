@@ -578,7 +578,15 @@ namespace NSG {
       _u64 marker = k - 1;
       while (++marker < l_search && frontier.size() < beam_width) {
         if (retset[marker].flag) {
-          frontier.push_back(retset[marker].id);
+          auto iter = nhood_cache.find(retset[marker].id);
+          if (iter != nhood_cache.end()) {
+            cached_nhoods.push_back(std::make_pair(retset[marker].id, iter->second));
+            if (stats != nullptr) {
+              stats->n_cache_hits++;
+            }
+          } else {
+            frontier.push_back(retset[marker].id);
+          }
           retset[marker].flag = false;
         }
       }
@@ -588,24 +596,16 @@ namespace NSG {
         hops++;
         for (_u64 i = 0; i < frontier.size(); i++) {
           unsigned id = frontier[i];
-          auto     iter = nhood_cache.find(id);
-          if (iter != nhood_cache.end()) {
-            cached_nhoods.push_back(std::make_pair(id, iter->second));
-            if (stats != nullptr) {
-              stats->n_cache_hits++;
-            }
-          } else {
-            std::pair<_u64, char *> fnhood;
-            fnhood.first = id;
-            fnhood.second = sector_scratch + sector_scratch_idx * SECTOR_LEN;
-            sector_scratch_idx++;
-            frontier_nhoods.push_back(fnhood);
-            frontier_read_reqs.emplace_back(NODE_SECTOR_NO(id) * SECTOR_LEN,
-                                            SECTOR_LEN, fnhood.second);
-            if (stats != nullptr) {
+          std::pair<_u64, char *> fnhood;
+          fnhood.first = id;
+          fnhood.second = sector_scratch + sector_scratch_idx * SECTOR_LEN;
+          sector_scratch_idx++;
+          frontier_nhoods.push_back(fnhood);
+          frontier_read_reqs.emplace_back(NODE_SECTOR_NO(id) * SECTOR_LEN,
+                  SECTOR_LEN, fnhood.second);
+          if (stats != nullptr) {
               stats->n_4k++;
               stats->n_ios++;
-            }
           }
         }
         io_timer.reset();
