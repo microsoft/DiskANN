@@ -17,9 +17,10 @@
 #include "memory_mapper.h"
 
 template<typename T>
-int aux_main(const std::string& data_path, const unsigned L, const unsigned R,
-             const unsigned C, const unsigned num_rnds, const float alpha,
-             const std::string& save_path) {
+int build_in_memory_index(const std::string& data_path, const unsigned L,
+                          const unsigned R, const unsigned C,
+                          const unsigned num_rnds, const float alpha,
+                          const std::string& save_path) {
   NSG::Parameters paras;
   paras.Set<unsigned>("L", L);
   paras.Set<unsigned>("R", R);
@@ -30,8 +31,8 @@ int aux_main(const std::string& data_path, const unsigned L, const unsigned R,
   NSG::IndexNSG<T> index(NSG::L2, data_path);
   auto             s = std::chrono::high_resolution_clock::now();
   index.build(paras);
-  auto                          e = std::chrono::high_resolution_clock::now();
-  std::chrono::duration<double> diff = e - s;
+  std::chrono::duration<double> diff =
+      std::chrono::high_resolution_clock::now() - s;
 
   std::cout << "Indexing time: " << diff.count() << "\n";
   index.save(save_path.c_str());
@@ -58,11 +59,14 @@ int main(int argc, char** argv) {
       std::string(argv[8]) + std::string("_unopt.rnsg");
 
   if (std::string(argv[1]) == std::string("int8"))
-    aux_main<int8_t>(data_path, L, R, C, num_rnds, alpha, save_path);
+    build_in_memory_index<int8_t>(data_path, L, R, C, num_rnds, alpha,
+                                  save_path);
   else if (std::string(argv[1]) == std::string("uint8"))
-    aux_main<uint8_t>(data_path, L, R, C, num_rnds, alpha, save_path);
+    build_in_memory_index<uint8_t>(data_path, L, R, C, num_rnds, alpha,
+                                   save_path);
   else if (std::string(argv[1]) == std::string("float"))
-    aux_main<float>(data_path, L, R, C, num_rnds, alpha, save_path);
+    build_in_memory_index<float>(data_path, L, R, C, num_rnds, alpha,
+                                 save_path);
   else
     std::cout << "Unsupported type. Use float/int8/uint8" << std::endl;
 }

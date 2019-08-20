@@ -66,15 +66,16 @@ int main(int argc, char **argv) {
     exit(-1);
   }
 
-  _u64                     nshards = (_u64) std::atoi(argv[5]);
+  std::string nsg_prefix(argv[1]);
+  std::string nsg_suffix(argv[2]);
+  std::string idmaps_prefix(argv[3]);
+  std::string idmaps_suffix(argv[4]);
+  _u64        nshards = (_u64) std::atoi(argv[5]);
+  std::string output_nsg(argv[6]);
+
+  std::string              medoid_file = output_nsg + "_medoids.bin";
   std::vector<std::string> nsg_names(nshards);
   std::vector<std::string> idmaps_names(nshards);
-  std::string              nsg_prefix(argv[1]);
-  std::string              nsg_suffix(argv[2]);
-  std::string              idmaps_prefix(argv[3]);
-  std::string              idmaps_suffix(argv[4]);
-  std::string              output_nsg(argv[6]);
-  std::string              medoid_file = output_nsg + "_medoids.bin";
 
   for (_u64 shard = 0; shard < nshards; shard++) {
     nsg_names[shard] = nsg_prefix + std::to_string(shard) + nsg_suffix;

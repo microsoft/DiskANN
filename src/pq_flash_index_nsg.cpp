@@ -693,7 +693,7 @@ namespace NSG {
         float cur_expanded_dist =
             dist_cmp->compare(query, node_fp_coords_copy, aligned_dim);
         full_retset.push_back(
-                Neighbor(cached_nhood.first, cur_expanded_dist, true));
+            Neighbor(cached_nhood.first, cur_expanded_dist, true));
 
         _u64      nnbrs = cached_nhood.second.first;
         unsigned *node_nbrs = cached_nhood.second.second;
@@ -731,8 +731,8 @@ namespace NSG {
               continue;
             Neighbor nn(id, dist, true);
             _u64     r = InsertIntoPool(
-                    retset.data(), l_search,
-                    nn);  // Return position in sorted list where nn inserted.
+                retset.data(), l_search,
+                nn);  // Return position in sorted list where nn inserted.
             if (r < nk)
               nk = r;  // nk logs the best position in the retset that was
             // updated
