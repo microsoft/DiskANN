@@ -58,7 +58,7 @@ float calc_recall(unsigned num_queries, unsigned* gold_std, unsigned dim_gs,
 
 template<typename T>
 bool load_index(const char* indexFilePath, const char* queryParameters,
-                NSG::PQFlashNSG<T>*& _pFlashIndex) {
+                NSG::PQFlashNSG<T>*& _pFlashIndex, int use_visited_cache) {
   std::stringstream parser;
   parser << std::string(queryParameters);
   std::string              cur_param;
@@ -78,6 +78,7 @@ bool load_index(const char* indexFilePath, const char* queryParameters,
   // convert strs into params
   std::string data_bin = index_prefix_path + "_compressed.bin";
   std::string pq_tables_bin = index_prefix_path + "_pq_pivots.bin";
+  std::string node_visit_bin = index_prefix_path + "_visit_ctr.bin";
 
   _u32 dim32, num_points32, num_chunks32, num_centers32, chunk_size32;
 
@@ -90,6 +91,13 @@ bool load_index(const char* indexFilePath, const char* queryParameters,
   compressed_meta_reader.read((char*) &num_points32, sizeof(uint32_t));
   compressed_meta_reader.read((char*) &num_chunks32, sizeof(uint32_t));
   compressed_meta_reader.close();
+
+  _u64*  node_visit_list = NULL;
+  size_t one = 0, num_cache_nodes = 0;
+
+  if (use_visited_cache)
+    NSG::load_bin<_u64>(node_visit_bin.c_str(), node_visit_list,
+                        num_cache_nodes, one);
 
   chunk_size32 = DIV_ROUND_UP(dim32, num_chunks32);
 
@@ -126,7 +134,11 @@ bool load_index(const char* indexFilePath, const char* queryParameters,
                      nthreads, medoids_file.c_str());
 
   // cache bfs levels
-  _pFlashIndex->cache_bfs_levels(cache_nlevels);
+  if (use_visited_cache)
+    _pFlashIndex->cache_visited_nodes(node_visit_list, num_cache_nodes);
+  else
+    _pFlashIndex->cache_bfs_levels(cache_nlevels);
+
   return 0;
 }
 
@@ -146,6 +158,7 @@ std::tuple<float, float, float> search_index(
 
   NSG::Timer timer;
 // std::cout<<"aligned dim: " << _pFlashIndex->aligned_dim<<std::endl;
+
 #pragma omp parallel for schedule(dynamic, 1) num_threads(16)
   for (_s64 i = 0; i < (int32_t) query_num; i++) {
     _pFlashIndex->cached_beam_search(
@@ -185,12 +198,13 @@ int aux_main(int argc, char** argv) {
   float*    gt_dist;
   size_t    gt_num, gt_dim;
   size_t    gt_num_dist, gt_dim_dist;
-  NSG::load_bin<T>(argv[3], query, query_num, ndims);
-  NSG::load_bin<uint32_t>(argv[4], gt_load, gt_num, gt_dim);
-  NSG::load_bin<float>(argv[5], gt_dist, gt_num_dist, gt_dim_dist);
+  NSG::load_bin<T>(argv[4], query, query_num, ndims);
+  NSG::load_bin<uint32_t>(argv[5], gt_load, gt_num, gt_dim);
+  NSG::load_bin<float>(argv[6], gt_dist, gt_num_dist, gt_dim_dist);
+  bool use_visited_cache = std::atoi(argv[3]);
 
-  std::string recall_string = std::string("Recall@") + std::string(argv[6]);
-  _u64        recall_at = std::atoi(argv[6]);
+  std::string recall_string = std::string("Recall@") + std::string(argv[7]);
+  _u64        recall_at = std::atoi(argv[7]);
 
   if (gt_num != gt_num_dist || gt_dim != gt_dim_dist) {
     std::cout << "Ground truth idx and dist dimension mismatch. " << std::endl;
@@ -214,7 +228,7 @@ int aux_main(int argc, char** argv) {
   // for query search
   {
     // load the index
-    bool res = load_index(argv[2], "8 3 16", _pFlashIndex);
+    bool res = load_index(argv[2], "8 3 16", _pFlashIndex, use_visited_cache);
     omp_set_num_threads(16);
 
     // ERROR CHECK
@@ -287,9 +301,10 @@ int aux_main(int argc, char** argv) {
 }
 
 int main(int argc, char** argv) {
-  if (argc != 7) {
+  if (argc != 8) {
     std::cout << "Usage: " << argv[0]
-              << " <index_type[float/int8/uint8]>  <index_prefix_path>  "
+              << " <index_type[float/int8/uint8]>  <index_prefix_path> "
+                 "<use_visited_cache[0/1]> "
                  "<query_bin>  <ground_truth_idx_bin>  <ground_truth_dist_bin> "
                  " recall@"
               << std::endl;
