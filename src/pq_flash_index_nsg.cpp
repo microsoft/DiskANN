@@ -172,6 +172,8 @@ namespace NSG {
     }
   }
 
+  /*  This function loads the nhood_cache and coord_cache with cached nodes present in node_list.. 
+   *  The num_nodes parameter tells how many nodes to cache. */
   template<typename T>
   void PQFlashNSG<T>::cache_visited_nodes(_u64 *node_list, _u64 num_nodes) {
     // borrow thread data
