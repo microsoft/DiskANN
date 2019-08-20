@@ -125,7 +125,7 @@ std::tuple<float, float, float> search_index(
 }
 
 template<typename T>
-int aux_main(int argc, char** argv) {
+int create_visited_cache(int argc, char** argv) {
   NSG::PQFlashNSG<T>* _pFlashIndex;
 
   // load query bin
@@ -195,11 +195,11 @@ int main(int argc, char** argv) {
     exit(-1);
   }
   if (std::string(argv[1]) == std::string("float"))
-    aux_main<float>(argc, argv);
+    create_visited_cache<float>(argc, argv);
   else if (std::string(argv[1]) == std::string("int8"))
-    aux_main<int8_t>(argc, argv);
+    create_visited_cache<int8_t>(argc, argv);
   else if (std::string(argv[1]) == std::string("uint8"))
-    aux_main<uint8_t>(argc, argv);
+    create_visited_cache<uint8_t>(argc, argv);
   else
     std::cout << "Unsupported index type. Use float or int8 or uint8"
               << std::endl;
