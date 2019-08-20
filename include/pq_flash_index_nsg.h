@@ -49,7 +49,7 @@ namespace NSG {
   template<typename T>
   class PQFlashNSG {
    public:
-    PQFlashNSG();
+    PQFlashNSG(bool visited_cache = false);
     ~PQFlashNSG();
 
     // load data, but obtain handle to nsg file
@@ -58,9 +58,11 @@ namespace NSG {
               const _u64 n_chunks, const _u64 data_dim, const _u64 max_nthreads,
               const char *medoids_file = nullptr);
 
+    void cache_visited_nodes(_u64 *node_list, _u64 num_nodes);
     // NOTE:: implemented
     void cache_bfs_levels(_u64 nlevels);
 
+    void save_cached_nodes(_u64 num_nodes, std::string cache_file_path);
     // setting up thread-specific data
     void setup_thread_data(_u64 nthreads);
     void destroy_thread_data();
@@ -71,6 +73,7 @@ namespace NSG {
                             float *res_dists, const _u64 beam_width,
                             QueryStats * stats = nullptr,
                             Distance<T> *output_dist_func = nullptr);
+
     AlignedFileReader *reader;
 
     // index info
@@ -84,6 +87,9 @@ namespace NSG {
     _u64 n_base = 0;
     _u64 data_dim = 0;
     _u64 aligned_dim = 0;
+
+    std::vector<std::pair<_u64, _u32>> node_visit_counter;
+    bool create_visit_cache;
 
     // PQ data
     // n_chunks = # of chunks ndims is split into
