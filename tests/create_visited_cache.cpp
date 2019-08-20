@@ -98,12 +98,10 @@ std::tuple<float, float, float> search_index(
     uint64_t neighborCount, float* distances, uint64_t* ids, _u64 L) {
   //  _u64     L = 6 * neighborCount;
   //  _u64     L = 12;
-  const T* query_load = (const T*) vector;
-
+  const T*         query_load = (const T*) vector;
   NSG::QueryStats* stats = new NSG::QueryStats[query_num];
-
-  NSG::Timer timer;
-#pragma omp  parallel for schedule(dynamic, 1) num_threads(16)
+  NSG::Timer       timer;
+#pragma omp        parallel for schedule(dynamic, 1) num_threads(16)
   for (_u64 i = 0; i < query_num; i++)
     _pFlashIndex->cached_beam_search(
         query_load + (i * _pFlashIndex->aligned_dim), neighborCount, L,

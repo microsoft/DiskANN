@@ -6,3 +6,5 @@ build/*
 /data/SIFT1M
 /out/build/x64-Debug
 /src/#index_nsg.cpp#
+cscope*
+

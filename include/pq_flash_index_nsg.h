@@ -73,6 +73,7 @@ namespace NSG {
                             float *res_dists, const _u64 beam_width,
                             QueryStats * stats = nullptr,
                             Distance<T> *output_dist_func = nullptr);
+
     AlignedFileReader *reader;
 
     // index info

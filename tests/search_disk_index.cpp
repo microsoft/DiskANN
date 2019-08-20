@@ -6,6 +6,7 @@
 #include <pq_flash_index_nsg.h>
 #include <string.h>
 #include <time.h>
+#include <atomic>
 #include <cstring>
 #include <iomanip>
 #include "partition_and_pq.h"
@@ -101,6 +102,10 @@ bool load_index(const char* indexFilePath, const char* queryParameters,
 
   chunk_size32 = DIV_ROUND_UP(dim32, num_chunks32);
 
+  if (use_visited_cache)
+    NSG::load_bin<_u64>(node_visit_bin.c_str(), node_visit_list,
+                        num_cache_nodes, one);
+
   // infer chunk_size
   _u64 m_dimension = (_u64) dim32;
   _u64 n_chunks = (_u64) num_chunks32;
@@ -166,7 +171,6 @@ std::tuple<float, float, float> search_index(
         ids + (i * neighborCount), distances + (i * neighborCount), 6,
         stats + i);
   }
-
   //  _u64 total_query_us = timer.elapsed();
   //  double qps = (double) query_num / ((double) total_query_us / 1e6);
   //  std::cout << "QPS: " << qps << std::endl;
@@ -198,6 +202,7 @@ int aux_main(int argc, char** argv) {
   float*    gt_dist;
   size_t    gt_num, gt_dim;
   size_t    gt_num_dist, gt_dim_dist;
+
   NSG::load_bin<T>(argv[4], query, query_num, ndims);
   NSG::load_bin<uint32_t>(argv[5], gt_load, gt_num, gt_dim);
   NSG::load_bin<float>(argv[6], gt_dist, gt_num_dist, gt_dim_dist);

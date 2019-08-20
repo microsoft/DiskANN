@@ -3,6 +3,7 @@
 #include "percentile_stats.h"
 
 #include <omp.h>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <iterator>
@@ -616,6 +617,7 @@ namespace NSG {
     compute_dists(medoid_nhoods[best_medoid].second,
                   medoid_nhoods[best_medoid].first, dist_scratch);
 #endif
+
     _u64 tmp_l = 0;
     // add each neighbor of medoid
     for (; tmp_l < l_search && tmp_l < medoid_nhoods[best_medoid].first;
@@ -719,6 +721,8 @@ namespace NSG {
           //   retset[k].flag = false;
           //   unsigned n = retset[k].id;
           // }
+          //
+
           char *node_disk_buf =
               OFFSET_TO_NODE(frontier_nhood.second, frontier_nhood.first);
           unsigned *node_buf = OFFSET_TO_NODE_NHOOD(node_disk_buf);
