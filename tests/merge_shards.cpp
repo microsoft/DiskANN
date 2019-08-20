@@ -58,21 +58,10 @@ void read_shard_id_maps(const std::vector<std::string> &    fnames,
   }
 }
 
-int main(int argc, char **argv) {
-  if (argc != 7) {
-    std::cout << argv[0] << " nsg_prefix[1] nsg_suffix[2] idmaps_prefix[3] "
-                            "idmaps_suffix[4] n_shards[5] output_nsg[6]"
-              << std::endl;
-    exit(-1);
-  }
-
-  std::string nsg_prefix(argv[1]);
-  std::string nsg_suffix(argv[2]);
-  std::string idmaps_prefix(argv[3]);
-  std::string idmaps_suffix(argv[4]);
-  _u64        nshards = (_u64) std::atoi(argv[5]);
-  std::string output_nsg(argv[6]);
-
+int merge_shards(const std::string &nsg_prefix, const std::string &nsg_suffix,
+                 const std::string &idmaps_prefix,
+                 const std::string &idmaps_suffix, const _u64 nshards,
+                 const std::string &output_nsg) {
   std::string              medoid_file = output_nsg + "_medoids.bin";
   std::vector<std::string> nsg_names(nshards);
   std::vector<std::string> idmaps_names(nshards);
@@ -124,8 +113,7 @@ int main(int argc, char **argv) {
   }
 
   // create cached nsg writers
-  std::string     final_nsg_name(argv[6]);
-  cached_ofstream nsg_writer(final_nsg_name, 1024 * 1048576);
+  cached_ofstream nsg_writer(output_nsg, 1024 * 1048576);
 
   unsigned width;
   // read width from each nsg to advance buffer by sizeof(unsigned) bytes
@@ -198,4 +186,22 @@ int main(int argc, char **argv) {
   std::cout << "Finished merge\n";
   delete[] nhood;
   return 0;
+}
+int main(int argc, char **argv) {
+  if (argc != 7) {
+    std::cout << argv[0] << " nsg_prefix[1] nsg_suffix[2] idmaps_prefix[3] "
+                            "idmaps_suffix[4] n_shards[5] output_nsg[6]"
+              << std::endl;
+    exit(-1);
+  }
+
+  std::string nsg_prefix(argv[1]);
+  std::string nsg_suffix(argv[2]);
+  std::string idmaps_prefix(argv[3]);
+  std::string idmaps_suffix(argv[4]);
+  _u64        nshards = (_u64) std::atoi(argv[5]);
+  std::string output_nsg(argv[6]);
+
+  return merge_shards(nsg_prefix, nsg_suffix, idmaps_prefix, idmaps_suffix,
+                      nshards, output_nsg);
 }
