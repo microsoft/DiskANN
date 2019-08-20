@@ -15,15 +15,6 @@ _u64 get_file_size(const std::string &fname) {
   return end_pos;
 }
 
-void read_nsg(const std::string &fname, std::vector<unsigned> &nsg) {
-  _u64 fsize = get_file_size(fname);
-  std::cout << "Reading file: " << fname << ", size: " << fsize << "B\n";
-  nsg.resize(fsize / sizeof(unsigned));
-  std::ifstream reader(fname, std::ios::binary);
-  reader.read((char *) nsg.data(), fsize);
-  reader.close();
-}
-
 void read_bad_ivecs(const std::string &fname, std::vector<unsigned> &ivecs) {
   _u64 fsize = get_file_size(fname);
   std::cout << "Reading bad ivecs: " << fname << ", size: " << fsize << "B\n";
@@ -38,43 +29,18 @@ void read_bad_ivecs(const std::string &fname, std::vector<unsigned> &ivecs) {
   reader.close();
 }
 
-void read_unsigned_ivecs(const std::string &    fname,
-                         std::vector<unsigned> &ivecs) {
-  std::ifstream reader(fname, std::ios::binary);
-  unsigned      nvals;
-  reader.read((char *) &nvals, sizeof(unsigned));
-  _u64 fsize = (nvals + 1) * sizeof(unsigned);
-  std::cout << "Reading ivecs: " << fname << ", size: " << fsize << "B\n";
-  ivecs.resize(nvals);
-
-  reader.read((char *) ivecs.data(), nvals * sizeof(unsigned));
-  reader.close();
-}
-
-void read_shard_id_maps(const std::vector<std::string> &    fnames,
-                        std::vector<std::vector<unsigned>> &id_maps) {
-  for (_u64 i = 0; i < fnames.size(); i++) {
-    read_bad_ivecs(fnames[i], id_maps[i]);
-  }
-}
-
 int merge_shards(const std::string &nsg_prefix, const std::string &nsg_suffix,
                  const std::string &idmaps_prefix,
                  const std::string &idmaps_suffix, const _u64 nshards,
                  const std::string &output_nsg) {
-  std::string              medoid_file = output_nsg + "_medoids.bin";
-  std::vector<std::string> nsg_names(nshards);
-  std::vector<std::string> idmaps_names(nshards);
-
+  // Read ID maps
+  std::vector<std::string>           nsg_names(nshards);
+  std::vector<std::vector<unsigned>> idmaps(nshards);
   for (_u64 shard = 0; shard < nshards; shard++) {
     nsg_names[shard] = nsg_prefix + std::to_string(shard) + nsg_suffix;
-    idmaps_names[shard] = idmaps_prefix + std::to_string(shard) + idmaps_suffix;
+    read_bad_ivecs(idmaps_prefix + std::to_string(shard) + idmaps_suffix,
+                   idmaps[shard]);
   }
-
-  std::vector<std::vector<unsigned>> idmaps(nshards);
-
-  // read all id maps
-  read_shard_id_maps(idmaps_names, idmaps);
 
   // find max node id
   _u64 nnodes = 0;
@@ -127,6 +93,7 @@ int merge_shards(const std::string &nsg_prefix, const std::string &nsg_suffix,
 
   width *= rep_factor;
   nsg_writer.write((char *) &width, sizeof(unsigned));
+  std::string   medoid_file = output_nsg + "_medoids.bin";
   std::ofstream medoid_writer(medoid_file.c_str(), std::ios::binary);
   _u32          nshards_u32 = nshards;
   _u32          one_val = 1;
