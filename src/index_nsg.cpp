@@ -402,6 +402,56 @@ namespace NSG {
               << std::endl;
   }
 
+template<typename T, typename TagT>
+	void IndexNSG<T, TagT>::gen_fake_point(unsigned num_new, unsigned fake_points,
+	T *data) {
+	float *center = new float[_dim]();
+	for (unsigned j = 0; j < _dim; j++)
+		center[j] = 0;
+	if ((num_new - fake_points) <= 1) {
+		for (unsigned i = 0; i < _dim; i++) {
+			data[i] = 0;
+		}
+	data[0] = 1;
+	} 
+	else {
+		for (unsigned i = 0; i < (num_new - fake_points); i++)
+			for (unsigned j = 0; j < _dim; j++)
+				center[j] += data[(i + fake_points) * _dim + j];
+		for (unsigned j = 0; j < _dim; j++)
+			center[j] /= _nd;
+		for (unsigned i = 0; i < _dim; i++) {
+			data[i] = center[i]; 
+			}	
+	}
+	unsigned                     new_gen = 1;
+	std::set < std::vector < float > > fpts;
+	while (new_gen < fake_points) {
+		std::vector < float > tmp = std::vector < float > (_dim);
+		std::random_device device;
+		std::mt19937 generator(device()); 
+		std::uniform_real_distribution < float > dist(0, 1);
+		for( unsigned i = 0; i < _dim; i++){
+			tmp.push_back(dist(generator));
+		}
+		unsigned set_size = fpts.size();
+		fpts.insert(tmp);
+		if( set_size < fpts.size())
+			new_gen++;
+	}
+	if( fake_points > 1){
+		std::set < std::vector < float > >::iterator iter;
+		unsigned inserted = 1;
+		for( iter = fpts.begin(); iter != fpts.end(); iter++){
+			std::vector < float > res = *iter;
+			for( unsigned i = 0; i < _dim; i++){
+				data[ inserted * _dim + i] = res[i];
+			}
+			inserted++;
+		}
+	}
+}
+
   /* init_random_graph():
    * num_points: Number of points in the dataset
    * k: max degree of the graph
@@ -446,7 +496,8 @@ namespace NSG {
         _final_graph[mapping[i]].shrink_to_fit();
       }
     }
-    _ep = calculate_entry_point();
+//    _ep = calculate_entry_point();
+	_ep = 0;
     std::cout << "done. Entry point set to " << _ep << "." << std::endl;
   }
 
