@@ -1290,7 +1290,7 @@ namespace NSG {
         tsl::robin_set<unsigned> visited;
 
         for (size_t n = start_id + block * PAR_BLOCK_SZ;
-             n < start_id + (std::min)(round_size, (block + 1) * PAR_BLOCK_SZ);
+             n < start_id + (std::min<size_t>)(round_size, (block + 1) * PAR_BLOCK_SZ);
              ++n) {
           pool.clear();
           tmp.clear();
@@ -1407,7 +1407,7 @@ namespace NSG {
 
           for (size_t n = start_id + block * PAR_BLOCK_SZ;
                n <
-               start_id + (std::min)(round_size, (block + 1) * PAR_BLOCK_SZ);
+               start_id + (std::min<size_t>)(round_size, (block + 1) * PAR_BLOCK_SZ);
                ++n) {
             pool.clear();
             tmp.clear();
