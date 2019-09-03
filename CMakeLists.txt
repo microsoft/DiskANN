@@ -77,6 +77,6 @@ else()
 	add_compile_options(-march=native -Wall -fno-builtin-malloc -fno-builtin-calloc -fno-builtin-realloc -fno-builtin-free -fopenmp -fopenmp-simd -funroll-loops -Wfatal-errors -DUSE_ACCELERATED_PQ -DUSE_AVX2)
 endif()
 
-add_subdirectory(src/dll)
+add_subdirectory(src)
 add_subdirectory(tests)
 add_subdirectory(tests/utils)

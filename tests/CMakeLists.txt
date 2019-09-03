@@ -18,6 +18,7 @@ target_link_libraries(search_disk_index ${PROJECT_NAME} aio)
 
 add_executable(rename_merge_shards rename_merge_shards.cpp)
 
+
 if(MSVC)
 	add_executable(test_nsg_dll test_nsg_dll.cpp)
 	target_link_options(test_nsg_dll PRIVATE /MACHINE:x64)
