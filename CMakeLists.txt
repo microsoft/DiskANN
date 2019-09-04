@@ -6,7 +6,6 @@ endif()
 set(CMAKE_STANDARD 14)
 
 
-set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "./build")
 #set(CMAKE_USER_MAKE_RULES_OVERRIDE "${CMAKE_CURRENT_LIST_DIR}/CompilerOptions.cmake")
 if(MSVC)
 	set(CMAKE_CXX_COMPILER $ENV{VCToolsInstallDir}/bin/Hostx64/x64/cl.exe)

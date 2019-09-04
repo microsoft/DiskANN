@@ -8,6 +8,7 @@
 #include "neighbor.h"
 #include "parameters.h"
 #include "tsl/robin_set.h"
+#include "windows_customizations.h"
 #include "util.h"
 
 template<typename T>
@@ -22,9 +23,9 @@ template<typename T>
 int partition(const char *base_file, const char *train_file, size_t num_centers,
               size_t max_k_means_reps, const char *prefix_dir, size_t k_base);
 
-int generate_pq_pivots(const float *train_data, size_t num_train, size_t dim,
-                       size_t num_centers, size_t num_pq_chunks,
-                       size_t max_k_means_reps, std::string pq_pivots_path);
+NSGDLLEXPORT int generate_pq_pivots(
+    const float *train_data, size_t num_train, size_t dim, size_t num_centers,
+    size_t num_pq_chunks, size_t max_k_means_reps, std::string pq_pivots_path);
 
 template<typename T>
 int generate_pq_data_from_pivots(const T *base_data, size_t num_points,
