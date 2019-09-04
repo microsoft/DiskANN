@@ -69,6 +69,7 @@ namespace NSG {
     // Return -1 if tag not found, 0 if OK.
     int delete_point(const TagT tag);
 
+    int eager_delete( const TagT tag, const Parameters &parameters);
     /*  Internals of the library */
     void set_data(const T *data);
 
@@ -117,6 +118,7 @@ namespace NSG {
 
     // WARNING: Do not call consolidate_deletes() without acquiring change_lock_
     // Returns number of live points left after consolidation
+
     size_t consolidate_deletes(const Parameters &parameters);
 
     // Computes the in edges of each node, from the out graph

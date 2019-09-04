@@ -135,15 +135,23 @@ namespace NSG {
     return 0;
   }
 
-  // Do not call consolidate_deletes() if you have not locked _change_lock.
-  // Returns number of live points left after consolidation
+  //eager_deletes function - does not compact rows but flag deleted one's as empty
   template<typename T, typename TagT>
-  size_t IndexNSG<T, TagT>::consolidate_deletes(const Parameters &parameters) {
-    assert(!_consolidated_order);
+  int IndexNSG<T, TagT>::eager_delete( const TagT tag, const Parameters &parameters) {
+    /*assert(!_consolidated_order);
     assert(_can_delete);
     assert(_enable_tags);
     assert(_delete_set.size() <= _nd);
-    assert(_empty_slots.size() + _nd == _max_points);
+    assert(_empty_slots.size() + _nd == _max_points);*/
+
+    LockGuard guard(_change_lock);
+    if (_tag_to_location.find(tag) == _tag_to_location.end()) {
+      std::cerr << "Delete tag not found" << std::endl;
+      return -1;
+    }
+    _delete_set.insert(_tag_to_location[tag]);
+    _location_to_tag.erase(_tag_to_location[tag]);
+    _tag_to_location.erase(tag);
 
     const unsigned range = parameters.Get<unsigned>("R");
     const unsigned maxc = parameters.Get<unsigned>("C");
@@ -198,6 +206,131 @@ namespace NSG {
         }
       }
     }
+
+    // If start node is removed, replace it.
+   /* if (_delete_set.find(_ep) != _delete_set.end()) {
+      std::cerr << "Replacing start node which has been deleted... "
+                << std::flush;
+      auto old_ep = _ep;
+      // First active neighbor of old start node is new start node
+      for (auto iter : _final_graph[_ep])
+        if (_delete_set.find(iter) != _delete_set.end()) {
+          _ep = iter;
+          break;
+        }
+      if (_ep == old_ep) {
+        std::cerr << "ERROR: Did not find a replacement for start node."
+                  << std::endl;
+        exit(-1);
+      } else {
+        assert(_delete_set.find(_ep) == _delete_set.end());
+        std::cout << "New start node is " << _ep << std::endl;
+      }
+    }*/
+
+/*    _nd -= _delete_set.size();
+
+    std::cout << "Re-numbering nodes and edges and consolidating data... "
+              << std::flush;
+    for (unsigned old = 0; old < _max_points; ++old) {
+      if (new_location[old] < _max_points) { */ // If point continues to exist
+
+        // Renumber nodes to compact the order
+        /*for (size_t i = 0; i < _final_graph[old].size(); ++i) {
+          assert(new_location[_final_graph[old][i]] <= _final_graph[old][i]);
+          _final_graph[old][i] = new_location[_final_graph[old][i]];
+        }*/
+
+        // Move the data and adj list to the correct position
+        /*if (new_location[old] != old) {
+          assert(new_location[old] < old);
+          _final_graph[new_location[old]].swap(_final_graph[old]);
+          memcpy((void *) (_data + _dim * (size_t) new_location[old]),
+                 (void *) (_data + _dim * (size_t) old), _dim * sizeof(T));
+        }*/
+      /*}
+    }
+    std::cout << "done." << std::endl;*/
+//    _store_data = true;
+
+    //std::cout << "Updating mapping between tags and ids... " << std::flush;
+    // Update the location pointed to by tag
+    /*_tag_to_location.clear();
+    for (auto iter : _location_to_tag)
+      _tag_to_location[iter.second] = new_location[iter.first];
+    _location_to_tag.clear();
+    for (auto iter : _tag_to_location)
+      _location_to_tag[iter.second] = iter.first;
+    std::cout << "done." << std::endl;*/
+
+    //for (unsigned old = active; old < _max_points; ++old)
+      //_final_graph[old].clear();
+
+    return 0;
+  }
+  // Do not call consolidate_deletes() if you have not locked _change_lock.
+  // Returns number of live points left after consolidation
+  template<typename T, typename TagT>
+  size_t IndexNSG<T, TagT>::consolidate_deletes(const Parameters &parameters) {
+    assert(!_consolidated_order);
+    assert(_can_delete);
+    assert(_enable_tags);
+    assert(_delete_set.size() <= _nd);
+    assert(_empty_slots.size() + _nd == _max_points);
+
+    const unsigned range = parameters.Get<unsigned>("R");
+    const unsigned maxc = parameters.Get<unsigned>("C");
+    const float    alpha = parameters.Get<float>("alpha");
+
+    std::vector<unsigned> new_location;
+    new_location.resize(_max_points, _max_points);
+    unsigned active = 0;
+    for (unsigned old = 0; old < _max_points; ++old)
+      if (_empty_slots.find(old) == _empty_slots.end() &&
+          _delete_set.find(old) == _delete_set.end())
+        new_location[old] = active++;
+    assert(active + _empty_slots.size() + _delete_set.size() == _max_points);
+
+    /*tsl::robin_set<unsigned> candidate_set;
+    std::vector<Neighbor>    expanded_nghrs;
+    std::vector<Neighbor>    result;
+
+    for (unsigned i = 0; i < _max_points; ++i) {
+      if (new_location[i] < _max_points) {
+        candidate_set.clear();
+        expanded_nghrs.clear();
+        result.clear();
+
+        bool modify = false;
+        for (auto ngh : _final_graph[i]) {
+          if (new_location[ngh] >= _max_points) {
+            modify = true;
+
+            // Add outgoing links from
+            for (auto j : _final_graph[ngh])
+              if (_delete_set.find(j) == _delete_set.end())
+                candidate_set.insert(j);
+          } else {
+            candidate_set.insert(ngh);
+          }
+        }
+
+        if (modify) {
+          for (auto j : candidate_set)
+            expanded_nghrs.push_back(Neighbor(
+                j,
+                _distance->compare(_data + _dim * (size_t) i,
+                                   _data + _dim * (size_t) j, (unsigned) _dim),
+                true));
+          std::sort(expanded_nghrs.begin(), expanded_nghrs.end());
+          occlude_list(expanded_nghrs, i, alpha, range, maxc, result);
+
+          _final_graph[i].clear();
+          for (auto j : result)
+            _final_graph[i].push_back(j.id);
+        }
+      }
+    }*/
 
     // If start node is removed, replace it.
     if (_delete_set.find(_ep) != _delete_set.end()) {
