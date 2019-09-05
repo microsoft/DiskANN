@@ -73,7 +73,10 @@ bool load_index(const char* indexFilePath, const char* queryParameters,
     return 1;
   }
 
-  const std::string index_prefix_path(indexFilePath);
+  std::cout << "Beam Width[1]: " << param_list[0] << " CacheNLevels[2]: "
+            << param_list[1] << " nthreads[3]: " << param_list[2] << std::endl;
+
+      const std::string index_prefix_path(indexFilePath);
 
   // convert strs into params
   std::string data_bin = index_prefix_path + "_compressed_uint32.bin";
