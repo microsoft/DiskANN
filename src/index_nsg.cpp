@@ -458,7 +458,7 @@ namespace NSG {
 
   template<typename T, typename TagT>
   int IndexNSG<T, TagT>::disable_delete(const Parameters &parameters,
-                                        const bool        consolidate) {
+                                        const bool consolidate) {
     LockGuard guard(_change_lock);
     if (!_can_delete) {
       std::cerr << "Delete not currently enabled" << std::endl;
@@ -717,7 +717,7 @@ namespace NSG {
   }
 
   template<typename T, typename TagT>
-  void IndexNSG<T, TagT>::get_neighbors(const T *              query,
+  void IndexNSG<T, TagT>::get_neighbors(const T *query,
                                         const Parameters &     parameter,
                                         std::vector<Neighbor> &retset,
                                         std::vector<Neighbor> &fullset) {
@@ -727,7 +727,7 @@ namespace NSG {
   }
 
   template<typename T, typename TagT>
-  void IndexNSG<T, TagT>::get_neighbors(const T *                 query,
+  void IndexNSG<T, TagT>::get_neighbors(const T *query,
                                         const Parameters &        parameter,
                                         std::vector<Neighbor> &   retset,
                                         std::vector<Neighbor> &   fullset,
@@ -765,7 +765,7 @@ namespace NSG {
   }
 
   template<typename T, typename TagT>
-  int IndexNSG<T, TagT>::insert_point(const T *                 point,
+  int IndexNSG<T, TagT>::insert_point(const T *point,
                                       const Parameters &        parameters,
                                       std::vector<Neighbor> &   pool,
                                       std::vector<Neighbor> &   tmp,
@@ -912,8 +912,8 @@ namespace NSG {
     bool *visited = new bool[_nd]();
     std::fill(visited, visited + _nd, false);
     std::map<unsigned, std::vector<tsl::robin_set<unsigned>>> bfs_orders;
-    unsigned                                                  start_node = _ep;
-    bool                                                      complete = false;
+    unsigned start_node = _ep;
+    bool     complete = false;
     bfs_orders.insert(
         std::make_pair(start_node, std::vector<tsl::robin_set<unsigned>>()));
     auto &bfs_order = bfs_orders[start_node];
@@ -987,7 +987,7 @@ namespace NSG {
       center[j] /= _nd;
 
     // compute all to one distance
-    float *distances = new float[_nd]();
+    float * distances = new float[_nd]();
 #pragma omp parallel for schedule(static, 65536)
     for (_s64 i = 0; i < (_s64) _nd;
          i++) {  // GOPAL Changed from "size_t i" to "int i"
@@ -1023,7 +1023,7 @@ namespace NSG {
    */
   template<typename T, typename TagT>
   void IndexNSG<T, TagT>::occlude_list(const std::vector<Neighbor> &pool,
-                                       const unsigned               location,
+                                       const unsigned location,
                                        const float alpha, const unsigned degree,
                                        const unsigned         maxc,
                                        std::vector<Neighbor> &result) {
@@ -1164,9 +1164,10 @@ namespace NSG {
           /* temp_pool contains distance of each node in graph_copy, from
            * neighbor of n */
           temp_pool.emplace_back(SimpleNeighbor(
-              node, _distance->compare(_data + _aligned_dim * (size_t) node,
-                                       _data + _aligned_dim * (size_t) des.id,
-                                       (unsigned) _aligned_dim)));
+              node,
+              _distance->compare(_data + _aligned_dim * (size_t) node,
+                                 _data + _aligned_dim * (size_t) des.id,
+                                 (unsigned) _aligned_dim)));
         /* sort temp_pool according to distance from neighbor of n */
         std::sort(temp_pool.begin(), temp_pool.end());
         for (auto iter = temp_pool.begin(); iter + 1 != temp_pool.end(); ++iter)
@@ -1257,7 +1258,7 @@ namespace NSG {
   /*truncate degree of rand-nsg index */
   template<typename T, typename TagT>
   void IndexNSG<T, TagT>::truncate_degree(Parameters &parameters,
-                                          unsigned    new_degree) {
+                                          unsigned new_degree) {
     //    The graph will be updated periodically in NUM_SYNCS batches
     uint32_t NUM_SYNCS = DIV_ROUND_UP(_nd, (128 * 1024));
     if (_nd < (1 << 22))
@@ -1387,8 +1388,9 @@ namespace NSG {
           if (last_round_alpha > 1)
             parameters.Set<unsigned>(
                 "L", (unsigned) (std::min)(
-                         (int) L, (int) (L - (L - 50) * ((float) sync_num /
-                                                         (float) NUM_SYNCS))));
+                         (int) L, (int) (L -
+                                         (L - 50) * ((float) sync_num /
+                                                     (float) NUM_SYNCS))));
           parameters.Set<float>("alpha", last_round_alpha);
         }
         size_t start_id = sync_num * round_size;
@@ -1474,7 +1476,7 @@ namespace NSG {
   */
 
   template<typename T, typename TagT>
-  void IndexNSG<T, TagT>::build(Parameters &             parameters,
+  void IndexNSG<T, TagT>::build(Parameters &parameters,
                                 const std::vector<TagT> &tags) {
     if (_enable_tags) {
       if (tags.size() != _nd) {
@@ -1926,15 +1928,16 @@ namespace NSG {
   template NSGDLLEXPORT class IndexNSG<int8_t>;
   template NSGDLLEXPORT class IndexNSG<uint8_t>;
 
+#ifdef __NSG_WINDOWS__
   template NSGDLLEXPORT IndexNSG<uint8_t, int>::IndexNSG(
       Metric m, const char *filename, const size_t max_points, const size_t nd,
       const bool enable_tags);
-  template NSGDLLEXPORT IndexNSG<int8_t, int>::IndexNSG(Metric       m,
+  template NSGDLLEXPORT IndexNSG<int8_t, int>::IndexNSG(Metric m,
                                                         const char * filename,
                                                         const size_t max_points,
                                                         const size_t nd,
                                                         const bool enable_tags);
-  template NSGDLLEXPORT IndexNSG<float, int>::IndexNSG(Metric       m,
+  template NSGDLLEXPORT IndexNSG<float, int>::IndexNSG(Metric m,
                                                        const char * filename,
                                                        const size_t max_points,
                                                        const size_t nd,
@@ -1965,5 +1968,5 @@ namespace NSG {
       const char *diskopt_path);
   template NSGDLLEXPORT void IndexNSG<float, int>::save_disk_opt_graph(
       const char *diskopt_path);
-
+#endif
 }  // namespace NSG

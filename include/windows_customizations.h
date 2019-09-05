@@ -5,4 +5,3 @@
 #else
 #define NSGDLLEXPORT
 #endif
-

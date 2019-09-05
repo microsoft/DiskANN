@@ -52,47 +52,46 @@ namespace NSG {
 #ifdef __NSG_WINDOWS__
     __declspec(dllexport)
 #endif
-	PQFlashNSG();
+        PQFlashNSG();
 #ifdef __NSG_WINDOWS__
     __declspec(dllexport)
 #endif
-    ~PQFlashNSG();
+        ~PQFlashNSG();
 
+// load data, but obtain handle to nsg file
+#ifdef __NSG_WINDOWS__
+    __declspec(dllexport)
+#endif
+        void load(const char *data_bin, const char *nsg_file,
+                  const char *pq_tables_bin, const _u64 chunk_size,
+                  const _u64 n_chunks, const _u64 data_dim,
+                  const _u64 max_nthreads, const char *medoids_file = nullptr);
 
-    // load data, but obtain handle to nsg file
+// NOTE:: implemented
 #ifdef __NSG_WINDOWS__
     __declspec(dllexport)
 #endif
-    void load(const char *data_bin, const char *nsg_file,
-              const char *pq_tables_bin, const _u64 chunk_size,
-              const _u64 n_chunks, const _u64 data_dim, const _u64 max_nthreads,
-              const char *medoids_file = nullptr);
+        void cache_bfs_levels(_u64 nlevels);
 
-    // NOTE:: implemented
+// setting up thread-specific data
 #ifdef __NSG_WINDOWS__
     __declspec(dllexport)
 #endif
-    void cache_bfs_levels(_u64 nlevels);
+        void setup_thread_data(_u64 nthreads);
+#ifdef __NSG_WINDOWS__
+    __declspec(dllexport)
+#endif
+        void destroy_thread_data();
 
-    // setting up thread-specific data
+// implemented
 #ifdef __NSG_WINDOWS__
     __declspec(dllexport)
 #endif
-    void setup_thread_data(_u64 nthreads);
-#ifdef __NSG_WINDOWS__
-    __declspec(dllexport)
-#endif
-    void destroy_thread_data();
-
-    // implemented
-#ifdef __NSG_WINDOWS__
-    __declspec(dllexport)
-#endif
-    void               cached_beam_search(const T *query, const _u64 k_search,
-                                          const _u64 l_search, _u64 *res_ids,
-                                          float *res_dists, const _u64 beam_width,
-                                          QueryStats * stats = nullptr,
-                                          Distance<T> *output_dist_func = nullptr);
+        void cached_beam_search(const T *query, const _u64 k_search,
+                                const _u64 l_search, _u64 *res_ids,
+                                float *res_dists, const _u64 beam_width,
+                                QueryStats * stats = nullptr,
+                                Distance<T> *output_dist_func = nullptr);
     AlignedFileReader *reader;
 
     // index info
@@ -121,17 +120,17 @@ namespace NSG {
     Distance<T> *dist_cmp;
 
     // medoid/start info
-    uint32_t *                               medoids;
+    uint32_t *medoids;
     std::vector<std::pair<_u64, unsigned *>> medoid_nhoods;
-    size_t                                   num_medoids;
-    T *                                      medoid_full_precs;
+    size_t num_medoids;
+    T *    medoid_full_precs;
 
     // nhood_cache
-    unsigned *                                        nhood_cache_buf = nullptr;
+    unsigned *nhood_cache_buf = nullptr;
     tsl::robin_map<_u64, std::pair<_u64, unsigned *>> nhood_cache;
 
     // coord_cache
-    T *                       coord_cache_buf = nullptr;
+    T *coord_cache_buf = nullptr;
     tsl::robin_map<_u64, T *> coord_cache;
 
     // thread-specific scratch
