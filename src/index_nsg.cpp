@@ -135,9 +135,10 @@ namespace NSG {
     return 0;
   }
 
-  //eager_deletes function - does not compact rows but flag deleted one's as empty
+  // deleting point from graph and restructuring it
   template<typename T, typename TagT>
-  int IndexNSG<T, TagT>::eager_delete( const TagT tag, const Parameters &parameters) {
+  int IndexNSG<T, TagT>::eager_delete(const TagT tag,
+                                      const Parameters &parameters, std::vector <unsigned> &new_location) {
     /*assert(!_consolidated_order);
     assert(_can_delete);
     assert(_enable_tags);
@@ -150,21 +151,33 @@ namespace NSG {
       return -1;
     }
     _delete_set.insert(_tag_to_location[tag]);
+	unsigned id = _tag_to_location[tag];
     _location_to_tag.erase(_tag_to_location[tag]);
     _tag_to_location.erase(tag);
 
     const unsigned range = parameters.Get<unsigned>("R");
     const unsigned maxc = parameters.Get<unsigned>("C");
     const float    alpha = parameters.Get<float>("alpha");
-
-    std::vector<unsigned> new_location;
-    new_location.resize(_max_points, _max_points);
-    unsigned active = 0;
+	
+if(new_location[0] < _max_points){
+	unsigned active = new_location[id -1] + 1;
+	new_location[id]  = _max_points;
+	for(unsigned old = id + 1; old < _max_points; old++)
+		
+      if (_empty_slots.find(old) == _empty_slots.end() &&
+          _delete_set.find(old) == _delete_set.end())
+       { new_location[old] = active;
+	active++;}
+    assert(active + _empty_slots.size() + _delete_set.size() == _max_points);
+}
+ else
+{   unsigned active = 0;
     for (unsigned old = 0; old < _max_points; ++old)
       if (_empty_slots.find(old) == _empty_slots.end() &&
           _delete_set.find(old) == _delete_set.end())
         new_location[old] = active++;
     assert(active + _empty_slots.size() + _delete_set.size() == _max_points);
+}
 
     tsl::robin_set<unsigned> candidate_set;
     std::vector<Neighbor>    expanded_nghrs;
@@ -208,52 +221,52 @@ namespace NSG {
     }
 
     // If start node is removed, replace it.
-   /* if (_delete_set.find(_ep) != _delete_set.end()) {
-      std::cerr << "Replacing start node which has been deleted... "
-                << std::flush;
-      auto old_ep = _ep;
-      // First active neighbor of old start node is new start node
-      for (auto iter : _final_graph[_ep])
-        if (_delete_set.find(iter) != _delete_set.end()) {
-          _ep = iter;
-          break;
-        }
-      if (_ep == old_ep) {
-        std::cerr << "ERROR: Did not find a replacement for start node."
-                  << std::endl;
-        exit(-1);
-      } else {
-        assert(_delete_set.find(_ep) == _delete_set.end());
-        std::cout << "New start node is " << _ep << std::endl;
-      }
-    }*/
+    /* if (_delete_set.find(_ep) != _delete_set.end()) {
+       std::cerr << "Replacing start node which has been deleted... "
+                 << std::flush;
+       auto old_ep = _ep;
+       // First active neighbor of old start node is new start node
+       for (auto iter : _final_graph[_ep])
+         if (_delete_set.find(iter) != _delete_set.end()) {
+           _ep = iter;
+           break;
+         }
+       if (_ep == old_ep) {
+         std::cerr << "ERROR: Did not find a replacement for start node."
+                   << std::endl;
+         exit(-1);
+       } else {
+         assert(_delete_set.find(_ep) == _delete_set.end());
+         std::cout << "New start node is " << _ep << std::endl;
+       }
+     }*/
 
-/*    _nd -= _delete_set.size();
+    /*    _nd -= _delete_set.size();
 
     std::cout << "Re-numbering nodes and edges and consolidating data... "
               << std::flush;
     for (unsigned old = 0; old < _max_points; ++old) {
-      if (new_location[old] < _max_points) { */ // If point continues to exist
+      if (new_location[old] < _max_points) { */  // If point continues to exist
 
-        // Renumber nodes to compact the order
-        /*for (size_t i = 0; i < _final_graph[old].size(); ++i) {
-          assert(new_location[_final_graph[old][i]] <= _final_graph[old][i]);
-          _final_graph[old][i] = new_location[_final_graph[old][i]];
-        }*/
+    // Renumber nodes to compact the order
+    /*for (size_t i = 0; i < _final_graph[old].size(); ++i) {
+      assert(new_location[_final_graph[old][i]] <= _final_graph[old][i]);
+      _final_graph[old][i] = new_location[_final_graph[old][i]];
+    }*/
 
-        // Move the data and adj list to the correct position
-        /*if (new_location[old] != old) {
-          assert(new_location[old] < old);
-          _final_graph[new_location[old]].swap(_final_graph[old]);
-          memcpy((void *) (_data + _dim * (size_t) new_location[old]),
-                 (void *) (_data + _dim * (size_t) old), _dim * sizeof(T));
-        }*/
-      /*}
-    }
-    std::cout << "done." << std::endl;*/
-//    _store_data = true;
+    // Move the data and adj list to the correct position
+    /*if (new_location[old] != old) {
+      assert(new_location[old] < old);
+      _final_graph[new_location[old]].swap(_final_graph[old]);
+      memcpy((void *) (_data + _dim * (size_t) new_location[old]),
+             (void *) (_data + _dim * (size_t) old), _dim * sizeof(T));
+    }*/
+    /*}
+  }
+  std::cout << "done." << std::endl;*/
+    //    _store_data = true;
 
-    //std::cout << "Updating mapping between tags and ids... " << std::flush;
+    // std::cout << "Updating mapping between tags and ids... " << std::flush;
     // Update the location pointed to by tag
     /*_tag_to_location.clear();
     for (auto iter : _location_to_tag)
@@ -263,8 +276,8 @@ namespace NSG {
       _location_to_tag[iter.second] = iter.first;
     std::cout << "done." << std::endl;*/
 
-    //for (unsigned old = active; old < _max_points; ++old)
-      //_final_graph[old].clear();
+    // for (unsigned old = active; old < _max_points; ++old)
+    //_final_graph[old].clear();
 
     return 0;
   }
@@ -534,56 +547,38 @@ namespace NSG {
     std::cout << "Loaded " << nodes << " nodes, and " << cc << " neighbors"
               << std::endl;
   }
-
-template<typename T, typename TagT>
-	void IndexNSG<T, TagT>::gen_fake_point(unsigned num_new, unsigned fake_points,
-	T *data) {
-	float *center = new float[_dim]();
-	for (unsigned j = 0; j < _dim; j++)
-		center[j] = 0;
-	if ((num_new - fake_points) <= 1) {
-		for (unsigned i = 0; i < _dim; i++) {
-			data[i] = 0;
-		}
-	data[0] = 1;
-	} 
-	else {
-		for (unsigned i = 0; i < (num_new - fake_points); i++)
-			for (unsigned j = 0; j < _dim; j++)
-				center[j] += data[(i + fake_points) * _dim + j];
-		for (unsigned j = 0; j < _dim; j++)
-			center[j] /= _nd;
-		for (unsigned i = 0; i < _dim; i++) {
-			data[i] = center[i]; 
-			}	
+// allocate (_max_points + fake_points) * dim space to data
+  template<typename T, typename TagT>
+  void IndexNSG<T, TagT>::gen_fake_point(unsigned fake_points,
+                                         T *data) {
+	if(_has_built){
+	std::cout << "Index already built. Cannot add more points" << std::endl;
 	}
-	unsigned                     new_gen = 1;
-	std::set < std::vector < float > > fpts;
-	while (new_gen < fake_points) {
-		std::vector < float > tmp = std::vector < float > (_dim);
-		std::random_device device;
-		std::mt19937 generator(device()); 
-		std::uniform_real_distribution < float > dist(0, 1);
-		for( unsigned i = 0; i < _dim; i++){
-			tmp.push_back(dist(generator));
-		}
-		unsigned set_size = fpts.size();
-		fpts.insert(tmp);
-		if( set_size < fpts.size())
-			new_gen++;
-	}
-	if( fake_points > 1){
-		std::set < std::vector < float > >::iterator iter;
-		unsigned inserted = 1;
-		for( iter = fpts.begin(); iter != fpts.end(); iter++){
-			std::vector < float > res = *iter;
-			for( unsigned i = 0; i < _dim; i++){
-				data[ inserted * _dim + i] = res[i];
-			}
-			inserted++;
-		}
-	}
-}
+    unsigned                     new_gen = 0;
+    std::set<std::vector<float>> fpts;
+    while (new_gen < fake_points) {
+      std::vector<float>                    tmp = std::vector<float>(_dim);
+      std::random_device                    device;
+      std::mt19937                          generator(device());
+      std::uniform_real_distribution<float> dist(0, 1);
+      for (unsigned i = 0; i < _dim; i++) {
+        tmp.push_back(dist(generator));
+      }
+      unsigned set_size = fpts.size();
+      fpts.insert(tmp);
+      if (set_size < fpts.size())
+        new_gen++;
+    }
+      std::set<std::vector<float>>::iterator iter;
+      unsigned                               inserted = 0;
+      for (iter = fpts.begin(); iter != fpts.end(); iter++) {
+        std::vector<float> res = *iter;
+        for (unsigned i = 0; i < _dim; i++) {
+          data[inserted * _dim + i] = res[i];
+        }
+        inserted++;
+      }
+  }
 
   /* init_random_graph():
    * num_points: Number of points in the dataset
@@ -629,8 +624,8 @@ template<typename T, typename TagT>
         _final_graph[mapping[i]].shrink_to_fit();
       }
     }
-//    _ep = calculate_entry_point();
-	_ep = 0;
+    //    _ep = calculate_entry_point();
+    _ep = 0;
     std::cout << "done. Entry point set to " << _ep << "." << std::endl;
   }
 

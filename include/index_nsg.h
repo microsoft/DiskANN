@@ -23,9 +23,11 @@ namespace NSG {
 
     void save(const char *filename);
     void load(const char *filename, const bool load_tags = false);
-    void gen_fake_point(unsigned num_new, unsigned fake_points, T *data);
-    void init_random_graph(size_t num_points, unsigned k, std::vector<size_t> mapping = std::vector<size_t>());
-    void build(const T *data, Parameters &parameters, const std::vector<TagT> &tags = std::vector<TagT>());
+    void gen_fake_point(unsigned fake_points, T *data);
+    void init_random_graph(size_t num_points, unsigned k,
+                           std::vector<size_t> mapping = std::vector<size_t>());
+    void build(const T *data, Parameters &parameters,
+               const std::vector<TagT> &tags = std::vector<TagT>());
 
     typedef std::vector<SimpleNeighbor> vecNgh;
 
@@ -69,7 +71,7 @@ namespace NSG {
     // Return -1 if tag not found, 0 if OK.
     int delete_point(const TagT tag);
 
-    int eager_delete( const TagT tag, const Parameters &parameters);
+    int eager_delete(const TagT tag, const Parameters &parameters, std::vector < unsigned > &new_location);
     /*  Internals of the library */
     void set_data(const T *data);
 

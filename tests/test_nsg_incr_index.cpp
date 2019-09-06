@@ -43,22 +43,23 @@ int main(int argc, char** argv) {
   num_new = num_points + num_fake;
 
   auto data_copy = new float[num_new * dim];
-  memcpy((void*) ( data_copy + num_fake * dim ), (void*) data_load,
+  memcpy((void*) (data_copy + num_fake * dim), (void*) data_load,
          num_points * dim * sizeof(float));
-  auto             data_copy_copy = new float[num_new * dim];
+  auto data_copy_copy = new float[num_new * dim];
 
   typedef unsigned TagT;
 
-  NSG::IndexNSG<float, TagT> index(dim, num_new - num_incr, NSG::L2,
-                                   num_points, true);
+  NSG::IndexNSG<float, TagT> index(dim, num_new - num_incr, NSG::L2, num_new,
+                                   true);
   {
     std::vector<TagT> tags(num_new - num_incr);
     std::iota(tags.begin(), tags.end(), 0);
 
-    index.gen_fake_point(num_new, num_fake, data_copy);
+    index.gen_fake_point(num_fake, data_copy);
     NSG::Timer timer;
     index.build(data_copy, paras, tags);
-    memcpy((void*) data_copy_copy, (void*) data_copy,num_new * dim * sizeof(float));
+    memcpy((void*) data_copy_copy, (void*) data_copy,
+           num_new * dim * sizeof(float));
     std::cout << "Index time: " << timer.elapsed() / 1000 << "ms\n";
   }
 
@@ -68,7 +69,7 @@ int main(int argc, char** argv) {
 
   {
     NSG::Timer timer;
-    for (size_t i = num_new - num_incr; i < num_points; ++i)
+    for (size_t i = num_new - num_incr; i < num_new; ++i)
       index.insert_point(data_copy_copy + i * dim, paras, pool, tmp, visited,
                          cut_graph, i);
     std::cout << "Incremental time: " << timer.elapsed() / 1000 << "ms\n";
@@ -77,22 +78,25 @@ int main(int argc, char** argv) {
 
   tsl::robin_set<unsigned> delete_list;
   while (delete_list.size() < num_incr)
-    delete_list.insert(((rand() * rand() * rand()) % num_points) + num_fake );
+    delete_list.insert(((rand() * rand() * rand()) % num_points) + num_fake);
   std::cout << "Deleting " << delete_list.size() << " elements" << std::endl;
 
   {
     NSG::Timer timer;
     index.enable_delete();
-	unsigned count = 0;
+    unsigned count = 0;
+	std::vector <unsigned> new_location;
+    new_location.resize(num_new, num_new);
+
     for (auto p : delete_list)
-      //if (index.delete_point(p) != 0)
-	if(index.eager_delete(p, paras)!=0)
-		std::cerr << "Delete tag " << p << " not found" << std::endl;
-	else{
-		count++;
-		if(count%1000 == 0)
-			std::cout<<count<<std::endl;
-}
+      // if (index.delete_point(p) != 0)
+      if (index.eager_delete(p, paras, new_location) != 0)
+        std::cerr << "Delete tag " << p << " not found" << std::endl;
+      else {
+        count++;
+        if (count % 1000 == 0)
+          std::cout << count << std::endl;
+      }
 
     if (index.disable_delete(paras, true) != 0) {
       std::cerr << "Disable delete failed" << std::endl;
@@ -104,8 +108,8 @@ int main(int argc, char** argv) {
   {
     NSG::Timer timer;
     for (auto p : delete_list)
-      index.insert_point(data_copy_copy + (size_t) p * (size_t) dim, paras, pool,
-                         tmp, visited, cut_graph, p);
+      index.insert_point(data_copy_copy + (size_t) p * (size_t) dim, paras,
+                         pool, tmp, visited, cut_graph, p);
     std::cout << "Re-incremental time: " << timer.elapsed() / 1000 << "ms\n";
   }
 
