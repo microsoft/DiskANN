@@ -138,41 +138,46 @@ namespace NSG {
   // deleting point from graph and restructuring it
   template<typename T, typename TagT>
   int IndexNSG<T, TagT>::eager_delete(const TagT tag,
-                                      const Parameters &parameters, std::vector <unsigned> &new_location) {
-
+                                      const Parameters &     parameters,
+                                      std::vector<unsigned> &new_location) {
     LockGuard guard(_change_lock);
     if (_tag_to_location.find(tag) == _tag_to_location.end()) {
       std::cerr << "Delete tag not found" << std::endl;
       return -1;
     }
     _delete_set.insert(_tag_to_location[tag]);
-	unsigned id = _tag_to_location[tag];
+    unsigned id = _tag_to_location[tag];
     _location_to_tag.erase(_tag_to_location[tag]);
     _tag_to_location.erase(tag);
 
     const unsigned range = parameters.Get<unsigned>("R");
     const unsigned maxc = parameters.Get<unsigned>("C");
     const float    alpha = parameters.Get<float>("alpha");
-	
-if(new_location[0] < _max_points){
-	unsigned active = new_location[id -1] + 1;
-	new_location[id]  = _max_points;
-	for(unsigned old = id + 1; old < _max_points; old++)
-		
-      if (_empty_slots.find(old) == _empty_slots.end() &&
-          _delete_set.find(old) == _delete_set.end())
-       { new_location[old] = active;
-	active++;}
-    assert(active + _empty_slots.size() + _delete_set.size() == _max_points);
-}
- else
-{   unsigned active = 0;
-    for (unsigned old = 0; old < _max_points; ++old)
-      if (_empty_slots.find(old) == _empty_slots.end() &&
-          _delete_set.find(old) == _delete_set.end())
-        new_location[old] = active++;
-    assert(active + _empty_slots.size() + _delete_set.size() == _max_points);
-}
+
+    if (new_location[0] < _max_points) {
+      unsigned active;
+      if (id == 0)
+        active = 0;
+      else {
+        active = new_location[id - 1] + 1;
+      }
+      new_location[id] = _max_points;
+      for (unsigned old = id + 1; old < _max_points; old++)
+
+        if (_empty_slots.find(old) == _empty_slots.end() &&
+            _delete_set.find(old) == _delete_set.end()) {
+          new_location[old] = active;
+          active++;
+        }
+      assert(active + _empty_slots.size() + _delete_set.size() == _max_points);
+    } else {
+      unsigned active = 0;
+      for (unsigned old = 0; old < _max_points; ++old)
+        if (_empty_slots.find(old) == _empty_slots.end() &&
+            _delete_set.find(old) == _delete_set.end())
+          new_location[old] = active++;
+      assert(active + _empty_slots.size() + _delete_set.size() == _max_points);
+    }
 
     tsl::robin_set<unsigned> candidate_set;
     std::vector<Neighbor>    expanded_nghrs;
@@ -215,7 +220,6 @@ if(new_location[0] < _max_points){
       }
     }
 
-
     return 0;
   }
   // Do not call consolidate_deletes() if you have not locked _change_lock.
@@ -240,7 +244,6 @@ if(new_location[0] < _max_points){
           _delete_set.find(old) == _delete_set.end())
         new_location[old] = active++;
     assert(active + _empty_slots.size() + _delete_set.size() == _max_points);
-
 
     // If start node is removed, replace it.
     if (_delete_set.find(_ep) != _delete_set.end()) {
@@ -444,13 +447,12 @@ if(new_location[0] < _max_points){
     std::cout << "Loaded " << nodes << " nodes, and " << cc << " neighbors"
               << std::endl;
   }
-// allocate (_max_points + fake_points) * dim space to data
+  // allocate (_max_points + fake_points) * dim space to data
   template<typename T, typename TagT>
-  void IndexNSG<T, TagT>::gen_fake_point(unsigned fake_points,
-                                         T *data) {
-	if(_has_built){
-	std::cout << "Index already built. Cannot add more points" << std::endl;
-	}
+  void IndexNSG<T, TagT>::gen_fake_point(unsigned fake_points, T *data) {
+    if (_has_built) {
+      std::cout << "Index already built. Cannot add more points" << std::endl;
+    }
     unsigned                     new_gen = 0;
     std::set<std::vector<float>> fpts;
     while (new_gen < fake_points) {
@@ -466,15 +468,15 @@ if(new_location[0] < _max_points){
       if (set_size < fpts.size())
         new_gen++;
     }
-      std::set<std::vector<float>>::iterator iter;
-      unsigned                               inserted = 0;
-      for (iter = fpts.begin(); iter != fpts.end(); iter++) {
-        std::vector<float> res = *iter;
-        for (unsigned i = 0; i < _dim; i++) {
-          data[inserted * _dim + i] = res[i];
-        }
-        inserted++;
+    std::set<std::vector<float>>::iterator iter;
+    unsigned                               inserted = 0;
+    for (iter = fpts.begin(); iter != fpts.end(); iter++) {
+      std::vector<float> res = *iter;
+      for (unsigned i = 0; i < _dim; i++) {
+        data[inserted * _dim + i] = res[i];
       }
+      inserted++;
+    }
   }
 
   /* init_random_graph():

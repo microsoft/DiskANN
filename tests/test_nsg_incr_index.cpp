@@ -84,8 +84,8 @@ int main(int argc, char** argv) {
   {
     NSG::Timer timer;
     index.enable_delete();
-    unsigned count = 0;
-	std::vector <unsigned> new_location;
+    unsigned              count = 0;
+    std::vector<unsigned> new_location;
     new_location.resize(num_new, num_new);
 
     for (auto p : delete_list)

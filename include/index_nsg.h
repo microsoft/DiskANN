@@ -71,7 +71,8 @@ namespace NSG {
     // Return -1 if tag not found, 0 if OK.
     int delete_point(const TagT tag);
 
-    int eager_delete(const TagT tag, const Parameters &parameters, std::vector < unsigned > &new_location);
+    int eager_delete(const TagT tag, const Parameters &parameters,
+                     std::vector<unsigned> &new_location);
     /*  Internals of the library */
     void set_data(const T *data);
 
