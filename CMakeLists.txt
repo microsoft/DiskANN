@@ -31,17 +31,18 @@ endif()
 #MKL Config
 if (MSVC)
 	set(INTEL_ROOT $ENV{ICPP_COMPILER19})
+	set(MKL_ROOT ${INTEL_ROOT}/mkl)
 	add_compile_options(/arch:AVX2 /Qpar)
 	link_libraries("${INTEL_ROOT}/mkl/lib/intel64/mkl_core_dll.lib" "${INTEL_ROOT}/mkl/lib/intel64/mkl_rt.lib"  "${INTEL_ROOT}/mkl/lib/intel64/mkl_intel_thread_dll.lib" "${INTEL_ROOT}/compiler/lib/intel64/libiomp5md.lib"  "${INTEL_ROOT}/mkl/lib/intel64/mkl_intel_ilp64_dll.lib" "${INTEL_ROOT}/mkl/lib/intel64/mkl_sequential_dll.lib")
 	
 else()
 	set(INTEL_ROOT /opt/intel/compilers_and_libraries/linux)
+	set(MKL_ROOT ${INTEL_ROOT}/mkl)
 	add_compile_options(-m64 -Wl,--no-as-needed)
 	link_libraries(mkl_intel_ilp64 mkl_intel_thread mkl_core iomp5 pthread m dl)
 	link_directories(${INTEL_ROOT}/lib/intel64 ${MKL_ROOT}/lib/intel64)
 endif()
 
-set(MKL_ROOT ${INTEL_ROOT}/mkl)
 add_definitions(-DMKL_ILP64)
 include_directories(include ${INTEL_ROOT}/include ${MKL_ROOT}/include)
 

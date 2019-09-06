@@ -127,7 +127,8 @@ namespace NSG {
         _u64 coord_alloc_size = ROUND_UP(MAX_N_CMPS * this->aligned_dim, 256);
         NSG::alloc_aligned((void **) &scratch.coord_scratch, coord_alloc_size,
                            256);
-        //scratch.coord_scratch = new T[MAX_N_CMPS * this->aligned_dim]; //Gopal. Commenting out the reallocation!
+        // scratch.coord_scratch = new T[MAX_N_CMPS * this->aligned_dim];
+        // //Gopal. Commenting out the reallocation!
         NSG::alloc_aligned((void **) &scratch.sector_scratch,
                            MAX_N_SECTOR_READS * SECTOR_LEN, SECTOR_LEN);
         NSG::alloc_aligned((void **) &scratch.aligned_scratch,
