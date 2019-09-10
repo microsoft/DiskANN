@@ -6,6 +6,60 @@ if (MSVC)
 	target_link_options(nsg_lib PRIVATE $<$<CONFIG:Debug>:/IMPLIB:${CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG}/nsg_lib.lib>
 										$<$<CONFIG:Release>:/IMPLIB:${CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE}/nsg_lib.lib>
 					   )
+	add_custom_command(TARGET 
+							nsg_lib 
+							POST_BUILD 
+							COMMAND ${CMAKE_COMMAND} -E copy ${INTEL_ROOT}redist/intel64/compiler/libiomp5md.dll "$<$<CONFIG:debug>:${CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG}>$<$<CONFIG:optimized>:${CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE}>" )
+	add_custom_command(TARGET 
+							nsg_lib 
+							POST_BUILD 
+							COMMAND ${CMAKE_COMMAND} -E copy ${INTEL_ROOT}redist/intel64/mkl/mkl_avx.dll "$<$<CONFIG:debug>:\"${CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG}\">$<$<CONFIG:optimized>:\"${CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE}\">" )
+	add_custom_command(TARGET 
+							nsg_lib 
+							POST_BUILD 
+							COMMAND ${CMAKE_COMMAND} -E copy ${INTEL_ROOT}redist/intel64/mkl/mkl_avx2.dll "$<$<CONFIG:debug>:\"${CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG}\">$<$<CONFIG:optimized>:\"${CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE}\">" )
+	add_custom_command(TARGET 
+							nsg_lib 
+							POST_BUILD 
+							COMMAND ${CMAKE_COMMAND} -E copy ${INTEL_ROOT}redist/intel64/mkl/mkl_avx512.dll "$<$<CONFIG:debug>:\"${CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG}\">$<$<CONFIG:optimized>:\"${CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE}\">" )
+	add_custom_command(TARGET 
+							nsg_lib 
+							POST_BUILD 
+							COMMAND ${CMAKE_COMMAND} -E copy ${INTEL_ROOT}redist/intel64/mkl/mkl_core.dll "$<$<CONFIG:debug>:\"${CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG}\">$<$<CONFIG:optimized>:\"${CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE}\">" )
+	add_custom_command(TARGET 
+							nsg_lib 
+							POST_BUILD 
+							COMMAND ${CMAKE_COMMAND} -E copy ${INTEL_ROOT}redist/intel64/mkl/mkl_def.dll "$<$<CONFIG:debug>:\"${CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG}\">$<$<CONFIG:optimized>:\"${CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE}\">" )
+	add_custom_command(TARGET 
+							nsg_lib 
+							POST_BUILD 
+							COMMAND ${CMAKE_COMMAND} -E copy ${INTEL_ROOT}redist/intel64/mkl/mkl_intel_thread.dll "$<$<CONFIG:debug>:\"${CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG}\">$<$<CONFIG:optimized>:\"${CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE}\">" )
+	add_custom_command(TARGET 
+							nsg_lib 
+							POST_BUILD 
+							COMMAND ${CMAKE_COMMAND} -E copy ${INTEL_ROOT}redist/intel64/mkl/mkl_rt.dll "$<$<CONFIG:debug>:\"${CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG}\">$<$<CONFIG:optimized>:\"${CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE}\">" )
+	add_custom_command(TARGET 
+							nsg_lib 
+							POST_BUILD 
+							COMMAND ${CMAKE_COMMAND} -E copy ${PROJECT_SOURCE_DIR}/dependencies/windows/dll/boost_date_time-vc141-mt-x64-1_70.dll "$<$<CONFIG:debug>:\"${CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG}\">$<$<CONFIG:optimized>:\"${CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE}\">" )
+	add_custom_command(TARGET 
+							nsg_lib 
+							POST_BUILD 
+							COMMAND ${CMAKE_COMMAND} -E copy ${PROJECT_SOURCE_DIR}/dependencies/windows/dll/cpprest_2_10.dll "$<$<CONFIG:debug>:\"${CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG}\">$<$<CONFIG:optimized>:\"${CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE}\">" )
+	add_custom_command(TARGET 
+							nsg_lib 
+							POST_BUILD 
+							COMMAND ${CMAKE_COMMAND} -E copy ${PROJECT_SOURCE_DIR}/dependencies/windows/dll/LIBEAY32.dll "$<$<CONFIG:debug>:\"${CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG}\">$<$<CONFIG:optimized>:\"${CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE}\">" )
+	add_custom_command(TARGET 
+							nsg_lib 
+							POST_BUILD 
+							COMMAND ${CMAKE_COMMAND} -E copy ${PROJECT_SOURCE_DIR}/dependencies/windows/dll/SSLEAY32.dll "$<$<CONFIG:debug>:\"${CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG}\">$<$<CONFIG:optimized>:\"${CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE}\">" )
+	add_custom_command(TARGET 
+							nsg_lib 
+							POST_BUILD 
+							COMMAND ${CMAKE_COMMAND} -E copy ${PROJECT_SOURCE_DIR}/dependencies/windows/dll/zlib1.dll "$<$<CONFIG:debug>:\"${CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG}\">$<$<CONFIG:optimized>:\"${CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE}\">" )
+
 endif()
+
 
 
