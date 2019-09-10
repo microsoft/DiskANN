@@ -132,21 +132,22 @@ namespace NSG {
       _consolidated_order = false;
     }
     _can_delete = true;
+    _can_delete = true;
     return 0;
   }
 
   // deleting point from graph and restructuring it
   template<typename T, typename TagT>
   int IndexNSG<T, TagT>::eager_delete(const TagT tag,
-                                      const Parameters &     parameters,
-                                      std::vector<unsigned> &new_location) {
+                                      const Parameters &parameters) {
     LockGuard guard(_change_lock);
     if (_tag_to_location.find(tag) == _tag_to_location.end()) {
       std::cerr << "Delete tag not found" << std::endl;
       return -1;
     }
-    _delete_set.insert(_tag_to_location[tag]);
+
     unsigned id = _tag_to_location[tag];
+    _delete_set.insert(_tag_to_location[tag]);
     _location_to_tag.erase(_tag_to_location[tag]);
     _tag_to_location.erase(tag);
 
@@ -154,71 +155,56 @@ namespace NSG {
     const unsigned maxc = parameters.Get<unsigned>("C");
     const float    alpha = parameters.Get<float>("alpha");
 
-    if (new_location[0] < _max_points) {
-      unsigned active;
-      if (id == 0)
-        active = 0;
-      else {
-        active = new_location[id - 1] + 1;
-      }
-      new_location[id] = _max_points;
-      for (unsigned old = id + 1; old < _max_points; old++)
+    tsl::robin_set<unsigned>
+        modified;  // to store points whose in-neighbors have to be updates
 
-        if (_empty_slots.find(old) == _empty_slots.end() &&
-            _delete_set.find(old) == _delete_set.end()) {
-          new_location[old] = active;
-          active++;
+    for (auto j : _final_graph[id])  // removing delteted point from its
+                                     // out-neighbors' in-neighbor list
+      for (unsigned k = 0; k < _in_graph[j].size(); k++) {
+        if (_in_graph[j][k] == id) {
+          _in_graph[j].erase(_in_graph[j].begin() + k);
+          break;
         }
-      assert(active + _empty_slots.size() + _delete_set.size() == _max_points);
-    } else {
-      unsigned active = 0;
-      for (unsigned old = 0; old < _max_points; ++old)
-        if (_empty_slots.find(old) == _empty_slots.end() &&
-            _delete_set.find(old) == _delete_set.end())
-          new_location[old] = active++;
-      assert(active + _empty_slots.size() + _delete_set.size() == _max_points);
+      }
+    for (auto j : _final_graph[id]) {
+      modified.insert(j);
     }
 
+    size_t                   in_size = _in_graph[id].size();
     tsl::robin_set<unsigned> candidate_set;
     std::vector<Neighbor>    expanded_nghrs;
     std::vector<Neighbor>    result;
+    for (unsigned i = 0; i < in_size; i++) {
+      candidate_set.clear();
+      expanded_nghrs.clear();
+      result.clear();
 
-    for (unsigned i = 0; i < _max_points; ++i) {
-      if (new_location[i] < _max_points) {
-        candidate_set.clear();
-        expanded_nghrs.clear();
-        result.clear();
+      auto ngh = _in_graph[id][i];
+      for (auto j : _final_graph[id])
+        candidate_set.insert(j);
+      for (auto j : _final_graph[ngh]) {
+        candidate_set.insert(j);
+        modified.insert(j);
+      }
+      candidate_set.erase(id);
+      modified.erase(id);
+      for (auto j : candidate_set)
+        expanded_nghrs.push_back(Neighbor(
+            j,
+            _distance->compare(_data + _dim * (size_t) ngh,
+                               _data + _dim * (size_t) j, (unsigned) _dim),
+            true));
+      std::sort(expanded_nghrs.begin(), expanded_nghrs.end());
+      occlude_list(expanded_nghrs, ngh, alpha, range, maxc, result);
+      _final_graph[ngh].clear();
 
-        bool modify = false;
-        for (auto ngh : _final_graph[i]) {
-          if (new_location[ngh] >= _max_points) {
-            modify = true;
-
-            // Add outgoing links from
-            for (auto j : _final_graph[ngh])
-              if (_delete_set.find(j) == _delete_set.end())
-                candidate_set.insert(j);
-          } else {
-            candidate_set.insert(ngh);
-          }
-        }
-
-        if (modify) {
-          for (auto j : candidate_set)
-            expanded_nghrs.push_back(Neighbor(
-                j,
-                _distance->compare(_data + _dim * (size_t) i,
-                                   _data + _dim * (size_t) j, (unsigned) _dim),
-                true));
-          std::sort(expanded_nghrs.begin(), expanded_nghrs.end());
-          occlude_list(expanded_nghrs, i, alpha, range, maxc, result);
-
-          _final_graph[i].clear();
-          for (auto j : result)
-            _final_graph[i].push_back(j.id);
-        }
+      for (auto j : result) {
+        _final_graph[ngh].push_back(j.id);
+        _in_graph[j.id].emplace_back(ngh);
       }
     }
+    for (auto j : modified)
+      std::sort(_in_graph[j].begin(), _in_graph[j].end());
 
     return 0;
   }
@@ -279,10 +265,16 @@ namespace NSG {
           _final_graph[old][i] = new_location[_final_graph[old][i]];
         }
 
+        for (size_t i = 0; i < _in_graph[old].size(); ++i) {
+          assert(new_location[_in_graph[old][i]] <= _in_graph[old][i]);
+          _in_graph[old][i] = new_location[_in_graph[old][i]];
+        }
+
         // Move the data and adj list to the correct position
         if (new_location[old] != old) {
           assert(new_location[old] < old);
           _final_graph[new_location[old]].swap(_final_graph[old]);
+          _in_graph[new_location[old]].swap(_in_graph[old]);
           memcpy((void *) (_data + _dim * (size_t) new_location[old]),
                  (void *) (_data + _dim * (size_t) old), _dim * sizeof(T));
         }
@@ -441,10 +433,11 @@ namespace NSG {
       _final_graph.emplace_back(tmp);
 
       if (nodes % 5000000 == 0)
-        std::cout << "Loaded " << nodes << " nodes, and " << cc << " neighbors"
+        std::cout << "Loaded " << nodes << "nodes, and " << cc << " neighbors"
                   << std::endl;
     }
-    std::cout << "Loaded " << nodes << " nodes, and " << cc << " neighbors"
+
+    std::cout << "Loaded " << nodes << "nodes, and " << cc << " neighbors"
               << std::endl;
   }
   // allocate (_max_points + fake_points) * dim space to data
@@ -490,6 +483,9 @@ namespace NSG {
     k = (std::min)(k, (unsigned) 32);
     _final_graph.resize(_max_points);
     _final_graph.reserve(_max_points);
+
+    _in_graph.resize(_max_points);
+    _in_graph.reserve(_max_points);
     if (!mapping.empty())
       num_points = mapping.size();
     else {
@@ -715,10 +711,22 @@ namespace NSG {
     _final_graph[location].clear();
     _final_graph[location].reserve(range);
     assert(!cut_graph.empty());
-    for (auto link : cut_graph)
+    for (auto link : cut_graph) {
       _final_graph[location].emplace_back(link.id);
+      int flag = 0;
+      for (unsigned k = 0; k < _in_graph[link.id].size(); k++) {
+        if (_in_graph[link.id][k] > location) {
+          _in_graph[link.id].insert(_in_graph[link.id].begin() + k, location);
+          flag = 1;
+          break;
+        }
+      }
+      if (flag == 0)
+        _in_graph[link.id].emplace_back(location);
+    }
+
     assert(_final_graph[location].size() <= range);
-    inter_insert(location, cut_graph, parameters);
+    inter_insert(location, cut_graph, parameters, 1);
 
     return 0;
   }
@@ -1026,12 +1034,13 @@ namespace NSG {
    * This function tries to add reverse links from all the visited nodes to
    * the current node n.
    */
+
   template<typename T, typename TagT>
-  void IndexNSG<T, TagT>::inter_insert(unsigned n, vecNgh &cut_graph_n,
-                                       const Parameters &parameter) {
+  void IndexNSG<T, TagT>::inter_insert(unsigned n, vecNgh &cut_graph,
+                                       const Parameters &parameter, int flag) {
     float      alpha = parameter.Get<float>("alpha");
     const auto range = parameter.Get<float>("R");
-    const auto src_pool = cut_graph_n;
+    const auto src_pool = cut_graph;
 
     assert(!src_pool.empty());
 
@@ -1059,6 +1068,18 @@ namespace NSG {
 
         if (des_pool.size() < range) {
           des_pool.emplace_back(n);
+          if (flag == 1) {
+            int res = 0;
+            for (unsigned k = 0; k < _in_graph[n].size(); k++) {
+              if (_in_graph[n][k] > des.id) {
+                _in_graph[n].insert(_in_graph[n].begin() + k, des.id);
+                res = 1;
+                break;
+              }
+            }
+            if (res == 0)
+              _in_graph[n].emplace_back(des.id);
+          }
           continue;
         }
 
@@ -1102,25 +1123,21 @@ namespace NSG {
             float djk = _distance->compare(_data + _dim * (size_t) r.id,
                                            _data + _dim * (size_t) p.id,
                                            (unsigned) _dim);
-            if (djk < p.distance /* dik */) {
+            if (alpha * djk < p.distance /* dik */) {
               occlude = true;
               break;
             }
           }
-
           if (!occlude)
             result.emplace_back(p);
-
           if (!occlude && alpha > 1)
             iter = temp_pool.erase(iter);
           else
             ++iter;
         }
-
         if (alpha > 1 && result.size() < range && !temp_pool.empty()) {
           std::vector<SimpleNeighbor> result2;
           result2.emplace_back(temp_pool[0]);
-
           auto iter = temp_pool.begin();
           while (result2.size() + result.size() < range &&
                  ++iter != temp_pool.end()) {
@@ -1131,6 +1148,7 @@ namespace NSG {
                 occlude = true;
                 break;
               }
+
               float djk = _distance->compare(_data + _dim * (size_t) r.id,
                                              _data + _dim * (size_t) p.id,
                                              (unsigned) _dim);
@@ -1150,8 +1168,22 @@ namespace NSG {
           LockGuard guard(_locks[des.id]);
           assert(result.size() <= range);
           des_pool.clear();
-          for (auto iter : result)
+          for (auto iter : result) {
             des_pool.emplace_back(iter.id);
+            if (flag == 1) {
+              int res = 0;
+              for (unsigned k = 0; k < _in_graph[iter.id].size(); k++) {
+                if (_in_graph[iter.id][k] > des.id) {
+                  _in_graph[iter.id].insert(_in_graph[iter.id].begin() + k,
+                                            des.id);
+                  res = 1;
+                  break;
+                }
+              }
+              if (res == 0)
+                _in_graph[iter.id].emplace_back(des.id);
+            }
+          }
         }
       }
 
@@ -1269,10 +1301,9 @@ namespace NSG {
           }
           assert(_final_graph[node].size() <= range);
         }
-
 #pragma omp parallel for schedule(static, PAR_BLOCK_SZ)
         for (int n = start_id; n < end_id; ++n) {
-          inter_insert(n, cut_graph_[n], parameters);
+          inter_insert(n, cut_graph_[n], parameters, 0);
         }
 
         if ((sync_num * 100) / NUM_SYNCS > progress_counter) {
@@ -1303,6 +1334,15 @@ namespace NSG {
   }
 
   template<typename T, typename TagT>
+  void IndexNSG<T, TagT>::update_in_graph() {
+    for (unsigned i = 0; i < _in_graph.size(); i++)
+      _in_graph[i].clear();
+    for (unsigned i = 0; i < _final_graph.size();
+         i++)  // copying to in-neighbor graph
+      for (unsigned j = 0; j < _final_graph[i].size(); j++)
+        _in_graph[_final_graph[i][j]].emplace_back(i);
+  }
+  template<typename T, typename TagT>
   void IndexNSG<T, TagT>::build(const T *data, Parameters &parameters,
                                 const std::vector<TagT> &tags) {
     _data = data;
@@ -1318,6 +1358,8 @@ namespace NSG {
       }
     }
     link(parameters);  // Primary func for creating nsg graph
+
+    update_in_graph();  // copying values to in_graph
 
     size_t max = 0, min = 1 << 30, total = 0, cnt = 0;
     for (size_t i = 0; i < _nd; i++) {
@@ -1339,16 +1381,16 @@ namespace NSG {
   std::pair<int, int> IndexNSG<T, TagT>::beam_search(
       const T *query, const T *x, const size_t K, const Parameters &parameters,
       unsigned *indices, int beam_width,
-      const std::vector<unsigned> &start_points) {
+      const std::vector<unsigned> &start_points, unsigned fake_points) {
     const unsigned int L = parameters.Get<unsigned>("L_search");
-    return beam_search(query, x, K, L, indices, beam_width, start_points);
+    return beam_search(query, x, K, L, indices, beam_width, start_points,
+                       fake_points);
   }
-
   template<typename T, typename TagT>
   std::pair<int, int> IndexNSG<T, TagT>::beam_search(
       const T *query, const T *x, const size_t K, const unsigned L,
       unsigned *indices, int beam_width,
-      const std::vector<unsigned> &start_points) {
+      const std::vector<unsigned> &start_points, unsigned fake_points) {
     _data = x;
     std::vector<unsigned>    init_ids;
     tsl::robin_set<unsigned> visited(10 * L);
@@ -1498,11 +1540,11 @@ namespace NSG {
   std::pair<int, int> IndexNSG<T, TagT>::beam_search_tags(
       const T *query, const T *x, const size_t K, const Parameters &parameters,
       TagT *tags, int beam_width, const std::vector<unsigned> &start_points,
-      unsigned *indices_buffer) {
+      unsigned fake_points, unsigned *indices_buffer) {
     const bool alloc = indices_buffer == NULL;
     auto       indices = alloc ? new unsigned[K] : indices_buffer;
-    auto       ret =
-        beam_search(query, x, K, parameters, indices, beam_width, start_points);
+    auto       ret = beam_search(query, x, K, parameters, indices, beam_width,
+                           start_points, fake_points);
     for (int i = 0; i < (int) K; ++i)
       tags[i] = _location_to_tag[indices[i]];
     if (alloc)

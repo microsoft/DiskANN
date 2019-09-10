@@ -84,18 +84,15 @@ int main(int argc, char** argv) {
   {
     NSG::Timer timer;
     index.enable_delete();
-    unsigned              count = 0;
-    std::vector<unsigned> new_location;
-    new_location.resize(num_new, num_new);
-
+    unsigned count = 0;
     for (auto p : delete_list)
-      // if (index.delete_point(p) != 0)
-      if (index.eager_delete(p, paras, new_location) != 0)
+
+      if (index.eager_delete(p, paras) != 0)
         std::cerr << "Delete tag " << p << " not found" << std::endl;
       else {
         count++;
-        if (count % 1000 == 0)
-          std::cout << count << std::endl;
+
+        std::cout << count << std::endl;
       }
 
     if (index.disable_delete(paras, true) != 0) {

@@ -26,9 +26,9 @@ namespace NSG {
     void gen_fake_point(unsigned fake_points, T *data);
     void init_random_graph(size_t num_points, unsigned k,
                            std::vector<size_t> mapping = std::vector<size_t>());
+    void update_in_graph();
     void build(const T *data, Parameters &parameters,
                const std::vector<TagT> &tags = std::vector<TagT>());
-
     typedef std::vector<SimpleNeighbor> vecNgh;
 
     void populate_start_points_ep(std::vector<unsigned> &start_points);
@@ -39,18 +39,20 @@ namespace NSG {
     std::pair<int, int> beam_search(const T *query, const T *x, const size_t K,
                                     const unsigned int L, unsigned *indices,
                                     int                          beam_width,
-                                    const std::vector<unsigned> &start_points);
+                                    const std::vector<unsigned> &start_points,
+                                    unsigned                     fake_points);
 
     std::pair<int, int> beam_search(const T *query, const T *x, const size_t K,
                                     const Parameters &parameters,
                                     unsigned *indices, int beam_width,
-                                    const std::vector<unsigned> &start_points);
+                                    const std::vector<unsigned> &start_points,
+                                    unsigned                     fake_points);
 
     std::pair<int, int> beam_search_tags(
         const T *query, const T *x, const size_t K,
         const Parameters &parameters, TagT *tags, int beam_width,
-        const std::vector<unsigned> &start_points,
-        unsigned *                   indices_buffer = NULL);
+        const std::vector<unsigned> &start_points, unsigned fake_points,
+        unsigned *indices_buffer = NULL);
 
     void prefetch_vector(unsigned id);
 
@@ -71,14 +73,14 @@ namespace NSG {
     // Return -1 if tag not found, 0 if OK.
     int delete_point(const TagT tag);
 
-    int eager_delete(const TagT tag, const Parameters &parameters,
-                     std::vector<unsigned> &new_location);
+    int eager_delete(const TagT tag, const Parameters &parameters);
     /*  Internals of the library */
     void set_data(const T *data);
 
    protected:
     typedef std::vector<std::vector<unsigned>> CompactGraph;
     CompactGraph                               _final_graph;
+    CompactGraph                               _in_graph;
 
     void reachable_bfs(const unsigned                         start_node,
                        std::vector<tsl::robin_set<unsigned>> &bfs_order,
@@ -103,7 +105,7 @@ namespace NSG {
                        tsl::robin_set<unsigned> &visited);
 
     void inter_insert(unsigned n, vecNgh &cut_graph,
-                      const Parameters &parameter);
+                      const Parameters &parameter, int flag);
 
     void sync_prune(const T *x, unsigned location, std::vector<Neighbor> &pool,
                     const Parameters &        parameter,
