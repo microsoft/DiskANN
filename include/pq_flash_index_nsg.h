@@ -3,6 +3,7 @@
 #include <sstream>
 #include <stack>
 #include <string>
+
 #include "aligned_file_reader.h"
 #include "concurrent_queue.h"
 #include "neighbor.h"
@@ -12,6 +13,7 @@
 #include "tsl/robin_map.h"
 #include "tsl/robin_set.h"
 #include "utils.h"
+#include "windows_customizations.h"
 
 #define MAX_N_CMPS 16384
 #define SECTOR_LEN 4096
@@ -49,31 +51,31 @@ namespace NSG {
   template<typename T>
   class PQFlashNSG {
    public:
-    PQFlashNSG(bool visited_cache = false);
-    ~PQFlashNSG();
+    NSGDLLEXPORT PQFlashNSG(bool visited_cache = false);
+    NSGDLLEXPORT ~PQFlashNSG();
 
     // load data, but obtain handle to nsg file
-    void load(const char *data_bin, const char *nsg_file,
-              const char *pq_tables_bin, const _u64 chunk_size,
-              const _u64 n_chunks, const _u64 data_dim, const _u64 max_nthreads,
-              const char *medoids_file = nullptr);
+    NSGDLLEXPORT void load(const char *data_bin, const char *nsg_file,
+                           const char *pq_tables_bin, const _u64 chunk_size,
+                           const _u64 n_chunks, const _u64 data_dim,
+                           const _u64  max_nthreads,
+                           const char *medoids_file = nullptr);
 
-    void cache_visited_nodes(_u64 *node_list, _u64 num_nodes);
-    // NOTE:: implemented
-    void cache_bfs_levels(_u64 nlevels);
+    NSGDLLEXPORT void cache_visited_nodes(_u64 *node_list, _u64 num_nodes);
+    NSGDLLEXPORT void cache_bfs_levels(_u64 nlevels);
 
-    void save_cached_nodes(_u64 num_nodes, std::string cache_file_path);
+    NSGDLLEXPORT void save_cached_nodes(_u64        num_nodes,
+                                        std::string cache_file_path);
+
     // setting up thread-specific data
-    void setup_thread_data(_u64 nthreads);
-    void destroy_thread_data();
+    NSGDLLEXPORT void setup_thread_data(_u64 nthreads);
+    NSGDLLEXPORT void destroy_thread_data();
 
     // implemented
-    void cached_beam_search(const T *query, const _u64 k_search,
-                            const _u64 l_search, _u64 *res_ids,
-                            float *res_dists, const _u64 beam_width,
-                            QueryStats * stats = nullptr,
-                            Distance<T> *output_dist_func = nullptr);
-
+    NSGDLLEXPORT void cached_beam_search(
+        const T *query, const _u64 k_search, const _u64 l_search, _u64 *res_ids,
+        float *res_dists, const _u64 beam_width, QueryStats *stats = nullptr,
+        Distance<T> *output_dist_func = nullptr);
     AlignedFileReader *reader;
 
     // index info
@@ -122,4 +124,4 @@ namespace NSG {
     ConcurrentQueue<ThreadData<T>> thread_data;
     _u64                           max_nthreads;
   };
-}
+}  // namespace NSG

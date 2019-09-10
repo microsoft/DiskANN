@@ -9,6 +9,7 @@
 #include "parameters.h"
 #include "tsl/robin_set.h"
 #include "utils.h"
+#include "windows_customizations.h"
 
 template<typename T>
 void gen_random_slice(const std::string data_file, float p_val,
@@ -23,9 +24,11 @@ int partition(const std::string data_file, const float sampling_rate,
               size_t num_centers, size_t max_k_means_reps,
               const std::string prefix_path, size_t k_base);
 
-int generate_pq_pivots(const float *train_data, size_t num_train, size_t dim,
-                       size_t num_centers, size_t num_pq_chunks,
-                       size_t max_k_means_reps, std::string pq_pivots_path);
+NSGDLLEXPORT int generate_pq_pivots(const float *train_data, size_t num_train,
+                                    size_t dim, size_t num_centers,
+                                    size_t      num_pq_chunks,
+                                    size_t      max_k_means_reps,
+                                    std::string pq_pivots_path);
 
 template<typename T>
 int generate_pq_data_from_pivots(const std::string data_file,

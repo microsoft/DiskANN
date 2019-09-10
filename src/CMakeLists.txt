@@ -1,8 +1,11 @@
-set(CMAKE_CXX_STANDARD 11)
+set(CMAKE_CXX_STANDARD 14)
 
-file(GLOB CPP_SOURCES *.cpp)
-
-add_library(${PROJECT_NAME} ${CPP_SOURCES})
-add_library(${PROJECT_NAME}_s STATIC ${CPP_SOURCES})
-
-#install()
+if(MSVC)
+	add_subdirectory(dll)
+	add_subdirectory(webservice)
+else()
+	file(GLOB CPP_SOURCES *.cpp)
+	add_library(${PROJECT_NAME} ${CPP_SOURCES})
+	add_library(${PROJECT_NAME}_s STATIC ${CPP_SOURCES})
+endif()
+install()

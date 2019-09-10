@@ -199,6 +199,7 @@ namespace NSG {
     // cache bfs levels
     _pFlashIndex->cache_bfs_levels(cache_nlevels);
 
+    free(params);  // Gopal. Caller has to free the 'params' variable.
     return 0;
   }
 
