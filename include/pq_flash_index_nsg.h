@@ -59,7 +59,7 @@ namespace NSG {
                            const char *pq_tables_bin, const _u64 chunk_size,
                            const _u64 n_chunks, const _u64 data_dim,
                            const _u64  max_nthreads,
-                           const char *medoids_file = nullptr);
+                           const char *medoids_file = {0});
 
     NSGDLLEXPORT void cache_visited_nodes(_u64 *node_list, _u64 num_nodes);
     NSGDLLEXPORT void cache_bfs_levels(_u64 nlevels);

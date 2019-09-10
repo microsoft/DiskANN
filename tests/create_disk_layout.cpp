@@ -1,4 +1,4 @@
-#include <util.h>
+#include <utils.h>
 #include <cmath>
 #include <cstring>
 #include <fstream>
@@ -9,24 +9,23 @@
 
 #define SECTOR_LEN 4096
 
-template <typename T>
+template<typename T>
 int aux_main(int argc, char **argv) {
-  unsigned npts, ndims;
+  unsigned    npts, ndims;
   std::string base_file(argv[2]);
   std::string rand_nsg_file(argv[3]);
   std::string output_file(argv[4]);
 
   // amount to read or write in one shot
-  _u64 read_blk_size = 64 * 1024 * 1024;
-  _u64 write_blk_size = read_blk_size;
+  _u64            read_blk_size = 64 * 1024 * 1024;
+  _u64            write_blk_size = read_blk_size;
   cached_ifstream base_reader(base_file, read_blk_size);
-  base_reader.read((char*) &npts, sizeof(uint32_t));
-  base_reader.read((char*) &ndims, sizeof(uint32_t));
+  base_reader.read((char *) &npts, sizeof(uint32_t));
+  base_reader.read((char *) &ndims, sizeof(uint32_t));
 
   size_t npts_64, ndims_64;
   npts_64 = npts;
   ndims_64 = ndims;
-
 
   // create cached reader + writer
   cached_ifstream nsg_reader(rand_nsg_file, read_blk_size);
@@ -63,7 +62,7 @@ int aux_main(int argc, char **argv) {
   *(_u64 *) (sector_buf + 3 * sizeof(_u64)) = nnodes_per_sector;
   nsg_writer.write(sector_buf, SECTOR_LEN);
 
-  T *cur_node_coords = new T[ndims_64];
+  T *  cur_node_coords = new T[ndims_64];
   _u64 n_sectors = ROUND_UP(npts_64, nnodes_per_sector) / nnodes_per_sector;
   std::cout << "# sectors: " << n_sectors << "\n";
   _u64 cur_node_id = 0;
@@ -87,8 +86,8 @@ int aux_main(int argc, char **argv) {
       nsg_reader.read((char *) nhood_buf, nnbrs * sizeof(unsigned));
 
       // write coords of node first
-    //  T *node_coords = data + ((_u64) ndims_64 * cur_node_id);
-    base_reader.read((char*) cur_node_coords, sizeof(T)*ndims_64);
+      //  T *node_coords = data + ((_u64) ndims_64 * cur_node_id);
+      base_reader.read((char *) cur_node_coords, sizeof(T) * ndims_64);
       memcpy(node_buf, cur_node_coords, ndims_64 * sizeof(T));
 
       // write nnbrs
@@ -110,26 +109,29 @@ int aux_main(int argc, char **argv) {
   }
   delete[] sector_buf;
   delete[] node_buf;
-delete[] cur_node_coords;
+  delete[] cur_node_coords;
   std::cout << "Output file written\n";
   return 0;
 }
 
 int main(int argc, char **argv) {
   if (argc != 5) {
-    std::cout << argv[0] << " data_type <float/int8/uint8> data_bin rand-nsg_path output_file" << std::endl;
+    std::cout
+        << argv[0]
+        << " data_type <float/int8/uint8> data_bin rand-nsg_path output_file"
+        << std::endl;
     exit(-1);
   }
   int ret_val = -1;
-  if (std::string(argv[1])==std::string("float"))
-      ret_val = aux_main<float>(argc,argv);
-  else if (std::string(argv[1])==std::string("int8"))
-      ret_val = aux_main<int8_t>(argc,argv);
-  else if (std::string(argv[1])==std::string("uint8"))
-      ret_val = aux_main<uint8_t>(argc,argv);
+  if (std::string(argv[1]) == std::string("float"))
+    ret_val = aux_main<float>(argc, argv);
+  else if (std::string(argv[1]) == std::string("int8"))
+    ret_val = aux_main<int8_t>(argc, argv);
+  else if (std::string(argv[1]) == std::string("uint8"))
+    ret_val = aux_main<uint8_t>(argc, argv);
   else {
-      std::cout<<"unsupported type. use int8/uint8/float "<<std::endl;
-      ret_val = -2;
+    std::cout << "unsupported type. use int8/uint8/float " << std::endl;
+    ret_val = -2;
   }
   return ret_val;
 }
