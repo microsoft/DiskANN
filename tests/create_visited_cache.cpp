@@ -130,16 +130,15 @@ int create_visited_cache(int argc, char** argv) {
 
   // load query bin
   T*     query = nullptr;
-  size_t query_num, ndims;
+  size_t query_num, ndims, query_aligned_dim;
   _u64   curL = 0;
   _u64   num_cache_nodes = 0;
 
-  NSG::load_bin<T>(argv[3], query, query_num, ndims);
+  NSG::load_aligned_bin<T>(argv[3], query, query_num, ndims, query_aligned_dim);
   curL = atoi(argv[4]);
   num_cache_nodes = atoi(argv[5]);
 
-  query = NSG::data_align<T>(query, query_num, ndims);
-  ndims = ROUND_UP(ndims, 8);
+  ndims = query_aligned_dim;
 
   // for query search
   {

@@ -201,13 +201,13 @@ int aux_main(int argc, char** argv) {
 
   // load query bin
   T*        query = nullptr;
-  size_t    query_num, ndims;
+  size_t    query_num, ndims, query_aligned_dim;
   uint32_t* gt_load;
   float*    gt_dist;
   size_t    gt_num, gt_dim;
   size_t    gt_num_dist, gt_dim_dist;
 
-  NSG::load_bin<T>(argv[4], query, query_num, ndims);
+  NSG::load_aligned_bin<T>(argv[4], query, query_num, ndims, query_aligned_dim);
   NSG::load_bin<uint32_t>(argv[5], gt_load, gt_num, gt_dim);
   NSG::load_bin<float>(argv[6], gt_dist, gt_num_dist, gt_dim_dist);
   bool use_visited_cache = std::atoi(argv[3]);
@@ -230,9 +230,6 @@ int aux_main(int argc, char** argv) {
               << " elements. Calculating recall at " << gt_dim << std::endl;
     recall_at = gt_dim;
   }
-
-  query = NSG::data_align<T>(query, query_num, ndims);
-  ndims = ROUND_UP(ndims, 8);
 
   // for query search
   {

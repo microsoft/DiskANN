@@ -28,11 +28,21 @@ int aux_main(int argc, char **argv) {
   ndims_64 = ndims;
 
   // create cached reader + writer
+  size_t          actual_file_size = get_file_size(rand_nsg_file);
   cached_ifstream nsg_reader(rand_nsg_file, read_blk_size);
   cached_ofstream nsg_writer(output_file, write_blk_size);
 
   // metadata: width, medoid
   unsigned width_u32, medoid_u32;
+  size_t   index_file_size;
+
+  nsg_reader.read((char *) &index_file_size, sizeof(uint64_t));
+  if (index_file_size != actual_file_size) {
+    std::cout << "Rand-NSG Index file size does not match expected size per "
+                 "meta-data."
+              << std::endl;
+    exit(-1);
+  }
   nsg_reader.read((char *) &width_u32, sizeof(unsigned));
   nsg_reader.read((char *) &medoid_u32, sizeof(unsigned));
 
@@ -55,15 +65,18 @@ int aux_main(int argc, char **argv) {
   unsigned *nhood_buf =
       (unsigned *) (node_buf + (ndims_64 * sizeof(T)) + sizeof(unsigned));
 
+  // number of sectors (1 for meta data)
+  _u64 n_sectors = ROUND_UP(npts_64, nnodes_per_sector) / nnodes_per_sector;
+  _u64 disk_index_file_size = (n_sectors +1 )* SECTOR_LEN;
   // write first sector with metadata
-  *(_u64 *) sector_buf = npts_64;
-  *(_u64 *) (sector_buf + sizeof(_u64)) = medoid;
-  *(_u64 *) (sector_buf + 2 * sizeof(_u64)) = max_node_len;
-  *(_u64 *) (sector_buf + 3 * sizeof(_u64)) = nnodes_per_sector;
+  *(_u64 *) (sector_buf + 0 * sizeof(_u64)) = disk_index_file_size;
+  *(_u64 *) (sector_buf + 1 * sizeof(_u64)) = npts_64;
+  *(_u64 *) (sector_buf + 2 * sizeof(_u64)) = medoid;
+  *(_u64 *) (sector_buf + 3 * sizeof(_u64)) = max_node_len;
+  *(_u64 *) (sector_buf + 4 * sizeof(_u64)) = nnodes_per_sector;
   nsg_writer.write(sector_buf, SECTOR_LEN);
 
-  T *  cur_node_coords = new T[ndims_64];
-  _u64 n_sectors = ROUND_UP(npts_64, nnodes_per_sector) / nnodes_per_sector;
+  T *cur_node_coords = new T[ndims_64];
   std::cout << "# sectors: " << n_sectors << "\n";
   _u64 cur_node_id = 0;
   for (_u64 sector = 0; sector < n_sectors; sector++) {

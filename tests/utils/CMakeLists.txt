@@ -10,15 +10,6 @@ else()
 	target_link_libraries(truncate_rnsg ${PROJECT_NAME} -ltcmalloc)
 endif()
 
-
-add_executable(calc_recall calc_recall.cpp)
-if(MSVC)
-	target_link_options(calc_recall PRIVATE /MACHINE:x64)
-	target_link_libraries(calc_recall debug ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG}/nsg_lib.lib)
-	target_link_libraries(calc_recall optimized ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE}/nsg_lib.lib)
-endif()
-
-
 add_executable(fvecs_to_bin fvecs_to_bin.cpp)
 if(MSVC)
 	target_link_options(fvecs_to_bin PRIVATE /MACHINE:x64)
@@ -62,4 +53,4 @@ if(MSVC)
 endif()
 
 # formatter
-add_custom_command(TARGET calc_recall PRE_BUILD COMMAND clang-format-4.0 -i ../../../include/*.h ../../../include/dll/*.h ../../../src/*.cpp  ../../../tests/*.cpp ../../../src/dll/*.cpp ../../../tests/utils/*.cpp)
+add_custom_command(TARGET gen_random_slice PRE_BUILD COMMAND clang-format-4.0 -i ../../../include/*.h ../../../include/dll/*.h ../../../src/*.cpp  ../../../tests/*.cpp ../../../src/dll/*.cpp ../../../tests/utils/*.cpp)

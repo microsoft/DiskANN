@@ -2,6 +2,7 @@
 //#include <indexing.h>
 #include <index_nsg.h>
 #include <math_utils.h>
+#include "cached_io.h"
 #include "partition_and_pq.h"
 
 // DEPRECATED: NEED TO REPROGRAM

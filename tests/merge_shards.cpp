@@ -8,24 +8,20 @@
 #include "cached_io.h"
 #include "utils.h"
 
-_u64 get_file_size(const std::string &fname) {
-  std::ifstream reader(fname, std::ios::binary | std::ios::ate);
-  _u64          end_pos = reader.tellg();
-  reader.close();
-  return end_pos;
-}
-
-void read_bad_ivecs(const std::string &fname, std::vector<unsigned> &ivecs) {
-  _u64 fsize = get_file_size(fname);
-  std::cout << "Reading bad ivecs: " << fname << ", size: " << fsize << "B\n";
-  uint32_t      npts32, dummy;
+void read_idmap(const std::string &fname, std::vector<unsigned> &ivecs) {
+  uint32_t      npts32, dim;
+  size_t        actual_file_size = get_file_size(fname);
   std::ifstream reader(fname.c_str(), std::ios::binary);
   reader.read((char *) &npts32, sizeof(uint32_t));
-  reader.read((char *) &dummy, sizeof(uint32_t));
-  npts32 = fsize / sizeof(unsigned) - 2;
-  std::cout << "Points = " << npts32 << std::endl;
+  reader.read((char *) &dim, sizeof(uint32_t));
+  if (dim != 1 || actual_file_size != ((size_t) npts32)*sizeof(uint32_t) + 2 * sizeof(uint32_t)) {
+    std::cout << "Error reading idmap file. Check if the file is bin file with "
+                 "1 dimensional data. Actual: " << actual_file_size << ", expected: " << (size_t)npts32 + 2*sizeof(uint32_t)
+              << std::endl;
+    exit(-1);
+  }
   ivecs.resize(npts32);
-  reader.read((char *) ivecs.data(), npts32 * sizeof(uint32_t));
+  reader.read((char *) ivecs.data(), ((size_t) npts32) * sizeof(uint32_t));
   reader.close();
 }
 
@@ -38,8 +34,8 @@ int merge_shards(const std::string &nsg_prefix, const std::string &nsg_suffix,
   std::vector<std::vector<unsigned>> idmaps(nshards);
   for (_u64 shard = 0; shard < nshards; shard++) {
     nsg_names[shard] = nsg_prefix + std::to_string(shard) + nsg_suffix;
-    read_bad_ivecs(idmaps_prefix + std::to_string(shard) + idmaps_suffix,
-                   idmaps[shard]);
+    read_idmap(idmaps_prefix + std::to_string(shard) + idmaps_suffix,
+               idmaps[shard]);
   }
 
   // find max node id
@@ -76,10 +72,19 @@ int merge_shards(const std::string &nsg_prefix, const std::string &nsg_suffix,
   std::vector<cached_ifstream> nsg_readers(nshards);
   for (_u64 i = 0; i < nshards; i++) {
     nsg_readers[i].open(nsg_names[i], 1024 * 1048576);
+    size_t actual_file_size = get_file_size(nsg_names[i]);
+    size_t expected_file_size;
+    nsg_readers[i].read((char *) &expected_file_size, sizeof(uint64_t));
+    if (actual_file_size != expected_file_size) {
+      std::cout << "Error in Rand-NSG file " << nsg_names[i] << std::endl;
+      exit(-1);
+    }
   }
 
+  size_t merged_index_size = 0;
   // create cached nsg writers
   cached_ofstream nsg_writer(output_nsg, 1024 * 1048576);
+  nsg_writer.write((char *) &merged_index_size, sizeof(uint64_t));
 
   unsigned width;
   // read width from each nsg to advance buffer by sizeof(unsigned) bytes
@@ -128,7 +133,7 @@ int merge_shards(const std::string &nsg_prefix, const std::string &nsg_suffix,
       nsg_writer.write((char *) &nnbrs, sizeof(unsigned));
       nsg_writer.write((char *) nhood, nnbrs * sizeof(unsigned));
       if (cur_id % 999999 == 1) {
-        std::cout << "Finished merging " << cur_id << " nodes\n";
+        std::cout << "." << std::flush;
       }
       cur_id = node_id;
       nnbrs = 0;
@@ -149,6 +154,10 @@ int merge_shards(const std::string &nsg_prefix, const std::string &nsg_suffix,
   }
   nsg_writer.write((char *) &nnbrs, sizeof(unsigned));
   nsg_writer.write((char *) nhood, nnbrs * sizeof(unsigned));
+  nsg_writer.flush_cache();
+  merged_index_size = nsg_writer.get_file_size();
+  nsg_writer.reset();
+  nsg_writer.write((char *) &merged_index_size, sizeof(uint64_t));
 
   std::cout << "Finished merge\n";
   delete[] nhood;

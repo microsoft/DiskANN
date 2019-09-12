@@ -431,8 +431,16 @@ namespace NSG {
     }
 
     // read nsg metadata
+    size_t        actual_index_size = get_file_size(nsg_file);
     std::ifstream nsg_meta(nsg_file, std::ios::binary);
-    _u64          nnodes;
+    size_t        expected_file_size;
+    READ_U64(nsg_meta, expected_file_size);
+    if (actual_index_size != expected_file_size) {
+      std::cout << "File size mismatch for " << nsg_file
+                << " with meta-data size" << expected_file_size << std::endl;
+      exit(-1);
+    }
+    _u64 nnodes;
     READ_U64(nsg_meta, nnodes);
     std::cout << "nnodes: " << nnodes << std::endl;
     assert(nnodes == n_base);

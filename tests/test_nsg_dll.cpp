@@ -70,11 +70,9 @@ int aux_main(int argc, char** argv) {
 
     // load query bin
     T*   query = nullptr;
-    _u64 nqueries, ndims;
-    NSG::load_bin<T>(argv[3], query, nqueries, ndims);
-    query = NSG::data_align<T>(query, nqueries, ndims);
-    //    NSG::aligned_load_Tvecs<T>(argv[3], query, nqueries, ndims);
-    ndims = ROUND_UP(ndims, 8);
+    _u64 nqueries, ndims, aligned_query_dim;
+    NSG::load_aligned_bin<T>(argv[3], query, nqueries, ndims,
+                             aligned_query_dim);
 
     std::cout << "Loading ground truth..." << std::flush;
     // load ground truth
