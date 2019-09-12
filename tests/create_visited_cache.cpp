@@ -21,10 +21,10 @@
 #include "memory_mapper.h"
 
 template<typename T>
-bool load_index(const char* indexFilePath, const char* queryParameters,
+bool load_index(const char* indexFilePath, const char* warmupParameters,
                 NSG::PQFlashNSG<T>*& _pFlashIndex) {
   std::stringstream parser;
-  parser << std::string(queryParameters);
+  parser << std::string(warmupParameters);
   std::string              cur_param;
   std::vector<std::string> param_list;
   while (parser >> cur_param)
@@ -40,24 +40,34 @@ bool load_index(const char* indexFilePath, const char* queryParameters,
   const std::string index_prefix_path(indexFilePath);
 
   // convert strs into params
-  std::string data_bin = index_prefix_path + "_compressed_uint32.bin";
+  std::string data_bin = index_prefix_path + "_compressed.bin";
   std::string pq_tables_bin = index_prefix_path + "_pq_pivots.bin";
+  std::string medoids_bin = index_prefix_path + "_medoids.bin";
 
   // determine nchunks
   std::string params_path = index_prefix_path + "_params.bin";
   std::string node_visit_bin = index_prefix_path + "_visit_ctr.bin";
 
-  uint32_t* params;
-  size_t    nargs, one;
-  NSG::load_bin<uint32_t>(params_path.c_str(), params, nargs, one);
+
+  _u32 dim32, num_points32, num_chunks32, num_centers32, chunk_size32;
+
+  std::ifstream pq_meta_reader(pq_tables_bin, std::ios::binary);
+  pq_meta_reader.read((char*) &num_centers32, sizeof(uint32_t));
+  pq_meta_reader.read((char*) &dim32, sizeof(uint32_t));
+  pq_meta_reader.close();
+
+  std::ifstream compressed_meta_reader(data_bin, std::ios::binary);
+  compressed_meta_reader.read((char*) &num_points32, sizeof(uint32_t));
+  compressed_meta_reader.read((char*) &num_chunks32, sizeof(uint32_t));
+  compressed_meta_reader.close();
 
   // infer chunk_size
-  _u64 m_dimension = (_u64) params[3];
-  _u64 n_chunks = (_u64) params[4];
-  _u64 chunk_size = (_u64)(m_dimension / n_chunks);
-  // corrected n_chnks in case it is dimension is not divisible by original
-  // num_chunks
-  n_chunks = DIV_ROUND_UP(m_dimension, chunk_size);
+  chunk_size32 = DIV_ROUND_UP(dim32, num_chunks32);
+
+  _u64 m_dimension = (_u64) dim32;
+  _u64 n_chunks = (_u64) num_chunks32;
+  _u64 chunk_size = chunk_size32;
+
 
   std::string nsg_disk_opt = index_prefix_path + "_diskopt.rnsg";
 
@@ -80,7 +90,7 @@ bool load_index(const char* indexFilePath, const char* queryParameters,
 
   _pFlashIndex->load(data_bin.c_str(), nsg_disk_opt.c_str(),
                      pq_tables_bin.c_str(), chunk_size, n_chunks, m_dimension,
-                     nthreads);
+                     nthreads, medoids_bin.c_str());
 
   // cache bfs levels
   _pFlashIndex->cache_bfs_levels(cache_nlevels);
@@ -91,59 +101,42 @@ bool load_index(const char* indexFilePath, const char* queryParameters,
 // Search several vectors, return their neighbors' distance and ids.
 // Both distances & ids are returned arraies of neighborCount elements,
 // And need to be allocated by invoker, which capacity should be greater
-// than [query_num * neighborCount].
+// than [warmup_num * neighborCount].
 template<typename T>
-std::tuple<float, float, float> search_index(
-    NSG::PQFlashNSG<T>* _pFlashIndex, const char* vector, uint64_t query_num,
+    void search_index(
+    NSG::PQFlashNSG<T>* _pFlashIndex, const char* vector, uint64_t warmup_num,
     uint64_t neighborCount, float* distances, uint64_t* ids, _u64 L) {
   //  _u64     L = 6 * neighborCount;
   //  _u64     L = 12;
-  const T*         query_load = (const T*) vector;
-  NSG::QueryStats* stats = new NSG::QueryStats[query_num];
-  NSG::Timer       timer;
+  const T*         warmup_load = (const T*) vector;
 #pragma omp        parallel for schedule(dynamic, 1) num_threads(16)
-  for (_u64 i = 0; i < query_num; i++)
+  for (_u64 i = 0; i < warmup_num; i++)
     _pFlashIndex->cached_beam_search(
-        query_load + (i * _pFlashIndex->aligned_dim), neighborCount, L,
-        ids + (i * neighborCount), distances + (i * neighborCount), 6,
-        stats + i);
+        warmup_load + (i * _pFlashIndex->aligned_dim), neighborCount, L,
+        ids + (i * neighborCount), distances + (i * neighborCount), 6);
 
-  float mean_latency = NSG::get_percentile_stats(
-      stats, query_num, 0.5,
-      [](const NSG::QueryStats& stats) { return stats.total_us; });
-
-  float latency_99 = NSG::get_percentile_stats(
-      stats, query_num, 0.99,
-      [](const NSG::QueryStats& stats) { return stats.total_us; });
-
-  float mean_io = NSG::get_percentile_stats(
-      stats, query_num, 0.5,
-      [](const NSG::QueryStats& stats) { return stats.n_ios; });
-
-  delete[] stats;
-  return std::make_tuple(mean_latency, latency_99, mean_io);
 }
 
 template<typename T>
 int create_visited_cache(int argc, char** argv) {
   NSG::PQFlashNSG<T>* _pFlashIndex;
 
-  // load query bin
-  T*     query = nullptr;
-  size_t query_num, ndims, query_aligned_dim;
+  // load warmup bin
+  T*     warmup = nullptr;
+  size_t warmup_num, ndims, warmup_aligned_dim;
   _u64   curL = 0;
   _u64   num_cache_nodes = 0;
 
-  NSG::load_aligned_bin<T>(argv[3], query, query_num, ndims, query_aligned_dim);
+  NSG::load_aligned_bin<T>(argv[3], warmup, warmup_num, ndims, warmup_aligned_dim);
   curL = atoi(argv[4]);
   num_cache_nodes = atoi(argv[5]);
 
-  ndims = query_aligned_dim;
+  ndims = warmup_aligned_dim;
 
-  // for query search
+  // for warmup search
   {
     // load the index
-    bool res = load_index(argv[2], "8 3 16", _pFlashIndex);
+    bool res = load_index(argv[2], "8 2 16", _pFlashIndex);
     omp_set_num_threads(16);
 
     // ERROR CHECK
@@ -152,35 +145,23 @@ int create_visited_cache(int argc, char** argv) {
       exit(-1);
     }
 
-    std::cout.setf(std::ios_base::fixed, std::ios_base::floatfield);
-    std::cout.precision(2);
-
-    std::cout << std::setw(8) << "Ls" << std::setw(16) << "Avg Latency"
-              << std::setw(16) << "99 Latency" << std::setw(16)
-              << "Avg Disk I/Os" << std::endl;
-    std::cout << "============================================================="
-                 "============"
-                 "======="
-              << std::endl;
-
     int    recall_at = 5;
-    _u64*  query_res = new _u64[recall_at * query_num];
-    _u32*  query_res32 = new _u32[query_num * recall_at];
-    float* query_dists = new float[recall_at * query_num];
+    _u64*  warmup_res = new _u64[recall_at * warmup_num];
+    _u32*  warmup_res32 = new _u32[warmup_num * recall_at];
+    float* warmup_dists = new float[recall_at * warmup_num];
 
     // execute queries
-    std::tuple<float, float, float> q_stats;
-    q_stats = search_index(_pFlashIndex, (const char*) query, query_num,
-                           recall_at, query_dists, query_res, curL);
+    search_index(_pFlashIndex, (const char*) warmup, warmup_num,
+                           recall_at, warmup_dists, warmup_res, curL);
 
     std::cout << "Saving visit ctr file" << std::endl;
     std::string node_cache_path = std::string(argv[2]) + "_visit_ctr.bin";
     _pFlashIndex->save_cached_nodes(num_cache_nodes, node_cache_path);
 
-    NSG::aligned_free(query);
-    delete[] query_res;
-    delete[] query_res32;
-    delete[] query_dists;
+    NSG::aligned_free(warmup);
+    delete[] warmup_res;
+    delete[] warmup_res32;
+    delete[] warmup_dists;
   }
   return 0;
 }
@@ -189,7 +170,7 @@ int main(int argc, char** argv) {
   if (argc != 6) {
     std::cout << "Usage: " << argv[0]
               << " <index_type[float/int8/uint8]>  <index_prefix_path>  "
-                 "<query_bin> LS num_cached_nodes"
+                 "<warmup_bin> LS num_cached_nodes"
               << std::endl;
     exit(-1);
   }

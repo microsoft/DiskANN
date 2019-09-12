@@ -35,12 +35,6 @@ float calc_recall(unsigned num_queries, unsigned* gold_std, unsigned dim_gs,
     while (cur_pt_recall_threshold < dim_gs &&
            gold_std_dist[i * dim_gs + cur_pt_recall_threshold - 1] ==
                gold_std_dist[i * dim_gs + cur_pt_recall_threshold]) {
-      //      std::cout << i << " " << cur_pt_recall_threshold << " "
-      //                << gold_std_dist[i * dim_gs + cur_pt_recall_threshold -
-      //                1]
-      //                << " " << gold_std_dist[i * dim_gs +
-      //                cur_pt_recall_threshold]
-      //                << std::endl;
       cur_pt_recall_threshold++;
     }
 
@@ -97,6 +91,14 @@ bool load_index(const char* indexFilePath, const char* queryParameters,
   compressed_meta_reader.read((char*) &num_chunks32, sizeof(uint32_t));
   compressed_meta_reader.close();
 
+  // infer chunk_size
+  chunk_size32 = DIV_ROUND_UP(dim32, num_chunks32);
+
+  _u64 m_dimension = (_u64) dim32;
+  _u64 n_chunks = (_u64) num_chunks32;
+  _u64 chunk_size = chunk_size32;
+
+
   _u64*  node_visit_list = NULL;
   size_t one = 0, num_cache_nodes = 0;
 
@@ -104,18 +106,6 @@ bool load_index(const char* indexFilePath, const char* queryParameters,
     NSG::load_bin<_u64>(node_visit_bin.c_str(), node_visit_list,
                         num_cache_nodes, one);
 
-  chunk_size32 = DIV_ROUND_UP(dim32, num_chunks32);
-
-  if (use_visited_cache)
-    NSG::load_bin<_u64>(node_visit_bin.c_str(), node_visit_list,
-                        num_cache_nodes, one);
-
-  // infer chunk_size
-  _u64 m_dimension = (_u64) dim32;
-  _u64 n_chunks = (_u64) num_chunks32;
-  _u64 chunk_size = chunk_size32;
-  // corrected n_chnks in case it is dimension is not divisible by original
-  // num_chunks
 
   std::string nsg_disk_opt = index_prefix_path + "_diskopt.rnsg";
   std::string medoids_file = index_prefix_path + "_medoids.bin";
