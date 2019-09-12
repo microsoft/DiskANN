@@ -67,7 +67,7 @@ int aux_main(int argc, char **argv) {
 
   // number of sectors (1 for meta data)
   _u64 n_sectors = ROUND_UP(npts_64, nnodes_per_sector) / nnodes_per_sector;
-  _u64 disk_index_file_size = (n_sectors +1 )* SECTOR_LEN;
+  _u64 disk_index_file_size = (n_sectors + 1) * SECTOR_LEN;
   // write first sector with metadata
   *(_u64 *) (sector_buf + 0 * sizeof(_u64)) = disk_index_file_size;
   *(_u64 *) (sector_buf + 1 * sizeof(_u64)) = npts_64;

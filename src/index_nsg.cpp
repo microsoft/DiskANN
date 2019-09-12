@@ -1883,15 +1883,15 @@ namespace NSG {
     unsigned *nhood_buf =
         (unsigned *) (node_buf + (ndims_u64 * sizeof(T)) + sizeof(unsigned));
 
-  _u64 n_sectors = ROUND_UP(npts_64, nnodes_per_sector) / nnodes_per_sector;
-  _u64 disk_index_file_size = (n_sectors +1 )* SECTOR_LEN;
-  // write first sector with metadata
-  *(_u64 *) (sector_buf + 0 * sizeof(_u64)) = disk_index_file_size;
-  *(_u64 *) (sector_buf + 1 * sizeof(_u64)) = npts_64;
-  *(_u64 *) (sector_buf + 2 * sizeof(_u64)) = medoid;
-  *(_u64 *) (sector_buf + 3 * sizeof(_u64)) = max_node_len;
-  *(_u64 *) (sector_buf + 4 * sizeof(_u64)) = nnodes_per_sector;
-  nsg_writer.write(sector_buf, SECTOR_LEN);
+    _u64 n_sectors = ROUND_UP(npts_u64, nnodes_per_sector) / nnodes_per_sector;
+    _u64 disk_index_file_size = (n_sectors + 1) * SECTOR_LEN;
+    // write first sector with metadata
+    *(_u64 *) (sector_buf + 0 * sizeof(_u64)) = disk_index_file_size;
+    *(_u64 *) (sector_buf + 1 * sizeof(_u64)) = npts_u64;
+    *(_u64 *) (sector_buf + 2 * sizeof(_u64)) = (_u64) _ep;
+    *(_u64 *) (sector_buf + 3 * sizeof(_u64)) = max_node_len;
+    *(_u64 *) (sector_buf + 4 * sizeof(_u64)) = nnodes_per_sector;
+    nsg_writer.write(sector_buf, SECTOR_LEN);
     std::cout << "# sectors: " << n_sectors << "\n";
 
     _u64 cur_node_id = 0;

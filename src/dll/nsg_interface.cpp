@@ -64,7 +64,7 @@ namespace NSG {
     unsigned R = (unsigned) atoi(param_list[1].c_str());
     unsigned C = (unsigned) atoi(param_list[2].c_str());
     size_t   num_pq_chunks = (size_t) atoi(param_list[3].c_str());
-    float training_set_sampling_rate =  atof(param_list[4].c_str());
+    float    training_set_sampling_rate = atof(param_list[4].c_str());
 
     auto s = std::chrono::high_resolution_clock::now();
 
@@ -72,17 +72,17 @@ namespace NSG {
     size_t train_size, train_dim;
 
     // generates random sample and sets it to train_data and updates train_size
-    gen_random_slice<T>(dataFilePath, training_set_sampling_rate, train_data, train_size, train_dim);
+    gen_random_slice<T>(dataFilePath, training_set_sampling_rate, train_data,
+                        train_size, train_dim);
 
     std::cout << "Training loaded of size " << train_size << std::endl;
 
     //  unsigned    nn_graph_deg = (unsigned) atoi(argv[3]);
 
-    generate_pq_pivots(train_data, train_size, train_dim, 256, num_pq_chunks, 15,
-                       pq_pivots_path);
-    generate_pq_data_from_pivots<T>(dataFilePath, 256,
-                                    num_pq_chunks, pq_pivots_path,
-                                    pq_compressed_vectors_path);
+    generate_pq_pivots(train_data, train_size, train_dim, 256, num_pq_chunks,
+                       15, pq_pivots_path);
+    generate_pq_data_from_pivots<T>(dataFilePath, 256, num_pq_chunks,
+                                    pq_pivots_path, pq_compressed_vectors_path);
 
     delete[] train_data;
 
@@ -137,43 +137,42 @@ namespace NSG {
     // convert strs into params
     std::string data_bin = index_prefix_path + "_compressed.bin";
     std::string pq_tables_bin = index_prefix_path + "_pq_pivots.bin";
-  std::string node_visit_bin = index_prefix_path + "_visit_ctr.bin";
+    std::string node_visit_bin = index_prefix_path + "_visit_ctr.bin";
 
-  _u32 dim32, num_points32, num_chunks32, num_centers32, chunk_size32;
+    _u32 dim32, num_points32, num_chunks32, num_centers32, chunk_size32;
 
-  std::ifstream pq_meta_reader(pq_tables_bin, std::ios::binary);
-  pq_meta_reader.read((char*) &num_centers32, sizeof(uint32_t));
-  pq_meta_reader.read((char*) &dim32, sizeof(uint32_t));
-  pq_meta_reader.close();
+    std::ifstream pq_meta_reader(pq_tables_bin, std::ios::binary);
+    pq_meta_reader.read((char*) &num_centers32, sizeof(uint32_t));
+    pq_meta_reader.read((char*) &dim32, sizeof(uint32_t));
+    pq_meta_reader.close();
 
-  std::ifstream compressed_meta_reader(data_bin, std::ios::binary);
-  compressed_meta_reader.read((char*) &num_points32, sizeof(uint32_t));
-  compressed_meta_reader.read((char*) &num_chunks32, sizeof(uint32_t));
-  compressed_meta_reader.close();
+    std::ifstream compressed_meta_reader(data_bin, std::ios::binary);
+    compressed_meta_reader.read((char*) &num_points32, sizeof(uint32_t));
+    compressed_meta_reader.read((char*) &num_chunks32, sizeof(uint32_t));
+    compressed_meta_reader.close();
 
-  // infer chunk_size
-  chunk_size32 = DIV_ROUND_UP(dim32, num_chunks32);
-  _u64 m_dimension = (_u64) dim32;
-  _u64 n_chunks = (_u64) num_chunks32;
-  _u64 chunk_size = chunk_size32;
+    // infer chunk_size
+    chunk_size32 = DIV_ROUND_UP(dim32, num_chunks32);
+    _u64 m_dimension = (_u64) dim32;
+    _u64 n_chunks = (_u64) num_chunks32;
+    _u64 chunk_size = chunk_size32;
 
-  _u64*  node_visit_list = NULL;
-  size_t one = 0, num_cache_nodes = 0;
+    _u64*  node_visit_list = NULL;
+    size_t one = 0, num_cache_nodes = 0;
 
-  if (cache_nlevels == -1 && file_exists(node_visit_bin))
-    NSG::load_bin<_u64>(node_visit_bin.c_str(), node_visit_list,
-                        num_cache_nodes, one);
-  else if (!file_exists(node_visit_bin))
+    if (cache_nlevels == -1 && file_exists(node_visit_bin))
+      NSG::load_bin<_u64>(node_visit_bin.c_str(), node_visit_list,
+                          num_cache_nodes, one);
+    else if (!file_exists(node_visit_bin))
       cache_nlevels = 2;
 
-
-  std::string nsg_disk_opt = index_prefix_path + "_diskopt.rnsg";
-  std::string medoids_file = index_prefix_path + "_medoids.bin";
+    std::string nsg_disk_opt = index_prefix_path + "_diskopt.rnsg";
+    std::string medoids_file = index_prefix_path + "_medoids.bin";
     std::string nsg_disk_opt = index_prefix_path + "_diskopt.rnsg";
 
     this->Lsearch = (_u64) std::atoi(param_list[0].c_str());
     this->beam_width = (_u64) std::atoi(param_list[1].c_str());
-    int        cache_nlevels = (_u64) std::atoi(param_list[2].c_str());
+    int         cache_nlevels = (_u64) std::atoi(param_list[2].c_str());
     _u64        nthreads = (_u64) std::atoi(param_list[3].c_str());
     std::string stars(40, '*');
     std::cout << stars << "\nPQ -- n_chunks: " << this->n_chunks
@@ -194,11 +193,11 @@ namespace NSG {
 
     // cache bfs levels
     if (cache_nlevels > 0)
-    _pFlashIndex->cache_bfs_levels(cache_nlevels);
+      _pFlashIndex->cache_bfs_levels(cache_nlevels);
     else
-        _pFlashIndex->cache_visited_nodes(node_visit_list, num_cache_nodes);
+      _pFlashIndex->cache_visited_nodes(node_visit_list, num_cache_nodes);
 
-//    free(params);  // Gopal. Caller has to free the 'params' variable.
+    //    free(params);  // Gopal. Caller has to free the 'params' variable.
     return 0;
   }
 

@@ -48,7 +48,6 @@ bool load_index(const char* indexFilePath, const char* warmupParameters,
   std::string params_path = index_prefix_path + "_params.bin";
   std::string node_visit_bin = index_prefix_path + "_visit_ctr.bin";
 
-
   _u32 dim32, num_points32, num_chunks32, num_centers32, chunk_size32;
 
   std::ifstream pq_meta_reader(pq_tables_bin, std::ios::binary);
@@ -67,7 +66,6 @@ bool load_index(const char* indexFilePath, const char* warmupParameters,
   _u64 m_dimension = (_u64) dim32;
   _u64 n_chunks = (_u64) num_chunks32;
   _u64 chunk_size = chunk_size32;
-
 
   std::string nsg_disk_opt = index_prefix_path + "_diskopt.rnsg";
 
@@ -103,18 +101,17 @@ bool load_index(const char* indexFilePath, const char* warmupParameters,
 // And need to be allocated by invoker, which capacity should be greater
 // than [warmup_num * neighborCount].
 template<typename T>
-    void search_index(
-    NSG::PQFlashNSG<T>* _pFlashIndex, const char* vector, uint64_t warmup_num,
-    uint64_t neighborCount, float* distances, uint64_t* ids, _u64 L) {
+void search_index(NSG::PQFlashNSG<T>* _pFlashIndex, const char* vector,
+                  uint64_t warmup_num, uint64_t neighborCount, float* distances,
+                  uint64_t* ids, _u64 L) {
   //  _u64     L = 6 * neighborCount;
   //  _u64     L = 12;
-  const T*         warmup_load = (const T*) vector;
-#pragma omp        parallel for schedule(dynamic, 1) num_threads(16)
+  const T*  warmup_load = (const T*) vector;
+#pragma omp parallel for schedule(dynamic, 1) num_threads(16)
   for (_u64 i = 0; i < warmup_num; i++)
     _pFlashIndex->cached_beam_search(
         warmup_load + (i * _pFlashIndex->aligned_dim), neighborCount, L,
         ids + (i * neighborCount), distances + (i * neighborCount), 6);
-
 }
 
 template<typename T>
@@ -127,7 +124,8 @@ int create_visited_cache(int argc, char** argv) {
   _u64   curL = 0;
   _u64   num_cache_nodes = 0;
 
-  NSG::load_aligned_bin<T>(argv[3], warmup, warmup_num, ndims, warmup_aligned_dim);
+  NSG::load_aligned_bin<T>(argv[3], warmup, warmup_num, ndims,
+                           warmup_aligned_dim);
   curL = atoi(argv[4]);
   num_cache_nodes = atoi(argv[5]);
 
@@ -151,8 +149,8 @@ int create_visited_cache(int argc, char** argv) {
     float* warmup_dists = new float[recall_at * warmup_num];
 
     // execute queries
-    search_index(_pFlashIndex, (const char*) warmup, warmup_num,
-                           recall_at, warmup_dists, warmup_res, curL);
+    search_index(_pFlashIndex, (const char*) warmup, warmup_num, recall_at,
+                 warmup_dists, warmup_res, curL);
 
     std::cout << "Saving visit ctr file" << std::endl;
     std::string node_cache_path = std::string(argv[2]) + "_visit_ctr.bin";

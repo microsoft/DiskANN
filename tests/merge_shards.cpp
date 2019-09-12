@@ -14,9 +14,13 @@ void read_idmap(const std::string &fname, std::vector<unsigned> &ivecs) {
   std::ifstream reader(fname.c_str(), std::ios::binary);
   reader.read((char *) &npts32, sizeof(uint32_t));
   reader.read((char *) &dim, sizeof(uint32_t));
-  if (dim != 1 || actual_file_size != ((size_t) npts32)*sizeof(uint32_t) + 2 * sizeof(uint32_t)) {
+  if (dim != 1 ||
+      actual_file_size !=
+          ((size_t) npts32) * sizeof(uint32_t) + 2 * sizeof(uint32_t)) {
     std::cout << "Error reading idmap file. Check if the file is bin file with "
-                 "1 dimensional data. Actual: " << actual_file_size << ", expected: " << (size_t)npts32 + 2*sizeof(uint32_t)
+                 "1 dimensional data. Actual: "
+              << actual_file_size
+              << ", expected: " << (size_t) npts32 + 2 * sizeof(uint32_t)
               << std::endl;
     exit(-1);
   }

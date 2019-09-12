@@ -98,14 +98,12 @@ bool load_index(const char* indexFilePath, const char* queryParameters,
   _u64 n_chunks = (_u64) num_chunks32;
   _u64 chunk_size = chunk_size32;
 
-
   _u64*  node_visit_list = NULL;
   size_t one = 0, num_cache_nodes = 0;
 
   if (use_visited_cache)
     NSG::load_bin<_u64>(node_visit_bin.c_str(), node_visit_list,
                         num_cache_nodes, one);
-
 
   std::string nsg_disk_opt = index_prefix_path + "_diskopt.rnsg";
   std::string medoids_file = index_prefix_path + "_medoids.bin";
