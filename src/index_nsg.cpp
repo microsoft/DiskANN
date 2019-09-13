@@ -203,39 +203,6 @@ namespace NSG {
     }
 
     _nd--;
-    for (unsigned old = 0; old < _max_points; ++old) {
-      if (old != id) {  // If point continues to exist
-
-        // Renumber nodes to compact the order
-        for (size_t i = 0; i < _final_graph[old].size(); ++i) {
-          if (_final_graph[old][i] > id)
-            _final_graph[old][i] = _final_graph[old][i] - 1;
-        }
-
-        for (size_t i = 0; i < _in_graph[old].size(); ++i) {
-          if (_in_graph[old][i] > id)
-            _in_graph[old][i] = _in_graph[old][i] - 1;
-        }
-
-        // Move the data and adj list to the correct position
-        if (old > id) {
-          _final_graph[old - 1].swap(_final_graph[old]);
-          _in_graph[old - 1].swap(_in_graph[old]);
-        }
-      }
-    }
-
-    // Update the location pointed to by tag
-    _tag_to_location.clear();
-    for (auto iter : _location_to_tag) {
-      if (iter.second > tag)
-        _tag_to_location[iter.second] = iter.first - 1;
-      else
-        _tag_to_location[iter.second] = iter.first;
-    }
-    _location_to_tag.clear();
-    for (auto iter : _tag_to_location)
-      _location_to_tag[iter.second] = iter.first;
 
     _eager_done = true;
     return 0;
