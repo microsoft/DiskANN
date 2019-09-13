@@ -57,7 +57,7 @@ namespace NSG {
                               const size_t max_points, const bool enable_tags,
                               const bool store_data)
       : _dim(dimension), _nd(n), _has_built(false), _width(0),
-        _can_delete(false), _enable_tags(enable_tags),
+        _can_delete(false), _eager_done(true), _enable_tags(enable_tags),
         _consolidated_order(true), _store_data(store_data) {
     _max_points = (max_points > 0) ? max_points : n;
     if (_max_points < n) {
@@ -131,8 +131,15 @@ namespace NSG {
         _empty_slots.insert(slot);
       _consolidated_order = false;
     }
+
+    if (_eager_done) {
+      assert(_empty_slots.size() == 0);
+      for (unsigned slot = _nd; slot < _max_points; ++slot)
+        _empty_slots.insert(slot);
+      _eager_done = false;
+    }
     _can_delete = true;
-    _can_delete = true;
+
     return 0;
   }
 
@@ -147,16 +154,12 @@ namespace NSG {
     }
 
     unsigned id = _tag_to_location[tag];
-    _delete_set.insert(_tag_to_location[tag]);
     _location_to_tag.erase(_tag_to_location[tag]);
     _tag_to_location.erase(tag);
 
     const unsigned range = parameters.Get<unsigned>("R");
     const unsigned maxc = parameters.Get<unsigned>("C");
     const float    alpha = parameters.Get<float>("alpha");
-
-    tsl::robin_set<unsigned>
-        modified;  // to store points whose in-neighbors have to be updates
 
     for (auto j : _final_graph[id])  // removing delteted point from its
                                      // out-neighbors' in-neighbor list
@@ -166,9 +169,6 @@ namespace NSG {
           break;
         }
       }
-    for (auto j : _final_graph[id]) {
-      modified.insert(j);
-    }
 
     size_t                   in_size = _in_graph[id].size();
     tsl::robin_set<unsigned> candidate_set;
@@ -184,10 +184,8 @@ namespace NSG {
         candidate_set.insert(j);
       for (auto j : _final_graph[ngh]) {
         candidate_set.insert(j);
-        modified.insert(j);
       }
-      candidate_set.erase(id);
-      modified.erase(id);
+
       for (auto j : candidate_set)
         expanded_nghrs.push_back(Neighbor(
             j,
@@ -196,22 +194,60 @@ namespace NSG {
             true));
       std::sort(expanded_nghrs.begin(), expanded_nghrs.end());
       occlude_list(expanded_nghrs, ngh, alpha, range, maxc, result);
-      _final_graph[ngh].clear();
 
+      _final_graph[ngh].clear();
       for (auto j : result) {
         _final_graph[ngh].push_back(j.id);
         _in_graph[j.id].emplace_back(ngh);
       }
     }
-    for (auto j : modified)
-      std::sort(_in_graph[j].begin(), _in_graph[j].end());
 
+    _nd--;
+    for (unsigned old = 0; old < _max_points; ++old) {
+      if (old != id) {  // If point continues to exist
+
+        // Renumber nodes to compact the order
+        for (size_t i = 0; i < _final_graph[old].size(); ++i) {
+          if (_final_graph[old][i] > id)
+            _final_graph[old][i] = _final_graph[old][i] - 1;
+        }
+
+        for (size_t i = 0; i < _in_graph[old].size(); ++i) {
+          if (_in_graph[old][i] > id)
+            _in_graph[old][i] = _in_graph[old][i] - 1;
+        }
+
+        // Move the data and adj list to the correct position
+        if (old > id) {
+          _final_graph[old - 1].swap(_final_graph[old]);
+          _in_graph[old - 1].swap(_in_graph[old]);
+        }
+      }
+    }
+
+    // Update the location pointed to by tag
+    _tag_to_location.clear();
+    for (auto iter : _location_to_tag) {
+      if (iter.second > tag)
+        _tag_to_location[iter.second] = iter.first - 1;
+      else
+        _tag_to_location[iter.second] = iter.first;
+    }
+    _location_to_tag.clear();
+    for (auto iter : _tag_to_location)
+      _location_to_tag[iter.second] = iter.first;
+
+    _eager_done = true;
     return 0;
   }
   // Do not call consolidate_deletes() if you have not locked _change_lock.
   // Returns number of live points left after consolidation
   template<typename T, typename TagT>
   size_t IndexNSG<T, TagT>::consolidate_deletes(const Parameters &parameters) {
+    if (_eager_done) {
+      std::cout << "No consolidation required, eager deletes done" << std::endl;
+      return 0;
+    }
     assert(!_consolidated_order);
     assert(_can_delete);
     assert(_enable_tags);
@@ -230,6 +266,47 @@ namespace NSG {
           _delete_set.find(old) == _delete_set.end())
         new_location[old] = active++;
     assert(active + _empty_slots.size() + _delete_set.size() == _max_points);
+
+    tsl::robin_set<unsigned> candidate_set;
+    std::vector<Neighbor>    expanded_nghrs;
+    std::vector<Neighbor>    result;
+
+    for (unsigned i = 0; i < _max_points; ++i) {
+      if (new_location[i] < _max_points) {
+        candidate_set.clear();
+        expanded_nghrs.clear();
+        result.clear();
+
+        bool modify = false;
+        for (auto ngh : _final_graph[i]) {
+          if (new_location[ngh] >= _max_points) {
+            modify = true;
+
+            // Add outgoing links from
+            for (auto j : _final_graph[ngh])
+              if (_delete_set.find(j) == _delete_set.end())
+                candidate_set.insert(j);
+          } else {
+            candidate_set.insert(ngh);
+          }
+        }
+
+        if (modify) {
+          for (auto j : candidate_set)
+            expanded_nghrs.push_back(Neighbor(
+                j,
+                _distance->compare(_data + _dim * (size_t) i,
+                                   _data + _dim * (size_t) j, (unsigned) _dim),
+                true));
+          std::sort(expanded_nghrs.begin(), expanded_nghrs.end());
+          occlude_list(expanded_nghrs, i, alpha, range, maxc, result);
+
+          _final_graph[i].clear();
+          for (auto j : result)
+            _final_graph[i].push_back(j.id);
+        }
+      }
+    }
 
     // If start node is removed, replace it.
     if (_delete_set.find(_ep) != _delete_set.end()) {
@@ -316,17 +393,30 @@ namespace NSG {
       std::cerr << "Point tag array not instantiated" << std::endl;
       exit(-1);
     }
-    if (_tag_to_location.size() + _delete_set.size() != _nd) {
+    if (_eager_done) {
+      std::cout << "#Points after eager_delete : " << _nd << std::endl;
+      if (_tag_to_location.size() != _nd) {
+        std::cerr << "Tags to points array wrong sized" << std::endl;
+        return -2;
+      }
+    } else if (_tag_to_location.size() + _delete_set.size() != _nd) {
       std::cerr << "Tags to points array wrong sized" << std::endl;
       return -2;
     }
-    if (_location_to_tag.size() + _delete_set.size() != _nd) {
+    if (_eager_done) {
+      if (_location_to_tag.size() != _nd) {
+        std::cerr << "Points to tags array wrong sized" << std::endl;
+        return -3;
+      }
+    } else if (_location_to_tag.size() + _delete_set.size() != _nd) {
       std::cerr << "Points to tags array wrong sized" << std::endl;
       return -3;
     }
     if (consolidate) {
       auto nd = consolidate_deletes(parameters);
-      std::cout << "#Points after consolidation: " << nd << std::endl;
+
+      if (nd >= 0)
+        std::cout << "#Points after consolidation: " << nd << std::endl;
     }
 
     _can_delete = false;
@@ -335,12 +425,16 @@ namespace NSG {
 
   template<typename T, typename TagT>
   int IndexNSG<T, TagT>::delete_point(const TagT tag) {
+    if (_eager_done) {
+      std::cout << "Eager deletes done, lazy deletes not allowed" << std::endl;
+      return -1;
+    }
     LockGuard guard(_change_lock);
     if (_tag_to_location.find(tag) == _tag_to_location.end()) {
       std::cerr << "Delete tag not found" << std::endl;
       return -1;
     }
-    _delete_set.insert(_tag_to_location[tag]);
+
     _location_to_tag.erase(_tag_to_location[tag]);
     _tag_to_location.erase(tag);
     return 0;
@@ -354,7 +448,7 @@ namespace NSG {
     assert(_final_graph.size() == _max_points);
     if (_enable_tags) {
       _change_lock.lock();
-      if (_can_delete || !_consolidated_order) {
+      if (_can_delete || (!_consolidated_order && !_eager_done)) {
         std::cerr << "Disable deletes and consolidate index before saving."
                   << std::endl;
         exit(-1);
@@ -433,11 +527,11 @@ namespace NSG {
       _final_graph.emplace_back(tmp);
 
       if (nodes % 5000000 == 0)
-        std::cout << "Loaded " << nodes << "nodes, and " << cc << " neighbors"
+        std::cout << "Loaded " << nodes << " nodes, and " << cc << " neighbors"
                   << std::endl;
     }
 
-    std::cout << "Loaded " << nodes << "nodes, and " << cc << " neighbors"
+    std::cout << "Loaded " << nodes << " nodes, and " << cc << " neighbors"
               << std::endl;
   }
   // allocate (_max_points + fake_points) * dim space to data
@@ -738,7 +832,7 @@ namespace NSG {
     assert(_nd < _max_points);
 
     unsigned location;
-    if (_consolidated_order)
+    if (_consolidated_order || _eager_done)
       location = _nd;
     else {
       assert(_empty_slots.size() != 0);
@@ -1123,7 +1217,7 @@ namespace NSG {
             float djk = _distance->compare(_data + _dim * (size_t) r.id,
                                            _data + _dim * (size_t) p.id,
                                            (unsigned) _dim);
-            if (alpha * djk < p.distance /* dik */) {
+            if (djk < p.distance /* dik */) {
               occlude = true;
               break;
             }
@@ -1281,8 +1375,16 @@ namespace NSG {
             // the points visited, just the ids
             get_neighbors(_data + (size_t) _dim * n, parameters, tmp, pool,
                           visited);
+
+            for (unsigned i = 0; i < pool.size(); i++)
+              if (pool[i].id == n) {
+                pool.erase(pool.begin() + i);
+                break;
+              }
+            visited.erase(n);
             // sync_prune will check pool, and remove some of the points and
             // create a cut_graph, which contains neighbors for point n
+
             sync_prune(_data + (size_t) _dim * n, n, pool, parameters, visited,
                        cut_graph_[n]);
           }
@@ -1337,10 +1439,14 @@ namespace NSG {
   void IndexNSG<T, TagT>::update_in_graph() {
     for (unsigned i = 0; i < _in_graph.size(); i++)
       _in_graph[i].clear();
+
     for (unsigned i = 0; i < _final_graph.size();
          i++)  // copying to in-neighbor graph
-      for (unsigned j = 0; j < _final_graph[i].size(); j++)
-        _in_graph[_final_graph[i][j]].emplace_back(i);
+
+      for (unsigned j = 0; j < _final_graph[i].size(); j++) {
+        if (i == _final_graph[i][j])
+          _in_graph[_final_graph[i][j]].emplace_back(i);
+      }
   }
   template<typename T, typename TagT>
   void IndexNSG<T, TagT>::build(const T *data, Parameters &parameters,

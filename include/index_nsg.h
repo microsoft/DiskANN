@@ -77,6 +77,9 @@ namespace NSG {
     /*  Internals of the library */
     void set_data(const T *data);
 
+    // print in_degree of points
+    void report_in_degree(tsl::robin_set<unsigned> delete_list);
+
    protected:
     typedef std::vector<std::vector<unsigned>> CompactGraph;
     CompactGraph                               _final_graph;
@@ -104,6 +107,7 @@ namespace NSG {
                        std::vector<Neighbor> &   fullset,
                        tsl::robin_set<unsigned> &visited);
 
+    // flag = 1 for incremental insertions, flag = 0 for graph build
     void inter_insert(unsigned n, vecNgh &cut_graph,
                       const Parameters &parameter, int flag);
 
@@ -148,6 +152,7 @@ namespace NSG {
     bool _enable_tags;
     bool _consolidated_order;
     bool _store_data;
+    bool _eager_done;  // if eager_done = 1, lazy deletes are not allowed
 
     std::unordered_map<TagT, unsigned> _tag_to_location;
     std::unordered_map<unsigned, TagT> _location_to_tag;
