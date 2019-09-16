@@ -3,14 +3,14 @@
 #include <index_nsg.h>
 #include <math_utils.h>
 #include "partition_and_pq.h"
-#include "util.h"
+#include "utils.h"
 
 // #define TRAINING_SET_SIZE 2000000
 //#define TRAINING_SET_SIZE 2000000
 
 template<typename T>
-bool testBuildIndex(const char* dataFilePath, const char* indexFilePath,
-                    const char* indexBuildParameters) {
+bool build_disk_index(const char* dataFilePath, const char* indexFilePath,
+                      const char* indexBuildParameters) {
   std::stringstream parser;
   parser << std::string(indexBuildParameters);
   std::string              cur_param;
@@ -32,7 +32,7 @@ bool testBuildIndex(const char* dataFilePath, const char* indexFilePath,
   std::string train_file_path = index_prefix_path + "_training_set_float.bin";
   std::string pq_pivots_path = index_prefix_path + "_pq_pivots.bin";
   std::string pq_compressed_vectors_path =
-      index_prefix_path + "_compressed_uint32.bin";
+      index_prefix_path + "_compressed.bin";
   std::string randnsg_path = index_prefix_path + "_unopt.rnsg";
   std::string diskopt_path = index_prefix_path + "_diskopt.rnsg";
 
@@ -66,9 +66,8 @@ bool testBuildIndex(const char* dataFilePath, const char* indexFilePath,
 
   generate_pq_pivots(train_data, train_size, dim, 256, num_pq_chunks, 15,
                      pq_pivots_path);
-  generate_pq_data_from_pivots<T>(data_load, points_num, dim, 256,
-                                  num_pq_chunks, pq_pivots_path,
-                                  pq_compressed_vectors_path);
+  generate_pq_data_from_pivots<T>(dataFilePath, 256, num_pq_chunks,
+                                  pq_pivots_path, pq_compressed_vectors_path);
 
   delete[] data_load;
   delete[] train_data;
@@ -120,11 +119,11 @@ int main(int argc, char** argv) {
                          " " + std::string(argv[6]) + " " +
                          std::string(argv[7]) + " " + std::string(argv[8]);
     if (std::string(argv[1]) == std::string("float"))
-      testBuildIndex<float>(argv[2], argv[3], params.c_str());
+      build_disk_index<float>(argv[2], argv[3], params.c_str());
     else if (std::string(argv[1]) == std::string("int8"))
-      testBuildIndex<int8_t>(argv[2], argv[3], params.c_str());
+      build_disk_index<int8_t>(argv[2], argv[3], params.c_str());
     else if (std::string(argv[1]) == std::string("uint8"))
-      testBuildIndex<uint8_t>(argv[2], argv[3], params.c_str());
+      build_disk_index<uint8_t>(argv[2], argv[3], params.c_str());
     else
       std::cout << "Error. wrong file type" << std::endl;
   }

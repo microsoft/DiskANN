@@ -3,7 +3,7 @@
 #include <string.h>
 #include <cstring>
 #include <iomanip>
-#include "util.h"
+#include "utils.h"
 #ifndef __NSG_WINDOWS__
 #include <sys/mman.h>
 #include <sys/stat.h>
@@ -57,12 +57,13 @@ int aux_main(int argc, char** argv) {
   T*        query_load = NULL;
   unsigned* gt_load = NULL;
   float*    gt_dist = NULL;
-  size_t    query_num, query_dim;
+  size_t    query_num, query_dim, query_aligned_dim;
   size_t    gt_num, gt_dim;
   size_t    gt_num_dist, gt_dim_dist;
 
   //  NSG::load_bin<T>(argv[2], data_load, points_num, dim);
-  NSG::load_bin<T>(argv[3], query_load, query_num, query_dim);
+  NSG::load_aligned_bin<T>(argv[3], query_load, query_num, query_dim,
+                           query_aligned_dim);
   NSG::load_bin<unsigned>(argv[4], gt_load, gt_num, gt_dim);
   NSG::load_bin<float>(argv[5], gt_dist, gt_num_dist, gt_dim_dist);
   std::string rand_nsg_path(argv[6]);
@@ -110,10 +111,6 @@ int aux_main(int argc, char** argv) {
   std::cout.setf(std::ios_base::fixed, std::ios_base::floatfield);
   std::cout.precision(2);
 
-  //  data_load = NSG::data_align(data_load, points_num, dim);
-  query_load = NSG::data_align(query_load, query_num, query_dim);
-  std::cout << "query data loaded and aligned" << std::endl;
-
   NSG::IndexNSG<T> index(NSG::L2, argv[2]);
   index.load(rand_nsg_path.c_str());  // to load NSG
   std::cout << "Index loaded" << std::endl;
@@ -147,9 +144,9 @@ int aux_main(int argc, char** argv) {
 
     auto    s = std::chrono::high_resolution_clock::now();
 #pragma omp parallel for schedule(dynamic, 1)
-    for (int i = 0; i < query_num; i++) {
+    for (int i = 0; i < (int32_t) query_num; i++) {
       auto ret =
-          index.beam_search(query_load + i * query_dim, K, paras,
+          index.beam_search(query_load + i * query_aligned_dim, K, paras,
                             res + ((size_t) i) * K, beam_width, start_points);
 #pragma omp atomic
       total_hops += ret.first;

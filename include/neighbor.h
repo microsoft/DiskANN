@@ -1,14 +1,9 @@
-//
-// Copyright (c) 2017 ZJULearning. All rights reserved.
-//
-// This source code is licensed under the MIT license.
-//
 #pragma once
 
 #include <cstddef>
 #include <mutex>
 #include <vector>
-#include "util.h"
+#include "utils.h"
 
 namespace NSG {
 

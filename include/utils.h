@@ -1,7 +1,4 @@
-﻿//
-// Created by 付聪 on 2017/6/21.
-//
-
+﻿
 #pragma once
 #include <fcntl.h>
 
@@ -98,28 +95,121 @@ namespace NSG {
   }
 
   template<typename T>
-  inline T *data_align(T *data_ori, size_t point_num, size_t &dim) {
-    T *data_new = nullptr;
+  inline void load_bin(const std::string &bin_file, T *&data, size_t &npts,
+                       size_t &dim) {
+    _u64            read_blk_size = 64 * 1024 * 1024;
+    cached_ifstream reader(bin_file, read_blk_size);
+    std::cout << "Reading bin file " << bin_file << " ..." << std::flush;
+    size_t actual_file_size = reader.get_file_size();
 
-    size_t new_dim = ROUND_UP(dim, 8);
-    size_t allocSize = point_num * new_dim * sizeof(T);
-    std::cout << "Allocating aligned memory, " << allocSize << " bytes..."
+    int npts_i32, dim_i32;
+    reader.read((char *) &npts_i32, sizeof(int));
+    reader.read((char *) &dim_i32, sizeof(int));
+    npts = (unsigned) npts_i32;
+    dim = (unsigned) dim_i32;
+
+    std::cout << "Metadata: #pts = " << npts << ", #dims = " << dim << "..."
               << std::flush;
-    alloc_aligned(((void **) &data_new), allocSize, 8 * sizeof(T));
-    std::cout << "done. Copying data to aligned memory..." << std::flush;
 
-    for (size_t i = 0; i < point_num; i++) {
-      memcpy(data_new + i * (size_t) new_dim, data_ori + i * (size_t) dim,
-             dim * sizeof(float));
-      memset(data_new + i * (size_t) new_dim + dim, 0,
-             (new_dim - dim) * sizeof(float));
+    size_t expected_actual_file_size =
+        npts * dim * sizeof(T) + 2 * sizeof(uint32_t);
+    if (actual_file_size != expected_actual_file_size) {
+      std::cout << "Error. File size mismatch. Actual size is "
+                << actual_file_size << " while expected size is  "
+                << expected_actual_file_size << std::endl;
+      exit(-1);
     }
-    dim = new_dim;
-    std::cout << " done." << std::endl;
-    delete[] data_ori;
 
-    return data_new;
+    data = new T[npts * dim];
+    reader.read((char *) data, npts * dim * sizeof(T));
+    std::cout << "Finished reading bin file." << std::endl;
   }
+
+  template<typename T>
+  inline void save_bin(const std::string &filename, T *data, size_t npts,
+                       size_t ndims) {
+    std::ofstream writer(filename, std::ios::binary | std::ios::out);
+    std::cout << "Writing bin: " << filename << "\n";
+    int npts_i32 = (int) npts, ndims_i32 = (int) ndims;
+    writer.write((char *) &npts_i32, sizeof(int));
+    writer.write((char *) &ndims_i32, sizeof(int));
+    std::cout << "bin: #pts = " << npts << ", #dims = " << ndims
+              << ", size = " << npts * ndims * sizeof(T) + 2 * sizeof(int)
+              << "B" << std::endl;
+
+    //    data = new T[npts_u64 * ndims_u64];
+    writer.write((char *) data, npts * ndims * sizeof(T));
+    writer.close();
+    std::cout << "Finished writing bin" << std::endl;
+  }
+
+  template<typename T>
+  inline void load_aligned_bin(const std::string bin_file, T *&data,
+                               size_t &npts, size_t &dim, size_t &rounded_dim) {
+    _u64            read_blk_size = 64 * 1024 * 1024;
+    cached_ifstream reader(bin_file, read_blk_size);
+    std::cout << "Reading bin file " << bin_file << " ..." << std::flush;
+    size_t actual_file_size = reader.get_file_size();
+
+    int npts_i32, dim_i32;
+    reader.read((char *) &npts_i32, sizeof(int));
+    reader.read((char *) &dim_i32, sizeof(int));
+    npts = (unsigned) npts_i32;
+    dim = (unsigned) dim_i32;
+
+    std::cout << "Metadata: #pts = " << npts << ", #dims = " << dim << "..."
+              << std::flush;
+
+    size_t expected_actual_file_size =
+        npts * dim * sizeof(T) + 2 * sizeof(uint32_t);
+    if (actual_file_size != expected_actual_file_size) {
+      std::cout << "Error. File size mismatch. Actual size is "
+                << actual_file_size << " while expected size is  "
+                << expected_actual_file_size << std::endl;
+      exit(-1);
+    }
+
+    rounded_dim = ROUND_UP(dim, 8);
+    size_t allocSize = npts * rounded_dim * sizeof(T);
+    std::cout << "allocating aligned memory, " << allocSize << " bytes..."
+              << std::flush;
+    alloc_aligned(((void **) &data), allocSize, 8 * sizeof(T));
+    std::cout << "done. Copying data..." << std::flush;
+
+    for (size_t i = 0; i < npts; i++) {
+      reader.read((char *) (data + i * rounded_dim), dim * sizeof(T));
+      memset(data + i * rounded_dim + dim, 0, (rounded_dim - dim) * sizeof(T));
+    }
+    std::cout << " done." << std::endl;
+    std::cout << "Finished reading bin file." << std::endl;
+  }
+
+  /*
+    template<typename T>
+    inline T *data_align(T *data_ori, size_t point_num, size_t &dim) {
+      T *data_new = nullptr;
+
+      size_t new_dim = ROUND_UP(dim, 8);
+      size_t allocSize = point_num * new_dim * sizeof(T);
+      std::cout << "Allocating aligned memory, " << allocSize << " bytes..."
+                << std::flush;
+      alloc_aligned(((void **) &data_new), allocSize, 8 * sizeof(T));
+      std::cout << "done. Copying data to aligned memory..." << std::flush;
+
+      for (size_t i = 0; i < point_num; i++) {
+        memcpy(data_new + i * (size_t) new_dim, data_ori + i * (size_t) dim,
+               dim * sizeof(float));
+        memset(data_new + i * (size_t) new_dim + dim, 0,
+               (new_dim - dim) * sizeof(float));
+      }
+      dim = new_dim;
+      std::cout << " done." << std::endl;
+      delete[] data_ori;
+
+      return data_new;
+    }
+
+    */
 
   template<typename InType, typename OutType>
   void convert_types(const InType *srcmat, OutType *destmat, size_t npts,
@@ -251,46 +341,6 @@ namespace NSG {
 #else
     CloseHandle(fd);
 #endif
-  }
-
-  template<typename T>
-  inline void load_bin(const char *filename, T *&data, size_t &npts,
-                       size_t &ndims) {
-    std::ifstream reader(filename, std::ios::binary);
-    std::cout << "Reading bin file " << filename << " ...\n";
-    int npts_i32, ndims_i32;
-    reader.read((char *) &npts_i32, sizeof(int));
-    reader.read((char *) &ndims_i32, sizeof(int));
-    npts = (unsigned) npts_i32;
-    ndims = (unsigned) ndims_i32;
-    _u64 npts_u64 = (_u64) npts;
-    _u64 ndims_u64 = (_u64) ndims;
-    std::cout << "#pts = " << npts << ", #dims = " << ndims
-              << ", size = " << npts_u64 * ndims_u64 * sizeof(T) << "B"
-              << std::endl;
-
-    data = new T[npts_u64 * ndims_u64];
-    reader.read((char *) data, npts_u64 * ndims_u64 * sizeof(T));
-    reader.close();
-    std::cout << "Finished reading bin file." << std::endl;
-  }
-
-  template<typename T>
-  inline void save_bin(const char *filename, T *data, size_t npts,
-                       size_t ndims) {
-    std::ofstream writer(filename, std::ios::binary | std::ios::out);
-    std::cout << "Writing bin: " << filename << "\n";
-    int npts_i32 = (int) npts, ndims_i32 = (int) ndims;
-    writer.write((char *) &npts_i32, sizeof(int));
-    writer.write((char *) &ndims_i32, sizeof(int));
-    std::cout << "bin: #pts = " << npts << ", #dims = " << ndims
-              << ", size = " << npts * ndims * sizeof(T) + 2 * sizeof(int)
-              << "B" << std::endl;
-
-    //    data = new T[npts_u64 * ndims_u64];
-    writer.write((char *) data, npts * ndims * sizeof(T));
-    writer.close();
-    std::cout << "Finished writing bin" << std::endl;
   }
 
   // plain saves data as npts X ndims array into filename
@@ -510,4 +560,15 @@ struct PivotContainer {
 inline bool file_exists(const std::string &name) {
   struct stat buffer;
   return (stat(name.c_str(), &buffer) == 0);
+}
+
+inline _u64 get_file_size(const std::string &fname) {
+  if (!file_exists(fname))
+    return 0;
+  else {
+    std::ifstream reader(fname, std::ios::binary | std::ios::ate);
+    _u64          end_pos = reader.tellg();
+    reader.close();
+    return end_pos;
+  }
 }

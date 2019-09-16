@@ -1,11 +1,7 @@
-//
-// Created by 付聪 on 2017/6/21.
-//
-
 #include <index_nsg.h>
 #include <omp.h>
 #include <string.h>
-#include "util.h"
+#include "utils.h"
 
 #ifndef __NSG_WINDOWS__
 #include <sys/mman.h>

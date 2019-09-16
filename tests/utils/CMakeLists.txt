@@ -10,30 +10,6 @@ else()
 	target_link_libraries(truncate_rnsg ${PROJECT_NAME} -ltcmalloc)
 endif()
 
-
-add_executable(test_partitioning test_partitioning.cpp)
-if(MSVC)
-	target_link_options(test_partitioning PRIVATE /MACHINE:x64)
-	target_link_libraries(test_partitioning debug ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG}/nsg_lib.lib)
-	target_link_libraries(test_partitioning optimized ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE}/nsg_lib.lib)
-else() 
-	target_link_libraries(test_partitioning ${PROJECT_NAME} -ltcmalloc)
-endif()
-
-add_executable(calc_recall calc_recall.cpp)
-if(MSVC)
-	target_link_options(calc_recall PRIVATE /MACHINE:x64)
-	target_link_libraries(calc_recall debug ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG}/nsg_lib.lib)
-	target_link_libraries(calc_recall optimized ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE}/nsg_lib.lib)
-endif()
-
-add_executable(opt_disk_graph opt_disk_graph.cpp)
-if(MSVC)
-	target_link_options(opt_disk_graph PRIVATE /MACHINE:x64)
-	target_link_libraries(opt_disk_graph debug ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG}/nsg_lib.lib)
-	target_link_libraries(opt_disk_graph optimized ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE}/nsg_lib.lib)
-endif()
-
 add_executable(fvecs_to_bin fvecs_to_bin.cpp)
 if(MSVC)
 	target_link_options(fvecs_to_bin PRIVATE /MACHINE:x64)
@@ -77,4 +53,4 @@ if(MSVC)
 endif()
 
 # formatter
-add_custom_command(TARGET calc_recall PRE_BUILD COMMAND clang-format-4.0 -i ../../../include/*.h ../../../include/dll/*.h ../../../src/*.cpp  ../../../tests/*.cpp ../../../src/dll/*.cpp ../../../tests/utils/*.cpp)
+add_custom_command(TARGET gen_random_slice PRE_BUILD COMMAND clang-format-4.0 -i ../../../include/*.h ../../../include/dll/*.h ../../../src/*.cpp  ../../../tests/*.cpp ../../../src/dll/*.cpp ../../../tests/utils/*.cpp)

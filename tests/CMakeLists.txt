@@ -19,15 +19,6 @@ else()
 	target_link_libraries(build_in_memory_index ${PROJECT_NAME} -ltcmalloc)
 endif()
 
-add_executable(build_disk_index build_disk_index.cpp)
-if(MSVC)
-	target_link_options(build_disk_index PRIVATE /MACHINE:x64)
-	target_link_libraries(build_disk_index debug ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG}/nsg_lib.lib)
-	target_link_libraries(build_disk_index optimized ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE}/nsg_lib.lib)
-else() 
-	target_link_libraries(build_disk_index ${PROJECT_NAME} -ltcmalloc)
-endif()
-
 add_executable(search_in_memory_index search_in_memory_index.cpp)
 if(MSVC)
 	target_link_options(search_in_memory_index PRIVATE /MACHINE:x64)
@@ -46,7 +37,17 @@ else()
 	target_link_libraries(search_disk_index ${PROJECT_NAME} aio)
 endif()
 
-add_executable(rename_merge_shards rename_merge_shards.cpp)
+add_executable(create_visited_cache create_visited_cache.cpp)
+target_link_libraries(create_visited_cache ${PROJECT_NAME} aio)
+
+add_executable(generate_pq generate_pq.cpp)
+target_link_libraries(generate_pq ${PROJECT_NAME})
+
+add_executable(partition_data partition_data.cpp)
+target_link_libraries(partition_data ${PROJECT_NAME} -ltcmalloc)
+
+add_executable(merge_shards merge_shards.cpp)
+add_executable(create_disk_layout create_disk_layout.cpp)
 
 if(MSVC)
 	add_executable(test_nsg_dll test_nsg_dll.cpp)

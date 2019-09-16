@@ -9,19 +9,19 @@
 #include "neighbor.h"
 #include "parameters.h"
 #include "tsl/robin_set.h"
-#include "util.h"
+#include "utils.h"
 
 namespace NSG {
   template<typename T, typename TagT = int>
   class IndexNSG {
    public:
-    IndexNSG(Metric m, const char *filename, const size_t max_points = 0,
+    IndexNSG(Metric m, const std::string &filename, const size_t max_points = 0,
              const size_t nd = 0, const bool enable_tags = false);
 
     ~IndexNSG();
 
-    void save(const char *filename);
-    void load(const char *filename);
+    void save(const std::string &filename);
+    void load(const std::string &filename);
 
     void init_random_graph(size_t num_points, unsigned k,
                            std::vector<size_t> mapping = std::vector<size_t>());
@@ -53,7 +53,7 @@ namespace NSG {
                                     int                    beam_width,
                                     std::vector<unsigned> &start_points);
 
-    void save_disk_opt_graph(const char *diskopt_path);
+    void save_disk_opt_graph(const std::string &diskopt_path);
 
 /* Methods for inserting and deleting points from the databases*/
 #define NULL_TAG (TagT(-1))

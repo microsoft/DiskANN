@@ -8,83 +8,39 @@
 #include "cached_io.h"
 #include "utils.h"
 
-_u64 get_file_size(const std::string &fname) {
-  std::ifstream reader(fname, std::ios::binary | std::ios::ate);
-  _u64          end_pos = reader.tellg();
-  reader.close();
-  return end_pos;
-}
-
-void read_nsg(const std::string &fname, std::vector<unsigned> &nsg) {
-  _u64 fsize = get_file_size(fname);
-  std::cout << "Reading file: " << fname << ", size: " << fsize << "B\n";
-  nsg.resize(fsize / sizeof(unsigned));
-  std::ifstream reader(fname, std::ios::binary);
-  reader.read((char *) nsg.data(), fsize);
-  reader.close();
-}
-
-void read_bad_ivecs(const std::string &fname, std::vector<unsigned> &ivecs) {
-  _u64 fsize = get_file_size(fname);
-  std::cout << "Reading bad ivecs: " << fname << ", size: " << fsize << "B\n";
-  uint32_t      npts32, dummy;
+void read_idmap(const std::string &fname, std::vector<unsigned> &ivecs) {
+  uint32_t      npts32, dim;
+  size_t        actual_file_size = get_file_size(fname);
   std::ifstream reader(fname.c_str(), std::ios::binary);
   reader.read((char *) &npts32, sizeof(uint32_t));
-  reader.read((char *) &dummy, sizeof(uint32_t));
-  npts32 = fsize / sizeof(unsigned) - 2;
-  std::cout << "Points = " << npts32 << std::endl;
-  ivecs.resize(npts32);
-  reader.read((char *) ivecs.data(), npts32 * sizeof(uint32_t));
-  reader.close();
-}
-
-void read_unsigned_ivecs(const std::string &    fname,
-                         std::vector<unsigned> &ivecs) {
-  std::ifstream reader(fname, std::ios::binary);
-  unsigned      nvals;
-  reader.read((char *) &nvals, sizeof(unsigned));
-  _u64 fsize = (nvals + 1) * sizeof(unsigned);
-  std::cout << "Reading ivecs: " << fname << ", size: " << fsize << "B\n";
-  ivecs.resize(nvals);
-
-  reader.read((char *) ivecs.data(), nvals * sizeof(unsigned));
-  reader.close();
-}
-
-void read_shard_id_maps(const std::vector<std::string> &    fnames,
-                        std::vector<std::vector<unsigned>> &id_maps) {
-  for (_u64 i = 0; i < fnames.size(); i++) {
-    read_bad_ivecs(fnames[i], id_maps[i]);
-  }
-}
-
-int main(int argc, char **argv) {
-  if (argc != 7) {
-    std::cout << argv[0] << " nsg_prefix[1] nsg_suffix[2] idmaps_prefix[3] "
-                            "idmaps_suffix[4] n_shards[5] output_nsg[6]"
+  reader.read((char *) &dim, sizeof(uint32_t));
+  if (dim != 1 ||
+      actual_file_size !=
+          ((size_t) npts32) * sizeof(uint32_t) + 2 * sizeof(uint32_t)) {
+    std::cout << "Error reading idmap file. Check if the file is bin file with "
+                 "1 dimensional data. Actual: "
+              << actual_file_size
+              << ", expected: " << (size_t) npts32 + 2 * sizeof(uint32_t)
               << std::endl;
     exit(-1);
   }
+  ivecs.resize(npts32);
+  reader.read((char *) ivecs.data(), ((size_t) npts32) * sizeof(uint32_t));
+  reader.close();
+}
 
-  _u64                     nshards = (_u64) std::atoi(argv[5]);
-  std::vector<std::string> nsg_names(nshards);
-  std::vector<std::string> idmaps_names(nshards);
-  std::string              nsg_prefix(argv[1]);
-  std::string              nsg_suffix(argv[2]);
-  std::string              idmaps_prefix(argv[3]);
-  std::string              idmaps_suffix(argv[4]);
-  std::string              output_nsg(argv[6]);
-  std::string              medoid_file = output_nsg + "_medoids.bin";
-
+int merge_shards(const std::string &nsg_prefix, const std::string &nsg_suffix,
+                 const std::string &idmaps_prefix,
+                 const std::string &idmaps_suffix, const _u64 nshards,
+                 const std::string &output_nsg) {
+  // Read ID maps
+  std::vector<std::string>           nsg_names(nshards);
+  std::vector<std::vector<unsigned>> idmaps(nshards);
   for (_u64 shard = 0; shard < nshards; shard++) {
     nsg_names[shard] = nsg_prefix + std::to_string(shard) + nsg_suffix;
-    idmaps_names[shard] = idmaps_prefix + std::to_string(shard) + idmaps_suffix;
+    read_idmap(idmaps_prefix + std::to_string(shard) + idmaps_suffix,
+               idmaps[shard]);
   }
-
-  std::vector<std::vector<unsigned>> idmaps(nshards);
-
-  // read all id maps
-  read_shard_id_maps(idmaps_names, idmaps);
 
   // find max node id
   _u64 nnodes = 0;
@@ -120,11 +76,19 @@ int main(int argc, char **argv) {
   std::vector<cached_ifstream> nsg_readers(nshards);
   for (_u64 i = 0; i < nshards; i++) {
     nsg_readers[i].open(nsg_names[i], 1024 * 1048576);
+    size_t actual_file_size = get_file_size(nsg_names[i]);
+    size_t expected_file_size;
+    nsg_readers[i].read((char *) &expected_file_size, sizeof(uint64_t));
+    if (actual_file_size != expected_file_size) {
+      std::cout << "Error in Rand-NSG file " << nsg_names[i] << std::endl;
+      exit(-1);
+    }
   }
 
+  size_t merged_index_size = 0;
   // create cached nsg writers
-  std::string     final_nsg_name(argv[6]);
-  cached_ofstream nsg_writer(final_nsg_name, 1024 * 1048576);
+  cached_ofstream nsg_writer(output_nsg, 1024 * 1048576);
+  nsg_writer.write((char *) &merged_index_size, sizeof(uint64_t));
 
   unsigned width;
   // read width from each nsg to advance buffer by sizeof(unsigned) bytes
@@ -138,6 +102,7 @@ int main(int argc, char **argv) {
 
   width *= rep_factor;
   nsg_writer.write((char *) &width, sizeof(unsigned));
+  std::string   medoid_file = output_nsg + "_medoids.bin";
   std::ofstream medoid_writer(medoid_file.c_str(), std::ios::binary);
   _u32          nshards_u32 = nshards;
   _u32          one_val = 1;
@@ -172,7 +137,7 @@ int main(int argc, char **argv) {
       nsg_writer.write((char *) &nnbrs, sizeof(unsigned));
       nsg_writer.write((char *) nhood, nnbrs * sizeof(unsigned));
       if (cur_id % 999999 == 1) {
-        std::cout << "Finished merging " << cur_id << " nodes\n";
+        std::cout << "." << std::flush;
       }
       cur_id = node_id;
       nnbrs = 0;
@@ -193,8 +158,30 @@ int main(int argc, char **argv) {
   }
   nsg_writer.write((char *) &nnbrs, sizeof(unsigned));
   nsg_writer.write((char *) nhood, nnbrs * sizeof(unsigned));
+  nsg_writer.flush_cache();
+  merged_index_size = nsg_writer.get_file_size();
+  nsg_writer.reset();
+  nsg_writer.write((char *) &merged_index_size, sizeof(uint64_t));
 
   std::cout << "Finished merge\n";
   delete[] nhood;
   return 0;
+}
+int main(int argc, char **argv) {
+  if (argc != 7) {
+    std::cout << argv[0] << " nsg_prefix[1] nsg_suffix[2] idmaps_prefix[3] "
+                            "idmaps_suffix[4] n_shards[5] output_nsg[6]"
+              << std::endl;
+    exit(-1);
+  }
+
+  std::string nsg_prefix(argv[1]);
+  std::string nsg_suffix(argv[2]);
+  std::string idmaps_prefix(argv[3]);
+  std::string idmaps_suffix(argv[4]);
+  _u64        nshards = (_u64) std::atoi(argv[5]);
+  std::string output_nsg(argv[6]);
+
+  return merge_shards(nsg_prefix, nsg_suffix, idmaps_prefix, idmaps_suffix,
+                      nshards, output_nsg);
 }

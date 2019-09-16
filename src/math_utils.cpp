@@ -1,6 +1,6 @@
 #include <malloc.h>
 #include <math_utils.h>
-#include "util.h"
+#include "utils.h"
 
 namespace math_utils {
 

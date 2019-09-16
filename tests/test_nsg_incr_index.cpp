@@ -7,7 +7,7 @@
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
-#include "util.h"
+#include "utils.h"
 
 int main(int argc, char** argv) {
   if (argc != 8) {
@@ -18,10 +18,10 @@ int main(int argc, char** argv) {
   }
 
   float* data_load = NULL;
-  size_t num_points, dim;
+  size_t num_points, dim, aligned_dim;
 
-  NSG::load_bin<float>(argv[1], data_load, num_points, dim);
-  data_load = NSG::data_align(data_load, num_points, dim);
+  NSG::load_aligned_bin<float>(argv[1], data_load, num_points, dim,
+                               aligned_dim);
 
   unsigned    L = (unsigned) atoi(argv[2]);
   unsigned    R = (unsigned) atoi(argv[3]);

@@ -2,7 +2,7 @@
 
 #include <dll/nsg_interface.h>
 #include "dll/IANNIndex.h"
-#include "util.h"
+#include "utils.h"
 
 float calc_recall(_u64 num_queries, unsigned* gold_std, _u64 dim_gs,
                   _u64* our_results, _u64 dim_or, _u64 recall_at) {
@@ -52,7 +52,7 @@ int aux_main(int argc, char** argv) {
   // for indexing
   {
     // just construct index
-    bool res = intf->BuildIndex(argv[1], argv[2], "50 64 200 50");
+    bool res = intf->BuildIndex(argv[1], argv[2], "50 64 200 50 0.01");
     // ERROR CHECK
     if (res == 1) {
       exit(-1);
@@ -70,11 +70,9 @@ int aux_main(int argc, char** argv) {
 
     // load query bin
     T*   query = nullptr;
-    _u64 nqueries, ndims;
-    NSG::load_bin<T>(argv[3], query, nqueries, ndims);
-    query = NSG::data_align<T>(query, nqueries, ndims);
-    //    NSG::aligned_load_Tvecs<T>(argv[3], query, nqueries, ndims);
-    ndims = ROUND_UP(ndims, 8);
+    _u64 nqueries, ndims, aligned_query_dim;
+    NSG::load_aligned_bin<T>(argv[3], query, nqueries, ndims,
+                             aligned_query_dim);
 
     std::cout << "Loading ground truth..." << std::flush;
     // load ground truth

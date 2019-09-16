@@ -16,7 +16,7 @@
 #include "exceptions.h"
 #include "parameters.h"
 #include "tsl/robin_set.h"
-#include "util.h"
+#include "utils.h"
 
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -57,13 +57,15 @@ namespace NSG {
   // Initialize an index with metric m, load the data of type T with filename
   // (bin), and initialize max_points
   template<typename T, typename TagT>
-  IndexNSG<T, TagT>::IndexNSG(Metric m, const char *filename,
+  IndexNSG<T, TagT>::IndexNSG(Metric m, const std::string &filename,
                               const size_t max_points, const size_t nd,
                               const bool enable_tags)
       : _has_built(false), _width(0), _can_delete(false),
         _enable_tags(enable_tags), _consolidated_order(true) {
-    load_bin<T>(filename, _data, _nd, _dim);
-    std::cout << "#points in file: " << _nd << ", dim: " << _dim << std::endl;
+    load_aligned_bin<T>(filename, _data, _nd, _dim, _aligned_dim);
+    // data is stored to _nd * aligned_dim matrix with necessary zero-padding
+    std::cout << "#points in file: " << _nd << ", dim: " << _dim
+              << ", rounded_dim: " << _aligned_dim << std::endl;
 
     if (nd > 0) {
       if (_nd < nd) {
@@ -80,12 +82,6 @@ namespace NSG {
                 << _max_points << "  n: " << _nd << std::endl;
       exit(-1);
     }
-
-    // temporarily setting aligned_dim to _dim. will be rounded to multiple of 8
-    // in data_align function
-    _aligned_dim = _dim;
-    _data = data_align<T>(_data, _nd, _aligned_dim);
-    // data is now aligned to _nd * aligned_dim matrix
 
     this->_distance = ::get_distance_function<T>();
 
@@ -499,8 +495,9 @@ namespace NSG {
   }
 
   template<typename T, typename TagT>
-  void IndexNSG<T, TagT>::save(const char *filename) {
+  void IndexNSG<T, TagT>::save(const std::string &filename) {
     long long     total_gr_edges = 0;
+    size_t        index_size = 0;
     std::ofstream out(filename, std::ios::binary | std::ios::out);
 
     assert(_final_graph.size() == _max_points);
@@ -514,6 +511,7 @@ namespace NSG {
       }
     }
 
+    out.write((char *) &index_size, sizeof(uint64_t));
     out.write((char *) &_width, sizeof(unsigned));
     out.write((char *) &_ep, sizeof(unsigned));
     for (unsigned i = 0; i < _nd; i++) {
@@ -522,6 +520,9 @@ namespace NSG {
       out.write((char *) _final_graph[i].data(), GK * sizeof(unsigned));
       total_gr_edges += GK;
     }
+    index_size = out.tellp();
+    out.seekp(0, std::ios::beg);
+    out.write((char *) &index_size, sizeof(uint64_t));
     out.close();
 
     if (_enable_tags) {
@@ -539,8 +540,19 @@ namespace NSG {
 
   // load the SNG index if pre-computed
   template<typename T, typename TagT>
-  void IndexNSG<T, TagT>::load(const char *filename) {
+  void IndexNSG<T, TagT>::load(const std::string &filename) {
     std::ifstream in(filename, std::ios::binary);
+    in.seekg(0, in.end);
+    size_t expected_file_size;
+    size_t actual_file_size = in.tellg();
+    in.seekg(0, in.beg);
+    in.read((char *) &expected_file_size, sizeof(uint64_t));
+    if (actual_file_size != expected_file_size) {
+      std::cout << "Error loading Rand-NSG index. File size mismatch, expected "
+                   "size (metadata): "
+                << expected_file_size << std::endl;
+      exit(-1);
+    }
     in.read((char *) &_width, sizeof(unsigned));
     in.read((char *) &_ep, sizeof(unsigned));
     std::cout << "NSG -- width: " << _width << ", _ep: " << _ep << "\n";
@@ -557,6 +569,8 @@ namespace NSG {
       std::vector<unsigned> tmp(k);
       in.read((char *) tmp.data(), k * sizeof(unsigned));
       _final_graph.emplace_back(tmp);
+      if (std::find(tmp.begin(), tmp.end(), nodes - 1) != tmp.end())
+        std::cout << "self-loop at " << nodes - 1 << std::endl;
 
       if (nodes % 10000000 == 0)
         std::cout << "Loaded " << nodes << " nodes, and " << cc << " neighbors"
@@ -581,7 +595,7 @@ namespace NSG {
   template<typename T, typename TagT>
   void IndexNSG<T, TagT>::init_random_graph(size_t num_points, unsigned k,
                                             std::vector<size_t> mapping) {
-    k = (std::min)(k, (unsigned) 32);
+    k = (std::min)(k, (unsigned) 100);
     _final_graph.resize(_max_points);
     _final_graph.reserve(_max_points);
     if (!mapping.empty())
@@ -607,8 +621,11 @@ namespace NSG {
       for (_s64 i = block * PAR_BLOCK_SZ;
            i < (block + 1) * PAR_BLOCK_SZ && i < (_s64) num_points; i++) {
         std::set<unsigned> ra_ndset;
-        while (ra_ndset.size() < k)
-          ra_ndset.insert(dis(gen));
+        while (ra_ndset.size() < k) {
+          unsigned cur_pt = dis(gen);
+          if (cur_pt != i)
+            ra_ndset.insert(cur_pt);
+        }
 
         _final_graph[mapping[i]].reserve(k);
         for (auto s : ra_ndset)
@@ -638,11 +655,15 @@ namespace NSG {
     /* put random L new ids into visited list and init_ids list */
     while (init_ids.size() < L) {
       unsigned id = (rand() * rand() * rand()) % _nd;
-      if (visited.find(id) != visited.end())
-        continue;
-      else
+      if (visited.find(id) == visited.end()) {
         visited.insert(id);
-      init_ids.emplace_back(id);
+        fullset.emplace_back(
+            Neighbor(id,
+                     _distance->compare(_data + _aligned_dim * (size_t) id,
+                                        query, _aligned_dim),
+                     true));
+        init_ids.emplace_back(id);
+      }
     }
 
     /* compare distance of all points in init_ids with query, and put the id
@@ -650,13 +671,15 @@ namespace NSG {
      * in retset
      */
     unsigned l = 0;
+    Neighbor nn;
     for (auto id : init_ids) {
       assert(id < _max_points);
-      retset[l++] =
-          Neighbor(id,
-                   _distance->compare(_data + _aligned_dim * (size_t) id, query,
-                                      _aligned_dim),
-                   true);
+      nn = Neighbor(id,
+                    _distance->compare(_data + _aligned_dim * (size_t) id,
+                                       query, _aligned_dim),
+                    true);
+      fullset.emplace_back(nn);
+      retset[l++] = nn;
     }
 
     /* sort retset based on distance of each point to query */
@@ -695,7 +718,7 @@ namespace NSG {
                                  (unsigned) _aligned_dim);
           Neighbor nn(id, dist, true);
           fullset.emplace_back(nn);
-          if (dist >= retset[l - 1].distance)
+          if (dist >= retset[l - 1].distance && (l == retset.size()))
             continue;
 
           // if distance is smaller than largest, add to retset, keep it
@@ -751,8 +774,11 @@ namespace NSG {
     for (auto iter : ep_neighbors) {
       if (init_ids.size() >= L)
         break;
-      init_ids.emplace_back(iter.id);
-      visited.insert(iter.id);
+      if (visited.find(iter.id) == visited.end()) {
+        visited.insert(iter.id);
+        fullset.emplace_back(iter);
+        init_ids.emplace_back(iter.id);
+      }
     }
 
     /* Before calling this function: ep_neighbors contains the list of
@@ -1031,6 +1057,8 @@ namespace NSG {
     assert(!pool.empty());
 
     unsigned start = (pool[0].id == location) ? 1 : 0;
+    if (start == pool.size())
+      return;
     /* put the first node in start. This will be nearest neighbor to q */
     result.emplace_back(pool[start]);
 
@@ -1345,9 +1373,7 @@ namespace NSG {
   template<typename T, typename TagT>
   void IndexNSG<T, TagT>::link(Parameters &parameters) {
     //    The graph will be updated periodically in NUM_SYNCS batches
-    uint32_t NUM_SYNCS = DIV_ROUND_UP(_nd, (128 * 1024));
-    if (_nd < (1 << 22))
-      NUM_SYNCS = 4 * NUM_SYNCS;
+    uint32_t NUM_SYNCS = DIV_ROUND_UP(_nd, (128 * 96));
     std::cout << "Number of syncs: " << NUM_SYNCS << std::endl;
 
     const unsigned NUM_RNDS = parameters.Get<unsigned>(
@@ -1423,6 +1449,16 @@ namespace NSG {
                           pool, visited);
             // sync_prune will check pool, and remove some of the points and
             // create a cut_graph, which contains neighbors for point n
+            if (visited.find(n) != visited.end()) {
+              unsigned itpos = 0;
+              for (auto iter : pool) {
+                if (iter.id == n) {
+                  pool.erase(pool.begin() + itpos);
+                  break;
+                }
+                itpos++;
+              }
+            }
             sync_prune(_data + (size_t) _aligned_dim * n, n, pool, parameters,
                        visited, cut_graph_[n]);
           }
@@ -1819,7 +1855,7 @@ namespace NSG {
     */
 
   template<typename T, typename TagT>
-  void IndexNSG<T, TagT>::save_disk_opt_graph(const char *diskopt_path) {
+  void IndexNSG<T, TagT>::save_disk_opt_graph(const std::string &diskopt_path) {
     const _u64 SECTOR_LEN = 4096;
     std::cout << "Embedding node coords with its nhood" << std::endl;
     size_t npts_u64 = _nd, ndims_u64 = _dim;
@@ -1847,14 +1883,15 @@ namespace NSG {
     unsigned *nhood_buf =
         (unsigned *) (node_buf + (ndims_u64 * sizeof(T)) + sizeof(unsigned));
 
-    // write first sector with metadata
-    *(_u64 *) sector_buf = npts_u64;
-    *(_u64 *) (sector_buf + sizeof(_u64)) = (_u64) _ep;
-    *(_u64 *) (sector_buf + 2 * sizeof(_u64)) = max_node_len;
-    *(_u64 *) (sector_buf + 3 * sizeof(_u64)) = nnodes_per_sector;
-    nsg_writer.write(sector_buf, SECTOR_LEN);
-
     _u64 n_sectors = ROUND_UP(npts_u64, nnodes_per_sector) / nnodes_per_sector;
+    _u64 disk_index_file_size = (n_sectors + 1) * SECTOR_LEN;
+    // write first sector with metadata
+    *(_u64 *) (sector_buf + 0 * sizeof(_u64)) = disk_index_file_size;
+    *(_u64 *) (sector_buf + 1 * sizeof(_u64)) = npts_u64;
+    *(_u64 *) (sector_buf + 2 * sizeof(_u64)) = (_u64) _ep;
+    *(_u64 *) (sector_buf + 3 * sizeof(_u64)) = max_node_len;
+    *(_u64 *) (sector_buf + 4 * sizeof(_u64)) = nnodes_per_sector;
+    nsg_writer.write(sector_buf, SECTOR_LEN);
     std::cout << "# sectors: " << n_sectors << "\n";
 
     _u64 cur_node_id = 0;

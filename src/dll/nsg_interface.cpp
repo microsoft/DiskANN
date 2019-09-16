@@ -43,22 +43,20 @@ namespace NSG {
     while (parser >> cur_param)
       param_list.push_back(cur_param);
 
-    if (param_list.size() != 4) {
+    if (param_list.size() != 5) {
       std::cout
           << "Correct usage of parameters is L (indexing search list size) "
              "R (max degree) C (visited list maximum size) B (approximate "
              "compressed number of bytes per datapoint to store in "
-             "memory) "
+             "memory) Training-Set-Sampling-Rate-For-PQ-Generation"
           << std::endl;
       return 1;
     }
 
     std::string index_prefix_path(indexFilePath);
-    std::string index_params_path = index_prefix_path + "_params.bin";
-    std::string train_file_path = index_prefix_path + "_training_set_float.bin";
     std::string pq_pivots_path = index_prefix_path + "_pq_pivots.bin";
     std::string pq_compressed_vectors_path =
-        index_prefix_path + "_compressed_uint32.bin";
+        index_prefix_path + "_compressed.bin";
     std::string randnsg_path = index_prefix_path + "_unopt.rnsg";
     std::string diskopt_path = index_prefix_path + "_diskopt.rnsg";
 
@@ -66,36 +64,26 @@ namespace NSG {
     unsigned R = (unsigned) atoi(param_list[1].c_str());
     unsigned C = (unsigned) atoi(param_list[2].c_str());
     size_t   num_pq_chunks = (size_t) atoi(param_list[3].c_str());
-
-    std::cout << "loading data.." << std::endl;
-    T* data_load = NULL;
-
-    size_t points_num, dim;
-
-    NSG::load_bin<T>(dataFilePath, data_load, points_num, dim);
-    std::cout << "done." << std::endl;
+    float    training_set_sampling_rate = atof(param_list[4].c_str());
 
     auto s = std::chrono::high_resolution_clock::now();
 
-    size_t train_size;
     float* train_data;
+    size_t train_size, train_dim;
 
-    float p_val = ((float) TRAINING_SET_SIZE / (float) points_num);
     // generates random sample and sets it to train_data and updates train_size
-    gen_random_slice<T>(data_load, points_num, dim, p_val, train_data,
-                        train_size);
+    gen_random_slice<T>(dataFilePath, training_set_sampling_rate, train_data,
+                        train_size, train_dim);
 
     std::cout << "Training loaded of size " << train_size << std::endl;
 
     //  unsigned    nn_graph_deg = (unsigned) atoi(argv[3]);
 
-    generate_pq_pivots(train_data, train_size, dim, 256, num_pq_chunks, 15,
-                       pq_pivots_path);
-    generate_pq_data_from_pivots<T>(data_load, points_num, dim, 256,
-                                    num_pq_chunks, pq_pivots_path,
-                                    pq_compressed_vectors_path);
+    generate_pq_pivots(train_data, train_size, train_dim, 256, num_pq_chunks,
+                       15, pq_pivots_path);
+    generate_pq_data_from_pivots<T>(dataFilePath, 256, num_pq_chunks,
+                                    pq_pivots_path, pq_compressed_vectors_path);
 
-    delete[] data_load;
     delete[] train_data;
 
     NSG::Parameters paras;
@@ -117,15 +105,6 @@ namespace NSG {
     }
 
     _pNsgIndex->save_disk_opt_graph(diskopt_path.c_str());
-
-    uint32_t* params_array = new uint32_t[5];
-    params_array[0] = (uint32_t) L;
-    params_array[1] = (uint32_t) R;
-    params_array[2] = (uint32_t) C;
-    params_array[3] = (uint32_t) dim;
-    params_array[4] = (uint32_t) num_pq_chunks;
-    NSG::save_bin<uint32_t>(index_params_path.c_str(), params_array, 5, 1);
-    std::cout << "Saving params to " << index_params_path << "\n";
 
     auto                          e = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> diff = e - s;
@@ -156,28 +135,44 @@ namespace NSG {
     const std::string index_prefix_path(indexFilePath);
 
     // convert strs into params
-    std::string data_bin = index_prefix_path + "_compressed_uint32.bin";
+    std::string data_bin = index_prefix_path + "_compressed.bin";
     std::string pq_tables_bin = index_prefix_path + "_pq_pivots.bin";
+    std::string node_visit_bin = index_prefix_path + "_visit_ctr.bin";
 
-    // determine nchunks
-    std::string params_path = index_prefix_path + "_params.bin";
-    uint32_t*   params;
-    size_t      nargs, one;
-    load_bin<uint32_t>(params_path.c_str(), params, nargs, one);
+    _u32 dim32, num_points32, num_chunks32, num_centers32, chunk_size32;
+
+    std::ifstream pq_meta_reader(pq_tables_bin, std::ios::binary);
+    pq_meta_reader.read((char*) &num_centers32, sizeof(uint32_t));
+    pq_meta_reader.read((char*) &dim32, sizeof(uint32_t));
+    pq_meta_reader.close();
+
+    std::ifstream compressed_meta_reader(data_bin, std::ios::binary);
+    compressed_meta_reader.read((char*) &num_points32, sizeof(uint32_t));
+    compressed_meta_reader.read((char*) &num_chunks32, sizeof(uint32_t));
+    compressed_meta_reader.close();
 
     // infer chunk_size
-    this->m_dimension = (_u64) params[3];
+    chunk_size32 = DIV_ROUND_UP(dim32, num_chunks32);
+    _u64 m_dimension = (_u64) dim32;
+    _u64 n_chunks = (_u64) num_chunks32;
+    _u64 chunk_size = chunk_size32;
 
-    this->n_chunks = (_u64) params[4];
-    this->chunk_size = (_u64)(this->m_dimension / this->n_chunks);
-    // corrected number of chunks
-    this->n_chunks = DIV_ROUND_UP(this->m_dimension, this->chunk_size);
+    _u64*  node_visit_list = NULL;
+    size_t one = 0, num_cache_nodes = 0;
 
+    if (cache_nlevels == -1 && file_exists(node_visit_bin))
+      NSG::load_bin<_u64>(node_visit_bin.c_str(), node_visit_list,
+                          num_cache_nodes, one);
+    else if (!file_exists(node_visit_bin))
+      cache_nlevels = 2;
+
+    std::string nsg_disk_opt = index_prefix_path + "_diskopt.rnsg";
+    std::string medoids_file = index_prefix_path + "_medoids.bin";
     std::string nsg_disk_opt = index_prefix_path + "_diskopt.rnsg";
 
     this->Lsearch = (_u64) std::atoi(param_list[0].c_str());
     this->beam_width = (_u64) std::atoi(param_list[1].c_str());
-    _u64        cache_nlevels = (_u64) std::atoi(param_list[2].c_str());
+    int         cache_nlevels = (_u64) std::atoi(param_list[2].c_str());
     _u64        nthreads = (_u64) std::atoi(param_list[3].c_str());
     std::string stars(40, '*');
     std::cout << stars << "\nPQ -- n_chunks: " << this->n_chunks
@@ -194,12 +189,15 @@ namespace NSG {
     // load index
     _pFlashIndex->load(data_bin.c_str(), nsg_disk_opt.c_str(),
                        pq_tables_bin.c_str(), this->chunk_size, this->n_chunks,
-                       this->m_dimension, nthreads);
+                       this->m_dimension, nthreads, medoids_file.c_str());
 
     // cache bfs levels
-    _pFlashIndex->cache_bfs_levels(cache_nlevels);
+    if (cache_nlevels > 0)
+      _pFlashIndex->cache_bfs_levels(cache_nlevels);
+    else
+      _pFlashIndex->cache_visited_nodes(node_visit_list, num_cache_nodes);
 
-    free(params);  // Gopal. Caller has to free the 'params' variable.
+    //    free(params);  // Gopal. Caller has to free the 'params' variable.
     return 0;
   }
 

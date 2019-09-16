@@ -3,6 +3,7 @@
 #include "percentile_stats.h"
 
 #include <omp.h>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <iterator>
@@ -11,7 +12,7 @@
 #include "exceptions.h"
 #include "parameters.h"
 #include "timer.h"
-#include "util.h"
+#include "utils.h"
 
 #include "tsl/robin_set.h"
 
@@ -75,20 +76,23 @@ namespace {
 
 namespace NSG {
   template<>
-  PQFlashNSG<_u8>::PQFlashNSG() {
+  PQFlashNSG<_u8>::PQFlashNSG(bool create_node_cache) {
     this->dist_cmp = new DistanceL2UInt8();
+    this->create_visit_cache = create_node_cache;
     //    medoid_nhood.second = nullptr;
   }
 
   template<>
-  PQFlashNSG<_s8>::PQFlashNSG() {
+  PQFlashNSG<_s8>::PQFlashNSG(bool create_node_cache) {
     this->dist_cmp = new DistanceL2Int8();
+    this->create_visit_cache = create_node_cache;
     //    medoid_nhood.second = nullptr;
   }
 
   template<>
-  PQFlashNSG<float>::PQFlashNSG() {
+  PQFlashNSG<float>::PQFlashNSG(bool create_node_cache) {
     this->dist_cmp = new DistanceL2();
+    this->create_visit_cache = create_node_cache;
     //    medoid_nhood.second = nullptr;
   }
 
@@ -167,6 +171,73 @@ namespace NSG {
       NSG::aligned_free((void *) scratch.aligned_pqtable_dist_scratch);
       NSG::aligned_free((void *) scratch.aligned_dist_scratch);
     }
+  }
+
+  /*  This function loads the nhood_cache and coord_cache with cached nodes
+   * present in node_list..
+   *  The num_nodes parameter tells how many nodes to cache. */
+  template<typename T>
+  void PQFlashNSG<T>::cache_visited_nodes(_u64 *node_list, _u64 num_nodes) {
+    // borrow thread data
+    ThreadData<T> this_thread_data = this->thread_data.pop();
+    while (this_thread_data.scratch.sector_scratch == nullptr) {
+      this->thread_data.wait_for_push_notify();
+      this_thread_data = this->thread_data.pop();
+    }
+
+    IOContext ctx = this_thread_data.ctx;
+
+    nhood_cache_buf = new unsigned[num_nodes * 111];
+    memset(nhood_cache_buf, 0, num_nodes * 111);
+
+    _u64 coord_cache_buf_len = num_nodes * aligned_dim;
+    NSG::alloc_aligned((void **) &coord_cache_buf,
+                       coord_cache_buf_len * sizeof(T), 8 * sizeof(T));
+    memset(coord_cache_buf, 0, coord_cache_buf_len * sizeof(T));
+
+    size_t BLOCK_SIZE = 1000;
+    size_t num_blocks = DIV_ROUND_UP(num_nodes, BLOCK_SIZE);
+
+    for (_u64 block = 0; block < num_blocks; block++) {
+      _u64 start_idx = block * BLOCK_SIZE;
+      _u64 end_idx = (std::min)(num_nodes, (block + 1) * BLOCK_SIZE);
+      for (_u64 node_idx = start_idx; node_idx < end_idx; node_idx++) {
+        std::vector<AlignedRead> read_reqs;
+        std::vector<std::pair<_u64, char *>> nhoods;
+        AlignedRead read;
+        char *      buf = nullptr;
+        alloc_aligned((void **) &buf, SECTOR_LEN, SECTOR_LEN);
+        nhoods.push_back(std::make_pair(node_list[node_idx], buf));
+        read.len = SECTOR_LEN;
+        read.buf = buf;
+        read.offset = NODE_SECTOR_NO(node_list[node_idx]) * SECTOR_LEN;
+        read_reqs.push_back(read);
+
+        reader->read(read_reqs, ctx);
+
+        for (auto &nhood : nhoods) {
+          char *node_buf = OFFSET_TO_NODE(nhood.second, nhood.first);
+          T *   node_coords = OFFSET_TO_NODE_COORDS(node_buf);
+          T *   cached_coords = coord_cache_buf + node_idx * aligned_dim;
+          memcpy(cached_coords, node_coords, data_dim * sizeof(T));
+          coord_cache.insert(std::make_pair(nhood.first, cached_coords));
+
+          // insert node nhood into nhood_cache
+          unsigned *node_nhood = OFFSET_TO_NODE_NHOOD(node_buf);
+          _u64      nnbrs = (_u64) *node_nhood;
+          unsigned *nbrs = node_nhood + 1;
+          // std::cerr << "CACHE: nnbrs = " << nnbrs << "\n";
+          std::pair<_u64, unsigned *> cnhood;
+          cnhood.first = nnbrs;
+          cnhood.second = nhood_cache_buf + node_idx * (111);
+          memcpy(cnhood.second, nbrs, nnbrs * sizeof(unsigned));
+          nhood_cache.insert(std::make_pair(nhood.first, cnhood));
+          aligned_free(nhood.second);
+        }
+      }
+    }
+    // return thread data
+    this->thread_data.push(this_thread_data);
   }
 
   template<typename T>
@@ -309,6 +380,24 @@ namespace NSG {
   }
 
   template<typename T>
+  void PQFlashNSG<T>::save_cached_nodes(_u64        num_nodes,
+                                        std::string cache_file_path) {
+    if (this->create_visit_cache) {
+      std::sort(this->node_visit_counter.begin(), node_visit_counter.end(),
+                [](std::pair<_u64, _u32> &left, std::pair<_u64, _u32> &right) {
+                  return left.second > right.second;
+                });
+
+      std::vector<_u64> node_ids;
+      for (_u64 i = 0; i < num_nodes; i++) {
+        node_ids.push_back(this->node_visit_counter[i].first);
+      }
+
+      save_bin<_u64>(cache_file_path.c_str(), node_ids.data(), num_nodes, 1);
+    }
+  }
+
+  template<typename T>
   void PQFlashNSG<T>::load(const char *data_bin, const char *nsg_file,
                            const char *pq_tables_bin, const _u64 chunk_size,
                            const _u64 n_chunks, const _u64 data_dim,
@@ -333,9 +422,25 @@ namespace NSG {
               << ", ndims: " << data_dim << ", aligned_dim: " << aligned_dim
               << std::endl;
 
+    if (this->create_visit_cache) {
+      this->node_visit_counter.resize(npts_u64);
+      for (_u64 i = 0; i < node_visit_counter.size(); i++) {
+        this->node_visit_counter[i].first = i;
+        this->node_visit_counter[i].second = 0;
+      }
+    }
+
     // read nsg metadata
+    size_t        actual_index_size = get_file_size(nsg_file);
     std::ifstream nsg_meta(nsg_file, std::ios::binary);
-    _u64          nnodes;
+    size_t        expected_file_size;
+    READ_U64(nsg_meta, expected_file_size);
+    if (actual_index_size != expected_file_size) {
+      std::cout << "File size mismatch for " << nsg_file
+                << " with meta-data size" << expected_file_size << std::endl;
+      exit(-1);
+    }
+    _u64 nnodes;
     READ_U64(nsg_meta, nnodes);
     std::cout << "nnodes: " << nnodes << std::endl;
     assert(nnodes == n_base);
@@ -519,13 +624,12 @@ namespace NSG {
       }
     }
 
-    unsigned counter = 0;
-
 // compute medoid nhood <-> query distances
 #ifdef USE_ACCELERATED_PQ
     compute_dists(medoid_nhoods[best_medoid].second,
                   medoid_nhoods[best_medoid].first, dist_scratch);
 #endif
+
     _u64 tmp_l = 0;
     // add each neighbor of medoid
     for (; tmp_l < l_search && tmp_l < medoid_nhoods[best_medoid].first;
@@ -581,8 +685,22 @@ namespace NSG {
       _u64 marker = k - 1;
       while (++marker < l_search && frontier.size() < beam_width) {
         if (retset[marker].flag) {
-          frontier.push_back(retset[marker].id);
+          auto iter = nhood_cache.find(retset[marker].id);
+          if (iter != nhood_cache.end()) {
+            cached_nhoods.push_back(
+                std::make_pair(retset[marker].id, iter->second));
+            if (stats != nullptr) {
+              stats->n_cache_hits++;
+            }
+          } else {
+            frontier.push_back(retset[marker].id);
+          }
           retset[marker].flag = false;
+          if (this->create_visit_cache) {
+            reinterpret_cast<std::atomic<_u32> &>(
+                this->node_visit_counter[retset[marker].id].second)
+                .fetch_add(1);
+          }
         }
       }
 
@@ -591,24 +709,16 @@ namespace NSG {
         hops++;
         for (_u64 i = 0; i < frontier.size(); i++) {
           unsigned id = frontier[i];
-          auto     iter = nhood_cache.find(id);
-          if (iter != nhood_cache.end()) {
-            cached_nhoods.push_back(std::make_pair(id, iter->second));
-            if (stats != nullptr) {
-              stats->n_cache_hits++;
-            }
-          } else {
-            std::pair<_u64, char *> fnhood;
-            fnhood.first = id;
-            fnhood.second = sector_scratch + sector_scratch_idx * SECTOR_LEN;
-            sector_scratch_idx++;
-            frontier_nhoods.push_back(fnhood);
-            frontier_read_reqs.emplace_back(NODE_SECTOR_NO(id) * SECTOR_LEN,
-                                            SECTOR_LEN, fnhood.second);
-            if (stats != nullptr) {
-              stats->n_4k++;
-              stats->n_ios++;
-            }
+          std::pair<_u64, char *> fnhood;
+          fnhood.first = id;
+          fnhood.second = sector_scratch + sector_scratch_idx * SECTOR_LEN;
+          sector_scratch_idx++;
+          frontier_nhoods.push_back(fnhood);
+          frontier_read_reqs.emplace_back(NODE_SECTOR_NO(id) * SECTOR_LEN,
+                                          SECTOR_LEN, fnhood.second);
+          if (stats != nullptr) {
+            stats->n_4k++;
+            stats->n_ios++;
           }
         }
         io_timer.reset();
@@ -623,6 +733,8 @@ namespace NSG {
           //   retset[k].flag = false;
           //   unsigned n = retset[k].id;
           // }
+          //
+
           char *node_disk_buf =
               OFFSET_TO_NODE(frontier_nhood.second, frontier_nhood.first);
           unsigned *node_buf = OFFSET_TO_NODE_NHOOD(node_disk_buf);
@@ -686,59 +798,59 @@ namespace NSG {
             }
           }
         }
+      }
 
-        // process cached nhoods
-        for (auto &cached_nhood : cached_nhoods) {
-          auto  global_cache_iter = coord_cache.find(cached_nhood.first);
-          T *   node_fp_coords_copy = global_cache_iter->second;
-          float cur_expanded_dist =
-              dist_cmp->compare(query, node_fp_coords_copy, aligned_dim);
-          full_retset.push_back(
-              Neighbor(cached_nhood.first, cur_expanded_dist, true));
+      // process cached nhoods
+      for (auto &cached_nhood : cached_nhoods) {
+        auto  global_cache_iter = coord_cache.find(cached_nhood.first);
+        T *   node_fp_coords_copy = global_cache_iter->second;
+        float cur_expanded_dist =
+            dist_cmp->compare(query, node_fp_coords_copy, aligned_dim);
+        full_retset.push_back(
+            Neighbor(cached_nhood.first, cur_expanded_dist, true));
 
-          _u64      nnbrs = cached_nhood.second.first;
-          unsigned *node_nbrs = cached_nhood.second.second;
+        _u64      nnbrs = cached_nhood.second.first;
+        unsigned *node_nbrs = cached_nhood.second.second;
 
 #ifdef USE_ACCELERATED_PQ
-          // compute node_nbrs <-> query dists in PQ space
-          compute_dists(node_nbrs, nnbrs, dist_scratch);
+        // compute node_nbrs <-> query dists in PQ space
+        compute_dists(node_nbrs, nnbrs, dist_scratch);
 #else
-          // issue prefetches
-          for (_u64 m = 0; m < nnbrs; ++m) {
-            unsigned next_id = node_nbrs[m];
-            _mm_prefetch((char *) data + next_id * n_chunks, _MM_HINT_T1);
-          }
+        // issue prefetches
+        for (_u64 m = 0; m < nnbrs; ++m) {
+          unsigned next_id = node_nbrs[m];
+          _mm_prefetch((char *) data + next_id * n_chunks, _MM_HINT_T1);
+        }
 #endif
-          // process prefetched nhood
-          for (_u64 m = 0; m < nnbrs; ++m) {
-            unsigned id = node_nbrs[m];
-            if (visited.find(id) != visited.end()) {
-              continue;
-            } else {
-              visited.insert(id);
-              cmps++;
+        // process prefetched nhood
+        for (_u64 m = 0; m < nnbrs; ++m) {
+          unsigned id = node_nbrs[m];
+          if (visited.find(id) != visited.end()) {
+            continue;
+          } else {
+            visited.insert(id);
+            cmps++;
 #ifdef USE_ACCELERATED_PQ
-              float dist = dist_scratch[m];
+            float dist = dist_scratch[m];
 #else
-              pq_table.convert(data + id * n_chunks, scratch);
-              float dist = dist_cmp->compare(scratch, query, aligned_dim);
+            pq_table.convert(data + id * n_chunks, scratch);
+            float dist = dist_cmp->compare(scratch, query, aligned_dim);
 #endif
-              // std::cout << "cmp: " << id << ", dist: " << dist << std::endl;
-              // std::cerr << "dist: " << dist << std::endl;
-              if (stats != nullptr) {
-                stats->n_cmps++;
-              }
-              if (dist >= retset[l_search - 1].distance)
-                continue;
-              Neighbor nn(id, dist, true);
-              _u64     r = InsertIntoPool(
-                  retset.data(), l_search,
-                  nn);  // Return position in sorted list where nn inserted.
-              if (r < nk)
-                nk = r;  // nk logs the best position in the retset that was
-                         // updated
-                         // due to neighbors of n.
+            // std::cout << "cmp: " << id << ", dist: " << dist << std::endl;
+            // std::cerr << "dist: " << dist << std::endl;
+            if (stats != nullptr) {
+              stats->n_cmps++;
             }
+            if (dist >= retset[l_search - 1].distance)
+              continue;
+            Neighbor nn(id, dist, true);
+            _u64     r = InsertIntoPool(
+                retset.data(), l_search,
+                nn);  // Return position in sorted list where nn inserted.
+            if (r < nk)
+              nk = r;  // nk logs the best position in the retset that was
+            // updated
+            // due to neighbors of n.
           }
         }
       }
