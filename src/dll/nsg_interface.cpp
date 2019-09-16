@@ -8,7 +8,7 @@
 #include "dll/nsg_interface.h"
 #include "index_nsg.h"
 #include "partition_and_pq.h"
-#include "util.h"
+#include "utils.h"
 
 namespace NSG {
 
@@ -160,20 +160,20 @@ namespace NSG {
     _u64*  node_visit_list = NULL;
     size_t one = 0, num_cache_nodes = 0;
 
+    std::string nsg_disk_opt = index_prefix_path + "_diskopt.rnsg";
+    std::string medoids_file = index_prefix_path + "_medoids.bin";
+
+    this->Lsearch = (_u64) std::atoi(param_list[0].c_str());
+    this->beam_width = (_u64) std::atoi(param_list[1].c_str());
+    int         cache_nlevels = (_u64) std::atoi(param_list[2].c_str());
+    _u64        nthreads = (_u64) std::atoi(param_list[3].c_str());
+
     if (cache_nlevels == -1 && file_exists(node_visit_bin))
       NSG::load_bin<_u64>(node_visit_bin.c_str(), node_visit_list,
                           num_cache_nodes, one);
     else if (!file_exists(node_visit_bin))
       cache_nlevels = 2;
 
-    std::string nsg_disk_opt = index_prefix_path + "_diskopt.rnsg";
-    std::string medoids_file = index_prefix_path + "_medoids.bin";
-    std::string nsg_disk_opt = index_prefix_path + "_diskopt.rnsg";
-
-    this->Lsearch = (_u64) std::atoi(param_list[0].c_str());
-    this->beam_width = (_u64) std::atoi(param_list[1].c_str());
-    int         cache_nlevels = (_u64) std::atoi(param_list[2].c_str());
-    _u64        nthreads = (_u64) std::atoi(param_list[3].c_str());
     std::string stars(40, '*');
     std::cout << stars << "\nPQ -- n_chunks: " << this->n_chunks
               << ", chunk_size: " << this->chunk_size

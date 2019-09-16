@@ -57,12 +57,12 @@ namespace NSG {
   // Initialize an index with metric m, load the data of type T with filename
   // (bin), and initialize max_points
   template<typename T, typename TagT>
-  IndexNSG<T, TagT>::IndexNSG(Metric m, const std::string &filename,
+  IndexNSG<T, TagT>::IndexNSG(Metric m, const char* filename,
                               const size_t max_points, const size_t nd,
                               const bool enable_tags)
       : _has_built(false), _width(0), _can_delete(false),
         _enable_tags(enable_tags), _consolidated_order(true) {
-    load_aligned_bin<T>(filename, _data, _nd, _dim, _aligned_dim);
+    load_aligned_bin<T>(std::string(filename), _data, _nd, _dim, _aligned_dim);
     // data is stored to _nd * aligned_dim matrix with necessary zero-padding
     std::cout << "#points in file: " << _nd << ", dim: " << _dim
               << ", rounded_dim: " << _aligned_dim << std::endl;
@@ -495,10 +495,10 @@ namespace NSG {
   }
 
   template<typename T, typename TagT>
-  void IndexNSG<T, TagT>::save(const std::string &filename) {
+  void IndexNSG<T, TagT>::save(const char* filename) {
     long long     total_gr_edges = 0;
     size_t        index_size = 0;
-    std::ofstream out(filename, std::ios::binary | std::ios::out);
+    std::ofstream out(std::string(filename), std::ios::binary | std::ios::out);
 
     assert(_final_graph.size() == _max_points);
     if (_enable_tags) {
@@ -540,8 +540,8 @@ namespace NSG {
 
   // load the SNG index if pre-computed
   template<typename T, typename TagT>
-  void IndexNSG<T, TagT>::load(const std::string &filename) {
-    std::ifstream in(filename, std::ios::binary);
+  void IndexNSG<T, TagT>::load(const char* filename) {
+    std::ifstream in(std::string(filename), std::ios::binary);
     in.seekg(0, in.end);
     size_t expected_file_size;
     size_t actual_file_size = in.tellg();
@@ -1855,7 +1855,7 @@ namespace NSG {
     */
 
   template<typename T, typename TagT>
-  void IndexNSG<T, TagT>::save_disk_opt_graph(const std::string &diskopt_path) {
+  void IndexNSG<T, TagT>::save_disk_opt_graph(const char* diskopt_path) {
     const _u64 SECTOR_LEN = 4096;
     std::cout << "Embedding node coords with its nhood" << std::endl;
     size_t npts_u64 = _nd, ndims_u64 = _dim;
@@ -1864,7 +1864,7 @@ namespace NSG {
     _u64 write_blk_size = 256l * 1024l * 1024l;
 
     // create cached reader + writer
-    cached_ofstream nsg_writer(diskopt_path, write_blk_size);
+    cached_ofstream nsg_writer(std::string(diskopt_path), write_blk_size);
 
     // compute
     _u64 max_node_len, nnodes_per_sector;
