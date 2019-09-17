@@ -1,6 +1,25 @@
-Build:
+##Linux build and usage (incomplete):
 
-Windows:
+Install the following packages through apt-get, and Intel MKL either by downloading the installer or using [apt](https://software.intel.com/en-us/articles/installing-intel-free-libs-and-python-apt-repo) (we tested with build 2019.4-070).
+```
+sudo apt install cmake g++ libaio-dev libgoogle-perftools-dev clang-format-4.0
+```
+
+Build
+```
+mkdir build && cd build && cmake .. && make -j
+```
+
+**Usage**
+```
+@Ravi, could you please fill in.
+```
+
+##Windows solution file. (@Gopal Please check for accuracy and add any extra instructions if needed. I dont know instructions for building DLL and REST APIs. )
+- Install MKL??
+- Open nsg.sln file in the root folder and build with release/x64 configuration to generate DLLs and other driver files.
+
+##Windows CMake Build:
 
 Install MKL:
 -	Install MKL from https://software.intel.com/en-us/mkl
@@ -26,11 +45,3 @@ build_disk_index.exe float "E:\sift1m_u8\sift1m_float_harsha\sift_base.bin" E:\c
 search_disk_index float E:\cmake-sift\disk-index_L50_R64_C750 E:\sift1m_u8\sift1m_float_harsha\sift_query.bin E:\sift1m_u8\sift1m_float_harsha\sift_query_gs100.bin E:\sift1m_u8\sift1m_float_harsha\sift_query_gs100_dist.bin 5
 
 
-UNIX (NOT COMPLETE):
--	Install the following packages
-o	cmake
-o	g++ 
-o	Intel MKL:  https://software.intel.com/en-us/articles/installing-intel-free-libs-and-python-apt-repo
-o	libaio-dev
-o	libgoogle-perftools-dev
-o	clang-format-4.0
