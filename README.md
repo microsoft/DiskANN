@@ -17,9 +17,10 @@ mkdir build && cd build && cmake .. && make -j
 
 ##Windows solution file. (@Gopal Please check for accuracy and add any extra instructions if needed. I dont know instructions for building DLL and REST APIs. )
 - Install MKL??
-- Open nsg.sln file in the root folder and build with release/x64 configuration to generate DLLs and other driver files.
+- Open nsg.sln file in the root folder and build with release/x64 configuration to generate DLLs and other driver files.\
+- @Gopal: Should we add usage instructions for DLLs/REST APIs/drivers?
 
-##Windows CMake Build:
+##Windows CMake Build: (@Gopal: I guess DLLs build is still not supported here?)
 
 Install MKL:
 -	Install MKL from https://software.intel.com/en-us/mkl
