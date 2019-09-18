@@ -2,7 +2,7 @@
 #include <webservice/disk_nsg_search.h>
 #include <ctime>
 #include <iomanip>
-#include "util.h"
+#include "utils.h"
 
 namespace NSG {
   const unsigned int DEFAULT_BEAM_WIDTH = 8;
