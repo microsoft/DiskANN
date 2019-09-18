@@ -33,13 +33,8 @@ namespace NSG {
 
     void populate_start_points_bfs(std::vector<unsigned> &start_points);
 
-    std::pair<int, int> beam_search(const T *query, const size_t K,
-                                    const Parameters &parameters,
-                                    unsigned *indices, int beam_width,
-                                    std::vector<unsigned> start_points);
-
     std::pair<int, int> beam_search_tags(const T *query, const size_t K,
-                                         const Parameters &parameters,
+                                         const size_t L,
                                          TagT *tags, int beam_width,
                                          std::vector<unsigned> &start_points,
                                          unsigned *indices_buffer = NULL);
@@ -49,7 +44,7 @@ namespace NSG {
     // Gopal. Added beam_search overload that takes L as parameter, so that we
     // can customize L on a per-query basis without tampering with "Parameters"
     std::pair<int, int> beam_search(const T *query, const size_t K,
-                                    const unsigned int L, unsigned *indices,
+                                    const size_t L, unsigned *indices,
                                     int                    beam_width,
                                     std::vector<unsigned> &start_points);
 
@@ -69,10 +64,6 @@ namespace NSG {
 
     // Return -1 if tag not found, 0 if OK.
     int delete_point(const TagT tag);
-
-    void truncate_degree(Parameters &parameters, unsigned new_degree);
-    /*  Internals of the library */
-    //    void set_data(const T *data);
 
    protected:
     typedef std::vector<std::vector<unsigned>> CompactGraph;

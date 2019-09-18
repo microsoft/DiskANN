@@ -1283,91 +1283,8 @@ namespace NSG {
     }
   }
 
-  /*truncate degree of rand-nsg index */
-  template<typename T, typename TagT>
-  void IndexNSG<T, TagT>::truncate_degree(Parameters &parameters,
-                                          unsigned new_degree) {
-    //    The graph will be updated periodically in NUM_SYNCS batches
-    uint32_t NUM_SYNCS = DIV_ROUND_UP(_nd, (128 * 1024));
-    if (_nd < (1 << 22))
-      NUM_SYNCS = 4 * NUM_SYNCS;
-    std::cout << "Number of syncs: " << NUM_SYNCS << std::endl;
 
-    auto cut_graph_ = new vecNgh[_nd];
-
-    unsigned progress_counter = 0;
-    //    unsigned old_degree = parameters.Get<unsigned>("R");
-    parameters.Set<unsigned>("R", new_degree);
-    unsigned range = new_degree;
-    _width = new_degree;
-
-    size_t round_size = DIV_ROUND_UP(_nd, NUM_SYNCS);  // size of each batch
-
-    for (uint32_t sync_num = 0; sync_num < NUM_SYNCS; sync_num++) {
-      size_t start_id = sync_num * round_size;
-      size_t end_id = (std::min)(_nd, (sync_num + 1) * round_size);
-      size_t round_size = end_id - start_id;
-
-      size_t PAR_BLOCK_SZ =
-          round_size > 1 << 20 ? 1 << 12 : (round_size + 256) / 256;
-      size_t nblocks = DIV_ROUND_UP(round_size, PAR_BLOCK_SZ);
-
-#pragma omp parallel for schedule(dynamic, 1)
-      for (_s64 block = 0; block < (_s64) nblocks;
-           ++block) {  // Gopal. changed from size_t to _s64
-        std::vector<Neighbor>    pool, tmp;
-        tsl::robin_set<unsigned> visited;
-
-        for (size_t n = start_id + block * PAR_BLOCK_SZ;
-             n < start_id + (std::min<size_t>) (round_size,
-                                                (block + 1) * PAR_BLOCK_SZ);
-             ++n) {
-          pool.clear();
-          tmp.clear();
-          visited.clear();
-
-          // sync_prune will check pool, and remove some of the points and
-          // create a cut_graph, which contains neighbors for point n
-          sync_prune(_data + (size_t) _aligned_dim * n, n, pool, parameters,
-                     visited, cut_graph_[n]);
-        }
-      }
-
-#pragma omp parallel for schedule(static, PAR_BLOCK_SZ)
-
-      for (_s64 node = (_s64) start_id; node < (_s64) end_id; ++node) {
-        // clear all the neighbors of _final_graph[node]
-        _final_graph[node].clear();
-        _final_graph[node].reserve(range);
-        assert(!cut_graph_[node].empty());
-        for (auto link : cut_graph_[node]) {
-          _final_graph[node].emplace_back(link.id);
-          assert(link.id >= 0 && link.id < _nd);
-        }
-        assert(_final_graph[node].size() <= range);
-      }
-
-      if ((sync_num * 100) / NUM_SYNCS > progress_counter) {
-        std::cout << "Completed  (sync: " << sync_num << "/" << NUM_SYNCS
-                  << ") with alpha=" << parameters.Get<float>("alpha")
-                  << std::endl;
-        progress_counter += 5;
-      }
-
-#pragma omp parallel for schedule(static, PAR_BLOCK_SZ)
-      for (_s64 n = start_id; n < (_s64) end_id;
-           ++n) {  // Gopal. from unsigned n to int n for openmp
-        auto node = n;
-        assert(!cut_graph_[node].empty());
-        cut_graph_[node].clear();
-        cut_graph_[node].shrink_to_fit();
-      }
-    }
-
-    delete[] cut_graph_;
-  }
-
-  /* LinkHierarchy():
+  /* Link():
    * The graph creation function.
    */
   template<typename T, typename TagT>
@@ -1546,15 +1463,7 @@ namespace NSG {
 
   template<typename T, typename TagT>
   std::pair<int, int> IndexNSG<T, TagT>::beam_search(
-      const T *query, const size_t K, const Parameters &parameters,
-      unsigned *indices, int beam_width, std::vector<unsigned> start_points) {
-    const unsigned int L = parameters.Get<unsigned>("L_search");
-    return beam_search(query, K, L, indices, beam_width, start_points);
-  }
-
-  template<typename T, typename TagT>
-  std::pair<int, int> IndexNSG<T, TagT>::beam_search(
-      const T *query, const size_t K, const unsigned L, unsigned *indices,
+      const T *query, const size_t K, const size_t L, unsigned *indices,
       int beam_width, std::vector<unsigned> &start_points) {
     //    _data = x;
 
@@ -1703,157 +1612,7 @@ namespace NSG {
     }
     return std::make_pair(hops, cmps);
   }
-  /*
-    // INT8 specialization
-    template<>
-    void IndexNSG<_s8>::iterate_to_fixed_point(
-        const _s8 *query, const Parameters &parameter,
-        std::vector<unsigned> &init_ids, std::vector<Neighbor> &retset,
-        std::vector<Neighbor> &fullset, tsl::robin_set<unsigned> &visited) {
-      const unsigned L = parameter.Get<unsigned>("L");
-
-      // put random L new ids into visited list and init_ids list
-      while (init_ids.size() < L) {
-        unsigned id = (rand() * rand() * rand()) % _nd;
-        if (visited.find(id) != visited.end())
-          continue;
-        else
-          visited.insert(id);
-        init_ids.emplace_back(id);
-      }
-
-      // nodes to compare against in iterations
-      unsigned unvisited_nbrs[256] = {0}, unvisited_nnbrs = 0;
-      float    unvisited_nbrs_dists[256] = {0.0f};
-
-      // lambdas as helpers
-      // filters all unvisited nodes and places them into out_nbrs. Additonally,
-      // also inserts out_nbrs into visited
-      auto filter_visited_a_ndmark_visited = [this, &visited](
-          const unsigned *nbrs, const unsigned nnbrs, unsigned *out_nbrs,
-          unsigned &out_nnbrs) {
-        out_nnbrs = 0;
-        for (unsigned i = 0; i < nnbrs; i++) {
-          unsigned idx = nbrs[i];
-          bool     is_not_visited = (visited.find(idx) == visited.end());
-          if (is_not_visited) {
-            const _s8 *point_coords = this->_data + this->_aligned_dim * idx;
-            // also issue prefetches to bring vector into L2 --> prefetch easier
-            // from L2->L1 later
-            NSG::prefetch_vector_l2((const char *) point_coords,
-                                    this->_aligned_dim * sizeof(_s8));
-            out_nbrs[out_nnbrs++] = idx;
-          }
-        }
-        visited.insert(out_nbrs, out_nbrs + out_nnbrs);
-      };
-
-      auto batch_compute_distances = [this](
-          const _s8 *query, const unsigned *nbrs, const unsigned nnbrs,
-          float *out_dists) {
-        NSG::prefetch_vector(
-            (const char *) (this->_data + (this->_aligned_dim * nbrs[0])),
-            this->_aligned_dim * sizeof(_s8));
-        for (unsigned i = 0; i < nnbrs; i++) {
-          // prefetch next coordinates from L2 -> L1 (2 cycles for L2 hit +
-          // 128-dim vectors)
-          if (i < nnbrs - 1) {
-            NSG::prefetch_vector(
-                (const char *) (this->_data + (this->_aligned_dim * nbrs[i +
-    1])),
-                this->_aligned_dim * sizeof(_s8));
-          }
-          const _s8 *point_coords = this->_data + (this->_aligned_dim *
-    nbrs[i]);
-          out_dists[i] =
-              this->_distance->compare(query, point_coords, this->_aligned_dim);
-        }
-      };
-
-      // compare distance of all points in init_ids with query, and put the id
-      // with distance
-      // in retset
-      //
-      unsigned l = 0;
-      for (auto id : init_ids) {
-        assert(id < _nd);
-        retset[l++] =
-            Neighbor(id,
-                     _distance->compare(_data + _aligned_dim * (size_t) id,
-    query,
-                                        _aligned_dim),
-                     true);
-      }
-
-      // sort retset based on distance of each point to query
-      std::sort(retset.begin(), retset.begin() + l);
-      int k = 0;
-      while (k < (int) l) {
-        int nk = l;
-        if (!retset[k].flag)
-          k++;
-
-        retset[k].flag = false;
-        unsigned n = retset[k].id;
-
-        // prefetch _final_graph[n]
-        unsigned *nbrs = _final_graph[n].data();   // nbrs: data of neighbors
-        unsigned  nnbrs = _final_graph[n].size();  // nnbrs: number of neighbors
-
-        // prefetch nnbrs
-        NSG::prefetch_vector((const char *) nbrs, nnbrs * sizeof(unsigned));
-
-        // filter nbrs into compare_ids
-        filter_visited_a_ndmark_visited(nbrs, nnbrs, unvisited_nbrs,
-                                        unvisited_nnbrs);
-
-        // batch prefetch all unvisited vectors into L2
-        for (_u64 i = 0; i < unvisited_nnbrs; i++) {
-          const _s8 *vec = this->_data + (unvisited_nbrs[i] *
-    this->_aligned_dim);
-          NSG::prefetch_vector_l2((const char *) vec,
-                                  this->_aligned_dim * sizeof(_s8));
-        }
-
-        // prefetch query
-        NSG::prefetch_vector((const char *) query,
-                             this->_aligned_dim * sizeof(_s8));
-
-        // batch compute distances to unvisited nodes
-        batch_compute_distances(query, unvisited_nbrs, unvisited_nnbrs,
-                                unvisited_nbrs_dists);
-
-        // prefetch distances vector (should be in L1/L2)
-        NSG::prefetch_vector((const char *) unvisited_nbrs_dists,
-                             unvisited_nnbrs * sizeof(float));
-        NSG::prefetch_vector((const char *) unvisited_nbrs,
-                             unvisited_nnbrs * sizeof(unsigned));
-
-        NSG::prefetch_vector((const char *) retset.data(),
-                             retset.size() * sizeof(Neighbor));
-
-        for (size_t m = 0; m < unvisited_nnbrs; m++) {
-          unsigned id = unvisited_nbrs[m];  // id = neighbor
-          // compare distance of id with query
-          float    dist = unvisited_nbrs_dists[m];
-          Neighbor nn(id, dist, true);
-          fullset.push_back(nn);
-          if (dist >= retset[l - 1].distance)
-            continue;
-
-          // if distance is smaller than largest, add to retset, keep it sorted
-          int r = InsertIntoPool(retset.data(), l, nn);
-
-          if (l + 1 < retset.size())
-            ++l;
-          if (r < nk)
-            nk = r;
-        }
-      }
-      assert(!fullset.empty());
-    }
-    */
-
+  
   template<typename T, typename TagT>
   void IndexNSG<T, TagT>::save_disk_opt_graph(const char* diskopt_path) {
     const _u64 SECTOR_LEN = 4096;
@@ -1946,13 +1705,13 @@ namespace NSG {
 
   template<typename T, typename TagT>
   std::pair<int, int> IndexNSG<T, TagT>::beam_search_tags(
-      const T *query, const size_t K, const Parameters &parameters, TagT *tags,
+      const T *query, const size_t K, const size_t L, TagT *tags,
       int beam_width, std::vector<unsigned> &start_points,
       unsigned *indices_buffer) {
     const bool alloc = indices_buffer == NULL;
     auto       indices = alloc ? new unsigned[K] : indices_buffer;
     auto       ret =
-        beam_search(query, K, parameters, indices, beam_width, start_points);
+        beam_search(query, K, L, indices, beam_width, start_points);
     for (int i = 0; i < (int) K; ++i)
       tags[i] = _point_to_tag[indices[i]];
     if (alloc)
@@ -1999,11 +1758,110 @@ namespace NSG {
   template NSGDLLEXPORT void IndexNSG<float, int>::build(
       Parameters &parameters, const std::vector<int> &tags);
 
+
+    template NSGDLLEXPORT std::pair<int, int>
+                        IndexNSG<uint8_t>::beam_search(const uint8_t *query, const size_t K,
+                                           const size_t L, unsigned *indices,
+                                           int                    beam_width,
+                                           std::vector<unsigned> &start_points);
+  template NSGDLLEXPORT std::pair<int, int>
+                        IndexNSG<int8_t>::beam_search(const int8_t *query, const size_t K,
+                                           const size_t L, unsigned *indices,
+                                           int                    beam_width,
+                                           std::vector<unsigned> &start_points);
+    template NSGDLLEXPORT std::pair<int, int>
+                          IndexNSG<float>::beam_search(
+        const float *query, const size_t K, const size_t L, unsigned *indices,
+        int beam_width, std::vector<unsigned> &start_points);
+
+
   template NSGDLLEXPORT void IndexNSG<uint8_t, int>::save_disk_opt_graph(
       const char *diskopt_path);
   template NSGDLLEXPORT void IndexNSG<int8_t, int>::save_disk_opt_graph(
       const char *diskopt_path);
   template NSGDLLEXPORT void IndexNSG<float, int>::save_disk_opt_graph(
       const char *diskopt_path);
+
+  template NSGDLLEXPORT int IndexNSG<int8_t, int>::delete_point(const int tag);
+  template NSGDLLEXPORT int IndexNSG<uint8_t, int>::delete_point(const int tag);
+  template NSGDLLEXPORT int IndexNSG<float, int>::delete_point(const int tag);
+  template NSGDLLEXPORT int IndexNSG<int8_t, size_t>::delete_point(const size_t tag);
+  template NSGDLLEXPORT int IndexNSG<uint8_t, size_t>::delete_point(const size_t tag);
+  template NSGDLLEXPORT int IndexNSG<float, size_t>::delete_point(const size_t tag);
+  template NSGDLLEXPORT int IndexNSG<int8_t, std::string>::delete_point(const std::string tag);
+  template NSGDLLEXPORT int IndexNSG<uint8_t, std::string>::delete_point(const std::string tag);
+  template NSGDLLEXPORT int IndexNSG<float, std::string>::delete_point(const std::string tag);
+
+  template NSGDLLEXPORT int IndexNSG<int8_t, int>::disable_delete(
+      const Parameters &parameters, const bool consolidate);
+  template NSGDLLEXPORT int IndexNSG<uint8_t, int>::disable_delete(
+      const Parameters &parameters, const bool consolidate);
+  template NSGDLLEXPORT int IndexNSG<float, int>::disable_delete(
+      const Parameters &parameters, const bool consolidate);
+  template NSGDLLEXPORT int IndexNSG<int8_t, size_t>::disable_delete(
+      const Parameters &parameters, const bool consolidate);
+  template NSGDLLEXPORT int IndexNSG<uint8_t, size_t>::disable_delete(
+      const Parameters &parameters, const bool consolidate);
+  template NSGDLLEXPORT int IndexNSG<float, size_t>::disable_delete(
+      const Parameters &parameters, const bool consolidate);
+  template NSGDLLEXPORT int IndexNSG<int8_t, std::string>::disable_delete(
+      const Parameters &parameters, const bool consolidate);
+  template NSGDLLEXPORT int IndexNSG<uint8_t, std::string>::disable_delete(
+      const Parameters &parameters, const bool consolidate);
+  template NSGDLLEXPORT int IndexNSG<float, std::string>::disable_delete(
+      const Parameters &parameters, const bool consolidate);
+  
+
+   template NSGDLLEXPORT int IndexNSG<int8_t, int>::enable_delete();
+  template NSGDLLEXPORT int IndexNSG<uint8_t, int>::enable_delete();
+   template NSGDLLEXPORT int IndexNSG<float, int>::enable_delete();
+  template NSGDLLEXPORT int  IndexNSG<int8_t, size_t>::enable_delete();
+  template NSGDLLEXPORT int  IndexNSG<uint8_t, size_t>::enable_delete();
+  template NSGDLLEXPORT int  IndexNSG<float, size_t>::enable_delete();
+  template NSGDLLEXPORT int  IndexNSG<int8_t, std::string>::enable_delete();
+  template NSGDLLEXPORT int  IndexNSG<uint8_t, std::string>::enable_delete();
+  template NSGDLLEXPORT int  IndexNSG<float, std::string>::enable_delete();
+  
+  template NSGDLLEXPORT int IndexNSG<int8_t, int>::insert_point(
+      const int8_t *point, const Parameters &parameters,
+      std::vector<Neighbor> &pool, std::vector<Neighbor> &tmp,
+      tsl::robin_set<unsigned> &visited, vecNgh &cut_graph, const int tag);
+  template NSGDLLEXPORT int IndexNSG<uint8_t, int>::insert_point(
+      const uint8_t *point, const Parameters &parameters,
+      std::vector<Neighbor> &pool, std::vector<Neighbor> &tmp,
+      tsl::robin_set<unsigned> &visited, vecNgh &cut_graph, const int tag);
+  template NSGDLLEXPORT int IndexNSG<float, int>::insert_point(
+      const float *point, const Parameters &parameters,
+      std::vector<Neighbor> &pool, std::vector<Neighbor> &tmp,
+      tsl::robin_set<unsigned> &visited, vecNgh &cut_graph, const int tag);
+  template NSGDLLEXPORT int IndexNSG<int8_t, size_t>::insert_point(
+      const int8_t *point, const Parameters &parameters,
+      std::vector<Neighbor> &pool, std::vector<Neighbor> &tmp,
+      tsl::robin_set<unsigned> &visited, vecNgh &cut_graph, const size_t tag);
+  template NSGDLLEXPORT int IndexNSG<uint8_t, size_t>::insert_point(
+      const uint8_t *point, const Parameters &parameters,
+      std::vector<Neighbor> &pool, std::vector<Neighbor> &tmp,
+      tsl::robin_set<unsigned> &visited, vecNgh &cut_graph, const size_t tag);
+  template NSGDLLEXPORT int IndexNSG<float, size_t>::insert_point(
+      const float *point, const Parameters &parameters,
+      std::vector<Neighbor> &pool, std::vector<Neighbor> &tmp,
+      tsl::robin_set<unsigned> &visited, vecNgh &cut_graph, const size_t tag);
+  template NSGDLLEXPORT int IndexNSG<int8_t, std::string>::insert_point(
+      const int8_t *point, const Parameters &parameters,
+      std::vector<Neighbor> &pool, std::vector<Neighbor> &tmp,
+      tsl::robin_set<unsigned> &visited, vecNgh &cut_graph,
+      const std::string tag);
+  template NSGDLLEXPORT int IndexNSG<uint8_t, std::string>::insert_point(
+      const uint8_t *point, const Parameters &parameters,
+      std::vector<Neighbor> &pool, std::vector<Neighbor> &tmp,
+      tsl::robin_set<unsigned> &visited, vecNgh &cut_graph,
+      const std::string tag);
+  template NSGDLLEXPORT int IndexNSG<float, std::string>::insert_point(
+      const float *point, const Parameters &parameters,
+      std::vector<Neighbor> &pool, std::vector<Neighbor> &tmp,
+      tsl::robin_set<unsigned> &visited, vecNgh &cut_graph,
+      const std::string tag);
+
+
 #endif
 }  // namespace NSG

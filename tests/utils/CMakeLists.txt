@@ -1,15 +1,5 @@
 set(CMAKE_CXX_STANDARD 14)
 
-
-add_executable(truncate_rnsg truncate_rnsg.cpp)
-if(MSVC)
-	target_link_options(truncate_rnsg PRIVATE /MACHINE:x64)
-	target_link_libraries(truncate_rnsg debug ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG}/nsg_lib.lib)
-	target_link_libraries(truncate_rnsg optimized ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE}/nsg_lib.lib)
-else() 
-	target_link_libraries(truncate_rnsg ${PROJECT_NAME} -ltcmalloc)
-endif()
-
 add_executable(fvecs_to_bin fvecs_to_bin.cpp)
 if(MSVC)
 	target_link_options(fvecs_to_bin PRIVATE /MACHINE:x64)

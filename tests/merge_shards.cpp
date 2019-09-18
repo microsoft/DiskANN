@@ -3,7 +3,8 @@
 #include <cassert>
 #include <fstream>
 #include <iostream>
-#include <parallel/algorithm>
+//#include <parallel/algorithm>
+#include <string>
 #include <vector>
 #include "cached_io.h"
 #include "utils.h"
@@ -64,7 +65,7 @@ int merge_shards(const std::string &nsg_prefix, const std::string &nsg_suffix,
       node_shard.push_back(std::make_pair(node_id, shard));
     }
   }
-  __gnu_parallel::sort(
+  std::sort(
       node_shard.begin(), node_shard.end(),
       [](const auto &left, const auto &right) {
         return left.first < right.first ||

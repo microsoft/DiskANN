@@ -27,12 +27,6 @@ float calc_recall(unsigned num_queries, unsigned* gold_std, unsigned dim_gs,
     while (cur_pt_recall_threshold < dim_gs &&
            gold_std_dist[i * dim_gs + cur_pt_recall_threshold - 1] ==
                gold_std_dist[i * dim_gs + cur_pt_recall_threshold]) {
-      //      std::cout << i << " " << cur_pt_recall_threshold << " "
-      //                << gold_std_dist[i * dim_gs + cur_pt_recall_threshold -
-      //                1]
-      //                << " " << gold_std_dist[i * dim_gs +
-      //                cur_pt_recall_threshold]
-      //                << std::endl;
       cur_pt_recall_threshold++;
     }
 
@@ -51,7 +45,6 @@ float calc_recall(unsigned num_queries, unsigned* gold_std, unsigned dim_gs,
 
 template<typename T>
 int aux_main(int argc, char** argv) {
-  int      bfs_init = 0;
   unsigned beam_width = 4;
 
   T*        query_load = NULL;
@@ -116,10 +109,6 @@ int aux_main(int argc, char** argv) {
   std::cout << "Index loaded" << std::endl;
 
   std::vector<unsigned> start_points;
-  if (bfs_init) {
-    index.populate_start_points_bfs(start_points);
-    std::cout << "Initialized starting points based on BFS" << std::endl;
-  }
 
   NSG::Parameters paras;
   std::cout << std::setw(8) << "Ls" << std::setw(16) << recall_string
@@ -136,9 +125,6 @@ int aux_main(int argc, char** argv) {
     if (L < recall_at)
       continue;
 
-    paras.Set<unsigned>("L_search", L);
-    paras.Set<unsigned>("P_search", L);
-
     long long total_hops = 0;
     long long total_cmps = 0;
 
@@ -146,7 +132,7 @@ int aux_main(int argc, char** argv) {
 #pragma omp parallel for schedule(dynamic, 1)
     for (int i = 0; i < (int32_t) query_num; i++) {
       auto ret =
-          index.beam_search(query_load + i * query_aligned_dim, K, paras,
+          index.beam_search(query_load + i * query_aligned_dim, K, L,
                             res + ((size_t) i) * K, beam_width, start_points);
 #pragma omp atomic
       total_hops += ret.first;
