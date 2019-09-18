@@ -521,20 +521,14 @@ template void NSGDLLEXPORT gen_random_slice<int8_t>(const std::string data_file,
                                                     size_t &ndims);
 
 template NSGDLLEXPORT int partition<int8_t>(
-    const std::string data_file,
-                               const float sampling_rate, size_t num_centers,
-                               size_t            max_k_means_reps,
-                               const std::string prefix_path, size_t k_base);
+    const std::string data_file, const float sampling_rate, size_t num_centers,
+    size_t max_k_means_reps, const std::string prefix_path, size_t k_base);
 template NSGDLLEXPORT int partition<uint8_t>(
-    const std::string data_file,
-                                const float sampling_rate, size_t num_centers,
-                                size_t            max_k_means_reps,
-                                const std::string prefix_path, size_t k_base);
+    const std::string data_file, const float sampling_rate, size_t num_centers,
+    size_t max_k_means_reps, const std::string prefix_path, size_t k_base);
 template NSGDLLEXPORT int partition<float>(
-    const std::string data_file,
-                              const float sampling_rate, size_t num_centers,
-                              size_t            max_k_means_reps,
-                              const std::string prefix_path, size_t k_base);
+    const std::string data_file, const float sampling_rate, size_t num_centers,
+    size_t max_k_means_reps, const std::string prefix_path, size_t k_base);
 
 template NSGDLLEXPORT int generate_pq_data_from_pivots<int8_t>(
     const std::string data_file, size_t num_centers, size_t num_pq_chunks,

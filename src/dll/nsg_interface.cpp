@@ -165,8 +165,8 @@ namespace NSG {
 
     this->Lsearch = (_u64) std::atoi(param_list[0].c_str());
     this->beam_width = (_u64) std::atoi(param_list[1].c_str());
-    int         cache_nlevels = (_u64) std::atoi(param_list[2].c_str());
-    _u64        nthreads = (_u64) std::atoi(param_list[3].c_str());
+    int  cache_nlevels = (_u64) std::atoi(param_list[2].c_str());
+    _u64 nthreads = (_u64) std::atoi(param_list[3].c_str());
 
     if (cache_nlevels == -1 && file_exists(node_visit_bin))
       NSG::load_bin<_u64>(node_visit_bin.c_str(), node_visit_list,

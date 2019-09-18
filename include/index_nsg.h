@@ -15,13 +15,13 @@ namespace NSG {
   template<typename T, typename TagT = int>
   class IndexNSG {
    public:
-    IndexNSG(Metric m, const char* filename, const size_t max_points = 0,
+    IndexNSG(Metric m, const char *filename, const size_t max_points = 0,
              const size_t nd = 0, const bool enable_tags = false);
 
     ~IndexNSG();
 
-    void save(const char* filename);
-    void load(const char* filename);
+    void save(const char *filename);
+    void load(const char *filename);
 
     void init_random_graph(size_t num_points, unsigned k,
                            std::vector<size_t> mapping = std::vector<size_t>());
@@ -34,9 +34,9 @@ namespace NSG {
     void populate_start_points_bfs(std::vector<unsigned> &start_points);
 
     std::pair<int, int> beam_search_tags(const T *query, const size_t K,
-                                         const size_t L,
-                                         TagT *tags, int beam_width,
-                                         std::vector<unsigned> &start_points,
+                                         const size_t L, TagT *tags,
+                                         int                    beam_width,
+                                         std::vector<unsigned> start_points,
                                          unsigned *indices_buffer = NULL);
 
     void prefetch_vector(unsigned id);
@@ -46,9 +46,9 @@ namespace NSG {
     std::pair<int, int> beam_search(const T *query, const size_t K,
                                     const size_t L, unsigned *indices,
                                     int                    beam_width,
-                                    std::vector<unsigned> &start_points);
+                                    std::vector<unsigned> start_points);
 
-    void save_disk_opt_graph(const char* diskopt_path);
+    void save_disk_opt_graph(const char *diskopt_path);
 
 /* Methods for inserting and deleting points from the databases*/
 #define NULL_TAG (TagT(-1))

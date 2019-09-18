@@ -57,7 +57,7 @@ namespace NSG {
   // Initialize an index with metric m, load the data of type T with filename
   // (bin), and initialize max_points
   template<typename T, typename TagT>
-  IndexNSG<T, TagT>::IndexNSG(Metric m, const char* filename,
+  IndexNSG<T, TagT>::IndexNSG(Metric m, const char *filename,
                               const size_t max_points, const size_t nd,
                               const bool enable_tags)
       : _has_built(false), _width(0), _can_delete(false),
@@ -495,7 +495,7 @@ namespace NSG {
   }
 
   template<typename T, typename TagT>
-  void IndexNSG<T, TagT>::save(const char* filename) {
+  void IndexNSG<T, TagT>::save(const char *filename) {
     long long     total_gr_edges = 0;
     size_t        index_size = 0;
     std::ofstream out(std::string(filename), std::ios::binary | std::ios::out);
@@ -540,7 +540,7 @@ namespace NSG {
 
   // load the SNG index if pre-computed
   template<typename T, typename TagT>
-  void IndexNSG<T, TagT>::load(const char* filename) {
+  void IndexNSG<T, TagT>::load(const char *filename) {
     std::ifstream in(std::string(filename), std::ios::binary);
     in.seekg(0, in.end);
     size_t expected_file_size;
@@ -1284,7 +1284,6 @@ namespace NSG {
     }
   }
 
-
   /* Link():
    * The graph creation function.
    */
@@ -1465,7 +1464,7 @@ namespace NSG {
   template<typename T, typename TagT>
   std::pair<int, int> IndexNSG<T, TagT>::beam_search(
       const T *query, const size_t K, const size_t L, unsigned *indices,
-      int beam_width, std::vector<unsigned> &start_points) {
+      int beam_width, std::vector<unsigned> start_points) {
     //    _data = x;
 
     std::vector<unsigned> init_ids;
@@ -1613,9 +1612,9 @@ namespace NSG {
     }
     return std::make_pair(hops, cmps);
   }
-  
+
   template<typename T, typename TagT>
-  void IndexNSG<T, TagT>::save_disk_opt_graph(const char* diskopt_path) {
+  void IndexNSG<T, TagT>::save_disk_opt_graph(const char *diskopt_path) {
     const _u64 SECTOR_LEN = 4096;
     std::cout << "Embedding node coords with its nhood" << std::endl;
     size_t npts_u64 = _nd, ndims_u64 = _dim;
@@ -1707,12 +1706,11 @@ namespace NSG {
   template<typename T, typename TagT>
   std::pair<int, int> IndexNSG<T, TagT>::beam_search_tags(
       const T *query, const size_t K, const size_t L, TagT *tags,
-      int beam_width, std::vector<unsigned> &start_points,
+      int beam_width, std::vector<unsigned> start_points,
       unsigned *indices_buffer) {
     const bool alloc = indices_buffer == NULL;
     auto       indices = alloc ? new unsigned[K] : indices_buffer;
-    auto       ret =
-        beam_search(query, K, L, indices, beam_width, start_points);
+    auto ret = beam_search(query, K, L, indices, beam_width, start_points);
     for (int i = 0; i < (int) K; ++i)
       tags[i] = _point_to_tag[indices[i]];
     if (alloc)
@@ -1759,22 +1757,15 @@ namespace NSG {
   template NSGDLLEXPORT void IndexNSG<float, int>::build(
       Parameters &parameters, const std::vector<int> &tags);
 
-
-    template NSGDLLEXPORT std::pair<int, int>
-                        IndexNSG<uint8_t>::beam_search(const uint8_t *query, const size_t K,
-                                           const size_t L, unsigned *indices,
-                                           int                    beam_width,
-                                           std::vector<unsigned> &start_points);
-  template NSGDLLEXPORT std::pair<int, int>
-                        IndexNSG<int8_t>::beam_search(const int8_t *query, const size_t K,
-                                           const size_t L, unsigned *indices,
-                                           int                    beam_width,
-                                           std::vector<unsigned> &start_points);
-    template NSGDLLEXPORT std::pair<int, int>
-                          IndexNSG<float>::beam_search(
-        const float *query, const size_t K, const size_t L, unsigned *indices,
-        int beam_width, std::vector<unsigned> &start_points);
-
+  template NSGDLLEXPORT std::pair<int, int> IndexNSG<uint8_t>::beam_search(
+      const uint8_t *query, const size_t K, const size_t L, unsigned *indices,
+      int beam_width, std::vector<unsigned> &start_points);
+  template NSGDLLEXPORT std::pair<int, int> IndexNSG<int8_t>::beam_search(
+      const int8_t *query, const size_t K, const size_t L, unsigned *indices,
+      int beam_width, std::vector<unsigned> &start_points);
+  template NSGDLLEXPORT std::pair<int, int> IndexNSG<float>::beam_search(
+      const float *query, const size_t K, const size_t L, unsigned *indices,
+      int beam_width, std::vector<unsigned> &start_points);
 
   template NSGDLLEXPORT void IndexNSG<uint8_t, int>::save_disk_opt_graph(
       const char *diskopt_path);
@@ -1786,12 +1777,18 @@ namespace NSG {
   template NSGDLLEXPORT int IndexNSG<int8_t, int>::delete_point(const int tag);
   template NSGDLLEXPORT int IndexNSG<uint8_t, int>::delete_point(const int tag);
   template NSGDLLEXPORT int IndexNSG<float, int>::delete_point(const int tag);
-  template NSGDLLEXPORT int IndexNSG<int8_t, size_t>::delete_point(const size_t tag);
-  template NSGDLLEXPORT int IndexNSG<uint8_t, size_t>::delete_point(const size_t tag);
-  template NSGDLLEXPORT int IndexNSG<float, size_t>::delete_point(const size_t tag);
-  template NSGDLLEXPORT int IndexNSG<int8_t, std::string>::delete_point(const std::string tag);
-  template NSGDLLEXPORT int IndexNSG<uint8_t, std::string>::delete_point(const std::string tag);
-  template NSGDLLEXPORT int IndexNSG<float, std::string>::delete_point(const std::string tag);
+  template NSGDLLEXPORT int IndexNSG<int8_t, size_t>::delete_point(
+      const size_t tag);
+  template NSGDLLEXPORT int IndexNSG<uint8_t, size_t>::delete_point(
+      const size_t tag);
+  template NSGDLLEXPORT int IndexNSG<float, size_t>::delete_point(
+      const size_t tag);
+  template NSGDLLEXPORT int IndexNSG<int8_t, std::string>::delete_point(
+      const std::string tag);
+  template NSGDLLEXPORT int IndexNSG<uint8_t, std::string>::delete_point(
+      const std::string tag);
+  template NSGDLLEXPORT int IndexNSG<float, std::string>::delete_point(
+      const std::string tag);
 
   template NSGDLLEXPORT int IndexNSG<int8_t, int>::disable_delete(
       const Parameters &parameters, const bool consolidate);
@@ -1811,18 +1808,17 @@ namespace NSG {
       const Parameters &parameters, const bool consolidate);
   template NSGDLLEXPORT int IndexNSG<float, std::string>::disable_delete(
       const Parameters &parameters, const bool consolidate);
-  
 
-   template NSGDLLEXPORT int IndexNSG<int8_t, int>::enable_delete();
+  template NSGDLLEXPORT int IndexNSG<int8_t, int>::enable_delete();
   template NSGDLLEXPORT int IndexNSG<uint8_t, int>::enable_delete();
-   template NSGDLLEXPORT int IndexNSG<float, int>::enable_delete();
-  template NSGDLLEXPORT int  IndexNSG<int8_t, size_t>::enable_delete();
-  template NSGDLLEXPORT int  IndexNSG<uint8_t, size_t>::enable_delete();
-  template NSGDLLEXPORT int  IndexNSG<float, size_t>::enable_delete();
-  template NSGDLLEXPORT int  IndexNSG<int8_t, std::string>::enable_delete();
-  template NSGDLLEXPORT int  IndexNSG<uint8_t, std::string>::enable_delete();
-  template NSGDLLEXPORT int  IndexNSG<float, std::string>::enable_delete();
-  
+  template NSGDLLEXPORT int IndexNSG<float, int>::enable_delete();
+  template NSGDLLEXPORT int IndexNSG<int8_t, size_t>::enable_delete();
+  template NSGDLLEXPORT int IndexNSG<uint8_t, size_t>::enable_delete();
+  template NSGDLLEXPORT int IndexNSG<float, size_t>::enable_delete();
+  template NSGDLLEXPORT int IndexNSG<int8_t, std::string>::enable_delete();
+  template NSGDLLEXPORT int IndexNSG<uint8_t, std::string>::enable_delete();
+  template NSGDLLEXPORT int IndexNSG<float, std::string>::enable_delete();
+
   template NSGDLLEXPORT int IndexNSG<int8_t, int>::insert_point(
       const int8_t *point, const Parameters &parameters,
       std::vector<Neighbor> &pool, std::vector<Neighbor> &tmp,
@@ -1862,7 +1858,6 @@ namespace NSG {
       std::vector<Neighbor> &pool, std::vector<Neighbor> &tmp,
       tsl::robin_set<unsigned> &visited, vecNgh &cut_graph,
       const std::string tag);
-
 
 #endif
 }  // namespace NSG
