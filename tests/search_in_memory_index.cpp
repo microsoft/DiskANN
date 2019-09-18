@@ -121,7 +121,6 @@ int aux_main(int argc, char** argv) {
   unsigned  K = recall_at;
   unsigned* res = new unsigned[(size_t) query_num * K];
   for (uint32_t test_id = 0; test_id < Lvec.size(); test_id++) {
-    std::cout << "Running test " << test_id << std::endl;
     unsigned L = Lvec[test_id];
     if (L < recall_at)
       continue;
@@ -135,7 +134,6 @@ int aux_main(int argc, char** argv) {
       auto ret =
           index.beam_search(query_load + i * query_aligned_dim, K, L,
                             res + ((size_t) i) * K, beam_width, start_points);
-      std::cout << "After beam search call " << std::endl;
 #pragma omp atomic
       total_hops += ret.first;
 #pragma omp atomic

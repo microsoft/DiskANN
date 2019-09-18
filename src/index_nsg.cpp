@@ -1759,13 +1759,13 @@ namespace NSG {
 
   template NSGDLLEXPORT std::pair<int, int> IndexNSG<uint8_t>::beam_search(
       const uint8_t *query, const size_t K, const size_t L, unsigned *indices,
-      int beam_width, std::vector<unsigned> &start_points);
+      int beam_width, std::vector<unsigned> start_points);
   template NSGDLLEXPORT std::pair<int, int> IndexNSG<int8_t>::beam_search(
       const int8_t *query, const size_t K, const size_t L, unsigned *indices,
-      int beam_width, std::vector<unsigned> &start_points);
+      int beam_width, std::vector<unsigned> start_points);
   template NSGDLLEXPORT std::pair<int, int> IndexNSG<float>::beam_search(
       const float *query, const size_t K, const size_t L, unsigned *indices,
-      int beam_width, std::vector<unsigned> &start_points);
+      int beam_width, std::vector<unsigned> start_points);
 
   template NSGDLLEXPORT void IndexNSG<uint8_t, int>::save_disk_opt_graph(
       const char *diskopt_path);
