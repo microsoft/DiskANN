@@ -1,7 +1,6 @@
 ﻿
 #pragma once
 #include <fcntl.h>
-
 #include <algorithm>
 #include <cassert>
 #include <cstdlib>
@@ -99,7 +98,7 @@ namespace NSG {
                        size_t &dim) {
     _u64            read_blk_size = 64 * 1024 * 1024;
     cached_ifstream reader(bin_file, read_blk_size);
-    std::cout << "Reading bin file " << bin_file << " ..." << std::flush;
+    std::cout << "Reading bin file " << bin_file.c_str() << " ..." << std::flush;
     size_t actual_file_size = reader.get_file_size();
 
     int npts_i32, dim_i32;
@@ -129,7 +128,7 @@ namespace NSG {
   inline void save_bin(const std::string &filename, T *data, size_t npts,
                        size_t ndims) {
     std::ofstream writer(filename, std::ios::binary | std::ios::out);
-    std::cout << "Writing bin: " << filename << "\n";
+    std::cout << "Writing bin: " << filename.c_str() << "\n";
     int npts_i32 = (int) npts, ndims_i32 = (int) ndims;
     writer.write((char *) &npts_i32, sizeof(int));
     writer.write((char *) &ndims_i32, sizeof(int));

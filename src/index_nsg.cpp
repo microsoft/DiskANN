@@ -799,8 +799,9 @@ namespace NSG {
                                       vecNgh &cut_graph, const TagT tag) {
     unsigned range = parameters.Get<unsigned>("R");
     assert(_has_built);
-    if (_enable_tags)
-      assert(tag != NULL_TAG);
+	//Gopal. Commenting out because we cannot assume the "null value"
+    //if (_enable_tags)
+    //  assert(tag != NULL_TAG);
 
     LockGuard guard(_change_lock);
     std::cout << "got lock" << std::endl;

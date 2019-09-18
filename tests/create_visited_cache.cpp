@@ -108,7 +108,7 @@ void search_index(NSG::PQFlashNSG<T>* _pFlashIndex, const char* vector,
   //  _u64     L = 12;
   const T*  warmup_load = (const T*) vector;
 #pragma omp parallel for schedule(dynamic, 1) num_threads(16)
-  for (_u64 i = 0; i < warmup_num; i++)
+  for (_s64 i = 0; i < warmup_num; i++)
     _pFlashIndex->cached_beam_search(
         warmup_load + (i * _pFlashIndex->aligned_dim), neighborCount, L,
         ids + (i * neighborCount), distances + (i * neighborCount), 6);
