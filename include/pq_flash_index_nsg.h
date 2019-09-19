@@ -51,18 +51,23 @@ namespace NSG {
   template<typename T>
   class PQFlashNSG {
    public:
-    NSGDLLEXPORT PQFlashNSG(bool visited_cache = false);
+    NSGDLLEXPORT PQFlashNSG();
     NSGDLLEXPORT ~PQFlashNSG();
 
-    // load data, but obtain handle to nsg file
-    NSGDLLEXPORT void load(const char *data_bin, const char *nsg_file,
-                           const char *pq_tables_bin, const _u64 chunk_size,
-                           const _u64 n_chunks, const _u64 data_dim,
-                           const _u64  max_nthreads,
-                           const char *medoids_file = {0});
+    // load compressed data, and obtains the handle to the disk-resident index
+    NSGDLLEXPORT int load(uint32_t num_threads, const char *pq_centroids_bin,
+                          const char *compressed_data_bin,
+                          const char *disk_index_file,
+                          const char *medoids_file = {0});
 
+    NSGDLLEXPORT void create_disk_layout(const std::string base_file,
+                                         const std::string mem_index_file,
+                                         const std::string output_file);
     NSGDLLEXPORT void cache_visited_nodes(_u64 *node_list, _u64 num_nodes);
+    NSGDLLEXPORT void load_cache_from_file(std::string cache_bin);
     NSGDLLEXPORT void cache_bfs_levels(_u64 nlevels);
+
+    NSGDLLEXPORT void set_cache_create_flag();
 
     NSGDLLEXPORT void save_cached_nodes(_u64        num_nodes,
                                         std::string cache_file_path);
@@ -86,7 +91,7 @@ namespace NSG {
     _u64 max_node_len = 0, nnodes_per_sector = 0, max_degree = 0;
 
     // data info
-    _u64 n_base = 0;
+    _u64 num_points = 0;
     _u64 data_dim = 0;
     _u64 aligned_dim = 0;
 
@@ -123,5 +128,6 @@ namespace NSG {
     // thread-specific scratch
     ConcurrentQueue<ThreadData<T>> thread_data;
     _u64                           max_nthreads;
+    bool                           load_flag = false;
   };
 }  // namespace NSG

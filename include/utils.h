@@ -93,12 +93,24 @@ namespace NSG {
     }
   }
 
+  inline void get_bin_metadata(const std::string &bin_file, size_t &nrows,
+                               size_t &ncols) {
+    std::ifstream reader(bin_file.c_str(), std::ios::binary);
+    uint32_t      nrows_32, ncols_32;
+    reader.read((char *) &nrows_32, sizeof(uint32_t));
+    reader.read((char *) &ncols_32, sizeof(uint32_t));
+    nrows = nrows_32;
+    ncols = ncols_32;
+    reader.close();
+  }
+
   template<typename T>
   inline void load_bin(const std::string &bin_file, T *&data, size_t &npts,
                        size_t &dim) {
     _u64            read_blk_size = 64 * 1024 * 1024;
     cached_ifstream reader(bin_file, read_blk_size);
-    std::cout << "Reading bin file " << bin_file.c_str() << " ..." << std::flush;
+    std::cout << "Reading bin file " << bin_file.c_str() << " ..."
+              << std::flush;
     size_t actual_file_size = reader.get_file_size();
 
     int npts_i32, dim_i32;

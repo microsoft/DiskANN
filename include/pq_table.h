@@ -24,7 +24,8 @@ namespace NSG {
       }
     }
 
-    void load_bin(const char* filename, _u64 nchunks, _u64 chunksize) {
+    void load_pq_centroid_bin(const char* filename, _u64 nchunks,
+                              _u64 chunksize) {
       this->n_chunks = nchunks;
       this->chunk_size = chunksize;
       // bin structure: [256][ndims][ndims(float)]
