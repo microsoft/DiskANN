@@ -3,6 +3,7 @@
 #include <string.h>
 #include <cstring>
 #include <iomanip>
+#include <set>
 #include "util.h"
 #ifndef __NSG_WINDOWS__
 #include <sys/mman.h>
@@ -19,6 +20,16 @@ float calc_recall(unsigned num_queries, unsigned* gold_std, unsigned dim_gs,
   unsigned total_recall = 0;
 
   for (size_t i = 0; i < num_queries; i++) {
+    std::set<unsigned> unique_results;
+    for (uint32_t j = 0; j < recall_at; j++) {
+      unique_results.insert(our_results[i * dim_or + j]);
+    }
+    if (unique_results.size() < recall_at) {
+      std::cout << "Point " << i << " has duplicates. " << std::endl;
+      for (auto p : unique_results)
+        std::cout << p << " ";
+      std::cout << std::endl;
+    }
     for (unsigned j = 0; j < recall_at; j++)
       this_point[j] = false;
     for (size_t j1 = 0; j1 < recall_at; j1++)

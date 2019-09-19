@@ -80,27 +80,26 @@ int main(int argc, char** argv) {
   while (delete_list.size() < num_incr)
     delete_list.insert(((rand() * rand() * rand()) % num_points) + num_fake);
   std::cout << "Deleting " << delete_list.size() << " elements" << std::endl;
-
+  index.update_in_graph();
   {
     NSG::Timer timer;
     index.enable_delete();
-    unsigned count = 0;
     for (auto p : delete_list)
 
-      if (index.delete_point(p) != 0)
+      if (index.eager_delete(p, paras) != 0)
+        //    if(index.delete_point(p) != 0)
         std::cerr << "Delete tag " << p << " not found" << std::endl;
-     else {
-	count++;
-	std::cout << count << "  ";
-    }
 
     if (index.disable_delete(paras, true) != 0) {
       std::cerr << "Disable delete failed" << std::endl;
       return -1;
     }
     std::cout << "Delete time: " << timer.elapsed() / 1000 << "ms\n";
+    index.update_in_graph();
   }
 
+  auto save_path_del = save_path + ".del";
+  index.save(save_path_del.c_str());
   {
     NSG::Timer timer;
     for (auto p : delete_list)

@@ -45,8 +45,8 @@ namespace NSG {
     std::pair<int, int> beam_search(const T *query, const T *x, const size_t K,
                                     const Parameters &parameters,
                                     unsigned *indices, int beam_width,
-                                    const std::vector<unsigned> &start_points,
-                                    unsigned                     fake_points);
+                                    const std::vector<unsigned> start_points,
+                                    unsigned                    fake_points);
 
     std::pair<int, int> beam_search_tags(
         const T *query, const T *x, const size_t K,
