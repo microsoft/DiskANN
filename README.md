@@ -7,21 +7,28 @@ sudo apt install cmake g++ libaio-dev libgoogle-perftools-dev clang-format-4.0
 
 Build
 ```
-mkdir build && cd build && cmake .. && make -j
+mkdir build && cd build && cmake .. && make -j 
 ```
 
-**Usage**
-To generate an SSD-friendly index
+**Usage for SSD-based indices**
+To generate an SSD-friendly index, use the `tests/create_disk_index.sh` script. 
+For floating point data file SIFT1M, to generate an index with 32 bytes in-
+memory fooptrint per vector, you might want to use (assuming `pwd` is project root):
+```
+export BUILD_PATH=./build
+${BUILD_PATH}/tests/utils/fvecs_to_bin data/SIFT1M/sift_base.fvecs data/SIFT1M/sift_base.bin
+./tests/create_disk_index.sh -t float -i data/SIFT1M/sift_base.bin -o data/SIFT1M/tmp -L 30 -R 64 -b 32
 ```
 
+To search the generated index
+```
 ```
 
-##Windows solution file. (@Gopal Please check for accuracy and add any extra instructions if needed. I dont know instructions for building DLL and REST APIs. )
-- Install MKL??
-- Open nsg.sln file in the root folder and build with release/x64 configuration to generate DLLs and other driver files.\
-- @Gopal: Should we add usage instructions for DLLs/REST APIs/drivers?
+**Usage for in-memory indices**
 
-##Windows CMake Build: (@Gopal: I guess DLLs build is still not supported here?)
+
+
+##Windows CMake Build
 
 Install CMAKE (v3.15.2 or later)
 
@@ -35,10 +42,11 @@ Build steps:
 -	Open a new developer command prompt
 -	Create a "build" directory under nsg
 -	Change to the "build" directory and run  
-```<cmake_path> -B. -A x64 -G "Visual Studio 15 2017" ..
 ```
-		(Do specify the full path to cmake, as VS comes with its own (older) version of cmake, which will not work)
--	This will create a “rand-nsg” solution
+<cmake_path> -B. -A x64 -G "Visual Studio 15 2017" ..
+```
+	Do specify the full path to cmake, as VS comes with its own (older) version of cmake, which may not work.
+-	This will create a “rand-nsg” solution file.
 -	Open the rand-nsg solution and build the “nsg_lib”, “build_disk_index” and “search_disk_index” projects in order
 -	To build from command line, use "msbuild rand-nsg.sln". Check msbuild for options around targets.
 
