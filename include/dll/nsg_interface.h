@@ -51,6 +51,7 @@ namespace NSG {
    public:
     // Vector dimension.
     unsigned __int32       m_dimension;
+    unsigned __int32       aligned_dimension;
     ANNIndex::DistanceType m_distanceType;
 
    private:
