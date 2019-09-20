@@ -11,8 +11,9 @@ mkdir build && cd build && cmake .. && make -j
 ```
 
 **Usage**
+To generate an SSD-friendly index
 ```
-@Ravi, could you please fill in.
+
 ```
 
 ##Windows solution file. (@Gopal Please check for accuracy and add any extra instructions if needed. I dont know instructions for building DLL and REST APIs. )

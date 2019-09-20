@@ -39,6 +39,6 @@ echo "Building $TYPE disk-index on $DATA with L=$L, R=$R, B=$B and storing outpu
 DISK_INDEX_PATH="${OUTPUT_PREFIX}_diskopt.index"
 UNOPT_INDEX_PATH="${OUTPUT_PREFIX}_mem.index"
 
-./tests/generate_pq  $TYPE  $DATA  $OUTPUT_PREFIX  $B  0.01
-./tests/build_memory_index  $TYPE  $DATA  $L  $R  1250  2  1.2  $UNOPT_INDEX_PATH
-./tests/create_disk_layout $TYPE $DATA $UNOPT_INDEX_PATH $DISK_INDEX_PATH
+${BUILD_PATH}/tests/generate_pq  $TYPE  $DATA  $OUTPUT_PREFIX  $B  0.01
+${BUILD_PATH}/tests/build_memory_index  $TYPE  $DATA  $L  $R  1250  2  1.2  $UNOPT_INDEX_PATH
+${BUILD_PATH}/tests/create_disk_layout $TYPE $DATA $UNOPT_INDEX_PATH $DISK_INDEX_PATH
