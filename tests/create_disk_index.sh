@@ -36,7 +36,7 @@ fi
 # Begin script in case all parameters are correct
 echo "Building $TYPE disk-index on $DATA with L=$L, R=$R, B=$B and storing output files in prefix $OUTPUT_PREFIX"
 
-DISK_INDEX_PATH="${OUTPUT_PREFIX}_diskopt.index"
+DISK_INDEX_PATH="${OUTPUT_PREFIX}_disk.index"
 UNOPT_INDEX_PATH="${OUTPUT_PREFIX}_mem.index"
 
 ${BUILD_PATH}/tests/generate_pq  $TYPE  $DATA  $OUTPUT_PREFIX  $B  0.01
