@@ -3,24 +3,24 @@
 command_helper()
 {
     echo ""
-    echo "Usage: $0 -t data_type -i input_bin_file -o index_prefix -l L -r R -b PQ_vector_bytes"
+    echo "Usage: $0 -t data_type -i input_bin_file -o index_prefix -L Lvalue -r Rvalue -b PQ_vector_bytes"
     echo -e "\t-t Base file data type: float/int8/uint8"
     echo -e "\t-i input bin file path"
     echo -e "\t-o output index prefix path (will generate path_pq_pivots.bin, path_compressed.bin, path_diskopt.bin)"
-    echo -e "\t-l index construction quality (L = 30 to 100 works, 50 is good choice)"
-    echo -e "\t-r index maximum degree"
+    echo -e "\t-L index construction quality (L = 30 to 100 works, 50 is good choice)"
+    echo -e "\t-R index maximum degree"
     echo -e "\t-b approximate memory footprint per vector in bytes using product quantization"
     exit 1 # Exit script after printing help
 }
 
-while getopts "t:i:o:l:r:b:" opt
+while getopts "t:i:o:L:R:b:" opt
 do
     case "$opt" in
         t ) TYPE="$OPTARG" ;;
         i ) DATA="$OPTARG" ;;
         o ) OUTPUT_PREFIX="$OPTARG" ;;
-        l ) L="$OPTARG" ;;
-        r ) R="$OPTARG" ;;
+        L ) L="$OPTARG" ;;
+        R ) R="$OPTARG" ;;
         b ) B="$OPTARG" ;;
         ? ) command_helper ;; # Print command_helper in case parameter is non-existent
     esac
