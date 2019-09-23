@@ -42,6 +42,8 @@ if(MSVC)
 	target_link_libraries(gen_random_slice optimized ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE}/nsg_lib.lib)
 endif()
 
+add_executable(calculate_recall calculate_recall.cpp)
+
 # formatter
 if (NOT MSVC)
 	add_custom_command(TARGET gen_random_slice PRE_BUILD COMMAND clang-format-4.0 -i ../../../include/*.h ../../../include/dll/*.h ../../../src/*.cpp  ../../../tests/*.cpp ../../../src/dll/*.cpp ../../../tests/utils/*.cpp)

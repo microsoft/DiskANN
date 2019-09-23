@@ -85,6 +85,7 @@ int search_memory_index(int argc, char** argv) {
         result_output_prefix + std::to_string(L) + "_idx_uint32.bin";
     NSG::save_bin<_u32>(cur_result_path, query_result_ids[test_id].data(),
                         query_num, recall_at);
+    test_id++;
   }
 
   NSG::aligned_free(query);
