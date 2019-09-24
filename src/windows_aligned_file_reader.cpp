@@ -1,4 +1,4 @@
-#ifdef __NSG_WINDOWS__
+#ifdef _WINDOWS
 #include "windows_aligned_file_reader.h"
 #include <iostream>
 #include "utils.h"
@@ -23,6 +23,7 @@ void WindowsAlignedFileReader::register_thread() {
   if (this->ctx_map.find(std::this_thread::get_id()) != ctx_map.end()) {
     std::cout << "Warning:: Duplicate registration for thread_id : "
               << std::this_thread::get_id() << "\n";
+
   }
 
   IOContext ctx;

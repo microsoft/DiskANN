@@ -7,66 +7,89 @@ sudo apt install cmake g++ libaio-dev libgoogle-perftools-dev clang-format-4.0
 
 Build
 ```
-mkdir build && cd build && cmake .. && make -j
+mkdir build && cd build && cmake .. && make -j 
 ```
 
-**Usage**
+**Usage for SSD-based indices**
+To generate an SSD-friendly index, use the `tests/create_disk_index.sh` script. 
+For floating point data file SIFT1M, to generate an index with 32 bytes in-
+memory fooptrint per vector, you might want to use (assuming `pwd` is project root):
 ```
-@Ravi, could you please fill in.
+export BUILD_PATH=./build
+${BUILD_PATH}/tests/utils/fvecs_to_bin data/SIFT1M/sift_base.fvecs data/SIFT1M/sift_base.bin
+./tests/create_disk_index.sh -t float -i data/SIFT1M/sift_base.bin -o data/SIFT1M/tmp -L 30 -R 64 -b 32
 ```
 
-##Windows solution file. (@Gopal Please check for accuracy and add any extra instructions if needed. I dont know instructions for building DLL and REST APIs. )
-- Install MKL??
-- Open nsg.sln file in the root folder and build with release/x64 configuration to generate DLLs and other driver files.\
-- @Gopal: Should we add usage instructions for DLLs/REST APIs/drivers?
+To search the generated index
+```
+```
 
-##Windows CMake Build: (@Gopal: I guess DLLs build is still not supported here?)
+**Usage for in-memory indices**
 
-Install CMAKE (v3.15.2 or later) from https://cmake.org/
+
+
+##Windows CMake Build
+
+The Windows version has been tested with the enterprise editions of Visual Studio 2017 and Visual Studio 2019
+
+Install CMAKE (v3.15.2 or later) from https://cmake.org
 
 Install MKL:
 -	Install MKL from https://software.intel.com/en-us/mkl
--	After installation, run the 'set' command to check if the ICPP_COMPILER19 is set. 
-- 	If the variable is not set, add it to the system variables, setting it to the "windows" folder under your MKL installation.
-	(For instance, if your install folder is "C:\Program Files (x86)\IntelSWtools", set ICPP_COMPILER19 to "C:\Program Files (x86)\IntelSWtools\compilers_and_libraries\windows")
+-	Set a new System environment variable, called INTEL_ROOT to the "windows" folder under your MKL installation
+	(For instance, if your install folder is "C:\Program Files (x86)\IntelSWtools", set INTEL_ROOT to "C:\Program Files (x86)\IntelSWtools\compilers_and_libraries\windows")
 
-Build steps:
--	Open a new command prompt
+**Build steps:**
+-	Open a new developer command prompt
 -	Create a "build" directory under nsg
--	Change to the "build" directory and run:
-
-```cmake_path\cmake.exe -B. -A x64 ..
+-	Change to the "build" directory and run  
 ```
-	(Do specify the full path to cmake, as VS comes with its own (older) version of cmake, which will not work)
+cmake -B. -A x64 ..
+```
+**Note: Since VS comes with its own (older) version of cmake, you have to specify the full path to cmake to ensure that the right version is used.**
+-	This will create a “rand-nsg” solution file.
+-	Open the rand-nsg solution and build the “nsg_dll” project first. 
+- 	Then build all the other binaries using the ALL_BUILD project that is part of the solution
+- 	Generated binaries are stored in the nsg/x64/Debug or nsg/x64/Release directories.
 
--	This will create a “rand-nsg” solution
--	Open the rand-nsg solution and build the “nsg_lib”, “build_disk_index” and “search_disk_index” projects in order
--	To build from command line, use "msbuild rand-nsg.sln". Check msbuild for options around targets.
+To build from command line, use msbuild to first build the "nsg_dll" project. And then build the entire solution, as shown below.
+```
+msbuild src\dll\nsg_dll.vcxproj
+msbuild rand-nsg.sln
+```
+Check msbuild docs for additional options including choosing between debug and release builds.
 
-#Sanity checks (paths specific to nn-z840): 
+###Sanity checks (paths specific to nn-z840): 
 
-#Building the index:
+**Creating the graph**
 
-First generate the pivots:
+1. Generate compressed vectors using Product Quantization
 ```
 generate_pq.exe float "E:\sift1m_u8\sift1m_float_harsha\sift_base.bin" E:\cmake-sift\ravi-index 32 0.01
 ```
-Then build the 'regular' index:
+
+2. Build the graph using the compressed vectors
 ```
 build_memory_index.exe float E:\sift1m_u8\sift1m_float_harsha\sift_base.bin 50 64 750 2 1.2 E:\cmake-sift\ravi-index_memory.index
 ```
-Optimize for disk search: 
+
+3. Optimize for disk layout
 ```
 create_disk_layout.exe float E:\sift1m_u8\sift1m_float_harsha\sift_base.bin E:\cmake-sift\ravi-index_memory.index E:\cmake-sift\ravi-index_disk.index
 ```
-Run search: 
+
+**Search**
+
+At this stage we have a NSG graph on disk optimized for search. To conduct search for vectors given in the file sift_query.bin, 
 ```
 search_disk_index.exe float E:\cmake-sift\ravi-index_pq_pivots.bin E:\cmake-sift\ravi-index_compressed.bin E:\cmake-sift\ravi-index_disk.index null null E:\sift1m_u8\sift1m_float_harsha\sift_query.bin 5 16 4 E:\cmake-sift\ravi-index_results 10 20 30 40
 ```
-Measure recall
+Results of the query are stored in the file ravi-index_resultsXX_idx_uint32.bin where XX is the L-size [10, 20, 30, 40]
+To calculate recall @ 5 for L = 20, 
 ```
 calculate_recall.exe E:\sift1m_u8\sift1m_float_harsha\sift_gs100_idx.bin E:\cmake-sift\ravi-index_results20_idx_uint32.bin 5
 ```
 
+**Note:** You can simply type any of the commands given above by itself to get a description of the command line arguments.
 
 

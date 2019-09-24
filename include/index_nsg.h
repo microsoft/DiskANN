@@ -35,7 +35,7 @@ namespace NSG {
 
     std::pair<int, int> beam_search_tags(const T *query, const size_t K,
                                          const size_t L, TagT *tags,
-                                         int                    beam_width,
+                                         int                   beam_width,
                                          std::vector<unsigned> start_points,
                                          unsigned *indices_buffer = NULL);
 
@@ -45,10 +45,8 @@ namespace NSG {
     // can customize L on a per-query basis without tampering with "Parameters"
     std::pair<int, int> beam_search(const T *query, const size_t K,
                                     const size_t L, unsigned *indices,
-                                    int                    beam_width,
+                                    int                   beam_width,
                                     std::vector<unsigned> start_points);
-
-    void save_disk_opt_graph(const char *diskopt_path);
 
 /* Methods for inserting and deleting points from the databases*/
 #define NULL_TAG (TagT(-1))

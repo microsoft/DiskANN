@@ -26,7 +26,7 @@
 #include "memory_mapper.h"
 #include "partition_and_pq.h"
 #include "windows_customizations.h"
-#ifdef __NSG_WINDOWS__
+#ifdef _WINDOWS
 #include <xmmintrin.h>
 #endif
 
@@ -92,19 +92,22 @@ namespace NSG {
   template<>
   IndexNSG<float>::~IndexNSG() {
     delete this->_distance;
-    delete[] _data;
+//    delete[] _data;
+    aligned_free(_data);
   }
 
   template<>
   IndexNSG<_s8>::~IndexNSG() {
     delete this->_distance;
-    delete[] _data;
+    aligned_free(_data);
+//    delete[] _data;
   }
 
   template<>
   IndexNSG<_u8>::~IndexNSG() {
     delete this->_distance;
-    delete[] _data;
+    aligned_free(_data);
+//   delete[] _data;
   }
 
   template<typename T, typename TagT>
@@ -650,10 +653,10 @@ namespace NSG {
       const T *query, const Parameters &parameter,
       std::vector<unsigned> &init_ids, std::vector<Neighbor> &retset,
       std::vector<Neighbor> &fullset, tsl::robin_set<unsigned> &visited) {
-    const unsigned L = parameter.Get<unsigned>("L");
+//    const unsigned L = parameter.Get<unsigned>("L");
 
     /* put random L new ids into visited list and init_ids list */
-    while (init_ids.size() < L) {
+/*      while (init_ids.size() < L) {
       unsigned id = (rand() * rand() * rand()) % _nd;
       if (visited.find(id) == visited.end()) {
         visited.insert(id);
@@ -665,7 +668,7 @@ namespace NSG {
         init_ids.emplace_back(id);
       }
     }
-
+*/
     /* compare distance of all points in init_ids with query, and put the id
      * with distance
      * in retset
@@ -718,7 +721,7 @@ namespace NSG {
                                  (unsigned) _aligned_dim);
           Neighbor nn(id, dist, true);
           fullset.emplace_back(nn);
-          if (dist >= retset[l - 1].distance && (l == retset.size()))
+          if (dist >= retset[l - 1].distance && (l == retset.size()-1))
             continue;
 
           // if distance is smaller than largest, add to retset, keep it
@@ -799,8 +802,8 @@ namespace NSG {
                                       vecNgh &cut_graph, const TagT tag) {
     unsigned range = parameters.Get<unsigned>("R");
     assert(_has_built);
-	//Gopal. Commenting out because we cannot assume the "null value"
-    //if (_enable_tags)
+    // Gopal. Commenting out because we cannot assume the "null value"
+    // if (_enable_tags)
     //  assert(tag != NULL_TAG);
 
     LockGuard guard(_change_lock);
@@ -1329,11 +1332,12 @@ namespace NSG {
       for (uint32_t sync_num = 0; sync_num < NUM_SYNCS; sync_num++) {
         if (rnd_no == NUM_RNDS - 1) {
           if (last_round_alpha > 1)
-            parameters.Set<unsigned>(
-                "L", (unsigned) (std::min)(
-                         (int) L, (int) (L -
-                                         (L - 50) * ((float) sync_num /
-                                                     (float) NUM_SYNCS))));
+//            parameters.Set<unsigned>(
+//                "L", (unsigned) (std::min)(
+//                         (int) L, (int) (L -
+//                                         (L - 50) * ((float) sync_num /
+//                                                     (float) NUM_SYNCS))));
+            parameters.Set<unsigned>("L", (std::min)(L, (unsigned) 50));                                                 
           parameters.Set<float>("alpha", last_round_alpha);
         }
         size_t start_id = sync_num * round_size;
@@ -1614,96 +1618,6 @@ namespace NSG {
   }
 
   template<typename T, typename TagT>
-  void IndexNSG<T, TagT>::save_disk_opt_graph(const char *diskopt_path) {
-    const _u64 SECTOR_LEN = 4096;
-    std::cout << "Embedding node coords with its nhood" << std::endl;
-    size_t npts_u64 = _nd, ndims_u64 = _dim;
-
-    // amount to write in one shot
-    _u64 write_blk_size = 256l * 1024l * 1024l;
-
-    // create cached reader + writer
-    cached_ofstream nsg_writer(std::string(diskopt_path), write_blk_size);
-
-    // compute
-    _u64 max_node_len, nnodes_per_sector;
-    max_node_len =
-        (((_u64) _width + 1) * sizeof(unsigned)) + (ndims_u64 * sizeof(T));
-    nnodes_per_sector = SECTOR_LEN / max_node_len;
-
-    std::cout << "medoid: " << _ep << "B\n";
-    std::cout << "max_node_len: " << max_node_len << "B\n";
-    std::cout << "nnodes_per_sector: " << nnodes_per_sector << "B\n";
-
-    // SECTOR_LEN buffer for each sector
-    char *    sector_buf = new char[SECTOR_LEN];
-    char *    node_buf = new char[max_node_len];
-    unsigned &nnbrs = *(unsigned *) (node_buf + ndims_u64 * sizeof(T));
-    unsigned *nhood_buf =
-        (unsigned *) (node_buf + (ndims_u64 * sizeof(T)) + sizeof(unsigned));
-
-    _u64 n_sectors = ROUND_UP(npts_u64, nnodes_per_sector) / nnodes_per_sector;
-    _u64 disk_index_file_size = (n_sectors + 1) * SECTOR_LEN;
-    // write first sector with metadata
-    *(_u64 *) (sector_buf + 0 * sizeof(_u64)) = disk_index_file_size;
-    *(_u64 *) (sector_buf + 1 * sizeof(_u64)) = npts_u64;
-    *(_u64 *) (sector_buf + 2 * sizeof(_u64)) = (_u64) _ep;
-    *(_u64 *) (sector_buf + 3 * sizeof(_u64)) = max_node_len;
-    *(_u64 *) (sector_buf + 4 * sizeof(_u64)) = nnodes_per_sector;
-    nsg_writer.write(sector_buf, SECTOR_LEN);
-    std::cout << "# sectors: " << n_sectors << "\n";
-
-    _u64 cur_node_id = 0;
-    for (_u64 sector = 0; sector < n_sectors; sector++) {
-      if (sector % 100000 == 0) {
-        std::cout << "Sector #" << sector << "written\n";
-      }
-
-      memset(sector_buf, 0, SECTOR_LEN);
-
-      for (_u64 sector_node_id = 0;
-           sector_node_id < nnodes_per_sector && cur_node_id < npts_u64;
-           sector_node_id++) {
-        // set cur node's nnbrs
-        nnbrs = _final_graph[cur_node_id].size();
-
-        // sanity checks on nnbrs
-        assert(nnbrs > 0);
-        assert(nnbrs <= _width);
-
-        // set cur node's nhood
-        nhood_buf = _final_graph[cur_node_id].data();
-
-        // write coords of node first
-        const T *node_coords = _data + (_aligned_dim * cur_node_id);
-        memcpy(node_buf, node_coords, ndims_u64 * sizeof(T));
-
-        // write nnbrs
-        *(unsigned *) (node_buf + ndims_u64 * sizeof(T)) = nnbrs;
-
-        // write nhood next
-        memcpy(node_buf + (ndims_u64 * sizeof(T)) + sizeof(unsigned), nhood_buf,
-               nnbrs * sizeof(unsigned));
-
-        // get offset into sector_buf
-        char *sector_node_buf = sector_buf + (sector_node_id * max_node_len);
-
-        // copy node buf into sector_node_buf
-        memcpy(sector_node_buf, node_buf, max_node_len);
-        cur_node_id++;
-      }
-
-      // flush sector to disk
-      nsg_writer.write(sector_buf, SECTOR_LEN);
-    }
-
-    delete[] sector_buf;
-    delete[] node_buf;
-
-    std::cout << "Diskopt NSG written to " << diskopt_path << "\n";
-  }
-
-  template<typename T, typename TagT>
   std::pair<int, int> IndexNSG<T, TagT>::beam_search_tags(
       const T *query, const size_t K, const size_t L, TagT *tags,
       int beam_width, std::vector<unsigned> start_points,
@@ -1723,7 +1637,7 @@ namespace NSG {
   template NSGDLLEXPORT class IndexNSG<int8_t>;
   template NSGDLLEXPORT class IndexNSG<uint8_t>;
 
-#ifdef __NSG_WINDOWS__
+#ifdef _WINDOWS
   template NSGDLLEXPORT IndexNSG<uint8_t, int>::IndexNSG(
       Metric m, const char *filename, const size_t max_points, const size_t nd,
       const bool enable_tags);
@@ -1766,13 +1680,6 @@ namespace NSG {
   template NSGDLLEXPORT std::pair<int, int> IndexNSG<float>::beam_search(
       const float *query, const size_t K, const size_t L, unsigned *indices,
       int beam_width, std::vector<unsigned> start_points);
-
-  template NSGDLLEXPORT void IndexNSG<uint8_t, int>::save_disk_opt_graph(
-      const char *diskopt_path);
-  template NSGDLLEXPORT void IndexNSG<int8_t, int>::save_disk_opt_graph(
-      const char *diskopt_path);
-  template NSGDLLEXPORT void IndexNSG<float, int>::save_disk_opt_graph(
-      const char *diskopt_path);
 
   template NSGDLLEXPORT int IndexNSG<int8_t, int>::delete_point(const int tag);
   template NSGDLLEXPORT int IndexNSG<uint8_t, int>::delete_point(const int tag);

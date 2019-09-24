@@ -13,7 +13,7 @@
 #include <malloc.h>
 #endif
 
-#ifdef __NSG_WINDOWS__
+#ifdef _WINDOWS
 #include <Windows.h>
 typedef HANDLE FileHandle;
 #else
@@ -54,7 +54,7 @@ namespace NSG {
   inline void alloc_aligned(void **ptr, size_t size, size_t align) {
     *ptr = nullptr;
     assert(IS_ALIGNED(size, align));
-#ifndef __NSG_WINDOWS__
+#ifndef _WINDOWS
     *ptr = ::aligned_alloc(align, size);
 #else
     *ptr = ::_aligned_malloc(size, align);  // note the swapped arguments!
@@ -68,7 +68,7 @@ namespace NSG {
     if (ptr == nullptr) {
       return;
     }
-#ifndef __NSG_WINDOWS__
+#ifndef _WINDOWS
     free(ptr);
 #else
     ::_aligned_free(ptr);
@@ -93,12 +93,24 @@ namespace NSG {
     }
   }
 
+  inline void get_bin_metadata(const std::string &bin_file, size_t &nrows,
+                               size_t &ncols) {
+    std::ifstream reader(bin_file.c_str(), std::ios::binary);
+    uint32_t      nrows_32, ncols_32;
+    reader.read((char *) &nrows_32, sizeof(uint32_t));
+    reader.read((char *) &ncols_32, sizeof(uint32_t));
+    nrows = nrows_32;
+    ncols = ncols_32;
+    reader.close();
+  }
+
   template<typename T>
   inline void load_bin(const std::string &bin_file, T *&data, size_t &npts,
                        size_t &dim) {
     _u64            read_blk_size = 64 * 1024 * 1024;
     cached_ifstream reader(bin_file, read_blk_size);
-    std::cout << "Reading bin file " << bin_file.c_str() << " ..." << std::flush;
+    std::cout << "Reading bin file " << bin_file.c_str() << " ..."
+              << std::flush;
     size_t actual_file_size = reader.get_file_size();
 
     int npts_i32, dim_i32;
@@ -295,7 +307,7 @@ namespace NSG {
 
     // open classical fd
     FileHandle fd;
-#ifndef __NSG_WINDOWS__
+#ifndef _WINDOWS
     fd = open(filename, O_RDONLY);
     assert(fd != -1);
 #else
@@ -311,7 +323,7 @@ namespace NSG {
       // computed using aligned dimension
       T *buf = data + i * aligned_dim;
 
-#ifndef __NSG_WINDOWS__
+#ifndef _WINDOWS
       int ret = -1;
       ret = pread(fd, (char *) buf, dim * sizeof(T), file_offset);
 #else
@@ -335,7 +347,7 @@ namespace NSG {
     }
     std::cout << "Finished reading Tvecs" << std::endl;
 
-#ifndef __NSG_WINDOWS__
+#ifndef _WINDOWS
     close(fd);
 #else
     CloseHandle(fd);
@@ -464,7 +476,7 @@ namespace NSG {
 
     // open classical fd
     FileHandle fd;
-#ifndef __NSG_WINDOWS__
+#ifndef _WINDOWS
     fd = open(filename, O_RDONLY);
     assert(fd != -1);
 #else
@@ -482,7 +494,7 @@ namespace NSG {
       _u64 cur_blk_size = cur_blk_npts * per_row;
 
 // read blk into block_read_buf
-#ifndef __NSG_WINDOWS__
+#ifndef _WINDOWS
       int ret = -1;
       ret = pread(fd, block_read_buf, cur_blk_size, cur_blk_offset);
 #else
@@ -514,7 +526,7 @@ namespace NSG {
       }
       std::cout << "Block #" << blk << " read\n";
     }
-#ifndef __NSG_WINDOWS__
+#ifndef _WINDOWS
     close(fd);
 #else
     CloseHandle(fd);

@@ -7,7 +7,7 @@
 #include <string.h>
 #include "utils.h"
 
-#ifndef __NSG_WINDOWS__
+#ifndef _WINDOWS
 #include <sys/mman.h>
 #include <unistd.h>
 #else
@@ -45,7 +45,7 @@ int main(int argc, char** argv) {
     std::cout << "Usage:\n"
               << argv[0] << "  data_type<int8/uint8/float>  <data_file.bin>"
               << "  L  R  C  #rounds  alpha"
-              << "  <output_graph_prefix>" << std::endl;
+              << "  <output_graph_file>" << std::endl;
     exit(-1);
   }
 
@@ -55,8 +55,7 @@ int main(int argc, char** argv) {
   const unsigned    C = (unsigned) atoi(argv[5]);
   const unsigned    num_rnds = (unsigned) atoi(argv[6]);
   const float       alpha = (float) atof(argv[7]);
-  const std::string save_path =
-      std::string(argv[8]) + std::string("_unopt.rnsg");
+  const std::string save_path(argv[8]);
 
   if (std::string(argv[1]) == std::string("int8"))
     build_in_memory_index<int8_t>(data_path, L, R, C, num_rnds, alpha,

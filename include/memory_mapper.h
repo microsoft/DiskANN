@@ -1,6 +1,6 @@
 #pragma once
 
-#ifndef __NSG_WINDOWS__
+#ifndef _WINDOWS
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
@@ -15,7 +15,7 @@
 namespace NSG {
   class MemoryMapper {
    private:
-#ifndef __NSG_WINDOWS__
+#ifndef _WINDOWS
     int _fd;
 #else
     HANDLE _bareFile;
