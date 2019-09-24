@@ -7,7 +7,7 @@
 #include <string.h>
 #include "utils.h"
 
-#ifndef __NSG_WINDOWS__
+#ifndef _WINDOWS
 #include <sys/mman.h>
 #include <unistd.h>
 #else

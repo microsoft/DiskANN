@@ -25,7 +25,7 @@
 #include <cassert>
 #include "memory_mapper.h"
 #include "partition_and_pq.h"
-#ifdef __NSG_WINDOWS__
+#ifdef _WINDOWS
 #include <xmmintrin.h>
 #endif
 

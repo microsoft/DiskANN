@@ -9,7 +9,7 @@ MemoryMapper::MemoryMapper(const std::string& filename)
 }
 
 MemoryMapper::MemoryMapper(const char* filename) {
-#ifndef __NSG_WINDOWS__
+#ifndef _WINDOWS
   _fd = open(filename, O_RDONLY);
   if (_fd <= 0) {
     std::cerr << "Inner vertices file not found" << std::endl;
@@ -70,7 +70,7 @@ size_t MemoryMapper::getFileSize() {
 }
 
 MemoryMapper::~MemoryMapper() {
-#ifndef __NSG_WINDOWS__
+#ifndef _WINDOWS
   if (munmap(_buf, _fileSize) != 0)
     std::cerr << "ERROR unmapping. CHECK!" << std::endl;
   close(_fd);

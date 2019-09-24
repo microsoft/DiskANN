@@ -30,25 +30,32 @@ To search the generated index
 
 ##Windows CMake Build
 
-Install CMAKE (v3.15.2 or later)
+The Windows version has been tested with the enterprise editions of Visual Studio 2017 and Visual Studio 2019
+
+Install CMAKE (v3.15.2 or later) from https://cmake.org
 
 Install MKL:
 -	Install MKL from https://software.intel.com/en-us/mkl
--	After installation, run the 'set' command to check if the ICPP_COMPILER19 is set. 
-- 	If the variable is not set, add it to the system variables, setting it to the "windows" folder under your MKL installation.
-	(For instance, if your install folder is "C:\Program Files (x86)\IntelSWtools", set ICPP_COMPILER19 to "C:\Program Files (x86)\IntelSWtools\compilers_and_libraries\windows")
+-	Set a new System environment variable, called INTEL_ROOT to the "windows" folder under your MKL installation
+	(For instance, if your install folder is "C:\Program Files (x86)\IntelSWtools", set INTEL_ROOT to "C:\Program Files (x86)\IntelSWtools\compilers_and_libraries\windows")
 
 Build steps:
 -	Open a new developer command prompt
 -	Create a "build" directory under nsg
 -	Change to the "build" directory and run  
 ```
-<cmake_path> -B. -A x64 -G "Visual Studio 15 2017" ..
+cmake -B. -A x64 ..
 ```
-	Do specify the full path to cmake, as VS comes with its own (older) version of cmake, which may not work.
+	Since VS comes with its own (older) version of cmake, you have to specify the full path to cmake to ensure that the right version is used.
 -	This will create a “rand-nsg” solution file.
--	Open the rand-nsg solution and build the “nsg_lib”, “build_disk_index” and “search_disk_index” projects in order
--	To build from command line, use "msbuild rand-nsg.sln". Check msbuild for options around targets.
+-	Open the rand-nsg solution and build the “nsg_dll” project first. 
+- 	Then build all the other binaries using the ALL_BUILD project that is part of the solution
+-	To build from command line, use msbuild to first build the "nsg_dll" project. And then use it to build the entire solution
+```
+msbuild src\dll\nsg_dll.vcxproj
+msbuild rand-nsg.sln
+```
+	Check msbuild for targets (debug/release).
 
 #Sanity checks (paths specific to nn-z840): 
 

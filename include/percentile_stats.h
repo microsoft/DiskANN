@@ -4,7 +4,7 @@
 #include <cstdint>
 #include <fstream>
 #include <functional>
-#ifdef __NSG_WINDOWS__
+#ifdef _WINDOWS
 #include <numeric>
 #endif
 #include <string>

@@ -1,6 +1,6 @@
 #pragma once
 
-#ifdef __NSG_WINDOWS__
+#ifdef _WINDOWS
 #define NSGDLLEXPORT __declspec(dllexport)
 #else
 #define NSGDLLEXPORT
