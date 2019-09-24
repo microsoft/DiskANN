@@ -49,10 +49,11 @@ int aux_main(int argc, char** argv) {
 
   ANNIndex::IANNIndex* intf = new NSG::NSGInterface<T>(0, ANNIndex::DT_L2);
 
+  bool res = 0;
   // for indexing
   {
     // just construct index
-    bool res = intf->BuildIndex(argv[1], argv[2], "50 64 200 50 0.01");
+//    res = intf->BuildIndex(argv[1], argv[2], "50 64 200 50 0.01");
     // ERROR CHECK
     if (res == 1) {
       exit(-1);

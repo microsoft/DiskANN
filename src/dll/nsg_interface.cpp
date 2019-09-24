@@ -137,7 +137,7 @@ namespace NSG {
     std::string medoids_file = index_prefix_path + "_medoids.bin";
 
     size_t data_dim, num_pq_centers;
-    NSG::get_bin_metadata(pq_tables_bin, data_dim, num_pq_centers);
+    NSG::get_bin_metadata(pq_tables_bin, num_pq_centers, data_dim);
     this->m_dimension = (_u32) data_dim;
     this->aligned_dimension = ROUND_UP(this->m_dimension, 8);
 
@@ -170,14 +170,16 @@ namespace NSG {
                                     float*            distances,
                                     unsigned __int64* ids) const {
     //    _u64      L = 6 * neighborCount;
-
+    std::cout << this->aligned_dimension << " is aligned dimension "
+              << std::endl;
     const T* query = (const T*) vector;
-#pragma omp  parallel for schedule(dynamic, 1)
+//#pragma omp  parallel for schedule(dynamic, 1)
     for (_s64 i = 0; i < queryCount; i++) {
       _pFlashIndex->cached_beam_search(
           query + (i * this->aligned_dimension), neighborCount, this->Lsearch,
           ids + (i * neighborCount), distances + (i * neighborCount),
           this->beam_width);
+//      std::cout << i << std::endl;
     }
   }
 
