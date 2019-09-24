@@ -22,7 +22,7 @@ mkdir build && cd build && cmake .. && make -j
 
 ##Windows CMake Build: (@Gopal: I guess DLLs build is still not supported here?)
 
-Install CMAKE (v3.15.2 or later)
+Install CMAKE (v3.15.2 or later) from https://cmake.org/
 
 Install MKL:
 -	Install MKL from https://software.intel.com/en-us/mkl
@@ -31,12 +31,14 @@ Install MKL:
 	(For instance, if your install folder is "C:\Program Files (x86)\IntelSWtools", set ICPP_COMPILER19 to "C:\Program Files (x86)\IntelSWtools\compilers_and_libraries\windows")
 
 Build steps:
--	Open a new developer command prompt
+-	Open a new command prompt
 -	Create a "build" directory under nsg
--	Change to the "build" directory and run  
-```<cmake_path> -B. -A x64 -G "Visual Studio 15 2017" ..
+-	Change to the "build" directory and run:
+
+```cmake_path\cmake.exe -B. -A x64 ..
 ```
-		(Do specify the full path to cmake, as VS comes with its own (older) version of cmake, which will not work)
+	(Do specify the full path to cmake, as VS comes with its own (older) version of cmake, which will not work)
+
 -	This will create a “rand-nsg” solution
 -	Open the rand-nsg solution and build the “nsg_lib”, “build_disk_index” and “search_disk_index” projects in order
 -	To build from command line, use "msbuild rand-nsg.sln". Check msbuild for options around targets.
