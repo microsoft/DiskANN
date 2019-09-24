@@ -43,17 +43,28 @@ Build steps:
 
 #Sanity checks (paths specific to nn-z840): 
 
-Building the index:
+#Building the index:
+
+First generate the pivots:
 ```
 generate_pq.exe float "E:\sift1m_u8\sift1m_float_harsha\sift_base.bin" E:\cmake-sift\ravi-index 32 0.01
-build_in_memory_index.exe float "E:\sift1m_u8\sift1m_float_harsha\sift_base.bin" 50 64 750 2 1 E:\cmake-sift\ravi-index
-create_disk_layout.exe float "E:\sift1m_u8\sift1m_float_harsha\sift_base.bin" E:\cmake-sift\ravi-index_unopt.rnsg E:\cmake-sift\ravi-index_diskopt.rnsg
-search_disk_index.exe float E:\cmake-sift\ravi-index 0 E:\sift1m_u8\sift1m_float_harsha\sift_query.bin E:\sift1m_u8\sift1m_float_harsha\sift_query_gs100.bin E:\sift1m_u8\sift1m_float_harsha\sift_query_gs100_dist.bin 5
+```
+Then build the 'regular' index:
+```
+build_memory_index.exe float E:\sift1m_u8\sift1m_float_harsha\sift_base.bin 50 64 750 2 1.2 E:\cmake-sift\ravi-index_memory.index
+```
+Optimize for disk search: 
+```
+create_disk_layout.exe float E:\sift1m_u8\sift1m_float_harsha\sift_base.bin E:\cmake-sift\ravi-index_memory.index E:\cmake-sift\ravi-index_disk.index
+```
+Run search: 
+```
+search_disk_index.exe float E:\cmake-sift\ravi-index_pq_pivots.bin E:\cmake-sift\ravi-index_compressed.bin E:\cmake-sift\ravi-index_disk.index null null E:\sift1m_u8\sift1m_float_harsha\sift_query.bin 5 16 4 E:\cmake-sift\ravi-index_results 10 20 30 40
+```
+Measure recall
+```
+calculate_recall.exe E:\sift1m_u8\sift1m_float_harsha\sift_gs100_idx.bin E:\cmake-sift\ravi-index_results20_idx_uint32.bin 5
 ```
 
-
-build_disk_index.exe float "E:\sift1m_u8\sift1m_float_harsha\sift_base.bin" E:\cmake-sift\disk-index_L50_R64_C750 50 64 750 32 50000
-
-search_disk_index float E:\cmake-sift\disk-index_L50_R64_C750 E:\sift1m_u8\sift1m_float_harsha\sift_query.bin E:\sift1m_u8\sift1m_float_harsha\sift_query_gs100.bin E:\sift1m_u8\sift1m_float_harsha\sift_query_gs100_dist.bin 5
 
 
