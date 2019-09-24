@@ -1,5 +1,5 @@
 #pragma once
-#ifdef __NSG_WINDOWS__
+#ifdef _WINDOWS
 #include <Windows.h>
 #include <fcntl.h>
 #include <malloc.h>

@@ -16,7 +16,7 @@
 
 #include "tsl/robin_set.h"
 
-#ifdef __NSG_WINDOWS__
+#ifdef _WINDOWS
 #include "windows_aligned_file_reader.h"
 #else
 #include "linux_aligned_file_reader.h"
@@ -350,7 +350,7 @@ namespace NSG {
     for (auto &k_v : nhood_cache) {
       unsigned *nbrs = k_v.second.second;
       _u64      nnbrs = k_v.second.first;
-#ifndef __NSG_WINDOWS__
+#ifndef _WINDOWS
       assert(malloc_usable_size(nbrs) >= nnbrs * sizeof(unsigned));
 #else
       assert(_msize(nbrs) >= nnbrs * sizeof(unsigned));
@@ -510,7 +510,7 @@ namespace NSG {
 
     // open AlignedFileReader handle to nsg_file
     std::string nsg_fname(disk_index_file);
-#ifdef __NSG_WINDOWS__
+#ifdef _WINDOWS
     reader = new WindowsAlignedFileReader();
 #else
     reader = new LinuxAlignedFileReader();

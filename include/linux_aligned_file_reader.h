@@ -1,5 +1,5 @@
 #pragma once
-#ifndef __NSG_WINDOWS__
+#ifndef _WINDOWS
 
 #include "aligned_file_reader.h"
 

@@ -1,7 +1,7 @@
 #pragma once
 
 #include <utils.h>
-#ifdef __NSG_WINDOWS__
+#ifdef _WINDOWS
 #include <intrin.h>
 #else
 #include <immintrin.h>
@@ -45,7 +45,7 @@ namespace NSG {
    public:
     float compare(const int8_t *a, const int8_t *b, unsigned size) const {
       float result = 0.0;
-#ifndef __NSG_WINDOWS__
+#ifndef _WINDOWS
 #pragma omp simd
 #endif
       for (_s32 i = 0; i < (_s32) size; i++) {
@@ -64,7 +64,7 @@ namespace NSG {
    public:
     float compare(const uint8_t *a, const uint8_t *b, unsigned size) const {
       float result = 0.0;
-#ifndef __NSG_WINDOWS__
+#ifndef _WINDOWS
 #pragma omp simd
 #endif
       for (_s32 i = 0; i < (_s32) size; i++) {
@@ -81,7 +81,7 @@ namespace NSG {
 
   class DistanceL2 : public Distance<float> {
    public:
-#ifndef __NSG_WINDOWS__
+#ifndef _WINDOWS
     float compare(const float *a, const float *b, unsigned size) const
         __attribute__((hot)) {
       a = (const float *) __builtin_assume_aligned(a, 32);
@@ -120,7 +120,7 @@ namespace NSG {
       // horizontal add sum
       result = _mm256_reduce_add_ps(sum);
 #else
-#ifndef __NSG_WINDOWS__
+#ifndef _WINDOWS
 #pragma omp simd reduction(+ : result) aligned(a, b : 32)
 #endif
       for (_s32 i = 0; i < (_s32) size; i++) {

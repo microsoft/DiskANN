@@ -26,7 +26,7 @@
 #include "memory_mapper.h"
 #include "partition_and_pq.h"
 #include "windows_customizations.h"
-#ifdef __NSG_WINDOWS__
+#ifdef _WINDOWS
 #include <xmmintrin.h>
 #endif
 
@@ -1637,7 +1637,7 @@ namespace NSG {
   template NSGDLLEXPORT class IndexNSG<int8_t>;
   template NSGDLLEXPORT class IndexNSG<uint8_t>;
 
-#ifdef __NSG_WINDOWS__
+#ifdef _WINDOWS
   template NSGDLLEXPORT IndexNSG<uint8_t, int>::IndexNSG(
       Metric m, const char *filename, const size_t max_points, const size_t nd,
       const bool enable_tags);

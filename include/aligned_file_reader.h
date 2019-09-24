@@ -1,7 +1,7 @@
 #pragma once
 
 #include <vector>
-#ifndef __NSG_WINDOWS__
+#ifndef _WINDOWS
 #include <fcntl.h>
 #include <libaio.h>
 #include <unistd.h>

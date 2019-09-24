@@ -1,5 +1,6 @@
 #pragma once
-#pragma once
+
+#include "windows_customizations.h"
 
 namespace ANNIndex {
 
@@ -13,47 +14,32 @@ namespace ANNIndex {
 
   class IANNIndex {
    public:
-#ifdef __NSG_WINDOWS__
-    __declspec(dllexport)
-#endif
-        explicit IANNIndex(unsigned __int32 dimension = 0,
-                           DistanceType     distanceType = DT_L2)
+    NSGDLLEXPORT explicit IANNIndex(unsigned __int32 dimension = 0,
+                                    DistanceType     distanceType = DT_L2)
         : m_dimension(dimension), m_distanceType(distanceType) {
     }
 
-#ifdef __NSG_WINDOWS__
-    __declspec(dllexport)
-#endif
-        virtual ~IANNIndex() {
+    NSGDLLEXPORT virtual ~IANNIndex() {
     }
 
-#ifdef __NSG_WINDOWS__
-    __declspec(dllexport)
-#endif
-        // In implementation, the file path can be a file or folder.
-        virtual bool BuildIndex(const char* dataFilePath,
-                                const char* indexFilePath,
-                                const char* indexBuildParameters) = 0;
+    // In implementation, the file path can be a file or folder.
+    NSGDLLEXPORT virtual bool BuildIndex(const char* dataFilePath,
+                                         const char* indexFilePath,
+                                         const char* indexBuildParameters) = 0;
 
-#ifdef __NSG_WINDOWS__
-    __declspec(dllexport)
-#endif
-        // Load index form file.
-        virtual bool LoadIndex(const char* indexFilePath,
-                               const char* queryParameters) = 0;
+    // Load index form file.
+    NSGDLLEXPORT virtual bool LoadIndex(const char* indexFilePath,
+                                        const char* queryParameters) = 0;
 
-// Search several vectors, return their neighbors' distance and ids.
-// Both distances & ids are returned arraies of neighborCount elements,
-// And need to be allocated by invoker, which capicity should be greater
-// than queryCount * neighborCount.
-#ifdef __NSG_WINDOWS__
-    __declspec(dllexport)
-#endif
-        virtual void SearchIndex(const char*       vector,
-                                 unsigned __int64  queryCount,
-                                 unsigned __int64  neighborCount,
-                                 float*            distances,
-                                 unsigned __int64* ids) const = 0;
+    // Search several vectors, return their neighbors' distance and ids.
+    // Both distances & ids are returned arraies of neighborCount elements,
+    // And need to be allocated by invoker, which capicity should be greater
+    // than queryCount * neighborCount.
+    NSGDLLEXPORT virtual void SearchIndex(const char*       vector,
+                                          unsigned __int64  queryCount,
+                                          unsigned __int64  neighborCount,
+                                          float*            distances,
+                                          unsigned __int64* ids) const = 0;
 
    public:
     // Vector dimension.
