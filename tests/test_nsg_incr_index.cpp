@@ -73,6 +73,7 @@ int main(int argc, char** argv) {
       index.insert_point(data_copy_copy + i * dim, paras, pool, tmp, visited,
                          cut_graph, i);
     std::cout << "Incremental time: " << timer.elapsed() / 1000 << "ms\n";
+    index.update_in_graph();
   }
   index.save(save_path.c_str());
 
@@ -80,14 +81,14 @@ int main(int argc, char** argv) {
   while (delete_list.size() < num_incr)
     delete_list.insert(((rand() * rand() * rand()) % num_points) + num_fake);
   std::cout << "Deleting " << delete_list.size() << " elements" << std::endl;
-  index.update_in_graph();
+
   {
     NSG::Timer timer;
     index.enable_delete();
     for (auto p : delete_list)
 
       if (index.eager_delete(p, paras) != 0)
-        //    if(index.delete_point(p) != 0)
+        // if (index.delete_point(p) != 0)
         std::cerr << "Delete tag " << p << " not found" << std::endl;
 
     if (index.disable_delete(paras, true) != 0) {
@@ -106,6 +107,7 @@ int main(int argc, char** argv) {
       index.insert_point(data_copy_copy + (size_t) p * (size_t) dim, paras,
                          pool, tmp, visited, cut_graph, p);
     std::cout << "Re-incremental time: " << timer.elapsed() / 1000 << "ms\n";
+    //  index.update_in_graph();
   }
 
   auto save_path_reinc = save_path + ".reinc";

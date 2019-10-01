@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cassert>
+#include <map>
 #include <sstream>
 #include <stack>
 #include <string>
@@ -89,6 +90,10 @@ namespace NSG {
                        std::vector<tsl::robin_set<unsigned>> &bfs_order,
                        bool *                                 visited);
 
+    void calculate_bfs_level(const unsigned start_node,
+                             std::map<unsigned, unsigned> &bfs_level,
+                             bool *visited);
+
     // entry point is centroid based on all-to-centroid distance computation
     unsigned calculate_entry_point();
 
@@ -119,6 +124,11 @@ namespace NSG {
                       const unsigned location, const float alpha,
                       const unsigned degree, const unsigned maxc,
                       std::vector<Neighbor> &result);
+
+    void occlude_list_eager(const std::vector<Neighbor> &pool,
+                            const unsigned location, const float alpha,
+                            const unsigned degree, const unsigned maxc,
+                            std::vector<Neighbor> &result);
 
     void link(Parameters &parameters);
 
