@@ -96,7 +96,6 @@ int main(int argc, char** argv) {
       return -1;
     }
     std::cout << "Delete time: " << timer.elapsed() / 1000 << "ms\n";
-    index.update_in_graph();
   }
 
   auto save_path_del = save_path + ".del";
@@ -107,7 +106,6 @@ int main(int argc, char** argv) {
       index.insert_point(data_copy_copy + (size_t) p * (size_t) dim, paras,
                          pool, tmp, visited, cut_graph, p);
     std::cout << "Re-incremental time: " << timer.elapsed() / 1000 << "ms\n";
-    //  index.update_in_graph();
   }
 
   auto save_path_reinc = save_path + ".reinc";

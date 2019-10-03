@@ -75,6 +75,7 @@ namespace NSG {
     int delete_point(const TagT tag);
 
     int eager_delete(const TagT tag, const Parameters &parameters);
+
     /*  Internals of the library */
     void set_data(const T *data);
 
@@ -89,10 +90,6 @@ namespace NSG {
     void reachable_bfs(const unsigned                         start_node,
                        std::vector<tsl::robin_set<unsigned>> &bfs_order,
                        bool *                                 visited);
-
-    void calculate_bfs_level(const unsigned start_node,
-                             std::map<unsigned, unsigned> &bfs_level,
-                             bool *visited);
 
     // entry point is centroid based on all-to-centroid distance computation
     unsigned calculate_entry_point();
@@ -134,6 +131,14 @@ namespace NSG {
 
     // WARNING: Do not call reserve_location() without acquiring change_lock_
     unsigned reserve_location();
+
+    // get new location corresponding to each undeleted tag after deletions
+
+    std::vector<unsigned> get_new_location(unsigned &active);
+
+    // renumbering nodes, updating tag and location mappings and compacting the
+    // graph
+    void compact_data(std::vector<unsigned> new_location, unsigned active);
 
     // WARNING: Do not call consolidate_deletes() without acquiring change_lock_
     // Returns number of live points left after consolidation
