@@ -184,8 +184,8 @@ namespace NSG {
       std::cout << "Duplicate entries in in-neighbor list of deleted point "
                 << _in_graph[id].size() << "  " << in_nbr.size() << std::endl;
 
-    std::random_device rd;
-    std::mt19937       gen(rd());
+    std::random_device          rd;
+    std::mt19937                gen(rd());
     std::bernoulli_distribution d(0.25);  // gives true 1/4th of the time
 
     // for (unsigned i = 0; i < _in_graph[id].size(); i++) {
