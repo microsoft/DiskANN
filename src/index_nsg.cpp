@@ -186,7 +186,7 @@ namespace NSG {
 
        std::random_device rd;
        std::mt19937 gen(rd());
-       std::bernoulli_distribution d(0.25); //gives true 1/4th of the time*/
+       std::bernoulli_distribution d(0.25); //gives true 1/4th of the time
 
     // for (unsigned i = 0; i < _in_graph[id].size(); i++) {
     for (auto it : in_nbr) {
@@ -401,6 +401,30 @@ namespace NSG {
   template<typename T, typename TagT>
   void IndexNSG<T, TagT>::compact_data(std::vector<unsigned> new_location,
                                        unsigned active) {
+
+
+    // If start node is removed, replace it.
+    if (_delete_set.find(_ep) != _delete_set.end()) {
+      std::cerr << "Replacing start node which has been deleted... "
+                << std::flush;
+      auto old_ep = _ep;
+      // First active neighbor of old start node is new start node
+      for (auto iter : _final_graph[_ep])
+        if (_delete_set.find(iter) != _delete_set.end()) {
+          _ep = iter;
+          break;
+        }
+      if (_ep == old_ep) {
+        std::cerr << "ERROR: Did not find a replacement for start node."
+                  << std::endl;
+        exit(-1);
+      } else {
+        assert(_delete_set.find(_ep) == _delete_set.end());
+        std::cout << "New start node is " << _ep << std::endl;
+      }
+    }
+
+
     std::cout << "Re-numbering nodes and edges and consolidating data... "
               << std::flush;
     for (unsigned old = 0; old < _max_points; ++old) {
@@ -510,17 +534,9 @@ namespace NSG {
     long long     total_gr_edges = 0;
     std::ofstream out(filename, std::ios::binary | std::ios::out);
 
-    for (unsigned i = 0; i < _final_graph.size(); i++)
-      for (unsigned j = 0; j < _final_graph[i].size(); j++)
-        if (_delete_set.find(_final_graph[i][j]) != _delete_set.end())
-          std::cout << "Deleted point " << _final_graph[i][j]
-                    << " found in final graph at "
-                    << "( " << i << " , " << j << " )" << std::endl;
-
     if (_eager_done) {
       unsigned              active = 0;
       std::vector<unsigned> new_location = get_new_location(active);
-      //  std::cout << "Active = " << active << std::endl;
       compact_data(new_location, active);
     }
 
@@ -1548,6 +1564,8 @@ namespace NSG {
 
   template<typename T, typename TagT>
   void IndexNSG<T, TagT>::update_in_graph() {
+
+      std::cout << "Updating in_graph.....";
     for (unsigned i = 0; i < _in_graph.size(); i++)
       _in_graph[i].clear();
 
@@ -1562,6 +1580,7 @@ namespace NSG {
         _in_graph[_final_graph[i][j]].emplace_back(i);
       }
 
+    
     size_t max_in, min_in, avg_in;
     max_in = 0;
     min_in = _max_points + 1;
@@ -1574,9 +1593,9 @@ namespace NSG {
         min_in = _in_graph[i].size();
     }
 
-    std::cout << "Max in_degree = " << max_in << "; Min in_degree = " << min_in
+    std::cout << std::endl << "Max in_degree = " << max_in << "; Min in_degree = " << min_in
               << "; Average in_degree = "
-              << (float) (avg_in) / (float) (_in_graph.size()) << std::endl;
+              << (float) (avg_in) / (float) (_nd) << std::endl;
   }
   template<typename T, typename TagT>
   void IndexNSG<T, TagT>::build(const T *data, Parameters &parameters,
@@ -1641,10 +1660,10 @@ namespace NSG {
      * their distance from the query node
      */
     std::vector<Neighbor> ep_neighbors;
-    for (auto curpt : start_points)
-      for (auto id : _final_graph[curpt]) {
+    for (auto cur_pt : start_points)
+      for (auto id : _final_graph[cur_pt]) {
         if (id >= _nd) {
-          std::cout << "Error" << id << "    Curpt " << curpt << std::endl;
+          std::cout << "Error" << id << "    Cur_pt " << cur_pt << std::endl;
           exit(-1);
         }
         // std::cout << "cmp: query <-> " << id << "\n";
