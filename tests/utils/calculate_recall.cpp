@@ -38,9 +38,9 @@ float calc_recall_set(unsigned num_queries, unsigned* gold_std, unsigned dim_gs,
 
 int main(int argc, char** argv) {
   if (argc != 4 && argc != 5) {
-    std::cout << argv[0]
-              << " <ground_truth_bin> <our_results_bin>  <r1> <optional: r2 to calculate "
-                 "recall r1@r2. By default, r2 will be set to r1>"
+    std::cout << argv[0] << " <ground_truth_bin> <our_results_bin>  <r1> "
+                            "<optional: r2 to calculate "
+                            "recall r1@r2. By default, r2 will be set to r1>"
               << std::endl;
     exit(-1);
   }

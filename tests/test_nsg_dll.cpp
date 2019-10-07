@@ -53,7 +53,7 @@ int aux_main(int argc, char** argv) {
   // for indexing
   {
     // just construct index
-//    res = intf->BuildIndex(argv[1], argv[2], "50 64 200 50 0.01");
+    res = intf->BuildIndex(argv[1], argv[2], "50 64 200 50 0.01");
     // ERROR CHECK
     if (res == 1) {
       exit(-1);

@@ -153,8 +153,8 @@ namespace math_utils {
         }
       }
     }
-  delete[] ones_a;
- delete[] ones_b; 
+    delete[] ones_a;
+    delete[] ones_b;
   }
 
   // Given data in num_points * new_dim row major

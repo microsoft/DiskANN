@@ -50,7 +50,7 @@ namespace NSG {
              "compressed number of bytes per datapoint to store in "
              "memory) Training-Set-Sampling-Rate-For-PQ-Generation"
           << std::endl;
-      return 1;
+      return false;
     }
 
     std::string index_prefix_path(indexFilePath);
@@ -107,7 +107,7 @@ namespace NSG {
 
     std::cout << "Indexing time: " << diff.count() << "\n";
 
-    return 0;
+    return true;
   }
 
   template<typename T>
@@ -125,7 +125,7 @@ namespace NSG {
       std::cerr << "Correct usage of parameters is \n"
                    "Lsearch[1] BeamWidth[2] cache_nlevels[3] nthreads[4]"
                 << std::endl;
-      return 1;
+      return false;
     }
 
     const std::string index_prefix_path(indexFilePath);
@@ -156,7 +156,7 @@ namespace NSG {
     // cache bfs levels
     _pFlashIndex->cache_bfs_levels(cache_nlevels);
     //    free(params);  // Gopal. Caller has to free the 'params' variable.
-    return 0;
+    return true;
   }
 
   // Search several vectors, return their neighbors' distance and ids.
@@ -173,18 +173,34 @@ namespace NSG {
     std::cout << this->aligned_dimension << " is aligned dimension "
               << std::endl;
     const T* query = (const T*) vector;
-//#pragma omp  parallel for schedule(dynamic, 1)
+    //#pragma omp  parallel for schedule(dynamic, 1)
     for (_s64 i = 0; i < queryCount; i++) {
       _pFlashIndex->cached_beam_search(
           query + (i * this->aligned_dimension), neighborCount, this->Lsearch,
           ids + (i * neighborCount), distances + (i * neighborCount),
           this->beam_width);
-//      std::cout << i << std::endl;
+      //      std::cout << i << std::endl;
     }
   }
 
+  extern "C" __declspec(dllexport) ANNIndex::IANNIndex* CreateObjectFloat(
+      unsigned __int32 dimension, ANNIndex::DistanceType distanceType) {
+    return new NSG::NSGInterface<float>(dimension, distanceType);
+  }
+
+  extern "C" __declspec(dllexport) void ReleaseObjectFloat(
+      ANNIndex::IANNIndex* object) {
+    NSG::NSGInterface<float>* subclass =
+        dynamic_cast<NSG::NSGInterface<float>*>(object);
+    if (subclass != nullptr) {
+      delete subclass;
+    }
+  }
+  
   template class NSGInterface<int8_t>;
   template class NSGInterface<float>;
   template class NSGInterface<uint8_t>;
 
 }  // namespace NSG
+
+

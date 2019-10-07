@@ -92,7 +92,7 @@ namespace NSG {
   template<>
   IndexNSG<float>::~IndexNSG() {
     delete this->_distance;
-//    delete[] _data;
+    //    delete[] _data;
     aligned_free(_data);
   }
 
@@ -100,14 +100,14 @@ namespace NSG {
   IndexNSG<_s8>::~IndexNSG() {
     delete this->_distance;
     aligned_free(_data);
-//    delete[] _data;
+    //    delete[] _data;
   }
 
   template<>
   IndexNSG<_u8>::~IndexNSG() {
     delete this->_distance;
     aligned_free(_data);
-//   delete[] _data;
+    //   delete[] _data;
   }
 
   template<typename T, typename TagT>
@@ -653,22 +653,22 @@ namespace NSG {
       const T *query, const Parameters &parameter,
       std::vector<unsigned> &init_ids, std::vector<Neighbor> &retset,
       std::vector<Neighbor> &fullset, tsl::robin_set<unsigned> &visited) {
-//    const unsigned L = parameter.Get<unsigned>("L");
+    //    const unsigned L = parameter.Get<unsigned>("L");
 
     /* put random L new ids into visited list and init_ids list */
-/*      while (init_ids.size() < L) {
-      unsigned id = (rand() * rand() * rand()) % _nd;
-      if (visited.find(id) == visited.end()) {
-        visited.insert(id);
-        fullset.emplace_back(
-            Neighbor(id,
-                     _distance->compare(_data + _aligned_dim * (size_t) id,
-                                        query, _aligned_dim),
-                     true));
-        init_ids.emplace_back(id);
-      }
-    }
-*/
+    /*      while (init_ids.size() < L) {
+          unsigned id = (rand() * rand() * rand()) % _nd;
+          if (visited.find(id) == visited.end()) {
+            visited.insert(id);
+            fullset.emplace_back(
+                Neighbor(id,
+                         _distance->compare(_data + _aligned_dim * (size_t) id,
+                                            query, _aligned_dim),
+                         true));
+            init_ids.emplace_back(id);
+          }
+        }
+    */
     /* compare distance of all points in init_ids with query, and put the id
      * with distance
      * in retset
@@ -721,7 +721,7 @@ namespace NSG {
                                  (unsigned) _aligned_dim);
           Neighbor nn(id, dist, true);
           fullset.emplace_back(nn);
-          if (dist >= retset[l - 1].distance && (l == retset.size()-1))
+          if (dist >= retset[l - 1].distance && (l == retset.size() - 1))
             continue;
 
           // if distance is smaller than largest, add to retset, keep it
@@ -1332,12 +1332,14 @@ namespace NSG {
       for (uint32_t sync_num = 0; sync_num < NUM_SYNCS; sync_num++) {
         if (rnd_no == NUM_RNDS - 1) {
           if (last_round_alpha > 1)
-//            parameters.Set<unsigned>(
-//                "L", (unsigned) (std::min)(
-//                         (int) L, (int) (L -
-//                                         (L - 50) * ((float) sync_num /
-//                                                     (float) NUM_SYNCS))));
-            parameters.Set<unsigned>("L", (std::min)(L, (unsigned) 50));                                                 
+            //            parameters.Set<unsigned>(
+            //                "L", (unsigned) (std::min)(
+            //                         (int) L, (int) (L -
+            //                                         (L - 50) * ((float)
+            //                                         sync_num /
+            //                                                     (float)
+            //                                                     NUM_SYNCS))));
+            parameters.Set<unsigned>("L", (std::min)(L, (unsigned) 50));
           parameters.Set<float>("alpha", last_round_alpha);
         }
         size_t start_id = sync_num * round_size;

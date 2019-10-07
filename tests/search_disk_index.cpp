@@ -135,18 +135,19 @@ int search_disk_index(int argc, char** argv) {
   }
 
   std::cout << "Done searching. Now saving results " << std::endl;
-  _u64 test_id = 0;
-  uint32_t *results_u32 = new unsigned[recall_at * query_num];
+  _u64      test_id = 0;
+  uint32_t* results_u32 = new unsigned[recall_at * query_num];
   for (auto L : Lvec) {
-      NSG::convert_types<uint64_t, uint32_t>(query_result_ids[test_id].data(), results_u32, query_num, recall_at);
+    NSG::convert_types<uint64_t, uint32_t>(query_result_ids[test_id].data(),
+                                           results_u32, query_num, recall_at);
     std::string cur_result_path =
         result_output_prefix + std::to_string(L) + "_idx_uint32.bin";
-    NSG::save_bin<_u32>(cur_result_path, results_u32,
-                        query_num, recall_at);
-//    cur_result_path =
-//        result_output_prefix + std::to_string(L) + "_dist_float.bin";
-//    NSG::save_bin<float>(cur_result_path, query_result_dists[test_id].data(),
-//                         query_num, recall_at);
+    NSG::save_bin<_u32>(cur_result_path, results_u32, query_num, recall_at);
+    //    cur_result_path =
+    //        result_output_prefix + std::to_string(L) + "_dist_float.bin";
+    //    NSG::save_bin<float>(cur_result_path,
+    //    query_result_dists[test_id].data(),
+    //                         query_num, recall_at);
     test_id++;
   }
   delete[] results_u32;
