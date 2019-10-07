@@ -490,53 +490,53 @@ int partition(const std::string data_file, const float sampling_rate,
 
 // Instantations of supported templates
 
-template void NSGDLLEXPORT gen_random_slice<float>(const float *inputdata,
+template void DISKANN_DLLEXPORT gen_random_slice<float>(const float *inputdata,
                                                    size_t npts, size_t ndims,
                                                    float   p_val,
                                                    float *&sampled_data,
                                                    size_t &slice_size);
-template void NSGDLLEXPORT gen_random_slice<uint8_t>(const uint8_t *inputdata,
+template void DISKANN_DLLEXPORT gen_random_slice<uint8_t>(const uint8_t *inputdata,
                                                      size_t npts, size_t ndims,
                                                      float   p_val,
                                                      float *&sampled_data,
                                                      size_t &slice_size);
-template void NSGDLLEXPORT gen_random_slice<int8_t>(const int8_t *inputdata,
+template void DISKANN_DLLEXPORT gen_random_slice<int8_t>(const int8_t *inputdata,
                                                     size_t npts, size_t ndims,
                                                     float   p_val,
                                                     float *&sampled_data,
                                                     size_t &slice_size);
 
-template void NSGDLLEXPORT gen_random_slice<float>(const std::string data_file,
+template void DISKANN_DLLEXPORT gen_random_slice<float>(const std::string data_file,
                                                    float             p_val,
                                                    float *&sampled_data,
                                                    size_t &slice_size,
                                                    size_t &ndims);
-template void NSGDLLEXPORT gen_random_slice<uint8_t>(
+template void DISKANN_DLLEXPORT gen_random_slice<uint8_t>(
     const std::string data_file, float p_val, float *&sampled_data,
     size_t &slice_size, size_t &ndims);
-template void NSGDLLEXPORT gen_random_slice<int8_t>(const std::string data_file,
+template void DISKANN_DLLEXPORT gen_random_slice<int8_t>(const std::string data_file,
                                                     float             p_val,
                                                     float *&sampled_data,
                                                     size_t &slice_size,
                                                     size_t &ndims);
 
-template NSGDLLEXPORT int partition<int8_t>(
+template DISKANN_DLLEXPORT int partition<int8_t>(
     const std::string data_file, const float sampling_rate, size_t num_centers,
     size_t max_k_means_reps, const std::string prefix_path, size_t k_base);
-template NSGDLLEXPORT int partition<uint8_t>(
+template DISKANN_DLLEXPORT int partition<uint8_t>(
     const std::string data_file, const float sampling_rate, size_t num_centers,
     size_t max_k_means_reps, const std::string prefix_path, size_t k_base);
-template NSGDLLEXPORT int partition<float>(
+template DISKANN_DLLEXPORT int partition<float>(
     const std::string data_file, const float sampling_rate, size_t num_centers,
     size_t max_k_means_reps, const std::string prefix_path, size_t k_base);
 
-template NSGDLLEXPORT int generate_pq_data_from_pivots<int8_t>(
+template DISKANN_DLLEXPORT int generate_pq_data_from_pivots<int8_t>(
     const std::string data_file, size_t num_centers, size_t num_pq_chunks,
     std::string pq_pivots_path, std::string pq_compressed_vectors_path);
-template NSGDLLEXPORT int generate_pq_data_from_pivots<uint8_t>(
+template DISKANN_DLLEXPORT int generate_pq_data_from_pivots<uint8_t>(
     const std::string data_file, size_t num_centers, size_t num_pq_chunks,
     std::string pq_pivots_path, std::string pq_compressed_vectors_path);
-template NSGDLLEXPORT int generate_pq_data_from_pivots<float>(
+template DISKANN_DLLEXPORT int generate_pq_data_from_pivots<float>(
     const std::string data_file, size_t num_centers, size_t num_pq_chunks,
     std::string pq_pivots_path, std::string pq_compressed_vectors_path);
 

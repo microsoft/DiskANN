@@ -11,25 +11,25 @@ namespace diskann {
   template<typename T>
   class NSGInterface : public ANNIndex::IANNIndex {
    public:
-    NSGDLLEXPORT NSGInterface(unsigned __int32       dimension,
+    DISKANN_DLLEXPORT NSGInterface(unsigned __int32       dimension,
                               ANNIndex::DistanceType distanceType);
 
-    NSGDLLEXPORT virtual ~NSGInterface();
+    DISKANN_DLLEXPORT virtual ~NSGInterface();
 
     // In implementation, the file path can be a file or folder.
-    NSGDLLEXPORT virtual bool BuildIndex(const char* dataFilePath,
+    DISKANN_DLLEXPORT virtual bool BuildIndex(const char* dataFilePath,
                                          const char* indexFilePath,
                                          const char* indexBuildParameters);
 
     // Load index form file.
-    NSGDLLEXPORT virtual bool LoadIndex(const char* indexFilePath,
+    DISKANN_DLLEXPORT virtual bool LoadIndex(const char* indexFilePath,
                                         const char* queryParameters);
 
     // Search several vectors, return their neighbors' distance and ids.
     // Both distances & ids are returned arraies of neighborCount elements,
     // And need to be allocated by invoker, which capicity should be greater
     // than queryCount * neighborCount.
-    NSGDLLEXPORT virtual void SearchIndex(const char*       vector,
+    DISKANN_DLLEXPORT virtual void SearchIndex(const char*       vector,
                                           unsigned __int64  queryCount,
                                           unsigned __int64  neighborCount,
                                           float*            distances,

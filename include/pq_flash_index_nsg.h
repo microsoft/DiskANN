@@ -51,33 +51,33 @@ namespace diskann {
   template<typename T>
   class PQFlashNSG {
    public:
-    NSGDLLEXPORT PQFlashNSG();
-    NSGDLLEXPORT ~PQFlashNSG();
+    DISKANN_DLLEXPORT PQFlashNSG();
+    DISKANN_DLLEXPORT ~PQFlashNSG();
 
     // load compressed data, and obtains the handle to the disk-resident index
-    NSGDLLEXPORT int load(uint32_t num_threads, const char *pq_centroids_bin,
+    DISKANN_DLLEXPORT int load(uint32_t num_threads, const char *pq_centroids_bin,
                           const char *compressed_data_bin,
                           const char *disk_index_file,
                           const char *medoids_file = {0});
 
-    NSGDLLEXPORT void create_disk_layout(const std::string base_file,
+    DISKANN_DLLEXPORT void create_disk_layout(const std::string base_file,
                                          const std::string mem_index_file,
                                          const std::string output_file);
-    NSGDLLEXPORT void cache_visited_nodes(_u64 *node_list, _u64 num_nodes);
-    NSGDLLEXPORT void load_cache_from_file(std::string cache_bin);
-    NSGDLLEXPORT void cache_bfs_levels(_u64 nlevels);
+    DISKANN_DLLEXPORT void cache_visited_nodes(_u64 *node_list, _u64 num_nodes);
+    DISKANN_DLLEXPORT void load_cache_from_file(std::string cache_bin);
+    DISKANN_DLLEXPORT void cache_bfs_levels(_u64 nlevels);
 
-    NSGDLLEXPORT void set_cache_create_flag();
+    DISKANN_DLLEXPORT void set_cache_create_flag();
 
-    NSGDLLEXPORT void save_cached_nodes(_u64        num_nodes,
+    DISKANN_DLLEXPORT void save_cached_nodes(_u64        num_nodes,
                                         std::string cache_file_path);
 
     // setting up thread-specific data
-    NSGDLLEXPORT void setup_thread_data(_u64 nthreads);
-    NSGDLLEXPORT void destroy_thread_data();
+    DISKANN_DLLEXPORT void setup_thread_data(_u64 nthreads);
+    DISKANN_DLLEXPORT void destroy_thread_data();
 
     // implemented
-    NSGDLLEXPORT void cached_beam_search(
+    DISKANN_DLLEXPORT void cached_beam_search(
         const T *query, const _u64 k_search, const _u64 l_search, _u64 *res_ids,
         float *res_dists, const _u64 beam_width, QueryStats *stats = nullptr,
         Distance<T> *output_dist_func = nullptr);

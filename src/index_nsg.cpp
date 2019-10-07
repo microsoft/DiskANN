@@ -1635,134 +1635,134 @@ namespace diskann {
   }
 
   // EXPORTS
-  template NSGDLLEXPORT class IndexNSG<float>;
-  template NSGDLLEXPORT class IndexNSG<int8_t>;
-  template NSGDLLEXPORT class IndexNSG<uint8_t>;
+  template DISKANN_DLLEXPORT class IndexNSG<float>;
+  template DISKANN_DLLEXPORT class IndexNSG<int8_t>;
+  template DISKANN_DLLEXPORT class IndexNSG<uint8_t>;
 
 #ifdef _WINDOWS
-  template NSGDLLEXPORT IndexNSG<uint8_t, int>::IndexNSG(
+  template DISKANN_DLLEXPORT IndexNSG<uint8_t, int>::IndexNSG(
       Metric m, const char *filename, const size_t max_points, const size_t nd,
       const bool enable_tags);
-  template NSGDLLEXPORT IndexNSG<int8_t, int>::IndexNSG(Metric m,
+  template DISKANN_DLLEXPORT IndexNSG<int8_t, int>::IndexNSG(Metric m,
                                                         const char * filename,
                                                         const size_t max_points,
                                                         const size_t nd,
                                                         const bool enable_tags);
-  template NSGDLLEXPORT IndexNSG<float, int>::IndexNSG(Metric m,
+  template DISKANN_DLLEXPORT IndexNSG<float, int>::IndexNSG(Metric m,
                                                        const char * filename,
                                                        const size_t max_points,
                                                        const size_t nd,
                                                        const bool enable_tags);
 
-  template NSGDLLEXPORT IndexNSG<uint8_t, int>::~IndexNSG();
-  template NSGDLLEXPORT IndexNSG<int8_t, int>::~IndexNSG();
-  template NSGDLLEXPORT IndexNSG<float, int>::~IndexNSG();
+  template DISKANN_DLLEXPORT IndexNSG<uint8_t, int>::~IndexNSG();
+  template DISKANN_DLLEXPORT IndexNSG<int8_t, int>::~IndexNSG();
+  template DISKANN_DLLEXPORT IndexNSG<float, int>::~IndexNSG();
 
-  template NSGDLLEXPORT void IndexNSG<uint8_t, int>::save(const char *filename);
-  template NSGDLLEXPORT void IndexNSG<int8_t, int>::save(const char *filename);
-  template NSGDLLEXPORT void IndexNSG<float, int>::save(const char *filename);
+  template DISKANN_DLLEXPORT void IndexNSG<uint8_t, int>::save(const char *filename);
+  template DISKANN_DLLEXPORT void IndexNSG<int8_t, int>::save(const char *filename);
+  template DISKANN_DLLEXPORT void IndexNSG<float, int>::save(const char *filename);
 
-  template NSGDLLEXPORT void IndexNSG<uint8_t, int>::load(const char *filename);
-  template NSGDLLEXPORT void IndexNSG<int8_t, int>::load(const char *filename);
-  template NSGDLLEXPORT void IndexNSG<float, int>::load(const char *filename);
+  template DISKANN_DLLEXPORT void IndexNSG<uint8_t, int>::load(const char *filename);
+  template DISKANN_DLLEXPORT void IndexNSG<int8_t, int>::load(const char *filename);
+  template DISKANN_DLLEXPORT void IndexNSG<float, int>::load(const char *filename);
 
-  template NSGDLLEXPORT void IndexNSG<uint8_t, int>::build(
+  template DISKANN_DLLEXPORT void IndexNSG<uint8_t, int>::build(
       Parameters &parameters, const std::vector<int> &tags);
-  template NSGDLLEXPORT void IndexNSG<int8_t, int>::build(
+  template DISKANN_DLLEXPORT void IndexNSG<int8_t, int>::build(
       Parameters &parameters, const std::vector<int> &tags);
-  template NSGDLLEXPORT void IndexNSG<float, int>::build(
+  template DISKANN_DLLEXPORT void IndexNSG<float, int>::build(
       Parameters &parameters, const std::vector<int> &tags);
 
-  template NSGDLLEXPORT std::pair<int, int> IndexNSG<uint8_t>::beam_search(
+  template DISKANN_DLLEXPORT std::pair<int, int> IndexNSG<uint8_t>::beam_search(
       const uint8_t *query, const size_t K, const size_t L, unsigned *indices,
       int beam_width, std::vector<unsigned> start_points);
-  template NSGDLLEXPORT std::pair<int, int> IndexNSG<int8_t>::beam_search(
+  template DISKANN_DLLEXPORT std::pair<int, int> IndexNSG<int8_t>::beam_search(
       const int8_t *query, const size_t K, const size_t L, unsigned *indices,
       int beam_width, std::vector<unsigned> start_points);
-  template NSGDLLEXPORT std::pair<int, int> IndexNSG<float>::beam_search(
+  template DISKANN_DLLEXPORT std::pair<int, int> IndexNSG<float>::beam_search(
       const float *query, const size_t K, const size_t L, unsigned *indices,
       int beam_width, std::vector<unsigned> start_points);
 
-  template NSGDLLEXPORT int IndexNSG<int8_t, int>::delete_point(const int tag);
-  template NSGDLLEXPORT int IndexNSG<uint8_t, int>::delete_point(const int tag);
-  template NSGDLLEXPORT int IndexNSG<float, int>::delete_point(const int tag);
-  template NSGDLLEXPORT int IndexNSG<int8_t, size_t>::delete_point(
+  template DISKANN_DLLEXPORT int IndexNSG<int8_t, int>::delete_point(const int tag);
+  template DISKANN_DLLEXPORT int IndexNSG<uint8_t, int>::delete_point(const int tag);
+  template DISKANN_DLLEXPORT int IndexNSG<float, int>::delete_point(const int tag);
+  template DISKANN_DLLEXPORT int IndexNSG<int8_t, size_t>::delete_point(
       const size_t tag);
-  template NSGDLLEXPORT int IndexNSG<uint8_t, size_t>::delete_point(
+  template DISKANN_DLLEXPORT int IndexNSG<uint8_t, size_t>::delete_point(
       const size_t tag);
-  template NSGDLLEXPORT int IndexNSG<float, size_t>::delete_point(
+  template DISKANN_DLLEXPORT int IndexNSG<float, size_t>::delete_point(
       const size_t tag);
-  template NSGDLLEXPORT int IndexNSG<int8_t, std::string>::delete_point(
+  template DISKANN_DLLEXPORT int IndexNSG<int8_t, std::string>::delete_point(
       const std::string tag);
-  template NSGDLLEXPORT int IndexNSG<uint8_t, std::string>::delete_point(
+  template DISKANN_DLLEXPORT int IndexNSG<uint8_t, std::string>::delete_point(
       const std::string tag);
-  template NSGDLLEXPORT int IndexNSG<float, std::string>::delete_point(
+  template DISKANN_DLLEXPORT int IndexNSG<float, std::string>::delete_point(
       const std::string tag);
 
-  template NSGDLLEXPORT int IndexNSG<int8_t, int>::disable_delete(
+  template DISKANN_DLLEXPORT int IndexNSG<int8_t, int>::disable_delete(
       const Parameters &parameters, const bool consolidate);
-  template NSGDLLEXPORT int IndexNSG<uint8_t, int>::disable_delete(
+  template DISKANN_DLLEXPORT int IndexNSG<uint8_t, int>::disable_delete(
       const Parameters &parameters, const bool consolidate);
-  template NSGDLLEXPORT int IndexNSG<float, int>::disable_delete(
+  template DISKANN_DLLEXPORT int IndexNSG<float, int>::disable_delete(
       const Parameters &parameters, const bool consolidate);
-  template NSGDLLEXPORT int IndexNSG<int8_t, size_t>::disable_delete(
+  template DISKANN_DLLEXPORT int IndexNSG<int8_t, size_t>::disable_delete(
       const Parameters &parameters, const bool consolidate);
-  template NSGDLLEXPORT int IndexNSG<uint8_t, size_t>::disable_delete(
+  template DISKANN_DLLEXPORT int IndexNSG<uint8_t, size_t>::disable_delete(
       const Parameters &parameters, const bool consolidate);
-  template NSGDLLEXPORT int IndexNSG<float, size_t>::disable_delete(
+  template DISKANN_DLLEXPORT int IndexNSG<float, size_t>::disable_delete(
       const Parameters &parameters, const bool consolidate);
-  template NSGDLLEXPORT int IndexNSG<int8_t, std::string>::disable_delete(
+  template DISKANN_DLLEXPORT int IndexNSG<int8_t, std::string>::disable_delete(
       const Parameters &parameters, const bool consolidate);
-  template NSGDLLEXPORT int IndexNSG<uint8_t, std::string>::disable_delete(
+  template DISKANN_DLLEXPORT int IndexNSG<uint8_t, std::string>::disable_delete(
       const Parameters &parameters, const bool consolidate);
-  template NSGDLLEXPORT int IndexNSG<float, std::string>::disable_delete(
+  template DISKANN_DLLEXPORT int IndexNSG<float, std::string>::disable_delete(
       const Parameters &parameters, const bool consolidate);
 
-  template NSGDLLEXPORT int IndexNSG<int8_t, int>::enable_delete();
-  template NSGDLLEXPORT int IndexNSG<uint8_t, int>::enable_delete();
-  template NSGDLLEXPORT int IndexNSG<float, int>::enable_delete();
-  template NSGDLLEXPORT int IndexNSG<int8_t, size_t>::enable_delete();
-  template NSGDLLEXPORT int IndexNSG<uint8_t, size_t>::enable_delete();
-  template NSGDLLEXPORT int IndexNSG<float, size_t>::enable_delete();
-  template NSGDLLEXPORT int IndexNSG<int8_t, std::string>::enable_delete();
-  template NSGDLLEXPORT int IndexNSG<uint8_t, std::string>::enable_delete();
-  template NSGDLLEXPORT int IndexNSG<float, std::string>::enable_delete();
+  template DISKANN_DLLEXPORT int IndexNSG<int8_t, int>::enable_delete();
+  template DISKANN_DLLEXPORT int IndexNSG<uint8_t, int>::enable_delete();
+  template DISKANN_DLLEXPORT int IndexNSG<float, int>::enable_delete();
+  template DISKANN_DLLEXPORT int IndexNSG<int8_t, size_t>::enable_delete();
+  template DISKANN_DLLEXPORT int IndexNSG<uint8_t, size_t>::enable_delete();
+  template DISKANN_DLLEXPORT int IndexNSG<float, size_t>::enable_delete();
+  template DISKANN_DLLEXPORT int IndexNSG<int8_t, std::string>::enable_delete();
+  template DISKANN_DLLEXPORT int IndexNSG<uint8_t, std::string>::enable_delete();
+  template DISKANN_DLLEXPORT int IndexNSG<float, std::string>::enable_delete();
 
-  template NSGDLLEXPORT int IndexNSG<int8_t, int>::insert_point(
+  template DISKANN_DLLEXPORT int IndexNSG<int8_t, int>::insert_point(
       const int8_t *point, const Parameters &parameters,
       std::vector<Neighbor> &pool, std::vector<Neighbor> &tmp,
       tsl::robin_set<unsigned> &visited, vecNgh &cut_graph, const int tag);
-  template NSGDLLEXPORT int IndexNSG<uint8_t, int>::insert_point(
+  template DISKANN_DLLEXPORT int IndexNSG<uint8_t, int>::insert_point(
       const uint8_t *point, const Parameters &parameters,
       std::vector<Neighbor> &pool, std::vector<Neighbor> &tmp,
       tsl::robin_set<unsigned> &visited, vecNgh &cut_graph, const int tag);
-  template NSGDLLEXPORT int IndexNSG<float, int>::insert_point(
+  template DISKANN_DLLEXPORT int IndexNSG<float, int>::insert_point(
       const float *point, const Parameters &parameters,
       std::vector<Neighbor> &pool, std::vector<Neighbor> &tmp,
       tsl::robin_set<unsigned> &visited, vecNgh &cut_graph, const int tag);
-  template NSGDLLEXPORT int IndexNSG<int8_t, size_t>::insert_point(
+  template DISKANN_DLLEXPORT int IndexNSG<int8_t, size_t>::insert_point(
       const int8_t *point, const Parameters &parameters,
       std::vector<Neighbor> &pool, std::vector<Neighbor> &tmp,
       tsl::robin_set<unsigned> &visited, vecNgh &cut_graph, const size_t tag);
-  template NSGDLLEXPORT int IndexNSG<uint8_t, size_t>::insert_point(
+  template DISKANN_DLLEXPORT int IndexNSG<uint8_t, size_t>::insert_point(
       const uint8_t *point, const Parameters &parameters,
       std::vector<Neighbor> &pool, std::vector<Neighbor> &tmp,
       tsl::robin_set<unsigned> &visited, vecNgh &cut_graph, const size_t tag);
-  template NSGDLLEXPORT int IndexNSG<float, size_t>::insert_point(
+  template DISKANN_DLLEXPORT int IndexNSG<float, size_t>::insert_point(
       const float *point, const Parameters &parameters,
       std::vector<Neighbor> &pool, std::vector<Neighbor> &tmp,
       tsl::robin_set<unsigned> &visited, vecNgh &cut_graph, const size_t tag);
-  template NSGDLLEXPORT int IndexNSG<int8_t, std::string>::insert_point(
+  template DISKANN_DLLEXPORT int IndexNSG<int8_t, std::string>::insert_point(
       const int8_t *point, const Parameters &parameters,
       std::vector<Neighbor> &pool, std::vector<Neighbor> &tmp,
       tsl::robin_set<unsigned> &visited, vecNgh &cut_graph,
       const std::string tag);
-  template NSGDLLEXPORT int IndexNSG<uint8_t, std::string>::insert_point(
+  template DISKANN_DLLEXPORT int IndexNSG<uint8_t, std::string>::insert_point(
       const uint8_t *point, const Parameters &parameters,
       std::vector<Neighbor> &pool, std::vector<Neighbor> &tmp,
       tsl::robin_set<unsigned> &visited, vecNgh &cut_graph,
       const std::string tag);
-  template NSGDLLEXPORT int IndexNSG<float, std::string>::insert_point(
+  template DISKANN_DLLEXPORT int IndexNSG<float, std::string>::insert_point(
       const float *point, const Parameters &parameters,
       std::vector<Neighbor> &pool, std::vector<Neighbor> &tmp,
       tsl::robin_set<unsigned> &visited, vecNgh &cut_graph,

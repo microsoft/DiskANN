@@ -1,7 +1,7 @@
 #pragma once
 
 #ifdef _WINDOWS
-#define NSGDLLEXPORT __declspec(dllexport)
+#define DISKANN_DLLEXPORT __declspec(dllexport)
 #else
-#define NSGDLLEXPORT
+#define DISKANN_DLLEXPORT
 #endif
