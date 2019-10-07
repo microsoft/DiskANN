@@ -7,7 +7,7 @@
 #include <pq_flash_index_nsg.h>
 #include <webservice\in_memory_nsg_search.h>
 
-namespace NSG {
+namespace diskann {
   
   class DiskNSGSearch {
    public:
@@ -26,7 +26,7 @@ namespace NSG {
     unsigned int _dimensions, _numPoints;
 
     std::vector<std::wstring>      _ids;
-    std::unique_ptr<NSG::PQFlashNSG<float>> _pFlashIndex;
+    std::unique_ptr<diskann::PQFlashNSG<float>> _pFlashIndex;
     Distance<float>*                            cosine_distance = nullptr;
   };
-}  // namespace NSG
+}  // namespace diskann

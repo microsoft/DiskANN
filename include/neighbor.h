@@ -5,7 +5,7 @@
 #include <vector>
 #include "utils.h"
 
-namespace NSG {
+namespace diskann {
 
   struct Neighbor {
     unsigned id;
@@ -231,4 +231,4 @@ namespace NSG {
     addr[right] = nn;
     return right;
   }
-}  // namespace NSG
+}  // namespace diskann

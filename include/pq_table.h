@@ -1,7 +1,7 @@
 #pragma once
 #include "utils.h"
 
-namespace NSG {
+namespace diskann {
   template<typename T>
   class FixedChunkPQTable {
     // data_dim = n_chunks * chunk_size;
@@ -31,7 +31,7 @@ namespace NSG {
       // bin structure: [256][ndims][ndims(float)]
       unsigned npts_u32, ndims_u32;
       size_t   npts_u64, ndims_u64;
-      NSG::load_bin<float>(filename, tables, npts_u64, ndims_u64);
+      diskann::load_bin<float>(filename, tables, npts_u64, ndims_u64);
       npts_u32 = npts_u64;
       ndims_u32 = ndims_u64;
       std::cout << "PQ Pivots: # ctrs: " << npts_u32
@@ -99,4 +99,4 @@ namespace NSG {
       }
     }
   };
-}  // namespace NSG
+}  // namespace diskann

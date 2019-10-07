@@ -11,7 +11,7 @@
 #include "tsl/robin_set.h"
 #include "utils.h"
 
-namespace NSG {
+namespace diskann {
   template<typename T, typename TagT = int>
   class IndexNSG {
    public:

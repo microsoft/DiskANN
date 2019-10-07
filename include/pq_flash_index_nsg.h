@@ -19,7 +19,7 @@
 #define SECTOR_LEN 4096
 #define MAX_N_SECTOR_READS 16
 
-namespace NSG {
+namespace diskann {
   template<typename T>
   struct QueryScratch {
     T *  coord_scratch = nullptr;  // MUST BE AT LEAST [MAX_N_CMPS * data_dim]
@@ -32,7 +32,7 @@ namespace NSG {
     float *aligned_scratch = nullptr;  // MUST BE AT LEAST [aligned_dim]
     float *aligned_pqtable_dist_scratch =
         nullptr;                            // MUST BE AT LEAST [256 * NCHUNKS]
-    float *aligned_dist_scratch = nullptr;  // MUST BE AT LEAST NSG MAX_DEGREE
+    float *aligned_dist_scratch = nullptr;  // MUST BE AT LEAST diskann MAX_DEGREE
     _u8 *  aligned_pq_coord_scratch =
         nullptr;  // MUST BE AT LEAST  [N_CHUNKS * MAX_DEGREE]
 
@@ -130,4 +130,4 @@ namespace NSG {
     _u64                           max_nthreads;
     bool                           load_flag = false;
   };
-}  // namespace NSG
+}  // namespace diskann

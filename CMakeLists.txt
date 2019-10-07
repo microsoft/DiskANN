@@ -14,7 +14,7 @@ else()
 	set(CMAKE_CXX_COMPILER g++)
 endif()
 
-project(rand-nsg)
+project(diskann)
 include_directories(${PROJECT_SOURCE_DIR}/include)
 
 

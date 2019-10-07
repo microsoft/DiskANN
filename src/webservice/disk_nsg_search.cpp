@@ -4,7 +4,7 @@
 #include <iomanip>
 #include "utils.h"
 
-namespace NSG {
+namespace diskann {
   const unsigned int DEFAULT_BEAM_WIDTH = 8;
   // const unsigned int L_MULTIPLIER = 10;
   // const unsigned int MAX_L = 300;
@@ -24,7 +24,7 @@ namespace NSG {
     std::string params_path = index_prefix_path + "_params.bin";
     uint32_t*   params;
     size_t      nargs, one;
-    NSG::load_bin<uint32_t>(params_path.c_str(), params, nargs, one);
+    diskann::load_bin<uint32_t>(params_path.c_str(), params, nargs, one);
 
     // infer chunk_size
     _u64 m_dimension = (_u64) params[3];
@@ -115,4 +115,4 @@ namespace NSG {
     return ids;
   }
 
-}  // namespace NSG
+}  // namespace diskann

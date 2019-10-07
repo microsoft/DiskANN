@@ -55,14 +55,14 @@ int search_disk_index(int argc, char** argv) {
   std::cout << "Search parameters: #threads: " << num_threads
             << ", beamwidth: " << beam_width << std::endl;
 
-  NSG::load_aligned_bin<T>(query_bin, query, query_num, query_dim,
+  diskann::load_aligned_bin<T>(query_bin, query, query_num, query_dim,
                            query_aligned_dim);
 
   bool use_cache_list = false;
   if (file_exists(cached_list_file))
     use_cache_list = true;
 
-  NSG::PQFlashNSG<T> _pFlashIndex;
+  diskann::PQFlashNSG<T> _pFlashIndex;
 
   int res = _pFlashIndex.load(num_threads, pq_centroids_file.c_str(),
                               compressed_data_file.c_str(),
@@ -103,9 +103,9 @@ int search_disk_index(int argc, char** argv) {
     query_result_ids[test_id].resize(recall_at * query_num);
     query_result_dists[test_id].resize(recall_at * query_num);
 
-    NSG::QueryStats* stats = new NSG::QueryStats[query_num];
+    diskann::QueryStats* stats = new diskann::QueryStats[query_num];
 
-    NSG::Timer timer;
+    diskann::Timer timer;
 // std::cout<<"aligned dim: " << _pFlashIndex->aligned_dim<<std::endl;
 
 #pragma omp parallel for schedule(dynamic, 1)
@@ -117,17 +117,17 @@ int search_disk_index(int argc, char** argv) {
           stats + i);
     }
 
-    float mean_latency = NSG::get_percentile_stats(
+    float mean_latency = diskann::get_percentile_stats(
         stats, query_num, 0.5,
-        [](const NSG::QueryStats& stats) { return stats.total_us; });
+        [](const diskann::QueryStats& stats) { return stats.total_us; });
 
-    float latency_99 = NSG::get_percentile_stats(
+    float latency_99 = diskann::get_percentile_stats(
         stats, query_num, 0.99,
-        [](const NSG::QueryStats& stats) { return stats.total_us; });
+        [](const diskann::QueryStats& stats) { return stats.total_us; });
 
-    float mean_io = NSG::get_percentile_stats(
+    float mean_io = diskann::get_percentile_stats(
         stats, query_num, 0.5,
-        [](const NSG::QueryStats& stats) { return stats.n_ios; });
+        [](const diskann::QueryStats& stats) { return stats.n_ios; });
 
     std::cout << std::setw(8) << L << std::setw(16) << mean_latency
               << std::setw(16) << latency_99 << std::setw(16) << mean_io
@@ -138,20 +138,20 @@ int search_disk_index(int argc, char** argv) {
   _u64      test_id = 0;
   uint32_t* results_u32 = new unsigned[recall_at * query_num];
   for (auto L : Lvec) {
-    NSG::convert_types<uint64_t, uint32_t>(query_result_ids[test_id].data(),
+    diskann::convert_types<uint64_t, uint32_t>(query_result_ids[test_id].data(),
                                            results_u32, query_num, recall_at);
     std::string cur_result_path =
         result_output_prefix + std::to_string(L) + "_idx_uint32.bin";
-    NSG::save_bin<_u32>(cur_result_path, results_u32, query_num, recall_at);
+    diskann::save_bin<_u32>(cur_result_path, results_u32, query_num, recall_at);
     //    cur_result_path =
     //        result_output_prefix + std::to_string(L) + "_dist_float.bin";
-    //    NSG::save_bin<float>(cur_result_path,
+    //    diskann::save_bin<float>(cur_result_path,
     //    query_result_dists[test_id].data(),
     //                         query_num, recall_at);
     test_id++;
   }
   delete[] results_u32;
-  NSG::aligned_free(query);
+  diskann::aligned_free(query);
   return 0;
 }
 

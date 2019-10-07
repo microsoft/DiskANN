@@ -74,7 +74,7 @@ namespace {
   }
 }  // namespace
 
-namespace NSG {
+namespace diskann {
   template<>
   PQFlashNSG<_u8>::PQFlashNSG() {
     this->dist_cmp = new DistanceL2UInt8();
@@ -102,7 +102,7 @@ namespace NSG {
     // delete backing bufs for nhood and coord cache
     if (nhood_cache_buf != nullptr) {
       delete[] nhood_cache_buf;
-      NSG::aligned_free(coord_cache_buf);
+      diskann::aligned_free(coord_cache_buf);
     }
     for (auto m : medoid_nhoods)
       delete[] m.second;
@@ -129,19 +129,19 @@ namespace NSG {
         // std::cout << "ctx: " << ctx << "\n";
         QueryScratch<T> scratch;
         _u64 coord_alloc_size = ROUND_UP(MAX_N_CMPS * this->aligned_dim, 256);
-        NSG::alloc_aligned((void **) &scratch.coord_scratch, coord_alloc_size,
+        diskann::alloc_aligned((void **) &scratch.coord_scratch, coord_alloc_size,
                            256);
         // scratch.coord_scratch = new T[MAX_N_CMPS * this->aligned_dim];
         // //Gopal. Commenting out the reallocation!
-        NSG::alloc_aligned((void **) &scratch.sector_scratch,
+        diskann::alloc_aligned((void **) &scratch.sector_scratch,
                            MAX_N_SECTOR_READS * SECTOR_LEN, SECTOR_LEN);
-        NSG::alloc_aligned((void **) &scratch.aligned_scratch,
+        diskann::alloc_aligned((void **) &scratch.aligned_scratch,
                            256 * sizeof(float), 256);
-        NSG::alloc_aligned((void **) &scratch.aligned_pq_coord_scratch,
+        diskann::alloc_aligned((void **) &scratch.aligned_pq_coord_scratch,
                            16384 * sizeof(_u8), 256);
-        NSG::alloc_aligned((void **) &scratch.aligned_pqtable_dist_scratch,
+        diskann::alloc_aligned((void **) &scratch.aligned_pqtable_dist_scratch,
                            16384 * sizeof(float), 256);
-        NSG::alloc_aligned((void **) &scratch.aligned_dist_scratch,
+        diskann::alloc_aligned((void **) &scratch.aligned_dist_scratch,
                            512 * sizeof(float), 256);
         memset(scratch.aligned_scratch, 0, 256 * sizeof(float));
         memset(scratch.coord_scratch, 0, MAX_N_CMPS * this->aligned_dim);
@@ -165,12 +165,12 @@ namespace NSG {
         data = this->thread_data.pop();
       }
       auto &scratch = data.scratch;
-      NSG::aligned_free((void *) scratch.coord_scratch);
-      NSG::aligned_free((void *) scratch.sector_scratch);
-      NSG::aligned_free((void *) scratch.aligned_scratch);
-      NSG::aligned_free((void *) scratch.aligned_pq_coord_scratch);
-      NSG::aligned_free((void *) scratch.aligned_pqtable_dist_scratch);
-      NSG::aligned_free((void *) scratch.aligned_dist_scratch);
+      diskann::aligned_free((void *) scratch.coord_scratch);
+      diskann::aligned_free((void *) scratch.sector_scratch);
+      diskann::aligned_free((void *) scratch.aligned_scratch);
+      diskann::aligned_free((void *) scratch.aligned_pq_coord_scratch);
+      diskann::aligned_free((void *) scratch.aligned_pqtable_dist_scratch);
+      diskann::aligned_free((void *) scratch.aligned_dist_scratch);
     }
   }
 
@@ -187,7 +187,7 @@ namespace NSG {
     _u64  num_cached_nodes;
     _u64  dummy_ones;
     _u64 *node_list;
-    NSG::load_bin<_u64>(cache_bin, node_list, num_cached_nodes, dummy_ones);
+    diskann::load_bin<_u64>(cache_bin, node_list, num_cached_nodes, dummy_ones);
     std::cout << "Caching " << num_cached_nodes
               << "nodes full-precision vectors and graph neighborhood "
                  "information in memory..."
@@ -206,7 +206,7 @@ namespace NSG {
     memset(nhood_cache_buf, 0, num_cached_nodes * (max_degree + 1));
 
     _u64 coord_cache_buf_len = num_cached_nodes * aligned_dim;
-    NSG::alloc_aligned((void **) &coord_cache_buf,
+    diskann::alloc_aligned((void **) &coord_cache_buf,
                        coord_cache_buf_len * sizeof(T), 8 * sizeof(T));
     memset(coord_cache_buf, 0, coord_cache_buf_len * sizeof(T));
 
@@ -382,7 +382,7 @@ namespace NSG {
               << coord_cache.size() << "\n";
     // consolidate coord_cache down to single buf
     _u64 coord_cache_buf_len = coord_cache.size() * aligned_dim;
-    NSG::alloc_aligned((void **) &coord_cache_buf,
+    diskann::alloc_aligned((void **) &coord_cache_buf,
                        coord_cache_buf_len * sizeof(T), 8 * sizeof(T));
     memset(coord_cache_buf, 0, coord_cache_buf_len * sizeof(T));
     cur_off = 0;
@@ -431,7 +431,7 @@ namespace NSG {
     this->aligned_dim = ROUND_UP(pq_file_dim, 8);
 
     size_t npts_u64, nchunks_u64;
-    NSG::load_bin<_u8>(compressed_data_bin, data, npts_u64, nchunks_u64);
+    diskann::load_bin<_u8>(compressed_data_bin, data, npts_u64, nchunks_u64);
 
     this->num_points = npts_u64;
     this->n_chunks = nchunks_u64;
@@ -1063,4 +1063,4 @@ namespace NSG {
   template class PQFlashNSG<_u8>;
   template class PQFlashNSG<_s8>;
   template class PQFlashNSG<float>;
-}  // namespace NSG
+}  // namespace diskann

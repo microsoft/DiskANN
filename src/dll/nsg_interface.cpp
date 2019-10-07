@@ -10,7 +10,7 @@
 #include "partition_and_pq.h"
 #include "utils.h"
 
-namespace NSG {
+namespace diskann {
 
 #define TRAINING_SET_SIZE 2000000
   template<typename T>
@@ -18,14 +18,14 @@ namespace NSG {
                                         ANNIndex::DistanceType distanceType)
       : ANNIndex::IANNIndex(dimension, distanceType), _pNsgIndex(nullptr) {
     if (distanceType == ANNIndex::DT_L2) {
-      _compareMetric = NSG::Metric::L2;
+      _compareMetric = diskann::Metric::L2;
     } else if (distanceType == ANNIndex::DT_InnerProduct) {
-      _compareMetric = NSG::Metric::INNER_PRODUCT;
+      _compareMetric = diskann::Metric::INNER_PRODUCT;
     } else {
       throw std::exception("Only DT_L2 and DT_InnerProduct are supported.");
     }
 
-  }  // namespace NSG
+  }  // namespace diskann
 
   template<typename T>
   NSGInterface<T>::~NSGInterface<T>() {
@@ -84,7 +84,7 @@ namespace NSG {
 
     delete[] train_data;
 
-    NSG::Parameters paras;
+    diskann::Parameters paras;
     paras.Set<unsigned>("L", L);
     paras.Set<unsigned>("R", R);
     paras.Set<unsigned>("C", C);
@@ -92,8 +92,8 @@ namespace NSG {
     paras.Set<unsigned>("num_rnds", 2);
     paras.Set<std::string>("save_path", randnsg_path);
 
-    _pNsgIndex = std::unique_ptr<NSG::IndexNSG<T>>(
-        new NSG::IndexNSG<T>(_compareMetric, dataFilePath));
+    _pNsgIndex = std::unique_ptr<diskann::IndexNSG<T>>(
+        new diskann::IndexNSG<T>(_compareMetric, dataFilePath));
 
     _pNsgIndex->build(paras);
     _pNsgIndex->save(randnsg_path.c_str());
@@ -137,7 +137,7 @@ namespace NSG {
     std::string medoids_file = index_prefix_path + "_medoids.bin";
 
     size_t data_dim, num_pq_centers;
-    NSG::get_bin_metadata(pq_tables_bin, num_pq_centers, data_dim);
+    diskann::get_bin_metadata(pq_tables_bin, num_pq_centers, data_dim);
     this->m_dimension = (_u32) data_dim;
     this->aligned_dimension = ROUND_UP(this->m_dimension, 8);
 
@@ -185,13 +185,13 @@ namespace NSG {
 
   extern "C" __declspec(dllexport) ANNIndex::IANNIndex* CreateObjectFloat(
       unsigned __int32 dimension, ANNIndex::DistanceType distanceType) {
-    return new NSG::NSGInterface<float>(dimension, distanceType);
+    return new diskann::NSGInterface<float>(dimension, distanceType);
   }
 
   extern "C" __declspec(dllexport) void ReleaseObjectFloat(
       ANNIndex::IANNIndex* object) {
-    NSG::NSGInterface<float>* subclass =
-        dynamic_cast<NSG::NSGInterface<float>*>(object);
+    diskann::NSGInterface<float>* subclass =
+        dynamic_cast<diskann::NSGInterface<float>*>(object);
     if (subclass != nullptr) {
       delete subclass;
     }
@@ -201,6 +201,6 @@ namespace NSG {
   template class NSGInterface<float>;
   template class NSGInterface<uint8_t>;
 
-}  // namespace NSG
+}  // namespace diskann
 
 

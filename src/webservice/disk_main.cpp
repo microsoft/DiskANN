@@ -1,4 +1,4 @@
-// nsg_server.cpp : REST interface for NSG search.
+// nsg_server.cpp : REST interface for diskann search.
 //
 #include <utils.h>
 #include <webservice/disk_nsg_search.h>
@@ -7,7 +7,7 @@
 #include <iostream>
 
 std::unique_ptr<DiskServer>             g_httpServer(nullptr);
-std::unique_ptr<NSG::DiskNSGSearch> g_diskNSGSearch(nullptr);
+std::unique_ptr<diskann::DiskNSGSearch> g_diskNSGSearch(nullptr);
 
 void setup(const utility::string_t& address) {
   web::http::uri_builder uriBldr(address);
@@ -30,8 +30,8 @@ void teardown(const utility::string_t& address) {
 void loadIndex(const char* indexFilePrefix, const char* idsFile,
                const _u64 cache_nlevels, const _u64 nthreads) {
   auto nsgSearch =
-      new NSG::DiskNSGSearch(indexFilePrefix, idsFile, cache_nlevels, nthreads);
-  g_diskNSGSearch = std::unique_ptr<NSG::DiskNSGSearch>(nsgSearch);
+      new diskann::DiskNSGSearch(indexFilePrefix, idsFile, cache_nlevels, nthreads);
+  g_diskNSGSearch = std::unique_ptr<diskann::DiskNSGSearch>(nsgSearch);
 }
 
 std::wstring getHostingAddress(const char* hostNameAndPort) {

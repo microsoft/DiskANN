@@ -3,7 +3,7 @@
 #include "pq_flash_index_nsg.h"
 #include "windows_customizations.h"
 
-namespace NSG {
+namespace diskann {
 
   template<typename T, typename TagT = int>
   class IndexNSG;
@@ -43,8 +43,8 @@ namespace NSG {
 
    private:
     std::string                       _nsgPathPrefix;
-    std::unique_ptr<NSG::IndexNSG<T>> _pNsgIndex;
-    NSG::Metric                       _compareMetric;
+    std::unique_ptr<diskann::IndexNSG<T>> _pNsgIndex;
+    diskann::Metric                       _compareMetric;
 
     // flash stuff
     std::unique_ptr<PQFlashNSG<T>> _pFlashIndex;
@@ -53,4 +53,4 @@ namespace NSG {
     _u64                           beam_width;
     _u64                           Lsearch;
   };
-}  // namespace NSG
+}  // namespace diskann

@@ -32,25 +32,25 @@
 
 namespace {
   template<typename T>
-  NSG::Distance<T> *get_distance_function();
+  diskann::Distance<T> *get_distance_function();
 
   template<>
-  NSG::Distance<float> *get_distance_function() {
-    return new NSG::DistanceL2();
+  diskann::Distance<float> *get_distance_function() {
+    return new diskann::DistanceL2();
   }
 
   template<>
-  NSG::Distance<int8_t> *get_distance_function() {
-    return new NSG::DistanceL2Int8();
+  diskann::Distance<int8_t> *get_distance_function() {
+    return new diskann::DistanceL2Int8();
   }
 
   template<>
-  NSG::Distance<uint8_t> *get_distance_function() {
-    return new NSG::DistanceL2UInt8();
+  diskann::Distance<uint8_t> *get_distance_function() {
+    return new diskann::DistanceL2UInt8();
   }
 }  // namespace
 
-namespace NSG {
+namespace diskann {
 #define _CONTROL_NUM 100
 #define MAX_START_POINTS 100
 
@@ -698,7 +698,7 @@ namespace NSG {
         // prefetch _final_graph[n]
         unsigned *nbrs = _final_graph[n].data();   // nbrs: data of neighbors
         unsigned  nnbrs = _final_graph[n].size();  // nnbrs: number of neighbors
-        NSG::prefetch_vector((const char *) nbrs, nnbrs * sizeof(unsigned));
+        diskann::prefetch_vector((const char *) nbrs, nnbrs * sizeof(unsigned));
         for (size_t m = 0; m < nnbrs; m++) {
           unsigned id = nbrs[m];  // id = neighbor
           if (m < (nnbrs - 1)) {
@@ -706,7 +706,7 @@ namespace NSG {
             unsigned id_next = nbrs[m + 1];
             // vec_next1: data of next neighbor
             const T *vec_next1 = _data + (size_t) id_next * _aligned_dim;
-            NSG::prefetch_vector((const char *) vec_next1,
+            diskann::prefetch_vector((const char *) vec_next1,
                                  _aligned_dim * sizeof(T));
           }
 
@@ -1576,7 +1576,7 @@ namespace NSG {
         if (iter < (last_iter - 1)) {
           unsigned id_next = *(iter + 1);
           const T *vec1 = _data + _aligned_dim * id_next;
-          NSG::prefetch_vector((const char *) vec1, _aligned_dim * sizeof(T));
+          diskann::prefetch_vector((const char *) vec1, _aligned_dim * sizeof(T));
         }
 
         cmps++;
@@ -1769,4 +1769,4 @@ namespace NSG {
       const std::string tag);
 
 #endif
-}  // namespace NSG
+}  // namespace diskann

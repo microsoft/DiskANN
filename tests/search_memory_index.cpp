@@ -40,19 +40,19 @@ int search_memory_index(int argc, char** argv) {
 
   std::cout << "Search parameters: beamwidth: " << beam_width << std::endl;
 
-  NSG::load_aligned_bin<T>(query_bin, query, query_num, query_dim,
+  diskann::load_aligned_bin<T>(query_bin, query, query_num, query_dim,
                            query_aligned_dim);
 
   std::cout.setf(std::ios_base::fixed, std::ios_base::floatfield);
   std::cout.precision(2);
 
-  NSG::IndexNSG<T> index(NSG::L2, data_file.c_str());
-  index.load(memory_index_file.c_str());  // to load NSG
+  diskann::IndexNSG<T> index(diskann::L2, data_file.c_str());
+  index.load(memory_index_file.c_str());  // to load diskann
   std::cout << "Index loaded" << std::endl;
 
   std::vector<unsigned> start_points;
 
-  NSG::Parameters paras;
+  diskann::Parameters paras;
   std::cout << std::setw(8) << "Ls" << std::setw(16) << "Latency" << std::endl;
   std::cout << "==============================" << std::endl;
 
@@ -83,12 +83,12 @@ int search_memory_index(int argc, char** argv) {
   for (auto L : Lvec) {
     std::string cur_result_path =
         result_output_prefix + std::to_string(L) + "_idx_uint32.bin";
-    NSG::save_bin<_u32>(cur_result_path, query_result_ids[test_id].data(),
+    diskann::save_bin<_u32>(cur_result_path, query_result_ids[test_id].data(),
                         query_num, recall_at);
     test_id++;
   }
 
-  NSG::aligned_free(query);
+  diskann::aligned_free(query);
   return 0;
 }
 

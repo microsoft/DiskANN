@@ -49,7 +49,7 @@ typedef int16_t  _s16;
 typedef uint8_t  _u8;
 typedef int8_t   _s8;
 
-namespace NSG {
+namespace diskann {
 
   inline void alloc_aligned(void **ptr, size_t size, size_t align) {
     *ptr = nullptr;
@@ -547,7 +547,7 @@ namespace NSG {
     for (size_t d = 0; d < max_prefetch_size; d += 64)
       _mm_prefetch((const char *) vec + d, _MM_HINT_T1);
   }
-}  // namespace NSG
+}  // namespace diskann
 
 struct PivotContainer {
   PivotContainer() = default;

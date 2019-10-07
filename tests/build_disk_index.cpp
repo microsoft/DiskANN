@@ -47,7 +47,7 @@ bool build_disk_index(const char* dataFilePath, const char* indexFilePath,
 
   size_t points_num, dim;
 
-  NSG::load_bin<T>(dataFilePath, data_load, points_num, dim);
+  diskann::load_bin<T>(dataFilePath, data_load, points_num, dim);
   std::cout << "done." << std::endl;
 
   auto s = std::chrono::high_resolution_clock::now();
@@ -72,7 +72,7 @@ bool build_disk_index(const char* dataFilePath, const char* indexFilePath,
   delete[] data_load;
   delete[] train_data;
 
-  NSG::Parameters paras;
+  diskann::Parameters paras;
   paras.Set<unsigned>("L", L);
   paras.Set<unsigned>("R", R);
   paras.Set<unsigned>("C", C);
@@ -80,7 +80,7 @@ bool build_disk_index(const char* dataFilePath, const char* indexFilePath,
   paras.Set<unsigned>("num_rnds", 2);
   paras.Set<std::string>("save_path", randnsg_path);
 
-  NSG::IndexNSG<T>* _pNsgIndex = new NSG::IndexNSG<T>(NSG::L2, dataFilePath);
+  diskann::IndexNSG<T>* _pNsgIndex = new diskann::IndexNSG<T>(diskann::L2, dataFilePath);
   if (file_exists(randnsg_path.c_str())) {
     _pNsgIndex->load(randnsg_path.c_str());
   } else {
@@ -96,7 +96,7 @@ bool build_disk_index(const char* dataFilePath, const char* indexFilePath,
   params_array[2] = (uint32_t) C;
   params_array[3] = (uint32_t) dim;
   params_array[4] = (uint32_t) num_pq_chunks;
-  NSG::save_bin<uint32_t>(index_params_path.c_str(), params_array, 5, 1);
+  diskann::save_bin<uint32_t>(index_params_path.c_str(), params_array, 5, 1);
   std::cout << "Saving params to " << index_params_path << "\n";
 
   auto                          e = std::chrono::high_resolution_clock::now();

@@ -1,7 +1,7 @@
 #pragma once
 #include <stdexcept>
 
-namespace NSG {
+namespace diskann {
 
   class NotImplementedException : public std::logic_error {
    public:

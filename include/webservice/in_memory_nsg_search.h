@@ -6,7 +6,7 @@
 #include <distance.h>
 #include <index_nsg.h>
 #include <cosine_similarity.h>
-namespace NSG {
+namespace diskann {
   class NSGSearchResult {
    public:
     NSGSearchResult(unsigned int k, unsigned int elapsedTimeInMs)
@@ -46,6 +46,6 @@ namespace NSG {
     unsigned int _dimensions, _numPoints;
 
     std::vector<std::wstring>      _ids;
-    std::unique_ptr<NSG::IndexNSG<float>> _nsgIndex;
+    std::unique_ptr<diskann::IndexNSG<float>> _nsgIndex;
   };
-}  // namespace NSG
+}  // namespace diskann

@@ -21,14 +21,14 @@ int build_in_memory_index(const std::string& data_path, const unsigned L,
                           const unsigned R, const unsigned C,
                           const unsigned num_rnds, const float alpha,
                           const std::string& save_path) {
-  NSG::Parameters paras;
+  diskann::Parameters paras;
   paras.Set<unsigned>("L", L);
   paras.Set<unsigned>("R", R);
   paras.Set<unsigned>("C", C);
   paras.Set<unsigned>("num_rnds", num_rnds);
   paras.Set<float>("alpha", alpha);
 
-  NSG::IndexNSG<T> index(NSG::L2, data_path.c_str());
+  diskann::IndexNSG<T> index(diskann::L2, data_path.c_str());
   auto             s = std::chrono::high_resolution_clock::now();
   index.build(paras);
   std::chrono::duration<double> diff =

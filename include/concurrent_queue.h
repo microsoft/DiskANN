@@ -8,7 +8,7 @@
 #include <type_traits>
 #include <unordered_set>
 
-namespace NSG {
+namespace diskann {
 
   template<typename T>
   class ConcurrentQueue {
@@ -107,4 +107,4 @@ namespace NSG {
       this->pop_cv.notify_all();
     }
   };
-}  // namespace NSG
+}  // namespace diskann

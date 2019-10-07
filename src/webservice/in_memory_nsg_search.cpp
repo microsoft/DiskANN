@@ -4,7 +4,7 @@
 #include <iomanip>
 #include "util.h"
 
-namespace NSG {
+namespace diskann {
   const unsigned int DEFAULT_BEAM_WIDTH = 8;
   // const unsigned int L_MULTIPLIER = 10;
   // const unsigned int MAX_L = 300;
@@ -15,8 +15,8 @@ namespace NSG {
                                        const char* indexFile,
                                        const char* idsFile, Metric m)
       : _baseVectors(nullptr) {
-    _nsgIndex = std::unique_ptr<NSG::IndexNSG<float>>(
-        new NSG::IndexNSG<float>(m, baseFile, 0, false));
+    _nsgIndex = std::unique_ptr<diskann::IndexNSG<float>>(
+        new diskann::IndexNSG<float>(m, baseFile, 0, false));
     _nsgIndex->load(indexFile);
 
     _ids = load_ids(idsFile);
@@ -46,7 +46,7 @@ namespace NSG {
       searchResult.finalResultIndices.push_back(index); //TEMPORARY FOR IDENTIFYING RECALL
     });
 
-    std::vector<float> similarityScores = NSG::compute_cosine_similarity_batch(
+    std::vector<float> similarityScores = diskann::compute_cosine_similarity_batch(
         query, indices, _baseVectors, _dimensions, K);
     searchResult.distances = similarityScores;
 
@@ -103,4 +103,4 @@ namespace NSG {
     return ids;
   }
 
-}  // namespace NSG
+}  // namespace diskann

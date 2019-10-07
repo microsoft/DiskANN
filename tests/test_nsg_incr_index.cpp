@@ -26,7 +26,7 @@ int main(int argc, char** argv) {
   float* data_load = NULL;
   size_t num_points, dim, aligned_dim;
 
-  NSG::load_aligned_bin<float>(argv[1], data_load, num_points, dim,
+  diskann::load_aligned_bin<float>(argv[1], data_load, num_points, dim,
                                aligned_dim);
 
   unsigned    L = (unsigned) atoi(argv[2]);
@@ -36,7 +36,7 @@ int main(int argc, char** argv) {
   unsigned    num_rnds = (unsigned) std::atoi(argv[6]);
   std::string save_path(argv[7]);
 
-  NSG::Parameters paras;
+  diskann::Parameters paras;
   paras.Set<unsigned>("L", L);
   paras.Set<unsigned>("R", R);
   paras.Set<unsigned>("C", C);
@@ -48,23 +48,23 @@ int main(int argc, char** argv) {
 
   typedef int TagT;
 
-  NSG::IndexNSG<float, TagT> index(NSG::L2, argv[1], num_points,
+  diskann::IndexNSG<float, TagT> index(diskann::L2, argv[1], num_points,
                                    num_points - num_incr, true);
   {
     std::vector<TagT> tags(num_points - num_incr);
     std::iota(tags.begin(), tags.end(), 0);
 
-    NSG::Timer timer;
+    diskann::Timer timer;
     index.build(paras, tags);
     std::cout << "Index build time: " << timer.elapsed() / 1000 << "ms\n";
   }
 
-  std::vector<NSG::Neighbor>       pool, tmp;
+  std::vector<diskann::Neighbor>       pool, tmp;
   tsl::robin_set<unsigned>         visited;
-  std::vector<NSG::SimpleNeighbor> cut_graph;
+  std::vector<diskann::SimpleNeighbor> cut_graph;
 
   {
-    NSG::Timer timer;
+    diskann::Timer timer;
     for (size_t i = num_points - num_incr; i < num_points; ++i) {
       index.insert_point(data_load + i * dim, paras, pool, tmp, visited,
                          cut_graph, i);
@@ -80,7 +80,7 @@ int main(int argc, char** argv) {
   std::cout << "Deleting " << delete_list.size() << " elements" << std::endl;
 
   {
-    NSG::Timer timer;
+    diskann::Timer timer;
     index.enable_delete();
     for (auto p : delete_list)
       if (index.delete_point(p) != 0)
@@ -94,7 +94,7 @@ int main(int argc, char** argv) {
   }
 
   {
-    NSG::Timer timer;
+    diskann::Timer timer;
     for (auto p : delete_list)
       index.insert_point(data_load + (size_t) p * (size_t) dim, paras, pool,
                          tmp, visited, cut_graph, p);
