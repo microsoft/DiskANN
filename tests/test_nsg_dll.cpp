@@ -73,7 +73,7 @@ int aux_main(int argc, char** argv) {
     T*   query = nullptr;
     _u64 nqueries, ndims, aligned_query_dim;
     diskann::load_aligned_bin<T>(argv[3], query, nqueries, ndims,
-                             aligned_query_dim);
+                                 aligned_query_dim);
 
     std::cout << "Loading ground truth..." << std::flush;
     // load ground truth

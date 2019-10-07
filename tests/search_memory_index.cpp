@@ -41,12 +41,12 @@ int search_memory_index(int argc, char** argv) {
   std::cout << "Search parameters: beamwidth: " << beam_width << std::endl;
 
   diskann::load_aligned_bin<T>(query_bin, query, query_num, query_dim,
-                           query_aligned_dim);
+                               query_aligned_dim);
 
   std::cout.setf(std::ios_base::fixed, std::ios_base::floatfield);
   std::cout.precision(2);
 
-  diskann::IndexNSG<T> index(diskann::L2, data_file.c_str());
+  diskann::Index<T> index(diskann::L2, data_file.c_str());
   index.load(memory_index_file.c_str());  // to load diskann
   std::cout << "Index loaded" << std::endl;
 
@@ -84,7 +84,7 @@ int search_memory_index(int argc, char** argv) {
     std::string cur_result_path =
         result_output_prefix + std::to_string(L) + "_idx_uint32.bin";
     diskann::save_bin<_u32>(cur_result_path, query_result_ids[test_id].data(),
-                        query_num, recall_at);
+                            query_num, recall_at);
     test_id++;
   }
 

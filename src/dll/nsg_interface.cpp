@@ -92,8 +92,8 @@ namespace diskann {
     paras.Set<unsigned>("num_rnds", 2);
     paras.Set<std::string>("save_path", randnsg_path);
 
-    _pNsgIndex = std::unique_ptr<diskann::IndexNSG<T>>(
-        new diskann::IndexNSG<T>(_compareMetric, dataFilePath));
+    _pNsgIndex = std::unique_ptr<diskann::Index<T>>(
+        new diskann::Index<T>(_compareMetric, dataFilePath));
 
     _pNsgIndex->build(paras);
     _pNsgIndex->save(randnsg_path.c_str());
@@ -196,11 +196,9 @@ namespace diskann {
       delete subclass;
     }
   }
-  
+
   template class NSGInterface<int8_t>;
   template class NSGInterface<float>;
   template class NSGInterface<uint8_t>;
 
 }  // namespace diskann
-
-

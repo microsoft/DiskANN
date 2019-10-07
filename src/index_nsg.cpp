@@ -57,9 +57,8 @@ namespace diskann {
   // Initialize an index with metric m, load the data of type T with filename
   // (bin), and initialize max_points
   template<typename T, typename TagT>
-  IndexNSG<T, TagT>::IndexNSG(Metric m, const char *filename,
-                              const size_t max_points, const size_t nd,
-                              const bool enable_tags)
+  Index<T, TagT>::Index(Metric m, const char *filename, const size_t max_points,
+                        const size_t nd, const bool enable_tags)
       : _has_built(false), _width(0), _can_delete(false),
         _enable_tags(enable_tags), _consolidated_order(true) {
     load_aligned_bin<T>(std::string(filename), _data, _nd, _dim, _aligned_dim);
@@ -90,28 +89,28 @@ namespace diskann {
   }
 
   template<>
-  IndexNSG<float>::~IndexNSG() {
+  Index<float>::~Index() {
     delete this->_distance;
     //    delete[] _data;
     aligned_free(_data);
   }
 
   template<>
-  IndexNSG<_s8>::~IndexNSG() {
+  Index<_s8>::~Index() {
     delete this->_distance;
     aligned_free(_data);
     //    delete[] _data;
   }
 
   template<>
-  IndexNSG<_u8>::~IndexNSG() {
+  Index<_u8>::~Index() {
     delete this->_distance;
     aligned_free(_data);
     //   delete[] _data;
   }
 
   template<typename T, typename TagT>
-  void IndexNSG<T, TagT>::compute_in_degree_stats() {
+  void Index<T, TagT>::compute_in_degree_stats() {
     std::vector<size_t> in_degrees;
 
     size_t out_sum = 0;
@@ -137,7 +136,7 @@ namespace diskann {
   }
 
   template<typename T, typename TagT>
-  int IndexNSG<T, TagT>::enable_delete() {
+  int Index<T, TagT>::enable_delete() {
     LockGuard guard(_change_lock);
     assert(!_can_delete);
     assert(_enable_tags);
@@ -163,7 +162,7 @@ namespace diskann {
   // Do not call consolidate_deletes() if you have not locked _change_lock.
   // Returns number of live points left after consolidation
   template<typename T, typename TagT>
-  size_t IndexNSG<T, TagT>::consolidate_deletes(const Parameters &parameters) {
+  size_t Index<T, TagT>::consolidate_deletes(const Parameters &parameters) {
     assert(!_consolidated_order);
     assert(_can_delete);
     assert(_enable_tags);
@@ -299,7 +298,7 @@ namespace diskann {
   /*
   // Do not call consolidate_deletes() if you have not locked _change_lock.
   // Returns number of live points left after consolidation
-  size_t IndexNSG::consolidate_deletes_old(const Parameters &parameters) {
+  size_t Index::consolidate_deletes_old(const Parameters &parameters) {
     assert(!_consolidated_order);
     assert(_can_delete);
     assert(_enable_tags);
@@ -456,8 +455,8 @@ namespace diskann {
   */
 
   template<typename T, typename TagT>
-  int IndexNSG<T, TagT>::disable_delete(const Parameters &parameters,
-                                        const bool consolidate) {
+  int Index<T, TagT>::disable_delete(const Parameters &parameters,
+                                     const bool consolidate) {
     LockGuard guard(_change_lock);
     if (!_can_delete) {
       std::cerr << "Delete not currently enabled" << std::endl;
@@ -485,7 +484,7 @@ namespace diskann {
   }
 
   template<typename T, typename TagT>
-  int IndexNSG<T, TagT>::delete_point(const TagT tag) {
+  int Index<T, TagT>::delete_point(const TagT tag) {
     LockGuard guard(_change_lock);
     if (_tag_to_point.find(tag) == _tag_to_point.end()) {
       std::cerr << "Delete tag not found" << std::endl;
@@ -498,7 +497,7 @@ namespace diskann {
   }
 
   template<typename T, typename TagT>
-  void IndexNSG<T, TagT>::save(const char *filename) {
+  void Index<T, TagT>::save(const char *filename) {
     long long     total_gr_edges = 0;
     size_t        index_size = 0;
     std::ofstream out(std::string(filename), std::ios::binary | std::ios::out);
@@ -543,7 +542,7 @@ namespace diskann {
 
   // load the SNG index if pre-computed
   template<typename T, typename TagT>
-  void IndexNSG<T, TagT>::load(const char *filename) {
+  void Index<T, TagT>::load(const char *filename) {
     std::ifstream in(std::string(filename), std::ios::binary);
     in.seekg(0, in.end);
     size_t expected_file_size;
@@ -596,8 +595,8 @@ namespace diskann {
    * mapping: initial vector of a sample of the points in the dataset
    */
   template<typename T, typename TagT>
-  void IndexNSG<T, TagT>::init_random_graph(size_t num_points, unsigned k,
-                                            std::vector<size_t> mapping) {
+  void Index<T, TagT>::init_random_graph(size_t num_points, unsigned k,
+                                         std::vector<size_t> mapping) {
     k = (std::min)(k, (unsigned) 100);
     _final_graph.resize(_max_points);
     _final_graph.reserve(_max_points);
@@ -649,7 +648,7 @@ namespace diskann {
    * visited : will contain all the nodes that are visited during search.
    */
   template<typename T, typename TagT>
-  void IndexNSG<T, TagT>::iterate_to_fixed_point(
+  void Index<T, TagT>::iterate_to_fixed_point(
       const T *query, const Parameters &parameter,
       std::vector<unsigned> &init_ids, std::vector<Neighbor> &retset,
       std::vector<Neighbor> &fullset, tsl::robin_set<unsigned> &visited) {
@@ -707,7 +706,7 @@ namespace diskann {
             // vec_next1: data of next neighbor
             const T *vec_next1 = _data + (size_t) id_next * _aligned_dim;
             diskann::prefetch_vector((const char *) vec_next1,
-                                 _aligned_dim * sizeof(T));
+                                     _aligned_dim * sizeof(T));
           }
 
           if (visited.find(id) == visited.end())
@@ -743,21 +742,21 @@ namespace diskann {
   }
 
   template<typename T, typename TagT>
-  void IndexNSG<T, TagT>::get_neighbors(const T *query,
-                                        const Parameters &     parameter,
-                                        std::vector<Neighbor> &retset,
-                                        std::vector<Neighbor> &fullset) {
+  void Index<T, TagT>::get_neighbors(const T *query,
+                                     const Parameters &     parameter,
+                                     std::vector<Neighbor> &retset,
+                                     std::vector<Neighbor> &fullset) {
     const unsigned           L = parameter.Get<unsigned>("L");
     tsl::robin_set<unsigned> visited(10 * L);
     get_neighbors(query, parameter, retset, fullset, visited);
   }
 
   template<typename T, typename TagT>
-  void IndexNSG<T, TagT>::get_neighbors(const T *query,
-                                        const Parameters &        parameter,
-                                        std::vector<Neighbor> &   retset,
-                                        std::vector<Neighbor> &   fullset,
-                                        tsl::robin_set<unsigned> &visited) {
+  void Index<T, TagT>::get_neighbors(const T *query,
+                                     const Parameters &        parameter,
+                                     std::vector<Neighbor> &   retset,
+                                     std::vector<Neighbor> &   fullset,
+                                     tsl::robin_set<unsigned> &visited) {
     const unsigned L = parameter.Get<unsigned>("L");
 
     retset.resize(L + 1);
@@ -794,12 +793,11 @@ namespace diskann {
   }
 
   template<typename T, typename TagT>
-  int IndexNSG<T, TagT>::insert_point(const T *point,
-                                      const Parameters &        parameters,
-                                      std::vector<Neighbor> &   pool,
-                                      std::vector<Neighbor> &   tmp,
-                                      tsl::robin_set<unsigned> &visited,
-                                      vecNgh &cut_graph, const TagT tag) {
+  int Index<T, TagT>::insert_point(const T *point, const Parameters &parameters,
+                                   std::vector<Neighbor> &   pool,
+                                   std::vector<Neighbor> &   tmp,
+                                   tsl::robin_set<unsigned> &visited,
+                                   vecNgh &cut_graph, const TagT tag) {
     unsigned range = parameters.Get<unsigned>("R");
     assert(_has_built);
     // Gopal. Commenting out because we cannot assume the "null value"
@@ -851,7 +849,7 @@ namespace diskann {
   // Do not call reserve_location() if you have not locked _change_lock.
   // It is not thread safe.
   template<typename T, typename TagT>
-  unsigned IndexNSG<T, TagT>::reserve_location() {
+  unsigned Index<T, TagT>::reserve_location() {
     assert(_nd < _max_points);
 
     unsigned location;
@@ -874,7 +872,7 @@ namespace diskann {
    * This function fills in the order to do bfs in bfs_order
    */
   template<typename T, typename TagT>
-  void IndexNSG<T, TagT>::reachable_bfs(
+  void Index<T, TagT>::reachable_bfs(
       const unsigned                         start_node,
       std::vector<tsl::robin_set<unsigned>> &bfs_order, bool *visited) {
     auto &                    nsg = _final_graph;
@@ -935,7 +933,7 @@ namespace diskann {
   }
 
   template<typename T, typename TagT>
-  void IndexNSG<T, TagT>::populate_start_points_bfs(
+  void Index<T, TagT>::populate_start_points_bfs(
       std::vector<unsigned> &start_points) {
     // populate a visited array
     // WARNING: DO NOT MAKE THIS A VECTOR
@@ -1003,7 +1001,7 @@ namespace diskann {
    * in the graph.
    */
   template<typename T, typename TagT>
-  unsigned IndexNSG<T, TagT>::get_entry_point() {
+  unsigned Index<T, TagT>::get_entry_point() {
     // allocate and init centroid
     float *center = new float[_aligned_dim]();
     for (size_t j = 0; j < _aligned_dim; j++)
@@ -1052,11 +1050,10 @@ namespace diskann {
    * Assumes that pool is sorted in order of increasing distance.
    */
   template<typename T, typename TagT>
-  void IndexNSG<T, TagT>::occlude_list(const std::vector<Neighbor> &pool,
-                                       const unsigned location,
-                                       const float alpha, const unsigned degree,
-                                       const unsigned         maxc,
-                                       std::vector<Neighbor> &result) {
+  void Index<T, TagT>::occlude_list(const std::vector<Neighbor> &pool,
+                                    const unsigned location, const float alpha,
+                                    const unsigned degree, const unsigned maxc,
+                                    std::vector<Neighbor> &result) {
     assert(std::is_sorted(pool.begin(), pool.end()));
     assert(!pool.empty());
 
@@ -1088,11 +1085,11 @@ namespace diskann {
   }
 
   template<typename T, typename TagT>
-  void IndexNSG<T, TagT>::sync_prune(const T *x, const unsigned location,
-                                     std::vector<Neighbor> &   pool,
-                                     const Parameters &        parameter,
-                                     tsl::robin_set<unsigned> &visited,
-                                     vecNgh &                  cut_graph) {
+  void Index<T, TagT>::sync_prune(const T *x, const unsigned location,
+                                  std::vector<Neighbor> &   pool,
+                                  const Parameters &        parameter,
+                                  tsl::robin_set<unsigned> &visited,
+                                  vecNgh &                  cut_graph) {
     unsigned range = parameter.Get<unsigned>("R");
     unsigned maxc = parameter.Get<unsigned>("C");
     float    alpha = parameter.Get<float>("alpha");
@@ -1148,8 +1145,8 @@ namespace diskann {
    * the current node n.
    */
   template<typename T, typename TagT>
-  void IndexNSG<T, TagT>::inter_insert(unsigned n, vecNgh &cut_graph_n,
-                                       const Parameters &parameter) {
+  void Index<T, TagT>::inter_insert(unsigned n, vecNgh &cut_graph_n,
+                                    const Parameters &parameter) {
     float      alpha = parameter.Get<float>("alpha");
     const auto range = parameter.Get<float>("R");
     const auto src_pool = cut_graph_n;
@@ -1291,7 +1288,7 @@ namespace diskann {
    * The graph creation function.
    */
   template<typename T, typename TagT>
-  void IndexNSG<T, TagT>::link(Parameters &parameters) {
+  void Index<T, TagT>::link(Parameters &parameters) {
     //    The graph will be updated periodically in NUM_SYNCS batches
     uint32_t NUM_SYNCS = DIV_ROUND_UP(_nd, (128 * 96));
     std::cout << "Number of syncs: " << NUM_SYNCS << std::endl;
@@ -1429,14 +1426,14 @@ namespace diskann {
   }
 
   /*  template<typename T, typename TagT>
-    void IndexNSG<T, TagT>::set_data(T *data) {
+    void Index<T, TagT>::set_data(T *data) {
       _data = data;
     }
   */
 
   template<typename T, typename TagT>
-  void IndexNSG<T, TagT>::build(Parameters &parameters,
-                                const std::vector<TagT> &tags) {
+  void Index<T, TagT>::build(Parameters &parameters,
+                             const std::vector<TagT> &tags) {
     if (_enable_tags) {
       if (tags.size() != _nd) {
         std::cerr << "#Tags should be equal to #points" << std::endl;
@@ -1468,7 +1465,7 @@ namespace diskann {
   }
 
   template<typename T, typename TagT>
-  std::pair<int, int> IndexNSG<T, TagT>::beam_search(
+  std::pair<int, int> Index<T, TagT>::beam_search(
       const T *query, const size_t K, const size_t L, unsigned *indices,
       int beam_width, std::vector<unsigned> start_points) {
     //    _data = x;
@@ -1576,7 +1573,8 @@ namespace diskann {
         if (iter < (last_iter - 1)) {
           unsigned id_next = *(iter + 1);
           const T *vec1 = _data + _aligned_dim * id_next;
-          diskann::prefetch_vector((const char *) vec1, _aligned_dim * sizeof(T));
+          diskann::prefetch_vector((const char *) vec1,
+                                   _aligned_dim * sizeof(T));
         }
 
         cmps++;
@@ -1620,7 +1618,7 @@ namespace diskann {
   }
 
   template<typename T, typename TagT>
-  std::pair<int, int> IndexNSG<T, TagT>::beam_search_tags(
+  std::pair<int, int> Index<T, TagT>::beam_search_tags(
       const T *query, const size_t K, const size_t L, TagT *tags,
       int beam_width, std::vector<unsigned> start_points,
       unsigned *indices_buffer) {
@@ -1635,134 +1633,142 @@ namespace diskann {
   }
 
   // EXPORTS
-  template DISKANN_DLLEXPORT class IndexNSG<float>;
-  template DISKANN_DLLEXPORT class IndexNSG<int8_t>;
-  template DISKANN_DLLEXPORT class IndexNSG<uint8_t>;
+  template DISKANN_DLLEXPORT class Index<float>;
+  template DISKANN_DLLEXPORT class Index<int8_t>;
+  template DISKANN_DLLEXPORT class Index<uint8_t>;
 
 #ifdef _WINDOWS
-  template DISKANN_DLLEXPORT IndexNSG<uint8_t, int>::IndexNSG(
-      Metric m, const char *filename, const size_t max_points, const size_t nd,
-      const bool enable_tags);
-  template DISKANN_DLLEXPORT IndexNSG<int8_t, int>::IndexNSG(Metric m,
+  template DISKANN_DLLEXPORT Index<uint8_t, int>::Index(Metric m,
                                                         const char * filename,
                                                         const size_t max_points,
                                                         const size_t nd,
                                                         const bool enable_tags);
-  template DISKANN_DLLEXPORT IndexNSG<float, int>::IndexNSG(Metric m,
+  template DISKANN_DLLEXPORT Index<int8_t, int>::Index(Metric m,
                                                        const char * filename,
                                                        const size_t max_points,
                                                        const size_t nd,
                                                        const bool enable_tags);
+  template DISKANN_DLLEXPORT Index<float, int>::Index(Metric m,
+                                                      const char * filename,
+                                                      const size_t max_points,
+                                                      const size_t nd,
+                                                      const bool   enable_tags);
 
-  template DISKANN_DLLEXPORT IndexNSG<uint8_t, int>::~IndexNSG();
-  template DISKANN_DLLEXPORT IndexNSG<int8_t, int>::~IndexNSG();
-  template DISKANN_DLLEXPORT IndexNSG<float, int>::~IndexNSG();
+  template DISKANN_DLLEXPORT Index<uint8_t, int>::~Index();
+  template DISKANN_DLLEXPORT Index<int8_t, int>::~Index();
+  template DISKANN_DLLEXPORT Index<float, int>::~Index();
 
-  template DISKANN_DLLEXPORT void IndexNSG<uint8_t, int>::save(const char *filename);
-  template DISKANN_DLLEXPORT void IndexNSG<int8_t, int>::save(const char *filename);
-  template DISKANN_DLLEXPORT void IndexNSG<float, int>::save(const char *filename);
+  template DISKANN_DLLEXPORT void Index<uint8_t, int>::save(
+      const char *filename);
+  template DISKANN_DLLEXPORT void Index<int8_t, int>::save(
+      const char *filename);
+  template DISKANN_DLLEXPORT void Index<float, int>::save(const char *filename);
 
-  template DISKANN_DLLEXPORT void IndexNSG<uint8_t, int>::load(const char *filename);
-  template DISKANN_DLLEXPORT void IndexNSG<int8_t, int>::load(const char *filename);
-  template DISKANN_DLLEXPORT void IndexNSG<float, int>::load(const char *filename);
+  template DISKANN_DLLEXPORT void Index<uint8_t, int>::load(
+      const char *filename);
+  template DISKANN_DLLEXPORT void Index<int8_t, int>::load(
+      const char *filename);
+  template DISKANN_DLLEXPORT void Index<float, int>::load(const char *filename);
 
-  template DISKANN_DLLEXPORT void IndexNSG<uint8_t, int>::build(
+  template DISKANN_DLLEXPORT void Index<uint8_t, int>::build(
       Parameters &parameters, const std::vector<int> &tags);
-  template DISKANN_DLLEXPORT void IndexNSG<int8_t, int>::build(
+  template DISKANN_DLLEXPORT void Index<int8_t, int>::build(
       Parameters &parameters, const std::vector<int> &tags);
-  template DISKANN_DLLEXPORT void IndexNSG<float, int>::build(
+  template DISKANN_DLLEXPORT void Index<float, int>::build(
       Parameters &parameters, const std::vector<int> &tags);
 
-  template DISKANN_DLLEXPORT std::pair<int, int> IndexNSG<uint8_t>::beam_search(
+  template DISKANN_DLLEXPORT std::pair<int, int> Index<uint8_t>::beam_search(
       const uint8_t *query, const size_t K, const size_t L, unsigned *indices,
       int beam_width, std::vector<unsigned> start_points);
-  template DISKANN_DLLEXPORT std::pair<int, int> IndexNSG<int8_t>::beam_search(
+  template DISKANN_DLLEXPORT std::pair<int, int> Index<int8_t>::beam_search(
       const int8_t *query, const size_t K, const size_t L, unsigned *indices,
       int beam_width, std::vector<unsigned> start_points);
-  template DISKANN_DLLEXPORT std::pair<int, int> IndexNSG<float>::beam_search(
+  template DISKANN_DLLEXPORT std::pair<int, int> Index<float>::beam_search(
       const float *query, const size_t K, const size_t L, unsigned *indices,
       int beam_width, std::vector<unsigned> start_points);
 
-  template DISKANN_DLLEXPORT int IndexNSG<int8_t, int>::delete_point(const int tag);
-  template DISKANN_DLLEXPORT int IndexNSG<uint8_t, int>::delete_point(const int tag);
-  template DISKANN_DLLEXPORT int IndexNSG<float, int>::delete_point(const int tag);
-  template DISKANN_DLLEXPORT int IndexNSG<int8_t, size_t>::delete_point(
+  template DISKANN_DLLEXPORT int Index<int8_t, int>::delete_point(
+      const int tag);
+  template DISKANN_DLLEXPORT int Index<uint8_t, int>::delete_point(
+      const int tag);
+  template DISKANN_DLLEXPORT int Index<float, int>::delete_point(const int tag);
+  template DISKANN_DLLEXPORT int Index<int8_t, size_t>::delete_point(
       const size_t tag);
-  template DISKANN_DLLEXPORT int IndexNSG<uint8_t, size_t>::delete_point(
+  template DISKANN_DLLEXPORT int Index<uint8_t, size_t>::delete_point(
       const size_t tag);
-  template DISKANN_DLLEXPORT int IndexNSG<float, size_t>::delete_point(
+  template DISKANN_DLLEXPORT int Index<float, size_t>::delete_point(
       const size_t tag);
-  template DISKANN_DLLEXPORT int IndexNSG<int8_t, std::string>::delete_point(
+  template DISKANN_DLLEXPORT int Index<int8_t, std::string>::delete_point(
       const std::string tag);
-  template DISKANN_DLLEXPORT int IndexNSG<uint8_t, std::string>::delete_point(
+  template DISKANN_DLLEXPORT int Index<uint8_t, std::string>::delete_point(
       const std::string tag);
-  template DISKANN_DLLEXPORT int IndexNSG<float, std::string>::delete_point(
+  template DISKANN_DLLEXPORT int Index<float, std::string>::delete_point(
       const std::string tag);
 
-  template DISKANN_DLLEXPORT int IndexNSG<int8_t, int>::disable_delete(
+  template DISKANN_DLLEXPORT int Index<int8_t, int>::disable_delete(
       const Parameters &parameters, const bool consolidate);
-  template DISKANN_DLLEXPORT int IndexNSG<uint8_t, int>::disable_delete(
+  template DISKANN_DLLEXPORT int Index<uint8_t, int>::disable_delete(
       const Parameters &parameters, const bool consolidate);
-  template DISKANN_DLLEXPORT int IndexNSG<float, int>::disable_delete(
+  template DISKANN_DLLEXPORT int Index<float, int>::disable_delete(
       const Parameters &parameters, const bool consolidate);
-  template DISKANN_DLLEXPORT int IndexNSG<int8_t, size_t>::disable_delete(
+  template DISKANN_DLLEXPORT int Index<int8_t, size_t>::disable_delete(
       const Parameters &parameters, const bool consolidate);
-  template DISKANN_DLLEXPORT int IndexNSG<uint8_t, size_t>::disable_delete(
+  template DISKANN_DLLEXPORT int Index<uint8_t, size_t>::disable_delete(
       const Parameters &parameters, const bool consolidate);
-  template DISKANN_DLLEXPORT int IndexNSG<float, size_t>::disable_delete(
+  template DISKANN_DLLEXPORT int Index<float, size_t>::disable_delete(
       const Parameters &parameters, const bool consolidate);
-  template DISKANN_DLLEXPORT int IndexNSG<int8_t, std::string>::disable_delete(
+  template DISKANN_DLLEXPORT int Index<int8_t, std::string>::disable_delete(
       const Parameters &parameters, const bool consolidate);
-  template DISKANN_DLLEXPORT int IndexNSG<uint8_t, std::string>::disable_delete(
+  template DISKANN_DLLEXPORT int Index<uint8_t, std::string>::disable_delete(
       const Parameters &parameters, const bool consolidate);
-  template DISKANN_DLLEXPORT int IndexNSG<float, std::string>::disable_delete(
+  template DISKANN_DLLEXPORT int Index<float, std::string>::disable_delete(
       const Parameters &parameters, const bool consolidate);
 
-  template DISKANN_DLLEXPORT int IndexNSG<int8_t, int>::enable_delete();
-  template DISKANN_DLLEXPORT int IndexNSG<uint8_t, int>::enable_delete();
-  template DISKANN_DLLEXPORT int IndexNSG<float, int>::enable_delete();
-  template DISKANN_DLLEXPORT int IndexNSG<int8_t, size_t>::enable_delete();
-  template DISKANN_DLLEXPORT int IndexNSG<uint8_t, size_t>::enable_delete();
-  template DISKANN_DLLEXPORT int IndexNSG<float, size_t>::enable_delete();
-  template DISKANN_DLLEXPORT int IndexNSG<int8_t, std::string>::enable_delete();
-  template DISKANN_DLLEXPORT int IndexNSG<uint8_t, std::string>::enable_delete();
-  template DISKANN_DLLEXPORT int IndexNSG<float, std::string>::enable_delete();
+  template DISKANN_DLLEXPORT int Index<int8_t, int>::enable_delete();
+  template DISKANN_DLLEXPORT int Index<uint8_t, int>::enable_delete();
+  template DISKANN_DLLEXPORT int Index<float, int>::enable_delete();
+  template DISKANN_DLLEXPORT int Index<int8_t, size_t>::enable_delete();
+  template DISKANN_DLLEXPORT int Index<uint8_t, size_t>::enable_delete();
+  template DISKANN_DLLEXPORT int Index<float, size_t>::enable_delete();
+  template DISKANN_DLLEXPORT int Index<int8_t, std::string>::enable_delete();
+  template DISKANN_DLLEXPORT int Index<uint8_t, std::string>::enable_delete();
+  template DISKANN_DLLEXPORT int Index<float, std::string>::enable_delete();
 
-  template DISKANN_DLLEXPORT int IndexNSG<int8_t, int>::insert_point(
+  template DISKANN_DLLEXPORT int Index<int8_t, int>::insert_point(
       const int8_t *point, const Parameters &parameters,
       std::vector<Neighbor> &pool, std::vector<Neighbor> &tmp,
       tsl::robin_set<unsigned> &visited, vecNgh &cut_graph, const int tag);
-  template DISKANN_DLLEXPORT int IndexNSG<uint8_t, int>::insert_point(
+  template DISKANN_DLLEXPORT int Index<uint8_t, int>::insert_point(
       const uint8_t *point, const Parameters &parameters,
       std::vector<Neighbor> &pool, std::vector<Neighbor> &tmp,
       tsl::robin_set<unsigned> &visited, vecNgh &cut_graph, const int tag);
-  template DISKANN_DLLEXPORT int IndexNSG<float, int>::insert_point(
+  template DISKANN_DLLEXPORT int Index<float, int>::insert_point(
       const float *point, const Parameters &parameters,
       std::vector<Neighbor> &pool, std::vector<Neighbor> &tmp,
       tsl::robin_set<unsigned> &visited, vecNgh &cut_graph, const int tag);
-  template DISKANN_DLLEXPORT int IndexNSG<int8_t, size_t>::insert_point(
+  template DISKANN_DLLEXPORT int Index<int8_t, size_t>::insert_point(
       const int8_t *point, const Parameters &parameters,
       std::vector<Neighbor> &pool, std::vector<Neighbor> &tmp,
       tsl::robin_set<unsigned> &visited, vecNgh &cut_graph, const size_t tag);
-  template DISKANN_DLLEXPORT int IndexNSG<uint8_t, size_t>::insert_point(
+  template DISKANN_DLLEXPORT int Index<uint8_t, size_t>::insert_point(
       const uint8_t *point, const Parameters &parameters,
       std::vector<Neighbor> &pool, std::vector<Neighbor> &tmp,
       tsl::robin_set<unsigned> &visited, vecNgh &cut_graph, const size_t tag);
-  template DISKANN_DLLEXPORT int IndexNSG<float, size_t>::insert_point(
+  template DISKANN_DLLEXPORT int Index<float, size_t>::insert_point(
       const float *point, const Parameters &parameters,
       std::vector<Neighbor> &pool, std::vector<Neighbor> &tmp,
       tsl::robin_set<unsigned> &visited, vecNgh &cut_graph, const size_t tag);
-  template DISKANN_DLLEXPORT int IndexNSG<int8_t, std::string>::insert_point(
+  template DISKANN_DLLEXPORT int Index<int8_t, std::string>::insert_point(
       const int8_t *point, const Parameters &parameters,
       std::vector<Neighbor> &pool, std::vector<Neighbor> &tmp,
       tsl::robin_set<unsigned> &visited, vecNgh &cut_graph,
       const std::string tag);
-  template DISKANN_DLLEXPORT int IndexNSG<uint8_t, std::string>::insert_point(
+  template DISKANN_DLLEXPORT int Index<uint8_t, std::string>::insert_point(
       const uint8_t *point, const Parameters &parameters,
       std::vector<Neighbor> &pool, std::vector<Neighbor> &tmp,
       tsl::robin_set<unsigned> &visited, vecNgh &cut_graph,
       const std::string tag);
-  template DISKANN_DLLEXPORT int IndexNSG<float, std::string>::insert_point(
+  template DISKANN_DLLEXPORT int Index<float, std::string>::insert_point(
       const float *point, const Parameters &parameters,
       std::vector<Neighbor> &pool, std::vector<Neighbor> &tmp,
       tsl::robin_set<unsigned> &visited, vecNgh &cut_graph,

@@ -80,7 +80,8 @@ bool build_disk_index(const char* dataFilePath, const char* indexFilePath,
   paras.Set<unsigned>("num_rnds", 2);
   paras.Set<std::string>("save_path", randnsg_path);
 
-  diskann::IndexNSG<T>* _pNsgIndex = new diskann::IndexNSG<T>(diskann::L2, dataFilePath);
+  diskann::Index<T>* _pNsgIndex =
+      new diskann::Index<T>(diskann::L2, dataFilePath);
   if (file_exists(randnsg_path.c_str())) {
     _pNsgIndex->load(randnsg_path.c_str());
   } else {

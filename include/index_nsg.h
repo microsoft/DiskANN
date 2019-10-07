@@ -13,12 +13,12 @@
 
 namespace diskann {
   template<typename T, typename TagT = int>
-  class IndexNSG {
+  class Index {
    public:
-    IndexNSG(Metric m, const char *filename, const size_t max_points = 0,
+    Index(Metric m, const char *filename, const size_t max_points = 0,
              const size_t nd = 0, const bool enable_tags = false);
 
-    ~IndexNSG();
+    ~Index();
 
     void save(const char *filename);
     void load(const char *filename);

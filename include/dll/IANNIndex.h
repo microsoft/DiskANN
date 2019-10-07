@@ -15,7 +15,7 @@ namespace ANNIndex {
   class IANNIndex {
    public:
     DISKANN_DLLEXPORT explicit IANNIndex(unsigned __int32 dimension = 0,
-                                    DistanceType     distanceType = DT_L2)
+                                         DistanceType     distanceType = DT_L2)
         : m_dimension(dimension), m_distanceType(distanceType) {
     }
 
@@ -23,23 +23,23 @@ namespace ANNIndex {
     }
 
     // In implementation, the file path can be a file or folder.
-    DISKANN_DLLEXPORT virtual bool BuildIndex(const char* dataFilePath,
-                                         const char* indexFilePath,
-                                         const char* indexBuildParameters) = 0;
+    DISKANN_DLLEXPORT virtual bool BuildIndex(
+        const char* dataFilePath, const char* indexFilePath,
+        const char* indexBuildParameters) = 0;
 
     // Load index form file.
     DISKANN_DLLEXPORT virtual bool LoadIndex(const char* indexFilePath,
-                                        const char* queryParameters) = 0;
+                                             const char* queryParameters) = 0;
 
     // Search several vectors, return their neighbors' distance and ids.
     // Both distances & ids are returned arraies of neighborCount elements,
     // And need to be allocated by invoker, which capicity should be greater
     // than queryCount * neighborCount.
     DISKANN_DLLEXPORT virtual void SearchIndex(const char*       vector,
-                                          unsigned __int64  queryCount,
-                                          unsigned __int64  neighborCount,
-                                          float*            distances,
-                                          unsigned __int64* ids) const = 0;
+                                               unsigned __int64  queryCount,
+                                               unsigned __int64  neighborCount,
+                                               float*            distances,
+                                               unsigned __int64* ids) const = 0;
 
    public:
     // Vector dimension.

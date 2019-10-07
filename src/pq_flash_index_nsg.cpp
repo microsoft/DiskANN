@@ -129,20 +129,20 @@ namespace diskann {
         // std::cout << "ctx: " << ctx << "\n";
         QueryScratch<T> scratch;
         _u64 coord_alloc_size = ROUND_UP(MAX_N_CMPS * this->aligned_dim, 256);
-        diskann::alloc_aligned((void **) &scratch.coord_scratch, coord_alloc_size,
-                           256);
+        diskann::alloc_aligned((void **) &scratch.coord_scratch,
+                               coord_alloc_size, 256);
         // scratch.coord_scratch = new T[MAX_N_CMPS * this->aligned_dim];
         // //Gopal. Commenting out the reallocation!
         diskann::alloc_aligned((void **) &scratch.sector_scratch,
-                           MAX_N_SECTOR_READS * SECTOR_LEN, SECTOR_LEN);
+                               MAX_N_SECTOR_READS * SECTOR_LEN, SECTOR_LEN);
         diskann::alloc_aligned((void **) &scratch.aligned_scratch,
-                           256 * sizeof(float), 256);
+                               256 * sizeof(float), 256);
         diskann::alloc_aligned((void **) &scratch.aligned_pq_coord_scratch,
-                           16384 * sizeof(_u8), 256);
+                               16384 * sizeof(_u8), 256);
         diskann::alloc_aligned((void **) &scratch.aligned_pqtable_dist_scratch,
-                           16384 * sizeof(float), 256);
+                               16384 * sizeof(float), 256);
         diskann::alloc_aligned((void **) &scratch.aligned_dist_scratch,
-                           512 * sizeof(float), 256);
+                               512 * sizeof(float), 256);
         memset(scratch.aligned_scratch, 0, 256 * sizeof(float));
         memset(scratch.coord_scratch, 0, MAX_N_CMPS * this->aligned_dim);
         ThreadData<T> data;
@@ -207,7 +207,7 @@ namespace diskann {
 
     _u64 coord_cache_buf_len = num_cached_nodes * aligned_dim;
     diskann::alloc_aligned((void **) &coord_cache_buf,
-                       coord_cache_buf_len * sizeof(T), 8 * sizeof(T));
+                           coord_cache_buf_len * sizeof(T), 8 * sizeof(T));
     memset(coord_cache_buf, 0, coord_cache_buf_len * sizeof(T));
 
     size_t BLOCK_SIZE = 1000;
@@ -383,7 +383,7 @@ namespace diskann {
     // consolidate coord_cache down to single buf
     _u64 coord_cache_buf_len = coord_cache.size() * aligned_dim;
     diskann::alloc_aligned((void **) &coord_cache_buf,
-                       coord_cache_buf_len * sizeof(T), 8 * sizeof(T));
+                           coord_cache_buf_len * sizeof(T), 8 * sizeof(T));
     memset(coord_cache_buf, 0, coord_cache_buf_len * sizeof(T));
     cur_off = 0;
     for (auto &k_v : coord_cache) {

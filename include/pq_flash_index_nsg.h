@@ -31,9 +31,10 @@ namespace diskann {
 
     float *aligned_scratch = nullptr;  // MUST BE AT LEAST [aligned_dim]
     float *aligned_pqtable_dist_scratch =
-        nullptr;                            // MUST BE AT LEAST [256 * NCHUNKS]
-    float *aligned_dist_scratch = nullptr;  // MUST BE AT LEAST diskann MAX_DEGREE
-    _u8 *  aligned_pq_coord_scratch =
+        nullptr;  // MUST BE AT LEAST [256 * NCHUNKS]
+    float *aligned_dist_scratch =
+        nullptr;  // MUST BE AT LEAST diskann MAX_DEGREE
+    _u8 *aligned_pq_coord_scratch =
         nullptr;  // MUST BE AT LEAST  [N_CHUNKS * MAX_DEGREE]
 
     void reset() {
@@ -55,14 +56,15 @@ namespace diskann {
     DISKANN_DLLEXPORT ~PQFlashNSG();
 
     // load compressed data, and obtains the handle to the disk-resident index
-    DISKANN_DLLEXPORT int load(uint32_t num_threads, const char *pq_centroids_bin,
-                          const char *compressed_data_bin,
-                          const char *disk_index_file,
-                          const char *medoids_file = {0});
+    DISKANN_DLLEXPORT int load(uint32_t    num_threads,
+                               const char *pq_centroids_bin,
+                               const char *compressed_data_bin,
+                               const char *disk_index_file,
+                               const char *medoids_file = {0});
 
     DISKANN_DLLEXPORT void create_disk_layout(const std::string base_file,
-                                         const std::string mem_index_file,
-                                         const std::string output_file);
+                                              const std::string mem_index_file,
+                                              const std::string output_file);
     DISKANN_DLLEXPORT void cache_visited_nodes(_u64 *node_list, _u64 num_nodes);
     DISKANN_DLLEXPORT void load_cache_from_file(std::string cache_bin);
     DISKANN_DLLEXPORT void cache_bfs_levels(_u64 nlevels);
@@ -70,7 +72,7 @@ namespace diskann {
     DISKANN_DLLEXPORT void set_cache_create_flag();
 
     DISKANN_DLLEXPORT void save_cached_nodes(_u64        num_nodes,
-                                        std::string cache_file_path);
+                                             std::string cache_file_path);
 
     // setting up thread-specific data
     DISKANN_DLLEXPORT void setup_thread_data(_u64 nthreads);

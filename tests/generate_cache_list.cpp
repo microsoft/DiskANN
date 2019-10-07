@@ -44,7 +44,7 @@ int generate_cache_list(int argc, char** argv) {
             << ", beamwidth: " << beam_width << std::endl;
 
   diskann::load_aligned_bin<T>(warmup_bin, warmup, warmup_num, ndims,
-                           warmup_aligned_dim);
+                               warmup_aligned_dim);
 
   diskann::PQFlashNSG<T> _pFlashIndex;
 

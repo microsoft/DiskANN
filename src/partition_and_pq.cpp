@@ -146,7 +146,7 @@ int generate_pq_pivots(const float *train_data, size_t num_train, size_t dim,
   if (file_exists(pq_pivots_path)) {
     size_t file_dim, file_num_centers;
     diskann::load_bin<float>(pq_pivots_path, full_pivot_data, file_num_centers,
-                         file_dim);
+                             file_dim);
     if (file_dim == dim && file_num_centers == num_centers) {
       std::cout << "PQ pivot file exists. Not generating again" << std::endl;
       delete[] full_pivot_data;
@@ -191,7 +191,7 @@ int generate_pq_pivots(const float *train_data, size_t num_train, size_t dim,
   }
 
   diskann::save_bin<float>(pq_pivots_path.c_str(), full_pivot_data,
-                       (size_t) num_centers, dim);
+                           (size_t) num_centers, dim);
   return 0;
 }
 
@@ -226,7 +226,7 @@ int generate_pq_data_from_pivots(const std::string data_file,
     size_t file_num_centers;
     size_t file_dim;
     diskann::load_bin<float>(pq_pivots_path, full_pivot_data, file_num_centers,
-                         file_dim);
+                             file_dim);
 
     if (file_num_centers != num_centers) {
       std::cout << "ERROR: file number of PQ centers " << file_num_centers
@@ -264,8 +264,8 @@ int generate_pq_data_from_pivots(const std::string data_file,
     size_t cur_blk_size = end_id - start_id;
 
     base_reader.read((char *) block_data_T, sizeof(T) * (cur_blk_size * dim));
-    diskann::convert_types<T, float>(block_data_T, block_data_float, cur_blk_size,
-                                 dim);
+    diskann::convert_types<T, float>(block_data_T, block_data_float,
+                                     cur_blk_size, dim);
 
     std::cout << "Processing points  [" << start_id << ", " << end_id << ").."
               << std::flush;
@@ -374,8 +374,8 @@ int partition(const std::string data_file, const float sampling_rate,
                        num_parts, max_k_means_reps, NULL, NULL);
 
     std::cout << "Saving global k-center pivots" << std::endl;
-    diskann::save_bin<float>(output_file.c_str(), pivot_data, (size_t) num_parts,
-                         train_dim);
+    diskann::save_bin<float>(output_file.c_str(), pivot_data,
+                             (size_t) num_parts, train_dim);
   } else {
     size_t file_num_parts;
     size_t file_dim;
@@ -444,8 +444,8 @@ int partition(const std::string data_file, const float sampling_rate,
     size_t cur_blk_size = end_id - start_id;
 
     base_reader.read((char *) block_data_T, sizeof(T) * (cur_blk_size * dim));
-    diskann::convert_types<T, float>(block_data_T, block_data_float, cur_blk_size,
-                                 dim);
+    diskann::convert_types<T, float>(block_data_T, block_data_float,
+                                     cur_blk_size, dim);
 
     math_utils::compute_closest_centers(block_data_float, cur_blk_size, dim,
                                         pivot_data, num_parts, k_base,
@@ -490,35 +490,25 @@ int partition(const std::string data_file, const float sampling_rate,
 
 // Instantations of supported templates
 
-template void DISKANN_DLLEXPORT gen_random_slice<float>(const float *inputdata,
-                                                   size_t npts, size_t ndims,
-                                                   float   p_val,
-                                                   float *&sampled_data,
-                                                   size_t &slice_size);
-template void DISKANN_DLLEXPORT gen_random_slice<uint8_t>(const uint8_t *inputdata,
-                                                     size_t npts, size_t ndims,
-                                                     float   p_val,
-                                                     float *&sampled_data,
-                                                     size_t &slice_size);
-template void DISKANN_DLLEXPORT gen_random_slice<int8_t>(const int8_t *inputdata,
-                                                    size_t npts, size_t ndims,
-                                                    float   p_val,
-                                                    float *&sampled_data,
-                                                    size_t &slice_size);
+template void DISKANN_DLLEXPORT
+gen_random_slice<float>(const float *inputdata, size_t npts, size_t ndims,
+                        float p_val, float *&sampled_data, size_t &slice_size);
+template void DISKANN_DLLEXPORT gen_random_slice<uint8_t>(
+    const uint8_t *inputdata, size_t npts, size_t ndims, float p_val,
+    float *&sampled_data, size_t &slice_size);
+template void DISKANN_DLLEXPORT
+gen_random_slice<int8_t>(const int8_t *inputdata, size_t npts, size_t ndims,
+                         float p_val, float *&sampled_data, size_t &slice_size);
 
-template void DISKANN_DLLEXPORT gen_random_slice<float>(const std::string data_file,
-                                                   float             p_val,
-                                                   float *&sampled_data,
-                                                   size_t &slice_size,
-                                                   size_t &ndims);
+template void DISKANN_DLLEXPORT gen_random_slice<float>(
+    const std::string data_file, float p_val, float *&sampled_data,
+    size_t &slice_size, size_t &ndims);
 template void DISKANN_DLLEXPORT gen_random_slice<uint8_t>(
     const std::string data_file, float p_val, float *&sampled_data,
     size_t &slice_size, size_t &ndims);
-template void DISKANN_DLLEXPORT gen_random_slice<int8_t>(const std::string data_file,
-                                                    float             p_val,
-                                                    float *&sampled_data,
-                                                    size_t &slice_size,
-                                                    size_t &ndims);
+template void DISKANN_DLLEXPORT gen_random_slice<int8_t>(
+    const std::string data_file, float p_val, float *&sampled_data,
+    size_t &slice_size, size_t &ndims);
 
 template DISKANN_DLLEXPORT int partition<int8_t>(
     const std::string data_file, const float sampling_rate, size_t num_centers,

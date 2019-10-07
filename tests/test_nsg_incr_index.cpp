@@ -27,7 +27,7 @@ int main(int argc, char** argv) {
   size_t num_points, dim, aligned_dim;
 
   diskann::load_aligned_bin<float>(argv[1], data_load, num_points, dim,
-                               aligned_dim);
+                                   aligned_dim);
 
   unsigned    L = (unsigned) atoi(argv[2]);
   unsigned    R = (unsigned) atoi(argv[3]);
@@ -48,8 +48,8 @@ int main(int argc, char** argv) {
 
   typedef int TagT;
 
-  diskann::IndexNSG<float, TagT> index(diskann::L2, argv[1], num_points,
-                                   num_points - num_incr, true);
+  diskann::Index<float, TagT> index(diskann::L2, argv[1], num_points,
+                                    num_points - num_incr, true);
   {
     std::vector<TagT> tags(num_points - num_incr);
     std::iota(tags.begin(), tags.end(), 0);
@@ -60,7 +60,7 @@ int main(int argc, char** argv) {
   }
 
   std::vector<diskann::Neighbor>       pool, tmp;
-  tsl::robin_set<unsigned>         visited;
+  tsl::robin_set<unsigned>             visited;
   std::vector<diskann::SimpleNeighbor> cut_graph;
 
   {

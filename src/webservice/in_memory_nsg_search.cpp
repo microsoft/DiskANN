@@ -15,8 +15,8 @@ namespace diskann {
                                        const char* indexFile,
                                        const char* idsFile, Metric m)
       : _baseVectors(nullptr) {
-    _nsgIndex = std::unique_ptr<diskann::IndexNSG<float>>(
-        new diskann::IndexNSG<float>(m, baseFile, 0, false));
+    _nsgIndex = std::unique_ptr<diskann::Index<float>>(
+        new diskann::Index<float>(m, baseFile, 0, false));
     _nsgIndex->load(indexFile);
 
     _ids = load_ids(idsFile);

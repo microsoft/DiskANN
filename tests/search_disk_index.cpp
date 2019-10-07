@@ -56,7 +56,7 @@ int search_disk_index(int argc, char** argv) {
             << ", beamwidth: " << beam_width << std::endl;
 
   diskann::load_aligned_bin<T>(query_bin, query, query_num, query_dim,
-                           query_aligned_dim);
+                               query_aligned_dim);
 
   bool use_cache_list = false;
   if (file_exists(cached_list_file))
@@ -138,8 +138,8 @@ int search_disk_index(int argc, char** argv) {
   _u64      test_id = 0;
   uint32_t* results_u32 = new unsigned[recall_at * query_num];
   for (auto L : Lvec) {
-    diskann::convert_types<uint64_t, uint32_t>(query_result_ids[test_id].data(),
-                                           results_u32, query_num, recall_at);
+    diskann::convert_types<uint64_t, uint32_t>(
+        query_result_ids[test_id].data(), results_u32, query_num, recall_at);
     std::string cur_result_path =
         result_output_prefix + std::to_string(L) + "_idx_uint32.bin";
     diskann::save_bin<_u32>(cur_result_path, results_u32, query_num, recall_at);
