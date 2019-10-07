@@ -47,10 +47,10 @@ namespace diskann {
     diskann::Metric                    _compareMetric;
 
     // flash stuff
-    std::unique_ptr<PQFlashNSG<T>> _pFlashIndex;
-    _u64                           n_chunks;
-    _u64                           chunk_size;
-    _u64                           beam_width;
-    _u64                           Lsearch;
+    std::unique_ptr<PQFlashIndex<T>> _pFlashIndex;
+    _u64                             n_chunks;
+    _u64                             chunk_size;
+    _u64                             beam_width;
+    _u64                             Lsearch;
   };
 }  // namespace diskann

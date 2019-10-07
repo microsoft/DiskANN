@@ -46,7 +46,7 @@ int generate_cache_list(int argc, char** argv) {
   diskann::load_aligned_bin<T>(warmup_bin, warmup, warmup_num, ndims,
                                warmup_aligned_dim);
 
-  diskann::PQFlashNSG<T> _pFlashIndex;
+  diskann::PQFlashIndex<T> _pFlashIndex;
 
   int res = _pFlashIndex.load(num_threads, pq_centroids_file.c_str(),
                               compressed_data_file.c_str(),

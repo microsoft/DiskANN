@@ -97,7 +97,7 @@ namespace diskann {
 
     _pNsgIndex->build(paras);
     _pNsgIndex->save(randnsg_path.c_str());
-    _pFlashIndex.reset(new PQFlashNSG<T>());
+    _pFlashIndex.reset(new PQFlashIndex<T>());
     _pFlashIndex->create_disk_layout(std::string(dataFilePath), randnsg_path,
                                      disk_index_path);
 
@@ -147,7 +147,7 @@ namespace diskann {
     _u64 nthreads = (_u64) std::atoi(param_list[3].c_str());
 
     // create object
-    _pFlashIndex.reset(new PQFlashNSG<T>());
+    _pFlashIndex.reset(new PQFlashIndex<T>());
 
     // load index
     _pFlashIndex->load(nthreads, pq_tables_bin.c_str(), data_bin.c_str(),

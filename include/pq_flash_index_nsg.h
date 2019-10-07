@@ -50,10 +50,10 @@ namespace diskann {
   };
 
   template<typename T>
-  class PQFlashNSG {
+  class PQFlashIndex {
    public:
-    DISKANN_DLLEXPORT PQFlashNSG();
-    DISKANN_DLLEXPORT ~PQFlashNSG();
+    DISKANN_DLLEXPORT PQFlashIndex();
+    DISKANN_DLLEXPORT ~PQFlashIndex();
 
     // load compressed data, and obtains the handle to the disk-resident index
     DISKANN_DLLEXPORT int load(uint32_t    num_threads,

@@ -76,25 +76,25 @@ namespace {
 
 namespace diskann {
   template<>
-  PQFlashNSG<_u8>::PQFlashNSG() {
+  PQFlashIndex<_u8>::PQFlashIndex() {
     this->dist_cmp = new DistanceL2UInt8();
     //    medoid_nhood.second = nullptr;
   }
 
   template<>
-  PQFlashNSG<_s8>::PQFlashNSG() {
+  PQFlashIndex<_s8>::PQFlashIndex() {
     this->dist_cmp = new DistanceL2Int8();
     //    medoid_nhood.second = nullptr;
   }
 
   template<>
-  PQFlashNSG<float>::PQFlashNSG() {
+  PQFlashIndex<float>::PQFlashIndex() {
     this->dist_cmp = new DistanceL2();
     //    medoid_nhood.second = nullptr;
   }
 
   template<typename T>
-  PQFlashNSG<T>::~PQFlashNSG() {
+  PQFlashIndex<T>::~PQFlashIndex() {
     if (data != nullptr) {
       delete[] data;
     }
@@ -116,7 +116,7 @@ namespace diskann {
   }
 
   template<typename T>
-  void PQFlashNSG<T>::setup_thread_data(_u64 nthreads) {
+  void PQFlashIndex<T>::setup_thread_data(_u64 nthreads) {
     std::cout << "Setting up thread-specific contexts for nthreads: "
               << nthreads << "\n";
 // omp parallel for to generate unique thread IDs
@@ -155,7 +155,7 @@ namespace diskann {
   }
 
   template<typename T>
-  void PQFlashNSG<T>::destroy_thread_data() {
+  void PQFlashIndex<T>::destroy_thread_data() {
     std::cerr << "Clearing scratch" << std::endl;
     assert(this->thread_data.size() == this->max_nthreads);
     while (this->thread_data.size() > 0) {
@@ -175,7 +175,7 @@ namespace diskann {
   }
 
   template<typename T>
-  void PQFlashNSG<T>::set_cache_create_flag() {
+  void PQFlashIndex<T>::set_cache_create_flag() {
     this->create_visit_cache = true;
   }
 
@@ -183,7 +183,7 @@ namespace diskann {
    * present in node_list..
    *  The num_nodes parameter tells how many nodes to cache. */
   template<typename T>
-  void PQFlashNSG<T>::load_cache_from_file(std::string cache_bin) {
+  void PQFlashIndex<T>::load_cache_from_file(std::string cache_bin) {
     _u64  num_cached_nodes;
     _u64  dummy_ones;
     _u64 *node_list;
@@ -257,7 +257,7 @@ namespace diskann {
   }
 
   template<typename T>
-  void PQFlashNSG<T>::cache_bfs_levels(_u64 nlevels) {
+  void PQFlashIndex<T>::cache_bfs_levels(_u64 nlevels) {
     assert(nlevels > 1);
 
     // borrow thread data
@@ -396,7 +396,7 @@ namespace diskann {
   }
 
   template<typename T>
-  void PQFlashNSG<T>::save_cached_nodes(_u64        num_nodes,
+  void PQFlashIndex<T>::save_cached_nodes(_u64        num_nodes,
                                         std::string cache_file_path) {
     if (this->create_visit_cache) {
       std::sort(this->node_visit_counter.begin(), node_visit_counter.end(),
@@ -414,7 +414,7 @@ namespace diskann {
   }
 
   template<typename T>
-  int PQFlashNSG<T>::load(uint32_t num_threads, const char *pq_centroids_bin,
+  int PQFlashIndex<T>::load(uint32_t num_threads, const char *pq_centroids_bin,
                           const char *compressed_data_bin,
                           const char *disk_index_file,
                           const char *medoids_file) {
@@ -577,7 +577,7 @@ namespace diskann {
   }
 
   template<typename T>
-  void PQFlashNSG<T>::create_disk_layout(const std::string base_file,
+  void PQFlashIndex<T>::create_disk_layout(const std::string base_file,
                                          const std::string mem_index_file,
                                          const std::string output_file) {
     unsigned npts, ndims;
@@ -693,7 +693,7 @@ namespace diskann {
   }
 
   template<typename T>
-  void PQFlashNSG<T>::cached_beam_search(const T *query, const _u64 k_search,
+  void PQFlashIndex<T>::cached_beam_search(const T *query, const _u64 k_search,
                                          const _u64 l_search, _u64 *indices,
                                          float *      distances,
                                          const _u64   beam_width,
@@ -1060,7 +1060,7 @@ namespace diskann {
   }
 
   // instantiations
-  template class PQFlashNSG<_u8>;
-  template class PQFlashNSG<_s8>;
-  template class PQFlashNSG<float>;
+  template class PQFlashIndex<_u8>;
+  template class PQFlashIndex<_s8>;
+  template class PQFlashIndex<float>;
 }  // namespace diskann

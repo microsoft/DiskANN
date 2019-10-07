@@ -11,7 +11,7 @@
 
 template<typename T>
 int create_disk_layout(int argc, char **argv) {
-  diskann::PQFlashNSG<T> _pFlashIndex;
+  diskann::PQFlashIndex<T> _pFlashIndex;
   std::string            base_file(argv[2]);
   std::string            rand_nsg_file(argv[3]);
   std::string            output_file(argv[4]);

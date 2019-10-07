@@ -62,7 +62,7 @@ int search_disk_index(int argc, char** argv) {
   if (file_exists(cached_list_file))
     use_cache_list = true;
 
-  diskann::PQFlashNSG<T> _pFlashIndex;
+  diskann::PQFlashIndex<T> _pFlashIndex;
 
   int res = _pFlashIndex.load(num_threads, pq_centroids_file.c_str(),
                               compressed_data_file.c_str(),
