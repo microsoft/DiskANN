@@ -16,7 +16,7 @@ namespace diskann {
   class Index {
    public:
     Index(Metric m, const char *filename, const size_t max_points = 0,
-             const size_t nd = 0, const bool enable_tags = false);
+          const size_t nd = 0, const bool enable_tags = false);
 
     ~Index();
 

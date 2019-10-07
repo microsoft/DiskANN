@@ -386,7 +386,7 @@ namespace diskann {
   //    delete[] out;
   //  }
 
-  struct OneShotNSG {
+  struct OneShotIndex {
     _u64                  medoid, width;
     unsigned *            nsg = nullptr;
     std::vector<unsigned> nnbrs_;
@@ -423,7 +423,7 @@ namespace diskann {
       std::cout << "# nodes: " << nnodes << std::endl;
     }
 
-    ~OneShotNSG() {
+    ~OneShotIndex() {
       if (nsg != nullptr) {
         delete[] nsg;
       }

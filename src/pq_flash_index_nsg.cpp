@@ -397,7 +397,7 @@ namespace diskann {
 
   template<typename T>
   void PQFlashIndex<T>::save_cached_nodes(_u64        num_nodes,
-                                        std::string cache_file_path) {
+                                          std::string cache_file_path) {
     if (this->create_visit_cache) {
       std::sort(this->node_visit_counter.begin(), node_visit_counter.end(),
                 [](std::pair<_u64, _u32> &left, std::pair<_u64, _u32> &right) {
@@ -415,9 +415,9 @@ namespace diskann {
 
   template<typename T>
   int PQFlashIndex<T>::load(uint32_t num_threads, const char *pq_centroids_bin,
-                          const char *compressed_data_bin,
-                          const char *disk_index_file,
-                          const char *medoids_file) {
+                            const char *compressed_data_bin,
+                            const char *disk_index_file,
+                            const char *medoids_file) {
     size_t pq_file_dim, pq_file_num_centroids;
     get_bin_metadata(pq_centroids_bin, pq_file_num_centroids, pq_file_dim);
 
@@ -578,8 +578,8 @@ namespace diskann {
 
   template<typename T>
   void PQFlashIndex<T>::create_disk_layout(const std::string base_file,
-                                         const std::string mem_index_file,
-                                         const std::string output_file) {
+                                           const std::string mem_index_file,
+                                           const std::string output_file) {
     unsigned npts, ndims;
 
     // amount to read or write in one shot
@@ -694,11 +694,11 @@ namespace diskann {
 
   template<typename T>
   void PQFlashIndex<T>::cached_beam_search(const T *query, const _u64 k_search,
-                                         const _u64 l_search, _u64 *indices,
-                                         float *      distances,
-                                         const _u64   beam_width,
-                                         QueryStats * stats,
-                                         Distance<T> *output_dist_func) {
+                                           const _u64 l_search, _u64 *indices,
+                                           float *      distances,
+                                           const _u64   beam_width,
+                                           QueryStats * stats,
+                                           Distance<T> *output_dist_func) {
     ThreadData<T> data = this->thread_data.pop();
     while (data.scratch.sector_scratch == nullptr) {
       this->thread_data.wait_for_push_notify();
