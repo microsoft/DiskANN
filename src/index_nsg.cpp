@@ -178,29 +178,52 @@ namespace NSG {
     std::vector<Neighbor>    expanded_nghrs;
     std::vector<Neighbor>    result;
     tsl::robin_set<unsigned> in_nbr;
+    // tsl::robin_set<unsigned> out_nbr;
+    std::vector<Neighbor>    pool, tmp;
+    tsl::robin_set<unsigned> visited;
     for (unsigned i = 0; i < _in_graph[id].size(); i++)
       in_nbr.insert(_in_graph[id][i]);
     if (_in_graph[id].size() != in_nbr.size())
       std::cout << "Duplicate entries in in-neighbor list of deleted point "
                 << _in_graph[id].size() << "  " << in_nbr.size() << std::endl;
 
-    std::random_device          rd;
+    /*
+     std::random_device          rd;
     std::mt19937                gen(rd());
     std::bernoulli_distribution d(0.25);  // gives true 1/4th of the time
+    for (unsigned i = 0; i < _final_graph[id].size(); i++)
+      if (std::find(_final_graph[_final_graph[id][i]].begin(),
+                    _final_graph[_final_graph[id][i]].end(),
+                    id) != _final_graph[_final_graph[id][i]].end())
+        out_nbr.insert(_final_graph[id][i]);
+    */
 
-    // for (unsigned i = 0; i < _in_graph[id].size(); i++) {
+    pool.clear();
+    tmp.clear();
+    visited.clear();
+    get_neighbors(_data + (size_t) _dim * id, parameters, tmp, pool, visited);
+
+    for (unsigned i = 0; i < pool.size(); i++)
+      if (pool[i].id == id) {
+        pool.erase(pool.begin() + i);
+        break;
+      }
     for (auto it : in_nbr) {
       _final_graph[it].erase(
           std::remove(_final_graph[it].begin(), _final_graph[it].end(), id),
           _final_graph[it].end());
-      bool modify = d(gen);
-      if (modify == true) {
+    }
+    /*  bool modify = d(gen);
+    if(modify == true){*/
+    //    unsigned count = 0;
+    for (auto it : visited) {
+      auto ngh = it;
+      if (in_nbr.find(ngh) != in_nbr.end()) {
+        //          count++;
         candidate_set.clear();
         expanded_nghrs.clear();
         result.clear();
 
-        // unsigned ngh = _in_graph[id][i];
-        auto ngh = it;
         for (auto j : _final_graph[id])
           if ((j != id) && (j != ngh))
             candidate_set.insert(j);
@@ -239,6 +262,8 @@ namespace NSG {
     _nd--;
 
     _eager_done = true;
+    // std::cout << "Fraction of visited points that were true in-neighbors =
+    // "<< (float)count/((float)in_nbr.size()) << std::endl;
     return 0;
   }
 
