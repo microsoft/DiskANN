@@ -18,20 +18,20 @@ class WindowsAlignedFileReader : public AlignedFileReader {
 
  public:
   WindowsAlignedFileReader(){};
-  ~WindowsAlignedFileReader(){};
+  virtual ~WindowsAlignedFileReader(){};
 
-  void register_thread();
-  void deregister_thread() {
+  virtual void register_thread();
+  virtual void deregister_thread() {
   }
-  IOContext &get_ctx();
+  virtual IOContext &get_ctx();
 
   // Open & close ops
   // Blocking calls
-  void open(const std::string &fname);
-  void close();
+  virtual void open(const std::string &fname);
+  virtual void close();
 
   // process batch of aligned requests in parallel
   // NOTE :: blocking call for the calling thread, but can thread-safe
-  void read(std::vector<AlignedRead> &read_reqs, IOContext ctx);
+  virtual void read(std::vector<AlignedRead> &read_reqs, IOContext ctx);
 };
 #endif

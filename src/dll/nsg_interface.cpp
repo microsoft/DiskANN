@@ -170,8 +170,6 @@ namespace NSG {
                                     float*            distances,
                                     unsigned __int64* ids) const {
     //    _u64      L = 6 * neighborCount;
-    std::cout << this->aligned_dimension << " is aligned dimension "
-              << std::endl;
     const T* query = (const T*) vector;
     //#pragma omp  parallel for schedule(dynamic, 1)
     for (_s64 i = 0; i < queryCount; i++) {
