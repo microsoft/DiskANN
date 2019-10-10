@@ -1,8 +1,12 @@
-set(CMAKE_CXX_STANDARD 11)
+set(CMAKE_CXX_STANDARD 14)
 
-file(GLOB CPP_SOURCES *.cpp)
-
-add_library(${PROJECT_NAME} ${CPP_SOURCES})
-add_library(${PROJECT_NAME}_s STATIC ${CPP_SOURCES})
-
-#install()
+if(MSVC)
+	add_subdirectory(dll)
+	add_subdirectory(webservice)
+else()
+	#file(GLOB CPP_SOURCES *.cpp)
+	set(CPP_SOURCES index_nsg.cpp linux_aligned_file_reader.cpp math_utils.cpp memory_mapper.cpp partition_and_pq.cpp pq_flash_index_nsg.cpp)
+	add_library(${PROJECT_NAME} ${CPP_SOURCES})
+	add_library(${PROJECT_NAME}_s STATIC ${CPP_SOURCES})
+endif()
+install()

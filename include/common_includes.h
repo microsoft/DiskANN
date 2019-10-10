@@ -14,5 +14,4 @@
 #include <sys/stat.h>
 #include <time.h>
 //#include <unistd.h>
-#include <mkl.h>
 #include <vector>

@@ -1,33 +1,33 @@
 #pragma once
-#include "util.h"
+#include "utils.h"
 
 namespace NSG {
   template<typename T>
-  class PQTable {
-   public:
-    virtual void load_bin(const char* filename) = 0;
-    virtual void convert(const T* in_vec, float* out_vec) = 0;
-  };
-
-  template<typename T>
-  class FixedChunkPQTable : PQTable<_u8> {
+  class FixedChunkPQTable {
     // data_dim = n_chunks * chunk_size;
-    float* tables;      // pq_tables = float* [[2^8 * [chunk_size]] * n_chunks]
+    float* tables =
+        nullptr;        // pq_tables = float* [[2^8 * [chunk_size]] * n_chunks]
     _u64   n_chunks;    // n_chunks = # of chunks ndims is split into
     _u64   chunk_size;  // chunk_size = chunk size of each dimension chunk
     _u64   ndims;       // ndims = chunk_size * n_chunks
-    float* tables_T;    // same as pq_tables, but col-major
+    float* tables_T = nullptr;  // same as pq_tables, but col-major
    public:
-    FixedChunkPQTable(_u64 nchunks, _u64 chunksize)
-        : n_chunks(nchunks), chunk_size(chunksize) {
+    FixedChunkPQTable() {
     }
 
-    ~FixedChunkPQTable() {
-      delete[] tables;
-      delete[] tables_T;
+    virtual ~FixedChunkPQTable() {
+      if (tables != nullptr) {
+        delete[] tables;
+      }
+      if (tables_T != nullptr) {
+        delete[] tables_T;
+      }
     }
 
-    void load_bin(const char* filename) override {
+    void load_pq_centroid_bin(const char* filename, _u64 nchunks,
+                              _u64 chunksize) {
+      this->n_chunks = nchunks;
+      this->chunk_size = chunksize;
       // bin structure: [256][ndims][ndims(float)]
       unsigned npts_u32, ndims_u32;
       size_t   npts_u64, ndims_u64;
@@ -49,7 +49,7 @@ namespace NSG {
 
     // in_vec = _u8 * [n_chunks]
     // out_vec = float* [ndims]
-    virtual void convert(const _u8* in_vec, float* out_vec) override {
+    virtual void convert(const _u8* in_vec, float* out_vec) {
       // _mm_prefetch((char*) tables, 3);
       _mm_prefetch((char*) in_vec, _MM_HINT_T1);
       // prefetch full out_vec

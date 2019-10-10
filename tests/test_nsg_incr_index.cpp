@@ -1,28 +1,27 @@
 #include <index_nsg.h>
-#include <timer.h>
-
+#include <numeric>
 #include <omp.h>
 #include <string.h>
+#include <time.h>
+#include <timer.h>
+
+#include "utils.h"
+
+#ifndef _WINDOWS
 #include <sys/mman.h>
 #include <sys/stat.h>
-#include <time.h>
 #include <unistd.h>
-#include "util.h"
+#endif
+
+#include "memory_mapper.h"
 
 int main(int argc, char** argv) {
   if (argc != 10) {
     std::cout << "Correct usage: " << argv[0]
               << " data_file L R C alpha num_rounds "
-              << "save_graph_file #incr_points #fake_points" << std::endl;
+              << "save_graph_file #incr_points #frozen_points" << std::endl;
     exit(-1);
   }
-
-  float* data_load = NULL;
-  size_t num_points, dim, num_new;
-
-  NSG::load_Tvecs<float>(argv[1], data_load, num_points, dim);
-  data_load = NSG::data_align(data_load, num_points, dim);
-  std::cout << "Data loaded and aligned" << std::endl;
 
   unsigned    L = (unsigned) atoi(argv[2]);
   unsigned    R = (unsigned) atoi(argv[3]);
@@ -31,7 +30,7 @@ int main(int argc, char** argv) {
   unsigned    num_rnds = (unsigned) std::atoi(argv[6]);
   std::string save_path(argv[7]);
   unsigned    num_incr = (unsigned) atoi(argv[8]);
-  unsigned    num_fake = (unsigned) atoi(argv[9]);
+  unsigned    num_frozen = (unsigned) atoi(argv[9]);
 
   NSG::Parameters paras;
   paras.Set<unsigned>("L", L);
@@ -40,27 +39,21 @@ int main(int argc, char** argv) {
   paras.Set<float>("alpha", alpha);
   paras.Set<unsigned>("num_rnds", num_rnds);
 
-  num_new = num_points + num_fake;
-
-  auto data_copy = new float[num_new * dim];
-  memcpy((void*) (data_copy + num_fake * dim), (void*) data_load,
-         num_points * dim * sizeof(float));
-  auto data_copy_copy = new float[num_new * dim];
+  size_t num_points, dim, aligned_dim;
+  float* data_load = NULL;
+  NSG::load_aligned_bin<float>(argv[1], data_load, num_points, dim,
+                               aligned_dim);
 
   typedef unsigned TagT;
-
-  NSG::IndexNSG<float, TagT> index(dim, num_new - num_incr, NSG::L2, num_new,
-                                   true);
+  NSG::IndexNSG<float, TagT> index(NSG::L2, argv[1], num_points - num_incr,
+                                   num_points, true, true, num_frozen);
   {
     std::vector<TagT> tags(num_new - num_incr);
     std::iota(tags.begin(), tags.end(), 0);
 
-    index.gen_fake_point(num_fake, data_copy);
     NSG::Timer timer;
-    index.build(data_copy, paras, tags);
-    memcpy((void*) data_copy_copy, (void*) data_copy,
-           num_new * dim * sizeof(float));
-    std::cout << "Index time: " << timer.elapsed() / 1000 << "ms\n";
+    index.build(paras, tags);
+    std::cout << "Index build time: " << timer.elapsed() / 1000 << "ms\n";
   }
 
   std::vector<NSG::Neighbor>       pool, tmp;
@@ -69,13 +62,15 @@ int main(int argc, char** argv) {
 
   {
     NSG::Timer timer;
-    for (size_t i = num_new - num_incr; i < num_new; ++i)
-      index.insert_point(data_copy_copy + i * dim, paras, pool, tmp, visited,
+    for (size_t i = num_points - num_incr; i < num_points; ++i) {
+      index.insert_point(data_load + i * aligned_dim, paras, pool, tmp, visited,
                          cut_graph, i);
+      std::cout << i << std::endl;
+    }
     std::cout << "Incremental time: " << timer.elapsed() / 1000 << "ms\n";
-    index.update_in_graph();
+    auto save_path_inc = save_path + ".inc";
+    index.save(save_path_inc.c_str());
   }
-  index.save(save_path.c_str());
 
   tsl::robin_set<unsigned> delete_list;
   while (delete_list.size() < num_incr)
@@ -103,16 +98,16 @@ int main(int argc, char** argv) {
   {
     NSG::Timer timer;
     for (auto p : delete_list)
-      index.insert_point(data_copy_copy + (size_t) p * (size_t) dim, paras,
+      index.insert_point(data_load + (size_t) p * (size_t) aligned_dim, paras,
                          pool, tmp, visited, cut_graph, p);
     std::cout << "Re-incremental time: " << timer.elapsed() / 1000 << "ms\n";
+    auto save_path_reinc = save_path + ".reinc";
+    index.save(save_path_reinc.c_str());
   }
 
   auto save_path_reinc = save_path + ".reinc";
   index.save(save_path_reinc.c_str());
-
-  delete[] data_copy_copy;
-  delete[] data_copy;
+  
   delete[] data_load;
 
   return 0;

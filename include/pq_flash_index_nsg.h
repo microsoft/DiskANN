@@ -3,6 +3,7 @@
 #include <sstream>
 #include <stack>
 #include <string>
+
 #include "aligned_file_reader.h"
 #include "concurrent_queue.h"
 #include "neighbor.h"
@@ -11,7 +12,8 @@
 #include "pq_table.h"
 #include "tsl/robin_map.h"
 #include "tsl/robin_set.h"
-#include "util.h"
+#include "utils.h"
+#include "windows_customizations.h"
 
 #define MAX_N_CMPS 16384
 #define SECTOR_LEN 4096
@@ -49,27 +51,36 @@ namespace NSG {
   template<typename T>
   class PQFlashNSG {
    public:
-    PQFlashNSG();
-    ~PQFlashNSG();
+    NSGDLLEXPORT PQFlashNSG();
+    NSGDLLEXPORT ~PQFlashNSG();
 
-    // load data, but obtain handle to nsg file
-    void load(const char *data_bin, const char *nsg_file,
-              const char *pq_tables_bin, const _u64 chunk_size,
-              const _u64 n_chunks, const _u64 data_dim,
-              const _u64 max_nthreads);
+    // load compressed data, and obtains the handle to the disk-resident index
+    NSGDLLEXPORT int load(uint32_t num_threads, const char *pq_centroids_bin,
+                          const char *compressed_data_bin,
+                          const char *disk_index_file,
+                          const char *medoids_file = {0});
 
-    // NOTE:: implemented
-    void cache_bfs_levels(_u64 nlevels);
+    NSGDLLEXPORT void create_disk_layout(const std::string base_file,
+                                         const std::string mem_index_file,
+                                         const std::string output_file);
+    NSGDLLEXPORT void cache_visited_nodes(_u64 *node_list, _u64 num_nodes);
+    NSGDLLEXPORT void load_cache_from_file(std::string cache_bin);
+    NSGDLLEXPORT void cache_bfs_levels(_u64 nlevels);
+
+    NSGDLLEXPORT void set_cache_create_flag();
+
+    NSGDLLEXPORT void save_cached_nodes(_u64        num_nodes,
+                                        std::string cache_file_path);
 
     // setting up thread-specific data
-    void setup_thread_data(_u64 nthreads);
-    void destroy_thread_data();
+    NSGDLLEXPORT void setup_thread_data(_u64 nthreads);
+    NSGDLLEXPORT void destroy_thread_data();
 
     // implemented
-    void cached_beam_search(const T *query, const _u64 k_search,
-                            const _u64 l_search, _u64 *res_ids,
-                            float *res_dists, const _u64 beam_width,
-                            QueryStats *stats = nullptr);
+    NSGDLLEXPORT void cached_beam_search(
+        const T *query, const _u64 k_search, const _u64 l_search, _u64 *res_ids,
+        float *res_dists, const _u64 beam_width, QueryStats *stats = nullptr,
+        Distance<T> *output_dist_func = nullptr);
     AlignedFileReader *reader;
 
     // index info
@@ -80,26 +91,31 @@ namespace NSG {
     _u64 max_node_len = 0, nnodes_per_sector = 0, max_degree = 0;
 
     // data info
-    _u64 n_base = 0;
+    _u64 num_points = 0;
     _u64 data_dim = 0;
     _u64 aligned_dim = 0;
+
+    std::vector<std::pair<_u64, _u32>> node_visit_counter;
+    bool create_visit_cache;
 
     // PQ data
     // n_chunks = # of chunks ndims is split into
     // data: _u8 * n_chunks
     // chunk_size = chunk size of each dimension chunk
     // pq_tables = float* [[2^8 * [chunk_size]] * n_chunks]
-    _u8 *                 data = nullptr;
-    _u64                  chunk_size;
-    _u64                  n_chunks;
-    FixedChunkPQTable<T> *pq_table;
+    _u8 *                data = nullptr;
+    _u64                 chunk_size;
+    _u64                 n_chunks;
+    FixedChunkPQTable<T> pq_table;
 
     // distance comparator
     Distance<T> *dist_cmp;
 
     // medoid/start info
-    _u64 medoid = 0;
-    std::pair<_u64, unsigned *> medoid_nhood;
+    uint32_t *medoids;
+    std::vector<std::pair<_u64, unsigned *>> medoid_nhoods;
+    size_t num_medoids;
+    T *    medoid_full_precs;
 
     // nhood_cache
     unsigned *nhood_cache_buf = nullptr;
@@ -112,5 +128,6 @@ namespace NSG {
     // thread-specific scratch
     ConcurrentQueue<ThreadData<T>> thread_data;
     _u64                           max_nthreads;
+    bool                           load_flag = false;
   };
-}
+}  // namespace NSG

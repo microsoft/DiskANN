@@ -1,5 +1,6 @@
 #include <common_includes.h>
-#include "util.h"
+#include <mkl.h>
+#include "utils.h"
 
 namespace math_utils {
 

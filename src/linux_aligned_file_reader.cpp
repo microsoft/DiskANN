@@ -5,7 +5,7 @@
 #include <cstdio>
 #include <iostream>
 #include "tsl/robin_map.h"
-#include "util.h"
+#include "utils.h"
 #define MAX_EVENTS 1024
 
 namespace {
@@ -14,6 +14,7 @@ namespace {
 
   void execute_io(io_context_t ctx, int fd, std::vector<AlignedRead> &read_reqs,
                   uint64_t n_retries = 0) {
+#ifdef DEBUG
     for (auto &req : read_reqs) {
       assert(IS_ALIGNED(req.len, 512));
       // std::cout << "request:"<<req.offset<<":"<<req.len << std::endl;
@@ -21,6 +22,7 @@ namespace {
       assert(IS_ALIGNED(req.buf, 512));
       // assert(malloc_usable_size(req.buf) >= req.len);
     }
+#endif
 
     // break-up requests into chunks of size MAX_EVENTS each
     uint64_t n_iters = ROUND_UP(read_reqs.size(), MAX_EVENTS) / MAX_EVENTS;
@@ -36,7 +38,10 @@ namespace {
                       read_reqs[j + iter * MAX_EVENTS].len,
                       read_reqs[j + iter * MAX_EVENTS].offset);
       }
+
       // initialize `cbs` using `cb` array
+      //
+
       for (uint64_t i = 0; i < n_ops; i++) {
         cbs[i] = cb.data() + i;
       }
@@ -75,6 +80,7 @@ namespace {
       }
       */
     }
+
     /*
     for(unsigned i=0;i<64;i++){
       std::cout << *((unsigned*)read_reqs[0].buf + i) << " ";
@@ -147,8 +153,8 @@ void LinuxAlignedFileReader::deregister_thread() {
 
   lk.unlock();
   io_context_t ctx = this->get_ctx();
-  int          ret = io_destroy(ctx);
-  assert(ret == 0);
+  io_destroy(ctx);
+  //  assert(ret == 0);
   lk.lock();
   ctx_map.erase(my_id);
   std::cerr << "returned ctx from thread-id:" << my_id << std::endl;
@@ -164,14 +170,14 @@ void LinuxAlignedFileReader::open(const std::string &fname) {
 }
 
 void LinuxAlignedFileReader::close() {
-  int64_t ret;
+  //  int64_t ret;
 
   // check to make sure file_desc is closed
-  ret = ::fcntl(this->file_desc, F_GETFD);
-  assert(ret != -1);
+  ::fcntl(this->file_desc, F_GETFD);
+  //  assert(ret != -1);
 
-  ret = ::close(this->file_desc);
-  assert(ret != -1);
+  ::close(this->file_desc);
+  //  assert(ret != -1);
 }
 
 void LinuxAlignedFileReader::read(std::vector<AlignedRead> &read_reqs,

@@ -1,7 +1,7 @@
-#ifdef __NSG_WINDOWS__
+#ifdef _WINDOWS
 #include "windows_aligned_file_reader.h"
 #include <iostream>
-#include "util.h"
+#include "utils.h"
 
 #define SECTOR_LEN 4096
 #define MAX_IO_DEPTH 64
@@ -84,7 +84,8 @@ void WindowsAlignedFileReader::read(std::vector<AlignedRead>& read_reqs,
 
     // batch start/end
     _u64 batch_start = MAX_IO_DEPTH * i;
-    _u64 batch_size = min((_u64)(n_reqs - batch_start), (_u64) MAX_IO_DEPTH);
+    _u64 batch_size =
+        std::min((_u64)(n_reqs - batch_start), (_u64) MAX_IO_DEPTH);
 
     // fill OVERLAPPED and issue them
     for (_u64 j = 0; j < batch_size; j++) {

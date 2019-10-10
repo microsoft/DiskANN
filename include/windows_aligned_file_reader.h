@@ -1,5 +1,5 @@
 #pragma once
-#ifdef __NSG_WINDOWS__
+#ifdef _WINDOWS
 #include <Windows.h>
 #include <fcntl.h>
 #include <malloc.h>
@@ -10,7 +10,7 @@
 #include <thread>
 #include "aligned_file_reader.h"
 #include "tsl/robin_map.h"
-#include "util.h"
+#include "utils.h"
 class WindowsAlignedFileReader : public AlignedFileReader {
  private:
   uint64_t     file_sz;

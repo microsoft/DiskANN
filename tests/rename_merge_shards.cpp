@@ -6,7 +6,7 @@
 #include <parallel/algorithm>
 #include <vector>
 #include "cached_io.h"
-#include "util.h"
+#include "utils.h"
 
 _u64 get_file_size(const std::string &fname) {
   std::ifstream reader(fname, std::ios::binary | std::ios::ate);
@@ -27,15 +27,15 @@ void read_nsg(const std::string &fname, std::vector<unsigned> &nsg) {
 void read_bad_ivecs(const std::string &fname, std::vector<unsigned> &ivecs) {
   _u64 fsize = get_file_size(fname);
   std::cout << "Reading bad ivecs: " << fname << ", size: " << fsize << "B\n";
-  std::vector<unsigned> local_vec;
-  local_vec.resize(fsize / sizeof(unsigned));
-  std::ifstream reader(fname, std::ios::binary);
-  reader.read((char *) local_vec.data(), fsize);
+  uint32_t      npts32, dummy;
+  std::ifstream reader(fname.c_str(), std::ios::binary);
+  reader.read((char *) &npts32, sizeof(uint32_t));
+  reader.read((char *) &dummy, sizeof(uint32_t));
+  npts32 = fsize / sizeof(unsigned) - 2;
+  std::cout << "Points = " << npts32 << std::endl;
+  ivecs.resize(npts32);
+  reader.read((char *) ivecs.data(), npts32 * sizeof(uint32_t));
   reader.close();
-  ivecs.resize(local_vec.size() / 2);
-  for (_u64 i = 0; i < local_vec.size() / 2; i++) {
-    ivecs[i] = local_vec[2 * i + 1];
-  }
 }
 
 void read_unsigned_ivecs(const std::string &    fname,
@@ -73,6 +73,8 @@ int main(int argc, char **argv) {
   std::string              nsg_suffix(argv[2]);
   std::string              idmaps_prefix(argv[3]);
   std::string              idmaps_suffix(argv[4]);
+  std::string              output_nsg(argv[6]);
+  std::string              medoid_file = output_nsg + "_medoids.bin";
 
   for (_u64 shard = 0; shard < nshards; shard++) {
     nsg_names[shard] = nsg_prefix + std::to_string(shard) + nsg_suffix;
@@ -136,16 +138,25 @@ int main(int argc, char **argv) {
 
   width *= rep_factor;
   nsg_writer.write((char *) &width, sizeof(unsigned));
+  std::ofstream medoid_writer(medoid_file.c_str(), std::ios::binary);
+  _u32          nshards_u32 = nshards;
+  _u32          one_val = 1;
+  medoid_writer.write((char *) &nshards_u32, sizeof(uint32_t));
+  medoid_writer.write((char *) &one_val, sizeof(uint32_t));
+
   for (_u64 shard = 0; shard < nshards; shard++) {
     unsigned medoid;
     // read medoid
     nsg_readers[shard].read((char *) &medoid, sizeof(unsigned));
     // rename medoid
     medoid = idmaps[shard][medoid];
+
+    medoid_writer.write((char *) &medoid, sizeof(uint32_t));
     // write renamed medoid
     if (shard == (nshards - 1))  //--> uncomment if running hierarchical
       nsg_writer.write((char *) &medoid, sizeof(unsigned));
   }
+  medoid_writer.close();
 
   std::cout << "Starting merge\n";
   unsigned *nhood = new unsigned[32768];
@@ -180,6 +191,8 @@ int main(int argc, char **argv) {
     nnbrs += shard_nnbrs;
     shard_nhood += shard_nnbrs;
   }
+  nsg_writer.write((char *) &nnbrs, sizeof(unsigned));
+  nsg_writer.write((char *) nhood, nnbrs * sizeof(unsigned));
 
   std::cout << "Finished merge\n";
   delete[] nhood;

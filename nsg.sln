@@ -3,7 +3,7 @@ Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio 15
 VisualStudioVersion = 15.0.28307.329
 MinimumVisualStudioVersion = 10.0.40219.1
-Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "nsg", "vcproj\nsg\nsg.vcxproj", "{E2B234D7-0EB1-4F35-B2D4-C313A20941C8}"
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "search_disk_index", "vcproj\nsg\nsg.vcxproj", "{E2B234D7-0EB1-4F35-B2D4-C313A20941C8}"
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "test_recall", "vcproj\test_recall\test_recall.vcxproj", "{C639031F-E693-4ED7-AAC6-CDA29388A16F}"
 EndProject
@@ -21,10 +21,11 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "nsg_dll", "vcproj\nsg_dll\n
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "test_nsg_dll", "vcproj\test_nsg_dll\test_nsg_dll.vcxproj", "{FA1ECBFE-B257-4B5D-9F80-AEB107AC57BE}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "nsg_disk_server", "vcproj\nsg_disk_webclient\nsg_disk_webclient.vcxproj", "{520672AD-23CF-4B5F-BBF9-720B14514A35}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "convert", "vcproj\convert\convert.vcxproj", "{985CA83E-BE77-48C9-935D-7DBCB3DFA9B3}"
+EndProject
 Global
-	GlobalSection(Performance) = preSolution
-		HasPerformanceSessions = true
-	EndGlobalSection
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|x64 = Debug|x64
 		Debug|x86 = Debug|x86
@@ -104,12 +105,31 @@ Global
 		{FA1ECBFE-B257-4B5D-9F80-AEB107AC57BE}.Release|x64.Build.0 = Release|x64
 		{FA1ECBFE-B257-4B5D-9F80-AEB107AC57BE}.Release|x86.ActiveCfg = Release|Win32
 		{FA1ECBFE-B257-4B5D-9F80-AEB107AC57BE}.Release|x86.Build.0 = Release|Win32
+		{520672AD-23CF-4B5F-BBF9-720B14514A35}.Debug|x64.ActiveCfg = Debug|x64
+		{520672AD-23CF-4B5F-BBF9-720B14514A35}.Debug|x64.Build.0 = Debug|x64
+		{520672AD-23CF-4B5F-BBF9-720B14514A35}.Debug|x86.ActiveCfg = Debug|Win32
+		{520672AD-23CF-4B5F-BBF9-720B14514A35}.Debug|x86.Build.0 = Debug|Win32
+		{520672AD-23CF-4B5F-BBF9-720B14514A35}.Release|x64.ActiveCfg = Release|x64
+		{520672AD-23CF-4B5F-BBF9-720B14514A35}.Release|x64.Build.0 = Release|x64
+		{520672AD-23CF-4B5F-BBF9-720B14514A35}.Release|x86.ActiveCfg = Release|Win32
+		{520672AD-23CF-4B5F-BBF9-720B14514A35}.Release|x86.Build.0 = Release|Win32
+		{985CA83E-BE77-48C9-935D-7DBCB3DFA9B3}.Debug|x64.ActiveCfg = Debug|x64
+		{985CA83E-BE77-48C9-935D-7DBCB3DFA9B3}.Debug|x64.Build.0 = Debug|x64
+		{985CA83E-BE77-48C9-935D-7DBCB3DFA9B3}.Debug|x86.ActiveCfg = Debug|Win32
+		{985CA83E-BE77-48C9-935D-7DBCB3DFA9B3}.Debug|x86.Build.0 = Debug|Win32
+		{985CA83E-BE77-48C9-935D-7DBCB3DFA9B3}.Release|x64.ActiveCfg = Release|x64
+		{985CA83E-BE77-48C9-935D-7DBCB3DFA9B3}.Release|x64.Build.0 = Release|x64
+		{985CA83E-BE77-48C9-935D-7DBCB3DFA9B3}.Release|x86.ActiveCfg = Release|Win32
+		{985CA83E-BE77-48C9-935D-7DBCB3DFA9B3}.Release|x86.Build.0 = Release|Win32
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {8DD15E54-0160-4179-9CE5-2CEA63BD6CDE}
+	EndGlobalSection
+	GlobalSection(Performance) = preSolution
+		HasPerformanceSessions = true
 	EndGlobalSection
 	GlobalSection(Performance) = preSolution
 		HasPerformanceSessions = true

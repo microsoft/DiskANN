@@ -1,6 +1,6 @@
 #include <malloc.h>
 #include <math_utils.h>
-#include "util.h"
+#include "utils.h"
 
 namespace math_utils {
 
@@ -18,7 +18,7 @@ namespace math_utils {
   void compute_vecs_l2sq(float* vecs_l2sq, float* data, const size_t num_points,
                          const size_t dim) {
 #pragma omp parallel for schedule(static, 8192)
-    for (int64_t n_iter = 0; n_iter < num_points; n_iter++) {
+    for (int64_t n_iter = 0; n_iter < (_s64) num_points; n_iter++) {
       vecs_l2sq[n_iter] =
           cblas_snrm2((MKL_INT) dim, (data + (n_iter * dim)), 1);
       vecs_l2sq[n_iter] *= vecs_l2sq[n_iter];
@@ -127,7 +127,7 @@ namespace math_utils {
 
     if (k == 1) {
 #pragma omp parallel for schedule(static, 8192)
-      for (int64_t i = 0; i < num_points; i++) {
+      for (int64_t i = 0; i < (_s64) num_points; i++) {
         float  min = std::numeric_limits<float>::max();
         float* current = dist_matrix + (i * num_centers);
         for (size_t j = 0; j < num_centers; j++) {
@@ -139,7 +139,7 @@ namespace math_utils {
       }
     } else {
 #pragma omp parallel for schedule(static, 8192)
-      for (int64_t i = 0; i < num_points; i++) {
+      for (int64_t i = 0; i < (_s64) num_points; i++) {
         std::priority_queue<PivotContainer> top_k_queue;
         float* current = dist_matrix + (i * num_centers);
         for (size_t j = 0; j < num_centers; j++) {
@@ -153,6 +153,8 @@ namespace math_utils {
         }
       }
     }
+    delete[] ones_a;
+    delete[] ones_b;
   }
 
   // Given data in num_points * new_dim row major
@@ -211,7 +213,9 @@ namespace math_utils {
 
 #pragma omp parallel for schedule(static, 1)
       for (int64_t j = cur_blk * PAR_BLOCK_SIZE;
-           j < std::min(num_points, (cur_blk + 1) * PAR_BLOCK_SIZE); j++) {
+           j <
+           std::min((_s64) num_points, (_s64)((cur_blk + 1) * PAR_BLOCK_SIZE));
+           j++) {
         for (size_t l = 0; l < k; l++) {
           size_t this_center_id =
               closest_centers[(j - cur_blk * PAR_BLOCK_SIZE) * k + l];
@@ -240,7 +244,7 @@ namespace math_utils {
               << dim << " dimensions using " << num_centers << " centers "
               << std::endl;
 #pragma omp parallel for schedule(static, 8192)
-    for (int64_t n_iter = 0; n_iter < num_points; n_iter++) {
+    for (int64_t n_iter = 0; n_iter < (_s64) num_points; n_iter++) {
       for (size_t d_iter = 0; d_iter < dim; d_iter++) {
         if (to_subtract == 1)
           data_load[n_iter * dim + d_iter] =
@@ -290,7 +294,7 @@ namespace kmeans {
     memset(centers, 0, sizeof(float) * (size_t) num_centers * (size_t) dim);
 
 #pragma omp parallel for schedule(static, 1)
-    for (int64_t c = 0; c < num_centers; ++c) {
+    for (int64_t c = 0; c < (_s64) num_centers; ++c) {
       float*  center = centers + (size_t) c * (size_t) dim;
       double* cluster_sum = new double[dim];
       for (size_t i = 0; i < dim; i++)
@@ -318,7 +322,7 @@ namespace kmeans {
       std::vector<float> residuals(nchunks * BUF_PAD, 0.0);
 
 #pragma omp parallel for schedule(static, 32)
-      for (int64_t chunk = 0; chunk < nchunks; ++chunk)
+      for (int64_t chunk = 0; chunk < (_s64) nchunks; ++chunk)
         for (size_t d = chunk * CHUNK_SIZE;
              d < num_points && d < (chunk + 1) * CHUNK_SIZE; ++d)
           residuals[chunk * BUF_PAD] += math_utils::calc_distance(
@@ -413,10 +417,11 @@ namespace kmeans {
   void kmeanspp_selecting_pivots(float* data, size_t num_points, size_t dim,
                                  float* pivot_data, size_t num_centers) {
     if (num_points > 1 << 23) {
-      std::cout
-          << "ERROR: Currently not supported. Falling back to random pivot "
-             "selection."
-          << std::endl;
+      std::cout << "ERROR: n_pts " << num_points
+                << " currently not supported for k-means++, maximum is "
+                   "8388608. Falling back to random pivot "
+                   "selection."
+                << std::endl;
       selecting_pivots(data, num_points, dim, pivot_data, num_centers);
       return;
     }
@@ -439,7 +444,7 @@ namespace kmeans {
     float* dist = new float[num_points];
 
 #pragma omp parallel for schedule(static, 8192)
-    for (int64_t i = 0; i < num_points; i++) {
+    for (int64_t i = 0; i < (_s64) num_points; i++) {
       dist[i] =
           math_utils::calc_distance(data + i * dim, data + init_id * dim, dim);
     }
@@ -478,7 +483,7 @@ namespace kmeans {
                   dim * sizeof(float));
 
 #pragma omp parallel for schedule(static, 8192)
-      for (int64_t i = 0; i < num_points; i++) {
+      for (int64_t i = 0; i < (_s64) num_points; i++) {
         dist[i] = (std::min)(
             dist[i], math_utils::calc_distance(data + i * dim,
                                                data + tmp_pivot * dim, dim));

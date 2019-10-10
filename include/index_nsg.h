@@ -10,62 +10,55 @@
 #include "neighbor.h"
 #include "parameters.h"
 #include "tsl/robin_set.h"
-#include "util.h"
+#include "utils.h"
 
 namespace NSG {
   template<typename T, typename TagT = unsigned>
   class IndexNSG {
    public:
-    IndexNSG(const size_t dimension, const size_t n, Metric m,
+    IndexNSG(Metric m, const char *filename, const size_t nd = 0,
              const size_t max_points = 0, const bool enable_tags = false,
-             const bool store_data = false);
-
+             const bool store_data = true, const size_t num_frozen_pts = 1,
+             const bool maintain_in_graph = false);
     ~IndexNSG();
 
     void save(const char *filename);
     void load(const char *filename, const bool load_tags = false);
-    void gen_fake_point(unsigned fake_points, T *data);
     void init_random_graph(size_t num_points, unsigned k,
                            std::vector<size_t> mapping = std::vector<size_t>());
-    void update_in_graph();
-    void build(const T *data, Parameters &parameters,
-               const std::vector<TagT> &tags = std::vector<TagT>());
-    typedef std::vector<SimpleNeighbor> vecNgh;
 
+    void build(Parameters &             parameters,
+               const std::vector<TagT> &tags = std::vector<TagT>());
+    
     void populate_start_points_ep(std::vector<unsigned> &start_points);
     void populate_start_points_bfs(std::vector<unsigned> &start_points);
 
     // Gopal. Added beam_search overload that takes L as parameter, so that we
     // can customize L on a per-query basis without tampering with "Parameters"
-    std::pair<int, int> beam_search(const T *query, const T *x, const size_t K,
+    std::pair<int, int> beam_search(const T *query, const size_t K,
                                     const unsigned int L, unsigned *indices,
                                     int                          beam_width,
-                                    const std::vector<unsigned> &start_points,
-                                    unsigned                     fake_points);
+                                    const std::vector<unsigned> &start_points);
 
-    std::pair<int, int> beam_search(const T *query, const T *x, const size_t K,
+    std::pair<int, int> beam_search(const T *query, const size_t K,
                                     const Parameters &parameters,
                                     unsigned *indices, int beam_width,
-                                    const std::vector<unsigned> start_points,
-                                    unsigned                    fake_points);
+                                    const std::vector<unsigned> start_points);
 
     std::pair<int, int> beam_search_tags(
-        const T *query, const T *x, const size_t K,
-        const Parameters &parameters, TagT *tags, int beam_width,
-        const std::vector<unsigned> &start_points, unsigned fake_points,
-        unsigned *indices_buffer = NULL);
+        const T *query, const size_t K, const Parameters &parameters,
+        TagT *tags, int beam_width, const std::vector<unsigned> &start_points,
+        unsigned *indices_buffer=NULL);
 
     void prefetch_vector(unsigned id);
 
-    void save_disk_opt_graph(const char *diskopt_path);
-
-/* Methods for inserting and deleting points from the databases*/
-#define NULL_TAG (TagT(-1))
+    /* describe valid interleaving of inserts/deletes
+    Methods for inserting and deleting points from the databases*/
 
     int insert_point(const T *point, const Parameters &parameter,
                      std::vector<Neighbor> &pool, std::vector<Neighbor> &tmp,
                      tsl::robin_set<unsigned> &visited, vecNgh &cut_graph,
-                     const TagT tag = NULL_TAG);
+                     const TagT tag);
 
     int enable_delete();
     int disable_delete(const Parameters &parameters,
@@ -74,15 +67,12 @@ namespace NSG {
     // Return -1 if tag not found, 0 if OK.
     int delete_point(const TagT tag);
 
+    // delete point from graph and restructure it immediately
     int eager_delete(const TagT tag, const Parameters &parameters);
 
     /*  Internals of the library */
-    void set_data(const T *data);
-
-    // print in_degree of points
-    void report_in_degree(tsl::robin_set<unsigned> delete_list);
-
    protected:
+    typedef std::vector<SimpleNeighbor> vecNgh;
     typedef std::vector<std::vector<unsigned>> CompactGraph;
     CompactGraph                               _final_graph;
     CompactGraph                               _in_graph;
@@ -93,6 +83,9 @@ namespace NSG {
 
     // entry point is centroid based on all-to-centroid distance computation
     unsigned calculate_entry_point();
+    int  gen_frozen_points(T *data);
+    void update_in_graph();
+
 
     void iterate_to_fixed_point(const T *query, const Parameters &parameter,
                                 std::vector<unsigned> &   init_ids,
@@ -109,9 +102,9 @@ namespace NSG {
                        std::vector<Neighbor> &   fullset,
                        tsl::robin_set<unsigned> &visited);
 
-    // flag = 1 for incremental insertions, flag = 0 for graph build
     void inter_insert(unsigned n, vecNgh &cut_graph,
-                      const Parameters &parameter, int flag);
+                      const Parameters &parameter,
+                      const bool        update_in_graph = false);
 
     void sync_prune(const T *x, unsigned location, std::vector<Neighbor> &pool,
                     const Parameters &        parameter,
@@ -122,37 +115,31 @@ namespace NSG {
                       const unsigned degree, const unsigned maxc,
                       std::vector<Neighbor> &result);
 
-    void occlude_list_eager(const std::vector<Neighbor> &pool,
-                            const unsigned location, const float alpha,
-                            const unsigned degree, const unsigned maxc,
-                            std::vector<Neighbor> &result);
-
     void link(Parameters &parameters);
 
     // WARNING: Do not call reserve_location() without acquiring change_lock_
     unsigned reserve_location();
 
     // get new location corresponding to each undeleted tag after deletions
-
     std::vector<unsigned> get_new_location(unsigned &active);
 
-    // renumbering nodes, updating tag and location mappings and compacting the
-    // graph
+    // renumber nodes, update tag and location maps and compact the graph
     void compact_data(std::vector<unsigned> new_location, unsigned active);
 
-    // WARNING: Do not call consolidate_deletes() without acquiring change_lock_
+    // WARNING: Do not call consolidate_deletes without acquiring change_lock_
     // Returns number of live points left after consolidation
-
     size_t consolidate_deletes(const Parameters &parameters);
 
-    // Computes the in edges of each node, from the out graph
-    void compute_in_degree_stats();
+    // Computes the in degree stats from the out graph
+    void compute_in_degree_stats() const;
 
    private:
-    const size_t            _dim;
-    const T *               _data;
+    size_t                  _dim;
+    size_t                  _aligned_dim;
+    T *                     _data;
     size_t                  _nd;
     size_t                  _max_points;
+    size_t                  _num_frozen_pts;
     bool                    _has_built;
     Distance<T> *           _distance;
     unsigned                _width;
@@ -168,6 +155,7 @@ namespace NSG {
     bool _consolidated_order;
     bool _store_data;
     bool _eager_done;  // if eager_done = 1, lazy deletes are not allowed
+    bool _maintain_in_graph;
 
     std::unordered_map<TagT, unsigned> _tag_to_location;
     std::unordered_map<unsigned, TagT> _location_to_tag;

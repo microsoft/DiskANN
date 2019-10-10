@@ -1,11 +1,10 @@
 #include <iostream>
-#include "util.h"
+#include "utils.h"
 
 void block_convert(std::ifstream& reader, std::ofstream& writer,
                    float* read_buf, float* write_buf, _u64 npts, _u64 ndims) {
   reader.read((char*) read_buf,
               npts * (ndims * sizeof(float) + sizeof(unsigned)));
-#pragma omp parallel for
   for (_u64 i = 0; i < npts; i++) {
     memcpy(write_buf + i * ndims, (read_buf + i * (ndims + 1)) + 1,
            ndims * sizeof(float));

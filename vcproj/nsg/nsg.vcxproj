@@ -23,41 +23,37 @@
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
     </ClCompile>
     <ClCompile Include="..\..\src\windows_aligned_file_reader.cpp" />
-    <ClCompile Include="..\..\tests\test_pq_flash_nsg_search.cpp">
-      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
-    </ClCompile>
+    <ClCompile Include="..\..\tests\search_disk_index.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\..\include\efanna2e\distance.h" />
     <ClInclude Include="..\..\include\efanna2e\neighbor.h" />
     <ClInclude Include="..\..\include\efanna2e\pq_flash_index_nsg.h" />
     <ClInclude Include="..\..\include\efanna2e\pq_table.h" />
-    <ClInclude Include="..\..\include\efanna2e\timer.h" />
-    <ClInclude Include="..\..\include\efanna2e\util.h" />
     <ClInclude Include="..\..\include\tsl\robin_growth_policy.h" />
     <ClInclude Include="..\..\include\tsl\robin_hash.h" />
     <ClInclude Include="..\..\include\tsl\robin_map.h" />
     <ClInclude Include="..\..\include\tsl\robin_set.h" />
-    <ClInclude Include="..\..\include\utils.h" />
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <VCProjectVersion>15.0</VCProjectVersion>
     <ProjectGuid>{E2B234D7-0EB1-4F35-B2D4-C313A20941C8}</ProjectGuid>
     <Keyword>Win32Proj</Keyword>
     <RootNamespace>nsg</RootNamespace>
-    <WindowsTargetPlatformVersion>10.0.17763.0</WindowsTargetPlatformVersion>
+    <WindowsTargetPlatformVersion>10.0.17134.0</WindowsTargetPlatformVersion>
+    <ProjectName>search_disk_index</ProjectName>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
     <UseDebugLibraries>true</UseDebugLibraries>
-    <PlatformToolset>v141</PlatformToolset>
+    <PlatformToolset>v142</PlatformToolset>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
     <UseDebugLibraries>false</UseDebugLibraries>
-    <PlatformToolset>v141</PlatformToolset>
+    <PlatformToolset>v142</PlatformToolset>
     <WholeProgramOptimization>true</WholeProgramOptimization>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
@@ -106,7 +102,7 @@
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <LinkIncremental>false</LinkIncremental>
-    <IncludePath>C:\Users\t-sujs\Source\Repos\nsg\vcproj\nsg\include;$(IncludePath)</IncludePath>
+    <IncludePath>..\..\dependencies\windows\mkl\include\;..\..\include\;$(IncludePath)</IncludePath>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>
@@ -171,7 +167,7 @@
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>NDEBUG;_CONSOLE;__NSG_WINDOWS__;USE_AVX2;%(PreprocessorDefinitions); USE_AVX2;USE_ACCELERATED_PQ</PreprocessorDefinitions>
+      <PreprocessorDefinitions>NOMINMAX;NDEBUG;_CONSOLE;__NSG_WINDOWS__;USE_AVX2;%(PreprocessorDefinitions); USE_AVX2;USE_ACCELERATED_PQ</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <PrecompiledHeaderFile>
       </PrecompiledHeaderFile>

@@ -61,6 +61,7 @@ void Server::handle_post(web::http::http_request message) {
 
       NSG::NSGSearchResult srchRslt =
           _searcher->search(queryVector, dimensions, (unsigned int) k);
+      NSG::aligned_free(queryVector);
 
       web::json::value response = prepareResponse(queryId, k);
       web::json::value ids = rsltIdsToJsonArray(srchRslt);
@@ -116,18 +117,12 @@ static void parseJson(const utility::string_t& body, int& k, long long& queryId,
   }
 
   dimensions = static_cast<unsigned int>(queryArr.size());
-  unsigned new_dim = dimensions / DATA_ALIGN_FACTOR;
-  if (dimensions % DATA_ALIGN_FACTOR > 0)
-    ++new_dim;
-  new_dim *= DATA_ALIGN_FACTOR;
-
-
-  queryVector = new float[new_dim];
+  unsigned new_dim = ROUND_UP(dimensions, 8);
+  NSG::alloc_aligned((void**) &queryVector, new_dim * sizeof(float), 256);
   memset(queryVector, 0, new_dim * sizeof(float));
   for (int i = 0; i < queryArr.size(); i++) {
     queryVector[i] = (float) queryArr[i].as_double();
   }
-
 }
 
 // Utility functions

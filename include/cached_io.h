@@ -18,49 +18,54 @@ class cached_ifstream {
   }
 
   void open(const std::string& filename, uint64_t cache_size) {
-    this->cache_size = cache_size;
     this->cur_off = 0;
     reader.open(filename, std::ios::binary | std::ios::ate);
     fsize = reader.tellg();
     reader.seekg(0, std::ios::beg);
     assert(reader.is_open());
     assert(cache_size > 0);
+    cache_size = (std::min)(cache_size, fsize);
+    this->cache_size = cache_size;
     cache_buf = new char[cache_size];
     reader.read(cache_buf, cache_size);
     std::cout << "Opened: " << filename.c_str() << ", size: " << fsize
               << ", cache_size: " << cache_size << "\n";
   }
 
+  size_t get_file_size() {
+    return fsize;
+  }
   void read(char* read_buf, uint64_t n_bytes) {
     assert(cache_buf != nullptr);
     assert(read_buf != nullptr);
-    if (this->eof()) {
-      // check EOF
-      return;
-    } else if (n_bytes <= (cache_size - cur_off)) {
+    if (n_bytes <= (cache_size - cur_off)) {
       // case 1: cache contains all data
       memcpy(read_buf, cache_buf + cur_off, n_bytes);
       cur_off += n_bytes;
     } else {
       // case 2: cache contains some data
       uint64_t cached_bytes = cache_size - cur_off;
+      if (n_bytes - cached_bytes > fsize - reader.tellg()) {
+        std::cout << "Reading beyond end of file" << std::endl;
+        exit(-1);
+      }
       memcpy(read_buf, cache_buf + cur_off, cached_bytes);
 
       // go to disk and fetch more data
-      reader.read(cache_buf, cache_size);
+      reader.read(read_buf + cached_bytes, n_bytes - cached_bytes);
       // reset cur off
-      cur_off = 0;
-      // copy remaining data to read_buf
-      memcpy(read_buf + cached_bytes, cache_buf, n_bytes - cached_bytes);
+      cur_off = cache_size;
 
-      // increment cur_off
-      cur_off = n_bytes - cached_bytes;
+      uint64_t size_left = fsize - reader.tellg();
+
+      if (size_left >= cache_size) {
+        reader.read(cache_buf, cache_size);
+        cur_off = 0;
+      }
+
+      // note that if size_left < cache_size, then cur_off = cache_size, so
+      // subsequent reads will all be directly from file
     }
-  }
-
-  bool eof() {
-    // reader is EOF AND cur cache buf offset <=> last pos
-    return reader.eof() && (cur_off == (fsize % cache_size));
   }
 
  private:
@@ -92,8 +97,7 @@ class cached_ofstream {
   ~cached_ofstream() {
     // dump any remaining data in memory
     if (cur_off > 0) {
-      writer.write(cache_buf, cur_off);
-      fsize += cur_off;
+      this->flush_cache();
     }
 
     delete[] cache_buf;
@@ -101,6 +105,9 @@ class cached_ofstream {
     std::cout << "Finished writing " << fsize << "B\n";
   }
 
+  size_t get_file_size() {
+    return fsize;
+  }
   // writes n_bytes from write_buf to the underlying ofstream/cache
   void write(char* write_buf, uint64_t n_bytes) {
     assert(cache_buf != nullptr);
@@ -109,26 +116,29 @@ class cached_ofstream {
       memcpy(cache_buf + cur_off, write_buf, n_bytes);
       cur_off += n_bytes;
     } else {
-      // case 2: cache can take some data
-      uint64_t cached_bytes = cache_size - cur_off;
-      memcpy(cache_buf + cur_off, write_buf, cached_bytes);
-
-      // go to disk and write all cache data
-      writer.write(cache_buf, cache_size);
-      fsize += cache_size;
-
-      // memset all cache data
+      // case 2: cache cant take all data
+      // go to disk and write existing cache data
+      writer.write(cache_buf, cur_off);
+      fsize += cur_off;
+      // write the new data to disk
+      writer.write(write_buf, n_bytes);
+      fsize += n_bytes;
+      // memset all cache data and reset cur_off
       memset(cache_buf, 0, cache_size);
-
-      // reset cur off
       cur_off = 0;
-
-      // copy remaining data from read_buf to cache_buf
-      memcpy(cache_buf, write_buf + cached_bytes, n_bytes - cached_bytes);
-
-      // increment cur_off
-      cur_off = n_bytes - cached_bytes;
     }
+  }
+
+  void flush_cache() {
+    assert(cache_buf != nullptr);
+    writer.write(cache_buf, cur_off);
+    fsize += cur_off;
+    memset(cache_buf, 0, cache_size);
+    cur_off = 0;
+  }
+
+  void reset() {
+    writer.seekp(0);
   }
 
  private:

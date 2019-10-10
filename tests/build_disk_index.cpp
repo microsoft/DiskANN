@@ -3,14 +3,14 @@
 #include <index_nsg.h>
 #include <math_utils.h>
 #include "partition_and_pq.h"
-#include "util.h"
+#include "utils.h"
 
 // #define TRAINING_SET_SIZE 2000000
 //#define TRAINING_SET_SIZE 2000000
 
 template<typename T>
-bool testBuildIndex(const char* dataFilePath, const char* indexFilePath,
-                    const char* indexBuildParameters) {
+bool build_disk_index(const char* dataFilePath, const char* indexFilePath,
+                      const char* indexBuildParameters) {
   std::stringstream parser;
   parser << std::string(indexBuildParameters);
   std::string              cur_param;
@@ -22,7 +22,7 @@ bool testBuildIndex(const char* dataFilePath, const char* indexFilePath,
     std::cout << "Correct usage of parameters is L (indexing search list size) "
                  "R (max degree) C (visited list maximum size) B (approximate "
                  "compressed number of bytes per datapoint to store in "
-                 "memory) TRAINING_SIZE"
+                 "memory) sample_size (for PQ generation)"
               << std::endl;
     return 1;
   }
@@ -32,7 +32,7 @@ bool testBuildIndex(const char* dataFilePath, const char* indexFilePath,
   std::string train_file_path = index_prefix_path + "_training_set_float.bin";
   std::string pq_pivots_path = index_prefix_path + "_pq_pivots.bin";
   std::string pq_compressed_vectors_path =
-      index_prefix_path + "_compressed_uint32.bin";
+      index_prefix_path + "_compressed.bin";
   std::string randnsg_path = index_prefix_path + "_unopt.rnsg";
   std::string diskopt_path = index_prefix_path + "_diskopt.rnsg";
 
@@ -42,37 +42,35 @@ bool testBuildIndex(const char* dataFilePath, const char* indexFilePath,
   size_t   num_pq_chunks = (size_t) atoi(param_list[3].c_str());
   size_t   TRAINING_SET_SIZE = (size_t) atoi(param_list[4].c_str());
 
+  std::cout << "loading data.." << std::endl;
   T* data_load = NULL;
 
   size_t points_num, dim;
 
   NSG::load_bin<T>(dataFilePath, data_load, points_num, dim);
-  std::cout << "Data loaded" << std::endl;
+  std::cout << "done." << std::endl;
 
   auto s = std::chrono::high_resolution_clock::now();
 
-  if (points_num > 2 * TRAINING_SET_SIZE) {
-    gen_random_slice(data_load, points_num, dim, train_file_path.c_str(),
-                     (size_t) TRAINING_SET_SIZE);
-  } else {
-    float* float_data = new float[points_num * dim];
-    for (size_t i = 0; i < points_num; i++) {
-      for (size_t j = 0; j < dim; j++) {
-        float_data[i * dim + j] = data_load[i * dim + j];
-      }
-    }
+  size_t train_size;
+  float* train_data;
 
-    NSG::save_bin<float>(train_file_path.c_str(), float_data, points_num, dim);
-    delete[] float_data;
-  }
+  float p_val = ((float) TRAINING_SET_SIZE / (float) points_num);
+  // generates random sample and sets it to train_data and updates train_size
+  gen_random_slice<T>(data_load, points_num, dim, p_val, train_data,
+                      train_size);
+
+  std::cout << "Training loaded of size " << train_size << std::endl;
 
   //  unsigned    nn_graph_deg = (unsigned) atoi(argv[3]);
 
-  generate_pq_pivots<T>(train_file_path, 256, num_pq_chunks, 15,
-                        pq_pivots_path);
-  generate_pq_data_from_pivots<T>(data_load, points_num, dim, 256,
-                                  num_pq_chunks, pq_pivots_path,
-                                  pq_compressed_vectors_path);
+  generate_pq_pivots(train_data, train_size, dim, 256, num_pq_chunks, 15,
+                     pq_pivots_path);
+  generate_pq_data_from_pivots<T>(dataFilePath, 256, num_pq_chunks,
+                                  pq_pivots_path, pq_compressed_vectors_path);
+
+  delete[] data_load;
+  delete[] train_data;
 
   NSG::Parameters paras;
   paras.Set<unsigned>("L", L);
@@ -82,15 +80,11 @@ bool testBuildIndex(const char* dataFilePath, const char* indexFilePath,
   paras.Set<unsigned>("num_rnds", 2);
   paras.Set<std::string>("save_path", randnsg_path);
 
-  data_load = NSG::data_align(data_load, points_num, dim);
-  std::cout << "Base data aligned for optimized Rand-NSG execution."
-            << std::endl;
-  NSG::IndexNSG<T>* _pNsgIndex = new NSG::IndexNSG<T>(dim, points_num, NSG::L2);
+  NSG::IndexNSG<T>* _pNsgIndex = new NSG::IndexNSG<T>(NSG::L2, dataFilePath);
   if (file_exists(randnsg_path.c_str())) {
-    _pNsgIndex->set_data(data_load);
     _pNsgIndex->load(randnsg_path.c_str());
   } else {
-    _pNsgIndex->build(data_load, paras);
+    _pNsgIndex->build(paras);
     _pNsgIndex->save(randnsg_path.c_str());
   }
 
@@ -115,21 +109,21 @@ bool testBuildIndex(const char* dataFilePath, const char* indexFilePath,
 
 int main(int argc, char** argv) {
   if (argc != 9) {
-    std::cout
-        << "Usage: " << argv[0]
-        << " data_type [float/uint8/int8]  data_file[bin] index_prefix_path L "
-           "R C N_CHUNKS TRAINING_SIZE"
-        << std::endl;
+    std::cout << "Usage: " << argv[0]
+              << "  <data_type[float/uint8/int8]>   <data_file[.bin]>  "
+                 "<index_prefix_path>  L "
+                 "R C N_CHUNKS TRAINING_SIZE"
+              << std::endl;
   } else {
     std::string params = std::string(argv[4]) + " " + std::string(argv[5]) +
                          " " + std::string(argv[6]) + " " +
                          std::string(argv[7]) + " " + std::string(argv[8]);
     if (std::string(argv[1]) == std::string("float"))
-      testBuildIndex<float>(argv[2], argv[3], params.c_str());
+      build_disk_index<float>(argv[2], argv[3], params.c_str());
     else if (std::string(argv[1]) == std::string("int8"))
-      testBuildIndex<int8_t>(argv[2], argv[3], params.c_str());
+      build_disk_index<int8_t>(argv[2], argv[3], params.c_str());
     else if (std::string(argv[1]) == std::string("uint8"))
-      testBuildIndex<uint8_t>(argv[2], argv[3], params.c_str());
+      build_disk_index<uint8_t>(argv[2], argv[3], params.c_str());
     else
       std::cout << "Error. wrong file type" << std::endl;
   }
