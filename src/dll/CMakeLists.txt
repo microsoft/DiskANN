@@ -1,4 +1,8 @@
-add_library(nsg_dll SHARED dllmain.cpp nsg_interface.cpp ../partition_and_pq.cpp ../pq_flash_index_nsg.cpp ../windows_aligned_file_reader.cpp ../memory_mapper.cpp ../index_nsg.cpp ../math_utils.cpp)
+if (MSVC)
+	add_library(diskpriority_io STATIC DiskPriorityIO.cpp)
+endif()
+
+add_library(nsg_dll SHARED dllmain.cpp nsg_interface.cpp bing_aligned_file_reader.cpp ../partition_and_pq.cpp ../pq_flash_index_nsg.cpp ../windows_aligned_file_reader.cpp ../memory_mapper.cpp ../index_nsg.cpp ../math_utils.cpp)
 if (MSVC)
 	add_definitions(-D_USRDLL -D_WINDLL)
 	add_compile_options(/MD)
@@ -6,6 +10,11 @@ if (MSVC)
 	target_link_options(nsg_dll PRIVATE $<$<CONFIG:Debug>:/IMPLIB:${CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG}/nsg_dll.lib>
 										$<$<CONFIG:Release>:/IMPLIB:${CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE}/nsg_dll.lib>
 					   )
+	target_link_libraries(nsg_dll debug ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG}/diskpriority_io.lib)
+	target_link_libraries(nsg_dll optimized ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE}/diskpriority_io.lib)
+
+					
+
 	add_custom_command(TARGET 
 							nsg_dll 
 							POST_BUILD 

@@ -14,8 +14,8 @@ else()
 	set(CMAKE_CXX_COMPILER g++)
 endif()
 
-project(rand-nsg)
-include_directories(${PROJECT_SOURCE_DIR}/include)
+project(diskann)
+include_directories(${PROJECT_SOURCE_DIR}/include ${PROJECT_SOURCE_DIR}/include/dll)
 
 
 #OpenMP
@@ -59,7 +59,7 @@ include_directories(include ${INTEL_ROOT}/include ${MKL_ROOT}/include)
 #Main compiler/linker settings 
 if(MSVC)
 	#language options
-	add_compile_options(/permissive- /openmp /Zc:wchar_t /Zc:twoPhase- /Zc:forScope /Zc:inline /WX- /GR- /std:c++14 /Gd /W3 /MP /Zi /sdl- /FC /nologo /diagnostics:classic) 
+	add_compile_options(/permissive- /openmp /Zc:wchar_t /Zc:twoPhase- /Zc:forScope /Zc:inline /WX- /GR- /std:c++14 /Gd /W3 /MP /Zi /FC /nologo /diagnostics:classic) 
 	#code generation options
 	add_compile_options(/Qpar /fp:fast /Zp8 /fp:except- /EHsc /GS- /Gm- /Gy )
 	#optimization options
@@ -76,9 +76,11 @@ if(MSVC)
 
 	set(CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG ${PROJECT_SOURCE_DIR}/x64/Debug)
 	set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_DEBUG ${PROJECT_SOURCE_DIR}/x64/Debug)
+	set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY_DEBUG ${PROJECT_SOURCE_DIR}/x64/Debug)
 
 	set(CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE ${PROJECT_SOURCE_DIR}/x64/Release)
 	set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE ${PROJECT_SOURCE_DIR}/x64/Release)
+	set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY_RELEASE ${PROJECT_SOURCE_DIR}/x64/Release)
 else()
 	set(ENV{TCMALLOC_LARGE_ALLOC_REPORT_THRESHOLD} 500000000000)
 	set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -g -DDEBUG -O0 -fsanitize=address -fsanitize=leak -fsanitize=undefined")
