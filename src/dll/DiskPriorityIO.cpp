@@ -9,40 +9,24 @@
 
 #define SECTOR_LEN 4096
 #define MAX_IO_DEPTH 64
-#define NUM_IO_POLL_THREADS 4
+#define NUM_IO_POLL_THREADS 1
 
 namespace NSG {
 
   struct DiskAnnOverlapped : public OVERLAPPED {
-    ANNIndex::AsyncReadRequest*          m_readRequest;
-    ConcurrentQueue<DiskAnnOverlapped*>* m_overlappedQueue;
-
-    DiskAnnOverlapped(ConcurrentQueue<DiskAnnOverlapped*>* overlappedQueue)
-        : m_overlappedQueue(overlappedQueue), m_readRequest(nullptr) {
-    }
+    std::function<void(bool)> m_callback;
   };
-
-  void overlappedCompletionRoutine(DWORD errorCode, DWORD numBytesRead,
-                                   LPOVERLAPPED pOverlapped) {
-    DiskAnnOverlapped* pDiskAnnOS = ((DiskAnnOverlapped*) pOverlapped);
-    pDiskAnnOS->m_overlappedQueue->push(pDiskAnnOS);
-
-    bool ret = errorCode == ERROR_SUCCESS ? true : false;
-    if (errorCode != ERROR_SUCCESS) {
-      std::cerr << "Overlapped read request failed with error " << errorCode
-                << std::endl;
-    }
-    pDiskAnnOS->m_readRequest->m_success = ret;
-    pDiskAnnOS->m_readRequest->m_callback(ret);
-  }
 
   DiskPriorityIO::DiskPriorityIO(ANNIndex::DiskIOScenario scenario)
       : IDiskPriorityIO(scenario), m_fileHandle(nullptr), m_iocp(nullptr),
-        m_currentThreadId(0) {
+        m_currentThreadId(0), m_stopPolling(false),
+        m_overlappedQueue(2 * MAX_IO_DEPTH) {
   }
 
   DiskPriorityIO::~DiskPriorityIO() {
+    std::cout << "In DiskPriorityIO destructor" << std::endl;
   }
+
   bool DiskPriorityIO::Initialize(const char* filePath,
                                   // Max read/write buffer size.
                                   unsigned __int32 maxIOSize,
@@ -67,9 +51,8 @@ namespace NSG {
         CreateIoCompletionPort(m_fileHandle, nullptr, 0, NUM_IO_POLL_THREADS);
 
     for (int i = 0; i < MAX_IO_DEPTH * 2; i++) {
-      DiskAnnOverlapped* pOoverlapped =
-          new DiskAnnOverlapped(&m_overlappedQueue);
-      m_overlappedQueue.push(pOoverlapped);
+      DiskAnnOverlapped* pOverlapped = new DiskAnnOverlapped();
+      m_overlappedQueue.push(pOverlapped);
     }
 
     for (int i = 0; i < NUM_IO_POLL_THREADS; i++) {
@@ -85,18 +68,22 @@ namespace NSG {
     return false;
   }
   bool DiskPriorityIO::ReadFileAsync(ANNIndex::AsyncReadRequest& readRequest) {
-    DiskAnnOverlapped* os = m_overlappedQueue.pop();
-    memset(os, 0, sizeof(DiskAnnOverlapped));
+    DiskAnnOverlapped* os = nullptr;
+    m_overlappedQueue.pop(os);
 
-    os->m_overlappedQueue = &m_overlappedQueue;
-    os->m_readRequest = &readRequest;
-
-    os->Offset = readRequest.m_offset & 0xffffffff;
     os->OffsetHigh = (readRequest.m_offset >> 32);
+    os->Offset = readRequest.m_offset & 0xffffffff;
+    os->hEvent = nullptr;
+    os->Internal = 0;
+    os->InternalHigh = 0;
+    os->m_callback = readRequest.m_callback;
 
-    DWORD bytesRead = 0;
-    BOOL  readSuccess = ::ReadFile(m_fileHandle, readRequest.m_buffer,
-                                  readRequest.m_readSize, &bytesRead, os);
+    assert(os->Internal == 0);
+    assert(os->InternalHigh == 0);
+    assert(os->hEvent == nullptr);
+
+    BOOL readSuccess = ::ReadFile(m_fileHandle, readRequest.m_buffer,
+                                  readRequest.m_readSize, nullptr, os);
 
     if (!readSuccess && GetLastError() != ERROR_IO_PENDING) {
       m_overlappedQueue.push(os);
@@ -108,11 +95,21 @@ namespace NSG {
   }
 
   void DiskPriorityIO::ShutDown() {
+    m_stopPolling = true;
+    for (auto& thrd : m_ioPollingThreads) {
+      if (thrd.joinable()) {
+        std::cout << "Trying to join thread " << thrd.get_id() << std::endl;
+        thrd.join();
+        std::cout << "Thread " << thrd.get_id() << " joined." << std::endl;
+      }
+    }
     if (m_fileHandle != nullptr) {
       CloseHandle(m_fileHandle);
     }
+
+    DiskAnnOverlapped* ptr = nullptr;
     while (!m_overlappedQueue.empty()) {
-      auto ptr = m_overlappedQueue.pop();
+      m_overlappedQueue.pop(ptr);
       if (ptr != nullptr) {
         delete ptr;
       }
@@ -128,25 +125,35 @@ namespace NSG {
     OVERLAPPED*        os;
     DiskAnnOverlapped* dOS;
 
+    int i = 0;
     while (true) {
-      BOOL ret = ::GetQueuedCompletionStatus(this->m_iocp, &cBytesTransferred,
-                                             &key, &os, INFINITE);
-      std::cout << " Worker (" << GetCurrentThreadId() << ") Ret value: " << ret
-                << std::endl;
-
-      if (FALSE == ret || os == nullptr) {
-        return;
+      if (m_stopPolling) {
+        break;
       }
+
+      BOOL ret = ::GetQueuedCompletionStatus(this->m_iocp, &cBytesTransferred,
+                                             &key, &os, 2);
+      i++;
+
+      dOS = (DiskAnnOverlapped*) os;
+      auto& callback = dOS->m_callback;
+
       if (ret == ERROR_IO_PENDING) {
         continue;
       }
 
-      dOS = (DiskAnnOverlapped*) os;
-      assert(cBytesTransferred == dOS->m_readRequest->m_readSize);
-
-      auto& callback = dOS->m_readRequest->m_callback;
-      dOS->m_overlappedQueue->push(dOS);
-      callback(true);
+      if (FALSE == ret) {
+        if (os != nullptr) {
+          m_overlappedQueue.push(dOS);
+          callback(false);
+        } else {
+          // if os == nullptr, it means nothing was dequed, so we continue
+          // loopin'
+        }
+      } else {
+        m_overlappedQueue.push(dOS);
+        callback(true);
+      }
     }
   }
 

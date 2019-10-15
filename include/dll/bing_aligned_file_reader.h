@@ -1,40 +1,31 @@
 #pragma once
 #ifdef _WINDOWS
-#include <Windows.h>
-#include <fcntl.h>
-#include <malloc.h>
-#include <minwinbase.h>
-
-#include <cstdio>
-#include <mutex>
-#include <thread>
-#include "aligned_file_reader.h"
-#include "tsl/robin_map.h"
-#include "utils.h"
+#ifdef BING_INFRA
+#include "dll/IDiskPriorityIO.h"
+#include "windows_aligned_file_reader.h"
 
 
-class WindowsAlignedFileReader : public AlignedFileReader {
-private:
-	uint64_t     file_sz;
-	std::wstring filename;
+class BingAlignedFileReader : public WindowsAlignedFileReader {
+ private:
+  ANNIndex::IDiskPriorityIO *m_pReader;
 
-public:
-	WindowsAlignedFileReader() {};
-	virtual ~WindowsAlignedFileReader() {};
+ public:
+  BingAlignedFileReader(){};
+  virtual ~BingAlignedFileReader(){};
 
-	virtual void register_thread();
-	virtual void deregister_thread() {
-	}
-	virtual IOContext &get_ctx();
+  virtual void register_thread();
+  virtual void deregister_thread() {
+  }
+  virtual IOContext &get_ctx();
 
-	// Open & close ops
-	// Blocking calls
-	virtual void open(const std::string &fname);
-	virtual void close();
+  // Open & close ops
+  // Blocking calls
+  virtual void open(const std::string &fname);
+  virtual void close();
 
-	// process batch of aligned requests in parallel
-	// NOTE :: blocking call for the calling thread, but can thread-safe
-	virtual void read(std::vector<AlignedRead> &read_reqs, IOContext ctx);
+  // process batch of aligned requests in parallel
+  // NOTE :: blocking call for the calling thread, but can thread-safe
+  virtual void read(std::vector<AlignedRead> &read_reqs, IOContext ctx);
 };
 #endif
-
+#endif

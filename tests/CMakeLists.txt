@@ -82,6 +82,7 @@ if(MSVC)
 	target_link_libraries(test_nsg_dll optimized ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE}/nsg_dll.lib)
 
 	add_executable(test_diskpriority_io test_diskpriority_io.cpp)
+	target_include_directories(test_diskpriority_io PRIVATE "F:/boost/boost_1_71_0")
 	target_link_options(test_diskpriority_io PRIVATE /MACHINE:x64)
 	target_link_libraries(test_diskpriority_io debug ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG}/diskpriority_io.lib)
 	target_link_libraries(test_diskpriority_io optimized ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE}/diskpriority_io.lib)

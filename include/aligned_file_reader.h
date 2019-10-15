@@ -9,11 +9,20 @@ typedef io_context_t IOContext;
 #else
 #include <Windows.h>
 #include <minwinbase.h>
+
+
 typedef struct {
   HANDLE                  fhandle = NULL;
   HANDLE                  iocp = NULL;
   std::vector<OVERLAPPED> reqs;
 } IOContext;
+
+#ifdef BING_INFRA
+#include "dll/IDiskPriorityIO.h"
+typedef struct BingIOContext : IOContext {
+	ANNIndex::IDiskPriorityIO* m_pDiskIO = nullptr;
+};
+#endif
 #endif
 
 #include <malloc.h>

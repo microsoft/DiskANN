@@ -1,11 +1,15 @@
 #pragma once
 #ifdef _WINDOWS
 
+#include <thread>
+#include <vector>
 #include "Windows.h"
 #include "ProcessThreadsApi.h"
-#include "IDiskPriorityIO.h"
 
-#include "concurrent_queue.h"
+#define _ENABLE_ATOMIC_ALIGNMENT_FIX
+#include <boost/lockfree/queue.hpp>
+
+#include "IDiskPriorityIO.h"
 
 namespace NSG {
 
@@ -32,12 +36,13 @@ namespace NSG {
     virtual void listenIOCP();
 
    private:
-    const char*                         m_fileName;
-    HANDLE                              m_fileHandle;
-    HANDLE                              m_iocp;
-    DWORD                               m_currentThreadId;
-    ConcurrentQueue<DiskAnnOverlapped*> m_overlappedQueue;
-    std::vector<std::thread>            m_ioPollingThreads;
+    const char*                                m_fileName;
+    HANDLE                                     m_fileHandle;
+    HANDLE                                     m_iocp;
+    DWORD                                      m_currentThreadId;
+    boost::lockfree::queue<DiskAnnOverlapped*> m_overlappedQueue;
+    std::vector<std::thread>                   m_ioPollingThreads;
+    std::atomic<bool>                          m_stopPolling;
   };
 }  // namespace NSG
 

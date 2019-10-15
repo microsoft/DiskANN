@@ -1,5 +1,6 @@
 if (MSVC)
 	add_library(diskpriority_io STATIC DiskPriorityIO.cpp)
+	target_include_directories(diskpriority_io PRIVATE "F:/boost/boost_1_71_0" )
 endif()
 
 add_library(nsg_dll SHARED dllmain.cpp nsg_interface.cpp bing_aligned_file_reader.cpp ../partition_and_pq.cpp ../pq_flash_index_nsg.cpp ../windows_aligned_file_reader.cpp ../memory_mapper.cpp ../index_nsg.cpp ../math_utils.cpp)
