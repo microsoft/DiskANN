@@ -60,13 +60,16 @@ namespace NSG {
   // (bin), and initialize max_points
   template<typename T, typename TagT>
   IndexNSG<T, TagT>::IndexNSG(Metric m, const char *filename, const size_t nd,
+
                               const size_t max_points, const bool enable_tags,
-                              const bool store_data, const size_t num_frozen_pts,
-                              const bool maintain_in_graph)
+                              const bool   store_data,
+                              const size_t num_frozen_pts,
+                              const bool   support_eager_delete)
       : _has_built(false), _width(0), _can_delete(false), _eager_done(true),
-        _enable_tags(enable_tags), _consolidated_order(true),
-        _store_data(store_data), _num_frozen_pts(num_frozen_pts),
-        _maintain_in_graph(maintain_in_graph) {
+        _lazy_done(true), _compacted_order(true), _enable_tags(enable_tags),
+        _consolidated_order(true), _store_data(store_data),
+        _num_frozen_pts(num_frozen_pts),
+        _support_eager_delete(support_eager_delete) {
     // data is stored to _nd * aligned_dim matrix with necessary zero-padding
     load_aligned_bin<T>(std::string(filename), _data, _nd, _dim, _aligned_dim);
     std::cout << "#points in file: " << _nd << ", dim: " << _dim
@@ -89,13 +92,14 @@ namespace NSG {
       exit(-1);
     }
 
-    // Allocate space for max points and frozen points, 
+    // Allocate space for max points and frozen points,
     // and add frozen points at the end of the array
     realloc(_data, (_max_points + _num_frozen_pts) * _aligned_dim * sizeof(T));
-    gen_frozen_points(_data + _max_points * _aligned_dim * sizeof(T));
+    gen_frozen_points(_data);
 
     this->_distance = ::get_distance_function<T>();
-    _locks = std::vector<std::mutex>(_max_points + _num_frozen_points);
+    _locks = std::vector<std::mutex>(_max_points + _num_frozen_pts);
+
     _width = 0;
   }
 
@@ -158,27 +162,30 @@ namespace NSG {
       return -2;
     }
 
-    if (_consolidated_order) {
+    if (_consolidated_order && _compacted_order) {
       assert(_empty_slots.size() == 0);
       for (unsigned slot = _nd; slot < _max_points; ++slot)
         _empty_slots.insert(slot);
       _consolidated_order = false;
+      _compacted_order = false;
     }
 
-    if (_eager_done) {
-      assert(_empty_slots.size() == 0);
-      for (unsigned slot = _nd; slot < _max_points; ++slot)
-        _empty_slots.insert(slot);
-      _eager_done = false;
-    }
+    _lazy_done = false;
+    _eager_done = false;
     _can_delete = true;
 
     return 0;
   }
 
   template<typename T, typename TagT>
-  int IndexNSG<T, TagT>::eager_delete(const TagT        tag,
+  int IndexNSG<T, TagT>::eager_delete(const TagT tag,
                                       const Parameters &parameters) {
+    if (_lazy_done && (!_consolidated_order)) {
+      std::cout << "Lazy delete reuests issued but data not consolidated, "
+                   "cannot proceed with eager deletes."
+                << std::endl;
+      return -1;
+    }
     LockGuard guard(_change_lock);
     if (_tag_to_location.find(tag) == _tag_to_location.end()) {
       std::cerr << "Delete tag not found" << std::endl;
@@ -189,13 +196,14 @@ namespace NSG {
     _location_to_tag.erase(_tag_to_location[tag]);
     _tag_to_location.erase(tag);
     _delete_set.insert(id);
+    _empty_slots.insert(id);
 
     const unsigned range = parameters.Get<unsigned>("R");
     const unsigned maxc = parameters.Get<unsigned>("C");
     const float    alpha = parameters.Get<float>("alpha");
 
     // delete point from out-neighbors' in-neighbor list
-    for (auto j : _final_graph[id])  
+    for (auto j : _final_graph[id])
       for (unsigned k = 0; k < _in_graph[j].size(); k++)
         if (_in_graph[j][k] == id) {
           _in_graph[j].erase(_in_graph[j].begin() + k);
@@ -205,15 +213,16 @@ namespace NSG {
     tsl::robin_set<unsigned> in_nbr;
     for (unsigned i = 0; i < _in_graph[id].size(); i++)
       in_nbr.insert(_in_graph[id][i]);
-    assert (_in_graph[id].size() != in_nbr.size());
-     
+    assert(_in_graph[id].size() != in_nbr.size());
+
     tsl::robin_set<unsigned> candidate_set;
     std::vector<Neighbor>    expanded_nghrs;
     std::vector<Neighbor>    result;
     std::vector<Neighbor>    pool, tmp;
     tsl::robin_set<unsigned> visited;
 
-    get_neighbors(_data + (size_t) _aligned_dim * id, parameters, tmp, pool, visited);
+    get_neighbors(_data + (size_t) _aligned_dim * id, parameters, tmp, pool,
+                  visited);
 
     for (unsigned i = 0; i < pool.size(); i++)
       if (pool[i].id == id) {
@@ -242,12 +251,12 @@ namespace NSG {
             candidate_set.insert(j);
 
         for (auto j : candidate_set)
-          expanded_nghrs.push_back(Neighbor(
-              j,
-              _distance->compare(_data + _aligned_dim * (size_t) ngh,
+          expanded_nghrs.push_back(
+              Neighbor(j,
+                       _distance->compare(_data + _aligned_dim * (size_t) ngh,
                                           _data + _aligned_dim * (size_t) j,
                                           (unsigned) _aligned_dim),
-              true));
+                       true));
         std::sort(expanded_nghrs.begin(), expanded_nghrs.end());
         occlude_list(expanded_nghrs, ngh, alpha, range, maxc, result);
 
@@ -282,6 +291,7 @@ namespace NSG {
       std::cout << "No consolidation required, eager deletes done" << std::endl;
       return 0;
     }
+
     assert(!_consolidated_order);
     assert(_can_delete);
     assert(_enable_tags);
@@ -344,7 +354,7 @@ namespace NSG {
     }
 
     _nd -= _delete_set.size();
-    compact_data(new_location, active);
+    compact_data(new_location, active, _consolidated_order);
     return _nd;
   }
 
@@ -364,8 +374,9 @@ namespace NSG {
 
   template<typename T, typename TagT>
   void IndexNSG<T, TagT>::compact_data(std::vector<unsigned> new_location,
-                                       unsigned              active) {
+                                       unsigned active, bool mode) {
     // If start node is removed, replace it.
+    assert(!mode);
     if (_delete_set.find(_ep) != _delete_set.end()) {
       std::cerr << "Replacing start node which has been deleted... "
                 << std::flush;
@@ -397,7 +408,7 @@ namespace NSG {
           _final_graph[old][i] = new_location[_final_graph[old][i]];
         }
 
-        if (_maintain_in_graph)
+        if (_support_eager_delete)
           for (size_t i = 0; i < _in_graph[old].size(); ++i) {
             assert(new_location[_in_graph[old][i]] <= _in_graph[old][i]);
             _in_graph[old][i] = new_location[_in_graph[old][i]];
@@ -407,7 +418,7 @@ namespace NSG {
         if (new_location[old] != old) {
           assert(new_location[old] < old);
           _final_graph[new_location[old]].swap(_final_graph[old]);
-          if (maintain_in_graph)
+          if (_support_eager_delete)
             _in_graph[new_location[old]].swap(_in_graph[old]);
           memcpy((void *) (_data + _aligned_dim * (size_t) new_location[old]),
                  (void *) (_data + _aligned_dim * (size_t) old),
@@ -429,15 +440,14 @@ namespace NSG {
 
     for (unsigned old = active; old < _max_points; ++old)
       _final_graph[old].clear();
-
     _delete_set.clear();
     _empty_slots.clear();
-    _consolidated_order = true;
+    mode = true;
     std::cout << "Consolidated the index" << std::endl;
   }
   template<typename T, typename TagT>
   int IndexNSG<T, TagT>::disable_delete(const Parameters &parameters,
-                                        const bool        consolidate) {
+                                        const bool consolidate) {
     LockGuard guard(_change_lock);
     if (!_can_delete) {
       std::cerr << "Delete not currently enabled" << std::endl;
@@ -479,8 +489,10 @@ namespace NSG {
 
   template<typename T, typename TagT>
   int IndexNSG<T, TagT>::delete_point(const TagT tag) {
-    if (_eager_done) {
-      std::cout << "Eager deletes done, lazy deletes not allowed" << std::endl;
+    if ((_eager_done) && (!_compacted_order)) {
+      std::cout << "Eager delete requests were issued but data was not "
+                   "compacted, cannot proceed with lazy_deletes"
+                << std::endl;
       return -1;
     }
     LockGuard guard(_change_lock);
@@ -501,22 +513,36 @@ namespace NSG {
     size_t        index_size = 0;
     std::ofstream out(std::string(filename), std::ios::binary | std::ios::out);
 
-    if (_eager_done) {
-      unsigned              active = 0;
-      std::vector<unsigned> new_location = get_new_location(active);
-      compact_data(new_location, active);
-    }
-
-    assert(_final_graph.size() == _max_points);
-    if (_enable_tags) {
-      _change_lock.lock();
-      if (_can_delete || (!_consolidated_order && !_eager_done)) {
-        std::cerr << "Disable deletes and consolidate index before saving."
+    if (_support_eager_delete)
+      if (_eager_done && (!_compacted_order))
+        if (_nd < _max_points) {
+          assert(_final_graph.size() == _max_points + _num_frozen_pts);
+          unsigned              active = 0;
+          std::vector<unsigned> new_location = get_new_location(active);
+          compact_data(new_location, active, _compacted_order);
+        } else {
+          assert(_final_graph.size() == _max_points + _num_frozen_pts);
+          if (_enable_tags) {
+            _change_lock.lock();
+            if (_can_delete) {
+              std::cerr
+                  << "Disable deletes and consolidate index before saving."
                   << std::endl;
-        exit(-1);
+              exit(-1);
+            }
+          }
+        }
+    if (_lazy_done) {
+      assert(_final_graph.size() == _max_points + _num_frozen_pts);
+      if (_enable_tags) {
+        _change_lock.lock();
+        if (_can_delete || (!_consolidated_order)) {
+          std::cout << "Disable deletes and consolidate index before saving."
+                    << std::endl;
+          exit(-1);
+        }
       }
     }
-
     out.write((char *) &index_size, sizeof(uint64_t));
     out.write((char *) &_width, sizeof(unsigned));
     out.write((char *) &_ep, sizeof(unsigned));
@@ -557,6 +583,7 @@ namespace NSG {
   // load the index if pre-computed
   template<typename T, typename TagT>
   void IndexNSG<T, TagT>::load(const char *filename, const bool load_tags) {
+    std::cout << std::endl << std::string(filename) << std::endl << std::endl;
     std::ifstream in(std::string(filename), std::ios::binary);
     in.seekg(0, in.end);
     size_t expected_file_size;
@@ -567,6 +594,7 @@ namespace NSG {
       std::cout << "Error loading Rand-NSG index. File size mismatch, expected "
                    "size (metadata): "
                 << expected_file_size << std::endl;
+      std::cout << "Actual file size : " << actual_file_size << std::endl;
       exit(-1);
     }
 
@@ -631,12 +659,12 @@ namespace NSG {
 
     std::random_device                    device;
     std::mt19937                          generator(device());
-    std::uniform_real_distribution<float> dist(0, 1); 
+    std::uniform_real_distribution<float> dist(0, 1);
     // Harsha: Should the distribution change with the distance metric?
 
-    while (auto i = 0; i < _num_frozen_points; ++i)
-      for (unsigned d = 0; d < _aligned_dim; d++) 
-        data[i * _aligned_dim + d] = dist(generator);
+    for (auto i = 0; i < _num_frozen_pts; ++i)
+      for (unsigned d = 0; d < _aligned_dim; d++)
+        data[(i + _max_points) * _aligned_dim + d] = dist(generator);
 
     return 0;
   }
@@ -647,43 +675,47 @@ namespace NSG {
    * mapping: initial vector of a sample of the points in the dataset
    */
   template<typename T, typename TagT>
-  void IndexNSG<T, TagT>::init_random_graph(size_t num_points, unsigned k,
-                                            std::vector<size_t> mapping) {
+  void IndexNSG<T, TagT>::init_random_graph(unsigned k) {
     k = (std::min)(k, (unsigned) 100);
-    _final_graph.resize(_max_points);
-    _final_graph.reserve(_max_points);
+    unsigned new_max_points = _max_points + _num_frozen_pts;
+    unsigned new_nd = _nd + _num_frozen_pts;
+    _final_graph.resize(new_max_points);
+    _final_graph.reserve(new_max_points);
 
-    _in_graph.resize(_max_points);
-    _in_graph.reserve(_max_points);
+    if (_support_eager_delete) {
+      _in_graph.resize(new_max_points);
+      _in_graph.reserve(new_max_points);
+    }
+
+    std::vector<size_t> mapping = std::vector<size_t>();
     if (!mapping.empty())
-      num_points = mapping.size();
+      new_nd = mapping.size();
     else {
-      mapping.resize(num_points);
+      mapping.resize(new_nd);
       std::iota(std::begin(mapping), std::end(mapping), 0);
     }
 
-    std::cout << "Generating random graph with " << num_points << " points... "
+    std::cout << "Generating random graph with " << new_nd << " points... "
               << std::flush;
     // PAR_BLOCK_SZ gives the number of points that can fit in a single block
     _s64 PAR_BLOCK_SZ = (1 << 16);  // = 64KB
-    _s64 nblocks = DIV_ROUND_UP((_s64) num_points, PAR_BLOCK_SZ);
+    _s64 nblocks = DIV_ROUND_UP((_s64) new_nd, PAR_BLOCK_SZ);
 
 #pragma omp parallel for schedule(static, 1)
     for (_s64 block = 0; block < nblocks;
          ++block) {  // GOPAL Changed from "size_t block" to "int block"
       std::random_device                    rd;
       std::mt19937                          gen(rd());
-      std::uniform_int_distribution<size_t> dis(0, num_points - 1 + _num_frozen_pts);
+      std::uniform_int_distribution<size_t> dis(0, _nd - 1 + _num_frozen_pts);
 
       /* Put random number points as neighbours to the 10% of the nodes */
       for (_s64 i = block * PAR_BLOCK_SZ;
-           i < (block + 1) * PAR_BLOCK_SZ && i < (_s64) num_points; i++) {
+           i < (block + 1) * PAR_BLOCK_SZ && i < (_s64) new_nd; i++) {
         std::set<unsigned> rand_set;
-        while (rand_set.size() < k && rand_set.size() < num_points)
+        while (rand_set.size() < k && rand_set.size() < new_nd) {
           unsigned cur_pt = dis(gen);
           if (cur_pt != i)
-            rand_set.insert(cur_pt < num_points ? cur_pt 
-              : cur_pt - num_points + _max_points);
+            rand_set.insert(cur_pt < _nd ? cur_pt : cur_pt - _nd + _max_points);
         }
 
         _final_graph[mapping[i]].reserve(k);
@@ -692,7 +724,8 @@ namespace NSG {
         _final_graph[mapping[i]].shrink_to_fit();
       }
     }
-    _ep = 0;
+    //  _ep = 0;
+    _ep = _max_points;
     std::cout << "done. Entry point set to " << _ep << "." << std::endl;
   }
 
@@ -710,8 +743,7 @@ namespace NSG {
       const T *query, const Parameters &parameter,
       std::vector<unsigned> &init_ids, std::vector<Neighbor> &retset,
       std::vector<Neighbor> &fullset, tsl::robin_set<unsigned> &visited) {
-
-    // put random L new ids into visited list and init_ids list 
+    // put random L new ids into visited list and init_ids list
     const unsigned L = parameter.Get<unsigned>("L");
     while (init_ids.size() < L && init_ids.size() < _nd) {
       unsigned id = (rand() * rand() * rand()) % _nd;
@@ -792,7 +824,7 @@ namespace NSG {
   }
 
   template<typename T, typename TagT>
-  void IndexNSG<T, TagT>::get_neighbors(const T *              query,
+  void IndexNSG<T, TagT>::get_neighbors(const T *query,
                                         const Parameters &     parameter,
                                         std::vector<Neighbor> &retset,
                                         std::vector<Neighbor> &fullset) {
@@ -802,7 +834,7 @@ namespace NSG {
   }
 
   template<typename T, typename TagT>
-  void IndexNSG<T, TagT>::get_neighbors(const T *                 query,
+  void IndexNSG<T, TagT>::get_neighbors(const T *query,
                                         const Parameters &        parameter,
                                         std::vector<Neighbor> &   retset,
                                         std::vector<Neighbor> &   fullset,
@@ -843,7 +875,7 @@ namespace NSG {
   }
 
   template<typename T, typename TagT>
-  int IndexNSG<T, TagT>::insert_point(const T *                 point,
+  int IndexNSG<T, TagT>::insert_point(const T *point,
                                       const Parameters &        parameters,
                                       std::vector<Neighbor> &   pool,
                                       std::vector<Neighbor> &   tmp,
@@ -912,7 +944,7 @@ namespace NSG {
     assert(_nd < _max_points);
 
     unsigned location;
-    if (_consolidated_order || _eager_done)
+    if (_consolidated_order && _compacted_order)
       location = _nd;
     else {
       assert(_empty_slots.size() != 0);
@@ -921,6 +953,7 @@ namespace NSG {
       auto iter = _empty_slots.begin();
       location = *iter;
       _empty_slots.erase(iter);
+      _delete_set.erase(iter);
     }
 
     ++_nd;
@@ -1003,8 +1036,8 @@ namespace NSG {
     bool *visited = new bool[_nd]();
     std::fill(visited, visited + _nd, false);
     std::map<unsigned, std::vector<tsl::robin_set<unsigned>>> bfs_orders;
-    unsigned                                                  start_node = _ep;
-    bool                                                      complete = false;
+    unsigned start_node = _ep;
+    bool     complete = false;
     bfs_orders.insert(
         std::make_pair(start_node, std::vector<tsl::robin_set<unsigned>>()));
     auto &bfs_order = bfs_orders[start_node];
@@ -1078,7 +1111,7 @@ namespace NSG {
       center[j] /= _nd;
 
     // compute all to one distance
-    float *distances = new float[_nd]();
+    float * distances = new float[_nd]();
 #pragma omp parallel for schedule(static, 65536)
     for (_s64 i = 0; i < (_s64) _nd;
          i++) {  // GOPAL Changed from "size_t i" to "int i"
@@ -1110,7 +1143,7 @@ namespace NSG {
 
   template<typename T, typename TagT>
   void IndexNSG<T, TagT>::occlude_list(const std::vector<Neighbor> &pool,
-                                       const unsigned               location,
+                                       const unsigned location,
                                        const float alpha, const unsigned degree,
                                        const unsigned         maxc,
                                        std::vector<Neighbor> &result) {
@@ -1174,7 +1207,8 @@ namespace NSG {
     std::vector<Neighbor> result;
     occlude_list(pool, location, 1.0, range, maxc, result);
 
-    /* create new array result2 for points selected according to parameter alpha,
+    /* create new array result2 for points selected according to parameter
+     * alpha,
      * which controls how aggressively occlude_list prunes the pool
      */
     if (alpha > 1.0 && !pool.empty() && result.size() < range) {
@@ -1200,7 +1234,7 @@ namespace NSG {
   }
 
   /* Add reverse links from all the visited nodes to node n.
-   */
+  */
 
   template<typename T, typename TagT>
   void IndexNSG<T, TagT>::inter_insert(unsigned n, vecNgh &cut_graph,
@@ -1259,9 +1293,10 @@ namespace NSG {
           /* temp_pool contains distance of each node in graph_copy, from
            * neighbor of n */
           temp_pool.emplace_back(SimpleNeighbor(
-              node, _distance->compare(_data + _aligned_dim * (size_t) node,
-                                       _data + _aligned_dim * (size_t) des.id,
-                                       (unsigned) _aligned_dim)));
+              node,
+              _distance->compare(_data + _aligned_dim * (size_t) node,
+                                 _data + _aligned_dim * (size_t) des.id,
+                                 (unsigned) _aligned_dim)));
         /* sort temp_pool according to distance from neighbor of n */
         std::sort(temp_pool.begin(), temp_pool.end());
         for (auto iter = temp_pool.begin(); iter + 1 != temp_pool.end(); ++iter)
@@ -1334,7 +1369,7 @@ namespace NSG {
             if (std::find(des_pool.begin(), des_pool.end(), iter.id) ==
                 des_pool.end())
               des_pool.emplace_back(iter.id);
-            if (flag == 1) {
+            if (update_in_graph) {
               if (std::find(_in_graph[iter.id].begin(),
                             _in_graph[iter.id].end(),
                             des.id) == _in_graph[iter.id].end())
@@ -1385,14 +1420,17 @@ namespace NSG {
       rand_perm.emplace_back(i);
     }
 
+    if (_num_frozen_pts)
+      rand_perm.emplace_back(_max_points);
+
     std::random_device               rd;
     std::mt19937                     gen(rd());
     std::uniform_real_distribution<> dis(0, 1);
 
-    init_random_graph(_nd, range);
+    init_random_graph(range);
 
-    assert(_final_graph.size() == _max_points);
-    auto cut_graph_ = new vecNgh[_nd];
+    assert(_final_graph.size() == _max_points + _num_frozen_pts);
+    auto cut_graph_ = new vecNgh[_nd + _num_frozen_pts];
 
     for (uint32_t rnd_no = 0; rnd_no < NUM_RNDS; rnd_no++) {
       // Shuffle the dataset
@@ -1540,7 +1578,8 @@ namespace NSG {
     std::cout << "Starting index build..." << std::endl;
     link(parameters);  // Primary func for creating nsg graph
 
-    update_in_graph();  // copying values to in_graph
+    if (_support_eager_delete)
+      update_in_graph();  // copying values to in_graph
 
     size_t max = 0, min = 1 << 30, total = 0, cnt = 0;
     for (size_t i = 0; i < _nd; i++) {
@@ -1564,17 +1603,15 @@ namespace NSG {
       const T *query, const size_t K, const Parameters &parameters,
       unsigned *indices, int beam_width,
       const std::vector<unsigned> start_points) {
-
     const unsigned int L = parameters.Get<unsigned>("L_search");
     return beam_search(query, K, L, indices, beam_width, start_points);
   }
 
   template<typename T, typename TagT>
   std::pair<int, int> IndexNSG<T, TagT>::beam_search(
-      const T *query, const size_t K, const size_t L, unsigned *indices,
-      int beam_width, std::vector<unsigned> start_points) {
-
-    std::vector<unsigned> init_ids;
+      const T *query, const size_t K, const unsigned L, unsigned *indices,
+      int beam_width, const std::vector<unsigned> &start_points) {
+    std::vector<unsigned>    init_ids;
     tsl::robin_set<unsigned> visited(10 * L);
 
     if (start_points.size() == 0) {
@@ -1696,7 +1733,7 @@ namespace NSG {
          * set flag to true
          */
         // Harsha: Why do we require id < _nd
-        if (id >= _nd) {
+        if ((id >= _nd) && (id < _max_points)) {
           std::cout << id << std::endl;
           exit(-1);
         }
@@ -1727,7 +1764,7 @@ namespace NSG {
       auto id = retset[i + deleted].id;
       if (_delete_set.size() > 0 && _delete_set.find(id) != _delete_set.end())
         deleted++;
-      else if (id < _max_points) // Remove frozen points
+      else if (id < _max_points)  // Remove frozen points
         indices[i++] = id;
     }
     return std::make_pair(hops, cmps);
@@ -1735,25 +1772,19 @@ namespace NSG {
 
   template<typename T, typename TagT>
   std::pair<int, int> IndexNSG<T, TagT>::beam_search_tags(
-      const T *query, const size_t K, const Parameters &parameters,
-      TagT *tags, int beam_width, const std::vector<unsigned> &start_points,
+      const T *query, const size_t K, const Parameters &parameters, TagT *tags,
+      int beam_width, const std::vector<unsigned> &start_points,
       unsigned *indices_buffer) {
-
     const bool alloc = indices_buffer == NULL;
     auto       indices = alloc ? new unsigned[K] : indices_buffer;
-    auto       ret = beam_search(query, K, parameters, indices, beam_width,
-                           start_points);
+    auto       ret =
+        beam_search(query, K, parameters, indices, beam_width, start_points);
     for (int i = 0; i < (int) K; ++i)
       tags[i] = _location_to_tag[indices[i]];
     if (alloc)
       delete[] indices;
     return ret;
   }
-
-  template class IndexNSG<float>;
-  template class IndexNSG<int8_t>;
-  template class IndexNSG<uint8_t>;
-
 
   // EXPORTS
   template NSGDLLEXPORT class IndexNSG<float>;
@@ -1765,12 +1796,12 @@ namespace NSG {
       Metric m, const char *filename, const size_t max_points, const size_t nd,
       const bool enable_tags);
   template NSGDLLEXPORT IndexNSG<int8_t, int>::IndexNSG(Metric m,
-                                                        const char *filename,
+                                                        const char * filename,
                                                         const size_t max_points,
                                                         const size_t nd,
                                                         const bool enable_tags);
   template NSGDLLEXPORT IndexNSG<float, int>::IndexNSG(Metric m,
-                                                       const char *filename,
+                                                       const char * filename,
                                                        const size_t max_points,
                                                        const size_t nd,
                                                        const bool enable_tags);

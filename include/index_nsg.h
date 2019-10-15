@@ -19,24 +19,25 @@ namespace NSG {
     IndexNSG(Metric m, const char *filename, const size_t nd = 0,
              const size_t max_points = 0, const bool enable_tags = false,
              const bool store_data = true, const size_t num_frozen_pts = 1,
-             const bool maintain_in_graph = false);
+             const bool support_eager_delete = false);
     ~IndexNSG();
 
+    // checks if data is consolidated, saves graph, metadata and associated
+    // tags.
     void save(const char *filename);
     void load(const char *filename, const bool load_tags = false);
-    void init_random_graph(size_t num_points, unsigned k,
-                           std::vector<size_t> mapping = std::vector<size_t>());
+    void init_random_graph(unsigned k);
 
     void build(Parameters &             parameters,
                const std::vector<TagT> &tags = std::vector<TagT>());
-    
+
     void populate_start_points_ep(std::vector<unsigned> &start_points);
     void populate_start_points_bfs(std::vector<unsigned> &start_points);
 
     // Gopal. Added beam_search overload that takes L as parameter, so that we
     // can customize L on a per-query basis without tampering with "Parameters"
     std::pair<int, int> beam_search(const T *query, const size_t K,
-                                    const unsigned int L, unsigned *indices,
+                                    const unsigned L, unsigned *indices,
                                     int                          beam_width,
                                     const std::vector<unsigned> &start_points);
 
@@ -48,44 +49,54 @@ namespace NSG {
     std::pair<int, int> beam_search_tags(
         const T *query, const size_t K, const Parameters &parameters,
         TagT *tags, int beam_width, const std::vector<unsigned> &start_points,
-        unsigned *indices_buffer=NULL);
+        unsigned *indices_buffer = NULL);
 
     void prefetch_vector(unsigned id);
 
-    /* describe valid interleaving of inserts/deletes
-    Methods for inserting and deleting points from the databases*/
-
+    /* insertions possible only when id corresponding to tag does not already
+     * exist in the graph */
     int insert_point(const T *point, const Parameters &parameter,
                      std::vector<Neighbor> &pool, std::vector<Neighbor> &tmp,
-                     tsl::robin_set<unsigned> &visited, vecNgh &cut_graph,
-                     const TagT tag);
+                     tsl::robin_set<unsigned> &   visited,
+                     std::vector<SimpleNeighbor> &cut_graph, const TagT tag);
 
+    // call before triggering deleteions - sets important flags required for
+    // deletion related operations
     int enable_delete();
+
+    // call after all delete requests have been served, checks if deletions were
+    // executed correctly, rearranges metadata in case of lazy deletes
     int disable_delete(const Parameters &parameters,
                        const bool        consolidate = false);
 
-    // Return -1 if tag not found, 0 if OK.
+    // Record deleted point now and restructure graph later. Return -1 if tag
+    // not found, 0 if OK. Do not call if _eager_delete was called earlier and
+    // data was not consolidated
     int delete_point(const TagT tag);
 
-    // delete point from graph and restructure it immediately
+    // Delete point from graph and restructure it immediately. Do not call if
+    // _lazy_delete was called earlier and data was not consolidated
     int eager_delete(const TagT tag, const Parameters &parameters);
 
     /*  Internals of the library */
    protected:
-    typedef std::vector<SimpleNeighbor> vecNgh;
+    typedef std::vector<SimpleNeighbor>        vecNgh;
     typedef std::vector<std::vector<unsigned>> CompactGraph;
     CompactGraph                               _final_graph;
     CompactGraph                               _in_graph;
 
+    // to get appropriate start points for search
     void reachable_bfs(const unsigned                         start_node,
                        std::vector<tsl::robin_set<unsigned>> &bfs_order,
                        bool *                                 visited);
 
-    // entry point is centroid based on all-to-centroid distance computation
+    // determines navigating node of the graph by calculating medoid of data
     unsigned calculate_entry_point();
-    int  gen_frozen_points(T *data);
+    // generates one or more frozen points that will never get deleted from the
+    // graph
+    int gen_frozen_points(T *data);
+    // called only when _eager_delete is to be supported
     void update_in_graph();
-
 
     void iterate_to_fixed_point(const T *query, const Parameters &parameter,
                                 std::vector<unsigned> &   init_ids,
@@ -123,8 +134,11 @@ namespace NSG {
     // get new location corresponding to each undeleted tag after deletions
     std::vector<unsigned> get_new_location(unsigned &active);
 
-    // renumber nodes, update tag and location maps and compact the graph
-    void compact_data(std::vector<unsigned> new_location, unsigned active);
+    // renumber nodes, update tag and location maps and compact the graph, mode
+    // = _consolidated_order in case of lazy deletion and _compacted_order in
+    // case of eager deletion
+    void compact_data(std::vector<unsigned> new_location, unsigned active,
+                      bool mode);
 
     // WARNING: Do not call consolidate_deletes without acquiring change_lock_
     // Returns number of live points left after consolidation
@@ -134,16 +148,16 @@ namespace NSG {
     void compute_in_degree_stats() const;
 
    private:
-    size_t                  _dim;
-    size_t                  _aligned_dim;
-    T *                     _data;
-    size_t                  _nd;
-    size_t                  _max_points;
-    size_t                  _num_frozen_pts;
-    bool                    _has_built;
-    Distance<T> *           _distance;
-    unsigned                _width;
-    unsigned                _ep;
+    size_t       _dim;
+    size_t       _aligned_dim;
+    T *          _data;
+    size_t       _nd;  // number of active points i.e. existing in the graph
+    size_t       _max_points;  // total number of points in given data set
+    size_t       _num_frozen_pts;
+    bool         _has_built;
+    Distance<T> *_distance;
+    unsigned     _width;
+    unsigned     _ep;
     std::vector<std::mutex> _locks;  // Per node lock, cardinality=max_points_
     char *                  _opt_graph;
     size_t                  _node_size;
@@ -152,10 +166,16 @@ namespace NSG {
 
     bool _can_delete;
     bool _enable_tags;
-    bool _consolidated_order;
+    bool _lazy_done;           // true if lazy deletions have been made
+    bool _consolidated_order;  // true if after lazy deletions, data has been
+                               // consolidated
     bool _store_data;
-    bool _eager_done;  // if eager_done = 1, lazy deletes are not allowed
-    bool _maintain_in_graph;
+    bool _eager_done;            // true if eager deletions have been made
+    bool _compacted_order;       // true if after eager deletions, data has been
+                                 // consolidated
+    bool _support_eager_delete;  //_support_eager_delete = 1 activates extra
+                                 // data structures and functions required for
+    // eager deletion
 
     std::unordered_map<TagT, unsigned> _tag_to_location;
     std::unordered_map<unsigned, TagT> _location_to_tag;

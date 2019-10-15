@@ -46,9 +46,9 @@ int main(int argc, char** argv) {
 
   typedef unsigned TagT;
   NSG::IndexNSG<float, TagT> index(NSG::L2, argv[1], num_points - num_incr,
-                                   num_points, true, true, num_frozen);
+                                   num_points, true, true, num_frozen, true);
   {
-    std::vector<TagT> tags(num_new - num_incr);
+    std::vector<TagT> tags(num_points - num_incr);
     std::iota(tags.begin(), tags.end(), 0);
 
     NSG::Timer timer;
@@ -65,7 +65,6 @@ int main(int argc, char** argv) {
     for (size_t i = num_points - num_incr; i < num_points; ++i) {
       index.insert_point(data_load + i * aligned_dim, paras, pool, tmp, visited,
                          cut_graph, i);
-      std::cout << i << std::endl;
     }
     std::cout << "Incremental time: " << timer.elapsed() / 1000 << "ms\n";
     auto save_path_inc = save_path + ".inc";
@@ -74,7 +73,7 @@ int main(int argc, char** argv) {
 
   tsl::robin_set<unsigned> delete_list;
   while (delete_list.size() < num_incr)
-    delete_list.insert(((rand() * rand() * rand()) % num_points) + num_fake);
+    delete_list.insert(((rand() * rand() * rand()) % num_points) + num_frozen);
   std::cout << "Deleting " << delete_list.size() << " elements" << std::endl;
 
   {
@@ -82,8 +81,8 @@ int main(int argc, char** argv) {
     index.enable_delete();
     for (auto p : delete_list)
 
-      if (index.eager_delete(p, paras) != 0)
-        // if (index.delete_point(p) != 0)
+      //  if (index.eager_delete(p, paras) != 0)
+      if (index.delete_point(p) != 0)
         std::cerr << "Delete tag " << p << " not found" << std::endl;
 
     if (index.disable_delete(paras, true) != 0) {
@@ -93,21 +92,19 @@ int main(int argc, char** argv) {
     std::cout << "Delete time: " << timer.elapsed() / 1000 << "ms\n";
   }
 
-  auto save_path_del = save_path + ".del";
-  index.save(save_path_del.c_str());
+  //  auto save_path_del = save_path + ".del";
+  // index.save(save_path_del.c_str());
   {
     NSG::Timer timer;
     for (auto p : delete_list)
       index.insert_point(data_load + (size_t) p * (size_t) aligned_dim, paras,
                          pool, tmp, visited, cut_graph, p);
     std::cout << "Re-incremental time: " << timer.elapsed() / 1000 << "ms\n";
-    auto save_path_reinc = save_path + ".reinc";
-    index.save(save_path_reinc.c_str());
   }
 
   auto save_path_reinc = save_path + ".reinc";
   index.save(save_path_reinc.c_str());
-  
+
   delete[] data_load;
 
   return 0;

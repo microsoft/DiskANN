@@ -196,11 +196,9 @@ namespace NSG {
       delete subclass;
     }
   }
-  
+
   template class NSGInterface<int8_t>;
   template class NSGInterface<float>;
   template class NSGInterface<uint8_t>;
 
 }  // namespace NSG
-
-

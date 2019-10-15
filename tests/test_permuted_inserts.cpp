@@ -8,7 +8,7 @@
 #include <time.h>
 #include <unistd.h>
 #include <random>
-#include "util.h"
+#include "utils.h"
 
 int main(int argc, char** argv) {
   if (argc != 8) {
@@ -47,14 +47,17 @@ int main(int argc, char** argv) {
 
   typedef unsigned TagT;
 
-  NSG::IndexNSG<float, TagT> index(dim, num_points - num_incr, NSG::L2,
+  //  NSG::IndexNSG<float, TagT> index(dim, num_points - num_incr, NSG::L2,
+  //                                 num_points, true, true);
+
+  NSG::IndexNSG<float, TagT> index(NSG::L2, argv[1], num_points - num_incr,
                                    num_points, true, true);
   {
     std::vector<TagT> tags(num_points - num_incr);
     std::iota(tags.begin(), tags.end(), 0);
 
     NSG::Timer timer;
-    index.build(data_copy, paras, tags);
+    index.build(paras, tags);
     std::cout << "Index time: " << timer.elapsed() / 1000 << "ms\n";
   }
 
