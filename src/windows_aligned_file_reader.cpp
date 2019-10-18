@@ -1,10 +1,11 @@
 #ifdef _WINDOWS
+#ifndef USE_BING_INFRA
 #include "windows_aligned_file_reader.h"
 #include <iostream>
 #include "utils.h"
 
 #define SECTOR_LEN 4096
-#define MAX_IO_DEPTH 64
+
 
 void WindowsAlignedFileReader::open(const std::string& fname) {
   m_filename = std::wstring(fname.begin(), fname.end());
@@ -32,7 +33,7 @@ void WindowsAlignedFileReader::register_thread() {
                                FILE_FLAG_OVERLAPPED | FILE_FLAG_RANDOM_ACCESS,
                            NULL);
   if (ctx.fhandle == INVALID_HANDLE_VALUE) {
-    std::cout << "Error opening " << filename.c_str()
+    std::cout << "Error opening " << m_filename.c_str()
               << " -- error=" << GetLastError() << std::endl;
   }
 
@@ -63,7 +64,7 @@ IOContext& WindowsAlignedFileReader::get_ctx() {
 }
 
 void WindowsAlignedFileReader::read(std::vector<AlignedRead>& read_reqs,
-                                    IOContext                 ctx) {
+                                    IOContext&                 ctx) {
   using namespace std::chrono_literals;
   // execute each request sequentially
   _u64 n_reqs = read_reqs.size();
@@ -145,4 +146,5 @@ void WindowsAlignedFileReader::read(std::vector<AlignedRead>& read_reqs,
     }
   }
 }
+#endif
 #endif

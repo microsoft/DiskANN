@@ -1,5 +1,6 @@
 #pragma once
 #ifdef _WINDOWS
+#ifndef USE_BING_INFRA
 #include <Windows.h>
 #include <fcntl.h>
 #include <malloc.h>
@@ -11,6 +12,9 @@
 #include "aligned_file_reader.h"
 #include "tsl/robin_map.h"
 #include "utils.h"
+
+
+
 class WindowsAlignedFileReader : public AlignedFileReader {
  private:
   std::wstring m_filename;
@@ -36,6 +40,7 @@ class WindowsAlignedFileReader : public AlignedFileReader {
 
   // process batch of aligned requests in parallel
   // NOTE :: blocking call for the calling thread, but can thread-safe
-  virtual void read(std::vector<AlignedRead> &read_reqs, IOContext ctx);
+  virtual void read(std::vector<AlignedRead> &read_reqs, IOContext& ctx);
 };
-#endif
+#endif //USE_BING_INFRA
+#endif	//_WINDOWS

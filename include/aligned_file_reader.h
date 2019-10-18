@@ -1,6 +1,7 @@
 #pragma once
 
 #include <vector>
+#include <atomic>
 #ifndef _WINDOWS
 #include <fcntl.h>
 #include <libaio.h>
@@ -10,20 +11,34 @@ typedef io_context_t IOContext;
 #include <Windows.h>
 #include <minwinbase.h>
 
-
+#ifndef USE_BING_INFRA
 typedef struct {
   HANDLE                  fhandle = NULL;
   HANDLE                  iocp = NULL;
   std::vector<OVERLAPPED> reqs;
 } IOContext;
-
-#ifdef BING_INFRA
+#else
 #include "dll/IDiskPriorityIO.h"
-typedef struct BingIOContext : IOContext {
-	ANNIndex::IDiskPriorityIO* m_pDiskIO = nullptr;
+#include <atomic>
+//TODO: Caller code is very callous about copying IOContext objects
+//all over the place. MUST verify that it won't cause leaks/logical
+//errors.
+//Because of such callous copying, we have to use ptr->atomic instead
+//of atomic, as atomic is not copyable.
+struct IOContext{
+  ANNIndex::IDiskPriorityIO*              m_pDiskIO = nullptr;
+  std::vector<ANNIndex::AsyncReadRequest> m_requests;
+  std::shared_ptr<std::atomic<int>>       m_pCompleteCount;
+
+  
+  IOContext() : m_pCompleteCount(new std::atomic<int>(0)) {
+  }
 };
 #endif
+
 #endif
+
+#define MAX_IO_DEPTH 128
 
 #include <malloc.h>
 #include <cstdio>
@@ -53,7 +68,7 @@ struct AlignedRead {
 class AlignedFileReader {
  protected:
   tsl::robin_map<std::thread::id, IOContext> ctx_map;
-  std::mutex ctx_mut;
+  std::mutex                                 ctx_mut;
 
  public:
   // returns the thread-specific context
@@ -74,5 +89,5 @@ class AlignedFileReader {
 
   // process batch of aligned requests in parallel
   // NOTE :: blocking call
-  virtual void read(std::vector<AlignedRead>& read_reqs, IOContext ctx) = 0;
+  virtual void read(std::vector<AlignedRead>& read_reqs, IOContext& ctx) = 0;
 };

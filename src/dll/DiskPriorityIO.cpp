@@ -8,7 +8,7 @@
 #include "utils.h"
 
 #define SECTOR_LEN 4096
-#define MAX_IO_DEPTH 64
+#define MAX_IO_DEPTH 128
 #define NUM_IO_POLL_THREADS 1
 
 namespace NSG {
@@ -33,6 +33,7 @@ namespace NSG {
                                   unsigned __int32 maxReadRetries,
                                   unsigned __int32 maxWriteRetries,
                                   unsigned __int16 threadPoolSize) {
+    m_fileName = filePath;
     m_fileHandle = CreateFileA(
         filePath, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING,
         FILE_ATTRIBUTE_READONLY | FILE_FLAG_NO_BUFFERING |
@@ -70,6 +71,9 @@ namespace NSG {
   bool DiskPriorityIO::ReadFileAsync(ANNIndex::AsyncReadRequest& readRequest) {
     DiskAnnOverlapped* os = nullptr;
     m_overlappedQueue.pop(os);
+    if (os == nullptr) {
+      os = new DiskAnnOverlapped();
+	}
 
     os->OffsetHigh = (readRequest.m_offset >> 32);
     os->Offset = readRequest.m_offset & 0xffffffff;
@@ -87,6 +91,8 @@ namespace NSG {
 
     if (!readSuccess && GetLastError() != ERROR_IO_PENDING) {
       m_overlappedQueue.push(os);
+      std::cerr << "Failed to read file: " << m_fileName
+                << " Error: " << std::hex << GetLastError() << std::endl;
       readRequest.m_callback(false);
       return false;
     } else {

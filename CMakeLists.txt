@@ -59,14 +59,14 @@ include_directories(include ${INTEL_ROOT}/include ${MKL_ROOT}/include)
 #Main compiler/linker settings 
 if(MSVC)
 	#language options
-	add_compile_options(/permissive- /openmp /Zc:wchar_t /Zc:twoPhase- /Zc:forScope /Zc:inline /WX- /GR- /std:c++14 /Gd /W3 /MP /Zi /FC /nologo /diagnostics:classic) 
+	add_compile_options(/permissive- /openmp /Zc:wchar_t /Zc:twoPhase- /Zc:forScope /Zc:inline /WX- /std:c++14 /Gd /W3 /MP /Zi /FC /nologo /diagnostics:classic) 
 	#code generation options
 	add_compile_options(/Qpar /fp:fast /Zp8 /fp:except- /EHsc /GS- /Gm- /Gy )
 	#optimization options
 	add_compile_options(/Ot /Oy /Oi /GL)
 	#path options
 	#add_compile_options(/Fdx64/Release/vc141.pdb /Fox64/Release/)
-	add_definitions(-DUSE_AVX2 -DUSE_ACCELERATED_PQ -D_WINDOWS -DNOMINMAX -DUNICODE)
+	add_definitions(-DUSE_AVX2 -DUSE_BING_INFRA -DUSE_ACCELERATED_PQ -D_WINDOWS -DNOMINMAX -DUNICODE)
 	
 	set(CMAKE_SHARED_LIBRARY_CXX_LINK_FLAGS "/MANIFEST /MACHINE:X64 /LTCG:incremental /NXCOMPAT /DYNAMICBASE /OPT:REF /INCREMENTAL:NO /SUBSYSTEM:CONSOLE /MANIFESTUAC:\"level='asInvoker' uiAccess='false'\"")
 	set(CMAKE_EXECUTABLE_CXX_LINK_FLAGS "/MANIFEST /MACHINE:X64 /LTCG:incremental /NXCOMPAT /DYNAMICBASE /OPT:REF /INCREMENTAL:NO /SUBSYSTEM:CONSOLE /MANIFESTUAC:\"level='asInvoker' uiAccess='false'\"")

@@ -7,6 +7,7 @@ add_library(nsg_dll SHARED dllmain.cpp nsg_interface.cpp bing_aligned_file_reade
 if (MSVC)
 	add_definitions(-D_USRDLL -D_WINDLL)
 	add_compile_options(/MD)
+	target_include_directories(nsg_dll PRIVATE "F:/boost/boost_1_71_0" )
 	target_link_options(nsg_dll PRIVATE /DLL /MACHINE:X64)
 	target_link_options(nsg_dll PRIVATE $<$<CONFIG:Debug>:/IMPLIB:${CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG}/nsg_dll.lib>
 										$<$<CONFIG:Release>:/IMPLIB:${CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE}/nsg_dll.lib>

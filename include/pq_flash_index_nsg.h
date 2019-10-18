@@ -63,7 +63,7 @@ namespace NSG {
     NSGDLLEXPORT void create_disk_layout(const std::string base_file,
                                          const std::string mem_index_file,
                                          const std::string output_file);
-    NSGDLLEXPORT void cache_visited_nodes(_u64 *node_list, _u64 num_nodes);
+    //NSGDLLEXPORT void cache_visited_nodes(_u64 *node_list, _u64 num_nodes);
     NSGDLLEXPORT void load_cache_from_file(std::string cache_bin);
     NSGDLLEXPORT void cache_bfs_levels(_u64 nlevels);
 

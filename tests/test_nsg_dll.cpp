@@ -1,5 +1,3 @@
-#define NOMINMAX
-
 #include <dll/nsg_interface.h>
 #include "dll/IANNIndex.h"
 #include "utils.h"
