@@ -94,7 +94,12 @@ namespace NSG {
 
     // Allocate space for max points and frozen points,
     // and add frozen points at the end of the array
-    realloc(_data, (_max_points + _num_frozen_pts) * _aligned_dim * sizeof(T));
+    _data = (T *) realloc(
+        _data, (_max_points + _num_frozen_pts) * _aligned_dim * sizeof(T));
+    if (_data == NULL) {
+      std::cout << "Realloc failed, killing programme" << std::endl;
+      exit(-1);
+    }
     gen_frozen_points(_data);
 
     this->_distance = ::get_distance_function<T>();
@@ -303,27 +308,33 @@ namespace NSG {
     const float    alpha = parameters.Get<float>("alpha");
 
     std::vector<unsigned> new_location;
-    new_location.resize(_max_points, _max_points);
+    new_location.resize(_max_points + _num_frozen_pts,
+                        _max_points + _num_frozen_pts);
     unsigned active = 0;
-    for (unsigned old = 0; old < _max_points; ++old)
+    for (unsigned old = 0; old < _max_points + _num_frozen_pts; ++old)
       if (_empty_slots.find(old) == _empty_slots.end() &&
           _delete_set.find(old) == _delete_set.end())
         new_location[old] = active++;
-    assert(active + _empty_slots.size() + _delete_set.size() == _max_points);
+    std::cout << "Active = " << active
+              << "    Number of empty slots =  " << _empty_slots.size()
+              << "   Number of points in delete set =  " << _delete_set.size()
+              << "  _nd = " << _nd << std::endl;
+    assert(active + _empty_slots.size() + _delete_set.size() ==
+           _max_points + _num_frozen_pts);
 
     tsl::robin_set<unsigned> candidate_set;
     std::vector<Neighbor>    expanded_nghrs;
     std::vector<Neighbor>    result;
 
-    for (unsigned i = 0; i < _max_points; ++i) {
-      if (new_location[i] < _max_points) {
+    for (unsigned i = 0; i < _max_points + _num_frozen_pts; ++i) {
+      if (new_location[i] < _max_points + _num_frozen_pts) {
         candidate_set.clear();
         expanded_nghrs.clear();
         result.clear();
 
         bool modify = false;
         for (auto ngh : _final_graph[i]) {
-          if (new_location[ngh] >= _max_points) {
+          if (new_location[ngh] >= _max_points + _num_frozen_pts) {
             modify = true;
 
             // Add outgoing links from
@@ -399,8 +410,9 @@ namespace NSG {
 
     std::cout << "Re-numbering nodes and edges and consolidating data... "
               << std::flush;
-    for (unsigned old = 0; old < _max_points; ++old) {
-      if (new_location[old] < _max_points) {  // If point continues to exist
+    for (unsigned old = 0; old < _max_points + _num_frozen_pts; ++old) {
+      if (new_location[old] <
+          _max_points + _num_frozen_pts) {  // If point continues to exist
 
         // Renumber nodes to compact the order
         for (size_t i = 0; i < _final_graph[old].size(); ++i) {
@@ -438,7 +450,7 @@ namespace NSG {
       _location_to_tag[iter.second] = iter.first;
     std::cout << "done." << std::endl;
 
-    for (unsigned old = active; old < _max_points; ++old)
+    for (unsigned old = active; old < _max_points + _num_frozen_pts; ++old)
       _final_graph[old].clear();
     _delete_set.clear();
     _empty_slots.clear();
@@ -662,9 +674,12 @@ namespace NSG {
     std::uniform_real_distribution<float> dist(0, 1);
     // Harsha: Should the distribution change with the distance metric?
 
-    for (auto i = 0; i < _num_frozen_pts; ++i)
-      for (unsigned d = 0; d < _aligned_dim; d++)
+    for (auto i = 0; i < _num_frozen_pts; ++i) {
+      for (unsigned d = 0; d < _dim; d++)
         data[(i + _max_points) * _aligned_dim + d] = dist(generator);
+      for (unsigned d = _dim; d < _aligned_dim; d++)
+        data[(i + _max_points) * _aligned_dim + d] = 0;
+    }
 
     return 0;
   }
@@ -687,19 +702,11 @@ namespace NSG {
       _in_graph.reserve(new_max_points);
     }
 
-    std::vector<size_t> mapping = std::vector<size_t>();
-    if (!mapping.empty())
-      new_nd = mapping.size();
-    else {
-      mapping.resize(new_nd);
-      std::iota(std::begin(mapping), std::end(mapping), 0);
-    }
-
     std::cout << "Generating random graph with " << new_nd << " points... "
               << std::flush;
     // PAR_BLOCK_SZ gives the number of points that can fit in a single block
     _s64 PAR_BLOCK_SZ = (1 << 16);  // = 64KB
-    _s64 nblocks = DIV_ROUND_UP((_s64) new_nd, PAR_BLOCK_SZ);
+    _s64 nblocks = DIV_ROUND_UP((_s64) _nd, PAR_BLOCK_SZ);
 
 #pragma omp parallel for schedule(static, 1)
     for (_s64 block = 0; block < nblocks;
@@ -710,22 +717,55 @@ namespace NSG {
 
       /* Put random number points as neighbours to the 10% of the nodes */
       for (_s64 i = block * PAR_BLOCK_SZ;
-           i < (block + 1) * PAR_BLOCK_SZ && i < (_s64) new_nd; i++) {
+           i < (block + 1) * PAR_BLOCK_SZ && i < (_s64) _nd; i++) {
         std::set<unsigned> rand_set;
-        while (rand_set.size() < k && rand_set.size() < new_nd) {
+        while (rand_set.size() < k && rand_set.size() < new_nd - 1) {
           unsigned cur_pt = dis(gen);
-          if (cur_pt != i)
-            rand_set.insert(cur_pt < _nd ? cur_pt : cur_pt - _nd + _max_points);
+          if (_nd > 1) {
+            if (cur_pt != i)
+              rand_set.insert(cur_pt < _nd ? cur_pt
+                                           : cur_pt - _nd + _max_points);
+          } else
+            rand_set.insert(dis(gen));
+          //          std::cout << "Size of rand_set = " << rand_set.size() <<
+          //          std::endl;
         }
+        /*      for(auto j : rand_set)
+                  std::cout << j << "  " ;
+              std::cout << std::endl;*/
 
-        _final_graph[mapping[i]].reserve(k);
+        _final_graph[i].reserve(k);
         for (auto s : rand_set)
-          _final_graph[mapping[i]].emplace_back(mapping[s]);
-        _final_graph[mapping[i]].shrink_to_fit();
+          _final_graph[i].emplace_back(s);
+        _final_graph[i].shrink_to_fit();
       }
     }
-    //  _ep = 0;
-    _ep = _max_points;
+
+    if (_num_frozen_pts > 0) {
+      std::cout << "Initialising random neighbors for frozen point"
+                << std::endl;
+
+      std::random_device                    rd;
+      std::mt19937                          gen(rd());
+      std::uniform_int_distribution<size_t> dis(0, _nd - 1 + _num_frozen_pts);
+
+      std::set<unsigned> rand_set;
+      while (rand_set.size() < k && rand_set.size() < new_nd) {
+        unsigned cur_pt = dis(gen);
+        if (cur_pt != _max_points)
+          rand_set.insert(cur_pt < _nd ? cur_pt : cur_pt - _nd + _max_points);
+      }
+
+      _final_graph[_max_points].reserve(k);
+      for (auto s : rand_set)
+        _final_graph[_max_points].emplace_back(s);
+      _final_graph[_max_points].shrink_to_fit();
+    }
+
+    if (_num_frozen_pts > 0)
+      _ep = _max_points;
+    else
+      _ep = 0;
     std::cout << "done. Entry point set to " << _ep << "." << std::endl;
   }
 
@@ -746,7 +786,7 @@ namespace NSG {
     // put random L new ids into visited list and init_ids list
     const unsigned L = parameter.Get<unsigned>("L");
     while (init_ids.size() < L && init_ids.size() < _nd) {
-      unsigned id = (rand() * rand() * rand()) % _nd;
+      unsigned id = (rand()) % _nd;
       if (visited.find(id) != visited.end())
         continue;
       else
@@ -757,7 +797,7 @@ namespace NSG {
     unsigned l = 0;
     Neighbor nn;
     for (auto id : init_ids) {
-      assert(id < _max_points);
+      assert(id < _max_points + _num_frozen_pts);
       retset[l++] =
           Neighbor(id,
                    _distance->compare(_data + _aligned_dim * (size_t) id, query,
@@ -922,7 +962,7 @@ namespace NSG {
     sync_prune(_data + (size_t) _aligned_dim * location, location, pool,
                parameters, visited, cut_graph);
 
-    assert(_final_graph.size() == _max_points);
+    assert(_final_graph.size() == _max_points + _num_frozen_pts);
     _final_graph[location].clear();
     _final_graph[location].reserve(range);
     assert(!cut_graph.empty());
@@ -1155,13 +1195,14 @@ namespace NSG {
       return;
     /* put the first node in start. This will be nearest neighbor to q */
     result.emplace_back(pool[start]);
-
-    while (result.size() < degree && (++start) < pool.size() && start < maxc) {
+    unsigned count = 0;
+    while (result.size() < degree && (++start) < pool.size()) {
       auto &p = pool[start];
       bool  occlude = false;
       for (unsigned t = 0; t < result.size(); t++) {
         if (p.id == result[t].id) {
           occlude = true;
+          count++;
           break;
         }
         float djk = _distance->compare(
@@ -1169,9 +1210,11 @@ namespace NSG {
             _data + _aligned_dim * (size_t) p.id, (unsigned) _aligned_dim);
         if (alpha * djk < p.distance /* dik */) {
           occlude = true;
+          count++;
           break;
         }
       }
+
       if (!occlude)
         result.emplace_back(p);
     }
@@ -1192,16 +1235,22 @@ namespace NSG {
     /* check the neighbors of the query that are not part of visited,
      * check their distance to the query, and add it to pool.
      */
-    if (!_final_graph[location].empty())
+    if (!_final_graph[location].empty()) {
       for (auto id : _final_graph[location]) {
-        if (visited.find(id) != visited.end())
+        if (visited.find(id) != visited.end()) {
           continue;
+        }
+
         float dist = _distance->compare(x, _data + _aligned_dim * (size_t) id,
                                         (unsigned) _aligned_dim);
+
         pool.emplace_back(Neighbor(id, dist, true));
       }
+    }
 
     // sort the pool based on distance to query
+    if (pool.empty())
+      std::cout << "Pool is empty" << std::endl;
     std::sort(pool.begin(), pool.end());
 
     std::vector<Neighbor> result;
@@ -1214,7 +1263,6 @@ namespace NSG {
     if (alpha > 1.0 && !pool.empty() && result.size() < range) {
       std::vector<Neighbor> result2;
       occlude_list(pool, location, 1.2, range - result.size(), maxc, result2);
-
       // add everything from result2 to result. This will lead to duplicates
       for (unsigned i = 0; i < result2.size(); i++) {
         result.emplace_back(result2[i]);
@@ -1227,10 +1275,12 @@ namespace NSG {
     /* Add all the nodes in result into a variable called cut_graph
      * So this contains all the neighbors of id location
      */
+
     cut_graph.clear();
     assert(result.size() <= range);
-    for (auto iter : result)
+    for (auto iter : result) {
       cut_graph.emplace_back(SimpleNeighbor(iter.id, iter.distance));
+    }
   }
 
   /* Add reverse links from all the visited nodes to node n.
@@ -1248,7 +1298,7 @@ namespace NSG {
 
     for (auto des : src_pool) {
       /* des.id is the id of the neighbors of n */
-      assert(des.id >= 0 && des.id < _max_points);
+      assert(des.id >= 0 && (des.id < _max_points + _num_frozen_pts));
 
       int dup = 0;
       /* des_pool contains the neighbors of the neighbors of n */
@@ -1258,7 +1308,7 @@ namespace NSG {
       {
         LockGuard guard(_locks[des.id]);
         for (auto nn : des_pool) {
-          assert(nn >= 0 && nn < _max_points);
+          assert(nn >= 0 && (nn < _max_points + _num_frozen_pts));
 
           if (n == nn) {
             dup = 1;
@@ -1420,8 +1470,8 @@ namespace NSG {
       rand_perm.emplace_back(i);
     }
 
-    if (_num_frozen_pts)
-      rand_perm.emplace_back(_max_points);
+    for (size_t i = 0; i < _num_frozen_pts; ++i)
+      rand_perm.emplace_back(_max_points + i);
 
     std::random_device               rd;
     std::mt19937                     gen(rd());
@@ -1429,8 +1479,9 @@ namespace NSG {
 
     init_random_graph(range);
 
-    assert(_final_graph.size() == _max_points + _num_frozen_pts);
-    auto cut_graph_ = new vecNgh[_nd + _num_frozen_pts];
+    if (_final_graph.size() != _max_points + _num_frozen_pts)
+      std::cerr << "Final graph wrong sized" << std::endl;
+    auto cut_graph_ = new vecNgh[_max_points + _num_frozen_pts];
 
     for (uint32_t rnd_no = 0; rnd_no < NUM_RNDS; rnd_no++) {
       // Shuffle the dataset
@@ -1439,6 +1490,56 @@ namespace NSG {
 
       size_t round_size = DIV_ROUND_UP(_nd, NUM_SYNCS);  // size of each batch
 
+      if (_num_frozen_pts > 0) {
+        std::cout << "Adding edges to frozen point" << std::endl;
+
+        if (rnd_no == NUM_RNDS - 1) {
+          if (last_round_alpha > 1)
+            parameters.Set<unsigned>("L", (std::min)(L, (unsigned) 50));
+          parameters.Set<float>("alpha", last_round_alpha);
+        }
+
+        std::vector<Neighbor>    pool, tmp;
+        tsl::robin_set<unsigned> visited;
+
+        pool.clear();
+        tmp.clear();
+        visited.clear();
+
+        get_neighbors(_data + (size_t) _aligned_dim * _max_points, parameters,
+                      tmp, pool, visited);
+
+        if (visited.find(_max_points) != visited.end()) {
+          for (unsigned i = 0; i < pool.size(); i++)
+            if (pool[i].id == _max_points) {
+              pool.erase(pool.begin() + i);
+              break;
+            }
+        }
+
+        // sync_prune will check pool, and remove some of the points and
+        // create a cut_graph, which contains neighbors for point n
+        sync_prune(_data + (size_t) _aligned_dim * _max_points, _max_points,
+                   pool, parameters, visited, cut_graph_[_max_points]);
+
+        _final_graph[_max_points].clear();
+        _final_graph[_max_points].reserve(range);
+        assert(!cut_graph_[_max_points].empty());
+        for (auto link : cut_graph_[_max_points]) {
+          _final_graph[_max_points].emplace_back(link.id);
+          assert(link.id >= 0 && ((link.id < _nd) ||
+                                  (link.id >= _nd && link.id == _max_points)));
+        }
+        assert(_final_graph[_max_points].size() <= range);
+
+        inter_insert(_max_points, cut_graph_[_max_points], parameters);
+
+        assert(!cut_graph_[_max_points].empty());
+        cut_graph_[_max_points].clear();
+        cut_graph_[_max_points].shrink_to_fit();
+      }
+
+      std::cout << "Constructing rest of the graph..... " << std::endl;
       for (uint32_t sync_num = 0; sync_num < NUM_SYNCS; sync_num++) {
         if (rnd_no == NUM_RNDS - 1) {
           if (last_round_alpha > 1)
@@ -1488,7 +1589,6 @@ namespace NSG {
         }
 
 #pragma omp parallel for schedule(static, PAR_BLOCK_SZ)
-
         for (_s64 node = (_s64) start_id; node < (_s64) end_id; ++node) {
           // clear all the neighbors of _final_graph[node]
           _final_graph[node].clear();
@@ -1496,10 +1596,12 @@ namespace NSG {
           assert(!cut_graph_[node].empty());
           for (auto link : cut_graph_[node]) {
             _final_graph[node].emplace_back(link.id);
-            assert(link.id >= 0 && link.id < _nd);
+            assert(link.id >= 0 &&
+                   ((link.id < _nd) || (link.id >= _max_points)));
           }
           assert(_final_graph[node].size() <= range);
         }
+
 #pragma omp parallel for schedule(static, PAR_BLOCK_SZ)
         for (_s64 n = start_id; n < (_s64) end_id; ++n) {
           inter_insert(n, cut_graph_[n], parameters);

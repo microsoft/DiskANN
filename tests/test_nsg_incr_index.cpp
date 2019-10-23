@@ -73,7 +73,7 @@ int main(int argc, char** argv) {
 
   tsl::robin_set<unsigned> delete_list;
   while (delete_list.size() < num_incr)
-    delete_list.insert(((rand() * rand() * rand()) % num_points) + num_frozen);
+    delete_list.insert(rand() % num_points);
   std::cout << "Deleting " << delete_list.size() << " elements" << std::endl;
 
   {
@@ -81,8 +81,8 @@ int main(int argc, char** argv) {
     index.enable_delete();
     for (auto p : delete_list)
 
-      //  if (index.eager_delete(p, paras) != 0)
-      if (index.delete_point(p) != 0)
+      if (index.eager_delete(p, paras) != 0)
+        //  if (index.delete_point(p) != 0)
         std::cerr << "Delete tag " << p << " not found" << std::endl;
 
     if (index.disable_delete(paras, true) != 0) {
