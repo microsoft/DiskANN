@@ -315,10 +315,6 @@ namespace NSG {
       if (_empty_slots.find(old) == _empty_slots.end() &&
           _delete_set.find(old) == _delete_set.end())
         new_location[old] = active++;
-    std::cout << "Active = " << active
-              << "    Number of empty slots =  " << _empty_slots.size()
-              << "   Number of points in delete set =  " << _delete_set.size()
-              << "  _nd = " << _nd << std::endl;
     assert(active + _empty_slots.size() + _delete_set.size() ==
            _max_points + _num_frozen_pts);
 
@@ -727,12 +723,7 @@ namespace NSG {
                                            : cur_pt - _nd + _max_points);
           } else
             rand_set.insert(dis(gen));
-          //          std::cout << "Size of rand_set = " << rand_set.size() <<
-          //          std::endl;
         }
-        /*      for(auto j : rand_set)
-                  std::cout << j << "  " ;
-              std::cout << std::endl;*/
 
         _final_graph[i].reserve(k);
         for (auto s : rand_set)
@@ -1195,14 +1186,13 @@ namespace NSG {
       return;
     /* put the first node in start. This will be nearest neighbor to q */
     result.emplace_back(pool[start]);
-    unsigned count = 0;
+
     while (result.size() < degree && (++start) < pool.size()) {
       auto &p = pool[start];
       bool  occlude = false;
       for (unsigned t = 0; t < result.size(); t++) {
         if (p.id == result[t].id) {
           occlude = true;
-          count++;
           break;
         }
         float djk = _distance->compare(
@@ -1210,11 +1200,9 @@ namespace NSG {
             _data + _aligned_dim * (size_t) p.id, (unsigned) _aligned_dim);
         if (alpha * djk < p.distance /* dik */) {
           occlude = true;
-          count++;
           break;
         }
       }
-
       if (!occlude)
         result.emplace_back(p);
     }
@@ -1235,22 +1223,18 @@ namespace NSG {
     /* check the neighbors of the query that are not part of visited,
      * check their distance to the query, and add it to pool.
      */
-    if (!_final_graph[location].empty()) {
+    if (!_final_graph[location].empty())
       for (auto id : _final_graph[location]) {
         if (visited.find(id) != visited.end()) {
           continue;
         }
-
         float dist = _distance->compare(x, _data + _aligned_dim * (size_t) id,
                                         (unsigned) _aligned_dim);
 
         pool.emplace_back(Neighbor(id, dist, true));
       }
-    }
 
     // sort the pool based on distance to query
-    if (pool.empty())
-      std::cout << "Pool is empty" << std::endl;
     std::sort(pool.begin(), pool.end());
 
     std::vector<Neighbor> result;
@@ -1263,6 +1247,7 @@ namespace NSG {
     if (alpha > 1.0 && !pool.empty() && result.size() < range) {
       std::vector<Neighbor> result2;
       occlude_list(pool, location, 1.2, range - result.size(), maxc, result2);
+
       // add everything from result2 to result. This will lead to duplicates
       for (unsigned i = 0; i < result2.size(); i++) {
         result.emplace_back(result2[i]);
@@ -1275,12 +1260,10 @@ namespace NSG {
     /* Add all the nodes in result into a variable called cut_graph
      * So this contains all the neighbors of id location
      */
-
     cut_graph.clear();
     assert(result.size() <= range);
-    for (auto iter : result) {
+    for (auto iter : result)
       cut_graph.emplace_back(SimpleNeighbor(iter.id, iter.distance));
-    }
   }
 
   /* Add reverse links from all the visited nodes to node n.
@@ -1555,6 +1538,7 @@ namespace NSG {
         size_t nblocks = DIV_ROUND_UP(round_size, PAR_BLOCK_SZ);
 
 #pragma omp parallel for schedule(dynamic, 1)
+
         for (_s64 block = 0; block < (_s64) nblocks;
              ++block) {  // Gopal. changed from size_t to _s64
           std::vector<Neighbor>    pool, tmp;
@@ -1587,7 +1571,6 @@ namespace NSG {
                        visited, cut_graph_[n]);
           }
         }
-
 #pragma omp parallel for schedule(static, PAR_BLOCK_SZ)
         for (_s64 node = (_s64) start_id; node < (_s64) end_id; ++node) {
           // clear all the neighbors of _final_graph[node]
