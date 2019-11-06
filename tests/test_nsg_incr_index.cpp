@@ -59,6 +59,7 @@ int main(int argc, char** argv) {
   std::vector<NSG::Neighbor>       pool, tmp;
   tsl::robin_set<unsigned>         visited;
   std::vector<NSG::SimpleNeighbor> cut_graph;
+  index.readjust_data(num_frozen);
 
   {
     NSG::Timer timer;
@@ -76,13 +77,13 @@ int main(int argc, char** argv) {
     delete_list.insert(rand() % num_points);
   std::cout << "Deleting " << delete_list.size() << " elements" << std::endl;
 
-  {
+ {
     NSG::Timer timer;
     index.enable_delete();
     for (auto p : delete_list)
 
-      if (index.eager_delete(p, paras) != 0)
-        //  if (index.delete_point(p) != 0)
+       if (index.eager_delete(p, paras) != 0)
+    //  if (index.delete_point(p) != 0)
         std::cerr << "Delete tag " << p << " not found" << std::endl;
 
     if (index.disable_delete(paras, true) != 0) {
@@ -92,8 +93,10 @@ int main(int argc, char** argv) {
     std::cout << "Delete time: " << timer.elapsed() / 1000 << "ms\n";
   }
 
-  //  auto save_path_del = save_path + ".del";
-  // index.save(save_path_del.c_str());
+  auto save_path_del = save_path + ".del";
+  index.save(save_path_del.c_str());
+
+  index.readjust_data(num_frozen);
   {
     NSG::Timer timer;
     for (auto p : delete_list)

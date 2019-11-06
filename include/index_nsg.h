@@ -52,6 +52,9 @@ namespace NSG {
         unsigned *indices_buffer = NULL);
 
     void prefetch_vector(unsigned id);
+    
+    //repositions frozen points to the end of _data - if they have been moved during deletion
+    void readjust_data(unsigned _num_frozen_pts);
 
     /* insertions possible only when id corresponding to tag does not already
      * exist in the graph */
@@ -138,7 +141,7 @@ namespace NSG {
     // = _consolidated_order in case of lazy deletion and _compacted_order in
     // case of eager deletion
     void compact_data(std::vector<unsigned> new_location, unsigned active,
-                      bool mode);
+                      bool &mode);
 
     // WARNING: Do not call consolidate_deletes without acquiring change_lock_
     // Returns number of live points left after consolidation
