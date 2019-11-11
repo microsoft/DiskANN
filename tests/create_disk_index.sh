@@ -3,17 +3,17 @@
 command_helper()
 {
     echo ""
-    echo "Usage: $0 -t data_type -i input_bin_file -o index_prefix -L Lvalue -r Rvalue -b PQ_vector_bytes"
+    echo "Usage: $0 -t data_type -i input_bin_file -o index_prefix -L Lvalue -R Rvalue -B PQ_vector_bytes"
     echo -e "\t-t Base file data type: float/int8/uint8"
     echo -e "\t-i input bin file path"
     echo -e "\t-o output index prefix path (will generate path_pq_pivots.bin, path_compressed.bin, path_diskopt.bin)"
-    echo -e "\t-L index construction quality (L = 30 to 100 works, 50 is good choice)"
-    echo -e "\t-R index maximum degree"
-    echo -e "\t-b approximate memory footprint per vector in bytes using product quantization"
+    echo -e "\t-L index construction quality (e.g., L = 30, 50, 100 are good choices)"
+    echo -e "\t-R index maximum degree (e.g., R = 64, 100 are reasonable choices)"
+    echo -e "\t-B approximate memory footprint per vector in bytes using product quantization"
     exit 1 # Exit script after printing help
 }
 
-while getopts "t:i:o:L:R:b:" opt
+while getopts "t:i:o:L:R:B:" opt
 do
     case "$opt" in
         t ) TYPE="$OPTARG" ;;
@@ -21,7 +21,7 @@ do
         o ) OUTPUT_PREFIX="$OPTARG" ;;
         L ) L="$OPTARG" ;;
         R ) R="$OPTARG" ;;
-        b ) B="$OPTARG" ;;
+        B ) B="$OPTARG" ;;
         ? ) command_helper ;; # Print command_helper in case parameter is non-existent
     esac
 done
@@ -38,7 +38,9 @@ echo "Building $TYPE disk-index on $DATA with L=$L, R=$R, B=$B and storing outpu
 
 DISK_INDEX_PATH="${OUTPUT_PREFIX}_disk.index"
 UNOPT_INDEX_PATH="${OUTPUT_PREFIX}_mem.index"
-
+# generating compressed vectors into $B bytes per vector, using a sampling rate of 0.01. Change if you want higher or lower sampling rate (higher is better).
 ${BUILD_PATH}/tests/generate_pq  $TYPE  $DATA  $OUTPUT_PREFIX  $B  0.01
+#builds the in-memory graph index using 2 passes over data, and using alpha = 1.2, with size of L_construction = $L and max-degree $R. 
 ${BUILD_PATH}/tests/build_memory_index  $TYPE  $DATA  $L  $R  1250  2  1.2  $UNOPT_INDEX_PATH
+#creates the disk layout by storing the graph and data together 
 ${BUILD_PATH}/tests/create_disk_layout $TYPE $DATA $UNOPT_INDEX_PATH $DISK_INDEX_PATH

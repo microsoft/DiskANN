@@ -35,9 +35,9 @@ namespace diskann {
       npts_u32 = npts_u64;
       ndims_u32 = ndims_u64;
       std::cout << "PQ Pivots: # ctrs: " << npts_u32
-                << ", # dims: " << ndims_u32 << std::endl;
+                << ", # dims: " << ndims_u32 << "#chunks: " << nchunks << "chunk_size: " << chunksize << std::endl;
       ndims = n_chunks * chunk_size;
-      assert((_u64) ndims_u32 == n_chunks * chunk_size);
+      //      assert((_u64) ndims_u32 == n_chunks * chunk_size);
       // alloc and compute transpose
       tables_T = new float[256 * ndims_u32];
       for (_u64 i = 0; i < 256; i++) {
