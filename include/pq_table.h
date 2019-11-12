@@ -35,8 +35,9 @@ namespace diskann {
       npts_u32 = npts_u64;
       ndims_u32 = ndims_u64;
       std::cout << "PQ Pivots: # ctrs: " << npts_u32
-                << ", # dims: " << ndims_u32 << "#chunks: " << nchunks << "chunk_size: " << chunksize << std::endl;
-      ndims = n_chunks * chunk_size;
+                << ", # dims: " << ndims_u32 << "#chunks: " << nchunks
+                << "chunk_size: " << chunksize << std::endl;
+      this->ndims = ndims_u32;
       //      assert((_u64) ndims_u32 == n_chunks * chunk_size);
       // alloc and compute transpose
       tables_T = new float[256 * ndims_u32];
@@ -89,7 +90,9 @@ namespace diskann {
         // sum (q-c)^2 for the dimensions associated with this chunk
         float* chunk_dists = dist_vec + (256 * chunk);
         for (_u64 j = 0; j < chunk_size; j++) {
-          _u64         dim_no = (chunk * chunk_size) + j;
+          _u64 dim_no = (chunk * chunk_size) + j;
+          if (dim_no == this->ndims)
+            break;
           const float* centers_dim_vec = tables_T + (256 * dim_no);
           for (_u64 idx = 0; idx < 256; idx++) {
             float diff = centers_dim_vec[idx] - (float) query_vec[dim_no];
