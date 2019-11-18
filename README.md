@@ -47,15 +47,15 @@ Install MKL:
 cmake -B. -A x64 ..
 ```
 **Note: Since VS comes with its own (older) version of cmake, you have to specify the full path to cmake to ensure that the right version is used.**
--	This will create a “rand-nsg” solution file.
--	Open the rand-nsg solution and build the “nsg_dll” project first. 
+-	This will create a “diskann” solution file.
+-	Open the diskann solution and build the “nsg_dll” project first. 
 - 	Then build all the other binaries using the ALL_BUILD project that is part of the solution
 - 	Generated binaries are stored in the nsg/x64/Debug or nsg/x64/Release directories.
 
 To build from command line, use msbuild to first build the "nsg_dll" project. And then build the entire solution, as shown below.
 ```
 msbuild src\dll\nsg_dll.vcxproj
-msbuild rand-nsg.sln
+msbuild diskann.sln
 ```
 Check msbuild docs for additional options including choosing between debug and release builds.
 
