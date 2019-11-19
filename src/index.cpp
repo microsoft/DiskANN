@@ -61,8 +61,8 @@ namespace diskann {
   template<typename T, typename TagT>
   Index<T, TagT>::Index(Metric m, const char *filename, const size_t max_points,
 
-                        const size_t nd, const bool enable_tags,
-                        const bool store_data, const size_t num_frozen_pts,
+                        const size_t nd, const size_t num_frozen_pts,
+                        const bool enable_tags, const bool store_data,
                         const bool support_eager_delete)
       : _has_built(false), _width(0), _can_delete(false), _eager_done(true),
         _lazy_done(true), _compacted_order(true), _enable_tags(enable_tags),
@@ -423,6 +423,7 @@ namespace diskann {
         // Renumber nodes to compact the order
         for (size_t i = 0; i < _final_graph[old].size(); ++i) {
           assert(new_location[_final_graph[old][i]] <= _final_graph[old][i]);
+          _final_graph[old][i] = new_location[_final_graph[old][i]];
         }
 
         if (_support_eager_delete)
@@ -553,7 +554,7 @@ namespace diskann {
     std::ofstream out(std::string(filename), std::ios::binary | std::ios::out);
 
     if (_support_eager_delete)
-      if (_eager_done && (!_compacted_order))
+      if (_eager_done && (!_compacted_order)) {
         if (_nd < _max_points) {
           assert(_final_graph.size() == _max_points + _num_frozen_pts);
           unsigned              active = 0;
@@ -574,6 +575,7 @@ namespace diskann {
             }
           }
         }
+      }
     if (_lazy_done) {
       assert(_final_graph.size() == _max_points + _num_frozen_pts);
       if (_enable_tags) {
@@ -614,7 +616,7 @@ namespace diskann {
       unsigned new_nd = _nd + _num_frozen_pts;
       out_data.write((char *) &new_nd, sizeof(_s32));
       out_data.write((char *) &_dim, sizeof(_s32));
-      for (auto i = 0; i < _nd + _num_frozen_pts; ++i)
+      for (unsigned i = 0; i < _nd + _num_frozen_pts; ++i)
         out_data.write((char *) (_data + i * _aligned_dim), _dim * sizeof(T));
       out_data.close();
     }
@@ -706,7 +708,7 @@ namespace diskann {
     std::uniform_real_distribution<float> dist(0, 1);
     // Harsha: Should the distribution change with the distance metric?
 
-    for (auto i = 0; i < _num_frozen_pts; ++i) {
+    for (unsigned i = 0; i < _num_frozen_pts; ++i) {
       for (unsigned d = 0; d < _dim; d++)
         data[(i + _max_points) * _aligned_dim + d] = dist(generator);
       for (unsigned d = _dim; d < _aligned_dim; d++)
@@ -969,9 +971,9 @@ namespace diskann {
         std::cout << "Finished updating graph, updating data now" << std::endl;
         for (unsigned i = 0; i < _num_frozen_pts; i++) {
           memcpy((void *) (_data + (size_t) _aligned_dim * (_max_points + i)),
-                 (void *) _data + (size_t) _aligned_dim * (_nd + i),
+                 _data + (size_t) _aligned_dim * (_nd + i),
                  sizeof(float) * _dim);
-          memset((void *) (_data + (size_t) _aligned_dim * (_nd + i)), 0,
+          memset((_data + (size_t) _aligned_dim * (_nd + i)), 0,
                  sizeof(float) * _aligned_dim);
         }
         std::cout << "Readjustment done" << std::endl;
@@ -1814,7 +1816,7 @@ namespace diskann {
      * in visited list as well as in the init_ids list
      */
     while (init_ids.size() < L) {
-      unsigned id = (rand() * rand() * rand()) % _nd;
+      unsigned id = (rand()) % _nd;
       if (visited.find(id) == visited.end())
         visited.insert(id);
       else

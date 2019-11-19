@@ -17,8 +17,8 @@ namespace diskann {
   class Index {
    public:
     Index(Metric m, const char *filename, const size_t max_points = 0,
-          const size_t nd = 0, const bool enable_tags = false,
-          const bool store_data = true, const size_t num_frozen_pts = 1,
+          const size_t nd = 0, const size_t num_frozen_pts = 0,
+          const bool enable_tags = false, const bool store_data = true,
           const bool support_eager_delete = false);
     ~Index();
 
@@ -165,17 +165,17 @@ namespace diskann {
     size_t                  _neighbor_len;
 
     bool _can_delete;
+    bool _eager_done;       // true if eager deletions have been made
+    bool _lazy_done;        // true if lazy deletions have been made
+    bool _compacted_order;  // true if after eager deletions, data has been
+                            // consolidated
     bool _enable_tags;
-    bool _lazy_done;           // true if lazy deletions have been made
     bool _consolidated_order;  // true if after lazy deletions, data has been
                                // consolidated
     bool _store_data;
-    bool _eager_done;            // true if eager deletions have been made
-    bool _compacted_order;       // true if after eager deletions, data has been
-                                 // consolidated
-    bool _support_eager_delete;  //_support_eager_delete = 1 activates extra
-                                 // data structures and functions required for
-    // eager deletion
+    bool _support_eager_delete;  //_support_eager_delete = activates extra data
+                                 // structures and functions required for eager
+    // deletion
 
     std::unordered_map<TagT, unsigned> _tag_to_location;
     std::unordered_map<unsigned, TagT> _location_to_tag;
