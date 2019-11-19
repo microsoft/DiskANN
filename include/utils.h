@@ -151,7 +151,7 @@ namespace diskann {
     //    data = new T[npts_u64 * ndims_u64];
     writer.write((char *) data, npts * ndims * sizeof(T));
     writer.close();
-    std::cout << "Finished writing bin" << std::endl;
+    std::cout << "Finished writing bin." << std::endl;
   }
 
   template<typename T>
@@ -168,9 +168,6 @@ namespace diskann {
     npts = (unsigned) npts_i32;
     dim = (unsigned) dim_i32;
 
-    std::cout << "Metadata: #pts = " << npts << ", #dims = " << dim << "..."
-              << std::flush;
-
     size_t expected_actual_file_size =
         npts * dim * sizeof(T) + 2 * sizeof(uint32_t);
     if (actual_file_size != expected_actual_file_size) {
@@ -181,6 +178,9 @@ namespace diskann {
     }
 
     rounded_dim = ROUND_UP(dim, 8);
+
+    std::cout << "Metadata: #pts = " << npts << ", #dims = " << dim
+              << ", aligned_dim = " << rounded_dim << "..." << std::flush;
     size_t allocSize = npts * rounded_dim * sizeof(T);
     std::cout << "allocating aligned memory, " << allocSize << " bytes..."
               << std::flush;
@@ -192,31 +192,6 @@ namespace diskann {
       memset(data + i * rounded_dim + dim, 0, (rounded_dim - dim) * sizeof(T));
     }
     std::cout << " done." << std::endl;
-    std::cout << "Finished reading bin file." << std::endl;
-  }
-
-  template<typename T>
-  inline T *data_align(T *data_ori, size_t point_num, size_t &dim) {
-    T *data_new = nullptr;
-
-    size_t new_dim = ROUND_UP(dim, 8);
-    size_t allocSize = point_num * new_dim * sizeof(T);
-    std::cout << "Allocating aligned memory, " << allocSize << " bytes..."
-              << std::flush;
-    alloc_aligned(((void **) &data_new), allocSize, 8 * sizeof(T));
-    std::cout << "done. Copying data to aligned memory..." << std::flush;
-
-    for (size_t i = 0; i < point_num; i++) {
-      memcpy(data_new + i * (size_t) new_dim, data_ori + i * (size_t) dim,
-             dim * sizeof(float));
-      memset(data_new + i * (size_t) new_dim + dim, 0,
-             (new_dim - dim) * sizeof(float));
-    }
-    dim = new_dim;
-    std::cout << " done." << std::endl;
-    delete[] data_ori;
-
-    return data_new;
   }
 
   template<typename InType, typename OutType>
@@ -372,165 +347,6 @@ namespace diskann {
     }
   }
 
-  //  inline void write_Tvecs_unsigned(const char *fname, uint64_t *input,
-  //                                   uint64_t npts, uint64_t ndims) {
-  //    unsigned *out = new unsigned[npts * ndims];
-  //    for (uint64_t i = 0; i < npts * ndims; i++) {
-  //      out[i] = (unsigned) input[i];
-  //    }
-  //
-  //    save_Tvecs<unsigned>(fname, out, npts, ndims);
-  //    delete[] out;
-  //  }
-
-  struct OneShotIndex {
-    _u64                  medoid, width;
-    unsigned *            nsg = nullptr;
-    std::vector<unsigned> nnbrs_;
-    std::vector<_u64>     offsets;
-    _u64                  nnodes;
-
-    void read(char *filename) {
-      std::ifstream reader(filename, std::ios::binary | std::ios::ate);
-      _u64 nsg_len = reader.tellg() - (std::streamoff)(2 * sizeof(unsigned));
-      reader.seekg(0, std::ios::beg);
-      unsigned medoid_u32, width_u32;
-      reader.read((char *) &width_u32, sizeof(unsigned));
-      reader.read((char *) &medoid_u32, sizeof(unsigned));
-      medoid = (_u64) medoid_u32;
-      width = (_u64) width_u32;
-      std::cout << "Medoid: " << medoid << ", width: " << width << std::endl;
-      std::cout << "NSG Size: " << nsg_len << "B\n";
-      nsg = (unsigned *) (new char[nsg_len]);
-      reader.read((char *) nsg, nsg_len);
-
-      // compute # nodes
-      nnodes = 0;
-      _u64 cur_off = 0;
-      while (cur_off * sizeof(unsigned) < nsg_len) {
-        nnodes++;
-        unsigned cur_nnbrs_ = *(nsg + cur_off);
-        // offset to start of node nhood
-        offsets.push_back(cur_off + 1);
-        // # nbrs in nhood
-        nnbrs_.push_back(cur_nnbrs_);
-        // offset to start of next node nhood
-        cur_off += (cur_nnbrs_ + 1);
-      }
-      std::cout << "# nodes: " << nnodes << std::endl;
-    }
-
-    ~OneShotIndex() {
-      if (nsg != nullptr) {
-        delete[] nsg;
-      }
-    }
-
-    unsigned *data(_u64 idx) {
-      return (nsg + offsets[idx]);
-    }
-
-    _u64 nnbrs(_u64 idx) {
-      return nnbrs_[idx];
-    }
-
-    _u64 size() {
-      return nnodes;
-    }
-  };
-
-  template<typename Dtype, typename Mtype>
-  inline void block_load_convert_Tvecs(const char *filename, Mtype *&data,
-                                       _u64 &num, _u64 &dim) {
-    // check validity of file
-    std::ifstream in(filename, std::ios::binary);
-    if (!in.is_open()) {
-      std::cout << "Error opening file: " << filename << std::endl;
-      exit(-1);
-    }
-    _u32 dim_u32;
-    in.read((char *) &dim_u32, sizeof(unsigned));
-    in.seekg(0, std::ios::end);
-    std::ios::pos_type ss = in.tellg();
-    in.close();
-    dim = (_u64) dim_u32;
-
-    // calculate vector size
-    _u64 fsize = (_u64) ss;
-    _u64 per_row = sizeof(unsigned) + dim * sizeof(Dtype);
-    num = fsize / per_row;
-    std::cout << "# points = " << num << ", dimensions = " << dim << std::endl;
-
-    // data = new T[(size_t) num * (size_t) dim];
-    data = (Mtype *) malloc(num * dim * sizeof(Mtype));
-    memset((void *) data, 0, num * dim * sizeof(Mtype));
-
-    // block read buf
-    _u64  blk_size = 5 * 1048576;
-    char *block_read_buf = new char[per_row * blk_size];
-    _u64  n_blks = ROUND_UP(num, blk_size) / blk_size;
-    std::cout << "# blks: " << n_blks << ", blk_size: " << blk_size << "\n";
-
-    // open classical fd
-    FileHandle fd;
-#ifndef _WINDOWS
-    fd = open(filename, O_RDONLY);
-    assert(fd != -1);
-#else
-    fd = CreateFileA(filename, GENERIC_READ,
-                     0,        // no sharing
-                     nullptr,  // default security
-                     OPEN_EXISTING, FILE_FLAG_RANDOM_ACCESS, nullptr);
-    assert(fd != nullptr);
-#endif
-
-    for (_u64 blk = 0; blk < n_blks; blk++) {
-      // block stats
-      _u64 cur_blk_npts = (std::min)(num - blk * blk_size, blk_size);
-      _u64 cur_blk_offset = blk * blk_size * per_row;
-      _u64 cur_blk_size = cur_blk_npts * per_row;
-
-// read blk into block_read_buf
-#ifndef _WINDOWS
-      int ret = -1;
-      ret = pread(fd, block_read_buf, cur_blk_size, cur_blk_offset);
-#else
-      DWORD      ret = -1;
-      OVERLAPPED overlapped;
-      memset(&overlapped, 0, sizeof(overlapped));
-      overlapped.OffsetHigh =
-          (uint32_t)((cur_blk_offset & 0xFFFFFFFF00000000LL) >> 32);
-      overlapped.Offset = (uint32_t)(cur_blk_offset & 0xFFFFFFFFLL);
-      if (!ReadFile(fd, (LPVOID) block_read_buf, (DWORD) cur_blk_size, &ret,
-                    &overlapped)) {
-        std::cout << "Read file returned error: " << GetLastError()
-                  << std::endl;
-      }
-#endif
-      if ((_u64) ret != cur_blk_size) {
-        std::cout << "read=" << ret << ", expected=" << cur_blk_size;
-        exit(-1);
-      }
-#pragma omp parallel for schedule(static, 32768)
-      for (_s64 j = 0; j < cur_blk_npts; j++) {
-        Mtype *mem_vec = data + dim * (blk_size * blk + j);
-        Dtype *disk_vec =
-            (Dtype *) (block_read_buf + (per_row * j) + sizeof(unsigned));
-        for (_u64 d = 0; d < dim; d++) {
-          assert(disk_vec[d] < 32768);
-          mem_vec[d] = (Mtype) disk_vec[d];
-        }
-      }
-      std::cout << "Block #" << blk << " read\n";
-    }
-#ifndef _WINDOWS
-    close(fd);
-#else
-    CloseHandle(fd);
-#endif
-    delete[] block_read_buf;
-  }
-
   // NOTE :: good efficiency when total_vec_size is integral multiple of 64
   inline void prefetch_vector(const char *vec, size_t vecsize) {
     size_t max_prefetch_size = (vecsize / 64) * 64;
@@ -579,4 +395,24 @@ inline _u64 get_file_size(const std::string &fname) {
     reader.close();
     return end_pos;
   }
+}
+
+inline bool validate_file_size(const std::string &name) {
+  std::ifstream in(std::string(name), std::ios::binary);
+  in.seekg(0, in.end);
+  size_t actual_file_size = in.tellg();
+  in.seekg(0, in.beg);
+  size_t expected_file_size;
+  in.read((char *) &expected_file_size, sizeof(uint64_t));
+  if (actual_file_size != expected_file_size) {
+    std::cout << "Error loading" << name << ". Expected "
+                                            "size (metadata): "
+              << expected_file_size
+              << ", actual file size : " << actual_file_size << ". Exitting."
+              << std::endl;
+    in.close();
+    exit(-1);
+  }
+  in.close();
+  return 1;
 }
