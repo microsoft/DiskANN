@@ -98,42 +98,37 @@ namespace diskann {
     // called only when _eager_delete is to be supported
     void update_in_graph();
 
-    void iterate_to_fixed_point(
-      const size_t node_id, const Parameters &parameter,
-      std::vector<unsigned> &init_ids, std::vector<Neighbor> &retset,
-      std::vector<Neighbor> &fullset, tsl::robin_set<unsigned> &visited);
-    
-    void get_neighbors(const size_t node,
-                                     const Parameters &        parameter,
-                                     std::vector<Neighbor> &   retset,
-                                     std::vector<Neighbor> &   fullset,
-                                     tsl::robin_set<unsigned> &visited);
+    void iterate_to_fixed_point(const size_t node_id, const unsigned Lindex,
+                                std::vector<unsigned> &   init_ids,
+                                std::vector<Neighbor> &   retset,
+                                std::vector<Neighbor> &   fullset,
+                                tsl::robin_set<unsigned> &visited);
 
-    void inter_insert(unsigned n,
-                                    std::vector<unsigned> &pruned_list,
-                                    const Parameters &     parameter,
-                                    bool                   update_in_graph);
+    void get_neighbors(const size_t node, const unsigned Lindex,
+                       std::vector<Neighbor> &   retset,
+                       std::vector<Neighbor> &   fullset,
+                       tsl::robin_set<unsigned> &visited);
 
-    void sync_prune(const unsigned location,
-                                  std::vector<Neighbor> &pool,
-                                  const Parameters &     parameter,
-                                  std::vector<unsigned> &pruned_list);
+    void inter_insert(unsigned n, std::vector<unsigned> &pruned_list,
+                      const Parameters &parameter, bool update_in_graph);
 
-    void occlude_list(std::vector<Neighbor> &pool,
-                                    const unsigned location, const float alpha,
-                                    const unsigned degree, const unsigned maxc,
-                                    std::vector<Neighbor> &result);
+    void sync_prune(const unsigned location, std::vector<Neighbor> &pool,
+                    const Parameters &     parameter,
+                    std::vector<unsigned> &pruned_list);
 
-void occlude_list(std::vector<Neighbor> &pool,
-                                    const unsigned location, const float alpha,
-                                    const unsigned degree, const unsigned maxc,
-                                    std::vector<Neighbor> &result,
-                                    std::vector<float> &   occlude_factor);
+    void occlude_list(std::vector<Neighbor> &pool, const unsigned location,
+                      const float alpha, const unsigned degree,
+                      const unsigned maxc, std::vector<Neighbor> &result);
 
+    void occlude_list(std::vector<Neighbor> &pool, const unsigned location,
+                      const float alpha, const unsigned degree,
+                      const unsigned maxc, std::vector<Neighbor> &result,
+                      std::vector<float> &occlude_factor);
 
-  void batch_inter_insert(
-      unsigned n, const std::vector<unsigned> &pruned_list,
-      const Parameters &parameter, std::vector<unsigned> &need_to_sync);
+    void batch_inter_insert(unsigned                     n,
+                            const std::vector<unsigned> &pruned_list,
+                            const Parameters &           parameter,
+                            std::vector<unsigned> &      need_to_sync);
 
     void link(Parameters &parameters);
 
@@ -176,12 +171,12 @@ void occlude_list(std::vector<Neighbor> &pool,
     bool _compacted_order;  // true if after eager deletions, data has been
                             // consolidated
     bool _enable_tags;
-    bool _consolidated_order;  // true if after lazy deletions, data has been
-                               // consolidated
-    bool _store_data;
+    bool _consolidated_order;    // true if after lazy deletions, data has been
+                                 // consolidated
     bool _support_eager_delete;  //_support_eager_delete = activates extra data
                                  // structures and functions required for eager
     // deletion
+    bool _store_data;
 
     std::unordered_map<TagT, unsigned> _tag_to_location;
     std::unordered_map<unsigned, TagT> _location_to_tag;

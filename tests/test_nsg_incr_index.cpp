@@ -47,7 +47,8 @@ int main(int argc, char** argv) {
 
   typedef int TagT;
   diskann::Index<float, TagT> index(diskann::L2, argv[1], num_points,
-                                    num_points - num_incr, num_frozen, true, true, true);
+                                    num_points - num_incr, num_frozen, true,
+                                    true, true);
   {
     std::vector<TagT> tags(num_points - num_incr);
     std::iota(tags.begin(), tags.end(), 0);
