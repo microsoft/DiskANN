@@ -52,8 +52,9 @@ namespace NSG {
         unsigned *indices_buffer = NULL);
 
     void prefetch_vector(unsigned id);
-    
-    //repositions frozen points to the end of _data - if they have been moved during deletion
+
+    // repositions frozen points to the end of _data - if they have been moved
+    // during deletion
     void readjust_data(unsigned _num_frozen_pts);
 
     /* insertions possible only when id corresponding to tag does not already
