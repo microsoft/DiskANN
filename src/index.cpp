@@ -32,7 +32,7 @@
 #include <xmmintrin.h>
 #endif
 
-#define MAX_ALPHA 2
+#define MAX_ALPHA 3
 #define SLACK_FACTOR 1.2
 // only L2 implemented. Need to implement inner product search
 namespace {
@@ -1165,7 +1165,7 @@ namespace diskann {
     while (cur_alpha <= alpha && !pool.empty() && result.size() < range) {
       occlude_list(pool, location, cur_alpha, range, maxc, result,
                    occlude_factor);
-      cur_alpha += 0.3;
+      cur_alpha *= 1.25;
 
     }
 
