@@ -71,7 +71,7 @@ namespace diskann {
         _num_frozen_pts(num_frozen_pts),
         _support_eager_delete(support_eager_delete) {
     // data is stored to _nd * aligned_dim matrix with necessary zero-padding
-		std::cout << "Number of frozen points = " << _num_frozen_pts <<  std::endl;
+    std::cout << "Number of frozen points = " << _num_frozen_pts << std::endl;
     load_aligned_bin<T>(std::string(filename), _data, _nd, _dim, _aligned_dim);
 
     if (nd > 0) {
@@ -152,7 +152,6 @@ namespace diskann {
     _lazy_done = false;
     _eager_done = false;
     _can_delete = true;
-    //    update_in_graph();
 
     return 0;
   }
@@ -201,8 +200,7 @@ namespace diskann {
     std::vector<Neighbor>    pool, tmp;
     tsl::robin_set<unsigned> visited;
 
-    get_neighbors(id, parameters, tmp, pool,
-                  visited);
+    get_neighbors(id, parameters, tmp, pool, visited);
 
     for (unsigned i = 0; i < pool.size(); i++)
       if (pool[i].id == id) {
@@ -401,8 +399,10 @@ namespace diskann {
 
         if (_support_eager_delete)
           for (size_t i = 0; i < _in_graph[old].size(); ++i) {
-            assert(new_location[_in_graph[old][i]] <= _in_graph[old][i]);
+            if(new_location[_in_graph[old][i]] <= _in_graph[old][i])
             _in_graph[old][i] = new_location[_in_graph[old][i]];
+	   else
+		    std::cout << "Wrong new location for  " << _in_graph[old][i] << " is " << new_location[_in_graph[old][i]] << std::endl;
           }
 
         // Move the data and adj list to the correct position
@@ -532,6 +532,14 @@ namespace diskann {
           assert(_final_graph.size() == _max_points + _num_frozen_pts);
           unsigned              active = 0;
           std::vector<unsigned> new_location = get_new_location(active);
+	  std::cout << "Size of new_location = " << new_location.size() << std::endl;
+	  for(unsigned i = 0 ; i < new_location.size(); i++)
+		  if((_delete_set.find(i) == _delete_set.end()) && (new_location[i] >= _max_points + _num_frozen_pts))
+			  std::cout << "Wrong new_location assigned to  " << i << std::endl;
+		  else{
+			  if((_delete_set.find(i) != _delete_set.end()) && (new_location[i] < _max_points + _num_frozen_pts))
+				  std::cout << "Wrong location assigned to delete point  " << i << std::endl;
+		  }
           compact_data(new_location, active, _compacted_order);
 
           update_in_graph();
@@ -603,7 +611,7 @@ namespace diskann {
   template<typename T, typename TagT>
   void Index<T, TagT>::load(const char *filename, const bool load_tags) {
     validate_file_size(filename);
-    size_t   expected_file_size;
+    size_t        expected_file_size;
     std::ifstream in(filename, std::ios::binary);
     in.read((char *) &expected_file_size, sizeof(_u64));
     in.read((char *) &_width, sizeof(unsigned));
@@ -794,7 +802,8 @@ namespace diskann {
             unsigned id_next = nbrs[m + 1];
             // vec_next1: data of next neighbor
             const T *vec_next1 = _data + (size_t) id_next * _aligned_dim;
-            diskann::prefetch_vector((const char *) vec_next1, _aligned_dim * sizeof(T));
+            diskann::prefetch_vector((const char *) vec_next1,
+                                     _aligned_dim * sizeof(T));
           }
 
           if (inserted_into_pool.find(id) != inserted_into_pool.end())
@@ -829,7 +838,6 @@ namespace diskann {
     assert(!fullset.empty());
   }
 
-
   template<typename T, typename TagT>
   void Index<T, TagT>::get_neighbors(const size_t node,
                                      const Parameters &        parameter,
@@ -853,7 +861,7 @@ namespace diskann {
 
   template<typename T, typename TagT>
   void Index<T, TagT>::readjust_data(unsigned _num_frozen_pts) {
-    if (_num_frozen_pts > 0){
+    if (_num_frozen_pts > 0) {
       if (_final_graph[_max_points].empty()) {
         std::cout << "Readjusting data to correctly position frozen point"
                   << std::endl;
@@ -880,9 +888,8 @@ namespace diskann {
         }
         std::cout << "Readjustment done" << std::endl;
       }
-    }
-    else
-	    std::cout << "No frozen points. No re-adjustment required" << std::endl;
+    } else
+      std::cout << "No frozen points. No re-adjustment required" << std::endl;
   }
 
   template<typename T, typename TagT>
@@ -923,7 +930,6 @@ namespace diskann {
 
     get_neighbors(location, parameters, tmp, pool, visited);
 
-
     for (unsigned i = 0; i < pool.size(); i++)
       if (pool[i].id == location) {
         pool.erase(pool.begin() + i);
@@ -931,8 +937,7 @@ namespace diskann {
         break;
       }
 
-    sync_prune(location, pool,
-               parameters, pruned_list);
+    sync_prune(location, pool, parameters, pruned_list);
 
     assert(_final_graph.size() == _max_points + _num_frozen_pts);
 
@@ -944,14 +949,14 @@ namespace diskann {
 
     _final_graph[location].clear();
     _final_graph[location].reserve(range);
-    assert(!cut_graph.empty());
-    for (auto link : cut_graph) {
-      _final_graph[location].emplace_back(link.id);
-      if(_support_eager_delete)
-	      if (std::find(_in_graph[link.id].begin(), _in_graph[link.id].end(),
-                    location) == _in_graph[link.id].end()){
-        _in_graph[link.id].emplace_back(location);
-      }
+  assert(!pruned_list.empty());
+    for (auto link : pruned_list) {
+      _final_graph[location].emplace_back(link);
+      if (_support_eager_delete)
+        if (std::find(_in_graph[link].begin(), _in_graph[link].end(),
+                      location) == _in_graph[link].end()) {
+          _in_graph[link].emplace_back(location);
+        }
     }
 
     assert(_final_graph[location].size() <= range);

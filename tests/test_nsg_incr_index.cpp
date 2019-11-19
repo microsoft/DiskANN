@@ -47,7 +47,8 @@ int main(int argc, char** argv) {
 
   typedef int TagT;
   diskann::Index<float, TagT> index(diskann::L2, argv[1], num_points,
-                                    num_points - num_incr, num_frozen, true, true, true);
+                                    num_points - num_incr, num_frozen, true,
+                                    true, true);
   {
     std::vector<TagT> tags(num_points - num_incr);
     std::iota(tags.begin(), tags.end(), 0);
@@ -83,8 +84,8 @@ int main(int argc, char** argv) {
     index.enable_delete();
     for (auto p : delete_list)
 
-      //    if (index.eager_delete(p, paras) != 0)
-      if (index.delete_point(p) != 0)
+          if (index.eager_delete(p, paras) != 0)
+    //  if (index.delete_point(p) != 0)
         std::cerr << "Delete tag " << p << " not found" << std::endl;
 
     if (index.disable_delete(paras, true) != 0) {
