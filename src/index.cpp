@@ -794,7 +794,7 @@ namespace diskann {
     if (_num_frozen_pts > 0)
       _ep = _max_points;
     else
-      _ep = 0;
+      _ep = calculate_entry_point();
     std::cout << "done. Entry point set to " << _ep << "." << std::endl;
   }
 
