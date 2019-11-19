@@ -98,14 +98,13 @@ namespace diskann {
     // called only when _eager_delete is to be supported
     void update_in_graph();
 
-    void iterate_to_fixed_point(const size_t              node_id,
-                                const Parameters &        parameter,
+    void iterate_to_fixed_point(const size_t node_id, const unsigned Lindex,
                                 std::vector<unsigned> &   init_ids,
                                 std::vector<Neighbor> &   retset,
                                 std::vector<Neighbor> &   fullset,
                                 tsl::robin_set<unsigned> &visited);
 
-    void get_neighbors(const size_t node, const Parameters &parameter,
+    void get_neighbors(const size_t node, const unsigned Lindex,
                        std::vector<Neighbor> &   retset,
                        std::vector<Neighbor> &   fullset,
                        tsl::robin_set<unsigned> &visited);
@@ -172,12 +171,12 @@ namespace diskann {
     bool _compacted_order;  // true if after eager deletions, data has been
                             // consolidated
     bool _enable_tags;
-    bool _consolidated_order;  // true if after lazy deletions, data has been
-                               // consolidated
-    bool _store_data;
+    bool _consolidated_order;    // true if after lazy deletions, data has been
+                                 // consolidated
     bool _support_eager_delete;  //_support_eager_delete = activates extra data
                                  // structures and functions required for eager
     // deletion
+    bool _store_data;
 
     std::unordered_map<TagT, unsigned> _tag_to_location;
     std::unordered_map<unsigned, TagT> _location_to_tag;

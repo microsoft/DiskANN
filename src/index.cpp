@@ -65,11 +65,11 @@ namespace diskann {
                         const size_t nd, const size_t num_frozen_pts,
                         const bool enable_tags, const bool store_data,
                         const bool support_eager_delete)
-      : _has_built(false), _width(0), _can_delete(false), _eager_done(true),
-        _lazy_done(true), _compacted_order(true), _enable_tags(enable_tags),
-        _consolidated_order(true), _store_data(store_data),
-        _num_frozen_pts(num_frozen_pts),
-        _support_eager_delete(support_eager_delete) {
+      : _num_frozen_pts(num_frozen_pts), _has_built(false), _width(0),
+        _can_delete(false), _eager_done(true), _lazy_done(true),
+        _compacted_order(true), _enable_tags(enable_tags),
+        _consolidated_order(true), _support_eager_delete(support_eager_delete),
+        _store_data(store_data) {
     // data is stored to _nd * aligned_dim matrix with necessary zero-padding
     std::cout << "Number of frozen points = " << _num_frozen_pts << std::endl;
     load_aligned_bin<T>(std::string(filename), _data, _nd, _dim, _aligned_dim);
@@ -200,7 +200,9 @@ namespace diskann {
     std::vector<Neighbor>    pool, tmp;
     tsl::robin_set<unsigned> visited;
 
-    get_neighbors(id, parameters, tmp, pool, visited);
+    unsigned Lindex = parameters.Get<unsigned>("L");
+    get_neighbors(id, Lindex, tmp, pool, visited);
+
 
     for (unsigned i = 0; i < pool.size(); i++)
       if (pool[i].id == id) {
@@ -719,8 +721,8 @@ namespace diskann {
       std::uniform_int_distribution<size_t> dis(0, new_nd - 1);
 
       /* Put random number points as neighbours to the 10% of the nodes */
-      for (_s64 i = block * PAR_BLOCK_SZ;
-           i < (block + 1) * PAR_BLOCK_SZ && i < (_s64) new_nd; i++) {
+      for (_u64 i = (_u64) block * PAR_BLOCK_SZ;
+           i < (_u64)(block + 1) * PAR_BLOCK_SZ && i < new_nd; i++) {
         size_t             node_loc = i < _nd ? i : i - _nd + _max_points;
         std::set<unsigned> rand_set;
         while (rand_set.size() < degree && rand_set.size() < new_nd - 1) {
@@ -750,7 +752,7 @@ namespace diskann {
    */
   template<typename T, typename TagT>
   void Index<T, TagT>::iterate_to_fixed_point(
-      const size_t node_id, const Parameters &parameter,
+      const size_t node_id, const unsigned Lindex,
       std::vector<unsigned> &init_ids, std::vector<Neighbor> &retset,
       std::vector<Neighbor> &fullset, tsl::robin_set<unsigned> &visited) {
     /* compare distance of all points in init_ids with node_coords, and put the
@@ -773,15 +775,15 @@ namespace diskann {
         inserted_into_pool.insert(id);
         retset[l++] = nn;
       }
-      if (l == (retset.size() - 1))
+      if (l == Lindex)
         break;
     }
 
     /* sort retset based on distance of each point to node_coords */
     std::sort(retset.begin(), retset.begin() + l);
-    int k = 0;
-    while (k < (int) l) {
-      int nk = l;
+    unsigned k = 0;
+    while (k < l) {
+      unsigned nk = l;
 
       if (retset[k].flag) {
         retset[k].flag = false;
@@ -817,14 +819,14 @@ namespace diskann {
           //          fullset.emplace_back(nn);
           //          visited.insert(id);
           inserted_into_pool.insert(id);
-          if (dist >= retset[l - 1].distance && (l == retset.size() - 1))
+          if (dist >= retset[l - 1].distance && (l == Lindex))
             continue;
 
           // if distance is smaller than largest, add to retset, keep it
           // sorted
-          int r = InsertIntoPool(retset.data(), l, nn);
+          unsigned r = InsertIntoPool(retset.data(), l, nn);
 
-          if (l + 1 < retset.size())
+          if (l < Lindex)
             ++l;
           if (r < nk)
             nk = r;
@@ -839,24 +841,21 @@ namespace diskann {
   }
 
   template<typename T, typename TagT>
-  void Index<T, TagT>::get_neighbors(const size_t node,
-                                     const Parameters &        parameter,
+  void Index<T, TagT>::get_neighbors(const size_t node, const unsigned Lindex,
                                      std::vector<Neighbor> &   retset,
                                      std::vector<Neighbor> &   fullset,
                                      tsl::robin_set<unsigned> &visited) {
-    const unsigned L = parameter.Get<unsigned>("L");
-
-    retset.resize(L + 1);
+    retset.resize(Lindex + 1);
     std::vector<unsigned> init_ids;
-    init_ids.reserve(L);
+    init_ids.reserve(Lindex);
     init_ids.emplace_back(_ep);
-    for (uint32_t i = 0; i < (L - 1); i++) {
+    for (uint32_t i = 0; i < (Lindex - 1); i++) {
       unsigned seed = rand() % (_nd + _num_frozen_pts);
       seed = seed < _nd ? seed : seed - _nd + _max_points;
       init_ids.emplace_back(seed);
     }
 
-    iterate_to_fixed_point(node, parameter, init_ids, retset, fullset, visited);
+    iterate_to_fixed_point(node, Lindex, init_ids, retset, fullset, visited);
   }
 
   template<typename T, typename TagT>
@@ -927,8 +926,9 @@ namespace diskann {
     cut_graph.clear();
     visited.clear();
     std::vector<unsigned> pruned_list;
+    unsigned              Lindex = parameters.Get<unsigned>("L");
 
-    get_neighbors(location, parameters, tmp, pool, visited);
+    get_neighbors(location, Lindex, tmp, pool, visited);
 
     for (unsigned i = 0; i < pool.size(); i++)
       if (pool[i].id == location) {
@@ -1399,7 +1399,7 @@ namespace diskann {
           // that were checked along with their distance from n. visited
           // contains all
           // the points visited, just the ids
-          get_neighbors(node, parameters, tmp, pool, visited);
+          get_neighbors(node, L, tmp, pool, visited);
           /* check the neighbors of the query that are not part of visited,
            * check their distance to the query, and add it to pool.
            */

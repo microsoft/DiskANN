@@ -21,8 +21,7 @@ namespace diskann {
       return distance < other.distance;
     }
     inline bool operator==(const Neighbor &other) const {
-      return (id == other.id) && (distance < other.distance) &&
-             (flag == other.flag);
+      return (id == other.id);
     }
   };
 
@@ -196,9 +195,10 @@ namespace diskann {
     }
   };
 
-  static inline int InsertIntoPool(Neighbor *addr, unsigned K, Neighbor nn) {
+  static inline unsigned InsertIntoPool(Neighbor *addr, unsigned K,
+                                        Neighbor nn) {
     // find the location to insert
-    int left = 0, right = K - 1;
+    unsigned left = 0, right = K - 1;
     if (addr[left].distance > nn.distance) {
       memmove((char *) &addr[left + 1], &addr[left], K * sizeof(Neighbor));
       addr[left] = nn;
@@ -209,7 +209,7 @@ namespace diskann {
       return K;
     }
     while (left < right - 1) {
-      int mid = (left + right) / 2;
+      unsigned mid = (left + right) / 2;
       if (addr[mid].distance > nn.distance)
         right = mid;
       else
