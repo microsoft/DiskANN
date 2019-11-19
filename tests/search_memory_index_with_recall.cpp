@@ -70,7 +70,7 @@ int search_memory_index(int argc, char** argv) {
   std::cout << "Search parameters: beamwidth: " << beam_width << std::endl;
 
   diskann::load_aligned_bin<T>(query_bin, query, query_num, query_dim,
-                           query_aligned_dim);
+                               query_aligned_dim);
 
   diskann::load_bin<unsigned>(gt_ids_bin, gt_ids, gt_num, gt_dim);
   if (gt_num != query_num) {
@@ -88,7 +88,7 @@ int search_memory_index(int argc, char** argv) {
   std::vector<unsigned> start_points;
 
   diskann::Parameters paras;
-  std::string     recall_string = "Recall@" + std::to_string(recall_at);
+  std::string         recall_string = "Recall@" + std::to_string(recall_at);
   std::cout << std::setw(8) << "Ls" << std::setw(16) << "Latency"
             << std::setw(16) << recall_string << std::endl;
   std::cout << "=========================================" << std::endl;
@@ -126,7 +126,7 @@ int search_memory_index(int argc, char** argv) {
     std::string cur_result_path =
         result_output_prefix + std::to_string(L) + "_idx_uint32.bin";
     diskann::save_bin<_u32>(cur_result_path, query_result_ids[test_id].data(),
-                        query_num, recall_at);
+                            query_num, recall_at);
     test_id++;
   }
 

@@ -94,37 +94,46 @@ namespace diskann {
     unsigned calculate_entry_point();
     // generates one or more frozen points that will never get deleted from the
     // graph
-    int gen_frozen_points(T *data);
+    int generate_random_frozen_points();
     // called only when _eager_delete is to be supported
     void update_in_graph();
 
-    void iterate_to_fixed_point(const T *query, const Parameters &parameter,
-                                std::vector<unsigned> &   init_ids,
-                                std::vector<Neighbor> &   retset,
-                                std::vector<Neighbor> &   fullset,
-                                tsl::robin_set<unsigned> &visited);
-    // void compute_distances_batch(const unsigned *ids, float *dists,
-    //                             const unsigned n_pts);
-    void get_neighbors(const T *query, const Parameters &parameter,
-                       std::vector<Neighbor> &retset,
-                       std::vector<Neighbor> &fullset);
-    void get_neighbors(const T *query, const Parameters &parameter,
-                       std::vector<Neighbor> &   retset,
-                       std::vector<Neighbor> &   fullset,
-                       tsl::robin_set<unsigned> &visited);
+    void iterate_to_fixed_point(
+      const size_t node_id, const Parameters &parameter,
+      std::vector<unsigned> &init_ids, std::vector<Neighbor> &retset,
+      std::vector<Neighbor> &fullset, tsl::robin_set<unsigned> &visited);
+    
+    void get_neighbors(const size_t node,
+                                     const Parameters &        parameter,
+                                     std::vector<Neighbor> &   retset,
+                                     std::vector<Neighbor> &   fullset,
+                                     tsl::robin_set<unsigned> &visited);
 
-    void inter_insert(unsigned n, vecNgh &cut_graph,
-                      const Parameters &parameter,
-                      const bool        update_in_graph = false);
+    void inter_insert(unsigned n,
+                                    std::vector<unsigned> &pruned_list,
+                                    const Parameters &     parameter,
+                                    bool                   update_in_graph);
 
-    void sync_prune(const T *x, unsigned location, std::vector<Neighbor> &pool,
-                    const Parameters &        parameter,
-                    tsl::robin_set<unsigned> &visited, vecNgh &cut_graph);
+    void sync_prune(const unsigned location,
+                                  std::vector<Neighbor> &pool,
+                                  const Parameters &     parameter,
+                                  std::vector<unsigned> &pruned_list);
 
-    void occlude_list(const std::vector<Neighbor> &pool,
-                      const unsigned location, const float alpha,
-                      const unsigned degree, const unsigned maxc,
-                      std::vector<Neighbor> &result);
+    void occlude_list(std::vector<Neighbor> &pool,
+                                    const unsigned location, const float alpha,
+                                    const unsigned degree, const unsigned maxc,
+                                    std::vector<Neighbor> &result);
+
+void occlude_list(std::vector<Neighbor> &pool,
+                                    const unsigned location, const float alpha,
+                                    const unsigned degree, const unsigned maxc,
+                                    std::vector<Neighbor> &result,
+                                    std::vector<float> &   occlude_factor);
+
+
+  void batch_inter_insert(
+      unsigned n, const std::vector<unsigned> &pruned_list,
+      const Parameters &parameter, std::vector<unsigned> &need_to_sync);
 
     void link(Parameters &parameters);
 
@@ -143,9 +152,6 @@ namespace diskann {
     // WARNING: Do not call consolidate_deletes without acquiring change_lock_
     // Returns number of live points left after consolidation
     size_t consolidate_deletes(const Parameters &parameters);
-
-    // Computes the in degree stats from the out graph
-    void compute_in_degree_stats();
 
    private:
     size_t       _dim;

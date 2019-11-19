@@ -1,0 +1,6 @@
+Notes:
+1) Constructor does not assign frozen points. Need to do it externally
+2) Check save() function
+3) in save_function, make use of save_bin<T> instead of rewriting code
+4) load() DO NOT assume that tags is in that file. What is we specify our own tag file? 
+5) Clean up init_random_graph, and fix in_graph everywhere

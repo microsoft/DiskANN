@@ -32,6 +32,9 @@
 #include <xmmintrin.h>
 #endif
 
+#define MAX_ALPHA 2
+#define SLACK_FACTOR 1.2
+// only L2 implemented. Need to implement inner product search
 namespace {
   template<typename T>
   diskann::Distance<T> *get_distance_function();
@@ -53,8 +56,6 @@ namespace {
 }  // namespace
 
 namespace diskann {
-#define _CONTROL_NUM 100
-#define MAX_START_POINTS 100
 
   // Initialize an index with metric m, load the data of type T with filename
   // (bin), and initialize max_points
@@ -72,14 +73,12 @@ namespace diskann {
     // data is stored to _nd * aligned_dim matrix with necessary zero-padding
 		std::cout << "Number of frozen points = " << _num_frozen_pts <<  std::endl;
     load_aligned_bin<T>(std::string(filename), _data, _nd, _dim, _aligned_dim);
-    std::cout << "#points in file: " << _nd << ", dim: " << _dim
-              << ", rounded_dim: " << _aligned_dim << std::endl;
 
     if (nd > 0) {
       if (_nd >= nd)
         _nd = nd;  // Consider the first _nd points and ignore the rest.
       else {
-        std::cerr << "Error: Driver requests loading " << _nd << " points,"
+        std::cerr << "ERROR: Driver requests loading " << _nd << " points,"
                   << "but file has fewer (" << nd << ") points" << std::endl;
         exit(-1);
       }
@@ -101,7 +100,6 @@ namespace diskann {
         std::cout << "Realloc failed, killing programme" << std::endl;
         exit(-1);
       }
-      gen_frozen_points(_data);
     }
 
     this->_distance = ::get_distance_function<T>();
@@ -126,32 +124,6 @@ namespace diskann {
   Index<_u8>::~Index() {
     delete this->_distance;
     aligned_free(_data);
-  }
-
-  template<typename T, typename TagT>
-  void Index<T, TagT>::compute_in_degree_stats() {
-    std::vector<size_t> in_degrees;
-
-    size_t out_sum = 0;
-    for (unsigned i = 0; i < _max_points; ++i) {
-      if (_delete_set.find(i) == _delete_set.end() &&
-          _empty_slots.find(i) == _empty_slots.end()) {
-        out_sum += _final_graph[i].size();
-        for (auto ngh : _final_graph[i])
-          in_degrees[ngh]++;
-      }
-    }
-
-    size_t max = 0, min = SIZE_MAX, sum = 0;
-    for (const auto &deg : in_degrees) {
-      max = (std::max)(max, deg);
-      min = (std::min)(min, deg);
-      sum += deg;
-    }
-    std::cout << "Max in-degree: " << max << "   Min in-degree: " << min
-              << "   Avg. in-degree: " << (float) (sum) / (float) (_nd)
-              << "   Avg. out-degree: " << (float) (out_sum) / (float) (_nd)
-              << std::endl;
   }
 
   template<typename T, typename TagT>
@@ -229,7 +201,7 @@ namespace diskann {
     std::vector<Neighbor>    pool, tmp;
     tsl::robin_set<unsigned> visited;
 
-    get_neighbors(_data + (size_t) _aligned_dim * id, parameters, tmp, pool,
+    get_neighbors(id, parameters, tmp, pool,
                   visited);
 
     for (unsigned i = 0; i < pool.size(); i++)
@@ -615,8 +587,8 @@ namespace diskann {
       std::ofstream out_data(std::string(filename) + std::string(".data"),
                              std::ios::binary);
       unsigned new_nd = _nd + _num_frozen_pts;
-      out_data.write((char *) &new_nd, sizeof(_s32));
-      out_data.write((char *) &_dim, sizeof(_s32));
+      out_data.write((char *) &new_nd, sizeof(_u32));
+      out_data.write((char *) &_dim, sizeof(_u32));
       for (unsigned i = 0; i < _nd + _num_frozen_pts; ++i)
         out_data.write((char *) (_data + i * _aligned_dim), _dim * sizeof(T));
       out_data.close();
@@ -630,24 +602,41 @@ namespace diskann {
   // load the index if pre-computed
   template<typename T, typename TagT>
   void Index<T, TagT>::load(const char *filename, const bool load_tags) {
-    std::cout << std::endl << std::string(filename) << std::endl << std::endl;
-    std::ifstream in(std::string(filename), std::ios::binary);
-    in.seekg(0, in.end);
-    size_t expected_file_size;
-    size_t actual_file_size = in.tellg();
-    in.seekg(0, in.beg);
-    in.read((char *) &expected_file_size, sizeof(uint64_t));
-    if (actual_file_size != expected_file_size) {
-      std::cout << "Error loading Rand-NSG index. File size mismatch, expected "
-                   "size (metadata): "
-                << expected_file_size << std::endl;
-      std::cout << "Actual file size : " << actual_file_size << std::endl;
+    validate_file_size(filename);
+    size_t   expected_file_size;
+    std::ifstream in(filename, std::ios::binary);
+    in.read((char *) &expected_file_size, sizeof(_u64));
+    in.read((char *) &_width, sizeof(unsigned));
+    in.read((char *) &_ep, sizeof(unsigned));
+    std::cout << "Loading vamana index " << filename << "..." << std::flush;
+
+    size_t   cc = 0;
+    unsigned nodes = 0;
+    while (!in.eof()) {
+      unsigned k;
+      in.read((char *) &k, sizeof(unsigned));
+      if (in.eof())
+        break;
+      cc += k;
+      ++nodes;
+      std::vector<unsigned> tmp(k);
+      in.read((char *) tmp.data(), k * sizeof(unsigned));
+      _final_graph.emplace_back(tmp);
+      if (std::find(tmp.begin(), tmp.end(), nodes - 1) != tmp.end())
+        std::cout << "self-loop at " << nodes - 1 << std::endl;
+
+      if (nodes % 10000000 == 0)
+        std::cout << "." << std::flush;
+    }
+    if (_final_graph.size() != _nd) {
+      std::cout << "ERROR. mismatch in number of points. Graph has "
+                << _final_graph.size() << " points and loaded dataset has "
+                << _nd << " points. " << std::endl;
       exit(-1);
     }
 
-    in.read((char *) &_width, sizeof(unsigned));
-    in.read((char *) &_ep, sizeof(unsigned));
-    std::cout << "NSG -- width: " << _width << ", _ep: " << _ep << "\n";
+    std::cout << "..done. Index has " << nodes << " nodes and " << cc
+              << " out-edges" << std::endl;
 
     if (load_tags) {
       if (_enable_tags == false)
@@ -667,38 +656,10 @@ namespace diskann {
       tag_file.close();
       assert(id == _nd);
     }
-
-    size_t   cc = 0;
-    unsigned nodes = 0;
-    while (!in.eof()) {
-      unsigned k;
-      in.read((char *) &k, sizeof(unsigned));
-      if (in.eof())
-        break;
-      cc += k;
-      ++nodes;
-      std::vector<unsigned> tmp(k);
-      in.read((char *) tmp.data(), k * sizeof(unsigned));
-      _final_graph.emplace_back(tmp);
-      if (std::find(tmp.begin(), tmp.end(), nodes - 1) != tmp.end())
-        std::cout << "self-loop at " << nodes - 1 << std::endl;
-
-      if (nodes % 10000000 == 0)
-        std::cout << "Loaded " << nodes << " nodes, and " << cc << " neighbors"
-                  << std::endl;
-    }
-    std::cout << "Loaded index with " << nodes << " nodes, and " << cc
-              << " neighbors" << std::endl;
-    if (_final_graph.size() != _nd) {
-      std::cout << "Error. mismatch in number of points. Graph has "
-                << _final_graph.size() << " points and loaded dataset has "
-                << _nd << " points. " << std::endl;
-      exit(-1);
-    }
   }
 
   template<typename T, typename TagT>
-  int Index<T, TagT>::gen_frozen_points(T *data) {
+  int Index<T, TagT>::generate_random_frozen_points() {
     if (_has_built) {
       std::cout << "Index already built. Cannot add more points" << std::endl;
       return -1;
@@ -711,9 +672,9 @@ namespace diskann {
 
     for (unsigned i = 0; i < _num_frozen_pts; ++i) {
       for (unsigned d = 0; d < _dim; d++)
-        data[(i + _max_points) * _aligned_dim + d] = dist(generator);
+        _data[(i + _max_points) * _aligned_dim + d] = dist(generator);
       for (unsigned d = _dim; d < _aligned_dim; d++)
-        data[(i + _max_points) * _aligned_dim + d] = 0;
+        _data[(i + _max_points) * _aligned_dim + d] = 0;
     }
 
     return 0;
@@ -721,12 +682,11 @@ namespace diskann {
 
   /* init_random_graph():
    * num_points: Number of points in the dataset
-   * k: max degree of the graph
-   * mapping: initial vector of a sample of the points in the dataset
+   * degree: max degree of the graph
    */
   template<typename T, typename TagT>
-  void Index<T, TagT>::init_random_graph(unsigned k) {
-    k = (std::min)(k, (unsigned) 100);
+  void Index<T, TagT>::init_random_graph(unsigned degree) {
+    degree = (std::min)(degree, (unsigned) 100);
     unsigned new_max_points = _max_points + _num_frozen_pts;
     unsigned new_nd = _nd + _num_frozen_pts;
     _final_graph.resize(new_max_points);
@@ -748,55 +708,27 @@ namespace diskann {
          ++block) {  // GOPAL Changed from "size_t block" to "int block"
       std::random_device                    rd;
       std::mt19937                          gen(rd());
-      std::uniform_int_distribution<size_t> dis(0, _nd - 1 + _num_frozen_pts);
+      std::uniform_int_distribution<size_t> dis(0, new_nd - 1);
 
       /* Put random number points as neighbours to the 10% of the nodes */
       for (_s64 i = block * PAR_BLOCK_SZ;
-           i < (block + 1) * PAR_BLOCK_SZ && i < (_s64) _nd; i++) {
+           i < (block + 1) * PAR_BLOCK_SZ && i < (_s64) new_nd; i++) {
+        size_t             node_loc = i < _nd ? i : i - _nd + _max_points;
         std::set<unsigned> rand_set;
-        while (rand_set.size() < k && rand_set.size() < new_nd - 1) {
+        while (rand_set.size() < degree && rand_set.size() < new_nd - 1) {
           unsigned cur_pt = dis(gen);
-          if (_nd > 1) {
-            if (cur_pt != i)
-              rand_set.insert(cur_pt < _nd ? cur_pt
-                                           : cur_pt - _nd + _max_points);
-          } else
-            rand_set.insert(dis(gen));
+          if (cur_pt != i)
+            rand_set.insert(cur_pt < _nd ? cur_pt : cur_pt - _nd + _max_points);
         }
 
-        _final_graph[i].reserve(k);
+        _final_graph[node_loc].reserve(degree);
         for (auto s : rand_set)
-          _final_graph[i].emplace_back(s);
-        _final_graph[i].shrink_to_fit();
+          _final_graph[node_loc].emplace_back(s);
+        _final_graph[node_loc].shrink_to_fit();
       }
     }
 
-    if (_num_frozen_pts > 0) {
-      std::cout << "Initialising random neighbors for frozen point"
-                << std::endl;
-
-      std::random_device                    rd;
-      std::mt19937                          gen(rd());
-      std::uniform_int_distribution<size_t> dis(0, _nd - 1 + _num_frozen_pts);
-
-      std::set<unsigned> rand_set;
-      while (rand_set.size() < k && rand_set.size() < new_nd) {
-        unsigned cur_pt = dis(gen);
-        if (cur_pt != _max_points)
-          rand_set.insert(cur_pt < _nd ? cur_pt : cur_pt - _nd + _max_points);
-      }
-
-      _final_graph[_max_points].reserve(k);
-      for (auto s : rand_set)
-        _final_graph[_max_points].emplace_back(s);
-      _final_graph[_max_points].shrink_to_fit();
-    }
-
-    if (_num_frozen_pts > 0)
-      _ep = _max_points;
-    else
-      _ep = calculate_entry_point();
-    std::cout << "done. Entry point set to " << _ep << "." << std::endl;
+    std::cout << ".. done " << std::endl;
   }
 
   /* iterate_to_fixed_point():
@@ -810,36 +742,34 @@ namespace diskann {
    */
   template<typename T, typename TagT>
   void Index<T, TagT>::iterate_to_fixed_point(
-      const T *query, const Parameters &parameter,
+      const size_t node_id, const Parameters &parameter,
       std::vector<unsigned> &init_ids, std::vector<Neighbor> &retset,
       std::vector<Neighbor> &fullset, tsl::robin_set<unsigned> &visited) {
-    // put random L new ids into visited list and init_ids list
-    const unsigned L = parameter.Get<unsigned>("L");
-    while (init_ids.size() < L && init_ids.size() < _nd) {
-      unsigned id = (rand()) % _nd;
-      if (id >= _nd)
-        std::cout << "Error! Invalid id in iterate_to_fixed_point" << std::endl;
-      if (visited.find(id) != visited.end())
-        continue;
-      else
-        visited.insert(id);
-      init_ids.emplace_back(id);
-    }
-
-    unsigned l = 0;
-    Neighbor nn;
+    /* compare distance of all points in init_ids with node_coords, and put the
+     * id
+     * with distance
+     * in retset
+     */
+    const T *                node_coords = _data + _aligned_dim * node_id;
+    unsigned                 l = 0;
+    Neighbor                 nn;
+    tsl::robin_set<unsigned> inserted_into_pool;
     for (auto id : init_ids) {
-      assert(((id < _max_points + _num_frozen_pts) && (id >= _nd)) ||
-             (id < _nd));
-      retset[l++] =
-          Neighbor(id,
-                   _distance->compare(_data + _aligned_dim * (size_t) id, query,
-                                      _aligned_dim),
-                   true);
-      fullset.emplace_back(retset[l - 1]);
+      assert(id < _max_points);
+      nn = Neighbor(id,
+                    _distance->compare(_data + _aligned_dim * (size_t) id,
+                                       node_coords, _aligned_dim),
+                    true);
+      if (inserted_into_pool.find(id) == inserted_into_pool.end()) {
+        //        fullset.emplace_back(nn);
+        inserted_into_pool.insert(id);
+        retset[l++] = nn;
+      }
+      if (l == (retset.size() - 1))
+        break;
     }
 
-    /* sort retset based on distance of each point to query */
+    /* sort retset based on distance of each point to node_coords */
     std::sort(retset.begin(), retset.begin() + l);
     int k = 0;
     while (k < (int) l) {
@@ -848,6 +778,10 @@ namespace diskann {
       if (retset[k].flag) {
         retset[k].flag = false;
         unsigned n = retset[k].id;
+        if (k != node_id) {
+          fullset.emplace_back(retset[k]);
+          visited.insert(n);
+        }
 
         // prefetch _final_graph[n]
         unsigned *nbrs = _final_graph[n].data();   // nbrs: data of neighbors
@@ -860,21 +794,20 @@ namespace diskann {
             unsigned id_next = nbrs[m + 1];
             // vec_next1: data of next neighbor
             const T *vec_next1 = _data + (size_t) id_next * _aligned_dim;
-            diskann::prefetch_vector((const char *) vec_next1,
-                                     _aligned_dim * sizeof(T));
+            diskann::prefetch_vector((const char *) vec_next1, _aligned_dim * sizeof(T));
           }
 
-          if (visited.find(id) == visited.end())
-            visited.insert(id);  // if id is not in visited, add it to visited
-          else
+          if (inserted_into_pool.find(id) != inserted_into_pool.end())
             continue;
 
-          // compare distance of id with query
-          float dist =
-              _distance->compare(query, _data + _aligned_dim * (size_t) id,
-                                 (unsigned) _aligned_dim);
+          // compare distance of id with node_coords
+          float dist = _distance->compare(node_coords,
+                                          _data + _aligned_dim * (size_t) id,
+                                          (unsigned) _aligned_dim);
           Neighbor nn(id, dist, true);
-          fullset.emplace_back(nn);
+          //          fullset.emplace_back(nn);
+          //          visited.insert(id);
+          inserted_into_pool.insert(id);
           if (dist >= retset[l - 1].distance && (l == retset.size() - 1))
             continue;
 
@@ -896,18 +829,9 @@ namespace diskann {
     assert(!fullset.empty());
   }
 
-  template<typename T, typename TagT>
-  void Index<T, TagT>::get_neighbors(const T *query,
-                                     const Parameters &     parameter,
-                                     std::vector<Neighbor> &retset,
-                                     std::vector<Neighbor> &fullset) {
-    const unsigned           L = parameter.Get<unsigned>("L");
-    tsl::robin_set<unsigned> visited(10 * L);
-    get_neighbors(query, parameter, retset, fullset, visited);
-  }
 
   template<typename T, typename TagT>
-  void Index<T, TagT>::get_neighbors(const T *query,
+  void Index<T, TagT>::get_neighbors(const size_t node,
                                      const Parameters &        parameter,
                                      std::vector<Neighbor> &   retset,
                                      std::vector<Neighbor> &   fullset,
@@ -917,37 +841,14 @@ namespace diskann {
     retset.resize(L + 1);
     std::vector<unsigned> init_ids;
     init_ids.reserve(L);
-
-    std::vector<Neighbor> ep_neighbors;
-    for (auto id : _final_graph[_ep]) {
-      /*    if((id >= _nd) && (id < _max_points))
-            std::cout << "Wrong point exists in _final_graph. It should be an
-         empty slot" << std::endl;*/
-      ep_neighbors.emplace_back(
-          Neighbor(id,
-                   _distance->compare(_data + _aligned_dim * (size_t) id, query,
-                                      _aligned_dim),
-                   true));
+    init_ids.emplace_back(_ep);
+    for (uint32_t i = 0; i < (L - 1); i++) {
+      unsigned seed = rand() % (_nd + _num_frozen_pts);
+      seed = seed < _nd ? seed : seed - _nd + _max_points;
+      init_ids.emplace_back(seed);
     }
 
-    std::sort(ep_neighbors.begin(), ep_neighbors.end());
-    for (auto iter : ep_neighbors) {
-      if (init_ids.size() >= L)
-        break;
-      if (visited.find(iter.id) == visited.end()) {
-        visited.insert(iter.id);
-        fullset.emplace_back(iter);
-        init_ids.emplace_back(iter.id);
-      }
-    }
-
-    /* Before calling this function: ep_neighbors contains the list of
-     * all the neighbors of navigating node along with distance from query,
-     * init_ids contains all the ids of the neighbors of _ep, visited also
-     * contains all the ids of neighbors of _ep
-     */
-    iterate_to_fixed_point(query, parameter, init_ids, retset, fullset,
-                           visited);
+    iterate_to_fixed_point(node, parameter, init_ids, retset, fullset, visited);
   }
 
   template<typename T, typename TagT>
@@ -1018,8 +919,9 @@ namespace diskann {
     tmp.clear();
     cut_graph.clear();
     visited.clear();
+    std::vector<unsigned> pruned_list;
 
-    get_neighbors(offset_data, parameters, tmp, pool, visited);
+    get_neighbors(location, parameters, tmp, pool, visited);
 
 
     for (unsigned i = 0; i < pool.size(); i++)
@@ -1029,8 +931,8 @@ namespace diskann {
         break;
       }
 
-    sync_prune(_data + (size_t) _aligned_dim * location, location, pool,
-               parameters, visited, cut_graph);
+    sync_prune(location, pool,
+               parameters, pruned_list);
 
     assert(_final_graph.size() == _max_points + _num_frozen_pts);
 
@@ -1053,7 +955,7 @@ namespace diskann {
     }
 
     assert(_final_graph[location].size() <= range);
-    inter_insert(location, cut_graph, parameters, 1);
+    inter_insert(location, pruned_list, parameters, 1);
 
     return 0;
   }
@@ -1149,71 +1051,6 @@ namespace diskann {
     start_points.push_back(_ep);
   }
 
-  template<typename T, typename TagT>
-  void Index<T, TagT>::populate_start_points_bfs(
-      std::vector<unsigned> &start_points) {
-    // populate a visited array
-    // WARNING: DO NOT MAKE THIS A VECTOR
-    bool *visited = new bool[_nd]();
-    std::fill(visited, visited + _nd, false);
-    std::map<unsigned, std::vector<tsl::robin_set<unsigned>>> bfs_orders;
-    unsigned start_node = _ep;
-    bool     complete = false;
-    bfs_orders.insert(
-        std::make_pair(start_node, std::vector<tsl::robin_set<unsigned>>()));
-    auto &bfs_order = bfs_orders[start_node];
-    reachable_bfs(start_node, bfs_order, visited);
-
-    start_node = 0;
-    std::map<unsigned, std::vector<tsl::robin_set<unsigned>>> other_bfs_orders;
-    while (!complete) {
-      other_bfs_orders.insert(
-          std::make_pair(start_node, std::vector<tsl::robin_set<unsigned>>()));
-      auto &other_bfs_order = bfs_orders[start_node];
-      reachable_bfs(start_node, other_bfs_order, visited);
-
-      complete = true;
-      for (unsigned idx = start_node; idx < _nd; idx++) {
-        if (!visited[idx]) {
-          complete = false;
-          start_node = idx;
-          break;
-        }
-      }
-    }
-    start_points.emplace_back(_ep);
-    // process each component, add one node from each level if more than one
-    // level, else ignore
-    for (auto &k_v : bfs_orders) {
-      if (k_v.second.size() > 1) {
-        std::cout << "Using start points in component with nav-node: "
-                  << k_v.first << std::endl;
-        // add nodes from each level to `start_points`
-        for (auto &lvl : k_v.second) {
-          for (size_t i = 0; i < 10 && i < lvl.size() &&
-                             start_points.size() < MAX_START_POINTS;
-               ++i) {
-            auto   iter = lvl.begin();
-            size_t rand_offset = rand() * rand() * rand() % lvl.size();
-            for (size_t j = 0; j < rand_offset; ++j)
-              iter++;
-
-            if (std::find(start_points.begin(), start_points.end(), *iter) ==
-                start_points.end())
-              start_points.emplace_back(*iter);
-          }
-
-          if (start_points.size() == MAX_START_POINTS)
-            break;
-        }
-      }
-    }
-    std::cout << "Chose " << start_points.size() << " starting points"
-              << std::endl;
-
-    delete[] visited;
-  }
-
   /* This function finds out the navigating node, which is the medoid node
    * in the graph.
    */
@@ -1263,273 +1100,227 @@ namespace diskann {
   }
 
   template<typename T, typename TagT>
-  void Index<T, TagT>::occlude_list(const std::vector<Neighbor> &pool,
+  void Index<T, TagT>::occlude_list(std::vector<Neighbor> &pool,
                                     const unsigned location, const float alpha,
                                     const unsigned degree, const unsigned maxc,
                                     std::vector<Neighbor> &result) {
+    uint32_t           pool_size = pool.size();
+    std::vector<float> occlude_factor(pool_size, 0);
+    occlude_list(pool, location, alpha, degree, maxc, result, occlude_factor);
+  }
+
+  template<typename T, typename TagT>
+  void Index<T, TagT>::occlude_list(std::vector<Neighbor> &pool,
+                                    const unsigned location, const float alpha,
+                                    const unsigned degree, const unsigned maxc,
+                                    std::vector<Neighbor> &result,
+                                    std::vector<float> &   occlude_factor) {
+    if (pool.empty())
+      return;
     assert(std::is_sorted(pool.begin(), pool.end()));
     assert(!pool.empty());
 
-    unsigned start = (pool[0].id == location) ? 1 : 0;
-    if (start == pool.size())
-      return;
+    unsigned start = 0;
     /* put the first node in start. This will be nearest neighbor to q */
-    result.emplace_back(pool[start]);
 
-    while (result.size() < degree && (++start) < pool.size()) {
+    //    result.emplace_back(pool[start]);
+
+    while (result.size() < degree && (start) < pool.size() && start < maxc) {
       auto &p = pool[start];
-      bool  occlude = false;
-      for (unsigned t = 0; t < result.size(); t++) {
-        if (p.id == result[t].id) {
-          occlude = true;
-          break;
-        }
-        float djk = _distance->compare(
-            _data + _aligned_dim * (size_t) result[t].id,
-            _data + _aligned_dim * (size_t) p.id, (unsigned) _aligned_dim);
-        if (alpha * djk < p.distance /* dik */) {
-          occlude = true;
-          break;
-        }
+      if (occlude_factor[start] > alpha) {
+        start++;
+        continue;
       }
-      if (!occlude)
-        result.emplace_back(p);
+      occlude_factor[start] = std::numeric_limits<float>::max();
+      result.push_back(p);
+      for (unsigned t = start + 1; t < pool.size() && t < maxc; t++) {
+        if (occlude_factor[t] >= MAX_ALPHA)
+          continue;
+        float djk = _distance->compare(
+            _data + _aligned_dim * (size_t) pool[t].id,
+            _data + _aligned_dim * (size_t) p.id, (unsigned) _aligned_dim);
+        occlude_factor[t] =
+            (std::max)(occlude_factor[t], pool[t].distance / djk);
+      }
+      start++;
     }
   }
 
   template<typename T, typename TagT>
-  void Index<T, TagT>::sync_prune(const T *x, const unsigned location,
-                                  std::vector<Neighbor> &   pool,
-                                  const Parameters &        parameter,
-                                  tsl::robin_set<unsigned> &visited,
-                                  vecNgh &                  cut_graph) {
+  void Index<T, TagT>::sync_prune(const unsigned location,
+                                  std::vector<Neighbor> &pool,
+                                  const Parameters &     parameter,
+                                  std::vector<unsigned> &pruned_list) {
     unsigned range = parameter.Get<unsigned>("R");
     unsigned maxc = parameter.Get<unsigned>("C");
     float    alpha = parameter.Get<float>("alpha");
 
+    if (pool.size() == 0)
+      return;
+
     _width = (std::max)(_width, range);
-
-    /* check the neighbors of the query that are not part of visited,
-     * check their distance to the query, and add it to pool.
-     */
-    if (!_final_graph[location].empty())
-      for (auto id : _final_graph[location]) {
-        if (visited.find(id) != visited.end()) {
-          continue;
-        }
-        float dist = _distance->compare(x, _data + _aligned_dim * (size_t) id,
-                                        (unsigned) _aligned_dim);
-
-        pool.emplace_back(Neighbor(id, dist, true));
-      }
 
     // sort the pool based on distance to query
     std::sort(pool.begin(), pool.end());
 
     std::vector<Neighbor> result;
-    occlude_list(pool, location, 1.0, range, maxc, result);
+    result.reserve(range);
+    std::vector<float> occlude_factor(pool.size(), 0);
+    //    occlude_list(pool, location, 1.0, range, maxc, result,
+    //    occlude_factor);
+    //    occlude_list(pool, location, alpha, range, maxc, result);
 
     /* create new array result2 for points selected according to parameter
      * alpha,
      * which controls how aggressively occlude_list prunes the pool
      */
-    if (alpha > 1.0 && !pool.empty() && result.size() < range) {
-      std::vector<Neighbor> result2;
-      occlude_list(pool, location, 1.2, range - result.size(), maxc, result2);
+    float cur_alpha = 1;
+    while (cur_alpha <= alpha && !pool.empty() && result.size() < range) {
+      //      std::vector<Neighbor> result2;
+      //      result2.reserve(range - result.size());
+      occlude_list(pool, location, cur_alpha, range, maxc, result,
+                   occlude_factor);
+      cur_alpha *= 1.3;
 
-      // add everything from result2 to result. This will lead to duplicates
-      for (unsigned i = 0; i < result2.size(); i++) {
-        result.emplace_back(result2[i]);
-      }
+      //      for (unsigned i = 0; i < result2.size(); i++) {
+      //        result.emplace_back(result2[i]);
+      //      }
+
       // convert it into a set, so that duplicates are all removed.
-      std::set<Neighbor> s(result.begin(), result.end());
-      result.assign(s.begin(), s.end());
+      //			std::set<Neighbor> s(result.begin(), result.end());
+      //			result.assign(s.begin(), s.end());
     }
 
     /* Add all the nodes in result into a variable called cut_graph
      * So this contains all the neighbors of id location
      */
-    cut_graph.clear();
+    pruned_list.clear();
     assert(result.size() <= range);
-    for (auto iter : result)
-      cut_graph.emplace_back(SimpleNeighbor(iter.id, iter.distance));
+    for (auto iter : result) {
+      if (iter.id != location)
+        pruned_list.emplace_back(iter.id);
+    }
   }
 
-  /* Add reverse links from all the visited nodes to node n.
-  */
-
+  /* batch_inter_insert():
+   * This function tries to add reverse links from all the visited nodes to
+   * the current node n.
+   */
   template<typename T, typename TagT>
-  void Index<T, TagT>::inter_insert(unsigned n, vecNgh &cut_graph,
-                                    const Parameters &parameter,
-                                    const bool        update_in_graph) {
-    float      alpha = parameter.Get<float>("alpha");
-    const auto range = parameter.Get<float>("R");
-    const auto src_pool = cut_graph;
+  void Index<T, TagT>::batch_inter_insert(
+      unsigned n, const std::vector<unsigned> &pruned_list,
+      const Parameters &parameter, std::vector<unsigned> &need_to_sync) {
+    const auto range = parameter.Get<unsigned>("R");
+
+    // assert(!src_pool.empty());
+
+    for (auto des : pruned_list) {
+      if (des == n)
+        continue;
+      /* des.id is the id of the neighbors of n */
+      assert(des >= 0 && des < _max_points);
+      if (des > _max_points)
+        std::cout << "error. " << des << " exceeds max_pts" << std::endl;
+      /* des_pool contains the neighbors of the neighbors of n */
+
+      {
+        LockGuard guard(_locks[des]);
+        //  e   auto &des_pool = _final_graph[des];
+        if (std::find(_final_graph[des].begin(), _final_graph[des].end(), n) ==
+            _final_graph[des].end()) {
+          _final_graph[des].push_back(n);
+          if (_final_graph[des].size() > (unsigned) (range * SLACK_FACTOR))
+            need_to_sync[des] = 1;
+        }
+      }  // des lock is released by this point
+    }
+  }
+
+  /* inter_insert():
+   * This function tries to add reverse links from all the visited nodes to
+   * the current node n.
+   */
+  template<typename T, typename TagT>
+  void Index<T, TagT>::inter_insert(unsigned n,
+                                    std::vector<unsigned> &pruned_list,
+                                    const Parameters &     parameter,
+                                    bool                   update_in_graph) {
+    const auto range = parameter.Get<unsigned>("R");
+    assert(n >= 0 && n < _nd);
+    const auto &src_pool = pruned_list;
 
     assert(!src_pool.empty());
 
     for (auto des : src_pool) {
       /* des.id is the id of the neighbors of n */
-      assert(des.id >= 0 && (des.id < _max_points + _num_frozen_pts));
-
-      int dup = 0;
+      assert(des >= 0 && des < _max_points);
       /* des_pool contains the neighbors of the neighbors of n */
-      auto &des_pool = _final_graph[des.id];
-
-      std::vector<unsigned> graph_copy;
+      auto &                des_pool = _final_graph[des];
+      std::vector<unsigned> copy_of_neighbors;
+      bool                  prune_needed = false;
       {
-        LockGuard guard(_locks[des.id]);
-        for (auto nn : des_pool) {
-          assert(nn >= 0 && (nn < _max_points + _num_frozen_pts));
-
-          if (n == nn) {
-            dup = 1;
-            break;
-          }
-        }
-        if (dup)
-          continue;
-
-        if (des_pool.size() < range) {
-          if (std::find(des_pool.begin(), des_pool.end(), n) == des_pool.end())
+        LockGuard guard(_locks[des]);
+        if (std::find(des_pool.begin(), des_pool.end(), n) == des_pool.end()) {
+          if (des_pool.size() < SLACK_FACTOR * range) {
             des_pool.emplace_back(n);
-
-          if (update_in_graph) {
-            if (std::find(_in_graph[n].begin(), _in_graph[n].end(), des.id) ==
-                _in_graph[n].end())
-              _in_graph[n].emplace_back(des.id);
+            if (update_in_graph) {
+              // USE APPROPRIATE LOCKS FOR IN_GRAPH
+              if (std::find(_in_graph[n].begin(), _in_graph[n].end(), des) ==
+                  _in_graph[n].end()) {
+                _in_graph[n].emplace_back(des);
+              }
+            }
+            prune_needed = false;
+          } else {
+            copy_of_neighbors = des_pool;
+            prune_needed = true;
           }
-          continue;
         }
-
-        assert(des_pool.size() == range);
-        graph_copy = des_pool;
-        graph_copy.emplace_back(n);
-        // at this point, graph_copy contains n and neighbors of neighbor of n
       }  // des lock is released by this point
 
-      assert(graph_copy.size() == 1 + range);
-      {
-        vecNgh temp_pool;
-        for (auto node : graph_copy)
-          /* temp_pool contains distance of each node in graph_copy, from
-           * neighbor of n */
-          temp_pool.emplace_back(SimpleNeighbor(
-              node,
-              _distance->compare(_data + _aligned_dim * (size_t) node,
-                                 _data + _aligned_dim * (size_t) des.id,
-                                 (unsigned) _aligned_dim)));
-        /* sort temp_pool according to distance from neighbor of n */
-        std::sort(temp_pool.begin(), temp_pool.end());
-        for (auto iter = temp_pool.begin(); iter + 1 != temp_pool.end(); ++iter)
-          assert(iter->id != (iter + 1)->id);
-
-        std::vector<SimpleNeighbor> result;
-        result.emplace_back(temp_pool[0]);
-
-        auto iter = temp_pool.begin();
-        if (alpha > 1)
-          iter = temp_pool.erase(iter);
-        while (result.size() < range && iter != temp_pool.end()) {
-          auto &p = *iter;
-          bool  occlude = false;
-
-          for (auto r : result) {
-            if (p.id == r.id) {
-              occlude = true;
-              break;
-            }
-            float djk = _distance->compare(_data + _aligned_dim * (size_t) r.id,
-                                           _data + _aligned_dim * (size_t) p.id,
-                                           (unsigned) _aligned_dim);
-            if (djk < p.distance /* dik */) {
-              occlude = true;
-              break;
-            }
+      if (prune_needed) {
+        copy_of_neighbors.push_back(n);
+        tsl::robin_set<unsigned> dummy_visited(0);
+        std::vector<Neighbor>    dummy_pool(0);
+        for (auto cur_nbr : copy_of_neighbors) {
+          if (dummy_visited.find(cur_nbr) == dummy_visited.end() &&
+              cur_nbr != des) {
+            float dist =
+                _distance->compare(_data + _aligned_dim * (size_t) des,
+                                   _data + _aligned_dim * (size_t) cur_nbr,
+                                   (unsigned) _aligned_dim);
+            dummy_pool.emplace_back(Neighbor(cur_nbr, dist, true));
+            dummy_visited.insert(cur_nbr);
           }
-          if (!occlude)
-            result.emplace_back(p);
-          if (!occlude && alpha > 1)
-            iter = temp_pool.erase(iter);
-          else
-            ++iter;
         }
-        if (alpha > 1 && result.size() < range && !temp_pool.empty()) {
-          std::vector<SimpleNeighbor> result2;
-          result2.emplace_back(temp_pool[0]);
-          auto iter = temp_pool.begin();
-          while (result2.size() + result.size() < range &&
-                 ++iter != temp_pool.end()) {
-            auto &p = *iter;
-            bool  occlude = false;
-            for (auto r : result) {
-              if (p.id == r.id) {
-                occlude = true;
-                break;
-              }
-              float djk =
-                  _distance->compare(_data + _aligned_dim * (size_t) r.id,
-                                     _data + _aligned_dim * (size_t) p.id,
-                                     (unsigned) _aligned_dim);
-              if (alpha * djk < p.distance /* dik */) {
-                occlude = true;
-                break;
-              }
-            }
-            if (!occlude)
-              result2.emplace_back(p);
-          }
-          for (auto r2 : result2)
-            result.emplace_back(r2);
-        }
-
+        std::vector<unsigned> new_out_neighbors;
+        sync_prune(des, dummy_pool, parameter, new_out_neighbors);
         {
-          LockGuard guard(_locks[des.id]);
-          assert(result.size() <= range);
-          if (update_in_graph) {
-            for (unsigned i = 0; i < des_pool.size(); i++)
-              _in_graph[des_pool[i]].erase(
-                  std::remove(_in_graph[des_pool[i]].begin(),
-                              _in_graph[des_pool[i]].end(), des.id),
-                  _in_graph[des_pool[i]].end());
-          }
-          des_pool.clear();
-          for (auto iter : result) {
-            if (std::find(des_pool.begin(), des_pool.end(), iter.id) ==
-                des_pool.end())
-              des_pool.emplace_back(iter.id);
+          LockGuard guard(_locks[des]);
+          // DELETE IN-EDGES FROM IN_GRAPH USING APPROPRIATE LOCKS
+          _final_graph[des].clear();
+          _final_graph[des].shrink_to_fit();
+          _final_graph[des].reserve(range);
+          for (auto new_nbr : new_out_neighbors) {
+            _final_graph[des].emplace_back(new_nbr);
             if (update_in_graph) {
-              if (std::find(_in_graph[iter.id].begin(),
-                            _in_graph[iter.id].end(),
-                            des.id) == _in_graph[iter.id].end())
-                _in_graph[iter.id].emplace_back(des.id);
+              _in_graph[new_nbr].emplace_back(des);
             }
           }
         }
       }
-
-      /* At the end of this, des_pool contains all the correct neighbors of
-       * the neighbors of the query node
-       */
-      assert(des_pool.size() <= range);
-      //      for (auto iter : des_pool)
-      //        assert(iter <= _nd);  // Equality occurs when called from
-      //        insert_point
     }
   }
-
   /* Link():
    * The graph creation function.
    */
   template<typename T, typename TagT>
   void Index<T, TagT>::link(Parameters &parameters) {
     //    The graph will be updated periodically in NUM_SYNCS batches
-    uint32_t NUM_SYNCS = DIV_ROUND_UP(_nd, (128 * 1024));
-    if (_nd < (1 << 22))
-      NUM_SYNCS = 4 * NUM_SYNCS;
-    if (_nd < NUM_SYNCS) {
-      NUM_SYNCS = _nd;
-    }
+    size_t   true_num_pts = _nd + _num_frozen_pts;
+    uint32_t NUM_SYNCS = DIV_ROUND_UP(true_num_pts, (128 * 192));
+    if (NUM_SYNCS < 40)
+      NUM_SYNCS = 40;
     std::cout << "Number of syncs: " << NUM_SYNCS << std::endl;
 
     const unsigned NUM_RNDS = parameters.Get<unsigned>(
@@ -1558,156 +1349,205 @@ namespace diskann {
 
     init_random_graph(range);
 
-    if (_final_graph.size() != _max_points + _num_frozen_pts)
-      std::cerr << "Final graph wrong sized" << std::endl;
-    auto cut_graph_ = new vecNgh[_max_points + _num_frozen_pts];
+    if (_num_frozen_pts > 0)
+      _ep = _max_points;
+    else
+      _ep = calculate_entry_point();
 
     for (uint32_t rnd_no = 0; rnd_no < NUM_RNDS; rnd_no++) {
+      float  sync_time = 0, total_sync_time = 0;
+      float  inter_time = 0, total_inter_time = 0;
+      size_t inter_count = 0, total_inter_count = 0;
       // Shuffle the dataset
       std::random_shuffle(rand_perm.begin(), rand_perm.end());
       unsigned progress_counter = 0;
 
       size_t round_size = DIV_ROUND_UP(_nd, NUM_SYNCS);  // size of each batch
+      std::vector<unsigned> need_to_sync(_max_points + _num_frozen_pts, 0);
 
-      if (_num_frozen_pts > 0) {
-        std::cout << "Adding edges to frozen point" << std::endl;
+      std::vector<std::vector<Neighbor>>    sync_pool_vector(round_size);
+      std::vector<tsl::robin_set<unsigned>> sync_visited_vector(round_size);
+      std::vector<std::vector<unsigned>>    pruned_list_vector(round_size);
 
-        if (rnd_no == NUM_RNDS - 1) {
-          if (last_round_alpha > 1)
-            parameters.Set<unsigned>("L", (std::min)(L, (unsigned) 50));
-          parameters.Set<float>("alpha", last_round_alpha);
-        }
-
-        std::vector<Neighbor>    pool, tmp;
-        tsl::robin_set<unsigned> visited;
-
-        pool.clear();
-        tmp.clear();
-        visited.clear();
-
-        get_neighbors(_data + (size_t) _aligned_dim * _max_points, parameters,
-                      tmp, pool, visited);
-
-        if (visited.find(_max_points) != visited.end()) {
-          for (unsigned i = 0; i < pool.size(); i++)
-            if (pool[i].id == _max_points) {
-              pool.erase(pool.begin() + i);
-              break;
-            }
-        }
-
-        // sync_prune will check pool, and remove some of the points and
-        // create a cut_graph, which contains neighbors for point n
-        sync_prune(_data + (size_t) _aligned_dim * _max_points, _max_points,
-                   pool, parameters, visited, cut_graph_[_max_points]);
-
-        _final_graph[_max_points].clear();
-        _final_graph[_max_points].reserve(range);
-        assert(!cut_graph_[_max_points].empty());
-        for (auto link : cut_graph_[_max_points]) {
-          _final_graph[_max_points].emplace_back(link.id);
-          assert(link.id >= 0 && ((link.id < _nd) ||
-                                  (link.id >= _nd && link.id == _max_points)));
-        }
-        assert(_final_graph[_max_points].size() <= range);
-
-        inter_insert(_max_points, cut_graph_[_max_points], parameters);
-
-        assert(!cut_graph_[_max_points].empty());
-        cut_graph_[_max_points].clear();
-        cut_graph_[_max_points].shrink_to_fit();
-      }
-
-      std::cout << "Constructing rest of the graph..... " << std::endl;
       for (uint32_t sync_num = 0; sync_num < NUM_SYNCS; sync_num++) {
         if (rnd_no == NUM_RNDS - 1) {
           if (last_round_alpha > 1)
-            parameters.Set<unsigned>("L", (std::min)(L, (unsigned) 50));
-          parameters.Set<float>("alpha", last_round_alpha);
+            //            parameters.Set<unsigned>("L", (std::min)(L, (unsigned)
+            //            50));
+            parameters.Set<float>("alpha", last_round_alpha);
         }
         size_t start_id = sync_num * round_size;
-        size_t end_id = (std::min)(_nd, (sync_num + 1) * round_size);
-        size_t round_size = end_id - start_id;
+        size_t end_id = (std::min)(true_num_pts, (sync_num + 1) * round_size);
 
-        size_t PAR_BLOCK_SZ =
-            round_size > 1 << 20 ? 1 << 12 : (round_size + 256) / 256;
-        size_t nblocks = DIV_ROUND_UP(round_size, PAR_BLOCK_SZ);
+        auto s = std::chrono::high_resolution_clock::now();
 
-#pragma omp parallel for schedule(dynamic, 1)
-
-        for (_s64 block = 0; block < (_s64) nblocks;
-             ++block) {  // Gopal. changed from size_t to _s64
-          std::vector<Neighbor>    pool, tmp;
-          tsl::robin_set<unsigned> visited;
-          for (size_t n = start_id + block * PAR_BLOCK_SZ;
-               n < start_id + (std::min<size_t>) (round_size,
-                                                  (block + 1) * PAR_BLOCK_SZ);
-               ++n) {
-            pool.clear();
-            tmp.clear();
-            visited.clear();
-
-            // get nearest neighbors of n in tmp. pool contains all the points
-            // that were checked along with their distance from n. visited
-            // contains all the points visited, just the ids
-            get_neighbors(_data + (size_t) _aligned_dim * n, parameters, tmp,
-                          pool, visited);
-
-            if (visited.find(n) != visited.end()) {
-              for (unsigned i = 0; i < pool.size(); i++)
-                if (pool[i].id == n) {
-                  pool.erase(pool.begin() + i);
-                  break;
-                }
+#pragma omp parallel for schedule(dynamic, 64)
+        for (_u64 node_ctr = (_u64) start_id; node_ctr < (_u64) end_id;
+             ++node_ctr) {
+          _u64                      node = rand_perm[node_ctr];
+          size_t                    node_offset = node_ctr - start_id;
+          std::vector<Neighbor> &   pool = sync_pool_vector[node_offset];
+          std::vector<Neighbor>     tmp;
+          tsl::robin_set<unsigned> &visited = sync_visited_vector[node_offset];
+          std::vector<unsigned> &pruned_list = pruned_list_vector[node_offset];
+          // get nearest neighbors of n in tmp. pool contains all the points
+          // that were checked along with their distance from n. visited
+          // contains all
+          // the points visited, just the ids
+          get_neighbors(node, parameters, tmp, pool, visited);
+          /* check the neighbors of the query that are not part of visited,
+           * check their distance to the query, and add it to pool.
+           */
+          if (!_final_graph[node].empty())
+            for (auto id : _final_graph[node]) {
+              if (visited.find(id) == visited.end() && id != node) {
+                float dist =
+                    _distance->compare(_data + _aligned_dim * (size_t) node,
+                                       _data + _aligned_dim * (size_t) id,
+                                       (unsigned) _aligned_dim);
+                pool.emplace_back(Neighbor(id, dist, true));
+                visited.insert(id);
+              }
             }
 
-            // sync_prune will check pool, and remove some of the points and
-            // create a cut_graph, which contains neighbors for point n
-            sync_prune(_data + (size_t) _aligned_dim * n, n, pool, parameters,
-                       visited, cut_graph_[n]);
-          }
-        }
-#pragma omp parallel for schedule(static, PAR_BLOCK_SZ)
-        for (_s64 node = (_s64) start_id; node < (_s64) end_id; ++node) {
-          // clear all the neighbors of _final_graph[node]
-          _final_graph[node].clear();
-          _final_graph[node].reserve(range);
-          assert(!cut_graph_[node].empty());
-          for (auto link : cut_graph_[node]) {
-            _final_graph[node].emplace_back(link.id);
-            assert(link.id >= 0 &&
-                   ((link.id < _nd) || (link.id >= _max_points)));
-          }
-          assert(_final_graph[node].size() <= range);
+          sync_prune(node, pool, parameters, pruned_list);
+          pool.clear();
+          pool.shrink_to_fit();
+          //          tmp.clear();
+          //          tmp.shrink_to_fit();
+          //          visited.clear();
+          //          tsl::robin_set<unsigned>().swap(visited);
         }
 
-#pragma omp parallel for schedule(static, PAR_BLOCK_SZ)
-        for (_s64 n = start_id; n < (_s64) end_id; ++n) {
-          inter_insert(n, cut_graph_[n], parameters);
+        std::chrono::duration<double> diff =
+            std::chrono::high_resolution_clock::now() - s;
+        sync_time += diff.count();
+
+// sync_prune will check pool, and remove some of the points and
+// create a cut_graph, which contains neighbors for point n
+#pragma omp parallel for schedule(dynamic, 64)
+        for (_u64 node_ctr = (_u64) start_id; node_ctr < (_u64) end_id;
+             ++node_ctr) {
+          _u64                   node = rand_perm[node_ctr];
+          size_t                 node_offset = node_ctr - start_id;
+          std::vector<unsigned> &pruned_list = pruned_list_vector[node_offset];
+          _final_graph[node].clear();
+          _final_graph[node].shrink_to_fit();
+          //						_final_graph[node].reserve(range);
+          for (auto id : pruned_list)
+            _final_graph[node].emplace_back(id);
         }
+        s = std::chrono::high_resolution_clock::now();
+
+#pragma omp parallel for schedule(dynamic, 64)
+        for (_u64 node_ctr = start_id; node_ctr < (_u64) end_id; ++node_ctr) {
+          _u64                   node = rand_perm[node_ctr];
+          _u64                   node_offset = node_ctr - start_id;
+          std::vector<unsigned> &pruned_list = pruned_list_vector[node_offset];
+          tsl::robin_set<unsigned> &visited = sync_visited_vector[node_offset];
+          batch_inter_insert(node, pruned_list, parameters, need_to_sync);
+          //          batch_inter_insert(node, visited, parameters,
+          //          need_to_sync);
+          //  inter_insert(node, pruned_list, parameters);
+          pruned_list.clear();
+          pruned_list.shrink_to_fit();
+          visited.clear();
+          tsl::robin_set<unsigned>().swap(visited);
+        }
+
+#pragma omp parallel for schedule(dynamic, 64)
+        for (_u64 node_ctr = 0; node_ctr < rand_perm.size(); node_ctr++) {
+          _u64 node = rand_perm[node_ctr];
+          if (need_to_sync[node] != 0) {
+            need_to_sync[node] = 0;
+            inter_count++;
+            tsl::robin_set<unsigned> dummy_visited(0);
+            std::vector<Neighbor>    dummy_pool(0);
+            std::vector<unsigned>    new_out_neighbors;
+
+            for (auto cur_nbr : _final_graph[node]) {
+              if (dummy_visited.find(cur_nbr) == dummy_visited.end() &&
+                  cur_nbr != node) {
+                float dist =
+                    _distance->compare(_data + _aligned_dim * (size_t) node,
+                                       _data + _aligned_dim * (size_t) cur_nbr,
+                                       (unsigned) _aligned_dim);
+                dummy_pool.emplace_back(Neighbor(cur_nbr, dist, true));
+                dummy_visited.insert(cur_nbr);
+              }
+            }
+            sync_prune(node, dummy_pool, parameters, new_out_neighbors);
+
+            _final_graph[node].clear();
+            _final_graph[node].shrink_to_fit();
+            _final_graph[node].reserve(range);
+            for (auto id : new_out_neighbors)
+              _final_graph[node].emplace_back(id);
+          }
+        }
+
+        diff = std::chrono::high_resolution_clock::now() - s;
+        inter_time += diff.count();
 
         if ((sync_num * 100) / NUM_SYNCS > progress_counter) {
+          std::cout.precision(4);
           std::cout << "Completed  (round: " << rnd_no << ", sync: " << sync_num
-                    << "/" << NUM_SYNCS
-                    << ") with L=" << parameters.Get<unsigned>("L")
-                    << ",alpha=" << parameters.Get<float>("alpha") << std::endl;
+                    << "/" << NUM_SYNCS << ")" << std::endl;
+          //					std::cout<<"	with L=" << parameters.Get<unsigned>("L")
+          //                    << ",alpha=" << parameters.Get<float>("alpha")
+          //                    << ". Stats: ";
+          //					std::cout<< "sync_time=" << sync_time <<"s, inter_time="
+          //<< inter_time <<"s, inter_count=" << inter_count << std::endl;
+          total_sync_time += sync_time;
+          total_inter_time += inter_time;
+          total_inter_count += inter_count;
+          sync_time = 0;
+          inter_time = 0;
+          inter_count = 0;
           progress_counter += 5;
         }
-
-#pragma omp parallel for schedule(static, PAR_BLOCK_SZ)
-        for (_s64 n = start_id; n < (_s64) end_id;
-             ++n) {  // Gopal. from unsigned n to int n for openmp
-          auto node = n;
-          assert(!cut_graph_[node].empty());
-          cut_graph_[node].clear();
-          cut_graph_[node].shrink_to_fit();
-        }
       }
+      std::cout << "Completed Pass " << rnd_no
+                << " of data using L=" << parameters.Get<unsigned>("L")
+                << " and alpha=" << parameters.Get<float>("alpha")
+                << ". Stats: ";
+      std::cout << "sync_time=" << total_sync_time
+                << "s, inter_time=" << total_inter_time
+                << "s, inter_count=" << total_inter_count << std::endl;
     }
 
-    delete[] cut_graph_;
-  }
+    std::cout << "Starting final cleanup.." << std::flush;
+#pragma omp parallel for schedule(dynamic, 64)
+    for (_u64 node_ctr = 0; node_ctr < rand_perm.size(); node_ctr++) {
+      size_t node = rand_perm[node_ctr];
+      if (_final_graph[node].size() > range) {
+        tsl::robin_set<unsigned> dummy_visited(0);
+        std::vector<Neighbor>    dummy_pool(0);
+        std::vector<unsigned>    new_out_neighbors;
 
+        for (auto cur_nbr : _final_graph[node]) {
+          if (dummy_visited.find(cur_nbr) == dummy_visited.end() &&
+              cur_nbr != node) {
+            float dist =
+                _distance->compare(_data + _aligned_dim * (size_t) node,
+                                   _data + _aligned_dim * (size_t) cur_nbr,
+                                   (unsigned) _aligned_dim);
+            dummy_pool.emplace_back(Neighbor(cur_nbr, dist, true));
+            dummy_visited.insert(cur_nbr);
+          }
+        }
+        sync_prune(node, dummy_pool, parameters, new_out_neighbors);
+
+        _final_graph[node].clear();
+        _final_graph[node].shrink_to_fit();
+        //						_final_graph[node].reserve(range);
+        for (auto id : new_out_neighbors)
+          _final_graph[node].emplace_back(id);
+      }
+    }
+    std::cout << "done." << std::endl;
+    //    compute_graph_stats();
+  }
   template<typename T, typename TagT>
   void Index<T, TagT>::update_in_graph() {
     std::cout << "Updating in_graph.....";
@@ -1799,7 +1639,7 @@ namespace diskann {
     for (auto cur_pt : start_points)
       for (auto id : _final_graph[cur_pt]) {
         if (id >= _nd) {
-          std::cout << "Error" << id << "    Cur_pt " << cur_pt << std::endl;
+          std::cout << "ERROR" << id << "    Cur_pt " << cur_pt << std::endl;
           exit(-1);
         }
         // std::cout << "cmp: query <-> " << id << "\n";
