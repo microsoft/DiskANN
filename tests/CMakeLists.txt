@@ -9,7 +9,6 @@ else()
 	target_link_libraries(test_nsg_incr_index ${PROJECT_NAME} -ltcmalloc)
 endif()
 
-
 add_executable(build_memory_index build_memory_index.cpp)
 if(MSVC)
 	target_link_options(build_memory_index PRIVATE /MACHINE:x64)

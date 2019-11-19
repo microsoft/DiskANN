@@ -1,4 +1,4 @@
-#include <index_nsg.h>
+#include <index.h>
 #include <numeric>
 #include <omp.h>
 #include <string.h>
@@ -16,10 +16,10 @@
 #include "memory_mapper.h"
 
 int main(int argc, char** argv) {
-  if (argc != 8) {
+  if (argc != 10) {
     std::cout << "Correct usage: " << argv[0]
               << " data_file L R C alpha num_rounds "
-              << "save_graph_file  " << std::endl;
+              << "save_graph_file #incr_points #frozen_points" << std::endl;
     exit(-1);
   }
 
@@ -35,6 +35,8 @@ int main(int argc, char** argv) {
   float       alpha = (float) std::atof(argv[5]);
   unsigned    num_rnds = (unsigned) std::atoi(argv[6]);
   std::string save_path(argv[7]);
+  unsigned    num_incr = (unsigned) atoi(argv[8]);
+  unsigned    num_frozen = (unsigned) atoi(argv[9]);
 
   diskann::Parameters paras;
   paras.Set<unsigned>("L", L);
@@ -43,11 +45,7 @@ int main(int argc, char** argv) {
   paras.Set<float>("alpha", alpha);
   paras.Set<unsigned>("num_rnds", num_rnds);
 
-  num_points = 20000;
-  unsigned num_incr = 1000;
-
   typedef int TagT;
-
   diskann::Index<float, TagT> index(diskann::L2, argv[1], num_points,
                                     num_points - num_incr, true);
   {
@@ -62,27 +60,30 @@ int main(int argc, char** argv) {
   std::vector<diskann::Neighbor>       pool, tmp;
   tsl::robin_set<unsigned>             visited;
   std::vector<diskann::SimpleNeighbor> cut_graph;
+  index.readjust_data(num_frozen);
 
   {
     diskann::Timer timer;
     for (size_t i = num_points - num_incr; i < num_points; ++i) {
-      index.insert_point(data_load + i * dim, paras, pool, tmp, visited,
+      index.insert_point(data_load + i * aligned_dim, paras, pool, tmp, visited,
                          cut_graph, i);
-      std::cout << i << std::endl;
     }
     std::cout << "Incremental time: " << timer.elapsed() / 1000 << "ms\n";
-    index.save(save_path.c_str());
+    auto save_path_inc = save_path + ".inc";
+    index.save(save_path_inc.c_str());
   }
 
   tsl::robin_set<unsigned> delete_list;
   while (delete_list.size() < num_incr)
-    delete_list.insert((rand() * rand() * rand()) % num_points);
+    delete_list.insert(rand() % num_points);
   std::cout << "Deleting " << delete_list.size() << " elements" << std::endl;
 
   {
     diskann::Timer timer;
     index.enable_delete();
     for (auto p : delete_list)
+
+      //    if (index.eager_delete(p, paras) != 0)
       if (index.delete_point(p) != 0)
         std::cerr << "Delete tag " << p << " not found" << std::endl;
 
@@ -93,15 +94,22 @@ int main(int argc, char** argv) {
     std::cout << "Delete time: " << timer.elapsed() / 1000 << "ms\n";
   }
 
+  auto save_path_del = save_path + ".del";
+  index.save(save_path_del.c_str());
+
+  index.readjust_data(num_frozen);
+  std::cout << "Beginning reinsertion of points now" << std::endl;
   {
     diskann::Timer timer;
-    for (auto p : delete_list)
-      index.insert_point(data_load + (size_t) p * (size_t) dim, paras, pool,
-                         tmp, visited, cut_graph, p);
+    for (auto p : delete_list) {
+      index.insert_point(data_load + (size_t) p * (size_t) aligned_dim, paras,
+                         pool, tmp, visited, cut_graph, p);
+    }
     std::cout << "Re-incremental time: " << timer.elapsed() / 1000 << "ms\n";
-    auto save_path_reinc = save_path + ".reinc";
-    index.save(save_path_reinc.c_str());
   }
+
+  auto save_path_reinc = save_path + ".reinc";
+  index.save(save_path_reinc.c_str());
 
   delete[] data_load;
 

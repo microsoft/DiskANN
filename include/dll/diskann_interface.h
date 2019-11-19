@@ -1,6 +1,6 @@
 #pragma once
 #include "IANNIndex.h"
-#include "pq_flash_index_nsg.h"
+#include "pq_flash_index.h"
 #include "windows_customizations.h"
 
 namespace diskann {
@@ -9,12 +9,12 @@ namespace diskann {
   class Index;
 
   template<typename T>
-  class NSGInterface : public ANNIndex::IANNIndex {
+  class DiskANNInterface : public ANNIndex::IANNIndex {
    public:
-    DISKANN_DLLEXPORT NSGInterface(unsigned __int32       dimension,
-                                   ANNIndex::DistanceType distanceType);
+    DISKANN_DLLEXPORT DiskANNInterface(unsigned __int32       dimension,
+                                       ANNIndex::DistanceType distanceType);
 
-    DISKANN_DLLEXPORT virtual ~NSGInterface();
+    DISKANN_DLLEXPORT virtual ~DiskANNInterface();
 
     // In implementation, the file path can be a file or folder.
     DISKANN_DLLEXPORT virtual bool BuildIndex(const char* dataFilePath,

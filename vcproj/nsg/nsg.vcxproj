@@ -19,7 +19,7 @@
     </ProjectConfiguration>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="..\..\src\pq_flash_index_nsg.cpp">
+    <ClCompile Include="..\..\src\pq_flash_index.cpp">
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
     </ClCompile>
     <ClCompile Include="..\..\src\windows_aligned_file_reader.cpp" />
@@ -28,7 +28,7 @@
   <ItemGroup>
     <ClInclude Include="..\..\include\efanna2e\distance.h" />
     <ClInclude Include="..\..\include\efanna2e\neighbor.h" />
-    <ClInclude Include="..\..\include\efanna2e\pq_flash_index_nsg.h" />
+    <ClInclude Include="..\..\include\efanna2e\pq_flash_index.h" />
     <ClInclude Include="..\..\include\efanna2e\pq_table.h" />
     <ClInclude Include="..\..\include\tsl\robin_growth_policy.h" />
     <ClInclude Include="..\..\include\tsl\robin_hash.h" />

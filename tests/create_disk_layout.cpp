@@ -5,8 +5,8 @@
 #include <iostream>
 #include <limits>
 #include <vector>
-#include <pq_flash_index_nsg.h>
-#include <index_nsg.h>
+#include <pq_flash_index.h>
+#include <index.h>
 #include "cached_io.h"
 
 template<typename T>

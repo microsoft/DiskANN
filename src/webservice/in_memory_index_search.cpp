@@ -1,5 +1,5 @@
 #include <cosine_similarity.h>
-#include <webservice/in_memory_nsg_search.h>
+#include <webservice/in_memory_index_search.h>
 #include <ctime>
 #include <iomanip>
 #include "util.h"
@@ -11,7 +11,7 @@ namespace diskann {
   const unsigned int DEFAULT_L = 704;
 
 
-  InMemoryNSGSearch::InMemoryNSGSearch(const char* baseFile,
+  InMemoryIndexSearch::InMemoryIndexSearch(const char* baseFile,
                                        const char* indexFile,
                                        const char* idsFile, Metric m)
       : _baseVectors(nullptr) {
@@ -22,7 +22,7 @@ namespace diskann {
     _ids = load_ids(idsFile);
   }
 
-  NSGSearchResult InMemoryNSGSearch::search(const float*       query,
+  IndexSearchResult InMemoryIndexSearch::search(const float*       query,
                                             const unsigned int dimensions,
                                             const unsigned int K) {
     std::vector<unsigned int> start_points;
@@ -40,7 +40,7 @@ namespace diskann {
 
     // indices has the indexes of the results. Select the results from the
     // ids_vector.
-    NSGSearchResult searchResult(K, (unsigned int) duration);
+    IndexSearchResult searchResult(K, (unsigned int) duration);
     std::for_each(indices, indices + K, [&](const unsigned int& index) {
       searchResult.addResult(_ids[index]);
       searchResult.finalResultIndices.push_back(index); //TEMPORARY FOR IDENTIFYING RECALL
@@ -56,10 +56,10 @@ namespace diskann {
     return searchResult;
   }
 
-  InMemoryNSGSearch::~InMemoryNSGSearch() {
+  InMemoryIndexSearch::~InMemoryIndexSearch() {
   }
 
-  void InMemoryNSGSearch::load_data(const char* filename, float*& data,
+  void InMemoryIndexSearch::load_data(const char* filename, float*& data,
                                     unsigned& num, unsigned& dim) {
     std::ifstream in(filename, std::ios::binary);
     if (!in.is_open()) {
@@ -85,7 +85,7 @@ namespace diskann {
     in.close();
   }
 
-  std::vector<std::wstring> InMemoryNSGSearch::load_ids(const char* idsFile) {
+  std::vector<std::wstring> InMemoryIndexSearch::load_ids(const char* idsFile) {
     std::wifstream            in(idsFile);
     std::vector<std::wstring> ids;
 

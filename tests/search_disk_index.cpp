@@ -1,9 +1,9 @@
 //#include <distances.h>
 //#include <indexing.h>
-#include <index_nsg.h>
+#include <index.h>
 #include <math_utils.h>
 #include <omp.h>
-#include <pq_flash_index_nsg.h>
+#include <pq_flash_index.h>
 #include <string.h>
 #include <time.h>
 #include <atomic>

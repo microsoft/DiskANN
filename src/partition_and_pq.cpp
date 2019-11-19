@@ -12,7 +12,7 @@
 #include <sstream>
 #include <string>
 #include "exceptions.h"
-#include "index_nsg.h"
+#include "index.h"
 #include "parameters.h"
 #include "tsl/robin_set.h"
 #include "utils.h"

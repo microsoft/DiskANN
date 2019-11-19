@@ -1,4 +1,4 @@
-#include "pq_flash_index_nsg.h"
+#include "pq_flash_index.h"
 #include <malloc.h>
 #include "percentile_stats.h"
 

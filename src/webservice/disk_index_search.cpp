@@ -1,5 +1,5 @@
 #include <cosine_similarity.h>
-#include <webservice/disk_nsg_search.h>
+#include <webservice/disk_index_search.h>
 #include <ctime>
 #include <iomanip>
 #include "utils.h"
@@ -10,7 +10,7 @@ namespace diskann {
   // const unsigned int MAX_L = 300;
   const unsigned int DEFAULT_L = 704;
 
-  DiskNSGSearch::DiskNSGSearch(const char* indexFilePrefix, const char* idsFile,
+  DiskIndexSearch::DiskIndexSearch(const char* indexFilePrefix, const char* idsFile,
                                const _u64 cache_nlevels, const _u64 nthreads) {
     this->cosine_distance = new DistanceCosine<float>();
 
@@ -43,7 +43,7 @@ namespace diskann {
               << stars << "\n";
 
     // create object
-    _pFlashIndex.reset(new PQFlashNSG<float>());
+    _pFlashIndex.reset(new PQFlashIndex<float>());
 
     // load index
     _pFlashIndex->load(data_bin.c_str(), nsg_disk_opt.c_str(),
@@ -61,7 +61,7 @@ namespace diskann {
     _ids = load_ids(idsFile);
   }
 
-  NSGSearchResult DiskNSGSearch::search(const float*       query,
+  NSGSearchResult DiskIndexSearch::search(const float*       query,
                                         const unsigned int dimensions,
                                         const unsigned int K) {
     std::vector<unsigned int> start_points;
@@ -93,11 +93,11 @@ namespace diskann {
     return searchResult;
   }
 
-  DiskNSGSearch::~DiskNSGSearch() {
+  DiskIndexSearch::~DiskIndexSearch() {
     delete this->cosine_distance;
   }
 
-  std::vector<std::wstring> DiskNSGSearch::load_ids(const char* idsFile) {
+  std::vector<std::wstring> DiskIndexSearch::load_ids(const char* idsFile) {
     std::wifstream            in(idsFile);
     std::vector<std::wstring> ids;
 

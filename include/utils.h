@@ -195,32 +195,29 @@ namespace diskann {
     std::cout << "Finished reading bin file." << std::endl;
   }
 
-  /*
-    template<typename T>
-    inline T *data_align(T *data_ori, size_t point_num, size_t &dim) {
-      T *data_new = nullptr;
+  template<typename T>
+  inline T *data_align(T *data_ori, size_t point_num, size_t &dim) {
+    T *data_new = nullptr;
 
-      size_t new_dim = ROUND_UP(dim, 8);
-      size_t allocSize = point_num * new_dim * sizeof(T);
-      std::cout << "Allocating aligned memory, " << allocSize << " bytes..."
-                << std::flush;
-      alloc_aligned(((void **) &data_new), allocSize, 8 * sizeof(T));
-      std::cout << "done. Copying data to aligned memory..." << std::flush;
+    size_t new_dim = ROUND_UP(dim, 8);
+    size_t allocSize = point_num * new_dim * sizeof(T);
+    std::cout << "Allocating aligned memory, " << allocSize << " bytes..."
+              << std::flush;
+    alloc_aligned(((void **) &data_new), allocSize, 8 * sizeof(T));
+    std::cout << "done. Copying data to aligned memory..." << std::flush;
 
-      for (size_t i = 0; i < point_num; i++) {
-        memcpy(data_new + i * (size_t) new_dim, data_ori + i * (size_t) dim,
-               dim * sizeof(float));
-        memset(data_new + i * (size_t) new_dim + dim, 0,
-               (new_dim - dim) * sizeof(float));
-      }
-      dim = new_dim;
-      std::cout << " done." << std::endl;
-      delete[] data_ori;
-
-      return data_new;
+    for (size_t i = 0; i < point_num; i++) {
+      memcpy(data_new + i * (size_t) new_dim, data_ori + i * (size_t) dim,
+             dim * sizeof(float));
+      memset(data_new + i * (size_t) new_dim + dim, 0,
+             (new_dim - dim) * sizeof(float));
     }
+    dim = new_dim;
+    std::cout << " done." << std::endl;
+    delete[] data_ori;
 
-    */
+    return data_new;
+  }
 
   template<typename InType, typename OutType>
   void convert_types(const InType *srcmat, OutType *destmat, size_t npts,

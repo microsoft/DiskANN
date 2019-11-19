@@ -1,8 +1,9 @@
-#include <index_nsg.h>
+#include <index.h>
 #include <omp.h>
 #include <string.h>
 #include <cstring>
 #include <iomanip>
+#include <set>
 #include "utils.h"
 #ifndef _WINDOWS
 #include <sys/mman.h>
@@ -51,6 +52,7 @@ int search_memory_index(int argc, char** argv) {
   std::cout << "Index loaded" << std::endl;
 
   std::vector<unsigned> start_points;
+  index.populate_start_points_ep(start_points);
 
   diskann::Parameters paras;
   std::cout << std::setw(8) << "Ls" << std::setw(16) << "Latency" << std::endl;
@@ -73,6 +75,7 @@ int search_memory_index(int argc, char** argv) {
     auto e = std::chrono::high_resolution_clock::now();
 
     std::chrono::duration<double> diff = e - s;
+
     float latency = (diff.count() / query_num) * (1000000);
 
     std::cout << std::setw(8) << L << std::setw(16) << latency << std::endl;
@@ -98,7 +101,8 @@ int main(int argc, char** argv) {
               << " <index_type[float/int8/uint8]>  <full_data_bin>  "
                  "<memory_index_path>  "
                  "<query_bin> "
-                 "<recall@> <beam_width> <result_output_prefix> <L1> <L2> ... "
+                 "<recall@> <beam_width> <result_output_prefix> <L1> "
+                 "<L2> ... "
               << std::endl;
     exit(-1);
   }

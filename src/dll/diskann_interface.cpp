@@ -5,8 +5,8 @@
 #include <string>
 #include <vector>
 
-#include "dll/nsg_interface.h"
-#include "index_nsg.h"
+#include "dll/diskann_interface.h"
+#include "index.h"
 #include "partition_and_pq.h"
 #include "utils.h"
 
@@ -14,8 +14,8 @@ namespace diskann {
 
 #define TRAINING_SET_SIZE 2000000
   template<typename T>
-  __cdecl NSGInterface<T>::NSGInterface(unsigned __int32       dimension,
-                                        ANNIndex::DistanceType distanceType)
+  __cdecl DiskANNInterface<T>::DiskANNInterface(
+      unsigned __int32 dimension, ANNIndex::DistanceType distanceType)
       : ANNIndex::IANNIndex(dimension, distanceType), _pNsgIndex(nullptr) {
     if (distanceType == ANNIndex::DT_L2) {
       _compareMetric = diskann::Metric::L2;
@@ -28,14 +28,14 @@ namespace diskann {
   }  // namespace diskann
 
   template<typename T>
-  NSGInterface<T>::~NSGInterface<T>() {
+  DiskANNInterface<T>::~DiskANNInterface<T>() {
   }
 
   template<typename T>
   // In implementation, the file path can be a file or folder.
-  bool NSGInterface<T>::BuildIndex(const char* dataFilePath,
-                                   const char* indexFilePath,
-                                   const char* indexBuildParameters) {
+  bool DiskANNInterface<T>::BuildIndex(const char* dataFilePath,
+                                       const char* indexFilePath,
+                                       const char* indexBuildParameters) {
     std::stringstream parser;
     parser << std::string(indexBuildParameters);
     std::string              cur_param;
@@ -112,8 +112,8 @@ namespace diskann {
 
   template<typename T>
   // Load index form file.
-  bool NSGInterface<T>::LoadIndex(const char* indexFilePath,
-                                  const char* queryParameters) {
+  bool DiskANNInterface<T>::LoadIndex(const char* indexFilePath,
+                                      const char* queryParameters) {
     std::stringstream parser;
     parser << std::string(queryParameters);
     std::string              cur_param;
@@ -164,11 +164,11 @@ namespace diskann {
   // And need to be allocated by invoker, which capacity should be greater
   // than [queryCount * neighborCount].
   template<typename T>
-  void NSGInterface<T>::SearchIndex(const char*       vector,
-                                    unsigned __int64  queryCount,
-                                    unsigned __int64  neighborCount,
-                                    float*            distances,
-                                    unsigned __int64* ids) const {
+  void DiskANNInterface<T>::SearchIndex(const char*       vector,
+                                        unsigned __int64  queryCount,
+                                        unsigned __int64  neighborCount,
+                                        float*            distances,
+                                        unsigned __int64* ids) const {
     //    _u64      L = 6 * neighborCount;
     std::cout << this->aligned_dimension << " is aligned dimension "
               << std::endl;
@@ -185,20 +185,20 @@ namespace diskann {
 
   extern "C" __declspec(dllexport) ANNIndex::IANNIndex* CreateObjectFloat(
       unsigned __int32 dimension, ANNIndex::DistanceType distanceType) {
-    return new diskann::NSGInterface<float>(dimension, distanceType);
+    return new diskann::DiskANNInterface<float>(dimension, distanceType);
   }
 
   extern "C" __declspec(dllexport) void ReleaseObjectFloat(
       ANNIndex::IANNIndex* object) {
-    diskann::NSGInterface<float>* subclass =
-        dynamic_cast<diskann::NSGInterface<float>*>(object);
+    diskann::DiskANNInterface<float>* subclass =
+        dynamic_cast<diskann::DiskANNInterface<float>*>(object);
     if (subclass != nullptr) {
       delete subclass;
     }
   }
 
-  template class NSGInterface<int8_t>;
-  template class NSGInterface<float>;
-  template class NSGInterface<uint8_t>;
+  template class DiskANNInterface<int8_t>;
+  template class DiskANNInterface<float>;
+  template class DiskANNInterface<uint8_t>;
 
 }  // namespace diskann

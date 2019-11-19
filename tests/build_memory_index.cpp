@@ -2,7 +2,7 @@
 // Created by 付聪 on 2017/6/21.
 //
 
-#include <index_nsg.h>
+#include <index.h>
 #include <omp.h>
 #include <string.h>
 #include "utils.h"

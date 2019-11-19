@@ -1,4 +1,4 @@
-add_library(nsg_dll SHARED dllmain.cpp nsg_interface.cpp ../partition_and_pq.cpp ../pq_flash_index_nsg.cpp ../windows_aligned_file_reader.cpp ../memory_mapper.cpp ../index_nsg.cpp ../math_utils.cpp)
+add_library(nsg_dll SHARED dllmain.cpp nsg_interface.cpp ../partition_and_pq.cpp ../pq_flash_index.cpp ../windows_aligned_file_reader.cpp ../memory_mapper.cpp ../index.cpp ../math_utils.cpp)
 if (MSVC)
 	add_definitions(-D_USRDLL -D_WINDLL)
 	add_compile_options(/MD)
