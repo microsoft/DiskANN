@@ -47,7 +47,7 @@ int main(int argc, char** argv) {
 
   typedef int TagT;
   diskann::Index<float, TagT> index(diskann::L2, argv[1], num_points,
-                                    num_points - num_incr, true);
+                                    num_points - num_incr, num_frozen, true, true, true);
   {
     std::vector<TagT> tags(num_points - num_incr);
     std::iota(tags.begin(), tags.end(), 0);
@@ -98,7 +98,6 @@ int main(int argc, char** argv) {
   index.save(save_path_del.c_str());
 
   index.readjust_data(num_frozen);
-  std::cout << "Beginning reinsertion of points now" << std::endl;
   {
     diskann::Timer timer;
     for (auto p : delete_list) {
