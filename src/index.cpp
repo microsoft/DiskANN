@@ -152,7 +152,6 @@ namespace diskann {
     _lazy_done = false;
     _eager_done = false;
     _can_delete = true;
-    //    update_in_graph();
 
     return 0;
   }
@@ -203,6 +202,7 @@ namespace diskann {
 
     unsigned Lindex = parameters.Get<unsigned>("L");
     get_neighbors(id, Lindex, tmp, pool, visited);
+
 
     for (unsigned i = 0; i < pool.size(); i++)
       if (pool[i].id == id) {
@@ -401,8 +401,10 @@ namespace diskann {
 
         if (_support_eager_delete)
           for (size_t i = 0; i < _in_graph[old].size(); ++i) {
-            assert(new_location[_in_graph[old][i]] <= _in_graph[old][i]);
+            if(new_location[_in_graph[old][i]] <= _in_graph[old][i])
             _in_graph[old][i] = new_location[_in_graph[old][i]];
+	   else
+		    std::cout << "Wrong new location for  " << _in_graph[old][i] << " is " << new_location[_in_graph[old][i]] << std::endl;
           }
 
         // Move the data and adj list to the correct position
@@ -532,6 +534,14 @@ namespace diskann {
           assert(_final_graph.size() == _max_points + _num_frozen_pts);
           unsigned              active = 0;
           std::vector<unsigned> new_location = get_new_location(active);
+	  std::cout << "Size of new_location = " << new_location.size() << std::endl;
+	  for(unsigned i = 0 ; i < new_location.size(); i++)
+		  if((_delete_set.find(i) == _delete_set.end()) && (new_location[i] >= _max_points + _num_frozen_pts))
+			  std::cout << "Wrong new_location assigned to  " << i << std::endl;
+		  else{
+			  if((_delete_set.find(i) != _delete_set.end()) && (new_location[i] < _max_points + _num_frozen_pts))
+				  std::cout << "Wrong location assigned to delete point  " << i << std::endl;
+		  }
           compact_data(new_location, active, _compacted_order);
 
           update_in_graph();
@@ -938,13 +948,13 @@ namespace diskann {
 
     _final_graph[location].clear();
     _final_graph[location].reserve(range);
-    assert(!cut_graph.empty());
-    for (auto link : cut_graph) {
-      _final_graph[location].emplace_back(link.id);
+  assert(!pruned_list.empty());
+    for (auto link : pruned_list) {
+      _final_graph[location].emplace_back(link);
       if (_support_eager_delete)
-        if (std::find(_in_graph[link.id].begin(), _in_graph[link.id].end(),
-                      location) == _in_graph[link.id].end()) {
-          _in_graph[link.id].emplace_back(location);
+        if (std::find(_in_graph[link].begin(), _in_graph[link].end(),
+                      location) == _in_graph[link].end()) {
+          _in_graph[link].emplace_back(location);
         }
     }
 
