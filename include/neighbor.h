@@ -208,7 +208,7 @@ namespace diskann {
       addr[K] = nn;
       return K;
     }
-    while (left < right - 1) {
+    while (right > 1 && left < right - 1) {
       unsigned mid = (left + right) / 2;
       if (addr[mid].distance > nn.distance)
         right = mid;
@@ -231,4 +231,4 @@ namespace diskann {
     addr[right] = nn;
     return right;
   }
-}  // namespace diskann
+}  // namespace diskann     

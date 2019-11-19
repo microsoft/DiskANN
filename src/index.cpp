@@ -750,6 +750,7 @@ namespace diskann {
      * with distance
      * in retset
      */
+
     const T *                node_coords = _data + _aligned_dim * node_id;
     unsigned                 l = 0;
     Neighbor                 nn;
@@ -815,7 +816,6 @@ namespace diskann {
           // if distance is smaller than largest, add to retset, keep it
           // sorted
           unsigned r = InsertIntoPool(retset.data(), l, nn);
-
           if (l < Lindex)
             ++l;
           if (r < nk)
@@ -839,12 +839,11 @@ namespace diskann {
     std::vector<unsigned> init_ids;
     init_ids.reserve(Lindex);
     init_ids.emplace_back(_ep);
-    for (uint32_t i = 0; i < (Lindex - 1); i++) {
-      unsigned seed = rand() % (_nd + _num_frozen_pts);
-      seed = seed < _nd ? seed : seed - _nd + _max_points;
-      init_ids.emplace_back(seed);
-    }
-
+        for (uint32_t i = 0; i < (Lindex - 1); i++) {
+          unsigned seed = rand() % (_nd + _num_frozen_pts);
+          seed = seed < _nd ? seed : seed - _nd + _max_points;
+          init_ids.emplace_back(seed);
+        }
     iterate_to_fixed_point(node, Lindex, init_ids, retset, fullset, visited);
   }
 
@@ -1161,29 +1160,13 @@ namespace diskann {
     std::vector<Neighbor> result;
     result.reserve(range);
     std::vector<float> occlude_factor(pool.size(), 0);
-    //    occlude_list(pool, location, 1.0, range, maxc, result,
-    //    occlude_factor);
-    //    occlude_list(pool, location, alpha, range, maxc, result);
-
-    /* create new array result2 for points selected according to parameter
-     * alpha,
-     * which controls how aggressively occlude_list prunes the pool
-     */
+    
     float cur_alpha = 1;
     while (cur_alpha <= alpha && !pool.empty() && result.size() < range) {
-      //      std::vector<Neighbor> result2;
-      //      result2.reserve(range - result.size());
       occlude_list(pool, location, cur_alpha, range, maxc, result,
                    occlude_factor);
-      cur_alpha *= 1.3;
+      cur_alpha += 0.3;
 
-      //      for (unsigned i = 0; i < result2.size(); i++) {
-      //        result.emplace_back(result2[i]);
-      //      }
-
-      // convert it into a set, so that duplicates are all removed.
-      //			std::set<Neighbor> s(result.begin(), result.end());
-      //			result.assign(s.begin(), s.end());
     }
 
     /* Add all the nodes in result into a variable called cut_graph
@@ -1367,15 +1350,12 @@ namespace diskann {
       for (uint32_t sync_num = 0; sync_num < NUM_SYNCS; sync_num++) {
         if (rnd_no == NUM_RNDS - 1) {
           if (last_round_alpha > 1)
-            //            parameters.Set<unsigned>("L", (std::min)(L, (unsigned)
-            //            50));
             parameters.Set<float>("alpha", last_round_alpha);
         }
         size_t start_id = sync_num * round_size;
         size_t end_id = (std::min)(true_num_pts, (sync_num + 1) * round_size);
 
         auto s = std::chrono::high_resolution_clock::now();
-
 #pragma omp parallel for schedule(dynamic, 64)
         for (_u64 node_ctr = (_u64) start_id; node_ctr < (_u64) end_id;
              ++node_ctr) {
@@ -1404,16 +1384,10 @@ namespace diskann {
                 visited.insert(id);
               }
             }
-
           sync_prune(node, pool, parameters, pruned_list);
           pool.clear();
           pool.shrink_to_fit();
-          //          tmp.clear();
-          //          tmp.shrink_to_fit();
-          //          visited.clear();
-          //          tsl::robin_set<unsigned>().swap(visited);
         }
-
         std::chrono::duration<double> diff =
             std::chrono::high_resolution_clock::now() - s;
         sync_time += diff.count();
@@ -1488,11 +1462,6 @@ namespace diskann {
           std::cout.precision(4);
           std::cout << "Completed  (round: " << rnd_no << ", sync: " << sync_num
                     << "/" << NUM_SYNCS << ")" << std::endl;
-          //					std::cout<<"	with L=" << parameters.Get<unsigned>("L")
-          //                    << ",alpha=" << parameters.Get<float>("alpha")
-          //                    << ". Stats: ";
-          //					std::cout<< "sync_time=" << sync_time <<"s, inter_time="
-          //<< inter_time <<"s, inter_count=" << inter_count << std::endl;
           total_sync_time += sync_time;
           total_inter_time += inter_time;
           total_inter_count += inter_count;
