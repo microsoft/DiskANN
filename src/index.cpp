@@ -1778,21 +1778,21 @@ namespace diskann {
   template DISKANN_DLLEXPORT class Index<uint8_t>;
 
 #ifdef _WINDOWS
-  template DISKANN_DLLEXPORT Index<uint8_t, int>::Index(Metric m,
-                                                        const char * filename,
-                                                        const size_t max_points,
-                                                        const size_t nd,
-                                                        const bool enable_tags);
-  template DISKANN_DLLEXPORT Index<int8_t, int>::Index(Metric m,
-                                                       const char * filename,
-                                                       const size_t max_points,
-                                                       const size_t nd,
-                                                       const bool enable_tags);
-  template DISKANN_DLLEXPORT Index<float, int>::Index(Metric m,
-                                                      const char * filename,
-                                                      const size_t max_points,
-                                                      const size_t nd,
-                                                      const bool   enable_tags);
+  template DISKANN_DLLEXPORT Index<uint8_t, int>::Index(Metric m, const char *filename, const size_t max_points,
+
+                        const size_t nd, const size_t num_frozen_pts,
+                        const bool enable_tags, const bool store_data,
+                        const bool support_eager_delete);
+  template DISKANN_DLLEXPORT Index<int8_t, int>::Index(Metric m, const char *filename, const size_t max_points,
+
+                        const size_t nd, const size_t num_frozen_pts,
+                        const bool enable_tags, const bool store_data,
+                        const bool support_eager_delete);
+  template DISKANN_DLLEXPORT Index<float, int>::Index(Metric m, const char *filename, const size_t max_points,
+
+                        const size_t nd, const size_t num_frozen_pts,
+                        const bool enable_tags, const bool store_data,
+                        const bool support_eager_delete);
 
   template DISKANN_DLLEXPORT Index<uint8_t, int>::~Index();
   template DISKANN_DLLEXPORT Index<int8_t, int>::~Index();
@@ -1804,11 +1804,9 @@ namespace diskann {
       const char *filename);
   template DISKANN_DLLEXPORT void Index<float, int>::save(const char *filename);
 
-  template DISKANN_DLLEXPORT void Index<uint8_t, int>::load(
-      const char *filename);
-  template DISKANN_DLLEXPORT void Index<int8_t, int>::load(
-      const char *filename);
-  template DISKANN_DLLEXPORT void Index<float, int>::load(const char *filename);
+  template DISKANN_DLLEXPORT void Index<uint8_t, int>::load(const char *filename, const bool load_tags);
+  template DISKANN_DLLEXPORT void Index<int8_t, int>::load(const char *filename, const bool load_tags);
+  template DISKANN_DLLEXPORT void Index<float, int>::load(const char *filename, const bool load_tags);
 
   template DISKANN_DLLEXPORT void Index<uint8_t, int>::build(
       Parameters &parameters, const std::vector<int> &tags);
@@ -1818,13 +1816,13 @@ namespace diskann {
       Parameters &parameters, const std::vector<int> &tags);
 
   template DISKANN_DLLEXPORT std::pair<int, int> Index<uint8_t>::beam_search(
-      const uint8_t *query, const size_t K, const size_t L, unsigned *indices,
+      const uint8_t *query, const size_t K, const unsigned L, unsigned *indices,
       int beam_width, std::vector<unsigned> start_points);
   template DISKANN_DLLEXPORT std::pair<int, int> Index<int8_t>::beam_search(
-      const int8_t *query, const size_t K, const size_t L, unsigned *indices,
+      const int8_t *query, const size_t K, const unsigned L, unsigned *indices,
       int beam_width, std::vector<unsigned> start_points);
   template DISKANN_DLLEXPORT std::pair<int, int> Index<float>::beam_search(
-      const float *query, const size_t K, const size_t L, unsigned *indices,
+      const float *query, const size_t K, const unsigned L, unsigned *indices,
       int beam_width, std::vector<unsigned> start_points);
 
   template DISKANN_DLLEXPORT int Index<int8_t, int>::delete_point(
