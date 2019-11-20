@@ -12,7 +12,7 @@
 
 namespace diskann {
 
-#define TRAINING_SET_SIZE 2000000
+#define TRAINING_SET_SIZE 3000000
   template<typename T>
   __cdecl DiskANNInterface<T>::DiskANNInterface(
       unsigned __int32 dimension, ANNIndex::DistanceType distanceType)
@@ -88,7 +88,7 @@ namespace diskann {
     paras.Set<unsigned>("L", L);
     paras.Set<unsigned>("R", R);
     paras.Set<unsigned>("C", C);
-    paras.Set<float>("alpha", 1.2f);
+    paras.Set<float>("alpha", 3f);
     paras.Set<unsigned>("num_rnds", 2);
     paras.Set<std::string>("save_path", randnsg_path);
 

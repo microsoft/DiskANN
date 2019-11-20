@@ -1862,6 +1862,25 @@ namespace diskann {
   template DISKANN_DLLEXPORT int Index<float, std::string>::disable_delete(
       const Parameters &parameters, const bool consolidate);
 
+  template DISKANN_DLLEXPORT int Index<int8_t, int>::eager_delete(const int tag,
+                                   const Parameters &parameters);
+  template DISKANN_DLLEXPORT int Index<int8_t, size_t>::eager_delete(const size_t tag,
+                                   const Parameters &parameters);
+  template DISKANN_DLLEXPORT int Index<int8_t, std::string>::eager_delete(const std::string tag,
+                                   const Parameters &parameters);
+  template DISKANN_DLLEXPORT int Index<uint8_t, int>::eager_delete(const int tag,
+                                   const Parameters &parameters);
+  template DISKANN_DLLEXPORT int Index<uint8_t, size_t>::eager_delete(const size_t tag,
+                                   const Parameters &parameters);
+  template DISKANN_DLLEXPORT int Index<uint8_t, std::string>::eager_delete(const std::string tag,
+                                   const Parameters &parameters);
+  template DISKANN_DLLEXPORT int Index<float, int>::eager_delete(const int tag,
+                                   const Parameters &parameters);
+  template DISKANN_DLLEXPORT int Index<float, size_t>::eager_delete(const size_t tag,
+                                   const Parameters &parameters);
+  template DISKANN_DLLEXPORT int Index<float, std::string>::eager_delete(const std::string tag,
+                                   const Parameters &parameters);
+
   template DISKANN_DLLEXPORT int Index<int8_t, int>::enable_delete();
   template DISKANN_DLLEXPORT int Index<uint8_t, int>::enable_delete();
   template DISKANN_DLLEXPORT int Index<float, int>::enable_delete();
@@ -1871,6 +1890,16 @@ namespace diskann {
   template DISKANN_DLLEXPORT int Index<int8_t, std::string>::enable_delete();
   template DISKANN_DLLEXPORT int Index<uint8_t, std::string>::enable_delete();
   template DISKANN_DLLEXPORT int Index<float, std::string>::enable_delete();
+
+  template DISKANN_DLLEXPORT void Index<int8_t, int>::readjust_data(unsigned _num_frozen_pts);
+  template DISKANN_DLLEXPORT void Index<uint8_t, int>::readjust_data(unsigned _num_frozen_pts);
+  template DISKANN_DLLEXPORT void Index<float, int>::readjust_data(unsigned _num_frozen_pts);
+  template DISKANN_DLLEXPORT void Index<int8_t, size_t>::readjust_data(unsigned _num_frozen_pts);
+  template DISKANN_DLLEXPORT void Index<uint8_t, size_t>::readjust_data(unsigned _num_frozen_pts);
+  template DISKANN_DLLEXPORT void Index<float, size_t>::readjust_data(unsigned _num_frozen_pts);
+  template DISKANN_DLLEXPORT void Index<int8_t, std::string>::readjust_data(unsigned _num_frozen_pts);
+  template DISKANN_DLLEXPORT void Index<uint8_t, std::string>::readjust_data(unsigned _num_frozen_pts);
+  template DISKANN_DLLEXPORT void Index<float, std::string>::readjust_data(unsigned _num_frozen_pts);
 
   template DISKANN_DLLEXPORT int Index<int8_t, int>::insert_point(
       const int8_t *point, const Parameters &parameters,

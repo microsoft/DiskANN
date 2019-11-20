@@ -52,7 +52,7 @@ int search_memory_index(int argc, char** argv) {
   std::cout << "Index loaded" << std::endl;
 
   std::vector<unsigned> start_points;
-  index.populate_start_points_ep(start_points);
+//  index.populate_start_points_ep(start_points);
 
   diskann::Parameters paras;
   std::cout << std::setw(8) << "Ls" << std::setw(16) << "Latency" << std::endl;

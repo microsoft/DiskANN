@@ -1,6 +1,6 @@
 #define NOMINMAX
 
-#include <dll/nsg_interface.h>
+#include <dll/diskann_interface.h>
 #include "dll/IANNIndex.h"
 #include "utils.h"
 
@@ -47,13 +47,13 @@ int aux_main(int argc, char** argv) {
     return -1;
   }
 
-  ANNIndex::IANNIndex* intf = new diskann::NSGInterface<T>(0, ANNIndex::DT_L2);
+  ANNIndex::IANNIndex* intf = new diskann::DiskANNInterface<T>(0, ANNIndex::DT_L2);
 
   bool res = 0;
   // for indexing
   {
     // just construct index
-    res = intf->BuildIndex(argv[1], argv[2], "50 64 200 50 0.01");
+    res = intf->BuildIndex(argv[1], argv[2], "60 100 2000 50 0.03");
     // ERROR CHECK
     if (res == 1) {
       exit(-1);
