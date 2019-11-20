@@ -51,7 +51,7 @@ ${BUILD_PATH}/tests/generate_pq  $TYPE  $DATA  $OUTPUT_PREFIX  $B  $RATE
 LOOP_END=$(( $NUM_PARTS - 1 ))
 for i in `seq 0 $LOOP_END`
 do 
-    ${BUILD_PATH}/tests/build_memory_index  $TYPE  "${OUTPUT_PREFIX}_kmeans_partitioning-${NUM_PARTS}_subshard-${i}.bin"  $L  $R  1250  2  1.2  "${OUTPUT_PREFIX}_kmeans_partitioning-${NUM_PARTS}_subshard-${i}_mem.index"
+    ${BUILD_PATH}/tests/build_memory_index  $TYPE  "${OUTPUT_PREFIX}_kmeans_partitioning-${NUM_PARTS}_subshard-${i}.bin"  $L  $R  2000  2  3  "${OUTPUT_PREFIX}_kmeans_partitioning-${NUM_PARTS}_subshard-${i}_mem.index"
 done
 #merge all the shards by taking a union of the overlapping graphs
 ${BUILD_PATH}/tests/merge_shards "${OUTPUT_PREFIX}_kmeans_partitioning-${NUM_PARTS}_subshard-" _mem.index "${OUTPUT_PREFIX}_kmeans_partitioning-${NUM_PARTS}_subshard-" _ids_uint32.bin $NUM_PARTS $UNOPT_INDEX_PATH
