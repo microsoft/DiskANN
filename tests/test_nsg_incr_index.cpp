@@ -84,8 +84,8 @@ int main(int argc, char** argv) {
     index.enable_delete();
     for (auto p : delete_list)
 
-          if (index.eager_delete(p, paras) != 0)
-    //  if (index.delete_point(p) != 0)
+      if (index.eager_delete(p, paras) != 0)
+        //  if (index.delete_point(p) != 0)
         std::cerr << "Delete tag " << p << " not found" << std::endl;
 
     if (index.disable_delete(paras, true) != 0) {

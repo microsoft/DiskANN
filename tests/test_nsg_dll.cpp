@@ -47,7 +47,8 @@ int aux_main(int argc, char** argv) {
     return -1;
   }
 
-  ANNIndex::IANNIndex* intf = new diskann::DiskANNInterface<T>(0, ANNIndex::DT_L2);
+  ANNIndex::IANNIndex* intf =
+      new diskann::DiskANNInterface<T>(0, ANNIndex::DT_L2);
 
   bool res = 0;
   // for indexing

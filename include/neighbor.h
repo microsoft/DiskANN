@@ -231,4 +231,4 @@ namespace diskann {
     addr[right] = nn;
     return right;
   }
-}  // namespace diskann     
+}  // namespace diskann

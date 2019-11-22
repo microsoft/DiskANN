@@ -31,9 +31,6 @@ namespace diskann {
     void build(Parameters &             parameters,
                const std::vector<TagT> &tags = std::vector<TagT>());
 
-    void populate_start_points_ep(std::vector<unsigned> &start_points);
-    void populate_start_points_bfs(std::vector<unsigned> &start_points);
-
     // Gopal. Added beam_search overload that takes L as parameter, so that we
     // can customize L on a per-query basis without tampering with "Parameters"
     std::pair<int, int> beam_search(const T *query, const size_t K,
@@ -112,9 +109,9 @@ namespace diskann {
     void inter_insert(unsigned n, std::vector<unsigned> &pruned_list,
                       const Parameters &parameter, bool update_in_graph);
 
-    void sync_prune(const unsigned location, std::vector<Neighbor> &pool,
-                    const Parameters &     parameter,
-                    std::vector<unsigned> &pruned_list);
+    void prune_neighbors(const unsigned location, std::vector<Neighbor> &pool,
+                         const Parameters &     parameter,
+                         std::vector<unsigned> &pruned_list);
 
     void occlude_list(std::vector<Neighbor> &pool, const unsigned location,
                       const float alpha, const unsigned degree,
