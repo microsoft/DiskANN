@@ -88,7 +88,7 @@ namespace diskann {
     paras.Set<unsigned>("L", L);
     paras.Set<unsigned>("R", R);
     paras.Set<unsigned>("C", C);
-    paras.Set<float>("alpha", 3f);
+    paras.Set<float>("alpha", 3.0);
     paras.Set<unsigned>("num_rnds", 2);
     paras.Set<std::string>("save_path", randnsg_path);
 
