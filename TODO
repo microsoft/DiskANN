@@ -11,4 +11,4 @@ Notes:
 10) load PQ data on the fly
 11) Use random projections instead of PQ?
 12) Add re-direction edges in prune?
-
+13) Check if Windows code works, and also the web service, and diskann_interface DLL
