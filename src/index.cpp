@@ -495,67 +495,6 @@ namespace diskann {
                            expanded_nodes_ids);
   }
 
-  template<typename T, typename TagT>
-  void Index<T, TagT>::reachable_bfs(
-      const unsigned                         start_node,
-      std::vector<tsl::robin_set<unsigned>> &bfs_order, bool *visited) {
-    auto &                    nsg = _final_graph;
-    tsl::robin_set<unsigned> *cur_level = new tsl::robin_set<unsigned>();
-    tsl::robin_set<unsigned> *prev_level = new tsl::robin_set<unsigned>();
-    prev_level->insert(start_node);
-    visited[start_node] = true;
-    unsigned level = 0;
-    unsigned nsg_size = nsg.size();
-    while (true) {
-      // clear state
-      cur_level->clear();
-
-      size_t max_deg = 0;
-      size_t min_deg = 0xffffffffffL;
-      size_t sum_deg = 0;
-
-      // select candidates
-      for (auto id : *prev_level) {
-        max_deg = (std::max)(max_deg, nsg[id].size());
-        min_deg = (std::min)(min_deg, nsg[id].size());
-        sum_deg += nsg[id].size();
-
-        for (const auto &nbr : nsg[id]) {
-          if (nbr >= nsg_size) {
-            std::cerr << "invalid" << std::endl;
-          }
-          if (!visited[nbr]) {
-            cur_level->insert(nbr);
-            visited[nbr] = true;
-          }
-        }
-      }
-
-      if (cur_level->empty()) {
-        break;
-      }
-
-      std::cerr << "Level #" << level << " : " << cur_level->size() << " nodes"
-                << "\tDegree max: " << max_deg
-                << "  avg: " << (float) sum_deg / (float) prev_level->size()
-                << "  min: " << min_deg << std::endl;
-
-      // create a new set
-      tsl::robin_set<unsigned> add(cur_level->size());
-      add.insert(cur_level->begin(), cur_level->end());
-      bfs_order.emplace_back(add);
-
-      // swap cur_level and prev_level, increment level
-      prev_level->clear();
-      std::swap(prev_level, cur_level);
-      level++;
-    }
-
-    // cleanup
-    delete cur_level;
-    delete prev_level;
-  }
-
   /* This function finds out the navigating node, which is the medoid node
    * in the graph.
    */
