@@ -45,6 +45,7 @@ int search_memory_index(int argc, char** argv) {
   T*                query = nullptr;
   unsigned*         gt_ids = nullptr;
   size_t            query_num, query_dim, query_aligned_dim, gt_num, gt_dim;
+  unsigned frozen_pts;
   std::vector<_u64> Lvec;
 
   std::string data_file(argv[2]);
@@ -54,8 +55,9 @@ int search_memory_index(int argc, char** argv) {
   _u64        recall_at = std::atoi(argv[6]);
   _u32        beam_width = std::atoi(argv[7]);
   std::string result_output_prefix(argv[8]);
+  frozen_pts = std::atoi(argv[9]);
 
-  for (int ctr = 9; ctr < argc; ctr++) {
+  for (int ctr = 10; ctr < argc; ctr++) {
     _u64 curL = std::atoi(argv[ctr]);
     if (curL >= recall_at)
       Lvec.push_back(curL);
@@ -105,7 +107,7 @@ int search_memory_index(int argc, char** argv) {
     for (int64_t i = 0; i < (int64_t) query_num; i++) {
       index.beam_search(query + i * query_aligned_dim, recall_at, L,
                         query_result_ids[test_id].data() + i * recall_at,
-                        beam_width, start_points);
+                        beam_width, start_points, frozen_pts);
     }
     auto e = std::chrono::high_resolution_clock::now();
 
@@ -135,12 +137,12 @@ int search_memory_index(int argc, char** argv) {
 }
 
 int main(int argc, char** argv) {
-  if (argc <= 9) {
+  if (argc <= 10) {
     std::cout << "Usage: " << argv[0]
               << " <index_type[float/int8/uint8]>  <full_data_bin>  "
                  "<memory_index_path>  "
                  "<query_bin> <groundtruth_id_bin> "
-                 "<recall@> <beam_width> <result_output_prefix> <L1> <L2> ... "
+                 "<recall@> <beam_width> <result_output_prefix> <#frozen_points> <L1> <L2> ... "
               << std::endl;
     exit(-1);
   }

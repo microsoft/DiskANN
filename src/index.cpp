@@ -156,7 +156,8 @@ namespace diskann {
             }
           compact_data(new_location, active, _compacted_order);
 
-          update_in_graph();
+          if (_support_eager_delete)
+            update_in_graph();
 
         } else {
           assert(_final_graph.size() == _max_points + _num_frozen_pts);
@@ -224,7 +225,8 @@ namespace diskann {
   // load the index from file and update the width (max_degree), ep (navigating
   // node id), and _final_graph (adjacency list)
   template<typename T, typename TagT>
-  void Index<T, TagT>::load(const char *filename, const bool load_tags) {
+  void Index<T, TagT>::load(const char *filename, const bool load_tags,
+                            const char *tag_filename) {
     validate_file_size(filename);
     size_t        expected_file_size;
     std::ifstream in(filename, std::ios::binary);
@@ -265,7 +267,12 @@ namespace diskann {
       if (_enable_tags == false)
         std::cout << "Enabling tags." << std::endl;
       _enable_tags = true;
-      std::ifstream tag_file(std::string(filename) + std::string(".tags"));
+
+      std::ifstream tag_file;
+      if (tag_filename == NULL)
+        tag_file = std::ifstream(std::string(filename) + std::string(".tags"));
+      else
+        tag_file = std::ifstream(std::string(tag_filename));
       if (!tag_file.is_open()) {
         std::cerr << "Tag file not found." << std::endl;
         exit(-1);
@@ -284,22 +291,36 @@ namespace diskann {
   // in case we add ''frozen'' auxiliary points to the dataset, these are not
   // visible to external world, we generate them here and update our dataset
   template<typename T, typename TagT>
-  int Index<T, TagT>::generate_random_frozen_points() {
+  int Index<T, TagT>::generate_random_frozen_points(const char *filename) {
     if (_has_built) {
       std::cout << "Index already built. Cannot add more points" << std::endl;
       return -1;
     }
 
-    std::random_device                    device;
-    std::mt19937                          generator(device());
-    std::uniform_real_distribution<float> dist(0, 1);
-    // Harsha: Should the distribution change with the distance metric?
+    if (filename) {  // user defined frozen points
+      T *frozen_pts;
+      load_aligned_bin<T>(std::string(filename), frozen_pts, _num_frozen_pts,
+                          _dim, _aligned_dim);
+      for (unsigned i = 0; i < _num_frozen_pts; i++) {
+        for (unsigned d = 0; d < _dim; d++)
+          _data[(i + _max_points) * _aligned_dim + d] =
+              frozen_pts[i * _dim + d];
+        for (unsigned d = _dim; d < _aligned_dim; d++)
+          _data[(i + _max_points) * _aligned_dim + d] = 0;
+      }
+    } else {  // random frozen points
 
-    for (unsigned i = 0; i < _num_frozen_pts; ++i) {
-      for (unsigned d = 0; d < _dim; d++)
-        _data[(i + _max_points) * _aligned_dim + d] = dist(generator);
-      for (unsigned d = _dim; d < _aligned_dim; d++)
-        _data[(i + _max_points) * _aligned_dim + d] = 0;
+      std::random_device                    device;
+      std::mt19937                          generator(device());
+      std::uniform_real_distribution<float> dist(0, 1);
+      // Harsha: Should the distribution change with the distance metric?
+
+      for (unsigned i = 0; i < _num_frozen_pts; ++i) {
+        for (unsigned d = 0; d < _dim; d++)
+          _data[(i + _max_points) * _aligned_dim + d] = dist(generator);
+        for (unsigned d = _dim; d < _aligned_dim; d++)
+          _data[(i + _max_points) * _aligned_dim + d] = 0;
+      }
     }
 
     return 0;
@@ -1039,7 +1060,7 @@ namespace diskann {
   template<typename T, typename TagT>
   std::pair<int, int> Index<T, TagT>::beam_search(
       const T *query, const size_t K, const unsigned L, unsigned *indices,
-      int beam_width, std::vector<unsigned> start_points) {
+      int beam_width, std::vector<unsigned> start_points, unsigned num_frozen) {
     std::vector<unsigned>    init_ids;
     tsl::robin_set<unsigned> visited(10 * L);
 
@@ -1086,11 +1107,14 @@ namespace diskann {
       init_ids.emplace_back(id);
     }
     std::vector<Neighbor> retset(L + 1);
+    std::vector<Neighbor> fullset(L + 1);
 
     /* Find out the distances of all the neighbors of navigating node
      * with the query and add it to retset. Actually not needed for all the
      * neighbors. Only needed for the random ones added later
-     */
+     i*/
+   
+	unsigned curr = 0;
     for (size_t i = 0; i < init_ids.size(); i++) {
       if (init_ids[i] >= _nd) {
         std::cout << init_ids[i] << std::endl;
@@ -1101,10 +1125,13 @@ namespace diskann {
                    _distance->compare(_data + _aligned_dim * init_ids[i], query,
                                       (unsigned) _aligned_dim),
                    true);
+      if(init_ids[i] < _nd - num_frozen)
+	      fullset[curr++] = retset[i];
     }
 
     /* Sort the retset based on distance of nodes from query */
     std::sort(retset.begin(), retset.begin() + L);
+    std::sort(fullset.begin(), fullset.begin() + L);
 
     std::vector<unsigned> frontier;
     std::vector<unsigned> unique_nbrs;
@@ -1159,10 +1186,10 @@ namespace diskann {
          * set flag to true
          */
         // Harsha: Why do we require id < _nd
-        if ((id >= _nd) && (id < _max_points)) {
+        if (id >= _nd) {
           std::cout << id << std::endl;
           exit(-1);
-        }
+	}
         float dist = _distance->compare(_data + _aligned_dim * id, query,
                                         (unsigned) _aligned_dim);
         if (dist >= retset[L - 1].distance)
@@ -1171,6 +1198,7 @@ namespace diskann {
 
         // Return position in sorted list where nn inserted.
         int r = InsertIntoPool(retset.data(), L, nn);
+	InsertIntoPool(fullset.data(), L, nn);
 
         if (_delete_set.size() != 0)
           if (_delete_set.find(id) != _delete_set.end())
@@ -1187,7 +1215,8 @@ namespace diskann {
     assert(retset.size() >= L + deleted);
     for (size_t i = 0; i < K;) {
       int  deleted = 0;
-      auto id = retset[i + deleted].id;
+//      auto id = retset[i + deleted].id;
+        auto id = fullset[i + deleted].id;
       if (_delete_set.size() > 0 && _delete_set.find(id) != _delete_set.end())
         deleted++;
       else if (id < _max_points)  // Remove frozen points
@@ -1199,11 +1228,11 @@ namespace diskann {
   template<typename T, typename TagT>
   std::pair<int, int> Index<T, TagT>::beam_search_tags(
       const T *query, const size_t K, const size_t L, TagT *tags,
-      int beam_width, std::vector<unsigned> start_points,
+      int beam_width, std::vector<unsigned> start_points, unsigned frozen_pts, 
       unsigned *indices_buffer) {
     const bool alloc = indices_buffer == NULL;
     auto       indices = alloc ? new unsigned[K] : indices_buffer;
-    auto ret = beam_search(query, K, L, indices, beam_width, start_points);
+    auto ret = beam_search(query, K, L, indices, beam_width, start_points, frozen_pts);
     for (int i = 0; i < (int) K; ++i)
       tags[i] = _location_to_tag[indices[i]];
     if (alloc)
@@ -1418,8 +1447,7 @@ namespace diskann {
       if (_empty_slots.find(old) == _empty_slots.end() &&
           _delete_set.find(old) == _delete_set.end())
         new_location[old] = active++;
-    assert(active + _empty_slots.size() + _delete_set.size() ==
-           _max_points + _num_frozen_pts);
+    assert(active + _delete_set.size() == _max_points + _num_frozen_pts);
 
     tsl::robin_set<unsigned> candidate_set;
     std::vector<Neighbor>    expanded_nghrs;
@@ -1462,8 +1490,12 @@ namespace diskann {
               _final_graph[i].push_back(j.id);
           }
         }
-      }
+      } else
+        _final_graph[i].clear();
     }
+
+    if (_support_eager_delete)
+      update_in_graph();
 
     _nd -= _delete_set.size();
     compact_data(new_location, active, _consolidated_order);
@@ -1527,23 +1559,12 @@ namespace diskann {
           for (size_t i = 0; i < _in_graph[old].size(); ++i) {
             if (new_location[_in_graph[old][i]] <= _in_graph[old][i])
               _in_graph[old][i] = new_location[_in_graph[old][i]];
-            else
-              std::cout << "Wrong new location for  " << _in_graph[old][i]
-                        << " is " << new_location[_in_graph[old][i]]
-                        << std::endl;
           }
 
         // Move the data and adj list to the correct position
         if (new_location[old] != old) {
           assert(new_location[old] < old);
           _final_graph[new_location[old]].swap(_final_graph[old]);
-          /*	  for(unsigned x = 0; x < _final_graph[new_location[old]].size();
-             x++){
-                if(_final_graph[new_location[old]][x] == new_location[old]){
-                  std::cout << "Self loop after swapping" <<std::endl;
-                    break;
-                    }
-              }*/
           if (_support_eager_delete)
             _in_graph[new_location[old]].swap(_in_graph[old]);
           memcpy((void *) (_data + _aligned_dim * (size_t) new_location[old]),
@@ -1625,7 +1646,8 @@ namespace diskann {
           _final_graph[_nd + i].clear();
         }
 
-        update_in_graph();
+        if (_support_eager_delete)
+          update_in_graph();
 
         std::cout << "Finished updating graph, updating data now" << std::endl;
         for (unsigned i = 0; i < _num_frozen_pts; i++) {
@@ -1710,7 +1732,10 @@ namespace diskann {
     }
 
     assert(_final_graph[location].size() <= range);
-    inter_insert(location, pruned_list, parameters, 1);
+    if (_support_eager_delete)
+      inter_insert(location, pruned_list, parameters, 1);
+    else
+      inter_insert(location, pruned_list, parameters, 0);
 
     return 0;
   }

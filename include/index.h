@@ -25,7 +25,11 @@ namespace diskann {
     // checks if data is consolidated, saves graph, metadata and associated
     // tags.
     void save(const char *filename);
-    void load(const char *filename, const bool load_tags = false);
+    void load(const char *filename, const bool load_tags = false,
+              const char *tag_filename = NULL);
+    // generates one or more frozen points that will never get deleted from the
+    // graph
+    int generate_random_frozen_points(const char *filename = NULL);
     void init_random_graph(unsigned k);
 
     void build(Parameters &             parameters,
@@ -36,12 +40,12 @@ namespace diskann {
     std::pair<int, int> beam_search(const T *query, const size_t K,
                                     const unsigned L, unsigned *indices,
                                     int                   beam_width,
-                                    std::vector<unsigned> start_points);
+                                    std::vector<unsigned> start_points, unsigned num_frozen);
 
     std::pair<int, int> beam_search_tags(const T *query, const size_t K,
                                          const size_t L, TagT *tags,
                                          int                   beam_width,
-                                         std::vector<unsigned> start_points,
+                                         std::vector<unsigned> start_points, unsigned frozen_pts, 
                                          unsigned *indices_buffer = NULL);
 
     void prefetch_vector(unsigned id);
@@ -89,9 +93,6 @@ namespace diskann {
 
     // determines navigating node of the graph by calculating medoid of data
     unsigned calculate_entry_point();
-    // generates one or more frozen points that will never get deleted from the
-    // graph
-    int generate_random_frozen_points();
     // called only when _eager_delete is to be supported
     void update_in_graph();
 
