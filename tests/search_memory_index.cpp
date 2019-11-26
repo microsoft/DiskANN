@@ -31,11 +31,10 @@ int search_memory_index(int argc, char** argv) {
 
   int ctr;
   int tags = std::atoi(argv[9]);
-  if(tags == 0)
-	  ctr = 10;
-  else
-  {
-	  ctr = 11;
+  if (tags == 0)
+    ctr = 10;
+  else {
+    ctr = 11;
   }
   for (ctr = 9; ctr < argc; ctr++) {
     _u64 curL = std::atoi(argv[ctr]);
@@ -58,11 +57,11 @@ int search_memory_index(int argc, char** argv) {
   std::cout.precision(2);
 
   diskann::Index<T> index(diskann::L2, data_file.c_str());
-  if(tags == 0)
-	  index.load(memory_index_file.c_str());  // to load diskann
-  else{
-	  std::string tag_file(argv[10]);
-	  index.load(memory_index_file.c_str(), 1, tag_file.c_str());
+  if (tags == 0)
+    index.load(memory_index_file.c_str());  // to load diskann
+  else {
+    std::string tag_file(argv[10]);
+    index.load(memory_index_file.c_str(), 1, tag_file.c_str());
   }
   std::cout << "Index loaded" << std::endl;
 

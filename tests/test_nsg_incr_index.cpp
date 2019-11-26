@@ -23,8 +23,8 @@ int main(int argc, char** argv) {
     exit(-1);
   }
 
-  float*      data_load = NULL;
-  size_t      num_points, dim, aligned_dim; 
+  float* data_load = NULL;
+  size_t num_points, dim, aligned_dim;
 
   diskann::load_aligned_bin<float>(argv[1], data_load, num_points, dim,
                                    aligned_dim);
@@ -53,11 +53,10 @@ int main(int argc, char** argv) {
     std::vector<TagT> tags(num_points - num_incr);
     std::iota(tags.begin(), tags.end(), 0);
 
-    if (argc > 10){
-	    std::string frozen_points_file(argv[10]);
-	    index.generate_random_frozen_points(frozen_points_file.c_str());
-    }
-    else
+    if (argc > 10) {
+      std::string frozen_points_file(argv[10]);
+      index.generate_random_frozen_points(frozen_points_file.c_str());
+    } else
       index.generate_random_frozen_points();
 
     diskann::Timer timer;

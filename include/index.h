@@ -40,12 +40,14 @@ namespace diskann {
     std::pair<int, int> beam_search(const T *query, const size_t K,
                                     const unsigned L, unsigned *indices,
                                     int                   beam_width,
-                                    std::vector<unsigned> start_points, unsigned num_frozen);
+                                    std::vector<unsigned> start_points,
+                                    unsigned              num_frozen);
 
     std::pair<int, int> beam_search_tags(const T *query, const size_t K,
                                          const size_t L, TagT *tags,
                                          int                   beam_width,
-                                         std::vector<unsigned> start_points, unsigned frozen_pts, 
+                                         std::vector<unsigned> start_points,
+                                         unsigned              frozen_pts,
                                          unsigned *indices_buffer = NULL);
 
     void prefetch_vector(unsigned id);

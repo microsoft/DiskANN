@@ -45,7 +45,7 @@ int search_memory_index(int argc, char** argv) {
   T*                query = nullptr;
   unsigned*         gt_ids = nullptr;
   size_t            query_num, query_dim, query_aligned_dim, gt_num, gt_dim;
-  unsigned frozen_pts;
+  unsigned          frozen_pts;
   std::vector<_u64> Lvec;
 
   std::string data_file(argv[2]);
@@ -92,22 +92,28 @@ int search_memory_index(int argc, char** argv) {
   diskann::Parameters paras;
   std::string         recall_string = "Recall@" + std::to_string(recall_at);
   std::cout << std::setw(8) << "Ls" << std::setw(16) << "Latency"
-            << std::setw(16) << recall_string << std::endl;
-  std::cout << "=========================================" << std::endl;
+            << std::setw(16) << recall_string << std::setw(12) << "Avg. Cmps" << std::setw(12) <<"Avg. Hops" << std::endl; 
+  std::cout << "================================================================" << std::endl;
 
   std::vector<std::vector<uint32_t>> query_result_ids(Lvec.size());
   std::vector<std::vector<float>>    query_result_dists(Lvec.size());
 
   for (uint32_t test_id = 0; test_id < Lvec.size(); test_id++) {
     _u64 L = Lvec[test_id];
+    size_t total_cmps = 0, total_hops=0;
     query_result_ids[test_id].resize(recall_at * query_num);
 
     auto s = std::chrono::high_resolution_clock::now();
     //#pragma omp parallel for schedule(dynamic, 1)
     for (int64_t i = 0; i < (int64_t) query_num; i++) {
+      std::pair<int,int> q_stats = 
       index.beam_search(query + i * query_aligned_dim, recall_at, L,
                         query_result_ids[test_id].data() + i * recall_at,
                         beam_width, start_points, frozen_pts);
+#pragma omp atomic
+      total_cmps += q_stats.second;
+#pragma omp atomic
+      total_hops += q_stats.first;
     }
     auto e = std::chrono::high_resolution_clock::now();
 
@@ -119,7 +125,7 @@ int search_memory_index(int argc, char** argv) {
     float latency = (diff.count() / query_num) * (1000000);
 
     std::cout << std::setw(8) << L << std::setw(16) << latency << std::setw(16)
-              << recall << std::endl;
+              << recall << std::setw(12)<< (float)total_cmps/query_num << std::setw(12) << (float) total_hops/query_num << std::endl;
   }
 
   std::cout << "Done searching. Now saving results " << std::endl;
@@ -142,7 +148,8 @@ int main(int argc, char** argv) {
               << " <index_type[float/int8/uint8]>  <full_data_bin>  "
                  "<memory_index_path>  "
                  "<query_bin> <groundtruth_id_bin> "
-                 "<recall@> <beam_width> <result_output_prefix> <#frozen_points> <L1> <L2> ... "
+                 "<recall@> <beam_width> <result_output_prefix> "
+                 "<#frozen_points> <L1> <L2> ... "
               << std::endl;
     exit(-1);
   }

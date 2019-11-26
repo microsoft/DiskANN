@@ -1113,8 +1113,8 @@ namespace diskann {
      * with the query and add it to retset. Actually not needed for all the
      * neighbors. Only needed for the random ones added later
      i*/
-   
-	unsigned curr = 0;
+
+    unsigned curr = 0;
     for (size_t i = 0; i < init_ids.size(); i++) {
       if (init_ids[i] >= _nd) {
         std::cout << init_ids[i] << std::endl;
@@ -1125,8 +1125,8 @@ namespace diskann {
                    _distance->compare(_data + _aligned_dim * init_ids[i], query,
                                       (unsigned) _aligned_dim),
                    true);
-      if(init_ids[i] < _nd - num_frozen)
-	      fullset[curr++] = retset[i];
+      if (init_ids[i] < _nd - num_frozen)
+        fullset[curr++] = retset[i];
     }
 
     /* Sort the retset based on distance of nodes from query */
@@ -1189,7 +1189,7 @@ namespace diskann {
         if (id >= _nd) {
           std::cout << id << std::endl;
           exit(-1);
-	}
+        }
         float dist = _distance->compare(_data + _aligned_dim * id, query,
                                         (unsigned) _aligned_dim);
         if (dist >= retset[L - 1].distance)
@@ -1198,7 +1198,7 @@ namespace diskann {
 
         // Return position in sorted list where nn inserted.
         int r = InsertIntoPool(retset.data(), L, nn);
-	InsertIntoPool(fullset.data(), L, nn);
+        InsertIntoPool(fullset.data(), L, nn);
 
         if (_delete_set.size() != 0)
           if (_delete_set.find(id) != _delete_set.end())
@@ -1214,9 +1214,9 @@ namespace diskann {
     }
     assert(retset.size() >= L + deleted);
     for (size_t i = 0; i < K;) {
-      int  deleted = 0;
-//      auto id = retset[i + deleted].id;
-        auto id = fullset[i + deleted].id;
+      int deleted = 0;
+      //      auto id = retset[i + deleted].id;
+      auto id = fullset[i + deleted].id;
       if (_delete_set.size() > 0 && _delete_set.find(id) != _delete_set.end())
         deleted++;
       else if (id < _max_points)  // Remove frozen points
@@ -1228,11 +1228,12 @@ namespace diskann {
   template<typename T, typename TagT>
   std::pair<int, int> Index<T, TagT>::beam_search_tags(
       const T *query, const size_t K, const size_t L, TagT *tags,
-      int beam_width, std::vector<unsigned> start_points, unsigned frozen_pts, 
+      int beam_width, std::vector<unsigned> start_points, unsigned frozen_pts,
       unsigned *indices_buffer) {
     const bool alloc = indices_buffer == NULL;
     auto       indices = alloc ? new unsigned[K] : indices_buffer;
-    auto ret = beam_search(query, K, L, indices, beam_width, start_points, frozen_pts);
+    auto       ret =
+        beam_search(query, K, L, indices, beam_width, start_points, frozen_pts);
     for (int i = 0; i < (int) K; ++i)
       tags[i] = _location_to_tag[indices[i]];
     if (alloc)
