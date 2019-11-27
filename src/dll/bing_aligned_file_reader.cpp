@@ -44,7 +44,7 @@ namespace diskann {
   }
 
   void BingAlignedFileReader::deregister_thread() {
-    auto& context = this->ctx_map.at(std::this_thread::get_id());
+    auto &context = this->ctx_map.at(std::this_thread::get_id());
 
     context.m_pDiskIO->ShutDown();
     delete context.m_pDiskIO;
@@ -52,7 +52,7 @@ namespace diskann {
     this->ctx_map.erase(std::this_thread::get_id());
   }
 
-  IOContext& BingAlignedFileReader::get_ctx() {
+  IOContext &BingAlignedFileReader::get_ctx() {
     if (this->ctx_map.find(std::this_thread::get_id()) == ctx_map.end()) {
       std::stringstream stream;
       stream << std::string("Thread ") << std::this_thread::get_id()
@@ -63,7 +63,7 @@ namespace diskann {
     return this->ctx_map.at(std::this_thread::get_id());
   }
 
-  void checkSize(const std::vector<AlignedRead> &read_reqs, IOContext& ctx) {
+  void checkSize(const std::vector<AlignedRead> &read_reqs, IOContext &ctx) {
     if (read_reqs.size() > ctx.m_requests.size()) {
       int count = read_reqs.size() - ctx.m_requests.size();
       for (int i = 0; i < count; i++) {
@@ -73,32 +73,34 @@ namespace diskann {
     }
   }
 
-  void BingAlignedFileReader::callback(std::shared_ptr<std::atomic<int>> pCounter, bool result) {
+  void BingAlignedFileReader::callback(
+      std::shared_ptr<std::atomic<int>> pCounter, bool result) {
     (*pCounter)++;
     if (!result) {
       std::stringstream stream;
-		//TODO: We must redo this request. But for now, just fail.
+      // TODO: We must redo this request. But for now, just fail.
       stream << "Read request to file: " << m_filename << "failed.";
       throw std::exception(stream.str().c_str());
-    } 
+    }
   }
 
   void BingAlignedFileReader::read(std::vector<AlignedRead> &read_reqs,
-                                   IOContext                 &ctx) {
+                                   IOContext &               ctx) {
     checkSize(read_reqs, ctx);
     *(ctx.m_pCompleteCount) = 0;
     for (int i = 0; i < read_reqs.size(); i++) {
       ctx.m_requests[i].m_buffer = (__int8 *) read_reqs[i].buf;
       ctx.m_requests[i].m_offset = read_reqs[i].offset;
-      ctx.m_requests[i].m_readSize = (unsigned int)read_reqs[i].len;
+      ctx.m_requests[i].m_readSize = (unsigned int) read_reqs[i].len;
 
-	  ctx.m_requests[i].m_callback =
-          std::bind(&BingAlignedFileReader::callback, this, ctx.m_pCompleteCount, std::placeholders::_1);
+      ctx.m_requests[i].m_callback =
+          std::bind(&BingAlignedFileReader::callback, this,
+                    ctx.m_pCompleteCount, std::placeholders::_1);
 
-	  ctx.m_pDiskIO->ReadFileAsync(ctx.m_requests[i]);
+      ctx.m_pDiskIO->ReadFileAsync(ctx.m_requests[i]);
     }
 
-	while ( *(ctx.m_pCompleteCount) < read_reqs.size()) {
+    while (*(ctx.m_pCompleteCount) < read_reqs.size()) {
       ;
     }
   }

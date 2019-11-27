@@ -86,11 +86,6 @@ else()
 endif()
 
 if(MSVC)
-	add_executable(test_nsg_dll test_nsg_dll.cpp)
-	target_link_options(test_nsg_dll PRIVATE /MACHINE:x64)
-	target_link_libraries(test_nsg_dll debug ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG}/nsg_dll.lib)
-	target_link_libraries(test_nsg_dll optimized ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE}/nsg_dll.lib)
-
 	add_executable(test_diskpriority_io test_diskpriority_io.cpp)
 	target_include_directories(test_diskpriority_io PRIVATE "F:/boost/boost_1_71_0")
 	target_link_options(test_diskpriority_io PRIVATE /MACHINE:x64)
@@ -98,5 +93,18 @@ if(MSVC)
 	target_link_libraries(test_diskpriority_io optimized ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE}/diskpriority_io.lib)
 
 	
+	add_executable(test_diskann_dll test_diskann_dll.cpp)
+	target_link_options(test_diskann_dll PRIVATE /MACHINE:x64)
+	target_link_libraries(test_diskann_dll debug
+        ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG}/nsg_dll.lib)
+	target_link_libraries(test_diskann_dll optimized
+        ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE}/nsg_dll.lib)
+	
+    add_executable(test_vamana_dll test_vamana_dll.cpp)
+	target_link_options(test_vamana_dll PRIVATE /MACHINE:x64)
+	target_link_libraries(test_vamana_dll debug
+        ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG}/nsg_dll.lib)
+	target_link_libraries(test_vamana_dll optimized
+        ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE}/nsg_dll.lib)
 endif()
 # formatter

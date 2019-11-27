@@ -63,7 +63,7 @@ void gen_random_slice(const std::string data_file, double p_val,
 
   std::random_device rd;  // Will be used to obtain a seed for the random number
   size_t             x = rd();
-  std::mt19937       generator((unsigned)x);
+  std::mt19937       generator((unsigned) x);
   std::uniform_real_distribution<float> distribution(0, 1);
 
   for (size_t i = 0; i < npts; i++) {
@@ -101,7 +101,7 @@ void gen_random_slice(const T *inputdata, size_t npts, size_t ndims,
                rd;  // Will be used to obtain a seed for the random number engine
   size_t       x = rd();
   std::mt19937 generator(
-      (unsigned)x);  // Standard mersenne_twister_engine seeded with rd()
+      (unsigned) x);  // Standard mersenne_twister_engine seeded with rd()
   std::uniform_real_distribution<float> distribution(0, 1);
 
   for (size_t i = 0; i < npts; i++) {
@@ -136,7 +136,8 @@ int generate_pq_pivots(const float *train_data, size_t num_train, size_t dim,
     return -1;
   }
 
-  size_t chunk_size = (size_t) (std::floor((double) dim / (double) num_pq_chunks));
+  size_t chunk_size =
+      (size_t)(std::floor((double) dim / (double) num_pq_chunks));
   float *full_pivot_data;
   size_t corrected_num_pq_chunks = DIV_ROUND_UP(dim, chunk_size);
 
@@ -214,7 +215,8 @@ int generate_pq_data_from_pivots(const std::string data_file,
   size_t num_points = npts32;
   size_t dim = basedim32;
 
-  size_t chunk_size = (size_t) (std::floor((double) dim / (double) num_pq_chunks));
+  size_t chunk_size =
+      (size_t)(std::floor((double) dim / (double) num_pq_chunks));
   size_t corrected_num_pq_chunks = DIV_ROUND_UP(dim, chunk_size);
 
   float *full_pivot_data = new float[num_centers * dim];
@@ -453,7 +455,7 @@ int partition(const std::string data_file, const float sampling_rate,
 
     for (size_t p = 0; p < cur_blk_size; p++) {
       for (size_t p1 = 0; p1 < k_base; p1++) {
-        size_t shard_id = block_closest_centers[p * k_base + p1];
+        size_t   shard_id = block_closest_centers[p * k_base + p1];
         uint32_t original_point_map_id = (uint32_t)(start_id + p);
         shard_data_writer[shard_id].write((char *) (block_data_T + p * dim),
                                           sizeof(T) * dim);
@@ -496,9 +498,9 @@ gen_random_slice<float>(const float *inputdata, size_t npts, size_t ndims,
 template void DISKANN_DLLEXPORT gen_random_slice<uint8_t>(
     const uint8_t *inputdata, size_t npts, size_t ndims, double p_val,
     float *&sampled_data, size_t &slice_size);
-template void DISKANN_DLLEXPORT
-gen_random_slice<int8_t>(const int8_t *inputdata, size_t npts, size_t ndims,
-                         double p_val, float *&sampled_data, size_t &slice_size);
+template void DISKANN_DLLEXPORT gen_random_slice<int8_t>(
+    const int8_t *inputdata, size_t npts, size_t ndims, double p_val,
+    float *&sampled_data, size_t &slice_size);
 
 template void DISKANN_DLLEXPORT gen_random_slice<float>(
     const std::string data_file, double p_val, float *&sampled_data,

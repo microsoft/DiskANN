@@ -221,10 +221,10 @@ namespace diskann {
       _u64 start_idx = block * BLOCK_SIZE;
       _u64 end_idx = (std::min)(num_cached_nodes, (block + 1) * BLOCK_SIZE);
       for (_u64 node_idx = start_idx; node_idx < end_idx; node_idx++) {
-        std::vector<AlignedRead>             read_reqs;
+        std::vector<AlignedRead> read_reqs;
         std::vector<std::pair<_u64, char *>> nhoods;
-        AlignedRead                          read;
-        char *                               buf = nullptr;
+        AlignedRead read;
+        char *      buf = nullptr;
         alloc_aligned((void **) &buf, SECTOR_LEN, SECTOR_LEN);
         nhoods.push_back(std::make_pair(node_list[node_idx], buf));
         read.len = SECTOR_LEN;
@@ -292,7 +292,7 @@ namespace diskann {
       cur_level->clear();
 
       // read in all pre_level nhoods
-      std::vector<AlignedRead>             read_reqs;
+      std::vector<AlignedRead> read_reqs;
       std::vector<std::pair<_u64, char *>> nhoods;
 
       for (const unsigned &id : *prev_level) {
@@ -374,8 +374,8 @@ namespace diskann {
     _u64 cur_off = 0;
     for (auto &k_v : nhood_cache) {
       std::pair<_u64, unsigned *> &val = nhood_cache[k_v.first];
-      unsigned *&                  ptr = val.second;
-      _u64                         nnbrs = val.first;
+      unsigned *&ptr = val.second;
+      _u64       nnbrs = val.first;
       memcpy(nhood_cache_buf + cur_off, ptr, nnbrs * sizeof(unsigned));
       delete[] ptr;
       ptr = nhood_cache_buf + cur_off;
@@ -550,8 +550,8 @@ namespace diskann {
       reader->read(medoid_read, ctx);
       std::cout << "After read of: " << cur_m << std::endl;
 
-          // all data about medoid
-          char *medoid_node_buf = OFFSET_TO_NODE(medoid_buf, medoid);
+      // all data about medoid
+      char *medoid_node_buf = OFFSET_TO_NODE(medoid_buf, medoid);
 
       // add medoid coords to `coord_cache`
       T *medoid_coords = new T[data_dim];
@@ -743,9 +743,8 @@ namespace diskann {
     _u8 *  pq_coord_scratch = query_scratch->aligned_pq_coord_scratch;
 
     // lambda to batch compute query<-> node distances in PQ space
-    auto compute_dists = [this, pq_coord_scratch, pq_dists](const unsigned *ids,
-                                                            const _u64 n_ids,
-                                                            float *dists_out) {
+    auto compute_dists = [this, pq_coord_scratch, pq_dists](
+        const unsigned *ids, const _u64 n_ids, float *dists_out) {
       ::aggregate_coords(ids, n_ids, this->data, this->n_chunks,
                          pq_coord_scratch);
       ::pq_dist_lookup(pq_coord_scratch, n_ids, this->n_chunks, pq_dists,
@@ -764,8 +763,9 @@ namespace diskann {
     _u64  best_medoid = 0;
     float best_dist = (std::numeric_limits<float>::max)();
     for (_u64 cur_m = 0; cur_m < num_medoids; cur_m++) {
-      float cur_expanded_dist = dist_cmp->compare(
-          query, medoid_full_precs + aligned_dim * cur_m, (uint32_t) aligned_dim);
+      float cur_expanded_dist =
+          dist_cmp->compare(query, medoid_full_precs + aligned_dim * cur_m,
+                            (uint32_t) aligned_dim);
       if (cur_expanded_dist < best_dist) {
         best_medoid = cur_m;
         best_dist = cur_expanded_dist;
@@ -814,9 +814,9 @@ namespace diskann {
     _u64 k = 0;
 
     // cleared every iteration
-    std::vector<_u64>                    frontier;
+    std::vector<_u64> frontier;
     std::vector<std::pair<_u64, char *>> frontier_nhoods;
-    std::vector<AlignedRead>             frontier_read_reqs;
+    std::vector<AlignedRead> frontier_read_reqs;
     std::vector<std::pair<_u64, std::pair<_u64, unsigned *>>> cached_nhoods;
 
     while (k < l_search) {
@@ -856,7 +856,7 @@ namespace diskann {
       if (!frontier.empty()) {
         hops++;
         for (_u64 i = 0; i < frontier.size(); i++) {
-          unsigned                id = frontier[i];
+          unsigned id = frontier[i];
           std::pair<_u64, char *> fnhood;
           fnhood.first = id;
           fnhood.second = sector_scratch + sector_scratch_idx * SECTOR_LEN;

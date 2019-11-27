@@ -50,17 +50,16 @@ int main(int argc, char** argv) {
   std::cout << "Sending " << NUM_CHUNKS << " requests per batch. "
             << NUM_THREADS << " batches " << std::endl;
 
-
   for (int i = 0; i < NUM_THREADS; i++) {
     diskann::DiskPriorityIO iohandler(
         ANNIndex::DiskIOScenario::DIS_HighPriorityUserRead);
     iohandler.Initialize(s.c_str());
 
-	HANDLE events[NUM_CHUNKS];
+    HANDLE                                  events[NUM_CHUNKS];
     std::vector<ANNIndex::AsyncReadRequest> requests;
     requests.reserve(NUM_CHUNKS);
 
-    int    chunkSize = batchSize / NUM_CHUNKS;
+    int chunkSize = batchSize / NUM_CHUNKS;
     for (int j = 0; j < NUM_CHUNKS; j++) {
       ANNIndex::AsyncReadRequest& request = requests[j];
       request.m_buffer = new __int8[chunkSize];

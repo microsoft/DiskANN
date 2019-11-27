@@ -1,5 +1,6 @@
 #define NOMINMAX
-#include <dll/diskann_interface.h>
+
+#include <dll/vamana_interface.h>
 #include "dll/IANNIndex.h"
 #include "utils.h"
 
@@ -47,15 +48,15 @@ int aux_main(int argc, char** argv) {
   }
 
   ANNIndex::IANNIndex* intf =
-      new diskann::DiskANNInterface<T>(0, ANNIndex::DT_L2);
+      new diskann::VamanaInterface<T>(0, ANNIndex::DT_L2);
 
   bool res = 0;
   // for indexing
   {
     // just construct index
-    res = intf->BuildIndex(argv[1], argv[2], "60 100 2000 50 0.03");
+    res = intf->BuildIndex(argv[1], argv[2], "75 32 2000 32 128");
     // ERROR CHECK
-    if (res == 1) {
+    if (res != 1) {
       exit(-1);
     }
   }
@@ -63,9 +64,10 @@ int aux_main(int argc, char** argv) {
   // for query search
   {
     // load the index
-    bool res = intf->LoadIndex(argv[2], "12 4 4 4");
+    std::string load_args = "110 1 " + std::string(argv[1]);
+    bool        res = intf->LoadIndex(argv[2], load_args.c_str());
     // ERROR CHECK
-    if (res == 1) {
+    if (res != 1) {
       exit(-1);
     }
 
@@ -88,8 +90,8 @@ int aux_main(int argc, char** argv) {
     }
 
     // query params/output
-    _u64   k = 5;
-    _u64   L = 12;
+    _u64   k = 100;
+    _u64   L = 110;
     _u64*  query_res = new _u64[k * nqueries];
     float* query_dists = new float[k * nqueries];
 
