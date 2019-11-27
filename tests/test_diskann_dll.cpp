@@ -54,9 +54,9 @@ int aux_main(int argc, char** argv) {
   // for indexing
   {
     // just construct index
-    res = intf->BuildIndex(argv[1], argv[2], "75 100 2000 25 0.03 32");
+    res = intf->BuildIndex(argv[1], argv[2], "75 32 2000 25 0.3 32");
     // ERROR CHECK
-    if (res == 1) {
+    if (res != 1) {
       exit(-1);
     }
   }
@@ -64,9 +64,9 @@ int aux_main(int argc, char** argv) {
   // for query search
   {
     // load the index
-    bool res = intf->LoadIndex(argv[2], "12 4 4 4");
+    bool res = intf->LoadIndex(argv[2], "110 4 4 4");
     // ERROR CHECK
-    if (res == 1) {
+    if (res != 1) {
       exit(-1);
     }
 
@@ -89,7 +89,7 @@ int aux_main(int argc, char** argv) {
     }
 
     // query params/output
-    _u64   k = 5;
+    _u64   k = 100;
     _u64   L = 12;
     _u64*  query_res = new _u64[k * nqueries];
     float* query_dists = new float[k * nqueries];

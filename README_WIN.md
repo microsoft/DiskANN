@@ -11,7 +11,7 @@ Install MKL:
 
 **Build steps:**
 -	Open a new developer command prompt
--	Create a "build" directory under nsg
+-	Create a "build" directory under diskann
 -	Change to the "build" directory and run  
 ```
 cmake -B. -A x64 ..
@@ -20,7 +20,7 @@ cmake -B. -A x64 ..
 -	This will create a “diskann” solution file.
 -	Open the diskann solution and build the “nsg_dll” project first. 
 - 	Then build all the other binaries using the ALL_BUILD project that is part of the solution
-- 	Generated binaries are stored in the nsg/x64/Debug or nsg/x64/Release directories.
+- 	Generated binaries are stored in the diskann/x64/Debug or diskann/x64/Release directories.
 
 To build from command line, use msbuild to first build the "nsg_dll" project. And then build the entire solution, as shown below.
 ```
@@ -40,7 +40,10 @@ generate_pq.exe float "E:\sift1m_u8\sift1m_float_harsha\sift_base.bin" E:\cmake-
 
 2. Build the graph using the compressed vectors
 ```
-build_memory_index.exe float E:\sift1m_u8\sift1m_float_harsha\sift_base.bin 50 64 750 2 1.2 E:\cmake-sift\ravi-index_memory.index
+build_memory_index.exe float E:\sift1m_u8\sift1m_float_harsha\sift_base.bin 50 64 750 2 3 E:\cmake-sift\ravi-index_memory.index 32
+for int8 datatype, use int8
+for uint8 datatype, use uint8
+the last parameters is number of threads you want to use for index building
 ```
 
 3. Optimize for disk layout
@@ -50,7 +53,7 @@ create_disk_layout.exe float E:\sift1m_u8\sift1m_float_harsha\sift_base.bin E:\c
 
 **Search**
 
-At this stage we have a NSG graph on disk optimized for search. To conduct search for vectors given in the file sift_query.bin, 
+At this stage we have a DiskANN graph on disk optimized for search. To conduct search for vectors given in the file sift_query.bin, 
 ```
 search_disk_index.exe float E:\cmake-sift\ravi-index_pq_pivots.bin E:\cmake-sift\ravi-index_compressed.bin E:\cmake-sift\ravi-index_disk.index null null E:\sift1m_u8\sift1m_float_harsha\sift_query.bin 5 16 4 E:\cmake-sift\ravi-index_results 10 20 30 40
 ```

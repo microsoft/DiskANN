@@ -109,8 +109,8 @@ namespace diskann {
 
     // convert strs into params
     this->Lsearch = (_u64) std::atoi(param_list[0].c_str());
-    std::string data_bin = param_list[1];
-    _u64        nthreads = (_u64) std::atoi(param_list[2].c_str());
+    _u64 nthreads = (_u64) std::atoi(param_list[1].c_str());
+	std::string data_bin = param_list[2];
 
     std::string mem_index_file = index_prefix_path + "_mem.index";
 
@@ -120,7 +120,8 @@ namespace diskann {
     //    this->aligned_dimension = ROUND_UP(this->m_dimension, 8);
 
     // create object
-    _pIndex.reset(new Index<T>(_compareMetric, data_bin.c_str()));
+    _pIndex = std::unique_ptr<diskann::Index<T>>(
+        new diskann::Index<T>(_compareMetric, data_bin.c_str()));
 
     // load index
     _pIndex->load(mem_index_file.c_str());
@@ -144,19 +145,19 @@ namespace diskann {
     std::vector<unsigned> start_points(0);
     //#pragma omp  parallel for schedule(dynamic, 1)
     for (_s64 i = 0; i < queryCount; i++) {
-      _pNsgindex->beam_search(query + i * this->aligned_dim, neighborCount,
+      _pIndex->beam_search(query + i * this->aligned_dimension, neighborCount,
                               this->Lsearch, 1, start_points,
                               ids + (i * neighborCount),
                               distances + (i * neighborCount));
     }
   }
 
-  extern "C" __declspec(dllexport) ANNIndex::IANNIndex* CreateObjectFloat(
+  extern "C" __declspec(dllexport) ANNIndex::IANNIndex* CreateVamanaObjectFloat(
       unsigned __int32 dimension, ANNIndex::DistanceType distanceType) {
     return new diskann::VamanaInterface<float>(dimension, distanceType);
   }
 
-  extern "C" __declspec(dllexport) void ReleaseObjectFloat(
+  extern "C" __declspec(dllexport) void ReleaseVamanaObjectFloat(
       ANNIndex::IANNIndex* object) {
     diskann::VamanaInterface<float>* subclass =
         dynamic_cast<diskann::VamanaInterface<float>*>(object);
