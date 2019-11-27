@@ -11,75 +11,82 @@
 #include "parameters.h"
 #include "tsl/robin_set.h"
 #include "utils.h"
+#include "windows_customizations.h"
 
 namespace diskann {
   template<typename T, typename TagT = int>
   class Index {
    public:
-    Index(Metric m, const char *filename, const size_t max_points = 0,
+ DISKANN_DLLEXPORT   Index(Metric m, const char *filename, const size_t max_points = 0,
           const size_t nd = 0, const size_t num_frozen_pts = 0,
           const bool enable_tags = false, const bool store_data = true,
           const bool support_eager_delete = false);
-    ~Index();
+    DISKANN_DLLEXPORT ~Index();
 
     // checks if data is consolidated, saves graph, metadata and associated
     // tags.
-    void save(const char *filename);
-    void load(const char *filename, const bool load_tags = false,
+    DISKANN_DLLEXPORT void save(const char *filename);
+    DISKANN_DLLEXPORT void load(const char *filename,
+                                const bool  load_tags = false,
               const char *tag_filename = NULL);
     // generates one or more frozen points that will never get deleted from the
     // graph
-    int generate_random_frozen_points(const char *filename = NULL);
-    void init_random_graph(unsigned k);
+    DISKANN_DLLEXPORT int generate_random_frozen_points(
+        const char *filename = NULL);
+    DISKANN_DLLEXPORT void init_random_graph(unsigned k);
 
-    void build(Parameters &             parameters,
+     DISKANN_DLLEXPORT void build(
+        Parameters &             parameters,
                const std::vector<TagT> &tags = std::vector<TagT>());
 
     // Gopal. Added beam_search overload that takes L as parameter, so that we
     // can customize L on a per-query basis without tampering with "Parameters"
-    std::pair<int, int> beam_search(const T *query, const size_t K,
+     DISKANN_DLLEXPORT std::pair<int, int> beam_search(
+         const T *query, const size_t K,
                                     const unsigned L, unsigned *indices,
                                     int                   beam_width,
                                     std::vector<unsigned> start_points,
                                     unsigned              num_frozen);
 
-    std::pair<int, int> beam_search_tags(const T *query, const size_t K,
+     DISKANN_DLLEXPORT std::pair<int, int> beam_search_tags(
+         const T *query, const size_t K,
                                          const size_t L, TagT *tags,
                                          int                   beam_width,
                                          std::vector<unsigned> start_points,
                                          unsigned              frozen_pts,
                                          unsigned *indices_buffer = NULL);
 
-    void prefetch_vector(unsigned id);
-
+   
     // repositions frozen points to the end of _data - if they have been moved
     // during deletion
-    void readjust_data(unsigned _num_frozen_pts);
+     DISKANN_DLLEXPORT void readjust_data(unsigned _num_frozen_pts);
 
     /* insertions possible only when id corresponding to tag does not already
      * exist in the graph */
-    int insert_point(const T *point, const Parameters &parameter,
+     DISKANN_DLLEXPORT int insert_point(const T *                    point,
+                                       const Parameters &           parameter,
                      std::vector<Neighbor> &pool, std::vector<Neighbor> &tmp,
                      tsl::robin_set<unsigned> &   visited,
                      std::vector<SimpleNeighbor> &cut_graph, const TagT tag);
 
     // call before triggering deleteions - sets important flags required for
     // deletion related operations
-    int enable_delete();
+     DISKANN_DLLEXPORT int enable_delete();
 
     // call after all delete requests have been served, checks if deletions were
     // executed correctly, rearranges metadata in case of lazy deletes
-    int disable_delete(const Parameters &parameters,
+     DISKANN_DLLEXPORT int disable_delete(const Parameters &parameters,
                        const bool        consolidate = false);
 
     // Record deleted point now and restructure graph later. Return -1 if tag
     // not found, 0 if OK. Do not call if _eager_delete was called earlier and
     // data was not consolidated
-    int delete_point(const TagT tag);
+     DISKANN_DLLEXPORT int delete_point(const TagT tag);
 
     // Delete point from graph and restructure it immediately. Do not call if
     // _lazy_delete was called earlier and data was not consolidated
-    int eager_delete(const TagT tag, const Parameters &parameters);
+     DISKANN_DLLEXPORT int eager_delete(const TagT        tag,
+                                       const Parameters &parameters);
 
     /*  Internals of the library */
    protected:
