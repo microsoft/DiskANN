@@ -47,6 +47,9 @@ class cached_ifstream {
       uint64_t cached_bytes = cache_size - cur_off;
       if (n_bytes - cached_bytes > fsize - reader.tellg()) {
         std::cout << "Reading beyond end of file" << std::endl;
+        std::cout << "n_bytes: " << n_bytes << " cached_bytes: " << cached_bytes
+                  << " fsize: " << fsize << " current pos:" << reader.tellg()
+                  << std::endl;
         exit(-1);
       }
       memcpy(read_buf, cache_buf + cur_off, cached_bytes);
