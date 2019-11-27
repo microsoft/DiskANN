@@ -20,13 +20,15 @@ template<typename T>
 int build_in_memory_index(const std::string& data_path, const unsigned L,
                           const unsigned R, const unsigned C,
                           const unsigned num_rnds, const float alpha,
-                          const std::string& save_path) {
+                          const std::string& save_path,
+                          const unsigned     num_threads) {
   diskann::Parameters paras;
   paras.Set<unsigned>("L", L);
   paras.Set<unsigned>("R", R);
   paras.Set<unsigned>("C", C);
   paras.Set<unsigned>("num_rnds", num_rnds);
   paras.Set<float>("alpha", alpha);
+  paras.Set<unsigned>("num_threads", num_threads);
 
   diskann::Index<T> index(diskann::L2, data_path.c_str());
   auto              s = std::chrono::high_resolution_clock::now();
@@ -41,11 +43,11 @@ int build_in_memory_index(const std::string& data_path, const unsigned L,
 }
 
 int main(int argc, char** argv) {
-  if (argc != 9) {
+  if (argc != 10) {
     std::cout << "Usage:\n"
               << argv[0] << "  data_type<int8/uint8/float>  <data_file.bin>"
               << "  L  R  C  #rounds  alpha"
-              << "  <output_graph_file>" << std::endl;
+              << "  <output_graph_file> num_threads_to_use" << std::endl;
     exit(-1);
   }
 
@@ -56,16 +58,17 @@ int main(int argc, char** argv) {
   const unsigned    num_rnds = (unsigned) atoi(argv[6]);
   const float       alpha = (float) atof(argv[7]);
   const std::string save_path(argv[8]);
+  const unsigned    num_threads = (unsigned) atoi(argv[9]);
 
   if (std::string(argv[1]) == std::string("int8"))
     build_in_memory_index<int8_t>(data_path, L, R, C, num_rnds, alpha,
-                                  save_path);
+                                  save_path, num_threads);
   else if (std::string(argv[1]) == std::string("uint8"))
     build_in_memory_index<uint8_t>(data_path, L, R, C, num_rnds, alpha,
-                                   save_path);
+                                   save_path, num_threads);
   else if (std::string(argv[1]) == std::string("float"))
-    build_in_memory_index<float>(data_path, L, R, C, num_rnds, alpha,
-                                 save_path);
+    build_in_memory_index<float>(data_path, L, R, C, num_rnds, alpha, save_path,
+                                 num_threads);
   else
     std::cout << "Unsupported type. Use float/int8/uint8" << std::endl;
 }

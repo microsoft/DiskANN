@@ -54,7 +54,7 @@ int aux_main(int argc, char** argv) {
   // for indexing
   {
     // just construct index
-    res = intf->BuildIndex(argv[1], argv[2], "60 100 2000 50 0.03");
+    res = intf->BuildIndex(argv[1], argv[2], "75 100 2000 25 0.03 32");
     // ERROR CHECK
     if (res == 1) {
       exit(-1);

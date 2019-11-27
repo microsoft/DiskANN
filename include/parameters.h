@@ -7,6 +7,12 @@ namespace diskann {
 
   class Parameters {
    public:
+    Parameters() {
+      std::stringstream sstream;
+      sstream << 0;
+      params["num_threads"] = sstream.str();
+    }
+
     template<typename ParamType>
     inline void Set(const std::string &name, const ParamType &value) {
       std::stringstream sstream;

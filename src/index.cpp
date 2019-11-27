@@ -33,7 +33,8 @@
 #endif
 
 #define MAX_ALPHA 3
-#define SLACK_FACTOR 1.2
+#define SLACK_FACTOR 1.3
+#define INDEXING_BEAM_WIDTH 1
 
 // only L2 implemented. Need to implement inner product search
 namespace {
@@ -197,26 +198,6 @@ namespace diskann {
     out.write((char *) &index_size, sizeof(uint64_t));
     out.close();
 
-    if (_enable_tags) {
-      std::ofstream out_tags(std::string(filename) + std::string(".tags"));
-      for (unsigned i = 0; i < _nd; i++) {
-        out_tags << _location_to_tag[i] << "\n";
-      }
-      out_tags.close();
-      _change_lock.unlock();
-    }
-
-    if (_store_data) {
-      std::ofstream out_data(std::string(filename) + std::string(".data"),
-                             std::ios::binary);
-      unsigned new_nd = _nd + _num_frozen_pts;
-      out_data.write((char *) &new_nd, sizeof(_u32));
-      out_data.write((char *) &_dim, sizeof(_u32));
-      for (unsigned i = 0; i < _nd + _num_frozen_pts; ++i)
-        out_data.write((char *) (_data + i * _aligned_dim), _dim * sizeof(T));
-      out_data.close();
-    }
-
     std::cout << "Avg degree: "
               << ((float) total_gr_edges) / ((float) (_nd + _num_frozen_pts))
               << std::endl;
@@ -246,10 +227,21 @@ namespace diskann {
       ++nodes;
       std::vector<unsigned> tmp(k);
       in.read((char *) tmp.data(), k * sizeof(unsigned));
-      _final_graph.emplace_back(tmp);
-      if (std::find(tmp.begin(), tmp.end(), nodes - 1) != tmp.end())
+      //      /* DEBUGGING CHECKS
+      std::set<unsigned> unique_nbrs;
+      for (auto id : tmp)
+        unique_nbrs.insert(id);
+      if (unique_nbrs.size() != tmp.size()) {
+        std::cout << "Duplicate neighbors for point " << nodes - 1 << std::endl;
+        exit(-1);
+      }
+      if (std::find(tmp.begin(), tmp.end(), nodes - 1) != tmp.end()) {
         std::cout << "self-loop at " << nodes - 1 << std::endl;
+        exit(-1);
+      }
+      //  END DEBUGGING CHECKS     */
 
+      _final_graph.emplace_back(tmp);
       if (nodes % 10000000 == 0)
         std::cout << "." << std::flush;
     }
@@ -263,11 +255,12 @@ namespace diskann {
     std::cout << "..done. Index has " << nodes << " nodes and " << cc
               << " out-edges" << std::endl;
 
+    // SEPARATE FUNCTION FOR LOADING TAGS? NEED TO CHECK IF SIZE MATCHES ETC?
+    // USE LOAD_BIN?
     if (load_tags) {
       if (_enable_tags == false)
         std::cout << "Enabling tags." << std::endl;
       _enable_tags = true;
-
       std::ifstream tag_file;
       if (tag_filename == NULL)
         tag_file = std::ifstream(std::string(filename) + std::string(".tags"));
@@ -288,212 +281,9 @@ namespace diskann {
     }
   }
 
-  // in case we add ''frozen'' auxiliary points to the dataset, these are not
-  // visible to external world, we generate them here and update our dataset
-  template<typename T, typename TagT>
-  int Index<T, TagT>::generate_random_frozen_points(const char *filename) {
-    if (_has_built) {
-      std::cout << "Index already built. Cannot add more points" << std::endl;
-      return -1;
-    }
-
-    if (filename) {  // user defined frozen points
-      T *frozen_pts;
-      load_aligned_bin<T>(std::string(filename), frozen_pts, _num_frozen_pts,
-                          _dim, _aligned_dim);
-      for (unsigned i = 0; i < _num_frozen_pts; i++) {
-        for (unsigned d = 0; d < _dim; d++)
-          _data[(i + _max_points) * _aligned_dim + d] =
-              frozen_pts[i * _dim + d];
-        for (unsigned d = _dim; d < _aligned_dim; d++)
-          _data[(i + _max_points) * _aligned_dim + d] = 0;
-      }
-    } else {  // random frozen points
-
-      std::random_device                    device;
-      std::mt19937                          generator(device());
-      std::uniform_real_distribution<float> dist(0, 1);
-      // Harsha: Should the distribution change with the distance metric?
-
-      for (unsigned i = 0; i < _num_frozen_pts; ++i) {
-        for (unsigned d = 0; d < _dim; d++)
-          _data[(i + _max_points) * _aligned_dim + d] = dist(generator);
-        for (unsigned d = _dim; d < _aligned_dim; d++)
-          _data[(i + _max_points) * _aligned_dim + d] = 0;
-      }
-    }
-
-    return 0;
-  }
-
   /**************************************************************
    *      Support for Static Index Building and Searching
    **************************************************************/
-
-  /* init_random_graph():
-   * degree: degree of the random graph
-   */
-  template<typename T, typename TagT>
-  void Index<T, TagT>::init_random_graph(unsigned degree) {
-    degree = (std::min)(degree, (unsigned) 100);
-    unsigned new_max_points = _max_points + _num_frozen_pts;
-    unsigned new_nd = _nd + _num_frozen_pts;
-    _final_graph.resize(new_max_points);
-    _final_graph.reserve(new_max_points);
-
-    if (_support_eager_delete) {
-      _in_graph.resize(new_max_points);
-      _in_graph.reserve(new_max_points);
-    }
-
-    std::cout << "Generating random graph with " << new_nd << " points... "
-              << std::flush;
-    // PAR_BLOCK_SZ gives the number of points that can fit in a single block
-    _s64 PAR_BLOCK_SZ = (1 << 16);  // = 64KB
-    _s64 nblocks = DIV_ROUND_UP((_s64) _nd, PAR_BLOCK_SZ);
-
-#pragma omp parallel for schedule(static, 1)
-    for (_s64 block = 0; block < nblocks; ++block) {
-      std::random_device                    rd;
-      std::mt19937                          gen(rd());
-      std::uniform_int_distribution<size_t> dis(0, new_nd - 1);
-
-      /* Put random number points as neighbours to the 10% of the nodes */
-      for (_u64 i = (_u64) block * PAR_BLOCK_SZ;
-           i < (_u64)(block + 1) * PAR_BLOCK_SZ && i < new_nd; i++) {
-        size_t             node_loc = i < _nd ? i : i - _nd + _max_points;
-        std::set<unsigned> rand_set;
-        while (rand_set.size() < degree && rand_set.size() < new_nd - 1) {
-          unsigned cur_pt = dis(gen);
-          if (cur_pt != i)
-            rand_set.insert(cur_pt < _nd ? cur_pt : cur_pt - _nd + _max_points);
-        }
-
-        _final_graph[node_loc].reserve(degree);
-        for (auto s : rand_set)
-          _final_graph[node_loc].emplace_back(s);
-        _final_graph[node_loc].shrink_to_fit();
-      }
-    }
-
-    std::cout << ".. done " << std::endl;
-  }
-
-  /* iterate_to_fixed_point():
-   * query : point whose neighbors to be found.
-   * init_ids : ids of neighbors of navigating node.
-   * retset : will contain the nearest neighbors of the query.
-
-   * expanded_nodes_info : will contain all the node ids and distances from
-   query that are
-   * checked.
-   * visited : will contain all the nodes that are visited during search.
-   */
-  template<typename T, typename TagT>
-  void Index<T, TagT>::iterate_to_fixed_point(
-      const size_t node_id, const unsigned Lindex,
-      std::vector<unsigned> &init_ids, std::vector<Neighbor> &retset,
-      std::vector<Neighbor> &   expanded_nodes_info,
-      tsl::robin_set<unsigned> &expanded_nodes_ids) {
-    /* compare distance of all points in init_ids with node_coords, and put the
-     * id
-     * with distance
-     * in retset
-     */
-
-    const T *                node_coords = _data + _aligned_dim * node_id;
-    unsigned                 l = 0;
-    Neighbor                 nn;
-    tsl::robin_set<unsigned> inserted_into_pool;
-    for (auto id : init_ids) {
-      assert(id < _max_points);
-      nn = Neighbor(id,
-                    _distance->compare(_data + _aligned_dim * (size_t) id,
-                                       node_coords, _aligned_dim),
-                    true);
-      if (inserted_into_pool.find(id) == inserted_into_pool.end()) {
-        inserted_into_pool.insert(id);
-        retset[l++] = nn;
-      }
-      if (l == Lindex)
-        break;
-    }
-
-    /* sort retset based on distance of each point to node_coords */
-    std::sort(retset.begin(), retset.begin() + l);
-    unsigned k = 0;
-    while (k < l) {
-      unsigned nk = l;
-
-      if (retset[k].flag) {
-        retset[k].flag = false;
-        unsigned n = retset[k].id;
-        if (k != node_id) {
-          expanded_nodes_info.emplace_back(retset[k]);
-          expanded_nodes_ids.insert(n);
-        }
-
-        // prefetch _final_graph[n]
-        unsigned *nbrs = _final_graph[n].data();   // nbrs: data of neighbors
-        unsigned  nnbrs = _final_graph[n].size();  // nnbrs: number of neighbors
-        diskann::prefetch_vector((const char *) nbrs, nnbrs * sizeof(unsigned));
-        for (size_t m = 0; m < nnbrs; m++) {
-          unsigned id = nbrs[m];  // id = neighbor
-          if (m < (nnbrs - 1)) {
-            // id_next = next neighbor
-            unsigned id_next = nbrs[m + 1];
-            // vec_next1: data of next neighbor
-            const T *vec_next1 = _data + (size_t) id_next * _aligned_dim;
-            diskann::prefetch_vector((const char *) vec_next1,
-                                     _aligned_dim * sizeof(T));
-          }
-
-          if (inserted_into_pool.find(id) != inserted_into_pool.end())
-            continue;
-
-          // compare distance of id with node_coords
-          float dist = _distance->compare(node_coords,
-                                          _data + _aligned_dim * (size_t) id,
-                                          (unsigned) _aligned_dim);
-          Neighbor nn(id, dist, true);
-          inserted_into_pool.insert(id);
-          if (dist >= retset[l - 1].distance && (l == Lindex))
-            continue;
-
-          // if distance is smaller than largest, add to retset, keep it
-          // sorted
-          unsigned r = InsertIntoPool(retset.data(), l, nn);
-          if (l < Lindex)
-            ++l;
-          if (r < nk)
-            nk = r;
-        }
-      }
-      if (nk <= k)
-        k = nk;
-      else
-        ++k;
-    }
-    assert(!expanded_nodes_info.empty());
-  }
-
-  template<typename T, typename TagT>
-  void Index<T, TagT>::get_neighbors(
-      const size_t node, const unsigned Lindex, std::vector<Neighbor> &retset,
-      std::vector<Neighbor> &   expanded_nodes_info,
-      tsl::robin_set<unsigned> &expanded_nodes_ids) {
-    retset.resize(Lindex + 1);
-    std::vector<unsigned> init_ids;
-    init_ids.reserve(Lindex);
-    init_ids.emplace_back(_ep);
-    for (uint32_t i = 0; i < (Lindex - 1); i++) {
-      unsigned seed = rand() % (_nd + _num_frozen_pts);
-      seed = seed < _nd ? seed : seed - _nd + _max_points;
-      init_ids.emplace_back(seed);
-    }
-    iterate_to_fixed_point(node, Lindex, init_ids, retset, expanded_nodes_info,
-                           expanded_nodes_ids);
-  }
 
   /* This function finds out the navigating node, which is the medoid node
    * in the graph.
@@ -543,6 +333,202 @@ namespace diskann {
     return min_idx;
   }
 
+  /* init_random_graph():
+   * degree: degree of the random graph
+   */
+  template<typename T, typename TagT>
+  void Index<T, TagT>::init_random_graph(unsigned degree) {
+    degree = (std::min)(degree, (unsigned) 80);
+    unsigned new_max_points = _max_points + _num_frozen_pts;
+    unsigned new_nd = _nd + _num_frozen_pts;
+    _final_graph.resize(new_max_points);
+    _final_graph.reserve(new_max_points);
+
+    if (_support_eager_delete) {
+      _in_graph.resize(new_max_points);
+      _in_graph.reserve(new_max_points);
+    }
+
+    std::cout << "Generating random graph with " << new_nd << " points... "
+              << std::flush;
+    // PAR_BLOCK_SZ gives the number of points that can fit in a single block
+    _s64 PAR_BLOCK_SZ = (1 << 16);  // = 64KB
+    _s64 nblocks = DIV_ROUND_UP((_s64) _nd, PAR_BLOCK_SZ);
+
+#pragma omp parallel for schedule(static, 1)
+    for (_s64 block = 0; block < nblocks; ++block) {
+      std::random_device                    rd;
+      std::mt19937                          gen(rd());
+      std::uniform_int_distribution<size_t> dis(0, new_nd - 1);
+
+      /* Put random number points as neighbours to the 10% of the nodes */
+      for (_u64 i = (_u64) block * PAR_BLOCK_SZ;
+           i < (_u64)(block + 1) * PAR_BLOCK_SZ && i < new_nd; i++) {
+        size_t             node_loc = i < _nd ? i : i - _nd + _max_points;
+        std::set<unsigned> rand_set;
+        while (rand_set.size() < degree && rand_set.size() < new_nd - 1) {
+          unsigned cur_pt = dis(gen);
+          if (cur_pt != i)
+            rand_set.insert(cur_pt < _nd ? cur_pt : cur_pt - _nd + _max_points);
+        }
+
+        _final_graph[node_loc].reserve(degree);
+        for (auto s : rand_set)
+          _final_graph[node_loc].emplace_back(s);
+        _final_graph[node_loc].shrink_to_fit();
+      }
+    }
+
+    std::cout << ".. done " << std::endl;
+  }
+
+  /* iterate_to_fixed_point():
+   * node_coords : point whose neighbors to be found.
+   * init_ids : ids of initial search list.
+   * Lsize : size of list.
+   * beam_width: beam_width when performing indexing
+   * expanded_nodes_info: will contain all the node ids and distances from
+   * query that are expanded
+   * expanded_nodes_ids : will contain all the nodes that are expanded during
+   * search.
+   * best_L_nodes: ids of closest L nodes in list
+   */
+  template<typename T, typename TagT>
+  std::pair<uint32_t, uint32_t> Index<T, TagT>::iterate_to_fixed_point(
+      const T *node_coords, const unsigned Lsize, const unsigned beam_width,
+      const std::vector<unsigned> &init_ids,
+      std::vector<Neighbor> &      expanded_nodes_info,
+      tsl::robin_set<unsigned> &   expanded_nodes_ids,
+      std::vector<Neighbor> &      best_L_nodes) {
+    best_L_nodes.resize(Lsize + 1);
+    expanded_nodes_info.reserve(10 * Lsize);
+    expanded_nodes_info.reserve(10 * Lsize);
+    unsigned                 l = 0;
+    Neighbor                 nn;
+    tsl::robin_set<unsigned> inserted_into_pool;
+
+    for (auto id : init_ids) {
+      assert(id < _max_points);
+      nn = Neighbor(id,
+                    _distance->compare(_data + _aligned_dim * (size_t) id,
+                                       node_coords, _aligned_dim),
+                    true);
+      if (inserted_into_pool.find(id) == inserted_into_pool.end()) {
+        inserted_into_pool.insert(id);
+        best_L_nodes[l++] = nn;
+      }
+      if (l == Lsize)
+        break;
+    }
+
+    /* sort best_L_nodes based on distance of each point to node_coords */
+    std::sort(best_L_nodes.begin(), best_L_nodes.begin() + l);
+    unsigned              k = 0;
+    uint32_t              hops = 0;
+    uint32_t              cmps = 0;
+    std::vector<unsigned> frontier;
+    std::vector<unsigned> nbrs_to_insert;
+    nbrs_to_insert.reserve(30 * Lsize);
+
+    while (k < l) {
+      unsigned nk = l;
+
+      frontier.clear();
+      nbrs_to_insert.clear();
+      unsigned marker = k - 1;
+
+      while (++marker < l && frontier.size() < (size_t) beam_width) {
+        if (best_L_nodes[marker].flag) {
+          frontier.emplace_back(best_L_nodes[marker].id);
+          best_L_nodes[marker].flag = false;
+          expanded_nodes_info.emplace_back(best_L_nodes[marker]);
+          expanded_nodes_ids.insert(best_L_nodes[marker].id);
+        }
+      }
+
+      if (!frontier.empty())
+        hops++;
+      for (auto iter = frontier.begin(); iter != frontier.end(); iter++) {
+        auto n = *iter;
+        if ((iter + 1) != frontier.end()) {
+          auto nextn = *(iter + 1);
+          diskann::prefetch_vector(
+              (const char *) _final_graph[nextn].data(),
+              _final_graph[nextn].size() * sizeof(unsigned));
+        }
+
+        for (unsigned m = 0; m < _final_graph[n].size(); ++m) {
+          unsigned id = _final_graph[n][m];
+          if (inserted_into_pool.find(id) == inserted_into_pool.end()) {
+            inserted_into_pool.insert(id);  // Add each unique neighbor to
+                                            // inserted to pool, if not already
+                                            // added. we will try to insert them
+                                            // into pool subsequently
+            nbrs_to_insert.emplace_back(
+                id);  // add as candidates to be inserted
+          }
+        }
+      }
+
+      for (uint64_t m = 0; m < nbrs_to_insert.size(); m++) {
+        if (m < (nbrs_to_insert.size() - 1)) {
+          // id_next = next neighbor
+          unsigned id_next = nbrs_to_insert[m + 1];
+          // vec_next1: data of next neighbor
+          const T *vec_next1 = _data + (size_t) id_next * _aligned_dim;
+          diskann::prefetch_vector((const char *) vec_next1,
+                                   _aligned_dim * sizeof(T));
+        }
+        auto id = nbrs_to_insert[m];
+
+        cmps++;
+        // compare distance of id with node_coords
+        float dist =
+            _distance->compare(node_coords, _data + _aligned_dim * (size_t) id,
+                               (unsigned) _aligned_dim);
+        Neighbor nn(id, dist, true);
+        if (dist >= best_L_nodes[l - 1].distance && (l == Lsize))
+          continue;
+
+        // if distance is smaller than largest, add to best_L_nodes, keep it
+        // sorted
+        unsigned r = InsertIntoPool(best_L_nodes.data(), l, nn);
+        if (l < Lsize)
+          ++l;
+        if (r < nk)
+          nk = r;
+      }
+      if (nk <= k)
+        k = nk;
+      else
+        ++k;
+    }
+    return std::make_pair(hops, cmps);
+  }
+
+  template<typename T, typename TagT>
+  void Index<T, TagT>::get_expanded_nodes(
+      const size_t node_id, const unsigned Lindex,
+      std::vector<unsigned>     init_ids,
+      std::vector<Neighbor> &   expanded_nodes_info,
+      tsl::robin_set<unsigned> &expanded_nodes_ids) {
+    const T *             node_coords = _data + _aligned_dim * node_id;
+    std::vector<Neighbor> best_L_nodes;
+
+    if (init_ids.size() == 0)
+      init_ids.emplace_back(_ep);
+    // We may optionally populate init_ids with random points
+    /*      for (uint32_t i = 0; i < (Lindex - 1); i++) {
+          unsigned seed = rand() % (_nd + _num_frozen_pts);
+          seed = seed < _nd ? seed : seed - _nd + _max_points;
+          init_ids.emplace_back(seed);
+        }
+        */
+    iterate_to_fixed_point(node_coords, Lindex, INDEXING_BEAM_WIDTH, init_ids,
+                           expanded_nodes_info, expanded_nodes_ids,
+                           best_L_nodes);
+  }
+
   template<typename T, typename TagT>
   void Index<T, TagT>::occlude_list(std::vector<Neighbor> &pool,
                                     const unsigned location, const float alpha,
@@ -564,29 +550,33 @@ namespace diskann {
     assert(std::is_sorted(pool.begin(), pool.end()));
     assert(!pool.empty());
 
-    unsigned start = 0;
-    /* put the first node in start. This will be nearest neighbor to q */
+    float cur_alpha = 1;
+    while (cur_alpha <= alpha && result.size() < degree) {
+      unsigned start = 0;
+      /* put the first node in start. This will be nearest neighbor to q */
 
-    //    result.emplace_back(pool[start]);
+      //    result.emplace_back(pool[start]);
 
-    while (result.size() < degree && (start) < pool.size() && start < maxc) {
-      auto &p = pool[start];
-      if (occlude_factor[start] > alpha) {
-        start++;
-        continue;
-      }
-      occlude_factor[start] = std::numeric_limits<float>::max();
-      result.push_back(p);
-      for (unsigned t = start + 1; t < pool.size() && t < maxc; t++) {
-        if (occlude_factor[t] >= MAX_ALPHA)
+      while (result.size() < degree && (start) < pool.size() && start < maxc) {
+        auto &p = pool[start];
+        if (occlude_factor[start] > cur_alpha) {
+          start++;
           continue;
-        float djk = _distance->compare(
-            _data + _aligned_dim * (size_t) pool[t].id,
-            _data + _aligned_dim * (size_t) p.id, (unsigned) _aligned_dim);
-        occlude_factor[t] =
-            (std::max)(occlude_factor[t], pool[t].distance / djk);
+        }
+        occlude_factor[start] = std::numeric_limits<float>::max();
+        result.push_back(p);
+        for (unsigned t = start + 1; t < pool.size() && t < maxc; t++) {
+          if (occlude_factor[t] > alpha)
+            continue;
+          float djk = _distance->compare(
+              _data + _aligned_dim * (size_t) pool[t].id,
+              _data + _aligned_dim * (size_t) p.id, (unsigned) _aligned_dim);
+          occlude_factor[t] =
+              (std::max)(occlude_factor[t], pool[t].distance / djk);
+        }
+        start++;
       }
-      start++;
+      cur_alpha *= 1.25;
     }
   }
 
@@ -611,16 +601,11 @@ namespace diskann {
     result.reserve(range);
     std::vector<float> occlude_factor(pool.size(), 0);
 
-    float cur_alpha = 1;
-    while (cur_alpha <= alpha && !pool.empty() && result.size() < range) {
-      occlude_list(pool, location, cur_alpha, range, maxc, result,
-                   occlude_factor);
-      cur_alpha *= 1.25;
-    }
+    occlude_list(pool, location, alpha, range, maxc, result, occlude_factor);
 
     /* Add all the nodes in result into a variable called cut_graph
-     * So this contains all the neighbors of id location
-     */
+   * So this contains all the neighbors of id location
+   */
     pruned_list.clear();
     assert(result.size() <= range);
     for (auto iter : result) {
@@ -739,10 +724,14 @@ namespace diskann {
   }
   /* Link():
    * The graph creation function.
-   */
+   *    The graph will be updated periodically in NUM_SYNCS batches
+  */
   template<typename T, typename TagT>
   void Index<T, TagT>::link(Parameters &parameters) {
-    //    The graph will be updated periodically in NUM_SYNCS batches
+    unsigned NUM_THREADS = parameters.Get<unsigned>("num_threads");
+    if (NUM_THREADS != 0)
+      omp_set_num_threads(NUM_THREADS);
+
     size_t   true_num_pts = _nd + _num_frozen_pts;
     uint32_t NUM_SYNCS = DIV_ROUND_UP(true_num_pts, (128 * 192));
     if (NUM_SYNCS < 40)
@@ -751,8 +740,8 @@ namespace diskann {
 
     const unsigned NUM_RNDS = parameters.Get<unsigned>(
         "num_rnds");  // num. of passes of overall algorithm
-    const unsigned L = parameters.Get<unsigned>("L");  // Search list size
-
+    const unsigned argL = parameters.Get<unsigned>("L");  // Search list size
+    unsigned       L = argL;
     // Max degree of graph
     const unsigned range = parameters.Get<unsigned>("R");
     // Pruning parameter
@@ -769,18 +758,34 @@ namespace diskann {
     for (size_t i = 0; i < _num_frozen_pts; ++i)
       rand_perm.emplace_back(_max_points + i);
 
+    // if there are frozen points, the first such one is set to be the _ep
+    if (_num_frozen_pts > 0)
+      _ep = _max_points;
+    else
+      _ep = calculate_entry_point();
+
     std::random_device               rd;
     std::mt19937                     gen(rd());
     std::uniform_real_distribution<> dis(0, 1);
 
     init_random_graph(range);
 
-    if (_num_frozen_pts > 0)
-      _ep = _max_points;
-    else
-      _ep = calculate_entry_point();
+    // creating a initial list to begin the search process. it has _ep and
+    // random other nodes
+    std::set<unsigned> unique_start_points;
+    unique_start_points.insert(_ep);
+    //    while (unique_start_points.size() < L)
+    //      unique_start_points.insert(rand_perm[rand() % rand_perm.size()]);
+
+    std::vector<unsigned> init_ids;
+    for (auto pt : unique_start_points)
+      init_ids.emplace_back(pt);
 
     for (uint32_t rnd_no = 0; rnd_no < NUM_RNDS; rnd_no++) {
+      //      L = argL < 50? argL : 50;
+      if (rnd_no == NUM_RNDS - 1)
+        L = argL;
+
       float  sync_time = 0, total_sync_time = 0;
       float  inter_time = 0, total_inter_time = 0;
       size_t inter_count = 0, total_inter_count = 0;
@@ -810,14 +815,13 @@ namespace diskann {
           _u64                      node = rand_perm[node_ctr];
           size_t                    node_offset = node_ctr - start_id;
           std::vector<Neighbor> &   pool = sync_pool_vector[node_offset];
-          std::vector<Neighbor>     tmp;
           tsl::robin_set<unsigned> &visited = sync_visited_vector[node_offset];
           std::vector<unsigned> &pruned_list = pruned_list_vector[node_offset];
           // get nearest neighbors of n in tmp. pool contains all the points
           // that were checked along with their distance from n. visited
           // contains all
           // the points visited, just the ids
-          get_neighbors(node, L, tmp, pool, visited);
+          get_expanded_nodes(node, L, init_ids, pool, visited);
           /* check the neighbors of the query that are not part of visited,
            * check their distance to the query, and add it to pool.
            */
@@ -997,182 +1001,65 @@ namespace diskann {
   }
 
   template<typename T, typename TagT>
-  std::pair<int, int> Index<T, TagT>::beam_search(
-      const T *query, const size_t K, const unsigned L, unsigned *indices,
-      int beam_width, std::vector<unsigned> start_points, unsigned num_frozen) {
+  std::pair<uint32_t, uint32_t> Index<T, TagT>::beam_search(
+      const T *query, const size_t K, const unsigned L, unsigned beam_width,
+      std::vector<unsigned> start_points, unsigned *indices) {
     std::vector<unsigned>    init_ids;
     tsl::robin_set<unsigned> visited(10 * L);
+    std::vector<Neighbor>    best_L_nodes, expanded_nodes_info;
+    tsl::robin_set<unsigned> expanded_nodes_ids;
 
-    if (start_points.size() == 0) {
-      start_points.emplace_back(_ep);
+    if (init_ids.size() == 0) {
+      init_ids.emplace_back(_ep);
     }
+    auto retval = iterate_to_fixed_point(query, L, beam_width, init_ids,
+                                         expanded_nodes_info,
+                                         expanded_nodes_ids, best_L_nodes);
 
-    /* ep_neighbors contains all the neighbors of navigating node, and
-     * their distance from the query node
-     */
-    std::vector<Neighbor> ep_neighbors;
-    for (auto cur_pt : start_points)
-      for (auto id : _final_graph[cur_pt]) {
-        if (id >= _nd) {
-          std::cout << "ERROR" << id << "    Cur_pt " << cur_pt << std::endl;
-          exit(-1);
-        }
-        // std::cout << "cmp: query <-> " << id << "\n";
-        ep_neighbors.emplace_back(
-            Neighbor(id,
-                     _distance->compare(_data + _aligned_dim * (size_t) id,
-                                        query, _aligned_dim),
-                     true));
-      }
-
-    /* sort the ep_neighbors based on the distance from query node */
-    std::sort(ep_neighbors.begin(), ep_neighbors.end());
-    for (auto iter : ep_neighbors) {
-      if (init_ids.size() >= L)
+    size_t pos = 0;
+    for (auto it : best_L_nodes) {
+      indices[pos] = it.id;
+      pos++;
+      if (pos == K)
         break;
-      init_ids.emplace_back(iter.id);  // Add the neighbors to init_ids
-      visited.insert(iter.id);         // Add the neighbors to visited list
     }
-
-    /* Add random nodes to fill in the L_SEARCH number of nodes
-     * in visited list as well as in the init_ids list
-     */
-    while (init_ids.size() < L) {
-      unsigned id = (rand()) % _nd;
-      if (visited.find(id) == visited.end())
-        visited.insert(id);
-      else
-        continue;
-      init_ids.emplace_back(id);
-    }
-    std::vector<Neighbor> retset(L + 1);
-    std::vector<Neighbor> fullset(L + 1);
-
-    /* Find out the distances of all the neighbors of navigating node
-     * with the query and add it to retset. Actually not needed for all the
-     * neighbors. Only needed for the random ones added later
-     i*/
-
-    unsigned curr = 0;
-    for (size_t i = 0; i < init_ids.size(); i++) {
-      if (init_ids[i] >= _nd) {
-        std::cout << init_ids[i] << std::endl;
-        exit(-1);
-      }
-      retset[i] =
-          Neighbor(init_ids[i],
-                   _distance->compare(_data + _aligned_dim * init_ids[i], query,
-                                      (unsigned) _aligned_dim),
-                   true);
-      if (init_ids[i] < _nd - num_frozen)
-        fullset[curr++] = retset[i];
-    }
-
-    /* Sort the retset based on distance of nodes from query */
-    std::sort(retset.begin(), retset.begin() + L);
-    std::sort(fullset.begin(), fullset.begin() + L);
-
-    std::vector<unsigned> frontier;
-    std::vector<unsigned> unique_nbrs;
-    unique_nbrs.reserve(10 * L);
-
-    int hops = 0;
-    int cmps = 0;
-    int k = 0;
-    int deleted = 0;
-
-    /* Maximum L rounds take place to get nearest neighbor.  */
-    while (k < (int) (L + deleted)) {
-      int nk = L;
-
-      frontier.clear();
-      unique_nbrs.clear();
-      unsigned marker = k - 1;
-      while (++marker < L && frontier.size() < (size_t) beam_width) {
-        if (retset[marker].flag) {
-          frontier.emplace_back(retset[marker].id);
-          retset[marker].flag = false;
-        }
-      }
-
-      if (!frontier.empty())
-        hops++;
-      for (auto n : frontier) {
-        /* check neighbors of each node of frontier */
-        for (unsigned m = 0; m < _final_graph[n].size(); ++m) {
-          unsigned id = _final_graph[n][m];
-          if (visited.find(id) != visited.end()) {
-            continue;
-          } else {
-            visited.insert(id);  // Add each unique neighbor to visited
-          }
-          unique_nbrs.emplace_back(id);  // add each neighbor to unique_nbrs
-        }
-      }
-      auto last_iter = std::unique(unique_nbrs.begin(), unique_nbrs.end());
-      for (auto iter = unique_nbrs.begin(); iter != last_iter; iter++) {
-        if (iter < (last_iter - 1)) {
-          unsigned id_next = *(iter + 1);
-          const T *vec1 = _data + _aligned_dim * id_next;
-          diskann::prefetch_vector((const char *) vec1,
-                                   _aligned_dim * sizeof(T));
-        }
-
-        cmps++;
-        unsigned id = *iter;
-        /* compare distance of each neighbor with that of query. If the
-         * distance is less than largest distance in retset, add to retset and
-         * set flag to true
-         */
-        // Harsha: Why do we require id < _nd
-        if (id >= _nd) {
-          std::cout << id << std::endl;
-          exit(-1);
-        }
-        float dist = _distance->compare(_data + _aligned_dim * id, query,
-                                        (unsigned) _aligned_dim);
-        if (dist >= retset[L - 1].distance)
-          continue;
-        Neighbor nn(id, dist, true);
-
-        // Return position in sorted list where nn inserted.
-        int r = InsertIntoPool(retset.data(), L, nn);
-        InsertIntoPool(fullset.data(), L, nn);
-
-        if (_delete_set.size() != 0)
-          if (_delete_set.find(id) != _delete_set.end())
-            deleted++;
-        if (r < nk)
-          nk = r;  // nk logs the best position in the retset that was updated
-                   // due to neighbors of n.
-      }
-      if (nk <= k)
-        k = nk;  // k is the best position in retset updated in this round.
-      else
-        ++k;
-    }
-    assert(retset.size() >= L + deleted);
-    for (size_t i = 0; i < K;) {
-      int deleted = 0;
-      //      auto id = retset[i + deleted].id;
-      auto id = fullset[i + deleted].id;
-      if (_delete_set.size() > 0 && _delete_set.find(id) != _delete_set.end())
-        deleted++;
-      else if (id < _max_points)  // Remove frozen points
-        indices[i++] = id;
-    }
-    return std::make_pair(hops, cmps);
+    return retval;
   }
 
   template<typename T, typename TagT>
-  std::pair<int, int> Index<T, TagT>::beam_search_tags(
+  std::pair<uint32_t, uint32_t> Index<T, TagT>::beam_search(
+      const T *query, const uint64_t K, const uint64_t L, unsigned beam_width,
+      std::vector<unsigned> init_ids, uint64_t *indices, float *distances) {
+    tsl::robin_set<unsigned> visited(10 * L);
+    std::vector<Neighbor>    best_L_nodes, expanded_nodes_info;
+    tsl::robin_set<unsigned> expanded_nodes_ids;
+
+    if (init_ids.size() == 0) {
+      init_ids.emplace_back(_ep);
+    }
+    auto retval = iterate_to_fixed_point(query, (unsigned) L, beam_width,
+                                         init_ids, expanded_nodes_info,
+                                         expanded_nodes_ids, best_L_nodes);
+
+    size_t pos = 0;
+    for (auto it : best_L_nodes) {
+      indices[pos] = it.id;
+      distances[pos] = it.distance;
+      pos++;
+      if (pos == K)
+        break;
+    }
+    return retval;
+  }
+
+  template<typename T, typename TagT>
+  std::pair<uint32_t, uint32_t> Index<T, TagT>::beam_search_tags(
       const T *query, const size_t K, const size_t L, TagT *tags,
-      int beam_width, std::vector<unsigned> start_points, unsigned frozen_pts,
-      unsigned *indices_buffer) {
+      unsigned beam_width, std::vector<unsigned> start_points,
+      unsigned frozen_pts, unsigned *indices_buffer) {
     const bool alloc = indices_buffer == NULL;
     auto       indices = alloc ? new unsigned[K] : indices_buffer;
-    auto       ret =
-        beam_search(query, K, L, indices, beam_width, start_points, frozen_pts);
+    auto ret = beam_search(query, K, L, beam_width, start_points, indices);
     for (int i = 0; i < (int) K; ++i)
       tags[i] = _location_to_tag[indices[i]];
     if (alloc)
@@ -1183,6 +1070,44 @@ namespace diskann {
   /*************************************************
    *      Support for Incremental Update
    *************************************************/
+
+  // in case we add ''frozen'' auxiliary points to the dataset, these are not
+  // visible to external world, we generate them here and update our dataset
+  template<typename T, typename TagT>
+  int Index<T, TagT>::generate_random_frozen_points(const char *filename) {
+    if (_has_built) {
+      std::cout << "Index already built. Cannot add more points" << std::endl;
+      return -1;
+    }
+
+    if (filename) {  // user defined frozen points
+      T *frozen_pts;
+      load_aligned_bin<T>(std::string(filename), frozen_pts, _num_frozen_pts,
+                          _dim, _aligned_dim);
+      for (unsigned i = 0; i < _num_frozen_pts; i++) {
+        for (unsigned d = 0; d < _dim; d++)
+          _data[(i + _max_points) * _aligned_dim + d] =
+              frozen_pts[i * _dim + d];
+        for (unsigned d = _dim; d < _aligned_dim; d++)
+          _data[(i + _max_points) * _aligned_dim + d] = 0;
+      }
+    } else {  // random frozen points
+
+      std::random_device                    device;
+      std::mt19937                          generator(device());
+      std::uniform_real_distribution<float> dist(0, 1);
+      // Harsha: Should the distribution change with the distance metric?
+
+      for (unsigned i = 0; i < _num_frozen_pts; ++i) {
+        for (unsigned d = 0; d < _dim; d++)
+          _data[(i + _max_points) * _aligned_dim + d] = dist(generator);
+        for (unsigned d = _dim; d < _aligned_dim; d++)
+          _data[(i + _max_points) * _aligned_dim + d] = 0;
+      }
+    }
+
+    return 0;
+  }
 
   template<typename T, typename TagT>
   int Index<T, TagT>::enable_delete() {
@@ -1258,8 +1183,10 @@ namespace diskann {
     std::vector<Neighbor>    pool, tmp;
     tsl::robin_set<unsigned> visited;
 
-    unsigned Lindex = parameters.Get<unsigned>("L");
-    get_neighbors(id, Lindex, tmp, pool, visited);
+    unsigned              Lindex = parameters.Get<unsigned>("L");
+    std::vector<unsigned> init_ids;
+
+    get_expanded_nodes(id, Lindex, init_ids, pool, visited);
 
     for (unsigned i = 0; i < pool.size(); i++)
       if (pool[i].id == id) {
@@ -1640,7 +1567,8 @@ namespace diskann {
     std::vector<unsigned> pruned_list;
     unsigned              Lindex = parameters.Get<unsigned>("L");
 
-    get_neighbors(location, Lindex, tmp, pool, visited);
+    std::vector<unsigned> init_ids;
+    get_expanded_nodes(location, Lindex, init_ids, pool, visited);
 
     for (unsigned i = 0; i < pool.size(); i++)
       if (pool[i].id == location) {

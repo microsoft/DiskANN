@@ -6,6 +6,7 @@
 //#include <parallel/algorithm>
 #include <string>
 #include <vector>
+#include <set>
 #include "cached_io.h"
 #include "utils.h"
 
@@ -80,12 +81,12 @@ int merge_shards(const std::string &nsg_prefix, const std::string &nsg_suffix,
     size_t expected_file_size;
     nsg_readers[i].read((char *) &expected_file_size, sizeof(uint64_t));
     if (actual_file_size != expected_file_size) {
-      std::cout << "Error in Rand-NSG file " << nsg_names[i] << std::endl;
+      std::cout << "Error in Vamana Index file " << nsg_names[i] << std::endl;
       exit(-1);
     }
   }
 
-  size_t merged_index_size = 0;
+  size_t merged_index_size = 16;
   // create cached nsg writers
   cached_ofstream nsg_writer(output_nsg, 1024 * 1048576);
   nsg_writer.write((char *) &merged_index_size, sizeof(uint64_t));
@@ -124,47 +125,61 @@ int merge_shards(const std::string &nsg_prefix, const std::string &nsg_suffix,
   medoid_writer.close();
 
   std::cout << "Starting merge\n";
-  unsigned *nhood = new unsigned[32768];
-  unsigned *shard_nhood = nhood;
+  std::set<unsigned> nhood_set;
+  std::vector<unsigned> final_nhood;
 
-  unsigned nnbrs = 0, shard_nnbrs;
+  unsigned nnbrs = 0, shard_nnbrs = 0;
   unsigned cur_id = 0;
   for (const auto &id_shard : node_shard) {
     unsigned node_id = id_shard.first;
     unsigned shard_id = id_shard.second;
     if (cur_id < node_id) {
+        final_nhood.reserve(nhood_set.size());
+      for (auto pt : nhood_set) 
+          final_nhood.emplace_back(pt);
+      nnbrs = nhood_set.size();
       // write into merged ofstream
       nsg_writer.write((char *) &nnbrs, sizeof(unsigned));
-      nsg_writer.write((char *) nhood, nnbrs * sizeof(unsigned));
-      if (cur_id % 999999 == 1) {
+      nsg_writer.write((char *) final_nhood.data(), nnbrs * sizeof(unsigned));
+      merged_index_size += (sizeof(unsigned) + nnbrs * sizeof(unsigned));
+      if (cur_id % 499999 == 1) {
         std::cout << "." << std::flush;
       }
       cur_id = node_id;
       nnbrs = 0;
-      shard_nhood = nhood;
+      nhood_set.clear();
+      final_nhood.clear();
     }
     // read from shard_id ifstream
     nsg_readers[shard_id].read((char *) &shard_nnbrs, sizeof(unsigned));
-    nsg_readers[shard_id].read((char *) shard_nhood,
+    std::vector<unsigned> shard_nhood(shard_nnbrs);
+    nsg_readers[shard_id].read((char *) shard_nhood.data(),
                                shard_nnbrs * sizeof(unsigned));
 
     // rename nodes
     for (_u64 j = 0; j < shard_nnbrs; j++) {
-      shard_nhood[j] = idmaps[shard_id][shard_nhood[j]];
+      nhood_set.insert(idmaps[shard_id][shard_nhood[j]]);
     }
-
-    nnbrs += shard_nnbrs;
-    shard_nhood += shard_nnbrs;
+    
   }
+
+  final_nhood.reserve(nhood_set.size());
+  for (auto pt : nhood_set) 
+      final_nhood.emplace_back(pt);
+  nnbrs = nhood_set.size();
+  // write into merged ofstream
   nsg_writer.write((char *) &nnbrs, sizeof(unsigned));
-  nsg_writer.write((char *) nhood, nnbrs * sizeof(unsigned));
-  nsg_writer.flush_cache();
-  merged_index_size = nsg_writer.get_file_size();
+  nsg_writer.write((char *) final_nhood.data(), nnbrs * sizeof(unsigned));
+  merged_index_size += (sizeof(unsigned) + nnbrs * sizeof(unsigned));
+  nhood_set.clear();
+  final_nhood.clear();
+
+  std::cout<<"Expected size: " << merged_index_size << std::endl;
+//  merged_index_size = nsg_writer.get_file_size();
   nsg_writer.reset();
   nsg_writer.write((char *) &merged_index_size, sizeof(uint64_t));
 
   std::cout << "Finished merge\n";
-  delete[] nhood;
   return 0;
 }
 int main(int argc, char **argv) {
