@@ -125,7 +125,7 @@ int merge_shards(const std::string &nsg_prefix, const std::string &nsg_suffix,
   medoid_writer.close();
 
   std::cout << "Starting merge\n";
-  std::set<unsigned> nhood_set;
+  std::set<unsigned>    nhood_set;
   std::vector<unsigned> final_nhood;
 
   unsigned nnbrs = 0, shard_nnbrs = 0;
@@ -134,9 +134,9 @@ int merge_shards(const std::string &nsg_prefix, const std::string &nsg_suffix,
     unsigned node_id = id_shard.first;
     unsigned shard_id = id_shard.second;
     if (cur_id < node_id) {
-        final_nhood.reserve(nhood_set.size());
-      for (auto pt : nhood_set) 
-          final_nhood.emplace_back(pt);
+      final_nhood.reserve(nhood_set.size());
+      for (auto pt : nhood_set)
+        final_nhood.emplace_back(pt);
       nnbrs = nhood_set.size();
       // write into merged ofstream
       nsg_writer.write((char *) &nnbrs, sizeof(unsigned));
@@ -160,12 +160,11 @@ int merge_shards(const std::string &nsg_prefix, const std::string &nsg_suffix,
     for (_u64 j = 0; j < shard_nnbrs; j++) {
       nhood_set.insert(idmaps[shard_id][shard_nhood[j]]);
     }
-    
   }
 
   final_nhood.reserve(nhood_set.size());
-  for (auto pt : nhood_set) 
-      final_nhood.emplace_back(pt);
+  for (auto pt : nhood_set)
+    final_nhood.emplace_back(pt);
   nnbrs = nhood_set.size();
   // write into merged ofstream
   nsg_writer.write((char *) &nnbrs, sizeof(unsigned));
@@ -174,8 +173,8 @@ int merge_shards(const std::string &nsg_prefix, const std::string &nsg_suffix,
   nhood_set.clear();
   final_nhood.clear();
 
-  std::cout<<"Expected size: " << merged_index_size << std::endl;
-//  merged_index_size = nsg_writer.get_file_size();
+  std::cout << "Expected size: " << merged_index_size << std::endl;
+  //  merged_index_size = nsg_writer.get_file_size();
   nsg_writer.reset();
   nsg_writer.write((char *) &merged_index_size, sizeof(uint64_t));
 

@@ -109,8 +109,8 @@ namespace diskann {
 
     // convert strs into params
     this->Lsearch = (_u64) std::atoi(param_list[0].c_str());
-    _u64 nthreads = (_u64) std::atoi(param_list[1].c_str());
-	std::string data_bin = param_list[2];
+    _u64        nthreads = (_u64) std::atoi(param_list[1].c_str());
+    std::string data_bin = param_list[2];
 
     std::string mem_index_file = index_prefix_path + "_mem.index";
 
@@ -146,9 +146,9 @@ namespace diskann {
     //#pragma omp  parallel for schedule(dynamic, 1)
     for (_s64 i = 0; i < queryCount; i++) {
       _pIndex->beam_search(query + i * this->aligned_dimension, neighborCount,
-                              this->Lsearch, 1, start_points,
-                              ids + (i * neighborCount),
-                              distances + (i * neighborCount));
+                           this->Lsearch, 1, start_points,
+                           ids + (i * neighborCount),
+                           distances + (i * neighborCount));
     }
   }
 

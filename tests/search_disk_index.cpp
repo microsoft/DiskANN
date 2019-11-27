@@ -141,7 +141,7 @@ int search_disk_index(int argc, char** argv) {
     diskann::convert_types<uint64_t, uint32_t>(
         query_result_ids[test_id].data(), results_u32, query_num, recall_at);
     std::string cur_result_path =
-        result_output_prefix + "_" +  std::to_string(L) + "_idx_uint32.bin";
+        result_output_prefix + "_" + std::to_string(L) + "_idx_uint32.bin";
     diskann::save_bin<_u32>(cur_result_path, results_u32, query_num, recall_at);
     //    cur_result_path =
     //        result_output_prefix + std::to_string(L) + "_dist_float.bin";
