@@ -11,7 +11,7 @@
 #define MAX_IO_DEPTH 128
 #define NUM_IO_POLL_THREADS 1
 
-namespace NSG {
+namespace diskann {
 
   struct DiskAnnOverlapped : public OVERLAPPED {
     std::function<void(bool)> m_callback;

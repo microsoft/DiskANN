@@ -65,7 +65,6 @@ namespace diskann {
     DISKANN_DLLEXPORT void create_disk_layout(const std::string base_file,
                                               const std::string mem_index_file,
                                               const std::string output_file);
-    DISKANN_DLLEXPORT void cache_visited_nodes(_u64 *node_list, _u64 num_nodes);
     DISKANN_DLLEXPORT void load_cache_from_file(std::string cache_bin);
     DISKANN_DLLEXPORT void cache_bfs_levels(_u64 nlevels);
 

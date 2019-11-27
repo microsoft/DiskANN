@@ -4,7 +4,7 @@
 #include "dll/IDiskPriorityIO.h"
 #include "aligned_file_reader.h"
 
-namespace NSG {
+namespace diskann {
   class BingAlignedFileReader : public AlignedFileReader {
    private:
     ANNIndex::IDiskPriorityIO *m_pReader;

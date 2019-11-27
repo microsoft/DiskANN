@@ -52,7 +52,7 @@ int main(int argc, char** argv) {
 
 
   for (int i = 0; i < NUM_THREADS; i++) {
-    NSG::DiskPriorityIO iohandler(
+    diskann::DiskPriorityIO iohandler(
         ANNIndex::DiskIOScenario::DIS_HighPriorityUserRead);
     iohandler.Initialize(s.c_str());
 

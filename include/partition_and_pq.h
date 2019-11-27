@@ -12,12 +12,12 @@
 #include "windows_customizations.h"
 
 template<typename T>
-void gen_random_slice(const std::string data_file, float p_val,
+void gen_random_slice(const std::string data_file, double p_val,
                       float *&sampled_data, size_t &slice_size, size_t &ndims);
 
 template<typename T>
 void gen_random_slice(const T *inputdata, size_t npts, size_t ndims,
-                      float p_val, float *&sampled_data, size_t &slice_size);
+                      double p_val, float *&sampled_data, size_t &slice_size);
 
 template<typename T>
 int partition(const std::string data_file, const float sampling_rate,

@@ -62,8 +62,7 @@ namespace diskann {
   // (bin), and initialize max_points
   template<typename T, typename TagT>
   Index<T, TagT>::Index(Metric m, const char *filename, const size_t max_points,
-
-                        const size_t nd, const size_t num_frozen_pts,
+	                    const size_t nd, const size_t num_frozen_pts,
                         const bool enable_tags, const bool store_data,
                         const bool support_eager_delete)
       : _num_frozen_pts(num_frozen_pts), _has_built(false), _width(0),
@@ -1752,17 +1751,14 @@ namespace diskann {
 #ifdef _WINDOWS
   template DISKANN_DLLEXPORT Index<uint8_t, int>::Index(
       Metric m, const char *filename, const size_t max_points,
-
       const size_t nd, const size_t num_frozen_pts, const bool enable_tags,
       const bool store_data, const bool support_eager_delete);
   template DISKANN_DLLEXPORT Index<int8_t, int>::Index(
       Metric m, const char *filename, const size_t max_points,
-
       const size_t nd, const size_t num_frozen_pts, const bool enable_tags,
       const bool store_data, const bool support_eager_delete);
   template DISKANN_DLLEXPORT Index<float, int>::Index(
       Metric m, const char *filename, const size_t max_points,
-
       const size_t nd, const size_t num_frozen_pts, const bool enable_tags,
       const bool store_data, const bool support_eager_delete);
 
@@ -1777,11 +1773,11 @@ namespace diskann {
   template DISKANN_DLLEXPORT void Index<float, int>::save(const char *filename);
 
   template DISKANN_DLLEXPORT void Index<uint8_t, int>::load(
-      const char *filename, const bool load_tags);
+      const char *filename, const bool load_tags, const char* load_filename);
   template DISKANN_DLLEXPORT void Index<int8_t, int>::load(
-      const char *filename, const bool load_tags);
-  template DISKANN_DLLEXPORT void Index<float, int>::load(const char *filename,
-                                                          const bool load_tags);
+      const char *filename, const bool load_tags, const char *load_filename);
+  template DISKANN_DLLEXPORT void Index<float, int>::load(
+	  const char *filename, const bool load_tags, const char *load_filename);
 
   template DISKANN_DLLEXPORT void Index<uint8_t, int>::build(
       Parameters &parameters, const std::vector<int> &tags);
@@ -1792,13 +1788,13 @@ namespace diskann {
 
   template DISKANN_DLLEXPORT std::pair<int, int> Index<uint8_t>::beam_search(
       const uint8_t *query, const size_t K, const unsigned L, unsigned *indices,
-      int beam_width, std::vector<unsigned> start_points);
+      int beam_width, std::vector<unsigned> start_points, unsigned num_frozen);
   template DISKANN_DLLEXPORT std::pair<int, int> Index<int8_t>::beam_search(
       const int8_t *query, const size_t K, const unsigned L, unsigned *indices,
-      int beam_width, std::vector<unsigned> start_points);
+      int beam_width, std::vector<unsigned> start_points, unsigned num_frozen);
   template DISKANN_DLLEXPORT std::pair<int, int> Index<float>::beam_search(
       const float *query, const size_t K, const unsigned L, unsigned *indices,
-      int beam_width, std::vector<unsigned> start_points);
+      int beam_width, std::vector<unsigned> start_points, unsigned num_frozen);
 
   template DISKANN_DLLEXPORT int Index<int8_t, int>::delete_point(
       const int tag);

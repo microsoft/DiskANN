@@ -11,6 +11,7 @@
 #include "parameters.h"
 #include "tsl/robin_set.h"
 #include "utils.h"
+#include "windows_customizations.h"
 
 namespace diskann {
   template<typename T, typename TagT = int>
@@ -29,7 +30,7 @@ namespace diskann {
               const char *tag_filename = NULL);
     // generates one or more frozen points that will never get deleted from the
     // graph
-    int generate_random_frozen_points(const char *filename = NULL);
+    DISKANN_DLLEXPORT int generate_random_frozen_points(const char *filename = NULL);
     void init_random_graph(unsigned k);
 
     void build(Parameters &             parameters,
@@ -49,8 +50,6 @@ namespace diskann {
                                          std::vector<unsigned> start_points,
                                          unsigned              frozen_pts,
                                          unsigned *indices_buffer = NULL);
-
-    void prefetch_vector(unsigned id);
 
     // repositions frozen points to the end of _data - if they have been moved
     // during deletion
@@ -87,11 +86,6 @@ namespace diskann {
     typedef std::vector<std::vector<unsigned>> CompactGraph;
     CompactGraph                               _final_graph;
     CompactGraph                               _in_graph;
-
-    // to get appropriate start points for search
-    void reachable_bfs(const unsigned                         start_node,
-                       std::vector<tsl::robin_set<unsigned>> &bfs_order,
-                       bool *                                 visited);
 
     // determines navigating node of the graph by calculating medoid of data
     unsigned calculate_entry_point();

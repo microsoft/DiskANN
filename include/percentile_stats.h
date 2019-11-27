@@ -26,7 +26,7 @@ namespace diskann {
     uint64_t n_cache_hits = 0;  // # cache_hits
   };
 
-  inline float get_percentile_stats(
+  inline uint64_t get_percentile_stats(
       QueryStats *stats, uint64_t len, float percentile,
       const std::function<uint64_t(const QueryStats &)> &member_fn) {
     std::vector<uint64_t> vals(len);

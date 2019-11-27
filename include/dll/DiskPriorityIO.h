@@ -11,7 +11,7 @@
 
 #include "IDiskPriorityIO.h"
 
-namespace NSG {
+namespace diskann {
 
   struct DiskAnnOverlapped;
 

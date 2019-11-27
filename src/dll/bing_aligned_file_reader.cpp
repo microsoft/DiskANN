@@ -6,7 +6,7 @@
 #include "bing_aligned_file_reader.h"
 #include "dll/DiskPriorityIO.h"
 
-namespace NSG {
+namespace diskann {
 
   // TODO: Must refactor this and WAFR to avoid code
   // repeats

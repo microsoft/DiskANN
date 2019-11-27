@@ -761,11 +761,11 @@ namespace diskann {
     full_retset.reserve(4096);
     tsl::robin_map<_u64, T *> fp_coords;
 
-    _u32  best_medoid = 0;
+    _u64  best_medoid = 0;
     float best_dist = (std::numeric_limits<float>::max)();
     for (_u64 cur_m = 0; cur_m < num_medoids; cur_m++) {
       float cur_expanded_dist = dist_cmp->compare(
-          query, medoid_full_precs + aligned_dim * cur_m, aligned_dim);
+          query, medoid_full_precs + aligned_dim * cur_m, (uint32_t) aligned_dim);
       if (cur_expanded_dist < best_dist) {
         best_medoid = cur_m;
         best_dist = cur_expanded_dist;
@@ -1073,4 +1073,5 @@ namespace diskann {
   template class PQFlashIndex<_u8>;
   template class PQFlashIndex<_s8>;
   template class PQFlashIndex<float>;
+
 }  // namespace diskann

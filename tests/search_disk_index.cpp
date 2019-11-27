@@ -117,15 +117,15 @@ int search_disk_index(int argc, char** argv) {
           stats + i);
     }
 
-    float mean_latency = diskann::get_percentile_stats(
+    uint64_t mean_latency = diskann::get_percentile_stats(
         stats, query_num, 0.5,
         [](const diskann::QueryStats& stats) { return stats.total_us; });
 
-    float latency_99 = diskann::get_percentile_stats(
+    uint64_t latency_99 = diskann::get_percentile_stats(
         stats, query_num, 0.99,
         [](const diskann::QueryStats& stats) { return stats.total_us; });
 
-    float mean_io = diskann::get_percentile_stats(
+    uint64_t mean_io = diskann::get_percentile_stats(
         stats, query_num, 0.5,
         [](const diskann::QueryStats& stats) { return stats.n_ios; });
 
