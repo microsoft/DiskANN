@@ -2,7 +2,7 @@
 #include <iostream>
 #include <sstream>
 
-using namespace NSG;
+using namespace diskann;
 
 MemoryMapper::MemoryMapper(const std::string& filename)
     : MemoryMapper(filename.c_str()) {

@@ -14,32 +14,32 @@ namespace ANNIndex {
 
   class IANNIndex {
    public:
-    NSGDLLEXPORT explicit IANNIndex(unsigned __int32 dimension = 0,
-                                    DistanceType     distanceType = DT_L2)
+    DISKANN_DLLEXPORT explicit IANNIndex(unsigned __int32 dimension = 0,
+                                         DistanceType     distanceType = DT_L2)
         : m_dimension(dimension), m_distanceType(distanceType) {
     }
 
-    NSGDLLEXPORT virtual ~IANNIndex() {
+    DISKANN_DLLEXPORT virtual ~IANNIndex() {
     }
 
     // In implementation, the file path can be a file or folder.
-    NSGDLLEXPORT virtual bool BuildIndex(const char* dataFilePath,
-                                         const char* indexFilePath,
-                                         const char* indexBuildParameters) = 0;
+    DISKANN_DLLEXPORT virtual bool BuildIndex(
+        const char* dataFilePath, const char* indexFilePath,
+        const char* indexBuildParameters) = 0;
 
     // Load index form file.
-    NSGDLLEXPORT virtual bool LoadIndex(const char* indexFilePath,
-                                        const char* queryParameters) = 0;
+    DISKANN_DLLEXPORT virtual bool LoadIndex(const char* indexFilePath,
+                                             const char* queryParameters) = 0;
 
     // Search several vectors, return their neighbors' distance and ids.
     // Both distances & ids are returned arraies of neighborCount elements,
     // And need to be allocated by invoker, which capicity should be greater
     // than queryCount * neighborCount.
-    NSGDLLEXPORT virtual void SearchIndex(const char*       vector,
-                                          unsigned __int64  queryCount,
-                                          unsigned __int64  neighborCount,
-                                          float*            distances,
-                                          unsigned __int64* ids) const = 0;
+    DISKANN_DLLEXPORT virtual void SearchIndex(const char*       vector,
+                                               unsigned __int64  queryCount,
+                                               unsigned __int64  neighborCount,
+                                               float*            distances,
+                                               unsigned __int64* ids) const = 0;
 
    public:
     // Vector dimension.

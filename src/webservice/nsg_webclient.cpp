@@ -130,7 +130,7 @@ void loadData(const std::string& fileName, float*& queries,
   if (fileName.rfind(".txt") != std::string::npos) {
     loadTextData(fileName, queries, numPoints, dimensions);
   } else if (fileName.rfind(".fvecs") != std::string::npos) {
-    NSG::InMemoryNSGSearch::load_data(fileName.c_str(), queries, numPoints,
+    diskann::InMemoryNSGSearch::load_data(fileName.c_str(), queries, numPoints,
                                       dimensions);
   } else {
     std::string message = std::string("Unknown file extension in filename ") +

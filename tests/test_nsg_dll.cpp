@@ -1,4 +1,5 @@
-#include <dll/nsg_interface.h>
+#define NOMINMAX
+#include <dll/diskann_interface.h>
 #include "dll/IANNIndex.h"
 #include "utils.h"
 
@@ -30,7 +31,7 @@ void write_Tvecs_unsigned(std::string fname, _u64* input, _u64 npts,
     out[i] = (unsigned) input[i];
   }
 
-  NSG::save_Tvecs<unsigned>(fname.c_str(), out, npts, ndims);
+  diskann::save_Tvecs<unsigned>(fname.c_str(), out, npts, ndims);
   delete[] out;
 }
 
@@ -45,13 +46,14 @@ int aux_main(int argc, char** argv) {
     return -1;
   }
 
-  ANNIndex::IANNIndex* intf = new NSG::NSGInterface<T>(0, ANNIndex::DT_L2);
+  ANNIndex::IANNIndex* intf =
+      new diskann::DiskANNInterface<T>(0, ANNIndex::DT_L2);
 
   bool res = 0;
   // for indexing
   {
     // just construct index
-    res = intf->BuildIndex(argv[1], argv[2], "50 64 200 50 0.01");
+    res = intf->BuildIndex(argv[1], argv[2], "60 100 2000 50 0.03");
     // ERROR CHECK
     if (res == 1) {
       exit(-1);
@@ -70,14 +72,14 @@ int aux_main(int argc, char** argv) {
     // load query bin
     T*   query = nullptr;
     _u64 nqueries, ndims, aligned_query_dim;
-    NSG::load_aligned_bin<T>(argv[3], query, nqueries, ndims,
-                             aligned_query_dim);
+    diskann::load_aligned_bin<T>(argv[3], query, nqueries, ndims,
+                                 aligned_query_dim);
 
     std::cout << "Loading ground truth..." << std::flush;
     // load ground truth
     _u32* ground_truth = nullptr;
     _u64  ngt, kgt;
-    NSG::load_bin<_u32>(argv[4], ground_truth, ngt, kgt);
+    diskann::load_bin<_u32>(argv[4], ground_truth, ngt, kgt);
 
     if (ngt != nqueries) {
       std::cout << "mismatch in ground truth rows and number of queries"
@@ -105,7 +107,7 @@ int aux_main(int argc, char** argv) {
     //  save results into ivecs
     // write_Tvecs_unsigned(argv[4], query_res, nqueries, k);
 
-    NSG::aligned_free(query);
+    diskann::aligned_free(query);
     delete[] ground_truth;
     delete[] query_res;
     delete[] query_dists;

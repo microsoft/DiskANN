@@ -6,7 +6,7 @@
 
 class DiskServer {
  public:
-  DiskServer(web::uri& url, std::unique_ptr<NSG::DiskNSGSearch>& searcher);
+  DiskServer(web::uri& url, std::unique_ptr<diskann::DiskNSGSearch>& searcher);
   virtual ~DiskServer();
 
   pplx::task<void> open();
@@ -18,5 +18,5 @@ class DiskServer {
  private:
   bool                                                              _isDebug;
   std::unique_ptr<web::http::experimental::listener::http_listener> _listener;
-  std::unique_ptr<NSG::DiskNSGSearch>&                          _searcher;
+  std::unique_ptr<diskann::DiskNSGSearch>&                          _searcher;
 };

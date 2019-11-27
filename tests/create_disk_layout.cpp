@@ -5,16 +5,16 @@
 #include <iostream>
 #include <limits>
 #include <vector>
-#include <pq_flash_index_nsg.h>
-#include <index_nsg.h>
+#include <pq_flash_index.h>
+#include <index.h>
 #include "cached_io.h"
 
 template<typename T>
 int create_disk_layout(int argc, char **argv) {
-  NSG::PQFlashNSG<T> _pFlashIndex;
-  std::string        base_file(argv[2]);
-  std::string        rand_nsg_file(argv[3]);
-  std::string        output_file(argv[4]);
+  diskann::PQFlashIndex<T> _pFlashIndex;
+  std::string              base_file(argv[2]);
+  std::string              rand_nsg_file(argv[3]);
+  std::string              output_file(argv[4]);
   _pFlashIndex.create_disk_layout(base_file, rand_nsg_file, output_file);
   return 0;
 }

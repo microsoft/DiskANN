@@ -1,9 +1,9 @@
 //#include <distances.h>
 //#include <indexing.h>
-#include <index_nsg.h>
+#include <index.h>
 #include <math_utils.h>
 #include <omp.h>
-#include <pq_flash_index_nsg.h>
+#include <pq_flash_index.h>
 #include <string.h>
 #include <time.h>
 #include <atomic>
@@ -43,10 +43,10 @@ int generate_cache_list(int argc, char** argv) {
   std::cout << "Search parameters: #threads: " << num_threads
             << ", beamwidth: " << beam_width << std::endl;
 
-  NSG::load_aligned_bin<T>(warmup_bin, warmup, warmup_num, ndims,
-                           warmup_aligned_dim);
+  diskann::load_aligned_bin<T>(warmup_bin, warmup, warmup_num, ndims,
+                               warmup_aligned_dim);
 
-  NSG::PQFlashNSG<T> _pFlashIndex;
+  diskann::PQFlashIndex<T> _pFlashIndex;
 
   int res = _pFlashIndex.load(num_threads, pq_centroids_file.c_str(),
                               compressed_data_file.c_str(),
@@ -72,7 +72,7 @@ int generate_cache_list(int argc, char** argv) {
                                     warmup_dists + (i * recall_at), beam_width);
   }
 
-  NSG::aligned_free(warmup);
+  diskann::aligned_free(warmup);
   delete[] warmup_res;
   delete[] warmup_dists;
 

@@ -19,9 +19,9 @@
     </ProjectConfiguration>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="..\..\src\index_nsg.cpp" />
+    <ClCompile Include="..\..\src\index.cpp" />
     <ClCompile Include="..\..\src\memory_mapper.cpp" />
-    <ClCompile Include="..\..\src\pq_flash_index_nsg.cpp" />
+    <ClCompile Include="..\..\src\pq_flash_index.cpp" />
     <ClCompile Include="..\..\src\webservice\disk_main.cpp" />
     <ClCompile Include="..\..\src\webservice\disk_nsg_search.cpp" />
     <ClCompile Include="..\..\src\webservice\disk_server.cpp" />
@@ -29,7 +29,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\..\include\cosine_similarity.h" />
-    <ClInclude Include="..\..\include\pq_flash_index_nsg.h" />
+    <ClInclude Include="..\..\include\pq_flash_index.h" />
     <ClInclude Include="..\..\include\webservice\disk_nsg_search.h" />
     <ClInclude Include="..\..\include\webservice\disk_server.h" />
     <ClInclude Include="..\..\include\webservice\stringutils.h" />

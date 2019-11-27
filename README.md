@@ -55,7 +55,7 @@ cmake -B. -A x64 ..
 To build from command line, use msbuild to first build the "nsg_dll" project. And then build the entire solution, as shown below.
 ```
 msbuild src\dll\nsg_dll.vcxproj
-msbuild rand-nsg.sln
+msbuild diskann.sln
 ```
 Check msbuild docs for additional options including choosing between debug and release builds.
 

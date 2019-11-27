@@ -24,7 +24,7 @@ namespace {
   }
 }  // namespace
 
-namespace NSG {
+namespace diskann {
   enum Metric { L2 = 0, INNER_PRODUCT = 1, FAST_L2 = 2, PQ = 3 };
   template<typename T>
   class Distance {
@@ -37,7 +37,7 @@ namespace NSG {
   template<typename T>
   class DistanceCosine : public Distance<T> {
     float compare(const T *a, const T *b, unsigned length) const {
-      return NSG::compute_cosine_similarity<T>(a, b, length);
+      return diskann::compute_cosine_similarity<T>(a, b, length);
     }
   };
 
@@ -131,4 +131,4 @@ namespace NSG {
     }
   };
 
-}  // namespace NSG
+}  // namespace diskann

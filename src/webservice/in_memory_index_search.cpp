@@ -1,28 +1,28 @@
 #include <cosine_similarity.h>
-#include <webservice/in_memory_nsg_search.h>
+#include <webservice/in_memory_index_search.h>
 #include <ctime>
 #include <iomanip>
 #include "util.h"
 
-namespace NSG {
+namespace diskann {
   const unsigned int DEFAULT_BEAM_WIDTH = 8;
   // const unsigned int L_MULTIPLIER = 10;
   // const unsigned int MAX_L = 300;
   const unsigned int DEFAULT_L = 704;
 
 
-  InMemoryNSGSearch::InMemoryNSGSearch(const char* baseFile,
+  InMemoryIndexSearch::InMemoryIndexSearch(const char* baseFile,
                                        const char* indexFile,
                                        const char* idsFile, Metric m)
       : _baseVectors(nullptr) {
-    _nsgIndex = std::unique_ptr<NSG::IndexNSG<float>>(
-        new NSG::IndexNSG<float>(m, baseFile, 0, false));
+    _nsgIndex = std::unique_ptr<diskann::Index<float>>(
+        new diskann::Index<float>(m, baseFile, 0, false));
     _nsgIndex->load(indexFile);
 
     _ids = load_ids(idsFile);
   }
 
-  NSGSearchResult InMemoryNSGSearch::search(const float*       query,
+  IndexSearchResult InMemoryIndexSearch::search(const float*       query,
                                             const unsigned int dimensions,
                                             const unsigned int K) {
     std::vector<unsigned int> start_points;
@@ -40,13 +40,13 @@ namespace NSG {
 
     // indices has the indexes of the results. Select the results from the
     // ids_vector.
-    NSGSearchResult searchResult(K, (unsigned int) duration);
+    IndexSearchResult searchResult(K, (unsigned int) duration);
     std::for_each(indices, indices + K, [&](const unsigned int& index) {
       searchResult.addResult(_ids[index]);
       searchResult.finalResultIndices.push_back(index); //TEMPORARY FOR IDENTIFYING RECALL
     });
 
-    std::vector<float> similarityScores = NSG::compute_cosine_similarity_batch(
+    std::vector<float> similarityScores = diskann::compute_cosine_similarity_batch(
         query, indices, _baseVectors, _dimensions, K);
     searchResult.distances = similarityScores;
 
@@ -56,10 +56,10 @@ namespace NSG {
     return searchResult;
   }
 
-  InMemoryNSGSearch::~InMemoryNSGSearch() {
+  InMemoryIndexSearch::~InMemoryIndexSearch() {
   }
 
-  void InMemoryNSGSearch::load_data(const char* filename, float*& data,
+  void InMemoryIndexSearch::load_data(const char* filename, float*& data,
                                     unsigned& num, unsigned& dim) {
     std::ifstream in(filename, std::ios::binary);
     if (!in.is_open()) {
@@ -85,7 +85,7 @@ namespace NSG {
     in.close();
   }
 
-  std::vector<std::wstring> InMemoryNSGSearch::load_ids(const char* idsFile) {
+  std::vector<std::wstring> InMemoryIndexSearch::load_ids(const char* idsFile) {
     std::wifstream            in(idsFile);
     std::vector<std::wstring> ids;
 
@@ -103,4 +103,4 @@ namespace NSG {
     return ids;
   }
 
-}  // namespace NSG
+}  // namespace diskann

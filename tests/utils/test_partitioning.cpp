@@ -1,6 +1,6 @@
 //#include <distances.h>
 //#include <indexing.h>
-#include <index_nsg.h>
+#include <index.h>
 #include <math_utils.h>
 #include "partition_and_pq.h"
 

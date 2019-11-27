@@ -3,7 +3,7 @@
 #include <typeinfo>
 #include <unordered_map>
 
-namespace NSG {
+namespace diskann {
 
   class Parameters {
    public:

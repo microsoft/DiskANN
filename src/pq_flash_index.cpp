@@ -1,4 +1,4 @@
-#include "pq_flash_index_nsg.h"
+#include "pq_flash_index.h"
 #include <malloc.h>
 #include "percentile_stats.h"
 
@@ -78,27 +78,27 @@ namespace {
   }
 }  // namespace
 
-namespace NSG {
+namespace diskann {
   template<>
-  PQFlashNSG<_u8>::PQFlashNSG() {
+  PQFlashIndex<_u8>::PQFlashIndex() {
     this->dist_cmp = new DistanceL2UInt8();
     //    medoid_nhood.second = nullptr;
   }
 
   template<>
-  PQFlashNSG<_s8>::PQFlashNSG() {
+  PQFlashIndex<_s8>::PQFlashIndex() {
     this->dist_cmp = new DistanceL2Int8();
     //    medoid_nhood.second = nullptr;
   }
 
   template<>
-  PQFlashNSG<float>::PQFlashNSG() {
+  PQFlashIndex<float>::PQFlashIndex() {
     this->dist_cmp = new DistanceL2();
     //    medoid_nhood.second = nullptr;
   }
 
   template<typename T>
-  PQFlashNSG<T>::~PQFlashNSG() {
+  PQFlashIndex<T>::~PQFlashIndex() {
     if (data != nullptr) {
       delete[] data;
     }
@@ -106,7 +106,7 @@ namespace NSG {
     // delete backing bufs for nhood and coord cache
     if (nhood_cache_buf != nullptr) {
       delete[] nhood_cache_buf;
-      NSG::aligned_free(coord_cache_buf);
+      diskann::aligned_free(coord_cache_buf);
     }
     for (auto m : medoid_nhoods)
       delete[] m.second;
@@ -120,7 +120,7 @@ namespace NSG {
   }
 
   template<typename T>
-  void PQFlashNSG<T>::setup_thread_data(_u64 nthreads) {
+  void PQFlashIndex<T>::setup_thread_data(_u64 nthreads) {
     std::cout << "Setting up thread-specific contexts for nthreads: "
               << nthreads << "\n";
 // omp parallel for to generate unique thread IDs
@@ -133,20 +133,20 @@ namespace NSG {
         // std::cout << "ctx: " << ctx << "\n";
         QueryScratch<T> scratch;
         _u64 coord_alloc_size = ROUND_UP(MAX_N_CMPS * this->aligned_dim, 256);
-        NSG::alloc_aligned((void **) &scratch.coord_scratch, coord_alloc_size,
-                           256);
+        diskann::alloc_aligned((void **) &scratch.coord_scratch,
+                               coord_alloc_size, 256);
         // scratch.coord_scratch = new T[MAX_N_CMPS * this->aligned_dim];
         // //Gopal. Commenting out the reallocation!
-        NSG::alloc_aligned((void **) &scratch.sector_scratch,
-                           MAX_N_SECTOR_READS * SECTOR_LEN, SECTOR_LEN);
-        NSG::alloc_aligned((void **) &scratch.aligned_scratch,
-                           256 * sizeof(float), 256);
-        NSG::alloc_aligned((void **) &scratch.aligned_pq_coord_scratch,
-                           16384 * sizeof(_u8), 256);
-        NSG::alloc_aligned((void **) &scratch.aligned_pqtable_dist_scratch,
-                           16384 * sizeof(float), 256);
-        NSG::alloc_aligned((void **) &scratch.aligned_dist_scratch,
-                           512 * sizeof(float), 256);
+        diskann::alloc_aligned((void **) &scratch.sector_scratch,
+                               MAX_N_SECTOR_READS * SECTOR_LEN, SECTOR_LEN);
+        diskann::alloc_aligned((void **) &scratch.aligned_scratch,
+                               256 * sizeof(float), 256);
+        diskann::alloc_aligned((void **) &scratch.aligned_pq_coord_scratch,
+                               16384 * sizeof(_u8), 256);
+        diskann::alloc_aligned((void **) &scratch.aligned_pqtable_dist_scratch,
+                               16384 * sizeof(float), 256);
+        diskann::alloc_aligned((void **) &scratch.aligned_dist_scratch,
+                               512 * sizeof(float), 256);
         memset(scratch.aligned_scratch, 0, 256 * sizeof(float));
         memset(scratch.coord_scratch, 0, MAX_N_CMPS * this->aligned_dim);
         ThreadData<T> data;
@@ -159,7 +159,7 @@ namespace NSG {
   }
 
   template<typename T>
-  void PQFlashNSG<T>::destroy_thread_data() {
+  void PQFlashIndex<T>::destroy_thread_data() {
     std::cerr << "Clearing scratch" << std::endl;
     assert(this->thread_data.size() == this->max_nthreads);
     while (this->thread_data.size() > 0) {
@@ -169,17 +169,17 @@ namespace NSG {
         data = this->thread_data.pop();
       }
       auto &scratch = data.scratch;
-      NSG::aligned_free((void *) scratch.coord_scratch);
-      NSG::aligned_free((void *) scratch.sector_scratch);
-      NSG::aligned_free((void *) scratch.aligned_scratch);
-      NSG::aligned_free((void *) scratch.aligned_pq_coord_scratch);
-      NSG::aligned_free((void *) scratch.aligned_pqtable_dist_scratch);
-      NSG::aligned_free((void *) scratch.aligned_dist_scratch);
+      diskann::aligned_free((void *) scratch.coord_scratch);
+      diskann::aligned_free((void *) scratch.sector_scratch);
+      diskann::aligned_free((void *) scratch.aligned_scratch);
+      diskann::aligned_free((void *) scratch.aligned_pq_coord_scratch);
+      diskann::aligned_free((void *) scratch.aligned_pqtable_dist_scratch);
+      diskann::aligned_free((void *) scratch.aligned_dist_scratch);
     }
   }
 
   template<typename T>
-  void PQFlashNSG<T>::set_cache_create_flag() {
+  void PQFlashIndex<T>::set_cache_create_flag() {
     this->create_visit_cache = true;
   }
 
@@ -187,11 +187,11 @@ namespace NSG {
    * present in node_list..
    *  The num_nodes parameter tells how many nodes to cache. */
   template<typename T>
-  void PQFlashNSG<T>::load_cache_from_file(std::string cache_bin) {
+  void PQFlashIndex<T>::load_cache_from_file(std::string cache_bin) {
     _u64  num_cached_nodes;
     _u64  dummy_ones;
     _u64 *node_list;
-    NSG::load_bin<_u64>(cache_bin, node_list, num_cached_nodes, dummy_ones);
+    diskann::load_bin<_u64>(cache_bin, node_list, num_cached_nodes, dummy_ones);
     std::cout << "Caching " << num_cached_nodes
               << "nodes full-precision vectors and graph neighborhood "
                  "information in memory..."
@@ -210,8 +210,8 @@ namespace NSG {
     memset(nhood_cache_buf, 0, num_cached_nodes * (max_degree + 1));
 
     _u64 coord_cache_buf_len = num_cached_nodes * aligned_dim;
-    NSG::alloc_aligned((void **) &coord_cache_buf,
-                       coord_cache_buf_len * sizeof(T), 8 * sizeof(T));
+    diskann::alloc_aligned((void **) &coord_cache_buf,
+                           coord_cache_buf_len * sizeof(T), 8 * sizeof(T));
     memset(coord_cache_buf, 0, coord_cache_buf_len * sizeof(T));
 
     size_t BLOCK_SIZE = 1000;
@@ -261,7 +261,7 @@ namespace NSG {
   }
 
   template<typename T>
-  void PQFlashNSG<T>::cache_bfs_levels(_u64 nlevels) {
+  void PQFlashIndex<T>::cache_bfs_levels(_u64 nlevels) {
     assert(nlevels > 1);
 
     // borrow thread data
@@ -386,8 +386,8 @@ namespace NSG {
               << coord_cache.size() << "\n";
     // consolidate coord_cache down to single buf
     _u64 coord_cache_buf_len = coord_cache.size() * aligned_dim;
-    NSG::alloc_aligned((void **) &coord_cache_buf,
-                       coord_cache_buf_len * sizeof(T), 8 * sizeof(T));
+    diskann::alloc_aligned((void **) &coord_cache_buf,
+                           coord_cache_buf_len * sizeof(T), 8 * sizeof(T));
     memset(coord_cache_buf, 0, coord_cache_buf_len * sizeof(T));
     cur_off = 0;
     for (auto &k_v : coord_cache) {
@@ -400,8 +400,8 @@ namespace NSG {
   }
 
   template<typename T>
-  void PQFlashNSG<T>::save_cached_nodes(_u64        num_nodes,
-                                        std::string cache_file_path) {
+  void PQFlashIndex<T>::save_cached_nodes(_u64        num_nodes,
+                                          std::string cache_file_path) {
     if (this->create_visit_cache) {
       std::sort(this->node_visit_counter.begin(), node_visit_counter.end(),
                 [](std::pair<_u64, _u32> &left, std::pair<_u64, _u32> &right) {
@@ -418,10 +418,10 @@ namespace NSG {
   }
 
   template<typename T>
-  int PQFlashNSG<T>::load(uint32_t num_threads, const char *pq_centroids_bin,
-                          const char *compressed_data_bin,
-                          const char *disk_index_file,
-                          const char *medoids_file) {
+  int PQFlashIndex<T>::load(uint32_t num_threads, const char *pq_centroids_bin,
+                            const char *compressed_data_bin,
+                            const char *disk_index_file,
+                            const char *medoids_file) {
     size_t pq_file_dim, pq_file_num_centroids;
     get_bin_metadata(pq_centroids_bin, pq_file_num_centroids, pq_file_dim);
 
@@ -435,7 +435,7 @@ namespace NSG {
     this->aligned_dim = ROUND_UP(pq_file_dim, 8);
 
     size_t npts_u64, nchunks_u64;
-    NSG::load_bin<_u8>(compressed_data_bin, data, npts_u64, nchunks_u64);
+    diskann::load_bin<_u8>(compressed_data_bin, data, npts_u64, nchunks_u64);
 
     this->num_points = npts_u64;
     this->n_chunks = nchunks_u64;
@@ -586,9 +586,9 @@ namespace NSG {
   }
 
   template<typename T>
-  void PQFlashNSG<T>::create_disk_layout(const std::string base_file,
-                                         const std::string mem_index_file,
-                                         const std::string output_file) {
+  void PQFlashIndex<T>::create_disk_layout(const std::string base_file,
+                                           const std::string mem_index_file,
+                                           const std::string output_file) {
     unsigned npts, ndims;
 
     // amount to read or write in one shot
@@ -702,12 +702,12 @@ namespace NSG {
   }
 
   template<typename T>
-  void PQFlashNSG<T>::cached_beam_search(const T *query, const _u64 k_search,
-                                         const _u64 l_search, _u64 *indices,
-                                         float *      distances,
-                                         const _u64   beam_width,
-                                         QueryStats * stats,
-                                         Distance<T> *output_dist_func) {
+  void PQFlashIndex<T>::cached_beam_search(const T *query, const _u64 k_search,
+                                           const _u64 l_search, _u64 *indices,
+                                           float *      distances,
+                                           const _u64   beam_width,
+                                           QueryStats * stats,
+                                           Distance<T> *output_dist_func) {
     ThreadData<T> data = this->thread_data.pop();
     while (data.scratch.sector_scratch == nullptr) {
       this->thread_data.wait_for_push_notify();
@@ -1070,7 +1070,7 @@ namespace NSG {
   }
 
   // instantiations
-  template class PQFlashNSG<_u8>;
-  template class PQFlashNSG<_s8>;
-  template class PQFlashNSG<float>;
-}  // namespace NSG
+  template class PQFlashIndex<_u8>;
+  template class PQFlashIndex<_s8>;
+  template class PQFlashIndex<float>;
+}  // namespace diskann

@@ -17,7 +17,6 @@ endif()
 project(diskann)
 include_directories(${PROJECT_SOURCE_DIR}/include ${PROJECT_SOURCE_DIR}/include/dll)
 
-
 #OpenMP
 find_package(OpenMP)
 if (OPENMP_FOUND)

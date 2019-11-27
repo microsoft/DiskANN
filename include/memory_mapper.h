@@ -12,7 +12,7 @@
 #endif
 #include <string>
 
-namespace NSG {
+namespace diskann {
   class MemoryMapper {
    private:
 #ifndef _WINDOWS

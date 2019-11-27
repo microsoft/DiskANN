@@ -4,12 +4,12 @@
 #include <vector>
 
 #include <distance.h>
-#include <index_nsg.h>
+#include <index.h>
 #include <cosine_similarity.h>
-namespace NSG {
-  class NSGSearchResult {
+namespace diskann {
+  class IndexSearchResult {
    public:
-    NSGSearchResult(unsigned int k, unsigned int elapsedTimeInMs)
+    IndexSearchResult(unsigned int k, unsigned int elapsedTimeInMs)
         : K(k), searchTimeInMs(elapsedTimeInMs) {
       finalResults.reserve(k);
     }
@@ -25,16 +25,16 @@ namespace NSG {
     std::vector<float>        distances;
   };
 
-  class InMemoryNSGSearch {
+  class InMemoryIndexSearch {
    public:
-    InMemoryNSGSearch(const char* baseFile, const char* indexFile,
+    InMemoryIndexSearch(const char* baseFile, const char* indexFile,
                       const char* idsFile, Metric m);
 
-    virtual NSGSearchResult search(const float*       query,
+    virtual IndexSearchResult search(const float*       query,
                                    const unsigned int dimensions,
                                    const unsigned int K);
 
-    virtual ~InMemoryNSGSearch();
+    virtual ~InMemoryIndexSearch();
 
     static void load_data(const char* filename, float*& data, unsigned& num,
                           unsigned& dim);
@@ -46,6 +46,6 @@ namespace NSG {
     unsigned int _dimensions, _numPoints;
 
     std::vector<std::wstring>      _ids;
-    std::unique_ptr<NSG::IndexNSG<float>> _nsgIndex;
+    std::unique_ptr<diskann::Index<float>> _nsgIndex;
   };
-}  // namespace NSG
+}  // namespace diskann

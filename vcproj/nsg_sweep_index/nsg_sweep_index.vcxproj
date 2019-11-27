@@ -173,7 +173,7 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="..\..\src\index_nsg.cpp" />
+    <ClCompile Include="..\..\src\index.cpp" />
     <ClCompile Include="..\..\src\memory_mapper.cpp" />
     <ClCompile Include="..\..\tests\build_in_memory_index.cpp" />
   </ItemGroup>

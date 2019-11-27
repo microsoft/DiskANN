@@ -10,14 +10,14 @@ int aux_main(int argc, char** argv) {
   source_type* sourceVec = nullptr;
   size_t       num_points, num_dims;
   std::cout << "Loading source vector from file " << argv[2] << std::endl;
-  NSG::load_bin<source_type>(argv[2], sourceVec, num_points, num_dims);
+  diskann::load_bin<source_type>(argv[2], sourceVec, num_points, num_dims);
 
   dest_type* destVec = new dest_type[num_points * num_dims];
-  NSG::convert_types<source_type, dest_type>(sourceVec, destVec, num_points,
+  diskann::convert_types<source_type, dest_type>(sourceVec, destVec, num_points,
                                              num_dims);
   std::cout << "Converted vector from type " << argv[1] << "to type " << argv[3]
             << std::endl;
-  NSG::save_bin<dest_type>(argv[4], destVec, num_points, num_dims);
+  diskann::save_bin<dest_type>(argv[4], destVec, num_points, num_dims);
   std::cout << "Saved converted vector to file " << argv[4] << std::endl;
   return 0;
 }

@@ -16,8 +16,8 @@ web::json::value toJsonArray(
     std::function<web::json::value(const T&)> valConverter);
 
 static web::json::value rsltIdsToJsonArray(
-    const NSG::NSGSearchResult& srchRslt);
-static web::json::value scoresToJsonArray(const NSG::NSGSearchResult& srchRslt);
+    const diskann::NSGSearchResult& srchRslt);
+static web::json::value scoresToJsonArray(const diskann::NSGSearchResult& srchRslt);
 static void parseJson(const utility::string_t& body, int& k, long long& queryId,
                       float*& queryVector, unsigned int& dimensions);
 static web::json::value prepareResponse(const long long& queryId, const int k);
@@ -30,7 +30,7 @@ const std::wstring VECTOR_KEY = L"query", K_KEY = L"k",
                    TIME_TAKEN_KEY = L"time_taken_in_us";
 
 // class Server
-Server::Server(web::uri& uri, std::unique_ptr<NSG::InMemoryNSGSearch>& searcher)
+Server::Server(web::uri& uri, std::unique_ptr<diskann::InMemoryNSGSearch>& searcher)
     : _searcher(searcher) {
   _listener = std::unique_ptr<web::http::experimental::listener::http_listener>(
       new web::http::experimental::listener::http_listener(uri));
@@ -59,9 +59,9 @@ void Server::handle_post(web::http::http_request message) {
       unsigned int dimensions = 0;
       parseJson(body, k, queryId, queryVector, dimensions);
 
-      NSG::NSGSearchResult srchRslt =
+      diskann::NSGSearchResult srchRslt =
           _searcher->search(queryVector, dimensions, (unsigned int) k);
-      NSG::aligned_free(queryVector);
+      diskann::aligned_free(queryVector);
 
       web::json::value response = prepareResponse(queryId, k);
       web::json::value ids = rsltIdsToJsonArray(srchRslt);
@@ -118,7 +118,7 @@ static void parseJson(const utility::string_t& body, int& k, long long& queryId,
 
   dimensions = static_cast<unsigned int>(queryArr.size());
   unsigned new_dim = ROUND_UP(dimensions, 8);
-  NSG::alloc_aligned((void**) &queryVector, new_dim * sizeof(float), 256);
+  diskann::alloc_aligned((void**) &queryVector, new_dim * sizeof(float), 256);
   memset(queryVector, 0, new_dim * sizeof(float));
   for (int i = 0; i < queryArr.size(); i++) {
     queryVector[i] = (float) queryArr[i].as_double();
@@ -139,7 +139,7 @@ web::json::value toJsonArray(
   return rslts;
 }
 
-web::json::value rsltIdsToJsonArray(const NSG::NSGSearchResult& srchRslt) {
+web::json::value rsltIdsToJsonArray(const diskann::NSGSearchResult& srchRslt) {
   web::json::value rslts = web::json::value::array();
   for (int i = 0; i < srchRslt.finalResults.size(); i++) {
     auto idVal = web::json::value::string(srchRslt.finalResults[i]);
@@ -148,7 +148,7 @@ web::json::value rsltIdsToJsonArray(const NSG::NSGSearchResult& srchRslt) {
   return rslts;
 }
 
-web::json::value scoresToJsonArray(const NSG::NSGSearchResult& srchRslt) {
+web::json::value scoresToJsonArray(const diskann::NSGSearchResult& srchRslt) {
   web::json::value scores = web::json::value::array();
   for (int i = 0; i < srchRslt.distances.size(); i++) {
     scores[i] = web::json::value::number(srchRslt.distances[i]);

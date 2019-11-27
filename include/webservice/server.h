@@ -6,7 +6,7 @@
 
 class Server {
  public:
-  Server(web::uri& url, std::unique_ptr<NSG::InMemoryNSGSearch>& searcher);
+  Server(web::uri& url, std::unique_ptr<diskann::InMemoryNSGSearch>& searcher);
   virtual ~Server();
 
   pplx::task<void> open();
@@ -18,5 +18,5 @@ class Server {
  private:
   bool                                                              _isDebug;
   std::unique_ptr<web::http::experimental::listener::http_listener> _listener;
-  std::unique_ptr<NSG::InMemoryNSGSearch>&                          _searcher;
+  std::unique_ptr<diskann::InMemoryNSGSearch>&                          _searcher;
 };

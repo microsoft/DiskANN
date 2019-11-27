@@ -12,7 +12,7 @@
 #include "distance.h"
 #include "parameters.h"
 
-namespace NSG {
+namespace diskann {
   struct QueryStats {
     uint64_t total_us = 0;      // total time to process query in micros
     uint64_t n_4k = 0;          // # of 4kB reads

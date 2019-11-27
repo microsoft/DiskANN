@@ -1,4 +1,4 @@
-// nsg_server.cpp : REST interface for NSG search.
+// nsg_server.cpp : REST interface for diskann search.
 //
 #include <webservice/server.h>
 #include <webservice/in_memory_nsg_search.h>
@@ -6,7 +6,7 @@
 #include <iostream>
 
 std::unique_ptr<Server>                 g_httpServer(nullptr);
-std::unique_ptr<NSG::InMemoryNSGSearch> g_inMemoryNSGSearch(nullptr);
+std::unique_ptr<diskann::InMemoryNSGSearch> g_inMemoryNSGSearch(nullptr);
 
 void setup(const utility::string_t& address) {
   web::http::uri_builder uriBldr(address);
@@ -28,8 +28,8 @@ void teardown(const utility::string_t& address) {
 void loadIndex(const char* indexFile, const char* baseFile,
                const char* idsFile) {
   auto nsgSearch =
-      new NSG::InMemoryNSGSearch(baseFile, indexFile, idsFile, NSG::L2);
-  g_inMemoryNSGSearch = std::unique_ptr<NSG::InMemoryNSGSearch>(nsgSearch);
+      new diskann::InMemoryNSGSearch(baseFile, indexFile, idsFile, diskann::L2);
+  g_inMemoryNSGSearch = std::unique_ptr<diskann::InMemoryNSGSearch>(nsgSearch);
 }
 
 std::wstring getHostingAddress(const char* hostNameAndPort) {

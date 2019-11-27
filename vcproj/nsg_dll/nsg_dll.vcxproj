@@ -20,18 +20,18 @@
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="..\..\src\dll\dllmain.cpp" />
-    <ClCompile Include="..\..\src\dll\nsg_interface.cpp" />
-    <ClCompile Include="..\..\src\index_nsg.cpp" />
+    <ClCompile Include="..\..\src\dll\diskann_interface.cpp" />
+    <ClCompile Include="..\..\src\index.cpp" />
     <ClCompile Include="..\..\src\math_utils.cpp" />
     <ClCompile Include="..\..\src\memory_mapper.cpp" />
     <ClCompile Include="..\..\src\partition_and_pq.cpp" />
-    <ClCompile Include="..\..\src\pq_flash_index_nsg.cpp" />
+    <ClCompile Include="..\..\src\pq_flash_index.cpp" />
     <ClCompile Include="..\..\src\windows_aligned_file_reader.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\..\include\dll\IANNIndex.h" />
-    <ClInclude Include="..\..\include\dll\nsg_interface.h" />
-    <ClInclude Include="..\..\include\dll\nsg_mkl.h" />
+    <ClInclude Include="..\..\include\dll\diskann_interface.h" />
+    <ClInclude Include="..\..\include\dll\diskann_mkl.h" />
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <VCProjectVersion>15.0</VCProjectVersion>

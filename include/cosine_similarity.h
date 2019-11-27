@@ -4,7 +4,7 @@
 #include <cstdlib>
 #include <vector>
 
-namespace NSG {
+namespace diskann {
   template<typename T>
   inline float compute_l2_norm(const T* vector, uint64_t ndims) {
     float norm = 0.0f;
@@ -40,4 +40,4 @@ namespace NSG {
     }
     return cos_dists;
   }
-}  // namespace NSG
+}  // namespace diskann

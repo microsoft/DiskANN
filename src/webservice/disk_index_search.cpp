@@ -1,16 +1,16 @@
 #include <cosine_similarity.h>
-#include <webservice/disk_nsg_search.h>
+#include <webservice/disk_index_search.h>
 #include <ctime>
 #include <iomanip>
 #include "utils.h"
 
-namespace NSG {
+namespace diskann {
   const unsigned int DEFAULT_BEAM_WIDTH = 8;
   // const unsigned int L_MULTIPLIER = 10;
   // const unsigned int MAX_L = 300;
   const unsigned int DEFAULT_L = 704;
 
-  DiskNSGSearch::DiskNSGSearch(const char* indexFilePrefix, const char* idsFile,
+  DiskIndexSearch::DiskIndexSearch(const char* indexFilePrefix, const char* idsFile,
                                const _u64 cache_nlevels, const _u64 nthreads) {
     this->cosine_distance = new DistanceCosine<float>();
 
@@ -24,7 +24,7 @@ namespace NSG {
     std::string params_path = index_prefix_path + "_params.bin";
     uint32_t*   params;
     size_t      nargs, one;
-    NSG::load_bin<uint32_t>(params_path.c_str(), params, nargs, one);
+    diskann::load_bin<uint32_t>(params_path.c_str(), params, nargs, one);
 
     // infer chunk_size
     _u64 m_dimension = (_u64) params[3];
@@ -43,7 +43,7 @@ namespace NSG {
               << stars << "\n";
 
     // create object
-    _pFlashIndex.reset(new PQFlashNSG<float>());
+    _pFlashIndex.reset(new PQFlashIndex<float>());
 
     // load index
     _pFlashIndex->load(data_bin.c_str(), nsg_disk_opt.c_str(),
@@ -61,7 +61,7 @@ namespace NSG {
     _ids = load_ids(idsFile);
   }
 
-  NSGSearchResult DiskNSGSearch::search(const float*       query,
+  NSGSearchResult DiskIndexSearch::search(const float*       query,
                                         const unsigned int dimensions,
                                         const unsigned int K) {
     std::vector<unsigned int> start_points;
@@ -93,11 +93,11 @@ namespace NSG {
     return searchResult;
   }
 
-  DiskNSGSearch::~DiskNSGSearch() {
+  DiskIndexSearch::~DiskIndexSearch() {
     delete this->cosine_distance;
   }
 
-  std::vector<std::wstring> DiskNSGSearch::load_ids(const char* idsFile) {
+  std::vector<std::wstring> DiskIndexSearch::load_ids(const char* idsFile) {
     std::wifstream            in(idsFile);
     std::vector<std::wstring> ids;
 
@@ -115,4 +115,4 @@ namespace NSG {
     return ids;
   }
 
-}  // namespace NSG
+}  // namespace diskann

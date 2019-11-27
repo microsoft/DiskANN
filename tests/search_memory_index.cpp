@@ -1,8 +1,9 @@
-#include <index_nsg.h>
+#include <index.h>
 #include <omp.h>
 #include <string.h>
 #include <cstring>
 #include <iomanip>
+#include <set>
 #include "utils.h"
 #ifndef _WINDOWS
 #include <sys/mman.h>
@@ -17,6 +18,7 @@ template<typename T>
 int search_memory_index(int argc, char** argv) {
   T*                query = nullptr;
   size_t            query_num, query_dim, query_aligned_dim;
+  unsigned          frozen_pts;
   std::vector<_u64> Lvec;
 
   std::string data_file(argv[2]);
@@ -25,8 +27,16 @@ int search_memory_index(int argc, char** argv) {
   _u64        recall_at = std::atoi(argv[5]);
   _u32        beam_width = std::atoi(argv[6]);
   std::string result_output_prefix(argv[7]);
+  frozen_pts = std::atoi(argv[8]);
 
-  for (int ctr = 8; ctr < argc; ctr++) {
+  int ctr;
+  int tags = std::atoi(argv[9]);
+  if (tags == 0)
+    ctr = 10;
+  else {
+    ctr = 11;
+  }
+  for (ctr = 9; ctr < argc; ctr++) {
     _u64 curL = std::atoi(argv[ctr]);
     if (curL >= recall_at)
       Lvec.push_back(curL);
@@ -40,19 +50,25 @@ int search_memory_index(int argc, char** argv) {
 
   std::cout << "Search parameters: beamwidth: " << beam_width << std::endl;
 
-  NSG::load_aligned_bin<T>(query_bin, query, query_num, query_dim,
-                           query_aligned_dim);
+  diskann::load_aligned_bin<T>(query_bin, query, query_num, query_dim,
+                               query_aligned_dim);
 
   std::cout.setf(std::ios_base::fixed, std::ios_base::floatfield);
   std::cout.precision(2);
 
-  NSG::IndexNSG<T> index(NSG::L2, data_file.c_str());
-  index.load(memory_index_file.c_str());  // to load NSG
+  diskann::Index<T> index(diskann::L2, data_file.c_str());
+  if (tags == 0)
+    index.load(memory_index_file.c_str());  // to load diskann
+  else {
+    std::string tag_file(argv[10]);
+    index.load(memory_index_file.c_str(), 1, tag_file.c_str());
+  }
   std::cout << "Index loaded" << std::endl;
 
   std::vector<unsigned> start_points;
+  //  index.populate_start_points_ep(start_points);
 
-  NSG::Parameters paras;
+  diskann::Parameters paras;
   std::cout << std::setw(8) << "Ls" << std::setw(16) << "Latency" << std::endl;
   std::cout << "==============================" << std::endl;
 
@@ -68,11 +84,12 @@ int search_memory_index(int argc, char** argv) {
     for (int64_t i = 0; i < (int64_t) query_num; i++) {
       index.beam_search(query + i * query_aligned_dim, recall_at, L,
                         query_result_ids[test_id].data() + i * recall_at,
-                        beam_width, start_points);
+                        beam_width, start_points, frozen_pts);
     }
     auto e = std::chrono::high_resolution_clock::now();
 
     std::chrono::duration<double> diff = e - s;
+
     float latency = (diff.count() / query_num) * (1000000);
 
     std::cout << std::setw(8) << L << std::setw(16) << latency << std::endl;
@@ -83,22 +100,24 @@ int search_memory_index(int argc, char** argv) {
   for (auto L : Lvec) {
     std::string cur_result_path =
         result_output_prefix + std::to_string(L) + "_idx_uint32.bin";
-    NSG::save_bin<_u32>(cur_result_path, query_result_ids[test_id].data(),
-                        query_num, recall_at);
+    diskann::save_bin<_u32>(cur_result_path, query_result_ids[test_id].data(),
+                            query_num, recall_at);
     test_id++;
   }
 
-  NSG::aligned_free(query);
+  diskann::aligned_free(query);
   return 0;
 }
 
 int main(int argc, char** argv) {
-  if (argc <= 8) {
+  if (argc <= 9) {
     std::cout << "Usage: " << argv[0]
               << " <index_type[float/int8/uint8]>  <full_data_bin>  "
                  "<memory_index_path>  "
                  "<query_bin> "
-                 "<recall@> <beam_width> <result_output_prefix> <L1> <L2> ... "
+                 "<recall@> <beam_width> <result_output_prefix> "
+                 "<num_frozen_points> <L1> "
+                 "<L2> ... "
               << std::endl;
     exit(-1);
   }
