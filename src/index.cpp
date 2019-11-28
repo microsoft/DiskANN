@@ -803,7 +803,7 @@ namespace diskann {
         size_t end_id = (std::min)(true_num_pts, (sync_num + 1) * round_size);
 
         auto s = std::chrono::high_resolution_clock::now();
-#pragma omp  parallel for schedule(dynamic, 64)
+#pragma omp  parallel for schedule(static, 256)
         for (_u64 node_ctr = (_u64) start_id; node_ctr < (_u64) end_id;
              ++node_ctr) {
           _u64                      node = rand_perm[node_ctr];
