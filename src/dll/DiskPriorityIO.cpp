@@ -73,7 +73,7 @@ namespace diskann {
     m_overlappedQueue.pop(os);
     if (os == nullptr) {
       os = new DiskAnnOverlapped();
-	}
+    }
 
     os->OffsetHigh = (readRequest.m_offset >> 32);
     os->Offset = readRequest.m_offset & 0xffffffff;

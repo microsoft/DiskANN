@@ -13,7 +13,7 @@ namespace ANNIndex {
     DIS_Count
   };
 
-  struct  AsyncReadRequest {
+  struct AsyncReadRequest {
     unsigned __int64          m_offset;
     __int8*                   m_buffer;
     std::function<void(bool)> m_callback;

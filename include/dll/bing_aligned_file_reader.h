@@ -16,7 +16,7 @@ namespace diskann {
 
     virtual void register_thread();
     virtual void deregister_thread();
-    
+
     virtual IOContext &get_ctx();
 
     // Open & close ops
@@ -26,10 +26,9 @@ namespace diskann {
 
     // process batch of aligned requests in parallel
     // NOTE :: blocking call for the calling thread, but can thread-safe
-    virtual void read(std::vector<AlignedRead> &read_reqs, IOContext& ctx);
+    virtual void read(std::vector<AlignedRead> &read_reqs, IOContext &ctx);
 
-	void callback(std::shared_ptr<std::atomic<int>> pCounter, bool result);
-
+    void callback(std::shared_ptr<std::atomic<int>> pCounter, bool result);
   };
 }  // namespace NSG
 #endif

@@ -1,33 +1,3 @@
-##Linux build and usage (incomplete):
-
-Install the following packages through apt-get, and Intel MKL either by downloading the installer or using [apt](https://software.intel.com/en-us/articles/installing-intel-free-libs-and-python-apt-repo) (we tested with build 2019.4-070).
-```
-sudo apt install cmake g++ libaio-dev libgoogle-perftools-dev clang-format-4.0
-```
-
-Build
-```
-mkdir build && cd build && cmake .. && make -j 
-```
-
-**Usage for SSD-based indices**
-To generate an SSD-friendly index, use the `tests/create_disk_index.sh` script. 
-For floating point data file SIFT1M, to generate an index with 32 bytes in-
-memory fooptrint per vector, you might want to use (assuming `pwd` is project root):
-```
-export BUILD_PATH=./build
-${BUILD_PATH}/tests/utils/fvecs_to_bin data/SIFT1M/sift_base.fvecs data/SIFT1M/sift_base.bin
-./tests/create_disk_index.sh -t float -i data/SIFT1M/sift_base.bin -o data/SIFT1M/tmp -L 30 -R 64 -b 32
-```
-
-To search the generated index
-```
-```
-
-**Usage for in-memory indices**
-
-
-
 ##Windows CMake Build
 
 The Windows version has been tested with the enterprise editions of Visual Studio 2017 and Visual Studio 2019
@@ -41,7 +11,7 @@ Install MKL:
 
 **Build steps:**
 -	Open a new developer command prompt
--	Create a "build" directory under nsg
+-	Create a "build" directory under diskann
 -	Change to the "build" directory and run  
 ```
 cmake -B. -A x64 ..
@@ -50,7 +20,7 @@ cmake -B. -A x64 ..
 -	This will create a “diskann” solution file.
 -	Open the "diskann" solution and build the “nsg_dll” project first. 
 - 	Then build all the other binaries using the ALL_BUILD project that is part of the solution
-- 	Generated binaries are stored in the nsg/x64/Debug or nsg/x64/Release directories.
+- 	Generated binaries are stored in the diskann/x64/Debug or diskann/x64/Release directories.
 
 To build from command line, use msbuild to first build the "nsg_dll" project. And then build the entire solution, as shown below.
 ```
@@ -70,7 +40,10 @@ generate_pq.exe float "E:\sift1m_u8\sift1m_float_harsha\sift_base.bin" E:\cmake-
 
 2. Build the graph using the compressed vectors
 ```
-build_memory_index.exe float E:\sift1m_u8\sift1m_float_harsha\sift_base.bin 50 64 750 2 1.2 E:\cmake-sift\ravi-index_memory.index
+build_memory_index.exe float E:\sift1m_u8\sift1m_float_harsha\sift_base.bin 50 64 750 2 3 E:\cmake-sift\ravi-index_memory.index 32
+for int8 datatype, use int8
+for uint8 datatype, use uint8
+the last parameters is number of threads you want to use for index building
 ```
 
 3. Optimize for disk layout
@@ -80,7 +53,7 @@ create_disk_layout.exe float E:\sift1m_u8\sift1m_float_harsha\sift_base.bin E:\c
 
 **Search**
 
-At this stage we have a NSG graph on disk optimized for search. To conduct search for vectors given in the file sift_query.bin, 
+At this stage we have a DiskANN graph on disk optimized for search. To conduct search for vectors given in the file sift_query.bin, 
 ```
 search_disk_index.exe float E:\cmake-sift\ravi-index_pq_pivots.bin E:\cmake-sift\ravi-index_compressed.bin E:\cmake-sift\ravi-index_disk.index null null E:\sift1m_u8\sift1m_float_harsha\sift_query.bin 5 16 4 E:\cmake-sift\ravi-index_results 10 20 30 40
 ```

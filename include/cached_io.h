@@ -141,6 +141,7 @@ class cached_ofstream {
   }
 
   void reset() {
+    flush_cache();
     writer.seekp(0);
   }
 

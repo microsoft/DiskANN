@@ -2,7 +2,9 @@ if (MSVC)
 	add_library(diskpriority_io STATIC DiskPriorityIO.cpp)
 	target_include_directories(diskpriority_io PRIVATE "F:/boost/boost_1_71_0")
 endif()
-add_library(nsg_dll SHARED dllmain.cpp diskann_interface.cpp ../partition_and_pq.cpp ../pq_flash_index.cpp ../windows_aligned_file_reader.cpp bing_aligned_file_reader.cpp ../memory_mapper.cpp ../index.cpp ../math_utils.cpp)
+add_library(nsg_dll SHARED dllmain.cpp vamana_interface.cpp
+    diskann_interface.cpp ../partition_and_pq.cpp ../pq_flash_index.cpp
+    ../windows_aligned_file_reader.cpp bing_aligned_file_reader.cpp ../memory_mapper.cpp ../index.cpp ../math_utils.cpp)
 if (MSVC)
 	add_definitions(-D_USRDLL -D_WINDLL)
 	add_compile_options(/MD)

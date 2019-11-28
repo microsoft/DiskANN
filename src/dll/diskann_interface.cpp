@@ -43,12 +43,13 @@ namespace diskann {
     while (parser >> cur_param)
       param_list.push_back(cur_param);
 
-    if (param_list.size() != 5) {
+    if (param_list.size() != 6) {
       std::cout
           << "Correct usage of parameters is L (indexing search list size) "
              "R (max degree) C (visited list maximum size) B (approximate "
              "compressed number of bytes per datapoint to store in "
-             "memory) Training-Set-Sampling-Rate-For-PQ-Generation"
+             "memory) S (Sampling Rate For PQ Generation) T (Max Threads To "
+             "Use)"
           << std::endl;
       return false;
     }
@@ -64,9 +65,9 @@ namespace diskann {
     unsigned R = (unsigned) atoi(param_list[1].c_str());
     unsigned C = (unsigned) atoi(param_list[2].c_str());
     size_t   num_pq_chunks = (size_t) atoi(param_list[3].c_str());
-    double    training_set_sampling_rate = atof(param_list[4].c_str());
-
-    auto s = std::chrono::high_resolution_clock::now();
+    float    training_set_sampling_rate = atof(param_list[4].c_str());
+    unsigned num_threads = (unsigned) atoi(param_list[5].c_str());
+    auto     s = std::chrono::high_resolution_clock::now();
 
     float* train_data;
     size_t train_size, train_dim;
@@ -90,6 +91,7 @@ namespace diskann {
     paras.Set<unsigned>("C", C);
     paras.Set<float>("alpha", 3.0);
     paras.Set<unsigned>("num_rnds", 2);
+    paras.Set<unsigned>("num_threads", num_threads);
     paras.Set<std::string>("save_path", randnsg_path);
 
     _pNsgIndex = std::unique_ptr<diskann::Index<T>>(
@@ -143,7 +145,7 @@ namespace diskann {
 
     this->Lsearch = (_u64) std::atoi(param_list[0].c_str());
     this->beam_width = (_u64) std::atoi(param_list[1].c_str());
-    int  cache_nlevels = (_u64) std::atoi(param_list[2].c_str());
+    int      cache_nlevels = (_u64) std::atoi(param_list[2].c_str());
     uint32_t nthreads = (uint32_t) std::atoi(param_list[3].c_str());
 
     // create object

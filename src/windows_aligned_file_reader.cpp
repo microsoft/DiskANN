@@ -6,7 +6,6 @@
 
 #define SECTOR_LEN 4096
 
-
 void WindowsAlignedFileReader::open(const std::string& fname) {
   m_filename = std::wstring(fname.begin(), fname.end());
   this->register_thread();
@@ -50,7 +49,6 @@ void WindowsAlignedFileReader::register_thread() {
   this->ctx_map.insert(std::make_pair(std::this_thread::get_id(), ctx));
 }
 
-
 IOContext& WindowsAlignedFileReader::get_ctx() {
   std::unique_lock<std::mutex> lk(this->ctx_mut);
   if (ctx_map.find(std::this_thread::get_id()) == ctx_map.end()) {
@@ -64,7 +62,7 @@ IOContext& WindowsAlignedFileReader::get_ctx() {
 }
 
 void WindowsAlignedFileReader::read(std::vector<AlignedRead>& read_reqs,
-                                    IOContext&                 ctx) {
+                                    IOContext&                ctx) {
   using namespace std::chrono_literals;
   // execute each request sequentially
   _u64 n_reqs = read_reqs.size();
