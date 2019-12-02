@@ -8,16 +8,22 @@ namespace diskann {
   class Parameters {
    public:
     Parameters() {
-      std::stringstream sstream;
-      sstream << 0;
-      params["num_threads"] = sstream.str();
+      // std::stringstream sstream;
+      // sstream << 0;
+      // params["num_threads"] = sstream.str();
+      int *p = new int;
+      *p = 0;
+      params["num_threads"] = p;
     }
 
     template<typename ParamType>
     inline void Set(const std::string &name, const ParamType &value) {
-      std::stringstream sstream;
-      sstream << value;
-      params[name] = sstream.str();
+      // std::stringstream sstream;
+      // sstream << value;
+      // params[name] = sstream.str();
+      ParamType *ptr = new ParamType;
+      *ptr = value;
+      params[name] = ptr;
     }
 
     template<typename ParamType>
@@ -26,7 +32,13 @@ namespace diskann {
       if (item == params.end()) {
         throw std::invalid_argument("Invalid parameter name.");
       } else {
-        return ConvertStrToValue<ParamType>(item->second);
+        // return ConvertStrToValue<ParamType>(item->second);
+        if (item->second == nullptr) {
+          throw std::invalid_argument(std::string("Parameter ") + name +
+                                      " has value null.");
+        } else {
+          return *(static_cast<ParamType*>(item->second));
+        }
       }
     }
 
@@ -40,8 +52,18 @@ namespace diskann {
       }
     }
 
+    ~Parameters() {
+      for (auto iter = params.begin(); iter != params.end(); iter++) {
+        if (iter->second != nullptr)
+          delete iter->second;
+      }
+    }
+
    private:
-    std::unordered_map<std::string, std::string> params;
+    std::unordered_map<std::string, void *> params;
+
+    Parameters(const Parameters &);
+    Parameters &operator=(const Parameters &);
 
     template<typename ParamType>
     inline ParamType ConvertStrToValue(const std::string &str) const {
@@ -56,4 +78,4 @@ namespace diskann {
       return value;
     }
   };
-}
+}  // namespace diskann

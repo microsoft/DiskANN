@@ -383,18 +383,24 @@ struct PivotContainer {
 
 inline bool file_exists(const std::string &name) {
   struct stat buffer;
-  return (stat(name.c_str(), &buffer) == 0);
+  auto val = stat(name.c_str(), &buffer);
+  std::cout << " Stat(" << name.c_str() << ") returned: " << val << std::endl;
+  return ( val == 0 );
 }
 
 inline _u64 get_file_size(const std::string &fname) {
-  if (!file_exists(fname))
-    return 0;
-  else {
-    std::ifstream reader(fname, std::ios::binary | std::ios::ate);
-    _u64          end_pos = reader.tellg();
+  std::ifstream reader(fname, std::ios::binary | std::ios::ate);
+  if (!reader.fail() && reader.is_open()) {
+    _u64 end_pos = reader.tellg();
+    std::cout << " Tellg: " << reader.tellg() << " as u64: " << end_pos
+              << std::endl;
     reader.close();
     return end_pos;
+  } else {
+    std::cout << "Could not open file: " << fname << std::endl;
+    return 0;
   }
+  
 }
 
 inline bool validate_file_size(const std::string &name) {

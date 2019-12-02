@@ -9,13 +9,12 @@ if (MSVC)
 	add_definitions(-D_USRDLL -D_WINDLL)
 	add_compile_options(/MD)
 	target_include_directories(nsg_dll PRIVATE "F:/boost/boost_1_71_0")
-	target_link_options(nsg_dll PRIVATE /DLL /MACHINE:X64)
+	target_link_options(nsg_dll PRIVATE /DLL /MACHINE:X64 /DEBUG:FULL "/INCLUDE:_tcmalloc")
 	target_link_options(nsg_dll PRIVATE $<$<CONFIG:Debug>:/IMPLIB:${CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG}/nsg_dll.lib>
 										$<$<CONFIG:Release>:/IMPLIB:${CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE}/nsg_dll.lib>
 					   )
-	target_link_libraries(nsg_dll debug ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG}/diskpriority_io.lib)
-	target_link_libraries(nsg_dll optimized ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE}/diskpriority_io.lib)
-
+	target_link_libraries(nsg_dll debug ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG}/diskpriority_io.lib ${PROJECT_SOURCE_DIR}/dependencies/windows/tcmalloc/libtcmalloc_minimal.lib)
+	target_link_libraries(nsg_dll optimized ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE}/diskpriority_io.lib ${PROJECT_SOURCE_DIR}/dependencies/windows/tcmalloc/libtcmalloc_minimal.lib)
 					
 
 	add_custom_command(TARGET 
@@ -70,6 +69,11 @@ if (MSVC)
 							nsg_dll 
 							POST_BUILD 
 							COMMAND ${CMAKE_COMMAND} -E copy ${PROJECT_SOURCE_DIR}/dependencies/windows/dll/zlib1.dll "$<$<CONFIG:debug>:\"${CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG}\">$<$<CONFIG:release>:\"${CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE}\">" )
+
+	add_custom_command(TARGET 
+							nsg_dll 
+							POST_BUILD 
+							COMMAND ${CMAKE_COMMAND} -E copy ${PROJECT_SOURCE_DIR}/dependencies/windows/tcmalloc/libtcmalloc_minimal.dll "$<$<CONFIG:debug>:\"${CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG}\">$<$<CONFIG:release>:\"${CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE}\">" )
 
 endif()
 

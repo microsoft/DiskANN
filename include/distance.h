@@ -45,7 +45,9 @@ namespace diskann {
    public:
     float compare(const int8_t *a, const int8_t *b, unsigned size) const {
       float result = 0.0;
-#pragma omp simd
+#ifndef _WINDOWS
+#pragma omp simd simdlen(8)
+#endif
       for (_s32 i = 0; i < (_s32) size; i++) {
         float diff = ((float) a[i] - (float) b[i]);
         // std::cout << "a: " << (float) a[i] << ", b: " << (float)b[i] << ",
@@ -62,11 +64,11 @@ namespace diskann {
    public:
     float compare(const uint8_t *a, const uint8_t *b, unsigned size) const {
       float result = 0.0;
-#pragma omp simd
+#ifndef _WINDOWS
+#pragma omp simd simdlen(8)
+#endif
       for (_s32 i = 0; i < (_s32) size; i++) {
         float diff = ((float) a[i] - (float) b[i]);
-        // std::cout << "a: " << (float) a[i] << ", b: " << (float)b[i] << ",
-        // diff: " << diff << "\n";
         result += diff * diff;
       }
       // std::cout << "a[0] --> " << (float) a[0] << ", a[size] --> " << (float)

@@ -46,7 +46,7 @@ if (MSVC)
 else()
 	set(INTEL_ROOT /opt/intel/compilers_and_libraries/linux)
 	set(MKL_ROOT ${INTEL_ROOT}/mkl)
-    add_compile_options(-m64 -Wl,--no-as-needed) 
+        add_compile_options(-m64 -Wl,--no-as-needed) 
 	link_libraries(mkl_intel_ilp64 mkl_intel_thread mkl_core iomp5 pthread m dl)
 	link_directories(${INTEL_ROOT}/lib/intel64 ${MKL_ROOT}/lib/intel64)
 endif()
@@ -58,7 +58,7 @@ include_directories(include ${INTEL_ROOT}/include ${MKL_ROOT}/include)
 #Main compiler/linker settings 
 if(MSVC)
 	#language options
-	add_compile_options(/permissive- /openmp:experimental /Zc:wchar_t /Zc:twoPhase- /Zc:forScope /Zc:inline /WX- /std:c++14 /Gd /W3 /MP /Zi /FC /nologo /diagnostics:classic) 
+	add_compile_options(/permissive- /openmp /Zc:wchar_t /Zc:twoPhase- /Zc:forScope /Zc:inline /WX- /std:c++14 /Gd /W3 /MP /Zi /FC /nologo /diagnostics:classic) 
 	#code generation options
 	add_compile_options(/Qpar /fp:fast /Zp8 /fp:except- /EHsc /GS- /Gm- /Gy )
 	#optimization options
@@ -67,8 +67,8 @@ if(MSVC)
 	#add_compile_options(/Fdx64/Release/vc141.pdb /Fox64/Release/)
 	add_definitions(-DUSE_AVX2 -DUSE_BING_INFRA -DUSE_ACCELERATED_PQ -D_WINDOWS -DNOMINMAX -DUNICODE)
 	
-	set(CMAKE_SHARED_LIBRARY_CXX_LINK_FLAGS "/MANIFEST /MACHINE:X64 /LTCG:incremental /NXCOMPAT /DYNAMICBASE /OPT:REF /SUBSYSTEM:CONSOLE /MANIFESTUAC:\"level='asInvoker' uiAccess='false'\"")
-	set(CMAKE_EXECUTABLE_CXX_LINK_FLAGS "/MANIFEST /MACHINE:X64 /LTCG:incremental /NXCOMPAT /DYNAMICBASE /OPT:REF /SUBSYSTEM:CONSOLE /MANIFESTUAC:\"level='asInvoker' uiAccess='false'\"")
+	set(CMAKE_SHARED_LIBRARY_CXX_LINK_FLAGS "/MANIFEST /MACHINE:X64 /DEBUG:FULL /LTCG:incremental /NXCOMPAT /DYNAMICBASE /OPT:REF /SUBSYSTEM:CONSOLE /MANIFESTUAC:\"level='asInvoker' uiAccess='false'\"")
+	set(CMAKE_EXECUTABLE_CXX_LINK_FLAGS "/MANIFEST /MACHINE:X64 /DEBUG:FULL /LTCG:incremental /NXCOMPAT /DYNAMICBASE /OPT:REF /SUBSYSTEM:CONSOLE /MANIFESTUAC:\"level='asInvoker' uiAccess='false'\"")
 
 	set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} /D_DEBUG")
 	set(CMAKE_SHARED_LIBRARY_CXX_LINK_FLAGS_DEBUG "${CMAKE_SHARED_LIBRARY_CXX_LINK_FLAGS_DEBUG} /DEBUG")

@@ -404,7 +404,8 @@ namespace diskann {
     expanded_nodes_info.reserve(10 * Lsize);
     unsigned                 l = 0;
     Neighbor                 nn;
-    tsl::robin_set<unsigned> inserted_into_pool;
+    tsl::robin_set<unsigned> inserted_into_pool(100 * Lsize);
+
 
     for (auto id : init_ids) {
       assert(id < _max_points);
@@ -478,6 +479,7 @@ namespace diskann {
           diskann::prefetch_vector((const char *) vec_next1,
                                    _aligned_dim * sizeof(T));
         }
+
         auto id = nbrs_to_insert[m];
 
         cmps++;
@@ -808,7 +810,7 @@ namespace diskann {
         size_t end_id = (std::min)(true_num_pts, (sync_num + 1) * round_size);
 
         auto s = std::chrono::high_resolution_clock::now();
-#pragma omp  parallel for schedule(static, 256)
+#pragma omp  parallel for schedule(dynamic, 64)
         for (_u64 node_ctr = (_u64) start_id; node_ctr < (_u64) end_id;
              ++node_ctr) {
           _u64                      node = rand_perm[node_ctr];
