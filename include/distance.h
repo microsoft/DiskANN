@@ -49,7 +49,7 @@ namespace diskann {
 #pragma omp simd simdlen(8)
 #endif
       for (_s32 i = 0; i < (_s32) size; i++) {
-        float diff = ((float) a[i] - (float) b[i]);
+        float diff = ((int16_t) a[i] - (int16_t) b[i]);
         // std::cout << "a: " << (float) a[i] << ", b: " << (float)b[i] << ",
         // diff: " << diff << "\n";
         result += diff * diff;
@@ -68,7 +68,7 @@ namespace diskann {
 #pragma omp simd simdlen(8)
 #endif
       for (_s32 i = 0; i < (_s32) size; i++) {
-        float diff = ((float) a[i] - (float) b[i]);
+        float diff = ((uint16_t) a[i] - (uint16_t)b[i]);
         result += diff * diff;
       }
       // std::cout << "a[0] --> " << (float) a[0] << ", a[size] --> " << (float)
