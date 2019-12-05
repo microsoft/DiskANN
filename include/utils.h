@@ -8,6 +8,7 @@
 #include <fstream>
 #include <iostream>
 #include <random>
+#include <set>
 #ifdef __APPLE__
 #else
 #include <malloc.h>
@@ -50,6 +51,10 @@ typedef uint8_t  _u8;
 typedef int8_t   _s8;
 
 namespace diskann {
+
+  float calc_recall_set(unsigned num_queries, unsigned *gold_std,
+                        unsigned dim_gs, unsigned *our_results, unsigned dim_or,
+                        unsigned recall_at, unsigned subset_size); 
 
   inline void alloc_aligned(void **ptr, size_t size, size_t align) {
     *ptr = nullptr;

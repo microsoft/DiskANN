@@ -7,35 +7,6 @@
 #include <vector>
 #include "utils.h"
 
-float calc_recall_set(unsigned num_queries, unsigned* gold_std, unsigned dim_gs,
-                      unsigned* our_results, unsigned dim_or,
-                      unsigned recall_at, unsigned subset_size) {
-  std::cout << "dim_gs: " << dim_gs << ", dim_or: " << dim_or
-            << ", recall_at: " << recall_at << " num_queries = " << num_queries
-            << "\n";
-  unsigned           total_recall = 0;
-  std::set<unsigned> gt, res;
-
-  for (size_t i = 0; i < num_queries; i++) {
-    gt.clear();
-    res.clear();
-    unsigned* gt_vec = gold_std + dim_gs * i;
-    unsigned* res_vec = our_results + dim_or * i;
-    gt.insert(gt_vec, gt_vec + recall_at);
-    res.insert(res_vec, res_vec + subset_size);
-    unsigned cur_recall = 0;
-    for (auto& v : gt) {
-      if (res.find(v) != res.end()) {
-        cur_recall++;
-      }
-    }
-    // std::cout << " idx: " << i << ", interesection: " << cur_recall << "\n";
-    total_recall += cur_recall;
-  }
-  return ((float) total_recall) / ((float) num_queries) *
-         (100.0 / ((float) recall_at));
-}
-
 int main(int argc, char** argv) {
   if (argc != 4 && argc != 5) {
     std::cout << argv[0] << " <ground_truth_bin> <our_results_bin>  <r1> "
@@ -49,8 +20,6 @@ int main(int argc, char** argv) {
   size_t    points_num, points_num_gs, points_num_or;
   size_t    dim_gs;
   size_t    dim_or;
-  //  load_data(argv[1], gold_std, points_num, dim_gs);
-  //  load_data(argv[2], our_results, points_num, dim_or);
   diskann::load_bin<unsigned>(argv[1], gold_std, points_num_gs, dim_gs);
   diskann::load_bin<unsigned>(argv[2], our_results, points_num_or, dim_or);
 
@@ -73,12 +42,13 @@ int main(int argc, char** argv) {
               << std::endl;
     return -1;
   }
-  std::cout << "calculating recall " << recall_at << "@" << subset_size
+  std::cout << "Calculating recall " << recall_at << "@" << subset_size
             << std::endl;
-  float recall_val = calc_recall_set(points_num, gold_std, dim_gs, our_results,
-                                     dim_or, recall_at, subset_size);
+  float recall_val =
+      diskann::calc_recall_set(points_num, gold_std, dim_gs, our_results,
+                               dim_or, recall_at, subset_size);
 
   //  double avg_recall = (recall*1.0)/(points_num*1.0);
-  std::cout << "avg. recall " << recall_at << " at " << subset_size << " is "
+  std::cout << "Avg. recall " << recall_at << " at " << subset_size << " is "
             << recall_val << "\n";
 }

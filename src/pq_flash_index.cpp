@@ -195,8 +195,7 @@ namespace diskann {
     _u64  dummy_ones;
     _u32 *node_list;
     diskann::load_bin<_u32>(cache_bin, node_list, num_cached_nodes, dummy_ones);
-    std::cout << "Caching " << num_cached_nodes
-              << " nodes in memory..."
+    std::cout << "Caching " << num_cached_nodes << " nodes in memory..."
               << std::flush;
 
     // borrow thread data
@@ -561,7 +560,6 @@ namespace diskann {
     std::cout << "Loading neighborhood info and full-precision vectors of "
               << num_medoids << " medoid(s) to memory" << std::endl;
     coord_cache.clear();
-    std::cout<<"Done" <<std::endl;
     for (uint64_t cur_m = 0; cur_m < num_medoids; cur_m++) {
       _u64 medoid = (_u64) medoids[cur_m];
       // read medoid nhood
