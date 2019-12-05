@@ -28,16 +28,6 @@ else()
 endif()
 
 
-add_executable(search_memory_index_with_recall search_memory_index_with_recall.cpp)
-if(MSVC)
-	target_link_options(search_memory_index_with_recall PRIVATE /MACHINE:x64)
-	target_link_libraries(search_memory_index_with_recall debug ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG}/nsg_dll.lib)
-	target_link_libraries(search_memory_index_with_recall optimized ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE}/nsg_dll.lib)
-else() 
-	target_link_libraries(search_memory_index_with_recall ${PROJECT_NAME})
-endif()
-
-
 add_executable(search_disk_index search_disk_index.cpp)
 if(MSVC)
 	target_link_options(search_disk_index PRIVATE /MACHINE:x64)
@@ -46,6 +36,7 @@ if(MSVC)
 else() 
 	target_link_libraries(search_disk_index ${PROJECT_NAME} aio)
 endif()
+
 
 add_executable(generate_cache_list generate_cache_list.cpp)
 if(MSVC)

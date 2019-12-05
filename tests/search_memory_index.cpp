@@ -14,21 +14,49 @@
 
 #include "memory_mapper.h"
 
+float calc_recall_set(unsigned num_queries, unsigned* gold_std, unsigned dim_gs,
+                      unsigned* our_results, unsigned dim_or,
+                      unsigned recall_at, unsigned subset_size) {
+  unsigned           total_recall = 0;
+  std::set<unsigned> gt, res;
+
+  for (size_t i = 0; i < num_queries; i++) {
+    gt.clear();
+    res.clear();
+    unsigned* gt_vec = gold_std + dim_gs * i;
+    unsigned* res_vec = our_results + dim_or * i;
+    gt.insert(gt_vec, gt_vec + recall_at);
+    res.insert(res_vec, res_vec + subset_size);
+    unsigned cur_recall = 0;
+    for (auto& v : gt) {
+      if (res.find(v) != res.end()) {
+        cur_recall++;
+      }
+    }
+    // std::cout << " idx: " << i << ", interesection: " << cur_recall << "\n";
+    total_recall += cur_recall;
+  }
+  return ((float) total_recall) / ((float) num_queries) *
+         (100.0 / ((float) recall_at));
+}
+
 template<typename T>
 int search_memory_index(int argc, char** argv) {
   T*                query = nullptr;
-  size_t            query_num, query_dim, query_aligned_dim;
+  unsigned*         gt_ids = nullptr;
+  size_t            query_num, query_dim, query_aligned_dim, gt_num, gt_dim;
   std::vector<_u64> Lvec;
 
   std::string data_file(argv[2]);
   std::string memory_index_file(argv[3]);
   std::string query_bin(argv[4]);
-  _u64        recall_at = std::atoi(argv[5]);
-  _u32        beam_width = std::atoi(argv[6]);
-  std::string result_output_prefix(argv[7]);
-  //  frozen_pts = std::atoi(argv[8]);
+  std::string gt_ids_bin(argv[5]);
+  _u64        recall_at = std::atoi(argv[6]);
+  _u32        beam_width = std::atoi(argv[7]);
+  std::string result_output_prefix(argv[8]);
+  bool        calc_recall_flag = false;
 
-  for (int ctr = 8; ctr < argc; ctr++) {
+  for (int ctr = 9; ctr < argc; ctr++) {
     _u64 curL = std::atoi(argv[ctr]);
     if (curL >= recall_at)
       Lvec.push_back(curL);
@@ -45,29 +73,38 @@ int search_memory_index(int argc, char** argv) {
   diskann::load_aligned_bin<T>(query_bin, query, query_num, query_dim,
                                query_aligned_dim);
 
+  if (file_exists(gt_ids_bin)) {
+    diskann::load_bin<unsigned>(gt_ids_bin, gt_ids, gt_num, gt_dim);
+    if (gt_num != query_num) {
+      std::cout << "Error. Mismatch in number of queries and ground truth data"
+                << std::endl;
+    }
+    calc_recall_flag = true;
+  }
+
   std::cout.setf(std::ios_base::fixed, std::ios_base::floatfield);
   std::cout.precision(2);
 
   diskann::Index<T> index(diskann::L2, data_file.c_str());
-  index.load(memory_index_file.c_str());  // to load diskann
+  index.load(memory_index_file.c_str());  // to load NSG
   std::cout << "Index loaded" << std::endl;
 
   std::vector<unsigned> start_points;
-  //  index.populate_start_points_ep(start_points);
 
   diskann::Parameters paras;
-  std::cout << std::setw(8) << "Ls" << std::setw(16) << "Latency"
-            << std::setw(16) << "Mean Cmps." << std::setw(16) << "Mean Hops."
-            << std::endl;
-  std::cout << "========================================================="
+  std::string         recall_string = "Recall@" + std::to_string(recall_at);
+  std::cout << std::setw(4) << "Ls" << std::setw(12) << "Latency"
+            << std::setw(12) << "Avg. Cmps" << std::setw(12) << "Avg. Hops"
+            << std::setw(12) << recall_string << std::endl;
+  std::cout << "====================================================="
             << std::endl;
 
   std::vector<std::vector<uint32_t>> query_result_ids(Lvec.size());
   std::vector<std::vector<float>>    query_result_dists(Lvec.size());
 
   for (uint32_t test_id = 0; test_id < Lvec.size(); test_id++) {
-    size_t total_cmps = 0, total_hops = 0;
     _u64   L = Lvec[test_id];
+    size_t total_cmps = 0, total_hops = 0;
     query_result_ids[test_id].resize(recall_at * query_num);
 
     auto s = std::chrono::high_resolution_clock::now();
@@ -83,13 +120,19 @@ int search_memory_index(int argc, char** argv) {
     }
     auto e = std::chrono::high_resolution_clock::now();
 
-    std::chrono::duration<double> diff = e - s;
+    float recall = 0;
+    if (calc_recall_flag)
+      recall = calc_recall_set(query_num, gt_ids, gt_dim,
+                               query_result_ids[test_id].data(), recall_at,
+                               recall_at, recall_at);
 
+    std::chrono::duration<double> diff = e - s;
     float latency = (diff.count() / query_num) * (1000000);
 
-    std::cout << std::setw(8) << L << std::setw(16) << latency << std::setw(16)
-              << (float) total_cmps / query_num << std::setw(16)
-              << (float) total_hops / query_num << std::endl;
+    std::cout << std::setw(4) << L << std::setw(12) << latency << std::setw(12)
+              << (float) total_cmps / query_num << std::setw(12)
+              << (float) total_hops / query_num << std::setw(12) << recall
+              << std::endl;
   }
 
   std::cout << "Done searching. Now saving results " << std::endl;
@@ -107,14 +150,13 @@ int search_memory_index(int argc, char** argv) {
 }
 
 int main(int argc, char** argv) {
-  if (argc <= 8) {
+  if (argc <= 9) {
     std::cout << "Usage: " << argv[0]
               << " <index_type[float/int8/uint8]>  <full_data_bin>  "
                  "<memory_index_path>  "
-                 "<query_bin> "
+                 "<query_bin> <groundtruth_id_bin> (use \"null\" for none) "
                  "<recall@> <beam_width> <result_output_prefix> "
-                 "<L1> "
-                 "<L2> ... "
+                 " <L1> <L2> ... "
               << std::endl;
     exit(-1);
   }

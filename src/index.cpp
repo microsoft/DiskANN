@@ -35,6 +35,7 @@
 #define MAX_ALPHA 3
 #define SLACK_FACTOR 1.3
 #define INDEXING_BEAM_WIDTH 1
+#define NEW_FILE_FORMAT 1
 
 // only L2 implemented. Need to implement inner product search
 namespace {
@@ -208,10 +209,14 @@ namespace diskann {
   template<typename T, typename TagT>
   void Index<T, TagT>::load(const char *filename, const bool load_tags,
                             const char *tag_filename) {
+#ifdef NEW_FILE_FORMAT
     validate_file_size(filename);
-    size_t        expected_file_size;
+#endif
     std::ifstream in(filename, std::ios::binary);
+#ifdef NEW_FILE_FORMAT
+    size_t expected_file_size;
     in.read((char *) &expected_file_size, sizeof(_u64));
+#endif
     in.read((char *) &_width, sizeof(unsigned));
     in.read((char *) &_ep, sizeof(unsigned));
     std::cout << "Loading vamana index " << filename << "..." << std::flush;
@@ -227,19 +232,20 @@ namespace diskann {
       ++nodes;
       std::vector<unsigned> tmp(k);
       in.read((char *) tmp.data(), k * sizeof(unsigned));
-      //      /* DEBUGGING CHECKS
-      std::set<unsigned> unique_nbrs;
-      for (auto id : tmp)
-        unique_nbrs.insert(id);
-      if (unique_nbrs.size() != tmp.size()) {
-        std::cout << "Duplicate neighbors for point " << nodes - 1 << std::endl;
-        exit(-1);
-      }
-      if (std::find(tmp.begin(), tmp.end(), nodes - 1) != tmp.end()) {
-        std::cout << "self-loop at " << nodes - 1 << std::endl;
-        exit(-1);
-      }
-      //  END DEBUGGING CHECKS     */
+      /* DEBUGGING CHECKS
+       std::set<unsigned> unique_nbrs;
+       for (auto id : tmp)
+         unique_nbrs.insert(id);
+       if (unique_nbrs.size() != tmp.size()) {
+         std::cout << "Duplicate neighbors for point " << nodes - 1 <<
+   std::endl;
+         exit(-1);
+       }
+       if (std::find(tmp.begin(), tmp.end(), nodes - 1) != tmp.end()) {
+         std::cout << "self-loop at " << nodes - 1 << std::endl;
+         exit(-1);
+       }
+   END DEBUGGING CHECKS     */
 
       _final_graph.emplace_back(tmp);
       if (nodes % 10000000 == 0)
