@@ -38,23 +38,14 @@ void write_Tvecs_unsigned(std::string fname, _u64* input, _u64 npts,
 
 template<typename T>
 int aux_main(int argc, char** argv) {
-  // argv[1]: data file
-  // argv[2]: output_file_pattern
-  if (argc != 5) {
-    std::cout << "Usage: " << argv[0]
-              << " <data_file> <output_file_prefix> <query_bin> <gt_bin>"
-              << std::endl;
-    return -1;
-  }
-
   ANNIndex::IANNIndex* intf =
       new diskann::VamanaInterface<T>(0, ANNIndex::DT_L2);
 
   bool res = 0;
   // for indexing
   {
-    // just construct index
-    res = intf->BuildIndex(argv[1], argv[2], "75 32 2000 32 128");
+    // just construct index: Lconstruction, Degree of Graph, Cconstruction, alpha (higher is denser graphs), T (Max threads to use)
+    res = intf->BuildIndex(argv[2], argv[3], "100 100 2000 1.5 32");
     // ERROR CHECK
     if (res != 1) {
       exit(-1);
@@ -63,9 +54,9 @@ int aux_main(int argc, char** argv) {
 
   // for query search
   {
-    // load the index
-    std::string load_args = "110 1 " + std::string(argv[1]);
-    bool        res = intf->LoadIndex(argv[2], load_args.c_str());
+    // load the index (arguments are L_search, beam_width, data_file)
+    std::string load_args = "110 1 " + std::string(argv[2]);
+    bool        res = intf->LoadIndex(argv[3], load_args.c_str());
     // ERROR CHECK
     if (res != 1) {
       exit(-1);
@@ -74,19 +65,22 @@ int aux_main(int argc, char** argv) {
     // load query bin
     T*   query = nullptr;
     _u64 nqueries, ndims, aligned_query_dim;
-    diskann::load_aligned_bin<T>(argv[3], query, nqueries, ndims,
+    diskann::load_aligned_bin<T>(argv[4], query, nqueries, ndims,
                                  aligned_query_dim);
 
-    std::cout << "Loading ground truth..." << std::flush;
     // load ground truth
     _u32* ground_truth = nullptr;
-    _u64  ngt, kgt;
-    diskann::load_bin<_u32>(argv[4], ground_truth, ngt, kgt);
-
-    if (ngt != nqueries) {
-      std::cout << "mismatch in ground truth rows and number of queries"
-                << std::endl;
-      return -1;
+    _u64  ngt=0, kgt=0;
+    bool  has_ground_truth = false;
+    if (std::string(argv[5]) != std::string("null")) {
+      std::cout << "Loading ground truth..." << std::flush;
+      diskann::load_bin<_u32>(argv[5], ground_truth, ngt, kgt);
+      if (ngt != nqueries) {
+        std::cout << "mismatch in ground truth rows and number of queries"
+                  << std::endl;
+        return -1;
+      }
+      has_ground_truth = true;
     }
 
     // query params/output
@@ -95,20 +89,21 @@ int aux_main(int argc, char** argv) {
     _u64*  query_res = new _u64[k * nqueries];
     float* query_dists = new float[k * nqueries];
 
-    if (kgt < k) {
+    if (kgt < k && has_ground_truth) {
       std::cout << "number of ground truth < k" << std::endl;
       return -1;
     }
-    std::cout << "done." << std::endl;
     // execute queries
     intf->SearchIndex((const char*) query, nqueries, k, query_dists, query_res);
-    float avg_recall =
-        calc_recall(nqueries, ground_truth, kgt, query_res, k, k);
-    std::cout << "Recall@" << k << " when searching with L = " << L << " is "
-              << avg_recall << std::endl;
+    float avg_recall = 0;
+    if (has_ground_truth) {
+      avg_recall = calc_recall(nqueries, ground_truth, kgt, query_res, k, k);
+      std::cout << "Recall@" << k << " when searching with L = " << L << " is "
+                << avg_recall << std::endl;
+    }
     //  save results into ivecs
     // write_Tvecs_unsigned(argv[4], query_res, nqueries, k);
-
+    std::cout << "Done searching." << std::endl;
     diskann::aligned_free(query);
     delete[] ground_truth;
     delete[] query_res;
@@ -118,5 +113,28 @@ int aux_main(int argc, char** argv) {
 }
 
 int main(int argc, char** argv) {
-  return aux_main<float>(argc, argv);
+  // argv[1]: datatype (int8/ uint8/ float)
+  // argv[2]: data file (.bin)
+  // argv[3]: output_file_prefix (will generate index with _mem.index suffix)
+  // argv[4]: query_bin file
+  // argv[5]: ground_truth ids file (32-byte integer entries, file size should
+  // be 8 + 4*k*n_q, where gt has k entries for n_q queries)
+  if (argc != 6) {
+    std::cout
+        << "Usage: " << argv[0]
+        << " <datatype> (int8/uint8/float) <data_file> (.bin) "
+           "<output_file_prefix> (index will be stored in prefix_mem.index) "
+           "<query_bin> (.bin)  <gt_bin> (use \"null\" if not available) "
+        << std::endl;
+    return -1;
+  }
+
+  if (std::string(argv[1]) == "int8")
+    return aux_main<int8_t>(argc, argv);
+  else if (std::string(argv[1]) == "float")
+    return aux_main<float>(argc, argv);
+  else if (std::string(argv[1]) == "uint8")
+    return aux_main<uint8_t>(argc, argv);
+  else
+    std::cout << "Unsupported type. Use int8/uint8/float." << std::endl;
 }
