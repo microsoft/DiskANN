@@ -1,5 +1,5 @@
 #include "utils.h"
-#include  <set>
+#include <set>
 
 namespace diskann {
   float calc_recall_set(unsigned num_queries, unsigned *gold_std,

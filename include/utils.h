@@ -54,7 +54,7 @@ namespace diskann {
 
   float calc_recall_set(unsigned num_queries, unsigned *gold_std,
                         unsigned dim_gs, unsigned *our_results, unsigned dim_or,
-                        unsigned recall_at, unsigned subset_size); 
+                        unsigned recall_at, unsigned subset_size);
 
   inline void alloc_aligned(void **ptr, size_t size, size_t align) {
     *ptr = nullptr;

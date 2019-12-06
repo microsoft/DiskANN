@@ -49,7 +49,8 @@ namespace diskann {
 #pragma omp simd reduction(+ : result) aligned(a, b : 8)
 #endif
       for (_s32 i = 0; i < (_s32) size; i++) {
-         result += ((int32_t)((int16_t) a[i] - (int16_t) b[i]))*((int32_t)((int16_t) a[i] - (int16_t) b[i]));
+        result += ((int32_t)((int16_t) a[i] - (int16_t) b[i])) *
+                  ((int32_t)((int16_t) a[i] - (int16_t) b[i]));
       }
       return (float) result;
     }
@@ -63,7 +64,8 @@ namespace diskann {
 #pragma omp simd reduction(+ : result) aligned(a, b : 8)
 #endif
       for (_s32 i = 0; i < (_s32) size; i++) {
-         result += ((int32_t)((int16_t) a[i] - (int16_t) b[i]))*((int32_t)((int16_t) a[i] - (int16_t) b[i]));
+        result += ((int32_t)((int16_t) a[i] - (int16_t) b[i])) *
+                  ((int32_t)((int16_t) a[i] - (int16_t) b[i]));
       }
       return (float) result;
     }

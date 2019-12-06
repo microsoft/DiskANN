@@ -104,7 +104,7 @@ namespace diskann {
     }
 
     if (centroid_data != nullptr)
-      delete[] centroid_data;
+      aligned_free(centroid_data);
     // delete backing bufs for nhood and coord cache
     if (nhood_cache_buf != nullptr) {
       delete[] nhood_cache_buf;
@@ -510,14 +510,15 @@ namespace diskann {
     this->setup_thread_data(num_threads);
     this->max_nthreads = num_threads;
     std::cout << "done.." << std::endl;
+    cache_medoid_nhoods();
     return 0;
   }
 
   template<typename T>
   void PQFlashIndex<T>::load_entry_points(const std::string entry_points_file,
                                           const std::string centroids_file) {
-    if (!file_exists(entry_points_file) || !file_exists(centroids_file)) {
-      std::cout << "Medoids file / centroids file not found. Using default "
+    if (!file_exists(entry_points_file)) {
+      std::cout << "Medoids file not found. Using default "
                    "medoid as starting point."
                 << std::endl;
       return;
@@ -527,13 +528,23 @@ namespace diskann {
       delete[] medoids;
     diskann::load_bin<uint32_t>(entry_points_file, medoids, num_medoids,
                                 tmp_dim);
+
     if (tmp_dim != 1) {
       std::cout << "Error loading medoids file. Expected bin format of m times "
                    "1 vector of uint32_t."
                 << std::endl;
       exit(-1);
     }
+
+    if (!file_exists(centroids_file)) {
+      std::cout << "Centroid data file not found. Using corresponding vectors "
+                   "for the medoids "
+                << std::endl;
+      return;
+    }
     size_t num_centroids, aligned_tmp_dim;
+    if (centroid_data != nullptr)
+      aligned_free(centroid_data);
     diskann::load_aligned_bin<float>(centroids_file, centroid_data,
                                      num_centroids, tmp_dim, aligned_tmp_dim);
     if (aligned_tmp_dim != aligned_dim || num_centroids != num_medoids) {
@@ -543,12 +554,19 @@ namespace diskann {
                 << std::endl;
       exit(-1);
     }
-    using_default_medoid = false;
+    using_default_medoid_data = false;
   }
 
   template<typename T>
   void PQFlashIndex<T>::cache_medoid_nhoods() {
     medoid_nhoods = std::vector<std::pair<_u64, unsigned *>>(num_medoids);
+
+    if (using_default_medoid_data && num_medoids > 0) {
+      if (centroid_data != nullptr)
+        aligned_free(centroid_data);
+      alloc_aligned(((void **) &centroid_data),
+                    num_medoids * aligned_dim * sizeof(float), 32);
+    }
 
     // borrow ctx
     ThreadData<T> data = this->thread_data.pop();
@@ -580,11 +598,9 @@ namespace diskann {
       memcpy(medoid_coords, medoid_disk_coords, data_dim * sizeof(T));
 
       coord_cache.insert(std::make_pair(medoid, medoid_coords));
-      if (using_default_medoid) {
-        alloc_aligned(((void **) &centroid_data), aligned_dim * sizeof(float),
-                      32);
+      if (using_default_medoid_data) {
         for (uint32_t i = 0; i < aligned_dim; i++)
-          centroid_data[i] = medoid_coords[i];
+          centroid_data[cur_m * aligned_dim + i] = medoid_coords[i];
       }
 
       // add medoid nhood to nhood_cache

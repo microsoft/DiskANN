@@ -116,17 +116,19 @@ namespace diskann {
     FixedChunkPQTable<T> pq_table;
 
     // distance comparator
-    Distance<T> *    dist_cmp;
-    Distance<float> *dist_cmp_float;
+    Distance<T> *    dist_cmp = nullptr;
+    Distance<float> *dist_cmp_float = nullptr;
 
     // medoid/start info
-    uint32_t *medoids;     // by default it is just one entry point of graph, we
-                           // can optionally have multiple starting points
-    size_t num_medoids;    // by default it is set to 1
-    float *centroid_data;  // by default, it is empty. If there are multiple
-                           // centroids, we pick the medoid corresponding to the
-                           // closest centroid as the starting point of search
-    bool using_default_medoid = true;
+    uint32_t *medoids =
+        nullptr;         // by default it is just one entry point of graph, we
+                         // can optionally have multiple starting points
+    size_t num_medoids;  // by default it is set to 1
+    float *centroid_data =
+        nullptr;  // by default, it is empty. If there are multiple
+                  // centroids, we pick the medoid corresponding to the
+                  // closest centroid as the starting point of search
+    bool using_default_medoid_data = true;
 
     std::vector<std::pair<_u64, unsigned *>> medoid_nhoods;
 
