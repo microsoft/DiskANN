@@ -215,15 +215,15 @@ namespace diskann {
                            coord_cache_buf_len * sizeof(T), 8 * sizeof(T));
     memset(coord_cache_buf, 0, coord_cache_buf_len * sizeof(T));
 
-    size_t BLOCK_SIZE = 1000;
+    size_t BLOCK_SIZE = 8;
     size_t num_blocks = DIV_ROUND_UP(num_cached_nodes, BLOCK_SIZE);
 
     for (_u64 block = 0; block < num_blocks; block++) {
       _u64 start_idx = block * BLOCK_SIZE;
       _u64 end_idx = (std::min)(num_cached_nodes, (block + 1) * BLOCK_SIZE);
-      for (_u64 node_idx = start_idx; node_idx < end_idx; node_idx++) {
         std::vector<AlignedRead> read_reqs;
         std::vector<std::pair<_u64, char *>> nhoods;
+      for (_u64 node_idx = start_idx; node_idx < end_idx; node_idx++) {
         AlignedRead read;
         char *      buf = nullptr;
         alloc_aligned((void **) &buf, SECTOR_LEN, SECTOR_LEN);
@@ -232,9 +232,11 @@ namespace diskann {
         read.buf = buf;
         read.offset = NODE_SECTOR_NO(node_list[node_idx]) * SECTOR_LEN;
         read_reqs.push_back(read);
+      }
 
         reader->read(read_reqs, ctx);
 
+        _u64 node_idx = start_idx;
         for (auto &nhood : nhoods) {
           char *node_buf = OFFSET_TO_NODE(nhood.second, nhood.first);
           T *   node_coords = OFFSET_TO_NODE_COORDS(node_buf);
@@ -253,7 +255,7 @@ namespace diskann {
           memcpy(cnhood.second, nbrs, nnbrs * sizeof(unsigned));
           nhood_cache.insert(std::make_pair(nhood.first, cnhood));
           aligned_free(nhood.second);
-        }
+          node_idx++;
       }
     }
     // return thread data

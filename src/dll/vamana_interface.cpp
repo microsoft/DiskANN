@@ -62,10 +62,10 @@ namespace diskann {
     float    alpha = (float) atof(param_list[3].c_str());
     unsigned num_threads = (unsigned) atoi(param_list[4].c_str());
 
-    size_t   data_dim;
+    size_t data_dim;
     size_t num_pts;
     diskann::get_bin_metadata(dataFilePath, num_pts, data_dim);
-    auto   s = std::chrono::high_resolution_clock::now();
+    auto s = std::chrono::high_resolution_clock::now();
 
     this->m_dimension = data_dim;
     this->aligned_dimension = ROUND_UP(data_dim, 8);

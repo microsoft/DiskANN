@@ -44,7 +44,8 @@ int aux_main(int argc, char** argv) {
   bool res = 0;
   // for indexing
   {
-    // just construct index: Lconstruction, Degree of Graph, Cconstruction, alpha (higher is denser graphs), T (Max threads to use)
+    // just construct index: Lconstruction, Degree of Graph, Cconstruction,
+    // alpha (higher is denser graphs), T (Max threads to use)
     res = intf->BuildIndex(argv[2], argv[3], "100 100 2000 1.5 32");
     // ERROR CHECK
     if (res != 1) {
@@ -70,7 +71,7 @@ int aux_main(int argc, char** argv) {
 
     // load ground truth
     _u32* ground_truth = nullptr;
-    _u64  ngt=0, kgt=0;
+    _u64  ngt = 0, kgt = 0;
     bool  has_ground_truth = false;
     if (std::string(argv[5]) != std::string("null")) {
       std::cout << "Loading ground truth..." << std::flush;

@@ -43,6 +43,6 @@ UNOPT_INDEX_PATH="${OUTPUT_PREFIX}_mem.index"
 # generating compressed vectors into $B bytes per vector, using a sampling rate of $S. Change if you want higher or lower sampling rate (higher is better).
 ${BUILD_PATH}/tests/generate_pq  $TYPE  $DATA  $OUTPUT_PREFIX  $B  $S
 #builds the in-memory graph index using 2 passes over data, and using alpha = 3, with size of L_construction = $L and max-degree $R and using 64 threads (change if you need to use fewer threads). 
-${BUILD_PATH}/tests/build_memory_index  $TYPE  $DATA  $L  $R  2000  2  3  $UNOPT_INDEX_PATH 64
+${BUILD_PATH}/tests/build_memory_index  $TYPE  $DATA  $L  $R  2000  2  4  $UNOPT_INDEX_PATH 64
 #creates the disk layout by storing the graph and data together 
 ${BUILD_PATH}/tests/create_disk_layout $TYPE $DATA $UNOPT_INDEX_PATH $DISK_INDEX_PATH
