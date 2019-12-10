@@ -44,15 +44,13 @@ namespace diskann {
   class DistanceL2Int8 : public Distance<int8_t> {
    public:
     float compare(const int8_t *a, const int8_t *b, unsigned size) const {
-      float result = 0.0;
-#ifndef _WINDOWS
-#pragma omp simd simdlen(8)
-#endif
+      int32_t result = 0;
+#pragma omp simd
       for (_s32 i = 0; i < (_s32) size; i++) {
-        float diff = ((int16_t) a[i] - (int16_t) b[i]);
         // std::cout << "a: " << (float) a[i] << ", b: " << (float)b[i] << ",
         // diff: " << diff << "\n";
-        result += diff * diff;
+        result += (int32_t)((int16_t) a[i] - (int16_t) b[i]) *
+                  (int32_t)((int16_t) a[i] - (int16_t) b[i]);
       }
       // std::cout << "a[0] --> " << (float) a[0] << ", a[size] --> " << (float)
       // a[size] << ", dist: " << result << "\n";
@@ -63,17 +61,16 @@ namespace diskann {
   class DistanceL2UInt8 : public Distance<uint8_t> {
    public:
     float compare(const uint8_t *a, const uint8_t *b, unsigned size) const {
-      float result = 0.0;
+      uint32_t result = 0;
 #ifndef _WINDOWS
 #pragma omp simd simdlen(8)
 #endif
       for (_s32 i = 0; i < (_s32) size; i++) {
-        float diff = ((uint16_t) a[i] - (uint16_t)b[i]);
-        result += diff * diff;
+        
+        result += (uint32_t)((uint16_t) a[i] - (uint16_t) b[i]) *
+                  (uint32_t)((uint16_t) a[i] - (uint16_t) b[i]);
       }
-      // std::cout << "a[0] --> " << (float) a[0] << ", a[size] --> " << (float)
-      // a[size] << ", dist: " << result << "\n";
-      return result;
+      return (float) result;
     }
   };
 
