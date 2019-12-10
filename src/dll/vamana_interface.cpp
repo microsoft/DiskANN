@@ -45,8 +45,9 @@ namespace diskann {
     if (param_list.size() != 5) {
       std::cout
           << "Correct usage of parameters is L (indexing search list size) "
-             "R (max degree) C (visited list maximum size) T (Max Threads To "
-             "Use) D (data_dimension)"
+             "R (max degree) C (visited list maximum size) alpha (higher is "
+             "denser graphs) T (Max Threads To "
+             "Use)"
           << std::endl;
       return false;
     }
@@ -57,9 +58,14 @@ namespace diskann {
     unsigned L = (unsigned) atoi(param_list[0].c_str());
     unsigned R = (unsigned) atoi(param_list[1].c_str());
     unsigned C = (unsigned) atoi(param_list[2].c_str());
-    unsigned num_threads = (unsigned) atoi(param_list[3].c_str());
-    unsigned data_dim = (unsigned) atoi(param_list[4].c_str());
-    auto     s = std::chrono::high_resolution_clock::now();
+
+    float    alpha = (float) atof(param_list[3].c_str());
+    unsigned num_threads = (unsigned) atoi(param_list[4].c_str());
+
+    size_t data_dim;
+    size_t num_pts;
+    diskann::get_bin_metadata(dataFilePath, num_pts, data_dim);
+    auto s = std::chrono::high_resolution_clock::now();
 
     this->m_dimension = data_dim;
     this->aligned_dimension = ROUND_UP(data_dim, 8);
@@ -68,7 +74,7 @@ namespace diskann {
     paras.Set<unsigned>("L", L);
     paras.Set<unsigned>("R", R);
     paras.Set<unsigned>("C", C);
-    paras.Set<float>("alpha", 3.0);
+    paras.Set<float>("alpha", alpha);
     paras.Set<unsigned>("num_rnds", 2);
     paras.Set<unsigned>("num_threads", num_threads);
 

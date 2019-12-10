@@ -137,6 +137,7 @@ namespace diskann {
     std::string pq_tables_bin = index_prefix_path + "_pq_pivots.bin";
     std::string disk_index_file = index_prefix_path + "_disk.index";
     std::string medoids_file = index_prefix_path + "_medoids.bin";
+    std::string centroid_data_file = index_prefix_path + "_centroids_float.bin";
 
     size_t data_dim, num_pq_centers;
     diskann::get_bin_metadata(pq_tables_bin, num_pq_centers, data_dim);
@@ -153,7 +154,9 @@ namespace diskann {
 
     // load index
     _pFlashIndex->load(nthreads, pq_tables_bin.c_str(), data_bin.c_str(),
-                       disk_index_file.c_str(), medoids_file.c_str());
+                       disk_index_file.c_str());
+    _pFlashIndex->load_entry_points(medoids_file, centroid_data_file);
+    _pFlashIndex->cache_medoid_nhoods();
 
     // cache bfs levels
     _pFlashIndex->cache_bfs_levels(cache_nlevels);

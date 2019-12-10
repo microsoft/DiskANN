@@ -1,3 +1,4 @@
+#pragma once
 #include <common_includes.h>
 #include <mkl.h>
 #include "utils.h"

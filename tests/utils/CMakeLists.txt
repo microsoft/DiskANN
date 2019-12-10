@@ -47,6 +47,8 @@ if(MSVC)
 	target_link_options(calculate_recall PRIVATE /MACHINE:x64)
 	target_link_libraries(calculate_recall debug ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG}/nsg_dll.lib)
 	target_link_libraries(calculate_recall optimized ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE}/nsg_dll.lib)
+else() 
+	target_link_libraries(calculate_recall ${PROJECT_NAME})
 endif()
 
 

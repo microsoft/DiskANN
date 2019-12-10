@@ -59,8 +59,12 @@ namespace diskann {
     DISKANN_DLLEXPORT int load(uint32_t    num_threads,
                                const char *pq_centroids_bin,
                                const char *compressed_data_bin,
-                               const char *disk_index_file,
-                               const char *medoids_file = {0});
+                               const char *disk_index_file);
+
+    DISKANN_DLLEXPORT void load_entry_points(
+        const std::string entry_points_file, const std::string centroids_file);
+
+    DISKANN_DLLEXPORT void cache_medoid_nhoods();
 
     DISKANN_DLLEXPORT void create_disk_layout(const std::string base_file,
                                               const std::string mem_index_file,
@@ -96,8 +100,9 @@ namespace diskann {
     _u64 data_dim = 0;
     _u64 aligned_dim = 0;
 
-    std::vector<std::pair<_u64, _u32>> node_visit_counter;
-    bool create_visit_cache;
+    std::string disk_index_file;
+    std::vector<std::pair<_u32, _u32>> node_visit_counter;
+    bool create_visit_cache = false;
 
     // PQ data
     // n_chunks = # of chunks ndims is split into
@@ -110,13 +115,21 @@ namespace diskann {
     FixedChunkPQTable<T> pq_table;
 
     // distance comparator
-    Distance<T> *dist_cmp;
+    Distance<T> *    dist_cmp = nullptr;
+    Distance<float> *dist_cmp_float = nullptr;
 
     // medoid/start info
-    uint32_t *medoids;
+    uint32_t *medoids =
+        nullptr;         // by default it is just one entry point of graph, we
+                         // can optionally have multiple starting points
+    size_t num_medoids;  // by default it is set to 1
+    float *centroid_data =
+        nullptr;  // by default, it is empty. If there are multiple
+                  // centroids, we pick the medoid corresponding to the
+                  // closest centroid as the starting point of search
+    bool using_default_medoid_data = true;
+
     std::vector<std::pair<_u64, unsigned *>> medoid_nhoods;
-    size_t num_medoids;
-    T *    medoid_full_precs;
 
     // nhood_cache
     unsigned *nhood_cache_buf = nullptr;

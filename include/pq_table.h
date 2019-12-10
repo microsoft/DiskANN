@@ -34,9 +34,9 @@ namespace diskann {
       diskann::load_bin<float>(filename, tables, npts_u64, ndims_u64);
       npts_u32 = npts_u64;
       ndims_u32 = ndims_u64;
-      std::cout << "PQ Pivots: # ctrs: " << npts_u32
-                << ", # dims: " << ndims_u32 << "#chunks: " << nchunks
-                << "chunk_size: " << chunksize << std::endl;
+      std::cout << "PQ Pivots: #ctrs: " << npts_u32 << ", #dims: " << ndims_u32
+                << ", #chunks: " << nchunks << ", chunk_size: " << chunksize
+                << std::endl;
       this->ndims = ndims_u32;
       //      assert((_u64) ndims_u32 == n_chunks * chunk_size);
       // alloc and compute transpose
