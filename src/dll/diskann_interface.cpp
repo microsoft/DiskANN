@@ -89,7 +89,7 @@ namespace diskann {
     paras.Set<unsigned>("L", L);
     paras.Set<unsigned>("R", R);
     paras.Set<unsigned>("C", C);
-    paras.Set<float>("alpha", 3.0);
+    paras.Set<float>("alpha", 4.0);
     paras.Set<unsigned>("num_rnds", 2);
     paras.Set<unsigned>("num_threads", num_threads);
     paras.Set<std::string>("save_path", randnsg_path);
@@ -123,9 +123,10 @@ namespace diskann {
     while (parser >> cur_param)
       param_list.push_back(cur_param);
 
-    if (param_list.size() != 4) {
+    if (param_list.size() != 5) {
       std::cerr << "Correct usage of parameters is \n"
-                   "Lsearch[1] BeamWidth[2] cache_nlevels[3] nthreads[4]"
+                   "Lsearch[1] BeamWidth[2] nthreads[3] warmup_file[4] "
+                   "number_of_nodes_to_cache[5]"
                 << std::endl;
       return false;
     }
@@ -138,6 +139,7 @@ namespace diskann {
     std::string disk_index_file = index_prefix_path + "_disk.index";
     std::string medoids_file = index_prefix_path + "_medoids.bin";
     std::string centroid_data_file = index_prefix_path + "_centroids_float.bin";
+    std::string cache_list_bin = index_prefix_path + "_cache_list.bin";
 
     size_t data_dim, num_pq_centers;
     diskann::get_bin_metadata(pq_tables_bin, num_pq_centers, data_dim);
@@ -146,21 +148,68 @@ namespace diskann {
 
     this->Lsearch = (_u64) std::atoi(param_list[0].c_str());
     this->beam_width = (_u64) std::atoi(param_list[1].c_str());
-    int      cache_nlevels = (_u64) std::atoi(param_list[2].c_str());
-    uint32_t nthreads = (uint32_t) std::atoi(param_list[3].c_str());
+    uint32_t    nthreads = (uint32_t) std::atoi(param_list[2].c_str());
+    std::string warmup_bin = param_list[3];
+    int         cache_nlevels = 3;
+    uint64_t    nnodes_to_cache = 0;
+    bool        use_smart_caching = false;
 
-    // create object
-    _pFlashIndex.reset(new PQFlashIndex<T>());
+	if (file_exists(warmup_bin)) {
+      nnodes_to_cache = (_u64) std::atoi(param_list[4].c_str());
+      use_smart_caching = true;
+    }
 
-    // load index
+
+    // load index to create cache_list if warmup file is present
+    if (use_smart_caching) {
+      _pFlashIndex.reset(new PQFlashIndex<T>());
+
+      T*     warmup = nullptr;
+      size_t warmup_num, ndims, warmup_aligned_dim;
+      diskann::load_aligned_bin<T>(warmup_bin, warmup, warmup_num, ndims,
+                                   warmup_aligned_dim);
+
+      _pFlashIndex->set_cache_create_flag();
+
+      _pFlashIndex->load(nthreads, pq_tables_bin.c_str(), data_bin.c_str(),
+                         disk_index_file.c_str());
+      _pFlashIndex->load_entry_points(medoids_file, centroid_data_file);
+      _pFlashIndex->cache_medoid_nhoods();
+      // cache bfs levels
+      _pFlashIndex->cache_bfs_levels(cache_nlevels);
+      //    free(params);  // Gopal. Caller has to free the 'params' variable.
+
+      unsigned recall_at = 1;
+      _u64*    warmup_res = new _u64[recall_at * warmup_num];
+      float*   warmup_dists = new float[recall_at * warmup_num];
+
+#pragma omp parallel for schedule(dynamic, 1)
+      for (_s64 i = 0; i < (int32_t) warmup_num; i++) {
+        _pFlashIndex->cached_beam_search(
+            warmup + (i * warmup_aligned_dim), recall_at, this->Lsearch,
+            warmup_res + (i * recall_at), warmup_dists + (i * recall_at),
+            this->beam_width);
+      }
+
+      diskann::aligned_free(warmup);
+      delete[] warmup_res;
+      delete[] warmup_dists;
+
+      std::cout << "Saving cache list to file " << cache_list_bin.c_str()
+                << std::endl;
+      _pFlashIndex.save_cached_nodes(nnodes_to_cache, cache_list_bin);
+    }
+
+	_pFlashIndex.reset(new PQFlashIndex<T>());
     _pFlashIndex->load(nthreads, pq_tables_bin.c_str(), data_bin.c_str(),
                        disk_index_file.c_str());
     _pFlashIndex->load_entry_points(medoids_file, centroid_data_file);
     _pFlashIndex->cache_medoid_nhoods();
-
     // cache bfs levels
-    _pFlashIndex->cache_bfs_levels(cache_nlevels);
-    //    free(params);  // Gopal. Caller has to free the 'params' variable.
+    if (use_smart_caching)
+      _pFlashIndex->load_cache_from_file(cache_list_bin);
+    else
+	  _pFlashIndex->cache_bfs_levels(cache_nlevels);
     return true;
   }
 

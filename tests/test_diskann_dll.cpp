@@ -63,7 +63,7 @@ int aux_main(int argc, char** argv) {
   // for query search
   {
     // load the index
-    bool res = intf->LoadIndex(argv[2], "110 4 4 4");
+    bool res = intf->LoadIndex(argv[2], "110 4 4 null 50000");
     // ERROR CHECK
     if (res != 1) {
       exit(-1);
