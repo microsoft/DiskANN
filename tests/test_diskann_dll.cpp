@@ -39,9 +39,9 @@ template<typename T>
 int aux_main(int argc, char** argv) {
   // argv[1]: data file
   // argv[2]: output_file_pattern
-  if (argc != 5) {
+  if (argc != 6) {
     std::cout << "Usage: " << argv[0]
-              << " <data_file> <output_file_prefix> <query_bin> <gt_bin>"
+              << " <data_file> <output_file_prefix> <query_bin> <gt_bin> <cached_nodes_file>(null if not present)"
               << std::endl;
     return -1;
   }
@@ -50,7 +50,7 @@ int aux_main(int argc, char** argv) {
       new diskann::DiskANNInterface<T>(0, ANNIndex::DT_L2);
 
   bool res = 0;
-  // for indexing
+   for indexing
   {
     // just construct index
     res = intf->BuildIndex(argv[1], argv[2], "75 32 2000 25 0.3 32");
@@ -63,7 +63,7 @@ int aux_main(int argc, char** argv) {
   // for query search
   {
     // load the index
-    bool res = intf->LoadIndex(argv[2], "110 4 4 null 50000");
+    bool res = intf->LoadIndex(argv[2], (std::string("110 4 4 ") + argv[5] + " 50000").c_str());
     // ERROR CHECK
     if (res != 1) {
       exit(-1);
@@ -116,5 +116,5 @@ int aux_main(int argc, char** argv) {
 }
 
 int main(int argc, char** argv) {
-  return aux_main<float>(argc, argv);
+  return aux_main<int8_t>(argc, argv);
 }

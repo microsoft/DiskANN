@@ -197,7 +197,7 @@ namespace diskann {
 
       std::cout << "Saving cache list to file " << cache_list_bin.c_str()
                 << std::endl;
-      _pFlashIndex.save_cached_nodes(nnodes_to_cache, cache_list_bin);
+      _pFlashIndex->save_cached_nodes(nnodes_to_cache, cache_list_bin);
     }
 
 	_pFlashIndex.reset(new PQFlashIndex<T>());
@@ -223,9 +223,9 @@ namespace diskann {
                                         unsigned __int64  neighborCount,
                                         float*            distances,
                                         unsigned __int64* ids) const {
-    //    _u64      L = 6 * neighborCount;
     const T* query = (const T*) vector;
-    //#pragma omp  parallel for schedule(dynamic, 1)
+
+//#pragma omp  parallel for schedule(dynamic, 1)
     for (_u64 i = 0; i < queryCount; i++) {
       _pFlashIndex->cached_beam_search(
           query + (i * this->aligned_dimension), neighborCount, this->Lsearch,

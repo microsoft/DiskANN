@@ -117,8 +117,7 @@ namespace diskann {
                        size_t &dim) {
     _u64            read_blk_size = 64 * 1024 * 1024;
     cached_ifstream reader(bin_file, read_blk_size);
-    std::cout << "Reading bin file " << bin_file.c_str() << " ..."
-              << std::flush;
+    std::cout << "Reading bin file " << bin_file.c_str() << " ..." << std::endl;
     size_t actual_file_size = reader.get_file_size();
 
     int npts_i32, dim_i32;
@@ -128,14 +127,15 @@ namespace diskann {
     dim = (unsigned) dim_i32;
 
     std::cout << "Metadata: #pts = " << npts << ", #dims = " << dim << "..."
-              << std::flush;
+              << std::endl;
 
     size_t expected_actual_file_size =
         npts * dim * sizeof(T) + 2 * sizeof(uint32_t);
     if (actual_file_size != expected_actual_file_size) {
       std::cout << "Error. File size mismatch. Actual size is "
                 << actual_file_size << " while expected size is  "
-                << expected_actual_file_size << std::endl;
+                << expected_actual_file_size << " npts = " << npts
+                << " dim = " << dim << " size of <T>= " << sizeof(T) << std::endl;
       exit(-1);
     }
 
@@ -181,7 +181,9 @@ namespace diskann {
     if (actual_file_size != expected_actual_file_size) {
       std::cout << "Error. File size mismatch. Actual size is "
                 << actual_file_size << " while expected size is  "
-                << expected_actual_file_size << std::endl;
+                << expected_actual_file_size << " npts = " << npts
+                << " dim = " << dim << " size of <T>= " << sizeof(T)
+                << std::endl;
       exit(-1);
     }
 
@@ -391,9 +393,9 @@ struct PivotContainer {
 
 inline bool file_exists(const std::string &name) {
   struct stat buffer;
-  auto val = stat(name.c_str(), &buffer);
+  auto        val = stat(name.c_str(), &buffer);
   std::cout << " Stat(" << name.c_str() << ") returned: " << val << std::endl;
-  return ( val == 0 );
+  return (val == 0);
 }
 
 inline _u64 get_file_size(const std::string &fname) {
@@ -408,7 +410,6 @@ inline _u64 get_file_size(const std::string &fname) {
     std::cout << "Could not open file: " << fname << std::endl;
     return 0;
   }
-  
 }
 
 inline bool validate_file_size(const std::string &name) {
@@ -419,8 +420,9 @@ inline bool validate_file_size(const std::string &name) {
   size_t expected_file_size;
   in.read((char *) &expected_file_size, sizeof(uint64_t));
   if (actual_file_size != expected_file_size) {
-    std::cout << "Error loading" << name << ". Expected "
-                                            "size (metadata): "
+    std::cout << "Error loading" << name
+              << ". Expected "
+                 "size (metadata): "
               << expected_file_size
               << ", actual file size : " << actual_file_size << ". Exitting."
               << std::endl;
