@@ -265,6 +265,9 @@ namespace diskann {
 
   template<typename T>
   void PQFlashIndex<T>::cache_bfs_levels(_u64 nlevels) {
+
+      if (nlevels <= 1)
+          return;
     assert(nlevels > 1);
 
     // borrow thread data
@@ -580,6 +583,7 @@ namespace diskann {
     std::cout << "Loading neighborhood info and full-precision vectors of "
               << num_medoids << " medoid(s) to memory" << std::endl;
     coord_cache.clear();
+    nhood_cache.clear();
     for (uint64_t cur_m = 0; cur_m < num_medoids; cur_m++) {
       _u64 medoid = (_u64) medoids[cur_m];
       // read medoid nhood
@@ -837,8 +841,8 @@ namespace diskann {
 
     std::sort(retset.begin(), retset.begin() + cur_list_size);
 
-    _u64 hops = 0;
     _u64 cmps = 0;
+    _u64 hops = 0;
     _u64 k = 0;
 
     // cleared every iteration
@@ -861,7 +865,7 @@ namespace diskann {
       _u64 marker = k - 1;
       while (++marker < cur_list_size && frontier.size() < beam_width) {
         if (retset[marker].flag) {
-          auto iter = nhood_cache.find(retset[marker].id);
+            auto iter = nhood_cache.find(retset[marker].id);
           if (iter != nhood_cache.end()) {
             cached_nhoods.push_back(
                 std::make_pair(retset[marker].id, iter->second));
@@ -882,7 +886,9 @@ namespace diskann {
 
       // read nhoods of frontier ids
       if (!frontier.empty()) {
-        hops++;
+          hops++;
+        if (stats != nullptr) 
+            stats->n_hops++;
         for (_u64 i = 0; i < frontier.size(); i++) {
           unsigned id = frontier[i];
           std::pair<_u64, char *> fnhood;

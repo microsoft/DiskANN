@@ -22,6 +22,20 @@
 
 #include "memory_mapper.h"
 
+void print_stats(std::string category, std::vector<float> percentiles, std::vector<float> results) {
+      std::cout<<std::setw(20)<<category <<": "<< std::flush;
+      for (uint32_t s = 0; s < percentiles.size(); s++) {
+          std::cout<<std::setw(8)<<percentiles[s]<<"%"; 
+      }
+      std::cout<<std::endl;
+      std::cout<<std::setw(22) << " "<<std::flush;
+      for (uint32_t s = 0; s < percentiles.size(); s++) {
+          std::cout<<std::setw(9)<<results[s]; 
+      }
+      std::cout<<std::endl;
+}
+
+
 template<typename T>
 int search_disk_index(int argc, char** argv) {
   // load query bin
@@ -114,13 +128,6 @@ int search_disk_index(int argc, char** argv) {
   std::cout.precision(2);
 
   std::string recall_string = "Recall@" + std::to_string(recall_at);
-  std::cout << std::setw(4) << "Ls" << std::setw(16) << "Avg Latency"
-            << std::setw(16) << "99 Latency" << std::setw(16) << "Avg Disk I/Os"
-            << std::setw(12) << recall_string << std::endl;
-  std::cout << "==================================================="
-               "============"
-               "======="
-            << std::endl;
   std::vector<std::vector<uint32_t>> query_result_ids(Lvec.size());
   std::vector<std::vector<float>>    query_result_dists(Lvec.size());
 
@@ -143,31 +150,73 @@ int search_disk_index(int argc, char** argv) {
           stats + i);
     }
 
-    float mean_latency = diskann::get_percentile_stats(
-        stats, query_num, 0.5,
-        [](const diskann::QueryStats& stats) { return stats.total_us; });
-
-    float latency_99 = diskann::get_percentile_stats(
-        stats, query_num, 0.99,
-        [](const diskann::QueryStats& stats) { return stats.total_us; });
-
-    float mean_io = diskann::get_percentile_stats(
-        stats, query_num, 0.5,
-        [](const diskann::QueryStats& stats) { return stats.n_ios; });
-
     diskann::convert_types<uint64_t, uint32_t>(query_result_ids_64.data(),
                                                query_result_ids[test_id].data(),
                                                query_num, recall_at);
 
-    float recall = 0;
-    if (calc_recall_flag)
-      recall = diskann::calc_recall_set(query_num, gt_ids, gt_dim,
+      std::cout <<"L_search: " << L << std::endl;
+    if (calc_recall_flag) {
+     float  recall = diskann::calc_recall_set(query_num, gt_ids, gt_dim,
                                         query_result_ids[test_id].data(),
                                         recall_at, recall_at, recall_at);
+      std::cout <<recall_string <<": "<<  recall << std::endl;
+    }
 
-    std::cout << std::setw(4) << L << std::setw(16) << mean_latency
-              << std::setw(16) << latency_99 << std::setw(16) << mean_io
-              << std::setw(12) << recall << std::endl;
+
+      std::vector<float> percentiles;
+      for (uint32_t s= 1; s < 20;s++) {
+          percentiles.push_back(s*5);
+      }
+      percentiles.push_back(99);
+      percentiles.push_back(99.9);
+      std::vector<float> results(percentiles.size());
+
+
+      for (uint32_t s =0; s< percentiles.size(); s++) {
+          results[s] = diskann::get_percentile_stats(
+        stats, query_num, percentiles[s]/100,
+        [](const diskann::QueryStats& stats) { return stats.n_ios; });
+      }
+      std::string category = "IO Stats";
+      print_stats(category, percentiles, results);
+
+
+      for (uint32_t s =0; s< percentiles.size(); s++) {
+          results[s] = diskann::get_percentile_stats(
+        stats, query_num, percentiles[s]/100,
+        [](const diskann::QueryStats& stats) { return stats.total_us; });
+      }
+      category = "Latency Stats";
+      print_stats(category, percentiles, results);
+
+
+      for (uint32_t s =0; s< percentiles.size(); s++) {
+          results[s] = diskann::get_percentile_stats(
+        stats, query_num, percentiles[s]/100,
+        [](const diskann::QueryStats& stats) { return stats.n_cmps; });
+      }
+      category = "Comparison Stats";
+      print_stats(category, percentiles, results);
+
+
+      for (uint32_t s =0; s< percentiles.size(); s++) {
+          results[s] = diskann::get_percentile_stats(
+        stats, query_num, percentiles[s]/100,
+        [](const diskann::QueryStats& stats) { return stats.n_cache_hits; });
+      }
+      category = "Cache Hits Stats";
+      print_stats(category, percentiles, results);
+
+
+      for (uint32_t s =0; s< percentiles.size(); s++) {
+          results[s] = diskann::get_percentile_stats(
+        stats, query_num, percentiles[s]/100,
+        [](const diskann::QueryStats& stats) { return stats.n_hops; });
+      }
+      category = "Hops Stats";
+      print_stats(category, percentiles, results);
+
+      std::cout<<std::endl;
   }
 
   std::cout << "Done searching. Now saving results " << std::endl;
