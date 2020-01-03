@@ -22,19 +22,19 @@
 
 #include "memory_mapper.h"
 
-void print_stats(std::string category, std::vector<float> percentiles, std::vector<float> results) {
-      std::cout<<std::setw(20)<<category <<": "<< std::flush;
-      for (uint32_t s = 0; s < percentiles.size(); s++) {
-          std::cout<<std::setw(8)<<percentiles[s]<<"%"; 
-      }
-      std::cout<<std::endl;
-      std::cout<<std::setw(22) << " "<<std::flush;
-      for (uint32_t s = 0; s < percentiles.size(); s++) {
-          std::cout<<std::setw(9)<<results[s]; 
-      }
-      std::cout<<std::endl;
+void print_stats(std::string category, std::vector<float> percentiles,
+                 std::vector<float> results) {
+  std::cout << std::setw(20) << category << ": " << std::flush;
+  for (uint32_t s = 0; s < percentiles.size(); s++) {
+    std::cout << std::setw(8) << percentiles[s] << "%";
+  }
+  std::cout << std::endl;
+  std::cout << std::setw(22) << " " << std::flush;
+  for (uint32_t s = 0; s < percentiles.size(); s++) {
+    std::cout << std::setw(9) << results[s];
+  }
+  std::cout << std::endl;
 }
-
 
 template<typename T>
 int search_disk_index(int argc, char** argv) {
@@ -50,16 +50,17 @@ int search_disk_index(int argc, char** argv) {
   std::string medoids_file(argv[5]);
   std::string centroid_data_file(argv[6]);
   std::string cached_list_file(argv[7]);
-  std::string query_bin(argv[8]);
-  std::string gt_ids_bin(argv[9]);
-  _u64        recall_at = std::atoi(argv[10]);
-  _u32        num_threads = std::atoi(argv[11]);
-  _u32        beam_width = std::atoi(argv[12]);
-  std::string result_output_prefix(argv[13]);
+  std::string warmup_query_file(argv[8]);
+  std::string query_bin(argv[9]);
+  std::string gt_ids_bin(argv[10]);
+  _u64        recall_at = std::atoi(argv[11]);
+  _u32        num_threads = std::atoi(argv[12]);
+  _u32        beam_width = std::atoi(argv[13]);
+  std::string result_output_prefix(argv[14]);
 
   bool calc_recall_flag = false;
 
-  for (int ctr = 14; ctr < argc; ctr++) {
+  for (int ctr = 15; ctr < argc; ctr++) {
     _u64 curL = std::atoi(argv[ctr]);
     if (curL >= recall_at)
       Lvec.push_back(curL);
@@ -70,7 +71,7 @@ int search_disk_index(int argc, char** argv) {
               << std::endl;
     return -1;
   }
-  _u32 cache_nlevels = 0;
+  _u32 num_nodes_to_cache = 250000;
 
   std::cout << "Search parameters: #threads: " << num_threads
             << ", beamwidth: " << beam_width << std::endl;
@@ -117,12 +118,54 @@ int search_disk_index(int argc, char** argv) {
               << std::endl;
     _pFlashIndex.load_cache_from_file(cached_list_file);
   } else {
-    std::cout << "Caching BFS levels " << cache_nlevels << " around medoid(s)"
-              << std::endl;
-    _pFlashIndex.cache_bfs_levels(cache_nlevels);
+    std::vector<uint32_t> node_list;
+    std::cout << "Caching " << num_nodes_to_cache
+              << " BFS nodes around medoid(s)" << std::endl;
+    _pFlashIndex.cache_bfs_levels(num_nodes_to_cache, node_list);
+    _pFlashIndex.load_cache_list(node_list);
   }
 
   omp_set_num_threads(num_threads);
+
+  uint64_t warmup_L = 50;
+  uint64_t warmup_num = 0, warmup_dim = 0, warmup_aligned_dim = 0;
+  T*       warmup = nullptr;
+  if (file_exists(warmup_query_file)) {
+    diskann::load_aligned_bin<T>(warmup_query_file, warmup, warmup_num,
+                                 warmup_dim, warmup_aligned_dim);
+  } else {
+    warmup_num = 100000;
+    warmup_dim = query_dim;
+    warmup_aligned_dim = query_aligned_dim;
+    std::cout << "Generating random warmup file with dim " << warmup_dim
+              << " and aligned dim " << warmup_aligned_dim << std::flush;
+    diskann::alloc_aligned(((void**) &warmup),
+                           warmup_num * warmup_aligned_dim * sizeof(T),
+                           8 * sizeof(T));
+    std::memset(warmup, 0, warmup_num * warmup_aligned_dim * sizeof(T));
+    std::random_device              rd;
+    std::mt19937                    gen(rd());
+    std::uniform_int_distribution<> dis(-128, 127);
+    for (uint32_t i = 0; i < warmup_num; i++) {
+      for (uint32_t d = 0; d < warmup_dim; d++) {
+        warmup[i * warmup_aligned_dim + d] = (T) dis(gen);
+      }
+    }
+    std::cout << "..done" << std::endl;
+  }
+  std::vector<uint64_t> warmup_result_ids_64(warmup_num, 0);
+  std::vector<float>    warmup_result_dists(warmup_num, 0);
+
+#pragma omp parallel for schedule(dynamic, 1)
+  for (_s64 i = 0; i < (int64_t) warmup_num; i++) {
+    _pFlashIndex.cached_beam_search(
+        warmup + (i * warmup_aligned_dim), 1, warmup_L,
+        warmup_result_ids_64.data() + (i * 1),
+        warmup_result_dists.data() + (i * 1), beam_width);
+  }
+  std::cout << "Done warming up threads and cache" << std::endl;
+  if (warmup != nullptr)
+    diskann::aligned_free(warmup);
 
   std::cout.setf(std::ios_base::fixed, std::ios_base::floatfield);
   std::cout.precision(2);
@@ -141,6 +184,7 @@ int search_disk_index(int argc, char** argv) {
     diskann::Timer timer;
 
     std::vector<uint64_t> query_result_ids_64(recall_at * query_num);
+    auto                  s = std::chrono::high_resolution_clock::now();
 #pragma omp               parallel for schedule(dynamic, 1)
     for (_s64 i = 0; i < (int64_t) query_num; i++) {
       _pFlashIndex.cached_beam_search(
@@ -149,74 +193,80 @@ int search_disk_index(int argc, char** argv) {
           query_result_dists[test_id].data() + (i * recall_at), beam_width,
           stats + i);
     }
+    auto                          e = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double> diff = e - s;
+    float qps = (1.0 * query_num) / (1.0 * diff.count());
 
     diskann::convert_types<uint64_t, uint32_t>(query_result_ids_64.data(),
                                                query_result_ids[test_id].data(),
                                                query_num, recall_at);
 
-      std::cout <<"L_search: " << L << std::endl;
+    std::cout << "L_search: " << L << std::endl;
+    std::cout << "QPS: " << qps << std::endl;
     if (calc_recall_flag) {
-     float  recall = diskann::calc_recall_set(query_num, gt_ids, gt_dim,
-                                        query_result_ids[test_id].data(),
-                                        recall_at, recall_at, recall_at);
-      std::cout <<recall_string <<": "<<  recall << std::endl;
+      float recall = diskann::calc_recall_set(query_num, gt_ids, gt_dim,
+                                              query_result_ids[test_id].data(),
+                                              recall_at, recall_at, recall_at);
+      std::cout << recall_string << ": " << recall << std::endl;
     }
 
+    std::vector<float> percentiles;
+    for (uint32_t s = 1; s < 20; s++) {
+      percentiles.push_back(s * 5);
+    }
+    percentiles.push_back(99);
+    percentiles.push_back(99.9);
+    std::vector<float> results(percentiles.size());
 
-      std::vector<float> percentiles;
-      for (uint32_t s= 1; s < 20;s++) {
-          percentiles.push_back(s*5);
-      }
-      percentiles.push_back(99);
-      percentiles.push_back(99.9);
-      std::vector<float> results(percentiles.size());
+    for (uint32_t s = 0; s < percentiles.size(); s++) {
+      results[s] = diskann::get_percentile_stats(
+          stats, query_num, percentiles[s] / 100,
+          [](const diskann::QueryStats& stats) { return stats.n_ios; });
+    }
+    std::string category = "IO Stats";
+    print_stats(category, percentiles, results);
 
+    for (uint32_t s = 0; s < percentiles.size(); s++) {
+      results[s] = diskann::get_percentile_stats(
+          stats, query_num, percentiles[s] / 100,
+          [](const diskann::QueryStats& stats) { return stats.total_us; });
+    }
+    category = "Latency Stats";
+    print_stats(category, percentiles, results);
 
-      for (uint32_t s =0; s< percentiles.size(); s++) {
-          results[s] = diskann::get_percentile_stats(
-        stats, query_num, percentiles[s]/100,
-        [](const diskann::QueryStats& stats) { return stats.n_ios; });
-      }
-      std::string category = "IO Stats";
-      print_stats(category, percentiles, results);
+    for (uint32_t s = 0; s < percentiles.size(); s++) {
+      results[s] = diskann::get_percentile_stats(
+          stats, query_num, percentiles[s] / 100,
+          [](const diskann::QueryStats& stats) { return stats.io_us; });
+    }
+    category = "IO Latency Stats";
+    print_stats(category, percentiles, results);
 
+    for (uint32_t s = 0; s < percentiles.size(); s++) {
+      results[s] = diskann::get_percentile_stats(
+          stats, query_num, percentiles[s] / 100,
+          [](const diskann::QueryStats& stats) { return stats.n_cmps; });
+    }
+    category = "Comparison Stats";
+    print_stats(category, percentiles, results);
 
-      for (uint32_t s =0; s< percentiles.size(); s++) {
-          results[s] = diskann::get_percentile_stats(
-        stats, query_num, percentiles[s]/100,
-        [](const diskann::QueryStats& stats) { return stats.total_us; });
-      }
-      category = "Latency Stats";
-      print_stats(category, percentiles, results);
+    for (uint32_t s = 0; s < percentiles.size(); s++) {
+      results[s] = diskann::get_percentile_stats(
+          stats, query_num, percentiles[s] / 100,
+          [](const diskann::QueryStats& stats) { return stats.n_cache_hits; });
+    }
+    category = "Cache Hits Stats";
+    print_stats(category, percentiles, results);
 
+    for (uint32_t s = 0; s < percentiles.size(); s++) {
+      results[s] = diskann::get_percentile_stats(
+          stats, query_num, percentiles[s] / 100,
+          [](const diskann::QueryStats& stats) { return stats.n_hops; });
+    }
+    category = "Hops Stats";
+    print_stats(category, percentiles, results);
 
-      for (uint32_t s =0; s< percentiles.size(); s++) {
-          results[s] = diskann::get_percentile_stats(
-        stats, query_num, percentiles[s]/100,
-        [](const diskann::QueryStats& stats) { return stats.n_cmps; });
-      }
-      category = "Comparison Stats";
-      print_stats(category, percentiles, results);
-
-
-      for (uint32_t s =0; s< percentiles.size(); s++) {
-          results[s] = diskann::get_percentile_stats(
-        stats, query_num, percentiles[s]/100,
-        [](const diskann::QueryStats& stats) { return stats.n_cache_hits; });
-      }
-      category = "Cache Hits Stats";
-      print_stats(category, percentiles, results);
-
-
-      for (uint32_t s =0; s< percentiles.size(); s++) {
-          results[s] = diskann::get_percentile_stats(
-        stats, query_num, percentiles[s]/100,
-        [](const diskann::QueryStats& stats) { return stats.n_hops; });
-      }
-      category = "Hops Stats";
-      print_stats(category, percentiles, results);
-
-      std::cout<<std::endl;
+    std::cout << std::endl;
   }
 
   std::cout << "Done searching. Now saving results " << std::endl;
@@ -232,14 +282,14 @@ int search_disk_index(int argc, char** argv) {
 }
 
 int main(int argc, char** argv) {
-  if (argc <= 14) {
+  if (argc <= 15) {
     std::cout << "Usage: " << argv[0]
               << " <index_type[float/int8/uint8]>  <pq_centroids_bin> "
                  "<compressed_data_bin> <disk_index_path> "
                  "<medoids_bin (use \"null\" if none)> "
                  "<centroids_vectors_float> (use \"null\" if medoids file is "
                  "null) <cache_list_bin (use "
-                 "\"null\" for none)> "
+                 "\"null\" for none)> <warmup file> (use \"null\" for none) "
                  "<query_bin> <groundtruth_bin> (use \"null\" for none) "
                  "<recall@> <num_threads> <beam_width> <result_output_prefix> "
                  "<L1> <L2> ... "
