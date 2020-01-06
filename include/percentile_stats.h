@@ -24,6 +24,7 @@ namespace diskann {
     uint64_t n_cmps_saved = 0;  // # cmps saved
     uint64_t n_cmps = 0;        // # cmps
     uint64_t n_cache_hits = 0;  // # cache_hits
+    uint64_t n_hops = 0;        // # search hops
   };
 
   inline uint64_t get_percentile_stats(

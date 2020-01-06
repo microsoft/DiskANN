@@ -38,7 +38,7 @@ int generate_cache_list(int argc, char** argv) {
   _u64        num_cache_nodes = std::atoi(argv[10]);
   std::string cache_list_bin(argv[11]);
 
-  _u32 num_threads = 16;
+  _u32 num_threads = 32;
   _u32 cache_nlevels = 3;
 
   std::cout << "Search parameters: #threads: " << num_threads

@@ -190,6 +190,76 @@ namespace diskann {
     this->create_visit_cache = true;
   }
 
+  template<typename T>
+  void PQFlashIndex<T>::load_cache_list(std::vector<uint32_t> &node_list) {
+    std::cout << "Loading the cache list into memory.." << std::flush;
+    _u64 num_cached_nodes = node_list.size();
+
+    // borrow thread data
+    ThreadData<T> this_thread_data = this->thread_data.pop();
+    while (this_thread_data.scratch.sector_scratch == nullptr) {
+      this->thread_data.wait_for_push_notify();
+      this_thread_data = this->thread_data.pop();
+    }
+
+    IOContext ctx = this_thread_data.ctx;
+
+    nhood_cache_buf = new unsigned[num_cached_nodes * (max_degree + 1)];
+    memset(nhood_cache_buf, 0, num_cached_nodes * (max_degree + 1));
+
+    _u64 coord_cache_buf_len = num_cached_nodes * aligned_dim;
+    diskann::alloc_aligned((void **) &coord_cache_buf,
+                           coord_cache_buf_len * sizeof(T), 8 * sizeof(T));
+    memset(coord_cache_buf, 0, coord_cache_buf_len * sizeof(T));
+
+    size_t BLOCK_SIZE = 8;
+    size_t num_blocks = DIV_ROUND_UP(num_cached_nodes, BLOCK_SIZE);
+
+    for (_u64 block = 0; block < num_blocks; block++) {
+      _u64 start_idx = block * BLOCK_SIZE;
+      _u64 end_idx = (std::min)(num_cached_nodes, (block + 1) * BLOCK_SIZE);
+      std::vector<AlignedRead> read_reqs;
+      std::vector<std::pair<_u64, char *>> nhoods;
+      for (_u64 node_idx = start_idx; node_idx < end_idx; node_idx++) {
+        AlignedRead read;
+        char *      buf = nullptr;
+        alloc_aligned((void **) &buf, SECTOR_LEN, SECTOR_LEN);
+        nhoods.push_back(std::make_pair(node_list[node_idx], buf));
+        read.len = SECTOR_LEN;
+        read.buf = buf;
+        read.offset = NODE_SECTOR_NO(node_list[node_idx]) * SECTOR_LEN;
+        read_reqs.push_back(read);
+      }
+
+      reader->read(read_reqs, ctx);
+
+      _u64 node_idx = start_idx;
+      for (auto &nhood : nhoods) {
+        char *node_buf = OFFSET_TO_NODE(nhood.second, nhood.first);
+        T *   node_coords = OFFSET_TO_NODE_COORDS(node_buf);
+        T *   cached_coords = coord_cache_buf + node_idx * aligned_dim;
+        memcpy(cached_coords, node_coords, data_dim * sizeof(T));
+        coord_cache.insert(std::make_pair(nhood.first, cached_coords));
+
+        // insert node nhood into nhood_cache
+        unsigned *node_nhood = OFFSET_TO_NODE_NHOOD(node_buf);
+        _u64      nnbrs = (_u64) *node_nhood;
+        unsigned *nbrs = node_nhood + 1;
+        // std::cerr << "CACHE: nnbrs = " << nnbrs << "\n";
+        std::pair<_u64, unsigned *> cnhood;
+        cnhood.first = nnbrs;
+        cnhood.second = nhood_cache_buf + node_idx * (max_degree + 1);
+        memcpy(cnhood.second, nbrs, nnbrs * sizeof(unsigned));
+        nhood_cache.insert(std::make_pair(nhood.first, cnhood));
+        aligned_free(nhood.second);
+        node_idx++;
+      }
+    }
+    // return thread data
+    this->thread_data.push(this_thread_data);
+    std::cout << "..done." << std::endl;
+  }
+
   /*  This function loads the nhood_cache and coord_cache with cached nodes
    * present in node_list..
    *  The num_nodes parameter tells how many nodes to cache. */
@@ -225,8 +295,8 @@ namespace diskann {
     for (_u64 block = 0; block < num_blocks; block++) {
       _u64 start_idx = block * BLOCK_SIZE;
       _u64 end_idx = (std::min)(num_cached_nodes, (block + 1) * BLOCK_SIZE);
-        std::vector<AlignedRead> read_reqs;
-        std::vector<std::pair<_u64, char *>> nhoods;
+      std::vector<AlignedRead> read_reqs;
+      std::vector<std::pair<_u64, char *>> nhoods;
       for (_u64 node_idx = start_idx; node_idx < end_idx; node_idx++) {
         AlignedRead read;
         char *      buf = nullptr;
@@ -238,28 +308,28 @@ namespace diskann {
         read_reqs.push_back(read);
       }
 
-        reader->read(read_reqs, ctx);
+      reader->read(read_reqs, ctx);
 
-        _u64 node_idx = start_idx;
-        for (auto &nhood : nhoods) {
-          char *node_buf = OFFSET_TO_NODE(nhood.second, nhood.first);
-          T *   node_coords = OFFSET_TO_NODE_COORDS(node_buf);
-          T *   cached_coords = coord_cache_buf + node_idx * aligned_dim;
-          memcpy(cached_coords, node_coords, data_dim * sizeof(T));
-          coord_cache.insert(std::make_pair(nhood.first, cached_coords));
+      _u64 node_idx = start_idx;
+      for (auto &nhood : nhoods) {
+        char *node_buf = OFFSET_TO_NODE(nhood.second, nhood.first);
+        T *   node_coords = OFFSET_TO_NODE_COORDS(node_buf);
+        T *   cached_coords = coord_cache_buf + node_idx * aligned_dim;
+        memcpy(cached_coords, node_coords, data_dim * sizeof(T));
+        coord_cache.insert(std::make_pair(nhood.first, cached_coords));
 
-          // insert node nhood into nhood_cache
-          unsigned *node_nhood = OFFSET_TO_NODE_NHOOD(node_buf);
-          _u64      nnbrs = (_u64) *node_nhood;
-          unsigned *nbrs = node_nhood + 1;
-          // std::cerr << "CACHE: nnbrs = " << nnbrs << "\n";
-          std::pair<_u64, unsigned *> cnhood;
-          cnhood.first = nnbrs;
-          cnhood.second = nhood_cache_buf + node_idx * (max_degree + 1);
-          memcpy(cnhood.second, nbrs, nnbrs * sizeof(unsigned));
-          nhood_cache.insert(std::make_pair(nhood.first, cnhood));
-          aligned_free(nhood.second);
-          node_idx++;
+        // insert node nhood into nhood_cache
+        unsigned *node_nhood = OFFSET_TO_NODE_NHOOD(node_buf);
+        _u64      nnbrs = (_u64) *node_nhood;
+        unsigned *nbrs = node_nhood + 1;
+        // std::cerr << "CACHE: nnbrs = " << nnbrs << "\n";
+        std::pair<_u64, unsigned *> cnhood;
+        cnhood.first = nnbrs;
+        cnhood.second = nhood_cache_buf + node_idx * (max_degree + 1);
+        memcpy(cnhood.second, nbrs, nnbrs * sizeof(unsigned));
+        nhood_cache.insert(std::make_pair(nhood.first, cnhood));
+        aligned_free(nhood.second);
+        node_idx++;
       }
     }
     // return thread data
@@ -268,7 +338,129 @@ namespace diskann {
   }
 
   template<typename T>
+  void PQFlashIndex<T>::cache_bfs_levels(_u64 num_nodes_to_cache,
+                                         std::vector<uint32_t> &node_list) {
+    node_list.clear();
+
+    // borrow thread data
+    ThreadData<T> this_thread_data = this->thread_data.pop();
+    while (this_thread_data.scratch.sector_scratch == nullptr) {
+      this->thread_data.wait_for_push_notify();
+      this_thread_data = this->thread_data.pop();
+    }
+
+    IOContext ctx = this_thread_data.ctx;
+
+    tsl::robin_set<unsigned> *cur_level, *prev_level;
+    cur_level = new tsl::robin_set<unsigned>();
+    prev_level = new tsl::robin_set<unsigned>();
+
+    for (_u64 miter = 0; miter < num_medoids; miter++) {
+      cur_level->insert(medoids[miter]);
+    }
+
+    _u64     lvl = 1;
+    uint64_t prev_node_list_size = 0;
+    while ((node_list.size() + cur_level->size() < num_nodes_to_cache) &&
+           cur_level->size() != 0) {
+      // swap prev_level and cur_level
+      std::swap(prev_level, cur_level);
+      // clear cur_level
+      cur_level->clear();
+
+      std::vector<unsigned> nodes_to_expand;
+
+      for (const unsigned &id : *prev_level) {
+        if (std::find(node_list.begin(), node_list.end(), id) !=
+            node_list.end()) {
+          continue;
+        }
+        node_list.push_back(id);
+        nodes_to_expand.push_back(id);
+      }
+
+      std::random_shuffle(nodes_to_expand.begin(), nodes_to_expand.end());
+
+      std::cout << "Level: " << lvl << std::flush;
+      bool finish_flag = false;
+
+      uint64_t BLOCK_SIZE = 1024;
+      uint64_t nblocks = DIV_ROUND_UP(nodes_to_expand.size(), BLOCK_SIZE);
+      for (size_t block = 0; block < nblocks && !finish_flag; block++) {
+        std::cout << "." << std::flush;
+        size_t start = block * BLOCK_SIZE;
+        size_t end =
+            (std::min)((block + 1) * BLOCK_SIZE, nodes_to_expand.size());
+        std::vector<AlignedRead> read_reqs;
+        std::vector<std::pair<_u64, char *>> nhoods;
+        for (size_t cur_pt = start; cur_pt < end; cur_pt++) {
+          char *buf = nullptr;
+          alloc_aligned((void **) &buf, SECTOR_LEN, SECTOR_LEN);
+          nhoods.push_back(std::make_pair(nodes_to_expand[cur_pt], buf));
+          AlignedRead read;
+          read.len = SECTOR_LEN;
+          read.buf = buf;
+          read.offset = NODE_SECTOR_NO(nodes_to_expand[cur_pt]) * SECTOR_LEN;
+          read_reqs.push_back(read);
+        }
+        // issue read requests
+        reader->read(read_reqs, ctx);
+        // process each nhood buf
+        for (auto &nhood : nhoods) {
+          // insert node coord into coord_cache
+          char *    node_buf = OFFSET_TO_NODE(nhood.second, nhood.first);
+          unsigned *node_nhood = OFFSET_TO_NODE_NHOOD(node_buf);
+          _u64      nnbrs = (_u64) *node_nhood;
+          unsigned *nbrs = node_nhood + 1;
+          // explore next level
+          for (_u64 j = 0; j < nnbrs && !finish_flag; j++) {
+            if (std::find(node_list.begin(), node_list.end(), nbrs[j]) ==
+                node_list.end()) {
+              cur_level->insert(nbrs[j]);
+            }
+            if (cur_level->size() + node_list.size() >= num_nodes_to_cache) {
+              finish_flag = true;
+            }
+          }
+          aligned_free(nhood.second);
+        }
+      }
+
+      std::cout << ". #nodes: " << node_list.size() - prev_node_list_size
+                << ", #nodes thus far: " << node_list.size() << std::endl;
+      prev_node_list_size = node_list.size();
+      lvl++;
+    }
+
+    std::vector<uint32_t> cur_level_node_list;
+    for (const unsigned &p : *cur_level)
+      cur_level_node_list.push_back(p);
+
+    std::random_shuffle(cur_level_node_list.begin(), cur_level_node_list.end());
+    size_t residual = num_nodes_to_cache - node_list.size();
+
+    for (size_t i = 0; i < residual; i++)
+      node_list.push_back(cur_level_node_list[i]);
+
+    std::set<unsigned> checkset;
+    for (auto p : node_list)
+      checkset.insert(p);
+
+    if (checkset.size() != node_list.size()) {
+      std::cout << "Duplicates found in cache node list" << std::endl;
+      exit(-1);
+    }
+    // return thread data
+    this->thread_data.push(this_thread_data);
+
+    delete cur_level;
+    delete prev_level;
+  }
+
+  template<typename T>
   void PQFlashIndex<T>::cache_bfs_levels(_u64 nlevels) {
+    if (nlevels <= 1)
+      return;
     assert(nlevels > 1);
 
     // borrow thread data
@@ -588,6 +780,7 @@ namespace diskann {
     std::cout << "Loading neighborhood info and full-precision vectors of "
               << num_medoids << " medoid(s) to memory" << std::endl;
     coord_cache.clear();
+    nhood_cache.clear();
     for (uint64_t cur_m = 0; cur_m < num_medoids; cur_m++) {
       _u64 medoid = (_u64) medoids[cur_m];
       // read medoid nhood
@@ -664,12 +857,13 @@ namespace diskann {
 
     nsg_reader.read((char *) &index_file_size, sizeof(uint64_t));
     if (index_file_size != actual_file_size) {
-      std::cout << "Rand-NSG Index file size does not match expected size per "
+      std::cout << "Vamana Index file size does not match expected size per "
                    "meta-data."
                 << " file size from file: " << index_file_size
                 << " actual file size: " << actual_file_size << std::endl;
       exit(-1);
     }
+
     nsg_reader.read((char *) &width_u32, sizeof(unsigned));
     nsg_reader.read((char *) &medoid_u32, sizeof(unsigned));
 
@@ -760,6 +954,8 @@ namespace diskann {
                                            const _u64   beam_width,
                                            QueryStats * stats,
                                            Distance<T> *output_dist_func) {
+    std::mt19937_64 eng{std::random_device{}()};
+
     ThreadData<T> data = this->thread_data.pop();
     while (data.scratch.sector_scratch == nullptr) {
       this->thread_data.wait_for_push_notify();
@@ -848,8 +1044,9 @@ namespace diskann {
 
     std::sort(retset.begin(), retset.begin() + cur_list_size);
 
-    _u64 hops = 0;
     _u64 cmps = 0;
+    _u64 hops = 0;
+    _u64 num_ios = 0;
     _u64 k = 0;
 
     // cleared every iteration
@@ -870,8 +1067,12 @@ namespace diskann {
 
       // find new beam
       _u64 marker = k - 1;
-      while (++marker < cur_list_size && frontier.size() < beam_width) {
+      _u64 num_seen = 0;
+
+      while (++marker < cur_list_size && frontier.size() < beam_width &&
+             num_seen < beam_width + 2) {
         if (retset[marker].flag) {
+          num_seen++;
           auto iter = nhood_cache.find(retset[marker].id);
           if (iter != nhood_cache.end()) {
             cached_nhoods.push_back(
@@ -894,6 +1095,8 @@ namespace diskann {
       // read nhoods of frontier ids
       if (!frontier.empty()) {
         hops++;
+        if (stats != nullptr)
+          stats->n_hops++;
         for (_u64 i = 0; i < frontier.size(); i++) {
           unsigned                id = frontier[i];
           std::pair<_u64, char *> fnhood;
@@ -907,8 +1110,12 @@ namespace diskann {
             stats->n_4k++;
             stats->n_ios++;
           }
+          num_ios++;
         }
         io_timer.reset();
+        long sleepTime =
+            100L + (long) ((1e2 - 1e1) * rand() / (RAND_MAX + 1.0));
+        usleep(sleepTime);
         reader->read(frontier_read_reqs, ctx);
         if (stats != nullptr) {
           stats->io_us += io_timer.elapsed();

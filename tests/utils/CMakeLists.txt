@@ -40,6 +40,8 @@ if(MSVC)
 	target_link_options(gen_random_slice PRIVATE /MACHINE:x64)
 	target_link_libraries(gen_random_slice debug ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG}/nsg_dll.lib)
 	target_link_libraries(gen_random_slice optimized ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE}/nsg_dll.lib)
+else() 
+	target_link_libraries(gen_random_slice ${PROJECT_NAME})
 endif()
 
 add_executable(calculate_recall calculate_recall.cpp ${PROJECT_SOURCE_DIR}/src/utils.cpp)

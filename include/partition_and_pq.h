@@ -12,7 +12,11 @@
 #include "windows_customizations.h"
 
 template<typename T>
-void gen_random_slice(const std::string data_file, double p_val,
+void gen_random_slice(const std::string base_file,
+                      const std::string output_prefix, float sampling_rate);
+
+template<typename T>
+void gen_random_slice(const std::string data_file, float p_val,
                       float *&sampled_data, size_t &slice_size, size_t &ndims);
 
 template<typename T>

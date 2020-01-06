@@ -70,7 +70,13 @@ namespace diskann {
                                               const std::string mem_index_file,
                                               const std::string output_file);
     DISKANN_DLLEXPORT void load_cache_from_file(std::string cache_bin);
+
+    DISKANN_DLLEXPORT void load_cache_list(std::vector<uint32_t> &node_list);
+
     DISKANN_DLLEXPORT void cache_bfs_levels(_u64 nlevels);
+
+    DISKANN_DLLEXPORT void cache_bfs_levels(_u64 num_nodes_to_cache,
+                                            std::vector<uint32_t> &node_list);
 
     DISKANN_DLLEXPORT void set_cache_create_flag();
 

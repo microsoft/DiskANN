@@ -31,6 +31,61 @@
 
 #define BLOCK_SIZE 5000000
 
+template<typename T>
+void gen_random_slice(const std::string base_file,
+                      const std::string output_prefix, float sampling_rate) {
+  _u64            read_blk_size = 64 * 1024 * 1024;
+  cached_ifstream base_reader(base_file.c_str(), read_blk_size);
+  std::ofstream sample_writer(std::string(output_prefix + "_data.bin").c_str(),
+                              std::ios::binary);
+  std::ofstream sample_id_writer(
+      std::string(output_prefix + "_ids.bin").c_str(), std::ios::binary);
+
+  std::random_device
+               rd;  // Will be used to obtain a seed for the random number engine
+  size_t       x = rd();
+  std::mt19937 generator(
+      x);  // Standard mersenne_twister_engine seeded with rd()
+  std::uniform_real_distribution<float> distribution(0, 1);
+
+  T *      cur_row;
+  size_t   npts, nd;
+  uint32_t npts_u32, nd_u32;
+  uint32_t num_sampled_pts_u32 = 0;
+  uint32_t one_const = 1;
+
+  base_reader.read((char *) &npts_u32, sizeof(uint32_t));
+  base_reader.read((char *) &nd_u32, sizeof(uint32_t));
+  std::cout << "Loading base " << base_file << ". #points: " << npts_u32
+            << ". #dim: " << nd_u32 << "." << std::endl;
+  sample_writer.write((char *) &num_sampled_pts_u32, sizeof(uint32_t));
+  sample_writer.write((char *) &nd_u32, sizeof(uint32_t));
+  sample_id_writer.write((char *) &num_sampled_pts_u32, sizeof(uint32_t));
+  sample_id_writer.write((char *) &one_const, sizeof(uint32_t));
+
+  npts = npts_u32;
+  nd = nd_u32;
+  cur_row = new T[nd];
+
+  for (size_t i = 0; i < npts; i++) {
+    base_reader.read((char *) cur_row, sizeof(T) * nd);
+    float sample = distribution(generator);
+    if (sample < sampling_rate) {
+      sample_writer.write((char *) cur_row, sizeof(T) * nd);
+      uint32_t cur_i_u32 = i;
+      sample_id_writer.write((char *) &cur_i_u32, sizeof(uint32_t));
+      num_sampled_pts_u32++;
+    }
+  }
+  sample_writer.seekp(0, std::ios::beg);
+  sample_writer.write((char *) &num_sampled_pts_u32, sizeof(uint32_t));
+  sample_id_writer.seekp(0, std::ios::beg);
+  sample_id_writer.write((char *) &num_sampled_pts_u32, sizeof(uint32_t));
+  sample_writer.close();
+  sample_id_writer.close();
+  delete[] cur_row;
+}
+
 // streams data from the file, and samples each vector with probability p_val
 // and returns a matrix of size slice_size* ndims as floating point type.
 // the slice_size and ndims are set inside the function.
@@ -491,6 +546,16 @@ int partition(const std::string data_file, const float sampling_rate,
 }
 
 // Instantations of supported templates
+
+template void DISKANN_DLLEXPORT
+gen_random_slice<int8_t>(const std::string base_file,
+                         const std::string output_prefix, float sampling_rate);
+template void DISKANN_DLLEXPORT
+gen_random_slice<uint8_t>(const std::string base_file,
+                          const std::string output_prefix, float sampling_rate);
+template void DISKANN_DLLEXPORT
+gen_random_slice<float>(const std::string base_file,
+                        const std::string output_prefix, float sampling_rate);
 
 template void DISKANN_DLLEXPORT
 gen_random_slice<float>(const float *inputdata, size_t npts, size_t ndims,
