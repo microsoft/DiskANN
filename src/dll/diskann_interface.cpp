@@ -65,7 +65,7 @@ namespace diskann {
     unsigned R = (unsigned) atoi(param_list[1].c_str());
     unsigned C = (unsigned) atoi(param_list[2].c_str());
     size_t   num_pq_chunks = (size_t) atoi(param_list[3].c_str());
-    float    training_set_sampling_rate = atof(param_list[4].c_str());
+    float    training_set_sampling_rate = (float) atof(param_list[4].c_str());
     unsigned num_threads = (unsigned) atoi(param_list[5].c_str());
     auto     s = std::chrono::high_resolution_clock::now();
 
@@ -154,8 +154,12 @@ namespace diskann {
     uint64_t num_cache_nodes = (_u64) std::atoi(param_list[2].c_str());
     _u64     nthreads = (_u64) std::atoi(param_list[3].c_str());
 
+<<<<<<< Updated upstream
 
 	_pFlashIndex.reset(new PQFlashIndex<T>());
+=======
+    _pFlashIndex.reset(new PQFlashIndex<T>());
+>>>>>>> Stashed changes
     _pFlashIndex->load(nthreads, pq_tables_bin.c_str(), data_bin.c_str(),
                        disk_index_file.c_str());
     _pFlashIndex->load_entry_points(medoids_file, centroid_data_file);
@@ -226,9 +230,13 @@ namespace diskann {
                                         unsigned __int64  neighborCount,
                                         float*            distances,
                                         unsigned __int64* ids) const {
-    const T* query = (const T*) vector;
+    const T*   query = (const T*) vector;
+    static int count = 0;
+    count++;
+    if (count % 100 == 0)
+      std::cout << "Finished " << count << " queries." << std::endl;
 
-//#pragma omp  parallel for schedule(dynamic, 1)
+    //#pragma omp  parallel for schedule(dynamic, 1)
     for (_u64 i = 0; i < queryCount; i++) {
       _pFlashIndex->cached_beam_search(
           query + (i * this->aligned_dimension), neighborCount, this->Lsearch,

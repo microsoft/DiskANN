@@ -38,7 +38,8 @@ namespace diskann {
     for (_u64 i = 0; i < MAX_IO_DEPTH; i++) {
       ANNIndex::AsyncReadRequest req;
       memset(&req, 0, sizeof(ANNIndex::AsyncReadRequest));
-      context.m_requests.push_back(req);
+      //context.m_pRequests->push_back(req);
+      context.m_pRequests->push_back(req);
     }
     this->ctx_map.insert(std::make_pair(std::this_thread::get_id(), context));
   }
@@ -64,47 +65,73 @@ namespace diskann {
   }
 
   void checkSize(const std::vector<AlignedRead> &read_reqs, IOContext &ctx) {
-    if (read_reqs.size() > ctx.m_requests.size()) {
-      int count = read_reqs.size() - ctx.m_requests.size();
+    if (read_reqs.size() > ctx.m_pRequests->size()) {
+      std::cout << "Increasing m_pRequests size from: "
+                << ctx.m_pRequests->size() << " to: " << read_reqs.size()
+                << std::endl;
+      auto count = read_reqs.size() - ctx.m_pRequests->size();
       for (int i = 0; i < count; i++) {
         ANNIndex::AsyncReadRequest readReq;
-        ctx.m_requests.push_back(readReq);
+        ctx.m_pRequests->push_back(readReq);
+      }
+    }
+
+    if (read_reqs.size() > ctx.m_pRequestsStatus->size()) {
+      std::cout << "Increasing m_pRequestsStatus size from: "
+                << ctx.m_pRequestsStatus->size() << " to: " << read_reqs.size()
+                << std::endl;
+      auto count = read_reqs.size() - ctx.m_pRequestsStatus->size();
+      for (int i = 0; i < count; i++) {
+        ctx.m_pRequestsStatus->push_back(IOContext::READ_WAIT);
+      }
+	}
+  }
+
+  void initializeRead(IOContext &ctx) {
+    //*(ctx.m_pCompleteCount) = 0;
+    // auto &statusVec = *(ctx.m_pRequestsStatus);
+    // std::fill(statusVec.begin(), statusVec.end(), IOContext::READ_WAIT);
+  }
+
+  void BingAlignedFileReader::read(std::vector<AlignedRead> &read_reqs,
+                                   IOContext &ctx, bool async) {
+    checkSize(read_reqs, ctx);
+    initializeRead(ctx);
+
+    for (int i = 0; i < read_reqs.size(); i++) {
+      (*ctx.m_pRequests)[i].m_buffer = (__int8 *) read_reqs[i].buf;
+      (*ctx.m_pRequests)[i].m_offset = read_reqs[i].offset;
+      (*ctx.m_pRequests)[i].m_readSize = (unsigned int) read_reqs[i].len;
+
+      (*ctx.m_pRequestsStatus)[i] = IOContext::READ_WAIT;
+
+      (*ctx.m_pRequests)[i].m_callback = [ctx, i, this](bool result) {
+        if (result) {
+          (*ctx.m_pRequestsStatus)[i] = IOContext::READ_SUCCESS;
+        } else {
+          std::stringstream stream;
+          stream << "Read request to file: " << m_filename << "failed.";
+          std::cout << stream.str() << std::endl;
+          (*ctx.m_pRequestsStatus)[i] = IOContext::READ_FAILED;
+        }
+      };
+      ctx.m_pDiskIO->ReadFileAsync((*ctx.m_pRequests)[i]);
+    }
+
+    if (!async) {
+      auto &statusVec = (*ctx.m_pRequestsStatus);
+      bool  mustWait = true;
+      while (mustWait) {
+        mustWait = false;
+        for (auto &status : statusVec) {
+          mustWait = mustWait || (status == IOContext::READ_WAIT);
+          if (mustWait)
+            break;  // for loop
+        }
       }
     }
   }
 
-  void BingAlignedFileReader::callback(
-      std::shared_ptr<std::atomic<int>> pCounter, bool result) {
-    (*pCounter)++;
-    if (!result) {
-      std::stringstream stream;
-      // TODO: We must redo this request. But for now, just fail.
-      stream << "Read request to file: " << m_filename << "failed.";
-      throw std::exception(stream.str().c_str());
-    }
-  }
-
-  void BingAlignedFileReader::read(std::vector<AlignedRead> &read_reqs,
-                                   IOContext &               ctx) {
-    checkSize(read_reqs, ctx);
-    *(ctx.m_pCompleteCount) = 0;
-    for (int i = 0; i < read_reqs.size(); i++) {
-      ctx.m_requests[i].m_buffer = (__int8 *) read_reqs[i].buf;
-      ctx.m_requests[i].m_offset = read_reqs[i].offset;
-      ctx.m_requests[i].m_readSize = (unsigned int) read_reqs[i].len;
-
-      ctx.m_requests[i].m_callback =
-          std::bind(&BingAlignedFileReader::callback, this,
-                    ctx.m_pCompleteCount, std::placeholders::_1);
-
-      ctx.m_pDiskIO->ReadFileAsync(ctx.m_requests[i]);
-    }
-
-    while (*(ctx.m_pCompleteCount) < read_reqs.size()) {
-      ;
-    }
-  }
-
-}  // namespace NSG
+}  // namespace diskann
 #endif  // USE_BING_INFRA
 #endif  //_WINDOWS

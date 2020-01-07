@@ -597,6 +597,19 @@ template DISKANN_DLLEXPORT int generate_pq_data_from_pivots<float>(
     const std::string data_file, size_t num_centers, size_t num_pq_chunks,
     std::string pq_pivots_path, std::string pq_compressed_vectors_path);
 
+template DISKANN_DLLEXPORT void gen_random_slice<int8_t>(
+    const std::string base_file, const std::string output_prefix,
+    float sampling_rate);
+
+template DISKANN_DLLEXPORT void gen_random_slice<uint8_t>(
+    const std::string base_file, const std::string output_prefix,
+    float sampling_rate);
+
+template DISKANN_DLLEXPORT void gen_random_slice<float>(
+    const std::string base_file, const std::string output_prefix,
+    float sampling_rate);
+
+
 // template<typename T>
 // int partition(const char *base_file, const char *train_file, size_t
 // num_centers,

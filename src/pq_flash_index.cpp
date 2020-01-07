@@ -218,7 +218,7 @@ namespace diskann {
     for (_u64 block = 0; block < num_blocks; block++) {
       _u64 start_idx = block * BLOCK_SIZE;
       _u64 end_idx = (std::min)(num_cached_nodes, (block + 1) * BLOCK_SIZE);
-      std::vector<AlignedRead> read_reqs;
+      std::vector<AlignedRead>             read_reqs;
       std::vector<std::pair<_u64, char *>> nhoods;
       for (_u64 node_idx = start_idx; node_idx < end_idx; node_idx++) {
         AlignedRead read;
@@ -295,7 +295,7 @@ namespace diskann {
     for (_u64 block = 0; block < num_blocks; block++) {
       _u64 start_idx = block * BLOCK_SIZE;
       _u64 end_idx = (std::min)(num_cached_nodes, (block + 1) * BLOCK_SIZE);
-      std::vector<AlignedRead> read_reqs;
+      std::vector<AlignedRead>             read_reqs;
       std::vector<std::pair<_u64, char *>> nhoods;
       for (_u64 node_idx = start_idx; node_idx < end_idx; node_idx++) {
         AlignedRead read;
@@ -391,7 +391,7 @@ namespace diskann {
         size_t start = block * BLOCK_SIZE;
         size_t end =
             (std::min)((block + 1) * BLOCK_SIZE, nodes_to_expand.size());
-        std::vector<AlignedRead> read_reqs;
+        std::vector<AlignedRead>             read_reqs;
         std::vector<std::pair<_u64, char *>> nhoods;
         for (size_t cur_pt = start; cur_pt < end; cur_pt++) {
           char *buf = nullptr;
@@ -947,6 +947,21 @@ namespace diskann {
     std::cout << "Output file written\n";
   }
 
+  bool getNextCompletedRequest(const IOContext &ctx, int &completedIndex) {
+    bool waitsRemaining = false;
+    for (int i = 0; i < (*ctx.m_pRequestsStatus).size(); i++) {
+      auto ithStatus = (*ctx.m_pRequestsStatus)[i];
+      if (ithStatus == IOContext::Status::READ_SUCCESS) {
+        completedIndex = i;
+        return true;
+      } else if (ithStatus == IOContext::Status::READ_WAIT) {
+        waitsRemaining = true;
+      }
+    }
+    completedIndex = -1;
+    return waitsRemaining;
+  }
+
   template<typename T>
   void PQFlashIndex<T>::cached_beam_search(const T *query, const _u64 k_search,
                                            const _u64 l_search, _u64 *indices,
@@ -1066,9 +1081,11 @@ namespace diskann {
       sector_scratch_idx = 0;
 
       // find new beam
+      // WAS: _u64 marker = k - 1;
       _u64 marker = k - 1;
       _u64 num_seen = 0;
 
+      // WAS: while (++marker < cur_list_size && frontier.size() < beam_width &&
       while (++marker < cur_list_size && frontier.size() < beam_width &&
              num_seen < beam_width + 2) {
         if (retset[marker].flag) {
@@ -1113,75 +1130,16 @@ namespace diskann {
           num_ios++;
         }
         io_timer.reset();
+<<<<<<< Updated upstream
         reader->read(frontier_read_reqs, ctx);
+=======
+        std::cout << "Thread Id: " << std::this_thread::get_id() << ": In cached_beam_search. Sending: "
+                  << frontier_read_reqs.size() << " requests to disk."
+                  << std::endl;
+        reader->read(frontier_read_reqs, ctx, true);  // async.
+>>>>>>> Stashed changes
         if (stats != nullptr) {
           stats->io_us += io_timer.elapsed();
-        }
-
-        // process each frontier nhood - compute distances to unvisited nodes
-        for (auto &frontier_nhood : frontier_nhoods) {
-          char *node_disk_buf =
-              OFFSET_TO_NODE(frontier_nhood.second, frontier_nhood.first);
-          unsigned *node_buf = OFFSET_TO_NODE_NHOOD(node_disk_buf);
-          _u64      nnbrs = (_u64)(*node_buf);
-          T *       node_fp_coords = OFFSET_TO_NODE_COORDS(node_disk_buf);
-          assert(data_buf_idx < MAX_N_CMPS);
-
-          T *node_fp_coords_copy = data_buf + (data_buf_idx * aligned_dim);
-          data_buf_idx++;
-          memcpy(node_fp_coords_copy, node_fp_coords, data_dim * sizeof(T));
-
-          float cur_expanded_dist =
-              dist_cmp->compare(query, node_fp_coords_copy, aligned_dim);
-          full_retset.push_back(
-              Neighbor(frontier_nhood.first, cur_expanded_dist, true));
-
-          unsigned *node_nbrs = (node_buf + 1);
-#ifdef USE_ACCELERATED_PQ
-          // compute node_nbrs <-> query dist in PQ space
-          compute_dists(node_nbrs, nnbrs, dist_scratch);
-#else
-          // issue prefetches
-          for (_u64 m = 0; m < nnbrs; ++m) {
-            unsigned next_id = node_nbrs[m];
-            _mm_prefetch((char *) data + next_id * n_chunks, _MM_HINT_T1);
-          }
-#endif
-
-          // process prefetch-ed nhood
-          for (_u64 m = 0; m < nnbrs; ++m) {
-            unsigned id = node_nbrs[m];
-            if (visited.find(id) != visited.end()) {
-              continue;
-            } else {
-              visited.insert(id);
-              cmps++;
-#ifdef USE_ACCELERATED_PQ
-              float dist = dist_scratch[m];
-#else
-              pq_table.convert(data + id * n_chunks, scratch);
-              float dist = dist_cmp->compare(scratch, query, aligned_dim);
-#endif
-              // std::cout << "cmp: " << id << ", dist: " << dist << std::endl;
-              // std::cerr << "dist: " << dist << std::endl;
-              if (stats != nullptr) {
-                stats->n_cmps++;
-              }
-              if (dist >= retset[cur_list_size - 1].distance &&
-                  (cur_list_size == l_search))
-                continue;
-              Neighbor nn(id, dist, true);
-              _u64     r = InsertIntoPool(
-                  retset.data(), cur_list_size,
-                  nn);  // Return position in sorted list where nn inserted.
-              if (cur_list_size < l_search)
-                ++cur_list_size;
-              if (r < nk)
-                nk = r;  // nk logs the best position in the retset that was
-                         // updated
-                         // due to neighbors of n.
-            }
-          }
         }
       }
 
@@ -1221,8 +1179,8 @@ namespace diskann {
             pq_table.convert(data + id * n_chunks, scratch);
             float dist = dist_cmp->compare(scratch, query, aligned_dim);
 #endif
-            // std::cout << "cmp: " << id << ", dist: " << dist << std::endl;
-            // std::cerr << "dist: " << dist << std::endl;
+            // std::cout << "cmp: " << id << ", dist: " << dist <<
+            // std::endl; std::cerr << "dist: " << dist << std::endl;
             if (stats != nullptr) {
               stats->n_cmps++;
             }
@@ -1242,6 +1200,83 @@ namespace diskann {
           }
         }
       }
+
+      // process each frontier nhood - compute distances to unvisited nodes
+      int completedIndex = -1;
+      // If we issued read requests and if a read is complete or there are reads
+      // in wait
+      // state, then enter the while loop.
+      while (frontier_read_reqs.size() > 0 &&
+             getNextCompletedRequest(ctx, completedIndex)) {
+        if (completedIndex == -1) { //all reads are waiting
+          continue;
+        }
+        auto &frontier_nhood = frontier_nhoods[completedIndex];
+        (*ctx.m_pRequestsStatus)[completedIndex] = IOContext::PROCESS_COMPLETE;
+        char *node_disk_buf =
+            OFFSET_TO_NODE(frontier_nhood.second, frontier_nhood.first);
+        unsigned *node_buf = OFFSET_TO_NODE_NHOOD(node_disk_buf);
+        _u64      nnbrs = (_u64)(*node_buf);
+        T *       node_fp_coords = OFFSET_TO_NODE_COORDS(node_disk_buf);
+        assert(data_buf_idx < MAX_N_CMPS);
+
+        T *node_fp_coords_copy = data_buf + (data_buf_idx * aligned_dim);
+        data_buf_idx++;
+        memcpy(node_fp_coords_copy, node_fp_coords, data_dim * sizeof(T));
+
+        float cur_expanded_dist =
+            dist_cmp->compare(query, node_fp_coords_copy, aligned_dim);
+        full_retset.push_back(
+            Neighbor(frontier_nhood.first, cur_expanded_dist, true));
+
+        unsigned *node_nbrs = (node_buf + 1);
+#ifdef USE_ACCELERATED_PQ
+        // compute node_nbrs <-> query dist in PQ space
+        compute_dists(node_nbrs, nnbrs, dist_scratch);
+#else
+        // issue prefetches
+        for (_u64 m = 0; m < nnbrs; ++m) {
+          unsigned next_id = node_nbrs[m];
+          _mm_prefetch((char *) data + next_id * n_chunks, _MM_HINT_T1);
+        }
+#endif
+
+        // process prefetch-ed nhood
+        for (_u64 m = 0; m < nnbrs; ++m) {
+          unsigned id = node_nbrs[m];
+          if (visited.find(id) != visited.end()) {
+            continue;
+          } else {
+            visited.insert(id);
+            cmps++;
+#ifdef USE_ACCELERATED_PQ
+            float dist = dist_scratch[m];
+#else
+            pq_table.convert(data + id * n_chunks, scratch);
+            float dist = dist_cmp->compare(scratch, query, aligned_dim);
+#endif
+            // std::cout << "cmp: " << id << ", dist: " << dist << std::endl;
+            // std::cerr << "dist: " << dist << std::endl;
+            if (stats != nullptr) {
+              stats->n_cmps++;
+            }
+            if (dist >= retset[cur_list_size - 1].distance &&
+                (cur_list_size == l_search))
+              continue;
+            Neighbor nn(id, dist, true);
+            _u64     r = InsertIntoPool(
+                retset.data(), cur_list_size,
+                nn);  // Return position in sorted list where nn inserted.
+            if (cur_list_size < l_search)
+              ++cur_list_size;
+            if (r < nk)
+              nk = r;  // nk logs the best position in the retset that was
+                       // updated
+                       // due to neighbors of n.
+          }
+        }
+      }
+
       // update best inserted position
       //
 
@@ -1250,7 +1285,6 @@ namespace diskann {
       else
         ++k;
     }
-
     // re-sort by distance
     std::sort(full_retset.begin(), full_retset.end(),
               [](const Neighbor &left, const Neighbor &right) {

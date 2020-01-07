@@ -1,5 +1,7 @@
 #pragma once
 
+#define MAX_IO_DEPTH 128
+
 #include <vector>
 #include <atomic>
 #ifndef _WINDOWS
@@ -26,18 +28,23 @@ typedef struct {
 // Because of such callous copying, we have to use ptr->atomic instead
 // of atomic, as atomic is not copyable.
 struct IOContext {
-  ANNIndex::IDiskPriorityIO*              m_pDiskIO = nullptr;
-  std::vector<ANNIndex::AsyncReadRequest> m_requests;
-  std::shared_ptr<std::atomic<int>>       m_pCompleteCount;
+  enum Status { READ_WAIT = 0, READ_SUCCESS, READ_FAILED, PROCESS_COMPLETE };
 
-  IOContext() : m_pCompleteCount(new std::atomic<int>(0)) {
+  ANNIndex::IDiskPriorityIO*                               m_pDiskIO = nullptr;
+  std::shared_ptr<std::vector<ANNIndex::AsyncReadRequest>> m_pRequests;
+  std::shared_ptr<std::vector<Status>>                     m_pRequestsStatus;
+
+  IOContext()
+      : m_pRequestsStatus(new std::vector<Status>()),
+        m_pRequests(new std::vector<ANNIndex::AsyncReadRequest>()) 
+  {
+    (*m_pRequestsStatus).reserve(MAX_IO_DEPTH);
+    (*m_pRequests).reserve(MAX_IO_DEPTH);
   }
 };
 #endif
 
 #endif
-
-#define MAX_IO_DEPTH 128
 
 #include <malloc.h>
 #include <cstdio>
@@ -67,7 +74,7 @@ struct AlignedRead {
 class AlignedFileReader {
  protected:
   tsl::robin_map<std::thread::id, IOContext> ctx_map;
-  std::mutex ctx_mut;
+  std::mutex                                 ctx_mut;
 
  public:
   // returns the thread-specific context
@@ -88,5 +95,6 @@ class AlignedFileReader {
 
   // process batch of aligned requests in parallel
   // NOTE :: blocking call
-  virtual void read(std::vector<AlignedRead>& read_reqs, IOContext& ctx) = 0;
+  virtual void read(std::vector<AlignedRead>& read_reqs, IOContext& ctx,
+                    bool async = false) = 0;
 };
