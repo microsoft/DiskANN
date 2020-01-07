@@ -126,7 +126,7 @@ namespace diskann {
     while (parser >> cur_param)
       param_list.push_back(cur_param);
 
-    if (param_list.size() != 5) {
+    if (param_list.size() != 4) {
       std::cerr << "Correct usage of parameters is \n"
                    "Lsearch[1] BeamWidth[2] num_cache_nodes[3] nthreads[4]"
                 << std::endl;
@@ -155,46 +155,6 @@ namespace diskann {
     _u64     nthreads = (_u64) std::atoi(param_list[3].c_str());
 
 
-    // load index to create cache_list if warmup file is present
-    if (use_smart_caching) {
-      _pFlashIndex.reset(new PQFlashIndex<T>());
-
-      T*     warmup = nullptr;
-      size_t warmup_num, ndims, warmup_aligned_dim;
-      diskann::load_aligned_bin<T>(warmup_bin, warmup, warmup_num, ndims,
-                                   warmup_aligned_dim);
-
-      _pFlashIndex->set_cache_create_flag();
-
-      _pFlashIndex->load(nthreads, pq_tables_bin.c_str(), data_bin.c_str(),
-                         disk_index_file.c_str());
-      _pFlashIndex->load_entry_points(medoids_file, centroid_data_file);
-      _pFlashIndex->cache_medoid_nhoods();
-      // cache bfs levels
-      _pFlashIndex->cache_bfs_levels(cache_nlevels);
-      //    free(params);  // Gopal. Caller has to free the 'params' variable.
-
-      unsigned recall_at = 1;
-      _u64*    warmup_res = new _u64[recall_at * warmup_num];
-      float*   warmup_dists = new float[recall_at * warmup_num];
-
-#pragma omp parallel for schedule(dynamic, 1)
-      for (_s64 i = 0; i < (int32_t) warmup_num; i++) {
-        _pFlashIndex->cached_beam_search(
-            warmup + (i * warmup_aligned_dim), recall_at, this->Lsearch,
-            warmup_res + (i * recall_at), warmup_dists + (i * recall_at),
-            this->beam_width);
-      }
-
-      diskann::aligned_free(warmup);
-      delete[] warmup_res;
-      delete[] warmup_dists;
-
-      std::cout << "Saving cache list to file " << cache_list_bin.c_str()
-                << std::endl;
-      _pFlashIndex->save_cached_nodes(nnodes_to_cache, cache_list_bin);
-    }
-
 	_pFlashIndex.reset(new PQFlashIndex<T>());
     _pFlashIndex->load(nthreads, pq_tables_bin.c_str(), data_bin.c_str(),
                        disk_index_file.c_str());
@@ -212,8 +172,8 @@ namespace diskann {
     uint64_t warmup_L = 50;
     uint64_t warmup_num = 0, warmup_dim = 0, warmup_aligned_dim = 0;
     T*       warmup = nullptr;
-    if (file_exists(warmup_query_file)) {
-      diskann::load_aligned_bin<T>(warmup_query_file, warmup, warmup_num,
+    if (file_exists(cache_warmup_file)) {
+      diskann::load_aligned_bin<T>(cache_warmup_file, warmup, warmup_num,
                                    warmup_dim, warmup_aligned_dim);
       if (warmup_dim != this->m_dimension) {
         std::cout << "Error in warmup file. Dimension mismatch." << std::endl;
@@ -287,6 +247,20 @@ namespace diskann {
       ANNIndex::IANNIndex* object) {
     diskann::DiskANNInterface<float>* subclass =
         dynamic_cast<diskann::DiskANNInterface<float>*>(object);
+    if (subclass != nullptr) {
+      delete subclass;
+    }
+  }
+
+  extern "C" __declspec(dllexport) ANNIndex::IANNIndex* CreateObjectByte(
+      unsigned __int32 dimension, ANNIndex::DistanceType distanceType) {
+    return new diskann::DiskANNInterface<int8_t>(dimension, distanceType);
+  }
+
+  extern "C" __declspec(dllexport) void ReleaseObjectByte(
+      ANNIndex::IANNIndex* object) {
+    diskann::DiskANNInterface<int8_t>* subclass =
+        dynamic_cast<diskann::DiskANNInterface<int8_t>*>(object);
     if (subclass != nullptr) {
       delete subclass;
     }

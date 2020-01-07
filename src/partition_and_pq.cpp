@@ -95,7 +95,7 @@ void gen_random_slice(const std::string base_file,
  ************************************/
 
 template<typename T>
-void gen_random_slice(const std::string data_file, double p_val,
+void gen_random_slice(const std::string data_file, float p_val,
                       float *&sampled_data, size_t &slice_size, size_t &ndims) {
   size_t                          npts;
   uint32_t                        npts32, ndims32;
@@ -568,13 +568,13 @@ template void DISKANN_DLLEXPORT gen_random_slice<int8_t>(
     float *&sampled_data, size_t &slice_size);
 
 template void DISKANN_DLLEXPORT gen_random_slice<float>(
-    const std::string data_file, double p_val, float *&sampled_data,
+    const std::string data_file, float p_val, float *&sampled_data,
     size_t &slice_size, size_t &ndims);
 template void DISKANN_DLLEXPORT gen_random_slice<uint8_t>(
-    const std::string data_file, double p_val, float *&sampled_data,
+    const std::string data_file, float p_val, float *&sampled_data,
     size_t &slice_size, size_t &ndims);
 template void DISKANN_DLLEXPORT gen_random_slice<int8_t>(
-    const std::string data_file, double p_val, float *&sampled_data,
+    const std::string data_file, float p_val, float *&sampled_data,
     size_t &slice_size, size_t &ndims);
 
 template DISKANN_DLLEXPORT int partition<int8_t>(
