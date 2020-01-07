@@ -66,9 +66,6 @@ namespace diskann {
 
   void checkSize(const std::vector<AlignedRead> &read_reqs, IOContext &ctx) {
     if (read_reqs.size() > ctx.m_pRequests->size()) {
-      std::cout << "Increasing m_pRequests size from: "
-                << ctx.m_pRequests->size() << " to: " << read_reqs.size()
-                << std::endl;
       auto count = read_reqs.size() - ctx.m_pRequests->size();
       for (int i = 0; i < count; i++) {
         ANNIndex::AsyncReadRequest readReq;
@@ -77,9 +74,6 @@ namespace diskann {
     }
 
     if (read_reqs.size() > ctx.m_pRequestsStatus->size()) {
-      std::cout << "Increasing m_pRequestsStatus size from: "
-                << ctx.m_pRequestsStatus->size() << " to: " << read_reqs.size()
-                << std::endl;
       auto count = read_reqs.size() - ctx.m_pRequestsStatus->size();
       for (int i = 0; i < count; i++) {
         ctx.m_pRequestsStatus->push_back(IOContext::READ_WAIT);

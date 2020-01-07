@@ -947,9 +947,9 @@ namespace diskann {
     std::cout << "Output file written\n";
   }
 
-  bool getNextCompletedRequest(const IOContext &ctx, int &completedIndex) {
+  bool getNextCompletedRequest(const IOContext &ctx, int size, int &completedIndex) {
     bool waitsRemaining = false;
-    for (int i = 0; i < (*ctx.m_pRequestsStatus).size(); i++) {
+    for (int i = 0; i < size; i++) {
       auto ithStatus = (*ctx.m_pRequestsStatus)[i];
       if (ithStatus == IOContext::Status::READ_SUCCESS) {
         completedIndex = i;
@@ -1085,9 +1085,9 @@ namespace diskann {
       _u64 marker = k - 1;
       _u64 num_seen = 0;
 
-      // WAS: while (++marker < cur_list_size && frontier.size() < beam_width &&
+
       while (++marker < cur_list_size && frontier.size() < beam_width &&
-             num_seen < beam_width + 2) {
+             num_seen < beam_width) {
         if (retset[marker].flag) {
           num_seen++;
           auto iter = nhood_cache.find(retset[marker].id);
@@ -1130,14 +1130,7 @@ namespace diskann {
           num_ios++;
         }
         io_timer.reset();
-<<<<<<< Updated upstream
-        reader->read(frontier_read_reqs, ctx);
-=======
-        std::cout << "Thread Id: " << std::this_thread::get_id() << ": In cached_beam_search. Sending: "
-                  << frontier_read_reqs.size() << " requests to disk."
-                  << std::endl;
         reader->read(frontier_read_reqs, ctx, true);  // async.
->>>>>>> Stashed changes
         if (stats != nullptr) {
           stats->io_us += io_timer.elapsed();
         }
@@ -1207,7 +1200,7 @@ namespace diskann {
       // in wait
       // state, then enter the while loop.
       while (frontier_read_reqs.size() > 0 &&
-             getNextCompletedRequest(ctx, completedIndex)) {
+             getNextCompletedRequest(ctx, frontier_read_reqs.size(), completedIndex)) {
         if (completedIndex == -1) { //all reads are waiting
           continue;
         }
