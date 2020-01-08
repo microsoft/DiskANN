@@ -22,6 +22,7 @@
 #include <sys/stat.h>
 #include <time.h>
 #include <typeinfo>
+#include <tsl/robin_map.h>
 
 #include <cassert>
 #include "memory_mapper.h"
@@ -184,29 +185,25 @@ void gen_random_slice(const T *inputdata, size_t npts, size_t ndims,
 // num_pq_chunks (if it divides dimension, else rounded) chunks, and runs
 // k-means in each chunk to compute the PQ pivots and stores in bin format in
 // file pq_pivots_path as a s num_centers*dim floating point binary file
-int generate_pq_pivots(const float *passed_train_data, size_t num_train, size_t dim,
-                       size_t num_centers, size_t num_pq_chunks,
+int generate_pq_pivots(const float *passed_train_data, size_t num_train,
+                       size_t dim, size_t num_centers, size_t num_pq_chunks,
                        size_t max_k_means_reps, std::string pq_pivots_path) {
   if (num_pq_chunks > dim) {
     std::cout << " Error: number of chunks more than dimension" << std::endl;
     return -1;
   }
 
-  float* train_data = new float[num_train*dim];
-  std::memcpy(train_data, passed_train_data, num_train*dim*sizeof(float));
+  float *train_data = new float[num_train * dim];
+  std::memcpy(train_data, passed_train_data, num_train * dim * sizeof(float));
 
-  for (uint64_t i = 0;  i < num_train; i++) {
-      for (uint64_t j = 0; j < dim; j++) {
-          if (passed_train_data[i*dim + j]!= train_data[i*dim +j])
-              std::cout<<"error in copy" << std::endl;
-      }
+  for (uint64_t i = 0; i < num_train; i++) {
+    for (uint64_t j = 0; j < dim; j++) {
+      if (passed_train_data[i * dim + j] != train_data[i * dim + j])
+        std::cout << "error in copy" << std::endl;
+    }
   }
 
-  size_t low_val = std::floor((double) dim / (double) num_pq_chunks);
-  size_t high_val = std::ceil((double) dim / (double) num_pq_chunks);
-
   float *full_pivot_data;
-
 
   if (file_exists(pq_pivots_path)) {
     size_t file_dim, file_num_centers;
@@ -219,111 +216,176 @@ int generate_pq_pivots(const float *passed_train_data, size_t num_train, size_t 
     }
   }
 
-// Calculate centroid and center the training data
+  // Calculate centroid and center the training data
   float *centroid = new float[dim];
   for (uint64_t d = 0; d < dim; d++) {
-      centroid[d] =0;
-      for (uint64_t p = 0; p < num_train; p++) {
-        centroid[d] += train_data[p*dim + d];
-      }
-      centroid[d] /= num_train;
+    centroid[d] = 0;
+    for (uint64_t p = 0; p < num_train; p++) {
+      centroid[d] += train_data[p * dim + d];
+    }
+    centroid[d] /= num_train;
   }
 
-//  std::memset(centroid, 0 , dim*sizeof(float));
+  //  std::memset(centroid, 0 , dim*sizeof(float));
 
   for (uint64_t d = 0; d < dim; d++) {
-      for (uint64_t p = 0; p < num_train; p++) {
-        train_data[p*dim + d] -= centroid[d];
-      }
+    for (uint64_t p = 0; p < num_train; p++) {
+      train_data[p * dim + d] -= centroid[d];
+    }
   }
 
   std::vector<uint32_t> rearrangement;
   std::vector<uint32_t> chunk_offsets;
 
+  float *correlations = new float[dim * dim];
+  std::memset(correlations, 0, sizeof(float) * dim * dim);
 
-
-  float* correlations = new float[dim*dim];
-  std::memset(correlations, 0, sizeof(float)*dim*dim);
-
-  auto corr_comp =
-      [](const std::tuple<uint32_t, uint32_t, float>& e1, const std::tuple<uint32_t, uint32_t, float>& e2) 
-      { return std::get<2>(e1) < std::get<2>(e2); };
-  std::priority_queue<std::tuple<uint32_t, uint32_t, float>, std::vector<std::tuple<uint32_t, uint32_t, float>>, decltype(corr_comp)> max_correlations(corr_comp);
+  auto corr_comp = [](const std::tuple<uint32_t, uint32_t, float> &e1,
+                      const std::tuple<uint32_t, uint32_t, float> &e2) {
+    return std::get<2>(e1) < std::get<2>(e2);
+  };
+  std::priority_queue<std::tuple<uint32_t, uint32_t, float>,
+                      std::vector<std::tuple<uint32_t, uint32_t, float>>,
+                      decltype(corr_comp)>
+      max_correlations(corr_comp);
 
   for (uint32_t i = 0; i < dim; i++)
-  for (uint32_t j = 0; j < dim; j++) {
-  for (uint32_t k = 0; k < num_train; k++)
-  correlations[i*dim+j] += (1.0/num_train)*train_data[k*dim+i]*train_data[k*dim+j];
-  max_correlations.push(std::make_tuple(i,j, std::abs(correlations[i*dim+j])));
-  }
-
-
-  while(!max_correlations.empty())  {
-      const auto& p = max_correlations.top();
-      max_correlations.pop();
-  }
+    for (uint32_t j = 0; j < dim; j++) {
+      for (uint32_t k = 0; k < num_train; k++)
+        correlations[i * dim + j] += (1.0 / num_train) *
+                                     train_data[k * dim + i] *
+                                     train_data[k * dim + j];
+      max_correlations.push(
+          std::make_tuple(i, j, std::abs(correlations[i * dim + j])));
+    }
 
   delete[] correlations;
 
+  size_t low_val = std::floor((double) dim / (double) num_pq_chunks);
+  size_t high_val = std::ceil((double) dim / (double) num_pq_chunks);
+  size_t max_num_high = dim - (low_val * num_pq_chunks);
+  size_t cur_num_high = 0;
+  size_t cur_bin_threshold = high_val;
 
   std::vector<std::vector<uint32_t>> bin_to_dims(num_pq_chunks);
-  std::vector<uint32_t> dim_to_bin(dim);
+  tsl::robin_map<uint32_t, uint32_t> dim_to_bin;
   std::vector<float> bin_loads(num_pq_chunks, 0);
 
+  /*
+    while(!max_correlations.empty())  {
+        const auto& p = max_correlations.top();
+        max_correlations.pop();
+        if (std::get<0>(p) == std::get<1>(p))
+            continue;
+        uint32_t p1 = std::get<0>(p);
+        uint32_t p2 = std::get<1>(p);
+        uint32_t anchor = p1, other = p2;
+        if (dim_to_bin.find(p1) != dim_to_bin.end() && dim_to_bin.find(p2) !=
+    dim_to_bin.end())
+            continue;
+        if (dim_to_bin.find(p1) == dim_to_bin.end() && dim_to_bin.find(p2) ==
+    dim_to_bin.end()) {
+            uint32_t best_bin = num_pq_chunks;
+            uint32_t best_bin_load = std::numeric_limits<uint32_t>::max();
+            for (uint32_t b = 0; b < num_pq_chunks; b++) {
+                if (bin_to_dims[b].size() < best_bin_load) {
+                    best_bin = b;
+                    best_bin_load = bin_to_dims[b].size();
+                }
+            }
+            if (best_bin_load > cur_bin_threshold - 2)
+            continue;
+
+            if (best_bin == num_pq_chunks)
+                std::cout<<"Error." << std::endl;
+            bin_to_dims[best_bin].push_back(p1);
+            bin_to_dims[best_bin].push_back(p2);
+            std::cout<<" Pushing " << p1 << " and " << p2 << " into bin #: " <<
+    best_bin << std::endl;
+            dim_to_bin[p1] = best_bin;
+            dim_to_bin[p2] = best_bin;
+            if (bin_to_dims[best_bin].size() == high_val)
+                cur_num_high++;
+            if (cur_num_high == max_num_high)
+                cur_bin_threshold = low_val;
+            continue;
+        }
+        if (dim_to_bin.find(p1) == dim_to_bin.end() && dim_to_bin.find(p2) !=
+    dim_to_bin.end()) {
+            anchor = p2;
+            other = p1;
+        }
+        uint32_t host_bin = dim_to_bin.find(anchor).value();
+        if (bin_to_dims[host_bin].size() < cur_bin_threshold) {
+            bin_to_dims[host_bin].push_back(other);
+            std::cout<<" Pushing " << other << " into bin #: " << host_bin <<
+    std::endl;
+            dim_to_bin[other] = host_bin;
+            if (bin_to_dims[host_bin].size() == high_val)
+                cur_num_high++;
+            if (cur_num_high == max_num_high)
+                cur_bin_threshold = low_val;
+        }
+    }
+    */
+
+  // Process dimensions not inserted by previous loop
   for (uint32_t d = 0; d < dim; d++) {
-      uint32_t cur_best = num_pq_chunks+1;
-      float cur_best_load = std::numeric_limits<float>::max();
-      for (uint32_t b = 0; b < num_pq_chunks; b++ ) {
-          if (bin_loads[b] < cur_best_load && bin_to_dims[b].size() < high_val) {
-              cur_best = b;
-              cur_best_load = bin_loads[b];
-          }
+    if (dim_to_bin.find(d) != dim_to_bin.end())
+      continue;
+    uint32_t cur_best = num_pq_chunks + 1;
+    float    cur_best_load = std::numeric_limits<float>::max();
+    for (uint32_t b = 0; b < num_pq_chunks; b++) {
+      if (bin_loads[b] < cur_best_load &&
+          bin_to_dims[b].size() < cur_bin_threshold) {
+        cur_best = b;
+        cur_best_load = bin_loads[b];
       }
-      std::cout<<" Pushing " << d << " into bin #: " << cur_best << std::endl;
-      bin_to_dims[cur_best].push_back(d);
+    }
+    std::cout << " Pushing " << d << " into bin #: " << cur_best << std::endl;
+    bin_to_dims[cur_best].push_back(d);
+    if (bin_to_dims[cur_best].size() == high_val) {
+      cur_num_high++;
+      if (cur_num_high == max_num_high)
+        cur_bin_threshold = low_val;
+    }
   }
-  
+
   rearrangement.clear();
   chunk_offsets.clear();
   chunk_offsets.push_back(0);
 
-  for (uint32_t b = 0; b< num_pq_chunks; b++) {
-      std::cout<<"[ ";
-      for (auto p : bin_to_dims[b]) {
-          rearrangement.push_back(p);
-          std::cout<<p<<",";
-      }
-      std::cout<<"] with load " << bin_loads[b] << std::endl;
-      if (b > 0)
-      chunk_offsets.push_back(chunk_offsets[b-1] + bin_to_dims[b-1].size());
+  for (uint32_t b = 0; b < num_pq_chunks; b++) {
+    std::cout << "[ ";
+    for (auto p : bin_to_dims[b]) {
+      rearrangement.push_back(p);
+      std::cout << p << ",";
+    }
+    std::cout << "] with load " << bin_loads[b] << std::endl;
+    if (b > 0)
+      chunk_offsets.push_back(chunk_offsets[b - 1] + bin_to_dims[b - 1].size());
   }
   chunk_offsets.push_back(dim);
 
-  std::cout<<"\nCross-checking rearranged order of coordinates:" << std::endl;
-  for (auto p: rearrangement)
-      std::cout<<p<<" " ;
-  std::cout<<std::endl;
-
-
-
-
+  std::cout << "\nCross-checking rearranged order of coordinates:" << std::endl;
+  for (auto p : rearrangement)
+    std::cout << p << " ";
+  std::cout << std::endl;
 
   full_pivot_data = new float[num_centers * dim];
 
   for (size_t i = 0; i < num_pq_chunks; i++) {
-    size_t cur_chunk_size =
-        chunk_offsets[i+1] - chunk_offsets[i];
+    size_t cur_chunk_size = chunk_offsets[i + 1] - chunk_offsets[i];
 
     if (cur_chunk_size == 0)
-        continue;
+      continue;
     float *   cur_pivot_data = new float[num_centers * cur_chunk_size];
     float *   cur_data = new float[num_train * cur_chunk_size];
     uint32_t *closest_center = new uint32_t[num_train];
 
     std::cout << "Processing chunk " << i << " with dimensions ["
-              << chunk_offsets[i] << ", " << chunk_offsets[i+1]
-              << ")" << std::endl;
-
+              << chunk_offsets[i] << ", " << chunk_offsets[i + 1] << ")"
+              << std::endl;
 
 #pragma omp parallel for schedule(static, 65536)
     for (int64_t j = 0; j < (_s64) num_train; j++) {
@@ -352,12 +414,13 @@ int generate_pq_pivots(const float *passed_train_data, size_t num_train, size_t 
   diskann::save_bin<float>(pq_pivots_path.c_str(), full_pivot_data,
                            (size_t) num_centers, dim);
   std::string centroids_path = pq_pivots_path + "_centroid.bin";
-  diskann::save_bin<float>(centroids_path.c_str(), centroid,
-                           (size_t) dim, 1);
+  diskann::save_bin<float>(centroids_path.c_str(), centroid, (size_t) dim, 1);
   std::string rearrangement_path = pq_pivots_path + "_rearrangement_perm.bin";
-  diskann::save_bin<uint32_t>(rearrangement_path.c_str(), rearrangement.data(), rearrangement.size(), 1);
+  diskann::save_bin<uint32_t>(rearrangement_path.c_str(), rearrangement.data(),
+                              rearrangement.size(), 1);
   std::string chunk_offsets_path = pq_pivots_path + "_chunk_offsets.bin";
-  diskann::save_bin<uint32_t>(chunk_offsets_path.c_str(), chunk_offsets.data(), chunk_offsets.size(), 1);
+  diskann::save_bin<uint32_t>(chunk_offsets_path.c_str(), chunk_offsets.data(),
+                              chunk_offsets.size(), 1);
   delete[] train_data;
   return 0;
 }
@@ -381,9 +444,8 @@ int generate_pq_data_from_pivots(const std::string data_file,
   size_t num_points = npts32;
   size_t dim = basedim32;
 
-
-  float *full_pivot_data;
-  float *centroid;
+  float *   full_pivot_data;
+  float *   centroid;
   uint32_t *rearrangement;
   uint32_t *chunk_offsets;
 
@@ -391,32 +453,31 @@ int generate_pq_data_from_pivots(const std::string data_file,
     std::cout << "ERROR: PQ k-means pivot file not found" << std::endl;
     return -1;
   } else {
+    uint64_t numr, numc;
 
+    std::string centroids_path = pq_pivots_path + "_centroid.bin";
+    diskann::load_bin<float>(centroids_path.c_str(), centroid, numr, numc);
 
-  uint64_t numr,numc;
-
-  std::string centroids_path = pq_pivots_path + "_centroid.bin";
-  diskann::load_bin<float>(centroids_path.c_str(), centroid,
-                           numr, numc);
-
-  if (numr != dim || numc != 1) {
-      std::cout<<"Error reading centroid file." << std::endl;
+    if (numr != dim || numc != 1) {
+      std::cout << "Error reading centroid file." << std::endl;
       exit(-1);
-  }
-  std::string rearrangement_path = pq_pivots_path + "_rearrangement_perm.bin";
-  diskann::load_bin<uint32_t>(rearrangement_path.c_str(), rearrangement, numr, numc);
-  if (numr != dim || numc != 1) {
-      std::cout<<"Error reading rearrangement file." << std::endl;
+    }
+    std::string rearrangement_path = pq_pivots_path + "_rearrangement_perm.bin";
+    diskann::load_bin<uint32_t>(rearrangement_path.c_str(), rearrangement, numr,
+                                numc);
+    if (numr != dim || numc != 1) {
+      std::cout << "Error reading rearrangement file." << std::endl;
       exit(-1);
-  }
-  std::string chunk_offsets_path = pq_pivots_path + "_chunk_offsets.bin";
-  diskann::load_bin<uint32_t>(chunk_offsets_path.c_str(), chunk_offsets, numr, numc);
-  if (numr != num_pq_chunks+1 || numc != 1) {
-      std::cout<<"Error reading chunk offsets file." << std::endl;
+    }
+    std::string chunk_offsets_path = pq_pivots_path + "_chunk_offsets.bin";
+    diskann::load_bin<uint32_t>(chunk_offsets_path.c_str(), chunk_offsets, numr,
+                                numc);
+    if (numr != num_pq_chunks + 1 || numc != 1) {
+      std::cout << "Error reading chunk offsets file." << std::endl;
       exit(-1);
-  }
+    }
 
-  size_t file_num_centers;
+    size_t file_num_centers;
     size_t file_dim;
     diskann::load_bin<float>(pq_pivots_path, full_pivot_data, file_num_centers,
                              file_dim);
@@ -442,11 +503,11 @@ int generate_pq_data_from_pivots(const std::string data_file,
   _u32 num_pq_chunks_u32 = num_pq_chunks;
 
   compressed_file_writer.write((char *) &num_points, sizeof(uint32_t));
-  compressed_file_writer.write((char *) &num_pq_chunks_u32,
-                               sizeof(uint32_t));
+  compressed_file_writer.write((char *) &num_pq_chunks_u32, sizeof(uint32_t));
 
-  _u32 * block_compressed_base = new _u32[BLOCK_SIZE * num_pq_chunks];
-  std::memset(block_compressed_base, 0, BLOCK_SIZE * num_pq_chunks * sizeof(uint32_t));
+  _u32 *block_compressed_base = new _u32[BLOCK_SIZE * num_pq_chunks];
+  std::memset(block_compressed_base, 0,
+              BLOCK_SIZE * num_pq_chunks * sizeof(uint32_t));
 
   T *    block_data_T = new T[BLOCK_SIZE * dim];
   float *block_data_float = new float[BLOCK_SIZE * dim];
@@ -460,34 +521,33 @@ int generate_pq_data_from_pivots(const std::string data_file,
     size_t cur_blk_size = end_id - start_id;
 
     base_reader.read((char *) block_data_T, sizeof(T) * (cur_blk_size * dim));
-    diskann::convert_types<T, float>(block_data_T, block_data_tmp,
-                                     cur_blk_size, dim);
+    diskann::convert_types<T, float>(block_data_T, block_data_tmp, cur_blk_size,
+                                     dim);
 
     std::cout << "Processing points  [" << start_id << ", " << end_id << ").."
               << std::flush;
 
     for (uint64_t p = 0; p < cur_blk_size; p++) {
-        for (uint64_t d = 0; d < dim; d++) {
-            block_data_tmp[p*dim + d] -= centroid[d];
-        }
+      for (uint64_t d = 0; d < dim; d++) {
+        block_data_tmp[p * dim + d] -= centroid[d];
+      }
     }
 
     for (uint64_t p = 0; p < cur_blk_size; p++) {
-        for (uint64_t d = 0; d < dim; d++) {
-            block_data_float[p*dim + d] = block_data_tmp[p*dim + rearrangement[d]];
-        }
+      for (uint64_t d = 0; d < dim; d++) {
+        block_data_float[p * dim + d] =
+            block_data_tmp[p * dim + rearrangement[d]];
+      }
     }
-  
 
     for (size_t i = 0; i < num_pq_chunks; i++) {
-      size_t cur_chunk_size = chunk_offsets[i+1] - chunk_offsets[i];
+      size_t cur_chunk_size = chunk_offsets[i + 1] - chunk_offsets[i];
       if (cur_chunk_size == 0)
-          continue;
+        continue;
 
       float *   cur_pivot_data = new float[num_centers * cur_chunk_size];
       float *   cur_data = new float[cur_blk_size * cur_chunk_size];
       uint32_t *closest_center = new uint32_t[cur_blk_size];
-
 
 #pragma omp parallel for schedule(static, 8192)
       for (int64_t j = 0; j < (_s64) cur_blk_size; j++) {
@@ -509,8 +569,7 @@ int generate_pq_data_from_pivots(const std::string data_file,
 
 #pragma omp parallel for schedule(static, 8192)
       for (int64_t j = 0; j < (_s64) cur_blk_size; j++) {
-        block_compressed_base[j * num_pq_chunks + i] =
-            closest_center[j];
+        block_compressed_base[j * num_pq_chunks + i] = closest_center[j];
       }
 
       delete[] cur_data;
@@ -524,11 +583,10 @@ int generate_pq_data_from_pivots(const std::string data_file,
           cur_blk_size * num_pq_chunks * sizeof(uint32_t));
     } else {
       uint8_t *pVec = new uint8_t[cur_blk_size * num_pq_chunks];
-      diskann::convert_types<uint32_t, uint8_t>(
-          block_compressed_base, pVec, cur_blk_size, num_pq_chunks);
+      diskann::convert_types<uint32_t, uint8_t>(block_compressed_base, pVec,
+                                                cur_blk_size, num_pq_chunks);
       compressed_file_writer.write(
-          (char *) pVec,
-          cur_blk_size * num_pq_chunks * sizeof(uint8_t));
+          (char *) pVec, cur_blk_size * num_pq_chunks * sizeof(uint8_t));
       delete[] pVec;
     }
 

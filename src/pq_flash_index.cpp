@@ -440,8 +440,7 @@ namespace diskann {
 
     std::cout << "Level: " << lvl << std::flush;
     std::cout << ". #nodes: " << node_list.size() - prev_node_list_size
-        << ", #nodes thus far: " << node_list.size() << std::endl;
-
+              << ", #nodes thus far: " << node_list.size() << std::endl;
 
     std::set<unsigned> checkset;
     for (auto p : node_list)
@@ -640,9 +639,9 @@ namespace diskann {
 
     this->num_points = npts_u64;
     this->n_chunks = nchunks_u64;
-//    this->chunk_size = DIV_ROUND_UP(this->data_dim, nchunks_u64);
+    //    this->chunk_size = DIV_ROUND_UP(this->data_dim, nchunks_u64);
 
-    pq_table.load_pq_centroid_bin(pq_centroids_bin);
+    pq_table.load_pq_centroid_bin(pq_centroids_bin, nchunks_u64);
 
     std::cout
         << "Loaded PQ centroids and in-memory compressed vectors. #points: "
@@ -1019,7 +1018,7 @@ namespace diskann {
 
     aligned_free(query_float);
 
-// compute medoid nhood <-> query distances
+    // compute medoid nhood <-> query distances
     compute_dists(&best_medoid, 1, dist_scratch);
     float dist = dist_scratch[0];
     retset[0] = Neighbor(best_medoid, dist, true);
