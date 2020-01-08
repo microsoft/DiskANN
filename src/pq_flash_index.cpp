@@ -1100,9 +1100,6 @@ namespace diskann {
           num_ios++;
         }
         io_timer.reset();
-        long sleepTime =
-            100L + (long) ((1e2 - 1e1) * rand() / (RAND_MAX + 1.0));
-        usleep(sleepTime);
         reader->read(frontier_read_reqs, ctx);
         if (stats != nullptr) {
           stats->io_us += io_timer.elapsed();
