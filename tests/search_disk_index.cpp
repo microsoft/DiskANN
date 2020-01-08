@@ -156,6 +156,7 @@ int search_disk_index(int argc, char** argv) {
   std::vector<uint64_t> warmup_result_ids_64(warmup_num, 0);
   std::vector<float>    warmup_result_dists(warmup_num, 0);
 
+  warmup_num = 1;
 #pragma omp parallel for schedule(dynamic, 1)
   for (_s64 i = 0; i < (int64_t) warmup_num; i++) {
     _pFlashIndex.cached_beam_search(

@@ -7,81 +7,76 @@ namespace diskann {
     // data_dim = n_chunks * chunk_size;
     float* tables =
         nullptr;        // pq_tables = float* [[2^8 * [chunk_size]] * n_chunks]
-    _u64   n_chunks;    // n_chunks = # of chunks ndims is split into
-    _u64   chunk_size;  // chunk_size = chunk size of each dimension chunk
+//    _u64   n_chunks;    // n_chunks = # of chunks ndims is split into
+//    _u64   chunk_size;  // chunk_size = chunk size of each dimension chunk
     _u64   ndims;       // ndims = chunk_size * n_chunks
+    _u64   n_chunks;
+    _u32* chunk_offsets = nullptr;
+    _u32* rearrangement = nullptr;
+    float* centroid = nullptr;
     float* tables_T = nullptr;  // same as pq_tables, but col-major
    public:
     FixedChunkPQTable() {
     }
 
     virtual ~FixedChunkPQTable() {
-      if (tables != nullptr) {
+      if (tables != nullptr) 
         delete[] tables;
-      }
-      if (tables_T != nullptr) {
+      if (tables_T != nullptr) 
         delete[] tables_T;
-      }
+      if (rearrangement != nullptr) 
+          delete[] rearrangement;
+      if (chunk_offsets != nullptr)
+          delete[] chunk_offsets;
+      if (centroid != nullptr)
+          delete[] centroid;
     }
 
-    void load_pq_centroid_bin(const char* filename, _u64 nchunks,
-                              _u64 chunksize) {
-      this->n_chunks = nchunks;
-      this->chunk_size = chunksize;
+    void load_pq_centroid_bin(const char* pq_table_file) {
+        std::string rearrangement_file = std::string(pq_table_file) + "_rearrangement_perm.bin";
+        std::string chunk_offset_file = std::string(pq_table_file) + "_chunk_offsets.bin";
+        std::string centroid_file = std::string(pq_table_file) + "_centroid.bin";
+      
       // bin structure: [256][ndims][ndims(float)]
-      unsigned npts_u32, ndims_u32;
+      uint64_t numr,numc;
       size_t   npts_u64, ndims_u64;
-      diskann::load_bin<float>(filename, tables, npts_u64, ndims_u64);
-      npts_u32 = npts_u64;
-      ndims_u32 = ndims_u64;
-      std::cout << "PQ Pivots: #ctrs: " << npts_u32 << ", #dims: " << ndims_u32
-                << ", #chunks: " << nchunks << ", chunk_size: " << chunksize
+      diskann::load_bin<float>(pq_table_file, tables, npts_u64, ndims_u64);
+      this->ndims = ndims_u64;
+
+      diskann::load_bin<_u32>(rearrangement_file, rearrangement, numr, numc);
+      if (numr != ndims_u64 || numc!=1) {
+          std::cout<<"Error loading rearrangement file" << std::endl;
+          exit(-1);
+      }
+
+      diskann::load_bin<_u32>(chunk_offset_file, chunk_offsets, numr, numc);
+      if (numc!=1) {
+          std::cout<<"Error loading chunk offsets file" << std::endl;
+          exit(-1);
+      }
+
+      this->n_chunks = numr - 1;
+
+
+      diskann::load_bin<float>(centroid_file, centroid, numr, numc);
+      if (numc!=1 || numr != ndims_u64) {
+          std::cout<<"Error loading centroid file" << std::endl;
+          exit(-1);
+      }
+
+      std::cout << "PQ Pivots: #ctrs: " << npts_u64 << ", #dims: " << ndims_u64
+                << ", #chunks: " << n_chunks  
                 << std::endl;
-      this->ndims = ndims_u32;
       //      assert((_u64) ndims_u32 == n_chunks * chunk_size);
       // alloc and compute transpose
-      tables_T = new float[256 * ndims_u32];
+      tables_T = new float[256 * ndims_u64];
       for (_u64 i = 0; i < 256; i++) {
-        for (_u64 j = 0; j < ndims_u32; j++) {
-          tables_T[j * 256 + i] = tables[i * ndims_u32 + j];
+        for (_u64 j = 0; j < ndims_u64; j++) {
+          tables_T[j * 256 + i] = tables[i * ndims_u64 + j];
         }
       }
     }
 
-    // in_vec = _u8 * [n_chunks]
-    // out_vec = float* [ndims]
-    virtual void convert(const _u8* in_vec, float* out_vec) {
-      // _mm_prefetch((char*) tables, 3);
-      _mm_prefetch((char*) in_vec, _MM_HINT_T1);
-      // prefetch full out_vec
-      _u64 n_floats_per_line = 16;
-      _u64 n_lines = ROUND_UP(ndims, n_floats_per_line) / n_floats_per_line;
-      for (_u64 line = 0; line < n_lines; line++) {
-        _mm_prefetch((char*) (out_vec + 16 * line), _MM_HINT_T1);
-      }
-
-      for (_u64 chunk = 0; chunk < n_chunks; chunk++) {
-        const _u8    pq_idx = *(in_vec + chunk);
-        const float* vals = (tables + (ndims * pq_idx)) + (chunk * chunk_size);
-        float*       chunk_out = out_vec + (chunk * chunk_size);
-        // avoiding memcpy as chunk size is at most 10
-        switch (chunk_size) {
-          case 2:
-            *chunk_out++ = *vals++;
-            *chunk_out++ = *vals++;
-            break;
-          case 3:
-            *chunk_out++ = *vals++;
-            *chunk_out++ = *vals++;
-            *chunk_out++ = *vals++;
-            break;
-          default:
-            for (_u64 i = 0; i < chunk_size; i++) {
-              *(chunk_out + i) = *(vals + i);
-            }
-        }
-      }
-    }
 
     void populate_chunk_distances(const T* query_vec, float* dist_vec) {
       memset(dist_vec, 0, 256 * n_chunks * sizeof(float));
@@ -89,13 +84,11 @@ namespace diskann {
       for (_u64 chunk = 0; chunk < n_chunks; chunk++) {
         // sum (q-c)^2 for the dimensions associated with this chunk
         float* chunk_dists = dist_vec + (256 * chunk);
-        for (_u64 j = 0; j < chunk_size; j++) {
-          _u64 dim_no = (chunk * chunk_size) + j;
-          if (dim_no == this->ndims)
-            break;
-          const float* centers_dim_vec = tables_T + (256 * dim_no);
+        for (_u64 j = chunk_offsets[chunk]; j < chunk_offsets[chunk+1]; j++) {
+          _u64 permuted_dim_in_query = rearrangement[j];
+          const float* centers_dim_vec = tables_T + (256 * j);
           for (_u64 idx = 0; idx < 256; idx++) {
-            float diff = centers_dim_vec[idx] - (float) query_vec[dim_no];
+            float diff = centers_dim_vec[idx] - ((float) query_vec[permuted_dim_in_query] - centroid[permuted_dim_in_query]);
             chunk_dists[idx] += (diff * diff);
           }
         }
