@@ -174,8 +174,8 @@ namespace diskann {
     uint64_t warmup_L = 50;
     uint64_t warmup_num = 0, warmup_dim = 0, warmup_aligned_dim = 0;
     T*       warmup = nullptr;
-    if (file_exists(warmup_query_file)) {
-      diskann::load_aligned_bin<T>(warmup_query_file, warmup, warmup_num,
+    if (file_exists(cache_warmup_file)) {
+      diskann::load_aligned_bin<T>(cache_warmup_file, warmup, warmup_num,
                                    warmup_dim, warmup_aligned_dim);
       if (warmup_dim != this->m_dimension) {
         std::cout << "Error in warmup file. Dimension mismatch." << std::endl;
