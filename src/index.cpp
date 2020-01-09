@@ -582,7 +582,7 @@ namespace diskann {
         }
         start++;
       }
-      cur_alpha *= 2;
+      cur_alpha *= 1.1;
     }
   }
 
