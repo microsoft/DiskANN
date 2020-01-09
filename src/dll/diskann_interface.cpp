@@ -82,7 +82,7 @@ namespace diskann {
     std::cout << "Training loaded of size " << train_size << std::endl;
 
     generate_pq_pivots(train_data, train_size, train_dim, 256, num_pq_chunks,
-                       15, pq_pivots_path);
+                       20, pq_pivots_path);
     generate_pq_data_from_pivots<T>(dataFilePath, 256, num_pq_chunks,
                                     pq_pivots_path, pq_compressed_vectors_path);
 
@@ -171,7 +171,7 @@ namespace diskann {
     //    free(params);  // Gopal. Caller has to free the 'params' variable.
     //
 
-    uint64_t warmup_L = 50;
+    uint64_t warmup_L = this->Lsearch;
     uint64_t warmup_num = 0, warmup_dim = 0, warmup_aligned_dim = 0;
     T*       warmup = nullptr;
     if (file_exists(cache_warmup_file)) {
