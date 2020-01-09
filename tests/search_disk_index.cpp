@@ -134,7 +134,7 @@ int search_disk_index(int argc, char** argv) {
     diskann::load_aligned_bin<T>(warmup_query_file, warmup, warmup_num,
                                  warmup_dim, warmup_aligned_dim);
   } else {
-    warmup_num = 100000;
+    warmup_num = 50000;
     warmup_dim = query_dim;
     warmup_aligned_dim = query_aligned_dim;
     std::cout << "Generating random warmup file with dim " << warmup_dim
@@ -202,14 +202,20 @@ int search_disk_index(int argc, char** argv) {
                                                query_result_ids[test_id].data(),
                                                query_num, recall_at);
 
-    std::cout << "L_search: " << L << std::endl;
-    std::cout << "QPS: " << qps << std::endl;
+		float mean_latency = diskann::get_mean_stats(
+										stats, query_num, 
+										[](const diskann::QueryStats& stats) { return stats.total_us; });
+
+    std::cout << "L_search: " << L << ", QPS: " << qps << ", Mean Latency: " << mean_latency << std::flush;
+
     if (calc_recall_flag) {
       float recall = diskann::calc_recall_set(query_num, gt_ids, gt_dim,
                                               query_result_ids[test_id].data(),
                                               recall_at, recall_at, recall_at);
-      std::cout << recall_string << ": " << recall << std::endl;
+      std::cout <<", " << recall_string << ": " << recall << std::endl;
     }
+		else
+						std::cout<<std::endl;
 
     std::vector<float> percentiles;
     percentiles.push_back(50);
