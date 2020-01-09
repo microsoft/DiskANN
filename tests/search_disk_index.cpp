@@ -134,7 +134,7 @@ int search_disk_index(int argc, char** argv) {
     diskann::load_aligned_bin<T>(warmup_query_file, warmup, warmup_num,
                                  warmup_dim, warmup_aligned_dim);
   } else {
-    warmup_num = 50000;
+    warmup_num = 100000;
     warmup_dim = query_dim;
     warmup_aligned_dim = query_aligned_dim;
     std::cout << "Generating random warmup file with dim " << warmup_dim
