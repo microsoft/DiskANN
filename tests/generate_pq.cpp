@@ -1,7 +1,7 @@
 #include "math_utils.h"
 #include "partition_and_pq.h"
 
-#define KMEANS_ITERS_FOR_PQ 15
+#define KMEANS_ITERS_FOR_PQ 20
 
 template<typename T>
 bool generate_pq(const std::string& data_path,

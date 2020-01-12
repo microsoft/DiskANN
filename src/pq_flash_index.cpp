@@ -442,6 +442,10 @@ namespace diskann {
     for (size_t i = 0; i < residual; i++)
       node_list.push_back(cur_level_node_list[i]);
 
+    std::cout << "Level: " << lvl << std::flush;
+    std::cout << ". #nodes: " << node_list.size() - prev_node_list_size
+              << ", #nodes thus far: " << node_list.size() << std::endl;
+
     std::set<unsigned> checkset;
     for (auto p : node_list)
       checkset.insert(p);
@@ -639,9 +643,9 @@ namespace diskann {
 
     this->num_points = npts_u64;
     this->n_chunks = nchunks_u64;
-    this->chunk_size = DIV_ROUND_UP(this->data_dim, nchunks_u64);
+    //    this->chunk_size = DIV_ROUND_UP(this->data_dim, nchunks_u64);
 
-    pq_table.load_pq_centroid_bin(pq_centroids_bin, n_chunks, chunk_size);
+    pq_table.load_pq_centroid_bin(pq_centroids_bin, nchunks_u64);
 
     std::cout
         << "Loaded PQ centroids and in-memory compressed vectors. #points: "
@@ -996,7 +1000,6 @@ namespace diskann {
     char *sector_scratch = query_scratch->sector_scratch;
     _u64 &sector_scratch_idx = query_scratch->sector_idx;
 
-#ifdef USE_ACCELERATED_PQ
     // query <-> PQ chunk centers distances
     float *pq_dists = query_scratch->aligned_pqtable_dist_scratch;
     pq_table.populate_chunk_distances(query, pq_dists);
@@ -1014,7 +1017,6 @@ namespace diskann {
       ::pq_dist_lookup(pq_coord_scratch, n_ids, this->n_chunks, pq_dists,
                        dists_out);
     };
-#endif
     Timer                 query_timer, io_timer;
     std::vector<Neighbor> retset(l_search + 1);
     tsl::robin_set<_u64>  visited(4096);
@@ -1042,16 +1044,11 @@ namespace diskann {
 
     aligned_free(query_float);
 
-// compute medoid nhood <-> query distances
-#ifdef USE_ACCELERATED_PQ
+    // compute medoid nhood <-> query distances
     compute_dists(&best_medoid, 1, dist_scratch);
-#endif
-
-#ifdef USE_ACCELERATED_PQ
     float dist = dist_scratch[0];
     retset[0] = Neighbor(best_medoid, dist, true);
     visited.insert(best_medoid);
-#endif
     if (stats != nullptr) {
       stats->n_cmps++;
     }
@@ -1148,16 +1145,8 @@ namespace diskann {
         _u64      nnbrs = cached_nhood.second.first;
         unsigned *node_nbrs = cached_nhood.second.second;
 
-#ifdef USE_ACCELERATED_PQ
         // compute node_nbrs <-> query dists in PQ space
         compute_dists(node_nbrs, nnbrs, dist_scratch);
-#else
-        // issue prefetches
-        for (_u64 m = 0; m < nnbrs; ++m) {
-          unsigned next_id = node_nbrs[m];
-          _mm_prefetch((char *) data + next_id * n_chunks, _MM_HINT_T1);
-        }
-#endif
         // process prefetched nhood
         for (_u64 m = 0; m < nnbrs; ++m) {
           unsigned id = node_nbrs[m];
@@ -1166,12 +1155,7 @@ namespace diskann {
           } else {
             visited.insert(id);
             cmps++;
-#ifdef USE_ACCELERATED_PQ
             float dist = dist_scratch[m];
-#else
-            pq_table.convert(data + id * n_chunks, scratch);
-            float dist = dist_cmp->compare(scratch, query, aligned_dim);
-#endif
             // std::cout << "cmp: " << id << ", dist: " << dist <<
             // std::endl; std::cerr << "dist: " << dist << std::endl;
             if (stats != nullptr) {
@@ -1223,16 +1207,8 @@ namespace diskann {
             Neighbor(frontier_nhood.first, cur_expanded_dist, true));
 
         unsigned *node_nbrs = (node_buf + 1);
-#ifdef USE_ACCELERATED_PQ
         // compute node_nbrs <-> query dist in PQ space
         compute_dists(node_nbrs, nnbrs, dist_scratch);
-#else
-        // issue prefetches
-        for (_u64 m = 0; m < nnbrs; ++m) {
-          unsigned next_id = node_nbrs[m];
-          _mm_prefetch((char *) data + next_id * n_chunks, _MM_HINT_T1);
-        }
-#endif
 
         // process prefetch-ed nhood
         for (_u64 m = 0; m < nnbrs; ++m) {
@@ -1242,12 +1218,7 @@ namespace diskann {
           } else {
             visited.insert(id);
             cmps++;
-#ifdef USE_ACCELERATED_PQ
             float dist = dist_scratch[m];
-#else
-            pq_table.convert(data + id * n_chunks, scratch);
-            float dist = dist_cmp->compare(scratch, query, aligned_dim);
-#endif
             // std::cout << "cmp: " << id << ", dist: " << dist << std::endl;
             // std::cerr << "dist: " << dist << std::endl;
             if (stats != nullptr) {

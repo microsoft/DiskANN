@@ -40,10 +40,19 @@ namespace diskann {
                 return left < right;
               });
 
-    //    uint64_t sum_vals = std::accumulate(vals.begin(), vals.end(),
-    //    (uint64_t) 0);
-
+		float retval = vals[(uint64_t)(percentile * len)];
     vals.clear();
-    return vals[(uint64_t)(percentile * len)];
+    return  retval;
+	}
+
+
+  inline float get_mean_stats(
+      QueryStats *stats, uint64_t len, 
+      const std::function<uint64_t(const QueryStats &)> &member_fn) {
+					float avg = 0;
+    for (uint64_t i = 0; i < len; i++) {
+      avg += member_fn(stats[i]);
+    }
+    return avg/len;
   }
 }

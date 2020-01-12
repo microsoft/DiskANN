@@ -156,6 +156,7 @@ int search_disk_index(int argc, char** argv) {
   std::vector<uint64_t> warmup_result_ids_64(warmup_num, 0);
   std::vector<float>    warmup_result_dists(warmup_num, 0);
 
+//  warmup_num = 1;
 #pragma omp parallel for schedule(dynamic, 1)
   for (_s64 i = 0; i < (int64_t) warmup_num; i++) {
     _pFlashIndex.cached_beam_search(
@@ -201,37 +202,36 @@ int search_disk_index(int argc, char** argv) {
                                                query_result_ids[test_id].data(),
                                                query_num, recall_at);
 
-    std::cout << "L_search: " << L << std::endl;
-    std::cout << "QPS: " << qps << std::endl;
+		float mean_latency = diskann::get_mean_stats(
+										stats, query_num, 
+										[](const diskann::QueryStats& stats) { return stats.total_us; });
+
+    std::cout << "L_search: " << L << ", QPS: " << qps << ", Mean Latency: " << mean_latency << std::flush;
+
     if (calc_recall_flag) {
       float recall = diskann::calc_recall_set(query_num, gt_ids, gt_dim,
                                               query_result_ids[test_id].data(),
                                               recall_at, recall_at, recall_at);
-      std::cout << recall_string << ": " << recall << std::endl;
+      std::cout <<", " << recall_string << ": " << recall << std::endl;
     }
+		else
+						std::cout<<std::endl;
 
     std::vector<float> percentiles;
-    for (uint32_t s = 1; s < 20; s++) {
-      percentiles.push_back(s * 5);
-    }
+    percentiles.push_back(50);
+    percentiles.push_back(90);
+    percentiles.push_back(95);
     percentiles.push_back(99);
     percentiles.push_back(99.9);
     std::vector<float> results(percentiles.size());
 
-    for (uint32_t s = 0; s < percentiles.size(); s++) {
-      results[s] = diskann::get_percentile_stats(
-          stats, query_num, percentiles[s] / 100,
-          [](const diskann::QueryStats& stats) { return stats.n_ios; });
-    }
-    std::string category = "IO Stats";
-    print_stats(category, percentiles, results);
 
     for (uint32_t s = 0; s < percentiles.size(); s++) {
       results[s] = diskann::get_percentile_stats(
           stats, query_num, percentiles[s] / 100,
           [](const diskann::QueryStats& stats) { return stats.total_us; });
     }
-    category = "Latency Stats";
+    std::string category = "Latency Stats";
     print_stats(category, percentiles, results);
 
     for (uint32_t s = 0; s < percentiles.size(); s++) {
@@ -242,12 +242,23 @@ int search_disk_index(int argc, char** argv) {
     category = "IO Latency Stats";
     print_stats(category, percentiles, results);
 
+    std::cout<<"==================Machine Independent Statistics===================" << std::endl;
+
+
+    for (uint32_t s = 0; s < percentiles.size(); s++) {
+      results[s] = diskann::get_percentile_stats(
+          stats, query_num, percentiles[s] / 100,
+          [](const diskann::QueryStats& stats) { return stats.n_ios; });
+    }
+    category = "Number of IO Reads";
+    print_stats(category, percentiles, results);
+
     for (uint32_t s = 0; s < percentiles.size(); s++) {
       results[s] = diskann::get_percentile_stats(
           stats, query_num, percentiles[s] / 100,
           [](const diskann::QueryStats& stats) { return stats.n_cmps; });
     }
-    category = "Comparison Stats";
+    category = "Distance Comparisons";
     print_stats(category, percentiles, results);
 
     for (uint32_t s = 0; s < percentiles.size(); s++) {
