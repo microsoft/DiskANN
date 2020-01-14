@@ -5,6 +5,9 @@
 #include <string>
 #include <vector>
 
+#include "omp.h"
+#include "mkl.h"
+
 #include "dll/diskann_interface.h"
 #include "index.h"
 #include "partition_and_pq.h"
@@ -54,13 +57,6 @@ namespace diskann {
       return false;
     }
 
-    std::string index_prefix_path(indexFilePath);
-    std::string pq_pivots_path = index_prefix_path + "_pq_pivots.bin";
-    std::string pq_compressed_vectors_path =
-        index_prefix_path + "_compressed.bin";
-    std::string randnsg_path = index_prefix_path + "_mem.index";
-    std::string disk_index_path = index_prefix_path + "_disk.index";
-
     unsigned L = (unsigned) atoi(param_list[0].c_str());
     unsigned R = (unsigned) atoi(param_list[1].c_str());
     unsigned C = (unsigned) atoi(param_list[2].c_str());
@@ -68,6 +64,30 @@ namespace diskann {
     float    training_set_sampling_rate = (float) atof(param_list[4].c_str());
     unsigned num_threads = (unsigned) atoi(param_list[5].c_str());
     auto     s = std::chrono::high_resolution_clock::now();
+
+    std::string index_prefix_path(indexFilePath);
+    std::string pq_pivots_path = index_prefix_path + "_pq_pivots.bin";
+    std::string pq_compressed_vectors_path =
+        index_prefix_path + "_compressed.bin";
+    std::string randnsg_path = index_prefix_path + "_mem.index";
+    std::string disk_index_path = index_prefix_path + "_disk.index";
+
+    diskann::Parameters paras;
+    paras.Set<unsigned>("L", L);
+    paras.Set<unsigned>("R", R);
+    paras.Set<unsigned>("C", C);
+    paras.Set<float>("alpha", 4.0);
+    paras.Set<unsigned>("num_rnds", 2);
+    paras.Set<unsigned>("num_threads", num_threads);
+    paras.Set<std::string>("save_path", randnsg_path);
+
+    if (num_threads != 0) {
+      std::cout << "Building index using: " << num_threads
+                << " threads. OMP in_parallel: " << omp_in_parallel()
+                << std::endl;
+      omp_set_num_threads(num_threads);
+      mkl_set_num_threads(num_threads);
+    }
 
     float* train_data;
     size_t train_size, train_dim;
@@ -87,15 +107,6 @@ namespace diskann {
                                     pq_pivots_path, pq_compressed_vectors_path);
 
     delete[] train_data;
-
-    diskann::Parameters paras;
-    paras.Set<unsigned>("L", L);
-    paras.Set<unsigned>("R", R);
-    paras.Set<unsigned>("C", C);
-    paras.Set<float>("alpha", 4.0);
-    paras.Set<unsigned>("num_rnds", 2);
-    paras.Set<unsigned>("num_threads", num_threads);
-    paras.Set<std::string>("save_path", randnsg_path);
 
     _pNsgIndex = std::unique_ptr<diskann::Index<T>>(
         new diskann::Index<T>(_compareMetric, dataFilePath));
@@ -225,7 +236,7 @@ namespace diskann {
                                         unsigned __int64  neighborCount,
                                         float*            distances,
                                         unsigned __int64* ids) const {
-    const T*   query = (const T*) vector;
+    const T* query = (const T*) vector;
     //#pragma omp  parallel for schedule(dynamic, 1)
     for (_u64 i = 0; i < queryCount; i++) {
       _pFlashIndex->cached_beam_search(

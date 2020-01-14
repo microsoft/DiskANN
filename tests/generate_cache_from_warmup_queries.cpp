@@ -64,7 +64,7 @@ int generate_cache_list(int argc, char** argv) {
             << std::endl;
   _pFlashIndex.cache_bfs_levels(cache_nlevels);
 
-  omp_set_num_threads(num_threads);
+  //omp_set_num_threads(num_threads);
   unsigned recall_at = 1;
   _u64*    warmup_res = new _u64[recall_at * warmup_num];
   float*   warmup_dists = new float[recall_at * warmup_num];

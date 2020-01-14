@@ -50,10 +50,10 @@ int aux_main(int argc, char** argv) {
       new diskann::DiskANNInterface<T>(0, ANNIndex::DT_L2);
 
   bool res = 0;
-   for indexing
+  //for indexing
   {
     // just construct index
-    res = intf->BuildIndex(argv[1], argv[2], "75 32 2000 25 0.3 32");
+    res = intf->BuildIndex(argv[1], argv[2], "75 32 2000 25 0.3 2");
     // ERROR CHECK
     if (res != 1) {
       exit(-1);

@@ -817,7 +817,7 @@ namespace diskann {
 
         auto s = std::chrono::high_resolution_clock::now();
 #pragma omp  parallel for schedule(dynamic, 64)
-        for (_u64 node_ctr = (_u64) start_id; node_ctr < (_u64) end_id;
+        for (_s64 node_ctr = (_s64) start_id; node_ctr < (_s64) end_id;
              ++node_ctr) {
           _u64                      node = rand_perm[node_ctr];
           size_t                    node_offset = node_ctr - start_id;
@@ -854,7 +854,7 @@ namespace diskann {
 // prune_neighbors will check pool, and remove some of the points and
 // create a cut_graph, which contains neighbors for point n
 #pragma omp parallel for schedule(dynamic, 64)
-        for (_u64 node_ctr = (_u64) start_id; node_ctr < (_u64) end_id;
+        for (_s64 node_ctr = (_s64) start_id; node_ctr < (_s64) end_id;
              ++node_ctr) {
           _u64                   node = rand_perm[node_ctr];
           size_t                 node_offset = node_ctr - start_id;
@@ -868,7 +868,7 @@ namespace diskann {
         s = std::chrono::high_resolution_clock::now();
 
 #pragma omp parallel for schedule(dynamic, 64)
-        for (_u64 node_ctr = start_id; node_ctr < (_u64) end_id; ++node_ctr) {
+        for (_s64 node_ctr = start_id; node_ctr < (_s64) end_id; ++node_ctr) {
           _u64                   node = rand_perm[node_ctr];
           _u64                   node_offset = node_ctr - start_id;
           std::vector<unsigned> &pruned_list = pruned_list_vector[node_offset];
@@ -882,7 +882,7 @@ namespace diskann {
         }
 
 #pragma omp parallel for schedule(dynamic, 64)
-        for (_u64 node_ctr = 0; node_ctr < rand_perm.size(); node_ctr++) {
+        for (_s64 node_ctr = 0; node_ctr < rand_perm.size(); node_ctr++) {
           _u64 node = rand_perm[node_ctr];
           if (need_to_sync[node] != 0) {
             need_to_sync[node] = 0;
@@ -939,7 +939,7 @@ namespace diskann {
 
     std::cout << "Starting final cleanup.." << std::flush;
 #pragma omp parallel for schedule(dynamic, 64)
-    for (_u64 node_ctr = 0; node_ctr < rand_perm.size(); node_ctr++) {
+    for (_s64 node_ctr = 0; node_ctr < rand_perm.size(); node_ctr++) {
       size_t node = rand_perm[node_ctr];
       if (_final_graph[node].size() > range) {
         tsl::robin_set<unsigned> dummy_visited(0);

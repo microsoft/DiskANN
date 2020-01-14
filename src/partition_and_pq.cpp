@@ -93,7 +93,7 @@ void gen_random_slice(const std::string base_file,
 // the slice_size and ndims are set inside the function.
 
 /***********************************
-* Reimplement using gen_random_slice(const T* inputdata,...)
+ * Reimplement using gen_random_slice(const T* inputdata,...)
  ************************************/
 
 template<typename T>
@@ -269,7 +269,7 @@ int generate_pq_pivots(const float *passed_train_data, size_t num_train,
 
   std::vector<std::vector<uint32_t>> bin_to_dims(num_pq_chunks);
   tsl::robin_map<uint32_t, uint32_t> dim_to_bin;
-  std::vector<float> bin_loads(num_pq_chunks, 0);
+  std::vector<float>                 bin_loads(num_pq_chunks, 0);
 
   /*
     while(!max_correlations.empty())  {
@@ -500,7 +500,7 @@ int generate_pq_data_from_pivots(const std::string data_file,
 
   std::ofstream compressed_file_writer(pq_compressed_vectors_path,
                                        std::ios::binary);
-  _u32 num_pq_chunks_u32 = num_pq_chunks;
+  _u32          num_pq_chunks_u32 = num_pq_chunks;
 
   compressed_file_writer.write((char *) &num_points, sizeof(uint32_t));
   compressed_file_writer.write((char *) &num_pq_chunks_u32, sizeof(uint32_t));
@@ -550,7 +550,7 @@ int generate_pq_data_from_pivots(const std::string data_file,
       uint32_t *closest_center = new uint32_t[cur_blk_size];
 
 #pragma omp parallel for schedule(static, 8192)
-      for (int64_t j = 0; j < (_s64) cur_blk_size; j++) {
+          for (int64_t j = 0; j < (_s64) cur_blk_size; j++) {
         for (uint64_t k = 0; k < cur_chunk_size; k++)
           cur_data[j * cur_chunk_size + k] =
               block_data_float[j * dim + chunk_offsets[i] + k];
@@ -771,7 +771,7 @@ gen_random_slice<float>(const std::string base_file,
                         const std::string output_prefix, float sampling_rate);
 
 template void DISKANN_DLLEXPORT
-gen_random_slice<float>(const float *inputdata, size_t npts, size_t ndims,
+                                gen_random_slice<float>(const float *inputdata, size_t npts, size_t ndims,
                         double p_val, float *&sampled_data, size_t &slice_size);
 template void DISKANN_DLLEXPORT gen_random_slice<uint8_t>(
     const uint8_t *inputdata, size_t npts, size_t ndims, double p_val,
@@ -821,7 +821,6 @@ template DISKANN_DLLEXPORT void gen_random_slice<uint8_t>(
 template DISKANN_DLLEXPORT void gen_random_slice<float>(
     const std::string base_file, const std::string output_prefix,
     float sampling_rate);
-
 
 // template<typename T>
 // int partition(const char *base_file, const char *train_file, size_t

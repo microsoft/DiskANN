@@ -192,7 +192,7 @@ namespace math_utils {
                           ? (num_points / PAR_BLOCK_SIZE)
                           : (num_points / PAR_BLOCK_SIZE) + 1;
 
-    mkl_set_num_threads(64);
+    //mkl_set_num_threads(64);
     if (!is_norm_given_for_pts)
       math_utils::compute_vecs_l2sq(pts_norms_squared, data, num_points, dim);
     math_utils::compute_vecs_l2sq(pivs_norms_squared, pivot_data, num_centers,
@@ -322,10 +322,11 @@ namespace kmeans {
       std::vector<float> residuals(nchunks * BUF_PAD, 0.0);
 
 #pragma omp parallel for schedule(static, 32)
-      for (int64_t chunk = 0; chunk < (_s64) nchunks; ++chunk)
-        for (size_t d = chunk * CHUNK_SIZE;
-             d < num_points && d < (chunk + 1) * CHUNK_SIZE; ++d)
-          residuals[chunk * BUF_PAD] += math_utils::calc_distance(
+          for (int64_t chunk = 0; chunk < (_s64) nchunks;
+               ++chunk) for (size_t d = chunk * CHUNK_SIZE;
+                             d < num_points && d < (chunk + 1) * CHUNK_SIZE;
+                             ++d) residuals[chunk * BUF_PAD] +=
+          math_utils::calc_distance(
               data + (d * dim),
               centers + (size_t) closest_center[d] * (size_t) dim, dim);
 
