@@ -34,7 +34,7 @@ void read_idmap(const std::string &fname, std::vector<unsigned> &ivecs) {
 int merge_shards(const std::string &nsg_prefix, const std::string &nsg_suffix,
                  const std::string &idmaps_prefix,
                  const std::string &idmaps_suffix, const _u64 nshards,
-                 const std::string &output_nsg) {
+                 const std::string &output_nsg, unsigned max_degree) {
   // Read ID maps
   std::vector<std::string>           nsg_names(nshards);
   std::vector<std::vector<unsigned>> idmaps(nshards);
@@ -54,7 +54,7 @@ int merge_shards(const std::string &nsg_prefix, const std::string &nsg_suffix,
     nelems += idmap.size();
   }
   nnodes++;
-  std::cout << "# nodes: " << nnodes << "\n";
+  std::cout << "# nodes: " << nnodes << ", max. degree: " << max_degree << std::endl;
 
   // compute inverse map: node -> shards
   std::vector<std::pair<unsigned, unsigned>> node_shard;
@@ -91,18 +91,22 @@ int merge_shards(const std::string &nsg_prefix, const std::string &nsg_suffix,
   cached_ofstream nsg_writer(output_nsg, 1024 * 1048576);
   nsg_writer.write((char *) &merged_index_size, sizeof(uint64_t));
 
-  unsigned width;
+  unsigned output_width = max_degree;
+  unsigned max_input_width = 0;
   // read width from each nsg to advance buffer by sizeof(unsigned) bytes
   for (auto &reader : nsg_readers) {
-    reader.read((char *) &width, sizeof(unsigned));
+      unsigned input_width;
+    reader.read((char *) &input_width, sizeof(unsigned));
+    max_input_width = input_width > max_input_width ? input_width : max_input_width;
   }
 
-  _u64 rep_factor = (_u64)(std::round((float) nelems / (float) nnodes));
-  std::cout << "Input width: " << width
-            << ", output width: " << width * rep_factor << "\n";
+  std::cout<<"Max input width: " << max_input_width <<", output width: " << output_width << std::endl;
+  //  _u64 rep_factor = (_u64)(std::round((float) nelems / (float) nnodes));
+  //  std::cout << "Input width: " << width
+  //            << ", output width: " << width * rep_factor << "\n";
 
-  width *= rep_factor;
-  nsg_writer.write((char *) &width, sizeof(unsigned));
+  //  width *= rep_factor;
+  nsg_writer.write((char *) &output_width, sizeof(unsigned));
   std::string   medoid_file = output_nsg + "_medoids.bin";
   std::ofstream medoid_writer(medoid_file.c_str(), std::ios::binary);
   _u32          nshards_u32 = nshards;
@@ -138,6 +142,8 @@ int merge_shards(const std::string &nsg_prefix, const std::string &nsg_suffix,
       for (auto pt : nhood_set)
         final_nhood.emplace_back(pt);
       nnbrs = nhood_set.size();
+      std::random_shuffle(final_nhood.begin(), final_nhood.end());
+      nnbrs = (std::min)(final_nhood.size(), (uint64_t) max_degree);
       // write into merged ofstream
       nsg_writer.write((char *) &nnbrs, sizeof(unsigned));
       nsg_writer.write((char *) final_nhood.data(), nnbrs * sizeof(unsigned));
@@ -166,6 +172,8 @@ int merge_shards(const std::string &nsg_prefix, const std::string &nsg_suffix,
   for (auto pt : nhood_set)
     final_nhood.emplace_back(pt);
   nnbrs = nhood_set.size();
+  std::random_shuffle(final_nhood.begin(), final_nhood.end());
+  nnbrs = (std::min)(final_nhood.size(), (uint64_t) max_degree);
   // write into merged ofstream
   nsg_writer.write((char *) &nnbrs, sizeof(unsigned));
   nsg_writer.write((char *) final_nhood.data(), nnbrs * sizeof(unsigned));
@@ -182,9 +190,10 @@ int merge_shards(const std::string &nsg_prefix, const std::string &nsg_suffix,
   return 0;
 }
 int main(int argc, char **argv) {
-  if (argc != 7) {
-    std::cout << argv[0] << " nsg_prefix[1] nsg_suffix[2] idmaps_prefix[3] "
-                            "idmaps_suffix[4] n_shards[5] output_nsg[6]"
+  if (argc != 8) {
+    std::cout << argv[0]
+              << " nsg_prefix[1] nsg_suffix[2] idmaps_prefix[3] "
+                 "idmaps_suffix[4] n_shards[5] max_degree[6] output_nsg[7]"
               << std::endl;
     exit(-1);
   }
@@ -194,8 +203,9 @@ int main(int argc, char **argv) {
   std::string idmaps_prefix(argv[3]);
   std::string idmaps_suffix(argv[4]);
   _u64        nshards = (_u64) std::atoi(argv[5]);
-  std::string output_nsg(argv[6]);
+  _u32        max_degree = (_u64) std::atoi(argv[6]);
+  std::string output_nsg(argv[7]);
 
   return merge_shards(nsg_prefix, nsg_suffix, idmaps_prefix, idmaps_suffix,
-                      nshards, output_nsg);
+                      nshards, output_nsg, max_degree);
 }

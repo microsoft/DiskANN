@@ -32,8 +32,6 @@
 #include <xmmintrin.h>
 #endif
 
-#define MAX_ALPHA 3
-#define SLACK_FACTOR 1.3
 #define INDEXING_BEAM_WIDTH 1
 #define NEW_FILE_FORMAT 1
 
@@ -378,10 +376,10 @@ namespace diskann {
             rand_set.insert(cur_pt < _nd ? cur_pt : cur_pt - _nd + _max_points);
         }
 
-        _final_graph[node_loc].reserve(1.1*SLACK_FACTOR*orig_degree);
+        _final_graph[node_loc].reserve(1.1 * SLACK_FACTOR * orig_degree);
         for (auto s : rand_set)
           _final_graph[node_loc].emplace_back(s);
-//        _final_graph[node_loc].shrink_to_fit();
+        //        _final_graph[node_loc].shrink_to_fit();
       }
     }
 
@@ -716,8 +714,8 @@ namespace diskann {
           LockGuard guard(_locks[des]);
           // DELETE IN-EDGES FROM IN_GRAPH USING APPROPRIATE LOCKS
           _final_graph[des].clear();
-//          _final_graph[des].shrink_to_fit();
-//          _final_graph[des].reserve(range);
+          //          _final_graph[des].shrink_to_fit();
+          //          _final_graph[des].reserve(range);
           for (auto new_nbr : new_out_neighbors) {
             _final_graph[des].emplace_back(new_nbr);
             if (update_in_graph) {
@@ -806,7 +804,6 @@ namespace diskann {
       std::vector<tsl::robin_set<unsigned>> sync_visited_vector(round_size);
       std::vector<std::vector<unsigned>>    pruned_list_vector(round_size);
 
-
       for (uint32_t sync_num = 0; sync_num < NUM_SYNCS; sync_num++) {
         if (rnd_no == NUM_RNDS - 1) {
           if (last_round_alpha > 1)
@@ -860,7 +857,7 @@ namespace diskann {
           size_t                 node_offset = node_ctr - start_id;
           std::vector<unsigned> &pruned_list = pruned_list_vector[node_offset];
           _final_graph[node].clear();
-//          _final_graph[node].shrink_to_fit();
+          //          _final_graph[node].shrink_to_fit();
           //						_final_graph[node].reserve(range);
           for (auto id : pruned_list)
             _final_graph[node].emplace_back(id);
@@ -905,8 +902,8 @@ namespace diskann {
             prune_neighbors(node, dummy_pool, parameters, new_out_neighbors);
 
             _final_graph[node].clear();
-//            _final_graph[node].shrink_to_fit();
-//            _final_graph[node].reserve(range);
+            //            _final_graph[node].shrink_to_fit();
+            //            _final_graph[node].reserve(range);
             for (auto id : new_out_neighbors)
               _final_graph[node].emplace_back(id);
           }
@@ -960,7 +957,7 @@ namespace diskann {
         prune_neighbors(node, dummy_pool, parameters, new_out_neighbors);
 
         _final_graph[node].clear();
-//        _final_graph[node].shrink_to_fit();
+        //        _final_graph[node].shrink_to_fit();
         //						_final_graph[node].reserve(range);
         for (auto id : new_out_neighbors)
           _final_graph[node].emplace_back(id);

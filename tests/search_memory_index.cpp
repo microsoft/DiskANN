@@ -18,6 +18,7 @@ template<typename T>
 int search_memory_index(int argc, char** argv) {
   T*                query = nullptr;
   unsigned*         gt_ids = nullptr;
+  float*            gt_dists = nullptr;
   size_t            query_num, query_dim, query_aligned_dim, gt_num, gt_dim;
   std::vector<_u64> Lvec;
 
@@ -96,9 +97,9 @@ int search_memory_index(int argc, char** argv) {
 
     float recall = 0;
     if (calc_recall_flag)
-      recall = diskann::calc_recall_set(query_num, gt_ids, gt_dim,
+      recall = diskann::calc_recall_set(query_num, gt_ids, gt_dists, gt_dim,
                                         query_result_ids[test_id].data(),
-                                        recall_at, recall_at, recall_at);
+                                        recall_at, recall_at);
 
     std::chrono::duration<double> diff = e - s;
     float latency = (diff.count() / query_num) * (1000000);

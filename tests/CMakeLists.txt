@@ -74,6 +74,16 @@ else()
 	target_link_libraries(partition_data ${PROJECT_NAME} -ltcmalloc)
 endif()
 
+
+add_executable(partition_with_ram_budget partition_with_ram_budget.cpp)
+if(MSVC)
+	target_link_options(partition_with_ram_budget PRIVATE /MACHINE:x64)
+	target_link_libraries(partition_with_ram_budget debug ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG}/nsg_dll.lib)
+	target_link_libraries(partition_with_ram_budget optimized ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE}/nsg_dll.lib)
+else() 
+	target_link_libraries(partition_with_ram_budget ${PROJECT_NAME} -ltcmalloc)
+endif()
+
 add_executable(merge_shards merge_shards.cpp)
 
 add_executable(create_disk_layout create_disk_layout.cpp)

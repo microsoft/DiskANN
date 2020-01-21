@@ -54,10 +54,10 @@ typedef int8_t   _s8;
 namespace diskann {
 
   DISKANN_DLLEXPORT float calc_recall_set(unsigned  num_queries,
-                                          unsigned *gold_std, unsigned dim_gs,
+                                          unsigned *gold_std, float *gs_dist,
+                                          unsigned  dim_gs,
                                           unsigned *our_results,
-                                          unsigned dim_or, unsigned recall_at,
-                                          unsigned subset_size);
+                                          unsigned dim_or, unsigned recall_at);
 
   inline void alloc_aligned(void **ptr, size_t size, size_t align) {
     *ptr = nullptr;

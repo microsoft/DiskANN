@@ -13,6 +13,8 @@
 #include "utils.h"
 #include "windows_customizations.h"
 
+#define SLACK_FACTOR 1.3
+
 namespace diskann {
   template<typename T, typename TagT = int>
   class Index {
