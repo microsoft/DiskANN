@@ -82,8 +82,8 @@ int search_memory_index(int argc, char** argv) {
     size_t total_cmps = 0, total_hops = 0;
     query_result_ids[test_id].resize(recall_at * query_num);
 
-    auto s = std::chrono::high_resolution_clock::now();
-    //#pragma omp parallel for schedule(dynamic, 1)
+    auto    s = std::chrono::high_resolution_clock::now();
+#pragma omp parallel for schedule(dynamic, 1)
     for (int64_t i = 0; i < (int64_t) query_num; i++) {
       std::pair<uint32_t, uint32_t> q_stats = index.beam_search(
           query + i * query_aligned_dim, recall_at, L, beam_width, start_points,

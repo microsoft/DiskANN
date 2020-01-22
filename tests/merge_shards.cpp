@@ -54,7 +54,8 @@ int merge_shards(const std::string &nsg_prefix, const std::string &nsg_suffix,
     nelems += idmap.size();
   }
   nnodes++;
-  std::cout << "# nodes: " << nnodes << ", max. degree: " << max_degree << std::endl;
+  std::cout << "# nodes: " << nnodes << ", max. degree: " << max_degree
+            << std::endl;
 
   // compute inverse map: node -> shards
   std::vector<std::pair<unsigned, unsigned>> node_shard;
@@ -95,12 +96,14 @@ int merge_shards(const std::string &nsg_prefix, const std::string &nsg_suffix,
   unsigned max_input_width = 0;
   // read width from each nsg to advance buffer by sizeof(unsigned) bytes
   for (auto &reader : nsg_readers) {
-      unsigned input_width;
+    unsigned input_width;
     reader.read((char *) &input_width, sizeof(unsigned));
-    max_input_width = input_width > max_input_width ? input_width : max_input_width;
+    max_input_width =
+        input_width > max_input_width ? input_width : max_input_width;
   }
 
-  std::cout<<"Max input width: " << max_input_width <<", output width: " << output_width << std::endl;
+  std::cout << "Max input width: " << max_input_width
+            << ", output width: " << output_width << std::endl;
   //  _u64 rep_factor = (_u64)(std::round((float) nelems / (float) nnodes));
   //  std::cout << "Input width: " << width
   //            << ", output width: " << width * rep_factor << "\n";
