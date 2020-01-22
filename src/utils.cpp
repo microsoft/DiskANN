@@ -48,20 +48,19 @@ namespace diskann {
            (100.0 / ((float) recall_at));
   }
 
+  /***************************************************
+      Support for Merging Many Vamana Indices
+   ***************************************************/
 
-   /***************************************************
-       Support for Merging Many Vamana Indices
-    ***************************************************/
-
-  void read_idmap(const std::string &    fname,
-                                  std::vector<unsigned> &ivecs) {
+  void read_idmap(const std::string &fname, std::vector<unsigned> &ivecs) {
     uint32_t      npts32, dim;
     size_t        actual_file_size = get_file_size(fname);
     std::ifstream reader(fname.c_str(), std::ios::binary);
     reader.read((char *) &npts32, sizeof(uint32_t));
     reader.read((char *) &dim, sizeof(uint32_t));
-    if (dim != 1 || actual_file_size != ((size_t) npts32) * sizeof(uint32_t) +
-                                            2 * sizeof(uint32_t)) {
+    if (dim != 1 ||
+        actual_file_size !=
+            ((size_t) npts32) * sizeof(uint32_t) + 2 * sizeof(uint32_t)) {
       std::cout
           << "Error reading idmap file. Check if the file is bin file with "
              "1 dimensional data. Actual: "
@@ -75,10 +74,10 @@ namespace diskann {
     reader.close();
   }
 
-  int merge_shards(
-      const std::string &nsg_prefix, const std::string &nsg_suffix,
-      const std::string &idmaps_prefix, const std::string &idmaps_suffix,
-      const _u64 nshards, const std::string &output_nsg, unsigned max_degree) {
+  int merge_shards(const std::string &nsg_prefix, const std::string &nsg_suffix,
+                   const std::string &idmaps_prefix,
+                   const std::string &idmaps_suffix, const _u64 nshards,
+                   const std::string &output_nsg, unsigned max_degree) {
     // Read ID maps
     std::vector<std::string>           nsg_names(nshards);
     std::vector<std::vector<unsigned>> idmaps(nshards);
@@ -111,11 +110,11 @@ namespace diskann {
         node_shard.push_back(std::make_pair(node_id, shard));
       }
     }
-    std::sort(node_shard.begin(), node_shard.end(),
-              [](const auto &left, const auto &right) {
-                return left.first < right.first || (left.first == right.first &&
-                                                    left.second < right.second);
-              });
+    std::sort(node_shard.begin(), node_shard.end(), [](const auto &left,
+                                                       const auto &right) {
+      return left.first < right.first ||
+             (left.first == right.first && left.second < right.second);
+    });
     std::cout << "Finished computing node -> shards map\n";
 
     // create cached nsg readers
@@ -234,5 +233,4 @@ namespace diskann {
     std::cout << "Finished merge\n";
     return 0;
   }
-
 };

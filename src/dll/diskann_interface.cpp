@@ -48,7 +48,8 @@ namespace diskann {
           << "Correct usage of parameters is L (indexing search list size) "
              "R (max degree) C (visited list maximum size) B (approximate "
              "compressed number of bytes per datapoint to store in "
-             "memory) S (Sampling Rate For PQ Generation)  M (max RAM budget(GB)) T (Max Threads To "
+             "memory) S (Sampling Rate For PQ Generation)  M (max RAM "
+             "budget(GB)) T (Max Threads To "
              "Use)"
           << std::endl;
       return false;
@@ -69,7 +70,7 @@ namespace diskann {
     float    training_set_sampling_rate = atof(param_list[4].c_str());
     double   ram_budget = (double) atof(param_list[5].c_str());
     unsigned num_threads = (unsigned) atoi(param_list[6].c_str());
-    auto s = std::chrono::high_resolution_clock::now();
+    auto     s = std::chrono::high_resolution_clock::now();
 
     float* train_data;
     size_t train_size, train_dim;
@@ -78,7 +79,8 @@ namespace diskann {
     gen_random_slice<T>(dataFilePath, training_set_sampling_rate, train_data,
                         train_size, train_dim);
 
-    double estimated_base_size = ((double)train_size) / training_set_sampling_rate;
+    double estimated_base_size =
+        ((double) train_size) / training_set_sampling_rate;
     double warmup_sampling_rate = (100000.0 / estimated_base_size);
 
     std::string warmup_file_prefix = index_prefix_path + "_warmup";
@@ -103,7 +105,7 @@ namespace diskann {
 
       diskann::Parameters paras;
       paras.Set<unsigned>("L", L);
-      paras.Set<unsigned>("R", 2*(R/3));
+      paras.Set<unsigned>("R", 2 * (R / 3));
       paras.Set<unsigned>("C", C);
       paras.Set<float>("alpha", 4.0);
       paras.Set<unsigned>("num_rnds", 2);
@@ -114,9 +116,8 @@ namespace diskann {
           new diskann::Index<T>(_compareMetric, shard_base_file.c_str()));
       _pNsgIndex->build(paras);
       _pNsgIndex->save(shard_index_file);
-
     }
-    
+
     diskann::merge_shards(merged_index_prefix + "_subshard-", "_mem.index",
                           merged_index_prefix + "_subshard-", "_ids_uint32.bin",
                           num_parts, mem_index_path, R);
@@ -127,8 +128,7 @@ namespace diskann {
     _pFlashIndex->create_disk_layout(std::string(dataFilePath), mem_index_path,
                                      disk_index_path);
 
-
-    //delete all shard data and mem index file
+    // delete all shard data and mem index file
 
     auto e = std::chrono::high_resolution_clock::now();
 

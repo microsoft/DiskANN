@@ -11,9 +11,6 @@
 #include "utils.h"
 #include <boost/dynamic_bitset.hpp>
 
-
-
-
 int main(int argc, char **argv) {
   if (argc != 8) {
     std::cout
@@ -33,6 +30,5 @@ int main(int argc, char **argv) {
   std::string output_nsg(argv[7]);
 
   return diskann::merge_shards(nsg_prefix, nsg_suffix, idmaps_prefix,
-                                idmaps_suffix, nshards, output_nsg,
-                                max_degree);
+                               idmaps_suffix, nshards, output_nsg, max_degree);
 }

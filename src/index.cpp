@@ -366,7 +366,8 @@ namespace diskann {
 
     unsigned                l = 0;
     Neighbor                nn;
-    boost::dynamic_bitset<> inserted_into_pool(_max_points + _num_frozen_pts);
+//    boost::dynamic_bitset<> inserted_into_pool(_max_points + _num_frozen_pts);
+    tsl::robin_set<unsigned> inserted_into_pool;    
 
     for (auto id : init_ids) {
       assert(id < _max_points);
@@ -374,8 +375,8 @@ namespace diskann {
                     _distance->compare(_data + _aligned_dim * (size_t) id,
                                        node_coords, _aligned_dim),
                     true);
-      if (inserted_into_pool[id] == 0) {
-        inserted_into_pool[id] = 1;
+      if (inserted_into_pool.find(id)== inserted_into_pool.end()) {
+        inserted_into_pool.insert(id);
         //      if (inserted_into_pool.find(id) == inserted_into_pool.end()) {
         //        inserted_into_pool.insert(id);
         best_L_nodes[l++] = nn;
@@ -422,8 +423,8 @@ namespace diskann {
 
         for (unsigned m = 0; m < _final_graph[n].size(); ++m) {
           unsigned id = _final_graph[n][m];
-          if (inserted_into_pool[id] == 0) {
-            inserted_into_pool[id] = 1;
+          if (inserted_into_pool.find(id) == inserted_into_pool.end()) {
+            inserted_into_pool.insert(id);
             // Add each unique
             //            neighbor to
             // inserted to pool, if not already
@@ -715,7 +716,7 @@ namespace diskann {
     unsigned       L = argL;
 
     std::vector<unsigned> Lvec;
-    Lvec.push_back(L);
+    Lvec.push_back(2*L/3);
     Lvec.push_back(L);
     const unsigned NUM_RNDS = Lvec.size();
 
@@ -1044,8 +1045,6 @@ namespace diskann {
       delete[] indices;
     return ret;
   }
-
- 
 
   /*************************************************
    *      Support for Incremental Update

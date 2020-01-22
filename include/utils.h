@@ -59,7 +59,6 @@ namespace diskann {
                                           unsigned *our_results,
                                           unsigned dim_or, unsigned recall_at);
 
-
   DISKANN_DLLEXPORT void read_idmap(const std::string &    fname,
                                     std::vector<unsigned> &ivecs);
 
@@ -67,8 +66,6 @@ namespace diskann {
       const std::string &nsg_prefix, const std::string &nsg_suffix,
       const std::string &idmaps_prefix, const std::string &idmaps_suffix,
       const _u64 nshards, const std::string &output_nsg, unsigned max_degree);
-  
-
 
   inline void alloc_aligned(void **ptr, size_t size, size_t align) {
     *ptr = nullptr;
