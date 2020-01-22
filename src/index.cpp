@@ -19,7 +19,7 @@
 #include "parameters.h"
 #include "tsl/robin_set.h"
 #include "utils.h"
-
+#include <boost/dynamic_bitset.hpp>
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <time.h>
@@ -402,11 +402,14 @@ namespace diskann {
     expanded_nodes_info.reserve(10 * Lsize);
     expanded_nodes_info.reserve(10 * Lsize);
 
-    std::vector<Neighbor> random_visited_info;
+//    std::vector<Neighbor> random_visited_info;
+//    random_visited_info.reserve(500);
+
 
     unsigned                 l = 0;
     Neighbor                 nn;
     tsl::robin_set<unsigned> inserted_into_pool;
+    boost::dynamic_bitset<> iip(_max_points + _num_frozen_pts);
 
     for (auto id : init_ids) {
       assert(id < _max_points);
@@ -414,14 +417,17 @@ namespace diskann {
                     _distance->compare(_data + _aligned_dim * (size_t) id,
                                        node_coords, _aligned_dim),
                     true);
-      if (inserted_into_pool.find(id) == inserted_into_pool.end()) {
-        inserted_into_pool.insert(id);
+      if (iip[id]==0) {
+         iip[id] = 1;
+//      if (inserted_into_pool.find(id) == inserted_into_pool.end()) {
+//        inserted_into_pool.insert(id);
         best_L_nodes[l++] = nn;
       }
       if (l == Lsize)
         break;
     }
 
+    
     /* sort best_L_nodes based on distance of each point to node_coords */
     std::sort(best_L_nodes.begin(), best_L_nodes.begin() + l);
     unsigned              k = 0;
@@ -460,8 +466,10 @@ namespace diskann {
 
         for (unsigned m = 0; m < _final_graph[n].size(); ++m) {
           unsigned id = _final_graph[n][m];
-          if (inserted_into_pool.find(id) == inserted_into_pool.end()) {
-            inserted_into_pool.insert(id);  // Add each unique neighbor to
+          if (iip[id]==0) {
+              iip[id] = 1;
+//          if (inserted_into_pool.find(id) == inserted_into_pool.end()) {
+//            inserted_into_pool.insert(id);  // Add each unique neighbor to
                                             // inserted to pool, if not already
                                             // added. we will try to insert them
                                             // into pool subsequently
@@ -489,6 +497,7 @@ namespace diskann {
                                (unsigned) _aligned_dim);
 
         Neighbor nn(id, dist, true);
+//        random_visited_info.emplace_back(id,dist,true);
 
         if (dist >= best_L_nodes[l - 1].distance && (l == Lsize))
           continue;
@@ -506,6 +515,16 @@ namespace diskann {
       else
         ++k;
     }
+/*      std::sort(random_visited_info.begin(), random_visited_info.end());
+//    std::random_shuffle(random_visited_info.begin(), random_visited_info.end());
+    for (auto &p : random_visited_info) {
+        if (expanded_nodes_ids.find(p.id) == expanded_nodes_ids.end()) {
+            expanded_nodes_info.emplace_back(p);
+            expanded_nodes_ids.insert(p.id);
+            if (expanded_nodes_ids.size() > 500)
+                break;
+        }
+    }*/
     return std::make_pair(hops, cmps);
   }
 
@@ -755,7 +774,7 @@ namespace diskann {
 
     std::vector<unsigned> Lvec;
     Lvec.push_back(L);
-    Lvec.push_back(L / 2);
+    Lvec.push_back(L);
 
     const unsigned NUM_RNDS = Lvec.size();
 
@@ -796,14 +815,11 @@ namespace diskann {
     std::mt19937                     gen(rd());
     std::uniform_real_distribution<> dis(0, 1);
 
-    //    init_random_graph(range);
 
     // creating a initial list to begin the search process. it has _ep and
     // random other nodes
     std::set<unsigned> unique_start_points;
     unique_start_points.insert(_ep);
-    //    while (unique_start_points.size() < L)
-    //      unique_start_points.insert(rand_perm[rand() % rand_perm.size()]);
 
     std::vector<unsigned> init_ids;
     for (auto pt : unique_start_points)
@@ -811,9 +827,8 @@ namespace diskann {
 
     diskann::Timer link_timer;
     for (uint32_t rnd_no = 0; rnd_no < NUM_RNDS; rnd_no++) {
-      //      L = argL < 50? argL : 50;
-      //      if (rnd_no == NUM_RNDS - 1)
-      //        L = argL;
+
+        std::vector<uint32_t> expanded_stats(rand_perm.size(), 0);
 
       L = Lvec[NUM_RNDS - rnd_no - 1];
 
@@ -825,6 +840,7 @@ namespace diskann {
       float  sync_time = 0, total_sync_time = 0;
       float  inter_time = 0, total_inter_time = 0;
       size_t inter_count = 0, total_inter_count = 0;
+      float search_time = 0, total_search_time = 0;
       // Shuffle the dataset
       //      std::random_shuffle(rand_perm.begin(), rand_perm.end());
       unsigned progress_counter = 0;
@@ -832,7 +848,6 @@ namespace diskann {
       size_t round_size = DIV_ROUND_UP(_nd, NUM_SYNCS);  // size of each batch
       std::vector<unsigned> need_to_sync(_max_points + _num_frozen_pts, 0);
 
-//      std::vector<std::vector<Neighbor>>    sync_pool_vector(round_size);
       std::vector<tsl::robin_set<unsigned>> sync_visited_vector(round_size);
       std::vector<std::vector<unsigned>>    pruned_list_vector(round_size);
 
@@ -840,15 +855,32 @@ namespace diskann {
         size_t start_id = sync_num * round_size;
         size_t end_id = (std::min)(true_num_pts, (sync_num + 1) * round_size);
 
-        /*            if (rnd_no == NUM_RNDS -1) {
-        //              if (Lvec[0] > 100)
-        //              L = (unsigned) (Lvec[0] - (float)(Lvec[0] - 100) *
-        ((float)sync_num)/((float)NUM_SYNCS));
-                    L = sync_num < NUM_SYNCS/3 ? Lvec[0] : 100;
-                }
-                */
+
 
         auto s = std::chrono::high_resolution_clock::now();
+/*  
+  #pragma omp  parallel for schedule(dynamic, 64)
+        for (_u64 node_ctr = (_u64) start_id; node_ctr < (_u64) end_id;
+             ++node_ctr) {
+          _u64                      node = rand_perm[node_ctr];
+          size_t                    node_offset = node_ctr - start_id;
+          tsl::robin_set<unsigned> &visited = sync_visited_vector[node_offset];
+          // get nearest neighbors of n in tmp. pool contains all the points
+          // that were checked along with their distance from n. visited
+          // contains all
+          // the points visited, just the ids
+          std::vector<Neighbor>   pool;
+          pool.reserve(L*2);
+          get_expanded_nodes(node, L, init_ids, pool, visited);
+          pool.clear();
+        } 
+        */
+        std::chrono::duration<double> diff =
+            std::chrono::high_resolution_clock::now() - s;
+        search_time += diff.count();
+
+
+        s = std::chrono::high_resolution_clock::now();
 #pragma omp  parallel for schedule(dynamic, 64)
         for (_u64 node_ctr = (_u64) start_id; node_ctr < (_u64) end_id;
              ++node_ctr) {
@@ -877,11 +909,12 @@ namespace diskann {
                 visited.insert(id);
               }
             }
+          expanded_stats[node] = pool.size();
           prune_neighbors(node, pool, parameters, pruned_list);
           pool.clear();
-//          pool.shrink_to_fit();
+          pool.shrink_to_fit();
         }
-        std::chrono::duration<double> diff =
+        diff =
             std::chrono::high_resolution_clock::now() - s;
         sync_time += diff.count();
 
@@ -911,8 +944,8 @@ namespace diskann {
 //          inter_insert(node, pruned_list, parameters, 0);
           pruned_list.clear();
           visited.clear();
-//          pruned_list.shrink_to_fit();
-//          tsl::robin_set<unsigned>().swap(visited);
+          pruned_list.shrink_to_fit();
+          tsl::robin_set<unsigned>().swap(visited);
         }
 
 #pragma omp parallel for schedule(dynamic, 64)
@@ -939,8 +972,6 @@ namespace diskann {
             prune_neighbors(node, dummy_pool, parameters, new_out_neighbors);
 
             _final_graph[node].clear();
-            //            _final_graph[node].shrink_to_fit();
-            //            _final_graph[node].reserve(range);
             for (auto id : new_out_neighbors)
               _final_graph[node].emplace_back(id);
           }
@@ -956,7 +987,9 @@ namespace diskann {
           total_sync_time += sync_time;
           total_inter_time += inter_time;
           total_inter_count += inter_count;
+          total_search_time += search_time;
           sync_time = 0;
+          search_time = 0;
           inter_time = 0;
           inter_count = 0;
           progress_counter += 5;
@@ -965,9 +998,15 @@ namespace diskann {
       std::cout << "Completed Pass " << rnd_no << " of data using L=" << L
                 << " and alpha=" << parameters.Get<float>("alpha")
                 << ". Stats: ";
-      std::cout << "sync_time=" << total_sync_time
+      std::cout << "search_time=" << total_search_time<<"s, search+prune_time=" << total_sync_time
                 << "s, inter_time=" << total_inter_time
-                << "s, inter_count=" << total_inter_count << std::endl;
+                << "s, inter_count=" << total_inter_count << std::flush;
+      std::sort(expanded_stats.begin(), expanded_stats.end());
+      std::cout<<", Num expanded nodes: 10\%ile: "<< expanded_stats[0.1*expanded_stats.size()] <<",";
+      std::cout<<"25\%ile: " <<expanded_stats[0.25*expanded_stats.size()] <<",";
+      std::cout<<"50\%ile: " <<expanded_stats[0.5*expanded_stats.size()] <<",";
+      std::cout<<"75\%ile: " <<expanded_stats[0.75*expanded_stats.size()] <<",";
+      std::cout<<"90\%ile: " <<expanded_stats[0.9*expanded_stats.size()] <<"\n";
     }
 
     std::cout << "Starting final cleanup.." << std::flush;
@@ -993,8 +1032,6 @@ namespace diskann {
         prune_neighbors(node, dummy_pool, parameters, new_out_neighbors);
 
         _final_graph[node].clear();
-        //        _final_graph[node].shrink_to_fit();
-        //						_final_graph[node].reserve(range);
         for (auto id : new_out_neighbors)
           _final_graph[node].emplace_back(id);
       }
