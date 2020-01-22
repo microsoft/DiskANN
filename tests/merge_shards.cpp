@@ -9,6 +9,7 @@
 #include <set>
 #include "cached_io.h"
 #include "utils.h"
+#include <boost/dynamic_bitset.hpp>
 
 void read_idmap(const std::string &fname, std::vector<unsigned> &ivecs) {
   uint32_t      npts32, dim;
@@ -132,8 +133,9 @@ int merge_shards(const std::string &nsg_prefix, const std::string &nsg_suffix,
   medoid_writer.close();
 
   std::cout << "Starting merge\n";
-  std::set<unsigned>    nhood_set;
-  std::vector<unsigned> final_nhood;
+  //  std::set<unsigned>    nhood_set;
+  boost::dynamic_bitset<> nhood_set(nnodes);
+  std::vector<unsigned>   final_nhood;
 
   unsigned nnbrs = 0, shard_nnbrs = 0;
   unsigned cur_id = 0;
@@ -141,10 +143,6 @@ int merge_shards(const std::string &nsg_prefix, const std::string &nsg_suffix,
     unsigned node_id = id_shard.first;
     unsigned shard_id = id_shard.second;
     if (cur_id < node_id) {
-      final_nhood.reserve(nhood_set.size());
-      for (auto pt : nhood_set)
-        final_nhood.emplace_back(pt);
-      nnbrs = nhood_set.size();
       std::random_shuffle(final_nhood.begin(), final_nhood.end());
       nnbrs = (std::min)(final_nhood.size(), (uint64_t) max_degree);
       // write into merged ofstream
@@ -156,7 +154,8 @@ int merge_shards(const std::string &nsg_prefix, const std::string &nsg_suffix,
       }
       cur_id = node_id;
       nnbrs = 0;
-      nhood_set.clear();
+      for (auto &p : final_nhood)
+        nhood_set[p] = 0;
       final_nhood.clear();
     }
     // read from shard_id ifstream
@@ -167,21 +166,21 @@ int merge_shards(const std::string &nsg_prefix, const std::string &nsg_suffix,
 
     // rename nodes
     for (_u64 j = 0; j < shard_nnbrs; j++) {
-      nhood_set.insert(idmaps[shard_id][shard_nhood[j]]);
+      if (nhood_set[idmaps[shard_id][shard_nhood[j]]] == 0) {
+        nhood_set[idmaps[shard_id][shard_nhood[j]]] = 1;
+        final_nhood.emplace_back(idmaps[shard_id][shard_nhood[j]]);
+      }
     }
   }
 
-  final_nhood.reserve(nhood_set.size());
-  for (auto pt : nhood_set)
-    final_nhood.emplace_back(pt);
-  nnbrs = nhood_set.size();
   std::random_shuffle(final_nhood.begin(), final_nhood.end());
   nnbrs = (std::min)(final_nhood.size(), (uint64_t) max_degree);
   // write into merged ofstream
   nsg_writer.write((char *) &nnbrs, sizeof(unsigned));
   nsg_writer.write((char *) final_nhood.data(), nnbrs * sizeof(unsigned));
   merged_index_size += (sizeof(unsigned) + nnbrs * sizeof(unsigned));
-  nhood_set.clear();
+  for (auto &p : final_nhood)
+    nhood_set[p] = 0;
   final_nhood.clear();
 
   std::cout << "Expected size: " << merged_index_size << std::endl;
@@ -194,10 +193,11 @@ int merge_shards(const std::string &nsg_prefix, const std::string &nsg_suffix,
 }
 int main(int argc, char **argv) {
   if (argc != 8) {
-    std::cout << argv[0]
-              << " nsg_prefix[1] nsg_suffix[2] idmaps_prefix[3] "
-                 "idmaps_suffix[4] n_shards[5] max_degree[6] output_nsg[7]"
-              << std::endl;
+    std::cout
+        << argv[0]
+        << " vamana_index_prefix[1] vamana_index_suffix[2] idmaps_prefix[3] "
+           "idmaps_suffix[4] n_shards[5] max_degree[6] output_vamana_path[7]"
+        << std::endl;
     exit(-1);
   }
 

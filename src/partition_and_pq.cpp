@@ -237,29 +237,30 @@ int generate_pq_pivots(const float *passed_train_data, size_t num_train,
   std::vector<uint32_t> rearrangement;
   std::vector<uint32_t> chunk_offsets;
 
-  float *correlations = new float[dim * dim];
-  std::memset(correlations, 0, sizeof(float) * dim * dim);
+  /*    float *correlations = new float[dim * dim];
+    std::memset(correlations, 0, sizeof(float) * dim * dim);
 
-  auto corr_comp = [](const std::tuple<uint32_t, uint32_t, float> &e1,
-                      const std::tuple<uint32_t, uint32_t, float> &e2) {
-    return std::get<2>(e1) < std::get<2>(e2);
-  };
-  std::priority_queue<std::tuple<uint32_t, uint32_t, float>,
-                      std::vector<std::tuple<uint32_t, uint32_t, float>>,
-                      decltype(corr_comp)>
-      max_correlations(corr_comp);
+    auto corr_comp = [](const std::tuple<uint32_t, uint32_t, float> &e1,
+                        const std::tuple<uint32_t, uint32_t, float> &e2) {
+      return std::get<2>(e1) < std::get<2>(e2);
+    };
+    std::priority_queue<std::tuple<uint32_t, uint32_t, float>,
+                        std::vector<std::tuple<uint32_t, uint32_t, float>>,
+                        decltype(corr_comp)>
+        max_correlations(corr_comp);
 
-  for (uint32_t i = 0; i < dim; i++)
-    for (uint32_t j = 0; j < dim; j++) {
-      for (uint32_t k = 0; k < num_train; k++)
-        correlations[i * dim + j] += (1.0 / num_train) *
-                                     train_data[k * dim + i] *
-                                     train_data[k * dim + j];
-      max_correlations.push(
-          std::make_tuple(i, j, std::abs(correlations[i * dim + j])));
-    }
+    for (uint32_t i = 0; i < dim; i++)
+      for (uint32_t j = 0; j < dim; j++) {
+        for (uint32_t k = 0; k < num_train; k++)
+          correlations[i * dim + j] += (1.0 / num_train) *
+                                       train_data[k * dim + i] *
+                                       train_data[k * dim + j];
+        max_correlations.push(
+            std::make_tuple(i, j, std::abs(correlations[i * dim + j])));
+      }
 
-  delete[] correlations;
+    delete[] correlations;
+    */
 
   size_t low_val = std::floor((double) dim / (double) num_pq_chunks);
   size_t high_val = std::ceil((double) dim / (double) num_pq_chunks);
@@ -361,7 +362,7 @@ int generate_pq_pivots(const float *passed_train_data, size_t num_train,
       rearrangement.push_back(p);
       std::cout << p << ",";
     }
-    std::cout << "] with load " << bin_loads[b] << std::endl;
+    std::cout << "] " << std::endl;
     if (b > 0)
       chunk_offsets.push_back(chunk_offsets[b - 1] + bin_to_dims[b - 1].size());
   }
@@ -894,7 +895,7 @@ int partition_with_ram_budget(const std::string data_file,
                               k_base, prefix_path);
   delete[] pivot_data;
   delete[] train_data_float;
-  return 0;
+  return num_parts;
 }
 
 // Instantations of supported templates
