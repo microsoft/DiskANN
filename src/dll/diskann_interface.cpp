@@ -43,12 +43,12 @@ namespace diskann {
     while (parser >> cur_param)
       param_list.push_back(cur_param);
 
-    if (param_list.size() != 6) {
+    if (param_list.size() != 7) {
       std::cout
           << "Correct usage of parameters is L (indexing search list size) "
              "R (max degree) C (visited list maximum size) B (approximate "
              "compressed number of bytes per datapoint to store in "
-             "memory) S (Sampling Rate For PQ Generation) T (Max Threads To "
+             "memory) S (Sampling Rate For PQ Generation)  M (max RAM budget(GB)) T (Max Threads To "
              "Use)"
           << std::endl;
       return false;
@@ -58,16 +58,18 @@ namespace diskann {
     std::string pq_pivots_path = index_prefix_path + "_pq_pivots.bin";
     std::string pq_compressed_vectors_path =
         index_prefix_path + "_compressed.bin";
-    std::string randnsg_path = index_prefix_path + "_mem.index";
+    std::string mem_index_path = index_prefix_path + "_mem.index";
     std::string disk_index_path = index_prefix_path + "_disk.index";
+    std::string merged_index_prefix = index_prefix_path + "_merged";
 
     unsigned L = (unsigned) atoi(param_list[0].c_str());
     unsigned R = (unsigned) atoi(param_list[1].c_str());
     unsigned C = (unsigned) atoi(param_list[2].c_str());
     size_t   num_pq_chunks = (size_t) atoi(param_list[3].c_str());
     float    training_set_sampling_rate = atof(param_list[4].c_str());
-    unsigned num_threads = (unsigned) atoi(param_list[5].c_str());
-    auto     s = std::chrono::high_resolution_clock::now();
+    double   ram_budget = (double) atof(param_list[5].c_str());
+    unsigned num_threads = (unsigned) atoi(param_list[6].c_str());
+    auto s = std::chrono::high_resolution_clock::now();
 
     float* train_data;
     size_t train_size, train_dim;
@@ -76,8 +78,11 @@ namespace diskann {
     gen_random_slice<T>(dataFilePath, training_set_sampling_rate, train_data,
                         train_size, train_dim);
 
+    double estimated_base_size = ((double)train_size) / training_set_sampling_rate;
+    double warmup_sampling_rate = (100000.0 / estimated_base_size);
+
     std::string warmup_file_prefix = index_prefix_path + "_warmup";
-    gen_random_slice<T>(dataFilePath, warmup_file_prefix, 0.01);
+    gen_random_slice<T>(dataFilePath, warmup_file_prefix, warmup_sampling_rate);
 
     std::cout << "Training loaded of size " << train_size << std::endl;
 
@@ -86,25 +91,44 @@ namespace diskann {
     generate_pq_data_from_pivots<T>(dataFilePath, 256, num_pq_chunks,
                                     pq_pivots_path, pq_compressed_vectors_path);
 
+    int num_parts = partition_with_ram_budget(
+        dataFilePath, training_set_sampling_rate, ram_budget, 2 * R / 3,
+        merged_index_prefix, 2);
+
+    for (int p = 0; p < num_parts; p++) {
+      std::string shard_base_file =
+          merged_index_prefix + "_subshard-" + std::to_string(p) + ".bin";
+      std::string shard_index_file =
+          merged_index_prefix + "_subshard-" + std::to_string(p) + "_mem.index";
+
+      diskann::Parameters paras;
+      paras.Set<unsigned>("L", L);
+      paras.Set<unsigned>("R", 2*(R/3));
+      paras.Set<unsigned>("C", C);
+      paras.Set<float>("alpha", 4.0);
+      paras.Set<unsigned>("num_rnds", 2);
+      paras.Set<unsigned>("num_threads", num_threads);
+      paras.Set<std::string>("save_path", shard_index_file);
+
+      _pNsgIndex = std::unique_ptr<diskann::Index<T>>(
+          new diskann::Index<T>(_compareMetric, shard_base_file.c_str()));
+      _pNsgIndex->build(paras);
+      _pNsgIndex->save(shard_index_file);
+
+    }
+    
+    diskann::merge_shards(merged_index_prefix + "_subshard-", "_mem.index",
+                          merged_index_prefix + "_subshard-", "_ids_uint32.bin",
+                          num_parts, mem_index_path, R);
+
     delete[] train_data;
 
-    diskann::Parameters paras;
-    paras.Set<unsigned>("L", L);
-    paras.Set<unsigned>("R", R);
-    paras.Set<unsigned>("C", C);
-    paras.Set<float>("alpha", 3.0);
-    paras.Set<unsigned>("num_rnds", 2);
-    paras.Set<unsigned>("num_threads", num_threads);
-    paras.Set<std::string>("save_path", randnsg_path);
-
-    _pNsgIndex = std::unique_ptr<diskann::Index<T>>(
-        new diskann::Index<T>(_compareMetric, dataFilePath));
-
-    _pNsgIndex->build(paras);
-    _pNsgIndex->save(randnsg_path.c_str());
     _pFlashIndex.reset(new PQFlashIndex<T>());
-    _pFlashIndex->create_disk_layout(std::string(dataFilePath), randnsg_path,
+    _pFlashIndex->create_disk_layout(std::string(dataFilePath), mem_index_path,
                                      disk_index_path);
+
+
+    //delete all shard data and mem index file
 
     auto e = std::chrono::high_resolution_clock::now();
 
@@ -139,7 +163,7 @@ namespace diskann {
     std::string data_bin = index_prefix_path + "_compressed.bin";
     std::string pq_tables_bin = index_prefix_path + "_pq_pivots.bin";
     std::string disk_index_file = index_prefix_path + "_disk.index";
-    std::string medoids_file = index_prefix_path + "_medoids.bin";
+    std::string medoids_file = index_prefix_path + "_mem.index_medoids.bin";
     std::string cache_list_file = index_prefix_path + "_cache_list.bin";
     std::string centroid_data_file = index_prefix_path + "_centroids_float.bin";
     std::string cache_warmup_file = index_prefix_path + "_warmup_data.bin";

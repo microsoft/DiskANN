@@ -58,6 +58,7 @@ namespace diskann {
         unsigned beam_width, std::vector<unsigned> start_points,
         unsigned frozen_pts, unsigned *indices_buffer = NULL);
 
+
     // repositions frozen points to the end of _data - if they have been moved
     // during deletion
     DISKANN_DLLEXPORT void readjust_data(unsigned _num_frozen_pts);
