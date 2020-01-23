@@ -15,6 +15,10 @@
 
 #define SLACK_FACTOR 1.3
 
+#define ESTIMATE_RAM_USAGE(size, dim, datasize, degree) \
+  (1.30 * (((double) size * dim) * datasize +           \
+           ((double) size * degree) * sizeof(unsigned) * SLACK_FACTOR))
+
 namespace diskann {
   template<typename T, typename TagT = int>
   class Index {

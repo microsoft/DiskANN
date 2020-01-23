@@ -364,10 +364,11 @@ namespace diskann {
     //    std::vector<Neighbor> random_visited_info;
     //    random_visited_info.reserve(500);
 
-    unsigned                l = 0;
-    Neighbor                nn;
-//    boost::dynamic_bitset<> inserted_into_pool(_max_points + _num_frozen_pts);
-    tsl::robin_set<unsigned> inserted_into_pool;    
+    unsigned l = 0;
+    Neighbor nn;
+    //    boost::dynamic_bitset<> inserted_into_pool(_max_points +
+    //    _num_frozen_pts);
+    tsl::robin_set<unsigned> inserted_into_pool;
 
     for (auto id : init_ids) {
       assert(id < _max_points);
@@ -375,7 +376,7 @@ namespace diskann {
                     _distance->compare(_data + _aligned_dim * (size_t) id,
                                        node_coords, _aligned_dim),
                     true);
-      if (inserted_into_pool.find(id)== inserted_into_pool.end()) {
+      if (inserted_into_pool.find(id) == inserted_into_pool.end()) {
         inserted_into_pool.insert(id);
         //      if (inserted_into_pool.find(id) == inserted_into_pool.end()) {
         //        inserted_into_pool.insert(id);
@@ -716,7 +717,7 @@ namespace diskann {
     unsigned       L = argL;
 
     std::vector<unsigned> Lvec;
-    Lvec.push_back(2*L/3);
+    Lvec.push_back(2 * L / 3);
     Lvec.push_back(L);
     const unsigned NUM_RNDS = Lvec.size();
 

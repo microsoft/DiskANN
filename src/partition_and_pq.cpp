@@ -871,10 +871,8 @@ int partition_with_ram_budget(const std::string data_file,
 
     for (auto &p : cluster_sizes) {
       double cur_shard_ram_estimate =
-          (p * train_dim) * sizeof(T) +
-          (p * graph_degree) * sizeof(unsigned) * SLACK_FACTOR;
-      cur_shard_ram_estimate *=
-          1.30;  // for some buffer and sampling loss, etc.
+          ESTIMATE_RAM_USAGE(p, train_dim, sizeof(T), graph_degree);
+
       if (cur_shard_ram_estimate > max_ram_usage)
         max_ram_usage = cur_shard_ram_estimate;
     }

@@ -65,7 +65,7 @@ namespace diskann {
 
     unsigned L = (unsigned) atoi(param_list[0].c_str());
     unsigned R = (unsigned) atoi(param_list[1].c_str());
-    unsigned C = (unsigned) atoi(param_list[2].c_str());
+    //    unsigned C = (unsigned) atoi(param_list[2].c_str());
     size_t   num_pq_chunks = (size_t) atoi(param_list[3].c_str());
     float    training_set_sampling_rate = atof(param_list[4].c_str());
     double   ram_budget = (double) atof(param_list[5].c_str());
@@ -93,35 +93,9 @@ namespace diskann {
     generate_pq_data_from_pivots<T>(dataFilePath, 256, num_pq_chunks,
                                     pq_pivots_path, pq_compressed_vectors_path);
 
-    int num_parts = partition_with_ram_budget(
-        dataFilePath, training_set_sampling_rate, ram_budget, 2 * R / 3,
-        merged_index_prefix, 2);
-
-    for (int p = 0; p < num_parts; p++) {
-      std::string shard_base_file =
-          merged_index_prefix + "_subshard-" + std::to_string(p) + ".bin";
-      std::string shard_index_file =
-          merged_index_prefix + "_subshard-" + std::to_string(p) + "_mem.index";
-
-      diskann::Parameters paras;
-      paras.Set<unsigned>("L", L);
-      paras.Set<unsigned>("R", 2 * (R / 3));
-      paras.Set<unsigned>("C", C);
-      paras.Set<float>("alpha", 4.0);
-      paras.Set<unsigned>("num_rnds", 2);
-      paras.Set<unsigned>("num_threads", num_threads);
-      paras.Set<std::string>("save_path", shard_index_file);
-
-      _pNsgIndex = std::unique_ptr<diskann::Index<T>>(
-          new diskann::Index<T>(_compareMetric, shard_base_file.c_str()));
-      _pNsgIndex->build(paras);
-      _pNsgIndex->save(shard_index_file);
-    }
-
-    diskann::merge_shards(merged_index_prefix + "_subshard-", "_mem.index",
-                          merged_index_prefix + "_subshard-", "_ids_uint32.bin",
-                          num_parts, mem_index_path, R);
-
+    diskann::build_merged_vamana_index<T>(dataFilePath, _compareMetric, L, R,
+                                          training_set_sampling_rate,
+                                          ram_budget, mem_index_path);
     delete[] train_data;
 
     _pFlashIndex.reset(new PQFlashIndex<T>());

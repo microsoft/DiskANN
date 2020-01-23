@@ -1,4 +1,5 @@
 #include "utils.h"
+#include "index.h"
 #include <algorithm>
 #include <atomic>
 #include <cassert>
@@ -9,6 +10,7 @@
 #include <vector>
 #include <set>
 #include "cached_io.h"
+#include "partition_and_pq.h"
 #include "utils.h"
 #include <boost/dynamic_bitset.hpp>
 #include <set>
@@ -231,6 +233,78 @@ namespace diskann {
     nsg_writer.write((char *) &merged_index_size, sizeof(uint64_t));
 
     std::cout << "Finished merge\n";
+    return 0;
+  }
+
+  template<typename T>
+  int build_merged_vamana_index(std::string     base_file,
+                                diskann::Metric _compareMetric, size_t L,
+                                size_t R, float sampling_rate,
+                                double ram_budget, std::string mem_index_path) {
+    size_t base_num, base_dim;
+    diskann::get_bin_metadata(base_file, base_num, base_dim);
+
+    double full_index_ram =
+        ESTIMATE_RAM_USAGE(base_num, base_dim, sizeof(T), R);
+    if (full_index_ram < ram_budget * 1024 * 1024 * 1024) {
+      std::cout << "Full index fits in RAM, building in one shot" << std::endl;
+      diskann::Parameters paras;
+      paras.Set<unsigned>("L", L);
+      paras.Set<unsigned>("R", R);
+      paras.Set<unsigned>("C", 2500);
+      paras.Set<float>("alpha", 4.0);
+      paras.Set<unsigned>("num_rnds", 2);
+      paras.Set<std::string>("save_path", mem_index_path);
+
+      std::unique_ptr<diskann::Index<T>> _pNsgIndex =
+          std::unique_ptr<diskann::Index<T>>(
+              new diskann::Index<T>(_compareMetric, base_file.c_str()));
+      _pNsgIndex->build(paras);
+      _pNsgIndex->save(mem_index_path);
+      return 0;
+    }
+    std::string merged_index_prefix = mem_index_path + "_tempFiles";
+    int         num_parts =
+        partition_with_ram_budget<T>(base_file, sampling_rate, ram_budget,
+                                     2 * R / 3, merged_index_prefix, 2);
+
+    for (int p = 0; p < num_parts; p++) {
+      std::string shard_base_file =
+          merged_index_prefix + "_subshard-" + std::to_string(p) + ".bin";
+      std::string shard_index_file =
+          merged_index_prefix + "_subshard-" + std::to_string(p) + "_mem.index";
+
+      diskann::Parameters paras;
+      paras.Set<unsigned>("L", L);
+      paras.Set<unsigned>("R", 2 * (R / 3));
+      paras.Set<unsigned>("C", 2500);
+      paras.Set<float>("alpha", 4.0);
+      paras.Set<unsigned>("num_rnds", 2);
+      paras.Set<std::string>("save_path", shard_index_file);
+
+      std::unique_ptr<diskann::Index<T>> _pNsgIndex =
+          std::unique_ptr<diskann::Index<T>>(
+              new diskann::Index<T>(_compareMetric, shard_base_file.c_str()));
+      _pNsgIndex->build(paras);
+      _pNsgIndex->save(shard_index_file);
+    }
+
+    diskann::merge_shards(merged_index_prefix + "_subshard-", "_mem.index",
+                          merged_index_prefix + "_subshard-", "_ids_uint32.bin",
+                          num_parts, mem_index_path, R);
+
+    // delete tempFiles
+    for (int p = 0; p < num_parts; p++) {
+      std::string shard_base_file =
+          merged_index_prefix + "_subshard-" + std::to_string(p) + ".bin";
+      std::string shard_id_file = merged_index_prefix + "_subshard-" +
+                                  std::to_string(p) + "_ids_uint32.bin";
+      std::string shard_index_file =
+          merged_index_prefix + "_subshard-" + std::to_string(p) + "_mem.index";
+      std::remove(shard_base_file.c_str());
+      std::remove(shard_id_file.c_str());
+      std::remove(shard_index_file.c_str());
+    }
     return 0;
   }
 };
