@@ -9,7 +9,7 @@
 #include <set>
 #include "cached_io.h"
 #include "utils.h"
-#include <boost/dynamic_bitset.hpp>
+//#include <boost/dynamic_bitset.hpp>
 
 int main(int argc, char **argv) {
   if (argc != 8) {

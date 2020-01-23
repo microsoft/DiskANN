@@ -58,14 +58,6 @@ namespace diskann {
       return false;
     }
 
-    unsigned L = (unsigned) atoi(param_list[0].c_str());
-    unsigned R = (unsigned) atoi(param_list[1].c_str());
-    unsigned C = (unsigned) atoi(param_list[2].c_str());
-    size_t   num_pq_chunks = (size_t) atoi(param_list[3].c_str());
-    float    training_set_sampling_rate = (float) atof(param_list[4].c_str());
-    unsigned num_threads = (unsigned) atoi(param_list[5].c_str());
-    auto     s = std::chrono::high_resolution_clock::now();
-
     std::string index_prefix_path(indexFilePath);
     std::string pq_pivots_path = index_prefix_path + "_pq_pivots.bin";
     std::string pq_compressed_vectors_path =

@@ -60,9 +60,8 @@ namespace diskann {
     std::ifstream reader(fname.c_str(), std::ios::binary);
     reader.read((char *) &npts32, sizeof(uint32_t));
     reader.read((char *) &dim, sizeof(uint32_t));
-    if (dim != 1 ||
-        actual_file_size !=
-            ((size_t) npts32) * sizeof(uint32_t) + 2 * sizeof(uint32_t)) {
+    if (dim != 1 || actual_file_size != ((size_t) npts32) * sizeof(uint32_t) +
+                                            2 * sizeof(uint32_t)) {
       std::cout
           << "Error reading idmap file. Check if the file is bin file with "
              "1 dimensional data. Actual: "
@@ -112,11 +111,11 @@ namespace diskann {
         node_shard.push_back(std::make_pair(node_id, shard));
       }
     }
-    std::sort(node_shard.begin(), node_shard.end(), [](const auto &left,
-                                                       const auto &right) {
-      return left.first < right.first ||
-             (left.first == right.first && left.second < right.second);
-    });
+    std::sort(node_shard.begin(), node_shard.end(),
+              [](const auto &left, const auto &right) {
+                return left.first < right.first || (left.first == right.first &&
+                                                    left.second < right.second);
+              });
     std::cout << "Finished computing node -> shards map\n";
 
     // create cached nsg readers
@@ -250,8 +249,8 @@ namespace diskann {
     if (full_index_ram < ram_budget * 1024 * 1024 * 1024) {
       std::cout << "Full index fits in RAM, building in one shot" << std::endl;
       diskann::Parameters paras;
-      paras.Set<unsigned>("L", L);
-      paras.Set<unsigned>("R", R);
+      paras.Set<unsigned>("L", (unsigned)L);
+      paras.Set<unsigned>("R", (unsigned)R);
       paras.Set<unsigned>("C", 2500);
       paras.Set<float>("alpha", 4.0);
       paras.Set<unsigned>("num_rnds", 2);
@@ -261,7 +260,7 @@ namespace diskann {
           std::unique_ptr<diskann::Index<T>>(
               new diskann::Index<T>(_compareMetric, base_file.c_str()));
       _pNsgIndex->build(paras);
-      _pNsgIndex->save(mem_index_path);
+      _pNsgIndex->save(mem_index_path.c_str());
       return 0;
     }
     std::string merged_index_prefix = mem_index_path + "_tempFiles";
@@ -276,8 +275,8 @@ namespace diskann {
           merged_index_prefix + "_subshard-" + std::to_string(p) + "_mem.index";
 
       diskann::Parameters paras;
-      paras.Set<unsigned>("L", L);
-      paras.Set<unsigned>("R", 2 * (R / 3));
+      paras.Set<unsigned>("L", (unsigned)L);
+      paras.Set<unsigned>("R", (unsigned) (2 * (R / 3)));
       paras.Set<unsigned>("C", 2500);
       paras.Set<float>("alpha", 4.0);
       paras.Set<unsigned>("num_rnds", 2);
@@ -287,7 +286,7 @@ namespace diskann {
           std::unique_ptr<diskann::Index<T>>(
               new diskann::Index<T>(_compareMetric, shard_base_file.c_str()));
       _pNsgIndex->build(paras);
-      _pNsgIndex->save(shard_index_file);
+      _pNsgIndex->save(shard_index_file.c_str());
     }
 
     diskann::merge_shards(merged_index_prefix + "_subshard-", "_mem.index",
@@ -308,4 +307,14 @@ namespace diskann {
     }
     return 0;
   }
-};
+
+  template DISKANN_DLLEXPORT int build_merged_vamana_index<int8_t>(
+      std::string base_file, diskann::Metric _compareMetric, size_t L, size_t R,
+      float sampling_rate, double ram_budget, std::string mem_index_path);
+  template DISKANN_DLLEXPORT int build_merged_vamana_index<float>(
+      std::string base_file, diskann::Metric _compareMetric, size_t L, size_t R,
+      float sampling_rate, double ram_budget, std::string mem_index_path);
+  template DISKANN_DLLEXPORT int build_merged_vamana_index<uint8_t>(
+      std::string base_file, diskann::Metric _compareMetric, size_t L, size_t R,
+      float sampling_rate, double ram_budget, std::string mem_index_path);
+};  // namespace diskann

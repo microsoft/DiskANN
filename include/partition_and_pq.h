@@ -9,6 +9,7 @@
 #include "parameters.h"
 #include "tsl/robin_set.h"
 #include "utils.h"
+
 #include "windows_customizations.h"
 
 template<typename T>
@@ -39,7 +40,7 @@ int partition(const std::string data_file, const float sampling_rate,
               size_t num_centers, size_t max_k_means_reps,
               const std::string prefix_path, size_t k_base);
 
-DISKANN_DLLEXPORT template<typename T>
+template<typename T>
 int partition_with_ram_budget(const std::string data_file,
                               const float sampling_rate, double ram_budget,
                               size_t            graph_degree,
