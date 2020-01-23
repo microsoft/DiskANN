@@ -12,7 +12,7 @@
 #include "cached_io.h"
 #include "partition_and_pq.h"
 #include "utils.h"
-#include <boost/dynamic_bitset.hpp>
+//#include <boost/dynamic_bitset.hpp>
 #include <set>
 
 namespace diskann {
@@ -178,8 +178,9 @@ namespace diskann {
 
     std::cout << "Starting merge\n";
     //  std::set<unsigned>    nhood_set;
-    boost::dynamic_bitset<> nhood_set(nnodes);
-    std::vector<unsigned>   final_nhood;
+    //    boost::dynamic_bitset<> nhood_set(nnodes);
+    std::vector<bool>     nhood_set(nnodes, 0);
+    std::vector<unsigned> final_nhood;
 
     unsigned nnbrs = 0, shard_nnbrs = 0;
     unsigned cur_id = 0;
