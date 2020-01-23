@@ -53,11 +53,26 @@ typedef int8_t   _s8;
 
 namespace diskann {
 
+  enum Metric { L2 = 0, INNER_PRODUCT = 1, FAST_L2 = 2, PQ = 3 };
+
   DISKANN_DLLEXPORT float calc_recall_set(unsigned  num_queries,
-                                          unsigned *gold_std, unsigned dim_gs,
+                                          unsigned *gold_std, float *gs_dist,
+                                          unsigned  dim_gs,
                                           unsigned *our_results,
-                                          unsigned dim_or, unsigned recall_at,
-                                          unsigned subset_size);
+                                          unsigned dim_or, unsigned recall_at);
+
+  DISKANN_DLLEXPORT void read_idmap(const std::string &    fname,
+                                    std::vector<unsigned> &ivecs);
+
+  DISKANN_DLLEXPORT int merge_shards(
+      const std::string &nsg_prefix, const std::string &nsg_suffix,
+      const std::string &idmaps_prefix, const std::string &idmaps_suffix,
+      const _u64 nshards, const std::string &output_nsg, unsigned max_degree);
+
+  template<typename T>
+  DISKANN_DLLEXPORT int build_merged_vamana_index(
+      std::string base_file, diskann::Metric _compareMetric, size_t L, size_t R,
+      float sampling_rate, double ram_budget, std::string mem_index_path);
 
   inline void alloc_aligned(void **ptr, size_t size, size_t align) {
     *ptr = nullptr;

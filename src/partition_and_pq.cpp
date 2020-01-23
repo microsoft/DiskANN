@@ -237,29 +237,30 @@ int generate_pq_pivots(const float *passed_train_data, size_t num_train,
   std::vector<uint32_t> rearrangement;
   std::vector<uint32_t> chunk_offsets;
 
-  float *correlations = new float[dim * dim];
-  std::memset(correlations, 0, sizeof(float) * dim * dim);
+  /*    float *correlations = new float[dim * dim];
+    std::memset(correlations, 0, sizeof(float) * dim * dim);
 
-  auto corr_comp = [](const std::tuple<uint32_t, uint32_t, float> &e1,
-                      const std::tuple<uint32_t, uint32_t, float> &e2) {
-    return std::get<2>(e1) < std::get<2>(e2);
-  };
-  std::priority_queue<std::tuple<uint32_t, uint32_t, float>,
-                      std::vector<std::tuple<uint32_t, uint32_t, float>>,
-                      decltype(corr_comp)>
-      max_correlations(corr_comp);
+    auto corr_comp = [](const std::tuple<uint32_t, uint32_t, float> &e1,
+                        const std::tuple<uint32_t, uint32_t, float> &e2) {
+      return std::get<2>(e1) < std::get<2>(e2);
+    };
+    std::priority_queue<std::tuple<uint32_t, uint32_t, float>,
+                        std::vector<std::tuple<uint32_t, uint32_t, float>>,
+                        decltype(corr_comp)>
+        max_correlations(corr_comp);
 
-  for (uint32_t i = 0; i < dim; i++)
-    for (uint32_t j = 0; j < dim; j++) {
-      for (uint32_t k = 0; k < num_train; k++)
-        correlations[i * dim + j] += (1.0 / num_train) *
-                                     train_data[k * dim + i] *
-                                     train_data[k * dim + j];
-      max_correlations.push(
-          std::make_tuple(i, j, std::abs(correlations[i * dim + j])));
-    }
+    for (uint32_t i = 0; i < dim; i++)
+      for (uint32_t j = 0; j < dim; j++) {
+        for (uint32_t k = 0; k < num_train; k++)
+          correlations[i * dim + j] += (1.0 / num_train) *
+                                       train_data[k * dim + i] *
+                                       train_data[k * dim + j];
+        max_correlations.push(
+            std::make_tuple(i, j, std::abs(correlations[i * dim + j])));
+      }
 
-  delete[] correlations;
+    delete[] correlations;
+    */
 
   size_t low_val = std::floor((double) dim / (double) num_pq_chunks);
   size_t high_val = std::ceil((double) dim / (double) num_pq_chunks);
@@ -361,7 +362,7 @@ int generate_pq_pivots(const float *passed_train_data, size_t num_train,
       rearrangement.push_back(p);
       std::cout << p << ",";
     }
-    std::cout << "] with load " << bin_loads[b] << std::endl;
+    std::cout << "] " << std::endl;
     if (b > 0)
       chunk_offsets.push_back(chunk_offsets[b - 1] + bin_to_dims[b - 1].size());
   }
@@ -602,68 +603,73 @@ int generate_pq_data_from_pivots(const std::string data_file,
   return 0;
 }
 
-// partitions a large base file into many shards using k-means hueristic
-// on a random sample generated using sampling_rate probability. After this, it
-// assignes each base point to the closest k_base nearest centers and creates
-// the shards.
-// The total number of points across all shards will be k_base * num_points.
-
 template<typename T>
-int partition(const std::string data_file, const float sampling_rate,
-              size_t num_parts, size_t max_k_means_reps,
-              const std::string prefix_path, size_t k_base) {
-  size_t dim;
-  size_t train_dim;
-  size_t num_points;
-  size_t num_train;
-  float *train_data_float;
+int estimate_cluster_sizes(const std::string data_file, float *pivots,
+                           const size_t num_centers, const size_t dim,
+                           const size_t         k_base,
+                           std::vector<size_t> &cluster_sizes) {
+  cluster_sizes.clear();
 
-  gen_random_slice<T>(data_file, sampling_rate, train_data_float, num_train,
-                      train_dim);
+  size_t num_test, test_dim;
+  float *test_data_float;
+  double sampling_rate = 0.01;
 
-  float *pivot_data;
+  gen_random_slice<T>(data_file, sampling_rate, test_data_float, num_test,
+                      test_dim);
 
-  std::string cur_file = std::string(prefix_path);
-  std::string output_file;
-
-  // kmeans_partitioning on training data
-
-  cur_file = cur_file + "_kmeans_partitioning-" + std::to_string(num_parts);
-  output_file = cur_file + "_pivots_float.bin";
-
-  if (!file_exists(output_file)) {
-    pivot_data = new float[num_parts * train_dim];
-
-    // Process Global k-means for kmeans_partitioning Step
-    std::cout << "Processing global k-means (kmeans_partitioning Step)"
+  if (test_dim != dim) {
+    std::cout << "Error. dimensions dont match for pivot set and base set"
               << std::endl;
-    kmeans::kmeanspp_selecting_pivots(train_data_float, num_train, train_dim,
-                                      pivot_data, num_parts);
+    return -1;
+  }
 
-    kmeans::run_lloyds(train_data_float, num_train, train_dim, pivot_data,
-                       num_parts, max_k_means_reps, NULL, NULL);
+  size_t *shard_counts = new size_t[num_centers];
 
-    std::cout << "Saving global k-center pivots" << std::endl;
-    diskann::save_bin<float>(output_file.c_str(), pivot_data,
-                             (size_t) num_parts, train_dim);
-  } else {
-    size_t file_num_parts;
-    size_t file_dim;
-    diskann::load_bin<float>(output_file, pivot_data, file_num_parts, file_dim);
-    if (file_num_parts != num_parts || file_dim != train_dim) {
-      std::cout << "ERROR: file number of kmeans_partitioning centers does "
-                   "not match input argument (or) file "
-                   "dimension does not match real dimension"
-                << std::endl;
-      return -1;
+  for (size_t i = 0; i < num_centers; i++) {
+    shard_counts[i] = 0;
+  }
+
+  _u32 * block_closest_centers = new _u32[BLOCK_SIZE * k_base];
+  float *block_data_float;
+
+  size_t num_blocks = DIV_ROUND_UP(num_test, BLOCK_SIZE);
+
+  for (size_t block = 0; block < num_blocks; block++) {
+    size_t start_id = block * BLOCK_SIZE;
+    size_t end_id = (std::min)((block + 1) * BLOCK_SIZE, num_test);
+    size_t cur_blk_size = end_id - start_id;
+
+    block_data_float = test_data_float + start_id * test_dim;
+
+    math_utils::compute_closest_centers(block_data_float, cur_blk_size, dim,
+                                        pivots, num_centers, k_base,
+                                        block_closest_centers);
+
+    for (size_t p = 0; p < cur_blk_size; p++) {
+      for (size_t p1 = 0; p1 < k_base; p1++) {
+        size_t shard_id = block_closest_centers[p * k_base + p1];
+        shard_counts[shard_id]++;
+      }
     }
   }
 
-  delete[] train_data_float;
+  std::cout << "Estimated cluster sizes: ";
+  for (size_t i = 0; i < num_centers; i++) {
+    _u32 cur_shard_count = shard_counts[i];
+    cluster_sizes.push_back(
+        size_t(((double) cur_shard_count) * (1.0 / sampling_rate)));
+    std::cout << cur_shard_count * (1.0 / sampling_rate) << " ";
+  }
+  std::cout << std::endl;
+  delete[] shard_counts;
+  delete[] block_closest_centers;
+  return 0;
+}
 
-  // now pivots are ready. need to stream base points and assign them to
-  // closest clusters.
-
+template<typename T>
+int shard_data_into_clusters(const std::string data_file, float *pivots,
+                             const size_t num_centers, const size_t dim,
+                             const size_t k_base, std::string prefix_path) {
   _u64 read_blk_size = 64 * 1024 * 1024;
   //  _u64 write_blk_size = 64 * 1024 * 1024;
   // create cached reader + writer
@@ -672,25 +678,24 @@ int partition(const std::string data_file, const float sampling_rate,
   _u32            basedim32;
   base_reader.read((char *) &npts32, sizeof(uint32_t));
   base_reader.read((char *) &basedim32, sizeof(uint32_t));
-  num_points = npts32;
-  dim = basedim32;
-  if (basedim32 != train_dim) {
+  size_t num_points = npts32;
+  if (basedim32 != dim) {
     std::cout << "Error. dimensions dont match for train set and base set"
               << std::endl;
     return -1;
   }
 
-  size_t *                   shard_counts = new size_t[num_parts];
-  std::vector<std::ofstream> shard_data_writer(num_parts);
-  std::vector<std::ofstream> shard_idmap_writer(num_parts);
+  size_t *                   shard_counts = new size_t[num_centers];
+  std::vector<std::ofstream> shard_data_writer(num_centers);
+  std::vector<std::ofstream> shard_idmap_writer(num_centers);
   _u32                       dummy_size = 0;
   _u32                       const_one = 1;
 
-  for (size_t i = 0; i < num_parts; i++) {
+  for (size_t i = 0; i < num_centers; i++) {
     std::string data_filename =
-        cur_file + "_subshard-" + std::to_string(i) + ".bin";
+        prefix_path + "_subshard-" + std::to_string(i) + ".bin";
     std::string idmap_filename =
-        cur_file + "_subshard-" + std::to_string(i) + "_ids_uint32.bin";
+        prefix_path + "_subshard-" + std::to_string(i) + "_ids_uint32.bin";
     shard_data_writer[i] =
         std::ofstream(data_filename.c_str(), std::ios::binary);
     shard_idmap_writer[i] =
@@ -718,7 +723,7 @@ int partition(const std::string data_file, const float sampling_rate,
                                      cur_blk_size, dim);
 
     math_utils::compute_closest_centers(block_data_float, cur_blk_size, dim,
-                                        pivot_data, num_parts, k_base,
+                                        pivots, num_centers, k_base,
                                         block_closest_centers);
 
     for (size_t p = 0; p < cur_blk_size; p++) {
@@ -735,10 +740,11 @@ int partition(const std::string data_file, const float sampling_rate,
   }
 
   size_t total_count = 0;
-
-  for (size_t i = 0; i < num_parts; i++) {
-    _u32 cur_shard_count = (uint32_t) shard_counts[i];
+  std::cout << "Actual shard sizes: ";
+  for (size_t i = 0; i < num_centers; i++) {
+    _u32 cur_shard_count = shard_counts[i];
     total_count += cur_shard_count;
+    std::cout << cur_shard_count << " ";
     shard_data_writer[i].seekp(0);
     shard_data_writer[i].write((char *) &cur_shard_count, sizeof(uint32_t));
     shard_data_writer[i].close();
@@ -747,15 +753,147 @@ int partition(const std::string data_file, const float sampling_rate,
     shard_idmap_writer[i].close();
   }
 
-  std::cout << "Partitioned " << num_points << " with replication factor "
+  std::cout << "\n Partitioned " << num_points << " with replication factor "
             << k_base << " to get " << total_count << " points across "
-            << num_parts << " shards " << std::endl;
-  delete[] pivot_data;
-  delete[] shard_counts;
-  delete[] block_closest_centers;
+            << num_centers << " shards " << std::endl;
   delete[] block_data_T;
   delete[] block_data_float;
+  delete[] block_closest_centers;
+  delete[] shard_counts;
   return 0;
+}
+
+// partitions a large base file into many shards using k-means hueristic
+// on a random sample generated using sampling_rate probability. After this, it
+// assignes each base point to the closest k_base nearest centers and creates
+// the shards.
+// The total number of points across all shards will be k_base * num_points.
+
+template<typename T>
+int partition(const std::string data_file, const float sampling_rate,
+              size_t num_parts, size_t max_k_means_reps,
+              const std::string prefix_path, size_t k_base) {
+  size_t train_dim;
+  size_t num_train;
+  float *train_data_float;
+
+  gen_random_slice<T>(data_file, sampling_rate, train_data_float, num_train,
+                      train_dim);
+
+  float *pivot_data;
+
+  std::string cur_file = std::string(prefix_path);
+  std::string output_file;
+
+  // kmeans_partitioning on training data
+
+  //  cur_file = cur_file + "_kmeans_partitioning-" + std::to_string(num_parts);
+  output_file = cur_file + "_pivots_float.bin";
+
+  pivot_data = new float[num_parts * train_dim];
+
+  // Process Global k-means for kmeans_partitioning Step
+  std::cout << "Processing global k-means (kmeans_partitioning Step)"
+            << std::endl;
+  kmeans::kmeanspp_selecting_pivots(train_data_float, num_train, train_dim,
+                                    pivot_data, num_parts);
+
+  kmeans::run_lloyds(train_data_float, num_train, train_dim, pivot_data,
+                     num_parts, max_k_means_reps, NULL, NULL);
+
+  std::cout << "Saving global k-center pivots" << std::endl;
+  diskann::save_bin<float>(output_file.c_str(), pivot_data, (size_t) num_parts,
+                           train_dim);
+
+  // now pivots are ready. need to stream base points and assign them to
+  // closest clusters.
+
+  std::vector<size_t> cluster_sizes;
+  estimate_cluster_sizes<T>(data_file, pivot_data, num_parts, train_dim, k_base,
+                            cluster_sizes);
+
+  shard_data_into_clusters<T>(data_file, pivot_data, num_parts, train_dim,
+                              k_base, prefix_path);
+  delete[] pivot_data;
+  delete[] train_data_float;
+  return 0;
+}
+
+template<typename T>
+int partition_with_ram_budget(const std::string data_file,
+                              const float sampling_rate, double ram_budget,
+                              size_t            graph_degree,
+                              const std::string prefix_path, size_t k_base) {
+  size_t train_dim;
+  size_t num_train;
+  float *train_data_float;
+  size_t max_k_means_reps = 20;
+
+  size_t num_parts = 3;
+  bool   fit_in_ram = false;
+
+  gen_random_slice<T>(data_file, sampling_rate, train_data_float, num_train,
+                      train_dim);
+
+  float *pivot_data = nullptr;
+
+  std::string cur_file = std::string(prefix_path);
+  std::string output_file;
+
+  // kmeans_partitioning on training data
+
+  //  cur_file = cur_file + "_kmeans_partitioning-" + std::to_string(num_parts);
+  output_file = cur_file + "_pivots_float.bin";
+
+  while (!fit_in_ram) {
+    fit_in_ram = true;
+
+    double max_ram_usage = 0;
+    if (pivot_data != nullptr)
+      delete[] pivot_data;
+
+    pivot_data = new float[num_parts * train_dim];
+    // Process Global k-means for kmeans_partitioning Step
+    std::cout << "Processing global k-means (kmeans_partitioning Step)"
+              << std::endl;
+    kmeans::kmeanspp_selecting_pivots(train_data_float, num_train, train_dim,
+                                      pivot_data, num_parts);
+
+    kmeans::run_lloyds(train_data_float, num_train, train_dim, pivot_data,
+                       num_parts, max_k_means_reps, NULL, NULL);
+
+    // now pivots are ready. need to stream base points and assign them to
+    // closest clusters.
+
+    std::vector<size_t> cluster_sizes;
+    estimate_cluster_sizes<T>(data_file, pivot_data, num_parts, train_dim,
+                              k_base, cluster_sizes);
+
+    for (auto &p : cluster_sizes) {
+      double cur_shard_ram_estimate =
+          ESTIMATE_RAM_USAGE(p, train_dim, sizeof(T), graph_degree);
+
+      if (cur_shard_ram_estimate > max_ram_usage)
+        max_ram_usage = cur_shard_ram_estimate;
+    }
+    std::cout << "With " << num_parts << " parts, max estimated RAM usage: "
+              << max_ram_usage / (1024 * 1024 * 1024) << "GB, budget given is "
+              << ram_budget << std::endl;
+    if (max_ram_usage > 1024 * 1024 * 1024 * ram_budget) {
+      fit_in_ram = false;
+      num_parts++;
+    }
+  }
+
+  std::cout << "Saving global k-center pivots" << std::endl;
+  diskann::save_bin<float>(output_file.c_str(), pivot_data, (size_t) num_parts,
+                           train_dim);
+
+  shard_data_into_clusters<T>(data_file, pivot_data, num_parts, train_dim,
+                              k_base, prefix_path);
+  delete[] pivot_data;
+  delete[] train_data_float;
+  return num_parts;
 }
 
 // Instantations of supported templates
@@ -790,6 +928,34 @@ template void DISKANN_DLLEXPORT gen_random_slice<int8_t>(
     const std::string data_file, float p_val, float *&sampled_data,
     size_t &slice_size, size_t &ndims);
 
+/*
+template DISKANN_DLLEXPORT
+int estimate_cluster_sizes<int8_t>(const std::string data_file, float* pivots,
+const size_t num_centers, const size_t dim, const size_t k_base,
+std::vector<size_t> &cluster_sizes);
+template DISKANN_DLLEXPORT
+int estimate_cluster_sizes<uint8_t>(const std::string data_file, float* pivots,
+const size_t num_centers, const size_t dim, const size_t k_base,
+std::vector<size_t> &cluster_sizes);
+template DISKANN_DLLEXPORT
+int estimate_cluster_sizes<float>(const std::string data_file, float* pivots,
+const size_t num_centers, const size_t dim, const size_t k_base,
+std::vector<size_t> &cluster_sizes);
+
+template DISKANN_DLLEXPORT
+int shard_data_into_clusters<int8_t>(const std::string data_file, float* pivots,
+const size_t num_centers, const size_t dim, const size_t k_base, std::string
+prefix_path);
+template DISKANN_DLLEXPORT
+int shard_data_into_clusters<uint8_t>(const std::string data_file, float*
+pivots, const size_t num_centers, const size_t dim, const size_t k_base,
+std::string prefix_path);
+template DISKANN_DLLEXPORT
+int shard_data_into_clusters<float>(const std::string data_file, float* pivots,
+const size_t num_centers, const size_t dim, const size_t k_base, std::string
+prefix_path);
+*/
+
 template DISKANN_DLLEXPORT int partition<int8_t>(
     const std::string data_file, const float sampling_rate, size_t num_centers,
     size_t max_k_means_reps, const std::string prefix_path, size_t k_base);
@@ -799,6 +965,16 @@ template DISKANN_DLLEXPORT int partition<uint8_t>(
 template DISKANN_DLLEXPORT int partition<float>(
     const std::string data_file, const float sampling_rate, size_t num_centers,
     size_t max_k_means_reps, const std::string prefix_path, size_t k_base);
+
+template DISKANN_DLLEXPORT int partition_with_ram_budget<int8_t>(
+    const std::string data_file, const float sampling_rate, double ram_budget,
+    size_t graph_degree, const std::string prefix_path, size_t k_base);
+template DISKANN_DLLEXPORT int partition_with_ram_budget<uint8_t>(
+    const std::string data_file, const float sampling_rate, double ram_budget,
+    size_t graph_degree, const std::string prefix_path, size_t k_base);
+template DISKANN_DLLEXPORT int partition_with_ram_budget<float>(
+    const std::string data_file, const float sampling_rate, double ram_budget,
+    size_t graph_degree, const std::string prefix_path, size_t k_base);
 
 template DISKANN_DLLEXPORT int generate_pq_data_from_pivots<int8_t>(
     const std::string data_file, size_t num_centers, size_t num_pq_chunks,

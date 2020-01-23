@@ -41,6 +41,7 @@ int search_disk_index(int argc, char** argv) {
   // load query bin
   T*                query = nullptr;
   unsigned*         gt_ids = nullptr;
+  float*            gt_dists = nullptr;
   size_t            query_num, query_dim, query_aligned_dim, gt_num, gt_dim;
   std::vector<_u64> Lvec;
 
@@ -53,14 +54,15 @@ int search_disk_index(int argc, char** argv) {
   std::string warmup_query_file(argv[8]);
   std::string query_bin(argv[9]);
   std::string gt_ids_bin(argv[10]);
-  _u64        recall_at = std::atoi(argv[11]);
-  _u32        num_threads = std::atoi(argv[12]);
-  _u32        beam_width = std::atoi(argv[13]);
-  std::string result_output_prefix(argv[14]);
+  std::string gt_dists_bin(argv[11]);
+  _u64        recall_at = std::atoi(argv[12]);
+  _u32        num_threads = std::atoi(argv[13]);
+  _u32        beam_width = std::atoi(argv[14]);
+  std::string result_output_prefix(argv[15]);
 
   bool calc_recall_flag = false;
 
-  for (int ctr = 15; ctr < argc; ctr++) {
+  for (int ctr = 16; ctr < argc; ctr++) {
     _u64 curL = std::atoi(argv[ctr]);
     if (curL >= recall_at)
       Lvec.push_back(curL);
@@ -84,6 +86,17 @@ int search_disk_index(int argc, char** argv) {
     if (gt_num != query_num) {
       std::cout << "Error. Mismatch in number of queries and ground truth data"
                 << std::endl;
+    }
+    if (file_exists(gt_dists_bin)) {
+      size_t gt_dist_num, gt_dist_dim;
+      diskann::load_bin<float>(gt_dists_bin, gt_dists, gt_dist_num,
+                               gt_dist_dim);
+      if (gt_dist_num != gt_num || gt_dist_dim != gt_dim) {
+        std::cout << "Mismatch between dimensions of groundtruth id file and "
+                     "distance file. Exitting."
+                  << std::endl;
+        exit(-1);
+      }
     }
     calc_recall_flag = true;
   }
@@ -202,20 +215,20 @@ int search_disk_index(int argc, char** argv) {
                                                query_result_ids[test_id].data(),
                                                query_num, recall_at);
 
-		float mean_latency = diskann::get_mean_stats(
-										stats, query_num, 
-										[](const diskann::QueryStats& stats) { return stats.total_us; });
+    float mean_latency = diskann::get_mean_stats(
+        stats, query_num,
+        [](const diskann::QueryStats& stats) { return stats.total_us; });
 
-    std::cout << "L_search: " << L << ", QPS: " << qps << ", Mean Latency: " << mean_latency << std::flush;
+    std::cout << "L_search: " << L << ", QPS: " << qps
+              << ", Mean Latency: " << mean_latency << std::flush;
 
     if (calc_recall_flag) {
-      float recall = diskann::calc_recall_set(query_num, gt_ids, gt_dim,
-                                              query_result_ids[test_id].data(),
-                                              recall_at, recall_at, recall_at);
-      std::cout <<", " << recall_string << ": " << recall << std::endl;
-    }
-		else
-						std::cout<<std::endl;
+      float recall = diskann::calc_recall_set(
+          query_num, gt_ids, gt_dists, gt_dim, query_result_ids[test_id].data(),
+          recall_at, recall_at);
+      std::cout << ", " << recall_string << ": " << recall << std::endl;
+    } else
+      std::cout << std::endl;
 
     std::vector<float> percentiles;
     percentiles.push_back(50);
@@ -224,7 +237,6 @@ int search_disk_index(int argc, char** argv) {
     percentiles.push_back(99);
     percentiles.push_back(99.9);
     std::vector<float> results(percentiles.size());
-
 
     for (uint32_t s = 0; s < percentiles.size(); s++) {
       results[s] = diskann::get_percentile_stats(
@@ -242,8 +254,9 @@ int search_disk_index(int argc, char** argv) {
     category = "IO Latency Stats";
     print_stats(category, percentiles, results);
 
-    std::cout<<"==================Machine Independent Statistics===================" << std::endl;
-
+    std::cout
+        << "==================Machine Independent Statistics==================="
+        << std::endl;
 
     for (uint32_t s = 0; s < percentiles.size(); s++) {
       results[s] = diskann::get_percentile_stats(
@@ -285,15 +298,21 @@ int search_disk_index(int argc, char** argv) {
   for (auto L : Lvec) {
     std::string cur_result_path =
         result_output_prefix + "_" + std::to_string(L) + "_idx_uint32.bin";
-    diskann::save_bin<_u32>(cur_result_path, query_result_ids[test_id++].data(),
+    diskann::save_bin<_u32>(cur_result_path, query_result_ids[test_id].data(),
                             query_num, recall_at);
+
+    cur_result_path =
+        result_output_prefix + "_" + std::to_string(L) + "_dists_float.bin";
+    diskann::save_bin<float>(cur_result_path,
+                             query_result_dists[test_id++].data(), query_num,
+                             recall_at);
   }
   diskann::aligned_free(query);
   return 0;
 }
 
 int main(int argc, char** argv) {
-  if (argc <= 15) {
+  if (argc <= 16) {
     std::cout << "Usage: " << argv[0]
               << " <index_type[float/int8/uint8]>  <pq_centroids_bin> "
                  "<compressed_data_bin> <disk_index_path> "
@@ -302,6 +321,7 @@ int main(int argc, char** argv) {
                  "null) <cache_list_bin (use "
                  "\"null\" for none)> <warmup file> (use \"null\" for none) "
                  "<query_bin> <groundtruth_bin> (use \"null\" for none) "
+                 "<groundtruth_dist_bin> (use \" null \" for none) "
                  "<recall@> <num_threads> <beam_width> <result_output_prefix> "
                  "<L1> <L2> ... "
               << std::endl;

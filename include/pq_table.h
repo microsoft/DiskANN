@@ -76,7 +76,7 @@ namespace diskann {
         for (uint32_t d = 0; d <= num_chunks; d++)
           chunk_offsets[d] = (std::min)(ndims, d * chunk_size);
         centroid = new float[ndims];
-        std::memset(centroid, 0, ndims*sizeof(float));
+        std::memset(centroid, 0, ndims * sizeof(float));
       }
 
       std::cout << "PQ Pivots: #ctrs: " << npts_u64 << ", #dims: " << ndims_u64

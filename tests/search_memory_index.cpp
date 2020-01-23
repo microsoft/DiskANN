@@ -18,6 +18,7 @@ template<typename T>
 int search_memory_index(int argc, char** argv) {
   T*                query = nullptr;
   unsigned*         gt_ids = nullptr;
+  float*            gt_dists = nullptr;
   size_t            query_num, query_dim, query_aligned_dim, gt_num, gt_dim;
   std::vector<_u64> Lvec;
 
@@ -81,8 +82,8 @@ int search_memory_index(int argc, char** argv) {
     size_t total_cmps = 0, total_hops = 0;
     query_result_ids[test_id].resize(recall_at * query_num);
 
-    auto s = std::chrono::high_resolution_clock::now();
-    //#pragma omp parallel for schedule(dynamic, 1)
+    auto    s = std::chrono::high_resolution_clock::now();
+#pragma omp parallel for schedule(dynamic, 1)
     for (int64_t i = 0; i < (int64_t) query_num; i++) {
       std::pair<uint32_t, uint32_t> q_stats = index.beam_search(
           query + i * query_aligned_dim, recall_at, L, beam_width, start_points,
@@ -96,9 +97,9 @@ int search_memory_index(int argc, char** argv) {
 
     float recall = 0;
     if (calc_recall_flag)
-      recall = diskann::calc_recall_set(query_num, gt_ids, gt_dim,
+      recall = diskann::calc_recall_set(query_num, gt_ids, gt_dists, gt_dim,
                                         query_result_ids[test_id].data(),
-                                        recall_at, recall_at, recall_at);
+                                        recall_at, recall_at);
 
     std::chrono::duration<double> diff = e - s;
     float latency = (diff.count() / query_num) * (1000000);
