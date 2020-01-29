@@ -62,13 +62,13 @@ namespace diskann {
     float    alpha = (float) atof(param_list[3].c_str());
     unsigned num_threads = (unsigned) atoi(param_list[4].c_str());
 
-    size_t data_dim;
-    size_t num_pts;
+    _u64 data_dim;
+    _u64 num_pts;
     diskann::get_bin_metadata(dataFilePath, num_pts, data_dim);
     auto s = std::chrono::high_resolution_clock::now();
 
-    this->m_dimension = data_dim;
-    this->aligned_dimension = ROUND_UP(data_dim, 8);
+    this->m_dimension = (_u32)data_dim;
+    this->aligned_dimension = (_u32) ROUND_UP(data_dim, 8);
 
     diskann::Parameters paras;
     paras.Set<unsigned>("L", L);
@@ -114,7 +114,7 @@ namespace diskann {
     const std::string index_prefix_path(indexFilePath);
 
     // convert strs into params
-    this->Lsearch = (_u64) std::atoi(param_list[0].c_str());
+    this->Lsearch = (unsigned) std::atoi(param_list[0].c_str());
     _u64        nthreads = (_u64) std::atoi(param_list[1].c_str());
     std::string data_bin = param_list[2];
 
@@ -149,8 +149,8 @@ namespace diskann {
                                        unsigned __int64* ids) const {
     const T*              query = (const T*) vector;
     std::vector<unsigned> start_points(0);
-    //#pragma omp  parallel for schedule(dynamic, 1)
-    for (_s64 i = 0; i < queryCount; i++) {
+
+    for (auto i = 0; i < queryCount; i++) {
       _pIndex->beam_search(query + i * this->aligned_dimension, neighborCount,
                            this->Lsearch, 1, start_points,
                            ids + (i * neighborCount),

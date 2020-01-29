@@ -74,7 +74,7 @@ namespace diskann {
           rearrangement[d] = d;
         chunk_offsets = new uint32_t[num_chunks + 1];
         for (uint32_t d = 0; d <= num_chunks; d++)
-          chunk_offsets[d] = (std::min)(ndims, d * chunk_size);
+          chunk_offsets[d] = (_u32)(std::min)(ndims, d * chunk_size);
         centroid = new float[ndims];
         std::memset(centroid, 0, ndims * sizeof(float));
       }

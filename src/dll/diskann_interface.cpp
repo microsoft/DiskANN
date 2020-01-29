@@ -69,8 +69,8 @@ namespace diskann {
     unsigned L = (unsigned) atoi(param_list[0].c_str());
     unsigned R = (unsigned) atoi(param_list[1].c_str());
     //    unsigned C = (unsigned) atoi(param_list[2].c_str());
-    size_t   num_pq_chunks = (size_t) atoi(param_list[3].c_str());
-    float    training_set_sampling_rate = atof(param_list[4].c_str());
+    unsigned num_pq_chunks =  (unsigned) atoi(param_list[3].c_str());
+    double    training_set_sampling_rate = atof(param_list[4].c_str());
     double   ram_budget = (double) atof(param_list[5].c_str());
     unsigned num_threads = (unsigned) atoi(param_list[6].c_str());
     auto     s = std::chrono::high_resolution_clock::now();
@@ -100,7 +100,7 @@ namespace diskann {
 
     std::cout << "Training loaded of size " << train_size << std::endl;
 
-    generate_pq_pivots(train_data, train_size, train_dim, 256, num_pq_chunks,
+    generate_pq_pivots(train_data, train_size, (_u32)train_dim, 256, num_pq_chunks,
                        20, pq_pivots_path);
     generate_pq_data_from_pivots<T>(dataFilePath, 256, num_pq_chunks,
                                     pq_pivots_path, pq_compressed_vectors_path);
@@ -163,7 +163,7 @@ namespace diskann {
     this->Lsearch = (_u64) std::atoi(param_list[0].c_str());
     this->beam_width = (_u64) std::atoi(param_list[1].c_str());
     uint64_t num_cache_nodes = (_u64) std::atoi(param_list[2].c_str());
-    _u64     nthreads = (_u64) std::atoi(param_list[3].c_str());
+    auto     nthreads = (_u32) std::atoi(param_list[3].c_str());
 
     _pFlashIndex.reset(new PQFlashIndex<T>());
     _pFlashIndex->load(nthreads, pq_tables_bin.c_str(), data_bin.c_str(),

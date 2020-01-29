@@ -27,12 +27,12 @@ namespace math_utils {
 
   void gen_unit_gaussian_matrix(float* data, size_t dim) {
     std::random_device               rd;
-    size_t                           x = rd();
+    auto                           x = rd();
     std::default_random_engine       generator(x);
     std::normal_distribution<double> distribution(0, 1.0);
     for (size_t i = 0; i < dim; i++) {
       for (size_t j = 0; j < dim; j++)
-        data[i * dim + j] = distribution(generator);
+        data[i * dim + j] = (float)distribution(generator);
       float norm = cblas_snrm2((MKL_INT) dim, (data + (i * dim)), 1);
       //		std::cout<<norm<<std::endl;
       //		norm = std::sqrt(norm);
@@ -112,17 +112,23 @@ namespace math_utils {
       ones_b[i] = 1.0;
     }
 
-    cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasTrans, (MKL_INT) num_points,
-                (MKL_INT) num_centers, 1.0, 1.0, docs_l2sq, 1.0, ones_a, 1.0,
-                0.0, dist_matrix, (MKL_INT) num_centers);
+    /*const  CBLAS_LAYOUT Layout, const  CBLAS_TRANSPOSE TransA,
+                 const  CBLAS_TRANSPOSE TransB, const MKL_INT M, const MKL_INT N,
+                 const MKL_INT K, const float alpha, const float *A,
+                 const MKL_INT lda, const float *B, const MKL_INT ldb,
+                 const float beta, float *C, const MKL_INT ldc);*/
 
     cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasTrans, (MKL_INT) num_points,
-                (MKL_INT) num_centers, 1.0, 1.0, ones_b, 1.0, centers_l2sq, 1.0,
-                1.0, dist_matrix, (MKL_INT) num_centers);
+                (MKL_INT) num_centers, (MKL_INT)1, 1.0f, docs_l2sq, (MKL_INT)1, ones_a, (MKL_INT)1,
+                0.0f, dist_matrix, (MKL_INT) num_centers);
 
     cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasTrans, (MKL_INT) num_points,
-                (MKL_INT) num_centers, (MKL_INT) dim, -2.0, data, (MKL_INT) dim,
-                centers, (MKL_INT) dim, 1.0, dist_matrix,
+                (MKL_INT) num_centers, (MKL_INT)1, 1.0f, ones_b, (MKL_INT)1, centers_l2sq, (MKL_INT)1,
+                1.0f, dist_matrix, (MKL_INT) num_centers);
+
+    cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasTrans, (MKL_INT) num_points,
+                (MKL_INT) num_centers, (MKL_INT) dim, -2.0f, data, (MKL_INT) dim,
+                centers, (MKL_INT) dim, 1.0f, dist_matrix,
                 (MKL_INT) num_centers);
 
     if (k == 1) {
@@ -132,7 +138,7 @@ namespace math_utils {
         float* current = dist_matrix + (i * num_centers);
         for (size_t j = 0; j < num_centers; j++) {
           if (current[j] < min) {
-            center_index[i] = j;
+            center_index[i] = (uint32_t)j;
             min = current[j];
           }
         }
@@ -148,7 +154,7 @@ namespace math_utils {
         }
         for (size_t j = 0; j < k; j++) {
           PivotContainer this_piv = top_k_queue.top();
-          center_index[i * k + j] = this_piv.piv_id;
+          center_index[i * k + j] = (uint32_t) this_piv.piv_id;
           top_k_queue.pop();
         }
       }
@@ -219,7 +225,7 @@ namespace math_utils {
         for (size_t l = 0; l < k; l++) {
           size_t this_center_id =
               closest_centers[(j - cur_blk * PAR_BLOCK_SIZE) * k + l];
-          closest_centers_ivf[j * k + l] = this_center_id;
+          closest_centers_ivf[j * k + l] = (uint32_t)this_center_id;
           if (inverted_index != NULL) {
 #pragma omp critical
             inverted_index[this_center_id].push_back(j);
@@ -399,10 +405,10 @@ namespace kmeans {
     std::cout << "Selecting " << num_centers << " pivots from " << num_points
               << " points using ";
     std::random_device rd;
-    size_t             x = rd();
+    auto             x = rd();
     std::cout << "random seed " << x << std::endl;
     std::mt19937                       generator(x);
-    std::uniform_int_distribution<int> distribution(0, num_points - 1);
+    std::uniform_int_distribution<size_t> distribution(0, num_points - 1);
 
     size_t tmp_pivot;
     for (size_t j = 0; j < num_centers; j++) {
@@ -431,11 +437,11 @@ namespace kmeans {
     std::cout << "Selecting " << num_centers << " pivots from " << num_points
               << " points using ";
     std::random_device rd;
-    size_t             x = rd();
+    auto             x = rd();
     std::cout << "random seed " << x << ": " << std::flush;
     std::mt19937                     generator(x);
     std::uniform_real_distribution<> distribution(0, 1);
-    std::uniform_int_distribution<>  int_dist(0, num_points - 1);
+    std::uniform_int_distribution<size_t>  int_dist(0, num_points - 1);
     size_t                           init_id = int_dist(generator);
     size_t                           num_picked = 1;
 

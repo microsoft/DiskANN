@@ -16,10 +16,10 @@
 #include <set>
 
 namespace diskann {
-  float calc_recall_set(unsigned num_queries, unsigned *gold_std,
-                        float *gs_dist, unsigned dim_gs, unsigned *our_results,
-                        unsigned dim_or, unsigned recall_at) {
-    unsigned           total_recall = 0;
+  double calc_recall_set(unsigned num_queries, unsigned *gold_std,
+                         float *gs_dist, unsigned dim_gs, unsigned *our_results,
+                         unsigned dim_or, unsigned recall_at) {
+    double             total_recall = 0;
     std::set<unsigned> gt, res;
 
     for (size_t i = 0; i < num_queries; i++) {
@@ -46,8 +46,7 @@ namespace diskann {
       }
       total_recall += cur_recall;
     }
-    return ((float) total_recall) / ((float) num_queries) *
-           (100.0 / ((float) recall_at));
+    return total_recall / (num_queries) * (100.0 / recall_at);
   }
 
   /***************************************************
@@ -108,7 +107,7 @@ namespace diskann {
       std::cout << "Creating inverse map -- shard #" << shard << "\n";
       for (_u64 idx = 0; idx < idmaps[shard].size(); idx++) {
         _u64 node_id = idmaps[shard][idx];
-        node_shard.push_back(std::make_pair(node_id, shard));
+        node_shard.push_back(std::make_pair((_u32)node_id, (_u32)shard));
       }
     }
     std::sort(node_shard.begin(), node_shard.end(),
@@ -156,7 +155,7 @@ namespace diskann {
     nsg_writer.write((char *) &output_width, sizeof(unsigned));
     std::string   medoid_file = output_nsg + "_medoids.bin";
     std::ofstream medoid_writer(medoid_file.c_str(), std::ios::binary);
-    _u32          nshards_u32 = nshards;
+    _u32          nshards_u32 = (_u32) nshards;
     _u32          one_val = 1;
     medoid_writer.write((char *) &nshards_u32, sizeof(uint32_t));
     medoid_writer.write((char *) &one_val, sizeof(uint32_t));
@@ -188,7 +187,8 @@ namespace diskann {
       unsigned shard_id = id_shard.second;
       if (cur_id < node_id) {
         std::random_shuffle(final_nhood.begin(), final_nhood.end());
-        nnbrs = (std::min)(final_nhood.size(), (uint64_t) max_degree);
+        nnbrs =
+            (unsigned) (std::min)(final_nhood.size(), (uint64_t) max_degree);
         // write into merged ofstream
         nsg_writer.write((char *) &nnbrs, sizeof(unsigned));
         nsg_writer.write((char *) final_nhood.data(), nnbrs * sizeof(unsigned));
@@ -218,7 +218,7 @@ namespace diskann {
     }
 
     std::random_shuffle(final_nhood.begin(), final_nhood.end());
-    nnbrs = (std::min)(final_nhood.size(), (uint64_t) max_degree);
+    nnbrs = (unsigned) (std::min)(final_nhood.size(), (uint64_t) max_degree);
     // write into merged ofstream
     nsg_writer.write((char *) &nnbrs, sizeof(unsigned));
     nsg_writer.write((char *) final_nhood.data(), nnbrs * sizeof(unsigned));
@@ -238,8 +238,8 @@ namespace diskann {
 
   template<typename T>
   int build_merged_vamana_index(std::string     base_file,
-                                diskann::Metric _compareMetric, size_t L,
-                                size_t R, float sampling_rate,
+                                diskann::Metric _compareMetric, unsigned L,
+                                unsigned R, double sampling_rate,
                                 double ram_budget, std::string mem_index_path) {
     size_t base_num, base_dim;
     diskann::get_bin_metadata(base_file, base_num, base_dim);
@@ -249,8 +249,8 @@ namespace diskann {
     if (full_index_ram < ram_budget * 1024 * 1024 * 1024) {
       std::cout << "Full index fits in RAM, building in one shot" << std::endl;
       diskann::Parameters paras;
-      paras.Set<unsigned>("L", (unsigned)L);
-      paras.Set<unsigned>("R", (unsigned)R);
+      paras.Set<unsigned>("L", (unsigned) L);
+      paras.Set<unsigned>("R", (unsigned) R);
       paras.Set<unsigned>("C", 2500);
       paras.Set<float>("alpha", 4.0);
       paras.Set<unsigned>("num_rnds", 2);
@@ -275,8 +275,8 @@ namespace diskann {
           merged_index_prefix + "_subshard-" + std::to_string(p) + "_mem.index";
 
       diskann::Parameters paras;
-      paras.Set<unsigned>("L", (unsigned)L);
-      paras.Set<unsigned>("R", (unsigned) (2 * (R / 3)));
+      paras.Set<unsigned>("L", L);
+      paras.Set<unsigned>("R", (2 * (R / 3)));
       paras.Set<unsigned>("C", 2500);
       paras.Set<float>("alpha", 4.0);
       paras.Set<unsigned>("num_rnds", 2);
@@ -309,12 +309,15 @@ namespace diskann {
   }
 
   template DISKANN_DLLEXPORT int build_merged_vamana_index<int8_t>(
-      std::string base_file, diskann::Metric _compareMetric, size_t L, size_t R,
-      float sampling_rate, double ram_budget, std::string mem_index_path);
+      std::string base_file, diskann::Metric _compareMetric, unsigned L,
+      unsigned R, double sampling_rate, double ram_budget,
+      std::string mem_index_path);
   template DISKANN_DLLEXPORT int build_merged_vamana_index<float>(
-      std::string base_file, diskann::Metric _compareMetric, size_t L, size_t R,
-      float sampling_rate, double ram_budget, std::string mem_index_path);
+      std::string base_file, diskann::Metric _compareMetric, unsigned L,
+      unsigned R, double sampling_rate, double ram_budget,
+      std::string mem_index_path);
   template DISKANN_DLLEXPORT int build_merged_vamana_index<uint8_t>(
-      std::string base_file, diskann::Metric _compareMetric, size_t L, size_t R,
-      float sampling_rate, double ram_budget, std::string mem_index_path);
+      std::string base_file, diskann::Metric _compareMetric, unsigned L,
+      unsigned R, double sampling_rate, double ram_budget,
+      std::string mem_index_path);
 };  // namespace diskann

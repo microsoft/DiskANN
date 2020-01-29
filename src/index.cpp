@@ -369,6 +369,7 @@ namespace diskann {
     //    boost::dynamic_bitset<> inserted_into_pool(_max_points +
     //    _num_frozen_pts);
     tsl::robin_set<unsigned> inserted_into_pool;
+    inserted_into_pool.reserve(Lsize * 20);
     for (auto id : init_ids) {
       assert(id < _max_points);
       nn = Neighbor(id,
@@ -669,6 +670,9 @@ namespace diskann {
         copy_of_neighbors.push_back(n);
         tsl::robin_set<unsigned> dummy_visited(0);
         std::vector<Neighbor>    dummy_pool(0);
+        dummy_visited.reserve(1.05 * SLACK_FACTOR * range);
+        dummy_pool.reserve(1.05 * SLACK_FACTOR * range);
+
         for (auto cur_nbr : copy_of_neighbors) {
           if (dummy_visited.find(cur_nbr) == dummy_visited.end() &&
               cur_nbr != des) {
@@ -706,7 +710,7 @@ namespace diskann {
     if (NUM_THREADS != 0)
       omp_set_num_threads(NUM_THREADS);
 
-    uint32_t NUM_SYNCS = DIV_ROUND_UP(_nd + _num_frozen_pts, (128 * 128));
+    uint32_t NUM_SYNCS = DIV_ROUND_UP(_nd + _num_frozen_pts, (128 * 64));
     if (NUM_SYNCS < 40)
       NUM_SYNCS = 40;
     std::cout << "Number of syncs: " << NUM_SYNCS << std::endl;
@@ -717,7 +721,7 @@ namespace diskann {
     unsigned       L = argL;
 
     std::vector<unsigned> Lvec;
-    Lvec.push_back(2 * L / 3);
+    Lvec.push_back(L);
     Lvec.push_back(L);
     const unsigned NUM_RNDS = Lvec.size();
 
@@ -728,6 +732,7 @@ namespace diskann {
 
     /* visit_order is a vector that is initialized to the entire graph */
     std::vector<unsigned> visit_order;
+    visit_order.reserve(_nd + _num_frozen_pts);
     for (size_t i = 0; i < _nd; i++) {
       visit_order.emplace_back(i);
     }
@@ -782,8 +787,7 @@ namespace diskann {
       size_t round_size = DIV_ROUND_UP(_nd, NUM_SYNCS);  // size of each batch
       std::vector<unsigned> need_to_sync(_max_points + _num_frozen_pts, 0);
 
-      std::vector<tsl::robin_set<unsigned>> sync_visited_vector(round_size);
-      std::vector<std::vector<unsigned>>    pruned_list_vector(round_size);
+      std::vector<std::vector<unsigned>> pruned_list_vector(round_size);
 
       for (uint32_t sync_num = 0; sync_num < NUM_SYNCS; sync_num++) {
         size_t start_id = sync_num * round_size;
@@ -796,9 +800,9 @@ namespace diskann {
 #pragma omp parallel for schedule(dynamic, 64)
         for (_s64 node_ctr = (_s64) start_id; node_ctr < (_s64) end_id;
              ++node_ctr) {
-          _u64                      node = visit_order[node_ctr];
-          size_t                    node_offset = node_ctr - start_id;
-          tsl::robin_set<unsigned> &visited = sync_visited_vector[node_offset];
+          _u64                     node = visit_order[node_ctr];
+          size_t                   node_offset = node_ctr - start_id;
+          tsl::robin_set<unsigned> visited;
           std::vector<unsigned> &pruned_list = pruned_list_vector[node_offset];
           // get nearest neighbors of n in tmp. pool contains all the points
           // that were checked along with their distance from n. visited
@@ -806,6 +810,7 @@ namespace diskann {
           // the points visited, just the ids
           std::vector<Neighbor> pool;
           pool.reserve(L * 2);
+          visited.reserve(L * 2);
           get_expanded_nodes(node, L, init_ids, pool, visited);
           /* check the neighbors of the query that are not part of visited,
            * check their distance to the query, and add it to pool.
@@ -822,8 +827,6 @@ namespace diskann {
               }
             }
           prune_neighbors(node, pool, parameters, pruned_list);
-          pool.clear();
-          pool.shrink_to_fit();
         }
         diff = std::chrono::high_resolution_clock::now() - s;
         sync_time += diff.count();
@@ -847,13 +850,10 @@ namespace diskann {
           _u64                   node = visit_order[node_ctr];
           _u64                   node_offset = node_ctr - start_id;
           std::vector<unsigned> &pruned_list = pruned_list_vector[node_offset];
-          tsl::robin_set<unsigned> &visited = sync_visited_vector[node_offset];
           batch_inter_insert(node, pruned_list, parameters, need_to_sync);
           //          inter_insert(node, pruned_list, parameters, 0);
           pruned_list.clear();
-          visited.clear();
           pruned_list.shrink_to_fit();
-          tsl::robin_set<unsigned>().swap(visited);
         }
 
 #pragma omp parallel for schedule(dynamic, 64)
@@ -953,8 +953,8 @@ namespace diskann {
         exit(-1);
       }
       for (size_t i = 0; i < tags.size(); ++i) {
-        _tag_to_location[tags[i]] = i;
-        _location_to_tag[i] = tags[i];
+        _tag_to_location[tags[i]] = (unsigned)i;
+        _location_to_tag[(unsigned)i] = tags[i];
       }
     }
     std::cout << "Starting index build..." << std::endl;
@@ -1009,7 +1009,7 @@ namespace diskann {
 
   template<typename T, typename TagT>
   std::pair<uint32_t, uint32_t> Index<T, TagT>::beam_search(
-      const T *query, const uint64_t K, const uint64_t L, unsigned beam_width,
+      const T *query, const uint64_t K, const unsigned L, unsigned beam_width,
       std::vector<unsigned> init_ids, uint64_t *indices, float *distances) {
     tsl::robin_set<unsigned> visited(10 * L);
     std::vector<Neighbor>    best_L_nodes, expanded_nodes_info;
@@ -1035,7 +1035,7 @@ namespace diskann {
 
   template<typename T, typename TagT>
   std::pair<uint32_t, uint32_t> Index<T, TagT>::beam_search_tags(
-      const T *query, const size_t K, const size_t L, TagT *tags,
+      const T *query, const size_t K, const unsigned L, TagT *tags,
       unsigned beam_width, std::vector<unsigned> start_points,
       unsigned frozen_pts, unsigned *indices_buffer) {
     const bool alloc = indices_buffer == NULL;
@@ -1069,7 +1069,7 @@ namespace diskann {
         for (unsigned d = 0; d < _dim; d++)
           _data[(i + _max_points) * _aligned_dim + d] =
               frozen_pts[i * _dim + d];
-        for (unsigned d = _dim; d < _aligned_dim; d++)
+        for (_u64 d = _dim; d < _aligned_dim; d++)
           _data[(i + _max_points) * _aligned_dim + d] = 0;
       }
     } else {  // random frozen points
@@ -1079,10 +1079,10 @@ namespace diskann {
       std::uniform_real_distribution<float> dist(0, 1);
       // Harsha: Should the distribution change with the distance metric?
 
-      for (unsigned i = 0; i < _num_frozen_pts; ++i) {
-        for (unsigned d = 0; d < _dim; d++)
+      for (_u64 i = 0; i < _num_frozen_pts; ++i) {
+        for (_u64 d = 0; d < _dim; d++)
           _data[(i + _max_points) * _aligned_dim + d] = dist(generator);
-        for (unsigned d = _dim; d < _aligned_dim; d++)
+        for (_u64 d = _dim; d < _aligned_dim; d++)
           _data[(i + _max_points) * _aligned_dim + d] = 0;
       }
     }
@@ -1533,7 +1533,7 @@ namespace diskann {
       return -2;
     }
 
-    size_t location = reserve_location();
+    auto location = reserve_location();
     _tag_to_location[tag] = location;
     _location_to_tag[location] = tag;
 

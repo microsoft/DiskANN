@@ -41,7 +41,6 @@ namespace diskann {
     // graph
     DISKANN_DLLEXPORT int generate_random_frozen_points(
         const char *filename = NULL);
-    DISKANN_DLLEXPORT void init_random_graph(unsigned k);
 
     DISKANN_DLLEXPORT void build(
         Parameters &             parameters,
@@ -54,11 +53,11 @@ namespace diskann {
         std::vector<unsigned> start_points, unsigned *indices);
 
     DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> beam_search(
-        const T *query, const uint64_t K, const uint64_t L, unsigned beam_width,
+        const T *query, const uint64_t K, const unsigned L, unsigned beam_width,
         std::vector<unsigned> init_ids, uint64_t *indices, float *distances);
 
     DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> beam_search_tags(
-        const T *query, const size_t K, const size_t L, TagT *tags,
+        const T *query, const size_t K, const unsigned L, TagT *tags,
         unsigned beam_width, std::vector<unsigned> start_points,
         unsigned frozen_pts, unsigned *indices_buffer = NULL);
 

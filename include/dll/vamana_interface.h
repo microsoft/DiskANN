@@ -47,7 +47,7 @@ namespace diskann {
     diskann::Metric                    _compareMetric;
 
     // flash stuff
-    _u64 beam_width;
-    _u64 Lsearch;
+    _u32 beam_width;
+    _u32 Lsearch;
   };
 }  // namespace diskann

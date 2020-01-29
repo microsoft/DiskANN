@@ -73,8 +73,6 @@ namespace diskann {
 
     DISKANN_DLLEXPORT void load_cache_list(std::vector<uint32_t> &node_list);
 
-    DISKANN_DLLEXPORT void cache_bfs_levels(_u64 nlevels);
-
     DISKANN_DLLEXPORT void cache_bfs_levels(_u64 num_nodes_to_cache,
                                             std::vector<uint32_t> &node_list);
 
@@ -135,15 +133,15 @@ namespace diskann {
                   // closest centroid as the starting point of search
     bool using_default_medoid_data = true;
 
-    std::vector<std::pair<_u64, unsigned *>> medoid_nhoods;
+    std::vector<std::pair<_u32, unsigned *>> medoid_nhoods;
 
     // nhood_cache
     unsigned *nhood_cache_buf = nullptr;
-    tsl::robin_map<_u64, std::pair<_u64, unsigned *>> nhood_cache;
+    tsl::robin_map<_u32, std::pair<_u32, _u32*>> nhood_cache;
 
     // coord_cache
     T *coord_cache_buf = nullptr;
-    tsl::robin_map<_u64, T *> coord_cache;
+    tsl::robin_map<_u32, T *> coord_cache;
 
     // thread-specific scratch
     ConcurrentQueue<ThreadData<T>> thread_data;
