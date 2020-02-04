@@ -5,7 +5,7 @@
 
 namespace diskann {
 
-  template<typename T, typename TagT = int>
+  template<typename T, typename TagT>
   class Index;
 
   template<typename T>

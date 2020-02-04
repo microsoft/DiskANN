@@ -5,7 +5,7 @@
 
 namespace diskann {
 
-  template<typename T, typename TagT = int>
+  template<typename T, typename TagT>
   class Index;
 
   template<typename T>
@@ -43,7 +43,7 @@ namespace diskann {
 
    private:
     std::string                        _nsgPathPrefix;
-    std::unique_ptr<diskann::Index<T>> _pNsgIndex;
+    std::unique_ptr<diskann::Index<T, int>> _pNsgIndex;
     diskann::Metric                    _compareMetric;
 
     // flash stuff

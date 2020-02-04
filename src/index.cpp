@@ -324,9 +324,9 @@ namespace diskann {
       }
     }
     // find imin
-    size_t min_idx = 0;
+    unsigned min_idx = 0;
     float  min_dist = distances[0];
-    for (size_t i = 1; i < _nd; i++) {
+    for (unsigned i = 1; i < _nd; i++) {
       if (distances[i] < min_dist) {
         min_idx = i;
         min_dist = distances[i];
@@ -374,7 +374,7 @@ namespace diskann {
       assert(id < _max_points);
       nn = Neighbor(id,
                     _distance->compare(_data + _aligned_dim * (size_t) id,
-                                       node_coords, _aligned_dim),
+                                       node_coords, (unsigned) _aligned_dim),
                     true);
       if (inserted_into_pool.find(id) == inserted_into_pool.end()) {
         inserted_into_pool.insert(id);
@@ -505,7 +505,7 @@ namespace diskann {
                                     const unsigned location, const float alpha,
                                     const unsigned degree, const unsigned maxc,
                                     std::vector<Neighbor> &result) {
-    uint32_t           pool_size = pool.size();
+    auto pool_size = (_u32) pool.size();
     std::vector<float> occlude_factor(pool_size, 0);
     occlude_list(pool, location, alpha, degree, maxc, result, occlude_factor);
   }
@@ -670,8 +670,10 @@ namespace diskann {
         copy_of_neighbors.push_back(n);
         tsl::robin_set<unsigned> dummy_visited(0);
         std::vector<Neighbor>    dummy_pool(0);
-        dummy_visited.reserve(1.05 * SLACK_FACTOR * range);
-        dummy_pool.reserve(1.05 * SLACK_FACTOR * range);
+
+        size_t reserveSize = (size_t)(std::ceil(1.05 * SLACK_FACTOR * range));
+        dummy_visited.reserve(reserveSize);
+        dummy_pool.reserve(reserveSize);
 
         for (auto cur_nbr : copy_of_neighbors) {
           if (dummy_visited.find(cur_nbr) == dummy_visited.end() &&
@@ -710,7 +712,7 @@ namespace diskann {
     if (NUM_THREADS != 0)
       omp_set_num_threads(NUM_THREADS);
 
-    uint32_t NUM_SYNCS = DIV_ROUND_UP(_nd + _num_frozen_pts, (128 * 64));
+    uint32_t NUM_SYNCS = (unsigned) DIV_ROUND_UP(_nd + _num_frozen_pts, (128 * 64));
     if (NUM_SYNCS < 40)
       NUM_SYNCS = 40;
     std::cout << "Number of syncs: " << NUM_SYNCS << std::endl;
@@ -723,7 +725,7 @@ namespace diskann {
     std::vector<unsigned> Lvec;
     Lvec.push_back(L);
     Lvec.push_back(L);
-    const unsigned NUM_RNDS = Lvec.size();
+    const unsigned NUM_RNDS = 2;
 
     // Max degree of graph
     // Pruning parameter
@@ -733,16 +735,16 @@ namespace diskann {
     /* visit_order is a vector that is initialized to the entire graph */
     std::vector<unsigned> visit_order;
     visit_order.reserve(_nd + _num_frozen_pts);
-    for (size_t i = 0; i < _nd; i++) {
+    for (unsigned i = 0; i < (unsigned)_nd; i++) {
       visit_order.emplace_back(i);
     }
 
-    for (size_t i = 0; i < _num_frozen_pts; ++i)
-      visit_order.emplace_back(_max_points + i);
+    for (unsigned i = 0; i < (unsigned)_num_frozen_pts; ++i)
+      visit_order.emplace_back((unsigned)(_max_points + i));
 
     // if there are frozen points, the first such one is set to be the _ep
     if (_num_frozen_pts > 0)
-      _ep = _max_points;
+      _ep = (unsigned) _max_points;
     else
       _ep = calculate_entry_point();
 
@@ -754,7 +756,7 @@ namespace diskann {
     }
 
     for (uint64_t p = 0; p < _max_points + _num_frozen_pts; p++) {
-      _final_graph[p].reserve(range * SLACK_FACTOR * 1.05);
+      _final_graph[p].reserve( (size_t) (std::ceil(range * SLACK_FACTOR * 1.05)));
     }
 
     std::random_device               rd;
@@ -779,8 +781,8 @@ namespace diskann {
           parameters.Set<float>("alpha", last_round_alpha);
       }
 
-      float    sync_time = 0, total_sync_time = 0;
-      float    inter_time = 0, total_inter_time = 0;
+      double    sync_time = 0, total_sync_time = 0;
+      double    inter_time = 0, total_inter_time = 0;
       size_t   inter_count = 0, total_inter_count = 0;
       unsigned progress_counter = 0;
 
@@ -800,7 +802,7 @@ namespace diskann {
 #pragma omp parallel for schedule(dynamic, 64)
         for (_s64 node_ctr = (_s64) start_id; node_ctr < (_s64) end_id;
              ++node_ctr) {
-          _u64                     node = visit_order[node_ctr];
+          auto                     node = visit_order[node_ctr];
           size_t                   node_offset = node_ctr - start_id;
           tsl::robin_set<unsigned> visited;
           std::vector<unsigned> &pruned_list = pruned_list_vector[node_offset];
@@ -847,7 +849,7 @@ namespace diskann {
 
 #pragma omp parallel for schedule(dynamic, 64)
         for (_s64 node_ctr = start_id; node_ctr < (_s64) end_id; ++node_ctr) {
-          _u64                   node = visit_order[node_ctr];
+          auto                   node = visit_order[node_ctr];
           _u64                   node_offset = node_ctr - start_id;
           std::vector<unsigned> &pruned_list = pruned_list_vector[node_offset];
           batch_inter_insert(node, pruned_list, parameters, need_to_sync);
@@ -859,7 +861,7 @@ namespace diskann {
 #pragma omp parallel for schedule(dynamic, 64)
         for (_s64 node_ctr = 0; node_ctr < (_s64)(visit_order.size());
              node_ctr++) {
-          _u64 node = visit_order[node_ctr];
+          auto node = visit_order[node_ctr];
           if (need_to_sync[node] != 0) {
             need_to_sync[node] = 0;
             inter_count++;
@@ -913,7 +915,7 @@ namespace diskann {
     std::cout << "Starting final cleanup.." << std::flush;
 #pragma omp parallel for schedule(dynamic, 64)
     for (_s64 node_ctr = 0; node_ctr < (_s64)(visit_order.size()); node_ctr++) {
-      size_t node = visit_order[node_ctr];
+      auto node = visit_order[node_ctr];
       if (_final_graph[node].size() > range) {
         tsl::robin_set<unsigned> dummy_visited(0);
         std::vector<Neighbor>    dummy_pool(0);
@@ -1065,7 +1067,7 @@ namespace diskann {
       T *frozen_pts;
       load_aligned_bin<T>(std::string(filename), frozen_pts, _num_frozen_pts,
                           _dim, _aligned_dim);
-      for (unsigned i = 0; i < _num_frozen_pts; i++) {
+      for (_u64 i = 0; i < _num_frozen_pts; i++) {
         for (unsigned d = 0; d < _dim; d++)
           _data[(i + _max_points) * _aligned_dim + d] =
               frozen_pts[i * _dim + d];
@@ -1081,7 +1083,7 @@ namespace diskann {
 
       for (_u64 i = 0; i < _num_frozen_pts; ++i) {
         for (_u64 d = 0; d < _dim; d++)
-          _data[(i + _max_points) * _aligned_dim + d] = dist(generator);
+          _data[(i + _max_points) * _aligned_dim + d] = (T) dist(generator);
         for (_u64 d = _dim; d < _aligned_dim; d++)
           _data[(i + _max_points) * _aligned_dim + d] = 0;
       }
@@ -1107,7 +1109,7 @@ namespace diskann {
 
     if (_consolidated_order && _compacted_order) {
       assert(_empty_slots.size() == 0);
-      for (unsigned slot = _nd; slot < _max_points; ++slot)
+      for (unsigned slot = (unsigned) _nd; slot < _max_points; ++slot)
         _empty_slots.insert(slot);
       _consolidated_order = false;
       _compacted_order = false;
@@ -1289,7 +1291,7 @@ namespace diskann {
 
     std::vector<unsigned> new_location;
     new_location.resize(_max_points + _num_frozen_pts,
-                        _max_points + _num_frozen_pts);
+                        (unsigned)(_max_points + _num_frozen_pts));
     unsigned active = 0;
     for (unsigned old = 0; old < _max_points + _num_frozen_pts; ++old)
       if (_empty_slots.find(old) == _empty_slots.end() &&
@@ -1354,7 +1356,7 @@ namespace diskann {
   std::vector<unsigned> Index<T, TagT>::get_new_location(unsigned &active) {
     std::vector<unsigned> new_location;
     new_location.resize(_max_points + _num_frozen_pts,
-                        _max_points + _num_frozen_pts);
+                        (unsigned) (_max_points + _num_frozen_pts));
 
     for (unsigned old = 0; old < _max_points + _num_frozen_pts; ++old)
       if (_empty_slots.find(old) == _empty_slots.end() &&
@@ -1462,7 +1464,7 @@ namespace diskann {
 
     unsigned location;
     if (_consolidated_order || _compacted_order)
-      location = _nd;
+      location = (unsigned)_nd;
     else {
       assert(_empty_slots.size() != 0);
       assert(_empty_slots.size() + _nd == _max_points);
@@ -1486,7 +1488,7 @@ namespace diskann {
         for (unsigned i = 0; i < _nd; i++)
           for (unsigned j = 0; j < _final_graph[i].size(); j++)
             if (_final_graph[i][j] >= _nd)
-              _final_graph[i][j] = _max_points + (_final_graph[i][j] - _nd);
+              _final_graph[i][j] = (unsigned) (_max_points + (_final_graph[i][j] - _nd));
         for (unsigned i = 0; i < _num_frozen_pts; i++) {
           for (unsigned k = 0; k < _final_graph[_nd + i].size(); k++)
             _final_graph[_max_points + i].emplace_back(

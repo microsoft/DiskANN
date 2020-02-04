@@ -45,7 +45,7 @@ void gen_random_slice(const std::string base_file,
 
   std::random_device
                rd;  // Will be used to obtain a seed for the random number engine
-  auto       x = rd();
+  auto         x = rd();
   std::mt19937 generator(
       x);  // Standard mersenne_twister_engine seeded with rd()
   std::uniform_real_distribution<float> distribution(0, 1);
@@ -74,7 +74,7 @@ void gen_random_slice(const std::string base_file,
     float sample = distribution(generator);
     if (sample < sampling_rate) {
       sample_writer.write((char *) cur_row, sizeof(T) * nd);
-      uint32_t cur_i_u32 = (_u32)i;
+      uint32_t cur_i_u32 = (_u32) i;
       sample_id_writer.write((char *) &cur_i_u32, sizeof(uint32_t));
       num_sampled_pts_u32++;
     }
@@ -186,8 +186,9 @@ void gen_random_slice(const T *inputdata, size_t npts, size_t ndims,
 // k-means in each chunk to compute the PQ pivots and stores in bin format in
 // file pq_pivots_path as a s num_centers*dim floating point binary file
 int generate_pq_pivots(const float *passed_train_data, size_t num_train,
-                       unsigned dim, unsigned num_centers, unsigned num_pq_chunks,
-                       unsigned max_k_means_reps, std::string pq_pivots_path) {
+                       unsigned dim, unsigned num_centers,
+                       unsigned num_pq_chunks, unsigned max_k_means_reps,
+                       std::string pq_pivots_path) {
   if (num_pq_chunks > dim) {
     std::cout << " Error: number of chunks more than dimension" << std::endl;
     return -1;
@@ -262,8 +263,8 @@ int generate_pq_pivots(const float *passed_train_data, size_t num_train,
     delete[] correlations;
     */
 
-  size_t low_val = (size_t)std::floor((double) dim / (double) num_pq_chunks);
-  size_t high_val = (size_t)std::ceil((double) dim / (double) num_pq_chunks);
+  size_t low_val = (size_t) std::floor((double) dim / (double) num_pq_chunks);
+  size_t high_val = (size_t) std::ceil((double) dim / (double) num_pq_chunks);
   size_t max_num_high = dim - (low_val * num_pq_chunks);
   size_t cur_num_high = 0;
   size_t cur_bin_threshold = high_val;
@@ -334,8 +335,8 @@ int generate_pq_pivots(const float *passed_train_data, size_t num_train,
   for (uint32_t d = 0; d < dim; d++) {
     if (dim_to_bin.find(d) != dim_to_bin.end())
       continue;
-    auto cur_best = num_pq_chunks + 1;
-    float    cur_best_load = std::numeric_limits<float>::max();
+    auto  cur_best = num_pq_chunks + 1;
+    float cur_best_load = std::numeric_limits<float>::max();
     for (uint32_t b = 0; b < num_pq_chunks; b++) {
       if (bin_loads[b] < cur_best_load &&
           bin_to_dims[b].size() < cur_bin_threshold) {
@@ -364,7 +365,8 @@ int generate_pq_pivots(const float *passed_train_data, size_t num_train,
     }
     std::cout << "] " << std::endl;
     if (b > 0)
-      chunk_offsets.push_back(chunk_offsets[b - 1] + (unsigned) bin_to_dims[b - 1].size());
+      chunk_offsets.push_back(chunk_offsets[b - 1] +
+                              (unsigned) bin_to_dims[b - 1].size());
   }
   chunk_offsets.push_back(dim);
 
@@ -551,7 +553,7 @@ int generate_pq_data_from_pivots(const std::string data_file,
       uint32_t *closest_center = new uint32_t[cur_blk_size];
 
 #pragma omp parallel for schedule(static, 8192)
-          for (int64_t j = 0; j < (_s64) cur_blk_size; j++) {
+      for (int64_t j = 0; j < (_s64) cur_blk_size; j++) {
         for (uint64_t k = 0; k < cur_chunk_size; k++)
           cur_data[j * cur_chunk_size + k] =
               block_data_float[j * dim + chunk_offsets[i] + k];
@@ -655,7 +657,7 @@ int estimate_cluster_sizes(const std::string data_file, float *pivots,
 
   std::cout << "Estimated cluster sizes: ";
   for (size_t i = 0; i < num_centers; i++) {
-    _u32 cur_shard_count = (_u32)shard_counts[i];
+    _u32 cur_shard_count = (_u32) shard_counts[i];
     cluster_sizes.push_back(
         size_t(((double) cur_shard_count) * (1.0 / sampling_rate)));
     std::cout << cur_shard_count * (1.0 / sampling_rate) << " ";
@@ -742,7 +744,7 @@ int shard_data_into_clusters(const std::string data_file, float *pivots,
   size_t total_count = 0;
   std::cout << "Actual shard sizes: ";
   for (size_t i = 0; i < num_centers; i++) {
-    _u32 cur_shard_count = (_u32)shard_counts[i];
+    _u32 cur_shard_count = (_u32) shard_counts[i];
     total_count += cur_shard_count;
     std::cout << cur_shard_count << " ";
     shard_data_writer[i].seekp(0);
@@ -829,8 +831,8 @@ int partition_with_ram_budget(const std::string data_file,
   float *train_data_float;
   size_t max_k_means_reps = 20;
 
-  int num_parts = 3;
-  bool   fit_in_ram = false;
+  int  num_parts = 3;
+  bool fit_in_ram = false;
 
   gen_random_slice<T>(data_file, sampling_rate, train_data_float, num_train,
                       train_dim);
@@ -899,11 +901,11 @@ int partition_with_ram_budget(const std::string data_file,
 // Instantations of supported templates
 
 template void DISKANN_DLLEXPORT
-gen_random_slice<int8_t>(const std::string base_file,
+                                gen_random_slice<int8_t>(const std::string base_file,
                          const std::string output_prefix, double sampling_rate);
-template void DISKANN_DLLEXPORT
-gen_random_slice<uint8_t>(const std::string base_file,
-                          const std::string output_prefix, double sampling_rate);
+template void DISKANN_DLLEXPORT gen_random_slice<uint8_t>(
+    const std::string base_file, const std::string output_prefix,
+    double sampling_rate);
 template void DISKANN_DLLEXPORT
 gen_random_slice<float>(const std::string base_file,
                         const std::string output_prefix, double sampling_rate);
@@ -927,34 +929,6 @@ template void DISKANN_DLLEXPORT gen_random_slice<uint8_t>(
 template void DISKANN_DLLEXPORT gen_random_slice<int8_t>(
     const std::string data_file, double p_val, float *&sampled_data,
     size_t &slice_size, size_t &ndims);
-
-/*
-template DISKANN_DLLEXPORT
-int estimate_cluster_sizes<int8_t>(const std::string data_file, float* pivots,
-const size_t num_centers, const size_t dim, const size_t k_base,
-std::vector<size_t> &cluster_sizes);
-template DISKANN_DLLEXPORT
-int estimate_cluster_sizes<uint8_t>(const std::string data_file, float* pivots,
-const size_t num_centers, const size_t dim, const size_t k_base,
-std::vector<size_t> &cluster_sizes);
-template DISKANN_DLLEXPORT
-int estimate_cluster_sizes<float>(const std::string data_file, float* pivots,
-const size_t num_centers, const size_t dim, const size_t k_base,
-std::vector<size_t> &cluster_sizes);
-
-template DISKANN_DLLEXPORT
-int shard_data_into_clusters<int8_t>(const std::string data_file, float* pivots,
-const size_t num_centers, const size_t dim, const size_t k_base, std::string
-prefix_path);
-template DISKANN_DLLEXPORT
-int shard_data_into_clusters<uint8_t>(const std::string data_file, float*
-pivots, const size_t num_centers, const size_t dim, const size_t k_base,
-std::string prefix_path);
-template DISKANN_DLLEXPORT
-int shard_data_into_clusters<float>(const std::string data_file, float* pivots,
-const size_t num_centers, const size_t dim, const size_t k_base, std::string
-prefix_path);
-*/
 
 template DISKANN_DLLEXPORT int partition<int8_t>(
     const std::string data_file, const float sampling_rate, size_t num_centers,
@@ -985,27 +959,3 @@ template DISKANN_DLLEXPORT int generate_pq_data_from_pivots<uint8_t>(
 template DISKANN_DLLEXPORT int generate_pq_data_from_pivots<float>(
     const std::string data_file, unsigned num_centers, unsigned num_pq_chunks,
     std::string pq_pivots_path, std::string pq_compressed_vectors_path);
-
-template DISKANN_DLLEXPORT void gen_random_slice<int8_t>(
-    const std::string base_file, const std::string output_prefix,
-    double sampling_rate);
-
-template DISKANN_DLLEXPORT void gen_random_slice<uint8_t>(
-    const std::string base_file, const std::string output_prefix,
-    double sampling_rate);
-
-template DISKANN_DLLEXPORT void gen_random_slice<float>(
-    const std::string base_file, const std::string output_prefix,
-    double sampling_rate);
-
-// template<typename T>
-// int partition(const char *base_file, const char *train_file, size_t
-// num_centers,
-//              size_t max_k_means_reps, const char *prefix_dir, size_t k_base);
-
-// template<typename T>
-// int generate_pq_data_from_pivots(const T *base_data, size_t num_points,
-//                                 size_t dim, size_t num_centers,
-//                                 size_t      num_pq_chunks,
-//                                 std::string pq_pivots_path,
-//                                 std::string pq_compressed_vectors_path);
