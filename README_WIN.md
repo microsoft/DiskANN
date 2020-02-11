@@ -3,9 +3,10 @@
 The Windows version has been tested with the enterprise editions of Visual Studio 2017 and Visual Studio 2019
 
 **Prerequisites:**
-Install CMAKE (v3.15.2 or later) from https://cmake.org
 
-Install MKL:
+- Install CMAKE (v3.15.2 or later) from https://cmake.org
+
+- Install MKL:
 -	Install MKL from https://software.intel.com/en-us/mkl
 -	Set a new System environment variable, called INTEL_ROOT to the "windows" folder under your MKL installation
 	(For instance, if your install folder is "C:\Program Files (x86)\IntelSWtools", set INTEL_ROOT to "C:\Program Files (x86)\IntelSWtools\compilers_and_libraries\windows")
