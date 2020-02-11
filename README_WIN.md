@@ -2,7 +2,7 @@
 
 The Windows version has been tested with the enterprise editions of Visual Studio 2017 and Visual Studio 2019
 
-**Prerequisites:***
+**Prerequisites:**
 Install CMAKE (v3.15.2 or later) from https://cmake.org
 
 Install MKL:
