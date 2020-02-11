@@ -4,15 +4,14 @@ The Windows version has been tested with the enterprise editions of Visual Studi
 
 **Prerequisites:**
 
-- Install CMAKE (v3.15.2 or later) from https://cmake.org
+* Install CMAKE (v3.15.2 or later) from https://cmake.org
+* Install MKL from https://software.intel.com/en-us/mkl
+* Download boost (v1.71.0 or later) from boost.org 
 
-- Install MKL:
-        Install MKL from https://software.intel.com/en-us/mkl
-	    Set a new System environment variable, called INTEL_ROOT to the "windows" folder under your MKL installation
-	    (For instance, if your install folder is "C:\Program Files (x86)\IntelSWtools", set INTEL_ROOT to "C:\Program Files (x86)\IntelSWtools\compilers_and_libraries\windows")
-
-Download boost:
--   Download boost from boost.org and set BOOST_ROOT to the download folder.
+* Environment variables: 
+    * Set a new System environment variable, called INTEL_ROOT to the "windows" folder under your MKL installation
+	   (For instance, if your install folder is "C:\Program Files (x86)\IntelSWtools", set INTEL_ROOT to "C:\Program Files (x86)\IntelSWtools\compilers_and_libraries\windows")
+    * Set BOOST_ROOT to your boost download folder
 
 **Build steps:**
 -	Open a new developer command prompt
