@@ -27,22 +27,51 @@ else()
 endif()
 
 
-#MKL Config
-if (MSVC)
-	if (NOT EXISTS "$ENV{INTEL_ROOT}" )
-		message (FATAL_ERROR "Please install MKL libraries and set env var INTEL_ROOT to the intel software directory. Should be similar to: C:\\Program Files (x86)\\IntelSWTools\\compilers_and_libraries\\windows\\. ")
+function(checkEnvAndSetLocalVar env_var msg local_var)
+	if (NOT EXISTS "$ENV{${env_var}}" )
+		message (FATAL_ERROR ${msg})
 	else()
-		if ($ENV{INTEL_ROOT} MATCHES "\\$"  OR $ENV{INTEL_ROOT} MATCHES "/$" )
-			set(INTEL_ROOT $ENV{INTEL_ROOT})
+		if ($ENV{${env_var}} MATCHES "\\$"  OR $ENV{${env_var}} MATCHES "/$" )
+			set(${local_var} $ENV{${env_var}} PARENT_SCOPE)
 		else()
-			message(STATUS "Appending trailing backslash to Intel tools path")
-			set(INTEL_ROOT "$ENV{INTEL_ROOT}\\")
+			message(STATUS "Appending trailing backslash to ${env_var}")
+			set(${local_var} "$ENV{${env_var}}\\" PARENT_SCOPE)
 		endif()
 	endif()
+endfunction()
+
+	
+
+#MKL Config
+if (MSVC)
+#	if (NOT EXISTS "$ENV{INTEL_ROOT}" )
+#		message (FATAL_ERROR "Please install MKL libraries and set env var INTEL_ROOT to the intel software directory. Should be similar to: C:\\Program Files (x86)\\IntelSWTools\\compilers_and_libraries\\windows\\. ")
+#	else()
+#		if ($ENV{INTEL_ROOT} MATCHES "\\$"  OR $ENV{INTEL_ROOT} MATCHES "/$" )
+#			set(INTEL_ROOT $ENV{INTEL_ROOT})
+#		else()
+#			message(STATUS "Appending trailing backslash to Intel tools path")
+#			set(INTEL_ROOT "$ENV{INTEL_ROOT}\\")
+#		endif()
+#	endif()
+	checkEnvAndSetLocalVar("INTEL_ROOT" "Please install Intel MKL libraries and set the env variable INTEL_ROOT to the intel software directory. Should be similar to: C:\\Program Files (x86)\\IntelSWTools\\compilers_and_libraries\\windows\\. " "INTEL_ROOT")
 	set(MKL_ROOT ${INTEL_ROOT}/mkl)
 	add_compile_options(/arch:AVX2 /Qpar)
 	link_libraries("${INTEL_ROOT}/mkl/lib/intel64/mkl_core_dll.lib" "${INTEL_ROOT}/mkl/lib/intel64/mkl_rt.lib"  "${INTEL_ROOT}/mkl/lib/intel64/mkl_intel_thread_dll.lib" "${INTEL_ROOT}/compiler/lib/intel64/libiomp5md.lib"  "${INTEL_ROOT}/mkl/lib/intel64/mkl_intel_ilp64_dll.lib" "${INTEL_ROOT}/mkl/lib/intel64/mkl_sequential_dll.lib")
-	
+
+	checkEnvAndSetLocalVar("BOOST_ROOT"  "Please download boost sources from boost.org and set env var BOOST_ROOT to the download folder." "BOOST_ROOT")
+#	if (NOT EXISTS "$ENV{BOOST_ROOT}")
+#		message (FATAL_ERROR "Please download boost sources from boost.org and set env var BOOST_ROOT to the appropriate directory.")	
+#	else()
+#		if ($ENV{BOOST_ROOT} MATCHES "\\$"  OR $ENV{BOOST_ROOT} MATCHES "/$" )
+#			set(BOOST_ROOT $ENV{BOOST_ROOT})
+#		else()
+#			message(STATUS "Appending trailing backslash to Boost sources path")
+#			set(BOOST_ROOT "$ENV{BOOST_ROOT}\\")
+#		endif()
+#	endif()
+
+
 else()
 	set(INTEL_ROOT /opt/intel/compilers_and_libraries/linux)
 	set(MKL_ROOT ${INTEL_ROOT}/mkl)
@@ -62,7 +91,7 @@ if(MSVC)
 	#code generation options
 	add_compile_options(/Qpar /fp:fast /Zp8 /fp:except- /EHsc /GS- /Gm- /Gy )
 	#optimization options
-	add_compile_options(/Ot /Oy /Oi /GL)
+	add_compile_options(/Ot /Oy /Oi)
 	#path options
 	#add_compile_options(/Fdx64/Release/vc141.pdb /Fox64/Release/)
 	add_definitions(-DUSE_AVX2 -DUSE_BING_INFRA -DUSE_ACCELERATED_PQ -D_WINDOWS -DNOMINMAX -DUNICODE)

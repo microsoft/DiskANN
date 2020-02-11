@@ -1,6 +1,6 @@
 if (MSVC)
 	add_library(diskpriority_io STATIC DiskPriorityIO.cpp)
-	target_include_directories(diskpriority_io PRIVATE "F:/boost/boost_1_71_0")
+	target_include_directories(diskpriority_io PRIVATE "${BOOST_ROOT}")
 endif()
 add_library(nsg_dll SHARED dllmain.cpp vamana_interface.cpp
     diskann_interface.cpp ../partition_and_pq.cpp ../pq_flash_index.cpp
@@ -8,7 +8,7 @@ add_library(nsg_dll SHARED dllmain.cpp vamana_interface.cpp
 if (MSVC)
 	add_definitions(-D_USRDLL -D_WINDLL)
 	add_compile_options(/MD)
-	target_include_directories(nsg_dll PRIVATE "F:/boost/boost_1_71_0")
+	target_include_directories(nsg_dll PRIVATE "${BOOST_ROOT}")
 	target_link_options(nsg_dll PRIVATE /DLL /MACHINE:X64 /DEBUG:FULL "/INCLUDE:_tcmalloc")
 	target_link_options(nsg_dll PRIVATE $<$<CONFIG:Debug>:/IMPLIB:${CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG}/nsg_dll.lib>
 										$<$<CONFIG:Release>:/IMPLIB:${CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE}/nsg_dll.lib>
