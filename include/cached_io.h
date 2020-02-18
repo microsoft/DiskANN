@@ -2,6 +2,9 @@
 #include <cstring>
 #include <fstream>
 #include <iostream>
+#include <sstream>
+
+#include "ann_exception.h"
 
 // sequential cached reads
 class cached_ifstream {
@@ -46,11 +49,14 @@ class cached_ifstream {
       // case 2: cache contains some data
       uint64_t cached_bytes = cache_size - cur_off;
       if (n_bytes - cached_bytes > fsize - reader.tellg()) {
-        std::cout << "Reading beyond end of file" << std::endl;
-        std::cout << "n_bytes: " << n_bytes << " cached_bytes: " << cached_bytes
-                  << " fsize: " << fsize << " current pos:" << reader.tellg()
-                  << std::endl;
-        exit(-1);
+        std::stringstream stream;
+        stream << "Reading beyond end of file" << std::endl;
+        stream << "n_bytes: " << n_bytes << " cached_bytes: " << cached_bytes
+               << " fsize: " << fsize << " current pos:" << reader.tellg()
+               << std::endl;
+        std::cout << stream.str() << std::endl;
+        throw diskann::ANNException(
+            stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
       }
       memcpy(read_buf, cache_buf + cur_off, cached_bytes);
 

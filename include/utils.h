@@ -25,6 +25,7 @@ typedef int FileHandle;
 #include "cached_io.h"
 #include "common_includes.h"
 #include "windows_customizations.h"
+#include "aligned_dtor.h"
 
 // taken from
 // https://github.com/Microsoft/BLAS-on-flash/blob/master/include/utils.h
@@ -56,10 +57,10 @@ namespace diskann {
   enum Metric { L2 = 0, INNER_PRODUCT = 1, FAST_L2 = 2, PQ = 3 };
 
   DISKANN_DLLEXPORT double calc_recall_set(unsigned  num_queries,
-                                          unsigned *gold_std, float *gs_dist,
-                                          unsigned  dim_gs,
-                                          unsigned *our_results,
-                                          unsigned dim_or, unsigned recall_at);
+                                           unsigned *gold_std, float *gs_dist,
+                                           unsigned  dim_gs,
+                                           unsigned *our_results,
+                                           unsigned dim_or, unsigned recall_at);
 
   DISKANN_DLLEXPORT void read_idmap(const std::string &    fname,
                                     std::vector<unsigned> &ivecs);
@@ -71,8 +72,9 @@ namespace diskann {
 
   template<typename T>
   DISKANN_DLLEXPORT int build_merged_vamana_index(
-      std::string base_file, diskann::Metric _compareMetric, unsigned L, unsigned R,
-      double sampling_rate, double ram_budget, std::string mem_index_path);
+      std::string base_file, diskann::Metric _compareMetric, unsigned L,
+      unsigned R, double sampling_rate, double ram_budget,
+      std::string mem_index_path);
 
   inline void alloc_aligned(void **ptr, size_t size, size_t align) {
     *ptr = nullptr;
@@ -147,16 +149,27 @@ namespace diskann {
     size_t expected_actual_file_size =
         npts * dim * sizeof(T) + 2 * sizeof(uint32_t);
     if (actual_file_size != expected_actual_file_size) {
-      std::cout << "Error. File size mismatch. Actual size is "
-                << actual_file_size << " while expected size is  "
-                << expected_actual_file_size << " npts = " << npts
-                << " dim = " << dim << " size of <T>= " << sizeof(T) << std::endl;
-      exit(-1);
+      std::stringstream stream;
+      stream << "Error. File size mismatch. Actual size is " << actual_file_size
+             << " while expected size is  " << expected_actual_file_size
+             << " npts = " << npts << " dim = " << dim
+             << " size of <T>= " << sizeof(T) << std::endl;
+      std::cout << stream.str();
+      throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
+                                  __LINE__);
     }
 
     data = new T[npts * dim];
     reader.read((char *) data, npts * dim * sizeof(T));
     std::cout << "Finished reading bin file." << std::endl;
+  }
+
+  template<typename T>
+  inline void load_bin(const std::string &bin_file, std::unique_ptr<T[]> &data,
+                       size_t &npts, size_t &dim) {
+    T *ptr;
+    load_bin<T>(bin_file, ptr, npts, dim);
+    data.reset(ptr);
   }
 
   template<typename T>
@@ -194,12 +207,14 @@ namespace diskann {
     size_t expected_actual_file_size =
         npts * dim * sizeof(T) + 2 * sizeof(uint32_t);
     if (actual_file_size != expected_actual_file_size) {
-      std::cout << "Error. File size mismatch. Actual size is "
-                << actual_file_size << " while expected size is  "
-                << expected_actual_file_size << " npts = " << npts
-                << " dim = " << dim << " size of <T>= " << sizeof(T)
-                << std::endl;
-      exit(-1);
+      std::stringstream stream;
+      stream << "Error. File size mismatch. Actual size is " << actual_file_size
+             << " while expected size is  " << expected_actual_file_size
+             << " npts = " << npts << " dim = " << dim
+             << " size of <T>= " << sizeof(T) << std::endl;
+      std::cout << stream.str() << std::endl;
+      throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
+                                  __LINE__);
     }
 
     rounded_dim = ROUND_UP(dim, 8);
@@ -219,6 +234,16 @@ namespace diskann {
     std::cout << " done." << std::endl;
   }
 
+  // template<typename T>
+  // inline void load_aligned_bin(const std::string     bin_file,
+  //                             std::unique_ptr<T[], aligned_dtor<T>> &data,
+  //                             size_t &npts, size_t &dim, size_t &rounded_dim)
+  //                             {
+  //  T *ptr;
+  //  load_aligned_bin(bin_file, ptr, npts, dim, rounded_im);
+  //  data.reset(ptr);
+  //}
+
   template<typename InType, typename OutType>
   void convert_types(const InType *srcmat, OutType *destmat, size_t npts,
                      size_t dim) {
@@ -231,125 +256,125 @@ namespace diskann {
   }
 
   /********* templated load functions *********/
-  template<typename T>
-  void load_Tvecs(const char *filename, T *&data, size_t &num, size_t &dim) {
-    // check validity of file
-    std::ifstream in(filename, std::ios::binary | std::ios::ate);
-    if (!in.is_open()) {
-      std::cout << "Error opening file: " << filename << std::endl;
-      exit(-1);
-    }
-    _u64 fsize = in.tellg();
-    in.seekg(0, std::ios::beg);
-    _u32 dim_u32;
-    in.read((char *) &dim_u32, sizeof(unsigned));
-    in.close();
-    dim = dim_u32;
-
-    _u64 ndims = (_u64) dim;
-    _u64 disk_vec_size = ndims * sizeof(T) + sizeof(unsigned);
-    _u64 mem_vec_size = ndims * sizeof(T);
-    _u64 npts = fsize / disk_vec_size;
-    num = npts;
-    std::cout << "Tvecs: " << filename << ", npts: " << npts
-              << ", ndims: " << ndims << "\n";
-    // allocate memory
-    data = new T[npts * ndims];
-
-    cached_ifstream reader(std::string(filename), 256 * 1024 * 1024);
-    unsigned        dummy_ndims;
-    for (_u64 i = 0; i < npts; i++) {
-      T *cur_vec = data + (i * ndims);
-      // read and ignore dummy ndims
-      reader.read((char *) &dummy_ndims, sizeof(unsigned));
-
-      // read vec
-      reader.read((char *) cur_vec, mem_vec_size);
-    }
-    return;
-  }
-
-  // each row in returned matrix is aligned to 32-byte boundary
-  template<typename T>
-  inline void aligned_load_Tvecs(char *filename, T *&data, unsigned &num,
-                                 unsigned &dim) {
-    // check validity of file
-    std::ifstream in(filename, std::ios::binary);
-    if (!in.is_open()) {
-      std::cout << "Error opening file: " << filename << std::endl;
-      exit(-1);
-    }
-
-    in.read((char *) &dim, sizeof(unsigned));
-    in.seekg(0, std::ios::end);
-    std::ios::pos_type ss = in.tellg();
-    in.close();
-
-    // calculate vector size
-    size_t fsize = (size_t) ss;
-    size_t per_row = sizeof(unsigned) + dim * sizeof(T);
-    num = fsize / per_row;
-    std::cout << "# points = " << num << ", original dimension = " << dim
-              << std::endl;
-
-    // create aligned buf
-    unsigned aligned_dim = ROUND_UP(dim, 8);
-    std::cout << "Aligned dimesion = " << aligned_dim << std::endl;
-
-    // data = new T[(size_t) num * (size_t) dim];
-    alloc_aligned((void **) &data,
-                  (size_t) num * (size_t) aligned_dim * sizeof(T), 32);
-
-    memset((void *) data, 0, (size_t) num * (size_t) aligned_dim * sizeof(T));
-
-    // open classical fd
-    FileHandle fd;
-#ifndef _WINDOWS
-    fd = open(filename, O_RDONLY);
-    assert(fd != -1);
-#else
-    fd = CreateFileA(filename, GENERIC_READ, 0, nullptr, OPEN_EXISTING,
-                     FILE_FLAG_RANDOM_ACCESS, nullptr);
-#endif
-
-    // parallel read each vector at the desired offset
-    // #pragma omp parallel for schedule(static, 32768)
-    for (size_t i = 0; i < num; i++) {
-      // computed using actual dimension
-      uint64_t file_offset = (per_row * i) + sizeof(unsigned);
-      // computed using aligned dimension
-      T *buf = data + i * aligned_dim;
-
-#ifndef _WINDOWS
-      int ret = -1;
-      ret = pread(fd, (char *) buf, dim * sizeof(T), file_offset);
-#else
-      DWORD      ret = -1;
-      OVERLAPPED overlapped;
-      memset(&overlapped, 0, sizeof(overlapped));
-      overlapped.OffsetHigh =
-          (uint32_t)((file_offset & 0xFFFFFFFF00000000LL) >> 32);
-      overlapped.Offset = (uint32_t)(file_offset & 0xFFFFFFFFLL);
-      if (!ReadFile(fd, (LPVOID) buf, dim * sizeof(T), &ret, &overlapped)) {
-        std::cout << "Read file returned error: " << GetLastError()
-                  << std::endl;
-      }
-#endif
-
-      // std::cout << "ret = " << ret << "\n";
-      if (ret != dim * sizeof(T)) {
-        std::cout << "read=" << ret << ", expected=" << dim * sizeof(T);
-        assert(ret == dim * sizeof(T));
-      }
-    }
-    std::cout << "Finished reading Tvecs" << std::endl;
-
-#ifndef _WINDOWS
-    close(fd);
-#else
-    CloseHandle(fd);
-#endif
-  }
+//  template<typename T>
+//  void load_Tvecs(const char *filename, T *&data, size_t &num, size_t &dim) {
+//    // check validity of file
+//    std::ifstream in(filename, std::ios::binary | std::ios::ate);
+//    if (!in.is_open()) {
+//      std::cout << "Error opening file: " << filename << std::endl;
+//      exit(-1);
+//    }
+//    _u64 fsize = in.tellg();
+//    in.seekg(0, std::ios::beg);
+//    _u32 dim_u32;
+//    in.read((char *) &dim_u32, sizeof(unsigned));
+//    in.close();
+//    dim = dim_u32;
+//
+//    _u64 ndims = (_u64) dim;
+//    _u64 disk_vec_size = ndims * sizeof(T) + sizeof(unsigned);
+//    _u64 mem_vec_size = ndims * sizeof(T);
+//    _u64 npts = fsize / disk_vec_size;
+//    num = npts;
+//    std::cout << "Tvecs: " << filename << ", npts: " << npts
+//              << ", ndims: " << ndims << "\n";
+//    // allocate memory
+//    data = new T[npts * ndims];
+//
+//    cached_ifstream reader(std::string(filename), 256 * 1024 * 1024);
+//    unsigned        dummy_ndims;
+//    for (_u64 i = 0; i < npts; i++) {
+//      T *cur_vec = data + (i * ndims);
+//      // read and ignore dummy ndims
+//      reader.read((char *) &dummy_ndims, sizeof(unsigned));
+//
+//      // read vec
+//      reader.read((char *) cur_vec, mem_vec_size);
+//    }
+//    return;
+//  }
+//
+//  // each row in returned matrix is aligned to 32-byte boundary
+//  template<typename T>
+//  inline void aligned_load_Tvecs(char *filename, T *&data, unsigned &num,
+//                                 unsigned &dim) {
+//    // check validity of file
+//    std::ifstream in(filename, std::ios::binary);
+//    if (!in.is_open()) {
+//      std::cout << "Error opening file: " << filename << std::endl;
+//      exit(-1);
+//    }
+//
+//    in.read((char *) &dim, sizeof(unsigned));
+//    in.seekg(0, std::ios::end);
+//    std::ios::pos_type ss = in.tellg();
+//    in.close();
+//
+//    // calculate vector size
+//    size_t fsize = (size_t) ss;
+//    size_t per_row = sizeof(unsigned) + dim * sizeof(T);
+//    num = fsize / per_row;
+//    std::cout << "# points = " << num << ", original dimension = " << dim
+//              << std::endl;
+//
+//    // create aligned buf
+//    unsigned aligned_dim = ROUND_UP(dim, 8);
+//    std::cout << "Aligned dimesion = " << aligned_dim << std::endl;
+//
+//    // data = new T[(size_t) num * (size_t) dim];
+//    alloc_aligned((void **) &data,
+//                  (size_t) num * (size_t) aligned_dim * sizeof(T), 32);
+//
+//    memset((void *) data, 0, (size_t) num * (size_t) aligned_dim * sizeof(T));
+//
+//    // open classical fd
+//    FileHandle fd;
+//#ifndef _WINDOWS
+//    fd = open(filename, O_RDONLY);
+//    assert(fd != -1);
+//#else
+//    fd = CreateFileA(filename, GENERIC_READ, 0, nullptr, OPEN_EXISTING,
+//                     FILE_FLAG_RANDOM_ACCESS, nullptr);
+//#endif
+//
+//    // parallel read each vector at the desired offset
+//    // #pragma omp parallel for schedule(static, 32768)
+//    for (size_t i = 0; i < num; i++) {
+//      // computed using actual dimension
+//      uint64_t file_offset = (per_row * i) + sizeof(unsigned);
+//      // computed using aligned dimension
+//      T *buf = data + i * aligned_dim;
+//
+//#ifndef _WINDOWS
+//      int ret = -1;
+//      ret = pread(fd, (char *) buf, dim * sizeof(T), file_offset);
+//#else
+//      DWORD      ret = -1;
+//      OVERLAPPED overlapped;
+//      memset(&overlapped, 0, sizeof(overlapped));
+//      overlapped.OffsetHigh =
+//          (uint32_t)((file_offset & 0xFFFFFFFF00000000LL) >> 32);
+//      overlapped.Offset = (uint32_t)(file_offset & 0xFFFFFFFFLL);
+//      if (!ReadFile(fd, (LPVOID) buf, dim * sizeof(T), &ret, &overlapped)) {
+//        std::cout << "Read file returned error: " << GetLastError()
+//                  << std::endl;
+//      }
+//#endif
+//
+//      // std::cout << "ret = " << ret << "\n";
+//      if (ret != dim * sizeof(T)) {
+//        std::cout << "read=" << ret << ", expected=" << dim * sizeof(T);
+//        assert(ret == dim * sizeof(T));
+//      }
+//    }
+//    std::cout << "Finished reading Tvecs" << std::endl;
+//
+//#ifndef _WINDOWS
+//    close(fd);
+//#else
+//    CloseHandle(fd);
+//#endif
+//  }
 
   // plain saves data as npts X ndims array into filename
   template<typename T>
@@ -442,8 +467,8 @@ inline bool validate_file_size(const std::string &name) {
               << ", actual file size : " << actual_file_size << ". Exitting."
               << std::endl;
     in.close();
-    exit(-1);
+    return false;
   }
   in.close();
-  return 1;
+  return true;
 }

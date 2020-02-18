@@ -69,8 +69,8 @@ namespace diskann {
     unsigned L = (unsigned) atoi(param_list[0].c_str());
     unsigned R = (unsigned) atoi(param_list[1].c_str());
     //    unsigned C = (unsigned) atoi(param_list[2].c_str());
-    unsigned num_pq_chunks =  (unsigned) atoi(param_list[3].c_str());
-    double    training_set_sampling_rate = atof(param_list[4].c_str());
+    unsigned num_pq_chunks = (unsigned) atoi(param_list[3].c_str());
+    double   training_set_sampling_rate = atof(param_list[4].c_str());
     double   ram_budget = (double) atof(param_list[5].c_str());
     unsigned num_threads = (unsigned) atoi(param_list[6].c_str());
     auto     s = std::chrono::high_resolution_clock::now();
@@ -83,47 +83,54 @@ namespace diskann {
       mkl_set_num_threads(num_threads);
     }
 
+    float* train_data = nullptr;
+    try {
+      size_t train_size, train_dim;
 
-    float* train_data;
-    size_t train_size, train_dim;
+      // generates random sample and sets it to train_data and updates
+      // train_size
+      gen_random_slice<T>(dataFilePath, training_set_sampling_rate, train_data,
+                          train_size, train_dim);
 
-    // generates random sample and sets it to train_data and updates train_size
-    gen_random_slice<T>(dataFilePath, training_set_sampling_rate, train_data,
-                        train_size, train_dim);
+      double estimated_base_size =
+          ((double) train_size) / training_set_sampling_rate;
+      double warmup_sampling_rate = (100000.0 / estimated_base_size);
 
-    double estimated_base_size =
-        ((double) train_size) / training_set_sampling_rate;
-    double warmup_sampling_rate = (100000.0 / estimated_base_size);
+      std::string warmup_file_prefix = index_prefix_path + "_warmup";
+      gen_random_slice<T>(dataFilePath, warmup_file_prefix,
+                          warmup_sampling_rate);
 
-    std::string warmup_file_prefix = index_prefix_path + "_warmup";
-    gen_random_slice<T>(dataFilePath, warmup_file_prefix, warmup_sampling_rate);
+      std::cout << "Training loaded of size " << train_size << std::endl;
 
-    std::cout << "Training loaded of size " << train_size << std::endl;
+      generate_pq_pivots(train_data, train_size, (_u32) train_dim, 256,
+                         num_pq_chunks, 20, pq_pivots_path);
+      generate_pq_data_from_pivots<T>(dataFilePath, 256, num_pq_chunks,
+                                      pq_pivots_path,
+                                      pq_compressed_vectors_path);
 
-    generate_pq_pivots(train_data, train_size, (_u32)train_dim, 256, num_pq_chunks,
-                       20, pq_pivots_path);
-    generate_pq_data_from_pivots<T>(dataFilePath, 256, num_pq_chunks,
-                                    pq_pivots_path, pq_compressed_vectors_path);
+      diskann::build_merged_vamana_index<T>(dataFilePath, _compareMetric, L, R,
+                                            training_set_sampling_rate,
+                                            ram_budget, mem_index_path);
+      delete[] train_data;
+      train_data = nullptr;
 
-    diskann::build_merged_vamana_index<T>(dataFilePath, _compareMetric, L, R,
-                                          training_set_sampling_rate,
-                                          ram_budget, mem_index_path);
-    delete[] train_data;
+      _pFlashIndex.reset(new PQFlashIndex<T>());
+      _pFlashIndex->create_disk_layout(std::string(dataFilePath),
+                                       mem_index_path, disk_index_path);
 
-    _pFlashIndex.reset(new PQFlashIndex<T>());
-    _pFlashIndex->create_disk_layout(std::string(dataFilePath), mem_index_path,
-                                     disk_index_path);
-
-    // delete all shard data and mem index file
-    std::remove(mem_index_path.c_str());
-
-    auto e = std::chrono::high_resolution_clock::now();
-
-    std::chrono::duration<double> diff = e - s;
-
-    std::cout << "Indexing time: " << diff.count() << "\n";
-
-    return true;
+      // delete all shard data and mem index file
+      std::remove(mem_index_path.c_str());
+      auto e = std::chrono::high_resolution_clock::now();
+      std::chrono::duration<double> diff = e - s;
+      std::cout << "Indexing time: " << diff.count() << "\n";
+      return true;
+    } catch (const diskann::ANNException& ex) {
+      std::cerr << ex.message();
+      if (train_data != nullptr) {
+        delete[] train_data;
+      }
+      return false;
+    }
   }
 
   template<typename T>
@@ -165,65 +172,42 @@ namespace diskann {
     uint64_t num_cache_nodes = (_u64) std::atoi(param_list[2].c_str());
     auto     nthreads = (_u32) std::atoi(param_list[3].c_str());
 
-    _pFlashIndex.reset(new PQFlashIndex<T>());
-    _pFlashIndex->load(nthreads, pq_tables_bin.c_str(), data_bin.c_str(),
-                       disk_index_file.c_str());
-    _pFlashIndex->load_entry_points(medoids_file, centroid_data_file);
-    _pFlashIndex->cache_medoid_nhoods();
-    std::vector<uint32_t> node_list;
-    // cache bfs levels
-    _pFlashIndex->cache_bfs_levels(num_cache_nodes, node_list);
-    _pFlashIndex->load_cache_list(node_list);
-    node_list.clear();
-    node_list.shrink_to_fit();
-    //    free(params);  // Gopal. Caller has to free the 'params' variable.
-    //
+    try {
+      _pFlashIndex.reset(new PQFlashIndex<T>());
+      _pFlashIndex->load(nthreads, pq_tables_bin.c_str(), data_bin.c_str(),
+                         disk_index_file.c_str());
+      _pFlashIndex->load_entry_points(medoids_file, centroid_data_file);
+      _pFlashIndex->cache_medoid_nhoods();
+      std::vector<uint32_t> node_list;
+      // cache bfs levels
+      _pFlashIndex->cache_bfs_levels(num_cache_nodes, node_list);
+      _pFlashIndex->load_cache_list(node_list);
+      node_list.clear();
+      node_list.shrink_to_fit();
 
-    uint64_t warmup_L = this->Lsearch;
-    uint64_t warmup_num = 0, warmup_dim = 0, warmup_aligned_dim = 0;
-    T*       warmup = nullptr;
-    if (file_exists(cache_warmup_file)) {
-      diskann::load_aligned_bin<T>(cache_warmup_file, warmup, warmup_num,
-                                   warmup_dim, warmup_aligned_dim);
-      if (warmup_dim != this->m_dimension) {
-        std::cout << "Error in warmup file. Dimension mismatch." << std::endl;
-        exit(-1);
-      }
-    } else {
-      warmup_num = 100000;
-      warmup_dim = this->m_dimension;
-      warmup_aligned_dim = this->aligned_dimension;
-      std::cout << "Generating random warmup file with dim " << warmup_dim
-                << " and aligned dim " << warmup_aligned_dim << std::flush;
-      diskann::alloc_aligned(((void**) &warmup),
-                             warmup_num * warmup_aligned_dim * sizeof(T),
-                             8 * sizeof(T));
-      std::memset(warmup, 0, warmup_num * warmup_aligned_dim * sizeof(T));
-      std::random_device              rd;
-      std::mt19937                    gen(rd());
-      std::uniform_int_distribution<> dis(-128, 127);
-      for (uint32_t i = 0; i < warmup_num; i++) {
-        for (uint32_t d = 0; d < warmup_dim; d++) {
-          warmup[i * warmup_aligned_dim + d] = (T) dis(gen);
-        }
-      }
-      std::cout << "..done" << std::endl;
-    }
-    std::vector<uint64_t> warmup_result_ids_64(warmup_num, 0);
-    std::vector<float>    warmup_result_dists(warmup_num, 0);
+      uint64_t warmup_L = this->Lsearch;
+      uint64_t warmup_num = 0, warmup_dim = 0, warmup_aligned_dim = 0;
+      T*       warmup = load_warmup(cache_warmup_file, warmup_num, warmup_dim,
+                              warmup_aligned_dim);
+      std::vector<uint64_t> warmup_result_ids_64(warmup_num, 0);
+      std::vector<float>    warmup_result_dists(warmup_num, 0);
 
 #pragma omp parallel for schedule(dynamic, 1)
-    for (_s64 i = 0; i < (int64_t) warmup_num; i++) {
-      _pFlashIndex->cached_beam_search(
-          warmup + (i * warmup_aligned_dim), 1, warmup_L,
-          warmup_result_ids_64.data() + (i * 1),
-          warmup_result_dists.data() + (i * 1), beam_width);
+      for (_s64 i = 0; i < (int64_t) warmup_num; i++) {
+        _pFlashIndex->cached_beam_search(
+            warmup + (i * warmup_aligned_dim), 1, warmup_L,
+            warmup_result_ids_64.data() + (i * 1),
+            warmup_result_dists.data() + (i * 1), beam_width);
+      }
+      std::cout << "Done warming up threads and cache." << std::endl;
+      if (warmup != nullptr)
+        diskann::aligned_free(warmup);
+      std::cout << "DiskANN Index Loaded." << std::endl;
+      return true;
+    } catch (const diskann::ANNException& ex) {
+      std::cerr << ex.message();
+      return false;
     }
-    std::cout << "Done warming up threads and cache." << std::endl;
-    if (warmup != nullptr)
-      diskann::aligned_free(warmup);
-    std::cout << "DiskANN Index Loaded." << std::endl;
-    return true;
   }
 
   // Search several vectors, return their neighbors' distance and ids.
@@ -236,14 +220,16 @@ namespace diskann {
                                         unsigned __int64  neighborCount,
                                         float*            distances,
                                         unsigned __int64* ids) const {
-    const T* query = (const T*) vector;
-    //#pragma omp  parallel for schedule(dynamic, 1)
-    for (_u64 i = 0; i < queryCount; i++) {
-      _pFlashIndex->cached_beam_search(
-          query + (i * this->aligned_dimension), neighborCount, this->Lsearch,
-          ids + (i * neighborCount), distances + (i * neighborCount),
-          this->beam_width);
-      //      std::cout << i << std::endl;
+    try {
+      const T* query = (const T*) vector;
+      for (_u64 i = 0; i < queryCount; i++) {
+        _pFlashIndex->cached_beam_search(
+            query + (i * this->aligned_dimension), neighborCount, this->Lsearch,
+            ids + (i * neighborCount), distances + (i * neighborCount),
+            this->beam_width);
+      }
+    } catch (const diskann::ANNException& ex) {
+      std::cerr << ex.message();
     }
   }
 
@@ -273,6 +259,47 @@ namespace diskann {
     if (subclass != nullptr) {
       delete subclass;
     }
+  }
+
+  template<typename T>
+  T* DiskANNInterface<T>::load_warmup(const std::string& cache_warmup_file,
+                                      uint64_t&          warmup_num,
+                                      uint64_t&          warmup_dim,
+                                      uint64_t&          warmup_aligned_dim) {
+    T* warmup = nullptr;
+    if (file_exists(cache_warmup_file)) {
+      diskann::load_aligned_bin<T>(cache_warmup_file, warmup, warmup_num,
+                                   warmup_dim, warmup_aligned_dim);
+      if (warmup_dim != this->m_dimension) {
+        std::stringstream stream;
+        stream << "Dimension mismatch in warmup file: " << cache_warmup_file
+               << " warmup_dim: " << warmup_dim
+               << " this->m_dimension: " << this->m_dimension;
+        std::cout << stream.str() << std::endl;
+        aligned_free(warmup);
+        warmup = nullptr;
+      }
+    } else {
+      warmup_num = 100000;
+      warmup_dim = this->m_dimension;
+      warmup_aligned_dim = this->aligned_dimension;
+      std::cout << "Generating random warmup file with dim " << warmup_dim
+                << " and aligned dim " << warmup_aligned_dim << std::flush;
+      diskann::alloc_aligned(((void**) &warmup),
+                             warmup_num * warmup_aligned_dim * sizeof(T),
+                             8 * sizeof(T));
+      std::memset(warmup, 0, warmup_num * warmup_aligned_dim * sizeof(T));
+      std::random_device              rd;
+      std::mt19937                    gen(rd());
+      std::uniform_int_distribution<> dis(-128, 127);
+      for (uint32_t i = 0; i < warmup_num; i++) {
+        for (uint32_t d = 0; d < warmup_dim; d++) {
+          warmup[i * warmup_aligned_dim + d] = (T) dis(gen);
+        }
+      }
+      std::cout << "..done" << std::endl;
+    }
+    return warmup;
   }
 
   template class DiskANNInterface<int8_t>;

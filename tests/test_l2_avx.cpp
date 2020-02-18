@@ -20,10 +20,10 @@ uint8_t* getData(const char* infileName, uint8_t dataTypeSizeInBytes,
   infile.read(reinterpret_cast<char*>(&count), sizeof(count));
   infile.read(reinterpret_cast<char*>(&dimension), sizeof(dimension));
 
-  std::cout << infileName << ": count: " << count << " dimensions: " << dimension
-            << std::endl;
+  std::cout << infileName << ": count: " << count
+            << " dimensions: " << dimension << std::endl;
 
-  uint64_t sizeToRead = (uint64_t)count * dataTypeSizeInBytes * dimension;
+  uint64_t sizeToRead = (uint64_t) count * dataTypeSizeInBytes * dimension;
   uint8_t* bytes = new uint8_t[sizeToRead];
   infile.read((char*) bytes, sizeToRead);
 
@@ -65,8 +65,33 @@ void concat_files(int argc, char** argv) {
   delete[] data2;
 
   std::cout << "Concatenated " << (count1 + count2) << " " << dimension1
-            << "-dimension vectors from files: " << argv[2] << " and " << argv[3]
-            << " and saved to output file: " << argv[4] << std::endl;
+            << "-dimension vectors from files: " << argv[2] << " and "
+            << argv[3] << " and saved to output file: " << argv[4] << std::endl;
+}
+
+void assignPtr(std::unique_ptr<float[]>& data) {
+  float* ptr = new float[30];
+  for (int i = 0; i < 30; i++) {
+    ptr[i] = i * 1.0f;
+  }
+
+  data.reset(ptr);
+  // std::make_unique<float[]>(30);
+}
+
+void uniquePtrAssignment() {
+  std::unique_ptr<float[]> data;
+  assignPtr(data);
+
+  for (int i = 0; i < 30; i++) {
+    std::cout << data[i] << " ";
+    if (data[i] - i > 0.001) {
+      std::cout << data[i] << "," << i << " screwed " << std::endl;
+      break;
+    }
+  }
+  std::cout << std::endl;
+  std::cout << "safe." << std::endl;
 }
 
 int main(int argc, char** argv) {
@@ -74,6 +99,8 @@ int main(int argc, char** argv) {
     std::cout << std::string("Usage: ") << argv[0] << " <mode> [arguments]"
               << std::endl;
     std::cout << "Modes: 1 for file concat. Args <file1> <file2> <outfile>"
+              << std::endl
+              << "       2 for test unique_ptr assignment. No args."
               << std::endl;
     return -1;
   }
@@ -84,6 +111,9 @@ int main(int argc, char** argv) {
     case 1:
       concat_files(argc, argv);
       return 0;
+      break;
+    case 2:
+      uniquePtrAssignment();
       break;
     default:
       std::cout << "Don't know what to do with mode parameter: " << argv[1]

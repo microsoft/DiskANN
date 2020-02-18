@@ -11,7 +11,7 @@ int main(int argc, char** argv) {
   if (argc != 4) {
     std::cout << argv[0] << " <ground_truth_bin> <our_results_bin>  <r> "
               << std::endl;
-    exit(-1);
+    return -1;
   }
   unsigned* gold_std = NULL;
   float*    gs_dist = nullptr;

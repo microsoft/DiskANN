@@ -52,9 +52,11 @@ void WindowsAlignedFileReader::register_thread() {
 IOContext& WindowsAlignedFileReader::get_ctx() {
   std::unique_lock<std::mutex> lk(this->ctx_mut);
   if (ctx_map.find(std::this_thread::get_id()) == ctx_map.end()) {
-    std::cerr << "unable to find IOContext for thread_id : "
-              << std::this_thread::get_id() << "\n";
-    exit(-2);
+    std::stringstream stream;
+    stream << "unable to find IOContext for thread_id : "
+           << std::this_thread::get_id() << "\n";
+    throw diskann::ANNException(stream.str(), -2, __FUNCSIG__, __FILE__,
+                                __LINE__);
   }
   IOContext& ctx = ctx_map[std::this_thread::get_id()];
   lk.unlock();
@@ -129,16 +131,20 @@ void WindowsAlignedFileReader::read(std::vector<AlignedRead>& read_reqs,
           if (error != WAIT_TIMEOUT) {
             std::cerr << "GetQueuedCompletionStatus() failed with error = "
                       << error << "\n";
-            exit(-4);
+            throw diskann::ANNException(
+                "GetQueuedCompletionStatus failed with error: ", error,
+                __FUNCSIG__, __FILE__, __LINE__);
           }
           // no completion packet dequeued ==> sleep for 5us and try again
           std::this_thread::sleep_for(5us);
         } else {
           // completion packet for failed IO dequeued
           auto op_idx = lp_os - ctx.reqs.data();
-          std::cerr << "I/O failed , offset: " << read_reqs[op_idx].offset
+          std::stringstream stream;
+          stream << "I/O failed , offset: " << read_reqs[op_idx].offset
                     << "with error code: " << GetLastError() << std::endl;
-          exit(-4);
+          throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
+                                      __LINE__);
         }
       }
     }

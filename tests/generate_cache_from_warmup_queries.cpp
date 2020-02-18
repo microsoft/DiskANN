@@ -44,48 +44,54 @@ int generate_cache_list(int argc, char** argv) {
   std::cout << "Search parameters: #threads: " << num_threads
             << ", beamwidth: " << beam_width << std::endl;
 
-  diskann::load_aligned_bin<T>(warmup_bin, warmup, warmup_num, ndims,
-                               warmup_aligned_dim);
+  try {
+    diskann::load_aligned_bin<T>(warmup_bin, warmup, warmup_num, ndims,
+                                 warmup_aligned_dim);
 
-  diskann::PQFlashIndex<T> _pFlashIndex;
+    diskann::PQFlashIndex<T> _pFlashIndex;
 
-  _pFlashIndex.set_cache_create_flag();
-  int res =
-      _pFlashIndex.load(num_threads, pq_centroids_file.c_str(),
-                        compressed_data_file.c_str(), disk_index_file.c_str());
-  if (res != 0) {
-    return res;
-  }
+    _pFlashIndex.set_cache_create_flag();
+    int res = _pFlashIndex.load(num_threads, pq_centroids_file.c_str(),
+                                compressed_data_file.c_str(),
+                                disk_index_file.c_str());
+    if (res != 0) {
+      return res;
+    }
 
-  _pFlashIndex.load_entry_points(medoids_file, centroid_data_file);
-  _pFlashIndex.cache_medoid_nhoods();
+    _pFlashIndex.load_entry_points(medoids_file, centroid_data_file);
+    _pFlashIndex.cache_medoid_nhoods();
 
-  std::cout << "Caching BFS levels " << cache_nlevels << " around medoid(s)."
-            << std::endl;
-  _pFlashIndex.cache_bfs_levels(cache_nlevels);
+    std::cout << "Caching BFS levels " << cache_nlevels << " around medoid(s)."
+              << std::endl;
+    _pFlashIndex.cache_bfs_levels(cache_nlevels);
 
-  //omp_set_num_threads(num_threads);
-  unsigned recall_at = 1;
-  _u64*    warmup_res = new _u64[recall_at * warmup_num];
-  float*   warmup_dists = new float[recall_at * warmup_num];
+    // omp_set_num_threads(num_threads);
+    unsigned recall_at = 1;
+    _u64*    warmup_res = new _u64[recall_at * warmup_num];
+    float*   warmup_dists = new float[recall_at * warmup_num];
 
 #pragma omp parallel for schedule(dynamic, 1)
-  for (_s64 i = 0; i < (int32_t) warmup_num; i++) {
-    _pFlashIndex.cached_beam_search(warmup + (i * warmup_aligned_dim),
-                                    recall_at, Lsearch,
-                                    warmup_res + (i * recall_at),
-                                    warmup_dists + (i * recall_at), beam_width);
+    for (_s64 i = 0; i < (int32_t) warmup_num; i++) {
+      _pFlashIndex.cached_beam_search(
+          warmup + (i * warmup_aligned_dim), recall_at, Lsearch,
+          warmup_res + (i * recall_at), warmup_dists + (i * recall_at),
+          beam_width);
+    }
+
+    diskann::aligned_free(warmup);
+    delete[] warmup_res;
+    delete[] warmup_dists;
+
+    std::cout << "Saving cache list to file " << cache_list_bin.c_str()
+              << std::endl;
+    _pFlashIndex.save_cached_nodes(num_cache_nodes, cache_list_bin);
+    return 0;
+  } catch (const diskann::ANNException& ex) {
+    diskann::aligned_free(warmup);
+    delete[] warmup_res;
+    delete[] warmup_dists;
+    return -1;
   }
-
-  diskann::aligned_free(warmup);
-  delete[] warmup_res;
-  delete[] warmup_dists;
-
-  std::cout << "Saving cache list to file " << cache_list_bin.c_str()
-            << std::endl;
-  _pFlashIndex.save_cached_nodes(num_cache_nodes, cache_list_bin);
-
-  return 0;
 }
 
 int main(int argc, char** argv) {

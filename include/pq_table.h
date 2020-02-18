@@ -49,13 +49,15 @@ namespace diskann {
         diskann::load_bin<_u32>(rearrangement_file, rearrangement, numr, numc);
         if (numr != ndims_u64 || numc != 1) {
           std::cout << "Error loading rearrangement file" << std::endl;
-          exit(-1);
+          throw diskann::ANNException("Error loading rearrangement file", -1,
+                                      __FUNCSIG__, __FILE__, __LINE__);
         }
 
         diskann::load_bin<_u32>(chunk_offset_file, chunk_offsets, numr, numc);
         if (numc != 1 || numr != num_chunks + 1) {
           std::cout << "Error loading chunk offsets file" << std::endl;
-          exit(-1);
+          throw diskann::ANNException("Error loading chunk offsets file", -1,
+                                      __FUNCSIG__, __FILE__, __LINE__);
         }
 
         this->n_chunks = numr - 1;
@@ -63,7 +65,9 @@ namespace diskann {
         diskann::load_bin<float>(centroid_file, centroid, numr, numc);
         if (numc != 1 || numr != ndims_u64) {
           std::cout << "Error loading centroid file" << std::endl;
-          exit(-1);
+          throw diskann::ANNException("Error loading centroid file", -1,
+                                      __FUNCSIG__, __FILE__, __LINE__);
+
         }
       } else {
         this->n_chunks = num_chunks;
