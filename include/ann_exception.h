@@ -1,6 +1,10 @@
 #pragma once
 #include <string>
 
+#ifndef _WINDOWS
+#define __FUNCSIG__ ""
+#endif
+
 namespace diskann {
   class ANNException {
    public:

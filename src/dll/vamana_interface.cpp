@@ -67,7 +67,7 @@ namespace diskann {
     diskann::get_bin_metadata(dataFilePath, num_pts, data_dim);
     auto s = std::chrono::high_resolution_clock::now();
 
-    this->m_dimension = (_u32)data_dim;
+    this->m_dimension = (_u32) data_dim;
     this->aligned_dimension = (_u32) ROUND_UP(data_dim, 8);
 
     diskann::Parameters paras;

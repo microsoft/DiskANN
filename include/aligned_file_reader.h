@@ -36,8 +36,7 @@ struct IOContext {
 
   IOContext()
       : m_pRequestsStatus(new std::vector<Status>()),
-        m_pRequests(new std::vector<ANNIndex::AsyncReadRequest>()) 
-  {
+        m_pRequests(new std::vector<ANNIndex::AsyncReadRequest>()) {
     (*m_pRequestsStatus).reserve(MAX_IO_DEPTH);
     (*m_pRequests).reserve(MAX_IO_DEPTH);
   }
@@ -74,7 +73,7 @@ struct AlignedRead {
 class AlignedFileReader {
  protected:
   tsl::robin_map<std::thread::id, IOContext> ctx_map;
-  std::mutex                                 ctx_mut;
+  std::mutex ctx_mut;
 
  public:
   // returns the thread-specific context

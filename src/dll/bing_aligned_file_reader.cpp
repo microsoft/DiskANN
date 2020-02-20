@@ -38,7 +38,7 @@ namespace diskann {
     for (_u64 i = 0; i < MAX_IO_DEPTH; i++) {
       ANNIndex::AsyncReadRequest req;
       memset(&req, 0, sizeof(ANNIndex::AsyncReadRequest));
-      //context.m_pRequests->push_back(req);
+      // context.m_pRequests->push_back(req);
       context.m_pRequests->push_back(req);
     }
     this->ctx_map.insert(std::make_pair(std::this_thread::get_id(), context));
@@ -78,7 +78,7 @@ namespace diskann {
       for (int i = 0; i < count; i++) {
         ctx.m_pRequestsStatus->push_back(IOContext::READ_WAIT);
       }
-	}
+    }
   }
 
   void initializeRead(IOContext &ctx) {

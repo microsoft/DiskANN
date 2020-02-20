@@ -137,7 +137,7 @@ namespace diskann {
 
     // nhood_cache
     unsigned *nhood_cache_buf = nullptr;
-    tsl::robin_map<_u32, std::pair<_u32, _u32*>> nhood_cache;
+    tsl::robin_map<_u32, std::pair<_u32, _u32 *>> nhood_cache;
 
     // coord_cache
     T *coord_cache_buf = nullptr;

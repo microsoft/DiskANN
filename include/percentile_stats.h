@@ -35,12 +35,11 @@ namespace diskann {
       vals[i] = member_fn(stats[i]);
     }
 
-    std::sort(vals.begin(), vals.end(),
-              [](const double &left, const double &right) {
-                return left < right;
-              });
+    std::sort(
+        vals.begin(), vals.end(),
+        [](const double &left, const double &right) { return left < right; });
 
-    auto retval = vals[((uint64_t)percentile) * len];
+    auto retval = vals[((uint64_t) percentile) * len];
     vals.clear();
     return retval;
   }

@@ -27,12 +27,12 @@ namespace math_utils {
 
   void gen_unit_gaussian_matrix(float* data, size_t dim) {
     std::random_device               rd;
-    auto                           x = rd();
+    auto                             x = rd();
     std::default_random_engine       generator(x);
     std::normal_distribution<double> distribution(0, 1.0);
     for (size_t i = 0; i < dim; i++) {
       for (size_t j = 0; j < dim; j++)
-        data[i * dim + j] = (float)distribution(generator);
+        data[i * dim + j] = (float) distribution(generator);
       float norm = cblas_snrm2((MKL_INT) dim, (data + (i * dim)), 1);
       //		std::cout<<norm<<std::endl;
       //		norm = std::sqrt(norm);
@@ -113,22 +113,25 @@ namespace math_utils {
     }
 
     /*const  CBLAS_LAYOUT Layout, const  CBLAS_TRANSPOSE TransA,
-                 const  CBLAS_TRANSPOSE TransB, const MKL_INT M, const MKL_INT N,
+                 const  CBLAS_TRANSPOSE TransB, const MKL_INT M, const MKL_INT
+       N,
                  const MKL_INT K, const float alpha, const float *A,
                  const MKL_INT lda, const float *B, const MKL_INT ldb,
                  const float beta, float *C, const MKL_INT ldc);*/
 
     cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasTrans, (MKL_INT) num_points,
-                (MKL_INT) num_centers, (MKL_INT)1, 1.0f, docs_l2sq, (MKL_INT)1, ones_a, (MKL_INT)1,
-                0.0f, dist_matrix, (MKL_INT) num_centers);
+                (MKL_INT) num_centers, (MKL_INT) 1, 1.0f, docs_l2sq,
+                (MKL_INT) 1, ones_a, (MKL_INT) 1, 0.0f, dist_matrix,
+                (MKL_INT) num_centers);
 
     cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasTrans, (MKL_INT) num_points,
-                (MKL_INT) num_centers, (MKL_INT)1, 1.0f, ones_b, (MKL_INT)1, centers_l2sq, (MKL_INT)1,
-                1.0f, dist_matrix, (MKL_INT) num_centers);
+                (MKL_INT) num_centers, (MKL_INT) 1, 1.0f, ones_b, (MKL_INT) 1,
+                centers_l2sq, (MKL_INT) 1, 1.0f, dist_matrix,
+                (MKL_INT) num_centers);
 
     cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasTrans, (MKL_INT) num_points,
-                (MKL_INT) num_centers, (MKL_INT) dim, -2.0f, data, (MKL_INT) dim,
-                centers, (MKL_INT) dim, 1.0f, dist_matrix,
+                (MKL_INT) num_centers, (MKL_INT) dim, -2.0f, data,
+                (MKL_INT) dim, centers, (MKL_INT) dim, 1.0f, dist_matrix,
                 (MKL_INT) num_centers);
 
     if (k == 1) {
@@ -138,7 +141,7 @@ namespace math_utils {
         float* current = dist_matrix + (i * num_centers);
         for (size_t j = 0; j < num_centers; j++) {
           if (current[j] < min) {
-            center_index[i] = (uint32_t)j;
+            center_index[i] = (uint32_t) j;
             min = current[j];
           }
         }
@@ -198,7 +201,7 @@ namespace math_utils {
                           ? (num_points / PAR_BLOCK_SIZE)
                           : (num_points / PAR_BLOCK_SIZE) + 1;
 
-    //mkl_set_num_threads(64);
+    // mkl_set_num_threads(64);
     if (!is_norm_given_for_pts)
       math_utils::compute_vecs_l2sq(pts_norms_squared, data, num_points, dim);
     math_utils::compute_vecs_l2sq(pivs_norms_squared, pivot_data, num_centers,
@@ -225,7 +228,7 @@ namespace math_utils {
         for (size_t l = 0; l < k; l++) {
           size_t this_center_id =
               closest_centers[(j - cur_blk * PAR_BLOCK_SIZE) * k + l];
-          closest_centers_ivf[j * k + l] = (uint32_t)this_center_id;
+          closest_centers_ivf[j * k + l] = (uint32_t) this_center_id;
           if (inverted_index != NULL) {
 #pragma omp critical
             inverted_index[this_center_id].push_back(j);
@@ -328,11 +331,10 @@ namespace kmeans {
       std::vector<float> residuals(nchunks * BUF_PAD, 0.0);
 
 #pragma omp parallel for schedule(static, 32)
-          for (int64_t chunk = 0; chunk < (_s64) nchunks;
-               ++chunk) for (size_t d = chunk * CHUNK_SIZE;
-                             d < num_points && d < (chunk + 1) * CHUNK_SIZE;
-                             ++d) residuals[chunk * BUF_PAD] +=
-          math_utils::calc_distance(
+      for (int64_t chunk = 0; chunk < (_s64) nchunks; ++chunk)
+        for (size_t d = chunk * CHUNK_SIZE;
+             d < num_points && d < (chunk + 1) * CHUNK_SIZE; ++d)
+          residuals[chunk * BUF_PAD] += math_utils::calc_distance(
               data + (d * dim),
               centers + (size_t) closest_center[d] * (size_t) dim, dim);
 
@@ -405,9 +407,9 @@ namespace kmeans {
     std::cout << "Selecting " << num_centers << " pivots from " << num_points
               << " points using ";
     std::random_device rd;
-    auto             x = rd();
+    auto               x = rd();
     std::cout << "random seed " << x << std::endl;
-    std::mt19937                       generator(x);
+    std::mt19937                          generator(x);
     std::uniform_int_distribution<size_t> distribution(0, num_points - 1);
 
     size_t tmp_pivot;
@@ -437,13 +439,13 @@ namespace kmeans {
     std::cout << "Selecting " << num_centers << " pivots from " << num_points
               << " points using ";
     std::random_device rd;
-    auto             x = rd();
+    auto               x = rd();
     std::cout << "random seed " << x << ": " << std::flush;
-    std::mt19937                     generator(x);
-    std::uniform_real_distribution<> distribution(0, 1);
-    std::uniform_int_distribution<size_t>  int_dist(0, num_points - 1);
-    size_t                           init_id = int_dist(generator);
-    size_t                           num_picked = 1;
+    std::mt19937                          generator(x);
+    std::uniform_real_distribution<>      distribution(0, 1);
+    std::uniform_int_distribution<size_t> int_dist(0, num_points - 1);
+    size_t                                init_id = int_dist(generator);
+    size_t                                num_picked = 1;
 
     picked.push_back(init_id);
     std::memcpy(pivot_data, data + init_id * dim, dim * sizeof(float));

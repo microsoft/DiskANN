@@ -55,8 +55,8 @@ class cached_ifstream {
                << " fsize: " << fsize << " current pos:" << reader.tellg()
                << std::endl;
         std::cout << stream.str() << std::endl;
-        throw diskann::ANNException(
-            stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
+        throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
+                                    __LINE__);
       }
       memcpy(read_buf, cache_buf + cur_off, cached_bytes);
 

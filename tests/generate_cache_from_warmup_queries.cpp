@@ -39,10 +39,13 @@ int generate_cache_list(int argc, char** argv) {
   std::string cache_list_bin(argv[11]);
 
   _u32 num_threads = 32;
-  _u32 cache_nlevels = 3;
 
   std::cout << "Search parameters: #threads: " << num_threads
             << ", beamwidth: " << beam_width << std::endl;
+
+  unsigned recall_at = 1;
+  _u64*    warmup_res = new _u64[recall_at * warmup_num];
+  float*   warmup_dists = new float[recall_at * warmup_num];
 
   try {
     diskann::load_aligned_bin<T>(warmup_bin, warmup, warmup_num, ndims,
@@ -61,14 +64,15 @@ int generate_cache_list(int argc, char** argv) {
     _pFlashIndex.load_entry_points(medoids_file, centroid_data_file);
     _pFlashIndex.cache_medoid_nhoods();
 
-    std::cout << "Caching BFS levels " << cache_nlevels << " around medoid(s)."
-              << std::endl;
-    _pFlashIndex.cache_bfs_levels(cache_nlevels);
+    {
+      std::vector<uint32_t> node_list;
+      std::cout << "Caching " << num_cache_nodes
+                << " BFS nodes around medoid(s)..." << std::endl;
+      _pFlashIndex.cache_bfs_levels(num_cache_nodes, node_list);
+      _pFlashIndex.load_cache_list(node_list);
+    }
 
-    // omp_set_num_threads(num_threads);
-    unsigned recall_at = 1;
-    _u64*    warmup_res = new _u64[recall_at * warmup_num];
-    float*   warmup_dists = new float[recall_at * warmup_num];
+// omp_set_num_threads(num_threads);
 
 #pragma omp parallel for schedule(dynamic, 1)
     for (_s64 i = 0; i < (int32_t) warmup_num; i++) {

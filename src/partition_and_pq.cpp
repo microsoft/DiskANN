@@ -66,7 +66,7 @@ void gen_random_slice(const std::string base_file,
 
   npts = npts_u32;
   nd = nd_u32;
-  std::unique_ptr<T[]> cur_row = std::make_unique<T[]> (nd);
+  std::unique_ptr<T[]> cur_row = std::make_unique<T[]>(nd);
 
   for (size_t i = 0; i < npts; i++) {
     base_reader.read((char *) cur_row.get(), sizeof(T) * nd);
@@ -189,8 +189,10 @@ int generate_pq_pivots(const float *passed_train_data, size_t num_train,
     return -1;
   }
 
-  std::unique_ptr<float[]> train_data = std::make_unique<float[]>(num_train * dim);
-  std::memcpy(train_data.get(), passed_train_data, num_train * dim * sizeof(float));
+  std::unique_ptr<float[]> train_data =
+      std::make_unique<float[]>(num_train * dim);
+  std::memcpy(train_data.get(), passed_train_data,
+              num_train * dim * sizeof(float));
 
   for (uint64_t i = 0; i < num_train; i++) {
     for (uint64_t j = 0; j < dim; j++) {
@@ -240,8 +242,7 @@ int generate_pq_pivots(const float *passed_train_data, size_t num_train,
 
   std::vector<std::vector<uint32_t>> bin_to_dims(num_pq_chunks);
   tsl::robin_map<uint32_t, uint32_t> dim_to_bin;
-  std::vector<float>                 bin_loads(num_pq_chunks, 0);
-
+  std::vector<float> bin_loads(num_pq_chunks, 0);
 
   // Process dimensions not inserted by previous loop
   for (uint32_t d = 0; d < dim; d++) {
@@ -294,9 +295,12 @@ int generate_pq_pivots(const float *passed_train_data, size_t num_train,
 
     if (cur_chunk_size == 0)
       continue;
-    std::unique_ptr<float[]> cur_pivot_data = std::make_unique<float[]>(num_centers * cur_chunk_size);
-    std::unique_ptr<float[]> cur_data = std::make_unique<float[]>(num_train * cur_chunk_size);
-    std::unique_ptr<uint32_t[]> closest_center = std::make_unique<uint32_t[]> (num_train);
+    std::unique_ptr<float[]> cur_pivot_data =
+        std::make_unique<float[]>(num_centers * cur_chunk_size);
+    std::unique_ptr<float[]> cur_data =
+        std::make_unique<float[]>(num_train * cur_chunk_size);
+    std::unique_ptr<uint32_t[]> closest_center =
+        std::make_unique<uint32_t[]>(num_train);
 
     std::cout << "Processing chunk " << i << " with dimensions ["
               << chunk_offsets[i] << ", " << chunk_offsets[i + 1] << ")"
@@ -312,8 +316,9 @@ int generate_pq_pivots(const float *passed_train_data, size_t num_train,
     kmeans::kmeanspp_selecting_pivots(cur_data.get(), num_train, cur_chunk_size,
                                       cur_pivot_data.get(), num_centers);
 
-    kmeans::run_lloyds(cur_data.get(), num_train, cur_chunk_size, cur_pivot_data.get(),
-                       num_centers, max_k_means_reps, NULL, closest_center.get());
+    kmeans::run_lloyds(cur_data.get(), num_train, cur_chunk_size,
+                       cur_pivot_data.get(), num_centers, max_k_means_reps,
+                       NULL, closest_center.get());
 
     for (uint64_t j = 0; j < num_centers; j++) {
       std::memcpy(full_pivot_data.get() + j * dim + chunk_offsets[i],
@@ -325,7 +330,8 @@ int generate_pq_pivots(const float *passed_train_data, size_t num_train,
   diskann::save_bin<float>(pq_pivots_path.c_str(), full_pivot_data.get(),
                            (size_t) num_centers, dim);
   std::string centroids_path = pq_pivots_path + "_centroid.bin";
-  diskann::save_bin<float>(centroids_path.c_str(), centroid.get(), (size_t) dim, 1);
+  diskann::save_bin<float>(centroids_path.c_str(), centroid.get(), (size_t) dim,
+                           1);
   std::string rearrangement_path = pq_pivots_path + "_rearrangement_perm.bin";
   diskann::save_bin<uint32_t>(rearrangement_path.c_str(), rearrangement.data(),
                               rearrangement.size(), 1);
@@ -371,7 +377,7 @@ int generate_pq_data_from_pivots(const std::string data_file,
     if (numr != dim || numc != 1) {
       std::cout << "Error reading centroid file." << std::endl;
       throw diskann::ANNException("Error reading centroid file.", -1,
-                                      __FUNCSIG__, __FILE__, __LINE__);
+                                  __FUNCSIG__, __FILE__, __LINE__);
     }
     std::string rearrangement_path = pq_pivots_path + "_rearrangement_perm.bin";
     diskann::load_bin<uint32_t>(rearrangement_path.c_str(), rearrangement, numr,
@@ -379,7 +385,7 @@ int generate_pq_data_from_pivots(const std::string data_file,
     if (numr != dim || numc != 1) {
       std::cout << "Error reading rearrangement file." << std::endl;
       throw diskann::ANNException("Error reading rearrangement file.", -1,
-                                      __FUNCSIG__, __FILE__, __LINE__);
+                                  __FUNCSIG__, __FILE__, __LINE__);
     }
     std::string chunk_offsets_path = pq_pivots_path + "_chunk_offsets.bin";
     diskann::load_bin<uint32_t>(chunk_offsets_path.c_str(), chunk_offsets, numr,
@@ -387,7 +393,7 @@ int generate_pq_data_from_pivots(const std::string data_file,
     if (numr != (uint64_t) num_pq_chunks + 1 || numc != 1) {
       std::cout << "Error reading chunk offsets file." << std::endl;
       throw diskann::ANNException("Error reading chunk offsets file.", -1,
-                                      __FUNCSIG__, __FILE__, __LINE__);
+                                  __FUNCSIG__, __FILE__, __LINE__);
     }
 
     size_t file_num_centers;
@@ -403,7 +409,7 @@ int generate_pq_data_from_pivots(const std::string data_file,
              << num_centers << std::endl;
       std::cout << stream.str() << std::endl;
       throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
-                                      __LINE__);
+                                  __LINE__);
     }
     if (file_dim != dim) {
       std::stringstream stream;
@@ -412,25 +418,28 @@ int generate_pq_data_from_pivots(const std::string data_file,
              << std::endl;
       std::cout << stream.str() << std::endl;
       throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
-                                      __LINE__);
+                                  __LINE__);
     }
     std::cout << "Loaded PQ pivot information" << std::endl;
   }
 
   std::ofstream compressed_file_writer(pq_compressed_vectors_path,
                                        std::ios::binary);
-  _u32          num_pq_chunks_u32 = num_pq_chunks;
+  _u32 num_pq_chunks_u32 = num_pq_chunks;
 
   compressed_file_writer.write((char *) &num_points, sizeof(uint32_t));
   compressed_file_writer.write((char *) &num_pq_chunks_u32, sizeof(uint32_t));
 
-  std::unique_ptr<_u32[]> block_compressed_base = std::make_unique<_u32[]>(BLOCK_SIZE * (_u64)num_pq_chunks);
+  std::unique_ptr<_u32[]> block_compressed_base =
+      std::make_unique<_u32[]>(BLOCK_SIZE * (_u64) num_pq_chunks);
   std::memset(block_compressed_base.get(), 0,
-              BLOCK_SIZE * (_u64)num_pq_chunks * sizeof(uint32_t));
+              BLOCK_SIZE * (_u64) num_pq_chunks * sizeof(uint32_t));
 
-  std::unique_ptr<T[]>    block_data_T = std::make_unique<T[]> (BLOCK_SIZE * dim);
-  std::unique_ptr<float[]> block_data_float = std::make_unique<float[]>(BLOCK_SIZE * dim);
-  std::unique_ptr<float[]> block_data_tmp = std::make_unique<float[]>(BLOCK_SIZE * dim);
+  std::unique_ptr<T[]> block_data_T = std::make_unique<T[]>(BLOCK_SIZE * dim);
+  std::unique_ptr<float[]> block_data_float =
+      std::make_unique<float[]>(BLOCK_SIZE * dim);
+  std::unique_ptr<float[]> block_data_tmp =
+      std::make_unique<float[]>(BLOCK_SIZE * dim);
 
   size_t num_blocks = DIV_ROUND_UP(num_points, BLOCK_SIZE);
 
@@ -439,9 +448,10 @@ int generate_pq_data_from_pivots(const std::string data_file,
     size_t end_id = (std::min)((block + 1) * BLOCK_SIZE, num_points);
     size_t cur_blk_size = end_id - start_id;
 
-    base_reader.read((char *) (block_data_T.get()), sizeof(T) * (cur_blk_size * dim));
-    diskann::convert_types<T, float>(block_data_T.get(), block_data_tmp.get(), cur_blk_size,
-                                     dim);
+    base_reader.read((char *) (block_data_T.get()),
+                     sizeof(T) * (cur_blk_size * dim));
+    diskann::convert_types<T, float>(block_data_T.get(), block_data_tmp.get(),
+                                     cur_blk_size, dim);
 
     std::cout << "Processing points  [" << start_id << ", " << end_id << ").."
               << std::flush;
@@ -464,9 +474,12 @@ int generate_pq_data_from_pivots(const std::string data_file,
       if (cur_chunk_size == 0)
         continue;
 
-      std::unique_ptr<float[]>   cur_pivot_data = std::make_unique<float[]>(num_centers * cur_chunk_size);
-      std::unique_ptr<float[]>   cur_data = std::make_unique<float[]>(cur_blk_size * cur_chunk_size);
-      std::unique_ptr<uint32_t[]> closest_center = std::make_unique<uint32_t[]>(cur_blk_size);
+      std::unique_ptr<float[]> cur_pivot_data =
+          std::make_unique<float[]>(num_centers * cur_chunk_size);
+      std::unique_ptr<float[]> cur_data =
+          std::make_unique<float[]>(cur_blk_size * cur_chunk_size);
+      std::unique_ptr<uint32_t[]> closest_center =
+          std::make_unique<uint32_t[]>(cur_blk_size);
 
 #pragma omp parallel for schedule(static, 8192)
       for (int64_t j = 0; j < (_s64) cur_blk_size; j++) {
@@ -497,11 +510,13 @@ int generate_pq_data_from_pivots(const std::string data_file,
           (char *) (block_compressed_base.get()),
           cur_blk_size * num_pq_chunks * sizeof(uint32_t));
     } else {
-      std::unique_ptr<uint8_t[]> pVec = std::make_unique<uint8_t[]>(cur_blk_size * num_pq_chunks);
-      diskann::convert_types<uint32_t, uint8_t>(block_compressed_base.get(), pVec.get(),
-                                                cur_blk_size, num_pq_chunks);
+      std::unique_ptr<uint8_t[]> pVec =
+          std::make_unique<uint8_t[]>(cur_blk_size * num_pq_chunks);
+      diskann::convert_types<uint32_t, uint8_t>(
+          block_compressed_base.get(), pVec.get(), cur_blk_size, num_pq_chunks);
       compressed_file_writer.write(
-          (char *) (pVec.get()), cur_blk_size * num_pq_chunks * sizeof(uint8_t));
+          (char *) (pVec.get()),
+          cur_blk_size * num_pq_chunks * sizeof(uint8_t));
     }
 
     std::cout << ".done." << std::endl;
@@ -592,7 +607,8 @@ int shard_data_into_clusters(const std::string data_file, float *pivots,
     return -1;
   }
 
-  std::unique_ptr<size_t[]>                   shard_counts = std::make_unique<size_t[]>(num_centers);
+  std::unique_ptr<size_t[]> shard_counts =
+      std::make_unique<size_t[]>(num_centers);
   std::vector<std::ofstream> shard_data_writer(num_centers);
   std::vector<std::ofstream> shard_idmap_writer(num_centers);
   _u32                       dummy_size = 0;
@@ -614,9 +630,11 @@ int shard_data_into_clusters(const std::string data_file, float *pivots,
     shard_counts[i] = 0;
   }
 
-  std::unique_ptr<_u32[]>   block_closest_centers = std::make_unique<_u32[]>(BLOCK_SIZE * k_base);
-  std::unique_ptr<T[]>      block_data_T = std::make_unique<T[]>(BLOCK_SIZE * dim);
-  std::unique_ptr<float[]>  block_data_float = std::make_unique<float[]> (BLOCK_SIZE * dim);
+  std::unique_ptr<_u32[]> block_closest_centers =
+      std::make_unique<_u32[]>(BLOCK_SIZE * k_base);
+  std::unique_ptr<T[]> block_data_T = std::make_unique<T[]>(BLOCK_SIZE * dim);
+  std::unique_ptr<float[]> block_data_float =
+      std::make_unique<float[]>(BLOCK_SIZE * dim);
 
   size_t num_blocks = DIV_ROUND_UP(num_points, BLOCK_SIZE);
 
@@ -625,20 +643,21 @@ int shard_data_into_clusters(const std::string data_file, float *pivots,
     size_t end_id = (std::min)((block + 1) * BLOCK_SIZE, num_points);
     size_t cur_blk_size = end_id - start_id;
 
-    base_reader.read((char *) block_data_T.get(), sizeof(T) * (cur_blk_size * dim));
+    base_reader.read((char *) block_data_T.get(),
+                     sizeof(T) * (cur_blk_size * dim));
     diskann::convert_types<T, float>(block_data_T.get(), block_data_float.get(),
                                      cur_blk_size, dim);
 
-    math_utils::compute_closest_centers(block_data_float.get(), cur_blk_size, dim,
-                                        pivots, num_centers, k_base,
+    math_utils::compute_closest_centers(block_data_float.get(), cur_blk_size,
+                                        dim, pivots, num_centers, k_base,
                                         block_closest_centers.get());
 
     for (size_t p = 0; p < cur_blk_size; p++) {
       for (size_t p1 = 0; p1 < k_base; p1++) {
         size_t   shard_id = block_closest_centers[p * k_base + p1];
         uint32_t original_point_map_id = (uint32_t)(start_id + p);
-        shard_data_writer[shard_id].write((char *) (block_data_T.get() + p * dim),
-                                          sizeof(T) * dim);
+        shard_data_writer[shard_id].write(
+            (char *) (block_data_T.get() + p * dim), sizeof(T) * dim);
         shard_idmap_writer[shard_id].write((char *) &original_point_map_id,
                                            sizeof(uint32_t));
         shard_counts[shard_id]++;
@@ -802,7 +821,7 @@ int partition_with_ram_budget(const std::string data_file,
 // Instantations of supported templates
 
 template void DISKANN_DLLEXPORT
-                                gen_random_slice<int8_t>(const std::string base_file,
+gen_random_slice<int8_t>(const std::string base_file,
                          const std::string output_prefix, double sampling_rate);
 template void DISKANN_DLLEXPORT gen_random_slice<uint8_t>(
     const std::string base_file, const std::string output_prefix,
@@ -812,7 +831,7 @@ gen_random_slice<float>(const std::string base_file,
                         const std::string output_prefix, double sampling_rate);
 
 template void DISKANN_DLLEXPORT
-                                gen_random_slice<float>(const float *inputdata, size_t npts, size_t ndims,
+gen_random_slice<float>(const float *inputdata, size_t npts, size_t ndims,
                         double p_val, float *&sampled_data, size_t &slice_size);
 template void DISKANN_DLLEXPORT gen_random_slice<uint8_t>(
     const uint8_t *inputdata, size_t npts, size_t ndims, double p_val,

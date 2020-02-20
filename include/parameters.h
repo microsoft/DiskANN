@@ -37,7 +37,7 @@ namespace diskann {
           throw std::invalid_argument(std::string("Parameter ") + name +
                                       " has value null.");
         } else {
-          return *(static_cast<ParamType*>(item->second));
+          return *(static_cast<ParamType *>(item->second));
         }
       }
     }

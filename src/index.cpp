@@ -322,7 +322,7 @@ namespace diskann {
       center[j] /= _nd;
 
     // compute all to one distance
-    float *distances = new float[_nd]();
+    float * distances = new float[_nd]();
 #pragma omp parallel for schedule(static, 65536)
     for (_s64 i = 0; i < (_s64) _nd;
          i++) {  // GOPAL Changed from "size_t i" to "int i"
@@ -562,7 +562,7 @@ namespace diskann {
   }
 
   template<typename T, typename TagT>
-  void Index<T, TagT>::prune_neighbors(const unsigned         location,
+  void Index<T, TagT>::prune_neighbors(const unsigned location,
                                        std::vector<Neighbor> &pool,
                                        const Parameters &     parameter,
                                        std::vector<unsigned> &pruned_list) {
@@ -642,7 +642,7 @@ namespace diskann {
    * the current node n.
    */
   template<typename T, typename TagT>
-  void Index<T, TagT>::inter_insert(unsigned               n,
+  void Index<T, TagT>::inter_insert(unsigned n,
                                     std::vector<unsigned> &pruned_list,
                                     const Parameters &     parameter,
                                     bool                   update_in_graph) {
@@ -961,7 +961,7 @@ namespace diskann {
   }
 
   template<typename T, typename TagT>
-  void Index<T, TagT>::build(Parameters &             parameters,
+  void Index<T, TagT>::build(Parameters &parameters,
                              const std::vector<TagT> &tags) {
     if (_enable_tags) {
       if (tags.size() != _nd) {
@@ -1138,7 +1138,7 @@ namespace diskann {
   }
 
   template<typename T, typename TagT>
-  int Index<T, TagT>::eager_delete(const TagT        tag,
+  int Index<T, TagT>::eager_delete(const TagT tag,
                                    const Parameters &parameters) {
     if (_lazy_done && (!_consolidated_order)) {
       std::cout << "Lazy delete reuests issued but data not consolidated, "
@@ -1611,7 +1611,7 @@ namespace diskann {
 
   template<typename T, typename TagT>
   int Index<T, TagT>::disable_delete(const Parameters &parameters,
-                                     const bool        consolidate) {
+                                     const bool consolidate) {
     LockGuard guard(_change_lock);
     if (!_can_delete) {
       std::cerr << "Delete not currently enabled" << std::endl;

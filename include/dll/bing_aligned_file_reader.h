@@ -7,7 +7,7 @@
 namespace diskann {
   class BingAlignedFileReader : public AlignedFileReader {
    private:
-    std::string                m_filename;
+    std::string m_filename;
 
    public:
     BingAlignedFileReader();
@@ -25,7 +25,8 @@ namespace diskann {
 
     // process batch of aligned requests in parallel
     // NOTE :: blocking call for the calling thread, but can thread-safe
-    virtual void read(std::vector<AlignedRead> &read_reqs, IOContext &ctx, bool async = false);
+    virtual void read(std::vector<AlignedRead> &read_reqs, IOContext &ctx,
+                      bool async = false);
   };
 }  // namespace NSG
 #endif

@@ -139,10 +139,10 @@ void WindowsAlignedFileReader::read(std::vector<AlignedRead>& read_reqs,
           std::this_thread::sleep_for(5us);
         } else {
           // completion packet for failed IO dequeued
-          auto op_idx = lp_os - ctx.reqs.data();
+          auto              op_idx = lp_os - ctx.reqs.data();
           std::stringstream stream;
           stream << "I/O failed , offset: " << read_reqs[op_idx].offset
-                    << "with error code: " << GetLastError() << std::endl;
+                 << "with error code: " << GetLastError() << std::endl;
           throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
                                       __LINE__);
         }

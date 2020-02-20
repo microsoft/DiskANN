@@ -67,7 +67,6 @@ namespace diskann {
           std::cout << "Error loading centroid file" << std::endl;
           throw diskann::ANNException("Error loading centroid file", -1,
                                       __FUNCSIG__, __FILE__, __LINE__);
-
         }
       } else {
         this->n_chunks = num_chunks;

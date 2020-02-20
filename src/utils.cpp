@@ -59,8 +59,9 @@ namespace diskann {
     std::ifstream reader(fname.c_str(), std::ios::binary);
     reader.read((char *) &npts32, sizeof(uint32_t));
     reader.read((char *) &dim, sizeof(uint32_t));
-    if (dim != 1 || actual_file_size != ((size_t) npts32) * sizeof(uint32_t) +
-                                            2 * sizeof(uint32_t)) {
+    if (dim != 1 ||
+        actual_file_size !=
+            ((size_t) npts32) * sizeof(uint32_t) + 2 * sizeof(uint32_t)) {
       std::stringstream stream;
       stream << "Error reading idmap file. Check if the file is bin file with "
                 "1 dimensional data. Actual: "
@@ -112,11 +113,11 @@ namespace diskann {
         node_shard.push_back(std::make_pair((_u32) node_id, (_u32) shard));
       }
     }
-    std::sort(node_shard.begin(), node_shard.end(),
-              [](const auto &left, const auto &right) {
-                return left.first < right.first || (left.first == right.first &&
-                                                    left.second < right.second);
-              });
+    std::sort(node_shard.begin(), node_shard.end(), [](const auto &left,
+                                                       const auto &right) {
+      return left.first < right.first ||
+             (left.first == right.first && left.second < right.second);
+    });
     std::cout << "Finished computing node -> shards map\n";
 
     // create cached nsg readers
@@ -128,10 +129,10 @@ namespace diskann {
       nsg_readers[i].read((char *) &expected_file_size, sizeof(uint64_t));
       if (actual_file_size != expected_file_size) {
         std::stringstream stream;
-        stream << "Error in Vamana Index file " << nsg_names[i] <<
-            " Actual file size: " << actual_file_size
-                                  << " does not match expected file size: "
-                                  << expected_file_size << std::endl;
+        stream << "Error in Vamana Index file " << nsg_names[i]
+               << " Actual file size: " << actual_file_size
+               << " does not match expected file size: " << expected_file_size
+               << std::endl;
         throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
                                     __LINE__);
       }
