@@ -17,7 +17,7 @@
 
 #define MAX_N_CMPS 16384
 #define SECTOR_LEN 4096
-#define MAX_N_SECTOR_READS 16
+#define MAX_N_SECTOR_READS 128
 
 namespace diskann {
   template<typename T>
