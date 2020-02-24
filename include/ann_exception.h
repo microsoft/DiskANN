@@ -1,5 +1,6 @@
 #pragma once
 #include <string>
+#include "windows_customizations.h"
 
 #ifndef _WINDOWS
 #define __FUNCSIG__ __PRETTY_FUNCTION__
@@ -8,12 +9,12 @@
 namespace diskann {
   class ANNException {
    public:
-    ANNException(const std::string& message, int errorCode);
-    ANNException(const std::string& message, int errorCode,
+    DISKANN_DLLEXPORT ANNException(const std::string& message, int errorCode);
+    DISKANN_DLLEXPORT ANNException(const std::string& message, int errorCode,
                  const std::string& funcSig, const std::string& fileName,
                  unsigned int lineNum);
 
-    std::string message() const;
+    DISKANN_DLLEXPORT std::string message() const;
 
    private:
     int          _errorCode;
