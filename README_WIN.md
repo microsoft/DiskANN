@@ -6,7 +6,7 @@ The Windows version has been tested with the enterprise editions of Visual Studi
 
 * Install CMAKE (v3.15.2 or later) from https://cmake.org
 * Install MKL from https://software.intel.com/en-us/mkl
-* Download boost (v1.71.0 or later) from boost.org 
+* Download boost (v1.71.0, later versions are not tested) from boost.org 
 
 * Environment variables: 
     * Set a new System environment variable, called INTEL_ROOT to the "windows" folder under your MKL installation
@@ -22,7 +22,7 @@ cmake -B. -A x64 ..
 ```
 **Note: Since VS comes with its own (older) version of cmake, you have to specify the full path to cmake to ensure that the right version is used.**
 -	This will create a “diskann” solution file.
--	Open the "diskann" solution and build the “nsg_dll” project first. 
+-	Open the "diskann" solution and build the "diskpriority_io" and “nsg_dll” projects in order. 
 - 	Then build all the other binaries using the ALL_BUILD project that is part of the solution
 - 	Generated binaries are stored in the diskann/x64/Debug or diskann/x64/Release directories.
 
