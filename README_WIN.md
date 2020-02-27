@@ -26,8 +26,9 @@ cmake -B. -A x64 ..
 - 	Then build all the other binaries using the ALL_BUILD project that is part of the solution
 - 	Generated binaries are stored in the diskann/x64/Debug or diskann/x64/Release directories.
 
-To build from command line, use msbuild to first build the "nsg_dll" project. And then build the entire solution, as shown below.
+To build from command line, change to the "build" directory and use msbuild to first build the "diskpriority_io" and "nsg_dll" projects. And then build the entire solution, as shown below.
 ```
+msbuild src\dll\diskpriority_io.vcxproj
 msbuild src\dll\nsg_dll.vcxproj
 msbuild diskann.sln
 ```
