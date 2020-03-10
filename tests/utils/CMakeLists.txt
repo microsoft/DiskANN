@@ -1,5 +1,3 @@
-set(CMAKE_CXX_STANDARD 14)
-
 add_executable(fvecs_to_bin fvecs_to_bin.cpp)
 if(MSVC)
 	target_link_options(fvecs_to_bin PRIVATE /MACHINE:x64)
@@ -56,6 +54,16 @@ if(MSVC)
 else() 
 	target_link_libraries(calculate_recall ${PROJECT_NAME})
 endif()
+
+add_executable(convert_axon_to_bin convert_axon_to_bin.cpp ${PROJECT_SOURCE_DIR}/src/ann_exception.cpp)
+if(MSVC)
+	target_include_directories(convert_axon_to_bin PRIVATE "${BOOST_ROOT}")
+	target_link_options(convert_axon_to_bin PRIVATE /MACHINE:x64)
+else() 
+	target_link_libraries(convert_axon_to_bin ${PROJECT_NAME})
+endif()
+
+
 
 
 # formatter
