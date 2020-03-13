@@ -36,6 +36,8 @@ namespace diskann {
         nullptr;  // MUST BE AT LEAST diskann MAX_DEGREE
     _u8 *aligned_pq_coord_scratch =
         nullptr;  // MUST BE AT LEAST  [N_CHUNKS * MAX_DEGREE]
+    T *    aligned_query_T = nullptr;
+    float *aligned_query_float = nullptr;
 
     void reset() {
       coord_idx = 0;

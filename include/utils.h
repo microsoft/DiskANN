@@ -251,7 +251,7 @@ namespace diskann {
 #pragma omp parallel for schedule(static, 65536)
     for (int64_t i = 0; i < (_s64) npts; i++) {
       for (uint64_t j = 0; j < dim; j++) {
-        destmat[i * dim + j] = srcmat[i * dim + j];
+        destmat[i * dim + j] = (OutType) srcmat[i * dim + j];
       }
     }
   }
