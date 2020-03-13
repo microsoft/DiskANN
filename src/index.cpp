@@ -874,7 +874,7 @@ namespace diskann {
                     pruned_list.shrink_to_fit();
                 }
 
-#pragma omp parallel for schedule(dynamic, 64)
+#pragma omp parallel for schedule(dynamic, 65536)
                 for (_s64 node_ctr = 0; node_ctr < (_s64)(visit_order.size());
                      node_ctr++) {
                     auto node = visit_order[node_ctr];
@@ -914,7 +914,10 @@ namespace diskann {
                     std::cout.precision(4);
                     std::cout << "Completed  (round: " << rnd_no
                               << ", sync: " << sync_num << "/" << NUM_SYNCS
-                              << " with L " << L << ")" << std::endl;
+                    << " with L " << L << ")"
+                    << " sync_time: " << sync_time << "s"
+                    << "; inter_time: " << inter_time << "s" << std::endl;
+
                     total_sync_time += sync_time;
                     total_inter_time += inter_time;
                     total_inter_count += inter_count;

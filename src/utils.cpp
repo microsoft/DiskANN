@@ -285,8 +285,8 @@ namespace diskann {
       diskann::Parameters paras;
       paras.Set<unsigned>("L", L);
       paras.Set<unsigned>("R", (2 * (R / 3)));
-      paras.Set<unsigned>("C", 2500);
-      paras.Set<float>("alpha", 4.0);
+      paras.Set<unsigned>("C", 500);
+      paras.Set<float>("alpha", 1.5f);
       paras.Set<unsigned>("num_rnds", 2);
       paras.Set<std::string>("save_path", shard_index_file);
 

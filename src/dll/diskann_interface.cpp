@@ -180,6 +180,12 @@ namespace diskann {
         uint64_t num_cache_nodes = (_u64) std::atoi(param_list[2].c_str());
         auto     nthreads = (_u32) std::atoi(param_list[3].c_str());
 
+        std::cout << "Loading index at path " << indexFilePath
+                  << " for search. Parameters: LSearch: " << this->Lsearch
+                  << " beam width: " << this->beam_width
+                  << " #cache nodes: " << num_cache_nodes
+                  << " #threads: " << nthreads << std::endl;
+
         try {
             _pFlashIndex.reset(new PQFlashIndex<T>());
             _pFlashIndex->load(nthreads, pq_tables_bin.c_str(),
@@ -218,6 +224,7 @@ namespace diskann {
         }
     }
 
+
     // Search several vectors, return their neighbors' distance and ids.
     // Both distances & ids are returned arraies of neighborCount elements,
     // And need to be allocated by invoker, which capacity should be greater
@@ -232,7 +239,7 @@ namespace diskann {
             const T* query = (const T*) vector;
             for (_u64 i = 0; i < queryCount; i++) {
                 _pFlashIndex->cached_beam_search(
-                    query + (i * this->aligned_dimension), neighborCount,
+                    query + (i * this->m_dimension), neighborCount,
                     this->Lsearch, ids + (i * neighborCount),
                     distances + (i * neighborCount), this->beam_width);
             }
