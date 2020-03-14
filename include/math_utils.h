@@ -1,6 +1,7 @@
 #pragma once
-#include <common_includes.h>
 #include <mkl.h>
+
+#include "common_includes.h"
 #include "utils.h"
 
 namespace math_utils {

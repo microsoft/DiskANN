@@ -6,10 +6,11 @@
 #include <stack>
 #include <string>
 #include <unordered_map>
+#include "tsl/robin_set.h"
+
 #include "distance.h"
 #include "neighbor.h"
 #include "parameters.h"
-#include "tsl/robin_set.h"
 #include "utils.h"
 #include "windows_customizations.h"
 
@@ -49,16 +50,14 @@ namespace diskann {
     // Gopal. Added beam_search overload that takes L as parameter, so that we
     // can customize L on a per-query basis without tampering with "Parameters"
     DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> beam_search(
-        const T *query, const size_t K, const unsigned L, unsigned beam_width,
-        std::vector<unsigned> start_points, unsigned *indices);
+        const T *query, const size_t K, const unsigned L, unsigned *indices);
 
     DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> beam_search(
-        const T *query, const uint64_t K, const unsigned L, unsigned beam_width,
+        const T *query, const uint64_t K, const unsigned L,
         std::vector<unsigned> init_ids, uint64_t *indices, float *distances);
 
     DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> beam_search_tags(
         const T *query, const size_t K, const unsigned L, TagT *tags,
-        unsigned beam_width, std::vector<unsigned> start_points,
         unsigned frozen_pts, unsigned *indices_buffer = NULL);
 
     // repositions frozen points to the end of _data - if they have been moved
@@ -107,7 +106,7 @@ namespace diskann {
     void update_in_graph();
 
     std::pair<uint32_t, uint32_t> iterate_to_fixed_point(
-        const T *node_coords, const unsigned Lindex, const unsigned beam_width,
+        const T *node_coords, const unsigned Lindex,
         const std::vector<unsigned> &init_ids,
         std::vector<Neighbor> &      expanded_nodes_info,
         tsl::robin_set<unsigned> &   expanded_nodes_ids,

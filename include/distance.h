@@ -15,27 +15,26 @@
 
 namespace {
 
-    static inline __m256 _mm256_mul_epi8(__m256i X, __m256i Y) {
-        __m256i zero = _mm256_setzero_si256();
+  static inline __m256 _mm256_mul_epi8(__m256i X, __m256i Y) {
+    __m256i zero = _mm256_setzero_si256();
 
-        __m256i sign_x = _mm256_cmpgt_epi8(zero, X);
-        __m256i sign_y = _mm256_cmpgt_epi8(zero, Y);
+    __m256i sign_x = _mm256_cmpgt_epi8(zero, X);
+    __m256i sign_y = _mm256_cmpgt_epi8(zero, Y);
 
-        __m256i xlo = _mm256_unpacklo_epi8(X, sign_x);
-        __m256i xhi = _mm256_unpackhi_epi8(X, sign_x);
-        __m256i ylo = _mm256_unpacklo_epi8(Y, sign_y);
-        __m256i yhi = _mm256_unpackhi_epi8(Y, sign_y);
+    __m256i xlo = _mm256_unpacklo_epi8(X, sign_x);
+    __m256i xhi = _mm256_unpackhi_epi8(X, sign_x);
+    __m256i ylo = _mm256_unpacklo_epi8(Y, sign_y);
+    __m256i yhi = _mm256_unpackhi_epi8(Y, sign_y);
 
-        return _mm256_cvtepi32_ps(_mm256_add_epi32(
-            _mm256_madd_epi16(xlo, ylo), _mm256_madd_epi16(xhi, yhi)));
-    }
+    return _mm256_cvtepi32_ps(_mm256_add_epi32(_mm256_madd_epi16(xlo, ylo),
+                                               _mm256_madd_epi16(xhi, yhi)));
+  }
 
-     static  inline __m256 _mm256_mul32_pi8(__m128i X, __m128i Y) {
-        __m256i xlo = _mm256_cvtepi8_epi16(X), ylo = _mm256_cvtepi8_epi16(Y);
-        return _mm256_blend_ps(_mm256_cvtepi32_ps(_mm256_madd_epi16(xlo, ylo)),
-                               _mm256_setzero_ps(), 252);
-    }
-
+  static inline __m256 _mm256_mul32_pi8(__m128i X, __m128i Y) {
+    __m256i xlo = _mm256_cvtepi8_epi16(X), ylo = _mm256_cvtepi8_epi16(Y);
+    return _mm256_blend_ps(_mm256_cvtepi32_ps(_mm256_madd_epi16(xlo, ylo)),
+                           _mm256_setzero_ps(), 252);
+  }
 
   static inline float _mm256_reduce_add_ps(__m256 x) {
     /* ( x3+x7, x2+x6, x1+x5, x0+x4 ) */
@@ -73,24 +72,24 @@ namespace diskann {
       int32_t result = 0;
 
 #ifdef _WINDOWS
-#ifdef USE_AVX2 
-    __m256 r = _mm256_setzero_ps();
+#ifdef USE_AVX2
+      __m256 r = _mm256_setzero_ps();
       char * pX = (char *) a, *pY = (char *) b;
       while (size >= 32) {
-          __m256i r1 = _mm256_subs_epi8(_mm256_loadu_si256((__m256i *) pX),
-                                        _mm256_loadu_si256((__m256i *) pY));
-          r = _mm256_add_ps(r, _mm256_mul_epi8(r1, r1));
-          pX += 32;
-          pY += 32;
-          size -= 32;
+        __m256i r1 = _mm256_subs_epi8(_mm256_loadu_si256((__m256i *) pX),
+                                      _mm256_loadu_si256((__m256i *) pY));
+        r = _mm256_add_ps(r, _mm256_mul_epi8(r1, r1));
+        pX += 32;
+        pY += 32;
+        size -= 32;
       }
       while (size > 0) {
-          __m128i r2 = _mm_subs_epi8(_mm_loadu_si128((__m128i *) pX),
-                                     _mm_loadu_si128((__m128i *) pY));
-          r = _mm256_add_ps(r, _mm256_mul32_pi8(r2, r2));
-          pX += 4;
-          pY += 4;
-          size -= 4;
+        __m128i r2 = _mm_subs_epi8(_mm_loadu_si128((__m128i *) pX),
+                                   _mm_loadu_si128((__m128i *) pY));
+        r = _mm256_add_ps(r, _mm256_mul32_pi8(r2, r2));
+        pX += 4;
+        pY += 4;
+        size -= 4;
       }
       r = _mm256_hadd_ps(_mm256_hadd_ps(r, r), r);
       return r.m256_f32[0] + r.m256_f32[4];
@@ -102,7 +101,7 @@ namespace diskann {
       }
       return (float) result;
 #endif
-#else      
+#else
 #pragma omp simd reduction(+ : result) aligned(a, b : 8)
       for (_s32 i = 0; i < (_s32) size; i++) {
         result += ((int32_t)((int16_t) a[i] - (int16_t) b[i])) *
@@ -111,7 +110,6 @@ namespace diskann {
       return (float) result;
 #endif
     }
-
   };
 
   class DistanceL2UInt8 : public Distance<uint8_t> {

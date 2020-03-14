@@ -3,6 +3,8 @@
 #include <sstream>
 #include <stack>
 #include <string>
+#include "tsl/robin_map.h"
+#include "tsl/robin_set.h"
 
 #include "aligned_file_reader.h"
 #include "concurrent_queue.h"
@@ -10,8 +12,6 @@
 #include "parameters.h"
 #include "percentile_stats.h"
 #include "pq_table.h"
-#include "tsl/robin_map.h"
-#include "tsl/robin_set.h"
 #include "utils.h"
 #include "windows_customizations.h"
 

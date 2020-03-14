@@ -8,6 +8,7 @@
 #include "omp.h"
 #include "mkl.h"
 
+#include "aux_utils.h"
 #include "dll/diskann_interface.h"
 #include "index.h"
 #include "partition_and_pq.h"
@@ -16,40 +17,38 @@
 namespace diskann {
 
 #define TRAINING_SET_SIZE 3000000
-    template<typename T>
-    __cdecl DiskANNInterface<T>::DiskANNInterface(
-        unsigned __int32 dimension, ANNIndex::DistanceType distanceType)
-        : ANNIndex::IANNIndex(dimension, distanceType), _pNsgIndex(nullptr) {
-        if (distanceType == ANNIndex::DT_L2) {
-            _compareMetric = diskann::Metric::L2;
-        } else if (distanceType == ANNIndex::DT_InnerProduct) {
-            _compareMetric = diskann::Metric::INNER_PRODUCT;
-        } else {
-            throw std::exception(
-                "Only DT_L2 and DT_InnerProduct are supported.");
-        }
-
-    }  // namespace diskann
-
-    template<typename T>
-    DiskANNInterface<T>::~DiskANNInterface<T>() {
+  template<typename T>
+  __cdecl DiskANNInterface<T>::DiskANNInterface(
+      unsigned __int32 dimension, ANNIndex::DistanceType distanceType)
+      : ANNIndex::IANNIndex(dimension, distanceType), _pNsgIndex(nullptr) {
+    if (distanceType == ANNIndex::DT_L2) {
+      _compareMetric = diskann::Metric::L2;
+    } else if (distanceType == ANNIndex::DT_InnerProduct) {
+      _compareMetric = diskann::Metric::INNER_PRODUCT;
+    } else {
+      throw std::exception("Only DT_L2 and DT_InnerProduct are supported.");
     }
 
-    template<typename T>
-    // In implementation, the file path can be a file or folder.
-    bool DiskANNInterface<T>::BuildIndex(const char* dataFilePath,
-                                         const char* indexFilePath,
-                                         const char* indexBuildParameters) {
-        std::stringstream parser;
-        parser << std::string(indexBuildParameters);
-        std::string              cur_param;
-        std::vector<std::string> param_list;
-        while (parser >> cur_param)
-            param_list.push_back(cur_param);
+  }  // namespace diskann
 
-        if (param_list.size() != 7) {
-            std::cout
-                << "Correct usage of parameters is L (indexing search list "
+  template<typename T>
+  DiskANNInterface<T>::~DiskANNInterface<T>() {
+  }
+
+  template<typename T>
+  // In implementation, the file path can be a file or folder.
+  bool DiskANNInterface<T>::BuildIndex(const char* dataFilePath,
+                                       const char* indexFilePath,
+                                       const char* indexBuildParameters) {
+    std::stringstream parser;
+    parser << std::string(indexBuildParameters);
+    std::string              cur_param;
+    std::vector<std::string> param_list;
+    while (parser >> cur_param)
+      param_list.push_back(cur_param);
+
+    if (param_list.size() != 7) {
+      std::cout << "Correct usage of parameters is L (indexing search list "
                    "size) "
                    "R (max degree) C (visited list maximum size) B "
                    "(approximate "
@@ -58,268 +57,263 @@ namespace diskann {
                    "budget(GB)) T (Max Threads To "
                    "Use)"
                 << std::endl;
-            return false;
-        }
-
-        std::string index_prefix_path(indexFilePath);
-        std::string pq_pivots_path = index_prefix_path + "_pq_pivots.bin";
-        std::string pq_compressed_vectors_path =
-            index_prefix_path + "_compressed.bin";
-        std::string mem_index_path = index_prefix_path + "_mem.index";
-        std::string disk_index_path = index_prefix_path + "_disk.index";
-        std::string merged_index_prefix = index_prefix_path + "_merged";
-
-        unsigned L = (unsigned) atoi(param_list[0].c_str());
-        unsigned R = (unsigned) atoi(param_list[1].c_str());
-        //    unsigned C = (unsigned) atoi(param_list[2].c_str());
-        unsigned num_pq_chunks = (unsigned) atoi(param_list[3].c_str());
-        double   training_set_sampling_rate = atof(param_list[4].c_str());
-        double   ram_budget = (double) atof(param_list[5].c_str());
-        unsigned num_threads = (unsigned) atoi(param_list[6].c_str());
-        auto     s = std::chrono::high_resolution_clock::now();
-
-        if (num_threads != 0) {
-            std::cout << "Building index using: " << num_threads
-                      << " threads. L = " << L << " R = " << R 
-                      << " num_pq_chunks: " << num_pq_chunks
-                      << " sampling rate: " << training_set_sampling_rate
-                      << " ram_budget: " << ram_budget 
-                      << std::endl;
-            omp_set_num_threads(num_threads);
-            mkl_set_num_threads(num_threads);
-        }
-
-        float* train_data = nullptr;
-        try {
-            size_t train_size, train_dim;
-
-            // generates random sample and sets it to train_data and updates
-            // train_size
-            gen_random_slice<T>(dataFilePath, training_set_sampling_rate,
-                                train_data, train_size, train_dim);
-
-            double estimated_base_size =
-                ((double) train_size) / training_set_sampling_rate;
-            double warmup_sampling_rate = (100000.0 / estimated_base_size);
-
-            std::string warmup_file_prefix = index_prefix_path + "_warmup";
-            gen_random_slice<T>(dataFilePath, warmup_file_prefix,
-                                warmup_sampling_rate);
-
-            std::cout << "Training loaded of size " << train_size << std::endl;
-
-            generate_pq_pivots(train_data, train_size, (_u32) train_dim, 256,
-                               num_pq_chunks, 20, pq_pivots_path);
-            generate_pq_data_from_pivots<T>(dataFilePath, 256, num_pq_chunks,
-                                            pq_pivots_path,
-                                            pq_compressed_vectors_path);
-
-            diskann::build_merged_vamana_index<T>(
-                dataFilePath, _compareMetric, L, R, training_set_sampling_rate,
-                ram_budget, mem_index_path);
-            delete[] train_data;
-            train_data = nullptr;
-
-            _pFlashIndex.reset(new PQFlashIndex<T>());
-            _pFlashIndex->create_disk_layout(std::string(dataFilePath),
-                                             mem_index_path, disk_index_path);
-
-            // delete all shard data and mem index file
-            std::remove(mem_index_path.c_str());
-            auto e = std::chrono::high_resolution_clock::now();
-            std::chrono::duration<double> diff = e - s;
-            std::cout << "Indexing time: " << diff.count() << "\n";
-            return true;
-        } catch (const diskann::ANNException& ex) {
-            std::cerr << ex.message();
-            if (train_data != nullptr) {
-                delete[] train_data;
-            }
-            return false;
-        }
+      return false;
     }
 
-    template<typename T>
-    // Load index form file.
-    bool DiskANNInterface<T>::LoadIndex(const char* indexFilePath,
-                                        const char* queryParameters) {
-        std::stringstream parser;
-        parser << std::string(queryParameters);
-        std::string              cur_param;
-        std::vector<std::string> param_list;
-        while (parser >> cur_param)
-            param_list.push_back(cur_param);
+    std::string index_prefix_path(indexFilePath);
+    std::string pq_pivots_path = index_prefix_path + "_pq_pivots.bin";
+    std::string pq_compressed_vectors_path =
+        index_prefix_path + "_compressed.bin";
+    std::string mem_index_path = index_prefix_path + "_mem.index";
+    std::string disk_index_path = index_prefix_path + "_disk.index";
+    std::string merged_index_prefix = index_prefix_path + "_merged";
 
-        if (param_list.size() != 4) {
-            std::cerr
-                << "Correct usage of parameters is \n"
+    unsigned L = (unsigned) atoi(param_list[0].c_str());
+    unsigned R = (unsigned) atoi(param_list[1].c_str());
+    //    unsigned C = (unsigned) atoi(param_list[2].c_str());
+    unsigned num_pq_chunks = (unsigned) atoi(param_list[3].c_str());
+    double   training_set_sampling_rate = atof(param_list[4].c_str());
+    double   ram_budget = (double) atof(param_list[5].c_str());
+    unsigned num_threads = (unsigned) atoi(param_list[6].c_str());
+    auto     s = std::chrono::high_resolution_clock::now();
+
+    if (num_threads != 0) {
+      std::cout << "Building index using: " << num_threads
+                << " threads. L = " << L << " R = " << R
+                << " num_pq_chunks: " << num_pq_chunks
+                << " sampling rate: " << training_set_sampling_rate
+                << " ram_budget: " << ram_budget << std::endl;
+      omp_set_num_threads(num_threads);
+      mkl_set_num_threads(num_threads);
+    }
+
+    float* train_data = nullptr;
+    try {
+      size_t train_size, train_dim;
+
+      // generates random sample and sets it to train_data and updates
+      // train_size
+      gen_random_slice<T>(dataFilePath, training_set_sampling_rate, train_data,
+                          train_size, train_dim);
+
+      double estimated_base_size =
+          ((double) train_size) / training_set_sampling_rate;
+      double warmup_sampling_rate = (100000.0 / estimated_base_size);
+
+      std::string warmup_file_prefix = index_prefix_path + "_warmup";
+      gen_random_slice<T>(dataFilePath, warmup_file_prefix,
+                          warmup_sampling_rate);
+
+      std::cout << "Training loaded of size " << train_size << std::endl;
+
+      generate_pq_pivots(train_data, train_size, (_u32) train_dim, 256,
+                         num_pq_chunks, 20, pq_pivots_path);
+      generate_pq_data_from_pivots<T>(dataFilePath, 256, num_pq_chunks,
+                                      pq_pivots_path,
+                                      pq_compressed_vectors_path);
+
+      diskann::build_merged_vamana_index<T>(dataFilePath, _compareMetric, L, R,
+                                            training_set_sampling_rate,
+                                            ram_budget, mem_index_path);
+      delete[] train_data;
+      train_data = nullptr;
+
+      _pFlashIndex.reset(new PQFlashIndex<T>());
+      _pFlashIndex->create_disk_layout(std::string(dataFilePath),
+                                       mem_index_path, disk_index_path);
+
+      // delete all shard data and mem index file
+      std::remove(mem_index_path.c_str());
+      auto e = std::chrono::high_resolution_clock::now();
+      std::chrono::duration<double> diff = e - s;
+      std::cout << "Indexing time: " << diff.count() << "\n";
+      return true;
+    } catch (const diskann::ANNException& ex) {
+      std::cerr << ex.message();
+      if (train_data != nullptr) {
+        delete[] train_data;
+      }
+      return false;
+    }
+  }
+
+  template<typename T>
+  // Load index form file.
+  bool DiskANNInterface<T>::LoadIndex(const char* indexFilePath,
+                                      const char* queryParameters) {
+    std::stringstream parser;
+    parser << std::string(queryParameters);
+    std::string              cur_param;
+    std::vector<std::string> param_list;
+    while (parser >> cur_param)
+      param_list.push_back(cur_param);
+
+    if (param_list.size() != 4) {
+      std::cerr << "Correct usage of parameters is \n"
                    "Lsearch[1] BeamWidth[2] num_cache_nodes[3] nthreads[4]"
                 << std::endl;
-            return false;
-        }
+      return false;
+    }
 
-        const std::string index_prefix_path(indexFilePath);
+    const std::string index_prefix_path(indexFilePath);
 
-        // convert strs into params
-        std::string data_bin = index_prefix_path + "_compressed.bin";
-        std::string pq_tables_bin = index_prefix_path + "_pq_pivots.bin";
-        std::string disk_index_file = index_prefix_path + "_disk.index";
-        std::string medoids_file = index_prefix_path + "_mem.index_medoids.bin";
-        std::string cache_list_file = index_prefix_path + "_cache_list.bin";
-        std::string centroid_data_file =
-            index_prefix_path + "_centroids_float.bin";
-        std::string cache_warmup_file = index_prefix_path + "_warmup_data.bin";
+    // convert strs into params
+    std::string data_bin = index_prefix_path + "_compressed.bin";
+    std::string pq_tables_bin = index_prefix_path + "_pq_pivots.bin";
+    std::string disk_index_file = index_prefix_path + "_disk.index";
+    std::string medoids_file = index_prefix_path + "_mem.index_medoids.bin";
+    std::string cache_list_file = index_prefix_path + "_cache_list.bin";
+    std::string centroid_data_file = index_prefix_path + "_centroids_float.bin";
+    std::string cache_warmup_file = index_prefix_path + "_warmup_data.bin";
 
-        size_t data_dim, num_pq_centers;
-        diskann::get_bin_metadata(pq_tables_bin, num_pq_centers, data_dim);
-        this->m_dimension = (_u32) data_dim;
-        this->aligned_dimension = ROUND_UP(this->m_dimension, 8);
+    size_t data_dim, num_pq_centers;
+    diskann::get_bin_metadata(pq_tables_bin, num_pq_centers, data_dim);
+    this->m_dimension = (_u32) data_dim;
+    this->aligned_dimension = ROUND_UP(this->m_dimension, 8);
 
-        this->Lsearch = (_u64) std::atoi(param_list[0].c_str());
-        this->beam_width = (_u64) std::atoi(param_list[1].c_str());
-        uint64_t num_cache_nodes = (_u64) std::atoi(param_list[2].c_str());
-        auto     nthreads = (_u32) std::atoi(param_list[3].c_str());
+    this->Lsearch = (_u64) std::atoi(param_list[0].c_str());
+    this->beam_width = (_u64) std::atoi(param_list[1].c_str());
+    uint64_t num_cache_nodes = (_u64) std::atoi(param_list[2].c_str());
+    auto     nthreads = (_u32) std::atoi(param_list[3].c_str());
 
-        std::cout << "Loading index at path " << indexFilePath
-                  << " for search. Parameters: LSearch: " << this->Lsearch
-                  << " beam width: " << this->beam_width
-                  << " #cache nodes: " << num_cache_nodes
-                  << " #threads: " << nthreads << std::endl;
+    std::cout << "Loading index at path " << indexFilePath
+              << " for search. Parameters: LSearch: " << this->Lsearch
+              << " beam width: " << this->beam_width
+              << " #cache nodes: " << num_cache_nodes
+              << " #threads: " << nthreads << std::endl;
 
-        try {
-            _pFlashIndex.reset(new PQFlashIndex<T>());
-            _pFlashIndex->load(nthreads, pq_tables_bin.c_str(),
-                               data_bin.c_str(), disk_index_file.c_str());
-            _pFlashIndex->load_entry_points(medoids_file, centroid_data_file);
-            _pFlashIndex->cache_medoid_nhoods();
-            std::vector<uint32_t> node_list;
-            // cache bfs levels
-            _pFlashIndex->cache_bfs_levels(num_cache_nodes, node_list);
-            _pFlashIndex->load_cache_list(node_list);
-            node_list.clear();
-            node_list.shrink_to_fit();
+    try {
+      _pFlashIndex.reset(new PQFlashIndex<T>());
+      _pFlashIndex->load(nthreads, pq_tables_bin.c_str(), data_bin.c_str(),
+                         disk_index_file.c_str());
+      _pFlashIndex->load_entry_points(medoids_file, centroid_data_file);
+      _pFlashIndex->cache_medoid_nhoods();
+      std::vector<uint32_t> node_list;
+      // cache bfs levels
+      _pFlashIndex->cache_bfs_levels(num_cache_nodes, node_list);
+      _pFlashIndex->load_cache_list(node_list);
+      node_list.clear();
+      node_list.shrink_to_fit();
 
-            uint64_t warmup_L = this->Lsearch;
-            uint64_t warmup_num = 0, warmup_dim = 0, warmup_aligned_dim = 0;
-            T* warmup = load_warmup(cache_warmup_file, warmup_num, warmup_dim,
-                                    warmup_aligned_dim);
-            std::vector<uint64_t> warmup_result_ids_64(warmup_num, 0);
-            std::vector<float>    warmup_result_dists(warmup_num, 0);
+      uint64_t warmup_L = this->Lsearch;
+      uint64_t warmup_num = 0, warmup_dim = 0, warmup_aligned_dim = 0;
+      T*       warmup = load_warmup(cache_warmup_file, warmup_num, warmup_dim,
+                              warmup_aligned_dim);
+      std::vector<uint64_t> warmup_result_ids_64(warmup_num, 0);
+      std::vector<float>    warmup_result_dists(warmup_num, 0);
 
 #pragma omp parallel for schedule(dynamic, 1)
-            for (_s64 i = 0; i < (int64_t) warmup_num; i++) {
-                _pFlashIndex->cached_beam_search(
-                    warmup + (i * warmup_aligned_dim), 1, warmup_L,
-                    warmup_result_ids_64.data() + (i * 1),
-                    warmup_result_dists.data() + (i * 1), beam_width);
-            }
-            std::cout << "Done warming up threads and cache." << std::endl;
-            if (warmup != nullptr)
-                diskann::aligned_free(warmup);
-            std::cout << "DiskANN Index Loaded." << std::endl;
-            return true;
-        } catch (const diskann::ANNException& ex) {
-            std::cerr << ex.message();
-            return false;
+      for (_s64 i = 0; i < (int64_t) warmup_num; i++) {
+        _pFlashIndex->cached_beam_search(
+            warmup + (i * warmup_aligned_dim), 1, warmup_L,
+            warmup_result_ids_64.data() + (i * 1),
+            warmup_result_dists.data() + (i * 1), beam_width);
+      }
+      std::cout << "Done warming up threads and cache." << std::endl;
+      if (warmup != nullptr)
+        diskann::aligned_free(warmup);
+      std::cout << "DiskANN Index Loaded." << std::endl;
+      return true;
+    } catch (const diskann::ANNException& ex) {
+      std::cerr << ex.message();
+      return false;
+    }
+  }
+
+  // Search several vectors, return their neighbors' distance and ids.
+  // Both distances & ids are returned arraies of neighborCount elements,
+  // And need to be allocated by invoker, which capacity should be greater
+  // than [queryCount * neighborCount].
+  template<typename T>
+  void DiskANNInterface<T>::SearchIndex(const char*       vector,
+                                        unsigned __int64  queryCount,
+                                        unsigned __int64  neighborCount,
+                                        float*            distances,
+                                        unsigned __int64* ids) const {
+    try {
+      const T* query = (const T*) vector;
+      for (_u64 i = 0; i < queryCount; i++) {
+        _pFlashIndex->cached_beam_search(
+            query + (i * this->m_dimension), neighborCount, this->Lsearch,
+            ids + (i * neighborCount), distances + (i * neighborCount),
+            this->beam_width);
+      }
+    } catch (const diskann::ANNException& ex) {
+      std::cerr << ex.message();
+    }
+  }
+
+  extern "C" __declspec(dllexport) ANNIndex::IANNIndex* CreateObjectFloat(
+      unsigned __int32 dimension, ANNIndex::DistanceType distanceType) {
+    return new diskann::DiskANNInterface<float>(dimension, distanceType);
+  }
+
+  extern "C" __declspec(dllexport) void ReleaseObjectFloat(
+      ANNIndex::IANNIndex* object) {
+    diskann::DiskANNInterface<float>* subclass =
+        dynamic_cast<diskann::DiskANNInterface<float>*>(object);
+    if (subclass != nullptr) {
+      delete subclass;
+    }
+  }
+
+  extern "C" __declspec(dllexport) ANNIndex::IANNIndex* CreateObjectByte(
+      unsigned __int32 dimension, ANNIndex::DistanceType distanceType) {
+    return new diskann::DiskANNInterface<int8_t>(dimension, distanceType);
+  }
+
+  extern "C" __declspec(dllexport) void ReleaseObjectByte(
+      ANNIndex::IANNIndex* object) {
+    diskann::DiskANNInterface<int8_t>* subclass =
+        dynamic_cast<diskann::DiskANNInterface<int8_t>*>(object);
+    if (subclass != nullptr) {
+      delete subclass;
+    }
+  }
+
+  template<typename T>
+  T* DiskANNInterface<T>::load_warmup(const std::string& cache_warmup_file,
+                                      uint64_t&          warmup_num,
+                                      uint64_t&          warmup_dim,
+                                      uint64_t&          warmup_aligned_dim) {
+    T* warmup = nullptr;
+    if (file_exists(cache_warmup_file)) {
+      diskann::load_aligned_bin<T>(cache_warmup_file, warmup, warmup_num,
+                                   warmup_dim, warmup_aligned_dim);
+      if (warmup_dim != this->m_dimension) {
+        std::stringstream stream;
+        stream << "Dimension mismatch in warmup file: " << cache_warmup_file
+               << " warmup_dim: " << warmup_dim
+               << " this->m_dimension: " << this->m_dimension;
+        std::cout << stream.str() << std::endl;
+        aligned_free(warmup);
+        warmup = nullptr;
+      }
+    } else {
+      warmup_num = 100000;
+      warmup_dim = this->m_dimension;
+      warmup_aligned_dim = this->aligned_dimension;
+      std::cout << "Generating random warmup file with dim " << warmup_dim
+                << " and aligned dim " << warmup_aligned_dim << std::flush;
+      diskann::alloc_aligned(((void**) &warmup),
+                             warmup_num * warmup_aligned_dim * sizeof(T),
+                             8 * sizeof(T));
+      std::memset(warmup, 0, warmup_num * warmup_aligned_dim * sizeof(T));
+      std::random_device              rd;
+      std::mt19937                    gen(rd());
+      std::uniform_int_distribution<> dis(-128, 127);
+      for (uint32_t i = 0; i < warmup_num; i++) {
+        for (uint32_t d = 0; d < warmup_dim; d++) {
+          warmup[i * warmup_aligned_dim + d] = (T) dis(gen);
         }
+      }
+      std::cout << "..done" << std::endl;
     }
+    return warmup;
+  }
 
-
-    // Search several vectors, return their neighbors' distance and ids.
-    // Both distances & ids are returned arraies of neighborCount elements,
-    // And need to be allocated by invoker, which capacity should be greater
-    // than [queryCount * neighborCount].
-    template<typename T>
-    void DiskANNInterface<T>::SearchIndex(const char*       vector,
-                                          unsigned __int64  queryCount,
-                                          unsigned __int64  neighborCount,
-                                          float*            distances,
-                                          unsigned __int64* ids) const {
-        try {
-            const T* query = (const T*) vector;
-            for (_u64 i = 0; i < queryCount; i++) {
-                _pFlashIndex->cached_beam_search(
-                    query + (i * this->m_dimension), neighborCount,
-                    this->Lsearch, ids + (i * neighborCount),
-                    distances + (i * neighborCount), this->beam_width);
-            }
-        } catch (const diskann::ANNException& ex) {
-            std::cerr << ex.message();
-        }
-    }
-
-    extern "C" __declspec(dllexport) ANNIndex::IANNIndex* CreateObjectFloat(
-        unsigned __int32 dimension, ANNIndex::DistanceType distanceType) {
-        return new diskann::DiskANNInterface<float>(dimension, distanceType);
-    }
-
-    extern "C" __declspec(dllexport) void ReleaseObjectFloat(
-        ANNIndex::IANNIndex* object) {
-        diskann::DiskANNInterface<float>* subclass =
-            dynamic_cast<diskann::DiskANNInterface<float>*>(object);
-        if (subclass != nullptr) {
-            delete subclass;
-        }
-    }
-
-    extern "C" __declspec(dllexport) ANNIndex::IANNIndex* CreateObjectByte(
-        unsigned __int32 dimension, ANNIndex::DistanceType distanceType) {
-        return new diskann::DiskANNInterface<int8_t>(dimension, distanceType);
-    }
-
-    extern "C" __declspec(dllexport) void ReleaseObjectByte(
-        ANNIndex::IANNIndex* object) {
-        diskann::DiskANNInterface<int8_t>* subclass =
-            dynamic_cast<diskann::DiskANNInterface<int8_t>*>(object);
-        if (subclass != nullptr) {
-            delete subclass;
-        }
-    }
-
-    template<typename T>
-    T* DiskANNInterface<T>::load_warmup(const std::string& cache_warmup_file,
-                                        uint64_t&          warmup_num,
-                                        uint64_t&          warmup_dim,
-                                        uint64_t&          warmup_aligned_dim) {
-        T* warmup = nullptr;
-        if (file_exists(cache_warmup_file)) {
-            diskann::load_aligned_bin<T>(cache_warmup_file, warmup, warmup_num,
-                                         warmup_dim, warmup_aligned_dim);
-            if (warmup_dim != this->m_dimension) {
-                std::stringstream stream;
-                stream << "Dimension mismatch in warmup file: "
-                       << cache_warmup_file << " warmup_dim: " << warmup_dim
-                       << " this->m_dimension: " << this->m_dimension;
-                std::cout << stream.str() << std::endl;
-                aligned_free(warmup);
-                warmup = nullptr;
-            }
-        } else {
-            warmup_num = 100000;
-            warmup_dim = this->m_dimension;
-            warmup_aligned_dim = this->aligned_dimension;
-            std::cout << "Generating random warmup file with dim " << warmup_dim
-                      << " and aligned dim " << warmup_aligned_dim
-                      << std::flush;
-            diskann::alloc_aligned(((void**) &warmup),
-                                   warmup_num * warmup_aligned_dim * sizeof(T),
-                                   8 * sizeof(T));
-            std::memset(warmup, 0, warmup_num * warmup_aligned_dim * sizeof(T));
-            std::random_device              rd;
-            std::mt19937                    gen(rd());
-            std::uniform_int_distribution<> dis(-128, 127);
-            for (uint32_t i = 0; i < warmup_num; i++) {
-                for (uint32_t d = 0; d < warmup_dim; d++) {
-                    warmup[i * warmup_aligned_dim + d] = (T) dis(gen);
-                }
-            }
-            std::cout << "..done" << std::endl;
-        }
-        return warmup;
-    }
-
-    template class DiskANNInterface<int8_t>;
-    template class DiskANNInterface<float>;
-    template class DiskANNInterface<uint8_t>;
+  template class DiskANNInterface<int8_t>;
+  template class DiskANNInterface<float>;
+  template class DiskANNInterface<uint8_t>;
 
 }  // namespace diskann

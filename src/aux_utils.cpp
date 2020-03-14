@@ -1,24 +1,26 @@
-#include "utils.h"
-#include "index.h"
+
 #include <algorithm>
 #include <atomic>
 #include <cassert>
 #include <fstream>
 #include <iostream>
-//#include <parallel/algorithm>
+#include <set>
 #include <string>
 #include <vector>
-#include <set>
+
+#include "aux_utils.h"
 #include "cached_io.h"
+#include "index.h"
 #include "partition_and_pq.h"
+#include "pq_flash_index.h"
 #include "utils.h"
 //#include <boost/dynamic_bitset.hpp>
-#include <set>
 
 namespace diskann {
-  double calc_recall_set(unsigned num_queries, unsigned *gold_std,
-                         float *gs_dist, unsigned dim_gs, unsigned *our_results,
-                         unsigned dim_or, unsigned recall_at) {
+  double calculate_recall(unsigned num_queries, unsigned *gold_std,
+                          float *gs_dist, unsigned dim_gs,
+                          unsigned *our_results, unsigned dim_or,
+                          unsigned recall_at) {
     double             total_recall = 0;
     std::set<unsigned> gt, res;
 
@@ -155,11 +157,7 @@ namespace diskann {
 
     std::cout << "Max input width: " << max_input_width
               << ", output width: " << output_width << std::endl;
-    //  _u64 rep_factor = (_u64)(std::round((float) nelems / (float) nnodes));
-    //  std::cout << "Input width: " << width
-    //            << ", output width: " << width * rep_factor << "\n";
 
-    //  width *= rep_factor;
     nsg_writer.write((char *) &output_width, sizeof(unsigned));
     std::string   medoid_file = output_nsg + "_medoids.bin";
     std::ofstream medoid_writer(medoid_file.c_str(), std::ios::binary);
@@ -183,8 +181,7 @@ namespace diskann {
     medoid_writer.close();
 
     std::cout << "Starting merge\n";
-    //  std::set<unsigned>    nhood_set;
-    //    boost::dynamic_bitset<> nhood_set(nnodes);
+
     std::vector<bool>     nhood_set(nnodes, 0);
     std::vector<unsigned> final_nhood;
 
@@ -236,7 +233,7 @@ namespace diskann {
     final_nhood.clear();
 
     std::cout << "Expected size: " << merged_index_size << std::endl;
-    //  merged_index_size = nsg_writer.get_file_size();
+
     nsg_writer.reset();
     nsg_writer.write((char *) &merged_index_size, sizeof(uint64_t));
 
@@ -259,8 +256,8 @@ namespace diskann {
       diskann::Parameters paras;
       paras.Set<unsigned>("L", (unsigned) L);
       paras.Set<unsigned>("R", (unsigned) R);
-      paras.Set<unsigned>("C", 2500);
-      paras.Set<float>("alpha", 4.0);
+      paras.Set<unsigned>("C", 750);
+      paras.Set<float>("alpha", 2.0f);
       paras.Set<unsigned>("num_rnds", 2);
       paras.Set<std::string>("save_path", mem_index_path);
 
@@ -285,8 +282,8 @@ namespace diskann {
       diskann::Parameters paras;
       paras.Set<unsigned>("L", L);
       paras.Set<unsigned>("R", (2 * (R / 3)));
-      paras.Set<unsigned>("C", 500);
-      paras.Set<float>("alpha", 1.5f);
+      paras.Set<unsigned>("C", 750);
+      paras.Set<float>("alpha", 2.0f);
       paras.Set<unsigned>("num_rnds", 2);
       paras.Set<std::string>("save_path", shard_index_file);
 
@@ -315,6 +312,81 @@ namespace diskann {
     }
     return 0;
   }
+
+  // General purpose support for DiskANN interface
+  //
+  //
+
+  // optimizes the beamwidth to maximize QPS for a given L_search subject to
+  // 99.9 latency not blowing up
+  template<typename T>
+  uint32_t optimize_beamwidth(diskann::PQFlashIndex<T> &_pFlashIndex,
+                              T *tuning_sample, _u64 tuning_sample_num,
+                              _u64 tuning_sample_aligned_dim, uint32_t L,
+                              uint32_t start_bw) {
+    uint32_t cur_bw = start_bw;
+    float    max_qps = 0;
+    uint32_t best_bw = start_bw;
+    bool     stop_flag = false;
+
+    if (cur_bw > 64)
+      stop_flag = true;
+
+    while (!stop_flag) {
+      std::vector<uint64_t> tuning_sample_result_ids_64(tuning_sample_num, 0);
+      std::vector<float>    tuning_sample_result_dists(tuning_sample_num, 0);
+      diskann::QueryStats * stats = new diskann::QueryStats[tuning_sample_num];
+
+      auto  s = std::chrono::high_resolution_clock::now();
+#pragma omp parallel for schedule(dynamic, 1)
+      for (_s64 i = 0; i < (int64_t) tuning_sample_num; i++) {
+        _pFlashIndex.cached_beam_search(
+            tuning_sample + (i * tuning_sample_aligned_dim), 1, L,
+            tuning_sample_result_ids_64.data() + (i * 1),
+            tuning_sample_result_dists.data() + (i * 1), cur_bw, stats + i);
+      }
+      auto e = std::chrono::high_resolution_clock::now();
+      std::chrono::duration<double> diff = e - s;
+      float qps = (1.0 * tuning_sample_num) / (1.0 * diff.count());
+
+      float lat_999 = diskann::get_percentile_stats(
+          stats, tuning_sample_num, 0.999,
+          [](const diskann::QueryStats &stats) { return stats.total_us; });
+
+      float mean_latency = diskann::get_mean_stats(
+          stats, tuning_sample_num,
+          [](const diskann::QueryStats &stats) { return stats.total_us; });
+
+      if (qps > max_qps && lat_999 < (15000) + mean_latency * 2) {
+        max_qps = qps;
+        best_bw = cur_bw;
+        //        std::cout<<"cur_bw: " << cur_bw <<", qps: " << qps <<",
+        //        mean_lat: " << mean_latency/1000<<", 99.9lat: " <<
+        //        lat_999/1000<<std::endl;
+        cur_bw = (std::ceil)((float) cur_bw * 1.1);
+      } else {
+        stop_flag = true;
+        //        std::cout<<"cur_bw: " << cur_bw <<", qps: " << qps <<",
+        //        mean_lat: " << mean_latency/1000<<", 99.9lat: " <<
+        //        lat_999/1000<<std::endl;
+      }
+      delete[] stats;
+    }
+    return best_bw;
+  }
+
+  template DISKANN_DLLEXPORT uint32_t optimize_beamwidth<int8_t>(
+      diskann::PQFlashIndex<int8_t> &_pFlashIndex, int8_t *tuning_sample,
+      _u64 tuning_sample_num, _u64 tuning_sample_aligned_dim, uint32_t L,
+      uint32_t start_bw);
+  template DISKANN_DLLEXPORT uint32_t optimize_beamwidth<uint8_t>(
+      diskann::PQFlashIndex<uint8_t> &_pFlashIndex, uint8_t *tuning_sample,
+      _u64 tuning_sample_num, _u64 tuning_sample_aligned_dim, uint32_t L,
+      uint32_t start_bw);
+  template DISKANN_DLLEXPORT uint32_t optimize_beamwidth<float>(
+      diskann::PQFlashIndex<float> &_pFlashIndex, float *tuning_sample,
+      _u64 tuning_sample_num, _u64 tuning_sample_aligned_dim, uint32_t L,
+      uint32_t start_bw);
 
   template DISKANN_DLLEXPORT int build_merged_vamana_index<int8_t>(
       std::string base_file, diskann::Metric _compareMetric, unsigned L,

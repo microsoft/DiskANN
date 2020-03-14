@@ -1,10 +1,9 @@
-#include <index.h>
-#include <omp.h>
-#include <string.h>
 #include <cstring>
 #include <iomanip>
+#include <omp.h>
 #include <set>
-#include "utils.h"
+#include <string.h>
+
 #ifndef _WINDOWS
 #include <sys/mman.h>
 #include <sys/stat.h>
@@ -12,7 +11,10 @@
 #include <unistd.h>
 #endif
 
+#include "aux_utils.h"
+#include "index.h"
 #include "memory_mapper.h"
+#include "utils.h"
 
 template<typename T>
 int search_memory_index(int argc, char** argv) {
@@ -64,8 +66,6 @@ int search_memory_index(int argc, char** argv) {
   index.load(memory_index_file.c_str());  // to load NSG
   std::cout << "Index loaded" << std::endl;
 
-  std::vector<unsigned> start_points;
-
   diskann::Parameters paras;
   std::string         recall_string = "Recall@" + std::to_string(recall_at);
   std::cout << std::setw(4) << "Ls" << std::setw(12) << "Latency"
@@ -85,9 +85,9 @@ int search_memory_index(int argc, char** argv) {
     auto    s = std::chrono::high_resolution_clock::now();
 #pragma omp parallel for schedule(dynamic, 1)
     for (int64_t i = 0; i < (int64_t) query_num; i++) {
-      std::pair<uint32_t, uint32_t> q_stats = index.beam_search(
-          query + i * query_aligned_dim, recall_at, L, beam_width, start_points,
-          query_result_ids[test_id].data() + i * recall_at);
+      std::pair<uint32_t, uint32_t> q_stats =
+          index.beam_search(query + i * query_aligned_dim, recall_at, L,
+                            query_result_ids[test_id].data() + i * recall_at);
 #pragma omp atomic
       total_cmps += q_stats.second;
 #pragma omp atomic
@@ -97,9 +97,9 @@ int search_memory_index(int argc, char** argv) {
 
     float recall = 0;
     if (calc_recall_flag)
-      recall = diskann::calc_recall_set(query_num, gt_ids, gt_dists, gt_dim,
-                                        query_result_ids[test_id].data(),
-                                        recall_at, recall_at);
+      recall = diskann::calculate_recall(query_num, gt_ids, gt_dists, gt_dim,
+                                         query_result_ids[test_id].data(),
+                                         recall_at, recall_at);
 
     std::chrono::duration<double> diff = e - s;
     float latency = (diff.count() / query_num) * (1000000);

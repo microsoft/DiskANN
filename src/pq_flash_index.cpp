@@ -164,7 +164,8 @@ namespace diskann {
         memset(scratch.aligned_scratch, 0, 256 * sizeof(float));
         memset(scratch.coord_scratch, 0, MAX_N_CMPS * this->aligned_dim);
         memset(scratch.aligned_query_T, 0, this->aligned_dim * sizeof(T));
-        memset(scratch.aligned_query_float, 0, this->aligned_dim * sizeof(float));
+        memset(scratch.aligned_query_float, 0,
+               this->aligned_dim * sizeof(float));
 
         ThreadData<T> data;
         data.ctx = ctx;
@@ -194,7 +195,6 @@ namespace diskann {
       diskann::aligned_free((void *) scratch.aligned_dist_scratch);
       diskann::aligned_free((void *) scratch.aligned_query_float);
       diskann::aligned_free((void *) scratch.aligned_query_T);
-
     }
   }
 
@@ -736,7 +736,8 @@ namespace diskann {
   void PQFlashIndex<T>::load_entry_points(const std::string entry_points_file,
                                           const std::string centroids_file) {
     if (!file_exists(entry_points_file)) {
-      std::cout << "Medoids file " << entry_points_file << " not found. Using default "
+      std::cout << "Medoids file " << entry_points_file
+                << " not found. Using default "
                    "medoid as starting point."
                 << std::endl;
       return;
@@ -1005,7 +1006,6 @@ namespace diskann {
     memcpy(data.scratch.aligned_query_T, query1, this->data_dim * sizeof(T));
     const T *    query = data.scratch.aligned_query_T;
     const float *query_float = data.scratch.aligned_query_float;
-    
 
     IOContext ctx = data.ctx;
     auto      query_scratch = &(data.scratch);
@@ -1049,7 +1049,6 @@ namespace diskann {
     std::vector<Neighbor> full_retset;
     full_retset.reserve(4096);
     tsl::robin_map<_u64, T *> fp_coords;
-
 
     _u32  best_medoid = 0;
     float best_dist = (std::numeric_limits<float>::max)();

@@ -1,16 +1,13 @@
 #include "ann_exception.h"
 #include <sstream>
 
-
-
 namespace diskann {
   ANNException::ANNException(const std::string& message, int errorCode)
       : _errorCode(errorCode), _message(message), _funcSig(""), _fileName(""),
         _lineNum(0) {
   }
 
-  ANNException::ANNException(const std::string& message,
-                                              int                errorCode,
+  ANNException::ANNException(const std::string& message, int errorCode,
                              const std::string& funcSig,
                              const std::string& fileName, unsigned lineNum)
       : ANNException(message, errorCode) {

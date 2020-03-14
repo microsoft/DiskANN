@@ -3,10 +3,11 @@
 #include <cassert>
 #include <fstream>
 #include <iostream>
-//#include <parallel/algorithm>
+#include <set>
 #include <string>
 #include <vector>
-#include <set>
+
+#include "aux_utils.h"
 #include "cached_io.h"
 #include "utils.h"
 //#include <boost/dynamic_bitset.hpp>
