@@ -1,14 +1,5 @@
-Notes:
-1) Constructor does not assign frozen points. Need to do it externally
-2) Check save() function
-3) in save_function, make use of save_bin<T> instead of rewriting code
-4) load() SHOULD NOT assume that tags is in that file. What is we specify our own tag file? 
-5) Fix in_graph everywhere
-6) Support starting search from any node in PQ_FLASH and in cached_beam_search
-7) Make use of beamsearch instead of get_neighbors for index building
-8) Use starting point for the search code
-9) support for high and low degrees
-10) load PQ data on the fly
-11) Use random projections instead of PQ?
-12) Add re-direction edges in prune?
-13) Check if Windows code works, and also the web service, and diskann_interface DLL
+Building disk index by merging shards currently needs a lot of working disk space.
+FOr each shard, we need to store the index; then we merge them all using merge_shards program to get a merged memory index, and then we create a disk index using this merged memory index.
+
+We should have a direct program which adds a new shard to the final disk index (and also perhaps parallelize this code to speed it up)
+
