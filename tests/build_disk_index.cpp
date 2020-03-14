@@ -1,16 +1,19 @@
 //#include <distances.h>
 //#include <indexing.h>
+//
+#include <omp.h>
+
 #include <index.h>
 #include <math_utils.h>
 #include "partition_and_pq.h"
 #include "utils.h"
 
-// #define TRAINING_SET_SIZE 2000000
-//#define TRAINING_SET_SIZE 2000000
+#define TRAINING_SET_SIZE 1500000
 
 template<typename T>
 bool build_disk_index(const char* dataFilePath, const char* indexFilePath,
-                      const char* indexBuildParameters) {
+                      const char*  indexBuildParameters,
+                      const Metric compareMetric) {
   std::stringstream parser;
   parser << std::string(indexBuildParameters);
   std::string              cur_param;
@@ -20,85 +23,68 @@ bool build_disk_index(const char* dataFilePath, const char* indexFilePath,
 
   if (param_list.size() != 5) {
     std::cout << "Correct usage of parameters is L (indexing search list size) "
-                 "R (max degree) C (visited list maximum size) B (approximate "
-                 "compressed number of bytes per datapoint to store in "
-                 "memory) sample_size (for PQ generation)"
+                 "R (max degree) B (RAM limit of final index in "
+                 "GB) M (memory limit while indexing) T (number of threads for "
+                 "indexing)"
               << std::endl;
     return 1;
   }
 
   std::string index_prefix_path(indexFilePath);
-  std::string index_params_path = index_prefix_path + "_params.bin";
-  std::string train_file_path = index_prefix_path + "_training_set_float.bin";
   std::string pq_pivots_path = index_prefix_path + "_pq_pivots.bin";
   std::string pq_compressed_vectors_path =
       index_prefix_path + "_compressed.bin";
-  std::string randnsg_path = index_prefix_path + "_unopt.rnsg";
-  std::string diskopt_path = index_prefix_path + "_diskopt.rnsg";
+  std::string mem_index_path = index_prefix_path + "_mem.index";
+  std::string disk_index_path = index_prefix_path + "_disk.index";
 
   unsigned L = (unsigned) atoi(param_list[0].c_str());
   unsigned R = (unsigned) atoi(param_list[1].c_str());
-  unsigned C = (unsigned) atoi(param_list[2].c_str());
-  size_t   num_pq_chunks = (size_t) atoi(param_list[3].c_str());
-  size_t   TRAINING_SET_SIZE = (size_t) atoi(param_list[4].c_str());
+  double   final_index_ram_limit =
+      (((double) atof(param_list[2].c_str())) - 0.25) * 1024.0 * 1024.0 *
+      1024.0;
+  double indexing_ram_budget = (float) atof(param_list[3].c_str());
+  _u32   num_threads = (_u32) atoi(param_list[4].c_str());
+
+  auto s = std::chrono::high_resolution_clock::now();
 
   std::cout << "loading data.." << std::endl;
   T* data_load = NULL;
 
   size_t points_num, dim;
 
-  diskann::load_bin<T>(dataFilePath, data_load, points_num, dim);
-  std::cout << "done." << std::endl;
+  diskann::get_bin_metadata(dataFilePath, points_num, dim);
+
+  size_t num_pq_chunks = (std::floor)(_u64(final_index_ram_limit / points_num));
+  std::cout << "Going to compress " << dim << "-dimensional data into "
+            << num_pq_chunks << " bytes per vector." << std::endl;
 
   auto s = std::chrono::high_resolution_clock::now();
 
-  size_t train_size;
+  size_t train_size, train_dim;
   float* train_data;
 
-  float p_val = ((float) TRAINING_SET_SIZE / (float) points_num);
+  double p_val = ((double) TRAINING_SET_SIZE / (double) points_num);
   // generates random sample and sets it to train_data and updates train_size
-  gen_random_slice<T>(data_load, points_num, dim, p_val, train_data,
-                      train_size);
+  gen_random_slice<T>(dataFilePath, p_val, train_data, train_size, train_dim);
 
-  std::cout << "Training loaded of size " << train_size << std::endl;
-
-  //  unsigned    nn_graph_deg = (unsigned) atoi(argv[3]);
+  std::cout << "Training data loaded of size " << train_size << std::endl;
 
   generate_pq_pivots(train_data, train_size, dim, 256, num_pq_chunks, 15,
                      pq_pivots_path);
   generate_pq_data_from_pivots<T>(dataFilePath, 256, num_pq_chunks,
                                   pq_pivots_path, pq_compressed_vectors_path);
 
-  delete[] data_load;
   delete[] train_data;
 
-  diskann::Parameters paras;
-  paras.Set<unsigned>("L", L);
-  paras.Set<unsigned>("R", R);
-  paras.Set<unsigned>("C", C);
-  paras.Set<float>("alpha", 1.2f);
-  paras.Set<unsigned>("num_rnds", 2);
-  paras.Set<std::string>("save_path", randnsg_path);
+  train_data = nullptr;
 
-  diskann::Index<T>* _pNsgIndex =
-      new diskann::Index<T>(diskann::L2, dataFilePath);
-  if (file_exists(randnsg_path.c_str())) {
-    _pNsgIndex->load(randnsg_path.c_str());
-  } else {
-    _pNsgIndex->build(paras);
-    _pNsgIndex->save(randnsg_path.c_str());
-  }
+  diskann::build_merged_vamana_index<T>(dataFilePath, compareMetric, L, R,
+                                        p_val, indexing_ram_budget,
+                                        mem_index_path);
 
-  _pNsgIndex->save_disk_opt_graph(diskopt_path.c_str());
+  double sample_sampling_rate = (150000.0 / points_num);
 
-  uint32_t* params_array = new uint32_t[5];
-  params_array[0] = (uint32_t) L;
-  params_array[1] = (uint32_t) R;
-  params_array[2] = (uint32_t) C;
-  params_array[3] = (uint32_t) dim;
-  params_array[4] = (uint32_t) num_pq_chunks;
-  diskann::save_bin<uint32_t>(index_params_path.c_str(), params_array, 5, 1);
-  std::cout << "Saving params to " << index_params_path << "\n";
+  gen_random_slice<T>(dataFilePath, sample_base_prefix, sample_sampling_rate);
 
   auto                          e = std::chrono::high_resolution_clock::now();
   std::chrono::duration<double> diff = e - s;
@@ -111,9 +97,10 @@ bool build_disk_index(const char* dataFilePath, const char* indexFilePath,
 int main(int argc, char** argv) {
   if (argc != 9) {
     std::cout << "Usage: " << argv[0]
-              << "  <data_type[float/uint8/int8]>   <data_file[.bin]>  "
-                 "<index_prefix_path>  L "
-                 "R C N_CHUNKS TRAINING_SIZE"
+              << "  <data_type [float/uint8/int8]>   <data_file [.bin]>  "
+                 "<index_prefix_path>  <L "
+                 "< [ram limit of final index in GB]> <M [indexing time memory "
+                 "limit in GB]> <T [number of threads during indexing>"
               << std::endl;
   } else {
     std::string params = std::string(argv[4]) + " " + std::string(argv[5]) +
