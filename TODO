@@ -5,7 +5,7 @@ We should have a direct program which adds a new shard to the final disk index (
 
 (2) Merge ground truth into DLVS format?
 
-(3) Add executable for ground truth calculation from exp-knn in tests/utils/
+DONE (3) Add executable for ground truth calculation from exp-knn in tests/utils/
 
 DONE (4) clean up search_memory_index : remove beamwidth argument, also take in distances, remove output of hops, print QPS
 

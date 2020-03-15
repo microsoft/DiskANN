@@ -55,6 +55,16 @@ else()
 	target_link_libraries(calculate_recall ${PROJECT_NAME} aio)
 endif()
 
+
+add_executable(compute_groundtruth compute_groundtruth.cpp)
+if(MSVC)
+	target_link_options(compute_groundtruth PRIVATE /MACHINE:x64)
+	target_link_libraries(compute_groundtruth debug ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG}/nsg_dll.lib)
+	target_link_libraries(compute_groundtruth optimized ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE}/nsg_dll.lib)
+else() 
+	target_link_libraries(compute_groundtruth ${PROJECT_NAME} aio)
+endif()
+
 #add_executable(convert_axon_to_bin convert_axon_to_bin.cpp ${PROJECT_SOURCE_DIR}/src/ann_exception.cpp)
 #if(MSVC)
 #	target_include_directories(convert_axon_to_bin PRIVATE "${BOOST_ROOT}")
