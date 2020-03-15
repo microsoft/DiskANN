@@ -65,6 +65,7 @@ namespace diskann {
     std::string pq_compressed_vectors_path =
         index_prefix_path + "_compressed.bin";
     std::string mem_index_path = index_prefix_path + "_mem.index";
+    std::string mem_index_path = index_prefix_path + "_medoids.bin";
     std::string disk_index_path = index_prefix_path + "_disk.index";
     std::string merged_index_prefix = index_prefix_path + "_merged";
 
@@ -112,15 +113,15 @@ namespace diskann {
                                       pq_pivots_path,
                                       pq_compressed_vectors_path);
 
-      diskann::build_merged_vamana_index<T>(dataFilePath, _compareMetric, L, R,
-                                            training_set_sampling_rate,
-                                            ram_budget, mem_index_path);
+      diskann::build_merged_vamana_index<T>(
+          dataFilePath, _compareMetric, L, R, training_set_sampling_rate,
+          ram_budget, mem_index_path, medoids_file);
       delete[] train_data;
       train_data = nullptr;
 
-      _pFlashIndex.reset(new PQFlashIndex<T>());
-      _pFlashIndex->create_disk_layout(std::string(dataFilePath),
-                                       mem_index_path, disk_index_path);
+      //      _pFlashIndex.reset(new PQFlashIndex<T>());
+      diskann::create_disk_layout<T>(std::string(dataFilePath), mem_index_path,
+                                     disk_index_path);
 
       // delete all shard data and mem index file
       std::remove(mem_index_path.c_str());
@@ -161,10 +162,9 @@ namespace diskann {
     std::string data_bin = index_prefix_path + "_compressed.bin";
     std::string pq_tables_bin = index_prefix_path + "_pq_pivots.bin";
     std::string disk_index_file = index_prefix_path + "_disk.index";
-    std::string medoids_file = index_prefix_path + "_mem.index_medoids.bin";
+    std::string medoids_file = index_prefix_path + "__medoids.bin";
     std::string cache_list_file = index_prefix_path + "_cache_list.bin";
-    std::string centroid_data_file = index_prefix_path + "_centroids_float.bin";
-    std::string cache_warmup_file = index_prefix_path + "_warmup_data.bin";
+    std::string sample_data_file = index_prefix_path + "_sample_data.bin";
 
     size_t data_dim, num_pq_centers;
     diskann::get_bin_metadata(pq_tables_bin, num_pq_centers, data_dim);

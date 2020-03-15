@@ -1,21 +1,20 @@
-#include <utils.h>
 #include <cmath>
 #include <cstring>
 #include <fstream>
 #include <iostream>
 #include <limits>
 #include <vector>
-#include <pq_flash_index.h>
-#include <index.h>
+
+#include "aux_utils.h"
 #include "cached_io.h"
+#include "utils.h"
 
 template<typename T>
 int create_disk_layout(int argc, char **argv) {
-  diskann::PQFlashIndex<T> _pFlashIndex;
-  std::string              base_file(argv[2]);
-  std::string              rand_nsg_file(argv[3]);
-  std::string              output_file(argv[4]);
-  _pFlashIndex.create_disk_layout(base_file, rand_nsg_file, output_file);
+  std::string base_file(argv[2]);
+  std::string rand_nsg_file(argv[3]);
+  std::string output_file(argv[4]);
+  diskann::create_disk_layout<T>(base_file, rand_nsg_file, output_file);
   return 0;
 }
 

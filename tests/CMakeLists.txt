@@ -29,6 +29,16 @@ else()
 endif()
 
 
+
+add_executable(build_disk_index build_disk_index.cpp)
+if(MSVC)
+	target_link_options(build_disk_index PRIVATE /MACHINE:x64 /DEBUG:FULL "/INCLUDE:_tcmalloc")
+	target_link_libraries(build_disk_index debug ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG}/nsg_dll.lib ${PROJECT_SOURCE_DIR}/dependencies/windows/tcmalloc/libtcmalloc_minimal.lib)
+	target_link_libraries(build_disk_index optimized ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE}/nsg_dll.lib ${PROJECT_SOURCE_DIR}/dependencies/windows/tcmalloc/libtcmalloc_minimal.lib)
+else() 
+	target_link_libraries(build_disk_index ${PROJECT_NAME} -ltcmalloc aio)
+endif()
+
 add_executable(search_disk_index search_disk_index.cpp
     ${PROJECT_SOURCE_DIR}/src/aux_utils.cpp)
 if(MSVC)
