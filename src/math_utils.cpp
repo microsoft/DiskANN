@@ -383,7 +383,8 @@ namespace kmeans {
       std::cout << "Lloyd's iter " << i << "  dist_sq residual: " << residual
                 << std::endl;
 
-      if (((i != 0) && ((old_residual - residual) / residual) < 0.00001) || (residual  < std::numeric_limits<float>::epsilon())) {
+      if (((i != 0) && ((old_residual - residual) / residual) < 0.00001) ||
+          (residual < std::numeric_limits<float>::epsilon())) {
         std::cout << "Residuals unchanged: " << old_residual << " becomes "
                   << residual << ". Early termination." << std::endl;
         break;

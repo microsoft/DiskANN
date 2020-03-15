@@ -47,16 +47,18 @@ namespace diskann {
         Parameters &             parameters,
         const std::vector<TagT> &tags = std::vector<TagT>());
 
-    // Gopal. Added beam_search overload that takes L as parameter, so that we
+    // Gopal. Added search overload that takes L as parameter, so that we
     // can customize L on a per-query basis without tampering with "Parameters"
-    DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> beam_search(
-        const T *query, const size_t K, const unsigned L, unsigned *indices);
+    DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> search(const T *query,
+                                                           const size_t   K,
+                                                           const unsigned L,
+                                                           unsigned *indices);
 
-    DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> beam_search(
+    DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> search(
         const T *query, const uint64_t K, const unsigned L,
         std::vector<unsigned> init_ids, uint64_t *indices, float *distances);
 
-    DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> beam_search_tags(
+    DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> search_with_tags(
         const T *query, const size_t K, const unsigned L, TagT *tags,
         unsigned frozen_pts, unsigned *indices_buffer = NULL);
 

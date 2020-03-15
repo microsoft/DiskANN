@@ -151,10 +151,9 @@ namespace diskann {
     std::vector<unsigned> start_points(0);
 
     for (auto i = 0; i < queryCount; i++) {
-      _pIndex->beam_search(query + i * this->aligned_dimension, neighborCount,
-                           this->Lsearch, 1, start_points,
-                           ids + (i * neighborCount),
-                           distances + (i * neighborCount));
+      _pIndex->search(query + i * this->aligned_dimension, neighborCount,
+                      this->Lsearch, start_points, ids + (i * neighborCount),
+                      distances + (i * neighborCount));
     }
   }
 

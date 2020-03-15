@@ -541,10 +541,11 @@ namespace diskann {
         1024.0;
     double indexing_ram_budget = (float) atof(param_list[3].c_str());
     if (indexing_ram_budget < 0) {
-        std::cout<<"Not building index. Please provide more RAM budget" << std::endl;
-        return 0;
+      std::cout << "Not building index. Please provide more RAM budget"
+                << std::endl;
+      return 0;
     }
-    _u32   num_threads = (_u32) atoi(param_list[4].c_str());
+    _u32 num_threads = (_u32) atoi(param_list[4].c_str());
 
     if (num_threads != 0) {
       omp_set_num_threads(num_threads);
@@ -560,13 +561,13 @@ namespace diskann {
     size_t num_pq_chunks =
         (std::floor)(_u64(final_index_ram_limit / points_num));
 
-    num_pq_chunks = num_pq_chunks <=0 ? 1 : num_pq_chunks;
+    num_pq_chunks = num_pq_chunks <= 0 ? 1 : num_pq_chunks;
     num_pq_chunks = num_pq_chunks > dim ? dim : num_pq_chunks;
-    num_pq_chunks = num_pq_chunks > MAX_PQ_CHUNKS ? MAX_PQ_CHUNKS : num_pq_chunks;
+    num_pq_chunks =
+        num_pq_chunks > MAX_PQ_CHUNKS ? MAX_PQ_CHUNKS : num_pq_chunks;
 
     std::cout << "Compressing " << dim << "-dimensional data into "
               << num_pq_chunks << " bytes per vector." << std::endl;
-
 
     size_t train_size, train_dim;
     float *train_data;

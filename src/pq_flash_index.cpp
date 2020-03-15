@@ -452,7 +452,8 @@ namespace diskann {
     std::random_shuffle(cur_level_node_list.begin(), cur_level_node_list.end());
     size_t residual = num_nodes_to_cache - node_list.size();
 
-    for (size_t i = 0; i < (std::min)(residual, cur_level_node_list.size()); i++)
+    for (size_t i = 0; i < (std::min)(residual, cur_level_node_list.size());
+         i++)
       node_list.push_back(cur_level_node_list[i]);
 
     std::cout << "Level: " << lvl << std::flush;

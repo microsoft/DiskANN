@@ -932,10 +932,10 @@ namespace diskann {
   }
 
   template<typename T, typename TagT>
-  std::pair<uint32_t, uint32_t> Index<T, TagT>::beam_search(const T *query,
-                                                            const size_t   K,
-                                                            const unsigned L,
-                                                            unsigned *indices) {
+  std::pair<uint32_t, uint32_t> Index<T, TagT>::search(const T *query,
+                                                       const size_t   K,
+                                                       const unsigned L,
+                                                       unsigned *     indices) {
     std::vector<unsigned>    init_ids;
     tsl::robin_set<unsigned> visited(10 * L);
     std::vector<Neighbor>    best_L_nodes, expanded_nodes_info;
@@ -959,7 +959,7 @@ namespace diskann {
   }
 
   template<typename T, typename TagT>
-  std::pair<uint32_t, uint32_t> Index<T, TagT>::beam_search(
+  std::pair<uint32_t, uint32_t> Index<T, TagT>::search(
       const T *query, const uint64_t K, const unsigned L,
       std::vector<unsigned> init_ids, uint64_t *indices, float *distances) {
     tsl::robin_set<unsigned> visited(10 * L);
@@ -985,12 +985,12 @@ namespace diskann {
   }
 
   template<typename T, typename TagT>
-  std::pair<uint32_t, uint32_t> Index<T, TagT>::beam_search_tags(
+  std::pair<uint32_t, uint32_t> Index<T, TagT>::search_with_tags(
       const T *query, const size_t K, const unsigned L, TagT *tags,
       unsigned frozen_pts, unsigned *indices_buffer) {
     const bool alloc = indices_buffer == NULL;
     auto       indices = alloc ? new unsigned[K] : indices_buffer;
-    auto       ret = beam_search(query, K, L, indices);
+    auto       ret = search(query, K, L, indices);
     for (int i = 0; i < (int) K; ++i)
       tags[i] = _location_to_tag[indices[i]];
     if (alloc)
