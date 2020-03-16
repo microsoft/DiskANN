@@ -27,3 +27,8 @@
 (14) Need to incorporate SATURATE_GRAPH to handle build_memory_index as well as build_disk_index
 
 (15) Eliminate parameters all together? It is giving warnings in linux compiler.
+
+(16) Add indexing capability with cosine similarity
+
+(17) Add indexing capability with maximum inner product similarity
+
