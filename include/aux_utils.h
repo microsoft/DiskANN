@@ -30,6 +30,11 @@ typedef int FileHandle;
 #include "windows_customizations.h"
 
 namespace diskann {
+  const size_t TRAINING_SET_SIZE = 1500000;
+  const double SPACE_FOR_CACHED_NODES_IN_GB = 0.25;
+  const double THRESHOLD_FOR_CACHING_IN_GB = 1.0;
+  const uint32_t NUM_NODES_TO_CACHE = 250000;
+
 
   template<typename T>
   class PQFlashIndex;
@@ -40,6 +45,11 @@ namespace diskann {
 
   DISKANN_DLLEXPORT void read_idmap(const std::string &    fname,
                                     std::vector<unsigned> &ivecs);
+
+  template<typename T>
+  DISKANN_DLLEXPORT T *load_warmup(const std::string &cache_warmup_file,
+                                   uint64_t &warmup_num, uint64_t warmup_dim,
+                                   uint64_t warmup_aligned_dim);
 
   DISKANN_DLLEXPORT int merge_shards(const std::string &nsg_prefix,
                                      const std::string &nsg_suffix,
@@ -57,7 +67,7 @@ namespace diskann {
 
   template<typename T>
   DISKANN_DLLEXPORT uint32_t
-  optimize_beamwidth(diskann::PQFlashIndex<T> &_pFlashIndex, T *tuning_sample,
+  optimize_beamwidth(std::unique_ptr<diskann::PQFlashIndex<T>> &_pFlashIndex, T *tuning_sample,
                      _u64 tuning_sample_num, _u64 tuning_sample_aligned_dim,
                      uint32_t L, uint32_t start_bw = 2);
 

@@ -101,15 +101,15 @@ int search_disk_index(int argc, char** argv) {
     calc_recall_flag = true;
   }
 
-  diskann::PQFlashIndex<T> _pFlashIndex;
+  std::unique_ptr<diskann::PQFlashIndex<T>> _pFlashIndex(new diskann::PQFlashIndex<T>());
 
   int res =
-      _pFlashIndex.load(num_threads, pq_centroids_file.c_str(),
+      _pFlashIndex->load(num_threads, pq_centroids_file.c_str(),
                         compressed_data_file.c_str(), disk_index_file.c_str());
 
   std::string centroid_data_file = "";
-  _pFlashIndex.load_entry_points(medoids_file, centroid_data_file);
-  _pFlashIndex.cache_medoid_nhoods();
+  _pFlashIndex->load_entry_points(medoids_file, centroid_data_file);
+  _pFlashIndex->cache_medoid_nhoods();
 
   if (res != 0) {
     return res;
@@ -118,8 +118,8 @@ int search_disk_index(int argc, char** argv) {
   std::vector<uint32_t> node_list;
   std::cout << "Caching " << num_nodes_to_cache << " BFS nodes around medoid(s)"
             << std::endl;
-  _pFlashIndex.cache_bfs_levels(num_nodes_to_cache, node_list);
-  _pFlashIndex.load_cache_list(node_list);
+  _pFlashIndex->cache_bfs_levels(num_nodes_to_cache, node_list);
+  _pFlashIndex->load_cache_list(node_list);
 
   omp_set_num_threads(num_threads);
 
@@ -152,7 +152,7 @@ int search_disk_index(int argc, char** argv) {
 
 #pragma omp parallel for schedule(dynamic, 1)
   for (_s64 i = 0; i < (int64_t) warmup_num; i++) {
-    _pFlashIndex.cached_beam_search(warmup + (i * warmup_aligned_dim), 1,
+    _pFlashIndex->cached_beam_search(warmup + (i * warmup_aligned_dim), 1,
                                     warmup_L,
                                     warmup_result_ids_64.data() + (i * 1),
                                     warmup_result_dists.data() + (i * 1), 4);
@@ -199,7 +199,7 @@ int search_disk_index(int argc, char** argv) {
     auto                  s = std::chrono::high_resolution_clock::now();
 #pragma omp               parallel for schedule(dynamic, 1)
     for (_s64 i = 0; i < (int64_t) query_num; i++) {
-      _pFlashIndex.cached_beam_search(
+      _pFlashIndex->cached_beam_search(
           query + (i * query_aligned_dim), recall_at, L,
           query_result_ids_64.data() + (i * recall_at),
           query_result_dists[test_id].data() + (i * recall_at),

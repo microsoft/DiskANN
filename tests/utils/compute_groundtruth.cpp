@@ -223,8 +223,8 @@ inline void load_bin_as_float(const char *filename, float *&data, size_t &npts,
   //  data =  (nptsuint64_t*ndimsuint64_t, ALIGNMENT);
   data = aligned_malloc<float>(nptsuint64_t * ndimsuint64_t, ALIGNMENT);
 #pragma omp parallel for schedule(dynamic, 32768)
-  for (uint64_t i = 0; i < nptsuint64_t; i++) {
-    for (uint64_t j = 0; j < ndimsuint64_t; j++) {
+  for (int64_t i = 0; i < (int64_t) nptsuint64_t; i++) {
+    for (int64_t j = 0; j < (int64_t) ndimsuint64_t; j++) {
       float cur_val_float = (float) data_T[i * ndimsuint64_t + j];
       std::memcpy((char *) (data + i * ndimsuint64_t + j),
                   (char *) &cur_val_float, sizeof(float));

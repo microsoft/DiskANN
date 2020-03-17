@@ -38,12 +38,10 @@ namespace diskann {
    public:
     // Vector dimension.
     unsigned __int32       m_dimension;
-    unsigned __int32       aligned_dimension;
+    unsigned __int32       m_aligned_dimension;
     ANNIndex::DistanceType m_distanceType;
 
    private:
-    T* load_warmup(const std::string& cache_warmup_file, uint64_t& warmup_num,
-                   uint64_t& warmup_dim, uint64_t& warmup_aligned_dim);
 
     std::string _nsgPathPrefix;
     std::unique_ptr<diskann::Index<T, int>> _pNsgIndex;

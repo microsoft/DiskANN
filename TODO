@@ -8,9 +8,9 @@
 
 (5) Add optimize BW code into interface. DONE
 
-(6) Clean up the parameters to ANN interface.
+(6) Clean up the parameters to ANN interface. DONE
 
-(7) Add the int8 distance AVX2.
+(7) Add the uint8 distance AVX2.
 
 (8) Check Shi's bug: if cache size is > num_nodes? DONE
 
@@ -22,7 +22,7 @@
 
 (12) Connect up index if disconnected by just linking start points or rebuilding an index on excluded points
 
-(13) Try to get rid of exposing internal parameters, such as sampling rate, C, etc.
+(13) Try to get rid of exposing internal parameters, such as sampling rate, C, etc. DONE
 
 (14) Need to incorporate SATURATE_GRAPH to handle build_memory_index as well as build_disk_index
 
