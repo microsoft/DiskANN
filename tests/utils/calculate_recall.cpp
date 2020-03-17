@@ -5,6 +5,8 @@
 #include <set>
 #include <string>
 #include <vector>
+
+#include "aux_utils.h"
 #include "utils.h"
 
 int main(int argc, char** argv) {
@@ -39,7 +41,7 @@ int main(int argc, char** argv) {
     return -1;
   }
   std::cout << "Calculating recall@" << recall_at << std::endl;
-  float recall_val = diskann::calc_recall_set(
+  float recall_val = diskann::calculate_recall(
       points_num, gold_std, gs_dist, dim_gs, our_results, dim_or, recall_at);
 
   //  double avg_recall = (recall*1.0)/(points_num*1.0);

@@ -1,14 +1,34 @@
-Notes:
-1) Constructor does not assign frozen points. Need to do it externally
-2) Check save() function
-3) in save_function, make use of save_bin<T> instead of rewriting code
-4) load() SHOULD NOT assume that tags is in that file. What is we specify our own tag file? 
-5) Fix in_graph everywhere
-6) Support starting search from any node in PQ_FLASH and in cached_beam_search
-7) Make use of beamsearch instead of get_neighbors for index building
-8) Use starting point for the search code
-9) support for high and low degrees
-10) load PQ data on the fly
-11) Use random projections instead of PQ?
-12) Add re-direction edges in prune?
-13) Check if Windows code works, and also the web service, and diskann_interface DLL
+(1) Building disk index by merging shards currently needs a lot of working disk space. For each shard, we need to store the index; then we merge them all using merge_shards program to get a merged memory index, and then we create a disk index using this merged memory index. We should have a direct program which adds a new shard to the final disk index (and also perhaps parallelize this code to speed it up).
+
+(2) Merge ground truth into DLVS format?. DONE, see (3) below.
+
+(3) Add executable for ground truth calculation from exp-knn in tests/utils/? DONE. This program outputs ground truth in our format and theirs.
+
+(4) Clean up search_memory_index : remove beamwidth argument, also take in distances, remove output of hops, print QPS. DONE
+
+(5) Add optimize BW code into interface. DONE
+
+(6) Clean up the parameters to ANN interface. DONE
+
+(7) Add the uint8 distance AVX2.
+
+(8) Check Shi's bug: if cache size is > num_nodes? DONE
+
+(9) add linux driver for build disk index with RAM budget. DONE
+
+(10) Update readmes to explain the programs, formats, etc.
+
+(11) Do a thorough walk through of code to detect possible crashes due to corner cases
+
+(12) Connect up index if disconnected by just linking start points or rebuilding an index on excluded points
+
+(13) Try to get rid of exposing internal parameters, such as sampling rate, C, etc. DONE
+
+(14) Need to incorporate SATURATE_GRAPH to handle build_memory_index as well as build_disk_index
+
+(15) Eliminate parameters all together? It is giving warnings in linux compiler.
+
+(16) Add indexing capability with cosine similarity
+
+(17) Add indexing capability with maximum inner product similarity
+

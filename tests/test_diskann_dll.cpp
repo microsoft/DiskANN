@@ -21,7 +21,7 @@ float calc_recall(_u64 num_queries, unsigned* gold_std, _u64 dim_gs,
         }
   }
   return ((float) total_recall) / ((float) num_queries) *
-         (100.0 / ((float) recall_at));
+         (100.0f / ((float) recall_at));
 }
 
 void write_Tvecs_unsigned(std::string fname, _u64* input, _u64 npts,

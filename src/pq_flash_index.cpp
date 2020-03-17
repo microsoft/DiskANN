@@ -150,9 +150,9 @@ namespace diskann {
         diskann::alloc_aligned((void **) &scratch.aligned_scratch,
                                256 * sizeof(float), 256);
         diskann::alloc_aligned((void **) &scratch.aligned_pq_coord_scratch,
-                               16384 * sizeof(_u8), 256);
+                               25600 * sizeof(_u8), 256);
         diskann::alloc_aligned((void **) &scratch.aligned_pqtable_dist_scratch,
-                               16384 * sizeof(float), 256);
+                               25600 * sizeof(float), 256);
         diskann::alloc_aligned((void **) &scratch.aligned_dist_scratch,
                                512 * sizeof(float), 256);
         diskann::alloc_aligned((void **) &scratch.aligned_query_T,
@@ -164,7 +164,8 @@ namespace diskann {
         memset(scratch.aligned_scratch, 0, 256 * sizeof(float));
         memset(scratch.coord_scratch, 0, MAX_N_CMPS * this->aligned_dim);
         memset(scratch.aligned_query_T, 0, this->aligned_dim * sizeof(T));
-        memset(scratch.aligned_query_float, 0, this->aligned_dim * sizeof(float));
+        memset(scratch.aligned_query_float, 0,
+               this->aligned_dim * sizeof(float));
 
         ThreadData<T> data;
         data.ctx = ctx;
@@ -194,7 +195,6 @@ namespace diskann {
       diskann::aligned_free((void *) scratch.aligned_dist_scratch);
       diskann::aligned_free((void *) scratch.aligned_query_float);
       diskann::aligned_free((void *) scratch.aligned_query_T);
-
     }
   }
 
@@ -452,7 +452,8 @@ namespace diskann {
     std::random_shuffle(cur_level_node_list.begin(), cur_level_node_list.end());
     size_t residual = num_nodes_to_cache - node_list.size();
 
-    for (size_t i = 0; i < residual; i++)
+    for (size_t i = 0; i < (std::min)(residual, cur_level_node_list.size());
+         i++)
       node_list.push_back(cur_level_node_list[i]);
 
     std::cout << "Level: " << lvl << std::flush;
@@ -736,7 +737,8 @@ namespace diskann {
   void PQFlashIndex<T>::load_entry_points(const std::string entry_points_file,
                                           const std::string centroids_file) {
     if (!file_exists(entry_points_file)) {
-      std::cout << "Medoids file " << entry_points_file << " not found. Using default "
+      std::cout << "Medoids file " << entry_points_file
+                << " not found. Using default "
                    "medoid as starting point."
                 << std::endl;
       return;
@@ -849,126 +851,6 @@ namespace diskann {
     this->thread_data.push_notify_all();
   }
 
-  template<typename T>
-  void PQFlashIndex<T>::create_disk_layout(const std::string base_file,
-                                           const std::string mem_index_file,
-                                           const std::string output_file) {
-    unsigned npts, ndims;
-
-    // amount to read or write in one shot
-    _u64            read_blk_size = 64 * 1024 * 1024;
-    _u64            write_blk_size = read_blk_size;
-    cached_ifstream base_reader(base_file, read_blk_size);
-    base_reader.read((char *) &npts, sizeof(uint32_t));
-    base_reader.read((char *) &ndims, sizeof(uint32_t));
-
-    size_t npts_64, ndims_64;
-    npts_64 = npts;
-    ndims_64 = ndims;
-
-    // create cached reader + writer
-    size_t          actual_file_size = get_file_size(mem_index_file);
-    cached_ifstream nsg_reader(mem_index_file, read_blk_size);
-    cached_ofstream nsg_writer(output_file, write_blk_size);
-
-    // metadata: width, medoid
-    unsigned width_u32, medoid_u32;
-    size_t   index_file_size;
-
-    nsg_reader.read((char *) &index_file_size, sizeof(uint64_t));
-    if (index_file_size != actual_file_size) {
-      std::stringstream stream;
-      stream << "Vamana Index file size does not match expected size per "
-                "meta-data."
-             << " file size from file: " << index_file_size
-             << " actual file size: " << actual_file_size << std::endl;
-
-      throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
-                                  __LINE__);
-    }
-
-    nsg_reader.read((char *) &width_u32, sizeof(unsigned));
-    nsg_reader.read((char *) &medoid_u32, sizeof(unsigned));
-
-    // compute
-    _u64 medoid, max_node_len, nnodes_per_sector;
-    npts_64 = (_u64) npts;
-    medoid = (_u64) medoid_u32;
-    max_node_len =
-        (((_u64) width_u32 + 1) * sizeof(unsigned)) + (ndims_64 * sizeof(T));
-    nnodes_per_sector = SECTOR_LEN / max_node_len;
-
-    std::cout << "medoid: " << medoid << "B\n";
-    std::cout << "max_node_len: " << max_node_len << "B\n";
-    std::cout << "nnodes_per_sector: " << nnodes_per_sector << "B\n";
-
-    // SECTOR_LEN buffer for each sector
-    std::unique_ptr<char[]> sector_buf = std::make_unique<char[]>(SECTOR_LEN);
-    std::unique_ptr<char[]> node_buf = std::make_unique<char[]>(max_node_len);
-    unsigned &nnbrs = *(unsigned *) (node_buf.get() + ndims_64 * sizeof(T));
-    unsigned *nhood_buf =
-        (unsigned *) (node_buf.get() + (ndims_64 * sizeof(T)) +
-                      sizeof(unsigned));
-
-    // number of sectors (1 for meta data)
-    _u64 n_sectors = ROUND_UP(npts_64, nnodes_per_sector) / nnodes_per_sector;
-    _u64 disk_index_file_size = (n_sectors + 1) * SECTOR_LEN;
-    // write first sector with metadata
-    *(_u64 *) (sector_buf.get() + 0 * sizeof(_u64)) = disk_index_file_size;
-    *(_u64 *) (sector_buf.get() + 1 * sizeof(_u64)) = npts_64;
-    *(_u64 *) (sector_buf.get() + 2 * sizeof(_u64)) = medoid;
-    *(_u64 *) (sector_buf.get() + 3 * sizeof(_u64)) = max_node_len;
-    *(_u64 *) (sector_buf.get() + 4 * sizeof(_u64)) = nnodes_per_sector;
-    nsg_writer.write(sector_buf.get(), SECTOR_LEN);
-
-    std::unique_ptr<T[]> cur_node_coords = std::make_unique<T[]>(ndims_64);
-    std::cout << "# sectors: " << n_sectors << "\n";
-    _u64 cur_node_id = 0;
-    for (_u64 sector = 0; sector < n_sectors; sector++) {
-      if (sector % 100000 == 0) {
-        std::cout << "Sector #" << sector << "written\n";
-      }
-      memset(sector_buf.get(), 0, SECTOR_LEN);
-      for (_u64 sector_node_id = 0;
-           sector_node_id < nnodes_per_sector && cur_node_id < npts_64;
-           sector_node_id++) {
-        memset(node_buf.get(), 0, max_node_len);
-        // read cur node's nnbrs
-        nsg_reader.read((char *) &nnbrs, sizeof(unsigned));
-
-        // sanity checks on nnbrs
-        assert(nnbrs > 0);
-        assert(nnbrs <= width_u32);
-
-        // read node's nhood
-        nsg_reader.read((char *) nhood_buf, nnbrs * sizeof(unsigned));
-
-        // write coords of node first
-        //  T *node_coords = data + ((_u64) ndims_64 * cur_node_id);
-        base_reader.read((char *) cur_node_coords.get(), sizeof(T) * ndims_64);
-        memcpy(node_buf.get(), cur_node_coords.get(), ndims_64 * sizeof(T));
-
-        // write nnbrs
-        *(unsigned *) (node_buf.get() + ndims_64 * sizeof(T)) = nnbrs;
-
-        // write nhood next
-        memcpy(node_buf.get() + ndims_64 * sizeof(T) + sizeof(unsigned),
-               nhood_buf, nnbrs * sizeof(unsigned));
-
-        // get offset into sector_buf
-        char *sector_node_buf =
-            sector_buf.get() + (sector_node_id * max_node_len);
-
-        // copy node buf into sector_node_buf
-        memcpy(sector_node_buf, node_buf.get(), max_node_len);
-        cur_node_id++;
-      }
-      // flush sector to disk
-      nsg_writer.write(sector_buf.get(), SECTOR_LEN);
-    }
-    std::cout << "Output file written\n";
-  }
-
 #ifdef USE_BING_INFRA
   bool getNextCompletedRequest(const IOContext &ctx, size_t size,
                                int &completedIndex) {
@@ -1005,7 +887,6 @@ namespace diskann {
     memcpy(data.scratch.aligned_query_T, query1, this->data_dim * sizeof(T));
     const T *    query = data.scratch.aligned_query_T;
     const float *query_float = data.scratch.aligned_query_float;
-    
 
     IOContext ctx = data.ctx;
     auto      query_scratch = &(data.scratch);
@@ -1049,7 +930,6 @@ namespace diskann {
     std::vector<Neighbor> full_retset;
     full_retset.reserve(4096);
     tsl::robin_map<_u64, T *> fp_coords;
-
 
     _u32  best_medoid = 0;
     float best_dist = (std::numeric_limits<float>::max)();

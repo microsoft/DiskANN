@@ -3,6 +3,8 @@
 #include <sstream>
 #include <stack>
 #include <string>
+#include "tsl/robin_map.h"
+#include "tsl/robin_set.h"
 
 #include "aligned_file_reader.h"
 #include "concurrent_queue.h"
@@ -10,14 +12,13 @@
 #include "parameters.h"
 #include "percentile_stats.h"
 #include "pq_table.h"
-#include "tsl/robin_map.h"
-#include "tsl/robin_set.h"
 #include "utils.h"
 #include "windows_customizations.h"
 
 #define MAX_N_CMPS 16384
 #define SECTOR_LEN 4096
 #define MAX_N_SECTOR_READS 128
+#define MAX_PQ_CHUNKS 100
 
 namespace diskann {
   template<typename T>
@@ -68,9 +69,6 @@ namespace diskann {
 
     DISKANN_DLLEXPORT void cache_medoid_nhoods();
 
-    DISKANN_DLLEXPORT void create_disk_layout(const std::string base_file,
-                                              const std::string mem_index_file,
-                                              const std::string output_file);
     DISKANN_DLLEXPORT void load_cache_from_file(std::string cache_bin);
 
     DISKANN_DLLEXPORT void load_cache_list(std::vector<uint32_t> &node_list);

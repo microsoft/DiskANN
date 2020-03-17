@@ -63,7 +63,7 @@ echo "LOOP END = ${LOOP_END}"
 
 for i in `seq 0 $LOOP_END`
 do 
-    ${BUILD_PATH}/tests/build_memory_index  $TYPE  "${OUTPUT_PREFIX}_subshard-${i}.bin"  $L  $SHARD_R  3000  2  4  "${OUTPUT_PREFIX}_subshard-${i}_mem.index" 0
+    ${BUILD_PATH}/tests/build_memory_index  $TYPE  "${OUTPUT_PREFIX}_subshard-${i}.bin"  $L  $SHARD_R  750  2  2  "${OUTPUT_PREFIX}_subshard-${i}_mem.index" 0
 done
 let "LOOP_END = $LOOP_END + 1"
 #merge all the shards by taking a union of the overlapping graphs

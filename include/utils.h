@@ -27,6 +27,7 @@ typedef int FileHandle;
 #include "common_includes.h"
 #include "windows_customizations.h"
 #include "aligned_dtor.h"
+//#include "pq_flash_index.h"
 
 // taken from
 // https://github.com/Microsoft/BLAS-on-flash/blob/master/include/utils.h
@@ -56,26 +57,6 @@ typedef int8_t   _s8;
 namespace diskann {
 
   enum Metric { L2 = 0, INNER_PRODUCT = 1, FAST_L2 = 2, PQ = 3 };
-
-  DISKANN_DLLEXPORT double calc_recall_set(unsigned  num_queries,
-                                           unsigned *gold_std, float *gs_dist,
-                                           unsigned  dim_gs,
-                                           unsigned *our_results,
-                                           unsigned dim_or, unsigned recall_at);
-
-  DISKANN_DLLEXPORT void read_idmap(const std::string &    fname,
-                                    std::vector<unsigned> &ivecs);
-
-  DISKANN_DLLEXPORT int merge_shards(
-      const std::string &nsg_prefix, const std::string &nsg_suffix,
-      const std::string &idmaps_prefix, const std::string &idmaps_suffix,
-      const _u64 nshards, const std::string &output_nsg, unsigned max_degree);
-
-  template<typename T>
-  DISKANN_DLLEXPORT int build_merged_vamana_index(
-      std::string base_file, diskann::Metric _compareMetric, unsigned L,
-      unsigned R, double sampling_rate, double ram_budget,
-      std::string mem_index_path);
 
   inline void alloc_aligned(void **ptr, size_t size, size_t align) {
     *ptr = nullptr;
@@ -413,7 +394,7 @@ namespace diskann {
     for (size_t d = 0; d < max_prefetch_size; d += 64)
       _mm_prefetch((const char *) vec + d, _MM_HINT_T1);
   }
-}  // namespace diskann
+};  // namespace diskann
 
 struct PivotContainer {
   PivotContainer() = default;

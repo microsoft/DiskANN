@@ -1,10 +1,9 @@
-#include <index.h>
-#include <omp.h>
-#include <string.h>
 #include <cstring>
 #include <iomanip>
+#include <omp.h>
 #include <set>
-#include "utils.h"
+#include <string.h>
+
 #ifndef _WINDOWS
 #include <sys/mman.h>
 #include <sys/stat.h>
@@ -12,7 +11,10 @@
 #include <unistd.h>
 #endif
 
+#include "aux_utils.h"
+#include "index.h"
 #include "memory_mapper.h"
+#include "utils.h"
 
 template<typename T>
 int search_memory_index(int argc, char** argv) {
@@ -26,10 +28,11 @@ int search_memory_index(int argc, char** argv) {
   std::string memory_index_file(argv[3]);
   std::string query_bin(argv[4]);
   std::string gt_ids_bin(argv[5]);
-  _u64        recall_at = std::atoi(argv[6]);
-  _u32        beam_width = std::atoi(argv[7]);
+  std::string gt_dists_bin(argv[6]);
+  _u64        recall_at = std::atoi(argv[7]);
   std::string result_output_prefix(argv[8]);
-  bool        calc_recall_flag = false;
+
+  bool calc_recall_flag = false;
 
   for (int ctr = 9; ctr < argc; ctr++) {
     _u64 curL = std::atoi(argv[ctr]);
@@ -38,12 +41,10 @@ int search_memory_index(int argc, char** argv) {
   }
 
   if (Lvec.size() == 0) {
-    std::cout << "No valid Lsearch found. Lsearch must be at least recall_at"
+    std::cout << "No valid Lsearch found. Lsearch must be at least recall_at."
               << std::endl;
     return -1;
   }
-
-  std::cout << "Search parameters: beamwidth: " << beam_width << std::endl;
 
   diskann::load_aligned_bin<T>(query_bin, query, query_num, query_dim,
                                query_aligned_dim);
@@ -53,8 +54,26 @@ int search_memory_index(int argc, char** argv) {
     if (gt_num != query_num) {
       std::cout << "Error. Mismatch in number of queries and ground truth data"
                 << std::endl;
+      return 0;
     }
     calc_recall_flag = true;
+    if (file_exists(gt_dists_bin)) {
+      _u64 gt_dists_num, gt_dists_dim;
+      diskann::load_bin<float>(gt_dists_bin, gt_dists, gt_dists_num,
+                               gt_dists_dim);
+      if (gt_dists_num != query_num) {
+        std::cout
+            << "Error. Mismatch in number of queries and ground truth data."
+            << std::endl;
+        return 0;
+      }
+      if (gt_dists_dim != gt_dim) {
+        std::cout << "Error. Mismatch in number of entries in ground truth ids "
+                     "and distances files."
+                  << std::endl;
+        return 0;
+      }
+    }
   }
 
   std::cout.setf(std::ios_base::fixed, std::ios_base::floatfield);
@@ -64,50 +83,56 @@ int search_memory_index(int argc, char** argv) {
   index.load(memory_index_file.c_str());  // to load NSG
   std::cout << "Index loaded" << std::endl;
 
-  std::vector<unsigned> start_points;
-
   diskann::Parameters paras;
   std::string         recall_string = "Recall@" + std::to_string(recall_at);
-  std::cout << std::setw(4) << "Ls" << std::setw(12) << "Latency"
-            << std::setw(12) << "Avg. Cmps" << std::setw(12) << "Avg. Hops"
+  std::cout << std::setw(4) << "Ls" << std::setw(12) << "QPS " << std::setw(18)
+            << "Mean Latency (ms)" << std::setw(15) << "99.9 Latency"
             << std::setw(12) << recall_string << std::endl;
-  std::cout << "====================================================="
+  std::cout << "==============================================================="
+               "==============="
             << std::endl;
 
   std::vector<std::vector<uint32_t>> query_result_ids(Lvec.size());
   std::vector<std::vector<float>>    query_result_dists(Lvec.size());
 
+  std::vector<double> latency_stats(query_num, 0);
+
   for (uint32_t test_id = 0; test_id < Lvec.size(); test_id++) {
-    _u64   L = Lvec[test_id];
-    size_t total_cmps = 0, total_hops = 0;
+    _u64 L = Lvec[test_id];
     query_result_ids[test_id].resize(recall_at * query_num);
 
     auto    s = std::chrono::high_resolution_clock::now();
 #pragma omp parallel for schedule(dynamic, 1)
     for (int64_t i = 0; i < (int64_t) query_num; i++) {
-      std::pair<uint32_t, uint32_t> q_stats = index.beam_search(
-          query + i * query_aligned_dim, recall_at, L, beam_width, start_points,
-          query_result_ids[test_id].data() + i * recall_at);
-#pragma omp atomic
-      total_cmps += q_stats.second;
-#pragma omp atomic
-      total_hops += q_stats.first;
+      auto qs = std::chrono::high_resolution_clock::now();
+      index.search(query + i * query_aligned_dim, recall_at, L,
+                   query_result_ids[test_id].data() + i * recall_at);
+      auto qe = std::chrono::high_resolution_clock::now();
+      std::chrono::duration<double> diff = qe - qs;
+      latency_stats[i] = diff.count() * 1000;
     }
-    auto e = std::chrono::high_resolution_clock::now();
+    auto                          e = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double> diff = e - s;
+
+    float qps = (query_num / diff.count());
 
     float recall = 0;
     if (calc_recall_flag)
-      recall = diskann::calc_recall_set(query_num, gt_ids, gt_dists, gt_dim,
-                                        query_result_ids[test_id].data(),
-                                        recall_at, recall_at);
+      recall = diskann::calculate_recall(query_num, gt_ids, gt_dists, gt_dim,
+                                         query_result_ids[test_id].data(),
+                                         recall_at, recall_at);
 
-    std::chrono::duration<double> diff = e - s;
-    float latency = (diff.count() / query_num) * (1000000);
+    std::sort(latency_stats.begin(), latency_stats.end());
+    double mean_latency = 0;
+    for (uint64_t q = 0; q < query_num; q++) {
+      mean_latency += latency_stats[q];
+    }
+    mean_latency /= query_num;
 
-    std::cout << std::setw(4) << L << std::setw(12) << latency << std::setw(12)
-              << (float) total_cmps / query_num << std::setw(12)
-              << (float) total_hops / query_num << std::setw(12) << recall
-              << std::endl;
+    std::cout << std::setw(4) << L << std::setw(12) << qps << std::setw(18)
+              << (float) mean_latency << std::setw(15)
+              << (float) latency_stats[(_u64)(0.999 * query_num)]
+              << std::setw(12) << recall << std::endl;
   }
 
   std::cout << "Done searching. Now saving results " << std::endl;
@@ -130,7 +155,8 @@ int main(int argc, char** argv) {
               << " <index_type[float/int8/uint8]>  <full_data_bin>  "
                  "<memory_index_path>  "
                  "<query_bin> <groundtruth_id_bin> (use \"null\" for none) "
-                 "<recall@> <beam_width> <result_output_prefix> "
+                 "<groundtruth_dist_bin> (use \"null\" for none) "
+                 "<recall@>  <result_output_prefix> "
                  " <L1> <L2> ... "
               << std::endl;
     exit(-1);

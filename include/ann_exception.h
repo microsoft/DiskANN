@@ -11,8 +11,9 @@ namespace diskann {
    public:
     DISKANN_DLLEXPORT ANNException(const std::string& message, int errorCode);
     DISKANN_DLLEXPORT ANNException(const std::string& message, int errorCode,
-                 const std::string& funcSig, const std::string& fileName,
-                 unsigned int lineNum);
+                                   const std::string& funcSig,
+                                   const std::string& fileName,
+                                   unsigned int       lineNum);
 
     DISKANN_DLLEXPORT std::string message() const;
 

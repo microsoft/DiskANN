@@ -2,8 +2,9 @@
 
 #define MAX_IO_DEPTH 128
 
-#include <vector>
 #include <atomic>
+#include <vector>
+
 #ifndef _WINDOWS
 #include <fcntl.h>
 #include <libaio.h>
