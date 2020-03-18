@@ -2,6 +2,15 @@
 #include <random>
 #include "distance.h"
 
+float distanceL2_I(const int8_t* a, const int8_t* b, size_t size) {
+  float distance = 0;
+  for (int i = 0; i < size; i++) {
+    int16_t diff = ((int16_t) a[i] - (int16_t) b[i]);
+    distance += diff * diff;
+  }
+  return distance;
+}
+
 int8_t* createVector(int size) {
   auto p = new int8_t[size];
   for (int i = 0; i < size; i++) {
@@ -94,6 +103,28 @@ void uniquePtrAssignment() {
   std::cout << "safe." << std::endl;
 }
 
+void compareDistanceComputations() {
+  int8_t vec1[] = {127, 127, 127, 127, 127, 127, 127, 127,
+                   127, 127, 127, 127, 127, 127, 127, 127,
+                   127, 127, 127, 127, 127, 127, 127, 127, 
+                   127, 127, 127, 127, 127, 127, 127, 127};
+  int8_t vec2[] = {-128, -128, -128, -128, -128, -128, -128, -128,
+                   -128, -128, -128, -128, -128, -128, -128, -128,
+                   -128, -128, -128, -128, -128, -128, -128, -128,
+                   -128, -128, -128, -128, -128, -128, -128, -128};
+
+  diskann::DistanceL2Int8 dist;
+  float                   dist1 = dist.compare(vec1, vec2, 8);
+  float                   dist2 = distanceL2_I(vec1, vec2, 8);
+
+  if (dist1 - dist2 > 0.01) {
+    std::cout << "Test failed. AVX dist: " << dist1 << " normal dist: " << dist2
+              << std::endl;
+  } else {
+    std::cout << "Two score are the same. " << std::endl;
+   }
+}
+
 int main(int argc, char** argv) {
   if (argc < 2) {
     std::cout << std::string("Usage: ") << argv[0] << " <mode> [arguments]"
@@ -101,6 +132,9 @@ int main(int argc, char** argv) {
     std::cout << "Modes: 1 for file concat. Args <file1> <file2> <outfile>"
               << std::endl
               << "       2 for test unique_ptr assignment. No args."
+              << std::endl;
+    std::cout << "      3 for comparing distance computations (AVX and "
+                 "normal). No args."
               << std::endl;
     return -1;
   }
@@ -114,6 +148,9 @@ int main(int argc, char** argv) {
       break;
     case 2:
       uniquePtrAssignment();
+      break;
+    case 3:
+      compareDistanceComputations();
       break;
     default:
       std::cout << "Don't know what to do with mode parameter: " << argv[1]

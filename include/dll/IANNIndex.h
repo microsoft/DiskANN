@@ -1,22 +1,71 @@
+
 #pragma once
 
 #include "windows_customizations.h"
+#include <string>
+#include <vector>
 
 namespace ANNIndex {
 
   // The Distance calculation type we can support.
   enum DistanceType { DT_L2 = 0, DT_Cosine, DT_InnerProduct, DT_Count };
 
-  enum AlgoType { AT_IVFPQHNSW = 0, AT_KDTREERNG, AT_RandNSG, AT_Count };
+  enum AlgoType {
+    // Memory
+    AT_HNSW = 0,
+    AT_KDTree,
+    // SSD
+    AT_IVFPQHNSW,
+    AT_KDTreeRNG,
+    AT_RandNSG,
+    // Fresh
+    AT_HNSWFresh,
+    AT_SPTAG,
+    AT_Count
+  };
+
+  enum VectorDataType { VDT_Byte = 0, VDT_Short, VDT_Float, VDT_Count };
+
+  enum SSDAlgoType { SAT_IVFPQHNSW, SAT_KDTreeRNG, SAT_RandNSG, SAT_Count };
+
+  static const char* SSDAlgoDLLNames[SAT_Count] = {
+    "ANNIndexIVFPQHNSW.dll", "KDTreeRNGSSDDLL.dll", "nsg_dll.dll"};
+  static const char* SSDAlgoNames[SAT_Count] = {"ivfpqhnsw", "kdtreerng",
+                                                "randnsg"};
+
+  static const char* ExportCreateObjectByteFunc = "CreateObjectByte";
+  static const char* ExportReleaseObjectByteFunc = "ReleaseObjectByte";
+
+  static const char* ExportCreateObjectShortFunc = "CreateObjectShort";
+  static const char* ExportReleaseObjectShortFunc = "ReleaseObjectShort";
 
   static const char* ExportCreateObjectFloatFunc = "CreateObjectFloat";
   static const char* ExportReleaseObjectFloatFunc = "ReleaseObjectFloat";
 
+  static const char* ExportCreateObjectFuncs[VDT_Count] = {
+    ExportCreateObjectByteFunc, ExportCreateObjectShortFunc,
+    ExportCreateObjectFloatFunc};
+  static const char* ExportReleaseObjectFuncs[VDT_Count] = {
+    ExportReleaseObjectByteFunc, ExportReleaseObjectShortFunc,
+    ExportReleaseObjectFloatFunc};
+
+  // NOTICE : if data is nullptr, it's means a real path has not been mampped to
+  // memory blob.
+  struct FileBlob {
+    std::string path;
+    const void* data;
+    size_t      size;
+
+    FileBlob(const std::string& filePath, const void* fileData, size_t fileSize)
+      : path(filePath), data(fileData), size(fileSize) {
+    }
+  };
+
   class IANNIndex {
    public:
-    DISKANN_DLLEXPORT explicit IANNIndex(unsigned __int32 dimension = 0,
-                                         DistanceType     distanceType = DT_L2)
-        : m_dimension(dimension), m_distanceType(distanceType) {
+    DISKANN_DLLEXPORT explicit IANNIndex(unsigned __int32 dimension,
+                       DistanceType     distanceType = DT_L2)
+      : m_dimension(dimension), m_distanceType(distanceType) {
     }
 
     DISKANN_DLLEXPORT virtual ~IANNIndex() {
@@ -24,28 +73,38 @@ namespace ANNIndex {
 
     // In implementation, the file path can be a file or folder.
     DISKANN_DLLEXPORT virtual bool BuildIndex(
-        const char* dataFilePath, const char* indexFilePath,
-        const char* indexBuildParameters) = 0;
+      const char* dataFilePath, const char* indexFilePath,
+                            const char* indexBuildParameters) = 0;
 
     // Load index form file.
     DISKANN_DLLEXPORT virtual bool LoadIndex(const char* indexFilePath,
-                                             const char* queryParameters) = 0;
+                           const char* queryParameters) = 0;
+
+    // Load index from memory blob.
+    DISKANN_DLLEXPORT virtual bool LoadIndex(const std::vector<FileBlob>& files,
+                           const char*                  queryParameters) = 0;
 
     // Search several vectors, return their neighbors' distance and ids.
     // Both distances & ids are returned arraies of neighborCount elements,
     // And need to be allocated by invoker, which capicity should be greater
     // than queryCount * neighborCount.
-    DISKANN_DLLEXPORT virtual void SearchIndex(const char*       vector,
-                                               unsigned __int64  queryCount,
-                                               unsigned __int64  neighborCount,
-                                               float*            distances,
-                                               unsigned __int64* ids) const = 0;
+
+    // TODO :: this interface has defect as a rare case is return array size may
+    // less than neighbor count.
+    DISKANN_DLLEXPORT virtual void SearchIndex(const char*       queryVectors,
+                             unsigned __int64 queryCount,
+                             unsigned __int64 neighborCount, float* distances,
+                             unsigned __int64* ids) const = 0;
 
    public:
     // Vector dimension.
-
     unsigned __int32 m_dimension;
-    DistanceType     m_distanceType;
+
+    DistanceType m_distanceType;
   };
 
+  typedef IANNIndex* (*CreateObjectFunc)(unsigned __int32, DistanceType);
+  typedef void (*ReleaseObjectFunc)(IANNIndex*);
+
 }  // namespace ANNIndex
+

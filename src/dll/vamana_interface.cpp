@@ -135,6 +135,13 @@ namespace diskann {
     return true;
   }
 
+  //Load index from memory blob.
+  template<typename T>
+  DISKANN_DLLEXPORT bool VamanaInterface<T>::LoadIndex(
+    const std::vector<ANNIndex::FileBlob>& files, const char* queryParameters) {
+    throw diskann::ANNException("Not implemented", -1);
+  }
+
   // Search several vectors, return their neighbors' distance and ids.
   // Both distances & ids are returned arraies of neighborCount elements,
   // And need to be allocated by invoker, which capacity should be greater
