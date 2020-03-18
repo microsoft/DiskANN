@@ -66,11 +66,11 @@ namespace diskann {
                         const size_t nd, const size_t num_frozen_pts,
                         const bool enable_tags, const bool store_data,
                         const bool support_eager_delete)
-      : _num_frozen_pts(num_frozen_pts), _has_built(false), _width(0),
-        _can_delete(false), _eager_done(true), _lazy_done(true),
-        _compacted_order(true), _enable_tags(enable_tags),
-        _consolidated_order(true), _support_eager_delete(support_eager_delete),
-        _store_data(store_data) {
+    : _num_frozen_pts(num_frozen_pts), _has_built(false), _width(0),
+      _can_delete(false), _eager_done(true), _lazy_done(true),
+      _compacted_order(true), _enable_tags(enable_tags),
+      _consolidated_order(true), _support_eager_delete(support_eager_delete),
+      _store_data(store_data) {
     // data is stored to _nd * aligned_dim matrix with necessary
     // zero-padding
     std::cout << "Number of frozen points = " << _num_frozen_pts << std::endl;
@@ -103,7 +103,7 @@ namespace diskann {
     // and add frozen points at the end of the array
     if (_num_frozen_pts > 0) {
       _data = (T *) realloc(
-          _data, (_max_points + _num_frozen_pts) * _aligned_dim * sizeof(T));
+        _data, (_max_points + _num_frozen_pts) * _aligned_dim * sizeof(T));
       if (_data == NULL) {
         std::cout << "Realloc failed, killing programme" << std::endl;
         free(_data);  // fixing OACR-reported bug.
@@ -178,9 +178,9 @@ namespace diskann {
                            "index before saving."
                         << std::endl;
               throw diskann::ANNException(
-                  "Disable deletes and consolidate index before "
-                  "saving.",
-                  -1, __FUNCSIG__, __FILE__, __LINE__);
+                "Disable deletes and consolidate index before "
+                "saving.",
+                -1, __FUNCSIG__, __FILE__, __LINE__);
             }
           }
         }
@@ -194,8 +194,8 @@ namespace diskann {
                        "saving."
                     << std::endl;
           throw diskann::ANNException(
-              "Disable deletes and consolidate index before saving.", -1,
-              __FUNCSIG__, __FILE__, __LINE__);
+            "Disable deletes and consolidate index before saving.", -1,
+            __FUNCSIG__, __FILE__, __LINE__);
         }
       }
     }
@@ -305,7 +305,7 @@ namespace diskann {
       center[j] /= _nd;
 
     // compute all to one distance
-    float * distances = new float[_nd]();
+    float *distances = new float[_nd]();
 #pragma omp parallel for schedule(static, 65536)
     for (_s64 i = 0; i < (_s64) _nd; i++) {
       // extract point and distance reference
@@ -347,11 +347,11 @@ namespace diskann {
    */
   template<typename T, typename TagT>
   std::pair<uint32_t, uint32_t> Index<T, TagT>::iterate_to_fixed_point(
-      const T *node_coords, const unsigned Lsize,
-      const std::vector<unsigned> &init_ids,
-      std::vector<Neighbor> &      expanded_nodes_info,
-      tsl::robin_set<unsigned> &   expanded_nodes_ids,
-      std::vector<Neighbor> &      best_L_nodes) {
+    const T *node_coords, const unsigned Lsize,
+    const std::vector<unsigned> &init_ids,
+    std::vector<Neighbor> &      expanded_nodes_info,
+    tsl::robin_set<unsigned> &   expanded_nodes_ids,
+    std::vector<Neighbor> &      best_L_nodes) {
     best_L_nodes.resize(Lsize + 1);
     expanded_nodes_info.reserve(10 * Lsize);
     expanded_nodes_ids.reserve(10 * Lsize);
@@ -398,8 +398,8 @@ namespace diskann {
             if ((m + 1) < _final_graph[n].size()) {
               auto nextn = _final_graph[n][m + 1];
               diskann::prefetch_vector(
-                  (const char *) _data + _aligned_dim * (size_t) nextn,
-                  sizeof(T) * _aligned_dim);
+                (const char *) _data + _aligned_dim * (size_t) nextn,
+                sizeof(T) * _aligned_dim);
             }
 
             cmps++;
@@ -431,10 +431,9 @@ namespace diskann {
 
   template<typename T, typename TagT>
   void Index<T, TagT>::get_expanded_nodes(
-      const size_t node_id, const unsigned Lindex,
-      std::vector<unsigned>     init_ids,
-      std::vector<Neighbor> &   expanded_nodes_info,
-      tsl::robin_set<unsigned> &expanded_nodes_ids) {
+    const size_t node_id, const unsigned Lindex, std::vector<unsigned> init_ids,
+    std::vector<Neighbor> &   expanded_nodes_info,
+    tsl::robin_set<unsigned> &expanded_nodes_ids) {
     const T *             node_coords = _data + _aligned_dim * node_id;
     std::vector<Neighbor> best_L_nodes;
 
@@ -482,10 +481,10 @@ namespace diskann {
           if (occlude_factor[t] > alpha)
             continue;
           float djk = _distance->compare(
-              _data + _aligned_dim * (size_t) pool[t].id,
-              _data + _aligned_dim * (size_t) p.id, (unsigned) _aligned_dim);
+            _data + _aligned_dim * (size_t) pool[t].id,
+            _data + _aligned_dim * (size_t) p.id, (unsigned) _aligned_dim);
           occlude_factor[t] =
-              (std::max)(occlude_factor[t], pool[t].distance / djk);
+            (std::max)(occlude_factor[t], pool[t].distance / djk);
         }
         start++;
       }
@@ -494,7 +493,7 @@ namespace diskann {
   }
 
   template<typename T, typename TagT>
-  void Index<T, TagT>::prune_neighbors(const unsigned location,
+  void Index<T, TagT>::prune_neighbors(const unsigned         location,
                                        std::vector<Neighbor> &pool,
                                        const Parameters &     parameter,
                                        std::vector<unsigned> &pruned_list) {
@@ -542,8 +541,8 @@ namespace diskann {
    */
   template<typename T, typename TagT>
   void Index<T, TagT>::batch_inter_insert(
-      unsigned n, const std::vector<unsigned> &pruned_list,
-      const Parameters &parameter, std::vector<unsigned> &need_to_sync) {
+    unsigned n, const std::vector<unsigned> &pruned_list,
+    const Parameters &parameter, std::vector<unsigned> &need_to_sync) {
     const auto range = parameter.Get<unsigned>("R");
 
     // assert(!src_pool.empty());
@@ -574,7 +573,7 @@ namespace diskann {
    * the current node n.
    */
   template<typename T, typename TagT>
-  void Index<T, TagT>::inter_insert(unsigned n,
+  void Index<T, TagT>::inter_insert(unsigned               n,
                                     std::vector<unsigned> &pruned_list,
                                     const Parameters &     parameter,
                                     bool                   update_in_graph) {
@@ -623,10 +622,9 @@ namespace diskann {
         for (auto cur_nbr : copy_of_neighbors) {
           if (dummy_visited.find(cur_nbr) == dummy_visited.end() &&
               cur_nbr != des) {
-            float dist =
-                _distance->compare(_data + _aligned_dim * (size_t) des,
-                                   _data + _aligned_dim * (size_t) cur_nbr,
-                                   (unsigned) _aligned_dim);
+            float dist = _distance->compare(
+              _data + _aligned_dim * (size_t) des,
+              _data + _aligned_dim * (size_t) cur_nbr, (unsigned) _aligned_dim);
             dummy_pool.emplace_back(Neighbor(cur_nbr, dist, true));
             dummy_visited.insert(cur_nbr);
           }
@@ -658,7 +656,7 @@ namespace diskann {
       omp_set_num_threads(NUM_THREADS);
 
     uint32_t NUM_SYNCS =
-        (unsigned) DIV_ROUND_UP(_nd + _num_frozen_pts, (64 * 64));
+      (unsigned) DIV_ROUND_UP(_nd + _num_frozen_pts, (64 * 64));
     if (NUM_SYNCS < 40)
       NUM_SYNCS = 40;
     std::cout << "Number of syncs: " << NUM_SYNCS << std::endl;
@@ -740,7 +738,7 @@ namespace diskann {
       for (uint32_t sync_num = 0; sync_num < NUM_SYNCS; sync_num++) {
         size_t start_id = sync_num * round_size;
         size_t end_id =
-            (std::min)(_nd + _num_frozen_pts, (sync_num + 1) * round_size);
+          (std::min)(_nd + _num_frozen_pts, (sync_num + 1) * round_size);
 
         auto s = std::chrono::high_resolution_clock::now();
         std::chrono::duration<double> diff;
@@ -766,10 +764,9 @@ namespace diskann {
           if (!_final_graph[node].empty())
             for (auto id : _final_graph[node]) {
               if (visited.find(id) == visited.end() && id != node) {
-                float dist =
-                    _distance->compare(_data + _aligned_dim * (size_t) node,
-                                       _data + _aligned_dim * (size_t) id,
-                                       (unsigned) _aligned_dim);
+                float dist = _distance->compare(
+                  _data + _aligned_dim * (size_t) node,
+                  _data + _aligned_dim * (size_t) id, (unsigned) _aligned_dim);
                 pool.emplace_back(Neighbor(id, dist, true));
                 visited.insert(id);
               }
@@ -819,9 +816,9 @@ namespace diskann {
               if (dummy_visited.find(cur_nbr) == dummy_visited.end() &&
                   cur_nbr != node) {
                 float dist =
-                    _distance->compare(_data + _aligned_dim * (size_t) node,
-                                       _data + _aligned_dim * (size_t) cur_nbr,
-                                       (unsigned) _aligned_dim);
+                  _distance->compare(_data + _aligned_dim * (size_t) node,
+                                     _data + _aligned_dim * (size_t) cur_nbr,
+                                     (unsigned) _aligned_dim);
                 dummy_pool.emplace_back(Neighbor(cur_nbr, dist, true));
                 dummy_visited.insert(cur_nbr);
               }
@@ -873,10 +870,9 @@ namespace diskann {
         for (auto cur_nbr : _final_graph[node]) {
           if (dummy_visited.find(cur_nbr) == dummy_visited.end() &&
               cur_nbr != node) {
-            float dist =
-                _distance->compare(_data + _aligned_dim * (size_t) node,
-                                   _data + _aligned_dim * (size_t) cur_nbr,
-                                   (unsigned) _aligned_dim);
+            float dist = _distance->compare(
+              _data + _aligned_dim * (size_t) node,
+              _data + _aligned_dim * (size_t) cur_nbr, (unsigned) _aligned_dim);
             dummy_pool.emplace_back(Neighbor(cur_nbr, dist, true));
             dummy_visited.insert(cur_nbr);
           }
@@ -894,7 +890,7 @@ namespace diskann {
   }
 
   template<typename T, typename TagT>
-  void Index<T, TagT>::build(Parameters &parameters,
+  void Index<T, TagT>::build(Parameters &             parameters,
                              const std::vector<TagT> &tags) {
     if (_enable_tags) {
       if (tags.size() != _nd) {
@@ -932,7 +928,7 @@ namespace diskann {
   }
 
   template<typename T, typename TagT>
-  std::pair<uint32_t, uint32_t> Index<T, TagT>::search(const T *query,
+  std::pair<uint32_t, uint32_t> Index<T, TagT>::search(const T *      query,
                                                        const size_t   K,
                                                        const unsigned L,
                                                        unsigned *     indices) {
@@ -945,8 +941,8 @@ namespace diskann {
       init_ids.emplace_back(_ep);
     }
     auto retval =
-        iterate_to_fixed_point(query, L, init_ids, expanded_nodes_info,
-                               expanded_nodes_ids, best_L_nodes);
+      iterate_to_fixed_point(query, L, init_ids, expanded_nodes_info,
+                             expanded_nodes_ids, best_L_nodes);
 
     size_t pos = 0;
     for (auto it : best_L_nodes) {
@@ -960,8 +956,8 @@ namespace diskann {
 
   template<typename T, typename TagT>
   std::pair<uint32_t, uint32_t> Index<T, TagT>::search(
-      const T *query, const uint64_t K, const unsigned L,
-      std::vector<unsigned> init_ids, uint64_t *indices, float *distances) {
+    const T *query, const uint64_t K, const unsigned L,
+    std::vector<unsigned> init_ids, uint64_t *indices, float *distances) {
     tsl::robin_set<unsigned> visited(10 * L);
     std::vector<Neighbor>    best_L_nodes, expanded_nodes_info;
     tsl::robin_set<unsigned> expanded_nodes_ids;
@@ -969,9 +965,9 @@ namespace diskann {
     if (init_ids.size() == 0) {
       init_ids.emplace_back(_ep);
     }
-    auto retval = iterate_to_fixed_point(query, (unsigned) L, init_ids,
-                                         expanded_nodes_info,
-                                         expanded_nodes_ids, best_L_nodes);
+    auto retval =
+      iterate_to_fixed_point(query, (unsigned) L, init_ids, expanded_nodes_info,
+                             expanded_nodes_ids, best_L_nodes);
 
     size_t pos = 0;
     for (auto it : best_L_nodes) {
@@ -986,8 +982,8 @@ namespace diskann {
 
   template<typename T, typename TagT>
   std::pair<uint32_t, uint32_t> Index<T, TagT>::search_with_tags(
-      const T *query, const size_t K, const unsigned L, TagT *tags,
-      unsigned frozen_pts, unsigned *indices_buffer) {
+    const T *query, const size_t K, const unsigned L, TagT *tags,
+    unsigned frozen_pts, unsigned *indices_buffer) {
     const bool alloc = indices_buffer == NULL;
     auto       indices = alloc ? new unsigned[K] : indices_buffer;
     auto       ret = search(query, K, L, indices);
@@ -1018,7 +1014,7 @@ namespace diskann {
       for (_u64 i = 0; i < _num_frozen_pts; i++) {
         for (unsigned d = 0; d < _dim; d++)
           _data[(i + _max_points) * _aligned_dim + d] =
-              frozen_pts[i * _dim + d];
+            frozen_pts[i * _dim + d];
         for (_u64 d = _dim; d < _aligned_dim; d++)
           _data[(i + _max_points) * _aligned_dim + d] = 0;
       }
@@ -1071,7 +1067,7 @@ namespace diskann {
   }
 
   template<typename T, typename TagT>
-  int Index<T, TagT>::eager_delete(const TagT tag,
+  int Index<T, TagT>::eager_delete(const TagT        tag,
                                    const Parameters &parameters) {
     if (_lazy_done && (!_consolidated_order)) {
       std::cout << "Lazy delete reuests issued but data not consolidated, "
@@ -1127,8 +1123,8 @@ namespace diskann {
 
     for (auto it : in_nbr) {
       _final_graph[it].erase(
-          std::remove(_final_graph[it].begin(), _final_graph[it].end(), id),
-          _final_graph[it].end());
+        std::remove(_final_graph[it].begin(), _final_graph[it].end(), id),
+        _final_graph[it].end());
     }
 
     for (auto it : visited) {
@@ -1150,11 +1146,11 @@ namespace diskann {
 
         for (auto j : candidate_set)
           expanded_nghrs.push_back(
-              Neighbor(j,
-                       _distance->compare(_data + _aligned_dim * (size_t) ngh,
-                                          _data + _aligned_dim * (size_t) j,
-                                          (unsigned) _aligned_dim),
-                       true));
+            Neighbor(j,
+                     _distance->compare(_data + _aligned_dim * (size_t) ngh,
+                                        _data + _aligned_dim * (size_t) j,
+                                        (unsigned) _aligned_dim),
+                     true));
         std::sort(expanded_nghrs.begin(), expanded_nghrs.end());
         occlude_list(expanded_nghrs, ngh, alpha, range, maxc, result);
 
@@ -1274,11 +1270,11 @@ namespace diskann {
         if (modify) {
           for (auto j : candidate_set)
             expanded_nghrs.push_back(
-                Neighbor(j,
-                         _distance->compare(_data + _aligned_dim * (size_t) i,
-                                            _data + _aligned_dim * (size_t) j,
-                                            (unsigned) _aligned_dim),
-                         true));
+              Neighbor(j,
+                       _distance->compare(_data + _aligned_dim * (size_t) i,
+                                          _data + _aligned_dim * (size_t) j,
+                                          (unsigned) _aligned_dim),
+                       true));
           std::sort(expanded_nghrs.begin(), expanded_nghrs.end());
           occlude_list(expanded_nghrs, i, alpha, range, maxc, result);
 
@@ -1334,8 +1330,8 @@ namespace diskann {
         std::cerr << "ERROR: Did not find a replacement for start node."
                   << std::endl;
         throw diskann::ANNException(
-            "ERROR: Did not find a replacement for start node.", -1,
-            __FUNCSIG__, __FILE__, __LINE__);
+          "ERROR: Did not find a replacement for start node.", -1, __FUNCSIG__,
+          __FILE__, __LINE__);
       } else {
         assert(_delete_set.find(_ep) == _delete_set.end());
         std::cout << "New start node is " << _ep << std::endl;
@@ -1439,11 +1435,11 @@ namespace diskann {
           for (unsigned j = 0; j < _final_graph[i].size(); j++)
             if (_final_graph[i][j] >= _nd)
               _final_graph[i][j] =
-                  (unsigned) (_max_points + (_final_graph[i][j] - _nd));
+                (unsigned) (_max_points + (_final_graph[i][j] - _nd));
         for (unsigned i = 0; i < _num_frozen_pts; i++) {
           for (unsigned k = 0; k < _final_graph[_nd + i].size(); k++)
             _final_graph[_max_points + i].emplace_back(
-                _final_graph[_nd + i][k]);
+              _final_graph[_nd + i][k]);
           _final_graph[_nd + i].clear();
         }
 
@@ -1517,9 +1513,9 @@ namespace diskann {
 
     for (unsigned i = 0; i < _final_graph[location].size(); i++)
       _in_graph[_final_graph[location][i]].erase(
-          std::remove(_in_graph[_final_graph[location][i]].begin(),
-                      _in_graph[_final_graph[location][i]].end(), location),
-          _in_graph[_final_graph[location][i]].end());
+        std::remove(_in_graph[_final_graph[location][i]].begin(),
+                    _in_graph[_final_graph[location][i]].end(), location),
+        _in_graph[_final_graph[location][i]].end());
 
     _final_graph[location].clear();
     _final_graph[location].reserve(range);
@@ -1544,7 +1540,7 @@ namespace diskann {
 
   template<typename T, typename TagT>
   int Index<T, TagT>::disable_delete(const Parameters &parameters,
-                                     const bool consolidate) {
+                                     const bool        consolidate) {
     LockGuard guard(_change_lock);
     if (!_can_delete) {
       std::cerr << "Delete not currently enabled" << std::endl;
