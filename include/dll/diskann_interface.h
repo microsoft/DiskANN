@@ -25,6 +25,10 @@ namespace diskann {
     DISKANN_DLLEXPORT virtual bool LoadIndex(const char* indexFilePath,
                                              const char* queryParameters);
 
+    // Load index from memory blob.
+    DISKANN_DLLEXPORT virtual bool LoadIndex(const std::vector<ANNIndex::FileBlob>& files,
+                                             const char* queryParameters);
+
     // Search several vectors, return their neighbors' distance and ids.
     // Both distances & ids are returned arraies of neighborCount elements,
     // And need to be allocated by invoker, which capicity should be greater
