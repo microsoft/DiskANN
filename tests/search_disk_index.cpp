@@ -21,6 +21,8 @@
 #include <unistd.h>
 #endif
 
+#define WARMUP true
+
 void print_stats(std::string category, std::vector<float> percentiles,
                  std::vector<float> results) {
   std::cout << std::setw(20) << category << ": " << std::flush;
@@ -48,19 +50,20 @@ int search_disk_index(int argc, char** argv) {
   std::string compressed_data_file(argv[3]);
   std::string disk_index_file(argv[4]);
   std::string medoids_file(argv[5]);
-  std::string warmup_query_file(argv[6]);
-  _u64        num_nodes_to_cache = std::atoi(argv[7]);
-  std::string query_bin(argv[8]);
-  std::string gt_ids_bin(argv[9]);
-  std::string gt_dists_bin(argv[10]);
-  _u64        recall_at = std::atoi(argv[11]);
-  _u32        num_threads = std::atoi(argv[12]);
-  _u32        beamwidth = std::atoi(argv[13]);
-  std::string result_output_prefix(argv[14]);
+  std::string centroids_file(argv[6]);
+  std::string warmup_query_file(argv[7]);
+  _u64        num_nodes_to_cache = std::atoi(argv[8]);
+  std::string query_bin(argv[9]);
+  std::string gt_ids_bin(argv[10]);
+  std::string gt_dists_bin(argv[11]);
+  _u64        recall_at = std::atoi(argv[12]);
+  _u32        num_threads = std::atoi(argv[13]);
+  _u32        beamwidth = std::atoi(argv[14]);
+  std::string result_output_prefix(argv[15]);
 
   bool calc_recall_flag = false;
 
-  for (int ctr = 15; ctr < argc; ctr++) {
+  for (int ctr = 16; ctr < argc; ctr++) {
     _u64 curL = std::atoi(argv[ctr]);
     if (curL >= recall_at)
       Lvec.push_back(curL);
@@ -101,15 +104,13 @@ int search_disk_index(int argc, char** argv) {
     calc_recall_flag = true;
   }
 
-  std::unique_ptr<diskann::PQFlashIndex<T>> _pFlashIndex(new diskann::PQFlashIndex<T>());
+  std::unique_ptr<diskann::PQFlashIndex<T>> _pFlashIndex(
+      new diskann::PQFlashIndex<T>());
 
   int res =
       _pFlashIndex->load(num_threads, pq_centroids_file.c_str(),
-                        compressed_data_file.c_str(), disk_index_file.c_str());
-
-  std::string centroid_data_file = "";
-  _pFlashIndex->load_entry_points(medoids_file, centroid_data_file);
-  _pFlashIndex->cache_medoid_nhoods();
+                         compressed_data_file.c_str(), disk_index_file.c_str(),
+                         medoids_file.c_str(), centroids_file.c_str(), false);
 
   if (res != 0) {
     return res;
@@ -126,38 +127,41 @@ int search_disk_index(int argc, char** argv) {
   uint64_t warmup_L = 15;
   uint64_t warmup_num = 0, warmup_dim = 0, warmup_aligned_dim = 0;
   T*       warmup = nullptr;
-  if (file_exists(warmup_query_file)) {
-    diskann::load_aligned_bin<T>(warmup_query_file, warmup, warmup_num,
-                                 warmup_dim, warmup_aligned_dim);
-  } else {
-    warmup_num = (std::min)((_u32) 200000, (_u32) 20000 * num_threads);
-    warmup_dim = query_dim;
-    warmup_aligned_dim = query_aligned_dim;
-    diskann::alloc_aligned(((void**) &warmup),
-                           warmup_num * warmup_aligned_dim * sizeof(T),
-                           8 * sizeof(T));
-    std::memset(warmup, 0, warmup_num * warmup_aligned_dim * sizeof(T));
-    std::random_device              rd;
-    std::mt19937                    gen(rd());
-    std::uniform_int_distribution<> dis(-128, 127);
-    for (uint32_t i = 0; i < warmup_num; i++) {
-      for (uint32_t d = 0; d < warmup_dim; d++) {
-        warmup[i * warmup_aligned_dim + d] = (T) dis(gen);
+
+  if (WARMUP) {
+    if (file_exists(warmup_query_file)) {
+      diskann::load_aligned_bin<T>(warmup_query_file, warmup, warmup_num,
+                                   warmup_dim, warmup_aligned_dim);
+    } else {
+      warmup_num = (std::min)((_u32) 200000, (_u32) 20000 * num_threads);
+      warmup_dim = query_dim;
+      warmup_aligned_dim = query_aligned_dim;
+      diskann::alloc_aligned(((void**) &warmup),
+                             warmup_num * warmup_aligned_dim * sizeof(T),
+                             8 * sizeof(T));
+      std::memset(warmup, 0, warmup_num * warmup_aligned_dim * sizeof(T));
+      std::random_device              rd;
+      std::mt19937                    gen(rd());
+      std::uniform_int_distribution<> dis(-128, 127);
+      for (uint32_t i = 0; i < warmup_num; i++) {
+        for (uint32_t d = 0; d < warmup_dim; d++) {
+          warmup[i * warmup_aligned_dim + d] = (T) dis(gen);
+        }
       }
     }
-  }
-  std::cout << "Warming up index... " << std::flush;
-  std::vector<uint64_t> warmup_result_ids_64(warmup_num, 0);
-  std::vector<float>    warmup_result_dists(warmup_num, 0);
+    std::cout << "Warming up index... " << std::flush;
+    std::vector<uint64_t> warmup_result_ids_64(warmup_num, 0);
+    std::vector<float>    warmup_result_dists(warmup_num, 0);
 
 #pragma omp parallel for schedule(dynamic, 1)
-  for (_s64 i = 0; i < (int64_t) warmup_num; i++) {
-    _pFlashIndex->cached_beam_search(warmup + (i * warmup_aligned_dim), 1,
-                                    warmup_L,
-                                    warmup_result_ids_64.data() + (i * 1),
-                                    warmup_result_dists.data() + (i * 1), 4);
+    for (_s64 i = 0; i < (int64_t) warmup_num; i++) {
+      _pFlashIndex->cached_beam_search(warmup + (i * warmup_aligned_dim), 1,
+                                       warmup_L,
+                                       warmup_result_ids_64.data() + (i * 1),
+                                       warmup_result_dists.data() + (i * 1), 4);
+    }
+    std::cout << "..done" << std::endl;
   }
-  std::cout << "..done" << std::endl;
 
   std::cout.setf(std::ios_base::fixed, std::ios_base::floatfield);
   std::cout.precision(2);
@@ -178,6 +182,8 @@ int search_disk_index(int argc, char** argv) {
   std::vector<std::vector<float>>    query_result_dists(Lvec.size());
 
   uint32_t optimized_beamwidth = 2;
+
+  //  query_num = 1;
 
   for (uint32_t test_id = 0; test_id < Lvec.size(); test_id++) {
     _u64 L = Lvec[test_id];
@@ -262,11 +268,12 @@ int search_disk_index(int argc, char** argv) {
 }
 
 int main(int argc, char** argv) {
-  if (argc <= 16) {
+  if (argc < 17) {
     std::cout << "Usage: " << argv[0]
               << " <index_type[float/int8/uint8]>  <pq_centroids_bin> "
                  "<compressed_data_bin> <disk_index_path> "
-                 "<medoids_bin (use \"null\" if none)> "
+                 "<medoids_bin (use \"null\" if none)> <centroids_float_bin "
+                 "(use \"null\" if none)> "
                  "  <warmup file> (use \"null\" for none) <num_nodes_to_cache> "
                  "<query_bin> <groundtruth_bin> (use \"null\" for none) "
                  "<groundtruth_dist_bin> (use \" null \" for none) "

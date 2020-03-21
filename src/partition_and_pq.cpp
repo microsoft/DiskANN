@@ -41,13 +41,13 @@ void gen_random_slice(const std::string base_file,
   std::ofstream sample_writer(std::string(output_prefix + "_data.bin").c_str(),
                               std::ios::binary);
   std::ofstream sample_id_writer(
-    std::string(output_prefix + "_ids.bin").c_str(), std::ios::binary);
+      std::string(output_prefix + "_ids.bin").c_str(), std::ios::binary);
 
   std::random_device
                rd;  // Will be used to obtain a seed for the random number engine
   auto         x = rd();
   std::mt19937 generator(
-    x);  // Standard mersenne_twister_engine seeded with rd()
+      x);  // Standard mersenne_twister_engine seeded with rd()
   std::uniform_real_distribution<float> distribution(0, 1);
 
   size_t   npts, nd;
@@ -153,7 +153,7 @@ void gen_random_slice(const T *inputdata, size_t npts, size_t ndims,
                rd;  // Will be used to obtain a seed for the random number engine
   size_t       x = rd();
   std::mt19937 generator(
-    (unsigned) x);  // Standard mersenne_twister_engine seeded with rd()
+      (unsigned) x);  // Standard mersenne_twister_engine seeded with rd()
   std::uniform_real_distribution<float> distribution(0, 1);
 
   for (size_t i = 0; i < npts; i++) {
@@ -190,7 +190,7 @@ int generate_pq_pivots(const float *passed_train_data, size_t num_train,
   }
 
   std::unique_ptr<float[]> train_data =
-    std::make_unique<float[]>(num_train * dim);
+      std::make_unique<float[]>(num_train * dim);
   std::memcpy(train_data.get(), passed_train_data,
               num_train * dim * sizeof(float));
 
@@ -242,7 +242,7 @@ int generate_pq_pivots(const float *passed_train_data, size_t num_train,
 
   std::vector<std::vector<uint32_t>> bin_to_dims(num_pq_chunks);
   tsl::robin_map<uint32_t, uint32_t> dim_to_bin;
-  std::vector<float>                 bin_loads(num_pq_chunks, 0);
+  std::vector<float> bin_loads(num_pq_chunks, 0);
 
   // Process dimensions not inserted by previous loop
   for (uint32_t d = 0; d < dim; d++) {
@@ -296,11 +296,11 @@ int generate_pq_pivots(const float *passed_train_data, size_t num_train,
     if (cur_chunk_size == 0)
       continue;
     std::unique_ptr<float[]> cur_pivot_data =
-      std::make_unique<float[]>(num_centers * cur_chunk_size);
+        std::make_unique<float[]>(num_centers * cur_chunk_size);
     std::unique_ptr<float[]> cur_data =
-      std::make_unique<float[]>(num_train * cur_chunk_size);
+        std::make_unique<float[]>(num_train * cur_chunk_size);
     std::unique_ptr<uint32_t[]> closest_center =
-      std::make_unique<uint32_t[]>(num_train);
+        std::make_unique<uint32_t[]>(num_train);
 
     std::cout << "Processing chunk " << i << " with dimensions ["
               << chunk_offsets[i] << ", " << chunk_offsets[i + 1] << ")"
@@ -425,21 +425,21 @@ int generate_pq_data_from_pivots(const std::string data_file,
 
   std::ofstream compressed_file_writer(pq_compressed_vectors_path,
                                        std::ios::binary);
-  _u32          num_pq_chunks_u32 = num_pq_chunks;
+  _u32 num_pq_chunks_u32 = num_pq_chunks;
 
   compressed_file_writer.write((char *) &num_points, sizeof(uint32_t));
   compressed_file_writer.write((char *) &num_pq_chunks_u32, sizeof(uint32_t));
 
   std::unique_ptr<_u32[]> block_compressed_base =
-    std::make_unique<_u32[]>(BLOCK_SIZE * (_u64) num_pq_chunks);
+      std::make_unique<_u32[]>(BLOCK_SIZE * (_u64) num_pq_chunks);
   std::memset(block_compressed_base.get(), 0,
               BLOCK_SIZE * (_u64) num_pq_chunks * sizeof(uint32_t));
 
   std::unique_ptr<T[]> block_data_T = std::make_unique<T[]>(BLOCK_SIZE * dim);
   std::unique_ptr<float[]> block_data_float =
-    std::make_unique<float[]>(BLOCK_SIZE * dim);
+      std::make_unique<float[]>(BLOCK_SIZE * dim);
   std::unique_ptr<float[]> block_data_tmp =
-    std::make_unique<float[]>(BLOCK_SIZE * dim);
+      std::make_unique<float[]>(BLOCK_SIZE * dim);
 
   size_t num_blocks = DIV_ROUND_UP(num_points, BLOCK_SIZE);
 
@@ -465,7 +465,7 @@ int generate_pq_data_from_pivots(const std::string data_file,
     for (uint64_t p = 0; p < cur_blk_size; p++) {
       for (uint64_t d = 0; d < dim; d++) {
         block_data_float[p * dim + d] =
-          block_data_tmp[p * dim + rearrangement[d]];
+            block_data_tmp[p * dim + rearrangement[d]];
       }
     }
 
@@ -475,17 +475,17 @@ int generate_pq_data_from_pivots(const std::string data_file,
         continue;
 
       std::unique_ptr<float[]> cur_pivot_data =
-        std::make_unique<float[]>(num_centers * cur_chunk_size);
+          std::make_unique<float[]>(num_centers * cur_chunk_size);
       std::unique_ptr<float[]> cur_data =
-        std::make_unique<float[]>(cur_blk_size * cur_chunk_size);
+          std::make_unique<float[]>(cur_blk_size * cur_chunk_size);
       std::unique_ptr<uint32_t[]> closest_center =
-        std::make_unique<uint32_t[]>(cur_blk_size);
+          std::make_unique<uint32_t[]>(cur_blk_size);
 
 #pragma omp parallel for schedule(static, 8192)
       for (int64_t j = 0; j < (_s64) cur_blk_size; j++) {
         for (uint64_t k = 0; k < cur_chunk_size; k++)
           cur_data[j * cur_chunk_size + k] =
-            block_data_float[j * dim + chunk_offsets[i] + k];
+              block_data_float[j * dim + chunk_offsets[i] + k];
       }
 
 #pragma omp parallel for schedule(static, 1)
@@ -507,15 +507,16 @@ int generate_pq_data_from_pivots(const std::string data_file,
 
     if (num_centers > 256) {
       compressed_file_writer.write(
-        (char *) (block_compressed_base.get()),
-        cur_blk_size * num_pq_chunks * sizeof(uint32_t));
+          (char *) (block_compressed_base.get()),
+          cur_blk_size * num_pq_chunks * sizeof(uint32_t));
     } else {
       std::unique_ptr<uint8_t[]> pVec =
-        std::make_unique<uint8_t[]>(cur_blk_size * num_pq_chunks);
+          std::make_unique<uint8_t[]>(cur_blk_size * num_pq_chunks);
       diskann::convert_types<uint32_t, uint8_t>(
-        block_compressed_base.get(), pVec.get(), cur_blk_size, num_pq_chunks);
+          block_compressed_base.get(), pVec.get(), cur_blk_size, num_pq_chunks);
       compressed_file_writer.write(
-        (char *) (pVec.get()), cur_blk_size * num_pq_chunks * sizeof(uint8_t));
+          (char *) (pVec.get()),
+          cur_blk_size * num_pq_chunks * sizeof(uint8_t));
     }
 
     std::cout << ".done." << std::endl;
@@ -578,7 +579,7 @@ int estimate_cluster_sizes(const std::string data_file, float *pivots,
   for (size_t i = 0; i < num_centers; i++) {
     _u32 cur_shard_count = (_u32) shard_counts[i];
     cluster_sizes.push_back(
-      size_t(((double) cur_shard_count) * (1.0 / sampling_rate)));
+        size_t(((double) cur_shard_count) * (1.0 / sampling_rate)));
     std::cout << cur_shard_count * (1.0 / sampling_rate) << " ";
   }
   std::cout << std::endl;
@@ -607,7 +608,7 @@ int shard_data_into_clusters(const std::string data_file, float *pivots,
   }
 
   std::unique_ptr<size_t[]> shard_counts =
-    std::make_unique<size_t[]>(num_centers);
+      std::make_unique<size_t[]>(num_centers);
   std::vector<std::ofstream> shard_data_writer(num_centers);
   std::vector<std::ofstream> shard_idmap_writer(num_centers);
   _u32                       dummy_size = 0;
@@ -615,13 +616,13 @@ int shard_data_into_clusters(const std::string data_file, float *pivots,
 
   for (size_t i = 0; i < num_centers; i++) {
     std::string data_filename =
-      prefix_path + "_subshard-" + std::to_string(i) + ".bin";
+        prefix_path + "_subshard-" + std::to_string(i) + ".bin";
     std::string idmap_filename =
-      prefix_path + "_subshard-" + std::to_string(i) + "_ids_uint32.bin";
+        prefix_path + "_subshard-" + std::to_string(i) + "_ids_uint32.bin";
     shard_data_writer[i] =
-      std::ofstream(data_filename.c_str(), std::ios::binary);
+        std::ofstream(data_filename.c_str(), std::ios::binary);
     shard_idmap_writer[i] =
-      std::ofstream(idmap_filename.c_str(), std::ios::binary);
+        std::ofstream(idmap_filename.c_str(), std::ios::binary);
     shard_data_writer[i].write((char *) &dummy_size, sizeof(uint32_t));
     shard_data_writer[i].write((char *) &basedim32, sizeof(uint32_t));
     shard_idmap_writer[i].write((char *) &dummy_size, sizeof(uint32_t));
@@ -630,10 +631,10 @@ int shard_data_into_clusters(const std::string data_file, float *pivots,
   }
 
   std::unique_ptr<_u32[]> block_closest_centers =
-    std::make_unique<_u32[]>(BLOCK_SIZE * k_base);
+      std::make_unique<_u32[]>(BLOCK_SIZE * k_base);
   std::unique_ptr<T[]> block_data_T = std::make_unique<T[]>(BLOCK_SIZE * dim);
   std::unique_ptr<float[]> block_data_float =
-    std::make_unique<float[]>(BLOCK_SIZE * dim);
+      std::make_unique<float[]>(BLOCK_SIZE * dim);
 
   size_t num_blocks = DIV_ROUND_UP(num_points, BLOCK_SIZE);
 
@@ -656,7 +657,7 @@ int shard_data_into_clusters(const std::string data_file, float *pivots,
         size_t   shard_id = block_closest_centers[p * k_base + p1];
         uint32_t original_point_map_id = (uint32_t)(start_id + p);
         shard_data_writer[shard_id].write(
-          (char *) (block_data_T.get() + p * dim), sizeof(T) * dim);
+            (char *) (block_data_T.get() + p * dim), sizeof(T) * dim);
         shard_idmap_writer[shard_id].write((char *) &original_point_map_id,
                                            sizeof(uint32_t));
         shard_counts[shard_id]++;
@@ -792,7 +793,7 @@ int partition_with_ram_budget(const std::string data_file,
 
     for (auto &p : cluster_sizes) {
       double cur_shard_ram_estimate =
-        ESTIMATE_RAM_USAGE(p, train_dim, sizeof(T), graph_degree);
+          ESTIMATE_RAM_USAGE(p, train_dim, sizeof(T), graph_degree);
 
       if (cur_shard_ram_estimate > max_ram_usage)
         max_ram_usage = cur_shard_ram_estimate;
@@ -820,61 +821,61 @@ int partition_with_ram_budget(const std::string data_file,
 // Instantations of supported templates
 
 template void DISKANN_DLLEXPORT
-                                gen_random_slice<int8_t>(const std::string base_file,
+gen_random_slice<int8_t>(const std::string base_file,
                          const std::string output_prefix, double sampling_rate);
 template void DISKANN_DLLEXPORT gen_random_slice<uint8_t>(
-  const std::string base_file, const std::string output_prefix,
-  double sampling_rate);
+    const std::string base_file, const std::string output_prefix,
+    double sampling_rate);
 template void DISKANN_DLLEXPORT
 gen_random_slice<float>(const std::string base_file,
                         const std::string output_prefix, double sampling_rate);
 
 template void DISKANN_DLLEXPORT
-                                gen_random_slice<float>(const float *inputdata, size_t npts, size_t ndims,
+gen_random_slice<float>(const float *inputdata, size_t npts, size_t ndims,
                         double p_val, float *&sampled_data, size_t &slice_size);
 template void DISKANN_DLLEXPORT gen_random_slice<uint8_t>(
-  const uint8_t *inputdata, size_t npts, size_t ndims, double p_val,
-  float *&sampled_data, size_t &slice_size);
+    const uint8_t *inputdata, size_t npts, size_t ndims, double p_val,
+    float *&sampled_data, size_t &slice_size);
 template void DISKANN_DLLEXPORT gen_random_slice<int8_t>(
-  const int8_t *inputdata, size_t npts, size_t ndims, double p_val,
-  float *&sampled_data, size_t &slice_size);
+    const int8_t *inputdata, size_t npts, size_t ndims, double p_val,
+    float *&sampled_data, size_t &slice_size);
 
 template void DISKANN_DLLEXPORT gen_random_slice<float>(
-  const std::string data_file, double p_val, float *&sampled_data,
-  size_t &slice_size, size_t &ndims);
+    const std::string data_file, double p_val, float *&sampled_data,
+    size_t &slice_size, size_t &ndims);
 template void DISKANN_DLLEXPORT gen_random_slice<uint8_t>(
-  const std::string data_file, double p_val, float *&sampled_data,
-  size_t &slice_size, size_t &ndims);
+    const std::string data_file, double p_val, float *&sampled_data,
+    size_t &slice_size, size_t &ndims);
 template void DISKANN_DLLEXPORT gen_random_slice<int8_t>(
-  const std::string data_file, double p_val, float *&sampled_data,
-  size_t &slice_size, size_t &ndims);
+    const std::string data_file, double p_val, float *&sampled_data,
+    size_t &slice_size, size_t &ndims);
 
 template DISKANN_DLLEXPORT int partition<int8_t>(
-  const std::string data_file, const float sampling_rate, size_t num_centers,
-  size_t max_k_means_reps, const std::string prefix_path, size_t k_base);
+    const std::string data_file, const float sampling_rate, size_t num_centers,
+    size_t max_k_means_reps, const std::string prefix_path, size_t k_base);
 template DISKANN_DLLEXPORT int partition<uint8_t>(
-  const std::string data_file, const float sampling_rate, size_t num_centers,
-  size_t max_k_means_reps, const std::string prefix_path, size_t k_base);
+    const std::string data_file, const float sampling_rate, size_t num_centers,
+    size_t max_k_means_reps, const std::string prefix_path, size_t k_base);
 template DISKANN_DLLEXPORT int partition<float>(
-  const std::string data_file, const float sampling_rate, size_t num_centers,
-  size_t max_k_means_reps, const std::string prefix_path, size_t k_base);
+    const std::string data_file, const float sampling_rate, size_t num_centers,
+    size_t max_k_means_reps, const std::string prefix_path, size_t k_base);
 
 template DISKANN_DLLEXPORT int partition_with_ram_budget<int8_t>(
-  const std::string data_file, const double sampling_rate, double ram_budget,
-  size_t graph_degree, const std::string prefix_path, size_t k_base);
+    const std::string data_file, const double sampling_rate, double ram_budget,
+    size_t graph_degree, const std::string prefix_path, size_t k_base);
 template DISKANN_DLLEXPORT int partition_with_ram_budget<uint8_t>(
-  const std::string data_file, const double sampling_rate, double ram_budget,
-  size_t graph_degree, const std::string prefix_path, size_t k_base);
+    const std::string data_file, const double sampling_rate, double ram_budget,
+    size_t graph_degree, const std::string prefix_path, size_t k_base);
 template DISKANN_DLLEXPORT int partition_with_ram_budget<float>(
-  const std::string data_file, const double sampling_rate, double ram_budget,
-  size_t graph_degree, const std::string prefix_path, size_t k_base);
+    const std::string data_file, const double sampling_rate, double ram_budget,
+    size_t graph_degree, const std::string prefix_path, size_t k_base);
 
 template DISKANN_DLLEXPORT int generate_pq_data_from_pivots<int8_t>(
-  const std::string data_file, unsigned num_centers, unsigned num_pq_chunks,
-  std::string pq_pivots_path, std::string pq_compressed_vectors_path);
+    const std::string data_file, unsigned num_centers, unsigned num_pq_chunks,
+    std::string pq_pivots_path, std::string pq_compressed_vectors_path);
 template DISKANN_DLLEXPORT int generate_pq_data_from_pivots<uint8_t>(
-  const std::string data_file, unsigned num_centers, unsigned num_pq_chunks,
-  std::string pq_pivots_path, std::string pq_compressed_vectors_path);
+    const std::string data_file, unsigned num_centers, unsigned num_pq_chunks,
+    std::string pq_pivots_path, std::string pq_compressed_vectors_path);
 template DISKANN_DLLEXPORT int generate_pq_data_from_pivots<float>(
-  const std::string data_file, unsigned num_centers, unsigned num_pq_chunks,
-  std::string pq_pivots_path, std::string pq_compressed_vectors_path);
+    const std::string data_file, unsigned num_centers, unsigned num_pq_chunks,
+    std::string pq_pivots_path, std::string pq_compressed_vectors_path);

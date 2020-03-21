@@ -18,8 +18,8 @@ namespace diskann {
 
   template<typename T>
   __cdecl DiskANNInterface<T>::DiskANNInterface(
-    unsigned __int32 dimension, ANNIndex::DistanceType distanceType)
-    : ANNIndex::IANNIndex(dimension, distanceType), _pNsgIndex(nullptr) {
+      unsigned __int32 dimension, ANNIndex::DistanceType distanceType)
+      : ANNIndex::IANNIndex(dimension, distanceType), _pNsgIndex(nullptr) {
     if (distanceType == ANNIndex::DT_L2) {
       _compareMetric = diskann::Metric::L2;
     } else if (distanceType == ANNIndex::DT_InnerProduct) {
@@ -100,11 +100,11 @@ namespace diskann {
       uint64_t tuning_sample_num = 0, tuning_sample_dim = 0,
                tuning_sample_aligned_dim = 0;
       T* tuning_sample =
-        diskann::load_warmup<T>(sample_data_file, tuning_sample_num,
-                                this->m_dimension, this->m_aligned_dimension);
+          diskann::load_warmup<T>(sample_data_file, tuning_sample_num,
+                                  this->m_dimension, this->m_aligned_dimension);
       this->beam_width = diskann::optimize_beamwidth<T>(
-        _pFlashIndex, tuning_sample, tuning_sample_num,
-        tuning_sample_aligned_dim, (uint32_t) this->Lsearch);
+          _pFlashIndex, tuning_sample, tuning_sample_num,
+          tuning_sample_aligned_dim, (uint32_t) this->Lsearch);
       std::cout << "Loaded DiskANN index with L: " << this->Lsearch
                 << " (calculated) beam width: " << this->beam_width
                 << " nthreads: " << nthreads << std::endl;
@@ -119,7 +119,8 @@ namespace diskann {
   // Load index from memory blob.
   template<typename T>
   DISKANN_DLLEXPORT bool DiskANNInterface<T>::LoadIndex(
-    const std::vector<ANNIndex::FileBlob>& files, const char* queryParameters) {
+      const std::vector<ANNIndex::FileBlob>& files,
+      const char*                            queryParameters) {
     throw diskann::ANNException("Not implemented", -1);
   }
 
@@ -137,9 +138,9 @@ namespace diskann {
       const T* query = (const T*) vector;
       for (_u64 i = 0; i < queryCount; i++) {
         _pFlashIndex->cached_beam_search(
-          query + (i * this->m_dimension), neighborCount, this->Lsearch,
-          ids + (i * neighborCount), distances + (i * neighborCount),
-          this->beam_width);
+            query + (i * this->m_dimension), neighborCount, this->Lsearch,
+            ids + (i * neighborCount), distances + (i * neighborCount),
+            this->beam_width);
       }
     } catch (const diskann::ANNException& ex) {
       std::cerr << ex.message();
@@ -147,28 +148,28 @@ namespace diskann {
   }
 
   extern "C" __declspec(dllexport) ANNIndex::IANNIndex* CreateObjectFloat(
-    unsigned __int32 dimension, ANNIndex::DistanceType distanceType) {
+      unsigned __int32 dimension, ANNIndex::DistanceType distanceType) {
     return new diskann::DiskANNInterface<float>(dimension, distanceType);
   }
 
   extern "C" __declspec(dllexport) void ReleaseObjectFloat(
-    ANNIndex::IANNIndex* object) {
+      ANNIndex::IANNIndex* object) {
     diskann::DiskANNInterface<float>* subclass =
-      dynamic_cast<diskann::DiskANNInterface<float>*>(object);
+        dynamic_cast<diskann::DiskANNInterface<float>*>(object);
     if (subclass != nullptr) {
       delete subclass;
     }
   }
 
   extern "C" __declspec(dllexport) ANNIndex::IANNIndex* CreateObjectByte(
-    unsigned __int32 dimension, ANNIndex::DistanceType distanceType) {
+      unsigned __int32 dimension, ANNIndex::DistanceType distanceType) {
     return new diskann::DiskANNInterface<int8_t>(dimension, distanceType);
   }
 
   extern "C" __declspec(dllexport) void ReleaseObjectByte(
-    ANNIndex::IANNIndex* object) {
+      ANNIndex::IANNIndex* object) {
     diskann::DiskANNInterface<int8_t>* subclass =
-      dynamic_cast<diskann::DiskANNInterface<int8_t>*>(object);
+        dynamic_cast<diskann::DiskANNInterface<int8_t>*>(object);
     if (subclass != nullptr) {
       delete subclass;
     }

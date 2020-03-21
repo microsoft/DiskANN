@@ -41,26 +41,26 @@ namespace diskann {
     // generates one or more frozen points that will never get deleted from the
     // graph
     DISKANN_DLLEXPORT int generate_random_frozen_points(
-      const char *filename = NULL);
+        const char *filename = NULL);
 
     DISKANN_DLLEXPORT void build(
-      Parameters &             parameters,
-      const std::vector<TagT> &tags = std::vector<TagT>());
+        Parameters &             parameters,
+        const std::vector<TagT> &tags = std::vector<TagT>());
 
     // Gopal. Added search overload that takes L as parameter, so that we
     // can customize L on a per-query basis without tampering with "Parameters"
-    DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> search(const T *      query,
+    DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> search(const T *query,
                                                            const size_t   K,
                                                            const unsigned L,
                                                            unsigned *indices);
 
     DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> search(
-      const T *query, const uint64_t K, const unsigned L,
-      std::vector<unsigned> init_ids, uint64_t *indices, float *distances);
+        const T *query, const uint64_t K, const unsigned L,
+        std::vector<unsigned> init_ids, uint64_t *indices, float *distances);
 
     DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> search_with_tags(
-      const T *query, const size_t K, const unsigned L, TagT *tags,
-      unsigned frozen_pts, unsigned *indices_buffer = NULL);
+        const T *query, const size_t K, const unsigned L, TagT *tags,
+        unsigned frozen_pts, unsigned *indices_buffer = NULL);
 
     // repositions frozen points to the end of _data - if they have been moved
     // during deletion
@@ -68,10 +68,13 @@ namespace diskann {
 
     /* insertions possible only when id corresponding to tag does not already
      * exist in the graph */
-    DISKANN_DLLEXPORT int insert_point(
-      const T *point, const Parameters &parameter, std::vector<Neighbor> &pool,
-      std::vector<Neighbor> &tmp, tsl::robin_set<unsigned> &visited,
-      std::vector<SimpleNeighbor> &cut_graph, const TagT tag);
+    DISKANN_DLLEXPORT int insert_point(const T *                    point,
+                                       const Parameters &           parameter,
+                                       std::vector<Neighbor> &      pool,
+                                       std::vector<Neighbor> &      tmp,
+                                       tsl::robin_set<unsigned> &   visited,
+                                       std::vector<SimpleNeighbor> &cut_graph,
+                                       const TagT                   tag);
 
     // call before triggering deleteions - sets important flags required for
     // deletion related operations
@@ -105,11 +108,11 @@ namespace diskann {
     void update_in_graph();
 
     std::pair<uint32_t, uint32_t> iterate_to_fixed_point(
-      const T *node_coords, const unsigned Lindex,
-      const std::vector<unsigned> &init_ids,
-      std::vector<Neighbor> &      expanded_nodes_info,
-      tsl::robin_set<unsigned> &   expanded_nodes_ids,
-      std::vector<Neighbor> &      best_L_nodes);
+        const T *node_coords, const unsigned Lindex,
+        const std::vector<unsigned> &init_ids,
+        std::vector<Neighbor> &      expanded_nodes_info,
+        tsl::robin_set<unsigned> &   expanded_nodes_ids,
+        std::vector<Neighbor> &      best_L_nodes);
 
     void get_expanded_nodes(const size_t node, const unsigned Lindex,
                             std::vector<unsigned>     init_ids,
