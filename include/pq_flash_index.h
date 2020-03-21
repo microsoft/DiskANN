@@ -60,16 +60,14 @@ namespace diskann {
 
     // load compressed data, and obtains the handle to the disk-resident index
     DISKANN_DLLEXPORT int load(uint32_t    num_threads,
-                               const char *pq_centroids_bin,
-                               const char *compressed_data_bin,
-                               const char *disk_index_file,
-                               const char *medoids_bin,
-                               const char *centroids_bin,
-                               const bool  count_visited_nodes = false);
-
-    //    DISKANN_DLLEXPORT void cache_medoid_nhoods();
+                               const char *pq_prefix,
+                               const char *disk_index_file);
 
     DISKANN_DLLEXPORT void load_cache_list(std::vector<uint32_t> &node_list);
+
+    DISKANN_DLLEXPORT void generate_cache_list_from_sample_queries(
+        std::string sample_bin, _u64 l_search, _u64 beamwidth,
+        _u64 num_nodes_to_cache, std::vector<uint32_t> &node_list);
 
     DISKANN_DLLEXPORT void cache_bfs_levels(_u64 num_nodes_to_cache,
                                             std::vector<uint32_t> &node_list);
@@ -134,8 +132,6 @@ namespace diskann {
         nullptr;  // by default, it is empty. If there are multiple
                   // centroids, we pick the medoid corresponding to the
                   // closest centroid as the starting point of search
-
-    std::vector<std::pair<_u32, unsigned *>> medoid_nhoods;
 
     // nhood_cache
     unsigned *nhood_cache_buf = nullptr;

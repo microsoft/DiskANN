@@ -46,24 +46,21 @@ int search_disk_index(int argc, char** argv) {
   size_t            query_num, query_dim, query_aligned_dim, gt_num, gt_dim;
   std::vector<_u64> Lvec;
 
-  std::string pq_centroids_file(argv[2]);
-  std::string compressed_data_file(argv[3]);
-  std::string disk_index_file(argv[4]);
-  std::string medoids_file(argv[5]);
-  std::string centroids_file(argv[6]);
-  std::string warmup_query_file(argv[7]);
-  _u64        num_nodes_to_cache = std::atoi(argv[8]);
-  std::string query_bin(argv[9]);
-  std::string gt_ids_bin(argv[10]);
-  std::string gt_dists_bin(argv[11]);
-  _u64        recall_at = std::atoi(argv[12]);
-  _u32        num_threads = std::atoi(argv[13]);
-  _u32        beamwidth = std::atoi(argv[14]);
-  std::string result_output_prefix(argv[15]);
+  std::string pq_prefix(argv[2]);
+  std::string disk_index_file(argv[3]);
+  std::string warmup_query_file(argv[4]);
+  _u64        num_nodes_to_cache = std::atoi(argv[5]);
+  std::string query_bin(argv[6]);
+  std::string gt_ids_bin(argv[7]);
+  std::string gt_dists_bin(argv[8]);
+  _u64        recall_at = std::atoi(argv[9]);
+  _u32        num_threads = std::atoi(argv[10]);
+  _u32        beamwidth = std::atoi(argv[11]);
+  std::string result_output_prefix(argv[12]);
 
   bool calc_recall_flag = false;
 
-  for (int ctr = 16; ctr < argc; ctr++) {
+  for (int ctr = 13; ctr < argc; ctr++) {
     _u64 curL = std::atoi(argv[ctr]);
     if (curL >= recall_at)
       Lvec.push_back(curL);
@@ -108,9 +105,7 @@ int search_disk_index(int argc, char** argv) {
       new diskann::PQFlashIndex<T>());
 
   int res =
-      _pFlashIndex->load(num_threads, pq_centroids_file.c_str(),
-                         compressed_data_file.c_str(), disk_index_file.c_str(),
-                         medoids_file.c_str(), centroids_file.c_str(), false);
+      _pFlashIndex->load(num_threads, pq_prefix.c_str(), disk_index_file.c_str());
 
   if (res != 0) {
     return res;
@@ -118,13 +113,15 @@ int search_disk_index(int argc, char** argv) {
   // cache bfs levels
   std::vector<uint32_t> node_list;
   std::cout << "Caching " << num_nodes_to_cache << " BFS nodes around medoid(s)"
-            << std::endl;
+      << std::endl;
   _pFlashIndex->cache_bfs_levels(num_nodes_to_cache, node_list);
   _pFlashIndex->load_cache_list(node_list);
+  node_list.clear();
+  node_list.shrink_to_fit();
 
   omp_set_num_threads(num_threads);
 
-  uint64_t warmup_L = 15;
+  uint64_t warmup_L = 20;
   uint64_t warmup_num = 0, warmup_dim = 0, warmup_aligned_dim = 0;
   T*       warmup = nullptr;
 
@@ -133,7 +130,7 @@ int search_disk_index(int argc, char** argv) {
       diskann::load_aligned_bin<T>(warmup_query_file, warmup, warmup_num,
                                    warmup_dim, warmup_aligned_dim);
     } else {
-      warmup_num = (std::min)((_u32) 200000, (_u32) 20000 * num_threads);
+      warmup_num = (std::min)((_u32) 150000, (_u32) 15000 * num_threads);
       warmup_dim = query_dim;
       warmup_aligned_dim = query_aligned_dim;
       diskann::alloc_aligned(((void**) &warmup),
@@ -268,13 +265,11 @@ int search_disk_index(int argc, char** argv) {
 }
 
 int main(int argc, char** argv) {
-  if (argc < 17) {
+  if (argc < 14) {
     std::cout << "Usage: " << argv[0]
-              << " <index_type[float/int8/uint8]>  <pq_centroids_bin> "
-                 "<compressed_data_bin> <disk_index_path> "
-                 "<medoids_bin (use \"null\" if none)> <centroids_float_bin "
-                 "(use \"null\" if none)> "
-                 "  <warmup file> (use \"null\" for none) <num_nodes_to_cache> "
+              << " <index_type[float/int8/uint8]>  <pq_data_prefix> "
+                 " <disk_index_path> "
+                 " <warmup query file> (use \"null\" for none) <num_nodes_to_cache> "
                  "<query_bin> <groundtruth_bin> (use \"null\" for none) "
                  "<groundtruth_dist_bin> (use \" null \" for none) "
                  "<recall@> <num_threads> <beamwidth: use 0 to optimize "
