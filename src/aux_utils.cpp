@@ -300,7 +300,8 @@ namespace diskann {
                                 diskann::Metric _compareMetric, unsigned L,
                                 unsigned R, double sampling_rate,
                                 double ram_budget, std::string mem_index_path,
-                                std::string medoids_file) {
+                                std::string medoids_file,
+                                std::string centroids_file) {
     size_t base_num, base_dim;
     diskann::get_bin_metadata(base_file, base_num, base_dim);
 
@@ -322,12 +323,16 @@ namespace diskann {
       _pvamanaIndex->build(paras);
       _pvamanaIndex->save(mem_index_path.c_str());
       std::remove(medoids_file.c_str());
+      std::remove(centroids_file.c_str());
       return 0;
     }
     std::string merged_index_prefix = mem_index_path + "_tempFiles";
     int         num_parts =
         partition_with_ram_budget<T>(base_file, sampling_rate, ram_budget,
                                      2 * R / 3, merged_index_prefix, 2);
+
+    std::string cur_centroid_filepath = merged_index_prefix + "_centroids.bin";
+    std::rename(cur_centroid_filepath.c_str(), centroids_file.c_str());
 
     for (int p = 0; p < num_parts; p++) {
       std::string shard_base_file =
@@ -575,10 +580,11 @@ namespace diskann {
     std::string index_prefix_path(indexFilePath);
     std::string pq_pivots_path = index_prefix_path + "_pq_pivots.bin";
     std::string pq_compressed_vectors_path =
-        index_prefix_path + "_compressed.bin";
+        index_prefix_path + "_pq_compressed.bin";
     std::string mem_index_path = index_prefix_path + "_mem.index";
-    std::string medoids_path = index_prefix_path + "_medoids.bin";
     std::string disk_index_path = index_prefix_path + "_disk.index";
+    std::string medoids_path = disk_index_path + "_medoids.bin";
+    std::string centroids_path = disk_index_path + "_centroids.bin";
     std::string sample_base_prefix = index_prefix_path + "_sample";
 
     unsigned L = (unsigned) atoi(param_list[0].c_str());
@@ -639,9 +645,9 @@ namespace diskann {
 
     train_data = nullptr;
 
-    diskann::build_merged_vamana_index<T>(dataFilePath, _compareMetric, L, R,
-                                          p_val, indexing_ram_budget,
-                                          mem_index_path, medoids_path);
+    diskann::build_merged_vamana_index<T>(
+        dataFilePath, _compareMetric, L, R, p_val, indexing_ram_budget,
+        mem_index_path, medoids_path, centroids_path);
 
     diskann::create_disk_layout<T>(dataFilePath, mem_index_path,
                                    disk_index_path);
@@ -705,13 +711,16 @@ namespace diskann {
   template DISKANN_DLLEXPORT int build_merged_vamana_index<int8_t>(
       std::string base_file, diskann::Metric _compareMetric, unsigned L,
       unsigned R, double sampling_rate, double ram_budget,
-      std::string mem_index_path, std::string medoids_path);
+      std::string mem_index_path, std::string medoids_path,
+      std::string centroids_file);
   template DISKANN_DLLEXPORT int build_merged_vamana_index<float>(
       std::string base_file, diskann::Metric _compareMetric, unsigned L,
       unsigned R, double sampling_rate, double ram_budget,
-      std::string mem_index_path, std::string medoids_path);
+      std::string mem_index_path, std::string medoids_path,
+      std::string centroids_file);
   template DISKANN_DLLEXPORT int build_merged_vamana_index<uint8_t>(
       std::string base_file, diskann::Metric _compareMetric, unsigned L,
       unsigned R, double sampling_rate, double ram_budget,
-      std::string mem_index_path, std::string medoids_path);
+      std::string mem_index_path, std::string medoids_path,
+      std::string centroids_file);
 };  // namespace diskann

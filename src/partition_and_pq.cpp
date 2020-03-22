@@ -710,7 +710,7 @@ int partition(const std::string data_file, const float sampling_rate,
   // kmeans_partitioning on training data
 
   //  cur_file = cur_file + "_kmeans_partitioning-" + std::to_string(num_parts);
-  output_file = cur_file + "_pivots_float.bin";
+  output_file = cur_file + "_centroids.bin";
 
   pivot_data = new float[num_parts * train_dim];
 
@@ -765,7 +765,7 @@ int partition_with_ram_budget(const std::string data_file,
   // kmeans_partitioning on training data
 
   //  cur_file = cur_file + "_kmeans_partitioning-" + std::to_string(num_parts);
-  output_file = cur_file + "_pivots_float.bin";
+  output_file = cur_file + "_centroids.bin";
 
   while (!fit_in_ram) {
     fit_in_ram = true;

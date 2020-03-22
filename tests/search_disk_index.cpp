@@ -104,8 +104,8 @@ int search_disk_index(int argc, char** argv) {
   std::unique_ptr<diskann::PQFlashIndex<T>> _pFlashIndex(
       new diskann::PQFlashIndex<T>());
 
-  int res =
-      _pFlashIndex->load(num_threads, pq_prefix.c_str(), disk_index_file.c_str());
+  int res = _pFlashIndex->load(num_threads, pq_prefix.c_str(),
+                               disk_index_file.c_str());
 
   if (res != 0) {
     return res;
@@ -113,7 +113,7 @@ int search_disk_index(int argc, char** argv) {
   // cache bfs levels
   std::vector<uint32_t> node_list;
   std::cout << "Caching " << num_nodes_to_cache << " BFS nodes around medoid(s)"
-      << std::endl;
+            << std::endl;
   _pFlashIndex->cache_bfs_levels(num_nodes_to_cache, node_list);
   _pFlashIndex->load_cache_list(node_list);
   node_list.clear();
@@ -266,16 +266,17 @@ int search_disk_index(int argc, char** argv) {
 
 int main(int argc, char** argv) {
   if (argc < 14) {
-    std::cout << "Usage: " << argv[0]
-              << " <index_type[float/int8/uint8]>  <pq_data_prefix> "
-                 " <disk_index_path> "
-                 " <warmup query file> (use \"null\" for none) <num_nodes_to_cache> "
-                 "<query_bin> <groundtruth_bin> (use \"null\" for none) "
-                 "<groundtruth_dist_bin> (use \" null \" for none) "
-                 "<recall@> <num_threads> <beamwidth: use 0 to optimize "
-                 "internally> <result_output_prefix> "
-                 "<L1> <L2> ... "
-              << std::endl;
+    std::cout
+        << "Usage: " << argv[0]
+        << " <index_type[float/int8/uint8]>  <pq_data_prefix> "
+           " <disk_index_path> "
+           " <warmup query file> (use \"null\" for none) <num_nodes_to_cache> "
+           "<query_bin> <groundtruth_bin> (use \"null\" for none) "
+           "<groundtruth_dist_bin> (use \" null \" for none) "
+           "<recall@> <num_threads> <beamwidth: use 0 to optimize "
+           "internally> <result_output_prefix> "
+           "<L1> <L2> ... "
+        << std::endl;
     exit(-1);
   }
   if (std::string(argv[1]) == std::string("float"))

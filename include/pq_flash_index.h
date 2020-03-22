@@ -59,8 +59,7 @@ namespace diskann {
     DISKANN_DLLEXPORT ~PQFlashIndex();
 
     // load compressed data, and obtains the handle to the disk-resident index
-    DISKANN_DLLEXPORT int load(uint32_t    num_threads,
-                               const char *pq_prefix,
+    DISKANN_DLLEXPORT int load(uint32_t num_threads, const char *pq_prefix,
                                const char *disk_index_file);
 
     DISKANN_DLLEXPORT void load_cache_list(std::vector<uint32_t> &node_list);

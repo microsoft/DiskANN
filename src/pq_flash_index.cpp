@@ -291,10 +291,9 @@ namespace diskann {
 
 #pragma omp parallel for schedule(dynamic, 1)
     for (_s64 i = 0; i < (int64_t) sample_num; i++) {
-        cached_beam_search(samples + (i * sample_aligned_dim), 1,
-                l_search,
-                tmp_result_ids_64.data() + (i * 1),
-                tmp_result_dists.data() + (i * 1), beamwidth);
+      cached_beam_search(samples + (i * sample_aligned_dim), 1, l_search,
+                         tmp_result_ids_64.data() + (i * 1),
+                         tmp_result_dists.data() + (i * 1), beamwidth);
     }
 
     std::sort(this->node_visit_counter.begin(), node_visit_counter.end(),
@@ -426,7 +425,6 @@ namespace diskann {
     this->thread_data.push(this_thread_data);
   }
 
-
   template<typename T>
   void PQFlashIndex<T>::use_medoids_data_as_centroids() {
     if (centroid_data != nullptr)
@@ -477,10 +475,12 @@ namespace diskann {
   template<typename T>
   int PQFlashIndex<T>::load(uint32_t num_threads, const char *pq_prefix,
                             const char *disk_index_file) {
-      std::string pq_table_bin = std::string(pq_prefix) + "_pivots.bin";
-      std::string pq_compressed_vectors = std::string(pq_prefix) + "_compressed.bin";
-      std::string medoids_file = std::string(disk_index_file) + "_medoids.bin";
-      std::string centroids_file = std::string(disk_index_file) + "_centroids.bin";
+    std::string pq_table_bin = std::string(pq_prefix) + "_pivots.bin";
+    std::string pq_compressed_vectors =
+        std::string(pq_prefix) + "_compressed.bin";
+    std::string medoids_file = std::string(disk_index_file) + "_medoids.bin";
+    std::string centroids_file =
+        std::string(disk_index_file) + "_centroids.bin";
 
     size_t pq_file_dim, pq_file_num_centroids;
     get_bin_metadata(pq_table_bin, pq_file_num_centroids, pq_file_dim);
