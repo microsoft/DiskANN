@@ -315,6 +315,7 @@ namespace diskann {
       paras.Set<unsigned>("C", 750);
       paras.Set<float>("alpha", 2.0f);
       paras.Set<unsigned>("num_rnds", 2);
+      paras.Set<bool>("saturate_graph", 1);
       paras.Set<std::string>("save_path", mem_index_path);
 
       std::unique_ptr<diskann::Index<T>> _pvamanaIndex =
@@ -346,6 +347,7 @@ namespace diskann {
       paras.Set<unsigned>("C", 750);
       paras.Set<float>("alpha", 2.0f);
       paras.Set<unsigned>("num_rnds", 2);
+      paras.Set<bool>("saturate_graph", 1);
       paras.Set<std::string>("save_path", shard_index_file);
 
       std::unique_ptr<diskann::Index<T>> _pvamanaIndex =

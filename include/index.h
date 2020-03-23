@@ -169,11 +169,13 @@ namespace diskann {
     Distance<T> *_distance;
     unsigned     _width;
     unsigned     _ep;
+    bool         _saturate_graph = false;
     std::vector<std::mutex> _locks;  // Per node lock, cardinality=max_points_
-    char *                  _opt_graph;
-    size_t                  _node_size;
-    size_t                  _data_len;
-    size_t                  _neighbor_len;
+
+    char * _opt_graph;
+    size_t _node_size;
+    size_t _data_len;
+    size_t _neighbor_len;
 
     bool _can_delete;
     bool _eager_done;       // true if eager deletions have been made

@@ -34,8 +34,6 @@
 #include <xmmintrin.h>
 #endif
 
-#define SATURATE_GRAPH 1
-
 // only L2 implemented. Need to implement inner product search
 namespace {
   template<typename T>
@@ -489,7 +487,7 @@ namespace diskann {
         }
         start++;
       }
-      cur_alpha *= 1.1;
+      cur_alpha *= 1.2;
     }
   }
 
@@ -526,7 +524,7 @@ namespace diskann {
         pruned_list.emplace_back(iter.id);
     }
 
-    if (SATURATE_GRAPH && alpha > 1) {
+    if (_saturate_graph && alpha > 1) {
       for (uint32_t i = 0; i < pool.size() && pruned_list.size() < range; i++) {
         if ((std::find(pruned_list.begin(), pruned_list.end(), pool[i].id) ==
              pruned_list.end()) &&
@@ -662,6 +660,11 @@ namespace diskann {
     if (NUM_SYNCS < 40)
       NUM_SYNCS = 40;
     std::cout << "Number of syncs: " << NUM_SYNCS << std::endl;
+
+    _saturate_graph = parameters.Get<bool>("saturate_graph");
+
+    if (NUM_THREADS != 0)
+      omp_set_num_threads(NUM_THREADS);
 
     const unsigned argL = parameters.Get<unsigned>("L");  // Search list size
     const unsigned range = parameters.Get<unsigned>("R");

@@ -68,11 +68,8 @@ namespace diskann {
     const std::string index_prefix_path(indexFilePath);
 
     // convert strs into params
-    std::string data_bin = index_prefix_path + "_compressed.bin";
-    std::string pq_tables_bin = index_prefix_path + "_pq_pivots.bin";
+    std::string pq_prefix = index_prefix_path + "_pq";
     std::string disk_index_file = index_prefix_path + "_disk.index";
-    std::string medoids_file = index_prefix_path + "_medoids.bin";
-    std::string cache_list_file = index_prefix_path + "_cache_list.bin";
     std::string sample_data_file = index_prefix_path + "_sample_data.bin";
 
     size_t data_dim, num_pq_centers;
@@ -86,10 +83,8 @@ namespace diskann {
 
     try {
       _pFlashIndex.reset(new PQFlashIndex<T>());
-      _pFlashIndex->load(nthreads, pq_tables_bin.c_str(), data_bin.c_str(),
-                         disk_index_file.c_str());
-      _pFlashIndex->load_entry_points(medoids_file, "");
-      _pFlashIndex->cache_medoid_nhoods();
+      _pFlashIndex->load(nthreads, pq_prefix.c_str(), disk_index_file.c_str());
+
       std::vector<uint32_t> node_list;
       // cache bfs levels
       _pFlashIndex->cache_bfs_levels(num_cache_nodes, node_list);

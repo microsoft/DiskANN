@@ -32,3 +32,16 @@
 
 (17) Add indexing capability with maximum inner product similarity
 
+
+
+
+---------
+Ravi
+
+Workflow:
+(i) PQ generates 2 files with "pq_prefix" prefix
+(ii) build_merged_vamana_index is used for generating memory index used for disk. can set saturate_graph here
+(iii) build_disk_index is calls (i) and (ii)
+(iv) search disk index uses (i) and (iii).
+
+
