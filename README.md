@@ -57,7 +57,9 @@ We now detail the main binaries using which one can build and search indices whi
 To generate an SSD-friendly index, use the `tests/build_disk_index` program. 
 ----------------------------------------------------------------------------
 
-Usage: ./tests/build_disk_index  [data_type<float/int8/uint8>]  [data_file.bin]  [index_prefix_path]  [R]  [L]  [B]  [M]  [T]. 
+```
+./tests/build_disk_index  [data_type<float/int8/uint8>]  [data_file.bin]  [index_prefix_path]  [R]  [L]  [B]  [M]  [T]. 
+```
 
 The arguments are as follows:
 
@@ -80,7 +82,9 @@ The arguments are as follows:
 To search the SSD-index, use the `tests/search_disk_index` program. 
 ----------------------------------------------------------------------------
 
-Usage: ./tests/search_disk_index  [index_type<float/int8/uint8>]  [index_prefix_path]  [num_nodes_to_cache]  [num_threads]  [beamwidth (use 0 to optimize internally)]  [query_file.bin]  [truthset.bin (use "null" for none)]  [K]  [result_output_prefix]  [L1]  [L2] etc.
+```
+./tests/search_disk_index  [index_type<float/int8/uint8>]  [index_prefix_path]  [num_nodes_to_cache]  [num_threads]  [beamwidth (use 0 to optimize internally)]  [query_file.bin]  [truthset.bin (use "null" for none)]  [K]  [result_output_prefix]  [L1]  [L2] etc.
+```
 
 The arguments are as follows:
 
@@ -111,7 +115,9 @@ The arguments are as follows:
 To generate index, use the `tests/build_memory_index` program. 
 --------------------------------------------------------------
 
-Usage: ./tests/build_memory_index  [data_type<int8/uint8/float>]  [data_file.bin]  [output_index_file]  [R]  [L]  [alpha]  [num_threads_to_use]
+```
+./tests/build_memory_index  [data_type<int8/uint8/float>]  [data_file.bin]  [output_index_file]  [R]  [L]  [alpha]  [num_threads_to_use]
+```
 
 The arguments are as follows:
 
@@ -133,7 +139,9 @@ The arguments are as follows:
 To search the generated index, use the `tests/search_memory_index` program:
 ---------------------------------------------------------------------------
 
-Usage: ./tests/search_memory_index  [index_type<float/int8/uint8>]  [data_file.bin]  [memory_index_path]  [query_file.bin]  [truthset.bin (use "null" for none)] [K]  [result_output_prefix]  [L1]  [L2] etc. 
+```
+./tests/search_memory_index  [index_type<float/int8/uint8>]  [data_file.bin]  [memory_index_path]  [query_file.bin]  [truthset.bin (use "null" for none)] [K]  [result_output_prefix]  [L1]  [L2] etc. 
+```
 
 The arguments are as follows:
 
