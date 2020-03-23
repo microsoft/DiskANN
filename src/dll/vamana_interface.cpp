@@ -135,10 +135,11 @@ namespace diskann {
     return true;
   }
 
-  //Load index from memory blob.
+  // Load index from memory blob.
   template<typename T>
   DISKANN_DLLEXPORT bool VamanaInterface<T>::LoadIndex(
-    const std::vector<ANNIndex::FileBlob>& files, const char* queryParameters) {
+      const std::vector<ANNIndex::FileBlob>& files,
+      const char*                            queryParameters) {
     throw diskann::ANNException("Not implemented", -1);
   }
 

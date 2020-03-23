@@ -59,31 +59,26 @@ namespace diskann {
     DISKANN_DLLEXPORT ~PQFlashIndex();
 
     // load compressed data, and obtains the handle to the disk-resident index
-    DISKANN_DLLEXPORT int load(uint32_t    num_threads,
-                               const char *pq_centroids_bin,
-                               const char *compressed_data_bin,
+    DISKANN_DLLEXPORT int load(uint32_t num_threads, const char *pq_prefix,
                                const char *disk_index_file);
 
-    DISKANN_DLLEXPORT void load_entry_points(
-        const std::string entry_points_file, const std::string centroids_file);
-
-    DISKANN_DLLEXPORT void cache_medoid_nhoods();
-
-    DISKANN_DLLEXPORT void load_cache_from_file(std::string cache_bin);
-
     DISKANN_DLLEXPORT void load_cache_list(std::vector<uint32_t> &node_list);
+
+    DISKANN_DLLEXPORT void generate_cache_list_from_sample_queries(
+        std::string sample_bin, _u64 l_search, _u64 beamwidth,
+        _u64 num_nodes_to_cache, std::vector<uint32_t> &node_list);
 
     DISKANN_DLLEXPORT void cache_bfs_levels(_u64 num_nodes_to_cache,
                                             std::vector<uint32_t> &node_list);
 
-    DISKANN_DLLEXPORT void set_cache_create_flag();
+    //    DISKANN_DLLEXPORT void cache_from_samples(const std::string
+    //    sample_file, _u64 num_nodes_to_cache, std::vector<uint32_t>
+    //    &node_list);
 
-    DISKANN_DLLEXPORT void save_cached_nodes(_u64        num_nodes,
-                                             std::string cache_file_path);
+    //    DISKANN_DLLEXPORT void save_cached_nodes(_u64        num_nodes,
+    //                                             std::string cache_file_path);
 
     // setting up thread-specific data
-    DISKANN_DLLEXPORT void setup_thread_data(_u64 nthreads);
-    DISKANN_DLLEXPORT void destroy_thread_data();
 
     // implemented
     DISKANN_DLLEXPORT void cached_beam_search(
@@ -92,6 +87,12 @@ namespace diskann {
         Distance<T> *output_dist_func = nullptr);
     AlignedFileReader *reader;
 
+   protected:
+    DISKANN_DLLEXPORT void use_medoids_data_as_centroids();
+    DISKANN_DLLEXPORT void setup_thread_data(_u64 nthreads);
+    DISKANN_DLLEXPORT void destroy_thread_data();
+
+   private:
     // index info
     // nhood of node `i` is in sector: [i / nnodes_per_sector]
     // offset in sector: [(i % nnodes_per_sector) * max_node_len]
@@ -106,7 +107,6 @@ namespace diskann {
 
     std::string disk_index_file;
     std::vector<std::pair<_u32, _u32>> node_visit_counter;
-    bool create_visit_cache = false;
 
     // PQ data
     // n_chunks = # of chunks ndims is split into
@@ -131,9 +131,6 @@ namespace diskann {
         nullptr;  // by default, it is empty. If there are multiple
                   // centroids, we pick the medoid corresponding to the
                   // closest centroid as the starting point of search
-    bool using_default_medoid_data = true;
-
-    std::vector<std::pair<_u32, unsigned *>> medoid_nhoods;
 
     // nhood_cache
     unsigned *nhood_cache_buf = nullptr;
@@ -147,5 +144,6 @@ namespace diskann {
     ConcurrentQueue<ThreadData<T>> thread_data;
     _u64                           max_nthreads;
     bool                           load_flag = false;
+    bool                           count_visited_nodes = false;
   };
 }  // namespace diskann

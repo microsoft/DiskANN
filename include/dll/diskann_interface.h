@@ -26,8 +26,9 @@ namespace diskann {
                                              const char* queryParameters);
 
     // Load index from memory blob.
-    DISKANN_DLLEXPORT virtual bool LoadIndex(const std::vector<ANNIndex::FileBlob>& files,
-                                             const char* queryParameters);
+    DISKANN_DLLEXPORT virtual bool LoadIndex(
+        const std::vector<ANNIndex::FileBlob>& files,
+        const char*                            queryParameters);
 
     // Search several vectors, return their neighbors' distance and ids.
     // Both distances & ids are returned arraies of neighborCount elements,
@@ -46,7 +47,6 @@ namespace diskann {
     ANNIndex::DistanceType m_distanceType;
 
    private:
-
     std::string _nsgPathPrefix;
     std::unique_ptr<diskann::Index<T, int>> _pNsgIndex;
     diskann::Metric _compareMetric;

@@ -29,7 +29,7 @@ namespace ANNIndex {
   enum SSDAlgoType { SAT_IVFPQHNSW, SAT_KDTreeRNG, SAT_RandNSG, SAT_Count };
 
   static const char* SSDAlgoDLLNames[SAT_Count] = {
-    "ANNIndexIVFPQHNSW.dll", "KDTreeRNGSSDDLL.dll", "nsg_dll.dll"};
+      "ANNIndexIVFPQHNSW.dll", "KDTreeRNGSSDDLL.dll", "nsg_dll.dll"};
   static const char* SSDAlgoNames[SAT_Count] = {"ivfpqhnsw", "kdtreerng",
                                                 "randnsg"};
 
@@ -43,11 +43,11 @@ namespace ANNIndex {
   static const char* ExportReleaseObjectFloatFunc = "ReleaseObjectFloat";
 
   static const char* ExportCreateObjectFuncs[VDT_Count] = {
-    ExportCreateObjectByteFunc, ExportCreateObjectShortFunc,
-    ExportCreateObjectFloatFunc};
+      ExportCreateObjectByteFunc, ExportCreateObjectShortFunc,
+      ExportCreateObjectFloatFunc};
   static const char* ExportReleaseObjectFuncs[VDT_Count] = {
-    ExportReleaseObjectByteFunc, ExportReleaseObjectShortFunc,
-    ExportReleaseObjectFloatFunc};
+      ExportReleaseObjectByteFunc, ExportReleaseObjectShortFunc,
+      ExportReleaseObjectFloatFunc};
 
   // NOTICE : if data is nullptr, it's means a real path has not been mampped to
   // memory blob.
@@ -57,15 +57,15 @@ namespace ANNIndex {
     size_t      size;
 
     FileBlob(const std::string& filePath, const void* fileData, size_t fileSize)
-      : path(filePath), data(fileData), size(fileSize) {
+        : path(filePath), data(fileData), size(fileSize) {
     }
   };
 
   class IANNIndex {
    public:
     DISKANN_DLLEXPORT explicit IANNIndex(unsigned __int32 dimension,
-                       DistanceType     distanceType = DT_L2)
-      : m_dimension(dimension), m_distanceType(distanceType) {
+                                         DistanceType     distanceType = DT_L2)
+        : m_dimension(dimension), m_distanceType(distanceType) {
     }
 
     DISKANN_DLLEXPORT virtual ~IANNIndex() {
@@ -73,16 +73,16 @@ namespace ANNIndex {
 
     // In implementation, the file path can be a file or folder.
     DISKANN_DLLEXPORT virtual bool BuildIndex(
-      const char* dataFilePath, const char* indexFilePath,
-                            const char* indexBuildParameters) = 0;
+        const char* dataFilePath, const char* indexFilePath,
+        const char* indexBuildParameters) = 0;
 
     // Load index form file.
     DISKANN_DLLEXPORT virtual bool LoadIndex(const char* indexFilePath,
-                           const char* queryParameters) = 0;
+                                             const char* queryParameters) = 0;
 
     // Load index from memory blob.
     DISKANN_DLLEXPORT virtual bool LoadIndex(const std::vector<FileBlob>& files,
-                           const char*                  queryParameters) = 0;
+                                             const char* queryParameters) = 0;
 
     // Search several vectors, return their neighbors' distance and ids.
     // Both distances & ids are returned arraies of neighborCount elements,
@@ -92,9 +92,10 @@ namespace ANNIndex {
     // TODO :: this interface has defect as a rare case is return array size may
     // less than neighbor count.
     DISKANN_DLLEXPORT virtual void SearchIndex(const char*       queryVectors,
-                             unsigned __int64 queryCount,
-                             unsigned __int64 neighborCount, float* distances,
-                             unsigned __int64* ids) const = 0;
+                                               unsigned __int64  queryCount,
+                                               unsigned __int64  neighborCount,
+                                               float*            distances,
+                                               unsigned __int64* ids) const = 0;
 
    public:
     // Vector dimension.
@@ -107,4 +108,3 @@ namespace ANNIndex {
   typedef void (*ReleaseObjectFunc)(IANNIndex*);
 
 }  // namespace ANNIndex
-

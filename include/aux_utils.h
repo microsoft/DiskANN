@@ -30,11 +30,10 @@ typedef int FileHandle;
 #include "windows_customizations.h"
 
 namespace diskann {
-  const size_t TRAINING_SET_SIZE = 1500000;
-  const double SPACE_FOR_CACHED_NODES_IN_GB = 0.25;
-  const double THRESHOLD_FOR_CACHING_IN_GB = 1.0;
+  const size_t   TRAINING_SET_SIZE = 1500000;
+  const double   SPACE_FOR_CACHED_NODES_IN_GB = 0.25;
+  const double   THRESHOLD_FOR_CACHING_IN_GB = 1.0;
   const uint32_t NUM_NODES_TO_CACHE = 250000;
-
 
   template<typename T>
   class PQFlashIndex;
@@ -63,13 +62,14 @@ namespace diskann {
   DISKANN_DLLEXPORT int build_merged_vamana_index(
       std::string base_file, diskann::Metric _compareMetric, unsigned L,
       unsigned R, double sampling_rate, double ram_budget,
-      std::string mem_index_path, std::string medoids_file);
+      std::string mem_index_path, std::string medoids_file,
+      std::string centroids_file);
 
   template<typename T>
-  DISKANN_DLLEXPORT uint32_t
-  optimize_beamwidth(std::unique_ptr<diskann::PQFlashIndex<T>> &_pFlashIndex, T *tuning_sample,
-                     _u64 tuning_sample_num, _u64 tuning_sample_aligned_dim,
-                     uint32_t L, uint32_t start_bw = 2);
+  DISKANN_DLLEXPORT uint32_t optimize_beamwidth(
+      std::unique_ptr<diskann::PQFlashIndex<T>> &_pFlashIndex, T *tuning_sample,
+      _u64 tuning_sample_num, _u64 tuning_sample_aligned_dim, uint32_t L,
+      uint32_t start_bw = 2);
 
   template<typename T>
   DISKANN_DLLEXPORT bool build_disk_index(const char *    dataFilePath,

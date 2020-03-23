@@ -28,6 +28,7 @@ int build_in_memory_index(const std::string& data_path, const unsigned L,
   paras.Set<unsigned>("C", C);
   paras.Set<unsigned>("num_rnds", num_rnds);
   paras.Set<float>("alpha", alpha);
+  paras.Set<bool>("saturate_graph", 0);
   paras.Set<unsigned>("num_threads", num_threads);
 
   diskann::Index<T> index(diskann::L2, data_path.c_str());

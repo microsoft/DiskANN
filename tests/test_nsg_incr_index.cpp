@@ -43,6 +43,7 @@ int main(int argc, char** argv) {
   paras.Set<unsigned>("R", R);
   paras.Set<unsigned>("C", C);
   paras.Set<float>("alpha", alpha);
+  paras.Set<bool>("saturate_graph", false);
   paras.Set<unsigned>("num_rnds", num_rnds);
 
   typedef int TagT;

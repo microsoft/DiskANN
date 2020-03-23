@@ -28,8 +28,6 @@ else()
 	target_link_libraries(search_memory_index ${PROJECT_NAME} aio)
 endif()
 
-
-
 add_executable(build_disk_index build_disk_index.cpp)
 if(MSVC)
 	target_link_options(build_disk_index PRIVATE /MACHINE:x64 /DEBUG:FULL "/INCLUDE:_tcmalloc")
@@ -47,25 +45,6 @@ if(MSVC)
 	target_link_libraries(search_disk_index optimized ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE}/nsg_dll.lib)
 else() 
 	target_link_libraries(search_disk_index ${PROJECT_NAME} aio)
-endif()
-
-
-add_executable(generate_cache_from_warmup_queries generate_cache_from_warmup_queries.cpp)
-if(MSVC)
-	target_link_options(generate_cache_from_warmup_queries PRIVATE /MACHINE:x64)
-	target_link_libraries(generate_cache_from_warmup_queries debug ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG}/nsg_dll.lib)
-	target_link_libraries(generate_cache_from_warmup_queries optimized ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE}/nsg_dll.lib)
-else() 
-	target_link_libraries(generate_cache_from_warmup_queries ${PROJECT_NAME} aio)
-endif()
-
-add_executable(generate_cache_from_bfs generate_cache_from_bfs.cpp)
-if(MSVC)
-	target_link_options(generate_cache_from_bfs PRIVATE /MACHINE:x64)
-	target_link_libraries(generate_cache_from_bfs debug ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG}/nsg_dll.lib)
-	target_link_libraries(generate_cache_from_bfs optimized ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE}/nsg_dll.lib)
-else() 
-	target_link_libraries(generate_cache_from_bfs ${PROJECT_NAME} aio)
 endif()
 
 add_executable(generate_pq generate_pq.cpp)
