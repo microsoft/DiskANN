@@ -146,6 +146,41 @@ namespace diskann {
     std::cout << "Finished reading bin file." << std::endl;
   }
 
+  inline void load_truthset(const std::string &bin_file, uint32_t *&ids,
+                            float *&dists, size_t &npts, size_t &dim) {
+    _u64            read_blk_size = 64 * 1024 * 1024;
+    cached_ifstream reader(bin_file, read_blk_size);
+    std::cout << "Reading truthset file " << bin_file.c_str() << " ..."
+              << std::endl;
+    size_t actual_file_size = reader.get_file_size();
+
+    int npts_i32, dim_i32;
+    reader.read((char *) &npts_i32, sizeof(int));
+    reader.read((char *) &dim_i32, sizeof(int));
+    npts = (unsigned) npts_i32;
+    dim = (unsigned) dim_i32;
+
+    std::cout << "Metadata: #pts = " << npts << ", #dims = " << dim << "..."
+              << std::endl;
+
+    size_t expected_actual_file_size =
+        2 * npts * dim * sizeof(uint32_t) + 2 * sizeof(uint32_t);
+    if (actual_file_size != expected_actual_file_size) {
+      std::stringstream stream;
+      stream << "Error. File size mismatch. Actual size is " << actual_file_size
+             << " while expected size is  " << expected_actual_file_size
+             << " npts = " << npts << " dim = " << dim << std::endl;
+      std::cout << stream.str();
+      throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
+                                  __LINE__);
+    }
+
+    ids = new uint32_t[npts * dim];
+    reader.read((char *) ids, npts * dim * sizeof(uint32_t));
+    dists = new float[npts * dim];
+    reader.read((char *) dists, npts * dim * sizeof(float));
+  }
+
   template<typename T>
   inline void load_bin(const std::string &bin_file, std::unique_ptr<T[]> &data,
                        size_t &npts, size_t &dim) {

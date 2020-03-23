@@ -19,12 +19,10 @@ bool build_index(const char* dataFilePath, const char* indexFilePath,
 int main(int argc, char** argv) {
   if (argc != 9) {
     std::cout << "Usage: " << argv[0]
-              << "  <data_type [float/uint8/int8]>   <data_file [.bin]>  "
-                 "<index_prefix_path>  <L candidate list size during indexing> "
-                 "<R [degree of final "
-                 "index]> <B [memory footprint of disk index]> <M [indexing "
-                 "time memory "
-                 "limit in GB]> <T [number of threads during indexing>"
+              << "  [data_type<float/int8/uint8>]  [data_file.bin]  "
+                 "[index_prefix_path]  "
+                 "[R]  [L]  [B]  [M]  [T]. See README for more information on "
+                 "parameters."
               << std::endl;
   } else {
     std::string params = std::string(argv[4]) + " " + std::string(argv[5]) +

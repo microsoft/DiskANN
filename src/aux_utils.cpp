@@ -16,7 +16,6 @@
 #include "partition_and_pq.h"
 #include "pq_flash_index.h"
 #include "utils.h"
-//#include <boost/dynamic_bitset.hpp>
 
 namespace diskann {
 
@@ -421,6 +420,7 @@ namespace diskann {
           [](const diskann::QueryStats &stats) { return stats.total_us; });
 
       if (qps > max_qps && lat_999 < (15000) + mean_latency * 2) {
+        //      if (qps > max_qps) {
         max_qps = qps;
         best_bw = cur_bw;
         //        std::cout<<"cur_bw: " << cur_bw <<", qps: " << qps <<",
@@ -571,8 +571,9 @@ namespace diskann {
 
     if (param_list.size() != 5) {
       std::cout
-          << "Correct usage of parameters is L (indexing search list size) "
-             "R (max degree) B (RAM limit of final index in "
+          << "Correct usage of parameters is R (max degree) "
+             "L (indexing list size, better if >= R) B (RAM limit of final "
+             "index in "
              "GB) M (memory limit while indexing) T (number of threads for "
              "indexing)"
           << std::endl;
@@ -589,8 +590,8 @@ namespace diskann {
     std::string centroids_path = disk_index_path + "_centroids.bin";
     std::string sample_base_prefix = index_prefix_path + "_sample";
 
-    unsigned L = (unsigned) atoi(param_list[0].c_str());
-    unsigned R = (unsigned) atoi(param_list[1].c_str());
+    unsigned R = (unsigned) atoi(param_list[0].c_str());
+    unsigned L = (unsigned) atoi(param_list[1].c_str());
 
     double final_index_ram_limit = get_memory_budget(param_list[2]);
     if (final_index_ram_limit <= 0) {

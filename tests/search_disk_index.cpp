@@ -46,21 +46,21 @@ int search_disk_index(int argc, char** argv) {
   size_t            query_num, query_dim, query_aligned_dim, gt_num, gt_dim;
   std::vector<_u64> Lvec;
 
-  std::string pq_prefix(argv[2]);
-  std::string disk_index_file(argv[3]);
-  std::string warmup_query_file(argv[4]);
-  _u64        num_nodes_to_cache = std::atoi(argv[5]);
+  std::string index_prefix_path(argv[2]);
+  std::string pq_prefix = index_prefix_path + "_pq";
+  std::string disk_index_file = index_prefix_path + "_disk.index";
+  std::string warmup_query_file = index_prefix_path + "_sample_data.bin";
+  _u64        num_nodes_to_cache = std::atoi(argv[3]);
+  _u32        num_threads = std::atoi(argv[4]);
+  _u32        beamwidth = std::atoi(argv[5]);
   std::string query_bin(argv[6]);
-  std::string gt_ids_bin(argv[7]);
-  std::string gt_dists_bin(argv[8]);
-  _u64        recall_at = std::atoi(argv[9]);
-  _u32        num_threads = std::atoi(argv[10]);
-  _u32        beamwidth = std::atoi(argv[11]);
-  std::string result_output_prefix(argv[12]);
+  std::string truthset_bin(argv[7]);
+  _u64        recall_at = std::atoi(argv[8]);
+  std::string result_output_prefix(argv[9]);
 
   bool calc_recall_flag = false;
 
-  for (int ctr = 13; ctr < argc; ctr++) {
+  for (int ctr = 10; ctr < argc; ctr++) {
     _u64 curL = std::atoi(argv[ctr]);
     if (curL >= recall_at)
       Lvec.push_back(curL);
@@ -81,22 +81,11 @@ int search_disk_index(int argc, char** argv) {
   diskann::load_aligned_bin<T>(query_bin, query, query_num, query_dim,
                                query_aligned_dim);
 
-  if (file_exists(gt_ids_bin)) {
-    diskann::load_bin<unsigned>(gt_ids_bin, gt_ids, gt_num, gt_dim);
+  if (file_exists(truthset_bin)) {
+    diskann::load_truthset(truthset_bin, gt_ids, gt_dists, gt_num, gt_dim);
     if (gt_num != query_num) {
       std::cout << "Error. Mismatch in number of queries and ground truth data"
                 << std::endl;
-    }
-    if (file_exists(gt_dists_bin)) {
-      size_t gt_dist_num, gt_dist_dim;
-      diskann::load_bin<float>(gt_dists_bin, gt_dists, gt_dist_num,
-                               gt_dist_dim);
-      if (gt_dist_num != gt_num || gt_dist_dim != gt_dim) {
-        std::cout << "Mismatch between dimensions of groundtruth id file and "
-                     "distance file. Exitting."
-                  << std::endl;
-        exit(-1);
-      }
     }
     calc_recall_flag = true;
   }
@@ -265,17 +254,15 @@ int search_disk_index(int argc, char** argv) {
 }
 
 int main(int argc, char** argv) {
-  if (argc < 14) {
+  if (argc < 11) {
     std::cout
         << "Usage: " << argv[0]
-        << " <index_type[float/int8/uint8]>  <pq_data_prefix> "
-           " <disk_index_path> "
-           " <warmup query file> (use \"null\" for none) <num_nodes_to_cache> "
-           "<query_bin> <groundtruth_bin> (use \"null\" for none) "
-           "<groundtruth_dist_bin> (use \" null \" for none) "
-           "<recall@> <num_threads> <beamwidth: use 0 to optimize "
-           "internally> <result_output_prefix> "
-           "<L1> <L2> ... "
+        << "  [index_type<float/int8/uint8>]  [index_prefix_path] "
+           " [num_nodes_to_cache]  [num_threads]  [beamwidth (use 0 to "
+           "optimize internally)] "
+           " [query_file.bin]  [truthset.bin (use \"null\" for none)] "
+           " [K]  [result_output_prefix] "
+           " [L1]  [L2] etc.  See README for more information on parameters."
         << std::endl;
     exit(-1);
   }
