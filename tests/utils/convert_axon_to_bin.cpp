@@ -37,16 +37,22 @@ std::vector<T> getVector(const std::string& str,
 
   std::vector<T> typedVec;
   typedVec.reserve(suggestedSize);
-
+  std::vector<std::string> strVec;
+  
   if (idsAndVector.size() >= 3) {
-    auto strVec = splitLine(idsAndVector[2], ',', suggestedSize);
-    std::transform(
-        strVec.begin(), strVec.end(), std::back_inserter(typedVec),
-        [&convertFn](const std::string& str) { return convertFn(str); });
+    strVec = splitLine(idsAndVector[2], ',', suggestedSize);
+  } else if (idsAndVector.size() == 2) {
+    strVec = splitLine(idsAndVector[1], ',', suggestedSize);
+  } else if (idsAndVector.size() == 1) {
+    strVec = splitLine(idsAndVector[0], ',', suggestedSize);
   } else {
     std::cerr << "Found line " << str
-              << " that didn't have standard delimiters." << std::endl;
+              << " that has non-standard number of delimiters: " << idsAndVector.size() << std::endl;
   }
+  std::transform(
+      strVec.begin(), strVec.end(), std::back_inserter(typedVec),
+      [&convertFn](const std::string& str) { return convertFn(str); });
+
   return typedVec;
 }
 
