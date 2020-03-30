@@ -16,7 +16,6 @@
 #include <string>
 #include "tsl/robin_set.h"
 
-#include <boost/dynamic_bitset.hpp>
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <time.h>
@@ -37,21 +36,54 @@
 // only L2 implemented. Need to implement inner product search
 namespace {
   template<typename T>
-  diskann::Distance<T> *get_distance_function();
+  diskann::Distance<T> *get_distance_function(diskann::Metric m);
 
   template<>
-  diskann::Distance<float> *get_distance_function() {
-    return new diskann::DistanceL2();
+  diskann::Distance<float> *get_distance_function(diskann::Metric m) {
+    if (m == diskann::Metric::L2)
+      return new diskann::DistanceL2();
+    else {
+      std::stringstream stream;
+      stream << "Only L2 metric supported as of now. Email "
+                "gopalsr@microsoft.com if you need cosine similarity or inner "
+                "product."
+             << std::endl;
+      std::cerr << stream.str() << std::endl;
+      throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
+                                  __LINE__);
+    }
   }
 
   template<>
-  diskann::Distance<int8_t> *get_distance_function() {
-    return new diskann::DistanceL2Int8();
+  diskann::Distance<int8_t> *get_distance_function(diskann::Metric m) {
+    if (m == diskann::Metric::L2)
+      return new diskann::DistanceL2Int8();
+    else {
+      std::stringstream stream;
+      stream << "Only L2 metric supported as of now. Email "
+                "gopalsr@microsoft.com if you need cosine similarity or inner "
+                "product."
+             << std::endl;
+      std::cerr << stream.str() << std::endl;
+      throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
+                                  __LINE__);
+    }
   }
 
   template<>
-  diskann::Distance<uint8_t> *get_distance_function() {
-    return new diskann::DistanceL2UInt8();
+  diskann::Distance<uint8_t> *get_distance_function(diskann::Metric m) {
+    if (m == diskann::Metric::L2)
+      return new diskann::DistanceL2UInt8();
+    else {
+      std::stringstream stream;
+      stream << "Only L2 metric supported as of now. Email "
+                "gopalsr@microsoft.com if you need cosine similarity or inner "
+                "product."
+             << std::endl;
+      std::cerr << stream.str() << std::endl;
+      throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
+                                  __LINE__);
+    }
   }
 }  // namespace
 
@@ -110,7 +142,7 @@ namespace diskann {
       }
     }
 
-    this->_distance = ::get_distance_function<T>();
+    this->_distance = ::get_distance_function<T>(m);
     _locks = std::vector<std::mutex>(_max_points + _num_frozen_pts);
 
     _width = 0;
@@ -326,7 +358,6 @@ namespace diskann {
       }
     }
 
-    //    std::cout << "Medoid index = " << min_idx << std::endl;
     delete[] distances;
     delete[] center;
     return min_idx;

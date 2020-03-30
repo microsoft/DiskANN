@@ -67,6 +67,63 @@ else()
 	target_link_libraries(compute_groundtruth ${PROJECT_NAME} aio)
 endif()
 
+
+
+
+add_executable(generate_pq generate_pq.cpp)
+if(MSVC)
+	target_link_options(generate_pq PRIVATE /MACHINE:x64 /DEBUG:FULL)
+	target_link_libraries(generate_pq debug ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG}/nsg_dll.lib)
+	target_link_libraries(generate_pq optimized ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE}/nsg_dll.lib)
+else() 
+	target_link_libraries(generate_pq ${PROJECT_NAME})
+endif()
+
+add_executable(partition_data partition_data.cpp)
+if(MSVC)
+	target_link_options(partition_data PRIVATE /MACHINE:x64 /DEBUG:FULL)
+	target_link_libraries(partition_data debug ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG}/nsg_dll.lib)
+	target_link_libraries(partition_data optimized ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE}/nsg_dll.lib)
+else() 
+	target_link_libraries(partition_data ${PROJECT_NAME} -ltcmalloc)
+endif()
+
+
+add_executable(partition_with_ram_budget partition_with_ram_budget.cpp)
+if(MSVC)
+	target_link_options(partition_with_ram_budget PRIVATE /MACHINE:x64)
+	target_link_libraries(partition_with_ram_budget debug ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG}/nsg_dll.lib)
+	target_link_libraries(partition_with_ram_budget optimized ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE}/nsg_dll.lib)
+else() 
+	target_link_libraries(partition_with_ram_budget ${PROJECT_NAME} -ltcmalloc)
+endif()
+
+
+
+add_executable(merge_shards merge_shards.cpp)
+if(MSVC)
+	target_link_options(merge_shards PRIVATE /MACHINE:x64)
+	target_link_libraries(merge_shards debug ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG}/nsg_dll.lib)
+	target_link_libraries(merge_shards optimized ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE}/nsg_dll.lib)
+else() 
+	target_link_libraries(merge_shards ${PROJECT_NAME} -ltcmalloc aio)
+endif()
+
+add_executable(create_disk_layout create_disk_layout.cpp)
+if(MSVC)
+	target_link_options(create_disk_layout PRIVATE /MACHINE:x64 /DEBUG:FULL "/INCLUDE:_tcmalloc")
+	target_link_libraries(create_disk_layout debug ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG}/nsg_dll.lib ${PROJECT_SOURCE_DIR}/dependencies/windows/tcmalloc/libtcmalloc_minimal.lib)
+	target_link_libraries(create_disk_layout optimized ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE}/nsg_dll.lib ${PROJECT_SOURCE_DIR}/dependencies/windows/tcmalloc/libtcmalloc_minimal.lib)
+else() 
+	target_link_libraries(create_disk_layout ${PROJECT_NAME} aio)
+endif()
+
+
+if(MSVC)
+add_executable(test_l2_avx test_l2_avx.cpp)
+target_link_options(test_l2_avx PRIVATE /MACHINE:x64 /DEBUG:FULL)
+endif()
+
 #add_executable(convert_axon_to_bin convert_axon_to_bin.cpp ${PROJECT_SOURCE_DIR}/src/ann_exception.cpp)
 #if(MSVC)
 #	target_include_directories(convert_axon_to_bin PRIVATE "${BOOST_ROOT}")

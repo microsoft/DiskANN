@@ -17,16 +17,15 @@
 #include "memory_mapper.h"
 
 template<typename T>
-int build_in_memory_index(const std::string& data_path, const unsigned L,
-                          const unsigned R, const unsigned C,
-                          const unsigned num_rnds, const float alpha,
+int build_in_memory_index(const std::string& data_path, const unsigned R,
+                          const unsigned L, const float alpha,
                           const std::string& save_path,
                           const unsigned     num_threads) {
   diskann::Parameters paras;
-  paras.Set<unsigned>("L", L);
   paras.Set<unsigned>("R", R);
-  paras.Set<unsigned>("C", C);
-  paras.Set<unsigned>("num_rnds", num_rnds);
+  paras.Set<unsigned>("L", L);
+  paras.Set<unsigned>(
+      "C", 750);  // maximum candidate set size during pruning procedure
   paras.Set<float>("alpha", alpha);
   paras.Set<bool>("saturate_graph", 0);
   paras.Set<unsigned>("num_threads", num_threads);
@@ -44,31 +43,32 @@ int build_in_memory_index(const std::string& data_path, const unsigned L,
 }
 
 int main(int argc, char** argv) {
-  if (argc != 10) {
-    std::cout << "Usage:\n"
-              << argv[0] << "  data_type<int8/uint8/float>  <data_file.bin>"
-              << "  L  R  C  #rounds  alpha"
-              << "  <output_graph_file> num_threads_to_use" << std::endl;
+  if (argc != 8) {
+    std::cout << "Usage: " << argv[0]
+              << "  [data_type<int8/uint8/float>]  [data_file.bin]  "
+                 "[output_index_file]  "
+              << "[R]  [L]  [alpha]"
+              << "  [num_threads_to_use]. See README for more information on "
+                 "parameters."
+              << std::endl;
     exit(-1);
   }
 
   const std::string data_path(argv[2]);
-  const unsigned    L = (unsigned) atoi(argv[3]);
+  const std::string save_path(argv[3]);
   const unsigned    R = (unsigned) atoi(argv[4]);
-  const unsigned    C = (unsigned) atoi(argv[5]);
-  const unsigned    num_rnds = (unsigned) atoi(argv[6]);
-  const float       alpha = (float) atof(argv[7]);
-  const std::string save_path(argv[8]);
-  const unsigned    num_threads = (unsigned) atoi(argv[9]);
+  const unsigned    L = (unsigned) atoi(argv[5]);
+  const float       alpha = (float) atof(argv[6]);
+  const unsigned    num_threads = (unsigned) atoi(argv[7]);
 
   if (std::string(argv[1]) == std::string("int8"))
-    build_in_memory_index<int8_t>(data_path, L, R, C, num_rnds, alpha,
-                                  save_path, num_threads);
+    build_in_memory_index<int8_t>(data_path, R, L, alpha, save_path,
+                                  num_threads);
   else if (std::string(argv[1]) == std::string("uint8"))
-    build_in_memory_index<uint8_t>(data_path, L, R, C, num_rnds, alpha,
-                                   save_path, num_threads);
+    build_in_memory_index<uint8_t>(data_path, R, L, alpha, save_path,
+                                   num_threads);
   else if (std::string(argv[1]) == std::string("float"))
-    build_in_memory_index<float>(data_path, L, R, C, num_rnds, alpha, save_path,
+    build_in_memory_index<float>(data_path, R, L, alpha, save_path,
                                  num_threads);
   else
     std::cout << "Unsupported type. Use float/int8/uint8" << std::endl;

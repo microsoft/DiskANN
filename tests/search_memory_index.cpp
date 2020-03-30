@@ -27,14 +27,13 @@ int search_memory_index(int argc, char** argv) {
   std::string data_file(argv[2]);
   std::string memory_index_file(argv[3]);
   std::string query_bin(argv[4]);
-  std::string gt_ids_bin(argv[5]);
-  std::string gt_dists_bin(argv[6]);
-  _u64        recall_at = std::atoi(argv[7]);
-  std::string result_output_prefix(argv[8]);
+  std::string truthset_bin(argv[5]);
+  _u64        recall_at = std::atoi(argv[6]);
+  std::string result_output_prefix(argv[7]);
 
   bool calc_recall_flag = false;
 
-  for (int ctr = 9; ctr < argc; ctr++) {
+  for (int ctr = 8; ctr < argc; ctr++) {
     _u64 curL = std::atoi(argv[ctr]);
     if (curL >= recall_at)
       Lvec.push_back(curL);
@@ -49,31 +48,13 @@ int search_memory_index(int argc, char** argv) {
   diskann::load_aligned_bin<T>(query_bin, query, query_num, query_dim,
                                query_aligned_dim);
 
-  if (file_exists(gt_ids_bin)) {
-    diskann::load_bin<unsigned>(gt_ids_bin, gt_ids, gt_num, gt_dim);
+  if (file_exists(truthset_bin)) {
+    diskann::load_truthset(truthset_bin, gt_ids, gt_dists, gt_num, gt_dim);
     if (gt_num != query_num) {
       std::cout << "Error. Mismatch in number of queries and ground truth data"
                 << std::endl;
-      return 0;
     }
     calc_recall_flag = true;
-    if (file_exists(gt_dists_bin)) {
-      _u64 gt_dists_num, gt_dists_dim;
-      diskann::load_bin<float>(gt_dists_bin, gt_dists, gt_dists_num,
-                               gt_dists_dim);
-      if (gt_dists_num != query_num) {
-        std::cout
-            << "Error. Mismatch in number of queries and ground truth data."
-            << std::endl;
-        return 0;
-      }
-      if (gt_dists_dim != gt_dim) {
-        std::cout << "Error. Mismatch in number of entries in ground truth ids "
-                     "and distances files."
-                  << std::endl;
-        return 0;
-      }
-    }
   }
 
   std::cout.setf(std::ios_base::fixed, std::ios_base::floatfield);
@@ -150,15 +131,15 @@ int search_memory_index(int argc, char** argv) {
 }
 
 int main(int argc, char** argv) {
-  if (argc <= 9) {
-    std::cout << "Usage: " << argv[0]
-              << " <index_type[float/int8/uint8]>  <full_data_bin>  "
-                 "<memory_index_path>  "
-                 "<query_bin> <groundtruth_id_bin> (use \"null\" for none) "
-                 "<groundtruth_dist_bin> (use \"null\" for none) "
-                 "<recall@>  <result_output_prefix> "
-                 " <L1> <L2> ... "
-              << std::endl;
+  if (argc < 9) {
+    std::cout
+        << "Usage: " << argv[0]
+        << "  [index_type<float/int8/uint8>]  [data_file.bin]  "
+           "[memory_index_path]  "
+           "[query_file.bin]  [truthset.bin (use \"null\" for none)] "
+           " [K]  [result_output_prefix] "
+           " [L1]  [L2] etc. See README for more information on parameters. "
+        << std::endl;
     exit(-1);
   }
   if (std::string(argv[1]) == std::string("int8"))

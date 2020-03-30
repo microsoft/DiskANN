@@ -28,9 +28,10 @@
 #define ALIGNMENT 512
 
 void command_line_help() {
-  std::cerr << "<exact-kann> <int8/uint8/float>   <base bin file> <query bin "
-               "file>  <K> <GT-output-prefix>"
-            << std::endl;
+  std::cerr
+      << "<exact-kann> <int8/uint8/float>   <base bin file> <query bin "
+         "file>  <K: # nearest neighbors to compute> <output-truthset-file>"
+      << std::endl;
 }
 
 template<class T>
@@ -252,8 +253,9 @@ inline void save_bin(const std::string filename, T *data, size_t npts,
   std::cout << "Finished writing bin" << std::endl;
 }
 
-inline void save_as_one_file(const std::string filename, int32_t *data,
-                             float *distances, size_t npts, size_t ndims) {
+inline void save_groundtruth_as_one_file(const std::string filename,
+                                         int32_t *data, float *distances,
+                                         size_t npts, size_t ndims) {
   std::ofstream writer(filename, std::ios::binary | std::ios::out);
   int           npts_i32 = (int) npts, ndims_i32 = (int) ndims;
   writer.write((char *) &npts_i32, sizeof(int));
@@ -321,11 +323,12 @@ int aux_main(int argv, char **argc) {
     }
   }
 
-  save_bin<int>(gt_file + std::string("_ids.bin"), closest_points, nqueries, k);
-  save_bin<float>(gt_file + std::string("_dist.bin"), dist_closest_points,
-                  nqueries, k);
-  save_as_one_file(gt_file + std::string("_combined_truthset.bin"),
-                   closest_points, dist_closest_points, nqueries, k);
+  //  save_bin<int>(gt_file + std::string("_ids.bin"), closest_points, nqueries,
+  //  k);
+  //  save_bin<float>(gt_file + std::string("_dist.bin"), dist_closest_points,
+  //                  nqueries, k);
+  save_groundtruth_as_one_file(gt_file, closest_points, dist_closest_points,
+                               nqueries, k);
   diskann::aligned_free(query_data);
   delete[] closest_points;
   delete[] dist_closest_points;

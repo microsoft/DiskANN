@@ -69,6 +69,7 @@ namespace diskann {
 
     // convert strs into params
     std::string pq_prefix = index_prefix_path + "_pq";
+    std::string pq_tables_bin = pq_prefix + "_pivots.bin";
     std::string disk_index_file = index_prefix_path + "_disk.index";
     std::string sample_data_file = index_prefix_path + "_sample_data.bin";
 
