@@ -22,6 +22,7 @@ namespace diskann {
     double n_ios = 0;         // total # of IOs issued
     double read_size = 0;     // total # of bytes read
     double io_us = 0;         // total time spent in IO
+    double cpu_us = 0;        // total time spent in CPU
     double n_cmps_saved = 0;  // # cmps saved
     double n_cmps = 0;        // # cmps
     double n_cache_hits = 0;  // # cache_hits

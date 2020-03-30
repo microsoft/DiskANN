@@ -21,7 +21,7 @@
 #include <unistd.h>
 #endif
 
-#define WARMUP true
+#define WARMUP false
 
 void print_stats(std::string category, std::vector<float> percentiles,
                  std::vector<float> results) {
@@ -155,7 +155,8 @@ int search_disk_index(int argc, char** argv) {
   std::string recall_string = "Recall@" + std::to_string(recall_at);
   std::cout << std::setw(6) << "L" << std::setw(12) << "Beamwidth"
             << std::setw(16) << "QPS" << std::setw(16) << "Mean Latency"
-            << std::setw(16) << "99.9 Latency" << std::setw(16) << "Mean IOs";
+            << std::setw(16) << "99.9 Latency" << std::setw(16) << "Mean IOs"
+            << std::setw(16) << "CPU (s)";
   if (calc_recall_flag) {
     std::cout << std::setw(16) << recall_string << std::endl;
   } else
@@ -217,6 +218,10 @@ int search_disk_index(int argc, char** argv) {
         stats, query_num,
         [](const diskann::QueryStats& stats) { return stats.n_ios; });
 
+    float mean_cpuus = diskann::get_mean_stats(
+        stats, query_num,
+        [](const diskann::QueryStats& stats) { return stats.cpu_us; });
+
     float recall = 0;
     if (calc_recall_flag) {
       recall = diskann::calculate_recall(query_num, gt_ids, gt_dists, gt_dim,
@@ -226,7 +231,8 @@ int search_disk_index(int argc, char** argv) {
 
     std::cout << std::setw(6) << L << std::setw(12) << optimized_beamwidth
               << std::setw(16) << qps << std::setw(16) << mean_latency
-              << std::setw(16) << latency_999 << std::setw(16) << mean_ios;
+              << std::setw(16) << latency_999 << std::setw(16) << mean_ios
+              << std::setw(16) << mean_cpuus;
     if (calc_recall_flag) {
       std::cout << std::setw(16) << recall << std::endl;
     } else

@@ -678,7 +678,7 @@ namespace diskann {
       ::pq_dist_lookup(pq_coord_scratch, n_ids, this->n_chunks, pq_dists,
                        dists_out);
     };
-    Timer                 query_timer, io_timer;
+    Timer                 query_timer, io_timer, cpu_timer;
     std::vector<Neighbor> retset(l_search + 1);
     tsl::robin_set<_u64>  visited(4096);
 
@@ -817,7 +817,13 @@ namespace diskann {
         unsigned *node_nbrs = cached_nhood.second.second;
 
         // compute node_nbrs <-> query dists in PQ space
+        cpu_timer.reset();
         compute_dists(node_nbrs, nnbrs, dist_scratch);
+        if (stats != nullptr) {
+          stats->n_cmps += nnbrs;
+          stats->cpu_us += cpu_timer.elapsed();
+        }
+
         // process prefetched nhood
         for (_u64 m = 0; m < nnbrs; ++m) {
           unsigned id = node_nbrs[m];
@@ -829,9 +835,6 @@ namespace diskann {
             float dist = dist_scratch[m];
             // std::cout << "cmp: " << id << ", dist: " << dist <<
             // std::endl; std::cerr << "dist: " << dist << std::endl;
-            if (stats != nullptr) {
-              stats->n_cmps++;
-            }
             if (dist >= retset[cur_list_size - 1].distance &&
                 (cur_list_size == l_search))
               continue;
@@ -883,8 +886,14 @@ namespace diskann {
 
         unsigned *node_nbrs = (node_buf + 1);
         // compute node_nbrs <-> query dist in PQ space
+        cpu_timer.reset();
         compute_dists(node_nbrs, nnbrs, dist_scratch);
+        if (stats != nullptr) {
+          stats->n_cmps += nnbrs;
+          stats->cpu_us += cpu_timer.elapsed();
+        }
 
+        cpu_timer.reset();
         // process prefetch-ed nhood
         for (_u64 m = 0; m < nnbrs; ++m) {
           unsigned id = node_nbrs[m];
@@ -913,6 +922,10 @@ namespace diskann {
                        // updated
                        // due to neighbors of n.
           }
+        }
+
+        if (stats != nullptr) {
+          stats->cpu_us += cpu_timer.elapsed();
         }
       }
 
