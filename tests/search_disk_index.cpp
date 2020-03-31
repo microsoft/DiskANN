@@ -21,7 +21,7 @@
 #include <unistd.h>
 #endif
 
-#define WARMUP false
+#define WARMUP true
 
 void print_stats(std::string category, std::vector<float> percentiles,
                  std::vector<float> results) {
