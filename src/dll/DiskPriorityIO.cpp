@@ -20,7 +20,7 @@ namespace diskann {
   DiskPriorityIO::DiskPriorityIO(ANNIndex::DiskIOScenario scenario)
       : IDiskPriorityIO(scenario), m_fileHandle(nullptr), m_iocp(nullptr),
         m_currentThreadId(0), m_stopPolling(false),
-        m_overlappedQueue(2 * MAX_IO_DEPTH) {
+        m_overlappedQueue(2 * MAX_IO_DEPTH), m_fileName("") {
   }
 
   DiskPriorityIO::~DiskPriorityIO() {
@@ -64,9 +64,9 @@ namespace diskann {
     return true;
   }
 
-  bool DiskPriorityIO::ReadFile(unsigned __int64 offset,
+  unsigned __int32 DiskPriorityIO::ReadFile(unsigned __int64 offset,
                                 unsigned __int32 readSize, __int8* buffer) {
-    return false;
+    return 0;
   }
   bool DiskPriorityIO::ReadFileAsync(ANNIndex::AsyncReadRequest& readRequest) {
     DiskAnnOverlapped* os = nullptr;

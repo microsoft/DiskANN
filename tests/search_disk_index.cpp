@@ -19,6 +19,11 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#else
+#ifdef USE_BING_INFRA
+#include "DiskPriorityIOInterface.h"
+#include "bing_aligned_file_reader.h"
+#endif
 #endif
 
 #define WARMUP true
@@ -90,8 +95,20 @@ int search_disk_index(int argc, char** argv) {
     calc_recall_flag = true;
   }
 
+
+  std::shared_ptr<AlignedFileReader> reader = nullptr;
+#ifdef _WINDOWS
+#ifndef USE_BING_INFRA
+  reader.reset(new WindowsAlignedFileReader());
+#else
+  reader.reset(new diskann::BingAlignedFileReader());
+#endif
+#else
+  reader.reset(new LinuxAlignedFileReader());
+#endif
+
   std::unique_ptr<diskann::PQFlashIndex<T>> _pFlashIndex(
-      new diskann::PQFlashIndex<T>());
+      new diskann::PQFlashIndex<T>(reader));
 
   int res = _pFlashIndex->load(num_threads, pq_prefix.c_str(),
                                disk_index_file.c_str());

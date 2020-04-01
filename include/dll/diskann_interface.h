@@ -12,7 +12,8 @@ namespace diskann {
   class DiskANNInterface : public ANNIndex::IANNIndex {
    public:
     DISKANN_DLLEXPORT DiskANNInterface(unsigned __int32       dimension,
-                                       ANNIndex::DistanceType distanceType);
+                                       ANNIndex::DistanceType distanceType, 
+                                       std::shared_ptr<ANNIndex::IDiskPriorityIO> diskIO = nullptr);
 
     DISKANN_DLLEXPORT virtual ~DiskANNInterface();
 
@@ -48,6 +49,7 @@ namespace diskann {
 
    private:
     std::string _nsgPathPrefix;
+    std::shared_ptr<ANNIndex::IDiskPriorityIO> _pDiskIO;
     std::unique_ptr<diskann::Index<T, int>> _pNsgIndex;
     diskann::Metric _compareMetric;
 

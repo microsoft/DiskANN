@@ -10,6 +10,8 @@
 
 #include "aux_utils.h"
 #include "dll/diskann_interface.h"
+#include "dll/DiskPriorityIOInterface.h"
+#include "dll/bing_aligned_file_reader.h"
 #include "index.h"
 #include "partition_and_pq.h"
 #include "utils.h"
@@ -17,15 +19,30 @@
 namespace diskann {
 
   template<typename T>
-  __cdecl DiskANNInterface<T>::DiskANNInterface(
-      unsigned __int32 dimension, ANNIndex::DistanceType distanceType)
-      : ANNIndex::IANNIndex(dimension, distanceType), _pNsgIndex(nullptr) {
+  DiskANNInterface<T>::DiskANNInterface(
+      unsigned __int32 dimension, ANNIndex::DistanceType distanceType,
+      std::shared_ptr<ANNIndex::IDiskPriorityIO> diskIO)
+      : ANNIndex::IANNIndex(dimension, distanceType, diskIO),
+        _pNsgIndex(nullptr) {
     if (distanceType == ANNIndex::DT_L2) {
       _compareMetric = diskann::Metric::L2;
-    } else if (distanceType == ANNIndex::DT_InnerProduct) {
-      _compareMetric = diskann::Metric::INNER_PRODUCT;
     } else {
       throw std::exception("Only DT_L2 and DT_InnerProduct are supported.");
+    }
+
+#ifdef _WINDOWS
+#ifdef USE_BING_INFRA
+    if (!diskIO) {
+#ifdef USE_BING_IO
+      throw std::exception(
+          "Disk IO cannot be null when invoked from ANN search.");
+#else
+      _pDiskIO.reset(new DiskPriorityIOInterface(ANNIndex::DiskIOScenario::DIS_HighPriorityUserRead));
+#endif
+      //Windows, but not using Bing infra? no need to do anything.
+#endif
+      //Linux? No need to do anything
+#endif
     }
 
   }  // namespace diskann
@@ -83,7 +100,19 @@ namespace diskann {
     auto     nthreads = (_u32) std::atoi(param_list[1].c_str());
 
     try {
-      _pFlashIndex.reset(new PQFlashIndex<T>());
+      std::shared_ptr<AlignedFileReader> reader = nullptr;
+
+#ifdef _WINDOWS
+#ifndef USE_BING_INFRA
+      reader.reset(new WindowsAlignedFileReader());
+#else
+      reader.reset(new BingAlignedFileReader(_pDiskIO));
+#endif
+#else
+      reader.reset(new LinuxAlignedFileReader());
+#endif
+
+      _pFlashIndex.reset(new PQFlashIndex<T>(reader));
       _pFlashIndex->load(nthreads, pq_prefix.c_str(), disk_index_file.c_str());
 
       std::vector<uint32_t> node_list;

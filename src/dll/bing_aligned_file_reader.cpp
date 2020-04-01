@@ -11,8 +11,12 @@ namespace diskann {
   // TODO: Must refactor this and WAFR to avoid code
   // repeats
 
-  BingAlignedFileReader::BingAlignedFileReader(){};
+  BingAlignedFileReader::BingAlignedFileReader(
+      std::shared_ptr<ANNIndex::IDiskPriorityIO> diskPriorityIOPtr) {
+    m_pDiskPriorityIO = diskPriorityIOPtr;
+  }    
   BingAlignedFileReader::~BingAlignedFileReader(){};
+
 
   // Open & close ops
   // Blocking calls
@@ -20,6 +24,7 @@ namespace diskann {
     m_filename = fname;
     this->register_thread();
   }
+
   void BingAlignedFileReader::close() {
   }
 
@@ -28,13 +33,20 @@ namespace diskann {
     if (this->ctx_map.find(std::this_thread::get_id()) != ctx_map.end()) {
       std::cout << "Warning:: Duplicate registration for thread_id : "
                 << std::this_thread::get_id() << "\n";
+      return;
     }
 
     IOContext context;
-    context.m_pDiskIO =
-        new DiskPriorityIO(ANNIndex::DiskIOScenario::DIS_HighPriorityUserRead);
-    context.m_pDiskIO->Initialize(m_filename.c_str());
 
+    std::cout << "In register thread, context: " << &context << std::endl;
+    if (!m_pDiskPriorityIO) {
+      context.m_pDiskIO.reset(new DiskPriorityIO(
+              ANNIndex::DiskIOScenario::DIS_HighPriorityUserRead));
+    } else {
+      context.m_pDiskIO = m_pDiskPriorityIO;
+    }
+    context.m_pDiskIO->Initialize(m_filename.c_str());
+    
     for (_u64 i = 0; i < MAX_IO_DEPTH; i++) {
       ANNIndex::AsyncReadRequest req;
       memset(&req, 0, sizeof(ANNIndex::AsyncReadRequest));
@@ -42,14 +54,16 @@ namespace diskann {
       context.m_pRequests->push_back(req);
     }
     this->ctx_map.insert(std::make_pair(std::this_thread::get_id(), context));
+
+    std::cout << "At the end of register_thread(), context: " << &context
+              << " use count is: " << context.m_pDiskIO.use_count()
+              << std::endl;
   }
 
   void BingAlignedFileReader::deregister_thread() {
     auto &context = this->ctx_map.at(std::this_thread::get_id());
 
     context.m_pDiskIO->ShutDown();
-    delete context.m_pDiskIO;
-
     this->ctx_map.erase(std::this_thread::get_id());
   }
 

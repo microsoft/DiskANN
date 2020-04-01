@@ -81,19 +81,25 @@ namespace {
 
 namespace diskann {
   template<>
-  PQFlashIndex<_u8>::PQFlashIndex() {
+  PQFlashIndex<_u8>::PQFlashIndex(std::shared_ptr<AlignedFileReader> &fileReader)
+      : reader(fileReader) {
     this->dist_cmp = new DistanceL2UInt8();
     this->dist_cmp_float = new DistanceL2();
+
   }
 
   template<>
-  PQFlashIndex<_s8>::PQFlashIndex() {
+  PQFlashIndex<_s8>::PQFlashIndex(
+      std::shared_ptr<AlignedFileReader> &fileReader)
+      : reader(fileReader) {
     this->dist_cmp = new DistanceL2Int8();
     this->dist_cmp_float = new DistanceL2();
   }
 
   template<>
-  PQFlashIndex<float>::PQFlashIndex() {
+  PQFlashIndex<float>::PQFlashIndex(
+      std::shared_ptr<AlignedFileReader> &fileReader)
+      : reader(fileReader) {
     this->dist_cmp = new DistanceL2();
     this->dist_cmp_float = new DistanceL2();
   }
@@ -117,7 +123,7 @@ namespace diskann {
     if (load_flag) {
       this->destroy_thread_data();
       reader->close();
-      delete reader;
+      //delete reader; //not deleting reader because it is now passed by ref.
     }
   }
 
@@ -546,15 +552,6 @@ namespace diskann {
 
     // open AlignedFileReader handle to nsg_file
     std::string nsg_fname(disk_index_file);
-#ifdef _WINDOWS
-#ifndef USE_BING_INFRA
-    reader = new WindowsAlignedFileReader();
-#else
-    reader = new BingAlignedFileReader();
-#endif
-#else
-    reader = new LinuxAlignedFileReader();
-#endif
     reader->open(nsg_fname);
 
     this->setup_thread_data(num_threads);
