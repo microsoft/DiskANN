@@ -16,6 +16,7 @@
 #include "index.h"
 #include "parameters.h"
 #include "tsl/robin_set.h"
+#include "tcmalloc/malloc_extension.h"
 #include "utils.h"
 
 #include <fcntl.h>
@@ -84,6 +85,9 @@ void gen_random_slice(const std::string base_file,
   sample_id_writer.write((char *) &num_sampled_pts_u32, sizeof(uint32_t));
   sample_writer.close();
   sample_id_writer.close();
+  std::cout << "Wrote " << num_sampled_pts_u32
+            << " points to sample file: " << output_prefix + "_data.bin"
+            << std::endl;
 }
 
 // streams data from the file, and samples each vector with probability p_val
@@ -518,9 +522,9 @@ int generate_pq_data_from_pivots(const std::string data_file,
           (char *) (pVec.get()),
           cur_blk_size * num_pq_chunks * sizeof(uint8_t));
     }
-
     std::cout << ".done." << std::endl;
   }
+  MallocExtension::instance()->ReleaseFreeMemory();
   compressed_file_writer.close();
   return 0;
 }

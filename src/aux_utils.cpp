@@ -419,6 +419,10 @@ namespace diskann {
           stats, tuning_sample_num,
           [](const diskann::QueryStats &stats) { return stats.total_us; });
 
+      //std::cout << "For bw: " << cur_bw << " qps: " << qps
+      //          << " max_qps: " << max_qps << " mean_lat: " << mean_latency
+      //          << " lat_999: " << lat_999 << std::endl;
+
       if (qps > max_qps && lat_999 < (15000) + mean_latency * 2) {
         //      if (qps > max_qps) {
         max_qps = qps;
@@ -429,6 +433,8 @@ namespace diskann {
         cur_bw = (uint32_t)(std::ceil)((float) cur_bw * 1.1);
       } else {
         stop_flag = true;
+        //std::cout << "Stopping at bw: " << best_bw << " max_qps: " << max_qps
+        //          << std::endl;
         //        std::cout<<"cur_bw: " << cur_bw <<", qps: " << qps <<",
         //        mean_lat: " << mean_latency/1000<<", 99.9lat: " <<
         //        lat_999/1000<<std::endl;
@@ -612,6 +618,12 @@ namespace diskann {
       omp_set_num_threads(num_threads);
       mkl_set_num_threads(num_threads);
     }
+
+    std::cout << "Starting index build: R=" << R << " L=" << L
+              << " Query RAM budget: " << final_index_ram_limit
+              << " Indexing ram budget: " << indexing_ram_budget
+              << " T: " << num_threads << std::endl;
+
 
     auto s = std::chrono::high_resolution_clock::now();
 

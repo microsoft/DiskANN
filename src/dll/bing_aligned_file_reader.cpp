@@ -38,7 +38,6 @@ namespace diskann {
 
     IOContext context;
 
-    std::cout << "In register thread, context: " << &context << std::endl;
     if (!m_pDiskPriorityIO) {
       context.m_pDiskIO.reset(new DiskPriorityIO(
               ANNIndex::DiskIOScenario::DIS_HighPriorityUserRead));
@@ -50,14 +49,9 @@ namespace diskann {
     for (_u64 i = 0; i < MAX_IO_DEPTH; i++) {
       ANNIndex::AsyncReadRequest req;
       memset(&req, 0, sizeof(ANNIndex::AsyncReadRequest));
-      // context.m_pRequests->push_back(req);
       context.m_pRequests->push_back(req);
     }
     this->ctx_map.insert(std::make_pair(std::this_thread::get_id(), context));
-
-    std::cout << "At the end of register_thread(), context: " << &context
-              << " use count is: " << context.m_pDiskIO.use_count()
-              << std::endl;
   }
 
   void BingAlignedFileReader::deregister_thread() {
@@ -119,7 +113,7 @@ namespace diskann {
         } else {
           std::stringstream stream;
           stream << "Read request to file: " << m_filename << "failed.";
-          std::cout << stream.str() << std::endl;
+          std::cerr << stream.str() << std::endl;
           (*ctx.m_pRequestsStatus)[i] = IOContext::READ_FAILED;
         }
       };

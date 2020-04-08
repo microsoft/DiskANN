@@ -2,9 +2,9 @@
 
 #define MAX_IO_DEPTH 128
 
-#include <atomic>
 #include <vector>
-#include <iostream>
+#include <atomic>
+
 
 #ifndef _WINDOWS
 #include <fcntl.h>
@@ -32,7 +32,7 @@ typedef struct {
 struct IOContext {
   enum Status { READ_WAIT = 0, READ_SUCCESS, READ_FAILED, PROCESS_COMPLETE };
 
-  std::shared_ptr<ANNIndex::IDiskPriorityIO>                               m_pDiskIO;
+  std::shared_ptr<ANNIndex::IDiskPriorityIO>              m_pDiskIO = nullptr;
   std::shared_ptr<std::vector<ANNIndex::AsyncReadRequest>> m_pRequests;
   std::shared_ptr<std::vector<Status>>                     m_pRequestsStatus;
 
@@ -42,26 +42,6 @@ struct IOContext {
     (*m_pRequestsStatus).reserve(MAX_IO_DEPTH);
     (*m_pRequests).reserve(MAX_IO_DEPTH);
   }
-
-  //IOContext& operator=(const IOContext& ctx) {
-  //  this->m_pDiskIO = ctx.m_pDiskIO;
-  //  this->m_pRequests = ctx.m_pRequests;
-  //  this->m_pRequestsStatus = ctx.m_pRequestsStatus;
-  //  std::cout << "In IOContext::operator=(). this->use_count:"
-  //            << this->m_pDiskIO.use_count()
-  //            << " ctx.use_count(): " << ctx.m_pDiskIO.use_count()
-  //            << " ctx is: " << &ctx << std::endl;
-  //  return *this;
-  //}
-  //IOContext(const IOContext& ctx) {
-  //  this->m_pDiskIO = ctx.m_pDiskIO;
-  //  this->m_pRequests = ctx.m_pRequests;
-  //  this->m_pRequestsStatus = ctx.m_pRequestsStatus;
-  //  std::cout << "In IOContext::copy ctor. this->use_count:"
-  //            << this->m_pDiskIO.use_count()
-  //            << " ctx.use_count(): " << ctx.m_pDiskIO.use_count()
-  //            << " ctx is: " << &ctx << std::endl;
-  //}
 };
 #endif
 

@@ -10,7 +10,6 @@
 
 #include "aux_utils.h"
 #include "dll/diskann_interface.h"
-#include "dll/DiskPriorityIOInterface.h"
 #include "dll/bing_aligned_file_reader.h"
 #include "index.h"
 #include "partition_and_pq.h"
@@ -27,25 +26,17 @@ namespace diskann {
     if (distanceType == ANNIndex::DT_L2) {
       _compareMetric = diskann::Metric::L2;
     } else {
-      throw std::exception("Only DT_L2 and DT_InnerProduct are supported.");
+      throw std::exception("Only DT_L2 is supported.");
     }
 
-#ifdef _WINDOWS
-#ifdef USE_BING_INFRA
-    if (!diskIO) {
 #ifdef USE_BING_IO
+    if (!diskIO) {
       throw std::exception(
           "Disk IO cannot be null when invoked from ANN search.");
-#else
-      _pDiskIO.reset(new DiskPriorityIOInterface(ANNIndex::DiskIOScenario::DIS_HighPriorityUserRead));
-#endif
-      //Windows, but not using Bing infra? no need to do anything.
-#endif
-      //Linux? No need to do anything
-#endif
     }
-
-  }  // namespace diskann
+    _pDiskIO = diskIO;
+#endif
+  }
 
   template<typename T>
   DiskANNInterface<T>::~DiskANNInterface<T>() {
@@ -75,9 +66,9 @@ namespace diskann {
 
     std::cout << "Pushed " << param_list.size() << " parameters" << std::endl;
 
-    if (param_list.size() != 2) {
+    if (param_list.size() != 3) {
       std::cerr << "Correct usage of parameters is \n"
-                   "Lsearch[1] nthreads[2]"
+                   "Lsearch[1] nthreads[2] beamwidth[3]"
                 << std::endl;
       return false;
     }
@@ -98,6 +89,7 @@ namespace diskann {
     this->Lsearch = (_u64) std::atoi(param_list[0].c_str());
     uint64_t num_cache_nodes = NUM_NODES_TO_CACHE;
     auto     nthreads = (_u32) std::atoi(param_list[1].c_str());
+    auto     beamwidth = (_u32) std::atoi(param_list[2].c_str());
 
     try {
       std::shared_ptr<AlignedFileReader> reader = nullptr;
@@ -113,7 +105,12 @@ namespace diskann {
 #endif
 
       _pFlashIndex.reset(new PQFlashIndex<T>(reader));
-      _pFlashIndex->load(nthreads, pq_prefix.c_str(), disk_index_file.c_str());
+      int res = _pFlashIndex->load(nthreads, pq_prefix.c_str(),
+                                   disk_index_file.c_str());
+      if (res != 0) {
+        return false;
+      }
+
 
       std::vector<uint32_t> node_list;
       // cache bfs levels
@@ -122,18 +119,37 @@ namespace diskann {
       node_list.clear();
       node_list.shrink_to_fit();
 
-      uint64_t tuning_sample_num = 0, tuning_sample_dim = 0,
-               tuning_sample_aligned_dim = 0;
+      uint64_t tuning_sample_num = 0;
+
+      std::cout << "Warming up index... " << std::flush;
       T* tuning_sample =
           diskann::load_warmup<T>(sample_data_file, tuning_sample_num,
                                   this->m_dimension, this->m_aligned_dimension);
-      this->beam_width = diskann::optimize_beamwidth<T>(
-          _pFlashIndex, tuning_sample, tuning_sample_num,
-          tuning_sample_aligned_dim, (uint32_t) this->Lsearch);
-      std::cout << "Loaded DiskANN index with L: " << this->Lsearch
-                << " (calculated) beam width: " << this->beam_width
-                << " nthreads: " << nthreads << std::endl;
+      std::vector<uint64_t> tuning_sample_result_ids_64(tuning_sample_num, 0);
+      std::vector<float>    tuning_sample_result_dists(tuning_sample_num, 0);
+#pragma omp parallel for schedule(dynamic, 1)
+      for (_s64 i = 0; i < (int64_t) tuning_sample_num; i++) {
+        _pFlashIndex->cached_beam_search(
+            tuning_sample + (i * this->m_aligned_dimension), 1, WARMUP_L,
+            tuning_sample_result_ids_64.data() + (i * 1),
+            tuning_sample_result_dists.data() + (i * 1), 4);
+      }
+      std::cout << "..done" << std::endl;
 
+      if (beamwidth == 0) {
+        this->beam_width = diskann::optimize_beamwidth<T>(
+            _pFlashIndex, tuning_sample, tuning_sample_num,
+            this->m_aligned_dimension, (uint32_t) this->Lsearch);
+        std::cout << "Loaded DiskANN index with L: " << this->Lsearch
+                  << " (calculated) beam width: " << this->beam_width
+                  << " nthreads: " << nthreads << std::endl;
+
+      } else {
+        this->beam_width = beamwidth;
+        std::cout << "Loaded DiskANN index with L: " << this->Lsearch
+                  << " (specified) beam width: " << this->beam_width
+                  << " nthreads: " << nthreads << std::endl;
+      }
       return true;
     } catch (const diskann::ANNException& ex) {
       std::cerr << ex.message();
@@ -172,9 +188,10 @@ namespace diskann {
     }
   }
 
-  extern "C" __declspec(dllexport) ANNIndex::IANNIndex* CreateObjectFloat(
-      unsigned __int32 dimension, ANNIndex::DistanceType distanceType) {
-    return new diskann::DiskANNInterface<float>(dimension, distanceType);
+extern "C" __declspec(dllexport) ANNIndex::IANNIndex* CreateObjectFloat(
+      unsigned __int32 dimension, ANNIndex::DistanceType distanceType,
+      std::shared_ptr<ANNIndex::IDiskPriorityIO> ptr) {
+    return new diskann::DiskANNInterface<float>(dimension, distanceType, ptr);
   }
 
   extern "C" __declspec(dllexport) void ReleaseObjectFloat(
@@ -187,8 +204,9 @@ namespace diskann {
   }
 
   extern "C" __declspec(dllexport) ANNIndex::IANNIndex* CreateObjectByte(
-      unsigned __int32 dimension, ANNIndex::DistanceType distanceType) {
-    return new diskann::DiskANNInterface<int8_t>(dimension, distanceType);
+      unsigned __int32 dimension, ANNIndex::DistanceType distanceType,
+      std::shared_ptr<ANNIndex::IDiskPriorityIO> ptr) {
+    return new diskann::DiskANNInterface<int8_t>(dimension, distanceType, ptr);
   }
 
   extern "C" __declspec(dllexport) void ReleaseObjectByte(

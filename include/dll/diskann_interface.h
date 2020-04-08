@@ -11,9 +11,9 @@ namespace diskann {
   template<typename T>
   class DiskANNInterface : public ANNIndex::IANNIndex {
    public:
-    DISKANN_DLLEXPORT DiskANNInterface(unsigned __int32       dimension,
-                                       ANNIndex::DistanceType distanceType, 
-                                       std::shared_ptr<ANNIndex::IDiskPriorityIO> diskIO = nullptr);
+    DISKANN_DLLEXPORT DiskANNInterface(
+        unsigned __int32 dimension, ANNIndex::DistanceType distanceType,
+        std::shared_ptr<ANNIndex::IDiskPriorityIO> diskIO = nullptr);
 
     DISKANN_DLLEXPORT virtual ~DiskANNInterface();
 
@@ -48,10 +48,11 @@ namespace diskann {
     ANNIndex::DistanceType m_distanceType;
 
    private:
-    std::string _nsgPathPrefix;
+    std::string                                _nsgPathPrefix;
+    std::shared_ptr<AlignedFileReader>         _pReader;
     std::shared_ptr<ANNIndex::IDiskPriorityIO> _pDiskIO;
-    std::unique_ptr<diskann::Index<T, int>> _pNsgIndex;
-    diskann::Metric _compareMetric;
+    std::unique_ptr<diskann::Index<T, int>>    _pNsgIndex;
+    diskann::Metric                            _compareMetric;
 
     // flash stuff
     std::unique_ptr<PQFlashIndex<T>> _pFlashIndex;

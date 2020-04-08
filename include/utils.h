@@ -490,3 +490,21 @@ inline bool validate_file_size(const std::string &name) {
   in.close();
   return true;
 }
+#ifdef _WINDOWS
+#include <Psapi.h>
+inline void printProcessMemory(const char *message) {
+  PROCESS_MEMORY_COUNTERS counters;
+  HANDLE                  h = GetCurrentProcess();
+  GetProcessMemoryInfo(h, &counters, sizeof(counters));
+  std::cout << message << " [Peaking Working Set size: "
+            << counters.PeakWorkingSetSize * 1.0 / (1024 * 1024 * 1024)
+            << "GB Working set size: "
+            << counters.WorkingSetSize * 1.0 / (1024 * 1024 * 1024)
+            << "GB Private bytes "
+            << counters.PagefileUsage * 1.0 / (1024 * 1024 * 1024) << "GB]"
+            << std::endl;
+}
+#else
+inline void printProcessMemory(const char *message) {
+}
+#endif

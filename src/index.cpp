@@ -29,6 +29,7 @@
 #include "timer.h"
 #include "utils.h"
 #include "windows_customizations.h"
+#include "tcmalloc/malloc_extension.h"
 #ifdef _WINDOWS
 #include <xmmintrin.h>
 #endif
@@ -887,6 +888,8 @@ namespace diskann {
           progress_counter += 5;
         }
       }
+
+      MallocExtension::instance()->ReleaseFreeMemory();
       std::cout << "Completed Pass " << rnd_no << " of data using L=" << L
                 << " and alpha=" << parameters.Get<float>("alpha")
                 << ". Stats: ";
