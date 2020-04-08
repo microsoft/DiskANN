@@ -21,7 +21,6 @@
 #include <unistd.h>
 #else
 #ifdef USE_BING_INFRA
-#include "DiskPriorityIOInterface.h"
 #include "bing_aligned_file_reader.h"
 #endif
 #endif
