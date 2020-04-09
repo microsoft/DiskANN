@@ -7,11 +7,12 @@
 namespace diskann {
   class BingAlignedFileReader : public AlignedFileReader {
    private:
-    std::string m_filename;
+    std::string                                m_filename;
     std::shared_ptr<ANNIndex::IDiskPriorityIO> m_pDiskPriorityIO;
 
    public:
-    DISKANN_DLLEXPORT BingAlignedFileReader(std::shared_ptr<ANNIndex::IDiskPriorityIO> pDiskIO = nullptr);
+    DISKANN_DLLEXPORT BingAlignedFileReader(
+        std::shared_ptr<ANNIndex::IDiskPriorityIO> pDiskIO = nullptr);
     DISKANN_DLLEXPORT virtual ~BingAlignedFileReader();
 
     virtual void register_thread();

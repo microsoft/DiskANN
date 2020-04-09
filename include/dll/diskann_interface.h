@@ -51,8 +51,8 @@ namespace diskann {
     std::string                                _nsgPathPrefix;
     std::shared_ptr<AlignedFileReader>         _pReader;
     std::shared_ptr<ANNIndex::IDiskPriorityIO> _pDiskIO;
-    std::unique_ptr<diskann::Index<T, int>>    _pNsgIndex;
-    diskann::Metric                            _compareMetric;
+    std::unique_ptr<diskann::Index<T, int>> _pNsgIndex;
+    diskann::Metric _compareMetric;
 
     // flash stuff
     std::unique_ptr<PQFlashIndex<T>> _pFlashIndex;

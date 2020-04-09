@@ -65,7 +65,8 @@ namespace diskann {
   }
 
   unsigned __int32 DiskPriorityIO::ReadFile(unsigned __int64 offset,
-                                unsigned __int32 readSize, __int8* buffer) {
+                                            unsigned __int32 readSize,
+                                            __int8*          buffer) {
     return 0;
   }
   bool DiskPriorityIO::ReadFileAsync(ANNIndex::AsyncReadRequest& readRequest) {

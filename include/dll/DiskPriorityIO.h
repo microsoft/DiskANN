@@ -26,8 +26,9 @@ namespace diskann {
                             unsigned __int32 maxWriteRetries = 2,
                             unsigned __int16 threadPoolSize = 4);
 
-    virtual unsigned __int32 ReadFile(unsigned __int64 offset, unsigned __int32 readSize,
-                          __int8* buffer);
+    virtual unsigned __int32 ReadFile(unsigned __int64 offset,
+                                      unsigned __int32 readSize,
+                                      __int8*          buffer);
     virtual bool ReadFileAsync(ANNIndex::AsyncReadRequest& readRequest);
 
     virtual void ShutDown();

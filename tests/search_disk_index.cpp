@@ -19,9 +19,12 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include "linux_aligned_file_reader.h"
 #else
 #ifdef USE_BING_INFRA
 #include "bing_aligned_file_reader.h"
+#else
+#include "windows_aligned_file_reader.h"
 #endif
 #endif
 
@@ -94,7 +97,6 @@ int search_disk_index(int argc, char** argv) {
     calc_recall_flag = true;
   }
 
-
   std::shared_ptr<AlignedFileReader> reader = nullptr;
 #ifdef _WINDOWS
 #ifndef USE_BING_INFRA
@@ -119,7 +121,8 @@ int search_disk_index(int argc, char** argv) {
   std::vector<uint32_t> node_list;
   std::cout << "Caching " << num_nodes_to_cache << " BFS nodes around medoid(s)"
             << std::endl;
-  _pFlashIndex->cache_bfs_levels(num_nodes_to_cache, node_list);
+//  _pFlashIndex->cache_bfs_levels(num_nodes_to_cache, node_list);
+  _pFlashIndex->generate_cache_list_from_sample_queries(warmup_query_file, 15, 6, num_nodes_to_cache, node_list);
   _pFlashIndex->load_cache_list(node_list);
   node_list.clear();
   node_list.shrink_to_fit();

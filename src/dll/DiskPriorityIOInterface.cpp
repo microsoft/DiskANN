@@ -14,22 +14,23 @@ namespace diskann {
   DiskPriorityIOInterface::~DiskPriorityIOInterface() {
   }
 
-  bool DiskPriorityIOInterface::Initialize(
-      const char* filePath,
-      // Max read/write buffer size.
-      unsigned __int32 maxIOSize,
-      unsigned __int32 maxReadRetries, unsigned __int32 maxWriteRetries ,
-      unsigned __int16 threadPoolSize) {
+  bool DiskPriorityIOInterface::Initialize(const char* filePath,
+                                           // Max read/write buffer size.
+                                           unsigned __int32 maxIOSize,
+                                           unsigned __int32 maxReadRetries,
+                                           unsigned __int32 maxWriteRetries,
+                                           unsigned __int16 threadPoolSize) {
     auto                        threadId = std::this_thread::get_id();
     std::lock_guard<std::mutex> lock(m_mutex);
 
     if (m_diskPriorityIOs.find(threadId) != m_diskPriorityIOs.end()) {
       std::shared_ptr<IDiskPriorityIO> diskIOPtr(
           new DiskPriorityIO(m_diskIOScenario));
-      m_diskPriorityIOs.insert(
-          std::make_pair(threadId, diskIOPtr));
+      m_diskPriorityIOs.insert(std::make_pair(threadId, diskIOPtr));
     } else {
-      std::cerr << "Duplicate thread registration in DPIOInterface::Initialize(). ID: " << threadId;
+      std::cerr << "Duplicate thread registration in "
+                   "DPIOInterface::Initialize(). ID: "
+                << threadId;
     }
     return true;
   }
@@ -65,9 +66,9 @@ namespace diskann {
   }
 
   void DiskPriorityIOInterface::ShutDown() {
-      //Note that this shutdown is called from the executing threads
-      //So like everything else, we'll forward it to the correct 
-      //thread.
+    // Note that this shutdown is called from the executing threads
+    // So like everything else, we'll forward it to the correct
+    // thread.
     auto threadId = std::this_thread::get_id();
     auto iter = m_diskPriorityIOs.find(threadId);
     if (iter != m_diskPriorityIOs.end()) {
