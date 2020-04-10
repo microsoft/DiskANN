@@ -81,11 +81,11 @@ namespace {
 
 namespace diskann {
   template<>
-  PQFlashIndex<_u8>::PQFlashIndex(std::shared_ptr<AlignedFileReader> &fileReader)
+  PQFlashIndex<_u8>::PQFlashIndex(
+      std::shared_ptr<AlignedFileReader> &fileReader)
       : reader(fileReader) {
     this->dist_cmp = new DistanceL2UInt8();
     this->dist_cmp_float = new DistanceL2();
-
   }
 
   template<>
@@ -123,7 +123,7 @@ namespace diskann {
     if (load_flag) {
       this->destroy_thread_data();
       reader->close();
-      //delete reader; //not deleting reader because it is now passed by ref.
+      // delete reader; //not deleting reader because it is now passed by ref.
     }
   }
 
@@ -747,7 +747,7 @@ namespace diskann {
         std::cout << std::endl;
   */
       while (marker < cur_list_size && frontier.size() < beam_width &&
-             num_seen < beam_width + 2) {
+             num_seen < beam_width) {
         if (retset[marker].flag) {
           num_seen++;
           auto iter = nhood_cache.find(retset[marker].id);

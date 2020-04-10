@@ -14,9 +14,8 @@ namespace diskann {
   BingAlignedFileReader::BingAlignedFileReader(
       std::shared_ptr<ANNIndex::IDiskPriorityIO> diskPriorityIOPtr) {
     m_pDiskPriorityIO = diskPriorityIOPtr;
-  }    
+  }
   BingAlignedFileReader::~BingAlignedFileReader(){};
-
 
   // Open & close ops
   // Blocking calls
@@ -40,11 +39,10 @@ namespace diskann {
 
     if (!m_pDiskPriorityIO) {
       context.m_pDiskIO.reset(new DiskPriorityIO(
-              ANNIndex::DiskIOScenario::DIS_HighPriorityUserRead));
+          ANNIndex::DiskIOScenario::DIS_HighPriorityUserRead));
     } else {
       context.m_pDiskIO = m_pDiskPriorityIO;
     }
-    
     for (_u64 i = 0; i < MAX_IO_DEPTH; i++) {
       ANNIndex::AsyncReadRequest req;
       memset(&req, 0, sizeof(ANNIndex::AsyncReadRequest));

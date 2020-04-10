@@ -5,11 +5,11 @@
 #include "windows_customizations.h"
 #include "dll/IDiskPriorityIO.h"
 
-
 namespace diskann {
   class DiskPriorityIOInterface : public ANNIndex::IDiskPriorityIO {
    public:
-    DISKANN_DLLEXPORT DiskPriorityIOInterface(ANNIndex::DiskIOScenario scenario =
+    DISKANN_DLLEXPORT DiskPriorityIOInterface(
+        ANNIndex::DiskIOScenario scenario =
             ANNIndex::DiskIOScenario::DIS_HighPriorityUserRead);
     DISKANN_DLLEXPORT virtual ~DiskPriorityIOInterface();
     virtual bool Initialize(const char* filePath,
@@ -30,6 +30,7 @@ namespace diskann {
    private:
     ANNIndex::DiskIOScenario m_diskIOScenario;
     std::mutex               m_mutex;
-    tsl::robin_map<std::thread::id, std::shared_ptr<IDiskPriorityIO>> m_diskPriorityIOs;
+    tsl::robin_map<std::thread::id, std::shared_ptr<IDiskPriorityIO>>
+        m_diskPriorityIOs;
   };
 }  // namespace diskann

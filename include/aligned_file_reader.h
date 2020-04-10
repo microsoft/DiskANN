@@ -5,7 +5,6 @@
 #include <vector>
 #include <atomic>
 
-
 #ifndef _WINDOWS
 #include <fcntl.h>
 #include <libaio.h>
@@ -32,7 +31,7 @@ typedef struct {
 struct IOContext {
   enum Status { READ_WAIT = 0, READ_SUCCESS, READ_FAILED, PROCESS_COMPLETE };
 
-  std::shared_ptr<ANNIndex::IDiskPriorityIO>              m_pDiskIO = nullptr;
+  std::shared_ptr<ANNIndex::IDiskPriorityIO>               m_pDiskIO = nullptr;
   std::shared_ptr<std::vector<ANNIndex::AsyncReadRequest>> m_pRequests;
   std::shared_ptr<std::vector<Status>>                     m_pRequestsStatus;
 

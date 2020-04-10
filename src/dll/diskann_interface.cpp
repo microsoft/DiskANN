@@ -116,7 +116,6 @@ namespace diskann {
         return false;
       }
 
-
       std::vector<uint32_t> node_list;
       // cache bfs levels
       _pFlashIndex->cache_bfs_levels(num_cache_nodes, node_list);
@@ -132,7 +131,7 @@ namespace diskann {
                                   this->m_dimension, this->m_aligned_dimension);
       std::vector<uint64_t> tuning_sample_result_ids_64(tuning_sample_num, 0);
       std::vector<float>    tuning_sample_result_dists(tuning_sample_num, 0);
-#pragma omp parallel for schedule(dynamic, 1)
+#pragma omp                 parallel for schedule(dynamic, 1)
       for (_s64 i = 0; i < (int64_t) tuning_sample_num; i++) {
         _pFlashIndex->cached_beam_search(
             tuning_sample + (i * this->m_aligned_dimension), 1, WARMUP_L,
@@ -193,7 +192,6 @@ namespace diskann {
     }
   }
 
-
   //Private methods:
   template <typename T>
   bool DiskANNInterface<T>::writeSharedStoreIniFile(const char* indexPathPrefix) {
@@ -223,7 +221,8 @@ namespace diskann {
     }
   }
 
-extern "C" __declspec(dllexport) ANNIndex::IANNIndex* CreateObjectFloat(
+  extern "C" __declspec(dllexport) ANNIndex::IANNIndex* CreateObjectFloat(
+
       unsigned __int32 dimension, ANNIndex::DistanceType distanceType,
       std::shared_ptr<ANNIndex::IDiskPriorityIO> ptr) {
     return new diskann::DiskANNInterface<float>(dimension, distanceType, ptr);
