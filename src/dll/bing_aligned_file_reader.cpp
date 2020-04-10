@@ -44,7 +44,6 @@ namespace diskann {
     } else {
       context.m_pDiskIO = m_pDiskPriorityIO;
     }
-    context.m_pDiskIO->Initialize(m_filename.c_str());
     
     for (_u64 i = 0; i < MAX_IO_DEPTH; i++) {
       ANNIndex::AsyncReadRequest req;

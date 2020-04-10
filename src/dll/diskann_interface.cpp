@@ -47,8 +47,12 @@ namespace diskann {
   bool DiskANNInterface<T>::BuildIndex(const char* dataFilePath,
                                        const char* indexFilePath,
                                        const char* indexBuildParameters) {
-    return diskann::build_disk_index<T>(dataFilePath, indexFilePath,
-                                        indexBuildParameters, _compareMetric);
+    if (diskann::build_disk_index<T>(dataFilePath, indexFilePath,
+                                     indexBuildParameters, _compareMetric)) {
+      return writeSharedStoreIniFile(indexFilePath);
+    } else {
+      return false;
+    }
   }
 
   template<typename T>
@@ -98,6 +102,7 @@ namespace diskann {
 #ifndef USE_BING_INFRA
       reader.reset(new WindowsAlignedFileReader());
 #else
+      _pDiskIO->Initialize(disk_index_file.c_str());
       reader.reset(new BingAlignedFileReader(_pDiskIO));
 #endif
 #else
@@ -185,6 +190,36 @@ namespace diskann {
       }
     } catch (const diskann::ANNException& ex) {
       std::cerr << ex.message();
+    }
+  }
+
+
+  //Private methods:
+  template <typename T>
+  bool DiskANNInterface<T>::writeSharedStoreIniFile(const char* indexPathPrefix) {
+    //Load template from the current folder. 
+    std::ifstream in(".\\SharedFileStoreTemplate.ini");
+    if (in.is_open()) {
+      std::string contents((std::istreambuf_iterator<char>(in)),
+                           std::istreambuf_iterator<char>());
+
+      size_t searchIndex = 0;
+      size_t replaceIndex = std::string::npos;
+      while ( (replaceIndex = contents.find(INDEX_PATH_PREFIX_PLACEHOLDER, searchIndex)) != std::string::npos) {
+        contents.replace(replaceIndex, PATH_PREFIX_PLACEHOLDER_LEN,
+                         indexPathPrefix);
+        searchIndex += strlen(indexPathPrefix);
+      }
+      std::ofstream out(std::string(indexPathPrefix) + "_SharedStore.ini");
+      out << contents;
+      out.close();
+      in.close();
+      return true;
+    } else {
+      std::cerr << "Could not find template file: SharedFileStoreTemplate.ini "
+                   "in the current directory. Please contact the DiskANN team."
+                << std::endl;
+      return false;
     }
   }
 

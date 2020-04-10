@@ -4,6 +4,8 @@
 #include "windows_customizations.h"
 
 namespace diskann {
+  const char* INDEX_PATH_PREFIX_PLACEHOLDER = "{0}";
+  const size_t PATH_PREFIX_PLACEHOLDER_LEN = strlen(INDEX_PATH_PREFIX_PLACEHOLDER);
 
   template<typename T, typename TagT>
   class Index;
@@ -46,6 +48,10 @@ namespace diskann {
     unsigned __int32       m_dimension;
     unsigned __int32       m_aligned_dimension;
     ANNIndex::DistanceType m_distanceType;
+
+   private:
+    // Methods
+    bool writeSharedStoreIniFile(const char* indexPathPrefix);
 
    private:
     std::string                                _nsgPathPrefix;

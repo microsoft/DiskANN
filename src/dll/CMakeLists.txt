@@ -74,6 +74,11 @@ if (MSVC)
 							nsg_dll 
 							POST_BUILD 
 							COMMAND ${CMAKE_COMMAND} -E copy ${PROJECT_SOURCE_DIR}/dependencies/windows/tcmalloc/libtcmalloc_minimal.dll "$<$<CONFIG:debug>:\"${CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG}\">$<$<CONFIG:release>:\"${CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE}\">" )
+	add_custom_command(TARGET 
+							nsg_dll 
+							POST_BUILD 
+							COMMAND ${CMAKE_COMMAND} -E copy ${PROJECT_SOURCE_DIR}/config/SharedFileStoreTemplate.ini "$<$<CONFIG:debug>:\"${CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG}\">$<$<CONFIG:release>:\"${CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE}\">" )
+
 
 endif()
 
