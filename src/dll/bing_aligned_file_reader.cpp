@@ -40,6 +40,7 @@ namespace diskann {
     if (!m_pDiskPriorityIO) {
       context.m_pDiskIO.reset(new DiskPriorityIO(
           ANNIndex::DiskIOScenario::DIS_HighPriorityUserRead));
+      context.m_pDiskIO->Initialize(m_filename.c_str());
     } else {
       context.m_pDiskIO = m_pDiskPriorityIO;
     }
