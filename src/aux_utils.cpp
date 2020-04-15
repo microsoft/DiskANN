@@ -391,8 +391,6 @@ namespace diskann {
     uint32_t best_bw = start_bw;
     bool     stop_flag = false;
 
-    if (cur_bw > 64)
-      stop_flag = true;
 
     while (!stop_flag) {
       std::vector<uint64_t> tuning_sample_result_ids_64(tuning_sample_num, 0);
@@ -439,6 +437,9 @@ namespace diskann {
         //        mean_lat: " << mean_latency/1000<<", 99.9lat: " <<
         //        lat_999/1000<<std::endl;
       }
+      if (cur_bw > 64)
+        stop_flag = true;
+
       delete[] stats;
     }
     return best_bw;
