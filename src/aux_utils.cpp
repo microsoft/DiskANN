@@ -399,8 +399,6 @@ namespace diskann {
       diskann::QueryStats * stats = new diskann::QueryStats[tuning_sample_num];
 
 
-	  if (cur_bw > 64)
-        stop_flag = true;
       auto  s = std::chrono::high_resolution_clock::now();
 #pragma omp parallel for schedule(dynamic, 1)
       for (_s64 i = 0; i < (int64_t) tuning_sample_num; i++) {
@@ -441,6 +439,9 @@ namespace diskann {
         //        mean_lat: " << mean_latency/1000<<", 99.9lat: " <<
         //        lat_999/1000<<std::endl;
       }
+      if (cur_bw > 64)
+        stop_flag = true;
+
       delete[] stats;
     }
     return best_bw;
