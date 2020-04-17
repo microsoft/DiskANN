@@ -1,4 +1,5 @@
 #pragma once
+
 #include "utils.h"
 
 namespace diskann {
@@ -48,14 +49,14 @@ namespace diskann {
       if (file_exists(chunk_offset_file)) {
         diskann::load_bin<_u32>(rearrangement_file, rearrangement, numr, numc);
         if (numr != ndims_u64 || numc != 1) {
-          std::cout << "Error loading rearrangement file" << std::endl;
+          diskann::cerr << "Error loading rearrangement file" << std::endl;
           throw diskann::ANNException("Error loading rearrangement file", -1,
                                       __FUNCSIG__, __FILE__, __LINE__);
         }
 
         diskann::load_bin<_u32>(chunk_offset_file, chunk_offsets, numr, numc);
         if (numc != 1 || numr != num_chunks + 1) {
-          std::cout << "Error loading chunk offsets file" << std::endl;
+          diskann::cerr << "Error loading chunk offsets file" << std::endl;
           throw diskann::ANNException("Error loading chunk offsets file", -1,
                                       __FUNCSIG__, __FILE__, __LINE__);
         }
@@ -64,7 +65,7 @@ namespace diskann {
 
         diskann::load_bin<float>(centroid_file, centroid, numr, numc);
         if (numc != 1 || numr != ndims_u64) {
-          std::cout << "Error loading centroid file" << std::endl;
+          diskann::cerr << "Error loading centroid file" << std::endl;
           throw diskann::ANNException("Error loading centroid file", -1,
                                       __FUNCSIG__, __FILE__, __LINE__);
         }
@@ -82,7 +83,8 @@ namespace diskann {
         std::memset(centroid, 0, ndims * sizeof(float));
       }
 
-      std::cout << "PQ Pivots: #ctrs: " << npts_u64 << ", #dims: " << ndims_u64
+      diskann::cout << "PQ Pivots: #ctrs: " << npts_u64
+                    << ", #dims: " << ndims_u64
                 << ", #chunks: " << n_chunks << std::endl;
       //      assert((_u64) ndims_u32 == n_chunks * chunk_size);
       // alloc and compute transpose

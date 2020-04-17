@@ -8,6 +8,7 @@
 #include "omp.h"
 #include "mkl.h"
 
+#include "logger.h"
 #include "aux_utils.h"
 #include "dll/diskann_interface.h"
 #include "dll/bing_aligned_file_reader.h"
@@ -29,7 +30,7 @@ namespace diskann {
       throw std::exception("Only DT_L2 is supported.");
     }
 
-#ifdef USE_BING_IO
+#ifdef EXEC_ENV_OLS
     if (!diskIO) {
       throw std::exception(
           "Disk IO cannot be null when invoked from ANN search.");
@@ -59,7 +60,7 @@ namespace diskann {
   // Load index form file.
   bool DiskANNInterface<T>::LoadIndex(const char* indexFilePath,
                                       const char* queryParameters) {
-    std::cout << "Loading index " << indexFilePath << " for search"
+    diskann::cout << "Loading index " << indexFilePath << " for search"
               << std::endl;
     std::stringstream parser;
     parser << std::string(queryParameters);
@@ -68,7 +69,8 @@ namespace diskann {
     while (parser >> cur_param)
       param_list.push_back(cur_param);
 
-    std::cout << "Pushed " << param_list.size() << " parameters" << std::endl;
+    diskann::cout << "Pushed " << param_list.size() << " parameters"
+                  << std::endl;
 
     if (param_list.size() != 3) {
       std::cerr << "Correct usage of parameters is \n"
@@ -125,7 +127,7 @@ namespace diskann {
 
       uint64_t tuning_sample_num = 0;
 
-      std::cout << "Warming up index... " << std::flush;
+      diskann::cout << "Warming up index... " << std::flush;
       T* tuning_sample =
           diskann::load_warmup<T>(sample_data_file, tuning_sample_num,
                                   this->m_dimension, this->m_aligned_dimension);
@@ -138,25 +140,25 @@ namespace diskann {
             tuning_sample_result_ids_64.data() + (i * 1),
             tuning_sample_result_dists.data() + (i * 1), 4);
       }
-      std::cout << "..done" << std::endl;
+      diskann::cout << "..done" << std::endl;
 
       if (beamwidth == 0) {
         this->beam_width = diskann::optimize_beamwidth<T>(
             _pFlashIndex, tuning_sample, tuning_sample_num,
             this->m_aligned_dimension, (uint32_t) this->Lsearch);
-        std::cout << "Loaded DiskANN index with L: " << this->Lsearch
+        diskann::cout << "Loaded DiskANN index with L: " << this->Lsearch
                   << " (calculated) beam width: " << this->beam_width
                   << " nthreads: " << nthreads << std::endl;
 
       } else {
         this->beam_width = beamwidth;
-        std::cout << "Loaded DiskANN index with L: " << this->Lsearch
+        diskann::cout << "Loaded DiskANN index with L: " << this->Lsearch
                   << " (specified) beam width: " << this->beam_width
                   << " nthreads: " << nthreads << std::endl;
       }
       return true;
     } catch (const diskann::ANNException& ex) {
-      std::cerr << ex.message();
+      diskann::cerr << ex.message();
       return false;
     }
   }

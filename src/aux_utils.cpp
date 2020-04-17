@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 
+#include "logger.h"
 #include "aux_utils.h"
 #include "cached_io.h"
 #include "index.h"
@@ -82,7 +83,7 @@ namespace diskann {
       }
     } else {
       warmup_num = 100000;
-      std::cout << "Generating random warmup file with dim " << warmup_dim
+      diskann::cout << "Generating random warmup file with dim " << warmup_dim
                 << " and aligned dim " << warmup_aligned_dim << std::flush;
       diskann::alloc_aligned(((void **) &warmup),
                              warmup_num * warmup_aligned_dim * sizeof(T),
@@ -96,7 +97,7 @@ namespace diskann {
           warmup[i * warmup_aligned_dim + d] = (T) dis(gen);
         }
       }
-      std::cout << "..done" << std::endl;
+      diskann::cout << "..done" << std::endl;
     }
     return warmup;
   }
@@ -155,14 +156,14 @@ namespace diskann {
       nelems += idmap.size();
     }
     nnodes++;
-    std::cout << "# nodes: " << nnodes << ", max. degree: " << max_degree
+    diskann::cout << "# nodes: " << nnodes << ", max. degree: " << max_degree
               << std::endl;
 
     // compute inverse map: node -> shards
     std::vector<std::pair<unsigned, unsigned>> node_shard;
     node_shard.reserve(nelems);
     for (_u64 shard = 0; shard < nshards; shard++) {
-      std::cout << "Creating inverse map -- shard #" << shard << "\n";
+      diskann::cout << "Creating inverse map -- shard #" << shard << "\n";
       for (_u64 idx = 0; idx < idmaps[shard].size(); idx++) {
         _u64 node_id = idmaps[shard][idx];
         node_shard.push_back(std::make_pair((_u32) node_id, (_u32) shard));
@@ -173,7 +174,7 @@ namespace diskann {
       return left.first < right.first ||
              (left.first == right.first && left.second < right.second);
     });
-    std::cout << "Finished computing node -> shards map\n";
+    diskann::cout << "Finished computing node -> shards map\n";
 
     // create cached vamana readers
     std::vector<cached_ifstream> vamana_readers(nshards);
@@ -208,7 +209,7 @@ namespace diskann {
           input_width > max_input_width ? input_width : max_input_width;
     }
 
-    std::cout << "Max input width: " << max_input_width
+    diskann::cout << "Max input width: " << max_input_width
               << ", output width: " << output_width << std::endl;
 
     diskann_writer.write((char *) &output_width, sizeof(unsigned));
@@ -232,7 +233,7 @@ namespace diskann {
     }
     medoid_writer.close();
 
-    std::cout << "Starting merge\n";
+    diskann::cout << "Starting merge\n";
 
     std::vector<bool>     nhood_set(nnodes, 0);
     std::vector<unsigned> final_nhood;
@@ -252,7 +253,7 @@ namespace diskann {
                              nnbrs * sizeof(unsigned));
         merged_index_size += (sizeof(unsigned) + nnbrs * sizeof(unsigned));
         if (cur_id % 499999 == 1) {
-          std::cout << "." << std::flush;
+          diskann::cout << "." << std::flush;
         }
         cur_id = node_id;
         nnbrs = 0;
@@ -285,12 +286,12 @@ namespace diskann {
       nhood_set[p] = 0;
     final_nhood.clear();
 
-    std::cout << "Expected size: " << merged_index_size << std::endl;
+    diskann::cout << "Expected size: " << merged_index_size << std::endl;
 
     diskann_writer.reset();
     diskann_writer.write((char *) &merged_index_size, sizeof(uint64_t));
 
-    std::cout << "Finished merge\n";
+    diskann::cout << "Finished merge\n";
     return 0;
   }
 
@@ -307,7 +308,8 @@ namespace diskann {
     double full_index_ram =
         ESTIMATE_RAM_USAGE(base_num, base_dim, sizeof(T), R);
     if (full_index_ram < ram_budget * 1024 * 1024 * 1024) {
-      std::cout << "Full index fits in RAM, building in one shot" << std::endl;
+      diskann::cout << "Full index fits in RAM, building in one shot"
+                    << std::endl;
       diskann::Parameters paras;
       paras.Set<unsigned>("L", (unsigned) L);
       paras.Set<unsigned>("R", (unsigned) R);
@@ -417,7 +419,7 @@ namespace diskann {
           stats, tuning_sample_num,
           [](const diskann::QueryStats &stats) { return stats.total_us; });
 
-      // std::cout << "For bw: " << cur_bw << " qps: " << qps
+      // diskann::cout << "For bw: " << cur_bw << " qps: " << qps
       //          << " max_qps: " << max_qps << " mean_lat: " << mean_latency
       //          << " lat_999: " << lat_999 << std::endl;
 
@@ -425,15 +427,15 @@ namespace diskann {
         //      if (qps > max_qps) {
         max_qps = qps;
         best_bw = cur_bw;
-        //        std::cout<<"cur_bw: " << cur_bw <<", qps: " << qps <<",
+        //        diskann::cout<<"cur_bw: " << cur_bw <<", qps: " << qps <<",
         //        mean_lat: " << mean_latency/1000<<", 99.9lat: " <<
         //        lat_999/1000<<std::endl;
         cur_bw = (uint32_t)(std::ceil)((float) cur_bw * 1.1);
       } else {
         stop_flag = true;
-        // std::cout << "Stopping at bw: " << best_bw << " max_qps: " << max_qps
+        // diskann::cout << "Stopping at bw: " << best_bw << " max_qps: " << max_qps
         //          << std::endl;
-        //        std::cout<<"cur_bw: " << cur_bw <<", qps: " << qps <<",
+        //        diskann::cout<<"cur_bw: " << cur_bw <<", qps: " << qps <<",
         //        mean_lat: " << mean_latency/1000<<", 99.9lat: " <<
         //        lat_999/1000<<std::endl;
       }
@@ -494,9 +496,9 @@ namespace diskann {
         (((_u64) width_u32 + 1) * sizeof(unsigned)) + (ndims_64 * sizeof(T));
     nnodes_per_sector = SECTOR_LEN / max_node_len;
 
-    std::cout << "medoid: " << medoid << "B\n";
-    std::cout << "max_node_len: " << max_node_len << "B\n";
-    std::cout << "nnodes_per_sector: " << nnodes_per_sector << "B\n";
+    diskann::cout << "medoid: " << medoid << "B\n";
+    diskann::cout << "max_node_len: " << max_node_len << "B\n";
+    diskann::cout << "nnodes_per_sector: " << nnodes_per_sector << "B\n";
 
     // SECTOR_LEN buffer for each sector
     std::unique_ptr<char[]> sector_buf = std::make_unique<char[]>(SECTOR_LEN);
@@ -518,11 +520,11 @@ namespace diskann {
     diskann_writer.write(sector_buf.get(), SECTOR_LEN);
 
     std::unique_ptr<T[]> cur_node_coords = std::make_unique<T[]>(ndims_64);
-    std::cout << "# sectors: " << n_sectors << "\n";
+    diskann::cout << "# sectors: " << n_sectors << "\n";
     _u64 cur_node_id = 0;
     for (_u64 sector = 0; sector < n_sectors; sector++) {
       if (sector % 100000 == 0) {
-        std::cout << "Sector #" << sector << "written\n";
+        diskann::cout << "Sector #" << sector << "written\n";
       }
       memset(sector_buf.get(), 0, SECTOR_LEN);
       for (_u64 sector_node_id = 0;
@@ -562,7 +564,7 @@ namespace diskann {
       // flush sector to disk
       diskann_writer.write(sector_buf.get(), SECTOR_LEN);
     }
-    std::cout << "Output file written\n";
+    diskann::cout << "Output file written\n";
   }
 
   template<typename T>
@@ -577,7 +579,7 @@ namespace diskann {
       param_list.push_back(cur_param);
 
     if (param_list.size() != 5) {
-      std::cout
+      diskann::cout
           << "Correct usage of parameters is R (max degree) "
              "L (indexing list size, better if >= R) B (RAM limit of final "
              "index in "
@@ -620,7 +622,7 @@ namespace diskann {
       mkl_set_num_threads(num_threads);
     }
 
-    std::cout << "Starting index build: R=" << R << " L=" << L
+    diskann::cout << "Starting index build: R=" << R << " L=" << L
               << " Query RAM budget: " << final_index_ram_limit
               << " Indexing ram budget: " << indexing_ram_budget
               << " T: " << num_threads << std::endl;
@@ -639,7 +641,7 @@ namespace diskann {
     num_pq_chunks =
         num_pq_chunks > MAX_PQ_CHUNKS ? MAX_PQ_CHUNKS : num_pq_chunks;
 
-    std::cout << "Compressing " << dim << "-dimensional data into "
+    diskann::cout << "Compressing " << dim << "-dimensional data into "
               << num_pq_chunks << " bytes per vector." << std::endl;
 
     size_t train_size, train_dim;
@@ -649,7 +651,7 @@ namespace diskann {
     // generates random sample and sets it to train_data and updates train_size
     gen_random_slice<T>(dataFilePath, p_val, train_data, train_size, train_dim);
 
-    std::cout << "Training data loaded of size " << train_size << std::endl;
+    diskann::cout << "Training data loaded of size " << train_size << std::endl;
 
     generate_pq_pivots(train_data, train_size, (uint32_t) dim, 256,
                        (uint32_t) num_pq_chunks, 15, pq_pivots_path);
@@ -674,7 +676,7 @@ namespace diskann {
     auto                          e = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> diff = e - s;
 
-    std::cout << "Indexing time: " << diff.count() << "\n";
+    diskann::cout << "Indexing time: " << diff.count() << "\n";
 
     return true;
   }

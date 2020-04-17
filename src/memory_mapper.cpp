@@ -1,3 +1,4 @@
+#include "logger.h"
 #include "memory_mapper.h"
 #include <iostream>
 #include <sstream>
@@ -21,7 +22,7 @@ MemoryMapper::MemoryMapper(const char* filename) {
     return;
   }
   _fileSize = sb.st_size;
-  std::cout << "File Size: " << _fileSize << std::endl;
+  diskann::cout << "File Size: " << _fileSize << std::endl;
   _buf = (char*) mmap(NULL, _fileSize, PROT_READ, MAP_PRIVATE, _fd, 0);
 #else
   _bareFile = CreateFileA(filename, GENERIC_READ | GENERIC_EXECUTE, 0, NULL,
@@ -55,7 +56,7 @@ MemoryMapper::MemoryMapper(const char* filename) {
   LARGE_INTEGER fSize;
   if (TRUE == GetFileSizeEx(_bareFile, &fSize)) {
     _fileSize = fSize.QuadPart;  // take the 64-bit value
-    std::cout << "File Size: " << _fileSize << std::endl;
+    diskann::cout << "File Size: " << _fileSize << std::endl;
   } else {
     std::cerr << "Failed to get size of file " << filename << std::endl;
   }

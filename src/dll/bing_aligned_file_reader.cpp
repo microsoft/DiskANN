@@ -3,6 +3,7 @@
 
 #include <string>
 #include <sstream>
+#include "logger.h"
 #include "bing_aligned_file_reader.h"
 #include "dll/DiskPriorityIO.h"
 
@@ -30,7 +31,7 @@ namespace diskann {
   void BingAlignedFileReader::register_thread() {
     std::unique_lock<std::mutex> lk(this->ctx_mut);
     if (this->ctx_map.find(std::this_thread::get_id()) != ctx_map.end()) {
-      std::cout << "Warning:: Duplicate registration for thread_id : "
+      diskann::cout << "Warning:: Duplicate registration for thread_id : "
                 << std::this_thread::get_id() << "\n";
       return;
     }

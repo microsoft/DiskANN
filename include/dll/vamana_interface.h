@@ -1,5 +1,5 @@
 #pragma once
-#include "IANNIndex.h"
+#include "bing/IANNIndex.h"
 #include "index.h"
 #include "windows_customizations.h"
 

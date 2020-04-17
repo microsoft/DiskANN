@@ -1,7 +1,7 @@
 #pragma once
 #ifdef _WINDOWS
 #ifdef USE_BING_INFRA
-#include "dll/IDiskPriorityIO.h"
+#include "bing/IDiskPriorityIO.h"
 #include "aligned_file_reader.h"
 
 namespace diskann {

@@ -2,7 +2,7 @@
 #include <string>
 #include <sstream>
 #include <tchar.h>
-#include "IDiskPriorityIO.h"
+#include "bing/IDiskPriorityIO.h"
 #include "DiskPriorityIO.h"
 
 #include "utils.h"
@@ -105,7 +105,8 @@ namespace diskann {
     m_stopPolling = true;
     for (auto& thrd : m_ioPollingThreads) {
       if (thrd.joinable()) {
-        std::cout << "Trying to join thread " << thrd.get_id() << std::endl;
+        std::cout << "Trying to join thread " << (thrd.get_id())
+                      << std::endl;
         thrd.join();
         std::cout << "Thread " << thrd.get_id() << " joined." << std::endl;
       }

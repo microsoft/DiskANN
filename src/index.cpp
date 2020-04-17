@@ -20,6 +20,7 @@
 #include <sys/stat.h>
 #include <time.h>
 
+#include "logger.h"
 #include "exceptions.h"
 #include "index.h"
 #include "math_utils.h"
@@ -104,7 +105,8 @@ namespace diskann {
         _store_data(store_data) {
     // data is stored to _nd * aligned_dim matrix with necessary
     // zero-padding
-    std::cout << "Number of frozen points = " << _num_frozen_pts << std::endl;
+    diskann::cout << "Number of frozen points = " << _num_frozen_pts
+                  << std::endl;
     load_aligned_bin<T>(std::string(filename), _data, _nd, _dim, _aligned_dim);
 
     if (nd > 0) {
@@ -114,7 +116,7 @@ namespace diskann {
         std::stringstream stream;
         stream << "ERROR: Driver requests loading " << _nd << " points,"
                << "but file has fewer (" << nd << ") points" << std::endl;
-        std::cerr << stream.str() << std::endl;
+        diskann::cerr << stream.str() << std::endl;
         throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
                                     __LINE__);
       }
@@ -125,7 +127,7 @@ namespace diskann {
       std::stringstream stream;
       stream << "ERROR: max_points must be >= data size; max_points: "
              << _max_points << "  n: " << _nd << std::endl;
-      std::cerr << stream.str() << std::endl;
+      diskann::cerr << stream.str() << std::endl;
       throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
                                   __LINE__);
     }
@@ -136,7 +138,7 @@ namespace diskann {
       _data = (T *) realloc(
           _data, (_max_points + _num_frozen_pts) * _aligned_dim * sizeof(T));
       if (_data == NULL) {
-        std::cout << "Realloc failed, killing programme" << std::endl;
+        diskann::cout << "Realloc failed, killing programme" << std::endl;
         free(_data);  // fixing OACR-reported bug.
         throw diskann::ANNException("Realloc failed", -1, __FUNCSIG__, __FILE__,
                                     __LINE__);
@@ -182,16 +184,17 @@ namespace diskann {
           assert(_final_graph.size() == _max_points + _num_frozen_pts);
           unsigned              active = 0;
           std::vector<unsigned> new_location = get_new_location(active);
-          std::cout << "Size of new_location = " << new_location.size()
+          diskann::cout << "Size of new_location = " << new_location.size()
                     << std::endl;
           for (unsigned i = 0; i < new_location.size(); i++)
             if ((_delete_set.find(i) == _delete_set.end()) &&
                 (new_location[i] >= _max_points + _num_frozen_pts))
-              std::cout << "Wrong new_location assigned to  " << i << std::endl;
+              diskann::cout << "Wrong new_location assigned to  " << i
+                            << std::endl;
             else {
               if ((_delete_set.find(i) != _delete_set.end()) &&
                   (new_location[i] < _max_points + _num_frozen_pts))
-                std::cout << "Wrong location assigned to "
+                diskann::cout << "Wrong location assigned to "
                              "delete point  "
                           << i << std::endl;
             }
@@ -221,7 +224,7 @@ namespace diskann {
       if (_enable_tags) {
         _change_lock.lock();
         if (_can_delete || (!_consolidated_order)) {
-          std::cout << "Disable deletes and consolidate index before "
+          diskann::cout << "Disable deletes and consolidate index before "
                        "saving."
                     << std::endl;
           throw diskann::ANNException(
@@ -244,7 +247,7 @@ namespace diskann {
     out.write((char *) &index_size, sizeof(uint64_t));
     out.close();
 
-    std::cout << "Avg degree: "
+    diskann::cout << "Avg degree: "
               << ((float) total_gr_edges) / ((float) (_nd + _num_frozen_pts))
               << std::endl;
   }
@@ -262,7 +265,7 @@ namespace diskann {
     in.read((char *) &expected_file_size, sizeof(_u64));
     in.read((char *) &_width, sizeof(unsigned));
     in.read((char *) &_ep, sizeof(unsigned));
-    std::cout << "Loading vamana index " << filename << "..." << std::flush;
+    diskann::cout << "Loading vamana index " << filename << "..." << std::flush;
 
     size_t   cc = 0;
     unsigned nodes = 0;
@@ -278,21 +281,21 @@ namespace diskann {
 
       _final_graph.emplace_back(tmp);
       if (nodes % 10000000 == 0)
-        std::cout << "." << std::flush;
+        diskann::cout << "." << std::flush;
     }
     if (_final_graph.size() != _nd) {
-      std::cout << "ERROR. mismatch in number of points. Graph has "
+      diskann::cout << "ERROR. mismatch in number of points. Graph has "
                 << _final_graph.size() << " points and loaded dataset has "
                 << _nd << " points. " << std::endl;
       return;
     }
 
-    std::cout << "..done. Index has " << nodes << " nodes and " << cc
+    diskann::cout << "..done. Index has " << nodes << " nodes and " << cc
               << " out-edges" << std::endl;
 
     if (load_tags) {
       if (_enable_tags == false)
-        std::cout << "Enabling tags." << std::endl;
+        diskann::cout << "Enabling tags." << std::endl;
       _enable_tags = true;
       std::ifstream tag_file;
       if (tag_filename == NULL)
@@ -584,7 +587,7 @@ namespace diskann {
       /* des.id is the id of the neighbors of n */
       assert(des >= 0 && des < _max_points);
       if (des > _max_points)
-        std::cout << "error. " << des << " exceeds max_pts" << std::endl;
+        diskann::cout << "error. " << des << " exceeds max_pts" << std::endl;
       /* des_pool contains the neighbors of the neighbors of n */
 
       {
@@ -691,7 +694,7 @@ namespace diskann {
         (unsigned) DIV_ROUND_UP(_nd + _num_frozen_pts, (64 * 64));
     if (NUM_SYNCS < 40)
       NUM_SYNCS = 40;
-    std::cout << "Number of syncs: " << NUM_SYNCS << std::endl;
+    diskann::cout << "Number of syncs: " << NUM_SYNCS << std::endl;
 
     _saturate_graph = parameters.Get<bool>("saturate_graph");
 
@@ -873,8 +876,9 @@ namespace diskann {
         inter_time += diff.count();
 
         if ((sync_num * 100) / NUM_SYNCS > progress_counter) {
-          std::cout.precision(4);
-          std::cout << "Completed  (round: " << rnd_no << ", sync: " << sync_num
+          diskann::cout.precision(4);
+          diskann::cout << "Completed  (round: " << rnd_no
+                        << ", sync: " << sync_num
                     << "/" << NUM_SYNCS << " with L " << L << ")"
                     << " sync_time: " << sync_time << "s"
                     << "; inter_time: " << inter_time << "s" << std::endl;
@@ -890,15 +894,15 @@ namespace diskann {
       }
 
       MallocExtension::instance()->ReleaseFreeMemory();
-      std::cout << "Completed Pass " << rnd_no << " of data using L=" << L
+      diskann::cout << "Completed Pass " << rnd_no << " of data using L=" << L
                 << " and alpha=" << parameters.Get<float>("alpha")
                 << ". Stats: ";
-      std::cout << "search+prune_time=" << total_sync_time
+      diskann::cout << "search+prune_time=" << total_sync_time
                 << "s, inter_time=" << total_inter_time
                 << "s, inter_count=" << total_inter_count << std::endl;
     }
 
-    std::cout << "Starting final cleanup.." << std::flush;
+    diskann::cout << "Starting final cleanup.." << std::flush;
 #pragma omp parallel for schedule(dynamic, 65536)
     for (_s64 node_ctr = 0; node_ctr < (_s64)(visit_order.size()); node_ctr++) {
       auto node = visit_order[node_ctr];
@@ -925,7 +929,7 @@ namespace diskann {
           _final_graph[node].emplace_back(id);
       }
     }
-    std::cout << "done. Link time: "
+    diskann::cout << "done. Link time: "
               << ((double) link_timer.elapsed() / (double) 1000000) << "s"
               << std::endl;
   }
@@ -944,7 +948,7 @@ namespace diskann {
         _location_to_tag[(unsigned) i] = tags[i];
       }
     }
-    std::cout << "Starting index build..." << std::endl;
+    diskann::cout << "Starting index build..." << std::endl;
     link(parameters);  // Primary func for creating nsg graph
 
     if (_support_eager_delete) {
@@ -960,7 +964,7 @@ namespace diskann {
       if (pool.size() < 2)
         cnt++;
     }
-    std::cout << "Degree: max:" << max
+    diskann::cout << "Degree: max:" << max
               << "  avg:" << (float) total / (float) _nd << "  min:" << min
               << "  count(deg<2):" << cnt << "\n"
               << "Index built." << std::endl;
@@ -1044,7 +1048,8 @@ namespace diskann {
   template<typename T, typename TagT>
   int Index<T, TagT>::generate_random_frozen_points(const char *filename) {
     if (_has_built) {
-      std::cout << "Index already built. Cannot add more points" << std::endl;
+      diskann::cout << "Index already built. Cannot add more points"
+                    << std::endl;
       return -1;
     }
 
@@ -1111,7 +1116,7 @@ namespace diskann {
   int Index<T, TagT>::eager_delete(const TagT tag,
                                    const Parameters &parameters) {
     if (_lazy_done && (!_consolidated_order)) {
-      std::cout << "Lazy delete reuests issued but data not consolidated, "
+      diskann::cout << "Lazy delete reuests issued but data not consolidated, "
                    "cannot proceed with eager deletes."
                 << std::endl;
       return -1;
@@ -1221,7 +1226,7 @@ namespace diskann {
 
   template<typename T, typename TagT>
   void Index<T, TagT>::update_in_graph() {
-    std::cout << "Updating in_graph.....";
+    diskann::cout << "Updating in_graph.....";
     for (unsigned i = 0; i < _in_graph.size(); i++)
       _in_graph[i].clear();
 
@@ -1232,7 +1237,7 @@ namespace diskann {
         if (std::find(_in_graph[_final_graph[i][j]].begin(),
                       _in_graph[_final_graph[i][j]].end(),
                       i) != _in_graph[_final_graph[i][j]].end())
-          std::cout << "Duplicates found" << std::endl;
+          diskann::cout << "Duplicates found" << std::endl;
         _in_graph[_final_graph[i][j]].emplace_back(i);
       }
 
@@ -1248,7 +1253,7 @@ namespace diskann {
         min_in = _in_graph[i].size();
     }
 
-    std::cout << std::endl
+    diskann::cout << std::endl
               << "Max in_degree = " << max_in << "; Min in_degree = " << min_in
               << "; Average in_degree = "
               << (float) (avg_in) / (float) (_nd + _num_frozen_pts)
@@ -1260,7 +1265,8 @@ namespace diskann {
   template<typename T, typename TagT>
   size_t Index<T, TagT>::consolidate_deletes(const Parameters &parameters) {
     if (_eager_done) {
-      std::cout << "No consolidation required, eager deletes done" << std::endl;
+      diskann::cout << "No consolidation required, eager deletes done"
+                    << std::endl;
       return 0;
     }
 
@@ -1368,20 +1374,21 @@ namespace diskann {
           break;
         }
       if (_ep == old_ep) {
-        std::cerr << "ERROR: Did not find a replacement for start node."
+        diskann::cerr << "ERROR: Did not find a replacement for start node."
                   << std::endl;
         throw diskann::ANNException(
             "ERROR: Did not find a replacement for start node.", -1,
             __FUNCSIG__, __FILE__, __LINE__);
       } else {
         assert(_delete_set.find(_ep) == _delete_set.end());
-        std::cout << "New start node is " << _ep << std::endl;
+        diskann::cout << "New start node is " << _ep << std::endl;
       }
     }
 
-    std::cout << "Re-numbering nodes and edges and consolidating data... "
+    diskann::cout
+        << "Re-numbering nodes and edges and consolidating data... "
               << std::flush;
-    std::cout << "active = " << active << std::endl;
+    diskann::cout << "active = " << active << std::endl;
     for (unsigned old = 0; old < _max_points + _num_frozen_pts; ++old) {
       if (new_location[old] <
           _max_points + _num_frozen_pts) {  // If point continues to exist
@@ -1410,9 +1417,9 @@ namespace diskann {
         }
       }
     }
-    std::cout << "done." << std::endl;
+    diskann::cout << "done." << std::endl;
 
-    std::cout << "Updating mapping between tags and ids... " << std::flush;
+    diskann::cout << "Updating mapping between tags and ids... " << std::flush;
     // Update the location pointed to by tag
     _tag_to_location.clear();
     for (auto iter : _location_to_tag)
@@ -1420,20 +1427,20 @@ namespace diskann {
     _location_to_tag.clear();
     for (auto iter : _tag_to_location)
       _location_to_tag[iter.second] = iter.first;
-    std::cout << "done." << std::endl;
+    diskann::cout << "done." << std::endl;
 
     for (unsigned old = active; old < _max_points + _num_frozen_pts; ++old)
       _final_graph[old].clear();
     _delete_set.clear();
     _empty_slots.clear();
     mode = true;
-    std::cout << "Consolidated the index" << std::endl;
+    diskann::cout << "Consolidated the index" << std::endl;
 
     /*	  for(unsigned i = 0; i < _nd + _num_frozen_pts; i++){
           int flag = 0;
           for(unsigned j = 0; j < _final_graph[i].size(); j++)
             if(_final_graph[i][j] == i){
-              std::cout << "Self loop found just after compacting inside the
+              diskann::cout << "Self loop found just after compacting inside the
        function" << std::endl;
               flag = 1;
               break;
@@ -1470,7 +1477,7 @@ namespace diskann {
   void Index<T, TagT>::readjust_data(unsigned _num_frozen_pts) {
     if (_num_frozen_pts > 0) {
       if (_final_graph[_max_points].empty()) {
-        std::cout << "Readjusting data to correctly position frozen point"
+        diskann::cout << "Readjusting data to correctly position frozen point"
                   << std::endl;
         for (unsigned i = 0; i < _nd; i++)
           for (unsigned j = 0; j < _final_graph[i].size(); j++)
@@ -1487,7 +1494,8 @@ namespace diskann {
         if (_support_eager_delete)
           update_in_graph();
 
-        std::cout << "Finished updating graph, updating data now" << std::endl;
+        diskann::cout << "Finished updating graph, updating data now"
+                      << std::endl;
         for (unsigned i = 0; i < _num_frozen_pts; i++) {
           memcpy((void *) (_data + (size_t) _aligned_dim * (_max_points + i)),
                  _data + (size_t) _aligned_dim * (_nd + i),
@@ -1495,10 +1503,11 @@ namespace diskann {
           memset((_data + (size_t) _aligned_dim * (_nd + i)), 0,
                  sizeof(float) * _aligned_dim);
         }
-        std::cout << "Readjustment done" << std::endl;
+        diskann::cout << "Readjustment done" << std::endl;
       }
     } else
-      std::cout << "No frozen points. No re-adjustment required" << std::endl;
+      diskann::cout << "No frozen points. No re-adjustment required"
+                    << std::endl;
   }
 
   template<typename T, typename TagT>
@@ -1584,39 +1593,39 @@ namespace diskann {
                                      const bool consolidate) {
     LockGuard guard(_change_lock);
     if (!_can_delete) {
-      std::cerr << "Delete not currently enabled" << std::endl;
+      diskann::cerr << "Delete not currently enabled" << std::endl;
       return -1;
     }
     if (!_enable_tags) {
-      std::cerr << "Point tag array not instantiated" << std::endl;
+      diskann::cerr << "Point tag array not instantiated" << std::endl;
       throw diskann::ANNException("Point tag array not instantiated", -1,
                                   __FUNCSIG__, __FILE__, __LINE__);
     }
     if (_eager_done) {
-      std::cout << "#Points after eager_delete : " << _nd + _num_frozen_pts
+      diskann::cout << "#Points after eager_delete : " << _nd + _num_frozen_pts
                 << std::endl;
       if (_tag_to_location.size() != _nd) {
-        std::cerr << "Tags to points array wrong sized" << std::endl;
+        diskann::cerr << "Tags to points array wrong sized" << std::endl;
         return -2;
       }
     } else if (_tag_to_location.size() + _delete_set.size() != _nd) {
-      std::cerr << "Tags to points array wrong sized" << std::endl;
+      diskann::cerr << "Tags to points array wrong sized" << std::endl;
       return -2;
     }
     if (_eager_done) {
       if (_location_to_tag.size() != _nd) {
-        std::cerr << "Points to tags array wrong sized" << std::endl;
+        diskann::cerr << "Points to tags array wrong sized" << std::endl;
         return -3;
       }
     } else if (_location_to_tag.size() + _delete_set.size() != _nd) {
-      std::cerr << "Points to tags array wrong sized" << std::endl;
+      diskann::cerr << "Points to tags array wrong sized" << std::endl;
       return -3;
     }
     if (consolidate) {
       auto nd = consolidate_deletes(parameters);
 
       if (nd >= 0)
-        std::cout << "#Points after consolidation: " << nd + _num_frozen_pts
+        diskann::cout << "#Points after consolidation: " << nd + _num_frozen_pts
                   << std::endl;
     }
 
@@ -1627,14 +1636,14 @@ namespace diskann {
   template<typename T, typename TagT>
   int Index<T, TagT>::delete_point(const TagT tag) {
     if ((_eager_done) && (!_compacted_order)) {
-      std::cout << "Eager delete requests were issued but data was not "
+      diskann::cout << "Eager delete requests were issued but data was not "
                    "compacted, cannot proceed with lazy_deletes"
                 << std::endl;
       return -1;
     }
     LockGuard guard(_change_lock);
     if (_tag_to_location.find(tag) == _tag_to_location.end()) {
-      std::cerr << "Delete tag not found" << std::endl;
+      diskann::cerr << "Delete tag not found" << std::endl;
       return -1;
     }
     assert(_tag_to_location[tag] < _max_points);

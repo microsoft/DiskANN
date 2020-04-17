@@ -1,6 +1,7 @@
 #include <limits>
 #include <malloc.h>
 #include <math_utils.h>
+#include "logger.h"
 #include "utils.h"
 
 namespace math_utils {
@@ -35,7 +36,7 @@ namespace math_utils {
       for (size_t j = 0; j < dim; j++)
         data[i * dim + j] = (float) distribution(generator);
       float norm = cblas_snrm2((MKL_INT) dim, (data + (i * dim)), 1);
-      //		std::cout<<norm<<std::endl;
+      //		diskann::cout<<norm<<std::endl;
       //		norm = std::sqrt(norm);
       for (size_t j = 0; j < dim; j++)
         data[i * dim + j] = data[i * dim + j] / norm;
@@ -53,9 +54,9 @@ namespace math_utils {
           for (size_t k = 0;k < dim;k ++)  {
       norm_mat[i*dim +j] += data[i*dim + k]* data[j*dim +k];
     }
-      std::cout<<norm_mat[i*dim+j]<<" ";
+      diskann::cout<<norm_mat[i*dim+j]<<" ";
       }
-      std::cout<<std::endl;
+      diskann::cout<<std::endl;
     }
     */
     delete[] tau;
@@ -66,10 +67,10 @@ namespace math_utils {
                             bool transpose_rot) {
     CBLAS_TRANSPOSE transpose = CblasNoTrans;
     if (transpose_rot) {
-      std::cout << "Transposing rotation matrix.." << std::flush;
+      diskann::cout << "Transposing rotation matrix.." << std::flush;
       transpose = CblasTrans;
     }
-    std::cout << "done Rotating data with random matrix.." << std::flush;
+    diskann::cout << "done Rotating data with random matrix.." << std::flush;
 
     //	float* tmp_mat = new float[num_points * dim];
     cblas_sgemm(CblasRowMajor, CblasNoTrans, transpose, (MKL_INT) num_points,
@@ -79,7 +80,7 @@ namespace math_utils {
     //		for (size_t j = 0; j < dim; j++)
     //			new_mat[i * dim + j] = tmp_mat[j * num_points + i];
     //	delete[] tmp_mat;
-    std::cout << "done." << std::endl;
+    diskann::cout << "done." << std::endl;
   }
 
   // calculate k closest centers to data of num_points * dim (row major)
@@ -98,7 +99,8 @@ namespace math_utils {
       const float* const docs_l2sq, const float* const centers_l2sq,
       uint32_t* center_index, float* const dist_matrix, size_t k) {
     if (k > num_centers) {
-      std::cout << "ERROR: k (" << k << ") > num_center(" << num_centers << ")"
+      diskann::cout << "ERROR: k (" << k << ") > num_center(" << num_centers
+                    << ")"
                 << std::endl;
       return;
     }
@@ -183,7 +185,8 @@ namespace math_utils {
                                std::vector<size_t>* inverted_index,
                                float*               pts_norms_squared) {
     if (k > num_centers) {
-      std::cout << "ERROR: k (" << k << ") > num_center(" << num_centers << ")"
+      diskann::cout << "ERROR: k (" << k << ") > num_center(" << num_centers
+                    << ")"
                 << std::endl;
       return;
     }
@@ -250,7 +253,7 @@ namespace math_utils {
   void process_residuals(float* data_load, size_t num_points, size_t dim,
                          float* cur_pivot_data, size_t num_centers,
                          uint32_t* closest_centers, bool to_subtract) {
-    std::cout << "Processing residuals of " << num_points << " points in "
+    diskann::cout << "Processing residuals of " << num_points << " points in "
               << dim << " dimensions using " << num_centers << " centers "
               << std::endl;
 #pragma omp parallel for schedule(static, 8192)
@@ -299,7 +302,7 @@ namespace kmeans {
                                         num_centers, 1, closest_center,
                                         closest_docs, docs_l2sq);
 
-    //	std::cout << "closest centerss calculation done " << std::endl;
+    //	diskann::cout << "closest centerss calculation done " << std::endl;
 
     memset(centers, 0, sizeof(float) * (size_t) num_centers * (size_t) dim);
 
@@ -380,12 +383,13 @@ namespace kmeans {
       residual = lloyds_iter(data, num_points, dim, centers, num_centers,
                              docs_l2sq, closest_docs, closest_center);
 
-      std::cout << "Lloyd's iter " << i << "  dist_sq residual: " << residual
+      diskann::cout << "Lloyd's iter " << i
+                    << "  dist_sq residual: " << residual
                 << std::endl;
 
       if (((i != 0) && ((old_residual - residual) / residual) < 0.00001) ||
           (residual < std::numeric_limits<float>::epsilon())) {
-        std::cout << "Residuals unchanged: " << old_residual << " becomes "
+        diskann::cout << "Residuals unchanged: " << old_residual << " becomes "
                   << residual << ". Early termination." << std::endl;
         break;
       }
@@ -406,11 +410,12 @@ namespace kmeans {
     //	pivot_data = new float[num_centers * dim];
 
     std::vector<size_t> picked;
-    std::cout << "Selecting " << num_centers << " pivots from " << num_points
+    diskann::cout << "Selecting " << num_centers << " pivots from "
+                  << num_points
               << " points using ";
     std::random_device rd;
     auto               x = rd();
-    std::cout << "random seed " << x << std::endl;
+    diskann::cout << "random seed " << x << std::endl;
     std::mt19937                          generator(x);
     std::uniform_int_distribution<size_t> distribution(0, num_points - 1);
 
@@ -428,7 +433,7 @@ namespace kmeans {
   void kmeanspp_selecting_pivots(float* data, size_t num_points, size_t dim,
                                  float* pivot_data, size_t num_centers) {
     if (num_points > 1 << 23) {
-      std::cout << "ERROR: n_pts " << num_points
+      diskann::cout << "ERROR: n_pts " << num_points
                 << " currently not supported for k-means++, maximum is "
                    "8388608. Falling back to random pivot "
                    "selection."
@@ -438,11 +443,11 @@ namespace kmeans {
     }
 
     std::vector<size_t> picked;
-    std::cout << "Selecting " << num_centers << " pivots from " << num_points
+    diskann::cout << "Selecting " << num_centers << " pivots from " << num_points
               << " points using ";
     std::random_device rd;
     auto               x = rd();
-    std::cout << "random seed " << x << ": " << std::flush;
+    diskann::cout << "random seed " << x << ": " << std::flush;
     std::mt19937                          generator(x);
     std::uniform_real_distribution<>      distribution(0, 1);
     std::uniform_int_distribution<size_t> int_dist(0, num_points - 1);
@@ -501,10 +506,10 @@ namespace kmeans {
       }
       num_picked++;
       if (num_picked % 32 == 0)
-        std::cout << "." << std::flush;
+        diskann::cout << "." << std::flush;
     }
-    std::cout << "done." << std::endl;
-    //	std::cout << " Generated pivots using k-means++. " << std::endl;
+    diskann::cout << "done." << std::endl;
+    //	diskann::cout << " Generated pivots using k-means++. " << std::endl;
     delete[] dist;
   }
 
