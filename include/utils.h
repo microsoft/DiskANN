@@ -195,7 +195,7 @@ namespace diskann {
   inline void save_bin(const std::string &filename, T *data, size_t npts,
                        size_t ndims) {
     std::ofstream writer(filename, std::ios::binary | std::ios::out);
-    diskann::cout << "Writing bin: " << filename.c_str() << "\n";
+    diskann::cout << "Writing bin: " << filename.c_str() << std::endl;
     int npts_i32 = (int) npts, ndims_i32 = (int) ndims;
     writer.write((char *) &npts_i32, sizeof(int));
     writer.write((char *) &ndims_i32, sizeof(int));

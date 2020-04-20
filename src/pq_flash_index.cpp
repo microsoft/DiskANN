@@ -131,7 +131,7 @@ namespace diskann {
   template<typename T>
   void PQFlashIndex<T>::setup_thread_data(_u64 nthreads) {
     diskann::cout << "Setting up thread-specific contexts for nthreads: "
-              << nthreads << "\n";
+              << nthreads << std::endl;
 // omp parallel for to generate unique thread IDs
 #pragma omp parallel for
     for (_s64 thread = 0; thread < (_s64) nthreads; thread++) {
@@ -748,7 +748,7 @@ namespace diskann {
         diskann::cout << std::endl;
   */
       while (marker < cur_list_size && frontier.size() < beam_width &&
-             num_seen < beam_width) {
+             num_seen < beam_width + 2) {
         if (retset[marker].flag) {
           num_seen++;
           auto iter = nhood_cache.find(retset[marker].id);

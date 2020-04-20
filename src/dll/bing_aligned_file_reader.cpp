@@ -32,7 +32,7 @@ namespace diskann {
     std::unique_lock<std::mutex> lk(this->ctx_mut);
     if (this->ctx_map.find(std::this_thread::get_id()) != ctx_map.end()) {
       diskann::cout << "Warning:: Duplicate registration for thread_id : "
-                << std::this_thread::get_id() << "\n";
+                    << std::this_thread::get_id() << std::endl;
       return;
     }
 

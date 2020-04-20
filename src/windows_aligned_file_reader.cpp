@@ -22,7 +22,7 @@ void WindowsAlignedFileReader::register_thread() {
   std::unique_lock<std::mutex> lk(this->ctx_mut);
   if (this->ctx_map.find(std::this_thread::get_id()) != ctx_map.end()) {
     diskann::cout << "Warning:: Duplicate registration for thread_id : "
-              << std::this_thread::get_id() << "\n";
+              << std::this_thread::get_id() << std::endl;
   }
 
   IOContext ctx;
@@ -78,7 +78,7 @@ void WindowsAlignedFileReader::read(std::vector<AlignedRead>& read_reqs,
 
       /*
         if (ResetEvent(os.hEvent) == 0) {
-          diskann::cerr << "ResetEvent failed\n";
+          diskann::cerr << "ResetEvent failed" << std::endl;
           exit(-3);
         }
       */
@@ -112,7 +112,8 @@ void WindowsAlignedFileReader::read(std::vector<AlignedRead>& read_reqs,
           diskann::cerr << "Error queuing IO -- " << error << "\n";
         }
       } else {
-        diskann::cerr << "Error queueing IO -- ReadFile returned TRUE\n";
+        diskann::cerr << "Error queueing IO -- ReadFile returned TRUE"
+                      << std::endl;
       }
     }
     DWORD       n_read = 0;
@@ -130,7 +131,7 @@ void WindowsAlignedFileReader::read(std::vector<AlignedRead>& read_reqs,
           DWORD error = GetLastError();
           if (error != WAIT_TIMEOUT) {
             diskann::cerr << "GetQueuedCompletionStatus() failed with error = "
-                      << error << "\n";
+                      << error << std::endl;
             throw diskann::ANNException(
                 "GetQueuedCompletionStatus failed with error: ", error,
                 __FUNCSIG__, __FILE__, __LINE__);

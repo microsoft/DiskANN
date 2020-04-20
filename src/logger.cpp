@@ -24,14 +24,18 @@ namespace diskann {
     _fp = fp;
     _logLevel = (_fp == stdout) ? ANNIndex::LogLevel::LL_Info
                               : ANNIndex::LogLevel::LL_Error;
-    _buf = new char[BUFFER_SIZE];
+#ifdef EXEC_ENV_OLS
+    _buf = new char[BUFFER_SIZE + 1]; //See comment in the header
+#else 
+    _buf = new char[BUFFER_SIZE]; //See comment in the header
+#endif
+
     memset(_buf, 0, (BUFFER_SIZE) * sizeof(char));
     setp(_buf, _buf + BUFFER_SIZE);
   }
 
   ANNStreamBuf::~ANNStreamBuf() {
-    std::lock_guard<std::mutex> lock(_mutex);
-    flush();
+    sync();
     _fp = nullptr;  // we'll not close because we can't.
     delete[] _buf;
   }

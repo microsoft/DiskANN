@@ -132,6 +132,7 @@ void testStreamBufImpl() {
   std::iota(v.begin(), v.end(), 1);
 
   std::cout << "Printing with std::cout" << std::endl;
+#pragma omp parallel for schedule(dynamic, 64)
   for (int i = 0; i < v.size(); i++) {
     std::cout << std::to_string(i) + ",";
     if (i != 0 && i % 10 == 0) {
@@ -140,7 +141,7 @@ void testStreamBufImpl() {
   }
 
   diskann::cout << "Printing with diskann::cout" << std::endl;
-  //#pragma omp parallel for schedule(dynamic, 64)
+#pragma omp parallel for schedule(dynamic, 64)
   for (int i = 0; i < v.size(); i++) {
     diskann::cout << std::to_string(i) + "," ;
     if (i != 0 && i % 10 == 0) {

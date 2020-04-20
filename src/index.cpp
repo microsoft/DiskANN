@@ -135,11 +135,12 @@ namespace diskann {
     // Allocate space for max points and frozen points,
     // and add frozen points at the end of the array
     if (_num_frozen_pts > 0) {
+      auto temp = _data;
       _data = (T *) realloc(
           _data, (_max_points + _num_frozen_pts) * _aligned_dim * sizeof(T));
-      if (_data == NULL) {
+      if (_data == nullptr) {
+        free(temp);
         diskann::cout << "Realloc failed, killing programme" << std::endl;
-        free(_data);  // fixing OACR-reported bug.
         throw diskann::ANNException("Realloc failed", -1, __FUNCSIG__, __FILE__,
                                     __LINE__);
       }
@@ -225,8 +226,7 @@ namespace diskann {
         _change_lock.lock();
         if (_can_delete || (!_consolidated_order)) {
           diskann::cout << "Disable deletes and consolidate index before "
-                       "saving."
-                    << std::endl;
+                       "saving." << std::endl;
           throw diskann::ANNException(
               "Disable deletes and consolidate index before saving.", -1,
               __FUNCSIG__, __FILE__, __LINE__);
@@ -1226,7 +1226,7 @@ namespace diskann {
 
   template<typename T, typename TagT>
   void Index<T, TagT>::update_in_graph() {
-    diskann::cout << "Updating in_graph.....";
+    diskann::cout << "Updating in_graph....." << std::flush;
     for (unsigned i = 0; i < _in_graph.size(); i++)
       _in_graph[i].clear();
 

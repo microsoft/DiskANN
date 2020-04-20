@@ -158,7 +158,7 @@ namespace diskann {
       }
       return true;
     } catch (const diskann::ANNException& ex) {
-      diskann::cerr << ex.message();
+      diskann::cerr << ex.message() << std::endl;
       return false;
     }
   }

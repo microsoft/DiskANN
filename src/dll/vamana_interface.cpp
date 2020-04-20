@@ -89,7 +89,7 @@ namespace diskann {
 
     std::chrono::duration<double> diff = e - s;
 
-    diskann::cout << "Indexing time: " << diff.count() << "\n";
+    diskann::cout << "Indexing time: " << diff.count() << std::endl;
 
     return true;
   }

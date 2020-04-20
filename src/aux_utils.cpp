@@ -163,7 +163,7 @@ namespace diskann {
     std::vector<std::pair<unsigned, unsigned>> node_shard;
     node_shard.reserve(nelems);
     for (_u64 shard = 0; shard < nshards; shard++) {
-      diskann::cout << "Creating inverse map -- shard #" << shard << "\n";
+      diskann::cout << "Creating inverse map -- shard #" << shard << std::endl;
       for (_u64 idx = 0; idx < idmaps[shard].size(); idx++) {
         _u64 node_id = idmaps[shard][idx];
         node_shard.push_back(std::make_pair((_u32) node_id, (_u32) shard));
@@ -174,7 +174,7 @@ namespace diskann {
       return left.first < right.first ||
              (left.first == right.first && left.second < right.second);
     });
-    diskann::cout << "Finished computing node -> shards map\n";
+    diskann::cout << "Finished computing node -> shards map" << std::endl;
 
     // create cached vamana readers
     std::vector<cached_ifstream> vamana_readers(nshards);
@@ -233,7 +233,7 @@ namespace diskann {
     }
     medoid_writer.close();
 
-    diskann::cout << "Starting merge\n";
+    diskann::cout << "Starting merge" << std::endl;
 
     std::vector<bool>     nhood_set(nnodes, 0);
     std::vector<unsigned> final_nhood;
@@ -291,7 +291,7 @@ namespace diskann {
     diskann_writer.reset();
     diskann_writer.write((char *) &merged_index_size, sizeof(uint64_t));
 
-    diskann::cout << "Finished merge\n";
+    diskann::cout << "Finished merge" << std::endl;
     return 0;
   }
 
@@ -496,9 +496,10 @@ namespace diskann {
         (((_u64) width_u32 + 1) * sizeof(unsigned)) + (ndims_64 * sizeof(T));
     nnodes_per_sector = SECTOR_LEN / max_node_len;
 
-    diskann::cout << "medoid: " << medoid << "B\n";
-    diskann::cout << "max_node_len: " << max_node_len << "B\n";
-    diskann::cout << "nnodes_per_sector: " << nnodes_per_sector << "B\n";
+    diskann::cout << "medoid: " << medoid << "B" << std::endl;
+    diskann::cout << "max_node_len: " << max_node_len << "B" << std::endl;
+    diskann::cout << "nnodes_per_sector: " << nnodes_per_sector << "B"
+                  << std::endl;
 
     // SECTOR_LEN buffer for each sector
     std::unique_ptr<char[]> sector_buf = std::make_unique<char[]>(SECTOR_LEN);
@@ -520,11 +521,11 @@ namespace diskann {
     diskann_writer.write(sector_buf.get(), SECTOR_LEN);
 
     std::unique_ptr<T[]> cur_node_coords = std::make_unique<T[]>(ndims_64);
-    diskann::cout << "# sectors: " << n_sectors << "\n";
+    diskann::cout << "# sectors: " << n_sectors << std::endl;
     _u64 cur_node_id = 0;
     for (_u64 sector = 0; sector < n_sectors; sector++) {
       if (sector % 100000 == 0) {
-        diskann::cout << "Sector #" << sector << "written\n";
+        diskann::cout << "Sector #" << sector << "written" << std::endl;
       }
       memset(sector_buf.get(), 0, SECTOR_LEN);
       for (_u64 sector_node_id = 0;
@@ -564,7 +565,7 @@ namespace diskann {
       // flush sector to disk
       diskann_writer.write(sector_buf.get(), SECTOR_LEN);
     }
-    diskann::cout << "Output file written\n";
+    diskann::cout << "Output file written." << std::endl;
   }
 
   template<typename T>
@@ -676,7 +677,7 @@ namespace diskann {
     auto                          e = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> diff = e - s;
 
-    diskann::cout << "Indexing time: " << diff.count() << "\n";
+    diskann::cout << "Indexing time: " << diff.count() << std::endl;
 
     return true;
   }

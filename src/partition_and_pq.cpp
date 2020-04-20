@@ -671,7 +671,7 @@ int shard_data_into_clusters(const std::string data_file, float *pivots,
   }
 
   size_t total_count = 0;
-  diskann::cout << "Actual shard sizes: ";
+  diskann::cout << "Actual shard sizes: " << std::flush;
   for (size_t i = 0; i < num_centers; i++) {
     _u32 cur_shard_count = (_u32) shard_counts[i];
     total_count += cur_shard_count;
