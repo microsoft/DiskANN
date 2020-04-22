@@ -2,6 +2,11 @@
 #include <iostream>
 #include "logger_impl.h"
 
+#ifdef EXEC_ENV_OLS
+#include "ANNLoggingImpl.hpp"
+#endif
+
+
 
 
 namespace diskann {
@@ -70,13 +75,11 @@ namespace diskann {
   }
   void ANNStreamBuf::logImpl(char* str, int num) {
 #ifdef EXEC_ENV_OLS
-    RandNSGLogging(level, str, args);
+    str[num] = '\0'; //Safe. See the c'tor. 
+    RandNSGLogging(_logLevel, str);
 #else 
     fwrite(str, sizeof(char), num, _fp); 
     auto ret = fflush(_fp);
-    if (ret != 0) {
-      std::cerr << "fflush returned: " << ret << std::endl; 
-    }
 #endif
   }
 

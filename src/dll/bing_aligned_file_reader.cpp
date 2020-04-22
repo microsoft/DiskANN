@@ -14,6 +14,13 @@ namespace diskann {
 
   BingAlignedFileReader::BingAlignedFileReader(
       std::shared_ptr<ANNIndex::IDiskPriorityIO> diskPriorityIOPtr) {
+#if defined(_WINDOWS) && defined(EXEC_ENV_OLS)
+    if (diskPriorityIOPtr == nullptr) {
+      throw diskann::ANNException(
+          "Must pass valid shared IO ptr to c'tor while running in OLS env.",
+          -1);
+    }
+#endif
     m_pDiskPriorityIO = diskPriorityIOPtr;
   }
   BingAlignedFileReader::~BingAlignedFileReader(){};
@@ -38,6 +45,9 @@ namespace diskann {
 
     IOContext context;
 
+#if defined(_WINDOWS) && defined(EXEC_ENV_OLS)
+    context.m_pDiskIO = m_pDiskPriorityIO;
+#else 
     if (!m_pDiskPriorityIO) {
       context.m_pDiskIO.reset(new DiskPriorityIO(
           ANNIndex::DiskIOScenario::DIS_HighPriorityUserRead));
@@ -45,6 +55,7 @@ namespace diskann {
     } else {
       context.m_pDiskIO = m_pDiskPriorityIO;
     }
+#endif
     for (_u64 i = 0; i < MAX_IO_DEPTH; i++) {
       ANNIndex::AsyncReadRequest req;
       memset(&req, 0, sizeof(ANNIndex::AsyncReadRequest));
@@ -112,7 +123,7 @@ namespace diskann {
         } else {
           std::stringstream stream;
           stream << "Read request to file: " << m_filename << "failed.";
-          std::cerr << stream.str() << std::endl;
+          diskann::cerr << stream.str() << std::endl;
           (*ctx.m_pRequestsStatus)[i] = IOContext::READ_FAILED;
         }
       };
