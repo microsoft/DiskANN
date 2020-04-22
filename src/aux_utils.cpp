@@ -1,4 +1,3 @@
-
 #include <algorithm>
 #include <atomic>
 #include <cassert>
@@ -393,11 +392,11 @@ namespace diskann {
     uint32_t best_bw = start_bw;
     bool     stop_flag = false;
 
-
     while (!stop_flag) {
       std::vector<uint64_t> tuning_sample_result_ids_64(tuning_sample_num, 0);
       std::vector<float>    tuning_sample_result_dists(tuning_sample_num, 0);
       diskann::QueryStats * stats = new diskann::QueryStats[tuning_sample_num];
+
 
       auto  s = std::chrono::high_resolution_clock::now();
 #pragma omp parallel for schedule(dynamic, 1)
