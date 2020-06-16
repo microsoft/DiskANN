@@ -120,8 +120,10 @@ endif()
 
 
 if(MSVC)
-add_executable(test_l2_avx test_l2_avx.cpp)
-target_link_options(test_l2_avx PRIVATE /MACHINE:x64 /DEBUG:FULL)
+	add_executable(test_l2_avx test_l2_avx.cpp)
+	target_link_options(test_l2_avx PRIVATE /MACHINE:x64 /DEBUG:FULL)
+	target_link_libraries(test_l2_avx debug ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG}/nsg_dll.lib)
+	target_link_libraries(test_l2_avx optimized ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE}/nsg_dll.lib)
 endif()
 
 #add_executable(convert_axon_to_bin convert_axon_to_bin.cpp ${PROJECT_SOURCE_DIR}/src/ann_exception.cpp)

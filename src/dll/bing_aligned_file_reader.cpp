@@ -53,6 +53,8 @@ namespace diskann {
           ANNIndex::DiskIOScenario::DIS_HighPriorityUserRead));
       context.m_pDiskIO->Initialize(m_filename.c_str());
     } else {
+      diskann::cout << "Assigning " << m_pDiskPriorityIO << " to IOContext"
+                    << std::endl;
       context.m_pDiskIO = m_pDiskPriorityIO;
     }
 #endif

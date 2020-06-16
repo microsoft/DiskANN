@@ -150,22 +150,117 @@ void testStreamBufImpl() {
   }
 }
 
+//--5. Testing MemBuf Impl
+class ContentBuf : public std::basic_streambuf<char> {
+ public:
+  ContentBuf(char* ptr, size_t size){
+    setg(ptr, ptr, ptr + size);
+  }
+};
+void testMemBufImpl(int argc, char** argv) {
+  // Create a simple binary file.
+  std::string        fileName = argv[2];
+  std::ofstream output_file(fileName, std::ios::binary);
+  uint32_t      n1 = 105, n2 = 18090;
+  const int     F_ARRAY_LEN = 5;
+  float         fs[] = {1.024f, 2.39021f, 4.532f, 7.980232f, 6.222f};
+  const int     I_ARRAY_LEN = 7;
+  _u8           arr[] = {12, 13, 14, 33, 222, 183, 99};
+  float         f1 = 9283.1237f;
+
+  output_file.write((const char*) &n1, sizeof(uint32_t));
+  output_file.write((const char*) &n2, sizeof(uint32_t));
+  output_file.write((const char*) &f1, sizeof(float));
+  output_file.write((const char*) fs, F_ARRAY_LEN * sizeof(float));
+  output_file.write((const char*) arr, I_ARRAY_LEN * sizeof(_u8));
+
+  output_file.close();
+
+  std::ifstream input_file(fileName, std::ios::binary | std::ios::ate);
+  size_t        size = input_file.tellg();
+  input_file.seekg(0);
+
+  auto              data = new char[size];
+  input_file.read(data, size);
+
+  std::cout << "Read " << size << " bytes from file" << std::endl;
+    
+  uint32_t int1, int2;
+  float    f2;
+  float*   fs1 = new float[F_ARRAY_LEN];
+  _u8*     arr1 = new _u8[I_ARRAY_LEN];
+  memset(fs1, 0, sizeof(float) * F_ARRAY_LEN);
+  memset(arr1, 0, sizeof(_u8) * I_ARRAY_LEN);
+
+  //std::ifstream reader(argv[1], std::ios::binary);
+  //reader.read((char *)&int1, sizeof(int));
+  //reader.read((char*) &int2, sizeof(int));
+  //reader.read((char*) &f2, sizeof(float));
+  //reader.read((char*) fs1, sizeof(float) * F_ARRAY_LEN);
+
+  ContentBuf cb(data, size);
+  std::basic_istream<char> reader(&cb);
+
+  reader.read((char*) &int1, sizeof(uint32_t));
+  reader.read((char*) &int2, sizeof(uint32_t));
+  reader.read((char*) &f2, sizeof(float));
+  reader.read((char*) fs1, F_ARRAY_LEN * sizeof(float));
+  reader.read((char*) arr1, I_ARRAY_LEN * sizeof(_u8));
+
+  std::cout << int1 << "," << int2 << ","  << f2 << std::endl;
+  for (int i = 0; i < F_ARRAY_LEN; i++) {
+    std::cout << fs1[i] << ",";
+  }
+  std::cout << std::endl;
+  for (int i = 0; i < I_ARRAY_LEN; i++) {
+    std::cout << std::to_string(arr1[i]) << ",";
+  }
+  std::cout << std::endl;
+  
+  assert(int1 == n1);
+  assert(int2 == n2);
+  assert(abs(f1 - f2) < 0.0001);
+}
+
+void testSubstringImpl(int argc, char** argv) {
+  assert(argc >= 4);
+
+  std::string s1(argv[2]);
+  std::string s2(argv[3]);
+  assert(s1[0] == s2[0]); //at least they share one char in common!
+
+  size_t index = -1;
+  size_t compareLen = s1.length() <= s2.length() ? s1.length() : s2.length();
+  for (size_t i = 0; i < compareLen; i++) {
+    if (s1[i] != s2[i]) {
+      index = i - 1;
+      break;
+    }
+  }
+  std::cout << "Common substring at 0 is:" << s1.substr(0, index);
+}
+
 DISKANN_DLLIMPORT std::basic_ostream<char> diskann::cout;
 DISKANN_DLLIMPORT std::basic_ostream<char>  diskann::cerr;
 
 int main(int argc, char** argv) {
   if (argc < 2) {
     std::cout << std::string("Usage: ") << argv[0] << " <mode> [arguments]"
-              << std::endl;
-    std::cout << "Modes: 1 for file concat. Args <file1> <file2> <outfile>"
+              << std::endl
+              << "Modes: 1 for file concat. Args <file1> <file2> <outfile>"
               << std::endl
               << "       2 for test unique_ptr assignment. No args."
+              << std::endl
+              << "      3 for comparing distance computations (AVX and "
+                 "normal). No args."
+              << std::endl
+              << "      4 for testing our streambuf() implemntation. No args"
+              << std::endl
+              << "      5 for testing membuf implementation. Args <outfile>"
+              << std::endl
+              << "      6 for testing substring implementation. Args <s1> <s2>"
               << std::endl;
-    std::cout << "      3 for comparing distance computations (AVX and "
-                 "normal). No args.";
-    std::cout << "      4 for testing our streambuf() impleemntation."
-                 "No args"
-              << std::endl;
+
     return -1;
   }
 
@@ -186,6 +281,12 @@ int main(int argc, char** argv) {
       break;
     case 4:
       testStreamBufImpl();
+      break;
+    case 5:
+      testMemBufImpl(argc, argv);
+      break;
+    case 6:
+      testSubstringImpl(argc, argv);
       break;
     default:
       std::cout << "Don't know what to do with mode parameter: " << argv[1]
