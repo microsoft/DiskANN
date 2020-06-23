@@ -21,8 +21,8 @@ void WindowsAlignedFileReader::close() {
 void WindowsAlignedFileReader::register_thread() {
   std::unique_lock<std::mutex> lk(this->ctx_mut);
   if (this->ctx_map.find(std::this_thread::get_id()) != ctx_map.end()) {
-    std::cout << "Warning:: Duplicate registration for thread_id : "
-              << std::this_thread::get_id() << "\n";
+    diskann::cout << "Warning:: Duplicate registration for thread_id : "
+              << std::this_thread::get_id() << std::endl;
   }
 
   IOContext ctx;
@@ -32,7 +32,7 @@ void WindowsAlignedFileReader::register_thread() {
                                FILE_FLAG_OVERLAPPED | FILE_FLAG_RANDOM_ACCESS,
                            NULL);
   if (ctx.fhandle == INVALID_HANDLE_VALUE) {
-    std::cout << "Error opening " << m_filename.c_str()
+    diskann::cout << "Error opening " << m_filename.c_str()
               << " -- error=" << GetLastError() << std::endl;
   }
 
@@ -78,7 +78,7 @@ void WindowsAlignedFileReader::read(std::vector<AlignedRead>& read_reqs,
 
       /*
         if (ResetEvent(os.hEvent) == 0) {
-          std::cerr << "ResetEvent failed\n";
+          diskann::cerr << "ResetEvent failed" << std::endl;
           exit(-3);
         }
       */
@@ -109,10 +109,11 @@ void WindowsAlignedFileReader::read(std::vector<AlignedRead>& read_reqs,
       if (ret == FALSE) {
         auto error = GetLastError();
         if (error != ERROR_IO_PENDING) {
-          std::cerr << "Error queuing IO -- " << error << "\n";
+          diskann::cerr << "Error queuing IO -- " << error << "\n";
         }
       } else {
-        std::cerr << "Error queueing IO -- ReadFile returned TRUE\n";
+        diskann::cerr << "Error queueing IO -- ReadFile returned TRUE"
+                      << std::endl;
       }
     }
     DWORD       n_read = 0;
@@ -129,8 +130,8 @@ void WindowsAlignedFileReader::read(std::vector<AlignedRead>& read_reqs,
         if (lp_os == NULL) {
           DWORD error = GetLastError();
           if (error != WAIT_TIMEOUT) {
-            std::cerr << "GetQueuedCompletionStatus() failed with error = "
-                      << error << "\n";
+            diskann::cerr << "GetQueuedCompletionStatus() failed with error = "
+                      << error << std::endl;
             throw diskann::ANNException(
                 "GetQueuedCompletionStatus failed with error: ", error,
                 __FUNCSIG__, __FILE__, __LINE__);

@@ -3,10 +3,10 @@ if (MSVC)
 	target_include_directories(diskpriority_io PRIVATE "${BOOST_ROOT}")
 endif()
 add_library(nsg_dll SHARED dllmain.cpp vamana_interface.cpp
-    diskann_interface.cpp ../partition_and_pq.cpp ../pq_flash_index.cpp
-    ../windows_aligned_file_reader.cpp bing_aligned_file_reader.cpp ../memory_mapper.cpp ../index.cpp ../math_utils.cpp ../aux_utils.cpp ../ann_exception.cpp)
+     ../partition_and_pq.cpp ../pq_flash_index.cpp
+    ../logger.cpp ../utils.cpp ../windows_aligned_file_reader.cpp bing_aligned_file_reader.cpp ../memory_mapper.cpp ../index.cpp ../math_utils.cpp ../aux_utils.cpp ../ann_exception.cpp)
 if (MSVC)
-	add_definitions(-D_USRDLL -D_WINDLL)
+	add_definitions(-D_USRDLL -D_WINDLL -DDISKANN_DLL)
 	add_compile_options(/MD)
 	target_include_directories(nsg_dll PRIVATE "${BOOST_ROOT}")
 	target_link_options(nsg_dll PRIVATE /DLL /MACHINE:X64 /DEBUG:FULL "/INCLUDE:_tcmalloc")

@@ -4,6 +4,7 @@
 #include <iostream>
 #include <sstream>
 
+#include "logger.h"
 #include "ann_exception.h"
 
 // sequential cached reads
@@ -11,8 +12,8 @@ class cached_ifstream {
  public:
   cached_ifstream() {
   }
-  cached_ifstream(const std::string& filename, uint64_t cache_size)
-      : cache_size(cache_size), cur_off(0) {
+  cached_ifstream(const std::string& filename, uint64_t cacheSize)
+      : cache_size(cacheSize), cur_off(0) {
     this->open(filename, cache_size);
   }
   ~cached_ifstream() {
@@ -20,19 +21,19 @@ class cached_ifstream {
     reader.close();
   }
 
-  void open(const std::string& filename, uint64_t cache_size) {
+  void open(const std::string& filename, uint64_t cacheSize) {
     this->cur_off = 0;
     reader.open(filename, std::ios::binary | std::ios::ate);
     fsize = reader.tellg();
     reader.seekg(0, std::ios::beg);
     assert(reader.is_open());
-    assert(cache_size > 0);
-    cache_size = (std::min)(cache_size, fsize);
-    this->cache_size = cache_size;
-    cache_buf = new char[cache_size];
-    reader.read(cache_buf, cache_size);
-    std::cout << "Opened: " << filename.c_str() << ", size: " << fsize
-              << ", cache_size: " << cache_size << "\n";
+    assert(cacheSize > 0);
+    cacheSize = (std::min)(cacheSize, fsize);
+    this->cache_size = cacheSize;
+    cache_buf = new char[cacheSize];
+    reader.read(cache_buf, cacheSize);
+    diskann::cout << "Opened: " << filename.c_str() << ", size: " << fsize
+              << ", cache_size: " << cacheSize << std::endl;
   }
 
   size_t get_file_size() {
@@ -54,7 +55,7 @@ class cached_ifstream {
         stream << "n_bytes: " << n_bytes << " cached_bytes: " << cached_bytes
                << " fsize: " << fsize << " current pos:" << reader.tellg()
                << std::endl;
-        std::cout << stream.str() << std::endl;
+        diskann::cout << stream.str() << std::endl;
         throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
                                     __LINE__);
       }
@@ -99,8 +100,8 @@ class cached_ofstream {
     assert(writer.is_open());
     assert(cache_size > 0);
     cache_buf = new char[cache_size];
-    std::cout << "Opened: " << filename.c_str()
-              << ", cache_size: " << cache_size << "\n";
+    diskann::cout << "Opened: " << filename.c_str()
+              << ", cache_size: " << cache_size << std::endl;
   }
 
   ~cached_ofstream() {
@@ -111,7 +112,7 @@ class cached_ofstream {
 
     delete[] cache_buf;
     writer.close();
-    std::cout << "Finished writing " << fsize << "B\n";
+    diskann::cout << "Finished writing " << fsize << "B" << std::endl;
   }
 
   size_t get_file_size() {

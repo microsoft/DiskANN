@@ -194,10 +194,10 @@ namespace math_utils {
     if (!is_norm_given_for_pts)
       pts_norms_squared = new float[num_points];
 
-    size_t PAR_BLOCK_SIZE = 1 << 23;
+    // size_t PAR_BLOCK_SIZE = 1 << 23;
     //	    (num_points > 1 << 20) ? 1 << 13 : (num_points / 16);
 
-    //	size_t PAR_BLOCK_SIZE = num_points;
+    size_t PAR_BLOCK_SIZE = num_points;
     size_t N_BLOCKS = (num_points % PAR_BLOCK_SIZE) == 0
                           ? (num_points / PAR_BLOCK_SIZE)
                           : (num_points / PAR_BLOCK_SIZE) + 1;

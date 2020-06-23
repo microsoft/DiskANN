@@ -1,3 +1,4 @@
+#include "logger.h"
 #include "pq_flash_index.h"
 #include <malloc.h>
 #include "percentile_stats.h"
@@ -84,31 +85,55 @@ namespace diskann {
   PQFlashIndex<_u8>::PQFlashIndex(
       std::shared_ptr<AlignedFileReader> &fileReader)
       : reader(fileReader) {
-    this->dist_cmp = new DistanceL2UInt8();
-    this->dist_cmp_float = new DistanceL2();
+
+    if (avx2Supported()) {
+      this->dist_cmp = new DistanceL2UInt8();
+      this->dist_cmp_float = new DistanceL2();
+    } else {
+      diskann::cout << "No AVX2 support. Switching to slower compare routines"
+                    << std::endl;
+      this->dist_cmp = new SlowDistanceL2Int<_u8>();
+      this->dist_cmp_float = new SlowDistanceL2Float();
+    }
   }
 
   template<>
   PQFlashIndex<_s8>::PQFlashIndex(
       std::shared_ptr<AlignedFileReader> &fileReader)
       : reader(fileReader) {
-    this->dist_cmp = new DistanceL2Int8();
-    this->dist_cmp_float = new DistanceL2();
+    if (avx2Supported()) {
+      this->dist_cmp = new DistanceL2Int8();
+      this->dist_cmp_float = new DistanceL2();
+    } else {
+      diskann::cout << "No AVX2 support. Switching to slower compare routines."
+                    << std::endl;
+      this->dist_cmp = new SlowDistanceL2Int<_s8>();
+      this->dist_cmp_float = new SlowDistanceL2Float();
+    }
   }
 
   template<>
   PQFlashIndex<float>::PQFlashIndex(
       std::shared_ptr<AlignedFileReader> &fileReader)
       : reader(fileReader) {
-    this->dist_cmp = new DistanceL2();
-    this->dist_cmp_float = new DistanceL2();
+    if (avx2Supported()) {
+      this->dist_cmp = new DistanceL2();
+      this->dist_cmp_float = new DistanceL2();
+    } else {
+      diskann::cout << "No AVX2 support. Switching to slower compare routines."
+                    << std::endl;
+      this->dist_cmp = new SlowDistanceL2Float();
+      this->dist_cmp_float = new SlowDistanceL2Float();
+    }
   }
 
   template<typename T>
   PQFlashIndex<T>::~PQFlashIndex() {
+#ifndef EXEC_ENV_OLS
     if (data != nullptr) {
       delete[] data;
     }
+#endif
 
     if (centroid_data != nullptr)
       aligned_free(centroid_data);
@@ -129,16 +154,16 @@ namespace diskann {
 
   template<typename T>
   void PQFlashIndex<T>::setup_thread_data(_u64 nthreads) {
-    std::cout << "Setting up thread-specific contexts for nthreads: "
-              << nthreads << "\n";
+    diskann::cout << "Setting up thread-specific contexts for nthreads: "
+              << nthreads << std::endl;
 // omp parallel for to generate unique thread IDs
-#pragma omp parallel for
+#pragma omp parallel for num_threads((int)nthreads)
     for (_s64 thread = 0; thread < (_s64) nthreads; thread++) {
 #pragma omp critical
       {
         this->reader->register_thread();
-        IOContext ctx = this->reader->get_ctx();
-        // std::cout << "ctx: " << ctx << "\n";
+        IOContext& ctx = this->reader->get_ctx();
+        // diskann::cout << "ctx: " << ctx << "\n";
         QueryScratch<T> scratch;
         _u64 coord_alloc_size = ROUND_UP(MAX_N_CMPS * this->aligned_dim, 256);
         diskann::alloc_aligned((void **) &scratch.coord_scratch,
@@ -178,7 +203,7 @@ namespace diskann {
 
   template<typename T>
   void PQFlashIndex<T>::destroy_thread_data() {
-    std::cerr << "Clearing scratch" << std::endl;
+    diskann::cout << "Clearing scratch" << std::endl;
     assert(this->thread_data.size() == this->max_nthreads);
     while (this->thread_data.size() > 0) {
       ThreadData<T> data = this->thread_data.pop();
@@ -200,7 +225,7 @@ namespace diskann {
 
   template<typename T>
   void PQFlashIndex<T>::load_cache_list(std::vector<uint32_t> &node_list) {
-    std::cout << "Loading the cache list into memory.." << std::flush;
+    diskann::cout << "Loading the cache list into memory.." << std::flush;
     _u64 num_cached_nodes = node_list.size();
 
     // borrow thread data
@@ -210,7 +235,7 @@ namespace diskann {
       this_thread_data = this->thread_data.pop();
     }
 
-    IOContext ctx = this_thread_data.ctx;
+    IOContext& ctx = this_thread_data.ctx;
 
     nhood_cache_buf = new unsigned[num_cached_nodes * (max_degree + 1)];
     memset(nhood_cache_buf, 0, num_cached_nodes * (max_degree + 1));
@@ -253,7 +278,7 @@ namespace diskann {
         unsigned *node_nhood = OFFSET_TO_NODE_NHOOD(node_buf);
         auto      nnbrs = *node_nhood;
         unsigned *nbrs = node_nhood + 1;
-        // std::cerr << "CACHE: nnbrs = " << nnbrs << "\n";
+        // diskann::cout << "CACHE: nnbrs = " << nnbrs << "\n";
         std::pair<_u32, unsigned *> cnhood;
         cnhood.first = nnbrs;
         cnhood.second = nhood_cache_buf + node_idx * (max_degree + 1);
@@ -265,13 +290,21 @@ namespace diskann {
     }
     // return thread data
     this->thread_data.push(this_thread_data);
-    std::cout << "..done." << std::endl;
+    diskann::cout << "..done." << std::endl;
   }
 
+#ifdef EXEC_ENV_OLS
+  template<typename T>
+  void PQFlashIndex<T>::generate_cache_list_from_sample_queries(
+      MemoryMappedFiles& files, std::string sample_bin, _u64 l_search, 
+      _u64 beamwidth, _u64 num_nodes_to_cache, uint32_t nthreads,
+      std::vector<uint32_t>& node_list) {
+#else
   template<typename T>
   void PQFlashIndex<T>::generate_cache_list_from_sample_queries(
       std::string sample_bin, _u64 l_search, _u64 beamwidth,
-      _u64 num_nodes_to_cache, std::vector<uint32_t> &node_list) {
+      _u64 num_nodes_to_cache, uint32_t nthreads, std::vector<uint32_t> &node_list) {
+#endif
     this->count_visited_nodes = true;
     this->node_visit_counter.clear();
     this->node_visit_counter.resize(this->num_points);
@@ -283,11 +316,19 @@ namespace diskann {
     _u64 sample_num, sample_dim, sample_aligned_dim;
     T *  samples;
 
+#ifdef EXEC_ENV_OLS
+    if (files.fileExists(sample_bin)) {
+        diskann::load_aligned_bin<T>(files, sample_bin, samples,
+            sample_num, sample_dim, sample_aligned_dim);
+    }
+#else
     if (file_exists(sample_bin)) {
       diskann::load_aligned_bin<T>(sample_bin, samples, sample_num, sample_dim,
                                    sample_aligned_dim);
-    } else {
-      std::cerr << "Sample bin file not found. Not generating cache."
+    }
+#endif 
+    else {
+      diskann::cerr << "Sample bin file not found. Not generating cache."
                 << std::endl;
       return;
     }
@@ -295,7 +336,7 @@ namespace diskann {
     std::vector<uint64_t> tmp_result_ids_64(sample_num, 0);
     std::vector<float>    tmp_result_dists(sample_num, 0);
 
-#pragma omp parallel for schedule(dynamic, 1)
+#pragma omp parallel for schedule(dynamic, 1) num_threads (nthreads)
     for (_s64 i = 0; i < (int64_t) sample_num; i++) {
       cached_beam_search(samples + (i * sample_aligned_dim), 1, l_search,
                          tmp_result_ids_64.data() + (i * 1),
@@ -320,7 +361,12 @@ namespace diskann {
   template<typename T>
   void PQFlashIndex<T>::cache_bfs_levels(_u64 num_nodes_to_cache,
                                          std::vector<uint32_t> &node_list) {
+    // Gopal. random_shuffle() is deprecated.
+    std::random_device rng;
+    std::mt19937       urng(rng());
+
     node_list.clear();
+
 
     // borrow thread data
     ThreadData<T> this_thread_data = this->thread_data.pop();
@@ -329,7 +375,7 @@ namespace diskann {
       this_thread_data = this->thread_data.pop();
     }
 
-    IOContext ctx = this_thread_data.ctx;
+    IOContext& ctx = this_thread_data.ctx;
 
     std::unique_ptr<tsl::robin_set<unsigned>> cur_level, prev_level;
     cur_level = std::make_unique<tsl::robin_set<unsigned>>();
@@ -359,15 +405,16 @@ namespace diskann {
         nodes_to_expand.push_back(id);
       }
 
-      std::random_shuffle(nodes_to_expand.begin(), nodes_to_expand.end());
+      // Gopal. random_shuffle() is deprecated.
+      std::shuffle(nodes_to_expand.begin(), nodes_to_expand.end(), urng);
 
-      std::cout << "Level: " << lvl << std::flush;
+      diskann::cout << "Level: " << lvl << std::flush;
       bool finish_flag = false;
 
       uint64_t BLOCK_SIZE = 1024;
       uint64_t nblocks = DIV_ROUND_UP(nodes_to_expand.size(), BLOCK_SIZE);
       for (size_t block = 0; block < nblocks && !finish_flag; block++) {
-        std::cout << "." << std::flush;
+        diskann::cout << "." << std::flush;
         size_t start = block * BLOCK_SIZE;
         size_t end =
             (std::min)((block + 1) * BLOCK_SIZE, nodes_to_expand.size());
@@ -406,7 +453,7 @@ namespace diskann {
         }
       }
 
-      std::cout << ". #nodes: " << node_list.size() - prev_node_list_size
+      diskann::cout << ". #nodes: " << node_list.size() - prev_node_list_size
                 << ", #nodes thus far: " << node_list.size() << std::endl;
       prev_node_list_size = node_list.size();
       lvl++;
@@ -416,15 +463,16 @@ namespace diskann {
     for (const unsigned &p : *cur_level)
       cur_level_node_list.push_back(p);
 
-    std::random_shuffle(cur_level_node_list.begin(), cur_level_node_list.end());
+    //Gopal. random_shuffle() is deprecated
+    std::shuffle(cur_level_node_list.begin(), cur_level_node_list.end(), urng);
     size_t residual = num_nodes_to_cache - node_list.size();
 
     for (size_t i = 0; i < (std::min)(residual, cur_level_node_list.size());
          i++)
       node_list.push_back(cur_level_node_list[i]);
 
-    std::cout << "Level: " << lvl << std::flush;
-    std::cout << ". #nodes: " << node_list.size() - prev_node_list_size
+    diskann::cout << "Level: " << lvl << std::flush;
+    diskann::cout << ". #nodes: " << node_list.size() - prev_node_list_size
               << ", #nodes thus far: " << node_list.size() << std::endl;
 
     // return thread data
@@ -445,8 +493,8 @@ namespace diskann {
       this->thread_data.wait_for_push_notify();
       data = this->thread_data.pop();
     }
-    IOContext ctx = data.ctx;
-    std::cout << "Loading centroid data from medoids vector data of "
+    IOContext& ctx = data.ctx;
+    diskann::cout << "Loading centroid data from medoids vector data of "
               << num_medoids << " medoid(s)" << std::endl;
     for (uint64_t cur_m = 0; cur_m < num_medoids; cur_m++) {
       auto medoid = medoids[cur_m];
@@ -478,9 +526,15 @@ namespace diskann {
     this->thread_data.push_notify_all();
   }
 
+#ifdef EXEC_ENV_OLS
+  template<typename T>
+  int PQFlashIndex<T>::load(MemoryMappedFiles& files, uint32_t num_threads, const char* pq_prefix,
+      const char* disk_index_file) {
+#else
   template<typename T>
   int PQFlashIndex<T>::load(uint32_t num_threads, const char *pq_prefix,
                             const char *disk_index_file) {
+#endif
     std::string pq_table_bin = std::string(pq_prefix) + "_pivots.bin";
     std::string pq_compressed_vectors =
         std::string(pq_prefix) + "_compressed.bin";
@@ -489,12 +543,16 @@ namespace diskann {
         std::string(disk_index_file) + "_centroids.bin";
 
     size_t pq_file_dim, pq_file_num_centroids;
+#ifdef EXEC_ENV_OLS
+    get_bin_metadata(files, pq_table_bin, pq_file_num_centroids, pq_file_dim);
+#else
     get_bin_metadata(pq_table_bin, pq_file_num_centroids, pq_file_dim);
+#endif
 
     this->disk_index_file = std::string(disk_index_file);
 
     if (pq_file_num_centroids != 256) {
-      std::cout << "Error. Number of PQ centroids is not 256. Exitting."
+      diskann::cout << "Error. Number of PQ centroids is not 256. Exitting."
                 << std::endl;
       return -1;
     }
@@ -503,27 +561,49 @@ namespace diskann {
     this->aligned_dim = ROUND_UP(pq_file_dim, 8);
 
     size_t npts_u64, nchunks_u64;
-    diskann::load_bin<_u8>(pq_compressed_vectors, data, npts_u64, nchunks_u64);
+#ifdef EXEC_ENV_OLS
+    diskann::load_bin<_u8>(files, pq_compressed_vectors, this->data, npts_u64, nchunks_u64);
+#else
+    diskann::load_bin<_u8>(pq_compressed_vectors, this->data, npts_u64, nchunks_u64);
+#endif
 
     this->num_points = npts_u64;
     this->n_chunks = nchunks_u64;
 
-    pq_table.load_pq_centroid_bin(pq_table_bin.c_str(), nchunks_u64);
+#ifdef EXEC_ENV_OLS
+    pq_table.load_pq_centroid_bin(files, pq_table_bin.c_str(), nchunks_u64);
+#else
+   pq_table.load_pq_centroid_bin(pq_table_bin.c_str(), nchunks_u64);
+#endif
 
-    std::cout
+    diskann::cout
         << "Loaded PQ centroids and in-memory compressed vectors. #points: "
         << num_points << " #dim: " << data_dim
         << " #aligned_dim: " << aligned_dim << " #chunks: " << n_chunks
         << std::endl;
 
     // read nsg metadata
+#ifdef EXEC_ENV_OLS
+    //This is a bit tricky. We have to read the header from the disk_index_file. But  this is 
+    //now exclusively a preserve of the DiskPriorityIO class. So, we need to estimate how many
+    //bytes are needed to store the header and read in that many using our 'standard' aligned 
+    //file reader approach. 
+    reader->open(disk_index_file);
+    this->setup_thread_data(num_threads);
+    this->max_nthreads = num_threads;
+
+    char* bytes = getHeaderBytes();
+    ContentBuf buf(bytes, HEADER_SIZE);
+    std::basic_istream<char> nsg_meta(&buf);
+#else
     std::ifstream nsg_meta(disk_index_file, std::ios::binary);
+#endif
 
     size_t actual_index_size = get_file_size(disk_index_file);
     size_t expected_file_size;
     READ_U64(nsg_meta, expected_file_size);
     if (actual_index_size != expected_file_size) {
-      std::cout << "File size mismatch for " << disk_index_file
+      diskann::cout << "File size mismatch for " << disk_index_file
                 << " (size: " << actual_index_size << ")"
                 << " with meta-data size: " << expected_file_size << std::endl;
       return -1;
@@ -532,7 +612,7 @@ namespace diskann {
     _u64 disk_nnodes;
     READ_U64(nsg_meta, disk_nnodes);
     if (disk_nnodes != num_points) {
-      std::cout << "Mismatch in #points for compressed data file and disk "
+      diskann::cout << "Mismatch in #points for compressed data file and disk "
                    "index file: "
                 << disk_nnodes << " vs " << num_points << std::endl;
       return -1;
@@ -544,22 +624,35 @@ namespace diskann {
     READ_U64(nsg_meta, nnodes_per_sector);
     max_degree = ((max_node_len - data_dim * sizeof(T)) / sizeof(unsigned)) - 1;
 
-    std::cout << "Disk-Index File Meta-data: ";
-    std::cout << "# nodes per sector: " << nnodes_per_sector;
-    std::cout << ", max node len (bytes): " << max_node_len;
-    std::cout << ", max node degree: " << max_degree << std::endl;
-    nsg_meta.close();
+    diskann::cout << "Disk-Index File Meta-data: ";
+    diskann::cout << "# nodes per sector: " << nnodes_per_sector;
+    diskann::cout << ", max node len (bytes): " << max_node_len;
+    diskann::cout << ", max node degree: " << max_degree << std::endl;
 
+#ifdef EXEC_ENV_OLS
+    delete[] bytes;
+#else
+    nsg_meta.close();
+#endif
+
+#ifndef EXEC_ENV_OLS
     // open AlignedFileReader handle to nsg_file
     std::string nsg_fname(disk_index_file);
     reader->open(nsg_fname);
-
     this->setup_thread_data(num_threads);
     this->max_nthreads = num_threads;
 
-    if (file_exists(medoids_file)) {
+#endif
+
+#ifdef EXEC_ENV_OLS
+    if (files.fileExists(medoids_file)) {
+      size_t tmp_dim;
+      diskann::load_bin<uint32_t>(files, medoids_file, medoids, num_medoids, tmp_dim);
+#else
+    if (file_exists(medoids_file)){
       size_t tmp_dim;
       diskann::load_bin<uint32_t>(medoids_file, medoids, num_medoids, tmp_dim);
+#endif
 
       if (tmp_dim != 1) {
         std::stringstream stream;
@@ -569,17 +662,27 @@ namespace diskann {
         throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
                                     __LINE__);
       }
+#ifdef EXEC_ENV_OLS
+      if (!files.fileExists(centroids_file)){
+#else
       if (!file_exists(centroids_file)) {
-        std::cout
+#endif
+        diskann::cout
             << "Centroid data file not found. Using corresponding vectors "
                "for the medoids "
             << std::endl;
         use_medoids_data_as_centroids();
       } else {
         size_t num_centroids, aligned_tmp_dim;
+#ifdef EXEC_ENV_OLS
+        diskann::load_aligned_bin<float>(files, centroids_file, centroid_data,
+            num_centroids, tmp_dim,
+            aligned_tmp_dim);
+#else
         diskann::load_aligned_bin<float>(centroids_file, centroid_data,
                                          num_centroids, tmp_dim,
                                          aligned_tmp_dim);
+#endif
         if (aligned_tmp_dim != aligned_dim || num_centroids != num_medoids) {
           std::stringstream stream;
           stream << "Error loading centroids data file. Expected bin format of "
@@ -598,7 +701,7 @@ namespace diskann {
       use_medoids_data_as_centroids();
     }
 
-    std::cout << "done.." << std::endl;
+    diskann::cout << "done.." << std::endl;
     return 0;
   }
 
@@ -640,7 +743,7 @@ namespace diskann {
     const T *    query = data.scratch.aligned_query_T;
     const float *query_float = data.scratch.aligned_query_float;
 
-    IOContext ctx = data.ctx;
+    IOContext& ctx = data.ctx;
     auto      query_scratch = &(data.scratch);
 
     // reset query
@@ -735,16 +838,16 @@ namespace diskann {
 
       /*
         bool marker_set = false;
-        std::cout << "hop " << hops << ": ";
+        diskann::cout << "hop " << hops << ": ";
         for (_u32 i = 0; i < cur_list_size; i++) {
-          std::cout << retset[i].id << "( " << retset[i].distance;
+          diskann::cout << retset[i].id << "( " << retset[i].distance;
           if (retset[i].flag && !marker_set) {
-            std::cout << ",*)  ";
+            diskann::cout << ",*)  ";
             marker_set = true;
           } else
-            std::cout << ")  ";
+            diskann::cout << ")  ";
         }
-        std::cout << std::endl;
+        diskann::cout << std::endl;
   */
       while (marker < cur_list_size && frontier.size() < beam_width &&
              num_seen < beam_width) {
@@ -830,7 +933,7 @@ namespace diskann {
             visited.insert(id);
             cmps++;
             float dist = dist_scratch[m];
-            // std::cout << "cmp: " << id << ", dist: " << dist <<
+            // diskann::cout << "cmp: " << id << ", dist: " << dist <<
             // std::endl; std::cerr << "dist: " << dist << std::endl;
             if (dist >= retset[cur_list_size - 1].distance &&
                 (cur_list_size == l_search))
@@ -900,8 +1003,8 @@ namespace diskann {
             visited.insert(id);
             cmps++;
             float dist = dist_scratch[m];
-            // std::cout << "cmp: " << id << ", dist: " << dist << std::endl;
-            // std::cerr << "dist: " << dist << std::endl;
+            // diskann::cout << "cmp: " << id << ", dist: " << dist << std::endl;
+            // diskann::cout << "dist: " << dist << std::endl;
             if (stats != nullptr) {
               stats->n_cmps++;
             }
@@ -957,6 +1060,25 @@ namespace diskann {
       stats->total_us = (double) query_timer.elapsed();
     }
   }
+
+#ifdef EXEC_ENV_OLS
+  template<typename T>
+  char* PQFlashIndex<T>::getHeaderBytes() {
+
+      IOContext& ctx = reader->get_ctx();
+      AlignedRead readReq;
+      readReq.buf = new char[PQFlashIndex<T>::HEADER_SIZE];
+      readReq.len = PQFlashIndex<T>::HEADER_SIZE;
+      readReq.offset = 0;
+
+      std::vector<AlignedRead> readReqs;
+      readReqs.push_back(readReq);
+
+      reader->read(readReqs, ctx, false);
+
+      return (char*)readReq.buf; 
+  }
+#endif
 
   // instantiations
   template class PQFlashIndex<_u8>;

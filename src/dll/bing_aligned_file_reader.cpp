@@ -3,6 +3,7 @@
 
 #include <string>
 #include <sstream>
+#include "logger.h"
 #include "bing_aligned_file_reader.h"
 #include "dll/DiskPriorityIO.h"
 
@@ -13,9 +14,21 @@ namespace diskann {
 
   BingAlignedFileReader::BingAlignedFileReader(
       std::shared_ptr<ANNIndex::IDiskPriorityIO> diskPriorityIOPtr) {
+#if defined(_WINDOWS) && defined(EXEC_ENV_OLS)
+    if (diskPriorityIOPtr == nullptr) {
+      throw diskann::ANNException(
+          "Must pass valid shared IO ptr to c'tor while running in OLS env.",
+          -1);
+    }
+#endif
     m_pDiskPriorityIO = diskPriorityIOPtr;
+    m_ownsDiskPriorityIO = diskPriorityIOPtr == nullptr;
   }
-  BingAlignedFileReader::~BingAlignedFileReader(){};
+
+  BingAlignedFileReader::~BingAlignedFileReader(){
+    std::unique_lock<std::mutex> lk(this->ctx_mut);
+    this->ctx_map.clear();
+  };
 
   // Open & close ops
   // Blocking calls
@@ -25,18 +38,22 @@ namespace diskann {
   }
 
   void BingAlignedFileReader::close() {
+    this->deregister_thread();
   }
 
   void BingAlignedFileReader::register_thread() {
     std::unique_lock<std::mutex> lk(this->ctx_mut);
     if (this->ctx_map.find(std::this_thread::get_id()) != ctx_map.end()) {
-      std::cout << "Warning:: Duplicate registration for thread_id : "
-                << std::this_thread::get_id() << "\n";
+      diskann::cout << "Warning:: Duplicate registration for thread_id : "
+                    << std::this_thread::get_id() << std::endl;
       return;
     }
 
     IOContext context;
 
+#if defined(_WINDOWS) && defined(EXEC_ENV_OLS)
+    context.m_pDiskIO = m_pDiskPriorityIO;
+#else
     if (!m_pDiskPriorityIO) {
       context.m_pDiskIO.reset(new DiskPriorityIO(
           ANNIndex::DiskIOScenario::DIS_HighPriorityUserRead));
@@ -44,6 +61,7 @@ namespace diskann {
     } else {
       context.m_pDiskIO = m_pDiskPriorityIO;
     }
+#endif
     for (_u64 i = 0; i < MAX_IO_DEPTH; i++) {
       ANNIndex::AsyncReadRequest req;
       memset(&req, 0, sizeof(ANNIndex::AsyncReadRequest));
@@ -52,11 +70,16 @@ namespace diskann {
     this->ctx_map.insert(std::make_pair(std::this_thread::get_id(), context));
   }
 
-  void BingAlignedFileReader::deregister_thread() {
-    auto &context = this->ctx_map.at(std::this_thread::get_id());
-
-    context.m_pDiskIO->ShutDown();
-    this->ctx_map.erase(std::this_thread::get_id());
+  void BingAlignedFileReader::deregister_thread() 
+  {
+    std::unique_lock<std::mutex> lk(this->ctx_mut);
+    std::thread::id tId = std::this_thread::get_id();
+    if (this->ctx_map.find(tId) != this->ctx_map.end()) {
+      if (m_ownsDiskPriorityIO) {
+        this->ctx_map.at(tId).m_pDiskIO->ShutDown();
+      }
+      this->ctx_map.erase(tId);
+    }
   }
 
   IOContext &BingAlignedFileReader::get_ctx() {
@@ -105,13 +128,13 @@ namespace diskann {
 
       (*ctx.m_pRequestsStatus)[i] = IOContext::READ_WAIT;
 
-      (*ctx.m_pRequests)[i].m_callback = [ctx, i, this](bool result) {
+      (*ctx.m_pRequests)[i].m_callback = [&ctx, i, this](bool result) {
         if (result) {
           (*ctx.m_pRequestsStatus)[i] = IOContext::READ_SUCCESS;
         } else {
           std::stringstream stream;
           stream << "Read request to file: " << m_filename << "failed.";
-          std::cerr << stream.str() << std::endl;
+          diskann::cerr << stream.str() << std::endl;
           (*ctx.m_pRequestsStatus)[i] = IOContext::READ_FAILED;
         }
       };
