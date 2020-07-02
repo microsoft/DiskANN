@@ -179,10 +179,11 @@ namespace diskann {
     }
   };
 
-
-  //Gopal. Slow implementations of the distance functions to get diskann to work in
-  //v14 machines that do not have AVX2 support. Performance here is not a concern, so
-  //we are using the simplest possible implementation.
+  // Gopal. Slow implementations of the distance functions to get diskann to
+  // work in
+  // v14 machines that do not have AVX2 support. Performance here is not a
+  // concern, so
+  // we are using the simplest possible implementation.
   template<typename T>
   class SlowDistanceL2Int : public Distance<T> {
     virtual float compare(const T *a, const T *b, unsigned length) const {
@@ -196,7 +197,8 @@ namespace diskann {
   };
 
   class SlowDistanceL2Float : public Distance<float> {
-    virtual float compare(const float *a, const float *b, unsigned length) const {
+    virtual float compare(const float *a, const float *b,
+                          unsigned length) const {
       float result = 0.0f;
       for (_u32 i = 0; i < length; i++) {
         result += (a[i] - b[i]) * (a[i] - b[i]);
@@ -204,9 +206,5 @@ namespace diskann {
       return result;
     }
   };
-
-
-
-  
 
 }  // namespace diskann

@@ -191,28 +191,28 @@ namespace diskann {
 
     auto fc = files.getContent(bin_file);
 
-    uint32_t t_npts, t_dim;
+    uint32_t  t_npts, t_dim;
     uint32_t* contentAsIntPtr = (uint32_t*) (fc._content);
     t_npts = *(contentAsIntPtr);
-    t_dim = *(contentAsIntPtr+1);
+    t_dim = *(contentAsIntPtr + 1);
 
     npts = t_npts;
     dim = t_dim;
 
     auto actual_file_size = npts * dim * sizeof(T) + 2 * sizeof(uint32_t);
-    if ( actual_file_size != fc._size) {
-        std::stringstream stream;
-        stream << "Error. File size mismatch. Actual size is "
-                << fc._size << " while expected size is  "
-                << actual_file_size << " npts = " << npts
-                << " dim = " << dim << " size of <T>= " << sizeof(T)
-                << std::endl;
-        diskann::cout << stream.str();
-        throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
-                                    __LINE__);
+    if (actual_file_size != fc._size) {
+      std::stringstream stream;
+      stream << "Error. File size mismatch. Actual size is " << fc._size
+             << " while expected size is  " << actual_file_size
+             << " npts = " << npts << " dim = " << dim
+             << " size of <T>= " << sizeof(T) << std::endl;
+      diskann::cout << stream.str();
+      throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
+                                  __LINE__);
     }
 
-    data = (T*) ((char*) fc._content + 2 * sizeof(uint32_t)); //No need to copy!
+    data =
+        (T*) ((char*) fc._content + 2 * sizeof(uint32_t));  // No need to copy!
   }
 #endif
 
@@ -390,7 +390,6 @@ namespace diskann {
     }
   }
 
-  
   // plain saves data as npts X ndims array into filename
   template<typename T>
   void save_Tvecs(const char* filename, T* data, size_t npts, size_t ndims) {
@@ -476,9 +475,8 @@ inline bool validate_file_size(const std::string& name) {
   size_t expected_file_size;
   in.read((char*) &expected_file_size, sizeof(uint64_t));
   if (actual_file_size != expected_file_size) {
-    diskann::cout << "Error loading" << name
-                  << ". Expected "
-                     "size (metadata): "
+    diskann::cout << "Error loading" << name << ". Expected "
+                                                "size (metadata): "
                   << expected_file_size
                   << ", actual file size : " << actual_file_size
                   << ". Exitting." << std::endl;
@@ -488,7 +486,6 @@ inline bool validate_file_size(const std::string& name) {
   in.close();
   return true;
 }
-
 
 #ifdef _WINDOWS
 #include <intrin.h>
@@ -520,6 +517,12 @@ inline void printProcessMemory(const char* message) {
                 << std::endl;
 }
 #else
+
+// need to check and change this
+inline bool avx2Supported() {
+  return true;
+}
+
 inline void printProcessMemory(const char* message) {
 }
 #endif

@@ -1,6 +1,5 @@
 #pragma once
 
-
 #ifdef EXEC_ENV_OLS
 
 namespace diskann {

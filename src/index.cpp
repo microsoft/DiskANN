@@ -52,8 +52,7 @@ namespace {
 
         return new diskann::SlowDistanceL2Float();
       }
-    }
-    else {
+    } else {
       std::stringstream stream;
       stream << "Only L2 metric supported as of now. Email "
                 "gopalsr@microsoft.com if you need cosine similarity or inner "
@@ -77,8 +76,7 @@ namespace {
 
         return new diskann::SlowDistanceL2Int<int8_t>();
       }
-    }
-    else {
+    } else {
       std::stringstream stream;
       stream << "Only L2 metric supported as of now. Email "
                 "gopalsr@microsoft.com if you need cosine similarity or inner "
@@ -101,8 +99,7 @@ namespace {
                   << std::endl;
         return new diskann::SlowDistanceL2Int<uint8_t>();
       }
-    }
-    else {
+    } else {
       std::stringstream stream;
       stream << "Only L2 metric supported as of now. Email "
                 "gopalsr@microsoft.com if you need cosine similarity or inner "
@@ -212,7 +209,7 @@ namespace diskann {
           unsigned              active = 0;
           std::vector<unsigned> new_location = get_new_location(active);
           diskann::cout << "Size of new_location = " << new_location.size()
-                    << std::endl;
+                        << std::endl;
           for (unsigned i = 0; i < new_location.size(); i++)
             if ((_delete_set.find(i) == _delete_set.end()) &&
                 (new_location[i] >= _max_points + _num_frozen_pts))
@@ -222,8 +219,8 @@ namespace diskann {
               if ((_delete_set.find(i) != _delete_set.end()) &&
                   (new_location[i] < _max_points + _num_frozen_pts))
                 diskann::cout << "Wrong location assigned to "
-                             "delete point  "
-                          << i << std::endl;
+                                 "delete point  "
+                              << i << std::endl;
             }
           compact_data(new_location, active, _compacted_order);
 
@@ -252,7 +249,8 @@ namespace diskann {
         _change_lock.lock();
         if (_can_delete || (!_consolidated_order)) {
           diskann::cout << "Disable deletes and consolidate index before "
-                       "saving." << std::endl;
+                           "saving."
+                        << std::endl;
           throw diskann::ANNException(
               "Disable deletes and consolidate index before saving.", -1,
               __FUNCSIG__, __FILE__, __LINE__);
@@ -274,8 +272,9 @@ namespace diskann {
     out.close();
 
     diskann::cout << "Avg degree: "
-              << ((float) total_gr_edges) / ((float) (_nd + _num_frozen_pts))
-              << std::endl;
+                  << ((float) total_gr_edges) /
+                         ((float) (_nd + _num_frozen_pts))
+                  << std::endl;
   }
 
   // load the index from file and update the width (max_degree), ep
@@ -311,13 +310,13 @@ namespace diskann {
     }
     if (_final_graph.size() != _nd) {
       diskann::cout << "ERROR. mismatch in number of points. Graph has "
-                << _final_graph.size() << " points and loaded dataset has "
-                << _nd << " points. " << std::endl;
+                    << _final_graph.size() << " points and loaded dataset has "
+                    << _nd << " points. " << std::endl;
       return;
     }
 
     diskann::cout << "..done. Index has " << nodes << " nodes and " << cc
-              << " out-edges" << std::endl;
+                  << " out-edges" << std::endl;
 
     if (load_tags) {
       if (_enable_tags == false)
@@ -904,10 +903,10 @@ namespace diskann {
         if ((sync_num * 100) / NUM_SYNCS > progress_counter) {
           diskann::cout.precision(4);
           diskann::cout << "Completed  (round: " << rnd_no
-                        << ", sync: " << sync_num
-                    << "/" << NUM_SYNCS << " with L " << L << ")"
-                    << " sync_time: " << sync_time << "s"
-                    << "; inter_time: " << inter_time << "s" << std::endl;
+                        << ", sync: " << sync_num << "/" << NUM_SYNCS
+                        << " with L " << L << ")"
+                        << " sync_time: " << sync_time << "s"
+                        << "; inter_time: " << inter_time << "s" << std::endl;
 
           total_sync_time += sync_time;
           total_inter_time += inter_time;
@@ -921,11 +920,11 @@ namespace diskann {
 
       MallocExtension::instance()->ReleaseFreeMemory();
       diskann::cout << "Completed Pass " << rnd_no << " of data using L=" << L
-                << " and alpha=" << parameters.Get<float>("alpha")
-                << ". Stats: ";
+                    << " and alpha=" << parameters.Get<float>("alpha")
+                    << ". Stats: ";
       diskann::cout << "search+prune_time=" << total_sync_time
-                << "s, inter_time=" << total_inter_time
-                << "s, inter_count=" << total_inter_count << std::endl;
+                    << "s, inter_time=" << total_inter_time
+                    << "s, inter_count=" << total_inter_count << std::endl;
     }
 
     diskann::cout << "Starting final cleanup.." << std::flush;
@@ -956,8 +955,8 @@ namespace diskann {
       }
     }
     diskann::cout << "done. Link time: "
-              << ((double) link_timer.elapsed() / (double) 1000000) << "s"
-              << std::endl;
+                  << ((double) link_timer.elapsed() / (double) 1000000) << "s"
+                  << std::endl;
   }
 
   template<typename T, typename TagT>
@@ -991,9 +990,9 @@ namespace diskann {
         cnt++;
     }
     diskann::cout << "Degree: max:" << max
-              << "  avg:" << (float) total / (float) _nd << "  min:" << min
-              << "  count(deg<2):" << cnt << "\n"
-              << "Index built." << std::endl;
+                  << "  avg:" << (float) total / (float) _nd << "  min:" << min
+                  << "  count(deg<2):" << cnt << "\n"
+                  << "Index built." << std::endl;
     _width = (std::max)((unsigned) max, _width);
     _has_built = true;
   }
@@ -1143,8 +1142,8 @@ namespace diskann {
                                    const Parameters &parameters) {
     if (_lazy_done && (!_consolidated_order)) {
       diskann::cout << "Lazy delete reuests issued but data not consolidated, "
-                   "cannot proceed with eager deletes."
-                << std::endl;
+                       "cannot proceed with eager deletes."
+                    << std::endl;
       return -1;
     }
     LockGuard guard(_change_lock);
@@ -1280,10 +1279,10 @@ namespace diskann {
     }
 
     diskann::cout << std::endl
-              << "Max in_degree = " << max_in << "; Min in_degree = " << min_in
-              << "; Average in_degree = "
-              << (float) (avg_in) / (float) (_nd + _num_frozen_pts)
-              << std::endl;
+                  << "Max in_degree = " << max_in
+                  << "; Min in_degree = " << min_in << "; Average in_degree = "
+                  << (float) (avg_in) / (float) (_nd + _num_frozen_pts)
+                  << std::endl;
   }
 
   // Do not call consolidate_deletes() if you have not locked _change_lock.
@@ -1401,7 +1400,7 @@ namespace diskann {
         }
       if (_ep == old_ep) {
         diskann::cerr << "ERROR: Did not find a replacement for start node."
-                  << std::endl;
+                      << std::endl;
         throw diskann::ANNException(
             "ERROR: Did not find a replacement for start node.", -1,
             __FUNCSIG__, __FILE__, __LINE__);
@@ -1411,9 +1410,8 @@ namespace diskann {
       }
     }
 
-    diskann::cout
-        << "Re-numbering nodes and edges and consolidating data... "
-              << std::flush;
+    diskann::cout << "Re-numbering nodes and edges and consolidating data... "
+                  << std::flush;
     diskann::cout << "active = " << active << std::endl;
     for (unsigned old = 0; old < _max_points + _num_frozen_pts; ++old) {
       if (new_location[old] <
@@ -1504,7 +1502,7 @@ namespace diskann {
     if (_num_frozen_pts > 0) {
       if (_final_graph[_max_points].empty()) {
         diskann::cout << "Readjusting data to correctly position frozen point"
-                  << std::endl;
+                      << std::endl;
         for (unsigned i = 0; i < _nd; i++)
           for (unsigned j = 0; j < _final_graph[i].size(); j++)
             if (_final_graph[i][j] >= _nd)
@@ -1629,7 +1627,7 @@ namespace diskann {
     }
     if (_eager_done) {
       diskann::cout << "#Points after eager_delete : " << _nd + _num_frozen_pts
-                << std::endl;
+                    << std::endl;
       if (_tag_to_location.size() != _nd) {
         diskann::cerr << "Tags to points array wrong sized" << std::endl;
         return -2;
@@ -1652,7 +1650,7 @@ namespace diskann {
 
       if (nd >= 0)
         diskann::cout << "#Points after consolidation: " << nd + _num_frozen_pts
-                  << std::endl;
+                      << std::endl;
     }
 
     _can_delete = false;
@@ -1663,8 +1661,8 @@ namespace diskann {
   int Index<T, TagT>::delete_point(const TagT tag) {
     if ((_eager_done) && (!_compacted_order)) {
       diskann::cout << "Eager delete requests were issued but data was not "
-                   "compacted, cannot proceed with lazy_deletes"
-                << std::endl;
+                       "compacted, cannot proceed with lazy_deletes"
+                    << std::endl;
       return -1;
     }
     LockGuard guard(_change_lock);

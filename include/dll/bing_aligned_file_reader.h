@@ -12,7 +12,8 @@ namespace diskann {
     bool                                       m_ownsDiskPriorityIO;
 
    public:
-    DISKANN_DLLEXPORT BingAlignedFileReader(std::shared_ptr<ANNIndex::IDiskPriorityIO> pDiskIO = nullptr);
+    DISKANN_DLLEXPORT BingAlignedFileReader(
+        std::shared_ptr<ANNIndex::IDiskPriorityIO> pDiskIO = nullptr);
     DISKANN_DLLEXPORT virtual ~BingAlignedFileReader();
 
     virtual void register_thread();
