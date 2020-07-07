@@ -116,7 +116,9 @@ namespace diskann {
    public:
     float compare(const uint8_t *a, const uint8_t *b, unsigned size) const {
       uint32_t result = 0;
+#ifndef _WINDOWS
 #pragma omp simd reduction(+ : result) aligned(a, b : 8)
+#endif
       for (_s32 i = 0; i < (_s32) size; i++) {
         result += ((int32_t)((int16_t) a[i] - (int16_t) b[i])) *
                   ((int32_t)((int16_t) a[i] - (int16_t) b[i]));
@@ -173,6 +175,34 @@ namespace diskann {
         result += (a[i] - b[i]) * (a[i] - b[i]);
       }
 #endif
+      return result;
+    }
+  };
+
+  // Gopal. Slow implementations of the distance functions to get diskann to
+  // work in
+  // v14 machines that do not have AVX2 support. Performance here is not a
+  // concern, so
+  // we are using the simplest possible implementation.
+  template<typename T>
+  class SlowDistanceL2Int : public Distance<T> {
+    virtual float compare(const T *a, const T *b, unsigned length) const {
+      uint32_t result = 0;
+      for (_u32 i = 0; i < length; i++) {
+        result += ((int32_t)((int16_t) a[i] - (int16_t) b[i])) *
+                  ((int32_t)((int16_t) a[i] - (int16_t) b[i]));
+      }
+      return (float) result;
+    }
+  };
+
+  class SlowDistanceL2Float : public Distance<float> {
+    virtual float compare(const float *a, const float *b,
+                          unsigned length) const {
+      float result = 0.0f;
+      for (_u32 i = 0; i < length; i++) {
+        result += (a[i] - b[i]) * (a[i] - b[i]);
+      }
       return result;
     }
   };

@@ -1,7 +1,6 @@
 #include <iostream>
 #include "utils.h"
 
-
 void block_convert(std::ifstream& reader, std::ofstream& writer,
                    float* read_buf, float* write_buf, _u64 npts, _u64 ndims) {
   reader.read((char*) read_buf,

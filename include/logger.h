@@ -9,6 +9,5 @@ namespace diskann {
   DISKANN_DLLIMPORT extern std::basic_ostream<char> cout;
   DISKANN_DLLIMPORT extern std::basic_ostream<char> cerr;
 #endif
- 
 
 }  // namespace diskann

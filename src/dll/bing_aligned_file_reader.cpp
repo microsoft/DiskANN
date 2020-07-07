@@ -22,8 +22,13 @@ namespace diskann {
     }
 #endif
     m_pDiskPriorityIO = diskPriorityIOPtr;
+    m_ownsDiskPriorityIO = diskPriorityIOPtr == nullptr;
   }
-  BingAlignedFileReader::~BingAlignedFileReader(){};
+
+  BingAlignedFileReader::~BingAlignedFileReader() {
+    std::unique_lock<std::mutex> lk(this->ctx_mut);
+    this->ctx_map.clear();
+  };
 
   // Open & close ops
   // Blocking calls
@@ -33,6 +38,7 @@ namespace diskann {
   }
 
   void BingAlignedFileReader::close() {
+    this->deregister_thread();
   }
 
   void BingAlignedFileReader::register_thread() {
@@ -47,7 +53,7 @@ namespace diskann {
 
 #if defined(_WINDOWS) && defined(EXEC_ENV_OLS)
     context.m_pDiskIO = m_pDiskPriorityIO;
-#else 
+#else
     if (!m_pDiskPriorityIO) {
       context.m_pDiskIO.reset(new DiskPriorityIO(
           ANNIndex::DiskIOScenario::DIS_HighPriorityUserRead));
@@ -65,10 +71,14 @@ namespace diskann {
   }
 
   void BingAlignedFileReader::deregister_thread() {
-    auto &context = this->ctx_map.at(std::this_thread::get_id());
-
-    context.m_pDiskIO->ShutDown();
-    this->ctx_map.erase(std::this_thread::get_id());
+    std::unique_lock<std::mutex> lk(this->ctx_mut);
+    std::thread::id              tId = std::this_thread::get_id();
+    if (this->ctx_map.find(tId) != this->ctx_map.end()) {
+      if (m_ownsDiskPriorityIO) {
+        this->ctx_map.at(tId).m_pDiskIO->ShutDown();
+      }
+      this->ctx_map.erase(tId);
+    }
   }
 
   IOContext &BingAlignedFileReader::get_ctx() {
@@ -117,7 +127,7 @@ namespace diskann {
 
       (*ctx.m_pRequestsStatus)[i] = IOContext::READ_WAIT;
 
-      (*ctx.m_pRequests)[i].m_callback = [ctx, i, this](bool result) {
+      (*ctx.m_pRequests)[i].m_callback = [&ctx, i, this](bool result) {
         if (result) {
           (*ctx.m_pRequestsStatus)[i] = IOContext::READ_SUCCESS;
         } else {

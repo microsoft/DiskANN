@@ -12,8 +12,8 @@ class cached_ifstream {
  public:
   cached_ifstream() {
   }
-  cached_ifstream(const std::string& filename, uint64_t cache_size)
-      : cache_size(cache_size), cur_off(0) {
+  cached_ifstream(const std::string& filename, uint64_t cacheSize)
+      : cache_size(cacheSize), cur_off(0) {
     this->open(filename, cache_size);
   }
   ~cached_ifstream() {
@@ -21,19 +21,19 @@ class cached_ifstream {
     reader.close();
   }
 
-  void open(const std::string& filename, uint64_t cache_size) {
+  void open(const std::string& filename, uint64_t cacheSize) {
     this->cur_off = 0;
     reader.open(filename, std::ios::binary | std::ios::ate);
     fsize = reader.tellg();
     reader.seekg(0, std::ios::beg);
     assert(reader.is_open());
-    assert(cache_size > 0);
-    cache_size = (std::min)(cache_size, fsize);
-    this->cache_size = cache_size;
-    cache_buf = new char[cache_size];
-    reader.read(cache_buf, cache_size);
+    assert(cacheSize > 0);
+    cacheSize = (std::min)(cacheSize, fsize);
+    this->cache_size = cacheSize;
+    cache_buf = new char[cacheSize];
+    reader.read(cache_buf, cacheSize);
     diskann::cout << "Opened: " << filename.c_str() << ", size: " << fsize
-              << ", cache_size: " << cache_size << std::endl;
+                  << ", cache_size: " << cacheSize << std::endl;
   }
 
   size_t get_file_size() {
@@ -101,7 +101,7 @@ class cached_ofstream {
     assert(cache_size > 0);
     cache_buf = new char[cache_size];
     diskann::cout << "Opened: " << filename.c_str()
-              << ", cache_size: " << cache_size << std::endl;
+                  << ", cache_size: " << cache_size << std::endl;
   }
 
   ~cached_ofstream() {
