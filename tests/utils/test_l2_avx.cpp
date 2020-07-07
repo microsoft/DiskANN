@@ -11,6 +11,16 @@ float distanceL2_I(const int8_t* a, const int8_t* b, size_t size) {
   return distance;
 }
 
+float distanceL2_F(const float* a, const float* b, size_t size) {
+  float distance = 0;
+  for (int i = 0; i < size; i++) {
+    distance += (a[i] - b[i]) * (a[i] - b[i]);
+  }
+  return distance;
+}
+
+
+
 int8_t* createVector(int size) {
   auto p = new int8_t[size];
   for (int i = 0; i < size; i++) {
@@ -103,26 +113,69 @@ void uniquePtrAssignment() {
   std::cout << "safe." << std::endl;
 }
 
-void compareDistanceComputations() {
-  int8_t vec1[] = {127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127,
-                   127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127,
-                   127, 127, 127, 127, 127, 127, 127, 127, 127, 127};
-  int8_t vec2[] = {-128, -128, -128, -128, -128, -128, -128, -128,
-                   -128, -128, -128, -128, -128, -128, -128, -128,
-                   -128, -128, -128, -128, -128, -128, -128, -128,
-                   -128, -128, -128, -128, -128, -128, -128, -128};
+float epsilon = 0.01;
+const int   A_SIZE = 100;
+void  compareDistanceComputationsInt() {
+  //int8_t vec1[] = {127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127,
+  //                 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127,
+  //                 127, 127, 127, 127, 127, 127, 127, 127, 127, 127};
+  //int8_t vec2[] = {-128, -128, -128, -128, -128, -128, -128, -128,
+  //                 -128, -128, -128, -128, -128, -128, -128, -128,
+  //                 -128, -128, -128, -128, -128, -128, -128, -128,
+  //                 -128, -128, -128, -128, -128, -128, -128, -128};
 
-  diskann::DistanceL2Int8 dist;
+  int8_t vec1[A_SIZE], vec2[A_SIZE];
+  srand(time(0));
+  bool neg = false;
+  for (int i = 0; i < A_SIZE; i++) {
+    auto a = rand() % 128;
+    auto b = rand() % 128;
+    vec1[i] = -a; // < 0 ? -a : a;
+    vec2[i] = -b; // < 0 ? -b : b;
+
+    neg = neg || vec1[i] < 0 || vec2[i] < 0;
+  }
+  if (!neg) {
+    std::cout << "No negative numbers in test. " << std::endl;
+  }
+
+
+  //diskann::DistanceL2Int8 dist;
+  diskann::AVXDistanceL2Int8 dist;
   float                   dist1 = dist.compare(vec1, vec2, 8);
   float                   dist2 = distanceL2_I(vec1, vec2, 8);
 
-  if (dist1 - dist2 > 0.01) {
-    std::cout << "Test failed. AVX dist: " << dist1 << " normal dist: " << dist2
-              << std::endl;
+  if (abs(dist1 - dist2) > epsilon ) {
+    std::cout << "compareDistanceComputationsInt(): Test failed. AVX dist: "
+              << dist1 << " normal dist: " << dist2 << " difference > "
+              << epsilon << std::endl;
   } else {
-    std::cout << "Two score are the same. " << std::endl;
+    std::cout << "Two scores are the same. " << std::endl;
   }
 }
+
+void compareDistanceComputationsFloat() {
+  srand(time(0));
+  float a[A_SIZE], b[A_SIZE];
+  for (int i = 0; i < A_SIZE; i++) {
+    a[i] = rand() / 10E5;
+    b[i] = rand() / 10E5;
+  }
+
+  diskann::AVXDistanceL2Float dist;
+  float                       dist1 = dist.compare(a, b, 100);
+  float                       dist2 = distanceL2_F(a, b, 100);
+  if (abs(dist1 - dist2) > epsilon) {
+    std::cout << "compareDistanceComputationsFloat(): Test failed. AVX dist: "
+              << dist1 << " normal dist: " << dist2 << " difference > "
+              << epsilon << std::endl;
+  } else {
+    std::cout << "Two scores are the same." << std::endl;
+  }
+}
+  
+
+
 
 int main(int argc, char** argv) {
   if (argc < 2) {
@@ -149,7 +202,8 @@ int main(int argc, char** argv) {
       uniquePtrAssignment();
       break;
     case 3:
-      compareDistanceComputations();
+      compareDistanceComputationsInt();
+      compareDistanceComputationsFloat();
       break;
     default:
       std::cout << "Don't know what to do with mode parameter: " << argv[1]

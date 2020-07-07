@@ -43,13 +43,14 @@ namespace {
   template<>
   diskann::Distance<float> *get_distance_function(diskann::Metric m) {
     if (m == diskann::Metric::L2) {
-      if (avx2Supported()) {
+      if (Avx2SupportedCPU) {
+        std::cout << "Using AVX2 distance computation" << std::endl;
         return new diskann::DistanceL2();
+      } else if (AvxSupportedCPU) {
+        std::cout << "AVX2 not supported. Using AVX distance computation" << std::endl;
+        return new diskann::AVXDistanceL2Float();
       } else {
-        std::cout << "AVX2 is not supported."
-                     "Switching to inefficient L2 computation"
-                  << std::endl;
-
+        std::cout << "Older CPU. Using slow distance computation" << std::endl;
         return new diskann::SlowDistanceL2Float();
       }
     }
@@ -68,13 +69,15 @@ namespace {
   template<>
   diskann::Distance<int8_t> *get_distance_function(diskann::Metric m) {
     if (m == diskann::Metric::L2) {
-      if (avx2Supported()) {
+      if (Avx2SupportedCPU) {
+        std::cout << "Using AVX2 distance computation" << std::endl;
         return new diskann::DistanceL2Int8();
-      } else {
-        std::cout << "AVX2 is not supported."
-                     "Switching to inefficient L2 computation"
+      } else if (AvxSupportedCPU) {
+        std::cout << "AVX2 not supported. Using AVX distance computation"
                   << std::endl;
-
+        return new diskann::AVXDistanceL2Int8();
+      } else {
+        std::cout << "Older CPU. Using slow distance computation" << std::endl;
         return new diskann::SlowDistanceL2Int<int8_t>();
       }
     }
@@ -93,16 +96,12 @@ namespace {
   template<>
   diskann::Distance<uint8_t> *get_distance_function(diskann::Metric m) {
     if (m == diskann::Metric::L2) {
-      if (avx2Supported()) {
+      std::cout << "AVX/AVX2 distance function not defined for Uint8. Using "
+                   "slow version. "
+                   "Contact gopalsr@microsoft.com if you need AVX/AVX2 support."
+                << std::endl;
         return new diskann::DistanceL2UInt8();
-      } else {
-        std::cout << "AVX2 is not supported."
-                     "Switching to inefficient L2 computation"
-                  << std::endl;
-        return new diskann::SlowDistanceL2Int<uint8_t>();
-      }
-    }
-    else {
+    } else {
       std::stringstream stream;
       stream << "Only L2 metric supported as of now. Email "
                 "gopalsr@microsoft.com if you need cosine similarity or inner "
@@ -918,8 +917,11 @@ namespace diskann {
           progress_counter += 5;
         }
       }
-
+      // Gopal. Splittng nsg_dll into separate DLLs for search and build.
+      // This code should only be available in the "build" DLL.
+#ifdef DISKANN_BUILD
       MallocExtension::instance()->ReleaseFreeMemory();
+#endif
       diskann::cout << "Completed Pass " << rnd_no << " of data using L=" << L
                 << " and alpha=" << parameters.Get<float>("alpha")
                 << ". Stats: ";

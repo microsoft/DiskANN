@@ -14,6 +14,53 @@
 #include <iostream>
 
 namespace {
+  static inline __m128 _mm_mulhi_epi8(__m128i X) {
+    __m128i zero = _mm_setzero_si128();
+    __m128i sign_x = _mm_cmplt_epi8(X, zero);
+    __m128i xhi = _mm_unpackhi_epi8(X, sign_x);
+
+    return _mm_cvtepi32_ps(
+        _mm_add_epi32(_mm_setzero_si128(), _mm_madd_epi16(xhi, xhi)));
+  }
+
+  static inline __m128 _mm_mulhi_epi8_shift32(__m128i X) {
+    __m128i zero = _mm_setzero_si128();
+    X = _mm_srli_epi64(X, 32);
+    __m128i sign_x = _mm_cmplt_epi8(X, zero);
+    __m128i xhi = _mm_unpackhi_epi8(X, sign_x);
+
+    return _mm_cvtepi32_ps(
+        _mm_add_epi32(_mm_setzero_si128(), _mm_madd_epi16(xhi, xhi)));
+  }
+  static inline __m128 _mm_mul_epi8(__m128i X, __m128i Y) {
+    __m128i zero = _mm_setzero_si128();
+
+    __m128i sign_x = _mm_cmplt_epi8(X, zero);
+    __m128i sign_y = _mm_cmplt_epi8(Y, zero);
+
+    __m128i xlo = _mm_unpacklo_epi8(X, sign_x);
+    __m128i xhi = _mm_unpackhi_epi8(X, sign_x);
+    __m128i ylo = _mm_unpacklo_epi8(Y, sign_y);
+    __m128i yhi = _mm_unpackhi_epi8(Y, sign_y);
+
+    return _mm_cvtepi32_ps(
+        _mm_add_epi32(_mm_madd_epi16(xlo, ylo), _mm_madd_epi16(xhi, yhi)));
+  }
+  static inline __m128 _mm_mul_epi8(__m128i X) {
+    __m128i zero = _mm_setzero_si128();
+    __m128i sign_x = _mm_cmplt_epi8(X, zero);
+    __m128i xlo = _mm_unpacklo_epi8(X, sign_x);
+    __m128i xhi = _mm_unpackhi_epi8(X, sign_x);
+
+    return _mm_cvtepi32_ps(
+        _mm_add_epi32(_mm_madd_epi16(xlo, xlo), _mm_madd_epi16(xhi, xhi)));
+  }
+
+  static inline __m128 _mm_mul32_pi8(__m128i X, __m128i Y) {
+    __m128i xlo = _mm_cvtepi8_epi16(X), ylo = _mm_cvtepi8_epi16(Y);
+    return _mm_cvtepi32_ps(
+        _mm_unpacklo_epi32(_mm_madd_epi16(xlo, ylo), _mm_setzero_si128()));
+  }
 
   static inline __m256 _mm256_mul_epi8(__m256i X, __m256i Y) {
     __m256i zero = _mm256_setzero_si256();
@@ -179,10 +226,9 @@ namespace diskann {
     }
   };
 
-
-  //Gopal. Slow implementations of the distance functions to get diskann to work in
-  //v14 machines that do not have AVX2 support. Performance here is not a concern, so
-  //we are using the simplest possible implementation.
+  // Gopal. Slow implementations of the distance functions to get diskann to
+  // work in v14 machines that do not have AVX2 support. Performance here is not
+  // a concern, so we are using the simplest possible implementation.
   template<typename T>
   class SlowDistanceL2Int : public Distance<T> {
     virtual float compare(const T *a, const T *b, unsigned length) const {
@@ -196,7 +242,8 @@ namespace diskann {
   };
 
   class SlowDistanceL2Float : public Distance<float> {
-    virtual float compare(const float *a, const float *b, unsigned length) const {
+    virtual float compare(const float *a, const float *b,
+                          unsigned length) const {
       float result = 0.0f;
       for (_u32 i = 0; i < length; i++) {
         result += (a[i] - b[i]) * (a[i] - b[i]);
@@ -205,8 +252,68 @@ namespace diskann {
     }
   };
 
+  class AVXDistanceL2Int8 : public Distance<int8_t> {
+   public:
+    virtual float compare(const int8_t *a, const int8_t *b,
+                          unsigned int length) const {
+      __m128  r = _mm_setzero_ps();
+      __m128i r1;
+      while (length >= 16) {
+        r1 = _mm_subs_epi8(_mm_load_si128((__m128i *) a),
+                           _mm_load_si128((__m128i *) b));
+        r = _mm_add_ps(r, _mm_mul_epi8(r1));
+        a += 16;
+        b += 16;
+        length -= 16;
+      }
+      r = _mm_hadd_ps(_mm_hadd_ps(r, r), r);
+      float res = r.m128_f32[0];
 
+      if (length >= 8) {
+        __m128  r2 = _mm_setzero_ps();
+        __m128i r3 = _mm_subs_epi8(_mm_load_si128((__m128i *) (a - 8)),
+                                   _mm_load_si128((__m128i *) (b - 8)));
+        r2 = _mm_add_ps(r2, _mm_mulhi_epi8(r3));
+        a += 8;
+        b += 8;
+        length -= 8;
+        r2 = _mm_hadd_ps(_mm_hadd_ps(r2, r2), r2);
+        res += r2.m128_f32[0];
+      }
 
-  
+      if (length >= 4) {
+        __m128  r2 = _mm_setzero_ps();
+        __m128i r3 = _mm_subs_epi8(_mm_load_si128((__m128i *) (a - 12)),
+                                   _mm_load_si128((__m128i *) (b - 12)));
+        r2 = _mm_add_ps(r2, _mm_mulhi_epi8_shift32(r3));
+        res += r2.m128_f32[0] + r2.m128_f32[1];
+      }
+
+      return res;
+    }
+      
+  };
+
+  class AVXDistanceL2Float : public Distance<float> {
+   public:
+    virtual float compare(const float *a, const float *b,
+                          unsigned int length) const {
+      __m128 diff, v1, v2;
+      __m128 sum = _mm_set1_ps(0);
+
+      while (length >= 4) {
+        v1 = _mm_loadu_ps(a);
+        a += 4;
+        v2 = _mm_loadu_ps(b);
+        b += 4;
+        diff = _mm_sub_ps(v1, v2);
+        sum = _mm_add_ps(sum, _mm_mul_ps(diff, diff));
+        length -= 4;
+      }
+
+      return sum.m128_f32[0] + sum.m128_f32[1] + sum.m128_f32[2] +
+             sum.m128_f32[3];
+    }
+  };
 
 }  // namespace diskann

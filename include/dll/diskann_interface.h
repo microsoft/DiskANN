@@ -56,9 +56,11 @@ namespace diskann {
 
    private:
     // Methods
+#ifdef EXEC_ENV_OLS
     void addBlobsToMemoryMappedFiles(
         const std::vector<ANNIndex::FileBlob>& files);
     bool writeSharedStoreIniFile(const char* indexPathPrefix);
+#endif
     T* loadTuningSample(const std::string& sample_data_file, 
                             uint32_t& tuning_sample_num);
     void warmupIndex(T* sample, uint32_t tuning_sample_num, uint32_t nthreads);
