@@ -21,7 +21,7 @@ typedef struct {
   std::vector<OVERLAPPED> reqs;
 } IOContext;
 #else
-#include "bing/IDiskPriorityIO.h"
+#include "IDiskPriorityIO.h"
 #include <atomic>
 // TODO: Caller code is very callous about copying IOContext objects
 // all over the place. MUST verify that it won't cause leaks/logical

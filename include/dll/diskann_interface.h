@@ -1,11 +1,19 @@
 #pragma once
-#include "bing/IANNIndex.h"
+
+#include "IANNIndex.h"
 #include "pq_flash_index.h"
 #include "windows_customizations.h"
+#include "memory_mapped_files.h"
 
 namespace diskann {
-  const char* INDEX_PATH_PREFIX_PLACEHOLDER = "{0}";
-  const size_t PATH_PREFIX_PLACEHOLDER_LEN = strlen(INDEX_PATH_PREFIX_PLACEHOLDER);
+  const char*  INDEX_PATH_PREFIX_PLACEHOLDER = "{0}";
+  const size_t PATH_PREFIX_PLACEHOLDER_LEN =
+      strlen(INDEX_PATH_PREFIX_PLACEHOLDER);
+
+  // Query time parameter need to be parsed when loading index.
+  const char* ParameterCandidateListSize = "CandidateListSize";
+  const char* ParameterSearchThreadCount = "SearchThreadCount";
+  const char* ParameterBeamWidth = "BeamWidth";
 
   template<typename T, typename TagT>
   class Index;
@@ -44,19 +52,26 @@ namespace diskann {
                                                unsigned __int64* ids) const;
 
    public:
-    // Vector dimension.
-    unsigned __int32       m_dimension;
-    unsigned __int32       m_aligned_dimension;
-    ANNIndex::DistanceType m_distanceType;
+    unsigned __int32 m_aligned_dimension;
 
    private:
     // Methods
+    void addBlobsToMemoryMappedFiles(
+        const std::vector<ANNIndex::FileBlob>& files);
     bool writeSharedStoreIniFile(const char* indexPathPrefix);
+    T* loadTuningSample(const std::string& sample_data_file,
+                        uint32_t&          tuning_sample_num);
+    void warmupIndex(T* sample, uint32_t tuning_sample_num, uint32_t nthreads);
+    void optimizeBeamwidth(T* sample, uint32_t tuning_sample_num,
+                           uint32_t beamwidth, uint32_t nthreads);
 
    private:
     std::string                                _nsgPathPrefix;
     std::shared_ptr<AlignedFileReader>         _pReader;
     std::shared_ptr<ANNIndex::IDiskPriorityIO> _pDiskIO;
+#ifdef EXEC_ENV_OLS
+    MemoryMappedFiles _mmFiles;
+#endif
     std::unique_ptr<diskann::Index<T, int>> _pNsgIndex;
     diskann::Metric _compareMetric;
 

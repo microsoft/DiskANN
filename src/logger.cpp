@@ -1,18 +1,18 @@
-#include <varargs.h>
+//#include <varargs.h>
+#include <cstring>
 #include <iostream>
-#include "logger_impl.h"
 
 #ifdef EXEC_ENV_OLS
 #include "ANNLoggingImpl.hpp"
 #endif
 
-
-
+#include "logger_impl.h"
+#include "windows_customizations.h"
 
 namespace diskann {
 
   DISKANN_DLLEXPORT ANNStreamBuf coutBuff(stdout);
-  DISKANN_DLLEXPORT ANNStreamBuf  cerrBuff(stderr);
+  DISKANN_DLLEXPORT ANNStreamBuf cerrBuff(stderr);
 
   DISKANN_DLLEXPORT std::basic_ostream<char> cout(&coutBuff);
   DISKANN_DLLEXPORT std::basic_ostream<char> cerr(&cerrBuff);
@@ -28,14 +28,14 @@ namespace diskann {
     }
     _fp = fp;
     _logLevel = (_fp == stdout) ? ANNIndex::LogLevel::LL_Info
-                              : ANNIndex::LogLevel::LL_Error;
+                                : ANNIndex::LogLevel::LL_Error;
 #ifdef EXEC_ENV_OLS
-    _buf = new char[BUFFER_SIZE + 1]; //See comment in the header
-#else 
-    _buf = new char[BUFFER_SIZE]; //See comment in the header
+    _buf = new char[BUFFER_SIZE + 1];  // See comment in the header
+#else
+    _buf = new char[BUFFER_SIZE];  // See comment in the header
 #endif
 
-    memset(_buf, 0, (BUFFER_SIZE) * sizeof(char));
+    std::memset(_buf, 0, (BUFFER_SIZE) * sizeof(char));
     setp(_buf, _buf + BUFFER_SIZE);
   }
 
@@ -48,12 +48,11 @@ namespace diskann {
   int ANNStreamBuf::overflow(int c) {
     std::lock_guard<std::mutex> lock(_mutex);
     if (c != EOF) {
-      *pptr() = c;
+      *pptr() = (char) c;
       pbump(1);
     }
     flush();
     return c;
-    
   }
 
   int ANNStreamBuf::sync() {
@@ -68,17 +67,17 @@ namespace diskann {
   }
 
   int ANNStreamBuf::flush() {
-    const int num = (int)(pptr() - pbase());
+    const int num = (int) (pptr() - pbase());
     logImpl(pbase(), num);
     pbump(-num);
     return num;
   }
   void ANNStreamBuf::logImpl(char* str, int num) {
 #ifdef EXEC_ENV_OLS
-    str[num] = '\0'; //Safe. See the c'tor. 
+    str[num] = '\0';  // Safe. See the c'tor.
     RandNSGLogging(_logLevel, str);
-#else 
-    fwrite(str, sizeof(char), num, _fp); 
+#else
+    fwrite(str, sizeof(char), num, _fp);
     auto ret = fflush(_fp);
 #endif
   }

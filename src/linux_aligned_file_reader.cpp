@@ -87,7 +87,7 @@ namespace {
     }
     std::cout << std::endl;*/
   }
-}  // namespace
+}
 
 LinuxAlignedFileReader::LinuxAlignedFileReader() {
   this->file_desc = -1;
@@ -187,10 +187,5 @@ void LinuxAlignedFileReader::read(std::vector<AlignedRead> &read_reqs,
   //	std::cout << "thread: " << std::this_thread::get_id() << ", crtx: " <<
   // ctx
   //<< "\n";
-  if (!async) {
-    execute_io(ctx, this->file_desc, read_reqs);
-  } else {
-    std::cout << "Async reads not supported in Linux." << std::endl;
-    std::exit(-1);
-  }
+  execute_io(ctx, this->file_desc, read_reqs);
 }

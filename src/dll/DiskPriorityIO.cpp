@@ -105,8 +105,7 @@ namespace diskann {
     m_stopPolling = true;
     for (auto& thrd : m_ioPollingThreads) {
       if (thrd.joinable()) {
-        std::cout << "Trying to join thread " << (thrd.get_id())
-                      << std::endl;
+        std::cout << "Trying to join thread " << (thrd.get_id()) << std::endl;
         thrd.join();
         std::cout << "Thread " << thrd.get_id() << " joined." << std::endl;
       }

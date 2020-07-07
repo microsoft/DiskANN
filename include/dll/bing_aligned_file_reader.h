@@ -1,7 +1,7 @@
 #pragma once
 #ifdef _WINDOWS
 #ifdef USE_BING_INFRA
-#include "bing/IDiskPriorityIO.h"
+#include "IDiskPriorityIO.h"
 #include "aligned_file_reader.h"
 
 namespace diskann {
@@ -9,6 +9,7 @@ namespace diskann {
    private:
     std::string                                m_filename;
     std::shared_ptr<ANNIndex::IDiskPriorityIO> m_pDiskPriorityIO;
+    bool                                       m_ownsDiskPriorityIO;
 
    public:
     DISKANN_DLLEXPORT BingAlignedFileReader(
