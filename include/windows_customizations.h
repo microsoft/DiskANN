@@ -5,5 +5,5 @@
 #define DISKANN_DLLIMPORT __declspec(dllimport)
 #else
 #define DISKANN_DLLEXPORT
+#define DISKANN_DLLIMPORT
 #endif
-

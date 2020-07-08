@@ -33,7 +33,7 @@ class cached_ifstream {
     cache_buf = new char[cacheSize];
     reader.read(cache_buf, cacheSize);
     diskann::cout << "Opened: " << filename.c_str() << ", size: " << fsize
-              << ", cache_size: " << cacheSize << std::endl;
+                  << ", cache_size: " << cacheSize << std::endl;
   }
 
   size_t get_file_size() {
@@ -101,7 +101,7 @@ class cached_ofstream {
     assert(cache_size > 0);
     cache_buf = new char[cache_size];
     diskann::cout << "Opened: " << filename.c_str()
-              << ", cache_size: " << cache_size << std::endl;
+                  << ", cache_size: " << cache_size << std::endl;
   }
 
   ~cached_ofstream() {

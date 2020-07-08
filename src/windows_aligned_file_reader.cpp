@@ -22,7 +22,7 @@ void WindowsAlignedFileReader::register_thread() {
   std::unique_lock<std::mutex> lk(this->ctx_mut);
   if (this->ctx_map.find(std::this_thread::get_id()) != ctx_map.end()) {
     diskann::cout << "Warning:: Duplicate registration for thread_id : "
-              << std::this_thread::get_id() << std::endl;
+                  << std::this_thread::get_id() << std::endl;
   }
 
   IOContext ctx;
@@ -33,7 +33,7 @@ void WindowsAlignedFileReader::register_thread() {
                            NULL);
   if (ctx.fhandle == INVALID_HANDLE_VALUE) {
     diskann::cout << "Error opening " << m_filename.c_str()
-              << " -- error=" << GetLastError() << std::endl;
+                  << " -- error=" << GetLastError() << std::endl;
   }
 
   // create IOCompletionPort
@@ -131,7 +131,7 @@ void WindowsAlignedFileReader::read(std::vector<AlignedRead>& read_reqs,
           DWORD error = GetLastError();
           if (error != WAIT_TIMEOUT) {
             diskann::cerr << "GetQueuedCompletionStatus() failed with error = "
-                      << error << std::endl;
+                          << error << std::endl;
             throw diskann::ANNException(
                 "GetQueuedCompletionStatus failed with error: ", error,
                 __FUNCSIG__, __FILE__, __LINE__);

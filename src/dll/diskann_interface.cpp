@@ -24,8 +24,8 @@
 namespace diskann {
   // File local utility functions
 
-  bool        parseParameters(const std::string&        queryParameters,
-                              std::vector<std::string>& param_list);
+  bool parseParameters(const std::string&        queryParameters,
+                       std::vector<std::string>& param_list);
   std::string readContentsOfFile(const char* fileName);
   // File local utility functions end.
 
@@ -450,7 +450,6 @@ namespace diskann {
 #ifdef EXEC_ENV_OLS
     }
 #endif
-
 
     diskann::cout << "Search parameter : ";
     for (const auto& parameter : param_list) {

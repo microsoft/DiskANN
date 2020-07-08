@@ -58,20 +58,22 @@ namespace diskann {
     // Gopal. Adapting to the new Bing interface. Since the DiskPriorityIO is
     // now a singleton, we have to take it in the DiskANNInterface and
     // pass it around. Since I don't want to pollute this interface with Bing
-    // classes, this class takes an AlignedFileReader object that can be 
-    //created the way we need. Linux will create a simple AlignedFileReader 
-    //and pass it. Regular Windows code should create a BingFileReader using
-    //the DiskPriorityIOInterface class, and for running on XTS, create a BingFileReader
-    //using the object passed by the XTS environment.
-    //Freeing the reader object is now the client's (DiskANNInterface's) responsibility. 
-    DISKANN_DLLEXPORT PQFlashIndex(std::shared_ptr<AlignedFileReader> &fileReader);
+    // classes, this class takes an AlignedFileReader object that can be
+    // created the way we need. Linux will create a simple AlignedFileReader
+    // and pass it. Regular Windows code should create a BingFileReader using
+    // the DiskPriorityIOInterface class, and for running on XTS, create a
+    // BingFileReader
+    // using the object passed by the XTS environment.
+    // Freeing the reader object is now the client's (DiskANNInterface's)
+    // responsibility.
+    DISKANN_DLLEXPORT PQFlashIndex(
+        std::shared_ptr<AlignedFileReader> &fileReader);
     DISKANN_DLLEXPORT ~PQFlashIndex();
 
-
 #ifdef EXEC_ENV_OLS
-    DISKANN_DLLEXPORT int load(diskann::MemoryMappedFiles& files, 
-                                       uint32_t num_threads, const char* pq_prefix,
-                                        const char* disk_index_file);
+    DISKANN_DLLEXPORT int load(diskann::MemoryMappedFiles &files,
+                               uint32_t num_threads, const char *pq_prefix,
+                               const char *disk_index_file);
 #else
     // load compressed data, and obtains the handle to the disk-resident index
     DISKANN_DLLEXPORT int load(uint32_t num_threads, const char *pq_prefix,
@@ -80,16 +82,16 @@ namespace diskann {
 
     DISKANN_DLLEXPORT void load_cache_list(std::vector<uint32_t> &node_list);
 
-
 #ifdef EXEC_ENV_OLS
     DISKANN_DLLEXPORT void generate_cache_list_from_sample_queries(
-        MemoryMappedFiles& files, std::string sample_bin, _u64 l_search,
+        MemoryMappedFiles &files, std::string sample_bin, _u64 l_search,
         _u64 beamwidth, _u64 num_nodes_to_cache, uint32_t nthreads,
-        std::vector<uint32_t>& node_list);
+        std::vector<uint32_t> &node_list);
 #else
     DISKANN_DLLEXPORT void generate_cache_list_from_sample_queries(
         std::string sample_bin, _u64 l_search, _u64 beamwidth,
-        _u64 num_nodes_to_cache, uint32_t num_threads, std::vector<uint32_t> &node_list);
+        _u64 num_nodes_to_cache, uint32_t num_threads,
+        std::vector<uint32_t> &node_list);
 #endif
 
     DISKANN_DLLEXPORT void cache_bfs_levels(_u64 num_nodes_to_cache,
@@ -109,7 +111,7 @@ namespace diskann {
         const T *query, const _u64 k_search, const _u64 l_search, _u64 *res_ids,
         float *res_dists, const _u64 beam_width, QueryStats *stats = nullptr,
         Distance<T> *output_dist_func = nullptr);
-    std::shared_ptr<AlignedFileReader>& reader;
+    std::shared_ptr<AlignedFileReader> &reader;
 
    protected:
     DISKANN_DLLEXPORT void use_medoids_data_as_centroids();
@@ -171,12 +173,11 @@ namespace diskann {
     bool                           count_visited_nodes = false;
 
 #ifdef EXEC_ENV_OLS
-    //Set to a larger value than the actual header to accommodate
-    //any additions we make to the header. This is an outer limit
-    //on how big the header can be. 
-    static const int HEADER_SIZE = 256; 
-    char* getHeaderBytes();
+    // Set to a larger value than the actual header to accommodate
+    // any additions we make to the header. This is an outer limit
+    // on how big the header can be.
+    static const int HEADER_SIZE = 256;
+    char *           getHeaderBytes();
 #endif
-    
   };
 }  // namespace diskann

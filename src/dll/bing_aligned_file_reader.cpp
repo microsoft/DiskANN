@@ -25,7 +25,7 @@ namespace diskann {
     m_ownsDiskPriorityIO = diskPriorityIOPtr == nullptr;
   }
 
-  BingAlignedFileReader::~BingAlignedFileReader(){
+  BingAlignedFileReader::~BingAlignedFileReader() {
     std::unique_lock<std::mutex> lk(this->ctx_mut);
     this->ctx_map.clear();
   };
@@ -70,10 +70,9 @@ namespace diskann {
     this->ctx_map.insert(std::make_pair(std::this_thread::get_id(), context));
   }
 
-  void BingAlignedFileReader::deregister_thread() 
-  {
+  void BingAlignedFileReader::deregister_thread() {
     std::unique_lock<std::mutex> lk(this->ctx_mut);
-    std::thread::id tId = std::this_thread::get_id();
+    std::thread::id              tId = std::this_thread::get_id();
     if (this->ctx_map.find(tId) != this->ctx_map.end()) {
       if (m_ownsDiskPriorityIO) {
         this->ctx_map.at(tId).m_pDiskIO->ShutDown();

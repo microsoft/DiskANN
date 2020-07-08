@@ -85,7 +85,6 @@ namespace diskann {
   PQFlashIndex<_u8>::PQFlashIndex(
       std::shared_ptr<AlignedFileReader> &fileReader)
       : reader(fileReader) {
-
     diskann::cout << "dist_cmp function for _u8 uses slow implementation."
         " Please contact gopalsr@microsoft.com if you need an AVX/AVX2"
         " implementation." << std::endl;
@@ -183,14 +182,14 @@ namespace diskann {
   template<typename T>
   void PQFlashIndex<T>::setup_thread_data(_u64 nthreads) {
     diskann::cout << "Setting up thread-specific contexts for nthreads: "
-              << nthreads << std::endl;
+                  << nthreads << std::endl;
 // omp parallel for to generate unique thread IDs
-#pragma omp parallel for num_threads((int)nthreads)
+#pragma omp parallel for num_threads((int) nthreads)
     for (_s64 thread = 0; thread < (_s64) nthreads; thread++) {
 #pragma omp critical
       {
         this->reader->register_thread();
-        IOContext& ctx = this->reader->get_ctx();
+        IOContext &ctx = this->reader->get_ctx();
         // diskann::cout << "ctx: " << ctx << "\n";
         QueryScratch<T> scratch;
         _u64 coord_alloc_size = ROUND_UP(MAX_N_CMPS * this->aligned_dim, 256);
@@ -263,7 +262,7 @@ namespace diskann {
       this_thread_data = this->thread_data.pop();
     }
 
-    IOContext& ctx = this_thread_data.ctx;
+    IOContext &ctx = this_thread_data.ctx;
 
     nhood_cache_buf = new unsigned[num_cached_nodes * (max_degree + 1)];
     memset(nhood_cache_buf, 0, num_cached_nodes * (max_degree + 1));
@@ -324,14 +323,15 @@ namespace diskann {
 #ifdef EXEC_ENV_OLS
   template<typename T>
   void PQFlashIndex<T>::generate_cache_list_from_sample_queries(
-      MemoryMappedFiles& files, std::string sample_bin, _u64 l_search, 
+      MemoryMappedFiles &files, std::string sample_bin, _u64 l_search,
       _u64 beamwidth, _u64 num_nodes_to_cache, uint32_t nthreads,
-      std::vector<uint32_t>& node_list) {
+      std::vector<uint32_t> &node_list) {
 #else
   template<typename T>
   void PQFlashIndex<T>::generate_cache_list_from_sample_queries(
       std::string sample_bin, _u64 l_search, _u64 beamwidth,
-      _u64 num_nodes_to_cache, uint32_t nthreads, std::vector<uint32_t> &node_list) {
+      _u64 num_nodes_to_cache, uint32_t nthreads,
+      std::vector<uint32_t> &node_list) {
 #endif
     this->count_visited_nodes = true;
     this->node_visit_counter.clear();
@@ -346,25 +346,25 @@ namespace diskann {
 
 #ifdef EXEC_ENV_OLS
     if (files.fileExists(sample_bin)) {
-        diskann::load_aligned_bin<T>(files, sample_bin, samples,
-            sample_num, sample_dim, sample_aligned_dim);
+      diskann::load_aligned_bin<T>(files, sample_bin, samples, sample_num,
+                                   sample_dim, sample_aligned_dim);
     }
 #else
     if (file_exists(sample_bin)) {
       diskann::load_aligned_bin<T>(sample_bin, samples, sample_num, sample_dim,
                                    sample_aligned_dim);
     }
-#endif 
+#endif
     else {
       diskann::cerr << "Sample bin file not found. Not generating cache."
-                << std::endl;
+                    << std::endl;
       return;
     }
 
     std::vector<uint64_t> tmp_result_ids_64(sample_num, 0);
     std::vector<float>    tmp_result_dists(sample_num, 0);
 
-#pragma omp parallel for schedule(dynamic, 1) num_threads (nthreads)
+#pragma omp parallel for schedule(dynamic, 1) num_threads(nthreads)
     for (_s64 i = 0; i < (int64_t) sample_num; i++) {
       cached_beam_search(samples + (i * sample_aligned_dim), 1, l_search,
                          tmp_result_ids_64.data() + (i * 1),
@@ -395,7 +395,6 @@ namespace diskann {
 
     node_list.clear();
 
-
     // borrow thread data
     ThreadData<T> this_thread_data = this->thread_data.pop();
     while (this_thread_data.scratch.sector_scratch == nullptr) {
@@ -403,7 +402,7 @@ namespace diskann {
       this_thread_data = this->thread_data.pop();
     }
 
-    IOContext& ctx = this_thread_data.ctx;
+    IOContext &ctx = this_thread_data.ctx;
 
     std::unique_ptr<tsl::robin_set<unsigned>> cur_level, prev_level;
     cur_level = std::make_unique<tsl::robin_set<unsigned>>();
@@ -482,7 +481,7 @@ namespace diskann {
       }
 
       diskann::cout << ". #nodes: " << node_list.size() - prev_node_list_size
-                << ", #nodes thus far: " << node_list.size() << std::endl;
+                    << ", #nodes thus far: " << node_list.size() << std::endl;
       prev_node_list_size = node_list.size();
       lvl++;
     }
@@ -491,7 +490,7 @@ namespace diskann {
     for (const unsigned &p : *cur_level)
       cur_level_node_list.push_back(p);
 
-    //Gopal. random_shuffle() is deprecated
+    // Gopal. random_shuffle() is deprecated
     std::shuffle(cur_level_node_list.begin(), cur_level_node_list.end(), urng);
     size_t residual = num_nodes_to_cache - node_list.size();
 
@@ -501,7 +500,7 @@ namespace diskann {
 
     diskann::cout << "Level: " << lvl << std::flush;
     diskann::cout << ". #nodes: " << node_list.size() - prev_node_list_size
-              << ", #nodes thus far: " << node_list.size() << std::endl;
+                  << ", #nodes thus far: " << node_list.size() << std::endl;
 
     // return thread data
     this->thread_data.push(this_thread_data);
@@ -521,9 +520,9 @@ namespace diskann {
       this->thread_data.wait_for_push_notify();
       data = this->thread_data.pop();
     }
-    IOContext& ctx = data.ctx;
+    IOContext &ctx = data.ctx;
     diskann::cout << "Loading centroid data from medoids vector data of "
-              << num_medoids << " medoid(s)" << std::endl;
+                  << num_medoids << " medoid(s)" << std::endl;
     for (uint64_t cur_m = 0; cur_m < num_medoids; cur_m++) {
       auto medoid = medoids[cur_m];
       // read medoid nhood
@@ -556,8 +555,9 @@ namespace diskann {
 
 #ifdef EXEC_ENV_OLS
   template<typename T>
-  int PQFlashIndex<T>::load(MemoryMappedFiles& files, uint32_t num_threads, const char* pq_prefix,
-      const char* disk_index_file) {
+  int PQFlashIndex<T>::load(MemoryMappedFiles &files, uint32_t num_threads,
+                            const char *pq_prefix,
+                            const char *disk_index_file) {
 #else
   template<typename T>
   int PQFlashIndex<T>::load(uint32_t num_threads, const char *pq_prefix,
@@ -581,7 +581,7 @@ namespace diskann {
 
     if (pq_file_num_centroids != 256) {
       diskann::cout << "Error. Number of PQ centroids is not 256. Exitting."
-                << std::endl;
+                    << std::endl;
       return -1;
     }
 
@@ -590,9 +590,11 @@ namespace diskann {
 
     size_t npts_u64, nchunks_u64;
 #ifdef EXEC_ENV_OLS
-    diskann::load_bin<_u8>(files, pq_compressed_vectors, this->data, npts_u64, nchunks_u64);
+    diskann::load_bin<_u8>(files, pq_compressed_vectors, this->data, npts_u64,
+                           nchunks_u64);
 #else
-    diskann::load_bin<_u8>(pq_compressed_vectors, this->data, npts_u64, nchunks_u64);
+    diskann::load_bin<_u8>(pq_compressed_vectors, this->data, npts_u64,
+                           nchunks_u64);
 #endif
 
     this->num_points = npts_u64;
@@ -601,7 +603,7 @@ namespace diskann {
 #ifdef EXEC_ENV_OLS
     pq_table.load_pq_centroid_bin(files, pq_table_bin.c_str(), nchunks_u64);
 #else
-   pq_table.load_pq_centroid_bin(pq_table_bin.c_str(), nchunks_u64);
+    pq_table.load_pq_centroid_bin(pq_table_bin.c_str(), nchunks_u64);
 #endif
 
     diskann::cout
@@ -610,18 +612,21 @@ namespace diskann {
         << " #aligned_dim: " << aligned_dim << " #chunks: " << n_chunks
         << std::endl;
 
-    // read nsg metadata
+// read nsg metadata
 #ifdef EXEC_ENV_OLS
-    //This is a bit tricky. We have to read the header from the disk_index_file. But  this is 
-    //now exclusively a preserve of the DiskPriorityIO class. So, we need to estimate how many
-    //bytes are needed to store the header and read in that many using our 'standard' aligned 
-    //file reader approach. 
+    // This is a bit tricky. We have to read the header from the
+    // disk_index_file. But  this is
+    // now exclusively a preserve of the DiskPriorityIO class. So, we need to
+    // estimate how many
+    // bytes are needed to store the header and read in that many using our
+    // 'standard' aligned
+    // file reader approach.
     reader->open(disk_index_file);
     this->setup_thread_data(num_threads);
     this->max_nthreads = num_threads;
 
-    char* bytes = getHeaderBytes();
-    ContentBuf buf(bytes, HEADER_SIZE);
+    char *                   bytes = getHeaderBytes();
+    ContentBuf               buf(bytes, HEADER_SIZE);
     std::basic_istream<char> nsg_meta(&buf);
 #else
     std::ifstream nsg_meta(disk_index_file, std::ios::binary);
@@ -632,8 +637,9 @@ namespace diskann {
     READ_U64(nsg_meta, expected_file_size);
     if (actual_index_size != expected_file_size) {
       diskann::cout << "File size mismatch for " << disk_index_file
-                << " (size: " << actual_index_size << ")"
-                << " with meta-data size: " << expected_file_size << std::endl;
+                    << " (size: " << actual_index_size << ")"
+                    << " with meta-data size: " << expected_file_size
+                    << std::endl;
       return -1;
     }
 
@@ -641,8 +647,8 @@ namespace diskann {
     READ_U64(nsg_meta, disk_nnodes);
     if (disk_nnodes != num_points) {
       diskann::cout << "Mismatch in #points for compressed data file and disk "
-                   "index file: "
-                << disk_nnodes << " vs " << num_points << std::endl;
+                       "index file: "
+                    << disk_nnodes << " vs " << num_points << std::endl;
       return -1;
     }
 
@@ -675,9 +681,10 @@ namespace diskann {
 #ifdef EXEC_ENV_OLS
     if (files.fileExists(medoids_file)) {
       size_t tmp_dim;
-      diskann::load_bin<uint32_t>(files, medoids_file, medoids, num_medoids, tmp_dim);
+      diskann::load_bin<uint32_t>(files, medoids_file, medoids, num_medoids,
+                                  tmp_dim);
 #else
-    if (file_exists(medoids_file)){
+    if (file_exists(medoids_file)) {
       size_t tmp_dim;
       diskann::load_bin<uint32_t>(medoids_file, medoids, num_medoids, tmp_dim);
 #endif
@@ -691,7 +698,7 @@ namespace diskann {
                                     __LINE__);
       }
 #ifdef EXEC_ENV_OLS
-      if (!files.fileExists(centroids_file)){
+      if (!files.fileExists(centroids_file)) {
 #else
       if (!file_exists(centroids_file)) {
 #endif
@@ -704,8 +711,8 @@ namespace diskann {
         size_t num_centroids, aligned_tmp_dim;
 #ifdef EXEC_ENV_OLS
         diskann::load_aligned_bin<float>(files, centroids_file, centroid_data,
-            num_centroids, tmp_dim,
-            aligned_tmp_dim);
+                                         num_centroids, tmp_dim,
+                                         aligned_tmp_dim);
 #else
         diskann::load_aligned_bin<float>(centroids_file, centroid_data,
                                          num_centroids, tmp_dim,
@@ -771,8 +778,8 @@ namespace diskann {
     const T *    query = data.scratch.aligned_query_T;
     const float *query_float = data.scratch.aligned_query_float;
 
-    IOContext& ctx = data.ctx;
-    auto      query_scratch = &(data.scratch);
+    IOContext &ctx = data.ctx;
+    auto       query_scratch = &(data.scratch);
 
     // reset query
     query_scratch->reset();
@@ -1031,7 +1038,8 @@ namespace diskann {
             visited.insert(id);
             cmps++;
             float dist = dist_scratch[m];
-            // diskann::cout << "cmp: " << id << ", dist: " << dist << std::endl;
+            // diskann::cout << "cmp: " << id << ", dist: " << dist <<
+            // std::endl;
             // diskann::cout << "dist: " << dist << std::endl;
             if (stats != nullptr) {
               stats->n_cmps++;
@@ -1091,20 +1099,19 @@ namespace diskann {
 
 #ifdef EXEC_ENV_OLS
   template<typename T>
-  char* PQFlashIndex<T>::getHeaderBytes() {
+  char *PQFlashIndex<T>::getHeaderBytes() {
+    IOContext & ctx = reader->get_ctx();
+    AlignedRead readReq;
+    readReq.buf = new char[PQFlashIndex<T>::HEADER_SIZE];
+    readReq.len = PQFlashIndex<T>::HEADER_SIZE;
+    readReq.offset = 0;
 
-      IOContext& ctx = reader->get_ctx();
-      AlignedRead readReq;
-      readReq.buf = new char[PQFlashIndex<T>::HEADER_SIZE];
-      readReq.len = PQFlashIndex<T>::HEADER_SIZE;
-      readReq.offset = 0;
+    std::vector<AlignedRead> readReqs;
+    readReqs.push_back(readReq);
 
-      std::vector<AlignedRead> readReqs;
-      readReqs.push_back(readReq);
+    reader->read(readReqs, ctx, false);
 
-      reader->read(readReqs, ctx, false);
-
-      return (char*)readReq.buf; 
+    return (char *) readReq.buf;
   }
 #endif
 

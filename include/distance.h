@@ -315,5 +315,4 @@ namespace diskann {
              sum.m128_f32[3];
     }
   };
-
 }  // namespace diskann

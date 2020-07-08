@@ -48,9 +48,10 @@ namespace diskann {
 
 #ifdef EXEC_ENV_OLS
   template<typename T>
-  DISKANN_DLLEXPORT T* load_warmup(MemoryMappedFiles& files, const std::string& cache_warmup_file,
-      uint64_t& warmup_num, uint64_t warmup_dim,
-      uint64_t warmup_aligned_dim);
+  DISKANN_DLLEXPORT T *load_warmup(MemoryMappedFiles &files,
+                                   const std::string &cache_warmup_file,
+                                   uint64_t &warmup_num, uint64_t warmup_dim,
+                                   uint64_t warmup_aligned_dim);
 #else
   template<typename T>
   DISKANN_DLLEXPORT T *load_warmup(const std::string &cache_warmup_file,
@@ -76,7 +77,7 @@ namespace diskann {
   template<typename T>
   DISKANN_DLLEXPORT uint32_t optimize_beamwidth(
       std::unique_ptr<diskann::PQFlashIndex<T>> &_pFlashIndex, T *tuning_sample,
-      _u64 tuning_sample_num, _u64 tuning_sample_aligned_dim, uint32_t L, 
+      _u64 tuning_sample_num, _u64 tuning_sample_aligned_dim, uint32_t L,
       uint32_t nthreads, uint32_t start_bw = 2);
 
   template<typename T>

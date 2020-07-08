@@ -18,7 +18,7 @@ class WindowsAlignedFileReader : public AlignedFileReader {
   std::wstring m_filename;
 
  protected:
-  //virtual IOContext createContext();
+  // virtual IOContext createContext();
 
  public:
   WindowsAlignedFileReader(){};
