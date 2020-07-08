@@ -43,7 +43,6 @@ namespace {
   template<>
   diskann::Distance<float> *get_distance_function(diskann::Metric m) {
     if (m == diskann::Metric::L2) {
-#ifdef _WINDOWS
       if (Avx2SupportedCPU) {
         std::cout << "Using AVX2 distance computation" << std::endl;
         return new diskann::DistanceL2();
@@ -55,9 +54,6 @@ namespace {
         std::cout << "Older CPU. Using slow distance computation" << std::endl;
         return new diskann::SlowDistanceL2Float();
       }
-#else
-      return new diskann::DistanceL2();
-#endif
     } else {
       std::stringstream stream;
       stream << "Only L2 metric supported as of now. Email "
@@ -73,7 +69,6 @@ namespace {
   template<>
   diskann::Distance<int8_t> *get_distance_function(diskann::Metric m) {
     if (m == diskann::Metric::L2) {
-#ifdef _WINDOWS
       if (Avx2SupportedCPU) {
         std::cout << "Using AVX2 distance computation" << std::endl;
         return new diskann::DistanceL2Int8();
@@ -85,9 +80,6 @@ namespace {
         std::cout << "Older CPU. Using slow distance computation" << std::endl;
         return new diskann::SlowDistanceL2Int<int8_t>();
       }
-#else
-      return new diskann::DistanceL2Int8();
-#endif
     } else {
       std::stringstream stream;
       stream << "Only L2 metric supported as of now. Email "

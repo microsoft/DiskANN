@@ -92,7 +92,6 @@ namespace diskann {
         << std::endl;
     // TODO: No AVX2/AVX implementation available for uint8.
     this->dist_cmp = new DistanceL2UInt8();
-#ifdef _WINDOWS
     if (Avx2SupportedCPU) {
       diskann::cout << "Using AVX2 dist_cmp_float function." << std::endl;
       this->dist_cmp_float = new DistanceL2();
@@ -104,16 +103,12 @@ namespace diskann {
                     << std::endl;
       this->dist_cmp_float = new SlowDistanceL2Float();
     }
-#else
-    this->dist_cmp_float = new DistanceL2();
-#endif
   }
 
   template<>
   PQFlashIndex<_s8>::PQFlashIndex(
       std::shared_ptr<AlignedFileReader> &fileReader)
       : reader(fileReader) {
-#ifdef _WINDOWS
     if (Avx2SupportedCPU) {
       diskann::cout << "Using AVX2 function for dist_cmp and dist_cmp_float"
                     << std::endl;
@@ -132,17 +127,12 @@ namespace diskann {
       this->dist_cmp = new SlowDistanceL2Int<int8_t>();
       this->dist_cmp_float = new SlowDistanceL2Float();
     }
-#else
-      this->dist_cmp = new DistanceL2Int8();
-    this->dist_cmp_float = new DistanceL2();
-#endif
   }
 
   template<>
   PQFlashIndex<float>::PQFlashIndex(
       std::shared_ptr<AlignedFileReader> &fileReader)
       : reader(fileReader) {
-#ifdef _WINDOWS
     if (Avx2SupportedCPU) {
       diskann::cout << "Using AVX2 functions for dist_cmp and dist_cmp_float"
                     << std::endl;
@@ -161,10 +151,6 @@ namespace diskann {
       this->dist_cmp = new AVXDistanceL2Float();
       this->dist_cmp_float = new AVXDistanceL2Float();
     }
-#else
-      this->dist_cmp = new DistanceL2();
-    this->dist_cmp_float = new DistanceL2();
-#endif
   }
 
   template<typename T>

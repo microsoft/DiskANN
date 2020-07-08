@@ -1,9 +1,9 @@
 #include "utils.h"
 
 #include <stdio.h>
-#include <intrin.h>
 
 #ifdef _WINDOWS
+#include <intrin.h>
 
 // Taken from:
 // https://insufficientlycomplicated.wordpress.com/2011/11/07/detecting-intel-advanced-vector-extensions-avx-in-visual-studio/
@@ -46,8 +46,12 @@ bool cpuHasAvx2Support() {
   }
   return false;
 }
+#endif
 
+#ifndef _WINDOWS
+bool AvxSupportedCPU = false;
+bool Avx2SupportedCPU = true;
+#else
 bool AvxSupportedCPU = cpuHasAvxSupport();
 bool Avx2SupportedCPU = cpuHasAvx2Support();
-
-#endif;
+#endif
