@@ -1,6 +1,9 @@
 #include <iostream>
 #include <random>
+#include <string>
+#include <numeric>
 #include "distance.h"
+#include "logger.h"
 
 float distanceL2_I(const int8_t* a, const int8_t* b, size_t size) {
   float distance = 0;
@@ -177,6 +180,32 @@ void compareDistanceComputationsFloat() {
 
 
 
+void testStreamBufImpl() {
+  std::vector<int> v(100);
+  std::iota(v.begin(), v.end(), 1);
+
+  std::cout << "Printing with std::cout" << std::endl;
+#pragma omp parallel for schedule(dynamic, 64)
+  for (int i = 0; i < v.size(); i++) {
+    std::cout << std::to_string(i) + ",";
+    if (i != 0 && i % 10 == 0) {
+      std::cout << std::endl;
+    }
+  }
+
+  diskann::cout << "Printing with diskann::cout" << std::endl;
+#pragma omp parallel for schedule(dynamic, 64)
+  for (int i = 0; i < v.size(); i++) {
+    diskann::cout << std::to_string(i) + ",";
+    if (i != 0 && i % 10 == 0) {
+      diskann::cout << std::endl;
+    }
+  }
+}
+
+DISKANN_DLLIMPORT std::basic_ostream<char> diskann::cout;
+DISKANN_DLLIMPORT std::basic_ostream<char> diskann::cerr;
+
 int main(int argc, char** argv) {
   if (argc < 2) {
     std::cout << std::string("Usage: ") << argv[0] << " <mode> [arguments]"
@@ -186,12 +215,16 @@ int main(int argc, char** argv) {
               << "       2 for test unique_ptr assignment. No args."
               << std::endl;
     std::cout << "      3 for comparing distance computations (AVX and "
-                 "normal). No args."
+                 "normal). No args.";
+    std::cout << "      4 for testing our streambuf() impleemntation."
+                 "No args"
               << std::endl;
     return -1;
   }
 
   int mode = atoi(argv[1]);
+
+  diskann::cout << "Testing" << std::endl;
 
   switch (mode) {
     case 1:
@@ -204,6 +237,9 @@ int main(int argc, char** argv) {
     case 3:
       compareDistanceComputationsInt();
       compareDistanceComputationsFloat();
+      break;
+    case 4:
+      testStreamBufImpl();
       break;
     default:
       std::cout << "Don't know what to do with mode parameter: " << argv[1]

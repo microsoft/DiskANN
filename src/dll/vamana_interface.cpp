@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 
+#include "logger.h"
 #include "dll/vamana_interface.h"
 #include "index.h"
 #include "utils.h"
@@ -43,7 +44,7 @@ namespace diskann {
       param_list.push_back(cur_param);
 
     if (param_list.size() != 5) {
-      std::cout
+      diskann::cout
           << "Correct usage of parameters is L (indexing search list size) "
              "R (max degree) C (visited list maximum size) alpha (higher is "
              "denser graphs) T (Max Threads To "
@@ -88,7 +89,7 @@ namespace diskann {
 
     std::chrono::duration<double> diff = e - s;
 
-    std::cout << "Indexing time: " << diff.count() << "\n";
+    diskann::cout << "Indexing time: " << diff.count() << std::endl;
 
     return true;
   }

@@ -1,5 +1,5 @@
 if (MSVC)
-	add_library(diskpriority_io STATIC DiskPriorityIO.cpp)
+	add_library(diskpriority_io STATIC DiskPriorityIO.cpp )
 	target_include_directories(diskpriority_io PRIVATE "${BOOST_ROOT}")
 endif()
 add_library(nsg_dll SHARED dllmain.cpp vamana_interface.cpp diskann_interface.cpp

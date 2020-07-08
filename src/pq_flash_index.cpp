@@ -885,7 +885,7 @@ namespace diskann {
         diskann::cout << std::endl;
   */
       while (marker < cur_list_size && frontier.size() < beam_width &&
-             num_seen < beam_width) {
+             num_seen < beam_width + 2) {
         if (retset[marker].flag) {
           num_seen++;
           auto iter = nhood_cache.find(retset[marker].id);
