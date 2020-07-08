@@ -9,7 +9,7 @@
 #define _ENABLE_ATOMIC_ALIGNMENT_FIX
 #include <boost/lockfree/queue.hpp>
 
-#include "bing\IDiskPriorityIO.h"
+#include "IDiskPriorityIO.h"
 
 namespace diskann {
 

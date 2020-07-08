@@ -2,7 +2,6 @@
 #include <string>
 #include <sstream>
 #include <tchar.h>
-#include "bing/IDiskPriorityIO.h"
 #include "DiskPriorityIO.h"
 
 #include "utils.h"
