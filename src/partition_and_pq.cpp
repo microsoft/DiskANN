@@ -530,8 +530,8 @@ int generate_pq_data_from_pivots(const std::string data_file,
     }
     diskann::cout << ".done." << std::endl;
   }
-  //Gopal. Splittng nsg_dll into separate DLLs for search and build.
-  //This code should only be available in the "build" DLL.
+// Gopal. Splittng nsg_dll into separate DLLs for search and build.
+// This code should only be available in the "build" DLL.
 #ifdef DISKANN_BUILD
   MallocExtension::instance()->ReleaseFreeMemory();
 #endif
@@ -567,7 +567,7 @@ int estimate_cluster_sizes(const std::string data_file, float *pivots,
 
   size_t num_points = 0, num_dim = 0;
   diskann::get_bin_metadata(data_file, num_points, num_dim);
-  size_t  block_size = num_points <= BLOCK_SIZE ? num_points : BLOCK_SIZE;
+  size_t block_size = num_points <= BLOCK_SIZE ? num_points : BLOCK_SIZE;
   _u32 * block_closest_centers = new _u32[block_size * k_base];
   float *block_data_float;
 

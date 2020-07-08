@@ -43,16 +43,21 @@ namespace {
   template<>
   diskann::Distance<float> *get_distance_function(diskann::Metric m) {
     if (m == diskann::Metric::L2) {
+#ifdef _WINDOWS
       if (Avx2SupportedCPU) {
         std::cout << "Using AVX2 distance computation" << std::endl;
         return new diskann::DistanceL2();
       } else if (AvxSupportedCPU) {
-        std::cout << "AVX2 not supported. Using AVX distance computation" << std::endl;
+        std::cout << "AVX2 not supported. Using AVX distance computation"
+                  << std::endl;
         return new diskann::AVXDistanceL2Float();
       } else {
         std::cout << "Older CPU. Using slow distance computation" << std::endl;
         return new diskann::SlowDistanceL2Float();
       }
+#else
+      return new diskann::DistanceL2();
+#endif
     } else {
       std::stringstream stream;
       stream << "Only L2 metric supported as of now. Email "
@@ -68,6 +73,7 @@ namespace {
   template<>
   diskann::Distance<int8_t> *get_distance_function(diskann::Metric m) {
     if (m == diskann::Metric::L2) {
+#ifdef _WINDOWS
       if (Avx2SupportedCPU) {
         std::cout << "Using AVX2 distance computation" << std::endl;
         return new diskann::DistanceL2Int8();
@@ -79,6 +85,9 @@ namespace {
         std::cout << "Older CPU. Using slow distance computation" << std::endl;
         return new diskann::SlowDistanceL2Int<int8_t>();
       }
+#else
+      return new diskann::DistanceL2Int8();
+#endif
     } else {
       std::stringstream stream;
       stream << "Only L2 metric supported as of now. Email "
@@ -98,7 +107,7 @@ namespace {
                    "slow version. "
                    "Contact gopalsr@microsoft.com if you need AVX/AVX2 support."
                 << std::endl;
-        return new diskann::DistanceL2UInt8();
+      return new diskann::DistanceL2UInt8();
     } else {
       std::stringstream stream;
       stream << "Only L2 metric supported as of now. Email "
@@ -917,8 +926,8 @@ namespace diskann {
           progress_counter += 5;
         }
       }
-      // Gopal. Splittng nsg_dll into separate DLLs for search and build.
-      // This code should only be available in the "build" DLL.
+// Gopal. Splittng nsg_dll into separate DLLs for search and build.
+// This code should only be available in the "build" DLL.
 #ifdef DISKANN_BUILD
       MallocExtension::instance()->ReleaseFreeMemory();
 #endif

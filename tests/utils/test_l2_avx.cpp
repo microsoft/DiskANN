@@ -22,8 +22,6 @@ float distanceL2_F(const float* a, const float* b, size_t size) {
   return distance;
 }
 
-
-
 int8_t* createVector(int size) {
   auto p = new int8_t[size];
   for (int i = 0; i < size; i++) {
@@ -116,13 +114,13 @@ void uniquePtrAssignment() {
   std::cout << "safe." << std::endl;
 }
 
-float epsilon = 0.01;
-const int   A_SIZE = 100;
-void  compareDistanceComputationsInt() {
-  //int8_t vec1[] = {127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127,
+float     epsilon = 0.01;
+const int A_SIZE = 100;
+void      compareDistanceComputationsInt() {
+  // int8_t vec1[] = {127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127,
   //                 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127,
   //                 127, 127, 127, 127, 127, 127, 127, 127, 127, 127};
-  //int8_t vec2[] = {-128, -128, -128, -128, -128, -128, -128, -128,
+  // int8_t vec2[] = {-128, -128, -128, -128, -128, -128, -128, -128,
   //                 -128, -128, -128, -128, -128, -128, -128, -128,
   //                 -128, -128, -128, -128, -128, -128, -128, -128,
   //                 -128, -128, -128, -128, -128, -128, -128, -128};
@@ -133,8 +131,8 @@ void  compareDistanceComputationsInt() {
   for (int i = 0; i < A_SIZE; i++) {
     auto a = rand() % 128;
     auto b = rand() % 128;
-    vec1[i] = -a; // < 0 ? -a : a;
-    vec2[i] = -b; // < 0 ? -b : b;
+    vec1[i] = -a;  // < 0 ? -a : a;
+    vec2[i] = -b;  // < 0 ? -b : b;
 
     neg = neg || vec1[i] < 0 || vec2[i] < 0;
   }
@@ -142,13 +140,12 @@ void  compareDistanceComputationsInt() {
     std::cout << "No negative numbers in test. " << std::endl;
   }
 
-
-  //diskann::DistanceL2Int8 dist;
+  // diskann::DistanceL2Int8 dist;
   diskann::AVXDistanceL2Int8 dist;
-  float                   dist1 = dist.compare(vec1, vec2, 8);
-  float                   dist2 = distanceL2_I(vec1, vec2, 8);
+  float                      dist1 = dist.compare(vec1, vec2, 8);
+  float                      dist2 = distanceL2_I(vec1, vec2, 8);
 
-  if (abs(dist1 - dist2) > epsilon ) {
+  if (abs(dist1 - dist2) > epsilon) {
     std::cout << "compareDistanceComputationsInt(): Test failed. AVX dist: "
               << dist1 << " normal dist: " << dist2 << " difference > "
               << epsilon << std::endl;
@@ -176,9 +173,6 @@ void compareDistanceComputationsFloat() {
     std::cout << "Two scores are the same." << std::endl;
   }
 }
-  
-
-
 
 void testStreamBufImpl() {
   std::vector<int> v(100);

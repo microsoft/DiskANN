@@ -102,11 +102,11 @@ namespace diskann {
     std::string sample_data_file = index_prefix_path + "_sample_data.bin";
 
     size_t data_dim, num_pq_centers;
-//#ifdef EXEC_ENV_OLS
+    //#ifdef EXEC_ENV_OLS
     get_bin_metadata(_mmFiles, pq_tables_bin, num_pq_centers, data_dim);
-//#else
-//    get_bin_metadata(pq_tables_bin, num_pq_centers, data_dim);
-//#endif
+    //#else
+    //    get_bin_metadata(pq_tables_bin, num_pq_centers, data_dim);
+    //#endif
 
     this->m_dimension = (_u32) data_dim;
     this->m_aligned_dimension = ROUND_UP(this->m_dimension, 8);
@@ -121,13 +121,13 @@ namespace diskann {
       _pFlashIndex.reset(new PQFlashIndex<T>(_pReader));
 
       int res;
-//#ifdef EXEC_ENV_OLS
+      //#ifdef EXEC_ENV_OLS
       res = _pFlashIndex->load(_mmFiles, nthreads, pq_prefix.c_str(),
                                disk_index_file.c_str());
-//#else
-//      res = _pFlashIndex->load(nthreads, pq_prefix.c_str(),
-//                               disk_index_file.c_str());
-//#endif
+      //#else
+      //      res = _pFlashIndex->load(nthreads, pq_prefix.c_str(),
+      //                               disk_index_file.c_str());
+      //#endif
       if (res != 0) {
         diskann::cerr << "Failed to load PQFlashIndex. PQFile: " << pq_prefix
                       << " Disk index file: " << disk_index_file << std::endl;
@@ -152,7 +152,7 @@ namespace diskann {
       diskann::cerr << ex.message() << std::endl;
       return false;
     }
-#else 
+#else
     diskann::cerr << "Cannot call LoadIndex with blobs outside OLS environment"
                   << std::endl;
     return false;
@@ -249,7 +249,7 @@ namespace diskann {
     }
   }
 
-  // PRIVATE FUNCTIONS START
+// PRIVATE FUNCTIONS START
 #ifdef EXEC_ENV_OLS
   template<typename T>
   void DiskANNInterface<T>::addBlobsToMemoryMappedFiles(
@@ -262,8 +262,8 @@ namespace diskann {
     }
   }
 
-  //Writing the INI File that tells OLS what to load in memory and what
-  //to keep on disk.
+  // Writing the INI File that tells OLS what to load in memory and what
+  // to keep on disk.
   template<typename T>
   bool DiskANNInterface<T>::writeSharedStoreIniFile(
       const char* indexPathPrefix) {

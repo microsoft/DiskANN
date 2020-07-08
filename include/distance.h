@@ -256,6 +256,11 @@ namespace diskann {
    public:
     virtual float compare(const int8_t *a, const int8_t *b,
                           unsigned int length) const {
+#ifndef _WINDOWS
+      std::cout << "AVX only supported in Windows build.";
+      return 0;
+    }
+#else
       __m128  r = _mm_setzero_ps();
       __m128i r1;
       while (length >= 16) {
@@ -291,13 +296,18 @@ namespace diskann {
 
       return res;
     }
-      
+#endif
   };
 
   class AVXDistanceL2Float : public Distance<float> {
    public:
     virtual float compare(const float *a, const float *b,
                           unsigned int length) const {
+#ifndef _WINDOWS
+      std::cout << "AVX only supported in Windows build.";
+      return 0;
+    }
+#else
       __m128 diff, v1, v2;
       __m128 sum = _mm_set1_ps(0);
 
@@ -314,5 +324,6 @@ namespace diskann {
       return sum.m128_f32[0] + sum.m128_f32[1] + sum.m128_f32[2] +
              sum.m128_f32[3];
     }
+#endif
   };
 }  // namespace diskann

@@ -494,7 +494,6 @@ inline bool validate_file_size(const std::string& name) {
 extern bool AvxSupportedCPU;
 extern bool Avx2SupportedCPU;
 
-
 inline void printProcessMemory(const char* message) {
   PROCESS_MEMORY_COUNTERS counters;
   HANDLE                  h = GetCurrentProcess();

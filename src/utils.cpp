@@ -5,7 +5,8 @@
 
 #ifdef _WINDOWS
 
-//Taken from: https://insufficientlycomplicated.wordpress.com/2011/11/07/detecting-intel-advanced-vector-extensions-avx-in-visual-studio/
+// Taken from:
+// https://insufficientlycomplicated.wordpress.com/2011/11/07/detecting-intel-advanced-vector-extensions-avx-in-visual-studio/
 bool cpuHasAvxSupport() {
   bool avxSupported = false;
 
@@ -48,6 +49,5 @@ bool cpuHasAvx2Support() {
 
 bool AvxSupportedCPU = cpuHasAvxSupport();
 bool Avx2SupportedCPU = cpuHasAvx2Support();
-
 
 #endif;
