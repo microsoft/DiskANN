@@ -491,19 +491,6 @@ inline bool validate_file_size(const std::string& name) {
 #include <intrin.h>
 #include <Psapi.h>
 
-extern bool Avx2SupportedCPU;
-inline bool avx2Supported() {
-  int cpuInfo[4];
-  __cpuid(cpuInfo, 0);
-  int n = cpuInfo[0];
-  if (n >= 7) {
-    __cpuidex(cpuInfo, 7, 0);
-    static int avx2Mask = 0x20;
-    return (cpuInfo[1] & avx2Mask) > 0;
-  }
-  return false;
-}
-
 inline void printProcessMemory(const char* message) {
   PROCESS_MEMORY_COUNTERS counters;
   HANDLE                  h = GetCurrentProcess();
@@ -526,3 +513,6 @@ inline bool avx2Supported() {
 inline void printProcessMemory(const char* message) {
 }
 #endif
+
+extern bool AvxSupportedCPU;
+extern bool Avx2SupportedCPU;

@@ -5,7 +5,7 @@
 #include <sstream>
 #include "logger.h"
 #include "bing_aligned_file_reader.h"
-#include "dll/DiskPriorityIO.h"
+#include "DiskPriorityIO.h"
 
 namespace diskann {
 

@@ -439,22 +439,23 @@ int generate_pq_data_from_pivots(const std::string data_file,
   compressed_file_writer.write((char *) &num_points, sizeof(uint32_t));
   compressed_file_writer.write((char *) &num_pq_chunks_u32, sizeof(uint32_t));
 
+  size_t block_size = num_points <= BLOCK_SIZE ? num_points : BLOCK_SIZE;
   std::unique_ptr<_u32[]> block_compressed_base =
-      std::make_unique<_u32[]>(BLOCK_SIZE * (_u64) num_pq_chunks);
+      std::make_unique<_u32[]>(block_size * (_u64) num_pq_chunks);
   std::memset(block_compressed_base.get(), 0,
-              BLOCK_SIZE * (_u64) num_pq_chunks * sizeof(uint32_t));
+              block_size * (_u64) num_pq_chunks * sizeof(uint32_t));
 
-  std::unique_ptr<T[]> block_data_T = std::make_unique<T[]>(BLOCK_SIZE * dim);
+  std::unique_ptr<T[]> block_data_T = std::make_unique<T[]>(block_size * dim);
   std::unique_ptr<float[]> block_data_float =
-      std::make_unique<float[]>(BLOCK_SIZE * dim);
+      std::make_unique<float[]>(block_size * dim);
   std::unique_ptr<float[]> block_data_tmp =
-      std::make_unique<float[]>(BLOCK_SIZE * dim);
+      std::make_unique<float[]>(block_size * dim);
 
-  size_t num_blocks = DIV_ROUND_UP(num_points, BLOCK_SIZE);
+  size_t num_blocks = DIV_ROUND_UP(num_points, block_size);
 
   for (size_t block = 0; block < num_blocks; block++) {
-    size_t start_id = block * BLOCK_SIZE;
-    size_t end_id = (std::min)((block + 1) * BLOCK_SIZE, num_points);
+    size_t start_id = block * block_size;
+    size_t end_id = (std::min)((block + 1) * block_size, num_points);
     size_t cur_blk_size = end_id - start_id;
 
     base_reader.read((char *) (block_data_T.get()),
@@ -529,7 +530,11 @@ int generate_pq_data_from_pivots(const std::string data_file,
     }
     diskann::cout << ".done." << std::endl;
   }
+// Gopal. Splittng nsg_dll into separate DLLs for search and build.
+// This code should only be available in the "build" DLL.
+#ifdef DISKANN_BUILD
   MallocExtension::instance()->ReleaseFreeMemory();
+#endif
   compressed_file_writer.close();
   return 0;
 }
@@ -560,14 +565,17 @@ int estimate_cluster_sizes(const std::string data_file, float *pivots,
     shard_counts[i] = 0;
   }
 
-  _u32 * block_closest_centers = new _u32[BLOCK_SIZE * k_base];
+  size_t num_points = 0, num_dim = 0;
+  diskann::get_bin_metadata(data_file, num_points, num_dim);
+  size_t block_size = num_points <= BLOCK_SIZE ? num_points : BLOCK_SIZE;
+  _u32 * block_closest_centers = new _u32[block_size * k_base];
   float *block_data_float;
 
-  size_t num_blocks = DIV_ROUND_UP(num_test, BLOCK_SIZE);
+  size_t num_blocks = DIV_ROUND_UP(num_test, block_size);
 
   for (size_t block = 0; block < num_blocks; block++) {
-    size_t start_id = block * BLOCK_SIZE;
-    size_t end_id = (std::min)((block + 1) * BLOCK_SIZE, num_test);
+    size_t start_id = block * block_size;
+    size_t end_id = (std::min)((block + 1) * block_size, num_test);
     size_t cur_blk_size = end_id - start_id;
 
     block_data_float = test_data_float + start_id * test_dim;
@@ -639,17 +647,18 @@ int shard_data_into_clusters(const std::string data_file, float *pivots,
     shard_counts[i] = 0;
   }
 
+  size_t block_size = num_points <= BLOCK_SIZE ? num_points : BLOCK_SIZE;
   std::unique_ptr<_u32[]> block_closest_centers =
-      std::make_unique<_u32[]>(BLOCK_SIZE * k_base);
-  std::unique_ptr<T[]> block_data_T = std::make_unique<T[]>(BLOCK_SIZE * dim);
+      std::make_unique<_u32[]>(block_size * k_base);
+  std::unique_ptr<T[]> block_data_T = std::make_unique<T[]>(block_size * dim);
   std::unique_ptr<float[]> block_data_float =
-      std::make_unique<float[]>(BLOCK_SIZE * dim);
+      std::make_unique<float[]>(block_size * dim);
 
-  size_t num_blocks = DIV_ROUND_UP(num_points, BLOCK_SIZE);
+  size_t num_blocks = DIV_ROUND_UP(num_points, block_size);
 
   for (size_t block = 0; block < num_blocks; block++) {
-    size_t start_id = block * BLOCK_SIZE;
-    size_t end_id = (std::min)((block + 1) * BLOCK_SIZE, num_points);
+    size_t start_id = block * block_size;
+    size_t end_id = (std::min)((block + 1) * block_size, num_points);
     size_t cur_blk_size = end_id - start_id;
 
     base_reader.read((char *) block_data_T.get(),

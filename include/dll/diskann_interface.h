@@ -55,17 +55,19 @@ namespace diskann {
     unsigned __int32 m_aligned_dimension;
 
    private:
-    // Methods
+// Methods
+#ifdef EXEC_ENV_OLS
     void addBlobsToMemoryMappedFiles(
         const std::vector<ANNIndex::FileBlob>& files);
     bool writeSharedStoreIniFile(const char* indexPathPrefix);
+#endif
     T* loadTuningSample(const std::string& sample_data_file,
                         uint32_t&          tuning_sample_num);
+
     void warmupIndex(T* sample, uint32_t tuning_sample_num, uint32_t nthreads);
     void optimizeBeamwidth(T* sample, uint32_t tuning_sample_num,
                            uint32_t beamwidth, uint32_t nthreads);
 
-   private:
     std::string                                _nsgPathPrefix;
     std::shared_ptr<AlignedFileReader>         _pReader;
     std::shared_ptr<ANNIndex::IDiskPriorityIO> _pDiskIO;
