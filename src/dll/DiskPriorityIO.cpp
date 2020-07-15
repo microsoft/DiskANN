@@ -23,7 +23,11 @@ namespace diskann {
   }
 
   DiskPriorityIO::~DiskPriorityIO() {
-    std::cout << "In DiskPriorityIO destructor" << std::endl;
+    //std::cout << "In DiskPriorityIO destructor, thread id "
+    //          << std::this_thread::get_id() << " this is:" << ((uint64_t) this)
+    //          << " Is Overlapped queue empty: " << m_overlappedQueue.empty()
+    //          << " Polling thread count: " << m_ioPollingThreads.size()
+    //          << std::endl;
   }
 
   bool DiskPriorityIO::Initialize(const char* filePath,
@@ -104,9 +108,9 @@ namespace diskann {
     m_stopPolling = true;
     for (auto& thrd : m_ioPollingThreads) {
       if (thrd.joinable()) {
-        std::cout << "Trying to join thread " << (thrd.get_id()) << std::endl;
+        std::cout << "Trying to join thread " << thrd.get_id();
         thrd.join();
-        std::cout << "Thread " << thrd.get_id() << " joined." << std::endl;
+        std::cout << "...done" << std::endl;
       }
     }
     if (m_fileHandle != nullptr) {
