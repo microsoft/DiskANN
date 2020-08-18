@@ -109,16 +109,6 @@ else()
 	target_link_libraries(merge_shards ${PROJECT_NAME} -ltcmalloc aio)
 endif()
 
-add_executable(create_disk_layout create_disk_layout.cpp)
-if(MSVC)
-	target_link_options(create_disk_layout PRIVATE /MACHINE:x64 /DEBUG:FULL "/INCLUDE:_tcmalloc")
-	target_link_libraries(create_disk_layout debug ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG}/nsg_dll.lib ${PROJECT_SOURCE_DIR}/dependencies/windows/tcmalloc/libtcmalloc_minimal.lib)
-	target_link_libraries(create_disk_layout optimized ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE}/nsg_dll.lib ${PROJECT_SOURCE_DIR}/dependencies/windows/tcmalloc/libtcmalloc_minimal.lib)
-else() 
-	target_link_libraries(create_disk_layout ${PROJECT_NAME} aio -ltcmalloc)
-endif()
-
-
 if(MSVC)
 	add_executable(test_l2_avx test_l2_avx.cpp)
 	target_link_options(test_l2_avx PRIVATE /MACHINE:x64 /DEBUG:FULL)

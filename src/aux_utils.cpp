@@ -14,7 +14,8 @@
 #include "mkl.h"
 #include "omp.h"
 #include "partition_and_pq.h"
-#include "pq_flash_index.h"
+#include "percentile_stats.h"
+//#include "pq_flash_index.h"
 #include "utils.h"
 
 namespace diskann {
@@ -425,315 +426,335 @@ namespace diskann {
 
   // optimizes the beamwidth to maximize QPS for a given L_search subject to
   // 99.9 latency not blowing up
-  template<typename T>
-  uint32_t optimize_beamwidth(
-      std::unique_ptr<diskann::PQFlashIndex<T>> &pFlashIndex, T *tuning_sample,
-      _u64 tuning_sample_num, _u64 tuning_sample_aligned_dim, uint32_t L,
-      uint32_t nthreads, uint32_t start_bw) {
-    uint32_t cur_bw = start_bw;
-    double   max_qps = 0;
-    uint32_t best_bw = start_bw;
-    bool     stop_flag = false;
+  //   template<typename T>
+  //   uint32_t optimize_beamwidth(
+  //       std::unique_ptr<diskann::PQFlashIndex<T>> &pFlashIndex, T
+  //       *tuning_sample,
+  //       _u64 tuning_sample_num, _u64 tuning_sample_aligned_dim, uint32_t L,
+  //       uint32_t nthreads, uint32_t start_bw) {
+  //     uint32_t cur_bw = start_bw;
+  //     double   max_qps = 0;
+  //     uint32_t best_bw = start_bw;
+  //     bool     stop_flag = false;
 
-    while (!stop_flag) {
-      std::vector<uint64_t> tuning_sample_result_ids_64(tuning_sample_num, 0);
-      std::vector<float>    tuning_sample_result_dists(tuning_sample_num, 0);
-      diskann::QueryStats * stats = new diskann::QueryStats[tuning_sample_num];
+  //     while (!stop_flag) {
+  //       std::vector<uint64_t> tuning_sample_result_ids_64(tuning_sample_num,
+  //       0);
+  //       std::vector<float>    tuning_sample_result_dists(tuning_sample_num,
+  //       0);
+  //       diskann::QueryStats * stats = new
+  //       diskann::QueryStats[tuning_sample_num];
 
-      auto  s = std::chrono::high_resolution_clock::now();
-#pragma omp parallel for schedule(dynamic, 1) num_threads(nthreads)
-      for (_s64 i = 0; i < (int64_t) tuning_sample_num; i++) {
-        pFlashIndex->cached_beam_search(
-            tuning_sample + (i * tuning_sample_aligned_dim), 1, L,
-            tuning_sample_result_ids_64.data() + (i * 1),
-            tuning_sample_result_dists.data() + (i * 1), cur_bw, stats + i);
-      }
-      auto e = std::chrono::high_resolution_clock::now();
-      std::chrono::duration<double> diff = e - s;
-      double qps = (1.0f * tuning_sample_num) / (1.0f * diff.count());
+  //       auto  s = std::chrono::high_resolution_clock::now();
+  // #pragma omp parallel for schedule(dynamic, 1) num_threads(nthreads)
+  //       for (_s64 i = 0; i < (int64_t) tuning_sample_num; i++) {
+  //         pFlashIndex->cached_beam_search(
+  //             tuning_sample + (i * tuning_sample_aligned_dim), 1, L,
+  //             tuning_sample_result_ids_64.data() + (i * 1),
+  //             tuning_sample_result_dists.data() + (i * 1), cur_bw, stats +
+  //             i);
+  //       }
+  //       auto e = std::chrono::high_resolution_clock::now();
+  //       std::chrono::duration<double> diff = e - s;
+  //       double qps = (1.0f * tuning_sample_num) / (1.0f * diff.count());
 
-      double lat_999 = diskann::get_percentile_stats(
-          stats, tuning_sample_num, 0.999,
-          [](const diskann::QueryStats &stats) { return stats.total_us; });
+  //       double lat_999 = diskann::get_percentile_stats(
+  //           stats, tuning_sample_num, 0.999,
+  //           [](const diskann::QueryStats &stats) { return stats.total_us; });
 
-      double mean_latency = diskann::get_mean_stats(
-          stats, tuning_sample_num,
-          [](const diskann::QueryStats &stats) { return stats.total_us; });
+  //       double mean_latency = diskann::get_mean_stats(
+  //           stats, tuning_sample_num,
+  //           [](const diskann::QueryStats &stats) { return stats.total_us; });
 
-      // diskann::cout << "For bw: " << cur_bw << " qps: " << qps
-      //          << " max_qps: " << max_qps << " mean_lat: " << mean_latency
-      //          << " lat_999: " << lat_999 << std::endl;
+  //       // diskann::cout << "For bw: " << cur_bw << " qps: " << qps
+  //       //          << " max_qps: " << max_qps << " mean_lat: " <<
+  //       mean_latency
+  //       //          << " lat_999: " << lat_999 << std::endl;
 
-      if (qps > max_qps && lat_999 < (15000) + mean_latency * 2) {
-        //      if (qps > max_qps) {
-        max_qps = qps;
-        best_bw = cur_bw;
-        //        diskann::cout<<"cur_bw: " << cur_bw <<", qps: " << qps <<",
-        //        mean_lat: " << mean_latency/1000<<", 99.9lat: " <<
-        //        lat_999/1000<<std::endl;
-        cur_bw = (uint32_t)(std::ceil)((float) cur_bw * 1.1);
-      } else {
-        stop_flag = true;
-        // diskann::cout << "Stopping at bw: " << best_bw << " max_qps: " <<
-        // max_qps
-        //          << std::endl;
-        //        diskann::cout<<"cur_bw: " << cur_bw <<", qps: " << qps <<",
-        //        mean_lat: " << mean_latency/1000<<", 99.9lat: " <<
-        //        lat_999/1000<<std::endl;
-      }
-      if (cur_bw > 64)
-        stop_flag = true;
+  //       if (qps > max_qps && lat_999 < (15000) + mean_latency * 2) {
+  //         //      if (qps > max_qps) {
+  //         max_qps = qps;
+  //         best_bw = cur_bw;
+  //         //        diskann::cout<<"cur_bw: " << cur_bw <<", qps: " << qps
+  //         <<",
+  //         //        mean_lat: " << mean_latency/1000<<", 99.9lat: " <<
+  //         //        lat_999/1000<<std::endl;
+  //         cur_bw = (uint32_t)(std::ceil)((float) cur_bw * 1.1);
+  //       } else {
+  //         stop_flag = true;
+  //         // diskann::cout << "Stopping at bw: " << best_bw << " max_qps: "
+  //         <<
+  //         // max_qps
+  //         //          << std::endl;
+  //         //        diskann::cout<<"cur_bw: " << cur_bw <<", qps: " << qps
+  //         <<",
+  //         //        mean_lat: " << mean_latency/1000<<", 99.9lat: " <<
+  //         //        lat_999/1000<<std::endl;
+  //       }
+  //       if (cur_bw > 64)
+  //         stop_flag = true;
 
-      delete[] stats;
-    }
-    return best_bw;
-  }
+  //       delete[] stats;
+  //     }
+  //     return best_bw;
+  //   }
 
-  template<typename T>
-  void create_disk_layout(const std::string base_file,
-                          const std::string mem_index_file,
-                          const std::string output_file) {
-    unsigned npts, ndims;
+  // template<typename T>
+  // void create_disk_layout(const std::string base_file,
+  //                         const std::string mem_index_file,
+  //                         const std::string output_file) {
+  //   unsigned npts, ndims;
 
-    // amount to read or write in one shot
-    _u64            read_blk_size = 64 * 1024 * 1024;
-    _u64            write_blk_size = read_blk_size;
-    cached_ifstream base_reader(base_file, read_blk_size);
-    base_reader.read((char *) &npts, sizeof(uint32_t));
-    base_reader.read((char *) &ndims, sizeof(uint32_t));
+  //   // amount to read or write in one shot
+  //   _u64            read_blk_size = 64 * 1024 * 1024;
+  //   _u64            write_blk_size = read_blk_size;
+  //   cached_ifstream base_reader(base_file, read_blk_size);
+  //   base_reader.read((char *) &npts, sizeof(uint32_t));
+  //   base_reader.read((char *) &ndims, sizeof(uint32_t));
 
-    size_t npts_64, ndims_64;
-    npts_64 = npts;
-    ndims_64 = ndims;
+  //   size_t npts_64, ndims_64;
+  //   npts_64 = npts;
+  //   ndims_64 = ndims;
 
-    // create cached reader + writer
-    size_t          actual_file_size = get_file_size(mem_index_file);
-    cached_ifstream vamana_reader(mem_index_file, read_blk_size);
-    cached_ofstream diskann_writer(output_file, write_blk_size);
+  //   // create cached reader + writer
+  //   size_t          actual_file_size = get_file_size(mem_index_file);
+  //   cached_ifstream vamana_reader(mem_index_file, read_blk_size);
+  //   cached_ofstream diskann_writer(output_file, write_blk_size);
 
-    // metadata: width, medoid
-    unsigned width_u32, medoid_u32;
-    size_t   index_file_size;
+  //   // metadata: width, medoid
+  //   unsigned width_u32, medoid_u32;
+  //   size_t   index_file_size;
 
-    vamana_reader.read((char *) &index_file_size, sizeof(uint64_t));
-    if (index_file_size != actual_file_size) {
-      std::stringstream stream;
-      stream << "Vamana Index file size does not match expected size per "
-                "meta-data."
-             << " file size from file: " << index_file_size
-             << " actual file size: " << actual_file_size << std::endl;
+  //   vamana_reader.read((char *) &index_file_size, sizeof(uint64_t));
+  //   if (index_file_size != actual_file_size) {
+  //     std::stringstream stream;
+  //     stream << "Vamana Index file size does not match expected size per "
+  //               "meta-data."
+  //            << " file size from file: " << index_file_size
+  //            << " actual file size: " << actual_file_size << std::endl;
 
-      throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
-                                  __LINE__);
-    }
+  //     throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
+  //                                 __LINE__);
+  //   }
 
-    vamana_reader.read((char *) &width_u32, sizeof(unsigned));
-    vamana_reader.read((char *) &medoid_u32, sizeof(unsigned));
+  //   vamana_reader.read((char *) &width_u32, sizeof(unsigned));
+  //   vamana_reader.read((char *) &medoid_u32, sizeof(unsigned));
 
-    // compute
-    _u64 medoid, max_node_len, nnodes_per_sector;
-    npts_64 = (_u64) npts;
-    medoid = (_u64) medoid_u32;
-    max_node_len =
-        (((_u64) width_u32 + 1) * sizeof(unsigned)) + (ndims_64 * sizeof(T));
-    nnodes_per_sector = SECTOR_LEN / max_node_len;
+  //   // compute
+  //   _u64 medoid, max_node_len, nnodes_per_sector;
+  //   npts_64 = (_u64) npts;
+  //   medoid = (_u64) medoid_u32;
+  //   max_node_len =
+  //       (((_u64) width_u32 + 1) * sizeof(unsigned)) + (ndims_64 * sizeof(T));
+  //   nnodes_per_sector = SECTOR_LEN / max_node_len;
 
-    diskann::cout << "medoid: " << medoid << "B" << std::endl;
-    diskann::cout << "max_node_len: " << max_node_len << "B" << std::endl;
-    diskann::cout << "nnodes_per_sector: " << nnodes_per_sector << "B"
-                  << std::endl;
+  //   diskann::cout << "medoid: " << medoid << "B" << std::endl;
+  //   diskann::cout << "max_node_len: " << max_node_len << "B" << std::endl;
+  //   diskann::cout << "nnodes_per_sector: " << nnodes_per_sector << "B"
+  //                 << std::endl;
 
-    // SECTOR_LEN buffer for each sector
-    std::unique_ptr<char[]> sector_buf = std::make_unique<char[]>(SECTOR_LEN);
-    std::unique_ptr<char[]> node_buf = std::make_unique<char[]>(max_node_len);
-    unsigned &nnbrs = *(unsigned *) (node_buf.get() + ndims_64 * sizeof(T));
-    unsigned *nhood_buf =
-        (unsigned *) (node_buf.get() + (ndims_64 * sizeof(T)) +
-                      sizeof(unsigned));
+  //   // SECTOR_LEN buffer for each sector
+  //   std::unique_ptr<char[]> sector_buf =
+  //   std::make_unique<char[]>(SECTOR_LEN);
+  //   std::unique_ptr<char[]> node_buf =
+  //   std::make_unique<char[]>(max_node_len);
+  //   unsigned &nnbrs = *(unsigned *) (node_buf.get() + ndims_64 * sizeof(T));
+  //   unsigned *nhood_buf =
+  //       (unsigned *) (node_buf.get() + (ndims_64 * sizeof(T)) +
+  //                     sizeof(unsigned));
 
-    // number of sectors (1 for meta data)
-    _u64 n_sectors = ROUND_UP(npts_64, nnodes_per_sector) / nnodes_per_sector;
-    _u64 disk_index_file_size = (n_sectors + 1) * SECTOR_LEN;
-    // write first sector with metadata
-    *(_u64 *) (sector_buf.get() + 0 * sizeof(_u64)) = disk_index_file_size;
-    *(_u64 *) (sector_buf.get() + 1 * sizeof(_u64)) = npts_64;
-    *(_u64 *) (sector_buf.get() + 2 * sizeof(_u64)) = medoid;
-    *(_u64 *) (sector_buf.get() + 3 * sizeof(_u64)) = max_node_len;
-    *(_u64 *) (sector_buf.get() + 4 * sizeof(_u64)) = nnodes_per_sector;
-    diskann_writer.write(sector_buf.get(), SECTOR_LEN);
+  //   // number of sectors (1 for meta data)
+  //   _u64 n_sectors = ROUND_UP(npts_64, nnodes_per_sector) /
+  //   nnodes_per_sector;
+  //   _u64 disk_index_file_size = (n_sectors + 1) * SECTOR_LEN;
+  //   // write first sector with metadata
+  //   *(_u64 *) (sector_buf.get() + 0 * sizeof(_u64)) = disk_index_file_size;
+  //   *(_u64 *) (sector_buf.get() + 1 * sizeof(_u64)) = npts_64;
+  //   *(_u64 *) (sector_buf.get() + 2 * sizeof(_u64)) = medoid;
+  //   *(_u64 *) (sector_buf.get() + 3 * sizeof(_u64)) = max_node_len;
+  //   *(_u64 *) (sector_buf.get() + 4 * sizeof(_u64)) = nnodes_per_sector;
+  //   diskann_writer.write(sector_buf.get(), SECTOR_LEN);
 
-    std::unique_ptr<T[]> cur_node_coords = std::make_unique<T[]>(ndims_64);
-    diskann::cout << "# sectors: " << n_sectors << std::endl;
-    _u64 cur_node_id = 0;
-    for (_u64 sector = 0; sector < n_sectors; sector++) {
-      if (sector % 100000 == 0) {
-        diskann::cout << "Sector #" << sector << "written" << std::endl;
-      }
-      memset(sector_buf.get(), 0, SECTOR_LEN);
-      for (_u64 sector_node_id = 0;
-           sector_node_id < nnodes_per_sector && cur_node_id < npts_64;
-           sector_node_id++) {
-        memset(node_buf.get(), 0, max_node_len);
-        // read cur node's nnbrs
-        vamana_reader.read((char *) &nnbrs, sizeof(unsigned));
+  //   std::unique_ptr<T[]> cur_node_coords = std::make_unique<T[]>(ndims_64);
+  //   diskann::cout << "# sectors: " << n_sectors << std::endl;
+  //   _u64 cur_node_id = 0;
+  //   for (_u64 sector = 0; sector < n_sectors; sector++) {
+  //     if (sector % 100000 == 0) {
+  //       diskann::cout << "Sector #" << sector << "written" << std::endl;
+  //     }
+  //     memset(sector_buf.get(), 0, SECTOR_LEN);
+  //     for (_u64 sector_node_id = 0;
+  //          sector_node_id < nnodes_per_sector && cur_node_id < npts_64;
+  //          sector_node_id++) {
+  //       memset(node_buf.get(), 0, max_node_len);
+  //       // read cur node's nnbrs
+  //       vamana_reader.read((char *) &nnbrs, sizeof(unsigned));
 
-        // sanity checks on nnbrs
-        assert(nnbrs > 0);
-        assert(nnbrs <= width_u32);
+  //       // sanity checks on nnbrs
+  //       assert(nnbrs > 0);
+  //       assert(nnbrs <= width_u32);
 
-        // read node's nhood
-        vamana_reader.read((char *) nhood_buf, nnbrs * sizeof(unsigned));
+  //       // read node's nhood
+  //       vamana_reader.read((char *) nhood_buf, nnbrs * sizeof(unsigned));
 
-        // write coords of node first
-        //  T *node_coords = data + ((_u64) ndims_64 * cur_node_id);
-        base_reader.read((char *) cur_node_coords.get(), sizeof(T) * ndims_64);
-        memcpy(node_buf.get(), cur_node_coords.get(), ndims_64 * sizeof(T));
+  //       // write coords of node first
+  //       //  T *node_coords = data + ((_u64) ndims_64 * cur_node_id);
+  //       base_reader.read((char *) cur_node_coords.get(), sizeof(T) *
+  //       ndims_64);
+  //       memcpy(node_buf.get(), cur_node_coords.get(), ndims_64 * sizeof(T));
 
-        // write nnbrs
-        *(unsigned *) (node_buf.get() + ndims_64 * sizeof(T)) = nnbrs;
+  //       // write nnbrs
+  //       *(unsigned *) (node_buf.get() + ndims_64 * sizeof(T)) = nnbrs;
 
-        // write nhood next
-        memcpy(node_buf.get() + ndims_64 * sizeof(T) + sizeof(unsigned),
-               nhood_buf, nnbrs * sizeof(unsigned));
+  //       // write nhood next
+  //       memcpy(node_buf.get() + ndims_64 * sizeof(T) + sizeof(unsigned),
+  //              nhood_buf, nnbrs * sizeof(unsigned));
 
-        // get offset into sector_buf
-        char *sector_node_buf =
-            sector_buf.get() + (sector_node_id * max_node_len);
+  //       // get offset into sector_buf
+  //       char *sector_node_buf =
+  //           sector_buf.get() + (sector_node_id * max_node_len);
 
-        // copy node buf into sector_node_buf
-        memcpy(sector_node_buf, node_buf.get(), max_node_len);
-        cur_node_id++;
-      }
-      // flush sector to disk
-      diskann_writer.write(sector_buf.get(), SECTOR_LEN);
-    }
-    diskann::cout << "Output file written." << std::endl;
-  }
+  //       // copy node buf into sector_node_buf
+  //       memcpy(sector_node_buf, node_buf.get(), max_node_len);
+  //       cur_node_id++;
+  //     }
+  //     // flush sector to disk
+  //     diskann_writer.write(sector_buf.get(), SECTOR_LEN);
+  //   }
+  //   diskann::cout << "Output file written." << std::endl;
+  // }
 
-  template<typename T>
-  bool build_disk_index(const char *dataFilePath, const char *indexFilePath,
-                        const char *    indexBuildParameters,
-                        diskann::Metric _compareMetric) {
-    std::stringstream parser;
-    parser << std::string(indexBuildParameters);
-    std::string              cur_param;
-    std::vector<std::string> param_list;
-    while (parser >> cur_param)
-      param_list.push_back(cur_param);
+  // template<typename T>
+  // bool build_disk_index(const char *dataFilePath, const char *indexFilePath,
+  //                       const char *    indexBuildParameters,
+  //                       diskann::Metric _compareMetric) {
+  //   std::stringstream parser;
+  //   parser << std::string(indexBuildParameters);
+  //   std::string              cur_param;
+  //   std::vector<std::string> param_list;
+  //   while (parser >> cur_param)
+  //     param_list.push_back(cur_param);
 
-    if (param_list.size() != 5) {
-      diskann::cout
-          << "Correct usage of parameters is R (max degree) "
-             "L (indexing list size, better if >= R) B (RAM limit of final "
-             "index in "
-             "GB) M (memory limit while indexing) T (number of threads for "
-             "indexing)"
-          << std::endl;
-      return false;
-    }
+  //   if (param_list.size() != 5) {
+  //     diskann::cout
+  //         << "Correct usage of parameters is R (max degree) "
+  //            "L (indexing list size, better if >= R) B (RAM limit of final "
+  //            "index in "
+  //            "GB) M (memory limit while indexing) T (number of threads for "
+  //            "indexing)"
+  //         << std::endl;
+  //     return false;
+  //   }
 
-    std::string index_prefix_path(indexFilePath);
-    std::string pq_pivots_path = index_prefix_path + "_pq_pivots.bin";
-    std::string pq_compressed_vectors_path =
-        index_prefix_path + "_pq_compressed.bin";
-    std::string mem_index_path = index_prefix_path + "_mem.index";
-    std::string disk_index_path = index_prefix_path + "_disk.index";
-    std::string medoids_path = disk_index_path + "_medoids.bin";
-    std::string centroids_path = disk_index_path + "_centroids.bin";
-    std::string sample_base_prefix = index_prefix_path + "_sample";
+  //   std::string index_prefix_path(indexFilePath);
+  //   std::string pq_pivots_path = index_prefix_path + "_pq_pivots.bin";
+  //   std::string pq_compressed_vectors_path =
+  //       index_prefix_path + "_pq_compressed.bin";
+  //   std::string mem_index_path = index_prefix_path + "_mem.index";
+  //   std::string disk_index_path = index_prefix_path + "_disk.index";
+  //   std::string medoids_path = disk_index_path + "_medoids.bin";
+  //   std::string centroids_path = disk_index_path + "_centroids.bin";
+  //   std::string sample_base_prefix = index_prefix_path + "_sample";
 
-    unsigned R = (unsigned) atoi(param_list[0].c_str());
-    unsigned L = (unsigned) atoi(param_list[1].c_str());
+  //   unsigned R = (unsigned) atoi(param_list[0].c_str());
+  //   unsigned L = (unsigned) atoi(param_list[1].c_str());
 
-    double final_index_ram_limit = get_memory_budget(param_list[2]);
-    if (final_index_ram_limit <= 0) {
-      std::cerr << "Insufficient memory budget (or string was not in right "
-                   "format). Should be > 0."
-                << std::endl;
-      return false;
-    }
-    double indexing_ram_budget = (float) atof(param_list[3].c_str());
-    if (indexing_ram_budget <= 0) {
-      std::cerr << "Not building index. Please provide more RAM budget"
-                << std::endl;
-      return false;
-    }
-    _u32 num_threads = (_u32) atoi(param_list[4].c_str());
+  //   double final_index_ram_limit = get_memory_budget(param_list[2]);
+  //   if (final_index_ram_limit <= 0) {
+  //     std::cerr << "Insufficient memory budget (or string was not in right "
+  //                  "format). Should be > 0."
+  //               << std::endl;
+  //     return false;
+  //   }
+  //   double indexing_ram_budget = (float) atof(param_list[3].c_str());
+  //   if (indexing_ram_budget <= 0) {
+  //     std::cerr << "Not building index. Please provide more RAM budget"
+  //               << std::endl;
+  //     return false;
+  //   }
+  //   _u32 num_threads = (_u32) atoi(param_list[4].c_str());
 
-    if (num_threads != 0) {
-      omp_set_num_threads(num_threads);
-      mkl_set_num_threads(num_threads);
-    }
+  //   if (num_threads != 0) {
+  //     omp_set_num_threads(num_threads);
+  //     mkl_set_num_threads(num_threads);
+  //   }
 
-    diskann::cout << "Starting index build: R=" << R << " L=" << L
-                  << " Query RAM budget: " << final_index_ram_limit
-                  << " Indexing ram budget: " << indexing_ram_budget
-                  << " T: " << num_threads << std::endl;
+  //   diskann::cout << "Starting index build: R=" << R << " L=" << L
+  //                 << " Query RAM budget: " << final_index_ram_limit
+  //                 << " Indexing ram budget: " << indexing_ram_budget
+  //                 << " T: " << num_threads << std::endl;
 
-    auto s = std::chrono::high_resolution_clock::now();
+  //   auto s = std::chrono::high_resolution_clock::now();
 
-    size_t points_num, dim;
+  //   size_t points_num, dim;
 
-    diskann::get_bin_metadata(dataFilePath, points_num, dim);
+  //   diskann::get_bin_metadata(dataFilePath, points_num, dim);
 
-    size_t num_pq_chunks =
-        (size_t)(std::floor)(_u64(final_index_ram_limit / points_num));
+  //   size_t num_pq_chunks =
+  //       (size_t)(std::floor)(_u64(final_index_ram_limit / points_num));
 
-    num_pq_chunks = num_pq_chunks <= 0 ? 1 : num_pq_chunks;
-    num_pq_chunks = num_pq_chunks > dim ? dim : num_pq_chunks;
-    num_pq_chunks =
-        num_pq_chunks > MAX_PQ_CHUNKS ? MAX_PQ_CHUNKS : num_pq_chunks;
+  //   num_pq_chunks = num_pq_chunks <= 0 ? 1 : num_pq_chunks;
+  //   num_pq_chunks = num_pq_chunks > dim ? dim : num_pq_chunks;
+  //   num_pq_chunks =
+  //       num_pq_chunks > MAX_PQ_CHUNKS ? MAX_PQ_CHUNKS : num_pq_chunks;
 
-    diskann::cout << "Compressing " << dim << "-dimensional data into "
-                  << num_pq_chunks << " bytes per vector." << std::endl;
+  //   diskann::cout << "Compressing " << dim << "-dimensional data into "
+  //                 << num_pq_chunks << " bytes per vector." << std::endl;
 
-    size_t train_size, train_dim;
-    float *train_data;
+  //   size_t train_size, train_dim;
+  //   float *train_data;
 
-    double p_val = ((double) TRAINING_SET_SIZE / (double) points_num);
-    // generates random sample and sets it to train_data and updates train_size
-    gen_random_slice<T>(dataFilePath, p_val, train_data, train_size, train_dim);
+  //   double p_val = ((double) TRAINING_SET_SIZE / (double) points_num);
+  //   // generates random sample and sets it to train_data and updates
+  //   train_size
+  //   gen_random_slice<T>(dataFilePath, p_val, train_data, train_size,
+  //   train_dim);
 
-    diskann::cout << "Training data loaded of size " << train_size << std::endl;
+  //   diskann::cout << "Training data loaded of size " << train_size <<
+  //   std::endl;
 
-    generate_pq_pivots(train_data, train_size, (uint32_t) dim, 256,
-                       (uint32_t) num_pq_chunks, 15, pq_pivots_path);
-    generate_pq_data_from_pivots<T>(dataFilePath, 256, (uint32_t) num_pq_chunks,
-                                    pq_pivots_path, pq_compressed_vectors_path);
+  //   generate_pq_pivots(train_data, train_size, (uint32_t) dim, 256,
+  //                      (uint32_t) num_pq_chunks, 15, pq_pivots_path);
+  //   generate_pq_data_from_pivots<T>(dataFilePath, 256, (uint32_t)
+  //   num_pq_chunks,
+  //                                   pq_pivots_path,
+  //                                   pq_compressed_vectors_path);
 
-    delete[] train_data;
+  //   delete[] train_data;
 
-    train_data = nullptr;
+  //   train_data = nullptr;
 
-    diskann::build_merged_vamana_index<T>(
-        dataFilePath, _compareMetric, L, R, p_val, indexing_ram_budget,
-        mem_index_path, medoids_path, centroids_path);
+  //   diskann::build_merged_vamana_index<T>(
+  //       dataFilePath, _compareMetric, L, R, p_val, indexing_ram_budget,
+  //       mem_index_path, medoids_path, centroids_path);
 
-    diskann::create_disk_layout<T>(dataFilePath, mem_index_path,
-                                   disk_index_path);
+  //   diskann::create_disk_layout<T>(dataFilePath, mem_index_path,
+  //                                  disk_index_path);
 
-    double sample_sampling_rate = (150000.0 / points_num);
-    gen_random_slice<T>(dataFilePath, sample_base_prefix, sample_sampling_rate);
+  //   double sample_sampling_rate = (150000.0 / points_num);
+  //   gen_random_slice<T>(dataFilePath, sample_base_prefix,
+  //   sample_sampling_rate);
 
-    std::remove(mem_index_path.c_str());
+  //   std::remove(mem_index_path.c_str());
 
-    auto                          e = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double> diff = e - s;
-    diskann::cout << "Indexing time: " << diff.count() << std::endl;
+  //   auto                          e =
+  //   std::chrono::high_resolution_clock::now();
+  //   std::chrono::duration<double> diff = e - s;
+  //   diskann::cout << "Indexing time: " << diff.count() << std::endl;
 
-    return true;
-  }
+  //   return true;
+  // }
 
-  template DISKANN_DLLEXPORT void create_disk_layout<int8_t>(
-      const std::string base_file, const std::string mem_index_file,
-      const std::string output_file);
+  // template DISKANN_DLLEXPORT void create_disk_layout<int8_t>(
+  //     const std::string base_file, const std::string mem_index_file,
+  //     const std::string output_file);
 
-  template DISKANN_DLLEXPORT void create_disk_layout<uint8_t>(
-      const std::string base_file, const std::string mem_index_file,
-      const std::string output_file);
-  template DISKANN_DLLEXPORT void create_disk_layout<float>(
-      const std::string base_file, const std::string mem_index_file,
-      const std::string output_file);
+  // template DISKANN_DLLEXPORT void create_disk_layout<uint8_t>(
+  //     const std::string base_file, const std::string mem_index_file,
+  //     const std::string output_file);
+  // template DISKANN_DLLEXPORT void create_disk_layout<float>(
+  //     const std::string base_file, const std::string mem_index_file,
+  //     const std::string output_file);
 
   template DISKANN_DLLEXPORT int8_t *load_warmup<int8_t>(
       const std::string &cache_warmup_file, uint64_t &warmup_num,
@@ -757,31 +778,31 @@ namespace diskann {
       uint64_t &warmup_num, uint64_t warmup_dim, uint64_t warmup_aligned_dim);
 #endif
 
-  template DISKANN_DLLEXPORT uint32_t optimize_beamwidth<int8_t>(
-      std::unique_ptr<diskann::PQFlashIndex<int8_t>> &pFlashIndex,
-      int8_t *tuning_sample, _u64 tuning_sample_num,
-      _u64 tuning_sample_aligned_dim, uint32_t L, uint32_t nthreads,
-      uint32_t start_bw);
-  template DISKANN_DLLEXPORT uint32_t optimize_beamwidth<uint8_t>(
-      std::unique_ptr<diskann::PQFlashIndex<uint8_t>> &pFlashIndex,
-      uint8_t *tuning_sample, _u64 tuning_sample_num,
-      _u64 tuning_sample_aligned_dim, uint32_t L, uint32_t nthreads,
-      uint32_t start_bw);
-  template DISKANN_DLLEXPORT uint32_t optimize_beamwidth<float>(
-      std::unique_ptr<diskann::PQFlashIndex<float>> &pFlashIndex,
-      float *tuning_sample, _u64 tuning_sample_num,
-      _u64 tuning_sample_aligned_dim, uint32_t L, uint32_t nthreads,
-      uint32_t start_bw);
+  // template DISKANN_DLLEXPORT uint32_t optimize_beamwidth<int8_t>(
+  //     std::unique_ptr<diskann::PQFlashIndex<int8_t>> &pFlashIndex,
+  //     int8_t *tuning_sample, _u64 tuning_sample_num,
+  //     _u64 tuning_sample_aligned_dim, uint32_t L, uint32_t nthreads,
+  //     uint32_t start_bw);
+  // template DISKANN_DLLEXPORT uint32_t optimize_beamwidth<uint8_t>(
+  //     std::unique_ptr<diskann::PQFlashIndex<uint8_t>> &pFlashIndex,
+  //     uint8_t *tuning_sample, _u64 tuning_sample_num,
+  //     _u64 tuning_sample_aligned_dim, uint32_t L, uint32_t nthreads,
+  //     uint32_t start_bw);
+  // template DISKANN_DLLEXPORT uint32_t optimize_beamwidth<float>(
+  //     std::unique_ptr<diskann::PQFlashIndex<float>> &pFlashIndex,
+  //     float *tuning_sample, _u64 tuning_sample_num,
+  //     _u64 tuning_sample_aligned_dim, uint32_t L, uint32_t nthreads,
+  //     uint32_t start_bw);
 
-  template DISKANN_DLLEXPORT bool build_disk_index<int8_t>(
-      const char *dataFilePath, const char *indexFilePath,
-      const char *indexBuildParameters, diskann::Metric _compareMetric);
-  template DISKANN_DLLEXPORT bool build_disk_index<uint8_t>(
-      const char *dataFilePath, const char *indexFilePath,
-      const char *indexBuildParameters, diskann::Metric _compareMetric);
-  template DISKANN_DLLEXPORT bool build_disk_index<float>(
-      const char *dataFilePath, const char *indexFilePath,
-      const char *indexBuildParameters, diskann::Metric _compareMetric);
+  // template DISKANN_DLLEXPORT bool build_disk_index<int8_t>(
+  //     const char *dataFilePath, const char *indexFilePath,
+  //     const char *indexBuildParameters, diskann::Metric _compareMetric);
+  // template DISKANN_DLLEXPORT bool build_disk_index<uint8_t>(
+  //     const char *dataFilePath, const char *indexFilePath,
+  //     const char *indexBuildParameters, diskann::Metric _compareMetric);
+  // template DISKANN_DLLEXPORT bool build_disk_index<float>(
+  //     const char *dataFilePath, const char *indexFilePath,
+  //     const char *indexBuildParameters, diskann::Metric _compareMetric);
 
   template DISKANN_DLLEXPORT int build_merged_vamana_index<int8_t>(
       std::string base_file, diskann::Metric _compareMetric, unsigned L,

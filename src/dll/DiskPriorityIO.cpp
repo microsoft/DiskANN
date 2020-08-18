@@ -23,8 +23,9 @@ namespace diskann {
   }
 
   DiskPriorityIO::~DiskPriorityIO() {
-    //std::cout << "In DiskPriorityIO destructor, thread id "
-    //          << std::this_thread::get_id() << " this is:" << ((uint64_t) this)
+    // std::cout << "In DiskPriorityIO destructor, thread id "
+    //          << std::this_thread::get_id() << " this is:" << ((uint64_t)
+    //          this)
     //          << " Is Overlapped queue empty: " << m_overlappedQueue.empty()
     //          << " Polling thread count: " << m_ioPollingThreads.size()
     //          << std::endl;
