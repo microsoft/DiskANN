@@ -200,13 +200,13 @@ void testStreamBufImpl() {
 //--5. Testing MemBuf Impl
 class ContentBuf : public std::basic_streambuf<char> {
  public:
-  ContentBuf(char* ptr, size_t size){
+  ContentBuf(char* ptr, size_t size) {
     setg(ptr, ptr, ptr + size);
   }
 };
 void testMemBufImpl(int argc, char** argv) {
   // Create a simple binary file.
-  std::string        fileName = argv[2];
+  std::string   fileName = argv[2];
   std::ofstream output_file(fileName, std::ios::binary);
   uint32_t      n1 = 105, n2 = 18090;
   const int     F_ARRAY_LEN = 5;
@@ -227,11 +227,11 @@ void testMemBufImpl(int argc, char** argv) {
   size_t        size = input_file.tellg();
   input_file.seekg(0);
 
-  auto              data = new char[size];
+  auto data = new char[size];
   input_file.read(data, size);
 
   std::cout << "Read " << size << " bytes from file" << std::endl;
-    
+
   uint32_t int1, int2;
   float    f2;
   float*   fs1 = new float[F_ARRAY_LEN];
@@ -239,13 +239,13 @@ void testMemBufImpl(int argc, char** argv) {
   memset(fs1, 0, sizeof(float) * F_ARRAY_LEN);
   memset(arr1, 0, sizeof(_u8) * I_ARRAY_LEN);
 
-  //std::ifstream reader(argv[1], std::ios::binary);
-  //reader.read((char *)&int1, sizeof(int));
-  //reader.read((char*) &int2, sizeof(int));
-  //reader.read((char*) &f2, sizeof(float));
-  //reader.read((char*) fs1, sizeof(float) * F_ARRAY_LEN);
+  // std::ifstream reader(argv[1], std::ios::binary);
+  // reader.read((char *)&int1, sizeof(int));
+  // reader.read((char*) &int2, sizeof(int));
+  // reader.read((char*) &f2, sizeof(float));
+  // reader.read((char*) fs1, sizeof(float) * F_ARRAY_LEN);
 
-  ContentBuf cb(data, size);
+  ContentBuf               cb(data, size);
   std::basic_istream<char> reader(&cb);
 
   reader.read((char*) &int1, sizeof(uint32_t));
@@ -254,7 +254,7 @@ void testMemBufImpl(int argc, char** argv) {
   reader.read((char*) fs1, F_ARRAY_LEN * sizeof(float));
   reader.read((char*) arr1, I_ARRAY_LEN * sizeof(_u8));
 
-  std::cout << int1 << "," << int2 << ","  << f2 << std::endl;
+  std::cout << int1 << "," << int2 << "," << f2 << std::endl;
   for (int i = 0; i < F_ARRAY_LEN; i++) {
     std::cout << fs1[i] << ",";
   }
@@ -263,7 +263,7 @@ void testMemBufImpl(int argc, char** argv) {
     std::cout << std::to_string(arr1[i]) << ",";
   }
   std::cout << std::endl;
-  
+
   assert(int1 == n1);
   assert(int2 == n2);
   assert(abs(f1 - f2) < 0.0001);
@@ -274,7 +274,7 @@ void testSubstringImpl(int argc, char** argv) {
 
   std::string s1(argv[2]);
   std::string s2(argv[3]);
-  assert(s1[0] == s2[0]); //at least they share one char in common!
+  assert(s1[0] == s2[0]);  // at least they share one char in common!
 
   size_t index = -1;
   size_t compareLen = s1.length() <= s2.length() ? s1.length() : s2.length();

@@ -44,7 +44,8 @@ namespace diskann {
       diskann::cout << "Closing all async handlers...";
       auto iter = ctx_map.begin();
       while (iter != ctx_map.end()) {
-        //std::cout << "In BAFR::close(), deregistering thread: " << iter->first
+        // std::cout << "In BAFR::close(), deregistering thread: " <<
+        // iter->first
         //          << " DiskIO use count: "
         //          << (iter->second).m_pDiskIO.use_count() << std::endl;
 
@@ -88,7 +89,6 @@ namespace diskann {
   }
 
   void BingAlignedFileReader::deregister_thread() {
-   
     std::unique_lock<std::mutex> lk(this->ctx_mut);
     std::thread::id              tId = std::this_thread::get_id();
     if (this->ctx_map.find(tId) != this->ctx_map.end()) {

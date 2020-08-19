@@ -74,8 +74,9 @@ int search_disk_index(int argc, char** argv) {
   }
 
   if (Lvec.size() == 0) {
-    diskann::cout << "No valid Lsearch found. Lsearch must be at least recall_at"
-              << std::endl;
+    diskann::cout
+        << "No valid Lsearch found. Lsearch must be at least recall_at"
+        << std::endl;
     return -1;
   }
 
@@ -91,8 +92,9 @@ int search_disk_index(int argc, char** argv) {
   if (file_exists(truthset_bin)) {
     diskann::load_truthset(truthset_bin, gt_ids, gt_dists, gt_num, gt_dim);
     if (gt_num != query_num) {
-      diskann::cout << "Error. Mismatch in number of queries and ground truth data"
-                << std::endl;
+      diskann::cout
+          << "Error. Mismatch in number of queries and ground truth data"
+          << std::endl;
     }
     calc_recall_flag = true;
   }
@@ -119,8 +121,8 @@ int search_disk_index(int argc, char** argv) {
   }
   // cache bfs levels
   std::vector<uint32_t> node_list;
-  diskann::cout << "Caching " << num_nodes_to_cache << " BFS nodes around medoid(s)"
-            << std::endl;
+  diskann::cout << "Caching " << num_nodes_to_cache
+                << " BFS nodes around medoid(s)" << std::endl;
   //  _pFlashIndex->cache_bfs_levels(num_nodes_to_cache, node_list);
   _pFlashIndex->generate_cache_list_from_sample_queries(
       warmup_query_file, 15, 6, num_nodes_to_cache, num_threads, node_list);
@@ -174,16 +176,17 @@ int search_disk_index(int argc, char** argv) {
 
   std::string recall_string = "Recall@" + std::to_string(recall_at);
   diskann::cout << std::setw(6) << "L" << std::setw(12) << "Beamwidth"
-            << std::setw(16) << "QPS" << std::setw(16) << "Mean Latency"
-            << std::setw(16) << "99.9 Latency" << std::setw(16) << "Mean IOs"
-            << std::setw(16) << "CPU (s)";
+                << std::setw(16) << "QPS" << std::setw(16) << "Mean Latency"
+                << std::setw(16) << "99.9 Latency" << std::setw(16)
+                << "Mean IOs" << std::setw(16) << "CPU (s)";
   if (calc_recall_flag) {
     diskann::cout << std::setw(16) << recall_string << std::endl;
   } else
     diskann::cout << std::endl;
-  diskann::cout << "==============================================================="
-               "==========================================="
-            << std::endl;
+  diskann::cout
+      << "==============================================================="
+         "==========================================="
+      << std::endl;
 
   std::vector<std::vector<uint32_t>> query_result_ids(Lvec.size());
   std::vector<std::vector<float>>    query_result_dists(Lvec.size());
@@ -250,9 +253,9 @@ int search_disk_index(int argc, char** argv) {
     }
 
     diskann::cout << std::setw(6) << L << std::setw(12) << optimized_beamwidth
-              << std::setw(16) << qps << std::setw(16) << mean_latency
-              << std::setw(16) << latency_999 << std::setw(16) << mean_ios
-              << std::setw(16) << mean_cpuus;
+                  << std::setw(16) << qps << std::setw(16) << mean_latency
+                  << std::setw(16) << latency_999 << std::setw(16) << mean_ios
+                  << std::setw(16) << mean_cpuus;
     if (calc_recall_flag) {
       diskann::cout << std::setw(16) << recall << std::endl;
     } else
@@ -300,5 +303,5 @@ int main(int argc, char** argv) {
     search_disk_index<uint8_t>(argc, argv);
   else
     diskann::cout << "Unsupported index type. Use float or int8 or uint8"
-              << std::endl;
+                  << std::endl;
 }

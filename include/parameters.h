@@ -8,9 +8,6 @@ namespace diskann {
   class Parameters {
    public:
     Parameters() {
-      // std::stringstream sstream;
-      // sstream << 0;
-      // params["num_threads"] = sstream.str();
       int *p = new int;
       *p = 0;
       params["num_threads"] = p;
@@ -18,12 +15,9 @@ namespace diskann {
 
     template<typename ParamType>
     inline void Set(const std::string &name, const ParamType &value) {
-      // std::stringstream sstream;
-      // sstream << value;
-      // params[name] = sstream.str();
-      ParamType *ptr = new ParamType;
+      ParamType *ptr = (ParamType *) malloc(sizeof(ParamType));
       *ptr = value;
-      params[name] = ptr;
+      params[name] = (void *) ptr;
     }
 
     template<typename ParamType>
@@ -55,7 +49,8 @@ namespace diskann {
     ~Parameters() {
       for (auto iter = params.begin(); iter != params.end(); iter++) {
         if (iter->second != nullptr)
-          delete iter->second;
+          free(iter->second);
+        // delete iter->second;
       }
     }
 
