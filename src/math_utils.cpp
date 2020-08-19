@@ -36,8 +36,7 @@ namespace math_utils {
       for (size_t j = 0; j < dim; j++)
         data[i * dim + j] = (float) distribution(generator);
       float norm = cblas_snrm2((MKL_INT) dim, (data + (i * dim)), 1);
-      //		diskann::cout<<norm<<std::endl;
-      //		norm = std::sqrt(norm);
+
       for (size_t j = 0; j < dim; j++)
         data[i * dim + j] = data[i * dim + j] / norm;
     }
@@ -46,19 +45,6 @@ namespace math_utils {
                    (lapack_int) dim, tau);
     LAPACKE_sorgqr(LAPACK_ROW_MAJOR, dim, dim, dim, data, dim, tau);
 
-    /*
-      float* norm_mat = new float[dim*dim];
-      for (size_t i = 0; i < dim; i++) {
-        for (size_t j = 0; j < dim; j++) {
-          norm_mat[i*dim +j] = 0;
-          for (size_t k = 0;k < dim;k ++)  {
-      norm_mat[i*dim +j] += data[i*dim + k]* data[j*dim +k];
-    }
-      diskann::cout<<norm_mat[i*dim+j]<<" ";
-      }
-      diskann::cout<<std::endl;
-    }
-    */
     delete[] tau;
   }
 
@@ -72,14 +58,10 @@ namespace math_utils {
     }
     diskann::cout << "done Rotating data with random matrix.." << std::flush;
 
-    //	float* tmp_mat = new float[num_points * dim];
     cblas_sgemm(CblasRowMajor, CblasNoTrans, transpose, (MKL_INT) num_points,
                 (MKL_INT) dim, (MKL_INT) dim, 1.0, data, (MKL_INT) dim, rot_mat,
                 (MKL_INT) dim, 0, new_mat, (MKL_INT) dim);
-    //	for (size_t i = 0; i < num_points; i++)
-    //		for (size_t j = 0; j < dim; j++)
-    //			new_mat[i * dim + j] = tmp_mat[j * num_points + i];
-    //	delete[] tmp_mat;
+
     diskann::cout << "done." << std::endl;
   }
 
@@ -113,13 +95,6 @@ namespace math_utils {
     for (size_t i = 0; i < num_points; i++) {
       ones_b[i] = 1.0;
     }
-
-    /*const  CBLAS_LAYOUT Layout, const  CBLAS_TRANSPOSE TransA,
-                 const  CBLAS_TRANSPOSE TransB, const MKL_INT M, const MKL_INT
-       N,
-                 const MKL_INT K, const float alpha, const float *A,
-                 const MKL_INT lda, const float *B, const MKL_INT ldb,
-                 const float beta, float *C, const MKL_INT ldc);*/
 
     cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasTrans, (MKL_INT) num_points,
                 (MKL_INT) num_centers, (MKL_INT) 1, 1.0f, docs_l2sq,
@@ -195,15 +170,11 @@ namespace math_utils {
     if (!is_norm_given_for_pts)
       pts_norms_squared = new float[num_points];
 
-    // size_t PAR_BLOCK_SIZE = 1 << 23;
-    //	    (num_points > 1 << 20) ? 1 << 13 : (num_points / 16);
-
     size_t PAR_BLOCK_SIZE = num_points;
     size_t N_BLOCKS = (num_points % PAR_BLOCK_SIZE) == 0
                           ? (num_points / PAR_BLOCK_SIZE)
                           : (num_points / PAR_BLOCK_SIZE) + 1;
 
-    // mkl_set_num_threads(64);
     if (!is_norm_given_for_pts)
       math_utils::compute_vecs_l2sq(pts_norms_squared, data, num_points, dim);
     math_utils::compute_vecs_l2sq(pivs_norms_squared, pivot_data, num_centers,
@@ -399,7 +370,7 @@ namespace kmeans {
     return residual;
   }
 
-  // assumes already memory allocated for pivot_data as new
+  // assumes memory allocated for pivot_data as new
   // float[num_centers*dim]
   // and select randomly num_centers points as pivots
   void selecting_pivots(float* data, size_t num_points, size_t dim,
@@ -505,7 +476,6 @@ namespace kmeans {
         diskann::cout << "." << std::flush;
     }
     diskann::cout << "done." << std::endl;
-    //	diskann::cout << " Generated pivots using k-means++. " << std::endl;
     delete[] dist;
   }
 

@@ -78,7 +78,7 @@ namespace diskann {
     RandNSGLogging(_logLevel, str);
 #else
     fwrite(str, sizeof(char), num, _fp);
-    auto ret = fflush(_fp);
+    fflush(_fp);
 #endif
   }
 
