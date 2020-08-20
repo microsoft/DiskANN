@@ -251,13 +251,28 @@ namespace diskann {
     diskann::cout << "Metadata: #pts = " << npts << ", #dims = " << dim << "..."
                   << std::endl;
 
-    size_t expected_actual_file_size =
+    int truthset_type = -1;  // 1 means truthset has ids and distances, 2 means
+                             // only ids, -1 is error
+    size_t expected_file_size_with_dists =
         2 * npts * dim * sizeof(uint32_t) + 2 * sizeof(uint32_t);
-    if (actual_file_size != expected_actual_file_size) {
+
+    if (actual_file_size == expected_file_size_with_dists)
+      truthset_type = 1;
+
+    size_t expected_file_size_just_ids =
+        npts * dim * sizeof(uint32_t) + 2 * sizeof(uint32_t);
+
+    if (actual_file_size == expected_file_size_just_ids)
+      truthset_type = 2;
+
+    if (truthset_type == -1) {
       std::stringstream stream;
-      stream << "Error. File size mismatch. Actual size is " << actual_file_size
-             << " while expected size is  " << expected_actual_file_size
-             << " npts = " << npts << " dim = " << dim << std::endl;
+      stream << "Error. File size mismatch. File should have bin format, with "
+                "npts followed by ngt followed by npts*ngt ids and optionally "
+                "followed by npts*ngt distance values; actual size: "
+             << actual_file_size
+             << ", expected: " << expected_file_size_with_dists << " or "
+             << expected_file_size_just_ids;
       diskann::cout << stream.str();
       throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
                                   __LINE__);
@@ -265,8 +280,11 @@ namespace diskann {
 
     ids = new uint32_t[npts * dim];
     reader.read((char*) ids, npts * dim * sizeof(uint32_t));
-    dists = new float[npts * dim];
-    reader.read((char*) dists, npts * dim * sizeof(float));
+
+    if (truthset_type == 1) {
+      dists = new float[npts * dim];
+      reader.read((char*) dists, npts * dim * sizeof(float));
+    }
   }
 
 #ifdef EXEC_ENV_OLS

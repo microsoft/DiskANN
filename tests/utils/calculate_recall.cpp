@@ -18,11 +18,12 @@ int main(int argc, char** argv) {
   unsigned* gold_std = NULL;
   float*    gs_dist = nullptr;
   unsigned* our_results = NULL;
+  float*    or_dist = nullptr;
   size_t    points_num, points_num_gs, points_num_or;
   size_t    dim_gs;
   size_t    dim_or;
-  diskann::load_bin<unsigned>(argv[1], gold_std, points_num_gs, dim_gs);
-  diskann::load_bin<unsigned>(argv[2], our_results, points_num_or, dim_or);
+  diskann::load_truthset(argv[1], gold_std, gs_dist, points_num_gs, dim_gs);
+  diskann::load_truthset(argv[2], our_results, or_dist, points_num_or, dim_or);
 
   if (points_num_gs != points_num_or) {
     std::cout
