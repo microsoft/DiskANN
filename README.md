@@ -41,7 +41,7 @@ The Windows version has been tested with the enterprise editions of Visual Studi
 -	Create a "build" directory under diskann
 -	Change to the "build" directory and run  
 ```
-cmake -B. -A x64 ..
+<full-path-to-cmake>\cmake -B. -A x64 ..
 ```
 **Note: Since VS comes with its own (older) version of cmake, you have to specify the full path to cmake to ensure that the right version is used.**
 -	This will create a “diskann” solution file.
