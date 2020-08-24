@@ -44,7 +44,7 @@ The Windows version has been tested with the enterprise editions of Visual Studi
 <full-path-to-cmake>\cmake -B. -A x64 ..
 ```
 **Note: Since VS comes with its own (older) version of cmake, you have to specify the full path to cmake to ensure that the right version is used.**
--	This will create a “diskann” solution file.
+-	This will create a “diskann” solution file in the "build" directory
 -	Open the "diskann" solution and build the “nsg_dll” project. 
 - 	Then build all the other binaries using the ALL_BUILD project that is part of the solution
 - 	Generated binaries are stored in the diskann/x64/Debug or diskann/x64/Release directories.
