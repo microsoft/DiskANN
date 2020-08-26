@@ -45,8 +45,8 @@ The Windows version has been tested with the Enterprise editions of Visual Studi
 ```
 
 **Note: Since VS comes with its own (older) version of cmake, you have to specify the full path to cmake to ensure that the right version is used.**
--	This will create a “diskann” solution file in the "build" directory
 -   The command-line shown uses the default CMake build system on the machine. If the default is not Visual Studio 2017 or Visual Studio 2019, the build system should be set using the -G option of CMake.
+-	This will create a “diskann” solution file in the "build" directory
 -	Open the "diskann" solution and build the “diskann” project. 
 - 	Then build all the other binaries using the ALL_BUILD project that is part of the solution
 - 	Generated binaries are stored in the diskann/x64/Debug or diskann/x64/Release directories.
