@@ -25,7 +25,7 @@ mkdir build && cd build && cmake .. && make -j
 
 ##Windows build:
 
-The Windows version has been tested with the enterprise editions of Visual Studio 2017 and Visual Studio 2019
+The Windows version has been tested with the Enterprise editions of Visual Studio 2017 and Visual Studio 2019. It should work with the Community and Professional editions as well without any changes. 
 
 **Prerequisites:**
 
@@ -43,15 +43,17 @@ The Windows version has been tested with the enterprise editions of Visual Studi
 ```
 <full-path-to-cmake>\cmake -B. -A x64 ..
 ```
+
 **Note: Since VS comes with its own (older) version of cmake, you have to specify the full path to cmake to ensure that the right version is used.**
 -	This will create a “diskann” solution file in the "build" directory
--	Open the "diskann" solution and build the “nsg_dll” project. 
+-   The command-line shown uses the default CMake build system on the machine. If the default is not Visual Studio 2017 or Visual Studio 2019, the build system should be set using the -G option of CMake.
+-	Open the "diskann" solution and build the “diskann” project. 
 - 	Then build all the other binaries using the ALL_BUILD project that is part of the solution
 - 	Generated binaries are stored in the diskann/x64/Debug or diskann/x64/Release directories.
 
-To build from command line, change to the "build" directory and use msbuild to first build the "nsg_dll" project. And then build the entire solution, as shown below.
+To build from command line, change to the "build" directory and use msbuild to first build the "diskann" project. And then build the entire solution, as shown below.
 ```
-msbuild src\dll\nsg_dll.vcxproj
+msbuild src\dll\diskann.vcxproj
 msbuild diskann.sln
 ```
 Check msbuild docs for additional options including choosing between debug and release builds.
