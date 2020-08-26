@@ -12,9 +12,9 @@
 template<typename T>
 int create_disk_layout(int argc, char **argv) {
   std::string base_file(argv[2]);
-  std::string rand_nsg_file(argv[3]);
+  std::string vamana_file(argv[3]);
   std::string output_file(argv[4]);
-  diskann::create_disk_layout<T>(base_file, rand_nsg_file, output_file);
+  diskann::create_disk_layout<T>(base_file, vamana_file, output_file);
   return 0;
 }
 

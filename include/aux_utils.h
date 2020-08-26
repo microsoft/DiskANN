@@ -59,12 +59,12 @@ namespace diskann {
                                    uint64_t warmup_aligned_dim);
 #endif
 
-  DISKANN_DLLEXPORT int merge_shards(const std::string &nsg_prefix,
-                                     const std::string &nsg_suffix,
+  DISKANN_DLLEXPORT int merge_shards(const std::string &vamana_prefix,
+                                     const std::string &vamana_suffix,
                                      const std::string &idmaps_prefix,
                                      const std::string &idmaps_suffix,
                                      const _u64 nshards, unsigned max_degree,
-                                     const std::string &output_nsg,
+                                     const std::string &output_vamana,
                                      const std::string &medoids_file);
 
   template<typename T>

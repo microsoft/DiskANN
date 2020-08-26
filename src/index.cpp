@@ -978,7 +978,7 @@ namespace diskann {
       }
     }
     diskann::cout << "Starting index build..." << std::endl;
-    link(parameters);  // Primary func for creating nsg graph
+    link(parameters);  // Primary func for creating graph
 
     if (_support_eager_delete) {
       update_in_graph();  // copying values to in_graph

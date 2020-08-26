@@ -611,7 +611,7 @@ namespace diskann {
         << " #aligned_dim: " << aligned_dim << " #chunks: " << n_chunks
         << std::endl;
 
-// read nsg metadata
+// read index metadata
 #ifdef EXEC_ENV_OLS
     // This is a bit tricky. We have to read the header from the
     // disk_index_file. But  this is
@@ -626,14 +626,14 @@ namespace diskann {
 
     char *                   bytes = getHeaderBytes();
     ContentBuf               buf(bytes, HEADER_SIZE);
-    std::basic_istream<char> nsg_meta(&buf);
+    std::basic_istream<char> index_metadata(&buf);
 #else
-    std::ifstream nsg_meta(disk_index_file, std::ios::binary);
+    std::ifstream index_metadata(disk_index_file, std::ios::binary);
 #endif
 
     size_t actual_index_size = get_file_size(disk_index_file);
     size_t expected_file_size;
-    READ_U64(nsg_meta, expected_file_size);
+    READ_U64(index_metadata, expected_file_size);
     if (actual_index_size != expected_file_size) {
       diskann::cout << "File size mismatch for " << disk_index_file
                     << " (size: " << actual_index_size << ")"
@@ -643,7 +643,7 @@ namespace diskann {
     }
 
     _u64 disk_nnodes;
-    READ_U64(nsg_meta, disk_nnodes);
+    READ_U64(index_metadata, disk_nnodes);
     if (disk_nnodes != num_points) {
       diskann::cout << "Mismatch in #points for compressed data file and disk "
                        "index file: "
@@ -652,9 +652,9 @@ namespace diskann {
     }
 
     size_t medoid_id_on_file;
-    READ_U64(nsg_meta, medoid_id_on_file);
-    READ_U64(nsg_meta, max_node_len);
-    READ_U64(nsg_meta, nnodes_per_sector);
+    READ_U64(index_metadata, medoid_id_on_file);
+    READ_U64(index_metadata, max_node_len);
+    READ_U64(index_metadata, nnodes_per_sector);
     max_degree = ((max_node_len - data_dim * sizeof(T)) / sizeof(unsigned)) - 1;
 
     diskann::cout << "Disk-Index File Meta-data: ";
@@ -665,13 +665,13 @@ namespace diskann {
 #ifdef EXEC_ENV_OLS
     delete[] bytes;
 #else
-    nsg_meta.close();
+    index_metadata.close();
 #endif
 
 #ifndef EXEC_ENV_OLS
-    // open AlignedFileReader handle to nsg_file
-    std::string nsg_fname(disk_index_file);
-    reader->open(nsg_fname);
+    // open AlignedFileReader handle to index_file
+    std::string index_fname(disk_index_file);
+    reader->open(index_fname);
     this->setup_thread_data(num_threads);
     this->max_nthreads = num_threads;
 

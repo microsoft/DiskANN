@@ -32,13 +32,6 @@ else()
 	target_link_libraries(uint32_to_uint8 ${PROJECT_NAME})
 endif()
 
-add_executable(nsg_bfs nsg_bfs.cpp)
-if(MSVC)
-	target_link_options(nsg_bfs PRIVATE /MACHINE:x64)
-	target_link_libraries(nsg_bfs debug ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG}/nsg_dll.lib)
-	target_link_libraries(nsg_bfs optimized ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE}/nsg_dll.lib)
-endif()
-
 add_executable(gen_random_slice gen_random_slice.cpp)
 if(MSVC)
 	target_link_options(gen_random_slice PRIVATE /MACHINE:x64)
