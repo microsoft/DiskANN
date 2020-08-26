@@ -37,7 +37,7 @@ The Windows version has been tested with the Enterprise editions of Visual Studi
 	   (For instance, if your install folder is "C:\Program Files (x86)\IntelSWtools", set INTEL_ROOT to "C:\Program Files (x86)\IntelSWtools\compilers_and_libraries\windows")
 
 **Build steps:**
--	Open a new developer command prompt
+-	Open a new command prompt window
 -	Create a "build" directory under diskann
 -	Change to the "build" directory and run  
 ```
