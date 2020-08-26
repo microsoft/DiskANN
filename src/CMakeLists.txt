@@ -2,7 +2,6 @@ set(CMAKE_CXX_STANDARD 14)
 
 if(MSVC)
 	add_subdirectory(dll)
-	add_subdirectory(webservice)
 else()
 	#file(GLOB CPP_SOURCES *.cpp)
 	set(CPP_SOURCES ann_exception.cpp aux_utils.cpp index.cpp
