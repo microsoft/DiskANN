@@ -27,7 +27,6 @@ typedef int FileHandle;
 #include "cached_io.h"
 #include "common_includes.h"
 #include "windows_customizations.h"
-#include "aligned_dtor.h"
 
 #ifdef EXEC_ENV_OLS
 #include "content_buf.h"
