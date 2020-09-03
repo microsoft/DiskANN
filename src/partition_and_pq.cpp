@@ -17,7 +17,6 @@
 #include "index.h"
 #include "parameters.h"
 #include "tsl/robin_set.h"
-#include "tcmalloc/malloc_extension.h"
 #include "utils.h"
 
 #include <fcntl.h>

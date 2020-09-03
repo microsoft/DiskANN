@@ -30,7 +30,6 @@
 #include "timer.h"
 #include "utils.h"
 #include "windows_customizations.h"
-#include "tcmalloc/malloc_extension.h"
 #ifdef _WINDOWS
 #include <xmmintrin.h>
 #endif
