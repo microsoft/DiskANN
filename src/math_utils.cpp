@@ -27,27 +27,6 @@ namespace math_utils {
     }
   }
 
-  void gen_unit_gaussian_matrix(float* data, size_t dim) {
-    std::random_device               rd;
-    auto                             x = rd();
-    std::default_random_engine       generator(x);
-    std::normal_distribution<double> distribution(0, 1.0);
-    for (size_t i = 0; i < dim; i++) {
-      for (size_t j = 0; j < dim; j++)
-        data[i * dim + j] = (float) distribution(generator);
-      float norm = cblas_snrm2((MKL_INT) dim, (data + (i * dim)), 1);
-
-      for (size_t j = 0; j < dim; j++)
-        data[i * dim + j] = data[i * dim + j] / norm;
-    }
-    float* tau = new float[dim];
-    LAPACKE_sgeqrf(LAPACK_ROW_MAJOR, (lapack_int) dim, (lapack_int) dim, data,
-                   (lapack_int) dim, tau);
-    LAPACKE_sorgqr(LAPACK_ROW_MAJOR, dim, dim, dim, data, dim, tau);
-
-    delete[] tau;
-  }
-
   void rotate_data_randomly(float* data, size_t num_points, size_t dim,
                             float* rot_mat, float*& new_mat,
                             bool transpose_rot) {

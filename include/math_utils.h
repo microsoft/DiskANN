@@ -14,8 +14,6 @@ namespace math_utils {
   void compute_vecs_l2sq(float* vecs_l2sq, float* data, const size_t num_points,
                          const size_t dim);
 
-  void gen_unit_gaussian_matrix(float* data, size_t dim);
-
   void rotate_data_randomly(float* data, size_t num_points, size_t dim,
                             float* rot_mat, float*& new_mat,
                             bool transpose_rot = false);
