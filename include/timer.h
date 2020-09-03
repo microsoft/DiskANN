@@ -1,23 +1,21 @@
-// borrowed from https://gist.github.com/tzutalin/fd0340a93bb8d998abb9
 #include <chrono>
 
 namespace diskann {
   class Timer {
-    typedef std::chrono::high_resolution_clock clock_;
-    std::chrono::time_point<clock_>            m_beg;
+    typedef std::chrono::high_resolution_clock _clock;
+    std::chrono::time_point<_clock>            check_point;
 
    public:
-    Timer() : m_beg(clock_::now()) {
+    Timer() : check_point(_clock::now()) {
     }
 
     void reset() {
-      m_beg = clock_::now();
+      check_point = _clock::now();
     }
 
-    // returns elapsed time in `us`
     long long elapsed() const {
       return std::chrono::duration_cast<std::chrono::microseconds>(
-                 clock_::now() - m_beg)
+                 _clock::now() - check_point)
           .count();
     }
   };
