@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation. All rights reserved.
+// Licensed under the MIT license.
+
 #ifdef _WINDOWS
 #ifndef USE_BING_INFRA
 #include "windows_aligned_file_reader.h"
