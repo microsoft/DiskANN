@@ -23,7 +23,6 @@ typedef HANDLE FileHandle;
 typedef int FileHandle;
 #endif
 
-#include "aligned_dtor.h"
 #include "cached_io.h"
 #include "common_includes.h"
 #include "utils.h"
