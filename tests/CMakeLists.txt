@@ -3,16 +3,6 @@
 
 set(CMAKE_CXX_STANDARD 14)
 
-add_executable(test_incremental_index test_incremental_index.cpp )
-if(MSVC)
-	target_link_options(test_incremental_index PRIVATE /MACHINE:x64 /DEBUG:FULL)
-	target_link_libraries(test_incremental_index debug ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG}/${PROJECT_NAME}.lib)
-	target_link_libraries(test_incremental_index optimized ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE}/${PROJECT_NAME}.lib)
-
-else() 
-	target_link_libraries(test_incremental_index ${PROJECT_NAME} -ltcmalloc)
-endif()
-
 add_executable(build_memory_index build_memory_index.cpp )
 if(MSVC)
 	target_link_options(build_memory_index PRIVATE /MACHINE:x64 /DEBUG:FULL "/INCLUDE:_tcmalloc")

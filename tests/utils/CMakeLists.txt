@@ -61,8 +61,6 @@ else()
 endif()
 
 
-
-
 add_executable(generate_pq generate_pq.cpp)
 if(MSVC)
 	target_link_options(generate_pq PRIVATE /MACHINE:x64 /DEBUG:FULL)
@@ -71,53 +69,6 @@ if(MSVC)
 else() 
 	target_link_libraries(generate_pq ${PROJECT_NAME} -ltcmalloc)
 endif()
-
-add_executable(partition_data partition_data.cpp)
-if(MSVC)
-	target_link_options(partition_data PRIVATE /MACHINE:x64 /DEBUG:FULL)
-	target_link_libraries(partition_data debug ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG}/${PROJECT_NAME}.lib)
-	target_link_libraries(partition_data optimized ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE}/${PROJECT_NAME}.lib)
-else() 
-	target_link_libraries(partition_data ${PROJECT_NAME} -ltcmalloc)
-endif()
-
-
-add_executable(partition_with_ram_budget partition_with_ram_budget.cpp)
-if(MSVC)
-	target_link_options(partition_with_ram_budget PRIVATE /MACHINE:x64)
-	target_link_libraries(partition_with_ram_budget debug ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG}/${PROJECT_NAME}.lib)
-	target_link_libraries(partition_with_ram_budget optimized ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE}/${PROJECT_NAME}.lib)
-else() 
-	target_link_libraries(partition_with_ram_budget ${PROJECT_NAME} -ltcmalloc)
-endif()
-
-
-
-add_executable(merge_shards merge_shards.cpp)
-if(MSVC)
-	target_link_options(merge_shards PRIVATE /MACHINE:x64)
-	target_link_libraries(merge_shards debug ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG}/${PROJECT_NAME}.lib)
-	target_link_libraries(merge_shards optimized ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE}/${PROJECT_NAME}.lib)
-else() 
-	target_link_libraries(merge_shards ${PROJECT_NAME} -ltcmalloc aio)
-endif()
-
-if(MSVC)
-	add_executable(test_l2_avx test_l2_avx.cpp)
-	target_link_options(test_l2_avx PRIVATE /MACHINE:x64 /DEBUG:FULL)
-	target_link_libraries(test_l2_avx debug ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG}/${PROJECT_NAME}.lib)
-	target_link_libraries(test_l2_avx optimized ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE}/${PROJECT_NAME}.lib)
-endif()
-
-#add_executable(convert_axon_to_bin convert_axon_to_bin.cpp ${PROJECT_SOURCE_DIR}/src/ann_exception.cpp)
-#if(MSVC)
-#	target_include_directories(convert_axon_to_bin PRIVATE "${BOOST_ROOT}")
-#	target_link_options(convert_axon_to_bin PRIVATE /MACHINE:x64)
-#else() 
-#	target_link_libraries(convert_axon_to_bin ${PROJECT_NAME})
-#endif()
-
-
 
 
 # formatter
