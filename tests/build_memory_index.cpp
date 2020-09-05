@@ -1,3 +1,7 @@
+// Copyright (c) Microsoft Corporation. All rights reserved.
+// Licensed under the MIT license.
+
+
 //
 // Created by 付聪 on 2017/6/21.
 //
