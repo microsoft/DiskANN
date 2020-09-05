@@ -1,11 +1,24 @@
-set(CMAKE_CXX_STANDARD 11)
+# Copyright (c) Microsoft Corporation. All rights reserved.
+# Licensed under the MIT license.
 
-add_executable(test_nsg_index test_nsg_index.cpp)
-target_link_libraries(test_nsg_index ${PROJECT_NAME})
+set(CMAKE_CXX_STANDARD 14)
 
-add_executable(test_nsg_search test_nsg_search.cpp)
-target_link_libraries(test_nsg_search ${PROJECT_NAME})
+add_executable(build_memory_index build_memory_index.cpp )
+if(MSVC)
+	target_link_options(build_memory_index PRIVATE /MACHINE:x64 /DEBUG:FULL "/INCLUDE:_tcmalloc")
+	target_link_libraries(build_memory_index debug ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG}/${PROJECT_NAME}.lib ${PROJECT_SOURCE_DIR}/dependencies/windows/tcmalloc/libtcmalloc_minimal.lib)
+	target_link_libraries(build_memory_index optimized ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE}/${PROJECT_NAME}.lib ${PROJECT_SOURCE_DIR}/dependencies/windows/tcmalloc/libtcmalloc_minimal.lib)
+else() 
+	target_link_libraries(build_memory_index ${PROJECT_NAME} -ltcmalloc)
+endif()
 
-add_executable(test_nsg_optimized_search test_nsg_optimized_search.cpp)
-target_link_libraries(test_nsg_optimized_search ${PROJECT_NAME})
+add_executable(search_memory_index search_memory_index.cpp )
+if(MSVC)
+	target_link_options(search_memory_index PRIVATE /MACHINE:x64 /DEBUG:FULL)
+	target_link_libraries(search_memory_index debug ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG}/${PROJECT_NAME}.lib)
+	target_link_libraries(search_memory_index optimized ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE}/${PROJECT_NAME}.lib)
+else() 
+	target_link_libraries(search_memory_index ${PROJECT_NAME} aio -ltcmalloc)
+endif()
 
+# formatter
