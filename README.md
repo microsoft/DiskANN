@@ -66,7 +66,7 @@ Check msbuild docs for additional options including choosing between debug and r
 
 ## Usage for in-memory indices
 
-** To generate index, use the `tests/build_memory_index` program.** 
+**To generate index, use the `tests/build_memory_index` program.** 
 
 ```
 ./tests/build_memory_index  [data_type<int8/uint8/float>]  [data_file.bin]  [output_index_file]  [R]  [L]  [alpha]  [num_threads_to_use]
@@ -89,7 +89,7 @@ The arguments are as follows:
 (vii) number of threads to use: indexing uses specified number of threads.
 
 
-** To search the generated index, use the `tests/search_memory_index` program.**
+**To search the generated index, use the `tests/search_memory_index` program.**
 
 ```
 ./tests/search_memory_index  [index_type<float/int8/uint8>]  [data_file.bin]  [memory_index_path]  [query_file.bin]  [truthset.bin (use "null" for none)] [K]  [result_output_prefix]  [L1]  [L2] etc. 
