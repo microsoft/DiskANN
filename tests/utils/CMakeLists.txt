@@ -1,0 +1,78 @@
+set(CMAKE_CXX_STANDARD 14)
+
+add_executable(fvecs_to_bin fvecs_to_bin.cpp)
+if(MSVC)
+	target_link_options(fvecs_to_bin PRIVATE /MACHINE:x64)
+	target_link_libraries(fvecs_to_bin debug ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG}/${PROJECT_NAME}.lib)
+	target_link_libraries(fvecs_to_bin optimized ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE}/${PROJECT_NAME}.lib)
+endif()
+
+add_executable(ivecs_to_bin ivecs_to_bin.cpp)
+if(MSVC)
+	target_link_options(ivecs_to_bin PRIVATE /MACHINE:x64)
+	target_link_libraries(ivecs_to_bin debug ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG}/${PROJECT_NAME}.lib)
+	target_link_libraries(ivecs_to_bin optimized ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE}/${PROJECT_NAME}.lib)
+endif()
+
+add_executable(int8_to_float int8_to_float.cpp)
+if(MSVC)
+	target_link_options(int8_to_float PRIVATE /MACHINE:x64)
+	target_link_libraries(int8_to_float debug ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG}/${PROJECT_NAME}.lib)
+	target_link_libraries(int8_to_float optimized ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE}/${PROJECT_NAME}.lib)
+else() 
+	target_link_libraries(int8_to_float ${PROJECT_NAME})
+endif()
+
+add_executable(uint32_to_uint8 uint32_to_uint8.cpp)
+if(MSVC)
+	target_link_options(uint32_to_uint8 PRIVATE /MACHINE:x64)
+	target_link_libraries(uint32_to_uint8 debug ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG}/${PROJECT_NAME}.lib)
+	target_link_libraries(uint32_to_uint8 optimized ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE}/${PROJECT_NAME}.lib)
+else() 
+	target_link_libraries(uint32_to_uint8 ${PROJECT_NAME})
+endif()
+
+add_executable(gen_random_slice gen_random_slice.cpp)
+if(MSVC)
+	target_link_options(gen_random_slice PRIVATE /MACHINE:x64)
+	target_link_libraries(gen_random_slice debug ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG}/${PROJECT_NAME}.lib)
+	target_link_libraries(gen_random_slice optimized ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE}/${PROJECT_NAME}.lib)
+else() 
+	target_link_libraries(gen_random_slice ${PROJECT_NAME} -ltcmalloc)
+endif()
+
+add_executable(calculate_recall calculate_recall.cpp)
+if(MSVC)
+	target_link_options(calculate_recall PRIVATE /MACHINE:x64)
+	target_link_libraries(calculate_recall debug ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG}/${PROJECT_NAME}.lib)
+	target_link_libraries(calculate_recall optimized ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE}/${PROJECT_NAME}.lib)
+else() 
+	target_link_libraries(calculate_recall ${PROJECT_NAME} aio -ltcmalloc)
+endif()
+
+
+add_executable(compute_groundtruth compute_groundtruth.cpp)
+if(MSVC)
+	target_link_options(compute_groundtruth PRIVATE /MACHINE:x64)
+	target_link_libraries(compute_groundtruth debug ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG}/${PROJECT_NAME}.lib)
+	target_link_libraries(compute_groundtruth optimized ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE}/${PROJECT_NAME}.lib)
+else() 
+	target_link_libraries(compute_groundtruth ${PROJECT_NAME} aio)
+endif()
+
+
+add_executable(generate_pq generate_pq.cpp)
+if(MSVC)
+	target_link_options(generate_pq PRIVATE /MACHINE:x64 /DEBUG:FULL)
+	target_link_libraries(generate_pq debug ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG}/${PROJECT_NAME}.lib)
+	target_link_libraries(generate_pq optimized ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE}/${PROJECT_NAME}.lib)
+else() 
+	target_link_libraries(generate_pq ${PROJECT_NAME} -ltcmalloc)
+endif()
+
+
+# formatter
+if (NOT MSVC)
+	#	add_custom_command(TARGET gen_random_slice PRE_BUILD COMMAND clang-format-4.0 -i ../../../include/*.h ../../../include/dll/*.h ../../../src/*.cpp  ../../../tests/*.cpp ../../../src/dll/*.cpp ../../../tests/utils/*.cpp)
+endif()
+
