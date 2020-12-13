@@ -15,9 +15,9 @@ namespace diskann {
                                        const char* indexFile,
                                        const char* idsFile, Metric m)
       : _baseVectors(nullptr) {
-    _nsgIndex = std::unique_ptr<diskann::Index<float>>(
+    _Index = std::unique_ptr<diskann::Index<float>>(
         new diskann::Index<float>(m, baseFile, 0, false));
-    _nsgIndex->load(indexFile);
+    _Index->load(indexFile);
 
     _ids = load_ids(idsFile);
   }
@@ -31,7 +31,7 @@ namespace diskann {
 
     auto startTime = std::chrono::high_resolution_clock::now();
 
-	_nsgIndex->beam_search(query, K,
+	_Index->beam_search(query, K,
                           /* (std::min)(K * L_MULTIPLIER, MAX_L)*/ DEFAULT_L,
                           indices, DEFAULT_BEAM_WIDTH, start_points);
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(

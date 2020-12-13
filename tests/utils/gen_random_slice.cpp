@@ -19,6 +19,13 @@
 
 template<typename T>
 int aux_main(int argc, char** argv) {
+  if (argc != 5) {
+    std::cout << argv[0] << " data_type [fliat/int8/uint8] base_bin_file "
+                            "sample_output_prefix sampling_probability"
+              << std::endl;
+    exit(-1);
+  }
+
   std::string base_file(argv[2]);
   std::string output_prefix(argv[3]);
   float       sampling_rate = (float) (std::atof(argv[4]));
@@ -27,13 +34,6 @@ int aux_main(int argc, char** argv) {
 }
 
 int main(int argc, char** argv) {
-  if (argc != 5) {
-    std::cout << argv[0] << " data_type [fliat/int8/uint8] base_bin_file "
-                            "sample_output_prefix sampling_probability"
-              << std::endl;
-    exit(-1);
-  }
-
   if (std::string(argv[1]) == std::string("float")) {
     aux_main<float>(argc, argv);
   } else if (std::string(argv[1]) == std::string("int8")) {

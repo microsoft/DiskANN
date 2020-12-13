@@ -168,4 +168,4 @@ namespace diskann {
     }
   }
 
-}  // namespace NSG
+}  // namespace Diskann

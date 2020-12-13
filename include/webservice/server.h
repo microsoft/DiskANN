@@ -2,11 +2,11 @@
 
 #include <cpprest/base_uri.h>
 #include <cpprest/http_listener.h>
-#include <webservice/in_memory_nsg_search.h>
+#include <webservice/in_memory_index_search.h>
 
 class Server {
  public:
-  Server(web::uri& url, std::unique_ptr<diskann::InMemoryNSGSearch>& searcher);
+  Server(web::uri& url, std::unique_ptr<diskann::InMemoryIndexSearch>& searcher);
   virtual ~Server();
 
   pplx::task<void> open();
@@ -18,5 +18,5 @@ class Server {
  private:
   bool                                                              _isDebug;
   std::unique_ptr<web::http::experimental::listener::http_listener> _listener;
-  std::unique_ptr<diskann::InMemoryNSGSearch>&                          _searcher;
+  std::unique_ptr<diskann::InMemoryIndexSearch>&                          _searcher;
 };

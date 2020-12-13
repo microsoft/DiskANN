@@ -39,8 +39,7 @@ namespace diskann {
   DiskANNInterface<T>::DiskANNInterface(
       unsigned __int32 dimension, ANNIndex::DistanceType distanceType,
       std::shared_ptr<ANNIndex::IDiskPriorityIO> diskIO)
-      : ANNIndex::IANNIndex(dimension, distanceType, diskIO),
-        _pNsgIndex(nullptr) {
+      : ANNIndex::IANNIndex(dimension, distanceType, diskIO), _pIndex(nullptr) {
     if (distanceType == ANNIndex::DT_L2) {
       _compareMetric = diskann::Metric::L2;
     } else {

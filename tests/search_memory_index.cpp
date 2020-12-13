@@ -61,7 +61,7 @@ int search_memory_index(int argc, char** argv) {
   std::cout.precision(2);
 
   diskann::Index<T> index(diskann::L2, data_file.c_str());
-  index.load(memory_index_file.c_str());  // to load NSG
+  index.load(memory_index_file.c_str());  // to load Index
   std::cout << "Index loaded" << std::endl;
 
   diskann::Parameters paras;

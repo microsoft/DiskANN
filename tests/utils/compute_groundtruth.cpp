@@ -275,6 +275,11 @@ inline void save_groundtruth_as_one_file(const std::string filename,
 
 template<typename T>
 int aux_main(int argv, char **argc) {
+  if (argv != 6) {
+    command_line_help();
+    return -1;
+  }
+
   size_t      npoints, nqueries, dim;
   std::string base_file(argc[2]);
   std::string query_file(argc[3]);
@@ -336,10 +341,6 @@ int aux_main(int argv, char **argc) {
 }
 
 int main(int argc, char **argv) {
-  if (argc != 6) {
-    command_line_help();
-    return -1;
-  }
   if (std::string(argv[1]) == std::string("float"))
     aux_main<float>(argc, argv);
   if (std::string(argv[1]) == std::string("int8"))

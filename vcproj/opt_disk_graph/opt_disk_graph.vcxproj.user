@@ -1,7 +1,0 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
-<Project ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
-  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
-    <LocalDebuggerCommandArguments>E:\spacevun_rnsg-96-150-96-750_alpha1point3_nsg-50-96-750_alpha1point2.nsg E:\spacevun_rnsg-64-150-64-750_alpha-1point2_nsg-50-128-750_alpha-1point2_diskopt.nsg F:\spacevun\pq\spacevun_base_pq-256-50-new_compressed_u8.bin</LocalDebuggerCommandArguments>
-    <DebuggerFlavor>WindowsLocalDebugger</DebuggerFlavor>
-  </PropertyGroup>
-</Project>

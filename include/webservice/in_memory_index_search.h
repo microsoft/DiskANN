@@ -46,6 +46,6 @@ namespace diskann {
     unsigned int _dimensions, _numPoints;
 
     std::vector<std::wstring>      _ids;
-    std::unique_ptr<diskann::Index<float>> _nsgIndex;
+    std::unique_ptr<diskann::Index<float>> _Index;
   };
 }  // namespace diskann

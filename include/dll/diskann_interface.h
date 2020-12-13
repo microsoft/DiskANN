@@ -68,13 +68,13 @@ namespace diskann {
     void optimizeBeamwidth(T* sample, uint32_t tuning_sample_num,
                            uint32_t beamwidth, uint32_t nthreads);
 
-    std::string                                _nsgPathPrefix;
+    std::string                                _indexPathPrefix;
     std::shared_ptr<AlignedFileReader>         _pReader;
     std::shared_ptr<ANNIndex::IDiskPriorityIO> _pDiskIO;
 #ifdef EXEC_ENV_OLS
     MemoryMappedFiles _mmFiles;
 #endif
-    std::unique_ptr<diskann::Index<T, int>> _pNsgIndex;
+    std::unique_ptr<diskann::Index<T, int>> _pIndex;
     diskann::Metric _compareMetric;
 
     // flash stuff

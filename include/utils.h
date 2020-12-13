@@ -528,6 +528,7 @@ inline bool avx2Supported() {
 }
 
 inline void printProcessMemory(const char* message) {
+  diskann::cout << message << std::endl;
 }
 #endif
 

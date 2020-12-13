@@ -16,7 +16,7 @@ namespace ANNIndex
     };
 
 #define KDTreeRNGLogging(level, ...) ANNIndex::ANNLogging(ANNIndex::AlgoNames[ANNIndex::AT_KDTreeRNG], (level), __FILE__, __LINE__, __FUNCTION__, __VA_ARGS__)
-#define RandNSGLogging(level, ...) ANNIndex::ANNLogging(ANNIndex::AlgoNames[ANNIndex::AT_RandNSG], (level), __FILE__, __LINE__, __FUNCTION__, __VA_ARGS__)
+#define DiskANNLogging(level, ...) ANNIndex::ANNLogging(ANNIndex::AlgoNames[ANNIndex::AT_DiskANN], (level), __FILE__, __LINE__, __FUNCTION__, __VA_ARGS__)
 #define IVFPQLogging(level, ...) ANNIndex::ANNLogging(ANNIndex::AlgoNames[ANNIndex::AT_IVFPQHNSW], (level), __FILE__, __LINE__, __FUNCTION__, __VA_ARGS__)
 
 

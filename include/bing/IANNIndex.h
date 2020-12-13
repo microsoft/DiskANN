@@ -18,7 +18,7 @@ namespace ANNIndex {
     // SSD
     AT_IVFPQHNSW,
     AT_KDTreeRNG,
-    AT_RandNSG,
+    AT_DiskANN,
     // Fresh
     AT_HNSWFresh,
     AT_SPTAG,
@@ -27,12 +27,12 @@ namespace ANNIndex {
 
   enum VectorDataType { VDT_Byte = 0, VDT_Short, VDT_Float, VDT_Count };
 
-  enum SSDAlgoType { SAT_IVFPQHNSW, SAT_KDTreeRNG, SAT_RandNSG, SAT_Count };
+  enum SSDAlgoType { SAT_IVFPQHNSW, SAT_KDTreeRNG, SAT_DiskANN, SAT_Count };
 
   static const char* SSDAlgoDLLNames[SAT_Count] = {
-      "ANNIndexIVFPQHNSW.dll", "KDTreeRNGSSDDLL.dll", "nsg_dll.dll"};
+      "ANNIndexIVFPQHNSW.dll", "KDTreeRNGSSDDLL.dll", "diskann_dll.dll"};
   static const char* SSDAlgoNames[SAT_Count] = {"ivfpqhnsw", "kdtreerng",
-                                                "randnsg"};
+                                                "diskann"};
 
   static const char* ExportCreateObjectByteFunc = "CreateObjectByte";
   static const char* ExportReleaseObjectByteFunc = "ReleaseObjectByte";

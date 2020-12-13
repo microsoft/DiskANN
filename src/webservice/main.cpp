@@ -1,12 +1,12 @@
-// nsg_server.cpp : REST interface for diskann search.
+// index_server.cpp : REST interface for diskann search.
 //
 #include <webservice/server.h>
-#include <webservice/in_memory_nsg_search.h>
+#include <webservice/in_memory_index_search.h>
 #include <codecvt>
 #include <iostream>
 
 std::unique_ptr<Server>                 g_httpServer(nullptr);
-std::unique_ptr<diskann::InMemoryNSGSearch> g_inMemoryNSGSearch(nullptr);
+std::unique_ptr<diskann::InMemoryIndexSearch> g_inMemoryIndexSearch(nullptr);
 
 void setup(const utility::string_t& address) {
   web::http::uri_builder uriBldr(address);
@@ -15,7 +15,7 @@ void setup(const utility::string_t& address) {
   std::wcout << L"Attempting to start server on " << uri.to_string()
              << std::endl;
 
-  g_httpServer = std::unique_ptr<Server>(new Server(uri, g_inMemoryNSGSearch));
+  g_httpServer = std::unique_ptr<Server>(new Server(uri, g_inMemoryIndexSearch));
   g_httpServer->open().wait();
 
   ucout << U"Listening for requests on: " << address << std::endl;
@@ -27,9 +27,9 @@ void teardown(const utility::string_t& address) {
 
 void loadIndex(const char* indexFile, const char* baseFile,
                const char* idsFile) {
-  auto nsgSearch =
-      new diskann::InMemoryNSGSearch(baseFile, indexFile, idsFile, diskann::L2);
-  g_inMemoryNSGSearch = std::unique_ptr<diskann::InMemoryNSGSearch>(nsgSearch);
+  auto indexSearch =
+      new diskann::InMemoryIndexSearch(baseFile, indexFile, idsFile, diskann::L2);
+  g_inMemoryIndexSearch = std::unique_ptr<diskann::InMemoryIndexSearch>(indexSearch);
 }
 
 std::wstring getHostingAddress(const char* hostNameAndPort) {
@@ -41,7 +41,7 @@ std::wstring getHostingAddress(const char* hostNameAndPort) {
 
 int main(int argc, char* argv[]) {
   if (argc != 5) {
-    std::cout << "Usage: nsg_server <ip_addr_and_port> <index_file> "
+    std::cout << "Usage: index_server <ip_addr_and_port> <index_file> "
                  "<base_file> <ids_file> "
               << std::endl;
     exit(1);

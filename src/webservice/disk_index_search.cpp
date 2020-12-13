@@ -32,7 +32,7 @@ namespace diskann {
     _u64 n_chunks = (_u64) params[4];
     _u64 chunk_size = (_u64)(m_dimension / n_chunks);
 
-    std::string nsg_disk_opt = index_prefix_path + "_diskopt.rnsg";
+    std::string index_disk_opt = index_prefix_path + "_disk.index";
 
     std::string stars(40, '*');
     std::cout << stars << "\nPQ -- n_chunks: " << n_chunks
@@ -46,7 +46,7 @@ namespace diskann {
     _pFlashIndex.reset(new PQFlashIndex<float>());
 
     // load index
-    _pFlashIndex->load(data_bin.c_str(), nsg_disk_opt.c_str(),
+    _pFlashIndex->load(data_bin.c_str(), index_disk_opt.c_str(),
                        pq_tables_bin.c_str(), chunk_size, n_chunks, m_dimension,
                        nthreads);
 
@@ -61,7 +61,7 @@ namespace diskann {
     _ids = load_ids(idsFile);
   }
 
-  NSGSearchResult DiskIndexSearch::search(const float*       query,
+  IndexSearchResult DiskIndexSearch::search(const float*       query,
                                         const unsigned int dimensions,
                                         const unsigned int K) {
     std::vector<unsigned int> start_points;
@@ -81,7 +81,7 @@ namespace diskann {
 
     // indices has the indexes of the results. Select the results from the
     // ids_vector.
-    NSGSearchResult searchResult(K, (unsigned int) duration);
+    IndexSearchResult searchResult(K, (unsigned int) duration);
     std::for_each(indices.begin(), indices.begin() + K, [&](const unsigned int& index) {
       searchResult.addResult(_ids[index]);
       searchResult.finalResultIndices.push_back(

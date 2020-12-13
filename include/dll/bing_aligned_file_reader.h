@@ -31,6 +31,6 @@ namespace diskann {
     virtual void read(std::vector<AlignedRead> &read_reqs, IOContext &ctx,
                       bool async = false);
   };
-}  // namespace NSG
+}  // namespace DiskANN
 #endif
 #endif

@@ -1,6 +1,6 @@
 #pragma once
 
 #include <string>
-namespace NSGStringUtils {
+namespace DiskANNStringUtils {
 
-}  // namespace NSGStringUtils
+}  // namespace DiskANNStringUtils

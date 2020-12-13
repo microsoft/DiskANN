@@ -5,7 +5,7 @@
 
 #include <distance.h>
 #include <pq_flash_index.h>
-#include <webservice\in_memory_nsg_search.h>
+#include <webservice\in_memory_index_search.h>
 
 namespace diskann {
   
@@ -14,7 +14,7 @@ namespace diskann {
     DiskIndexSearch(const char* indexFilePrefix, const char* idsFile,
                   const _u64 cache_nlevels, const _u64 nthreads);
 
-    virtual NSGSearchResult search(const float*       query,
+    virtual IndexSearchResult search(const float*       query,
                                    const unsigned int dimensions,
                                    const unsigned int K);
 

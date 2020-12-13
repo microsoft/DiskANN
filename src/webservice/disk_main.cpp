@@ -1,13 +1,13 @@
-// nsg_server.cpp : REST interface for diskann search.
+// index_server.cpp : REST interface for diskann search.
 //
 #include <utils.h>
-#include <webservice/disk_nsg_search.h>
+#include <webservice/disk_index_search.h>
 #include <webservice/disk_server.h>
 #include <codecvt>
 #include <iostream>
 
 std::unique_ptr<DiskServer>             g_httpServer(nullptr);
-std::unique_ptr<diskann::DiskNSGSearch> g_diskNSGSearch(nullptr);
+std::unique_ptr<diskann::DiskIndexSearch> g_diskIndexSearch(nullptr);
 
 void setup(const utility::string_t& address) {
   web::http::uri_builder uriBldr(address);
@@ -16,7 +16,7 @@ void setup(const utility::string_t& address) {
   std::wcout << L"Attempting to start server on " << uri.to_string()
              << std::endl;
 
-  g_httpServer = std::unique_ptr<DiskServer>(new DiskServer(uri, g_diskNSGSearch));
+  g_httpServer = std::unique_ptr<DiskServer>(new DiskServer(uri, g_diskIndexSearch));
   g_httpServer->open().wait();
 
   ucout << U"Listening for requests on: " << address << std::endl;
@@ -29,9 +29,9 @@ void teardown(const utility::string_t& address) {
 
 void loadIndex(const char* indexFilePrefix, const char* idsFile,
                const _u64 cache_nlevels, const _u64 nthreads) {
-  auto nsgSearch =
-      new diskann::DiskNSGSearch(indexFilePrefix, idsFile, cache_nlevels, nthreads);
-  g_diskNSGSearch = std::unique_ptr<diskann::DiskNSGSearch>(nsgSearch);
+  auto indexSearch =
+      new diskann::DiskIndexSearch(indexFilePrefix, idsFile, cache_nlevels, nthreads);
+  g_diskIndexSearch = std::unique_ptr<diskann::DiskIndexSearch>(indexSearch);
 }
 
 std::wstring getHostingAddress(const char* hostNameAndPort) {
@@ -44,7 +44,7 @@ std::wstring getHostingAddress(const char* hostNameAndPort) {
 
 int main(int argc, char* argv[]) {
   if (argc != 6) {
-    std::cout << "Usage: nsg_server <ip_addr_and_port> <prefix> "
+    std::cout << "Usage: index_server <ip_addr_and_port> <prefix> "
                  "<ids_file> <cache_nlevels> <nthreads>"
               << std::endl;
     exit(1);

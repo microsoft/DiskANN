@@ -4,7 +4,7 @@
 #include <string>
 
 #include <cpprest/base_uri.h>
-#include <webservice/disk_nsg_search.h>
+#include <webservice/disk_index_search.h>
 #include <webservice/disk_server.h>
 
 // Utility function declarations
@@ -14,8 +14,8 @@ web::json::value toJsonArray(const std::vector<T>& v,
 							 std::function<web::json::value(const T&)> valConverter);
 
 static web::json::value rsltIdsToJsonArray(
-    const diskann::NSGSearchResult& srchRslt);
-static web::json::value scoresToJsonArray(const diskann::NSGSearchResult& srchRslt);
+    const diskann::IndexSearchResult& srchRslt);
+static web::json::value scoresToJsonArray(const diskann::IndexSearchResult& srchRslt);
 static void parseJson(const utility::string_t& body, int& k, long long& queryId,
                       float*& queryVector, unsigned int& dimensions);
 static web::json::value prepareResponse(const long long& queryId, const int k);
@@ -29,7 +29,7 @@ const std::wstring VECTOR_KEY = L"query", K_KEY = L"k",
 
 // class Server
 DiskServer::DiskServer(web::uri&                            uri,
-                       std::unique_ptr<diskann::DiskNSGSearch>& searcher)
+                       std::unique_ptr<diskann::DiskIndexSearch>& searcher)
     : _searcher(searcher) {
   _listener = std::unique_ptr<web::http::experimental::listener::http_listener>(
       new web::http::experimental::listener::http_listener(uri));
@@ -60,7 +60,7 @@ void DiskServer::handle_post(web::http::http_request message) {
 	  // call allocates an aligned vector for 
       parseJson(body, k, queryId, queryVector, dimensions);
 
-      diskann::NSGSearchResult srchRslt =
+      diskann::IndexSearchResult srchRslt =
           _searcher->search(queryVector, dimensions, (unsigned int) k);
       diskann::aligned_free(queryVector);
 
@@ -139,7 +139,7 @@ web::json::value toJsonArray(
   return rslts;
 }
 
-web::json::value rsltIdsToJsonArray(const diskann::NSGSearchResult& srchRslt) {
+web::json::value rsltIdsToJsonArray(const diskann::IndexSearchResult& srchRslt) {
   web::json::value rslts = web::json::value::array();
   for (int i = 0; i < srchRslt.finalResults.size(); i++) {
     auto idVal = web::json::value::string(srchRslt.finalResults[i]);
@@ -148,7 +148,7 @@ web::json::value rsltIdsToJsonArray(const diskann::NSGSearchResult& srchRslt) {
   return rslts;
 }
 
-web::json::value scoresToJsonArray(const diskann::NSGSearchResult& srchRslt) {
+web::json::value scoresToJsonArray(const diskann::IndexSearchResult& srchRslt) {
   web::json::value scores = web::json::value::array();
   for (int i = 0; i < srchRslt.distances.size(); i++) {
     scores[i] = web::json::value::number(srchRslt.distances[i]);

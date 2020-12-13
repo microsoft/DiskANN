@@ -1,9 +1,9 @@
-// nsg_webclient.cpp : This file contains the 'main' function. Program execution
+// index_webclient.cpp : This file contains the 'main' function. Program execution
 // begins and ends there.
 //
 #include <cpprest/base_uri.h>
 #include <cpprest/http_client.h>
-#include <webservice/in_memory_nsg_search.h>
+#include <webservice/in_memory_index_search.h>
 #include <ctime>
 #include <iomanip>
 #include <iostream>
@@ -130,7 +130,7 @@ void loadData(const std::string& fileName, float*& queries,
   if (fileName.rfind(".txt") != std::string::npos) {
     loadTextData(fileName, queries, numPoints, dimensions);
   } else if (fileName.rfind(".fvecs") != std::string::npos) {
-    diskann::InMemoryNSGSearch::load_data(fileName.c_str(), queries, numPoints,
+    diskann::InMemoryIndexSearch::load_data(fileName.c_str(), queries, numPoints,
                                       dimensions);
   } else {
     std::string message = std::string("Unknown file extension in filename ") +
@@ -203,7 +203,7 @@ pplx::task<void> runQuery(float* queries, unsigned int dimensions,
 
 int main(int argc, char* argv[]) {
   if (argc < 4) {
-    std::cerr << "Usage: nsg_webclient <service_addr> <query_file> "
+    std::cerr << "Usage: index_webclient <service_addr> <query_file> "
                  "<num_nns_per_query> <ivecs_file> [<output_file>]"
               << std::endl;
     exit(1);

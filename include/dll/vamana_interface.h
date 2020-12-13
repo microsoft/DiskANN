@@ -47,7 +47,7 @@ namespace diskann {
     ANNIndex::DistanceType m_distanceType;
 
    private:
-    std::string                        _nsgPathPrefix;
+    std::string                        _indedPathPrefix;
     std::unique_ptr<diskann::Index<T>> _pIndex;
     diskann::Metric                    _compareMetric;
 

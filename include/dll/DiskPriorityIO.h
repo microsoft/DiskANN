@@ -45,6 +45,6 @@ namespace diskann {
     std::vector<std::thread>                   m_ioPollingThreads;
     std::atomic<bool>                          m_stopPolling;
   };
-}  // namespace NSG
+}  // namespace DiskANN
 
 #endif

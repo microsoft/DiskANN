@@ -506,18 +506,18 @@ namespace diskann {
 
   template<typename T, typename TagT>
   void Index<T, TagT>::occlude_list(std::vector<Neighbor> &pool,
-                                    const unsigned location, const float alpha,
-                                    const unsigned degree, const unsigned maxc,
+                                    const float alpha, const unsigned degree,
+                                    const unsigned         maxc,
                                     std::vector<Neighbor> &result) {
     auto               pool_size = (_u32) pool.size();
     std::vector<float> occlude_factor(pool_size, 0);
-    occlude_list(pool, location, alpha, degree, maxc, result, occlude_factor);
+    occlude_list(pool, alpha, degree, maxc, result, occlude_factor);
   }
 
   template<typename T, typename TagT>
   void Index<T, TagT>::occlude_list(std::vector<Neighbor> &pool,
-                                    const unsigned location, const float alpha,
-                                    const unsigned degree, const unsigned maxc,
+                                    const float alpha, const unsigned degree,
+                                    const unsigned         maxc,
                                     std::vector<Neighbor> &result,
                                     std::vector<float> &   occlude_factor) {
     if (pool.empty())
@@ -573,7 +573,7 @@ namespace diskann {
     result.reserve(range);
     std::vector<float> occlude_factor(pool.size(), 0);
 
-    occlude_list(pool, location, alpha, range, maxc, result, occlude_factor);
+    occlude_list(pool, alpha, range, maxc, result, occlude_factor);
 
     /* Add all the nodes in result into a variable called cut_graph
      * So this contains all the neighbors of id location
@@ -918,7 +918,7 @@ namespace diskann {
           progress_counter += 5;
         }
       }
-// Gopal. Splittng nsg_dll into separate DLLs for search and build.
+// Gopal. Splittng diskann_dll into separate DLLs for search and build.
 // This code should only be available in the "build" DLL.
 #ifdef DISKANN_BUILD
       MallocExtension::instance()->ReleaseFreeMemory();
@@ -1227,7 +1227,7 @@ namespace diskann {
                                           (unsigned) _aligned_dim),
                        true));
         std::sort(expanded_nghrs.begin(), expanded_nghrs.end());
-        occlude_list(expanded_nghrs, ngh, alpha, range, maxc, result);
+        occlude_list(expanded_nghrs, alpha, range, maxc, result);
 
         for (auto iter : _final_graph[ngh])
           for (unsigned k = 0; k < _in_graph[iter].size(); k++)
@@ -1352,7 +1352,7 @@ namespace diskann {
                                             (unsigned) _aligned_dim),
                          true));
           std::sort(expanded_nghrs.begin(), expanded_nghrs.end());
-          occlude_list(expanded_nghrs, i, alpha, range, maxc, result);
+          occlude_list(expanded_nghrs, alpha, range, maxc, result);
 
           _final_graph[i].clear();
           for (auto j : result) {
