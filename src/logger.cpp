@@ -77,7 +77,7 @@ namespace diskann {
   void ANNStreamBuf::logImpl(char* str, int num) {
 #ifdef EXEC_ENV_OLS
     str[num] = '\0';  // Safe. See the c'tor.
-    RandNSGLogging(_logLevel, str);
+    DiskANNLogging(_logLevel, str);
 #else
     fwrite(str, sizeof(char), num, _fp);
     fflush(_fp);

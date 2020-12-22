@@ -126,14 +126,14 @@ namespace diskann {
                          const Parameters &     parameter,
                          std::vector<unsigned> &pruned_list);
 
-    void occlude_list(std::vector<Neighbor> &pool, const unsigned location,
-                      const float alpha, const unsigned degree,
-                      const unsigned maxc, std::vector<Neighbor> &result);
+    void occlude_list(std::vector<Neighbor> &pool, const float alpha,
+                      const unsigned degree, const unsigned maxc,
+                      std::vector<Neighbor> &result);
 
-    void occlude_list(std::vector<Neighbor> &pool, const unsigned location,
-                      const float alpha, const unsigned degree,
-                      const unsigned maxc, std::vector<Neighbor> &result,
-                      std::vector<float> &occlude_factor);
+    void occlude_list(std::vector<Neighbor> &pool, const float alpha,
+                      const unsigned degree, const unsigned maxc,
+                      std::vector<Neighbor> &result,
+                      std::vector<float> &   occlude_factor);
 
     void batch_inter_insert(unsigned                     n,
                             const std::vector<unsigned> &pruned_list,
