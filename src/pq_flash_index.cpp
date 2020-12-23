@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation. All rights reserved.
+// Licensed under the MIT license.
+
 #include "logger.h"
 #include "pq_flash_index.h"
 #include <malloc.h>
