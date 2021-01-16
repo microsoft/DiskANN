@@ -15,6 +15,7 @@
 #include "aligned_file_reader.h"
 #include "tsl/robin_map.h"
 #include "utils.h"
+#include "windows_customizations.h"
 
 class WindowsAlignedFileReader : public AlignedFileReader {
  private:
@@ -24,22 +25,24 @@ class WindowsAlignedFileReader : public AlignedFileReader {
   // virtual IOContext createContext();
 
  public:
-  WindowsAlignedFileReader(){};
-  virtual ~WindowsAlignedFileReader(){};
+  DISKANN_DLLEXPORT WindowsAlignedFileReader(){};
+  DISKANN_DLLEXPORT virtual ~WindowsAlignedFileReader(){};
 
   // Open & close ops
   // Blocking calls
-  virtual void open(const std::string &fname);
-  virtual void close();
+  DISKANN_DLLEXPORT virtual void open(const std::string &fname);
+  DISKANN_DLLEXPORT virtual void  close();
 
-  virtual void register_thread();
-  virtual void deregister_thread() {
+  DISKANN_DLLEXPORT virtual void register_thread();
+  DISKANN_DLLEXPORT virtual void deregister_thread() {
   }
-  virtual IOContext &get_ctx();
+  DISKANN_DLLEXPORT virtual IOContext &get_ctx();
 
   // process batch of aligned requests in parallel
   // NOTE :: blocking call for the calling thread, but can thread-safe
-  virtual void read(std::vector<AlignedRead> &read_reqs, IOContext &ctx);
+  DISKANN_DLLEXPORT virtual void read(std::vector<AlignedRead> &read_reqs,
+                                      IOContext &ctx,
+                    bool async);
 };
 #endif  // USE_BING_INFRA
 #endif  //_WINDOWS

@@ -18,11 +18,11 @@ typedef io_context_t IOContext;
 #include <minwinbase.h>
 
 #ifndef USE_BING_INFRA
-typedef struct {
+struct IOContext{
   HANDLE                  fhandle = NULL;
   HANDLE                  iocp = NULL;
   std::vector<OVERLAPPED> reqs;
-} IOContext;
+};
 #else
 #include "IDiskPriorityIO.h"
 #include <atomic>

@@ -1,10 +1,6 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT license.
 
-//
-// Created by 付聪 on 2017/6/21.
-//
-
 #include <cstring>
 #include <iomanip>
 #include <omp.h>
@@ -33,14 +29,24 @@ int search_memory_index(int argc, char** argv) {
 
   std::string data_file(argv[2]);
   std::string memory_index_file(argv[3]);
-  std::string query_bin(argv[4]);
-  std::string truthset_bin(argv[5]);
-  _u64        recall_at = std::atoi(argv[6]);
-  std::string result_output_prefix(argv[7]);
+  _u64        num_threads = std::atoi(argv[4]);
+  std::string query_bin(argv[5]);
+  std::string truthset_bin(argv[6]);
+  _u64        recall_at = std::atoi(argv[7]);
+  std::string result_output_prefix(argv[8]);
+  bool        use_optimized_search = std::atoi(argv[9]);
+
+  if ((std::string(argv[1]) != std::string("float")) &&
+      (use_optimized_search == true)) {
+    std::cout << "Error. Optimized search currently only supported for "
+                 "floating point datatypes. Using un-optimized search."
+              << std::endl;
+    use_optimized_search = false;
+  }
 
   bool calc_recall_flag = false;
 
-  for (int ctr = 8; ctr < argc; ctr++) {
+  for (int ctr = 10; ctr < argc; ctr++) {
     _u64 curL = std::atoi(argv[ctr]);
     if (curL >= recall_at)
       Lvec.push_back(curL);
@@ -67,14 +73,20 @@ int search_memory_index(int argc, char** argv) {
   std::cout.setf(std::ios_base::fixed, std::ios_base::floatfield);
   std::cout.precision(2);
 
-  diskann::Index<T> index(diskann::L2, data_file.c_str());
+  auto metric = diskann::L2;
+  if (use_optimized_search)
+    metric = diskann::FAST_L2;
+  diskann::Index<T> index(metric, data_file.c_str());
   index.load(memory_index_file.c_str());  // to load NSG
   std::cout << "Index loaded" << std::endl;
+
+  if (use_optimized_search)
+    index.optimize_graph();
 
   diskann::Parameters paras;
   std::string         recall_string = "Recall@" + std::to_string(recall_at);
   std::cout << std::setw(4) << "Ls" << std::setw(12) << "QPS " << std::setw(18)
-            << "Mean Latency (ms)" << std::setw(15) << "99.9 Latency"
+            << "Mean Latency (mus)" << std::setw(15) << "99.9 Latency"
             << std::setw(12) << recall_string << std::endl;
   std::cout << "==============================================================="
                "==============="
@@ -89,15 +101,22 @@ int search_memory_index(int argc, char** argv) {
     _u64 L = Lvec[test_id];
     query_result_ids[test_id].resize(recall_at * query_num);
 
-    auto    s = std::chrono::high_resolution_clock::now();
+    auto s = std::chrono::high_resolution_clock::now();
+    omp_set_num_threads(num_threads);
 #pragma omp parallel for schedule(dynamic, 1)
     for (int64_t i = 0; i < (int64_t) query_num; i++) {
       auto qs = std::chrono::high_resolution_clock::now();
-      index.search(query + i * query_aligned_dim, recall_at, L,
-                   query_result_ids[test_id].data() + i * recall_at);
+      if (use_optimized_search) {
+        index.search_with_opt_graph(
+            query + i * query_aligned_dim, recall_at, L,
+            query_result_ids[test_id].data() + i * recall_at);
+      } else {
+        index.search(query + i * query_aligned_dim, recall_at, L,
+                     query_result_ids[test_id].data() + i * recall_at);
+      }
       auto qe = std::chrono::high_resolution_clock::now();
       std::chrono::duration<double> diff = qe - qs;
-      latency_stats[i] = diff.count() * 1000;
+      latency_stats[i] = diff.count() * 1000000;
     }
     auto                          e = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> diff = e - s;
@@ -138,13 +157,14 @@ int search_memory_index(int argc, char** argv) {
 }
 
 int main(int argc, char** argv) {
-  if (argc < 9) {
+  if (argc < 11) {
     std::cout
         << "Usage: " << argv[0]
         << "  [index_type<float/int8/uint8>]  [data_file.bin]  "
-           "[memory_index_path]  "
+           "[memory_index_path]  [num_threads] "
            "[query_file.bin]  [truthset.bin (use \"null\" for none)] "
-           " [K]  [result_output_prefix] "
+           " [K]  [result_output_prefix] [use_optimized_search (for small ~1M "
+           "data)] "
            " [L1]  [L2] etc. See README for more information on parameters. "
         << std::endl;
     exit(-1);

@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation. All rights reserved.
+// Licensed under the MIT license.
+
 #include <math_utils.h>
 #include <omp.h>
 #include <algorithm>
@@ -529,7 +532,7 @@ int generate_pq_data_from_pivots(const std::string data_file,
     }
     diskann::cout << ".done." << std::endl;
   }
-// Gopal. Splittng nsg_dll into separate DLLs for search and build.
+// Gopal. Splittng diskann_dll into separate DLLs for search and build.
 // This code should only be available in the "build" DLL.
 #ifdef DISKANN_BUILD
   MallocExtension::instance()->ReleaseFreeMemory();

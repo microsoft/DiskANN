@@ -98,6 +98,11 @@ namespace diskann {
     DISKANN_DLLEXPORT int eager_delete(const TagT        tag,
                                        const Parameters &parameters);
 
+    DISKANN_DLLEXPORT void optimize_graph();
+
+    DISKANN_DLLEXPORT void search_with_opt_graph(const T *query, size_t K,
+                                                 size_t L, unsigned *indices);
+
     /*  Internals of the library */
    protected:
     typedef std::vector<SimpleNeighbor>        vecNgh;
@@ -129,14 +134,14 @@ namespace diskann {
                          const Parameters &     parameter,
                          std::vector<unsigned> &pruned_list);
 
-    void occlude_list(std::vector<Neighbor> &pool, const unsigned location,
-                      const float alpha, const unsigned degree,
-                      const unsigned maxc, std::vector<Neighbor> &result);
+    void occlude_list(std::vector<Neighbor> &pool, const float alpha,
+                      const unsigned degree, const unsigned maxc,
+                      std::vector<Neighbor> &result);
 
-    void occlude_list(std::vector<Neighbor> &pool, const unsigned location,
-                      const float alpha, const unsigned degree,
-                      const unsigned maxc, std::vector<Neighbor> &result,
-                      std::vector<float> &occlude_factor);
+    void occlude_list(std::vector<Neighbor> &pool, const float alpha,
+                      const unsigned degree, const unsigned maxc,
+                      std::vector<Neighbor> &result,
+                      std::vector<float> &   occlude_factor);
 
     void batch_inter_insert(unsigned                     n,
                             const std::vector<unsigned> &pruned_list,

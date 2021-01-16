@@ -2,6 +2,8 @@
 // Licensed under the MIT license.
 
 #include <algorithm>
+#include <bitset>
+#include <boost/dynamic_bitset.hpp>
 #include <cassert>
 #include <chrono>
 #include <cmath>
@@ -44,7 +46,10 @@ namespace {
 
   template<>
   diskann::Distance<float> *get_distance_function(diskann::Metric m) {
-    if (m == diskann::Metric::L2) {
+    if (m == diskann::Metric::FAST_L2) {
+      std::cout << "Here" << std::endl;
+      return new diskann::DistanceFastL2<float>();
+    } else if (m == diskann::Metric::L2) {
       if (Avx2SupportedCPU) {
         std::cout << "Using AVX2 distance computation" << std::endl;
         return new diskann::DistanceL2();
@@ -508,18 +513,18 @@ namespace diskann {
 
   template<typename T, typename TagT>
   void Index<T, TagT>::occlude_list(std::vector<Neighbor> &pool,
-                                    const unsigned location, const float alpha,
-                                    const unsigned degree, const unsigned maxc,
+                                    const float alpha, const unsigned degree,
+                                    const unsigned         maxc,
                                     std::vector<Neighbor> &result) {
     auto               pool_size = (_u32) pool.size();
     std::vector<float> occlude_factor(pool_size, 0);
-    occlude_list(pool, location, alpha, degree, maxc, result, occlude_factor);
+    occlude_list(pool, alpha, degree, maxc, result, occlude_factor);
   }
 
   template<typename T, typename TagT>
   void Index<T, TagT>::occlude_list(std::vector<Neighbor> &pool,
-                                    const unsigned location, const float alpha,
-                                    const unsigned degree, const unsigned maxc,
+                                    const float alpha, const unsigned degree,
+                                    const unsigned         maxc,
                                     std::vector<Neighbor> &result,
                                     std::vector<float> &   occlude_factor) {
     if (pool.empty())
@@ -575,7 +580,7 @@ namespace diskann {
     result.reserve(range);
     std::vector<float> occlude_factor(pool.size(), 0);
 
-    occlude_list(pool, location, alpha, range, maxc, result, occlude_factor);
+    occlude_list(pool, alpha, range, maxc, result, occlude_factor);
 
     /* Add all the nodes in result into a variable called cut_graph
      * So this contains all the neighbors of id location
@@ -920,7 +925,7 @@ namespace diskann {
           progress_counter += 5;
         }
       }
-// Gopal. Splittng nsg_dll into separate DLLs for search and build.
+// Gopal. Splittng diskann_dll into separate DLLs for search and build.
 // This code should only be available in the "build" DLL.
 #ifdef DISKANN_BUILD
       MallocExtension::instance()->ReleaseFreeMemory();
@@ -1068,6 +1073,130 @@ namespace diskann {
     if (alloc)
       delete[] indices;
     return ret;
+  }
+
+  template<typename T, typename TagT>
+  void Index<T, TagT>::optimize_graph() {  // use after build or load
+    _data_len = (_aligned_dim + 1) * sizeof(float);
+    _neighbor_len = (_width + 1) * sizeof(unsigned);
+    _node_size = _data_len + _neighbor_len;
+    _opt_graph = (char *) malloc(_node_size * _nd);
+    DistanceFastL2<T> *dist_fast = (DistanceFastL2<T> *) _distance;
+    for (unsigned i = 0; i < _nd; i++) {
+      char *cur_node_offset = _opt_graph + i * _node_size;
+      float cur_norm = dist_fast->norm(_data + i * _aligned_dim, _aligned_dim);
+      std::memcpy(cur_node_offset, &cur_norm, sizeof(float));
+      std::memcpy(cur_node_offset + sizeof(float), _data + i * _aligned_dim,
+                  _data_len - sizeof(float));
+
+      cur_node_offset += _data_len;
+      unsigned k = _final_graph[i].size();
+      std::memcpy(cur_node_offset, &k, sizeof(unsigned));
+      std::memcpy(cur_node_offset + sizeof(unsigned), _final_graph[i].data(),
+                  k * sizeof(unsigned));
+      std::vector<unsigned>().swap(_final_graph[i]);
+    }
+    _final_graph.clear();
+    _final_graph.shrink_to_fit();
+  }
+
+  template<typename T, typename TagT>
+  void Index<T, TagT>::search_with_opt_graph(const T *query, size_t K, size_t L,
+                                             unsigned *indices) {
+    DistanceFastL2<T> *dist_fast = (DistanceFastL2<T> *) _distance;
+
+    std::vector<Neighbor> retset(L + 1);
+    std::vector<unsigned> init_ids(L);
+    // std::mt19937 rng(rand());
+    // GenRandom(rng, init_ids.data(), L, (unsigned) nd_);
+
+    boost::dynamic_bitset<> flags{_nd, 0};
+    unsigned                tmp_l = 0;
+    unsigned *              neighbors =
+        (unsigned *) (_opt_graph + _node_size * _ep + _data_len);
+    unsigned MaxM_ep = *neighbors;
+    neighbors++;
+
+    for (; tmp_l < L && tmp_l < MaxM_ep; tmp_l++) {
+      init_ids[tmp_l] = neighbors[tmp_l];
+      flags[init_ids[tmp_l]] = true;
+    }
+
+    while (tmp_l < L) {
+      unsigned id = rand() % _nd;
+      if (flags[id])
+        continue;
+      flags[id] = true;
+      init_ids[tmp_l] = id;
+      tmp_l++;
+    }
+
+    for (unsigned i = 0; i < init_ids.size(); i++) {
+      unsigned id = init_ids[i];
+      if (id >= _nd)
+        continue;
+      _mm_prefetch(_opt_graph + _node_size * id, _MM_HINT_T0);
+    }
+    L = 0;
+    for (unsigned i = 0; i < init_ids.size(); i++) {
+      unsigned id = init_ids[i];
+      if (id >= _nd)
+        continue;
+      T *   x = (T *) (_opt_graph + _node_size * id);
+      float norm_x = *x;
+      x++;
+      float dist =
+          dist_fast->compare(x, query, norm_x, (unsigned) _aligned_dim);
+      retset[i] = Neighbor(id, dist, true);
+      flags[id] = true;
+      L++;
+    }
+    // std::cout<<L<<std::endl;
+
+    std::sort(retset.begin(), retset.begin() + L);
+    int k = 0;
+    while (k < (int) L) {
+      int nk = L;
+
+      if (retset[k].flag) {
+        retset[k].flag = false;
+        unsigned n = retset[k].id;
+
+        _mm_prefetch(_opt_graph + _node_size * n + _data_len, _MM_HINT_T0);
+        unsigned *neighbors =
+            (unsigned *) (_opt_graph + _node_size * n + _data_len);
+        unsigned MaxM = *neighbors;
+        neighbors++;
+        for (unsigned m = 0; m < MaxM; ++m)
+          _mm_prefetch(_opt_graph + _node_size * neighbors[m], _MM_HINT_T0);
+        for (unsigned m = 0; m < MaxM; ++m) {
+          unsigned id = neighbors[m];
+          if (flags[id])
+            continue;
+          flags[id] = 1;
+          T *   data = (T *) (_opt_graph + _node_size * id);
+          float norm = *data;
+          data++;
+          float dist =
+              dist_fast->compare(query, data, norm, (unsigned) _aligned_dim);
+          if (dist >= retset[L - 1].distance)
+            continue;
+          Neighbor nn(id, dist, true);
+          int      r = InsertIntoPool(retset.data(), L, nn);
+
+          // if(L+1 < retset.size()) ++L;
+          if (r < nk)
+            nk = r;
+        }
+      }
+      if (nk <= k)
+        k = nk;
+      else
+        ++k;
+    }
+    for (size_t i = 0; i < K; i++) {
+      indices[i] = retset[i].id;
+    }
   }
 
   /*************************************************
@@ -1229,7 +1358,7 @@ namespace diskann {
                                           (unsigned) _aligned_dim),
                        true));
         std::sort(expanded_nghrs.begin(), expanded_nghrs.end());
-        occlude_list(expanded_nghrs, ngh, alpha, range, maxc, result);
+        occlude_list(expanded_nghrs, alpha, range, maxc, result);
 
         for (auto iter : _final_graph[ngh])
           for (unsigned k = 0; k < _in_graph[iter].size(); k++)
@@ -1354,7 +1483,7 @@ namespace diskann {
                                             (unsigned) _aligned_dim),
                          true));
           std::sort(expanded_nghrs.begin(), expanded_nghrs.end());
-          occlude_list(expanded_nghrs, i, alpha, range, maxc, result);
+          occlude_list(expanded_nghrs, alpha, range, maxc, result);
 
           _final_graph[i].clear();
           for (auto j : result) {
