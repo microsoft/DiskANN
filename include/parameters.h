@@ -45,7 +45,7 @@ namespace diskann {
                          const ParamType &  default_value) {
       try {
         return Get<ParamType>(name);
-      } catch (std::invalid_argument e) {
+      } catch (std::invalid_argument &e) {
         return default_value;
       }
     }
