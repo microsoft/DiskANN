@@ -174,7 +174,54 @@ namespace diskann {
     }
   };
 
-  class DistanceL2 : public Distance<float> {
+  class AVX512DistanceL2Float : public Distance<float> {
+   public:
+#ifndef _WINDOWS
+    float compare(const float *a, const float *b, unsigned size) const
+        __attribute__((hot)) {
+      a = (const float *) __builtin_assume_aligned(a, 32);
+      b = (const float *) __builtin_assume_aligned(b, 32);
+#else
+    float compare(const float *a, const float *b, unsigned size) const {
+#endif
+
+      float result = 0;
+#ifdef USE_AVX512
+      // assume size is divisible by 16
+      _u16   niters = size / 16;
+      __m512 sum = _mm512_setzero_ps();
+      for (_u16 j = 0; j < niters; j++) {
+        // scope is a[16j:16j+15], b[16j:16j+15]
+        // load a_vec
+        if (j < (niters - 1)) {
+          _mm_prefetch((char *) (a + 16 * (j + 1)), _MM_HINT_T0);
+          _mm_prefetch((char *) (b + 16 * (j + 1)), _MM_HINT_T0);
+        }
+        __m512 a_vec = _mm512_load_ps(a + 16 * j);
+        // load b_vec
+        __m512 b_vec = _mm512_load_ps(b + 16 * j);
+        // a_vec - b_vec
+        __m512 tmp_vec = _mm512_sub_ps(a_vec, b_vec);
+
+        // sum = (tmp_vec**2) + sum
+        sum = _mm512_fmadd_ps(tmp_vec, tmp_vec, sum);
+      }
+
+      // horizontal add sum
+      result = _mm512_reduce_add_ps(sum);
+#else
+#ifndef _WINDOWS
+#pragma omp simd reduction(+ : result) aligned(a, b : 32)
+#endif
+      for (_s32 i = 0; i < (_s32) size; i++) {
+        result += (a[i] - b[i]) * (a[i] - b[i]);
+      }
+#endif
+      return result;
+    }
+  };
+
+  class AVX2DistanceL2Float : public Distance<float> {
    public:
 #ifndef _WINDOWS
     float compare(const float *a, const float *b, unsigned size) const
@@ -331,12 +378,39 @@ namespace diskann {
     float compare(const T *a, const T *b, unsigned size) const {
       float result = 0;
 #ifdef __GNUC__
-#ifdef __AVX__
+#ifdef __AVX512F__
+#define AVX512_DOT(addr1, addr2, dest, tmp1, tmp2) \
+  tmp1 = _mm512_loadu_ps(addr1);                   \
+  tmp2 = _mm512_loadu_ps(addr2);                   \
+  dest = _mm512_fmadd_ps(tmp1, tmp2, dest);
+
+      __m512       sum;
+      __m512       l0, l1;
+      __m512       r0, r1;
+      unsigned     D = (size + 15) & ~15U;
+      unsigned     DR = D % 32;
+      unsigned     DD = D - DR;
+      const float *l = (float *) a;
+      const float *r = (float *) b;
+      const float *e_l = l + DD;
+      const float *e_r = r + DD;
+
+      sum = _mm512_setzero_ps();
+      if (DR) {
+        AVX512_DOT(e_l, e_r, sum, l0, r0);
+      }
+
+      for (unsigned i = 0; i < DD; i += 32, l += 32, r += 32) {
+        AVX512_DOT(l, r, sum, l0, r0);
+        AVX512_DOT(l + 16, r + 16, sum, l1, r1);
+      }
+
+      result = _mm512_reduce_add_ps(sum);
+#elif defined(__AVX__)
 #define AVX_DOT(addr1, addr2, dest, tmp1, tmp2) \
   tmp1 = _mm256_loadu_ps(addr1);                \
   tmp2 = _mm256_loadu_ps(addr2);                \
-  tmp1 = _mm256_mul_ps(tmp1, tmp2);             \
-  dest = _mm256_add_ps(dest, tmp1);
+  dest = _mm256_fmadd_ps(tmp1, tmp2, dest);
 
       __m256       sum;
       __m256       l0, l1;
@@ -348,9 +422,8 @@ namespace diskann {
       const float *r = (float *) b;
       const float *e_l = l + DD;
       const float *e_r = r + DD;
-      float unpack[8] __attribute__((aligned(32))) = {0, 0, 0, 0, 0, 0, 0, 0};
 
-      sum = _mm256_loadu_ps(unpack);
+      sum = _mm256_setzero_ps();
       if (DR) {
         AVX_DOT(e_l, e_r, sum, l0, r0);
       }
@@ -359,9 +432,8 @@ namespace diskann {
         AVX_DOT(l, r, sum, l0, r0);
         AVX_DOT(l + 8, r + 8, sum, l1, r1);
       }
-      _mm256_storeu_ps(unpack, sum);
-      result = unpack[0] + unpack[1] + unpack[2] + unpack[3] + unpack[4] +
-               unpack[5] + unpack[6] + unpack[7];
+
+      result = _mm256_reduce_add_ps(sum);
 
 #else
 #ifdef __SSE2__

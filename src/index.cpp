@@ -50,9 +50,13 @@ namespace {
       std::cout << "Here" << std::endl;
       return new diskann::DistanceFastL2<float>();
     } else if (m == diskann::Metric::L2) {
-      if (Avx2SupportedCPU) {
-        std::cout << "Using AVX2 distance computation" << std::endl;
-        return new diskann::DistanceL2();
+      if (Avx512SupportedCPU) {
+        std::cout << "Using AVX512 distance computation" << std::endl;
+        return new diskann::AVX512DistanceL2Float();
+      } else if (Avx2SupportedCPU) {
+        std::cout << "AVX512 not supported. Using AVX2 distance computation"
+                  << std::endl;
+        return new diskann::AVX2DistanceL2Float();
       } else if (AvxSupportedCPU) {
         std::cout << "AVX2 not supported. Using AVX distance computation"
                   << std::endl;

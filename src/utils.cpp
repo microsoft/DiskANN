@@ -49,12 +49,26 @@ bool cpuHasAvx2Support() {
   }
   return false;
 }
+
+bool cpuHasAvx512Support() {
+  int cpuInfo[4];
+  __cpuid(cpuInfo, 0);
+  int n = cpuInfo[0];
+  if (n >= 7) {
+    __cpuidex(cpuInfo, 7, 0);
+    static int avx512fMask = 0x10000;
+    return (cpuInfo[1] & avx512Mask) > 0;
+  }
+  return false;
+}
 #endif
 
 #ifndef _WINDOWS
 bool AvxSupportedCPU = false;
-bool Avx2SupportedCPU = true;
+bool Avx2SupportedCPU = false;
+bool Avx512SupportedCPU = true;
 #else
 bool AvxSupportedCPU = cpuHasAvxSupport();
 bool Avx2SupportedCPU = cpuHasAvx2Support();
+bool Avx512SupportedCPU = cpuHasAvx512Support();
 #endif
