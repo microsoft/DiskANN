@@ -525,11 +525,6 @@ inline void printProcessMemory(const char* message) {
 }
 #else
 
-// need to check and change this
-inline bool avx2Supported() {
-  return true;
-}
-
 inline void printProcessMemory(const char* message) {
   diskann::cout << message << std::endl;
 }
@@ -537,3 +532,4 @@ inline void printProcessMemory(const char* message) {
 
 extern bool AvxSupportedCPU;
 extern bool Avx2SupportedCPU;
+extern bool Avx512SupportedCPU;
