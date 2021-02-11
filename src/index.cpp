@@ -47,8 +47,11 @@ namespace {
   template<>
   diskann::Distance<float> *get_distance_function(diskann::Metric m) {
     if (m == diskann::Metric::FAST_L2) {
-      std::cout << "Here" << std::endl;
+      std::cout << "Using Fast L2 Distance Metric" << std::endl;
       return new diskann::DistanceFastL2<float>();
+    } else if (m == diskann::Metric::INNER_PRODUCT) {
+      std::cout << "Using Fast Inner Product Distance Metric" << std::endl;
+      return new diskann::DistanceFastInnerProduct<float>();
     } else if (m == diskann::Metric::L2) {
       if (Avx512SupportedCPU) {
         std::cout << "Using AVX512 distance computation" << std::endl;
@@ -67,9 +70,8 @@ namespace {
       }
     } else {
       std::stringstream stream;
-      stream << "Only L2 metric supported as of now. Email "
-                "gopalsr@microsoft.com if you need cosine similarity or inner "
-                "product."
+      stream << "Only L2 and Inner Product metric supported as of now. Email "
+                "gopalsr@microsoft.com if you need support for other metrics."
              << std::endl;
       std::cerr << stream.str() << std::endl;
       throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
@@ -1085,7 +1087,8 @@ namespace diskann {
     _neighbor_len = (_width + 1) * sizeof(unsigned);
     _node_size = _data_len + _neighbor_len;
     _opt_graph = (char *) malloc(_node_size * _nd);
-    DistanceFastL2<T> *dist_fast = (DistanceFastL2<T> *) _distance;
+    DistanceInnerProduct<T> *dist_fast =
+        dynamic_cast<DistanceInnerProduct<T> *>(_distance);
     for (unsigned i = 0; i < _nd; i++) {
       char *cur_node_offset = _opt_graph + i * _node_size;
       float cur_norm = dist_fast->norm(_data + i * _aligned_dim, _aligned_dim);
@@ -1107,12 +1110,11 @@ namespace diskann {
   template<typename T, typename TagT>
   void Index<T, TagT>::search_with_opt_graph(const T *query, size_t K, size_t L,
                                              unsigned *indices) {
-    DistanceFastL2<T> *dist_fast = (DistanceFastL2<T> *) _distance;
+    DistanceInnerProduct<T> *dist_fast =
+        dynamic_cast<DistanceInnerProduct<T> *>(_distance);
 
     std::vector<Neighbor> retset(L + 1);
     std::vector<unsigned> init_ids(L);
-    // std::mt19937 rng(rand());
-    // GenRandom(rng, init_ids.data(), L, (unsigned) nd_);
 
     boost::dynamic_bitset<> flags{_nd, 0};
     unsigned                tmp_l = 0;
@@ -1135,17 +1137,12 @@ namespace diskann {
       tmp_l++;
     }
 
-    for (unsigned i = 0; i < init_ids.size(); i++) {
-      unsigned id = init_ids[i];
-      if (id >= _nd)
-        continue;
-      _mm_prefetch(_opt_graph + _node_size * id, _MM_HINT_T0);
-    }
     L = 0;
     for (unsigned i = 0; i < init_ids.size(); i++) {
       unsigned id = init_ids[i];
       if (id >= _nd)
         continue;
+      _mm_prefetch(_opt_graph + _node_size * id, _MM_HINT_T0);
       T *   x = (T *) (_opt_graph + _node_size * id);
       float norm_x = *x;
       x++;
@@ -1155,7 +1152,6 @@ namespace diskann {
       flags[id] = true;
       L++;
     }
-    // std::cout<<L<<std::endl;
 
     std::sort(retset.begin(), retset.begin() + L);
     int k = 0;
@@ -1171,12 +1167,11 @@ namespace diskann {
             (unsigned *) (_opt_graph + _node_size * n + _data_len);
         unsigned MaxM = *neighbors;
         neighbors++;
-        for (unsigned m = 0; m < MaxM; ++m)
-          _mm_prefetch(_opt_graph + _node_size * neighbors[m], _MM_HINT_T0);
         for (unsigned m = 0; m < MaxM; ++m) {
           unsigned id = neighbors[m];
           if (flags[id])
             continue;
+          _mm_prefetch(_opt_graph + _node_size * id, _MM_HINT_T0);
           flags[id] = 1;
           T *   data = (T *) (_opt_graph + _node_size * id);
           float norm = *data;
@@ -1188,7 +1183,6 @@ namespace diskann {
           Neighbor nn(id, dist, true);
           int      r = InsertIntoPool(retset.data(), L, nn);
 
-          // if(L+1 < retset.size()) ++L;
           if (r < nk)
             nk = r;
         }
