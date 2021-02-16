@@ -1,6 +1,7 @@
 #pragma once
 
 #include <utils.h>
+#include <limits.h>
 #ifdef _WINDOWS
 #include <immintrin.h>
 #include <smmintrin.h>
@@ -635,12 +636,19 @@ namespace diskann {
   class DistanceFastInnerProduct : public DistanceInnerProduct<T> {
    public:
     float norm(const T *a, unsigned size) const {
-      return 1 / std::sqrt(DistanceInnerProduct<T>::norm(a, size));
+      float norm = std::sqrt(DistanceInnerProduct<T>::norm(a, size));
+      if (norm == 0.0) {
+        return std::numeric_limits<float>::max();
+      }
+      return 1 / norm;
     }
 
     float compare(const T *a, const T *b, unsigned size) const {
       float norm_a = std::sqrt(DistanceInnerProduct<T>::norm(a, size));
       float norm_b = std::sqrt(DistanceInnerProduct<T>::norm(b, size));
+      if (norm_a == 0.0 || norm_b == 0.0) {
+        return std::numeric_limits<float>::max();
+      }
       float result =
           DistanceInnerProduct<T>::compare(a, b, size) / (norm_a * norm_b);
       return 1 - result;
