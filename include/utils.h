@@ -350,7 +350,7 @@ namespace diskann {
       throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
                                   __LINE__);
     }
-    rounded_dim = ROUND_UP(dim, 8);
+    rounded_dim = ROUND_UP(dim, 16);
     diskann::cout << "Metadata: #pts = " << npts << ", #dims = " << dim
                   << ", aligned_dim = " << rounded_dim << "..." << std::flush;
     size_t allocSize = npts * rounded_dim * sizeof(T);
