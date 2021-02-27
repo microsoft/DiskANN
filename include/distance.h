@@ -621,7 +621,22 @@ namespace diskann {
   class DistanceFastL2 : public DistanceInnerProduct<T> {
    public:
     float norm(const T *a, unsigned size) const {
-      return DistanceInnerProduct<T>::norm(a, size);
+      float norm = DistanceInnerProduct<T>::norm(a, size);
+      if (norm == 0.0) {
+        return std::numeric_limits<float>::max();
+      }
+      return norm;
+    }
+
+    float compare(const T *a, const T *b, unsigned size) const {
+      float norm_a = DistanceInnerProduct<T>::norm(a, size);
+      float norm_b = DistanceInnerProduct<T>::norm(b, size);
+      if (norm_a == 0.0 || norm_b == 0.0) {
+        return std::numeric_limits<float>::max();
+      }
+      float result =
+          norm_a + norm_b - (2 * DistanceInnerProduct<T>::compare(a, b, size));
+      return result;
     }
 
     float compare(const T *a, const T *b, float norm, unsigned size) const {
