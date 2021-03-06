@@ -267,6 +267,7 @@ PYBIND11_MODULE(vamanapy, m) {
                                  const size_t num_queries,
                                  const size_t l_search) {
         py::array_t<unsigned> ids(knn * num_queries);
+        #pragma omp parallel for schedule(dynamic, 1)
         for (unsigned i = 0; i < num_queries; i++) {
           self.search_with_opt_graph(queries.data(i), knn,
                                      l_search, ids.mutable_data(i * knn));
