@@ -17,7 +17,7 @@ params.set("saturate_graph", False)
 params.set("num_threads", 32)
 
 start = time.time()
-index = SinglePrecisionIndex(Metric.L2, data_path)
+index = SinglePrecisionIndex(Metric.FAST_L2, data_path)
 index.build(params, [])
 end = time.time()
 
