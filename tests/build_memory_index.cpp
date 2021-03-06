@@ -29,7 +29,7 @@ int build_in_memory_index(const std::string& data_path, const unsigned R,
   paras.Set<bool>("saturate_graph", 0);
   paras.Set<unsigned>("num_threads", num_threads);
 
-  diskann::Index<T> index(diskann::L2, data_path.c_str());
+  diskann::Index<T> index(diskann::FAST_L2, data_path.c_str());
   auto              s = std::chrono::high_resolution_clock::now();
   index.build(paras);
   std::chrono::duration<double> diff =
