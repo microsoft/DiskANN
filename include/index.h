@@ -17,6 +17,8 @@
 #include "utils.h"
 #include "windows_customizations.h"
 
+#include "pq_table.h"
+
 #define SLACK_FACTOR 1.3
 
 #define ESTIMATE_RAM_USAGE(size, dim, datasize, degree) \
@@ -41,6 +43,7 @@ namespace diskann {
     DISKANN_DLLEXPORT void load(const char *filename,
                                 const bool  load_tags = false,
                                 const char *tag_filename = NULL);
+    DISKANN_DLLEXPORT void pq_load(const char *pq_prefix);
     // generates one or more frozen points that will never get deleted from the
     // graph
     DISKANN_DLLEXPORT int generate_random_frozen_points(
@@ -49,6 +52,9 @@ namespace diskann {
     DISKANN_DLLEXPORT void build(
         Parameters &             parameters,
         const std::vector<TagT> &tags = std::vector<TagT>());
+    DISKANN_DLLEXPORT void pq_build(const char *dataFilePath,
+                                    const char *indexFilePath,
+                                    Parameters &parameters);
 
     // Gopal. Added search overload that takes L as parameter, so that we
     // can customize L on a per-query basis without tampering with "Parameters"
@@ -102,6 +108,8 @@ namespace diskann {
 
     DISKANN_DLLEXPORT void search_with_opt_graph(const T *query, size_t K,
                                                  size_t L, unsigned *indices);
+    DISKANN_DLLEXPORT void pq_search(T *query, size_t K, size_t L,
+                                     unsigned *indices);
 
     /*  Internals of the library */
    protected:
@@ -178,6 +186,7 @@ namespace diskann {
     unsigned     _width;
     unsigned     _ep;
     bool         _saturate_graph = false;
+    bool         _normalize = false;
     std::vector<std::mutex> _locks;  // Per node lock, cardinality=max_points_
 
     char * _opt_graph;
@@ -197,6 +206,17 @@ namespace diskann {
                                  // structures and functions required for eager
     // deletion
     bool _store_data;
+
+    // _pq_data: Stores the data points in compressed format (_u8 * n_chunks)
+    // _chunk_size = chunk size of each dimension chunk
+    // _n_chunks = # of bytes the data is compressed to
+    // _pq_table = [[2^8 * [chunk_size]] * n_chunks]
+    _u8 *                _pq_data = nullptr;
+    _u64                 _chunk_size;
+    _u64                 _n_chunks;
+    FixedChunkPQTable<T> _pq_table;
+
+    float *_pq_table_dists = nullptr;  // Must be atleast [256 * _n_chunks]
 
     std::unordered_map<TagT, unsigned> _tag_to_location;
     std::unordered_map<unsigned, TagT> _location_to_tag;

@@ -54,35 +54,6 @@
 // returns region of `node_buf` containing [COORD(T)]
 #define OFFSET_TO_NODE_COORDS(node_buf) (T *) (node_buf)
 
-namespace {
-  void aggregate_coords(const unsigned *ids, const _u64 n_ids,
-                        const _u8 *all_coords, const _u64 ndims, _u8 *out) {
-    for (_u64 i = 0; i < n_ids; i++) {
-      memcpy(out + i * ndims, all_coords + ids[i] * ndims, ndims * sizeof(_u8));
-    }
-  }
-
-  void pq_dist_lookup(const _u8 *pq_ids, const _u64 n_pts,
-                      const _u64 pq_nchunks, const float *pq_dists,
-                      float *dists_out) {
-    _mm_prefetch((char *) dists_out, _MM_HINT_T0);
-    _mm_prefetch((char *) pq_ids, _MM_HINT_T0);
-    _mm_prefetch((char *) (pq_ids + 64), _MM_HINT_T0);
-    _mm_prefetch((char *) (pq_ids + 128), _MM_HINT_T0);
-    memset(dists_out, 0, n_pts * sizeof(float));
-    for (_u64 chunk = 0; chunk < pq_nchunks; chunk++) {
-      const float *chunk_dists = pq_dists + 256 * chunk;
-      if (chunk < pq_nchunks - 1) {
-        _mm_prefetch((char *) (chunk_dists + 256), _MM_HINT_T0);
-      }
-      for (_u64 idx = 0; idx < n_pts; idx++) {
-        _u8 pq_centerid = pq_ids[pq_nchunks * idx + chunk];
-        dists_out[idx] += chunk_dists[pq_centerid];
-      }
-    }
-  }
-}  // namespace
-
 namespace diskann {
   template<>
   PQFlashIndex<_u8>::PQFlashIndex(
@@ -565,18 +536,20 @@ namespace diskann {
   int PQFlashIndex<T>::load(uint32_t num_threads, const char *pq_prefix,
                             const char *disk_index_file) {
 #endif
-    std::string pq_table_bin = std::string(pq_prefix) + "_pivots.bin";
+    std::string pq_table_path = std::string(pq_prefix) + "_pq_pivots";
     std::string pq_compressed_vectors =
-        std::string(pq_prefix) + "_compressed.bin";
+        std::string(pq_prefix) + "_pq_compressed.bin";
     std::string medoids_file = std::string(disk_index_file) + "_medoids.bin";
     std::string centroids_file =
         std::string(disk_index_file) + "_centroids.bin";
 
     size_t pq_file_dim, pq_file_num_centroids;
 #ifdef EXEC_ENV_OLS
-    get_bin_metadata(files, pq_table_bin, pq_file_num_centroids, pq_file_dim);
+    get_bin_metadata(files, pq_table_path + ".bin", pq_file_num_centroids,
+                     pq_file_dim);
 #else
-    get_bin_metadata(pq_table_bin, pq_file_num_centroids, pq_file_dim);
+    get_bin_metadata(pq_table_path + ".bin", pq_file_num_centroids,
+                     pq_file_dim);
 #endif
 
     this->disk_index_file = std::string(disk_index_file);
@@ -603,9 +576,9 @@ namespace diskann {
     this->n_chunks = nchunks_u64;
 
 #ifdef EXEC_ENV_OLS
-    pq_table.load_pq_centroid_bin(files, pq_table_bin.c_str(), nchunks_u64);
+    pq_table.load_pq_centroid_bin(files, pq_table_path.c_str(), nchunks_u64);
 #else
-    pq_table.load_pq_centroid_bin(pq_table_bin.c_str(), nchunks_u64);
+    pq_table.load_pq_centroid_bin(pq_table_path.c_str(), nchunks_u64);
 #endif
 
     diskann::cout
@@ -810,10 +783,10 @@ namespace diskann {
     // lambda to batch compute query<-> node distances in PQ space
     auto compute_dists = [this, pq_coord_scratch, pq_dists](
         const unsigned *ids, const _u64 n_ids, float *dists_out) {
-      ::aggregate_coords(ids, n_ids, this->data, this->n_chunks,
-                         pq_coord_scratch);
-      ::pq_dist_lookup(pq_coord_scratch, n_ids, this->n_chunks, pq_dists,
-                       dists_out);
+      diskann::aggregate_coords(ids, n_ids, this->data, this->n_chunks,
+                                pq_coord_scratch);
+      diskann::pq_dist_lookup(pq_coord_scratch, n_ids, this->n_chunks, pq_dists,
+                              dists_out);
     };
     Timer                 query_timer, io_timer, cpu_timer;
     std::vector<Neighbor> retset(l_search + 1);

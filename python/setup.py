@@ -14,7 +14,7 @@ __version__ = "0.1.0"
 
 class BuildExt(build_ext):
     """A custom build extension for adding compiler-specific options."""
-    c_opts = {'unix': ['-Ofast']}
+    c_opts = {'unix': ['-Ofast', '-DMKL_ILP64', '-m64', '-Wl,--no-as-needed']}
     arch_list = '-march -msse -msse2 -msse3 -mssse3 -msse4 -msse4a -msse4.1 -msse4.2 -mavx -mavx2 -mavx512f'.split()
     no_arch_flag = True
 
@@ -27,7 +27,7 @@ class BuildExt(build_ext):
     if no_arch_flag:
         c_opts['unix'].append('-march=native')
 
-    link_opts = {'unix': []}
+    link_opts = {'unix': ['-L/opt/intel/compilers_and_libraries/linux/mkl/lib/intel64/', '-L/opt/intel/compilers_and_libraries/linux/lib/intel64/', '-lmkl_rt', '-lmkl_core', '-lmkl_intel_ilp64', '-lmkl_sequential', '-lmkl_intel_thread', '-liomp5', '-lpthread', '-lm', '-ldl']}
     c_opts['unix'].append('-fopenmp')
     link_opts['unix'].extend(['-fopenmp', '-pthread'])
 
@@ -58,7 +58,8 @@ ext_modules = [
     Extension(
         'vamanapy',
         ['src/vamana_bindings.cpp'],
-        include_dirs=["../include/", 
+        include_dirs=["../include/",
+                      "/opt/intel/compilers_and_libraries/linux/mkl/include/",
                       pybind11.get_include(False),
                       pybind11.get_include(True)],
         libraries=[],

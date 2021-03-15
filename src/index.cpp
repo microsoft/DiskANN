@@ -31,6 +31,7 @@
 #include "math_utils.h"
 #include "memory_mapper.h"
 #include "parameters.h"
+#include "pq_flash_index.h"
 #include "partition_and_pq.h"
 #include "timer.h"
 #include "utils.h"
@@ -186,6 +187,12 @@ namespace diskann {
     this->_distance = ::get_distance_function<T>(m);
     _locks = std::vector<std::mutex>(_max_points + _num_frozen_pts);
 
+    DistanceFastInnerProduct<T> *cosine_distance =
+        dynamic_cast<DistanceFastInnerProduct<T> *>(_distance);
+    if (cosine_distance != nullptr) {
+      _normalize = true;
+    }
+
     _width = 0;
   }
 
@@ -193,6 +200,8 @@ namespace diskann {
   Index<float>::~Index() {
     delete this->_distance;
     aligned_free(_data);
+    delete[] _pq_data;
+    aligned_free(_pq_table_dists);
   }
 
   template<>
@@ -1012,6 +1021,227 @@ namespace diskann {
                   << "Index built." << std::endl;
     _width = (std::max)((unsigned) max, _width);
     _has_built = true;
+  }
+
+  template<typename T, typename TagT>
+  void Index<T, TagT>::pq_build(const char *dataFilePath,
+                                const char *indexFilePath,
+                                Parameters &parameters) {
+    std::string filename(dataFilePath);
+    std::string index_prefix_path(indexFilePath);
+    std::string save_path = index_prefix_path + "_normalized_data.bin";
+    std::string pq_pivots_path = index_prefix_path + "_pq_pivots";
+    std::string pq_compressed_vectors_path =
+        index_prefix_path + "_pq_compressed.bin";
+
+    const unsigned R = parameters.Get<unsigned>("R");
+    const unsigned L = parameters.Get<unsigned>("L");
+    const float    alpha = parameters.Get<float>("alpha");
+    const unsigned num_chunks = parameters.Get<unsigned>("num_chunks");
+    const unsigned num_threads = parameters.Get<unsigned>("num_threads");
+
+    if (num_threads != 0) {
+      omp_set_num_threads(num_threads);
+      mkl_set_num_threads(num_threads);
+    }
+
+    _n_chunks = num_chunks;
+    diskann::cout << "Starting index build: R = " << R << " L = " << L
+                  << " Alpha = " << alpha << " Threads = " << num_threads
+                  << std::endl;
+    diskann::cout << "Compressing " << _dim << "-dimensional data into "
+                  << _n_chunks << " bytes per vector." << std::endl;
+    diskann::cout << "Training data loaded of size " << _nd << std::endl;
+
+    float *unaligned_data;
+    diskann::load_bin<float>(filename, unaligned_data, _nd, _dim);
+
+    if (_normalize) {
+      DistanceFastInnerProduct<T> *base_norm =
+          dynamic_cast<DistanceFastInnerProduct<T> *>(_distance);
+      for (unsigned b = 0; b < _nd; b++) {
+        float norm = base_norm->norm(_data + b * _aligned_dim, _aligned_dim);
+        if (norm != std::numeric_limits<float>::max()) {
+          for (unsigned i = 0; i < _dim; i++) {
+            unaligned_data[b * _dim + i] *= norm;
+          }
+        }
+      }
+
+      diskann::save_bin<float>(save_path.c_str(), unaligned_data, _nd, _dim);
+      filename = save_path;
+    }
+
+    generate_pq_pivots(unaligned_data, _nd, (uint32_t) _dim, 256,
+                       (uint32_t) _n_chunks, 15, pq_pivots_path);
+    generate_pq_data_from_pivots<T>(filename, 256, (uint32_t) _n_chunks,
+                                    pq_pivots_path, pq_compressed_vectors_path);
+    delete[] unaligned_data;
+
+    this->build(parameters);
+  }
+
+  template<typename T, typename TagT>
+  void Index<T, TagT>::pq_load(const char *pq_prefix) {
+    std::string pq_table_path = std::string(pq_prefix) + "_pq_pivots";
+    std::string pq_compressed_vectors =
+        std::string(pq_prefix) + "_pq_compressed.bin";
+
+    size_t pq_file_dim, pq_file_num_centroids;
+    get_bin_metadata(pq_table_path + ".bin", pq_file_num_centroids,
+                     pq_file_dim);
+
+    if (pq_file_num_centroids != 256) {
+      diskann::cout << "Error. Number of PQ centroids is not 256. Exiting."
+                    << std::endl;
+      return;
+    }
+
+    _u64 data_dim = pq_file_dim;
+    _u64 aligned_dim = ROUND_UP(pq_file_dim, 8);
+
+    size_t npts_u64, nchunks_u64;
+    diskann::load_bin<_u8>(pq_compressed_vectors, _pq_data, npts_u64,
+                           nchunks_u64);
+
+    _n_chunks = nchunks_u64;
+    _pq_table.load_pq_centroid_bin(pq_table_path.c_str(), _n_chunks);
+
+    if (_nd != npts_u64) {
+      diskann::cout << "Error. Mismatch of data points in the graph. Exiting."
+                    << std::endl;
+      return;
+    }
+
+    diskann::cout
+        << "Loaded PQ centroids and in-memory compressed vectors. #points: "
+        << npts_u64 << " #dim: " << data_dim << " #aligned_dim: " << aligned_dim
+        << " #chunks: " << _n_chunks << std::endl;
+
+    diskann::alloc_aligned((void **) &_pq_table_dists,
+                           256 * _n_chunks * sizeof(float), 256);
+    diskann::cout << "Done.." << std::endl;
+    return;
+  }
+
+  template<typename T, typename TagT>
+  void Index<T, TagT>::pq_search(T *query, size_t K, size_t L,
+                                 unsigned *indices) {
+    std::vector<Neighbor> retset(L + 1);
+    std::vector<unsigned> init_ids(L);
+    float                 pq_coord_dists[256];
+    unsigned              v_neighbors[256];
+
+    DistanceInnerProduct<T> *dist_fast =
+        dynamic_cast<DistanceInnerProduct<T> *>(_distance);
+
+    if (_normalize) {
+      float norm = dist_fast->norm(query, _aligned_dim);
+      if (norm != std::numeric_limits<float>::max()) {
+        for (unsigned i = 0; i < _dim; i++) {
+          query[i] *= norm;
+        }
+      }
+    }
+
+    _pq_table.populate_chunk_distances(query, _pq_table_dists);
+
+    boost::dynamic_bitset<> flags{_nd, 0};
+    unsigned                tmp_l = 0;
+    unsigned *              neighbors =
+        (unsigned *) (_opt_graph + _node_size * _ep + _data_len);
+    unsigned MaxM_ep = *neighbors;
+    neighbors++;
+
+    for (; tmp_l < L && tmp_l < MaxM_ep; tmp_l++) {
+      init_ids[tmp_l] = neighbors[tmp_l];
+      flags[init_ids[tmp_l]] = true;
+    }
+
+    while (tmp_l < L) {
+      unsigned id = rand() % _nd;
+      if (flags[id])
+        continue;
+      flags[id] = true;
+      init_ids[tmp_l] = id;
+      tmp_l++;
+    }
+
+    L = init_ids.size();
+    diskann::pq_dist_fast(init_ids.data(), _pq_data, L, _n_chunks,
+                          _pq_table_dists, pq_coord_dists);
+
+    for (unsigned i = 0; i < init_ids.size(); i++) {
+      unsigned id = init_ids[i];
+      retset[i] = Neighbor(id, pq_coord_dists[i], true);
+      flags[id] = true;
+    }
+
+    std::sort(retset.begin(), retset.begin() + L);
+    int k = 0;
+    while (k < (int) L) {
+      int nk = L;
+
+      if (retset[k].flag) {
+        retset[k].flag = false;
+        unsigned n = retset[k].id;
+
+        unsigned *neighbors =
+            (unsigned *) (_opt_graph + _node_size * n + _data_len);
+        unsigned MaxM = *neighbors;
+        neighbors++;
+
+        memset(v_neighbors, 0, MaxM);
+        unsigned visitable_neighbors = 0;
+
+        for (unsigned m = 0; m < MaxM; ++m) {
+          unsigned id = neighbors[m];
+          if (flags[id]) {
+            continue;
+          }
+          flags[id] = 1;
+          v_neighbors[visitable_neighbors] = id;
+          visitable_neighbors++;
+        }
+
+        diskann::pq_dist_fast(v_neighbors, _pq_data, visitable_neighbors,
+                              _n_chunks, _pq_table_dists, pq_coord_dists);
+        for (unsigned m = 0; m < visitable_neighbors; ++m) {
+          float dist = pq_coord_dists[m];
+          if (dist >= retset[L - 1].distance) {
+            continue;
+          }
+          Neighbor nn(v_neighbors[m], dist, true);
+          int      r = InsertIntoPool(retset.data(), L, nn);
+
+          if (r < nk) {
+            nk = r;
+          }
+        }
+      }
+
+      if (nk <= k) {
+        k = nk;
+      } else {
+        ++k;
+      }
+    }
+
+    for (unsigned i = 0; i < L; i++) {
+      unsigned id = retset[i].id;
+      _mm_prefetch(_opt_graph + _node_size * id, _MM_HINT_T0);
+      T *   x = (T *) (_opt_graph + _node_size * id);
+      float norm_x = *x;
+      x++;
+      retset[i].distance =
+          dist_fast->compare(x, query, norm_x, (unsigned) _aligned_dim);
+    }
+
+    std::sort(retset.begin(), retset.begin() + L);
+
+    for (size_t i = 0; i < K; i++) {
+      indices[i] = retset[i].id;
+    }
   }
 
   template<typename T, typename TagT>

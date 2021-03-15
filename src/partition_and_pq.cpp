@@ -211,9 +211,10 @@ int generate_pq_pivots(const float *passed_train_data, size_t num_train,
 
   std::unique_ptr<float[]> full_pivot_data;
 
-  if (file_exists(pq_pivots_path)) {
+  std::string save_path = pq_pivots_path + ".bin";
+  if (file_exists(save_path)) {
     size_t file_dim, file_num_centers;
-    diskann::load_bin<float>(pq_pivots_path, full_pivot_data, file_num_centers,
+    diskann::load_bin<float>(save_path, full_pivot_data, file_num_centers,
                              file_dim);
     if (file_dim == dim && file_num_centers == num_centers) {
       diskann::cout << "PQ pivot file exists. Not generating again"
@@ -338,7 +339,7 @@ int generate_pq_pivots(const float *passed_train_data, size_t num_train,
     }
   }
 
-  diskann::save_bin<float>(pq_pivots_path.c_str(), full_pivot_data.get(),
+  diskann::save_bin<float>(save_path.c_str(), full_pivot_data.get(),
                            (size_t) num_centers, dim);
   std::string centroids_path = pq_pivots_path + "_centroid.bin";
   diskann::save_bin<float>(centroids_path.c_str(), centroid.get(), (size_t) dim,
@@ -355,7 +356,7 @@ int generate_pq_pivots(const float *passed_train_data, size_t num_train,
 // streams the base file (data_file), and computes the closest centers in each
 // chunk to generate the compressed data_file and stores it in
 // pq_compressed_vectors_path.
-// If the numbber of centers is < 256, it stores as byte vector, else as 4-byte
+// If the number of centers is < 256, it stores as byte vector, else as 4-byte
 // vector in binary format.
 template<typename T>
 int generate_pq_data_from_pivots(const std::string data_file,
@@ -376,7 +377,7 @@ int generate_pq_data_from_pivots(const std::string data_file,
   std::unique_ptr<uint32_t[]> rearrangement;
   std::unique_ptr<uint32_t[]> chunk_offsets;
 
-  if (!file_exists(pq_pivots_path)) {
+  if (!file_exists(pq_pivots_path + ".bin")) {
     diskann::cout << "ERROR: PQ k-means pivot file not found" << std::endl;
     throw diskann::ANNException("PQ k-means pivot file not found", -1);
   } else {
@@ -409,8 +410,8 @@ int generate_pq_data_from_pivots(const std::string data_file,
 
     size_t file_num_centers;
     size_t file_dim;
-    diskann::load_bin<float>(pq_pivots_path, full_pivot_data, file_num_centers,
-                             file_dim);
+    diskann::load_bin<float>(pq_pivots_path + ".bin", full_pivot_data,
+                             file_num_centers, file_dim);
 
     if (file_num_centers != num_centers) {
       std::stringstream stream;
