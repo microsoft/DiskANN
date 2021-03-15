@@ -11,7 +11,7 @@ bool generate_pq(const std::string& data_path,
                  const std::string& index_prefix_path,
                  const size_t num_pq_centers, const size_t num_pq_chunks,
                  const float sampling_rate) {
-  std::string pq_pivots_path = index_prefix_path + "_pq_pivots.bin";
+  std::string pq_pivots_path = index_prefix_path + "_pq_pivots";
   std::string pq_compressed_vectors_path =
       index_prefix_path + "_compressed.bin";
 

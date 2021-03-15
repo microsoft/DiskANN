@@ -565,7 +565,7 @@ namespace diskann {
     _u64 cur_node_id = 0;
     for (_u64 sector = 0; sector < n_sectors; sector++) {
       if (sector % 100000 == 0) {
-        diskann::cout << "Sector #" << sector << "written" << std::endl;
+        diskann::cout << "Sector #" << sector << " written" << std::endl;
       }
       memset(sector_buf.get(), 0, SECTOR_LEN);
       for (_u64 sector_node_id = 0;
@@ -632,7 +632,7 @@ namespace diskann {
     }
 
     std::string index_prefix_path(indexFilePath);
-    std::string pq_pivots_path = index_prefix_path + "_pq_pivots.bin";
+    std::string pq_pivots_path = index_prefix_path + "_pq_pivots";
     std::string pq_compressed_vectors_path =
         index_prefix_path + "_pq_compressed.bin";
     std::string mem_index_path = index_prefix_path + "_mem.index";
@@ -666,7 +666,7 @@ namespace diskann {
 
     diskann::cout << "Starting index build: R=" << R << " L=" << L
                   << " Query RAM budget: " << final_index_ram_limit
-                  << " Indexing ram budget: " << indexing_ram_budget
+                  << " Indexing RAM budget: " << indexing_ram_budget
                   << " T: " << num_threads << std::endl;
 
     auto s = std::chrono::high_resolution_clock::now();

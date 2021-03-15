@@ -162,6 +162,10 @@ PYBIND11_MODULE(vamanapy, m) {
         }
       }, py::arg("file_name"), py::arg("load_tags") = false,
       py::arg("tag_file_name") = "")
+    .def("pq_load", [](Index<float, int> &self,
+                       const std::string pq_prefix_path) {
+        return self.pq_load(pq_prefix_path.c_str());
+      }, py::arg("pq_prefix_path"))
     .def("generate_random_frozen_points", [](Index<float, int> &self,
                                              const std::string file_name) {
         if (file_name == "") {
@@ -178,6 +182,11 @@ PYBIND11_MODULE(vamanapy, m) {
           return self.build(parameters, tags);
         }
       }, py::arg("parameters"), py::arg("tags"))
+    .def("pq_build", [](Index<float, int> &self, const std::string file_name,
+                        const std::string index_path, Parameters &parameters) {
+        return self.pq_build(file_name.c_str(), index_path.c_str(),
+                             parameters);
+      }, py::arg("file_name"), py::arg("index_path"), py::arg("parameters"))
     .def("search", [](Index<float, int> &self, std::vector<float> &query,
                       const size_t query_index, const size_t knn,
                       const size_t num_queries, const size_t l_search,
@@ -271,6 +280,45 @@ PYBIND11_MODULE(vamanapy, m) {
         for (unsigned i = 0; i < num_queries; i++) {
           self.search_with_opt_graph(queries.data(i), knn,
                                      l_search, ids.mutable_data(i * knn));
+        }
+        return ids;
+      }, py::arg("queries"), py::arg("knn") = 10, py::arg("num_queries"),
+      py::arg("l_search"))
+    .def("pq_search", [](Index<float, int> &self, std::vector<float> &query,
+                         const size_t query_index, const size_t knn,
+                         const size_t num_queries, const size_t l_search,
+                         std::vector<unsigned> &ids, const size_t id_index) {
+        if (ids.size() == 0) {
+          ids.resize(knn * num_queries);
+        }
+        self.pq_search(query.data() + query_index, knn, l_search,
+                       ids.data() + id_index);
+      }, py::arg("query"), py::arg("query_index"), py::arg("knn") = 10,
+      py::arg("num_queries"), py::arg("l_search"), py::arg("ids"),
+      py::arg("id_index"))
+    .def("pq_single_numpy_query", [](Index<float, int> &self,
+                                     py::array_t<float,
+                                                 py::array::c_style |
+                                                 py::array::forcecast> &query,
+                                     const size_t knn,
+                                     const size_t l_search) {
+        py::array_t<unsigned> ids(knn);
+        self.pq_search(query.mutable_data(), knn, l_search,
+                       ids.mutable_data());
+        return ids;
+      }, py::arg("query"), py::arg("knn") = 10, py::arg("l_search"))
+    .def("pq_batch_numpy_query", [](Index<float, int> &self,
+                                    py::array_t<float,
+                                                py::array::c_style |
+                                                py::array::forcecast> &queries,
+                                    const size_t knn,
+                                    const size_t num_queries,
+                                    const size_t l_search) {
+        py::array_t<unsigned> ids(knn * num_queries);
+        #pragma omp parallel for schedule(dynamic, 1)
+        for (unsigned i = 0; i < num_queries; i++) {
+          self.pq_search(queries.mutable_data(i), knn, l_search,
+                         ids.mutable_data(i * knn));
         }
         return ids;
       }, py::arg("queries"), py::arg("knn") = 10, py::arg("num_queries"),

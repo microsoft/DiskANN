@@ -49,14 +49,15 @@ namespace diskann {
     std::string chunk_offset_file =
         std::string(pq_table_file) + "_chunk_offsets.bin";
     std::string centroid_file = std::string(pq_table_file) + "_centroid.bin";
+    std::string table_file = std::string(pq_table_file) + ".bin";
 
     // bin structure: [256][ndims][ndims(float)]
     uint64_t numr, numc;
     size_t   npts_u64, ndims_u64;
 #ifdef EXEC_ENV_OLS
-    diskann::load_bin<float>(files, pq_table_file, tables, npts_u64, ndims_u64);
+    diskann::load_bin<float>(files, table_file, tables, npts_u64, ndims_u64);
 #else
-      diskann::load_bin<float>(pq_table_file, tables, npts_u64, ndims_u64);
+      diskann::load_bin<float>(table_file, tables, npts_u64, ndims_u64);
 #endif
     this->ndims = ndims_u64;
 

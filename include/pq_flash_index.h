@@ -24,6 +24,53 @@
 #define MAX_PQ_CHUNKS 100
 
 namespace diskann {
+  static inline void aggregate_coords(const unsigned *ids, const _u64 n_ids,
+                                      const _u8 *all_coords, const _u64 ndims,
+                                      _u8 *out) {
+    for (_u64 i = 0; i < n_ids; i++) {
+      memcpy(out + i * ndims, all_coords + ids[i] * ndims, ndims * sizeof(_u8));
+    }
+  }
+
+  static inline void pq_dist_lookup(const _u8 *pq_ids, const _u64 n_pts,
+                                    const _u64   pq_nchunks,
+                                    const float *pq_dists, float *dists_out) {
+    _mm_prefetch((char *) dists_out, _MM_HINT_T0);
+    memset(dists_out, 0, n_pts * sizeof(float));
+    for (_u64 chunk = 0; chunk < pq_nchunks; chunk++) {
+      const float *chunk_dists = pq_dists + 256 * chunk;
+      if (chunk < pq_nchunks - 1) {
+        _mm_prefetch((char *) (chunk_dists + 256), _MM_HINT_T0);
+      }
+      for (_u64 idx = 0; idx < n_pts; idx++) {
+        _u8 pq_centerid = pq_ids[pq_nchunks * idx + chunk];
+        dists_out[idx] += chunk_dists[pq_centerid];
+      }
+    }
+  }
+
+  static inline void pq_dist_fast(const unsigned *ids, const _u8 *pq_coords,
+                                  const _u64 n_pts, const _u64 pq_nchunks,
+                                  const float *pq_dists, float *dists_out) {
+    _mm_prefetch((char *) dists_out, _MM_HINT_T0);
+    memset(dists_out, 0, n_pts * sizeof(float));
+
+    for (_u64 idx = 0; idx < n_pts; idx++) {
+      _mm_prefetch((char *) pq_coords + ids[idx] * pq_nchunks, _MM_HINT_T0);
+    }
+
+    for (_u64 chunk = 0; chunk < pq_nchunks; chunk++) {
+      const float *chunk_dists = pq_dists + 256 * chunk;
+      if (chunk < pq_nchunks - 1) {
+        _mm_prefetch((char *) (chunk_dists + 256), _MM_HINT_T0);
+      }
+      for (_u64 idx = 0; idx < n_pts; idx++) {
+        _u8 pq_centerid = pq_coords[pq_nchunks * ids[idx] + chunk];
+        dists_out[idx] += chunk_dists[pq_centerid];
+      }
+    }
+  }
+
   template<typename T>
   struct QueryScratch {
     T *  coord_scratch = nullptr;  // MUST BE AT LEAST [MAX_N_CMPS * data_dim]

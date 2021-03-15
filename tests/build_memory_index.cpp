@@ -45,7 +45,7 @@ int main(int argc, char** argv) {
   if (argc != 8) {
     std::cout << "Usage: " << argv[0]
               << "  [data_type<int8/uint8/float>]  [data_file.bin]  "
-                 "[output_index_file]  "
+                 "[output_index_file.bin]  "
               << "[R]  [L]  [alpha]"
               << "  [num_threads_to_use]. See README for more information on "
                  "parameters."
