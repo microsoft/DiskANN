@@ -2,11 +2,13 @@
 # Licensed under the MIT license.
 
 import time
+import argparse
 from vamanapy import Metric, Parameters, SinglePrecisionIndex
 
-
-data_path = "/mnt/SIFT1M/sift_base.bin"
-save_path = "/home/t-sjaiswal/diskann/build/tests/SIFT1M/test_build_memory_index.bin"
+parser = argparse.ArgumentParser()
+parser.add_argument('data_path', type=str, help='Path to the input base set of vectors.')
+parser.add_argument('save_path', type=str, help='Path to the built index.')
+args = parser.parse_args()
 
 params = Parameters()
 params.set("L", 125)
@@ -17,10 +19,10 @@ params.set("saturate_graph", False)
 params.set("num_threads", 32)
 
 start = time.time()
-index = SinglePrecisionIndex(Metric.FAST_L2, data_path)
+index = SinglePrecisionIndex(Metric.FAST_L2, args.data_path)
 index.build(params, [])
 end = time.time()
 
 print("Indexing Time: " + str(end - start) + " seconds")
 
-index.save(save_path)
+index.save(args.save_path)
