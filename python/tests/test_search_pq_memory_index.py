@@ -2,16 +2,19 @@
 # Licensed under the MIT license.
 
 import time
+import argparse
 import numpy as np
 import vamanapy as vp
 
 
-data_path = "/mnt/SIFT1M/sift_base.bin"
-query_path = "/mnt/SIFT1M/sift_query.bin"
-ground_truth_path = "/home/t-sjaiswal/diskann/build/tests/SIFT1M/sift_groundtruth.bin"
-memory_index_path = "/home/t-sjaiswal/diskann/build/tests/PQ_SIFT1M/test_build_pq_memory_index.bin"
-pq_path = "/home/t-sjaiswal/diskann/build/tests/PQ_SIFT1M/test_pq_memory_index"
-output_path_prefix = "/home/t-sjaiswal/diskann/build/tests/PQ_SIFT1M/test_search_pq_memory_index"
+parser = argparse.ArgumentParser()
+parser.add_argument('data_path', type=str, help='Path to the input base set of vectors.')
+parser.add_argument('query_path', type=str, help='Path to the input query set of vectors.')
+parser.add_argument('ground_truth_path', type=str, help='Path to the input groundtruth set.')
+parser.add_argument('memory_index_path', type=str, help='Path to the built index.')
+parser.add_argument('pq_path', type=str, help='Prefix for the pq-quantization generated files.')
+parser.add_argument('output_path_prefix', type=str, help='Prefix for the generated output files.')
+args = parser.parse_args()
 
 recall_at = 10
 # Use multi-threaded search only for batch mode.
@@ -23,13 +26,13 @@ query_data = vp.VectorFloat()
 ground_truth_ids = vp.VectorUnsigned()
 ground_truth_dists = vp.VectorFloat()
 
-num_queries, query_dims, query_aligned_dims = vp.load_aligned_bin_float(query_path, query_data)
-num_ground_truth, ground_truth_dims = vp.load_truthset(ground_truth_path, ground_truth_ids, ground_truth_dists)
+num_queries, query_dims, query_aligned_dims = vp.load_aligned_bin_float(args.query_path, query_data)
+num_ground_truth, ground_truth_dims = vp.load_truthset(args.ground_truth_path, ground_truth_ids, ground_truth_dists)
 
-index = vp.SinglePrecisionIndex(vp.Metric.FAST_L2, data_path)
-index.load(file_name = memory_index_path)
+index = vp.SinglePrecisionIndex(vp.Metric.FAST_L2, args.data_path)
+index.load(file_name = args.memory_index_path)
 print("Index Loaded")
-index.pq_load(pq_prefix_path = pq_path)
+index.pq_load(pq_prefix_path = args.pq_path)
 print("PQ Data Loaded")
 
 index.optimize_graph()
@@ -63,7 +66,7 @@ if single_query_mode:
               "{:>20}".format("{:.2f}".format(latency_stats[int((0.999 * num_queries))]))
               + "{:>15}".format("{:.2f}".format(recall)))
 
-        result_path = output_path_prefix + "_" + str(L) + "_idx_uint32.bin"
+        result_path = args.output_path_prefix + "_" + str(L) + "_idx_uint32.bin"
         vp.save_bin_u32(result_path, query_result_ids, num_queries, recall_at)
 else:
     query_data = np.load('/mnt/SIFT1M/sift_query.npy')
@@ -89,5 +92,5 @@ else:
               "{:>15}".format("{:.2f}".format(mean_latency)) +
               "{:>15}".format("{:.2f}".format(recall)))
 
-        result_path = output_path_prefix + "_" + str(L) + "_idx_uint32.bin"
+        result_path = args.output_path_prefix + "_" + str(L) + "_idx_uint32.bin"
         vp.save_bin_u32(result_path, query_result_ids, num_queries, recall_at)

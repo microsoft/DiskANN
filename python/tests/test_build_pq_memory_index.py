@@ -2,12 +2,15 @@
 # Licensed under the MIT license.
 
 import time
+import argparse
 from vamanapy import Metric, Parameters, SinglePrecisionIndex
 
 
-data_path = "/mnt/SIFT1M/sift_base.bin"
-pq_path = "/home/t-sjaiswal/diskann/build/tests/PQ_SIFT1M/test_pq_memory_index"
-save_path = "/home/t-sjaiswal/diskann/build/tests/PQ_SIFT1M/test_build_pq_memory_index.bin"
+parser = argparse.ArgumentParser()
+parser.add_argument('data_path', type=str, help='Path to the input base set of vectors.')
+parser.add_argument('pq_path', type=str, help='Prefix for the pq-quantization generated files.')
+parser.add_argument('save_path', type=str, help='Path to the built index.')
+args = parser.parse_args()
 
 params = Parameters()
 params.set("L", 125)
@@ -19,10 +22,10 @@ params.set("num_chunks", 32)
 params.set("num_threads", 32)
 
 start = time.time()
-index = SinglePrecisionIndex(Metric.FAST_L2, data_path)
-index.pq_build(data_path, pq_path, params)
+index = SinglePrecisionIndex(Metric.FAST_L2, args.data_path)
+index.pq_build(args.data_path, args.pq_path, params)
 end = time.time()
 
 print("Indexing Time: " + str(end - start) + " seconds")
 
-index.save(save_path)
+index.save(args.save_path)
