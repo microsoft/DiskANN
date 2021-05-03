@@ -32,6 +32,7 @@
 #include "memory_mapper.h"
 #include "parameters.h"
 #include "partition_and_pq.h"
+#include "pm.h"
 #include "timer.h"
 #include "utils.h"
 #include "windows_customizations.h"
@@ -47,7 +48,6 @@ namespace {
   template<>
   diskann::Distance<float> *get_distance_function(diskann::Metric m) {
     if (m == diskann::Metric::FAST_L2) {
-      std::cout << "Here" << std::endl;
       return new diskann::DistanceFastL2<float>();
     } else if (m == diskann::Metric::L2) {
       if (Avx2SupportedCPU) {
@@ -124,12 +124,15 @@ namespace diskann {
 
   // Initialize an index with metric m, load the data of type T with filename
   // (bin), and initialize max_points
-  template<typename T, typename TagT>
-  Index<T, TagT>::Index(Metric m, const char *filename, const size_t max_points,
+  template<typename T, typename TagT, typename Allocator>
+  Index<T, TagT, Allocator>::Index(Metric m, const char *filename,
+                        bool data_in_pm,
+                        const Allocator& allocator,
+                        const size_t max_points,
                         const size_t nd, const size_t num_frozen_pts,
                         const bool enable_tags, const bool store_data,
                         const bool support_eager_delete)
-      : _num_frozen_pts(num_frozen_pts), _has_built(false), _width(0),
+      : _allocator(allocator), _num_frozen_pts(num_frozen_pts), _has_built(false), _width(0),
         _can_delete(false), _eager_done(true), _lazy_done(true),
         _compacted_order(true), _enable_tags(enable_tags),
         _consolidated_order(true), _support_eager_delete(support_eager_delete),
@@ -138,7 +141,7 @@ namespace diskann {
     // zero-padding
     diskann::cout << "Number of frozen points = " << _num_frozen_pts
                   << std::endl;
-    load_aligned_bin<T>(std::string(filename), _data, _nd, _dim, _aligned_dim);
+    load_aligned_bin<T>(std::string(filename), _data, _nd, _dim, _aligned_dim, data_in_pm);
 
     if (nd > 0) {
       if (_nd >= nd)
@@ -187,25 +190,49 @@ namespace diskann {
   Index<float>::~Index() {
     delete this->_distance;
     aligned_free(_data);
+    aligned_free(_opt_graph);
+  }
+
+  template<>
+  Index<float,int,diskann::pmem_allocator<unsigned>>::~Index() {
+    delete this->_distance;
+    aligned_free(_data);
+    aligned_free(_opt_graph);
   }
 
   template<>
   Index<_s8>::~Index() {
     delete this->_distance;
     aligned_free(_data);
+    aligned_free(_opt_graph);
+  }
+
+  template<>
+  Index<_s8,int,diskann::pmem_allocator<unsigned>>::~Index() {
+    delete this->_distance;
+    aligned_free(_data);
+    aligned_free(_opt_graph);
   }
 
   template<>
   Index<_u8>::~Index() {
     delete this->_distance;
     aligned_free(_data);
+    aligned_free(_opt_graph);
+  }
+
+  template<>
+  Index<_u8,int,diskann::pmem_allocator<unsigned>>::~Index() {
+    delete this->_distance;
+    aligned_free(_data);
+    aligned_free(_opt_graph);
   }
 
   // save the graph index on a file as an adjacency list. For each point,
   // first store the number of neighbors, and then the neighbor list (each as
   // 4 byte unsigned)
-  template<typename T, typename TagT>
-  void Index<T, TagT>::save(const char *filename) {
+  template<typename T, typename TagT, typename Allocator>
+  void Index<T, TagT, Allocator>::save(const char *filename) {
     long long     total_gr_edges = 0;
     size_t        index_size = 0;
     std::ofstream out(std::string(filename), std::ios::binary | std::ios::out);
@@ -287,8 +314,8 @@ namespace diskann {
 
   // load the index from file and update the width (max_degree), ep
   // (navigating node id), and _final_graph (adjacency list)
-  template<typename T, typename TagT>
-  void Index<T, TagT>::load(const char *filename, const bool load_tags,
+  template<typename T, typename TagT, typename Allocator>
+  void Index<T, TagT, Allocator>::load(const char *filename, const bool load_tags,
                             const char *tag_filename) {
     if (!validate_file_size(filename)) {
       return;
@@ -309,7 +336,7 @@ namespace diskann {
         break;
       cc += k;
       ++nodes;
-      std::vector<unsigned> tmp(k);
+      std::vector<unsigned, Allocator> tmp(k, _allocator);
       in.read((char *) tmp.data(), k * sizeof(unsigned));
 
       _final_graph.emplace_back(tmp);
@@ -357,8 +384,8 @@ namespace diskann {
   /* This function finds out the navigating node, which is the medoid node
    * in the graph.
    */
-  template<typename T, typename TagT>
-  unsigned Index<T, TagT>::calculate_entry_point() {
+  template<typename T, typename TagT, typename Allocator>
+  unsigned Index<T, TagT, Allocator>::calculate_entry_point() {
     // allocate and init centroid
     float *center = new float[_aligned_dim]();
     for (size_t j = 0; j < _aligned_dim; j++)
@@ -411,8 +438,8 @@ namespace diskann {
    * search.
    * best_L_nodes: ids of closest L nodes in list
    */
-  template<typename T, typename TagT>
-  std::pair<uint32_t, uint32_t> Index<T, TagT>::iterate_to_fixed_point(
+  template<typename T, typename TagT, typename Allocator>
+  std::pair<uint32_t, uint32_t> Index<T, TagT, Allocator>::iterate_to_fixed_point(
       const T *node_coords, const unsigned Lsize,
       const std::vector<unsigned> &init_ids,
       std::vector<Neighbor> &      expanded_nodes_info,
@@ -495,8 +522,8 @@ namespace diskann {
     return std::make_pair(hops, cmps);
   }
 
-  template<typename T, typename TagT>
-  void Index<T, TagT>::get_expanded_nodes(
+  template<typename T, typename TagT, typename Allocator>
+  void Index<T, TagT, Allocator>::get_expanded_nodes(
       const size_t node_id, const unsigned Lindex,
       std::vector<unsigned>     init_ids,
       std::vector<Neighbor> &   expanded_nodes_info,
@@ -511,8 +538,8 @@ namespace diskann {
                            expanded_nodes_ids, best_L_nodes);
   }
 
-  template<typename T, typename TagT>
-  void Index<T, TagT>::occlude_list(std::vector<Neighbor> &pool,
+  template<typename T, typename TagT, typename Allocator>
+  void Index<T, TagT, Allocator>::occlude_list(std::vector<Neighbor> &pool,
                                     const float alpha, const unsigned degree,
                                     const unsigned         maxc,
                                     std::vector<Neighbor> &result) {
@@ -521,8 +548,8 @@ namespace diskann {
     occlude_list(pool, alpha, degree, maxc, result, occlude_factor);
   }
 
-  template<typename T, typename TagT>
-  void Index<T, TagT>::occlude_list(std::vector<Neighbor> &pool,
+  template<typename T, typename TagT, typename Allocator>
+  void Index<T, TagT, Allocator>::occlude_list(std::vector<Neighbor> &pool,
                                     const float alpha, const unsigned degree,
                                     const unsigned         maxc,
                                     std::vector<Neighbor> &result,
@@ -559,8 +586,8 @@ namespace diskann {
     }
   }
 
-  template<typename T, typename TagT>
-  void Index<T, TagT>::prune_neighbors(const unsigned location,
+  template<typename T, typename TagT, typename Allocator>
+  void Index<T, TagT, Allocator>::prune_neighbors(const unsigned location,
                                        std::vector<Neighbor> &pool,
                                        const Parameters &     parameter,
                                        std::vector<unsigned> &pruned_list) {
@@ -606,8 +633,8 @@ namespace diskann {
    * This function tries to add reverse links from all the visited nodes to
    * the current node n.
    */
-  template<typename T, typename TagT>
-  void Index<T, TagT>::batch_inter_insert(
+  template<typename T, typename TagT, typename Allocator>
+  void Index<T, TagT, Allocator>::batch_inter_insert(
       unsigned n, const std::vector<unsigned> &pruned_list,
       const Parameters &parameter, std::vector<unsigned> &need_to_sync) {
     const auto range = parameter.Get<unsigned>("R");
@@ -639,8 +666,8 @@ namespace diskann {
    * This function tries to add reverse links from all the visited nodes to
    * the current node n.
    */
-  template<typename T, typename TagT>
-  void Index<T, TagT>::inter_insert(unsigned n,
+  template<typename T, typename TagT, typename Allocator>
+  void Index<T, TagT, Allocator>::inter_insert(unsigned n,
                                     std::vector<unsigned> &pruned_list,
                                     const Parameters &     parameter,
                                     bool                   update_in_graph) {
@@ -671,7 +698,7 @@ namespace diskann {
             }
             prune_needed = false;
           } else {
-            copy_of_neighbors = des_pool;
+            copy_of_neighbors.assign(des_pool.begin(), des_pool.end());
             prune_needed = true;
           }
         }
@@ -717,8 +744,8 @@ namespace diskann {
    * The graph creation function.
    *    The graph will be updated periodically in NUM_SYNCS batches
    */
-  template<typename T, typename TagT>
-  void Index<T, TagT>::link(Parameters &parameters) {
+  template<typename T, typename TagT, typename Allocator>
+  void Index<T, TagT, Allocator>::link(Parameters &parameters) {
     unsigned NUM_THREADS = parameters.Get<unsigned>("num_threads");
     if (NUM_THREADS != 0)
       omp_set_num_threads(NUM_THREADS);
@@ -765,11 +792,14 @@ namespace diskann {
     else
       _ep = calculate_entry_point();
 
+    // Since `diskann::pmem_allocator` is not default constructable, we need to create
+    // an empty vector and use the copying version of `resize`.
+    auto copy_val = std::vector<unsigned, Allocator>(_allocator);
     _final_graph.reserve(_max_points + _num_frozen_pts);
-    _final_graph.resize(_max_points + _num_frozen_pts);
+    _final_graph.resize(_max_points + _num_frozen_pts, copy_val);
     if (_support_eager_delete) {
       _in_graph.reserve(_max_points + _num_frozen_pts);
-      _in_graph.resize(_max_points + _num_frozen_pts);
+      _in_graph.resize(_max_points + _num_frozen_pts, copy_val);
     }
 
     for (uint64_t p = 0; p < _max_points + _num_frozen_pts; p++) {
@@ -970,8 +1000,8 @@ namespace diskann {
                   << std::endl;
   }
 
-  template<typename T, typename TagT>
-  void Index<T, TagT>::build(Parameters &parameters,
+  template<typename T, typename TagT, typename Allocator>
+  void Index<T, TagT, Allocator>::build(Parameters &parameters,
                              const std::vector<TagT> &tags) {
     if (_enable_tags) {
       if (tags.size() != _nd) {
@@ -1008,8 +1038,8 @@ namespace diskann {
     _has_built = true;
   }
 
-  template<typename T, typename TagT>
-  std::pair<uint32_t, uint32_t> Index<T, TagT>::search(const T *query,
+  template<typename T, typename TagT, typename Allocator>
+  std::pair<uint32_t, uint32_t> Index<T, TagT, Allocator>::search(const T *query,
                                                        const size_t   K,
                                                        const unsigned L,
                                                        unsigned *     indices) {
@@ -1035,8 +1065,8 @@ namespace diskann {
     return retval;
   }
 
-  template<typename T, typename TagT>
-  std::pair<uint32_t, uint32_t> Index<T, TagT>::search(
+  template<typename T, typename TagT, typename Allocator>
+  std::pair<uint32_t, uint32_t> Index<T, TagT, Allocator>::search(
       const T *query, const uint64_t K, const unsigned L,
       std::vector<unsigned> init_ids, uint64_t *indices, float *distances) {
     tsl::robin_set<unsigned> visited(10 * L);
@@ -1061,8 +1091,8 @@ namespace diskann {
     return retval;
   }
 
-  template<typename T, typename TagT>
-  std::pair<uint32_t, uint32_t> Index<T, TagT>::search_with_tags(
+  template<typename T, typename TagT, typename Allocator>
+  std::pair<uint32_t, uint32_t> Index<T, TagT, Allocator>::search_with_tags(
       const T *query, const size_t K, const unsigned L, TagT *tags,
       unsigned frozen_pts, unsigned *indices_buffer) {
     const bool alloc = indices_buffer == NULL;
@@ -1075,12 +1105,15 @@ namespace diskann {
     return ret;
   }
 
-  template<typename T, typename TagT>
-  void Index<T, TagT>::optimize_graph() {  // use after build or load
+  template<typename T, typename TagT, typename Allocator>
+  void Index<T, TagT, Allocator>::optimize_graph(bool use_pm) {  // use after build or load
     _data_len = (_aligned_dim + 1) * sizeof(float);
     _neighbor_len = (_width + 1) * sizeof(unsigned);
     _node_size = _data_len + _neighbor_len;
-    _opt_graph = (char *) malloc(_node_size * _nd);
+    void* temp_ptr;
+    diskann::alloc_aligned(&temp_ptr, _node_size * _nd, sizeof(uint8_t), use_pm);
+    _opt_graph = (char *) temp_ptr;
+    //_opt_graph = (char *) malloc(_node_size * _nd);
     DistanceFastL2<T> *dist_fast = (DistanceFastL2<T> *) _distance;
     for (unsigned i = 0; i < _nd; i++) {
       char *cur_node_offset = _opt_graph + i * _node_size;
@@ -1094,14 +1127,14 @@ namespace diskann {
       std::memcpy(cur_node_offset, &k, sizeof(unsigned));
       std::memcpy(cur_node_offset + sizeof(unsigned), _final_graph[i].data(),
                   k * sizeof(unsigned));
-      std::vector<unsigned>().swap(_final_graph[i]);
+      std::vector<unsigned,Allocator>(_allocator).swap(_final_graph[i]);
     }
     _final_graph.clear();
     _final_graph.shrink_to_fit();
   }
 
-  template<typename T, typename TagT>
-  void Index<T, TagT>::search_with_opt_graph(const T *query, size_t K, size_t L,
+  template<typename T, typename TagT, typename Allocator>
+  void Index<T, TagT, Allocator>::search_with_opt_graph(const T *query, size_t K, size_t L,
                                              unsigned *indices) {
     DistanceFastL2<T> *dist_fast = (DistanceFastL2<T> *) _distance;
 
@@ -1205,8 +1238,8 @@ namespace diskann {
 
   // in case we add ''frozen'' auxiliary points to the dataset, these are not
   // visible to external world, we generate them here and update our dataset
-  template<typename T, typename TagT>
-  int Index<T, TagT>::generate_random_frozen_points(const char *filename) {
+  template<typename T, typename TagT, typename Allocator>
+  int Index<T, TagT, Allocator>::generate_random_frozen_points(const char *filename) {
     if (_has_built) {
       diskann::cout << "Index already built. Cannot add more points"
                     << std::endl;
@@ -1242,8 +1275,8 @@ namespace diskann {
     return 0;
   }
 
-  template<typename T, typename TagT>
-  int Index<T, TagT>::enable_delete() {
+  template<typename T, typename TagT, typename Allocator>
+  int Index<T, TagT, Allocator>::enable_delete() {
     LockGuard guard(_change_lock);
     assert(!_can_delete);
     assert(_enable_tags);
@@ -1272,8 +1305,8 @@ namespace diskann {
     return 0;
   }
 
-  template<typename T, typename TagT>
-  int Index<T, TagT>::eager_delete(const TagT tag,
+  template<typename T, typename TagT, typename Allocator>
+  int Index<T, TagT, Allocator>::eager_delete(const TagT tag,
                                    const Parameters &parameters) {
     if (_lazy_done && (!_consolidated_order)) {
       diskann::cout << "Lazy delete reuests issued but data not consolidated, "
@@ -1384,8 +1417,8 @@ namespace diskann {
     return 0;
   }
 
-  template<typename T, typename TagT>
-  void Index<T, TagT>::update_in_graph() {
+  template<typename T, typename TagT, typename Allocator>
+  void Index<T, TagT, Allocator>::update_in_graph() {
     diskann::cout << "Updating in_graph....." << std::flush;
     for (unsigned i = 0; i < _in_graph.size(); i++)
       _in_graph[i].clear();
@@ -1422,8 +1455,8 @@ namespace diskann {
 
   // Do not call consolidate_deletes() if you have not locked _change_lock.
   // Returns number of live points left after consolidation
-  template<typename T, typename TagT>
-  size_t Index<T, TagT>::consolidate_deletes(const Parameters &parameters) {
+  template<typename T, typename TagT, typename Allocator>
+  size_t Index<T, TagT, Allocator>::consolidate_deletes(const Parameters &parameters) {
     if (_eager_done) {
       diskann::cout << "No consolidation required, eager deletes done"
                     << std::endl;
@@ -1503,8 +1536,8 @@ namespace diskann {
     return _nd;
   }
 
-  template<typename T, typename TagT>
-  std::vector<unsigned> Index<T, TagT>::get_new_location(unsigned &active) {
+  template<typename T, typename TagT, typename Allocator>
+  std::vector<unsigned> Index<T, TagT, Allocator>::get_new_location(unsigned &active) {
     std::vector<unsigned> new_location;
     new_location.resize(_max_points + _num_frozen_pts,
                         (unsigned) (_max_points + _num_frozen_pts));
@@ -1518,8 +1551,8 @@ namespace diskann {
     return new_location;
   }
 
-  template<typename T, typename TagT>
-  void Index<T, TagT>::compact_data(std::vector<unsigned> new_location,
+  template<typename T, typename TagT, typename Allocator>
+  void Index<T, TagT, Allocator>::compact_data(std::vector<unsigned> new_location,
                                     unsigned active, bool &mode) {
     // If start node is removed, replace it.
     assert(!mode);
@@ -1611,8 +1644,8 @@ namespace diskann {
 
   // Do not call reserve_location() if you have not locked _change_lock.
   // It is not thread safe.
-  template<typename T, typename TagT>
-  unsigned Index<T, TagT>::reserve_location() {
+  template<typename T, typename TagT, typename Allocator>
+  unsigned Index<T, TagT, Allocator>::reserve_location() {
     assert(_nd < _max_points);
 
     unsigned location;
@@ -1632,8 +1665,8 @@ namespace diskann {
     return location;
   }
 
-  template<typename T, typename TagT>
-  void Index<T, TagT>::readjust_data(unsigned _num_frozen_pts) {
+  template<typename T, typename TagT, typename Allocator>
+  void Index<T, TagT, Allocator>::readjust_data(unsigned _num_frozen_pts) {
     if (_num_frozen_pts > 0) {
       if (_final_graph[_max_points].empty()) {
         diskann::cout << "Readjusting data to correctly position frozen point"
@@ -1669,8 +1702,8 @@ namespace diskann {
                     << std::endl;
   }
 
-  template<typename T, typename TagT>
-  int Index<T, TagT>::insert_point(const T *point, const Parameters &parameters,
+  template<typename T, typename TagT, typename Allocator>
+  int Index<T, TagT, Allocator>::insert_point(const T *point, const Parameters &parameters,
                                    std::vector<Neighbor> &   pool,
                                    std::vector<Neighbor> &   tmp,
                                    tsl::robin_set<unsigned> &visited,
@@ -1747,8 +1780,8 @@ namespace diskann {
     return 0;
   }
 
-  template<typename T, typename TagT>
-  int Index<T, TagT>::disable_delete(const Parameters &parameters,
+  template<typename T, typename TagT, typename Allocator>
+  int Index<T, TagT, Allocator>::disable_delete(const Parameters &parameters,
                                      const bool consolidate) {
     LockGuard guard(_change_lock);
     if (!_can_delete) {
@@ -1792,8 +1825,8 @@ namespace diskann {
     return 0;
   }
 
-  template<typename T, typename TagT>
-  int Index<T, TagT>::delete_point(const TagT tag) {
+  template<typename T, typename TagT, typename Allocator>
+  int Index<T, TagT, Allocator>::delete_point(const TagT tag) {
     if ((_eager_done) && (!_compacted_order)) {
       diskann::cout << "Eager delete requests were issued but data was not "
                        "compacted, cannot proceed with lazy_deletes"
@@ -1816,4 +1849,8 @@ namespace diskann {
   template DISKANN_DLLEXPORT class Index<float>;
   template DISKANN_DLLEXPORT class Index<int8_t>;
   template DISKANN_DLLEXPORT class Index<uint8_t>;
+
+  template DISKANN_DLLEXPORT class Index<float,int,diskann::pmem_allocator<unsigned>>;
+  template DISKANN_DLLEXPORT class Index<int8_t,int,diskann::pmem_allocator<unsigned>>;
+  template DISKANN_DLLEXPORT class Index<uint8_t,int,diskann::pmem_allocator<unsigned>>;
 }  // namespace diskann

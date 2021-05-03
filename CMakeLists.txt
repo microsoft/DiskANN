@@ -14,7 +14,7 @@ if(MSVC)
 	set(CMAKE_CXX_COMPILER $ENV{VCToolsInstallDir}/bin/Hostx64/x64/cl.exe)
 	set(CMAKE_CXX_LINK_EXECUTABLE $ENV{VCToolsInstallDir}/bin/Hostx64/x64/link.exe)
 else()
-	set(CMAKE_CXX_COMPILER g++)
+	set(CMAKE_CXX_COMPILER clang++)
 endif()
 
 project(diskann)
@@ -43,7 +43,7 @@ function(checkEnvAndSetLocalVar env_var msg local_var)
 	endif()
 endfunction()
 
-	
+
 
 #MKL Config
 if (MSVC)
@@ -56,19 +56,22 @@ if (MSVC)
 else()
 	set(INTEL_ROOT /opt/intel/compilers_and_libraries/linux)
 	set(MKL_ROOT ${INTEL_ROOT}/mkl)
-        add_compile_options(-m64 -Wl,--no-as-needed) 
+        add_compile_options(-m64 -Wl,--no-as-needed)
 	link_libraries(mkl_intel_ilp64 mkl_intel_thread mkl_core iomp5 pthread m dl)
 	link_directories(${INTEL_ROOT}/lib/intel64 ${MKL_ROOT}/lib/intel64)
 endif()
+
+# Include PM
+link_libraries(memkind)
 
 add_definitions(-DMKL_ILP64)
 include_directories(include ${INTEL_ROOT}/include ${MKL_ROOT}/include ${BOOST_ROOT})
 
 
-#Main compiler/linker settings 
+#Main compiler/linker settings
 if(MSVC)
 	#language options
-	add_compile_options(/permissive- /openmp:experimental /Zc:wchar_t /Zc:twoPhase- /Zc:forScope /Zc:inline /WX- /std:c++14 /Gd /W3 /MP /Zi /FC /nologo /diagnostics:classic) 
+	add_compile_options(/permissive- /openmp:experimental /Zc:wchar_t /Zc:twoPhase- /Zc:forScope /Zc:inline /WX- /std:c++14 /Gd /W3 /MP /Zi /FC /nologo /diagnostics:classic)
 	#code generation options
 	add_compile_options(/Qpar /fp:fast /Zp8 /fp:except- /EHsc /GS- /Gm- /Gy )
 	#optimization options
@@ -76,7 +79,7 @@ if(MSVC)
 	#path options
 	#add_compile_options(/Fdx64/Release/vc141.pdb /Fox64/Release/)
 	add_definitions(-DUSE_AVX2 -DUSE_ACCELERATED_PQ -D_WINDOWS -DNOMINMAX -DUNICODE)
-	
+
 	set(CMAKE_SHARED_LIBRARY_CXX_LINK_FLAGS "/MANIFEST /MACHINE:X64 /DEBUG:FULL /LTCG:incremental /NXCOMPAT /DYNAMICBASE /OPT:REF /SUBSYSTEM:CONSOLE /MANIFESTUAC:\"level='asInvoker' uiAccess='false'\"")
 	set(CMAKE_EXECUTABLE_CXX_LINK_FLAGS "/MANIFEST /MACHINE:X64 /DEBUG:FULL /LTCG:incremental /NXCOMPAT /DYNAMICBASE /OPT:REF /SUBSYSTEM:CONSOLE /MANIFESTUAC:\"level='asInvoker' uiAccess='false'\"")
 

@@ -4,6 +4,7 @@
 #include <cstring>
 #include <iomanip>
 #include <omp.h>
+#include <memory>
 #include <set>
 #include <string.h>
 
@@ -17,10 +18,14 @@
 #include "aux_utils.h"
 #include "index.h"
 #include "memory_mapper.h"
+#include "pm.h"
 #include "utils.h"
 
-template<typename T>
-int search_memory_index(int argc, char** argv) {
+template<typename T, typename Allocator = std::allocator<unsigned>>
+int search_memory_index(int argc,
+                        char** argv,
+                        const Allocator& allocator = std::allocator<unsigned>()
+) {
   T*                query = nullptr;
   unsigned*         gt_ids = nullptr;
   float*            gt_dists = nullptr;
@@ -35,6 +40,10 @@ int search_memory_index(int argc, char** argv) {
   _u64        recall_at = std::atoi(argv[7]);
   std::string result_output_prefix(argv[8]);
   bool        use_optimized_search = std::atoi(argv[9]);
+  std::string pm_directory(argv[10]);
+  bool        data_in_pm = std::atoi(argv[11]);
+  // `graph_in_pm` checked by caller.
+  //bool        graph_in_pm = std::atoi(argv[12]);
 
   if ((std::string(argv[1]) != std::string("float")) &&
       (use_optimized_search == true)) {
@@ -46,7 +55,7 @@ int search_memory_index(int argc, char** argv) {
 
   bool calc_recall_flag = false;
 
-  for (int ctr = 10; ctr < argc; ctr++) {
+  for (int ctr = 13; ctr < argc; ctr++) {
     _u64 curL = std::atoi(argv[ctr]);
     if (curL >= recall_at)
       Lvec.push_back(curL);
@@ -58,8 +67,11 @@ int search_memory_index(int argc, char** argv) {
     return -1;
   }
 
-  diskann::load_aligned_bin<T>(query_bin, query, query_num, query_dim,
-                               query_aligned_dim);
+  if (data_in_pm && pm_directory == "null") {
+      std::cout << "Please set a PM directory to use PM!" << std::endl;
+      return -1;
+  }
+  diskann::load_aligned_bin<T>(query_bin, query, query_num, query_dim, query_aligned_dim);
 
   if (file_exists(truthset_bin)) {
     diskann::load_truthset(truthset_bin, gt_ids, gt_dists, gt_num, gt_dim);
@@ -76,12 +88,17 @@ int search_memory_index(int argc, char** argv) {
   auto metric = diskann::L2;
   if (use_optimized_search)
     metric = diskann::FAST_L2;
-  diskann::Index<T> index(metric, data_file.c_str());
+  diskann::Index<T,int,Allocator> index(
+    metric,
+    data_file.c_str(),
+    data_in_pm,
+    allocator
+  );
   index.load(memory_index_file.c_str());  // to load NSG
   std::cout << "Index loaded" << std::endl;
 
   if (use_optimized_search)
-    index.optimize_graph();
+    index.optimize_graph(data_in_pm);
 
   diskann::Parameters paras;
   std::string         recall_string = "Recall@" + std::to_string(recall_at);
@@ -157,7 +174,7 @@ int search_memory_index(int argc, char** argv) {
 }
 
 int main(int argc, char** argv) {
-  if (argc < 11) {
+  if (argc < 14) {
     std::cout
         << "Usage: " << argv[0]
         << "  [index_type<float/int8/uint8>]  [data_file.bin]  "
@@ -165,16 +182,42 @@ int main(int argc, char** argv) {
            "[query_file.bin]  [truthset.bin (use \"null\" for none)] "
            " [K]  [result_output_prefix] [use_optimized_search (for small ~1M "
            "data)] "
+           " [PM directory (use \"null\" for none)] [Data in PM] [Graph in PM]"
            " [L1]  [L2] etc. See README for more information on parameters. "
         << std::endl;
     exit(-1);
   }
-  if (std::string(argv[1]) == std::string("int8"))
-    search_memory_index<int8_t>(argc, argv);
-  else if (std::string(argv[1]) == std::string("uint8"))
-    search_memory_index<uint8_t>(argc, argv);
-  else if (std::string(argv[1]) == std::string("float"))
-    search_memory_index<float>(argc, argv);
-  else
-    std::cout << "Unsupported type. Use float/int8/uint8" << std::endl;
+
+  // Parse some PM options here so the `diskann::pmem_allocator` can be constructed
+  // if needed.
+  std::string pm_directory(argv[10]);
+  bool graph_in_pm = std::atoi(argv[12]);
+
+  if (pm_directory != "null") {
+      diskann::init_pm(pm_directory);
+  } else if (graph_in_pm) {
+      std::cout << "Please set the PM Directory in order to put the graph in PM" << std::endl;
+      exit(-1);
+  }
+
+  if (!graph_in_pm) {
+      if (std::string(argv[1]) == std::string("int8"))
+        search_memory_index<int8_t>(argc, argv);
+      else if (std::string(argv[1]) == std::string("uint8"))
+        search_memory_index<uint8_t>(argc, argv);
+      else if (std::string(argv[1]) == std::string("float"))
+        search_memory_index<float>(argc, argv);
+      else
+        std::cout << "Unsupported type. Use float/int8/uint8" << std::endl;
+  } else {
+      auto allocator = diskann::pm_allocator<unsigned>();
+      if (std::string(argv[1]) == std::string("int8"))
+        search_memory_index<int8_t>(argc, argv);
+      else if (std::string(argv[1]) == std::string("uint8"))
+        search_memory_index<uint8_t>(argc, argv);
+      else if (std::string(argv[1]) == std::string("float"))
+        search_memory_index<float>(argc, argv);
+      else
+        std::cout << "Unsupported type. Use float/int8/uint8" << std::endl;
+  }
 }

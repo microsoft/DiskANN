@@ -30,6 +30,7 @@ typedef int FileHandle;
 #include "cached_io.h"
 #include "common_includes.h"
 #include "windows_customizations.h"
+#include "pm.h" // PM modifications
 
 #ifdef EXEC_ENV_OLS
 #include "content_buf.h"
@@ -66,11 +67,11 @@ namespace diskann {
 
   enum Metric { L2 = 0, INNER_PRODUCT = 1, FAST_L2 = 2, PQ = 3 };
 
-  inline void alloc_aligned(void** ptr, size_t size, size_t align) {
+  inline void alloc_aligned(void** ptr, size_t size, size_t align, bool persistent = false) {
     *ptr = nullptr;
     assert(IS_ALIGNED(size, align));
 #ifndef _WINDOWS
-    *ptr = ::aligned_alloc(align, size);
+    *ptr = __alloc(size, align, persistent);
 #else
     *ptr = ::_aligned_malloc(size, align);  // note the swapped arguments!
 #endif
@@ -84,7 +85,7 @@ namespace diskann {
       return;
     }
 #ifndef _WINDOWS
-    free(ptr);
+    __free(ptr);
 #else
     ::_aligned_free(ptr);
 #endif
@@ -331,7 +332,8 @@ namespace diskann {
   inline void load_aligned_bin_impl(std::basic_istream<char>& reader,
                                     size_t actual_file_size, T*& data,
                                     size_t& npts, size_t& dim,
-                                    size_t& rounded_dim) {
+                                    size_t& rounded_dim,
+                                    bool use_pm = false) {
     int npts_i32, dim_i32;
     reader.read((char*) &npts_i32, sizeof(int));
     reader.read((char*) &dim_i32, sizeof(int));
@@ -356,7 +358,7 @@ namespace diskann {
     size_t allocSize = npts * rounded_dim * sizeof(T);
     diskann::cout << "allocating aligned memory, " << allocSize << " bytes..."
                   << std::flush;
-    alloc_aligned(((void**) &data), allocSize, 8 * sizeof(T));
+    alloc_aligned(((void**) &data), allocSize, 8 * sizeof(T), use_pm);
     diskann::cout << "done. Copying data..." << std::flush;
 
     for (size_t i = 0; i < npts; i++) {
@@ -384,7 +386,7 @@ namespace diskann {
 
   template<typename T>
   inline void load_aligned_bin(const std::string& bin_file, T*& data,
-                               size_t& npts, size_t& dim, size_t& rounded_dim) {
+                               size_t& npts, size_t& dim, size_t& rounded_dim, bool use_pm = false) {
     diskann::cout << "Reading bin file " << bin_file << " ..." << std::flush;
     // START OLS
     //_u64            read_blk_size = 64 * 1024 * 1024;
@@ -396,7 +398,7 @@ namespace diskann {
     uint64_t      fsize = reader.tellg();
     reader.seekg(0);
 
-    load_aligned_bin_impl(reader, fsize, data, npts, dim, rounded_dim);
+    load_aligned_bin_impl(reader, fsize, data, npts, dim, rounded_dim, use_pm);
   }
 
   template<typename InType, typename OutType>
