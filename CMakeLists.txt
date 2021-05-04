@@ -14,7 +14,7 @@ if(MSVC)
 	set(CMAKE_CXX_COMPILER $ENV{VCToolsInstallDir}/bin/Hostx64/x64/cl.exe)
 	set(CMAKE_CXX_LINK_EXECUTABLE $ENV{VCToolsInstallDir}/bin/Hostx64/x64/link.exe)
 else()
-	set(CMAKE_CXX_COMPILER clang++)
+	set(CMAKE_CXX_COMPILER g++)
 endif()
 
 project(diskann)
