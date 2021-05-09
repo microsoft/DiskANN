@@ -764,7 +764,7 @@ int partition(const std::string data_file, const float sampling_rate,
 
 template<typename T>
 int partition_with_ram_budget(const std::string data_file,
-                              const double sampling_rate, double ram_budget,
+                              const double sampling_rate, double ram_budget_GB,
                               size_t            graph_degree,
                               const std::string prefix_path, size_t k_base) {
   size_t train_dim;
@@ -772,11 +772,16 @@ int partition_with_ram_budget(const std::string data_file,
   float *train_data_float;
   size_t max_k_means_reps = 20;
 
-  int  num_parts = 3;
+
   bool fit_in_ram = false;
 
   gen_random_slice<T>(data_file, sampling_rate, train_data_float, num_train,
                       train_dim);
+  auto full_index_ram =
+      (uint64_t) ESTIMATE_RAM_USAGE(num_train, train_dim, sizeof(T), graph_degree);
+  uint64_t num_parts = DIV_ROUND_UP(
+      full_index_ram, (uint64_t)(1 << 30) * (uint64_t) ram_budget_GB);
+
 
   float *pivot_data = nullptr;
 
@@ -784,13 +789,9 @@ int partition_with_ram_budget(const std::string data_file,
   std::string output_file;
 
   // kmeans_partitioning on training data
-
-  //  cur_file = cur_file + "_kmeans_partitioning-" + std::to_string(num_parts);
   output_file = cur_file + "_centroids.bin";
 
-  while (!fit_in_ram) {
-    fit_in_ram = true;
-
+  do {
     double max_ram_usage = 0;
     if (pivot_data != nullptr)
       delete[] pivot_data;
@@ -821,12 +822,12 @@ int partition_with_ram_budget(const std::string data_file,
     }
     diskann::cout << "With " << num_parts << " parts, max estimated RAM usage: "
                   << max_ram_usage / (1024 * 1024 * 1024)
-                  << "GB, budget given is " << ram_budget << std::endl;
-    if (max_ram_usage > 1024 * 1024 * 1024 * ram_budget) {
+                  << "GB, budget given is " << ram_budget_GB << std::endl;
+    if (max_ram_usage > 1024 * 1024 * 1024 * ram_budget_GB) {
       fit_in_ram = false;
       num_parts++;
     }
-  }
+  } while (!fit_in_ram);
 
   diskann::cout << "Saving global k-center pivots" << std::endl;
   diskann::save_bin<float>(output_file.c_str(), pivot_data, (size_t) num_parts,
