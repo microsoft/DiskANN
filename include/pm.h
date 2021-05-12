@@ -1,10 +1,9 @@
 #pragma once
-
-#include <stdexcept> // For some reason, "pmem_allocator.h" doesn't include this.
-#include <pmem_allocator.h>
-
+#ifndef _WINDOWS
 #include <cassert>
 #include <string>
+#include <memkind.h>
+#include <pmem_allocator.h>
 
 namespace diskann {
   bool is_pm_init();
@@ -24,4 +23,5 @@ namespace diskann {
   {
     return pmem_allocator<T>(_pm_allocator());
   }
-}
+} // namespace diskann
+#endif

@@ -1,0 +1,17 @@
+﻿{
+  "configurations": [
+    {
+      "name": "Release",
+      "generator": "Visual Studio 16 2019 Win64",
+      "configurationType": "Release",
+      "inheritEnvironments": [ "msvc_x64" ],
+      "buildRoot": "${projectDir}\\out\\build\\${name}",
+      "installRoot": "${projectDir}\\out\\install\\${name}",
+      "buildCommandArgs": "",
+      "ctestCommandArgs": "",
+      "cmakeExecutable": "C:\\Program Files\\CMake\\bin\\cmake.exe",
+      "intelliSenseMode": "windows-msvc-x64",
+      "cmakeCommandArgs": "-DCMAKE_BUILD_TYPE=Release"
+    }
+  ]
+}

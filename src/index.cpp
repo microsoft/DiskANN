@@ -32,7 +32,9 @@
 #include "memory_mapper.h"
 #include "parameters.h"
 #include "partition_and_pq.h"
+#ifndef _WINDOWS
 #include "pm.h"
+#endif
 #include "timer.h"
 #include "utils.h"
 #include "windows_customizations.h"
@@ -193,15 +195,22 @@ namespace diskann {
     aligned_free(_opt_graph);
   }
 
-  template<>
-  Index<float,int,diskann::pmem_allocator<unsigned>>::~Index() {
-    delete this->_distance;
-    aligned_free(_data);
-    aligned_free(_opt_graph);
+  
+  template <> Index<_s8>::~Index() {
+      delete this->_distance;
+      aligned_free(_data);
+      aligned_free(_opt_graph);
   }
 
+  template <> Index<_u8>::~Index() {
+      delete this->_distance;
+      aligned_free(_data);
+      aligned_free(_opt_graph);
+  }
+
+  #ifndef _WINDOWS
   template<>
-  Index<_s8>::~Index() {
+  Index<float,int,diskann::pmem_allocator<unsigned>>::~Index() {
     delete this->_distance;
     aligned_free(_data);
     aligned_free(_opt_graph);
@@ -215,18 +224,12 @@ namespace diskann {
   }
 
   template<>
-  Index<_u8>::~Index() {
-    delete this->_distance;
-    aligned_free(_data);
-    aligned_free(_opt_graph);
-  }
-
-  template<>
   Index<_u8,int,diskann::pmem_allocator<unsigned>>::~Index() {
     delete this->_distance;
     aligned_free(_data);
     aligned_free(_opt_graph);
   }
+  #endif
 
   // save the graph index on a file as an adjacency list. For each point,
   // first store the number of neighbors, and then the neighbor list (each as
@@ -1849,8 +1852,9 @@ namespace diskann {
   template DISKANN_DLLEXPORT class Index<float>;
   template DISKANN_DLLEXPORT class Index<int8_t>;
   template DISKANN_DLLEXPORT class Index<uint8_t>;
-
+  #ifndef _WINDOWS
   template DISKANN_DLLEXPORT class Index<float,int,diskann::pmem_allocator<unsigned>>;
   template DISKANN_DLLEXPORT class Index<int8_t,int,diskann::pmem_allocator<unsigned>>;
   template DISKANN_DLLEXPORT class Index<uint8_t,int,diskann::pmem_allocator<unsigned>>;
+  #endif
 }  // namespace diskann

@@ -1,11 +1,16 @@
-#include "pm.h"
+#pragma once
+
+#ifndef _WINDOWS
 
 #include <cassert>
 #include <iostream>
 #include <string>
 #include <unordered_map>
 
-#include <memkind.h>
+
+    #include "pm.h"
+    #include <memkind.h>
+
 
 // Must be initialized before use.
 // Keep the allocation type of the base allocator to `uint8_t`.
@@ -60,3 +65,4 @@ void diskann::__free(void* ptr)
     }
 }
 
+#endif

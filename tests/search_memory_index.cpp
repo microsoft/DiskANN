@@ -13,17 +13,16 @@
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
+#include "pm.h"
 #endif
 
 #include "aux_utils.h"
 #include "index.h"
 #include "memory_mapper.h"
-#include "pm.h"
 #include "utils.h"
 
 template<typename T, typename Allocator = std::allocator<unsigned>>
-int search_memory_index(int argc,
-                        char** argv,
+int search_memory_index(int argc, char** argv,
                         const Allocator& allocator = std::allocator<unsigned>()
 ) {
   T*                query = nullptr;
@@ -34,16 +33,13 @@ int search_memory_index(int argc,
 
   std::string data_file(argv[2]);
   std::string memory_index_file(argv[3]);
-  _u64        num_threads = std::atoi(argv[4]);
+  _u64 num_threads = std::atoi(argv[4]);
   std::string query_bin(argv[5]);
   std::string truthset_bin(argv[6]);
-  _u64        recall_at = std::atoi(argv[7]);
+  _u64 recall_at = std::atoi(argv[7]);
   std::string result_output_prefix(argv[8]);
-  bool        use_optimized_search = std::atoi(argv[9]);
-  std::string pm_directory(argv[10]);
-  bool        data_in_pm = std::atoi(argv[11]);
-  // `graph_in_pm` checked by caller.
-  //bool        graph_in_pm = std::atoi(argv[12]);
+  bool use_optimized_search = std::atoi(argv[9]);
+
 
   if ((std::string(argv[1]) != std::string("float")) &&
       (use_optimized_search == true)) {
@@ -52,14 +48,27 @@ int search_memory_index(int argc,
               << std::endl;
     use_optimized_search = false;
   }
-
-  bool calc_recall_flag = false;
+  #ifndef _WINDOWS
+  std::string pm_directory(argv[10]);
+  bool data_in_pm = std::atoi(argv[11]);
 
   for (int ctr = 13; ctr < argc; ctr++) {
     _u64 curL = std::atoi(argv[ctr]);
     if (curL >= recall_at)
       Lvec.push_back(curL);
   }
+  #else
+    std::string pm_directory = "null";
+  bool data_in_pm = 0;
+
+  for (int ctr = 10; ctr < argc; ctr++) {
+    _u64 curL = std::atoi(argv[ctr]);
+    if (curL >= recall_at)
+      Lvec.push_back(curL);
+  }
+  #endif
+
+  bool calc_recall_flag = false;
 
   if (Lvec.size() == 0) {
     std::cout << "No valid Lsearch found. Lsearch must be at least recall_at."
@@ -174,6 +183,7 @@ int search_memory_index(int argc,
 }
 
 int main(int argc, char** argv) {
+    #ifndef _WINDOWS
   if (argc < 14) {
     std::cout
         << "Usage: " << argv[0]
@@ -190,8 +200,6 @@ int main(int argc, char** argv) {
 
   // Parse some PM options here so the `diskann::pmem_allocator` can be constructed
   // if needed.
-  std::string pm_directory(argv[10]);
-  bool graph_in_pm = std::atoi(argv[12]);
 
   if (pm_directory != "null") {
       diskann::init_pm(pm_directory);
@@ -202,22 +210,46 @@ int main(int argc, char** argv) {
 
   if (!graph_in_pm) {
       if (std::string(argv[1]) == std::string("int8"))
-        search_memory_index<int8_t>(argc, argv);
+          search_memory_index<int8_t>(argc,argv);
       else if (std::string(argv[1]) == std::string("uint8"))
-        search_memory_index<uint8_t>(argc, argv);
+          search_memory_index<uint8_t>(argc, argv);
       else if (std::string(argv[1]) == std::string("float"))
-        search_memory_index<float>(argc, argv);
+          search_memory_index<float>(argc, argv);
       else
         std::cout << "Unsupported type. Use float/int8/uint8" << std::endl;
   } else {
       auto allocator = diskann::pm_allocator<unsigned>();
       if (std::string(argv[1]) == std::string("int8"))
-        search_memory_index<int8_t>(argc, argv);
+          search_memory_index<int8_t>(argc, argv, allocator);
       else if (std::string(argv[1]) == std::string("uint8"))
-        search_memory_index<uint8_t>(argc, argv);
+          search_memory_index<uint8_t>(argc, argv, allocator);
       else if (std::string(argv[1]) == std::string("float"))
-        search_memory_index<float>(argc, argv);
+          search_memory_index<float>(argc, argv, allocator);
       else
         std::cout << "Unsupported type. Use float/int8/uint8" << std::endl;
   }
+  #else
+      if (argc < 11) {
+    std::cout
+        << "Usage: " << argv[0]
+        << "  [index_type<float/int8/uint8>]  [data_file.bin]  "
+           "[memory_index_path]  [num_threads] "
+           "[query_file.bin]  [truthset.bin (use \"null\" for none)] "
+           " [K]  [result_output_prefix] [use_optimized_search (for small ~1M "
+           "data)] "
+           " [L1]  [L2] etc. See README for more information on parameters. "
+        << std::endl;
+    exit(-1);
+  }
+
+
+  if (std::string(argv[1]) == std::string("int8"))
+      search_memory_index<int8_t>(argc,argv);
+  else if (std::string(argv[1]) == std::string("uint8"))
+      search_memory_index<uint8_t>(argc, argv);
+  else if (std::string(argv[1]) == std::string("float"))
+      search_memory_index<float>(argc, argv);
+  else
+    std::cout << "Unsupported type. Use float/int8/uint8" << std::endl;
+  #endif
 }
