@@ -54,7 +54,7 @@ if (MSVC)
 	checkEnvAndSetLocalVar("BOOST_ROOT" "Please install Boost (1.71 or greater) from www.boost.org and set the env var BOOST_ROOT to the boost directory." "BOOST_ROOT")
 
 else()
-	set(INTEL_ROOT /opt/intel/compilers_and_libraries/linux)
+	set(INTEL_ROOT /home/stg/intel/compilers_and_libraries_2020.2.254/linux)
 	set(MKL_ROOT ${INTEL_ROOT}/mkl)
         add_compile_options(-m64 -Wl,--no-as-needed)
 	link_libraries(mkl_intel_ilp64 mkl_intel_thread mkl_core iomp5 pthread m dl)

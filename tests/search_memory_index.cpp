@@ -49,9 +49,13 @@ int search_memory_index(int argc, char** argv,
     use_optimized_search = false;
   }
   #ifndef _WINDOWS
-  std::string pm_directory(argv[10]);
   bool data_in_pm = std::atoi(argv[11]);
+  std::string pm_directory(argv[10]);
 
+  if (data_in_pm && pm_directory == "null") {
+      std::cout << "Please set a PM directory to use PM!" << std::endl;
+      return -1;
+  }
   for (int ctr = 13; ctr < argc; ctr++) {
     _u64 curL = std::atoi(argv[ctr]);
     if (curL >= recall_at)
@@ -76,10 +80,6 @@ int search_memory_index(int argc, char** argv,
     return -1;
   }
 
-  if (data_in_pm && pm_directory == "null") {
-      std::cout << "Please set a PM directory to use PM!" << std::endl;
-      return -1;
-  }
   diskann::load_aligned_bin<T>(query_bin, query, query_num, query_dim, query_aligned_dim);
 
   if (file_exists(truthset_bin)) {
@@ -200,7 +200,8 @@ int main(int argc, char** argv) {
 
   // Parse some PM options here so the `diskann::pmem_allocator` can be constructed
   // if needed.
-
+  std::string pm_directory(argv[10]);
+  bool graph_in_pm = std::atoi(argv[12]);
   if (pm_directory != "null") {
       diskann::init_pm(pm_directory);
   } else if (graph_in_pm) {

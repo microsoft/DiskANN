@@ -1,5 +1,3 @@
-#pragma once
-
 #ifndef _WINDOWS
 
 #include <cassert>
