@@ -116,9 +116,7 @@ void exact_knn(const size_t dim, const size_t k,
                const float *const queries)  // queries in Col major
 {
   float *points_l2sq = new float[npoints];
-  //	std::cout<<"jere"<<std::endl;
   float *queries_l2sq = new float[nqueries];
-  //	std::cout<<"jere "<<npoints<<" " <<dim << " " << nqueries <<std::endl;
   compute_l2sq(points_l2sq, points, npoints, dim);
   compute_l2sq(queries_l2sq, queries, nqueries, dim);
 
@@ -164,14 +162,6 @@ void exact_knn(const size_t dim, const size_t k,
       assert(std::is_sorted(
           dist_closest_points + (ptrdiff_t) q * (ptrdiff_t) k,
           dist_closest_points + (ptrdiff_t)(q + 1) * (ptrdiff_t) k));
-      /*std::sort(point_dist.begin(), point_dist.end(),
-          [](const auto &l, const auto &r) {return l.second < r.second; });
-      for (int l = 0; l < k; ++l) {
-          closest_points[(ptrdiff_t)l + (ptrdiff_t)q * (ptrdiff_t)k] =
-      point_dist[l].first;
-          dist_closest_points[(ptrdiff_t)l + (ptrdiff_t)q * (ptrdiff_t)k] =
-      point_dist[l].second;
-      }*/
     }
     std::cout << "Computed exact k-NN for queries: [" << q_b << "," << q_e
               << ")" << std::endl;
@@ -219,12 +209,10 @@ inline void load_bin_as_float(const char *filename, float *&data, size_t &npts,
 
   reader.seekg(start_id * ndims * sizeof(T) + 2 * sizeof(uint32_t),
                std::ios::beg);
-  //    data = new T[nptsuint64_t * ndimsuint64_t];
   T *data_T = new T[nptsuint64_t * ndimsuint64_t];
   reader.read((char *) data_T, sizeof(T) * nptsuint64_t * ndimsuint64_t);
   std::cout << "Finished reading part of the bin file." << std::endl;
   reader.close();
-  //  data =  (nptsuint64_t*ndimsuint64_t, ALIGNMENT);
   data = aligned_malloc<float>(nptsuint64_t * ndimsuint64_t, ALIGNMENT);
 #pragma omp parallel for schedule(dynamic, 32768)
   for (int64_t i = 0; i < (int64_t) nptsuint64_t; i++) {
@@ -278,11 +266,7 @@ inline void save_groundtruth_as_one_file(const std::string filename,
 
 template<typename T>
 int aux_main(int argv, char **argc) {
-  if (argv != 6) {
-    command_line_help();
-    return -1;
-  }
-
+ 
   size_t      npoints, nqueries, dim;
   std::string base_file(argc[2]);
   std::string query_file(argc[3]);
@@ -331,10 +315,6 @@ int aux_main(int argv, char **argc) {
     }
   }
 
-  //  save_bin<int>(gt_file + std::string("_ids.bin"), closest_points, nqueries,
-  //  k);
-  //  save_bin<float>(gt_file + std::string("_dist.bin"), dist_closest_points,
-  //                  nqueries, k);
   save_groundtruth_as_one_file(gt_file, closest_points, dist_closest_points,
                                nqueries, k);
   diskann::aligned_free(query_data);
@@ -344,6 +324,11 @@ int aux_main(int argv, char **argc) {
 }
 
 int main(int argc, char **argv) {
+  if (argc != 6) {
+    command_line_help();
+    return -1;
+  }
+
   if (std::string(argv[1]) == std::string("float"))
     aux_main<float>(argc, argv);
   if (std::string(argv[1]) == std::string("int8"))
