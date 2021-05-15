@@ -226,9 +226,7 @@ namespace diskann {
     }
   };
 
-  // Gopal. Slow implementations of the distance functions to get diskann to
-  // work in v14 machines that do not have AVX2 support. Performance here is not
-  // a concern, so we are using the simplest possible implementation.
+  //  Slow implementations of the distance functions for machines without AVX2
   template<typename T>
   class SlowDistanceL2Int : public Distance<T> {
     virtual float compare(const T *a, const T *b, unsigned length) const {
