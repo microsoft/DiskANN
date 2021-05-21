@@ -12,7 +12,7 @@ See [guidelines](CONTRIBUTING.md) for contributing to this project.
 
 
 
-##Linux build:
+## Linux build:
 
 Install the following packages through apt-get, and Intel MKL either by downloading the installer or using [apt](https://software.intel.com/en-us/articles/installing-intel-free-libs-and-python-apt-repo) (we tested with build 2019.4-070).
 ```
@@ -24,7 +24,7 @@ Build
 mkdir build && cd build && cmake .. && make -j 
 ```
 
-##Windows build:
+## Windows build:
 
 The Windows version has been tested with the Enterprise editions of Visual Studio 2017 and Visual Studio 2019. It should work with the Community and Professional editions as well without any changes. 
 
@@ -65,7 +65,7 @@ msbuild diskann.sln
 Check msbuild docs for additional options including choosing between debug and release builds.
 
 
-##Usage:
+## Usage:
 
 We now detail the main binaries using which one can build and search indices which reside in memory as well as SSD-resident indices.
 
