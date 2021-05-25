@@ -666,11 +666,11 @@ namespace diskann {
 
     auto s = std::chrono::high_resolution_clock::now();
 
-    size_t points_num, dim;
+    size_t num_points, dim;
 
-    diskann::get_bin_metadata(dataFilePath, points_num, dim);
+    diskann::get_bin_metadata(dataFilePath, num_points, dim);
 
-    size_t num_pq_chunks = (size_t)(final_index_ram_limit / points_num);
+    size_t num_pq_chunks = (size_t)(final_index_ram_limit / num_points);
 
     if (num_pq_chunks < 1) {
       std::cerr << "Can not compress data to fewer than 1 Bytes" << std::endl;
@@ -681,17 +681,15 @@ namespace diskann {
     diskann::cout << "Compressing " << dim << "-dimensional data into "
                   << num_pq_chunks << " bytes per vector." << std::endl;
 
-    size_t train_size, train_dim;
-    float *train_data;
-
-    double p_val = ((double) PQ_TRAINING_SET_SIZE / (double) points_num);
+    double p_val = ((double) PQ_TRAINING_SET_SIZE / (double) num_points);
     if (p_val > 1.0)
       p_val = 1.0;
 
     // generates random sample and sets it to train_data and updates
     // train_size
-    gen_random_slice<T>(dataFilePath, p_val, train_data, train_size,
-    train_dim);
+    size_t train_size, ndims, npts;
+    float *train_data;
+    gen_random_slice<T>(dataFilePath, p_val, train_data, train_size, ndims);
 
     diskann::cout << "Sample data of size " << train_size
                   << " generated for computing PQ" << std::endl;
@@ -712,7 +710,7 @@ namespace diskann {
     diskann::create_disk_layout<T>(dataFilePath, mem_index_path,
                                    disk_index_path);
 
-    double sample_sampling_rate = (150000.0 / points_num);
+    double sample_sampling_rate = (150000.0 / num_points);
     gen_random_slice<T>(dataFilePath, sample_base_prefix,
     sample_sampling_rate);
 

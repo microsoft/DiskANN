@@ -103,7 +103,8 @@ void gen_random_slice(const std::string base_file,
 
 template<typename T>
 void gen_random_slice(const std::string data_file, double p_val,
-                      float *&sampled_data, size_t &slice_size, size_t &npts, size_t &ndims){
+                      float *&sampled_data, size_t &slice_size, size_t &ndims){
+  size_t                          npts;
   uint32_t                        npts32, ndims32;
   std::vector<std::vector<float>> sampled_vectors;
 
@@ -764,23 +765,25 @@ int partition_with_ram_budget(const std::string data_file,
                               const double sampling_rate, double ram_budget_GiB,
                               size_t            graph_degree,
                               const std::string prefix_path, size_t k_base) {
-  size_t npts;
+  size_t base_num, base_dim;
+  diskann::get_bin_metadata(data_file, base_num, base_dim);
+
+  auto full_index_ram =
+      ESTIMATE_RAM_USAGE(base_num, base_dim, sizeof(T), graph_degree);
+  uint64_t num_parts = 1 + DIV_ROUND_UP((uint64_t) full_index_ram,
+                                        (uint64_t)(ram_budget_GiB * (1 << 30)));
+  std::cout << "Estimate RAM usage for full data is " << full_index_ram
+            << ".\nEstimating number of partitions to be " << num_parts
+            << std::endl;
+
   size_t ndims;
   size_t num_train;
   float *train_data_float;
   size_t max_k_means_reps = 10;
-
-
-  bool fit_in_ram = false;
+  bool   fit_in_ram = false;
 
   gen_random_slice<T>(data_file, sampling_rate, train_data_float, num_train,
-                      npts, ndims);
-  auto full_index_ram =
-       ESTIMATE_RAM_USAGE(npts, ndims, sizeof(T), graph_degree);
-  uint64_t num_parts = DIV_ROUND_UP((uint64_t) full_index_ram,
-                                    (uint64_t)(ram_budget_GiB * (1 << 30)));
-
-
+                      ndims);
   float *pivot_data = nullptr;
 
   std::string cur_file = std::string(prefix_path);
@@ -808,8 +811,8 @@ int partition_with_ram_budget(const std::string data_file,
     // closest clusters.
 
     std::vector<size_t> cluster_sizes;
-    estimate_cluster_sizes<T>(data_file, pivot_data, num_parts, ndims,
-                              k_base, cluster_sizes);
+    estimate_cluster_sizes<T>(data_file, pivot_data, num_parts, ndims, k_base,
+                              cluster_sizes);
 
     for (auto &p : cluster_sizes) {
       double cur_shard_ram_estimate =
@@ -821,8 +824,8 @@ int partition_with_ram_budget(const std::string data_file,
     diskann::cout << "With " << num_parts << " parts, max estimated RAM usage: "
                   << max_ram_usage / (1024 * 1024 * 1024)
                   << "GB, budget given is " << ram_budget_GiB << std::endl;
-    
-    if (max_ram_usage > ram_budget_GiB * (1 << 30)) { 
+
+    if (max_ram_usage > ram_budget_GiB * (1 << 30)) {
       num_parts++;
     } else {
       fit_in_ram = true;
@@ -833,8 +836,8 @@ int partition_with_ram_budget(const std::string data_file,
   diskann::save_bin<float>(output_file.c_str(), pivot_data, (size_t) num_parts,
                            ndims);
 
-  shard_data_into_clusters<T>(data_file, pivot_data, num_parts, ndims,
-                              k_base, prefix_path);
+  shard_data_into_clusters<T>(data_file, pivot_data, num_parts, ndims, k_base,
+                              prefix_path);
   delete[] pivot_data;
   delete[] train_data_float;
   return num_parts;
