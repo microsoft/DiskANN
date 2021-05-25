@@ -45,7 +45,7 @@ int partition(const std::string data_file, const float sampling_rate,
 
 template<typename T>
 int partition_with_ram_budget(const std::string data_file,
-                              const double sampling_rate, double ram_budget,
+                              const double sampling_rate, double ram_budget_GiB,
                               size_t            graph_degree,
                               const std::string prefix_path, size_t k_base);
 

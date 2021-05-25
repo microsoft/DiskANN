@@ -91,9 +91,9 @@ The arguments are as follows:
 
 (v) L: the size of search list we maintain during index building. Typical values are between 75 to 200. Larger values will take more time to build but result in indices that provide higher recall for the same search parameters.
 
-(vi) B: bound on the memory footprint of the index at search time. Once built, the index will use up only the specified RAM limit, the rest will reside on disk. This will dictate how aggressively we compress the data vectors to store in memory. Larger will yield better performance at search time.
+(vi) B: bound in GiB on the memory footprint of the index at search time. Once built, the index will use up only the specified RAM limit, the rest will reside on disk. This will dictate how aggressively we compress the data vectors to store in memory. Larger will yield better performance at search time.
 
-(vii) M: Limit on the memory allowed for building the index. If you specify a value less than what is required to build the index in one pass, the index is  built using a divide and conquer approach so that  sub-graphs will fit in the RAM budget. The sub-graphs are  stitched together to build the overall index. This approach can be upto 1.5 times slower than building the index in one shot. Try to allocate as much memory as possible for index build as your RAM allows.
+(vii) M: Limit in GiB on the memory allowed for building the index. If you specify a value less than what is required to build the index in one pass, the index is  built using a divide and conquer approach so that  sub-graphs will fit in the RAM budget. The sub-graphs are  stitched together to build the overall index. This approach can be upto 1.5 times slower than building the index in one shot. Try to allocate as much memory as possible for index build as your RAM allows.
 
 (viii) T: number of threads used by the index build process. Since the code is highly parallel, the  indexing time improves almost linearly with the number of threads (subject to the cores available on the machine).
 

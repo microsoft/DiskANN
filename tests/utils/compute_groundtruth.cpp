@@ -164,14 +164,6 @@ void exact_knn(const size_t dim, const size_t k,
       assert(std::is_sorted(
           dist_closest_points + (ptrdiff_t) q * (ptrdiff_t) k,
           dist_closest_points + (ptrdiff_t)(q + 1) * (ptrdiff_t) k));
-      /*std::sort(point_dist.begin(), point_dist.end(),
-          [](const auto &l, const auto &r) {return l.second < r.second; });
-      for (int l = 0; l < k; ++l) {
-          closest_points[(ptrdiff_t)l + (ptrdiff_t)q * (ptrdiff_t)k] =
-      point_dist[l].first;
-          dist_closest_points[(ptrdiff_t)l + (ptrdiff_t)q * (ptrdiff_t)k] =
-      point_dist[l].second;
-      }*/
     }
     std::cout << "Computed exact k-NN for queries: [" << q_b << "," << q_e
               << ")" << std::endl;

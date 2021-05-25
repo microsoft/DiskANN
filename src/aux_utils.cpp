@@ -23,15 +23,14 @@
 
 namespace diskann {
 
-  double get_memory_budget(const std::string &mem_budget_str) {
+  double get_memory_budget_in_GiB(const std::string &mem_budget_str) {
     double mem_ram_budget = atof(mem_budget_str.c_str());
     double final_index_ram_limit = mem_ram_budget;
-    if (mem_ram_budget - SPACE_FOR_CACHED_NODES_IN_GB >
-        THRESHOLD_FOR_CACHING_IN_GB) {  // slack for space used by cached
-                                        // nodes
-      final_index_ram_limit = mem_ram_budget - SPACE_FOR_CACHED_NODES_IN_GB;
+    if (mem_ram_budget - SPACE_FOR_CACHED_NODES_IN_GiB >
+        THRESHOLD_FOR_CACHING_IN_GiB) {  // slack for cached nodes
+      final_index_ram_limit = mem_ram_budget - SPACE_FOR_CACHED_NODES_IN_GiB;
     }
-    return final_index_ram_limit * 1024 * 1024 * 1024;
+    return final_index_ram_limit * (double)(1<<30);
   }
 
   double calculate_recall(unsigned num_queries, unsigned *gold_std,
@@ -345,7 +344,7 @@ namespace diskann {
   int build_merged_vamana_index(std::string     base_file,
                                 diskann::Metric _compareMetric, unsigned L,
                                 unsigned R, double sampling_rate,
-                                double ram_budget, std::string mem_index_path,
+                                double ram_budget_GiB, std::string mem_index_path,
                                 std::string medoids_file,
                                 std::string centroids_file) {
     size_t base_num, base_dim;
@@ -353,9 +352,10 @@ namespace diskann {
 
     double full_index_ram =
         ESTIMATE_RAM_USAGE(base_num, base_dim, sizeof(T), R);
-    if (full_index_ram < ram_budget * 1024 * 1024 * 1024) {
-      diskann::cout << "Full index fits in RAM, building in one shot"
-                    << std::endl;
+    if (full_index_ram < ram_budget_GiB*(1<<30)) {
+      diskann::cout << "Estimated memory usage " << full_index_ram
+                    << " fits in RAM budget of " << ram_budget_GiB
+                    << "GiB. Building in one shot." << std::endl;
       diskann::Parameters paras;
       paras.Set<unsigned>("L", (unsigned) L);
       paras.Set<unsigned>("R", (unsigned) R);
@@ -376,7 +376,7 @@ namespace diskann {
     }
     std::string merged_index_prefix = mem_index_path + "_tempFiles";
     int         num_parts =
-        partition_with_ram_budget<T>(base_file, sampling_rate, ram_budget,
+        partition_with_ram_budget<T>(base_file, sampling_rate, ram_budget_GiB,
                                      2 * R / 3, merged_index_prefix, 2);
 
     std::string cur_centroid_filepath = merged_index_prefix + "_centroids.bin";
@@ -422,10 +422,6 @@ namespace diskann {
     }
     return 0;
   }
-
-  // General purpose support for DiskANN interface
-  //
-  //
 
   // optimizes the beamwidth to maximize QPS for a given L_search subject to
   // 99.9 latency not blowing up
@@ -621,13 +617,11 @@ namespace diskann {
       param_list.push_back(cur_param);
 
     if (param_list.size() != 5) {
-      diskann::cout
-          << "Correct usage of parameters is R (max degree) "
-             "L (indexing list size, better if >= R) B (RAM limit of final "
-             "index in "
-             "GB) M (memory limit while indexing) T (number of threads for "
-             "indexing)"
-          << std::endl;
+      diskann::cout << "Correct usage of parameters is R (max degree) "
+                    << "L (indexing list size, ideally set to >= R) "
+                    << "B (memory limit of index at search time in GB) "
+                    << "M (memory limit while indexing in GB) "
+                    << "T (number of threads for indexing)" << std::endl;
       return false;
     }
 
@@ -644,16 +638,15 @@ namespace diskann {
     unsigned R = (unsigned) atoi(param_list[0].c_str());
     unsigned L = (unsigned) atoi(param_list[1].c_str());
 
-    double final_index_ram_limit = get_memory_budget(param_list[2]);
-    if (final_index_ram_limit <= 0) {
-      std::cerr << "Insufficient memory budget (or string was not in right "
-                   "format). Should be > 0."
-                << std::endl;
+    double final_index_ram_limit = get_memory_budget_in_GiB(param_list[2]);
+    if (final_index_ram_limit <= 0.0) {
+      std::cerr << "Search-time memory budget should be > 0.0Bytes, requested: "
+                << final_index_ram_limit << std::endl;
       return false;
     }
-    double indexing_ram_budget = (float) atof(param_list[3].c_str());
-    if (indexing_ram_budget <= 0) {
-      std::cerr << "Not building index. Please provide more RAM budget"
+    double indexing_ram_budget_GiB = (double) atof(param_list[3].c_str());
+    if (indexing_ram_budget_GiB <= 0.0) {
+      std::cerr << "Indexing memory budget should be > 0 GiB, requested"
                 << std::endl;
       return false;
     }
@@ -664,9 +657,11 @@ namespace diskann {
       mkl_set_num_threads(num_threads);
     }
 
-    diskann::cout << "Starting index build: R=" << R << " L=" << L
-                  << " Query RAM budget: " << final_index_ram_limit
-                  << " Indexing ram budget: " << indexing_ram_budget
+    diskann::cout << "Starting index build with R=" << R << " L=" << L
+                  << " Search-time memory budget: "
+                  << final_index_ram_limit / (1 << 30) << "GiB"
+                  << " Indexing memory budget: " << indexing_ram_budget_GiB
+                  << "GiB"
                   << " T: " << num_threads << std::endl;
 
     auto s = std::chrono::high_resolution_clock::now();
@@ -675,13 +670,13 @@ namespace diskann {
 
     diskann::get_bin_metadata(dataFilePath, points_num, dim);
 
-    size_t num_pq_chunks =
-        (size_t)(std::floor)(_u64(final_index_ram_limit / points_num));
+    size_t num_pq_chunks = (size_t)(final_index_ram_limit / points_num);
 
-    num_pq_chunks = num_pq_chunks <= 0 ? 1 : num_pq_chunks;
+    if (num_pq_chunks < 1) {
+      std::cerr << "Can not compress data to fewer than 1 Bytes" << std::endl;
+      return false;
+    }
     num_pq_chunks = num_pq_chunks > dim ? dim : num_pq_chunks;
-    num_pq_chunks =
-        num_pq_chunks > dim ? dim : num_pq_chunks;
 
     diskann::cout << "Compressing " << dim << "-dimensional data into "
                   << num_pq_chunks << " bytes per vector." << std::endl;
@@ -689,28 +684,29 @@ namespace diskann {
     size_t train_size, train_dim;
     float *train_data;
 
-    double p_val = ((double) TRAINING_SET_SIZE / (double) points_num);
+    double p_val = ((double) PQ_TRAINING_SET_SIZE / (double) points_num);
+    if (p_val > 1.0)
+      p_val = 1.0;
+
     // generates random sample and sets it to train_data and updates
     // train_size
     gen_random_slice<T>(dataFilePath, p_val, train_data, train_size,
     train_dim);
 
-    diskann::cout << "Training data loaded of size " << train_size <<
-    std::endl;
+    diskann::cout << "Sample data of size " << train_size
+                  << " generated for computing PQ" << std::endl;
 
     generate_pq_pivots(train_data, train_size, (uint32_t) dim, 256,
                        (uint32_t) num_pq_chunks, 15, pq_pivots_path);
-    generate_pq_data_from_pivots<T>(dataFilePath, 256, (uint32_t)
-    num_pq_chunks,
-                                    pq_pivots_path,
-                                    pq_compressed_vectors_path);
+    generate_pq_data_from_pivots<T>(dataFilePath, 256, (uint32_t) num_pq_chunks,
+                                    pq_pivots_path, pq_compressed_vectors_path);
 
     delete[] train_data;
 
     train_data = nullptr;
 
     diskann::build_merged_vamana_index<T>(
-        dataFilePath, _compareMetric, L, R, p_val, indexing_ram_budget,
+        dataFilePath, _compareMetric, L, R, p_val, indexing_ram_budget_GiB,
         mem_index_path, medoids_path, centroids_path);
 
     diskann::create_disk_layout<T>(dataFilePath, mem_index_path,

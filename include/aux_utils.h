@@ -31,9 +31,9 @@ typedef int FileHandle;
 #include "windows_customizations.h"
 
 namespace diskann {
-  const size_t   TRAINING_SET_SIZE = 1500000;
-  const double   SPACE_FOR_CACHED_NODES_IN_GB = 0.25;
-  const double   THRESHOLD_FOR_CACHING_IN_GB = 1.0;
+  const size_t   PQ_TRAINING_SET_SIZE = 1500000;
+  const double   SPACE_FOR_CACHED_NODES_IN_GiB = 0.25;
+  const double   THRESHOLD_FOR_CACHING_IN_GiB = 1.0;
   const uint32_t NUM_NODES_TO_CACHE = 250000;
   const uint32_t WARMUP_L = 20;
 
@@ -71,7 +71,7 @@ namespace diskann {
   template<typename T>
   DISKANN_DLLEXPORT int build_merged_vamana_index(
       std::string base_file, diskann::Metric _compareMetric, unsigned L,
-      unsigned R, double sampling_rate, double ram_budget,
+      unsigned R, double sampling_rate, double ram_budget_GiB,
       std::string mem_index_path, std::string medoids_file,
       std::string centroids_file);
 

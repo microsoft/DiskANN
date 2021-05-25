@@ -289,7 +289,7 @@ int main(int argc, char** argv) {
   if (argc < 11) {
     diskann::cout
         << "Usage: " << argv[0]
-        << "  [index_type<float/int8/uint8>]  [index_prefix_path] "
+        << "  [data_type<float/int8/uint8>]  [index_prefix_path] "
            " [num_nodes_to_cache]  [num_threads]  [beamwidth (use 0 to "
            "optimize internally)] "
            " [query_file.bin]  [truthset.bin (use \"null\" for none)] "

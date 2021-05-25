@@ -20,8 +20,8 @@ int main(int argc, char** argv) {
   if (argc != 9) {
     std::cout << "Usage: " << argv[0]
               << "  [data_type<float/int8/uint8>]  [data_file.bin]  "
-                 "[index_prefix_path]  "
-                 "[R]  [L]  [B]  [M]  [T]. See README for more information on "
+                 "[index_prefix_path]  [R]  [L]  [B]  [M]  [T]. See README for "
+                 "more information on "
                  "parameters."
               << std::endl;
   } else {

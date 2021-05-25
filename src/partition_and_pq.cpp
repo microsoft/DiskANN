@@ -52,7 +52,7 @@ void gen_random_slice(const std::string base_file,
   auto         x = rd();
   std::mt19937 generator(
       x);  // Standard mersenne_twister_engine seeded with rd()
-  std::uniform_real_distribution<float> distribution(0, 1);
+  std::uniform_real_distribution<float> distribution(0.0, 1.0);
 
   size_t   npts, nd;
   uint32_t npts_u32, nd_u32;
@@ -103,7 +103,7 @@ void gen_random_slice(const std::string base_file,
 
 template<typename T>
 void gen_random_slice(const std::string data_file, double p_val,
-                      float *&sampled_data, size_t &slice_size, size_t &ndims) {
+                      float *&sampled_data, size_t &slice_size, size_t &ndims){
   size_t                          npts;
   uint32_t                        npts32, ndims32;
   std::vector<std::vector<float>> sampled_vectors;
@@ -119,7 +119,7 @@ void gen_random_slice(const std::string data_file, double p_val,
   npts = npts32;
   ndims = ndims32;
 
-  std::unique_ptr<T[]> cur_vector_T = std::make_unique<T[]>(ndims);
+  std::unique_ptr<T[]> cur_vector = std::make_unique<T[]>(ndims);
   p_val = p_val < 1 ? p_val : 1;
 
   std::random_device rd;  // Will be used to obtain a seed for the random number
@@ -128,12 +128,12 @@ void gen_random_slice(const std::string data_file, double p_val,
   std::uniform_real_distribution<float> distribution(0, 1);
 
   for (size_t i = 0; i < npts; i++) {
-    base_reader.read((char *) cur_vector_T.get(), ndims * sizeof(T));
+    base_reader.read((char *) cur_vector.get(), ndims * sizeof(T));
     float rnd_val = distribution(generator);
     if (rnd_val < p_val) {
       std::vector<float> cur_vector_float;
       for (size_t d = 0; d < ndims; d++)
-        cur_vector_float.push_back(cur_vector_T[d]);
+        cur_vector_float.push_back((float)(cur_vector[d]));
       sampled_vectors.push_back(cur_vector_float);
     }
   }
@@ -144,6 +144,8 @@ void gen_random_slice(const std::string data_file, double p_val,
       sampled_data[i * ndims + j] = sampled_vectors[i][j];
     }
   }
+  diskann::cout << "Sampled " << slice_size << " vectors from " << npts
+                << " vectors in " << data_file << std::endl;
 }
 
 // same as above, but samples from the matrix inputdata instead of a file of
@@ -152,7 +154,7 @@ template<typename T>
 void gen_random_slice(const T *inputdata, size_t npts, size_t ndims,
                       double p_val, float *&sampled_data, size_t &slice_size) {
   std::vector<std::vector<float>> sampled_vectors;
-  const T *                       cur_vector_T;
+  const T *                       cur_vector;
 
   p_val = p_val < 1 ? p_val : 1;
 
@@ -164,12 +166,12 @@ void gen_random_slice(const T *inputdata, size_t npts, size_t ndims,
   std::uniform_real_distribution<float> distribution(0, 1);
 
   for (size_t i = 0; i < npts; i++) {
-    cur_vector_T = inputdata + ndims * i;
+    cur_vector = inputdata + ndims * i;
     float rnd_val = distribution(generator);
     if (rnd_val < p_val) {
       std::vector<float> cur_vector_float;
       for (size_t d = 0; d < ndims; d++)
-        cur_vector_float.push_back(cur_vector_T[d]);
+        cur_vector_float.push_back(cur_vector[d]);
       sampled_vectors.push_back(cur_vector_float);
     }
   }
@@ -180,6 +182,8 @@ void gen_random_slice(const T *inputdata, size_t npts, size_t ndims,
       sampled_data[i * ndims + j] = sampled_vectors[i][j];
     }
   }
+  diskann::cout << "Sampled " << slice_size << "vectors from " << npts
+                << "vectors" << std::endl;
 }
 
 // given training data in train_data of dimensions num_train * dim, generate PQ
@@ -216,7 +220,7 @@ int generate_pq_pivots(const float *passed_train_data, size_t num_train,
     diskann::load_bin<float>(pq_pivots_path, full_pivot_data, file_num_centers,
                              file_dim);
     if (file_dim == dim && file_num_centers == num_centers) {
-      diskann::cout << "PQ pivot file exists. Not generating again"
+      diskann::cout << "PQ pivot file exists, reusing."
                     << std::endl;
       return -1;
     }
@@ -266,8 +270,6 @@ int generate_pq_pivots(const float *passed_train_data, size_t num_train,
         cur_best_load = bin_loads[b];
       }
     }
-    diskann::cout << " Pushing " << d << " into bin #: " << cur_best
-                  << std::endl;
     bin_to_dims[cur_best].push_back(d);
     if (bin_to_dims[cur_best].size() == high_val) {
       cur_num_high++;
@@ -279,7 +281,8 @@ int generate_pq_pivots(const float *passed_train_data, size_t num_train,
   rearrangement.clear();
   chunk_offsets.clear();
   chunk_offsets.push_back(0);
-
+  
+  diskann::cout << "Bin assignment for PQ..." << std::endl;
   for (uint32_t b = 0; b < num_pq_chunks; b++) {
     diskann::cout << "[ ";
     for (auto p : bin_to_dims[b]) {
@@ -292,12 +295,6 @@ int generate_pq_pivots(const float *passed_train_data, size_t num_train,
                               (unsigned) bin_to_dims[b - 1].size());
   }
   chunk_offsets.push_back(dim);
-
-  diskann::cout << "\nCross-checking rearranged order of coordinates:"
-                << std::endl;
-  for (auto p : rearrangement)
-    diskann::cout << p << " ";
-  diskann::cout << std::endl;
 
   full_pivot_data.reset(new float[num_centers * dim]);
 
@@ -313,7 +310,7 @@ int generate_pq_pivots(const float *passed_train_data, size_t num_train,
     std::unique_ptr<uint32_t[]> closest_center =
         std::make_unique<uint32_t[]>(num_train);
 
-    diskann::cout << "Processing chunk " << i << " with dimensions ["
+    diskann::cout << "Processing PQ chunk " << i << " with dimensions ["
                   << chunk_offsets[i] << ", " << chunk_offsets[i + 1] << ")"
                   << std::endl;
 
@@ -431,7 +428,7 @@ int generate_pq_data_from_pivots(const std::string data_file,
       throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
                                   __LINE__);
     }
-    diskann::cout << "Loaded PQ pivot information" << std::endl;
+    diskann::cout << "Loaded PQ pivot information." << std::endl;
   }
 
   std::ofstream compressed_file_writer(pq_compressed_vectors_path,
@@ -465,7 +462,7 @@ int generate_pq_data_from_pivots(const std::string data_file,
     diskann::convert_types<T, float>(block_data_T.get(), block_data_tmp.get(),
                                      cur_blk_size, dim);
 
-    diskann::cout << "Processing points  [" << start_id << ", " << end_id
+    diskann::cout << "Compressing points  [" << start_id << ", " << end_id
                   << ").." << std::flush;
 
     for (uint64_t p = 0; p < cur_blk_size; p++) {
@@ -532,7 +529,8 @@ int generate_pq_data_from_pivots(const std::string data_file,
     }
     diskann::cout << ".done." << std::endl;
   }
-// Gopal. Splittng diskann_dll into separate DLLs for search and build.
+
+// Splittng diskann_dll into separate DLLs for search and build.
 // This code should only be available in the "build" DLL.
 #ifdef DISKANN_BUILD
   MallocExtension::instance()->ReleaseFreeMemory();
@@ -764,13 +762,13 @@ int partition(const std::string data_file, const float sampling_rate,
 
 template<typename T>
 int partition_with_ram_budget(const std::string data_file,
-                              const double sampling_rate, double ram_budget_GB,
+                              const double sampling_rate, double ram_budget_GiB,
                               size_t            graph_degree,
                               const std::string prefix_path, size_t k_base) {
   size_t train_dim;
   size_t num_train;
   float *train_data_float;
-  size_t max_k_means_reps = 20;
+  size_t max_k_means_reps = 10;
 
 
   bool fit_in_ram = false;
@@ -779,8 +777,8 @@ int partition_with_ram_budget(const std::string data_file,
                       train_dim);
   auto full_index_ram =
       (uint64_t) ESTIMATE_RAM_USAGE(num_train, train_dim, sizeof(T), graph_degree);
-  uint64_t num_parts = DIV_ROUND_UP(
-      full_index_ram, (uint64_t)(1 << 30) * (uint64_t) ram_budget_GB);
+  uint64_t num_parts =
+      DIV_ROUND_UP(full_index_ram, (uint64_t)(ram_budget_GiB * (1 << 30)));
 
 
   float *pivot_data = nullptr;
@@ -822,10 +820,12 @@ int partition_with_ram_budget(const std::string data_file,
     }
     diskann::cout << "With " << num_parts << " parts, max estimated RAM usage: "
                   << max_ram_usage / (1024 * 1024 * 1024)
-                  << "GB, budget given is " << ram_budget_GB << std::endl;
-    if (max_ram_usage > 1024 * 1024 * 1024 * ram_budget_GB) {
-      fit_in_ram = false;
+                  << "GB, budget given is " << ram_budget_GiB << std::endl;
+    
+    if (max_ram_usage > ram_budget_GiB * (1 << 30)) { 
       num_parts++;
+    } else {
+      fit_in_ram = true;
     }
   } while (!fit_in_ram);
 
