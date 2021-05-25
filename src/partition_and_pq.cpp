@@ -103,8 +103,7 @@ void gen_random_slice(const std::string base_file,
 
 template<typename T>
 void gen_random_slice(const std::string data_file, double p_val,
-                      float *&sampled_data, size_t &slice_size, size_t &ndims){
-  size_t                          npts;
+                      float *&sampled_data, size_t &slice_size, size_t &npts, size_t &ndims){
   uint32_t                        npts32, ndims32;
   std::vector<std::vector<float>> sampled_vectors;
 
@@ -765,7 +764,8 @@ int partition_with_ram_budget(const std::string data_file,
                               const double sampling_rate, double ram_budget_GiB,
                               size_t            graph_degree,
                               const std::string prefix_path, size_t k_base) {
-  size_t train_dim;
+  size_t npts;
+  size_t ndims;
   size_t num_train;
   float *train_data_float;
   size_t max_k_means_reps = 10;
@@ -774,11 +774,11 @@ int partition_with_ram_budget(const std::string data_file,
   bool fit_in_ram = false;
 
   gen_random_slice<T>(data_file, sampling_rate, train_data_float, num_train,
-                      train_dim);
+                      npts, ndims);
   auto full_index_ram =
-      (uint64_t) ESTIMATE_RAM_USAGE(num_train, train_dim, sizeof(T), graph_degree);
-  uint64_t num_parts =
-      DIV_ROUND_UP(full_index_ram, (uint64_t)(ram_budget_GiB * (1 << 30)));
+       ESTIMATE_RAM_USAGE(npts, ndims, sizeof(T), graph_degree);
+  uint64_t num_parts = DIV_ROUND_UP((uint64_t) full_index_ram,
+                                    (uint64_t)(ram_budget_GiB * (1 << 30)));
 
 
   float *pivot_data = nullptr;
@@ -794,26 +794,26 @@ int partition_with_ram_budget(const std::string data_file,
     if (pivot_data != nullptr)
       delete[] pivot_data;
 
-    pivot_data = new float[num_parts * train_dim];
+    pivot_data = new float[num_parts * ndims];
     // Process Global k-means for kmeans_partitioning Step
     diskann::cout << "Processing global k-means (kmeans_partitioning Step)"
                   << std::endl;
-    kmeans::kmeanspp_selecting_pivots(train_data_float, num_train, train_dim,
+    kmeans::kmeanspp_selecting_pivots(train_data_float, num_train, ndims,
                                       pivot_data, num_parts);
 
-    kmeans::run_lloyds(train_data_float, num_train, train_dim, pivot_data,
+    kmeans::run_lloyds(train_data_float, num_train, ndims, pivot_data,
                        num_parts, max_k_means_reps, NULL, NULL);
 
     // now pivots are ready. need to stream base points and assign them to
     // closest clusters.
 
     std::vector<size_t> cluster_sizes;
-    estimate_cluster_sizes<T>(data_file, pivot_data, num_parts, train_dim,
+    estimate_cluster_sizes<T>(data_file, pivot_data, num_parts, ndims,
                               k_base, cluster_sizes);
 
     for (auto &p : cluster_sizes) {
       double cur_shard_ram_estimate =
-          ESTIMATE_RAM_USAGE(p, train_dim, sizeof(T), graph_degree);
+          ESTIMATE_RAM_USAGE(p, ndims, sizeof(T), graph_degree);
 
       if (cur_shard_ram_estimate > max_ram_usage)
         max_ram_usage = cur_shard_ram_estimate;
@@ -831,9 +831,9 @@ int partition_with_ram_budget(const std::string data_file,
 
   diskann::cout << "Saving global k-center pivots" << std::endl;
   diskann::save_bin<float>(output_file.c_str(), pivot_data, (size_t) num_parts,
-                           train_dim);
+                           ndims);
 
-  shard_data_into_clusters<T>(data_file, pivot_data, num_parts, train_dim,
+  shard_data_into_clusters<T>(data_file, pivot_data, num_parts, ndims,
                               k_base, prefix_path);
   delete[] pivot_data;
   delete[] train_data_float;
