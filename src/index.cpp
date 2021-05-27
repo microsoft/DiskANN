@@ -61,6 +61,9 @@ namespace {
         std::cout << "Older CPU. Using slow distance computation" << std::endl;
         return new diskann::SlowDistanceL2Float();
       }
+      } else if (m == diskann::Metric::INNER_PRODUCT) {        
+        std::cout << "Using Inner Product computation" << std::endl;
+        return new diskann::DistanceInnerProduct<float>();
     } else {
       std::stringstream stream;
       stream << "Only L2 metric supported as of now. Email "
@@ -129,7 +132,7 @@ namespace diskann {
                         const size_t nd, const size_t num_frozen_pts,
                         const bool enable_tags, const bool store_data,
                         const bool support_eager_delete)
-      : _num_frozen_pts(num_frozen_pts), _has_built(false), _width(0),
+      : _metric(m), _num_frozen_pts(num_frozen_pts), _has_built(false), _width(0),
         _can_delete(false), _eager_done(true), _lazy_done(true),
         _compacted_order(true), _enable_tags(enable_tags),
         _consolidated_order(true), _support_eager_delete(support_eager_delete),
@@ -1054,6 +1057,8 @@ namespace diskann {
     for (auto it : best_L_nodes) {
       indices[pos] = it.id;
       distances[pos] = it.distance;
+      if (_metric == diskann::INNER_PRODUCT)
+      distances[pos] = 1/distances[pos];
       pos++;
       if (pos == K)
         break;
