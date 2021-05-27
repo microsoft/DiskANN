@@ -328,7 +328,7 @@ namespace diskann {
   template<typename T>
   class DistanceInnerProduct : public Distance<T> {
    public:
-    float compare(const T *a, const T *b, unsigned size) const {
+    float acompare(const T *a, const T *b, unsigned size) const {
       float result = 0;
 #ifdef __GNUC__
 #ifdef __AVX__
@@ -426,10 +426,14 @@ namespace diskann {
 #endif
       return result;
     }
+    float compare(const T *a, const T *b, unsigned size) const { // since we use normally minimization objective for distance comparisons, we are returning 1/x.
+      float result = acompare(a,b,size);
+      return 1/result;
+    }
   };
 
   template<typename T>
-  class DistanceFastL2 : public DistanceInnerProduct<T> {
+  class DistanceFastL2 : public DistanceInnerProduct<T> {   // currently defined only for float. templated for future use.
    public:
     float norm(const T *a, unsigned size) const {
       float result = 0;
@@ -522,7 +526,7 @@ namespace diskann {
     using DistanceInnerProduct<T>::compare;
     float compare(const T *a, const T *b, float norm,
                   unsigned size) const {  // not implement
-      float result = -2 * DistanceInnerProduct<T>::compare(a, b, size);
+      float result = -2 * DistanceInnerProduct<T>::acompare(a, b, size);
       result += norm;
       return result;
     }

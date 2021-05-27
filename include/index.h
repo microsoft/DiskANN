@@ -167,6 +167,7 @@ namespace diskann {
     size_t consolidate_deletes(const Parameters &parameters);
 
    private:
+    Metric       _metric = diskann::L2;
     size_t       _dim;
     size_t       _aligned_dim;
     T *          _data;
