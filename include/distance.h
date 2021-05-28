@@ -428,7 +428,9 @@ namespace diskann {
     }
     float compare(const T *a, const T *b, unsigned size) const { // since we use normally minimization objective for distance comparisons, we are returning 1/x.
       float result = acompare(a,b,size);
-      return 1/result;
+      if (result < 0)
+      return std::numeric_limits<float>::max();
+      else return 1/result;
     }
   };
 
