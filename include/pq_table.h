@@ -137,15 +137,28 @@ namespace diskann {
         _u64         permuted_dim_in_query = rearrangement[j];
         const float* centers_dim_vec = tables_T + (256 * j);
         for (_u64 idx = 0; idx < 256; idx++) {
-          // Gopal. Fixing crash in v14 machines.
-          // float diff = centers_dim_vec[idx] -
-          //             ((float) query_vec[permuted_dim_in_query] -
-          //              centroid[permuted_dim_in_query]);
-          // chunk_dists[idx] += (diff * diff);
           double diff =
               centers_dim_vec[idx] - (query_vec[permuted_dim_in_query] -
                                       centroid[permuted_dim_in_query]);
           chunk_dists[idx] += (float) (diff * diff);
+        }
+      }
+    }
+  }
+  void
+  populate_chunk_inner_products(const T* query_vec, float* dist_vec) {
+    memset(dist_vec, 0, 256 * n_chunks * sizeof(float));
+    // chunk wise distance computation
+    for (_u64 chunk = 0; chunk < n_chunks; chunk++) {
+      // sum (q-c)^2 for the dimensions associated with this chunk
+      float* chunk_dists = dist_vec + (256 * chunk);
+      for (_u64 j = chunk_offsets[chunk]; j < chunk_offsets[chunk + 1]; j++) {
+        _u64         permuted_dim_in_query = rearrangement[j];
+        const float* centers_dim_vec = tables_T + (256 * j);
+        for (_u64 idx = 0; idx < 256; idx++) {
+          double prod =
+              centers_dim_vec[idx] * query_vec[permuted_dim_in_query];   // assumes that we are not shifting the vectors to mean zero, i.e., centroid array should be all zeros
+          chunk_dists[idx] -= (float) prod; // returning negative to keep the search code clean (max inner product vs min distance)
         }
       }
     }

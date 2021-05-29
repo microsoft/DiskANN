@@ -190,12 +190,13 @@ void gen_random_slice(const T *inputdata, size_t npts, size_t ndims,
 int generate_pq_pivots(const float *passed_train_data, size_t num_train,
                        unsigned dim, unsigned num_centers,
                        unsigned num_pq_chunks, unsigned max_k_means_reps,
-                       std::string pq_pivots_path) {
+                       std::string pq_pivots_path, bool make_zero_mean) {
   if (num_pq_chunks > dim) {
     diskann::cout << " Error: number of chunks more than dimension"
                   << std::endl;
     return -1;
   }
+
 
   std::unique_ptr<float[]> train_data =
       std::make_unique<float[]>(num_train * dim);
@@ -221,11 +222,14 @@ int generate_pq_pivots(const float *passed_train_data, size_t num_train,
       return -1;
     }
   }
-
+  
   // Calculate centroid and center the training data
   std::unique_ptr<float[]> centroid = std::make_unique<float[]>(dim);
   for (uint64_t d = 0; d < dim; d++) {
     centroid[d] = 0;
+  }
+    if (make_zero_mean) {
+    for (uint64_t d = 0; d < dim; d++) {
     for (uint64_t p = 0; p < num_train; p++) {
       centroid[d] += train_data[p * dim + d];
     }
@@ -233,11 +237,11 @@ int generate_pq_pivots(const float *passed_train_data, size_t num_train,
   }
 
   //  std::memset(centroid, 0 , dim*sizeof(float));
-
   for (uint64_t d = 0; d < dim; d++) {
     for (uint64_t p = 0; p < num_train; p++) {
       train_data[p * dim + d] -= centroid[d];
     }
+  }
   }
 
   std::vector<uint32_t> rearrangement;

@@ -54,7 +54,7 @@ DISKANN_DLLEXPORT int generate_pq_pivots(const float *train_data,
                                          unsigned    num_centers,
                                          unsigned    num_pq_chunks,
                                          unsigned    max_k_means_reps,
-                                         std::string pq_pivots_path);
+                                         std::string pq_pivots_path, bool make_zero_mean = false);
 
 template<typename T>
 int generate_pq_data_from_pivots(const std::string data_file,

@@ -70,7 +70,7 @@ namespace diskann {
     // Freeing the reader object is now the client's (DiskANNInterface's)
     // responsibility.
     DISKANN_DLLEXPORT PQFlashIndex(
-        std::shared_ptr<AlignedFileReader> &fileReader);
+        std::shared_ptr<AlignedFileReader> &fileReader, diskann::Metric metric = diskann::Metric::L2);
     DISKANN_DLLEXPORT ~PQFlashIndex();
 
 #ifdef EXEC_ENV_OLS
@@ -129,6 +129,7 @@ namespace diskann {
     // nbrs of node `i`: ((unsigned*)buf) + 1
     _u64 max_node_len = 0, nnodes_per_sector = 0, max_degree = 0;
 
+    diskann::Metric metric = diskann::Metric::L2;
     // data info
     _u64 num_points = 0;
     _u64 data_dim = 0;
