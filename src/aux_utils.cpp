@@ -56,7 +56,7 @@ namespace diskann {
       }
 
       gt.insert(gt_vec, gt_vec + tie_breaker);
-      res.insert(res_vec, res_vec + recall_at);
+      res.insert(res_vec, res_vec + recall_at); // change to recall_at for recall k@k or dim_or for k@dim_or
       unsigned cur_recall = 0;
       for (auto &v : gt) {
         if (res.find(v) != res.end()) {
@@ -726,7 +726,7 @@ namespace diskann {
     gen_random_slice<T>(dataFilePath, sample_base_prefix,
     sample_sampling_rate);
 
-    std::remove(mem_index_path.c_str());
+    std::remove(mem_index_path.c_str()); 
 
     auto                          e =
     std::chrono::high_resolution_clock::now();
