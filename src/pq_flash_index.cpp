@@ -86,8 +86,8 @@ namespace {
 namespace diskann {
   template<>
   PQFlashIndex<_u8>::PQFlashIndex(
-      std::shared_ptr<AlignedFileReader> &fileReader)
-      : reader(fileReader) {
+      std::shared_ptr<AlignedFileReader> &fileReader, diskann::Metric metric)
+      : reader(fileReader),  metric(metric) {
     diskann::cout
         << "dist_cmp function for _u8 uses slow implementation."
            " Please contact gopalsr@microsoft.com if you need an AVX/AVX2"
@@ -106,12 +106,16 @@ namespace diskann {
                     << std::endl;
       this->dist_cmp_float = new SlowDistanceL2Float();
     }
+    if (metric != diskann::Metric::L2) {
+      std::cout<<"Only L2 supported for byte vectors for now. Other distance functions are future work. Falling back to L2 distance." << std::endl;
+      this->metric = diskann::Metric::L2;
+    }
   }
 
   template<>
   PQFlashIndex<_s8>::PQFlashIndex(
-      std::shared_ptr<AlignedFileReader> &fileReader)
-      : reader(fileReader) {
+      std::shared_ptr<AlignedFileReader> &fileReader, diskann::Metric metric)
+      : reader(fileReader), metric(metric) {
     if (Avx2SupportedCPU) {
       diskann::cout << "Using AVX2 function for dist_cmp and dist_cmp_float"
                     << std::endl;
@@ -130,12 +134,18 @@ namespace diskann {
       this->dist_cmp = new SlowDistanceL2Int<int8_t>();
       this->dist_cmp_float = new SlowDistanceL2Float();
     }
+        if (metric != diskann::Metric::L2) {
+      std::cout<<"Only L2 supported for byte vectors for now. Other distance functions are future work. Falling back to L2 distance." << std::endl;
+      this->metric = diskann::Metric::L2;
+    }
+
   }
 
   template<>
   PQFlashIndex<float>::PQFlashIndex(
-      std::shared_ptr<AlignedFileReader> &fileReader)
-      : reader(fileReader) {
+      std::shared_ptr<AlignedFileReader> &fileReader, diskann::Metric metric)
+      : reader(fileReader), metric(metric) {
+        if (metric == diskann::Metric::L2) {
     if (Avx2SupportedCPU) {
       diskann::cout << "Using AVX2 functions for dist_cmp and dist_cmp_float"
                     << std::endl;
@@ -153,6 +163,15 @@ namespace diskann {
                     << std::endl;
       this->dist_cmp = new AVXDistanceL2Float();
       this->dist_cmp_float = new AVXDistanceL2Float();
+    }
+    } else if (metric == diskann::Metric::INNER_PRODUCT) {
+      this->dist_cmp = new DistanceInnerProduct<float>();
+      this->dist_cmp_float = new DistanceInnerProduct<float>();
+    } else {
+      std::cout<<"Unsupported metric type. Reverting to float." << std::endl;
+      this->dist_cmp = new AVXDistanceL2Float();
+      this->dist_cmp_float = new AVXDistanceL2Float();
+      this->metric = diskann::Metric::L2;
     }
   }
 
@@ -801,6 +820,9 @@ namespace diskann {
 
     // query <-> PQ chunk centers distances
     float *pq_dists = query_scratch->aligned_pqtable_dist_scratch;
+    if (metric==diskann::Metric::INNER_PRODUCT)
+        pq_table.populate_chunk_inner_products(query, pq_dists);
+    else if (metric==diskann::Metric::L2)
     pq_table.populate_chunk_distances(query, pq_dists);
 
     // query <-> neighbor list
