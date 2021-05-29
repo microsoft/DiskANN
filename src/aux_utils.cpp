@@ -343,7 +343,7 @@ namespace diskann {
 
   template<typename T>
   int build_merged_vamana_index(std::string     base_file,
-                                diskann::Metric _compareMetric, unsigned L,
+                                diskann::Metric compareMetric, unsigned L,
                                 unsigned R, double sampling_rate,
                                 double ram_budget, std::string mem_index_path,
                                 std::string medoids_file,
@@ -367,7 +367,7 @@ namespace diskann {
 
       std::unique_ptr<diskann::Index<T>> _pvamanaIndex =
           std::unique_ptr<diskann::Index<T>>(
-              new diskann::Index<T>(_compareMetric, base_file.c_str()));
+              new diskann::Index<T>(compareMetric, base_file.c_str()));
       _pvamanaIndex->build(paras);
       _pvamanaIndex->save(mem_index_path.c_str());
       std::remove(medoids_file.c_str());
@@ -399,7 +399,7 @@ namespace diskann {
 
       std::unique_ptr<diskann::Index<T>> _pvamanaIndex =
           std::unique_ptr<diskann::Index<T>>(
-              new diskann::Index<T>(_compareMetric, shard_base_file.c_str()));
+              new diskann::Index<T>(compareMetric, shard_base_file.c_str()));
       _pvamanaIndex->build(paras);
       _pvamanaIndex->save(shard_index_file.c_str());
     }
@@ -612,7 +612,7 @@ namespace diskann {
   template<typename T>
   bool build_disk_index(const char *dataFilePath, const char *indexFilePath,
                         const char *    indexBuildParameters,
-                        diskann::Metric _compareMetric) {
+                        diskann::Metric compareMetric) {
     std::stringstream parser;
     parser << std::string(indexBuildParameters);
     std::string              cur_param;
@@ -631,6 +631,9 @@ namespace diskann {
       return false;
     }
 
+    if (compareMetric == diskann::Metric::INNER_PRODUCT) {
+      std::cout<<"Using Inner Product for PQ and Graph Generation" << std::endl;
+    }
     std::string index_prefix_path(indexFilePath);
     std::string pq_pivots_path = index_prefix_path + "_pq_pivots.bin";
     std::string pq_compressed_vectors_path =
@@ -697,9 +700,12 @@ namespace diskann {
 
     diskann::cout << "Training data loaded of size " << train_size <<
     std::endl;
-
+    
+    bool make_zero_mean = true;
+    if (compareMetric == diskann::Metric::INNER_PRODUCT)
+      make_zero_mean = false;  
     generate_pq_pivots(train_data, train_size, (uint32_t) dim, 256,
-                       (uint32_t) num_pq_chunks, 15, pq_pivots_path);
+                       (uint32_t) num_pq_chunks, 15, pq_pivots_path, make_zero_mean);
     generate_pq_data_from_pivots<T>(dataFilePath, 256, (uint32_t)
     num_pq_chunks,
                                     pq_pivots_path,
@@ -710,7 +716,7 @@ namespace diskann {
     train_data = nullptr;
 
     diskann::build_merged_vamana_index<T>(
-        dataFilePath, _compareMetric, L, R, p_val, indexing_ram_budget,
+        dataFilePath, compareMetric, L, R, p_val, indexing_ram_budget,
         mem_index_path, medoids_path, centroids_path);
 
     diskann::create_disk_layout<T>(dataFilePath, mem_index_path,
@@ -781,26 +787,26 @@ namespace diskann {
 
   template DISKANN_DLLEXPORT bool build_disk_index<int8_t>(
       const char *dataFilePath, const char *indexFilePath,
-      const char *indexBuildParameters, diskann::Metric _compareMetric);
+      const char *indexBuildParameters, diskann::Metric compareMetric);
   template DISKANN_DLLEXPORT bool build_disk_index<uint8_t>(
       const char *dataFilePath, const char *indexFilePath,
-      const char *indexBuildParameters, diskann::Metric _compareMetric);
+      const char *indexBuildParameters, diskann::Metric compareMetric);
   template DISKANN_DLLEXPORT bool build_disk_index<float>(
       const char *dataFilePath, const char *indexFilePath,
-      const char *indexBuildParameters, diskann::Metric _compareMetric);
+      const char *indexBuildParameters, diskann::Metric compareMetric);
 
   template DISKANN_DLLEXPORT int build_merged_vamana_index<int8_t>(
-      std::string base_file, diskann::Metric _compareMetric, unsigned L,
+      std::string base_file, diskann::Metric compareMetric, unsigned L,
       unsigned R, double sampling_rate, double ram_budget,
       std::string mem_index_path, std::string medoids_path,
       std::string centroids_file);
   template DISKANN_DLLEXPORT int build_merged_vamana_index<float>(
-      std::string base_file, diskann::Metric _compareMetric, unsigned L,
+      std::string base_file, diskann::Metric compareMetric, unsigned L,
       unsigned R, double sampling_rate, double ram_budget,
       std::string mem_index_path, std::string medoids_path,
       std::string centroids_file);
   template DISKANN_DLLEXPORT int build_merged_vamana_index<uint8_t>(
-      std::string base_file, diskann::Metric _compareMetric, unsigned L,
+      std::string base_file, diskann::Metric compareMetric, unsigned L,
       unsigned R, double sampling_rate, double ram_budget,
       std::string mem_index_path, std::string medoids_path,
       std::string centroids_file);

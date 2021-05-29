@@ -114,7 +114,7 @@ int search_disk_index(int argc, char** argv) {
 #endif
 
   std::unique_ptr<diskann::PQFlashIndex<T>> _pFlashIndex(
-      new diskann::PQFlashIndex<T>(reader));
+      new diskann::PQFlashIndex<T>(reader, diskann::Metric::INNER_PRODUCT));
 
   int res = _pFlashIndex->load(num_threads, pq_prefix.c_str(),
                                disk_index_file.c_str());

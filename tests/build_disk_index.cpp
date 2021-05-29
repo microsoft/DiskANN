@@ -11,29 +11,32 @@
 
 template<typename T>
 bool build_index(const char* dataFilePath, const char* indexFilePath,
-                 const char* indexBuildParameters) {
+                 const char* indexBuildParameters, diskann::Metric metric) {
   return diskann::build_disk_index<T>(
-      dataFilePath, indexFilePath, indexBuildParameters, diskann::Metric::L2);
+      dataFilePath, indexFilePath, indexBuildParameters, metric);
 }
 
 int main(int argc, char** argv) {
-  if (argc != 9) {
+  if (argc != 10) {
     std::cout << "Usage: " << argv[0]
-              << "  [data_type<float/int8/uint8>]  [data_file.bin]  "
+              << "  [data_type<float/int8/uint8>]  [dist_fn: 0 for L2, 1 for MIPS] [data_file.bin]  "
                  "[index_prefix_path]  "
                  "[R]  [L]  [B]  [M]  [T]. See README for more information on "
                  "parameters."
               << std::endl;
   } else {
-    std::string params = std::string(argv[4]) + " " + std::string(argv[5]) +
-                         " " + std::string(argv[6]) + " " +
-                         std::string(argv[7]) + " " + std::string(argv[8]);
+    diskann::Metric metric = diskann::Metric::L2;
+    if (atoi(argv[2]) == 1)
+    metric = diskann::Metric::INNER_PRODUCT;
+    std::string params = std::string(argv[5]) + " " + std::string(argv[6]) +
+                         " " + std::string(argv[7]) + " " +
+                         std::string(argv[8]) + " " + std::string(argv[9]);
     if (std::string(argv[1]) == std::string("float"))
-      build_index<float>(argv[2], argv[3], params.c_str());
+      build_index<float>(argv[3], argv[4], params.c_str(), metric);
     else if (std::string(argv[1]) == std::string("int8"))
-      build_index<int8_t>(argv[2], argv[3], params.c_str());
+      build_index<int8_t>(argv[3], argv[4], params.c_str(), metric);
     else if (std::string(argv[1]) == std::string("uint8"))
-      build_index<uint8_t>(argv[2], argv[3], params.c_str());
+      build_index<uint8_t>(argv[3], argv[4], params.c_str(), metric);
     else
       std::cout << "Error. wrong file type" << std::endl;
   }
