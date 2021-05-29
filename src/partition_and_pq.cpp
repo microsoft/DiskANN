@@ -36,6 +36,7 @@
 #endif
 
 #define BLOCK_SIZE 5000000
+#define SAVE_INFLATED_PQ true
 
 template<typename T>
 void gen_random_slice(const std::string base_file,
@@ -380,6 +381,8 @@ int generate_pq_data_from_pivots(const std::string data_file,
   std::unique_ptr<uint32_t[]> rearrangement;
   std::unique_ptr<uint32_t[]> chunk_offsets;
 
+  std::string inflated_pq_file = pq_compressed_vectors_path + "_inflated.bin";
+
   if (!file_exists(pq_pivots_path)) {
     diskann::cout << "ERROR: PQ k-means pivot file not found" << std::endl;
     throw diskann::ANNException("PQ k-means pivot file not found", -1);
@@ -446,6 +449,20 @@ int generate_pq_data_from_pivots(const std::string data_file,
   compressed_file_writer.write((char *) &num_pq_chunks_u32, sizeof(uint32_t));
 
   size_t block_size = num_points <= BLOCK_SIZE ? num_points : BLOCK_SIZE;
+
+
+#ifdef SAVE_INFLATED_PQ
+  std::ofstream inflated_file_writer(inflated_pq_file,
+                                       std::ios::binary);
+  inflated_file_writer.write((char *) &num_points, sizeof(uint32_t));
+  inflated_file_writer.write((char *) &basedim32, sizeof(uint32_t));    
+
+  std::unique_ptr<float[]> block_inflated_base =
+      std::make_unique<float[]>(block_size * dim);
+  std::memset(block_inflated_base.get(), 0,
+              block_size * dim * sizeof(float));
+#endif                                       
+
   std::unique_ptr<_u32[]> block_compressed_base =
       std::make_unique<_u32[]>(block_size * (_u64) num_pq_chunks);
   std::memset(block_compressed_base.get(), 0,
@@ -518,6 +535,12 @@ int generate_pq_data_from_pivots(const std::string data_file,
 #pragma omp parallel for schedule(static, 8192)
       for (int64_t j = 0; j < (_s64) cur_blk_size; j++) {
         block_compressed_base[j * num_pq_chunks + i] = closest_center[j];
+#ifdef SAVE_INFLATED_PQ
+       for (uint64_t k = 0; k < cur_chunk_size; k++)
+          block_inflated_base[j * dim + chunk_offsets[i] + k] =
+              cur_pivot_data[closest_center[j] * cur_chunk_size + k] +
+              centroid[chunk_offsets[i] + k];
+#endif
       }
     }
 
@@ -532,8 +555,13 @@ int generate_pq_data_from_pivots(const std::string data_file,
           block_compressed_base.get(), pVec.get(), cur_blk_size, num_pq_chunks);
       compressed_file_writer.write(
           (char *) (pVec.get()),
-          cur_blk_size * num_pq_chunks * sizeof(uint8_t));
+          cur_blk_size * num_pq_chunks * sizeof(uint8_t));      
     }
+#ifdef SAVE_INFLATED_PQ
+        inflated_file_writer.write(
+          (char *) (block_inflated_base.get()),
+          cur_blk_size * dim * sizeof(float));
+#endif
     diskann::cout << ".done." << std::endl;
   }
 // Gopal. Splittng diskann_dll into separate DLLs for search and build.
@@ -542,6 +570,9 @@ int generate_pq_data_from_pivots(const std::string data_file,
   MallocExtension::instance()->ReleaseFreeMemory();
 #endif
   compressed_file_writer.close();
+#ifdef SAVE_INFLATED_PQ
+  inflated_file_writer.close();
+#endif
   return 0;
 }
 
