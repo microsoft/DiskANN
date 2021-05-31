@@ -538,7 +538,7 @@ namespace diskann {
     float cur_alpha = 1;
     while (cur_alpha <= alpha && result.size() < degree) {
       unsigned start = 0;
-
+      float eps = cur_alpha + 0.01;
       while (result.size() < degree && (start) < pool.size() && start < maxc) {
         auto &p = pool[start];
         if (occlude_factor[start] > cur_alpha) {
@@ -553,8 +553,18 @@ namespace diskann {
           float djk = _distance->compare(
               _data + _aligned_dim * (size_t) pool[t].id,
               _data + _aligned_dim * (size_t) p.id, (unsigned) _aligned_dim);
+              if (_metric == diskann::Metric::L2) {
           occlude_factor[t] =
               (std::max)(occlude_factor[t], pool[t].distance / djk);
+              }
+              else if (_metric == diskann::Metric::INNER_PRODUCT) { // stylized rules for inner product since we want max instead of min distance
+                float x = -pool[t].distance;
+                float y = -djk;
+                if (y > cur_alpha * x) {
+                  occlude_factor[t] =
+              (std::max)(occlude_factor[t], eps);
+                }
+              }
         }
         start++;
       }
@@ -1058,7 +1068,7 @@ namespace diskann {
       indices[pos] = it.id;
       distances[pos] = it.distance;
       if (_metric == diskann::INNER_PRODUCT)
-      distances[pos] = 1/distances[pos];
+      distances[pos] = -distances[pos];
       pos++;
       if (pos == K)
         break;

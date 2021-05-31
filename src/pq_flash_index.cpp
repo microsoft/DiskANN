@@ -1112,7 +1112,7 @@ namespace diskann {
       if (distances != nullptr) {
         distances[i] = full_retset[i].distance;
         if (metric == diskann::Metric::INNER_PRODUCT) // flip the sign from convert min to max
-        distances[i] = 1/distances[i];
+        distances[i] = -distances[i];
       }
     }
 
