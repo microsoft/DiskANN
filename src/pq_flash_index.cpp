@@ -165,6 +165,7 @@ namespace diskann {
       this->dist_cmp_float = new AVXDistanceL2Float();
     }
     } else if (metric == diskann::Metric::INNER_PRODUCT) {
+      std::cout<<"Using inner product distance function" << std::endl;
       this->dist_cmp = new DistanceInnerProduct<float>();
       this->dist_cmp_float = new DistanceInnerProduct<float>();
     } else {
@@ -1110,6 +1111,8 @@ namespace diskann {
       indices[i] = full_retset[i].id;
       if (distances != nullptr) {
         distances[i] = full_retset[i].distance;
+        if (metric == diskann::Metric::INNER_PRODUCT) // flip the sign from convert min to max
+        distances[i] = 1/distances[i];
       }
     }
 
