@@ -820,9 +820,9 @@ namespace diskann {
 
     // query <-> PQ chunk centers distances
     float *pq_dists = query_scratch->aligned_pqtable_dist_scratch;
-    if (metric==diskann::Metric::INNER_PRODUCT)
-        pq_table.populate_chunk_inner_products(query, pq_dists);
-    else if (metric==diskann::Metric::L2)
+//    if (metric==diskann::Metric::INNER_PRODUCT)
+//        pq_table.populate_chunk_inner_products(query, pq_dists);
+//    else if (metric==diskann::Metric::L2)
     pq_table.populate_chunk_distances(query, pq_dists);
 
     // query <-> neighbor list
