@@ -17,11 +17,11 @@ bool build_index(const char* dataFilePath, const char* indexFilePath,
 }
 
 int main(int argc, char** argv) {
-  if (argc != 10) {
+  if (argc != 11) {
     std::cout << "Usage: " << argv[0]
               << "  [data_type<float/int8/uint8>]  [dist_fn: 0 for L2, 1 for MIPS] [data_file.bin]  "
                  "[index_prefix_path]  "
-                 "[R]  [L]  [B]  [M]  [T]. See README for more information on "
+                 "[R]  [L]  [B]  [M]  [T] [PQ_disk_bytes (for very large dimensionality, use 0 for full vectors)]. See README for more information on "
                  "parameters."
               << std::endl;
   } else {
@@ -30,7 +30,7 @@ int main(int argc, char** argv) {
     metric = diskann::Metric::INNER_PRODUCT;
     std::string params = std::string(argv[5]) + " " + std::string(argv[6]) +
                          " " + std::string(argv[7]) + " " +
-                         std::string(argv[8]) + " " + std::string(argv[9]);
+                         std::string(argv[8]) + " " + std::string(argv[9]) + " " + std::string(argv[10]);
     if (std::string(argv[1]) == std::string("float"))
       build_index<float>(argv[3], argv[4], params.c_str(), metric);
     else if (std::string(argv[1]) == std::string("int8"))

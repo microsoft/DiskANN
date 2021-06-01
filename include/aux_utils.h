@@ -36,6 +36,7 @@ namespace diskann {
   const double   THRESHOLD_FOR_CACHING_IN_GB = 1.0;
   const uint32_t NUM_NODES_TO_CACHE = 250000;
   const uint32_t WARMUP_L = 20;
+  const uint32_t NUM_KMEANS_REPS = 12;
 
   template<typename T>
   class PQFlashIndex;

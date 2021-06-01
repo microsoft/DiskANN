@@ -620,15 +620,25 @@ namespace diskann {
     while (parser >> cur_param)
       param_list.push_back(cur_param);
 
-    if (param_list.size() != 5) {
+    if (param_list.size() != 5 && param_list.size() != 6) {
       diskann::cout
           << "Correct usage of parameters is R (max degree) "
              "L (indexing list size, better if >= R) B (RAM limit of final "
              "index in "
              "GB) M (memory limit while indexing) T (number of threads for "
-             "indexing)"
+             "indexing) B' (PQ bytes for disk index: optional parameter for very large dimensional data)"
           << std::endl;
       return false;
+    }
+
+    _u32 disk_pq_dims = 0;
+    bool use_disk_pq = false;
+
+    if (param_list.size() == 6) {
+     disk_pq_dims = atoi(param_list[5].c_str());
+     use_disk_pq = true;
+     if (disk_pq_dims == 0)
+     use_disk_pq = false;
     }
 
     if (compareMetric == diskann::Metric::INNER_PRODUCT) {
@@ -643,6 +653,11 @@ namespace diskann {
     std::string medoids_path = disk_index_path + "_medoids.bin";
     std::string centroids_path = disk_index_path + "_centroids.bin";
     std::string sample_base_prefix = index_prefix_path + "_sample";
+    std::string disk_pq_pivots_path = index_prefix_path + "_disk.index_pq_pivots.bin"; // optional if disk index is also storing pq data
+    std::string disk_pq_compressed_vectors_path = // optional if disk index is also storing pq data
+        index_prefix_path + "_disk.index_pq_compressed.bin";
+
+
 
     unsigned R = (unsigned) atoi(param_list[0].c_str());
     unsigned L = (unsigned) atoi(param_list[1].c_str());
@@ -661,6 +676,7 @@ namespace diskann {
       return false;
     }
     _u32 num_threads = (_u32) atoi(param_list[4].c_str());
+
 
     if (num_threads != 0) {
       omp_set_num_threads(num_threads);
@@ -698,6 +714,17 @@ namespace diskann {
     gen_random_slice<T>(dataFilePath, p_val, train_data, train_size,
     train_dim);
 
+    if (use_disk_pq) {
+      if (disk_pq_dims > dim)
+      disk_pq_dims = dim;
+
+      std::cout<<"Compressing base for disk-PQ into " << disk_pq_dims << " chunks " << std::endl;
+      generate_pq_pivots(train_data, train_size, (uint32_t) dim, 256,
+                       (uint32_t) disk_pq_dims, NUM_KMEANS_REPS, disk_pq_pivots_path, false);
+    generate_pq_data_from_pivots<T>(dataFilePath, 256, (uint32_t)  disk_pq_dims,
+                                    disk_pq_pivots_path,
+                                    disk_pq_compressed_vectors_path);
+    }
     diskann::cout << "Training data loaded of size " << train_size <<
     std::endl;
     
@@ -705,7 +732,7 @@ namespace diskann {
     if (compareMetric == diskann::Metric::INNER_PRODUCT)
       make_zero_mean = false;  
     generate_pq_pivots(train_data, train_size, (uint32_t) dim, 256,
-                       (uint32_t) num_pq_chunks, 15, pq_pivots_path, make_zero_mean);
+                       (uint32_t) num_pq_chunks, NUM_KMEANS_REPS, pq_pivots_path, make_zero_mean);
     generate_pq_data_from_pivots<T>(dataFilePath, 256, (uint32_t)
     num_pq_chunks,
                                     pq_pivots_path,
@@ -719,7 +746,11 @@ namespace diskann {
         dataFilePath, compareMetric, L, R, p_val, indexing_ram_budget,
         mem_index_path, medoids_path, centroids_path);
 
+    if (!use_disk_pq)
     diskann::create_disk_layout<T>(dataFilePath, mem_index_path,
+                                   disk_index_path);
+    else 
+    diskann::create_disk_layout<_u8>(disk_pq_compressed_vectors_path, mem_index_path,
                                    disk_index_path);
 
     double sample_sampling_rate = (150000.0 / points_num);
