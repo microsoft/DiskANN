@@ -13,8 +13,8 @@ namespace diskann {
         nullptr;  // pq_tables = float* [[2^8 * [chunk_size]] * n_chunks]
     //    _u64   n_chunks;    // n_chunks = # of chunks ndims is split into
     //    _u64   chunk_size;  // chunk_size = chunk size of each dimension chunk
-    _u64   ndims;  // ndims = chunk_size * n_chunks
-    _u64   n_chunks;
+    _u64   ndims = 0;  // ndims = chunk_size * n_chunks
+    _u64   n_chunks = 0;
     _u32*  chunk_offsets = nullptr;
     _u32*  rearrangement = nullptr;
     float* centroid = nullptr;
@@ -79,14 +79,14 @@ namespace diskann {
 #else
         diskann::load_bin<_u32>(chunk_offset_file, chunk_offsets, numr, numc);
 #endif
-      if (numc != 1 || numr != num_chunks + 1) {
+      if (numc != 1 || (numr != num_chunks + 1 && num_chunks != 0)) {
         diskann::cerr << "Error loading chunk offsets file. numc: " << numc
                       << " (should be 1). numr: " << numr << " (should be "
                       << num_chunks + 1 << ")" << std::endl;
         throw diskann::ANNException("Error loading chunk offsets file", -1,
                                     __FUNCSIG__, __FILE__, __LINE__);
       }
-
+      std::cout<<"PQ data has " << numr - 1 <<" bytes per point." << std::endl;
       this->n_chunks = numr - 1;
 
 #ifdef EXEC_ENV_OLS
@@ -126,6 +126,9 @@ namespace diskann {
     }
   }
 
+_u32 get_num_chunks() {
+  return n_chunks;
+}
   void
   populate_chunk_distances(const T* query_vec, float* dist_vec) {
     memset(dist_vec, 0, 256 * n_chunks * sizeof(float));

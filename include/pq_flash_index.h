@@ -133,7 +133,9 @@ namespace diskann {
     // data info
     _u64 num_points = 0;
     _u64 data_dim = 0;
+    _u64 disk_data_dim = 0; // will be different from data_dim only if we use PQ for disk data (very large dimensionality)
     _u64 aligned_dim = 0;
+    _u64 disk_bytes_per_point = 0;
 
     std::string disk_index_file;
     std::vector<std::pair<_u32, _u32>> node_visit_counter;
@@ -144,7 +146,6 @@ namespace diskann {
     // chunk_size = chunk size of each dimension chunk
     // pq_tables = float* [[2^8 * [chunk_size]] * n_chunks]
     _u8 *                data = nullptr;
-    _u64                 chunk_size;
     _u64                 n_chunks;
     FixedChunkPQTable<T> pq_table;
 
@@ -154,9 +155,8 @@ namespace diskann {
 
     // for very large datasets: we use PQ even for the disk resident index
     bool                 use_disk_index_pq = false;
-    _u64                 disk_index_chunk_size;
-    _u64                 disk_index_n_chunks;
-    FixedChunkPQTable<T> disk_index_pq_table;
+    _u64                 disk_pq_n_chunks;
+    FixedChunkPQTable<T> disk_pq_table;
 
 
     // medoid/start info

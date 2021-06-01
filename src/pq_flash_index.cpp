@@ -49,7 +49,7 @@
 
 // returns region of `node_buf` containing [NNBRS][NBR_ID(_u32)]
 #define OFFSET_TO_NODE_NHOOD(node_buf) \
-  (unsigned *) ((char *) node_buf + data_dim * sizeof(T))
+  (unsigned *) ((char *) node_buf + disk_bytes_per_point)
 
 // returns region of `node_buf` containing [COORD(T)]
 #define OFFSET_TO_NODE_COORDS(node_buf) (T *) (node_buf)
@@ -320,7 +320,7 @@ namespace diskann {
         char *node_buf = OFFSET_TO_NODE(nhood.second, nhood.first);
         T *   node_coords = OFFSET_TO_NODE_COORDS(node_buf);
         T *   cached_coords = coord_cache_buf + node_idx * aligned_dim;
-        memcpy(cached_coords, node_coords, data_dim * sizeof(T));
+        memcpy(cached_coords, node_coords, disk_bytes_per_point);
         coord_cache.insert(std::make_pair(nhood.first, cached_coords));
 
         // insert node nhood into nhood_cache
@@ -562,7 +562,7 @@ namespace diskann {
       // add medoid coords to `coord_cache`
       T *medoid_coords = new T[data_dim];
       T *medoid_disk_coords = OFFSET_TO_NODE_COORDS(medoid_node_buf);
-      memcpy(medoid_coords, medoid_disk_coords, data_dim * sizeof(T));
+      memcpy(medoid_coords, medoid_disk_coords, disk_bytes_per_point);
 
       for (uint32_t i = 0; i < data_dim; i++)
         centroid_data[cur_m * aligned_dim + i] = medoid_coords[i];
@@ -592,6 +592,7 @@ namespace diskann {
     std::string centroids_file =
         std::string(disk_index_file) + "_centroids.bin";
 
+ 
     size_t pq_file_dim, pq_file_num_centroids;
 #ifdef EXEC_ENV_OLS
     get_bin_metadata(files, pq_table_bin, pq_file_num_centroids, pq_file_dim);
@@ -608,7 +609,10 @@ namespace diskann {
     }
 
     this->data_dim = pq_file_dim;
+    this->disk_data_dim = this->data_dim; // will reset later if we use PQ on disk
+    this->disk_bytes_per_point = this->data_dim * sizeof(T); // will change later if we use PQ on disk
     this->aligned_dim = ROUND_UP(pq_file_dim, 8);
+
 
     size_t npts_u64, nchunks_u64;
 #ifdef EXEC_ENV_OLS
@@ -633,6 +637,20 @@ namespace diskann {
         << num_points << " #dim: " << data_dim
         << " #aligned_dim: " << aligned_dim << " #chunks: " << n_chunks
         << std::endl;
+
+
+std::string disk_pq_pivots_path = this->disk_index_file + "_pq_pivots.bin";
+if (file_exists(disk_pq_pivots_path)) {
+  use_disk_index_pq = true;
+  #ifdef EXEC_ENV_OLS
+    disk_pq_table.load_pq_centroid_bin(files, disk_pq_pivots_path.c_str(), 0); // giving 0 chunks as the pq_table will infer from the chunk_offsets file the correct value
+#else
+    disk_pq_table.load_pq_centroid_bin(disk_pq_pivots_path.c_str(), 0); // giving 0 chunks as the pq_table will infer from the chunk_offsets file the correct value
+#endif
+   disk_pq_n_chunks = disk_pq_table.get_num_chunks();
+   disk_bytes_per_point = disk_pq_n_chunks * sizeof(_u8);
+   std::cout<<"Disk index uses PQ data compressed down to " << disk_pq_n_chunks << " bytes per point." << std::endl;
+}
 
 // read index metadata
 #ifdef EXEC_ENV_OLS
@@ -678,7 +696,7 @@ namespace diskann {
     READ_U64(index_metadata, medoid_id_on_file);
     READ_U64(index_metadata, max_node_len);
     READ_U64(index_metadata, nnodes_per_sector);
-    max_degree = ((max_node_len - data_dim * sizeof(T)) / sizeof(unsigned)) - 1;
+    max_degree = ((max_node_len - disk_bytes_per_point) / sizeof(unsigned)) - 1;
 
     diskann::cout << "Disk-Index File Meta-data: ";
     diskann::cout << "# nodes per sector: " << nnodes_per_sector;
@@ -796,7 +814,7 @@ namespace diskann {
     for (uint32_t i = 0; i < this->data_dim; i++) {
       data.scratch.aligned_query_float[i] = query1[i];
     }
-    memcpy(data.scratch.aligned_query_T, query1, this->data_dim * sizeof(T));
+    memcpy(data.scratch.aligned_query_T, query1, disk_bytes_per_point);
     const T *    query = data.scratch.aligned_query_T;
     const float *query_float = data.scratch.aligned_query_float;
 
@@ -1025,7 +1043,7 @@ namespace diskann {
 
         T *node_fp_coords_copy = data_buf + (data_buf_idx * aligned_dim);
         data_buf_idx++;
-        memcpy(node_fp_coords_copy, node_fp_coords, data_dim * sizeof(T));
+        memcpy(node_fp_coords_copy, node_fp_coords, disk_bytes_per_point);
 
         float cur_expanded_dist = dist_cmp->compare(query, node_fp_coords_copy,
                                                     (unsigned) aligned_dim);
