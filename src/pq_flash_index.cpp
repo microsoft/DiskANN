@@ -860,6 +860,7 @@ namespace diskann {
     }
 
     compute_dists(&best_medoid, 1, dist_scratch);
+
     retset[0].id = best_medoid;
     retset[0].distance = dist_scratch[0];
     retset[0].flag = true;

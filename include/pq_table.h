@@ -145,6 +145,30 @@ namespace diskann {
       }
     }
   }
+
+ float compare(const T* query_vec, _u8* base_vec) {
+   float res = 0;
+     for (_u64 chunk = 0; chunk < n_chunks; chunk++) {
+      for (_u64 j = chunk_offsets[chunk]; j < chunk_offsets[chunk + 1]; j++) {
+        _u64         permuted_dim_in_query = rearrangement[j];
+        const float* centers_dim_vec = tables_T + (256 * j);
+        float diff = centers_dim_vec[base_vec[chunk]] - (query_vec[permuted_dim_in_query] - centroid[permuted_dim_in_query]); 
+        res += diff*diff;
+      }
+    }
+    return res;
+ }
+
+ void inflate_vector(_u8* base_vec, float* out_vec) {
+     for (_u64 chunk = 0; chunk < n_chunks; chunk++) {
+      for (_u64 j = chunk_offsets[chunk]; j < chunk_offsets[chunk + 1]; j++) {
+        _u64         original_dim = rearrangement[j];
+        const float* centers_dim_vec = tables_T + (256 * j);
+        out_vec[original_dim] = centers_dim_vec[base_vec[chunk]] + centroid[original_dim]; 
+      }
+    }
+ }
+
   void
   populate_chunk_inner_products(const T* query_vec, float* dist_vec) {
     memset(dist_vec, 0, 256 * n_chunks * sizeof(float));
