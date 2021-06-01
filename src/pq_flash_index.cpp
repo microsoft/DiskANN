@@ -897,19 +897,6 @@ namespace diskann {
       _u32 marker = k;
       _u32 num_seen = 0;
 
-      /*
-        bool marker_set = false;
-        diskann::cout << "hop " << hops << ": ";
-        for (_u32 i = 0; i < cur_list_size; i++) {
-          diskann::cout << retset[i].id << "( " << retset[i].distance;
-          if (retset[i].flag && !marker_set) {
-            diskann::cout << ",*)  ";
-            marker_set = true;
-          } else
-            diskann::cout << ")  ";
-        }
-        diskann::cout << std::endl;
-  */
       while (marker < cur_list_size && frontier.size() < beam_width &&
              num_seen < beam_width + 2) {
         if (retset[marker].flag) {
