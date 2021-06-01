@@ -152,6 +152,13 @@ namespace diskann {
     Distance<T> *    dist_cmp = nullptr;
     Distance<float> *dist_cmp_float = nullptr;
 
+    // for very large datasets: we use PQ even for the disk resident index
+    bool                 use_disk_index_pq = false;
+    _u64                 disk_index_chunk_size;
+    _u64                 disk_index_n_chunks;
+    FixedChunkPQTable<T> disk_index_pq_table;
+
+
     // medoid/start info
     uint32_t *medoids =
         nullptr;         // by default it is just one entry point of graph, we
