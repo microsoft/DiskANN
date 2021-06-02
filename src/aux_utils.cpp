@@ -741,9 +741,7 @@ namespace diskann {
     generate_pq_pivots(train_data, train_size, (uint32_t) dim, 256,
                        (uint32_t) num_pq_chunks, NUM_KMEANS_REPS, pq_pivots_path, make_zero_mean);
     generate_pq_data_from_pivots<T>(dataFilePath, 256, (uint32_t)
-    num_pq_chunks,
-                                    pq_pivots_path,
-                                    pq_compressed_vectors_path);
+    num_pq_chunks, pq_pivots_path, pq_compressed_vectors_path);
 
     delete[] train_data;
 
@@ -764,7 +762,9 @@ namespace diskann {
     gen_random_slice<T>(dataFilePath, sample_base_prefix,
     sample_sampling_rate);
 
-//    std::remove(mem_index_path.c_str()); 
+    std::remove(mem_index_path.c_str()); 
+    if (use_disk_pq)
+    std::remove(disk_pq_compressed_vectors_path.c_str());
 
     auto                          e =
     std::chrono::high_resolution_clock::now();

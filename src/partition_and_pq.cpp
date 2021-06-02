@@ -35,7 +35,7 @@
 #include <xmmintrin.h>
 #endif
 
-#define BLOCK_SIZE 50000
+#define BLOCK_SIZE 5000000
 //#define SAVE_INFLATED_PQ true
 
 template<typename T>
