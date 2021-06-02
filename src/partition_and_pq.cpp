@@ -881,6 +881,7 @@ int retrieve_shard_data_from_ids(const std::string data_file, std::string idmap_
         if (cur_pos == shard_size)
          break;
         if (original_point_map_id == shard_ids[cur_pos]) {
+          cur_pos++;
         shard_data_writer.write(
             (char *) (block_data_T.get() + p * dim), sizeof(T) * dim);
           num_written++;
