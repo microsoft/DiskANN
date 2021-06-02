@@ -385,6 +385,12 @@ namespace diskann {
     for (int p = 0; p < num_parts; p++) {
       std::string shard_base_file =
           merged_index_prefix + "_subshard-" + std::to_string(p) + ".bin";
+
+      std::string shard_ids_file =
+          merged_index_prefix + "_subshard-" + std::to_string(p) + "_ids_uint32.bin";
+
+      retrieve_shard_data_from_ids<T>(base_file, shard_ids_file, shard_base_file);
+
       std::string shard_index_file =
           merged_index_prefix + "_subshard-" + std::to_string(p) + "_mem.index";
 
@@ -402,6 +408,7 @@ namespace diskann {
               new diskann::Index<T>(compareMetric, shard_base_file.c_str()));
       _pvamanaIndex->build(paras);
       _pvamanaIndex->save(shard_index_file.c_str());
+      std::remove(shard_base_file.c_str());
     }
 
     diskann::merge_shards(merged_index_prefix + "_subshard-", "_mem.index",
