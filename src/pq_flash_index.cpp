@@ -564,10 +564,14 @@ namespace diskann {
       T *medoid_disk_coords = OFFSET_TO_NODE_COORDS(medoid_node_buf);
       memcpy(medoid_coords, medoid_disk_coords, disk_bytes_per_point);
 
+      if (!use_disk_index_pq) {
       for (uint32_t i = 0; i < data_dim; i++)
         centroid_data[cur_m * aligned_dim + i] = medoid_coords[i];
-
+      } else {
+        disk_pq_table.inflate_vector((_u8*) medoid_coords, (centroid_data + cur_m*aligned_dim));
+      }
       aligned_free(medoid_buf);
+      delete[] medoid_coords;
     }
 
     // return ctx
@@ -643,9 +647,9 @@ std::string disk_pq_pivots_path = this->disk_index_file + "_pq_pivots.bin";
 if (file_exists(disk_pq_pivots_path)) {
   use_disk_index_pq = true;
   #ifdef EXEC_ENV_OLS
-    disk_pq_table.load_pq_centroid_bin(files, disk_pq_pivots_path.c_str(), 0); // giving 0 chunks as the pq_table will infer from the chunk_offsets file the correct value
+    disk_pq_table.load_pq_centroid_bin(files, disk_pq_pivots_path.c_str(), 0); // giving 0 chunks to make the pq_table infer from the chunk_offsets file the correct value
 #else
-    disk_pq_table.load_pq_centroid_bin(disk_pq_pivots_path.c_str(), 0); // giving 0 chunks as the pq_table will infer from the chunk_offsets file the correct value
+    disk_pq_table.load_pq_centroid_bin(disk_pq_pivots_path.c_str(), 0); // giving 0 chunks to make the pq_table infer from the chunk_offsets file the correct value
 #endif
    disk_pq_n_chunks = disk_pq_table.get_num_chunks();
    disk_bytes_per_point = disk_pq_n_chunks * sizeof(_u8);
@@ -974,8 +978,13 @@ if (file_exists(disk_pq_pivots_path)) {
       for (auto &cached_nhood : cached_nhoods) {
         auto  global_cache_iter = coord_cache.find(cached_nhood.first);
         T *   node_fp_coords_copy = global_cache_iter->second;
-        float cur_expanded_dist = dist_cmp->compare(query, node_fp_coords_copy,
+        float cur_expanded_dist;
+        if (!use_disk_index_pq)
+          cur_expanded_dist = dist_cmp->compare(query, node_fp_coords_copy,
                                                     (unsigned) aligned_dim);
+        else {
+          cur_expanded_dist = disk_pq_table.compare(query, (_u8*) node_fp_coords_copy);
+        }
         full_retset.push_back(
             Neighbor((unsigned) cached_nhood.first, cur_expanded_dist, true));
 
@@ -1045,8 +1054,12 @@ if (file_exists(disk_pq_pivots_path)) {
         data_buf_idx++;
         memcpy(node_fp_coords_copy, node_fp_coords, disk_bytes_per_point);
 
-        float cur_expanded_dist = dist_cmp->compare(query, node_fp_coords_copy,
+        float cur_expanded_dist;
+        if (!use_disk_index_pq)
+        cur_expanded_dist = dist_cmp->compare(query, node_fp_coords_copy,
                                                     (unsigned) aligned_dim);
+        else
+        cur_expanded_dist = disk_pq_table.compare(query, (_u8*) node_fp_coords_copy);
         full_retset.push_back(
             Neighbor(frontier_nhood.first, cur_expanded_dist, true));
 
