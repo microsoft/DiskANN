@@ -757,7 +757,7 @@ namespace diskann {
     gen_random_slice<T>(dataFilePath, sample_base_prefix,
     sample_sampling_rate);
 
-    std::remove(mem_index_path.c_str()); 
+//    std::remove(mem_index_path.c_str()); 
 
     auto                          e =
     std::chrono::high_resolution_clock::now();

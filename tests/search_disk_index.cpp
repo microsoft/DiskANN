@@ -31,7 +31,7 @@
 #endif
 #endif
 
-#define WARMUP true
+#define WARMUP false
 
 void print_stats(std::string category, std::vector<float> percentiles,
                  std::vector<float> results) {
@@ -137,9 +137,9 @@ int search_disk_index(int argc, char** argv) {
   std::vector<uint32_t> node_list;
   diskann::cout << "Caching " << num_nodes_to_cache
                 << " BFS nodes around medoid(s)" << std::endl;
-//    _pFlashIndex->cache_bfs_levels(num_nodes_to_cache, node_list);
-  _pFlashIndex->generate_cache_list_from_sample_queries(
-      warmup_query_file, 15, 6, num_nodes_to_cache, num_threads, node_list);
+    _pFlashIndex->cache_bfs_levels(num_nodes_to_cache, node_list);
+//  _pFlashIndex->generate_cache_list_from_sample_queries(
+//      warmup_query_file, 15, 6, num_nodes_to_cache, num_threads, node_list);
   _pFlashIndex->load_cache_list(node_list);
   node_list.clear();
   node_list.shrink_to_fit();
@@ -208,7 +208,7 @@ int search_disk_index(int argc, char** argv) {
 
   uint32_t optimized_beamwidth = 2;
 
-
+//query_num = 1;
 
   for (uint32_t test_id = 0; test_id < Lvec.size(); test_id++) {
     _u64 L = Lvec[test_id];
