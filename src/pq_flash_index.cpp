@@ -817,8 +817,9 @@ if (file_exists(disk_pq_pivots_path)) {
 
     for (uint32_t i = 0; i < this->data_dim; i++) {
       data.scratch.aligned_query_float[i] = query1[i];
+      data.scratch.aligned_query_T[i] = query1[i];
     }
-    memcpy(data.scratch.aligned_query_T, query1, disk_bytes_per_point);
+//    memcpy(data.scratch.aligned_query_T, query1, disk_bytes_per_point);
     const T *    query = data.scratch.aligned_query_T;
     const float *query_float = data.scratch.aligned_query_float;
 
@@ -888,6 +889,15 @@ if (file_exists(disk_pq_pivots_path)) {
     retset[0].flag = true;
     visited.insert(best_medoid);
 
+/*
+    std::cout<<"Chose " << retset[0].id<< " as best medoid with distance " << retset[0].distance << std::endl;
+
+    std::cout<<"query from 0 to " << aligned_dim << std::endl;
+    for (_u32 i = 0; i < aligned_dim-1; i++) {
+      std::cout<<query[i]<<",";
+    }
+    std::cout<<query[aligned_dim-1] << std::endl;
+*/
     unsigned cur_list_size = 1;
 
     std::sort(retset.begin(), retset.begin() + cur_list_size);
@@ -906,6 +916,13 @@ if (file_exists(disk_pq_pivots_path)) {
 
     while (k < cur_list_size) {
       auto nk = cur_list_size;
+
+/*    std::cout<<"iteration " << hops<<" candidate list: " << std::endl;
+    for (_u32 px = 0; px < cur_list_size; px++) {
+      std::cout<<"("<<retset[px].id<<","<<retset[px].distance<<")\t";
+    }
+    std::cout<<std::endl;
+    */
 
       // clear iteration state
       frontier.clear();
@@ -1119,11 +1136,20 @@ if (file_exists(disk_pq_pivots_path)) {
 
       hops++;
     }
+
+
     // re-sort by distance
     std::sort(full_retset.begin(), full_retset.end(),
               [](const Neighbor &left, const Neighbor &right) {
                 return left.distance < right.distance;
               });
+
+/*
+    std::cout<<"return set: \n";
+    for (auto &x : full_retset)
+    std::cout<<x.id<<"\t" <<x.distance<<std::endl;
+    std::cout<<std::endl;
+*/
 
     // copy k_search values
     for (_u64 i = 0; i < k_search; i++) {
