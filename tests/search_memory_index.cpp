@@ -83,6 +83,8 @@ int search_memory_index(int argc, char** argv) {
   if (use_optimized_search)
     index.optimize_graph();
 
+  index.find_diameter(50);
+  index.unreachable_points();
   diskann::Parameters paras;
   std::string         recall_string = "Recall@" + std::to_string(recall_at);
   std::cout << std::setw(4) << "Ls" << std::setw(12) << "QPS " << std::setw(18)
@@ -103,11 +105,12 @@ int search_memory_index(int argc, char** argv) {
 
     auto s = std::chrono::high_resolution_clock::now();
     omp_set_num_threads(num_threads);
-#pragma omp parallel for schedule(dynamic, 1)
+    unsigned counter = 0;
+    //#pragma omp parallel for schedule(dynamic, 1)
     for (int64_t i = 0; i < (int64_t) query_num; i++) {
       auto qs = std::chrono::high_resolution_clock::now();
       if (use_optimized_search) {
-        index.search_with_opt_graph(
+        counter += index.search_with_opt_graph(
             query + i * query_aligned_dim, recall_at, L,
             query_result_ids[test_id].data() + i * recall_at);
       } else {
@@ -120,6 +123,7 @@ int search_memory_index(int argc, char** argv) {
     }
     auto                          e = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> diff = e - s;
+    std::cout << "Distance Computations: " << counter / query_num << std::endl;
 
     float qps = (query_num / diff.count());
 

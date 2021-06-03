@@ -106,10 +106,15 @@ namespace diskann {
 
     DISKANN_DLLEXPORT void optimize_graph();
 
-    DISKANN_DLLEXPORT void search_with_opt_graph(const T *query, size_t K,
-                                                 size_t L, unsigned *indices);
+    DISKANN_DLLEXPORT unsigned search_with_opt_graph(const T *query, size_t K,
+                                                     size_t    L,
+                                                     unsigned *indices);
     DISKANN_DLLEXPORT void pq_search(T *query, size_t K, size_t L,
                                      unsigned *indices);
+    DISKANN_DLLEXPORT unsigned bfs(unsigned id, unsigned &v_id,
+                                   unsigned &v_hops);
+    DISKANN_DLLEXPORT void unreachable_points();
+    DISKANN_DLLEXPORT void find_diameter(unsigned K);
 
     /*  Internals of the library */
    protected:

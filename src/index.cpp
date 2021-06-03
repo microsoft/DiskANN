@@ -1338,8 +1338,9 @@ namespace diskann {
   }
 
   template<typename T, typename TagT>
-  void Index<T, TagT>::search_with_opt_graph(const T *query, size_t K, size_t L,
-                                             unsigned *indices) {
+  unsigned Index<T, TagT>::search_with_opt_graph(const T *query, size_t K,
+                                                 size_t L, unsigned *indices) {
+    unsigned                 counter = 0;
     DistanceInnerProduct<T> *dist_fast =
         dynamic_cast<DistanceInnerProduct<T> *>(_distance);
 
@@ -1376,6 +1377,7 @@ namespace diskann {
       T *   x = (T *) (_opt_graph + _node_size * id);
       float norm_x = *x;
       x++;
+      counter++;
       float dist =
           dist_fast->compare(x, query, norm_x, (unsigned) _aligned_dim);
       retset[i] = Neighbor(id, dist, true);
@@ -1406,6 +1408,7 @@ namespace diskann {
           T *   data = (T *) (_opt_graph + _node_size * id);
           float norm = *data;
           data++;
+          counter++;
           float dist =
               dist_fast->compare(query, data, norm, (unsigned) _aligned_dim);
           if (dist >= retset[L - 1].distance)
@@ -1425,6 +1428,78 @@ namespace diskann {
     for (size_t i = 0; i < K; i++) {
       indices[i] = retset[i].id;
     }
+    return counter;
+  }
+
+  template<typename T, typename TagT>
+  unsigned Index<T, TagT>::bfs(unsigned id, unsigned &v_id, unsigned &v_hops) {
+    std::queue<std::pair<unsigned, unsigned>> q;
+    boost::dynamic_bitset<> flags{_nd, 0};
+
+    q.push({id, 0});
+    flags[id] = true;
+
+    while (!q.empty()) {
+      std::pair<unsigned, unsigned> v = q.front();
+      v_id = v.first;
+      v_hops = v.second;
+      q.pop();
+      unsigned *neighbors =
+          (unsigned *) (_opt_graph + _node_size * v_id + _data_len);
+      unsigned MaxM = *neighbors;
+      neighbors++;
+
+      for (unsigned i = 0; i < MaxM; i++) {
+        unsigned v_i = neighbors[i];
+        if (flags[v_i] == false) {
+          q.push({v_i, v_hops + 1});
+          flags[v_i] = true;
+        }
+      }
+    }
+
+    unsigned ccount = 0;
+    for (unsigned i = 0; i < _nd; i++) {
+      if (flags[i] == false) {
+        ccount++;
+      }
+    }
+
+    return ccount;
+  }
+
+  template<typename T, typename TagT>
+  void Index<T, TagT>::unreachable_points() {
+    unsigned id = _ep;
+    unsigned vertex_id, vertex_hops;
+    unsigned count = bfs(id, vertex_id, vertex_hops);
+    std::cout << "Unreachable Points: " << count << std::endl;
+  }
+
+  template<typename T, typename TagT>
+  void Index<T, TagT>::find_diameter(unsigned K) {
+    unsigned global_diameter = 0;
+
+    for (unsigned i = 0; i < K; i++) {
+      unsigned id = rand() % _nd;
+      unsigned diameter = 0;
+      unsigned vertex_id, vertex_hops;
+
+      while (true) {
+        bfs(id, vertex_id, vertex_hops);
+        if (vertex_hops > diameter) {
+          diameter = vertex_hops;
+          id = vertex_id;
+        } else {
+          break;
+        }
+      }
+
+      if (global_diameter < diameter) {
+        global_diameter = diameter;
+      }
+    }
+    std::cout << "Approximate Diameter: " << global_diameter << std::endl;
   }
 
   /*************************************************
