@@ -106,10 +106,12 @@ namespace diskann {
 
     DISKANN_DLLEXPORT void optimize_graph();
 
-    DISKANN_DLLEXPORT void search_with_opt_graph(const T *query, size_t K,
-                                                 size_t L, unsigned *indices);
+    DISKANN_DLLEXPORT std::pair<unsigned, unsigned> search_with_opt_graph(
+        const T *query, size_t K, size_t L, unsigned *indices);
     DISKANN_DLLEXPORT void pq_search(T *query, size_t K, size_t L,
                                      unsigned *indices);
+    DISKANN_DLLEXPORT void annotate_bfs_levels(unsigned          id,
+                                               std::vector<int> &bfs_levels);
 
     /*  Internals of the library */
    protected:
@@ -154,7 +156,9 @@ namespace diskann {
     void batch_inter_insert(unsigned                     n,
                             const std::vector<unsigned> &pruned_list,
                             const Parameters &           parameter,
-                            std::vector<unsigned> &      need_to_sync);
+                            std::vector<unsigned> &      need_to_sync,
+                            std::vector<int> &bfs_levels, int num_bfs_levels,
+                            unsigned rise_factor, bool rectify);
 
     void link(Parameters &parameters);
 
