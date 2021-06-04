@@ -3,7 +3,7 @@
 
 import time
 import numpy as np
-import vamanapy as vp
+import diskannpy as vp
 
 
 data_path = "/mnt/SIFT1M/sift_base.bin"

@@ -2,7 +2,7 @@
 # Licensed under the MIT license.
 
 import time
-from vamanapy import Metric, Parameters, SinglePrecisionIndex
+from diskannpy import Metric, Parameters, SinglePrecisionIndex
 
 
 data_path = "/mnt/SIFT1M/sift_base.bin"

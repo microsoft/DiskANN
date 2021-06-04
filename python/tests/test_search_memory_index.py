@@ -4,7 +4,7 @@
 import time
 import argparse
 import numpy as np
-import vamanapy as vp
+import diskannpy as vp
 
 
 parser = argparse.ArgumentParser()
