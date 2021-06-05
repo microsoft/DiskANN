@@ -624,7 +624,9 @@ namespace diskann {
   template<typename T, typename TagT>
   void Index<T, TagT>::batch_inter_insert(
       unsigned n, const std::vector<unsigned> &pruned_list,
-      const Parameters &parameter, std::vector<unsigned> &need_to_sync) {
+      const Parameters &parameter, std::vector<unsigned> &need_to_sync,
+      std::vector<unsigned> &indegree_counts, unsigned indegree_threshold,
+      unsigned rise_factor, bool count) {
     const auto range = parameter.Get<unsigned>("R");
 
     // assert(!src_pool.empty());
@@ -643,8 +645,23 @@ namespace diskann {
         if (std::find(_final_graph[des].begin(), _final_graph[des].end(), n) ==
             _final_graph[des].end()) {
           _final_graph[des].push_back(n);
-          if (_final_graph[des].size() > (unsigned) (range * SLACK_FACTOR))
-            need_to_sync[des] = 1;
+          if (count) {
+            indegree_counts[des] += 1;
+            if (_final_graph[des].size() > (unsigned) (range * SLACK_FACTOR)) {
+              need_to_sync[des] = 1;
+            }
+          } else {
+            if (indegree_counts[des] > indegree_threshold) {
+              if (_final_graph[des].size() > (unsigned) (rise_factor * range)) {
+                need_to_sync[des] = 1;
+              }
+            } else {
+              if (_final_graph[des].size() >
+                  (unsigned) (range * SLACK_FACTOR)) {
+                need_to_sync[des] = 1;
+              }
+            }
+          }
         }
       }  // des lock is released by this point
     }
@@ -804,13 +821,30 @@ namespace diskann {
     for (auto pt : unique_start_points)
       init_ids.emplace_back(pt);
 
-    diskann::Timer link_timer;
+    diskann::Timer        link_timer;
+    unsigned              rise_factor = 3;
+    unsigned              indegree_threshold = 3;
+    bool                  count = true;
+    diskann::Parameters local_params;
+    std::vector<unsigned> indegree_counts(_max_points + _num_frozen_pts, 0);
     for (uint32_t rnd_no = 0; rnd_no < NUM_RNDS; rnd_no++) {
       L = Lvec[rnd_no];
 
       if (rnd_no == NUM_RNDS - 1) {
         if (last_round_alpha > 1)
           parameters.Set<float>("alpha", last_round_alpha);
+
+        count = false;
+        local_params.Set<unsigned>("R", parameters.Get<unsigned>("R"));
+        local_params.Set<unsigned>("C", parameters.Get<unsigned>("C"));
+        local_params.Set<float>("alpha", parameters.Get<float>("alpha"));
+        local_params.Set<unsigned>("R", rise_factor * range);
+        std::vector<unsigned> vector_sorted(indegree_counts.size());
+        partial_sort_copy(begin(indegree_counts), end(indegree_counts),
+                          begin(vector_sorted), end(vector_sorted));
+        indegree_threshold =
+            vector_sorted[(_max_points + _num_frozen_pts) * 0.95];
+        std::cout << "Threshold: " << indegree_threshold << std::endl;
       }
 
       double   sync_time = 0, total_sync_time = 0;
@@ -860,7 +894,12 @@ namespace diskann {
                 visited.insert(id);
               }
             }
-          prune_neighbors(node, pool, parameters, pruned_list);
+
+          if (!count && indegree_counts[node] > indegree_threshold) {
+            prune_neighbors(node, pool, local_params, pruned_list);
+          } else {
+            prune_neighbors(node, pool, parameters, pruned_list);
+          }
         }
         diff = std::chrono::high_resolution_clock::now() - s;
         sync_time += diff.count();
@@ -884,7 +923,9 @@ namespace diskann {
           auto                   node = visit_order[node_ctr];
           _u64                   node_offset = node_ctr - start_id;
           std::vector<unsigned> &pruned_list = pruned_list_vector[node_offset];
-          batch_inter_insert(node, pruned_list, parameters, need_to_sync);
+          batch_inter_insert(node, pruned_list, parameters, need_to_sync,
+                             indegree_counts, indegree_threshold, rise_factor,
+                             count);
           //          inter_insert(node, pruned_list, parameters, 0);
           pruned_list.clear();
           pruned_list.shrink_to_fit();
@@ -912,7 +953,12 @@ namespace diskann {
                 dummy_visited.insert(cur_nbr);
               }
             }
-            prune_neighbors(node, dummy_pool, parameters, new_out_neighbors);
+
+            if (!count && indegree_counts[node] > indegree_threshold) {
+              prune_neighbors(node, dummy_pool, local_params, new_out_neighbors);
+            } else {
+              prune_neighbors(node, dummy_pool, parameters, new_out_neighbors);
+            }
 
             _final_graph[node].clear();
             for (auto id : new_out_neighbors)
@@ -973,7 +1019,12 @@ namespace diskann {
             dummy_visited.insert(cur_nbr);
           }
         }
-        prune_neighbors(node, dummy_pool, parameters, new_out_neighbors);
+
+        if (!count && indegree_counts[node] > indegree_threshold) {
+          prune_neighbors(node, dummy_pool, local_params, new_out_neighbors);
+        } else {
+          prune_neighbors(node, dummy_pool, parameters, new_out_neighbors);
+        }
 
         _final_graph[node].clear();
         for (auto id : new_out_neighbors)
@@ -1338,8 +1389,10 @@ namespace diskann {
   }
 
   template<typename T, typename TagT>
-  void Index<T, TagT>::search_with_opt_graph(const T *query, size_t K, size_t L,
-                                             unsigned *indices) {
+  std::pair<unsigned, unsigned> Index<T, TagT>::search_with_opt_graph(
+      const T *query, size_t K, size_t L, unsigned *indices) {
+    unsigned                 counter = 0;
+    unsigned                 hop_counter = 0;
     DistanceInnerProduct<T> *dist_fast =
         dynamic_cast<DistanceInnerProduct<T> *>(_distance);
 
@@ -1376,12 +1429,14 @@ namespace diskann {
       T *   x = (T *) (_opt_graph + _node_size * id);
       float norm_x = *x;
       x++;
+      counter++;
       float dist =
           dist_fast->compare(x, query, norm_x, (unsigned) _aligned_dim);
       retset[i] = Neighbor(id, dist, true);
       flags[id] = true;
       L++;
     }
+    hop_counter += 1;
 
     std::sort(retset.begin(), retset.begin() + L);
     int k = 0;
@@ -1397,6 +1452,7 @@ namespace diskann {
             (unsigned *) (_opt_graph + _node_size * n + _data_len);
         unsigned MaxM = *neighbors;
         neighbors++;
+        hop_counter += 1;
         for (unsigned m = 0; m < MaxM; ++m) {
           unsigned id = neighbors[m];
           if (flags[id])
@@ -1406,6 +1462,7 @@ namespace diskann {
           T *   data = (T *) (_opt_graph + _node_size * id);
           float norm = *data;
           data++;
+          counter++;
           float dist =
               dist_fast->compare(query, data, norm, (unsigned) _aligned_dim);
           if (dist >= retset[L - 1].distance)
@@ -1425,6 +1482,8 @@ namespace diskann {
     for (size_t i = 0; i < K; i++) {
       indices[i] = retset[i].id;
     }
+
+    return std::make_pair(counter, hop_counter);
   }
 
   /*************************************************

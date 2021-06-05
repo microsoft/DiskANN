@@ -106,8 +106,8 @@ namespace diskann {
 
     DISKANN_DLLEXPORT void optimize_graph();
 
-    DISKANN_DLLEXPORT void search_with_opt_graph(const T *query, size_t K,
-                                                 size_t L, unsigned *indices);
+    DISKANN_DLLEXPORT std::pair<unsigned, unsigned> search_with_opt_graph(
+        const T *query, size_t K, size_t L, unsigned *indices);
     DISKANN_DLLEXPORT void pq_search(T *query, size_t K, size_t L,
                                      unsigned *indices);
 
@@ -154,7 +154,10 @@ namespace diskann {
     void batch_inter_insert(unsigned                     n,
                             const std::vector<unsigned> &pruned_list,
                             const Parameters &           parameter,
-                            std::vector<unsigned> &      need_to_sync);
+                            std::vector<unsigned> &      need_to_sync,
+                            std::vector<unsigned> &      indegree_counts,
+                            unsigned indegree_threshold, unsigned rise_factor,
+                            bool count);
 
     void link(Parameters &parameters);
 

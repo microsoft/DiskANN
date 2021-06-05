@@ -87,9 +87,11 @@ int search_memory_index(int argc, char** argv) {
   std::string         recall_string = "Recall@" + std::to_string(recall_at);
   std::cout << std::setw(4) << "Ls" << std::setw(12) << "QPS " << std::setw(18)
             << "Mean Latency (mus)" << std::setw(15) << "99.9 Latency"
-            << std::setw(12) << recall_string << std::endl;
+            << std::setw(12) << recall_string << std::setw(12)
+            << "    Mean Distance Computations" << std::setw(12) << "Mean Hops"
+            << std::endl;
   std::cout << "==============================================================="
-               "==============="
+               "========================================"
             << std::endl;
 
   std::vector<std::vector<uint32_t>> query_result_ids(Lvec.size());
@@ -101,13 +103,16 @@ int search_memory_index(int argc, char** argv) {
     _u64 L = Lvec[test_id];
     query_result_ids[test_id].resize(recall_at * query_num);
 
-    auto s = std::chrono::high_resolution_clock::now();
+    auto     s = std::chrono::high_resolution_clock::now();
+    unsigned counter = 0;
+    unsigned hop_counter = 0;
+    std::pair<unsigned, unsigned> result;
     omp_set_num_threads(num_threads);
 #pragma omp parallel for schedule(dynamic, 1)
     for (int64_t i = 0; i < (int64_t) query_num; i++) {
       auto qs = std::chrono::high_resolution_clock::now();
       if (use_optimized_search) {
-        index.search_with_opt_graph(
+        result = index.search_with_opt_graph(
             query + i * query_aligned_dim, recall_at, L,
             query_result_ids[test_id].data() + i * recall_at);
       } else {
@@ -117,6 +122,8 @@ int search_memory_index(int argc, char** argv) {
       auto qe = std::chrono::high_resolution_clock::now();
       std::chrono::duration<double> diff = qe - qs;
       latency_stats[i] = diff.count() * 1000000;
+      counter += result.first;
+      hop_counter += result.second;
     }
     auto                          e = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> diff = e - s;
@@ -139,7 +146,9 @@ int search_memory_index(int argc, char** argv) {
     std::cout << std::setw(4) << L << std::setw(12) << qps << std::setw(18)
               << (float) mean_latency << std::setw(15)
               << (float) latency_stats[(_u64)(0.999 * query_num)]
-              << std::setw(12) << recall << std::endl;
+              << std::setw(12) << recall << std::setw(20)
+              << (float) counter / query_num << std::setw(20)
+              << (float) hop_counter / query_num << std::endl;
   }
 
   std::cout << "Done searching. Now saving results " << std::endl;
