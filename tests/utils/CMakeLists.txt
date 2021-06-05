@@ -24,6 +24,13 @@ if(MSVC)
 	target_link_libraries(tsv_to_bin optimized ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE}/diskann_dll.lib)
 endif()
 
+add_executable(bin_to_tsv bin_to_tsv.cpp)
+if(MSVC)
+	target_link_options(bin_to_tsv PRIVATE /MACHINE:x64)
+	target_link_libraries(bin_to_tsv debug ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG}/diskann_dll.lib)
+	target_link_libraries(bin_to_tsv optimized ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE}/diskann_dll.lib)
+endif()
+
 add_executable(int8_to_float int8_to_float.cpp)
 if(MSVC)
 	target_link_options(int8_to_float PRIVATE /MACHINE:x64)
