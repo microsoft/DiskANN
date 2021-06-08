@@ -23,8 +23,10 @@ namespace py = pybind11;
 using namespace diskann;
 
 std::unique_ptr<PQFlashIndex<float>> FloatPQFlashIndexCreator() {
-  return new PQFlashIndex<float>(
-      std::shared_ptr<AlignedFileReader>(new LinuxAlignedFileReader()));
+  std::shared_ptr<AlignedFileReader>   reader(new LinuxAlignedFileReader());
+  auto                                 index = new PQFlashIndex<float>(reader);
+  std::unique_ptr<PQFlashIndex<float>> unique_ptr_index(index);
+  return unique_ptr_index;
 }
 
 PYBIND11_MODULE(diskannpy, m) {
@@ -168,64 +170,47 @@ PYBIND11_MODULE(diskannpy, m) {
 
 
   py::class_<PQFlashIndex<float>>(m, "DiskANNFloatIndex")
-     .def(py::init(&FloatPQFlashIndexCreator);
-  //      .def(
-//          "load",
-//          [](Index<float, int> &self, const std::string file_name,
-//             bool load_tags, const std::string tag_file_name) {
-//            if (tag_file_name == "") {
-//              return self.load(file_name.c_str(), load_tags, NULL);
-//            } else {
-//              return self.load(file_name.c_str(), load_tags,
-//                               tag_file_name.c_str());
-//            }
-//          },
-//          py::arg("file_name"), py::arg("load_tags") = false,
-//          py::arg("tag_file_name") = "")
-//      .def(
-//          "search",
-//          [](Index<float, int> &self, std::vector<float> &query,
-//             const size_t query_index, const size_t knn,
-//             const size_t num_queries, const size_t l_search,
-//             std::vector<unsigned> &ids, const size_t id_index) {
-//
-//            if (ids.size() == 0) {
-//              ids.resize(knn * num_queries);
-//            }
-//
-//            self.search(query.data() + query_index, knn, l_search,
-//                        ids.data() + id_index);
-//          },
-//          py::arg("query"), py::arg("query_index"), py::arg("knn") = 10,
-//          py::arg("num_queries"), py::arg("l_search"), py::arg("ids"),
-//          py::arg("id_index"))
-//      .def(
-//          "single_numpy_query",
-//          [](Index<float, int> &self,
-//             py::array_t<float, py::array::c_style | py::array::forcecast>
-//                 &        query,
-//             const size_t knn, const size_t l_search) {
-//            py::array_t<unsigned> ids(knn);
-//            self.search_with_opt_graph(query.data(), knn, l_search,
-//                                       ids.mutable_data());
-//            return ids;
-//          },
-//          py::arg("query"), py::arg("knn") = 10, py::arg("l_search"))
-//      .def(
-//          "batch_numpy_query",
-//          [](Index<float, int> &self,
-//             py::array_t<float, py::array::c_style | py::array::forcecast>
-//                 &        queries,
-//             const size_t knn, const size_t num_queries,
-//             const size_t l_search) {
-//            py::array_t<unsigned> ids(knn * num_queries);
-//#pragma omp parallel for schedule(dynamic, 1)
-//            for (unsigned i = 0; i < num_queries; i++) {
-//              self.search_with_opt_graph(queries.data(i), knn, l_search,
-//                                         ids.mutable_data(i * knn));
-//            }
-//            return ids;
-//          },
-//          py::arg("queries"), py::arg("knn") = 10, py::arg("num_queries"),
-//          py::arg("l_search"));
+      .def(py::init(&FloatPQFlashIndexCreator))
+      .def(
+          "load",
+          [](PQFlashIndex<float> &self, const std::string& index_path_prefix) {
+
+            const std::string pq_path = index_path_prefix + std::string("_pq");
+            const std::string index_path =
+                index_path_prefix + std::string("_disk.index");
+            self.load(1, pq_path.c_str(), index_path.c_str());
+            std::vector<uint32_t> node_list;
+            _u64                  num_nodes_to_cache = 100000;
+            self.cache_bfs_levels(num_nodes_to_cache, node_list);
+            std::cout << "loaded index, cached " << node_list.size()
+                      << " nodes based on BFS" << std::endl;
+          },
+          py::arg("index_path_prefix"))
+      .def(
+          "search",
+          [](PQFlashIndex<float> &self, const float *query, const _u64 dim,
+             const _u64 knn, const _u64 l_search, const _u64 beam_width,
+             _u64 *ids, float *dists) {
+            QueryStats stats;
+            self.cached_beam_search(query, knn, l_search, ids, dists,
+                                    beam_width, &stats);
+          },
+          py::arg("query"), py::arg("dim"), py::arg("knn") = 10,
+          py::arg("l_search"), py::arg("beam_width"), py::arg("ids"),
+          py::arg("dists"))
+      .def(
+          "batch_search",
+          [](PQFlashIndex<float> &self, const float *query_data,
+             const _u64 nqueries, const _u64 dim, const _u64 knn,
+             const _u64 l_search, const _u64 beam_width, _u64 *ids,
+             float *dists) {
+#pragma omp parallel for schedule(dynamic, 1)
+            for (_u64 i = 0; i < nqueries; ++i)
+              self.cached_beam_search(query_data + i * dim, knn, l_search,
+                                      ids + i * knn, dists + i * knn,
+                                      beam_width);
+          },
+          py::arg("query_data"), py::arg("nqueries"), py::arg("dim"),
+          py::arg("knn") = 10, py::arg("l_search"), py::arg("beam_width"),
+          py::arg("ids"), py::arg("dists"));
 }
