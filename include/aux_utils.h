@@ -31,7 +31,7 @@ typedef int FileHandle;
 #include "windows_customizations.h"
 
 namespace diskann {
-  const size_t   TRAINING_SET_SIZE = 1500000;
+  const size_t   TRAINING_SET_SIZE = 150000;
   const double   SPACE_FOR_CACHED_NODES_IN_GB = 0.25;
   const double   THRESHOLD_FOR_CACHING_IN_GB = 1.0;
   const uint32_t NUM_NODES_TO_CACHE = 250000;
