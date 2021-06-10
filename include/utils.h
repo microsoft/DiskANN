@@ -218,6 +218,11 @@ namespace diskann {
   }
 #endif
 
+  inline void wait_for_keystroke() {
+    int a;
+    std::cin>> a;
+  }
+  
   template<typename T>
   inline void load_bin(const std::string& bin_file, T*& data, size_t& npts,
                        size_t& dim) {

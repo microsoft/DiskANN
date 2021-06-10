@@ -379,6 +379,9 @@ namespace diskann {
         partition_with_ram_budget<T>(base_file, sampling_rate, ram_budget,
                                      2 * R / 3, merged_index_prefix, 2);
 
+    wait_for_keystroke();
+
+
     std::string cur_centroid_filepath = merged_index_prefix + "_centroids.bin";
     std::rename(cur_centroid_filepath.c_str(), centroids_file.c_str());
 
@@ -409,6 +412,8 @@ namespace diskann {
       _pvamanaIndex->build(paras);
       _pvamanaIndex->save(shard_index_file.c_str());
       std::remove(shard_base_file.c_str());
+      wait_for_keystroke();
+
     }
 
     diskann::merge_shards(merged_index_prefix + "_subshard-", "_mem.index",
@@ -735,6 +740,8 @@ namespace diskann {
     diskann::cout << "Training data loaded of size " << train_size <<
     std::endl;
     
+    wait_for_keystroke();
+
     bool make_zero_mean = true;
     if (compareMetric == diskann::Metric::INNER_PRODUCT)
       make_zero_mean = false;  
@@ -750,6 +757,8 @@ namespace diskann {
     diskann::build_merged_vamana_index<T>(
         dataFilePath, compareMetric, L, R, p_val, indexing_ram_budget,
         mem_index_path, medoids_path, centroids_path);
+
+
 
     if (!use_disk_pq)
     diskann::create_disk_layout<T>(dataFilePath, mem_index_path,
