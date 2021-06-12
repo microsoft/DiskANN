@@ -844,9 +844,9 @@ if (file_exists(disk_pq_pivots_path)) {
 
     // query <-> PQ chunk centers distances
     float *pq_dists = query_scratch->aligned_pqtable_dist_scratch;
-//    if (metric==diskann::Metric::INNER_PRODUCT)
-//        pq_table.populate_chunk_inner_products(query, pq_dists);
-//    else if (metric==diskann::Metric::L2)
+    if (metric==diskann::Metric::INNER_PRODUCT)
+        pq_table.populate_chunk_inner_products(query, pq_dists);
+    else if (metric==diskann::Metric::L2)
     pq_table.populate_chunk_distances(query, pq_dists);
 
     // query <-> neighbor list
@@ -1000,6 +1000,9 @@ if (file_exists(disk_pq_pivots_path)) {
           cur_expanded_dist = dist_cmp->compare(query, node_fp_coords_copy,
                                                     (unsigned) aligned_dim);
         else {
+          if (metric == diskann::Metric::INNER_PRODUCT)
+          cur_expanded_dist = disk_pq_table.inner_product(query, (_u8*) node_fp_coords_copy);
+          else
           cur_expanded_dist = disk_pq_table.compare(query, (_u8*) node_fp_coords_copy);
         }
         full_retset.push_back(
@@ -1075,8 +1078,12 @@ if (file_exists(disk_pq_pivots_path)) {
         if (!use_disk_index_pq)
         cur_expanded_dist = dist_cmp->compare(query, node_fp_coords_copy,
                                                     (unsigned) aligned_dim);
-        else
-        cur_expanded_dist = disk_pq_table.compare(query, (_u8*) node_fp_coords_copy);
+        else {
+          if (metric == diskann::Metric::INNER_PRODUCT)
+          cur_expanded_dist = disk_pq_table.inner_product(query, (_u8*) node_fp_coords_copy);
+          else
+          cur_expanded_dist = disk_pq_table.compare(query, (_u8*) node_fp_coords_copy);
+        }
         full_retset.push_back(
             Neighbor(frontier_nhood.first, cur_expanded_dist, true));
 
