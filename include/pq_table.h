@@ -162,6 +162,20 @@ _u32 get_num_chunks() {
     return res;
  }
 
+ float inner_product(const T* query_vec, _u8* base_vec) {
+   float res = 0;
+     for (_u64 chunk = 0; chunk < n_chunks; chunk++) {
+      for (_u64 j = chunk_offsets[chunk]; j < chunk_offsets[chunk + 1]; j++) {
+        _u64         permuted_dim_in_query = rearrangement[j];
+        const float* centers_dim_vec = tables_T + (256 * j);
+        float diff = centers_dim_vec[base_vec[chunk]]*query_vec[permuted_dim_in_query];  // assumes centroid is 0 to prevent translation errors
+        res += diff;
+      }
+    }
+    return -res; // returns negative value to simulate distances (max -> min conversion)
+ }
+
+
  void inflate_vector(_u8* base_vec, float* out_vec) {
      for (_u64 chunk = 0; chunk < n_chunks; chunk++) {
       for (_u64 j = chunk_offsets[chunk]; j < chunk_offsets[chunk + 1]; j++) {
