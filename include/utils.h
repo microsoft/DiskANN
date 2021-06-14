@@ -52,6 +52,8 @@ typedef int FileHandle;
 #define IS_512_ALIGNED(X) IS_ALIGNED(X, 512)
 #define IS_4096_ALIGNED(X) IS_ALIGNED(X, 4096)
 
+
+
 typedef uint64_t _u64;
 typedef int64_t  _s64;
 typedef uint32_t _u32;
@@ -414,6 +416,28 @@ namespace diskann {
       }
     }
   }
+
+template<typename T>
+void prepare_base_for_inner_products(const std::string in_file, const std::string out_file) {
+  std::cout<<"Pre-processing base file by adding extra coordinate" << std::endl;
+  std::ifstream in_reader(in_file.c_str(), std::ios::binary);
+  std::ofstream out_writer(out_file.c_str(), std::ios::binary);
+  _u64 npts, in_dims, out_dims;
+  float max_norm = 0;
+
+  _u32 npts32, dims32;
+  in_reader.read((char *) &npts32, sizeof(uint32_t));
+  in_reader.read((char *) &dims32, sizeof(uint32_t));
+
+  npts = npts32;
+  in_dims = dims32;
+  out_dims = in_dims+1;
+
+  size_t BLOCK_SIZE = 5000000;
+  size_t block_size = npts <= BLOCK_SIZE ? npts : BLOCK_SIZE;
+  std::unique_ptr<T[]> block_data_T = std::make_unique<T[]>(block_size * out_dims);
+
+}
 
   // plain saves data as npts X ndims array into filename
   template<typename T>

@@ -504,9 +504,9 @@ namespace diskann {
       std::vector<unsigned>     init_ids,
       std::vector<Neighbor> &   expanded_nodes_info,
       tsl::robin_set<unsigned> &expanded_nodes_ids) {
-    const T *             node_coords = _data + _aligned_dim * node_id;
+    T *             node_coords = _data + _aligned_dim * node_id;
     std::vector<Neighbor> best_L_nodes;
-
+    
     if (init_ids.size() == 0)
       init_ids.emplace_back(_ep);
 
