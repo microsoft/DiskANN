@@ -70,7 +70,7 @@ std::cout<<"Max norm: " << max_norm << std::endl;
       diff = diff <= 0 ? 0 : std::sqrt(diff);
     new_data[i*newdims + ndims] = diff;
         if (diff <= 0) {
-      std::cout<<i<<" has large max norm, investigate. " << std::endl;
+      std::cout<<i<<" has large max norm, investigate if needed. " << std::endl;
     }
     }
     else 
