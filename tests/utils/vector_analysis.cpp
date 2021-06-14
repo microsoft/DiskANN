@@ -36,9 +36,51 @@ int analyze_norm(std::string base_file) {
   for (_u32 p = 0; p < 100; p+=5) 
   std::cout<<"percentile "<<p<<": " << norms[std::floor((p/100.0)*npts)] << std::endl;
   std::cout<<"percentile 100"<<": " << norms[npts-1] << std::endl;
+  delete[] data;
   return 0;
 }
 
+
+template<typename T>
+int augment_base(std::string base_file,std::string out_file, bool prep_base = true) {
+  std::cout<<"Analyzing data norms" << std::endl;
+  T* data;
+  _u64 npts, ndims;
+  diskann::load_bin<T>(base_file, data, npts, ndims);
+  std::vector<float> norms(npts, 0);
+  float max_norm = 0;
+  #pragma omp parallel for schedule(dynamic)
+  for (_u32 i = 0; i<npts; i++) {
+    for (_u32 d = 0; d < ndims; d++) 
+    norms[i] += data[i*ndims + d]* data[i* ndims + d];
+    max_norm = norms[i] > max_norm ? norms[i] : max_norm;
+  }
+//  std::sort(norms.begin(), norms.end());
+max_norm = std::sqrt(max_norm);
+std::cout<<"Max norm: " << max_norm << std::endl; 
+  T* new_data;
+  _u64 newdims = ndims + 1;
+  new_data = new T[npts*newdims];
+  for (_u64 i = 0;i < npts; i++) {
+    for (_u64 j = 0; j < ndims; j++) {
+      new_data[i*newdims + j] = data[i*ndims +j]/ max_norm;
+    }
+    if (prep_base) {
+      float diff = 1 - (norms[i]/ (max_norm* max_norm));
+      diff = diff <= 0 ? 0 : std::sqrt(diff);
+    new_data[i*newdims + ndims] = diff;
+        if (diff <= 0) {
+      std::cout<<i<<" has large max norm, investigate. " << std::endl;
+    }
+    }
+    else 
+    new_data[i*newdims + ndims] = 0;
+  }
+  diskann::save_bin<T>(out_file, new_data, npts, newdims);
+  delete[] new_data;
+  delete[] data;
+  return 0;
+}
 
 
 template<typename T>
@@ -48,14 +90,18 @@ int aux_main(int argc, char** argv) {
   _u32 option = atoi(argv[3]);
   if (option == 1) 
   analyze_norm<T>(base_file);
+  else if (option == 2) 
+  augment_base<T>(base_file, std::string(argv[4]), true);
+  else if (option == 3)
+  augment_base<T>(base_file, std::string(argv[4]), false);
   return 0;
 }
 
 int main(int argc, char** argv) {
 
-    if (argc != 4) {
+    if (argc < 4) {
     std::cout << argv[0] << " data_type [float/int8/uint8] base_bin_file "
-                            "[option: 1-norm analysis]"
+                            "[option: 1-norm analysis, 2-prep_base_for_mip, 3-prep_query_for_mip] [out_file for options 2/3]"
               << std::endl;
     exit(-1);
   }
