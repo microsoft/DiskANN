@@ -360,7 +360,7 @@ namespace diskann {
       paras.Set<unsigned>("L", (unsigned) L);
       paras.Set<unsigned>("R", (unsigned) R);
       paras.Set<unsigned>("C", 750);
-      paras.Set<float>("alpha", 2.0f);
+      paras.Set<float>("alpha", 1.2f);
       paras.Set<unsigned>("num_rnds", 2);
       paras.Set<bool>("saturate_graph", 1);
       paras.Set<std::string>("save_path", mem_index_path);
@@ -738,6 +738,11 @@ namespace diskann {
       std::cout<<"Compressing base for disk-PQ into " << disk_pq_dims << " chunks " << std::endl;
       generate_pq_pivots(train_data, train_size, (uint32_t) dim, 256,
                        (uint32_t) disk_pq_dims, NUM_KMEANS_REPS, disk_pq_pivots_path, false);
+    if (compareMetric == diskann::Metric::INNER_PRODUCT)               
+    generate_pq_data_from_pivots<float>(data_file_to_use.c_str(), 256, (uint32_t)  disk_pq_dims,
+                                    disk_pq_pivots_path,
+                                    disk_pq_compressed_vectors_path);
+    else
     generate_pq_data_from_pivots<T>(data_file_to_use.c_str(), 256, (uint32_t)  disk_pq_dims,
                                     disk_pq_pivots_path,
                                     disk_pq_compressed_vectors_path);
@@ -745,13 +750,17 @@ namespace diskann {
     diskann::cout << "Training data loaded of size " << train_size <<
     std::endl;
     
-    wait_for_keystroke();
+//    wait_for_keystroke();
 
     bool make_zero_mean = true;
     if (compareMetric == diskann::Metric::INNER_PRODUCT)
       make_zero_mean = false;  
     generate_pq_pivots(train_data, train_size, (uint32_t) dim, 256,
                        (uint32_t) num_pq_chunks, NUM_KMEANS_REPS, pq_pivots_path, make_zero_mean);
+    if (compareMetric == diskann::Metric::INNER_PRODUCT)
+    generate_pq_data_from_pivots<float>(data_file_to_use.c_str(), 256, (uint32_t)
+    num_pq_chunks, pq_pivots_path, pq_compressed_vectors_path);
+    else
     generate_pq_data_from_pivots<T>(data_file_to_use.c_str(), 256, (uint32_t)
     num_pq_chunks, pq_pivots_path, pq_compressed_vectors_path);
 
@@ -759,24 +768,36 @@ namespace diskann {
 
     train_data = nullptr;
 
+    if (compareMetric == diskann::Metric::INNER_PRODUCT)  
+    diskann::build_merged_vamana_index<float>(
+        data_file_to_use.c_str(), diskann::Metric::L2, L, R, p_val, indexing_ram_budget,
+        mem_index_path, medoids_path, centroids_path);
+    else
     diskann::build_merged_vamana_index<T>(
-        data_file_to_use.c_str(), compareMetric, L, R, p_val, indexing_ram_budget,
+        data_file_to_use.c_str(), diskann::Metric::L2, L, R, p_val, indexing_ram_budget,
         mem_index_path, medoids_path, centroids_path);
 
-
-
-    if (!use_disk_pq)
-    diskann::create_disk_layout<T>(data_file_to_use.c_str(), mem_index_path,
+    if (!use_disk_pq) {
+    if (compareMetric == diskann::Metric::INNER_PRODUCT)  
+    diskann::create_disk_layout<float>(data_file_to_use.c_str(), mem_index_path,
                                    disk_index_path);
+                                   else
+    diskann::create_disk_layout<T>(data_file_to_use.c_str(), mem_index_path,
+                                   disk_index_path);                                   
+    }
     else 
     diskann::create_disk_layout<_u8>(disk_pq_compressed_vectors_path, mem_index_path,
                                    disk_index_path);
 
     double sample_sampling_rate = (150000.0 / points_num);
+    if (compareMetric == diskann::Metric::INNER_PRODUCT)  
+    gen_random_slice<float>(data_file_to_use.c_str(), sample_base_prefix,
+    sample_sampling_rate);
+    else 
     gen_random_slice<T>(data_file_to_use.c_str(), sample_base_prefix,
     sample_sampling_rate);
 
-    std::remove(mem_index_path.c_str()); 
+//    std::remove(mem_index_path.c_str()); 
     if (use_disk_pq)
     std::remove(disk_pq_compressed_vectors_path.c_str());
 

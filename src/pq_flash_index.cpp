@@ -614,7 +614,10 @@ namespace diskann {
 
     this->data_dim = pq_file_dim;
     this->disk_data_dim = this->data_dim; // will reset later if we use PQ on disk
-    this->disk_bytes_per_point = this->data_dim * sizeof(T); // will change later if we use PQ on disk
+    this->disk_bytes_per_point = this->data_dim * sizeof(T); // will change later if we use PQ on disk or if we are using inner product without PQ
+    if (metric == diskann::Metric::INNER_PRODUCT) {
+    this->disk_bytes_per_point = this->data_dim * sizeof(float); // because we normalize the data and store it as float if no PQ
+    }
     this->aligned_dim = ROUND_UP(pq_file_dim, 8);
 
 
@@ -815,10 +818,24 @@ if (file_exists(disk_pq_pivots_path)) {
       data = this->thread_data.pop();
     }
 
+    float query_norm = 0;
+    if (metric == diskann::Metric::L2) {
     for (uint32_t i = 0; i < this->data_dim; i++) {
       data.scratch.aligned_query_float[i] = query1[i];
       data.scratch.aligned_query_T[i] = query1[i];
     }
+    } else if (metric == diskann::Metric::INNER_PRODUCT) {
+    for (uint32_t i = 0; i < this->data_dim - 1; i++) {
+      data.scratch.aligned_query_float[i] = query1[i];
+      query_norm += query1[i]*query1[i];
+    }
+    query_norm = std::sqrt(query_norm);
+    data.scratch.aligned_query_float[this->data_dim -1] = 0;
+    for (uint32_t i = 0; i < this->data_dim - 1; i++) {
+      data.scratch.aligned_query_float[i] /= query_norm;
+    }
+    }
+
 //    memcpy(data.scratch.aligned_query_T, query1, disk_bytes_per_point);
     const T *    query = data.scratch.aligned_query_T;
     const float *query_float = data.scratch.aligned_query_float;
@@ -844,10 +861,10 @@ if (file_exists(disk_pq_pivots_path)) {
 
     // query <-> PQ chunk centers distances
     float *pq_dists = query_scratch->aligned_pqtable_dist_scratch;
-    if (metric==diskann::Metric::INNER_PRODUCT)
-        pq_table.populate_chunk_inner_products(query, pq_dists);
-    else if (metric==diskann::Metric::L2)
-    pq_table.populate_chunk_distances(query, pq_dists);
+//    if (metric==diskann::Metric::INNER_PRODUCT)
+//        pq_table.populate_chunk_inner_products(query, pq_dists);
+//    else if (metric==diskann::Metric::L2)
+    pq_table.populate_chunk_distances(query_float, pq_dists);
 
     // query <-> neighbor list
     float *dist_scratch = query_scratch->aligned_dist_scratch;
@@ -889,15 +906,6 @@ if (file_exists(disk_pq_pivots_path)) {
     retset[0].flag = true;
     visited.insert(best_medoid);
 
-/*
-    std::cout<<"Chose " << retset[0].id<< " as best medoid with distance " << retset[0].distance << std::endl;
-
-    std::cout<<"query from 0 to " << aligned_dim << std::endl;
-    for (_u32 i = 0; i < aligned_dim-1; i++) {
-      std::cout<<query[i]<<",";
-    }
-    std::cout<<query[aligned_dim-1] << std::endl;
-*/
     unsigned cur_list_size = 1;
 
     std::sort(retset.begin(), retset.begin() + cur_list_size);
@@ -917,12 +925,6 @@ if (file_exists(disk_pq_pivots_path)) {
     while (k < cur_list_size) {
       auto nk = cur_list_size;
 
-/*    std::cout<<"iteration " << hops<<" candidate list: " << std::endl;
-    for (_u32 px = 0; px < cur_list_size; px++) {
-      std::cout<<"("<<retset[px].id<<","<<retset[px].distance<<")\t";
-    }
-    std::cout<<std::endl;
-    */
 
       // clear iteration state
       frontier.clear();
@@ -996,14 +998,19 @@ if (file_exists(disk_pq_pivots_path)) {
         auto  global_cache_iter = coord_cache.find(cached_nhood.first);
         T *   node_fp_coords_copy = global_cache_iter->second;
         float cur_expanded_dist;
-        if (!use_disk_index_pq)
+        if (!use_disk_index_pq) {
+          if (metric == diskann::Metric::INNER_PRODUCT)
+          cur_expanded_dist = dist_cmp_float->compare(query_float, (float*) node_fp_coords_copy,
+                                                    (unsigned) aligned_dim);
+                                                    else
           cur_expanded_dist = dist_cmp->compare(query, node_fp_coords_copy,
                                                     (unsigned) aligned_dim);
+        }
         else {
           if (metric == diskann::Metric::INNER_PRODUCT)
-          cur_expanded_dist = disk_pq_table.inner_product(query, (_u8*) node_fp_coords_copy);
+          cur_expanded_dist = disk_pq_table.inner_product(query_float, (_u8*) node_fp_coords_copy);
           else
-          cur_expanded_dist = disk_pq_table.compare(query, (_u8*) node_fp_coords_copy);
+          cur_expanded_dist = disk_pq_table.compare(query_float, (_u8*) node_fp_coords_copy);
         }
         full_retset.push_back(
             Neighbor((unsigned) cached_nhood.first, cur_expanded_dist, true));
@@ -1075,14 +1082,21 @@ if (file_exists(disk_pq_pivots_path)) {
         memcpy(node_fp_coords_copy, node_fp_coords, disk_bytes_per_point);
 
         float cur_expanded_dist;
-        if (!use_disk_index_pq)
-        cur_expanded_dist = dist_cmp->compare(query, node_fp_coords_copy,
+        if (!use_disk_index_pq) {
+          if (metric == diskann::Metric::INNER_PRODUCT)
+          cur_expanded_dist = dist_cmp_float->compare(query_float, (float*) node_fp_coords_copy,
                                                     (unsigned) aligned_dim);
+                                                    else
+          cur_expanded_dist = dist_cmp->compare(query, node_fp_coords_copy,
+                                                    (unsigned) aligned_dim);
+
+
+        }
         else {
           if (metric == diskann::Metric::INNER_PRODUCT)
-          cur_expanded_dist = disk_pq_table.inner_product(query, (_u8*) node_fp_coords_copy);
+          cur_expanded_dist = disk_pq_table.inner_product(query_float, (_u8*) node_fp_coords_copy);
           else
-          cur_expanded_dist = disk_pq_table.compare(query, (_u8*) node_fp_coords_copy);
+          cur_expanded_dist = disk_pq_table.compare(query_float, (_u8*) node_fp_coords_copy);
         }
         full_retset.push_back(
             Neighbor(frontier_nhood.first, cur_expanded_dist, true));

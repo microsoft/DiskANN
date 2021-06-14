@@ -147,7 +147,7 @@ namespace diskann {
     // pq_tables = float* [[2^8 * [chunk_size]] * n_chunks]
     _u8 *                data = nullptr;
     _u64                 n_chunks;
-    FixedChunkPQTable<T> pq_table;
+    FixedChunkPQTable pq_table;
 
     // distance comparator
     Distance<T> *    dist_cmp = nullptr;
@@ -156,7 +156,7 @@ namespace diskann {
     // for very large datasets: we use PQ even for the disk resident index
     bool                 use_disk_index_pq = false;
     _u64                 disk_pq_n_chunks;
-    FixedChunkPQTable<T> disk_pq_table;
+    FixedChunkPQTable disk_pq_table;
 
 
     // medoid/start info

@@ -6,7 +6,7 @@
 #include "utils.h"
 
 namespace diskann {
-  template<typename T>
+//  template<typename T>
   class FixedChunkPQTable {
     // data_dim = n_chunks * chunk_size;
     float* tables =
@@ -130,7 +130,7 @@ _u32 get_num_chunks() {
   return n_chunks;
 }
   void
-  populate_chunk_distances(const T* query_vec, float* dist_vec) {
+  populate_chunk_distances(const float* query_vec, float* dist_vec) {
     memset(dist_vec, 0, 256 * n_chunks * sizeof(float));
     // chunk wise distance computation
     for (_u64 chunk = 0; chunk < n_chunks; chunk++) {
@@ -149,7 +149,7 @@ _u32 get_num_chunks() {
     }
   }
 
- float compare(const T* query_vec, _u8* base_vec) {
+ float compare(const float* query_vec, _u8* base_vec) {
    float res = 0;
      for (_u64 chunk = 0; chunk < n_chunks; chunk++) {
       for (_u64 j = chunk_offsets[chunk]; j < chunk_offsets[chunk + 1]; j++) {
@@ -162,7 +162,7 @@ _u32 get_num_chunks() {
     return res;
  }
 
- float inner_product(const T* query_vec, _u8* base_vec) {
+ float inner_product(const float* query_vec, _u8* base_vec) {
    float res = 0;
      for (_u64 chunk = 0; chunk < n_chunks; chunk++) {
       for (_u64 j = chunk_offsets[chunk]; j < chunk_offsets[chunk + 1]; j++) {
@@ -187,7 +187,7 @@ _u32 get_num_chunks() {
  }
 
   void
-  populate_chunk_inner_products(const T* query_vec, float* dist_vec) {
+  populate_chunk_inner_products(const float* query_vec, float* dist_vec) {
     memset(dist_vec, 0, 256 * n_chunks * sizeof(float));
     // chunk wise distance computation
     for (_u64 chunk = 0; chunk < n_chunks; chunk++) {
