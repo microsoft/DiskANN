@@ -168,7 +168,7 @@ namespace diskann {
 
     // Allocate space for max points and frozen points,
     // and add frozen points at the end of the array
-    if (_num_frozen_pts > 0) {
+    if (_max_points + _num_frozen_pts > _nd) {
       auto temp = _data;
       _data = (T *) realloc(
           _data, (_max_points + _num_frozen_pts) * _aligned_dim * sizeof(T));
@@ -178,7 +178,7 @@ namespace diskann {
         throw diskann::ANNException("Realloc failed", -1, __FUNCSIG__, __FILE__,
                                     __LINE__);
       }
-    }
+  }
 
     this->_distance = ::get_distance_function<T>(m);
     _locks = std::vector<std::mutex>(_max_points + _num_frozen_pts);
@@ -361,18 +361,24 @@ namespace diskann {
    * in the graph.
    */
   template<typename T, typename TagT>
-  unsigned Index<T, TagT>::calculate_entry_point() {
+  unsigned Index<T, TagT>::calculate_entry_point(_u32 start_id, _u32 end_id) {
+    if (end_id - start_id <= 0) { // useful if given values are not valid, we reset to entire range of points.
+    end_id = _nd;
+    start_id = 0;
+    }
+
+   _u64 num_ids = end_id - start_id;
     // allocate and init centroid
     float *center = new float[_aligned_dim]();
     for (size_t j = 0; j < _aligned_dim; j++)
       center[j] = 0;
 
-    for (size_t i = 0; i < _nd; i++)
+    for (size_t i = start_id; i < end_id; i++)
       for (size_t j = 0; j < _aligned_dim; j++)
         center[j] += _data[i * _aligned_dim + j];
 
     for (size_t j = 0; j < _aligned_dim; j++)
-      center[j] /= _nd;
+      center[j] /= num_ids;
 
     // compute all to one distance
     float * distances = new float[_nd]();
@@ -772,11 +778,12 @@ namespace diskann {
     for (unsigned i = 0; i < (unsigned) _num_frozen_pts; ++i)
       visit_order.emplace_back((unsigned) (_max_points + i));
 
+    std::reverse(visit_order.begin(), visit_order.end());
     // if there are frozen points, the first such one is set to be the _ep
     if (_num_frozen_pts > 0)
       _ep = (unsigned) _max_points;
     else
-      _ep = calculate_entry_point();
+      _ep = calculate_entry_point(_nd - _num_learn, _nd);
 
     _final_graph.reserve(_max_points + _num_frozen_pts);
     _final_graph.resize(_max_points + _num_frozen_pts);
@@ -983,11 +990,40 @@ namespace diskann {
                   << std::endl;
   }
 
+template<typename T, typename TagT>
+  void Index<T, TagT>::setup_learn_data(std::string learn_file) { // only defined for static indices now. needs to be called before build(). Assumes that the first _nd points are base, and populates next with learn data.
+_u64 num_learn, learn_dim;
+diskann::get_bin_metadata(learn_file, num_learn, learn_dim);
+if (num_learn + _nd > _max_points) {
+          std::cerr << "Error! More points given than max_points for index. Exitting." << std::endl;
+        throw diskann::ANNException("Error! More points given than max_points for index. Exitting.", -1,
+                                    __FUNCSIG__, __FILE__, __LINE__);
+  
+}
+if (learn_dim != _dim) {
+          std::cerr << "Error! Dimension mismatch between learn file and index. Exitting." << std::endl;
+        throw diskann::ANNException("Error! Dimension mismatch between learn file and index. Exitting.", -1,
+                                    __FUNCSIG__, __FILE__, __LINE__);
+  
+}
+std::ifstream reader(learn_file.c_str(), std::ios::binary);
+reader.seekg(2*sizeof(_u32), std::ios::beg);
+for (_u64 i = _nd; i < _nd + num_learn; i++) {
+  reader.read((char*) (_data + i*_aligned_dim), _dim*sizeof(T));
+  learn_ids.insert(i);
+}
+_nd += num_learn;
+_num_learn = num_learn;
+std::cout<<"Done loading learn data for improving index quality. These will not appear in search results." << std::endl;
+  }
+
+
+
   template<typename T, typename TagT>
   void Index<T, TagT>::build(Parameters &parameters,
                              const std::vector<TagT> &tags) {
     if (_enable_tags) {
-      if (tags.size() != _nd) {
+      if (tags.size() != _nd - _num_learn) {
         std::cerr << "#Tags should be equal to #points" << std::endl;
         throw diskann::ANNException("#Tags must be equal to #points", -1,
                                     __FUNCSIG__, __FILE__, __LINE__);
@@ -1040,8 +1076,10 @@ namespace diskann {
 
     size_t pos = 0;
     for (auto it : best_L_nodes) {
+//      if (learn_ids.find(it.id) == learn_ids.end()) {
       indices[pos] = it.id;
       pos++;
+      //}
       if (pos == K)
         break;
     }
@@ -1065,11 +1103,13 @@ namespace diskann {
 
     size_t pos = 0;
     for (auto it : best_L_nodes) {
+            //if (learn_ids.find(it.id) == learn_ids.end()) {
       indices[pos] = it.id;
       distances[pos] = it.distance;
       if (_metric == diskann::INNER_PRODUCT)
       distances[pos] = -distances[pos];
       pos++;
+//            }
       if (pos == K)
         break;
     }

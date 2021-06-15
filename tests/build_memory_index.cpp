@@ -19,7 +19,7 @@ template<typename T>
 int build_in_memory_index(const std::string& data_path, _u32 dist_fn, const unsigned R,
                           const unsigned L, const float alpha,
                           const std::string& save_path,
-                          const unsigned     num_threads) {
+                          const unsigned     num_threads, const std::string& learn_path) {
   diskann::Parameters paras;
   paras.Set<unsigned>("R", R);
   paras.Set<unsigned>("L", L);
@@ -39,7 +39,17 @@ int build_in_memory_index(const std::string& data_path, _u32 dist_fn, const unsi
     return -1;
   }
 
-  diskann::Index<T> index(metric, data_path.c_str());
+  _u64 data_pts, data_dim, learn_pts = 0;
+  diskann::get_bin_metadata(data_path, data_pts, data_dim);
+  if (learn_path != "") {
+  diskann::get_bin_metadata(learn_path, learn_pts, data_dim);
+  }
+
+
+  diskann::Index<T> index(metric, data_path.c_str(), data_pts + learn_pts);
+  if (learn_pts > 0) {
+  index.setup_learn_data(learn_path);
+  }
   auto              s = std::chrono::high_resolution_clock::now();
   index.build(paras);
   std::chrono::duration<double> diff =
@@ -52,12 +62,12 @@ int build_in_memory_index(const std::string& data_path, _u32 dist_fn, const unsi
 }
 
 int main(int argc, char** argv) {
-  if (argc != 9) {
+  if (argc != 9 && argc != 10) {
     std::cout << "Usage: " << argv[0]
               << "  [data_type<int8/uint8/float>] [dist_fn 0 for L2, 1 for inner product] [data_file.bin]  "
                  "[output_index_file]  "
               << "[R]  [L]  [alpha]"
-              << "  [num_threads_to_use]. See README for more information on "
+              << "  [num_threads_to_use] [optional: learn_path]. See README for more information on "
                  "parameters."
               << std::endl;
     exit(-1);
@@ -72,16 +82,20 @@ int main(int argc, char** argv) {
   const unsigned    L = (unsigned) atoi(argv[ctr++]);
   const float       alpha = (float) atof(argv[ctr++]);
   const unsigned    num_threads = (unsigned) atoi(argv[ctr++]);
+  std::string learn_path = "";
+  if (argc == 10) {
+    learn_path = std::string(argv[ctr++]);
+  }
 
   if (std::string(argv[1]) == std::string("int8"))
     build_in_memory_index<int8_t>(data_path, dist_fn, R, L, alpha, save_path,
-                                  num_threads);
+                                  num_threads, learn_path);
   else if (std::string(argv[1]) == std::string("uint8"))
     build_in_memory_index<uint8_t>(data_path, dist_fn, R, L, alpha, save_path,
-                                   num_threads);
+                                   num_threads, learn_path);
   else if (std::string(argv[1]) == std::string("float"))
     build_in_memory_index<float>(data_path, dist_fn, R, L, alpha, save_path,
-                                 num_threads);
+                                 num_threads, learn_path);
   else
     std::cout << "Unsupported type. Use float/int8/uint8" << std::endl;
 }

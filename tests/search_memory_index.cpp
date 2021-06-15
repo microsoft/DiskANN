@@ -30,6 +30,7 @@ int search_memory_index(int argc, char** argv) {
   _u32 ctr = 2;
   _u32 dist_fn = atoi(argv[ctr++]);
   std::string data_file(argv[ctr++]);
+  std::string learn_file(argv[ctr++]);
   std::string memory_index_file(argv[ctr++]);
   _u64        num_threads = std::atoi(argv[ctr++]);
   std::string query_bin(argv[ctr++]);
@@ -85,7 +86,22 @@ int search_memory_index(int argc, char** argv) {
     std::cout<<"Error. Unsupported distance function. Exitting";
     return -1;
   }
-  diskann::Index<T> index(metric, data_file.c_str());
+
+  _u64 data_pts, data_dim, learn_pts = 0;
+  diskann::get_bin_metadata(data_file, data_pts, data_dim);
+  if (learn_file != "null") {
+  diskann::get_bin_metadata(learn_file, learn_pts, data_dim);
+  }
+
+
+  
+  
+
+
+  diskann::Index<T> index(metric, data_file.c_str(), data_pts + learn_pts);
+  if (learn_pts >0)
+  index.setup_learn_data(learn_file);
+
   index.load(memory_index_file.c_str());  // to load NSG
   std::cout << "Index loaded" << std::endl;
 
@@ -166,10 +182,10 @@ int search_memory_index(int argc, char** argv) {
 }
 
 int main(int argc, char** argv) {
-  if (argc < 11) {
+  if (argc < 12) {
     std::cout
         << "Usage: " << argv[0]
-        << "  [index_type<float/int8/uint8>]  [dist_fn (0 for L2, 1 for Inner Product, 2 for Fast L2 for small datasets)] [data_file.bin]  "
+        << "  [index_type<float/int8/uint8>]  [dist_fn (0 for L2, 1 for Inner Product, 2 for Fast L2 for small datasets)] [data_file.bin] [learn_file.bin (use ``null'' if none)] "
            "[memory_index_path]  [num_threads] "
            "[query_file.bin]  [truthset.bin (use \"null\" for none)] "
            " [K] [result_output_prefix]"

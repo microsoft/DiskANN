@@ -46,6 +46,8 @@ namespace diskann {
     DISKANN_DLLEXPORT int generate_random_frozen_points(
         const char *filename = NULL);
 
+    DISKANN_DLLEXPORT void setup_learn_data(std::string learn_file);
+
     DISKANN_DLLEXPORT void build(
         Parameters &             parameters,
         const std::vector<TagT> &tags = std::vector<TagT>());
@@ -111,7 +113,7 @@ namespace diskann {
     CompactGraph                               _in_graph;
 
     // determines navigating node of the graph by calculating medoid of data
-    unsigned calculate_entry_point();
+    unsigned calculate_entry_point(_u32 start_id = 0, _u32 end_id = 0);
     // called only when _eager_delete is to be supported
     void update_in_graph();
 
@@ -180,6 +182,8 @@ namespace diskann {
     unsigned     _ep;
     bool         _saturate_graph = false;
     std::vector<std::mutex> _locks;  // Per node lock, cardinality=max_points_
+    tsl::robin_set<_u32> learn_ids;
+    _u64 _num_learn = 0;
 
     char * _opt_graph;
     size_t _node_size;
