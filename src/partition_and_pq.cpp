@@ -745,7 +745,7 @@ int shard_data_into_clusters(const std::string data_file, float *pivots,
 
 
 
-
+// useful for partitioning large dataset. we first generate only the IDS for each shard, and retrieve the actual vectors on demand.
 template<typename T>
 int shard_data_into_clusters_only_ids(const std::string data_file, float *pivots,
                              const size_t num_centers, const size_t dim,
