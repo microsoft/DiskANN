@@ -783,7 +783,7 @@ namespace diskann {
     if (_num_frozen_pts > 0)
       _ep = (unsigned) _max_points;
     else
-      _ep = calculate_entry_point(_nd - _num_learn, _nd);
+      _ep = calculate_entry_point(0, _nd - _num_learn);
 
     _final_graph.reserve(_max_points + _num_frozen_pts);
     _final_graph.resize(_max_points + _num_frozen_pts);
@@ -1040,6 +1040,65 @@ std::cout<<"Done loading learn data for improving index quality. These will not 
       update_in_graph();  // copying values to in_graph
     }
 
+
+/*
+    const unsigned range = parameters.Get<unsigned>("R");
+    const unsigned maxc = parameters.Get<unsigned>("C");
+    const float    alpha = parameters.Get<float>("alpha");
+
+    tsl::robin_set<unsigned> candidate_set;
+    std::vector<Neighbor>    expanded_nghrs;
+    std::vector<Neighbor>    result;
+
+
+    for (unsigned i = 0; i < _nd - _num_learn; ++i) {
+
+        candidate_set.clear();
+        expanded_nghrs.clear();
+        result.clear();
+
+        bool modify = false;
+        for (auto ngh : _final_graph[i]) {
+          if (ngh >= _nd - _num_learn) {
+            modify = true;
+
+            // Add outgoing links from
+            for (auto j : _final_graph[ngh])
+              if (j < _nd - _num_learn)
+                candidate_set.insert(j);
+          } else {
+            candidate_set.insert(ngh);
+          }
+        }
+
+        if (modify) {
+          for (auto j : candidate_set)
+            expanded_nghrs.push_back(
+                Neighbor(j,
+                         _distance->compare(_data + _aligned_dim * (size_t) i,
+                                            _data + _aligned_dim * (size_t) j,
+                                            (unsigned) _aligned_dim),
+                         true));
+          std::sort(expanded_nghrs.begin(), expanded_nghrs.end());
+          occlude_list(expanded_nghrs, alpha, range, maxc, result);
+
+          _final_graph[i].clear();
+          for (auto j : result) {
+            if (j.id != i)
+              _final_graph[i].push_back(j.id);
+          }
+        }
+
+    }
+
+    for (unsigned i = _nd - _num_learn; i < _nd; ++i) 
+    _final_graph[i].clear();
+
+
+//    _nd -= _num_learn;
+*/
+
+
     size_t max = 0, min = 1 << 30, total = 0, cnt = 0;
     for (size_t i = 0; i < _nd; i++) {
       auto &pool = _final_graph[i];
@@ -1053,6 +1112,10 @@ std::cout<<"Done loading learn data for improving index quality. These will not 
                   << "  avg:" << (float) total / (float) _nd << "  min:" << min
                   << "  count(deg<2):" << cnt << "\n"
                   << "Index built." << std::endl;
+
+
+
+
     _width = (std::max)((unsigned) max, _width);
     _has_built = true;
   }
