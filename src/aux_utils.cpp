@@ -362,7 +362,7 @@ namespace diskann {
       paras.Set<unsigned>("C", 750);
       paras.Set<float>("alpha", 1.2f);
       paras.Set<unsigned>("num_rnds", 2);
-      paras.Set<bool>("saturate_graph", 1);
+      paras.Set<bool>("saturate_graph", 0);
       paras.Set<std::string>("save_path", mem_index_path);
 
       std::unique_ptr<diskann::Index<T>> _pvamanaIndex =
@@ -379,7 +379,7 @@ namespace diskann {
         partition_with_ram_budget<T>(base_file, sampling_rate, ram_budget,
                                      2 * R / 3, merged_index_prefix, 2);
 
-    wait_for_keystroke();
+//    wait_for_keystroke();
 
 
     std::string cur_centroid_filepath = merged_index_prefix + "_centroids.bin";
@@ -401,9 +401,9 @@ namespace diskann {
       paras.Set<unsigned>("L", L);
       paras.Set<unsigned>("R", (2 * (R / 3)));
       paras.Set<unsigned>("C", 750);
-      paras.Set<float>("alpha", 2.0f);
+      paras.Set<float>("alpha", 1.2f);
       paras.Set<unsigned>("num_rnds", 2);
-      paras.Set<bool>("saturate_graph", 1);
+      paras.Set<bool>("saturate_graph", 0);
       paras.Set<std::string>("save_path", shard_index_file);
 
       std::unique_ptr<diskann::Index<T>> _pvamanaIndex =
