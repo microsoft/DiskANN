@@ -379,9 +379,7 @@ namespace diskann {
         partition_with_ram_budget<T>(base_file, sampling_rate, ram_budget,
                                      2 * R / 3, merged_index_prefix, 2);
 
-//    wait_for_keystroke();
-
-
+    wait_for_keystroke();
     std::string cur_centroid_filepath = merged_index_prefix + "_centroids.bin";
     std::rename(cur_centroid_filepath.c_str(), centroids_file.c_str());
 
@@ -643,9 +641,18 @@ namespace diskann {
       return false;
     }
   
+
+    if (!std::is_same<T, float>::value && compareMetric == diskann::Metric::INNER_PRODUCT) {
+              std::stringstream stream;
+        stream << "DiskANN currently only supports floating point data for Max Inner Product Search. Please contact us if you need other scenarios." << std::endl;
+        throw diskann::ANNException(stream.str(), -1);
+
+    }
+
     _u32 disk_pq_dims = 0;
     bool use_disk_pq = false;
 
+// if there is a 6th parameter, it means we compress the disk index vectors also using PQ data (for very large dimensionality data). If the provided parameter is 0, it means we store full vectors.
     if (param_list.size() == 6) {
      disk_pq_dims = atoi(param_list[5].c_str());
      use_disk_pq = true;
@@ -668,7 +675,7 @@ namespace diskann {
     std::string disk_pq_compressed_vectors_path = // optional if disk index is also storing pq data
         index_prefix_path + "_disk.index_pq_compressed.bin";
 
-
+// output a new base file which contains extra dimension with sqrt(1 - ||x||^2/M^2) for every x, M is max norm of all points. Extra space on disk needed!
     if (compareMetric == diskann::Metric::INNER_PRODUCT) {
       std::cout<<"Using Inner Product search, so need to pre-process base data into temp file. Please ensure there is sufficient space!!" << std::endl;
       std::string prepped_base = index_prefix_path + "_prepped_base.bin";
@@ -750,17 +757,16 @@ namespace diskann {
     diskann::cout << "Training data loaded of size " << train_size <<
     std::endl;
     
-//    wait_for_keystroke();
+    wait_for_keystroke();
 
+// don't translate data to make zero mean for PQ compression. We must not translate for inner product search.
     bool make_zero_mean = true;
     if (compareMetric == diskann::Metric::INNER_PRODUCT)
       make_zero_mean = false;  
+
     generate_pq_pivots(train_data, train_size, (uint32_t) dim, 256,
                        (uint32_t) num_pq_chunks, NUM_KMEANS_REPS, pq_pivots_path, make_zero_mean);
-    if (compareMetric == diskann::Metric::INNER_PRODUCT)
-    generate_pq_data_from_pivots<float>(data_file_to_use.c_str(), 256, (uint32_t)
-    num_pq_chunks, pq_pivots_path, pq_compressed_vectors_path);
-    else
+                       
     generate_pq_data_from_pivots<T>(data_file_to_use.c_str(), 256, (uint32_t)
     num_pq_chunks, pq_pivots_path, pq_compressed_vectors_path);
 
@@ -768,20 +774,11 @@ namespace diskann {
 
     train_data = nullptr;
 
-    if (compareMetric == diskann::Metric::INNER_PRODUCT)  
-    diskann::build_merged_vamana_index<float>(
-        data_file_to_use.c_str(), diskann::Metric::L2, L, R, p_val, indexing_ram_budget,
-        mem_index_path, medoids_path, centroids_path);
-    else
     diskann::build_merged_vamana_index<T>(
         data_file_to_use.c_str(), diskann::Metric::L2, L, R, p_val, indexing_ram_budget,
         mem_index_path, medoids_path, centroids_path);
 
     if (!use_disk_pq) {
-    if (compareMetric == diskann::Metric::INNER_PRODUCT)  
-    diskann::create_disk_layout<float>(data_file_to_use.c_str(), mem_index_path,
-                                   disk_index_path);
-                                   else
     diskann::create_disk_layout<T>(data_file_to_use.c_str(), mem_index_path,
                                    disk_index_path);                                   
     }
@@ -790,10 +787,6 @@ namespace diskann {
                                    disk_index_path);
 
     double sample_sampling_rate = (150000.0 / points_num);
-    if (compareMetric == diskann::Metric::INNER_PRODUCT)  
-    gen_random_slice<float>(data_file_to_use.c_str(), sample_base_prefix,
-    sample_sampling_rate);
-    else 
     gen_random_slice<T>(data_file_to_use.c_str(), sample_base_prefix,
     sample_sampling_rate);
 
