@@ -255,9 +255,14 @@ namespace diskann {
     virtual float compare(const int8_t *a, const int8_t *b,
                           unsigned int length) const {
 #ifndef _WINDOWS
-      std::cout << "AVX only supported in Windows build.";
-      return 0;
-    }
+int32_t result = 0;
+#pragma omp simd reduction(+ : result) aligned(a, b : 8)
+      for (_s32 i = 0; i < (_s32) length; i++) {
+        result += ((int32_t)((int16_t) a[i] - (int16_t) b[i])) *
+                  ((int32_t)((int16_t) a[i] - (int16_t) b[i]));
+      }
+      return (float) result;
+                          }
 #else
       __m128  r = _mm_setzero_ps();
       __m128i r1;
@@ -302,9 +307,14 @@ namespace diskann {
     virtual float compare(const float *a, const float *b,
                           unsigned int length) const {
 #ifndef _WINDOWS
-      std::cout << "AVX only supported in Windows build.";
-      return 0;
-    }
+float result = 0;
+#pragma omp simd reduction(+ : result) aligned(a, b : 8)
+      for (_s32 i = 0; i < (_s32) length; i++) {
+        result += (a[i] - b[i]) *
+                  (a[i] - b[i]);
+      }
+      return result;
+                          }
 #else
       __m128 diff, v1, v2;
       __m128 sum = _mm_set1_ps(0);

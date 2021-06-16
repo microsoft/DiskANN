@@ -108,9 +108,7 @@ void inner_prod_to_points(
     const size_t dim,
     float *      dist_matrix,  // Col Major, cols are queries, rows are points
     size_t npoints, const float *const points,
-    const float *const points_l2sq,  // points in Col major
     size_t nqueries, const float *const queries,
-    const float *const queries_l2sq,  // queries in Col major
     float *ones_vec = NULL)  // Scratchspace of num_data size and init to 1.0
 {
   bool ones_vec_alloc = false;
@@ -171,8 +169,8 @@ void exact_knn(const size_t dim, const size_t k,
                        queries_l2sq + q_b);
     } else {
       inner_prod_to_points(
-          dim, dist_matrix, npoints, points, points_l2sq, q_e - q_b,
-          queries + (ptrdiff_t) q_b * (ptrdiff_t) dim, queries_l2sq + q_b);
+          dim, dist_matrix, npoints, points, q_e - q_b,
+          queries + (ptrdiff_t) q_b * (ptrdiff_t) dim);
     }
     std::cout << "Computed distances for queries: [" << q_b << "," << q_e << ")"
               << std::endl;
@@ -308,7 +306,7 @@ inline void save_groundtruth_as_one_file(const std::string filename,
 }
 
 template<typename T>
-int aux_main(int argv, char **argc) {
+int aux_main(char **argc) {
   size_t      npoints, nqueries, dim;
   std::string base_file(argc[2]);
   std::string query_file(argc[3]);
@@ -393,9 +391,9 @@ int main(int argc, char **argv) {
   }
 
   if (std::string(argv[1]) == std::string("float"))
-    aux_main<float>(argc, argv);
+    aux_main<float>(argv);
   if (std::string(argv[1]) == std::string("int8"))
-    aux_main<int8_t>(argc, argv);
+    aux_main<int8_t>(argv);
   if (std::string(argv[1]) == std::string("uint8"))
-    aux_main<uint8_t>(argc, argv);
+    aux_main<uint8_t>(argv);
 }
