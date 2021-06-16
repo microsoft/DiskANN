@@ -578,35 +578,20 @@ int generate_pq_data_from_pivots(const std::string data_file,
   return 0;
 }
 
-template<typename T>
-int estimate_cluster_sizes(const std::string data_file, float *pivots,
-                           const size_t num_centers, const size_t dim,
+int estimate_cluster_sizes(float* test_data_float, size_t num_test, float *pivots,
+                           const size_t num_centers, const size_t test_dim,
                            const size_t         k_base,
                            std::vector<size_t> &cluster_sizes) {
   cluster_sizes.clear();
 
-  size_t num_test, test_dim;
-  float *test_data_float;
-  double sampling_rate = 0.01;
-
-  gen_random_slice<T>(data_file, sampling_rate, test_data_float, num_test,
-                      test_dim);
-
-  if (test_dim != dim) {
-    diskann::cout << "Error. dimensions dont match for pivot set and base set"
-                  << std::endl;
-    return -1;
-  }
 
   size_t *shard_counts = new size_t[num_centers];
 
   for (size_t i = 0; i < num_centers; i++) {
     shard_counts[i] = 0;
   }
-
-  size_t num_points = 0, num_dim = 0;
-  diskann::get_bin_metadata(data_file, num_points, num_dim);
-  size_t block_size = num_points <= BLOCK_SIZE ? num_points : BLOCK_SIZE;
+  
+  size_t block_size = num_test <= BLOCK_SIZE ? num_test : BLOCK_SIZE;
   _u32 * block_closest_centers = new _u32[block_size * k_base];
   float *block_data_float;
 
@@ -619,7 +604,7 @@ int estimate_cluster_sizes(const std::string data_file, float *pivots,
 
     block_data_float = test_data_float + start_id * test_dim;
 
-    math_utils::compute_closest_centers(block_data_float, cur_blk_size, dim,
+    math_utils::compute_closest_centers(block_data_float, cur_blk_size, test_dim,
                                         pivots, num_centers, k_base,
                                         block_closest_centers);
 
@@ -635,8 +620,8 @@ int estimate_cluster_sizes(const std::string data_file, float *pivots,
   for (size_t i = 0; i < num_centers; i++) {
     _u32 cur_shard_count = (_u32) shard_counts[i];
     cluster_sizes.push_back(
-        size_t(((double) cur_shard_count) * (1.0 / sampling_rate)));
-    diskann::cout << cur_shard_count * (1.0 / sampling_rate) << " ";
+        (size_t)cur_shard_count);
+    diskann::cout << cur_shard_count << " ";
   }
   diskann::cout << std::endl;
   delete[] shard_counts;
@@ -952,9 +937,9 @@ int partition(const std::string data_file, const float sampling_rate,
   // now pivots are ready. need to stream base points and assign them to
   // closest clusters.
 
-  std::vector<size_t> cluster_sizes;
-  estimate_cluster_sizes<T>(data_file, pivot_data, num_parts, train_dim, k_base,
-                            cluster_sizes);
+  //std::vector<size_t> cluster_sizes;
+  //estimate_cluster_sizes<T>(data_file, pivot_data, num_parts, train_dim, k_base,
+  //                          cluster_sizes);
 
   shard_data_into_clusters<T>(data_file, pivot_data, num_parts, train_dim,
                               k_base, prefix_path);
@@ -971,13 +956,20 @@ int partition_with_ram_budget(const std::string data_file,
   size_t train_dim;
   size_t num_train;
   float *train_data_float;
-  size_t max_k_means_reps = 20;
+  size_t max_k_means_reps = 10;
 
   int  num_parts = 3;
   bool fit_in_ram = false;
 
   gen_random_slice<T>(data_file, sampling_rate, train_data_float, num_train,
                       train_dim);
+
+  size_t test_dim;
+  size_t num_test;
+  float *test_data_float;
+  gen_random_slice<T>(data_file, sampling_rate, test_data_float, num_test,
+                      test_dim);
+
 
   float *pivot_data = nullptr;
 
@@ -1010,10 +1002,11 @@ int partition_with_ram_budget(const std::string data_file,
     // closest clusters.
 
     std::vector<size_t> cluster_sizes;
-    estimate_cluster_sizes<T>(data_file, pivot_data, num_parts, train_dim,
+    estimate_cluster_sizes(test_data_float, num_test, pivot_data, num_parts, train_dim,
                               k_base, cluster_sizes);
 
     for (auto &p : cluster_sizes) {
+      p = (_u64) (p/ sampling_rate); // to account for the fact that p is the size of the shard over the testing sample.
       double cur_shard_ram_estimate =
           ESTIMATE_RAM_USAGE(p, train_dim, sizeof(T), graph_degree);
 
@@ -1037,6 +1030,7 @@ int partition_with_ram_budget(const std::string data_file,
                               k_base, prefix_path);
   delete[] pivot_data;
   delete[] train_data_float;
+  delete[] test_data_float;
   return num_parts;
 }
 

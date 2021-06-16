@@ -379,7 +379,6 @@ namespace diskann {
         partition_with_ram_budget<T>(base_file, sampling_rate, ram_budget,
                                      2 * R / 3, merged_index_prefix, 2);
 
-    wait_for_keystroke();
     std::string cur_centroid_filepath = merged_index_prefix + "_centroids.bin";
     std::rename(cur_centroid_filepath.c_str(), centroids_file.c_str());
 
@@ -410,7 +409,7 @@ namespace diskann {
       _pvamanaIndex->build(paras);
       _pvamanaIndex->save(shard_index_file.c_str());
       std::remove(shard_base_file.c_str());
-      wait_for_keystroke();
+//      wait_for_keystroke();
 
     }
 
