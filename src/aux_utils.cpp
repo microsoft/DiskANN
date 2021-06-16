@@ -354,7 +354,7 @@ namespace diskann {
     double full_index_ram =
         ESTIMATE_RAM_USAGE(base_num, base_dim, sizeof(T), R);
     if (full_index_ram < ram_budget * 1024 * 1024 * 1024) {
-      diskann::cout << "Full index fits in RAM, building in one shot"
+      diskann::cout << "Full index fits in RAM budget, should consume at most " << full_index_ram/(1024*1024*1024) <<"GBs, so building in one shot"
                     << std::endl;
       diskann::Parameters paras;
       paras.Set<unsigned>("L", (unsigned) L);
@@ -757,8 +757,6 @@ namespace diskann {
     diskann::cout << "Training data loaded of size " << train_size <<
     std::endl;
     
-    wait_for_keystroke();
-
 // don't translate data to make zero mean for PQ compression. We must not translate for inner product search.
     bool make_zero_mean = true;
     if (compareMetric == diskann::Metric::INNER_PRODUCT)
@@ -773,6 +771,8 @@ namespace diskann {
     delete[] train_data;
 
     train_data = nullptr;
+    MallocExtension::instance()->ReleaseFreeMemory();
+
 
     diskann::build_merged_vamana_index<T>(
         data_file_to_use.c_str(), diskann::Metric::L2, L, R, p_val, indexing_ram_budget,
