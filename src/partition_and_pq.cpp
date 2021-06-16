@@ -1018,7 +1018,7 @@ int partition_with_ram_budget(const std::string data_file,
                   << "GB, budget given is " << ram_budget << std::endl;
     if (max_ram_usage > 1024 * 1024 * 1024 * ram_budget) {
       fit_in_ram = false;
-      num_parts++;
+      num_parts+=2;
     }
   }
 
