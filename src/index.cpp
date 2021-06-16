@@ -137,6 +137,7 @@ namespace diskann {
         _compacted_order(true), _enable_tags(enable_tags),
         _consolidated_order(true), _support_eager_delete(support_eager_delete),
         _store_data(store_data) {
+
     // data is stored to _nd * aligned_dim matrix with necessary
     // zero-padding
     diskann::cout << "Number of frozen points = " << _num_frozen_pts
@@ -182,7 +183,6 @@ namespace diskann {
 
     this->_distance = ::get_distance_function<T>(m);
     _locks = std::vector<std::mutex>(_max_points + _num_frozen_pts);
-
     _width = 0;
   }
 
@@ -788,6 +788,7 @@ namespace diskann {
     for (uint64_t p = 0; p < _max_points + _num_frozen_pts; p++) {
       _final_graph[p].reserve((size_t)(std::ceil(range * SLACK_FACTOR * 1.05)));
     }
+
 
     std::random_device               rd;
     std::mt19937                     gen(rd());

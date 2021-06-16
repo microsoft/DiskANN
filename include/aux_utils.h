@@ -29,6 +29,8 @@ typedef int FileHandle;
 #include "common_includes.h"
 #include "utils.h"
 #include "windows_customizations.h"
+#include "gperftools/malloc_extension.h"
+
 
 namespace diskann {
   const size_t   TRAINING_SET_SIZE = 150000;

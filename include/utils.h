@@ -222,6 +222,7 @@ namespace diskann {
 
   inline void wait_for_keystroke() {
     int a;
+    std::cout<<"Press any number to continue.." << std::endl;
     std::cin>> a;
   }
   
