@@ -13,7 +13,7 @@
 #include "utils.h"
 
 template<typename T>
-int create_disk_layout(int argc, char **argv) {
+int create_disk_layout(char **argv) {
   std::string base_file(argv[2]);
   std::string vamana_file(argv[3]);
   std::string output_file(argv[4]);
@@ -31,11 +31,11 @@ int main(int argc, char **argv) {
 
   int ret_val = -1;
   if (std::string(argv[1]) == std::string("float"))
-    ret_val = create_disk_layout<float>(argc, argv);
+    ret_val = create_disk_layout<float>(argv);
   else if (std::string(argv[1]) == std::string("int8"))
-    ret_val = create_disk_layout<int8_t>(argc, argv);
+    ret_val = create_disk_layout<int8_t>(argv);
   else if (std::string(argv[1]) == std::string("uint8"))
-    ret_val = create_disk_layout<uint8_t>(argc, argv);
+    ret_val = create_disk_layout<uint8_t>(argv);
   else {
     std::cout << "unsupported type. use int8/uint8/float " << std::endl;
     ret_val = -2;

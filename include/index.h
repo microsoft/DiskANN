@@ -63,7 +63,7 @@ namespace diskann {
 
     DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> search_with_tags(
         const T *query, const size_t K, const unsigned L, TagT *tags,
-        unsigned frozen_pts, unsigned *indices_buffer = NULL);
+        unsigned *indices_buffer = NULL);
 
     // repositions frozen points to the end of _data - if they have been moved
     // during deletion

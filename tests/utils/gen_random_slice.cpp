@@ -21,7 +21,7 @@
 #include <typeinfo>
 
 template<typename T>
-int aux_main(int argc, char** argv) {
+int aux_main(char** argv) {
 
   std::string base_file(argv[2]);
   std::string output_prefix(argv[3]);
@@ -40,11 +40,11 @@ int main(int argc, char** argv) {
   }
 
   if (std::string(argv[1]) == std::string("float")) {
-    aux_main<float>(argc, argv);
+    aux_main<float>(argv);
   } else if (std::string(argv[1]) == std::string("int8")) {
-    aux_main<int8_t>(argc, argv);
+    aux_main<int8_t>(argv);
   } else if (std::string(argv[1]) == std::string("uint8")) {
-    aux_main<uint8_t>(argc, argv);
+    aux_main<uint8_t>(argv);
   } else
     std::cout << "Unsupported type. Use float/int8/uint8." << std::endl;
   return 0;

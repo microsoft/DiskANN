@@ -807,8 +807,7 @@ if (file_exists(disk_pq_pivots_path)) {
                                            const _u64 l_search, _u64 *indices,
                                            float *      distances,
                                            const _u64   beam_width,
-                                           QueryStats * stats,
-                                           Distance<T> *output_dist_func) {
+                                           QueryStats * stats) {
     ThreadData<T> data = this->thread_data.pop();
     while (data.scratch.sector_scratch == nullptr) {
       this->thread_data.wait_for_push_notify();

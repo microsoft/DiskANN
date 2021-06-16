@@ -1080,7 +1080,7 @@ namespace diskann {
   template<typename T, typename TagT>
   std::pair<uint32_t, uint32_t> Index<T, TagT>::search_with_tags(
       const T *query, const size_t K, const unsigned L, TagT *tags,
-      unsigned frozen_pts, unsigned *indices_buffer) {
+      unsigned *indices_buffer) {
     const bool alloc = indices_buffer == NULL;
     auto       indices = alloc ? new unsigned[K] : indices_buffer;
     auto       ret = search(query, K, L, indices);
