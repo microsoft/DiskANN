@@ -5,6 +5,7 @@
 
 #include <cassert>
 #include <map>
+#include <memory>
 #include <sstream>
 #include <stack>
 #include <string>
@@ -24,10 +25,11 @@
            ((double) size * degree) * sizeof(unsigned) * SLACK_FACTOR))
 
 namespace diskann {
-  template<typename T, typename TagT = int>
+  template<typename T, typename TagT = int, typename Allocator = std::allocator<unsigned>>
   class Index {
    public:
-    DISKANN_DLLEXPORT Index(Metric m, const char *filename,
+    DISKANN_DLLEXPORT Index(Metric m, const char *filename, bool data_in_pm = false,
+                            const Allocator& allocator = std::allocator<unsigned>(),
                             const size_t max_points = 0, const size_t nd = 0,
                             const size_t num_frozen_pts = 0,
                             const bool   enable_tags = false,
@@ -98,15 +100,16 @@ namespace diskann {
     DISKANN_DLLEXPORT int eager_delete(const TagT        tag,
                                        const Parameters &parameters);
 
-    DISKANN_DLLEXPORT void optimize_graph();
+    DISKANN_DLLEXPORT void optimize_graph(bool use_pm = false);
 
     DISKANN_DLLEXPORT void search_with_opt_graph(const T *query, size_t K,
                                                  size_t L, unsigned *indices);
 
     /*  Internals of the library */
    protected:
+    const Allocator _allocator;
     typedef std::vector<SimpleNeighbor>        vecNgh;
-    typedef std::vector<std::vector<unsigned>> CompactGraph;
+    typedef std::vector<std::vector<unsigned, Allocator>> CompactGraph;
     CompactGraph                               _final_graph;
     CompactGraph                               _in_graph;
 

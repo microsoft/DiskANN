@@ -43,32 +43,51 @@ function(checkEnvAndSetLocalVar env_var msg local_var)
 	endif()
 endfunction()
 
-	
+
 
 #MKL Config
 if (MSVC)
 	checkEnvAndSetLocalVar("INTEL_ROOT" "Please install Intel MKL libraries and set the env variable INTEL_ROOT to the intel software directory. Should be similar to: C:\\Program Files (x86)\\IntelSWTools\\compilers_and_libraries\\windows\\. " "INTEL_ROOT")
-	set(MKL_ROOT ${INTEL_ROOT}/mkl)
+	set(MKL_ROOT ${INTEL_ROOT}/mkl/latest/)
 	add_compile_options(/arch:AVX2 /Qpar)
-	link_libraries("${INTEL_ROOT}/mkl/lib/intel64/mkl_core_dll.lib" "${INTEL_ROOT}/mkl/lib/intel64/mkl_rt.lib"  "${INTEL_ROOT}/mkl/lib/intel64/mkl_intel_thread_dll.lib" "${INTEL_ROOT}/compiler/lib/intel64/libiomp5md.lib"  "${INTEL_ROOT}/mkl/lib/intel64/mkl_intel_ilp64_dll.lib" "${INTEL_ROOT}/mkl/lib/intel64/mkl_sequential_dll.lib")
+	link_libraries("${INTEL_ROOT}/mkl/latest/lib/intel64/mkl_core_dll.lib" "${INTEL_ROOT}/mkl/latest/lib/intel64/mkl_rt.lib"  "${INTEL_ROOT}/mkl/latest/lib/intel64/mkl_intel_thread_dll.lib" "${INTEL_ROOT}/compiler/latest/windows/compiler/lib/intel64_win/libiomp5md.lib"  "${INTEL_ROOT}/mkl/latest/lib/intel64/mkl_intel_ilp64_dll.lib" "${INTEL_ROOT}/mkl/latest/lib/intel64/mkl_sequential_dll.lib")
 	checkEnvAndSetLocalVar("BOOST_ROOT" "Please install Boost (1.71 or greater) from www.boost.org and set the env var BOOST_ROOT to the boost directory." "BOOST_ROOT")
 
 else()
-	set(INTEL_ROOT /opt/intel/compilers_and_libraries/linux)
+	set(INTEL_ROOT /home/stg/intel/compilers_and_libraries_2020.2.254/linux)
 	set(MKL_ROOT ${INTEL_ROOT}/mkl)
-        add_compile_options(-m64 -Wl,--no-as-needed) 
+        add_compile_options(-m64 -Wl,--no-as-needed)
 	link_libraries(mkl_intel_ilp64 mkl_intel_thread mkl_core iomp5 pthread m dl)
 	link_directories(${INTEL_ROOT}/lib/intel64 ${MKL_ROOT}/lib/intel64)
+endif()
+
+#function(checkPMem env_var local_var)
+#	if (NOT EXISTS "$ENV{${env_var}}")
+#		message ("PMem variable not found defaulting to DRAM")
+#		set(${local_var} "DRAM" PARENT_SCOPE)
+#	else()
+#		message (STATUS "using ${env_var}")
+#		set(${local_var} "$ENV{${env_var}}" PARENT_SCOPE)
+#		if ($ENV{${env_var}} MATCHES "PMEM")
+#			link_libraries(memkind)
+#		endif()
+#	endif()
+#endfunction()
+
+# Include PM
+if (MSVC)
+else()
+link_libraries(memkind)
 endif()
 
 add_definitions(-DMKL_ILP64)
 include_directories(include ${INTEL_ROOT}/include ${MKL_ROOT}/include ${BOOST_ROOT})
 
 
-#Main compiler/linker settings 
+#Main compiler/linker settings
 if(MSVC)
 	#language options
-	add_compile_options(/permissive- /openmp:experimental /Zc:wchar_t /Zc:twoPhase- /Zc:forScope /Zc:inline /WX- /std:c++14 /Gd /W3 /MP /Zi /FC /nologo /diagnostics:classic) 
+	add_compile_options(/permissive- /openmp:experimental /Zc:wchar_t /Zc:twoPhase- /Zc:forScope /Zc:inline /WX- /std:c++14 /Gd /W3 /MP /Zi /FC /nologo /diagnostics:classic)
 	#code generation options
 	add_compile_options(/Qpar /fp:fast /Zp8 /fp:except- /EHsc /GS- /Gm- /Gy )
 	#optimization options
@@ -76,20 +95,20 @@ if(MSVC)
 	#path options
 	#add_compile_options(/Fdx64/Release/vc141.pdb /Fox64/Release/)
 	add_definitions(-DUSE_AVX2 -DUSE_ACCELERATED_PQ -D_WINDOWS -DNOMINMAX -DUNICODE)
-	
+
 	set(CMAKE_SHARED_LIBRARY_CXX_LINK_FLAGS "/MANIFEST /MACHINE:X64 /DEBUG:FULL /LTCG:incremental /NXCOMPAT /DYNAMICBASE /OPT:REF /SUBSYSTEM:CONSOLE /MANIFESTUAC:\"level='asInvoker' uiAccess='false'\"")
 	set(CMAKE_EXECUTABLE_CXX_LINK_FLAGS "/MANIFEST /MACHINE:X64 /DEBUG:FULL /LTCG:incremental /NXCOMPAT /DYNAMICBASE /OPT:REF /SUBSYSTEM:CONSOLE /MANIFESTUAC:\"level='asInvoker' uiAccess='false'\"")
 
 	set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} /D_DEBUG")
 	set(CMAKE_SHARED_LIBRARY_CXX_LINK_FLAGS_DEBUG "${CMAKE_SHARED_LIBRARY_CXX_LINK_FLAGS_DEBUG} /DEBUG")
 
-	set(CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG ${PROJECT_SOURCE_DIR}/x64/Debug)
-	set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_DEBUG ${PROJECT_SOURCE_DIR}/x64/Debug)
-	set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY_DEBUG ${PROJECT_SOURCE_DIR}/x64/Debug)
+	set(CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG ${PROJECT_SOURCE_DIR}/out/build/Debug)
+	set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_DEBUG ${PROJECT_SOURCE_DIR}/out/build/Debug)
+	set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY_DEBUG ${PROJECT_SOURCE_DIR}/out/build/Debug)
 
-	set(CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE ${PROJECT_SOURCE_DIR}/x64/Release)
-	set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE ${PROJECT_SOURCE_DIR}/x64/Release)
-	set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY_RELEASE ${PROJECT_SOURCE_DIR}/x64/Release)
+	set(CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE ${PROJECT_SOURCE_DIR}/out/build/Release)
+	set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE ${PROJECT_SOURCE_DIR}/out/build/Release)
+	set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY_RELEASE ${PROJECT_SOURCE_DIR}/out/build/Release)
 else()
 	set(ENV{TCMALLOC_LARGE_ALLOC_REPORT_THRESHOLD} 500000000000)
     #	set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -g -DDEBUG -O0 -fsanitize=address -fsanitize=leak -fsanitize=undefined")
