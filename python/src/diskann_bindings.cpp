@@ -2,6 +2,7 @@
 // Licensed under the MIT license.
 
 #include <omp.h>
+#include <mkl.h>
 
 #include <pybind11/numpy.h>
 #include <pybind11/pybind11.h>
@@ -36,9 +37,7 @@ PYBIND11_MODULE(diskannpy, m) {
   py::bind_vector<std::vector<unsigned>>(m, "VectorUnsigned");
   py::bind_vector<std::vector<float>>(m, "VectorFloat");
 
-  py::enum_<Metric>(m, "Metric")
-      .value("L2", Metric::L2)
-      .export_values();
+  py::enum_<Metric>(m, "Metric").value("L2", Metric::L2).export_values();
 
   py::class_<Parameters>(m, "Parameters")
       .def(py::init<>())
@@ -56,7 +55,7 @@ PYBIND11_MODULE(diskannpy, m) {
           py::arg("name"), py::arg("value"));
 
   py::class_<Neighbor>(m, "Neighbor")
-      .def(py::init<>()) 
+      .def(py::init<>())
       .def(py::init<unsigned, float, bool>())
       .def(py::self < py::self)
       .def(py::self == py::self);
@@ -68,7 +67,7 @@ PYBIND11_MODULE(diskannpy, m) {
       .def(py::self == py::self);
 
   py::class_<AlignedFileReader>(m, "AlignedFileReader");
-  
+
   py::class_<LinuxAlignedFileReader>(m, "LinuxAlignedFileReader")
       .def(py::init<>());
   //    .def("get_ctx", &LinuxAlignedFileReader::get_ctx)
@@ -167,14 +166,11 @@ PYBIND11_MODULE(diskannpy, m) {
          size_t dims) { save_bin<_u32>(file_name, data.data(), npts, dims); },
       py::arg("file_name"), py::arg("data"), py::arg("npts"), py::arg("dims"));
 
-
-
   py::class_<PQFlashIndex<float>>(m, "DiskANNFloatIndex")
       .def(py::init(&FloatPQFlashIndexCreator))
       .def(
-          "load",
-          [](PQFlashIndex<float> &self, const std::string& index_path_prefix) {
-
+          "load_index",
+          [](PQFlashIndex<float> &self, const std::string &index_path_prefix) {
             const std::string pq_path = index_path_prefix + std::string("_pq");
             const std::string index_path =
                 index_path_prefix + std::string("_disk.index");
@@ -212,5 +208,83 @@ PYBIND11_MODULE(diskannpy, m) {
           },
           py::arg("query_data"), py::arg("nqueries"), py::arg("dim"),
           py::arg("knn") = 10, py::arg("l_search"), py::arg("beam_width"),
-          py::arg("ids"), py::arg("dists"));
+          py::arg("ids"), py::arg("dists"))
+      .def(
+        "build",
+           [](PQFlashIndex<float> &          self,
+              const char *dataFilePath, const std::string &index_prefix_path,
+              unsigned R, unsigned L, double final_index_ram_limit,
+              double indexing_ram_budget, unsigned num_threads) {
+             std::string pq_pivots_path = index_prefix_path + "_pq_pivots";
+             std::string pq_compressed_vectors_path =
+                 index_prefix_path + "_pq_compressed.bin";
+             std::string mem_index_path = index_prefix_path + "_mem.index";
+             std::string disk_index_path = index_prefix_path + "_disk.index";
+             std::string medoids_path = disk_index_path + "_medoids.bin";
+             std::string centroids_path = disk_index_path + "_centroids.bin";
+             std::string sample_base_prefix = index_prefix_path + "_sample";
+
+             if (num_threads != 0) {
+               omp_set_num_threads(num_threads);
+               mkl_set_num_threads(num_threads);
+             }
+
+             cout << "Starting index build: R=" << R << " L=" << L
+                  << " Query RAM budget: " << final_index_ram_limit
+                  << " Indexing RAM budget: " << indexing_ram_budget
+                  << " T: " << num_threads << std::endl;
+
+             auto s = std::chrono::high_resolution_clock::now();
+
+             size_t points_num, dim;
+
+             get_bin_metadata(dataFilePath, points_num, dim);
+
+             size_t num_pq_chunks =
+                 (size_t)(std::floor)(_u64(final_index_ram_limit / points_num));
+
+             num_pq_chunks = num_pq_chunks <= 0 ? 1 : num_pq_chunks;
+             num_pq_chunks = num_pq_chunks > dim ? dim : num_pq_chunks;
+             num_pq_chunks =
+                 num_pq_chunks > MAX_PQ_CHUNKS ? MAX_PQ_CHUNKS : num_pq_chunks;
+
+             cout << "Compressing " << dim << "-dimensional data into "
+                  << num_pq_chunks << " bytes per vector." << std::endl;
+
+             size_t train_size, train_dim;
+             float *train_data;
+
+             double p_val = ((double) TRAINING_SET_SIZE / (double) points_num);
+             // generates random sample and sets it to train_data and updates
+             // train_size
+             gen_random_slice<T>(dataFilePath, p_val, train_data, train_size,
+                                 train_dim);
+
+             cout << "Training data loaded of size " << train_size << std::endl;
+
+             generate_pq_pivots(train_data, train_size, (uint32_t) dim, 256,
+                                (uint32_t) num_pq_chunks, 15, pq_pivots_path);
+             generate_pq_data_from_pivots<T>(
+                 dataFilePath, 256, (uint32_t) num_pq_chunks, pq_pivots_path,
+                 pq_compressed_vectors_path);
+
+             delete[] train_data;
+
+             build_merged_vamana_index<T>(
+                 dataFilePath, _compareMetric, L, R, p_val, indexing_ram_budget,
+                 mem_index_path, medoids_path, centroids_path);
+
+             create_disk_layout<T>(dataFilePath, mem_index_path,
+                                   disk_index_path);
+
+             double sample_sampling_rate = (150000.0 / points_num);
+             gen_random_slice<T>(dataFilePath, sample_base_prefix,
+                                 sample_sampling_rate);
+
+             std::remove(mem_index_path.c_str());
+
+             auto e = std::chrono::high_resolution_clock::now();
+             std::chrono::duration<double> diff = e - s;
+             cout << "Indexing time: " << diff.count() << std::endl;
+           });
 }
