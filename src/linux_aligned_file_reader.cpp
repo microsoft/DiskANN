@@ -1,8 +1,7 @@
-// Copyright (c) Microsoft Corporation. All rights reserved.
-// Licensed under the MIT license.
 
 #include "linux_aligned_file_reader.h"
 
+#include <aio.h>
 #include <cassert>
 #include <cstdio>
 #include <iostream>
@@ -19,7 +18,7 @@ namespace {
 #ifdef DEBUG
     for (auto &req : read_reqs) {
       assert(IS_ALIGNED(req.len, 512));
-      // std::cout << "request:"<<req.offset<<":"<<req.len << std::endl;
+      // diskann::cout << "request:"<<req.offset<<":"<<req.len << std::endl;
       assert(IS_ALIGNED(req.offset, 512));
       assert(IS_ALIGNED(req.buf, 512));
       // assert(malloc_usable_size(req.buf) >= req.len);
@@ -56,8 +55,8 @@ namespace {
         if (ret != (int64_t) n_ops) {
           std::cerr << "io_submit() failed; returned " << ret
                     << ", expected=" << n_ops << ", ernno=" << errno << "="
-                    << ::strerror(-ret) << ", try #" << n_tries + 1;
-          std::cout << "ctx: " << ctx << "\n";
+                    << ::strerror((int) -ret) << ", try #" << n_tries + 1;
+          diskann::cout << "ctx: " << ctx << "\n";
           exit(-1);
         } else {
           // wait on io_getevents
@@ -67,29 +66,16 @@ namespace {
           if (ret != (int64_t) n_ops) {
             std::cerr << "io_getevents() failed; returned " << ret
                       << ", expected=" << n_ops << ", ernno=" << errno << "="
-                      << ::strerror(-ret) << ", try #" << n_tries + 1;
+                      << ::strerror((int) -ret) << ", try #" << n_tries + 1;
             exit(-1);
           } else {
             break;
           }
         }
       }
-      // disabled since req.buf could be an offset into another buf
-      /*
-      for (auto &req : read_reqs) {
-        // corruption check
-        assert(malloc_usable_size(req.buf) >= req.len);
-      }
-      */
     }
-
-    /*
-    for(unsigned i=0;i<64;i++){
-      std::cout << *((unsigned*)read_reqs[0].buf + i) << " ";
-    }
-    std::cout << std::endl;*/
   }
-}
+}  // namespace
 
 LinuxAlignedFileReader::LinuxAlignedFileReader() {
   this->file_desc = -1;
@@ -128,8 +114,6 @@ void LinuxAlignedFileReader::register_thread() {
   auto                         my_id = std::this_thread::get_id();
   std::unique_lock<std::mutex> lk(ctx_mut);
   if (ctx_map.find(my_id) != ctx_map.end()) {
-    std::cerr << "multiple calls to register_thread from the same thread"
-              << std::endl;
     return;
   }
   io_context_t ctx = 0;
@@ -141,8 +125,6 @@ void LinuxAlignedFileReader::register_thread() {
     std::cerr << "io_setup() failed; returned " << ret << ", errno=" << errno
               << ":" << ::strerror(errno) << std::endl;
   } else {
-    std::cerr << "allocating ctx: " << ctx << " to thread-id:" << my_id
-              << std::endl;
     ctx_map[my_id] = ctx;
   }
   lk.unlock();
@@ -159,16 +141,40 @@ void LinuxAlignedFileReader::deregister_thread() {
   //  assert(ret == 0);
   lk.lock();
   ctx_map.erase(my_id);
-  std::cerr << "returned ctx from thread-id:" << my_id << std::endl;
+  //  std::cerr << "returned ctx from thread-id:" << my_id << std::endl;
   lk.unlock();
 }
 
-void LinuxAlignedFileReader::open(const std::string &fname) {
-  int flags = O_DIRECT | O_RDONLY | O_LARGEFILE;
+void LinuxAlignedFileReader::deregister_all_threads() {
+  std::unique_lock<std::mutex> lk(ctx_mut);
+
+  for (auto &iter : ctx_map) {
+    io_context_t ctx = iter.second;
+    io_destroy(ctx);
+    //  assert(ret == 0);
+    //    std::cerr << "returned ctx from thread-id:" << iter.first <<
+    //    std::endl;
+  }
+  ctx_map.clear();
+  lk.unlock();
+}
+
+void LinuxAlignedFileReader::open(const std::string &fname,
+                                  bool               enable_writes = false,
+                                  bool               enable_create = false) {
+  int flags = O_DIRECT | O_LARGEFILE;
+  if (!enable_writes) {
+    flags |= O_RDONLY;
+  } else {
+    flags |= O_RDWR;
+  }
+  if (enable_create) {
+    flags |= O_CREAT;
+  }
   this->file_desc = ::open(fname.c_str(), flags);
   // error checks
   assert(this->file_desc != -1);
-  std::cerr << "Opened file : " << fname << std::endl;
+  //  std::cerr << "Opened file : " << fname << std::endl;
 }
 
 void LinuxAlignedFileReader::close() {
@@ -185,9 +191,46 @@ void LinuxAlignedFileReader::close() {
 void LinuxAlignedFileReader::read(std::vector<AlignedRead> &read_reqs,
                                   io_context_t &ctx, bool async) {
   assert(this->file_desc != -1);
-  //#pragma omp critical
-  //	std::cout << "thread: " << std::this_thread::get_id() << ", crtx: " <<
-  // ctx
-  //<< "\n";
   execute_io(ctx, this->file_desc, read_reqs);
+  if (async == true) {
+    std::cerr << "async only supported in Windows for now." << std::endl;
+  }
+}
+
+void LinuxAlignedFileReader::sequential_write(AlignedRead &write_req,
+                                              IOContext &  ctx) {
+  assert(this->file_desc != -1);
+  // check inputs
+  assert(IS_ALIGNED(write_req.offset, 4096));
+  assert(IS_ALIGNED(write_req.buf, 4096));
+  assert(IS_ALIGNED(write_req.len, 4096));
+
+  // create write request
+  io_event_t  evt;
+  struct iocb cb;
+  iocb_t *    cbs = &cb;
+  io_prep_pwrite(&cb, this->file_desc, write_req.buf, write_req.len,
+                 write_req.offset);
+
+  uint64_t n_tries = 0;
+  // issue reads
+  int64_t ret = io_submit(ctx, (int64_t) 1, &cbs);
+  // if requests didn't get accepted
+  if (ret != (int64_t) 1) {
+    std::cerr << "io_submit() failed; returned " << ret << ", expected=" << 1
+              << ", ernno=" << errno << "=" << ::strerror((int) -ret)
+              << ", try #" << n_tries + 1;
+    diskann::cout << "ctx: " << ctx << "\n";
+    exit(-1);
+  } else {
+    // wait on io_getevents
+    ret = io_getevents(ctx, (int64_t) 1, (int64_t) 1, &evt, nullptr);
+    // if requests didn't complete
+    if (ret != (int64_t) 1) {
+      std::cerr << "io_getevents() failed; returned " << ret
+                << ", expected=" << 1 << ", ernno=" << errno << "="
+                << ::strerror((int) -ret) << ", try #" << n_tries + 1;
+      exit(-1);
+    }
+  }
 }

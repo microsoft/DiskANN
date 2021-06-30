@@ -9,34 +9,44 @@
 
 #include "logger.h"
 #include "ann_exception.h"
+#include "utils.h"
 
 // sequential cached reads
 class cached_ifstream {
  public:
   cached_ifstream() {
   }
-  cached_ifstream(const std::string& filename, uint64_t cacheSize)
+  cached_ifstream(const std::string& filename, uint64_t cacheSize,
+                  uint32_t initial_offset = 0)
       : cache_size(cacheSize), cur_off(0) {
-    this->open(filename, cache_size);
+    this->open(filename, cache_size, initial_offset);
   }
   ~cached_ifstream() {
-    delete[] cache_buf;
-    reader.close();
+    //    delete[] cache_buf;
+    if (reader.is_open())
+      reader.close();
   }
 
-  void open(const std::string& filename, uint64_t cacheSize) {
+  void close() {
+    if (reader.is_open())
+      reader.close();
+  }
+
+  void open(const std::string& filename, uint64_t cacheSize,
+            size_t initial_offset = 0) {
     this->cur_off = 0;
     reader.open(filename, std::ios::binary | std::ios::ate);
     fsize = reader.tellg();
-    reader.seekg(0, std::ios::beg);
+    reader.seekg(initial_offset, reader.beg);
     assert(reader.is_open());
     assert(cacheSize > 0);
-    cacheSize = (std::min)(cacheSize, fsize);
-    this->cache_size = cacheSize;
-    cache_buf = new char[cacheSize];
-    reader.read(cache_buf, cacheSize);
+    cacheSize = (std::min)(cacheSize, fsize - initial_offset);
     diskann::cout << "Opened: " << filename.c_str() << ", size: " << fsize
                   << ", cache_size: " << cacheSize << std::endl;
+    this->cache_size = cacheSize;
+    cache_buf = new char[cacheSize];
+    //    cache_buf = std::make_unique<char[]>(cacheSize);
+    reader.read(cache_buf, cacheSize);
   }
 
   size_t get_file_size() {
@@ -97,24 +107,42 @@ class cached_ifstream {
 // sequential cached writes
 class cached_ofstream {
  public:
-  cached_ofstream(const std::string& filename, uint64_t cache_size)
+  cached_ofstream() {
+  }
+  cached_ofstream(const std::string& filename, uint64_t cache_size,
+                  size_t initial_offset = 0)
       : cache_size(cache_size), cur_off(0) {
-    writer.open(filename, std::ios::binary);
+    open(filename, cache_size, initial_offset);
+  }
+  void open(const std::string& filename, uint64_t cache_size,
+            size_t initial_offset = 0) {
+    open_file_to_write(writer, filename);
     assert(writer.is_open());
     assert(cache_size > 0);
+    writer.seekp(initial_offset, writer.beg);
     cache_buf = new char[cache_size];
+    fsize = initial_offset;
     diskann::cout << "Opened: " << filename.c_str()
                   << ", cache_size: " << cache_size << std::endl;
   }
 
   ~cached_ofstream() {
+    this->close();
+  }
+
+  void close() {
     // dump any remaining data in memory
     if (cur_off > 0) {
       this->flush_cache();
     }
 
-    delete[] cache_buf;
-    writer.close();
+    if (cache_buf != nullptr) {
+      delete[] cache_buf;
+      cache_buf = nullptr;
+    }
+
+    if (writer.is_open())
+      writer.close();
     diskann::cout << "Finished writing " << fsize << "B" << std::endl;
   }
 

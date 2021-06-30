@@ -14,8 +14,8 @@
 
 int main(int argc, char** argv) {
   if (argc != 4) {
-    std::cout << argv[0] << " <ground_truth_bin> <our_results_bin>  <r> "
-              << std::endl;
+    diskann::cout << argv[0] << " <ground_truth_bin> <our_results_bin>  <r> "
+                  << std::endl;
     return -1;
   }
   unsigned* gold_std = NULL;
@@ -29,7 +29,7 @@ int main(int argc, char** argv) {
   diskann::load_truthset(argv[2], our_results, or_dist, points_num_or, dim_or);
 
   if (points_num_gs != points_num_or) {
-    std::cout
+    diskann::cout
         << "Error. Number of queries mismatch in ground truth and our results"
         << std::endl;
     return -1;
@@ -39,15 +39,16 @@ int main(int argc, char** argv) {
   uint32_t recall_at = std::atoi(argv[3]);
 
   if ((dim_or < recall_at) || (recall_at > dim_gs)) {
-    std::cout << "ground truth has size " << dim_gs << "; our set has "
-              << dim_or << " points. Asking for recall " << recall_at
-              << std::endl;
+    diskann::cout << "ground truth has size " << dim_gs << "; our set has "
+                  << dim_or << " points. Asking for recall " << recall_at
+                  << std::endl;
     return -1;
   }
-  std::cout << "Calculating recall@" << recall_at << std::endl;
-  float recall_val = diskann::calculate_recall(
-      points_num, gold_std, gs_dist, dim_gs, our_results, dim_or, recall_at);
+  diskann::cout << "Calculating recall@" << recall_at << std::endl;
+  float recall_val = (float) diskann::calculate_recall(
+      (_u32) points_num, gold_std, gs_dist, (_u32) dim_gs, our_results,
+      (_u32) dim_or, recall_at);
 
   //  double avg_recall = (recall*1.0)/(points_num*1.0);
-  std::cout << "Avg. recall@" << recall_at << " is " << recall_val << "\n";
+  diskann::cout << "Avg. recall@" << recall_at << " is " << recall_val << "\n";
 }

@@ -2,17 +2,28 @@
 // Licensed under the MIT license.
 
 #pragma once
+
+#include <immintrin.h>
+#include <smmintrin.h>
+#include <tmmintrin.h>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <vector>
+#include <limits>
+#include <algorithm>
+#include <stdexcept>
+
+#include "simd_utils.h"
+
+extern bool Avx2SupportedCPU;
 
 namespace diskann {
   template<typename T>
   inline float compute_l2_norm(const T* vector, uint64_t ndims) {
     float norm = 0.0f;
     for (uint64_t i = 0; i < ndims; i++) {
-      norm += vector[i] * vector[i];
+      norm += (float) (vector[i] * vector[i]);
     }
     return std::sqrt(norm);
   }
@@ -24,7 +35,7 @@ namespace diskann {
     float right_norm = compute_l2_norm<T>(right, ndims);
     float dot = 0.0f;
     for (uint64_t i = 0; i < ndims; i++) {
-      dot += left[i] * right[i];
+      dot += (float) (left[i] * right[i]);
     }
     float cos_sim = dot / (left_norm * right_norm);
     return cos_sim;

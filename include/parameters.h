@@ -21,6 +21,10 @@ namespace diskann {
       //      ParamType *ptr = (ParamType *) malloc(sizeof(ParamType));
       ParamType *ptr = new ParamType;
       *ptr = value;
+      if (params.find(name) != params.end()) {
+        free(params[name]);
+      }
+
       params[name] = (void *) ptr;
     }
 
@@ -54,7 +58,6 @@ namespace diskann {
       for (auto iter = params.begin(); iter != params.end(); iter++) {
         if (iter->second != nullptr)
           free(iter->second);
-        // delete iter->second;
       }
     }
 

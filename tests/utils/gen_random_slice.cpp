@@ -21,14 +21,7 @@
 #include <typeinfo>
 
 template<typename T>
-int aux_main(int argc, char** argv) {
-  if (argc != 5) {
-    std::cout << argv[0] << " data_type [fliat/int8/uint8] base_bin_file "
-                            "sample_output_prefix sampling_probability"
-              << std::endl;
-    exit(-1);
-  }
-
+int aux_main(char** argv) {
   std::string base_file(argv[2]);
   std::string output_prefix(argv[3]);
   float       sampling_rate = (float) (std::atof(argv[4]));
@@ -37,13 +30,21 @@ int aux_main(int argc, char** argv) {
 }
 
 int main(int argc, char** argv) {
+  if (argc != 5) {
+    diskann::cout << argv[0]
+                  << " data_type [float/int8/uint8] base_bin_file "
+                     "sample_output_prefix sampling_probability"
+                  << std::endl;
+    exit(-1);
+  }
+
   if (std::string(argv[1]) == std::string("float")) {
-    aux_main<float>(argc, argv);
+    aux_main<float>(argv);
   } else if (std::string(argv[1]) == std::string("int8")) {
-    aux_main<int8_t>(argc, argv);
+    aux_main<int8_t>(argv);
   } else if (std::string(argv[1]) == std::string("uint8")) {
-    aux_main<uint8_t>(argc, argv);
+    aux_main<uint8_t>(argv);
   } else
-    std::cout << "Unsupported type. Use float/int8/uint8." << std::endl;
+    diskann::cout << "Unsupported type. Use float/int8/uint8." << std::endl;
   return 0;
 }
