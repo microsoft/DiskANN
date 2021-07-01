@@ -67,6 +67,8 @@ namespace diskann {
     DISKANN_DLLEXPORT size_t load_delete_set(const std::string &filename,
                                              size_t             offset = 0);
 
+    DISKANN_DLLEXPORT void get_delete_set(tsl::robin_set<uint32_t> &del_set); 
+
     DISKANN_DLLEXPORT size_t get_num_points();
 
     DISKANN_DLLEXPORT size_t return_max_points();

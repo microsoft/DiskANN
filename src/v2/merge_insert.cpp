@@ -228,9 +228,13 @@ namespace diskann {
       }
 
       if(_active_delete_set == 0)
-	      _deletion_set_0.insert(tag);
-      else
-	      _deletion_set_1.insert(tag);
+      {_deletion_set_0.insert(tag);
+          _mem_index_0->lazy_delete(tag);
+      }
+      else{
+          _deletion_set_1.insert(tag);
+          _mem_index_1->lazy_delete(tag);
+      }
  }
 
  template<typename T, typename TagT>

@@ -466,10 +466,12 @@ namespace diskann {
     diskann::cout << "Found " << this->disk_deleted_ids.size()
                   << " tags to delete from SSD-DiskANN\n";
 
-    this->mem_deleted_ids.resize(this->mem_data.size());
+//    this->mem_deleted_ids.resize(this->mem_data.size());
     for (uint32_t i = 0; i < this->mem_data.size(); i++) {
       tsl::robin_set<uint32_t> &deleted_ids = this->mem_deleted_ids[i];
       for (uint32_t id = 0; id < this->mem_npts[i]; id++) {
+          if(deleted_ids.find(id) != deleted_ids.end())
+              continue;
         const TagT tag = this->mem_tags[i][id];
         //if (this->deleted_tags.find(tag) != this->deleted_tags.end()) {
         //  deleted_ids.insert(id);
@@ -1236,6 +1238,13 @@ namespace diskann {
         base_offset += INDEX_OFFSET;
         this->offset_ids.push_back(index_offset);
         this->mem_deltas.push_back(new GraphDelta(index_offset, npts));
+        tsl::robin_set<uint32_t> temp_del_set;
+        if(file_exists(mem_index_path + ".del"))
+        {
+            mem_index->load_delete_set(mem_index_path + ".del");
+            mem_index->get_delete_set(temp_del_set);
+        }
+        this->mem_deleted_ids.push_back(temp_del_set);
         mem_index->load_tags(mem_index_path + ".tags");
         // manage tags
         std::unique_ptr<TagT[]> index_tags;
@@ -1246,10 +1255,7 @@ namespace diskann {
         for (uint32_t k = 0; k < npts; k++) {
           auto iter = loc_tag_map.find(k);
           if (iter == loc_tag_map.end()) {
-            diskann::cout << "Index # " << this->mem_data.size()
-                          << " : missing tag for node #" << k << "\n";
-            exit(-1);
-            index_tags[k] = (TagT) k;
+            index_tags[k] = (TagT) 0;
           } else {
             index_tags[k] = iter->second;
           }

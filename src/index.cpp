@@ -357,6 +357,12 @@ namespace diskann {
   }
 
   template<typename T, typename TagT>
+      void Index<T, TagT>::get_delete_set(tsl::robin_set<uint32_t> &del_set)
+      {
+          del_set = _delete_set;
+      }
+
+  template<typename T, typename TagT>
   size_t Index<T, TagT>::load_delete_set(const std::string &filename,
                                          size_t             offset) {
     std::unique_ptr<_u32[]> delete_list;
@@ -2541,7 +2547,7 @@ namespace diskann {
       std::shared_lock<std::shared_timed_mutex> l(_tag_lock);
 
       if (_tag_to_location.find(tag) == _tag_to_location.end()) {
-        diskann::cerr << "Delete tag not found" << std::endl;
+//        diskann::cerr << "Delete tag not found" << std::endl;
         return -1;
       }
       assert(_tag_to_location[tag] < _max_points);
