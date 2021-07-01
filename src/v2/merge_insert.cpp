@@ -123,6 +123,7 @@ namespace diskann {
     }
 
     TMP_FOLDER = working_folder;
+    std::cout << "TMP_FOLDER inside MergeInsert : " << TMP_FOLDER << std::endl;
   }
 
   template<typename T, typename TagT>
@@ -336,8 +337,8 @@ namespace diskann {
          mem_in.push_back(_mem_index_prefix + "_1");
      else
          mem_in.push_back(_mem_index_prefix + "_0");
-     std::string folder = " ";
-     _merger->merge(_disk_index_prefix_in.c_str(), mem_in, _disk_index_prefix_out.c_str(), _deleted_tags_vector, folder);
+     
+     _merger->merge(_disk_index_prefix_in.c_str(), mem_in, _disk_index_prefix_out.c_str(), _deleted_tags_vector, TMP_FOLDER);
 
     diskann::cout << "Merge done" << std::endl;
     {
@@ -415,6 +416,7 @@ namespace diskann {
      //start timer
      diskann::Timer timer;
      construct_index_merger();
+     merge();
      destruct_index_merger();
      diskann::cout << "Merge time : " << timer.elapsed()/1000 << " ms" << std::endl;
      //end timer

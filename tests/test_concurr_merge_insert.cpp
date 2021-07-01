@@ -441,7 +441,7 @@ void run_iter(diskann::MergeInsert<T> & merge_insert,
   // files for mem-DiskANN
   std::string mem_pts_file = mem_prefix + ".data_orig";
   std::string mem_tags_file = mem_prefix + ".tags_orig";
-  std::this_thread::sleep_for(std::chrono::milliseconds(5000));
+  std::this_thread::sleep_for(std::chrono::seconds(10));
 
   ::merge_future =
       std::async(std::launch::async, merge_kernel<T>, std::ref(merge_insert));
@@ -483,7 +483,7 @@ void run_iter(diskann::MergeInsert<T> & merge_insert,
                   << " seconds " << std::endl;
         search_kernel<T>(merge_insert, inactive_set, query_file, gs_file);
         */
-    std::this_thread::sleep_for(std::chrono::milliseconds(10000));
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
   } while ((merge_status != std::future_status::ready));
 }
 
@@ -675,6 +675,7 @@ int main(int argc, char **argv) {
   int         arg_no = 1;
   std::string index_type = argv[arg_no++];
   TMP_FOLDER = argv[arg_no++];
+  std::cout << "TMP_FOLDER : " << TMP_FOLDER << std::endl;
   std::string base_prefix(argv[arg_no++]);
   std::string merge_prefix(argv[arg_no++]);
   std::string mem_prefix(argv[arg_no++]);

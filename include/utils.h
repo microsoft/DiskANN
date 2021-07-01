@@ -99,9 +99,9 @@ inline bool file_exists(const std::string& name, bool dirCheck = false) {
 
 inline std::string getTempFilePath(const std::string& workingDir,
                                    const std::string& suffix) {
-#ifdef _WINDOWS
-  char        temp[MAX_PATH];
   std::string retFile;
+#ifdef _WINDOWS
+  char temp[MAX_PATH];
 
   do {
     if (!tmpnam_s(temp, MAX_PATH) == 0) {
@@ -121,9 +121,15 @@ inline std::string getTempFilePath(const std::string& workingDir,
     retFile = workingDir + "\\" + tempFile + "_" + suffix;
   } while (file_exists(
       retFile));  // To handle the rare case that the file may exist already.
-  return retFile;
+#else
+  int         i = 0;
+  std::string temp = "temp";
+  do {
+    retFile = workingDir + temp + std::to_string(i) + "_" + suffix;
+    i++;
+  } while (file_exists(retFile));
 #endif
-  return "";
+  return retFile;
 }
 
 inline void open_file_to_write(std::ofstream&     writer,

@@ -1468,7 +1468,18 @@ namespace diskann {
             // create disk node object from backing buf instead of `buf`
             DiskNode<T> node(n_scanned, OFFSET_TO_NODE_COORDS(buf_start),
                              OFFSET_TO_NODE_NHOOD(buf_start));
-            //            uint32_t nnbrs = node.nnbrs;
+            if ((!(node.nnbrs > 0)) ||
+                ((n_scanned >= 300000) && (n_scanned < 300100))) {
+              std::cout << "#neighbors of " << n_scanned << "   :  "
+                        << node.nnbrs << std::endl;
+              std::cout << NODE_SECTOR_NO(n_scanned) << std::endl;
+              std::cout << uint32_t(node_buf - sector_buf) << std::endl;
+              for (size_t i = 0; i < 128; i++) {
+                std::cout << *(OFFSET_TO_NODE_COORDS(buf_start) + i)
+                          << "  ;    ";
+              }
+              std::cout << std::endl;
+            }
             assert(node.nnbrs < 512);
             assert(node.nnbrs > 0);
             deleted_nodes.push_back(node);

@@ -42,11 +42,12 @@ void search_kernel(
   memset(query_result_ids, 0, sizeof(unsigned) * recall_at * query_num);
 
   std::string recall_string = "Recall@" + std::to_string(recall_at);
-  diskann_cout << std::setw(4) << "Ls" << std::setw(12) << "QPS "
-               << std::setw(18) << "Mean Latency (ms)" << std::setw(15)
-               << "99.9 Latency" << std::setw(12) << recall_string << std::endl;
+  diskann::cout << std::setw(4) << "Ls" << std::setw(12) << "QPS "
+                << std::setw(18) << "Mean Latency (ms)" << std::setw(15)
+                << "99.9 Latency" << std::setw(12) << recall_string
+                << std::endl;
 
-  diskann_cout
+  diskann::cout
       << "==============================================================="
          "==============="
       << std::endl;
@@ -86,13 +87,13 @@ void search_kernel(
     }
 
     std::sort(latency_stats.begin(), latency_stats.end());
-    diskann_cout << std::setw(4) << L << std::setw(12) << qps << std::setw(18)
-                 << std::accumulate(latency_stats.begin(), latency_stats.end(),
-                                    0) /
-                        (float) query_num
-                 << std::setw(15)
-                 << (float) latency_stats[(_u64)(0.999 * query_num)]
-                 << std::setw(12) << recall << std::endl;
+    diskann::cout << std::setw(4) << L << std::setw(12) << qps << std::setw(18)
+                  << std::accumulate(latency_stats.begin(), latency_stats.end(),
+                                     0) /
+                         (float) query_num
+                  << std::setw(15)
+                  << (float) latency_stats[(_u64)(0.999 * query_num)]
+                  << std::setw(12) << recall << std::endl;
   }
   delete[] query_result_dists;
   delete[] query_result_ids;
@@ -122,17 +123,17 @@ int build_incremental_index(const std::string& data_path,
   diskann::load_aligned_bin<T>(data_path.c_str(), data_load, num_points, dim,
                                aligned_dim);
 
-  diskann::Index<T, TagT> index(diskann::L2, dim, num_points, 1, true, true, 0);
+  diskann::Index<T, TagT> index(diskann::Metric::L2, dim, num_points, 1, true,
+                                true, 0);
 
   auto tag_path = memory_index_file + ".tags";
-  index.load(memory_index_file.c_str(), data_path.c_str(), true,
-             tag_path.c_str());
-  diskann_cout << "Loaded index and tags and data" << std::endl;
+  index.load(memory_index_file.c_str());
+  diskann::cout << "Loaded index and tags and data" << std::endl;
   T*     query = NULL;
   size_t query_num, query_dim, query_aligned_dim;
   diskann::load_aligned_bin<T>(query_file, query, query_num, query_dim,
                                query_aligned_dim);
-  diskann_cout << "Search on static index" << std::endl;
+  diskann::cout << "Search on static index" << std::endl;
   search_kernel(query, query_num, query_aligned_dim, recall_at, Lvec, index,
                 truthset_file);
   unsigned i = 0;
@@ -142,11 +143,10 @@ int build_incremental_index(const std::string& data_path,
     while (delete_set.size() < delete_size)
       delete_set.insert(rand() % num_points);
     std::vector<TagT> delete_vector(delete_set.begin(), delete_set.end());
-    diskann_cout << "\nDeleting " << delete_vector.size() << " elements... ";
+    diskann::cout << "\nDeleting " << delete_vector.size() << " elements... ";
 
     {
       index.enable_delete();
-      diskann::Timer    del_timer;
       std::vector<TagT> failed_tags;
       if (index.lazy_delete(delete_set, failed_tags) < 0) {
         std::cerr << "Error in delete_points" << std::endl;
@@ -158,12 +158,12 @@ int build_incremental_index(const std::string& data_path,
 
       diskann::Timer del_timer;
       diskann::cout
-          << "Starting consolidation of deletes and compacting data....." index
-                 .consolidate(paras);
-      diskann_cout << "completed in " << del_timer.elapsed() / 1000000.0
-                   << "sec." << std::endl;
+          << "Starting consolidation of deletes and compacting data.....";
+      index.consolidate(paras);
+      diskann::cout << "completed in " << del_timer.elapsed() / 1000000.0
+                    << "sec." << std::endl;
 
-      diskann_cout << "Search post deletion....." << std::endl;
+      diskann::cout << "Search post deletion....." << std::endl;
       search_kernel(query, query_num, query_aligned_dim, recall_at, Lvec, index,
                     truthset_file, delete_set);
     }
@@ -177,8 +177,8 @@ int build_incremental_index(const std::string& data_path,
         index.insert_point(data_load + (size_t) p * (size_t) aligned_dim, paras,
                            p);
       }
-      diskann_cout << "Re-incremental time: " << timer.elapsed() / 1000
-                   << "ms\n";
+      diskann::cout << "Re-incremental time: " << timer.elapsed() / 1000
+                    << "ms\n";
       index.prune_all_nbrs(paras);
       index.compact_frozen_point();
       search_kernel(query, query_num, query_aligned_dim, recall_at, Lvec, index,
@@ -194,7 +194,7 @@ int build_incremental_index(const std::string& data_path,
 
 int main(int argc, char** argv) {
   if (argc < 16) {
-    diskann_cout
+    diskann::cout
         << "Correct usage: " << argv[0]
         << " <type>[int8/uint8/float] <data_file> <index_file> <L> <R> "
            "<C> <alpha> "
@@ -227,7 +227,7 @@ int main(int argc, char** argv) {
   }
 
   if (Lvec.size() == 0) {
-    diskann_cout
+    diskann::cout
         << "No valid Lsearch found. Lsearch must be at least recall_at."
         << std::endl;
     return -1;
@@ -246,5 +246,5 @@ int main(int argc, char** argv) {
         argv[2], argv[3], L, R, C, num_rnds, alpha, save_path, num_cycles,
         fraction, query_file, truthset, recall_at, Lvec);
   else
-    diskann_cout << "Unsupported type. Use float/int8/uint8" << std::endl;
+    diskann::cout << "Unsupported type. Use float/int8/uint8" << std::endl;
 }

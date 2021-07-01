@@ -586,6 +586,8 @@ namespace diskann {
     diskann::save_bin<_u64>(this->temp_disk_index_path, output_metadata.data(),
                             output_metadata.size(), 1, 0);
 
+    int i;
+    std::cin >> i;
     // free buf
     aligned_free((void *) buf);
 
@@ -1139,9 +1141,11 @@ namespace diskann {
     this->disk_index_out_path = disk_out;
     this->disk_index_in_path = disk_in;
     this->TMP_FOLDER = working_folder;
+    std::cout << "Working folder : " << working_folder << std::endl;
     this->temp_disk_index_path = getTempFilePath(working_folder, "temp_disk_index");
     this->temp_pq_coords_path = getTempFilePath(working_folder, "temp_pq_compressed");
     this->temp_tags_path = getTempFilePath(working_folder, "temp_tags");
+    std::cout << this->temp_disk_index_path << " , "  << this->temp_pq_coords_path << "  ,  " << this->temp_tags_path << std::endl;
     this->final_index_file =
         this->_single_file_index ? this->disk_index_out_path
                                  : this->disk_index_out_path + "_disk.index";
