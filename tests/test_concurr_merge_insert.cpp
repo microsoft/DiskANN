@@ -447,9 +447,9 @@ void run_iter(diskann::MergeInsert<T> & merge_insert,
       std::async(std::launch::async, merge_kernel<T>, std::ref(merge_insert));
 
   while (!(::_insertions_done.load() && ::_del_done.load())) {
-    /*    std::cout << "Search at " << ::global_timer.elapsed() / 1000000
-                  << " seconds " << std::endl;
-        search_kernel<T>(merge_insert, active_set);*/
+    std::cout << "Search at " << ::global_timer.elapsed() / 1000000
+              << " seconds " << std::endl;
+    search_kernel<T>(merge_insert, active_set);
     std::this_thread::sleep_for(std::chrono::milliseconds(5000));
   }
 
@@ -457,11 +457,11 @@ void run_iter(diskann::MergeInsert<T> & merge_insert,
     ::_insertions_done.store(false);
     ::_del_done.store(false);
 
-        std::cout << "Searching all indices" << std::endl;
-        std::cout << "Search at " << ::global_timer.elapsed() / 1000000
-                  << " seconds " << std::endl;
-        search_kernel<T>(merge_insert, active_set, true);
-    
+    std::cout << "Searching all indices" << std::endl;
+    std::cout << "Search at " << ::global_timer.elapsed() / 1000000
+              << " seconds " << std::endl;
+    search_kernel<T>(merge_insert, active_set, true);
+
     std::cout << "ITER: Seeding iteration"
               << "\n";
     // seed the iteration
@@ -478,10 +478,10 @@ void run_iter(diskann::MergeInsert<T> & merge_insert,
   std::future_status merge_status;
   do {
     merge_status = ::merge_future.wait_for(std::chrono::milliseconds(1));
-    /*    std::cout << "Search at " << ::global_timer.elapsed() / 1000000
-                  << " seconds " << std::endl;
-        search_kernel<T>(merge_insert, active_set);
-        */
+    std::cout << "Search at " << ::global_timer.elapsed() / 1000000
+              << " seconds " << std::endl;
+    search_kernel<T>(merge_insert, active_set);
+
     std::this_thread::sleep_for(std::chrono::milliseconds(1000));
   } while ((merge_status != std::future_status::ready));
 }
@@ -652,6 +652,7 @@ void run_all_iters(std::string base_prefix, std::string merge_prefix,
 }
 
 int main(int argc, char **argv) {
+  std::cout << "Entering main()" << std::endl;
   if (argc < 20) {
     std::cout << "Correct usage: " << argv[0]
               << " <type[int8/uint8/float]> <WORKING_FOLDER> <base_prefix> "
@@ -673,7 +674,6 @@ int main(int argc, char **argv) {
   int         arg_no = 1;
   std::string index_type = argv[arg_no++];
   TMP_FOLDER = argv[arg_no++];
-  std::cout << "TMP_FOLDER : " << TMP_FOLDER << std::endl;
   std::string base_prefix(argv[arg_no++]);
   std::string merge_prefix(argv[arg_no++]);
   std::string mem_prefix(argv[arg_no++]);
@@ -697,6 +697,7 @@ int main(int argc, char **argv) {
       ::Lvec.push_back(curL);
   }
 
+  std::cout << "Assigning parameters" << std::endl;
   params[std::string("n_iters")] = n_iters;
   params[std::string("insert_count")] = insert_count;
   params[std::string("delete_count")] = delete_count;
@@ -727,6 +728,7 @@ int main(int argc, char **argv) {
   else
     active_tags_filename = base_prefix + "_disk.index.tags";
 
+  std::cout << "Calling run_all_iters()" << std::endl;
   if (index_type == std::string("float")) {
     diskann::DistanceL2 dist_cmp;
     run_all_iters<float>(base_prefix, merge_prefix, mem_prefix, data_bin,
@@ -743,4 +745,5 @@ int main(int argc, char **argv) {
     std::cout << "Unsupported type : " << index_type << "\n";
   }
   std::cout << "Exiting\n";
+  return 0;
 }

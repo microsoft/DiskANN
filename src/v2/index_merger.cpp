@@ -148,6 +148,7 @@ namespace diskann {
       const uint32_t count = this->mem_npts[i];
 
       size_t cur_cache_size = 0;
+#ifdef USE_TCMALLOC
       MallocExtension::instance()->GetNumericProperty(
           "tcmalloc.max_total_thread_cache_bytes", &cur_cache_size);
       //diskann::cout << "Current cache size : " << (cur_cache_size >> 10)
@@ -156,6 +157,7 @@ namespace diskann {
       MallocExtension::instance()->SetNumericProperty(
           "tcmalloc.max_total_thread_cache_bytes", 128 * 1024 * 1024);
 
+#endif
       diskann::Timer timer;
 #pragma omp parallel for schedule(dynamic, 1) num_threads(MAX_INSERT_THREADS)
       // iteratively insert each point into full index
@@ -1382,7 +1384,9 @@ namespace diskann {
     // TODO (correct) :: write to the right file
     //std::string tmp_file = TMP_FOLDER + "/index_ravi";
 
+#ifdef USE_TCMALLOC
     MallocExtension::instance()->ReleaseFreeMemory();
+#endif
 
     //this->output_writer.open(tmp_file, std::ios::out | std::ios::binary);
     //assert(this->output_writer.is_open());

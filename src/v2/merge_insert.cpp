@@ -89,7 +89,7 @@ namespace diskann {
     _paras_disk.Set<bool>("saturate_graph", 0);
 
     _num_search_threads = parameters.Get<_u32>("num_search_threads");
-    _beamwidth = parameters.Get<uint64_t>("beamwidth");
+    _beamwidth = parameters.Get<uint32_t>("beamwidth");
     _num_nodes_to_cache = parameters.Get<_u32>("nodes_to_cache");
 
     _search_tpool = new ThreadPool(_num_search_threads);

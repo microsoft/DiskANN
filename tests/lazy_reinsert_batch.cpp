@@ -28,11 +28,13 @@ void search_kernel(
     T* query, size_t query_num, size_t query_aligned_dim, const int recall_at,
     std::vector<_u64> Lvec, diskann::Index<T, TagT>& index,
     const std::string&       truthset_file,
-    tsl::robin_set<unsigned> delete_list = tsl::robin_set<unsigned>()) {
+    tsl::robin_set<unsigned> active_tags = tsl::robin_set<unsigned>()) {
   unsigned* gt_ids = NULL;
+  unsigned* gt_tags = NULL;
   float*    gt_dists = NULL;
   size_t    gt_num, gt_dim;
-  diskann::load_truthset(truthset_file, gt_ids, gt_dists, gt_num, gt_dim);
+  diskann::load_truthset(truthset_file, gt_ids, gt_dists, gt_num, gt_dim,
+                         &gt_tags);
 
   float*    query_result_dists = new float[recall_at * query_num];
   unsigned* query_result_ids = new unsigned[recall_at * query_num];
@@ -63,8 +65,8 @@ void search_kernel(
     for (int64_t i = 0; i < (int64_t) query_num; i++) {
       auto qs = std::chrono::high_resolution_clock::now();
       index.search_with_tags(query + i * query_aligned_dim, recall_at, (_u32) L,
-                             query_result_tags + i * recall_at, 1,
-                             query_result_ids + i * recall_at);
+                             query_result_tags + i * recall_at,
+                             query_result_dists + i * recall_at);
       auto qe = std::chrono::high_resolution_clock::now();
       std::chrono::duration<double> diff = qe - qs;
       latency_stats[i] = diff.count() * 1000;
@@ -76,10 +78,10 @@ void search_kernel(
     float                         qps = (float) (query_num / diff.count());
 
     float recall;
-    if (delete_list.size() > 0) {
+    if (active_tags.size() > 0) {
       recall = (float) diskann::calculate_recall(
           (_u32) query_num, gt_ids, gt_dists, (_u32) gt_dim, query_result_tags,
-          (_u32) recall_at, (_u32) recall_at, delete_list);
+          (_u32) recall_at, (_u32) recall_at, active_tags);
     } else {
       recall = (float) diskann::calculate_recall(
           (_u32) query_num, gt_ids, gt_dists, (_u32) gt_dim, query_result_tags,
@@ -123,8 +125,8 @@ int build_incremental_index(const std::string& data_path,
   diskann::load_aligned_bin<T>(data_path.c_str(), data_load, num_points, dim,
                                aligned_dim);
 
-  diskann::Index<T, TagT> index(diskann::Metric::L2, dim, num_points, 1, true,
-                                true, 0);
+  diskann::Index<T, TagT> index(diskann::Metric::L2, dim, num_points + 100, 1,
+                                false, true, 0);
 
   auto tag_path = memory_index_file + ".tags";
   index.load(memory_index_file.c_str());
@@ -143,6 +145,12 @@ int build_incremental_index(const std::string& data_path,
     while (delete_set.size() < delete_size)
       delete_set.insert(rand() % num_points);
     std::vector<TagT> delete_vector(delete_set.begin(), delete_set.end());
+    tsl::robin_set<unsigned> active_tags;
+    for (size_t j = 0; j < num_points; j++) {
+      if (delete_set.find(j) == delete_set.end()) {
+        active_tags.insert(j);
+      }
+    }
     diskann::cout << "\nDeleting " << delete_vector.size() << " elements... ";
 
     {
@@ -155,7 +163,12 @@ int build_incremental_index(const std::string& data_path,
         std::cerr << "Failed to delete " << failed_tags.size() << " tags"
                   << std::endl;
       }
-
+      /*
+            std::string save_del_path =
+                save_path + "_" + std::to_string(i) + ".delete";
+            index.save(save_del_path.c_str());
+            index.load(save_del_path.c_str());
+            */
       diskann::Timer del_timer;
       diskann::cout
           << "Starting consolidation of deletes and compacting data.....";
@@ -165,11 +178,10 @@ int build_incremental_index(const std::string& data_path,
 
       diskann::cout << "Search post deletion....." << std::endl;
       search_kernel(query, query_num, query_aligned_dim, recall_at, Lvec, index,
-                    truthset_file, delete_set);
+                    truthset_file, active_tags);
     }
 
     {
-      index.reposition_frozen_point_to_end();
       diskann::Timer timer;
 #pragma omp parallel for
       for (size_t i = 0; i < delete_vector.size(); i++) {
@@ -179,8 +191,6 @@ int build_incremental_index(const std::string& data_path,
       }
       diskann::cout << "Re-incremental time: " << timer.elapsed() / 1000
                     << "ms\n";
-      index.prune_all_nbrs(paras);
-      index.compact_frozen_point();
       search_kernel(query, query_num, query_aligned_dim, recall_at, Lvec, index,
                     truthset_file);
     }

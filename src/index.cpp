@@ -443,16 +443,7 @@ namespace diskann {
                   << " size(_location_to_tag): " << _location_to_tag.size()
                   << " size(_tag_to_location):" << _tag_to_location.size()
                   << " Max points: " << _max_points << std::endl;
-    // auto point_count = _location_to_tag.size();
-    // Since we haven't consolidated while save, during load, it is possible
-    // that we'll get locations > point_count. Hence commented
-    // for (auto lt : _location_to_tag) {
-    //  if (lt.first > point_count) {
-    //    std::cout << "Found location: " << lt.first << " for tag: " <<
-    //    lt.second
-    //              << ", location > " << point_count << std::endl;
-    //  }
-    //}
+
     _change_lock.unlock();
   }
 
@@ -488,14 +479,15 @@ namespace diskann {
     // Sanity check. In case the user gave us fewer points as max_points than
     // the number
     // of points in the dataset, resize the _final_graph to the larger size.
-    if (_max_points < expected_num_points) {
+    if (_max_points < (expected_num_points - _num_frozen_pts)) {
       diskann::cout << "Number of points in data: " << expected_num_points
-                    << " is less than max_points argument: "
+                    << " is more than max_points argument: "
                     << _final_graph.size()
                     << " Setting max points to: " << expected_num_points
                     << std::endl;
       _final_graph.resize(expected_num_points);
-      _max_points = expected_num_points;
+      _max_points = expected_num_points - _num_frozen_pts;
+      // changed expected_num to expected_num - frozen_num
     }
 
     size_t   bytes_read = 24;
@@ -2195,7 +2187,6 @@ namespace diskann {
                       << " NOT found in delete set of size: "
                       << _delete_set.size() << std::endl;
             }
-            print_delete_set();
 
             diskann::cerr << sstream.str() << std::endl;
             throw diskann::ANNException(sstream.str(), -1, __FUNCSIG__,
@@ -2708,8 +2699,6 @@ namespace diskann {
                   << std::endl;
     diskann::cout << "Number of empty slots: " << _empty_slots.size()
                   << std::endl;
-    // print_delete_set();
-    // are_deleted_points_in_graph();
     diskann::cout << std::boolalpha
                   << "Data compacted: " << this->_data_compacted
                   << " Lazy done: " << this->_lazy_done
