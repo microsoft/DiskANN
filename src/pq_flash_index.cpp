@@ -1450,6 +1450,7 @@ namespace diskann {
       assert(this->reader);
 
       this->reader->read(reads, ctx);
+      reads[0].offset += reads[0].len;
 
       // scan each sector
       for (uint32_t i = 0; i < sectors_per_scan && n_scanned < this->num_points;
@@ -1468,18 +1469,32 @@ namespace diskann {
             // create disk node object from backing buf instead of `buf`
             DiskNode<T> node(n_scanned, OFFSET_TO_NODE_COORDS(buf_start),
                              OFFSET_TO_NODE_NHOOD(buf_start));
-            if ((!(node.nnbrs > 0)) ||
-                ((n_scanned >= 300000) && (n_scanned < 300100))) {
-              std::cout << "#neighbors of " << n_scanned << "   :  "
-                        << node.nnbrs << std::endl;
-              std::cout << NODE_SECTOR_NO(n_scanned) << std::endl;
-              std::cout << uint32_t(node_buf - sector_buf) << std::endl;
-              for (size_t i = 0; i < 128; i++) {
-                std::cout << *(OFFSET_TO_NODE_COORDS(buf_start) + i)
-                          << "  ;    ";
-              }
-              std::cout << std::endl;
-            }
+            /*            if ((!(node.nnbrs > 0)) ||
+                            ((n_scanned >= 325000) && (n_scanned < 325100)) ||
+                            ((n_scanned >= 300000) && (n_scanned < 300100))) {
+                          std::cout << "#neighbors of " << n_scanned << "   :  "
+                                    << node.nnbrs << std::endl;
+                          std::cout << NODE_SECTOR_NO(n_scanned) << std::endl;
+                          std::cout << uint32_t(node_buf - sector_buf) <<
+               std::endl; for (size_t i = 0; i < 128; i++) { std::cout <<
+               *(OFFSET_TO_NODE_COORDS(buf_start) + i)
+                                      << "  ;    ";
+                          }
+                          std::cout << std::endl;
+                          if (((n_scanned % 5) != 0) && (node.nnbrs == 0)) {
+                            std::cout << "Previous vector : " << std::endl;
+                            std::cout << NODE_SECTOR_NO(n_scanned - 1) <<
+               std::endl; char *buf_prev = OFFSET_TO_NODE(sector_buf, n_scanned
+               - 1); std::cout << uint32_t(buf_prev - sector_buf) << std::endl;
+                            for (size_t i = 0; i < 128; i++) {
+                              std::cout << *(OFFSET_TO_NODE_COORDS(buf_prev) +
+               i)
+                                        << "  ;    ";
+                            }
+                            std::cout << std::endl;
+                          }
+                        }
+                        */
             assert(node.nnbrs < 512);
             assert(node.nnbrs > 0);
             deleted_nodes.push_back(node);

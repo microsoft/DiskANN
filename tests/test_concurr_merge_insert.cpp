@@ -48,6 +48,8 @@ diskann::Timer        global_timer;
 std::string           all_points_file;
 bool                  save_index_as_one_file;
 std::string           TMP_FOLDER;
+std::string           query_file = "";
+std::string           truthset_file = "";
 
 template<typename T, typename TagT = uint32_t>
 void seed_iter(tsl::robin_set<uint32_t> &active_set,
@@ -246,11 +248,8 @@ void search_disk_index(const std::string &             index_prefix_path,
 template<typename T, typename TagT = uint32_t>
 void search_kernel(diskann::MergeInsert<T> &       merge_insert,
                    const tsl::robin_set<uint32_t> &active_tags,
-                   const std::string query_path, const std::string gs_path,
-                   bool print_stats = false) {
-  std::string query_bin = query_path;
-  std::string truthset_bin = gs_path;
-  uint64_t    recall_at = params[std::string("recall_k")];
+                   bool                            print_stats = false) {
+  uint64_t recall_at = params[std::string("recall_k")];
 
   // hold data
   T *       query = nullptr;
@@ -259,11 +258,14 @@ void search_kernel(diskann::MergeInsert<T> &       merge_insert,
   float *   gt_dists = nullptr;
   size_t    query_num, query_dim, query_aligned_dim, gt_num, gt_dim;
 
+  const std::string temp = "/mnt/t-adisin/sift_query.bin";
+  std::cout << "Loading query : " << temp << std::endl;
   // load query + truthset
-  diskann::load_aligned_bin<T>(query_bin, query, query_num, query_dim,
+  diskann::load_aligned_bin<T>(temp, query, query_num, query_dim,
                                query_aligned_dim);
-  std::cout << "Loaded query" << std::endl;
-  diskann::load_truthset(gs_path, gt_ids, gt_dists, gt_num, gt_dim);
+  std::cout << "Loaded query : " << temp << std::endl;
+  diskann::load_truthset(::truthset_file, gt_ids, gt_dists, gt_num, gt_dim,
+                         &gt_tags);
   std::cout << "Loaded gt" << std::endl;
   if (gt_num != query_num) {
     std::cout << "Error. Mismatch in number of queries and ground truth data"
@@ -435,9 +437,7 @@ template<typename T, typename TagT = uint32_t>
 void run_iter(diskann::MergeInsert<T> & merge_insert,
               const std::string &       mem_prefix,
               tsl::robin_set<uint32_t> &active_set,
-              tsl::robin_set<uint32_t> &inactive_set,
-              const std::string query_file, const std::string gs_file,
-              T *data) {
+              tsl::robin_set<uint32_t> &inactive_set) {
   // files for mem-DiskANN
   std::string mem_pts_file = mem_prefix + ".data_orig";
   std::string mem_tags_file = mem_prefix + ".tags_orig";
@@ -449,7 +449,7 @@ void run_iter(diskann::MergeInsert<T> & merge_insert,
   while (!(::_insertions_done.load() && ::_del_done.load())) {
     /*    std::cout << "Search at " << ::global_timer.elapsed() / 1000000
                   << " seconds " << std::endl;
-        search_kernel<T>(merge_insert, inactive_set, query_file, gs_file);*/
+        search_kernel<T>(merge_insert, active_set);*/
     std::this_thread::sleep_for(std::chrono::milliseconds(5000));
   }
 
@@ -457,12 +457,11 @@ void run_iter(diskann::MergeInsert<T> & merge_insert,
     ::_insertions_done.store(false);
     ::_del_done.store(false);
 
-    /*    std::cout << "Searching all indices" << std::endl;
+        std::cout << "Searching all indices" << std::endl;
         std::cout << "Search at " << ::global_timer.elapsed() / 1000000
                   << " seconds " << std::endl;
-        search_kernel<T>(merge_insert, inactive_set, query_file, gs_file, true);
-        */
-
+        search_kernel<T>(merge_insert, active_set, true);
+    
     std::cout << "ITER: Seeding iteration"
               << "\n";
     // seed the iteration
@@ -481,20 +480,20 @@ void run_iter(diskann::MergeInsert<T> & merge_insert,
     merge_status = ::merge_future.wait_for(std::chrono::milliseconds(1));
     /*    std::cout << "Search at " << ::global_timer.elapsed() / 1000000
                   << " seconds " << std::endl;
-        search_kernel<T>(merge_insert, inactive_set, query_file, gs_file);
+        search_kernel<T>(merge_insert, active_set);
         */
     std::this_thread::sleep_for(std::chrono::milliseconds(1000));
   } while ((merge_status != std::future_status::ready));
 }
 
 template<typename T, typename TagT = uint32_t>
-void run_iter(diskann::MergeInsert<T> &merge_insert,
-              const std::string &base_prefix, const std::string &merge_prefix,
-              const std::string &       mem_prefix,
-              tsl::robin_set<uint32_t> &active_set,
-              tsl::robin_set<uint32_t> &inactive_set,
-              const std::string &query_file, const std::string &gs_file,
-              diskann::Distance<T> *dist_cmp) {
+void run_single_iter(diskann::MergeInsert<T> & merge_insert,
+                     const std::string &       base_prefix,
+                     const std::string &       merge_prefix,
+                     const std::string &       mem_prefix,
+                     tsl::robin_set<uint32_t> &active_set,
+                     tsl::robin_set<uint32_t> &inactive_set,
+                     diskann::Distance<T> *    dist_cmp) {
   // files for mem-DiskANN
   std::string mem_pts_file = mem_prefix + ".data_orig";
   std::string mem_tags_file = mem_prefix + ".tags_orig";
@@ -505,7 +504,7 @@ void run_iter(diskann::MergeInsert<T> &merge_insert,
     /*    std::cout << "Searching all indices" << std::endl;
         std::cout << "Search at " << ::global_timer.elapsed() / 1000000
                   << " seconds " << std::endl;
-        search_kernel<T>(merge_insert, inactive_set, query_file, gs_file, true);
+        search_kernel<T>(merge_insert, active_set, true);
         */
     std::cout << "ITER: Seeding iteration"
               << "\n";
@@ -535,7 +534,7 @@ void run_iter(diskann::MergeInsert<T> &merge_insert,
     merge_status = ::merge_future.wait_for(std::chrono::milliseconds(1));
     /*  std::cout << "Search at " << ::global_timer.elapsed() / 1000000
                 << " seconds " << std::endl;
-        search_kernel<T>(merge_insert, inactive_set, query_file, gs_file);
+        search_kernel<T>(merge_insert, active_set);
         */
     //    std::this_thread::sleep_for(std::chrono::milliseconds(10000));
   } while ((merge_status != std::future_status::ready));
@@ -544,13 +543,11 @@ void run_iter(diskann::MergeInsert<T> &merge_insert,
 template<typename T, typename TagT = uint32_t>
 void run_all_iters(std::string base_prefix, std::string merge_prefix,
                    const std::string mem_prefix, const std::string data_file,
-                   const std::string active_tags_file,
-                   const std::string query_file, const std::string gs_file,
+                   const std::string     active_tags_file,
                    diskann::Distance<T> *dist_cmp) {
   // load all data points
-  std::unique_ptr<T[]> data;
-  uint64_t             npts = 0, ndims = 0;
-  diskann::load_bin<T>(data_file, data, npts, ndims);
+  uint64_t npts = 0, ndims = 0;
+  diskann::get_bin_metadata(data_file, npts, ndims);
   std::cout << "Loaded base bin" << std::endl;
   params[std::string("ndims")] = (uint32_t) ndims;
 
@@ -629,10 +626,10 @@ void run_all_iters(std::string base_prefix, std::string merge_prefix,
   diskann::MergeInsert<T, TagT> merge_insert(
       paras, ndims, mem_prefix, base_prefix, merge_prefix, dist_cmp, metric,
       ::save_index_as_one_file, working_folder);
+  //  search_kernel<T, TagT>(merge_insert, active_tags, true);
   for (size_t i = 0; i < n_iters; i++) {
     std::cout << "ITER : " << i << std::endl;
-    run_iter<T>(merge_insert, mem_prefix, active_tags, inactive_tags,
-                query_file, gs_file, data.get());
+    run_iter<T>(merge_insert, mem_prefix, active_tags, inactive_tags);
   }
   /*
   std::cout << "Done running all iterations, now merging any leftover points."
@@ -643,14 +640,15 @@ void run_all_iters(std::string base_prefix, std::string merge_prefix,
     insert_status = ::insert_future.wait_for(std::chrono::milliseconds(1));
     delete_status = ::delete_future.wait_for(std::chrono::milliseconds(1));
 
-    //    search_kernel<T>(merge_insert, active_tags, query_file, gs_file,
+    //    search_kernel<T>(merge_insert, active_tags,
     //    false);
   } while ((merge_status != std::future_status::ready) ||
            (insert_status != std::future_status::ready) ||
            (delete_status != std::future_status::ready));
   merge_kernel(merge_insert);
   */
-  search_kernel<T, TagT>(merge_insert, active_tags, query_file, gs_file, true);
+  //  search_kernel<T, TagT>(merge_insert, active_tags,
+  //  true);
 }
 
 int main(int argc, char **argv) {
@@ -685,8 +683,8 @@ int main(int argc, char **argv) {
   float       alpha_disk = (float) atof(argv[arg_no++]);
   std::string data_bin(argv[arg_no++]);
   int         single_file = atoi(argv[arg_no++]);
-  std::string query_bin(argv[arg_no++]);
-  std::string gt_bin(argv[arg_no++]);
+  std::string query_path(argv[arg_no++]);
+  std::string gt_file(argv[arg_no++]);
   int         n_iters = atoi(argv[arg_no++]);
   uint32_t    insert_count = (uint32_t) atoi(argv[arg_no++]);
   uint32_t    delete_count = (uint32_t) atoi(argv[arg_no++]);
@@ -716,6 +714,8 @@ int main(int argc, char **argv) {
   params[std::string("merge_maxc")] = (uint32_t)(range * 2.5);
   params[std::string("merge_l_index")] = L_disk;
 
+  ::query_file = ::query_file + query_path;
+  ::truthset_file = gt_file;
   if (single_file == 1)
     ::save_index_as_one_file = true;
   else
@@ -730,15 +730,15 @@ int main(int argc, char **argv) {
   if (index_type == std::string("float")) {
     diskann::DistanceL2 dist_cmp;
     run_all_iters<float>(base_prefix, merge_prefix, mem_prefix, data_bin,
-                         active_tags_filename, query_bin, gt_bin, &dist_cmp);
+                         active_tags_filename, &dist_cmp);
   } else if (index_type == std::string("uint8")) {
     diskann::DistanceL2UInt8 dist_cmp;
     run_all_iters<uint8_t>(base_prefix, merge_prefix, mem_prefix, data_bin,
-                           active_tags_filename, query_bin, gt_bin, &dist_cmp);
+                           active_tags_filename, &dist_cmp);
   } else if (index_type == std::string("int8")) {
     diskann::DistanceL2Int8 dist_cmp;
     run_all_iters<int8_t>(base_prefix, merge_prefix, mem_prefix, data_bin,
-                          active_tags_filename, query_bin, gt_bin, &dist_cmp);
+                          active_tags_filename, &dist_cmp);
   } else {
     std::cout << "Unsupported type : " << index_type << "\n";
   }

@@ -544,14 +544,7 @@ namespace diskann {
                                size_t offset = 0) {
     diskann::cout << "Reading bin file " << bin_file << " at offset " << offset
                   << "..." << std::flush;
-    // START OLS
-    //_u64            read_blk_size = 64 * 1024 * 1024;
-    // cached_ifstream reader(bin_file, read_blk_size);
-    // size_t actual_file_size = reader.get_file_size();
-    // END OLS
-
     std::ifstream reader(bin_file, std::ios::binary | std::ios::ate);
-    //    uint64_t      fsize = reader.tellg();
     reader.seekg(0);
 
     load_aligned_bin_impl(reader, data, npts, dim, rounded_dim, offset);

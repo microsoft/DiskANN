@@ -239,12 +239,13 @@ int search_disk_index(int argc, char** argv) {
     diskann::QueryStats* stats = new diskann::QueryStats[query_num];
 
     std::vector<uint64_t> query_result_tags_64(recall_at * query_num);
+    std::vector<uint32_t> query_result_tags_32(recall_at * query_num);
     auto                  s = std::chrono::high_resolution_clock::now();
 #pragma omp parallel for schedule(dynamic, 1)
     for (_s64 i = 0; i < (int64_t) query_num; i++) {
-      _pFlashIndex->cached_beam_search_ids(
+      _pFlashIndex->cached_beam_search(
           query + (i * query_aligned_dim), (uint64_t) recall_at, (uint64_t) L,
-          query_result_tags_64.data() + (i * recall_at),
+          query_result_tags_32.data() + (i * recall_at),
           query_result_dists[test_id].data() + (i * recall_at),
           (uint64_t) optimized_beamwidth, stats + i);
     }
@@ -253,8 +254,8 @@ int search_disk_index(int argc, char** argv) {
     float                         qps =
         (float) ((1.0 * (double) query_num) / (1.0 * (double) diff.count()));
 
-    diskann::convert_types<uint64_t, uint32_t>(
-        query_result_tags_64.data(), query_result_tags[test_id].data(),
+    diskann::convert_types<uint32_t, uint32_t>(
+        query_result_tags_32.data(), query_result_tags[test_id].data(),
         (size_t) query_num, (size_t) recall_at);
 
     float mean_latency = (float) diskann::get_mean_stats(
@@ -285,7 +286,7 @@ int search_disk_index(int argc, char** argv) {
     float recall = 0;
     if (calc_recall_flag) {
       recall = (float) diskann::calculate_recall(
-          (_u32) query_num, gt_ids, gt_dists, (_u32) gt_dim,
+          (_u32) query_num, tags, gt_dists, (_u32) gt_dim,
           query_result_tags[test_id].data(), (_u32) recall_at,
           (_u32) recall_at);
     }

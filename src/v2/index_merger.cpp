@@ -587,9 +587,6 @@ namespace diskann {
     output_writer.close();
     diskann::save_bin<_u64>(this->temp_disk_index_path, output_metadata.data(),
                             output_metadata.size(), 1, 0);
-
-    int i;
-    std::cin >> i;
     // free buf
     aligned_free((void *) buf);
 
