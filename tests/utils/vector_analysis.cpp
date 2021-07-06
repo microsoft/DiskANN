@@ -40,6 +40,27 @@ int analyze_norm(std::string base_file) {
   return 0;
 }
 
+template<typename T>
+int normalize_base(std::string base_file, std::string out_file) {
+  std::cout<<"Normalizing base" << std::endl;
+  T* data;
+  _u64 npts, ndims;
+  diskann::load_bin<T>(base_file, data, npts, ndims);
+//  std::vector<float> norms(npts, 0);
+  #pragma omp parallel for schedule(dynamic)
+  for (_u32 i = 0; i<npts; i++) {
+    float pt_norm = 0;
+    for (_u32 d = 0; d < ndims; d++) 
+    pt_norm += data[i*ndims + d]* data[i* ndims + d];
+    pt_norm = std::sqrt(pt_norm);
+    for (_u32 d = 0; d < ndims; d++) 
+    data[i*ndims + d] = data[i* ndims + d]/pt_norm;
+  }
+  diskann::save_bin<T>(out_file, data, npts, ndims);
+  delete[] data;
+  return 0;
+}
+
 
 template<typename T>
 int augment_base(std::string base_file,std::string out_file, bool prep_base = true) {
@@ -94,6 +115,8 @@ int aux_main(char** argv) {
   augment_base<T>(base_file, std::string(argv[4]), true);
   else if (option == 3)
   augment_base<T>(base_file, std::string(argv[4]), false);
+  else if (option == 4)
+  normalize_base<T>(base_file, std::string(argv[4]));
   return 0;
 }
 
@@ -101,7 +124,7 @@ int main(int argc, char** argv) {
 
     if (argc < 4) {
     std::cout << argv[0] << " data_type [float/int8/uint8] base_bin_file "
-                            "[option: 1-norm analysis, 2-prep_base_for_mip, 3-prep_query_for_mip] [out_file for options 2/3]"
+                            "[option: 1-norm analysis, 2-prep_base_for_mip, 3-prep_query_for_mip, 4-normalize-vecs] [out_file for options 2/3]"
               << std::endl;
     exit(-1);
   }
