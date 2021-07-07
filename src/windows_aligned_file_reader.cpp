@@ -7,9 +7,8 @@
 #include <iostream>
 #include "utils.h"
 
-#define SECTOR_LEN 4096
-
-void WindowsAlignedFileReader::open(const std::string& fname) {
+void WindowsAlignedFileReader::open(const std::string& fname,
+                                    bool enable_writes, bool enable_create) {
   m_filename = std::wstring(fname.begin(), fname.end());
   this->register_thread();
 }
@@ -67,7 +66,7 @@ IOContext& WindowsAlignedFileReader::get_ctx() {
 }
 
 void WindowsAlignedFileReader::read(std::vector<AlignedRead>& read_reqs,
-                                    IOContext&                ctx, bool async) {
+                                    IOContext& ctx, bool async) {
   using namespace std::chrono_literals;
   // execute each request sequentially
   _u64 n_reqs = read_reqs.size();

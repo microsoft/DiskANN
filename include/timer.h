@@ -22,4 +22,4 @@ namespace diskann {
           .count();
     }
   };
-}
+}  // namespace diskann

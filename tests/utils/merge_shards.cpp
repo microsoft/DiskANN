@@ -16,7 +16,7 @@
 
 int main(int argc, char **argv) {
   if (argc != 9) {
-    std::cout
+    diskann::cout
         << argv[0]
         << " vamana_index_prefix[1] vamana_index_suffix[2] idmaps_prefix[3] "
            "idmaps_suffix[4] n_shards[5] max_degree[6] output_vamana_path[7] "

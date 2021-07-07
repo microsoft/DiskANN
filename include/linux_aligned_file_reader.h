@@ -24,15 +24,19 @@ class LinuxAlignedFileReader : public AlignedFileReader {
   // de-register thread-id for a context
   void deregister_thread();
 
+  void deregister_all_threads();
+
   // Open & close ops
   // Blocking calls
-  void open(const std::string &fname);
+  void open(const std::string &fname, bool enable_writes, bool enable_create);
   void close();
 
   // process batch of aligned requests in parallel
   // NOTE :: blocking call
   void read(std::vector<AlignedRead> &read_reqs, IOContext &ctx,
             bool async = false);
+
+  void sequential_write(AlignedRead &write_req, IOContext &ctx);
 };
 
 #endif

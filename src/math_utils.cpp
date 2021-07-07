@@ -152,7 +152,10 @@ namespace math_utils {
     if (!is_norm_given_for_pts)
       pts_norms_squared = new float[num_points];
 
-    size_t PAR_BLOCK_SIZE = num_points;
+    size_t PAR_BLOCK_SIZE = std::min((size_t) 1 << 23, num_points);
+    //	    (num_points > 1 << 20) ? 1 << 13 : (num_points / 16);
+
+    //	size_t PAR_BLOCK_SIZE = num_points;
     size_t N_BLOCKS = (num_points % PAR_BLOCK_SIZE) == 0
                           ? (num_points / PAR_BLOCK_SIZE)
                           : (num_points / PAR_BLOCK_SIZE) + 1;
@@ -204,9 +207,6 @@ namespace math_utils {
   void process_residuals(float* data_load, size_t num_points, size_t dim,
                          float* cur_pivot_data, size_t num_centers,
                          uint32_t* closest_centers, bool to_subtract) {
-    diskann::cout << "Processing residuals of " << num_points << " points in "
-                  << dim << " dimensions using " << num_centers << " centers "
-                  << std::endl;
 #pragma omp parallel for schedule(static, 8192)
     for (int64_t n_iter = 0; n_iter < (_s64) num_points; n_iter++) {
       for (size_t d_iter = 0; d_iter < dim; d_iter++) {
@@ -334,13 +334,15 @@ namespace kmeans {
       residual = lloyds_iter(data, num_points, dim, centers, num_centers,
                              docs_l2sq, closest_docs, closest_center);
 
-      diskann::cout << "Lloyd's iter " << i
-                    << "  dist_sq residual: " << residual << std::endl;
+      // diskann::cout << "Lloyd's iter " << i
+      //              << "  dist_sq residual: " << residual << std::endl;
 
-      if (((i != 0) && ((old_residual - residual) / residual) < 0.00001) ||
+      if (((i != 0) &&
+           ((double) ((old_residual - residual) / residual)) < 0.00001) ||
           (residual < std::numeric_limits<float>::epsilon())) {
-        diskann::cout << "Residuals unchanged: " << old_residual << " becomes "
-                      << residual << ". Early termination." << std::endl;
+        // diskann::cout << "Residuals unchanged: " << old_residual << " becomes
+        // "
+        //              << residual << ". Early termination." << std::endl;
         break;
       }
     }
@@ -359,12 +361,9 @@ namespace kmeans {
                         float* pivot_data, size_t num_centers) {
     //	pivot_data = new float[num_centers * dim];
 
-    std::vector<size_t> picked;
-    diskann::cout << "Selecting " << num_centers << " pivots from "
-                  << num_points << " points using ";
-    std::random_device rd;
-    auto               x = rd();
-    diskann::cout << "random seed " << x << std::endl;
+    std::vector<size_t>                   picked;
+    std::random_device                    rd;
+    auto                                  x = rd();
     std::mt19937                          generator(x);
     std::uniform_int_distribution<size_t> distribution(0, num_points - 1);
 
@@ -391,12 +390,9 @@ namespace kmeans {
       return;
     }
 
-    std::vector<size_t> picked;
-    diskann::cout << "Selecting " << num_centers << " pivots from "
-                  << num_points << " points using ";
-    std::random_device rd;
-    auto               x = rd();
-    diskann::cout << "random seed " << x << ": " << std::flush;
+    std::vector<size_t>                   picked;
+    std::random_device                    rd;
+    auto                                  x = rd();
     std::mt19937                          generator(x);
     std::uniform_real_distribution<>      distribution(0, 1);
     std::uniform_int_distribution<size_t> int_dist(0, num_points - 1);
@@ -423,7 +419,7 @@ namespace kmeans {
 
       double sum = 0;
       for (size_t i = 0; i < num_points; i++) {
-        sum = sum + dist[i];
+        sum = sum + (double) dist[i];
       }
       if (sum == 0)
         sum_flag = true;
@@ -433,11 +429,12 @@ namespace kmeans {
       double prefix_sum = 0;
       for (size_t i = 0; i < (num_points); i++) {
         tmp_pivot = i;
-        if (dart_val >= prefix_sum && dart_val < prefix_sum + dist[i]) {
+        if (dart_val >= prefix_sum &&
+            dart_val < prefix_sum + (double) dist[i]) {
           break;
         }
 
-        prefix_sum += dist[i];
+        prefix_sum += (double) dist[i];
       }
 
       if (std::find(picked.begin(), picked.end(), tmp_pivot) != picked.end() &&
@@ -454,10 +451,10 @@ namespace kmeans {
                                                data + tmp_pivot * dim, dim));
       }
       num_picked++;
-      if (num_picked % 32 == 0)
-        diskann::cout << "." << std::flush;
+      // if (num_picked % 32 == 0)
+      //  diskann::cout << "." << std::flush;
     }
-    diskann::cout << "done." << std::endl;
+    // diskann::cout << "done." << std::endl;
     delete[] dist;
   }
 

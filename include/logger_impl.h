@@ -66,7 +66,7 @@ namespace diskann {
 // This implies calling code _must_ either print std::endl or std::flush
 // to ensure that the message is written immediately.
 #ifdef EXEC_ENV_OLS
-    static const int BUFFER_SIZE = 1024;
+    static const int BUFFER_SIZE = 2048;
 #else
     static const int BUFFER_SIZE = 0;
 #endif

@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <mutex>
 #include <vector>
+#include <limits>
 #include "utils.h"
 
 namespace diskann {

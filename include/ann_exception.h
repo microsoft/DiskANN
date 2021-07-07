@@ -19,6 +19,7 @@ namespace diskann {
                                    unsigned int       lineNum);
 
     DISKANN_DLLEXPORT std::string message() const;
+    DISKANN_DLLEXPORT int         errorCode() const;
 
    private:
     int          _errorCode;

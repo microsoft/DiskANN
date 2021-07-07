@@ -15,9 +15,18 @@
 
 #include "windows_customizations.h"
 
+const uint32_t NUM_PQ_CENTERS = 256;
+const uint32_t NUM_K_MEANS_ITERS = 15;
+
 template<typename T>
 void gen_random_slice(const std::string base_file,
-                      const std::string output_prefix, double sampling_rate);
+                      const std::string output_prefix, double sampling_rate,
+                      size_t offset = 0);
+
+template<typename T>
+void gen_random_slice(const std::string data_file, double p_val,
+                      std::unique_ptr<float[]> &sampled_data,
+                      size_t &slice_size, size_t &ndims);
 
 template<typename T>
 void gen_random_slice(const std::string data_file, double p_val,
@@ -49,6 +58,12 @@ int partition_with_ram_budget(const std::string data_file,
                               size_t            graph_degree,
                               const std::string prefix_path, size_t k_base);
 
+template<typename T>
+DISKANN_DLLEXPORT int generate_pq_pivots(
+    const std::unique_ptr<T[]> &passed_train_data, size_t num_train,
+    unsigned dim, unsigned num_centers, unsigned num_pq_chunks,
+    unsigned max_k_means_reps, std::string pq_pivots_path);
+
 DISKANN_DLLEXPORT int generate_pq_pivots(const float *train_data,
                                          size_t num_train, unsigned dim,
                                          unsigned    num_centers,
@@ -60,4 +75,5 @@ template<typename T>
 int generate_pq_data_from_pivots(const std::string data_file,
                                  unsigned num_centers, unsigned num_pq_chunks,
                                  std::string pq_pivots_path,
-                                 std::string pq_compressed_vectors_path);
+                                 std::string pq_compressed_vectors_path,
+                                 size_t      offset = 0);

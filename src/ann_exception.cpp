@@ -33,4 +33,8 @@ namespace diskann {
     return sstream.str();
   }
 
+  int ANNException::errorCode() const {
+    return _errorCode;
+  }
+
 }  // namespace diskann

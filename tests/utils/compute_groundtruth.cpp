@@ -31,10 +31,10 @@
 #define ALIGNMENT 512
 
 void command_line_help() {
-  std::cerr
-      << "<exact-kann> <int8/uint8/float>   <base bin file> <query bin "
-         "file>  <K: # nearest neighbors to compute> <output-truthset-file>"
-      << std::endl;
+  std::cerr << "<exact-kann> <int8/uint8/float>   <base bin file> <query bin "
+               "file>  <K: # nearest neighbors to compute> "
+               "<output-truthset-file> optional:<tag_file>"
+            << std::endl;
 }
 
 template<class T>
@@ -131,8 +131,8 @@ void exact_knn(const size_t dim, const size_t k,
     distsq_to_points(dim, dist_matrix, npoints, points, points_l2sq, q_e - q_b,
                      queries + (ptrdiff_t) q_b * (ptrdiff_t) dim,
                      queries_l2sq + q_b);
-    std::cout << "Computed distances for queries: [" << q_b << "," << q_e << ")"
-              << std::endl;
+    diskann::cout << "Computed distances for queries: [" << q_b << "," << q_e
+                  << ")" << std::endl;
 
 #pragma omp parallel for schedule(dynamic, 16)
     for (long long q = q_b; q < q_e; q++) {
@@ -163,8 +163,8 @@ void exact_knn(const size_t dim, const size_t k,
           dist_closest_points + (ptrdiff_t) q * (ptrdiff_t) k,
           dist_closest_points + (ptrdiff_t)(q + 1) * (ptrdiff_t) k));
     }
-    std::cout << "Computed exact k-NN for queries: [" << q_b << "," << q_e
-              << ")" << std::endl;
+    diskann::cout << "Computed exact k-NN for queries: [" << q_b << "," << q_e
+                  << ")" << std::endl;
   }
 
   delete[] dist_matrix;
@@ -176,16 +176,18 @@ void exact_knn(const size_t dim, const size_t k,
 template<typename T>
 inline int get_num_parts(const char *filename) {
   std::ifstream reader(filename, std::ios::binary);
-  std::cout << "Reading bin file " << filename << " ...\n";
+  diskann::cout << "Reading bin file " << filename << " ...\n";
   int npts_i32, ndims_i32;
   reader.read((char *) &npts_i32, sizeof(int));
   reader.read((char *) &ndims_i32, sizeof(int));
-  std::cout << "#pts = " << npts_i32 << ", #dims = " << ndims_i32 << std::endl;
+  diskann::cout << "#pts = " << npts_i32 << ", #dims = " << ndims_i32
+                << std::endl;
   reader.close();
-  int num_parts = (npts_i32 % PARTSIZE) == 0
-                      ? npts_i32 / PARTSIZE
-                      : std::floor(npts_i32 / PARTSIZE) + 1;
-  std::cout << "Number of parts: " << num_parts << std::endl;
+  uint32_t num_parts =
+      (npts_i32 % PARTSIZE) == 0
+          ? (_u32)(npts_i32 / PARTSIZE)
+          : (_u32) std::floor((double) npts_i32 / (double) PARTSIZE) + 1;
+  diskann::cout << "Number of parts: " << num_parts << std::endl;
   return num_parts;
 }
 
@@ -193,7 +195,7 @@ template<typename T>
 inline void load_bin_as_float(const char *filename, float *&data, size_t &npts,
                               size_t &ndims, int part_num) {
   std::ifstream reader(filename, std::ios::binary);
-  std::cout << "Reading bin file " << filename << " ...\n";
+  diskann::cout << "Reading bin file " << filename << " ...\n";
   int npts_i32, ndims_i32;
   reader.read((char *) &npts_i32, sizeof(int));
   reader.read((char *) &ndims_i32, sizeof(int));
@@ -203,16 +205,18 @@ inline void load_bin_as_float(const char *filename, float *&data, size_t &npts,
   ndims = (unsigned) ndims_i32;
   uint64_t nptsuint64_t = (uint64_t) npts;
   uint64_t ndimsuint64_t = (uint64_t) ndims;
-  std::cout << "#pts in part = " << npts << ", #dims = " << ndims
-            << ", size = " << nptsuint64_t * ndimsuint64_t * sizeof(T) << "B"
-            << std::endl;
+  diskann::cout << "#pts in part = " << npts << ", #dims = " << ndims
+                << ", size = " << nptsuint64_t * ndimsuint64_t * sizeof(T)
+                << "B" << std::endl;
 
   reader.seekg(start_id * ndims * sizeof(T) + 2 * sizeof(uint32_t),
                std::ios::beg);
+  //    data = new T[nptsuint64_t * ndimsuint64_t];
   T *data_T = new T[nptsuint64_t * ndimsuint64_t];
   reader.read((char *) data_T, sizeof(T) * nptsuint64_t * ndimsuint64_t);
-  std::cout << "Finished reading part of the bin file." << std::endl;
+  diskann::cout << "Finished reading part of the bin file." << std::endl;
   reader.close();
+  //  data =  (nptsuint64_t*ndimsuint64_t, ALIGNMENT);
   data = aligned_malloc<float>(nptsuint64_t * ndimsuint64_t, ALIGNMENT);
 #pragma omp parallel for schedule(dynamic, 32768)
   for (int64_t i = 0; i < (int64_t) nptsuint64_t; i++) {
@@ -223,55 +227,62 @@ inline void load_bin_as_float(const char *filename, float *&data, size_t &npts,
     }
   }
   delete[] data_T;
-  std::cout << "Finished converting part data to float." << std::endl;
+  diskann::cout << "Finished converting part data to float." << std::endl;
 }
 
 template<typename T>
 inline void save_bin(const std::string filename, T *data, size_t npts,
                      size_t ndims) {
   std::ofstream writer(filename, std::ios::binary | std::ios::out);
-  std::cout << "Writing bin: " << filename << "\n";
+  diskann::cout << "Writing bin: " << filename << "\n";
   int npts_i32 = (int) npts, ndims_i32 = (int) ndims;
   writer.write((char *) &npts_i32, sizeof(int));
   writer.write((char *) &ndims_i32, sizeof(int));
-  std::cout << "bin: #pts = " << npts << ", #dims = " << ndims
-            << ", size = " << npts * ndims * sizeof(T) + 2 * sizeof(int) << "B"
-            << std::endl;
+  diskann::cout << "bin: #pts = " << npts << ", #dims = " << ndims
+                << ", size = " << npts * ndims * sizeof(T) + 2 * sizeof(int)
+                << "B" << std::endl;
 
   //    data = new T[npts_u64 * ndims_u64];
   writer.write((char *) data, npts * ndims * sizeof(T));
   writer.close();
-  std::cout << "Finished writing bin" << std::endl;
+  diskann::cout << "Finished writing bin" << std::endl;
 }
 
 inline void save_groundtruth_as_one_file(const std::string filename,
                                          int32_t *data, float *distances,
-                                         size_t npts, size_t ndims) {
+                                         size_t npts, size_t ndims,
+                                         uint32_t *tags = nullptr) {
   std::ofstream writer(filename, std::ios::binary | std::ios::out);
   int           npts_i32 = (int) npts, ndims_i32 = (int) ndims;
   writer.write((char *) &npts_i32, sizeof(int));
   writer.write((char *) &ndims_i32, sizeof(int));
-  std::cout << "Saving truthset in one file (npts, dim, npts*dim id-matrix, "
-               "npts*dim dist-matrix) with npts = "
-            << npts << ", dim = " << ndims << ", size = "
-            << 2 * npts * ndims * sizeof(unsigned) + 2 * sizeof(int) << "B"
-            << std::endl;
+  diskann::cout
+      << "Saving truthset in one file (npts, dim, npts*dim id-matrix, "
+         "npts*dim dist-matrix) with npts = "
+      << npts << ", dim = " << ndims
+      << ", size = " << 2 * npts * ndims * sizeof(unsigned) + 2 * sizeof(int)
+      << "B" << std::endl;
 
   //    data = new T[npts_u64 * ndims_u64];
   writer.write((char *) data, npts * ndims * sizeof(uint32_t));
   writer.write((char *) distances, npts * ndims * sizeof(float));
+  if (tags != nullptr) {
+    writer.write((char *) tags, npts * ndims * sizeof(uint32_t));
+  } else {
+    writer.write((char *) data, npts * ndims * sizeof(uint32_t));
+  }
+
   writer.close();
-  std::cout << "Finished writing truthset" << std::endl;
+  diskann::cout << "Finished writing truthset" << std::endl;
 }
 
 template<typename T>
-int aux_main(int argv, char **argc) {
- 
+int aux_main(int argc, char **argv) {
   size_t      npoints, nqueries, dim;
-  std::string base_file(argc[2]);
-  std::string query_file(argc[3]);
-  size_t      k = atoi(argc[4]);
-  std::string gt_file(argc[5]);
+  std::string base_file(argv[2]);
+  std::string query_file(argv[3]);
+  size_t      k = atoi(argv[4]);
+  std::string gt_file(argv[5]);
 
   float *base_data;
   float *query_data;
@@ -314,21 +325,38 @@ int aux_main(int argv, char **argc) {
       dist_closest_points[i * k + j] = cur_res[j].second;
     }
   }
+  uint32_t *tags = nullptr;
+  if (argc == 7) {
+    std::cout << "Loading tags from " << argv[6] << "\n";
+    tags = new uint32_t[nqueries * k];
+    uint32_t *  all_tags;
+    std::string tag_file = std::string(argv[6]);
+    size_t      tag_pts, tag_dim;
+    diskann::load_bin(tag_file, all_tags, tag_pts, tag_dim);
+
+    diskann::cout << "Loaded tags for " << tag_pts << " points.\n";
+    for (uint64_t i = 0; i < nqueries * k; i++) {
+      tags[i] = all_tags[closest_points[i]];
+    }
+  }
 
   save_groundtruth_as_one_file(gt_file, closest_points, dist_closest_points,
-                               nqueries, k);
+                               nqueries, k, tags);
   diskann::aligned_free(query_data);
   delete[] closest_points;
   delete[] dist_closest_points;
+  if (tags != nullptr) {
+    delete[] tags;
+  }
+
   return 0;
 }
 
 int main(int argc, char **argv) {
-  if (argc != 6) {
+  if (argc != 6 && argc != 7) {
     command_line_help();
     return -1;
   }
-
   if (std::string(argv[1]) == std::string("float"))
     aux_main<float>(argc, argv);
   if (std::string(argv[1]) == std::string("int8"))
