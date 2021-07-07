@@ -55,28 +55,18 @@ class BuildExt(build_ext):
 
 
 ext_modules = [
-    #Extension(
-    #    'vamanapy',
-    #    ['src/vamana_bindings.cpp'],
-    #    include_dirs=["../include/",
-    #                  "/opt/intel/compilers_and_libraries/linux/mkl/include/",
-    #                  pybind11.get_include(False),
-    #                  pybind11.get_include(True)],
-    #    libraries=[],
-    #    language='c++',
-    #    extra_objects=['../build/src/libdiskann_s.a'],
-    #),
-    Extension(
+       Extension(
         'diskannpy',
         ['src/diskann_bindings.cpp'],
-        include_dirs=["../include/",
-                      "/opt/intel/compilers_and_libraries/linux/mkl/include/",
+        include_dirs=['../include/',
+                      '/opt/intel/compilers_and_libraries/linux/mkl/include/',
+                      '/usr/include',
                       pybind11.get_include(False),
                       pybind11.get_include(True)],
-        libraries=[],
+        libraries=['aio'],
         language='c++',
         extra_objects=['../build/src/libdiskann_s.a'],
-    ),
+    )
 ]
 
 

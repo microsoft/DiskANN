@@ -8,7 +8,6 @@ import diskannpy
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument('data_path', type=str, help='Path to the input base set of vectors.')
 parser.add_argument('query_path', type=str, help='Path to the input query set of vectors.')
 parser.add_argument('ground_truth_path', type=str, help='Path to the input groundtruth set.')
 parser.add_argument('index_path_prefix', type=str, help='Path prefix for index files.')
