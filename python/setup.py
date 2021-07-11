@@ -14,7 +14,7 @@ __version__ = "0.1.0"
 
 class BuildExt(build_ext):
     """A custom build extension for adding compiler-specific options."""
-    c_opts = {'unix': ['-Ofast', '-DMKL_ILP64', '-m64', '-Wl,--no-as-needed']}
+    c_opts = {'unix': ['-ggdb', '-Ofast', '-DMKL_ILP64', '-m64', '-Wl,--no-as-needed']}
     arch_list = '-march -msse -msse2 -msse3 -mssse3 -msse4 -msse4a -msse4.1 -msse4.2 -mavx -mavx2 -mavx512f'.split()
     no_arch_flag = True
 
