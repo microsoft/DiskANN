@@ -3,6 +3,7 @@
 
 #include <omp.h>
 #include <string>
+#include <memory>
 
 #include <pybind11/numpy.h>
 #include <pybind11/pybind11.h>
@@ -20,6 +21,23 @@ PYBIND11_MAKE_OPAQUE(std::vector<float>);
 
 namespace py = pybind11;
 using namespace diskann;
+
+#ifdef __linux__
+template<class T>
+struct DiskANNIndex {
+  PQFlashIndex<T>* pq_flash_index;
+  std::shared_ptr<AlignedFileReader> reader;
+  
+  DiskANNIndex(){ 
+    reader = std::make_shared<LinuxAlignedFileReader>();
+    pq_flash_index = new PQFlashIndex<T>(reader);
+  }
+
+  ~DiskANNIndex() {
+    delete pq_flash_index;
+  }
+};
+#endif
 
 PYBIND11_MODULE(diskannpy, m) {
   m.doc() = "DiskANN Python Bindings";
@@ -157,33 +175,30 @@ PYBIND11_MODULE(diskannpy, m) {
          size_t dims) { save_bin<_u32>(file_name, data.data(), npts, dims); },
       py::arg("file_name"), py::arg("data"), py::arg("npts"), py::arg("dims"));
 
-  py::class_<PQFlashIndex<float>>(m, "DiskANNFloatIndex")
-      .def(py::init([]() {
-        std::shared_ptr<AlignedFileReader> reader(new LinuxAlignedFileReader());
-        auto index = new PQFlashIndex<float>(reader);
-        return index;
+  py::class_<DiskANNIndex<float>>(m, "DiskANNFloatIndex")
+      .def(py::init([]() { return new DiskANNIndex<float>();
       }))
       .def(
           "load_index",
-          [](PQFlashIndex<float> &self, const std::string &index_path_prefix) {
+          [](DiskANNIndex<float> &self, const std::string &index_path_prefix) {
             const std::string pq_path = index_path_prefix;
             const std::string index_path =
                 index_path_prefix + std::string("_disk.index");
-            self.load(1, pq_path.c_str(), index_path.c_str());
+            self.pq_flash_index->load(1, pq_path.c_str(), index_path.c_str());
             std::vector<uint32_t> node_list;
             _u64                  num_nodes_to_cache = 100000;
-            self.cache_bfs_levels(num_nodes_to_cache, node_list);
+            self.pq_flash_index->cache_bfs_levels(num_nodes_to_cache, node_list);
             std::cout << "loaded index, cached " << node_list.size()
                       << " nodes based on BFS" << std::endl;
           },
           py::arg("index_path_prefix"))
       .def(
           "search",
-          [](PQFlashIndex<float> &self, const float *query, const _u64 dim,
+          [](DiskANNIndex<float> &self, const float *query, const _u64 dim,
              const _u64 knn, const _u64 l_search, const _u64 beam_width,
              _u64 *ids, float *dists) {
             QueryStats stats;
-            self.cached_beam_search(query, knn, l_search, ids, dists,
+            self.pq_flash_index->cached_beam_search(query, knn, l_search, ids, dists,
                                     beam_width, &stats);
           },
           py::arg("query"), py::arg("dim"), py::arg("knn") = 10,
@@ -191,13 +206,13 @@ PYBIND11_MODULE(diskannpy, m) {
           py::arg("dists"))
       .def(
           "batch_search",
-          [](PQFlashIndex<float> &self, const float *query_data,
+          [](DiskANNIndex<float> &self, const float *query_data,
              const _u64 nqueries, const _u64 dim, const _u64 knn,
              const _u64 l_search, const _u64 beam_width, _u64 *ids,
              float *dists) {
 #pragma omp parallel for schedule(dynamic, 1)
             for (_u64 i = 0; i < nqueries; ++i)
-              self.cached_beam_search(query_data + i * dim, knn, l_search,
+              self.pq_flash_index->cached_beam_search(query_data + i * dim, knn, l_search,
                                       ids + i * knn, dists + i * knn,
                                       beam_width);
           },
@@ -206,7 +221,7 @@ PYBIND11_MODULE(diskannpy, m) {
           py::arg("ids"), py::arg("dists"))
       .def(
         "build",
-        [](PQFlashIndex<float> &self, const char *dataFilePath,
+        [](DiskANNIndex<float> &self, const char *dataFilePath,
                        const char *index_prefix_path, unsigned R, unsigned L,
                        double final_index_ram_limit, double indexing_ram_budget,
                        unsigned num_threads) {
