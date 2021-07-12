@@ -711,7 +711,7 @@ namespace diskann {
       use_medoids_data_as_centroids();
     }
 
-    diskann::cout << "done.." << std::endl;
+    diskann::cout << "Index load complete." << std::endl;
     return 0;
   }
 
