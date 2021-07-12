@@ -46,7 +46,7 @@ if single_query_mode:
 
         for j in range(num_queries):
             qs = time.time()
-            index.search(query_data, query_aligned_dims, recall_t, L, W,
+            index.search(query_data, query_aligned_dims, recall_at, L, W,
                          query_result_ids + j * recall_at, query_result_dists + j * recall_at)
             qe = time.time()
             latency_stats.append(float((qe - qs) * 1000000))
@@ -73,7 +73,7 @@ else:
         diskannpy.set_num_threads(num_threads)
 
         qs = time.time()
-        query_result_ids = index.batch_search(query_data, num_queries, query_aligned_dims, recall_t, L, W, query_result_ids, query_result_dists)
+        query_result_ids = index.batch_search(query_data, num_queries, query_aligned_dims, recall_at, L, W, query_result_ids, query_result_dists)
         qe = time.time()
         latency_stats = float((qe - qs) * 1000000)
 
