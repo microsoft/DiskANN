@@ -47,6 +47,16 @@ else()
 	target_link_libraries(int8_to_float ${PROJECT_NAME})
 endif()
 
+add_executable(uint8_to_float uint8_to_float.cpp)
+if(MSVC)
+	target_link_options(uint8_to_float PRIVATE /MACHINE:x64)
+	target_link_libraries(uint8_to_float debug ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG}/diskann_dll.lib)
+	target_link_libraries(uint8_to_float optimized ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE}/diskann_dll.lib)
+else() 
+	target_link_libraries(uint8_to_float ${PROJECT_NAME})
+endif()
+
+
 add_executable(uint32_to_uint8 uint32_to_uint8.cpp)
 if(MSVC)
 	target_link_options(uint32_to_uint8 PRIVATE /MACHINE:x64)
@@ -54,6 +64,16 @@ if(MSVC)
 	target_link_libraries(uint32_to_uint8 optimized ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE}/diskann_dll.lib)
 else() 
 	target_link_libraries(uint32_to_uint8 ${PROJECT_NAME})
+endif()
+
+
+add_executable(vector_analysis vector_analysis.cpp)
+if(MSVC)
+	target_link_options(vector_analysis PRIVATE /MACHINE:x64)
+	target_link_libraries(vector_analysis debug ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG}/diskann_dll.lib)
+	target_link_libraries(vector_analysis optimized ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE}/diskann_dll.lib)
+else() 
+	target_link_libraries(vector_analysis ${PROJECT_NAME} -ltcmalloc)
 endif()
 
 add_executable(gen_random_slice gen_random_slice.cpp)
@@ -136,6 +156,6 @@ endif()
 
 # formatter
 if (LINUX)
-	add_custom_command(TARGET gen_random_slice PRE_BUILD COMMAND clang-format-4.0 -i ../../../include/*.h ../../../include/dll/*.h ../../../src/*.cpp  ../../../tests/*.cpp ../../../src/dll/*.cpp ../../../tests/utils/*.cpp)
+	add_custom_command(TARGET gen_random_slice PRE_BUILD COMMAND clang-format -i ../../../include/*.h ../../../include/dll/*.h ../../../src/*.cpp  ../../../tests/*.cpp ../../../src/dll/*.cpp ../../../tests/utils/*.cpp)
 endif()
 

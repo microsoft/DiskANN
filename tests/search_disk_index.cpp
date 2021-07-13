@@ -31,7 +31,7 @@
 #endif
 #endif
 
-#define WARMUP true
+#define WARMUP false
 
 void print_stats(std::string category, std::vector<float> percentiles,
                  std::vector<float> results) {
@@ -56,26 +56,37 @@ int search_disk_index(int argc, char** argv) {
   size_t            query_num, query_dim, query_aligned_dim, gt_num, gt_dim;
   std::vector<_u64> Lvec;
 
-  std::string index_prefix_path(argv[2]);
+  _u32 ctr = 2;
+  _u32 dist_fn = atoi(argv[ctr++]);
+  std::string index_prefix_path(argv[ctr++]);
   std::string pq_prefix = index_prefix_path + "_pq";
   std::string disk_index_file = index_prefix_path + "_disk.index";
   std::string warmup_query_file = index_prefix_path + "_sample_data.bin";
-  _u64        num_nodes_to_cache = std::atoi(argv[3]);
-  _u32        num_threads = std::atoi(argv[4]);
-  _u32        beamwidth = std::atoi(argv[5]);
-  std::string query_bin(argv[6]);
-  std::string truthset_bin(argv[7]);
-  _u64        recall_at = std::atoi(argv[8]);
-  std::string result_output_prefix(argv[9]);
+  _u64        num_nodes_to_cache = std::atoi(argv[ctr++]);
+  _u32        num_threads = std::atoi(argv[ctr++]);
+  _u32        beamwidth = std::atoi(argv[ctr++]);
+  std::string query_bin(argv[ctr++]);
+  std::string truthset_bin(argv[ctr++]);
+  _u64        recall_at = std::atoi(argv[ctr++]);
+  std::string result_output_prefix(argv[ctr++]);
 
   bool calc_recall_flag = false;
 
-  for (int ctr = 10; ctr < argc; ctr++) {
+  for (; ctr < (_u32) argc; ctr++) {
     _u64 curL = std::atoi(argv[ctr]);
     if (curL >= recall_at)
       Lvec.push_back(curL);
   }
 
+  diskann::Metric metric;
+  if (dist_fn == 0) 
+  metric = diskann::Metric::L2;
+  else if (dist_fn == 1)
+  metric = diskann::Metric::INNER_PRODUCT;
+  else {
+    std::cout<<"Unsupported distance function. Currently only L2/ Inner Product support." << std::endl;
+    return -1;
+  }
   if (Lvec.size() == 0) {
     diskann::cout
         << "No valid Lsearch found. Lsearch must be at least recall_at"
@@ -114,7 +125,7 @@ int search_disk_index(int argc, char** argv) {
 #endif
 
   std::unique_ptr<diskann::PQFlashIndex<T>> _pFlashIndex(
-      new diskann::PQFlashIndex<T>(reader));
+      new diskann::PQFlashIndex<T>(reader, metric));
 
   int res = _pFlashIndex->load(num_threads, pq_prefix.c_str(),
                                disk_index_file.c_str());
@@ -126,12 +137,13 @@ int search_disk_index(int argc, char** argv) {
   std::vector<uint32_t> node_list;
   diskann::cout << "Caching " << num_nodes_to_cache
                 << " BFS nodes around medoid(s)" << std::endl;
-  //  _pFlashIndex->cache_bfs_levels(num_nodes_to_cache, node_list);
-  _pFlashIndex->generate_cache_list_from_sample_queries(
-      warmup_query_file, 15, 6, num_nodes_to_cache, num_threads, node_list);
+    _pFlashIndex->cache_bfs_levels(num_nodes_to_cache, node_list);
+//  _pFlashIndex->generate_cache_list_from_sample_queries(
+//      warmup_query_file, 15, 6, num_nodes_to_cache, num_threads, node_list);
   _pFlashIndex->load_cache_list(node_list);
   node_list.clear();
   node_list.shrink_to_fit();
+
 
   omp_set_num_threads(num_threads);
 
@@ -196,7 +208,7 @@ int search_disk_index(int argc, char** argv) {
 
   uint32_t optimized_beamwidth = 2;
 
-  //  query_num = 1;
+//query_num = 1;
 
   for (uint32_t test_id = 0; test_id < Lvec.size(); test_id++) {
     _u64 L = Lvec[test_id];
@@ -213,6 +225,7 @@ int search_disk_index(int argc, char** argv) {
     query_result_dists[test_id].resize(recall_at * query_num);
 
     diskann::QueryStats* stats = new diskann::QueryStats[query_num];
+
 
     std::vector<uint64_t> query_result_ids_64(recall_at * query_num);
     auto                  s = std::chrono::high_resolution_clock::now();
@@ -286,10 +299,10 @@ int search_disk_index(int argc, char** argv) {
 }
 
 int main(int argc, char** argv) {
-  if (argc < 11) {
+  if (argc < 12) {
     diskann::cout
         << "Usage: " << argv[0]
-        << "  [index_type<float/int8/uint8>]  [index_prefix_path] "
+        << "  [index_type<float/int8/uint8>]  [dist_fn 0 for l2/ 1 for inner product] [index_prefix_path] "
            " [num_nodes_to_cache]  [num_threads]  [beamwidth (use 0 to "
            "optimize internally)] "
            " [query_file.bin]  [truthset.bin (use \"null\" for none)] "

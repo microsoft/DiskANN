@@ -255,9 +255,14 @@ namespace diskann {
     virtual float compare(const int8_t *a, const int8_t *b,
                           unsigned int length) const {
 #ifndef _WINDOWS
-      std::cout << "AVX only supported in Windows build.";
-      return 0;
-    }
+int32_t result = 0;
+#pragma omp simd reduction(+ : result) aligned(a, b : 8)
+      for (_s32 i = 0; i < (_s32) length; i++) {
+        result += ((int32_t)((int16_t) a[i] - (int16_t) b[i])) *
+                  ((int32_t)((int16_t) a[i] - (int16_t) b[i]));
+      }
+      return (float) result;
+                          }
 #else
       __m128  r = _mm_setzero_ps();
       __m128i r1;
@@ -302,9 +307,14 @@ namespace diskann {
     virtual float compare(const float *a, const float *b,
                           unsigned int length) const {
 #ifndef _WINDOWS
-      std::cout << "AVX only supported in Windows build.";
-      return 0;
-    }
+float result = 0;
+#pragma omp simd reduction(+ : result) aligned(a, b : 8)
+      for (_s32 i = 0; i < (_s32) length; i++) {
+        result += (a[i] - b[i]) *
+                  (a[i] - b[i]);
+      }
+      return result;
+                          }
 #else
       __m128 diff, v1, v2;
       __m128 sum = _mm_set1_ps(0);
@@ -328,7 +338,7 @@ namespace diskann {
   template<typename T>
   class DistanceInnerProduct : public Distance<T> {
    public:
-    float compare(const T *a, const T *b, unsigned size) const {
+    float acompare(const T *a, const T *b, unsigned size) const {
       float result = 0;
 #ifdef __GNUC__
 #ifdef __AVX__
@@ -426,10 +436,17 @@ namespace diskann {
 #endif
       return result;
     }
+    float compare(const T *a, const T *b, unsigned size) const { // since we use normally minimization objective for distance comparisons, we are returning 1/x.
+      float result = acompare(a,b,size);
+//      if (result < 0)
+//      return std::numeric_limits<float>::max();
+//      else 
+return -result;
+    }
   };
 
   template<typename T>
-  class DistanceFastL2 : public DistanceInnerProduct<T> {
+  class DistanceFastL2 : public DistanceInnerProduct<T> {   // currently defined only for float. templated for future use.
    public:
     float norm(const T *a, unsigned size) const {
       float result = 0;
@@ -522,7 +539,7 @@ namespace diskann {
     using DistanceInnerProduct<T>::compare;
     float compare(const T *a, const T *b, float norm,
                   unsigned size) const {  // not implement
-      float result = -2 * DistanceInnerProduct<T>::compare(a, b, size);
+      float result = -2 * DistanceInnerProduct<T>::acompare(a, b, size);
       result += norm;
       return result;
     }

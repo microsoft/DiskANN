@@ -61,6 +61,9 @@ namespace {
         std::cout << "Older CPU. Using slow distance computation" << std::endl;
         return new diskann::SlowDistanceL2Float();
       }
+      } else if (m == diskann::Metric::INNER_PRODUCT) {        
+        std::cout << "Using Inner Product computation" << std::endl;
+        return new diskann::DistanceInnerProduct<float>();
     } else {
       std::stringstream stream;
       stream << "Only L2 metric supported as of now. Email "
@@ -129,11 +132,12 @@ namespace diskann {
                         const size_t nd, const size_t num_frozen_pts,
                         const bool enable_tags, const bool store_data,
                         const bool support_eager_delete)
-      : _num_frozen_pts(num_frozen_pts), _has_built(false), _width(0),
+      : _metric(m), _num_frozen_pts(num_frozen_pts), _has_built(false), _width(0),
         _can_delete(false), _eager_done(true), _lazy_done(true),
         _compacted_order(true), _enable_tags(enable_tags),
         _consolidated_order(true), _support_eager_delete(support_eager_delete),
         _store_data(store_data) {
+
     // data is stored to _nd * aligned_dim matrix with necessary
     // zero-padding
     diskann::cout << "Number of frozen points = " << _num_frozen_pts
@@ -179,7 +183,6 @@ namespace diskann {
 
     this->_distance = ::get_distance_function<T>(m);
     _locks = std::vector<std::mutex>(_max_points + _num_frozen_pts);
-
     _width = 0;
   }
 
@@ -501,9 +504,9 @@ namespace diskann {
       std::vector<unsigned>     init_ids,
       std::vector<Neighbor> &   expanded_nodes_info,
       tsl::robin_set<unsigned> &expanded_nodes_ids) {
-    const T *             node_coords = _data + _aligned_dim * node_id;
+    T *             node_coords = _data + _aligned_dim * node_id;
     std::vector<Neighbor> best_L_nodes;
-
+    
     if (init_ids.size() == 0)
       init_ids.emplace_back(_ep);
 
@@ -535,7 +538,7 @@ namespace diskann {
     float cur_alpha = 1;
     while (cur_alpha <= alpha && result.size() < degree) {
       unsigned start = 0;
-
+      float eps = cur_alpha + 0.01;
       while (result.size() < degree && (start) < pool.size() && start < maxc) {
         auto &p = pool[start];
         if (occlude_factor[start] > cur_alpha) {
@@ -550,8 +553,18 @@ namespace diskann {
           float djk = _distance->compare(
               _data + _aligned_dim * (size_t) pool[t].id,
               _data + _aligned_dim * (size_t) p.id, (unsigned) _aligned_dim);
+              if (_metric == diskann::Metric::L2) {
           occlude_factor[t] =
               (std::max)(occlude_factor[t], pool[t].distance / djk);
+              }
+              else if (_metric == diskann::Metric::INNER_PRODUCT) { // stylized rules for inner product since we want max instead of min distance
+                float x = -pool[t].distance;
+                float y = -djk;
+                if (y > cur_alpha * x) {
+                  occlude_factor[t] =
+              (std::max)(occlude_factor[t], eps);
+                }
+              }
         }
         start++;
       }
@@ -775,6 +788,7 @@ namespace diskann {
     for (uint64_t p = 0; p < _max_points + _num_frozen_pts; p++) {
       _final_graph[p].reserve((size_t)(std::ceil(range * SLACK_FACTOR * 1.05)));
     }
+
 
     std::random_device               rd;
     std::mt19937                     gen(rd());
@@ -1054,6 +1068,8 @@ namespace diskann {
     for (auto it : best_L_nodes) {
       indices[pos] = it.id;
       distances[pos] = it.distance;
+      if (_metric == diskann::INNER_PRODUCT)
+      distances[pos] = -distances[pos];
       pos++;
       if (pos == K)
         break;
@@ -1064,7 +1080,7 @@ namespace diskann {
   template<typename T, typename TagT>
   std::pair<uint32_t, uint32_t> Index<T, TagT>::search_with_tags(
       const T *query, const size_t K, const unsigned L, TagT *tags,
-      unsigned frozen_pts, unsigned *indices_buffer) {
+      unsigned *indices_buffer) {
     const bool alloc = indices_buffer == NULL;
     auto       indices = alloc ? new unsigned[K] : indices_buffer;
     auto       ret = search(query, K, L, indices);

@@ -49,7 +49,7 @@
 
 // returns region of `node_buf` containing [NNBRS][NBR_ID(_u32)]
 #define OFFSET_TO_NODE_NHOOD(node_buf) \
-  (unsigned *) ((char *) node_buf + data_dim * sizeof(T))
+  (unsigned *) ((char *) node_buf + disk_bytes_per_point)
 
 // returns region of `node_buf` containing [COORD(T)]
 #define OFFSET_TO_NODE_COORDS(node_buf) (T *) (node_buf)
@@ -86,8 +86,8 @@ namespace {
 namespace diskann {
   template<>
   PQFlashIndex<_u8>::PQFlashIndex(
-      std::shared_ptr<AlignedFileReader> &fileReader)
-      : reader(fileReader) {
+      std::shared_ptr<AlignedFileReader> &fileReader, diskann::Metric metric)
+      : reader(fileReader),  metric(metric) {
     diskann::cout
         << "dist_cmp function for _u8 uses slow implementation."
            " Please contact gopalsr@microsoft.com if you need an AVX/AVX2"
@@ -106,12 +106,16 @@ namespace diskann {
                     << std::endl;
       this->dist_cmp_float = new SlowDistanceL2Float();
     }
+    if (metric != diskann::Metric::L2) {
+      std::cout<<"Only L2 supported for byte vectors for now. Other distance functions are future work. Falling back to L2 distance." << std::endl;
+      this->metric = diskann::Metric::L2;
+    }
   }
 
   template<>
   PQFlashIndex<_s8>::PQFlashIndex(
-      std::shared_ptr<AlignedFileReader> &fileReader)
-      : reader(fileReader) {
+      std::shared_ptr<AlignedFileReader> &fileReader, diskann::Metric metric)
+      : reader(fileReader), metric(metric) {
     if (Avx2SupportedCPU) {
       diskann::cout << "Using AVX2 function for dist_cmp and dist_cmp_float"
                     << std::endl;
@@ -130,12 +134,18 @@ namespace diskann {
       this->dist_cmp = new SlowDistanceL2Int<int8_t>();
       this->dist_cmp_float = new SlowDistanceL2Float();
     }
+        if (metric != diskann::Metric::L2) {
+      std::cout<<"Only L2 supported for byte vectors for now. Other distance functions are future work. Falling back to L2 distance." << std::endl;
+      this->metric = diskann::Metric::L2;
+    }
+
   }
 
   template<>
   PQFlashIndex<float>::PQFlashIndex(
-      std::shared_ptr<AlignedFileReader> &fileReader)
-      : reader(fileReader) {
+      std::shared_ptr<AlignedFileReader> &fileReader, diskann::Metric metric)
+      : reader(fileReader), metric(metric) {
+        if (metric == diskann::Metric::L2) {
     if (Avx2SupportedCPU) {
       diskann::cout << "Using AVX2 functions for dist_cmp and dist_cmp_float"
                     << std::endl;
@@ -153,6 +163,16 @@ namespace diskann {
                     << std::endl;
       this->dist_cmp = new AVXDistanceL2Float();
       this->dist_cmp_float = new AVXDistanceL2Float();
+    }
+    } else if (metric == diskann::Metric::INNER_PRODUCT) {
+      std::cout<<"Using inner product distance function" << std::endl;
+      this->dist_cmp = new DistanceInnerProduct<float>();
+      this->dist_cmp_float = new DistanceInnerProduct<float>();
+    } else {
+      std::cout<<"Unsupported metric type. Reverting to float." << std::endl;
+      this->dist_cmp = new AVXDistanceL2Float();
+      this->dist_cmp_float = new AVXDistanceL2Float();
+      this->metric = diskann::Metric::L2;
     }
   }
 
@@ -300,7 +320,7 @@ namespace diskann {
         char *node_buf = OFFSET_TO_NODE(nhood.second, nhood.first);
         T *   node_coords = OFFSET_TO_NODE_COORDS(node_buf);
         T *   cached_coords = coord_cache_buf + node_idx * aligned_dim;
-        memcpy(cached_coords, node_coords, data_dim * sizeof(T));
+        memcpy(cached_coords, node_coords, disk_bytes_per_point);
         coord_cache.insert(std::make_pair(nhood.first, cached_coords));
 
         // insert node nhood into nhood_cache
@@ -542,12 +562,16 @@ namespace diskann {
       // add medoid coords to `coord_cache`
       T *medoid_coords = new T[data_dim];
       T *medoid_disk_coords = OFFSET_TO_NODE_COORDS(medoid_node_buf);
-      memcpy(medoid_coords, medoid_disk_coords, data_dim * sizeof(T));
+      memcpy(medoid_coords, medoid_disk_coords, disk_bytes_per_point);
 
+      if (!use_disk_index_pq) {
       for (uint32_t i = 0; i < data_dim; i++)
         centroid_data[cur_m * aligned_dim + i] = medoid_coords[i];
-
+      } else {
+        disk_pq_table.inflate_vector((_u8*) medoid_coords, (centroid_data + cur_m*aligned_dim));
+      }
       aligned_free(medoid_buf);
+      delete[] medoid_coords;
     }
 
     // return ctx
@@ -572,6 +596,7 @@ namespace diskann {
     std::string centroids_file =
         std::string(disk_index_file) + "_centroids.bin";
 
+ 
     size_t pq_file_dim, pq_file_num_centroids;
 #ifdef EXEC_ENV_OLS
     get_bin_metadata(files, pq_table_bin, pq_file_num_centroids, pq_file_dim);
@@ -588,7 +613,10 @@ namespace diskann {
     }
 
     this->data_dim = pq_file_dim;
+    this->disk_data_dim = this->data_dim; // will reset later if we use PQ on disk
+    this->disk_bytes_per_point = this->data_dim * sizeof(T); // will change later if we use PQ on disk or if we are using inner product without PQ
     this->aligned_dim = ROUND_UP(pq_file_dim, 8);
+
 
     size_t npts_u64, nchunks_u64;
 #ifdef EXEC_ENV_OLS
@@ -613,6 +641,20 @@ namespace diskann {
         << num_points << " #dim: " << data_dim
         << " #aligned_dim: " << aligned_dim << " #chunks: " << n_chunks
         << std::endl;
+
+
+std::string disk_pq_pivots_path = this->disk_index_file + "_pq_pivots.bin";
+if (file_exists(disk_pq_pivots_path)) {
+  use_disk_index_pq = true;
+  #ifdef EXEC_ENV_OLS
+    disk_pq_table.load_pq_centroid_bin(files, disk_pq_pivots_path.c_str(), 0); // giving 0 chunks to make the pq_table infer from the chunk_offsets file the correct value
+#else
+    disk_pq_table.load_pq_centroid_bin(disk_pq_pivots_path.c_str(), 0); // giving 0 chunks to make the pq_table infer from the chunk_offsets file the correct value
+#endif
+   disk_pq_n_chunks = disk_pq_table.get_num_chunks();
+   disk_bytes_per_point = disk_pq_n_chunks * sizeof(_u8);
+   std::cout<<"Disk index uses PQ data compressed down to " << disk_pq_n_chunks << " bytes per point." << std::endl;
+}
 
 // read index metadata
 #ifdef EXEC_ENV_OLS
@@ -658,7 +700,7 @@ namespace diskann {
     READ_U64(index_metadata, medoid_id_on_file);
     READ_U64(index_metadata, max_node_len);
     READ_U64(index_metadata, nnodes_per_sector);
-    max_degree = ((max_node_len - data_dim * sizeof(T)) / sizeof(unsigned)) - 1;
+    max_degree = ((max_node_len - disk_bytes_per_point) / sizeof(unsigned)) - 1;
 
     diskann::cout << "Disk-Index File Meta-data: ";
     diskann::cout << "# nodes per sector: " << nnodes_per_sector;
@@ -765,20 +807,37 @@ namespace diskann {
                                            const _u64 l_search, _u64 *indices,
                                            float *      distances,
                                            const _u64   beam_width,
-                                           QueryStats * stats,
-                                           Distance<T> *output_dist_func) {
+                                           QueryStats * stats) {
     ThreadData<T> data = this->thread_data.pop();
     while (data.scratch.sector_scratch == nullptr) {
       this->thread_data.wait_for_push_notify();
       data = this->thread_data.pop();
     }
 
-    for (uint32_t i = 0; i < this->data_dim; i++) {
-      data.scratch.aligned_query_float[i] = query1[i];
-    }
-    memcpy(data.scratch.aligned_query_T, query1, this->data_dim * sizeof(T));
+
+// copy query to thread specific aligned and allocated memory (for distance calculations we need aligned data)
+
+    float query_norm = 0;
     const T *    query = data.scratch.aligned_query_T;
     const float *query_float = data.scratch.aligned_query_float;
+
+    for (uint32_t i = 0; i < this->data_dim; i++) {
+      data.scratch.aligned_query_float[i] = query1[i];
+      data.scratch.aligned_query_T[i] = query1[i];
+      query_norm += query1[i]*query1[i];
+    }
+
+// if inner product, we laso normalize the query and set the last coordinate to 0 (this is the extra coordindate used to convert MIPS to L2 search) 
+ if (metric == diskann::Metric::INNER_PRODUCT) {
+    query_norm = std::sqrt(query_norm);
+    data.scratch.aligned_query_T[this->data_dim -1] = 0;
+    data.scratch.aligned_query_float[this->data_dim -1] = 0;
+    for (uint32_t i = 0; i < this->data_dim - 1; i++) {
+      data.scratch.aligned_query_T[i] /= query_norm;
+      data.scratch.aligned_query_float[i] /= query_norm;
+    }
+    }
+
 
     IOContext &ctx = data.ctx;
     auto       query_scratch = &(data.scratch);
@@ -801,7 +860,7 @@ namespace diskann {
 
     // query <-> PQ chunk centers distances
     float *pq_dists = query_scratch->aligned_pqtable_dist_scratch;
-    pq_table.populate_chunk_distances(query, pq_dists);
+    pq_table.populate_chunk_distances(query_float, pq_dists);
 
     // query <-> neighbor list
     float *dist_scratch = query_scratch->aligned_dist_scratch;
@@ -837,6 +896,7 @@ namespace diskann {
     }
 
     compute_dists(&best_medoid, 1, dist_scratch);
+
     retset[0].id = best_medoid;
     retset[0].distance = dist_scratch[0];
     retset[0].flag = true;
@@ -861,6 +921,7 @@ namespace diskann {
     while (k < cur_list_size) {
       auto nk = cur_list_size;
 
+
       // clear iteration state
       frontier.clear();
       frontier_nhoods.clear();
@@ -873,19 +934,6 @@ namespace diskann {
       _u32 marker = k;
       _u32 num_seen = 0;
 
-      /*
-        bool marker_set = false;
-        diskann::cout << "hop " << hops << ": ";
-        for (_u32 i = 0; i < cur_list_size; i++) {
-          diskann::cout << retset[i].id << "( " << retset[i].distance;
-          if (retset[i].flag && !marker_set) {
-            diskann::cout << ",*)  ";
-            marker_set = true;
-          } else
-            diskann::cout << ")  ";
-        }
-        diskann::cout << std::endl;
-  */
       while (marker < cur_list_size && frontier.size() < beam_width &&
              num_seen < beam_width + 2) {
         if (retset[marker].flag) {
@@ -945,8 +993,17 @@ namespace diskann {
       for (auto &cached_nhood : cached_nhoods) {
         auto  global_cache_iter = coord_cache.find(cached_nhood.first);
         T *   node_fp_coords_copy = global_cache_iter->second;
-        float cur_expanded_dist = dist_cmp->compare(query, node_fp_coords_copy,
+        float cur_expanded_dist;
+        if (!use_disk_index_pq) {
+          cur_expanded_dist = dist_cmp->compare(query, node_fp_coords_copy,
                                                     (unsigned) aligned_dim);
+        }
+        else {
+          if (metric == diskann::Metric::INNER_PRODUCT)
+          cur_expanded_dist = disk_pq_table.inner_product(query_float, (_u8*) node_fp_coords_copy);
+          else
+          cur_expanded_dist = disk_pq_table.compare(query_float, (_u8*) node_fp_coords_copy);
+        }
         full_retset.push_back(
             Neighbor((unsigned) cached_nhood.first, cur_expanded_dist, true));
 
@@ -1014,10 +1071,19 @@ namespace diskann {
 
         T *node_fp_coords_copy = data_buf + (data_buf_idx * aligned_dim);
         data_buf_idx++;
-        memcpy(node_fp_coords_copy, node_fp_coords, data_dim * sizeof(T));
+        memcpy(node_fp_coords_copy, node_fp_coords, disk_bytes_per_point);
 
-        float cur_expanded_dist = dist_cmp->compare(query, node_fp_coords_copy,
+        float cur_expanded_dist;
+        if (!use_disk_index_pq) {
+          cur_expanded_dist = dist_cmp->compare(query, node_fp_coords_copy,
                                                     (unsigned) aligned_dim);
+        }
+        else {
+          if (metric == diskann::Metric::INNER_PRODUCT)
+          cur_expanded_dist = disk_pq_table.inner_product(query_float, (_u8*) node_fp_coords_copy);
+          else
+          cur_expanded_dist = disk_pq_table.compare(query_float, (_u8*) node_fp_coords_copy);
+        }
         full_retset.push_back(
             Neighbor(frontier_nhood.first, cur_expanded_dist, true));
 
@@ -1077,17 +1143,28 @@ namespace diskann {
 
       hops++;
     }
+
+
     // re-sort by distance
     std::sort(full_retset.begin(), full_retset.end(),
               [](const Neighbor &left, const Neighbor &right) {
                 return left.distance < right.distance;
               });
 
+/*
+    std::cout<<"return set: \n";
+    for (auto &x : full_retset)
+    std::cout<<x.id<<"\t" <<x.distance<<std::endl;
+    std::cout<<std::endl;
+*/
+
     // copy k_search values
     for (_u64 i = 0; i < k_search; i++) {
       indices[i] = full_retset[i].id;
       if (distances != nullptr) {
         distances[i] = full_retset[i].distance;
+        if (metric == diskann::Metric::INNER_PRODUCT) // flip the sign from convert min to max
+        distances[i] = -distances[i];
       }
     }
 

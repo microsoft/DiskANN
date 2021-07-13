@@ -27,8 +27,7 @@ template<typename T>
 void gen_random_slice(const T *inputdata, size_t npts, size_t ndims,
                       double p_val, float *&sampled_data, size_t &slice_size);
 
-template<typename T>
-int estimate_cluster_sizes(const std::string data_file, float *pivots,
+int estimate_cluster_sizes(float* test_data_float, size_t num_test, float *pivots,
                            const size_t num_centers, const size_t dim,
                            const size_t         k_base,
                            std::vector<size_t> &cluster_sizes);
@@ -37,6 +36,15 @@ template<typename T>
 int shard_data_into_clusters(const std::string data_file, float *pivots,
                              const size_t num_centers, const size_t dim,
                              const size_t k_base, std::string prefix_path);
+
+template<typename T>
+int shard_data_into_clusters_only_ids(const std::string data_file, float *pivots,
+                             const size_t num_centers, const size_t dim,
+                             const size_t k_base, std::string prefix_path);
+
+template<typename T>
+int retrieve_shard_data_from_ids(const std::string data_file, std::string idmap_filename, std::string data_filename);
+
 
 template<typename T>
 int partition(const std::string data_file, const float sampling_rate,
@@ -54,7 +62,7 @@ DISKANN_DLLEXPORT int generate_pq_pivots(const float *train_data,
                                          unsigned    num_centers,
                                          unsigned    num_pq_chunks,
                                          unsigned    max_k_means_reps,
-                                         std::string pq_pivots_path);
+                                         std::string pq_pivots_path, bool make_zero_mean = false);
 
 template<typename T>
 int generate_pq_data_from_pivots(const std::string data_file,

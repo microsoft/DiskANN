@@ -70,7 +70,7 @@ namespace diskann {
     // Freeing the reader object is now the client's (DiskANNInterface's)
     // responsibility.
     DISKANN_DLLEXPORT PQFlashIndex(
-        std::shared_ptr<AlignedFileReader> &fileReader);
+        std::shared_ptr<AlignedFileReader> &fileReader, diskann::Metric metric = diskann::Metric::L2);
     DISKANN_DLLEXPORT ~PQFlashIndex();
 
 #ifdef EXEC_ENV_OLS
@@ -112,8 +112,7 @@ namespace diskann {
     // implemented
     DISKANN_DLLEXPORT void cached_beam_search(
         const T *query, const _u64 k_search, const _u64 l_search, _u64 *res_ids,
-        float *res_dists, const _u64 beam_width, QueryStats *stats = nullptr,
-        Distance<T> *output_dist_func = nullptr);
+        float *res_dists, const _u64 beam_width, QueryStats *stats = nullptr);
     std::shared_ptr<AlignedFileReader> &reader;
 
    protected:
@@ -129,10 +128,13 @@ namespace diskann {
     // nbrs of node `i`: ((unsigned*)buf) + 1
     _u64 max_node_len = 0, nnodes_per_sector = 0, max_degree = 0;
 
+    diskann::Metric metric = diskann::Metric::L2;
     // data info
     _u64 num_points = 0;
     _u64 data_dim = 0;
+    _u64 disk_data_dim = 0; // will be different from data_dim only if we use PQ for disk data (very large dimensionality)
     _u64 aligned_dim = 0;
+    _u64 disk_bytes_per_point = 0;
 
     std::string disk_index_file;
     std::vector<std::pair<_u32, _u32>> node_visit_counter;
@@ -143,13 +145,18 @@ namespace diskann {
     // chunk_size = chunk size of each dimension chunk
     // pq_tables = float* [[2^8 * [chunk_size]] * n_chunks]
     _u8 *                data = nullptr;
-    _u64                 chunk_size;
     _u64                 n_chunks;
-    FixedChunkPQTable<T> pq_table;
+    FixedChunkPQTable pq_table;
 
     // distance comparator
     Distance<T> *    dist_cmp = nullptr;
     Distance<float> *dist_cmp_float = nullptr;
+
+    // for very large datasets: we use PQ even for the disk resident index
+    bool                 use_disk_index_pq = false;
+    _u64                 disk_pq_n_chunks;
+    FixedChunkPQTable disk_pq_table;
+
 
     // medoid/start info
     uint32_t *medoids =
