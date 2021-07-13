@@ -814,9 +814,12 @@ if (file_exists(disk_pq_pivots_path)) {
       data = this->thread_data.pop();
     }
 
+
 // copy query to thread specific aligned and allocated memory (for distance calculations we need aligned data)
 
     float query_norm = 0;
+    const T *    query = data.scratch.aligned_query_T;
+    const float *query_float = data.scratch.aligned_query_float;
 
     for (uint32_t i = 0; i < this->data_dim; i++) {
       data.scratch.aligned_query_float[i] = query1[i];
@@ -827,14 +830,14 @@ if (file_exists(disk_pq_pivots_path)) {
 // if inner product, we laso normalize the query and set the last coordinate to 0 (this is the extra coordindate used to convert MIPS to L2 search) 
  if (metric == diskann::Metric::INNER_PRODUCT) {
     query_norm = std::sqrt(query_norm);
+    data.scratch.aligned_query_T[this->data_dim -1] = 0;
     data.scratch.aligned_query_float[this->data_dim -1] = 0;
     for (uint32_t i = 0; i < this->data_dim - 1; i++) {
+      data.scratch.aligned_query_T[i] /= query_norm;
       data.scratch.aligned_query_float[i] /= query_norm;
     }
     }
 
-    const T *    query = data.scratch.aligned_query_T;
-    const float *query_float = data.scratch.aligned_query_float;
 
     IOContext &ctx = data.ctx;
     auto       query_scratch = &(data.scratch);

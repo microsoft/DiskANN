@@ -47,6 +47,16 @@ else()
 	target_link_libraries(int8_to_float ${PROJECT_NAME})
 endif()
 
+add_executable(uint8_to_float uint8_to_float.cpp)
+if(MSVC)
+	target_link_options(uint8_to_float PRIVATE /MACHINE:x64)
+	target_link_libraries(uint8_to_float debug ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG}/diskann_dll.lib)
+	target_link_libraries(uint8_to_float optimized ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE}/diskann_dll.lib)
+else() 
+	target_link_libraries(uint8_to_float ${PROJECT_NAME})
+endif()
+
+
 add_executable(uint32_to_uint8 uint32_to_uint8.cpp)
 if(MSVC)
 	target_link_options(uint32_to_uint8 PRIVATE /MACHINE:x64)

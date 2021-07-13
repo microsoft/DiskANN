@@ -83,19 +83,23 @@ std::cout<<"Max norm: " << max_norm << std::endl;
   _u64 newdims = ndims + 1;
   new_data = new T[npts*newdims];
   for (_u64 i = 0;i < npts; i++) {
+    if (prep_base) {
     for (_u64 j = 0; j < ndims; j++) {
       new_data[i*newdims + j] = data[i*ndims +j]/ max_norm;
     }
-    if (prep_base) {
       float diff = 1 - (norms[i]/ (max_norm* max_norm));
       diff = diff <= 0 ? 0 : std::sqrt(diff);
     new_data[i*newdims + ndims] = diff;
         if (diff <= 0) {
-      std::cout<<i<<" has large max norm, investigate if needed. " << std::endl;
+      std::cout<<i<<" has large max norm, investigate if needed. diff = " << diff << std::endl;
     }
     }
-    else 
+    else {
+    for (_u64 j = 0; j < ndims; j++) {
+      new_data[i*newdims + j] = data[i*ndims +j]/ std::sqrt(norms[i]);
+    }
     new_data[i*newdims + ndims] = 0;
+    }
   }
   diskann::save_bin<T>(out_file, new_data, npts, newdims);
   delete[] new_data;
