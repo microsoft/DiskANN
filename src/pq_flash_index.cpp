@@ -122,8 +122,8 @@ namespace diskann {
       diskann::cout << "No AVX/AVX2 support. Switching to slow implementations "
                        "for dist_cmp and dist_cmp_float"
                     << std::endl;
-      this->dist_cmp = new AVXDistanceL2Float();
-      this->dist_cmp_float = new AVXDistanceL2Float();
+      this->dist_cmp = new SlowDistanceL2Float();
+      this->dist_cmp_float = new SlowDistanceL2Float();
     }
   }
 

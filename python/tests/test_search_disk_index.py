@@ -41,13 +41,13 @@ if single_query_mode:
     for i, L in enumerate(l_search):
         latency_stats = []
         query_result_ids = diskannpy.VectorUnsigned()
-        query_result_dists = diskannpy.VectorUnsigned()
+        query_result_dists = diskannpy.VectorFloat()
         s = time.time()
 
         for j in range(num_queries):
             qs = time.time()
-            index.search(query_data, query_aligned_dims, recall_at, L, W,
-                         query_result_ids + j * recall_at, query_result_dists + j * recall_at)
+            index.search(query_data, j, query_aligned_dims, num_queries, 
+                         recall_at, L, W, query_result_ids, query_result_dists)
             qe = time.time()
             latency_stats.append(float((qe - qs) * 1000000))
 

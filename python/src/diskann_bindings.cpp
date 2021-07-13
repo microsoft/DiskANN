@@ -194,14 +194,21 @@ PYBIND11_MODULE(diskannpy, m) {
           py::arg("index_path_prefix"))
       .def(
           "search",
-          [](DiskANNIndex<float> &self, const float *query, const _u64 dim,
-             const _u64 knn, const _u64 l_search, const _u64 beam_width,
-             _u64 *ids, float *dists) {
+          [](DiskANNIndex<float> &self, std::vector<float> &query, const _u64 query_idx,
+		  const _u64 dim, const _u64 num_queries, const _u64 knn, const _u64 l_search, const _u64 beam_width,
+             std::vector<unsigned> &ids, std::vector<float> &dists) {
             QueryStats stats;
-            self.pq_flash_index->cached_beam_search(query, knn, l_search, ids, dists,
-                                    beam_width, &stats);
+	    if (ids.size() < knn * num_queries) {
+	    	ids.resize(knn * num_queries);
+	    	dists.resize(knn * num_queries);
+	    }
+	    std::vector<_u64> _u64_ids(knn);
+            self.pq_flash_index->cached_beam_search(query.data() + (query_idx * dim), knn, l_search, 
+			    _u64_ids.data(), dists.data() + (query_idx * knn), beam_width, &stats);
+	    for(_u64 i=0;i<knn;i++)
+	    	ids[(query_idx * knn) + i] = _u64_ids[i];
           },
-          py::arg("query"), py::arg("dim"), py::arg("knn") = 10,
+          py::arg("query"), py::arg("query_idx"), py::arg("dim"), py::arg("num_queries"), py::arg("knn") = 10,
           py::arg("l_search"), py::arg("beam_width"), py::arg("ids"),
           py::arg("dists"))
       .def(
