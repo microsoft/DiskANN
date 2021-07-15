@@ -308,7 +308,7 @@ int aux_main(char **argc) {
   size_t      k = atoi(argc[4]);
   bool use_mip = false;
   std::string gt_file(argc[5]);
-  if (std::string(argv[6]) == std::string("mips"))
+  if (std::string(argc[6]) == std::string("mips"))
 	  use_mip = true;
   
 

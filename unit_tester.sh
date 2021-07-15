@@ -17,13 +17,15 @@ sed -e '/^$/d' ${CATALOG1} > ${CATALOG}
 
 
 while IFS= read -r line; do
-  BASE=$line
-  read -r QUERY
+  BASE="${WORK_FOLDER}/${line}"
+  read -r line
+  QUERY="${WORK_FOLDER}/${line}"
   read -r TYPE
   read -r METRIC
-  echo "Going to run test on ${BASE} base, ${QUERY} query, ${TYPE} datatype, ${METRIC} metric"
+  GT="${WORK_FOLDER}/test_gt100"
+  echo "Going to run test on ${BASE} base, ${QUERY} query, ${TYPE} datatype, ${METRIC} metric, saving gt at ${GT}"
   echo "Computing Groundtruth"
-  ${BUILD_FOLDER}/tests/utils/compute_groundtruth ${TYPE} 
+  ${BUILD_FOLDER}/tests/utils/compute_groundtruth ${TYPE} ${BASE} ${QUERY} 30 ${GT} ${METRIC}
 
 done < "${CATALOG}"
 
