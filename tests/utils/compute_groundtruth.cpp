@@ -34,7 +34,7 @@ void command_line_help() {
   std::cerr << "./compute_groundtruth <int8/uint8/float>   <base bin file> "
                "<query bin "
                "file>  <K: # nearest neighbors to compute> "
-               "<output-truthset-file> <dist_function: 0 for L2, 1 for MIP>"
+               "<output-truthset-file> <dist_function: l2/mips>"
             << std::endl;
 }
 
@@ -306,8 +306,11 @@ int aux_main(char **argc) {
   std::string base_file(argc[2]);
   std::string query_file(argc[3]);
   size_t      k = atoi(argc[4]);
+  bool use_mip = false;
   std::string gt_file(argc[5]);
-  bool        use_mip = atoi(argc[6]);
+  if (std::string(argv[6]) == std::string("mips"))
+	  use_mip = true;
+  
 
   float *base_data;
   float *query_data;
