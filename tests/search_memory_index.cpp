@@ -174,7 +174,7 @@ int main(int argc, char** argv) {
   if (argc < 11) {
     std::cout
         << "Usage: " << argv[0]
-        << "  [index_type<float/int8/uint8>]  [dist_fn (0 for L2, 1 for Inner Product, 2 for Fast L2 for small datasets)] [data_file.bin]  "
+        << "  [index_type<float/int8/uint8>]  [dist_fn (l2/mips/fast_l2)] [data_file.bin]  "
            "[memory_index_path]  [num_threads] "
            "[query_file.bin]  [truthset.bin (use \"null\" for none)] "
            " [K] [result_output_prefix]"

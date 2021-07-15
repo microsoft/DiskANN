@@ -67,6 +67,11 @@ int search_disk_index(int argc, char** argv) {
     std::cout<<"Unsupported distance function. Currently only L2/ Inner Product support." << std::endl;
     return -1;
   }
+  
+  if ((std::string(argv[1]) != std::string("float")) && (metric == diskann::Metric::INNER_PRODUCT)) {
+        std::cout<<"Currently support only floating point data for Inner Product." << std::endl;
+    return -1;
+  }
 
   ctr++;
 
@@ -304,7 +309,7 @@ int main(int argc, char** argv) {
   if (argc < 12) {
     diskann::cout
         << "Usage: " << argv[0]
-        << "  [index_type<float/int8/uint8>]  [dist_fn 0 for l2/ 1 for inner product] [index_prefix_path] "
+        << "  [index_type<float/int8/uint8>]  [dist_fn<l2/mips>] [index_prefix_path] "
            " [num_nodes_to_cache]  [num_threads]  [beamwidth (use 0 to "
            "optimize internally)] "
            " [query_file.bin]  [truthset.bin (use \"null\" for none)] "
