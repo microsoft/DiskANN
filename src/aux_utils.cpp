@@ -797,7 +797,7 @@ namespace diskann {
     gen_random_slice<T>(data_file_to_use.c_str(), sample_base_prefix,
                         sample_sampling_rate);
 
-    //    std::remove(mem_index_path.c_str());
+    std::remove(mem_index_path.c_str());
     if (use_disk_pq)
       std::remove(disk_pq_compressed_vectors_path.c_str());
 
