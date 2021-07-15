@@ -17,16 +17,38 @@ sed -e '/^$/d' ${CATALOG1} > ${CATALOG}
 
 
 while IFS= read -r line; do
-  BASE="${WORK_FOLDER}/${line}"
+  DATASET=${line}
+  BASE="${WORK_FOLDER}/${DATASET}"
   read -r line
   QUERY="${WORK_FOLDER}/${line}"
   read -r TYPE
   read -r METRIC
-  GT="${WORK_FOLDER}/test_gt100"
+  GT="${WORK_FOLDER}/${DATASET}_gt30_${METRIC}"
+  MEM="${WORK_FOLDER}/${DATASET}_mem"
+  DISK="${WORK_FOLDER}/${DATASET}_disk"
+  MBLOG="${WORK_FOLDER}/${DATASET}_mb.log"
+  DBLOG="${WORK_FOLDER}/${DATASET}_db.log"
+  MSLOG="${WORK_FOLDER}/${DATASET}_ms.log"
+  DSLOG="${WORK_FOLDER}/${DATASET}_ds.log"
   echo "Going to run test on ${BASE} base, ${QUERY} query, ${TYPE} datatype, ${METRIC} metric, saving gt at ${GT}"
   echo "Computing Groundtruth"
-  ${BUILD_FOLDER}/tests/utils/compute_groundtruth ${TYPE} ${BASE} ${QUERY} 30 ${GT} ${METRIC}
-
+  ${BUILD_FOLDER}/tests/utils/compute_groundtruth ${TYPE} ${BASE} ${QUERY} 30 ${GT} ${METRIC} > /dev/null
+  echo "Building Mem Index"
+  ${BUILD_FOLDER}/tests/build_memory_index ${TYPE} ${METRIC} ${BASE} ${MEM}  32  50  1.2 0 > ${MBLOG}
+  awk '/^Degree/' ${MBLOG}
+  awk '/^Indexing/' ${MBLOG}
+  echo "Building Disk Index"
+  ${BUILD_FOLDER}/tests/build_disk_index  ${TYPE} ${METRIC} ${BASE} ${DISK} 32 50 0.003 0.001 32 0 > ${DBLOG}
+  awk '/^Compressing/' ${DBLOG}
+  echo "#shards in disk index"
+  awk '/^bin:/' ${DBLOG}
+  awk '/^Indexing/' ${DBLOG}
+  echo "Searching Mem Index"
+  ${BUILD_FOLDER}/tests/search_memory_index ${TYPE} ${METRIC} ${BASE} ${MEM} 16 ${QUERY} ${GT} 10 /tmp/res 10 20 30 40 50 60 70 80 90 100 > ${MSLOG}
+  awk '/===/{x=NR+10}(NR<=x){print}' ${MSLOG}
+  echo "Searching Disk Index"
+  ${BUILD_FOLDER}/tests/search_disk_index ${TYPE} ${METRIC} ${DISK} 10000 10 4 ${QUERY} ${GT} 10 /tmp/res 10 20 30 40 50 60 70 80 90 100 > ${DSLOG}
+  awk '/===/{x=NR+10}(NR<=x){print}' ${DSLOG}
 done < "${CATALOG}"
 
 fi
