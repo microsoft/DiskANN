@@ -52,7 +52,7 @@ namespace diskann {
 
     // Gopal. Added search overload that takes L as parameter, so that we
     // can customize L on a per-query basis without tampering with "Parameters"
-    DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> search(const T *query,
+    DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> search(const T *      query,
                                                            const size_t   K,
                                                            const unsigned L,
                                                            unsigned *indices);

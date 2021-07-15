@@ -58,4 +58,4 @@ namespace diskann {
     }
     return avg / len;
   }
-}
+}  // namespace diskann

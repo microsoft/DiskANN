@@ -16,7 +16,8 @@
 #include "memory_mapper.h"
 
 template<typename T>
-int build_in_memory_index(const std::string& data_path, const diskann::Metric &metric, const unsigned R,
+int build_in_memory_index(const std::string&     data_path,
+                          const diskann::Metric& metric, const unsigned R,
                           const unsigned L, const float alpha,
                           const std::string& save_path,
                           const unsigned     num_threads) {
@@ -55,16 +56,18 @@ int main(int argc, char** argv) {
 
   _u32 ctr = 2;
 
-diskann::Metric metric;
-    if (std::string(argv[ctr]) == std::string("mips"))
-      metric = diskann::Metric::INNER_PRODUCT;
+  diskann::Metric metric;
+  if (std::string(argv[ctr]) == std::string("mips"))
+    metric = diskann::Metric::INNER_PRODUCT;
   else if (std::string(argv[ctr]) == std::string("l2"))
-  metric = diskann::Metric::L2;
+    metric = diskann::Metric::L2;
   else {
-    std::cout<<"Unsupported distance function. Currently only L2/ Inner Product support." << std::endl;
+    std::cout << "Unsupported distance function. Currently only L2/ Inner "
+                 "Product support."
+              << std::endl;
     return -1;
   }
-ctr++;
+  ctr++;
 
   const std::string data_path(argv[ctr++]);
   const std::string save_path(argv[ctr++]);

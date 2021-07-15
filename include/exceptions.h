@@ -12,4 +12,4 @@ namespace diskann {
         : std::logic_error("Function not yet implemented.") {
     }
   };
-}
+}  // namespace diskann

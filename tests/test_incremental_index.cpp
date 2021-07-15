@@ -49,7 +49,7 @@ int main(int argc, char** argv) {
   paras.Set<bool>("saturate_graph", false);
   paras.Set<unsigned>("num_rnds", num_rnds);
 
-  typedef int TagT;
+  typedef int                 TagT;
   diskann::Index<float, TagT> index(diskann::L2, argv[1], num_points,
                                     num_points - num_incr, num_frozen, true,
                                     true, true);

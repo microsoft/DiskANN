@@ -27,28 +27,31 @@ int search_memory_index(int argc, char** argv) {
   size_t            query_num, query_dim, query_aligned_dim, gt_num, gt_dim;
   std::vector<_u64> Lvec;
 
-  _u32 ctr = 2;
+  _u32            ctr = 2;
   diskann::Metric metric;
 
-    if (std::string(argv[ctr]) == std::string("mips"))
-      metric = diskann::Metric::INNER_PRODUCT;
+  if (std::string(argv[ctr]) == std::string("mips"))
+    metric = diskann::Metric::INNER_PRODUCT;
   else if (std::string(argv[ctr]) == std::string("l2"))
-  metric = diskann::Metric::L2;
+    metric = diskann::Metric::L2;
   else if (std::string(argv[ctr]) == std::string("fast_l2"))
     metric = diskann::Metric::FAST_L2;
   else {
-    std::cout<<"Unsupported distance function. Currently only L2/ Inner Product/FAST_L2 support." << std::endl;
+    std::cout << "Unsupported distance function. Currently only L2/ Inner "
+                 "Product/FAST_L2 support."
+              << std::endl;
     return -1;
   }
-ctr++;
+  ctr++;
 
   if ((std::string(argv[1]) != std::string("float")) &&
-      ((metric == diskann::Metric::INNER_PRODUCT) || (metric == diskann::Metric::FAST_L2))) {
-    std::cout << "Error. Inner product and Fast_L2 search currently only supported for "
+      ((metric == diskann::Metric::INNER_PRODUCT) ||
+       (metric == diskann::Metric::FAST_L2))) {
+    std::cout << "Error. Inner product and Fast_L2 search currently only "
+                 "supported for "
                  "floating point datatypes."
               << std::endl;
   }
-
 
   std::string data_file(argv[ctr++]);
   std::string memory_index_file(argv[ctr++]);
@@ -57,8 +60,7 @@ ctr++;
   std::string truthset_bin(argv[ctr++]);
   _u64        recall_at = std::atoi(argv[ctr++]);
   std::string result_output_prefix(argv[ctr++]);
-//  bool        use_optimized_search = std::atoi(argv[ctr++]);
-
+  //  bool        use_optimized_search = std::atoi(argv[ctr++]);
 
   bool calc_recall_flag = false;
 
@@ -88,7 +90,6 @@ ctr++;
 
   std::cout.setf(std::ios_base::fixed, std::ios_base::floatfield);
   std::cout.precision(2);
-
 
   diskann::Index<T> index(metric, data_file.c_str());
   index.load(memory_index_file.c_str());  // to load NSG
@@ -174,7 +175,8 @@ int main(int argc, char** argv) {
   if (argc < 11) {
     std::cout
         << "Usage: " << argv[0]
-        << "  [index_type<float/int8/uint8>]  [dist_fn (l2/mips/fast_l2)] [data_file.bin]  "
+        << "  [index_type<float/int8/uint8>]  [dist_fn (l2/mips/fast_l2)] "
+           "[data_file.bin]  "
            "[memory_index_path]  [num_threads] "
            "[query_file.bin]  [truthset.bin (use \"null\" for none)] "
            " [K] [result_output_prefix]"

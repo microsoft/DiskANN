@@ -22,9 +22,10 @@ int create_disk_layout(char **argv) {
 }
 
 int main(int argc, char **argv) {
-    if (argc != 5) {
-    std::cout << argv[0] << " data_type <float/int8/uint8> data_bin "
-                            "vamana_index_file output_diskann_index_file"
+  if (argc != 5) {
+    std::cout << argv[0]
+              << " data_type <float/int8/uint8> data_bin "
+                 "vamana_index_file output_diskann_index_file"
               << std::endl;
     exit(-1);
   }

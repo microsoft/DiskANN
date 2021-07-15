@@ -11,7 +11,7 @@ int main(int argc, char** argv) {
   }
 
   uint8_t* input;
-  size_t  npts, nd;
+  size_t   npts, nd;
   diskann::load_bin<uint8_t>(argv[1], input, npts, nd);
   float* output = new float[npts * nd];
   diskann::convert_types<uint8_t, float>(input, output, npts, nd);

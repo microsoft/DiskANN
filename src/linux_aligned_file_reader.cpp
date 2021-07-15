@@ -89,7 +89,7 @@ namespace {
     }
     std::cout << std::endl;*/
   }
-}
+}  // namespace
 
 LinuxAlignedFileReader::LinuxAlignedFileReader() {
   this->file_desc = -1;

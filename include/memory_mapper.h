@@ -38,4 +38,4 @@ namespace diskann {
 
     ~MemoryMapper();
   };
-}
+}  // namespace diskann

@@ -70,7 +70,8 @@ namespace diskann {
     // Freeing the reader object is now the client's (DiskANNInterface's)
     // responsibility.
     DISKANN_DLLEXPORT PQFlashIndex(
-        std::shared_ptr<AlignedFileReader> &fileReader, diskann::Metric metric = diskann::Metric::L2);
+        std::shared_ptr<AlignedFileReader> &fileReader,
+        diskann::Metric                     metric = diskann::Metric::L2);
     DISKANN_DLLEXPORT ~PQFlashIndex();
 
 #ifdef EXEC_ENV_OLS
@@ -79,8 +80,8 @@ namespace diskann {
                                const char *disk_index_file);
 #else
     // load compressed data, and obtains the handle to the disk-resident index
-    DISKANN_DLLEXPORT int load(uint32_t num_threads, const char *pq_prefix,
-                               const char *disk_index_file);
+    DISKANN_DLLEXPORT int  load(uint32_t num_threads, const char *pq_prefix,
+                                const char *disk_index_file);
 #endif
 
     DISKANN_DLLEXPORT void load_cache_list(std::vector<uint32_t> &node_list);
@@ -132,11 +133,12 @@ namespace diskann {
     // data info
     _u64 num_points = 0;
     _u64 data_dim = 0;
-    _u64 disk_data_dim = 0; // will be different from data_dim only if we use PQ for disk data (very large dimensionality)
+    _u64 disk_data_dim = 0;  // will be different from data_dim only if we use
+                             // PQ for disk data (very large dimensionality)
     _u64 aligned_dim = 0;
     _u64 disk_bytes_per_point = 0;
 
-    std::string disk_index_file;
+    std::string                        disk_index_file;
     std::vector<std::pair<_u32, _u32>> node_visit_counter;
 
     // PQ data
@@ -144,8 +146,8 @@ namespace diskann {
     // data: _u8 * n_chunks
     // chunk_size = chunk size of each dimension chunk
     // pq_tables = float* [[2^8 * [chunk_size]] * n_chunks]
-    _u8 *                data = nullptr;
-    _u64                 n_chunks;
+    _u8 *             data = nullptr;
+    _u64              n_chunks;
     FixedChunkPQTable pq_table;
 
     // distance comparator
@@ -153,10 +155,9 @@ namespace diskann {
     Distance<float> *dist_cmp_float = nullptr;
 
     // for very large datasets: we use PQ even for the disk resident index
-    bool                 use_disk_index_pq = false;
-    _u64                 disk_pq_n_chunks;
+    bool              use_disk_index_pq = false;
+    _u64              disk_pq_n_chunks;
     FixedChunkPQTable disk_pq_table;
-
 
     // medoid/start info
     uint32_t *medoids =
@@ -169,11 +170,11 @@ namespace diskann {
                   // closest centroid as the starting point of search
 
     // nhood_cache
-    unsigned *nhood_cache_buf = nullptr;
+    unsigned *                                    nhood_cache_buf = nullptr;
     tsl::robin_map<_u32, std::pair<_u32, _u32 *>> nhood_cache;
 
     // coord_cache
-    T *coord_cache_buf = nullptr;
+    T *                       coord_cache_buf = nullptr;
     tsl::robin_map<_u32, T *> coord_cache;
 
     // thread-specific scratch

@@ -31,7 +31,8 @@
 #define ALIGNMENT 512
 
 void command_line_help() {
-  std::cerr << "./compute_groundtruth <int8/uint8/float>   <base bin file> <query bin "
+  std::cerr << "./compute_groundtruth <int8/uint8/float>   <base bin file> "
+               "<query bin "
                "file>  <K: # nearest neighbors to compute> "
                "<output-truthset-file> <dist_function: 0 for L2, 1 for MIP>"
             << std::endl;
@@ -107,8 +108,8 @@ void distsq_to_points(
 void inner_prod_to_points(
     const size_t dim,
     float *      dist_matrix,  // Col Major, cols are queries, rows are points
-    size_t npoints, const float *const points,
-    size_t nqueries, const float *const queries,
+    size_t npoints, const float *const points, size_t nqueries,
+    const float *const queries,
     float *ones_vec = NULL)  // Scratchspace of num_data size and init to 1.0
 {
   bool ones_vec_alloc = false;
@@ -120,7 +121,7 @@ void inner_prod_to_points(
   cblas_sgemm(CblasColMajor, CblasTrans, CblasNoTrans, npoints, nqueries, dim,
               (float) -1.0, points, dim, queries, dim, (float) 0.0, dist_matrix,
               npoints);
-  
+
   if (ones_vec_alloc)
     delete[] ones_vec;
 }
@@ -163,9 +164,8 @@ void exact_knn(const size_t dim, const size_t k,
                        q_e - q_b, queries + (ptrdiff_t) q_b * (ptrdiff_t) dim,
                        queries_l2sq + q_b);
     } else {
-      inner_prod_to_points(
-          dim, dist_matrix, npoints, points, q_e - q_b,
-          queries + (ptrdiff_t) q_b * (ptrdiff_t) dim);
+      inner_prod_to_points(dim, dist_matrix, npoints, points, q_e - q_b,
+                           queries + (ptrdiff_t) q_b * (ptrdiff_t) dim);
     }
     std::cout << "Computed distances for queries: [" << q_b << "," << q_e << ")"
               << std::endl;
@@ -339,8 +339,6 @@ int aux_main(char **argc) {
 
     delete[] closest_points_part;
     delete[] dist_closest_points_part;
-
-    
 
     diskann::aligned_free(base_data);
   }

@@ -52,8 +52,6 @@ typedef int FileHandle;
 #define IS_512_ALIGNED(X) IS_ALIGNED(X, 512)
 #define IS_4096_ALIGNED(X) IS_ALIGNED(X, 4096)
 
-
-
 typedef uint64_t _u64;
 typedef int64_t  _s64;
 typedef uint32_t _u32;
@@ -222,10 +220,10 @@ namespace diskann {
 
   inline void wait_for_keystroke() {
     int a;
-    std::cout<<"Press any number to continue.." << std::endl;
-    std::cin>> a;
+    std::cout << "Press any number to continue.." << std::endl;
+    std::cin >> a;
   }
-  
+
   template<typename T>
   inline void load_bin(const std::string& bin_file, T*& data, size_t& npts,
                        size_t& dim) {
@@ -418,76 +416,87 @@ namespace diskann {
     }
   }
 
-//this function will take in_file of n*d dimensions and save the output as a floating point matrix 
-// with n*(d+1) dimensions. All vectors are scaled by a large value M so that the norms are <=1
-// and the final coordinate is set so that the resulting norm (in d+1 coordinates) is equal to 1
-// this is a classical transformation from MIPS to L2 search from "On Symmetric and Asymmetric LSHs for Inner Product Search"
-// by Neyshabur and Srebro
+  // this function will take in_file of n*d dimensions and save the output as a
+  // floating point matrix
+  // with n*(d+1) dimensions. All vectors are scaled by a large value M so that
+  // the norms are <=1 and the final coordinate is set so that the resulting
+  // norm (in d+1 coordinates) is equal to 1 this is a classical transformation
+  // from MIPS to L2 search from "On Symmetric and Asymmetric LSHs for Inner
+  // Product Search" by Neyshabur and Srebro
 
-template<typename T>
-void prepare_base_for_inner_products(const std::string in_file, const std::string out_file) {
-  std::cout<<"Pre-processing base file by adding extra coordinate" << std::endl;
-  std::ifstream in_reader(in_file.c_str(), std::ios::binary);
-  std::ofstream out_writer(out_file.c_str(), std::ios::binary);
-  _u64 npts, in_dims, out_dims;
-  float max_norm = 0;
+  template<typename T>
+  void prepare_base_for_inner_products(const std::string in_file,
+                                       const std::string out_file) {
+    std::cout << "Pre-processing base file by adding extra coordinate"
+              << std::endl;
+    std::ifstream in_reader(in_file.c_str(), std::ios::binary);
+    std::ofstream out_writer(out_file.c_str(), std::ios::binary);
+    _u64          npts, in_dims, out_dims;
+    float         max_norm = 0;
 
-  _u32 npts32, dims32;
-  in_reader.read((char *) &npts32, sizeof(uint32_t));
-  in_reader.read((char *) &dims32, sizeof(uint32_t));
+    _u32 npts32, dims32;
+    in_reader.read((char*) &npts32, sizeof(uint32_t));
+    in_reader.read((char*) &dims32, sizeof(uint32_t));
 
-  npts = npts32;
-  in_dims = dims32;
-  out_dims = in_dims+1;
-  _u32 outdims32 = (_u32) out_dims;
+    npts = npts32;
+    in_dims = dims32;
+    out_dims = in_dims + 1;
+    _u32 outdims32 = (_u32) out_dims;
 
-  out_writer.write((char *) &npts32, sizeof(uint32_t));
-  out_writer.write((char *) &outdims32, sizeof(uint32_t));
+    out_writer.write((char*) &npts32, sizeof(uint32_t));
+    out_writer.write((char*) &outdims32, sizeof(uint32_t));
 
+    size_t               BLOCK_SIZE = 100000;
+    size_t               block_size = npts <= BLOCK_SIZE ? npts : BLOCK_SIZE;
+    std::unique_ptr<T[]> in_block_data =
+        std::make_unique<T[]>(block_size * in_dims);
+    std::unique_ptr<float[]> out_block_data =
+        std::make_unique<float[]>(block_size * out_dims);
 
-  size_t BLOCK_SIZE = 100000;
-  size_t block_size = npts <= BLOCK_SIZE ? npts : BLOCK_SIZE;
-  std::unique_ptr<T[]> in_block_data = std::make_unique<T[]>(block_size * in_dims);
-  std::unique_ptr<float[]> out_block_data = std::make_unique<float[]>(block_size * out_dims);
+    std::memset(out_block_data.get(), 0, sizeof(float) * block_size * out_dims);
+    _u64 num_blocks = DIV_ROUND_UP(npts, block_size);
 
-  std::memset(out_block_data.get(), 0, sizeof(float)*block_size*out_dims);
-  _u64 num_blocks = DIV_ROUND_UP(npts, block_size);  
-  
-  std::vector<float> norms(npts, 0);
+    std::vector<float> norms(npts, 0);
 
-  for (_u64 b = 0; b < num_blocks; b++) {
-    _u64 start_id = b* block_size;
-    _u64 end_id = (b+1) * block_size < npts ? (b+1) * block_size : npts;
-    _u64 block_pts = end_id - start_id;
-    in_reader.read((char *) in_block_data.get(), block_pts * in_dims * sizeof(T));
-    for (_u64 p = 0; p < block_pts; p++) {
-      for (_u64 j = 0; j < in_dims; j++) {
-        norms[start_id + p] += in_block_data[p*in_dims + j]*in_block_data[p*in_dims + j];
+    for (_u64 b = 0; b < num_blocks; b++) {
+      _u64 start_id = b * block_size;
+      _u64 end_id = (b + 1) * block_size < npts ? (b + 1) * block_size : npts;
+      _u64 block_pts = end_id - start_id;
+      in_reader.read((char*) in_block_data.get(),
+                     block_pts * in_dims * sizeof(T));
+      for (_u64 p = 0; p < block_pts; p++) {
+        for (_u64 j = 0; j < in_dims; j++) {
+          norms[start_id + p] +=
+              in_block_data[p * in_dims + j] * in_block_data[p * in_dims + j];
+        }
+        max_norm =
+            max_norm > norms[start_id + p] ? max_norm : norms[start_id + p];
       }
-      max_norm = max_norm > norms[start_id + p] ? max_norm : norms[start_id + p];
     }
+
+    max_norm = std::sqrt(max_norm);
+
+    in_reader.seekg(2 * sizeof(_u32), std::ios::beg);
+    for (_u64 b = 0; b < num_blocks; b++) {
+      _u64 start_id = b * block_size;
+      _u64 end_id = (b + 1) * block_size < npts ? (b + 1) * block_size : npts;
+      _u64 block_pts = end_id - start_id;
+      in_reader.read((char*) in_block_data.get(),
+                     block_pts * in_dims * sizeof(T));
+      for (_u64 p = 0; p < block_pts; p++) {
+        for (_u64 j = 0; j < in_dims; j++) {
+          out_block_data[p * out_dims + j] =
+              in_block_data[p * in_dims + j] / max_norm;
+        }
+        float res = 1 - (norms[start_id + p] / (max_norm * max_norm));
+        res = res <= 0 ? 0 : std::sqrt(res);
+        out_block_data[p * out_dims + out_dims - 1] = res;
+      }
+      out_writer.write((char*) out_block_data.get(),
+                       block_pts * out_dims * sizeof(float));
+    }
+    out_writer.close();
   }
-
-  max_norm = std::sqrt(max_norm);
- 
-  in_reader.seekg(2*sizeof(_u32), std::ios::beg);
-  for (_u64 b = 0; b < num_blocks; b++) {
-    _u64 start_id = b* block_size;
-    _u64 end_id = (b+1) * block_size < npts ? (b+1) * block_size : npts;
-    _u64 block_pts = end_id - start_id;
-    in_reader.read((char *) in_block_data.get(), block_pts * in_dims * sizeof(T));
-    for (_u64 p = 0; p < block_pts; p++) {
-      for (_u64 j = 0; j < in_dims; j++) {
-        out_block_data[p*out_dims + j] = in_block_data[p*in_dims + j] / max_norm;
-      }
-      float res = 1 - (norms[start_id + p]/ (max_norm* max_norm));
-      res = res <= 0 ? 0 : std::sqrt(res);
-      out_block_data[p*out_dims + out_dims -1] = res;
-    }
-    out_writer.write((char *)out_block_data.get(), block_pts * out_dims * sizeof(float));
-  } 
-  out_writer.close();
-}
 
   // plain saves data as npts X ndims array into filename
   template<typename T>
@@ -574,8 +583,9 @@ inline bool validate_file_size(const std::string& name) {
   size_t expected_file_size;
   in.read((char*) &expected_file_size, sizeof(uint64_t));
   if (actual_file_size != expected_file_size) {
-    diskann::cout << "Error loading" << name << ". Expected "
-                                                "size (metadata): "
+    diskann::cout << "Error loading" << name
+                  << ". Expected "
+                     "size (metadata): "
                   << expected_file_size
                   << ", actual file size : " << actual_file_size
                   << ". Exitting." << std::endl;

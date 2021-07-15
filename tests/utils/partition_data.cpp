@@ -11,9 +11,10 @@
 int main(int argc, char** argv) {
   if (argc != 7) {
     std::cout << "Usage:\n"
-              << argv[0] << "  datatype<int8/uint8/float>  <data_path>"
-                            "  <prefix_path>  <sampling_rate>  "
-                            "  <num_partitions>  <k_index>"
+              << argv[0]
+              << "  datatype<int8/uint8/float>  <data_path>"
+                 "  <prefix_path>  <sampling_rate>  "
+                 "  <num_partitions>  <k_index>"
               << std::endl;
     exit(-1);
   }
