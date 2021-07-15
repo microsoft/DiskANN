@@ -542,7 +542,7 @@ namespace diskann {
     using DistanceInnerProduct<T>::compare;
     float compare(const T *a, const T *b, float norm,
                   unsigned size) const {  // not implement
-      floatresult = -2 * DistanceInnerProduct<T>::inner_product(a, b, size);
+      float result = -2 * DistanceInnerProduct<T>::inner_product(a, b, size);
       result += norm;
       return result;
     }
