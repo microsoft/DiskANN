@@ -15,6 +15,7 @@ CATALOG1="${WORK_FOLDER}/catalog.txt"
 CATALOG="${WORK_FOLDER}/catalog_formatted.txt"
 sed -e '/^$/d' ${CATALOG1} > ${CATALOG}
 
+mkdir ${WORK_FOLDER}/indices
 
 while IFS= read -r line; do
   DATASET=${line}
@@ -23,13 +24,13 @@ while IFS= read -r line; do
   QUERY="${WORK_FOLDER}/${line}"
   read -r TYPE
   read -r METRIC
-  GT="${WORK_FOLDER}/${DATASET}_gt30_${METRIC}"
-  MEM="${WORK_FOLDER}/${DATASET}_mem"
-  DISK="${WORK_FOLDER}/${DATASET}_disk"
-  MBLOG="${WORK_FOLDER}/${DATASET}_mb.log"
-  DBLOG="${WORK_FOLDER}/${DATASET}_db.log"
-  MSLOG="${WORK_FOLDER}/${DATASET}_ms.log"
-  DSLOG="${WORK_FOLDER}/${DATASET}_ds.log"
+  GT="${WORK_FOLDER}/indices/${DATASET}_gt30_${METRIC}"
+  MEM="${WORK_FOLDER}/indices/${DATASET}_mem"
+  DISK="${WORK_FOLDER}/indices/${DATASET}_disk"
+  MBLOG="${WORK_FOLDER}/indices/${DATASET}_mb.log"
+  DBLOG="${WORK_FOLDER}/indices/${DATASET}_db.log"
+  MSLOG="${WORK_FOLDER}/indices/${DATASET}_ms.log"
+  DSLOG="${WORK_FOLDER}/indices/${DATASET}_ds.log"
   echo "Going to run test on ${BASE} base, ${QUERY} query, ${TYPE} datatype, ${METRIC} metric, saving gt at ${GT}"
   echo "Computing Groundtruth"
   ${BUILD_FOLDER}/tests/utils/compute_groundtruth ${TYPE} ${BASE} ${QUERY} 30 ${GT} ${METRIC} > /dev/null
@@ -38,7 +39,7 @@ while IFS= read -r line; do
   awk '/^Degree/' ${MBLOG}
   awk '/^Indexing/' ${MBLOG}
   echo "Building Disk Index"
-  ${BUILD_FOLDER}/tests/build_disk_index  ${TYPE} ${METRIC} ${BASE} ${DISK} 32 50 0.003 0.001 32 0 > ${DBLOG}
+  ${BUILD_FOLDER}/tests/build_disk_index  ${TYPE} ${METRIC} ${BASE} ${DISK} 32 50 0.03 0.01 32 0 > ${DBLOG}
   awk '/^Compressing/' ${DBLOG}
   echo "#shards in disk index"
   awk '/^bin:/' ${DBLOG}
