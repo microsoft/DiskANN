@@ -504,7 +504,7 @@ namespace diskann {
       std::vector<unsigned>     init_ids,
       std::vector<Neighbor> &   expanded_nodes_info,
       tsl::robin_set<unsigned> &expanded_nodes_ids) {
-    T *             node_coords = _data + _aligned_dim * node_id;
+    const T *             node_coords = _data + _aligned_dim * node_id;
     std::vector<Neighbor> best_L_nodes;
     
     if (init_ids.size() == 0)
@@ -538,7 +538,7 @@ namespace diskann {
     float cur_alpha = 1;
     while (cur_alpha <= alpha && result.size() < degree) {
       unsigned start = 0;
-      float eps = cur_alpha + 0.01;
+      float eps = cur_alpha + 0.01; // used for MIPS, where we store a value of eps in cur_alpha to denote pruned out entries which we can skip in later rounds.
       while (result.size() < degree && (start) < pool.size() && start < maxc) {
         auto &p = pool[start];
         if (occlude_factor[start] > cur_alpha) {

@@ -231,7 +231,7 @@ int generate_pq_pivots(const float *passed_train_data, size_t num_train,
   for (uint64_t d = 0; d < dim; d++) {
     centroid[d] = 0;
   }
-    if (make_zero_mean) {
+    if (make_zero_mean) { // If we use L2 distance, there is an option to translate all vectors to make them centered and then compute PQ. This needs to be set to false when using PQ for MIPS as such translations dont preserve inner products.
     for (uint64_t d = 0; d < dim; d++) {
     for (uint64_t p = 0; p < num_train; p++) {
       centroid[d] += train_data[p * dim + d];
@@ -239,7 +239,7 @@ int generate_pq_pivots(const float *passed_train_data, size_t num_train,
     centroid[d] /= num_train;
   }
 
-  //  std::memset(centroid, 0 , dim*sizeof(float));
+  
   for (uint64_t d = 0; d < dim; d++) {
     for (uint64_t p = 0; p < num_train; p++) {
       train_data[p * dim + d] -= centroid[d];
@@ -937,10 +937,7 @@ int partition(const std::string data_file, const float sampling_rate,
   // now pivots are ready. need to stream base points and assign them to
   // closest clusters.
 
-  //std::vector<size_t> cluster_sizes;
-  //estimate_cluster_sizes<T>(data_file, pivot_data, num_parts, train_dim, k_base,
-  //                          cluster_sizes);
-
+  
   shard_data_into_clusters<T>(data_file, pivot_data, num_parts, train_dim,
                               k_base, prefix_path);
   delete[] pivot_data;

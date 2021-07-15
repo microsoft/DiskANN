@@ -418,6 +418,12 @@ namespace diskann {
     }
   }
 
+//this function will take in_file of n*d dimensions and save the output as a floating point matrix 
+// with n*(d+1) dimensions. All vectors are scaled by a large value M so that the norms are <=1
+// and the final coordinate is set so that the resulting norm (in d+1 coordinates) is equal to 1
+// this is a classical transformation from MIPS to L2 search from "On Symmetric and Asymmetric LSHs for Inner Product Search"
+// by Neyshabur and Srebro
+
 template<typename T>
 void prepare_base_for_inner_products(const std::string in_file, const std::string out_file) {
   std::cout<<"Pre-processing base file by adding extra coordinate" << std::endl;

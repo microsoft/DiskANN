@@ -354,7 +354,7 @@ namespace diskann {
     double full_index_ram =
         ESTIMATE_RAM_USAGE(base_num, base_dim, sizeof(T), R);
     if (full_index_ram < ram_budget * 1024 * 1024 * 1024) {
-      diskann::cout << "Full index fits in RAM budget, should consume at most " << full_index_ram/(1024*1024*1024) <<"GBs, so building in one shot"
+      diskann::cout << "Full index fits in RAM budget, should consume at most " << full_index_ram/(1024*1024*1024) <<"GiBs, so building in one shot"
                     << std::endl;
       diskann::Parameters paras;
       paras.Set<unsigned>("L", (unsigned) L);
@@ -643,7 +643,7 @@ namespace diskann {
 
     if (!std::is_same<T, float>::value && compareMetric == diskann::Metric::INNER_PRODUCT) {
               std::stringstream stream;
-        stream << "DiskANN currently only supports floating point data for Max Inner Product Search. Please contact us if you need other scenarios." << std::endl;
+        stream << "DiskANN currently only supports floating point data for Max Inner Product Search. " << std::endl;
         throw diskann::ANNException(stream.str(), -1);
 
     }
@@ -676,7 +676,7 @@ namespace diskann {
 
 // output a new base file which contains extra dimension with sqrt(1 - ||x||^2/M^2) for every x, M is max norm of all points. Extra space on disk needed!
     if (compareMetric == diskann::Metric::INNER_PRODUCT) {
-      std::cout<<"Using Inner Product search, so need to pre-process base data into temp file. Please ensure there is sufficient space!!" << std::endl;
+      std::cout<<"Using Inner Product search, so need to pre-process base data into temp file. Please ensure there is additional (n*(d+1)*4) bytes for storing pre-processed base vectors, apart from the intermin indices and final index." << std::endl;
       std::string prepped_base = index_prefix_path + "_prepped_base.bin";
       data_file_to_use = prepped_base;
       diskann::prepare_base_for_inner_products<T>(base_file, prepped_base);

@@ -338,7 +338,7 @@ float result = 0;
   template<typename T>
   class DistanceInnerProduct : public Distance<T> {
    public:
-    float acompare(const T *a, const T *b, unsigned size) const {
+    float inner_product(const T *a, const T *b, unsigned size) const {
       float result = 0;
 #ifdef __GNUC__
 #ifdef __AVX__
@@ -437,7 +437,7 @@ float result = 0;
       return result;
     }
     float compare(const T *a, const T *b, unsigned size) const { // since we use normally minimization objective for distance comparisons, we are returning 1/x.
-      float result = acompare(a,b,size);
+      float result = inner_product(a,b,size);
 //      if (result < 0)
 //      return std::numeric_limits<float>::max();
 //      else 
@@ -539,7 +539,7 @@ return -result;
     using DistanceInnerProduct<T>::compare;
     float compare(const T *a, const T *b, float norm,
                   unsigned size) const {  // not implement
-      float result = -2 * DistanceInnerProduct<T>::acompare(a, b, size);
+      float result = -2 * DistanceInnerProduct<T>::inner_product(a, b, size);
       result += norm;
       return result;
     }

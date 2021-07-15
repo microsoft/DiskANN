@@ -149,7 +149,7 @@ _u32 get_num_chunks() {
     }
   }
 
- float compare(const float* query_vec, _u8* base_vec) {
+ float l2_distance(const float* query_vec, _u8* base_vec) {
    float res = 0;
      for (_u64 chunk = 0; chunk < n_chunks; chunk++) {
       for (_u64 j = chunk_offsets[chunk]; j < chunk_offsets[chunk + 1]; j++) {

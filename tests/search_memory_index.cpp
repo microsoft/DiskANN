@@ -28,7 +28,28 @@ int search_memory_index(int argc, char** argv) {
   std::vector<_u64> Lvec;
 
   _u32 ctr = 2;
-  _u32 dist_fn = atoi(argv[ctr++]);
+  diskann::Metric metric;
+
+    if (std::string(argv[ctr]) == std::string("mips"))
+      metric = diskann::Metric::INNER_PRODUCT;
+  else if (std::string(argv[ctr]) == std::string("l2"))
+  metric = diskann::Metric::L2;
+  else if (std::string(argv[ctr]) == std::string("fast_l2"))
+    metric = diskann::Metric::FAST_L2;
+  else {
+    std::cout<<"Unsupported distance function. Currently only L2/ Inner Product/FAST_L2 support." << std::endl;
+    return -1;
+  }
+ctr++;
+
+  if ((std::string(argv[1]) != std::string("float")) &&
+      ((metric == diskann::Metric::INNER_PRODUCT) || (metric == diskann::Metric::FAST_L2))) {
+    std::cout << "Error. Inner product and Fast_L2 search currently only supported for "
+                 "floating point datatypes."
+              << std::endl;
+  }
+
+
   std::string data_file(argv[ctr++]);
   std::string memory_index_file(argv[ctr++]);
   _u64        num_threads = std::atoi(argv[ctr++]);
@@ -38,12 +59,6 @@ int search_memory_index(int argc, char** argv) {
   std::string result_output_prefix(argv[ctr++]);
 //  bool        use_optimized_search = std::atoi(argv[ctr++]);
 
-  if ((std::string(argv[1]) != std::string("float")) &&
-      ((dist_fn == 1) || (dist_fn == 2))) {
-    std::cout << "Error. Inner product and Fast_L2 search currently only supported for "
-                 "floating point datatypes."
-              << std::endl;
-  }
 
   bool calc_recall_flag = false;
 
@@ -74,17 +89,7 @@ int search_memory_index(int argc, char** argv) {
   std::cout.setf(std::ios_base::fixed, std::ios_base::floatfield);
   std::cout.precision(2);
 
-  diskann::Metric metric;
-  if (dist_fn == 0)
-    metric = diskann::L2;
-  else if (dist_fn == 1)
-    metric = diskann::INNER_PRODUCT;
-  else if(dist_fn == 2)
-    metric = diskann::FAST_L2;
-  else {
-    std::cout<<"Error. Unsupported distance function. Exitting";
-    return -1;
-  }
+
   diskann::Index<T> index(metric, data_file.c_str());
   index.load(memory_index_file.c_str());  // to load NSG
   std::cout << "Index loaded" << std::endl;

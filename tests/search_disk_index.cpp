@@ -57,7 +57,19 @@ int search_disk_index(int argc, char** argv) {
   std::vector<_u64> Lvec;
 
   _u32 ctr = 2;
-  _u32 dist_fn = atoi(argv[ctr++]);
+  diskann::Metric metric;
+
+    if (std::string(argv[ctr]) == std::string("mips"))
+      metric = diskann::Metric::INNER_PRODUCT;
+  else if (std::string(argv[ctr]) == std::string("l2"))
+  metric = diskann::Metric::L2;
+  else {
+    std::cout<<"Unsupported distance function. Currently only L2/ Inner Product support." << std::endl;
+    return -1;
+  }
+
+  ctr++;
+
   std::string index_prefix_path(argv[ctr++]);
   std::string pq_prefix = index_prefix_path + "_pq";
   std::string disk_index_file = index_prefix_path + "_disk.index";
@@ -78,15 +90,6 @@ int search_disk_index(int argc, char** argv) {
       Lvec.push_back(curL);
   }
 
-  diskann::Metric metric;
-  if (dist_fn == 0) 
-  metric = diskann::Metric::L2;
-  else if (dist_fn == 1)
-  metric = diskann::Metric::INNER_PRODUCT;
-  else {
-    std::cout<<"Unsupported distance function. Currently only L2/ Inner Product support." << std::endl;
-    return -1;
-  }
   if (Lvec.size() == 0) {
     diskann::cout
         << "No valid Lsearch found. Lsearch must be at least recall_at"
@@ -208,7 +211,6 @@ int search_disk_index(int argc, char** argv) {
 
   uint32_t optimized_beamwidth = 2;
 
-//query_num = 1;
 
   for (uint32_t test_id = 0; test_id < Lvec.size(); test_id++) {
     _u64 L = Lvec[test_id];

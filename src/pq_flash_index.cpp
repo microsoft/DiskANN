@@ -1002,7 +1002,7 @@ if (file_exists(disk_pq_pivots_path)) {
           if (metric == diskann::Metric::INNER_PRODUCT)
           cur_expanded_dist = disk_pq_table.inner_product(query_float, (_u8*) node_fp_coords_copy);
           else
-          cur_expanded_dist = disk_pq_table.compare(query_float, (_u8*) node_fp_coords_copy);
+          cur_expanded_dist = disk_pq_table.l2_distance(query_float, (_u8*) node_fp_coords_copy);
         }
         full_retset.push_back(
             Neighbor((unsigned) cached_nhood.first, cur_expanded_dist, true));
@@ -1082,7 +1082,7 @@ if (file_exists(disk_pq_pivots_path)) {
           if (metric == diskann::Metric::INNER_PRODUCT)
           cur_expanded_dist = disk_pq_table.inner_product(query_float, (_u8*) node_fp_coords_copy);
           else
-          cur_expanded_dist = disk_pq_table.compare(query_float, (_u8*) node_fp_coords_copy);
+          cur_expanded_dist = disk_pq_table.l2_distance(query_float, (_u8*) node_fp_coords_copy);
         }
         full_retset.push_back(
             Neighbor(frontier_nhood.first, cur_expanded_dist, true));

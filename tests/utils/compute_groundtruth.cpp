@@ -31,7 +31,7 @@
 #define ALIGNMENT 512
 
 void command_line_help() {
-  std::cerr << "<exact-kann> <int8/uint8/float>   <base bin file> <query bin "
+  std::cerr << "./compute_groundtruth <int8/uint8/float>   <base bin file> <query bin "
                "file>  <K: # nearest neighbors to compute> "
                "<output-truthset-file> <dist_function: 0 for L2, 1 for MIP>"
             << std::endl;
@@ -120,12 +120,7 @@ void inner_prod_to_points(
   cblas_sgemm(CblasColMajor, CblasTrans, CblasNoTrans, npoints, nqueries, dim,
               (float) -1.0, points, dim, queries, dim, (float) 0.0, dist_matrix,
               npoints);
-  //  cblas_sgemm(CblasColMajor, CblasNoTrans, CblasTrans, npoints, nqueries, 1,
-  //              (float) 1.0, points_l2sq, npoints, ones_vec, nqueries,
-  //              (float) 1.0, dist_matrix, npoints);
-  //  cblas_sgemm(CblasColMajor, CblasNoTrans, CblasTrans, npoints, nqueries, 1,
-  //              (float) 1.0, ones_vec, npoints, queries_l2sq, nqueries,
-  //              (float) 1.0, dist_matrix, npoints);
+  
   if (ones_vec_alloc)
     delete[] ones_vec;
 }
@@ -345,21 +340,7 @@ int aux_main(char **argc) {
     delete[] closest_points_part;
     delete[] dist_closest_points_part;
 
-    /*
-        std::cout << "For testing: doing brute force for one point" <<
-       std::endl; std::vector<std::pair<_u32, float>>  brute_force; for (_u32 i
-       = 0; i < npoints; i++) { float cur_pt_dist = 0; for (_u64 k = 0; k < dim;
-       k++) { cur_pt_dist += base_data[i * dim + k] * query_data[k];
-          }
-          brute_force.push_back(std::make_pair(i, -cur_pt_dist));
-        }
-
-        std::sort(brute_force.begin(), brute_force.end(), custom_dist);
-        for (_u32 i = 0; i < 10; i++)  {
-          std::cout<<brute_force[i].first <<" " << -brute_force[i].second <<
-       std::endl;
-        }
-        */
+    
 
     diskann::aligned_free(base_data);
   }
