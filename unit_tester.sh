@@ -40,8 +40,8 @@ while IFS= read -r line; do
   DSLOG="${WORK_FOLDER}/${DATASET}_ds.log"
   
   FILESIZE=`wc -c "${BASE}" | awk '{print $1}'`
-  BUDGETBUILD=`bc <<< "scale=2; ${FILESIZE}/(5*1024*1024*1024)"`
-  BUDGETSERVE=`bc <<< "scale=2; ${FILESIZE}/(10*1024*1024*1024)"`
+  BUDGETBUILD=`bc <<< "scale=4; ${FILESIZE}/(5*1024*1024*1024)"`
+  BUDGETSERVE=`bc <<< "scale=4; ${FILESIZE}/(10*1024*1024*1024)"`
   echo "Going to build with ${BUDGETBUILD} GiB RAM and serve with ${BUDGETSERVE} GiB RAM"
   rm ${DISK}_*
   
