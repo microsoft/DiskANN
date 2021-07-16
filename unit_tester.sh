@@ -40,12 +40,14 @@ while IFS= read -r line; do
   DSLOG="${WORK_FOLDER}/${DATASET}_ds.log"
   
   FILESIZE=`wc -c "${BASE}" | awk '{print $1}'`
-  BUDGETBUILD=`bc <<< "scale=4; ${FILESIZE}/(5*1024*1024*1024)"`
-  BUDGETSERVE=`bc <<< "scale=4; ${FILESIZE}/(10*1024*1024*1024)"`
-  echo "Going to build with ${BUDGETBUILD} GiB RAM and serve with ${BUDGETSERVE} GiB RAM"
+  BUDGETBUILD=`bc <<< "scale=4; 0.0001 + ${FILESIZE}/(5*1024*1024*1024)"`
+  BUDGETSERVE=`bc <<< "scale=4; 0.0001 + ${FILESIZE}/(10*1024*1024*1024)"`
+  echo "============================================================================================================================================="
+  echo "Running tests on ${DATASET} dataset, ${TYPE} datatype, $METRIC metric, ${BUDGETBUILD} GiB and ${BUDGETSERVE} GiB build and serve budget"
+  echo "============================================================================================================================================="
   rm ${DISK}_*
   
-  echo "Going to run test on ${BASE} base, ${QUERY} query, ${TYPE} datatype, ${METRIC} metric, saving gt at ${GT}"
+  #echo "Going to run test on ${BASE} base, ${QUERY} query, ${TYPE} datatype, ${METRIC} metric, saving gt at ${GT}"
   echo "Computing Groundtruth"
   ${BUILD_FOLDER}/tests/utils/compute_groundtruth ${TYPE} ${BASE} ${QUERY} 30 ${GT} ${METRIC} > /dev/null
   echo "Building Mem Index"
