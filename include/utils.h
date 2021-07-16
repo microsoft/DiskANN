@@ -425,8 +425,8 @@ namespace diskann {
   // Product Search" by Neyshabur and Srebro
 
   template<typename T>
-  void prepare_base_for_inner_products(const std::string in_file,
-                                       const std::string out_file) {
+  float prepare_base_for_inner_products(const std::string in_file,
+                                        const std::string out_file) {
     std::cout << "Pre-processing base file by adding extra coordinate"
               << std::endl;
     std::ifstream in_reader(in_file.c_str(), std::ios::binary);
@@ -496,6 +496,7 @@ namespace diskann {
                        block_pts * out_dims * sizeof(float));
     }
     out_writer.close();
+    return max_norm;
   }
 
   // plain saves data as npts X ndims array into filename

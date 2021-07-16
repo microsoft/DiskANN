@@ -793,6 +793,17 @@ namespace diskann {
       use_medoids_data_as_centroids();
     }
 
+    std::string norm_file = std::string(disk_index_file) + "_max_base_norm.bin";
+
+    if (file_exists(norm_file) && metric == diskann::Metric::INNER_PRODUCT) {
+      _u64   dumr, dumc;
+      float *norm_val;
+      diskann::load_bin<float>(norm_file, norm_val, dumr, dumc);
+      this->max_base_norm = norm_val[0];
+      std::cout << "Setting re-scaling factor of base vectors to "
+                << this->max_base_norm << std::endl;
+      delete[] norm_val;
+    }
     diskann::cout << "done.." << std::endl;
     return 0;
   }
@@ -1177,9 +1188,15 @@ namespace diskann {
       indices[i] = full_retset[i].id;
       if (distances != nullptr) {
         distances[i] = full_retset[i].distance;
-        if (metric == diskann::Metric::INNER_PRODUCT)  // flip the sign from
-                                                       // convert min to max
-          distances[i] = -distances[i];
+        if (metric == diskann::Metric::INNER_PRODUCT) {  // flip the sign from
+                                                         // convert min to max
+          distances[i] = (-distances[i]);
+          if (max_base_norm != 0)
+            distances[i] *= (max_base_norm *
+                             query_norm);  // rescale to revert back to original
+                                           // norms (cancelling the effect of
+                                           // base and query pre-processing)
+        }
       }
     }
 

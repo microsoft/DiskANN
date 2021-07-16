@@ -306,11 +306,10 @@ int aux_main(char **argc) {
   std::string base_file(argc[2]);
   std::string query_file(argc[3]);
   size_t      k = atoi(argc[4]);
-  bool use_mip = false;
+  bool        use_mip = false;
   std::string gt_file(argc[5]);
   if (std::string(argc[6]) == std::string("mips"))
-	  use_mip = true;
-  
+    use_mip = true;
 
   float *base_data;
   float *query_data;

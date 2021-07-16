@@ -130,6 +130,9 @@ namespace diskann {
     _u64 max_node_len = 0, nnodes_per_sector = 0, max_degree = 0;
 
     diskann::Metric metric = diskann::Metric::L2;
+    float           max_base_norm =
+        0;  // used only for inner product search to re-scale the result value
+            // (due to the pre-processing of base during index build)
     // data info
     _u64 num_points = 0;
     _u64 data_dim = 0;

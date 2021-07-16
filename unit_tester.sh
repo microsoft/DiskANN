@@ -59,10 +59,11 @@ while IFS= read -r line; do
   ${BUILD_FOLDER}/tests/build_disk_index  ${TYPE} ${METRIC} ${BASE} ${DISK} 32 50 ${BUDGETSERVE} ${BUDGETBUILD} 32 0 > ${DBLOG}
   awk '/^Compressing/' ${DBLOG}
   echo "#shards in disk index"
-  awk '/^bin:/' ${DBLOG}
   awk '/^Indexing/' ${DBLOG}
   echo "Searching Disk Index"
-  ${BUILD_FOLDER}/tests/search_disk_index ${TYPE} ${METRIC} ${DISK} 10000 10 4 ${QUERY} ${GT} 10 /tmp/res 10 20 30 40 50 60 70 80 90 100 > ${DSLOG}
+  ${BUILD_FOLDER}/tests/search_disk_index ${TYPE} ${METRIC} ${DISK} 10000 10 4 ${QUERY} ${GT} 10 /tmp/res 100 > ${DSLOG}
+  echo "# shards used during index construction:"
+  awk '/medoids/{x=NR+1}(NR<=x){print}' ${DSLOG}
   awk '/===/{x=NR+10}(NR<=x){print}' ${DSLOG}
 done < "${CATALOG}"
 fi

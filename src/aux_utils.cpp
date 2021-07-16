@@ -686,7 +686,10 @@ namespace diskann {
                 << std::endl;
       std::string prepped_base = index_prefix_path + "_prepped_base.bin";
       data_file_to_use = prepped_base;
-      diskann::prepare_base_for_inner_products<T>(base_file, prepped_base);
+      float max_norm_of_base =
+          diskann::prepare_base_for_inner_products<T>(base_file, prepped_base);
+      std::string norm_file = disk_index_path + "_max_base_norm.bin";
+      diskann::save_bin<float>(norm_file, &max_norm_of_base, 1, 1);
     }
 
     unsigned R = (unsigned) atoi(param_list[0].c_str());
