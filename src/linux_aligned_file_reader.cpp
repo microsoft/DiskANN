@@ -141,7 +141,7 @@ void LinuxAlignedFileReader::register_thread() {
     std::cerr << "io_setup() failed; returned " << ret << ", errno=" << errno
               << ":" << ::strerror(errno) << std::endl;
   } else {
-    std::cerr << "allocating ctx: " << ctx << " to thread-id:" << my_id
+    diskann::cout << "allocating ctx: " << ctx << " to thread-id:" << my_id
               << std::endl;
     ctx_map[my_id] = ctx;
   }
