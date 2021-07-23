@@ -114,8 +114,14 @@ namespace diskann {
     DISKANN_DLLEXPORT void cached_beam_search(
         const T *query, const _u64 k_search, const _u64 l_search, _u64 *res_ids,
         float *res_dists, const _u64 beam_width, QueryStats *stats = nullptr);
-    std::shared_ptr<AlignedFileReader> &reader;
 
+
+    DISKANN_DLLEXPORT void range_search(const T *query1, const double range,
+                                           const _u64 l_search, std::vector<_u64> &results,
+                                           const _u64  beam_width,
+                                           QueryStats *stats = nullptr);
+
+    std::shared_ptr<AlignedFileReader> &reader;
    protected:
     DISKANN_DLLEXPORT void use_medoids_data_as_centroids();
     DISKANN_DLLEXPORT void setup_thread_data(_u64 nthreads);
