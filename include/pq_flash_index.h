@@ -117,7 +117,7 @@ namespace diskann {
 
 
     DISKANN_DLLEXPORT void range_search(const T *query1, const double range,
-                                           const _u64 l_search, std::vector<_u64> &results,
+                                           const _u64 l_search, std::vector<_u32> &results,
                                            const _u64  beam_width,
                                            QueryStats *stats = nullptr);
 

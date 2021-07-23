@@ -295,6 +295,56 @@ namespace diskann {
     }
   }
 
+  inline void load_range_truthset(const std::string& bin_file, std::vector<std::vector<_u32>> &groundtruth, _u64 & gt_num) {
+    _u64            read_blk_size = 64 * 1024 * 1024;
+    cached_ifstream reader(bin_file, read_blk_size);
+    diskann::cout << "Reading truthset file " << bin_file.c_str() << " ..."
+                  << std::endl;
+    size_t actual_file_size = reader.get_file_size();
+
+    int npts_u32, total_u32;
+    reader.read((char*) &npts_u32, sizeof(int));
+    reader.read((char*) &total_u32, sizeof(int));
+
+    gt_num = (_u64) npts_u32;
+    _u64 total_res = (_u64) total_u32;
+    
+    diskann::cout << "Metadata: #pts = " << gt_num << ", #total_results = " << total_res << "..."
+                  << std::endl;
+
+    size_t expected_file_size =
+        2*sizeof(_u32) + gt_num*sizeof(_u32) + total_res*sizeof(_u32);
+
+    if (actual_file_size != expected_file_size) {
+      std::stringstream stream;
+      stream << "Error. File size mismatch in range truthset. actual size: "
+             << actual_file_size
+             << ", expected: " << expected_file_size;
+      diskann::cout << stream.str();
+      throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
+                                  __LINE__);
+    }
+    groundtruth.clear();
+    groundtruth.resize(gt_num);
+    std::vector<_u32> gt_count(gt_num);
+
+    reader.read((char*) gt_count.data(), sizeof(_u32)*gt_num);
+
+   for (_u32 i = 0; i < gt_num; i++) {
+      groundtruth[i].clear();
+      groundtruth[i].resize(gt_count[i]);
+      reader.read((char*) groundtruth[i].data(), sizeof(_u32)*gt_count[i]);
+
+// debugging code
+/*      if (i < 10) { 
+      std::cout<<gt_count[i] <<" nbrs, ids: "; 
+        for (auto &x : groundtruth[i])
+          std::cout<<x <<" ";
+        std::cout<<std::endl;
+      } */
+   }
+  }
+
 #ifdef EXEC_ENV_OLS
   template<typename T>
   inline void load_bin(MemoryMappedFiles& files, const std::string& bin_file,
