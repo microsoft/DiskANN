@@ -72,12 +72,16 @@ else:
     for i, L in enumerate(l_search):
         diskannpy.set_num_threads(num_threads)
 
+        query_result_ids = diskannpy.VectorUnsigned()
+        query_result_dists = diskannpy.VectorFloat()
+
         qs = time.time()
-        query_result_ids = index.batch_search(query_data, num_queries, query_aligned_dims, recall_at, L, W, query_result_ids, query_result_dists)
+        query_result_ids = index.batch_search(query_data, num_queries, 
+                                         query_aligned_dims, recall_at, L, W,
+                                         query_result_ids, query_result_dists)
         qe = time.time()
         latency_stats = float((qe - qs) * 1000000)
 
-        query_result_ids = diskannpy.VectorUnsigned(query_result_ids)
         qps = (num_queries / (qe - qs))
         recall = diskannpy.calculate_recall(num_queries, ground_truth_ids,
                                      ground_truth_dists, ground_truth_dims,
