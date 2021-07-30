@@ -10,6 +10,7 @@
 #include <pybind11/stl.h>
 #include <pybind11/stl_bind.h>
 #include <pybind11/operators.h>
+#include <pybind11/gil.h>
 
 #include "linux_aligned_file_reader.h"
 #include "aux_utils.h"
@@ -220,26 +221,33 @@ PYBIND11_MODULE(diskannpy, m) {
           [](DiskANNIndex<float> &self, std::vector<float> &queries,
              const _u64 dim, const _u64 num_queries, const _u64 knn,
              const _u64 l_search, const _u64 beam_width, 
-            std::vector<unsigned> &ids, std::vector<float> &dists) {
+            std::vector<unsigned> &ids, std::vector<float> &dists,
+	    const int num_threads) {
 
               if (ids.size() < knn * num_queries) {
               ids.resize(knn * num_queries);
               dists.resize(knn * num_queries);
             }
+
+	    py::gil_scoped_release release;
+
+	    omp_set_num_threads(num_threads);
 #pragma omp parallel for schedule(dynamic, 1)
             for (_u64 q = 0; q < num_queries; ++q) {
               std::vector<_u64> u64_ids(knn);
 
               self.pq_flash_index->cached_beam_search(
-                  queries.data() + q * dim, knn, l_search, u64_ids.data() + q * knn,
+                  queries.data() + q * dim, knn, l_search, u64_ids.data(),
                   dists.data() + q * knn, beam_width);
               for (_u64 i = 0; i < knn; i++)
                 ids[(q * knn) + i] = u64_ids[i];
             }
+
+	    py::gil_scoped_acquire acquire;
           },
-          py::arg("queries"), py::arg("nqueries"), py::arg("dim"),
+          py::arg("queries"), py::arg("dim"), py::arg("num_queries"),
           py::arg("knn") = 10, py::arg("l_search"), py::arg("beam_width"),
-          py::arg("ids"), py::arg("dists"))
+          py::arg("ids"), py::arg("dists"), py::arg("num_threads"))
       .def(
         "build",
         [](DiskANNIndex<float> &self, const char *dataFilePath,
