@@ -10,7 +10,6 @@
 #include <pybind11/stl.h>
 #include <pybind11/stl_bind.h>
 #include <pybind11/operators.h>
-#include <pybind11/gil.h>
 
 #include "linux_aligned_file_reader.h"
 #include "aux_utils.h"
@@ -228,9 +227,6 @@ PYBIND11_MODULE(diskannpy, m) {
               ids.resize(knn * num_queries);
               dists.resize(knn * num_queries);
             }
-
-            py::gil_scoped_release release;
-
             omp_set_num_threads(num_threads);
 #pragma omp parallel for schedule(dynamic, 1)
             for (_u64 q = 0; q < num_queries; ++q) {
@@ -242,8 +238,6 @@ PYBIND11_MODULE(diskannpy, m) {
               for (_u64 i = 0; i < knn; i++)
                 ids[(q * knn) + i] = u64_ids[i];
             }
-
-            py::gil_scoped_acquire acquire;
           },
           py::arg("queries"), py::arg("dim"), py::arg("num_queries"),
           py::arg("knn") = 10, py::arg("l_search"), py::arg("beam_width"),
