@@ -26,7 +26,6 @@ query_data = vp.VectorFloat()
 ground_truth_ids = vp.VectorUnsigned()
 ground_truth_dists = vp.VectorFloat()
 
-num_queries, query_dims, query_aligned_dims = vp.load_aligned_bin_float(args.query_path, query_data)
 num_ground_truth, ground_truth_dims = vp.load_truthset(args.ground_truth_path, ground_truth_ids, ground_truth_dists)
 
 index = vp.SinglePrecisionIndex(vp.Metric.FAST_L2, args.data_path)
@@ -39,6 +38,7 @@ index.optimize_graph()
 print("Graph Optimization Completed")
 
 if single_query_mode:
+    num_queries, query_dims, query_aligned_dims = vp.load_aligned_bin_float(args.query_path, query_data)
     print("Ls     QPS     Mean Latency (mus)     99.9 Latency     Recall@10")
     print("================================================================")
     for i, L in enumerate(l_search):
@@ -69,7 +69,8 @@ if single_query_mode:
         result_path = args.output_path_prefix + "_" + str(L) + "_idx_uint32.bin"
         vp.save_bin_u32(result_path, query_result_ids, num_queries, recall_at)
 else:
-    query_data = np.load('/mnt/SIFT1M/sift_query.npy')
+    query_data = np.load(args.query_path)
+    num_queries = query_data.shape[0]
     print("Ls     QPS     Mean Latency (mus)   Recall@10")
     print("=============================================")
     for i, L in enumerate(l_search):
