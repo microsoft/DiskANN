@@ -34,7 +34,7 @@ num_queries, query_dims, query_aligned_dims = diskannpy.load_aligned_bin_float(a
 num_ground_truth, ground_truth_dims = diskannpy.load_truthset(args.ground_truth_path, ground_truth_ids, ground_truth_dists)
 
 index = diskannpy.DiskANNFloatIndex()
-index.load_index(index_path_prefix = args.index_path_prefix, num_threads)
+index.load_index(args.index_path_prefix, num_threads)
 print("Index Loaded")
 
 #index.optimize_graph()
