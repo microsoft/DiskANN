@@ -17,7 +17,7 @@ args = parser.parse_args()
 recall_at = 10
 # Use multi-threaded search only for batch mode.
 num_threads = 1
-single_query_mode = True
+single_query_mode = False
 l_search = [40, 50, 60, 70, 80, 90, 100, 110, 120]
 W = 4
 
@@ -42,6 +42,10 @@ if single_query_mode:
         latency_stats = []
         query_result_ids = diskannpy.VectorUnsigned()
         query_result_dists = diskannpy.VectorFloat()
+        
+        ids.resize(knn * num_queries)
+        dists.resize(knn * num_queries)
+
         s = time.time()
 
         for j in range(num_queries):
@@ -76,9 +80,9 @@ else:
         query_result_dists = diskannpy.VectorFloat()
 
         qs = time.time()
-        query_result_ids = index.batch_search(query_data, num_queries, 
-                                         query_aligned_dims, recall_at, L, W,
-                                         query_result_ids, query_result_dists)
+        index.batch_search(query_data, query_aligned_dims, num_queries, 
+                           recall_at, L, W,
+                           query_result_ids, query_result_dists)
         qe = time.time()
         latency_stats = float((qe - qs) * 1000000)
 
