@@ -181,18 +181,19 @@ PYBIND11_MODULE(diskannpy, m) {
       }))
       .def(
           "load_index",
-          [](DiskANNIndex<float> &self, const std::string &index_path_prefix) {
+          [](DiskANNIndex<float> &self, const std::string &index_path_prefix,
+            const int num_threads) {
             const std::string pq_path = index_path_prefix;
             const std::string index_path =
                 index_path_prefix + std::string("_disk.index");
-            self.pq_flash_index->load(1, pq_path.c_str(), index_path.c_str());
+            self.pq_flash_index->load(num_threads, pq_path.c_str(), index_path.c_str());
             std::vector<uint32_t> node_list;
             _u64                  num_nodes_to_cache = 1000;
             self.pq_flash_index->cache_bfs_levels(num_nodes_to_cache, node_list);
             std::cout << "loaded index, cached " << node_list.size()
                       << " nodes based on BFS" << std::endl;
           },
-          py::arg("index_path_prefix"))
+          py::arg("index_path_prefix"), py::arg("num_threads"))
       .def(
           "search",
           [](DiskANNIndex<float> &self, std::vector<float> &query,
@@ -220,18 +221,17 @@ PYBIND11_MODULE(diskannpy, m) {
           "batch_search",
           [](DiskANNIndex<float> &self, std::vector<float> &queries,
              const _u64 dim, const _u64 num_queries, const _u64 knn,
-             const _u64 l_search, const _u64 beam_width, 
-            std::vector<unsigned> &ids, std::vector<float> &dists,
-	    const int num_threads) {
-
-              if (ids.size() < knn * num_queries) {
+             const _u64 l_search, const _u64 beam_width,
+             std::vector<unsigned> &ids, std::vector<float> &dists,
+             const int num_threads) {
+            if (ids.size() < knn * num_queries) {
               ids.resize(knn * num_queries);
               dists.resize(knn * num_queries);
             }
 
-	    py::gil_scoped_release release;
+            py::gil_scoped_release release;
 
-	    omp_set_num_threads(num_threads);
+            omp_set_num_threads(num_threads);
 #pragma omp parallel for schedule(dynamic, 1)
             for (_u64 q = 0; q < num_queries; ++q) {
               std::vector<_u64> u64_ids(knn);
@@ -243,14 +243,12 @@ PYBIND11_MODULE(diskannpy, m) {
                 ids[(q * knn) + i] = u64_ids[i];
             }
 
-	    py::gil_scoped_acquire acquire;
+            py::gil_scoped_acquire acquire;
           },
           py::arg("queries"), py::arg("dim"), py::arg("num_queries"),
           py::arg("knn") = 10, py::arg("l_search"), py::arg("beam_width"),
           py::arg("ids"), py::arg("dists"), py::arg("num_threads"))
-      .def(
-        "build",
-        [](DiskANNIndex<float> &self, const char *dataFilePath,
+      .def("build", [](DiskANNIndex<float> &self, const char *dataFilePath,
                        const char *index_prefix_path, unsigned R, unsigned L,
                        double final_index_ram_limit, double indexing_ram_budget,
                        unsigned num_threads) {

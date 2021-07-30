@@ -12,14 +12,19 @@ parser.add_argument('query_path', type=str, help='Path to the input query set of
 parser.add_argument('ground_truth_path', type=str, help='Path to the input groundtruth set.')
 parser.add_argument('index_path_prefix', type=str, help='Path prefix for index files.')
 parser.add_argument('output_path_prefix', type=str, help='Prefix for the generated output files.')
+parser.add_argument('K', type=int, help='k value for recall@K.')
+parser.add_argument('W', type=int, help='Beamwidth for search.')
+parser.add_argument('T', type=int, help='Number of threads to use for search.')
+
 args = parser.parse_args()
 
-recall_at = 10
+recall_at = args.K
+W = args.W
 # Use multi-threaded search only for batch mode.
-num_threads = 16
+num_threads = args.T
 single_query_mode = False
 l_search = [40, 50, 60, 70, 80, 90, 100, 110, 120]
-W = 4
+
 
 query_data = diskannpy.VectorFloat()
 ground_truth_ids = diskannpy.VectorUnsigned()
@@ -29,7 +34,7 @@ num_queries, query_dims, query_aligned_dims = diskannpy.load_aligned_bin_float(a
 num_ground_truth, ground_truth_dims = diskannpy.load_truthset(args.ground_truth_path, ground_truth_ids, ground_truth_dists)
 
 index = diskannpy.DiskANNFloatIndex()
-index.load_index(index_path_prefix = args.index_path_prefix)
+index.load_index(index_path_prefix = args.index_path_prefix, num_threads)
 print("Index Loaded")
 
 #index.optimize_graph()
