@@ -295,6 +295,72 @@ namespace diskann {
     }
   }
 
+  inline void prune_truthset_for_range(const std::string& bin_file, float range, std::vector<std::vector<_u32>> &groundtruth, 
+                            size_t& npts) {
+    _u64            read_blk_size = 64 * 1024 * 1024;
+    cached_ifstream reader(bin_file, read_blk_size);
+    diskann::cout << "Reading truthset file " << bin_file.c_str() << " ..."
+                  << std::endl;
+    size_t actual_file_size = reader.get_file_size();
+
+    int npts_i32, dim_i32;
+    reader.read((char*) &npts_i32, sizeof(int));
+    reader.read((char*) &dim_i32, sizeof(int));
+    npts = (unsigned) npts_i32;
+    _u64 dim = (unsigned) dim_i32;
+    _u32* ids;
+    float* dists;
+
+    diskann::cout << "Metadata: #pts = " << npts << ", #dims = " << dim << "..."
+                  << std::endl;
+
+    int truthset_type = -1;  // 1 means truthset has ids and distances, 2 means
+                             // only ids, -1 is error
+    size_t expected_file_size_with_dists =
+        2 * npts * dim * sizeof(uint32_t) + 2 * sizeof(uint32_t);
+
+    if (actual_file_size == expected_file_size_with_dists)
+      truthset_type = 1;
+
+    if (truthset_type == -1) {
+      std::stringstream stream;
+      stream << "Error. File size mismatch. File should have bin format, with "
+                "npts followed by ngt followed by npts*ngt ids and optionally "
+                "followed by npts*ngt distance values; actual size: "
+             << actual_file_size
+             << ", expected: " << expected_file_size_with_dists;
+      diskann::cout << stream.str();
+      throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
+                                  __LINE__);
+    }
+
+    ids = new uint32_t[npts * dim];
+    reader.read((char*) ids, npts * dim * sizeof(uint32_t));
+ 
+    if (truthset_type == 1) {
+      dists = new float[npts * dim];
+      reader.read((char*) dists, npts * dim * sizeof(float));
+    }
+    float min_dist = std::numeric_limits<float>::max();
+    float max_dist = 0;
+    groundtruth.resize(npts);
+    for (_u32 i = 0; i < npts; i++) {
+      groundtruth[i].clear();
+      for (_u32 j = 0; j < dim; j++) {
+        if (dists[i*dim + j] <= range) {
+          groundtruth[i].emplace_back(ids[i*dim+j]);
+        }
+        min_dist = min_dist > dists[i*dim+j] ? dists[i*dim + j] : min_dist;
+        max_dist = max_dist < dists[i*dim+j] ? dists[i*dim + j] : max_dist;
+      }
+      //std::cout<<groundtruth[i].size() << " " ;
+    }
+    std::cout<<"Min dist: " << min_dist <<", Max dist: "<< max_dist << std::endl;
+    delete[] ids;
+    delete[] dists;
+  }
+
+
   inline void load_range_truthset(const std::string& bin_file, std::vector<std::vector<_u32>> &groundtruth, _u64 & gt_num) {
     _u64            read_blk_size = 64 * 1024 * 1024;
     cached_ifstream reader(bin_file, read_blk_size);

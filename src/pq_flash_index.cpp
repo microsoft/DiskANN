@@ -1222,11 +1222,15 @@ namespace diskann {
 _u32 res_count = 0;
 this->cached_beam_search(query1, l_search, l_search, indices, distances, beam_width, stats);
 for (_u32 i = 0; i < l_search; i++) {
+  //std::cout<<distances[i]<<" ";
   if (distances[i] > (float) range) {
     res_count = i;
     break;
-  }
+  } else if (i == l_search -1)
+  res_count = l_search;
 }
+//std::cout<<"\n\n"<<std::endl;
+//std::cout<<res_count<< std::endl;
   return res_count; 
 }
 

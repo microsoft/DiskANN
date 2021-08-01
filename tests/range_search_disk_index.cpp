@@ -116,7 +116,8 @@ std::vector<std::vector<_u32>> groundtruth_ids;
                                query_aligned_dim);
 
   if (file_exists(truthset_bin)) {
-    diskann::load_range_truthset(truthset_bin, groundtruth_ids, gt_num);
+    diskann::load_range_truthset(truthset_bin, groundtruth_ids, gt_num); // use for range search type of truthset
+//    diskann::prune_truthset_for_range(truthset_bin, search_range, groundtruth_ids, gt_num); // use for traditional truthset
     if (gt_num != query_num) {
       diskann::cout
           << "Error. Mismatch in number of queries and ground truth data"
@@ -248,6 +249,7 @@ std::vector<std::vector<_u32>> groundtruth_ids;
           query + (i * query_aligned_dim), search_range, L,
           indices.data() + i*L, distances.data() + i *L,
           optimized_beamwidth, stats + i);
+  //        std::cout<<res_count <<" ";
           query_result_ids[test_id][i].reserve(res_count);
           query_result_ids[test_id][i].resize(res_count);
           for(_u32 idx = 0; idx< res_count; idx++)
