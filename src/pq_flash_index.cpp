@@ -838,6 +838,7 @@ namespace diskann {
       data = this->thread_data.pop();
     }
 
+//std::cout<<l_search<<" ";
     // copy query to thread specific aligned and allocated memory (for distance
     // calculations we need aligned data)
 
@@ -1092,7 +1093,9 @@ namespace diskann {
         unsigned *node_buf = OFFSET_TO_NODE_NHOOD(node_disk_buf);
         _u64      nnbrs = (_u64)(*node_buf);
         T *       node_fp_coords = OFFSET_TO_NODE_COORDS(node_disk_buf);
-        assert(data_buf_idx < MAX_N_CMPS);
+//        assert(data_buf_idx < MAX_N_CMPS);
+        if (data_buf_idx == MAX_N_CMPS)
+          data_buf_idx = 0;
 
         T *node_fp_coords_copy = data_buf + (data_buf_idx * aligned_dim);
         data_buf_idx++;
@@ -1208,40 +1211,23 @@ namespace diskann {
     }
   }
 
+// range search returns results of all neighbors within distance of range. indices and distances need to be pre-allocated of size l_search
+// and the return value is the number of matching hits.
+
     template<typename T>
-  void PQFlashIndex<T>::range_search(const T *query1, const double range,
-                                           const _u64 l_search, std::vector<_u32> &results,
+  _u32 PQFlashIndex<T>::range_search(const T *query1, const double range,
+                                           const _u64 l_search, _u64* indices, float* distances,
                                            const _u64  beam_width,
                                            QueryStats *stats) {
-
-tsl::robin_set<_u32> return_ids;
-_u32 cur_l = l_search;
-std::vector<_u64> cur_results;
-std::vector<float> cur_dists;
-bool stop_flag = false;
-while(!stop_flag) {
-  cur_results.clear();
-  cur_dists.clear();
-cur_results.resize(cur_l);
-cur_dists.resize(cur_l);
-for (auto &x : cur_dists)
-x = std::numeric_limits<float>::max();
-this->cached_beam_search(query1, cur_l, cur_l, cur_results.data(), cur_dists.data(), beam_width, stats);
-for (_u32 i = 0; i < cur_l; i++) {
-  if (cur_dists[i] <= (float) range) {
-    return_ids.insert(cur_results[i]);
+_u32 res_count = 0;
+this->cached_beam_search(query1, l_search, l_search, indices, distances, beam_width, stats);
+for (_u32 i = 0; i < l_search; i++) {
+  if (distances[i] > (float) range) {
+    res_count = i;
+    break;
   }
 }
-if (cur_dists[cur_l -1] > (float) range) {
-  stop_flag = true;
-} else {
-  cur_l *= 2;
-}
-}
-results.clear();
-results.reserve(return_ids.size());
-for (auto &x: return_ids)
-results.emplace_back(x);
+  return res_count; 
 }
 
 #ifdef EXEC_ENV_OLS

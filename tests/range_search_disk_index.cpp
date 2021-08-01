@@ -215,11 +215,17 @@ std::vector<std::vector<_u32>> groundtruth_ids;
       << std::endl;
 
   std::vector<std::vector<std::vector<uint32_t>>> query_result_ids(Lvec.size());
-  
+  std::vector<_u64> indices;
+  std::vector<float> distances;
+
   uint32_t optimized_beamwidth = 2;
 
   for (uint32_t test_id = 0; test_id < Lvec.size(); test_id++) {
     _u64 L = Lvec[test_id];
+    indices.clear();
+    distances.clear();
+    indices.resize(L*query_num);
+    distances.resize(L*query_num);
 
     if (beamwidth <= 0) {
       //    diskann::cout<<"Tuning beamwidth.." << std::endl;
@@ -237,10 +243,15 @@ std::vector<std::vector<_u32>> groundtruth_ids;
     auto                  s = std::chrono::high_resolution_clock::now();
 #pragma omp parallel for schedule(dynamic, 1)
     for (_s64 i = 0; i < (int64_t) query_num; i++) {
+      _u32 res_count = 
       _pFlashIndex->range_search(
           query + (i * query_aligned_dim), search_range, L,
-          query_result_ids[test_id][i],
+          indices.data() + i*L, distances.data() + i *L,
           optimized_beamwidth, stats + i);
+          query_result_ids[test_id][i].reserve(res_count);
+          query_result_ids[test_id][i].resize(res_count);
+          for(_u32 idx = 0; idx< res_count; idx++)
+          query_result_ids[test_id][i][idx] = indices[i*L + idx];
     }
     auto                          e = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> diff = e - s;

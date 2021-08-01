@@ -327,12 +327,26 @@ namespace diskann {
     groundtruth.clear();
     groundtruth.resize(gt_num);
     std::vector<_u32> gt_count(gt_num);
+    
+
 
     reader.read((char*) gt_count.data(), sizeof(_u32)*gt_num);
+
+    std::vector<_u32> gt_stats(gt_count);
+    std::sort(gt_stats.begin(), gt_stats.end());
+ 
+    std::cout<<"GT count percentiles:" << std::endl;
+      for (_u32 p = 0; p < 100; p += 5)
+    std::cout << "percentile " << p << ": "
+              << gt_stats[std::floor((p / 100.0) * gt_num)] << std::endl;
+  std::cout << "percentile 100"
+            << ": " << gt_stats[gt_num - 1] << std::endl;
+
 
    for (_u32 i = 0; i < gt_num; i++) {
       groundtruth[i].clear();
       groundtruth[i].resize(gt_count[i]);
+      if (gt_count[i]!=0)
       reader.read((char*) groundtruth[i].data(), sizeof(_u32)*gt_count[i]);
 
 // debugging code
