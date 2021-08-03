@@ -79,16 +79,13 @@ PYBIND11_MODULE(diskannpy, m) {
 
   py::class_<LinuxAlignedFileReader>(m, "LinuxAlignedFileReader")
       .def(py::init<>());
-  //    .def("get_ctx", &LinuxAlignedFileReader::get_ctx)
-  //    .def("register_thread", &LinuxAlignedFileReader::register_thread)
-  //    .def("open", &LinuxAlignedFileReader::open)
-  //    .def("close", &LinuxAlignedFileReader::close)
-  //    .def("read", &LinuxAlignedFileReader::read);
 
   m.def(
-      "set_num_threads",
+      "omp_set_num_threads",
       [](const size_t num_threads) { omp_set_num_threads(num_threads); },
       py::arg("num_threads") = 1);
+
+  m.def("omp_get_max_threads", []() { return omp_get_max_threads(); });
 
   m.def(
       "load_aligned_bin_float",
