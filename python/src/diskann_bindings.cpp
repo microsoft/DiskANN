@@ -182,12 +182,18 @@ PYBIND11_MODULE(diskannpy, m) {
             const std::string pq_path = index_path_prefix;
             const std::string index_path =
                 index_path_prefix + std::string("_disk.index");
-            self.pq_flash_index->load(num_threads, pq_path.c_str(), index_path.c_str());
+            int load_success = 
+              self.pq_flash_index->load(num_threads, pq_path.c_str(), index_path.c_str());
+            if (load_success != 0) {
+              std::cout << "Index load failed" << std::endl;
+              return load_success;
+            }
             std::vector<uint32_t> node_list;
             _u64                  num_nodes_to_cache = 1000;
             self.pq_flash_index->cache_bfs_levels(num_nodes_to_cache, node_list);
             std::cout << "loaded index, cached " << node_list.size()
                       << " nodes based on BFS" << std::endl;
+            return 0;
           },
           py::arg("index_path_prefix"), py::arg("num_threads"))
       .def(
