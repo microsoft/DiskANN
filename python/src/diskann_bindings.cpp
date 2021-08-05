@@ -173,24 +173,24 @@ PYBIND11_MODULE(diskannpy, m) {
       py::arg("file_name"), py::arg("data"), py::arg("npts"), py::arg("dims"));
 
   py::class_<DiskANNIndex<float>>(m, "DiskANNFloatIndex")
-      .def(py::init([]() { return new DiskANNIndex<float>();
-      }))
+      .def(py::init([]() { return new DiskANNIndex<float>(); }))
       .def(
           "load_index",
           [](DiskANNIndex<float> &self, const std::string &index_path_prefix,
-            const int num_threads) {
+             const int num_threads) {
             const std::string pq_path = index_path_prefix;
             const std::string index_path =
                 index_path_prefix + std::string("_disk.index");
-            int load_success = 
-              self.pq_flash_index->load(num_threads, pq_path.c_str(), index_path.c_str());
+            int load_success = self.pq_flash_index->load(
+                num_threads, pq_path.c_str(), index_path.c_str());
             if (load_success != 0) {
               std::cout << "Index load failed" << std::endl;
               return load_success;
             }
             std::vector<uint32_t> node_list;
             _u64                  num_nodes_to_cache = 1000;
-            self.pq_flash_index->cache_bfs_levels(num_nodes_to_cache, node_list);
+            self.pq_flash_index->cache_bfs_levels(num_nodes_to_cache,
+                                                  node_list);
             std::cout << "loaded index, cached " << node_list.size()
                       << " nodes based on BFS" << std::endl;
             return 0;
@@ -202,7 +202,6 @@ PYBIND11_MODULE(diskannpy, m) {
              const _u64 query_idx, const _u64 dim, const _u64 num_queries,
              const _u64 knn, const _u64 l_search, const _u64 beam_width,
              std::vector<unsigned> &ids, std::vector<float> &dists) {
-
             QueryStats stats;
             if (ids.size() < knn * num_queries) {
               ids.resize(knn * num_queries);
@@ -216,9 +215,9 @@ PYBIND11_MODULE(diskannpy, m) {
             for (_u64 i = 0; i < knn; i++)
               ids[(query_idx * knn) + i] = _u64_ids[i];
           },
-          py::arg("query"), py::arg("query_idx"), py::arg("dim"), py::arg("num_queries"), py::arg("knn") = 10,
-          py::arg("l_search"), py::arg("beam_width"), py::arg("ids"),
-          py::arg("dists"))
+          py::arg("query"), py::arg("query_idx"), py::arg("dim"),
+          py::arg("num_queries"), py::arg("knn"), py::arg("l_search"),
+          py::arg("beam_width"), py::arg("ids"), py::arg("dists"))
       .def(
           "batch_search",
           [](DiskANNIndex<float> &self, std::vector<float> &queries,
@@ -243,7 +242,7 @@ PYBIND11_MODULE(diskannpy, m) {
             }
           },
           py::arg("queries"), py::arg("dim"), py::arg("num_queries"),
-          py::arg("knn") = 10, py::arg("l_search"), py::arg("beam_width"),
+          py::arg("knn"), py::arg("l_search"), py::arg("beam_width"),
           py::arg("ids"), py::arg("dists"), py::arg("num_threads"))
       .def(
           "build",
@@ -259,7 +258,65 @@ PYBIND11_MODULE(diskannpy, m) {
                                              params.c_str(),
                                              diskann::Metric::L2);
           },
-          py::arg("data_file_path"), py::arg("index_prefix_path"),
-          py::arg("R"), py::arg("L"), py::arg("final_index_ram_limit"),
-          py::arg("indexing_ram_limit"), py::arg("num_threads") );
+          py::arg("data_file_path"), py::arg("index_prefix_path"), py::arg("R"),
+          py::arg("L"), py::arg("final_index_ram_limit"),
+          py::arg("indexing_ram_limit"), py::arg("num_threads"))
+      .def(
+          "pq_single_numpy_query",
+          [](DiskANNIndex<float> &self,
+             py::array_t<float, py::array::c_style | py::array::forcecast>
+                 &      query,
+             const _u64 dim, const _u64 knn, const _u64 l_search,
+             const _u64 beam_width) {
+            py::array_t<unsigned> ids(knn);
+
+            std::vector<unsigned> u32_ids(knn);
+            std::vector<_u64>     u64_ids(knn);
+            std::vector<float>    dists(knn);
+            QueryStats            stats;
+
+            self.pq_flash_index->cached_beam_search(
+                query.mutable_data(), knn, l_search, u64_ids.data(),
+                dists.data(), beam_width, &stats);
+
+            auto r = ids.mutable_unchecked<1>();
+            for (_u64 i = 0; i < knn; ++i)
+              r(i) = (unsigned) u64_ids[i];
+
+            return ids;
+          },
+          py::arg("query"), py::arg("dim"), py::arg("knn"), py::arg("l_search"),
+          py::arg("beam_width"))
+      .def(
+          "pq_batch_numpy_query",
+          [](DiskANNIndex<float> &self,
+             py::array_t<float, py::array::c_style | py::array::forcecast>
+                 &      queries,
+             const _u64 dim, const _u64 num_queries, const _u64 knn,
+             const _u64 l_search, const _u64 beam_width,
+             const int num_threads) {
+            py::array_t<unsigned> ids(knn * num_queries);
+
+            std::vector<unsigned> u32_ids(knn * num_queries);
+            std::vector<_u64>     u64_ids(knn * num_queries);
+            std::vector<float>    dists(knn * num_queries);
+            QueryStats            stats;
+
+#pragma omp parallel for schedule(dynamic, 1)
+            for (_u64 i = 0; i < num_queries; i++) {
+              self.pq_flash_index->cached_beam_search(
+                  queries.mutable_data(i), knn, l_search,
+                  u64_ids.data() + i * knn, dists.data() + i * knn, beam_width,
+                  &stats);
+            }
+
+            auto r = ids.mutable_unchecked<1>();
+            for (_u64 i = 0; i < knn * num_queries; ++i)
+              r(i) = (unsigned) u64_ids[i];
+
+            return ids;
+          },
+          py::arg("queries"), py::arg("dim"), py::arg("num_queries"),
+          py::arg("knn"), py::arg("l_search"), py::arg("beam_width"),
+          py::arg("num_threads"));
 }
