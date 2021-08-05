@@ -15,7 +15,6 @@
 #include "aux_utils.h"
 #include "pq_flash_index.h"
 
-
 PYBIND11_MAKE_OPAQUE(std::vector<unsigned>);
 PYBIND11_MAKE_OPAQUE(std::vector<float>);
 
@@ -25,10 +24,10 @@ using namespace diskann;
 #ifdef __linux__
 template<class T>
 struct DiskANNIndex {
-  PQFlashIndex<T>* pq_flash_index;
+  PQFlashIndex<T> *                  pq_flash_index;
   std::shared_ptr<AlignedFileReader> reader;
-  
-  DiskANNIndex(){ 
+
+  DiskANNIndex() {
     reader = std::make_shared<LinuxAlignedFileReader>();
     pq_flash_index = new PQFlashIndex<T>(reader);
   }
@@ -167,6 +166,50 @@ PYBIND11_MODULE(diskannpy, m) {
       py::arg("results"), py::arg("result_dims"), py::arg("recall_at"));
 
   m.def(
+      "calculate_recall_numpy_input",
+      [](const unsigned num_queries, std::vector<unsigned> &ground_truth_ids,
+         std::vector<float> &ground_truth_dists,
+         const unsigned      ground_truth_dims,
+         py::array_t<unsigned, py::array::c_style | py::array::forcecast>
+             &          results,
+         const unsigned result_dims, const unsigned recall_at) {
+        unsigned *gti_ptr = ground_truth_ids.data();
+        float *   gtd_ptr = ground_truth_dists.data();
+        unsigned *r_ptr = results.mutable_data();
+
+        double             total_recall = 0;
+        std::set<unsigned> gt, res;
+        for (size_t i = 0; i < num_queries; i++) {
+          gt.clear();
+          res.clear();
+          size_t tie_breaker = recall_at;
+          if (gtd_ptr != nullptr) {
+            tie_breaker = recall_at - 1;
+            float *gt_dist_vec = gtd_ptr + ground_truth_dims * i;
+            while (tie_breaker < ground_truth_dims &&
+                   gt_dist_vec[tie_breaker] == gt_dist_vec[recall_at - 1])
+              tie_breaker++;
+          }
+
+          gt.insert(gti_ptr + ground_truth_dims * i,
+                    gti_ptr + ground_truth_dims * i + tie_breaker);
+          res.insert(r_ptr + result_dims * i,
+                     r_ptr + result_dims * i + recall_at);
+          unsigned cur_recall = 0;
+          for (auto &v : gt) {
+            if (res.find(v) != res.end()) {
+              cur_recall++;
+            }
+          }
+          total_recall += cur_recall;
+        }
+        return py::float_(total_recall / (num_queries) * (100.0 / recall_at));
+      },
+      py::arg("num_queries"), py::arg("ground_truth_ids"),
+      py::arg("ground_truth_dists"), py::arg("ground_truth_dims"),
+      py::arg("results"), py::arg("result_dims"), py::arg("recall_at"));
+
+  m.def(
       "save_bin_u32",
       [](const std::string &file_name, std::vector<unsigned> &data, size_t npts,
          size_t dims) { save_bin<_u32>(file_name, data.data(), npts, dims); },
@@ -269,7 +312,7 @@ PYBIND11_MODULE(diskannpy, m) {
              const _u64 dim, const _u64 knn, const _u64 l_search,
              const _u64 beam_width) {
             py::array_t<unsigned> ids(knn);
-            py::array_t<float>       dists(knn);
+            py::array_t<float>    dists(knn);
 
             std::vector<unsigned> u32_ids(knn);
             std::vector<_u64>     u64_ids(knn);

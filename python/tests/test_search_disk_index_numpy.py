@@ -49,7 +49,7 @@ else:
     print("Ls     QPS     Mean Latency (mus)   Recall@10")
     print("=============================================")
     for i, L in enumerate(l_search):
-        diskannpy.set_num_threads(num_threads)
+        diskannpy.omp_set_num_threads(num_threads)
 
         qs = time.time()
         ids, dists = index.batch_search_numpy_input(query_data, query_aligned_dims, 
@@ -58,17 +58,9 @@ else:
         latency_stats = float((qe - qs) * 1000000)
         qps = (num_queries / (qe - qs))
         
-        query_result_ids = diskannpy.VectorUnsigned(num_queries * query_aligned_dims)
-        query_result_dists = diskannpy.VectorFloat(num_queries * query_aligned_dims)
-        for q in range(0,num_queries):
-            for r in range(0,knn):
-                query_result_ids[q*num_queries + r] = ids[q*num_queries + r]
-                query_result_dists[q*num_queries + r] = dists[q*num_queries + r]
-
-        recall = diskannpy.calculate_recall(num_queries, ground_truth_ids,
+        recall = diskannpy.calculate_recall_numpy(num_queries, ground_truth_ids,
                                      ground_truth_dists, ground_truth_dims,
-                                     query_result_ids, recall_at,
-                                     recall_at)
+                                     ids, recall_at, recall_at)
         mean_latency = latency_stats / num_queries
         print(str(L) + "{:>10}".format("{:.2f}".format(qps)) + "{:>15}".format("{:.2f}".format(mean_latency)) + "{:>15}".format("{:.2f}".format(recall)))
 

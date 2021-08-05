@@ -76,7 +76,7 @@ else:
     print("Ls     QPS     Mean Latency (mus)   Recall@10")
     print("=============================================")
     for i, L in enumerate(l_search):
-        diskannpy.set_num_threads(num_threads)
+        diskannpy.omp_set_num_threads(num_threads)
 
         query_result_ids = diskannpy.VectorUnsigned()
         query_result_dists = diskannpy.VectorFloat()
