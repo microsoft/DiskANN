@@ -341,21 +341,19 @@ PYBIND11_MODULE(diskannpy, m) {
             py::array_t<unsigned> ids(knn * num_queries);
             py::array_t<float>    dists(knn * num_queries);
 
-            std::vector<unsigned> u32_ids(knn * num_queries);
             std::vector<_u64>     u64_ids(knn * num_queries);
-            QueryStats            stats;
 
 #pragma omp parallel for schedule(dynamic, 1)
             for (_u64 i = 0; i < num_queries; i++) {
               self.pq_flash_index->cached_beam_search(
                   queries.mutable_data(i), knn, l_search,
                   u64_ids.data() + i * knn, dists.mutable_data(i * knn),
-                  beam_width, &stats);
+                  beam_width);
             }
 
             auto r = ids.mutable_unchecked<1>();
             for (_u64 i = 0; i < knn * num_queries; ++i)
-              r(i) = (unsigned) u64_ids[i];
+              r(i) = (unsigned) u64_ids[i];	    
 
             return std::make_pair(ids, dists);
           },
