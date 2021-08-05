@@ -16,6 +16,7 @@ parser.add_argument('W', type=int, help='Beamwidth for search.')
 parser.add_argument('T', type=int, help='Number of threads to use for search.')
 
 args = parser.parse_args()
+args = parser.parse_args()
 
 recall_at = args.K
 W = args.W
@@ -58,7 +59,7 @@ else:
         latency_stats = float((qe - qs) * 1000000)
         qps = (num_queries / (qe - qs))
         
-        recall = diskannpy.calculate_recall_numpy(num_queries, ground_truth_ids,
+        recall = diskannpy.calculate_recall_numpy_input(num_queries, ground_truth_ids,
                                      ground_truth_dists, ground_truth_dims,
                                      ids, recall_at, recall_at)
         mean_latency = latency_stats / num_queries
