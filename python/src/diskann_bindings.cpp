@@ -338,8 +338,8 @@ PYBIND11_MODULE(diskannpy, m) {
              const _u64 dim, const _u64 num_queries, const _u64 knn,
              const _u64 l_search, const _u64 beam_width,
              const int num_threads) {
-            py::array_t<unsigned> ids(knn * num_queries);
-            py::array_t<float>    dists(knn * num_queries);
+            py::array_t<unsigned> ids({num_queries, knn});
+            py::array_t<float>    dists({num_queries, knn});
 
             std::vector<_u64>     u64_ids(knn * num_queries);
 
@@ -347,13 +347,14 @@ PYBIND11_MODULE(diskannpy, m) {
             for (_u64 i = 0; i < num_queries; i++) {
               self.pq_flash_index->cached_beam_search(
                   queries.data(i), knn, l_search,
-                  u64_ids.data() + i * knn, dists.mutable_data(i * knn),
+                  u64_ids.data() + i * knn, dists.mutable_data(i),
                   beam_width);
             }
 
-            auto r = ids.mutable_unchecked<1>();
-            for (_u64 i = 0; i < knn * num_queries; ++i)
-              r(i) = (unsigned) u64_ids[i];	    
+            auto r = ids.mutable_unchecked();
+            for (_u64 i = 0; i < num_queries; ++i)
+	      for (_u64 j = 0; j < knn; ++j)
+		r(i,j) = (unsigned) u64_ids[i*knn + j];	    
 
             return std::make_pair(ids, dists);
           },
