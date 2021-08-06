@@ -319,7 +319,7 @@ PYBIND11_MODULE(diskannpy, m) {
             QueryStats            stats;
 
             self.pq_flash_index->cached_beam_search(
-                query.mutable_data(), knn, l_search, u64_ids.data(),
+                query.data(), knn, l_search, u64_ids.data(),
                 dists.mutable_data(), beam_width, &stats);
 
             auto r = ids.mutable_unchecked<1>();
@@ -346,7 +346,7 @@ PYBIND11_MODULE(diskannpy, m) {
 #pragma omp parallel for schedule(dynamic, 1)
             for (_u64 i = 0; i < num_queries; i++) {
               self.pq_flash_index->cached_beam_search(
-                  queries.mutable_data(i), knn, l_search,
+                  queries.data(i), knn, l_search,
                   u64_ids.data() + i * knn, dists.mutable_data(i * knn),
                   beam_width);
             }
