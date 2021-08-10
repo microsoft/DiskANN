@@ -17,6 +17,9 @@
 
 PYBIND11_MAKE_OPAQUE(std::vector<unsigned>);
 PYBIND11_MAKE_OPAQUE(std::vector<float>);
+PYBIND11_MAKE_OPAQUE(std::vector<int8_t>);
+PYBIND11_MAKE_OPAQUE(std::vector<uint8_t>);
+
 
 namespace py = pybind11;
 using namespace diskann;
@@ -147,6 +150,9 @@ PYBIND11_MODULE(diskannpy, m) {
 
   py::bind_vector<std::vector<unsigned>>(m, "VectorUnsigned");
   py::bind_vector<std::vector<float>>(m, "VectorFloat");
+  py::bind_vector<std::vector<int8_t>>(m, "VectorInt8");
+  py::bind_vector<std::vector<uint8_t>>(m, "VectorUInt8");
+
 
   py::enum_<Metric>(m, "Metric").value("L2", Metric::L2).export_values();
 
@@ -348,6 +354,83 @@ PYBIND11_MODULE(diskannpy, m) {
                                  " " + std::to_string(indexing_ram_budget) +
                                  " " + std::to_string(num_threads);
             diskann::build_disk_index<float>(data_file_path, index_prefix_path,
+                                             params.c_str(),
+                                             diskann::Metric::L2);
+          },
+          py::arg("data_file_path"), py::arg("index_prefix_path"), py::arg("R"),
+          py::arg("L"), py::arg("final_index_ram_limit"),
+          py::arg("indexing_ram_limit"), py::arg("num_threads"));
+
+  py::class_<DiskANNIndex<int8_t>>(m, "DiskANNInt8Index")
+      .def(py::init([]() { return new DiskANNIndex<int8_t>(); }))
+      .def("load_index", &DiskANNIndex<int8_t>::load_index,
+           py::arg("index_path_prefix"), py::arg("num_threads"))
+      .def("search", &DiskANNIndex<int8_t>::search, py::arg("query"),
+           py::arg("query_idx"), py::arg("dim"), py::arg("num_queries"),
+           py::arg("knn"), py::arg("l_search"), py::arg("beam_width"),
+           py::arg("ids"), py::arg("dists"))
+      .def("batch_search", &DiskANNIndex<int8_t>::batch_search,
+           py::arg("queries"), py::arg("dim"), py::arg("num_queries"),
+           py::arg("knn"), py::arg("l_search"), py::arg("beam_width"),
+           py::arg("ids"), py::arg("dists"), py::arg("num_threads"))
+      .def("search_numpy_input", &DiskANNIndex<int8_t>::search_numpy_input,
+           py::arg("query"), py::arg("dim"), py::arg("knn"),
+           py::arg("l_search"), py::arg("beam_width"))
+      .def("batch_search_numpy_input",
+           &DiskANNIndex<int8_t>::batch_search_numpy_input, py::arg("queries"),
+           py::arg("dim"), py::arg("num_queries"), py::arg("knn"),
+           py::arg("l_search"), py::arg("beam_width"), py::arg("num_threads"))
+      .def(
+          "build",
+          [](DiskANNIndex<int8_t> &self, const char *data_file_path,
+             const char *index_prefix_path, unsigned R, unsigned L,
+             double final_index_ram_limit, double indexing_ram_budget,
+             unsigned num_threads) {
+            std::string params = std::to_string(R) + " " + std::to_string(L) +
+                                 " " + std::to_string(final_index_ram_limit) +
+                                 " " + std::to_string(indexing_ram_budget) +
+                                 " " + std::to_string(num_threads);
+            diskann::build_disk_index<int8_t>(data_file_path, index_prefix_path,
+                                             params.c_str(),
+                                             diskann::Metric::L2);
+          },
+          py::arg("data_file_path"), py::arg("index_prefix_path"), py::arg("R"),
+          py::arg("L"), py::arg("final_index_ram_limit"),
+          py::arg("indexing_ram_limit"), py::arg("num_threads"));
+
+
+  
+  py::class_<DiskANNIndex<uint8_t>>(m, "DiskANNUInt8Index")
+      .def(py::init([]() { return new DiskANNIndex<uint8_t>(); }))
+      .def("load_index", &DiskANNIndex<uint8_t>::load_index,
+           py::arg("index_path_prefix"), py::arg("num_threads"))
+      .def("search", &DiskANNIndex<uint8_t>::search, py::arg("query"),
+           py::arg("query_idx"), py::arg("dim"), py::arg("num_queries"),
+           py::arg("knn"), py::arg("l_search"), py::arg("beam_width"),
+           py::arg("ids"), py::arg("dists"))
+      .def("batch_search", &DiskANNIndex<uint8_t>::batch_search,
+           py::arg("queries"), py::arg("dim"), py::arg("num_queries"),
+           py::arg("knn"), py::arg("l_search"), py::arg("beam_width"),
+           py::arg("ids"), py::arg("dists"), py::arg("num_threads"))
+      .def("search_numpy_input", &DiskANNIndex<uint8_t>::search_numpy_input,
+           py::arg("query"), py::arg("dim"), py::arg("knn"),
+           py::arg("l_search"), py::arg("beam_width"))
+      .def("batch_search_numpy_input",
+           &DiskANNIndex<uint8_t>::batch_search_numpy_input, py::arg("queries"),
+           py::arg("dim"), py::arg("num_queries"), py::arg("knn"),
+           py::arg("l_search"), py::arg("beam_width"), py::arg("num_threads"))
+      .def(
+          "build",
+          [](DiskANNIndex<uint8_t> &self, const char *data_file_path,
+             const char *index_prefix_path, unsigned R, unsigned L,
+             double final_index_ram_limit, double indexing_ram_budget,
+             unsigned num_threads) {
+            std::string params = std::to_string(R) + " " + std::to_string(L) +
+                                 " " + std::to_string(final_index_ram_limit) +
+                                 " " + std::to_string(indexing_ram_budget) +
+                                 " " + std::to_string(num_threads);
+            diskann::build_disk_index<uint8_t>(
+                data_file_path, index_prefix_path,
                                              params.c_str(),
                                              diskann::Metric::L2);
           },
