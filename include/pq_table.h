@@ -6,7 +6,6 @@
 #include "utils.h"
 
 namespace diskann {
-  //  template<typename T>
   class FixedChunkPQTable {
     // data_dim = n_chunks * chunk_size;
     float* tables =

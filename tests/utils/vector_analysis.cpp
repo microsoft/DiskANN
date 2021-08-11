@@ -31,6 +31,7 @@ int analyze_norm(std::string base_file) {
   for (_u32 i = 0; i < npts; i++) {
     for (_u32 d = 0; d < ndims; d++)
       norms[i] += data[i * ndims + d] * data[i * ndims + d];
+    norms[i] = std::sqrt(norms[i]);
   }
   std::sort(norms.begin(), norms.end());
   for (_u32 p = 0; p < 100; p += 5)
@@ -130,7 +131,7 @@ int main(int argc, char** argv) {
         << argv[0]
         << " data_type [float/int8/uint8] base_bin_file "
            "[option: 1-norm analysis, 2-prep_base_for_mip, "
-           "3-prep_query_for_mip, 4-normalize-vecs] [out_file for options 2/3]"
+           "3-prep_query_for_mip, 4-normalize-vecs] [out_file for options 2/3/4]"
         << std::endl;
     exit(-1);
   }
