@@ -67,7 +67,7 @@ IOContext& WindowsAlignedFileReader::get_ctx() {
 }
 
 void WindowsAlignedFileReader::read(std::vector<AlignedRead>& read_reqs,
-                                    IOContext&                ctx, bool async) {
+                                    IOContext& ctx, bool async) {
   using namespace std::chrono_literals;
   // execute each request sequentially
   _u64 n_reqs = read_reqs.size();

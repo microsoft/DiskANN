@@ -19,6 +19,9 @@ namespace diskann {
     template<typename ParamType>
     inline void Set(const std::string &name, const ParamType &value) {
       //      ParamType *ptr = (ParamType *) malloc(sizeof(ParamType));
+      if (params.find(name) != params.end()) {
+        free(params[name]);
+      }
       ParamType *ptr = new ParamType;
       *ptr = value;
       params[name] = (void *) ptr;

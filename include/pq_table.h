@@ -6,15 +6,14 @@
 #include "utils.h"
 
 namespace diskann {
-  template<typename T>
   class FixedChunkPQTable {
     // data_dim = n_chunks * chunk_size;
     float* tables =
         nullptr;  // pq_tables = float* [[2^8 * [chunk_size]] * n_chunks]
     //    _u64   n_chunks;    // n_chunks = # of chunks ndims is split into
     //    _u64   chunk_size;  // chunk_size = chunk size of each dimension chunk
-    _u64   ndims;  // ndims = chunk_size * n_chunks
-    _u64   n_chunks;
+    _u64   ndims = 0;  // ndims = chunk_size * n_chunks
+    _u64   n_chunks = 0;
     _u32*  chunk_offsets = nullptr;
     _u32*  rearrangement = nullptr;
     float* centroid = nullptr;
@@ -79,14 +78,15 @@ namespace diskann {
 #else
         diskann::load_bin<_u32>(chunk_offset_file, chunk_offsets, numr, numc);
 #endif
-      if (numc != 1 || numr != num_chunks + 1) {
+      if (numc != 1 || (numr != num_chunks + 1 && num_chunks != 0)) {
         diskann::cerr << "Error loading chunk offsets file. numc: " << numc
                       << " (should be 1). numr: " << numr << " (should be "
                       << num_chunks + 1 << ")" << std::endl;
         throw diskann::ANNException("Error loading chunk offsets file", -1,
                                     __FUNCSIG__, __FILE__, __LINE__);
       }
-
+      std::cout << "PQ data has " << numr - 1 << " bytes per point."
+                << std::endl;
       this->n_chunks = numr - 1;
 
 #ifdef EXEC_ENV_OLS
@@ -126,8 +126,11 @@ namespace diskann {
     }
   }
 
-  void
-  populate_chunk_distances(const T* query_vec, float* dist_vec) {
+  _u32
+  get_num_chunks() {
+    return n_chunks;
+  }
+  void populate_chunk_distances(const float* query_vec, float* dist_vec) {
     memset(dist_vec, 0, 256 * n_chunks * sizeof(float));
     // chunk wise distance computation
     for (_u64 chunk = 0; chunk < n_chunks; chunk++) {
@@ -137,11 +140,6 @@ namespace diskann {
         _u64         permuted_dim_in_query = rearrangement[j];
         const float* centers_dim_vec = tables_T + (256 * j);
         for (_u64 idx = 0; idx < 256; idx++) {
-          // Gopal. Fixing crash in v14 machines.
-          // float diff = centers_dim_vec[idx] -
-          //             ((float) query_vec[permuted_dim_in_query] -
-          //              centroid[permuted_dim_in_query]);
-          // chunk_dists[idx] += (diff * diff);
           double diff =
               centers_dim_vec[idx] - (query_vec[permuted_dim_in_query] -
                                       centroid[permuted_dim_in_query]);
@@ -150,5 +148,72 @@ namespace diskann {
       }
     }
   }
-};
+
+  float l2_distance(const float* query_vec, _u8* base_vec) {
+    float res = 0;
+    for (_u64 chunk = 0; chunk < n_chunks; chunk++) {
+      for (_u64 j = chunk_offsets[chunk]; j < chunk_offsets[chunk + 1]; j++) {
+        _u64         permuted_dim_in_query = rearrangement[j];
+        const float* centers_dim_vec = tables_T + (256 * j);
+        float        diff = centers_dim_vec[base_vec[chunk]] -
+                     (query_vec[permuted_dim_in_query] -
+                      centroid[permuted_dim_in_query]);
+        res += diff * diff;
+      }
+    }
+    return res;
+  }
+
+  float inner_product(const float* query_vec, _u8* base_vec) {
+    float res = 0;
+    for (_u64 chunk = 0; chunk < n_chunks; chunk++) {
+      for (_u64 j = chunk_offsets[chunk]; j < chunk_offsets[chunk + 1]; j++) {
+        _u64         permuted_dim_in_query = rearrangement[j];
+        const float* centers_dim_vec = tables_T + (256 * j);
+        float        diff =
+            centers_dim_vec[base_vec[chunk]] *
+            query_vec[permuted_dim_in_query];  // assumes centroid is 0 to
+                                               // prevent translation errors
+        res += diff;
+      }
+    }
+    return -res;  // returns negative value to simulate distances (max -> min
+                  // conversion)
+  }
+
+  void inflate_vector(_u8* base_vec, float* out_vec) {
+    for (_u64 chunk = 0; chunk < n_chunks; chunk++) {
+      for (_u64 j = chunk_offsets[chunk]; j < chunk_offsets[chunk + 1]; j++) {
+        _u64         original_dim = rearrangement[j];
+        const float* centers_dim_vec = tables_T + (256 * j);
+        out_vec[original_dim] =
+            centers_dim_vec[base_vec[chunk]] + centroid[original_dim];
+      }
+    }
+  }
+
+  void populate_chunk_inner_products(const float* query_vec, float* dist_vec) {
+    memset(dist_vec, 0, 256 * n_chunks * sizeof(float));
+    // chunk wise distance computation
+    for (_u64 chunk = 0; chunk < n_chunks; chunk++) {
+      // sum (q-c)^2 for the dimensions associated with this chunk
+      float* chunk_dists = dist_vec + (256 * chunk);
+      for (_u64 j = chunk_offsets[chunk]; j < chunk_offsets[chunk + 1]; j++) {
+        _u64         permuted_dim_in_query = rearrangement[j];
+        const float* centers_dim_vec = tables_T + (256 * j);
+        for (_u64 idx = 0; idx < 256; idx++) {
+          double prod =
+              centers_dim_vec[idx] *
+              query_vec[permuted_dim_in_query];  // assumes that we are not
+                                                 // shifting the vectors to mean
+                                                 // zero, i.e., centroid array
+                                                 // should be all zeros
+          chunk_dists[idx] -=
+              (float) prod;  // returning negative to keep the search code clean
+                             // (max inner product vs min distance)
+        }
+      }
+    }
+  }
+};  // namespace diskann
 }  // namespace diskann

@@ -26,8 +26,9 @@ void block_convert(std::ifstream& reader, std::ofstream& writer, _u64 npts,
 int main(int argc, char** argv) {
   if (argc != 6) {
     std::cout << argv[0]
-                  << "<float/int8/uint8> input_filename.tsv output_filename.bin dim num_pts>"
-                  << std::endl;
+              << "<float/int8/uint8> input_filename.tsv output_filename.bin "
+                 "dim num_pts>"
+              << std::endl;
     exit(-1);
   }
 
@@ -50,7 +51,7 @@ int main(int argc, char** argv) {
   _u64 nblks = ROUND_UP(npts, blk_size) / blk_size;
   std::cout << "# blks: " << nblks << std::endl;
   std::ofstream writer(argv[3], std::ios::binary);
-  auto           npts_s32 = (_u32) npts;
+  auto          npts_s32 = (_u32) npts;
   auto          ndims_s32 = (_u32) ndims;
   writer.write((char*) &npts_s32, sizeof(_u32));
   writer.write((char*) &ndims_s32, sizeof(_u32));

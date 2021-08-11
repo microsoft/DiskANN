@@ -255,11 +255,16 @@ namespace diskann {
     virtual float compare(const int8_t *a, const int8_t *b,
                           unsigned int length) const {
 #ifndef _WINDOWS
-      std::cout << "AVX only supported in Windows build.";
-      return 0;
+      int32_t result = 0;
+#pragma omp simd reduction(+ : result) aligned(a, b : 8)
+      for (_s32 i = 0; i < (_s32) length; i++) {
+        result += ((int32_t)((int16_t) a[i] - (int16_t) b[i])) *
+                  ((int32_t)((int16_t) a[i] - (int16_t) b[i]));
+      }
+      return (float) result;
     }
 #else
-      __m128  r = _mm_setzero_ps();
+      __m128 r = _mm_setzero_ps();
       __m128i r1;
       while (length >= 16) {
         r1 = _mm_subs_epi8(_mm_load_si128((__m128i *) a),
@@ -273,7 +278,7 @@ namespace diskann {
       float res = r.m128_f32[0];
 
       if (length >= 8) {
-        __m128  r2 = _mm_setzero_ps();
+        __m128 r2 = _mm_setzero_ps();
         __m128i r3 = _mm_subs_epi8(_mm_load_si128((__m128i *) (a - 8)),
                                    _mm_load_si128((__m128i *) (b - 8)));
         r2 = _mm_add_ps(r2, _mm_mulhi_epi8(r3));
@@ -285,7 +290,7 @@ namespace diskann {
       }
 
       if (length >= 4) {
-        __m128  r2 = _mm_setzero_ps();
+        __m128 r2 = _mm_setzero_ps();
         __m128i r3 = _mm_subs_epi8(_mm_load_si128((__m128i *) (a - 12)),
                                    _mm_load_si128((__m128i *) (b - 12)));
         r2 = _mm_add_ps(r2, _mm_mulhi_epi8_shift32(r3));
@@ -302,8 +307,12 @@ namespace diskann {
     virtual float compare(const float *a, const float *b,
                           unsigned int length) const {
 #ifndef _WINDOWS
-      std::cout << "AVX only supported in Windows build.";
-      return 0;
+      float result = 0;
+#pragma omp simd reduction(+ : result) aligned(a, b : 8)
+      for (_s32 i = 0; i < (_s32) length; i++) {
+        result += (a[i] - b[i]) * (a[i] - b[i]);
+      }
+      return result;
     }
 #else
       __m128 diff, v1, v2;
@@ -328,7 +337,7 @@ namespace diskann {
   template<typename T>
   class DistanceInnerProduct : public Distance<T> {
    public:
-    float compare(const T *a, const T *b, unsigned size) const {
+    float inner_product(const T *a, const T *b, unsigned size) const {
       float result = 0;
 #ifdef __GNUC__
 #ifdef __AVX__
@@ -426,10 +435,21 @@ namespace diskann {
 #endif
       return result;
     }
+    float compare(const T *a, const T *b, unsigned size)
+        const {  // since we use normally minimization objective for distance
+                 // comparisons, we are returning 1/x.
+      float result = inner_product(a, b, size);
+      //      if (result < 0)
+      //      return std::numeric_limits<float>::max();
+      //      else
+      return -result;
+    }
   };
 
   template<typename T>
-  class DistanceFastL2 : public DistanceInnerProduct<T> {
+  class DistanceFastL2
+      : public DistanceInnerProduct<T> {  // currently defined only for float.
+                                          // templated for future use.
    public:
     float norm(const T *a, unsigned size) const {
       float result = 0;
@@ -522,7 +542,7 @@ namespace diskann {
     using DistanceInnerProduct<T>::compare;
     float compare(const T *a, const T *b, float norm,
                   unsigned size) const {  // not implement
-      float result = -2 * DistanceInnerProduct<T>::compare(a, b, size);
+      float result = -2 * DistanceInnerProduct<T>::inner_product(a, b, size);
       result += norm;
       return result;
     }
