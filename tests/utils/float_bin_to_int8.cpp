@@ -4,7 +4,6 @@
 #include <iostream>
 #include "utils.h"
 
-
 void block_convert(std::ofstream& writer, int8_t* write_buf,
                    std::ifstream& reader, float* read_buf, _u64 npts,
                    _u64 ndims, float bias, float scale) {

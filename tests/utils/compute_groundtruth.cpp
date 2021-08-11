@@ -31,10 +31,11 @@
 #define ALIGNMENT 512
 
 void command_line_help() {
-  std::cerr
-      << "<exact-kann> <int8/uint8/float>   <base bin file> <query bin "
-         "file>  <K: # nearest neighbors to compute> <output-truthset-file>"
-      << std::endl;
+  std::cerr << "./compute_groundtruth <int8/uint8/float>   <base bin file> "
+               "<query bin "
+               "file>  <K: # nearest neighbors to compute> "
+               "<output-truthset-file> <dist_function: l2/mips>"
+            << std::endl;
 }
 
 template<class T>
@@ -104,6 +105,27 @@ void distsq_to_points(
     delete[] ones_vec;
 }
 
+void inner_prod_to_points(
+    const size_t dim,
+    float *      dist_matrix,  // Col Major, cols are queries, rows are points
+    size_t npoints, const float *const points, size_t nqueries,
+    const float *const queries,
+    float *ones_vec = NULL)  // Scratchspace of num_data size and init to 1.0
+{
+  bool ones_vec_alloc = false;
+  if (ones_vec == NULL) {
+    ones_vec = new float[nqueries > npoints ? nqueries : npoints];
+    std::fill_n(ones_vec, nqueries > npoints ? nqueries : npoints, (float) 1.0);
+    ones_vec_alloc = true;
+  }
+  cblas_sgemm(CblasColMajor, CblasTrans, CblasNoTrans, npoints, nqueries, dim,
+              (float) -1.0, points, dim, queries, dim, (float) 0.0, dist_matrix,
+              npoints);
+
+  if (ones_vec_alloc)
+    delete[] ones_vec;
+}
+
 void exact_knn(const size_t dim, const size_t k,
                int *const closest_points,  // k * num_queries preallocated, col
                                            // major, queries columns
@@ -112,13 +134,22 @@ void exact_knn(const size_t dim, const size_t k,
                                                   // corresponding closes_points
                size_t             npoints,
                const float *const points,  // points in Col major
-               size_t             nqueries,
-               const float *const queries)  // queries in Col major
+               size_t nqueries, const float *const queries,
+               bool use_mip = false)  // queries in Col major
 {
   float *points_l2sq = new float[npoints];
   float *queries_l2sq = new float[nqueries];
   compute_l2sq(points_l2sq, points, npoints, dim);
   compute_l2sq(queries_l2sq, queries, nqueries, dim);
+
+  std::cout << "Going to compute " << k << " NNs for " << nqueries
+            << " queries over " << npoints << " points in " << dim
+            << " dimensions using";
+  if (use_mip)
+    std::cout << " inner product ";
+  else
+    std::cout << " L2 ";
+  std::cout << "distance fn. " << std::endl;
 
   size_t q_batch_size = (1 << 9);
   float *dist_matrix = new float[(size_t) q_batch_size * (size_t) npoints];
@@ -128,9 +159,14 @@ void exact_knn(const size_t dim, const size_t k,
     int64_t q_e =
         ((b + 1) * q_batch_size > nqueries) ? nqueries : (b + 1) * q_batch_size;
 
-    distsq_to_points(dim, dist_matrix, npoints, points, points_l2sq, q_e - q_b,
-                     queries + (ptrdiff_t) q_b * (ptrdiff_t) dim,
-                     queries_l2sq + q_b);
+    if (!use_mip) {
+      distsq_to_points(dim, dist_matrix, npoints, points, points_l2sq,
+                       q_e - q_b, queries + (ptrdiff_t) q_b * (ptrdiff_t) dim,
+                       queries_l2sq + q_b);
+    } else {
+      inner_prod_to_points(dim, dist_matrix, npoints, points, q_e - q_b,
+                           queries + (ptrdiff_t) q_b * (ptrdiff_t) dim);
+    }
     std::cout << "Computed distances for queries: [" << q_b << "," << q_e << ")"
               << std::endl;
 
@@ -265,13 +301,15 @@ inline void save_groundtruth_as_one_file(const std::string filename,
 }
 
 template<typename T>
-int aux_main(int argv, char **argc) {
- 
+int aux_main(char **argc) {
   size_t      npoints, nqueries, dim;
   std::string base_file(argc[2]);
   std::string query_file(argc[3]);
   size_t      k = atoi(argc[4]);
+  bool        use_mip = false;
   std::string gt_file(argc[5]);
+  if (std::string(argc[6]) == std::string("mips"))
+    use_mip = true;
 
   float *base_data;
   float *query_data;
@@ -291,7 +329,7 @@ int aux_main(int argv, char **argc) {
     float *dist_closest_points_part = new float[nqueries * k];
 
     exact_knn(dim, k, closest_points_part, dist_closest_points_part, npoints,
-              base_data, nqueries, query_data);
+              base_data, nqueries, query_data, use_mip);
 
     for (_u64 i = 0; i < nqueries; i++) {
       for (_u64 j = 0; j < k; j++) {
@@ -303,6 +341,7 @@ int aux_main(int argv, char **argc) {
 
     delete[] closest_points_part;
     delete[] dist_closest_points_part;
+
     diskann::aligned_free(base_data);
   }
 
@@ -311,7 +350,10 @@ int aux_main(int argv, char **argc) {
     std::sort(cur_res.begin(), cur_res.end(), custom_dist);
     for (_u64 j = 0; j < k; j++) {
       closest_points[i * k + j] = (int32_t) cur_res[j].first;
-      dist_closest_points[i * k + j] = cur_res[j].second;
+      if (use_mip)
+        dist_closest_points[i * k + j] = -cur_res[j].second;
+      else
+        dist_closest_points[i * k + j] = cur_res[j].second;
     }
   }
 
@@ -324,15 +366,15 @@ int aux_main(int argv, char **argc) {
 }
 
 int main(int argc, char **argv) {
-  if (argc != 6) {
+  if (argc != 7) {
     command_line_help();
     return -1;
   }
 
   if (std::string(argv[1]) == std::string("float"))
-    aux_main<float>(argc, argv);
+    aux_main<float>(argv);
   if (std::string(argv[1]) == std::string("int8"))
-    aux_main<int8_t>(argc, argv);
+    aux_main<int8_t>(argv);
   if (std::string(argv[1]) == std::string("uint8"))
-    aux_main<uint8_t>(argc, argv);
+    aux_main<uint8_t>(argv);
 }

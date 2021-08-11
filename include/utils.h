@@ -218,6 +218,12 @@ namespace diskann {
   }
 #endif
 
+  inline void wait_for_keystroke() {
+    int a;
+    std::cout << "Press any number to continue.." << std::endl;
+    std::cin >> a;
+  }
+
   template<typename T>
   inline void load_bin(const std::string& bin_file, T*& data, size_t& npts,
                        size_t& dim) {
@@ -287,6 +293,136 @@ namespace diskann {
       dists = new float[npts * dim];
       reader.read((char*) dists, npts * dim * sizeof(float));
     }
+  }
+
+  inline void prune_truthset_for_range(const std::string& bin_file, float range, std::vector<std::vector<_u32>> &groundtruth, 
+                            size_t& npts) {
+    _u64            read_blk_size = 64 * 1024 * 1024;
+    cached_ifstream reader(bin_file, read_blk_size);
+    diskann::cout << "Reading truthset file " << bin_file.c_str() << " ..."
+                  << std::endl;
+    size_t actual_file_size = reader.get_file_size();
+
+    int npts_i32, dim_i32;
+    reader.read((char*) &npts_i32, sizeof(int));
+    reader.read((char*) &dim_i32, sizeof(int));
+    npts = (unsigned) npts_i32;
+    _u64 dim = (unsigned) dim_i32;
+    _u32* ids;
+    float* dists;
+
+    diskann::cout << "Metadata: #pts = " << npts << ", #dims = " << dim << "..."
+                  << std::endl;
+
+    int truthset_type = -1;  // 1 means truthset has ids and distances, 2 means
+                             // only ids, -1 is error
+    size_t expected_file_size_with_dists =
+        2 * npts * dim * sizeof(uint32_t) + 2 * sizeof(uint32_t);
+
+    if (actual_file_size == expected_file_size_with_dists)
+      truthset_type = 1;
+
+    if (truthset_type == -1) {
+      std::stringstream stream;
+      stream << "Error. File size mismatch. File should have bin format, with "
+                "npts followed by ngt followed by npts*ngt ids and optionally "
+                "followed by npts*ngt distance values; actual size: "
+             << actual_file_size
+             << ", expected: " << expected_file_size_with_dists;
+      diskann::cout << stream.str();
+      throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
+                                  __LINE__);
+    }
+
+    ids = new uint32_t[npts * dim];
+    reader.read((char*) ids, npts * dim * sizeof(uint32_t));
+ 
+    if (truthset_type == 1) {
+      dists = new float[npts * dim];
+      reader.read((char*) dists, npts * dim * sizeof(float));
+    }
+    float min_dist = std::numeric_limits<float>::max();
+    float max_dist = 0;
+    groundtruth.resize(npts);
+    for (_u32 i = 0; i < npts; i++) {
+      groundtruth[i].clear();
+      for (_u32 j = 0; j < dim; j++) {
+        if (dists[i*dim + j] <= range) {
+          groundtruth[i].emplace_back(ids[i*dim+j]);
+        }
+        min_dist = min_dist > dists[i*dim+j] ? dists[i*dim + j] : min_dist;
+        max_dist = max_dist < dists[i*dim+j] ? dists[i*dim + j] : max_dist;
+      }
+      //std::cout<<groundtruth[i].size() << " " ;
+    }
+    std::cout<<"Min dist: " << min_dist <<", Max dist: "<< max_dist << std::endl;
+    delete[] ids;
+    delete[] dists;
+  }
+
+
+  inline void load_range_truthset(const std::string& bin_file, std::vector<std::vector<_u32>> &groundtruth, _u64 & gt_num) {
+    _u64            read_blk_size = 64 * 1024 * 1024;
+    cached_ifstream reader(bin_file, read_blk_size);
+    diskann::cout << "Reading truthset file " << bin_file.c_str() << " ..."
+                  << std::endl;
+    size_t actual_file_size = reader.get_file_size();
+
+    int npts_u32, total_u32;
+    reader.read((char*) &npts_u32, sizeof(int));
+    reader.read((char*) &total_u32, sizeof(int));
+
+    gt_num = (_u64) npts_u32;
+    _u64 total_res = (_u64) total_u32;
+    
+    diskann::cout << "Metadata: #pts = " << gt_num << ", #total_results = " << total_res << "..."
+                  << std::endl;
+
+    size_t expected_file_size =
+        2*sizeof(_u32) + gt_num*sizeof(_u32) + total_res*sizeof(_u32);
+
+    if (actual_file_size != expected_file_size) {
+      std::stringstream stream;
+      stream << "Error. File size mismatch in range truthset. actual size: "
+             << actual_file_size
+             << ", expected: " << expected_file_size;
+      diskann::cout << stream.str();
+      throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
+                                  __LINE__);
+    }
+    groundtruth.clear();
+    groundtruth.resize(gt_num);
+    std::vector<_u32> gt_count(gt_num);
+    
+
+
+    reader.read((char*) gt_count.data(), sizeof(_u32)*gt_num);
+
+    std::vector<_u32> gt_stats(gt_count);
+    std::sort(gt_stats.begin(), gt_stats.end());
+ 
+    std::cout<<"GT count percentiles:" << std::endl;
+      for (_u32 p = 0; p < 100; p += 5)
+    std::cout << "percentile " << p << ": "
+              << gt_stats[std::floor((p / 100.0) * gt_num)] << std::endl;
+  std::cout << "percentile 100"
+            << ": " << gt_stats[gt_num - 1] << std::endl;
+
+
+   for (_u32 i = 0; i < gt_num; i++) {
+      groundtruth[i].clear();
+      groundtruth[i].resize(gt_count[i]);
+      if (gt_count[i]!=0)
+      reader.read((char*) groundtruth[i].data(), sizeof(_u32)*gt_count[i]);
+
+// debugging code
+/*      if (i < 10) { 
+      std::cout<<gt_count[i] <<" nbrs, ids: "; 
+        for (auto &x : groundtruth[i])
+          std::cout<<x <<" ";
+        std::cout<<std::endl;
+      } */
+   }
   }
 
 #ifdef EXEC_ENV_OLS
@@ -410,6 +546,89 @@ namespace diskann {
     }
   }
 
+  // this function will take in_file of n*d dimensions and save the output as a
+  // floating point matrix
+  // with n*(d+1) dimensions. All vectors are scaled by a large value M so that
+  // the norms are <=1 and the final coordinate is set so that the resulting
+  // norm (in d+1 coordinates) is equal to 1 this is a classical transformation
+  // from MIPS to L2 search from "On Symmetric and Asymmetric LSHs for Inner
+  // Product Search" by Neyshabur and Srebro
+
+  template<typename T>
+  float prepare_base_for_inner_products(const std::string in_file,
+                                        const std::string out_file) {
+    std::cout << "Pre-processing base file by adding extra coordinate"
+              << std::endl;
+    std::ifstream in_reader(in_file.c_str(), std::ios::binary);
+    std::ofstream out_writer(out_file.c_str(), std::ios::binary);
+    _u64          npts, in_dims, out_dims;
+    float         max_norm = 0;
+
+    _u32 npts32, dims32;
+    in_reader.read((char*) &npts32, sizeof(uint32_t));
+    in_reader.read((char*) &dims32, sizeof(uint32_t));
+
+    npts = npts32;
+    in_dims = dims32;
+    out_dims = in_dims + 1;
+    _u32 outdims32 = (_u32) out_dims;
+
+    out_writer.write((char*) &npts32, sizeof(uint32_t));
+    out_writer.write((char*) &outdims32, sizeof(uint32_t));
+
+    size_t               BLOCK_SIZE = 100000;
+    size_t               block_size = npts <= BLOCK_SIZE ? npts : BLOCK_SIZE;
+    std::unique_ptr<T[]> in_block_data =
+        std::make_unique<T[]>(block_size * in_dims);
+    std::unique_ptr<float[]> out_block_data =
+        std::make_unique<float[]>(block_size * out_dims);
+
+    std::memset(out_block_data.get(), 0, sizeof(float) * block_size * out_dims);
+    _u64 num_blocks = DIV_ROUND_UP(npts, block_size);
+
+    std::vector<float> norms(npts, 0);
+
+    for (_u64 b = 0; b < num_blocks; b++) {
+      _u64 start_id = b * block_size;
+      _u64 end_id = (b + 1) * block_size < npts ? (b + 1) * block_size : npts;
+      _u64 block_pts = end_id - start_id;
+      in_reader.read((char*) in_block_data.get(),
+                     block_pts * in_dims * sizeof(T));
+      for (_u64 p = 0; p < block_pts; p++) {
+        for (_u64 j = 0; j < in_dims; j++) {
+          norms[start_id + p] +=
+              in_block_data[p * in_dims + j] * in_block_data[p * in_dims + j];
+        }
+        max_norm =
+            max_norm > norms[start_id + p] ? max_norm : norms[start_id + p];
+      }
+    }
+
+    max_norm = std::sqrt(max_norm);
+
+    in_reader.seekg(2 * sizeof(_u32), std::ios::beg);
+    for (_u64 b = 0; b < num_blocks; b++) {
+      _u64 start_id = b * block_size;
+      _u64 end_id = (b + 1) * block_size < npts ? (b + 1) * block_size : npts;
+      _u64 block_pts = end_id - start_id;
+      in_reader.read((char*) in_block_data.get(),
+                     block_pts * in_dims * sizeof(T));
+      for (_u64 p = 0; p < block_pts; p++) {
+        for (_u64 j = 0; j < in_dims; j++) {
+          out_block_data[p * out_dims + j] =
+              in_block_data[p * in_dims + j] / max_norm;
+        }
+        float res = 1 - (norms[start_id + p] / (max_norm * max_norm));
+        res = res <= 0 ? 0 : std::sqrt(res);
+        out_block_data[p * out_dims + out_dims - 1] = res;
+      }
+      out_writer.write((char*) out_block_data.get(),
+                       block_pts * out_dims * sizeof(float));
+    }
+    out_writer.close();
+    return max_norm;
+  }
+
   // plain saves data as npts X ndims array into filename
   template<typename T>
   void save_Tvecs(const char* filename, T* data, size_t npts, size_t ndims) {
@@ -495,8 +714,9 @@ inline bool validate_file_size(const std::string& name) {
   size_t expected_file_size;
   in.read((char*) &expected_file_size, sizeof(uint64_t));
   if (actual_file_size != expected_file_size) {
-    diskann::cout << "Error loading" << name << ". Expected "
-                                                "size (metadata): "
+    diskann::cout << "Error loading" << name
+                  << ". Expected "
+                     "size (metadata): "
                   << expected_file_size
                   << ", actual file size : " << actual_file_size
                   << ". Exitting." << std::endl;

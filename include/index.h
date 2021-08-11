@@ -52,7 +52,7 @@ namespace diskann {
 
     // Gopal. Added search overload that takes L as parameter, so that we
     // can customize L on a per-query basis without tampering with "Parameters"
-    DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> search(const T *query,
+    DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> search(const T *      query,
                                                            const size_t   K,
                                                            const unsigned L,
                                                            unsigned *indices);
@@ -63,7 +63,7 @@ namespace diskann {
 
     DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> search_with_tags(
         const T *query, const size_t K, const unsigned L, TagT *tags,
-        unsigned frozen_pts, unsigned *indices_buffer = NULL);
+        unsigned *indices_buffer = NULL);
 
     // repositions frozen points to the end of _data - if they have been moved
     // during deletion
@@ -167,6 +167,7 @@ namespace diskann {
     size_t consolidate_deletes(const Parameters &parameters);
 
    private:
+    Metric       _metric = diskann::L2;
     size_t       _dim;
     size_t       _aligned_dim;
     T *          _data;
