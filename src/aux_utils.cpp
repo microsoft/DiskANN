@@ -742,7 +742,7 @@ namespace diskann {
 
     diskann::cout << "Starting index build: R=" << R << " L=" << L
                   << " Query RAM budget: " << final_index_ram_limit
-                  << " Indexing ram budget: " << indexing_ram_budget
+                  << " Indexing RAM budget: " << indexing_ram_budget
                   << " T: " << num_threads << std::endl;
 
     auto s = std::chrono::high_resolution_clock::now();

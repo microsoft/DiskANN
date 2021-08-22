@@ -364,7 +364,7 @@ int generate_pq_pivots(const float *passed_train_data, size_t num_train,
 // streams the base file (data_file), and computes the closest centers in each
 // chunk to generate the compressed data_file and stores it in
 // pq_compressed_vectors_path.
-// If the numbber of centers is < 256, it stores as byte vector, else as 4-byte
+// If the number of centers is < 256, it stores as byte vector, else as 4-byte
 // vector in binary format.
 template<typename T>
 int generate_pq_data_from_pivots(const std::string data_file,
