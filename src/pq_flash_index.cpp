@@ -608,14 +608,13 @@ namespace diskann {
     get_bin_metadata(pq_table_bin, pq_file_num_centroids, pq_file_dim);
 #endif
 
-    this->disk_index_file = std::string(disk_index_file);
-
     if (pq_file_num_centroids != 256) {
       diskann::cout << "Error. Number of PQ centroids is not 256. Exitting."
                     << std::endl;
       return -1;
     }
 
+    this->disk_index_file = std::string(disk_index_file);
     this->data_dim = pq_file_dim;
     this->disk_data_dim =
         this->data_dim;  // will reset later if we use PQ on disk

@@ -178,10 +178,6 @@ namespace diskann {
 
     data = new T[npts * dim];
     reader.read((char*) data, npts * dim * sizeof(T));
-
-    //    diskann::cout << "Last bytes: "
-    //                  << getValues<T>(data + (npts - 2) * dim, dim);
-    //    diskann::cout << "Finished reading bin file." << std::endl;
   }
 
 #ifdef EXEC_ENV_OLS
@@ -227,11 +223,6 @@ namespace diskann {
   template<typename T>
   inline void load_bin(const std::string& bin_file, T*& data, size_t& npts,
                        size_t& dim) {
-    // OLS
-    //_u64            read_blk_size = 64 * 1024 * 1024;
-    // cached_ifstream reader(bin_file, read_blk_size);
-    // size_t actual_file_size = reader.get_file_size();
-    // END OLS
     diskann::cout << "Reading bin file " << bin_file.c_str() << " ..."
                   << std::endl;
     std::ifstream reader(bin_file, std::ios::binary | std::ios::ate);
@@ -522,11 +513,6 @@ namespace diskann {
   inline void load_aligned_bin(const std::string& bin_file, T*& data,
                                size_t& npts, size_t& dim, size_t& rounded_dim) {
     diskann::cout << "Reading bin file " << bin_file << " ..." << std::flush;
-    // START OLS
-    //_u64            read_blk_size = 64 * 1024 * 1024;
-    // cached_ifstream reader(bin_file, read_blk_size);
-    // size_t actual_file_size = reader.get_file_size();
-    // END OLS
 
     std::ifstream reader(bin_file, std::ios::binary | std::ios::ate);
     uint64_t      fsize = reader.tellg();

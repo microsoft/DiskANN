@@ -29,7 +29,7 @@ class BuildExt(build_ext):
 
     link_opts = {'unix': ['-L/opt/intel/compilers_and_libraries/linux/mkl/lib/intel64/', '-L/opt/intel/compilers_and_libraries/linux/lib/intel64/', '-lmkl_rt', '-lmkl_core', '-lmkl_intel_ilp64', '-lmkl_sequential', '-lmkl_intel_thread', '-liomp5', '-lpthread', '-lm', '-ldl']}
     c_opts['unix'].append('-fopenmp')
-    link_opts['unix'].extend(['-fopenmp', '-pthread'])
+    link_opts['unix'].extend(['-fopenmp', '-pthread', '-ltcmalloc'])
 
     def build_extensions(self):
         ct = 'unix'
