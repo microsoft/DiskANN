@@ -67,7 +67,7 @@ struct DiskANNIndex {
   }
 
   int load_index(const std::string &index_path_prefix, const int num_threads,
-    const size_t num_nodes_to_cache, int cache_mechanism=1) {
+    const size_t num_nodes_to_cache, int cache_mechanism) {
     const std::string pq_path = index_path_prefix + std::string("_pq");
     const std::string index_path =
         index_path_prefix + std::string("_disk.index");
@@ -362,7 +362,7 @@ PYBIND11_MODULE(diskannpy, m) {
            py::arg("num_nodes_to_cache"))
       .def("load_index", &DiskANNIndex<float>::load_index,
            py::arg("index_path_prefix"), py::arg("num_threads"),
-           py::arg("num_nodes_to_cache"), py::arg("cache_mechanism"))
+           py::arg("num_nodes_to_cache"), py::arg("cache_mechanism") = 1)
       .def("search", &DiskANNIndex<float>::search, py::arg("query"),
            py::arg("query_idx"), py::arg("dim"), py::arg("num_queries"),
            py::arg("knn"), py::arg("l_search"), py::arg("beam_width"),
@@ -402,7 +402,7 @@ PYBIND11_MODULE(diskannpy, m) {
         py::arg("num_nodes_to_cache"))
       .def("load_index", &DiskANNIndex<int8_t>::load_index,
            py::arg("index_path_prefix"), py::arg("num_threads"),
-           py::arg("num_nodes_to_cache"), py::arg("cache_mechanism"))
+           py::arg("num_nodes_to_cache"), py::arg("cache_mechanism") = 1)
       .def("search", &DiskANNIndex<int8_t>::search, py::arg("query"),
            py::arg("query_idx"), py::arg("dim"), py::arg("num_queries"),
            py::arg("knn"), py::arg("l_search"), py::arg("beam_width"),
@@ -444,7 +444,7 @@ PYBIND11_MODULE(diskannpy, m) {
            py::arg("num_nodes_to_cache"))
       .def("load_index", &DiskANNIndex<uint8_t>::load_index,
            py::arg("index_path_prefix"), py::arg("num_threads"),
-           py::arg("num_nodes_to_cache"), py::arg("cache_mechanism"))
+           py::arg("num_nodes_to_cache"), py::arg("cache_mechanism") = 1)
       .def("search", &DiskANNIndex<uint8_t>::search, py::arg("query"),
            py::arg("query_idx"), py::arg("dim"), py::arg("num_queries"),
            py::arg("knn"), py::arg("l_search"), py::arg("beam_width"),
