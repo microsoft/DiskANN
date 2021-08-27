@@ -837,7 +837,7 @@ namespace diskann {
       data = this->thread_data.pop();
     }
 
-//std::cout<<l_search<<" ";
+    // std::cout<<l_search<<" ";
     // copy query to thread specific aligned and allocated memory (for distance
     // calculations we need aligned data)
 
@@ -1092,7 +1092,7 @@ namespace diskann {
         unsigned *node_buf = OFFSET_TO_NODE_NHOOD(node_disk_buf);
         _u64      nnbrs = (_u64)(*node_buf);
         T *       node_fp_coords = OFFSET_TO_NODE_COORDS(node_disk_buf);
-//        assert(data_buf_idx < MAX_N_CMPS);
+        //        assert(data_buf_idx < MAX_N_CMPS);
         if (data_buf_idx == MAX_N_CMPS)
           data_buf_idx = 0;
 
@@ -1210,7 +1210,8 @@ namespace diskann {
     }
   }
 
-// range search returns results of all neighbors within distance of range. indices and distances need to be pre-allocated of size l_search
+// range search returns results of all neighbors within distance of range. 
+// Indices and distances need to be pre-allocated of size l_search
 // and the return value is the number of matching hits.
 
 template<typename T>
@@ -1252,6 +1253,11 @@ template<typename T>
     indices.resize(res_count);
     distances.resize(res_count);
     return res_count;
+  }
+  
+  template<typename T>
+  Metric PQFlashIndex<T>::get_metric() {
+    return metric;
   }
 
 #ifdef EXEC_ENV_OLS
