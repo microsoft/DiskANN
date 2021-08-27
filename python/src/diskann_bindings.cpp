@@ -30,13 +30,17 @@ struct DiskANNIndex {
   PQFlashIndex<T> *                  pq_flash_index;
   std::shared_ptr<AlignedFileReader> reader;
 
-  DiskANNIndex() {
+  DiskANNIndex(diskann::Metric metric) {
     reader = std::make_shared<LinuxAlignedFileReader>();
-    pq_flash_index = new PQFlashIndex<T>(reader);
+    pq_flash_index = new PQFlashIndex<T>(reader, metric);
   }
 
   ~DiskANNIndex() {
     delete pq_flash_index;
+  }
+
+  auto get_metric() {
+    return pq_flash_index->get_metric();
   }
 
   void cache_bfs_levels(size_t num_nodes_to_cache) {
@@ -187,7 +191,10 @@ PYBIND11_MODULE(diskannpy, m) {
   py::bind_vector<std::vector<uint8_t>>(m, "VectorUInt8");
 
 
-  py::enum_<Metric>(m, "Metric").value("L2", Metric::L2).export_values();
+  py::enum_<Metric>(m, "Metric")
+    .value("L2", Metric::L2)
+    .value("INNER_PRODUCT", Metric::INNER_PRODUCT)
+    .export_values();
 
   py::class_<Parameters>(m, "Parameters")
       .def(py::init<>())
@@ -357,7 +364,10 @@ PYBIND11_MODULE(diskannpy, m) {
       py::arg("file_name"), py::arg("data"), py::arg("npts"), py::arg("dims"));
 
   py::class_<DiskANNIndex<float>>(m, "DiskANNFloatIndex")
-      .def(py::init([]() { return new DiskANNIndex<float>(); }))
+      .def(py::init([](diskann::Metric metric) {
+        return std::unique_ptr<DiskANNIndex<float>>(
+            new DiskANNIndex<float>(metric));
+      }))
       .def("cache_bfs_levels", &DiskANNIndex<float>::cache_bfs_levels,
            py::arg("num_nodes_to_cache"))
       .def("load_index", &DiskANNIndex<float>::load_index,
@@ -389,15 +399,17 @@ PYBIND11_MODULE(diskannpy, m) {
                                  " " + std::to_string(indexing_ram_budget) +
                                  " " + std::to_string(num_threads);
             diskann::build_disk_index<float>(data_file_path, index_prefix_path,
-                                             params.c_str(),
-                                             diskann::Metric::L2);
+                                             params.c_str(), self.get_metric());
           },
           py::arg("data_file_path"), py::arg("index_prefix_path"), py::arg("R"),
           py::arg("L"), py::arg("final_index_ram_limit"),
           py::arg("indexing_ram_limit"), py::arg("num_threads"));
 
   py::class_<DiskANNIndex<int8_t>>(m, "DiskANNInt8Index")
-      .def(py::init([]() { return new DiskANNIndex<int8_t>(); }))
+      .def(py::init([](diskann::Metric metric) {
+        return std::unique_ptr<DiskANNIndex<int8_t>>(
+            new DiskANNIndex<int8_t>(metric));
+      }))
       .def("cache_bfs_levels", &DiskANNIndex<int8_t>::cache_bfs_levels,
         py::arg("num_nodes_to_cache"))
       .def("load_index", &DiskANNIndex<int8_t>::load_index,
@@ -429,8 +441,8 @@ PYBIND11_MODULE(diskannpy, m) {
                                  " " + std::to_string(indexing_ram_budget) +
                                  " " + std::to_string(num_threads);
             diskann::build_disk_index<int8_t>(data_file_path, index_prefix_path,
-                                             params.c_str(),
-                                             diskann::Metric::L2);
+                                              params.c_str(),
+                                              self.get_metric());
           },
           py::arg("data_file_path"), py::arg("index_prefix_path"), py::arg("R"),
           py::arg("L"), py::arg("final_index_ram_limit"),
@@ -439,7 +451,10 @@ PYBIND11_MODULE(diskannpy, m) {
 
   
   py::class_<DiskANNIndex<uint8_t>>(m, "DiskANNUInt8Index")
-      .def(py::init([]() { return new DiskANNIndex<uint8_t>(); }))
+      .def(py::init([](diskann::Metric metric) {
+        return std::unique_ptr<DiskANNIndex<uint8_t>>(
+            new DiskANNIndex<uint8_t>(metric));
+      }))
       .def("cache_bfs_levels", &DiskANNIndex<uint8_t>::cache_bfs_levels,
            py::arg("num_nodes_to_cache"))
       .def("load_index", &DiskANNIndex<uint8_t>::load_index,
@@ -471,9 +486,8 @@ PYBIND11_MODULE(diskannpy, m) {
                                  " " + std::to_string(indexing_ram_budget) +
                                  " " + std::to_string(num_threads);
             diskann::build_disk_index<uint8_t>(
-                data_file_path, index_prefix_path,
-                                             params.c_str(),
-                                             diskann::Metric::L2);
+                data_file_path, index_prefix_path, params.c_str(),
+                self.get_metric());
           },
           py::arg("data_file_path"), py::arg("index_prefix_path"), py::arg("R"),
           py::arg("L"), py::arg("final_index_ram_limit"),
