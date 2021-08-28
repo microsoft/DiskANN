@@ -393,17 +393,20 @@ PYBIND11_MODULE(diskannpy, m) {
           [](DiskANNIndex<float> &self, const char *data_file_path,
              const char *index_prefix_path, unsigned R, unsigned L,
              double final_index_ram_limit, double indexing_ram_budget,
-             unsigned num_threads) {
+             unsigned num_threads, unsigned pq_disk_bytes) {
             std::string params = std::to_string(R) + " " + std::to_string(L) +
                                  " " + std::to_string(final_index_ram_limit) +
                                  " " + std::to_string(indexing_ram_budget) +
                                  " " + std::to_string(num_threads);
+            if (pq_disk_bytes > 0)
+              params = params + " " + std::to_string(pq_disk_bytes);
             diskann::build_disk_index<float>(data_file_path, index_prefix_path,
                                              params.c_str(), self.get_metric());
           },
           py::arg("data_file_path"), py::arg("index_prefix_path"), py::arg("R"),
           py::arg("L"), py::arg("final_index_ram_limit"),
-          py::arg("indexing_ram_limit"), py::arg("num_threads"));
+          py::arg("indexing_ram_limit"), py::arg("num_threads"),
+          py::arg("pq_disk_bytes") = 0);
 
   py::class_<DiskANNIndex<int8_t>>(m, "DiskANNInt8Index")
       .def(py::init([](diskann::Metric metric) {
@@ -435,19 +438,21 @@ PYBIND11_MODULE(diskannpy, m) {
           [](DiskANNIndex<int8_t> &self, const char *data_file_path,
              const char *index_prefix_path, unsigned R, unsigned L,
              double final_index_ram_limit, double indexing_ram_budget,
-             unsigned num_threads) {
+             unsigned num_threads, unsigned pq_disk_bytes) {
             std::string params = std::to_string(R) + " " + std::to_string(L) +
                                  " " + std::to_string(final_index_ram_limit) +
                                  " " + std::to_string(indexing_ram_budget) +
                                  " " + std::to_string(num_threads);
+            if (pq_disk_bytes > 0)
+              params = params + " " + std::to_string(pq_disk_bytes);
             diskann::build_disk_index<int8_t>(data_file_path, index_prefix_path,
                                               params.c_str(),
                                               self.get_metric());
           },
           py::arg("data_file_path"), py::arg("index_prefix_path"), py::arg("R"),
           py::arg("L"), py::arg("final_index_ram_limit"),
-          py::arg("indexing_ram_limit"), py::arg("num_threads"));
-
+          py::arg("indexing_ram_limit"), py::arg("num_threads"),
+          py::arg("pq_disk_bytes") = 0);
 
   
   py::class_<DiskANNIndex<uint8_t>>(m, "DiskANNUInt8Index")
@@ -480,16 +485,19 @@ PYBIND11_MODULE(diskannpy, m) {
           [](DiskANNIndex<uint8_t> &self, const char *data_file_path,
              const char *index_prefix_path, unsigned R, unsigned L,
              double final_index_ram_limit, double indexing_ram_budget,
-             unsigned num_threads) {
+             unsigned num_threads, unsigned pq_disk_bytes) {
             std::string params = std::to_string(R) + " " + std::to_string(L) +
                                  " " + std::to_string(final_index_ram_limit) +
                                  " " + std::to_string(indexing_ram_budget) +
                                  " " + std::to_string(num_threads);
+            if (pq_disk_bytes > 0)
+              params = params + " " + std::to_string(pq_disk_bytes);
             diskann::build_disk_index<uint8_t>(
                 data_file_path, index_prefix_path, params.c_str(),
                 self.get_metric());
           },
           py::arg("data_file_path"), py::arg("index_prefix_path"), py::arg("R"),
           py::arg("L"), py::arg("final_index_ram_limit"),
-          py::arg("indexing_ram_limit"), py::arg("num_threads"));
+          py::arg("indexing_ram_limit"), py::arg("num_threads"),
+          py::arg("pq_disk_bytes") = 0);
 }
