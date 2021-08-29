@@ -80,8 +80,8 @@ namespace diskann {
                                const char *disk_index_file);
 #else
     // load compressed data, and obtains the handle to the disk-resident index
-    DISKANN_DLLEXPORT int  load(uint32_t num_threads, const char *pq_prefix,
-                                const char *disk_index_file);
+    DISKANN_DLLEXPORT int load(uint32_t num_threads, const char *pq_prefix,
+                               const char *disk_index_file);
 #endif
 
     DISKANN_DLLEXPORT void load_cache_list(std::vector<uint32_t> &node_list);
@@ -117,6 +117,7 @@ namespace diskann {
     DISKANN_DLLEXPORT Metric get_metric();
 
     std::shared_ptr<AlignedFileReader> &reader;
+
    protected:
     DISKANN_DLLEXPORT void use_medoids_data_as_centroids();
     DISKANN_DLLEXPORT void setup_thread_data(_u64 nthreads);
@@ -131,9 +132,11 @@ namespace diskann {
     _u64 max_node_len = 0, nnodes_per_sector = 0, max_degree = 0;
 
     diskann::Metric metric = diskann::Metric::L2;
-    float           max_base_norm =
-        0;  // used only for inner product search to re-scale the result value
-            // (due to the pre-processing of base during index build)
+
+    // used only for inner product search to re-scale the result value
+    // (due to the pre-processing of base during index build)
+    float max_base_norm = 0;
+
     // data info
     _u64 num_points = 0;
     _u64 data_dim = 0;

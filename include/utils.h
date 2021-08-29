@@ -344,7 +344,6 @@ namespace diskann {
         min_dist = min_dist > dists[i*dim+j] ? dists[i*dim + j] : min_dist;
         max_dist = max_dist < dists[i*dim+j] ? dists[i*dim + j] : max_dist;
       }
-      //std::cout<<groundtruth[i].size() << " " ;
     }
     std::cout<<"Min dist: " << min_dist <<", Max dist: "<< max_dist << std::endl;
     delete[] ids;
@@ -405,14 +404,6 @@ namespace diskann {
       groundtruth[i].resize(gt_count[i]);
       if (gt_count[i]!=0)
       reader.read((char*) groundtruth[i].data(), sizeof(_u32)*gt_count[i]);
-
-// debugging code
-/*      if (i < 10) { 
-      std::cout<<gt_count[i] <<" nbrs, ids: "; 
-        for (auto &x : groundtruth[i])
-          std::cout<<x <<" ";
-        std::cout<<std::endl;
-      } */
    }
   }
 
@@ -446,13 +437,11 @@ namespace diskann {
                   << ", size = " << npts * ndims * sizeof(T) + 2 * sizeof(int)
                   << "B" << std::endl;
 
-    //    data = new T[npts_u64 * ndims_u64];
     writer.write((char*) data, npts * ndims * sizeof(T));
     writer.close();
     diskann::cout << "Finished writing bin." << std::endl;
   }
 
-  // load_aligned_bin functions START
 
   template<typename T>
   inline void load_aligned_bin_impl(std::basic_istream<char>& reader,
