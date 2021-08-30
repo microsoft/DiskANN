@@ -185,7 +185,7 @@ struct DiskANNIndex {
 
     py::array_t<unsigned> ids(num_queries * l_search);
     py::array_t<float>    dists(num_queries * l_search);
-    py::array_t<float>    offsets(num_queries + 1);
+    py::array_t<unsigned> offsets(num_queries + 1);
 
     std::vector<_u64> u64_ids(num_queries * l_search);
 
