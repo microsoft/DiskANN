@@ -36,7 +36,7 @@ ground_truth_dists = diskannpy.VectorFloat()
 num_queries, query_dims, query_aligned_dims = diskannpy.load_aligned_bin_float(args.query_path, query_data)
 num_ground_truth, ground_truth_dims = diskannpy.load_truthset(args.ground_truth_path, ground_truth_ids, ground_truth_dists)
 
-index = diskannpy.DiskANNFloatIndex()
+index = diskannpy.DiskANNFloatIndex(diskannpy.L2)
 if index.load_index(args.index_path_prefix, num_threads, num_nodes_to_cache) != 0:
         print("Index load failed")
 else:

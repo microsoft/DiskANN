@@ -194,16 +194,18 @@ struct DiskANNIndex {
 
 #pragma omp parallel for schedule(dynamic, 1)
     for (_u64 i = 0; i < num_queries; i++) {
-      offsets_mutable(i+1) = pq_flash_index->range_search(
+      offsets_mutable(i + 1) = pq_flash_index->range_search(
           queries.data(i), range, l_search, u64_ids.data() + i * l_search,
           dists.mutable_data(i * l_search), beam_width);
     }
-
-    auto r = ids.mutable_unchecked();
+    
+    auto   ids_mutable = ids.mutable_unchecked();
+    auto   dists_mutable = dists.mutable_unchecked();
     size_t pos = 0;
     for (_u64 i = 0; i < num_queries; ++i) {
       for (_u64 j = 0; j < offsets_mutable(i+1); ++j) {
-        r(pos++) = (unsigned) u64_ids[i * l_search + j];
+        ids_mutable(pos) = (unsigned) u64_ids[i * l_search + j];
+        dists_mutable(pos++) = dists_mutable(i * l_search + j);
       }
       offsets_mutable(i + 1) = offsets_mutable(i) + offsets_mutable(i + 1);
     }

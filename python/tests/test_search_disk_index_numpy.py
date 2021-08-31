@@ -38,7 +38,7 @@ for i in range(0, num_queries):
     for d in range(0, query_dims):
         query_data_numpy[i,d] = query_data[i * query_aligned_dims + d]
         
-index = diskannpy.DiskANNFloatIndex()
+index = diskannpy.DiskANNFloatIndex(diskannpy.L2)
 if index.load_index(args.index_path_prefix, num_threads, num_nodes_to_cache) != 0:
     print("Index load failed")
 else:

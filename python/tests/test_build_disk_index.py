@@ -18,7 +18,7 @@ parser.add_argument('T', type=int, help='Number of threads for index constructio
 args = parser.parse_args()
 
 start = time.time()
-index = DiskANNFloatIndex()
+index = DiskANNFloatIndex(diskannpy.L2)
 index.build(args.data_path, args.save_path, args.R, args.L, args.B, args.M, args.T)
 end = time.time()
 
