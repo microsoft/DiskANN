@@ -76,55 +76,59 @@ To generate an SSD-friendly index, use the `tests/build_disk_index` program.
 ----------------------------------------------------------------------------
 
 ```
-./tests/build_disk_index  [data_type<float/int8/uint8>]  [data_file.bin]  [index_prefix_path]  [R]  [L]  [B]  [M]  [T]. 
+./tests/build_disk_index  [data_type<float/int8/uint8>] [l2/mips] [data_file.bin]  [index_prefix_path]  [R]  [L]  [B]  [M]  [T]. 
 ```
 
 The arguments are as follows:
 
 (i) data_type:  The datatype is the type of dataset you wish to build an index. We support byte indices (signed int8 or unsigned uint8) or float indices. 
 
-(ii) data_file: The input data over which to build an index, in .bin format. The first 4 bytes represent number of points as integer. The next 4 bytes represent the dimension of data as integer. The following n*d*sizeof(T) bytes contain the contents of the data one data point in time. sizeof(T) is 1 for byte indices, and 4 for float indices. This will be read by the program as int8_t for signed indices, uint8_t for unsigned indices or float for float indices.
+(ii) metric: There are two primary metric types of distance supported: l2 and mips.
 
-(iii) index_prefix_path: the index will generate a few files, all beginning with the specified prefix path. For example, if you provide ~/index_test as the prefix path, build  generates files such as ~/index_test_pq_pivots.bin, ~/index_test_pq_compressed.bin, ~/index_test_disk.index, etc. There may be between 8 and 10 files generated with this prefix depending on how we construct the index.
+(iii) data_file: The input data over which to build an index, in .bin format. The first 4 bytes represent number of points as integer. The next 4 bytes represent the dimension of data as integer. The following n*d*sizeof(T) bytes contain the contents of the data one data point in time. sizeof(T) is 1 for byte indices, and 4 for float indices. This will be read by the program as int8_t for signed indices, uint8_t for unsigned indices or float for float indices.
 
-(iv) R: the degree of our graph index, typically between 60 and 150. Again, larger values will result in bigger indices (with longer indexing times), but better search quality. Try to ensure that the L value is at least the R value unless you need to build indices really quickly, but can somewhat compromise on quality. 
+(iv) index_prefix_path: the index will generate a few files, all beginning with the specified prefix path. For example, if you provide ~/index_test as the prefix path, build  generates files such as ~/index_test_pq_pivots.bin, ~/index_test_pq_compressed.bin, ~/index_test_disk.index, etc. There may be between 8 and 10 files generated with this prefix depending on how we construct the index.
 
-(v) L: the size of search list we maintain during index building. Typical values are between 75 to 200. Larger values will take more time to build but result in indices that provide higher recall for the same search parameters.
+(v) R: the degree of our graph index, typically between 60 and 150. Again, larger values will result in bigger indices (with longer indexing times), but better search quality. Try to ensure that the L value is at least the R value unless you need to build indices really quickly, but can somewhat compromise on quality. 
 
-(vi) B: bound on the memory footprint of the index at search time. Once built, the index will use up only the specified RAM limit, the rest will reside on disk. This will dictate how aggressively we compress the data vectors to store in memory. Larger will yield better performance at search time.
+(vi) L: the size of search list we maintain during index building. Typical values are between 75 to 200. Larger values will take more time to build but result in indices that provide higher recall for the same search parameters.
 
-(vii) M: Limit on the memory allowed for building the index. If you specify a value less than what is required to build the index in one pass, the index is  built using a divide and conquer approach so that  sub-graphs will fit in the RAM budget. The sub-graphs are  stitched together to build the overall index. This approach can be upto 1.5 times slower than building the index in one shot. Try to allocate as much memory as possible for index build as your RAM allows.
+(vii) B: bound on the memory footprint of the index at search time. Once built, the index will use up only the specified RAM limit, the rest will reside on disk. This will dictate how aggressively we compress the data vectors to store in memory. Larger will yield better performance at search time.
 
-(viii) T: number of threads used by the index build process. Since the code is highly parallel, the  indexing time improves almost linearly with the number of threads (subject to the cores available on the machine).
+(viii) M: Limit on the memory allowed for building the index. If you specify a value less than what is required to build the index in one pass, the index is  built using a divide and conquer approach so that  sub-graphs will fit in the RAM budget. The sub-graphs are  stitched together to build the overall index. This approach can be upto 1.5 times slower than building the index in one shot. Try to allocate as much memory as possible for index build as your RAM allows.
+
+(ix) T: number of threads used by the index build process. Since the code is highly parallel, the  indexing time improves almost linearly with the number of threads (subject to the cores available on the machine).
 
 To search the SSD-index, use the `tests/search_disk_index` program. 
 ----------------------------------------------------------------------------
 
 ```
-./tests/search_disk_index  [index_type<float/int8/uint8>]  [index_prefix_path]  [num_nodes_to_cache]  [num_threads]  [beamwidth (use 0 to optimize internally)]  [query_file.bin]  [truthset.bin (use "null" for none)]  [K]  [result_output_prefix]  [L1]  [L2] etc.
+./tests/search_disk_index  [index_type<float/int8/uint8>] [l2/mips] [index_prefix_path]  [num_nodes_to_cache]  [num_threads]  [beamwidth (use 0 to optimize internally)]  [query_file.bin]  [truthset.bin (use "null" for none)]  [K]  [result_output_prefix]  [L1]  [L2] etc.
 ```
 
 The arguments are as follows:
 
 (i) data type: same as (i) above in building index.
 
-(ii) index_prefix_path: same as (iii) above in building index.
+(ii) metric: There are two primary metric types of distance supported: l2 and mips.
 
-(iii) num_nodes_to_cache: our program stores the entire graph on disk. For faster search performance, we provide the support to cache a few nodes (which are closest to the starting point) in memory. 
+(iii) index_prefix_path: same as (iii) above in building index.
 
-(iv) num_threads: search using specified number of threads in parallel, one thread per query. More will result in more IOs, so find the balance depending on the bandwidth of the SSD.
+(iv) num_nodes_to_cache: our program stores the entire graph on disk. For faster search performance, we provide the support to cache a few nodes (which are closest to the starting point) in memory. 
 
-(v) beamwidth: maximum number of IO requests each query will issue per iteration of search code. Larger beamwidth williult in fewer IO round-trips per query, but might result in slightly higher number of IO requests to SSD per query. Specifying 0 will optimize the beamwidth depending on the number of threads performing search.
+(v) num_threads: search using specified number of threads in parallel, one thread per query. More will result in more IOs, so find the balance depending on the bandwidth of the SSD.
 
-(vi) query_file.bin: search on these queries, same format as data file (ii) above. The query file must be the same type as specified in (i).
+(vi) beamwidth: maximum number of IO requests each query will issue per iteration of search code. Larger beamwidth williult in fewer IO round-trips per query, but might result in slightly higher number of IO requests to SSD per query. Specifying 0 will optimize the beamwidth depending on the number of threads performing search.
 
-(vii) truthset.bin file. Must be in the following format, or specify "null": n, the number of queries (4 bytes) followed by d, the number of ground truth elements per query (4 bytes), followed by n*d entries per query representing the d closest IDs per query in integer format,  followed by n*d entries representing the corresponding distances (float). Total file size is 8 + 4*n*d + 4*n*d. The groundtruth file, if not available, can be calculated using our program, tests/utils/compute_groundtruth. If you just want to measure the latency numbers of search and output the nearest neighbors without calculating recall, enter "null".
+(vii) query_file.bin: search on these queries, same format as data file (ii) above. The query file must be the same type as specified in (i).
 
-(viii) K: measure recall@k, meaning the accuracy of retrieving top-k nearest neighbors.
+(viii) truthset.bin file. Must be in the following format, or specify "null": n, the number of queries (4 bytes) followed by d, the number of ground truth elements per query (4 bytes), followed by n*d entries per query representing the d closest IDs per query in integer format,  followed by n*d entries representing the corresponding distances (float). Total file size is 8 + 4*n*d + 4*n*d. The groundtruth file, if not available, can be calculated using our program, tests/utils/compute_groundtruth. If you just want to measure the latency numbers of search and output the nearest neighbors without calculating recall, enter "null".
 
-(ix) result output prefix: search results will be stored in files with specified prefix, in bin format.
+(ix) K: measure recall@k, meaning the accuracy of retrieving top-k nearest neighbors.
 
-(x, xi, ...) various search_list sizes to perform search with. Larger will result in slower latencies, but higher accuracies. Must be atleast the recall@ value in (vi).
+(x) result output prefix: search results will be stored in files with specified prefix, in bin format.
+
+(xi, xii, ...) various search_list sizes to perform search with. Larger will result in slower latencies, but higher accuracies. Must be atleast the recall@ value in (vi).
 
 
 **Usage for in-memory indices**
@@ -134,45 +138,49 @@ To generate index, use the `tests/build_memory_index` program.
 --------------------------------------------------------------
 
 ```
-./tests/build_memory_index  [data_type<int8/uint8/float>]  [data_file.bin]  [output_index_file]  [R]  [L]  [alpha]  [num_threads_to_use]
+./tests/build_memory_index  [data_type<int8/uint8/float>] [l2/mips] [data_file.bin]  [output_index_file]  [R]  [L]  [alpha]  [num_threads_to_use]
 ```
 
 The arguments are as follows:
 
 (i) data_type: same as (i) above in building disk index.
 
-(ii) data_file: same as (ii) above in building disk index, the input data file in .bin format of type int8/uint8/float.
+(ii) metric: There are two primary metric types of distance supported: l2 and mips.
 
-(iii) output_index_file: memory index will be saved here.
+(iii) data_file: same as (ii) above in building disk index, the input data file in .bin format of type int8/uint8/float.
 
-(iv) R: max degree of index: larger is typically better, range (50-150). Preferrably ensure that L is at least R.
+(iv) output_index_file: memory index will be saved here.
 
-(v) L: candidate_list_size for building index, larger is better (typical range: 75 to 200)
+(v) R: max degree of index: larger is typically better, range (50-150). Preferrably ensure that L is at least R.
 
-(vi) alpha: float value which determines how dense our overall graph will be, and diameter will be log of n base alpha (roughly). Typical values are between 1 to 1.5. 1 will yield sparsest graph, 1.5 will yield denser graphs.
+(vi) L: candidate_list_size for building index, larger is better (typical range: 75 to 200)
 
-(vii) number of threads to use: indexing uses specified number of threads.
+(vii) alpha: float value which determines how dense our overall graph will be, and diameter will be log of n base alpha (roughly). Typical values are between 1 to 1.5. 1 will yield sparsest graph, 1.5 will yield denser graphs.
+
+(viii) number of threads to use: indexing uses specified number of threads.
 
 
 To search the generated index, use the `tests/search_memory_index` program:
 ---------------------------------------------------------------------------
 
 ```
-./tests/search_memory_index  [index_type<float/int8/uint8>]  [data_file.bin]  [memory_index_path]  [query_file.bin]  [truthset.bin (use "null" for none)] [K]  [result_output_prefix]  [L1]  [L2] etc. 
+./tests/search_memory_index  [index_type<float/int8/uint8>] [l2/mips] [data_file.bin]  [memory_index_path]  [query_file.bin]  [truthset.bin (use "null" for none)] [K]  [result_output_prefix]  [L1]  [L2] etc. 
 ```
 
 The arguments are as follows:
 
 (i) data type: same as (i) above in building index.
 
-(ii) memory_index_path: enter path of index built (argument (iii) above in building memory index).
+(ii) metric: There are two primary metric types of distance supported: l2 and mips.
 
-(iii) query_bin: search on these queries, same format as data file (ii) above. The query file must be the same type as specified in (i).
+(iii) memory_index_path: enter path of index built (argument (iii) above in building memory index).
 
-(iv) Truthset file. Must be in the following format: n, the number of queries (4 bytes) followed by d, the number of ground truth elements per query (4 bytes), followed by n*d entries per query representing the d closest IDs per query in integer format,  followed by n*d entries representing the corresponding distances (float). Total file size is 8 + 4*n*d + 4*n*d. The groundtruth file, if not available, can be calculated using our program, tests/utils/compute_groundtruth.
+(iv) query_bin: search on these queries, same format as data file (ii) above. The query file must be the same type as specified in (i).
 
-(v) K: search for recall@k, meaning accuracy of retrieving top-k nearest neighbors.
+(v) Truthset file. Must be in the following format: n, the number of queries (4 bytes) followed by d, the number of ground truth elements per query (4 bytes), followed by n*d entries per query representing the d closest IDs per query in integer format,  followed by n*d entries representing the corresponding distances (float). Total file size is 8 + 4*n*d + 4*n*d. The groundtruth file, if not available, can be calculated using our program, tests/utils/compute_groundtruth.
 
-(vi) result output prefix: will search and store the computed results in the files with specified prefix in bin format.
+(vi) K: search for recall@k, meaning accuracy of retrieving top-k nearest neighbors.
 
-(vii, viii, ...) various search_list sizes to perform search with. Larger will result in slower latencies, but higher accuracies. Must be atleast the recall@ value in (vi).
+(vii) result output prefix: will search and store the computed results in the files with specified prefix in bin format.
+
+(viii, ix, ...) various search_list sizes to perform search with. Larger will result in slower latencies, but higher accuracies. Must be atleast the recall@ value in (vi).
