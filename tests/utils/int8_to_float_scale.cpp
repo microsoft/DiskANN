@@ -4,23 +4,23 @@
 #include <iostream>
 #include "utils.h"
 
-void block_convert(std::ofstream& writer, int8_t* write_buf,
-                   std::ifstream& reader, float* read_buf, _u64 npts,
+void block_convert(std::ofstream& writer, float* write_buf,
+                   std::ifstream& reader, int8_t* read_buf, _u64 npts,
                    _u64 ndims, float bias, float scale) {
-  reader.read((char*) read_buf, npts * ndims * sizeof(float));
+  reader.read((char*) read_buf, npts * ndims * sizeof(int8_t));
 
   for (_u64 i = 0; i < npts; i++) {
     for (_u64 d = 0; d < ndims; d++) {
       write_buf[d + i * ndims] =
-          (int8_t)((read_buf[d + i * ndims] - bias) * (254.0 / scale));
+          (((float)read_buf[d + i * ndims] - bias) * scale);
     }
   }
-  writer.write((char*) write_buf, npts * ndims);
+  writer.write((char*) write_buf, npts * ndims * sizeof(float));
 }
 
 int main(int argc, char** argv) {
   if (argc != 5) {
-    std::cout << "Usage: " << argv[0] << "  input_bin  output_tsv  bias  scale"
+    std::cout << "Usage: " << argv[0] << "  input-int8.bin  output-float.bin  bias  scale"
               << std::endl;
     exit(-1);
   }
@@ -39,8 +39,8 @@ int main(int argc, char** argv) {
   _u64 nblks = ROUND_UP(npts, blk_size) / blk_size;
 
   std::ofstream writer(argv[2], std::ios::binary);
-  auto          read_buf = new float[blk_size * ndims];
-  auto          write_buf = new int8_t[blk_size * ndims];
+  auto          read_buf = new int8_t[blk_size * ndims];
+  auto          write_buf = new float[blk_size * ndims];
   float         bias = atof(argv[3]);
   float         scale = atof(argv[4]);
 
