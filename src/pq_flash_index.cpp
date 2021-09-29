@@ -1214,25 +1214,46 @@ namespace diskann {
 // range search returns results of all neighbors within distance of range. indices and distances need to be pre-allocated of size l_search
 // and the return value is the number of matching hits.
 
-    template<typename T>
+template<typename T>
   _u32 PQFlashIndex<T>::range_search(const T *query1, const double range,
-                                           const _u64 l_search, _u64* indices, float* distances,
-                                           const _u64  beam_width,
-                                           QueryStats *stats) {
-_u32 res_count = 0;
-this->cached_beam_search(query1, l_search, l_search, indices, distances, beam_width, stats);
-for (_u32 i = 0; i < l_search; i++) {
-  //std::cout<<distances[i]<<" ";
-  if (distances[i] > (float) range) {
-    res_count = i;
-    break;
-  } else if (i == l_search -1)
-  res_count = l_search;
-}
-//std::cout<<"\n\n"<<std::endl;
-//std::cout<<res_count<< std::endl;
-  return res_count; 
-}
+                                     const _u64          min_l_search,
+                                     const _u64          max_l_search,
+                                     std::vector<_u64> & indices,
+                                     std::vector<float> &distances,
+                                     const _u64          min_beam_width,
+                                     QueryStats *        stats) {
+    _u32 res_count = 0;
+
+    bool stop_flag = false;
+
+    _u32 l_search = min_l_search;  // starting size of the candidate list
+    while (!stop_flag) {
+      indices.resize(l_search);
+      distances.resize(l_search);
+      _u64 cur_bw =
+          min_beam_width > (l_search / 5) ? min_beam_width : l_search / 5;
+      cur_bw = (cur_bw > 100) ? 100 : cur_bw;
+      for (auto &x : distances)
+        x = std::numeric_limits<float>::max();
+      this->cached_beam_search(query1, l_search, l_search, indices.data(),
+                               distances.data(), cur_bw, stats);
+      for (_u32 i = 0; i < l_search; i++) {
+        if (distances[i] > (float) range) {
+          res_count = i;
+          break;
+        } else if (i == l_search - 1)
+          res_count = l_search;
+      }
+      if (res_count < (_u32)(l_search / 2.0))
+        stop_flag = true;
+      l_search = l_search * 2;
+      if (l_search > max_l_search)
+        stop_flag = true;
+    }
+    indices.resize(res_count);
+    distances.resize(res_count);
+    return res_count;
+  }
 
 #ifdef EXEC_ENV_OLS
   template<typename T>
