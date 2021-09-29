@@ -117,9 +117,12 @@ namespace diskann {
 
 
   DISKANN_DLLEXPORT _u32 range_search(const T *query1, const double range,
-                                           const _u64 l_search, _u64* indices, float* distances,
-                                           const _u64  beam_width,
-                                           QueryStats *stats = nullptr);
+                                     const _u64          min_l_search,
+                                     const _u64          max_l_search,
+                                     std::vector<_u64> & indices,
+                                     std::vector<float> &distances,
+                                     const _u64          min_beam_width,
+                                     QueryStats *        stats);
 
     std::shared_ptr<AlignedFileReader> &reader;
    protected:
