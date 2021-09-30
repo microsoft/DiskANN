@@ -178,38 +178,46 @@ struct DiskANNIndex {
     return std::make_pair(ids, dists);
   }
 
-  auto batch_range_search_numpy_input(
+auto batch_range_search_numpy_input(
       py::array_t<T, py::array::c_style | py::array::forcecast> &queries,
       const _u64 dim, const _u64 num_queries, const double range,
-      const _u64 l_search, const _u64 beam_width, const int num_threads) {
-
-    py::array_t<unsigned> ids(num_queries * l_search);
-    py::array_t<float>    dists(num_queries * l_search);
+      const _u64 min_list_size, const _u64 max_list_size, const _u64 beam_width,
+      const int num_threads) {
     py::array_t<unsigned> offsets(num_queries + 1);
 
-    std::vector<_u64> u64_ids(num_queries * l_search);
+    std::vector<std::vector<_u64>>  u64_ids(num_queries);
+    std::vector<std::vector<float>> dists(num_queries);
 
     auto offsets_mutable = offsets.mutable_unchecked();
     offsets_mutable(0) = 0;
 
 #pragma omp parallel for schedule(dynamic, 1)
     for (_u64 i = 0; i < num_queries; i++) {
-      offsets_mutable(i + 1) = pq_flash_index->range_search(
-          queries.data(i), range, l_search, u64_ids.data() + i * l_search,
-          dists.mutable_data(i * l_search), beam_width);
+      _u32 res_count = pq_flash_index->range_search(
+          queries.data(i), range, min_list_size, max_list_size, u64_ids[i],
+          dists[i], beam_width);
+      offsets_mutable(i + 1) = res_count;
     }
-    
+
+    uint64_t total_res_count = 0;
+    for (_u64 i = 0; i < num_queries; ++i) {
+      total_res_count += offsets_mutable(i + 1);
+    }
+
+    py::array_t<unsigned> ids(total_res_count);
+    py::array_t<float>    res_dists(total_res_count);
+
     auto   ids_mutable = ids.mutable_unchecked();
-    auto   dists_mutable = dists.mutable_unchecked();
+    auto   res_dists_mutable = res_dists.mutable_unchecked();
     size_t pos = 0;
     for (_u64 i = 0; i < num_queries; ++i) {
-      for (_u64 j = 0; j < offsets_mutable(i+1); ++j) {
-        ids_mutable(pos) = (unsigned) u64_ids[i * l_search + j];
-        dists_mutable(pos++) = dists_mutable(i * l_search + j);
+      for (_u64 j = 0; j < offsets_mutable(i + 1); ++j) {
+        ids_mutable(pos) = (unsigned) u64_ids[i][j];
+        res_dists_mutable(pos++) = dists[i][j];
       }
       offsets_mutable(i + 1) = offsets_mutable(i) + offsets_mutable(i + 1);
     }
-    return std::make_pair(offsets, std::make_pair(ids, dists));
+    return std::make_pair(offsets, std::make_pair(ids, res_dists));
   }
 };
 
@@ -425,7 +433,7 @@ PYBIND11_MODULE(diskannpy, m) {
       .def("batch_range_search_numpy_input",
            &DiskANNIndex<float>::batch_range_search_numpy_input,
            py::arg("queries"), py::arg("dim"), py::arg("num_queries"),
-           py::arg("range"), py::arg("l_search"), py::arg("beam_width"),
+           py::arg("range"), py::arg("min_list_size"), py::arg("max_list_size"), py::arg("beam_width"),
            py::arg("num_threads"))
       .def(
           "build",
@@ -475,7 +483,7 @@ PYBIND11_MODULE(diskannpy, m) {
       .def("batch_range_search_numpy_input",
            &DiskANNIndex<int8_t>::batch_range_search_numpy_input,
            py::arg("queries"), py::arg("dim"), py::arg("num_queries"),
-           py::arg("range"), py::arg("l_search"), py::arg("beam_width"),
+           py::arg("range"), py::arg("min_list_size"), py::arg("max_list_size"), py::arg("beam_width"),
            py::arg("num_threads"))
       .def(
           "build",
@@ -527,7 +535,7 @@ PYBIND11_MODULE(diskannpy, m) {
       .def("batch_range_search_numpy_input",
            &DiskANNIndex<uint8_t>::batch_range_search_numpy_input,
            py::arg("queries"), py::arg("dim"), py::arg("num_queries"),
-           py::arg("range"), py::arg("l_search"), py::arg("beam_width"),
+           py::arg("range"), py::arg("min_list_size"), py::arg("max_list_size"), py::arg("beam_width"),
            py::arg("num_threads"))
       .def(
           "build",

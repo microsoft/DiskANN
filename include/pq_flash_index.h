@@ -112,7 +112,7 @@ namespace diskann {
                                      std::vector<_u64> & indices,
                                      std::vector<float> &distances,
                                      const _u64          min_beam_width,
-                                     QueryStats *        stats);
+                                     QueryStats *        stats = nullptr);
 
     DISKANN_DLLEXPORT Metric get_metric();
 
