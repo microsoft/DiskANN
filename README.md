@@ -116,7 +116,7 @@ The arguments are as follows:
 
 (iv) num_nodes_to_cache: our program stores the entire graph on disk. For faster search performance, we provide the support to cache a few nodes (which are closest to the starting point) in memory. 
 
-(v) num_threads: search using specified number of threads in parallel, one thread per query. More will result in more IOs, so find the balance depending on the bandwidth of the SSD.
+(v) num_threads: search using specified number of threads in parallel, one thread per query. More threads will result in more IOs/second across the system, so find the balance depending on the bandwidth of the SSD.
 
 (vi) beamwidth: maximum number of IO requests each query will issue per iteration of search code. Larger beamwidth williult in fewer IO round-trips per query, but might result in slightly higher number of IO requests to SSD per query. Specifying 0 will optimize the beamwidth depending on the number of threads performing search.
 
