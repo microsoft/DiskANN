@@ -14,6 +14,12 @@ namespace {
   typedef struct io_event io_event_t;
   typedef struct iocb     iocb_t;
 
+  // execute_io read file using the way fio does,
+  // iops tested by fio with num-jobs=4 can reach the peak,
+  // we can also create 4 io_context_t, and then parallel the execute_io.
+  // Note:
+  //    1, file should be opened with `O_DIRECT` flag;
+  //    2, the bufs in read_reqs must be aligned to 512 bytes.
   void execute_io(io_context_t ctx, int fd, std::vector<AlignedRead> &read_reqs,
                   uint64_t n_retries = 0) {
 #ifdef DEBUG
@@ -26,68 +32,65 @@ namespace {
     }
 #endif
 
-    // break-up requests into chunks of size MAX_EVENTS each
-    uint64_t n_iters = ROUND_UP(read_reqs.size(), MAX_EVENTS) / MAX_EVENTS;
-    for (uint64_t iter = 0; iter < n_iters; iter++) {
-      uint64_t n_ops =
-          std::min((uint64_t) read_reqs.size() - (iter * MAX_EVENTS),
-                   (uint64_t) MAX_EVENTS);
-      std::vector<iocb_t *>    cbs(n_ops, nullptr);
-      std::vector<io_event_t>  evts(n_ops);
-      std::vector<struct iocb> cb(n_ops);
-      for (uint64_t j = 0; j < n_ops; j++) {
-        io_prep_pread(cb.data() + j, fd, read_reqs[j + iter * MAX_EVENTS].buf,
-                      read_reqs[j + iter * MAX_EVENTS].len,
-                      read_reqs[j + iter * MAX_EVENTS].offset);
+    size_t wait_nr = 32;
+    size_t total = read_reqs.size();
+    size_t done = 0;
+    size_t submitted = 0;
+    size_t to_submit_num = MAX_EVENTS;
+
+    std::vector<iocb_t *>    cbs(total, nullptr);
+    std::vector<io_event_t>  evts(total);
+    std::vector<struct iocb> cb(total);
+
+    //#pragma omp parallel for
+    for (auto i = 0; i < total; i++) {
+      io_prep_pread(cb.data() + i,
+                    fd,
+                    read_reqs[i].buf,
+                    read_reqs[i].len,
+                    read_reqs[i].offset);
+      cbs[i] = cb.data() + i;
+    }
+
+    while (done < total) {
+      auto upper = total - submitted;
+      if (to_submit_num > upper) {
+        to_submit_num = upper;
+      }
+      if (to_submit_num > MAX_EVENTS) {
+        to_submit_num = MAX_EVENTS;
       }
 
-      // initialize `cbs` using `cb` array
-      //
-
-      for (uint64_t i = 0; i < n_ops; i++) {
-        cbs[i] = cb.data() + i;
-      }
-
-      uint64_t n_tries = 0;
-      while (n_tries <= n_retries) {
-        // issue reads
-        int64_t ret = io_submit(ctx, (int64_t) n_ops, cbs.data());
-        // if requests didn't get accepted
-        if (ret != (int64_t) n_ops) {
-          std::cerr << "io_submit() failed; returned " << ret
-                    << ", expected=" << n_ops << ", ernno=" << errno << "="
-                    << ::strerror(-ret) << ", try #" << n_tries + 1;
-          std::cout << "ctx: " << ctx << "\n";
-          exit(-1);
-        } else {
-          // wait on io_getevents
-          ret = io_getevents(ctx, (int64_t) n_ops, (int64_t) n_ops, evts.data(),
-                             nullptr);
-          // if requests didn't complete
-          if (ret != (int64_t) n_ops) {
-            std::cerr << "io_getevents() failed; returned " << ret
-                      << ", expected=" << n_ops << ", ernno=" << errno << "="
-                      << ::strerror(-ret) << ", try #" << n_tries + 1;
+      if (to_submit_num > 0) {
+          auto r_submit = io_submit(ctx, to_submit_num, cbs.data() + submitted);
+          if (r_submit < 0) {
+            std::cerr << "io_submit() failed; returned " << r_submit
+                      << ", ernno=" << errno << "=" << ::strerror(-r_submit)
+                      << std::endl;
+            std::cout << "ctx: " << ctx << "\n";
             exit(-1);
-          } else {
-            break;
-          }
-        }
       }
-      // disabled since req.buf could be an offset into another buf
-      /*
-      for (auto &req : read_reqs) {
-        // corruption check
-        assert(malloc_usable_size(req.buf) >= req.len);
-      }
-      */
-    }
 
-    /*
-    for(unsigned i=0;i<64;i++){
-      std::cout << *((unsigned*)read_reqs[0].buf + i) << " ";
+      submitted += r_submit;
+      }
+
+      auto pending = submitted - done;
+      if (wait_nr > pending) {
+        wait_nr = pending;
+      }
+
+      auto r_done = io_getevents(ctx, wait_nr, MAX_EVENTS, evts.data() + done, nullptr);
+      if (r_done < 0) {
+        std::cerr << "io_getevents() failed; returned " << r_done
+                  << ", ernno=" << errno << "="
+                  << ::strerror(-r_done)
+                  << std::endl;
+        exit(-1);
+      }
+
+      to_submit_num = r_done;
+      done += r_done;
     }
-    std::cout << std::endl;*/
   }
 }  // namespace
 
