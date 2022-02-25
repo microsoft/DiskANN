@@ -44,7 +44,7 @@ function(checkEnvAndSetLocalVar env_var msg local_var)
 endfunction()
 
 	
-
+include_directories(include)
 #MKL Config
 if (MSVC)
 	checkEnvAndSetLocalVar("INTEL_ROOT" "Please install Intel MKL libraries and set the env variable INTEL_ROOT to the intel software directory. Should be similar to: C:\\Program Files (x86)\\IntelSWTools\\compilers_and_libraries\\windows\\. " "INTEL_ROOT")
@@ -52,18 +52,25 @@ if (MSVC)
 	add_compile_options(/arch:AVX2 /Qpar)
 	link_libraries("${INTEL_ROOT}/mkl/lib/intel64/mkl_core_dll.lib" "${INTEL_ROOT}/mkl/lib/intel64/mkl_rt.lib"  "${INTEL_ROOT}/mkl/lib/intel64/mkl_intel_thread_dll.lib" "${INTEL_ROOT}/compiler/lib/intel64/libiomp5md.lib"  "${INTEL_ROOT}/mkl/lib/intel64/mkl_intel_ilp64_dll.lib" "${INTEL_ROOT}/mkl/lib/intel64/mkl_sequential_dll.lib")
 	checkEnvAndSetLocalVar("BOOST_ROOT" "Please install Boost (1.71 or greater) from www.boost.org and set the env var BOOST_ROOT to the boost directory." "BOOST_ROOT")
-
+	include_directories(${INTEL_ROOT}/include)
+	include_directories(${MKL_ROOT}/include)
 else()
-	set(INTEL_ROOT /opt/intel/compilers_and_libraries/linux)
-	set(MKL_ROOT ${INTEL_ROOT}/mkl)
+	# expected path for manual intel mkl installs
+	set(MKL_ROOT /opt/intel/compilers_and_libraries/mkl/latest CACHE PATH "Intel mkl libraries and includes root path")
+	link_directories(${MKL_ROOT}/lib/intel64)
+	include_directories(${MKL_ROOT}/include)
+
+	# expected path for apt packaged intel mkl installs
+	link_directories(/usr/lib/x86_64-linux-gnu/mkl)
+	include_directories(/usr/include/mkl)
+
+	# compile flags and link libraries
         add_compile_options(-m64 -Wl,--no-as-needed) 
 	link_libraries(mkl_intel_ilp64 mkl_intel_thread mkl_core iomp5 pthread m dl)
-	link_directories(${INTEL_ROOT}/lib/intel64 ${MKL_ROOT}/lib/intel64)
 endif()
+include_directories(${BOOST_ROOT})
 
 add_definitions(-DMKL_ILP64)
-include_directories(include ${INTEL_ROOT}/include ${MKL_ROOT}/include ${BOOST_ROOT})
-
 
 #Main compiler/linker settings 
 if(MSVC)
