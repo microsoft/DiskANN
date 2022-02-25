@@ -8,7 +8,7 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v2
     - run: |
-        sudo apt install cmake g++ libaio-dev libgoogle-perftools-dev clang-format-12 libboost-dev libmkl-full-dev
+        sudo apt install cmake g++ libaio-dev libgoogle-perftools-dev clang-format libboost-dev libmkl-full-dev
         mkdir build && cd build && cmake .. && make -j
   build-ubuntu-18:
     runs-on: 'ubuntu-18.04'
@@ -16,9 +16,8 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v2
     - run: |
-        sudo apt install cmake g++ libaio-dev libgoogle-perftools-dev clang-format-4.0 libboost-dev
+        sudo apt install cmake g++ libaio-dev libgoogle-perftools-dev clang-format libboost-dev
         wget https://registrationcenter-download.intel.com/akdlm/irc_nas/18487/l_BaseKit_p_2022.1.2.146.sh
         sudo sh l_BaseKit_p_2022.1.2.146.sh -a --components intel.oneapi.lin.mkl.devel --action install --install-dir /opt/intel/compilers_and_libraries --eula accept -s
-        ls -R /opt/intel
         mkdir build && cd build && cmake .. && make -j
 

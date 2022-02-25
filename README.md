@@ -14,13 +14,23 @@ See [guidelines](CONTRIBUTING.md) for contributing to this project.
 
 ## Linux build:
 
-Install the following packages through apt-get, and Intel MKL either by downloading the installer or using [apt](https://software.intel.com/en-us/articles/installing-intel-free-libs-and-python-apt-repo) (we tested with build 2019.4-070).
-```
-sudo apt install cmake g++ libaio-dev libgoogle-perftools-dev clang-format-4.0 libboost-dev
+Install the following packages through apt-get
+
+```bash
+sudo apt install cmake g++ libaio-dev libgoogle-perftools-dev clang-format libboost-dev
 ```
 
-Build
+### Install Intel MKL
+#### Ubuntu 20.04
+```bash
+sudo apt install libmkl-full-dev
 ```
+
+#### Earlier versions of Ubuntu
+Install Intel MKL either by downloading the installer or using [apt](https://software.intel.com/en-us/articles/installing-intel-free-libs-and-python-apt-repo) (we tested with build 2019.4-070 and 2022.1.2.146).
+
+### Build
+```bash
 mkdir build && cd build && cmake .. && make -j 
 ```
 
