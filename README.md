@@ -1,8 +1,8 @@
 # DiskANN
 
 The goal of the project is to build scalable, performant and cost-effective approximate nearest neighbor search algorithms.
-The initial release has the in-memory version of the [DiskANN paper](https://papers.nips.cc/paper/9527-rand-nsg-fast-accurate-billion-point-nearest-neighbor-search-on-a-single-node.pdf) published in NeurIPS 2019. 
-This code reuses and builds upon some of the [code for NSG](https://github.com/ZJULearning/nsg) algoritm.
+This release has the code from the [DiskANN paper](https://papers.nips.cc/paper/9527-rand-nsg-fast-accurate-billion-point-nearest-neighbor-search-on-a-single-node.pdf) published in NeurIPS 2019, and improvements. 
+This code reuses and builds upon some of the [code for NSG](https://github.com/ZJULearning/nsg) algorithm.
 
 This project has adopted the [Microsoft Open Source Code of Conduct](https://opensource.microsoft.com/codeofconduct/).
 For more information see the [Code of Conduct FAQ](https://opensource.microsoft.com/codeofconduct/faq/) or
