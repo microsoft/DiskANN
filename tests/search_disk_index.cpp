@@ -211,7 +211,7 @@ int search_disk_index(int argc, char** argv) {
     diskann::cout << std::endl;
   diskann::cout
       << "==============================================================="
-         "==========================================="
+         "======================================================="
       << std::endl;
 
   std::vector<std::vector<uint32_t>> query_result_ids(Lvec.size());

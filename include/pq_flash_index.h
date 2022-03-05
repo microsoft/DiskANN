@@ -18,10 +18,11 @@
 #include "utils.h"
 #include "windows_customizations.h"
 
+#define MAX_GRAPH_DEGREE 512
 #define MAX_N_CMPS 16384
 #define SECTOR_LEN 4096
 #define MAX_N_SECTOR_READS 128
-#define MAX_PQ_CHUNKS 128
+#define MAX_PQ_CHUNKS 256
 
 namespace diskann {
   template<typename T>
@@ -33,7 +34,7 @@ namespace diskann {
         nullptr;          // MUST BE AT LEAST [MAX_N_SECTOR_READS * SECTOR_LEN]
     _u64 sector_idx = 0;  // index of next [SECTOR_LEN] scratch to use
 
-    float *aligned_scratch = nullptr;  // MUST BE AT LEAST [aligned_dim]
+
     float *aligned_pqtable_dist_scratch =
         nullptr;  // MUST BE AT LEAST [256 * NCHUNKS]
     float *aligned_dist_scratch =
