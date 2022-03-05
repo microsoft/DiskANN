@@ -224,22 +224,19 @@ namespace diskann {
         // scratch.coord_scratch = new T[MAX_N_CMPS * this->aligned_dim];
         // //Gopal. Commenting out the reallocation!
         diskann::alloc_aligned((void **) &scratch.sector_scratch,
-                               MAX_N_SECTOR_READS * SECTOR_LEN, SECTOR_LEN);
-        diskann::alloc_aligned((void **) &scratch.aligned_scratch,
-                               256 * sizeof(float), 256);
+                               (_u64) MAX_N_SECTOR_READS * (_u64) SECTOR_LEN, SECTOR_LEN);
         diskann::alloc_aligned((void **) &scratch.aligned_pq_coord_scratch,
-                               25600 * sizeof(_u8), 256);
+                               (_u64) MAX_GRAPH_DEGREE * (_u64) MAX_PQ_CHUNKS * sizeof(_u8), 256);
         diskann::alloc_aligned((void **) &scratch.aligned_pqtable_dist_scratch,
-                               25600 * sizeof(float), 256);
+                               256 * (_u64) MAX_PQ_CHUNKS * sizeof(float), 256);
         diskann::alloc_aligned((void **) &scratch.aligned_dist_scratch,
-                               512 * sizeof(float), 256);
+                               (_u64) MAX_GRAPH_DEGREE * sizeof(float), 256);
         diskann::alloc_aligned((void **) &scratch.aligned_query_T,
                                this->aligned_dim * sizeof(T), 8 * sizeof(T));
         diskann::alloc_aligned((void **) &scratch.aligned_query_float,
                                this->aligned_dim * sizeof(float),
                                8 * sizeof(float));
 
-        memset(scratch.aligned_scratch, 0, 256 * sizeof(float));
         memset(scratch.coord_scratch, 0, MAX_N_CMPS * this->aligned_dim);
         memset(scratch.aligned_query_T, 0, this->aligned_dim * sizeof(T));
         memset(scratch.aligned_query_float, 0,
@@ -267,7 +264,6 @@ namespace diskann {
       auto &scratch = data.scratch;
       diskann::aligned_free((void *) scratch.coord_scratch);
       diskann::aligned_free((void *) scratch.sector_scratch);
-      diskann::aligned_free((void *) scratch.aligned_scratch);
       diskann::aligned_free((void *) scratch.aligned_pq_coord_scratch);
       diskann::aligned_free((void *) scratch.aligned_pqtable_dist_scratch);
       diskann::aligned_free((void *) scratch.aligned_dist_scratch);
@@ -649,6 +645,14 @@ namespace diskann {
         << " #aligned_dim: " << aligned_dim << " #chunks: " << n_chunks
         << std::endl;
 
+    if (n_chunks > MAX_PQ_CHUNKS) {
+              std::stringstream stream;
+        stream << "Error loading index. Ensure that max PQ bytes for in-memory PQ data does not exceed "
+               << MAX_PQ_CHUNKS << std::endl;
+        throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
+                                    __LINE__);
+    }
+
     std::string disk_pq_pivots_path = this->disk_index_file + "_pq_pivots.bin";
     if (file_exists(disk_pq_pivots_path)) {
       use_disk_index_pq = true;
@@ -714,6 +718,14 @@ namespace diskann {
     READ_U64(index_metadata, max_node_len);
     READ_U64(index_metadata, nnodes_per_sector);
     max_degree = ((max_node_len - disk_bytes_per_point) / sizeof(unsigned)) - 1;
+
+    if (max_degree > MAX_GRAPH_DEGREE) {
+              std::stringstream stream;
+        stream << "Error loading index. Ensure that max graph degree (R) does not exceed "
+               << MAX_GRAPH_DEGREE << std::endl;
+        throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
+                                    __LINE__);
+    }
 
     diskann::cout << "Disk-Index File Meta-data: ";
     diskann::cout << "# nodes per sector: " << nnodes_per_sector;
@@ -869,10 +881,6 @@ namespace diskann {
 
     // reset query
     query_scratch->reset();
-
-    // scratch space to compute distances between FP32 Query and INT8 data
-    float *scratch = query_scratch->aligned_scratch;
-    _mm_prefetch((char *) scratch, _MM_HINT_T0);
 
     // pointers to buffers for data
     T *   data_buf = query_scratch->coord_scratch;
