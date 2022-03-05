@@ -10,6 +10,13 @@ if(MSVC)
 	target_link_libraries(fvecs_to_bin optimized ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE}/diskann_dll.lib)
 endif()
 
+add_executable(rand_data_gen rand_data_gen.cpp)
+if(MSVC)
+	target_link_options(rand_data_gen PRIVATE /MACHINE:x64)
+	target_link_libraries(rand_data_gen debug ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG}/diskann_dll.lib)
+	target_link_libraries(rand_data_gen optimized ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE}/diskann_dll.lib)
+endif()
+
 add_executable(float_bin_to_int8 float_bin_to_int8.cpp)
 if(MSVC)
 	target_link_options(float_bin_to_int8 PRIVATE /MACHINE:x64)
