@@ -56,8 +56,9 @@ if (MSVC)
 	include_directories(${MKL_ROOT}/include)
 else()
 	# expected path for manual intel mkl installs
-	set(MKL_ROOT /opt/intel/compilers_and_libraries/mkl/latest CACHE PATH "Intel mkl libraries and includes root path")
-	link_directories(${MKL_ROOT}/lib/intel64)
+	set(OMP_PATH /opt/intel/oneapi/compiler/2022.0.2/linux/compiler/lib/intel64_lin/)
+	set(MKL_ROOT /opt/intel/oneapi/mkl/latest)
+	link_directories(${OMP_PATH} ${MKL_ROOT}/lib/intel64)
 	include_directories(${MKL_ROOT}/include)
 
 	# expected path for apt packaged intel mkl installs
