@@ -17,6 +17,6 @@ jobs:
     - run: |
         sudo apt install cmake g++ libaio-dev libgoogle-perftools-dev clang-format libboost-dev
         wget https://registrationcenter-download.intel.com/akdlm/irc_nas/18487/l_BaseKit_p_2022.1.2.146.sh
-        sudo sh l_BaseKit_p_2022.1.2.146.sh -a --components intel.oneapi.lin.mkl.devel --action install --install-dir /opt/intel/compilers_and_libraries --eula accept -s
+        sudo sh l_BaseKit_p_2022.1.2.146.sh -a --components intel.oneapi.lin.mkl.devel --action install --eula accept -s
         mkdir build && cd build && cmake .. && make -j
 
