@@ -310,14 +310,12 @@ int main(int argc, char** argv) {
   if (argc < 12) {
     diskann::cout
         << "Usage: " << argv[0]
-        << "  [index_type<float/int8/uint8>]  [dist_fn<l2/mips>] "
-           "[index_prefix_path] "
-           " [num_nodes_to_cache]  [num_threads]  [beamwidth (use 0 to "
-           "optimize internally)] "
-           " [query_file.bin]  [truthset.bin (use \"null\" for none)] "
-           " [K]  [result_output_prefix] "
-           " [L1]  [L2] etc.  See README for more information on parameters."
-        << std::endl;
+        << "   index_type<float/int8/uint8>   dist_fn<l2/mips>   "
+           "index_prefix_path   num_nodes_to_cache   "
+           "T(num_threads)   W(beamwidth)   "
+           "query_file.bin   truthset.bin(\"null\" for none)   "
+           "K   result_output_prefix   L1   L2 ..."
+           << std::endl;
     exit(-1);
   }
   if (std::string(argv[1]) == std::string("float"))
