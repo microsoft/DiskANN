@@ -50,13 +50,7 @@ int block_write_int8(std::ofstream& writer, _u64 ndims, _u64 npts,
       vec[d] = vec[d] * norm / std::sqrt(sum);
     
     for (_u64 d = 0; d < ndims; ++d) {
-      int rounded = std::round<int>(vec[d]);
-      if (rounded < -128)
-        vec_T[d] = -128; 
-      else if (rounded > 127)
-        vec_T[d] = 127;
-      else 
-        vec_T[d] = rounded;
+      vec_T[d] = std::round<int>(vec[d]);
     }
     
     writer.write((char*) vec_T, ndims * sizeof(int8_t));
@@ -86,13 +80,7 @@ int block_write_uint8(std::ofstream& writer, _u64 ndims, _u64 npts,
       vec[d] = vec[d] * norm / std::sqrt(sum);
     
     for (_u64 d = 0; d < ndims; ++d) {
-      int rounded = 128 + std::round<int>(vec[d]);
-      if (rounded < 0)
-        vec_T[d] = 0; 
-      else if (rounded > 255)
-        vec_T[d] = 255;
-      else 
-        vec_T[d] = rounded;
+      vec_T[d] = 128 + std::round<int>(vec[d]);
     }
 
     writer.write((char*) vec_T, ndims * sizeof(uint8_t));
@@ -106,7 +94,7 @@ int block_write_uint8(std::ofstream& writer, _u64 ndims, _u64 npts,
 int main(int argc, char** argv) {
   if (argc != 6) {
     std::cout << argv[0]
-              << "<float/int8/uint8> ndims npts norm output.bin"
+              << " <float/int8/uint8> ndims npts norm output.bin"
               << std::endl;
     exit(-1);
   }
@@ -121,6 +109,19 @@ int main(int argc, char** argv) {
   _u64  ndims = atoi(argv[2]);
   _u64  npts = atoi(argv[3]);
   float norm = atof(argv[4]);
+
+  if (norm <= 0.0) {
+    std::cerr << "Error: Norm must be a positive number" << std::endl;
+    return -1;
+  }
+
+  if ((std::string(argv[1]) == std::string("int8"))
+   || (std::string(argv[1]) == std::string("uint8"))) {
+     if (norm > 127) {
+       std::cerr << "Error: for in8/uint8 datatypes, L2 norm can not be greater than 127" << std::endl;
+       return -1;
+     }
+   }
 
   std::ofstream writer(argv[5], std::ios::binary);
   auto          npts_s32 = (_u32) npts;
