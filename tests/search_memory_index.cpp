@@ -175,12 +175,13 @@ int main(int argc, char** argv) {
   if (argc < 11) {
     std::cout
         << "Usage: " << argv[0]
-        << "  [index_type<float/int8/uint8>]  [dist_fn (l2/mips/fast_l2)] "
-           "[data_file.bin]  "
-           "[memory_index_path]  [num_threads] "
-           "[query_file.bin]  [truthset.bin (use \"null\" for none)] "
-           " [K] [result_output_prefix]"
-           " [L1]  [L2] etc. See README for more information on parameters. "
+        << "   index_type<float/int8/uint8>   "
+           "dist_fn<l2/mips/fast_l2>   "
+           "data_file.bin   memory_index_path   "
+           "T(num_threads)   query_file.bin   "
+           "truthset.bin(\"null\" for none)   "
+           "K   result_output_prefix   "
+           "L1   L2 ... \n"
         << std::endl;
     exit(-1);
   }

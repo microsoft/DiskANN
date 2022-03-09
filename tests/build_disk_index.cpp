@@ -19,13 +19,12 @@ bool build_index(const char* dataFilePath, const char* indexFilePath,
 int main(int argc, char** argv) {
   if (argc != 11) {
     std::cout << "Usage: " << argv[0]
-              << "  [data_type<float/int8/uint8>]  [dist_fn: l2/mips] "
-                 "[data_file.bin]  "
-                 "[index_prefix_path]  "
-                 "[R]  [L]  [B]  [M]  [T] [PQ_disk_bytes (for very large "
-                 "dimensionality, use 0 for full vectors)]. See README for "
-                 "more information on "
-                 "parameters."
+              << "   data_type<float/int8/uint8>   dist_fn<l2/mips>   "
+                 "data_file.bin   index_prefix_path  "
+                 "R(graph degree)   L(build complexity)   "
+                 "B(search memory allocation in GB)   "
+                 "M(build memory allocation in GB)   "
+                 "T(#threads)   PQ_disk_bytes"
               << std::endl;
   } else {
     diskann::Metric metric = diskann::Metric::L2;
