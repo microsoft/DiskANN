@@ -4,13 +4,12 @@
 #include <iostream>
 #include "utils.h"
 
-template<class T>
-void block_convert(std::ifstream& reader, std::ofstream& writer, _u64 npts,
+void block_convert_float(std::ifstream& reader, std::ofstream& writer, _u64 npts,
                    _u64 ndims) {
-  auto read_buf = new T[4 * npts * (ndims + 1)];
+  auto read_buf = new float[npts * (ndims + 1)];
 
   auto cursor = read_buf;
-  T    val;
+  float    val;
 
   for (_u64 i = 0; i < npts; i++) {
     for (_u64 d = 0; d < ndims; ++d) {
@@ -19,9 +18,46 @@ void block_convert(std::ifstream& reader, std::ofstream& writer, _u64 npts,
       cursor++;
     }
   }
-  writer.write((char*) read_buf, npts * ndims * sizeof(T));
+  writer.write((char*) read_buf, npts * ndims * sizeof(float));
   delete[] read_buf;
 }
+
+void block_convert_int8(std::ifstream& reader, std::ofstream& writer, _u64 npts,
+                   _u64 ndims) {
+  auto read_buf = new int8_t[npts * (ndims + 1)];
+
+  auto cursor = read_buf;
+  int    val;
+
+  for (_u64 i = 0; i < npts; i++) {
+    for (_u64 d = 0; d < ndims; ++d) {
+      reader >> val;
+      *cursor = (int8_t)val;
+      cursor++;
+    }
+  }
+  writer.write((char*) read_buf, npts * ndims * sizeof(uint8_t));
+  delete[] read_buf;
+}
+
+void block_convert_uint8(std::ifstream& reader, std::ofstream& writer, _u64 npts,
+                   _u64 ndims) {
+  auto read_buf = new uint8_t[npts * (ndims + 1)];
+
+  auto cursor = read_buf;
+  int    val;
+
+  for (_u64 i = 0; i < npts; i++) {
+    for (_u64 d = 0; d < ndims; ++d) {
+      reader >> val;
+      *cursor = (uint8_t) val;
+      cursor++;
+    }
+  }
+  writer.write((char*) read_buf, npts * ndims * sizeof(uint8_t));
+  delete[] read_buf;
+}
+
 
 int main(int argc, char** argv) {
   if (argc != 6) {
@@ -59,11 +95,11 @@ int main(int argc, char** argv) {
   for (_u64 i = 0; i < nblks; i++) {
     _u64 cblk_size = std::min(npts - i * blk_size, blk_size);
     if (std::string(argv[1]) == std::string("float")) {
-      block_convert<float>(reader, writer, cblk_size, ndims);
+      block_convert_float(reader, writer, cblk_size, ndims);
     } else if (std::string(argv[1]) == std::string("int8")) {
-      block_convert<int8_t>(reader, writer, cblk_size, ndims);
+      block_convert_int8(reader, writer, cblk_size, ndims);
     } else if (std::string(argv[1]) == std::string("uint8")) {
-      block_convert<uint8_t>(reader, writer, cblk_size, ndims);
+      block_convert_uint8(reader, writer, cblk_size, ndims);
     }
     std::cout << "Block #" << i << " written" << std::endl;
   }
