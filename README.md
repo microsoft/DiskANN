@@ -85,6 +85,6 @@ Check msbuild docs for additional options including choosing between debug and r
 
 Please see the following pages on using the compiled code:
 
-- [link](workflows/SSD_index.md) Commandline interface for building and search SSD based indices 
-- [link](workflows/in_memory_index.md) Commandline interface for building and search in memory indices
+- [Commandline interface for building and search SSD based indices](workflows/SSD_index.md)  
+- [Commandline interface for building and search in memory indices](workflows/in_memory_index.md) 
 - To be added: Python interfaces and docker files
