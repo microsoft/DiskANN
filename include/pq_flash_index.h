@@ -71,7 +71,7 @@ namespace diskann {
     // Freeing the reader object is now the client's (DiskANNInterface's)
     // responsibility.
     DISKANN_DLLEXPORT PQFlashIndex(
-        std::shared_ptr<AlignedFileReader> &fileReader,
+        std::shared_ptr<AlignedFileReader>  fileReader,
         diskann::Metric                     metric = diskann::Metric::L2);
     DISKANN_DLLEXPORT ~PQFlashIndex();
 
@@ -125,7 +125,7 @@ namespace diskann {
                                      const _u64          min_beam_width,
                                      QueryStats *        stats);
 
-    std::shared_ptr<AlignedFileReader> &reader;
+    std::shared_ptr<AlignedFileReader> reader;
    protected:
     DISKANN_DLLEXPORT void use_medoids_data_as_centroids();
     DISKANN_DLLEXPORT void setup_thread_data(_u64 nthreads);

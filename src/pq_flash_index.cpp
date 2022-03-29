@@ -86,8 +86,8 @@ namespace {
 namespace diskann {
   template<>
   PQFlashIndex<_u8>::PQFlashIndex(
-      std::shared_ptr<AlignedFileReader> &fileReader, diskann::Metric metric)
-      : reader(fileReader), metric(metric) {
+      std::shared_ptr<AlignedFileReader> fileReader, diskann::Metric metric)
+      : reader(std::move(fileReader)), metric(metric) {
     diskann::cout
         << "dist_cmp function for _u8 uses slow implementation."
            " Please contact gopalsr@microsoft.com if you need an AVX/AVX2"
@@ -116,8 +116,8 @@ namespace diskann {
 
   template<>
   PQFlashIndex<_s8>::PQFlashIndex(
-      std::shared_ptr<AlignedFileReader> &fileReader, diskann::Metric metric)
-      : reader(fileReader), metric(metric) {
+      std::shared_ptr<AlignedFileReader> fileReader, diskann::Metric metric)
+      : reader(std::move(fileReader)), metric(metric) {
     if (Avx2SupportedCPU) {
       diskann::cout << "Using AVX2 function for dist_cmp and dist_cmp_float"
                     << std::endl;
@@ -146,8 +146,8 @@ namespace diskann {
 
   template<>
   PQFlashIndex<float>::PQFlashIndex(
-      std::shared_ptr<AlignedFileReader> &fileReader, diskann::Metric metric)
-      : reader(fileReader), metric(metric) {
+      std::shared_ptr<AlignedFileReader> fileReader, diskann::Metric metric)
+      : reader(std::move(fileReader)), metric(metric) {
     if (metric == diskann::Metric::L2) {
       if (Avx2SupportedCPU) {
         diskann::cout << "Using AVX2 functions for dist_cmp and dist_cmp_float"
