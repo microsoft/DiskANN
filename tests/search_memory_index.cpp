@@ -92,7 +92,7 @@ int search_memory_index(int argc, char** argv) {
   std::cout.precision(2);
 
   diskann::Index<T> index(metric, data_file.c_str());
-  index.load(memory_index_file.c_str());  // to load NSG
+  index.load(memory_index_file.c_str()); 
   std::cout << "Index loaded" << std::endl;
 
   if (metric == diskann::FAST_L2)

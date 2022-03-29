@@ -4,7 +4,7 @@
 if(MSVC)
 	cmake_minimum_required(VERSION 3.15)
 else()
-	cmake_minimum_required(VERSION 2.8)
+	cmake_minimum_required(VERSION 3.9)
 endif()
 set(CMAKE_STANDARD 14)
 
@@ -109,3 +109,7 @@ endif()
 add_subdirectory(src)
 add_subdirectory(tests)
 add_subdirectory(tests/utils)
+
+if(RESTAPI)
+	add_subdirectory(tests/restapi)
+endif()

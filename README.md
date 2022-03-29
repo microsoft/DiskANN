@@ -17,7 +17,12 @@ See [guidelines](CONTRIBUTING.md) for contributing to this project.
 Install the following packages through apt-get
 
 ```bash
-sudo apt install cmake g++ libaio-dev libgoogle-perftools-dev clang-format libboost-dev
+sudo apt install cmake g++ libaio-dev libgoogle-perftools-dev clang-format libboost-dev 
+```
+
+For building the REST API, also install [cpprestsdk](https://github.com/microsoft/cpprestsdk)
+```bash
+sudo apt-get install libcpprest-dev
 ```
 
 ### Install Intel MKL

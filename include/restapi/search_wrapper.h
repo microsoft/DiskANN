@@ -1,0 +1,114 @@
+// Copyright (c) Microsoft Corporation. All rights reserved.
+// Licensed under the MIT license.
+
+#pragma once
+
+#include <string>
+#include <vector>
+#include <stdexcept>
+
+#include <index.h>
+#include <pq_flash_index.h>
+
+namespace diskann {
+  class SearchResult {
+   public:
+    SearchResult(unsigned int K, unsigned int elapsed_time_in_ms,
+                 const unsigned* const indices, const float* const distances,
+                 const std::string* const tags = NULL);
+
+    const std::vector<unsigned int>& get_indices() const {
+      return _indices;
+    }
+    const std::vector<float>& get_distances() const {
+      return _distances;
+    }
+    bool tags_enabled() const {
+      return _tags_enabled;
+    }
+    const std::vector<std::string>& get_tags() const {
+      return _tags;
+    }
+
+   private:
+    unsigned int              _K;
+    unsigned int              _search_time_in_ms;
+    std::vector<unsigned int> _indices;
+    std::vector<float>        _distances;
+
+    bool                     _tags_enabled;
+    std::vector<std::string> _tags;
+  };
+
+  class SearchNotImplementedException : public std::logic_error {
+   private:
+    std::string _errormsg;
+
+   public:
+    SearchNotImplementedException(const char* type)
+        : std::logic_error("Not Implemented") {
+      _errormsg = "Search with data type ";
+      _errormsg += std::string(type);
+      _errormsg += " not implemented : ";
+      _errormsg += __FUNCTION__;
+    }
+
+    virtual const char* what() const throw() {
+      return _errormsg.c_str();
+    }
+  };
+
+  class BaseSearch {
+   public:
+    BaseSearch(const char* tagsFile = nullptr);
+    virtual SearchResult search(const float*       query,
+                                const unsigned int dimensions,
+                                const unsigned int K) {
+      throw SearchNotImplementedException("float");
+    }
+    virtual SearchResult search(const int8_t*      query,
+                                const unsigned int dimensions,
+                                const unsigned int K) {
+      throw SearchNotImplementedException("int8_t");
+    }
+
+    virtual SearchResult search(const uint8_t*     query,
+                                const unsigned int dimensions,
+                                const unsigned int K) {
+      throw SearchNotImplementedException("uint8_t");
+    }
+
+   private:
+    std::vector<std::string> _tags_str;
+  };
+
+  template<typename T>
+  class InMemorySearch : public BaseSearch {
+   public:
+    InMemorySearch(const char* baseFile, const char* indexFile,
+                   const char* tagsFile, Metric m);
+    virtual ~InMemorySearch();
+
+    SearchResult search(const T* query, const unsigned int dimensions,
+                        const unsigned int K);
+
+   private:
+    unsigned int                       _dimensions, _numPoints;
+    std::unique_ptr<diskann::Index<T>> _index;
+  };
+
+  template<typename T>
+  class PQFlashSearch : public BaseSearch {
+   public:
+    PQFlashSearch(const char* indexPrefix, const unsigned num_nodes_to_cache,
+                  const unsigned num_threads, const char* tagsFile, Metric m);
+    virtual ~PQFlashSearch();
+
+    SearchResult search(const T* query, const unsigned int dimensions,
+                        const unsigned int K);
+
+   private:
+    unsigned int                              _dimensions, _numPoints;
+    std::unique_ptr<diskann::PQFlashIndex<T>> _index;
+  };
+}  // namespace diskann

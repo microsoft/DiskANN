@@ -10,7 +10,13 @@ else()
 	set(CPP_SOURCES ann_exception.cpp aux_utils.cpp index.cpp
         linux_aligned_file_reader.cpp math_utils.cpp memory_mapper.cpp
         partition_and_pq.cpp  pq_flash_index.cpp logger.cpp utils.cpp)
+
+	if (RESTAPI)
+		list(APPEND CPP_SOURCES restapi/search_wrapper.cpp restapi/server.cpp)
+	endif()
+
 	add_library(${PROJECT_NAME} ${CPP_SOURCES})
 	add_library(${PROJECT_NAME}_s STATIC ${CPP_SOURCES})
+	
 endif()
 install()

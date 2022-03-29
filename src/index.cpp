@@ -1029,7 +1029,8 @@ namespace diskann {
   std::pair<uint32_t, uint32_t> Index<T, TagT>::search(const T *      query,
                                                        const size_t   K,
                                                        const unsigned L,
-                                                       unsigned *     indices) {
+                                                       unsigned *     indices,
+                                                       float * distances) {
     std::vector<unsigned>    init_ids;
     tsl::robin_set<unsigned> visited(10 * L);
     std::vector<Neighbor>    best_L_nodes, expanded_nodes_info;
@@ -1045,6 +1046,10 @@ namespace diskann {
     size_t pos = 0;
     for (auto it : best_L_nodes) {
       indices[pos] = it.id;
+      if (distances)
+      distances[pos] = it.distance;
+      if (_metric == diskann::INNER_PRODUCT)
+        distances[pos] = -distances[pos];
       pos++;
       if (pos == K)
         break;

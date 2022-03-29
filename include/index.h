@@ -55,7 +55,8 @@ namespace diskann {
     DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> search(const T *      query,
                                                            const size_t   K,
                                                            const unsigned L,
-                                                           unsigned *indices);
+                                                           unsigned *indices,
+                                                           float *distances=NULL);
 
     DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> search(
         const T *query, const uint64_t K, const unsigned L,
