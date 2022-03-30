@@ -28,7 +28,7 @@ namespace diskann {
 
     template<class T>
     void parseJson(const utility::string_t& body, int& k, int64_t& queryId,
-                   T*& queryVector, unsigned int& dimensions);
+                   T*& queryVector, unsigned int& dimensions, unsigned &Ls);
 
     web::json::value idsToJsonArray(const diskann::SearchResult& result);
     web::json::value distancesToJsonArray(const diskann::SearchResult& result);

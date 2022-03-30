@@ -11,6 +11,8 @@
 #include <restapi/server.h>
 
 namespace diskann {
+  const unsigned int DEFAULT_L = 100;
+
   Server::Server(web::uri& uri, std::unique_ptr<diskann::BaseSearch>& searcher,
                  const std::string& typestring)
       : _searcher(searcher) {
@@ -51,11 +53,12 @@ namespace diskann {
       try {
         T*           queryVector = nullptr;
         unsigned int dimensions = 0;
-        parseJson(body, k, queryId, queryVector, dimensions);
+        unsigned int Ls;
+        parseJson(body, k, queryId, queryVector, dimensions, Ls);
 
         auto startTime = std::chrono::high_resolution_clock::now();
         diskann::SearchResult result =
-            _searcher->search(queryVector, dimensions, (unsigned int) k);
+            _searcher->search(queryVector, dimensions, (unsigned int) k, Ls);
         diskann::aligned_free(queryVector);
 
         web::json::value response = prepareResponse(queryId, k);
@@ -94,13 +97,15 @@ namespace diskann {
   template<class T>
   void Server::parseJson(const utility::string_t& body, int& k,
                          int64_t& queryId, T*& queryVector,
-                         unsigned int& dimensions) {
+                         unsigned int& dimensions, unsigned& Ls) {
     std::cout << body << std::endl;
     web::json::value val = web::json::value::parse(body);
     web::json::array queryArr = val.at(VECTOR_KEY).as_array();
     queryId = val.has_field(QUERY_ID_KEY)
                   ? val.at(QUERY_ID_KEY).as_number().to_int64()
                   : -1;
+    Ls = val.has_field(L_KEY) ? val.at(L_KEY).as_number().to_uint32()
+        : DEFAULT_L;
     k = val.at(K_KEY).as_integer();
 
     if (k <= 0) {

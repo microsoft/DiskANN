@@ -63,18 +63,21 @@ namespace diskann {
     BaseSearch(const char* tagsFile = nullptr);
     virtual SearchResult search(const float*       query,
                                 const unsigned int dimensions,
-                                const unsigned int K) {
+                                const unsigned int K,
+                                const unsigned int Ls) {
       throw SearchNotImplementedException("float");
     }
     virtual SearchResult search(const int8_t*      query,
                                 const unsigned int dimensions,
-                                const unsigned int K) {
+                                const unsigned int K,
+                                const unsigned int Ls) {
       throw SearchNotImplementedException("int8_t");
     }
 
     virtual SearchResult search(const uint8_t*     query,
                                 const unsigned int dimensions,
-                                const unsigned int K) {
+                                const unsigned int K,
+                                const unsigned int Ls) {
       throw SearchNotImplementedException("uint8_t");
     }
 
@@ -94,7 +97,7 @@ namespace diskann {
     virtual ~InMemorySearch();
 
     SearchResult search(const T* query, const unsigned int dimensions,
-                        const unsigned int K);
+                        const unsigned int K, const unsigned int Ls);
 
    private:
     unsigned int                       _dimensions, _numPoints;
@@ -109,7 +112,7 @@ namespace diskann {
     virtual ~PQFlashSearch();
 
     SearchResult search(const T* query, const unsigned int dimensions,
-                        const unsigned int K);
+                        const unsigned int K, const unsigned int Ls);
 
    private:
     unsigned int                              _dimensions, _numPoints;

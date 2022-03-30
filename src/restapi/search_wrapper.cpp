@@ -22,7 +22,6 @@
 #endif
 
 namespace diskann {
-  const unsigned int DEFAULT_L = 100;
   const unsigned int DEFAULT_W = 1;
 
   SearchResult::SearchResult(unsigned int K, unsigned int elapsed_time_in_ms,
@@ -49,10 +48,8 @@ namespace diskann {
       }
 
       std::string tag;
-      while (!in.eof()) {
-        in >> tag;
-        if (!in.eof())
-          _tags_str.push_back(tag);
+      while (std::getline(in, tag)) {
+        _tags_str.push_back(tag);
       }
 
       _tags_enabled = true;
@@ -92,12 +89,13 @@ namespace diskann {
   template<typename T>
   SearchResult InMemorySearch<T>::search(const T*           query,
                                          const unsigned int dimensions,
-                                         const unsigned int K) {
+                                         const unsigned int K,
+                                         const unsigned int Ls) {
     unsigned int* indices = new unsigned int[K];
     float*        distances = new float[K];
 
     auto startTime = std::chrono::high_resolution_clock::now();
-    _index->search(query, K, DEFAULT_L, indices, distances);
+    _index->search(query, K, Ls, indices, distances);
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(
                         std::chrono::high_resolution_clock::now() - startTime)
                         .count();
@@ -163,13 +161,14 @@ namespace diskann {
   template<typename T>
   SearchResult PQFlashSearch<T>::search(const T*           query,
                                         const unsigned int dimensions,
-                                        const unsigned int K) {
+                                        const unsigned int K,
+                                        const unsigned int Ls) {
     _u64*     indices_u64 = new _u64[K];
     unsigned* indices = new unsigned[K];
     float*    distances = new float[K];
 
     auto startTime = std::chrono::high_resolution_clock::now();
-    _index->cached_beam_search(query, K, DEFAULT_L, indices_u64, distances,
+    _index->cached_beam_search(query, K, Ls, indices_u64, distances,
                                DEFAULT_W);
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(
                         std::chrono::high_resolution_clock::now() - startTime)
