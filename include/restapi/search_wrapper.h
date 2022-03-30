@@ -78,7 +78,11 @@ namespace diskann {
       throw SearchNotImplementedException("uint8_t");
     }
 
-   private:
+    void lookup_tags(const unsigned K, const unsigned* indices,
+                     std::string* ret_tags);
+
+   protected:
+    bool                     _tags_enabled;
     std::vector<std::string> _tags_str;
   };
 

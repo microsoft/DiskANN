@@ -36,6 +36,8 @@ namespace diskann {
       if (tags != NULL)
         this->_tags.push_back(tags[i]);
     }
+    if (tags != NULL)
+      this->_tags_enabled = true;
   }
 
   BaseSearch::BaseSearch(const char* tagsFile) {
@@ -49,11 +51,31 @@ namespace diskann {
       std::string tag;
       while (!in.eof()) {
         in >> tag;
-        _tags_str.push_back(tag);
+        if (!in.eof())
+          _tags_str.push_back(tag);
       }
 
-      std::cout << "Loaded " << _tags_str.size() << " from " << tagsFile
+      _tags_enabled = true;
+
+      std::cout << "Loaded " << _tags_str.size() << " tags from " << tagsFile
                 << std::endl;
+    } else {
+      _tags_enabled = false;
+    }
+  }
+
+  void BaseSearch::lookup_tags(const unsigned K, const unsigned* indices,
+                               std::string* ret_tags) {
+    if (_tags_enabled == false)
+      throw std::runtime_error("Can not look up tags as they are not enabled.");
+    else {
+      for (unsigned k = 0; k < K; ++k) {
+        if (indices[k] > _tags_str.size())
+          throw std::runtime_error(
+              "In tag lookup, index exceeded the number of tags");
+        else
+          ret_tags[k] = _tags_str[indices[k]];
+      }
     }
   }
 
@@ -80,7 +102,13 @@ namespace diskann {
                         std::chrono::high_resolution_clock::now() - startTime)
                         .count();
 
-    SearchResult result(K, (unsigned int) duration, indices, distances, NULL);
+    std::string* tags = nullptr;
+    if (_tags_enabled) {
+      tags = new std::string[K];
+      lookup_tags(K, indices, tags);
+    }
+
+    SearchResult result(K, (unsigned int) duration, indices, distances, tags);
 
     delete[] indices;
     delete[] distances;
@@ -149,7 +177,13 @@ namespace diskann {
     for (unsigned k = 0; k < K; ++k)
       indices[k] = indices_u64[k];
 
-    SearchResult result(K, (unsigned int) duration, indices, distances, NULL);
+    std::string* tags = nullptr;
+    if (_tags_enabled) {
+      tags = new std::string[K];
+      lookup_tags(K, indices, tags);
+    }
+
+    SearchResult result(K, (unsigned int) duration, indices, distances, tags);
 
     delete[] indices_u64;
     delete[] indices;

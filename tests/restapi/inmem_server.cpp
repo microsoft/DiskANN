@@ -42,21 +42,24 @@ int main(int argc, char* argv[]) {
   }
 
   std::string address(argv[1]);
+  const char* data_file = argv[3];
+  const char* index_file = argv[4];
+  const char* tags_file = argc == 6 ? argv[5] : nullptr;
 
   const std::string typestring(argv[2]);
   if (typestring == std::string("float")) {
-    auto searcher = new diskann::InMemorySearch<float>(
-        argv[3], argv[4], argc == 6 ? argv[5] : nullptr, diskann::L2);
+    auto searcher = new diskann::InMemorySearch<float>(data_file, index_file,
+                                                       tags_file, diskann::L2);
     g_inMemorySearch =
         std::unique_ptr<diskann::InMemorySearch<float>>(searcher);
   } else if (typestring == std::string("int8")) {
-    auto searcher = new diskann::InMemorySearch<int8_t>(
-        argv[3], argv[4], argc == 6 ? argv[5] : nullptr, diskann::L2);
+    auto searcher = new diskann::InMemorySearch<int8_t>(data_file, index_file,
+                                                        tags_file, diskann::L2);
     g_inMemorySearch =
         std::unique_ptr<diskann::InMemorySearch<int8_t>>(searcher);
   } else if (typestring == std::string("uint8")) {
     auto searcher = new diskann::InMemorySearch<uint8_t>(
-        argv[3], argv[4], argc == 6 ? argv[5] : nullptr, diskann::L2);
+        data_file, index_file, tags_file, diskann::L2);
     g_inMemorySearch =
         std::unique_ptr<diskann::InMemorySearch<uint8_t>>(searcher);
   } else {
