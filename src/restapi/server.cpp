@@ -7,15 +7,47 @@
 #include <string>
 #include <cstdlib>
 #include <codecvt>
+#include <limits>
 
 #include <restapi/server.h>
 
 namespace diskann {
   const unsigned int DEFAULT_L = 100;
 
-  Server::Server(web::uri& uri, std::unique_ptr<diskann::BaseSearch>& searcher,
-                 const std::string& typestring)
-      : _searcher(searcher) {
+  // Server::Server(web::uri& uri, std::unique_ptr<diskann::BaseSearch>&
+  // searcher,
+  //                const std::string& typestring)
+  //     : _multi_searcher(std::vector<diskann::BaseSearch>{searcher}),
+  //     _multi_search(false) {
+  //   _listener =
+  //       std::unique_ptr<web::http::experimental::listener::http_listener>(
+  //           new web::http::experimental::listener::http_listener(uri));
+  //   if (typestring == std::string("float")) {
+  //     _listener->support(
+  //         std::bind(&Server::handle_post<float>, this,
+  //         std::placeholders::_1));
+  //   } else if (typestring == std::string("int8_t")) {
+  //     _listener->support(
+  //         web::http::methods::POST,
+  //         std::bind(&Server::handle_post<int8_t>, this,
+  //         std::placeholders::_1));
+  //   } else if (typestring == std::string("uint8_t")) {
+  //     _listener->support(web::http::methods::POST,
+  //                        std::bind(&Server::handle_post<uint8_t>, this,
+  //                                  std::placeholders::_1));
+  //   } else {
+  //     throw "Unsupported type in server constuctor";
+  //   }
+  // }
+
+  Server::Server(
+      web::uri&                                          uri,
+      std::vector<std::unique_ptr<diskann::BaseSearch>>& multi_searcher,
+      const std::string&                                 typestring)
+      : _multi_search(multi_searcher.size() > 1 ? true : false) {
+    for (auto& searcher : multi_searcher)
+      _multi_searcher.push_back(std::move(searcher));
+
     _listener =
         std::unique_ptr<web::http::experimental::listener::http_listener>(
             new web::http::experimental::listener::http_listener(uri));
@@ -45,27 +77,77 @@ namespace diskann {
     return _listener->close();
   }
 
+  diskann::SearchResult Server::aggregate_results(
+      const unsigned K, const std::vector<diskann::SearchResult>& results) {
+    if (_multi_search) {
+      auto best_indices = new unsigned[K];
+      auto best_distances = new float[K];
+      auto partitions = new unsigned[K];
+      auto best_tags = results[0].tags_enabled() ? new std::string[K] : nullptr;
+
+      auto                numsearchers = _multi_searcher.size();
+      std::vector<size_t> pos(numsearchers, 0);
+
+      for (size_t k = 0; k < K; ++k) {
+        float best_distance = std::numeric_limits<float>::max();
+
+        for (size_t i = 0; i < numsearchers; ++i) {
+          if (results[i].get_distances()[pos[i]] < best_distance) {
+            best_indices[k] = results[i].get_indices()[pos[i]];
+            best_distance = results[i].get_distances()[pos[i]];
+            partitions[k] = i;
+            if (results[i].tags_enabled())
+              best_tags[k] = results[i].get_tags()[pos[i]];
+          }
+          best_distance = best_distances[k];
+          pos[i]++;
+        }
+      }
+
+      unsigned int total_time = 0;
+      for (int i = 0; i < numsearchers; ++i)
+        total_time += results[i].get_time();
+      diskann::SearchResult result = SearchResult(
+          K, total_time, best_indices, best_distances, best_tags, partitions);
+
+      delete[] best_indices;
+      delete[] best_distances;
+      delete[] partitions;
+      delete[] best_tags;
+
+      return result;
+    } else {
+      return results[0];
+    }
+  }
+
   template<class T>
   void Server::handle_post(web::http::http_request message) {
     message.extract_string(true).then([=](utility::string_t body) {
       int64_t queryId = -1;
-      int     k = 0;
+      int     K = 0;
       try {
         T*           queryVector = nullptr;
         unsigned int dimensions = 0;
         unsigned int Ls;
-        parseJson(body, k, queryId, queryVector, dimensions, Ls);
+        parseJson(body, K, queryId, queryVector, dimensions, Ls);
 
         auto startTime = std::chrono::high_resolution_clock::now();
-        diskann::SearchResult result =
-            _searcher->search(queryVector, dimensions, (unsigned int) k, Ls);
+
+        std::vector<diskann::SearchResult> results;
+        for (auto& searcher : _multi_searcher)
+          results.push_back(
+              searcher->search(queryVector, dimensions, (unsigned int) K, Ls));
+        diskann::SearchResult result = aggregate_results(K, results);
         diskann::aligned_free(queryVector);
 
-        web::json::value response = prepareResponse(queryId, k);
+        web::json::value response = prepareResponse(queryId, K);
         response[INDICES_KEY] = idsToJsonArray(result);
         response[DISTANCES_KEY] = distancesToJsonArray(result);
         if (result.tags_enabled())
           response[TAGS_KEY] = tagsToJsonArray(result);
+        if (result.partitions_enabled())
+          response[PARTITION_KEY] = partitionsToJsonArray(result);
 
         response[TIME_TAKEN_KEY] =
             std::chrono::duration_cast<std::chrono::microseconds>(
@@ -77,7 +159,7 @@ namespace diskann {
       } catch (const std::exception& ex) {
         std::cerr << "Exception while processing request: " << queryId << ":"
                   << ex.what() << std::endl;
-        web::json::value response = prepareResponse(queryId, k);
+        web::json::value response = prepareResponse(queryId, K);
         response[ERROR_MESSAGE_KEY] = web::json::value::string(ex.what());
         // web::json::value::string(to_wstring(ex.what()));
         message.reply(web::http::status_codes::InternalError, response).wait();
@@ -105,7 +187,7 @@ namespace diskann {
                   ? val.at(QUERY_ID_KEY).as_number().to_int64()
                   : -1;
     Ls = val.has_field(L_KEY) ? val.at(L_KEY).as_number().to_uint32()
-        : DEFAULT_L;
+                              : DEFAULT_L;
     k = val.at(K_KEY).as_integer();
 
     if (k <= 0) {
@@ -160,6 +242,16 @@ namespace diskann {
   }
 
   web::json::value Server::tagsToJsonArray(
+      const diskann::SearchResult& result) {
+    web::json::value tagArray = web::json::value::array();
+    auto             tags = result.get_tags();
+    for (size_t i = 0; i < tags.size(); i++) {
+      tagArray[i] = web::json::value::string(tags[i]);
+    }
+    return tagArray;
+  }
+
+  web::json::value Server::partitionsToJsonArray(
       const diskann::SearchResult& result) {
     web::json::value tagArray = web::json::value::array();
     auto             tags = result.get_tags();

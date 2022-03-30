@@ -15,7 +15,8 @@ namespace diskann {
    public:
     SearchResult(unsigned int K, unsigned int elapsed_time_in_ms,
                  const unsigned* const indices, const float* const distances,
-                 const std::string* const tags = NULL);
+                 const std::string* const tags = nullptr,
+                 const unsigned* const    partitions = nullptr);
 
     const std::vector<unsigned int>& get_indices() const {
       return _indices;
@@ -29,6 +30,15 @@ namespace diskann {
     const std::vector<std::string>& get_tags() const {
       return _tags;
     }
+    bool partitions_enabled() const {
+      return _partitions_enabled;
+    }
+    const std::vector<unsigned>& get_partitions() const {
+      return _partitions;
+    }
+    const unsigned get_time() const {
+      return _search_time_in_ms;
+    }
 
    private:
     unsigned int              _K;
@@ -38,6 +48,9 @@ namespace diskann {
 
     bool                     _tags_enabled;
     std::vector<std::string> _tags;
+
+    bool                  _partitions_enabled;
+    std::vector<unsigned> _partitions;
   };
 
   class SearchNotImplementedException : public std::logic_error {
@@ -63,21 +76,18 @@ namespace diskann {
     BaseSearch(const char* tagsFile = nullptr);
     virtual SearchResult search(const float*       query,
                                 const unsigned int dimensions,
-                                const unsigned int K,
-                                const unsigned int Ls) {
+                                const unsigned int K, const unsigned int Ls) {
       throw SearchNotImplementedException("float");
     }
     virtual SearchResult search(const int8_t*      query,
                                 const unsigned int dimensions,
-                                const unsigned int K,
-                                const unsigned int Ls) {
+                                const unsigned int K, const unsigned int Ls) {
       throw SearchNotImplementedException("int8_t");
     }
 
     virtual SearchResult search(const uint8_t*     query,
                                 const unsigned int dimensions,
-                                const unsigned int K,
-                                const unsigned int Ls) {
+                                const unsigned int K, const unsigned int Ls) {
       throw SearchNotImplementedException("uint8_t");
     }
 

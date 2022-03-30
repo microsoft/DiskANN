@@ -12,8 +12,8 @@
 
 using namespace diskann;
 
-std::unique_ptr<Server>              g_httpServer(nullptr);
-std::unique_ptr<diskann::BaseSearch> g_inMemorySearch(nullptr);
+std::unique_ptr<Server>                           g_httpServer(nullptr);
+std::vector<std::unique_ptr<diskann::BaseSearch>> g_inMemorySearch;
 
 void setup(const utility::string_t& address, const std::string& typestring) {
   web::http::uri_builder uriBldr(address);
@@ -48,20 +48,20 @@ int main(int argc, char* argv[]) {
 
   const std::string typestring(argv[2]);
   if (typestring == std::string("float")) {
-    auto searcher = new diskann::InMemorySearch<float>(data_file, index_file,
-                                                       tags_file, diskann::L2);
-    g_inMemorySearch =
-        std::unique_ptr<diskann::InMemorySearch<float>>(searcher);
+    auto searcher =
+        std::unique_ptr<diskann::BaseSearch>(new diskann::InMemorySearch<float>(
+            data_file, index_file, tags_file, diskann::L2));
+    g_inMemorySearch.push_back(std::move(searcher));
   } else if (typestring == std::string("int8")) {
-    auto searcher = new diskann::InMemorySearch<int8_t>(data_file, index_file,
-                                                        tags_file, diskann::L2);
-    g_inMemorySearch =
-        std::unique_ptr<diskann::InMemorySearch<int8_t>>(searcher);
+    auto searcher = std::unique_ptr<diskann::BaseSearch>(
+        new diskann::InMemorySearch<int8_t>(data_file, index_file, tags_file,
+                                            diskann::L2));
+    g_inMemorySearch.push_back(std::move(searcher));
   } else if (typestring == std::string("uint8")) {
-    auto searcher = new diskann::InMemorySearch<uint8_t>(
-        data_file, index_file, tags_file, diskann::L2);
-    g_inMemorySearch =
-        std::unique_ptr<diskann::InMemorySearch<uint8_t>>(searcher);
+    auto searcher = std::unique_ptr<diskann::BaseSearch>(
+        new diskann::InMemorySearch<uint8_t>(data_file, index_file, tags_file,
+                                             diskann::L2));
+    g_inMemorySearch.push_back(std::move(searcher));
   } else {
     std::cerr << "Unsupported data type " << argv[2] << std::endl;
   }

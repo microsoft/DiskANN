@@ -11,6 +11,7 @@ namespace diskann {
   static const std::string VECTOR_KEY = "query", K_KEY = "k",
                            INDICES_KEY = "indices", DISTANCES_KEY = "distances",
                            TAGS_KEY = "tags", QUERY_ID_KEY = "query_id",
-                           ERROR_MESSAGE_KEY = "error", L_KEY="Ls",
-                           TIME_TAKEN_KEY = "time_taken_in_us";
+                           ERROR_MESSAGE_KEY = "error", L_KEY = "Ls",
+                           TIME_TAKEN_KEY = "time_taken_in_us",
+                           PARTITION_KEY = "partition";
 }  // namespace diskann

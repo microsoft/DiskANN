@@ -27,16 +27,26 @@ namespace diskann {
   SearchResult::SearchResult(unsigned int K, unsigned int elapsed_time_in_ms,
                              const unsigned* const    indices,
                              const float* const       distances,
-                             const std::string* const tags)
+                             const std::string* const tags,
+                             const unsigned* const    partitions)
       : _K(K), _search_time_in_ms(elapsed_time_in_ms) {
     for (unsigned i = 0; i < K; ++i) {
       this->_indices.push_back(indices[i]);
       this->_distances.push_back(distances[i]);
       if (tags != NULL)
         this->_tags.push_back(tags[i]);
+      if (partitions != NULL)
+        this->_partitions.push_back(partitions[i]);
     }
-    if (tags != NULL)
+    if (tags != nullptr)
       this->_tags_enabled = true;
+    else
+      this->_tags_enabled = false;
+
+    if (partitions != nullptr)
+      this->_partitions_enabled = true;
+    else
+      this->_partitions_enabled = false;
   }
 
   BaseSearch::BaseSearch(const char* tagsFile) {
@@ -168,8 +178,7 @@ namespace diskann {
     float*    distances = new float[K];
 
     auto startTime = std::chrono::high_resolution_clock::now();
-    _index->cached_beam_search(query, K, Ls, indices_u64, distances,
-                               DEFAULT_W);
+    _index->cached_beam_search(query, K, Ls, indices_u64, distances, DEFAULT_W);
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(
                         std::chrono::high_resolution_clock::now() - startTime)
                         .count();
