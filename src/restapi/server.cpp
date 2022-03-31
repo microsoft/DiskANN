@@ -82,7 +82,7 @@ namespace diskann {
     if (_multi_search) {
       auto best_indices = new unsigned[K];
       auto best_distances = new float[K];
-      auto partitions = new unsigned[K];
+      auto best_partitions = new unsigned[K];
       auto best_tags = results[0].tags_enabled() ? new std::string[K] : nullptr;
 
       auto                numsearchers = _multi_searcher.size();
@@ -90,29 +90,32 @@ namespace diskann {
 
       for (size_t k = 0; k < K; ++k) {
         float best_distance = std::numeric_limits<float>::max();
+        unsigned best_partition;
 
         for (size_t i = 0; i < numsearchers; ++i) {
           if (results[i].get_distances()[pos[i]] < best_distance) {
-            best_indices[k] = results[i].get_indices()[pos[i]];
             best_distance = results[i].get_distances()[pos[i]];
-            partitions[k] = i;
-            if (results[i].tags_enabled())
-              best_tags[k] = results[i].get_tags()[pos[i]];
+            best_partition = i;          
           }
-          best_distance = best_distances[k];
-          pos[i]++;
         }
+          best_distances[k] = best_distance;
+          best_indices[k] =  results[best_partition].get_indices()[pos[best_partition]];
+          best_partitions[k] = best_partition;
+          if (results[best_partition].tags_enabled())
+              best_tags[k] = results[best_partition].get_tags()[pos[best_partition]];
+          std::cout << best_partition << " " << pos[best_partition] << std::endl;
+          pos[best_partition]++;
       }
 
       unsigned int total_time = 0;
-      for (int i = 0; i < numsearchers; ++i)
+      for (size_t i = 0; i < numsearchers; ++i)
         total_time += results[i].get_time();
       diskann::SearchResult result = SearchResult(
-          K, total_time, best_indices, best_distances, best_tags, partitions);
+          K, total_time, best_indices, best_distances, best_tags, best_partitions);
 
       delete[] best_indices;
       delete[] best_distances;
-      delete[] partitions;
+      delete[] best_partitions;
       delete[] best_tags;
 
       return result;
@@ -123,48 +126,57 @@ namespace diskann {
 
   template<class T>
   void Server::handle_post(web::http::http_request message) {
-    message.extract_string(true).then([=](utility::string_t body) {
-      int64_t queryId = -1;
-      int     K = 0;
-      try {
-        T*           queryVector = nullptr;
-        unsigned int dimensions = 0;
-        unsigned int Ls;
-        parseJson(body, K, queryId, queryVector, dimensions, Ls);
+    message.extract_string(true)
+        .then([=](utility::string_t body) {
+          int64_t queryId = -1;
+          int     K = 0;
+          try {
+            T*           queryVector = nullptr;
+            unsigned int dimensions = 0;
+            unsigned int Ls;
+            parseJson(body, K, queryId, queryVector, dimensions, Ls);
 
-        auto startTime = std::chrono::high_resolution_clock::now();
+            auto startTime = std::chrono::high_resolution_clock::now();
 
-        std::vector<diskann::SearchResult> results;
-        for (auto& searcher : _multi_searcher)
-          results.push_back(
-              searcher->search(queryVector, dimensions, (unsigned int) K, Ls));
-        diskann::SearchResult result = aggregate_results(K, results);
-        diskann::aligned_free(queryVector);
+            std::vector<diskann::SearchResult> results;
+            for (auto& searcher : _multi_searcher)
+              results.push_back(searcher->search(queryVector, dimensions,
+                                                 (unsigned int) K, Ls));
+            diskann::SearchResult result = aggregate_results(K, results);
+            diskann::aligned_free(queryVector);
 
-        web::json::value response = prepareResponse(queryId, K);
-        response[INDICES_KEY] = idsToJsonArray(result);
-        response[DISTANCES_KEY] = distancesToJsonArray(result);
-        if (result.tags_enabled())
-          response[TAGS_KEY] = tagsToJsonArray(result);
-        if (result.partitions_enabled())
-          response[PARTITION_KEY] = partitionsToJsonArray(result);
+            web::json::value response = prepareResponse(queryId, K);
+            response[INDICES_KEY] = idsToJsonArray(result);
+            response[DISTANCES_KEY] = distancesToJsonArray(result);
+            if (result.tags_enabled())
+              response[TAGS_KEY] = tagsToJsonArray(result);
+            if (result.partitions_enabled())
+              response[PARTITION_KEY] = partitionsToJsonArray(result);
 
-        response[TIME_TAKEN_KEY] =
-            std::chrono::duration_cast<std::chrono::microseconds>(
-                std::chrono::high_resolution_clock::now() - startTime)
-                .count();
+            response[TIME_TAKEN_KEY] =
+                std::chrono::duration_cast<std::chrono::microseconds>(
+                    std::chrono::high_resolution_clock::now() - startTime)
+                    .count();
 
-        std::cout << "Responding to: " << queryId << std::endl;
-        message.reply(web::http::status_codes::OK, response).wait();
-      } catch (const std::exception& ex) {
-        std::cerr << "Exception while processing request: " << queryId << ":"
-                  << ex.what() << std::endl;
-        web::json::value response = prepareResponse(queryId, K);
-        response[ERROR_MESSAGE_KEY] = web::json::value::string(ex.what());
-        // web::json::value::string(to_wstring(ex.what()));
-        message.reply(web::http::status_codes::InternalError, response).wait();
-      }
-    });
+            std::cout << "Responding to: " << queryId << std::endl;
+            return std::make_pair(web::http::status_codes::OK, response);
+          } catch (const std::exception& ex) {
+            std::cerr << "Exception while processing query: " << queryId << ":"
+                      << ex.what() << std::endl;
+            web::json::value response = prepareResponse(queryId, K);
+            response[ERROR_MESSAGE_KEY] = web::json::value::string(ex.what());
+            return std::make_pair(web::http::status_codes::InternalError,
+                                  response);
+          }
+        })
+        .then([=](std::pair<short unsigned int, web::json::value> response_status) {
+          try {
+            message.reply(response_status.first, response_status.second).wait();
+          } catch (const std::exception& ex) {
+            std::cerr << "Exception while processing reply: " << ex.what()
+                      << std::endl;
+          };
+        });
   }
 
   web::json::value Server::prepareResponse(const int64_t& queryId,
@@ -253,11 +265,11 @@ namespace diskann {
 
   web::json::value Server::partitionsToJsonArray(
       const diskann::SearchResult& result) {
-    web::json::value tagArray = web::json::value::array();
-    auto             tags = result.get_tags();
-    for (size_t i = 0; i < tags.size(); i++) {
-      tagArray[i] = web::json::value::string(tags[i]);
+    web::json::value partitionArray = web::json::value::array();
+    auto             partitions = result.get_partitions();
+    for (size_t i = 0; i < partitions.size(); i++) {
+      partitionArray[i] = web::json::value::number(partitions[i]);
     }
-    return tagArray;
+    return partitionArray;
   }
 };  // namespace diskann

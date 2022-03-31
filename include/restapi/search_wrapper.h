@@ -36,7 +36,7 @@ namespace diskann {
     const std::vector<unsigned>& get_partitions() const {
       return _partitions;
     }
-    const unsigned get_time() const {
+    unsigned get_time() const {
       return _search_time_in_ms;
     }
 
