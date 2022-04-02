@@ -26,23 +26,31 @@ int main(int argc, char** argv) {
                  "M(build memory allocation in GB)   "
                  "T(#threads)   PQ_disk_bytes"
               << std::endl;
-  } else {
-    diskann::Metric metric = diskann::Metric::L2;
+    return -1;
+  }
 
-    if (std::string(argv[2]) == std::string("mips"))
-      metric = diskann::Metric::INNER_PRODUCT;
+  diskann::Metric metric = diskann::Metric::L2;
 
-    std::string params = std::string(argv[5]) + " " + std::string(argv[6]) +
-                         " " + std::string(argv[7]) + " " +
-                         std::string(argv[8]) + " " + std::string(argv[9]) +
-                         " " + std::string(argv[10]);
+  if (std::string(argv[2]) == std::string("mips"))
+    metric = diskann::Metric::INNER_PRODUCT;
+
+  std::string params = std::string(argv[5]) + " " + std::string(argv[6]) + " " +
+                       std::string(argv[7]) + " " + std::string(argv[8]) + " " +
+                       std::string(argv[9]) + " " + std::string(argv[10]);
+  try {
     if (std::string(argv[1]) == std::string("float"))
-      build_index<float>(argv[3], argv[4], params.c_str(), metric);
+      return build_index<float>(argv[3], argv[4], params.c_str(), metric);
     else if (std::string(argv[1]) == std::string("int8"))
-      build_index<int8_t>(argv[3], argv[4], params.c_str(), metric);
+      return build_index<int8_t>(argv[3], argv[4], params.c_str(), metric);
     else if (std::string(argv[1]) == std::string("uint8"))
-      build_index<uint8_t>(argv[3], argv[4], params.c_str(), metric);
-    else
-      std::cout << "Error. wrong file type" << std::endl;
+      return build_index<uint8_t>(argv[3], argv[4], params.c_str(), metric);
+    else {
+      diskann::cerr << "Error. Unsupported data type" << std::endl;
+      return -1;
+    }
+  } catch (const std::exception& e) {
+    std::cout << std::string(e.what()) << std::endl;
+    diskann::cerr << "Index build failed." << std::endl;
+    return -1;
   }
 }
