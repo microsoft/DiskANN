@@ -115,7 +115,8 @@ int search_disk_index(int argc, char** argv) {
   diskann::load_aligned_bin<T>(query_bin, query, query_num, query_dim,
                                query_aligned_dim);
 
-  if (file_exists(truthset_bin)) {
+  if (truthset_bin != std::string("null") &&
+      truthset_bin != std::string("NULL") && file_exists(truthset_bin)) {
     diskann::load_truthset(truthset_bin, gt_ids, gt_dists, gt_num, gt_dim);
     if (gt_num != query_num) {
       diskann::cout
@@ -151,7 +152,7 @@ int search_disk_index(int argc, char** argv) {
                 << " BFS nodes around medoid(s)" << std::endl;
   //_pFlashIndex->cache_bfs_levels(num_nodes_to_cache, node_list);
   _pFlashIndex->generate_cache_list_from_sample_queries(
-       warmup_query_file, 15, 6, num_nodes_to_cache, num_threads, node_list);
+      warmup_query_file, 15, 6, num_nodes_to_cache, num_threads, node_list);
   _pFlashIndex->load_cache_list(node_list);
   node_list.clear();
   node_list.shrink_to_fit();
@@ -223,7 +224,7 @@ int search_disk_index(int argc, char** argv) {
     _u64 L = Lvec[test_id];
 
     if (beamwidth <= 0) {
-      //    diskann::cout<<"Tuning beamwidth.." << std::endl;
+      diskann::cout << "Tuning beamwidth.." << std::endl;
       optimized_beamwidth =
           optimize_beamwidth(_pFlashIndex, warmup, warmup_num,
                              warmup_aligned_dim, L, optimized_beamwidth);
@@ -308,23 +309,30 @@ int search_disk_index(int argc, char** argv) {
 
 int main(int argc, char** argv) {
   if (argc < 12) {
-    diskann::cout
-        << "Usage: " << argv[0]
-        << "   index_type<float/int8/uint8>   dist_fn<l2/mips>   "
-           "index_prefix_path   num_nodes_to_cache   "
-           "T(num_threads)   W(beamwidth)   "
-           "query_file.bin   truthset.bin(\"null\" for none)   "
-           "K   result_output_prefix   L1   L2 ..."
-           << std::endl;
+    std::cerr << "Usage: " << argv[0]
+              << "   index_type<float/int8/uint8>   dist_fn<l2/mips>   "
+                 "index_prefix_path   num_nodes_to_cache   "
+                 "T(num_threads)   W(beamwidth)   "
+                 "query_file.bin   truthset.bin(\"null\" for none)   "
+                 "K   result_output_prefix   L1   L2 ..."
+              << std::endl;
     exit(-1);
   }
-  if (std::string(argv[1]) == std::string("float"))
-    search_disk_index<float>(argc, argv);
-  else if (std::string(argv[1]) == std::string("int8"))
-    search_disk_index<int8_t>(argc, argv);
-  else if (std::string(argv[1]) == std::string("uint8"))
-    search_disk_index<uint8_t>(argc, argv);
-  else
-    diskann::cout << "Unsupported index type. Use float or int8 or uint8"
-                  << std::endl;
+  try {
+    if (std::string(argv[1]) == std::string("float"))
+      return search_disk_index<float>(argc, argv);
+    else if (std::string(argv[1]) == std::string("int8"))
+      return search_disk_index<int8_t>(argc, argv);
+    else if (std::string(argv[1]) == std::string("uint8"))
+      return search_disk_index<uint8_t>(argc, argv);
+    else {
+      std::cerr << "Unsupported index type. Use float or int8 or uint8"
+                << std::endl;
+      return -1;
+    }
+  } catch (const std::exception& e) {
+    std::cout << std::string(e.what()) << std::endl;
+    diskann::cerr << "Index search failed." << std::endl;
+    return -1;
+  }
 }

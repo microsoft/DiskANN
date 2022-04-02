@@ -178,17 +178,13 @@ namespace diskann {
 
     data = new T[npts * dim];
     reader.read((char*) data, npts * dim * sizeof(T));
-
-    //    diskann::cout << "Last bytes: "
-    //                  << getValues<T>(data + (npts - 2) * dim, dim);
-    //    diskann::cout << "Finished reading bin file." << std::endl;
   }
 
 #ifdef EXEC_ENV_OLS
   template<typename T>
   inline void load_bin(MemoryMappedFiles& files, const std::string& bin_file,
                        T*& data, size_t& npts, size_t& dim) {
-    diskann::cout << "Reading bin file " << bin_file.c_str() << " ..."
+    diskann::cout << "Reading bin file " << bin_file.c_str() << "... "
                   << std::endl;
 
     auto fc = files.getContent(bin_file);
@@ -208,7 +204,6 @@ namespace diskann {
              << " while expected size is  " << actual_file_size
              << " npts = " << npts << " dim = " << dim
              << " size of <T>= " << sizeof(T) << std::endl;
-      diskann::cout << stream.str();
       throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
                                   __LINE__);
     }
@@ -232,13 +227,21 @@ namespace diskann {
     // cached_ifstream reader(bin_file, read_blk_size);
     // size_t actual_file_size = reader.get_file_size();
     // END OLS
-    diskann::cout << "Reading bin file " << bin_file.c_str() << " ..."
-                  << std::endl;
-    std::ifstream reader(bin_file, std::ios::binary | std::ios::ate);
-    uint64_t      fsize = reader.tellg();
-    reader.seekg(0);
 
-    load_bin_impl<T>(reader, fsize, data, npts, dim);
+    std::ifstream reader;
+    reader.exceptions(std::ifstream::failbit | std::ifstream::badbit);
+
+    try {
+      diskann::cout << "Opening bin file " << bin_file.c_str() << "... "
+                    << std::endl;
+      reader.open(bin_file, std::ios::binary | std::ios::ate);
+      uint64_t fsize = reader.tellg();
+      reader.seekg(0);
+      load_bin_impl<T>(reader, fsize, data, npts, dim);
+    } catch (std::system_error& e) {
+      throw FileException(bin_file, e, __FUNCSIG__, __FILE__, __LINE__);
+    }
+    diskann::cout << "done." << std::endl;
   }
   // load_bin functions END
 
@@ -256,8 +259,8 @@ namespace diskann {
     npts = (unsigned) npts_i32;
     dim = (unsigned) dim_i32;
 
-    diskann::cout << "Metadata: #pts = " << npts << ", #dims = " << dim << "..."
-                  << std::endl;
+    diskann::cout << "Metadata: #pts = " << npts << ", #dims = " << dim
+                  << "... " << std::endl;
 
     int truthset_type = -1;  // 1 means truthset has ids and distances, 2 means
                              // only ids, -1 is error
@@ -295,11 +298,12 @@ namespace diskann {
     }
   }
 
-  inline void prune_truthset_for_range(const std::string& bin_file, float range, std::vector<std::vector<_u32>> &groundtruth, 
-                            size_t& npts) {
+  inline void prune_truthset_for_range(
+      const std::string& bin_file, float range,
+      std::vector<std::vector<_u32>>& groundtruth, size_t& npts) {
     _u64            read_blk_size = 64 * 1024 * 1024;
     cached_ifstream reader(bin_file, read_blk_size);
-    diskann::cout << "Reading truthset file " << bin_file.c_str() << " ..."
+    diskann::cout << "Reading truthset file " << bin_file.c_str() << "... "
                   << std::endl;
     size_t actual_file_size = reader.get_file_size();
 
@@ -307,12 +311,12 @@ namespace diskann {
     reader.read((char*) &npts_i32, sizeof(int));
     reader.read((char*) &dim_i32, sizeof(int));
     npts = (unsigned) npts_i32;
-    _u64 dim = (unsigned) dim_i32;
-    _u32* ids;
+    _u64   dim = (unsigned) dim_i32;
+    _u32*  ids;
     float* dists;
 
-    diskann::cout << "Metadata: #pts = " << npts << ", #dims = " << dim << "..."
-                  << std::endl;
+    diskann::cout << "Metadata: #pts = " << npts << ", #dims = " << dim
+                  << "... " << std::endl;
 
     int truthset_type = -1;  // 1 means truthset has ids and distances, 2 means
                              // only ids, -1 is error
@@ -336,7 +340,7 @@ namespace diskann {
 
     ids = new uint32_t[npts * dim];
     reader.read((char*) ids, npts * dim * sizeof(uint32_t));
- 
+
     if (truthset_type == 1) {
       dists = new float[npts * dim];
       reader.read((char*) dists, npts * dim * sizeof(float));
@@ -347,25 +351,29 @@ namespace diskann {
     for (_u32 i = 0; i < npts; i++) {
       groundtruth[i].clear();
       for (_u32 j = 0; j < dim; j++) {
-        if (dists[i*dim + j] <= range) {
-          groundtruth[i].emplace_back(ids[i*dim+j]);
+        if (dists[i * dim + j] <= range) {
+          groundtruth[i].emplace_back(ids[i * dim + j]);
         }
-        min_dist = min_dist > dists[i*dim+j] ? dists[i*dim + j] : min_dist;
-        max_dist = max_dist < dists[i*dim+j] ? dists[i*dim + j] : max_dist;
+        min_dist =
+            min_dist > dists[i * dim + j] ? dists[i * dim + j] : min_dist;
+        max_dist =
+            max_dist < dists[i * dim + j] ? dists[i * dim + j] : max_dist;
       }
-      //std::cout<<groundtruth[i].size() << " " ;
+      // std::cout<<groundtruth[i].size() << " " ;
     }
-    std::cout<<"Min dist: " << min_dist <<", Max dist: "<< max_dist << std::endl;
+    std::cout << "Min dist: " << min_dist << ", Max dist: " << max_dist
+              << std::endl;
     delete[] ids;
     delete[] dists;
   }
 
-
-  inline void load_range_truthset(const std::string& bin_file, std::vector<std::vector<_u32>> &groundtruth, _u64 & gt_num) {
+  inline void load_range_truthset(const std::string&              bin_file,
+                                  std::vector<std::vector<_u32>>& groundtruth,
+                                  _u64&                           gt_num) {
     _u64            read_blk_size = 64 * 1024 * 1024;
     cached_ifstream reader(bin_file, read_blk_size);
-    diskann::cout << "Reading truthset file " << bin_file.c_str() << " ..."
-                  << std::endl;
+    diskann::cout << "Reading truthset file " << bin_file.c_str() << "... "
+                  << std::flush;
     size_t actual_file_size = reader.get_file_size();
 
     int npts_u32, total_u32;
@@ -374,18 +382,17 @@ namespace diskann {
 
     gt_num = (_u64) npts_u32;
     _u64 total_res = (_u64) total_u32;
-    
-    diskann::cout << "Metadata: #pts = " << gt_num << ", #total_results = " << total_res << "..."
-                  << std::endl;
+
+    diskann::cout << "Metadata: #pts = " << gt_num
+                  << ", #total_results = " << total_res << "... " << std::flush;
 
     size_t expected_file_size =
-        2*sizeof(_u32) + gt_num*sizeof(_u32) + total_res*sizeof(_u32);
+        2 * sizeof(_u32) + gt_num * sizeof(_u32) + total_res * sizeof(_u32);
 
     if (actual_file_size != expected_file_size) {
       std::stringstream stream;
       stream << "Error. File size mismatch in range truthset. actual size: "
-             << actual_file_size
-             << ", expected: " << expected_file_size;
+             << actual_file_size << ", expected: " << expected_file_size;
       diskann::cout << stream.str();
       throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
                                   __LINE__);
@@ -393,36 +400,25 @@ namespace diskann {
     groundtruth.clear();
     groundtruth.resize(gt_num);
     std::vector<_u32> gt_count(gt_num);
-    
 
-
-    reader.read((char*) gt_count.data(), sizeof(_u32)*gt_num);
+    reader.read((char*) gt_count.data(), sizeof(_u32) * gt_num);
 
     std::vector<_u32> gt_stats(gt_count);
     std::sort(gt_stats.begin(), gt_stats.end());
- 
-    std::cout<<"GT count percentiles:" << std::endl;
-      for (_u32 p = 0; p < 100; p += 5)
-    std::cout << "percentile " << p << ": "
-              << gt_stats[std::floor((p / 100.0) * gt_num)] << std::endl;
-  std::cout << "percentile 100"
-            << ": " << gt_stats[gt_num - 1] << std::endl;
 
+    std::cout << "GT count percentiles:" << std::endl;
+    for (_u32 p = 0; p < 100; p += 5)
+      std::cout << "percentile " << p << ": "
+                << gt_stats[std::floor((p / 100.0) * gt_num)] << std::endl;
+    std::cout << "percentile 100"
+              << ": " << gt_stats[gt_num - 1] << std::endl;
 
-   for (_u32 i = 0; i < gt_num; i++) {
+    for (_u32 i = 0; i < gt_num; i++) {
       groundtruth[i].clear();
       groundtruth[i].resize(gt_count[i]);
-      if (gt_count[i]!=0)
-      reader.read((char*) groundtruth[i].data(), sizeof(_u32)*gt_count[i]);
-
-// debugging code
-/*      if (i < 10) { 
-      std::cout<<gt_count[i] <<" nbrs, ids: "; 
-        for (auto &x : groundtruth[i])
-          std::cout<<x <<" ";
-        std::cout<<std::endl;
-      } */
-   }
+      if (gt_count[i] != 0)
+        reader.read((char*) groundtruth[i].data(), sizeof(_u32) * gt_count[i]);
+    }
   }
 
 #ifdef EXEC_ENV_OLS
@@ -488,12 +484,13 @@ namespace diskann {
     }
     rounded_dim = ROUND_UP(dim, 8);
     diskann::cout << "Metadata: #pts = " << npts << ", #dims = " << dim
-                  << ", aligned_dim = " << rounded_dim << "..." << std::flush;
+                  << ", aligned_dim = " << rounded_dim << "... " << std::flush;
     size_t allocSize = npts * rounded_dim * sizeof(T);
-    diskann::cout << "allocating aligned memory, " << allocSize << " bytes..."
-                  << std::flush;
+    diskann::cout << "allocating aligned memory of " << allocSize
+                  << " bytes... " << std::flush;
     alloc_aligned(((void**) &data), allocSize, 8 * sizeof(T));
-    diskann::cout << "done. Copying data..." << std::flush;
+    diskann::cout << "done. Copying data to mem_aligned buffer..."
+                  << std::flush;
 
     for (size_t i = 0; i < npts; i++) {
       reader.read((char*) (data + i * rounded_dim), dim * sizeof(T));
@@ -507,32 +504,38 @@ namespace diskann {
   inline void load_aligned_bin(MemoryMappedFiles& files,
                                const std::string& bin_file, T*& data,
                                size_t& npts, size_t& dim, size_t& rounded_dim) {
-    diskann::cout << "Reading bin file " << bin_file << " ..." << std::flush;
-    FileContent              fc = files.getContent(bin_file);
-    ContentBuf               buf((char*) fc._content, fc._size);
-    std::basic_istream<char> reader(&buf);
+    try {
+      diskann::cout << "Opening bin file " << bin_file << " ..." << std::flush;
+      FileContent              fc = files.getContent(bin_file);
+      ContentBuf               buf((char*) fc._content, fc._size);
+      std::basic_istream<char> reader(&buf);
 
-    size_t actual_file_size = fc._size;
-    load_aligned_bin_impl(reader, actual_file_size, data, npts, dim,
-                          rounded_dim);
+      size_t actual_file_size = fc._size;
+      load_aligned_bin_impl(reader, actual_file_size, data, npts, dim,
+                            rounded_dim);
+    } catch (std::system_error& e) {
+      throw FileException(bin_file, e, __FUNCSIG__, __FILE__, __LINE__);
+    }
   }
 #endif
 
   template<typename T>
   inline void load_aligned_bin(const std::string& bin_file, T*& data,
                                size_t& npts, size_t& dim, size_t& rounded_dim) {
-    diskann::cout << "Reading bin file " << bin_file << " ..." << std::flush;
-    // START OLS
-    //_u64            read_blk_size = 64 * 1024 * 1024;
-    // cached_ifstream reader(bin_file, read_blk_size);
-    // size_t actual_file_size = reader.get_file_size();
-    // END OLS
+    std::ifstream reader;
+    reader.exceptions(std::ifstream::failbit | std::ifstream::badbit);
 
-    std::ifstream reader(bin_file, std::ios::binary | std::ios::ate);
-    uint64_t      fsize = reader.tellg();
-    reader.seekg(0);
+    try {
+      diskann::cout << "Reading (with alignment) bin file " << bin_file
+                    << " ..." << std::flush;
+      reader.open(bin_file, std::ios::binary | std::ios::ate);
 
-    load_aligned_bin_impl(reader, fsize, data, npts, dim, rounded_dim);
+      uint64_t fsize = reader.tellg();
+      reader.seekg(0);
+      load_aligned_bin_impl(reader, fsize, data, npts, dim, rounded_dim);
+    } catch (std::system_error& e) {
+      throw FileException(bin_file, e, __FUNCSIG__, __FILE__, __LINE__);
+    }
   }
 
   template<typename InType, typename OutType>
@@ -706,24 +709,24 @@ inline _u64 get_file_size(const std::string& fname) {
   }
 }
 
-inline bool validate_file_size(const std::string& name) {
-  std::ifstream in(std::string(name), std::ios::binary);
+inline bool validate_index_file_size(std::ifstream& in) {
+  if (!in.is_open())
+    throw diskann::ANNException(
+        "Index file size check called on unopened file stream", -1, __FUNCSIG__,
+        __FILE__, __LINE__);
   in.seekg(0, in.end);
   size_t actual_file_size = in.tellg();
   in.seekg(0, in.beg);
   size_t expected_file_size;
   in.read((char*) &expected_file_size, sizeof(uint64_t));
+  in.seekg(0, in.beg);
   if (actual_file_size != expected_file_size) {
-    diskann::cout << "Error loading" << name
-                  << ". Expected "
-                     "size (metadata): "
+    diskann::cerr << "Index file size error. Expected size (metadata): "
                   << expected_file_size
-                  << ", actual file size : " << actual_file_size
-                  << ". Exitting." << std::endl;
-    in.close();
+                  << ", actual file size : " << actual_file_size << "."
+                  << std::endl;
     return false;
   }
-  in.close();
   return true;
 }
 

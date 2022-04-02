@@ -34,7 +34,6 @@ namespace diskann {
         nullptr;          // MUST BE AT LEAST [MAX_N_SECTOR_READS * SECTOR_LEN]
     _u64 sector_idx = 0;  // index of next [SECTOR_LEN] scratch to use
 
-
     float *aligned_pqtable_dist_scratch =
         nullptr;  // MUST BE AT LEAST [256 * NCHUNKS]
     float *aligned_dist_scratch =
@@ -116,16 +115,16 @@ namespace diskann {
         const T *query, const _u64 k_search, const _u64 l_search, _u64 *res_ids,
         float *res_dists, const _u64 beam_width, QueryStats *stats = nullptr);
 
-
-  DISKANN_DLLEXPORT _u32 range_search(const T *query1, const double range,
-                                     const _u64          min_l_search,
-                                     const _u64          max_l_search,
-                                     std::vector<_u64> & indices,
-                                     std::vector<float> &distances,
-                                     const _u64          min_beam_width,
-                                     QueryStats *        stats);
+    DISKANN_DLLEXPORT _u32 range_search(const T *query1, const double range,
+                                        const _u64          min_l_search,
+                                        const _u64          max_l_search,
+                                        std::vector<_u64> & indices,
+                                        std::vector<float> &distances,
+                                        const _u64          min_beam_width,
+                                        QueryStats *        stats);
 
     std::shared_ptr<AlignedFileReader> &reader;
+
    protected:
     DISKANN_DLLEXPORT void use_medoids_data_as_centroids();
     DISKANN_DLLEXPORT void setup_thread_data(_u64 nthreads);

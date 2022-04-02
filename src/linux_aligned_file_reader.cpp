@@ -82,12 +82,6 @@ namespace {
       }
       */
     }
-
-    /*
-    for(unsigned i=0;i<64;i++){
-      std::cout << *((unsigned*)read_reqs[0].buf + i) << " ";
-    }
-    std::cout << std::endl;*/
   }
 }  // namespace
 

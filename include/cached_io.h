@@ -17,6 +17,7 @@ class cached_ifstream {
   }
   cached_ifstream(const std::string& filename, uint64_t cacheSize)
       : cache_size(cacheSize), cur_off(0) {
+    reader.exceptions(std::ifstream::failbit | std::ifstream::badbit);
     this->open(filename, cache_size);
   }
   ~cached_ifstream() {
@@ -26,25 +27,33 @@ class cached_ifstream {
 
   void open(const std::string& filename, uint64_t cacheSize) {
     this->cur_off = 0;
-    reader.open(filename, std::ios::binary | std::ios::ate);
-    fsize = reader.tellg();
-    reader.seekg(0, std::ios::beg);
-    assert(reader.is_open());
-    assert(cacheSize > 0);
-    cacheSize = (std::min)(cacheSize, fsize);
-    this->cache_size = cacheSize;
-    cache_buf = new char[cacheSize];
-    reader.read(cache_buf, cacheSize);
-    diskann::cout << "Opened: " << filename.c_str() << ", size: " << fsize
-                  << ", cache_size: " << cacheSize << std::endl;
+
+    try {
+      reader.open(filename, std::ios::binary | std::ios::ate);
+      fsize = reader.tellg();
+      reader.seekg(0, std::ios::beg);
+      assert(reader.is_open());
+      assert(cacheSize > 0);
+      cacheSize = (std::min)(cacheSize, fsize);
+      this->cache_size = cacheSize;
+      cache_buf = new char[cacheSize];
+      reader.read(cache_buf, cacheSize);
+      diskann::cout << "Opened: " << filename.c_str() << ", size: " << fsize
+                    << ", cache_size: " << cacheSize << std::endl;
+    } catch (std::system_error& e) {
+      throw diskann::FileException(filename, e, __FUNCSIG__, __FILE__,
+                                   __LINE__);
+    }
   }
 
   size_t get_file_size() {
     return fsize;
   }
+
   void read(char* read_buf, uint64_t n_bytes) {
     assert(cache_buf != nullptr);
     assert(read_buf != nullptr);
+
     if (n_bytes <= (cache_size - cur_off)) {
       // case 1: cache contains all data
       memcpy(read_buf, cache_buf + cur_off, n_bytes);
@@ -75,7 +84,6 @@ class cached_ifstream {
         reader.read(cache_buf, cache_size);
         cur_off = 0;
       }
-
       // note that if size_left < cache_size, then cur_off = cache_size, so
       // subsequent reads will all be directly from file
     }
@@ -99,12 +107,18 @@ class cached_ofstream {
  public:
   cached_ofstream(const std::string& filename, uint64_t cache_size)
       : cache_size(cache_size), cur_off(0) {
-    writer.open(filename, std::ios::binary);
-    assert(writer.is_open());
-    assert(cache_size > 0);
-    cache_buf = new char[cache_size];
-    diskann::cout << "Opened: " << filename.c_str()
-                  << ", cache_size: " << cache_size << std::endl;
+    writer.exceptions(std::ifstream::failbit | std::ifstream::badbit);
+    try {
+      writer.open(filename, std::ios::binary);
+      assert(writer.is_open());
+      assert(cache_size > 0);
+      cache_buf = new char[cache_size];
+      diskann::cout << "Opened: " << filename.c_str()
+                    << ", cache_size: " << cache_size << std::endl;
+    } catch (std::system_error& e) {
+      throw diskann::FileException(filename, e, __FUNCSIG__, __FILE__,
+                                   __LINE__);
+    }
   }
 
   ~cached_ofstream() {

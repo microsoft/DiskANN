@@ -65,13 +65,10 @@ namespace {
       std::cout << "Using Inner Product computation" << std::endl;
       return new diskann::DistanceInnerProduct<float>();
     } else {
-      std::stringstream stream;
-      stream << "Only L2 metric supported as of now. Email "
-                "gopalsr@microsoft.com if you need cosine similarity or inner "
-                "product."
-             << std::endl;
-      std::cerr << stream.str() << std::endl;
-      throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
+      std::string error_msg(
+          "Only L2 and inner product distance function supported for float "
+          "type");
+      throw diskann::ANNException(error_msg, -1, __FUNCSIG__, __FILE__,
                                   __LINE__);
     }
   }
@@ -91,13 +88,9 @@ namespace {
         return new diskann::SlowDistanceL2Int<int8_t>();
       }
     } else {
-      std::stringstream stream;
-      stream << "Only L2 metric supported as of now. Email "
-                "gopalsr@microsoft.com if you need cosine similarity or inner "
-                "product."
-             << std::endl;
-      std::cerr << stream.str() << std::endl;
-      throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
+      std::string error_msg(
+          "Only L2 distance function supported for int8_t type");
+      throw diskann::ANNException(error_msg, -1, __FUNCSIG__, __FILE__,
                                   __LINE__);
     }
   }
@@ -107,17 +100,12 @@ namespace {
     if (m == diskann::Metric::L2) {
       std::cout << "AVX/AVX2 distance function not defined for Uint8. Using "
                    "slow version. "
-                   "Contact gopalsr@microsoft.com if you need AVX/AVX2 support."
                 << std::endl;
       return new diskann::DistanceL2UInt8();
     } else {
-      std::stringstream stream;
-      stream << "Only L2 metric supported as of now. Email "
-                "gopalsr@microsoft.com if you need cosine similarity or inner "
-                "product."
-             << std::endl;
-      std::cerr << stream.str() << std::endl;
-      throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
+      std::string error_msg(
+          "Only L2 distance function supported for uint8_t type");
+      throw diskann::ANNException(error_msg, -1, __FUNCSIG__, __FILE__,
                                   __LINE__);
     }
   }
@@ -141,7 +129,15 @@ namespace diskann {
     // zero-padding
     diskann::cout << "Number of frozen points = " << _num_frozen_pts
                   << std::endl;
-    load_aligned_bin<T>(std::string(filename), _data, _nd, _dim, _aligned_dim);
+    try {
+      load_aligned_bin<T>(std::string(filename), _data, _nd, _dim,
+                          _aligned_dim);
+    } catch (std::exception &e) {
+      diskann::cerr
+          << "Index constructor failed since the data file could not be read"
+          << std::endl;
+      throw;
+    }
 
     if (nd > 0) {
       if (_nd >= nd)
@@ -210,76 +206,84 @@ namespace diskann {
   void Index<T, TagT>::save(const char *filename) {
     long long     total_gr_edges = 0;
     size_t        index_size = 0;
-    std::ofstream out(std::string(filename), std::ios::binary | std::ios::out);
+    std::ofstream out;
+    out.exceptions(std::ifstream::failbit | std::ifstream::badbit);
 
-    if (_support_eager_delete)
-      if (_eager_done && (!_compacted_order)) {
-        if (_nd < _max_points) {
-          assert(_final_graph.size() == _max_points + _num_frozen_pts);
-          unsigned              active = 0;
-          std::vector<unsigned> new_location = get_new_location(active);
-          diskann::cout << "Size of new_location = " << new_location.size()
-                        << std::endl;
-          for (unsigned i = 0; i < new_location.size(); i++)
-            if ((_delete_set.find(i) == _delete_set.end()) &&
-                (new_location[i] >= _max_points + _num_frozen_pts))
-              diskann::cout << "Wrong new_location assigned to  " << i
-                            << std::endl;
-            else {
-              if ((_delete_set.find(i) != _delete_set.end()) &&
-                  (new_location[i] < _max_points + _num_frozen_pts))
-                diskann::cout << "Wrong location assigned to "
-                                 "delete point  "
-                              << i << std::endl;
-            }
-          compact_data(new_location, active, _compacted_order);
+    try {
+      out.open(std::string(filename), std::ios::binary | std::ios::out);
 
-          if (_support_eager_delete)
-            update_in_graph();
+      if (_support_eager_delete)
+        if (_eager_done && (!_compacted_order)) {
+          if (_nd < _max_points) {
+            assert(_final_graph.size() == _max_points + _num_frozen_pts);
+            unsigned              active = 0;
+            std::vector<unsigned> new_location = get_new_location(active);
+            diskann::cout << "Size of new_location = " << new_location.size()
+                          << std::endl;
+            for (unsigned i = 0; i < new_location.size(); i++)
+              if ((_delete_set.find(i) == _delete_set.end()) &&
+                  (new_location[i] >= _max_points + _num_frozen_pts))
+                diskann::cout << "Wrong new_location assigned to  " << i
+                              << std::endl;
+              else {
+                if ((_delete_set.find(i) != _delete_set.end()) &&
+                    (new_location[i] < _max_points + _num_frozen_pts))
+                  diskann::cout << "Wrong location assigned to "
+                                   "delete point  "
+                                << i << std::endl;
+              }
+            compact_data(new_location, active, _compacted_order);
 
-        } else {
-          assert(_final_graph.size() == _max_points + _num_frozen_pts);
-          if (_enable_tags) {
-            _change_lock.lock();
-            if (_can_delete) {
-              std::cerr << "Disable deletes and consolidate "
-                           "index before saving."
-                        << std::endl;
-              throw diskann::ANNException(
-                  "Disable deletes and consolidate index before "
-                  "saving.",
-                  -1, __FUNCSIG__, __FILE__, __LINE__);
+            if (_support_eager_delete)
+              update_in_graph();
+
+          } else {
+            assert(_final_graph.size() == _max_points + _num_frozen_pts);
+            if (_enable_tags) {
+              _change_lock.lock();
+              if (_can_delete) {
+                std::cerr << "Disable deletes and consolidate "
+                             "index before saving."
+                          << std::endl;
+                throw diskann::ANNException(
+                    "Disable deletes and consolidate index before "
+                    "saving.",
+                    -1, __FUNCSIG__, __FILE__, __LINE__);
+              }
             }
           }
         }
-      }
-    if (_lazy_done) {
-      assert(_final_graph.size() == _max_points + _num_frozen_pts);
-      if (_enable_tags) {
-        _change_lock.lock();
-        if (_can_delete || (!_consolidated_order)) {
-          diskann::cout << "Disable deletes and consolidate index before "
-                           "saving."
-                        << std::endl;
-          throw diskann::ANNException(
-              "Disable deletes and consolidate index before saving.", -1,
-              __FUNCSIG__, __FILE__, __LINE__);
+      if (_lazy_done) {
+        assert(_final_graph.size() == _max_points + _num_frozen_pts);
+        if (_enable_tags) {
+          _change_lock.lock();
+          if (_can_delete || (!_consolidated_order)) {
+            diskann::cout << "Disable deletes and consolidate index before "
+                             "saving."
+                          << std::endl;
+            throw diskann::ANNException(
+                "Disable deletes and consolidate index before saving.", -1,
+                __FUNCSIG__, __FILE__, __LINE__);
+          }
         }
       }
+      out.write((char *) &index_size, sizeof(uint64_t));
+      out.write((char *) &_width, sizeof(unsigned));
+      out.write((char *) &_ep, sizeof(unsigned));
+      for (unsigned i = 0; i < _nd + _num_frozen_pts; i++) {
+        unsigned GK = (unsigned) _final_graph[i].size();
+        out.write((char *) &GK, sizeof(unsigned));
+        out.write((char *) _final_graph[i].data(), GK * sizeof(unsigned));
+        total_gr_edges += GK;
+      }
+      index_size = out.tellp();
+      out.seekp(0, std::ios::beg);
+      out.write((char *) &index_size, sizeof(uint64_t));
+      out.close();
+    } catch (std::system_error &e) {
+      throw FileException(std::string(filename), e, __FUNCSIG__, __FILE__,
+                          __LINE__);
     }
-    out.write((char *) &index_size, sizeof(uint64_t));
-    out.write((char *) &_width, sizeof(unsigned));
-    out.write((char *) &_ep, sizeof(unsigned));
-    for (unsigned i = 0; i < _nd + _num_frozen_pts; i++) {
-      unsigned GK = (unsigned) _final_graph[i].size();
-      out.write((char *) &GK, sizeof(unsigned));
-      out.write((char *) _final_graph[i].data(), GK * sizeof(unsigned));
-      total_gr_edges += GK;
-    }
-    index_size = out.tellp();
-    out.seekp(0, std::ios::beg);
-    out.write((char *) &index_size, sizeof(uint64_t));
-    out.close();
 
     diskann::cout << "Avg degree: "
                   << ((float) total_gr_edges) /
@@ -292,63 +296,80 @@ namespace diskann {
   template<typename T, typename TagT>
   void Index<T, TagT>::load(const char *filename, const bool load_tags,
                             const char *tag_filename) {
-    if (!validate_file_size(filename)) {
-      return;
-    }
-    std::ifstream in(filename, std::ios::binary);
-    size_t        expected_file_size;
-    in.read((char *) &expected_file_size, sizeof(_u64));
-    in.read((char *) &_width, sizeof(unsigned));
-    in.read((char *) &_ep, sizeof(unsigned));
-    diskann::cout << "Loading vamana index " << filename << "..." << std::flush;
+    diskann::cout << "Reading index file: " << filename << "... " << std::flush;
+    std::ifstream in;
+    in.exceptions(std::ifstream::failbit | std::ifstream::badbit);
+    try {
+      in.open(filename, std::ios::binary);
+      if (!validate_index_file_size(in)) {
+        throw ANNException("Invalid index size.", -1, __FUNCSIG__, __FILE__,
+                           __LINE__);
+      }
 
-    size_t   cc = 0;
-    unsigned nodes = 0;
-    while (!in.eof()) {
-      unsigned k;
-      in.read((char *) &k, sizeof(unsigned));
-      if (in.eof())
-        break;
-      cc += k;
-      ++nodes;
-      std::vector<unsigned> tmp(k);
-      in.read((char *) tmp.data(), k * sizeof(unsigned));
+      size_t expected_file_size;
+      in.read((char *) &expected_file_size, sizeof(_u64));
+      in.read((char *) &_width, sizeof(unsigned));
+      in.read((char *) &_ep, sizeof(unsigned));
+      diskann::cout << "Loading vamana index " << filename << "..."
+                    << std::flush;
 
-      _final_graph.emplace_back(tmp);
-      if (nodes % 10000000 == 0)
-        diskann::cout << "." << std::flush;
-    }
-    if (_final_graph.size() != _nd) {
-      diskann::cout << "ERROR. mismatch in number of points. Graph has "
-                    << _final_graph.size() << " points and loaded dataset has "
-                    << _nd << " points. " << std::endl;
-      return;
-    }
+      size_t   cc = 0;
+      unsigned nodes = 0;
+      while (in.peek() != EOF) {
+        unsigned k;
+        in.read((char *) &k, sizeof(unsigned));
+        cc += k;
+        ++nodes;
+        std::vector<unsigned> tmp(k);
+        in.read((char *) tmp.data(), k * sizeof(unsigned));
 
-    diskann::cout << "..done. Index has " << nodes << " nodes and " << cc
-                  << " out-edges" << std::endl;
+        _final_graph.emplace_back(tmp);
+        if (nodes % 10000000 == 0)
+          diskann::cout << "." << std::flush;
+      }
+      if (_final_graph.size() != _nd) {
+        std::stringstream message;
+        message << "ERROR. mismatch in number of points. Graph has "
+                << _final_graph.size() << " points and loaded dataset has "
+                << _nd << " points. " << std::endl;
+        throw ANNException(message.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
+      }
+      diskann::cout << "done. Index has " << nodes << " nodes and " << cc
+                    << " out-edges" << std::endl;
+    } catch (std::system_error &e) {
+      throw FileException(filename, e, __FUNCSIG__, __FILE__, __LINE__);
+    }
 
     if (load_tags) {
       if (_enable_tags == false)
         diskann::cout << "Enabling tags." << std::endl;
       _enable_tags = true;
+      std::string tag_filename_s =
+          (tag_filename == NULL) ? std::string(filename) + std::string(".tags")
+                                 : std::string(tag_filename);
+
       std::ifstream tag_file;
-      if (tag_filename == NULL)
-        tag_file = std::ifstream(std::string(filename) + std::string(".tags"));
-      else
-        tag_file = std::ifstream(std::string(tag_filename));
-      if (!tag_file.is_open()) {
-        std::cerr << "Tag file not found." << std::endl;
-        return;
-      }
+      tag_file.exceptions(std::ifstream::failbit | std::ifstream::badbit);
       unsigned id = 0;
-      TagT     tag;
-      while (tag_file >> tag) {
-        _location_to_tag[id] = tag;
-        _tag_to_location[tag] = id++;
+
+      try {
+        tag_file.open(tag_filename_s);
+
+        TagT tag;
+        while (tag_file >> tag) {
+          _location_to_tag[id] = tag;
+          _tag_to_location[tag] = id++;
+        }
+        tag_file.close();
+      } catch (std::system_error &e) {
+        throw FileException(tag_filename_s, e, __FUNCSIG__, __FILE__, __LINE__);
       }
-      tag_file.close();
-      assert(id == _nd);
+
+      if (id != _nd)
+        throw ANNException(
+            std::string(
+                "Error: number of tags read differs from the index size"),
+            -1, __FUNCSIG__, __FILE__, __LINE__);
     }
   }
 
@@ -1613,19 +1634,6 @@ namespace diskann {
     _empty_slots.clear();
     mode = true;
     diskann::cout << "Consolidated the index" << std::endl;
-
-    /*	  for(unsigned i = 0; i < _nd + _num_frozen_pts; i++){
-          int flag = 0;
-          for(unsigned j = 0; j < _final_graph[i].size(); j++)
-            if(_final_graph[i][j] == i){
-              diskann::cout << "Self loop found just after compacting inside the
-       function" << std::endl;
-              flag = 1;
-              break;
-            }
-          if(flag == 1)
-            break;
-        } */
   }
 
   // Do not call reserve_location() if you have not locked _change_lock.

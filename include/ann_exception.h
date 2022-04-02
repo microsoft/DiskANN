@@ -3,6 +3,8 @@
 
 #pragma once
 #include <string>
+#include <stdexcept>
+#include <system_error>
 #include "windows_customizations.h"
 
 #ifndef _WINDOWS
@@ -10,7 +12,8 @@
 #endif
 
 namespace diskann {
-  class ANNException {
+
+  class ANNException : public std::runtime_error {
    public:
     DISKANN_DLLEXPORT ANNException(const std::string& message, int errorCode);
     DISKANN_DLLEXPORT ANNException(const std::string& message, int errorCode,
@@ -18,13 +21,16 @@ namespace diskann {
                                    const std::string& fileName,
                                    unsigned int       lineNum);
 
-    DISKANN_DLLEXPORT std::string message() const;
-
    private:
-    int          _errorCode;
-    std::string  _message;
-    std::string  _funcSig;
-    std::string  _fileName;
-    unsigned int _lineNum;
+    int _errorCode;
+  };
+
+  class FileException : public ANNException {
+   public:
+    DISKANN_DLLEXPORT FileException(const std::string& filename,
+                                    std::system_error& e,
+                                    const std::string& funcSig,
+                                    const std::string& fileName,
+                                    unsigned int       lineNum);
   };
 }  // namespace diskann
