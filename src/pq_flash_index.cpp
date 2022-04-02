@@ -158,10 +158,16 @@ namespace diskann {
                                this->aligned_dim * sizeof(float),
                                8 * sizeof(float));
         scratch.visited = new tsl::robin_set<_u64>(4096);
+        diskann::alloc_aligned((void **) &scratch.rotated_query,
+                               this->aligned_dim * sizeof(float),
+                               8 * sizeof(float));
+
 
         memset(scratch.coord_scratch, 0, MAX_N_CMPS * this->aligned_dim);
         memset(scratch.aligned_query_T, 0, this->aligned_dim * sizeof(T));
         memset(scratch.aligned_query_float, 0,
+               this->aligned_dim * sizeof(float));
+        memset(scratch.rotated_query, 0,
                this->aligned_dim * sizeof(float));
 
         ThreadData<T> data;
@@ -190,6 +196,7 @@ namespace diskann {
       diskann::aligned_free((void *) scratch.aligned_pqtable_dist_scratch);
       diskann::aligned_free((void *) scratch.aligned_dist_scratch);
       diskann::aligned_free((void *) scratch.aligned_query_float);
+      diskann::aligned_free((void *) scratch.rotated_query);
       diskann::aligned_free((void *) scratch.aligned_query_T);
 
       delete scratch.visited;
@@ -848,10 +855,13 @@ namespace diskann {
     float        query_norm = 0;
     const T *    query = data.scratch.aligned_query_T;
     const float *query_float = data.scratch.aligned_query_float;
+    float *query_rotated = data.scratch.rotated_query;
 
-    for (uint32_t i = 0; i < this->data_dim; i++) {
+
+    for (uint32_t i = 0; i < this->data_dim; i++) { // if data_dim is 1 more than real dim for inner product is this correct?
       data.scratch.aligned_query_float[i] = query1[i];
       data.scratch.aligned_query_T[i] = query1[i];
+      query_rotated[i] = query1[i];
       query_norm += query1[i] * query1[i];
     }
 
@@ -883,8 +893,9 @@ namespace diskann {
     _u64 &sector_scratch_idx = query_scratch->sector_idx;
 
     // query <-> PQ chunk centers distances
+    pq_table.preprocess_query(query_rotated); // center the query and rotate if we have a rotation matrix
     float *pq_dists = query_scratch->aligned_pqtable_dist_scratch;
-    pq_table.populate_chunk_distances(query_float, pq_dists);
+    pq_table.populate_chunk_distances(query_rotated, pq_dists);
 
     // query <-> neighbor list
     float *dist_scratch = query_scratch->aligned_dist_scratch;
@@ -1023,7 +1034,7 @@ namespace diskann {
             cur_expanded_dist = disk_pq_table.inner_product(
                 query_float, (_u8 *) node_fp_coords_copy);
           else
-            cur_expanded_dist = disk_pq_table.l2_distance(
+            cur_expanded_dist = disk_pq_table.l2_distance( // disk_pq does not support OPQ yet
                 query_float, (_u8 *) node_fp_coords_copy);
         }
         full_retset.push_back(

@@ -199,6 +199,57 @@ namespace math_utils {
       delete[] pts_norms_squared;
   }
 
+
+void singular_value_decomposition(long long int m,     // number of rows in matrix
+                                long long int n,     // number of columns in matrix
+                                long long int lda,   // leading dimension of matrix
+                                double *a) // pointer to top-left corner
+{
+    // Setup a buffer to hold the singular values:
+    int numberOfSingularValues = m < n ? m : n;
+    double *s =  new double[numberOfSingularValues];
+
+    // Setup buffers to hold the matrices U and Vt:
+    double *u = new double[m*m];
+    double *vt = new double[n*n];
+
+    // Workspace and status variables:
+    double workSize;
+    double *work = &workSize;
+    long long int lwork = -1;
+    long long int *iwork = new long long int[8 * numberOfSingularValues];
+    long long int info = 0;
+
+    // Call dgesdd_ with lwork = -1 to query optimal workspace size:
+    dgesdd_("A", &m, &n, a, &lda, s, u, &m, vt, &n, work, &lwork, iwork, &info);
+    if (info) // handle error conditions here
+
+    // Optimal workspace size is returned in work[0].
+    lwork = workSize;
+    work = new double[lwork];
+
+    // Call dgesdd_ to do the actual computation:
+    dgesdd_("A", &m, &n, a, &lda, s, u, &m, vt, &n, work, &lwork, iwork, &info);
+    if (info) // handle error conditions here
+
+    // Cleanup workspace:
+    delete[] work;
+    delete[] iwork;
+
+    // do something useful with U, S, Vt ...
+    for (_u32 i =0; i < numberOfSingularValues; i++) {
+      std::cout <<s[i] <<" ";
+    }
+
+   std::cout<<std::endl;
+
+    // and then clean them up too:
+    delete[] s;
+    delete[] u;
+    delete[] vt;
+}
+
+
   // if to_subtract is 1, will subtract nearest center from each row. Else will
   // add. Output will be in data_load iself.
   // Nearest centers need to be provided in closst_centers.
@@ -222,6 +273,8 @@ namespace math_utils {
       }
     }
   }
+
+
 
 }  // namespace math_utils
 
@@ -335,8 +388,8 @@ namespace kmeans {
       residual = lloyds_iter(data, num_points, dim, centers, num_centers,
                              docs_l2sq, closest_docs, closest_center);
 
-      diskann::cout << "Lloyd's iter " << i
-                    << "  dist_sq residual: " << residual << std::endl;
+//      diskann::cout << "Lloyd's iter " << i
+//                    << "  dist_sq residual: " << residual << std::endl;
 
       if (((i != 0) && ((old_residual - residual) / residual) < 0.00001) ||
           (residual < std::numeric_limits<float>::epsilon())) {
@@ -361,11 +414,11 @@ namespace kmeans {
     //	pivot_data = new float[num_centers * dim];
 
     std::vector<size_t> picked;
-    diskann::cout << "Selecting " << num_centers << " pivots from "
-                  << num_points << " points using ";
+//    diskann::cout << "Selecting " << num_centers << " pivots from "
+//                  << num_points << " points using ";
     std::random_device rd;
     auto               x = rd();
-    diskann::cout << "random seed " << x << std::endl;
+//    diskann::cout << "random seed " << x << std::endl;
     std::mt19937                          generator(x);
     std::uniform_int_distribution<size_t> distribution(0, num_points - 1);
 
@@ -393,11 +446,11 @@ namespace kmeans {
     }
 
     std::vector<size_t> picked;
-    diskann::cout << "Selecting " << num_centers << " pivots from "
-                  << num_points << " points using ";
+//    diskann::cout << "Selecting " << num_centers << " pivots from "
+//                  << num_points << " points using ";
     std::random_device rd;
     auto               x = rd();
-    diskann::cout << "random seed " << x << ": " << std::flush;
+//    diskann::cout << "random seed " << x << ": " << std::flush;
     std::mt19937                          generator(x);
     std::uniform_real_distribution<>      distribution(0, 1);
     std::uniform_int_distribution<size_t> int_dist(0, num_points - 1);
@@ -455,11 +508,12 @@ namespace kmeans {
                                                data + tmp_pivot * dim, dim));
       }
       num_picked++;
-      if (num_picked % 32 == 0)
-        diskann::cout << "." << std::flush;
+  //    if (num_picked % 32 == 0)
+  //      diskann::cout << "." << std::flush;
     }
-    diskann::cout << "done." << std::endl;
+  //  diskann::cout << "done." << std::endl;
     delete[] dist;
   }
 
 }  // namespace kmeans
+
