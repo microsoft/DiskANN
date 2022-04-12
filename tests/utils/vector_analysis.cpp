@@ -127,12 +127,12 @@ int aux_main(char** argv) {
 
 int main(int argc, char** argv) {
   if (argc < 4) {
-    std::cout
-        << argv[0]
-        << " data_type [float/int8/uint8] base_bin_file "
-           "[option: 1-norm analysis, 2-prep_base_for_mip, "
-           "3-prep_query_for_mip, 4-normalize-vecs] [out_file for options 2/3/4]"
-        << std::endl;
+    std::cout << argv[0]
+              << " data_type [float/int8/uint8] base_bin_file "
+                 "[option: 1-norm analysis, 2-prep_base_for_mip, "
+                 "3-prep_query_for_mip, 4-normalize-vecs] [out_file for "
+                 "options 2/3/4]"
+              << std::endl;
     exit(-1);
   }
 

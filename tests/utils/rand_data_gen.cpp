@@ -8,12 +8,12 @@
 #include "utils.h"
 
 int block_write_float(std::ofstream& writer, _u64 ndims, _u64 npts,
-                       float norm) {
+                      float norm) {
   auto vec = new float[ndims];
 
   std::random_device         rd{};
   std::mt19937               gen{rd()};
-  std::normal_distribution<> normal_rand{0,1};
+  std::normal_distribution<> normal_rand{0, 1};
 
   for (_u64 i = 0; i < npts; i++) {
     float sum = 0;
@@ -23,7 +23,7 @@ int block_write_float(std::ofstream& writer, _u64 ndims, _u64 npts,
       sum += vec[d] * vec[d];
     for (_u64 d = 0; d < ndims; ++d)
       vec[d] = vec[d] * norm / std::sqrt(sum);
-    
+
     writer.write((char*) vec, ndims * sizeof(float));
   }
 
@@ -31,8 +31,7 @@ int block_write_float(std::ofstream& writer, _u64 ndims, _u64 npts,
   return 0;
 }
 
-int block_write_int8(std::ofstream& writer, _u64 ndims, _u64 npts,
-                       float norm) {
+int block_write_int8(std::ofstream& writer, _u64 ndims, _u64 npts, float norm) {
   auto vec = new float[ndims];
   auto vec_T = new int8_t[ndims];
 
@@ -48,11 +47,11 @@ int block_write_int8(std::ofstream& writer, _u64 ndims, _u64 npts,
       sum += vec[d] * vec[d];
     for (_u64 d = 0; d < ndims; ++d)
       vec[d] = vec[d] * norm / std::sqrt(sum);
-    
+
     for (_u64 d = 0; d < ndims; ++d) {
       vec_T[d] = std::round<int>(vec[d]);
     }
-    
+
     writer.write((char*) vec_T, ndims * sizeof(int8_t));
   }
 
@@ -62,7 +61,7 @@ int block_write_int8(std::ofstream& writer, _u64 ndims, _u64 npts,
 }
 
 int block_write_uint8(std::ofstream& writer, _u64 ndims, _u64 npts,
-                       float norm) {
+                      float norm) {
   auto vec = new float[ndims];
   auto vec_T = new int8_t[ndims];
 
@@ -78,7 +77,7 @@ int block_write_uint8(std::ofstream& writer, _u64 ndims, _u64 npts,
       sum += vec[d] * vec[d];
     for (_u64 d = 0; d < ndims; ++d)
       vec[d] = vec[d] * norm / std::sqrt(sum);
-    
+
     for (_u64 d = 0; d < ndims; ++d) {
       vec_T[d] = 128 + std::round<int>(vec[d]);
     }
@@ -93,8 +92,7 @@ int block_write_uint8(std::ofstream& writer, _u64 ndims, _u64 npts,
 
 int main(int argc, char** argv) {
   if (argc != 6) {
-    std::cout << argv[0]
-              << " <float/int8/uint8> ndims npts norm output.bin"
+    std::cout << argv[0] << " <float/int8/uint8> ndims npts norm output.bin"
               << std::endl;
     exit(-1);
   }
@@ -115,13 +113,15 @@ int main(int argc, char** argv) {
     return -1;
   }
 
-  if ((std::string(argv[1]) == std::string("int8"))
-   || (std::string(argv[1]) == std::string("uint8"))) {
-     if (norm > 127) {
-       std::cerr << "Error: for in8/uint8 datatypes, L2 norm can not be greater than 127" << std::endl;
-       return -1;
-     }
-   }
+  if ((std::string(argv[1]) == std::string("int8")) ||
+      (std::string(argv[1]) == std::string("uint8"))) {
+    if (norm > 127) {
+      std::cerr << "Error: for in8/uint8 datatypes, L2 norm can not be greater "
+                   "than 127"
+                << std::endl;
+      return -1;
+    }
+  }
 
   std::ofstream writer(argv[5], std::ios::binary);
   auto          npts_s32 = (_u32) npts;
@@ -141,13 +141,13 @@ int main(int argc, char** argv) {
     } else if (std::string(argv[1]) == std::string("int8")) {
       ret = block_write_int8(writer, ndims, cblk_size, norm);
     } else if (std::string(argv[1]) == std::string("uint8")) {
-      ret =  block_write_uint8(writer, ndims, cblk_size, norm);
+      ret = block_write_uint8(writer, ndims, cblk_size, norm);
     }
     if (ret == 0)
       std::cout << "Block #" << i << " written" << std::endl;
     else {
       writer.close();
-      std::cout << "failed to write" <<std::endl;
+      std::cout << "failed to write" << std::endl;
       return -1;
     }
   }

@@ -1,0 +1,1158 @@
+diff --git a/src/gperftools/malloc_extension.h b/src/gperftools/malloc_extension.h
+index d203394..53f9f1b 100644
+--- a/src/gperftools/malloc_extension.h
++++ b/src/gperftools/malloc_extension.h
+@@ -87,7 +87,7 @@ class PERFTOOLS_DLL_DECL SysAllocator {
+ // The default implementations of the following routines do nothing.
+ // All implementations should be thread-safe; the current one
+ // (TCMallocImplementation) is.
+-class PERFTOOLS_DLL_DECL MallocExtension {
++class PERFTOOLS_DLL_DECL __declspec(dllexport)  MallocExtension {
+  public:
+   virtual ~MallocExtension();
+ 
+diff --git a/src/windows/patch_functions.cc b/src/windows/patch_functions.cc
+index a2d0a03..d8ef34d 100644
+--- a/src/windows/patch_functions.cc
++++ b/src/windows/patch_functions.cc
+@@ -131,12 +131,12 @@ const char kMangledDeleteArrayNothrow[] = "??_V@YAXPAXABUnothrow_t@std@@@Z";
+ // namespace.  I'd rather export a variable named "_tcmalloc", but I
+ // couldn't figure out how to get that to work.  This function exports
+ // the symbol "__tcmalloc".)
+-extern "C" PERFTOOLS_DLL_DECL void _tcmalloc();
++extern "C" PERFTOOLS_DLL_DECL __declspec(dllexport) void _tcmalloc();
+ void _tcmalloc() { }
+ 
+ // This is the version needed for windows x64, which has a different
+ // decoration scheme which doesn't auto-add a leading underscore.
+-extern "C" PERFTOOLS_DLL_DECL void __tcmalloc();
++extern "C" PERFTOOLS_DLL_DECL __declspec(dllexport)  void __tcmalloc();
+ void __tcmalloc() { }
+ 
+ namespace {    // most everything here is in an unnamed namespace
+diff --git a/vsprojects/addr2line-pdb/addr2line-pdb.vcxproj b/vsprojects/addr2line-pdb/addr2line-pdb.vcxproj
+index 4801616..7b7bb18 100644
+--- a/vsprojects/addr2line-pdb/addr2line-pdb.vcxproj
++++ b/vsprojects/addr2line-pdb/addr2line-pdb.vcxproj
+@@ -35,41 +35,41 @@
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release-Patch|Win32'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>false</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+     <WholeProgramOptimization>true</WholeProgramOptimization>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release-Override|Win32'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>false</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+     <WholeProgramOptimization>true</WholeProgramOptimization>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release-Patch|x64'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>false</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+     <WholeProgramOptimization>true</WholeProgramOptimization>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release-Override|x64'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>false</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+     <WholeProgramOptimization>true</WholeProgramOptimization>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>true</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>true</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+   </PropertyGroup>
+   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+diff --git a/vsprojects/addressmap_unittest/addressmap_unittest.vcxproj b/vsprojects/addressmap_unittest/addressmap_unittest.vcxproj
+index de44f74..162b53f 100644
+--- a/vsprojects/addressmap_unittest/addressmap_unittest.vcxproj
++++ b/vsprojects/addressmap_unittest/addressmap_unittest.vcxproj
+@@ -35,41 +35,41 @@
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release-Patch|Win32'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>false</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+     <WholeProgramOptimization>true</WholeProgramOptimization>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release-Override|Win32'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>false</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+     <WholeProgramOptimization>true</WholeProgramOptimization>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release-Patch|x64'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>false</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+     <WholeProgramOptimization>true</WholeProgramOptimization>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release-Override|x64'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>false</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+     <WholeProgramOptimization>true</WholeProgramOptimization>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>true</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>true</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+   </PropertyGroup>
+   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+diff --git a/vsprojects/current_allocated_bytes_test/current_allocated_bytes_test.vcxproj b/vsprojects/current_allocated_bytes_test/current_allocated_bytes_test.vcxproj
+index be6ebcf..e20c669 100644
+--- a/vsprojects/current_allocated_bytes_test/current_allocated_bytes_test.vcxproj
++++ b/vsprojects/current_allocated_bytes_test/current_allocated_bytes_test.vcxproj
+@@ -35,41 +35,41 @@
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release-Patch|Win32'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>false</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+     <WholeProgramOptimization>true</WholeProgramOptimization>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release-Override|Win32'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>false</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+     <WholeProgramOptimization>true</WholeProgramOptimization>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release-Patch|x64'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>false</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+     <WholeProgramOptimization>true</WholeProgramOptimization>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release-Override|x64'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>false</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+     <WholeProgramOptimization>true</WholeProgramOptimization>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>true</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>true</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+   </PropertyGroup>
+   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+diff --git a/vsprojects/frag_unittest/frag_unittest.vcxproj b/vsprojects/frag_unittest/frag_unittest.vcxproj
+index d463582..372ec91 100644
+--- a/vsprojects/frag_unittest/frag_unittest.vcxproj
++++ b/vsprojects/frag_unittest/frag_unittest.vcxproj
+@@ -35,41 +35,41 @@
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release-Patch|Win32'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>false</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+     <WholeProgramOptimization>true</WholeProgramOptimization>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release-Override|Win32'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>false</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+     <WholeProgramOptimization>true</WholeProgramOptimization>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release-Patch|x64'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>false</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+     <WholeProgramOptimization>true</WholeProgramOptimization>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release-Override|x64'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>false</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+     <WholeProgramOptimization>true</WholeProgramOptimization>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>true</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>true</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+   </PropertyGroup>
+   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+diff --git a/vsprojects/libtcmalloc_minimal/libtcmalloc_minimal.vcxproj b/vsprojects/libtcmalloc_minimal/libtcmalloc_minimal.vcxproj
+index 1bd87bc..b66a06e 100644
+--- a/vsprojects/libtcmalloc_minimal/libtcmalloc_minimal.vcxproj
++++ b/vsprojects/libtcmalloc_minimal/libtcmalloc_minimal.vcxproj
+@@ -30,46 +30,47 @@
+     <UseNativeEnvironment>true</UseNativeEnvironment>
+     <ProjectGuid>{55E2B3AE-3CA1-4DB6-97F7-0A044D6F446F}</ProjectGuid>
+     <Keyword>Win32Proj</Keyword>
++    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+   </PropertyGroup>
+   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release-Patch|Win32'" Label="Configuration">
+     <ConfigurationType>DynamicLibrary</ConfigurationType>
+     <UseDebugLibraries>false</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+     <WholeProgramOptimization>true</WholeProgramOptimization>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release-Override|Win32'" Label="Configuration">
+     <ConfigurationType>StaticLibrary</ConfigurationType>
+     <UseDebugLibraries>false</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+     <WholeProgramOptimization>true</WholeProgramOptimization>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release-Patch|x64'" Label="Configuration">
+     <ConfigurationType>DynamicLibrary</ConfigurationType>
+     <UseDebugLibraries>false</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+     <WholeProgramOptimization>true</WholeProgramOptimization>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release-Override|x64'" Label="Configuration">
+-    <ConfigurationType>StaticLibrary</ConfigurationType>
++    <ConfigurationType>DynamicLibrary</ConfigurationType>
+     <UseDebugLibraries>false</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+     <WholeProgramOptimization>true</WholeProgramOptimization>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
+     <ConfigurationType>DynamicLibrary</ConfigurationType>
+     <UseDebugLibraries>true</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+     <ConfigurationType>DynamicLibrary</ConfigurationType>
+     <UseDebugLibraries>true</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+   </PropertyGroup>
+   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+@@ -180,15 +181,16 @@
+   </ItemDefinitionGroup>
+   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release-Override|x64'">
+     <ClCompile>
+-      <PreprocessorDefinitions>WIN32_OVERRIDE_ALLOCATORS;PERFTOOLS_DLL_DECL=;NDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
++      <PreprocessorDefinitions>PERFTOOLS_DLL_DECL=;NDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+       <WarningLevel>Level3</WarningLevel>
+       <MultiProcessorCompilation>true</MultiProcessorCompilation>
+-      <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
++      <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+       <BufferSecurityCheck>false</BufferSecurityCheck>
+       <EnforceTypeConversionRules>true</EnforceTypeConversionRules>
++      <RuntimeTypeInfo>true</RuntimeTypeInfo>
+     </ClCompile>
+     <Link>
+-      <SubSystem>Windows</SubSystem>
++      <SubSystem>Console</SubSystem>
+       <OptimizeReferences>true</OptimizeReferences>
+       <EnableCOMDATFolding>true</EnableCOMDATFolding>
+     </Link>
+diff --git a/vsprojects/low_level_alloc_unittest/low_level_alloc_unittest.vcxproj b/vsprojects/low_level_alloc_unittest/low_level_alloc_unittest.vcxproj
+index 8f1a22b..f020fb3 100644
+--- a/vsprojects/low_level_alloc_unittest/low_level_alloc_unittest.vcxproj
++++ b/vsprojects/low_level_alloc_unittest/low_level_alloc_unittest.vcxproj
+@@ -35,41 +35,41 @@
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release-Patch|Win32'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>false</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+     <WholeProgramOptimization>true</WholeProgramOptimization>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release-Override|Win32'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>false</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+     <WholeProgramOptimization>true</WholeProgramOptimization>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release-Patch|x64'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>false</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+     <WholeProgramOptimization>true</WholeProgramOptimization>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release-Override|x64'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>false</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+     <WholeProgramOptimization>true</WholeProgramOptimization>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>true</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>true</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+   </PropertyGroup>
+   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+diff --git a/vsprojects/malloc_extension_test/malloc_extension_test.vcxproj b/vsprojects/malloc_extension_test/malloc_extension_test.vcxproj
+index e1a8918..0f7e7c3 100644
+--- a/vsprojects/malloc_extension_test/malloc_extension_test.vcxproj
++++ b/vsprojects/malloc_extension_test/malloc_extension_test.vcxproj
+@@ -35,41 +35,41 @@
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release-Patch|Win32'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>false</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+     <WholeProgramOptimization>true</WholeProgramOptimization>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release-Override|Win32'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>false</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+     <WholeProgramOptimization>true</WholeProgramOptimization>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release-Patch|x64'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>false</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+     <WholeProgramOptimization>true</WholeProgramOptimization>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release-Override|x64'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>false</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+     <WholeProgramOptimization>true</WholeProgramOptimization>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>true</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>true</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+   </PropertyGroup>
+   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+diff --git a/vsprojects/malloc_hook_test/malloc_hook_test.vcxproj b/vsprojects/malloc_hook_test/malloc_hook_test.vcxproj
+index 8cfbf7a..b6f7212 100644
+--- a/vsprojects/malloc_hook_test/malloc_hook_test.vcxproj
++++ b/vsprojects/malloc_hook_test/malloc_hook_test.vcxproj
+@@ -35,41 +35,41 @@
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release-Patch|Win32'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>false</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+     <WholeProgramOptimization>true</WholeProgramOptimization>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release-Override|Win32'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>false</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+     <WholeProgramOptimization>true</WholeProgramOptimization>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release-Patch|x64'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>false</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+     <WholeProgramOptimization>true</WholeProgramOptimization>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release-Override|x64'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>false</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+     <WholeProgramOptimization>true</WholeProgramOptimization>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>true</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>true</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+   </PropertyGroup>
+   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+diff --git a/vsprojects/markidle_unittest/markidle_unittest.vcxproj b/vsprojects/markidle_unittest/markidle_unittest.vcxproj
+index 6294d56..7f410ee 100644
+--- a/vsprojects/markidle_unittest/markidle_unittest.vcxproj
++++ b/vsprojects/markidle_unittest/markidle_unittest.vcxproj
+@@ -35,41 +35,41 @@
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release-Patch|Win32'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>false</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+     <WholeProgramOptimization>true</WholeProgramOptimization>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release-Override|Win32'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>false</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+     <WholeProgramOptimization>true</WholeProgramOptimization>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release-Patch|x64'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>false</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+     <WholeProgramOptimization>true</WholeProgramOptimization>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release-Override|x64'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>false</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+     <WholeProgramOptimization>true</WholeProgramOptimization>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>true</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>true</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+   </PropertyGroup>
+   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+diff --git a/vsprojects/nm-pdb/nm-pdb.vcxproj b/vsprojects/nm-pdb/nm-pdb.vcxproj
+index ac6caeb..f7a8e21 100644
+--- a/vsprojects/nm-pdb/nm-pdb.vcxproj
++++ b/vsprojects/nm-pdb/nm-pdb.vcxproj
+@@ -35,41 +35,41 @@
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release-Patch|Win32'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>false</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+     <WholeProgramOptimization>true</WholeProgramOptimization>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release-Override|Win32'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>false</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+     <WholeProgramOptimization>true</WholeProgramOptimization>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release-Patch|x64'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>false</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+     <WholeProgramOptimization>true</WholeProgramOptimization>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release-Override|x64'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>false</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+     <WholeProgramOptimization>true</WholeProgramOptimization>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>true</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>true</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+   </PropertyGroup>
+   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+diff --git a/vsprojects/packed-cache_test/packed-cache_test.vcxproj b/vsprojects/packed-cache_test/packed-cache_test.vcxproj
+index 9f57d19..4d00694 100644
+--- a/vsprojects/packed-cache_test/packed-cache_test.vcxproj
++++ b/vsprojects/packed-cache_test/packed-cache_test.vcxproj
+@@ -35,41 +35,41 @@
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release-Patch|Win32'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>false</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+     <WholeProgramOptimization>true</WholeProgramOptimization>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release-Override|Win32'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>false</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+     <WholeProgramOptimization>true</WholeProgramOptimization>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release-Patch|x64'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>false</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+     <WholeProgramOptimization>true</WholeProgramOptimization>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release-Override|x64'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>false</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+     <WholeProgramOptimization>true</WholeProgramOptimization>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>true</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>true</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+   </PropertyGroup>
+   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+diff --git a/vsprojects/page_heap_test/page_heap_test.vcxproj b/vsprojects/page_heap_test/page_heap_test.vcxproj
+index 8503a0d..ef910c4 100644
+--- a/vsprojects/page_heap_test/page_heap_test.vcxproj
++++ b/vsprojects/page_heap_test/page_heap_test.vcxproj
+@@ -35,41 +35,41 @@
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release-Patch|Win32'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>false</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+     <WholeProgramOptimization>true</WholeProgramOptimization>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release-Override|Win32'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>false</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+     <WholeProgramOptimization>true</WholeProgramOptimization>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release-Patch|x64'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>false</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+     <WholeProgramOptimization>true</WholeProgramOptimization>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release-Override|x64'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>false</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+     <WholeProgramOptimization>true</WholeProgramOptimization>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>true</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>true</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+   </PropertyGroup>
+   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+@@ -226,4 +226,4 @@
+   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+   <ImportGroup Label="ExtensionTargets">
+   </ImportGroup>
+-</Project>
++</Project>
+\ No newline at end of file
+diff --git a/vsprojects/pagemap_unittest/pagemap_unittest.vcxproj b/vsprojects/pagemap_unittest/pagemap_unittest.vcxproj
+index e5f267c..8263907 100644
+--- a/vsprojects/pagemap_unittest/pagemap_unittest.vcxproj
++++ b/vsprojects/pagemap_unittest/pagemap_unittest.vcxproj
+@@ -35,41 +35,41 @@
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release-Patch|Win32'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>false</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+     <WholeProgramOptimization>true</WholeProgramOptimization>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release-Override|Win32'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>false</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+     <WholeProgramOptimization>true</WholeProgramOptimization>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release-Patch|x64'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>false</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+     <WholeProgramOptimization>true</WholeProgramOptimization>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release-Override|x64'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>false</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+     <WholeProgramOptimization>true</WholeProgramOptimization>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>true</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>true</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+   </PropertyGroup>
+   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+diff --git a/vsprojects/preamble_patcher_test/preamble_patcher_test.vcxproj b/vsprojects/preamble_patcher_test/preamble_patcher_test.vcxproj
+index cf3daad..5501767 100644
+--- a/vsprojects/preamble_patcher_test/preamble_patcher_test.vcxproj
++++ b/vsprojects/preamble_patcher_test/preamble_patcher_test.vcxproj
+@@ -35,41 +35,41 @@
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release-Patch|Win32'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>false</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+     <WholeProgramOptimization>true</WholeProgramOptimization>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release-Override|Win32'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>false</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+     <WholeProgramOptimization>true</WholeProgramOptimization>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release-Patch|x64'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>false</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+     <WholeProgramOptimization>true</WholeProgramOptimization>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release-Override|x64'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>false</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+     <WholeProgramOptimization>true</WholeProgramOptimization>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>true</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>true</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+   </PropertyGroup>
+   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+diff --git a/vsprojects/realloc_unittest/realloc_unittest.vcxproj b/vsprojects/realloc_unittest/realloc_unittest.vcxproj
+index e16c02f..e1adcce 100644
+--- a/vsprojects/realloc_unittest/realloc_unittest.vcxproj
++++ b/vsprojects/realloc_unittest/realloc_unittest.vcxproj
+@@ -35,41 +35,41 @@
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release-Patch|Win32'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>false</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+     <WholeProgramOptimization>true</WholeProgramOptimization>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release-Override|Win32'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>false</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+     <WholeProgramOptimization>true</WholeProgramOptimization>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release-Patch|x64'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>false</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+     <WholeProgramOptimization>true</WholeProgramOptimization>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release-Override|x64'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>false</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+     <WholeProgramOptimization>true</WholeProgramOptimization>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>true</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>true</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+   </PropertyGroup>
+   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+diff --git a/vsprojects/sampler_test/sampler_test.vcxproj b/vsprojects/sampler_test/sampler_test.vcxproj
+index 98d6bb4..a729208 100644
+--- a/vsprojects/sampler_test/sampler_test.vcxproj
++++ b/vsprojects/sampler_test/sampler_test.vcxproj
+@@ -35,41 +35,41 @@
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release-Patch|Win32'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>false</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+     <WholeProgramOptimization>true</WholeProgramOptimization>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release-Override|Win32'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>false</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+     <WholeProgramOptimization>true</WholeProgramOptimization>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release-Patch|x64'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>false</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+     <WholeProgramOptimization>true</WholeProgramOptimization>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release-Override|x64'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>false</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+     <WholeProgramOptimization>true</WholeProgramOptimization>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>true</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>true</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+   </PropertyGroup>
+   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+diff --git a/vsprojects/stack_trace_table_test/stack_trace_table_test.vcxproj b/vsprojects/stack_trace_table_test/stack_trace_table_test.vcxproj
+index 23de726..6abce5e 100644
+--- a/vsprojects/stack_trace_table_test/stack_trace_table_test.vcxproj
++++ b/vsprojects/stack_trace_table_test/stack_trace_table_test.vcxproj
+@@ -35,41 +35,41 @@
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release-Patch|Win32'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>false</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+     <WholeProgramOptimization>true</WholeProgramOptimization>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release-Override|Win32'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>false</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+     <WholeProgramOptimization>true</WholeProgramOptimization>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release-Patch|x64'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>false</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+     <WholeProgramOptimization>true</WholeProgramOptimization>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release-Override|x64'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>false</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+     <WholeProgramOptimization>true</WholeProgramOptimization>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>true</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>true</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+   </PropertyGroup>
+   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+diff --git a/vsprojects/system-alloc_unittest/system-alloc_unittest.vcxproj b/vsprojects/system-alloc_unittest/system-alloc_unittest.vcxproj
+index a6dca2b..74e12b6 100644
+--- a/vsprojects/system-alloc_unittest/system-alloc_unittest.vcxproj
++++ b/vsprojects/system-alloc_unittest/system-alloc_unittest.vcxproj
+@@ -35,41 +35,41 @@
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release-Patch|Win32'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>false</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+     <WholeProgramOptimization>true</WholeProgramOptimization>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release-Override|Win32'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>false</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+     <WholeProgramOptimization>true</WholeProgramOptimization>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release-Patch|x64'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>false</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+     <WholeProgramOptimization>true</WholeProgramOptimization>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release-Override|x64'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>false</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+     <WholeProgramOptimization>true</WholeProgramOptimization>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>true</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>true</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+   </PropertyGroup>
+   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+diff --git a/vsprojects/tcmalloc_minimal_large/tcmalloc_minimal_large_unittest.vcxproj b/vsprojects/tcmalloc_minimal_large/tcmalloc_minimal_large_unittest.vcxproj
+index dd0f686..db79f5f 100644
+--- a/vsprojects/tcmalloc_minimal_large/tcmalloc_minimal_large_unittest.vcxproj
++++ b/vsprojects/tcmalloc_minimal_large/tcmalloc_minimal_large_unittest.vcxproj
+@@ -35,41 +35,41 @@
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release-Patch|Win32'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>false</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+     <WholeProgramOptimization>true</WholeProgramOptimization>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release-Override|Win32'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>false</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+     <WholeProgramOptimization>true</WholeProgramOptimization>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release-Patch|x64'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>false</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+     <WholeProgramOptimization>true</WholeProgramOptimization>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release-Override|x64'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>false</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+     <WholeProgramOptimization>true</WholeProgramOptimization>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>true</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>true</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+   </PropertyGroup>
+   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+diff --git a/vsprojects/tcmalloc_minimal_unittest/tcmalloc_minimal_unittest.vcxproj b/vsprojects/tcmalloc_minimal_unittest/tcmalloc_minimal_unittest.vcxproj
+index 96689ff..ed97393 100644
+--- a/vsprojects/tcmalloc_minimal_unittest/tcmalloc_minimal_unittest.vcxproj
++++ b/vsprojects/tcmalloc_minimal_unittest/tcmalloc_minimal_unittest.vcxproj
+@@ -35,41 +35,41 @@
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release-Patch|Win32'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>false</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+     <WholeProgramOptimization>true</WholeProgramOptimization>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release-Override|Win32'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>false</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+     <WholeProgramOptimization>true</WholeProgramOptimization>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release-Patch|x64'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>false</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+     <WholeProgramOptimization>true</WholeProgramOptimization>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release-Override|x64'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>false</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+     <WholeProgramOptimization>true</WholeProgramOptimization>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>true</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>true</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+   </PropertyGroup>
+   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+diff --git a/vsprojects/thread_dealloc_unittest/thread_dealloc_unittest.vcxproj b/vsprojects/thread_dealloc_unittest/thread_dealloc_unittest.vcxproj
+index 41f31c1..d1f8f7f 100644
+--- a/vsprojects/thread_dealloc_unittest/thread_dealloc_unittest.vcxproj
++++ b/vsprojects/thread_dealloc_unittest/thread_dealloc_unittest.vcxproj
+@@ -35,41 +35,41 @@
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release-Patch|Win32'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>false</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+     <WholeProgramOptimization>true</WholeProgramOptimization>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release-Override|Win32'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>false</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+     <WholeProgramOptimization>true</WholeProgramOptimization>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release-Patch|x64'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>false</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+     <WholeProgramOptimization>true</WholeProgramOptimization>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release-Override|x64'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>false</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+     <WholeProgramOptimization>true</WholeProgramOptimization>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>true</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+     <ConfigurationType>Application</ConfigurationType>
+     <UseDebugLibraries>true</UseDebugLibraries>
+-    <PlatformToolset>v140</PlatformToolset>
++    <PlatformToolset>v142</PlatformToolset>
+     <CharacterSet>Unicode</CharacterSet>
+   </PropertyGroup>
+   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />

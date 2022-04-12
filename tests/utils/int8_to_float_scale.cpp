@@ -12,7 +12,7 @@ void block_convert(std::ofstream& writer, float* write_buf,
   for (_u64 i = 0; i < npts; i++) {
     for (_u64 d = 0; d < ndims; d++) {
       write_buf[d + i * ndims] =
-          (((float)read_buf[d + i * ndims] - bias) * scale);
+          (((float) read_buf[d + i * ndims] - bias) * scale);
     }
   }
   writer.write((char*) write_buf, npts * ndims * sizeof(float));
@@ -20,8 +20,8 @@ void block_convert(std::ofstream& writer, float* write_buf,
 
 int main(int argc, char** argv) {
   if (argc != 5) {
-    std::cout << "Usage: " << argv[0] << "  input-int8.bin  output-float.bin  bias  scale"
-              << std::endl;
+    std::cout << "Usage: " << argv[0]
+              << "  input-int8.bin  output-float.bin  bias  scale" << std::endl;
     exit(-1);
   }
 
