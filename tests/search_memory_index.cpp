@@ -55,6 +55,7 @@ int search_memory_index(int argc, char** argv) {
 
   std::string data_file(argv[ctr++]);
   std::string memory_index_file(argv[ctr++]);
+  _u64        max_points = std::atoi(argv[ctr++]);
   _u64        num_threads = std::atoi(argv[ctr++]);
   std::string query_bin(argv[ctr++]);
   std::string truthset_bin(argv[ctr++]);
@@ -91,8 +92,10 @@ int search_memory_index(int argc, char** argv) {
   std::cout.setf(std::ios_base::fixed, std::ios_base::floatfield);
   std::cout.precision(2);
 
-  diskann::Index<T> index(metric, data_file.c_str());
-  index.load(memory_index_file.c_str());  // to load NSG
+  diskann::Index<T, uint32_t> index(metric, query_dim, max_points, false,
+                                    false);
+  index.load(memory_index_file.c_str(), num_threads,
+             (_u32) * (std::max(Lvec.begin(), Lvec.end())));
   std::cout << "Index loaded" << std::endl;
 
   if (metric == diskann::FAST_L2)
@@ -172,12 +175,12 @@ int search_memory_index(int argc, char** argv) {
 }
 
 int main(int argc, char** argv) {
-  if (argc < 11) {
+  if (argc < 12) {
     std::cout
         << "Usage: " << argv[0]
         << "   index_type<float/int8/uint8>   "
            "dist_fn<l2/mips/fast_l2>   "
-           "data_file.bin   memory_index_path   "
+           "data_file.bin   memory_index_path [max_points (temporary)]  "
            "T(num_threads)   query_file.bin   "
            "truthset.bin(\"null\" for none)   "
            "K   result_output_prefix   "

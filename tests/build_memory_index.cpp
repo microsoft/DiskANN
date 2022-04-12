@@ -15,7 +15,7 @@
 
 #include "memory_mapper.h"
 
-template<typename T>
+template<typename T, typename TagT = uint32_t>
 int build_in_memory_index(const std::string&     data_path,
                           const diskann::Metric& metric, const unsigned R,
                           const unsigned L, const float alpha,
@@ -30,9 +30,15 @@ int build_in_memory_index(const std::string&     data_path,
   paras.Set<bool>("saturate_graph", 0);
   paras.Set<unsigned>("num_threads", num_threads);
 
-  diskann::Index<T> index(metric, data_path.c_str());
+  _u64 data_num, data_dim;
+  diskann::get_bin_metadata(data_path, data_num, data_dim);
+
+diskann::Index<T, TagT> index(metric, data_dim, data_num, false,
+                                false,
+                                false);  // enable_tags forced to true!
   auto              s = std::chrono::high_resolution_clock::now();
-  index.build(paras);
+    index.build(data_path.c_str(), data_num, paras);
+
   std::chrono::duration<double> diff =
       std::chrono::high_resolution_clock::now() - s;
 

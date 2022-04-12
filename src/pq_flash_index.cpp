@@ -97,7 +97,7 @@ namespace diskann {
     this->dist_cmp = new DistanceL2UInt8();
     if (Avx2SupportedCPU) {
       diskann::cout << "Using AVX2 dist_cmp_float function." << std::endl;
-      this->dist_cmp_float = new DistanceL2();
+      this->dist_cmp_float = new DistanceL2Float();
     } else if (AvxSupportedCPU) {
       diskann::cout << "Using AVX dist_cmp_float function" << std::endl;
       this->dist_cmp_float = new AVXDistanceL2Float();
@@ -122,7 +122,7 @@ namespace diskann {
       diskann::cout << "Using AVX2 function for dist_cmp and dist_cmp_float"
                     << std::endl;
       this->dist_cmp = new DistanceL2Int8();
-      this->dist_cmp_float = new DistanceL2();
+      this->dist_cmp_float = new DistanceL2Float();
     } else if (AvxSupportedCPU) {
       diskann::cout << "No AVX2 support. Switching to AVX routines for "
                        "dist_cmp, dist_cmp_float."
@@ -152,8 +152,8 @@ namespace diskann {
       if (Avx2SupportedCPU) {
         diskann::cout << "Using AVX2 functions for dist_cmp and dist_cmp_float"
                       << std::endl;
-        this->dist_cmp = new DistanceL2();
-        this->dist_cmp_float = new DistanceL2();
+        this->dist_cmp = new DistanceL2Float();
+        this->dist_cmp_float = new DistanceL2Float();
       } else if (AvxSupportedCPU) {
         diskann::cout << "No AVX2 support. Switching to AVX functions for "
                          "dist_cmp and dist_cmp_float."
@@ -170,8 +170,8 @@ namespace diskann {
       }
     } else if (metric == diskann::Metric::INNER_PRODUCT) {
       std::cout << "Using inner product distance function" << std::endl;
-      this->dist_cmp = new DistanceInnerProduct<float>();
-      this->dist_cmp_float = new DistanceInnerProduct<float>();
+//      this->dist_cmp = new DistanceInnerProduct<float>();
+//      this->dist_cmp_float = new DistanceInnerProduct<float>();
     } else {
       std::cout << "Unsupported metric type. Reverting to float." << std::endl;
       this->dist_cmp = new AVXDistanceL2Float();

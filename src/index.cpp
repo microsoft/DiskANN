@@ -1,33 +1,30 @@
-// Copyright (c) Microsoft Corporation. All rights reserved.
-// Licensed under the MIT license.
+// TODOS 
+// ADD THE COPYRIGHT NOTICE
+// ADD FAST L2 DISTANCE FUNCTION
+// CHECK ALL DISTANCE FUNCTIONS ARE VALID (INNER PRODUCT, COSINE, L2, FAST L2)
+// CHECK FOR BULK AND FRESH
+// CHECK FOR FLOAT, INT8 and UINT8
 
-#include <algorithm>
-#include <bitset>
-#include <boost/dynamic_bitset.hpp>
-#include <cassert>
-#include <chrono>
-#include <cmath>
-#include <cstdio>
-#include <ctime>
-#include <fstream>
-#include <iostream>
-#include <iterator>
-#include <map>
-#include <numeric>
+#include <type_traits>
 #include <omp.h>
 #include <random>
+//#include <semaphore.h>
 #include <set>
+#include <shared_mutex>
 #include <sstream>
 #include <string>
 #include "tsl/robin_set.h"
+#include "tsl/robin_map.h"
+#include <unordered_map>
 
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <time.h>
 
+#include "common_includes.h"
 #include "logger.h"
 #include "exceptions.h"
-#include "index.h"
+#include "aligned_file_reader.h"
 #include "math_utils.h"
 #include "memory_mapper.h"
 #include "parameters.h"
@@ -35,320 +32,868 @@
 #include "timer.h"
 #include "utils.h"
 #include "windows_customizations.h"
+#include "ann_exception.h"
+//#include "tcmalloc/malloc_extension.h"
+#include "boost/dynamic_bitset.hpp"
+
 #ifdef _WINDOWS
 #include <xmmintrin.h>
 #endif
+#include "index.h"
 
-// only L2 implemented. Need to implement inner product search
-namespace {
-  template<typename T>
-  diskann::Distance<T> *get_distance_function(diskann::Metric m);
-
-  template<>
-  diskann::Distance<float> *get_distance_function(diskann::Metric m) {
-    if (m == diskann::Metric::FAST_L2) {
-      std::cout << "Here" << std::endl;
-      return new diskann::DistanceFastL2<float>();
-    } else if (m == diskann::Metric::L2) {
-      if (Avx2SupportedCPU) {
-        std::cout << "Using AVX2 distance computation" << std::endl;
-        return new diskann::DistanceL2();
-      } else if (AvxSupportedCPU) {
-        std::cout << "AVX2 not supported. Using AVX distance computation"
-                  << std::endl;
-        return new diskann::AVXDistanceL2Float();
-      } else {
-        std::cout << "Older CPU. Using slow distance computation" << std::endl;
-        return new diskann::SlowDistanceL2Float();
-      }
-    } else if (m == diskann::Metric::INNER_PRODUCT) {
-      std::cout << "Using Inner Product computation" << std::endl;
-      return new diskann::DistanceInnerProduct<float>();
-    } else {
-      std::stringstream stream;
-      stream << "Only L2 metric supported as of now. Email "
-                "gopalsr@microsoft.com if you need cosine similarity or inner "
-                "product."
-             << std::endl;
-      std::cerr << stream.str() << std::endl;
-      throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
-                                  __LINE__);
-    }
-  }
-
-  template<>
-  diskann::Distance<int8_t> *get_distance_function(diskann::Metric m) {
-    if (m == diskann::Metric::L2) {
-      if (Avx2SupportedCPU) {
-        std::cout << "Using AVX2 distance computation" << std::endl;
-        return new diskann::DistanceL2Int8();
-      } else if (AvxSupportedCPU) {
-        std::cout << "AVX2 not supported. Using AVX distance computation"
-                  << std::endl;
-        return new diskann::AVXDistanceL2Int8();
-      } else {
-        std::cout << "Older CPU. Using slow distance computation" << std::endl;
-        return new diskann::SlowDistanceL2Int<int8_t>();
-      }
-    } else {
-      std::stringstream stream;
-      stream << "Only L2 metric supported as of now. Email "
-                "gopalsr@microsoft.com if you need cosine similarity or inner "
-                "product."
-             << std::endl;
-      std::cerr << stream.str() << std::endl;
-      throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
-                                  __LINE__);
-    }
-  }
-
-  template<>
-  diskann::Distance<uint8_t> *get_distance_function(diskann::Metric m) {
-    if (m == diskann::Metric::L2) {
-      std::cout << "AVX/AVX2 distance function not defined for Uint8. Using "
-                   "slow version. "
-                   "Contact gopalsr@microsoft.com if you need AVX/AVX2 support."
-                << std::endl;
-      return new diskann::DistanceL2UInt8();
-    } else {
-      std::stringstream stream;
-      stream << "Only L2 metric supported as of now. Email "
-                "gopalsr@microsoft.com if you need cosine similarity or inner "
-                "product."
-             << std::endl;
-      std::cerr << stream.str() << std::endl;
-      throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
-                                  __LINE__);
-    }
-  }
-}  // namespace
+#define MAX_POINTS_FOR_USING_BITSET 10000000
 
 namespace diskann {
+
+  template<typename T>
+  inline T diskann_max(T left, T right) {
+    return left > right ? left : right;
+  }
+  // QueryScratch functions
+  template<typename T>
+  InMemQueryScratch<T>::InMemQueryScratch() {
+    search_l = indexing_l = r = 0;
+    // pointers are initialized in the header itself.
+  }
+  template<typename T>
+  void InMemQueryScratch<T>::setup(uint32_t search_l, uint32_t indexing_l,
+                                   uint32_t r, size_t dim) {
+    if (search_l == 0 || indexing_l == 0 || r == 0 || dim == 0) {
+      std::stringstream ss;
+      ss << "In InMemQueryScratch, one of search_l = " << search_l
+         << ", indexing_l = " << indexing_l << ", dim = " << dim
+         << " or r = " << r << " is zero." << std::endl;
+      throw diskann::ANNException(ss.str(), -1);
+    }
+    indices = new uint32_t[search_l];     // only used by search
+    interim_dists = new float[search_l];  // only used by search
+    memset(indices, 0, sizeof(uint32_t) * search_l);
+    memset(interim_dists, 0, sizeof(float) * search_l);
+    this->search_l = search_l;
+    this->indexing_l = indexing_l;
+    this->r = r;
+
+    auto   aligned_dim = ROUND_UP(dim, 8);
+    size_t allocSize = aligned_dim * sizeof(T);
+    alloc_aligned(((void **) &aligned_query), allocSize, 8 * sizeof(T));
+    memset(aligned_query, 0, aligned_dim * sizeof(T));
+
+    auto l_to_use = diskann_max(search_l, indexing_l);
+
+    _des = new std::vector<unsigned>();
+    _des->reserve(2 * r);
+    _pool = new std::vector<Neighbor>();
+    _pool->reserve(l_to_use * 10);
+    _visited = new tsl::robin_set<unsigned>();
+    _visited->reserve(l_to_use * 2);
+    _best_l_nodes = new std::vector<Neighbor>();
+    _best_l_nodes->resize(l_to_use + 1);
+    _inserted_into_pool_rs = new tsl::robin_set<unsigned>();
+    _inserted_into_pool_rs->reserve(l_to_use * 20);
+    _inserted_into_pool_bs = new boost::dynamic_bitset<>();
+  }
+
+  template<typename T>
+  void InMemQueryScratch<T>::clear() {
+    memset(indices, 0, sizeof(uint32_t) * search_l);
+    memset(interim_dists, 0, sizeof(float) * search_l);
+    _pool->clear();
+    _visited->clear();
+    _des->clear();
+    _inserted_into_pool_rs->clear();
+    _inserted_into_pool_bs->reset();
+    // Should not clear best_l_nodes because code expects its size > 0.
+    //_best_l_nodes->clear();
+    // aligned_query gets overwritten every time, so no need to memset it.
+  }
+
+  template<typename T>
+  void InMemQueryScratch<T>::resize_for_query(uint32_t new_search_l) {
+    if (search_l < new_search_l) {
+      if (indices != nullptr) {
+        delete[] indices;
+      }
+      indices = new uint32_t[new_search_l];
+
+      if (interim_dists != nullptr) {
+        delete[] interim_dists;
+      }
+      interim_dists = new float[new_search_l];
+      search_l = new_search_l;
+    }
+  }
+
+  template<typename T>
+  void InMemQueryScratch<T>::destroy() {
+    if (indices != nullptr) {
+      delete[] indices;
+      indices = nullptr;
+    }
+    if (interim_dists != nullptr) {
+      delete[] interim_dists;
+      interim_dists = nullptr;
+    }
+    if (_pool != nullptr) {
+      delete _pool;
+      _pool = nullptr;
+    }
+    if (_visited != nullptr) {
+      delete _visited;
+      _visited = nullptr;
+    }
+    if (_des != nullptr) {
+      delete _des;
+      _des = nullptr;
+    }
+    if (_best_l_nodes != nullptr) {
+      delete _best_l_nodes;
+      _best_l_nodes = nullptr;
+    }
+    if (aligned_query != nullptr) {
+      aligned_free(aligned_query);
+      aligned_query = nullptr;
+    }
+
+    if (_inserted_into_pool_rs != nullptr) {
+      delete _inserted_into_pool_rs;
+      _inserted_into_pool_rs = nullptr;
+    }
+    if (_inserted_into_pool_bs != nullptr) {
+      delete _inserted_into_pool_bs;
+      _inserted_into_pool_bs = nullptr;
+    }
+
+    search_l = indexing_l = r = 0;
+  }
+
+  // Class to avoid the hassle of pushing and popping the query scratch.
+  template<typename T>
+  class ScratchStoreManager {
+   public:
+    diskann::InMemQueryScratch<T>          _scratch;
+    ConcurrentQueue<InMemQueryScratch<T>> &_query_scratch;
+    ScratchStoreManager(ConcurrentQueue<InMemQueryScratch<T>> &query_scratch)
+        : _query_scratch(query_scratch) {
+      _scratch = query_scratch.pop();
+      while (_scratch.indices == nullptr) {
+        query_scratch.wait_for_push_notify();
+        _scratch = query_scratch.pop();
+      }
+    }
+    InMemQueryScratch<T> scratch_space() {
+      return _scratch;
+    }
+
+    ~ScratchStoreManager() {
+      // std::stringstream ss;
+      // ss << "Thread id:" << std::this_thread::get_id()
+      //   << ": Clearing scratch.pool with ptr: " << std::hex
+      //   << (_u64) _scratch._pool << std::dec << std::endl;
+      // std::cout << ss.str();
+      _scratch.clear();
+      _query_scratch.push(_scratch);
+      _query_scratch.push_notify_all();
+    }
+
+   private:
+    ScratchStoreManager(const ScratchStoreManager<T> &);
+    ScratchStoreManager<T> &operator=(const ScratchStoreManager<T> &);
+  };
 
   // Initialize an index with metric m, load the data of type T with filename
   // (bin), and initialize max_points
   template<typename T, typename TagT>
-  Index<T, TagT>::Index(Metric m, const char *filename, const size_t max_points,
-                        const size_t nd, const size_t num_frozen_pts,
-                        const bool enable_tags, const bool store_data,
+  Index<T, TagT>::Index(Metric m, const size_t dim, const size_t max_points,
+                        const bool        dynamic_index,
+                        const bool        save_index_in_one_file,
+                        const Parameters &indexParams,
+                        const Parameters &searchParams, const bool enable_tags,
                         const bool support_eager_delete)
-      : _metric(m), _num_frozen_pts(num_frozen_pts), _has_built(false),
-        _width(0), _can_delete(false), _eager_done(true), _lazy_done(true),
-        _compacted_order(true), _enable_tags(enable_tags),
-        _consolidated_order(true), _support_eager_delete(support_eager_delete),
-        _store_data(store_data) {
+      : Index(m, dim, max_points, dynamic_index, save_index_in_one_file,
+              enable_tags, support_eager_delete) {  // Thank you C++ 11!
+    _indexingQueueSize = indexParams.Get<uint32_t>("L");
+    _indexingRange = indexParams.Get<uint32_t>("R");
+    _indexingMaxC = indexParams.Get<uint32_t>("C");
+    _indexingAlpha = indexParams.Get<float>("alpha");
+
+    uint32_t num_threads_srch = searchParams.Get<uint32_t>("num_threads");
+    uint32_t num_threads_indx = indexParams.Get<uint32_t>("num_threads");
+    uint32_t num_threads = diskann_max(num_threads_srch, num_threads_indx);
+    uint32_t search_l = searchParams.Get<uint32_t>("L");
+
+    initialize_query_scratch(num_threads, search_l, _indexingQueueSize,
+                             _indexingRange, dim);
+  }
+
+  template<typename T, typename TagT>
+  Index<T, TagT>::Index(Metric m, const size_t dim, const size_t max_points,
+                        const bool dynamic_index,
+                        const bool save_index_in_one_file,
+                        const bool enable_tags, const bool support_eager_delete)
+      : _dist_metric(m), _dim(dim), _max_points(max_points),
+        _save_as_one_file(save_index_in_one_file),
+        _dynamic_index(dynamic_index), _enable_tags(enable_tags),
+        _support_eager_delete(support_eager_delete) {
+    if (dynamic_index && !enable_tags) {
+      throw diskann::ANNException(
+          "ERROR: Eager Deletes must have Dynamic Indexing enabled.", -1,
+          __FUNCSIG__, __FILE__, __LINE__);
+      diskann::cerr
+          << "WARNING: Dynamic Indices must have tags enabled. Auto-enabling."
+          << std::endl;
+      _enable_tags = true;
+    }
+    if (support_eager_delete && !dynamic_index) {
+      diskann::cerr << "ERROR: Eager Deletes must have Dynamic Indexing "
+                       "enabled. Exitting."
+                    << std::endl;
+      throw diskann::ANNException(
+          "ERROR: Eager deletes are possible only if dynamic indexing is "
+          "enabled. Exiting.",
+          -1, __FUNCSIG__, __FILE__, __LINE__);
+    }
     // data is stored to _nd * aligned_dim matrix with necessary
     // zero-padding
-    diskann::cout << "Number of frozen points = " << _num_frozen_pts
+    _aligned_dim = ROUND_UP(_dim, 8);
+
+    if (dynamic_index) {
+      _num_frozen_pts = 1;
+    }
+    // Sanity check. While logically it is correct, max_points ==0 causes
+    // downstream problems.
+    if (_max_points == 0) {
+      _max_points = 1;
+    }
+
+    alloc_aligned(((void **) &_data),
+                  (_max_points + _num_frozen_pts) * _aligned_dim * sizeof(T),
+                  8 * sizeof(T));
+    std::memset(_data, 0,
+                (_max_points + _num_frozen_pts) * _aligned_dim * sizeof(T));
+
+    _ep = (unsigned) _max_points;
+
+    //_final_graph.reserve(_max_points + _num_frozen_pts);
+    _final_graph.resize(_max_points + _num_frozen_pts);
+
+    if (_support_eager_delete) {
+      _in_graph.reserve(_max_points + _num_frozen_pts);
+      _in_graph.resize(_max_points + _num_frozen_pts);
+    }
+
+    diskann::cout << "Getting distance function for metric: "
+                  << (m == diskann::Metric::COSINE ? "cosine" : "l2")
                   << std::endl;
-    load_aligned_bin<T>(std::string(filename), _data, _nd, _dim, _aligned_dim);
 
-    if (nd > 0) {
-      if (_nd >= nd)
-        _nd = nd;  // Consider the first _nd points and ignore the rest.
-      else {
-        std::stringstream stream;
-        stream << "ERROR: Driver requests loading " << _nd << " points,"
-               << "but file has fewer (" << nd << ") points" << std::endl;
-        diskann::cerr << stream.str() << std::endl;
-        throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
-                                    __LINE__);
-      }
+    if (m == diskann::Metric::COSINE && std::is_floating_point<T>::value) {
+      // This is safe because T is float inside the if block.
+//      this->_distance = (Distance<T> *) new AVXNormalizedCosineDistanceFloat();
+//      this->_normalize_vecs = true;
+      std::cout<<"Need to add functionality for COSINE metric" << std::endl;
+    } else {
+      this->_distance = get_distance_function<T>(m);
     }
 
-    _max_points = (max_points > 0) ? max_points : _nd;
-    if (_max_points < _nd) {
-      std::stringstream stream;
-      stream << "ERROR: max_points must be >= data size; max_points: "
-             << _max_points << "  n: " << _nd << std::endl;
-      diskann::cerr << stream.str() << std::endl;
-      throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
-                                  __LINE__);
-    }
-
-    // Allocate space for max points and frozen points,
-    // and add frozen points at the end of the array
-    if (_num_frozen_pts > 0) {
-      auto temp = _data;
-      _data = (T *) realloc(
-          _data, (_max_points + _num_frozen_pts) * _aligned_dim * sizeof(T));
-      if (_data == nullptr) {
-        free(temp);
-        diskann::cout << "Realloc failed, killing programme" << std::endl;
-        throw diskann::ANNException("Realloc failed", -1, __FUNCSIG__, __FILE__,
-                                    __LINE__);
-      }
-    }
-
-    this->_distance = ::get_distance_function<T>(m);
     _locks = std::vector<std::mutex>(_max_points + _num_frozen_pts);
+
+    if (_support_eager_delete)
+      _locks_in = std::vector<std::mutex>(_max_points + _num_frozen_pts);
+
     _width = 0;
   }
 
-  template<>
-  Index<float>::~Index() {
-    delete this->_distance;
-    aligned_free(_data);
+  template<typename T, typename TagT>
+  Index<T, TagT>::~Index() {
+    // Ensure that no other activity is happening before dtor()
+    std::unique_lock<std::shared_timed_mutex> ul(_update_lock);
+    std::unique_lock<std::shared_timed_mutex> tul(_tag_lock);
+    std::unique_lock<std::shared_timed_mutex> tdl(_delete_lock);
+
+    for (auto &lock : _locks) {
+      LockGuard lg(lock);
+    }
+    for (auto &lock : _locks_in) {
+      LockGuard lg(lock);
+    }
+
+    if (this->_distance != nullptr) {
+      delete this->_distance;
+      this->_distance = nullptr;
+    }
+    if (this->_data != nullptr) {
+      aligned_free(this->_data);
+      this->_data = nullptr;
+    }
+
+    while (!_query_scratch.empty()) {
+      auto val = _query_scratch.pop();
+      while (val.indices == nullptr) {
+        _query_scratch.wait_for_push_notify();
+        val = _query_scratch.pop();
+      }
+      val.destroy();
+    }
   }
 
-  template<>
-  Index<_s8>::~Index() {
-    delete this->_distance;
-    aligned_free(_data);
+  template<typename T, typename TagT>
+  void Index<T, TagT>::initialize_query_scratch(uint32_t num_threads,
+                                                uint32_t search_l,
+                                                uint32_t indexing_l, uint32_t r,
+                                                size_t dim) {
+    for (uint32_t i = 0; i < num_threads; i++) {
+      InMemQueryScratch<T> scratch;
+      scratch.setup(search_l, indexing_l, r, dim);
+      _query_scratch.push(scratch);
+    }
   }
 
-  template<>
-  Index<_u8>::~Index() {
-    delete this->_distance;
-    aligned_free(_data);
+  // template<typename T, typename TagT>
+  // void Index<T, TagT>::save_index_as_one_file(bool flag) {
+  //  _save_as_one_file = flag;
+  //}
+
+  template<typename T, typename TagT>
+  void Index<T, TagT>::clear_index() {
+    memset(_data, 0,
+           _aligned_dim * (_max_points + _num_frozen_pts) * sizeof(T));
+    _nd = 0;
+    for (size_t i = 0; i < _final_graph.size(); i++)
+      _final_graph[i].clear();
+
+    _tag_to_location.clear();
+    _location_to_tag.clear();
+
+    // What about empty slots, delete_set, etc?
+  }
+
+  template<typename T, typename TagT>
+  _u64 Index<T, TagT>::save_tags(std::string tags_file, size_t offset) {
+    if (!_enable_tags) {
+      diskann::cout << "Not saving tags as they are not enabled." << std::endl;
+      return 0;
+    }
+    size_t tag_bytes_written;
+    TagT * tag_data = new TagT[_nd + _num_frozen_pts];
+    for (_u32 i = 0; i < _nd; i++) {
+      if (_location_to_tag.find(i) != _location_to_tag.end()) {
+        tag_data[i] = _location_to_tag[i];
+      } else {
+        // catering to future when tagT can be any type.
+        std::memset((char *) &tag_data[i], 0, sizeof(TagT));
+      }
+    }
+    if (_num_frozen_pts > 0) {
+      std::memset((char *) &tag_data[_ep], 0, sizeof(TagT));
+    }
+    tag_bytes_written =
+        save_bin<TagT>(tags_file, tag_data, _nd + _num_frozen_pts, 1);
+    delete[] tag_data;
+    return tag_bytes_written;
+  }
+
+  template<typename T, typename TagT>
+  _u64 Index<T, TagT>::save_data(std::string data_file, size_t offset) {
+    return save_data_in_base_dimensions(data_file, _data, _nd + _num_frozen_pts,
+                                        _dim, _aligned_dim, offset);
   }
 
   // save the graph index on a file as an adjacency list. For each point,
   // first store the number of neighbors, and then the neighbor list (each as
   // 4 byte unsigned)
   template<typename T, typename TagT>
-  void Index<T, TagT>::save(const char *filename) {
-    long long     total_gr_edges = 0;
-    size_t        index_size = 0;
-    std::ofstream out(std::string(filename), std::ios::binary | std::ios::out);
+  _u64 Index<T, TagT>::save_graph(std::string graph_file, size_t offset) {
+    std::ofstream out;
+    open_file_to_write(out, graph_file);
 
-    if (_support_eager_delete)
-      if (_eager_done && (!_compacted_order)) {
-        if (_nd < _max_points) {
-          assert(_final_graph.size() == _max_points + _num_frozen_pts);
-          unsigned              active = 0;
-          std::vector<unsigned> new_location = get_new_location(active);
-          diskann::cout << "Size of new_location = " << new_location.size()
-                        << std::endl;
-          for (unsigned i = 0; i < new_location.size(); i++)
-            if ((_delete_set.find(i) == _delete_set.end()) &&
-                (new_location[i] >= _max_points + _num_frozen_pts))
-              diskann::cout << "Wrong new_location assigned to  " << i
-                            << std::endl;
-            else {
-              if ((_delete_set.find(i) != _delete_set.end()) &&
-                  (new_location[i] < _max_points + _num_frozen_pts))
-                diskann::cout << "Wrong location assigned to "
-                                 "delete point  "
-                              << i << std::endl;
-            }
-          compact_data(new_location, active, _compacted_order);
-
-          if (_support_eager_delete)
-            update_in_graph();
-
-        } else {
-          assert(_final_graph.size() == _max_points + _num_frozen_pts);
-          if (_enable_tags) {
-            _change_lock.lock();
-            if (_can_delete) {
-              std::cerr << "Disable deletes and consolidate "
-                           "index before saving."
-                        << std::endl;
-              throw diskann::ANNException(
-                  "Disable deletes and consolidate index before "
-                  "saving.",
-                  -1, __FUNCSIG__, __FILE__, __LINE__);
-            }
-          }
-        }
-      }
-    if (_lazy_done) {
-      assert(_final_graph.size() == _max_points + _num_frozen_pts);
-      if (_enable_tags) {
-        _change_lock.lock();
-        if (_can_delete || (!_consolidated_order)) {
-          diskann::cout << "Disable deletes and consolidate index before "
-                           "saving."
-                        << std::endl;
-          throw diskann::ANNException(
-              "Disable deletes and consolidate index before saving.", -1,
-              __FUNCSIG__, __FILE__, __LINE__);
-        }
-      }
-    }
+    out.seekp(offset, out.beg);
+    _u64 index_size = 24;
+    _u32 max_degree = 0;
     out.write((char *) &index_size, sizeof(uint64_t));
     out.write((char *) &_width, sizeof(unsigned));
-    out.write((char *) &_ep, sizeof(unsigned));
+    unsigned ep_u32 = _ep;
+    out.write((char *) &ep_u32, sizeof(unsigned));
+    out.write((char *) &_num_frozen_pts, sizeof(_u64));
     for (unsigned i = 0; i < _nd + _num_frozen_pts; i++) {
       unsigned GK = (unsigned) _final_graph[i].size();
       out.write((char *) &GK, sizeof(unsigned));
       out.write((char *) _final_graph[i].data(), GK * sizeof(unsigned));
-      total_gr_edges += GK;
+      max_degree = _final_graph[i].size() > max_degree
+                       ? (_u32) _final_graph[i].size()
+                       : max_degree;
+      index_size += (_u64)(sizeof(unsigned) * (GK + 1));
     }
-    index_size = out.tellp();
-    out.seekp(0, std::ios::beg);
+    out.seekp(offset, out.beg);
     out.write((char *) &index_size, sizeof(uint64_t));
+    out.write((char *) &max_degree, sizeof(_u32));
     out.close();
+    return index_size;  // number of bytes written
+  }
 
-    diskann::cout << "Avg degree: "
-                  << ((float) total_gr_edges) /
-                         ((float) (_nd + _num_frozen_pts))
+  template<typename T, typename TagT>
+  _u64 Index<T, TagT>::save_delete_list(const std::string &filename,
+                                        _u64 file_offset) {
+    if (_delete_set.size() == 0) {
+      return 0;
+    }
+    std::unique_ptr<_u32[]> delete_list =
+        std::make_unique<_u32[]>(_delete_set.size());
+    _u32 i = 0;
+    for (auto &del : _delete_set) {
+      delete_list[i++] = del;
+    }
+    return save_bin<_u32>(filename, delete_list.get(), _delete_set.size(), 1);
+  }
+
+  template<typename T, typename TagT>
+  void Index<T, TagT>::save(const char *filename) {
+    // first check if no thread is inserting
+    auto start = std::chrono::high_resolution_clock::now();
+    std::unique_lock<std::shared_timed_mutex> lock(_update_lock);
+    _change_lock.lock();
+
+    // compact_data();
+    compact_frozen_point();
+    if (!_save_as_one_file) {
+      std::string graph_file = std::string(filename);
+      std::string tags_file = std::string(filename) + ".tags";
+      std::string data_file = std::string(filename) + ".data";
+      std::string delete_list_file = std::string(filename) + ".del";
+
+      // Because the save_* functions use append mode, ensure that
+      // the files are deleted before save. Ideally, we should check
+      // the error code for delete_file, but will ignore now because
+      // delete should succeed if save will succeed.
+      delete_file(graph_file);
+      save_graph(graph_file);
+      delete_file(data_file);
+      save_data(data_file);
+      delete_file(tags_file);
+      save_tags(tags_file);
+      delete_file(delete_list_file);
+      save_delete_list(delete_list_file);
+    } else {
+      delete_file(filename);
+      std::vector<size_t> cumul_bytes(5, 0);
+      cumul_bytes[0] = METADATA_SIZE;
+      cumul_bytes[1] =
+          cumul_bytes[0] + save_graph(std::string(filename), cumul_bytes[0]);
+      cumul_bytes[2] =
+          cumul_bytes[1] + save_data(std::string(filename), cumul_bytes[1]);
+      cumul_bytes[3] =
+          cumul_bytes[2] + save_tags(std::string(filename), cumul_bytes[2]);
+      cumul_bytes[4] =
+          cumul_bytes[3] + save_delete_list(filename, cumul_bytes[3]);
+      diskann::save_bin<_u64>(filename, cumul_bytes.data(), cumul_bytes.size(),
+                              1);
+
+      diskann::cout << "Saved index as one file to " << filename << " of size "
+                    << cumul_bytes[cumul_bytes.size() - 1] << "B." << std::endl;
+    }
+
+    reposition_frozen_point_to_end();
+
+    _change_lock.unlock();
+    auto stop = std::chrono::high_resolution_clock::now();
+    auto timespan =
+        std::chrono::duration_cast<std::chrono::duration<double>>(stop - start);
+    diskann::cout << "Time taken for save: " << timespan.count() << "s."
                   << std::endl;
   }
 
-  // load the index from file and update the width (max_degree), ep
-  // (navigating node id), and _final_graph (adjacency list)
+#ifdef EXEC_ENV_OLS
   template<typename T, typename TagT>
-  void Index<T, TagT>::load(const char *filename, const bool load_tags,
-                            const char *tag_filename) {
-    if (!validate_file_size(filename)) {
-      return;
+  size_t Index<T, TagT>::load_tags(AlignedFileReader &reader, size_t offset) {
+#else
+  template<typename T, typename TagT>
+  size_t Index<T, TagT>::load_tags(const std::string tag_filename,
+                                   size_t offset) {
+    if (_enable_tags && !file_exists(tag_filename)) {
+      diskann::cerr << "Tag file provided does not exist!" << std::endl;
+      throw diskann::ANNException("Tag file provided does not exist!", -1,
+                                  __FUNCSIG__, __FILE__, __LINE__);
     }
+#endif
+    if (!_enable_tags) {
+      diskann::cout << "Tags not loaded as tags not enabled." << std::endl;
+      return 0;
+    }
+
+    size_t file_dim, file_num_points;
+    TagT * tag_data;
+#ifdef EXEC_ENV_OLS
+    load_bin<TagT>(reader, tag_data, file_num_points, file_dim, offset);
+#else
+    load_bin<TagT>(std::string(tag_filename), tag_data, file_num_points,
+                   file_dim);
+#endif
+
+    if (file_dim != 1) {
+      std::stringstream stream;
+      stream << "ERROR: Found " << file_dim << " dimensions for tags,"
+             << "but tag file must have 1 dimension." << std::endl;
+      diskann::cerr << stream.str() << std::endl;
+      delete[] tag_data;
+      throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
+                                  __LINE__);
+    }
+
+    size_t num_data_points =
+        _num_frozen_pts > 0 ? file_num_points - 1 : file_num_points;
+    for (_u32 i = 0; i < (_u32) num_data_points; i++) {
+      TagT tag = *(tag_data + i);
+      if (_delete_set.find(i) == _delete_set.end()) {
+        _location_to_tag[i] = tag;
+        _tag_to_location[tag] = (_u32) i;
+      }
+    }
+    diskann::cout << "Tags loaded." << std::endl;
+    delete[] tag_data;
+    return file_num_points;
+  }
+
+  template<typename T, typename TagT>
+#ifdef EXEC_ENV_OLS
+  size_t Index<T, TagT>::load_data(AlignedFileReader &reader, size_t offset) {
+#else
+  size_t Index<T, TagT>::load_data(std::string filename, size_t offset) {
+#endif
+    size_t file_dim, file_num_points;
+#ifdef EXEC_ENV_OLS
+    diskann::get_bin_metadata(reader, file_num_points, file_dim, offset);
+#else
+    if (!file_exists(filename)) {
+      std::stringstream stream;
+      stream << "ERROR: data file " << filename << " does not exist."
+             << std::endl;
+      diskann::cerr << stream.str() << std::endl;
+      aligned_free(_data);
+      throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
+                                  __LINE__);
+    }
+    diskann::get_bin_metadata(filename, file_num_points, file_dim);
+#endif
+
+    // since we are loading a new dataset, _empty_slots must be cleared
+    _empty_slots.clear();
+
+    if (file_dim != _dim) {
+      std::stringstream stream;
+      stream << "ERROR: Driver requests loading " << _dim << " dimension,"
+             << "but file has " << file_dim << " dimension." << std::endl;
+      diskann::cerr << stream.str() << std::endl;
+      aligned_free(_data);
+      throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
+                                  __LINE__);
+    }
+
+    if (file_num_points > _max_points) {
+      //_change_lock is already locked in load()
+      std::unique_lock<std::shared_timed_mutex> tl(_tag_lock);
+      std::unique_lock<std::shared_timed_mutex> growth_lock(_update_lock);
+
+      resize(file_num_points);
+    }
+
+#ifdef EXEC_ENV_OLS
+    copy_aligned_data_from_file<T>(reader, _data, file_num_points, file_dim,
+                                   _aligned_dim, offset);
+#else
+    copy_aligned_data_from_file<T>(std::string(filename), _data,
+                                   file_num_points, file_dim, _aligned_dim,
+                                   offset);
+#endif
+    return file_num_points;
+  }
+
+#ifdef EXEC_ENV_OLS
+  template<typename T, typename TagT>
+  size_t Index<T, TagT>::load_delete_set(AlignedFileReader &reader,
+                                         size_t offset) {
+#else
+  template<typename T, typename TagT>
+  size_t Index<T, TagT>::load_delete_set(const std::string &filename,
+                                         size_t offset) {
+#endif
+    std::unique_ptr<_u32[]> delete_list;
+    _u64                    npts, ndim;
+
+#ifdef EXEC_ENV_OLS
+    diskann::load_bin<_u32>(reader, delete_list, npts, ndim, offset);
+#else
+    diskann::load_bin<_u32>(filename, delete_list, npts, ndim);
+#endif
+    assert(ndim == 1);
+    for (int i = 0; i < npts; i++) {
+      _delete_set.insert(delete_list[i]);
+    }
+    return npts;
+  }
+
+  // load the index from file and update the width (max_degree), ep (navigating
+  // node id), and _final_graph (adjacency list)
+  template<typename T, typename TagT>
+#ifdef EXEC_ENV_OLS
+  void Index<T, TagT>::load(AlignedFileReader &reader, uint32_t num_threads,
+                            uint32_t search_l) {
+#else
+  void Index<T, TagT>::load(const char *filename, uint32_t num_threads,
+                            uint32_t search_l) {
+#endif
+    _change_lock.lock();
+
+    size_t tags_file_num_pts = 0, graph_num_pts = 0, data_file_num_pts = 0;
+
+    if (!_save_as_one_file) {
+// For DLVS Store, we will not support saving the index in multiple files.
+#ifndef EXEC_ENV_OLS
+      std::string data_file = std::string(filename) + ".data";
+      std::string tags_file = std::string(filename) + ".tags";
+      std::string delete_set_file = std::string(filename) + ".del";
+      std::string graph_file = std::string(filename);
+      data_file_num_pts = load_data(data_file);
+      if (file_exists(delete_set_file)) {
+        load_delete_set(delete_set_file);
+      }
+      if (_enable_tags) {
+        tags_file_num_pts = load_tags(tags_file);
+      }
+      graph_num_pts = load_graph(graph_file, data_file_num_pts);
+#endif
+
+    } else {
+      _u64                    nr, nc;
+      std::unique_ptr<_u64[]> file_offset_data;
+
+#ifdef EXEC_ENV_OLS
+      diskann::load_bin(reader, file_offset_data, nr, nc, 0);
+#else
+      std::string index_file(filename);
+      diskann::load_bin<_u64>(index_file, file_offset_data, nr, nc);
+#endif
+
+#ifdef EXEC_ENV_OLS
+      data_file_num_pts = load_data(reader, file_offset_data[1]);
+#else
+      // Loading data first so that we know how many points to expect.
+      data_file_num_pts = load_data(index_file, file_offset_data[1]);
+#endif
+#ifdef EXEC_ENV_OLS
+      graph_num_pts =
+          load_graph(reader, data_file_num_pts, file_offset_data[0]);
+#else
+      graph_num_pts =
+          load_graph(index_file, data_file_num_pts, file_offset_data[0]);
+#endif
+      if (file_offset_data[3] != file_offset_data[4]) {
+#ifdef EXEC_ENV_OLS
+        load_delete_set(reader, file_offset_data[3]);
+#else
+        load_delete_set(index_file, file_offset_data[3]);
+#endif
+      }
+      if (_enable_tags) {
+#ifdef EXEC_ENV_OLS
+        tags_file_num_pts = load_tags(reader, file_offset_data[2]);
+#else
+        tags_file_num_pts = load_tags(index_file, file_offset_data[2]);
+#endif
+      }
+    }
+
+    if (data_file_num_pts != graph_num_pts ||
+        (data_file_num_pts != tags_file_num_pts && _enable_tags)) {
+      std::stringstream stream;
+      stream << "ERROR: When loading index, loaded " << data_file_num_pts
+             << " points from datafile, " << graph_num_pts
+             << " from graph, and " << tags_file_num_pts
+             << " tags, with num_frozen_pts being set to " << _num_frozen_pts
+             << " in constructor." << std::endl;
+      diskann::cerr << stream.str() << std::endl;
+      aligned_free(_data);
+      throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
+                                  __LINE__);
+    }
+
+    _nd = data_file_num_pts - _num_frozen_pts;
+    _empty_slots.clear();
+    for (auto i = _nd; i < _max_points; i++) {
+      _empty_slots.insert((uint32_t) i);
+    }
+
+    _lazy_done = _delete_set.size() != 0;
+
+    reposition_frozen_point_to_end();
+    diskann::cout << "Num frozen points:" << _num_frozen_pts << " _nd: " << _nd
+                  << " _ep: " << _ep
+                  << " size(_location_to_tag): " << _location_to_tag.size()
+                  << " size(_tag_to_location):" << _tag_to_location.size()
+                  << " Max points: " << _max_points << std::endl;
+
+    _search_queue_size = search_l;
+    // For incremental index, _query_scratch is initialized in the constructor.
+    // For the bulk index, the parameters required to initialize _query_scratch
+    // are known only at load time, hence this check and the call to
+    // initialize_q_s().
+    if (_query_scratch.size() == 0) {
+      initialize_query_scratch(num_threads, search_l, search_l,
+                               (uint32_t) _max_range_of_loaded_graph, _dim);
+    }
+
+    _change_lock.unlock();
+  }
+
+#ifdef EXEC_ENV_OLS
+  template<typename T, typename TagT>
+  size_t Index<T, TagT>::load_graph(AlignedFileReader &reader,
+                                    size_t expected_num_points, size_t offset) {
+#else
+
+  template<typename T, typename TagT>
+  size_t Index<T, TagT>::load_graph(std::string filename,
+                                    size_t expected_num_points, size_t offset) {
+#endif
+    size_t expected_file_size;
+    _u64   file_frozen_pts;
+
+#ifdef EXEC_ENV_OLS
+    int header_size = 2 * sizeof(_u64) + 2 * sizeof(unsigned);
+    std::unique_ptr<char[]> header = std::make_unique<char[]>(header_size);
+    read_array(reader, header.get(), header_size, offset);
+
+    expected_file_size = *((_u64 *) header.get());
+    _width = *((_u32 *) (header.get() + sizeof(_u64)));
+    _ep = *((_u32 *) (header.get() + sizeof(_u64) + sizeof(unsigned)));
+    file_frozen_pts = *((_u64 *) (header.get() + sizeof(_u64) +
+                                  sizeof(unsigned) + sizeof(unsigned)));
+#else
+
     std::ifstream in(filename, std::ios::binary);
-    size_t        expected_file_size;
+    in.seekg(offset, in.beg);
     in.read((char *) &expected_file_size, sizeof(_u64));
     in.read((char *) &_width, sizeof(unsigned));
     in.read((char *) &_ep, sizeof(unsigned));
-    diskann::cout << "Loading vamana index " << filename << "..." << std::flush;
+    in.read((char *) &file_frozen_pts, sizeof(_u64));
+#endif
+    diskann::cout << "From graph header, expected_file_size: "
+                  << expected_file_size << ", _width: " << _width
+                  << ", _ep: " << _ep
+                  << ", file_frozen_pts: " << file_frozen_pts << std::endl;
 
+    if (file_frozen_pts != _num_frozen_pts) {
+      std::stringstream stream;
+      if (file_frozen_pts == 1) {
+        stream << "ERROR: When loading index, detected dynamic index, but "
+                  "constructor asks for static index. Exitting."
+               << std::endl;
+      } else {
+        stream << "ERROR: When loading index, detected static index, but "
+                  "constructor asks for dynamic index. Exitting."
+               << std::endl;
+      }
+      diskann::cerr << stream.str() << std::endl;
+      aligned_free(_data);
+      throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
+                                  __LINE__);
+    }
+
+#ifdef EXEC_ENV_OLS
+    diskann::cout << "Loading vamana graph from reader..." << std::flush;
+#else
+    diskann::cout << "Loading vamana graph " << filename << "..." << std::flush;
+#endif
+
+    // Sanity check. In case the user gave us fewer points as max_points than
+    // the number
+    // of points in the dataset, resize the _final_graph to the larger size.
+    if (_max_points < expected_num_points) {
+      diskann::cout << "Number of points in data: " << expected_num_points
+                    << " is greater than max_points: " << _max_points
+                    << " Setting max points to: " << expected_num_points
+                    << std::endl;
+      _final_graph.resize(expected_num_points + _num_frozen_pts);
+      _max_points = expected_num_points;
+    }
+#ifdef EXEC_ENV_OLS
+    _u32 nodes_read = 0;
+    _u64 cc = 0;
+    _u64 graph_offset = offset + header_size;
+    while (nodes_read < expected_num_points) {
+      _u32 k;
+      read_value(reader, k, graph_offset);
+      graph_offset += sizeof(_u32);
+      std::vector<_u32> tmp(k);
+      tmp.reserve(k);
+      read_array(reader, tmp.data(), k, graph_offset);
+      graph_offset += k * sizeof(_u32);
+      cc += k;
+      _final_graph[nodes_read].swap(tmp);
+      nodes_read++;
+      if (nodes_read % 1000000 == 0) {
+        diskann::cout << "." << std::flush;
+      }
+      if (k > _max_range_of_loaded_graph) {
+        _max_range_of_loaded_graph = k;
+      }
+    }
+#else
+
+    size_t   bytes_read = 24;
     size_t   cc = 0;
-    unsigned nodes = 0;
-    while (!in.eof()) {
+    unsigned nodes_read = 0;
+    while (bytes_read != expected_file_size) {
       unsigned k;
       in.read((char *) &k, sizeof(unsigned));
-      if (in.eof())
-        break;
+      if (k == 0) {
+        diskann::cerr << "ERROR: Point found with no out-neighbors, point#"
+                      << nodes_read << std::endl;
+      }
+      //      if (in.eof())
+      //        break;
       cc += k;
-      ++nodes;
+      ++nodes_read;
       std::vector<unsigned> tmp(k);
+      tmp.reserve(k);
       in.read((char *) tmp.data(), k * sizeof(unsigned));
-
-      _final_graph.emplace_back(tmp);
-      if (nodes % 10000000 == 0)
+      _final_graph[nodes_read - 1].swap(tmp);
+      bytes_read += sizeof(uint32_t) * ((_u64) k + 1);
+      if (nodes_read % 10000000 == 0)
         diskann::cout << "." << std::flush;
+      if (k > _max_range_of_loaded_graph) {
+        _max_range_of_loaded_graph = k;
+      }
     }
-    if (_final_graph.size() != _nd) {
-      diskann::cout << "ERROR. mismatch in number of points. Graph has "
-                    << _final_graph.size() << " points and loaded dataset has "
-                    << _nd << " points. " << std::endl;
-      return;
+#endif
+
+    diskann::cout << "done. Index has " << nodes_read << " nodes and " << cc
+                  << " out-edges, _ep is set to " << _ep << std::endl;
+    return nodes_read;
+  }
+
+  template<typename T, typename TagT>
+  int Index<T, TagT>::get_vector_by_tag(TagT &tag, T *vec) {
+    std::shared_lock<std::shared_timed_mutex> lock(_tag_lock);
+    if (_tag_to_location.find(tag) == _tag_to_location.end()) {
+      diskann::cout << "Tag " << tag << " does not exist" << std::endl;
+      return -1;
     }
 
-    diskann::cout << "..done. Index has " << nodes << " nodes and " << cc
-                  << " out-edges" << std::endl;
+    size_t location = _tag_to_location[tag];  // must be
+    // memory should be allocated for vec before calling this function
+    memcpy((void *) vec, (void *) (_data + location * _aligned_dim),
+           (size_t) _dim * sizeof(T));
+    return 0;
+  }
 
-    if (load_tags) {
-      if (_enable_tags == false)
-        diskann::cout << "Enabling tags." << std::endl;
-      _enable_tags = true;
-      std::ifstream tag_file;
-      if (tag_filename == NULL)
-        tag_file = std::ifstream(std::string(filename) + std::string(".tags"));
-      else
-        tag_file = std::ifstream(std::string(tag_filename));
-      if (!tag_file.is_open()) {
-        std::cerr << "Tag file not found." << std::endl;
-        return;
-      }
-      unsigned id = 0;
-      TagT     tag;
-      while (tag_file >> tag) {
-        _location_to_tag[id] = tag;
-        _tag_to_location[tag] = id++;
-      }
-      tag_file.close();
-      assert(id == _nd);
+  template<typename T, typename TagT>
+  const T *Index<T, TagT>::get_vector_by_tag(const TagT &tag) {
+    std::shared_lock<std::shared_timed_mutex> lock(_tag_lock);
+    if (_tag_to_location.find(tag) == _tag_to_location.end()) {
+      diskann::cout << "Tag " << tag << " does not exist in the index."
+                    << std::endl;
+      return nullptr;
+    } else {
+      unsigned location = _tag_to_location[tag];
+      return _data + (((size_t) location) * _aligned_dim);
     }
   }
 
@@ -368,13 +913,13 @@ namespace diskann {
 
     for (size_t i = 0; i < _nd; i++)
       for (size_t j = 0; j < _aligned_dim; j++)
-        center[j] += _data[i * _aligned_dim + j];
+        center[j] += (float) _data[i * _aligned_dim + j];
 
     for (size_t j = 0; j < _aligned_dim; j++)
-      center[j] /= _nd;
+      center[j] /= (float) _nd;
 
     // compute all to one distance
-    float *distances = new float[_nd]();
+    float * distances = new float[_nd]();
 #pragma omp parallel for schedule(static, 65536)
     for (_s64 i = 0; i < (_s64) _nd; i++) {
       // extract point and distance reference
@@ -383,7 +928,8 @@ namespace diskann {
       dist = 0;
       float diff = 0;
       for (size_t j = 0; j < _aligned_dim; j++) {
-        diff = (center[j] - cur_vec[j]) * (center[j] - cur_vec[j]);
+        diff =
+            (center[j] - (float) cur_vec[j]) * (center[j] - (float) cur_vec[j]);
         dist += diff;
       }
     }
@@ -419,25 +965,61 @@ namespace diskann {
       const std::vector<unsigned> &init_ids,
       std::vector<Neighbor> &      expanded_nodes_info,
       tsl::robin_set<unsigned> &   expanded_nodes_ids,
-      std::vector<Neighbor> &      best_L_nodes) {
-    best_L_nodes.resize(Lsize + 1);
-    expanded_nodes_info.reserve(10 * Lsize);
-    expanded_nodes_ids.reserve(10 * Lsize);
+      std::vector<Neighbor> &best_L_nodes, std::vector<unsigned> &des,
+      tsl::robin_set<unsigned> &inserted_into_pool_rs,
+      boost::dynamic_bitset<> &inserted_into_pool_bs, bool ret_frozen,
+      bool search_invocation) {
+    for (unsigned i = 0; i < Lsize + 1; i++) {
+      best_L_nodes[i].distance = std::numeric_limits<float>::max();
+    }
+    if (!search_invocation) {
+      expanded_nodes_ids.clear();
+      expanded_nodes_info.clear();
+      // expanded_nodes_info.reserve(10 * Lsize);
+      // expanded_nodes_ids.reserve((int) (1.5 * Lsize));
+      des.clear();
+    }
 
-    unsigned                 l = 0;
-    Neighbor                 nn;
-    tsl::robin_set<unsigned> inserted_into_pool;
-    inserted_into_pool.reserve(Lsize * 20);
+    unsigned l = 0;
+    Neighbor nn;
+
+    bool fast_iterate =
+        (_max_points + _num_frozen_pts) <= MAX_POINTS_FOR_USING_BITSET;
+    // tsl::robin_set<unsigned> inserted_into_pool_rs;
+    // boost::dynamic_bitset<> inserted_into_pool_bs;
+
+    if (fast_iterate) {
+      auto total_num_points = _max_points + _num_frozen_pts;
+      if (inserted_into_pool_bs.size() < total_num_points) {
+        // hopefully using 2X will reduce the number of allocations.
+        auto resize_size = 2 * total_num_points > MAX_POINTS_FOR_USING_BITSET
+                               ? MAX_POINTS_FOR_USING_BITSET
+                               : 2 * total_num_points;
+        inserted_into_pool_bs.resize(2 * total_num_points);
+      }
+    }
 
     for (auto id : init_ids) {
-      assert(id < _max_points);
+      if (id >= _max_points + _num_frozen_pts) {
+        diskann::cerr << "Wrong id : " << id << std::endl;
+        throw diskann::ANNException(
+            std::string("Wrong id") + std::to_string(id), -1, __FUNCSIG__,
+            __FILE__, __LINE__);
+      }
       nn = Neighbor(id,
                     _distance->compare(_data + _aligned_dim * (size_t) id,
                                        node_coords, (unsigned) _aligned_dim),
                     true);
-      if (inserted_into_pool.find(id) == inserted_into_pool.end()) {
-        inserted_into_pool.insert(id);
-        best_L_nodes[l++] = nn;
+      if (fast_iterate) {
+        if (inserted_into_pool_bs[id] == 0) {
+          inserted_into_pool_bs[id] = 1;
+          best_L_nodes[l++] = nn;
+        }
+      } else {
+        if (inserted_into_pool_rs.find(id) == inserted_into_pool_rs.end()) {
+          inserted_into_pool_rs.insert(id);
+          best_L_nodes[l++] = nn;
+        }
       }
       if (l == Lsize)
         break;
@@ -455,16 +1037,56 @@ namespace diskann {
       if (best_L_nodes[k].flag) {
         best_L_nodes[k].flag = false;
         auto n = best_L_nodes[k].id;
-        expanded_nodes_info.emplace_back(best_L_nodes[k]);
-        expanded_nodes_ids.insert(n);
+        if (!(best_L_nodes[k].id == _ep && _num_frozen_pts > 0 &&
+              !ret_frozen)) {
+          if (!search_invocation) {
+            expanded_nodes_info.emplace_back(best_L_nodes[k]);
+            expanded_nodes_ids.insert(n);
+          }
+        }
+        // std::vector<unsigned> des;
+        des.clear();
+        // des.reserve(2 * _final_graph[n].size());
+        if (_dynamic_index) {
+          LockGuard guard(_locks[n]);
+          for (unsigned m = 0; m < _final_graph[n].size(); m++) {
+            if (_final_graph[n][m] >= _max_points + _num_frozen_pts) {
+              diskann::cerr << "Wrong id found: " << _final_graph[n][m]
+                            << std::endl;
+              throw diskann::ANNException(
+                  std::string("Wrong id found") +
+                      std::to_string(_final_graph[n][m]),
+                  -1, __FUNCSIG__, __FILE__, __LINE__);
+            }
+            des.emplace_back(_final_graph[n][m]);
+          }
+        } else {
+          for (unsigned m = 0; m < _final_graph[n].size(); m++) {
+            if (_final_graph[n][m] >= _max_points + _num_frozen_pts) {
+              diskann::cerr << "Wrong id found: " << _final_graph[n][m]
+                            << std::endl;
+              throw diskann::ANNException(
+                  std::string("Wrong id found") +
+                      std::to_string(_final_graph[n][m]),
+                  -1, __FUNCSIG__, __FILE__, __LINE__);
+            }
+            des.emplace_back(_final_graph[n][m]);
+          }
+        }
 
-        for (unsigned m = 0; m < _final_graph[n].size(); ++m) {
-          unsigned id = _final_graph[n][m];
-          if (inserted_into_pool.find(id) == inserted_into_pool.end()) {
-            inserted_into_pool.insert(id);
-
-            if ((m + 1) < _final_graph[n].size()) {
-              auto nextn = _final_graph[n][m + 1];
+        for (unsigned m = 0; m < des.size(); ++m) {
+          unsigned id = des[m];
+          bool     id_is_missing = fast_iterate ? inserted_into_pool_bs[id] == 0
+                                            : inserted_into_pool_rs.find(id) ==
+                                                  inserted_into_pool_rs.end();
+          if (id_is_missing) {
+            if (fast_iterate) {
+              inserted_into_pool_bs[id] = 1;
+            } else {
+              inserted_into_pool_rs.insert(id);
+            }
+            if ((m + 1) < des.size()) {
+              auto nextn = des[m + 1];
               diskann::prefetch_vector(
                   (const char *) _data + _aligned_dim * (size_t) nextn,
                   sizeof(T) * _aligned_dim);
@@ -497,20 +1119,64 @@ namespace diskann {
     return std::make_pair(hops, cmps);
   }
 
+  // template<typename T, typename TagT>
+  // void Index<T, TagT>::iterate_to_fixed_point(
+  //    const T *node_coords, const unsigned Lindex,
+  //    std::vector<Neighbor> &expanded_nodes_info,
+  //    tsl::robin_map<uint32_t, T *> &coord_map, bool return_frozen_pt) {
+  //  std::vector<uint32_t> init_ids;
+  //  init_ids.push_back(this->_ep);
+  //  std::vector<Neighbor>    best_L_nodes;
+  //  tsl::robin_set<uint32_t> expanded_nodes_ids;
+  //  this->iterate_to_fixed_point(node_coords, Lindex, init_ids,
+  //                               expanded_nodes_info, expanded_nodes_ids,
+  //                               best_L_nodes, return_frozen_pt);
+  //  for (Neighbor &einf : expanded_nodes_info) {
+  //    T *coords =
+  //        this->_data + (uint64_t) einf.id * (uint64_t) this->_aligned_dim;
+  //    coord_map.insert(std::make_pair(einf.id, coords));
+  //  }
+  //}
+
+  template<typename T, typename TagT>
+  void Index<T, TagT>::get_expanded_nodes(
+      const size_t node_id, const unsigned Lindex,
+      std::vector<unsigned>     init_ids,
+      std::vector<Neighbor> &   expanded_nodes_info,
+      tsl::robin_set<unsigned> &expanded_nodes_ids, std::vector<unsigned> &des,
+      std::vector<Neighbor> &   best_L_nodes,
+      tsl::robin_set<unsigned> &inserted_into_pool_rs,
+      boost::dynamic_bitset<> & inserted_into_pool_bs) {
+    const T *node_coords = _data + _aligned_dim * node_id;
+
+    if (init_ids.size() == 0)
+      init_ids.emplace_back(_ep);
+
+    iterate_to_fixed_point(node_coords, Lindex, init_ids, expanded_nodes_info,
+                           expanded_nodes_ids, best_L_nodes, des,
+                           inserted_into_pool_rs, inserted_into_pool_bs);
+  }
+
   template<typename T, typename TagT>
   void Index<T, TagT>::get_expanded_nodes(
       const size_t node_id, const unsigned Lindex,
       std::vector<unsigned>     init_ids,
       std::vector<Neighbor> &   expanded_nodes_info,
       tsl::robin_set<unsigned> &expanded_nodes_ids) {
-    const T *             node_coords = _data + _aligned_dim * node_id;
-    std::vector<Neighbor> best_L_nodes;
+    const T *node_coords = _data + _aligned_dim * node_id;
 
     if (init_ids.size() == 0)
       init_ids.emplace_back(_ep);
 
+    std::vector<unsigned> des;
+    std::vector<Neighbor> best_L_nodes;
+    best_L_nodes.resize(Lindex + 1);
+    tsl::robin_set<unsigned> inserted_into_pool_rs;
+    boost::dynamic_bitset<>  inserted_into_pool_bs;
+
     iterate_to_fixed_point(node_coords, Lindex, init_ids, expanded_nodes_info,
-                           expanded_nodes_ids, best_L_nodes);
+                           expanded_nodes_ids, best_L_nodes, des,
+                           inserted_into_pool_rs, inserted_into_pool_bs);
   }
 
   template<typename T, typename TagT>
@@ -537,10 +1203,9 @@ namespace diskann {
     float cur_alpha = 1;
     while (cur_alpha <= alpha && result.size() < degree) {
       unsigned start = 0;
-      float    eps =
-          cur_alpha +
-          0.01;  // used for MIPS, where we store a value of eps in cur_alpha to
-                 // denote pruned out entries which we can skip in later rounds.
+      float eps = cur_alpha + 0.01f;  // used for MIPS, where we store a value
+                                      // of eps in cur_alpha to
+      // denote pruned out entries which we can skip in later rounds.
       while (result.size() < degree && (start) < pool.size() && start < maxc) {
         auto &p = pool[start];
         if (occlude_factor[start] > cur_alpha) {
@@ -555,10 +1220,12 @@ namespace diskann {
           float djk = _distance->compare(
               _data + _aligned_dim * (size_t) pool[t].id,
               _data + _aligned_dim * (size_t) p.id, (unsigned) _aligned_dim);
-          if (_metric == diskann::Metric::L2) {
+          if (_dist_metric == diskann::Metric::L2 ||
+              _dist_metric == diskann::Metric::COSINE) {
             occlude_factor[t] =
-                (std::max)(occlude_factor[t], pool[t].distance / djk);
-          } else if (_metric ==
+                //(std::max)(occlude_factor[t], pool[t].distance / djk);
+                diskann_max(occlude_factor[t], pool[t].distance / djk);
+          } else if (_dist_metric ==
                      diskann::Metric::INNER_PRODUCT) {  // stylized rules for
                                                         // inner product since
                                                         // we want max instead
@@ -566,7 +1233,8 @@ namespace diskann {
             float x = -pool[t].distance;
             float y = -djk;
             if (y > cur_alpha * x) {
-              occlude_factor[t] = (std::max)(occlude_factor[t], eps);
+              occlude_factor[t] =
+                  /* (std::max)*/ diskann_max(occlude_factor[t], eps);
             }
           }
         }
@@ -576,17 +1244,80 @@ namespace diskann {
     }
   }
 
+  // template<typename T, typename TagT>
+  // void Index<T, TagT>::occlude_pq(std::vector<Neighbor> &pool,
+  //                                const unsigned location, const float alpha,
+  //                                const unsigned degree, const unsigned maxc,
+  //                                std::vector<Neighbor> &result) {
+  //  auto               pool_size = (_u32) pool.size();
+  //  std::vector<float> occlude_factor(pool_size, 0);
+  //  occlude_list(pool, location, alpha, degree, maxc, result, occlude_factor);
+  //}
+
+  // template<typename T, typename TagT>
+  // void Index<T, TagT>::occlude_pq(std::vector<Neighbor> &pool,
+  //                                const unsigned location, const float alpha,
+  //                                const unsigned degree, const unsigned maxc,
+  //                                std::vector<Neighbor> &result,
+  //                                std::vector<float> &   occlude_factor) {
+  //  if (pool.empty())
+  //    return;
+  //  assert(std::is_sorted(pool.begin(), pool.end()));
+  //  assert(!pool.empty());
+
+  //  float cur_alpha = 1;
+  //  while (cur_alpha <= alpha && result.size() < degree) {
+  //    unsigned start = 0;
+
+  //    while (result.size() < degree && (start) < pool.size() && start < maxc)
+  //    {
+  //      auto &p = pool[start];
+  //      if (occlude_factor[start] > cur_alpha) {
+  //        start++;
+  //        continue;
+  //      }
+  //      occlude_factor[start] = std::numeric_limits<float>::max();
+  //      result.push_back(p);
+  //      for (unsigned t = start + 1; t < pool.size() && t < maxc; t++) {
+  //        if (occlude_factor[t] > alpha)
+  //          continue;
+  //        unsigned p_id, q_id;
+  //        p_id = pool[t].id;
+  //        q_id = p.id;
+  //        if (p_id == _max_points)
+  //          p_id = _nd;
+  //        if (q_id == _max_points)
+  //          q_id = _nd;
+  //        float djk = _distance->compare(
+  //            _pq_data + _aligned_dim * (size_t) p_id,
+  //            _pq_data + _aligned_dim * (size_t) q_id, (unsigned)
+  //            _aligned_dim);
+  //        occlude_factor[t] =
+  //            (std::max)(occlude_factor[t], pool[t].distance / djk);
+  //      }
+  //      start++;
+  //    }
+  //    cur_alpha *= 1.2;
+  //  }
+  //}
+
   template<typename T, typename TagT>
-  void Index<T, TagT>::prune_neighbors(const unsigned         location,
+  void Index<T, TagT>::prune_neighbors(const unsigned location,
                                        std::vector<Neighbor> &pool,
                                        const Parameters &     parameter,
                                        std::vector<unsigned> &pruned_list) {
-    unsigned range = parameter.Get<unsigned>("R");
-    unsigned maxc = parameter.Get<unsigned>("C");
-    float    alpha = parameter.Get<float>("alpha");
+    unsigned range = _indexingRange;  // parameter.Get<unsigned>("R");
+    unsigned maxc = _indexingMaxC;    // parameter.Get<unsigned>("C");
+    float    alpha = _indexingAlpha;  // parameter.Get<float>("alpha");
 
-    if (pool.size() == 0)
-      return;
+    if (pool.size() == 0) {
+      std::stringstream ss;
+      ss << "Thread id:" << std::this_thread::get_id()
+         << " Pool address: " << &pool << std::endl;
+      std::cout << ss.str();
+      throw diskann::ANNException("Pool passed to prune_neighbors is empty",
+                                  -1);
+    }
 
     _width = (std::max)(_width, range);
 
@@ -635,7 +1366,7 @@ namespace diskann {
       if (des == n)
         continue;
       /* des.id is the id of the neighbors of n */
-      assert(des >= 0 && des < _max_points);
+      assert(des >= 0 && des < _max_points + _num_frozen_pts);
       if (des > _max_points)
         diskann::cout << "error. " << des << " exceeds max_pts" << std::endl;
       /* des_pool contains the neighbors of the neighbors of n */
@@ -645,7 +1376,8 @@ namespace diskann {
         if (std::find(_final_graph[des].begin(), _final_graph[des].end(), n) ==
             _final_graph[des].end()) {
           _final_graph[des].push_back(n);
-          if (_final_graph[des].size() > (unsigned) (range * SLACK_FACTOR))
+          if (_final_graph[des].size() >
+              (unsigned) (range * GRAPH_SLACK_FACTOR))
             need_to_sync[des] = 1;
         }
       }  // des lock is released by this point
@@ -657,19 +1389,19 @@ namespace diskann {
    * the current node n.
    */
   template<typename T, typename TagT>
-  void Index<T, TagT>::inter_insert(unsigned               n,
+  void Index<T, TagT>::inter_insert(unsigned n,
                                     std::vector<unsigned> &pruned_list,
                                     const Parameters &     parameter,
                                     bool                   update_in_graph) {
-    const auto range = parameter.Get<unsigned>("R");
-    assert(n >= 0 && n < _nd);
+    const auto range = _indexingRange;  // parameter.Get<unsigned>("R");
+    assert(n >= 0 && n < _nd + _num_frozen_pts);
     const auto &src_pool = pruned_list;
 
     assert(!src_pool.empty());
 
     for (auto des : src_pool) {
       /* des.id is the id of the neighbors of n */
-      assert(des >= 0 && des < _max_points);
+      assert(des >= 0 && des < _max_points + _num_frozen_pts);
       /* des_pool contains the neighbors of the neighbors of n */
       auto &                des_pool = _final_graph[des];
       std::vector<unsigned> copy_of_neighbors;
@@ -677,14 +1409,11 @@ namespace diskann {
       {
         LockGuard guard(_locks[des]);
         if (std::find(des_pool.begin(), des_pool.end(), n) == des_pool.end()) {
-          if (des_pool.size() < SLACK_FACTOR * range) {
+          if (des_pool.size() < (_u64)(GRAPH_SLACK_FACTOR * range)) {
             des_pool.emplace_back(n);
             if (update_in_graph) {
-              // USE APPROPRIATE LOCKS FOR IN_GRAPH
-              if (std::find(_in_graph[n].begin(), _in_graph[n].end(), des) ==
-                  _in_graph[n].end()) {
-                _in_graph[n].emplace_back(des);
-              }
+              LockGuard guard(_locks_in[n]);
+              _in_graph[n].emplace_back(des);
             }
             prune_needed = false;
           } else {
@@ -699,7 +1428,8 @@ namespace diskann {
         tsl::robin_set<unsigned> dummy_visited(0);
         std::vector<Neighbor>    dummy_pool(0);
 
-        size_t reserveSize = (size_t)(std::ceil(1.05 * SLACK_FACTOR * range));
+        size_t reserveSize =
+            (size_t)(std::ceil(1.05 * GRAPH_SLACK_FACTOR * range));
         dummy_visited.reserve(reserveSize);
         dummy_pool.reserve(reserveSize);
 
@@ -718,11 +1448,26 @@ namespace diskann {
         prune_neighbors(des, dummy_pool, parameter, new_out_neighbors);
         {
           LockGuard guard(_locks[des]);
-          // DELETE IN-EDGES FROM IN_GRAPH USING APPROPRIATE LOCKS
+          // updating in_graph of out-neighbors of des
+          if (update_in_graph) {
+            for (auto out_nbr : _final_graph[des]) {
+              {
+                LockGuard guard(_locks_in[out_nbr]);
+                for (unsigned i = 0; i < _in_graph[out_nbr].size(); i++) {
+                  if (_in_graph[out_nbr][i] == des) {
+                    _in_graph[out_nbr].erase(_in_graph[out_nbr].begin() + i);
+                    break;
+                  }
+                }
+              }
+            }
+          }
+
           _final_graph[des].clear();
           for (auto new_nbr : new_out_neighbors) {
             _final_graph[des].emplace_back(new_nbr);
             if (update_in_graph) {
+              LockGuard guard(_locks_in[new_nbr]);
               _in_graph[new_nbr].emplace_back(des);
             }
           }
@@ -736,25 +1481,26 @@ namespace diskann {
    */
   template<typename T, typename TagT>
   void Index<T, TagT>::link(Parameters &parameters) {
-    unsigned NUM_THREADS = parameters.Get<unsigned>("num_threads");
-    if (NUM_THREADS != 0)
-      omp_set_num_threads(NUM_THREADS);
+    unsigned num_threads = parameters.Get<unsigned>("num_threads");
+    if (num_threads != 0)
+      omp_set_num_threads(num_threads);
 
-    uint32_t NUM_SYNCS =
+    uint32_t num_syncs =
         (unsigned) DIV_ROUND_UP(_nd + _num_frozen_pts, (64 * 64));
-    if (NUM_SYNCS < 40)
-      NUM_SYNCS = 40;
-    diskann::cout << "Number of syncs: " << NUM_SYNCS << std::endl;
+    if (num_syncs < 40)
+      num_syncs = 40;
+    diskann::cout << "Number of syncs: " << num_syncs << std::endl;
 
     _saturate_graph = parameters.Get<bool>("saturate_graph");
 
-    if (NUM_THREADS != 0)
-      omp_set_num_threads(NUM_THREADS);
+    if (num_threads != 0)
+      omp_set_num_threads(num_threads);
 
-    const unsigned argL = parameters.Get<unsigned>("L");  // Search list size
-    const unsigned range = parameters.Get<unsigned>("R");
-    const float    last_round_alpha = parameters.Get<float>("alpha");
-    unsigned       L = argL;
+    _indexingQueueSize = parameters.Get<unsigned>("L");  // Search list size
+    _indexingRange = parameters.Get<unsigned>("R");
+    _indexingMaxC = parameters.Get<unsigned>("C");
+    const float last_round_alpha = parameters.Get<float>("alpha");
+    unsigned    L = _indexingQueueSize;
 
     std::vector<unsigned> Lvec;
     Lvec.push_back(L);
@@ -764,17 +1510,20 @@ namespace diskann {
     // Max degree of graph
     // Pruning parameter
     // Set alpha=1 for the first pass; use specified alpha for last pass
-    parameters.Set<float>("alpha", 1);
+    // parameters.Set<float>("alpha", 1);
+    _indexingAlpha = 1.0f;
 
     /* visit_order is a vector that is initialized to the entire graph */
-    std::vector<unsigned> visit_order;
+    std::vector<unsigned>          visit_order;
+    std::vector<diskann::Neighbor> pool, tmp;
+    tsl::robin_set<unsigned>       visited;
     visit_order.reserve(_nd + _num_frozen_pts);
     for (unsigned i = 0; i < (unsigned) _nd; i++) {
       visit_order.emplace_back(i);
     }
 
-    for (unsigned i = 0; i < (unsigned) _num_frozen_pts; ++i)
-      visit_order.emplace_back((unsigned) (_max_points + i));
+    if (_num_frozen_pts > 0)
+      visit_order.emplace_back((unsigned) _max_points);
 
     // if there are frozen points, the first such one is set to be the _ep
     if (_num_frozen_pts > 0)
@@ -782,15 +1531,17 @@ namespace diskann {
     else
       _ep = calculate_entry_point();
 
-    _final_graph.reserve(_max_points + _num_frozen_pts);
-    _final_graph.resize(_max_points + _num_frozen_pts);
+    /*    _final_graph.reserve(_max_points + _num_frozen_pts);
+        _final_graph.resize(_max_points + _num_frozen_pts); */
+
     if (_support_eager_delete) {
       _in_graph.reserve(_max_points + _num_frozen_pts);
       _in_graph.resize(_max_points + _num_frozen_pts);
     }
 
-    for (uint64_t p = 0; p < _max_points + _num_frozen_pts; p++) {
-      _final_graph[p].reserve((size_t)(std::ceil(range * SLACK_FACTOR * 1.05)));
+    for (uint64_t p = 0; p < _nd; p++) {
+      _final_graph[p].reserve(
+          (size_t)(std::ceil(_indexingRange * GRAPH_SLACK_FACTOR * 1.05)));
     }
 
     std::random_device               rd;
@@ -812,7 +1563,8 @@ namespace diskann {
 
       if (rnd_no == NUM_RNDS - 1) {
         if (last_round_alpha > 1)
-          parameters.Set<float>("alpha", last_round_alpha);
+          // parameters.Set<float>("alpha", last_round_alpha);
+          _indexingAlpha = last_round_alpha;
       }
 
       double   sync_time = 0, total_sync_time = 0;
@@ -820,12 +1572,12 @@ namespace diskann {
       size_t   inter_count = 0, total_inter_count = 0;
       unsigned progress_counter = 0;
 
-      size_t round_size = DIV_ROUND_UP(_nd, NUM_SYNCS);  // size of each batch
+      size_t round_size = DIV_ROUND_UP(_nd, num_syncs);  // size of each batch
       std::vector<unsigned> need_to_sync(_max_points + _num_frozen_pts, 0);
 
       std::vector<std::vector<unsigned>> pruned_list_vector(round_size);
 
-      for (uint32_t sync_num = 0; sync_num < NUM_SYNCS; sync_num++) {
+      for (uint32_t sync_num = 0; sync_num < num_syncs; sync_num++) {
         size_t start_id = sync_num * round_size;
         size_t end_id =
             (std::min)(_nd + _num_frozen_pts, (sync_num + 1) * round_size);
@@ -925,10 +1677,10 @@ namespace diskann {
         diff = std::chrono::high_resolution_clock::now() - s;
         inter_time += diff.count();
 
-        if ((sync_num * 100) / NUM_SYNCS > progress_counter) {
+        if ((sync_num * 100) / num_syncs > progress_counter) {
           diskann::cout.precision(4);
           diskann::cout << "Completed  (round: " << rnd_no
-                        << ", sync: " << sync_num << "/" << NUM_SYNCS
+                        << ", sync: " << sync_num << "/" << num_syncs
                         << " with L " << L << ")"
                         << " sync_time: " << sync_time << "s"
                         << "; inter_time: " << inter_time << "s" << std::endl;
@@ -942,24 +1694,28 @@ namespace diskann {
           progress_counter += 5;
         }
       }
-// Gopal. Splittng diskann_dll into separate DLLs for search and build.
+// Gopal. Splittng nsg_dll into separate DLLs for search and build.
 // This code should only be available in the "build" DLL.
-#ifdef DISKANN_BUILD
+#ifdef USE_TCMALLOC
       MallocExtension::instance()->ReleaseFreeMemory();
 #endif
-      diskann::cout << "Completed Pass " << rnd_no << " of data using L=" << L
-                    << " and alpha=" << parameters.Get<float>("alpha")
-                    << ". Stats: ";
-      diskann::cout << "search+prune_time=" << total_sync_time
-                    << "s, inter_time=" << total_inter_time
-                    << "s, inter_count=" << total_inter_count << std::endl;
+      if (_nd > 0) {
+        diskann::cout << "Completed Pass " << rnd_no << " of data using L=" << L
+                      << " and alpha=" << parameters.Get<float>("alpha")
+                      << ". Stats: ";
+        diskann::cout << "search+prune_time=" << total_sync_time
+                      << "s, inter_time=" << total_inter_time
+                      << "s, inter_count=" << total_inter_count << std::endl;
+      }
     }
 
-    diskann::cout << "Starting final cleanup.." << std::flush;
+    if (_nd > 0) {
+      diskann::cout << "Starting final cleanup.." << std::flush;
+    }
 #pragma omp parallel for schedule(dynamic, 65536)
     for (_s64 node_ctr = 0; node_ctr < (_s64)(visit_order.size()); node_ctr++) {
       auto node = visit_order[node_ctr];
-      if (_final_graph[node].size() > range) {
+      if (_final_graph[node].size() > _indexingRange) {
         tsl::robin_set<unsigned> dummy_visited(0);
         std::vector<Neighbor>    dummy_pool(0);
         std::vector<unsigned>    new_out_neighbors;
@@ -982,27 +1738,143 @@ namespace diskann {
           _final_graph[node].emplace_back(id);
       }
     }
-    diskann::cout << "done. Link time: "
-                  << ((double) link_timer.elapsed() / (double) 1000000) << "s"
-                  << std::endl;
+    if (_nd > 0) {
+      diskann::cout << "done. Link time: "
+                    << ((double) link_timer.elapsed() / (double) 1000000) << "s"
+                    << std::endl;
+    }
   }
 
   template<typename T, typename TagT>
-  void Index<T, TagT>::build(Parameters &             parameters,
-                             const std::vector<TagT> &tags) {
-    if (_enable_tags) {
-      if (tags.size() != _nd) {
-        std::cerr << "#Tags should be equal to #points" << std::endl;
-        throw diskann::ANNException("#Tags must be equal to #points", -1,
-                                    __FUNCSIG__, __FILE__, __LINE__);
-      }
-      for (size_t i = 0; i < tags.size(); ++i) {
-        _tag_to_location[tags[i]] = (unsigned) i;
-        _location_to_tag[(unsigned) i] = tags[i];
+  void Index<T, TagT>::prune_all_nbrs(const Parameters &parameters) {
+    const unsigned range = parameters.Get<unsigned>("R");
+
+    diskann::Timer timer;
+#pragma omp        parallel for
+    for (_s64 node = 0; node < (_s64)(_max_points + _num_frozen_pts); node++) {
+      if ((size_t) node < _nd || (size_t) node == _max_points) {
+        if (_final_graph[node].size() > range) {
+          tsl::robin_set<unsigned> dummy_visited(0);
+          std::vector<Neighbor>    dummy_pool(0);
+          std::vector<unsigned>    new_out_neighbors;
+
+          for (auto cur_nbr : _final_graph[node]) {
+            if (dummy_visited.find(cur_nbr) == dummy_visited.end() &&
+                cur_nbr != node) {
+              float dist =
+                  _distance->compare(_data + _aligned_dim * (size_t) node,
+                                     _data + _aligned_dim * (size_t) cur_nbr,
+                                     (unsigned) _aligned_dim);
+              dummy_pool.emplace_back(Neighbor(cur_nbr, dist, true));
+              dummy_visited.insert(cur_nbr);
+            }
+          }
+          prune_neighbors((_u32) node, dummy_pool, parameters,
+                          new_out_neighbors);
+
+          _final_graph[node].clear();
+          for (auto id : new_out_neighbors)
+            _final_graph[node].emplace_back(id);
+        }
       }
     }
-    diskann::cout << "Starting index build..." << std::endl;
-    link(parameters);  // Primary func for creating graph
+
+    diskann::cout << "Prune time : " << timer.elapsed() / 1000 << "ms"
+                  << std::endl;
+    size_t max = 0, min = 1 << 30, total = 0, cnt = 0;
+    for (size_t i = 0; i < (_nd + _num_frozen_pts); i++) {
+      auto &pool = _final_graph[i];
+      max = (std::max)(max, pool.size());
+      min = (std::min)(min, pool.size());
+      total += pool.size();
+      if (pool.size() < 2)
+        cnt++;
+    }
+    if (min > max)
+      min = max;
+    if (_nd > 0) {
+      diskann::cout << "Index built with degree: max:" << max << "  avg:"
+                    << (float) total / (float) (_nd + _num_frozen_pts)
+                    << "  min:" << min << "  count(deg<2):" << cnt << std::endl;
+    }
+  }
+
+  template<typename T, typename TagT>
+  void Index<T, TagT>::build(const char *filename,
+                             const size_t             num_points_to_load,
+                             Parameters &             parameters,
+                             const std::vector<TagT> &tags) {
+    if (!file_exists(filename)) {
+      diskann::cerr << "Data file " << filename
+                    << " does not exist!!! Exiting...." << std::endl;
+      std::stringstream stream;
+      stream << "Data file " << filename << " does not exist." << std::endl;
+      diskann::cerr << stream.str() << std::endl;
+      throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
+                                  __LINE__);
+    }
+
+    size_t file_num_points, file_dim;
+    if (filename == nullptr) {
+      diskann::cout << "Starting with an empty index." << std::endl;
+      _nd = 0;
+    } else {
+      diskann::get_bin_metadata(filename, file_num_points, file_dim);
+      if (file_num_points > _max_points ||
+          num_points_to_load > file_num_points) {
+        std::stringstream stream;
+        stream << "ERROR: Driver requests loading " << num_points_to_load
+               << " points and file has " << file_num_points << " points, but "
+               << "index can support only " << _max_points
+               << " points as specified in constructor." << std::endl;
+        diskann::cerr << stream.str() << std::endl;
+        aligned_free(_data);
+        throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
+                                    __LINE__);
+      }
+      if (file_dim != _dim) {
+        std::stringstream stream;
+        stream << "ERROR: Driver requests loading " << _dim << " dimension,"
+               << "but file has " << file_dim << " dimension." << std::endl;
+        diskann::cerr << stream.str() << std::endl;
+        aligned_free(_data);
+        throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
+                                    __LINE__);
+      }
+
+      copy_aligned_data_from_file<T>(std::string(filename), _data,
+                                     file_num_points, file_dim, _aligned_dim);
+      if (_normalize_vecs) {
+        for (uint64_t i = 0; i < file_num_points; i++) {
+          normalize(_data + _aligned_dim * i, _aligned_dim);
+        }
+      }
+
+      diskann::cout << "Loading only first " << num_points_to_load
+                    << " from file.. " << std::endl;
+      _nd = num_points_to_load;
+
+      if (_enable_tags && tags.size() != num_points_to_load) {
+        std::stringstream stream;
+        stream << "ERROR: Driver requests loading " << num_points_to_load
+               << " points from file,"
+               << "but tags vector is of size " << tags.size() << "."
+               << std::endl;
+        diskann::cerr << stream.str() << std::endl;
+        aligned_free(_data);
+        throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
+                                    __LINE__);
+      }
+      if (_enable_tags) {
+        for (size_t i = 0; i < tags.size(); ++i) {
+          _tag_to_location[tags[i]] = (unsigned) i;
+          _location_to_tag[(unsigned) i] = tags[i];
+        }
+      }
+    }
+
+    generate_frozen_point();
+    link(parameters);  // Primary func for creating nsg graph
 
     if (_support_eager_delete) {
       update_in_graph();  // copying values to in_graph
@@ -1017,84 +1889,1492 @@ namespace diskann {
       if (pool.size() < 2)
         cnt++;
     }
-    diskann::cout << "Degree: max:" << max
-                  << "  avg:" << (float) total / (float) _nd << "  min:" << min
-                  << "  count(deg<2):" << cnt << "\n"
-                  << "Index built." << std::endl;
+    if (min > max)
+      min = max;
+    if (_nd > 0) {
+      diskann::cout << "Index built with degree: max:" << max << "  avg:"
+                    << (float) total / (float) (_nd + _num_frozen_pts)
+                    << "  min:" << min << "  count(deg<2):" << cnt << std::endl;
+    }
     _width = (std::max)((unsigned) max, _width);
     _has_built = true;
   }
 
   template<typename T, typename TagT>
-  std::pair<uint32_t, uint32_t> Index<T, TagT>::search(const T *      query,
+  void Index<T, TagT>::build(const char *filename,
+                             const size_t num_points_to_load,
+                             Parameters &parameters, const char *tag_filename) {
+    if (!file_exists(filename)) {
+      diskann::cerr << "Data file provided " << filename << " does not exist."
+                    << std::endl;
+      std::stringstream stream;
+      stream << "Data file provided " << filename << " does not exist."
+             << std::endl;
+      diskann::cerr << stream.str() << std::endl;
+      throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
+                                  __LINE__);
+    }
+
+    size_t file_num_points, file_dim;
+    if (filename == nullptr) {
+      diskann::cout << "Starting with an empty index." << std::endl;
+      _nd = 0;
+    } else {
+      diskann::get_bin_metadata(filename, file_num_points, file_dim);
+      if (file_num_points > _max_points ||
+          num_points_to_load > file_num_points) {
+        std::stringstream stream;
+        stream << "ERROR: Driver requests loading " << num_points_to_load
+               << " points and file has " << file_num_points << " points, but "
+               << "index can support only " << _max_points
+               << " points as specified in constructor." << std::endl;
+        diskann::cerr << stream.str() << std::endl;
+        aligned_free(_data);
+        throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
+                                    __LINE__);
+      }
+      if (file_dim != _dim) {
+        std::stringstream stream;
+        stream << "ERROR: Driver requests loading " << _dim << " dimension,"
+               << "but file has " << file_dim << " dimension." << std::endl;
+        diskann::cerr << stream.str() << std::endl;
+        aligned_free(_data);
+        throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
+                                    __LINE__);
+      }
+
+      copy_aligned_data_from_file<T>(std::string(filename), _data,
+                                     file_num_points, file_dim, _aligned_dim);
+
+      diskann::cout << "Loading only first " << num_points_to_load
+                    << " from file.. " << std::endl;
+      _nd = num_points_to_load;
+      if (_enable_tags) {
+        if (tag_filename == nullptr) {
+          for (unsigned i = 0; i < num_points_to_load; i++) {
+            _tag_to_location[i] = i;
+            _location_to_tag[i] = i;
+          }
+        } else {
+          if (file_exists(tag_filename)) {
+            diskann::cout << "Loading tags from " << tag_filename
+                          << " for vamana index build" << std::endl;
+            TagT * tag_data = nullptr;
+            size_t npts, ndim;
+            diskann::load_bin(tag_filename, tag_data, npts, ndim);
+            if (npts != num_points_to_load) {
+              std::stringstream sstream;
+              sstream << "Loaded " << npts
+                      << " tags instead of expected number: "
+                      << num_points_to_load;
+              diskann::cerr << sstream.str() << std::endl;
+              throw diskann::ANNException(sstream.str(), -1, __FUNCSIG__,
+                                          __FILE__, __LINE__);
+            }
+            for (size_t i = 0; i < npts; i++) {
+              _tag_to_location[tag_data[i]] = (unsigned) i;
+              _location_to_tag[(unsigned) i] = tag_data[i];
+            }
+            delete[] tag_data;
+          } else {
+            diskann::cerr << "Tag file " << tag_filename
+                          << " does not exist. Exiting..." << std::endl;
+            throw diskann::ANNException(
+                std::string("Tag file") + tag_filename + " does not exist", -1,
+                __FUNCSIG__, __FILE__, __LINE__);
+          }
+        }
+      }
+    }
+
+    generate_frozen_point();
+    link(parameters);  // Primary func for creating nsg graph
+
+    if (_support_eager_delete) {
+      update_in_graph();  // copying values to in_graph
+    }
+
+    size_t max = 0, min = 1 << 30, total = 0, cnt = 0;
+    for (size_t i = 0; i < _nd; i++) {
+      auto &pool = _final_graph[i];
+      max = (std::max)(max, pool.size());
+      min = (std::min)(min, pool.size());
+      total += pool.size();
+      if (pool.size() < 2)
+        cnt++;
+    }
+    if (min > max)
+      min = max;
+    if (_nd > 0) {
+      diskann::cout << "Index built with degree: max:" << max << "  avg:"
+                    << (float) total / (float) (_nd + _num_frozen_pts)
+                    << "  min:" << min << "  count(deg<2):" << cnt << std::endl;
+    }
+    _width = (std::max)((unsigned) max, _width);
+    _has_built = true;
+  }
+
+  // template<typename T, typename TagT>
+  // std::pair<uint32_t, uint32_t> Index<T, TagT>::search(
+  //    const T *query, const size_t K, const unsigned L,
+  //    std::vector<Neighbor_Tag<TagT>> &best_K_tags) {
+
+  //  std::shared_lock<std::shared_timed_mutex> ulock(_update_lock);
+  //  assert(best_K_tags.size() == 0);
+  //  std::vector<unsigned>    init_ids;
+  //  tsl::robin_set<unsigned> visited(10 * L);
+  //  std::vector<Neighbor>    best, expanded_nodes_info;
+  //  tsl::robin_set<unsigned> expanded_nodes_ids;
+
+  //  if (init_ids.size() == 0) {
+  //    init_ids.emplace_back(_ep);
+  //  }
+
+  //  T *    aligned_query;
+  //  size_t allocSize = _aligned_dim * sizeof(T);
+  //  alloc_aligned(((void **) &aligned_query), allocSize, 8 * sizeof(T));
+  //  memset(aligned_query, 0, _aligned_dim * sizeof(T));
+  //  memcpy(aligned_query, query, _dim * sizeof(T));
+
+  //  if (_normalize_vecs) {
+  //    normalize((float *) aligned_query, _dim);
+  //  }
+
+  //  auto retval =
+  //      iterate_to_fixed_point(aligned_query, L, init_ids,
+  //      expanded_nodes_info,
+  //                             expanded_nodes_ids, best, true, true); //return
+  //                             frozen, search invocation = true;
+
+  //  //std::shared_lock<std::shared_timed_mutex> lock(_tag_lock);
+  //  std::shared_lock<std::shared_mutex> lock(_tag_lock);
+  //  for (auto iter : best) {
+  //    if (_location_to_tag.find(iter.id) != _location_to_tag.end())
+  //      best_K_tags.emplace_back(
+  //          Neighbor_Tag<TagT>(_location_to_tag[iter.id], iter.distance));
+  //    if (best_K_tags.size() == K)
+  //      break;
+  //  }
+  //  aligned_free(aligned_query);
+  //  return retval;
+  //}
+
+  template<typename T, typename TagT>
+  template<typename IdType>
+  std::pair<uint32_t, uint32_t> Index<T, TagT>::search(const T *query,
                                                        const size_t   K,
                                                        const unsigned L,
-                                                       unsigned *     indices) {
+                                                       IdType *       indices,
+                                                       float *distances) {
+    ScratchStoreManager<T> manager(_query_scratch);
+    auto                   scratch = manager.scratch_space();
+
+    return search_impl(query, K, L, indices, distances, scratch);
+  }
+
+  template<typename T, typename TagT>
+  template<typename IdType>
+  std::pair<uint32_t, uint32_t> Index<T, TagT>::search_impl(
+      const T *query, const size_t K, const unsigned L, IdType *indices,
+      float *distances, InMemQueryScratch<T> &scratch) {
+    std::vector<Neighbor> &   expanded_nodes_info = scratch.pool();
+    tsl::robin_set<unsigned> &expanded_nodes_ids = scratch.visited();
+    std::vector<unsigned> &   des = scratch.des();
+    std::vector<Neighbor>     best_L_nodes = scratch.best_l_nodes();
+    tsl::robin_set<unsigned> &inserted_into_pool_rs =
+        scratch.inserted_into_pool_rs();
+    boost::dynamic_bitset<> &inserted_into_pool_bs =
+        scratch.inserted_into_pool_bs();
+
+    std::vector<unsigned> init_ids;
+
+    std::shared_lock<std::shared_timed_mutex> lock(_update_lock);
+
+    if (init_ids.size() == 0) {
+      init_ids.emplace_back(_ep);
+    }
+    T *aligned_query = scratch.aligned_query;
+    memcpy(aligned_query, query, _dim * sizeof(T));
+
+    if (_normalize_vecs) {
+      normalize((float *) aligned_query, _dim);
+    }
+
+    auto retval = iterate_to_fixed_point(
+        aligned_query, L, init_ids, expanded_nodes_info, expanded_nodes_ids,
+        best_L_nodes, des, inserted_into_pool_rs, inserted_into_pool_bs, true,
+        true);
+
+    size_t pos = 0;
+    for (auto it : best_L_nodes) {
+      if (it.id < _max_points) {
+        indices[pos] =
+            (IdType) it.id;  // safe because our indices are always uint32_t and
+                             // IDType will be uint32_t or uint64_t
+        if (distances != nullptr) {
+#ifdef EXEC_ENV_OLS
+          distances[pos] = it.distance;  // DLVS expects negative distances
+#else
+          distances[pos] = _dist_metric == diskann::Metric::INNER_PRODUCT
+                               ? -1 * it.distance
+                               : it.distance;
+#endif
+        }
+        pos++;
+      }
+      if (pos == K)
+        break;
+    }
+    return retval;
+  }
+
+  //  template<typename T, typename TagT>
+  //  std::pair<uint32_t, uint32_t> Index<T, TagT>::search(
+  //      const T *query, const uint64_t K, const unsigned L,
+  //      std::vector<unsigned> init_ids, uint64_t *indices, float *distances) {
+  //    tsl::robin_set<unsigned> visited(10 * L);
+  //    std::vector<Neighbor>    best_L_nodes, expanded_nodes_info;
+  //    tsl::robin_set<unsigned> expanded_nodes_ids;
+  //
+  //        std::shared_lock<std::shared_timed_mutex> lock(_update_lock);
+  //
+  //    if (init_ids.size() == 0) {
+  //      init_ids.emplace_back(_ep);
+  //    }
+  //    T *    aligned_query;
+  //    size_t allocSize = _aligned_dim * sizeof(T);
+  //    alloc_aligned(((void **) &aligned_query), allocSize, 8 * sizeof(T));
+  //    memset(aligned_query, 0, _aligned_dim * sizeof(T));
+  //    memcpy(aligned_query, query, _dim * sizeof(T));
+  //
+  //    if (_normalize_vecs) {
+  //      normalize((float *) aligned_query, _dim);
+  //    }
+  //
+  //
+  //    auto retval = iterate_to_fixed_point(aligned_query, (unsigned) L,
+  //    init_ids,
+  //                                         expanded_nodes_info,
+  //                                         expanded_nodes_ids, best_L_nodes,
+  //                                         true, true);
+  //
+  //    size_t pos = 0;
+  //    for (auto it : best_L_nodes) {
+  //      indices[pos] = it.id;
+  //#ifdef EXEC_ENV_OLS
+  //      distances[pos] = it.distance;  // DLVS expects negative distances
+  //#else
+  //      distances[pos] = _dist_metric == diskann::Metric::INNER_PRODUCT
+  //                           ? -1 * it.distance
+  //                           : it.distance;
+  //#endif
+  //      pos++;
+  //      if (pos == K)
+  //        break;
+  //    }
+  //    aligned_free(aligned_query);
+  //    return retval;
+  //  }
+
+  template<typename T, typename TagT>
+  size_t Index<T, TagT>::search_with_tags(const T *query, const uint64_t K,
+                                          const unsigned L, TagT *tags,
+                                          float *           distances,
+                                          std::vector<T *> &res_vectors) {
+    ScratchStoreManager<T> manager(_query_scratch);
+    auto                   scratch = manager.scratch_space();
+
+    if (L > scratch.search_l) {
+      scratch.resize_for_query(L);
+      diskann::cout << "Expanding query scratch_space. Was created with Lsize: "
+                    << scratch.search_l << " but search L is: " << L
+                    << std::endl;
+    }
+    _u32 * indices = scratch.indices;             // new unsigned[L];
+    float *dist_interim = scratch.interim_dists;  // new float[L];
+    auto   ret = search_impl(query, L, L, indices, dist_interim, scratch);
+
+    std::shared_lock<std::shared_timed_mutex> ulock(_update_lock);
+    // std::shared_lock<std::shared_timed_mutex> lock(_tag_lock);
+    std::shared_lock<std::shared_timed_mutex> lock(_tag_lock);
+    size_t                                    pos = 0;
+
+    for (int i = 0; i < (int) L; ++i)
+      if (_location_to_tag.find(indices[i]) != _location_to_tag.end()) {
+        tags[pos] = _location_to_tag[indices[i]];
+
+        // assuming that client has already initialized enough space if they
+        // want the result vectors returned.
+        if (res_vectors.size() > 0) {
+          memcpy(res_vectors[pos], _data + ((size_t) indices[i]) * _aligned_dim,
+                 _dim * sizeof(T));
+          // res_vectors[i] = _data + indices[i] * _aligned_dim;
+        }
+
+        if (distances != nullptr) {
+#ifdef EXEC_ENV_OLS
+          distances[pos] = dist_interim[i];  // DLVS expects negative distances
+#else
+          distances[pos] = _dist_metric == INNER_PRODUCT ? -1 * dist_interim[i]
+                                                         : dist_interim[i];
+#endif
+        }
+        pos++;
+        // in the weird case that res_vectors.size() != k, terminate at the
+        // lower value.
+        if (pos == K || pos == res_vectors.size())
+          break;
+      }
+
+    return pos;
+  }
+
+  template<typename T, typename TagT>
+  size_t Index<T, TagT>::get_num_points() {
+    return _nd;
+  }
+
+  template<typename T, typename TagT>
+  T *Index<T, TagT>::get_data() {
+    if (_num_frozen_pts > 0) {
+      T *    ret_data = nullptr;
+      size_t allocSize = ((size_t) _nd) * _aligned_dim * sizeof(T);
+      alloc_aligned(((void **) &ret_data), allocSize, 8 * sizeof(T));
+      memset(ret_data, 0, allocSize);
+      memcpy(ret_data, _data, allocSize);
+      return ret_data;
+    }
+    return _data;
+  }
+  template<typename T, typename TagT>
+  size_t Index<T, TagT>::return_max_points() {
+    return _max_points;
+  }
+
+  /*************************************************
+   *      Support for Incremental Update
+   *************************************************/
+
+  // in case we add ''frozen'' auxiliary points to the dataset, these are not
+  // visible to external world, we generate them here and update our dataset
+  template<typename T, typename TagT>
+  int Index<T, TagT>::generate_frozen_point() {
+    if (_num_frozen_pts == 0)
+      return 0;
+
+    if (_nd == 0) {
+      memset(_data + (_max_points) *_aligned_dim, 0, _aligned_dim * sizeof(T));
+      return 1;
+    }
+    size_t res = calculate_entry_point();
+    memcpy(_data + _max_points * _aligned_dim, _data + res * _aligned_dim,
+           _aligned_dim * sizeof(T));
+    return 0;
+  }
+
+  template<typename T, typename TagT>
+  int Index<T, TagT>::enable_delete() {
+    // assert(!_can_delete);
+    assert(_enable_tags);
+
+    // if (_can_delete) {
+    //  std::cerr << "Delete already enabled" << std::endl;
+    //  return -1;
+    //}
+    if (!_enable_tags) {
+      diskann::cerr << "Tags must be instantiated for deletions" << std::endl;
+      return -2;
+    }
+
+    if (_data_compacted) {
+      for (unsigned slot = (unsigned) _nd; slot < _max_points; ++slot) {
+        _empty_slots.insert(slot);
+      }
+    }
+
+    _lazy_done = false;
+    _eager_done = false;
+    //_can_delete = true;
+
+    if (_support_eager_delete) {
+      _in_graph.resize(_max_points + _num_frozen_pts);
+      _in_graph.reserve(_max_points + _num_frozen_pts);
+      update_in_graph();
+    }
+    return 0;
+  }
+
+  template<typename T, typename TagT>
+  void Index<T, TagT>::release_location() {
+    LockGuard guard(_change_lock);
+    _nd--;
+  }
+
+  template<typename T, typename TagT>
+  int Index<T, TagT>::eager_delete(const TagT tag, const Parameters &parameters,
+                                   int delete_mode) {
+    if (_lazy_done && (!_data_compacted)) {
+      diskann::cout << "Lazy delete requests issued but data not consolidated, "
+                       "cannot proceed with eager deletes."
+                    << std::endl;
+      return -1;
+    }
+
+    unsigned id;  // since we will return if tag is not found, ok to leave it
+                  // uninitialized.
+    {
+      // std::shared_lock<std::shared_timed_mutex> lock(_tag_lock);
+      std::shared_lock<std::shared_timed_mutex> lock(_tag_lock);
+      if (_tag_to_location.find(tag) == _tag_to_location.end()) {
+        diskann::cerr << "Delete tag " << tag << " not found" << std::endl;
+        return -1;
+      }
+      id = _tag_to_location[tag];
+    }
+
+    {
+      // std::unique_lock<std::shared_timed_mutex> lock(_tag_lock);
+      std::unique_lock<std::shared_timed_mutex> lock(_tag_lock);
+      _location_to_tag.erase(_tag_to_location[tag]);
+      _tag_to_location.erase(tag);
+    }
+
+    {
+      // id will be valid because if not, it'll return in the {} above.
+      std::unique_lock<std::shared_timed_mutex> lock(_delete_lock);
+      _delete_set.insert(id);
+      _empty_slots.insert(id);
+    }
+
+    const unsigned range = parameters.Get<unsigned>("R");
+    const unsigned maxc = parameters.Get<unsigned>("C");
+    const float    alpha = parameters.Get<float>("alpha");
+
+    // delete point from out-neighbors' in-neighbor list
+    {
+      LockGuard guard(_locks[id]);
+      for (size_t i = 0; i < _final_graph[id].size(); i++) {
+        unsigned j = _final_graph[id][i];
+        {
+          LockGuard guard(_locks_in[j]);
+          for (unsigned k = 0; k < _in_graph[j].size(); k++) {
+            if (_in_graph[j][k] == id) {
+              _in_graph[j].erase(_in_graph[j].begin() + k);
+              break;
+            }
+          }
+        }
+      }
+    }
+
+    tsl::robin_set<unsigned> in_nbr;
+    {
+      LockGuard guard(_locks_in[id]);
+      for (unsigned i = 0; i < _in_graph[id].size(); i++)
+        in_nbr.insert(_in_graph[id][i]);
+    }
+    assert(_in_graph[id].size() == in_nbr.size());
+
+    std::vector<Neighbor>    pool, tmp;
+    tsl::robin_set<unsigned> visited;
+    std::vector<unsigned>    intersection;
+    unsigned                 Lindex = parameters.Get<unsigned>("L");
     std::vector<unsigned>    init_ids;
-    tsl::robin_set<unsigned> visited(10 * L);
-    std::vector<Neighbor>    best_L_nodes, expanded_nodes_info;
-    tsl::robin_set<unsigned> expanded_nodes_ids;
 
-    if (init_ids.size() == 0) {
-      init_ids.emplace_back(_ep);
+    if (delete_mode == 2) {
+      // constructing list of in-neighbors to be processed
+      get_expanded_nodes(id, Lindex, init_ids, pool, visited);
+
+      for (auto node : visited) {
+        if (in_nbr.find(node) != in_nbr.end()) {
+          intersection.push_back(node);
+        }
+      }
     }
-    auto retval =
-        iterate_to_fixed_point(query, L, init_ids, expanded_nodes_info,
-                               expanded_nodes_ids, best_L_nodes);
 
-    size_t pos = 0;
-    for (auto it : best_L_nodes) {
-      indices[pos] = it.id;
-      pos++;
-      if (pos == K)
+    // deleting deleted point from all in-neighbors' out-neighbor list
+    for (auto it : in_nbr) {
+      LockGuard guard(_locks[it]);
+      _final_graph[it].erase(
+          std::remove(_final_graph[it].begin(), _final_graph[it].end(), id),
+          _final_graph[it].end());
+    }
+
+    tsl::robin_set<unsigned> candidate_set;
+    std::vector<Neighbor>    expanded_nghrs;
+    std::vector<Neighbor>    result;
+
+    for (size_t i = 0; i < intersection.size(); i++) {
+      auto ngh = intersection[i];
+
+      candidate_set.clear();
+      expanded_nghrs.clear();
+      result.clear();
+
+      {
+        std::shared_lock<std::shared_timed_mutex> lock(_delete_lock);
+        if (_delete_set.find(ngh) != _delete_set.end())
+          continue;
+      }
+
+      {
+        LockGuard guard(_locks[ngh]);
+
+        // constructing candidate set from out-neighbors and out-neighbors of
+        // ngh and id
+        {  // should a shared reader lock on delete_lock be held here at the
+           // beginning of the two for loops or should it be held and release
+           // for ech iteration of the for loops? Which is faster?
+
+          std::shared_lock<std::shared_timed_mutex> lock(_delete_lock);
+          for (auto j : _final_graph[id]) {
+            if ((j != id) && (j != ngh) &&
+                (_delete_set.find(j) == _delete_set.end()))
+              candidate_set.insert(j);
+          }
+
+          for (auto j : _final_graph[ngh]) {
+            if ((j != id) && (j != ngh) &&
+                (_delete_set.find(j) == _delete_set.end()))
+              candidate_set.insert(j);
+          }
+        }
+
+        for (auto j : candidate_set)
+          expanded_nghrs.push_back(
+              Neighbor(j,
+                       _distance->compare(_data + _aligned_dim * (size_t) ngh,
+                                          _data + _aligned_dim * (size_t) j,
+                                          (unsigned) _aligned_dim),
+                       true));
+        std::sort(expanded_nghrs.begin(), expanded_nghrs.end());
+        occlude_list(expanded_nghrs, alpha, range, maxc, result);
+
+        // deleting ngh from its old out-neighbors' in-neighbor list
+        for (auto iter : _final_graph[ngh]) {
+          {
+            LockGuard guard(_locks_in[iter]);
+            for (unsigned k = 0; k < _in_graph[iter].size(); k++) {
+              if (_in_graph[iter][k] == ngh) {
+                _in_graph[iter].erase(_in_graph[iter].begin() + k);
+                break;
+              }
+            }
+          }
+        }
+
+        _final_graph[ngh].clear();
+
+        // updating out-neighbors and in-neighbors of ngh
+        {
+          std::shared_lock<std::shared_timed_mutex> lock(_delete_lock);
+          for (size_t i = 0; i < result.size(); i++) {
+            auto j = result[i];
+            if (_delete_set.find(j.id) == _delete_set.end()) {
+              _final_graph[ngh].push_back(j.id);
+              {
+                LockGuard guard(_locks_in[j.id]);
+                if (std::find(_in_graph[j.id].begin(), _in_graph[j.id].end(),
+                              ngh) == _in_graph[j.id].end()) {
+                  _in_graph[j.id].emplace_back(ngh);
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+
+    _final_graph[id].clear();
+    _in_graph[id].clear();
+
+    release_location();
+
+    _eager_done = true;
+    _data_compacted = false;
+    return 0;
+  }
+
+  template<typename T, typename TagT>
+  void Index<T, TagT>::update_in_graph() {
+    //  diskann::cout << "Updating in_graph.....";
+    for (unsigned i = 0; i < _in_graph.size(); i++)
+      _in_graph[i].clear();
+
+    for (size_t i = 0; i < _final_graph.size();
+         i++)  // copying to in-neighbor graph
+      for (size_t j = 0; j < _final_graph[i].size(); j++)
+        _in_graph[_final_graph[i][j]].emplace_back((_u32) i);
+  }
+
+  // Do not call consolidate_deletes() if you have not locked _change_lock.
+  // Returns number of live points left after consolidation
+  // proxy inserts all nghrs of deleted points
+  // original approach
+  template<typename T, typename TagT>
+  size_t Index<T, TagT>::consolidate_deletes(const Parameters &parameters) {
+    if (_eager_done) {
+      // RKNOTE: say something here....?
+      diskann::cout
+          << "In consolidate_deletes(), _eager_done is true. So exiting."
+          << std::endl;
+      return 0;
+    }
+
+    diskann::cout << "Inside Index::consolidate_deletes()" << std::endl;
+    // assert(_can_delete);
+    assert(_enable_tags);
+    assert(_delete_set.size() <= _nd);
+    assert(_empty_slots.size() + _nd == _max_points);
+
+    const unsigned range = parameters.Get<unsigned>("R");
+    const unsigned maxc = parameters.Get<unsigned>("C");
+    const float    alpha = parameters.Get<float>("alpha");
+
+    _u64     total_pts = _max_points + _num_frozen_pts;
+    unsigned block_size = 1 << 10;
+    _s64     total_blocks = DIV_ROUND_UP(total_pts, block_size);
+
+    auto    start = std::chrono::high_resolution_clock::now();
+#pragma omp parallel for schedule(dynamic)
+    for (_s64 block = 0; block < total_blocks; ++block) {
+      tsl::robin_set<unsigned> candidate_set;
+      std::vector<Neighbor>    expanded_nghrs;
+      std::vector<Neighbor>    result;
+
+      for (_s64 i = block * block_size;
+           i < (_s64)((block + 1) * block_size) &&
+           i < (_s64)(_max_points + _num_frozen_pts);
+           i++) {
+        if ((_delete_set.find((_u32) i) == _delete_set.end()) &&
+            (_empty_slots.find((_u32) i) == _empty_slots.end())) {
+          candidate_set.clear();
+          expanded_nghrs.clear();
+          result.clear();
+
+          bool modify = false;
+          for (auto ngh : _final_graph[(_u32) i]) {
+            if (_delete_set.find(ngh) != _delete_set.end()) {
+              modify = true;
+
+              // Add outgoing links from
+              for (auto j : _final_graph[ngh])
+                if (_delete_set.find(j) == _delete_set.end())
+                  candidate_set.insert(j);
+            } else {
+              candidate_set.insert(ngh);
+            }
+          }
+          if (modify) {
+            for (auto j : candidate_set) {
+              expanded_nghrs.push_back(
+                  Neighbor(j,
+                           _distance->compare(_data + _aligned_dim * i,
+                                              _data + _aligned_dim * (size_t) j,
+                                              (unsigned) _aligned_dim),
+                           true));
+            }
+
+            std::sort(expanded_nghrs.begin(), expanded_nghrs.end());
+            occlude_list(expanded_nghrs, alpha, range, maxc, result);
+
+            _final_graph[(_u32) i].clear();
+            for (auto j : result) {
+              if (j.id != (_u32) i &&
+                  (_delete_set.find(j.id) == _delete_set.end()))
+                _final_graph[(_u32) i].push_back(j.id);
+            }
+          }
+        }
+      }
+    }
+
+    if (_support_eager_delete)
+      update_in_graph();
+
+    for (auto iter : _delete_set) {
+      _empty_slots.insert(iter);
+    }
+    _nd -= _delete_set.size();
+
+    _data_compacted = _delete_set.size() == 0;
+
+    auto stop = std::chrono::high_resolution_clock::now();
+    diskann::cout << "Time taken for consolidate_deletes() "
+                  << std::chrono::duration_cast<std::chrono::duration<double>>(
+                         stop - start)
+                         .count()
+                  << "s." << std::endl;
+
+    return _nd;
+  }
+
+  template<typename T, typename TagT>
+  void Index<T, TagT>::consolidate(Parameters &parameters) {
+    consolidate_deletes(parameters);
+    compact_data();
+  }
+
+  // retain all old nghrs - send only nghrs of del points for occlude - to fill
+  // in empty slots
+  /* template<typename T, typename TagT>
+   size_t Index<T, TagT>::consolidate_deletes(const Parameters &parameters) {
+     if (_eager_done) {
+       return 0;
+     }
+
+     assert(!_data_compacted);
+     assert(_can_delete);
+     assert(_enable_tags);
+     assert(_delete_set.size() <= _nd);
+     assert(_empty_slots.size() + _nd == _max_points);
+
+     const unsigned range = parameters.Get<unsigned>("R");
+     const unsigned maxc = parameters.Get<unsigned>("C");
+     const float    alpha = parameters.Get<float>("alpha");
+
+     _u64     total_pts = _max_points + _num_frozen_pts;
+     unsigned block_size = 1 << 10;
+     _s64     total_blocks = DIV_ROUND_UP(total_pts, block_size);
+
+ #pragma omp parallel for schedule(dynamic)
+     for (_s64 block = 0; block < total_blocks; ++block) {
+       tsl::robin_set<unsigned> candidate_set_old;
+       tsl::robin_set<unsigned> candidate_set_new;
+       std::vector<Neighbor>    expanded_nghrs;
+       std::vector<Neighbor>    result;
+
+       for (_s64 i = block * block_size;
+            i < (_s64)((block + 1) * block_size) &&
+            i < (_s64)(_max_points + _num_frozen_pts);
+            i++) {
+         if ((_delete_set.find((_u32) i) == _delete_set.end()) &&
+             (_empty_slots.find((_u32) i) == _empty_slots.end())) {
+           candidate_set_new.clear();
+           candidate_set_old.clear();
+           expanded_nghrs.clear();
+           result.clear();
+
+           bool modify = false;
+           for (auto ngh : _final_graph[(_u32) i]) {
+             if (_delete_set.find(ngh) != _delete_set.end()) {
+               modify = true;
+               // Add outgoing links from
+               for (auto j : _final_graph[ngh])
+                 if (_delete_set.find(j) == _delete_set.end())
+                   candidate_set_new.insert(j);
+             } else {
+               candidate_set_old.insert(ngh);
+             }
+           }
+
+           if (modify) {
+             for (auto elem : candidate_set_old) {
+               if (candidate_set_new.find(elem) != candidate_set_new.end()) {
+                 candidate_set_new.erase(elem);
+               }
+             }
+             if (!candidate_set_new.empty()) {
+               for (auto j : candidate_set_new)
+                 expanded_nghrs.push_back(Neighbor(
+                     j,
+                     _distance->compare(_data + _aligned_dim * i,
+                                        _data + _aligned_dim * (size_t) j,
+                                        (unsigned) _aligned_dim),
+                     true));
+
+               std::sort(expanded_nghrs.begin(), expanded_nghrs.end());
+               occlude_list(expanded_nghrs, (_u32) i, alpha,
+                            range - candidate_set_old.size(), maxc, result);
+             }
+
+             _final_graph[(_u32) i].clear();
+             for (auto j : candidate_set_old) {
+               if (j != i) {
+                 _final_graph[i].push_back(j);
+               }
+               if (_final_graph[(_u32) i].size() == range) {
+                 break;
+               }
+             }
+             for (auto j : result) {
+               if (j.id != (_u32) i) {
+                 _final_graph[(_u32) i].push_back(j.id);
+               }
+               if (_final_graph[(_u32) i].size() == range) {
+                 break;
+               }
+             }
+           }
+         }
+       }
+     }
+     if (_support_eager_delete)
+       update_in_graph();
+
+     for (auto iter : _delete_set)
+       _empty_slots.insert(iter);
+     _nd -= _delete_set.size();
+     return _nd;
+   } */
+
+  template<typename T, typename TagT>
+  void Index<T, TagT>::compact_frozen_point() {
+    if (_nd < _max_points) {
+      if (_num_frozen_pts > 0) {
+        // set new _ep to be frozen point
+        _ep = (_u32) _nd;
+        if (!_final_graph[_max_points].empty()) {
+          for (unsigned i = 0; i < _nd; i++)
+            for (unsigned j = 0; j < _final_graph[i].size(); j++)
+              if (_final_graph[i][j] == _max_points)
+                _final_graph[i][j] = (_u32) _nd;
+
+          _final_graph[_nd].clear();
+          for (unsigned k = 0; k < _final_graph[_max_points].size(); k++)
+            _final_graph[_nd].emplace_back(_final_graph[_max_points][k]);
+
+          _final_graph[_max_points].clear();
+          if (_support_eager_delete)
+            update_in_graph();
+
+          memcpy((void *) (_data + _aligned_dim * _nd),
+                 _data + (size_t) _aligned_dim * _max_points, sizeof(T) * _dim);
+          memset((_data + (size_t) _aligned_dim * _max_points), 0,
+                 sizeof(T) * _aligned_dim);
+        }
+      }
+    }
+  }
+
+  template<typename T, typename TagT>
+  void Index<T, TagT>::compact_data_for_search() {
+    compact_data();
+    compact_frozen_point();
+  }
+
+  template<typename T, typename TagT>
+  void Index<T, TagT>::compact_data_for_insert() {
+    compact_data();
+
+    size_t max = 0, min = 1 << 30, total = 0, cnt = 0;
+    for (size_t i = 0; i < (_nd + _num_frozen_pts); i++) {
+      auto &pool = _final_graph[i];
+      max = (std::max)(max, pool.size());
+      min = (std::min)(min, pool.size());
+      total += pool.size();
+      if (pool.size() < 2)
+        cnt++;
+    }
+    if (min > max)
+      min = max;
+    if (_nd > 0) {
+      diskann::cout << "Index built with degree: max:" << max << "  avg:"
+                    << (float) total / (float) (_nd + _num_frozen_pts)
+                    << "  min:" << min << "  count(deg<2):" << cnt << std::endl;
+    }
+  }
+
+  template<typename T, typename TagT>
+  void Index<T, TagT>::compact_data() {
+    if (!_dynamic_index)
+      return;
+
+    if (!_lazy_done && !_eager_done)
+      return;
+
+    if (_data_compacted) {
+      diskann::cerr
+          << "Warning! Calling compact_data() when _data_compacted is true!"
+          << std::endl;
+      return;
+    }
+
+    auto start = std::chrono::high_resolution_clock::now();
+    auto fnstart = start;
+
+    std::vector<unsigned> new_location = std::vector<unsigned>(
+        _max_points + _num_frozen_pts, (_u32) _max_points);
+
+    _u32 new_counter = 0;
+
+    for (_u32 old_counter = 0; old_counter < _max_points + _num_frozen_pts;
+         old_counter++) {
+      if (_location_to_tag.find(old_counter) != _location_to_tag.end()) {
+        new_location[old_counter] = new_counter;
+        new_counter++;
+      }
+    }
+
+    auto stop = std::chrono::high_resolution_clock::now();
+    // If start node is removed, replace it.
+    if (_delete_set.find(_ep) != _delete_set.end()) {
+      diskann::cerr << "Replacing start node which has been deleted... "
+                    << std::flush;
+      auto old_ep = _ep;
+      // First active neighbor of old start node is new start node
+      for (auto iter : _final_graph[_ep])
+        if (_delete_set.find(iter) != _delete_set.end()) {
+          _ep = iter;
+          break;
+        }
+      if (_ep == old_ep) {
+        diskann::cerr << "ERROR: Did not find a replacement for start node."
+                      << std::endl;
+        throw diskann::ANNException(
+            "ERROR: Did not find a replacement for start node.", -1,
+            __FUNCSIG__, __FILE__, __LINE__);
+      } else {
+        assert(_delete_set.find(_ep) == _delete_set.end());
+        //        diskann::cout << "New start node is " << _ep << std::endl;
+      }
+    }
+
+    start = std::chrono::high_resolution_clock::now();
+    double copy_time = 0;
+    for (unsigned old = 0; old <= _max_points; ++old) {
+      if ((new_location[old] < _max_points) ||
+          (old == _max_points)) {  // If point continues to exist
+
+        // Renumber nodes to compact the order
+        for (size_t i = 0; i < _final_graph[old].size(); ++i) {
+          if (new_location[_final_graph[old][i]] > _final_graph[old][i]) {
+            std::stringstream sstream;
+            sstream << "Error in compact_data(). Found point: " << old
+                    << " whose " << i << "th neighbor has new location "
+                    << new_location[_final_graph[old][i]]
+                    << " that is greater than its old location: "
+                    << _final_graph[old][i];
+            if (_delete_set.find(_final_graph[old][i]) != _delete_set.end()) {
+              sstream << std::endl
+                      << " Point: " << old << " index: " << i
+                      << " neighbor: " << _final_graph[old][i]
+                      << " found in delete set of size: " << _delete_set.size()
+                      << std::endl;
+            } else {
+              sstream << " Point: " << old
+                      << " neighbor: " << _final_graph[old][i]
+                      << " NOT found in delete set of size: "
+                      << _delete_set.size() << std::endl;
+            }
+            diskann::cerr << sstream.str() << std::endl;
+            throw diskann::ANNException(sstream.str(), -1, __FUNCSIG__,
+                                        __FILE__, __LINE__);
+          }
+          _final_graph[old][i] = new_location[_final_graph[old][i]];
+        }
+
+        if (_support_eager_delete)
+          for (size_t i = 0; i < _in_graph[old].size(); ++i) {
+            if (new_location[_in_graph[old][i]] <= _in_graph[old][i])
+              _in_graph[old][i] = new_location[_in_graph[old][i]];
+          }
+
+        // Move the data and adj list to the correct position
+        auto c_start = std::chrono::high_resolution_clock::now();
+        if (new_location[old] != old) {
+          assert(new_location[old] < old);
+          _final_graph[new_location[old]].swap(_final_graph[old]);
+          if (_support_eager_delete)
+            _in_graph[new_location[old]].swap(_in_graph[old]);
+          memcpy((void *) (_data + _aligned_dim * (size_t) new_location[old]),
+                 (void *) (_data + _aligned_dim * (size_t) old),
+                 _aligned_dim * sizeof(T));
+        }
+        auto c_stop = std::chrono::high_resolution_clock::now();
+        copy_time += std::chrono::duration_cast<std::chrono::duration<double>>(
+                         c_stop - c_start)
+                         .count();
+
+      } else {
+        _final_graph[old].clear();
+      }
+    }
+    stop = std::chrono::high_resolution_clock::now();
+
+    start = std::chrono::high_resolution_clock::now();
+    _tag_to_location.clear();
+    for (auto iter : _location_to_tag) {
+      _tag_to_location[iter.second] = new_location[iter.first];
+    }
+    _location_to_tag.clear();
+    for (auto iter : _tag_to_location) {
+      _location_to_tag[iter.second] = iter.first;
+    }
+
+    for (_u64 old = _nd; old < _max_points; ++old) {
+      _final_graph[old].clear();
+    }
+    _delete_set.clear();
+    _empty_slots.clear();
+    for (auto i = _nd; i < _max_points; i++) {
+      _empty_slots.insert((uint32_t) i);
+    }
+
+    _lazy_done = false;
+    _eager_done = false;
+    _data_compacted = true;
+    stop = std::chrono::high_resolution_clock::now();
+    diskann::cout << "Time taken for compact_data(): "
+                  << std::chrono::duration_cast<std::chrono::duration<double>>(
+                         stop - fnstart)
+                         .count()
+                  << "s." << std::endl;
+  }
+
+  // Do not call reserve_location() if you have not locked _change_lock.
+  // It is not thread safe.
+  template<typename T, typename TagT>
+  int Index<T, TagT>::reserve_location() {
+    LockGuard guard(_change_lock);
+    if (_nd >= _max_points) {
+      return -1;
+    }
+    unsigned location;
+    if (_data_compacted) {
+      location = (unsigned) _nd;
+      _empty_slots.erase(location);
+    } else {
+      // no need of delete_lock here, _change_lock will ensure no other thread
+      // executes this block of code
+      assert(_empty_slots.size() != 0);
+      assert(_empty_slots.size() + _nd == _max_points);
+
+      auto iter = _empty_slots.begin();
+      location = *iter;
+      _empty_slots.erase(iter);
+      _delete_set.erase(location);
+    }
+
+    ++_nd;
+    return location;
+  }
+
+  template<typename T, typename TagT>
+  void Index<T, TagT>::reposition_point(unsigned old_location,
+                                        unsigned new_location) {
+    for (unsigned i = 0; i < _nd; i++)
+      for (unsigned j = 0; j < _final_graph[i].size(); j++)
+        if (_final_graph[i][j] == old_location)
+          _final_graph[i][j] = (unsigned) new_location;
+
+    _final_graph[new_location].clear();
+    for (unsigned k = 0; k < _final_graph[_nd].size(); k++)
+      _final_graph[new_location].emplace_back(_final_graph[old_location][k]);
+
+    _final_graph[old_location].clear();
+
+    if (_support_eager_delete) {
+      update_in_graph();
+    }
+    memcpy((void *) (_data + (size_t) _aligned_dim * new_location),
+           _data + (size_t) _aligned_dim * old_location,
+           sizeof(T) * _aligned_dim);
+    memset((_data + (size_t) _aligned_dim * old_location), 0,
+           sizeof(T) * _aligned_dim);
+  }
+
+  template<typename T, typename TagT>
+  void Index<T, TagT>::reposition_frozen_point_to_end() {
+    if (_num_frozen_pts == 0)
+      return;
+
+    if (_nd == _max_points) {
+      diskann::cout
+          << "Not repositioning frozen point as it is already at the end."
+          << std::endl;
+      return;
+    }
+    reposition_point((_u32) _nd, (_u32) _max_points);
+    _ep = (_u32) _max_points;
+  }
+
+  template<typename T, typename TagT>
+  void Index<T, TagT>::resize(size_t new_max_points) {
+    auto start = std::chrono::high_resolution_clock::now();
+    assert(_empty_slots.size() ==
+           0);  // should not resize if there are empty slots.
+#ifndef _WINDOWS
+    T *new_data;
+    alloc_aligned((void **) &new_data,
+                  (new_max_points + 1) * _aligned_dim * sizeof(T),
+                  8 * sizeof(T));
+    memcpy(new_data, _data, (_max_points + 1) * _aligned_dim * sizeof(T));
+    aligned_free(_data);
+    _data = new_data;
+#else
+    realloc_aligned((void **) &_data,
+                    (new_max_points + 1) * _aligned_dim * sizeof(T),
+                    8 * sizeof(T));
+#endif
+    _final_graph.resize(new_max_points + 1);
+    _locks = std::vector<std::mutex>(new_max_points + 1);
+    if (_support_eager_delete) {
+      _in_graph.resize(new_max_points + 1);
+      _locks_in = std::vector<std::mutex>(new_max_points + 1);
+    }
+
+    reposition_point((_u32) _max_points, (_u32) new_max_points);
+    _max_points = new_max_points;
+    _ep = (_u32) new_max_points;
+
+    for (auto i = _nd; i < _max_points; i++) {
+      _empty_slots.insert((uint32_t) i);
+    }
+
+    auto stop = std::chrono::high_resolution_clock::now();
+    diskann::cout << "Resizing took: "
+                  << std::chrono::duration<double>(stop - start).count() << "s"
+                  << std::endl;
+  }
+
+  template<typename T, typename TagT>
+  int Index<T, TagT>::insert_point(const T *point, const Parameters &parameters,
+                                   const TagT tag) {
+    std::shared_lock<std::shared_timed_mutex> lock(_update_lock);
+    unsigned range = _indexingRange;  // parameters.Get<unsigned>("R");
+    //    assert(_has_built);
+
+    // Avoiding the use of temporary containers.
+    ScratchStoreManager<T> manager(_query_scratch);
+    auto                   scratch = manager.scratch_space();
+
+    std::vector<Neighbor> &   pool = scratch.pool();
+    tsl::robin_set<unsigned> &visited = scratch.visited();
+
+    {
+      // std::shared_lock<std::shared_timed_mutex> lock(_tag_lock);
+      std::shared_lock<std::shared_timed_mutex> tsl(_tag_lock);
+      if (_enable_tags &&
+          (_tag_to_location.find(tag) != _tag_to_location.end())) {
+        // This is a repeat of lazy_delete, but we can't call
+        // that function because we are taking many locks here. Hence
+        // the repeated code.
+        tsl.unlock();
+        std::unique_lock<std::shared_timed_mutex> tul(_tag_lock);
+        std::unique_lock<std::shared_timed_mutex> tdl(_delete_lock);
+        _lazy_done = true;
+        _delete_set.insert(_tag_to_location[tag]);
+        _location_to_tag.erase(_tag_to_location[tag]);
+        _tag_to_location.erase(tag);
+      }
+    }
+
+    auto location = reserve_location();
+    if (location == -1) {
+      lock.unlock();
+      std::unique_lock<std::shared_timed_mutex> growth_lock(_update_lock);
+
+      if (_nd >= _max_points) {
+        auto new_max_points = (size_t)(_max_points * INDEX_GROWTH_FACTOR);
+        resize(new_max_points);
+      }
+      growth_lock.unlock();
+      lock.lock();
+      location = reserve_location();
+      // TODO: Consider making this a while/do_while loop so that we retry
+      // instead of terminating.
+      if (location == -1) {
+        throw diskann::ANNException(
+            "Cannot reserve location even after expanding graph. Terminating.",
+            -1, __FUNCSIG__, __FILE__, __LINE__);
+      }
+    }
+
+    {
+      std::unique_lock<std::shared_timed_mutex> lock(_tag_lock);
+
+      _tag_to_location[tag] = location;
+      _location_to_tag[location] = tag;
+    }
+
+    auto offset_data = _data + (size_t) _aligned_dim * location;
+    memset((void *) offset_data, 0, sizeof(T) * _aligned_dim);
+    memcpy((void *) offset_data, point, sizeof(T) * _dim);
+
+    if (_normalize_vecs) {
+      normalize((float *) offset_data, _dim);
+    }
+
+    pool.clear();
+    visited.clear();
+    std::vector<unsigned> pruned_list;
+    unsigned Lindex = _indexingQueueSize;  // parameters.Get<unsigned>("L");
+
+    std::vector<unsigned> init_ids;
+    get_expanded_nodes(location, Lindex, init_ids, pool, visited, scratch.des(),
+                       scratch.best_l_nodes(), scratch.inserted_into_pool_rs(),
+                       scratch.inserted_into_pool_bs());
+
+    for (unsigned i = 0; i < pool.size(); i++)
+      if (pool[i].id == (unsigned) location) {
+        pool.erase(pool.begin() + i);
+        visited.erase((unsigned) location);
         break;
+      }
+
+    prune_neighbors(location, pool, parameters, pruned_list);
+    assert(_final_graph.size() == _max_points + _num_frozen_pts);
+
+    if (_support_eager_delete) {
+      for (unsigned i = 0; i < _final_graph[location].size(); i++) {
+        {
+          LockGuard guard(_locks_in[_final_graph[location][i]]);
+          _in_graph[_final_graph[location][i]].erase(
+              std::remove(_in_graph[_final_graph[location][i]].begin(),
+                          _in_graph[_final_graph[location][i]].end(), location),
+              _in_graph[_final_graph[location][i]].end());
+        }
+      }
     }
-    return retval;
+
+    _final_graph[location].clear();
+    _final_graph[location].shrink_to_fit();
+    _final_graph[location].reserve((_u64)(range * GRAPH_SLACK_FACTOR * 1.05));
+
+    assert(!pruned_list.empty());
+    {
+      LockGuard guard(_locks[location]);
+      for (auto link : pruned_list) {
+        _final_graph[location].emplace_back(link);
+        if (_support_eager_delete) {
+          LockGuard guard(_locks_in[link]);
+          _in_graph[link].emplace_back(location);
+        }
+      }
+    }
+
+    assert(_final_graph[location].size() <= range);
+    if (_support_eager_delete) {
+      inter_insert(location, pruned_list, parameters, 1);
+    } else {
+      inter_insert(location, pruned_list, parameters, 0);
+    }
+    return 0;
   }
 
   template<typename T, typename TagT>
-  std::pair<uint32_t, uint32_t> Index<T, TagT>::search(
-      const T *query, const uint64_t K, const unsigned L,
-      std::vector<unsigned> init_ids, uint64_t *indices, float *distances) {
-    tsl::robin_set<unsigned> visited(10 * L);
-    std::vector<Neighbor>    best_L_nodes, expanded_nodes_info;
-    tsl::robin_set<unsigned> expanded_nodes_ids;
-
-    if (init_ids.size() == 0) {
-      init_ids.emplace_back(_ep);
+  int Index<T, TagT>::disable_delete(const Parameters &parameters,
+                                     const bool consolidate) {
+    // if (!_can_delete) {
+    //  diskann::cerr << "Delete not currently enabled" << std::endl;
+    //  return -1;
+    //}
+    if (!_enable_tags) {
+      diskann::cerr << "Point tag array not instantiated" << std::endl;
+      throw diskann::ANNException("Point tag array not instantiated", -1,
+                                  __FUNCSIG__, __FILE__, __LINE__);
     }
-    auto retval = iterate_to_fixed_point(query, (unsigned) L, init_ids,
-                                         expanded_nodes_info,
-                                         expanded_nodes_ids, best_L_nodes);
-
-    size_t pos = 0;
-    for (auto it : best_L_nodes) {
-      indices[pos] = it.id;
-      distances[pos] = it.distance;
-      if (_metric == diskann::INNER_PRODUCT)
-        distances[pos] = -distances[pos];
-      pos++;
-      if (pos == K)
-        break;
+    if (_eager_done) {
+      if (_tag_to_location.size() != _nd) {
+        diskann::cerr << "Tags to points array wrong sized : "
+                      << _tag_to_location.size() << std::endl;
+        return -2;
+      }
+    } else if (_tag_to_location.size() + _delete_set.size() != _nd) {
+      diskann::cerr << "Tags to points array wrong sized"
+                    << "\n_tag_to_location.size():  " << _tag_to_location.size()
+                    << "\n_delete_set.size():  " << _delete_set.size()
+                    << "\n_nd:  " << _nd << std::endl;
+      return -2;
     }
-    return retval;
+
+    if (_eager_done) {
+      if (_location_to_tag.size() != _nd) {
+        diskann::cerr << "Points to tags array wrong sized" << std::endl;
+        return -3;
+      }
+    } else if (_location_to_tag.size() + _delete_set.size() != _nd) {
+      diskann::cerr << "Points to tags array wrong sized "
+                    << _location_to_tag.size() << " " << _delete_set.size()
+                    << std::endl;
+      return -3;
+    }
+
+    if (consolidate) {
+      std::unique_lock<std::shared_timed_mutex> lock(_update_lock);
+      consolidate_deletes(parameters);
+    }
+
+    //_can_delete = false;
+    return 0;
   }
 
   template<typename T, typename TagT>
-  std::pair<uint32_t, uint32_t> Index<T, TagT>::search_with_tags(
-      const T *query, const size_t K, const unsigned L, TagT *tags,
-      unsigned *indices_buffer) {
-    const bool alloc = indices_buffer == NULL;
-    auto       indices = alloc ? new unsigned[K] : indices_buffer;
-    auto       ret = search(query, K, L, indices);
-    for (int i = 0; i < (int) K; ++i)
-      tags[i] = _location_to_tag[indices[i]];
-    if (alloc)
-      delete[] indices;
-    return ret;
+  int Index<T, TagT>::lazy_delete(const TagT &tag) {
+    if ((_eager_done) && (!_data_compacted)) {
+      diskann::cerr << "Eager delete requests were issued but data was not "
+                       "compacted, cannot proceed with lazy_deletes"
+                    << std::endl;
+      return -2;
+    }
+    std::shared_lock<std::shared_timed_mutex> lock(_update_lock);
+    _lazy_done = true;
+
+    {
+      // std::shared_lock<std::shared_timed_mutex> l(_tag_lock);
+      std::shared_lock<std::shared_timed_mutex> l(_tag_lock);
+
+      if (_tag_to_location.find(tag) == _tag_to_location.end()) {
+        diskann::cerr << "Delete tag not found" << std::endl;
+        return -1;
+      }
+      assert(_tag_to_location[tag] < _max_points);
+    }
+
+    {
+      std::shared_lock<std::shared_timed_mutex> tl(_tag_lock);
+      std::unique_lock<std::shared_timed_mutex> l(_delete_lock);
+      _delete_set.insert(_tag_to_location[tag]);
+    }
+
+    {
+      // std::unique_lock<std::shared_timed_mutex> l(_tag_lock);
+      std::unique_lock<std::shared_timed_mutex> l(_tag_lock);
+      _location_to_tag.erase(_tag_to_location[tag]);
+      _tag_to_location.erase(tag);
+    }
+
+    return 0;
+  }
+
+  // TODO: Check if this function needs a shared_lock on _tag_lock.
+  template<typename T, typename TagT>
+  int Index<T, TagT>::lazy_delete(const tsl::robin_set<TagT> &tags,
+                                  std::vector<TagT> &failed_tags) {
+    if (failed_tags.size() > 0) {
+      diskann::cerr << "failed_tags should be passed as an empty list"
+                    << std::endl;
+      return -3;
+    }
+    if ((_eager_done) && (!_data_compacted)) {
+      diskann::cout << "Eager delete requests were issued but data was not "
+                       "compacted, cannot proceed with lazy_deletes"
+                    << std::endl;
+      return -2;
+    }
+    std::shared_lock<std::shared_timed_mutex> lock(_update_lock);
+    _lazy_done = true;
+
+    for (auto tag : tags) {
+      //      assert(_tag_to_location[tag] < _max_points);
+      if (_tag_to_location.find(tag) == _tag_to_location.end()) {
+        failed_tags.push_back(tag);
+      } else {
+        _delete_set.insert(_tag_to_location[tag]);
+        _location_to_tag.erase(_tag_to_location[tag]);
+        _tag_to_location.erase(tag);
+      }
+    }
+
+    return 0;
   }
 
   template<typename T, typename TagT>
+  int Index<T, TagT>::extract_data(
+      T *ret_data, std::unordered_map<TagT, unsigned> &tag_to_location) {
+    if (!_data_compacted) {
+      diskann::cerr
+          << "Error! Data not compacted. Cannot give access to private data."
+          << std::endl;
+      return -1;
+    }
+    std::memset(ret_data, 0, (size_t) _aligned_dim * _nd * sizeof(T));
+    std::memcpy(ret_data, _data, (size_t)(_aligned_dim) *_nd * sizeof(T));
+    tag_to_location = _tag_to_location;
+    return 0;
+  }
+
+  template<typename T, typename TagT>
+  void Index<T, TagT>::get_location_to_tag(
+      std::unordered_map<unsigned, TagT> &ret_loc_to_tag) {
+    ret_loc_to_tag = _location_to_tag;
+  }
+
+  template<typename T, typename TagT>
+  bool Index<T, TagT>::hasIndexBeenSaved() {
+    return _is_saved;
+  }
+
+  template<typename T, typename TagT>
+  void Index<T, TagT>::get_active_tags(tsl::robin_set<TagT> &active_tags) {
+    active_tags.clear();
+    for (auto iter : _tag_to_location) {
+      active_tags.insert(iter.first);
+    }
+  }
+
+  template<typename T, typename TagT>
+#ifdef EXEC_ENV_OLS
+  bool Index<T, TagT>::get_npts_and_dim_from_index(AlignedFileReader &reader,
+                                                   size_t &npts, size_t &dim) {
+#else
+  bool Index<T, TagT>::get_npts_and_dim_from_index(const char *file_name,
+                                                   size_t &npts, size_t &dim) {
+#endif
+    size_t rows, cols;
+
+#ifdef EXEC_ENV_OLS
+    diskann::get_bin_metadata(reader, rows, cols);
+#else
+    get_bin_metadata(file_name, rows, cols);
+#endif
+    if (rows == METADATA_ROWS) {
+      // Single file index.
+      auto metadata = std::make_unique<uint64_t[]>(METADATA_ROWS);
+// metadata[1] points to the data.
+#ifdef EXEC_ENV_OLS
+      load_bin(reader, metadata, rows, cols, 0);
+      get_bin_metadata(reader, npts, dim, metadata[1]);
+
+#else
+      load_bin(file_name, metadata, rows, cols);
+      get_bin_metadata(file_name, npts, dim);
+#endif
+      return true;
+    } else {
+#ifdef EXEC_ENV_OLS
+      return false;
+#else
+      std::string data_file(file_name);
+      if (data_file.find(".data") != std::string::npos) {
+        get_bin_metadata(file_name, npts, dim);
+        return true;
+      } else {
+        diskann::cerr << "For multi-file indices, the file passed to "
+                         "get_npts_and_dim should be the .data file."
+                      << std::endl;
+        return false;
+      }
+#endif
+    }
+  }
+
+  template<typename T, typename TagT>
+  void Index<T, TagT>::print_status() const {
+    diskann::cout << "------------------- Index object: " << (uint64_t) this
+                  << " -------------------" << std::endl;
+    diskann::cout << "Number of points: " << _nd << std::endl;
+    diskann::cout << "Graph size: " << _final_graph.size() << std::endl;
+    diskann::cout << "Location to tag size: " << _location_to_tag.size()
+                  << std::endl;
+    diskann::cout << "Tag to location size: " << _tag_to_location.size()
+                  << std::endl;
+    diskann::cout << "Number of empty slots: " << _empty_slots.size()
+                  << std::endl;
+    // print_delete_set();
+    // are_deleted_points_in_graph();
+    diskann::cout << std::boolalpha
+                  << "Data compacted: " << this->_data_compacted
+                  << " Lazy done: " << this->_lazy_done
+                  << " Eager done: " << this->_eager_done << std::endl;
+    diskann::cout << "---------------------------------------------------------"
+                     "------------"
+                  << std::endl;
+  }
+
+
+template<typename T, typename TagT>
   void Index<T, TagT>::optimize_graph() {  // use after build or load
     _data_len = (_aligned_dim + 1) * sizeof(float);
     _neighbor_len = (_width + 1) * sizeof(unsigned);
@@ -1218,621 +3498,76 @@ namespace diskann {
     }
   }
 
-  /*************************************************
-   *      Support for Incremental Update
-   *************************************************/
-
-  // in case we add ''frozen'' auxiliary points to the dataset, these are not
-  // visible to external world, we generate them here and update our dataset
+  /*  Internals of the library */
   template<typename T, typename TagT>
-  int Index<T, TagT>::generate_random_frozen_points(const char *filename) {
-    if (_has_built) {
-      diskann::cout << "Index already built. Cannot add more points"
-                    << std::endl;
-      return -1;
-    }
-
-    if (filename) {  // user defined frozen points
-      T *frozen_pts;
-      load_aligned_bin<T>(std::string(filename), frozen_pts, _num_frozen_pts,
-                          _dim, _aligned_dim);
-      for (_u64 i = 0; i < _num_frozen_pts; i++) {
-        for (unsigned d = 0; d < _dim; d++)
-          _data[(i + _max_points) * _aligned_dim + d] =
-              frozen_pts[i * _dim + d];
-        for (_u64 d = _dim; d < _aligned_dim; d++)
-          _data[(i + _max_points) * _aligned_dim + d] = 0;
-      }
-    } else {  // random frozen points
-
-      std::random_device                    device;
-      std::mt19937                          generator(device());
-      std::uniform_real_distribution<float> dist(0, 1);
-      // Harsha: Should the distribution change with the distance metric?
-
-      for (_u64 i = 0; i < _num_frozen_pts; ++i) {
-        for (_u64 d = 0; d < _dim; d++)
-          _data[(i + _max_points) * _aligned_dim + d] = (T) dist(generator);
-        for (_u64 d = _dim; d < _aligned_dim; d++)
-          _data[(i + _max_points) * _aligned_dim + d] = 0;
-      }
-    }
-
-    return 0;
-  }
-
-  template<typename T, typename TagT>
-  int Index<T, TagT>::enable_delete() {
-    LockGuard guard(_change_lock);
-    assert(!_can_delete);
-    assert(_enable_tags);
-
-    if (_can_delete) {
-      std::cerr << "Delete already enabled" << std::endl;
-      return -1;
-    }
-    if (!_enable_tags) {
-      std::cerr << "Tags must be instantiated for deletions" << std::endl;
-      return -2;
-    }
-
-    if (_consolidated_order && _compacted_order) {
-      assert(_empty_slots.size() == 0);
-      for (unsigned slot = (unsigned) _nd; slot < _max_points; ++slot)
-        _empty_slots.insert(slot);
-      _consolidated_order = false;
-      _compacted_order = false;
-    }
-
-    _lazy_done = false;
-    _eager_done = false;
-    _can_delete = true;
-
-    return 0;
-  }
-
-  template<typename T, typename TagT>
-  int Index<T, TagT>::eager_delete(const TagT        tag,
-                                   const Parameters &parameters) {
-    if (_lazy_done && (!_consolidated_order)) {
-      diskann::cout << "Lazy delete reuests issued but data not consolidated, "
-                       "cannot proceed with eager deletes."
-                    << std::endl;
-      return -1;
-    }
-    LockGuard guard(_change_lock);
-    if (_tag_to_location.find(tag) == _tag_to_location.end()) {
-      std::cerr << "Delete tag not found" << std::endl;
-      return -1;
-    }
-
-    unsigned id = _tag_to_location[tag];
-    _location_to_tag.erase(_tag_to_location[tag]);
-    _tag_to_location.erase(tag);
-    _delete_set.insert(id);
-    _empty_slots.insert(id);
-
-    const unsigned range = parameters.Get<unsigned>("R");
-    const unsigned maxc = parameters.Get<unsigned>("C");
-    const float    alpha = parameters.Get<float>("alpha");
-
-    // delete point from out-neighbors' in-neighbor list
-    for (auto j : _final_graph[id])
-      for (unsigned k = 0; k < _in_graph[j].size(); k++)
-        if (_in_graph[j][k] == id) {
-          _in_graph[j].erase(_in_graph[j].begin() + k);
-          break;
-        }
-
-    tsl::robin_set<unsigned> in_nbr;
-    for (unsigned i = 0; i < _in_graph[id].size(); i++)
-      in_nbr.insert(_in_graph[id][i]);
-    assert(_in_graph[id].size() == in_nbr.size());
-
-    tsl::robin_set<unsigned> candidate_set;
-    std::vector<Neighbor>    expanded_nghrs;
-    std::vector<Neighbor>    result;
-    std::vector<Neighbor>    pool, tmp;
-    tsl::robin_set<unsigned> visited;
-
-    unsigned              Lindex = parameters.Get<unsigned>("L");
-    std::vector<unsigned> init_ids;
-
-    get_expanded_nodes(id, Lindex, init_ids, pool, visited);
-
-    for (unsigned i = 0; i < pool.size(); i++)
-      if (pool[i].id == id) {
-        pool.erase(pool.begin() + i);
-        break;
-      }
-
-    for (auto it : in_nbr) {
-      _final_graph[it].erase(
-          std::remove(_final_graph[it].begin(), _final_graph[it].end(), id),
-          _final_graph[it].end());
-    }
-
-    for (auto it : visited) {
-      auto ngh = it;
-      if (in_nbr.find(ngh) != in_nbr.end()) {
-        candidate_set.clear();
-        expanded_nghrs.clear();
-        result.clear();
-
-        for (auto j : _final_graph[id])
-          if ((j != id) && (j != ngh) &&
-              (_delete_set.find(j) == _delete_set.end()))
-            candidate_set.insert(j);
-
-        for (auto j : _final_graph[ngh])
-          if ((j != id) && (j != ngh) &&
-              (_delete_set.find(j) == _delete_set.end()))
-            candidate_set.insert(j);
-
-        for (auto j : candidate_set)
-          expanded_nghrs.push_back(
-              Neighbor(j,
-                       _distance->compare(_data + _aligned_dim * (size_t) ngh,
-                                          _data + _aligned_dim * (size_t) j,
-                                          (unsigned) _aligned_dim),
-                       true));
-        std::sort(expanded_nghrs.begin(), expanded_nghrs.end());
-        occlude_list(expanded_nghrs, alpha, range, maxc, result);
-
-        for (auto iter : _final_graph[ngh])
-          for (unsigned k = 0; k < _in_graph[iter].size(); k++)
-            if (_in_graph[iter][k] == ngh) {
-              _in_graph[iter].erase(_in_graph[iter].begin() + k);
-            }
-
-        _final_graph[ngh].clear();
-
-        for (auto j : result) {
-          if (_delete_set.find(j.id) == _delete_set.end())
-            _final_graph[ngh].push_back(j.id);
-          if (std::find(_in_graph[j.id].begin(), _in_graph[j.id].end(), ngh) ==
-              _in_graph[j.id].end())
-            _in_graph[j.id].emplace_back(ngh);
-        }
-      }
-    }
-    _final_graph[id].clear();
-    _nd--;
-
-    _eager_done = true;
-    return 0;
-  }
-
-  template<typename T, typename TagT>
-  void Index<T, TagT>::update_in_graph() {
-    diskann::cout << "Updating in_graph....." << std::flush;
-    for (unsigned i = 0; i < _in_graph.size(); i++)
-      _in_graph[i].clear();
-
-    for (unsigned i = 0; i < _final_graph.size();
-         i++)  // copying to in-neighbor graph
-
-      for (unsigned j = 0; j < _final_graph[i].size(); j++) {
-        if (std::find(_in_graph[_final_graph[i][j]].begin(),
-                      _in_graph[_final_graph[i][j]].end(),
-                      i) != _in_graph[_final_graph[i][j]].end())
-          diskann::cout << "Duplicates found" << std::endl;
-        _in_graph[_final_graph[i][j]].emplace_back(i);
-      }
-
-    size_t max_in, min_in, avg_in;
-    max_in = 0;
-    min_in = _max_points + 1;
-    avg_in = 0;
-    for (unsigned i = 0; i < _in_graph.size(); i++) {
-      avg_in += _in_graph[i].size();
-      if (_in_graph[i].size() > max_in)
-        max_in = _in_graph[i].size();
-      if ((_in_graph[i].size() < min_in) && (i != _ep))
-        min_in = _in_graph[i].size();
-    }
-
-    diskann::cout << std::endl
-                  << "Max in_degree = " << max_in
-                  << "; Min in_degree = " << min_in << "; Average in_degree = "
-                  << (float) (avg_in) / (float) (_nd + _num_frozen_pts)
-                  << std::endl;
-  }
-
-  // Do not call consolidate_deletes() if you have not locked _change_lock.
-  // Returns number of live points left after consolidation
-  template<typename T, typename TagT>
-  size_t Index<T, TagT>::consolidate_deletes(const Parameters &parameters) {
-    if (_eager_done) {
-      diskann::cout << "No consolidation required, eager deletes done"
-                    << std::endl;
-      return 0;
-    }
-
-    assert(!_consolidated_order);
-    assert(_can_delete);
-    assert(_enable_tags);
-    assert(_delete_set.size() <= _nd);
-    assert(_empty_slots.size() + _nd == _max_points);
-
-    const unsigned range = parameters.Get<unsigned>("R");
-    const unsigned maxc = parameters.Get<unsigned>("C");
-    const float    alpha = parameters.Get<float>("alpha");
-
-    std::vector<unsigned> new_location;
-    new_location.resize(_max_points + _num_frozen_pts,
-                        (unsigned) (_max_points + _num_frozen_pts));
-    unsigned active = 0;
-    for (unsigned old = 0; old < _max_points + _num_frozen_pts; ++old)
-      if (_empty_slots.find(old) == _empty_slots.end() &&
-          _delete_set.find(old) == _delete_set.end())
-        new_location[old] = active++;
-    assert(active + _delete_set.size() == _max_points + _num_frozen_pts);
-
-    tsl::robin_set<unsigned> candidate_set;
-    std::vector<Neighbor>    expanded_nghrs;
-    std::vector<Neighbor>    result;
-
-    for (unsigned i = 0; i < _max_points + _num_frozen_pts; ++i) {
-      if (new_location[i] < _max_points + _num_frozen_pts) {
-        candidate_set.clear();
-        expanded_nghrs.clear();
-        result.clear();
-
-        bool modify = false;
-        for (auto ngh : _final_graph[i]) {
-          if (new_location[ngh] >= _max_points + _num_frozen_pts) {
-            modify = true;
-
-            // Add outgoing links from
-            for (auto j : _final_graph[ngh])
-              if (_delete_set.find(j) == _delete_set.end())
-                candidate_set.insert(j);
-          } else {
-            candidate_set.insert(ngh);
-          }
-        }
-
-        if (modify) {
-          for (auto j : candidate_set)
-            expanded_nghrs.push_back(
-                Neighbor(j,
-                         _distance->compare(_data + _aligned_dim * (size_t) i,
-                                            _data + _aligned_dim * (size_t) j,
-                                            (unsigned) _aligned_dim),
-                         true));
-          std::sort(expanded_nghrs.begin(), expanded_nghrs.end());
-          occlude_list(expanded_nghrs, alpha, range, maxc, result);
-
-          _final_graph[i].clear();
-          for (auto j : result) {
-            if (j.id != i)
-              _final_graph[i].push_back(j.id);
-          }
-        }
-      } else
-        _final_graph[i].clear();
-    }
-
-    if (_support_eager_delete)
-      update_in_graph();
-
-    _nd -= _delete_set.size();
-    compact_data(new_location, active, _consolidated_order);
-    return _nd;
-  }
-
-  template<typename T, typename TagT>
-  std::vector<unsigned> Index<T, TagT>::get_new_location(unsigned &active) {
-    std::vector<unsigned> new_location;
-    new_location.resize(_max_points + _num_frozen_pts,
-                        (unsigned) (_max_points + _num_frozen_pts));
-
-    for (unsigned old = 0; old < _max_points + _num_frozen_pts; ++old)
-      if (_empty_slots.find(old) == _empty_slots.end() &&
-          _delete_set.find(old) == _delete_set.end())
-        new_location[old] = active++;
-    assert(active + _delete_set.size() == _max_points + _num_frozen_pts);
-
-    return new_location;
-  }
-
-  template<typename T, typename TagT>
-  void Index<T, TagT>::compact_data(std::vector<unsigned> new_location,
-                                    unsigned active, bool &mode) {
-    // If start node is removed, replace it.
-    assert(!mode);
-    if (_delete_set.find(_ep) != _delete_set.end()) {
-      std::cerr << "Replacing start node which has been deleted... "
-                << std::flush;
-      auto old_ep = _ep;
-      // First active neighbor of old start node is new start node
-      for (auto iter : _final_graph[_ep])
-        if (_delete_set.find(iter) != _delete_set.end()) {
-          _ep = iter;
-          break;
-        }
-      if (_ep == old_ep) {
-        diskann::cerr << "ERROR: Did not find a replacement for start node."
-                      << std::endl;
-        throw diskann::ANNException(
-            "ERROR: Did not find a replacement for start node.", -1,
-            __FUNCSIG__, __FILE__, __LINE__);
-      } else {
-        assert(_delete_set.find(_ep) == _delete_set.end());
-        diskann::cout << "New start node is " << _ep << std::endl;
-      }
-    }
-
-    diskann::cout << "Re-numbering nodes and edges and consolidating data... "
-                  << std::flush;
-    diskann::cout << "active = " << active << std::endl;
-    for (unsigned old = 0; old < _max_points + _num_frozen_pts; ++old) {
-      if (new_location[old] <
-          _max_points + _num_frozen_pts) {  // If point continues to exist
-
-        // Renumber nodes to compact the order
-        for (size_t i = 0; i < _final_graph[old].size(); ++i) {
-          assert(new_location[_final_graph[old][i]] <= _final_graph[old][i]);
-          _final_graph[old][i] = new_location[_final_graph[old][i]];
-        }
-
-        if (_support_eager_delete)
-          for (size_t i = 0; i < _in_graph[old].size(); ++i) {
-            if (new_location[_in_graph[old][i]] <= _in_graph[old][i])
-              _in_graph[old][i] = new_location[_in_graph[old][i]];
-          }
-
-        // Move the data and adj list to the correct position
-        if (new_location[old] != old) {
-          assert(new_location[old] < old);
-          _final_graph[new_location[old]].swap(_final_graph[old]);
-          if (_support_eager_delete)
-            _in_graph[new_location[old]].swap(_in_graph[old]);
-          memcpy((void *) (_data + _aligned_dim * (size_t) new_location[old]),
-                 (void *) (_data + _aligned_dim * (size_t) old),
-                 _aligned_dim * sizeof(T));
-        }
-      }
-    }
-    diskann::cout << "done." << std::endl;
-
-    diskann::cout << "Updating mapping between tags and ids... " << std::flush;
-    // Update the location pointed to by tag
-    _tag_to_location.clear();
-    for (auto iter : _location_to_tag)
-      _tag_to_location[iter.second] = new_location[iter.first];
-    _location_to_tag.clear();
-    for (auto iter : _tag_to_location)
-      _location_to_tag[iter.second] = iter.first;
-    diskann::cout << "done." << std::endl;
-
-    for (unsigned old = active; old < _max_points + _num_frozen_pts; ++old)
-      _final_graph[old].clear();
-    _delete_set.clear();
-    _empty_slots.clear();
-    mode = true;
-    diskann::cout << "Consolidated the index" << std::endl;
-
-    /*	  for(unsigned i = 0; i < _nd + _num_frozen_pts; i++){
-          int flag = 0;
-          for(unsigned j = 0; j < _final_graph[i].size(); j++)
-            if(_final_graph[i][j] == i){
-              diskann::cout << "Self loop found just after compacting inside the
-       function" << std::endl;
-              flag = 1;
-              break;
-            }
-          if(flag == 1)
-            break;
-        } */
-  }
-
-  // Do not call reserve_location() if you have not locked _change_lock.
-  // It is not thread safe.
-  template<typename T, typename TagT>
-  unsigned Index<T, TagT>::reserve_location() {
-    assert(_nd < _max_points);
-
-    unsigned location;
-    if (_consolidated_order || _compacted_order)
-      location = (unsigned) _nd;
-    else {
-      assert(_empty_slots.size() != 0);
-      assert(_empty_slots.size() + _nd == _max_points);
-
-      auto iter = _empty_slots.begin();
-      location = *iter;
-      _empty_slots.erase(iter);
-      _delete_set.erase(iter);
-    }
-
-    ++_nd;
-    return location;
-  }
-
-  template<typename T, typename TagT>
-  void Index<T, TagT>::readjust_data(unsigned _num_frozen_pts) {
-    if (_num_frozen_pts > 0) {
-      if (_final_graph[_max_points].empty()) {
-        diskann::cout << "Readjusting data to correctly position frozen point"
-                      << std::endl;
-        for (unsigned i = 0; i < _nd; i++)
-          for (unsigned j = 0; j < _final_graph[i].size(); j++)
-            if (_final_graph[i][j] >= _nd)
-              _final_graph[i][j] =
-                  (unsigned) (_max_points + (_final_graph[i][j] - _nd));
-        for (unsigned i = 0; i < _num_frozen_pts; i++) {
-          for (unsigned k = 0; k < _final_graph[_nd + i].size(); k++)
-            _final_graph[_max_points + i].emplace_back(
-                _final_graph[_nd + i][k]);
-          _final_graph[_nd + i].clear();
-        }
-
-        if (_support_eager_delete)
-          update_in_graph();
-
-        diskann::cout << "Finished updating graph, updating data now"
-                      << std::endl;
-        for (unsigned i = 0; i < _num_frozen_pts; i++) {
-          memcpy((void *) (_data + (size_t) _aligned_dim * (_max_points + i)),
-                 _data + (size_t) _aligned_dim * (_nd + i),
-                 sizeof(float) * _dim);
-          memset((_data + (size_t) _aligned_dim * (_nd + i)), 0,
-                 sizeof(float) * _aligned_dim);
-        }
-        diskann::cout << "Readjustment done" << std::endl;
-      }
-    } else
-      diskann::cout << "No frozen points. No re-adjustment required"
-                    << std::endl;
-  }
-
-  template<typename T, typename TagT>
-  int Index<T, TagT>::insert_point(const T *point, const Parameters &parameters,
-                                   std::vector<Neighbor> &   pool,
-                                   std::vector<Neighbor> &   tmp,
-                                   tsl::robin_set<unsigned> &visited,
-                                   vecNgh &cut_graph, const TagT tag) {
-    unsigned range = parameters.Get<unsigned>("R");
-    assert(_has_built);
-
-    LockGuard guard(_change_lock);
-    if (_enable_tags &&
-        (_tag_to_location.find(tag) != _tag_to_location.end())) {
-      std::cerr << "Entry with the tag " << tag << " exists already"
-                << std::endl;
-      return -1;
-    }
-    if (_nd == _max_points) {
-      std::cerr << "Can not insert, reached maximum(" << _max_points
-                << ") points." << std::endl;
-      return -2;
-    }
-
-    auto location = reserve_location();
-    _tag_to_location[tag] = location;
-    _location_to_tag[location] = tag;
-
-    auto offset_data = _data + (size_t) _aligned_dim * location;
-    memset((void *) offset_data, 0, sizeof(float) * _aligned_dim);
-    memcpy((void *) offset_data, point, sizeof(float) * _dim);
-
-    pool.clear();
-    tmp.clear();
-    cut_graph.clear();
-    visited.clear();
-    std::vector<unsigned> pruned_list;
-    unsigned              Lindex = parameters.Get<unsigned>("L");
-
-    std::vector<unsigned> init_ids;
-    get_expanded_nodes(location, Lindex, init_ids, pool, visited);
-
-    for (unsigned i = 0; i < pool.size(); i++)
-      if (pool[i].id == location) {
-        pool.erase(pool.begin() + i);
-        visited.erase(location);
-        break;
-      }
-
-    prune_neighbors(location, pool, parameters, pruned_list);
-
-    assert(_final_graph.size() == _max_points + _num_frozen_pts);
-
-    for (unsigned i = 0; i < _final_graph[location].size(); i++)
-      _in_graph[_final_graph[location][i]].erase(
-          std::remove(_in_graph[_final_graph[location][i]].begin(),
-                      _in_graph[_final_graph[location][i]].end(), location),
-          _in_graph[_final_graph[location][i]].end());
-
-    _final_graph[location].clear();
-    _final_graph[location].reserve(range);
-    assert(!pruned_list.empty());
-    for (auto link : pruned_list) {
-      _final_graph[location].emplace_back(link);
-      if (_support_eager_delete)
-        if (std::find(_in_graph[link].begin(), _in_graph[link].end(),
-                      location) == _in_graph[link].end()) {
-          _in_graph[link].emplace_back(location);
-        }
-    }
-
-    assert(_final_graph[location].size() <= range);
-    if (_support_eager_delete)
-      inter_insert(location, pruned_list, parameters, 1);
-    else
-      inter_insert(location, pruned_list, parameters, 0);
-
-    return 0;
-  }
-
-  template<typename T, typename TagT>
-  int Index<T, TagT>::disable_delete(const Parameters &parameters,
-                                     const bool        consolidate) {
-    LockGuard guard(_change_lock);
-    if (!_can_delete) {
-      diskann::cerr << "Delete not currently enabled" << std::endl;
-      return -1;
-    }
-    if (!_enable_tags) {
-      diskann::cerr << "Point tag array not instantiated" << std::endl;
-      throw diskann::ANNException("Point tag array not instantiated", -1,
-                                  __FUNCSIG__, __FILE__, __LINE__);
-    }
-    if (_eager_done) {
-      diskann::cout << "#Points after eager_delete : " << _nd + _num_frozen_pts
-                    << std::endl;
-      if (_tag_to_location.size() != _nd) {
-        diskann::cerr << "Tags to points array wrong sized" << std::endl;
-        return -2;
-      }
-    } else if (_tag_to_location.size() + _delete_set.size() != _nd) {
-      diskann::cerr << "Tags to points array wrong sized" << std::endl;
-      return -2;
-    }
-    if (_eager_done) {
-      if (_location_to_tag.size() != _nd) {
-        diskann::cerr << "Points to tags array wrong sized" << std::endl;
-        return -3;
-      }
-    } else if (_location_to_tag.size() + _delete_set.size() != _nd) {
-      diskann::cerr << "Points to tags array wrong sized" << std::endl;
-      return -3;
-    }
-    if (consolidate) {
-      auto nd = consolidate_deletes(parameters);
-
-      if (nd >= 0)
-        diskann::cout << "#Points after consolidation: " << nd + _num_frozen_pts
-                      << std::endl;
-    }
-
-    _can_delete = false;
-    return 0;
-  }
-
-  template<typename T, typename TagT>
-  int Index<T, TagT>::delete_point(const TagT tag) {
-    if ((_eager_done) && (!_compacted_order)) {
-      diskann::cout << "Eager delete requests were issued but data was not "
-                       "compacted, cannot proceed with lazy_deletes"
-                    << std::endl;
-      return -1;
-    }
-    LockGuard guard(_change_lock);
-    if (_tag_to_location.find(tag) == _tag_to_location.end()) {
-      diskann::cerr << "Delete tag not found" << std::endl;
-      return -1;
-    }
-    assert(_tag_to_location[tag] < _max_points);
-    _delete_set.insert(_tag_to_location[tag]);
-    _location_to_tag.erase(_tag_to_location[tag]);
-    _tag_to_location.erase(tag);
-    return 0;
-  }
+  const float Index<T, TagT>::INDEX_GROWTH_FACTOR = 1.5f;
 
   // EXPORTS
-  template DISKANN_DLLEXPORT class Index<float>;
-  template DISKANN_DLLEXPORT class Index<int8_t>;
-  template DISKANN_DLLEXPORT class Index<uint8_t>;
+  template DISKANN_DLLEXPORT class Index<float, int32_t>;
+  template DISKANN_DLLEXPORT class Index<int8_t, int32_t>;
+  template DISKANN_DLLEXPORT class Index<uint8_t, int32_t>;
+  template DISKANN_DLLEXPORT class Index<float, uint32_t>;
+  template DISKANN_DLLEXPORT class Index<int8_t, uint32_t>;
+  template DISKANN_DLLEXPORT class Index<uint8_t, uint32_t>;
+  template DISKANN_DLLEXPORT class Index<float, int64_t>;
+  template DISKANN_DLLEXPORT class Index<int8_t, int64_t>;
+  template DISKANN_DLLEXPORT class Index<uint8_t, int64_t>;
+  template DISKANN_DLLEXPORT class Index<float, uint64_t>;
+  template DISKANN_DLLEXPORT class Index<int8_t, uint64_t>;
+  template DISKANN_DLLEXPORT class Index<uint8_t, uint64_t>;
+
+  template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t>
+  Index<float, uint64_t>::search<uint64_t>(const float *query, const size_t K,
+                                           const unsigned L, uint64_t *indices,
+                                           float *distances);
+  template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t>
+  Index<float, uint64_t>::search<uint32_t>(const float *query, const size_t K,
+                                           const unsigned L, uint32_t *indices,
+                                           float *distances);
+  template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t>
+  Index<uint8_t, uint64_t>::search<uint64_t>(const uint8_t *query,
+                                             const size_t K, const unsigned L,
+                                             uint64_t *indices,
+                                             float *   distances);
+  template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t>
+  Index<uint8_t, uint64_t>::search<uint32_t>(const uint8_t *query,
+                                             const size_t K, const unsigned L,
+                                             uint32_t *indices,
+                                             float *   distances);
+  template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t>
+  Index<int8_t, uint64_t>::search<uint64_t>(const int8_t *query, const size_t K,
+                                            const unsigned L, uint64_t *indices,
+                                            float *distances);
+  template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t>
+  Index<int8_t, uint64_t>::search<uint32_t>(const int8_t *query, const size_t K,
+                                            const unsigned L, uint32_t *indices,
+                                            float *distances);
+  // TagT==uint32_t
+  template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t>
+  Index<float, uint32_t>::search<uint64_t>(const float *query, const size_t K,
+                                           const unsigned L, uint64_t *indices,
+                                           float *distances);
+  template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t>
+  Index<float, uint32_t>::search<uint32_t>(const float *query, const size_t K,
+                                           const unsigned L, uint32_t *indices,
+                                           float *distances);
+  template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t>
+  Index<uint8_t, uint32_t>::search<uint64_t>(const uint8_t *query,
+                                             const size_t K, const unsigned L,
+                                             uint64_t *indices,
+                                             float *   distances);
+  template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t>
+  Index<uint8_t, uint32_t>::search<uint32_t>(const uint8_t *query,
+                                             const size_t K, const unsigned L,
+                                             uint32_t *indices,
+                                             float *   distances);
+  template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t>
+  Index<int8_t, uint32_t>::search<uint64_t>(const int8_t *query, const size_t K,
+                                            const unsigned L, uint64_t *indices,
+                                            float *distances);
+  template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t>
+  Index<int8_t, uint32_t>::search<uint32_t>(const int8_t *query, const size_t K,
+                                            const unsigned L, uint32_t *indices,
+                                            float *distances);
+
 }  // namespace diskann
