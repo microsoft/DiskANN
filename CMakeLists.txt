@@ -18,7 +18,7 @@ else()
 endif()
 
 project(diskann)
-include_directories(${PROJECT_SOURCE_DIR}/include ${PROJECT_SOURCE_DIR}/include/dll)
+include_directories(${PROJECT_SOURCE_DIR}/include ${PROJECT_SOURCE_DIR}/include/dll ${PROJECT_SOURCE_DIR}/gperftools/src)
 
 #OpenMP
 find_package(OpenMP)

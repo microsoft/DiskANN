@@ -19,19 +19,116 @@
 #include "partition_and_pq.h"
 #include "percentile_stats.h"
 #include "pq_flash_index.h"
+#include "tsl/robin_set.h"
+
 #include "utils.h"
 
 namespace diskann {
 
-  double get_memory_budget(const std::string &mem_budget_str) {
-    double mem_ram_budget = atof(mem_budget_str.c_str());
-    double final_index_ram_limit = mem_ram_budget;
-    if (mem_ram_budget - SPACE_FOR_CACHED_NODES_IN_GB >
+  void add_new_file_to_single_index(std::string index_file,
+                                    std::string new_file) {
+    std::unique_ptr<_u64[]> metadata;
+    _u64                    nr, nc;
+    diskann::load_bin<_u64>(index_file, metadata, nr, nc);
+    if (nc != 1) {
+      std::stringstream stream;
+      stream << "Error, index file specified does not have correct metadata. "
+             << std::endl;
+      throw diskann::ANNException(stream.str(), -1);
+    }
+    size_t          index_ending_offset = metadata[nr - 1];
+    _u64            read_blk_size = 64 * 1024 * 1024;
+    cached_ofstream writer(index_file, read_blk_size);
+    _u64            check_file_size = get_file_size(index_file);
+    if (check_file_size != index_ending_offset) {
+      std::stringstream stream;
+      stream << "Error, index file specified does not have correct metadata "
+                "(last entry must match the filesize). "
+             << std::endl;
+      throw diskann::ANNException(stream.str(), -1);
+    }
+
+    cached_ifstream reader(new_file, read_blk_size);
+    size_t          fsize = reader.get_file_size();
+    if (fsize == 0) {
+      std::stringstream stream;
+      stream << "Error, new file specified is empty. Not appending. "
+             << std::endl;
+      throw diskann::ANNException(stream.str(), -1);
+    }
+
+    size_t num_blocks = DIV_ROUND_UP(fsize, read_blk_size);
+    char * dump = new char[read_blk_size];
+    for (_u64 i = 0; i < num_blocks; i++) {
+      size_t cur_block_size = read_blk_size > fsize - (i * read_blk_size)
+                                  ? fsize - (i * read_blk_size)
+                                  : read_blk_size;
+      reader.read(dump, cur_block_size);
+      writer.write(dump, cur_block_size);
+    }
+    //    reader.close();
+    //    writer.close();
+
+    delete[] dump;
+    std::vector<_u64> new_meta;
+    for (_u64 i = 0; i < nr; i++)
+      new_meta.push_back(metadata[i]);
+    new_meta.push_back(metadata[nr - 1] + fsize);
+
+    diskann::save_bin<_u64>(index_file, new_meta.data(), new_meta.size(), 1);
+  }
+
+  double get_memory_budget(double search_ram_budget) {
+    double final_index_ram_limit = search_ram_budget;
+    if (search_ram_budget - SPACE_FOR_CACHED_NODES_IN_GB >
         THRESHOLD_FOR_CACHING_IN_GB) {  // slack for space used by cached
                                         // nodes
-      final_index_ram_limit = mem_ram_budget - SPACE_FOR_CACHED_NODES_IN_GB;
+      final_index_ram_limit = search_ram_budget - SPACE_FOR_CACHED_NODES_IN_GB;
     }
     return final_index_ram_limit * 1024 * 1024 * 1024;
+  }
+
+  double get_memory_budget(const std::string &mem_budget_str) {
+    double search_ram_budget = atof(mem_budget_str.c_str());
+    return get_memory_budget(search_ram_budget);
+  }
+
+  size_t calculate_num_pq_chunks(double final_index_ram_limit,
+                                 size_t points_num, uint32_t dim,
+                                 const std::vector<std::string> &param_list) {
+    size_t num_pq_chunks =
+        (size_t)(std::floor)(_u64(final_index_ram_limit / (double) points_num));
+    diskann::cout << "Calculated num_pq_chunks :" << num_pq_chunks << std::endl;
+    if (param_list.size() >= 6) {
+      float compress_ratio = (float) atof(param_list[5].c_str());
+      if (compress_ratio > 0 && compress_ratio <= 1) {
+        size_t chunks_by_cr = (size_t)(std::floor)(compress_ratio * dim);
+
+        if (chunks_by_cr > 0 && chunks_by_cr < num_pq_chunks) {
+          diskann::cout << "Compress ratio:" << compress_ratio
+                        << " new #pq_chunks:" << chunks_by_cr << std::endl;
+          num_pq_chunks = chunks_by_cr;
+        } else {
+          diskann::cout << "Compress ratio: " << compress_ratio
+                        << " #new pq_chunks: " << chunks_by_cr
+                        << " is either zero or greater than num_pq_chunks: "
+                        << num_pq_chunks << ". num_pq_chunks is unchanged. "
+                        << std::endl;
+        }
+      } else {
+        diskann::cerr << "Compression ratio: " << compress_ratio
+                      << " should be in (0,1]" << std::endl;
+      }
+    }
+
+    num_pq_chunks = num_pq_chunks <= 0 ? 1 : num_pq_chunks;
+    num_pq_chunks = num_pq_chunks > dim ? dim : num_pq_chunks;
+    num_pq_chunks =
+        num_pq_chunks > MAX_PQ_CHUNKS ? MAX_PQ_CHUNKS : num_pq_chunks;
+
+    diskann::cout << "Compressing " << dim << "-dimensional data into "
+                  << num_pq_chunks << " bytes per vector." << std::endl;
+    return num_pq_chunks;
   }
 
   double calculate_recall(unsigned num_queries, unsigned *gold_std,
@@ -68,6 +165,63 @@ namespace diskann {
       total_recall += cur_recall;
     }
     return total_recall / (num_queries) * (100.0 / recall_at);
+  }
+
+  double calculate_recall(unsigned num_queries, unsigned *gold_std,
+                          float *gs_dist, unsigned dim_gs,
+                          unsigned *our_results, unsigned dim_or,
+                          unsigned                        recall_at,
+                          const tsl::robin_set<unsigned> &active_tags) {
+    double             total_recall = 0;
+    std::set<unsigned> gt, res;
+    bool               printed = false;
+    for (size_t i = 0; i < num_queries; i++) {
+      gt.clear();
+      res.clear();
+      unsigned *gt_vec = gold_std + dim_gs * i;
+      unsigned *res_vec = our_results + dim_or * i;
+      size_t    tie_breaker = recall_at;
+      unsigned  active_points_count = 0;
+      unsigned  cur_counter = 0;
+      while (active_points_count < recall_at && cur_counter < dim_gs) {
+        if (active_tags.find(*(gt_vec + cur_counter)) != active_tags.end()) {
+          active_points_count++;
+        }
+        cur_counter++;
+      }
+      if (active_tags.empty())
+        cur_counter = recall_at;
+
+      if ((active_points_count < recall_at && !active_tags.empty()) &&
+          !printed) {
+        diskann::cout << "Warning: Couldn't find enough closest neighbors "
+                      << active_points_count << "/" << recall_at
+                      << " from "
+                         "truthset for query # "
+                      << i << ". Will result in under-reported value of recall."
+                      << std::endl;
+        printed = true;
+      }
+      if (gs_dist != nullptr) {
+        tie_breaker = cur_counter - 1;
+        float *gt_dist_vec = gs_dist + dim_gs * i;
+        while (tie_breaker < dim_gs &&
+               gt_dist_vec[tie_breaker] == gt_dist_vec[cur_counter - 1])
+          tie_breaker++;
+      }
+
+      gt.insert(gt_vec, gt_vec + tie_breaker);
+      res.insert(res_vec, res_vec + recall_at);
+      unsigned cur_recall = 0;
+      for (auto &v : res) {
+        if (gt.find(v) != gt.end()) {
+          cur_recall++;
+        }
+      }
+      total_recall += cur_recall;
+    }
+    return ((double) (total_recall / (num_queries))) *
+           ((double) (100.0 / recall_at));
   }
 
   double calculate_range_search_recall(
@@ -130,12 +284,20 @@ namespace diskann {
     if (files.fileExists(cache_warmup_file)) {
       diskann::load_aligned_bin<T>(files, cache_warmup_file, warmup, warmup_num,
                                    file_dim, file_aligned_dim);
+      diskann::cout << "In the warmup file: " << cache_warmup_file
+                    << " File dim: " << file_dim
+                    << " File aligned dim: " << file_aligned_dim
+                    << " Expected dim: " << warmup_dim
+                    << " Expected aligned dim: " << warmup_aligned_dim
+                    << std::endl;
+
       if (file_dim != warmup_dim || file_aligned_dim != warmup_aligned_dim) {
         std::stringstream stream;
         stream << "Mismatched dimensions in sample file. file_dim = "
                << file_dim << " file_aligned_dim: " << file_aligned_dim
                << " index_dim: " << warmup_dim
                << " index_aligned_dim: " << warmup_aligned_dim << std::endl;
+        diskann::cerr << stream.str();
         throw diskann::ANNException(stream.str(), -1);
       }
     } else {
@@ -247,18 +409,20 @@ namespace diskann {
     std::vector<cached_ifstream> vamana_readers(nshards);
     for (_u64 i = 0; i < nshards; i++) {
       vamana_readers[i].open(vamana_names[i], 1024 * 1048576);
-      size_t actual_file_size = get_file_size(vamana_names[i]);
+      //      size_t actual_file_size = get_file_size(vamana_names[i]);
       size_t expected_file_size;
       vamana_readers[i].read((char *) &expected_file_size, sizeof(uint64_t));
-      if (actual_file_size != expected_file_size) {
-        std::stringstream stream;
-        stream << "Error in Vamana Index file " << vamana_names[i]
-               << " Actual file size: " << actual_file_size
-               << " does not match expected file size: " << expected_file_size
-               << std::endl;
-        throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
-                                    __LINE__);
-      }
+      /*      if (actual_file_size != expected_file_size) {
+              std::stringstream stream;
+              stream << "Error in Vamana Index file " << vamana_names[i]
+                     << " Actual file size: " << actual_file_size
+                     << " does not match expected file size: " <<
+         expected_file_size
+                     << std::endl;
+              throw diskann::ANNException(stream.str(), -1, __FUNCSIG__,
+         __FILE__,
+                                          __LINE__);
+            } */
     }
 
     size_t merged_index_size = 16;
@@ -379,7 +543,7 @@ namespace diskann {
     diskann::get_bin_metadata(base_file, base_num, base_dim);
 
     double full_index_ram =
-        ESTIMATE_RAM_USAGE(base_num, base_dim, sizeof(T), R);
+        estimate_ram_usage(base_num, base_dim, sizeof(T), R);
     if (full_index_ram < ram_budget * 1024 * 1024 * 1024) {
       diskann::cout << "Full index fits in RAM budget, should consume at most "
                     << full_index_ram / (1024 * 1024 * 1024)
@@ -394,9 +558,10 @@ namespace diskann {
       paras.Set<std::string>("save_path", mem_index_path);
 
       std::unique_ptr<diskann::Index<T>> _pvamanaIndex =
-          std::unique_ptr<diskann::Index<T>>(
-              new diskann::Index<T>(compareMetric, base_file.c_str()));
-      _pvamanaIndex->build(paras);
+          std::unique_ptr<diskann::Index<T>>(new diskann::Index<T>(
+              compareMetric, base_dim, base_num, false, false, false));
+      _pvamanaIndex->build(base_file.c_str(), base_num, paras);
+
       _pvamanaIndex->save(mem_index_path.c_str());
       std::remove(medoids_file.c_str());
       std::remove(centroids_file.c_str());
@@ -432,10 +597,13 @@ namespace diskann {
       paras.Set<bool>("saturate_graph", 1);
       paras.Set<std::string>("save_path", shard_index_file);
 
+      _u64 shard_base_dim, shard_base_pts;
+      get_bin_metadata(shard_base_file, shard_base_pts, shard_base_dim);
       std::unique_ptr<diskann::Index<T>> _pvamanaIndex =
-          std::unique_ptr<diskann::Index<T>>(
-              new diskann::Index<T>(compareMetric, shard_base_file.c_str()));
-      _pvamanaIndex->build(paras);
+          std::unique_ptr<diskann::Index<T>>(new diskann::Index<T>(
+              compareMetric, shard_base_dim, shard_base_pts, false,
+              false));  // TODO: Single?
+      _pvamanaIndex->build(shard_base_file.c_str(), shard_base_pts, paras);
       _pvamanaIndex->save(shard_index_file.c_str());
       std::remove(shard_base_file.c_str());
       //      wait_for_keystroke();
@@ -766,7 +934,7 @@ namespace diskann {
     size_t train_size, train_dim;
     float *train_data;
 
-    double p_val = ((double) TRAINING_SET_SIZE / (double) points_num);
+    double p_val = ((double) MAX_PQ_TRAINING_SET_SIZE / (double) points_num);
     // generates random sample and sets it to train_data and updates
     // train_size
     gen_random_slice<T>(data_file_to_use.c_str(), p_val, train_data, train_size,
