@@ -309,14 +309,14 @@ int search_disk_index(int argc, char** argv) {
 
 int main(int argc, char** argv) {
   if (argc < 12) {
-    std::cerr << "Usage: " << argv[0]
+    std::cout << "Usage: " << argv[0]
               << "   index_type<float/int8/uint8>   dist_fn<l2/mips>   "
                  "index_prefix_path   num_nodes_to_cache   "
                  "T(num_threads)   W(beamwidth)   "
                  "query_file.bin   truthset.bin(\"null\" for none)   "
                  "K   result_output_prefix   L1   L2 ..."
               << std::endl;
-    exit(-1);
+    return -1;
   }
   try {
     if (std::string(argv[1]) == std::string("float"))

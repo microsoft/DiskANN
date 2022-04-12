@@ -3,81 +3,173 @@
 
 #pragma once
 
+#include <atomic>
 #include <cassert>
 #include <map>
+#include <shared_mutex>
 #include <sstream>
 #include <stack>
 #include <string>
 #include <unordered_map>
 #include "tsl/robin_set.h"
+#include "tsl/robin_map.h"
 
 #include "distance.h"
 #include "neighbor.h"
 #include "parameters.h"
 #include "utils.h"
+#include "concurrent_queue.h"
 #include "windows_customizations.h"
 
-#define SLACK_FACTOR 1.3
+#define GRAPH_SLACK_FACTOR 1.3
+#define OVERHEAD_FACTOR 1.1
 
-#define ESTIMATE_RAM_USAGE(size, dim, datasize, degree) \
-  (1.30 * (((double) size * dim) * datasize +           \
-           ((double) size * degree) * sizeof(unsigned) * SLACK_FACTOR))
+namespace boost {
+#ifndef BOOST_DYNAMIC_BITSET_FWD_HPP
+  template<typename Block = unsigned long,
+           typename Allocator = std::allocator<Block>>
+  class dynamic_bitset;
+#endif
+}  // namespace boost
 
 namespace diskann {
-  template<typename T, typename TagT = int>
+  inline double estimate_ram_usage(_u64 size, _u32 dim, _u32 datasize,
+                                   _u32 degree) {
+    double size_of_data = ((double) size) * ROUND_UP(dim, 8) * datasize;
+    double size_of_graph =
+        ((double) size) * degree * sizeof(unsigned) * GRAPH_SLACK_FACTOR;
+    double size_of_locks = ((double) size) * sizeof(std::mutex);
+    double size_of_outer_vector = ((double) size) * sizeof(ptrdiff_t);
+
+    return OVERHEAD_FACTOR * (size_of_data + size_of_graph + size_of_locks +
+                              size_of_outer_vector);
+  }
+
+  template<typename T>
+  struct InMemQueryScratch {
+    std::vector<Neighbor> *   _pool = nullptr;
+    tsl::robin_set<unsigned> *_visited = nullptr;
+    std::vector<unsigned> *   _des = nullptr;
+    std::vector<Neighbor> *   _best_l_nodes = nullptr;
+    tsl::robin_set<unsigned> *_inserted_into_pool_rs = nullptr;
+    boost::dynamic_bitset<> * _inserted_into_pool_bs = nullptr;
+
+    T *       aligned_query = nullptr;
+    uint32_t *indices = nullptr;
+    float *   interim_dists = nullptr;
+
+    uint32_t search_l;
+    uint32_t indexing_l;
+    uint32_t r;
+
+    InMemQueryScratch();
+    void setup(uint32_t search_l, uint32_t indexing_l, uint32_t r, size_t dim);
+    void clear();
+    void resize_for_query(uint32_t new_search_l);
+    void destroy();
+
+    std::vector<Neighbor> &pool() {
+      return *_pool;
+    }
+    std::vector<unsigned> &des() {
+      return *_des;
+    }
+    tsl::robin_set<unsigned> &visited() {
+      return *_visited;
+    }
+    std::vector<Neighbor> &best_l_nodes() {
+      return *_best_l_nodes;
+    }
+    tsl::robin_set<unsigned> &inserted_into_pool_rs() {
+      return *_inserted_into_pool_rs;
+    }
+    boost::dynamic_bitset<> &inserted_into_pool_bs() {
+      return *_inserted_into_pool_bs;
+    }
+  };
+
+  template<typename T, typename TagT = uint32_t>
   class Index {
    public:
-    DISKANN_DLLEXPORT Index(Metric m, const char *filename,
-                            const size_t max_points = 0, const size_t nd = 0,
-                            const size_t num_frozen_pts = 0,
-                            const bool   enable_tags = false,
-                            const bool   store_data = true,
-                            const bool   support_eager_delete = false);
+    // Constructor for Bulk operations and for creating the index object solely
+    // for loading a prexisting index.
+    DISKANN_DLLEXPORT Index(Metric m, const size_t dim, const size_t max_points,
+                            const bool dynamic_index,
+                            const bool save_index_in_one_file,
+                            const bool enable_tags = false,
+                            const bool support_eager_delete = false);
+
+    // Constructor for incremental index
+    DISKANN_DLLEXPORT Index(Metric m, const size_t dim, const size_t max_points,
+                            const bool        dynamic_index,
+                            const bool        save_index_in_one_file,
+                            const Parameters &indexParameters,
+                            const Parameters &searchParameters,
+                            const bool        enable_tags = false,
+                            const bool        support_eager_delete = false);
+
     DISKANN_DLLEXPORT ~Index();
+
+    // Public Functions for Static Support
 
     // checks if data is consolidated, saves graph, metadata and associated
     // tags.
     DISKANN_DLLEXPORT void save(const char *filename);
-    DISKANN_DLLEXPORT void load(const char *filename,
-                                const bool  load_tags = false,
-                                const char *tag_filename = NULL);
-    // generates one or more frozen points that will never get deleted from the
-    // graph
-    DISKANN_DLLEXPORT int generate_random_frozen_points(
-        const char *filename = NULL);
+    DISKANN_DLLEXPORT _u64 save_graph(std::string filename, size_t offset = 0);
+    DISKANN_DLLEXPORT _u64 save_data(std::string filename, size_t offset = 0);
+    DISKANN_DLLEXPORT _u64 save_tags(std::string filename, size_t offset = 0);
+    DISKANN_DLLEXPORT _u64 save_delete_list(const std::string &filename,
+                                            size_t             offset = 0);
+
+    DISKANN_DLLEXPORT void load(const char *index_file, uint32_t num_threads,
+                                uint32_t search_l);
+
+    DISKANN_DLLEXPORT size_t load_graph(const std::string filename,
+                                        size_t            expected_num_points,
+                                        size_t            offset = 0);
+
+    DISKANN_DLLEXPORT size_t load_data(std::string filename, size_t offset = 0);
+
+    DISKANN_DLLEXPORT size_t load_tags(const std::string tag_file_name,
+                                       size_t            offset = 0);
+    DISKANN_DLLEXPORT size_t load_delete_set(const std::string &filename,
+                                             size_t             offset = 0);
+
+    DISKANN_DLLEXPORT size_t get_num_points();
+
+    DISKANN_DLLEXPORT size_t return_max_points();
 
     DISKANN_DLLEXPORT void build(
+        const char *filename, const size_t num_points_to_load,
         Parameters &             parameters,
         const std::vector<TagT> &tags = std::vector<TagT>());
 
+    DISKANN_DLLEXPORT void build(const char * filename,
+                                 const size_t num_points_to_load,
+                                 Parameters & parameters,
+                                 const char * tag_filename);
+
     // Gopal. Added search overload that takes L as parameter, so that we
     // can customize L on a per-query basis without tampering with "Parameters"
-    DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> search(const T *      query,
-                                                           const size_t   K,
-                                                           const unsigned L,
-                                                           unsigned *indices);
-
+    template<typename IDType>
     DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> search(
-        const T *query, const uint64_t K, const unsigned L,
-        std::vector<unsigned> init_ids, uint64_t *indices, float *distances);
+        const T *query, const size_t K, const unsigned L, IDType *indices,
+        float *distances = nullptr);
 
-    DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> search_with_tags(
-        const T *query, const size_t K, const unsigned L, TagT *tags,
-        unsigned *indices_buffer = NULL);
+    DISKANN_DLLEXPORT size_t search_with_tags(const T *query, const uint64_t K,
+                                              const unsigned L, TagT *tags,
+                                              float *           distances,
+                                              std::vector<T *> &res_vectors);
 
-    // repositions frozen points to the end of _data - if they have been moved
-    // during deletion
-    DISKANN_DLLEXPORT void readjust_data(unsigned _num_frozen_pts);
+    DISKANN_DLLEXPORT void clear_index();
 
-    /* insertions possible only when id corresponding to tag does not already
-     * exist in the graph */
-    DISKANN_DLLEXPORT int insert_point(const T *                    point,
-                                       const Parameters &           parameter,
-                                       std::vector<Neighbor> &      pool,
-                                       std::vector<Neighbor> &      tmp,
-                                       tsl::robin_set<unsigned> &   visited,
-                                       std::vector<SimpleNeighbor> &cut_graph,
-                                       const TagT                   tag);
+    // Public Functions for Incremental Support
+
+    // insertions possible only when id corresponding to tag does not already
+    // exist in the graph 
+    DISKANN_DLLEXPORT int insert_point(
+        const T *point, const Parameters &parameter,
+        const TagT tag);  // only keep point, tag, parameters
 
     // call before triggering deleteions - sets important flags required for
     // deletion related operations
@@ -91,12 +183,64 @@ namespace diskann {
     // Record deleted point now and restructure graph later. Return -1 if tag
     // not found, 0 if OK. Do not call if _eager_delete was called earlier and
     // data was not consolidated
-    DISKANN_DLLEXPORT int delete_point(const TagT tag);
+    DISKANN_DLLEXPORT int lazy_delete(const TagT &tag);
+
+    // Record deleted points now and restructure graph later. Add to failed_tags
+    // if tag not found. Do not call if _eager_delete was called earlier and
+    // data was not consolidated. Return -1 if
+    DISKANN_DLLEXPORT int lazy_delete(const tsl::robin_set<TagT> &tags,
+                                      std::vector<TagT> &         failed_tags);
 
     // Delete point from graph and restructure it immediately. Do not call if
     // _lazy_delete was called earlier and data was not consolidated
     DISKANN_DLLEXPORT int eager_delete(const TagT        tag,
-                                       const Parameters &parameters);
+                                       const Parameters &parameters,
+                                       int               delete_mode = 1);
+    // return _data and tag_to_location offset
+    DISKANN_DLLEXPORT int extract_data(
+        T *ret_data, std::unordered_map<TagT, unsigned> &tag_to_location);
+
+    DISKANN_DLLEXPORT void get_location_to_tag(
+        std::unordered_map<unsigned, TagT> &ret_loc_to_tag);
+
+    DISKANN_DLLEXPORT void prune_all_nbrs(const Parameters &parameters);
+
+    DISKANN_DLLEXPORT void compact_data_for_insert();
+
+    DISKANN_DLLEXPORT bool                    hasIndexBeenSaved();
+    const std::vector<std::vector<unsigned>> *get_graph() const {
+      return &this->_final_graph;
+    }
+    T *                                       get_data();
+    const std::unordered_map<unsigned, TagT> *get_tags() const {
+      return &this->_location_to_tag;
+    };
+    // repositions frozen points to the end of _data - if they have been moved
+    // during deletion
+    DISKANN_DLLEXPORT void reposition_frozen_point_to_end();
+    DISKANN_DLLEXPORT void reposition_point(unsigned old_location,
+                                            unsigned new_location);
+
+    DISKANN_DLLEXPORT void compact_frozen_point();
+    DISKANN_DLLEXPORT void compact_data_for_search();
+
+    DISKANN_DLLEXPORT void consolidate(Parameters &parameters);
+
+    // DISKANN_DLLEXPORT void save_index_as_one_file(bool flag);
+
+    DISKANN_DLLEXPORT void get_active_tags(tsl::robin_set<TagT> &active_tags);
+
+    DISKANN_DLLEXPORT int   get_vector_by_tag(TagT &tag, T *vec);
+    DISKANN_DLLEXPORT const T *get_vector_by_tag(const TagT &tag);
+
+    DISKANN_DLLEXPORT void print_status() const;
+
+    // This variable MUST be updated if the number of entries in the metadata
+    // change.
+    DISKANN_DLLEXPORT static const int METADATA_ROWS = 5;
+
+    DISKANN_DLLEXPORT static bool get_npts_and_dim_from_index(
+        const char *file_name, size_t &npts, size_t &dim);
 
     DISKANN_DLLEXPORT void optimize_graph();
 
@@ -105,24 +249,49 @@ namespace diskann {
 
     /*  Internals of the library */
    protected:
-    typedef std::vector<SimpleNeighbor>        vecNgh;
-    typedef std::vector<std::vector<unsigned>> CompactGraph;
-    CompactGraph                               _final_graph;
-    CompactGraph                               _in_graph;
+    // No copy/assign.
+    Index(const Index<T, TagT> &) = delete;
+    Index<T, TagT> &operator=(const Index<T, TagT> &) = delete;
+
+    std::vector<std::vector<unsigned>> _final_graph;
+    std::vector<std::vector<unsigned>> _in_graph;
+
+    // generates one frozen point that will never get deleted from the
+    // graph
+    int generate_frozen_point();
 
     // determines navigating node of the graph by calculating medoid of data
     unsigned calculate_entry_point();
     // called only when _eager_delete is to be supported
     void update_in_graph();
 
+    template<typename IDType>
+    std::pair<uint32_t, uint32_t> search_impl(const T *query, const size_t K,
+                                              const unsigned L, IDType *indices,
+                                              float *               distances,
+                                              InMemQueryScratch<T> &scratch);
+
     std::pair<uint32_t, uint32_t> iterate_to_fixed_point(
         const T *node_coords, const unsigned Lindex,
         const std::vector<unsigned> &init_ids,
         std::vector<Neighbor> &      expanded_nodes_info,
         tsl::robin_set<unsigned> &   expanded_nodes_ids,
-        std::vector<Neighbor> &      best_L_nodes);
-
+        std::vector<Neighbor> &best_L_nodes, std::vector<unsigned> &des,
+        tsl::robin_set<unsigned> &inserted_into_pool_rs,
+        boost::dynamic_bitset<> &inserted_into_pool_bs, bool ret_frozen = true,
+        bool search_invocation = false);
     void get_expanded_nodes(const size_t node, const unsigned Lindex,
+                            std::vector<unsigned>     init_ids,
+                            std::vector<Neighbor> &   expanded_nodes_info,
+                            tsl::robin_set<unsigned> &expanded_nodes_ids,
+                            std::vector<unsigned> &   des,
+                            std::vector<Neighbor> &   best_L_nodes,
+                            tsl::robin_set<unsigned> &inserted_into_pool_rs,
+                            boost::dynamic_bitset<> & inserted_into_pool_bs);
+
+    // get_expanded_nodes for insertion. Must investigate to see if perf can
+    // be improved here as well using the same technique as above.
+    void get_expanded_nodes(const size_t node_id, const unsigned Lindex,
                             std::vector<unsigned>     init_ids,
                             std::vector<Neighbor> &   expanded_nodes_info,
                             tsl::robin_set<unsigned> &expanded_nodes_ids);
@@ -151,60 +320,93 @@ namespace diskann {
     void link(Parameters &parameters);
 
     // WARNING: Do not call reserve_location() without acquiring change_lock_
-    unsigned reserve_location();
+    int  reserve_location();
+    void release_location();
 
-    // get new location corresponding to each undeleted tag after deletions
-    std::vector<unsigned> get_new_location(unsigned &active);
+    // Support for resizing the index
+    // This function must be called ONLY after taking the _change_lock and
+    // _update_lock. Anything else in a MT environment will lead to an
+    // inconsistent index.
+    void resize(size_t new_max_points);
+
+    /*    // get new location corresponding to each undeleted tag after
+       deletions std::vector<unsigned> get_new_location(unsigned &active);*/
 
     // renumber nodes, update tag and location maps and compact the graph, mode
     // = _consolidated_order in case of lazy deletion and _compacted_order in
     // case of eager deletion
-    void compact_data(std::vector<unsigned> new_location, unsigned active,
-                      bool &mode);
+    void compact_data();
 
     // WARNING: Do not call consolidate_deletes without acquiring change_lock_
     // Returns number of live points left after consolidation
     size_t consolidate_deletes(const Parameters &parameters);
 
+    void initialize_query_scratch(uint32_t num_threads, uint32_t search_l,
+                                  uint32_t indexing_l, uint32_t r, size_t dim);
+
    private:
-    Metric       _metric = diskann::L2;
-    size_t       _dim;
-    size_t       _aligned_dim;
-    T *          _data;
-    size_t       _nd;  // number of active points i.e. existing in the graph
-    size_t       _max_points;  // total number of points in given data set
-    size_t       _num_frozen_pts;
-    bool         _has_built;
-    Distance<T> *_distance;
-    unsigned     _width;
-    unsigned     _ep;
+    Metric       _dist_metric = diskann::L2;
+    size_t       _dim = 0;
+    size_t       _aligned_dim = 0;
+    T *          _data = nullptr;
+    size_t       _nd = 0;  // number of active points i.e. existing in the graph
+    size_t       _max_points = 0;  // total number of points in given data set
+    size_t       _num_frozen_pts = 0;
+    bool         _has_built = false;
+    Distance<T> *_distance = nullptr;
+    unsigned     _width = 0;
+    unsigned     _ep = 0;
+    size_t       _max_range_of_loaded_graph = 0;
     bool         _saturate_graph = false;
-    std::vector<std::mutex> _locks;  // Per node lock, cardinality=max_points_
+    bool         _save_as_one_file = false;
+    bool         _dynamic_index = false;
+    bool         _enable_tags = false;
+    // Using normalied L2 for cosine.
+    bool _normalize_vecs = false;
 
-    char * _opt_graph;
-    size_t _node_size;
-    size_t _data_len;
-    size_t _neighbor_len;
+    // Indexing parameters
+    uint32_t _indexingQueueSize, _indexingRange, _indexingMaxC;
+    float    _indexingAlpha;
+    uint32_t _search_queue_size;
 
-    bool _can_delete;
-    bool _eager_done;       // true if eager deletions have been made
-    bool _lazy_done;        // true if lazy deletions have been made
-    bool _compacted_order;  // true if after eager deletions, data has been
-                            // consolidated
-    bool _enable_tags;
-    bool _consolidated_order;    // true if after lazy deletions, data has been
-                                 // consolidated
-    bool _support_eager_delete;  //_support_eager_delete = activates extra data
-                                 // structures and functions required for eager
-    // deletion
-    bool _store_data;
+    // Query scratch data structures
+    ConcurrentQueue<InMemQueryScratch<T>> _query_scratch;
 
+    // flags for dynamic indexing
     std::unordered_map<TagT, unsigned> _tag_to_location;
     std::unordered_map<unsigned, TagT> _location_to_tag;
 
     tsl::robin_set<unsigned> _delete_set;
     tsl::robin_set<unsigned> _empty_slots;
 
-    std::mutex _change_lock;  // Allow only 1 thread to insert/delete
+    bool _support_eager_delete =
+        false;  //_support_eager_delete = activates extra data
+    // bool _can_delete = false;  // only true if deletes can be done (if
+    // enabled)
+    bool _eager_done = false;     // true if eager deletions have been made
+    bool _lazy_done = false;      // true if lazy deletions have been made
+    bool _data_compacted = true;  // true if data has been consolidated
+    bool _is_saved = false;  // Gopal. Checking if the index is already saved.
+
+    std::vector<std::mutex> _locks;  // Per node lock, cardinality=max_points_
+    std::shared_timed_mutex _tag_lock;  // reader-writer lock on
+                                        // _tag_to_location and
+    std::mutex _change_lock;  // Lock taken to synchronously modify _nd
+    std::vector<std::mutex> _locks_in;     // Per node lock
+    std::shared_timed_mutex _delete_lock;  // Lock on _delete_set and
+                                           // _empty_slots when reading and
+                                           // writing to them
+
+    // _location_to_tag, has a shared lock
+    // and exclusive lock associated with
+    // it.
+    std::shared_timed_mutex _update_lock;  // coordinate save() and any change
+                                           // being done to the graph.
+    static const float INDEX_GROWTH_FACTOR;
+
+    char * _opt_graph;
+    size_t _node_size;
+    size_t _data_len;
+    size_t _neighbor_len;
   };
 }  // namespace diskann

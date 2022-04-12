@@ -36,9 +36,11 @@ int search_memory_index(int argc, char** argv) {
     metric = diskann::Metric::L2;
   else if (std::string(argv[ctr]) == std::string("fast_l2"))
     metric = diskann::Metric::FAST_L2;
+  else if (std::string(argv[ctr]) == std::string("cosine"))
+    metric = diskann::Metric::COSINE;
   else {
     std::cout << "Unsupported distance function. Currently only L2/ Inner "
-                 "Product/FAST_L2 support."
+                 "Product/FAST_L2/Cosine support."
               << std::endl;
     return -1;
   }
@@ -55,6 +57,7 @@ int search_memory_index(int argc, char** argv) {
 
   std::string data_file(argv[ctr++]);
   std::string memory_index_file(argv[ctr++]);
+  _u64        max_points = std::atoi(argv[ctr++]);
   _u64        num_threads = std::atoi(argv[ctr++]);
   std::string query_bin(argv[ctr++]);
   std::string truthset_bin(argv[ctr++]);
@@ -64,10 +67,13 @@ int search_memory_index(int argc, char** argv) {
 
   bool calc_recall_flag = false;
 
+  _u32 max_search_L = 0;
   for (; ctr < (_u32) argc; ctr++) {
     _u64 curL = std::atoi(argv[ctr]);
-    if (curL >= recall_at)
+    if (curL >= recall_at) {
       Lvec.push_back(curL);
+      max_search_L = max_search_L > curL ? max_search_L : curL;
+    }
   }
 
   if (Lvec.size() == 0) {
@@ -91,8 +97,11 @@ int search_memory_index(int argc, char** argv) {
   std::cout.setf(std::ios_base::fixed, std::ios_base::floatfield);
   std::cout.precision(2);
 
-  diskann::Index<T> index(metric, data_file.c_str());
-  index.load(memory_index_file.c_str());  // to load NSG
+  diskann::Index<T, uint32_t> index(metric, query_dim, max_points, false,
+                                    false);
+
+  index.load(memory_index_file.c_str(), num_threads,
+             max_search_L);
   std::cout << "Index loaded" << std::endl;
 
   if (metric == diskann::FAST_L2)
@@ -172,17 +181,17 @@ int search_memory_index(int argc, char** argv) {
 }
 
 int main(int argc, char** argv) {
-  if (argc < 11) {
+  if (argc < 12) {
     std::cout << "Usage: " << argv[0]
               << "   index_type<float/int8/uint8>   "
                  "dist_fn<l2/mips/fast_l2>   "
-                 "data_file.bin   memory_index_path   "
+                 "data_file.bin   memory_index_path  max_points  "
                  "T(num_threads)   query_file.bin   "
                  "truthset.bin(\"null\" for none)   "
                  "K   result_output_prefix   "
                  "L1   L2 ... \n"
               << std::endl;
-    exit(-1);
+    return -1;
   }
 
   try {

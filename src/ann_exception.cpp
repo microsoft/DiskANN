@@ -31,8 +31,8 @@ namespace diskann {
                                std::system_error& e, const std::string& funcSig,
                                const std::string& fileName,
                                unsigned int       lineNum)
-      : ANNException(std::string(" While opening file ") + filename +
-                         std::string(", error code: ") +
+      : ANNException(std::string(" While opening file \'") + filename +
+                         std::string("\', error code: ") +
                          std::to_string(e.code().value()) + "  " +
                          e.code().message(),
                      e.code().value(), funcSig, fileName, lineNum) {
