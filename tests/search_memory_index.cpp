@@ -65,10 +65,13 @@ int search_memory_index(int argc, char** argv) {
 
   bool calc_recall_flag = false;
 
+  _u32 max_search_L = 0;
   for (; ctr < (_u32) argc; ctr++) {
     _u64 curL = std::atoi(argv[ctr]);
-    if (curL >= recall_at)
+    if (curL >= recall_at) {
       Lvec.push_back(curL);
+      max_search_L = max_search_L > curL ? max_search_L : curL;
+    }
   }
 
   if (Lvec.size() == 0) {
@@ -94,8 +97,9 @@ int search_memory_index(int argc, char** argv) {
 
   diskann::Index<T, uint32_t> index(metric, query_dim, max_points, false,
                                     false);
+
   index.load(memory_index_file.c_str(), num_threads,
-             (_u32) * (std::max(Lvec.begin(), Lvec.end())));
+             max_search_L);
   std::cout << "Index loaded" << std::endl;
 
   if (metric == diskann::FAST_L2)

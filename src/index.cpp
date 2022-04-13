@@ -2260,6 +2260,7 @@ namespace diskann {
   // visible to external world, we generate them here and update our dataset
   template<typename T, typename TagT>
   int Index<T, TagT>::generate_frozen_point() {
+
     if (_num_frozen_pts == 0)
       return 0;
 

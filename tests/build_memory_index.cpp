@@ -34,7 +34,7 @@ int build_in_memory_index(const std::string&     data_path,
   diskann::get_bin_metadata(data_path, data_num, data_dim);
 
   diskann::Index<T, TagT> index(metric, data_dim, data_num, false, false,
-                                false);  // enable_tags forced to true!
+                                false);  
   auto                    s = std::chrono::high_resolution_clock::now();
   index.build(data_path.c_str(), data_num, paras);
 

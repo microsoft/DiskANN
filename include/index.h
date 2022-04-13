@@ -364,16 +364,16 @@ namespace diskann {
 
    private:
     Metric       _dist_metric = diskann::L2;
-    size_t       _dim;
-    size_t       _aligned_dim;
-    T *          _data;
-    size_t       _nd;  // number of active points i.e. existing in the graph
-    size_t       _max_points;  // total number of points in given data set
-    size_t       _num_frozen_pts;
-    bool         _has_built;
-    Distance<T> *_distance;
-    unsigned     _width;
-    unsigned     _ep;
+    size_t       _dim = 0;
+    size_t       _aligned_dim = 0;
+    T *          _data = nullptr;
+    size_t       _nd = 0;  // number of active points i.e. existing in the graph
+    size_t       _max_points = 0;  // total number of points in given data set
+    size_t       _num_frozen_pts = 0;
+    bool         _has_built = false;
+    Distance<T> *_distance = nullptr;
+    unsigned     _width = 0;
+    unsigned     _ep = 0;
     size_t       _max_range_of_loaded_graph = 0;
     bool         _saturate_graph = false;
     bool         _save_as_one_file = false;
