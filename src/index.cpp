@@ -623,7 +623,7 @@ namespace diskann {
     diskann::load_bin<_u32>(filename, delete_list, npts, ndim);
 #endif
     assert(ndim == 1);
-    for (int i = 0; i < npts; i++) {
+    for (uint32_t i = 0; i < npts; i++) {
       _delete_set.insert(delete_list[i]);
     }
     return npts;
@@ -995,7 +995,8 @@ namespace diskann {
         auto resize_size = 2 * total_num_points > MAX_POINTS_FOR_USING_BITSET
                                ? MAX_POINTS_FOR_USING_BITSET
                                : 2 * total_num_points;
-        inserted_into_pool_bs.resize(2 * total_num_points);
+//        inserted_into_pool_bs.resize(2 * total_num_points);
+        inserted_into_pool_bs.resize(resize_size);
       }
     }
 
@@ -2192,7 +2193,7 @@ namespace diskann {
     }
     _u32 * indices = scratch.indices;             // new unsigned[L];
     float *dist_interim = scratch.interim_dists;  // new float[L];
-    auto   ret = search_impl(query, L, L, indices, dist_interim, scratch);
+    search_impl(query, L, L, indices, dist_interim, scratch);
 
     std::shared_lock<std::shared_timed_mutex> ulock(_update_lock);
     // std::shared_lock<std::shared_timed_mutex> lock(_tag_lock);
