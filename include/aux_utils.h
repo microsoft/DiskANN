@@ -48,8 +48,8 @@ namespace diskann {
 
   DISKANN_DLLEXPORT double get_memory_budget(const std::string &mem_budget_str);
   DISKANN_DLLEXPORT double get_memory_budget(double search_ram_budget_in_gb);
-  DISKANN_DLLEXPORT void add_new_file_to_single_index(std::string index_file,
-                                                      std::string new_file);
+  DISKANN_DLLEXPORT void   add_new_file_to_single_index(std::string index_file,
+                                                        std::string new_file);
 
   DISKANN_DLLEXPORT size_t calculate_num_pq_chunks(double final_index_ram_limit,
                                                    size_t points_num,
@@ -64,8 +64,9 @@ namespace diskann {
       unsigned *our_results, unsigned dim_or, unsigned recall_at,
       const tsl::robin_set<unsigned> &active_tags);
 
-DISKANN_DLLEXPORT double calculate_range_search_recall(unsigned num_queries, std::vector<std::vector<_u32>> &groundtruth,
-                          std::vector<std::vector<_u32>> &our_results);
+  DISKANN_DLLEXPORT double calculate_range_search_recall(
+      unsigned num_queries, std::vector<std::vector<_u32>> &groundtruth,
+      std::vector<std::vector<_u32>> &our_results);
 
   DISKANN_DLLEXPORT void read_idmap(const std::string &    fname,
                                     std::vector<unsigned> &ivecs);

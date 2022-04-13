@@ -170,8 +170,8 @@ namespace diskann {
       }
     } else if (metric == diskann::Metric::INNER_PRODUCT) {
       std::cout << "Using inner product distance function" << std::endl;
-//      this->dist_cmp = new DistanceInnerProduct<float>();
-//      this->dist_cmp_float = new DistanceInnerProduct<float>();
+      //      this->dist_cmp = new DistanceInnerProduct<float>();
+      //      this->dist_cmp_float = new DistanceInnerProduct<float>();
     } else {
       std::cout << "Unsupported metric type. Reverting to float." << std::endl;
       this->dist_cmp = new AVXDistanceL2Float();
@@ -224,9 +224,11 @@ namespace diskann {
         // scratch.coord_scratch = new T[MAX_N_CMPS * this->aligned_dim];
         // //Gopal. Commenting out the reallocation!
         diskann::alloc_aligned((void **) &scratch.sector_scratch,
-                               (_u64) MAX_N_SECTOR_READS * (_u64) SECTOR_LEN, SECTOR_LEN);
-        diskann::alloc_aligned((void **) &scratch.aligned_pq_coord_scratch,
-                               (_u64) MAX_GRAPH_DEGREE * (_u64) MAX_PQ_CHUNKS * sizeof(_u8), 256);
+                               (_u64) MAX_N_SECTOR_READS * (_u64) SECTOR_LEN,
+                               SECTOR_LEN);
+        diskann::alloc_aligned(
+            (void **) &scratch.aligned_pq_coord_scratch,
+            (_u64) MAX_GRAPH_DEGREE * (_u64) MAX_PQ_CHUNKS * sizeof(_u8), 256);
         diskann::alloc_aligned((void **) &scratch.aligned_pqtable_dist_scratch,
                                256 * (_u64) MAX_PQ_CHUNKS * sizeof(float), 256);
         diskann::alloc_aligned((void **) &scratch.aligned_dist_scratch,
@@ -646,11 +648,12 @@ namespace diskann {
         << std::endl;
 
     if (n_chunks > MAX_PQ_CHUNKS) {
-              std::stringstream stream;
-        stream << "Error loading index. Ensure that max PQ bytes for in-memory PQ data does not exceed "
-               << MAX_PQ_CHUNKS << std::endl;
-        throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
-                                    __LINE__);
+      std::stringstream stream;
+      stream << "Error loading index. Ensure that max PQ bytes for in-memory "
+                "PQ data does not exceed "
+             << MAX_PQ_CHUNKS << std::endl;
+      throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
+                                  __LINE__);
     }
 
     std::string disk_pq_pivots_path = this->disk_index_file + "_pq_pivots.bin";
@@ -720,11 +723,12 @@ namespace diskann {
     max_degree = ((max_node_len - disk_bytes_per_point) / sizeof(unsigned)) - 1;
 
     if (max_degree > MAX_GRAPH_DEGREE) {
-              std::stringstream stream;
-        stream << "Error loading index. Ensure that max graph degree (R) does not exceed "
-               << MAX_GRAPH_DEGREE << std::endl;
-        throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
-                                    __LINE__);
+      std::stringstream stream;
+      stream << "Error loading index. Ensure that max graph degree (R) does "
+                "not exceed "
+             << MAX_GRAPH_DEGREE << std::endl;
+      throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
+                                  __LINE__);
     }
 
     diskann::cout << "Disk-Index File Meta-data: ";
@@ -850,7 +854,7 @@ namespace diskann {
       data = this->thread_data.pop();
     }
 
-//std::cout<<l_search<<" ";
+    // std::cout<<l_search<<" ";
     // copy query to thread specific aligned and allocated memory (for distance
     // calculations we need aligned data)
 
@@ -1101,7 +1105,7 @@ namespace diskann {
         unsigned *node_buf = OFFSET_TO_NODE_NHOOD(node_disk_buf);
         _u64      nnbrs = (_u64)(*node_buf);
         T *       node_fp_coords = OFFSET_TO_NODE_COORDS(node_disk_buf);
-//        assert(data_buf_idx < MAX_N_CMPS);
+        //        assert(data_buf_idx < MAX_N_CMPS);
         if (data_buf_idx == MAX_N_CMPS)
           data_buf_idx = 0;
 
@@ -1219,10 +1223,11 @@ namespace diskann {
     }
   }
 
-// range search returns results of all neighbors within distance of range. indices and distances need to be pre-allocated of size l_search
-// and the return value is the number of matching hits.
+  // range search returns results of all neighbors within distance of range.
+  // indices and distances need to be pre-allocated of size l_search and the
+  // return value is the number of matching hits.
 
-template<typename T>
+  template<typename T>
   _u32 PQFlashIndex<T>::range_search(const T *query1, const double range,
                                      const _u64          min_l_search,
                                      const _u64          max_l_search,

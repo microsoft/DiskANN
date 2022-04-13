@@ -33,11 +33,10 @@ int build_in_memory_index(const std::string&     data_path,
   _u64 data_num, data_dim;
   diskann::get_bin_metadata(data_path, data_num, data_dim);
 
-diskann::Index<T, TagT> index(metric, data_dim, data_num, false,
-                                false,
+  diskann::Index<T, TagT> index(metric, data_dim, data_num, false, false,
                                 false);  // enable_tags forced to true!
-  auto              s = std::chrono::high_resolution_clock::now();
-    index.build(data_path.c_str(), data_num, paras);
+  auto                    s = std::chrono::high_resolution_clock::now();
+  index.build(data_path.c_str(), data_num, paras);
 
   std::chrono::duration<double> diff =
       std::chrono::high_resolution_clock::now() - s;
@@ -54,8 +53,7 @@ int main(int argc, char** argv) {
               << "data_type<int8/uint8/float>  dist_fn<l2/mips> "
               << "data_file.bin   output_index_file  "
               << "R(graph degree)   L(build complexity)  "
-              << "alpha(graph diameter control)   T(num_threads)"
-              << std::endl;
+              << "alpha(graph diameter control)   T(num_threads)" << std::endl;
     exit(-1);
   }
 

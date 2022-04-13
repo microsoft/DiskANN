@@ -176,16 +176,15 @@ int search_memory_index(int argc, char** argv) {
 
 int main(int argc, char** argv) {
   if (argc < 12) {
-    std::cout
-        << "Usage: " << argv[0]
-        << "   index_type<float/int8/uint8>   "
-           "dist_fn<l2/mips/fast_l2>   "
-           "data_file.bin   memory_index_path [max_points (temporary)]  "
-           "T(num_threads)   query_file.bin   "
-           "truthset.bin(\"null\" for none)   "
-           "K   result_output_prefix   "
-           "L1   L2 ... \n"
-        << std::endl;
+    std::cout << "Usage: " << argv[0]
+              << "   index_type<float/int8/uint8>   "
+                 "dist_fn<l2/mips/fast_l2>   "
+                 "data_file.bin   memory_index_path [max_points (temporary)]  "
+                 "T(num_threads)   query_file.bin   "
+                 "truthset.bin(\"null\" for none)   "
+                 "K   result_output_prefix   "
+                 "L1   L2 ... \n"
+              << std::endl;
     exit(-1);
   }
   if (std::string(argv[1]) == std::string("int8"))

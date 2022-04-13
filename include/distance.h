@@ -53,30 +53,28 @@ namespace diskann {
 #endif
   };
 
-template <typename T>
+  template<typename T>
   class DistanceInnerProduct : public Distance<T> {
    public:
-float inner_product(const T *a, const T *b, unsigned size) const;
-    float compare(const T *a, const T *b, unsigned size)  const 
-    {
-        // since we use normally minimization objective for distance
-                 // comparisons, we are returning 1/x.
+    float inner_product(const T *a, const T *b, unsigned size) const;
+    float compare(const T *a, const T *b, unsigned size) const {
+      // since we use normally minimization objective for distance
+      // comparisons, we are returning 1/x.
       float result = inner_product(a, b, size);
       //      if (result < 0)
       //      return std::numeric_limits<float>::max();
       //      else
       return -result;
     }
-    };
+  };
 
-
-template <typename T>
+  template<typename T>
   class DistanceFastL2
       : public DistanceInnerProduct<T> {  // currently defined only for float.
                                           // templated for future use.
    public:
     float norm(const T *a, unsigned size) const;
-//    using DistanceInnerProductFloat::compare;
+    //    using DistanceInnerProductFloat::compare;
     float compare(const T *a, const T *b, float norm,
                   unsigned size) const {  // not implement
       float result = -2 * DistanceInnerProduct<T>::inner_product(a, b, size);
@@ -84,14 +82,6 @@ template <typename T>
       return result;
     }
   };
-
-
-
-
-
-
-
-
 
   // Gopal. Slow implementations of the distance functions to get diskann to
   // work in pre-AVX machines. Performance here is not a concern, so we are
@@ -135,7 +125,6 @@ template <typename T>
     DISKANN_DLLEXPORT virtual float compare(const float *a, const float *b,
                                             uint32_t length) const;
   };
-
 
   class AVXNormalizedCosineDistanceFloat : public Distance<float> {
    private:

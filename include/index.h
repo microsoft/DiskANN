@@ -97,7 +97,7 @@ namespace diskann {
   template<typename T, typename TagT = uint32_t>
   class Index {
    public:
-   // Constructor for Bulk operations and for creating the index object solely
+    // Constructor for Bulk operations and for creating the index object solely
     // for loading a prexisting index.
     DISKANN_DLLEXPORT Index(Metric m, const size_t dim, const size_t max_points,
                             const bool dynamic_index,
@@ -116,7 +116,7 @@ namespace diskann {
 
     DISKANN_DLLEXPORT ~Index();
 
-// Public Functions for Static Support
+    // Public Functions for Static Support
 
     // checks if data is consolidated, saves graph, metadata and associated
     // tags.
@@ -127,8 +127,7 @@ namespace diskann {
     DISKANN_DLLEXPORT _u64 save_delete_list(const std::string &filename,
                                             size_t             offset = 0);
 
-
-        DISKANN_DLLEXPORT void load(const char *index_file, uint32_t num_threads,
+    DISKANN_DLLEXPORT void load(const char *index_file, uint32_t num_threads,
                                 uint32_t search_l);
 
     DISKANN_DLLEXPORT size_t load_graph(const std::string filename,
@@ -137,19 +136,20 @@ namespace diskann {
 
     DISKANN_DLLEXPORT size_t load_data(std::string filename, size_t offset = 0);
 
-    DISKANN_DLLEXPORT size_t      load_tags(const std::string tag_file_name,
-                                            size_t            offset = 0);
-    DISKANN_DLLEXPORT size_t      load_delete_set(const std::string &filename,
-                                                  size_t             offset = 0);
+    DISKANN_DLLEXPORT size_t load_tags(const std::string tag_file_name,
+                                       size_t            offset = 0);
+    DISKANN_DLLEXPORT size_t load_delete_set(const std::string &filename,
+                                             size_t             offset = 0);
 
     DISKANN_DLLEXPORT size_t get_num_points();
 
     DISKANN_DLLEXPORT size_t return_max_points();
 
-/*    // generates one or more frozen points that will never get deleted from the
-    // graph
-    DISKANN_DLLEXPORT int generate_random_frozen_points(
-        const char *filename = NULL);*/
+    /*    // generates one or more frozen points that will never get deleted
+       from the
+        // graph
+        DISKANN_DLLEXPORT int generate_random_frozen_points(
+            const char *filename = NULL);*/
 
     DISKANN_DLLEXPORT void build(
         const char *filename, const size_t num_points_to_load,
@@ -160,7 +160,6 @@ namespace diskann {
                                  const size_t num_points_to_load,
                                  Parameters & parameters,
                                  const char * tag_filename);
-
 
     // Gopal. Added search overload that takes L as parameter, so that we
     // can customize L on a per-query basis without tampering with "Parameters"
@@ -178,17 +177,18 @@ namespace diskann {
 
     // Public Functions for Incremental Support
 
-/*
-    // repositions frozen points to the end of _data - if they have been moved
-    // during deletion
-    DISKANN_DLLEXPORT void readjust_data(unsigned _num_frozen_pts);
-*/
+    /*
+        // repositions frozen points to the end of _data - if they have been
+       moved
+        // during deletion
+        DISKANN_DLLEXPORT void readjust_data(unsigned _num_frozen_pts);
+    */
     /* insertions possible only when id corresponding to tag does not already
      * exist in the graph */
-DISKANN_DLLEXPORT int insert_point(
+    DISKANN_DLLEXPORT int insert_point(
         const T *point, const Parameters &parameter,
         const TagT tag);  // only keep point, tag, parameters
-    
+
     // call before triggering deleteions - sets important flags required for
     // deletion related operations
     DISKANN_DLLEXPORT int enable_delete();
@@ -201,14 +201,13 @@ DISKANN_DLLEXPORT int insert_point(
     // Record deleted point now and restructure graph later. Return -1 if tag
     // not found, 0 if OK. Do not call if _eager_delete was called earlier and
     // data was not consolidated
-        DISKANN_DLLEXPORT int lazy_delete(const TagT &tag);
+    DISKANN_DLLEXPORT int lazy_delete(const TagT &tag);
 
     // Record deleted points now and restructure graph later. Add to failed_tags
     // if tag not found. Do not call if _eager_delete was called earlier and
     // data was not consolidated. Return -1 if
     DISKANN_DLLEXPORT int lazy_delete(const tsl::robin_set<TagT> &tags,
                                       std::vector<TagT> &         failed_tags);
-
 
     // Delete point from graph and restructure it immediately. Do not call if
     // _lazy_delete was called earlier and data was not consolidated
@@ -226,11 +225,11 @@ DISKANN_DLLEXPORT int insert_point(
 
     DISKANN_DLLEXPORT void compact_data_for_insert();
 
-    DISKANN_DLLEXPORT bool hasIndexBeenSaved();
-        const std::vector<std::vector<unsigned>> *get_graph() const {
+    DISKANN_DLLEXPORT bool                    hasIndexBeenSaved();
+    const std::vector<std::vector<unsigned>> *get_graph() const {
       return &this->_final_graph;
     }
-    T *get_data();
+    T *                                       get_data();
     const std::unordered_map<unsigned, TagT> *get_tags() const {
       return &this->_location_to_tag;
     };
@@ -249,18 +248,17 @@ DISKANN_DLLEXPORT int insert_point(
 
     DISKANN_DLLEXPORT void get_active_tags(tsl::robin_set<TagT> &active_tags);
 
-    DISKANN_DLLEXPORT int get_vector_by_tag(TagT &tag, T *vec);
+    DISKANN_DLLEXPORT int   get_vector_by_tag(TagT &tag, T *vec);
     DISKANN_DLLEXPORT const T *get_vector_by_tag(const TagT &tag);
 
     DISKANN_DLLEXPORT void print_status() const;
 
-// This variable MUST be updated if the number of entries in the metadata
+    // This variable MUST be updated if the number of entries in the metadata
     // change.
     DISKANN_DLLEXPORT static const int METADATA_ROWS = 5;
 
     DISKANN_DLLEXPORT static bool get_npts_and_dim_from_index(
         const char *file_name, size_t &npts, size_t &dim);
-
 
     DISKANN_DLLEXPORT void optimize_graph();
 
@@ -349,9 +347,8 @@ DISKANN_DLLEXPORT int insert_point(
     // inconsistent index.
     void resize(size_t new_max_points);
 
-
-/*    // get new location corresponding to each undeleted tag after deletions
-    std::vector<unsigned> get_new_location(unsigned &active);*/
+    /*    // get new location corresponding to each undeleted tag after
+       deletions std::vector<unsigned> get_new_location(unsigned &active);*/
 
     // renumber nodes, update tag and location maps and compact the graph, mode
     // = _consolidated_order in case of lazy deletion and _compacted_order in
@@ -365,7 +362,6 @@ DISKANN_DLLEXPORT int insert_point(
     void initialize_query_scratch(uint32_t num_threads, uint32_t search_l,
                                   uint32_t indexing_l, uint32_t r, size_t dim);
 
-
    private:
     Metric       _dist_metric = diskann::L2;
     size_t       _dim;
@@ -378,12 +374,12 @@ DISKANN_DLLEXPORT int insert_point(
     Distance<T> *_distance;
     unsigned     _width;
     unsigned     _ep;
-    size_t   _max_range_of_loaded_graph = 0;
+    size_t       _max_range_of_loaded_graph = 0;
     bool         _saturate_graph = false;
-    bool     _save_as_one_file = false;
-    bool     _dynamic_index = false;
-    bool     _enable_tags = false;
-        // Using normalied L2 for cosine.
+    bool         _save_as_one_file = false;
+    bool         _dynamic_index = false;
+    bool         _enable_tags = false;
+    // Using normalied L2 for cosine.
     bool _normalize_vecs = false;
 
     // Indexing parameters
@@ -410,8 +406,6 @@ DISKANN_DLLEXPORT int insert_point(
     bool _data_compacted = true;  // true if data has been consolidated
     bool _is_saved = false;  // Gopal. Checking if the index is already saved.
 
-
-
     std::vector<std::mutex> _locks;  // Per node lock, cardinality=max_points_
     std::shared_timed_mutex _tag_lock;  // reader-writer lock on
                                         // _tag_to_location and
@@ -428,12 +422,9 @@ DISKANN_DLLEXPORT int insert_point(
                                            // being done to the graph.
     static const float INDEX_GROWTH_FACTOR;
 
-
     char * _opt_graph;
     size_t _node_size;
     size_t _data_len;
     size_t _neighbor_len;
-
-
   };
 }  // namespace diskann

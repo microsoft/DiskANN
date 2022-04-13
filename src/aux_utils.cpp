@@ -25,7 +25,7 @@
 
 namespace diskann {
 
-    void add_new_file_to_single_index(std::string index_file,
+  void add_new_file_to_single_index(std::string index_file,
                                     std::string new_file) {
     std::unique_ptr<_u64[]> metadata;
     _u64                    nr, nc;
@@ -66,8 +66,8 @@ namespace diskann {
       reader.read(dump, cur_block_size);
       writer.write(dump, cur_block_size);
     }
-//    reader.close();
-//    writer.close();
+    //    reader.close();
+    //    writer.close();
 
     delete[] dump;
     std::vector<_u64> new_meta;
@@ -224,8 +224,9 @@ namespace diskann {
            ((double) (100.0 / recall_at));
   }
 
-  double calculate_range_search_recall(unsigned num_queries, std::vector<std::vector<_u32>> &groundtruth,
-                          std::vector<std::vector<_u32>> &our_results) {
+  double calculate_range_search_recall(
+      unsigned num_queries, std::vector<std::vector<_u32>> &groundtruth,
+      std::vector<std::vector<_u32>> &our_results) {
     double             total_recall = 0;
     std::set<unsigned> gt, res;
 
@@ -234,7 +235,7 @@ namespace diskann {
       res.clear();
 
       gt.insert(groundtruth[i].begin(), groundtruth[i].end());
-      res.insert(our_results[i].begin(), our_results[i].end()); 
+      res.insert(our_results[i].begin(), our_results[i].end());
       unsigned cur_recall = 0;
       for (auto &v : gt) {
         if (res.find(v) != res.end()) {
@@ -242,9 +243,9 @@ namespace diskann {
         }
       }
       if (gt.size() != 0)
-      total_recall += ((100.0*cur_recall)/gt.size());
+        total_recall += ((100.0 * cur_recall) / gt.size());
       else
-      total_recall += 100;
+        total_recall += 100;
     }
     return total_recall / (num_queries);
   }
@@ -283,7 +284,7 @@ namespace diskann {
     if (files.fileExists(cache_warmup_file)) {
       diskann::load_aligned_bin<T>(files, cache_warmup_file, warmup, warmup_num,
                                    file_dim, file_aligned_dim);
-                                         diskann::cout << "In the warmup file: " << cache_warmup_file
+      diskann::cout << "In the warmup file: " << cache_warmup_file
                     << " File dim: " << file_dim
                     << " File aligned dim: " << file_aligned_dim
                     << " Expected dim: " << warmup_dim
@@ -408,18 +409,20 @@ namespace diskann {
     std::vector<cached_ifstream> vamana_readers(nshards);
     for (_u64 i = 0; i < nshards; i++) {
       vamana_readers[i].open(vamana_names[i], 1024 * 1048576);
-//      size_t actual_file_size = get_file_size(vamana_names[i]);
+      //      size_t actual_file_size = get_file_size(vamana_names[i]);
       size_t expected_file_size;
       vamana_readers[i].read((char *) &expected_file_size, sizeof(uint64_t));
-/*      if (actual_file_size != expected_file_size) {
-        std::stringstream stream;
-        stream << "Error in Vamana Index file " << vamana_names[i]
-               << " Actual file size: " << actual_file_size
-               << " does not match expected file size: " << expected_file_size
-               << std::endl;
-        throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
-                                    __LINE__);
-      } */
+      /*      if (actual_file_size != expected_file_size) {
+              std::stringstream stream;
+              stream << "Error in Vamana Index file " << vamana_names[i]
+                     << " Actual file size: " << actual_file_size
+                     << " does not match expected file size: " <<
+         expected_file_size
+                     << std::endl;
+              throw diskann::ANNException(stream.str(), -1, __FUNCSIG__,
+         __FILE__,
+                                          __LINE__);
+            } */
     }
 
     size_t merged_index_size = 16;
@@ -555,10 +558,9 @@ namespace diskann {
       paras.Set<std::string>("save_path", mem_index_path);
 
       std::unique_ptr<diskann::Index<T>> _pvamanaIndex =
-          std::unique_ptr<diskann::Index<T>>(
-              new diskann::Index<T>(compareMetric, base_dim, base_num, false,
-                                    false, false));
-        _pvamanaIndex->build(base_file.c_str(), base_num, paras);
+          std::unique_ptr<diskann::Index<T>>(new diskann::Index<T>(
+              compareMetric, base_dim, base_num, false, false, false));
+      _pvamanaIndex->build(base_file.c_str(), base_num, paras);
 
       _pvamanaIndex->save(mem_index_path.c_str());
       std::remove(medoids_file.c_str());

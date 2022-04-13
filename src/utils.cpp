@@ -63,7 +63,7 @@ bool AvxSupportedCPU = false;
 #endif
 
 namespace diskann {
-    // Get the right distance function for the given metric.
+  // Get the right distance function for the given metric.
   template<>
   diskann::Distance<float>* get_distance_function(diskann::Metric m) {
     if (m == diskann::Metric::L2) {
@@ -88,11 +88,13 @@ namespace diskann {
       diskann::cout << "Inner product: Using AVX2 implementation" << std::endl;
       return new diskann::AVXDistanceInnerProductFloat();
     } else if (m == diskann::Metric::FAST_L2) {
-          return new diskann::DistanceFastL2<float>();
-   } else {
+      return new diskann::DistanceFastL2<float>();
+    } else {
       std::stringstream stream;
-      stream << "Only L2, cosine, and inner product supported for floating point vectors as of now. Email "
-                "{gopalsr, harshasi, rakri}@microsoft.com if you need support for any other metric."
+      stream << "Only L2, cosine, and inner product supported for floating "
+                "point vectors as of now. Email "
+                "{gopalsr, harshasi, rakri}@microsoft.com if you need support "
+                "for any other metric."
              << std::endl;
       diskann::cerr << stream.str() << std::endl;
       throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
@@ -121,8 +123,11 @@ namespace diskann {
       return new diskann::DistanceCosineInt8();
     } else {
       std::stringstream stream;
-      stream << "Only L2 and cosine supported for signed byte vectors as of now. Email "
-                "{gopalsr, harshasi, rakri}@microsoft.com if you need support for any other metric."             << std::endl;
+      stream << "Only L2 and cosine supported for signed byte vectors as of "
+                "now. Email "
+                "{gopalsr, harshasi, rakri}@microsoft.com if you need support "
+                "for any other metric."
+             << std::endl;
       diskann::cerr << stream.str() << std::endl;
       throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
                                   __LINE__);
@@ -132,13 +137,13 @@ namespace diskann {
   template<>
   diskann::Distance<uint8_t>* get_distance_function(diskann::Metric m) {
     if (m == diskann::Metric::L2) {
-    #ifdef _WINDOWS
+#ifdef _WINDOWS
       diskann::cout
           << "WARNING: AVX/AVX2 distance function not defined for Uint8. Using "
              "slow version. "
              "Contact gopalsr@microsoft.com if you need AVX/AVX2 support."
           << std::endl;
-          #endif
+#endif
       return new diskann::DistanceL2UInt8();
     } else if (m == diskann::Metric::COSINE) {
       diskann::cout
@@ -149,8 +154,11 @@ namespace diskann {
       return new diskann::SlowDistanceCosineUInt8();
     } else {
       std::stringstream stream;
-      stream << "Only L2 and cosine supported for unsigned byte vectors as of now. Email "
-                "{gopalsr, harshasi, rakri}@microsoft.com if you need support for any other metric."             << std::endl;
+      stream << "Only L2 and cosine supported for unsigned byte vectors as of "
+                "now. Email "
+                "{gopalsr, harshasi, rakri}@microsoft.com if you need support "
+                "for any other metric."
+             << std::endl;
       diskann::cerr << stream.str() << std::endl;
       throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
                                   __LINE__);
@@ -160,7 +168,7 @@ namespace diskann {
   void block_convert(std::ofstream& writr, std::ifstream& readr,
                      float* read_buf, _u64 npts, _u64 ndims) {
     readr.read((char*) read_buf, npts * ndims * sizeof(float));
-    _u32    ndims_u32 = (_u32) ndims;
+    _u32 ndims_u32 = (_u32) ndims;
 #pragma omp parallel for
     for (_s64 i = 0; i < (_s64) npts; i++) {
       float norm_pt = std::numeric_limits<float>::epsilon();
@@ -209,5 +217,4 @@ namespace diskann {
                   << std::endl;
   }
 
-
-}
+}  // namespace diskann

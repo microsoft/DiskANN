@@ -99,7 +99,6 @@ inline bool file_exists(const std::string& name, bool dirCheck = false) {
   }
 }
 
-
 typedef uint64_t _u64;
 typedef int64_t  _s64;
 typedef uint32_t _u32;
@@ -108,8 +107,8 @@ typedef uint16_t _u16;
 typedef int16_t  _s16;
 typedef uint8_t  _u8;
 typedef int8_t   _s8;
-inline void open_file_to_write(std::ofstream&     writer,
-                               const std::string& filename) {
+inline void      open_file_to_write(std::ofstream&     writer,
+                                    const std::string& filename) {
   writer.exceptions(std::ofstream::failbit | std::ofstream::badbit);
   if (!file_exists(filename))
     writer.open(filename, std::ios::binary | std::ios::out);
@@ -160,11 +159,10 @@ inline int delete_file(const std::string& fileName) {
   }
 }
 
-
 namespace diskann {
   static const size_t MAX_SIZE_OF_STREAMBUF = 2LL * 1024 * 1024 * 1024;
 
-  enum Metric { L2 = 0, INNER_PRODUCT = 1, COSINE = 2, FAST_L2 = 3, PQ = 4};
+  enum Metric { L2 = 0, INNER_PRODUCT = 1, COSINE = 2, FAST_L2 = 3, PQ = 4 };
 
   inline void alloc_aligned(void** ptr, size_t size, size_t align) {
     *ptr = nullptr;
@@ -413,8 +411,9 @@ namespace diskann {
     }
   }
 
-  inline void prune_truthset_for_range(const std::string& bin_file, float range, std::vector<std::vector<_u32>> &groundtruth, 
-                            size_t& npts) {
+  inline void prune_truthset_for_range(
+      const std::string& bin_file, float range,
+      std::vector<std::vector<_u32>>& groundtruth, size_t& npts) {
     _u64            read_blk_size = 64 * 1024 * 1024;
     cached_ifstream reader(bin_file, read_blk_size);
     diskann::cout << "Reading truthset file " << bin_file.c_str() << " ..."
@@ -425,8 +424,8 @@ namespace diskann {
     reader.read((char*) &npts_i32, sizeof(int));
     reader.read((char*) &dim_i32, sizeof(int));
     npts = (unsigned) npts_i32;
-    _u64 dim = (unsigned) dim_i32;
-    _u32* ids;
+    _u64   dim = (unsigned) dim_i32;
+    _u32*  ids;
     float* dists;
 
     diskann::cout << "Metadata: #pts = " << npts << ", #dims = " << dim << "..."
@@ -454,7 +453,7 @@ namespace diskann {
 
     ids = new uint32_t[npts * dim];
     reader.read((char*) ids, npts * dim * sizeof(uint32_t));
- 
+
     if (truthset_type == 1) {
       dists = new float[npts * dim];
       reader.read((char*) dists, npts * dim * sizeof(float));
@@ -465,21 +464,25 @@ namespace diskann {
     for (_u32 i = 0; i < npts; i++) {
       groundtruth[i].clear();
       for (_u32 j = 0; j < dim; j++) {
-        if (dists[i*dim + j] <= range) {
-          groundtruth[i].emplace_back(ids[i*dim+j]);
+        if (dists[i * dim + j] <= range) {
+          groundtruth[i].emplace_back(ids[i * dim + j]);
         }
-        min_dist = min_dist > dists[i*dim+j] ? dists[i*dim + j] : min_dist;
-        max_dist = max_dist < dists[i*dim+j] ? dists[i*dim + j] : max_dist;
+        min_dist =
+            min_dist > dists[i * dim + j] ? dists[i * dim + j] : min_dist;
+        max_dist =
+            max_dist < dists[i * dim + j] ? dists[i * dim + j] : max_dist;
       }
-      //std::cout<<groundtruth[i].size() << " " ;
+      // std::cout<<groundtruth[i].size() << " " ;
     }
-    std::cout<<"Min dist: " << min_dist <<", Max dist: "<< max_dist << std::endl;
+    std::cout << "Min dist: " << min_dist << ", Max dist: " << max_dist
+              << std::endl;
     delete[] ids;
     delete[] dists;
   }
 
-
-  inline void load_range_truthset(const std::string& bin_file, std::vector<std::vector<_u32>> &groundtruth, _u64 & gt_num) {
+  inline void load_range_truthset(const std::string&              bin_file,
+                                  std::vector<std::vector<_u32>>& groundtruth,
+                                  _u64&                           gt_num) {
     _u64            read_blk_size = 64 * 1024 * 1024;
     cached_ifstream reader(bin_file, read_blk_size);
     diskann::cout << "Reading truthset file " << bin_file.c_str() << " ..."
@@ -492,18 +495,17 @@ namespace diskann {
 
     gt_num = (_u64) npts_u32;
     _u64 total_res = (_u64) total_u32;
-    
-    diskann::cout << "Metadata: #pts = " << gt_num << ", #total_results = " << total_res << "..."
-                  << std::endl;
+
+    diskann::cout << "Metadata: #pts = " << gt_num
+                  << ", #total_results = " << total_res << "..." << std::endl;
 
     size_t expected_file_size =
-        2*sizeof(_u32) + gt_num*sizeof(_u32) + total_res*sizeof(_u32);
+        2 * sizeof(_u32) + gt_num * sizeof(_u32) + total_res * sizeof(_u32);
 
     if (actual_file_size != expected_file_size) {
       std::stringstream stream;
       stream << "Error. File size mismatch in range truthset. actual size: "
-             << actual_file_size
-             << ", expected: " << expected_file_size;
+             << actual_file_size << ", expected: " << expected_file_size;
       diskann::cout << stream.str();
       throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
                                   __LINE__);
@@ -511,36 +513,33 @@ namespace diskann {
     groundtruth.clear();
     groundtruth.resize(gt_num);
     std::vector<_u32> gt_count(gt_num);
-    
 
-
-    reader.read((char*) gt_count.data(), sizeof(_u32)*gt_num);
+    reader.read((char*) gt_count.data(), sizeof(_u32) * gt_num);
 
     std::vector<_u32> gt_stats(gt_count);
     std::sort(gt_stats.begin(), gt_stats.end());
- 
-    std::cout<<"GT count percentiles:" << std::endl;
-      for (_u32 p = 0; p < 100; p += 5)
-    std::cout << "percentile " << p << ": "
-              << gt_stats[std::floor((p / 100.0) * gt_num)] << std::endl;
-  std::cout << "percentile 100"
-            << ": " << gt_stats[gt_num - 1] << std::endl;
 
+    std::cout << "GT count percentiles:" << std::endl;
+    for (_u32 p = 0; p < 100; p += 5)
+      std::cout << "percentile " << p << ": "
+                << gt_stats[std::floor((p / 100.0) * gt_num)] << std::endl;
+    std::cout << "percentile 100"
+              << ": " << gt_stats[gt_num - 1] << std::endl;
 
-   for (_u32 i = 0; i < gt_num; i++) {
+    for (_u32 i = 0; i < gt_num; i++) {
       groundtruth[i].clear();
       groundtruth[i].resize(gt_count[i]);
-      if (gt_count[i]!=0)
-      reader.read((char*) groundtruth[i].data(), sizeof(_u32)*gt_count[i]);
+      if (gt_count[i] != 0)
+        reader.read((char*) groundtruth[i].data(), sizeof(_u32) * gt_count[i]);
 
-// debugging code
-/*      if (i < 10) { 
-      std::cout<<gt_count[i] <<" nbrs, ids: "; 
-        for (auto &x : groundtruth[i])
-          std::cout<<x <<" ";
-        std::cout<<std::endl;
-      } */
-   }
+      // debugging code
+      /*      if (i < 10) {
+            std::cout<<gt_count[i] <<" nbrs, ids: ";
+              for (auto &x : groundtruth[i])
+                std::cout<<x <<" ";
+              std::cout<<std::endl;
+            } */
+    }
   }
 
 #ifdef EXEC_ENV_OLS
@@ -563,7 +562,7 @@ namespace diskann {
 
   template<typename T>
   inline uint64_t save_bin(const std::string& filename, T* data, size_t npts,
-                       size_t ndims) {
+                           size_t ndims) {
     std::ofstream writer(filename, std::ios::binary | std::ios::out);
     diskann::cout << "Writing bin: " << filename.c_str() << std::endl;
     int npts_i32 = (int) npts, ndims_i32 = (int) ndims;
@@ -578,7 +577,7 @@ namespace diskann {
     writer.close();
     size_t bytes_written = npts * ndims * sizeof(T) + 2 * sizeof(uint32_t);
     diskann::cout << "Finished writing bin." << std::endl;
-    return bytes_written;    
+    return bytes_written;
   }
 
   // load_aligned_bin functions START
@@ -788,7 +787,6 @@ namespace diskann {
     return bytes_written;
   }
 
-
   template<typename T>
   inline void copy_aligned_data_from_file(const std::string bin_file, T*& data,
                                           size_t& npts, size_t& dim,
@@ -832,8 +830,6 @@ namespace diskann {
     }
   }
 
-
-
   // NOTE :: good efficiency when total_vec_size is integral multiple of 64
   inline void prefetch_vector(const char* vec, size_t vecsize) {
     size_t max_prefetch_size = (vecsize / 64) * 64;
@@ -848,7 +844,7 @@ namespace diskann {
       _mm_prefetch((const char*) vec + d, _MM_HINT_T1);
   }
 
-    // NOTE: Implementation in utils.cpp.
+  // NOTE: Implementation in utils.cpp.
   void block_convert(std::ofstream& writr, std::ifstream& readr,
                      float* read_buf, _u64 npts, _u64 ndims);
 

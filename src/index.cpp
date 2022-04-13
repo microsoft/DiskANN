@@ -1,4 +1,4 @@
-// TODOS 
+// TODOS
 // ADD THE COPYRIGHT NOTICE
 // ADD FAST L2 DISTANCE FUNCTION
 // CHECK ALL DISTANCE FUNCTIONS ARE VALID (INNER PRODUCT, COSINE, L2, FAST L2)
@@ -287,9 +287,9 @@ namespace diskann {
 
     if (m == diskann::Metric::COSINE && std::is_floating_point<T>::value) {
       // This is safe because T is float inside the if block.
-//      this->_distance = (Distance<T> *) new AVXNormalizedCosineDistanceFloat();
-//      this->_normalize_vecs = true;
-      std::cout<<"Need to add functionality for COSINE metric" << std::endl;
+      //      this->_distance = (Distance<T> *) new
+      //      AVXNormalizedCosineDistanceFloat(); this->_normalize_vecs = true;
+      std::cout << "Need to add functionality for COSINE metric" << std::endl;
     } else {
       this->_distance = get_distance_function<T>(m);
     }
@@ -431,7 +431,7 @@ namespace diskann {
 
   template<typename T, typename TagT>
   _u64 Index<T, TagT>::save_delete_list(const std::string &filename,
-                                        _u64 file_offset) {
+                                        _u64               file_offset) {
     if (_delete_set.size() == 0) {
       return 0;
     }
@@ -506,7 +506,7 @@ namespace diskann {
 #else
   template<typename T, typename TagT>
   size_t Index<T, TagT>::load_tags(const std::string tag_filename,
-                                   size_t offset) {
+                                   size_t            offset) {
     if (_enable_tags && !file_exists(tag_filename)) {
       diskann::cerr << "Tag file provided does not exist!" << std::endl;
       throw diskann::ANNException("Tag file provided does not exist!", -1,
@@ -608,11 +608,11 @@ namespace diskann {
 #ifdef EXEC_ENV_OLS
   template<typename T, typename TagT>
   size_t Index<T, TagT>::load_delete_set(AlignedFileReader &reader,
-                                         size_t offset) {
+                                         size_t             offset) {
 #else
   template<typename T, typename TagT>
   size_t Index<T, TagT>::load_delete_set(const std::string &filename,
-                                         size_t offset) {
+                                         size_t             offset) {
 #endif
     std::unique_ptr<_u32[]> delete_list;
     _u64                    npts, ndim;
@@ -919,7 +919,7 @@ namespace diskann {
       center[j] /= (float) _nd;
 
     // compute all to one distance
-    float * distances = new float[_nd]();
+    float *distances = new float[_nd]();
 #pragma omp parallel for schedule(static, 65536)
     for (_s64 i = 0; i < (_s64) _nd; i++) {
       // extract point and distance reference
@@ -1302,7 +1302,7 @@ namespace diskann {
   //}
 
   template<typename T, typename TagT>
-  void Index<T, TagT>::prune_neighbors(const unsigned location,
+  void Index<T, TagT>::prune_neighbors(const unsigned         location,
                                        std::vector<Neighbor> &pool,
                                        const Parameters &     parameter,
                                        std::vector<unsigned> &pruned_list) {
@@ -1389,7 +1389,7 @@ namespace diskann {
    * the current node n.
    */
   template<typename T, typename TagT>
-  void Index<T, TagT>::inter_insert(unsigned n,
+  void Index<T, TagT>::inter_insert(unsigned               n,
                                     std::vector<unsigned> &pruned_list,
                                     const Parameters &     parameter,
                                     bool                   update_in_graph) {
@@ -1750,7 +1750,7 @@ namespace diskann {
     const unsigned range = parameters.Get<unsigned>("R");
 
     diskann::Timer timer;
-#pragma omp        parallel for
+#pragma omp parallel for
     for (_s64 node = 0; node < (_s64)(_max_points + _num_frozen_pts); node++) {
       if ((size_t) node < _nd || (size_t) node == _max_points) {
         if (_final_graph[node].size() > range) {
@@ -1800,7 +1800,7 @@ namespace diskann {
   }
 
   template<typename T, typename TagT>
-  void Index<T, TagT>::build(const char *filename,
+  void Index<T, TagT>::build(const char *             filename,
                              const size_t             num_points_to_load,
                              Parameters &             parameters,
                              const std::vector<TagT> &tags) {
@@ -1901,7 +1901,7 @@ namespace diskann {
   }
 
   template<typename T, typename TagT>
-  void Index<T, TagT>::build(const char *filename,
+  void Index<T, TagT>::build(const char * filename,
                              const size_t num_points_to_load,
                              Parameters &parameters, const char *tag_filename) {
     if (!file_exists(filename)) {
@@ -2061,7 +2061,7 @@ namespace diskann {
 
   template<typename T, typename TagT>
   template<typename IdType>
-  std::pair<uint32_t, uint32_t> Index<T, TagT>::search(const T *query,
+  std::pair<uint32_t, uint32_t> Index<T, TagT>::search(const T *      query,
                                                        const size_t   K,
                                                        const unsigned L,
                                                        IdType *       indices,
@@ -2535,7 +2535,7 @@ namespace diskann {
     unsigned block_size = 1 << 10;
     _s64     total_blocks = DIV_ROUND_UP(total_pts, block_size);
 
-    auto    start = std::chrono::high_resolution_clock::now();
+    auto start = std::chrono::high_resolution_clock::now();
 #pragma omp parallel for schedule(dynamic)
     for (_s64 block = 0; block < total_blocks; ++block) {
       tsl::robin_set<unsigned> candidate_set;
@@ -3155,7 +3155,7 @@ namespace diskann {
 
   template<typename T, typename TagT>
   int Index<T, TagT>::disable_delete(const Parameters &parameters,
-                                     const bool consolidate) {
+                                     const bool        consolidate) {
     // if (!_can_delete) {
     //  diskann::cerr << "Delete not currently enabled" << std::endl;
     //  return -1;
@@ -3241,7 +3241,7 @@ namespace diskann {
   // TODO: Check if this function needs a shared_lock on _tag_lock.
   template<typename T, typename TagT>
   int Index<T, TagT>::lazy_delete(const tsl::robin_set<TagT> &tags,
-                                  std::vector<TagT> &failed_tags) {
+                                  std::vector<TagT> &         failed_tags) {
     if (failed_tags.size() > 0) {
       diskann::cerr << "failed_tags should be passed as an empty list"
                     << std::endl;
@@ -3373,8 +3373,7 @@ namespace diskann {
                   << std::endl;
   }
 
-
-template<typename T, typename TagT>
+  template<typename T, typename TagT>
   void Index<T, TagT>::optimize_graph() {  // use after build or load
     _data_len = (_aligned_dim + 1) * sizeof(float);
     _neighbor_len = (_width + 1) * sizeof(unsigned);
@@ -3517,56 +3516,56 @@ template<typename T, typename TagT>
   template DISKANN_DLLEXPORT class Index<uint8_t, uint64_t>;
 
   template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t>
-  Index<float, uint64_t>::search<uint64_t>(const float *query, const size_t K,
+                             Index<float, uint64_t>::search<uint64_t>(const float *query, const size_t K,
                                            const unsigned L, uint64_t *indices,
                                            float *distances);
   template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t>
-  Index<float, uint64_t>::search<uint32_t>(const float *query, const size_t K,
+                             Index<float, uint64_t>::search<uint32_t>(const float *query, const size_t K,
                                            const unsigned L, uint32_t *indices,
                                            float *distances);
   template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t>
-  Index<uint8_t, uint64_t>::search<uint64_t>(const uint8_t *query,
+                             Index<uint8_t, uint64_t>::search<uint64_t>(const uint8_t *query,
                                              const size_t K, const unsigned L,
                                              uint64_t *indices,
                                              float *   distances);
   template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t>
-  Index<uint8_t, uint64_t>::search<uint32_t>(const uint8_t *query,
+                             Index<uint8_t, uint64_t>::search<uint32_t>(const uint8_t *query,
                                              const size_t K, const unsigned L,
                                              uint32_t *indices,
                                              float *   distances);
   template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t>
-  Index<int8_t, uint64_t>::search<uint64_t>(const int8_t *query, const size_t K,
+                             Index<int8_t, uint64_t>::search<uint64_t>(const int8_t *query, const size_t K,
                                             const unsigned L, uint64_t *indices,
                                             float *distances);
   template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t>
-  Index<int8_t, uint64_t>::search<uint32_t>(const int8_t *query, const size_t K,
+                             Index<int8_t, uint64_t>::search<uint32_t>(const int8_t *query, const size_t K,
                                             const unsigned L, uint32_t *indices,
                                             float *distances);
   // TagT==uint32_t
   template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t>
-  Index<float, uint32_t>::search<uint64_t>(const float *query, const size_t K,
+                             Index<float, uint32_t>::search<uint64_t>(const float *query, const size_t K,
                                            const unsigned L, uint64_t *indices,
                                            float *distances);
   template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t>
-  Index<float, uint32_t>::search<uint32_t>(const float *query, const size_t K,
+                             Index<float, uint32_t>::search<uint32_t>(const float *query, const size_t K,
                                            const unsigned L, uint32_t *indices,
                                            float *distances);
   template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t>
-  Index<uint8_t, uint32_t>::search<uint64_t>(const uint8_t *query,
+                             Index<uint8_t, uint32_t>::search<uint64_t>(const uint8_t *query,
                                              const size_t K, const unsigned L,
                                              uint64_t *indices,
                                              float *   distances);
   template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t>
-  Index<uint8_t, uint32_t>::search<uint32_t>(const uint8_t *query,
+                             Index<uint8_t, uint32_t>::search<uint32_t>(const uint8_t *query,
                                              const size_t K, const unsigned L,
                                              uint32_t *indices,
                                              float *   distances);
   template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t>
-  Index<int8_t, uint32_t>::search<uint64_t>(const int8_t *query, const size_t K,
+                             Index<int8_t, uint32_t>::search<uint64_t>(const int8_t *query, const size_t K,
                                             const unsigned L, uint64_t *indices,
                                             float *distances);
   template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t>
-  Index<int8_t, uint32_t>::search<uint32_t>(const int8_t *query, const size_t K,
+                             Index<int8_t, uint32_t>::search<uint32_t>(const int8_t *query, const size_t K,
                                             const unsigned L, uint32_t *indices,
                                             float *distances);
 

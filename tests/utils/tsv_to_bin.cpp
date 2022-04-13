@@ -4,12 +4,12 @@
 #include <iostream>
 #include "utils.h"
 
-void block_convert_float(std::ifstream& reader, std::ofstream& writer, _u64 npts,
-                   _u64 ndims) {
+void block_convert_float(std::ifstream& reader, std::ofstream& writer,
+                         _u64 npts, _u64 ndims) {
   auto read_buf = new float[npts * (ndims + 1)];
 
-  auto cursor = read_buf;
-  float    val;
+  auto  cursor = read_buf;
+  float val;
 
   for (_u64 i = 0; i < npts; i++) {
     for (_u64 d = 0; d < ndims; ++d) {
@@ -23,16 +23,16 @@ void block_convert_float(std::ifstream& reader, std::ofstream& writer, _u64 npts
 }
 
 void block_convert_int8(std::ifstream& reader, std::ofstream& writer, _u64 npts,
-                   _u64 ndims) {
+                        _u64 ndims) {
   auto read_buf = new int8_t[npts * (ndims + 1)];
 
   auto cursor = read_buf;
-  int    val;
+  int  val;
 
   for (_u64 i = 0; i < npts; i++) {
     for (_u64 d = 0; d < ndims; ++d) {
       reader >> val;
-      *cursor = (int8_t)val;
+      *cursor = (int8_t) val;
       cursor++;
     }
   }
@@ -40,12 +40,12 @@ void block_convert_int8(std::ifstream& reader, std::ofstream& writer, _u64 npts,
   delete[] read_buf;
 }
 
-void block_convert_uint8(std::ifstream& reader, std::ofstream& writer, _u64 npts,
-                   _u64 ndims) {
+void block_convert_uint8(std::ifstream& reader, std::ofstream& writer,
+                         _u64 npts, _u64 ndims) {
   auto read_buf = new uint8_t[npts * (ndims + 1)];
 
   auto cursor = read_buf;
-  int    val;
+  int  val;
 
   for (_u64 i = 0; i < npts; i++) {
     for (_u64 d = 0; d < ndims; ++d) {
@@ -57,7 +57,6 @@ void block_convert_uint8(std::ifstream& reader, std::ofstream& writer, _u64 npts
   writer.write((char*) read_buf, npts * ndims * sizeof(uint8_t));
   delete[] read_buf;
 }
-
 
 int main(int argc, char** argv) {
   if (argc != 6) {
