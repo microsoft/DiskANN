@@ -2,7 +2,7 @@
 # Licensed under the MIT license.
 
 add_library(diskann_dll SHARED dllmain.cpp ../partition_and_pq.cpp ../pq_flash_index.cpp ../logger.cpp ../utils.cpp 
-	  ../windows_aligned_file_reader.cpp ../memory_mapper.cpp ../index.cpp ../math_utils.cpp ../aux_utils.cpp ../ann_exception.cpp)
+	  ../windows_aligned_file_reader.cpp ../distance.cpp ../memory_mapper.cpp ../index.cpp ../math_utils.cpp ../aux_utils.cpp ../ann_exception.cpp)
 if (MSVC)
 	add_definitions(-D_USRDLL -D_WINDLL -DDISKANN_DLL)
 	add_compile_options(/MD)

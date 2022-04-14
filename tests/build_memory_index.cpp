@@ -60,13 +60,15 @@ int main(int argc, char** argv) {
   _u32 ctr = 2;
 
   diskann::Metric metric;
-  if (std::string(argv[ctr]) == std::string("mips"))
+  if (std::string(argv[ctr]) == std::string("mips")) {
     metric = diskann::Metric::INNER_PRODUCT;
-  else if (std::string(argv[ctr]) == std::string("l2"))
+  } else if (std::string(argv[ctr]) == std::string("l2")) {
     metric = diskann::Metric::L2;
-  else {
+  } else if (std::string(argv[ctr]) == std::string("cosine")) {
+    metric = diskann::Metric::COSINE;
+  }else {
     std::cout << "Unsupported distance function. Currently only L2/ Inner "
-                 "Product support."
+                 "Product/Cosine are supported."
               << std::endl;
     return -1;
   }
