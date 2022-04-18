@@ -92,4 +92,4 @@ Please see the following pages on using the compiled code:
 
 - [Commandline interface for building and search SSD based indices](workflows/SSD_index.md)  
 - [Commandline interface for building and search in memory indices](workflows/in_memory_index.md) 
-- To be added: Python interfaces and docker files
+- [REST service set up for serving DiskANN indices and query interface](workflows/rest_api.md)

@@ -35,8 +35,8 @@ void teardown(const utility::string_t& address) {
 
 int main(int argc, char* argv[]) {
   if (argc != 6 && argc != 5) {
-    std::cout << "Usage: server ip_addr:port <float/int8/uint8> data_file "
-                 "index_file <tags_file>"
+    std::cout << "Usage: inmem_server ip_addr:port data_type<float/int8/uint8>"
+                 " data_file index_file [tags_file]"
               << std::endl;
     exit(1);
   }

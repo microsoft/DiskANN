@@ -60,7 +60,7 @@ void query_loop(const std::string& ip_addr_port, const std::string& query_file,
 
 int main(int argc, char* argv[]) {
   if (argc != 6) {
-    std::cout << "Usage: client ip_addr:port <float/int8/uint8> query_file "
+    std::cout << "Usage: client ip_addr:port data_type<float/int8/uint8> query_file "
                  "num_queries Ls"
               << std::endl;
     exit(1);
