@@ -18,10 +18,10 @@ Follow the instructions for [building an in-memory DiskANN index](/workflows/in_
 
 ```bash
 # To start serving an in-memory index
-./tests/restapi/inmem_server ip_addr:port data_type<float/int8/uint8> data_file index_file [tags_file]
+./tests/restapi/inmem_server http://ip_addr:port data_type<float/int8/uint8> data_file index_file [tags_file]
 
 # To start serving an SSD-based index.
-./tests/restapi/ssd_server ip_addr:port data_type<float/int8/uint8> index_file_prefix num_nodes_to_cache num_threads [tags_file]
+./tests/restapi/ssd_server http://ip_addr:port data_type<float/int8/uint8> index_file_prefix num_nodes_to_cache num_threads [tags_file]
 ```
 The `data_type` and the `data_file` should be the same as those used in the construction of the index. The server returns the ids and distances of the closests vector in the index to the query. The ids are implicitly defined by the order of the vector in the data file. If you wish to assigning a different numbering or GUID or URL to the vectors in the index, use the optional `tags_file`. This should be a file which lists a "tag" string for each vector in the index. The file should contain one string per line. The string on the line `n` is considered the tag corresponding to the vector `n` in the index (in the implicit order defined in the `data_file`).
 
@@ -43,7 +43,7 @@ Issue a json query with the following fields
 - "query_id" : An id to track the query. Use a unique number to keep track of queries, or "0" if you do not want to keep track.
 - "Ls" : query complexity. Higher Ls takes more milliseconds to process but offers higher recall. Default to 256 if you don't want to tune this. 
 
-*Post a json query using python*
+**Post a json query using python**
 
 ```python
 import requests
@@ -61,7 +61,8 @@ The response might look like the following. The partition array indicates the ID
 {"distances":[1.6947,1.6954,1.6972,1.6985,1.6991,1.7003,1.7008,1.7014,1.7021,1.7039],"indices":[8976853,8221762,30909336,13100282,30514543,11537860,7133262,34074869,50512601,17983301],"k":10,"partition":[20,7,20,20,6,6,11,6,6,20],"query_id":1234,"tags":["https://xyz1", "https://xyz2", "https://xyz3", "https://xyz4", "https://xyz5", "https://xyz6", "https://xyz7", "https://xyz8", "https://xyz9", "https://xyz10"],"time_taken_in_us":3245}
 ```
 
-*Command line interface to issue multiple queries from a file*
+**Command line interface to issue multiple queries from a file**
+
 To issue `num_queries` queries from `query_file`, run the following command
 ```bash
 client ip_addr:port data_type<float/int8/uint8> query_file num_queries Ls"
