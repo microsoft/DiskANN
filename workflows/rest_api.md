@@ -1,4 +1,5 @@
-** REST service set up for serving DiskANN indices and query interface **
+**REST service set up for serving DiskANN indices and query interface**
+=======================================================================
 
 Install dependencies on Ubuntu and compile
 ------------------------------------------
@@ -17,7 +18,7 @@ Follow the instructions for [building an in-memory DiskANN index](/workflows/in_
 
 ```bash
 # To start serving an in-memory index
-./tests/resapi/inmemserver ip_addr:port data_type<float/int8/uint8> data_file index_file [tags_file]
+./tests/resapi/inmem_server ip_addr:port data_type<float/int8/uint8> data_file index_file [tags_file]
 
 # To start serving an SSD-based index.
 ./tests/resapi/ssd_server ip_addr:port data_type<float/int8/uint8> index_file_prefix num_nodes_to_cache num_threads [tags_file]
@@ -36,7 +37,7 @@ The service searches each of the indices and aggregate the results based on dist
 
 Querying the service
 --------------------
-The service can be queried using a json query with the following field
+Issue a json query with the following fields
 - "k" : The nunber of nearest neighbors needed
 - "query" : The query vector with a listing of co-ordinates.
 - "query_id" : An id to track the query. Use a unique number to keep track of queries, or "0" if you do not want to keep track.
@@ -55,7 +56,7 @@ response = requests.post('http://ip_addr:port', json=jsonquery)
 print(response.text)
 ```
 
-The response might look like the following. The partition array indicates the ID of index from which the result was found in the case of a multi-index set up. For a single index set up, the response would not contain a partition. The response may or may not contain `tags` based on whether the server was started with a `tags_file`. 
+The response might look like the following. The partition array indicates the ID of index from which the result was found in the case of a multi-index set up. For a single index set up, the response would not contain the information on partitions. The response may or may not contain `tags` based on whether the server was started with a `tags_file`. 
 ```json
 {"distances":[1.6947,1.6954,1.6972,1.6985,1.6991,1.7003,1.7008,1.7014,1.7021,1.7039],"indices":[8976853,8221762,30909336,13100282,30514543,11537860,7133262,34074869,50512601,17983301],"k":10,"partition":[20,7,20,20,6,6,11,6,6,20],"query_id":1234,"tags":["https://xyz1", "https://xyz2", "https://xyz3", "https://xyz4", "https://xyz5", "https://xyz6", "https://xyz7", "https://xyz8", "https://xyz9", "https://xyz10"],"time_taken_in_us":3245}
 ```
