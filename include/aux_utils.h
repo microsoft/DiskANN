@@ -97,6 +97,15 @@ namespace diskann {
       const std::string &infile, const std::string &indexPrefix,
       diskann::Metric &distMetric);
 
+  DISKANN_DLLEXPORT int extract_shard_ids_from_cluster_file(std::string cluster_file, std::string merged_index_prefix);
+
+template<typename T>
+  DISKANN_DLLEXPORT int build_merged_vamana_with_cluster_file(std::string     base_file, std::string cluster_file, 
+                                diskann::Metric compareMetric, unsigned L,
+                                unsigned R, std::string mem_index_path,
+                                std::string medoids_file);
+  
+
   template<typename T>
   DISKANN_DLLEXPORT int build_merged_vamana_index(
       std::string base_file, diskann::Metric _compareMetric, unsigned L,

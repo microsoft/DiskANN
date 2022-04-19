@@ -632,6 +632,11 @@ int shard_data_into_clusters(const std::string data_file, float *pivots,
   _u64 read_blk_size = 64 * 1024 * 1024;
   //  _u64 write_blk_size = 64 * 1024 * 1024;
   // create cached reader + writer
+  std::string all_cluster_info_txt = prefix_path + "_labels.txt";
+  std::ofstream clusters_in_txt_format(all_cluster_info_txt);
+  std::vector<std::vector<_u32>> cluster_to_pts;
+  cluster_to_pts.resize(num_centers);
+
   cached_ifstream base_reader(data_file, read_blk_size);
   _u32            npts32;
   _u32            basedim32;
@@ -698,10 +703,23 @@ int shard_data_into_clusters(const std::string data_file, float *pivots,
             (char *) (block_data_T.get() + p * dim), sizeof(T) * dim);
         shard_idmap_writer[shard_id].write((char *) &original_point_map_id,
                                            sizeof(uint32_t));
+        cluster_to_pts[shard_id].push_back(original_point_map_id);
         shard_counts[shard_id]++;
       }
     }
   }
+
+  for (_u32 i = 0; i < num_centers; i++) {
+    for (_u32 j = 0; j + 1 < cluster_to_pts[i].size(); j++) {
+      clusters_in_txt_format << cluster_to_pts[i][j] <<",";
+    }
+    if (cluster_to_pts[i].size() > 0) {
+      clusters_in_txt_format << cluster_to_pts[i][cluster_to_pts[i].size()-1];
+    }
+    clusters_in_txt_format<<std::endl;
+  }
+
+  clusters_in_txt_format.close();
 
   size_t total_count = 0;
   diskann::cout << "Actual shard sizes: " << std::flush;

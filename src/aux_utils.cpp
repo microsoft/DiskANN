@@ -531,6 +531,100 @@ namespace diskann {
     diskann::cout << "Finished merge" << std::endl;
     return 0;
   }
+  
+  int extract_shard_ids_from_cluster_file(std::string cluster_file, std::string merged_index_prefix) {
+    std::ifstream infile(cluster_file);
+    std::string   line, token;
+    unsigned      num_shards = 0;
+
+    while (std::getline(infile, line)) {
+      std::istringstream       iss(line);
+      std::vector<_u32> pts_in_shard(0);
+      // long int              val;
+      while (getline(iss, token, ',')) {
+        token.erase(std::remove(token.begin(), token.end(), '\n'), token.end());
+        token.erase(std::remove(token.begin(), token.end(), '\r'), token.end());
+        pts_in_shard.push_back((_u32)std::atoi(token.c_str()));
+      }
+      if (pts_in_shard.size() <= 0) {
+        std::cout << "No points found for shard "<< num_shards << std::endl;
+        exit(-1);
+      }
+      std::sort(pts_in_shard.begin(), pts_in_shard.end());
+      std::string shard_filename = merged_index_prefix + "_subshard-" + std::to_string(num_shards) + "_ids_uint32.bin";
+      diskann::save_bin<_u32>(shard_filename, pts_in_shard.data(), pts_in_shard.size(), 1);
+      num_shards++;
+    }
+    std::cout << "Identified " << num_shards << " distinct shards"
+              << std::endl;
+    return num_shards;
+  }
+
+  template<typename T>
+  int build_merged_vamana_with_cluster_file(std::string     base_file, std::string cluster_file, 
+                                diskann::Metric compareMetric, unsigned L,
+                                unsigned R, std::string mem_index_path,
+                                std::string medoids_file) {
+    size_t base_num, base_dim;
+    diskann::get_bin_metadata(base_file, base_num, base_dim);
+
+    std::string merged_index_prefix = mem_index_path + "_tempFiles";
+    int         num_parts =
+        extract_shard_ids_from_cluster_file(cluster_file, merged_index_prefix);
+
+    for (int p = 0; p < num_parts; p++) {
+      std::string shard_base_file =
+          merged_index_prefix + "_subshard-" + std::to_string(p) + ".bin";
+
+      std::string shard_ids_file = merged_index_prefix + "_subshard-" +
+                                   std::to_string(p) + "_ids_uint32.bin";
+
+      retrieve_shard_data_from_ids<T>(base_file, shard_ids_file,
+                                      shard_base_file);
+
+      std::string shard_index_file =
+          merged_index_prefix + "_subshard-" + std::to_string(p) + "_mem.index";
+
+      diskann::Parameters paras;
+      paras.Set<unsigned>("L", L);
+      paras.Set<unsigned>("R", (2 * (R / 3)));
+      paras.Set<unsigned>("C", 750);
+      paras.Set<float>("alpha", 1.2f);
+      paras.Set<unsigned>("num_rnds", 2);
+      paras.Set<bool>("saturate_graph", 1);
+      paras.Set<std::string>("save_path", shard_index_file);
+
+      _u64 shard_base_dim, shard_base_pts;
+      get_bin_metadata(shard_base_file, shard_base_pts, shard_base_dim);
+      std::unique_ptr<diskann::Index<T>> _pvamanaIndex =
+          std::unique_ptr<diskann::Index<T>>(new diskann::Index<T>(
+              compareMetric, shard_base_dim, shard_base_pts, false,
+              false));  // TODO: Single?
+      _pvamanaIndex->build(shard_base_file.c_str(), shard_base_pts, paras);
+      _pvamanaIndex->save(shard_index_file.c_str());
+      std::remove(shard_base_file.c_str());
+      //      wait_for_keystroke();
+    }
+
+    diskann::merge_shards(merged_index_prefix + "_subshard-", "_mem.index",
+                          merged_index_prefix + "_subshard-", "_ids_uint32.bin",
+                          num_parts, R, mem_index_path, medoids_file);
+
+    // delete tempFiles
+    for (int p = 0; p < num_parts; p++) {
+      std::string shard_base_file =
+          merged_index_prefix + "_subshard-" + std::to_string(p) + ".bin";
+      std::string shard_id_file = merged_index_prefix + "_subshard-" +
+                                  std::to_string(p) + "_ids_uint32.bin";
+      std::string shard_index_file =
+          merged_index_prefix + "_subshard-" + std::to_string(p) + "_mem.index";
+      std::remove(shard_base_file.c_str());
+      std::remove(shard_id_file.c_str());
+      std::remove(shard_index_file.c_str());
+    }
+    return 0;
+  }
+
 
   template<typename T>
   int build_merged_vamana_index(std::string     base_file,
@@ -979,9 +1073,14 @@ namespace diskann {
     train_data = nullptr;
     MallocExtension::instance()->ReleaseFreeMemory();
 
-    diskann::build_merged_vamana_index<T>(
+/*    diskann::build_merged_vamana_index<T>(
         data_file_to_use.c_str(), diskann::Metric::L2, L, R, p_val,
         indexing_ram_budget, mem_index_path, medoids_path, centroids_path);
+*/
+    std::string cluster_file = base_file  + "_labels.txt";
+    diskann::build_merged_vamana_with_cluster_file<T>(
+        data_file_to_use.c_str(), cluster_file.c_str(), diskann::Metric::L2, L, R, mem_index_path, medoids_path);
+
 
     if (!use_disk_pq) {
       diskann::create_disk_layout<T>(data_file_to_use.c_str(), mem_index_path,
@@ -1079,4 +1178,17 @@ namespace diskann {
       unsigned R, double sampling_rate, double ram_budget,
       std::string mem_index_path, std::string medoids_path,
       std::string centroids_file);
+
+  template DISKANN_DLLEXPORT int build_merged_vamana_with_cluster_file<int8_t>(
+      std::string base_file, std::string cluster_file, diskann::Metric compareMetric, unsigned L,
+      unsigned R, std::string mem_index_path, std::string medoids_path);
+  template DISKANN_DLLEXPORT int build_merged_vamana_with_cluster_file<float>(
+      std::string base_file,std::string cluster_file,  diskann::Metric compareMetric, unsigned L,
+      unsigned R, std::string mem_index_path, std::string medoids_path);
+  template DISKANN_DLLEXPORT int build_merged_vamana_with_cluster_file<uint8_t>(
+      std::string base_file,std::string cluster_file,  diskann::Metric compareMetric, unsigned L,
+      unsigned R,  std::string mem_index_path, std::string medoids_path);
+
+
+
 };  // namespace diskann
