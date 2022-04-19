@@ -1077,7 +1077,7 @@ namespace diskann {
         data_file_to_use.c_str(), diskann::Metric::L2, L, R, p_val,
         indexing_ram_budget, mem_index_path, medoids_path, centroids_path);
 */
-    std::string cluster_file = base_file  + "_labels.txt";
+    std::string cluster_file = index_prefix_path  + "_labels.txt";
     diskann::build_merged_vamana_with_cluster_file<T>(
         data_file_to_use.c_str(), cluster_file.c_str(), diskann::Metric::L2, L, R, mem_index_path, medoids_path);
 
