@@ -425,7 +425,8 @@ namespace diskann {
             } */
     }
 
-    size_t merged_index_size = 16;
+    size_t merged_index_size = 24;
+    size_t merged_index_frozen = 0;
     // create cached vamana writers
     cached_ofstream diskann_writer(output_vamana, 1024 * 1048576);
     diskann_writer.write((char *) &merged_index_size, sizeof(uint64_t));
@@ -450,10 +451,13 @@ namespace diskann {
     medoid_writer.write((char *) &nshards_u32, sizeof(uint32_t));
     medoid_writer.write((char *) &one_val, sizeof(uint32_t));
 
+    _u64 vamana_index_frozen = 0;
     for (_u64 shard = 0; shard < nshards; shard++) {
       unsigned medoid;
       // read medoid
       vamana_readers[shard].read((char *) &medoid, sizeof(unsigned));
+      vamana_readers[shard].read((char *) &vamana_index_frozen, sizeof(_u64));
+      assert(vamana_index_frozen == false);
       // rename medoid
       medoid = idmaps[shard][medoid];
 
@@ -462,6 +466,7 @@ namespace diskann {
       if (shard == (nshards - 1))  //--> uncomment if running hierarchical
         diskann_writer.write((char *) &medoid, sizeof(unsigned));
     }
+    diskann_writer.write((char *) &merged_index_frozen, sizeof(_u64));
     medoid_writer.close();
 
     diskann::cout << "Starting merge" << std::endl;
@@ -594,7 +599,7 @@ namespace diskann {
       paras.Set<unsigned>("C", 750);
       paras.Set<float>("alpha", 1.2f);
       paras.Set<unsigned>("num_rnds", 2);
-      paras.Set<bool>("saturate_graph", 1);
+      paras.Set<bool>("saturate_graph", 0);
       paras.Set<std::string>("save_path", shard_index_file);
 
       _u64 shard_base_dim, shard_base_pts;
@@ -621,9 +626,12 @@ namespace diskann {
                                   std::to_string(p) + "_ids_uint32.bin";
       std::string shard_index_file =
           merged_index_prefix + "_subshard-" + std::to_string(p) + "_mem.index";
+      std::string shard_index_file_data = shard_index_file + ".data";
+
       std::remove(shard_base_file.c_str());
       std::remove(shard_id_file.c_str());
       std::remove(shard_index_file.c_str());
+      std::remove(shard_index_file_data.c_str());
     }
     return 0;
   }
@@ -659,10 +667,10 @@ namespace diskann {
       }
       auto e = std::chrono::high_resolution_clock::now();
       std::chrono::duration<double> diff = e - s;
-      double qps = (1.0f * tuning_sample_num) / (1.0f * diff.count());
+      double qps = (1.0f * (float) tuning_sample_num) / (1.0f * (float) diff.count());
 
       double lat_999 = diskann::get_percentile_stats(
-          stats, tuning_sample_num, 0.999,
+          stats, tuning_sample_num, 0.999f,
           [](const diskann::QueryStats &stats) { return stats.total_us; });
 
       double mean_latency = diskann::get_mean_stats(
@@ -672,7 +680,7 @@ namespace diskann {
       if (qps > max_qps && lat_999 < (15000) + mean_latency * 2) {
         max_qps = qps;
         best_bw = cur_bw;
-        cur_bw = (uint32_t)(std::ceil)((float) cur_bw * 1.1);
+        cur_bw = (uint32_t)(std::ceil)((float) cur_bw * 1.1f);
       } else {
         stop_flag = true;
       }
@@ -703,7 +711,8 @@ namespace diskann {
 
     // create cached reader + writer
     size_t          actual_file_size = get_file_size(mem_index_file);
-    cached_ifstream vamana_reader(mem_index_file, read_blk_size);
+    diskann::cout<<"Vamana index file size=" << actual_file_size << std::endl;
+    std::ifstream vamana_reader(mem_index_file, std::ios::binary);
     cached_ofstream diskann_writer(output_file, write_blk_size);
 
     // metadata: width, medoid
@@ -711,7 +720,7 @@ namespace diskann {
     size_t   index_file_size;
 
     vamana_reader.read((char *) &index_file_size, sizeof(uint64_t));
-    if (index_file_size != actual_file_size) {
+/*    if (index_file_size != actual_file_size) {
       std::stringstream stream;
       stream << "Vamana Index file size does not match expected size per "
                 "meta-data."
@@ -720,15 +729,19 @@ namespace diskann {
 
       throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
                                   __LINE__);
-    }
+    } */
+    _u64 vamana_frozen_num = false, vamana_frozen_loc = 0;
+
 
     vamana_reader.read((char *) &width_u32, sizeof(unsigned));
     vamana_reader.read((char *) &medoid_u32, sizeof(unsigned));
-
+    vamana_reader.read((char *) &vamana_frozen_num, sizeof(_u64));
     // compute
     _u64 medoid, max_node_len, nnodes_per_sector;
     npts_64 = (_u64) npts;
     medoid = (_u64) medoid_u32;
+        if (vamana_frozen_num == 1)
+      vamana_frozen_loc = medoid;
     max_node_len =
         (((_u64) width_u32 + 1) * sizeof(unsigned)) + (ndims_64 * sizeof(T));
     nnodes_per_sector = SECTOR_LEN / max_node_len;
@@ -755,6 +768,9 @@ namespace diskann {
     *(_u64 *) (sector_buf.get() + 2 * sizeof(_u64)) = medoid;
     *(_u64 *) (sector_buf.get() + 3 * sizeof(_u64)) = max_node_len;
     *(_u64 *) (sector_buf.get() + 4 * sizeof(_u64)) = nnodes_per_sector;
+    *(_u64 *) (sector_buf.get() + 5 * sizeof(_u64)) = vamana_frozen_num;
+    *(_u64 *) (sector_buf.get() + 6 * sizeof(_u64)) = vamana_frozen_loc;    
+    
     diskann_writer.write(sector_buf.get(), SECTOR_LEN);
 
     std::unique_ptr<T[]> cur_node_coords = std::make_unique<T[]>(ndims_64);
@@ -777,7 +793,12 @@ namespace diskann {
         assert(nnbrs <= width_u32);
 
         // read node's nhood
-        vamana_reader.read((char *) nhood_buf, nnbrs * sizeof(unsigned));
+                vamana_reader.read((char *) nhood_buf,
+                           (std::min)(nnbrs, width_u32) * sizeof(unsigned));
+        if (nnbrs > width_u32) {
+          vamana_reader.seekg((nnbrs - width_u32) * sizeof(unsigned),
+                              vamana_reader.cur);
+        }
 
         // write coords of node first
         //  T *node_coords = data + ((_u64) ndims_64 * cur_node_id);
@@ -785,11 +806,12 @@ namespace diskann {
         memcpy(node_buf.get(), cur_node_coords.get(), ndims_64 * sizeof(T));
 
         // write nnbrs
-        *(unsigned *) (node_buf.get() + ndims_64 * sizeof(T)) = nnbrs;
+        *(unsigned *) (node_buf.get() + ndims_64 * sizeof(T)) =
+            (std::min)(nnbrs, width_u32);
 
         // write nhood next
         memcpy(node_buf.get() + ndims_64 * sizeof(T) + sizeof(unsigned),
-               nhood_buf, nnbrs * sizeof(unsigned));
+               nhood_buf, (std::min)(nnbrs, width_u32) * sizeof(unsigned));
 
         // get offset into sector_buf
         char *sector_node_buf =
