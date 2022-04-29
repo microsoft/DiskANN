@@ -408,24 +408,11 @@ namespace diskann {
     // create cached vamana readers
     std::vector<cached_ifstream> vamana_readers(nshards);
     for (_u64 i = 0; i < nshards; i++) {
-      vamana_readers[i].open(vamana_names[i], 1024 * 1048576);
-      //      size_t actual_file_size = get_file_size(vamana_names[i]);
+      vamana_readers[i].open(vamana_names[i], BUFFER_SIZE_FOR_CACHED_IO);
       size_t expected_file_size;
       vamana_readers[i].read((char *) &expected_file_size, sizeof(uint64_t));
-      /*      if (actual_file_size != expected_file_size) {
-              std::stringstream stream;
-              stream << "Error in Vamana Index file " << vamana_names[i]
-                     << " Actual file size: " << actual_file_size
-                     << " does not match expected file size: " <<
-         expected_file_size
-                     << std::endl;
-              throw diskann::ANNException(stream.str(), -1, __FUNCSIG__,
-         __FILE__,
-                                          __LINE__);
-            } */
     }
 
-    //    size_t merged_index_size = 24;
     size_t vamana_metadata_size =
         sizeof(_u64) + sizeof(_u32) + sizeof(_u32) +
         sizeof(_u64);  // expected file size + max degree + medoid_id +
