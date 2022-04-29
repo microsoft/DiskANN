@@ -100,8 +100,7 @@ int search_memory_index(int argc, char** argv) {
   diskann::Index<T, uint32_t> index(metric, query_dim, max_points, false,
                                     false);
 
-  index.load(memory_index_file.c_str(), num_threads,
-             max_search_L);
+  index.load(memory_index_file.c_str(), num_threads, max_search_L);
   std::cout << "Index loaded" << std::endl;
 
   if (metric == diskann::FAST_L2)

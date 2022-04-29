@@ -48,7 +48,7 @@ namespace diskann {
     cos_dists.reserve(npts);
 
     for (size_t i = 0; i < npts; i++) {
-      const float* point = all_data + (size_t) (indices[i]) * (size_t) (ndims);
+      const float* point = all_data + (size_t)(indices[i]) * (size_t)(ndims);
       cos_dists.push_back(
           compute_cosine_similarity<float>(point, query, ndims));
     }

@@ -102,4 +102,4 @@ namespace diskann {
     /* Conversion to float is a no-op on x86-64 */
     return _mm_cvtss_f32(x32);
   }
-}  // namespace
+}  // namespace diskann

@@ -18,6 +18,10 @@
 #include "timer.h"
 #include "utils.h"
 
+#ifdef _WINDOWS
+#include "tcmalloc/malloc_extension.h"
+#endif
+#include "cosine_similarity.h"
 #include "tsl/robin_set.h"
 
 #ifdef _WINDOWS
@@ -30,9 +34,8 @@
 #include "linux_aligned_file_reader.h"
 #endif
 
-#define SECTOR_LEN 4096
-
 #define READ_U64(stream, val) stream.read((char *) &val, sizeof(_u64))
+#define READ_U32(stream, val) stream.read((char *) &val, sizeof(_u32))
 #define READ_UNSIGNED(stream, val) stream.read((char *) &val, sizeof(unsigned))
 
 // sector # on disk where node_id is present
@@ -729,6 +732,18 @@ namespace diskann {
              << MAX_GRAPH_DEGREE << std::endl;
       throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
                                   __LINE__);
+    }
+
+    // setting up concept of frozen points in disk index for streaming-DiskANN
+    READ_U64(index_metadata, this->num_frozen_points);
+    _u64 file_frozen_id;
+    READ_U64(index_metadata, file_frozen_id);
+    if (this->num_frozen_points == 1)
+      this->frozen_location = file_frozen_id;
+    if (this->num_frozen_points == 1) {
+      diskann::cout << " Detected frozen point in index at location "
+                    << this->frozen_location
+                    << ". Will not output it at search time." << std::endl;
     }
 
     diskann::cout << "Disk-Index File Meta-data: ";

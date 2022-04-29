@@ -5,6 +5,8 @@
 
 #include "utils.h"
 
+#define NUM_PQ_CENTROIDS 256
+
 namespace diskann {
   class FixedChunkPQTable {
     // data_dim = n_chunks * chunk_size;
