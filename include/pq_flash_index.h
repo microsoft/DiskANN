@@ -175,7 +175,6 @@ namespace diskann {
     _u64              disk_pq_n_chunks = 0;
     FixedChunkPQTable disk_pq_table;
 
-
     // medoid/start info
     uint32_t *medoids =
         nullptr;         // by default it is just one entry point of graph, we

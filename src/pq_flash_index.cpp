@@ -34,7 +34,6 @@
 #include "linux_aligned_file_reader.h"
 #endif
 
-
 #define READ_U64(stream, val) stream.read((char *) &val, sizeof(_u64))
 #define READ_U32(stream, val) stream.read((char *) &val, sizeof(_u32))
 #define READ_UNSIGNED(stream, val) stream.read((char *) &val, sizeof(unsigned))
@@ -735,7 +734,7 @@ namespace diskann {
                                   __LINE__);
     }
 
-// setting up concept of frozen points in disk index for streaming-DiskANN 
+    // setting up concept of frozen points in disk index for streaming-DiskANN
     READ_U64(index_metadata, this->num_frozen_points);
     _u64 file_frozen_id;
     READ_U64(index_metadata, file_frozen_id);
@@ -746,7 +745,6 @@ namespace diskann {
                     << this->frozen_location
                     << ". Will not output it at search time." << std::endl;
     }
-
 
     diskann::cout << "Disk-Index File Meta-data: ";
     diskann::cout << "# nodes per sector: " << nnodes_per_sector;

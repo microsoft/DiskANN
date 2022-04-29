@@ -74,8 +74,7 @@ namespace diskann {
                                           // templated for future use.
    public:
     float norm(const T *a, unsigned size) const;
-    float compare(const T *a, const T *b, float norm,
-                  unsigned size) const;
+    float compare(const T *a, const T *b, float norm, unsigned size) const;
   };
 
   // Gopal. Slow implementations of the distance functions to get diskann to

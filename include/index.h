@@ -166,7 +166,7 @@ namespace diskann {
     // Public Functions for Incremental Support
 
     // insertions possible only when id corresponding to tag does not already
-    // exist in the graph 
+    // exist in the graph
     DISKANN_DLLEXPORT int insert_point(
         const T *point, const Parameters &parameter,
         const TagT tag);  // only keep point, tag, parameters

@@ -425,11 +425,23 @@ namespace diskann {
             } */
     }
 
-    size_t merged_index_size = 24;
-    size_t merged_index_frozen = 0;
+    //    size_t merged_index_size = 24;
+    size_t vamana_metadata_size =
+        sizeof(_u64) + sizeof(_u32) + sizeof(_u32) +
+        sizeof(_u64);  // expected file size + max degree + medoid_id +
+                       // frozen_point info
+
     // create cached vamana writers
-    cached_ofstream diskann_writer(output_vamana, 1024 * 1048576);
-    diskann_writer.write((char *) &merged_index_size, sizeof(uint64_t));
+    cached_ofstream merged_vamana_writer(output_vamana,
+                                         BUFFER_SIZE_FOR_CACHED_IO);
+
+    size_t merged_index_size =
+        vamana_metadata_size;  // we initialize the size of the merged index to
+                               // the metadata size
+    size_t merged_index_frozen = 0;
+    merged_vamana_writer.write(
+        (char *) &merged_index_size,
+        sizeof(uint64_t));  // we will overwrite the index size at the end
 
     unsigned output_width = max_degree;
     unsigned max_input_width = 0;
@@ -444,14 +456,17 @@ namespace diskann {
     diskann::cout << "Max input width: " << max_input_width
                   << ", output width: " << output_width << std::endl;
 
-    diskann_writer.write((char *) &output_width, sizeof(unsigned));
+    merged_vamana_writer.write((char *) &output_width, sizeof(unsigned));
     std::ofstream medoid_writer(medoids_file.c_str(), std::ios::binary);
     _u32          nshards_u32 = (_u32) nshards;
     _u32          one_val = 1;
     medoid_writer.write((char *) &nshards_u32, sizeof(uint32_t));
     medoid_writer.write((char *) &one_val, sizeof(uint32_t));
 
-    _u64 vamana_index_frozen = 0;
+    _u64 vamana_index_frozen =
+        0;  // as of now the functionality to merge many overlapping vamana
+            // indices is supported only for bulk indices without frozen point.
+            // Hence the final index will also not have any frozen points.
     for (_u64 shard = 0; shard < nshards; shard++) {
       unsigned medoid;
       // read medoid
@@ -464,9 +479,9 @@ namespace diskann {
       medoid_writer.write((char *) &medoid, sizeof(uint32_t));
       // write renamed medoid
       if (shard == (nshards - 1))  //--> uncomment if running hierarchical
-        diskann_writer.write((char *) &medoid, sizeof(unsigned));
+        merged_vamana_writer.write((char *) &medoid, sizeof(unsigned));
     }
-    diskann_writer.write((char *) &merged_index_frozen, sizeof(_u64));
+    merged_vamana_writer.write((char *) &merged_index_frozen, sizeof(_u64));
     medoid_writer.close();
 
     diskann::cout << "Starting merge" << std::endl;
@@ -489,9 +504,9 @@ namespace diskann {
         nnbrs =
             (unsigned) (std::min)(final_nhood.size(), (uint64_t) max_degree);
         // write into merged ofstream
-        diskann_writer.write((char *) &nnbrs, sizeof(unsigned));
-        diskann_writer.write((char *) final_nhood.data(),
-                             nnbrs * sizeof(unsigned));
+        merged_vamana_writer.write((char *) &nnbrs, sizeof(unsigned));
+        merged_vamana_writer.write((char *) final_nhood.data(),
+                                   nnbrs * sizeof(unsigned));
         merged_index_size += (sizeof(unsigned) + nnbrs * sizeof(unsigned));
         if (cur_id % 499999 == 1) {
           diskann::cout << "." << std::flush;
@@ -521,8 +536,9 @@ namespace diskann {
     std::shuffle(final_nhood.begin(), final_nhood.end(), urng);
     nnbrs = (unsigned) (std::min)(final_nhood.size(), (uint64_t) max_degree);
     // write into merged ofstream
-    diskann_writer.write((char *) &nnbrs, sizeof(unsigned));
-    diskann_writer.write((char *) final_nhood.data(), nnbrs * sizeof(unsigned));
+    merged_vamana_writer.write((char *) &nnbrs, sizeof(unsigned));
+    merged_vamana_writer.write((char *) final_nhood.data(),
+                               nnbrs * sizeof(unsigned));
     merged_index_size += (sizeof(unsigned) + nnbrs * sizeof(unsigned));
     for (auto &p : final_nhood)
       nhood_set[p] = 0;
@@ -530,8 +546,8 @@ namespace diskann {
 
     diskann::cout << "Expected size: " << merged_index_size << std::endl;
 
-    diskann_writer.reset();
-    diskann_writer.write((char *) &merged_index_size, sizeof(uint64_t));
+    merged_vamana_writer.reset();
+    merged_vamana_writer.write((char *) &merged_index_size, sizeof(uint64_t));
 
     diskann::cout << "Finished merge" << std::endl;
     return 0;
@@ -667,7 +683,8 @@ namespace diskann {
       }
       auto e = std::chrono::high_resolution_clock::now();
       std::chrono::duration<double> diff = e - s;
-      double qps = (1.0f * (float) tuning_sample_num) / (1.0f * (float) diff.count());
+      double                        qps =
+          (1.0f * (float) tuning_sample_num) / (1.0f * (float) diff.count());
 
       double lat_999 = diskann::get_percentile_stats(
           stats, tuning_sample_num, 0.999f,
@@ -710,9 +727,9 @@ namespace diskann {
     ndims_64 = ndims;
 
     // create cached reader + writer
-    size_t          actual_file_size = get_file_size(mem_index_file);
-    diskann::cout<<"Vamana index file size=" << actual_file_size << std::endl;
-    std::ifstream vamana_reader(mem_index_file, std::ios::binary);
+    size_t actual_file_size = get_file_size(mem_index_file);
+    diskann::cout << "Vamana index file size=" << actual_file_size << std::endl;
+    std::ifstream   vamana_reader(mem_index_file, std::ios::binary);
     cached_ofstream diskann_writer(output_file, write_blk_size);
 
     // metadata: width, medoid
@@ -720,18 +737,17 @@ namespace diskann {
     size_t   index_file_size;
 
     vamana_reader.read((char *) &index_file_size, sizeof(uint64_t));
-/*    if (index_file_size != actual_file_size) {
-      std::stringstream stream;
-      stream << "Vamana Index file size does not match expected size per "
-                "meta-data."
-             << " file size from file: " << index_file_size
-             << " actual file size: " << actual_file_size << std::endl;
+    /*    if (index_file_size != actual_file_size) {
+          std::stringstream stream;
+          stream << "Vamana Index file size does not match expected size per "
+                    "meta-data."
+                 << " file size from file: " << index_file_size
+                 << " actual file size: " << actual_file_size << std::endl;
 
-      throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
-                                  __LINE__);
-    } */
+          throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
+                                      __LINE__);
+        } */
     _u64 vamana_frozen_num = false, vamana_frozen_loc = 0;
-
 
     vamana_reader.read((char *) &width_u32, sizeof(unsigned));
     vamana_reader.read((char *) &medoid_u32, sizeof(unsigned));
@@ -740,7 +756,7 @@ namespace diskann {
     _u64 medoid, max_node_len, nnodes_per_sector;
     npts_64 = (_u64) npts;
     medoid = (_u64) medoid_u32;
-        if (vamana_frozen_num == 1)
+    if (vamana_frozen_num == 1)
       vamana_frozen_loc = medoid;
     max_node_len =
         (((_u64) width_u32 + 1) * sizeof(unsigned)) + (ndims_64 * sizeof(T));
@@ -769,8 +785,8 @@ namespace diskann {
     *(_u64 *) (sector_buf.get() + 3 * sizeof(_u64)) = max_node_len;
     *(_u64 *) (sector_buf.get() + 4 * sizeof(_u64)) = nnodes_per_sector;
     *(_u64 *) (sector_buf.get() + 5 * sizeof(_u64)) = vamana_frozen_num;
-    *(_u64 *) (sector_buf.get() + 6 * sizeof(_u64)) = vamana_frozen_loc;    
-    
+    *(_u64 *) (sector_buf.get() + 6 * sizeof(_u64)) = vamana_frozen_loc;
+
     diskann_writer.write(sector_buf.get(), SECTOR_LEN);
 
     std::unique_ptr<T[]> cur_node_coords = std::make_unique<T[]>(ndims_64);
@@ -793,7 +809,7 @@ namespace diskann {
         assert(nnbrs <= width_u32);
 
         // read node's nhood
-                vamana_reader.read((char *) nhood_buf,
+        vamana_reader.read((char *) nhood_buf,
                            (std::min)(nnbrs, width_u32) * sizeof(unsigned));
         if (nnbrs > width_u32) {
           vamana_reader.seekg((nnbrs - width_u32) * sizeof(unsigned),
