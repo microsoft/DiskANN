@@ -20,7 +20,7 @@
 
 #define MAX_GRAPH_DEGREE 512
 #define MAX_N_CMPS 16384
-#define SECTOR_LEN 4096
+#define SECTOR_LEN (_u64) 4096
 #define MAX_N_SECTOR_READS 128
 #define MAX_PQ_CHUNKS 256
 
@@ -86,6 +86,8 @@ namespace diskann {
 
     DISKANN_DLLEXPORT void load_cache_list(std::vector<uint32_t> &node_list);
 
+    DISKANN_DLLEXPORT _u64 return_nd();
+
 #ifdef EXEC_ENV_OLS
     DISKANN_DLLEXPORT void generate_cache_list_from_sample_queries(
         MemoryMappedFiles &files, std::string sample_bin, _u64 l_search,
@@ -144,6 +146,8 @@ namespace diskann {
             // (due to the pre-processing of base during index build)
     // data info
     _u64 num_points = 0;
+    _u64 num_frozen_points = 0;
+    _u64 frozen_location = 0;
     _u64 data_dim = 0;
     _u64 disk_data_dim = 0;  // will be different from data_dim only if we use
                              // PQ for disk data (very large dimensionality)
@@ -168,7 +172,7 @@ namespace diskann {
 
     // for very large datasets: we use PQ even for the disk resident index
     bool              use_disk_index_pq = false;
-    _u64              disk_pq_n_chunks;
+    _u64              disk_pq_n_chunks = 0;
     FixedChunkPQTable disk_pq_table;
 
     // medoid/start info

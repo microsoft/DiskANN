@@ -136,7 +136,7 @@ namespace diskann {
       __m256 b_vec = _mm256_load_ps(b + 8 * j);
       // a_vec - b_vec
       __m256 tmp_vec = _mm256_sub_ps(a_vec, b_vec);
-      
+
       sum = _mm256_fmadd_ps(tmp_vec, tmp_vec, sum);
     }
 
@@ -342,11 +342,11 @@ namespace diskann {
 
   template<typename T>
   float DistanceFastL2<T>::compare(const T *a, const T *b, float norm,
-                  unsigned size) const {
-      float result = -2 * DistanceInnerProduct<T>::inner_product(a, b, size);
-      result += norm;
-      return result;
-    }
+                                   unsigned size) const {
+    float result = -2 * DistanceInnerProduct<T>::inner_product(a, b, size);
+    result += norm;
+    return result;
+  }
 
   template<typename T>
   float DistanceFastL2<T>::norm(const T *a, unsigned size) const {

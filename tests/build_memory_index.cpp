@@ -35,7 +35,7 @@ int build_in_memory_index(const std::string&     data_path,
   diskann::get_bin_metadata(data_path, data_num, data_dim);
 
   diskann::Index<T, TagT> index(metric, data_dim, data_num, false, false,
-                                false);  
+                                false);
   auto                    s = std::chrono::high_resolution_clock::now();
   index.build(data_path.c_str(), data_num, paras);
 
@@ -67,7 +67,7 @@ int main(int argc, char** argv) {
     metric = diskann::Metric::L2;
   } else if (std::string(argv[ctr]) == std::string("cosine")) {
     metric = diskann::Metric::COSINE;
-  }else {
+  } else {
     std::cout << "Unsupported distance function. Currently only L2/ Inner "
                  "Product/Cosine are supported."
               << std::endl;

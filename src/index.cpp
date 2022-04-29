@@ -382,10 +382,9 @@ namespace diskann {
     }
     try {
       tag_bytes_written =
-         save_bin<TagT>(tags_file, tag_data, _nd + _num_frozen_pts, 1);
+          save_bin<TagT>(tags_file, tag_data, _nd + _num_frozen_pts, 1);
     } catch (std::system_error &e) {
-      throw FileException(tags_file, e, __FUNCSIG__, __FILE__,
-                          __LINE__);
+      throw FileException(tags_file, e, __FUNCSIG__, __FILE__, __LINE__);
     }
     delete[] tag_data;
     return tag_bytes_written;
@@ -995,7 +994,7 @@ namespace diskann {
         auto resize_size = 2 * total_num_points > MAX_POINTS_FOR_USING_BITSET
                                ? MAX_POINTS_FOR_USING_BITSET
                                : 2 * total_num_points;
-//        inserted_into_pool_bs.resize(2 * total_num_points);
+        //        inserted_into_pool_bs.resize(2 * total_num_points);
         inserted_into_pool_bs.resize(resize_size);
       }
     }
@@ -2014,7 +2013,6 @@ namespace diskann {
     _width = (std::max)((unsigned) max, _width);
     _has_built = true;
   }
-  
 
   template<typename T, typename TagT>
   template<typename IdType>
@@ -2168,7 +2166,6 @@ namespace diskann {
   // visible to external world, we generate them here and update our dataset
   template<typename T, typename TagT>
   int Index<T, TagT>::generate_frozen_point() {
-
     if (_num_frozen_pts == 0)
       return 0;
 
