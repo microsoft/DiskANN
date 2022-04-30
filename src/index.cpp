@@ -205,12 +205,10 @@ namespace diskann {
   template<typename T, typename TagT>
   Index<T, TagT>::Index(Metric m, const size_t dim, const size_t max_points,
                         const bool        dynamic_index,
-                        const bool        save_index_in_one_file,
                         const Parameters &indexParams,
                         const Parameters &searchParams, const bool enable_tags,
                         const bool support_eager_delete)
-      : Index(m, dim, max_points, dynamic_index, save_index_in_one_file,
-              enable_tags, support_eager_delete) {  // Thank you C++ 11!
+      : Index(m, dim, max_points, dynamic_index, enable_tags, support_eager_delete) {  // Thank you C++ 11!
     _indexingQueueSize = indexParams.Get<uint32_t>("L");
     _indexingRange = indexParams.Get<uint32_t>("R");
     _indexingMaxC = indexParams.Get<uint32_t>("C");
@@ -228,10 +226,8 @@ namespace diskann {
   template<typename T, typename TagT>
   Index<T, TagT>::Index(Metric m, const size_t dim, const size_t max_points,
                         const bool dynamic_index,
-                        const bool save_index_in_one_file,
                         const bool enable_tags, const bool support_eager_delete)
       : _dist_metric(m), _dim(dim), _max_points(max_points),
-        _save_as_one_file(save_index_in_one_file),
         _dynamic_index(dynamic_index), _enable_tags(enable_tags),
         _support_eager_delete(support_eager_delete) {
     if (dynamic_index && !enable_tags) {
@@ -362,7 +358,7 @@ namespace diskann {
   }
 
   template<typename T, typename TagT>
-  _u64 Index<T, TagT>::save_tags(std::string tags_file, size_t offset) {
+  _u64 Index<T, TagT>::save_tags(std::string tags_file) {
     if (!_enable_tags) {
       diskann::cout << "Not saving tags as they are not enabled." << std::endl;
       return 0;
@@ -391,20 +387,21 @@ namespace diskann {
   }
 
   template<typename T, typename TagT>
-  _u64 Index<T, TagT>::save_data(std::string data_file, size_t offset) {
+  _u64 Index<T, TagT>::save_data(std::string data_file) {
     return save_data_in_base_dimensions(data_file, _data, _nd + _num_frozen_pts,
-                                        _dim, _aligned_dim, offset);
+                                        _dim, _aligned_dim);
   }
 
   // save the graph index on a file as an adjacency list. For each point,
   // first store the number of neighbors, and then the neighbor list (each as
   // 4 byte unsigned)
   template<typename T, typename TagT>
-  _u64 Index<T, TagT>::save_graph(std::string graph_file, size_t offset) {
+  _u64 Index<T, TagT>::save_graph(std::string graph_file) {
     std::ofstream out;
     open_file_to_write(out, graph_file);
 
-    out.seekp(offset, out.beg);
+    _u64 file_offset = 0; // we will use this if we want 
+    out.seekp(file_offset, out.beg);
     _u64 index_size = 24;
     _u32 max_degree = 0;
     out.write((char *) &index_size, sizeof(uint64_t));
@@ -421,7 +418,7 @@ namespace diskann {
                        : max_degree;
       index_size += (_u64)(sizeof(unsigned) * (GK + 1));
     }
-    out.seekp(offset, out.beg);
+    out.seekp(file_offset, out.beg);
     out.write((char *) &index_size, sizeof(uint64_t));
     out.write((char *) &max_degree, sizeof(_u32));
     out.close();
@@ -429,8 +426,7 @@ namespace diskann {
   }
 
   template<typename T, typename TagT>
-  _u64 Index<T, TagT>::save_delete_list(const std::string &filename,
-                                        _u64               file_offset) {
+  _u64 Index<T, TagT>::save_delete_list(const std::string &filename) {
     if (_delete_set.size() == 0) {
       return 0;
     }
@@ -471,22 +467,7 @@ namespace diskann {
       delete_file(delete_list_file);
       save_delete_list(delete_list_file);
     } else {
-      delete_file(filename);
-      std::vector<size_t> cumul_bytes(5, 0);
-      cumul_bytes[0] = METADATA_SIZE;
-      cumul_bytes[1] =
-          cumul_bytes[0] + save_graph(std::string(filename), cumul_bytes[0]);
-      cumul_bytes[2] =
-          cumul_bytes[1] + save_data(std::string(filename), cumul_bytes[1]);
-      cumul_bytes[3] =
-          cumul_bytes[2] + save_tags(std::string(filename), cumul_bytes[2]);
-      cumul_bytes[4] =
-          cumul_bytes[3] + save_delete_list(filename, cumul_bytes[3]);
-      diskann::save_bin<_u64>(filename, cumul_bytes.data(), cumul_bytes.size(),
-                              1);
-
-      diskann::cout << "Saved index as one file to " << filename << " of size "
-                    << cumul_bytes[cumul_bytes.size() - 1] << "B." << std::endl;
+        diskann::cout<<"Save index in a single file currently not supported. Not saving the index." << std::endl;
     }
 
     reposition_frozen_point_to_end();
@@ -501,11 +482,10 @@ namespace diskann {
 
 #ifdef EXEC_ENV_OLS
   template<typename T, typename TagT>
-  size_t Index<T, TagT>::load_tags(AlignedFileReader &reader, size_t offset) {
+  size_t Index<T, TagT>::load_tags(AlignedFileReader &reader) {
 #else
   template<typename T, typename TagT>
-  size_t Index<T, TagT>::load_tags(const std::string tag_filename,
-                                   size_t            offset) {
+  size_t Index<T, TagT>::load_tags(const std::string tag_filename) {
     if (_enable_tags && !file_exists(tag_filename)) {
       diskann::cerr << "Tag file provided does not exist!" << std::endl;
       throw diskann::ANNException("Tag file provided does not exist!", -1,
@@ -520,7 +500,7 @@ namespace diskann {
     size_t file_dim, file_num_points;
     TagT * tag_data;
 #ifdef EXEC_ENV_OLS
-    load_bin<TagT>(reader, tag_data, file_num_points, file_dim, offset);
+    load_bin<TagT>(reader, tag_data, file_num_points, file_dim);
 #else
     load_bin<TagT>(std::string(tag_filename), tag_data, file_num_points,
                    file_dim);
@@ -552,13 +532,13 @@ namespace diskann {
 
   template<typename T, typename TagT>
 #ifdef EXEC_ENV_OLS
-  size_t Index<T, TagT>::load_data(AlignedFileReader &reader, size_t offset) {
+  size_t Index<T, TagT>::load_data(AlignedFileReader &reader) {
 #else
-  size_t Index<T, TagT>::load_data(std::string filename, size_t offset) {
+  size_t Index<T, TagT>::load_data(std::string filename) {
 #endif
     size_t file_dim, file_num_points;
 #ifdef EXEC_ENV_OLS
-    diskann::get_bin_metadata(reader, file_num_points, file_dim, offset);
+    diskann::get_bin_metadata(reader, file_num_points, file_dim);
 #else
     if (!file_exists(filename)) {
       std::stringstream stream;
@@ -595,29 +575,26 @@ namespace diskann {
 
 #ifdef EXEC_ENV_OLS
     copy_aligned_data_from_file<T>(reader, _data, file_num_points, file_dim,
-                                   _aligned_dim, offset);
+                                   _aligned_dim);
 #else
     copy_aligned_data_from_file<T>(std::string(filename), _data,
-                                   file_num_points, file_dim, _aligned_dim,
-                                   offset);
+                                   file_num_points, file_dim, _aligned_dim);
 #endif
     return file_num_points;
   }
 
 #ifdef EXEC_ENV_OLS
   template<typename T, typename TagT>
-  size_t Index<T, TagT>::load_delete_set(AlignedFileReader &reader,
-                                         size_t             offset) {
+  size_t Index<T, TagT>::load_delete_set(AlignedFileReader &reader) {
 #else
   template<typename T, typename TagT>
-  size_t Index<T, TagT>::load_delete_set(const std::string &filename,
-                                         size_t             offset) {
+  size_t Index<T, TagT>::load_delete_set(const std::string &filename) {
 #endif
     std::unique_ptr<_u32[]> delete_list;
     _u64                    npts, ndim;
 
 #ifdef EXEC_ENV_OLS
-    diskann::load_bin<_u32>(reader, delete_list, npts, ndim, offset);
+    diskann::load_bin<_u32>(reader, delete_list, npts, ndim);
 #else
     diskann::load_bin<_u32>(filename, delete_list, npts, ndim);
 #endif
@@ -660,43 +637,8 @@ namespace diskann {
 #endif
 
     } else {
-      _u64                    nr, nc;
-      std::unique_ptr<_u64[]> file_offset_data;
-
-#ifdef EXEC_ENV_OLS
-      diskann::load_bin(reader, file_offset_data, nr, nc, 0);
-#else
-      std::string index_file(filename);
-      diskann::load_bin<_u64>(index_file, file_offset_data, nr, nc);
-#endif
-
-#ifdef EXEC_ENV_OLS
-      data_file_num_pts = load_data(reader, file_offset_data[1]);
-#else
-      // Loading data first so that we know how many points to expect.
-      data_file_num_pts = load_data(index_file, file_offset_data[1]);
-#endif
-#ifdef EXEC_ENV_OLS
-      graph_num_pts =
-          load_graph(reader, data_file_num_pts, file_offset_data[0]);
-#else
-      graph_num_pts =
-          load_graph(index_file, data_file_num_pts, file_offset_data[0]);
-#endif
-      if (file_offset_data[3] != file_offset_data[4]) {
-#ifdef EXEC_ENV_OLS
-        load_delete_set(reader, file_offset_data[3]);
-#else
-        load_delete_set(index_file, file_offset_data[3]);
-#endif
-      }
-      if (_enable_tags) {
-#ifdef EXEC_ENV_OLS
-        tags_file_num_pts = load_tags(reader, file_offset_data[2]);
-#else
-        tags_file_num_pts = load_tags(index_file, file_offset_data[2]);
-#endif
-      }
+        diskann::cout<<"Single index file saving/loading support not yet enabled. Not loading the index." << std::endl;
+        return;
     }
 
     if (data_file_num_pts != graph_num_pts ||
@@ -744,12 +686,12 @@ namespace diskann {
 #ifdef EXEC_ENV_OLS
   template<typename T, typename TagT>
   size_t Index<T, TagT>::load_graph(AlignedFileReader &reader,
-                                    size_t expected_num_points, size_t offset) {
+                                    size_t expected_num_points) {
 #else
 
   template<typename T, typename TagT>
   size_t Index<T, TagT>::load_graph(std::string filename,
-                                    size_t expected_num_points, size_t offset) {
+                                    size_t expected_num_points) {
 #endif
     size_t expected_file_size;
     _u64   file_frozen_pts;
@@ -757,7 +699,7 @@ namespace diskann {
 #ifdef EXEC_ENV_OLS
     int header_size = 2 * sizeof(_u64) + 2 * sizeof(unsigned);
     std::unique_ptr<char[]> header = std::make_unique<char[]>(header_size);
-    read_array(reader, header.get(), header_size, offset);
+    read_array(reader, header.get(), header_size);
 
     expected_file_size = *((_u64 *) header.get());
     _width = *((_u32 *) (header.get() + sizeof(_u64)));
@@ -766,12 +708,15 @@ namespace diskann {
                                   sizeof(unsigned) + sizeof(unsigned)));
 #else
 
+    _u64 file_offset = 0; // will need this for single file format support
     std::ifstream in(filename, std::ios::binary);
-    in.seekg(offset, in.beg);
+    in.seekg(file_offset, in.beg);
     in.read((char *) &expected_file_size, sizeof(_u64));
     in.read((char *) &_width, sizeof(unsigned));
     in.read((char *) &_ep, sizeof(unsigned));
     in.read((char *) &file_frozen_pts, sizeof(_u64));
+    _u64 vamana_metadata_size = sizeof(_u64) + sizeof(_u32) + sizeof(_u32) + sizeof(_u64);
+
 #endif
     diskann::cout << "From graph header, expected_file_size: "
                   << expected_file_size << ", _width: " << _width
@@ -815,7 +760,7 @@ namespace diskann {
 #ifdef EXEC_ENV_OLS
     _u32 nodes_read = 0;
     _u64 cc = 0;
-    _u64 graph_offset = offset + header_size;
+    _u64 graph_offset = file_offset + header_size;
     while (nodes_read < expected_num_points) {
       _u32 k;
       read_value(reader, k, graph_offset);
@@ -836,7 +781,7 @@ namespace diskann {
     }
 #else
 
-    size_t   bytes_read = 24;
+    size_t   bytes_read = vamana_metadata_size;
     size_t   cc = 0;
     unsigned nodes_read = 0;
     while (bytes_read != expected_file_size) {
@@ -1244,62 +1189,6 @@ namespace diskann {
     }
   }
 
-  // template<typename T, typename TagT>
-  // void Index<T, TagT>::occlude_pq(std::vector<Neighbor> &pool,
-  //                                const unsigned location, const float alpha,
-  //                                const unsigned degree, const unsigned maxc,
-  //                                std::vector<Neighbor> &result) {
-  //  auto               pool_size = (_u32) pool.size();
-  //  std::vector<float> occlude_factor(pool_size, 0);
-  //  occlude_list(pool, location, alpha, degree, maxc, result, occlude_factor);
-  //}
-
-  // template<typename T, typename TagT>
-  // void Index<T, TagT>::occlude_pq(std::vector<Neighbor> &pool,
-  //                                const unsigned location, const float alpha,
-  //                                const unsigned degree, const unsigned maxc,
-  //                                std::vector<Neighbor> &result,
-  //                                std::vector<float> &   occlude_factor) {
-  //  if (pool.empty())
-  //    return;
-  //  assert(std::is_sorted(pool.begin(), pool.end()));
-  //  assert(!pool.empty());
-
-  //  float cur_alpha = 1;
-  //  while (cur_alpha <= alpha && result.size() < degree) {
-  //    unsigned start = 0;
-
-  //    while (result.size() < degree && (start) < pool.size() && start < maxc)
-  //    {
-  //      auto &p = pool[start];
-  //      if (occlude_factor[start] > cur_alpha) {
-  //        start++;
-  //        continue;
-  //      }
-  //      occlude_factor[start] = std::numeric_limits<float>::max();
-  //      result.push_back(p);
-  //      for (unsigned t = start + 1; t < pool.size() && t < maxc; t++) {
-  //        if (occlude_factor[t] > alpha)
-  //          continue;
-  //        unsigned p_id, q_id;
-  //        p_id = pool[t].id;
-  //        q_id = p.id;
-  //        if (p_id == _max_points)
-  //          p_id = _nd;
-  //        if (q_id == _max_points)
-  //          q_id = _nd;
-  //        float djk = _distance->compare(
-  //            _pq_data + _aligned_dim * (size_t) p_id,
-  //            _pq_data + _aligned_dim * (size_t) q_id, (unsigned)
-  //            _aligned_dim);
-  //        occlude_factor[t] =
-  //            (std::max)(occlude_factor[t], pool[t].distance / djk);
-  //      }
-  //      start++;
-  //    }
-  //    cur_alpha *= 1.2;
-  //  }
-  //}
 
   template<typename T, typename TagT>
   void Index<T, TagT>::prune_neighbors(const unsigned         location,
@@ -3101,51 +2990,6 @@ namespace diskann {
     }
   }
 
-  template<typename T, typename TagT>
-#ifdef EXEC_ENV_OLS
-  bool Index<T, TagT>::get_npts_and_dim_from_index(AlignedFileReader &reader,
-                                                   size_t &npts, size_t &dim) {
-#else
-  bool Index<T, TagT>::get_npts_and_dim_from_index(const char *file_name,
-                                                   size_t &npts, size_t &dim) {
-#endif
-    size_t rows, cols;
-
-#ifdef EXEC_ENV_OLS
-    diskann::get_bin_metadata(reader, rows, cols);
-#else
-    get_bin_metadata(file_name, rows, cols);
-#endif
-    if (rows == METADATA_ROWS) {
-      // Single file index.
-      auto metadata = std::make_unique<uint64_t[]>(METADATA_ROWS);
-// metadata[1] points to the data.
-#ifdef EXEC_ENV_OLS
-      load_bin(reader, metadata, rows, cols, 0);
-      get_bin_metadata(reader, npts, dim, metadata[1]);
-
-#else
-      load_bin(file_name, metadata, rows, cols);
-      get_bin_metadata(file_name, npts, dim);
-#endif
-      return true;
-    } else {
-#ifdef EXEC_ENV_OLS
-      return false;
-#else
-      std::string data_file(file_name);
-      if (data_file.find(".data") != std::string::npos) {
-        get_bin_metadata(file_name, npts, dim);
-        return true;
-      } else {
-        diskann::cerr << "For multi-file indices, the file passed to "
-                         "get_npts_and_dim should be the .data file."
-                      << std::endl;
-        return false;
-      }
-#endif
-    }
-  }
 
   template<typename T, typename TagT>
   void Index<T, TagT>::print_status() const {

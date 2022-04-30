@@ -97,8 +97,7 @@ int search_memory_index(int argc, char** argv) {
   std::cout.setf(std::ios_base::fixed, std::ios_base::floatfield);
   std::cout.precision(2);
 
-  diskann::Index<T, uint32_t> index(metric, query_dim, max_points, false,
-                                    false);
+  diskann::Index<T, uint32_t> index(metric, query_dim, max_points, false);
 
   index.load(memory_index_file.c_str(), num_threads, max_search_L);
   std::cout << "Index loaded" << std::endl;
