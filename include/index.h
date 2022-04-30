@@ -95,14 +95,12 @@ namespace diskann {
     // for loading a prexisting index.
     DISKANN_DLLEXPORT Index(Metric m, const size_t dim, const size_t max_points,
                             const bool dynamic_index,
-                            const bool save_index_in_one_file,
                             const bool enable_tags = false,
                             const bool support_eager_delete = false);
 
     // Constructor for incremental index
     DISKANN_DLLEXPORT Index(Metric m, const size_t dim, const size_t max_points,
                             const bool        dynamic_index,
-                            const bool        save_index_in_one_file,
                             const Parameters &indexParameters,
                             const Parameters &searchParameters,
                             const bool        enable_tags = false,
@@ -115,25 +113,21 @@ namespace diskann {
     // checks if data is consolidated, saves graph, metadata and associated
     // tags.
     DISKANN_DLLEXPORT void save(const char *filename);
-    DISKANN_DLLEXPORT _u64 save_graph(std::string filename, size_t offset = 0);
-    DISKANN_DLLEXPORT _u64 save_data(std::string filename, size_t offset = 0);
-    DISKANN_DLLEXPORT _u64 save_tags(std::string filename, size_t offset = 0);
-    DISKANN_DLLEXPORT _u64 save_delete_list(const std::string &filename,
-                                            size_t             offset = 0);
+    DISKANN_DLLEXPORT _u64 save_graph(std::string filename);
+    DISKANN_DLLEXPORT _u64 save_data(std::string filename);
+    DISKANN_DLLEXPORT _u64 save_tags(std::string filename);
+    DISKANN_DLLEXPORT _u64 save_delete_list(const std::string &filename);
 
     DISKANN_DLLEXPORT void load(const char *index_file, uint32_t num_threads,
                                 uint32_t search_l);
 
     DISKANN_DLLEXPORT size_t load_graph(const std::string filename,
-                                        size_t            expected_num_points,
-                                        size_t            offset = 0);
+                                        size_t            expected_num_points);
 
-    DISKANN_DLLEXPORT size_t load_data(std::string filename, size_t offset = 0);
+    DISKANN_DLLEXPORT size_t load_data(std::string filename0);
 
-    DISKANN_DLLEXPORT size_t load_tags(const std::string tag_file_name,
-                                       size_t            offset = 0);
-    DISKANN_DLLEXPORT size_t load_delete_set(const std::string &filename,
-                                             size_t             offset = 0);
+    DISKANN_DLLEXPORT size_t load_tags(const std::string tag_file_name);
+    DISKANN_DLLEXPORT size_t load_delete_set(const std::string &filename);
 
     DISKANN_DLLEXPORT size_t get_num_points();
 
@@ -238,9 +232,6 @@ namespace diskann {
     // This variable MUST be updated if the number of entries in the metadata
     // change.
     DISKANN_DLLEXPORT static const int METADATA_ROWS = 5;
-
-    DISKANN_DLLEXPORT static bool get_npts_and_dim_from_index(
-        const char *file_name, size_t &npts, size_t &dim);
 
     DISKANN_DLLEXPORT void optimize_graph();
 
@@ -358,7 +349,7 @@ namespace diskann {
     unsigned     _ep = 0;
     size_t       _max_range_of_loaded_graph = 0;
     bool         _saturate_graph = false;
-    bool         _save_as_one_file = false;
+    bool         _save_as_one_file = false; // plan to support in next version to avoid too many files per index
     bool         _dynamic_index = false;
     bool         _enable_tags = false;
     // Using normalied L2 for cosine.
