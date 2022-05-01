@@ -9,6 +9,7 @@
 #include <set>
 #include <string.h>
 #include <time.h>
+#include <boost/program_options.hpp>
 
 #include "aux_utils.h"
 #include "index.h"
@@ -33,6 +34,8 @@
 
 #define WARMUP false
 
+namespace po = boost::program_options;
+
 void print_stats(std::string category, std::vector<float> percentiles,
                  std::vector<float> results) {
   diskann::cout << std::setw(20) << category << ": " << std::flush;
@@ -48,76 +51,36 @@ void print_stats(std::string category, std::vector<float> percentiles,
 }
 
 template<typename T>
-int search_disk_index(int argc, char** argv) {
-  // load query bin
-  T*                query = nullptr;
-  unsigned*         gt_ids = nullptr;
-  float*            gt_dists = nullptr;
-  size_t            query_num, query_dim, query_aligned_dim, gt_num, gt_dim;
-  std::vector<_u64> Lvec;
-
-  _u32            ctr = 2;
-  diskann::Metric metric;
-
-  if (std::string(argv[ctr]) == std::string("mips"))
-    metric = diskann::Metric::INNER_PRODUCT;
-  else if (std::string(argv[ctr]) == std::string("l2"))
-    metric = diskann::Metric::L2;
-  else {
-    std::cout << "Unsupported distance function. Currently only L2/ Inner "
-                 "Product support."
-              << std::endl;
-    return -1;
-  }
-
-  if ((std::string(argv[1]) != std::string("float")) &&
-      (metric == diskann::Metric::INNER_PRODUCT)) {
-    std::cout << "Currently support only floating point data for Inner Product."
-              << std::endl;
-    return -1;
-  }
-
-  ctr++;
-
-  std::string index_prefix_path(argv[ctr++]);
-  std::string pq_prefix = index_prefix_path + "_pq";
-  std::string disk_index_file = index_prefix_path + "_disk.index";
-  std::string warmup_query_file = index_prefix_path + "_sample_data.bin";
-  _u64        num_nodes_to_cache = std::atoi(argv[ctr++]);
-  _u32        num_threads = std::atoi(argv[ctr++]);
-  _u32        beamwidth = std::atoi(argv[ctr++]);
-  std::string query_bin(argv[ctr++]);
-  std::string truthset_bin(argv[ctr++]);
-  _u64        recall_at = std::atoi(argv[ctr++]);
-  std::string result_output_prefix(argv[ctr++]);
-
-  bool calc_recall_flag = false;
-
-  for (; ctr < (_u32) argc; ctr++) {
-    _u64 curL = std::atoi(argv[ctr]);
-    if (curL >= recall_at)
-      Lvec.push_back(curL);
-  }
-
-  if (Lvec.size() == 0) {
-    diskann::cout
-        << "No valid Lsearch found. Lsearch must be at least recall_at"
-        << std::endl;
-    return -1;
-  }
-
+int search_disk_index(diskann::Metric&   metric,
+                      const std::string& index_path_prefix,
+                      const std::string& result_output_prefix,
+                      const std::string& query_file, std::string& gt_file,
+                      const unsigned num_threads, const unsigned recall_at,
+                      const unsigned               beamwidth,
+                      const unsigned               num_nodes_to_cache,
+                      const std::vector<unsigned>& Lvec) {
   diskann::cout << "Search parameters: #threads: " << num_threads << ", ";
   if (beamwidth <= 0)
     diskann::cout << "beamwidth to be optimized for each L value" << std::endl;
   else
     diskann::cout << " beamwidth: " << beamwidth << std::endl;
 
-  diskann::load_aligned_bin<T>(query_bin, query, query_num, query_dim,
+  std::string pq_prefix = index_path_prefix + "_pq";
+  std::string disk_index_file = index_path_prefix + "_disk.index";
+  std::string warmup_query_file = index_path_prefix + "_sample_data.bin";
+
+  // load query bin
+  T*        query = nullptr;
+  unsigned* gt_ids = nullptr;
+  float*    gt_dists = nullptr;
+  size_t    query_num, query_dim, query_aligned_dim, gt_num, gt_dim;
+  diskann::load_aligned_bin<T>(query_file, query, query_num, query_dim,
                                query_aligned_dim);
 
-  if (truthset_bin != std::string("null") &&
-      truthset_bin != std::string("NULL") && file_exists(truthset_bin)) {
-    diskann::load_truthset(truthset_bin, gt_ids, gt_dists, gt_num, gt_dim);
+  bool calc_recall_flag = false;
+  if (gt_file != std::string("null") && gt_file != std::string("NULL") &&
+      file_exists(gt_file)) {
+    diskann::load_truthset(gt_file, gt_ids, gt_dists, gt_num, gt_dim);
     if (gt_num != query_num) {
       diskann::cout
           << "Error. Mismatch in number of queries and ground truth data"
@@ -223,6 +186,12 @@ int search_disk_index(int argc, char** argv) {
   for (uint32_t test_id = 0; test_id < Lvec.size(); test_id++) {
     _u64 L = Lvec[test_id];
 
+    if (L < recall_at) {
+      diskann::cout << "Ignoring search with L:" << L
+                    << " since it's smaller than K:" << recall_at << std::endl;
+      continue;
+    }
+
     if (beamwidth <= 0) {
       diskann::cout << "Tuning beamwidth.." << std::endl;
       optimized_beamwidth =
@@ -290,6 +259,9 @@ int search_disk_index(int argc, char** argv) {
   diskann::cout << "Done searching. Now saving results " << std::endl;
   _u64 test_id = 0;
   for (auto L : Lvec) {
+    if (L < recall_at)
+      continue;
+
     std::string cur_result_path =
         result_output_prefix + "_" + std::to_string(L) + "_idx_uint32.bin";
     diskann::save_bin<_u32>(cur_result_path, query_result_ids[test_id].data(),
@@ -308,25 +280,97 @@ int search_disk_index(int argc, char** argv) {
 }
 
 int main(int argc, char** argv) {
-  if (argc < 12) {
-    std::cout << "Usage: " << argv[0]
-              << "   index_type<float/int8/uint8>   dist_fn<l2/mips>   "
-                 "index_prefix_path   num_nodes_to_cache   "
-                 "T(num_threads)   W(beamwidth)   "
-                 "query_file.bin   truthset.bin(\"null\" for none)   "
-                 "K   result_output_prefix   L1   L2 ..."
+  std::string data_type, dist_fn, index_path_prefix, result_path_prefix,
+      query_file, gt_file;
+  unsigned              num_threads, K, W, num_nodes_to_cache;
+  std::vector<unsigned> Lvec;
+
+  po::options_description desc{"Arguments"};
+  try {
+    desc.add_options()("help,h", "Print information on arguments");
+    desc.add_options()("data_type",
+                       po::value<std::string>(&data_type)->required(),
+                       "data type <int8/uint8/float>");
+    desc.add_options()("dist_fn", po::value<std::string>(&dist_fn)->required(),
+                       "distance function <l2/mips/fast_l2>");
+    desc.add_options()("index_path_prefix",
+                       po::value<std::string>(&index_path_prefix)->required(),
+                       "Path prefix to the index");
+    desc.add_options()("result_path",
+                       po::value<std::string>(&result_path_prefix)->required(),
+                       "Path prefix for saving results of the queries");
+    desc.add_options()("query_file",
+                       po::value<std::string>(&query_file)->required(),
+                       "Query file in binary format");
+    desc.add_options()(
+        "gt_file",
+        po::value<std::string>(&gt_file)->default_value(std::string("null")),
+        "ground truth file for the queryset");
+    desc.add_options()("recall_at,K", po::value<uint32_t>(&K)->required(),
+                       "Number of neighbors to be returned");
+    desc.add_options()("search_list,L",
+                       po::value<std::vector<unsigned>>(&Lvec)->multitoken(),
+                       "List of L values of search");
+    desc.add_options()("beamwidth,W", po::value<uint32_t>(&W)->default_value(2),
+                       "Beamwidth for search");
+    desc.add_options()(
+        "num_nodes_to_cache",
+        po::value<uint32_t>(&num_nodes_to_cache)->default_value(100000),
+        "Beamwidth for search");
+    desc.add_options()(
+        "num_threads,T",
+        po::value<uint32_t>(&num_threads)->default_value(omp_get_num_procs()),
+        "Number of threads used for building index (defaults to "
+        "omp_get_num_procs())");
+
+    po::variables_map vm;
+    po::store(po::parse_command_line(argc, argv, desc), vm);
+    if (vm.count("help")) {
+      std::cout << desc;
+      return 0;
+    }
+    po::notify(vm);
+  } catch (const std::exception& ex) {
+    std::cerr << ex.what() << '\n';
+    return -1;
+  }
+
+  diskann::Metric metric;
+  if (dist_fn == std::string("mips")) {
+    metric = diskann::Metric::INNER_PRODUCT;
+  } else if (dist_fn == std::string("l2")) {
+    metric = diskann::Metric::L2;
+  } else if (dist_fn == std::string("cosine")) {
+    metric = diskann::Metric::COSINE;
+  } else {
+    std::cout << "Unsupported distance function. Currently only L2/ Inner "
+                 "Product/Cosine are supported."
               << std::endl;
     return -1;
   }
+
+  if ((data_type != std::string("float")) &&
+      (metric == diskann::Metric::INNER_PRODUCT)) {
+    std::cout << "Currently support only floating point data for Inner Product."
+              << std::endl;
+    return -1;
+  }
+
   try {
-    if (std::string(argv[1]) == std::string("float"))
-      return search_disk_index<float>(argc, argv);
-    else if (std::string(argv[1]) == std::string("int8"))
-      return search_disk_index<int8_t>(argc, argv);
-    else if (std::string(argv[1]) == std::string("uint8"))
-      return search_disk_index<uint8_t>(argc, argv);
+    if (data_type == std::string("float"))
+      return search_disk_index<float>(
+          metric, index_path_prefix, result_path_prefix, query_file, gt_file,
+          num_threads, K, W, num_nodes_to_cache, Lvec);
+    else if (data_type == std::string("int8"))
+      return search_disk_index<int8_t>(
+          metric, index_path_prefix, result_path_prefix, query_file, gt_file,
+          num_threads, K, W, num_nodes_to_cache, Lvec);
+    else if (data_type == std::string("uint8"))
+      return search_disk_index<uint8_t>(
+          metric, index_path_prefix, result_path_prefix, query_file, gt_file,
+          num_threads, K, W, num_nodes_to_cache, Lvec);
     else {
-      std::cerr << "Unsupported index type. Use float or int8 or uint8"
+      std::cerr << "Unsupported data type. Use float or int8 or uint8"
                 << std::endl;
       return -1;
     }
