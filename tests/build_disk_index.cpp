@@ -1,7 +1,8 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT license.
 
-#include "omp.h"
+#include <omp.h>
+#include <boost/program_options.hpp>
 
 #include "aux_utils.h"
 #include "index.h"
@@ -9,41 +10,107 @@
 #include "partition_and_pq.h"
 #include "utils.h"
 
-template<typename T>
-bool build_index(const char* dataFilePath, const char* indexFilePath,
-                 const char* indexBuildParameters, diskann::Metric metric) {
-  return diskann::build_disk_index<T>(dataFilePath, indexFilePath,
-                                      indexBuildParameters, metric);
-}
+namespace po = boost::program_options;
+
+// template<typename T>
+// bool build_index(const char* data_path, const char* inde_path_prefix,
+//                  const char* params, diskann::Metric metric) {
+//   return diskann::build_disk_index<T>(dataFilePath, indexFilePath, params,
+//                                       metric);
+// }
 
 int main(int argc, char** argv) {
-  if (argc != 11) {
-    std::cout << "Usage: " << argv[0]
-              << "   data_type<float/int8/uint8>   dist_fn<l2/mips>   "
-                 "data_file.bin   index_prefix_path  "
-                 "R(graph degree)   L(build complexity)   "
-                 "B(search memory allocation in GB)   "
-                 "M(build memory allocation in GB)   "
-                 "T(#threads)   PQ_disk_bytes"
+  // if (argc != 11) {
+  //   std::cout << "Usage: " << argv[0]
+  //             << "   data_type<float/int8/uint8>   dist_fn<l2/mips>   "
+  //                "data_file.bin   index_prefix_path  "
+  //                "R(graph degree)   L(build complexity)   "
+  //                "B(search memory allocation in GB)   "
+  //                "M(build memory allocation in GB)   "
+  //                "T(#threads)   PQ_disk_bytes"
+  //             << std::endl;
+  //   return -1;
+  // }
+
+  std::string data_type, dist_fn, data_path, index_path_prefix;
+  unsigned    num_threads, R, L, disk_PQ;
+  float       B, M;
+
+  po::options_description desc{"Arguments"};
+  try {
+    desc.add_options()("help,h", "Print information on arguments");
+    desc.add_options()("data_type",
+                       po::value<std::string>(&data_type)->required(),
+                       "data type <int8/uint8/float>");
+    desc.add_options()("dist_fn", po::value<std::string>(&dist_fn)->required(),
+                       "distance function <l2/mips>");
+    desc.add_options()("data_path",
+                       po::value<std::string>(&data_path)->required(),
+                       "Input data file in bin format");
+    desc.add_options()("index_path_prefix",
+                       po::value<std::string>(&index_path_prefix)->required(),
+                       "Path prefix for saving index file components");
+    desc.add_options()("max_degree,R",
+                       po::value<uint32_t>(&R)->default_value(64),
+                       "Maximum graph degree");
+    desc.add_options()(
+        "Lbuild,L", po::value<uint32_t>(&L)->default_value(100),
+        "Build complexity, higher value results in better graphs");
+    desc.add_options()("search_DRAM_budget,B", po::value<float>(&B)->required(),
+                       "DRAM budget in GB for searching the index to set the "
+                       "compressed level for data while search happens");
+    desc.add_options()("build_DRAM_budget,M", po::value<float>(&M)->required(),
+                       "DRAM budget in GB for building the index");
+    desc.add_options()(
+        "num_threads,T",
+        po::value<uint32_t>(&num_threads)->default_value(omp_get_num_procs()),
+        "Number of threads used for building index (defaults to "
+        "omp_get_num_procs())");
+    desc.add_options()("PQ_disk_bytes",
+                       po::value<uint32_t>(&disk_PQ)->default_value(0),
+                       "Number of bytes to which vectors should be compressed "
+                       "on SSD; 0 for no compression");
+
+    po::variables_map vm;
+    po::store(po::parse_command_line(argc, argv, desc), vm);
+    if (vm.count("help")) {
+      std::cout << desc;
+      return 0;
+    }
+    po::notify(vm);
+  } catch (const std::exception& ex) {
+    std::cerr << ex.what() << '\n';
+    return -1;
+  }
+
+  diskann::Metric metric;
+  if (dist_fn == std::string("l2"))
+    metric = diskann::Metric::L2;
+  else if (dist_fn == std::string("mips"))
+    metric = diskann::Metric::INNER_PRODUCT;
+  else {
+    std::cout << "Error. Only l2 and mips distance functions are supported"
               << std::endl;
     return -1;
   }
 
-  diskann::Metric metric = diskann::Metric::L2;
+  std::string params = std::string(std::to_string(R)) + " " +
+                       std::string(std::to_string(L)) + " " +
+                       std::string(std::to_string(B)) + " " +
+                       std::string(std::to_string(M)) + " " +
+                       std::string(std::to_string(num_threads)) + " " +
+                       std::string(std::to_string(disk_PQ));
 
-  if (std::string(argv[2]) == std::string("mips"))
-    metric = diskann::Metric::INNER_PRODUCT;
-
-  std::string params = std::string(argv[5]) + " " + std::string(argv[6]) + " " +
-                       std::string(argv[7]) + " " + std::string(argv[8]) + " " +
-                       std::string(argv[9]) + " " + std::string(argv[10]);
   try {
-    if (std::string(argv[1]) == std::string("float"))
-      return build_index<float>(argv[3], argv[4], params.c_str(), metric);
-    else if (std::string(argv[1]) == std::string("int8"))
-      return build_index<int8_t>(argv[3], argv[4], params.c_str(), metric);
-    else if (std::string(argv[1]) == std::string("uint8"))
-      return build_index<uint8_t>(argv[3], argv[4], params.c_str(), metric);
+    if (data_type == std::string("int8"))
+      return diskann::build_disk_index<int8_t>(
+          data_path.c_str(), index_path_prefix.c_str(), params.c_str(), metric);
+    else if (data_type == std::string("uint8"))
+      return diskann::build_disk_index<uint8_t>(
+          data_path.c_str(), index_path_prefix.c_str(), params.c_str(), metric);
+    else if (data_type == std::string("float"))
+      return diskann::build_disk_index<float>(
+          data_path.c_str(), index_path_prefix.c_str(), params.c_str(), metric);
     else {
       diskann::cerr << "Error. Unsupported data type" << std::endl;
       return -1;
