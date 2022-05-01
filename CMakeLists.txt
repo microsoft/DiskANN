@@ -29,6 +29,10 @@ else()
     message(FATAL_ERROR "No OpenMP support")
 endif()
 
+find_package(Boost REQUIRED COMPONENTS program_options)
+if(Boost_FOUND)
+	include_directories(${BOOST_INCLUDE_DIR})
+endif()
 
 function(checkEnvAndSetLocalVar env_var msg local_var)
 	if (NOT EXISTS "$ENV{${env_var}}" )
@@ -69,7 +73,6 @@ else()
         add_compile_options(-m64 -Wl,--no-as-needed) 
 	link_libraries(mkl_intel_ilp64 mkl_intel_thread mkl_core iomp5 pthread m dl)
 endif()
-include_directories(${BOOST_ROOT})
 
 add_definitions(-DMKL_ILP64)
 
