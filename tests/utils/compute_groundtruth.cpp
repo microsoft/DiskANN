@@ -14,6 +14,9 @@
 #include <limits>
 #include <cstring>
 #include <queue>
+#include <omp.h>
+#include <mkl.h>
+#include <boost/program_options.hpp>
 
 #ifdef _WINDOWS
 #include <malloc.h>
@@ -21,8 +24,6 @@
 #include <stdlib.h>
 #endif
 
-#include "mkl.h"
-#include "omp.h"
 #include "utils.h"
 
 // WORKS FOR UPTO 2 BILLION POINTS (as we use INT INSTEAD OF UNSIGNED)
@@ -30,13 +31,7 @@
 #define PARTSIZE 10000000
 #define ALIGNMENT 512
 
-void command_line_help() {
-  std::cerr << "./compute_groundtruth <int8/uint8/float>   <base bin file> "
-               "<query bin "
-               "file>  <K: # nearest neighbors to compute> "
-               "<output-truthset-file> <dist_function: l2/mips>"
-            << std::endl;
-}
+namespace po = boost::program_options;
 
 template<class T>
 T div_round_up(const T numerator, const T denominator) {
@@ -274,7 +269,6 @@ inline void save_bin(const std::string filename, T *data, size_t npts,
             << ", size = " << npts * ndims * sizeof(T) + 2 * sizeof(int) << "B"
             << std::endl;
 
-  //    data = new T[npts_u64 * ndims_u64];
   writer.write((char *) data, npts * ndims * sizeof(T));
   writer.close();
   std::cout << "Finished writing bin" << std::endl;
@@ -301,15 +295,9 @@ inline void save_groundtruth_as_one_file(const std::string filename,
 }
 
 template<typename T>
-int aux_main(char **argc) {
-  size_t      npoints, nqueries, dim;
-  std::string base_file(argc[2]);
-  std::string query_file(argc[3]);
-  size_t      k = atoi(argc[4]);
-  bool        use_mip = false;
-  std::string gt_file(argc[5]);
-  if (std::string(argc[6]) == std::string("mips"))
-    use_mip = true;
+int aux_main(const std::string &base_file, const std::string &query_file,
+             const std::string &gt_file, size_t k, bool use_mip) {
+  size_t npoints, nqueries, dim;
 
   float *base_data;
   float *query_data;
@@ -366,15 +354,72 @@ int aux_main(char **argc) {
 }
 
 int main(int argc, char **argv) {
-  if (argc != 7) {
-    command_line_help();
+  std::string data_type, dist_fn, base_file, query_file, gt_file;
+  uint64_t    K;
+
+  try {
+    po::options_description desc{"Arguments"};
+
+    desc.add_options()("help,h", "Print information on arguments");
+
+    desc.add_options()("data_type",
+                       po::value<std::string>(&data_type)->required(),
+                       "data type <int8/uint8/float>");
+    desc.add_options()("dist_fn", po::value<std::string>(&dist_fn)->required(),
+                       "distance function <l2/mips>");
+    desc.add_options()("base_file",
+                       po::value<std::string>(&base_file)->required(),
+                       "File containing the base vectors in binary format");
+    desc.add_options()("query_file",
+                       po::value<std::string>(&query_file)->required(),
+                       "File containing the query vectors in binary format");
+    desc.add_options()(
+        "gt_file", po::value<std::string>(&gt_file)->required(),
+        "File name for the writing ground truth in binary format");
+    desc.add_options()("K", po::value<uint64_t>(&K)->required(),
+                       "Number of ground truth nearest neighbors to compute");
+
+    po::variables_map vm;
+    po::store(po::parse_command_line(argc, argv, desc), vm);
+    if (vm.count("help")) {
+      std::cout << desc;
+      return 0;
+    }
+    po::notify(vm);
+  } catch (const std::exception &ex) {
+    std::cerr << ex.what() << '\n';
     return -1;
   }
 
-  if (std::string(argv[1]) == std::string("float"))
-    aux_main<float>(argv);
-  if (std::string(argv[1]) == std::string("int8"))
-    aux_main<int8_t>(argv);
-  if (std::string(argv[1]) == std::string("uint8"))
-    aux_main<uint8_t>(argv);
+  if (data_type != std::string("float") && data_type != std::string("int8") &&
+      data_type != std::string("uint8")) {
+    std::cout << "Unsupported type. float, int8 and uint8 types are supported."
+              << std::endl;
+    return -1;
+  }
+
+  bool use_mip;
+  if (dist_fn == std::string("l2")) {
+    use_mip = false;
+  } else if (dist_fn == std::string("mips")) {
+    use_mip = true;
+  } else {
+    std::cerr << "Unsupported distance function. Use l2 or mips." << std::endl;
+    return -1;
+  }
+
+try {
+  if (data_type == std::string("float"))
+    aux_main<float>(base_file, query_file, gt_file, K, use_mip);
+  if (data_type == std::string("int8"))
+    aux_main<int8_t>(base_file, query_file, gt_file, K, use_mip);
+  if (data_type == std::string("uint8"))
+    aux_main<uint8_t>(base_file, query_file, gt_file, K, use_mip);
 }
+catch (const std::exception& e) {
+    std::cout << std::string(e.what()) << std::endl;
+    diskann::cerr << "Index search failed." << std::endl;
+    return -1;
+  }
+}
+

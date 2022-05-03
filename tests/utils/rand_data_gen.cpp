@@ -5,7 +5,11 @@
 #include <cstdlib>
 #include <random>
 #include <cmath>
+#include <boost/program_options.hpp>
+
 #include "utils.h"
+
+namespace po = boost::program_options;
 
 int block_write_float(std::ofstream& writer, _u64 ndims, _u64 npts,
                       float norm) {
@@ -91,22 +95,46 @@ int block_write_uint8(std::ofstream& writer, _u64 ndims, _u64 npts,
 }
 
 int main(int argc, char** argv) {
-  if (argc != 6) {
-    std::cout << argv[0] << " <float/int8/uint8> ndims npts norm output.bin"
-              << std::endl;
-    exit(-1);
+
+  std::string data_type, output_file;
+  _u64        ndims, npts;
+  float       norm;
+
+  try {
+    po::options_description desc{"Arguments"};
+
+    desc.add_options()("help,h", "Print information on arguments");
+
+    desc.add_options()("data_type",
+                       po::value<std::string>(&data_type)->required(),
+                       "data type <int8/uint8/float>");
+    desc.add_options()("output_file",
+                       po::value<std::string>(&output_file)->required(),
+                       "File name for saving the random vectors");
+    desc.add_options()("ndims,D", po::value<uint64_t>(&ndims)->required(),
+                       "Dimensoinality of the vector");
+    desc.add_options()("npts,N", po::value<uint64_t>(&npts)->required(),
+                       "Number of vectors");
+    desc.add_options()("norm", po::value<float>(&norm)->required(),
+                       "Norm of the vectors");
+    po::variables_map vm;
+    po::store(po::parse_command_line(argc, argv, desc), vm);
+    if (vm.count("help")) {
+      std::cout << desc;
+      return 0;
+    }
+    po::notify(vm);
+  } catch (const std::exception& ex) {
+    std::cerr << ex.what() << '\n';
+    return -1;
   }
 
-  if (std::string(argv[1]) != std::string("float") &&
-      std::string(argv[1]) != std::string("int8") &&
-      std::string(argv[1]) != std::string("uint8")) {
+  if (data_type != std::string("float") && data_type != std::string("int8") &&
+      data_type != std::string("uint8")) {
     std::cout << "Unsupported type. float, int8 and uint8 types are supported."
               << std::endl;
+    return -1;
   }
-
-  _u64  ndims = atoi(argv[2]);
-  _u64  npts = atoi(argv[3]);
-  float norm = atof(argv[4]);
 
   if (norm <= 0.0) {
     std::cerr << "Error: Norm must be a positive number" << std::endl;
