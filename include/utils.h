@@ -79,16 +79,13 @@ inline bool file_exists(const std::string& name, bool dirCheck = false) {
   val = _stat64(name.c_str(), &buffer);
 #endif
 
-  diskann::cout << " Stat(" << name.c_str() << ") returned: " << val
-                << std::endl;
   if (val != 0) {
     switch (errno) {
       case EINVAL:
         diskann::cout << "Invalid argument passed to stat()" << std::endl;
         break;
       case ENOENT:
-        diskann::cout << "File " << name.c_str() << " does not exist"
-                      << std::endl;
+// file is not existing, not an issue, so we won't cout anything.
         break;
       default:
         diskann::cout << "Unexpected error in stat():" << errno << std::endl;
