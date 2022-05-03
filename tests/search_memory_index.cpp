@@ -162,7 +162,7 @@ int main(int argc, char** argv) {
                        po::value<std::string>(&data_type)->required(),
                        "data type <int8/uint8/float>");
     desc.add_options()("dist_fn", po::value<std::string>(&dist_fn)->required(),
-                       "distance function <l2/mips/fast_l2>");
+                       "distance function <l2/mips/fast_l2/cosine>");
     desc.add_options()("index_path_prefix",
                        po::value<std::string>(&index_path_prefix)->required(),
                        "Path prefix to the index");
@@ -206,6 +206,8 @@ int main(int argc, char** argv) {
     metric = diskann::Metric::L2;
   } else if (dist_fn == std::string("cosine")) {
     metric = diskann::Metric::COSINE;
+      } else if (dist_fn == std::string("fast_l2")) {
+    metric = diskann::Metric::FAST_L2;
   } else {
     std::cout << "Unsupported distance function. Currently only L2/ Inner "
                  "Product/Cosine are supported."
