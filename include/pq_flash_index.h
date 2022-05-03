@@ -43,9 +43,12 @@ namespace diskann {
     T *    aligned_query_T = nullptr;
     float *aligned_query_float = nullptr;
 
+    tsl::robin_set<_u64> *visited = nullptr;
+
     void reset() {
       coord_idx = 0;
       sector_idx = 0;
+      visited->clear();  // does not deallocate memory.
     }
   };
 
@@ -58,17 +61,6 @@ namespace diskann {
   template<typename T>
   class PQFlashIndex {
    public:
-    // Gopal. Adapting to the new Bing interface. Since the DiskPriorityIO is
-    // now a singleton, we have to take it in the DiskANNInterface and
-    // pass it around. Since I don't want to pollute this interface with Bing
-    // classes, this class takes an AlignedFileReader object that can be
-    // created the way we need. Linux will create a simple AlignedFileReader
-    // and pass it. Regular Windows code should create a BingFileReader using
-    // the DiskPriorityIOInterface class, and for running on XTS, create a
-    // BingFileReader
-    // using the object passed by the XTS environment.
-    // Freeing the reader object is now the client's (DiskANNInterface's)
-    // responsibility.
     DISKANN_DLLEXPORT PQFlashIndex(
         std::shared_ptr<AlignedFileReader> &fileReader,
         diskann::Metric                     metric = diskann::Metric::L2);
@@ -76,12 +68,10 @@ namespace diskann {
 
 #ifdef EXEC_ENV_OLS
     DISKANN_DLLEXPORT int load(diskann::MemoryMappedFiles &files,
-                               uint32_t num_threads, const char *pq_prefix,
-                               const char *disk_index_file);
+                               uint32_t num_threads, const char *index_prefix);
 #else
     // load compressed data, and obtains the handle to the disk-resident index
-    DISKANN_DLLEXPORT int  load(uint32_t num_threads, const char *pq_prefix,
-                                const char *disk_index_file);
+    DISKANN_DLLEXPORT int  load(uint32_t num_threads, const char *index_prefix);
 #endif
 
     DISKANN_DLLEXPORT void load_cache_list(std::vector<uint32_t> &node_list);
@@ -167,8 +157,8 @@ namespace diskann {
     FixedChunkPQTable pq_table;
 
     // distance comparator
-    Distance<T> *    dist_cmp = nullptr;
-    Distance<float> *dist_cmp_float = nullptr;
+    std::shared_ptr<Distance<T>>     dist_cmp;
+    std::shared_ptr<Distance<float>> dist_cmp_float;
 
     // for very large datasets: we use PQ even for the disk resident index
     bool              use_disk_index_pq = false;

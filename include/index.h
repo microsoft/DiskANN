@@ -143,7 +143,7 @@ namespace diskann {
                                  Parameters & parameters,
                                  const char * tag_filename);
 
-    // Gopal. Added search overload that takes L as parameter, so that we
+    // Added search overload that takes L as parameter, so that we
     // can customize L on a per-query basis without tampering with "Parameters"
     template<typename IDType>
     DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> search(
@@ -233,9 +233,11 @@ namespace diskann {
     // change.
     DISKANN_DLLEXPORT static const int METADATA_ROWS = 5;
 
-    DISKANN_DLLEXPORT void optimize_graph();
+    // For Bulk Index FastL2 search, we interleave the data with graph 
+    DISKANN_DLLEXPORT void optimize_index_layout();
 
-    DISKANN_DLLEXPORT void search_with_opt_graph(const T *query, size_t K,
+    // For FastL2 search on optimized layout
+    DISKANN_DLLEXPORT void search_with_optimized_layout(const T *query, size_t K,
                                                  size_t L, unsigned *indices);
 
     /*  Internals of the library */
@@ -372,8 +374,7 @@ namespace diskann {
 
     bool _support_eager_delete =
         false;  //_support_eager_delete = activates extra data
-    // bool _can_delete = false;  // only true if deletes can be done (if
-    // enabled)
+
     bool _eager_done = false;     // true if eager deletions have been made
     bool _lazy_done = false;      // true if lazy deletions have been made
     bool _data_compacted = true;  // true if data has been consolidated

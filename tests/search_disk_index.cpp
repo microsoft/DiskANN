@@ -66,8 +66,6 @@ int search_disk_index(diskann::Metric&   metric,
   else
     diskann::cout << " beamwidth: " << beamwidth << std::endl;
 
-  std::string pq_prefix = index_path_prefix + "_pq";
-  std::string disk_index_file = index_path_prefix + "_disk.index";
   std::string warmup_query_file = index_path_prefix + "_sample_data.bin";
 
   // load query bin
@@ -104,8 +102,7 @@ int search_disk_index(diskann::Metric&   metric,
   std::unique_ptr<diskann::PQFlashIndex<T>> _pFlashIndex(
       new diskann::PQFlashIndex<T>(reader, metric));
 
-  int res = _pFlashIndex->load(num_threads, pq_prefix.c_str(),
-                               disk_index_file.c_str());
+  int res = _pFlashIndex->load(num_threads, index_path_prefix.c_str());
 
   if (res != 0) {
     return res;
