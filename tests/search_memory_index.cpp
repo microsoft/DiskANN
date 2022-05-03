@@ -155,7 +155,7 @@ int main(int argc, char** argv) {
                        "data type <int8/uint8/float>");
     desc.add_options()("dist_fn", po::value<std::string>(&dist_fn)->required(),
                        "distance function <l2/mips/fast_l2>");
-    desc.add_options()("index_path_prefx",
+    desc.add_options()("index_path_prefix",
                        po::value<std::string>(&index_path_prefix)->required(),
                        "Path prefix to the index");
     desc.add_options()("result_path",
