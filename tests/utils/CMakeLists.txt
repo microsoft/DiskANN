@@ -15,6 +15,8 @@ if(MSVC)
 	target_link_options(rand_data_gen PRIVATE /MACHINE:x64)
 	target_link_libraries(rand_data_gen debug ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG}/diskann_dll.lib)
 	target_link_libraries(rand_data_gen optimized ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE}/diskann_dll.lib)
+else() 
+	target_link_libraries(rand_data_gen ${PROJECT_NAME} Boost::program_options)
 endif()
 
 add_executable(float_bin_to_int8 float_bin_to_int8.cpp)
@@ -126,7 +128,7 @@ if(MSVC)
 	target_link_libraries(compute_groundtruth debug ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG}/diskann_dll.lib)
 	target_link_libraries(compute_groundtruth optimized ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE}/diskann_dll.lib)
 else() 
-	target_link_libraries(compute_groundtruth ${PROJECT_NAME} aio)
+	target_link_libraries(compute_groundtruth ${PROJECT_NAME} aio Boost::program_options)
 endif()
 
 
