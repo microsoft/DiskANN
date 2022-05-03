@@ -21,7 +21,7 @@ MemoryMapper::MemoryMapper(const char* filename) {
   }
   struct stat sb;
   if (fstat(_fd, &sb) != 0) {
-    std::cerr << "Inner vertices file not dound. " << std::endl;
+    std::cerr << "Inner vertices file not found. " << std::endl;
     return;
   }
   _fileSize = sb.st_size;
@@ -61,7 +61,7 @@ MemoryMapper::MemoryMapper(const char* filename) {
     _fileSize = fSize.QuadPart;  // take the 64-bit value
     diskann::cout << "File Size: " << _fileSize << std::endl;
   } else {
-    std::cerr << "Failed to get size of file " << filename << std::endl;
+    std::cerr << "Failed to get the size of file " << filename << std::endl;
   }
 #endif
 }
