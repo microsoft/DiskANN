@@ -277,15 +277,11 @@ namespace diskann {
       _in_graph.resize(_max_points + _num_frozen_pts);
     }
 
-    diskann::cout << "Getting distance function for metric: "
-                  << (m == diskann::Metric::COSINE ? "cosine" : "l2")
-                  << std::endl;
-
     if (m == diskann::Metric::COSINE && std::is_floating_point<T>::value) {
       // This is safe because T is float inside the if block.
-      //      this->_distance = (Distance<T> *) new
-      //      AVXNormalizedCosineDistanceFloat(); this->_normalize_vecs = true;
-      std::cout << "Need to add functionality for COSINE metric" << std::endl;
+            this->_distance = (Distance<T> *) new AVXNormalizedCosineDistanceFloat(); 
+            this->_normalize_vecs = true;
+      // std::cout << "Need to add functionality for COSINE metric" << std::endl;
     } else {
       this->_distance = get_distance_function<T>(m);
     }

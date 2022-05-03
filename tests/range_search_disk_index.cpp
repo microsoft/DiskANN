@@ -80,8 +80,6 @@ int search_disk_index(int argc, char** argv) {
   ctr++;
 
   std::string index_prefix_path(argv[ctr++]);
-  std::string pq_prefix = index_prefix_path + "_pq";
-  std::string disk_index_file = index_prefix_path + "_disk.index";
   std::string warmup_query_file = index_prefix_path + "_sample_data.bin";
   _u64        num_nodes_to_cache = std::atoi(argv[ctr++]);
   _u32        num_threads = std::atoi(argv[ctr++]);
@@ -140,8 +138,7 @@ int search_disk_index(int argc, char** argv) {
   std::unique_ptr<diskann::PQFlashIndex<T>> _pFlashIndex(
       new diskann::PQFlashIndex<T>(reader, metric));
 
-  int res = _pFlashIndex->load(num_threads, pq_prefix.c_str(),
-                               disk_index_file.c_str());
+  int res = _pFlashIndex->load(num_threads, index_prefix_path.c_str());
 
   if (res != 0) {
     return res;

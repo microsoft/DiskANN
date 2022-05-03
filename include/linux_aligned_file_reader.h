@@ -23,6 +23,8 @@ class LinuxAlignedFileReader : public AlignedFileReader {
 
   // de-register thread-id for a context
   void deregister_thread();
+  void deregister_all_threads();
+
 
   // Open & close ops
   // Blocking calls
