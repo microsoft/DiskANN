@@ -12,25 +12,7 @@
 
 namespace po = boost::program_options;
 
-// template<typename T>
-// bool build_index(const char* data_path, const char* inde_path_prefix,
-//                  const char* params, diskann::Metric metric) {
-//   return diskann::build_disk_index<T>(dataFilePath, indexFilePath, params,
-//                                       metric);
-// }
-
 int main(int argc, char** argv) {
-  // if (argc != 11) {
-  //   std::cout << "Usage: " << argv[0]
-  //             << "   data_type<float/int8/uint8>   dist_fn<l2/mips>   "
-  //                "data_file.bin   index_prefix_path  "
-  //                "R(graph degree)   L(build complexity)   "
-  //                "B(search memory allocation in GB)   "
-  //                "M(build memory allocation in GB)   "
-  //                "T(#threads)   PQ_disk_bytes"
-  //             << std::endl;
-  //   return -1;
-  // }
 
   std::string data_type, dist_fn, data_path, index_path_prefix;
   unsigned    num_threads, R, L, disk_PQ;

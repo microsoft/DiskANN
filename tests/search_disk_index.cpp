@@ -312,7 +312,7 @@ int main(int argc, char** argv) {
                        po::value<std::vector<unsigned>>(&Lvec)->multitoken(),
                        "List of L values of search");
     desc.add_options()("beamwidth,W", po::value<uint32_t>(&W)->default_value(2),
-                       "Beamwidth for search");
+                       "Beamwidth for search. Set 0 to optimize internally.");
     desc.add_options()(
         "num_nodes_to_cache",
         po::value<uint32_t>(&num_nodes_to_cache)->default_value(100000),
