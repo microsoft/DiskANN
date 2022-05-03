@@ -90,6 +90,7 @@ class AlignedFileReader {
   virtual void register_thread() = 0;
   // de-register thread-id for a context
   virtual void deregister_thread() = 0;
+  virtual void deregister_all_threads() = 0;
 
   // Open & close ops
   // Blocking calls

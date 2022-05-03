@@ -17,29 +17,44 @@ namespace diskann {
                                             uint32_t length) const;
   };
 
-  class DistanceCosineFloat : public Distance<float> {
-   public:
-    DISKANN_DLLEXPORT virtual float compare(const float *a, const float *b,
-                                            uint32_t length) const;
-  };
-
-  class SlowDistanceCosineUInt8 : public Distance<uint8_t> {
-   public:
-    DISKANN_DLLEXPORT virtual float compare(const uint8_t *a, const uint8_t *b,
-                                            uint32_t length) const;
-  };
-
   class DistanceL2Int8 : public Distance<int8_t> {
    public:
     DISKANN_DLLEXPORT virtual float compare(const int8_t *a, const int8_t *b,
                                             uint32_t size) const;
   };
 
-  class DistanceL2UInt8 : public Distance<uint8_t> {
+  // AVX implementations. Borrowed from HNSW code.
+  class AVXDistanceL2Int8 : public Distance<int8_t> {
    public:
-    DISKANN_DLLEXPORT virtual float compare(const uint8_t *a, const uint8_t *b,
-                                            uint32_t size) const;
+    DISKANN_DLLEXPORT virtual float compare(const int8_t *a, const int8_t *b,
+                                            uint32_t length) const;
   };
+
+  // Slow implementations of the distance functions to get diskann to
+  // work in pre-AVX machines. Performance here is not a concern, so we are
+  // using the simplest possible implementation.
+  template<typename T>
+  class SlowDistanceL2Int : public Distance<T> {
+   public:
+    // Implementing here because this is a template function
+    DISKANN_DLLEXPORT virtual float compare(const T *a, const T *b,
+                                            uint32_t length) const {
+      uint32_t result = 0;
+      for (uint32_t i = 0; i < length; i++) {
+        result += ((int32_t)((int16_t) a[i] - (int16_t) b[i])) *
+                  ((int32_t)((int16_t) a[i] - (int16_t) b[i]));
+      }
+      return (float) result;
+    }
+  };
+
+
+  class DistanceCosineFloat : public Distance<float> {
+   public:
+    DISKANN_DLLEXPORT virtual float compare(const float *a, const float *b,
+                                            uint32_t length) const;
+  };
+
 
   class DistanceL2Float : public Distance<float> {
    public:
@@ -52,6 +67,33 @@ namespace diskann {
         __attribute__((hot));
 #endif
   };
+
+  class AVXDistanceL2Float : public Distance<float> {
+   public:
+    DISKANN_DLLEXPORT virtual float compare(const float *a, const float *b,
+                                            uint32_t length) const;
+  };
+
+  class SlowDistanceL2Float : public Distance<float> {
+   public:
+    DISKANN_DLLEXPORT virtual float compare(const float *a, const float *b,
+                                            uint32_t length) const;
+  };
+
+
+  class SlowDistanceCosineUInt8 : public Distance<uint8_t> {
+   public:
+    DISKANN_DLLEXPORT virtual float compare(const uint8_t *a, const uint8_t *b,
+                                            uint32_t length) const;
+  };
+
+
+  class DistanceL2UInt8 : public Distance<uint8_t> {
+   public:
+    DISKANN_DLLEXPORT virtual float compare(const uint8_t *a, const uint8_t *b,
+                                            uint32_t size) const;
+  };
+
 
   template<typename T>
   class DistanceInnerProduct : public Distance<T> {
@@ -77,42 +119,6 @@ namespace diskann {
     float compare(const T *a, const T *b, float norm, unsigned size) const;
   };
 
-  // Gopal. Slow implementations of the distance functions to get diskann to
-  // work in pre-AVX machines. Performance here is not a concern, so we are
-  // using the simplest possible implementation.
-  template<typename T>
-  class SlowDistanceL2Int : public Distance<T> {
-   public:
-    // Implementing here because this is a template function
-    DISKANN_DLLEXPORT virtual float compare(const T *a, const T *b,
-                                            uint32_t length) const {
-      uint32_t result = 0;
-      for (uint32_t i = 0; i < length; i++) {
-        result += ((int32_t)((int16_t) a[i] - (int16_t) b[i])) *
-                  ((int32_t)((int16_t) a[i] - (int16_t) b[i]));
-      }
-      return (float) result;
-    }
-  };
-
-  class SlowDistanceL2Float : public Distance<float> {
-   public:
-    DISKANN_DLLEXPORT virtual float compare(const float *a, const float *b,
-                                            uint32_t length) const;
-  };
-
-  // AVX implementations. Borrowed from HNSW code.
-  class AVXDistanceL2Int8 : public Distance<int8_t> {
-   public:
-    DISKANN_DLLEXPORT virtual float compare(const int8_t *a, const int8_t *b,
-                                            uint32_t length) const;
-  };
-
-  class AVXDistanceL2Float : public Distance<float> {
-   public:
-    DISKANN_DLLEXPORT virtual float compare(const float *a, const float *b,
-                                            uint32_t length) const;
-  };
 
   class AVXDistanceInnerProductFloat : public Distance<float> {
    public:

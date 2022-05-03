@@ -25,11 +25,7 @@
 #include "tsl/robin_set.h"
 
 #ifdef _WINDOWS
-#ifdef USE_BING_INFRA
-#include "bing_aligned_file_reader.h"
-#else
 #include "windows_aligned_file_reader.h"
-#endif
 #else
 #include "linux_aligned_file_reader.h"
 #endif
@@ -44,11 +40,6 @@
 // obtains region of sector containing node
 #define OFFSET_TO_NODE(sector_buf, node_id) \
   ((char *) sector_buf + (((_u64) node_id) % nnodes_per_sector) * max_node_len)
-
-// offset into sector where node_id's nhood starts
-#define NODE_SECTOR_OFFSET(sector_buf, node_id) \
-  ((char *) sector_buf +                        \
-   ((((_u64) node_id) % nnodes_per_sector) * max_node_len))
 
 // returns region of `node_buf` containing [NNBRS][NBR_ID(_u32)]
 #define OFFSET_TO_NODE_NHOOD(node_buf) \
@@ -87,101 +78,29 @@ namespace {
 }  // namespace
 
 namespace diskann {
-  template<>
-  PQFlashIndex<_u8>::PQFlashIndex(
-      std::shared_ptr<AlignedFileReader> &fileReader, diskann::Metric metric)
-      : reader(fileReader), metric(metric) {
-    diskann::cout
-        << "dist_cmp function for _u8 uses slow implementation."
-           " Please contact gopalsr@microsoft.com if you need an AVX/AVX2"
-           " implementation."
-        << std::endl;
-    // TODO: No AVX2/AVX implementation available for uint8.
-    this->dist_cmp = new DistanceL2UInt8();
-    if (Avx2SupportedCPU) {
-      diskann::cout << "Using AVX2 dist_cmp_float function." << std::endl;
-      this->dist_cmp_float = new DistanceL2Float();
-    } else if (AvxSupportedCPU) {
-      diskann::cout << "Using AVX dist_cmp_float function" << std::endl;
-      this->dist_cmp_float = new AVXDistanceL2Float();
-    } else {
-      diskann::cout << "No AVX/AVX2 support. Using Slow dist_cmp_float function"
-                    << std::endl;
-      this->dist_cmp_float = new SlowDistanceL2Float();
-    }
-    if (metric != diskann::Metric::L2) {
-      std::cout << "Only L2 supported for byte vectors for now. Other distance "
-                   "functions are future work. Falling back to L2 distance."
-                << std::endl;
-      this->metric = diskann::Metric::L2;
-    }
-  }
-
-  template<>
-  PQFlashIndex<_s8>::PQFlashIndex(
-      std::shared_ptr<AlignedFileReader> &fileReader, diskann::Metric metric)
-      : reader(fileReader), metric(metric) {
-    if (Avx2SupportedCPU) {
-      diskann::cout << "Using AVX2 function for dist_cmp and dist_cmp_float"
-                    << std::endl;
-      this->dist_cmp = new DistanceL2Int8();
-      this->dist_cmp_float = new DistanceL2Float();
-    } else if (AvxSupportedCPU) {
-      diskann::cout << "No AVX2 support. Switching to AVX routines for "
-                       "dist_cmp, dist_cmp_float."
-                    << std::endl;
-      this->dist_cmp = new AVXDistanceL2Int8();
-      this->dist_cmp_float = new AVXDistanceL2Float();
-    } else {
-      diskann::cout << "No AVX/AVX2 support. Switching to slow routines for "
-                       "dist_cmp, dist_cmp_float"
-                    << std::endl;
-      this->dist_cmp = new SlowDistanceL2Int<int8_t>();
-      this->dist_cmp_float = new SlowDistanceL2Float();
-    }
-    if (metric != diskann::Metric::L2) {
-      std::cout << "Only L2 supported for byte vectors for now. Other distance "
-                   "functions are future work. Falling back to L2 distance."
-                << std::endl;
-      this->metric = diskann::Metric::L2;
-    }
-  }
-
-  template<>
-  PQFlashIndex<float>::PQFlashIndex(
-      std::shared_ptr<AlignedFileReader> &fileReader, diskann::Metric metric)
-      : reader(fileReader), metric(metric) {
-    if (metric == diskann::Metric::L2) {
-      if (Avx2SupportedCPU) {
-        diskann::cout << "Using AVX2 functions for dist_cmp and dist_cmp_float"
+  template<typename T>
+  PQFlashIndex<T>::PQFlashIndex(
+      std::shared_ptr<AlignedFileReader> &fileReader, diskann::Metric m)
+      : reader(fileReader), metric(m) {
+    if (m == diskann::Metric::COSINE || m == diskann::Metric::INNER_PRODUCT) {
+      if (std::is_floating_point<T>::value) {
+        diskann::cout << "Cosine metric chosen for (normalized) float data."
+                         "Changing distance to L2 to boost accuracy."
                       << std::endl;
-        this->dist_cmp = new DistanceL2Float();
-        this->dist_cmp_float = new DistanceL2Float();
-      } else if (AvxSupportedCPU) {
-        diskann::cout << "No AVX2 support. Switching to AVX functions for "
-                         "dist_cmp and dist_cmp_float."
-                      << std::endl;
-        this->dist_cmp = new AVXDistanceL2Float();
-        this->dist_cmp_float = new AVXDistanceL2Float();
+        m = diskann::Metric::L2;
       } else {
-        diskann::cout
-            << "No AVX/AVX2 support. Switching to slow implementations "
-               "for dist_cmp and dist_cmp_float"
-            << std::endl;
-        this->dist_cmp = new AVXDistanceL2Float();
-        this->dist_cmp_float = new AVXDistanceL2Float();
+        diskann::cerr << "WARNING: Cannot normalize integral data types."
+                      << " This may result in erroneous results or poor recall."
+                      << " Consider using L2 distance with integral data types."
+                      << std::endl;
       }
-    } else if (metric == diskann::Metric::INNER_PRODUCT) {
-      std::cout << "Using inner product distance function" << std::endl;
-      //      this->dist_cmp = new DistanceInnerProduct<float>();
-      //      this->dist_cmp_float = new DistanceInnerProduct<float>();
-    } else {
-      std::cout << "Unsupported metric type. Reverting to float." << std::endl;
-      this->dist_cmp = new AVXDistanceL2Float();
-      this->dist_cmp_float = new AVXDistanceL2Float();
-      this->metric = diskann::Metric::L2;
     }
+
+    this->dist_cmp.reset(diskann::get_distance_function<T>(m));
+    this->dist_cmp_float.reset(diskann::get_distance_function<float>(m));
   }
+
+
 
   template<typename T>
   PQFlashIndex<T>::~PQFlashIndex() {
@@ -199,8 +118,6 @@ namespace diskann {
       diskann::aligned_free(coord_cache_buf);
     }
 
-    delete this->dist_cmp;
-    delete this->dist_cmp_float;
     if (load_flag) {
       this->destroy_thread_data();
       reader->close();
@@ -219,13 +136,11 @@ namespace diskann {
       {
         this->reader->register_thread();
         IOContext &ctx = this->reader->get_ctx();
-        // diskann::cout << "ctx: " << ctx << "\n";
+
         QueryScratch<T> scratch;
         _u64 coord_alloc_size = ROUND_UP(MAX_N_CMPS * this->aligned_dim, 256);
         diskann::alloc_aligned((void **) &scratch.coord_scratch,
                                coord_alloc_size, 256);
-        // scratch.coord_scratch = new T[MAX_N_CMPS * this->aligned_dim];
-        // //Gopal. Commenting out the reallocation!
         diskann::alloc_aligned((void **) &scratch.sector_scratch,
                                (_u64) MAX_N_SECTOR_READS * (_u64) SECTOR_LEN,
                                SECTOR_LEN);
@@ -241,6 +156,7 @@ namespace diskann {
         diskann::alloc_aligned((void **) &scratch.aligned_query_float,
                                this->aligned_dim * sizeof(float),
                                8 * sizeof(float));
+        scratch.visited = new tsl::robin_set<_u64>(4096);
 
         memset(scratch.coord_scratch, 0, MAX_N_CMPS * this->aligned_dim);
         memset(scratch.aligned_query_T, 0, this->aligned_dim * sizeof(T));
@@ -274,7 +190,11 @@ namespace diskann {
       diskann::aligned_free((void *) scratch.aligned_dist_scratch);
       diskann::aligned_free((void *) scratch.aligned_query_float);
       diskann::aligned_free((void *) scratch.aligned_query_T);
+
+      delete scratch.visited;
+
     }
+    this->reader->deregister_all_threads();
   }
 
   template<typename T>
@@ -321,7 +241,13 @@ namespace diskann {
       reader->read(read_reqs, ctx);
 
       _u64 node_idx = start_idx;
-      for (auto &nhood : nhoods) {
+      for (_u32 i = 0; i < read_reqs.size(); i++) {
+#ifdef _WINDOWS  // this block is to handle failed reads in production settings
+        if ((*ctx.m_pRequestsStatus)[i] != IOContext::READ_SUCCESS) {
+          continue;
+        }
+#endif
+        auto &nhood = nhoods[i];
         char *node_buf = OFFSET_TO_NODE(nhood.second, nhood.first);
         T *   node_coords = OFFSET_TO_NODE_COORDS(node_buf);
         T *   cached_coords = coord_cache_buf + node_idx * aligned_dim;
@@ -330,9 +256,9 @@ namespace diskann {
 
         // insert node nhood into nhood_cache
         unsigned *node_nhood = OFFSET_TO_NODE_NHOOD(node_buf);
+
         auto      nnbrs = *node_nhood;
         unsigned *nbrs = node_nhood + 1;
-        // diskann::cout << "CACHE: nnbrs = " << nnbrs << "\n";
         std::pair<_u32, unsigned *> cnhood;
         cnhood.first = nnbrs;
         cnhood.second = nhood_cache_buf + node_idx * (max_degree + 1);
@@ -344,6 +270,7 @@ namespace diskann {
     }
     // return thread data
     this->thread_data.push(this_thread_data);
+    this->thread_data.push_notify_all();
     diskann::cout << "..done." << std::endl;
   }
 
@@ -416,11 +343,21 @@ namespace diskann {
   template<typename T>
   void PQFlashIndex<T>::cache_bfs_levels(_u64 num_nodes_to_cache,
                                          std::vector<uint32_t> &node_list) {
-    // Gopal. random_shuffle() is deprecated.
     std::random_device rng;
     std::mt19937       urng(rng());
 
     node_list.clear();
+
+    // Do not cache more than 10% of the nodes in the index
+    _u64 tenp_nodes = (_u64)(std::round(this->num_points * 0.1));
+    if (num_nodes_to_cache > tenp_nodes) {
+      diskann::cout << "Reducing nodes to cache from: " << num_nodes_to_cache
+                    << " to: " << tenp_nodes
+                    << "(10 percent of total nodes:" << this->num_points << ")"
+                    << std::endl;
+      num_nodes_to_cache = tenp_nodes == 0 ? 1 : tenp_nodes;
+    }
+    diskann::cout << "Caching " << num_nodes_to_cache << "..." << std::endl;
 
     // borrow thread data
     ThreadData<T> this_thread_data = this->thread_data.pop();
@@ -459,7 +396,6 @@ namespace diskann {
         nodes_to_expand.push_back(id);
       }
 
-      // Gopal. random_shuffle() is deprecated.
       std::shuffle(nodes_to_expand.begin(), nodes_to_expand.end(), urng);
 
       diskann::cout << "Level: " << lvl << std::flush;
@@ -484,10 +420,19 @@ namespace diskann {
           read.offset = NODE_SECTOR_NO(nodes_to_expand[cur_pt]) * SECTOR_LEN;
           read_reqs.push_back(read);
         }
+
         // issue read requests
         reader->read(read_reqs, ctx);
+
         // process each nhood buf
-        for (auto &nhood : nhoods) {
+        for (_u32 i = 0; i < read_reqs.size(); i++) {
+#ifdef _WINDOWS  // this block is to handle read failures in production settings
+          if ((*ctx.m_pRequestsStatus)[i] != IOContext::READ_SUCCESS) {
+            continue;
+          }
+#endif
+          auto &nhood = nhoods[i];
+
           // insert node coord into coord_cache
           char *    node_buf = OFFSET_TO_NODE(nhood.second, nhood.first);
           unsigned *node_nhood = OFFSET_TO_NODE_NHOOD(node_buf);
@@ -517,7 +462,6 @@ namespace diskann {
     for (const unsigned &p : *cur_level)
       cur_level_node_list.push_back(p);
 
-    // Gopal. random_shuffle() is deprecated
     std::shuffle(cur_level_node_list.begin(), cur_level_node_list.end(), urng);
     size_t residual = num_nodes_to_cache - node_list.size();
 
@@ -531,6 +475,9 @@ namespace diskann {
 
     // return thread data
     this->thread_data.push(this_thread_data);
+    this->thread_data.push_notify_all();
+
+    diskann::cout << "done" << std::endl;
   }
 
   template<typename T>
@@ -576,6 +523,7 @@ namespace diskann {
         disk_pq_table.inflate_vector((_u8 *) medoid_coords,
                                      (centroid_data + cur_m * aligned_dim));
       }
+
       aligned_free(medoid_buf);
       delete[] medoid_coords;
     }
@@ -588,16 +536,16 @@ namespace diskann {
 #ifdef EXEC_ENV_OLS
   template<typename T>
   int PQFlashIndex<T>::load(MemoryMappedFiles &files, uint32_t num_threads,
-                            const char *pq_prefix,
-                            const char *disk_index_file) {
+                            const char *index_prefix) {
 #else
   template<typename T>
-  int PQFlashIndex<T>::load(uint32_t num_threads, const char *pq_prefix,
-                            const char *disk_index_file) {
+  int PQFlashIndex<T>::load(uint32_t num_threads, const char *index_prefix) {
 #endif
-    std::string pq_table_bin = std::string(pq_prefix) + "_pivots.bin";
+    std::string pq_table_bin = std::string(index_prefix) + "_pq_pivots.bin";
     std::string pq_compressed_vectors =
-        std::string(pq_prefix) + "_compressed.bin";
+        std::string(index_prefix) + "_pq_compressed.bin";
+    std::string disk_index_file =
+        std::string(index_prefix) + "_disk.index";
     std::string medoids_file = std::string(disk_index_file) + "_medoids.bin";
     std::string centroids_file =
         std::string(disk_index_file) + "_centroids.bin";
@@ -609,7 +557,7 @@ namespace diskann {
     get_bin_metadata(pq_table_bin, pq_file_num_centroids, pq_file_dim);
 #endif
 
-    this->disk_index_file = std::string(disk_index_file);
+    this->disk_index_file = disk_index_file;
 
     if (pq_file_num_centroids != 256) {
       diskann::cout << "Error. Number of PQ centroids is not 256. Exitting."
@@ -674,7 +622,7 @@ namespace diskann {
                // chunk_offsets file the correct value
 #endif
       disk_pq_n_chunks = disk_pq_table.get_num_chunks();
-      disk_bytes_per_point = disk_pq_n_chunks * sizeof(_u8);
+      disk_bytes_per_point = disk_pq_n_chunks * sizeof(_u8); // revising disk_bytes_per_point since DISK PQ is used.
       std::cout << "Disk index uses PQ data compressed down to "
                 << disk_pq_n_chunks << " bytes per point." << std::endl;
     }
@@ -811,8 +759,8 @@ namespace diskann {
           stream << "Error loading centroids data file. Expected bin format of "
                     "m times data_dim vector of float, where m is number of "
                     "medoids "
-                    "in medoids file."
-                 << std::endl;
+                    "in medoids file.";
+          diskann::cerr << stream.str() << std::endl;
           throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
                                       __LINE__);
         }
@@ -929,12 +877,10 @@ namespace diskann {
     };
     Timer                 query_timer, io_timer, cpu_timer;
     std::vector<Neighbor> retset(l_search + 1);
-    tsl::robin_set<_u64>  visited(4096);
+    tsl::robin_set<_u64> &visited = *(query_scratch->visited);
 
     std::vector<Neighbor> full_retset;
     full_retset.reserve(4096);
-    tsl::robin_map<_u64, T *> fp_coords;
-
     _u32                        best_medoid = 0;
     float                       best_dist = (std::numeric_limits<float>::max)();
     std::vector<SimpleNeighbor> medoid_dists;
@@ -949,7 +895,6 @@ namespace diskann {
     }
 
     compute_dists(&best_medoid, 1, dist_scratch);
-
     retset[0].id = best_medoid;
     retset[0].distance = dist_scratch[0];
     retset[0].flag = true;
@@ -966,28 +911,28 @@ namespace diskann {
 
     // cleared every iteration
     std::vector<unsigned>                    frontier;
+    frontier.reserve(2 * beam_width);
     std::vector<std::pair<unsigned, char *>> frontier_nhoods;
+    frontier_nhoods.reserve(2 * beam_width);
     std::vector<AlignedRead>                 frontier_read_reqs;
+    frontier_read_reqs.reserve(2 * beam_width);
     std::vector<std::pair<unsigned, std::pair<unsigned, unsigned *>>>
         cached_nhoods;
+    cached_nhoods.reserve(2 * beam_width);
 
     while (k < cur_list_size) {
       auto nk = cur_list_size;
-
       // clear iteration state
       frontier.clear();
       frontier_nhoods.clear();
       frontier_read_reqs.clear();
       cached_nhoods.clear();
       sector_scratch_idx = 0;
-
       // find new beam
-      // WAS: _u64 marker = k - 1;
       _u32 marker = k;
       _u32 num_seen = 0;
-
       while (marker < cur_list_size && frontier.size() < beam_width &&
-             num_seen < beam_width + 2) {
+             num_seen < beam_width) {
         if (retset[marker].flag) {
           num_seen++;
           auto iter = nhood_cache.find(retset[marker].id);
@@ -1037,7 +982,7 @@ namespace diskann {
         reader->read(frontier_read_reqs, ctx);  // synchronous IO linux
 #endif
         if (stats != nullptr) {
-          stats->io_us += io_timer.elapsed();
+          stats->io_us += (double) io_timer.elapsed();
         }
       }
 
@@ -1067,8 +1012,8 @@ namespace diskann {
         cpu_timer.reset();
         compute_dists(node_nbrs, nnbrs, dist_scratch);
         if (stats != nullptr) {
-          stats->n_cmps += nnbrs;
-          stats->cpu_us += cpu_timer.elapsed();
+          stats->n_cmps += (double) nnbrs;
+          stats->cpu_us += (double) cpu_timer.elapsed();
         }
 
         // process prefetched nhood
@@ -1080,8 +1025,6 @@ namespace diskann {
             visited.insert(id);
             cmps++;
             float dist = dist_scratch[m];
-            // diskann::cout << "cmp: " << id << ", dist: " << dist <<
-            // std::endl; std::cerr << "dist: " << dist << std::endl;
             if (dist >= retset[cur_list_size - 1].distance &&
                 (cur_list_size == l_search))
               continue;
@@ -1127,7 +1070,6 @@ namespace diskann {
         T *node_fp_coords_copy = data_buf + (data_buf_idx * aligned_dim);
         data_buf_idx++;
         memcpy(node_fp_coords_copy, node_fp_coords, disk_bytes_per_point);
-
         float cur_expanded_dist;
         if (!use_disk_index_pq) {
           cur_expanded_dist = dist_cmp->compare(query, node_fp_coords_copy,
@@ -1142,14 +1084,13 @@ namespace diskann {
         }
         full_retset.push_back(
             Neighbor(frontier_nhood.first, cur_expanded_dist, true));
-
         unsigned *node_nbrs = (node_buf + 1);
         // compute node_nbrs <-> query dist in PQ space
         cpu_timer.reset();
         compute_dists(node_nbrs, nnbrs, dist_scratch);
         if (stats != nullptr) {
-          stats->n_cmps += nnbrs;
-          stats->cpu_us += cpu_timer.elapsed();
+          stats->n_cmps += (double) nnbrs;
+          stats->cpu_us += (double) cpu_timer.elapsed();
         }
 
         cpu_timer.reset();
@@ -1162,9 +1103,6 @@ namespace diskann {
             visited.insert(id);
             cmps++;
             float dist = dist_scratch[m];
-            // diskann::cout << "cmp: " << id << ", dist: " << dist <<
-            // std::endl;
-            // diskann::cout << "dist: " << dist << std::endl;
             if (stats != nullptr) {
               stats->n_cmps++;
             }
@@ -1185,7 +1123,7 @@ namespace diskann {
         }
 
         if (stats != nullptr) {
-          stats->cpu_us += cpu_timer.elapsed();
+          stats->cpu_us += (double) cpu_timer.elapsed();
         }
       }
 
@@ -1206,12 +1144,7 @@ namespace diskann {
                 return left.distance < right.distance;
               });
 
-    /*
-        std::cout<<"return set: \n";
-        for (auto &x : full_retset)
-        std::cout<<x.id<<"\t" <<x.distance<<std::endl;
-        std::cout<<std::endl;
-    */
+
 
     // copy k_search values
     for (_u64 i = 0; i < k_search; i++) {

@@ -103,8 +103,7 @@ int search_disk_index(diskann::Metric&   metric,
   std::unique_ptr<diskann::PQFlashIndex<T>> _pFlashIndex(
       new diskann::PQFlashIndex<T>(reader, metric));
 
-  int res = _pFlashIndex->load(num_threads, pq_prefix.c_str(),
-                               disk_index_file.c_str());
+  int res = _pFlashIndex->load(num_threads, index_prefix_path.c_str());
 
   if (res != 0) {
     return res;
