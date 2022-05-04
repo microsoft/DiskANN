@@ -133,22 +133,57 @@ void exact_knn(const size_t dim, const size_t k,
                                                   // preallocated, Dist to
                                                   // corresponding closes_points
                size_t             npoints,
-               const float *const points,  // points in Col major
-               size_t nqueries, const float *const queries,
-               bool use_mip = false)  // queries in Col major
+               float * points_in,  // points in Col major
+               size_t nqueries,  float * queries_in,
+               _u32 metric = 0)  // queries in Col major, metric = 0 implies L2, =1 implies MIPS, =2 implies cosine
 {
   float *points_l2sq = new float[npoints];
   float *queries_l2sq = new float[nqueries];
+  compute_l2sq(points_l2sq, points_in, npoints, dim);
+  compute_l2sq(queries_l2sq, queries_in, nqueries, dim);
+
+  float* points = points_in;
+  float* queries = queries_in;
+
+  if (metric == 2) {
+    points = new float[npoints*dim];
+    queries = new float[nqueries*dim];
+#pragma omp parallel for schedule(static, 4096)
+    for (_u32 i =0; i < npoints; i++) {
+      float norm = std::sqrt(points_l2sq[i]);
+      if (norm==0) {
+        norm = std::numeric_limits<float>::epsilon();
+      }
+      for (_u32 j=0; j < dim; j++) {
+        points[i*dim + j] = points_in[i*dim+j]/ norm;
+      }
+    }
+
+#pragma omp parallel for schedule(static, 4096)
+    for (_u32 i =0; i < nqueries; i++) {
+      float norm = std::sqrt(queries_l2sq[i]);
+      if (norm==0) {
+        norm = std::numeric_limits<float>::epsilon();
+      }
+      for (_u32 j=0; j < dim; j++) {
+        queries[i*dim + j] = queries_in[i*dim +j]/ norm;
+      }
+    }
+    //recalculate norms after normalizing, they should all be one. 
   compute_l2sq(points_l2sq, points, npoints, dim);
   compute_l2sq(queries_l2sq, queries, nqueries, dim);
+  }
+
 
   std::cout << "Going to compute " << k << " NNs for " << nqueries
             << " queries over " << npoints << " points in " << dim
             << " dimensions using";
-  if (use_mip)
-    std::cout << " inner product ";
+  if (metric==1)
+    std::cout << " MIPS ";
+  else if(metric==2)
+    std::cout << " Cosine ";
   else
-    std::cout << " L2 ";
+    std::cout << " L2 ";  
   std::cout << "distance fn. " << std::endl;
 
   size_t q_batch_size = (1 << 9);
@@ -159,7 +194,7 @@ void exact_knn(const size_t dim, const size_t k,
     int64_t q_e =
         ((b + 1) * q_batch_size > nqueries) ? nqueries : (b + 1) * q_batch_size;
 
-    if (!use_mip) {
+    if (metric == 0 || metric == 2) {
       distsq_to_points(dim, dist_matrix, npoints, points, points_l2sq,
                        q_e - q_b, queries + (ptrdiff_t) q_b * (ptrdiff_t) dim,
                        queries_l2sq + q_b);
@@ -207,6 +242,11 @@ void exact_knn(const size_t dim, const size_t k,
 
   delete[] points_l2sq;
   delete[] queries_l2sq;
+
+  if (metric == 2) {
+    delete[] points;
+    delete[] queries;
+  }
 }
 
 template<typename T>
@@ -306,10 +346,13 @@ int aux_main(char **argc) {
   std::string base_file(argc[2]);
   std::string query_file(argc[3]);
   size_t      k = atoi(argc[4]);
-  bool        use_mip = false;
+  _u32        metric = 0;
   std::string gt_file(argc[5]);
   if (std::string(argc[6]) == std::string("mips"))
-    use_mip = true;
+    metric = 1;
+  if (std::string(argc[6]) == std::string("cosine"))
+    metric = 2;
+
 
   float *base_data;
   float *query_data;
@@ -329,7 +372,7 @@ int aux_main(char **argc) {
     float *dist_closest_points_part = new float[nqueries * k];
 
     exact_knn(dim, k, closest_points_part, dist_closest_points_part, npoints,
-              base_data, nqueries, query_data, use_mip);
+              base_data, nqueries, query_data, metric);
 
     for (_u64 i = 0; i < nqueries; i++) {
       for (_u64 j = 0; j < k; j++) {
@@ -350,7 +393,7 @@ int aux_main(char **argc) {
     std::sort(cur_res.begin(), cur_res.end(), custom_dist);
     for (_u64 j = 0; j < k; j++) {
       closest_points[i * k + j] = (int32_t) cur_res[j].first;
-      if (use_mip)
+      if (metric == 1)
         dist_closest_points[i * k + j] = -cur_res[j].second;
       else
         dist_closest_points[i * k + j] = cur_res[j].second;
