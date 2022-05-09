@@ -608,8 +608,9 @@ namespace diskann {
       _u64 shard_base_dim, shard_base_pts;
       get_bin_metadata(shard_base_file, shard_base_pts, shard_base_dim);
       std::unique_ptr<diskann::Index<T>> _pvamanaIndex =
-          std::unique_ptr<diskann::Index<T>>(new diskann::Index<T>(
-              compareMetric, shard_base_dim, shard_base_pts, false));  // TODO: Single?
+          std::unique_ptr<diskann::Index<T>>(
+              new diskann::Index<T>(compareMetric, shard_base_dim,
+                                    shard_base_pts, false));  // TODO: Single?
       _pvamanaIndex->build(shard_base_file.c_str(), shard_base_pts, paras);
       _pvamanaIndex->save(shard_index_file.c_str());
       std::remove(shard_base_file.c_str());
@@ -638,8 +639,6 @@ namespace diskann {
   }
 
   // General purpose support for DiskANN interface
-  //
-  //
 
   // optimizes the beamwidth to maximize QPS for a given L_search subject to
   // 99.9 latency not blowing up
@@ -664,7 +663,8 @@ namespace diskann {
         pFlashIndex->cached_beam_search(
             tuning_sample + (i * tuning_sample_aligned_dim), 1, L,
             tuning_sample_result_ids_64.data() + (i * 1),
-            tuning_sample_result_dists.data() + (i * 1), cur_bw, stats + i);
+            tuning_sample_result_dists.data() + (i * 1), cur_bw, 
+            false, stats + i);
       }
       auto e = std::chrono::high_resolution_clock::now();
       std::chrono::duration<double> diff = e - s;
@@ -697,7 +697,8 @@ namespace diskann {
   template<typename T>
   void create_disk_layout(const std::string base_file,
                           const std::string mem_index_file,
-                          const std::string output_file) {
+                          const std::string output_file,
+                          const std::string reorder_data_file) {
     unsigned npts, ndims;
 
     // amount to read or write in one shot
@@ -711,6 +712,37 @@ namespace diskann {
     npts_64 = npts;
     ndims_64 = ndims;
 
+    // Check if we need to append data for re-ordering
+    bool          append_reorder_data = false;
+    std::ifstream reorder_data_reader;
+
+    unsigned npts_reorder_file = 0, ndims_reorder_file = 0;
+    if (reorder_data_file != std::string("")) {
+      append_reorder_data = true;
+      size_t reorder_data_file_size = get_file_size(reorder_data_file);
+      reorder_data_reader.exceptions(std::ofstream::failbit |
+                                     std::ofstream::badbit);
+
+      try {
+        reorder_data_reader.open(reorder_data_file, std::ios::binary);
+        reorder_data_reader.read((char *) &npts_reorder_file, sizeof(unsigned));
+        reorder_data_reader.read((char *) &ndims_reorder_file,
+                                 sizeof(unsigned));
+        if (npts_reorder_file != npts)
+          throw ANNException(
+              "Mismatch in num_points between reorder data file and base file",
+              -1, __FUNCSIG__, __FILE__, __LINE__);
+        if (reorder_data_file_size != 8 + sizeof(float) *
+                                              (size_t) npts_reorder_file *
+                                              (size_t) ndims_reorder_file)
+          throw ANNException("Discrepancy in reorder data file size ", -1,
+                             __FUNCSIG__, __FILE__, __LINE__);
+      } catch (std::system_error &e) {
+        throw FileException(reorder_data_file, e, __FUNCSIG__, __FILE__,
+                            __LINE__);
+      }
+    }
+
     // create cached reader + writer
     size_t actual_file_size = get_file_size(mem_index_file);
     diskann::cout << "Vamana index file size=" << actual_file_size << std::endl;
@@ -722,16 +754,16 @@ namespace diskann {
     size_t   index_file_size;
 
     vamana_reader.read((char *) &index_file_size, sizeof(uint64_t));
-    /*    if (index_file_size != actual_file_size) {
-          std::stringstream stream;
-          stream << "Vamana Index file size does not match expected size per "
-                    "meta-data."
-                 << " file size from file: " << index_file_size
-                 << " actual file size: " << actual_file_size << std::endl;
+    if (index_file_size != actual_file_size) {
+      std::stringstream stream;
+      stream << "Vamana Index file size does not match expected size per "
+                "meta-data."
+             << " file size from file: " << index_file_size
+             << " actual file size: " << actual_file_size << std::endl;
 
-          throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
-                                      __LINE__);
-        } */
+      throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
+                                  __LINE__);
+    }
     _u64 vamana_frozen_num = false, vamana_frozen_loc = 0;
 
     vamana_reader.read((char *) &width_u32, sizeof(unsigned));
@@ -762,7 +794,18 @@ namespace diskann {
 
     // number of sectors (1 for meta data)
     _u64 n_sectors = ROUND_UP(npts_64, nnodes_per_sector) / nnodes_per_sector;
-    _u64 disk_index_file_size = (n_sectors + 1) * SECTOR_LEN;
+    _u64 n_reorder_sectors = 0;
+    _u64 n_data_nodes_per_sector = 0;
+
+    if (append_reorder_data) {
+      n_data_nodes_per_sector = 
+        SECTOR_LEN / (ndims_reorder_file * sizeof(float));
+      n_reorder_sectors =
+          ROUND_UP(npts_64, n_data_nodes_per_sector) / n_data_nodes_per_sector;
+    }
+    _u64 disk_index_file_size =
+        (n_sectors + n_reorder_sectors + 1) * SECTOR_LEN;
+
     // write first sector with metadata
     *(_u64 *) (sector_buf.get() + 0 * sizeof(_u64)) = disk_index_file_size;
     *(_u64 *) (sector_buf.get() + 1 * sizeof(_u64)) = npts_64;
@@ -771,6 +814,13 @@ namespace diskann {
     *(_u64 *) (sector_buf.get() + 4 * sizeof(_u64)) = nnodes_per_sector;
     *(_u64 *) (sector_buf.get() + 5 * sizeof(_u64)) = vamana_frozen_num;
     *(_u64 *) (sector_buf.get() + 6 * sizeof(_u64)) = vamana_frozen_loc;
+    *(_u64 *) (sector_buf.get() + 7 * sizeof(_u64)) = append_reorder_data;
+    if (append_reorder_data) {
+      *(_u64 *) (sector_buf.get() + 8 * sizeof(_u64)) = n_sectors + 1;
+      *(_u64 *) (sector_buf.get() + 9 * sizeof(_u64)) = ndims_reorder_file;
+      *(_u64 *) (sector_buf.get() + 10 * sizeof(_u64)) =
+          n_data_nodes_per_sector;
+    }
 
     diskann_writer.write(sector_buf.get(), SECTOR_LEN);
 
@@ -825,6 +875,35 @@ namespace diskann {
       // flush sector to disk
       diskann_writer.write(sector_buf.get(), SECTOR_LEN);
     }
+    if (append_reorder_data) {
+      diskann::cout << "Index written. Appending reorder data..." << std::endl;
+
+      auto                    vec_len = ndims_reorder_file * sizeof(float);
+      std::unique_ptr<char[]> vec_buf = std::make_unique<char[]>(vec_len);
+
+      for (_u64 sector = 0; sector < n_reorder_sectors; sector++) {
+        if (sector % 100000 == 0) {
+          diskann::cout << "Reorder data Sector #" << sector << "written"
+                        << std::endl;
+        }
+
+        memset(sector_buf.get(), 0, SECTOR_LEN);
+
+        for (_u64 sector_node_id = 0;
+             sector_node_id < n_data_nodes_per_sector &&
+             sector_node_id < npts_64;
+             sector_node_id++) {
+          memset(vec_buf.get(), 0, vec_len);
+          reorder_data_reader.read(vec_buf.get(), vec_len);
+
+          // copy node buf into sector_node_buf
+          memcpy(sector_buf.get() + (sector_node_id * vec_len), vec_buf.get(),
+                 vec_len);
+        }
+        // flush sector to disk
+        diskann_writer.write(sector_buf.get(), SECTOR_LEN);
+      }
+    }
     diskann::cout << "Output file written." << std::endl;
   }
 
@@ -836,17 +915,21 @@ namespace diskann {
     parser << std::string(indexBuildParameters);
     std::string              cur_param;
     std::vector<std::string> param_list;
-    while (parser >> cur_param)
+    while (parser >> cur_param) {
       param_list.push_back(cur_param);
-
-    if (param_list.size() != 5 && param_list.size() != 6) {
+    }
+    if (param_list.size() != 5 && param_list.size() != 6 &&
+        param_list.size() != 7) {
       diskann::cout
           << "Correct usage of parameters is R (max degree) "
-             "L (indexing list size, better if >= R) B (RAM limit of final "
-             "index in "
-             "GB) M (memory limit while indexing) T (number of threads for "
-             "indexing) B' (PQ bytes for disk index: optional parameter for "
+             "L (indexing list size, better if >= R)"
+             "B (RAM limit of final index in GB)"
+             "M (memory limit while indexing)"
+             "T (number of threads for indexing)"
+             "B' (PQ bytes for disk index: optional parameter for "
              "very large dimensional data)"
+             "reorder (set true to include full precision in data file"
+             ": optional paramter, use only when using disk PQ"
           << std::endl;
       return -1;
     }
@@ -863,14 +946,21 @@ namespace diskann {
     _u32 disk_pq_dims = 0;
     bool use_disk_pq = false;
 
-    // if there is a 6th parameter, it means we compress the disk index vectors
-    // also using PQ data (for very large dimensionality data). If the provided
-    // parameter is 0, it means we store full vectors.
-    if (param_list.size() == 6) {
+    // if there is a 6th parameter, it means we compress the disk index
+    // vectors also using PQ data (for very large dimensionality data). If the
+    // provided parameter is 0, it means we store full vectors.
+    if (param_list.size() == 6 || param_list.size() == 7) {
       disk_pq_dims = atoi(param_list[5].c_str());
       use_disk_pq = true;
       if (disk_pq_dims == 0)
         use_disk_pq = false;
+    }
+
+    bool reorder_data = false;
+    if (param_list.size() == 7) {
+      if (1 == atoi(param_list[6].c_str())) {
+        reorder_data = true;
+      }
     }
 
     std::string base_file(dataFilePath);
@@ -884,12 +974,11 @@ namespace diskann {
     std::string medoids_path = disk_index_path + "_medoids.bin";
     std::string centroids_path = disk_index_path + "_centroids.bin";
     std::string sample_base_prefix = index_prefix_path + "_sample";
+    // optional, used if disk index file must store pq data
     std::string disk_pq_pivots_path =
-        index_prefix_path +
-        "_disk.index_pq_pivots.bin";  // optional if disk index is also storing
-                                      // pq data
-    std::string disk_pq_compressed_vectors_path =  // optional if disk index is
-                                                   // also storing pq data
+        index_prefix_path + "_disk.index_pq_pivots.bin";
+    // optional, used if disk index must store pq data
+    std::string disk_pq_compressed_vectors_path =
         index_prefix_path + "_disk.index_pq_compressed.bin";
 
     // output a new base file which contains extra dimension with sqrt(1 -
@@ -1009,9 +1098,15 @@ namespace diskann {
     if (!use_disk_pq) {
       diskann::create_disk_layout<T>(data_file_to_use.c_str(), mem_index_path,
                                      disk_index_path);
-    } else
-      diskann::create_disk_layout<_u8>(disk_pq_compressed_vectors_path,
-                                       mem_index_path, disk_index_path);
+    } else {
+      if (!reorder_data)
+        diskann::create_disk_layout<_u8>(disk_pq_compressed_vectors_path,
+                                         mem_index_path, disk_index_path);
+      else
+        diskann::create_disk_layout<_u8>(disk_pq_compressed_vectors_path,
+                                         mem_index_path, disk_index_path,
+                                         data_file_to_use.c_str());
+    }
 
     double ten_percent_points = std::ceil(points_num * 0.1);
     double num_sample_points = ten_percent_points > MAX_SAMPLE_POINTS_FOR_WARMUP
@@ -1034,14 +1129,13 @@ namespace diskann {
 
   template DISKANN_DLLEXPORT void create_disk_layout<int8_t>(
       const std::string base_file, const std::string mem_index_file,
-      const std::string output_file);
-
+      const std::string output_file, const std::string reorder_data_file);
   template DISKANN_DLLEXPORT void create_disk_layout<uint8_t>(
       const std::string base_file, const std::string mem_index_file,
-      const std::string output_file);
+      const std::string output_file, const std::string reorder_data_file);
   template DISKANN_DLLEXPORT void create_disk_layout<float>(
       const std::string base_file, const std::string mem_index_file,
-      const std::string output_file);
+      const std::string output_file, const std::string reorder_data_file);
 
   template DISKANN_DLLEXPORT int8_t *load_warmup<int8_t>(
       const std::string &cache_warmup_file, uint64_t &warmup_num,
