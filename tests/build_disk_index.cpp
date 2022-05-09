@@ -13,10 +13,10 @@
 namespace po = boost::program_options;
 
 int main(int argc, char** argv) {
-
   std::string data_type, dist_fn, data_path, index_path_prefix;
   unsigned    num_threads, R, L, disk_PQ;
   float       B, M;
+  bool        append_reorder_data = false;
 
   po::options_description desc{"Arguments"};
   try {
@@ -52,6 +52,10 @@ int main(int argc, char** argv) {
                        po::value<uint32_t>(&disk_PQ)->default_value(0),
                        "Number of bytes to which vectors should be compressed "
                        "on SSD; 0 for no compression");
+    desc.add_options()("append_reorder_data",
+                       po::bool_switch()->default_value(false),
+                       "Include full precision data in the index. Use only in "
+                       "conjuction with compressed data on SSD.");
 
     po::variables_map vm;
     po::store(po::parse_command_line(argc, argv, desc), vm);
@@ -60,6 +64,8 @@ int main(int argc, char** argv) {
       return 0;
     }
     po::notify(vm);
+    if (vm["append_reorder_data"].as<bool>())
+      append_reorder_data = true;
   } catch (const std::exception& ex) {
     std::cerr << ex.what() << '\n';
     return -1;
@@ -76,12 +82,28 @@ int main(int argc, char** argv) {
     return -1;
   }
 
+  if (append_reorder_data) {
+    if (disk_PQ == 0) {
+      std::cout << "Error: It is not necessary to append data for reordering "
+                   "when vectors are not compressed on disk."
+                << std::endl;
+      return -1;
+    }
+    if (data_type != std::string("float")) {
+      std::cout << "Error: Appending data for reordering currently only "
+                   "supported for float data type."
+                << std::endl;
+      return -1;
+    }
+  }
+
   std::string params = std::string(std::to_string(R)) + " " +
                        std::string(std::to_string(L)) + " " +
                        std::string(std::to_string(B)) + " " +
                        std::string(std::to_string(M)) + " " +
                        std::string(std::to_string(num_threads)) + " " +
-                       std::string(std::to_string(disk_PQ));
+                       std::string(std::to_string(disk_PQ)) + " " +
+                       std::string(std::to_string(append_reorder_data));
 
   try {
     if (data_type == std::string("int8"))
