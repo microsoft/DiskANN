@@ -2067,7 +2067,6 @@ namespace diskann {
 
   template<typename T, typename TagT>
   int Index<T, TagT>::enable_delete() {
-    // assert(!_can_delete);
     assert(_enable_tags);
 
     if (!_enable_tags) {
@@ -2083,7 +2082,6 @@ namespace diskann {
 
     _lazy_done = false;
     _eager_done = false;
-    //_can_delete = true;
 
     if (_support_eager_delete) {
       _in_graph.resize(_max_points + _num_frozen_pts);
@@ -2303,15 +2301,12 @@ namespace diskann {
   template<typename T, typename TagT>
   size_t Index<T, TagT>::consolidate_deletes(const Parameters &parameters) {
     if (_eager_done) {
-      // RKNOTE: say something here....?
       diskann::cout
           << "In consolidate_deletes(), _eager_done is true. So exiting."
           << std::endl;
       return 0;
     }
 
-    diskann::cout << "Inside Index::consolidate_deletes()" << std::endl;
-    // assert(_can_delete);
     assert(_enable_tags);
     assert(_delete_set.size() <= _nd);
     assert(_empty_slots.size() + _nd == _max_points);
@@ -2839,10 +2834,6 @@ namespace diskann {
   template<typename T, typename TagT>
   int Index<T, TagT>::disable_delete(const Parameters &parameters,
                                      const bool        consolidate) {
-    // if (!_can_delete) {
-    //  diskann::cerr << "Delete not currently enabled" << std::endl;
-    //  return -1;
-    //}
     if (!_enable_tags) {
       diskann::cerr << "Point tag array not instantiated" << std::endl;
       throw diskann::ANNException("Point tag array not instantiated", -1,
@@ -2879,7 +2870,6 @@ namespace diskann {
       consolidate_deletes(parameters);
     }
 
-    //_can_delete = false;
     return 0;
   }
 
@@ -3012,7 +3002,7 @@ namespace diskann {
   }
 
   template<typename T, typename TagT>
-  void Index<T, TagT>::optimize_graph() {  // use after build or load
+  void Index<T, TagT>::optimize_index_layout() {  // use after build or load
     _data_len = (_aligned_dim + 1) * sizeof(float);
     _neighbor_len = (_width + 1) * sizeof(unsigned);
     _node_size = _data_len + _neighbor_len;
@@ -3037,7 +3027,7 @@ namespace diskann {
   }
 
   template<typename T, typename TagT>
-  void Index<T, TagT>::search_with_opt_graph(const T *query, size_t K, size_t L,
+  void Index<T, TagT>::search_with_optimized_layout(const T *query, size_t K, size_t L,
                                              unsigned *indices) {
     DistanceFastL2<T> *dist_fast = (DistanceFastL2<T> *) _distance;
 

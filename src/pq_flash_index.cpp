@@ -41,11 +41,6 @@
 #define OFFSET_TO_NODE(sector_buf, node_id) \
   ((char *) sector_buf + (((_u64) node_id) % nnodes_per_sector) * max_node_len)
 
-// offset into sector where node_id's nhood starts
-#define NODE_SECTOR_OFFSET(sector_buf, node_id) \
-  ((char *) sector_buf +                        \
-   ((((_u64) node_id) % nnodes_per_sector) * max_node_len))
-
 // returns region of `node_buf` containing [NNBRS][NBR_ID(_u32)]
 #define OFFSET_TO_NODE_NHOOD(node_buf) \
   (unsigned *) ((char *) node_buf + disk_bytes_per_point)
@@ -83,101 +78,6 @@ namespace {
 }  // namespace
 
 namespace diskann {
-/*  template<>
-  PQFlashIndex<_u8>::PQFlashIndex(
-      std::shared_ptr<AlignedFileReader> &fileReader, diskann::Metric metric)
-      : reader(fileReader), metric(metric) {
-    diskann::cout
-        << "dist_cmp function for _u8 uses slow implementation."
-           " Please contact gopalsr@microsoft.com if you need an AVX/AVX2"
-           " implementation."
-        << std::endl;
-    // TODO: No AVX2/AVX implementation available for uint8.
-    this->dist_cmp = new DistanceL2UInt8();
-    if (Avx2SupportedCPU) {
-      diskann::cout << "Using AVX2 dist_cmp_float function." << std::endl;
-      this->dist_cmp_float = new DistanceL2Float();
-    } else if (AvxSupportedCPU) {
-      diskann::cout << "Using AVX dist_cmp_float function" << std::endl;
-      this->dist_cmp_float = new AVXDistanceL2Float();
-    } else {
-      diskann::cout << "No AVX/AVX2 support. Using Slow dist_cmp_float function"
-                    << std::endl;
-      this->dist_cmp_float = new SlowDistanceL2Float();
-    }
-    if (metric != diskann::Metric::L2) {
-      std::cout << "Only L2 supported for byte vectors for now. Other distance "
-                   "functions are future work. Falling back to L2 distance."
-                << std::endl;
-      this->metric = diskann::Metric::L2;
-    }
-  }
-
-  template<>
-  PQFlashIndex<_s8>::PQFlashIndex(
-      std::shared_ptr<AlignedFileReader> &fileReader, diskann::Metric metric)
-      : reader(fileReader), metric(metric) {
-    if (Avx2SupportedCPU) {
-      diskann::cout << "Using AVX2 function for dist_cmp and dist_cmp_float"
-                    << std::endl;
-      this->dist_cmp = new DistanceL2Int8();
-      this->dist_cmp_float = new DistanceL2Float();
-    } else if (AvxSupportedCPU) {
-      diskann::cout << "No AVX2 support. Switching to AVX routines for "
-                       "dist_cmp, dist_cmp_float."
-                    << std::endl;
-      this->dist_cmp = new AVXDistanceL2Int8();
-      this->dist_cmp_float = new AVXDistanceL2Float();
-    } else {
-      diskann::cout << "No AVX/AVX2 support. Switching to slow routines for "
-                       "dist_cmp, dist_cmp_float"
-                    << std::endl;
-      this->dist_cmp = new SlowDistanceL2Int<int8_t>();
-      this->dist_cmp_float = new SlowDistanceL2Float();
-    }
-    if (metric != diskann::Metric::L2) {
-      std::cout << "Only L2 supported for byte vectors for now. Other distance "
-                   "functions are future work. Falling back to L2 distance."
-                << std::endl;
-      this->metric = diskann::Metric::L2;
-    }
-  }
-
-  template<>
-  PQFlashIndex<float>::PQFlashIndex(
-      std::shared_ptr<AlignedFileReader> &fileReader, diskann::Metric metric)
-      : reader(fileReader), metric(metric) {
-    if (metric == diskann::Metric::L2) {
-      if (Avx2SupportedCPU) {
-        diskann::cout << "Using AVX2 functions for dist_cmp and dist_cmp_float"
-                      << std::endl;
-        this->dist_cmp = new DistanceL2Float();
-        this->dist_cmp_float = new DistanceL2Float();
-      } else if (AvxSupportedCPU) {
-        diskann::cout << "No AVX2 support. Switching to AVX functions for "
-                         "dist_cmp and dist_cmp_float."
-                      << std::endl;
-        this->dist_cmp = new AVXDistanceL2Float();
-        this->dist_cmp_float = new AVXDistanceL2Float();
-      } else {
-        diskann::cout
-            << "No AVX/AVX2 support. Switching to slow implementations "
-               "for dist_cmp and dist_cmp_float"
-            << std::endl;
-        this->dist_cmp = new AVXDistanceL2Float();
-        this->dist_cmp_float = new AVXDistanceL2Float();
-      }
-    } else if (metric == diskann::Metric::INNER_PRODUCT) {
-      std::cout << "Using inner product distance function" << std::endl;
-      //      this->dist_cmp = new DistanceInnerProduct<float>();
-      //      this->dist_cmp_float = new DistanceInnerProduct<float>();
-    } else {
-      std::cout << "Unsupported metric type. Reverting to float." << std::endl;
-      this->dist_cmp = new AVXDistanceL2Float();
-      this->dist_cmp_float = new AVXDistanceL2Float();
-      this->metric = diskann::Metric::L2;
-    }
-  } */
   template<typename T>
   PQFlashIndex<T>::PQFlashIndex(
       std::shared_ptr<AlignedFileReader> &fileReader, diskann::Metric m)
@@ -359,7 +259,6 @@ namespace diskann {
 
         auto      nnbrs = *node_nhood;
         unsigned *nbrs = node_nhood + 1;
-        // diskann::cout << "CACHE: nnbrs = " << nnbrs << "\n";
         std::pair<_u32, unsigned *> cnhood;
         cnhood.first = nnbrs;
         cnhood.second = nhood_cache_buf + node_idx * (max_degree + 1);
@@ -444,7 +343,6 @@ namespace diskann {
   template<typename T>
   void PQFlashIndex<T>::cache_bfs_levels(_u64 num_nodes_to_cache,
                                          std::vector<uint32_t> &node_list) {
-    // random_shuffle() is deprecated.
     std::random_device rng;
     std::mt19937       urng(rng());
 
@@ -498,7 +396,6 @@ namespace diskann {
         nodes_to_expand.push_back(id);
       }
 
-      // Gopal. random_shuffle() is deprecated.
       std::shuffle(nodes_to_expand.begin(), nodes_to_expand.end(), urng);
 
       diskann::cout << "Level: " << lvl << std::flush;
@@ -565,7 +462,6 @@ namespace diskann {
     for (const unsigned &p : *cur_level)
       cur_level_node_list.push_back(p);
 
-    // Gopal. random_shuffle() is deprecated
     std::shuffle(cur_level_node_list.begin(), cur_level_node_list.end(), urng);
     size_t residual = num_nodes_to_cache - node_list.size();
 

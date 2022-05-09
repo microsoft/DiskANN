@@ -57,7 +57,7 @@ int search_memory_index(diskann::Metric& metric, const std::string& index_path,
              *(std::max_element(Lvec.begin(), Lvec.end())));
   std::cout << "Index loaded" << std::endl;
   if (metric == diskann::FAST_L2)
-    index.optimize_graph();
+    index.optimize_index_layout();
 
   diskann::Parameters paras;
   std::cout.setf(std::ios_base::fixed, std::ios_base::floatfield);
@@ -89,7 +89,7 @@ int search_memory_index(diskann::Metric& metric, const std::string& index_path,
     for (int64_t i = 0; i < (int64_t) query_num; i++) {
       auto qs = std::chrono::high_resolution_clock::now();
       if (metric == diskann::FAST_L2) {
-        index.search_with_opt_graph(
+        index.search_with_optimized_layout(
             query + i * query_aligned_dim, recall_at, L,
             query_result_ids[test_id].data() + i * recall_at);
       } else {

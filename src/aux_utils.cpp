@@ -66,8 +66,8 @@ namespace diskann {
       reader.read(dump, cur_block_size);
       writer.write(dump, cur_block_size);
     }
-    //    reader.close();
-    //    writer.close();
+//    reader.close();
+//    writer.close();
 
     delete[] dump;
     std::vector<_u64> new_meta;
@@ -613,7 +613,6 @@ namespace diskann {
       _pvamanaIndex->build(shard_base_file.c_str(), shard_base_pts, paras);
       _pvamanaIndex->save(shard_index_file.c_str());
       std::remove(shard_base_file.c_str());
-      //      wait_for_keystroke();
     }
 
     diskann::merge_shards(merged_index_prefix + "_subshard-", "_mem.index",
@@ -1014,7 +1013,11 @@ namespace diskann {
       diskann::create_disk_layout<_u8>(disk_pq_compressed_vectors_path,
                                        mem_index_path, disk_index_path);
 
-    double sample_sampling_rate = (150000.0 / points_num);
+    double ten_percent_points = std::ceil(points_num * 0.1);
+    double num_sample_points = ten_percent_points > MAX_SAMPLE_POINTS_FOR_WARMUP
+                                   ? MAX_SAMPLE_POINTS_FOR_WARMUP
+                                   : ten_percent_points;
+    double sample_sampling_rate = num_sample_points / points_num;
     gen_random_slice<T>(data_file_to_use.c_str(), sample_base_prefix,
                         sample_sampling_rate);
 
