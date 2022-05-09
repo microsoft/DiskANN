@@ -52,14 +52,12 @@ void print_stats(std::string category, std::vector<float> percentiles,
 }
 
 template<typename T>
-int search_disk_index(diskann::Metric&   metric,
-                      const std::string& index_path_prefix,
-                      const std::string& result_output_prefix,
-                      const std::string& query_file, std::string& gt_file,
-                      const unsigned num_threads, const unsigned recall_at,
-                      const unsigned               beamwidth,
-                      const unsigned               num_nodes_to_cache,
-                      const std::vector<unsigned>& Lvec) {
+int search_disk_index(
+    diskann::Metric& metric, const std::string& index_path_prefix,
+    const std::string& result_output_prefix, const std::string& query_file,
+    std::string& gt_file, const unsigned num_threads, const unsigned recall_at,
+    const unsigned beamwidth, const unsigned num_nodes_to_cache,
+    const std::vector<unsigned>& Lvec, const bool use_reorder_data = false) {
   diskann::cout << "Search parameters: #threads: " << num_threads << ", ";
   if (beamwidth <= 0)
     diskann::cout << "beamwidth to be optimized for each L value" << std::endl;
@@ -112,7 +110,8 @@ int search_disk_index(diskann::Metric&   metric,
   diskann::cout << "Caching " << num_nodes_to_cache
                 << " BFS nodes around medoid(s)" << std::endl;
   //_pFlashIndex->cache_bfs_levels(num_nodes_to_cache, node_list);
-  _pFlashIndex->generate_cache_list_from_sample_queries(
+  if (num_nodes_to_cache > 0)
+    _pFlashIndex->generate_cache_list_from_sample_queries(
       warmup_query_file, 15, 6, num_nodes_to_cache, num_threads, node_list);
   _pFlashIndex->load_cache_list(node_list);
   node_list.clear();
@@ -151,10 +150,10 @@ int search_disk_index(diskann::Metric&   metric,
 
 #pragma omp parallel for schedule(dynamic, 1)
     for (_s64 i = 0; i < (int64_t) warmup_num; i++) {
-      _pFlashIndex->cached_beam_search(warmup + (i * warmup_aligned_dim), 1,
-                                       warmup_L,
-                                       warmup_result_ids_64.data() + (i * 1),
-                                       warmup_result_dists.data() + (i * 1), 4);
+      _pFlashIndex->cached_beam_search(
+          warmup + (i * warmup_aligned_dim), 1, warmup_L,
+          warmup_result_ids_64.data() + (i * 1),
+          warmup_result_dists.data() + (i * 1), 4);
     }
     diskann::cout << "..done" << std::endl;
   }
@@ -212,7 +211,7 @@ int search_disk_index(diskann::Metric&   metric,
           query + (i * query_aligned_dim), recall_at, L,
           query_result_ids_64.data() + (i * recall_at),
           query_result_dists[test_id].data() + (i * recall_at),
-          optimized_beamwidth, &(stats[i]));
+          optimized_beamwidth, use_reorder_data, stats + i);
     }
     auto                          e = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> diff = e - s;
@@ -285,6 +284,7 @@ int main(int argc, char** argv) {
       query_file, gt_file;
   unsigned              num_threads, K, W, num_nodes_to_cache;
   std::vector<unsigned> Lvec;
+  bool                  use_reorder_data = false;
 
   po::options_description desc{"Arguments"};
   try {
@@ -316,13 +316,17 @@ int main(int argc, char** argv) {
                        "Beamwidth for search. Set 0 to optimize internally.");
     desc.add_options()(
         "num_nodes_to_cache",
-        po::value<uint32_t>(&num_nodes_to_cache)->default_value(100000),
+        po::value<uint32_t>(&num_nodes_to_cache)->default_value(0),
         "Beamwidth for search");
     desc.add_options()(
         "num_threads,T",
         po::value<uint32_t>(&num_threads)->default_value(omp_get_num_procs()),
         "Number of threads used for building index (defaults to "
         "omp_get_num_procs())");
+    desc.add_options()("use_reorder_data",
+                       po::bool_switch()->default_value(false),
+                       "Include full precision data in the index. Use only in "
+                       "conjuction with compressed data on SSD.");
 
     po::variables_map vm;
     po::store(po::parse_command_line(argc, argv, desc), vm);
@@ -331,6 +335,8 @@ int main(int argc, char** argv) {
       return 0;
     }
     po::notify(vm);
+    if (vm["use_reorder_data"].as<bool>())
+      use_reorder_data = true;
   } catch (const std::exception& ex) {
     std::cerr << ex.what() << '\n';
     return -1;
@@ -357,19 +363,26 @@ int main(int argc, char** argv) {
     return -1;
   }
 
+  if (use_reorder_data && data_type != std::string("float")) {
+    std::cout << "Error: Reorder data for reordering currently only "
+                 "supported for float data type."
+              << std::endl;
+    return -1;
+  }
+
   try {
     if (data_type == std::string("float"))
       return search_disk_index<float>(
           metric, index_path_prefix, result_path_prefix, query_file, gt_file,
-          num_threads, K, W, num_nodes_to_cache, Lvec);
+          num_threads, K, W, num_nodes_to_cache, Lvec, use_reorder_data);
     else if (data_type == std::string("int8"))
       return search_disk_index<int8_t>(
           metric, index_path_prefix, result_path_prefix, query_file, gt_file,
-          num_threads, K, W, num_nodes_to_cache, Lvec);
+          num_threads, K, W, num_nodes_to_cache, Lvec, use_reorder_data);
     else if (data_type == std::string("uint8"))
       return search_disk_index<uint8_t>(
           metric, index_path_prefix, result_path_prefix, query_file, gt_file,
-          num_threads, K, W, num_nodes_to_cache, Lvec);
+          num_threads, K, W, num_nodes_to_cache, Lvec, use_reorder_data);
     else {
       std::cerr << "Unsupported data type. Use float or int8 or uint8"
                 << std::endl;
