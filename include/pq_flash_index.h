@@ -24,6 +24,8 @@
 #define MAX_N_SECTOR_READS 128
 #define MAX_PQ_CHUNKS 256
 
+#define FULL_PRECISION_REORDER_MULTIPLIER 3
+
 namespace diskann {
   template<typename T>
   struct QueryScratch {
@@ -77,7 +79,8 @@ namespace diskann {
 #ifdef EXEC_ENV_OLS
     DISKANN_DLLEXPORT int load(diskann::MemoryMappedFiles &files,
                                uint32_t num_threads, const char *pq_prefix,
-                               const char *disk_index_file);
+                               const char *disk_index_file,
+                               const bool  use_reorder_data = false);
 #else
     // load compressed data, and obtains the handle to the disk-resident index
     DISKANN_DLLEXPORT int  load(uint32_t num_threads, const char *pq_prefix,
@@ -103,19 +106,10 @@ namespace diskann {
     DISKANN_DLLEXPORT void cache_bfs_levels(_u64 num_nodes_to_cache,
                                             std::vector<uint32_t> &node_list);
 
-    //    DISKANN_DLLEXPORT void cache_from_samples(const std::string
-    //    sample_file, _u64 num_nodes_to_cache, std::vector<uint32_t>
-    //    &node_list);
-
-    //    DISKANN_DLLEXPORT void save_cached_nodes(_u64        num_nodes,
-    //                                             std::string cache_file_path);
-
-    // setting up thread-specific data
-
-    // implemented
     DISKANN_DLLEXPORT void cached_beam_search(
         const T *query, const _u64 k_search, const _u64 l_search, _u64 *res_ids,
-        float *res_dists, const _u64 beam_width, QueryStats *stats = nullptr);
+        float *res_dists, const _u64 beam_width,
+        const bool use_reorder_data = false, QueryStats *stats = nullptr);
 
     DISKANN_DLLEXPORT _u32 range_search(const T *query1, const double range,
                                         const _u64          min_l_search,
@@ -140,10 +134,16 @@ namespace diskann {
     // nbrs of node `i`: ((unsigned*)buf) + 1
     _u64 max_node_len = 0, nnodes_per_sector = 0, max_degree = 0;
 
+    // Data used for searching with re-order vectors
+    _u64 ndims_reorder_vecs = 0, reorder_data_start_sector = 0,
+         nvecs_per_sector = 0;
+
     diskann::Metric metric = diskann::Metric::L2;
-    float           max_base_norm =
-        0;  // used only for inner product search to re-scale the result value
-            // (due to the pre-processing of base during index build)
+
+    // used only for inner product search to re-scale the result value
+    // (due to the pre-processing of base during index build)
+    float max_base_norm = 0.0f;
+
     // data info
     _u64 num_points = 0;
     _u64 num_frozen_points = 0;
@@ -176,14 +176,16 @@ namespace diskann {
     FixedChunkPQTable disk_pq_table;
 
     // medoid/start info
-    uint32_t *medoids =
-        nullptr;         // by default it is just one entry point of graph, we
-                         // can optionally have multiple starting points
-    size_t num_medoids;  // by default it is set to 1
-    float *centroid_data =
-        nullptr;  // by default, it is empty. If there are multiple
-                  // centroids, we pick the medoid corresponding to the
-                  // closest centroid as the starting point of search
+
+    // graph has one entry point by default,
+    // we can optionally have multiple starting points
+    uint32_t *medoids = nullptr;
+    // defaults to 1
+    size_t num_medoids;
+    // by default, it is empty. If there are multiple
+    // centroids, we pick the medoid corresponding to the
+    // closest centroid as the starting point of search
+    float *centroid_data = nullptr;
 
     // nhood_cache
     unsigned *                                    nhood_cache_buf = nullptr;
@@ -198,12 +200,14 @@ namespace diskann {
     _u64                           max_nthreads;
     bool                           load_flag = false;
     bool                           count_visited_nodes = false;
+    bool                           reorder_data_exists = false;
+    _u64                           reoreder_data_offset = 0;
 
 #ifdef EXEC_ENV_OLS
     // Set to a larger value than the actual header to accommodate
     // any additions we make to the header. This is an outer limit
     // on how big the header can be.
-    static const int HEADER_SIZE = 256;
+    static const int HEADER_SIZE = SECTOR_LEN;
     char *           getHeaderBytes();
 #endif
   };
