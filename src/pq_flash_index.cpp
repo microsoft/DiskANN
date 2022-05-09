@@ -256,6 +256,7 @@ namespace diskann {
         diskann::alloc_aligned((void **) &scratch.aligned_query_float,
                                this->aligned_dim * sizeof(float),
                                8 * sizeof(float));
+        scratch.visited = new tsl::robin_set<_u64>(4096);
 
         memset(scratch.coord_scratch, 0, MAX_N_CMPS * this->aligned_dim);
         memset(scratch.aligned_query_T, 0, this->aligned_dim * sizeof(T));
