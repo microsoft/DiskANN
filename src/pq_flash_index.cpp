@@ -860,9 +860,9 @@ namespace diskann {
   template<typename T>
   void PQFlashIndex<T>::cached_beam_search(const T *query1, const _u64 k_search,
                                            const _u64 l_search, _u64 *indices,
-                                           float *     distances,
-                                           const _u64  beam_width,
-                                           QueryStats *stats) {
+                                           float *            distances,
+                                           const _u64         beam_width,
+                                           struct QueryStats *stats) {
     ThreadData<T> data = this->thread_data.pop();
     while (data.scratch.sector_scratch == nullptr) {
       this->thread_data.wait_for_push_notify();
@@ -1232,6 +1232,8 @@ namespace diskann {
 
     this->thread_data.push(data);
     this->thread_data.push_notify_all();
+
+    // std::cout << num_ios << " " <<stats << std::endl;
 
     if (stats != nullptr) {
       stats->total_us = (double) query_timer.elapsed();
