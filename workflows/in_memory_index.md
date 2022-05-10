@@ -58,14 +58,14 @@ Now build and search the index and measure the recall using ground truth compute
 
  The output of search lists the throughput (Queries/sec) as well as mean and 99.9 latency in microseconds for each `L` parameter provided. (We measured on a 32-core 64-vCPU D-series Azure VM)
  ```
-   Ls        QPS Mean Latency (mus)   99.9 Latency   Recall@10
-==============================================================================
-  10   154917.02            395.05       14375.10       97.80
-  20   144956.02            438.96         690.41       98.93
-  30   116529.09            546.67         852.81       99.30
-  40    96592.95            658.87         961.61       99.45
-  50    82953.09            768.00        1126.12       99.56
- 100    47502.29           1341.58        8256.21       99.88
+  Ls        QPS      Avg dist cmps  Mean Latency (mus)   99.9 Latency   Recall@10
+=================================================================================
+  10   319901.78            348.93              174.51        4943.35       97.80
+  20   346572.72            525.85              183.36         376.60       98.93
+  30   292060.12            688.86              217.73         421.60       99.30
+  40   248945.22            841.74              255.41         476.80       99.45
+  50   215888.81            986.67              294.62         542.21       99.56
+ 100   129711.39           1631.94              490.58         848.61       99.88
  ```
 
 

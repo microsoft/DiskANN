@@ -18,6 +18,7 @@
 #include "partition_and_pq.h"
 #include "timer.h"
 #include "utils.h"
+#include "percentile_stats.h"
 
 #ifndef _WINDOWS
 #include <sys/mman.h>
@@ -203,17 +204,18 @@ int search_disk_index(diskann::Metric&   metric,
     query_result_ids[test_id].resize(recall_at * query_num);
     query_result_dists[test_id].resize(recall_at * query_num);
 
-    diskann::QueryStats* stats = new diskann::QueryStats[query_num];
+    auto stats = new diskann::QueryStats[query_num];
 
     std::vector<uint64_t> query_result_ids_64(recall_at * query_num);
     auto                  s = std::chrono::high_resolution_clock::now();
+
 #pragma omp parallel for schedule(dynamic, 1)
     for (_s64 i = 0; i < (int64_t) query_num; i++) {
       _pFlashIndex->cached_beam_search(
           query + (i * query_aligned_dim), recall_at, L,
           query_result_ids_64.data() + (i * recall_at),
           query_result_dists[test_id].data() + (i * recall_at),
-          optimized_beamwidth, stats + i);
+          optimized_beamwidth, &(stats[i]));
     }
     auto                          e = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> diff = e - s;
@@ -223,19 +225,19 @@ int search_disk_index(diskann::Metric&   metric,
                                                query_result_ids[test_id].data(),
                                                query_num, recall_at);
 
-    float mean_latency = diskann::get_mean_stats(
+    auto mean_latency = diskann::get_mean_stats<float>(
         stats, query_num,
         [](const diskann::QueryStats& stats) { return stats.total_us; });
 
-    float latency_999 = diskann::get_percentile_stats(
+    auto latency_999 = diskann::get_percentile_stats<float>(
         stats, query_num, 0.999,
         [](const diskann::QueryStats& stats) { return stats.total_us; });
 
-    float mean_ios = diskann::get_mean_stats(
+    auto mean_ios = diskann::get_mean_stats<unsigned>(
         stats, query_num,
         [](const diskann::QueryStats& stats) { return stats.n_ios; });
 
-    float mean_cpuus = diskann::get_mean_stats(
+    auto mean_cpuus = diskann::get_mean_stats<float>(
         stats, query_num,
         [](const diskann::QueryStats& stats) { return stats.cpu_us; });
 
@@ -254,6 +256,7 @@ int search_disk_index(diskann::Metric&   metric,
       diskann::cout << std::setw(16) << recall << std::endl;
     } else
       diskann::cout << std::endl;
+    delete[] stats;
   }
 
   diskann::cout << "Done searching. Now saving results " << std::endl;
@@ -273,6 +276,7 @@ int search_disk_index(diskann::Metric&   metric,
                              query_result_dists[test_id++].data(), query_num,
                              recall_at);
   }
+
   diskann::aligned_free(query);
   if (warmup != nullptr)
     diskann::aligned_free(warmup);

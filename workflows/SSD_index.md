@@ -56,17 +56,18 @@ Now build and search the index and measure the recall using ground truth compute
 # Using 0.003GB search memory budget for 100K vectors implies 32 byte PQ compression
 ./tests/build_disk_index --data_type float --dist_fn l2 --data_path data/sift/sift_learn.fbin --index_path_prefix data/sift/disk_index_sift_learn_R32_L50_A1.2 -R 32 -L50 -B 0.003 -
 M 1
- ./tests/search_disk_index  --data_type float --dist_fn l2 --index_path_prefix data/sift/disk_index_sift_learn_R32_L50_A1.2 --query_file data/sift/sift_query.fbin  --gt_file data/sift/sift_query_learn_gt100 -K 10 -L 10 20 30 40 50 100 --result_path data/sift/res
+ ./tests/search_disk_index  --data_type float --dist_fn l2 --index_path_prefix data/sift/disk_index_sift_learn_R32_L50_A1.2 --query_file data/sift/sift_query.fbin  --gt_file data/sift/sift_query_learn_gt100 -K 10 -L 10 20 30 40 50 100 --result_path data/sift/res --num_nodes_to_cache 10000
  ```
 
 The search might be slower on machine with remote SSDs. The output lists the quer throughput, the mean and 99.9pc latency in microseconds and mean number of 4KB IOs to disk for each `L` parameter provided. 
 
 ```
-     L   Beamwidth             QPS    Mean Latency    99.9 Latency        Mean IOs         CPU (s)       Recall@10
+    L   Beamwidth             QPS    Mean Latency    99.9 Latency        Mean IOs         CPU (s)       Recall@10
 ======================================================================================================================
-    10           2       371739.66          116.40          601.00            0.00           30.95           83.04
-    20           2       412005.66          125.42          284.00            0.00           37.94           96.55
-    30           2       369444.72          150.45          271.00            0.00           47.32           98.81
-    40           2       318832.78          179.72          346.00            0.00           56.38           99.41
-    50           2       274415.66          215.04          308.00            0.00           66.16           99.63
+    10           2        27723.95         2271.92         4700.00            8.81           40.47           81.79
+    20           2        15369.23         4121.04         7576.00           15.93           61.60           96.42
+    30           2        10335.75         6147.14        11424.00           23.30           74.96           98.78
+    40           2         7684.18         8278.83        14714.00           30.78           94.27           99.40
+    50           2         6421.66         9913.28        16550.00           38.35          116.86           99.63
+   100           2         3337.98        19107.81        29292.00           76.59          226.88           99.91
 ```

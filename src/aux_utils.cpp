@@ -672,11 +672,11 @@ namespace diskann {
       double                        qps =
           (1.0f * (float) tuning_sample_num) / (1.0f * (float) diff.count());
 
-      double lat_999 = diskann::get_percentile_stats(
+      double lat_999 = diskann::get_percentile_stats<float>(
           stats, tuning_sample_num, 0.999f,
           [](const diskann::QueryStats &stats) { return stats.total_us; });
 
-      double mean_latency = diskann::get_mean_stats(
+      double mean_latency = diskann::get_mean_stats<float>(
           stats, tuning_sample_num,
           [](const diskann::QueryStats &stats) { return stats.total_us; });
 
