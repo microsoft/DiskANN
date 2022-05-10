@@ -213,21 +213,21 @@ int search_disk_index(diskann::Metric&   metric,
     }
     auto                          e = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> diff = e - s;
-    float qps = (1.0 * query_num) / (1.0 * diff.count());
+    auto qps = (1.0 * query_num) / (1.0 * diff.count());
 
-    float mean_latency = diskann::get_mean_stats(
+    auto mean_latency = diskann::get_mean_stats<float>(
         stats, query_num,
         [](const diskann::QueryStats& stats) { return stats.total_us; });
 
-    float latency_999 = diskann::get_percentile_stats(
+    auto latency_999 = diskann::get_percentile_stats<float>(
         stats, query_num, 0.999,
         [](const diskann::QueryStats& stats) { return stats.total_us; });
 
-    float mean_ios = diskann::get_mean_stats(
+    auto mean_ios = diskann::get_mean_stats<unsigned>(
         stats, query_num,
         [](const diskann::QueryStats& stats) { return stats.n_ios; });
 
-    float mean_cpuus = diskann::get_mean_stats(
+    float mean_cpuus = diskann::get_mean_stats<float>(
         stats, query_num,
         [](const diskann::QueryStats& stats) { return stats.cpu_us; });
 

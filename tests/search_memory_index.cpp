@@ -62,15 +62,17 @@ int search_memory_index(diskann::Metric& metric, const std::string& index_path,
   std::cout.precision(2);
   std::string recall_string = "Recall@" + std::to_string(recall_at);
   std::cout << std::setw(4) << "Ls" << std::setw(12) << "QPS " << std::setw(18)
-            << "Mean Latency (mus)" << std::setw(15) << "99.9 Latency"
-            << std::setw(12) << recall_string << std::endl;
+            << "Avg dist cmps" << std::setw(20) << "Mean Latency (mus)"
+            << std::setw(15) << "99.9 Latency" << std::setw(12) << recall_string
+            << std::endl;
   std::cout << "==============================================================="
-               "==============="
+               "=================="
             << std::endl;
 
   std::vector<std::vector<uint32_t>> query_result_ids(Lvec.size());
   std::vector<std::vector<float>>    query_result_dists(Lvec.size());
-  std::vector<double>                latency_stats(query_num, 0);
+  std::vector<float>                 latency_stats(query_num, 0);
+  std::vector<unsigned>              cmp_stats(query_num, 0);
 
   for (uint32_t test_id = 0; test_id < Lvec.size(); test_id++) {
     _u64 L = Lvec[test_id];
@@ -91,8 +93,11 @@ int search_memory_index(diskann::Metric& metric, const std::string& index_path,
             query + i * query_aligned_dim, recall_at, L,
             query_result_ids[test_id].data() + i * recall_at);
       } else {
-        index.search(query + i * query_aligned_dim, recall_at, L,
-                     query_result_ids[test_id].data() + i * recall_at);
+        cmp_stats[i] =
+            index
+                .search(query + i * query_aligned_dim, recall_at, L,
+                        query_result_ids[test_id].data() + i * recall_at)
+                .second;
       }
       auto qe = std::chrono::high_resolution_clock::now();
       std::chrono::duration<double> diff = qe - qs;
@@ -110,14 +115,17 @@ int search_memory_index(diskann::Metric& metric, const std::string& index_path,
                                          recall_at, recall_at);
 
     std::sort(latency_stats.begin(), latency_stats.end());
-    double mean_latency = 0;
-    for (uint64_t q = 0; q < query_num; q++) {
-      mean_latency += latency_stats[q];
-    }
-    mean_latency /= query_num;
+    float mean_latency =
+        std::accumulate(latency_stats.begin(), latency_stats.end(), 0.0) /
+        query_num;
+
+    float avg_cmps =
+        (float) std::accumulate(cmp_stats.begin(), cmp_stats.end(), 0) /
+        (float) query_num;
 
     std::cout << std::setw(4) << L << std::setw(12) << qps << std::setw(18)
-              << (float) mean_latency << std::setw(15)
+              << avg_cmps << std::setw(20) << (float) mean_latency
+              << std::setw(15)
               << (float) latency_stats[(_u64)(0.999 * query_num)]
               << std::setw(12) << recall << std::endl;
   }
