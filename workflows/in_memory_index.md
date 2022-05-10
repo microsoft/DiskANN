@@ -31,3 +31,41 @@ The arguments are as follows:
 7. **K**: search for *K* neighbors and measure *K*-recall@*K*, meaning the intersection between the retrieved top-*K* nearest neighbors and ground truth *K* nearest neighbors.
 8. **result_output_prefix**: search results will be stored in files, one per L value (see next arg), with specified prefix, in binary format.
 9. **-L (--search_list)**: A list of search_list sizes to perform search with. Larger parameters will result in slower latencies, but higher accuracies. Must be atleast the value of *K* in (7).
+
+
+Example with BIGANN:
+--------------------
+
+This example demonstrates the use of the commands above on a 100K slice of the [BIGANN dataset](http://corpus-texmex.irisa.fr/) with 128 dimensional SIFT descriptors applied to images. 
+
+Download the base and query set and convert the data to binary format
+```bash
+mkdir -p DiskANN/build/data && cd DiskANN/build/data
+wget ftp://ftp.irisa.fr/local/texmex/corpus/sift.tar.gz
+tar -xf sift.tar.gz
+cd ..
+./tests/utils/fvecs_to_bin data/sift/sift_learn.fvecs data/sift/sift_learn.fbin
+./tests/utils/fvecs_to_bin data/sift/sift_query.fvecs data/sift/sift_query.fbin
+```
+
+Now build and search the index and measure the recall using ground truth computed using brutefoce. 
+```bash
+./tests/utils/compute_groundtruth  --data_type float --dist_fn l2 --base_file data/sift/sift_learn.fbin --query_file  data/sift/sift_query.fbin --gt_file data/sift/sift_query_learn_gt100 --K 100
+./tests/build_memory_index  --data_type float --dist_fn l2 --data_path data/sift/sift_learn.fbin --index_path_prefix data/sift/index_sift_learn_R32_L50_A1.2 -R 32 -L 50 --alpha 1.2
+ ./tests/search_memory_index  --data_type float --dist_fn l2 --index_path_prefix data/sift/index_sift_learn_R32_L50_A1.2 --query_file data/sift/sift_query.fbin  --gt_file data/sift/sift_query_learn_gt100 -K 10 -L 10 20 30 40 50 100 --result_path data/sift/res
+ ```
+ 
+
+ The output of search lists the throughput (Queries/sec) as well as mean and 99.9 latency in microseconds for each `L` parameter provided. (We measured on a 32-core 64-vCPU D-series Azure VM)
+ ```
+   Ls        QPS Mean Latency (mus)   99.9 Latency   Recall@10
+==============================================================================
+  10   154917.02            395.05       14375.10       97.80
+  20   144956.02            438.96         690.41       98.93
+  30   116529.09            546.67         852.81       99.30
+  40    96592.95            658.87         961.61       99.45
+  50    82953.09            768.00        1126.12       99.56
+ 100    47502.29           1341.58        8256.21       99.88
+ ```
+
+
