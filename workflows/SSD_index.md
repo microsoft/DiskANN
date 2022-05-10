@@ -33,3 +33,40 @@ The arguments are as follows:
 9. **K**: search for *K* neighbors and measure *K*-recall@*K*, meaning the intersection between the retrieved top-*K* nearest neighbors and ground truth *K* nearest neighbors.
 10. **result_output_prefix**: Search results will be stored in files with specified prefix, in bin format.
 11. **-L (--search_list)**: A list of search_list sizes to perform search with. Larger parameters will result in slower latencies, but higher accuracies. Must be atleast the value of *K* in arg (9).
+
+
+Example with BIGANN:
+--------------------
+
+This example demonstrates the use of the commands above on a 100K slice of the [BIGANN dataset](http://corpus-texmex.irisa.fr/) with 128 dimensional SIFT descriptors applied to images. 
+
+Download the base and query set and convert the data to binary format
+```bash
+mkdir -p DiskANN/build/data && cd DiskANN/build/data
+wget ftp://ftp.irisa.fr/local/texmex/corpus/sift.tar.gz
+tar -xf sift.tar.gz
+cd ..
+./tests/utils/fvecs_to_bin data/sift/sift_learn.fvecs data/sift/sift_learn.fbin
+./tests/utils/fvecs_to_bin data/sift/sift_query.fvecs data/sift/sift_query.fbin
+```
+
+Now build and search the index and measure the recall using ground truth computed using brutefoce. 
+```bash
+./tests/utils/compute_groundtruth  --data_type float --dist_fn l2 --base_file data/sift/sift_learn.fbin --query_file  data/sift/sift_query.fbin --gt_file data/sift/sift_query_learn_gt100 --K 100
+# Using 0.003GB search memory budget for 100K vectors implies 32 byte PQ compression
+./tests/build_disk_index --data_type float --dist_fn l2 --data_path data/sift/sift_learn.fbin --index_path_prefix data/sift/disk_index_sift_learn_R32_L50_A1.2 -R 32 -L50 -B 0.003 -
+M 1
+ ./tests/search_disk_index  --data_type float --dist_fn l2 --index_path_prefix data/sift/disk_index_sift_learn_R32_L50_A1.2 --query_file data/sift/sift_query.fbin  --gt_file data/sift/sift_query_learn_gt100 -K 10 -L 10 20 30 40 50 100 --result_path data/sift/res
+ ```
+
+The search might be slower on machine with remote SSDs. The output lists the quer throughput, the mean and 99.9pc latency in microseconds and mean number of 4KB IOs to disk for each `L` parameter provided. 
+
+```
+     L   Beamwidth             QPS    Mean Latency    99.9 Latency        Mean IOs         CPU (s)       Recall@10
+======================================================================================================================
+    10           2       371739.66          116.40          601.00            0.00           30.95           83.04
+    20           2       412005.66          125.42          284.00            0.00           37.94           96.55
+    30           2       369444.72          150.45          271.00            0.00           47.32           98.81
+    40           2       318832.78          179.72          346.00            0.00           56.38           99.41
+    50           2       274415.66          215.04          308.00            0.00           66.16           99.63
+```
