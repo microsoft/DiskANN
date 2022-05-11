@@ -50,7 +50,6 @@ void print_stats(std::string category, std::vector<float> percentiles,
 template<typename T>
 int search_disk_index(diskann::Metric&   metric,
                       const std::string& index_path_prefix,
-                      const std::string& result_output_prefix,
                       const std::string& query_file, std::string& gt_file,
                       const unsigned num_threads, const float search_range,
                       const unsigned               beamwidth,
@@ -103,7 +102,7 @@ int search_disk_index(diskann::Metric&   metric,
   std::unique_ptr<diskann::PQFlashIndex<T>> _pFlashIndex(
       new diskann::PQFlashIndex<T>(reader, metric));
 
-  int res = _pFlashIndex->load(num_threads, index_prefix_path.c_str());
+  int res = _pFlashIndex->load(num_threads, index_path_prefix.c_str());
 
   if (res != 0) {
     return res;
@@ -283,9 +282,6 @@ int main(int argc, char** argv) {
     desc.add_options()("index_path_prefix",
                        po::value<std::string>(&index_path_prefix)->required(),
                        "Path prefix to the index");
-    desc.add_options()("result_path",
-                       po::value<std::string>(&result_path_prefix)->required(),
-                       "Path prefix for saving results of the queries");
     desc.add_options()("query_file",
                        po::value<std::string>(&query_file)->required(),
                        "Query file in binary format");
@@ -347,15 +343,15 @@ int main(int argc, char** argv) {
   try {
     if (data_type == std::string("float"))
       return search_disk_index<float>(
-          metric, index_path_prefix, result_path_prefix, query_file, gt_file,
+          metric, index_path_prefix, query_file, gt_file,
           num_threads, range, W, num_nodes_to_cache, Lvec);
     else if (data_type == std::string("int8"))
       return search_disk_index<int8_t>(
-          metric, index_path_prefix, result_path_prefix, query_file, gt_file,
+          metric, index_path_prefix, query_file, gt_file,
           num_threads, range, W, num_nodes_to_cache, Lvec);
     else if (data_type == std::string("uint8"))
       return search_disk_index<uint8_t>(
-          metric, index_path_prefix, result_path_prefix, query_file, gt_file,
+          metric, index_path_prefix, query_file, gt_file,
           num_threads, range, W, num_nodes_to_cache, Lvec);
     else {
       std::cerr << "Unsupported data type. Use float or int8 or uint8"

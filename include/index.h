@@ -162,8 +162,8 @@ namespace diskann {
     // insertions possible only when id corresponding to tag does not already
     // exist in the graph
     DISKANN_DLLEXPORT int insert_point(
-        const T *point, const Parameters &parameter,
-        const TagT tag);  // only keep point, tag, parameters
+        const T *point, 
+        const TagT tag);  
 
     // call before triggering deleteions - sets important flags required for
     // deletion related operations
@@ -289,11 +289,11 @@ namespace diskann {
                             std::vector<Neighbor> &   expanded_nodes_info,
                             tsl::robin_set<unsigned> &expanded_nodes_ids);
 
-    void inter_insert(unsigned n, std::vector<unsigned> &pruned_list,
-                      const Parameters &parameter, bool update_in_graph);
+    void prune_neighbors(const unsigned location, std::vector<Neighbor> &pool,
+                         std::vector<unsigned> &pruned_list);
 
     void prune_neighbors(const unsigned location, std::vector<Neighbor> &pool,
-                         const Parameters &     parameter,
+                         const _u32 range, const _u32 max_candidate_size, const float alpha,
                          std::vector<unsigned> &pruned_list);
 
     void occlude_list(std::vector<Neighbor> &pool, const float alpha,
@@ -307,8 +307,19 @@ namespace diskann {
 
     void batch_inter_insert(unsigned                     n,
                             const std::vector<unsigned> &pruned_list,
-                            const Parameters &           parameter,
+                            const _u32 range,
                             std::vector<unsigned> &      need_to_sync);
+
+    void batch_inter_insert(unsigned                     n,
+                            const std::vector<unsigned> &pruned_list,
+                            std::vector<unsigned> &      need_to_sync);
+
+    void inter_insert(unsigned n, std::vector<unsigned> &pruned_list,
+                      const _u32 range, bool update_in_graph);
+
+    void inter_insert(unsigned n, std::vector<unsigned> &pruned_list,
+                      bool update_in_graph);
+
 
     void link(Parameters &parameters);
 
