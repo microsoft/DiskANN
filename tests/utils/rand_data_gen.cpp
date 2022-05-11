@@ -95,7 +95,6 @@ int block_write_uint8(std::ofstream& writer, _u64 ndims, _u64 npts,
 }
 
 int main(int argc, char** argv) {
-
   std::string data_type, output_file;
   _u64        ndims, npts;
   float       norm;
@@ -141,45 +140,55 @@ int main(int argc, char** argv) {
     return -1;
   }
 
-  if ((std::string(argv[1]) == std::string("int8")) ||
-      (std::string(argv[1]) == std::string("uint8"))) {
-    if (norm > 127) {
-      std::cerr << "Error: for in8/uint8 datatypes, L2 norm can not be greater "
-                   "than 127"
-                << std::endl;
-      return -1;
+  if (data_type == std::string("int8") ||
+      data_type == std::string("uint8")) {
+      if (norm > 127) {
+        std::cerr
+            << "Error: for int8/uint8 datatypes, L2 norm can not be greater "
+               "than 127"
+            << std::endl;
+        return -1;
+      }
     }
+
+  try {
+    std::ofstream writer;
+    writer.exceptions(std::ofstream::failbit | std::ofstream::badbit);
+    writer.open(output_file, std::ios::binary);
+    auto npts_s32 = (_u32) npts;
+    auto ndims_s32 = (_u32) ndims;
+    writer.write((char*) &npts_s32, sizeof(_u32));
+    writer.write((char*) &ndims_s32, sizeof(_u32));
+
+    _u64 blk_size = 131072;
+    _u64 nblks = ROUND_UP(npts, blk_size) / blk_size;
+    std::cout << "# blks: " << nblks << std::endl;
+
+    int ret = 0;
+    for (_u64 i = 0; i < nblks; i++) {
+      _u64 cblk_size = std::min(npts - i * blk_size, blk_size);
+      if (data_type == std::string("float")) {
+        ret = block_write_float(writer, ndims, cblk_size, norm);
+      } else if (data_type == std::string("int8")) {
+        ret = block_write_int8(writer, ndims, cblk_size, norm);
+      } else if (data_type == std::string("uint8")) {
+        ret = block_write_uint8(writer, ndims, cblk_size, norm);
+      }
+      if (ret == 0)
+        std::cout << "Block #" << i << " written" << std::endl;
+      else {
+        writer.close();
+        std::cout << "failed to write" << std::endl;
+        return -1;
+      }
+    }
+    writer.close();
+
+  } catch (const std::exception& e) {
+    std::cout << std::string(e.what()) << std::endl;
+    diskann::cerr << "Index build failed." << std::endl;
+    return -1;
   }
 
-  std::ofstream writer(argv[5], std::ios::binary);
-  auto          npts_s32 = (_u32) npts;
-  auto          ndims_s32 = (_u32) ndims;
-  writer.write((char*) &npts_s32, sizeof(_u32));
-  writer.write((char*) &ndims_s32, sizeof(_u32));
-
-  _u64 blk_size = 131072;
-  _u64 nblks = ROUND_UP(npts, blk_size) / blk_size;
-  std::cout << "# blks: " << nblks << std::endl;
-
-  int ret = 0;
-  for (_u64 i = 0; i < nblks; i++) {
-    _u64 cblk_size = std::min(npts - i * blk_size, blk_size);
-    if (std::string(argv[1]) == std::string("float")) {
-      ret = block_write_float(writer, ndims, cblk_size, norm);
-    } else if (std::string(argv[1]) == std::string("int8")) {
-      ret = block_write_int8(writer, ndims, cblk_size, norm);
-    } else if (std::string(argv[1]) == std::string("uint8")) {
-      ret = block_write_uint8(writer, ndims, cblk_size, norm);
-    }
-    if (ret == 0)
-      std::cout << "Block #" << i << " written" << std::endl;
-    else {
-      writer.close();
-      std::cout << "failed to write" << std::endl;
-      return -1;
-    }
-  }
-
-  writer.close();
   return 0;
 }
