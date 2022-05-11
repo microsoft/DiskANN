@@ -418,7 +418,7 @@ try {
 }
 catch (const std::exception& e) {
     std::cout << std::string(e.what()) << std::endl;
-    diskann::cerr << "Index search failed." << std::endl;
+    diskann::cerr << "Compute GT failed." << std::endl;
     return -1;
   }
 }
