@@ -80,7 +80,7 @@ namespace diskann {
                       << std::endl;
         return new diskann::SlowDistanceL2Float();
       }
-    } else if (m == diskann::Metric::COSINE) {
+    } else if (m == diskann::Metric::COSINE) {   
       diskann::cout << "Cosine: Using either AVX or AVX2 implementation"
                     << std::endl;
       return new diskann::DistanceCosineFloat();

@@ -26,7 +26,14 @@ namespace diskann {
 #ifdef _WINDOWS
     return diskann::CosineSimilarity2<int8_t>(a, b, length);
 #else
-    return diskann::compute_cosine_similarity(a, b, length);
+    int magA = 0, magB = 0, scalarProduct = 0;
+    for (uint32_t i = 0; i < length; i++) {
+      magA += ((int32_t) a[i]) * ((int32_t) a[i]);
+      magB += ((int32_t) b[i]) * ((int32_t) b[i]);
+      scalarProduct += ((int32_t) a[i]) * ((int32_t) b[i]);
+    }
+    // similarity == 1-cosine distance
+    return 1.0f - (float) (scalarProduct / (sqrt(magA) * sqrt(magB)));
 #endif
   }
 
@@ -35,7 +42,14 @@ namespace diskann {
 #ifdef _WINDOWS
     return diskann::CosineSimilarity2<float>(a, b, length);
 #else
-    return diskann::compute_cosine_similarity(a, b, length);
+    float magA = 0, magB = 0, scalarProduct = 0;
+    for (uint32_t i = 0; i < length; i++) {
+      magA += (a[i]) * (a[i]);
+      magB += (b[i]) * (b[i]);
+      scalarProduct += (a[i]) * (b[i]);
+    }
+    // similarity == 1-cosine distance
+    return 1.0f - (scalarProduct / (sqrt(magA) * sqrt(magB)));
 #endif
   }
 
