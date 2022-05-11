@@ -111,7 +111,7 @@ namespace diskann {
       uint32_t nthreads, uint32_t start_bw = 2);
 
   template<typename T>
-  DISKANN_DLLEXPORT bool build_disk_index(const char *    dataFilePath,
+  DISKANN_DLLEXPORT int build_disk_index(const char *    dataFilePath,
                                           const char *    indexFilePath,
                                           const char *    indexBuildParameters,
                                           diskann::Metric _compareMetric);
