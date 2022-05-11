@@ -1189,12 +1189,15 @@ namespace diskann {
 
   template<typename T, typename TagT>
   void Index<T, TagT>::prune_neighbors(const unsigned         location,
-                                       std::vector<Neighbor> &pool,
-                                       const Parameters &     parameter,
+                                       std::vector<Neighbor> &pool, 
                                        std::vector<unsigned> &pruned_list) {
-    unsigned range = _indexingRange;  // parameter.Get<unsigned>("R");
-    unsigned maxc = _indexingMaxC;    // parameter.Get<unsigned>("C");
-    float    alpha = _indexingAlpha;  // parameter.Get<float>("alpha");
+                                       prune_neighbors(location, pool, _indexingRange, _indexingMaxC, _indexingAlpha, pruned_list);
+                                       }
+
+  template<typename T, typename TagT>
+  void Index<T, TagT>::prune_neighbors(const unsigned         location,
+                                       std::vector<Neighbor> &pool, const _u32 range, const _u32 max_candidate_size, const float alpha, 
+                                       std::vector<unsigned> &pruned_list) {
 
     if (pool.size() == 0) {
       std::stringstream ss;
@@ -1214,7 +1217,7 @@ namespace diskann {
     result.reserve(range);
     std::vector<float> occlude_factor(pool.size(), 0);
 
-    occlude_list(pool, alpha, range, maxc, result, occlude_factor);
+    occlude_list(pool, alpha, range, max_candidate_size, result, occlude_factor);
 
     /* Add all the nodes in result into a variable called cut_graph
      * So this contains all the neighbors of id location
@@ -1243,8 +1246,7 @@ namespace diskann {
   template<typename T, typename TagT>
   void Index<T, TagT>::batch_inter_insert(
       unsigned n, const std::vector<unsigned> &pruned_list,
-      const Parameters &parameter, std::vector<unsigned> &need_to_sync) {
-    const auto range = parameter.Get<unsigned>("R");
+      const _u32 range, std::vector<unsigned> &need_to_sync) {
 
     // assert(!src_pool.empty());
 
@@ -1270,6 +1272,13 @@ namespace diskann {
     }
   }
 
+  template<typename T, typename TagT>
+  void Index<T, TagT>::batch_inter_insert(
+      unsigned n, const std::vector<unsigned> &pruned_list,
+      std::vector<unsigned> &need_to_sync) {
+      batch_inter_insert(n, pruned_list, _indexingRange, need_to_sync);
+      }
+
   /* inter_insert():
    * This function tries to add reverse links from all the visited nodes to
    * the current node n.
@@ -1277,9 +1286,9 @@ namespace diskann {
   template<typename T, typename TagT>
   void Index<T, TagT>::inter_insert(unsigned               n,
                                     std::vector<unsigned> &pruned_list,
-                                    const Parameters &     parameter,
+                                    const _u32 range,
                                     bool                   update_in_graph) {
-    const auto range = _indexingRange;  // parameter.Get<unsigned>("R");
+//    const auto range = _indexingRange;  // parameter.Get<unsigned>("R");
     assert(n >= 0 && n < _nd + _num_frozen_pts);
     const auto &src_pool = pruned_list;
 
@@ -1331,7 +1340,7 @@ namespace diskann {
           }
         }
         std::vector<unsigned> new_out_neighbors;
-        prune_neighbors(des, dummy_pool, parameter, new_out_neighbors);
+        prune_neighbors(des, dummy_pool, new_out_neighbors);
         {
           LockGuard guard(_locks[des]);
           // updating in_graph of out-neighbors of des
@@ -1361,6 +1370,15 @@ namespace diskann {
       }
     }
   }
+
+  template<typename T, typename TagT>
+  void Index<T, TagT>::inter_insert(unsigned               n,
+                                    std::vector<unsigned> &pruned_list,
+                                    bool                   update_in_graph) {
+                                    inter_insert(n, pruned_list, _indexingRange, update_in_graph);
+                                    }
+
+
   /* Link():
    * The graph creation function.
    *    The graph will be updated periodically in NUM_SYNCS batches
@@ -1500,7 +1518,7 @@ namespace diskann {
                 visited.insert(id);
               }
             }
-          prune_neighbors(node, pool, parameters, pruned_list);
+          prune_neighbors(node, pool, pruned_list);
         }
         diff = std::chrono::high_resolution_clock::now() - s;
         sync_time += diff.count();
@@ -1524,7 +1542,7 @@ namespace diskann {
           auto                   node = visit_order[node_ctr];
           _u64                   node_offset = node_ctr - start_id;
           std::vector<unsigned> &pruned_list = pruned_list_vector[node_offset];
-          batch_inter_insert(node, pruned_list, parameters, need_to_sync);
+          batch_inter_insert(node, pruned_list, need_to_sync);
           //          inter_insert(node, pruned_list, parameters, 0);
           pruned_list.clear();
           pruned_list.shrink_to_fit();
@@ -1552,7 +1570,7 @@ namespace diskann {
                 dummy_visited.insert(cur_nbr);
               }
             }
-            prune_neighbors(node, dummy_pool, parameters, new_out_neighbors);
+            prune_neighbors(node, dummy_pool, new_out_neighbors);
 
             _final_graph[node].clear();
             for (auto id : new_out_neighbors)
@@ -1617,7 +1635,7 @@ namespace diskann {
             dummy_visited.insert(cur_nbr);
           }
         }
-        prune_neighbors(node, dummy_pool, parameters, new_out_neighbors);
+        prune_neighbors(node, dummy_pool, new_out_neighbors);
 
         _final_graph[node].clear();
         for (auto id : new_out_neighbors)
@@ -1655,7 +1673,7 @@ namespace diskann {
               dummy_visited.insert(cur_nbr);
             }
           }
-          prune_neighbors((_u32) node, dummy_pool, parameters,
+          prune_neighbors((_u32) node, dummy_pool,
                           new_out_neighbors);
 
           _final_graph[node].clear();
@@ -2707,7 +2725,7 @@ namespace diskann {
   }
 
   template<typename T, typename TagT>
-  int Index<T, TagT>::insert_point(const T *point, const Parameters &parameters,
+  int Index<T, TagT>::insert_point(const T *point, 
                                    const TagT tag) {
     std::shared_lock<std::shared_timed_mutex> lock(_update_lock);
     unsigned range = _indexingRange;  // parameters.Get<unsigned>("R");
@@ -2791,7 +2809,7 @@ namespace diskann {
         break;
       }
 
-    prune_neighbors(location, pool, parameters, pruned_list);
+    prune_neighbors(location, pool, pruned_list);
     assert(_final_graph.size() == _max_points + _num_frozen_pts);
 
     if (_support_eager_delete) {
@@ -2824,9 +2842,9 @@ namespace diskann {
 
     assert(_final_graph[location].size() <= range);
     if (_support_eager_delete) {
-      inter_insert(location, pruned_list, parameters, 1);
+      inter_insert(location, pruned_list, 1);
     } else {
-      inter_insert(location, pruned_list, parameters, 0);
+      inter_insert(location, pruned_list, 0);
     }
     return 0;
   }
