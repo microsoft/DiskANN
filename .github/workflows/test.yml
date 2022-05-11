@@ -1,22 +1,57 @@
-name: DiskANN Build
-on: [push, pull_request]
+name: DiskANN Build and run
+on: [pull_request]
 jobs:
-  build-ubuntu-latest:
+  ubuntu-latest-build-run:
     runs-on: ubuntu-latest
     steps:
     - name: Checkout repository
       uses: actions/checkout@v2
-    - run: |
-        sudo apt install cmake g++ libaio-dev libgoogle-perftools-dev clang-format libboost-dev libmkl-full-dev
+    - name: Install deps
+      run: |
+        sudo apt install cmake g++ libaio-dev libgoogle-perftools-dev clang-format libboost-dev libboost-program-options-dev libmkl-full-dev
+    - name: build
+      run: |
         mkdir build && cd build && cmake .. && make -j
-  build-ubuntu-18:
+    - name: Generate 10K random floating points in 10 dims 
+      run: |
+        ./tests/utils/rand_data_gen --data_type float --output_file rand_float_10D_10K_norm1.0.bin -D 10 -N 10000 --norm 1.0
+    - name : comput ground truth for l2 and mips
+      run: |
+        ./tests/utils/compute_groundtruth  --data_type float --dist_fn l2 --base_file rand_float_10D_10K_norm1.0.bin --query_file rand_float_10D_10K_norm1.0.bin --gt_file rand_float_10D_10K_norm1.0_l2_self_gt100 --K 100    - name: test l2 dist fn on float
+        ./tests/utils/compute_groundtruth  --data_type float --dist_fn mips --base_file rand_float_10D_10K_norm1.0.bin --query_file rand_float_10D_10K_norm1.0.bin --gt_file rand_float_10D_10K_norm1.0_mips_self_gt100 --K 100    - name: test l2 dist fn on float
+    - name: build memory index with l2 distance
+      run: |    
+        ./tests/build_memory_index --data_type float --dist_fn l2 --data_path rand_float_10D_10K_norm1.0.bin --index_path_prefix index_rand_float_10D_10K_norm1.0
+    - name: test search with l2 and fast l2 dist_fn on float
+      run: |
+        ./tests/search_memory_index --data_type float --dist_fn fast_l2 --index_path_prefix index_rand_float_10D_10K_norm1.0 --query_file rand_float_10D_10K_norm1.0.bin --recall_at 10 --result_path temp --gt_file rand_float_10D_10K_norm1.0_l2_self_gt100 -L  16 32
+        ./tests/search_memory_index --data_type float --dist_fn l2 --index_path_prefix index_rand_float_10D_10K_norm1.0 --query_file rand_float_10D_10K_norm1.0.bin --recall_at 10 --result_path temp --gt_file rand_float_10D_10K_norm1.0_l2_self_gt100 -L  16 32
+    
+
+  ubuntu-18-build:
     runs-on: 'ubuntu-18.04'
     steps:
     - name: Checkout repository
       uses: actions/checkout@v2
-    - run: |
-        sudo apt install cmake g++ libaio-dev libgoogle-perftools-dev clang-format libboost-dev
+    - name: Install deps
+      run: |
+        sudo apt install cmake g++ libaio-dev libgoogle-perftools-dev clang-format libboost-dev libboost-program-options-dev
         wget https://registrationcenter-download.intel.com/akdlm/irc_nas/18487/l_BaseKit_p_2022.1.2.146.sh
         sudo sh l_BaseKit_p_2022.1.2.146.sh -a --components intel.oneapi.lin.mkl.devel --action install --eula accept -s
+    - name: build
+      run: |
         mkdir build && cd build && cmake .. && make -j
 
+on: [push]
+jobs:
+  ubuntu-latest-build-run:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v2
+    - name: Install deps
+      run: |
+        sudo apt install cmake g++ libaio-dev libgoogle-perftools-dev clang-format libboost-dev libboost-program-options-dev libmkl-full-dev
+    - name: build
+      run: |
+        mkdir build && cd build && cmake .. && make -j
