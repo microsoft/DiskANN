@@ -829,7 +829,7 @@ namespace diskann {
   }
 
   template<typename T>
-  bool build_disk_index(const char *dataFilePath, const char *indexFilePath,
+  int build_disk_index(const char *dataFilePath, const char *indexFilePath,
                         const char *    indexBuildParameters,
                         diskann::Metric compareMetric) {
     std::stringstream parser;
@@ -848,7 +848,7 @@ namespace diskann {
              "indexing) B' (PQ bytes for disk index: optional parameter for "
              "very large dimensional data)"
           << std::endl;
-      return false;
+      return -1;
     }
 
     if (!std::is_same<T, float>::value &&
@@ -917,13 +917,13 @@ namespace diskann {
       std::cerr << "Insufficient memory budget (or string was not in right "
                    "format). Should be > 0."
                 << std::endl;
-      return false;
+      return -1;
     }
     double indexing_ram_budget = (float) atof(param_list[3].c_str());
     if (indexing_ram_budget <= 0) {
       std::cerr << "Not building index. Please provide more RAM budget"
                 << std::endl;
-      return false;
+      return -1;
     }
     _u32 num_threads = (_u32) atoi(param_list[4].c_str());
 
@@ -1029,7 +1029,7 @@ namespace diskann {
     std::chrono::duration<double> diff = e - s;
     diskann::cout << "Indexing time: " << diff.count() << std::endl;
 
-    return true;
+    return 0;
   }
 
   template DISKANN_DLLEXPORT void create_disk_layout<int8_t>(
@@ -1081,13 +1081,13 @@ namespace diskann {
       _u64 tuning_sample_aligned_dim, uint32_t L, uint32_t nthreads,
       uint32_t start_bw);
 
-  template DISKANN_DLLEXPORT bool build_disk_index<int8_t>(
+  template DISKANN_DLLEXPORT int build_disk_index<int8_t>(
       const char *dataFilePath, const char *indexFilePath,
       const char *indexBuildParameters, diskann::Metric compareMetric);
-  template DISKANN_DLLEXPORT bool build_disk_index<uint8_t>(
+  template DISKANN_DLLEXPORT int build_disk_index<uint8_t>(
       const char *dataFilePath, const char *indexFilePath,
       const char *indexBuildParameters, diskann::Metric compareMetric);
-  template DISKANN_DLLEXPORT bool build_disk_index<float>(
+  template DISKANN_DLLEXPORT int build_disk_index<float>(
       const char *dataFilePath, const char *indexFilePath,
       const char *indexBuildParameters, diskann::Metric compareMetric);
 
