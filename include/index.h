@@ -163,6 +163,7 @@ namespace diskann {
     // exist in the graph
     DISKANN_DLLEXPORT int insert_point(
         const T *point, 
+        const Parameters &parameters,
         const TagT tag);  
 
     // call before triggering deleteions - sets important flags required for
@@ -172,6 +173,11 @@ namespace diskann {
     // call after all delete requests have been served, checks if deletions were
     // executed correctly, rearranges metadata in case of lazy deletes
     DISKANN_DLLEXPORT int disable_delete(const Parameters &parameters,
+                                         const bool        consolidate = false);
+
+    // call after all delete requests have been served, checks if deletions were
+    // executed correctly, rearranges metadata in case of lazy deletes
+    DISKANN_DLLEXPORT int disable_delete_2(const Parameters &parameters,
                                          const bool        consolidate = false);
 
     // Record deleted point now and restructure graph later. Return -1 if tag
@@ -219,6 +225,7 @@ namespace diskann {
     DISKANN_DLLEXPORT void compact_data_for_search();
 
     DISKANN_DLLEXPORT void consolidate(Parameters &parameters);
+    DISKANN_DLLEXPORT void consolidate2(Parameters &parameters);
 
     // DISKANN_DLLEXPORT void save_index_as_one_file(bool flag);
 
@@ -345,6 +352,10 @@ namespace diskann {
     // Returns number of live points left after consolidation
     size_t consolidate_deletes(const Parameters &parameters);
 
+    // WARNING: Do not call consolidate_deletes_2 without acquiring change_lock_
+    // Returns number of live points left after consolidation
+    size_t consolidate_deletes_2(const Parameters &parameters);
+
     void initialize_query_scratch(uint32_t num_threads, uint32_t search_l,
                                   uint32_t indexing_l, uint32_t r, size_t dim);
 
@@ -396,6 +407,7 @@ namespace diskann {
                                         // _tag_to_location and
     std::mutex _change_lock;  // Lock taken to synchronously modify _nd
     std::vector<std::mutex> _locks_in;     // Per node lock
+    std::vector<std::mutex> _locks_consolidate; //per node lock for consolidate deletes
     std::shared_timed_mutex _delete_lock;  // Lock on _delete_set and
                                            // _empty_slots when reading and
                                            // writing to them
