@@ -131,11 +131,6 @@ void build_incremental_index(
               << " points since the data file has only that many" << std::endl;
   }
 
-  size_t allocSize = points_per_checkpoint * aligned_dim * sizeof(T);
-  T*     data_part = nullptr;
-
-  diskann::alloc_aligned((void**) &data_part, allocSize, 8 * sizeof(T));
-
   using TagT = uint32_t;
   unsigned   num_frozen = 1;
   const bool enable_tags = true;
@@ -161,17 +156,24 @@ void build_incremental_index(
               << beginning_index_size
               << " points since the data file has only that many" << std::endl;
   }
-  if (beginning_index_size > points_per_checkpoint) {
+  if (checkpoints_per_snapshot > 0 &&
+      beginning_index_size > points_per_checkpoint) {
     beginning_index_size = points_per_checkpoint;
     std::cerr << "WARNING: Reducing beginning index size to "
               << beginning_index_size << std::endl;
   }
+
+  size_t allocSize = beginning_index_size * aligned_dim * sizeof(T);
+  T*     data_part = nullptr;
+
+  diskann::alloc_aligned((void**) &data_part, allocSize, 8 * sizeof(T));
 
   std::vector<TagT> tags(beginning_index_size);
   std::iota(tags.begin(), tags.end(), static_cast<TagT>(current_point_offset));
 
   load_aligned_bin_part(data_path, data_part, current_point_offset,
                         beginning_index_size);
+  std::cout << "load aligned bin succeeded" << std::endl;
   diskann::Timer timer;
 
   if (beginning_index_size > 0) {
@@ -197,6 +199,8 @@ void build_incremental_index(
             << beginning_index_size << " points took " << elapsedSeconds
             << " seconds (" << beginning_index_size / elapsedSeconds
             << " points/second)\n ";
+
+  current_point_offset = beginning_index_size;
 
   if (concurrent) {
     int sub_threads = (thread_count + 1) / 2;
@@ -243,8 +247,8 @@ void build_incremental_index(
         for (size_t i = 0; i < points_to_delete_from_beginning; i++) {
           deletes.insert(static_cast<TagT>(points_to_skip + i));
         }
-        // std::vector<TagT> failed_deletes;
-        // index.lazy_delete(deletes, failed_deletes);
+        std::vector<TagT> failed_deletes;
+        index.lazy_delete(deletes, failed_deletes);
         omp_set_num_threads(sub_threads);
         diskann::Timer delete_timer;
         index.disable_delete(paras, true, true);
