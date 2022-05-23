@@ -8,6 +8,7 @@
 #include <time.h>
 #include <timer.h>
 #include <boost/program_options.hpp>
+#include <future>
 
 #include "utils.h"
 
@@ -94,7 +95,8 @@ void build_incremental_index(
     const float alpha, const unsigned thread_count, size_t points_to_skip,
     size_t max_points_to_insert, size_t beginning_index_size,
     size_t points_per_checkpoint, size_t checkpoints_per_snapshot,
-    const std::string& save_path, size_t points_to_delete_from_beginning) {
+    const std::string& save_path, size_t points_to_delete_from_beginning,
+    bool concurrent) {
 
   const unsigned C = 500;
   const bool     saturate_graph = false;
@@ -197,7 +199,77 @@ void build_incremental_index(
             << " seconds (" << beginning_index_size / elapsedSeconds
             << " points/second)\n ";
 
-  current_point_offset += beginning_index_size;
+  
+
+    if(concurrent){
+      int sub_threads = (thread_count + 1) / 2;
+        {
+          diskann::Timer timer;
+          index.enable_delete();
+
+          auto inserts = std::async(std::launch::async, [&] (){
+            size_t last_snapshot_points_threshold = 0;
+            size_t num_checkpoints_till_snapshot = checkpoints_per_snapshot;
+
+            for (size_t i = current_point_offset; i < last_point_threshold;
+                 i += points_per_checkpoint,
+                        current_point_offset += points_per_checkpoint) {
+              std::cout << i << std::endl << std::endl;
+
+              const size_t j_threshold =
+                  std::min(i + points_per_checkpoint, last_point_threshold);
+
+              load_aligned_bin_part(data_path, data_part, i, j_threshold - i);
+
+              diskann::Timer insert_timer;
+
+          #pragma omp parallel for num_threads(sub_threads) schedule(dynamic)
+              for (int64_t j = i; j < (int64_t) j_threshold; j++) {
+                index.insert_point(&data_part[(j - i) * aligned_dim],
+                                   static_cast<TagT>(j));
+              }
+              const double elapsedSeconds = insert_timer.elapsed() / 1000000.0;
+              std::cout << "Insertion time " << elapsedSeconds << " seconds ("
+                        << (j_threshold - i) / elapsedSeconds
+                        << " points/second overall, "
+                        << (j_threshold - i) / elapsedSeconds / thread_count
+                        << " per thread)\n ";
+            }
+          });
+
+
+
+          auto deletes = std::async(std::launch::async, [&] (){
+            std::cout << "Deleting " << points_to_delete_from_beginning
+                      << " points from the beginning of the index..." << std::endl;
+
+            tsl::robin_set<TagT> deletes;
+            // std::vector<TagT> deletes(points_to_delete_from_beginning);
+            for (size_t i = 0; i < points_to_delete_from_beginning; i++) {
+              deletes.insert(static_cast<TagT>(points_to_skip + i));
+            }
+            // std::vector<TagT> failed_deletes;
+            // index.lazy_delete(deletes, failed_deletes);
+            omp_set_num_threads(sub_threads);
+            diskann::Timer delete_timer;
+            index.disable_delete(paras, true, false);
+            const double elapsedSeconds = delete_timer.elapsed() / 1000000.0;
+
+            std::cout << "Deleted " << points_to_delete_from_beginning << " points in "
+                      << elapsedSeconds << " seconds ("
+                      << points_to_delete_from_beginning / elapsedSeconds 
+                      << " points/second overall, "
+                      << points_to_delete_from_beginning / elapsedSeconds / sub_threads
+                      << " per thread)\n ";
+        });
+
+        inserts.wait(); 
+        deletes.wait();
+
+        std::cout << "Time Elapsed" << timer.elapsed() / 1000 << "ms\n";
+      }
+    } else{
+      current_point_offset += beginning_index_size;
 
   size_t last_snapshot_points_threshold = 0;
   size_t num_checkpoints_till_snapshot = checkpoints_per_snapshot;
@@ -300,6 +372,8 @@ void build_incremental_index(
       index.save(save_path_inc.c_str());
     }
   }
+    }
+  
 
   diskann::aligned_free(data_part);
 }
@@ -312,6 +386,7 @@ int main(int argc, char** argv) {
   size_t      points_to_skip, max_points_to_insert, beginning_index_size,
       points_per_checkpoint, checkpoints_per_snapshot,
       points_to_delete_from_beginning;
+  bool concurrent; 
 
   po::options_description desc{"Arguments"};
   try {
@@ -359,6 +434,9 @@ int main(int argc, char** argv) {
     desc.add_options()(
         "points_to_delete_from_beginning",
         po::value<uint64_t>(&points_to_delete_from_beginning)->required(), "");
+    desc.add_options()(
+        "do_concurrent",
+        po::value<bool>(&concurrent)->required(), "");
 
     po::variables_map vm;
     po::store(po::parse_command_line(argc, argv, desc), vm);
@@ -378,19 +456,19 @@ int main(int argc, char** argv) {
           data_path, L, R, alpha, num_threads, points_to_skip,
           max_points_to_insert, beginning_index_size, points_per_checkpoint,
           checkpoints_per_snapshot, index_path_prefix,
-          points_to_delete_from_beginning);
+          points_to_delete_from_beginning, concurrent);
     else if (data_type == std::string("uint8"))
       build_incremental_index<uint8_t>(
           data_path, L, R, alpha, num_threads, points_to_skip,
           max_points_to_insert, beginning_index_size, points_per_checkpoint,
           checkpoints_per_snapshot, index_path_prefix,
-          points_to_delete_from_beginning);
+          points_to_delete_from_beginning, concurrent);
     else if (data_type == std::string("float"))
       build_incremental_index<float>(
           data_path, L, R, alpha, num_threads, points_to_skip,
           max_points_to_insert, beginning_index_size, points_per_checkpoint,
           checkpoints_per_snapshot, index_path_prefix,
-          points_to_delete_from_beginning);
+          points_to_delete_from_beginning, concurrent);
     else
       std::cout << "Unsupported type. Use float/int8/uint8" << std::endl;
   } catch (const std::exception& e) {
