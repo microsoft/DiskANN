@@ -789,7 +789,7 @@ namespace diskann {
   }
 
   template<typename T>
-  inline void copy_aligned_data_from_file(const std::string bin_file, T*& data,
+  inline void copy_aligned_data_from_file(const char* bin_file, T*& data,
                                           size_t& npts, size_t& dim,
                                           const size_t& rounded_dim,
                                           size_t        offset = 0) {
@@ -801,7 +801,9 @@ namespace diskann {
           "Null pointer passed to copy_aligned_data_from_file function", -1,
           __FUNCSIG__, __FILE__, __LINE__);
     }
-    std::ifstream reader(bin_file, std::ios::binary);
+    std::ifstream reader;
+    reader.exceptions(std::ios::badbit | std::ios::failbit);
+    reader.open(bin_file, std::ios::binary);
     reader.seekg(offset, reader.beg);
 
     int npts_i32, dim_i32;
@@ -809,21 +811,6 @@ namespace diskann {
     reader.read((char*) &dim_i32, sizeof(int));
     npts = (unsigned) npts_i32;
     dim = (unsigned) dim_i32;
-
-    /*
-    size_t expected_actual_file_size =
-        npts * dim * sizeof(T) + 2 * sizeof(uint32_t);
-    if (actual_file_size != expected_actual_file_size) {
-      std::stringstream stream;
-      stream << "Error. File size mismatch. Actual size is " << actual_file_size
-             << " while expected size is  " << expected_actual_file_size
-             << " npts = " << npts << " dim = " << dim
-             << " size of <T>= " << sizeof(T) << std::endl;
-      diskann::cout << stream.str() << std::endl;
-      throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
-                                  __LINE__);
-    }
-    */
 
     for (size_t i = 0; i < npts; i++) {
       reader.read((char*) (data + i * rounded_dim), dim * sizeof(T));
