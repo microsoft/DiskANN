@@ -2258,6 +2258,109 @@ namespace diskann {
     return _nd;
   }
 
+  // Do not call consolidate_deletes() if you have not locked _change_lock.
+  // Returns number of live points left after consolidation
+  template<typename T, typename TagT>
+  size_t Index<T, TagT>::consolidate_deletes_concurrent(const Parameters &parameters) {
+    if (_eager_done) {
+      diskann::cout
+          << "In consolidate_deletes(), _eager_done is true. So exiting."
+          << std::endl;
+      return 0;
+    }
+
+    assert(_enable_tags);
+    assert(_delete_set.size() <= _nd);
+    assert(_empty_slots.size() + _nd == _max_points);
+
+    const unsigned range = parameters.Get<unsigned>("R");
+    const unsigned maxc = parameters.Get<unsigned>("C");
+    const float    alpha = parameters.Get<float>("alpha");
+
+    _u64     total_pts = _max_points + _num_frozen_pts;
+    unsigned block_size = 1 << 10;
+    _s64     total_blocks = DIV_ROUND_UP(total_pts, block_size);
+
+    auto start = std::chrono::high_resolution_clock::now();
+#pragma omp parallel for schedule(dynamic)
+    for (_s64 block = 0; block < total_blocks; ++block) {
+      tsl::robin_set<unsigned> candidate_set;
+      std::vector<Neighbor>    expanded_nghrs;
+      std::vector<Neighbor>    result;
+
+      for (_s64 i = block * block_size;
+           i < (_s64) ((block + 1) * block_size) &&
+           i < (_s64) (_max_points + _num_frozen_pts);
+           i++) {
+        if ((_delete_set.find((_u32) i) == _delete_set.end()) &&
+            (_empty_slots.find((_u32) i) == _empty_slots.end())) {
+          candidate_set.clear();
+          expanded_nghrs.clear();
+          result.clear();
+
+          bool modify = false;
+          for (auto ngh : _final_graph[(_u32) i]) {
+            if (_delete_set.find(ngh) != _delete_set.end()) {
+              modify = true;
+
+              // Add outgoing links from
+              for (auto j : _final_graph[ngh])
+                if (_delete_set.find(j) == _delete_set.end())
+                  candidate_set.insert(j);
+            } else {
+              candidate_set.insert(ngh);
+            }
+          }
+          if (modify) {
+            for (auto j : candidate_set) {
+              expanded_nghrs.push_back(
+                  Neighbor(j,
+                           _distance->compare(_data + _aligned_dim * i,
+                                              _data + _aligned_dim * (size_t) j,
+                                              (unsigned) _aligned_dim),
+                           true));
+            }
+
+            std::sort(expanded_nghrs.begin(), expanded_nghrs.end());
+            occlude_list(expanded_nghrs, alpha, range, maxc, result);
+
+            {
+              LockGuard guard(_locks[i]);
+              _final_graph[(_u32) i].clear();
+              for (auto j : result) {
+                if (j.id != (_u32) i &&
+                    (_delete_set.find(j.id) == _delete_set.end()))
+                  _final_graph[(_u32) i].push_back(j.id);
+              }
+            }
+          }
+        }
+      }
+    }
+
+    if (_support_eager_delete)
+      update_in_graph();
+
+    {
+      LockGuard guard(_change_lock);
+      _nd -= _delete_set.size();
+      for (auto iter : _delete_set)
+        _empty_slots.insert(iter);
+      _delete_set.clear();
+    }
+
+
+    auto stop = std::chrono::high_resolution_clock::now();
+    diskann::cout << "Time taken for consolidate_deletes() "
+                  << std::chrono::duration_cast<std::chrono::duration<double>>(
+                         stop - start)
+                         .count()
+                  << "s." << std::endl;
+
+    return _nd;
+  }
+
+
   template<typename T, typename TagT>
   void Index<T, TagT>::consolidate(Parameters &parameters) {
     consolidate_deletes(parameters);
@@ -2648,12 +2751,17 @@ namespace diskann {
                        scratch.best_l_nodes(), scratch.inserted_into_pool_rs(),
                        scratch.inserted_into_pool_bs());
 
-    for (unsigned i = 0; i < pool.size(); i++)
+    for (unsigned i = 0; i < pool.size(); i++){
       if (pool[i].id == (unsigned) location) {
         pool.erase(pool.begin() + i);
         visited.erase((unsigned) location);
-        break;
+        i--;
+      } else if(_delete_set.find(pool[i].id) != _delete_set.end()){
+        pool.erase(pool.begin()+i);
+        visited.erase((unsigned) pool[i].id);
+        i--;
       }
+    }
 
     prune_neighbors(location, pool, pruned_list);
     assert(_final_graph.size() == _max_points + _num_frozen_pts);
@@ -2697,7 +2805,8 @@ namespace diskann {
 
   template<typename T, typename TagT>
   int Index<T, TagT>::disable_delete(const Parameters &parameters,
-                                     const bool        consolidate) {
+                                     const bool        consolidate,
+                                     const bool        concurrent) {
     if (!_enable_tags) {
       diskann::cerr << "Point tag array not instantiated" << std::endl;
       throw diskann::ANNException("Point tag array not instantiated", -1,
@@ -2730,8 +2839,12 @@ namespace diskann {
     }
 
     if (consolidate) {
-      std::unique_lock<std::shared_timed_mutex> lock(_update_lock);
-      consolidate_deletes(parameters);
+      if(concurrent){
+        consolidate_deletes_concurrent(parameters);
+      } else{
+        std::unique_lock<std::shared_timed_mutex> lock(_update_lock);
+        consolidate_deletes(parameters);
+      }
     }
 
     return 0;
@@ -2769,7 +2882,7 @@ namespace diskann {
       _location_to_tag.erase(_tag_to_location[tag]);
       _tag_to_location.erase(tag);
     }
-
+    _data_compacted = false;
     return 0;
   }
 
