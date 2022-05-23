@@ -252,7 +252,7 @@ void build_incremental_index(
             // index.lazy_delete(deletes, failed_deletes);
             omp_set_num_threads(sub_threads);
             diskann::Timer delete_timer;
-            index.disable_delete(paras, true, false);
+            index.disable_delete(paras, true, true);
             const double elapsedSeconds = delete_timer.elapsed() / 1000000.0;
 
             std::cout << "Deleted " << points_to_delete_from_beginning << " points in "
