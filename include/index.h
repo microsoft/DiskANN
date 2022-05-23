@@ -185,7 +185,8 @@ namespace diskann {
     // call after all delete requests have been served, checks if deletions were
     // executed correctly, rearranges metadata in case of lazy deletes
     DISKANN_DLLEXPORT int disable_delete(const Parameters &parameters,
-                                         const bool        consolidate = false);
+                                         const bool        consolidate = false,
+                                         const bool        concurrent = false);
 
     // Record deleted point now and restructure graph later. Return -1 if tag
     // not found, 0 if OK. Do not call if _eager_delete was called earlier and
@@ -352,6 +353,10 @@ namespace diskann {
     // WARNING: Do not call consolidate_deletes without acquiring change_lock_
     // Returns number of live points left after consolidation
     size_t consolidate_deletes(const Parameters &parameters);
+
+    // Returns number of live points left after consolidation
+    // Able to be called while inserts happen concurrently
+    size_t consolidate_deletes_concurrent(const Parameters &parameters);
 
     void initialize_query_scratch(uint32_t num_threads, uint32_t search_l,
                                   uint32_t indexing_l, uint32_t r, size_t dim);
