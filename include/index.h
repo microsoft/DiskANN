@@ -33,13 +33,13 @@ namespace boost {
 }  // namespace boost
 
 namespace diskann {
-   inline double estimate_ram_usage(_u64 size, _u32 dim, _u32 datasize,
-                                    _u32 degree) {
-     double size_of_data = ((double) size) * ROUND_UP(dim, 8) * datasize;
-     double size_of_graph =
-         ((double) size) * degree * sizeof(unsigned) * GRAPH_SLACK_FACTOR;
-     double size_of_locks = ((double) size) * sizeof(std::mutex);
-     double size_of_outer_vector = ((double) size) * sizeof(ptrdiff_t);
+  inline double estimate_ram_usage(_u64 size, _u32 dim, _u32 datasize,
+                                   _u32 degree) {
+    double size_of_data = ((double) size) * ROUND_UP(dim, 8) * datasize;
+    double size_of_graph =
+        ((double) size) * degree * sizeof(unsigned) * GRAPH_SLACK_FACTOR;
+    double size_of_locks = ((double) size) * sizeof(std::mutex);
+    double size_of_outer_vector = ((double) size) * sizeof(ptrdiff_t);
 
     return OVERHEAD_FACTOR * (size_of_data + size_of_graph + size_of_locks +
                               size_of_outer_vector);
@@ -93,10 +93,11 @@ namespace diskann {
    public:
     // Constructor for Bulk operations and for creating the index object solely
     // for loading a prexisting index.
-    DISKANN_DLLEXPORT Index(Metric m, const size_t dim, const size_t max_points,
-                            const bool dynamic_index,
-                            const bool enable_tags = false,
-                            const bool support_eager_delete = false);
+    DISKANN_DLLEXPORT Index(Metric m, const size_t dim,
+                            const size_t max_points = 1,
+                            const bool   dynamic_index = false,
+                            const bool   enable_tags = false,
+                            const bool   support_eager_delete = false);
 
     // Constructor for incremental index
     DISKANN_DLLEXPORT Index(Metric m, const size_t dim, const size_t max_points,
@@ -115,7 +116,6 @@ namespace diskann {
     DISKANN_DLLEXPORT _u64 save_tags(std::string filename);
     DISKANN_DLLEXPORT _u64 save_delete_list(const std::string &filename);
 
-
     // Load functions
     DISKANN_DLLEXPORT void   load(const char *index_file, uint32_t num_threads,
                                   uint32_t search_l);
@@ -125,20 +125,30 @@ namespace diskann {
     DISKANN_DLLEXPORT size_t load_tags(const std::string tag_file_name);
     DISKANN_DLLEXPORT size_t load_delete_set(const std::string &filename);
 
+
+    // get some private variables
     DISKANN_DLLEXPORT size_t get_num_points();
     DISKANN_DLLEXPORT size_t get_max_points();
 
-
-    // Batch build
+    
+    
+    // Batch build from a file. Optionally pass tags vector.
     DISKANN_DLLEXPORT void build(
         const char *filename, const size_t num_points_to_load,
         Parameters              &parameters,
         const std::vector<TagT> &tags = std::vector<TagT>());
 
+    // Batch build from a file. Optionally pass tags file.
     DISKANN_DLLEXPORT void build(const char  *filename,
                                  const size_t num_points_to_load,
                                  Parameters  &parameters,
                                  const char  *tag_filename);
+
+    // Batch build from a data array, which must pad vectors to aligned_dim
+    DISKANN_DLLEXPORT void build(const T *data, const size_t num_points_to_load,
+                                 Parameters              &parameters,
+                                 const std::vector<TagT> &tags);
+
 
 
     // For Bulk Index FastL2 search, we interleave the data with graph
@@ -162,12 +172,14 @@ namespace diskann {
                                               float            *distances,
                                               std::vector<T *> &res_vectors);
 
+
+
     DISKANN_DLLEXPORT void clear_index();
 
     // Will fail if tag already in the index
     DISKANN_DLLEXPORT int insert_point(const T *point, const TagT tag);
 
-    // call before issues deleteions - sets relevant flags for enalbing deletes
+    // call this before issuing deleteions to sets relevant flags
     DISKANN_DLLEXPORT int enable_delete();
 
     // call after all delete requests have been served, checks if deletions were
@@ -220,13 +232,14 @@ namespace diskann {
     DISKANN_DLLEXPORT void get_active_tags(tsl::robin_set<TagT> &active_tags);
 
     // memory should be allocated for vec before calling this function
-    DISKANN_DLLEXPORT int      get_vector_by_tag(TagT &tag, T *vec);
+    DISKANN_DLLEXPORT int get_vector_by_tag(TagT &tag, T *vec);
 
     DISKANN_DLLEXPORT void print_status() const;
 
     // This variable MUST be updated if the number of entries in the metadata
     // change.
     DISKANN_DLLEXPORT static const int METADATA_ROWS = 5;
+
 
 
     // ********************************
@@ -239,6 +252,10 @@ namespace diskann {
     // No copy/assign.
     Index(const Index<T, TagT> &) = delete;
     Index<T, TagT> &operator=(const Index<T, TagT> &) = delete;
+
+    // Use after _data and _nd have been populated
+    void build_with_data_populated(Parameters              &parameters,
+                                   const std::vector<TagT> &tags);
 
     // generates 1 frozen point that will never be deleted from the graph
     // This is not visible to the user
@@ -363,8 +380,8 @@ namespace diskann {
     size_t _data_len;
     size_t _neighbor_len;
 
-    unsigned _width = 0;
-    unsigned _ep = 0;
+    unsigned _max_observed_degree = 0;
+    unsigned _start = 0;
 
     bool _has_built = false;
     bool _saturate_graph = false;
