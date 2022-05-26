@@ -1,10 +1,10 @@
 **Usage for dynamic indices**
 ================================
 
-A "dynamic" index refers to an index where insertions of new points and deletions of existing points are supported. The program found in 
-`tests/test_streaming_scenario` provides functionality to do this. It allows the user to specify which points from the data file will be used
-to initially build the index, which points will be deleted from the index, and which points will be inserted into the index. It also provides
-functionality to perform the insertions and deletions sequentially or concurrently.
+A "dynamic" index refers to an index which supports insertion of new points into a previously built index as well as deletions of points in an index. The program found in `tests/test_streaming_scenario` tests this functionality. It allows the user to specify which points from the data file will be used
+to initially build the index, which points will be deleted from the index, and which points will be inserted into the index. Insertions and deletions can be performed sequentially or concurrently.
+
+When modifying the index sequentially, the user has the ability to take *snapshots*--that is, save the index to memory for every *m* insertions or deletions instead of only at the end of the build.
 
 --------------------------------------------------------------
 
@@ -19,12 +19,12 @@ The arguments are as follows:
 7. **--alpha** (default is 1.2): A float value between 1.0 and 1.5 which determines the diameter of the graph, which will be approximately *log n* to the base alpha. Typical values are between 1 to 1.5. 1 will yield the sparsest graph, 1.5 will yield denser graphs. 
 8. **T (--num_threads)** (default is to get_omp_num_procs()): number of threads used by the index build process. Since the code is highly parallel, the  indexing time improves almost linearly with the number of threads (subject to the cores available on the machine and DRAM bandwidth).
 9. **--points_to_skip**: number of points to skip from the beginning of the data file. 
-10. **max_points_to_insert**: the maximum size of the index. 
-11. **beginning_index_size**: how many points to build the initial index with. Thus, the number of points inserted dynamically will be max_points_to_insert - beginning_index_size. When concurrency is not enabled this is limited to points_per_checkpoint.
-12. **points_per_checkpoint**: when inserting and deleting sequentially, each update is handled in points_per_checkpoint batches. When updating concurrently, this is enabled for insertions but deletions are always processed in a single batch.
-13. **checkpoints_per_snapshot**: when inserting and deleting sequentially, the graph is saved to memory every checkpoints_per_snapshot checkpoints. This is not enabled for concurrent updates.
-14. **points_to_delete_from_beginning**: how many points to delete from the index, starting in order of insertion. If deletions are concurrent with insertions, points_to_delete_from_beginning cannot be larger than beginning_index_size. 
-14. **do_concurrent** (default false): whether to perform insertions and deletions concurrently or sequentially. If concurrent is specified, half the threads are used for insertions and half the threads are used for deletions. Note that insertions are performed before deletions if this flag is set to false, so in this case is possible to delete more than beginning_index_size points.
+10. **--max_points_to_insert**: the maximum size of the index. 
+11. **--beginning_index_size**: how many points to build the initial index with. The number of points inserted dynamically will be max_points_to_insert - beginning_index_size. 
+12. **--points_per_checkpoint**: when inserting and deleting sequentially, each update is handled in points_per_checkpoint batches. When updating concurrently, insertions are handled in points_per_checkpoint batches but deletions are always processed in a single batch.
+13. **--checkpoints_per_snapshot**: when inserting and deleting sequentially, the graph is saved to memory every checkpoints_per_snapshot checkpoints. This is not currently supported for concurrent updates.
+14. **--points_to_delete_from_beginning**: how many points to delete from the index, starting in order of insertion. If deletions are concurrent with insertions, points_to_delete_from_beginning cannot be larger than beginning_index_size. 
+14. **--do_concurrent** (default false): whether to perform insertions and deletions concurrently or sequentially. If concurrent is specified, half the threads are used for insertions and half the threads are used for deletions. Note that insertions are performed before deletions if this flag is set to false, so in this case is possible to delete more than beginning_index_size points.
 
 
 To search the generated index, use the `tests/search_memory_index` program:
@@ -68,14 +68,6 @@ The example below tests the following scenario: using a file with 100000 points,
  ./tests/search_memory_index  --data_type float --dist_fn l2 --index_path_prefix data/sift/index_sift_learn_dynamic --query_file data/sift/sift_query.fbin  --gt_file data/sift/sift_query_learn_dynamic_gt100 -K 10 -L 10 20 30 40 50 100 --result_path data/sift/res --dynamic true
  ```
 
- TODO: double check that searching with tags is not needed.
- 
 
- The output of search lists the throughput (Queries/sec) as well as mean and 99.9 latency in microseconds for each `L` parameter provided. (We measured on a [TODO input machine specs])
- ```
-  Ls        QPS      Avg dist cmps  Mean Latency (mus)   99.9 Latency   Recall@10
-=================================================================================
-TODO
- ```
 
 
