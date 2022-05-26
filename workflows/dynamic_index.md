@@ -1,7 +1,10 @@
+<!-- Copyright (c) Microsoft Corporation. All rights reserved.
+Licensed under the MIT license. -->
+
 **Usage for dynamic indices**
 ================================
 
-A "dynamic" index refers to an index which supports insertion of new points into a previously built index as well as deletions of points in an index. The program found in `tests/test_streaming_scenario` tests this functionality. It allows the user to specify which points from the data file will be used
+A "dynamic" index refers to an index which supports insertion of new points into a previously built index as well as deletions of points in an existing index. The program found in `tests/test_streaming_scenario` tests this functionality. It allows the user to specify which points from the data file will be used
 to initially build the index, which points will be deleted from the index, and which points will be inserted into the index. Insertions and deletions can be performed sequentially or concurrently.
 
 When modifying the index sequentially, the user has the ability to take *snapshots*--that is, save the index to memory for every *m* insertions or deletions instead of only at the end of the build.
@@ -61,7 +64,7 @@ cd ..
 ./tests/utils/fvecs_to_bin data/sift/sift_query.fvecs data/sift/sift_query.fbin
 ```
 
-The example below tests the following scenario: using a file with 100000 points, the first 50000 points are used to initially build the index. Then, the first 25000 points are deleted from the index, while the next 25000 points (i.e. points 50001 to 75000) are concurrently inserted into the index. Note that the memory index should be built **before** calculating the ground truth, since the memory index returns the slice of the sift100K dataset that was used to build the final graph (that is, points 25001-75000 in the original index.)
+The example below tests the following scenario: using a file with 100000 points, the first 50000 points are used to initially build the index. Then, the first 25000 points are deleted from the index, while an additional 25000 points (i.e. points 50001 to 75000) are concurrently inserted into the index. Note that the memory index should be built **before** calculating the ground truth, since the memory index returns the slice of the sift100K dataset that was used to build the final graph (that is, points 25001-75000 in the original index).
 ```bash
 ./tests/build_memory_index  --data_type float --dist_fn l2 --data_path data/sift/sift_learn.fbin --index_path_prefix data/sift/index_sift_learn_dynamic -R 32 -L 50 --alpha 1.2 --T 16 --points_to_skip 0 --max_points_to_insert 75000 --beginning_index_size 25000 --points_per_checkpoint 10000 --checkpoints_per_snapshot 0 --points_to_delete_from_beginning 25000 --do_concurrent true
 ./tests/utils/compute_groundtruth  --data_type float --dist_fn l2 --base_file data/sift/index_sift_learn_dynamic.data --query_file  data/sift/sift_query.fbin --gt_file data/sift/sift_query_learn_dynamic_gt100 --K 100
