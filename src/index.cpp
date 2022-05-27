@@ -8,6 +8,7 @@
 #include <shared_mutex>
 #include <sstream>
 #include <string>
+#include <numeric>
 #include "tsl/robin_set.h"
 #include "tsl/robin_map.h"
 #include <unordered_map>
@@ -1489,11 +1490,12 @@ namespace diskann {
 
         if ((sync_num * 100) / num_syncs > progress_counter) {
           diskann::cout.precision(4);
-          diskann::cout << "Completed  (round: " << rnd_no
-                        << ", sync: " << sync_num << "/" << num_syncs
-                        << " with L " << L << ")"
-                        << " sync_time: " << sync_time << "s"
-                        << "; inter_time: " << inter_time << "s" << std::endl;
+          // diskann::cout << "Completed  (round: " << rnd_no
+          //               << ", sync: " << sync_num << "/" << num_syncs
+          //               << " with L " << L << ")"
+          //               << " sync_time: " << sync_time << "s"
+          //               << "; inter_time: " << inter_time << "s" <<
+          //               std::endl;
 
           total_sync_time += sync_time;
           total_inter_time += inter_time;
@@ -2698,6 +2700,7 @@ namespace diskann {
 
     auto location = reserve_location();
     if (location == -1) {
+      std::cout << "WARNING: TRIED TO INSERT TOO MANY POINTS" << std::endl;
       lock.unlock();
       std::unique_lock<std::shared_timed_mutex> growth_lock(_update_lock);
 
@@ -2808,7 +2811,7 @@ namespace diskann {
                       << _tag_to_location.size() << std::endl;
         return -2;
       }
-    } else if (_tag_to_location.size() + _delete_set.size() != _nd) {
+    } else if (_tag_to_location.size() + _delete_set.size() < _nd) {
       diskann::cerr << "Tags to points array wrong sized"
                     << "\n_tag_to_location.size():  " << _tag_to_location.size()
                     << "\n_delete_set.size():  " << _delete_set.size()
@@ -2817,11 +2820,11 @@ namespace diskann {
     }
 
     if (_eager_done) {
-      if (_location_to_tag.size() != _nd) {
+      if (_location_to_tag.size() < _nd) {
         diskann::cerr << "Points to tags array wrong sized" << std::endl;
         return -3;
       }
-    } else if (_location_to_tag.size() + _delete_set.size() != _nd) {
+    } else if (_location_to_tag.size() + _delete_set.size() < _nd) {
       diskann::cerr << "Points to tags array wrong sized "
                     << _location_to_tag.size() << " " << _delete_set.size()
                     << std::endl;
