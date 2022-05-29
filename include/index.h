@@ -97,7 +97,8 @@ namespace diskann {
                             const size_t max_points = 1,
                             const bool   dynamic_index = false,
                             const bool   enable_tags = false,
-                            const bool   support_eager_delete = false);
+                            const bool   support_eager_delete = false,
+                            const bool   concurrent_consolidate = false);
 
     // Constructor for incremental index
     DISKANN_DLLEXPORT Index(Metric m, const size_t dim, const size_t max_points,
@@ -105,7 +106,8 @@ namespace diskann {
                             const Parameters &indexParameters,
                             const Parameters &searchParameters,
                             const bool        enable_tags = false,
-                            const bool        support_eager_delete = false);
+                            const bool        support_eager_delete = false,
+                            const bool        concurrent_consolidate = false);
 
     DISKANN_DLLEXPORT ~Index();
 
@@ -125,13 +127,10 @@ namespace diskann {
     DISKANN_DLLEXPORT size_t load_tags(const std::string tag_file_name);
     DISKANN_DLLEXPORT size_t load_delete_set(const std::string &filename);
 
-
     // get some private variables
     DISKANN_DLLEXPORT size_t get_num_points();
     DISKANN_DLLEXPORT size_t get_max_points();
 
-    
-    
     // Batch build from a file. Optionally pass tags vector.
     DISKANN_DLLEXPORT void build(
         const char *filename, const size_t num_points_to_load,
@@ -148,8 +147,6 @@ namespace diskann {
     DISKANN_DLLEXPORT void build(const T *data, const size_t num_points_to_load,
                                  Parameters              &parameters,
                                  const std::vector<TagT> &tags);
-
-
 
     // For Bulk Index FastL2 search, we interleave the data with graph
     DISKANN_DLLEXPORT void optimize_index_layout();
@@ -172,8 +169,6 @@ namespace diskann {
                                               float            *distances,
                                               std::vector<T *> &res_vectors);
 
-
-
     DISKANN_DLLEXPORT void clear_index();
 
     // Will fail if tag already in the index
@@ -181,12 +176,6 @@ namespace diskann {
 
     // call this before issuing deleteions to sets relevant flags
     DISKANN_DLLEXPORT int enable_delete();
-
-    // call after all delete requests have been served, checks if deletions were
-    // executed correctly, rearranges metadata in case of lazy deletes
-    DISKANN_DLLEXPORT int disable_delete(const Parameters &parameters,
-                                         const bool        consolidate = false,
-                                         const bool        concurrent = false);
 
     // Record deleted point now and restructure graph later. Return -1 if tag
     // not found, 0 if OK. Do not call if _eager_delete was called earlier and
@@ -199,6 +188,12 @@ namespace diskann {
     DISKANN_DLLEXPORT int lazy_delete(const tsl::robin_set<TagT> &tags,
                                       std::vector<TagT>          &failed_tags);
 
+    // Call after a series of lazy deletions
+    // Returns number of live points left after consolidation
+    // If _conc_consolidates is set in the ctor, then this call can be invoked
+    // alongside inserts and lazy deletes, else it acquires _update_lock 
+    size_t consolidate_deletes(const Parameters &parameters);
+
     // Delete point from graph and restructure it immediately. Do not call if
     // _lazy_delete was called earlier and data was not consolidated
     DISKANN_DLLEXPORT int eager_delete(const TagT        tag,
@@ -208,14 +203,9 @@ namespace diskann {
     DISKANN_DLLEXPORT int extract_data(
         T *ret_data, std::unordered_map<TagT, unsigned> &tag_to_location);
 
-    DISKANN_DLLEXPORT void get_location_to_tag(
-        std::unordered_map<unsigned, TagT> &ret_loc_to_tag);
-
     DISKANN_DLLEXPORT void prune_all_nbrs(const Parameters &parameters);
 
-    DISKANN_DLLEXPORT void compact_data_for_insert();
-
-    DISKANN_DLLEXPORT bool hasIndexBeenSaved();
+    DISKANN_DLLEXPORT bool is_index_saved();
 
     // repositions frozen points to the end of _data - if they have been moved
     // during deletion
@@ -240,8 +230,6 @@ namespace diskann {
     // This variable MUST be updated if the number of entries in the metadata
     // change.
     DISKANN_DLLEXPORT static const int METADATA_ROWS = 5;
-
-
 
     // ********************************
     //
@@ -341,7 +329,7 @@ namespace diskann {
     void release_location();
 
     // Resize the index when no slots are left for insertion.
-    // MUST acquire _change_lock and _update_lock before calling.
+    // MUST acquire _num_points_lock and _update_lock before calling.
     // Anything else in a MT environment will lead to an inconsistent index.
     void resize(size_t new_max_points);
 
@@ -350,13 +338,11 @@ namespace diskann {
     // case of eager deletion
     void compact_data();
 
-    // WARNING: Do not call consolidate_deletes without acquiring change_lock_
-    // Returns number of live points left after consolidation
-    size_t consolidate_deletes(const Parameters &parameters);
-
-    // Returns number of live points left after consolidation
-    // Able to be called while inserts happen concurrently
-    size_t consolidate_deletes_concurrent(const Parameters &parameters);
+    // Remove deleted nodes from adj list of node i and absorb edges from
+    // deleted neighbors Acquire _locks[i] prior to calling for thread-safety
+    void process_delete(const tsl::robin_set<unsigned> &old_delete_set,
+                        size_t i, const unsigned &range, const unsigned &maxc,
+                        const float &alpha);
 
     void initialize_query_scratch(uint32_t num_threads, uint32_t search_l,
                                   uint32_t indexing_l, uint32_t r, size_t dim);
@@ -419,11 +405,15 @@ namespace diskann {
     bool _lazy_done = false;      // true if lazy deletions have been made
     bool _data_compacted = true;  // true if data has been consolidated
     bool _is_saved = false;  // Gopal. Checking if the index is already saved.
+    bool _conc_consolidate = false;  // use _lock while searching
+
+    std::atomic<bool> _consolidate_active =
+        ATOMIC_VAR_INIT(false);  // Is one instance of consolidate active
 
     std::vector<std::mutex> _locks;  // Per node lock, cardinality=max_points_
     std::vector<std::mutex> _locks_in;  // Per node lock
 
-    std::mutex _change_lock;  // Lock to synchronously modify _nd
+    std::mutex _num_points_lock;  // Lock to synchronously modify _nd
 
     std::shared_timed_mutex
         _tag_lock;  // RW lock for _tag_to_location and _location_to_tag
