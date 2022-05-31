@@ -2256,6 +2256,189 @@ namespace diskann {
   // Do not call consolidate_deletes() if you have not locked _change_lock.
   // Returns number of live points left after consolidation
   template<typename T, typename TagT>
+  size_t Index<T, TagT>::consolidate_deletes_fix(const Parameters &parameters,
+                                                 int delete_policy) {
+    if (_eager_done) {
+      diskann::cout
+          << "In consolidate_deletes(), _eager_done is true. So exiting."
+          << std::endl;
+      return 0;
+    }
+
+    assert(_enable_tags);
+    assert(_delete_set.size() <= _nd);
+    assert(_empty_slots.size() + _nd == _max_points);
+
+    const unsigned range = parameters.Get<unsigned>("R");
+    const unsigned maxc = parameters.Get<unsigned>("C");
+    const float    alpha = parameters.Get<float>("alpha");
+
+    _u64     total_pts = _max_points + _num_frozen_pts;
+    unsigned block_size = 1 << 10;
+    _s64     total_blocks = DIV_ROUND_UP(total_pts, block_size);
+
+    bool policy_all = false;
+    bool policy_closest = false;
+    bool policy_random = false;
+
+    int num_closest = 5;
+    int num_random = 0;
+
+    if (delete_policy == 0) {
+      policy_all = true;
+    } else if (delete_policy == 1) {
+      policy_closest = true;
+    } else if (delete_policy == 2) {
+      policy_random = true;
+    }
+
+    std::vector<int> modified(total_pts, 0);
+    std::vector<int> pruned(total_pts, 0);
+
+    auto start = std::chrono::high_resolution_clock::now();
+#pragma omp parallel for schedule(dynamic)
+    for (_s64 block = 0; block < total_blocks; ++block) {
+      tsl::robin_set<unsigned> candidate_set;
+      std::vector<Neighbor>    expanded_nghrs;
+      std::vector<Neighbor>    result;
+
+      for (_s64 i = block * block_size;
+           i < (_s64)((block + 1) * block_size) &&
+           i < (_s64)(_max_points + _num_frozen_pts);
+           i++) {
+        if ((_delete_set.find((_u32) i) == _delete_set.end()) &&
+            (_empty_slots.find((_u32) i) == _empty_slots.end())) {
+          candidate_set.clear();
+          expanded_nghrs.clear();
+          result.clear();
+          bool modify = false;
+
+          if (policy_all) {
+            for (auto ngh : _final_graph[(_u32) i]) {
+              if (_delete_set.find(ngh) != _delete_set.end()) {
+                modify = true;
+
+                // Add outgoing links from
+                for (auto j : _final_graph[ngh])
+                  if (_delete_set.find(j) == _delete_set.end())
+                    candidate_set.insert(j);
+              } else {
+                candidate_set.insert(ngh);
+              }
+            }
+          } else if (policy_closest) {
+            for (auto ngh : _final_graph[(_u32) i]) {
+              if (_delete_set.find(ngh) != _delete_set.end()) {
+                modify = true;
+                std::vector<Neighbor> intermediate_nbh;
+                // Add outgoing links from
+                for (auto j : _final_graph[ngh])
+                  if (_delete_set.find(j) == _delete_set.end()) {
+                    intermediate_nbh.push_back(Neighbor(
+                        j,
+                        _distance->compare(_data + _aligned_dim * ngh,
+                                           _data + _aligned_dim * (size_t) j,
+                                           (unsigned) _aligned_dim),
+                        true));
+                    std::sort(intermediate_nbh.begin(), intermediate_nbh.end());
+                    int k =
+                        std::min(num_closest, (int) intermediate_nbh.size());
+                    for (int j = 0; j < k; j++) {
+                      candidate_set.insert(intermediate_nbh[j].id);
+                    }
+                  }
+
+              } else {
+                candidate_set.insert(ngh);
+              }
+            }
+          } else if (policy_random) {
+            for (auto ngh : _final_graph[(_u32) i]) {
+              if (_delete_set.find(ngh) != _delete_set.end()) {
+                modify = true;
+
+                std::vector<int> intermediate_candidates;
+                // Add outgoing links from
+                for (auto j : _final_graph[ngh])
+                  if (_delete_set.find(j) == _delete_set.end())
+                    intermediate_candidates.push_back(j);
+                int k =
+                    std::min((int) intermediate_candidates.size(), num_random);
+                // if we end up liking this policy, need to do something
+                // properly threadsafe
+                std::random_shuffle(intermediate_candidates.begin(),
+                                    intermediate_candidates.end());
+                for (int j = 0; j < k; j++)
+                  candidate_set.insert(intermediate_candidates[j]);
+              } else {
+                candidate_set.insert(ngh);
+              }
+            }
+          }
+
+          if (modify) {
+            modified[(_u32) i] = 1;
+            if (candidate_set.size() <= (size_t) 1.5 * range) {
+              _final_graph[(_u32) i].clear();
+              for (auto j : candidate_set) {
+                if (j != (_u32) i && (_delete_set.find(j) == _delete_set.end()))
+                  _final_graph[(_u32) i].push_back(j);
+              }
+            } else {
+              pruned[(_u32) i] = 1;
+              for (auto j : candidate_set) {
+                expanded_nghrs.push_back(Neighbor(
+                    j,
+                    _distance->compare(_data + _aligned_dim * i,
+                                       _data + _aligned_dim * (size_t) j,
+                                       (unsigned) _aligned_dim),
+                    true));
+              }
+              std::sort(expanded_nghrs.begin(), expanded_nghrs.end());
+              occlude_list(expanded_nghrs, alpha, range, maxc, result);
+
+              _final_graph[(_u32) i].clear();
+              for (auto j : result) {
+                if (j.id != (_u32) i &&
+                    (_delete_set.find(j.id) == _delete_set.end()))
+                  _final_graph[(_u32) i].push_back(j.id);
+              }
+            }
+          }
+        }
+      }
+    }
+
+    if (_support_eager_delete)
+      update_in_graph();
+
+    for (auto iter : _delete_set) {
+      _empty_slots.insert(iter);
+    }
+    _nd -= _delete_set.size();
+
+    _data_compacted = _delete_set.size() == 0;
+
+    auto stop = std::chrono::high_resolution_clock::now();
+    diskann::cout << "Time taken for consolidate_deletes() "
+                  << std::chrono::duration_cast<std::chrono::duration<double>>(
+                         stop - start)
+                         .count()
+                  << "s." << std::endl;
+
+    diskann::cout << "Number of nodes modified: "
+                  << std::accumulate(modified.begin(), modified.end(), 0)
+                  << std::endl;
+    diskann::cout << "Number of nodes pruned: "
+                  << std::accumulate(pruned.begin(), pruned.end(), 0)
+                  << std::endl;
+
+    return _nd;
+  }
+
+  // Do not call consolidate_deletes() if you have not locked _change_lock.
+  // Returns number of live points left after consolidation
+  template<typename T, typename TagT>
   size_t Index<T, TagT>::consolidate_deletes_concurrent(
       const Parameters &parameters) {
     if (_eager_done) {
@@ -2799,7 +2982,8 @@ namespace diskann {
   template<typename T, typename TagT>
   int Index<T, TagT>::disable_delete(const Parameters &parameters,
                                      const bool        consolidate,
-                                     const bool        concurrent) {
+                                     const bool        concurrent,
+                                     const int         delete_policy) {
     if (!_enable_tags) {
       diskann::cerr << "Point tag array not instantiated" << std::endl;
       throw diskann::ANNException("Point tag array not instantiated", -1,
@@ -2830,13 +3014,17 @@ namespace diskann {
                     << std::endl;
       return -3;
     }
+    if (delete_policy != 0 && delete_policy != 1 && delete_policy != 2) {
+      diskann::cerr << "Invalid delete policy: specify 0, 1, or 2" << std::endl;
+      return -4;
+    }
 
     if (consolidate) {
       if (concurrent) {
         consolidate_deletes_concurrent(parameters);
       } else {
         std::unique_lock<std::shared_timed_mutex> lock(_update_lock);
-        consolidate_deletes(parameters);
+        consolidate_deletes_fix(parameters, delete_policy);
       }
     }
 

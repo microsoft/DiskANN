@@ -186,7 +186,8 @@ namespace diskann {
     // executed correctly, rearranges metadata in case of lazy deletes
     DISKANN_DLLEXPORT int disable_delete(const Parameters &parameters,
                                          const bool        consolidate = false,
-                                         const bool        concurrent = false);
+                                         const bool        concurrent = false,
+                                         const int delete_policy = 0);
 
     // Record deleted point now and restructure graph later. Return -1 if tag
     // not found, 0 if OK. Do not call if _eager_delete was called earlier and
@@ -353,6 +354,10 @@ namespace diskann {
     // WARNING: Do not call consolidate_deletes without acquiring change_lock_
     // Returns number of live points left after consolidation
     size_t consolidate_deletes(const Parameters &parameters);
+
+    // WARNING: Do not call consolidate_deletes without acquiring change_lock_
+    // Returns number of live points left after consolidation
+    size_t consolidate_deletes_fix(const Parameters &parameters, int delete_policy);
 
     // Returns number of live points left after consolidation
     // Able to be called while inserts happen concurrently
