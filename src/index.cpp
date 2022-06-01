@@ -655,6 +655,8 @@ namespace diskann {
                   << " size(_tag_to_location):" << _tag_to_location.size()
                   << " Max points: " << _max_points << std::endl;
 
+    _has_built = true;
+
     _search_queue_size = search_l;
     // For incremental index, _query_scratch is initialized in the constructor.
     // For the bulk index, the parameters required to initialize _query_scratch
@@ -2277,18 +2279,21 @@ namespace diskann {
     unsigned block_size = 1 << 10;
     _s64     total_blocks = DIV_ROUND_UP(total_pts, block_size);
 
-    bool policy_all = false;
+    bool policy_none = false;
+    bool policy_all = false;  // default
     bool policy_closest = false;
     bool policy_random = false;
 
     int num_closest = 5;
-    int num_random = 0;
+    int num_random = 5;
 
     if (delete_policy == 0) {
-      policy_all = true;
+      policy_none = true;
     } else if (delete_policy == 1) {
-      policy_closest = true;
+      policy_all = true;
     } else if (delete_policy == 2) {
+      policy_closest = true;
+    } else if (delete_policy == 3) {
       policy_random = true;
     }
 
@@ -2313,7 +2318,15 @@ namespace diskann {
           result.clear();
           bool modify = false;
 
-          if (policy_all) {
+          if (policy_none) {
+            for (auto ngh : _final_graph[(_u32) i]) {
+              if (_delete_set.find(ngh) != _delete_set.end()) {
+                modify = true;
+              } else {
+                candidate_set.insert(ngh);
+              }
+            }
+          } else if (policy_all) {
             for (auto ngh : _final_graph[(_u32) i]) {
               if (_delete_set.find(ngh) != _delete_set.end()) {
                 modify = true;
@@ -3014,8 +3027,10 @@ namespace diskann {
                     << std::endl;
       return -3;
     }
-    if (delete_policy != 0 && delete_policy != 1 && delete_policy != 2) {
-      diskann::cerr << "Invalid delete policy: specify 0, 1, or 2" << std::endl;
+    if (delete_policy != 0 && delete_policy != 1 && delete_policy != 2 &&
+        delete_policy != 3) {
+      diskann::cerr << "Invalid delete policy: specify 0, 1, 2, or 3"
+                    << std::endl;
       return -4;
     }
 

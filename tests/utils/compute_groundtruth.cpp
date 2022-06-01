@@ -266,9 +266,11 @@ inline int get_num_parts(const char *filename) {
 template<typename T>
 inline void load_bin_as_float(const char *filename, float *&data, size_t &npts,
                               size_t &ndims, int part_num) {
-  std::ifstream reader;
-  reader.exceptions(std::ios::failbit | std::ios::badbit);
-  reader.open(filename, std::ios::binary);
+  //these changes seem to be necessary to read certain bin files
+  //not sure why
+  std::ifstream reader(filename, std::ios::binary);
+  // reader.exceptions(std::ios::failbit | std::ios::badbit);
+  // reader.open(filename, std::ios::binary);
   std::cout << "Reading bin file " << filename << " ...\n";
   int npts_i32, ndims_i32;
   reader.read((char *) &npts_i32, sizeof(int));

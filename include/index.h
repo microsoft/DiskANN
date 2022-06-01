@@ -187,7 +187,7 @@ namespace diskann {
     DISKANN_DLLEXPORT int disable_delete(const Parameters &parameters,
                                          const bool        consolidate = false,
                                          const bool        concurrent = false,
-                                         const int delete_policy = 0);
+                                         const int delete_policy = 1);
 
     // Record deleted point now and restructure graph later. Return -1 if tag
     // not found, 0 if OK. Do not call if _eager_delete was called earlier and
