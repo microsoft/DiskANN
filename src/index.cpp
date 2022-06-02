@@ -2430,7 +2430,7 @@ namespace diskann {
     }
     _nd -= _delete_set.size();
 
-    _data_compacted = _delete_set.size() == 0;
+    // _data_compacted = _delete_set.size() == 0;
 
     auto stop = std::chrono::high_resolution_clock::now();
     diskann::cout << "Time taken for consolidate_deletes() "
@@ -3041,6 +3041,7 @@ namespace diskann {
         std::unique_lock<std::shared_timed_mutex> lock(_update_lock);
         consolidate_deletes_fix(parameters, delete_policy);
       }
+      compact_data();
     }
 
     return 0;
@@ -3110,6 +3111,7 @@ namespace diskann {
       }
     }
 
+    _data_compacted = false;
     return 0;
   }
 

@@ -173,7 +173,6 @@ void test_batch_deletes(const std::string& data_path, const unsigned L,
       std::cout << std::endl;
     }
   }
-  std::cout << std::endl;
 }
 
 int main(int argc, char** argv) {
