@@ -2369,20 +2369,31 @@ namespace diskann {
             for (auto ngh : _final_graph[(_u32) i]) {
               if (_delete_set.find(ngh) != _delete_set.end()) {
                 modify = true;
-
-                std::vector<int> intermediate_candidates;
+                static thread_local std::mt19937 rng;
+                std::vector<int>                 intermediate_candidates;
                 // Add outgoing links from
                 for (auto j : _final_graph[ngh])
                   if (_delete_set.find(j) == _delete_set.end())
                     intermediate_candidates.push_back(j);
-                int k =
-                    std::min((int) intermediate_candidates.size(), num_random);
+                size_t k = std::min(intermediate_candidates.size(),
+                                    (size_t) num_random);
                 // if we end up liking this policy, need to do something
                 // properly threadsafe
-                std::random_shuffle(intermediate_candidates.begin(),
-                                    intermediate_candidates.end());
-                for (int j = 0; j < k; j++)
-                  candidate_set.insert(intermediate_candidates[j]);
+                // std::random_shuffle(intermediate_candidates.begin(),
+                //                     intermediate_candidates.end());
+                // for (int j = 0; j < k; j++)
+                //   candidate_set.insert(intermediate_candidates[j]);
+                std::set<int> intermediate_set;
+                while (intermediate_set.size() < k) {
+                  std::uniform_int_distribution<int> distribution(
+                      0, (int) intermediate_candidates.size());
+                  int index = distribution(rng) %
+                              ((int) intermediate_candidates.size());
+                  intermediate_set.insert(intermediate_candidates[index]);
+                }
+                for (const int elt : intermediate_set) {
+                  candidate_set.insert(elt);
+                }
               } else {
                 candidate_set.insert(ngh);
               }
