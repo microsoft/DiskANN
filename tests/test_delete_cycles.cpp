@@ -113,6 +113,9 @@ void test_batch_deletes(const std::string& data_path, const unsigned L,
     int parts = 10;
     int points_in_part;
 
+    std::vector<double> delete_times;
+    std::vector<double> insert_times;
+
     for (int i = 0; i < rounds; i++) {
       std::cout << "ROUND " << i + 1 << std::endl;
       std::cout << std::endl;
@@ -148,6 +151,8 @@ void test_batch_deletes(const std::string& data_path, const unsigned L,
         std::cout << "Deleted " << points_in_part << " points in "
                   << elapsedSeconds << " seconds" << std::endl;
 
+        delete_times.push_back(elapsedSeconds);
+
         // RE-INSERTIONS
         std::cout << "Re-inserting the same " << points_in_part
                   << " points from the index..." << std::endl;
@@ -164,6 +169,8 @@ void test_batch_deletes(const std::string& data_path, const unsigned L,
                   << elapsedSeconds << " seconds" << std::endl;
         std::cout << std::endl;
 
+        insert_times.push_back(elapsedSeconds);
+
         points_seen += points_in_part;
       }
 
@@ -172,6 +179,18 @@ void test_batch_deletes(const std::string& data_path, const unsigned L,
       indexCycle.save(save_path_inc.c_str());
       std::cout << std::endl;
     }
+
+    double avg_delete = ((double) std::accumulate(delete_times.begin(),
+                                                  delete_times.end(), 0.0)) /
+                        ((double) delete_times.size());
+    double avg_insert = ((double) std::accumulate(insert_times.begin(),
+                                                  insert_times.end(), 0.0)) /
+                        ((double) insert_times.size());
+    std::cout << "Average time for deletions " << avg_delete << " seconds"
+              << std::endl;
+    std::cout << "Average time for insertions " << avg_insert << " seconds"
+              << std::endl;
+    std::cout << std::endl;
   }
 }
 
