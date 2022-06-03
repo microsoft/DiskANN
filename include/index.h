@@ -351,9 +351,15 @@ namespace diskann {
     // case of eager deletion
     void compact_data();
 
+    void bfs_with_levels(const int levels, std::set<unsigned> &level_set);
+
     // WARNING: Do not call consolidate_deletes without acquiring change_lock_
     // Returns number of live points left after consolidation
     size_t consolidate_deletes(const Parameters &parameters);
+
+    // WARNING: Do not call consolidate_deletes without acquiring change_lock_
+    // Returns number of live points left after consolidation
+    size_t consolidate_deletes_bfs(const Parameters &parameters);
 
     // WARNING: Do not call consolidate_deletes without acquiring change_lock_
     // Returns number of live points left after consolidation
