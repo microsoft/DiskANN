@@ -2255,6 +2255,180 @@ namespace diskann {
     return _nd;
   }
 
+  // bfs, not very sophisticated, but only needs to handle a few levels
+  template<typename T, typename TagT>
+  void Index<T, TagT>::bfs_with_levels(const int           bfs_levels,
+                                       std::set<unsigned> &level_set) {
+    std::vector<std::set<unsigned>> level_sets(bfs_levels + 1);
+    std::set<unsigned>              level_set_0;
+    level_set_0.insert(_start);
+    level_sets[0] = level_set_0;
+    // std::set<unsigned> prev_levels;
+    level_set.insert(_start);
+    for (int i = 0; i < bfs_levels; i++) {
+      std::set<unsigned> next_level_set;
+      for (const unsigned j : level_sets[i]) {
+        for (const unsigned ngh : _final_graph[j]) {
+          next_level_set.insert(ngh);
+        }
+      }
+      for (const unsigned j : next_level_set) {
+        if (level_set.find(j) != level_set.end()) {
+          next_level_set.erase(j);
+        }
+        level_set.insert(j);
+      }
+      level_sets[i + 1] = next_level_set;
+    }
+  }
+
+  // Do not call consolidate_deletes() if you have not locked _change_lock.
+  // Returns number of live points left after consolidation
+  template<typename T, typename TagT>
+  size_t Index<T, TagT>::consolidate_deletes_bfs(const Parameters &parameters) {
+    if (_eager_done) {
+      diskann::cout
+          << "In consolidate_deletes(), _eager_done is true. So exiting."
+          << std::endl;
+      return 0;
+    }
+
+    assert(_enable_tags);
+    assert(_delete_set.size() <= _nd);
+    assert(_empty_slots.size() + _nd == _max_points);
+
+    const unsigned range = parameters.Get<unsigned>("R");
+    const unsigned maxc = parameters.Get<unsigned>("C");
+    const float    alpha = parameters.Get<float>("alpha");
+
+    _u64     total_pts = _max_points + _num_frozen_pts;
+    unsigned block_size = 1 << 10;
+    _s64     total_blocks = DIV_ROUND_UP(total_pts, block_size);
+
+    int                bfs_levels = 3;
+    std::set<unsigned> level_set;
+    bfs_with_levels(bfs_levels, level_set);
+    std::cout << level_set.size() << std::endl;
+
+    std::vector<int> modified(total_pts, 0);
+    std::vector<int> pruned(total_pts, 0);
+
+    int num_closest = 5;
+
+    auto start = std::chrono::high_resolution_clock::now();
+#pragma omp parallel for schedule(dynamic)
+    for (_s64 block = 0; block < total_blocks; ++block) {
+      tsl::robin_set<unsigned> candidate_set;
+      std::vector<Neighbor>    expanded_nghrs;
+      std::vector<Neighbor>    result;
+
+      for (_s64 i = block * block_size;
+           i < (_s64)((block + 1) * block_size) &&
+           i < (_s64)(_max_points + _num_frozen_pts);
+           i++) {
+        if ((_delete_set.find((_u32) i) == _delete_set.end()) &&
+            (_empty_slots.find((_u32) i) == _empty_slots.end())) {
+          candidate_set.clear();
+          expanded_nghrs.clear();
+          result.clear();
+
+          bool modify = false;
+          for (auto ngh : _final_graph[(_u32) i]) {
+            if (_delete_set.find(ngh) != _delete_set.end()) {
+              modify = true;
+
+              if (level_set.find(ngh) != level_set.end() &&
+                  level_set.find((_u32) i) != level_set.end()) {
+                // Add outgoing links from
+                for (auto j : _final_graph[ngh]) {
+                  // std::cout << "here" << std::endl;
+                  if (_delete_set.find(j) == _delete_set.end()) {
+                    candidate_set.insert(j);
+                  }
+                }
+              } else {
+                std::vector<Neighbor> intermediate_nbh;
+                for (auto j : _final_graph[ngh]) {
+                  if (_delete_set.find(j) == _delete_set.end()) {
+                    intermediate_nbh.push_back(Neighbor(
+                        j,
+                        _distance->compare(_data + _aligned_dim * ngh,
+                                           _data + _aligned_dim * (size_t) j,
+                                           (unsigned) _aligned_dim),
+                        true));
+                    std::sort(intermediate_nbh.begin(), intermediate_nbh.end());
+                    int k =
+                        std::min(num_closest, (int) intermediate_nbh.size());
+                    for (int j = 0; j < k; j++) {
+                      candidate_set.insert(intermediate_nbh[j].id);
+                    }
+                  }
+                }
+              }
+            } else {
+              candidate_set.insert(ngh);
+            }
+          }
+          if (modify) {
+            modified[(_u32) i] = 1;
+            if (candidate_set.size() <= (size_t) 1.5 * range) {
+              _final_graph[(_u32) i].clear();
+              for (auto j : candidate_set) {
+                if (j != (_u32) i && (_delete_set.find(j) == _delete_set.end()))
+                  _final_graph[(_u32) i].push_back(j);
+              }
+            } else {
+              pruned[(_u32) i] = 1;
+              for (auto j : candidate_set) {
+                expanded_nghrs.push_back(Neighbor(
+                    j,
+                    _distance->compare(_data + _aligned_dim * i,
+                                       _data + _aligned_dim * (size_t) j,
+                                       (unsigned) _aligned_dim),
+                    true));
+              }
+              std::sort(expanded_nghrs.begin(), expanded_nghrs.end());
+              occlude_list(expanded_nghrs, alpha, range, maxc, result);
+
+              _final_graph[(_u32) i].clear();
+              for (auto j : result) {
+                if (j.id != (_u32) i &&
+                    (_delete_set.find(j.id) == _delete_set.end()))
+                  _final_graph[(_u32) i].push_back(j.id);
+              }
+            }
+          }
+        }
+      }
+    }
+
+    if (_support_eager_delete)
+      update_in_graph();
+
+    for (auto iter : _delete_set) {
+      _empty_slots.insert(iter);
+    }
+    _nd -= _delete_set.size();
+
+    // _data_compacted = _delete_set.size() == 0;
+
+    auto stop = std::chrono::high_resolution_clock::now();
+    diskann::cout << "Time taken for consolidate_deletes() "
+                  << std::chrono::duration_cast<std::chrono::duration<double>>(
+                         stop - start)
+                         .count()
+                  << "s." << std::endl;
+
+    diskann::cout << "Number of nodes modified: "
+                  << std::accumulate(modified.begin(), modified.end(), 0)
+                  << std::endl;
+    diskann::cout << "Number of nodes pruned: "
+                  << std::accumulate(pruned.begin(), pruned.end(), 0)
+                  << std::endl;
+
+    return _nd;
+  }
+
   // Do not call consolidate_deletes() if you have not locked _change_lock.
   // Returns number of live points left after consolidation
   template<typename T, typename TagT>
@@ -2345,7 +2519,7 @@ namespace diskann {
                 modify = true;
                 std::vector<Neighbor> intermediate_nbh;
                 // Add outgoing links from
-                for (auto j : _final_graph[ngh])
+                for (auto j : _final_graph[ngh]) {
                   if (_delete_set.find(j) == _delete_set.end()) {
                     intermediate_nbh.push_back(Neighbor(
                         j,
@@ -2360,7 +2534,7 @@ namespace diskann {
                       candidate_set.insert(intermediate_nbh[j].id);
                     }
                   }
-
+                }
               } else {
                 candidate_set.insert(ngh);
               }
@@ -3050,7 +3224,8 @@ namespace diskann {
         consolidate_deletes_concurrent(parameters);
       } else {
         std::unique_lock<std::shared_timed_mutex> lock(_update_lock);
-        consolidate_deletes_fix(parameters, delete_policy);
+        // consolidate_deletes_fix(parameters, delete_policy);
+        consolidate_deletes_bfs(parameters);
       }
       compact_data();
     }
