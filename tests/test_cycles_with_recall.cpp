@@ -346,7 +346,7 @@ void test_batch_deletes(const std::string& data_path, const unsigned L,
 
         points_seen += points_in_part;
         const auto save_path_inc =
-          get_save_filename(save_path + ".after-cycle-", i*10+j, delete_policy);
+          get_save_filename(save_path + ".after-cycle-", 0, 0);
       indexCycle.save(save_path_inc.c_str());
 
       std::vector<unsigned> Lvec;
