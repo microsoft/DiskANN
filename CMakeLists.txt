@@ -18,7 +18,7 @@ else()
 endif()
 
 project(diskann)
-include_directories(${PROJECT_SOURCE_DIR}/include ${PROJECT_SOURCE_DIR}/include/dll ${PROJECT_SOURCE_DIR}/gperftools/src)
+include_directories(${PROJECT_SOURCE_DIR}/include ${PROJECT_SOURCE_DIR}/include/dll)
 
 #OpenMP
 find_package(OpenMP)
@@ -29,10 +29,6 @@ else()
     message(FATAL_ERROR "No OpenMP support")
 endif()
 
-find_package(Boost REQUIRED COMPONENTS program_options)
-if(Boost_FOUND)
-	include_directories(${BOOST_INCLUDE_DIR})
-endif()
 
 function(checkEnvAndSetLocalVar env_var msg local_var)
 	if (NOT EXISTS "$ENV{${env_var}}" )
@@ -47,7 +43,7 @@ function(checkEnvAndSetLocalVar env_var msg local_var)
 	endif()
 endfunction()
 
-	
+
 include_directories(include)
 #MKL Config
 if (MSVC)
@@ -70,16 +66,17 @@ else()
 	include_directories(/usr/include/mkl)
 
 	# compile flags and link libraries
-        add_compile_options(-m64 -Wl,--no-as-needed) 
+        add_compile_options(-m64 -Wl,--no-as-needed)
 	link_libraries(mkl_intel_ilp64 mkl_intel_thread mkl_core iomp5 pthread m dl)
 endif()
+include_directories(${BOOST_ROOT})
 
 add_definitions(-DMKL_ILP64)
 
-#Main compiler/linker settings 
+#Main compiler/linker settings
 if(MSVC)
 	#language options
-	add_compile_options(/permissive- /openmp:experimental /Zc:wchar_t /Zc:twoPhase- /Zc:forScope /Zc:inline /WX- /std:c++14 /Gd /W3 /MP /Zi /FC /nologo /diagnostics:classic) 
+	add_compile_options(/permissive- /openmp:experimental /Zc:wchar_t /Zc:twoPhase- /Zc:forScope /Zc:inline /WX- /std:c++14 /Gd /W3 /MP /Zi /FC /nologo /diagnostics:classic)
 	#code generation options
 	add_compile_options(/Qpar /fp:fast /Zp8 /fp:except- /EHsc /GS- /Gm- /Gy )
 	#optimization options
@@ -87,7 +84,7 @@ if(MSVC)
 	#path options
 	#add_compile_options(/Fdx64/Release/vc141.pdb /Fox64/Release/)
 	add_definitions(-DUSE_AVX2 -DUSE_ACCELERATED_PQ -D_WINDOWS -DNOMINMAX -DUNICODE)
-	
+
 	set(CMAKE_SHARED_LIBRARY_CXX_LINK_FLAGS "/MANIFEST /MACHINE:X64 /DEBUG:FULL /LTCG:incremental /NXCOMPAT /DYNAMICBASE /OPT:REF /SUBSYSTEM:CONSOLE /MANIFESTUAC:\"level='asInvoker' uiAccess='false'\"")
 	set(CMAKE_EXECUTABLE_CXX_LINK_FLAGS "/MANIFEST /MACHINE:X64 /DEBUG:FULL /LTCG:incremental /NXCOMPAT /DYNAMICBASE /OPT:REF /SUBSYSTEM:CONSOLE /MANIFESTUAC:\"level='asInvoker' uiAccess='false'\"")
 
@@ -106,7 +103,7 @@ else()
     #	set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -g -DDEBUG -O0 -fsanitize=address -fsanitize=leak -fsanitize=undefined")
     set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -g -DDEBUG -Wall -Wextra")
 	set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -Ofast -DNDEBUG -march=native -mtune=native -ftree-vectorize")
-	add_compile_options(-march=native -Wall -fno-builtin-malloc -fno-builtin-calloc -fno-builtin-realloc -fno-builtin-free -fopenmp -fopenmp-simd -funroll-loops -Wfatal-errors -DUSE_AVX2)
+	add_compile_options(-march=native -Wall -fno-builtin-malloc -fno-builtin-calloc -fno-builtin-realloc -fno-builtin-free -fopenmp -fopenmp-simd -funroll-loops -Wfatal-errors -DUSE_ACCELERATED_PQ -DUSE_AVX2)
 endif()
 
 add_subdirectory(src)
