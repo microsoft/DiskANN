@@ -1388,7 +1388,7 @@ namespace diskann {
     std::default_random_engine generator(seed);
     // 随机编号
     std::uniform_int_distribution<int> dist(0, N - 1);
-#pragma omp parallel for schedule(dynamic, 65536)
+#pragma omp parallel for schedule(dynamic, 128)
     for (size_t i = 0; i < _graph.size(); i++) {
       auto                      &child = _graph[i];
       std::unordered_set<size_t> gen_child;
