@@ -1485,7 +1485,7 @@ namespace diskann {
     std::random_device               rd;
     std::mt19937                     gen(rd());
     std::uniform_real_distribution<> dis(0, 1);
-    gen_random_graph(_final_graph, _ep, _indexingRange);
+    gen_random_graph(_final_graph, _nd, _indexingRange);
     std::random_shuffle(visit_order.begin(), visit_order.end());
     // creating a initial list to begin the search process. it has _ep and
     // random other nodes
