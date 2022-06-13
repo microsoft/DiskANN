@@ -100,14 +100,14 @@ void build_incremental_index(
   const unsigned C = 500;
   const bool     saturate_graph = false;
 
-  diskann::Parameters paras;
-  paras.Set<unsigned>("L", L);
-  paras.Set<unsigned>("R", R);
-  paras.Set<unsigned>("C", C);
-  paras.Set<float>("alpha", alpha);
-  paras.Set<bool>("saturate_graph", saturate_graph);
-  paras.Set<unsigned>("num_rnds", 1);
-  paras.Set<unsigned>("num_threads", thread_count);
+  diskann::Parameters params;
+  params.Set<unsigned>("L", L);
+  params.Set<unsigned>("R", R);
+  params.Set<unsigned>("C", C);
+  params.Set<float>("alpha", alpha);
+  params.Set<bool>("saturate_graph", saturate_graph);
+  params.Set<unsigned>("num_rnds", 1);
+  params.Set<unsigned>("num_threads", thread_count);
 
   size_t dim, aligned_dim;
   size_t num_points;
@@ -144,8 +144,8 @@ void build_incremental_index(
   }
 
   diskann::Index<T, TagT> index(diskann::L2, dim, max_points_to_insert, true,
-                                paras, paras, enable_tags,
-                                support_eager_delete);
+                                params, params, enable_tags,
+                                support_eager_delete, concurrent);
 
   size_t       current_point_offset = points_to_skip;
   const size_t last_point_threshold = points_to_skip + max_points_to_insert;
@@ -177,7 +177,7 @@ void build_incremental_index(
   diskann::Timer timer;
 
   if (beginning_index_size > 0) {
-    index.build(data_part, beginning_index_size, paras, tags);
+    index.build(data_part, beginning_index_size, params, tags);
   } else if (getenv("TTS_FAKE_FROZEN_POINT") != nullptr) {
     std::cout << "Adding a fake point for build() and deleting it" << std::endl;
 
@@ -189,7 +189,7 @@ void build_incremental_index(
       fake_coords[i] = static_cast<T>(i);
     }
 
-    index.build(fake_coords.data(), 1, paras, one_tag);
+    index.build(fake_coords.data(), 1, params, one_tag);
     index.enable_delete();
     index.lazy_delete(one_tag[0]);
   }
@@ -209,9 +209,6 @@ void build_incremental_index(
       index.enable_delete();
 
       auto inserts = std::async(std::launch::async, [&]() {
-        size_t last_snapshot_points_threshold = 0;
-        size_t num_checkpoints_till_snapshot = checkpoints_per_snapshot;
-
         for (size_t i = current_point_offset; i < last_point_threshold;
              i += points_per_checkpoint,
                     current_point_offset += points_per_checkpoint) {
@@ -251,7 +248,7 @@ void build_incremental_index(
         index.lazy_delete(deletes, failed_deletes);
         omp_set_num_threads(sub_threads);
         diskann::Timer delete_timer;
-        index.disable_delete(paras, true, true);
+        index.consolidate_deletes(params);
         const double elapsedSeconds = delete_timer.elapsed() / 1000000.0;
 
         std::cout << "Deleted " << points_to_delete_from_beginning
@@ -354,10 +351,11 @@ void build_incremental_index(
       std::cout << "Prepared request in " << request_timer.elapsed() / 1000000.0
                 << " seconds (" << failed_deletes.size() << " failed)\n";
 
-      omp_set_num_threads(thread_count);
+      //omp_set_num_threads(thread_count);
 
       diskann::Timer delete_timer;
-      index.disable_delete(paras, true);
+      index.consolidate_deletes(params);
+
       const double elapsedSeconds = delete_timer.elapsed() / 1000000.0;
 
       std::cout << "Deleted " << points_to_delete_from_beginning
@@ -437,7 +435,7 @@ int main(int argc, char** argv) {
         "points_to_delete_from_beginning",
         po::value<uint64_t>(&points_to_delete_from_beginning)->required(), "");
     desc.add_options()("do_concurrent",
-                       po::value<bool>(&concurrent)->required(), "");
+                       po::value<bool>(&concurrent)->default_value(false), "");
 
     po::variables_map vm;
     po::store(po::parse_command_line(argc, argv, desc), vm);
