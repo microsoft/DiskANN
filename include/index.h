@@ -188,11 +188,12 @@ namespace diskann {
     DISKANN_DLLEXPORT int lazy_delete(const tsl::robin_set<TagT> &tags,
                                       std::vector<TagT>          &failed_tags);
 
+
     // Call after a series of lazy deletions
     // Returns number of live points left after consolidation
     // If _conc_consolidates is set in the ctor, then this call can be invoked
     // alongside inserts and lazy deletes, else it acquires _update_lock 
-    size_t consolidate_deletes(const Parameters &parameters);
+    size_t consolidate_deletes(const Parameters &parameters, const int delete_policy = 0);
 
     // Delete point from graph and restructure it immediately. Do not call if
     // _lazy_delete was called earlier and data was not consolidated
@@ -342,7 +343,7 @@ namespace diskann {
     // deleted neighbors Acquire _locks[i] prior to calling for thread-safety
     void process_delete(const tsl::robin_set<unsigned> &old_delete_set,
                         size_t i, const unsigned &range, const unsigned &maxc,
-                        const float &alpha);
+                        const float &alpha, const int delete_policy);
 
 
     void initialize_query_scratch(uint32_t num_threads, uint32_t search_l,

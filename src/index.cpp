@@ -9,7 +9,6 @@
 #include <shared_mutex>
 #include <sstream>
 #include <string>
-#include <numeric>
 #include "tsl/robin_set.h"
 #include "tsl/robin_map.h"
 #include <unordered_map>
@@ -412,7 +411,6 @@ namespace diskann {
 
   template<typename T, typename TagT>
   _u64 Index<T, TagT>::save_delete_list(const std::string &filename) {
-
     if (_delete_set.size() == 0) {
       return 0;
     }
@@ -668,6 +666,8 @@ namespace diskann {
       initialize_query_scratch(num_threads, search_l, search_l,
                                (uint32_t) _max_range_of_loaded_graph, _dim);
     }
+
+    _has_built = true;
 
     _num_points_lock.unlock();
   }
@@ -953,7 +953,7 @@ namespace diskann {
           LockGuard guard(_locks[n]);
           for (unsigned m = 0; m < _final_graph[n].size(); m++) {
             if (_final_graph[n][m] >= _max_points + _num_frozen_pts) {
-                           throw diskann::ANNException(
+              throw diskann::ANNException(
                   std::string("Wrong id found") +
                       std::to_string(_final_graph[n][m]),
                   -1, __FUNCSIG__, __FILE__, __LINE__);
@@ -1488,12 +1488,11 @@ namespace diskann {
 
         if ((sync_num * 100) / num_syncs > progress_counter) {
           diskann::cout.precision(4);
-          // diskann::cout << "Completed  (round: " << rnd_no
-          //               << ", sync: " << sync_num << "/" << num_syncs
-          //               << " with L " << L << ")"
-          //               << " sync_time: " << sync_time << "s"
-          //               << "; inter_time: " << inter_time << "s" <<
-          //               std::endl;
+          diskann::cout << "Completed  (round: " << rnd_no
+                        << ", sync: " << sync_num << "/" << num_syncs
+                        << " with L " << L << ")"
+                        << " sync_time: " << sync_time << "s"
+                        << "; inter_time: " << inter_time << "s" << std::endl;
 
           total_sync_time += sync_time;
           total_inter_time += inter_time;
@@ -1801,7 +1800,6 @@ namespace diskann {
   std::pair<uint32_t, uint32_t> Index<T, TagT>::search_impl(
       const T *query, const size_t K, const unsigned L, IdType *indices,
       float *distances, InMemQueryScratch<T> &scratch) {
-
     std::vector<Neighbor> &   expanded_nodes_info = scratch.pool();
     tsl::robin_set<unsigned> &expanded_nodes_ids = scratch.visited();
     std::vector<unsigned> &   des = scratch.des();
@@ -1938,7 +1936,7 @@ namespace diskann {
       diskann::cerr << "Tags must be instantiated for deletions" << std::endl;
       return -2;
     }
-    
+
     std::unique_lock<std::shared_timed_mutex> update_lock(_update_lock);
     if (_data_compacted) {
       for (unsigned slot = (unsigned) _nd; slot < _max_points; ++slot) {
@@ -2159,8 +2157,8 @@ namespace diskann {
   template<typename T, typename TagT>
   inline void Index<T, TagT>::process_delete(
       const tsl::robin_set<unsigned> &old_delete_set, size_t i,
-      const unsigned &range, const unsigned &maxc, const float &alpha) {
-      
+      const unsigned &range, const unsigned &maxc, const float &alpha,
+      const int delete_policy) {
     tsl::robin_set<unsigned> candidate_set;
     std::vector<Neighbor>    expanded_nghrs;
     std::vector<Neighbor>    result;
@@ -2204,7 +2202,8 @@ namespace diskann {
   // Do not call consolidate_deletes() if you have not locked _num_points_lock.
   // Returns number of live points left after consolidation
   template<typename T, typename TagT>
-  size_t Index<T, TagT>::consolidate_deletes(const Parameters &params) {
+  size_t Index<T, TagT>::consolidate_deletes(const Parameters &params,
+                                             const int         delete_policy) {
     if (!_enable_tags)
       throw diskann::ANNException("Point tag array not instantiated", -1,
                                   __FUNCSIG__, __FILE__, __LINE__);
@@ -2266,7 +2265,7 @@ namespace diskann {
     _u64     total_pts = _max_points + _num_frozen_pts;
     unsigned block_size = 1 << 10;
     _s64     total_blocks = DIV_ROUND_UP(total_pts, block_size);
-    
+
     auto start = std::chrono::high_resolution_clock::now();
 #pragma omp parallel for num_threads(num_threads) schedule(dynamic)
     for (_s64 block = 0; block < total_blocks; ++block) {
@@ -2278,9 +2277,11 @@ namespace diskann {
             (_empty_slots.find((_u32) i) == _empty_slots.end())) {
           if (_conc_consolidate) {
             std::unique_lock<std::mutex> adj_list_lock(_locks[i]);
-            process_delete(old_delete_set, i, range, maxc, alpha);
+            process_delete(old_delete_set, i, range, maxc, alpha,
+                           delete_policy);
           } else {
-            process_delete(old_delete_set, i, range, maxc, alpha);
+            process_delete(old_delete_set, i, range, maxc, alpha,
+                           delete_policy);
           }
         }
       }
@@ -2323,7 +2324,6 @@ namespace diskann {
     return ret_nd;
   }
 
-  
   template<typename T, typename TagT>
   void Index<T, TagT>::consolidate(Parameters &parameters) {
     consolidate_deletes(parameters);
@@ -2520,8 +2520,8 @@ namespace diskann {
       location = (unsigned) _nd;
       _empty_slots.erase(location);
     } else {
-      // no need of delete_lock here, _num_points_lock will ensure no other thread
-      // executes this block of code
+      // no need of delete_lock here, _num_points_lock will ensure no other
+      // thread executes this block of code
       assert(_empty_slots.size() != 0);
       assert(_empty_slots.size() + _nd == _max_points);
 
@@ -2675,6 +2675,7 @@ namespace diskann {
     pool.clear();
     visited.clear();
     std::vector<unsigned> pruned_list;
+    // params.Get<unsigned>("L");
 
     std::vector<unsigned> init_ids;
     get_expanded_nodes(location, Lindex, init_ids, pool, visited, scratch.des(),
@@ -2758,6 +2759,7 @@ namespace diskann {
       _tag_to_location.erase(tag);
       _delete_set.insert(_tag_to_location[tag]);
     }
+
     _data_compacted = false;
     return 0;
   }
@@ -2807,7 +2809,7 @@ namespace diskann {
     tag_to_location = _tag_to_location;
     return 0;
   }
-  
+
   template<typename T, typename TagT>
   bool Index<T, TagT>::is_index_saved() {
     return _is_saved;

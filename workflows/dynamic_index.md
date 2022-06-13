@@ -68,6 +68,6 @@ The example below tests the following scenario: using a file with 100000 points,
 ```bash
 ./tests/test_streaming_scenario  --data_type float --dist_fn l2 --data_path data/sift/sift_learn.fbin --index_path_prefix data/sift/index_sift_learn_dynamic -R 32 -L 50 --alpha 1.2 -T 16 --points_to_skip 0 --max_points_to_insert 75000 --beginning_index_size 25000 --points_per_checkpoint 10000 --checkpoints_per_snapshot 0 --points_to_delete_from_beginning 25000 --do_concurrent true
 ./tests/utils/compute_groundtruth  --data_type float --dist_fn l2 --base_file data/sift/index_sift_learn_dynamic.after_concurrent_change.data --query_file  data/sift/sift_query.fbin --gt_file data/sift/sift_query_learn_dynamic_gt100 --K 100
- ./tests/search_memory_index  --data_type float --dist_fn l2 --index_path_prefix data/sift/index_sift_learn_dynamic.after_concurrent_change --query_file data/sift/sift_query.fbin  --gt_file data/sift/sift_query_learn_dynamic_gt100 -K 10 -L 10 20 30 40 50 100 --result_path data/sift/res --dynamic true
+./tests/search_memory_index  --data_type float --dist_fn l2 --index_path_prefix data/sift/index_sift_learn_dynamic.after_concurrent_change --query_file data/sift/sift_query.fbin  --gt_file data/sift/sift_query_learn_dynamic_gt100 -K 10 -L 10 20 30 40 50 100 --result_path data/sift/res --dynamic true
  ```
 
