@@ -2154,60 +2154,17 @@ namespace diskann {
         _in_graph[_final_graph[i][j]].emplace_back((_u32) i);
   }
 
-  // template<typename T, typename TagT>
-  // inline void Index<T, TagT>::process_delete(
-  //     const tsl::robin_set<unsigned> &old_delete_set, size_t i,
-  //     const unsigned &range, const unsigned &maxc, const float &alpha,
-  //     const int delete_policy) {
-  //   tsl::robin_set<unsigned> candidate_set;
-  //   std::vector<Neighbor>    expanded_nghrs;
-  //   std::vector<Neighbor>    result;
-
-  //   bool modify = false;
-
-  //   for (auto ngh : _final_graph[(_u32) i]) {
-  //     if (old_delete_set.find(ngh) != old_delete_set.end()) {
-  //       modify = true;
-
-  //       // Add outgoing links from
-  //       for (auto j : _final_graph[ngh])
-  //         if (old_delete_set.find(j) == old_delete_set.end())
-  //           candidate_set.insert(j);
-  //     } else {
-  //       candidate_set.insert(ngh);
-  //     }
-  //   }
-  //   if (modify) {
-  //     for (auto j : candidate_set) {
-  //       expanded_nghrs.push_back(
-  //           Neighbor(j,
-  //                    _distance->compare(_data + _aligned_dim * i,
-  //                                       _data + _aligned_dim * (size_t) j,
-  //                                       (unsigned) _aligned_dim),
-  //                    true));
-  //     }
-
-  //     std::sort(expanded_nghrs.begin(), expanded_nghrs.end());
-  //     occlude_list(expanded_nghrs, alpha, range, maxc, result);
-
-  //     _final_graph[(_u32) i].clear();
-  //     for (auto j : result) {
-  //       if (j.id != (_u32) i &&
-  //           (old_delete_set.find(j.id) == old_delete_set.end()))
-  //         _final_graph[(_u32) i].push_back(j.id);
-  //     }
-  //   }
-  // }
-
   template<typename T, typename TagT>
   inline std::pair<bool, bool> Index<T, TagT>::process_delete(
       const tsl::robin_set<unsigned> &old_delete_set, size_t i,
       const unsigned &range, const unsigned &maxc, const float &alpha,
       const int delete_policy) {
+
     bool policy_none = false;
     bool policy_all = false;
     bool policy_closest = false;
     bool policy_random = false;
+    bool policy_bfs = false;
 
     int num_closest = 5;
     int num_random = 5;
@@ -2220,7 +2177,14 @@ namespace diskann {
       policy_closest = true;
     } else if (delete_policy == 3) {
       policy_random = true;
-    } else {
+    } else if (delete_policy == 4){
+      if(_conc_consolidate){
+        std::cout << "ERROR: cannot use delete policy 4 when concurrent consolidate is enabled. Using default policy." << std::endl;
+        policy_all = true;
+      }
+      policy_bfs = true;
+    }
+    else {
       std::cout
           << "ERROR: invalid delete policy specified. Using default policy."
           << std::endl;
@@ -2463,6 +2427,8 @@ namespace diskann {
 
     if (!_conc_consolidate)
       update_lock.unlock();
+
+    // compact_data();
 
     auto stop = std::chrono::high_resolution_clock::now();
     diskann::cout << "Time taken for consolidate_deletes() "

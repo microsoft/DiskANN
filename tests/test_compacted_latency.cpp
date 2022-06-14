@@ -209,8 +209,9 @@ void test_batch_deletes(const std::string& data_path, const unsigned L,
                         const unsigned            thread_count,
                         const std::vector<size_t> Dvec,
                         const std::string& save_path, const int rounds,
-                        std::string& gt_file, const std::string& query_file,
-                        const std::string& res_path) {
+                        std::string&       truthset_file,
+                        const std::string& query_file,
+                        const std::string& result_path_prefix) {
   const unsigned C = 500;
   const bool     saturate_graph = false;
 
@@ -275,7 +276,7 @@ void test_batch_deletes(const std::string& data_path, const unsigned L,
     diskann::Index<T, TagT> indexCycle(diskann::L2, dim, num_points, true,
                                        paras, paras, enable_tags,
                                        support_eager_delete);
-    indexCycle.load(save_path.c_str(), thread_count, L);
+    indexCycle.load(save_path.c_str(), 64, L);
     std::cout << "Index loaded" << std::endl;
     std::cout << std::endl;
 
@@ -322,24 +323,6 @@ void test_batch_deletes(const std::string& data_path, const unsigned L,
 
         delete_times.push_back(elapsedSeconds);
 
-//         // RE-INSERTIONS
-//         std::cout << "Re-inserting the same " << points_in_part
-//                   << " points from the index..." << std::endl;
-//         diskann::Timer insert_timer;
-// #pragma omp parallel for num_threads(1) schedule(dynamic)
-//         for (int64_t k = points_seen;
-//              k < (int64_t) points_seen + points_in_part; k++) {
-//           indexCycle.insert_point(&data_load[indices[k] * aligned_dim],
-//                                   static_cast<TagT>(indices[k]));
-//         }
-//         elapsedSeconds = insert_timer.elapsed() / 1000000.0;
-
-//         std::cout << "Inserted " << points_in_part << " points in "
-//                   << elapsedSeconds << " seconds" << std::endl;
-//         std::cout << std::endl;
-
-//         insert_times.push_back(elapsedSeconds);
-
         indexCycle.print_status();
 
         points_seen += points_in_part;
@@ -355,9 +338,168 @@ void test_batch_deletes(const std::string& data_path, const unsigned L,
         Lvec.push_back(100);
         diskann::Metric metric;
         metric = diskann::Metric::L2;
-        search_memory_index<float>(metric, save_path_inc, res_path, query_file,
-                                   gt_file, thread_count, 10, Lvec, true, true,
-                                   history);
+        // Load the query file
+
+        // SEARCH AND CALCULATE RECALL
+
+        T*        query = nullptr;
+        unsigned* gt_ids = nullptr;
+        float*    gt_dists = nullptr;
+        size_t    query_num, query_dim, query_aligned_dim, gt_num, gt_dim;
+        diskann::load_aligned_bin<T>(query_file, query, query_num, query_dim,
+                                     query_aligned_dim);
+
+        bool dynamic = true;
+        int  num_threads = thread_count;
+        int  recall_at = 10;
+        bool tags = true;
+
+        // Check for ground truth
+        bool calc_recall_flag = false;
+        if (truthset_file != std::string("null") &&
+            file_exists(truthset_file)) {
+          diskann::load_truthset(truthset_file, gt_ids, gt_dists, gt_num,
+                                 gt_dim);
+          if (gt_num != query_num) {
+            std::cout
+                << "Error. Mismatch in number of queries and ground truth data"
+                << std::endl;
+          }
+          calc_recall_flag = true;
+        } else {
+          diskann::cout << " Truthset file " << truthset_file
+                        << " not found. Not computing recall." << std::endl;
+        }
+
+        diskann::Parameters paras;
+        std::cout.setf(std::ios_base::fixed, std::ios_base::floatfield);
+        std::cout.precision(2);
+
+        std::string recall_string = "Recall@" + std::to_string(recall_at);
+        if (tags) {
+          std::cout << std::setw(4) << "Ls" << std::setw(12) << "QPS "
+                    << std::setw(20) << "Mean Latency (mus)" << std::setw(15)
+                    << "99.9 Latency";
+        } else {
+          std::cout << std::setw(4) << "Ls" << std::setw(12) << "QPS "
+                    << std::setw(18) << "Avg dist cmps" << std::setw(20)
+                    << "Mean Latency (mus)" << std::setw(15) << "99.9 Latency";
+        }
+        if (calc_recall_flag)
+          std::cout << std::setw(12) << recall_string;
+        std::cout << std::endl;
+        std::cout
+            << "==============================================================="
+               "=================="
+            << std::endl;
+
+        std::vector<std::vector<uint32_t>> query_result_ids(Lvec.size());
+        std::vector<std::vector<float>>    query_result_dists(Lvec.size());
+        std::vector<float>                 latency_stats(query_num, 0);
+        std::vector<unsigned>              cmp_stats;
+        if (not tags) {
+          cmp_stats = std::vector<unsigned>(query_num, 0);
+        }
+
+        for (uint32_t test_id = 0; test_id < Lvec.size(); test_id++) {
+          uint32_t*       query_result_tags;
+          std::vector<T*> res = std::vector<T*>();
+          if (tags) {
+            query_result_tags = new uint32_t[recall_at * query_num];
+          }
+          _u64 L = Lvec[test_id];
+          if (L < recall_at) {
+            diskann::cout << "Ignoring search with L:" << L
+                          << " since it's smaller than K:" << recall_at
+                          << std::endl;
+            continue;
+          }
+          query_result_ids[test_id].resize(recall_at * query_num);
+
+          auto s = std::chrono::high_resolution_clock::now();
+          omp_set_num_threads(num_threads);
+#pragma omp parallel for schedule(dynamic, 1)
+          for (int64_t i = 0; i < (int64_t) query_num; i++) {
+            auto qs = std::chrono::high_resolution_clock::now();
+            if (metric == diskann::FAST_L2) {
+              indexCycle.search_with_optimized_layout(
+                  query + i * query_aligned_dim, recall_at, L,
+                  query_result_ids[test_id].data() + i * recall_at);
+            } else if (tags) {
+              indexCycle.search_with_tags(
+                  query + i * query_aligned_dim, recall_at, L,
+                  query_result_tags + i * recall_at, nullptr, res);
+            } else {
+              cmp_stats[i] =
+                  indexCycle
+                      .search(query + i * query_aligned_dim, recall_at, L,
+                              query_result_ids[test_id].data() + i * recall_at)
+                      .second;
+            }
+            auto qe = std::chrono::high_resolution_clock::now();
+            std::chrono::duration<double> diff = qe - qs;
+            latency_stats[i] = diff.count() * 1000000;
+          }
+
+          if (tags) {
+            for (int64_t i = 0; i < (int64_t) query_num * recall_at; i++) {
+              query_result_ids[test_id][i] = *(query_result_tags + i);
+            }
+          }
+          auto e = std::chrono::high_resolution_clock::now();
+          std::chrono::duration<double> diff = e - s;
+
+          float qps = (query_num / diff.count());
+
+          float recall = 0;
+          if (calc_recall_flag) {
+            recall = diskann::calculate_recall(
+                query_num, gt_ids, gt_dists, gt_dim,
+                query_result_ids[test_id].data(), recall_at, recall_at);
+            history.push_back(recall);
+          }
+
+          std::sort(latency_stats.begin(), latency_stats.end());
+          float mean_latency =
+              std::accumulate(latency_stats.begin(), latency_stats.end(), 0.0) /
+              query_num;
+
+          float avg_cmps =
+              (float) std::accumulate(cmp_stats.begin(), cmp_stats.end(), 0) /
+              (float) query_num;
+
+          if (tags) {
+            std::cout << std::setw(4) << L << std::setw(12) << qps
+                      << std::setw(20) << (float) mean_latency << std::setw(15)
+                      << (float) latency_stats[(_u64)(0.999 * query_num)];
+          } else {
+            std::cout << std::setw(4) << L << std::setw(12) << qps
+                      << std::setw(18) << avg_cmps << std::setw(20)
+                      << (float) mean_latency << std::setw(15)
+                      << (float) latency_stats[(_u64)(0.999 * query_num)];
+          }
+          if (calc_recall_flag)
+            std::cout << std::setw(12) << recall;
+          std::cout << std::endl;
+        }
+
+        std::cout << "Done searching. Now saving results " << std::endl;
+        _u64 test_id = 0;
+        for (auto L : Lvec) {
+          if (L < recall_at) {
+            diskann::cout << "Ignoring search with L:" << L
+                          << " since it's smaller than K:" << recall_at
+                          << std::endl;
+            continue;
+          }
+          std::string cur_result_path =
+              result_path_prefix + "_" + std::to_string(L) + "_idx_uint32.bin";
+          diskann::save_bin<_u32>(cur_result_path,
+                                  query_result_ids[test_id].data(), query_num,
+                                  recall_at);
+          test_id++;
+        }
+        diskann::aligned_free(query);
       }
     }
 
