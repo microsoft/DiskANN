@@ -2154,49 +2154,188 @@ namespace diskann {
         _in_graph[_final_graph[i][j]].emplace_back((_u32) i);
   }
 
+  // template<typename T, typename TagT>
+  // inline void Index<T, TagT>::process_delete(
+  //     const tsl::robin_set<unsigned> &old_delete_set, size_t i,
+  //     const unsigned &range, const unsigned &maxc, const float &alpha,
+  //     const int delete_policy) {
+  //   tsl::robin_set<unsigned> candidate_set;
+  //   std::vector<Neighbor>    expanded_nghrs;
+  //   std::vector<Neighbor>    result;
+
+  //   bool modify = false;
+
+  //   for (auto ngh : _final_graph[(_u32) i]) {
+  //     if (old_delete_set.find(ngh) != old_delete_set.end()) {
+  //       modify = true;
+
+  //       // Add outgoing links from
+  //       for (auto j : _final_graph[ngh])
+  //         if (old_delete_set.find(j) == old_delete_set.end())
+  //           candidate_set.insert(j);
+  //     } else {
+  //       candidate_set.insert(ngh);
+  //     }
+  //   }
+  //   if (modify) {
+  //     for (auto j : candidate_set) {
+  //       expanded_nghrs.push_back(
+  //           Neighbor(j,
+  //                    _distance->compare(_data + _aligned_dim * i,
+  //                                       _data + _aligned_dim * (size_t) j,
+  //                                       (unsigned) _aligned_dim),
+  //                    true));
+  //     }
+
+  //     std::sort(expanded_nghrs.begin(), expanded_nghrs.end());
+  //     occlude_list(expanded_nghrs, alpha, range, maxc, result);
+
+  //     _final_graph[(_u32) i].clear();
+  //     for (auto j : result) {
+  //       if (j.id != (_u32) i &&
+  //           (old_delete_set.find(j.id) == old_delete_set.end()))
+  //         _final_graph[(_u32) i].push_back(j.id);
+  //     }
+  //   }
+  // }
+
   template<typename T, typename TagT>
-  inline void Index<T, TagT>::process_delete(
+  inline std::pair<bool, bool> Index<T, TagT>::process_delete(
       const tsl::robin_set<unsigned> &old_delete_set, size_t i,
       const unsigned &range, const unsigned &maxc, const float &alpha,
       const int delete_policy) {
+    bool policy_none = false;
+    bool policy_all = false;
+    bool policy_closest = false;
+    bool policy_random = false;
+
+    int num_closest = 5;
+    int num_random = 5;
+
+    if (delete_policy == 0) {
+      policy_none = true;
+    } else if (delete_policy == 1) {
+      policy_all = true;
+    } else if (delete_policy == 2) {
+      policy_closest = true;
+    } else if (delete_policy == 3) {
+      policy_random = true;
+    } else {
+      std::cout
+          << "ERROR: invalid delete policy specified. Using default policy."
+          << std::endl;
+      policy_all = true;
+    }
+
     tsl::robin_set<unsigned> candidate_set;
     std::vector<Neighbor>    expanded_nghrs;
     std::vector<Neighbor>    result;
 
     bool modify = false;
+    bool prune = false;
 
-    for (auto ngh : _final_graph[(_u32) i]) {
-      if (old_delete_set.find(ngh) != old_delete_set.end()) {
-        modify = true;
+    if (policy_none) {
+      for (auto ngh : _final_graph[(_u32) i]) {
+        if (old_delete_set.find(ngh) != old_delete_set.end()) {
+          modify = true;
+        } else {
+          candidate_set.insert(ngh);
+        }
+      }
+    } else if (policy_all) {
+      for (auto ngh : _final_graph[(_u32) i]) {
+        if (old_delete_set.find(ngh) != old_delete_set.end()) {
+          modify = true;
 
-        // Add outgoing links from
-        for (auto j : _final_graph[ngh])
-          if (old_delete_set.find(j) == old_delete_set.end())
-            candidate_set.insert(j);
-      } else {
-        candidate_set.insert(ngh);
+          // Add outgoing links from
+          for (auto j : _final_graph[ngh])
+            if (old_delete_set.find(j) == old_delete_set.end())
+              candidate_set.insert(j);
+        } else {
+          candidate_set.insert(ngh);
+        }
+      }
+    } else if (policy_closest) {
+      for (auto ngh : _final_graph[(_u32) i]) {
+        if (old_delete_set.find(ngh) != old_delete_set.end()) {
+          modify = true;
+          std::vector<Neighbor> intermediate_nbh;
+          for (auto j : _final_graph[ngh]) {
+            if (old_delete_set.find(j) == old_delete_set.end()) {
+              intermediate_nbh.push_back(
+                  Neighbor(j,
+                           _distance->compare(_data + _aligned_dim * ngh,
+                                              _data + _aligned_dim * (size_t) j,
+                                              (unsigned) _aligned_dim),
+                           true));
+              std::sort(intermediate_nbh.begin(), intermediate_nbh.end());
+              int k = std::min(num_closest, (int) intermediate_nbh.size());
+              for (int m = 0; m < k; m++) {
+                candidate_set.insert(intermediate_nbh[m].id);
+              }
+            }
+          }
+        } else {
+          candidate_set.insert(ngh);
+        }
+      }
+    } else if (policy_random) {
+      for (auto ngh : _final_graph[(_u32) i]) {
+        if (old_delete_set.find(ngh) != old_delete_set.end()) {
+          modify = true;
+          static thread_local std::mt19937 rng;
+          std::vector<int>                 intermediate_candidates;
+          // Add outgoing links from
+          for (auto j : _final_graph[ngh])
+            if (old_delete_set.find(j) == old_delete_set.end())
+              intermediate_candidates.push_back(j);
+          size_t k =
+              std::min(intermediate_candidates.size(), (size_t) num_random);
+          std::set<int> intermediate_set;
+          while (intermediate_set.size() < k) {
+            std::uniform_int_distribution<int> distribution(0, (int) _nd);
+            int                                index =
+                distribution(rng) % ((int) intermediate_candidates.size());
+            intermediate_set.insert(intermediate_candidates[index]);
+          }
+          for (const int elt : intermediate_set) {
+            candidate_set.insert(elt);
+          }
+        } else {
+          candidate_set.insert(ngh);
+        }
       }
     }
+
     if (modify) {
-      for (auto j : candidate_set) {
-        expanded_nghrs.push_back(
-            Neighbor(j,
-                     _distance->compare(_data + _aligned_dim * i,
-                                        _data + _aligned_dim * (size_t) j,
-                                        (unsigned) _aligned_dim),
-                     true));
-      }
+      if (candidate_set.size() <= (size_t) 1.5 * range) {
+        _final_graph[(_u32) i].clear();
+        for (auto j : candidate_set) {
+          if (j != (_u32) i && (old_delete_set.find(j) == old_delete_set.end()))
+            _final_graph[(_u32) i].push_back(j);
+        }
+      } else {
+        prune = true;
+        for (auto j : candidate_set) {
+          expanded_nghrs.push_back(
+              Neighbor(j,
+                       _distance->compare(_data + _aligned_dim * i,
+                                          _data + _aligned_dim * (size_t) j,
+                                          (unsigned) _aligned_dim),
+                       true));
+        }
+        std::sort(expanded_nghrs.begin(), expanded_nghrs.end());
+        occlude_list(expanded_nghrs, alpha, range, maxc, result);
 
-      std::sort(expanded_nghrs.begin(), expanded_nghrs.end());
-      occlude_list(expanded_nghrs, alpha, range, maxc, result);
-
-      _final_graph[(_u32) i].clear();
-      for (auto j : result) {
-        if (j.id != (_u32) i &&
-            (old_delete_set.find(j.id) == old_delete_set.end()))
-          _final_graph[(_u32) i].push_back(j.id);
+        _final_graph[(_u32) i].clear();
+        for (auto j : result) {
+          if (j.id != (_u32) i &&
+              (old_delete_set.find(j.id) == old_delete_set.end()))
+            _final_graph[(_u32) i].push_back(j.id);
+        }
       }
     }
+    return std::make_pair(modify, prune);
   }
 
   // Do not call consolidate_deletes() if you have not locked _num_points_lock.
@@ -2266,6 +2405,9 @@ namespace diskann {
     unsigned block_size = 1 << 10;
     _s64     total_blocks = DIV_ROUND_UP(total_pts, block_size);
 
+    std::vector<int> modified(total_pts, 0);
+    std::vector<int> pruned(total_pts, 0);
+
     auto start = std::chrono::high_resolution_clock::now();
 #pragma omp parallel for num_threads(num_threads) schedule(dynamic)
     for (_s64 block = 0; block < total_blocks; ++block) {
@@ -2277,11 +2419,19 @@ namespace diskann {
             (_empty_slots.find((_u32) i) == _empty_slots.end())) {
           if (_conc_consolidate) {
             std::unique_lock<std::mutex> adj_list_lock(_locks[i]);
-            process_delete(old_delete_set, i, range, maxc, alpha,
-                           delete_policy);
+            auto stats = process_delete(old_delete_set, i, range, maxc, alpha,
+                                        delete_policy);
+            if (stats.first)
+              modified[(_u32) i] = 1;
+            if (stats.second)
+              pruned[(_u32) i] = 1;
           } else {
-            process_delete(old_delete_set, i, range, maxc, alpha,
-                           delete_policy);
+            auto stats = process_delete(old_delete_set, i, range, maxc, alpha,
+                                        delete_policy);
+            if (stats.first)
+              modified[(_u32) i] = 1;
+            if (stats.second)
+              pruned[(_u32) i] = 1;
           }
         }
       }
@@ -2320,6 +2470,12 @@ namespace diskann {
                          stop - start)
                          .count()
                   << "s." << std::endl;
+    diskann::cout << "Number of nodes modified: "
+                  << std::accumulate(modified.begin(), modified.end(), 0)
+                  << std::endl;
+    diskann::cout << "Number of nodes pruned: "
+                  << std::accumulate(pruned.begin(), pruned.end(), 0)
+                  << std::endl;
 
     return ret_nd;
   }
@@ -2792,6 +2948,7 @@ namespace diskann {
       }
     }
 
+    _data_compacted = false;
     return 0;
   }
 

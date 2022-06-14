@@ -34,7 +34,7 @@ int search_memory_index(diskann::Metric& metric, const std::string& index_path,
                         std::string& truthset_file, const unsigned num_threads,
                         const unsigned               recall_at,
                         const std::vector<unsigned>& Lvec, const bool dynamic,
-                        const bool tags, std::vector<float> &history) {
+                        const bool tags, std::vector<float>& history) {
   // Load the query file
   T*        query = nullptr;
   unsigned* gt_ids = nullptr;
@@ -142,7 +142,7 @@ int search_memory_index(diskann::Metric& metric, const std::string& index_path,
     float qps = (query_num / diff.count());
 
     float recall = 0;
-    if (calc_recall_flag){
+    if (calc_recall_flag) {
       recall = diskann::calculate_recall(query_num, gt_ids, gt_dists, gt_dim,
                                          query_result_ids[test_id].data(),
                                          recall_at, recall_at);
@@ -208,7 +208,8 @@ void test_batch_deletes(const std::string& data_path, const unsigned L,
                         const unsigned R, const float alpha,
                         const unsigned            thread_count,
                         const std::vector<size_t> Dvec,
-                        const std::string& save_path, const int rounds, std::string& gt_file, const std::string& query_file, 
+                        const std::string& save_path, const int rounds,
+                        std::string& gt_file, const std::string& query_file,
                         const std::string& res_path) {
   const unsigned C = 500;
   const bool     saturate_graph = false;
@@ -228,7 +229,7 @@ void test_batch_deletes(const std::string& data_path, const unsigned L,
   diskann::load_aligned_bin<T>(data_path, data_load, num_points, dim,
                                aligned_dim);
 
-  using TagT = uint64_t;
+  using TagT = uint32_t;
   unsigned   num_frozen = 1;
   const bool enable_tags = true;
   const bool support_eager_delete = false;
@@ -240,7 +241,6 @@ void test_batch_deletes(const std::string& data_path, const unsigned L,
     std::cout << "Overriding num_frozen to" << num_frozen << std::endl;
   }
 
-  // auto                    s = std::chrono::high_resolution_clock::now();
   diskann::Index<T, TagT> index(diskann::L2, dim, num_points, true, paras,
                                 paras, enable_tags, support_eager_delete);
 
@@ -250,8 +250,6 @@ void test_batch_deletes(const std::string& data_path, const unsigned L,
   index.build(&data_load[0], 1, paras, one_tag);
 
   std::cout << "Inserting every point into the index" << std::endl;
-  // std::chrono::duration<double> diff =
-  // std::chrono::high_resolution_clock::now() - s;
 
   diskann::Timer index_timer;
 
@@ -309,7 +307,6 @@ void test_batch_deletes(const std::string& data_path, const unsigned L,
                   << " points from the index..." << std::endl;
         indexCycle.enable_delete();
         tsl::robin_set<TagT> deletes;
-        // size_t               deletes_start = num_points - num_deletes;
         for (int k = points_seen; k < points_seen + points_in_part; k++) {
           deletes.insert(static_cast<TagT>(indices[k]));
         }
@@ -317,7 +314,6 @@ void test_batch_deletes(const std::string& data_path, const unsigned L,
         indexCycle.lazy_delete(deletes, failed_deletes);
         omp_set_num_threads(thread_count);
         diskann::Timer delete_timer;
-        // not using concurrent deletes
         indexCycle.consolidate_deletes(paras, delete_policy);
         double elapsedSeconds = delete_timer.elapsed() / 1000000.0;
 
@@ -346,41 +342,41 @@ void test_batch_deletes(const std::string& data_path, const unsigned L,
 
         points_seen += points_in_part;
         const auto save_path_inc =
-          get_save_filename(save_path + ".after-cycle-", 0, 0);
-      indexCycle.save(save_path_inc.c_str());
+            get_save_filename(save_path + ".after-cycle-", 0, 0);
+        indexCycle.save(save_path_inc.c_str());
 
-      std::vector<unsigned> Lvec;
-      Lvec.push_back(30);
-      diskann::Metric metric;
-      metric = diskann::Metric::L2;
-      search_memory_index<float>(metric, save_path_inc, res_path, query_file, gt_file, thread_count, 10, Lvec, true, true, history);
-      
+        std::vector<unsigned> Lvec;
+        Lvec.push_back(10);
+        diskann::Metric metric;
+        metric = diskann::Metric::L2;
+        search_memory_index<float>(metric, save_path_inc, res_path, query_file,
+                                   gt_file, thread_count, 10, Lvec, true, true,
+                                   history);
       }
-
-      
     }
 
-    std::cout << "Recall List: " << std::endl; 
-    for(const float rec : history) std::cout << rec << std::endl; 
+    std::cout << "Recall List: " << std::endl;
+    for (const float rec : history)
+      std::cout << rec << std::endl;
 
-    // double avg_delete = ((double) std::accumulate(delete_times.begin(),
-    //                                               delete_times.end(), 0.0)) /
-    //                     ((double) delete_times.size());
-    // double avg_insert = ((double) std::accumulate(insert_times.begin(),
-    //                                               insert_times.end(), 0.0)) /
-    //                     ((double) insert_times.size());
-    // std::cout << "Average time for deletions " << avg_delete << " seconds"
-    //           << std::endl;
-    // std::cout << "Average time for insertions " << avg_insert << " seconds"
-    //           << std::endl;
-    // std::cout << std::endl;
+    double avg_delete = ((double) std::accumulate(delete_times.begin(),
+                                                  delete_times.end(), 0.0)) /
+                        ((double) delete_times.size());
+    double avg_insert = ((double) std::accumulate(insert_times.begin(),
+                                                  insert_times.end(), 0.0)) /
+                        ((double) insert_times.size());
+    std::cout << "Average time for deletions " << avg_delete << " seconds"
+              << std::endl;
+    std::cout << "Average time for insertions " << avg_insert << " seconds"
+              << std::endl;
+    std::cout << std::endl;
   }
 }
 
 int main(int argc, char** argv) {
-  std::string         data_type, data_path, save_path, gt_file, query_file, res_path;
-  unsigned            num_threads, R, L;
-  float               alpha;
+  std::string data_type, data_path, save_path, gt_file, query_file, res_path;
+  unsigned    num_threads, R, L;
+  float       alpha;
   std::vector<size_t> Dvec;
   int                 rounds;
 
@@ -396,8 +392,7 @@ int main(int argc, char** argv) {
     desc.add_options()("save_path",
                        po::value<std::string>(&save_path)->required(),
                        "Path prefix for saving index file components");
-    desc.add_options()("gt_file",
-                       po::value<std::string>(&gt_file)->required(),
+    desc.add_options()("gt_file", po::value<std::string>(&gt_file)->required(),
                        "Ground truth file");
     desc.add_options()("query_file",
                        po::value<std::string>(&query_file)->required(),
@@ -441,13 +436,16 @@ int main(int argc, char** argv) {
   try {
     if (data_type == std::string("int8"))
       test_batch_deletes<int8_t>(data_path, L, R, alpha, num_threads, Dvec,
-                                 save_path, rounds, gt_file, query_file, res_path);
+                                 save_path, rounds, gt_file, query_file,
+                                 res_path);
     else if (data_type == std::string("uint8"))
       test_batch_deletes<uint8_t>(data_path, L, R, alpha, num_threads, Dvec,
-                                  save_path, rounds, gt_file, query_file, res_path);
+                                  save_path, rounds, gt_file, query_file,
+                                  res_path);
     else if (data_type == std::string("float"))
       test_batch_deletes<float>(data_path, L, R, alpha, num_threads, Dvec,
-                                save_path, rounds, gt_file, query_file, res_path);
+                                save_path, rounds, gt_file, query_file,
+                                res_path);
     else
       std::cout << "Unsupported type. Use float/int8/uint8" << std::endl;
   } catch (const std::exception& e) {
