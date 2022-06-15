@@ -2154,12 +2154,37 @@ namespace diskann {
         _in_graph[_final_graph[i][j]].emplace_back((_u32) i);
   }
 
+  // bfs, not very sophisticated, but only needs to handle a few levels
+  template<typename T, typename TagT>
+  void Index<T, TagT>::bfs_up_to_level(const int           bfs_levels,
+                                       std::set<unsigned> &level_set) {
+    std::vector<std::set<unsigned>> level_sets(bfs_levels + 1);
+    std::set<unsigned>              level_set_0;
+    level_set_0.insert(_start);
+    level_sets[0] = level_set_0;
+    level_set.insert(_start);
+    for (int i = 0; i < bfs_levels; i++) {
+      std::set<unsigned> next_level_set;
+      for (const unsigned j : level_sets[i]) {
+        for (const unsigned ngh : _final_graph[j]) {
+          next_level_set.insert(ngh);
+        }
+      }
+      for (const unsigned j : next_level_set) {
+        if (level_set.find(j) != level_set.end()) {
+          next_level_set.erase(j);
+        }
+        level_set.insert(j);
+      }
+      level_sets[i + 1] = next_level_set;
+    }
+  }
+
   template<typename T, typename TagT>
   inline std::pair<bool, bool> Index<T, TagT>::process_delete(
       const tsl::robin_set<unsigned> &old_delete_set, size_t i,
       const unsigned &range, const unsigned &maxc, const float &alpha,
-      const int delete_policy) {
-
+      const int delete_policy, std::set<unsigned> &level_set) {
     bool policy_none = false;
     bool policy_all = false;
     bool policy_closest = false;
@@ -2177,17 +2202,9 @@ namespace diskann {
       policy_closest = true;
     } else if (delete_policy == 3) {
       policy_random = true;
-    } else if (delete_policy == 4){
-      if(_conc_consolidate){
-        std::cout << "ERROR: cannot use delete policy 4 when concurrent consolidate is enabled. Using default policy." << std::endl;
-        policy_all = true;
-      }
+    } else if (delete_policy == 4) {
       policy_bfs = true;
-    }
-    else {
-      std::cout
-          << "ERROR: invalid delete policy specified. Using default policy."
-          << std::endl;
+    } else {
       policy_all = true;
     }
 
@@ -2269,6 +2286,40 @@ namespace diskann {
           candidate_set.insert(ngh);
         }
       }
+    } else if (policy_bfs) {
+      for (auto ngh : _final_graph[(_u32) i]) {
+        if (old_delete_set.find(ngh) != old_delete_set.end()) {
+          modify = true;
+
+          if (level_set.find(ngh) != level_set.end()) {
+            // Add outgoing links from
+            for (auto j : _final_graph[ngh]) {
+              if (old_delete_set.find(j) == _delete_set.end()) {
+                candidate_set.insert(j);
+              }
+            }
+          } else {
+            std::vector<Neighbor> intermediate_nbh;
+            for (auto j : _final_graph[ngh]) {
+              if (old_delete_set.find(j) == old_delete_set.end()) {
+                intermediate_nbh.push_back(Neighbor(
+                    j,
+                    _distance->compare(_data + _aligned_dim * ngh,
+                                       _data + _aligned_dim * (size_t) j,
+                                       (unsigned) _aligned_dim),
+                    true));
+                std::sort(intermediate_nbh.begin(), intermediate_nbh.end());
+                int k = std::min(num_closest, (int) intermediate_nbh.size());
+                for (int j = 0; j < k; j++) {
+                  candidate_set.insert(intermediate_nbh[j].id);
+                }
+              }
+            }
+          }
+        } else {
+          candidate_set.insert(ngh);
+        }
+      }
     }
 
     if (modify) {
@@ -2306,7 +2357,7 @@ namespace diskann {
   // Returns number of live points left after consolidation
   template<typename T, typename TagT>
   size_t Index<T, TagT>::consolidate_deletes(const Parameters &params,
-                                             const int         delete_policy) {
+                                             int               delete_policy) {
     if (!_enable_tags)
       throw diskann::ANNException("Point tag array not instantiated", -1,
                                   __FUNCSIG__, __FILE__, __LINE__);
@@ -2369,8 +2420,29 @@ namespace diskann {
     unsigned block_size = 1 << 10;
     _s64     total_blocks = DIV_ROUND_UP(total_pts, block_size);
 
-    std::vector<int> modified(total_pts, 0);
-    std::vector<int> pruned(total_pts, 0);
+    std::vector<int>   modified(total_pts, 0);
+    std::vector<int>   pruned(total_pts, 0);
+    std::set<unsigned> level_set;
+    const int          bfs_levels = 3;
+
+    if (delete_policy == 4) {
+      if (_conc_consolidate == false) {
+        bfs_up_to_level(bfs_levels, level_set);
+        std::cout << level_set.size() << std::endl;
+      } else {
+        std::cout << "ERROR: cannot use delete policy 4 when concurrent "
+                     "consolidate is enabled. Using default policy."
+                  << std::endl;
+        delete_policy = 1;
+      }
+    }
+
+    if (delete_policy > 4) {
+      std::cout
+          << "ERROR: invalid delete policy specified. Using default policy."
+          << std::endl;
+      delete_policy = 1;
+    }
 
     auto start = std::chrono::high_resolution_clock::now();
 #pragma omp parallel for num_threads(num_threads) schedule(dynamic)
@@ -2384,14 +2456,14 @@ namespace diskann {
           if (_conc_consolidate) {
             std::unique_lock<std::mutex> adj_list_lock(_locks[i]);
             auto stats = process_delete(old_delete_set, i, range, maxc, alpha,
-                                        delete_policy);
+                                        delete_policy, level_set);
             if (stats.first)
               modified[(_u32) i] = 1;
             if (stats.second)
               pruned[(_u32) i] = 1;
           } else {
             auto stats = process_delete(old_delete_set, i, range, maxc, alpha,
-                                        delete_policy);
+                                        delete_policy, level_set);
             if (stats.first)
               modified[(_u32) i] = 1;
             if (stats.second)

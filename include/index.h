@@ -193,7 +193,7 @@ namespace diskann {
     // If _conc_consolidates is set in the ctor, then this call can be invoked
     // alongside inserts and lazy deletes, else it acquires _update_lock
     size_t consolidate_deletes(const Parameters &parameters,
-                               const int         delete_policy = 1);
+                               int         delete_policy = 1);
 
     // Delete point from graph and restructure it immediately. Do not call if
     // _lazy_delete was called earlier and data was not consolidated
@@ -339,12 +339,16 @@ namespace diskann {
     // case of eager deletion
     void compact_data();
 
+    //simple BFS starting from the medoid
+    //do not call when performing concurrent updates
+    void bfs_up_to_level(const int bfs_levels, std::set<unsigned> &level_set);
+
     // Remove deleted nodes from adj list of node i and absorb edges from
     // deleted neighbors Acquire _locks[i] prior to calling for thread-safety
     std::pair<bool, bool> process_delete(
         const tsl::robin_set<unsigned> &old_delete_set, size_t i,
         const unsigned &range, const unsigned &maxc, const float &alpha,
-        const int delete_policy);
+        const int delete_policy, std::set<unsigned> &level_set);
 
     void initialize_query_scratch(uint32_t num_threads, uint32_t search_l,
                                   uint32_t indexing_l, uint32_t r, size_t dim);

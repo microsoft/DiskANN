@@ -242,7 +242,7 @@ void test_batch_deletes(const std::string& data_path, const unsigned L,
   }
 
   diskann::Index<T, TagT> index(diskann::L2, dim, num_points, true, paras,
-                                paras, enable_tags, support_eager_delete, true);
+                                paras, enable_tags, support_eager_delete);
 
   std::vector<TagT> one_tag;
   one_tag.push_back(0);
@@ -274,7 +274,7 @@ void test_batch_deletes(const std::string& data_path, const unsigned L,
     std::cout << std::endl;
     diskann::Index<T, TagT> indexCycle(diskann::L2, dim, num_points, true,
                                        paras, paras, enable_tags,
-                                       support_eager_delete, true);
+                                       support_eager_delete);
     indexCycle.load(save_path.c_str(), thread_count, L);
     std::cout << "Index loaded" << std::endl;
     std::cout << std::endl;
