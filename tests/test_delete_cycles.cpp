@@ -351,9 +351,9 @@ void test_batch_deletes(const std::string& data_path, const unsigned L,
         Lvec.push_back(100);
         diskann::Metric metric;
         metric = diskann::Metric::L2;
-        search_memory_index<float>(metric, save_path_inc, res_path, query_file,
-                                   gt_file, thread_count, 10, Lvec, true, true,
-                                   history);
+        search_memory_index<T>(metric, save_path_inc, res_path, query_file,
+                               gt_file, thread_count, 10, Lvec, true, true,
+                               history);
       }
     }
 
