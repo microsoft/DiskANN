@@ -524,7 +524,7 @@ namespace diskann {
     std::cout << "GT count percentiles:" << std::endl;
     for (_u32 p = 0; p < 100; p += 5)
       std::cout << "percentile " << p << ": "
-                << gt_stats[std::floor((p / 100.0) * gt_num)] << std::endl;
+                << gt_stats[static_cast<size_t>(std::floor((p / 100.0) * gt_num))] << std::endl;
     std::cout << "percentile 100"
               << ": " << gt_stats[gt_num - 1] << std::endl;
 

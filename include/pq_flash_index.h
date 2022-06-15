@@ -78,8 +78,6 @@ namespace diskann {
 
     DISKANN_DLLEXPORT void load_cache_list(std::vector<uint32_t> &node_list);
 
-    DISKANN_DLLEXPORT _u64 return_nd();
-
 #ifdef EXEC_ENV_OLS
     DISKANN_DLLEXPORT void generate_cache_list_from_sample_queries(
         MemoryMappedFiles &files, std::string sample_bin, _u64 l_search,

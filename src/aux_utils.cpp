@@ -10,6 +10,10 @@
 #include <string>
 #include <vector>
 
+#if defined(RELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS) && defined(DISKANN_BUILD)
+#include "gperftools/malloc_extension.h"
+#endif
+
 #include "logger.h"
 #include "aux_utils.h"
 #include "cached_io.h"
@@ -1089,7 +1093,11 @@ namespace diskann {
     delete[] train_data;
 
     train_data = nullptr;
+// Gopal. Splitting diskann_dll into separate DLLs for search and build.
+// This code should only be available in the "build" DLL.
+#if defined(RELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS) && defined(DISKANN_BUILD)
     MallocExtension::instance()->ReleaseFreeMemory();
+#endif
 
     diskann::build_merged_vamana_index<T>(
         data_file_to_use.c_str(), diskann::Metric::L2, L, R, p_val,

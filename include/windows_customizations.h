@@ -4,9 +4,13 @@
 #pragma once
 
 #ifdef _WINDOWS
+
+#ifdef _WINDLL
 #define DISKANN_DLLEXPORT __declspec(dllexport)
-#define DISKANN_DLLIMPORT __declspec(dllimport)
+#else
+#define DISKANN_DLLEXPORT __declspec(dllimport)
+#endif
+
 #else
 #define DISKANN_DLLEXPORT
-#define DISKANN_DLLIMPORT
 #endif

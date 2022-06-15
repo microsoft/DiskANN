@@ -12,3 +12,25 @@ jobs:
     - name: build
       run: |
         mkdir build && cd build && cmake .. && make -j
+
+  windows-build:
+    name: Build for ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      matrix:
+        os: [windows-2019, windows-latest]
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v2
+      with:
+          submodules: true
+
+    - name: Add VisualStudio command line tools into path
+      uses: ilammy/msvc-dev-cmd@v1
+
+    - name: Run configure and build
+      run: |
+        mkdir build && cd build && cmake .. && msbuild diskann.sln /m /nologo /t:Build /p:Configuration="Release" /property:Platform="x64"
+      shell: cmd

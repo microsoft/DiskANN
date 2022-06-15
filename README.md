@@ -42,44 +42,40 @@ mkdir build && cd build && cmake .. && make -j
 
 ## Windows build:
 
-The Windows version has been tested with the Enterprise editions of Visual Studio 2017 and Visual Studio 2019. It should work with the Community and Professional editions as well without any changes. 
+The Windows version has been tested with Enterprise editions of Visual Studio 2022, 2019 and 2017. It should work with the Community and Professional editions as well without any changes. 
 
 **Prerequisites:**
 
-* Install CMAKE (v3.15.2 or later) from https://cmake.org
-* Install MKL from https://software.intel.com/en-us/mkl
-* Install/download Boost from https://www.boost.org
+* CMake 3.15+ (available in VisualStudio 2019+ or from https://cmake.org)
+* NuGet.exe (install from https://www.nuget.org/downloads)
+    * The build script will use NuGet to get MKL, OpenMP and Boost packages.
+* DiskANN git repository checked out together with submodules. To check out submodules after git clone:
+```
+git submodule init
+git submodule update
+```
 
 * Environment variables: 
-    * Set a new System environment variable, called INTEL_ROOT to the "windows" folder under your MKL installation
-	   (For instance, if your install folder is "C:\Program Files (x86)\IntelSWtools", set INTEL_ROOT to "C:\Program Files (x86)\IntelSWtools\compilers_and_libraries\windows")
-    * Set environment variable BOOST_ROOT to your boost folder.
+    * [optional] If you would like to override the Boost library listed in windows/packages.config.in, set BOOST_ROOT to your Boost folder.
 
 **Build steps:**
--	Open a new command prompt window
--	Create a "build" directory under diskann
--	Change to the "build" directory and run  
+* Open the "x64 Native Tools Command Prompt for VS 2019" (or corresponding version) and change to DiskANN folder
+* Create a "build" directory inside it
+* Change to the "build" directory and run
 ```
-<full-path-to-cmake>\cmake -G "Visual Studio 16 2019" -B. -A x64 ..
+cmake ..
 ```
-OR 
+OR for Visual Studio 2017 and earlier:
 ```
-<full-path-to-cmake>\cmake -G "Visual Studio 15 2017" -B. -A x64 ..
+<full-path-to-installed-cmake>\cmake ..
 ```
-
-**Note: Since VS comes with its own (older) version of cmake, you have to specify the full path to cmake to ensure that the right version is used.**
--	This will create a “diskann” solution file in the "build" directory
--	Open the "diskann" solution and build the “diskann” project. 
-- 	Then build all the other binaries using the ALL_BUILD project that is part of the solution
-- 	Generated binaries are stored in the diskann/x64/Debug or diskann/x64/Release directories.
-
-To build from command line, change to the "build" directory and use msbuild to first build the "diskpriority_io" and "diskann_dll" projects. And then build the entire solution, as shown below.
+* This will create a diskann.sln solution. Open it from VisualStudio and build either Release or Debug configuration.
+    * Alternatively, use MSBuild:
 ```
-msbuild src\dll\diskann.vcxproj
-msbuild diskann.sln
+msbuild.exe diskann.sln /m /nologo /t:Build /p:Configuration="Release" /property:Platform="x64"
 ```
-Check msbuild docs for additional options including choosing between debug and release builds.
-
+    * This will also build gperftools submodule for libtcmalloc_minimal dependency.
+* Generated binaries are stored in the x64/Release or x64/Debug directories.
 
 ## Usage:
 
