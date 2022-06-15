@@ -2428,7 +2428,7 @@ namespace diskann {
     if (!_conc_consolidate)
       update_lock.unlock();
 
-    // compact_data();
+    compact_data();
 
     auto stop = std::chrono::high_resolution_clock::now();
     diskann::cout << "Time taken for consolidate_deletes() "

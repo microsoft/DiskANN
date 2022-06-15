@@ -242,7 +242,7 @@ void test_batch_deletes(const std::string& data_path, const unsigned L,
   }
 
   diskann::Index<T, TagT> index(diskann::L2, dim, num_points, true, paras,
-                                paras, enable_tags, support_eager_delete);
+                                paras, enable_tags, support_eager_delete, true);
 
   std::vector<TagT> one_tag;
   one_tag.push_back(0);
@@ -274,12 +274,12 @@ void test_batch_deletes(const std::string& data_path, const unsigned L,
     std::cout << std::endl;
     diskann::Index<T, TagT> indexCycle(diskann::L2, dim, num_points, true,
                                        paras, paras, enable_tags,
-                                       support_eager_delete);
+                                       support_eager_delete, true);
     indexCycle.load(save_path.c_str(), thread_count, L);
     std::cout << "Index loaded" << std::endl;
     std::cout << std::endl;
 
-    int parts = 10;
+    int parts = 20;
     int points_in_part;
 
     std::vector<double> delete_times;
@@ -296,7 +296,7 @@ void test_batch_deletes(const std::string& data_path, const unsigned L,
       std::random_shuffle(indices.begin(), indices.end());
 
       int points_seen = 0;
-      for (int j = 0; j < 1; j++) {
+      for (int j = 0; j < parts; j++) {
         if (j == parts - 1)
           points_in_part = num_points - points_seen;
         else
@@ -322,25 +322,25 @@ void test_batch_deletes(const std::string& data_path, const unsigned L,
 
         delete_times.push_back(elapsedSeconds);
 
-//         // RE-INSERTIONS
-//         std::cout << "Re-inserting the same " << points_in_part
-//                   << " points from the index..." << std::endl;
-//         diskann::Timer insert_timer;
-// #pragma omp parallel for num_threads(1) schedule(dynamic)
-//         for (int64_t k = points_seen;
-//              k < (int64_t) points_seen + points_in_part; k++) {
-//           indexCycle.insert_point(&data_load[indices[k] * aligned_dim],
-//                                   static_cast<TagT>(indices[k]));
-//         }
-//         elapsedSeconds = insert_timer.elapsed() / 1000000.0;
+        // RE-INSERTIONS
+        std::cout << "Re-inserting the same " << points_in_part
+                  << " points from the index..." << std::endl;
+        diskann::Timer insert_timer;
+#pragma omp parallel for num_threads(1) schedule(dynamic)
+        for (int64_t k = points_seen;
+             k < (int64_t) points_seen + points_in_part; k++) {
+          indexCycle.insert_point(&data_load[indices[k] * aligned_dim],
+                                  static_cast<TagT>(indices[k]));
+        }
+        elapsedSeconds = insert_timer.elapsed() / 1000000.0;
 
-//         std::cout << "Inserted " << points_in_part << " points in "
-//                   << elapsedSeconds << " seconds" << std::endl;
-//         std::cout << std::endl;
+        std::cout << "Inserted " << points_in_part << " points in "
+                  << elapsedSeconds << " seconds" << std::endl;
+        std::cout << std::endl;
 
-//         insert_times.push_back(elapsedSeconds);
+        insert_times.push_back(elapsedSeconds);
 
-        indexCycle.print_status();
+        // indexCycle.print_status();
 
         points_seen += points_in_part;
         const auto save_path_inc =
@@ -348,10 +348,6 @@ void test_batch_deletes(const std::string& data_path, const unsigned L,
         indexCycle.save(save_path_inc.c_str());
 
         std::vector<unsigned> Lvec;
-        Lvec.push_back(10);
-        Lvec.push_back(20);
-        Lvec.push_back(30);
-        Lvec.push_back(50);
         Lvec.push_back(100);
         diskann::Metric metric;
         metric = diskann::Metric::L2;
