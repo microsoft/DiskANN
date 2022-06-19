@@ -23,6 +23,7 @@
 
 #define GRAPH_SLACK_FACTOR 1.3
 #define OVERHEAD_FACTOR 1.1
+#define EXPAND_IF_FULL 0
 
 namespace boost {
 #ifndef BOOST_DYNAMIC_BITSET_FWD_HPP
@@ -112,20 +113,12 @@ namespace diskann {
     DISKANN_DLLEXPORT ~Index();
 
     // Saves graph, data, metadata and associated tags.
-    DISKANN_DLLEXPORT void save(const char *filename);
-    DISKANN_DLLEXPORT _u64 save_graph(std::string filename);
-    DISKANN_DLLEXPORT _u64 save_data(std::string filename);
-    DISKANN_DLLEXPORT _u64 save_tags(std::string filename);
-    DISKANN_DLLEXPORT _u64 save_delete_list(const std::string &filename);
+    DISKANN_DLLEXPORT void save(const char *filename,
+                                bool        compact_before_save = false);
 
     // Load functions
-    DISKANN_DLLEXPORT void   load(const char *index_file, uint32_t num_threads,
-                                  uint32_t search_l);
-    DISKANN_DLLEXPORT size_t load_graph(const std::string filename,
-                                        size_t            expected_num_points);
-    DISKANN_DLLEXPORT size_t load_data(std::string filename0);
-    DISKANN_DLLEXPORT size_t load_tags(const std::string tag_file_name);
-    DISKANN_DLLEXPORT size_t load_delete_set(const std::string &filename);
+    DISKANN_DLLEXPORT void load(const char *index_file, uint32_t num_threads,
+                                uint32_t search_l);
 
     // get some private variables
     DISKANN_DLLEXPORT size_t get_num_points();
@@ -191,8 +184,8 @@ namespace diskann {
     // Call after a series of lazy deletions
     // Returns number of live points left after consolidation
     // If _conc_consolidates is set in the ctor, then this call can be invoked
-    // alongside inserts and lazy deletes, else it acquires _update_lock 
-    size_t consolidate_deletes(const Parameters &parameters);
+    // alongside inserts and lazy deletes, else it acquires _update_lock
+    DISKANN_DLLEXPORT size_t consolidate_deletes(const Parameters &parameters);
 
     // Delete point from graph and restructure it immediately. Do not call if
     // _lazy_delete was called earlier and data was not consolidated
@@ -214,7 +207,7 @@ namespace diskann {
                                             unsigned new_location);
 
     DISKANN_DLLEXPORT void compact_frozen_point();
-    DISKANN_DLLEXPORT void compact_data_for_search();
+    // DISKANN_DLLEXPORT void compact_data_for_search();
 
     DISKANN_DLLEXPORT void consolidate(Parameters &parameters);
 
@@ -324,9 +317,8 @@ namespace diskann {
     // Create the graph, update periodically in NUM_SYNCS batches
     void link(Parameters &parameters);
 
-    // WARNING: Do not call reserve_location() without acquiring change_lock_
     int  reserve_location();
-    void release_location();
+    void release_location(int location);
 
     // Resize the index when no slots are left for insertion.
     // MUST acquire _num_points_lock and _update_lock before calling.
@@ -346,6 +338,18 @@ namespace diskann {
 
     void initialize_query_scratch(uint32_t num_threads, uint32_t search_l,
                                   uint32_t indexing_l, uint32_t r, size_t dim);
+
+    // Do not call without acquiring appropriate locks, call ::save() instead.
+    DISKANN_DLLEXPORT _u64 save_graph(std::string filename);
+    DISKANN_DLLEXPORT _u64 save_data(std::string filename);
+    DISKANN_DLLEXPORT _u64 save_tags(std::string filename);
+    DISKANN_DLLEXPORT _u64 save_delete_list(const std::string &filename);
+
+    DISKANN_DLLEXPORT size_t load_graph(const std::string filename,
+                                        size_t            expected_num_points);
+    DISKANN_DLLEXPORT size_t load_data(std::string filename0);
+    DISKANN_DLLEXPORT size_t load_tags(const std::string tag_file_name);
+    DISKANN_DLLEXPORT size_t load_delete_set(const std::string &filename);
 
    private:
     // Distance functions

@@ -53,7 +53,7 @@ int search_memory_index(diskann::Metric& metric, const std::string& index_path,
                   << " not found. Not computing recall." << std::endl;
   }
 
-  diskann::Index<T, uint32_t> index(metric, query_dim, 1, dynamic, dynamic);
+  diskann::Index<T, uint32_t> index(metric, query_dim, 0, dynamic, dynamic);
   index.load(index_path.c_str(), num_threads,
              *(std::max_element(Lvec.begin(), Lvec.end())));
   std::cout << "Index loaded" << std::endl;
@@ -63,7 +63,6 @@ int search_memory_index(diskann::Metric& metric, const std::string& index_path,
   diskann::Parameters paras;
   std::cout.setf(std::ios_base::fixed, std::ios_base::floatfield);
   std::cout.precision(2);
-
   std::string recall_string = "Recall@" + std::to_string(recall_at);
   if (tags) {
     std::cout << std::setw(4) << "Ls" << std::setw(12) << "QPS "
@@ -89,19 +88,22 @@ int search_memory_index(diskann::Metric& metric, const std::string& index_path,
     cmp_stats = std::vector<unsigned>(query_num, 0);
   }
 
+  uint32_t* query_result_tags;
+  if (tags) {
+    query_result_tags = new uint32_t[recall_at * query_num];
+  }
+
   for (uint32_t test_id = 0; test_id < Lvec.size(); test_id++) {
-    uint32_t*       query_result_tags;
-    std::vector<T*> res = std::vector<T*>();
-    if (tags) {
-      query_result_tags = new uint32_t[recall_at * query_num];
-    }
+    
     _u64 L = Lvec[test_id];
     if (L < recall_at) {
       diskann::cout << "Ignoring search with L:" << L
                     << " since it's smaller than K:" << recall_at << std::endl;
       continue;
     }
+
     query_result_ids[test_id].resize(recall_at * query_num);
+    std::vector<T*> res = std::vector<T*>();
 
     auto s = std::chrono::high_resolution_clock::now();
     omp_set_num_threads(num_threads);
@@ -115,6 +117,10 @@ int search_memory_index(diskann::Metric& metric, const std::string& index_path,
       } else if (tags) {
         index.search_with_tags(query + i * query_aligned_dim, recall_at, L,
                                query_result_tags + i * recall_at, nullptr, res);
+        for (int64_t r = 0; r < (int64_t) recall_at; r++) {
+          query_result_ids[test_id][recall_at * i + r] =
+              *(query_result_tags + recall_at * i + r);
+        }
       } else {
         cmp_stats[i] =
             index
@@ -126,15 +132,8 @@ int search_memory_index(diskann::Metric& metric, const std::string& index_path,
       std::chrono::duration<double> diff = qe - qs;
       latency_stats[i] = diff.count() * 1000000;
     }
-
-    if (tags) {
-      for (int64_t i = 0; i < (int64_t) query_num * recall_at; i++) {
-        query_result_ids[test_id][i] = *(query_result_tags + i);
-      }
-    }
-    auto                          e = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double> diff = e - s;
-
+    std::chrono::duration<double> diff =
+        std::chrono::high_resolution_clock::now() - s;
     float qps = (query_num / diff.count());
 
     float recall = 0;
@@ -181,7 +180,10 @@ int search_memory_index(diskann::Metric& metric, const std::string& index_path,
                             query_num, recall_at);
     test_id++;
   }
+
   diskann::aligned_free(query);
+  if (tags)
+    delete[] query_result_tags;
 
   return 0;
 }
@@ -257,6 +259,13 @@ int main(int argc, char** argv) {
                  "supported in general, and mips/fast_l2 only for floating "
                  "point data."
               << std::endl;
+    return -1;
+  }
+
+  if (dynamic && not tags) {
+    std::cerr
+        << "Tags must be enabled while searching dynamically built indices"
+        << std::endl;
     return -1;
   }
 
