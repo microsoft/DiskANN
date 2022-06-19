@@ -225,22 +225,15 @@ namespace diskann {
         _conc_consolidate(concurrent_consolidate) {
     if (dynamic_index && !enable_tags) {
       throw diskann::ANNException(
-          "ERROR: Eager Deletes must have Dynamic Indexing enabled.", -1,
+          "ERROR: Dynamic Indexing must have tags enabled.", -1,
           __FUNCSIG__, __FILE__, __LINE__);
-      diskann::cerr
-          << "WARNING: Dynamic Indices must have tags enabled. Auto-enabling."
-          << std::endl;
-      _enable_tags = true;
     }
     if (support_eager_delete && !dynamic_index) {
-      diskann::cerr << "ERROR: Eager Deletes must have Dynamic Indexing "
-                       "enabled. Exitting."
-                    << std::endl;
       throw diskann::ANNException(
-          "ERROR: Eager deletes are possible only if dynamic indexing is "
-          "enabled. Exiting.",
-          -1, __FUNCSIG__, __FILE__, __LINE__);
+          "ERROR: Eager deletes must have dynamic indexing enabled.", -1,
+          __FUNCSIG__, __FILE__, __LINE__);
     }
+
     // data stored to _nd * aligned_dim matrix with necessary zero-padding
     _aligned_dim = ROUND_UP(_dim, 8);
 
@@ -428,13 +421,25 @@ namespace diskann {
   }
 
   template<typename T, typename TagT>
-  void Index<T, TagT>::save(const char *filename) {
+  void Index<T, TagT>::save(const char *filename, bool compact_before_save) {
     // first check if no thread is inserting
     auto start = std::chrono::high_resolution_clock::now();
     std::unique_lock<std::shared_timed_mutex> lock(_update_lock);
     _num_points_lock.lock();
 
-    compact_frozen_point();
+    std::cerr << "data compacted: " << _data_compacted << std::endl;
+
+    if (compact_before_save) {
+      compact_data();
+      compact_frozen_point();
+    } else {
+      if (not _data_compacted) {
+        throw ANNException(
+            "Index save for non-compacted index is not yet implemented", -1,
+            __FUNCSIG__, __FILE__, __LINE__);
+      }
+    }
+
     if (!_save_as_one_file) {
       std::string graph_file = std::string(filename);
       std::string tags_file = std::string(filename) + ".tags";
@@ -907,7 +912,7 @@ namespace diskann {
 
     for (auto id : init_ids) {
       if (id >= _max_points + _num_frozen_pts) {
-        diskann::cerr << "Wrong id : " << id << std::endl;
+        diskann::cerr << "Out of range id found as an edge : " << id << std::endl;
         throw diskann::ANNException(
             std::string("Wrong id") + std::to_string(id), -1, __FUNCSIG__,
             __FILE__, __LINE__);
@@ -955,20 +960,22 @@ namespace diskann {
           LockGuard guard(_locks[n]);
           for (unsigned m = 0; m < _final_graph[n].size(); m++) {
             if (_final_graph[n][m] >= _max_points + _num_frozen_pts) {
-                           throw diskann::ANNException(
-                  std::string("Wrong id found") +
-                      std::to_string(_final_graph[n][m]),
-                  -1, __FUNCSIG__, __FILE__, __LINE__);
+              std::stringstream msg;
+              msg << "Out of range id " << _final_graph[n][m]
+                  << "found as an edge from " << n << " to " << m << std::endl;
+              throw diskann::ANNException(
+                  msg.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
             }
             des.emplace_back(_final_graph[n][m]);
           }
         } else {
           for (unsigned m = 0; m < _final_graph[n].size(); m++) {
             if (_final_graph[n][m] >= _max_points + _num_frozen_pts) {
+              std::stringstream msg;
+              msg << "Out of range id " << _final_graph[n][m]
+                  << "found as an edge from " << n << " to " << m << std::endl;
               throw diskann::ANNException(
-                  std::string("Wrong id found") +
-                      std::to_string(_final_graph[n][m]),
-                  -1, __FUNCSIG__, __FILE__, __LINE__);
+                  msg.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
             }
             des.emplace_back(_final_graph[n][m]);
           }
@@ -1957,13 +1964,7 @@ namespace diskann {
     }
     return 0;
   }
-
-  template<typename T, typename TagT>
-  void Index<T, TagT>::release_location() {
-    LockGuard guard(_num_points_lock);
-    _nd--;
-  }
-
+  
   template<typename T, typename TagT>
   int Index<T, TagT>::eager_delete(const TagT tag, const Parameters &parameters,
                                    int delete_mode) {
@@ -2139,7 +2140,7 @@ namespace diskann {
     _final_graph[id].clear();
     _in_graph[id].clear();
 
-    release_location();
+    release_location(id);
 
     _eager_done = true;
     _data_compacted = false;
@@ -2290,6 +2291,7 @@ namespace diskann {
       update_in_graph();
 
     if (_conc_consolidate) {
+      LockGuard guard(_num_points_lock);
       for (auto iter : old_delete_set)
         _empty_slots.insert(iter);
     } else {
@@ -2359,11 +2361,11 @@ namespace diskann {
     }
   }
 
-  template<typename T, typename TagT>
-  void Index<T, TagT>::compact_data_for_search() {
-    compact_data();
-    compact_frozen_point();
-  }
+  //template<typename T, typename TagT>
+  //void Index<T, TagT>::compact_data_for_search() {
+  //  compact_data();
+  //  compact_frozen_point();
+  //}
 
   template<typename T, typename TagT>
   void Index<T, TagT>::compact_data() {
@@ -2535,6 +2537,21 @@ namespace diskann {
     return location;
   }
 
+  
+  template<typename T, typename TagT>
+  void Index<T, TagT>::release_location(int location) {
+    LockGuard guard(_num_points_lock);
+
+    if (_empty_slots.find(location) != _empty_slots.end())
+      throw ANNException(
+          "Trying to release location, but location already in empty slots", -1,
+          __FUNCSIG__, __FILE__, __LINE__);
+    _empty_slots.insert(location);
+
+    _nd--;
+  }
+
+
   template<typename T, typename TagT>
   void Index<T, TagT>::reposition_point(unsigned old_location,
                                         unsigned new_location) {
@@ -2619,31 +2636,15 @@ namespace diskann {
 
     std::shared_lock<std::shared_timed_mutex> update_lock(_update_lock);
 
-    unsigned range = _indexingRange;
-    unsigned Lindex = _indexingQueueSize;
-
-    // Avoiding the use of temporary containers.
-    ScratchStoreManager<T> manager(_query_scratch);
-    auto                   scratch = manager.scratch_space();
-
-    std::vector<Neighbor> &   pool = scratch.pool();
-    tsl::robin_set<unsigned> &visited = scratch.visited();
-
-    {
-      std::shared_lock<std::shared_timed_mutex> tsl(_tag_lock);
-      if (_enable_tags &&
-          (_tag_to_location.find(tag) != _tag_to_location.end())) {
-        return -1;
-      }
-    }
-
+    // Find a vacant location in the data array to insert the new point
     auto location = reserve_location();
     if (location == -1) {
+#if EXPAND_IF_FULL
       update_lock.unlock();
       std::unique_lock<std::shared_timed_mutex> growth_lock(_update_lock);
 
       if (_nd >= _max_points) {
-        auto new_max_points = (size_t)(_max_points * INDEX_GROWTH_FACTOR);
+        auto new_max_points = (size_t) (_max_points * INDEX_GROWTH_FACTOR);
         resize(new_max_points);
       }
       growth_lock.unlock();
@@ -2655,15 +2656,25 @@ namespace diskann {
             "Cannot reserve location even after expanding graph. Terminating.",
             -1, __FUNCSIG__, __FILE__, __LINE__);
       }
+#else
+      return -1;
+#endif
     }
 
-    {
+    // Insert tag and mapping to location
+    if (_enable_tags) {
       std::unique_lock<std::shared_timed_mutex> lock(_tag_lock);
+
+      if (_tag_to_location.find(tag) != _tag_to_location.end()) {
+        release_location(location);
+        return -1;
+      }
 
       _tag_to_location[tag] = location;
       _location_to_tag[location] = tag;
     }
 
+    // Copy the vector in to the data array
     auto offset_data = _data + (size_t) _aligned_dim * location;
     memset((void *) offset_data, 0, sizeof(T) * _aligned_dim);
     memcpy((void *) offset_data, point, sizeof(T) * _dim);
@@ -2672,11 +2683,17 @@ namespace diskann {
       normalize((float *) offset_data, _dim);
     }
 
+    // Find and add appropriate graph edges
+    unsigned range = _indexingRange;
+    unsigned Lindex = _indexingQueueSize;
+
+    ScratchStoreManager<T>    manager(_query_scratch);
+    auto                      scratch = manager.scratch_space();
+    std::vector<Neighbor>    &pool = scratch.pool();
+    tsl::robin_set<unsigned> &visited = scratch.visited();
     pool.clear();
     visited.clear();
     std::vector<unsigned> pruned_list;
-    // params.Get<unsigned>("L");
-
     std::vector<unsigned> init_ids;
     get_expanded_nodes(location, Lindex, init_ids, pool, visited, scratch.des(),
                        scratch.best_l_nodes(), scratch.inserted_into_pool_rs(),
@@ -2711,7 +2728,7 @@ namespace diskann {
 
     _final_graph[location].clear();
     _final_graph[location].shrink_to_fit();
-    _final_graph[location].reserve((_u64)(range * GRAPH_SLACK_FACTOR * 1.05));
+    _final_graph[location].reserve((_u64) (range * GRAPH_SLACK_FACTOR * 1.05));
 
     assert(!pruned_list.empty());
     {
@@ -2744,6 +2761,7 @@ namespace diskann {
     }
     std::shared_lock<std::shared_timed_mutex> lock(_update_lock);
     _lazy_done = true;
+    _data_compacted = false;
 
     {
       std::unique_lock<std::shared_timed_mutex> tl(_tag_lock);
@@ -2760,7 +2778,6 @@ namespace diskann {
       _delete_set.insert(_tag_to_location[tag]);
     }
 
-    _data_compacted = false;
     return 0;
   }
 
@@ -2781,6 +2798,7 @@ namespace diskann {
     }
     std::shared_lock<std::shared_timed_mutex> lock(_update_lock);
     _lazy_done = true;
+    _data_compacted = false;
 
     for (auto tag : tags) {
       if (_tag_to_location.find(tag) == _tag_to_location.end()) {
