@@ -4,6 +4,7 @@
 #include <cstring>
 #include <iomanip>
 #include <algorithm>
+#include <numeric>
 #include <omp.h>
 #include <set>
 #include <string.h>
@@ -59,6 +60,7 @@ int search_memory_index(diskann::Metric& metric, const std::string& index_path,
   if (metric == diskann::FAST_L2)
     index.optimize_index_layout();
 
+  std::cout << "Using " << num_threads << " threads to search" << std::endl;
   diskann::Parameters paras;
   std::cout.setf(std::ios_base::fixed, std::ios_base::floatfield);
   std::cout.precision(2);

@@ -31,7 +31,6 @@ typedef int FileHandle;
 
 #include "utils.h"
 #include "windows_customizations.h"
-#include "gperftools/malloc_extension.h"
 
 namespace diskann {
   const size_t   MAX_PQ_TRAINING_SET_SIZE = 256000;

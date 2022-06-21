@@ -33,7 +33,9 @@
 #include "utils.h"
 #include "windows_customizations.h"
 #include "ann_exception.h"
-//#include "tcmalloc/malloc_extension.h"
+#if defined(RELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS) && defined(DISKANN_BUILD)
+#include "gperftools/malloc_extension.h"
+#endif
 #include "boost/dynamic_bitset.hpp"
 
 #ifdef _WINDOWS
@@ -1598,9 +1600,9 @@ namespace diskann {
           progress_counter += 5;
         }
       }
-// Gopal. Splittng nsg_dll into separate DLLs for search and build.
+// Gopal. Splitting nsg_dll into separate DLLs for search and build.
 // This code should only be available in the "build" DLL.
-#ifdef USE_TCMALLOC
+#if defined(RELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS) && defined(DISKANN_BUILD)
       MallocExtension::instance()->ReleaseFreeMemory();
 #endif
       if (_nd > 0) {

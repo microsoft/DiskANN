@@ -130,7 +130,7 @@ namespace diskann {
 
   _u32
   get_num_chunks() {
-    return n_chunks;
+    return static_cast<_u32>(n_chunks);
   }
   void populate_chunk_distances(const float* query_vec, float* dist_vec) {
     memset(dist_vec, 0, 256 * n_chunks * sizeof(float));

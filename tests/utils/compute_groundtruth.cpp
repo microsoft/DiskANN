@@ -144,7 +144,7 @@ void exact_knn(const size_t dim, const size_t k,
     points = new float[npoints*dim];
     queries = new float[nqueries*dim];
 #pragma omp parallel for schedule(static, 4096)
-    for (_u32 i =0; i < npoints; i++) {
+    for (_s64 i =0; i < npoints; i++) {
       float norm = std::sqrt(points_l2sq[i]);
       if (norm==0) {
         norm = std::numeric_limits<float>::epsilon();
@@ -155,7 +155,7 @@ void exact_knn(const size_t dim, const size_t k,
     }
 
 #pragma omp parallel for schedule(static, 4096)
-    for (_u32 i =0; i < nqueries; i++) {
+    for (_s64 i =0; i < nqueries; i++) {
       float norm = std::sqrt(queries_l2sq[i]);
       if (norm==0) {
         norm = std::numeric_limits<float>::epsilon();
