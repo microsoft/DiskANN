@@ -4,6 +4,7 @@
 #include <cstring>
 #include <iomanip>
 #include <algorithm>
+#include <numeric>
 #include <omp.h>
 #include <set>
 #include <string.h>

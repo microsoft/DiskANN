@@ -54,7 +54,7 @@ int search_memory_index(diskann::Metric& metric, const std::string& index_path,
                   << " not found. Not computing recall." << std::endl;
   }
 
-  diskann::Index<T, uint32_t> index(metric, query_dim, 0, dynamic, dynamic);
+  diskann::Index<T, uint32_t> index(metric, query_dim, 0, dynamic, tags);
   index.load(index_path.c_str(), num_threads,
              *(std::max_element(Lvec.begin(), Lvec.end())));
   std::cout << "Index loaded" << std::endl;
