@@ -15,6 +15,11 @@
 #include <set>
 #include <sstream>
 #include <string>
+
+#if defined(RELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS) && defined(DISKANN_BUILD)
+#include "gperftools/malloc_extension.h"
+#endif
+
 #include "logger.h"
 #include "exceptions.h"
 #include "index.h"
@@ -564,9 +569,9 @@ int generate_pq_data_from_pivots(const std::string data_file,
 #endif
     diskann::cout << ".done." << std::endl;
   }
-// Gopal. Splittng diskann_dll into separate DLLs for search and build.
+// Gopal. Splitting diskann_dll into separate DLLs for search and build.
 // This code should only be available in the "build" DLL.
-#ifdef DISKANN_BUILD
+#if defined(RELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS) && defined(DISKANN_BUILD)
   MallocExtension::instance()->ReleaseFreeMemory();
 #endif
   compressed_file_writer.close();

@@ -18,9 +18,6 @@
 #include "timer.h"
 #include "utils.h"
 
-#ifdef _WINDOWS
-#include "tcmalloc/malloc_extension.h"
-#endif
 #include "cosine_similarity.h"
 #include "tsl/robin_set.h"
 
@@ -248,7 +245,7 @@ namespace diskann {
 
       _u64 node_idx = start_idx;
       for (_u32 i = 0; i < read_reqs.size(); i++) {
-#ifdef _WINDOWS  // this block is to handle failed reads in production settings
+#if defined(_WINDOWS) && defined(USE_BING_INFRA) // this block is to handle failed reads in production settings
         if ((*ctx.m_pRequestsStatus)[i] != IOContext::READ_SUCCESS) {
           continue;
         }
@@ -432,7 +429,7 @@ namespace diskann {
 
         // process each nhood buf
         for (_u32 i = 0; i < read_reqs.size(); i++) {
-#ifdef _WINDOWS  // this block is to handle read failures in production settings
+#if defined(_WINDOWS) && defined(USE_BING_INFRA) // this block is to handle read failures in production settings
           if ((*ctx.m_pRequestsStatus)[i] != IOContext::READ_SUCCESS) {
             continue;
           }

@@ -30,18 +30,22 @@ class WindowsAlignedFileReader : public AlignedFileReader {
 
   // Open & close ops
   // Blocking calls
-  DISKANN_DLLEXPORT virtual void open(const std::string &fname);
-  DISKANN_DLLEXPORT virtual void close();
+  DISKANN_DLLEXPORT virtual void open(const std::string &fname) override;
+  DISKANN_DLLEXPORT virtual void close() override;
 
-  DISKANN_DLLEXPORT virtual void register_thread();
-  DISKANN_DLLEXPORT virtual void deregister_thread() {
+  DISKANN_DLLEXPORT virtual void register_thread() override;
+  DISKANN_DLLEXPORT virtual void deregister_thread() override {
+      // TODO: Needs implementation.
   }
-  DISKANN_DLLEXPORT virtual IOContext &get_ctx();
+  DISKANN_DLLEXPORT virtual void deregister_all_threads() override {
+      // TODO: Needs implementation.
+  }
+  DISKANN_DLLEXPORT virtual IOContext &get_ctx() override;
 
   // process batch of aligned requests in parallel
   // NOTE :: blocking call for the calling thread, but can thread-safe
   DISKANN_DLLEXPORT virtual void read(std::vector<AlignedRead> &read_reqs,
-                                      IOContext &ctx, bool async);
+                                      IOContext &ctx, bool async) override;
 };
 #endif  // USE_BING_INFRA
 #endif  //_WINDOWS

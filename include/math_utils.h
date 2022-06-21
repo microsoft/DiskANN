@@ -2,7 +2,6 @@
 // Licensed under the MIT license.
 
 #pragma once
-#include <mkl.h>
 
 #include "common_includes.h"
 #include "utils.h"
