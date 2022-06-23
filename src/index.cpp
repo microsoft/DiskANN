@@ -427,8 +427,6 @@ namespace diskann {
     std::unique_lock<std::shared_timed_mutex> lock(_update_lock);
     _num_points_lock.lock();
 
-    std::cerr << "data compacted: " << _data_compacted << std::endl;
-
     if (compact_before_save) {
       compact_data();
       compact_frozen_point();
@@ -2439,14 +2437,8 @@ namespace diskann {
               sstream << std::endl
                       << " Point: " << old << " index: " << i
                       << " neighbor: " << _final_graph[old][i]
-                      << " found in delete set of size: " << _delete_set.size()
-                      << std::endl;
-            } else {
-              sstream << " Point: " << old
-                      << " neighbor: " << _final_graph[old][i]
-                      << " NOT found in delete set of size: "
-                      << _delete_set.size() << std::endl;
-            }
+                      << " found in delete set of size: " << _delete_set.size();
+            } 
             throw diskann::ANNException(sstream.str(), -1, __FUNCSIG__,
                                         __FILE__, __LINE__);
           }
@@ -2773,9 +2765,9 @@ namespace diskann {
       }
       assert(_tag_to_location[tag] < _max_points);
 
+      _delete_set.insert(_tag_to_location[tag]);
       _location_to_tag.erase(_tag_to_location[tag]);
       _tag_to_location.erase(tag);
-      _delete_set.insert(_tag_to_location[tag]);
     }
 
     return 0;
