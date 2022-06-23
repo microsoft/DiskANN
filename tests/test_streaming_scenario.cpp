@@ -226,7 +226,7 @@ void build_incremental_index(
   if (beginning_index_size > 0) {
     index.build(data, beginning_index_size, params, tags);
     index.enable_delete();
-  } else if (getenv("TTS_FAKE_FROZEN_POINT") != nullptr) {
+  } else {
     std::cout << "Adding a fake point for build() and deleting it" << std::endl;
 
     std::vector<TagT> one_tag;
@@ -234,7 +234,7 @@ void build_incremental_index(
 
     std::vector<T> fake_coords(aligned_dim);
     for (size_t i = 0; i < dim; i++) {
-      fake_coords[i] = static_cast<T>(i);
+      fake_coords[i] = i == 0 ? 1 : 0;
     }
 
     index.build(fake_coords.data(), 1, params, one_tag);
@@ -319,7 +319,7 @@ void build_incremental_index(
 
         const auto save_path_inc =
             get_save_filename(save_path + ".inc-", points_to_skip, end);
-        index.save(save_path_inc.c_str());
+        index.save(save_path_inc.c_str(), true);
         const double elapsedSeconds = save_timer.elapsed() / 1000000.0;
         const size_t points_saved = end - points_to_skip;
 
@@ -339,7 +339,7 @@ void build_incremental_index(
         last_snapshot_points_threshold != last_point_threshold) {
       const auto save_path_inc = get_save_filename(
           save_path + ".inc-", points_to_skip, last_point_threshold);
-      index.save(save_path_inc.c_str());
+      index.save(save_path_inc.c_str(), true);
     }
 
     if (points_to_delete_from_beginning > 0) {
