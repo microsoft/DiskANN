@@ -2773,9 +2773,10 @@ namespace diskann {
       }
       assert(_tag_to_location[tag] < _max_points);
 
-      _location_to_tag.erase(_tag_to_location[tag]);
+      const auto location = _tag_to_location[tag];
+      _delete_set.insert(location);
+      _location_to_tag.erase(location);
       _tag_to_location.erase(tag);
-      _delete_set.insert(_tag_to_location[tag]);
     }
 
     return 0;
