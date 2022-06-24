@@ -34,7 +34,7 @@ jobs:
     - name: build
       if: runner.os != 'Windows'
       run: |
-        mkdir build && cd build && cmake .. && make -j
+        mkdir build && cd build && cmake -DCMAKE_BUILD_TYPE=Release .. && make -j
 
     - name: Add VisualStudio command line tools into path
       if: runner.os == 'Windows'

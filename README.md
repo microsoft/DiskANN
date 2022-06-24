@@ -38,7 +38,7 @@ sudo sh l_BaseKit_p_2022.1.2.146.sh -a --components intel.oneapi.lin.mkl.devel -
 
 ### Build
 ```bash
-mkdir build && cd build && cmake .. && make -j 
+mkdir build && cd build && cmake -DCMAKE_BUILD_TYPE=Release .. && make -j 
 ```
 
 ## Windows build:
