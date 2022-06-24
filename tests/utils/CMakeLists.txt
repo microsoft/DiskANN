@@ -5,6 +5,8 @@ set(CMAKE_CXX_STANDARD 14)
 
 add_executable(fvecs_to_bin fvecs_to_bin.cpp)
 
+add_executable(fvecs_to_bvecs fvecs_to_bvecs.cpp)
+
 add_executable(rand_data_gen rand_data_gen.cpp)
 target_link_libraries(rand_data_gen ${PROJECT_NAME} Boost::program_options)
 
