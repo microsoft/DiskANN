@@ -135,18 +135,22 @@ namespace diskann {
     DISKANN_DLLEXPORT void build(
         const char *filename, const size_t num_points_to_load,
         Parameters &             parameters,
-        const std::vector<TagT> &tags = std::vector<TagT>());
+        const std::vector<TagT> &tags = std::vector<TagT>(),
+        const char* query_filename = nullptr, const size_t num_query_points_to_load = 0);
 
     // Batch build from a file. Optionally pass tags file.
     DISKANN_DLLEXPORT void build(const char * filename,
                                  const size_t num_points_to_load,
                                  Parameters & parameters,
-                                 const char * tag_filename);
+                                 const char * tag_filename,
+                                 const char* query_filename = nullptr,
+                                 const size_t num_query_points_to_load = 0);
 
     // Batch build from a data array, which must pad vectors to aligned_dim
     DISKANN_DLLEXPORT void build(const T *data, const size_t num_points_to_load,
                                  Parameters &             parameters,
-                                 const std::vector<TagT> &tags);
+                                 const std::vector<TagT> &tags,
+                                 const T *query_data = nullptr, const size_t num_query_points_to_load = 0);
 
     // For Bulk Index FastL2 search, we interleave the data with graph
     DISKANN_DLLEXPORT void optimize_index_layout();
@@ -245,7 +249,7 @@ namespace diskann {
 
     // Use after _data and _nd have been populated
     void build_with_data_populated(Parameters &             parameters,
-                                   const std::vector<TagT> &tags);
+                                   const std::vector<TagT> &tags, const size_t num_query_points = 0);
 
     // generates 1 frozen point that will never be deleted from the graph
     // This is not visible to the user
@@ -323,7 +327,7 @@ namespace diskann {
                       bool update_in_graph);
 
     // Create the graph, update periodically in NUM_SYNCS batches
-    void link(Parameters &parameters);
+    void link(Parameters &parameters, const size_t num_query_points = 0);
 
     // WARNING: Do not call reserve_location() without acquiring change_lock_
     int  reserve_location();
@@ -366,6 +370,8 @@ namespace diskann {
     std::vector<std::vector<unsigned>> _final_graph;
     std::vector<std::vector<unsigned>> _in_graph;
 
+
+
     // Dimensions
     size_t _dim = 0;
     size_t _aligned_dim = 0;
@@ -400,6 +406,7 @@ namespace diskann {
     // data structures, flags and locks for dynamic indexing
     std::unordered_map<TagT, unsigned> _tag_to_location;
     std::unordered_map<unsigned, TagT> _location_to_tag;
+    std::unordered_map<TagT, bool> _tag_to_flag; //flag determining whether a tag corresponds to a base point or a query point
 
     tsl::robin_set<unsigned> _delete_set;
     tsl::robin_set<unsigned> _empty_slots;

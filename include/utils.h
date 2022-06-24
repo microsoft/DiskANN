@@ -792,7 +792,8 @@ namespace diskann {
   inline void copy_aligned_data_from_file(const char* bin_file, T*& data,
                                           size_t& npts, size_t& dim,
                                           const size_t& rounded_dim,
-                                          size_t        offset = 0) {
+                                          size_t        offset = 0,
+                                          size_t data_offset = 0) {
     if (data == nullptr) {
       diskann::cerr << "Memory was not allocated for " << data
                     << " before calling the load function. Exiting..."
@@ -812,7 +813,7 @@ namespace diskann {
     npts = (unsigned) npts_i32;
     dim = (unsigned) dim_i32;
 
-    for (size_t i = 0; i < npts; i++) {
+    for (size_t i = data_offset; i < npts+data_offset; i++) {
       reader.read((char*) (data + i * rounded_dim), dim * sizeof(T));
       memset(data + i * rounded_dim + dim, 0, (rounded_dim - dim) * sizeof(T));
     }
