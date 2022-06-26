@@ -194,9 +194,10 @@ namespace diskann {
                         const bool dynamic_index, const Parameters &indexParams,
                         const Parameters &searchParams, const bool enable_tags,
                         const bool support_eager_delete,
-                        const bool concurrent_consolidate)
+                        const bool concurrent_consolidate,
+                        const bool enable_flags)
       : Index(m, dim, max_points, dynamic_index, enable_tags,
-              support_eager_delete, concurrent_consolidate) {
+              support_eager_delete, concurrent_consolidate, enable_flags) {
     _indexingQueueSize = indexParams.Get<uint32_t>("L");
     _indexingRange = indexParams.Get<uint32_t>("R");
     _indexingMaxC = indexParams.Get<uint32_t>("C");
@@ -215,11 +216,12 @@ namespace diskann {
   Index<T, TagT>::Index(Metric m, const size_t dim, const size_t max_points,
                         const bool dynamic_index, const bool enable_tags,
                         const bool support_eager_delete,
-                        const bool concurrent_consolidate)
+                        const bool concurrent_consolidate,
+                        const bool enable_flags)
       : _dist_metric(m), _dim(dim), _max_points(max_points),
         _dynamic_index(dynamic_index), _enable_tags(enable_tags),
         _support_eager_delete(support_eager_delete),
-        _conc_consolidate(concurrent_consolidate) {
+        _conc_consolidate(concurrent_consolidate), _enable_flags(enable_flags) {
     if (dynamic_index && !enable_tags) {
       throw diskann::ANNException(
           "ERROR: Eager Deletes must have Dynamic Indexing enabled.", -1,
@@ -235,13 +237,22 @@ namespace diskann {
                     << std::endl;
       throw diskann::ANNException(
           "ERROR: Eager deletes are possible only if dynamic indexing is "
-          "enabled. Exiting.",
+          "enabled. Exitting.",
           -1, __FUNCSIG__, __FILE__, __LINE__);
     }
-    // data stored to _nd * aligned_dim matrix with necessary zero-padding
+    if (_enable_flags && !_enable_tags) {
+      diskann::cerr << "ERROR: Using flags requires tags to be  "
+                       "enabled. Exitting."
+                    << std::endl;
+      throw diskann::ANNException(
+          "ERROR: Using flags is possible only if tags are "
+          "enabled. Exitting.",
+          -1, __FUNCSIG__, __FILE__, __LINE__);
+    }
+
     _aligned_dim = ROUND_UP(_dim, 8);
 
-    if (dynamic_index) {
+    if (dynamic_index || _enable_flags) {
       _num_frozen_pts = 1;
     }
     // Sanity check. While logically it is correct, max_points = 0 causes
@@ -371,6 +382,30 @@ namespace diskann {
   }
 
   template<typename T, typename TagT>
+  _u64 Index<T, TagT>::save_flags(std::string flags_file) {
+    if (_tag_to_flag.size() == 0) {
+      diskann::cout << "Not saving flags as they were not used" << std::endl;
+      return 0;
+    }
+    size_t flag_bytes_written;
+    bool * flag_data = new bool[_nd + _num_frozen_pts];
+    for (_u32 i = 0; i < _nd; i++) {
+      flag_data[i] = _tag_to_flag[_location_to_tag[i]];
+    }
+    if (_num_frozen_pts > 0) {
+      std::memset((char *) &flag_data[_start], false, sizeof(bool));
+    }
+    try {
+      flag_bytes_written =
+          save_bin<bool>(flags_file, flag_data, _nd + _num_frozen_pts, 1);
+    } catch (std::system_error &e) {
+      throw FileException(flags_file, e, __FUNCSIG__, __FILE__, __LINE__);
+    }
+    delete[] flag_data;
+    return flag_bytes_written;
+  }
+
+  template<typename T, typename TagT>
   _u64 Index<T, TagT>::save_data(std::string data_file) {
     return save_data_in_base_dimensions(data_file, _data, _nd + _num_frozen_pts,
                                         _dim, _aligned_dim);
@@ -436,6 +471,7 @@ namespace diskann {
       std::string tags_file = std::string(filename) + ".tags";
       std::string data_file = std::string(filename) + ".data";
       std::string delete_list_file = std::string(filename) + ".del";
+      std::string flags_file = std::string(filename) + ".flags";
 
       // Because the save_* functions use append mode, ensure that
       // the files are deleted before save. Ideally, we should check
@@ -449,6 +485,9 @@ namespace diskann {
       save_tags(tags_file);
       delete_file(delete_list_file);
       save_delete_list(delete_list_file);
+      delete_file(flags_file);
+      save_flags(flags_file);
+
     } else {
       diskann::cout << "Save index in a single file currently not supported. "
                        "Not saving the index."
@@ -512,6 +551,56 @@ namespace diskann {
     }
     diskann::cout << "Tags loaded." << std::endl;
     delete[] tag_data;
+    return file_num_points;
+  }
+
+#ifdef EXEC_ENV_OLS
+  template<typename T, typename TagT>
+  size_t Index<T, TagT>::load_flags(AlignedFileReader &reader) {
+#else
+  template<typename T, typename TagT>
+  size_t Index<T, TagT>::load_flags(const std::string flag_filename) {
+    if (_enable_flags && !file_exists(flag_filename)) {
+      diskann::cerr << "Flag file provided does not exist!" << std::endl;
+      throw diskann::ANNException("Flag file provided does not exist!", -1,
+                                  __FUNCSIG__, __FILE__, __LINE__);
+    }
+#endif
+    if (!_enable_flags) {
+      diskann::cout << "Flags not loaded as flags not enabled." << std::endl;
+      return 0;
+    }
+
+    size_t file_dim, file_num_points;
+    bool * flag_data;
+#ifdef EXEC_ENV_OLS
+    load_bin<bool>(reader, flag_data, file_num_points, file_dim);
+#else
+    load_bin<bool>(std::string(flag_filename), flag_data, file_num_points,
+                   file_dim);
+#endif
+
+    if (file_dim != 1) {
+      std::stringstream stream;
+      stream << "ERROR: Found " << file_dim << " dimensions for flags,"
+             << "but flag file must have 1 dimension." << std::endl;
+      diskann::cerr << stream.str() << std::endl;
+      delete[] flag_data;
+      throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
+                                  __LINE__);
+    }
+
+    size_t num_data_points =
+        _num_frozen_pts > 0 ? file_num_points - 1 : file_num_points;
+    for (_u32 i = 0; i < (_u32) num_data_points; i++) {
+      bool flag = *(flag_data + i);
+      if (_delete_set.find(i) == _delete_set.end()) {
+        TagT tag = _location_to_tag[i];
+        _tag_to_flag[tag] = flag;
+      }
+    }
+    diskann::cout << "Flags loaded." << std::endl;
+    delete[] flag_data;
     return file_num_points;
   }
 
@@ -602,13 +691,15 @@ namespace diskann {
 #endif
     _num_points_lock.lock();
 
-    size_t tags_file_num_pts = 0, graph_num_pts = 0, data_file_num_pts = 0;
+    size_t tags_file_num_pts = 0, flags_file_num_pts = 0, graph_num_pts = 0,
+           data_file_num_pts = 0;
 
     if (!_save_as_one_file) {
       // For DLVS Store, we will not support saving the index in multiple files.
 #ifndef EXEC_ENV_OLS
       std::string data_file = std::string(filename) + ".data";
       std::string tags_file = std::string(filename) + ".tags";
+      std::string flags_file = std::string(filename) + ".flags";
       std::string delete_set_file = std::string(filename) + ".del";
       std::string graph_file = std::string(filename);
       data_file_num_pts = load_data(data_file);
@@ -617,6 +708,9 @@ namespace diskann {
       }
       if (_enable_tags) {
         tags_file_num_pts = load_tags(tags_file);
+      }
+      if (_enable_tags && _enable_flags) {
+        flags_file_num_pts = load_flags(flags_file);
       }
       graph_num_pts = load_graph(graph_file, data_file_num_pts);
 #endif
@@ -635,6 +729,19 @@ namespace diskann {
              << " points from datafile, " << graph_num_pts
              << " from graph, and " << tags_file_num_pts
              << " tags, with num_frozen_pts being set to " << _num_frozen_pts
+             << " in constructor." << std::endl;
+      diskann::cerr << stream.str() << std::endl;
+      aligned_free(_data);
+      throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
+                                  __LINE__);
+    }
+
+    if (_enable_flags && flags_file_num_pts != tags_file_num_pts) {
+      std::stringstream stream;
+      stream << "ERROR: When loading index, loaded " << tags_file_num_pts
+             << " points from tag file, " << graph_num_pts
+             << " from graph, and " << flags_file_num_pts
+             << " flags, with num_frozen_pts being set to " << _num_frozen_pts
              << " in constructor." << std::endl;
       diskann::cerr << stream.str() << std::endl;
       aligned_free(_data);
@@ -670,6 +777,30 @@ namespace diskann {
     _has_built = true;
 
     _num_points_lock.unlock();
+
+    // FOR TESTING PURPOSES ONLY
+    // TODO REMOVE IF MERGED TO MAIN
+    if (_enable_flags) {
+#pragma omp parallel for schedule(dynamic, 65536)
+      for (_s64 node_ctr = 0; node_ctr < (_s64) _nd; node_ctr++) {
+        for (auto nbh : _final_graph[node_ctr]) {
+          if (_tag_to_flag[nbh]) {
+            std::cout << "ERROR: point has a query neighbor" << std::endl;
+          }
+        }
+      }
+
+      std::cout << "No node has a query neighbor " << std::endl;
+
+      int count = 0;
+
+      for (_s64 node_ctr = 0; node_ctr < (_s64) _nd; node_ctr++) {
+        if (_tag_to_flag[node_ctr])
+          count++;
+      }
+
+      std::cout << "Number of nodes with flag set true " << count << std::endl;
+    }
   }
 
 #ifdef EXEC_ENV_OLS
@@ -1440,8 +1571,6 @@ namespace diskann {
                 }
                 t++;
               }
-              // std::cout << "Size of neighbor list for query node: " <<
-              // pruned_list.size() << std::endl;
             } else
               prune_neighbors(node, pool, pruned_list);
           } else
@@ -1449,8 +1578,6 @@ namespace diskann {
         }
         diff = std::chrono::high_resolution_clock::now() - s;
         sync_time += diff.count();
-
-        // std::vector<int> qpts_initial(end_id - start_id, 0);
 
 // prune_neighbors will check pool, and remove some of the points and
 // create a cut_graph, which contains neighbors for point n
@@ -1463,36 +1590,19 @@ namespace diskann {
           _final_graph[node].clear();
           for (auto id : pruned_list) {
             _final_graph[node].emplace_back(id);
-            // if(_tag_to_flag[id]) qpts_initial[node_ctr-start_id] = 1;
           }
         }
         s = std::chrono::high_resolution_clock::now();
-
-        // std::cout << "Number of query nodes after initial populaton: " <<
-        // std::accumulate(qpts_initial.begin(), qpts_initial.end(), 0) <<
-        // std::endl;
-
-        // std::vector<int> qpts_after_backlinks(end_id - start_id, 0);
 
 #pragma omp parallel for schedule(dynamic, 64)
         for (_s64 node_ctr = start_id; node_ctr < (_s64) end_id; ++node_ctr) {
           auto                   node = visit_order[node_ctr];
           _u64                   node_offset = node_ctr - start_id;
           std::vector<unsigned> &pruned_list = pruned_list_vector[node_offset];
-          // if(_tag_to_flag[node]) std::cout << "size of neighbor list for
-          // query node: " << pruned_list.size() << std::endl;
           batch_inter_insert(node, pruned_list, need_to_sync);
           pruned_list.clear();
           pruned_list.shrink_to_fit();
-          // for(auto nbh : _final_graph[node]) {if(_tag_to_flag[nbh])
-          // qpts_after_backlinks[node_ctr-start_id] = 1;}
         }
-
-        // std::cout << "Number of query nodes after addition of back links: "
-        // << std::accumulate(qpts_after_backlinks.begin(),
-        // qpts_after_backlinks.end(), 0) << std::endl;
-
-        // std::vector<int> qpts_after_backlinks(visit_order.size());
 
 #pragma omp parallel for schedule(dynamic, 65536)
         for (_s64 node_ctr = 0; node_ctr < (_s64)(visit_order.size());
@@ -1505,15 +1615,6 @@ namespace diskann {
             std::vector<Neighbor>    dummy_pool(0);
             std::vector<unsigned>    new_out_neighbors;
 
-            // int count = 0 ;
-
-            // for(auto cur_nbr : _final_graph[node]){
-            //   if(_tag_to_flag[cur_nbr]) count++;
-            // }
-
-            // if(count>0) std::cout << "Number of query neighbors before prune
-            // " << count << std::endl;
-
             for (auto cur_nbr : _final_graph[node]) {
               if (dummy_visited.find(cur_nbr) == dummy_visited.end() &&
                   cur_nbr != node) {
@@ -1525,6 +1626,8 @@ namespace diskann {
                 dummy_visited.insert(cur_nbr);
               }
             }
+            // if node is a query point, add the closest base points instead of
+            // pruning
             if (num_query_points != 0) {
               if (_tag_to_flag[node]) {
                 std::sort(dummy_pool.begin(), dummy_pool.end());
@@ -1545,21 +1648,8 @@ namespace diskann {
             _final_graph[node].clear();
             for (auto id : new_out_neighbors)
               _final_graph[node].emplace_back(id);
-
-            //           count = 0 ;
-
-            // for(auto cur_nbr : _final_graph[node]){
-            //   if(_tag_to_flag[cur_nbr]) count++;
-            // }
-
-            // if(count>0) std::cout << "Number of query neighbors before prune
-            // " << count << std::endl;
           }
         }
-
-        // std::cout << "Number of nodes with query neighbors after addition of
-        // back links: " << std::accumulate(qpts_after_backlinks.begin(),
-        // qpts_after_backlinks.end(), 0) << std::endl;
 
         diff = std::chrono::high_resolution_clock::now() - s;
         inter_time += diff.count();
@@ -1608,65 +1698,82 @@ namespace diskann {
       std::cout << "Beginning RobustStitch routine... " << std::endl;
       std::vector<int> changed(visit_order.size());
 
-      std::vector<int> per_node_capacity(_nd - num_query_points);
-      std::vector<int> query_indegree(_nd - num_query_points, 0);
+      std::vector<int> query_indegree(_nd, 0);
+      std::vector<int> per_node_capacity(_nd, 0);
 
       auto startclock = std::chrono::high_resolution_clock::now();
 
-      for (_s64 query_ctr = (_s64) visit_order.size() - num_query_points;
-           query_ctr < (_s64) visit_order.size(); query_ctr++) {
+      // std::set<_s64> qnbh_set;
+
+      for (_s64 query_ctr = (_s64) visit_order.size() - num_query_points - 1;
+           query_ctr < (_s64) visit_order.size() - 1; query_ctr++) {
         for (auto nbh : _final_graph[query_ctr]) {
+          // qnbh_set.insert(nbh);
           query_indegree[nbh]++;
         }
       }
 
-#pragma omp parallel for schedule(dynamic, 65536)
-      for (_s64 node_ctr = 0;
-           node_ctr < (_s64)(visit_order.size() - num_query_points);
-           node_ctr++) {
-        auto             node = visit_order[node_ctr];
-        std::vector<int> filtered_nbh;
-        int              c = 0;
-        for (auto nbh : _final_graph[node]) {
-          if (!_tag_to_flag[nbh]) {
-            c++;
-          }
-        }
-        int total_capacity = _indexingRange - c;
-        int per_query_capacity;
-        if (query_indegree[node] != 0)
-          per_query_capacity =
-              std::floor(total_capacity / ((double) query_indegree[node])) + 1;
-        else
-          per_query_capacity = 0;
-        per_node_capacity[node] = per_query_capacity;
+      // std::cout << "Size of query neighbor set " << qnbh_set.size() <<
+      // std::endl;
 
-        if (c <
-            (int) _final_graph[node]
-                .size()) {  // filter out query points in the neighbors of any
-                            // base points; thus search does not need modifying
-          std::vector<int> new_nbh;
+#pragma omp parallel for schedule(dynamic, 65536)
+      for (_s64 node_ctr = 0; node_ctr < (_s64)(visit_order.size());
+           node_ctr++) {
+        auto node = visit_order[node_ctr];
+
+        if (!_tag_to_flag[node]) {
+          int c = 0;
           for (auto nbh : _final_graph[node]) {
             if (!_tag_to_flag[nbh]) {
-              new_nbh.push_back(nbh);
+              c++;
             }
           }
-          _final_graph[node].clear();
-          for (auto p : new_nbh) {
-            _final_graph[node].emplace_back(p);
+          int total_capacity = _indexingRange - c;
+          int per_query_capacity;
+          if (query_indegree[node] != 0) {
+            per_query_capacity =
+                std::floor(total_capacity / ((double) query_indegree[node])) +
+                1;
+            per_node_capacity[node] = per_query_capacity;
+          }
+
+          if (c < (int) _final_graph[node]
+                      .size()) {  // filter out query points in the neighbors of
+                                  // any base points; thus search does not need
+                                  // modifying
+            std::vector<int> new_nbh;
+            for (auto nbh : _final_graph[node]) {
+              if (!_tag_to_flag[nbh]) {
+                new_nbh.push_back(nbh);
+              }
+            }
+            _final_graph[node].clear();
+            for (auto p : new_nbh) {
+              _final_graph[node].emplace_back(p);
+            }
           }
         }
       }
 
-      for (_s64 query_ctr = (_s64) visit_order.size() - num_query_points;
-           query_ctr < (_s64) visit_order.size(); query_ctr++) {
+      std::cout << "Stitching nodes now..." << std::endl;
+
+      for (_s64 query_ctr = (_s64) visit_order.size() - num_query_points - 1;
+           query_ctr < (_s64) visit_order.size() - 1; query_ctr++) {
         for (auto nbh : _final_graph[query_ctr]) {
           if (per_node_capacity[nbh] > 0)
             changed[nbh] = 1;
-          for (int j = 0; j < per_node_capacity[nbh]; j++) {
+          int c = 0;
+          int j = 0;
+          while (c < per_node_capacity[nbh] &&
+                 j < (int) _final_graph[query_ctr].size()) {
             auto candidate = _final_graph[query_ctr][j];
-            if (candidate != nbh)
+            if (candidate != nbh &&
+                (std::find(_final_graph[nbh].begin(), _final_graph[nbh].end(),
+                           candidate) == _final_graph[nbh].end())) {
               _final_graph[nbh].push_back(candidate);
+              c++;
+            }
+            j++;
           }
         }
       }
@@ -1678,6 +1785,19 @@ namespace diskann {
       std::cout << "Number of nodes stitched: "
                 << std::accumulate(changed.begin(), changed.end(), 0)
                 << std::endl;
+    }
+// FOR TESTING PURPOSES ONLY
+// TODO REMOVE IF MERGING TO MAIN
+#pragma omp parallel for schedule(dynamic, 65536)
+    for (_s64 node_ctr = 0; node_ctr < (_s64)(visit_order.size()); node_ctr++) {
+      auto node = visit_order[node_ctr];
+
+      for (auto nbh : _final_graph[node]) {
+        if (nbh > visit_order.size() - num_query_points - 1 &&
+            nbh != visit_order.size() - 1) {
+          std::cout << "ERROR: point has a query neighbor" << std::endl;
+        }
+      }
     }
   }
 
@@ -1815,8 +1935,21 @@ namespace diskann {
     memcpy((char *) _data, (char *) data,
            _aligned_dim * num_points_to_load * sizeof(T));
     if (query_data != nullptr) {
-      memcpy((char *) _data + num_points_to_load, (char *) query_data,
-             _aligned_dim * num_query_points_to_load * sizeof(T));
+      if (_enable_flags) {
+        memcpy((char *) (_data + _aligned_dim * num_points_to_load),
+               (char *) query_data,
+               _aligned_dim * num_query_points_to_load * sizeof(T));
+        std::cout << _aligned_dim * num_query_points_to_load * sizeof(T)
+                  << std::endl;
+      } else {
+        std::stringstream stream;
+        stream << "ERROR: query file provided but flags not enabled"
+               << std::endl;
+        diskann::cerr << stream.str() << std::endl;
+        aligned_free(_data);
+        throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
+                                    __LINE__);
+      }
     }
 
     if (_normalize_vecs) {
@@ -1887,12 +2020,12 @@ namespace diskann {
     size_t qfile_num_points, qfile_dim;
     qfile_num_points = 0;
 
-    if (query_filename != nullptr) {
-      if (!file_exists(filename)) {
+    if (query_filename != nullptr && _enable_flags) {
+      if (!file_exists(query_filename)) {
         diskann::cerr << "Query data file " << filename
                       << " does not exist!!! Exiting...." << std::endl;
         std::stringstream stream;
-        stream << "Query data file " << filename << " does not exist."
+        stream << "Query data file " << query_filename << " does not exist."
                << std::endl;
         diskann::cerr << stream.str() << std::endl;
         throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
@@ -1932,6 +2065,13 @@ namespace diskann {
         throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
                                     __LINE__);
       }
+    } else if (query_filename != nullptr && !_enable_flags) {
+      std::stringstream stream;
+      stream << "ERROR: query file provided but flags not enabled" << std::endl;
+      diskann::cerr << stream.str() << std::endl;
+      aligned_free(_data);
+      throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
+                                  __LINE__);
     }
 
     copy_aligned_data_from_file<T>(filename, _data, file_num_points, file_dim,

@@ -98,7 +98,8 @@ namespace diskann {
                             const bool   dynamic_index = false,
                             const bool   enable_tags = false,
                             const bool   support_eager_delete = false,
-                            const bool   concurrent_consolidate = false);
+                            const bool   concurrent_consolidate = false,
+                            const bool   enable_flags = false);
 
     // Constructor for incremental index
     DISKANN_DLLEXPORT Index(Metric m, const size_t dim, const size_t max_points,
@@ -107,7 +108,8 @@ namespace diskann {
                             const Parameters &searchParameters,
                             const bool        enable_tags = false,
                             const bool        support_eager_delete = false,
-                            const bool        concurrent_consolidate = false);
+                            const bool        concurrent_consolidate = false,
+                            const bool        enable_flags = false);
 
     DISKANN_DLLEXPORT ~Index();
 
@@ -116,6 +118,7 @@ namespace diskann {
     DISKANN_DLLEXPORT _u64 save_graph(std::string filename);
     DISKANN_DLLEXPORT _u64 save_data(std::string filename);
     DISKANN_DLLEXPORT _u64 save_tags(std::string filename);
+    DISKANN_DLLEXPORT _u64 save_flags(std::string filename);
     DISKANN_DLLEXPORT _u64 save_delete_list(const std::string &filename);
 
     // Load functions
@@ -125,6 +128,7 @@ namespace diskann {
                                         size_t            expected_num_points);
     DISKANN_DLLEXPORT size_t load_data(std::string filename0);
     DISKANN_DLLEXPORT size_t load_tags(const std::string tag_file_name);
+    DISKANN_DLLEXPORT size_t load_flags(const std::string flag_file_name);
     DISKANN_DLLEXPORT size_t load_delete_set(const std::string &filename);
 
     // get some private variables
@@ -136,21 +140,23 @@ namespace diskann {
         const char *filename, const size_t num_points_to_load,
         Parameters &             parameters,
         const std::vector<TagT> &tags = std::vector<TagT>(),
-        const char* query_filename = nullptr, const size_t num_query_points_to_load = 0);
+        const char *             query_filename = nullptr,
+        const size_t             num_query_points_to_load = 0);
 
     // Batch build from a file. Optionally pass tags file.
     DISKANN_DLLEXPORT void build(const char * filename,
                                  const size_t num_points_to_load,
                                  Parameters & parameters,
                                  const char * tag_filename,
-                                 const char* query_filename = nullptr,
+                                 const char * query_filename = nullptr,
                                  const size_t num_query_points_to_load = 0);
 
     // Batch build from a data array, which must pad vectors to aligned_dim
     DISKANN_DLLEXPORT void build(const T *data, const size_t num_points_to_load,
                                  Parameters &             parameters,
                                  const std::vector<TagT> &tags,
-                                 const T *query_data = nullptr, const size_t num_query_points_to_load = 0);
+                                 const T *                query_data = nullptr,
+                                 const size_t num_query_points_to_load = 0);
 
     // For Bulk Index FastL2 search, we interleave the data with graph
     DISKANN_DLLEXPORT void optimize_index_layout();
@@ -197,7 +203,7 @@ namespace diskann {
     // If _conc_consolidates is set in the ctor, then this call can be invoked
     // alongside inserts and lazy deletes, else it acquires _update_lock
     size_t consolidate_deletes(const Parameters &parameters,
-                               int         delete_policy = 1);
+                               int               delete_policy = 1);
 
     // Delete point from graph and restructure it immediately. Do not call if
     // _lazy_delete was called earlier and data was not consolidated
@@ -249,7 +255,8 @@ namespace diskann {
 
     // Use after _data and _nd have been populated
     void build_with_data_populated(Parameters &             parameters,
-                                   const std::vector<TagT> &tags, const size_t num_query_points = 0);
+                                   const std::vector<TagT> &tags,
+                                   const size_t num_query_points = 0);
 
     // generates 1 frozen point that will never be deleted from the graph
     // This is not visible to the user
@@ -343,8 +350,8 @@ namespace diskann {
     // case of eager deletion
     void compact_data();
 
-    //simple BFS starting from the medoid
-    //do not call when performing concurrent updates
+    // simple BFS starting from the medoid
+    // do not call when performing concurrent updates
     void bfs_up_to_level(const int bfs_levels, std::set<unsigned> &level_set);
 
     // Remove deleted nodes from adj list of node i and absorb edges from
@@ -369,8 +376,6 @@ namespace diskann {
     // Graph related data structures
     std::vector<std::vector<unsigned>> _final_graph;
     std::vector<std::vector<unsigned>> _in_graph;
-
-
 
     // Dimensions
     size_t _dim = 0;
@@ -406,7 +411,9 @@ namespace diskann {
     // data structures, flags and locks for dynamic indexing
     std::unordered_map<TagT, unsigned> _tag_to_location;
     std::unordered_map<unsigned, TagT> _location_to_tag;
-    std::unordered_map<TagT, bool> _tag_to_flag; //flag determining whether a tag corresponds to a base point or a query point
+    std::unordered_map<TagT, bool>
+        _tag_to_flag;  // flag determining whether a tag corresponds to a base
+                       // point or a query point
 
     tsl::robin_set<unsigned> _delete_set;
     tsl::robin_set<unsigned> _empty_slots;
@@ -419,6 +426,7 @@ namespace diskann {
     bool _data_compacted = true;  // true if data has been consolidated
     bool _is_saved = false;  // Gopal. Checking if the index is already saved.
     bool _conc_consolidate = false;  // use _lock while searching
+    bool _enable_flags = false;
 
     std::atomic<bool> _consolidate_active =
         ATOMIC_VAR_INIT(false);  // Is one instance of consolidate active
