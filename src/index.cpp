@@ -1566,7 +1566,9 @@ namespace diskann {
           _final_graph[node].clear();
           for (auto id : pruned_list) {
             if(id > _max_points+_num_frozen_pts){
-              std::cout << "ERROR: too large id " << id << "detected " << std::endl; 
+              std::cout << "ERROR: too large id " << id << " detected " << std::endl; 
+              std::cout << "Is the point a flagged point: " << _tag_to_flag[node] << std::endl;
+              std::cout << "size of pruned list: " << pruned_list.size() << std::endl; 
             }
             _final_graph[node].emplace_back(id);
           }
