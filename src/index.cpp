@@ -777,30 +777,6 @@ namespace diskann {
     _has_built = true;
 
     _num_points_lock.unlock();
-
-    // FOR TESTING PURPOSES ONLY
-    // TODO REMOVE IF MERGED TO MAIN
-    if (_enable_flags) {
-#pragma omp parallel for schedule(dynamic, 65536)
-      for (_s64 node_ctr = 0; node_ctr < (_s64) _nd; node_ctr++) {
-        for (auto nbh : _final_graph[node_ctr]) {
-          if (_tag_to_flag[nbh]) {
-            std::cout << "ERROR: point has a query neighbor" << std::endl;
-          }
-        }
-      }
-
-      std::cout << "No node has a query neighbor " << std::endl;
-
-      int count = 0;
-
-      for (_s64 node_ctr = 0; node_ctr < (_s64) _nd; node_ctr++) {
-        if (_tag_to_flag[node_ctr])
-          count++;
-      }
-
-      std::cout << "Number of nodes with flag set true " << count << std::endl;
-    }
   }
 
 #ifdef EXEC_ENV_OLS
@@ -1599,7 +1575,10 @@ namespace diskann {
           auto                   node = visit_order[node_ctr];
           _u64                   node_offset = node_ctr - start_id;
           std::vector<unsigned> &pruned_list = pruned_list_vector[node_offset];
-          batch_inter_insert(node, pruned_list, need_to_sync);
+          if (_tag_to_flag[node] && pruned_list.size() == 0) {
+            continue;
+          } else
+            batch_inter_insert(node, pruned_list, need_to_sync);
           pruned_list.clear();
           pruned_list.shrink_to_fit();
         }
@@ -1765,7 +1744,8 @@ namespace diskann {
           int c = 0;
           int j = 0;
           while (c < per_node_capacity[nbh] &&
-                 j < (int) _final_graph[query_ctr].size()) {
+                 j < (int) _final_graph[query_ctr].size() &&
+                 _final_graph[nbh].size() < _indexingRange) {
             auto candidate = _final_graph[query_ctr][j];
             if (candidate != nbh &&
                 (std::find(_final_graph[nbh].begin(), _final_graph[nbh].end(),
@@ -1939,8 +1919,6 @@ namespace diskann {
         memcpy((char *) (_data + _aligned_dim * num_points_to_load),
                (char *) query_data,
                _aligned_dim * num_query_points_to_load * sizeof(T));
-        std::cout << _aligned_dim * num_query_points_to_load * sizeof(T)
-                  << std::endl;
       } else {
         std::stringstream stream;
         stream << "ERROR: query file provided but flags not enabled"
