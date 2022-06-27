@@ -1565,6 +1565,9 @@ namespace diskann {
           std::vector<unsigned> &pruned_list = pruned_list_vector[node_offset];
           _final_graph[node].clear();
           for (auto id : pruned_list) {
+            if(id > _max_points+_num_frozen_pts){
+              std::cout << "ERROR: too large id " << id << "detected " << std::endl; 
+            }
             _final_graph[node].emplace_back(id);
           }
         }
