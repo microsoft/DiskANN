@@ -1540,7 +1540,7 @@ namespace diskann {
               std::sort(pool.begin(), pool.end());
               int r = 0;
               int t = 0;
-              while (r < (int) _indexingRange) {
+              while (r < (int) _indexingRange && t < (int) pool.size()) {
                 if (!_tag_to_flag[pool[t].id]) {
                   pruned_list.emplace_back(pool[t].id);
                   r++;
@@ -1569,6 +1569,8 @@ namespace diskann {
               std::cout << "ERROR: too large id " << id << " detected " << std::endl; 
               std::cout << "Is the point a flagged point: " << _tag_to_flag[node] << std::endl;
               std::cout << "size of pruned list: " << pruned_list.size() << std::endl; 
+              std::cout << "Elements of pruned list: " << std::endl;
+              for(auto id : pruned_list) std::cout << id << std::endl; 
             }
             _final_graph[node].emplace_back(id);
           }
