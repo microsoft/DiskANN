@@ -1582,10 +1582,7 @@ namespace diskann {
           auto                   node = visit_order[node_ctr];
           _u64                   node_offset = node_ctr - start_id;
           std::vector<unsigned> &pruned_list = pruned_list_vector[node_offset];
-          if (_tag_to_flag[node] && pruned_list.size() == 0) {
-            continue;
-          } else
-            batch_inter_insert(node, pruned_list, need_to_sync);
+          batch_inter_insert(node, pruned_list, need_to_sync);
           pruned_list.clear();
           pruned_list.shrink_to_fit();
         }

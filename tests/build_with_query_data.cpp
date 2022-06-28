@@ -62,7 +62,7 @@ void build_with_query_data(const std::string& data_path, const unsigned L,
   const bool enable_tags = true;
   const bool support_eager_delete = false;
   const bool concurrent_consolidate = false;
-  const bool enable_flags = true;
+  const bool queries_present = true;
 
   auto num_frozen_str = getenv("TTS_NUM_FROZEN");
 
@@ -73,7 +73,7 @@ void build_with_query_data(const std::string& data_path, const unsigned L,
 
   diskann::Index<T, TagT> index(
       diskann::L2, dim, num_points + num_query_points, true, paras, paras,
-      enable_tags, support_eager_delete, concurrent_consolidate, enable_flags);
+      enable_tags, support_eager_delete, concurrent_consolidate, queries_present);
 
   std::vector<TagT> tags(num_points + num_query_points);
   std::iota(tags.begin(), tags.end(), 0);
