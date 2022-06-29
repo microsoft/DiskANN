@@ -99,7 +99,8 @@ namespace diskann {
                             const bool   enable_tags = false,
                             const bool   support_eager_delete = false,
                             const bool   concurrent_consolidate = false,
-                            const bool   enable_flags = false);
+                            const bool   enable_flags = false,
+                            const size_t _max_query_points = 0);
 
     // Constructor for incremental index
     DISKANN_DLLEXPORT Index(Metric m, const size_t dim, const size_t max_points,
@@ -109,14 +110,21 @@ namespace diskann {
                             const bool        enable_tags = false,
                             const bool        support_eager_delete = false,
                             const bool        concurrent_consolidate = false,
-                            const bool        enable_flags = false);
+                            const bool        enable_flags = false,
+                            const size_t      max_query_points = 0);
 
     DISKANN_DLLEXPORT ~Index();
 
     // Saves graph, data, metadata and associated tags.
     DISKANN_DLLEXPORT void save(const char *filename);
-    DISKANN_DLLEXPORT _u64 save_graph(std::string filename);
-    DISKANN_DLLEXPORT _u64 save_data(std::string filename);
+    DISKANN_DLLEXPORT _u64 save_graph_internal(
+        std::string graph_file, std::vector<std::vector<unsigned>> &final_graph,
+        size_t &nd, size_t num_frozen_pts, unsigned &max_observed_degree,
+        unsigned start);
+    DISKANN_DLLEXPORT _u64 save_graph(std::string filename,
+                                      const int   version = 0);
+    DISKANN_DLLEXPORT _u64 save_data(std::string filename,
+                                     const int   version = 0);
     DISKANN_DLLEXPORT _u64 save_tags(std::string filename);
     DISKANN_DLLEXPORT _u64 save_flags(std::string filename);
     DISKANN_DLLEXPORT _u64 save_delete_list(const std::string &filename);
@@ -255,8 +263,7 @@ namespace diskann {
 
     // Use after _data and _nd have been populated
     void build_with_data_populated(Parameters &             parameters,
-                                   const std::vector<TagT> &tags,
-                                   const size_t num_query_points = 0);
+                                   const std::vector<TagT> &tags);
 
     // generates 1 frozen point that will never be deleted from the graph
     // This is not visible to the user
@@ -334,7 +341,7 @@ namespace diskann {
                       bool update_in_graph);
 
     // Create the graph, update periodically in NUM_SYNCS batches
-    void link(Parameters &parameters, const size_t num_query_points = 0);
+    void link(Parameters &parameters);
 
     // WARNING: Do not call reserve_location() without acquiring change_lock_
     int  reserve_location();
@@ -377,6 +384,11 @@ namespace diskann {
     std::vector<std::vector<unsigned>> _final_graph;
     std::vector<std::vector<unsigned>> _in_graph;
 
+    // Query graph data structures
+    T *                                _query_data = nullptr;
+    std::vector<std::vector<unsigned>> _query_graph;
+    std::vector<std::vector<unsigned>> _query_nn;
+
     // Dimensions
     size_t _dim = 0;
     size_t _aligned_dim = 0;
@@ -389,7 +401,9 @@ namespace diskann {
     size_t _neighbor_len;
 
     unsigned _max_observed_degree = 0;
+    unsigned _max_observed_qdegree = 0;
     unsigned _start = 0;
+    unsigned _qstart = 0;
 
     bool _has_built = false;
     bool _saturate_graph = false;
@@ -426,13 +440,17 @@ namespace diskann {
     bool _data_compacted = true;  // true if data has been consolidated
     bool _is_saved = false;  // Gopal. Checking if the index is already saved.
     bool _conc_consolidate = false;  // use _lock while searching
-    bool _enable_flags = false;
+
+    // query graph ctor variables
+    bool   _queries_present = false;
+    size_t _max_query_points = 0;
 
     std::atomic<bool> _consolidate_active =
         ATOMIC_VAR_INIT(false);  // Is one instance of consolidate active
 
     std::vector<std::mutex> _locks;  // Per node lock, cardinality=max_points_
-    std::vector<std::mutex> _locks_in;  // Per node lock
+    std::vector<std::mutex> _locks_in;     // Per node lock
+    std::vector<std::mutex> _query_locks;  // locks for the _query_nn vector
 
     std::mutex _num_points_lock;  // Lock to synchronously modify _nd
 

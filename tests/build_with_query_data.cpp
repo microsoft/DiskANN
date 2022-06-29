@@ -71,11 +71,12 @@ void build_with_query_data(const std::string& data_path, const unsigned L,
     std::cout << "Overriding num_frozen to" << num_frozen << std::endl;
   }
 
-  diskann::Index<T, TagT> index(
-      diskann::L2, dim, num_points + num_query_points, true, paras, paras,
-      enable_tags, support_eager_delete, concurrent_consolidate, queries_present);
+  diskann::Index<T, TagT> index(diskann::L2, dim, num_points, true, paras,
+                                paras, enable_tags, support_eager_delete,
+                                concurrent_consolidate, queries_present,
+                                num_query_points);
 
-  std::vector<TagT> tags(num_points + num_query_points);
+  std::vector<TagT> tags(num_points);
   std::iota(tags.begin(), tags.end(), 0);
 
   index.build(data_load, num_points, paras, tags, query_load, num_query_points);

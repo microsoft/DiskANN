@@ -193,11 +193,13 @@ namespace diskann {
   Index<T, TagT>::Index(Metric m, const size_t dim, const size_t max_points,
                         const bool dynamic_index, const Parameters &indexParams,
                         const Parameters &searchParams, const bool enable_tags,
-                        const bool support_eager_delete,
-                        const bool concurrent_consolidate,
-                        const bool enable_flags)
+                        const bool   support_eager_delete,
+                        const bool   concurrent_consolidate,
+                        const bool   queries_present,
+                        const size_t max_query_points)
       : Index(m, dim, max_points, dynamic_index, enable_tags,
-              support_eager_delete, concurrent_consolidate, enable_flags) {
+              support_eager_delete, concurrent_consolidate, queries_present,
+              max_query_points) {
     _indexingQueueSize = indexParams.Get<uint32_t>("L");
     _indexingRange = indexParams.Get<uint32_t>("R");
     _indexingMaxC = indexParams.Get<uint32_t>("C");
@@ -215,13 +217,15 @@ namespace diskann {
   template<typename T, typename TagT>
   Index<T, TagT>::Index(Metric m, const size_t dim, const size_t max_points,
                         const bool dynamic_index, const bool enable_tags,
-                        const bool support_eager_delete,
-                        const bool concurrent_consolidate,
-                        const bool enable_flags)
+                        const bool   support_eager_delete,
+                        const bool   concurrent_consolidate,
+                        const bool   queries_present,
+                        const size_t max_query_points)
       : _dist_metric(m), _dim(dim), _max_points(max_points),
         _dynamic_index(dynamic_index), _enable_tags(enable_tags),
         _support_eager_delete(support_eager_delete),
-        _conc_consolidate(concurrent_consolidate), _enable_flags(enable_flags) {
+        _conc_consolidate(concurrent_consolidate),
+        _queries_present(queries_present), _max_query_points(max_query_points) {
     if (dynamic_index && !enable_tags) {
       throw diskann::ANNException(
           "ERROR: Eager Deletes must have Dynamic Indexing enabled.", -1,
@@ -240,19 +244,10 @@ namespace diskann {
           "enabled. Exitting.",
           -1, __FUNCSIG__, __FILE__, __LINE__);
     }
-    if (_enable_flags && !_enable_tags) {
-      diskann::cerr << "ERROR: Using flags requires tags to be  "
-                       "enabled. Exitting."
-                    << std::endl;
-      throw diskann::ANNException(
-          "ERROR: Using flags is possible only if tags are "
-          "enabled. Exitting.",
-          -1, __FUNCSIG__, __FILE__, __LINE__);
-    }
 
     _aligned_dim = ROUND_UP(_dim, 8);
 
-    if (dynamic_index || _enable_flags) {
+    if (dynamic_index || _queries_present) {
       _num_frozen_pts = 1;
     }
     // Sanity check. While logically it is correct, max_points = 0 causes
@@ -291,6 +286,18 @@ namespace diskann {
 
     if (_support_eager_delete)
       _locks_in = std::vector<std::mutex>(_max_points + _num_frozen_pts);
+
+    if (_queries_present) {
+      alloc_aligned(((void **) &_query_data),
+                    (_max_query_points) *_aligned_dim * sizeof(T),
+                    8 * sizeof(T));
+      std::memset(_data, 0, (_max_query_points) *_aligned_dim * sizeof(T));
+      _query_graph.reserve(_max_query_points);
+      _query_graph.resize(_max_query_points);
+      _query_nn.reserve(_max_query_points);
+      _query_nn.resize(_max_query_points);
+      _query_locks = std::vector<std::mutex>(_max_query_points);
+    }
   }
 
   template<typename T, typename TagT>
@@ -406,16 +413,23 @@ namespace diskann {
   }
 
   template<typename T, typename TagT>
-  _u64 Index<T, TagT>::save_data(std::string data_file) {
-    return save_data_in_base_dimensions(data_file, _data, _nd + _num_frozen_pts,
-                                        _dim, _aligned_dim);
+  _u64 Index<T, TagT>::save_data(std::string data_file, const int version) {
+    if (version == 0)
+      return save_data_in_base_dimensions(
+          data_file, _data, _nd + _num_frozen_pts, _dim, _aligned_dim);
+    else
+      return save_data_in_base_dimensions(
+          data_file, _query_data, _max_query_points, _dim, _aligned_dim);
   }
 
   // save the graph index on a file as an adjacency list. For each point,
   // first store the number of neighbors, and then the neighbor list (each as
   // 4 byte unsigned)
   template<typename T, typename TagT>
-  _u64 Index<T, TagT>::save_graph(std::string graph_file) {
+  _u64 Index<T, TagT>::save_graph_internal(
+      std::string graph_file, std::vector<std::vector<unsigned>> &final_graph,
+      size_t &nd, size_t num_frozen_pts, unsigned &max_observed_degree,
+      unsigned start) {
     std::ofstream out;
     open_file_to_write(out, graph_file);
 
@@ -424,16 +438,16 @@ namespace diskann {
     _u64 index_size = 24;
     _u32 max_degree = 0;
     out.write((char *) &index_size, sizeof(uint64_t));
-    out.write((char *) &_max_observed_degree, sizeof(unsigned));
-    unsigned ep_u32 = _start;
+    out.write((char *) &max_observed_degree, sizeof(unsigned));
+    unsigned ep_u32 = start;
     out.write((char *) &ep_u32, sizeof(unsigned));
-    out.write((char *) &_num_frozen_pts, sizeof(_u64));
-    for (unsigned i = 0; i < _nd + _num_frozen_pts; i++) {
-      unsigned GK = (unsigned) _final_graph[i].size();
+    out.write((char *) &num_frozen_pts, sizeof(_u64));
+    for (unsigned i = 0; i < nd + num_frozen_pts; i++) {
+      unsigned GK = (unsigned) final_graph[i].size();
       out.write((char *) &GK, sizeof(unsigned));
-      out.write((char *) _final_graph[i].data(), GK * sizeof(unsigned));
-      max_degree = _final_graph[i].size() > max_degree
-                       ? (_u32) _final_graph[i].size()
+      out.write((char *) final_graph[i].data(), GK * sizeof(unsigned));
+      max_degree = final_graph[i].size() > max_degree
+                       ? (_u32) final_graph[i].size()
                        : max_degree;
       index_size += (_u64)(sizeof(unsigned) * (GK + 1));
     }
@@ -442,6 +456,19 @@ namespace diskann {
     out.write((char *) &max_degree, sizeof(_u32));
     out.close();
     return index_size;  // number of bytes written
+  }
+
+  template<typename T, typename TagT>
+  _u64 Index<T, TagT>::save_graph(std::string graph_file, const int version) {
+    if (version == 0)
+      return save_graph_internal(graph_file, _final_graph, _nd, _num_frozen_pts,
+                                 _max_observed_degree, _start);
+    else if (version == 1)
+      return save_graph_internal(graph_file, _query_graph, _max_query_points, 0,
+                                 _max_observed_qdegree, _qstart);
+    else
+      return save_graph_internal(graph_file, _query_nn, _max_query_points, 0,
+                                 _indexingRange, 0);
   }
 
   template<typename T, typename TagT>
@@ -471,7 +498,9 @@ namespace diskann {
       std::string tags_file = std::string(filename) + ".tags";
       std::string data_file = std::string(filename) + ".data";
       std::string delete_list_file = std::string(filename) + ".del";
-      std::string flags_file = std::string(filename) + ".flags";
+      std::string query_data_file = std::string(filename) + ".qdata";
+      std::string query_graph_file = std::string(filename) + ".qgraph";
+      std::string query_nn_file = std::string(filename) + ".qnn";
 
       // Because the save_* functions use append mode, ensure that
       // the files are deleted before save. Ideally, we should check
@@ -485,8 +514,14 @@ namespace diskann {
       save_tags(tags_file);
       delete_file(delete_list_file);
       save_delete_list(delete_list_file);
-      delete_file(flags_file);
-      save_flags(flags_file);
+      if (_queries_present) {
+        delete_file(query_data_file);
+        save_data(query_data_file);
+        delete_file(query_graph_file);
+        save_graph(query_graph_file, 1);
+        delete_file(query_nn_file);
+        save_graph(query_nn_file, 2);
+      }
 
     } else {
       diskann::cout << "Save index in a single file currently not supported. "
@@ -560,13 +595,13 @@ namespace diskann {
 #else
   template<typename T, typename TagT>
   size_t Index<T, TagT>::load_flags(const std::string flag_filename) {
-    if (_enable_flags && !file_exists(flag_filename)) {
+    if (_queries_present && !file_exists(flag_filename)) {
       diskann::cerr << "Flag file provided does not exist!" << std::endl;
       throw diskann::ANNException("Flag file provided does not exist!", -1,
                                   __FUNCSIG__, __FILE__, __LINE__);
     }
 #endif
-    if (!_enable_flags) {
+    if (!_queries_present) {
       diskann::cout << "Flags not loaded as flags not enabled." << std::endl;
       return 0;
     }
@@ -709,7 +744,7 @@ namespace diskann {
       if (_enable_tags) {
         tags_file_num_pts = load_tags(tags_file);
       }
-      if (_enable_tags && _enable_flags) {
+      if (_enable_tags && _queries_present) {
         flags_file_num_pts = load_flags(flags_file);
       }
       graph_num_pts = load_graph(graph_file, data_file_num_pts);
@@ -736,7 +771,7 @@ namespace diskann {
                                   __LINE__);
     }
 
-    if (_enable_flags && flags_file_num_pts != tags_file_num_pts) {
+    if (_queries_present && flags_file_num_pts != tags_file_num_pts) {
       std::stringstream stream;
       stream << "ERROR: When loading index, loaded " << tags_file_num_pts
              << " points from tag file, " << graph_num_pts
@@ -1408,8 +1443,7 @@ namespace diskann {
   }
 
   template<typename T, typename TagT>
-  void Index<T, TagT>::link(Parameters & parameters,
-                            const size_t num_query_points) {
+  void Index<T, TagT>::link(Parameters &parameters) {
     unsigned num_threads = parameters.Get<unsigned>("num_threads");
     if (num_threads != 0)
       omp_set_num_threads(num_threads);
@@ -1535,22 +1569,22 @@ namespace diskann {
           // if a query sample is specified and node is a query point,
           // truncate visited list instead of using RobustPrune
           // only place base points in visited list of query node
-          if (num_query_points != 0) {
-            if (_tag_to_flag[node]) {
-              std::sort(pool.begin(), pool.end());
-              int r = 0;
-              int t = 0;
-              while (r < (int) _indexingRange && t < (int) pool.size()) {
-                if (!_tag_to_flag[pool[t].id]) {
-                  pruned_list.emplace_back(pool[t].id);
-                  r++;
-                }
-                t++;
-              }
-            } else
-              prune_neighbors(node, pool, pruned_list);
-          } else
-            prune_neighbors(node, pool, pruned_list);
+          // if (num_query_points != 0) {
+          //   if (_tag_to_flag[node]) {
+          //     std::sort(pool.begin(), pool.end());
+          //     int r = 0;
+          //     int t = 0;
+          //     while (r < (int) _indexingRange && t < (int) pool.size()) {
+          //       if (!_tag_to_flag[pool[t].id]) {
+          //         pruned_list.emplace_back(pool[t].id);
+          //         r++;
+          //       }
+          //       t++;
+          //     }
+          //   } else
+          //     prune_neighbors(node, pool, pruned_list);
+          // } else
+          prune_neighbors(node, pool, pruned_list);
         }
         diff = std::chrono::high_resolution_clock::now() - s;
         sync_time += diff.count();
@@ -1565,13 +1599,6 @@ namespace diskann {
           std::vector<unsigned> &pruned_list = pruned_list_vector[node_offset];
           _final_graph[node].clear();
           for (auto id : pruned_list) {
-            if(id > _max_points+_num_frozen_pts){
-              std::cout << "ERROR: too large id " << id << " detected " << std::endl; 
-              std::cout << "Is the point a flagged point: " << _tag_to_flag[node] << std::endl;
-              std::cout << "size of pruned list: " << pruned_list.size() << std::endl; 
-              std::cout << "Elements of pruned list: " << std::endl;
-              for(auto id : pruned_list) std::cout << id << std::endl; 
-            }
             _final_graph[node].emplace_back(id);
           }
         }
@@ -1609,24 +1636,25 @@ namespace diskann {
                 dummy_visited.insert(cur_nbr);
               }
             }
-            // if node is a query point, add the closest base points instead of
-            // pruning
-            if (num_query_points != 0) {
-              if (_tag_to_flag[node]) {
-                std::sort(dummy_pool.begin(), dummy_pool.end());
-                int r = 0;
-                int t = 0;
-                while (r < (int) _indexingRange) {
-                  if (!_tag_to_flag[dummy_pool[t].id]) {
-                    new_out_neighbors.emplace_back(dummy_pool[t].id);
-                    r++;
-                  }
-                  t++;
-                }
-              } else
-                prune_neighbors(node, dummy_pool, new_out_neighbors);
-            } else
-              prune_neighbors(node, dummy_pool, new_out_neighbors);
+            // // if node is a query point, add the closest base points instead
+            // of
+            // // pruning
+            // if (num_query_points != 0) {
+            //   if (_tag_to_flag[node]) {
+            //     std::sort(dummy_pool.begin(), dummy_pool.end());
+            //     int r = 0;
+            //     int t = 0;
+            //     while (r < (int) _indexingRange) {
+            //       if (!_tag_to_flag[dummy_pool[t].id]) {
+            //         new_out_neighbors.emplace_back(dummy_pool[t].id);
+            //         r++;
+            //       }
+            //       t++;
+            //     }
+            //   } else
+            //     prune_neighbors(node, dummy_pool, new_out_neighbors);
+            // } else
+            prune_neighbors(node, dummy_pool, new_out_neighbors);
 
             _final_graph[node].clear();
             for (auto id : new_out_neighbors)
@@ -1675,114 +1703,121 @@ namespace diskann {
                     << std::endl;
     }
 
-    // perform RobustStitch on every non-query node if query sample points
-    // are present
-    if (num_query_points != 0) {
-      std::cout << "Beginning RobustStitch routine... " << std::endl;
-      std::vector<int> changed(visit_order.size());
+    //     // perform RobustStitch on every non-query node if query sample
+    //     points
+    //     // are present
+    //     if (num_query_points != 0) {
+    //       std::cout << "Beginning RobustStitch routine... " << std::endl;
+    //       std::vector<int> changed(visit_order.size());
 
-      std::vector<int> query_indegree(_nd, 0);
-      std::vector<int> per_node_capacity(_nd, 0);
+    //       std::vector<int> query_indegree(_nd, 0);
+    //       std::vector<int> per_node_capacity(_nd, 0);
 
-      auto startclock = std::chrono::high_resolution_clock::now();
+    //       auto startclock = std::chrono::high_resolution_clock::now();
 
-      // std::set<_s64> qnbh_set;
+    //       // std::set<_s64> qnbh_set;
 
-      for (_s64 query_ctr = (_s64) visit_order.size() - num_query_points - 1;
-           query_ctr < (_s64) visit_order.size() - 1; query_ctr++) {
-        for (auto nbh : _final_graph[query_ctr]) {
-          // qnbh_set.insert(nbh);
-          query_indegree[nbh]++;
-        }
-      }
+    //       for (_s64 query_ctr = (_s64) visit_order.size() - num_query_points
+    //       - 1;
+    //            query_ctr < (_s64) visit_order.size() - 1; query_ctr++) {
+    //         for (auto nbh : _final_graph[query_ctr]) {
+    //           // qnbh_set.insert(nbh);
+    //           query_indegree[nbh]++;
+    //         }
+    //       }
 
-      // std::cout << "Size of query neighbor set " << qnbh_set.size() <<
-      // std::endl;
+    //       // std::cout << "Size of query neighbor set " << qnbh_set.size() <<
+    //       // std::endl;
 
-#pragma omp parallel for schedule(dynamic, 65536)
-      for (_s64 node_ctr = 0; node_ctr < (_s64)(visit_order.size());
-           node_ctr++) {
-        auto node = visit_order[node_ctr];
+    // #pragma omp parallel for schedule(dynamic, 65536)
+    //       for (_s64 node_ctr = 0; node_ctr < (_s64)(visit_order.size());
+    //            node_ctr++) {
+    //         auto node = visit_order[node_ctr];
 
-        if (!_tag_to_flag[node]) {
-          int c = 0;
-          for (auto nbh : _final_graph[node]) {
-            if (!_tag_to_flag[nbh]) {
-              c++;
-            }
-          }
-          int total_capacity = _indexingRange - c;
-          int per_query_capacity;
-          if (query_indegree[node] != 0) {
-            per_query_capacity =
-                std::floor(total_capacity / ((double) query_indegree[node])) +
-                1;
-            per_node_capacity[node] = per_query_capacity;
-          }
+    //         if (!_tag_to_flag[node]) {
+    //           int c = 0;
+    //           for (auto nbh : _final_graph[node]) {
+    //             if (!_tag_to_flag[nbh]) {
+    //               c++;
+    //             }
+    //           }
+    //           int total_capacity = _indexingRange - c;
+    //           int per_query_capacity;
+    //           if (query_indegree[node] != 0) {
+    //             per_query_capacity =
+    //                 std::floor(total_capacity / ((double)
+    //                 query_indegree[node])) + 1;
+    //             per_node_capacity[node] = per_query_capacity;
+    //           }
 
-          if (c < (int) _final_graph[node]
-                      .size()) {  // filter out query points in the neighbors of
-                                  // any base points; thus search does not need
-                                  // modifying
-            std::vector<int> new_nbh;
-            for (auto nbh : _final_graph[node]) {
-              if (!_tag_to_flag[nbh]) {
-                new_nbh.push_back(nbh);
-              }
-            }
-            _final_graph[node].clear();
-            for (auto p : new_nbh) {
-              _final_graph[node].emplace_back(p);
-            }
-          }
-        }
-      }
+    //           if (c < (int) _final_graph[node]
+    //                       .size()) {  // filter out query points in the
+    //                       neighbors of
+    //                                   // any base points; thus search does
+    //                                   not need
+    //                                   // modifying
+    //             std::vector<int> new_nbh;
+    //             for (auto nbh : _final_graph[node]) {
+    //               if (!_tag_to_flag[nbh]) {
+    //                 new_nbh.push_back(nbh);
+    //               }
+    //             }
+    //             _final_graph[node].clear();
+    //             for (auto p : new_nbh) {
+    //               _final_graph[node].emplace_back(p);
+    //             }
+    //           }
+    //         }
+    //       }
 
-      std::cout << "Stitching nodes now..." << std::endl;
+    //       std::cout << "Stitching nodes now..." << std::endl;
 
-      for (_s64 query_ctr = (_s64) visit_order.size() - num_query_points - 1;
-           query_ctr < (_s64) visit_order.size() - 1; query_ctr++) {
-        for (auto nbh : _final_graph[query_ctr]) {
-          if (per_node_capacity[nbh] > 0)
-            changed[nbh] = 1;
-          int c = 0;
-          int j = 0;
-          while (c < per_node_capacity[nbh] &&
-                 j < (int) _final_graph[query_ctr].size() &&
-                 _final_graph[nbh].size() < _indexingRange) {
-            auto candidate = _final_graph[query_ctr][j];
-            if (candidate != nbh &&
-                (std::find(_final_graph[nbh].begin(), _final_graph[nbh].end(),
-                           candidate) == _final_graph[nbh].end())) {
-              _final_graph[nbh].push_back(candidate);
-              c++;
-            }
-            j++;
-          }
-        }
-      }
+    //       for (_s64 query_ctr = (_s64) visit_order.size() - num_query_points
+    //       - 1;
+    //            query_ctr < (_s64) visit_order.size() - 1; query_ctr++) {
+    //         for (auto nbh : _final_graph[query_ctr]) {
+    //           if (per_node_capacity[nbh] > 0)
+    //             changed[nbh] = 1;
+    //           int c = 0;
+    //           int j = 0;
+    //           while (c < per_node_capacity[nbh] &&
+    //                  j < (int) _final_graph[query_ctr].size() &&
+    //                  _final_graph[nbh].size() < _indexingRange) {
+    //             auto candidate = _final_graph[query_ctr][j];
+    //             if (candidate != nbh &&
+    //                 (std::find(_final_graph[nbh].begin(),
+    //                 _final_graph[nbh].end(),
+    //                            candidate) == _final_graph[nbh].end())) {
+    //               _final_graph[nbh].push_back(candidate);
+    //               c++;
+    //             }
+    //             j++;
+    //           }
+    //         }
+    //       }
 
-      auto diffclock = std::chrono::high_resolution_clock::now() - startclock;
-      std::cout << "RobustStich time: "
-                << (diffclock.count() / (double) 1000000000) << "s"
-                << std::endl;
-      std::cout << "Number of nodes stitched: "
-                << std::accumulate(changed.begin(), changed.end(), 0)
-                << std::endl;
-    }
-// FOR TESTING PURPOSES ONLY
-// TODO REMOVE IF MERGING TO MAIN
-#pragma omp parallel for schedule(dynamic, 65536)
-    for (_s64 node_ctr = 0; node_ctr < (_s64)(visit_order.size()); node_ctr++) {
-      auto node = visit_order[node_ctr];
+    //       auto diffclock = std::chrono::high_resolution_clock::now() -
+    //       startclock; std::cout << "RobustStich time: "
+    //                 << (diffclock.count() / (double) 1000000000) << "s"
+    //                 << std::endl;
+    //       std::cout << "Number of nodes stitched: "
+    //                 << std::accumulate(changed.begin(), changed.end(), 0)
+    //                 << std::endl;
+    //     }
+    // // FOR TESTING PURPOSES ONLY
+    // // TODO REMOVE IF MERGING TO MAIN
+    // #pragma omp parallel for schedule(dynamic, 65536)
+    //     for (_s64 node_ctr = 0; node_ctr < (_s64)(visit_order.size());
+    //     node_ctr++) {
+    //       auto node = visit_order[node_ctr];
 
-      for (auto nbh : _final_graph[node]) {
-        if (nbh > visit_order.size() - num_query_points - 1 &&
-            nbh != visit_order.size() - 1) {
-          std::cout << "ERROR: point has a query neighbor" << std::endl;
-        }
-      }
-    }
+    //       for (auto nbh : _final_graph[node]) {
+    //         if (nbh > visit_order.size() - num_query_points - 1 &&
+    //             nbh != visit_order.size() - 1) {
+    //           std::cout << "ERROR: point has a query neighbor" << std::endl;
+    //         }
+    //       }
+    //     }
   }
 
   template<typename T, typename TagT>
@@ -1840,8 +1875,7 @@ namespace diskann {
 
   template<typename T, typename TagT>
   void Index<T, TagT>::build_with_data_populated(
-      Parameters &parameters, const std::vector<TagT> &tags,
-      const size_t num_query_points) {
+      Parameters &parameters, const std::vector<TagT> &tags) {
     diskann::cout << "Starting index build with " << _nd << " points... "
                   << std::endl;
 
@@ -1860,24 +1894,6 @@ namespace diskann {
                                   __LINE__);
     }
 
-    if (num_query_points != 0) {
-      if (!_enable_tags) {
-        std::stringstream stream;
-        stream << "ERROR: Query points provided but tags not enabled"
-               << std::endl;
-        diskann::cerr << stream.str() << std::endl;
-        aligned_free(_data);
-        throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
-                                    __LINE__);
-      }
-      // set an array of flags determining whether a point is a query point or
-      // base point
-      for (size_t i = 0; i < _nd - num_query_points; i++)
-        _tag_to_flag[tags[i]] = false;
-      for (size_t i = _nd - num_query_points; i < _nd; i++)
-        _tag_to_flag[tags[i]] = true;
-    }
-
     if (_enable_tags) {
       for (size_t i = 0; i < tags.size(); ++i) {
         _tag_to_location[tags[i]] = (unsigned) i;
@@ -1886,7 +1902,7 @@ namespace diskann {
     }
 
     generate_frozen_point();
-    link(parameters, num_query_points);
+    link(parameters);
 
     if (_support_eager_delete) {
       update_in_graph();  // copying values to in_graph
@@ -1914,14 +1930,16 @@ namespace diskann {
                              Parameters &             parameters,
                              const std::vector<TagT> &tags, const T *query_data,
                              const size_t num_query_points_to_load) {
-    _nd = num_points_to_load + num_query_points_to_load;
+    _nd = num_points_to_load;
 
     memcpy((char *) _data, (char *) data,
            _aligned_dim * num_points_to_load * sizeof(T));
     if (query_data != nullptr) {
-      if (_enable_flags) {
-        memcpy((char *) (_data + _aligned_dim * num_points_to_load),
-               (char *) query_data,
+      if (_queries_present) {
+        // memcpy((char *) (_data + _aligned_dim * num_points_to_load),
+        //        (char *) query_data,
+        //        _aligned_dim * num_query_points_to_load * sizeof(T));
+        memcpy((char *) _query_data, (char *) query_data,
                _aligned_dim * num_query_points_to_load * sizeof(T));
       } else {
         std::stringstream stream;
@@ -1935,13 +1953,12 @@ namespace diskann {
     }
 
     if (_normalize_vecs) {
-      for (uint64_t i = 0; i < num_points_to_load + num_query_points_to_load;
-           i++) {
+      for (uint64_t i = 0; i < num_points_to_load; i++) {
         normalize(_data + _aligned_dim * i, _aligned_dim);
       }
     }
 
-    build_with_data_populated(parameters, tags, num_query_points_to_load);
+    build_with_data_populated(parameters, tags);
   }
 
   template<typename T, typename TagT>
@@ -2002,7 +2019,7 @@ namespace diskann {
     size_t qfile_num_points, qfile_dim;
     qfile_num_points = 0;
 
-    if (query_filename != nullptr && _enable_flags) {
+    if (query_filename != nullptr && _queries_present) {
       if (!file_exists(query_filename)) {
         diskann::cerr << "Query data file " << filename
                       << " does not exist!!! Exiting...." << std::endl;
@@ -2015,12 +2032,12 @@ namespace diskann {
       }
 
       diskann::get_bin_metadata(query_filename, qfile_num_points, qfile_dim);
-      if (qfile_num_points + file_num_points > _max_points) {
+      if (qfile_num_points > _max_query_points) {
         std::stringstream stream;
-        stream << "ERROR: Driver requests loading " << num_points_to_load
-               << " points and files have "
-               << qfile_num_points + file_num_points << " points, but "
-               << "index can support only " << _max_points
+        stream << "ERROR: Driver requests loading " << qfile_num_points
+               << " points and files have " << qfile_num_points
+               << " points, but "
+               << "index can support only " << _max_query_points
                << " points as specified in constructor." << std::endl;
         aligned_free(_data);
         throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
@@ -2047,7 +2064,7 @@ namespace diskann {
         throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
                                     __LINE__);
       }
-    } else if (query_filename != nullptr && !_enable_flags) {
+    } else if (query_filename != nullptr && !_queries_present) {
       std::stringstream stream;
       stream << "ERROR: query file provided but flags not enabled" << std::endl;
       diskann::cerr << stream.str() << std::endl;
@@ -2059,13 +2076,12 @@ namespace diskann {
     copy_aligned_data_from_file<T>(filename, _data, file_num_points, file_dim,
                                    _aligned_dim);
 
-    if (query_filename != nullptr)
-      copy_aligned_data_from_file<T>(query_filename, _data, qfile_num_points,
-                                     file_dim, _aligned_dim, 0,
-                                     num_points_to_load);
+    if (_queries_present)
+      copy_aligned_data_from_file<T>(query_filename, _query_data,
+                                     qfile_num_points, file_dim, _aligned_dim);
 
     if (_normalize_vecs) {
-      for (uint64_t i = 0; i < file_num_points + qfile_num_points; i++) {
+      for (uint64_t i = 0; i < file_num_points; i++) {
         normalize(_data + _aligned_dim * i, _aligned_dim);
       }
     }
@@ -2073,8 +2089,8 @@ namespace diskann {
     diskann::cout << "Using only first " << num_points_to_load
                   << " from file.. " << std::endl;
 
-    _nd = num_points_to_load + num_query_points_to_load;
-    build_with_data_populated(parameters, tags, num_query_points_to_load);
+    _nd = num_points_to_load;
+    build_with_data_populated(parameters, tags);
   }
 
   template<typename T, typename TagT>
