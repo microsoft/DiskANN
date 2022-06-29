@@ -282,6 +282,9 @@ namespace diskann {
                             tsl::robin_set<unsigned> &inserted_into_pool_rs,
                             boost::dynamic_bitset<> & inserted_into_pool_bs);
 
+
+void search_for_point_and_add_links(int location, _u32 Lindex, std::vector<Neighbor> &pool,  tsl::robin_set<unsigned> &visited, std::vector<unsigned> &des, std::vector<Neighbor> &best_L_nodes,  tsl::robin_set<unsigned> &inserted_into_pool_rs, boost::dynamic_bitset<> &inserted_into_pool_bs);
+
     // get_expanded_nodes for insertion. Must investigate to see if perf can
     // be improved here as well using the same technique as above.
     void get_expanded_nodes(const size_t node_id, const unsigned Lindex,
