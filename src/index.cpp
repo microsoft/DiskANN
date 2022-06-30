@@ -423,7 +423,7 @@ namespace diskann {
   template<typename T, typename TagT>
   void Index<T, TagT>::save(const char *filename, bool compact_before_save) {
     // first check if no thread is inserting
-    auto start = std::chrono::high_resolution_clock::now();
+    diskann::Timer timer;
     std::unique_lock<std::shared_timed_mutex> lock(_update_lock);
     _num_points_lock.lock();
 
@@ -465,11 +465,8 @@ namespace diskann {
     reposition_frozen_point_to_end();
 
     _num_points_lock.unlock();
-    auto stop = std::chrono::high_resolution_clock::now();
-    auto timespan =
-        std::chrono::duration_cast<std::chrono::duration<double>>(stop - start);
-    diskann::cout << "Time taken for save: " << timespan.count() << "s."
-                  << std::endl;
+    diskann::cout << "Time taken for save: " << timer.elapsed() / 1000000.0
+                  << "s." << std::endl;
   }
 
 #ifdef EXEC_ENV_OLS
@@ -608,6 +605,7 @@ namespace diskann {
                             uint32_t search_l) {
 #endif
     _num_points_lock.lock();
+    _has_built = true;
 
     size_t tags_file_num_pts = 0, graph_num_pts = 0, data_file_num_pts = 0;
 
@@ -959,8 +957,8 @@ namespace diskann {
           for (unsigned m = 0; m < _final_graph[n].size(); m++) {
             if (_final_graph[n][m] >= _max_points + _num_frozen_pts) {
               std::stringstream msg;
-              msg << "Out of range id " << _final_graph[n][m]
-                  << "found as an edge from " << n << " to " << m << std::endl;
+              msg << "Out of range edge " << _final_graph[n][m]
+                  << " found at vertex " << n << std::endl;
               throw diskann::ANNException(
                   msg.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
             }
@@ -970,8 +968,8 @@ namespace diskann {
           for (unsigned m = 0; m < _final_graph[n].size(); m++) {
             if (_final_graph[n][m] >= _max_points + _num_frozen_pts) {
               std::stringstream msg;
-              msg << "Out of range id " << _final_graph[n][m]
-                  << "found as an edge from " << n << " to " << m << std::endl;
+              msg << "Out of range edge " << _final_graph[n][m]
+                  << " found at vertex " << n << std::endl;
               throw diskann::ANNException(
                   msg.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
             }
@@ -1080,7 +1078,7 @@ namespace diskann {
                                     const float alpha, const unsigned degree,
                                     const unsigned         maxc,
                                     std::vector<Neighbor> &result,
-                                    std::vector<float> &   occlude_factor) {
+                                    std::vector<float>    &occlude_factor) {
     if (pool.empty())
       return;
     assert(std::is_sorted(pool.begin(), pool.end()));
@@ -2204,7 +2202,8 @@ namespace diskann {
   // Do not call consolidate_deletes() if you have not locked _num_points_lock.
   // Returns number of live points left after consolidation
   template<typename T, typename TagT>
-  size_t Index<T, TagT>::consolidate_deletes(const Parameters &params) {
+  consolidation_report Index<T, TagT>::consolidate_deletes(
+      const Parameters &params) {
     if (!_enable_tags)
       throw diskann::ANNException("Point tag array not instantiated", -1,
                                   __FUNCSIG__, __FILE__, __LINE__);
@@ -2231,8 +2230,8 @@ namespace diskann {
           -1, __FUNCSIG__, __FILE__, __LINE__);
     }
 
-    diskann::cout << "Consolidating deletes... " << std::endl;
-
+    diskann::cout << "Consolidating deletes... ";
+    
     std::unique_lock<std::shared_timed_mutex> update_lock(_update_lock,
                                                           std::defer_lock);
     if (!_conc_consolidate)
@@ -2263,28 +2262,20 @@ namespace diskann {
                                      ? omp_get_num_threads()
                                      : params.Get<unsigned>("num_threads");
 
-    _u64     total_pts = _max_points + _num_frozen_pts;
-    unsigned block_size = 1 << 10;
-    _s64     total_blocks = DIV_ROUND_UP(total_pts, block_size);
-    
-    auto start = std::chrono::high_resolution_clock::now();
-#pragma omp parallel for num_threads(num_threads) schedule(dynamic)
-    for (_s64 block = 0; block < total_blocks; ++block) {
-      for (_s64 i = block * block_size;
-           i < (_s64) ((block + 1) * block_size) &&
-           i < (_s64) (_max_points + _num_frozen_pts);
-           i++) {
-        if ((old_delete_set.find((_u32) i) == old_delete_set.end()) &&
-            (_empty_slots.find((_u32) i) == _empty_slots.end())) {
-          if (_conc_consolidate) {
-            std::unique_lock<std::mutex> adj_list_lock(_locks[i]);
-            process_delete(old_delete_set, i, range, maxc, alpha);
-          } else {
-            process_delete(old_delete_set, i, range, maxc, alpha);
-          }
+    diskann::Timer timer;
+#pragma omp parallel for num_threads(num_threads) schedule(dynamic, 8192)
+    for (_s64 i = 0; i < (_s64) (_max_points + _num_frozen_pts); i++) {
+      if ((old_delete_set.find((_u32) i) == old_delete_set.end()) &&
+          (_empty_slots.find((_u32) i) == _empty_slots.end())) {
+        if (_conc_consolidate) {
+          std::unique_lock<std::mutex> adj_list_lock(_locks[i]);
+          process_delete(old_delete_set, i, range, maxc, alpha);
+        } else {
+          process_delete(old_delete_set, i, range, maxc, alpha);
         }
       }
     }
+
     if (_support_eager_delete)
       update_in_graph();
 
@@ -2295,6 +2286,7 @@ namespace diskann {
     } else {
       for (auto iter : old_delete_set)
         _empty_slots.insert(iter);
+      update_lock.unlock();
     }
 
     size_t ret_nd;
@@ -2311,17 +2303,13 @@ namespace diskann {
       throw ANNException("Failed to change consolidation active to false", -1,
                          __FUNCSIG__, __FILE__, __LINE__);
 
-    if (!_conc_consolidate)
-      update_lock.unlock();
+    if (_delete_set.size() == 0)
+      _lazy_done = false;
 
-    auto stop = std::chrono::high_resolution_clock::now();
-    diskann::cout << "Time taken for consolidate_deletes() "
-                  << std::chrono::duration_cast<std::chrono::duration<double>>(
-                         stop - start)
-                         .count()
-                  << "s." << std::endl;
-
-    return ret_nd;
+    double duration = timer.elapsed() / 1000000.0;
+    diskann::cout << " done in " << duration << " seconds." << std::endl;
+    return consolidation_report(ret_nd, this->_max_points, _empty_slots.size(),
+                                old_delete_set.size(), _delete_set.size(), duration);
   }
 
   template<typename T, typename TagT>
@@ -2333,7 +2321,7 @@ namespace diskann {
   template<typename T, typename TagT>
   void Index<T, TagT>::compact_frozen_point() {
     if (_nd < _max_points) {
-      if (_num_frozen_pts > 0) {
+      if (_num_frozen_pts == 1) {
         // set new _start to be frozen point
         _start = (_u32) _nd;
         if (!_final_graph[_max_points].empty()) {
@@ -2343,10 +2331,8 @@ namespace diskann {
                 _final_graph[i][j] = (_u32) _nd;
 
           _final_graph[_nd].clear();
-          for (unsigned k = 0; k < _final_graph[_max_points].size(); k++)
-            _final_graph[_nd].emplace_back(_final_graph[_max_points][k]);
+          _final_graph[_nd].swap(_final_graph[_max_points]);
 
-          _final_graph[_max_points].clear();
           if (_support_eager_delete)
             update_in_graph();
 
@@ -2355,24 +2341,19 @@ namespace diskann {
           memset((_data + (size_t) _aligned_dim * _max_points), 0,
                  sizeof(T) * _aligned_dim);
         }
+      } else if (_num_frozen_pts > 1) {
+        throw ANNException("Case not implemented.", -1, __FUNCSIG__, __FILE__,
+                           __LINE__);
       }
     }
   }
 
-  //template<typename T, typename TagT>
-  //void Index<T, TagT>::compact_data_for_search() {
-  //  compact_data();
-  //  compact_frozen_point();
-  //}
 
   template<typename T, typename TagT>
   void Index<T, TagT>::compact_data() {
     if (!_dynamic_index)
       throw ANNException("Can not compact a non-dynamic index", -1, __FUNCSIG__,
                          __FILE__, __LINE__);
-
-    if (!_lazy_done && !_eager_done)
-      return;
 
     if (_data_compacted) {
       diskann::cerr
@@ -2381,23 +2362,39 @@ namespace diskann {
       return;
     }
 
-    auto start = std::chrono::high_resolution_clock::now();
-    auto fnstart = start;
-
-    std::vector<unsigned> new_location = std::vector<unsigned>(
-        _max_points + _num_frozen_pts, (_u32) _max_points);
-
-    _u32 new_counter = 0;
-
-    for (_u32 old_counter = 0; old_counter < _max_points + _num_frozen_pts;
-         old_counter++) {
-      if (_location_to_tag.find(old_counter) != _location_to_tag.end()) {
-        new_location[old_counter] = new_counter;
-        new_counter++;
-      }
+    if (_consolidate_active) {
+      throw ANNException(
+          "Can not compact data while a consolidation is ongoing", -1,
+          __FUNCSIG__, __FILE__, __LINE__);
     }
 
-    auto stop = std::chrono::high_resolution_clock::now();
+    if (_delete_set.size() > 0) {
+      throw ANNException(
+          "Can not compact data before lazy deletes are consolidated", -1,
+          __FUNCSIG__, __FILE__, __LINE__);
+    }
+    
+    diskann::Timer timer;
+
+    std::vector<unsigned> new_location = std::vector<unsigned>(
+        _max_points + _num_frozen_pts, (_u32) UINT32_MAX);
+
+
+    _u32 new_counter = 0;
+    std::set<_u32> empty_locations;
+    for (_u32 old_location = 0; old_location < _max_points; old_location++) {
+      if (_location_to_tag.find(old_location) != _location_to_tag.end()) {
+        new_location[old_location] = new_counter;
+        new_counter++;
+      } else {
+        empty_locations.insert(old_location);
+      }
+    }
+    for (_u32 old_location = _max_points;
+         old_location < _max_points + _num_frozen_pts; old_location++) {
+      new_location[old_location] = old_location;
+    }
+ 
     // If start node is removed, replace it.
     if (_delete_set.find(_start) != _delete_set.end()) {
       diskann::cerr << "Replacing start node which has been deleted... "
@@ -2418,27 +2415,28 @@ namespace diskann {
       }
     }
 
-    start = std::chrono::high_resolution_clock::now();
-    double copy_time = 0;
-    for (unsigned old = 0; old <= _max_points; ++old) {
-      if ((new_location[old] < _max_points) ||
-          (old == _max_points)) {  // If point continues to exist
-
-        // Renumber nodes to compact the order
+    for (unsigned old = 0; old < _max_points + _num_frozen_pts; ++old) {
+      if ((new_location[old] < _max_points)  // If point continues to exist
+          || (old >= _max_points && old < _max_points + _num_frozen_pts)) {
         for (size_t i = 0; i < _final_graph[old].size(); ++i) {
-          if (new_location[_final_graph[old][i]] > _final_graph[old][i]) {
+          if (new_location[_final_graph[old][i]] > _final_graph[old][i] &&
+              (_final_graph[old][i] < _max_points ||
+               _final_graph[old][i] > _max_points + _num_frozen_pts)) {
             std::stringstream sstream;
-            sstream << "Error in compact_data(). Found point: " << old
-                    << " whose " << i << "th neighbor has new location "
+            sstream << "Error in compact_data(). _final_graph[" << old << "]["
+                    << i << "] = " << _final_graph[old][i]
+                    << " has new location "
                     << new_location[_final_graph[old][i]]
-                    << " that is greater than its old location: "
-                    << _final_graph[old][i];
-            if (_delete_set.find(_final_graph[old][i]) != _delete_set.end()) {
-              sstream << std::endl
-                      << " Point: " << old << " index: " << i
-                      << " neighbor: " << _final_graph[old][i]
-                      << " found in delete set of size: " << _delete_set.size();
-            } 
+                    << " that is greater than its old location." << std::endl;
+            throw diskann::ANNException(sstream.str(), -1, __FUNCSIG__,
+                                        __FILE__, __LINE__);
+          }
+          if (empty_locations.find(_final_graph[old][i]) !=
+              empty_locations.end()) {
+            std::stringstream sstream;
+            sstream << "Error in compact_data(). _final_graph[" << old << "]["
+                    << i << "] = " << _final_graph[old][i]
+                    << " which is a blank location." << std::endl;
             throw diskann::ANNException(sstream.str(), -1, __FUNCSIG__,
                                         __FILE__, __LINE__);
           }
@@ -2452,7 +2450,6 @@ namespace diskann {
           }
 
         // Move the data and adj list to the correct position
-        auto c_start = std::chrono::high_resolution_clock::now();
         if (new_location[old] != old) {
           assert(new_location[old] < old);
           _final_graph[new_location[old]].swap(_final_graph[old]);
@@ -2462,18 +2459,11 @@ namespace diskann {
                  (void *) (_data + _aligned_dim * (size_t) old),
                  _aligned_dim * sizeof(T));
         }
-        auto c_stop = std::chrono::high_resolution_clock::now();
-        copy_time += std::chrono::duration_cast<std::chrono::duration<double>>(
-                         c_stop - c_start)
-                         .count();
-
       } else {
         _final_graph[old].clear();
       }
     }
-    stop = std::chrono::high_resolution_clock::now();
 
-    start = std::chrono::high_resolution_clock::now();
     _tag_to_location.clear();
     for (auto iter : _location_to_tag) {
       _tag_to_location[iter.second] = new_location[iter.first];
@@ -2492,15 +2482,10 @@ namespace diskann {
       _empty_slots.insert((uint32_t) i);
     }
 
-    _lazy_done = false;
     _eager_done = false;
     _data_compacted = true;
-    stop = std::chrono::high_resolution_clock::now();
-    diskann::cout << "Time taken for compact_data(): "
-                  << std::chrono::duration_cast<std::chrono::duration<double>>(
-                         stop - fnstart)
-                         .count()
-                  << "s." << std::endl;
+    diskann::cout << "Time taken for compact_data: "
+                  << timer.elapsed() / 1000000. << "s." << std::endl;
   }
 
   template<typename T, typename TagT>
@@ -2746,10 +2731,10 @@ namespace diskann {
   template<typename T, typename TagT>
   int Index<T, TagT>::lazy_delete(const TagT &tag) {
     if ((_eager_done) && (!_data_compacted)) {
-      diskann::cerr << "Eager delete requests were issued but data was not "
-                       "compacted, cannot proceed with lazy_deletes"
-                    << std::endl;
-      return -2;
+      throw ANNException(
+          "Eager delete requests were issued but data was not compacted, "
+          "cannot proceed with lazy_deletes",
+          -1, __FUNCSIG__, __FILE__, __LINE__);
     }
     std::shared_lock<std::shared_timed_mutex> lock(_update_lock);
     _lazy_done = true;
@@ -2776,18 +2761,17 @@ namespace diskann {
 
   // TODO: Check if this function needs a shared_lock on _tag_lock.
   template<typename T, typename TagT>
-  int Index<T, TagT>::lazy_delete(const tsl::robin_set<TagT> &tags,
-                                  std::vector<TagT> &         failed_tags) {
+  void Index<T, TagT>::lazy_delete(const std::vector<TagT> &tags,
+                                   std::vector<TagT>       &failed_tags) {
     if (failed_tags.size() > 0) {
-      diskann::cerr << "failed_tags should be passed as an empty list"
-                    << std::endl;
-      return -3;
+      throw ANNException("failed_tags should be passed as an empty list", -1,
+                         __FUNCSIG__, __FILE__, __LINE__);
     }
     if ((_eager_done) && (!_data_compacted)) {
-      diskann::cout << "Eager delete requests were issued but data was not "
-                       "compacted, cannot proceed with lazy_deletes"
-                    << std::endl;
-      return -2;
+      throw ANNException(
+          "Eager delete requests were issued but data was not compacted, "
+          "cannot proceed with lazy_deletes",
+          -1, __FUNCSIG__, __FILE__, __LINE__);
     }
     std::shared_lock<std::shared_timed_mutex> lock(_update_lock);
     _lazy_done = true;
@@ -2797,13 +2781,12 @@ namespace diskann {
       if (_tag_to_location.find(tag) == _tag_to_location.end()) {
         failed_tags.push_back(tag);
       } else {
-        _delete_set.insert(_tag_to_location[tag]);
-        _location_to_tag.erase(_tag_to_location[tag]);
+        const auto location = _tag_to_location[tag];
+        _delete_set.insert(location);
+        _location_to_tag.erase(location);
         _tag_to_location.erase(tag);
       }
     }
-
-    return 0;
   }
 
   template<typename T, typename TagT>

@@ -89,6 +89,20 @@ namespace diskann {
     }
   };
 
+  struct consolidation_report {
+    size_t _active_points, _max_points, _empty_slots, _slots_released,
+        _delete_set_size;
+    double _time;
+
+    consolidation_report(size_t active_points, size_t max_points,
+                         size_t empty_slots, size_t slots_released,
+                         size_t delete_set_size, double time_secs)
+        : _active_points(active_points), _max_points(max_points),
+          _empty_slots(empty_slots), _slots_released(slots_released),
+          _delete_set_size(delete_set_size), _time(time_secs) {
+    }
+  };
+
   template<typename T, typename TagT = uint32_t>
   class Index {
    public:
@@ -177,15 +191,16 @@ namespace diskann {
 
     // Record deleted points now and restructure graph later. Add to failed_tags
     // if tag not found. Do not call if _eager_delete was called earlier and
-    // data was not consolidated. Return -1 if
-    DISKANN_DLLEXPORT int lazy_delete(const tsl::robin_set<TagT> &tags,
-                                      std::vector<TagT>          &failed_tags);
+    // data was not consolidated.
+    DISKANN_DLLEXPORT void lazy_delete(const std::vector<TagT> &tags,
+                                       std::vector<TagT>       &failed_tags);
 
-    // Call after a series of lazy deletions
+        // Call after a series of lazy deletions
     // Returns number of live points left after consolidation
     // If _conc_consolidates is set in the ctor, then this call can be invoked
     // alongside inserts and lazy deletes, else it acquires _update_lock
-    DISKANN_DLLEXPORT size_t consolidate_deletes(const Parameters &parameters);
+    DISKANN_DLLEXPORT consolidation_report
+    consolidate_deletes(const Parameters &parameters);
 
     // Delete point from graph and restructure it immediately. Do not call if
     // _lazy_delete was called earlier and data was not consolidated
@@ -205,9 +220,6 @@ namespace diskann {
     DISKANN_DLLEXPORT void reposition_frozen_point_to_end();
     DISKANN_DLLEXPORT void reposition_point(unsigned old_location,
                                             unsigned new_location);
-
-    DISKANN_DLLEXPORT void compact_frozen_point();
-    // DISKANN_DLLEXPORT void compact_data_for_search();
 
     DISKANN_DLLEXPORT void consolidate(Parameters &parameters);
 
@@ -325,10 +337,13 @@ namespace diskann {
     // Anything else in a MT environment will lead to an inconsistent index.
     void resize(size_t new_max_points);
 
+    // Take an unique lock on _update_lock before calling either of these functions
     // renumber nodes, update tag and location maps and compact the graph, mode
     // = _consolidated_order in case of lazy deletion and _compacted_order in
     // case of eager deletion
-    void compact_data();
+    DISKANN_DLLEXPORT void compact_data();
+    DISKANN_DLLEXPORT void compact_frozen_point();
+
 
     // Remove deleted nodes from adj list of node i and absorb edges from
     // deleted neighbors Acquire _locks[i] prior to calling for thread-safety
@@ -407,7 +422,7 @@ namespace diskann {
 
     bool _eager_done = false;     // true if eager deletions have been made
     bool _lazy_done = false;      // true if lazy deletions have been made
-    bool _data_compacted = true;  // true if data has been consolidated
+    bool _data_compacted = true;  // true if data has been compacted
     bool _is_saved = false;  // Gopal. Checking if the index is already saved.
     bool _conc_consolidate = false;  // use _lock while searching
 
