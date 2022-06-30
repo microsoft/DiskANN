@@ -1564,14 +1564,7 @@ namespace diskann {
           size_t                 node_offset = node_ctr - start_id;
           std::vector<unsigned> &pruned_list = pruned_list_vector[node_offset];
           _final_graph[node].clear();
-          for (auto id : pruned_list) {
-            if(id > _max_points+_num_frozen_pts){
-              std::cout << "ERROR: too large id " << id << " detected " << std::endl; 
-              std::cout << "Is the point a flagged point: " << _tag_to_flag[node] << std::endl;
-              std::cout << "size of pruned list: " << pruned_list.size() << std::endl; 
-              std::cout << "Elements of pruned list: " << std::endl;
-              for(auto id : pruned_list) std::cout << id << std::endl; 
-            }
+          for(auto id: pruned_list){
             _final_graph[node].emplace_back(id);
           }
         }
@@ -1616,7 +1609,7 @@ namespace diskann {
                 std::sort(dummy_pool.begin(), dummy_pool.end());
                 int r = 0;
                 int t = 0;
-                while (r < (int) _indexingRange) {
+                while (r < (int) _indexingRange && t < (int) pool.size()) {
                   if (!_tag_to_flag[dummy_pool[t].id]) {
                     new_out_neighbors.emplace_back(dummy_pool[t].id);
                     r++;
@@ -1686,18 +1679,14 @@ namespace diskann {
 
       auto startclock = std::chrono::high_resolution_clock::now();
 
-      // std::set<_s64> qnbh_set;
 
       for (_s64 query_ctr = (_s64) visit_order.size() - num_query_points - 1;
            query_ctr < (_s64) visit_order.size() - 1; query_ctr++) {
         for (auto nbh : _final_graph[query_ctr]) {
-          // qnbh_set.insert(nbh);
           query_indegree[nbh]++;
         }
       }
 
-      // std::cout << "Size of query neighbor set " << qnbh_set.size() <<
-      // std::endl;
 
 #pragma omp parallel for schedule(dynamic, 65536)
       for (_s64 node_ctr = 0; node_ctr < (_s64)(visit_order.size());
@@ -1715,8 +1704,7 @@ namespace diskann {
           int per_query_capacity;
           if (query_indegree[node] != 0) {
             per_query_capacity =
-                std::floor(total_capacity / ((double) query_indegree[node])) +
-                1;
+                std::floor(total_capacity / ((double) query_indegree[node]));
             per_node_capacity[node] = per_query_capacity;
           }
 
@@ -1769,19 +1757,6 @@ namespace diskann {
       std::cout << "Number of nodes stitched: "
                 << std::accumulate(changed.begin(), changed.end(), 0)
                 << std::endl;
-    }
-// FOR TESTING PURPOSES ONLY
-// TODO REMOVE IF MERGING TO MAIN
-#pragma omp parallel for schedule(dynamic, 65536)
-    for (_s64 node_ctr = 0; node_ctr < (_s64)(visit_order.size()); node_ctr++) {
-      auto node = visit_order[node_ctr];
-
-      for (auto nbh : _final_graph[node]) {
-        if (nbh > visit_order.size() - num_query_points - 1 &&
-            nbh != visit_order.size() - 1) {
-          std::cout << "ERROR: point has a query neighbor" << std::endl;
-        }
-      }
     }
   }
 

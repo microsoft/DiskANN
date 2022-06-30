@@ -26,9 +26,9 @@ int main(int argc, char** argv) {
 
   std::vector<_s32> random_ids(npts);
   std::iota(random_ids.begin(), random_ids.end(), 0);
+  std::srand(time(0));
   std::random_shuffle(random_ids.begin(), random_ids.end());
   random_ids.resize(rpts);
-  std::cout << random_ids.size() << std::endl;
 
   std::ofstream writer(argv[2], std::ios::binary);
 
