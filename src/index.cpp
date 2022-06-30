@@ -471,7 +471,6 @@ namespace diskann {
       std::string tags_file = std::string(filename) + ".tags";
       std::string data_file = std::string(filename) + ".data";
       std::string delete_list_file = std::string(filename) + ".del";
-      std::string flags_file = std::string(filename) + ".flags";
 
       // Because the save_* functions use append mode, ensure that
       // the files are deleted before save. Ideally, we should check
@@ -485,8 +484,6 @@ namespace diskann {
       save_tags(tags_file);
       delete_file(delete_list_file);
       save_delete_list(delete_list_file);
-      delete_file(flags_file);
-      save_flags(flags_file);
 
     } else {
       diskann::cout << "Save index in a single file currently not supported. "
@@ -691,7 +688,7 @@ namespace diskann {
 #endif
     _num_points_lock.lock();
 
-    size_t tags_file_num_pts = 0, flags_file_num_pts = 0, graph_num_pts = 0,
+    size_t tags_file_num_pts = 0, graph_num_pts = 0,
            data_file_num_pts = 0;
 
     if (!_save_as_one_file) {
@@ -708,9 +705,6 @@ namespace diskann {
       }
       if (_enable_tags) {
         tags_file_num_pts = load_tags(tags_file);
-      }
-      if (_enable_tags && _enable_flags) {
-        flags_file_num_pts = load_flags(flags_file);
       }
       graph_num_pts = load_graph(graph_file, data_file_num_pts);
 #endif
@@ -736,18 +730,6 @@ namespace diskann {
                                   __LINE__);
     }
 
-    if (_enable_flags && flags_file_num_pts != tags_file_num_pts) {
-      std::stringstream stream;
-      stream << "ERROR: When loading index, loaded " << tags_file_num_pts
-             << " points from tag file, " << graph_num_pts
-             << " from graph, and " << flags_file_num_pts
-             << " flags, with num_frozen_pts being set to " << _num_frozen_pts
-             << " in constructor." << std::endl;
-      diskann::cerr << stream.str() << std::endl;
-      aligned_free(_data);
-      throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
-                                  __LINE__);
-    }
 
     _nd = data_file_num_pts - _num_frozen_pts;
     _empty_slots.clear();
