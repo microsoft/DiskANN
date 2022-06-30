@@ -388,29 +388,6 @@ namespace diskann {
     return tag_bytes_written;
   }
 
-  template<typename T, typename TagT>
-  _u64 Index<T, TagT>::save_flags(std::string flags_file) {
-    if (_tag_to_flag.size() == 0) {
-      diskann::cout << "Not saving flags as they were not used" << std::endl;
-      return 0;
-    }
-    size_t flag_bytes_written;
-    bool * flag_data = new bool[_nd + _num_frozen_pts];
-    for (_u32 i = 0; i < _nd; i++) {
-      flag_data[i] = _tag_to_flag[_location_to_tag[i]];
-    }
-    if (_num_frozen_pts > 0) {
-      std::memset((char *) &flag_data[_start], false, sizeof(bool));
-    }
-    try {
-      flag_bytes_written =
-          save_bin<bool>(flags_file, flag_data, _nd + _num_frozen_pts, 1);
-    } catch (std::system_error &e) {
-      throw FileException(flags_file, e, __FUNCSIG__, __FILE__, __LINE__);
-    }
-    delete[] flag_data;
-    return flag_bytes_written;
-  }
 
   template<typename T, typename TagT>
   _u64 Index<T, TagT>::save_data(std::string data_file, const int version) {
@@ -589,55 +566,7 @@ namespace diskann {
     return file_num_points;
   }
 
-#ifdef EXEC_ENV_OLS
-  template<typename T, typename TagT>
-  size_t Index<T, TagT>::load_flags(AlignedFileReader &reader) {
-#else
-  template<typename T, typename TagT>
-  size_t Index<T, TagT>::load_flags(const std::string flag_filename) {
-    if (_queries_present && !file_exists(flag_filename)) {
-      diskann::cerr << "Flag file provided does not exist!" << std::endl;
-      throw diskann::ANNException("Flag file provided does not exist!", -1,
-                                  __FUNCSIG__, __FILE__, __LINE__);
-    }
-#endif
-    if (!_queries_present) {
-      diskann::cout << "Flags not loaded as flags not enabled." << std::endl;
-      return 0;
-    }
 
-    size_t file_dim, file_num_points;
-    bool * flag_data;
-#ifdef EXEC_ENV_OLS
-    load_bin<bool>(reader, flag_data, file_num_points, file_dim);
-#else
-    load_bin<bool>(std::string(flag_filename), flag_data, file_num_points,
-                   file_dim);
-#endif
-
-    if (file_dim != 1) {
-      std::stringstream stream;
-      stream << "ERROR: Found " << file_dim << " dimensions for flags,"
-             << "but flag file must have 1 dimension." << std::endl;
-      diskann::cerr << stream.str() << std::endl;
-      delete[] flag_data;
-      throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
-                                  __LINE__);
-    }
-
-    size_t num_data_points =
-        _num_frozen_pts > 0 ? file_num_points - 1 : file_num_points;
-    for (_u32 i = 0; i < (_u32) num_data_points; i++) {
-      bool flag = *(flag_data + i);
-      if (_delete_set.find(i) == _delete_set.end()) {
-        TagT tag = _location_to_tag[i];
-        _tag_to_flag[tag] = flag;
-      }
-    }
-    diskann::cout << "Flags loaded." << std::endl;
-    delete[] flag_data;
-    return file_num_points;
-  }
 
   template<typename T, typename TagT>
 #ifdef EXEC_ENV_OLS
@@ -734,7 +663,6 @@ namespace diskann {
 #ifndef EXEC_ENV_OLS
       std::string data_file = std::string(filename) + ".data";
       std::string tags_file = std::string(filename) + ".tags";
-      std::string flags_file = std::string(filename) + ".flags";
       std::string delete_set_file = std::string(filename) + ".del";
       std::string graph_file = std::string(filename);
       data_file_num_pts = load_data(data_file);
@@ -743,9 +671,6 @@ namespace diskann {
       }
       if (_enable_tags) {
         tags_file_num_pts = load_tags(tags_file);
-      }
-      if (_enable_tags && _queries_present) {
-        flags_file_num_pts = load_flags(flags_file);
       }
       graph_num_pts = load_graph(graph_file, data_file_num_pts);
 #endif

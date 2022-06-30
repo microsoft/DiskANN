@@ -126,7 +126,6 @@ namespace diskann {
     DISKANN_DLLEXPORT _u64 save_data(std::string filename,
                                      const int   version = 0);
     DISKANN_DLLEXPORT _u64 save_tags(std::string filename);
-    DISKANN_DLLEXPORT _u64 save_flags(std::string filename);
     DISKANN_DLLEXPORT _u64 save_delete_list(const std::string &filename);
 
     // Load functions
@@ -136,7 +135,6 @@ namespace diskann {
                                         size_t            expected_num_points);
     DISKANN_DLLEXPORT size_t load_data(std::string filename0);
     DISKANN_DLLEXPORT size_t load_tags(const std::string tag_file_name);
-    DISKANN_DLLEXPORT size_t load_flags(const std::string flag_file_name);
     DISKANN_DLLEXPORT size_t load_delete_set(const std::string &filename);
 
     // get some private variables
@@ -425,9 +423,6 @@ namespace diskann {
     // data structures, flags and locks for dynamic indexing
     std::unordered_map<TagT, unsigned> _tag_to_location;
     std::unordered_map<unsigned, TagT> _location_to_tag;
-    std::unordered_map<TagT, bool>
-        _tag_to_flag;  // flag determining whether a tag corresponds to a base
-                       // point or a query point
 
     tsl::robin_set<unsigned> _delete_set;
     tsl::robin_set<unsigned> _empty_slots;
