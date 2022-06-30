@@ -4,6 +4,7 @@
 #pragma once
 
 #include <memory>
+#include <type_traits>
 
 #include "boost_dynamic_bitset_fwd.h"
 
@@ -17,7 +18,7 @@ namespace diskann {
   template<typename T>
   class natural_number_set {
    public:
-    static_assert(std::is_trivial_v<T>, "Identifier must be a trivial type");
+    static_assert(std::is_trivial<T>::value, "Identifier must be a trivial type");
 
     natural_number_set();
 
