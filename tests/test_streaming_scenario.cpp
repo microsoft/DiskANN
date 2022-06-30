@@ -112,25 +112,23 @@ void delete_from_beginning(diskann::Index<T, TagT>& index,
                            diskann::Parameters&     delete_params,
                            size_t                   points_to_skip,
                            size_t points_to_delete_from_beginning) {
-  std::cout << "Lazy deleting points " << points_to_skip << " to "
-            << points_to_skip + points_to_delete_from_beginning << "..."
-            << std::endl;
+  std::cout << std::endl
+            << "Lazy deleting points " << points_to_skip << " to "
+            << points_to_skip + points_to_delete_from_beginning << "... "; 
+  for (size_t i = points_to_skip;
+       i < points_to_skip + points_to_delete_from_beginning; ++i)
+    index.lazy_delete(i);
+  std::cout << "done." << std::endl;
 
-  tsl::robin_set<TagT> deletes;
-  for (size_t i = 0; i < points_to_delete_from_beginning; i++) {
-    deletes.insert(static_cast<TagT>(points_to_skip + i));
-  }
-  std::vector<TagT> failed_deletes;
-  index.lazy_delete(deletes, failed_deletes);
-  diskann::Timer delete_timer;
-  index.consolidate_deletes(delete_params);
-  const double elapsedSeconds = delete_timer.elapsed() / 1000000.0;
-
-  std::cout << "Deleted " << points_to_delete_from_beginning << " points in "
-            << elapsedSeconds << " seconds ("
-            << points_to_delete_from_beginning / elapsedSeconds
+  auto report = index.consolidate_deletes(delete_params);
+  std::cout << "#active points: " << report._active_points << std::endl
+            << "max points: " << report._max_points << std::endl
+            << "empty slots: " << report._empty_slots << std::endl
+            << "deletes processed: " << report._slots_released << std::endl
+            << "latest delete size: " << report._delete_set_size << std::endl
+            << "rate: (" << points_to_delete_from_beginning / report._time
             << " points/second overall, "
-            << points_to_delete_from_beginning / elapsedSeconds /
+            << points_to_delete_from_beginning / report._time /
                    delete_params.Get<unsigned>("num_threads")
             << " per thread)" << std::endl;
 }
@@ -189,8 +187,8 @@ void build_incremental_index(
     std::cout << "Overriding num_frozen to" << num_frozen << std::endl;
   }
 
-  diskann::Index<T, TagT> index(diskann::L2, dim, max_points_to_insert, true,
-                                params, params, enable_tags,
+  diskann::Index<T, TagT> index(diskann::L2, dim, max_points_to_insert + 1,
+                                true, params, params, enable_tags,
                                 support_eager_delete, concurrent);
 
   size_t       current_point_offset = points_to_skip;
@@ -293,7 +291,7 @@ void build_incremental_index(
     }
     delete_task.wait();
 
-    std::cout << "Time Elapsed" << timer.elapsed() / 1000 << "ms\n";
+    std::cout << "Time Elapsed " << timer.elapsed() / 1000 << "ms\n";
     const auto save_path_inc = save_path + ".after-concurrent-delete";
     index.save(save_path_inc.c_str(), true);
 
@@ -319,7 +317,7 @@ void build_incremental_index(
 
         const auto save_path_inc =
             get_save_filename(save_path + ".inc-", points_to_skip, end);
-        index.save(save_path_inc.c_str(), true);
+        index.save(save_path_inc.c_str(), false);
         const double elapsedSeconds = save_timer.elapsed() / 1000000.0;
         const size_t points_saved = end - points_to_skip;
 
@@ -339,7 +337,7 @@ void build_incremental_index(
         last_snapshot_points_threshold != last_point_threshold) {
       const auto save_path_inc = get_save_filename(
           save_path + ".inc-", points_to_skip, last_point_threshold);
-      index.save(save_path_inc.c_str(), true);
+      //index.save(save_path_inc.c_str(), false);
     }
 
     if (points_to_delete_from_beginning > 0) {
