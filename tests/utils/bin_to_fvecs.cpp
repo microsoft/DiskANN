@@ -29,7 +29,7 @@ int main(int argc, char** argv) {
   size_t npts = npts_s32;
   size_t ndims = ndims_s32;
   _u32   ndims_u32 = (_u32) ndims_s32;
-  //  _u64          fsize = writr.tellg();
+   _u64          fsize = writr.tellg();
   readr.seekg(0, std::ios::beg);
 
   unsigned ndims_u32;
