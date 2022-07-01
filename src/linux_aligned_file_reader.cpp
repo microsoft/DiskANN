@@ -6,13 +6,12 @@
 #include <cassert>
 #include <cstdio>
 #include <iostream>
+#include "aligned_file_reader.h"
 #include "tsl/robin_map.h"
 #include "utils.h"
 #define MAX_EVENTS 1024
 
 namespace {
-  typedef struct io_event io_event_t;
-  typedef struct iocb     iocb_t;
 
   void execute_io(io_context_t ctx, int fd, std::vector<AlignedRead> &read_reqs,
                   uint64_t n_retries = 0) {
@@ -171,7 +170,6 @@ void LinuxAlignedFileReader::deregister_all_threads() {
   //  lk.unlock();
 }
 
-
 void LinuxAlignedFileReader::open(const std::string &fname) {
   int flags = O_DIRECT | O_RDONLY | O_LARGEFILE;
   this->file_desc = ::open(fname.c_str(), flags);
@@ -193,13 +191,85 @@ void LinuxAlignedFileReader::close() {
 
 void LinuxAlignedFileReader::read(std::vector<AlignedRead> &read_reqs,
                                   io_context_t &ctx, bool async) {
-                                    if (async == true) {
-                                      diskann::cout<<"Async currently not supported in linux." << std::endl;
-                                    }
+  if (async == true) {
+    diskann::cout << "Async currently not supported in linux." << std::endl;
+  }
   assert(this->file_desc != -1);
   //#pragma omp critical
   //	std::cout << "thread: " << std::this_thread::get_id() << ", crtx: " <<
   // ctx
   //<< "\n";
   execute_io(ctx, this->file_desc, read_reqs);
+}
+
+AlignedReadRsp LinuxAlignedFileReader::submit_io(
+    std::vector<AlignedRead> &read_reqs, IOContext &ctx) {
+  AlignedReadRsp           rsp;
+  uint64_t                 n_ops = read_reqs.size();
+
+  std::vector<iocb_t *>    cbs(n_ops, nullptr);
+  std::vector<io_event_t>  evts(n_ops);
+  std::vector<struct iocb> cb(n_ops);
+  std::vector<int8_t> completed(n_ops, 0);
+  rsp.cbs = cbs;
+  rsp.evts = evts;
+  rsp.cb = cb;
+  rsp.completed = completed;
+  for (uint64_t j = 0; j < n_ops; j++) {
+    io_prep_pread(rsp.cb.data() + j, this->file_desc, read_reqs[j].buf,
+                  read_reqs[j].len, read_reqs[j].offset);
+  }
+
+  for (uint64_t i = 0; i < n_ops; i++) {
+    cbs[i] = cb.data() + i;
+  }
+  
+  int64_t ret = io_submit(ctx, (int64_t) n_ops, rsp.cbs.data());
+  
+  // if requests didn't get accepted
+  if (ret != (int64_t) n_ops) {
+    std::cerr << "io_submit() failed; returned " << ret
+              << ", expected=" << n_ops << ", ernno=" << errno << "="
+              << ::strerror(-ret) << ", try #" << 1;
+    std::cout << "ctx: " << ctx << "\n";
+    // diskann::cout << "----- cbs: " << cbs.size() << " evts: " << rsp.evts.size() << " cb: " << rsp.cb.size() << std::endl << std::flush;
+    return rsp;
+  }
+  // diskann::cout << "cbs: " << rsp.cbs.size() << " evts: " << rsp.evts.size() << " cb: " << rsp.cb.size() << std::endl << std::flush;
+  return rsp;
+}
+
+bool LinuxAlignedFileReader::getevents(AlignedReadRsp &rsp, IOContext &ctx) {
+  size_t n_ops = rsp.cb.size();
+  struct timespec timeout;
+  // timeout.tv_sec = 0;
+  timeout.tv_nsec = 100;
+  auto   ret = io_getevents(ctx, (int64_t) n_ops, (int64_t) n_ops,
+                            rsp.evts.data(), &timeout);
+  // if requests didn't complete
+  if (ret != (int64_t) n_ops) {
+    // std::cout << "io_getevents() failed; returned " << ret
+    //           << ", expected=" << n_ops << ", ernno=" << errno << "="
+    //           << ::strerror(-ret) << ", try #" << 1 << std::endl;
+    return false;
+  }
+  return true;
+}
+
+
+bool LinuxAlignedFileReader::getevents(AlignedReadRsp& rsp, IOContext& ctx, size_t idx) {
+  size_t n_ops = 1;
+  struct timespec timeout;
+  timeout.tv_sec = 0;
+  timeout.tv_nsec = 1000;
+  auto   ret = io_getevents(ctx, (int64_t) n_ops, (int64_t) n_ops,
+                            &rsp.evts[idx], &timeout);
+  // if requests didn't complete
+  if (ret != (int64_t) n_ops) {
+    // std::cout << "io_getevents() failed; returned " << ret
+    //           << ", expected=" << n_ops << ", ernno=" << errno << "="
+    //           << ::strerror(-ret) << ", try #" << 1 << std::endl;
+    return false;
+  }
+  return true;
 }

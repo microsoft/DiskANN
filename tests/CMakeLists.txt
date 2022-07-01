@@ -3,6 +3,13 @@
 
 set(CMAKE_CXX_STANDARD 14)
 
+include_directories(/data01/home/mengshangqi.123/liburing/include)
+
+add_executable(async_reader async_read.cpp)
+
+target_link_libraries(async_reader /data01/home/mengshangqi.123/liburing/lib/liburing.so)
+target_link_libraries(async_reader ${PROJECT_NAME} -ltcmalloc Boost::program_options)
+
 add_executable(build_memory_index build_memory_index.cpp )
 if(MSVC)
 	target_link_options(build_memory_index PRIVATE /MACHINE:x64 /DEBUG:FULL "/INCLUDE:_tcmalloc")

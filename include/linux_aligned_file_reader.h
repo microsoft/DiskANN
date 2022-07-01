@@ -16,7 +16,7 @@ class LinuxAlignedFileReader : public AlignedFileReader {
   LinuxAlignedFileReader();
   ~LinuxAlignedFileReader();
 
-  IOContext &get_ctx();
+  IOContext& get_ctx();
 
   // register thread-id for a context
   void register_thread();
@@ -25,16 +25,22 @@ class LinuxAlignedFileReader : public AlignedFileReader {
   void deregister_thread();
   void deregister_all_threads();
 
-
   // Open & close ops
   // Blocking calls
-  void open(const std::string &fname);
+  void open(const std::string& fname);
   void close();
 
   // process batch of aligned requests in parallel
   // NOTE :: blocking call
-  void read(std::vector<AlignedRead> &read_reqs, IOContext &ctx,
+  void read(std::vector<AlignedRead>& read_reqs, IOContext& ctx,
             bool async = false);
+
+  virtual AlignedReadRsp submit_io(std::vector<AlignedRead>& read_reqs,
+                                   IOContext&                ctx) override;
+
+  virtual bool getevents(AlignedReadRsp& rsp, IOContext& ctx) override;
+
+  virtual bool getevents(AlignedReadRsp& rsp, IOContext& ctx, size_t idx) override;
 };
 
 #endif

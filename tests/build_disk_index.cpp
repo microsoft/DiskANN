@@ -10,6 +10,8 @@
 #include "partition_and_pq.h"
 #include "utils.h"
 
+#include "linux_async_aligned_file_reader.h"
+
 namespace po = boost::program_options;
 
 int main(int argc, char** argv) {

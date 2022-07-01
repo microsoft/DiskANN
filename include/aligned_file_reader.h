@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include <exception>
+#include <cstdint>
 #define MAX_IO_DEPTH 128
 
 #include <vector>
@@ -55,6 +57,10 @@ struct IOContext {
 #include <thread>
 #include "tsl/robin_map.h"
 #include "utils.h"
+#include <exception>
+
+typedef struct io_event io_event_t;
+typedef struct iocb     iocb_t;
 
 // NOTE :: all 3 fields must be 512-aligned
 struct AlignedRead {
@@ -72,6 +78,13 @@ struct AlignedRead {
     assert(IS_512_ALIGNED(buf));
     // assert(malloc_usable_size(buf) >= len);
   }
+};
+
+struct AlignedReadRsp {
+  std::vector<iocb_t*>     cbs;
+  std::vector<io_event_t>  evts;
+  std::vector<struct iocb> cb;
+  std::vector<int8_t>      completed;
 };
 
 class AlignedFileReader {
@@ -101,4 +114,17 @@ class AlignedFileReader {
   // NOTE :: blocking call
   virtual void read(std::vector<AlignedRead>& read_reqs, IOContext& ctx,
                     bool async = false) = 0;
+
+  virtual AlignedReadRsp submit_io(std::vector<AlignedRead>& read_reqs,
+                                   IOContext&                ctx) {
+    AlignedReadRsp rsp;
+    return rsp;
+  }
+
+  virtual bool getevents(AlignedReadRsp& rsp, IOContext& ctx) {
+    return false;
+  }
+  virtual bool getevents(AlignedReadRsp& rsp, IOContext& ctx, size_t idx) {
+    return false;
+  }
 };

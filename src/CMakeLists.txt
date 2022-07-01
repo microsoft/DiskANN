@@ -8,7 +8,7 @@ if(MSVC)
 else()
 	#file(GLOB CPP_SOURCES *.cpp)
 	set(CPP_SOURCES ann_exception.cpp aux_utils.cpp distance.cpp index.cpp
-        linux_aligned_file_reader.cpp math_utils.cpp memory_mapper.cpp
+        linux_aligned_file_reader.cpp linux_async_aligned_file_reader.cpp math_utils.cpp memory_mapper.cpp
         partition_and_pq.cpp  pq_flash_index.cpp logger.cpp utils.cpp)
 	add_library(${PROJECT_NAME} ${CPP_SOURCES})
 	add_library(${PROJECT_NAME}_s STATIC ${CPP_SOURCES})

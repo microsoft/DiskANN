@@ -6,8 +6,9 @@ if(MSVC)
 else()
 	cmake_minimum_required(VERSION 2.8)
 endif()
-set(CMAKE_STANDARD 14)
+set(CMAKE_STANDARD 17)
 
+include_directories(/data01/home/mengshangqi.123/liburing/include)
 
 #set(CMAKE_USER_MAKE_RULES_OVERRIDE "${CMAKE_CURRENT_LIST_DIR}/CompilerOptions.cmake")
 if(MSVC)
@@ -71,7 +72,7 @@ else()
 
 	# compile flags and link libraries
         add_compile_options(-m64 -Wl,--no-as-needed) 
-	link_libraries(mkl_intel_ilp64 mkl_intel_thread mkl_core iomp5 pthread m dl)
+	link_libraries(mkl_intel_ilp64 mkl_intel_thread mkl_core iomp5 pthread m dl /data01/home/mengshangqi.123/liburing/lib/liburing.so)
 endif()
 
 add_definitions(-DMKL_ILP64)
