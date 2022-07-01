@@ -15,6 +15,10 @@ namespace diskann {
   // are needed. The memory usage of the set is determined by the largest
   // number of inserted entries (uses a vector as a backing store) as well as
   // the largest value to be placed in it (uses bitset as well).
+  //
+  // Thread-safety: this class is not thread-safe in general.
+  // Exception: multiple read-only operations (e.g. is_in_set, empty, size) are
+  // safe on the object only if there are no writers to it in parallel.
   template<typename T>
   class natural_number_set {
    public:
