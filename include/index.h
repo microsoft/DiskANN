@@ -14,7 +14,9 @@
 #include "tsl/robin_set.h"
 #include "tsl/robin_map.h"
 
+#include "boost_dynamic_bitset_fwd.h"
 #include "distance.h"
+#include "natural_number_set.h"
 #include "neighbor.h"
 #include "parameters.h"
 #include "utils.h"
@@ -24,14 +26,6 @@
 #define GRAPH_SLACK_FACTOR 1.3
 #define OVERHEAD_FACTOR 1.1
 #define EXPAND_IF_FULL 0
-
-namespace boost {
-#ifndef BOOST_DYNAMIC_BITSET_FWD_HPP
-  template<typename Block = unsigned long,
-           typename Allocator = std::allocator<Block>>
-  class dynamic_bitset;
-#endif
-}  // namespace boost
 
 namespace diskann {
   inline double estimate_ram_usage(_u64 size, _u32 dim, _u32 datasize,
@@ -415,7 +409,7 @@ namespace diskann {
     std::unordered_map<unsigned, TagT> _location_to_tag;
 
     tsl::robin_set<unsigned> _delete_set;
-    tsl::robin_set<unsigned> _empty_slots;
+    natural_number_set<unsigned> _empty_slots;
 
     bool _support_eager_delete =
         false;  // Enables in-graph, requires more space
