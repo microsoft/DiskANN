@@ -649,6 +649,7 @@ namespace diskann {
 
     _nd = data_file_num_pts - _num_frozen_pts;
     _empty_slots.clear();
+    _empty_slots.reserve(_max_points);
     for (auto i = _nd; i < _max_points; i++) {
       _empty_slots.insert((uint32_t) i);
     }
@@ -2266,7 +2267,7 @@ namespace diskann {
 #pragma omp parallel for num_threads(num_threads) schedule(dynamic, 8192)
     for (_s64 i = 0; i < (_s64) (_max_points + _num_frozen_pts); i++) {
       if ((old_delete_set.find((_u32) i) == old_delete_set.end()) &&
-          (_empty_slots.find((_u32) i) == _empty_slots.end())) {
+          _empty_slots.is_in_set((_u32) i)) {
         if (_conc_consolidate) {
           std::unique_lock<std::mutex> adj_list_lock(_locks[i]);
           process_delete(old_delete_set, i, range, maxc, alpha);
@@ -2495,18 +2496,19 @@ namespace diskann {
       return -1;
     }
     unsigned location;
-    if (_data_compacted) {
+    if (_data_compacted && _empty_slots.is_empty()) {
+      // This code path is encountered when enable_delete hasn't been
+      // called yet, so no points have been deleted and _empty_slots
+      // hasn't been filled in. In that case, just keep assigning
+      // consecutive locations.
       location = (unsigned) _nd;
-      _empty_slots.erase(location);
     } else {
       // no need of delete_lock here, _num_points_lock will ensure no other thread
       // executes this block of code
       assert(_empty_slots.size() != 0);
       assert(_empty_slots.size() + _nd == _max_points);
 
-      auto iter = _empty_slots.begin();
-      location = *iter;
-      _empty_slots.erase(iter);
+      location = _empty_slots.pop_any();
       _delete_set.erase(location);
     }
 
@@ -2519,7 +2521,7 @@ namespace diskann {
   void Index<T, TagT>::release_location(int location) {
     LockGuard guard(_num_points_lock);
 
-    if (_empty_slots.find(location) != _empty_slots.end())
+    if (_empty_slots.is_in_set(location))
       throw ANNException(
           "Trying to release location, but location already in empty slots", -1,
           __FUNCSIG__, __FILE__, __LINE__);
