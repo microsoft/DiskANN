@@ -268,7 +268,8 @@ namespace diskann {
     int generate_frozen_point();
 
     // determines navigating node of the graph by calculating medoid of data
-    unsigned calculate_entry_point();
+    unsigned calculate_entry_point_internal(size_t &nd, T* data);
+    unsigned calculate_entry_point(const int version = 0);
 
     // called only when _eager_delete is to be supported
     void update_in_graph();
@@ -279,6 +280,19 @@ namespace diskann {
                                               float *               distances,
                                               InMemQueryScratch<T> &scratch);
 
+    std::pair<uint32_t, uint32_t> iterate_to_fixed_point_internal(
+        const T *node_coords, const unsigned Lindex,
+        const std::vector<unsigned> &init_ids,
+        std::vector<Neighbor> &      expanded_nodes_info,
+        tsl::robin_set<unsigned> &   expanded_nodes_ids,
+        std::vector<Neighbor> &best_L_nodes, std::vector<unsigned> &des,
+        tsl::robin_set<unsigned> &inserted_into_pool_rs,
+        boost::dynamic_bitset<> &inserted_into_pool_bs, T *data, 
+        size_t &max_points, size_t &num_frozen_pts,
+        std::vector<std::vector<unsigned>> &final_graph, const unsigned &start,
+        bool ret_frozen = true, bool search_invocation = false,
+        const int version = 0);
+
     std::pair<uint32_t, uint32_t> iterate_to_fixed_point(
         const T *node_coords, const unsigned Lindex,
         const std::vector<unsigned> &init_ids,
@@ -287,7 +301,7 @@ namespace diskann {
         std::vector<Neighbor> &best_L_nodes, std::vector<unsigned> &des,
         tsl::robin_set<unsigned> &inserted_into_pool_rs,
         boost::dynamic_bitset<> &inserted_into_pool_bs, bool ret_frozen = true,
-        bool search_invocation = false);
+        bool search_invocation = false, const int version = 0);
 
     void get_expanded_nodes(const size_t node, const unsigned Lindex,
                             std::vector<unsigned>     init_ids,
@@ -298,28 +312,41 @@ namespace diskann {
                             tsl::robin_set<unsigned> &inserted_into_pool_rs,
                             boost::dynamic_bitset<> & inserted_into_pool_bs);
 
+    void get_expanded_nodes_internal(
+        const size_t node_id, const unsigned Lindex,
+        std::vector<unsigned>     init_ids,
+        std::vector<Neighbor> &   expanded_nodes_info,
+        tsl::robin_set<unsigned> &expanded_nodes_ids, T* data,
+        const int version);
+
     // get_expanded_nodes for insertion. Must investigate to see if perf can
     // be improved here as well using the same technique as above.
     void get_expanded_nodes(const size_t node_id, const unsigned Lindex,
                             std::vector<unsigned>     init_ids,
                             std::vector<Neighbor> &   expanded_nodes_info,
-                            tsl::robin_set<unsigned> &expanded_nodes_ids);
+                            tsl::robin_set<unsigned> &expanded_nodes_ids,
+                            const int                 version = 0);
 
     void prune_neighbors(const unsigned location, std::vector<Neighbor> &pool,
-                         std::vector<unsigned> &pruned_list);
+                         std::vector<unsigned> &pruned_list, const int version = 0);
 
     void prune_neighbors(const unsigned location, std::vector<Neighbor> &pool,
                          const _u32 range, const _u32 max_candidate_size,
-                         const float alpha, std::vector<unsigned> &pruned_list);
+                         const float alpha, std::vector<unsigned> &pruned_list, const int version = 0);
 
     void occlude_list(std::vector<Neighbor> &pool, const float alpha,
                       const unsigned degree, const unsigned maxc,
-                      std::vector<Neighbor> &result);
+                      std::vector<Neighbor> &result, const int version = 0);
 
     void occlude_list(std::vector<Neighbor> &pool, const float alpha,
                       const unsigned degree, const unsigned maxc,
                       std::vector<Neighbor> &result,
-                      std::vector<float> &   occlude_factor);
+                      std::vector<float> &   occlude_factor, const int version = 0);
+
+    void occlude_list_internal(std::vector<Neighbor> &pool, const float alpha,
+                      const unsigned degree, const unsigned maxc,
+                      std::vector<Neighbor> &result,
+                      std::vector<float> &   occlude_factor, T* data);
 
     // add reverse links from all the visited nodes to node n.
     void batch_inter_insert(unsigned                     n,
@@ -329,7 +356,12 @@ namespace diskann {
 
     void batch_inter_insert(unsigned                     n,
                             const std::vector<unsigned> &pruned_list,
-                            std::vector<unsigned> &      need_to_sync);
+                            std::vector<unsigned> &      need_to_sync,
+                            const int version = 0);
+
+    void batch_inter_insert_internal(
+      unsigned n, const std::vector<unsigned> &pruned_list, const _u32 range,
+      std::vector<unsigned> &need_to_sync, size_t& max_points, size_t& num_frozen_pts, std::vector<std::mutex> &locks, std::vector<std::vector<unsigned>> &final_graph);
 
     // add reverse links from all the visited nodes to node n.
     void inter_insert(unsigned n, std::vector<unsigned> &pruned_list,
@@ -339,7 +371,15 @@ namespace diskann {
                       bool update_in_graph);
 
     // Create the graph, update periodically in NUM_SYNCS batches
-    void link(Parameters &parameters);
+    void link(Parameters &parameters, const int version = 0);
+    void link_internal(Parameters &                        parameters,
+                       std::vector<std::vector<unsigned>> &final_graph,
+                       size_t &nd, unsigned &start, T *data,
+                       size_t &num_frozen_pts, size_t &max_points,
+                       const int version);
+
+    void populate_query_nn();
+    void robust_stitch();
 
     // WARNING: Do not call reserve_location() without acquiring change_lock_
     int  reserve_location();
@@ -401,7 +441,7 @@ namespace diskann {
     unsigned _max_observed_degree = 0;
     unsigned _max_observed_qdegree = 0;
     unsigned _start = 0;
-    unsigned _qstart = 0;
+    unsigned _query_start = 0;
 
     bool _has_built = false;
     bool _saturate_graph = false;
@@ -445,7 +485,8 @@ namespace diskann {
 
     std::vector<std::mutex> _locks;  // Per node lock, cardinality=max_points_
     std::vector<std::mutex> _locks_in;     // Per node lock
-    std::vector<std::mutex> _query_locks;  // locks for the _query_nn vector
+    std::vector<std::mutex> _query_locks;  // locks for the _query_graph vector
+    std::vector<std::mutex> _query_nn_locks;  // locks for the _query_nn vector
 
     std::mutex _num_points_lock;  // Lock to synchronously modify _nd
 
