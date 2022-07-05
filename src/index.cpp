@@ -1427,6 +1427,7 @@ namespace diskann {
             }
           }
         }
+        // if(_queries_present) insert_and_stitch(des);
       }
     }
   }
@@ -1687,7 +1688,92 @@ namespace diskann {
   // find the nearest neighbors in _final_graph of every point in _query_graph
   // and add them to the _query_nn field
   template<typename T, typename TagT>
+  void Index<T, TagT>::insert_and_stitch(unsigned location) {
+
+    auto                  L = _indexingQueueSize;
+    std::vector<unsigned> init_ids;
+    init_ids.emplace_back(_query_start);
+    tsl::robin_set<unsigned> visited;
+    std::vector<Neighbor>    pool;
+    pool.reserve(L * 2);
+    visited.reserve(L * 2);
+    const T *node_coords = _data + _aligned_dim * location;
+
+    std::vector<unsigned> des;
+    std::vector<Neighbor> best_L_nodes;
+    best_L_nodes.resize(L + 1);
+    tsl::robin_set<unsigned> inserted_into_pool_rs;
+    boost::dynamic_bitset<>  inserted_into_pool_bs;
+
+    int version = 1; //flag to search in query graph
+
+    iterate_to_fixed_point(node_coords, L, init_ids, pool, visited,
+                           best_L_nodes, des, inserted_into_pool_rs,
+                           inserted_into_pool_bs, true, false, version);
+    // find the notes in _query_nn that should be updated to include location
+    std::vector<unsigned> to_stitch;
+    for(auto nbh : visited){
+      std::vector<Neighbor> query_pool;
+      pool.reserve(L+1);
+      { 
+        LockGuard guard(_query_nn_locks[nbh]);
+        for(auto vnbh : _query_nn[nbh]){
+          float dist =
+                    _distance->compare(_query_data + _aligned_dim * (size_t) nbh,
+                                       _data + _aligned_dim * (size_t) vnbh,
+                                       (unsigned) _aligned_dim);
+          query_pool.emplace_back(Neighbor(vnbh, dist, true));
+        }
+        float dist =
+                    _distance->compare(_query_data + _aligned_dim * (size_t) nbh,
+                                       _data + _aligned_dim * (size_t) location,
+                                       (unsigned) _aligned_dim);
+        query_pool.emplace_back(Neighbor(location, dist, true));
+        std::sort(query_pool.begin(), query_pool.end());
+        if(query_pool[query_pool.size()-1].id != location){
+            auto to_remove = query_pool[query_pool.size()-1].id;
+            _query_nn[nbh].erase(std::find(_query_nn[nbh].begin(), _query_nn[nbh].end(), to_remove));
+            _query_nn[nbh].emplace_back(location);
+          to_stitch.push_back(nbh);
+        }
+      }
+    }
+
+    // robustStitch location based on the nodes in to_stitch
+
+    size_t total_capacity = _indexingRange - _final_graph[location].size();
+    size_t capacity;
+    if(to_stitch.size() == 0) capacity = 0;
+    else capacity = std::floor(total_capacity/ (double) to_stitch.size());
+    for(auto query_ctr : to_stitch){
+      int c = 0; //number of nodes added to _final_graph[nbh]
+      int j = 0; //iter count over _query_nn[query_ctr]
+      { 
+        LockGuard guard(_locks[location]);
+        while (c < (int) capacity &&
+               j < (int) _query_nn[query_ctr].size() &&
+               _final_graph[location].size() < _indexingRange) {
+          auto candidate = _query_nn[query_ctr][j];
+          if (candidate != location &&
+              (std::find(_final_graph[location].begin(), _final_graph[location].end(),
+                         candidate) == _final_graph[location].end())) {  
+            _final_graph[location].push_back(candidate);
+            c++;
+          }
+          j++;
+        }
+      }
+    }
+  }
+
+  // find the nearest neighbors in _final_graph of every point in _query_graph
+  // and add them to the _query_nn field
+  template<typename T, typename TagT>
   void Index<T, TagT>::populate_query_nn() {
+    std::cout << "Finding nearest neighbors of query nodes... " << std::endl; 
+
+    auto startclock = std::chrono::high_resolution_clock::now();
+
     auto                  L = _indexingQueueSize;
     std::vector<unsigned> init_ids;
     init_ids.emplace_back(_start);
@@ -1717,6 +1803,9 @@ namespace diskann {
         _query_nn[node_ctr].emplace_back(nbh.id);
       }
     }
+    auto diffclock = std::chrono::high_resolution_clock::now() - startclock;
+    std::cout << "Time for finding query nearest neighbors: "
+              << (diffclock.count() / (double) 1000000000) << "s" << std::endl;
   }
 
   template<typename T, typename TagT>
@@ -1775,7 +1864,7 @@ namespace diskann {
     }
 
     auto diffclock = std::chrono::high_resolution_clock::now() - startclock;
-    std::cout << "RobustStich time: "
+    std::cout << "RobustStitch time: "
               << (diffclock.count() / (double) 1000000000) << "s" << std::endl;
     std::cout << "Number of nodes stitched: "
               << std::accumulate(changed.begin(), changed.end(), 0)
@@ -1870,21 +1959,24 @@ namespace diskann {
       update_in_graph();  // copying values to in_graph
     }
 
-    size_t max = 0, min = SIZE_MAX, total = 0, cnt = 0;
-    for (size_t i = 0; i < _nd; i++) {
-      auto &pool = _final_graph[i];
-      max = (std::max)(max, pool.size());
-      min = (std::min)(min, pool.size());
-      total += pool.size();
-      if (pool.size() < 2)
-        cnt++;
-    }
-    diskann::cout << "Index built with degree: max:" << max
-                  << "  avg:" << (float) total / (float) (_nd + _num_frozen_pts)
-                  << "  min:" << min << "  count(deg<2):" << cnt << std::endl;
+    if(!_queries_present){
+      size_t max = 0, min = SIZE_MAX, total = 0, cnt = 0;
+      for (size_t i = 0; i < _nd; i++) {
+        auto &pool = _final_graph[i];
+        max = (std::max)(max, pool.size());
+        min = (std::min)(min, pool.size());
+        total += pool.size();
+        if (pool.size() < 2)
+          cnt++;
+      }
+      diskann::cout << "Index built with degree: max:" << max
+                    << "  avg:" << (float) total / (float) (_nd + _num_frozen_pts)
+                    << "  min:" << min << "  count(deg<2):" << cnt << std::endl;
 
-    _max_observed_degree = (std::max)((unsigned) max, _max_observed_degree);
-    _has_built = true;
+      _max_observed_degree = (std::max)((unsigned) max, _max_observed_degree);
+      _has_built = true;
+    }
+    
 
     if (_queries_present) {
       std::cout << "Beginning query index build" << std::endl;
@@ -1908,7 +2000,24 @@ namespace diskann {
 
       populate_query_nn();
       robust_stitch();
+
+      max = 0; min = SIZE_MAX; total = 0; cnt = 0;
+      for (size_t i = 0; i < _nd; i++) {
+        auto &pool = _final_graph[i];
+        max = (std::max)(max, pool.size());
+        min = (std::min)(min, pool.size());
+        total += pool.size();
+        if (pool.size() < 2)
+          cnt++;
+      }
+      diskann::cout << "Index built with degree: max:" << max
+                    << "  avg:" << (float) total / (float) (_nd + _num_frozen_pts)
+                    << "  min:" << min << "  count(deg<2):" << cnt << std::endl;
+
+      _max_observed_degree = (std::max)((unsigned) max, _max_observed_degree);
+      _has_built = true;
     }
+
   }
 
   template<typename T, typename TagT>
@@ -3259,6 +3368,7 @@ namespace diskann {
     }
 
     assert(_final_graph[location].size() <= range);
+    if(_queries_present) insert_and_stitch(location);
     if (_support_eager_delete) {
       inter_insert(location, pruned_list, 1);
     } else {

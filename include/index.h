@@ -380,6 +380,7 @@ namespace diskann {
 
     void populate_query_nn();
     void robust_stitch();
+    void insert_and_stitch(unsigned location);
 
     // WARNING: Do not call reserve_location() without acquiring change_lock_
     int  reserve_location();
