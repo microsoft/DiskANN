@@ -149,6 +149,9 @@ namespace diskann {
                                  Parameters              &parameters,
                                  const std::vector<TagT> &tags);
 
+    // Bootstrap an index with zero points for further incremental build
+    DISKANN_DLLEXPORT void build_with_zero_points();
+
     // For Bulk Index FastL2 search, we interleave the data with graph
     DISKANN_DLLEXPORT void optimize_index_layout();
 

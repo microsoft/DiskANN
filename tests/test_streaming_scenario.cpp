@@ -187,7 +187,7 @@ void build_incremental_index(
     std::cout << "Overriding num_frozen to" << num_frozen << std::endl;
   }
 
-  diskann::Index<T, TagT> index(diskann::L2, dim, max_points_to_insert + 1,
+  diskann::Index<T, TagT> index(diskann::L2, dim, max_points_to_insert,
                                 true, params, params, enable_tags,
                                 support_eager_delete, concurrent);
 
@@ -225,19 +225,8 @@ void build_incremental_index(
     index.build(data, beginning_index_size, params, tags);
     index.enable_delete();
   } else {
-    std::cout << "Adding a fake point for build() and deleting it" << std::endl;
-
-    std::vector<TagT> one_tag;
-    one_tag.push_back(UINT32_MAX);
-
-    std::vector<T> fake_coords(aligned_dim);
-    for (size_t i = 0; i < dim; i++) {
-      fake_coords[i] = i == 0 ? 1 : 0;
-    }
-
-    index.build(fake_coords.data(), 1, params, one_tag);
+    index.build_with_zero_points();
     index.enable_delete();
-    index.lazy_delete(one_tag[0]);
   }
 
   const double elapsedSeconds = timer.elapsed() / 1000000.0;
@@ -343,13 +332,12 @@ void build_incremental_index(
     if (points_to_delete_from_beginning > 0) {
       delete_from_beginning(index, params, points_to_skip,
                             points_to_delete_from_beginning);
-
-      const auto save_path_inc =
+    }
+    const auto save_path_inc =
           get_save_filename(save_path + ".after-delete-",
                             points_to_skip + points_to_delete_from_beginning,
                             last_point_threshold);
-      index.save(save_path_inc.c_str(), true);
-    }
+    index.save(save_path_inc.c_str(), true);
   }
 
   diskann::aligned_free(data);
