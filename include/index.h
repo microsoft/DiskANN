@@ -326,8 +326,9 @@ namespace diskann {
     // Create the graph, update periodically in NUM_SYNCS batches
     void link(Parameters &parameters);
 
-    int  reserve_location();
-    void release_location(int location);
+    int    reserve_location();
+    size_t release_location(int location);
+    size_t release_locations(tsl::robin_set<unsigned>& locations);
 
     // Resize the index when no slots are left for insertion.
     // MUST acquire _num_points_lock and _update_lock before calling.

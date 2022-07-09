@@ -79,11 +79,14 @@ inline void load_aligned_bin_part(const std::string& bin_file, T* data,
 }
 
 std::string get_save_filename(const std::string& save_path,
-                              size_t             points_to_skip,
-                              size_t             last_point_threshold) {
+                              size_t points_to_skip, size_t points_deleted,
+                              size_t last_point_threshold) {
   std::string final_path = save_path;
   if (points_to_skip > 0) {
-    final_path += std::to_string(points_to_skip) + "-";
+    final_path += "skip" + std::to_string(points_to_skip) + "-";
+  }
+  if (points_deleted > 0) {
+    final_path += "del" + std::to_string(points_deleted) + "-";
   }
   final_path += std::to_string(last_point_threshold);
   return final_path;
@@ -106,31 +109,35 @@ void insert_till_next_checkpoint(diskann::Index<T, TagT>& index, size_t start,
             << " per thread)\n ";
 }
 
-
 template<typename T, typename TagT>
 void delete_from_beginning(diskann::Index<T, TagT>& index,
                            diskann::Parameters&     delete_params,
                            size_t                   points_to_skip,
                            size_t points_to_delete_from_beginning) {
-  std::cout << std::endl
-            << "Lazy deleting points " << points_to_skip << " to "
-            << points_to_skip + points_to_delete_from_beginning << "... "; 
-  for (size_t i = points_to_skip;
-       i < points_to_skip + points_to_delete_from_beginning; ++i)
-    index.lazy_delete(i);
-  std::cout << "done." << std::endl;
+  try {
+    std::cout << std::endl
+              << "Lazy deleting points " << points_to_skip << " to "
+              << points_to_skip + points_to_delete_from_beginning << "... ";
+    for (size_t i = points_to_skip;
+         i < points_to_skip + points_to_delete_from_beginning; ++i)
+      index.lazy_delete(i);
+    std::cout << "done." << std::endl;
 
-  auto report = index.consolidate_deletes(delete_params);
-  std::cout << "#active points: " << report._active_points << std::endl
-            << "max points: " << report._max_points << std::endl
-            << "empty slots: " << report._empty_slots << std::endl
-            << "deletes processed: " << report._slots_released << std::endl
-            << "latest delete size: " << report._delete_set_size << std::endl
-            << "rate: (" << points_to_delete_from_beginning / report._time
-            << " points/second overall, "
-            << points_to_delete_from_beginning / report._time /
-                   delete_params.Get<unsigned>("num_threads")
-            << " per thread)" << std::endl;
+    auto report = index.consolidate_deletes(delete_params);
+    std::cout << "#active points: " << report._active_points << std::endl
+              << "max points: " << report._max_points << std::endl
+              << "empty slots: " << report._empty_slots << std::endl
+              << "deletes processed: " << report._slots_released << std::endl
+              << "latest delete size: " << report._delete_set_size << std::endl
+              << "rate: (" << points_to_delete_from_beginning / report._time
+              << " points/second overall, "
+              << points_to_delete_from_beginning / report._time /
+                     delete_params.Get<unsigned>("num_threads")
+              << " per thread)" << std::endl;
+  } catch (std::system_error& e) {
+    std::cout << "Exception caught in deletion thread: " << e.what()
+              << std::endl;
+  }
 }
 
 template<typename T>
@@ -187,8 +194,8 @@ void build_incremental_index(
     std::cout << "Overriding num_frozen to" << num_frozen << std::endl;
   }
 
-  diskann::Index<T, TagT> index(diskann::L2, dim, max_points_to_insert,
-                                true, params, params, enable_tags,
+  diskann::Index<T, TagT> index(diskann::L2, dim, max_points_to_insert, true,
+                                params, params, enable_tags,
                                 support_eager_delete, concurrent);
 
   size_t       current_point_offset = points_to_skip;
@@ -281,7 +288,9 @@ void build_incremental_index(
     delete_task.wait();
 
     std::cout << "Time Elapsed " << timer.elapsed() / 1000 << "ms\n";
-    const auto save_path_inc = save_path + ".after-concurrent-delete";
+    const auto save_path_inc = get_save_filename(
+        save_path + ".after-concurrent-delete-", points_to_skip,
+        points_to_delete_from_beginning, last_point_threshold);
     index.save(save_path_inc.c_str(), true);
 
   } else {
@@ -305,7 +314,8 @@ void build_incremental_index(
         diskann::Timer save_timer;
 
         const auto save_path_inc =
-            get_save_filename(save_path + ".inc-", points_to_skip, end);
+            get_save_filename(save_path + ".inc-", points_to_skip,
+                              points_to_delete_from_beginning, end);
         index.save(save_path_inc.c_str(), false);
         const double elapsedSeconds = save_timer.elapsed() / 1000000.0;
         const size_t points_saved = end - points_to_skip;
@@ -325,18 +335,18 @@ void build_incremental_index(
     if (checkpoints_per_snapshot >= 0 &&
         last_snapshot_points_threshold != last_point_threshold) {
       const auto save_path_inc = get_save_filename(
-          save_path + ".inc-", points_to_skip, last_point_threshold);
-      //index.save(save_path_inc.c_str(), false);
+          save_path + ".inc-", points_to_skip, points_to_delete_from_beginning,
+          last_point_threshold);
+      // index.save(save_path_inc.c_str(), false);
     }
 
     if (points_to_delete_from_beginning > 0) {
       delete_from_beginning(index, params, points_to_skip,
                             points_to_delete_from_beginning);
     }
-    const auto save_path_inc =
-          get_save_filename(save_path + ".after-delete-",
-                            points_to_skip + points_to_delete_from_beginning,
-                            last_point_threshold);
+    const auto save_path_inc = get_save_filename(
+        save_path + ".after-delete-", points_to_skip,
+        points_to_delete_from_beginning, last_point_threshold);
     index.save(save_path_inc.c_str(), true);
   }
 
@@ -382,21 +392,23 @@ int main(int argc, char** argv) {
         "Number of threads used for building index (defaults to "
         "omp_get_num_procs())");
     desc.add_options()("points_to_skip",
-                       po::value<uint64_t>(&points_to_skip)->required(), 
+                       po::value<uint64_t>(&points_to_skip)->required(),
                        "Skip these first set of points from file");
     desc.add_options()(
         "max_points_to_insert",
-        po::value<uint64_t>(&max_points_to_insert)->default_value(0), 
-        "These number of points from the file are inserted after points_to_skip");
+        po::value<uint64_t>(&max_points_to_insert)->default_value(0),
+        "These number of points from the file are inserted after "
+        "points_to_skip");
     desc.add_options()("beginning_index_size",
                        po::value<uint64_t>(&beginning_index_size)->required(),
                        "Batch build will be called on these set of points");
-    desc.add_options()("points_per_checkpoint",
-                       po::value<uint64_t>(&points_per_checkpoint)->required(),
-                       "Insertions are done in batches of points_per_checkpoint");
+    desc.add_options()(
+        "points_per_checkpoint",
+        po::value<uint64_t>(&points_per_checkpoint)->required(),
+        "Insertions are done in batches of points_per_checkpoint");
     desc.add_options()(
         "checkpoints_per_snapshot",
-        po::value<uint64_t>(&checkpoints_per_snapshot)->required(), 
+        po::value<uint64_t>(&checkpoints_per_snapshot)->required(),
         "Save the index to disk every few checkpoints");
     desc.add_options()(
         "points_to_delete_from_beginning",
