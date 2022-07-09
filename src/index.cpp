@@ -2186,9 +2186,13 @@ namespace diskann {
         modify = true;
 
         // Add outgoing links from
+        if (_conc_consolidate)
+          _locks[ngh].lock();
         for (auto j : _final_graph[ngh])
           if (old_delete_set.find(j) == old_delete_set.end())
             candidate_set.insert(j);
+        if (_conc_consolidate)
+          _locks[ngh].unlock();
       } else {
         candidate_set.insert(ngh);
       }
@@ -2220,6 +2224,8 @@ namespace diskann {
   template<typename T, typename TagT>
   consolidation_report Index<T, TagT>::consolidate_deletes(
       const Parameters &params) {
+    diskann::cout << "Starting consolidate_deletes... ";
+
     if (!_enable_tags)
       throw diskann::ANNException("Point tag array not instantiated", -1,
                                   __FUNCSIG__, __FILE__, __LINE__);
@@ -2228,25 +2234,33 @@ namespace diskann {
       throw ANNException("Can not consolidates eager deletes.", -1, __FUNCSIG__,
                          __FILE__, __LINE__);
 
-    if (_tag_to_location.size() + _delete_set.size() != _nd) {
-      throw diskann::ANNException(
-          "Tags to points array wrong sized, _tag_to_location.size():  " +
-              std::to_string(_tag_to_location.size()) +
-              "  _delete_set.size():  " + std::to_string(_delete_set.size()) +
-              "  _nd:  " + std::to_string(_nd),
-          -1, __FUNCSIG__, __FILE__, __LINE__);
-    }
+    {
+      LockGuard guard(_num_points_lock);
+      if (_empty_slots.size() + _nd != _max_points) {
+        std::string err = "#empty slots + nd != max points";
+        diskann::cerr << err << std::endl;
+        throw ANNException(err, -1, __FUNCSIG__, __FILE__, __LINE__);
+      }
 
-    if (_location_to_tag.size() + _delete_set.size() != _nd) {
-      throw diskann::ANNException(
-          "Points to tags array wrong sized, _location_to_tag.size(): " +
-              std::to_string(_location_to_tag.size()) +
-              "  _delete_set.size():  " + std::to_string(_delete_set.size()) +
-              "  _nd:  " + std::to_string(_nd),
-          -1, __FUNCSIG__, __FILE__, __LINE__);
-    }
+      {
+        std::shared_lock<std::shared_timed_mutex> tl(_tag_lock);
+        std::shared_lock<std::shared_timed_mutex> dl(_delete_lock);
+        if (_location_to_tag.size() + _delete_set.size() != _nd) {
+          std::stringstream err;
+          err << "Error: _location_to_tag.size (" << _location_to_tag.size()
+              << ")  + _delete_set.size (" << _delete_set.size() << ") != _nd("
+              << _nd << ")";
+          diskann::cerr << err.str() << std::endl;
+          throw diskann::ANNException(err.str(), -1, __FUNCSIG__, __FILE__,
+                                      __LINE__);
+        }
 
-    diskann::cout << "Consolidating deletes... ";
+        if (_location_to_tag.size() != _tag_to_location.size())
+          throw diskann::ANNException(
+              "_location_to_tag and _tag_to_location not of same size", -1,
+              __FUNCSIG__, __FILE__, __LINE__);
+      }
+    }
 
     std::unique_lock<std::shared_timed_mutex> update_lock(_update_lock,
                                                           std::defer_lock);
@@ -2255,15 +2269,12 @@ namespace diskann {
 
     bool expected_consolidate_value = false;
     if (_consolidate_active.compare_exchange_strong(expected_consolidate_value,
-                                                    true) == false)
+                                                    true) == false) {
       throw ANNException(
           "Attenpting to run consolidation while another consolidation "
           "instance is active",
           -1, __FUNCSIG__, __FILE__, __LINE__);
-
-    assert(_enable_tags);
-    assert(_delete_set.size() <= _nd);
-    assert(_empty_slots.size() + _nd == _max_points);
+    }
 
     tsl::robin_set<unsigned> old_delete_set;
     {
@@ -2278,12 +2289,12 @@ namespace diskann {
                                      ? omp_get_num_threads()
                                      : params.Get<unsigned>("num_threads");
 
+    diskann::cout << "Starting to process dangling edges... " << std::endl;
     diskann::Timer timer;
 #pragma omp parallel for num_threads(num_threads) schedule(dynamic, 8192)
-    for (_s64 loc = 0; loc < (_s64)(_max_points + _num_frozen_pts); loc++) {
-      if ((old_delete_set.find((_u32) loc) == old_delete_set.end()) &&
-          (loc >= (_s64) _max_points ||
-           not _empty_slots.is_in_set((_u32) loc))) {
+    for (_s64 loc = 0; loc < (_s64) _max_points; loc++) {
+      if (old_delete_set.find((_u32) loc) == old_delete_set.end() &&
+          not _empty_slots.is_in_set((_u32) loc)) {
         if (_conc_consolidate) {
           std::unique_lock<std::mutex> adj_list_lock(_locks[loc]);
           process_delete(old_delete_set, loc, range, maxc, alpha);
@@ -2292,26 +2303,20 @@ namespace diskann {
         }
       }
     }
-
+    for (_s64 loc = _max_points; loc < (_s64)(_max_points + _num_frozen_pts);
+         loc++) {
+      std::unique_lock<std::mutex> adj_list_lock(_locks[loc]);
+      process_delete(old_delete_set, loc, range, maxc, alpha);
+    }
     if (_support_eager_delete)
       update_in_graph();
+    diskann::cout << "done with dangling edges." << std::endl;
 
-    if (_conc_consolidate) {
-      LockGuard guard(_num_points_lock);
-      for (auto iter : old_delete_set)
-        _empty_slots.insert(iter);
-    } else {
-      for (auto iter : old_delete_set)
-        _empty_slots.insert(iter);
+    size_t ret_nd = release_locations(old_delete_set);
+    diskann::cout << "Returned empty slots and updated nd." << std::endl;
+
+    if (!_conc_consolidate) {
       update_lock.unlock();
-    }
-
-    size_t ret_nd;
-    {
-      LockGuard guard(_num_points_lock);
-      _nd -= old_delete_set.size();
-      ret_nd = _nd;
-      old_delete_set.clear();
     }
 
     expected_consolidate_value = true;
@@ -2387,8 +2392,10 @@ namespace diskann {
 
     if (_delete_set.size() > 0) {
       throw ANNException(
-          "Can not compact data before lazy deletes are consolidated", -1,
-          __FUNCSIG__, __FILE__, __LINE__);
+          "Can not compact data when index has non-trivial _delete_set of "
+          "size: " +
+              std::to_string(_delete_set.size()),
+          -1, __FUNCSIG__, __FILE__, __LINE__);
     }
 
     diskann::Timer timer;
@@ -2532,7 +2539,7 @@ namespace diskann {
   }
 
   template<typename T, typename TagT>
-  void Index<T, TagT>::release_location(int location) {
+  size_t Index<T, TagT>::release_location(int location) {
     LockGuard guard(_num_points_lock);
 
     if (_empty_slots.is_in_set(location))
@@ -2542,6 +2549,29 @@ namespace diskann {
     _empty_slots.insert(location);
 
     _nd--;
+    return _nd;
+  }
+
+  template<typename T, typename TagT>
+  size_t Index<T, TagT>::release_locations(
+      tsl::robin_set<unsigned> &locations) {
+    LockGuard guard(_num_points_lock);
+
+    for (auto location : locations) {
+      if (_empty_slots.is_in_set(location))
+        throw ANNException(
+            "Trying to release location, but location already in empty slots",
+            -1, __FUNCSIG__, __FILE__, __LINE__);
+      _empty_slots.insert(location);
+
+      _nd--;
+    }
+
+    if (_empty_slots.size() + _nd != _max_points)
+      throw ANNException("#empty slots + nd != max points", -1, __FUNCSIG__,
+                         __FILE__, __LINE__);
+
+    return _nd;
   }
 
   template<typename T, typename TagT>
@@ -2731,18 +2761,29 @@ namespace diskann {
     }
 
     {
+      std::shared_lock<std::shared_timed_mutex> tlock(_tag_lock,
+                                                      std::defer_lock);
+      if (_conc_consolidate)
+        tlock.lock();
+
       LockGuard guard(_locks[location]);
       _final_graph[location].clear();
       _final_graph[location].shrink_to_fit();
       _final_graph[location].reserve((_u64)(range * GRAPH_SLACK_FACTOR * 1.05));
 
       for (auto link : pruned_list) {
+        if (_conc_consolidate)
+          if (_location_to_tag.find(link) == _location_to_tag.end())
+            continue;
         _final_graph[location].emplace_back(link);
         if (_support_eager_delete) {
           LockGuard guard(_locks_in[link]);
           _in_graph[link].emplace_back(location);
         }
       }
+
+      if (_conc_consolidate)
+        tlock.unlock();
     }
 
     assert(_final_graph[location].size() <= range);
