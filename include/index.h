@@ -380,11 +380,12 @@ namespace diskann {
                        size_t &num_frozen_pts, size_t &max_points,
                        const int version);
 
-    void populate_query_nn(tsl::robin_set<unsigned> delete_set, bool from_empty = false);
+    void populate_query_nn();
     void robust_stitch(); 
     void robust_stitch(tsl::robin_set<unsigned> pruned_nodes); 
 
     std::vector<double> insert_and_stitch(unsigned location);
+    void erase_query_nn(tsl::robin_set<unsigned> delete_set);
 
     // WARNING: Do not call reserve_location() without acquiring change_lock_
     int  reserve_location();

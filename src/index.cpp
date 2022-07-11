@@ -1788,26 +1788,48 @@ namespace diskann {
     return times; 
   }
 
-
+  template<typename T, typename TagT>
+  void Index<T, TagT>::erase_query_nn(tsl::robin_set<unsigned> delete_set){
+#pragma omp parallel for schedule(dynamic)
+    for (_s64 node_ctr = (_s64) 0; node_ctr < (_s64) _max_query_points;
+         ++node_ctr) {
+      std::vector<Neighbor> new_pool;
+      {
+        LockGuard guard(_query_nn_locks[node_ctr]);
+        for(auto nbor : _query_nn[node_ctr]){
+          if(delete_set.find(nbor.id) == delete_set.end()){
+            new_pool.push_back(nbor);
+          }
+        }
+        if(new_pool.size() != _indexingRange){
+          while(new_pool.size() != _indexingRange){
+            new_pool.push_back(Neighbor(0, std::numeric_limits<float>::max(), false));
+          }
+          _query_nn[node_ctr].clear();
+          for(size_t i=0; i<_indexingRange; i++){
+            _query_nn[node_ctr][i] = new_pool[i];
+          }
+        }
+      }
+    }
+  }
 
 
   // find the nearest neighbors in _final_graph of every point in _query_graph
   // and add them to the _query_nn field
   template<typename T, typename TagT>
-  void Index<T, TagT>::populate_query_nn(tsl::robin_set<unsigned> delete_set, bool from_empty) {
+  void Index<T, TagT>::populate_query_nn() {
     std::cout << "Finding nearest neighbors of query nodes... " << std::endl; 
 
     diskann::Timer query_timer;
 
-    if(from_empty){
 #pragma omp parallel for schedule(dynamic)
       for (_s64 node_ctr = (_s64) 0; node_ctr < (_s64) _max_query_points;
            ++node_ctr) {
-        _query_nn[node_ctr].reserve(_indexingRange+1);
+        _query_nn[node_ctr].reserve(_indexingRange*2+1);
       }
-    }
 
-    auto                  L = _indexingQueueSize;
+    auto                  L = _indexingQueueSize*2;
     std::vector<unsigned> init_ids;
     init_ids.emplace_back(_start);
 #pragma omp parallel for schedule(dynamic)
@@ -1829,21 +1851,11 @@ namespace diskann {
                              best_L_nodes, des, inserted_into_pool_rs,
                              inserted_into_pool_bs);
 
-      if(_query_nn[node_ctr].empty() == false){
-        for(Neighbor nbor : _query_nn[node_ctr]){
-          //calculate distances and insert into pool
-          unsigned nbh = nbor.id;
-          if (visited.find(nbh) == visited.end() &&
-                delete_set.find(nbh) == delete_set.end()) {
-            pool.emplace_back(nbor);
-          }
-        }
-      }
       std::sort(pool.begin(), pool.end());
       size_t k = pool.size();
-      if(k < _indexingRange){
-        pool.resize(_indexingRange);
-        for(size_t j=k; j<_indexingRange; j++){
+      if(k < _indexingRange*2){
+        pool.resize(_indexingRange*2);
+        for(size_t j=k; j<_indexingRange*2; j++){
           pool[j].distance = std::numeric_limits<float>::max();
         }
       }
@@ -2122,9 +2134,9 @@ namespace diskann {
       _max_observed_qdegree = (std::max)((unsigned) max, _max_observed_qdegree);
 
 
-      tsl::robin_set<unsigned> dummy_set; 
-      bool from_empty = true;
-      populate_query_nn(dummy_set, from_empty);
+      // tsl::robin_set<unsigned> dummy_set; 
+      // bool from_empty = true;
+      populate_query_nn();
       robust_stitch();
 
       max = 0; min = SIZE_MAX; total = 0; cnt = 0;
@@ -2922,6 +2934,7 @@ namespace diskann {
               (old_delete_set.find(j.id) == old_delete_set.end()))
             _final_graph[(_u32) i].push_back(j.id);
         }
+        if(_queries_present) insert_and_stitch((_u32) i);
       }
     }
     return std::make_pair(modify, prune);
@@ -3017,6 +3030,8 @@ namespace diskann {
           << std::endl;
       delete_policy = 1;
     }
+
+    if(_queries_present) erase_query_nn(old_delete_set);
 
     auto start = std::chrono::high_resolution_clock::now();
 #pragma omp parallel for num_threads(num_threads) schedule(dynamic)
@@ -3527,8 +3542,8 @@ namespace diskann {
 
   template<typename T, typename TagT>
   int Index<T, TagT>::cleanup(){
-    tsl::robin_set<unsigned> dummy_set;
-    populate_query_nn(dummy_set);
+    // tsl::robin_set<unsigned> dummy_set;
+    populate_query_nn();
     robust_stitch();
     return 0;
   }
