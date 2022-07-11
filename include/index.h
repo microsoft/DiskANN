@@ -233,6 +233,8 @@ namespace diskann {
     DISKANN_DLLEXPORT void compact_frozen_point();
     DISKANN_DLLEXPORT void compact_data_for_search();
 
+    DISKANN_DLLEXPORT int cleanup();
+
     DISKANN_DLLEXPORT void consolidate(Parameters &parameters);
 
     // DISKANN_DLLEXPORT void save_index_as_one_file(bool flag);
@@ -364,10 +366,10 @@ namespace diskann {
       std::vector<unsigned> &need_to_sync, size_t& max_points, size_t& num_frozen_pts, std::vector<std::mutex> &locks, std::vector<std::vector<unsigned>> &final_graph);
 
     // add reverse links from all the visited nodes to node n.
-    void inter_insert(unsigned n, std::vector<unsigned> &pruned_list,
+    int inter_insert(unsigned n, std::vector<unsigned> &pruned_list,
                       const _u32 range, bool update_in_graph);
 
-    void inter_insert(unsigned n, std::vector<unsigned> &pruned_list,
+    int inter_insert(unsigned n, std::vector<unsigned> &pruned_list,
                       bool update_in_graph);
 
     // Create the graph, update periodically in NUM_SYNCS batches
@@ -378,8 +380,10 @@ namespace diskann {
                        size_t &num_frozen_pts, size_t &max_points,
                        const int version);
 
-    void populate_query_nn();
-    void robust_stitch();
+    void populate_query_nn(tsl::robin_set<unsigned> delete_set, bool from_empty = false);
+    void robust_stitch(); 
+    void robust_stitch(tsl::robin_set<unsigned> pruned_nodes); 
+
     void insert_and_stitch(unsigned location);
 
     // WARNING: Do not call reserve_location() without acquiring change_lock_
@@ -426,7 +430,7 @@ namespace diskann {
     // Query graph data structures
     T *                                _query_data = nullptr;
     std::vector<std::vector<unsigned>> _query_graph;
-    std::vector<std::vector<unsigned>> _query_nn;
+    std::vector<std::vector<Neighbor>> _query_nn;     
 
     // Dimensions
     size_t _dim = 0;
@@ -465,6 +469,7 @@ namespace diskann {
     std::unordered_map<TagT, unsigned> _tag_to_location;
     std::unordered_map<unsigned, TagT> _location_to_tag;
 
+    tsl::robin_set<unsigned> _stitch_set;
     tsl::robin_set<unsigned> _delete_set;
     tsl::robin_set<unsigned> _empty_slots;
 
@@ -491,6 +496,7 @@ namespace diskann {
 
     std::mutex _num_points_lock;  // Lock to synchronously modify _nd
 
+    std::mutex _stitch_lock; // lock for _stitch_set
     std::shared_timed_mutex
         _tag_lock;  // RW lock for _tag_to_location and _location_to_tag
     std::shared_timed_mutex

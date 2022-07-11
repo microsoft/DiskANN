@@ -83,18 +83,25 @@ void build_with_query_data(const std::string& data_path, const unsigned L,
 
   index.build(data_load, num_initial_points, paras, tags, query_load, num_query_points);
 
-  std::cout << "Inserting " << num_initial_points << " points into the index" << std::endl;
+  std::cout << "Inserting " << num_points - num_initial_points << " points into the index" << std::endl;
 
   diskann::Timer index_timer;
 
+  std::vector<int> num_pruned(num_points - num_initial_points, 0);
+
 #pragma omp parallel for num_threads(thread_count) schedule(dynamic)
   for (int64_t j = num_initial_points; j < (int64_t) num_points; j++) {
-    index.insert_point(&data_load[j * aligned_dim], static_cast<TagT>(j));
+    // if(j%10000 == 0) std::cout << "Next 10000 points inserted" << std::endl; 
+    // std::cout << j << std::endl; 
+    num_pruned[j - num_initial_points] = index.insert_point(&data_load[j * aligned_dim], static_cast<TagT>(j));
   }
+
+  // index.cleanup();
 
   double seconds = index_timer.elapsed() / 1000000.0;
 
   std::cout << "Inserted points in " << seconds << " seconds" << std::endl;
+  std::cout << "Total number of prunes: " << std::accumulate(num_pruned.begin(), num_pruned.end(), 0) << std::endl; 
 
   index.save(save_path.c_str());
 }

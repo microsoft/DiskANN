@@ -77,14 +77,17 @@ void build_from_inserts(const std::string& data_path, const unsigned L,
 
   diskann::Timer index_timer;
 
+  std::vector<int> num_pruned(num_points - 1, 0);
+
 #pragma omp parallel for num_threads(thread_count) schedule(dynamic)
   for (int64_t j = 1; j < (int64_t) num_points; j++) {
-    index.insert_point(&data_load[j * aligned_dim], static_cast<TagT>(j));
+    num_pruned[j-1] = index.insert_point(&data_load[j * aligned_dim], static_cast<TagT>(j));
   }
 
   double seconds = index_timer.elapsed() / 1000000.0;
 
   std::cout << "Inserted points in " << seconds << " seconds" << std::endl;
+  std::cout << "Total number of prunes: " << std::accumulate(num_pruned.begin(), num_pruned.end(), 0) << std::endl; 
 
   index.save(save_path.c_str());
   
