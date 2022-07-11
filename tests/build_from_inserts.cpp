@@ -81,7 +81,7 @@ void build_from_inserts(const std::string& data_path, const unsigned L,
 
 #pragma omp parallel for num_threads(thread_count) schedule(dynamic)
   for (int64_t j = 1; j < (int64_t) num_points; j++) {
-    num_pruned[j-1] = index.insert_point(&data_load[j * aligned_dim], static_cast<TagT>(j));
+    num_pruned[j-1] = index.insert_point(&data_load[j * aligned_dim], static_cast<TagT>(j)).first;
   }
 
   double seconds = index_timer.elapsed() / 1000000.0;

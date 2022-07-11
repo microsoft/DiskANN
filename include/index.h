@@ -188,7 +188,7 @@ namespace diskann {
     DISKANN_DLLEXPORT void clear_index();
 
     // Will fail if tag already in the index
-    DISKANN_DLLEXPORT int insert_point(const T *point, const TagT tag);
+    DISKANN_DLLEXPORT std::pair<int, std::vector<double>>  insert_point(const T *point, const TagT tag);
 
     // call this before issuing deleteions to sets relevant flags
     DISKANN_DLLEXPORT int enable_delete();
@@ -366,10 +366,10 @@ namespace diskann {
       std::vector<unsigned> &need_to_sync, size_t& max_points, size_t& num_frozen_pts, std::vector<std::mutex> &locks, std::vector<std::vector<unsigned>> &final_graph);
 
     // add reverse links from all the visited nodes to node n.
-    int inter_insert(unsigned n, std::vector<unsigned> &pruned_list,
+    std::pair<int, std::vector<double>>  inter_insert(unsigned n, std::vector<unsigned> &pruned_list,
                       const _u32 range, bool update_in_graph);
 
-    int inter_insert(unsigned n, std::vector<unsigned> &pruned_list,
+    std::pair<int, std::vector<double>>  inter_insert(unsigned n, std::vector<unsigned> &pruned_list,
                       bool update_in_graph);
 
     // Create the graph, update periodically in NUM_SYNCS batches
@@ -384,7 +384,7 @@ namespace diskann {
     void robust_stitch(); 
     void robust_stitch(tsl::robin_set<unsigned> pruned_nodes); 
 
-    void insert_and_stitch(unsigned location);
+    std::vector<double> insert_and_stitch(unsigned location);
 
     // WARNING: Do not call reserve_location() without acquiring change_lock_
     int  reserve_location();

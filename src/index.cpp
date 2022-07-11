@@ -1347,9 +1347,11 @@ namespace diskann {
   }
 
   template<typename T, typename TagT>
-  int Index<T, TagT>::inter_insert(unsigned               n,
+  std::pair<int, std::vector<double>> Index<T, TagT>::inter_insert(unsigned               n,
                                     std::vector<unsigned> &pruned_list,
                                     const _u32 range, bool update_in_graph) {
+    std::vector<double> stitch_times(3, 0.0);
+
     const auto &src_pool = pruned_list;
 
     assert(!src_pool.empty());
@@ -1431,19 +1433,18 @@ namespace diskann {
           }
         }
         if(_queries_present){
-          insert_and_stitch(des);
-          // {
-          //   LockGuard guard(_stitch_lock);
-          //   _stitch_set.insert(des);
-          // }
+          auto times = insert_and_stitch(des);
+          stitch_times[0] += times[0];
+          stitch_times[1] += times[1];
+          stitch_times[2] += times[2];
         }
       }
     }
-    return num_pruned;
+    return std::make_pair(num_pruned, stitch_times);
   }
 
   template<typename T, typename TagT>
-  int Index<T, TagT>::inter_insert(unsigned               n,
+  std::pair<int, std::vector<double>> Index<T, TagT>::inter_insert(unsigned               n,
                                     std::vector<unsigned> &pruned_list,
                                     bool                   update_in_graph) {
     return inter_insert(n, pruned_list, _indexingRange, update_in_graph);
@@ -1698,9 +1699,11 @@ namespace diskann {
   // find the nearest neighbors in _final_graph of every point in _query_graph
   // and add them to the _query_nn field
   template<typename T, typename TagT>
-  void Index<T, TagT>::insert_and_stitch(unsigned location) {
+  std::vector<double> Index<T, TagT>::insert_and_stitch(unsigned location) {
 
-    auto                  L = _indexingQueueSize;
+    std::vector<double> times(3);
+
+    auto                  L = _indexingQueueSize/2;
     std::vector<unsigned> init_ids;
     init_ids.emplace_back(_query_start);
     tsl::robin_set<unsigned> visited;
@@ -1717,12 +1720,21 @@ namespace diskann {
 
     int version = 1; //flag to search in query graph
 
+    diskann::Timer search_timer;
+
     iterate_to_fixed_point(node_coords, L, init_ids, pool, visited,
                            best_L_nodes, des, inserted_into_pool_rs,
                            inserted_into_pool_bs, true, false, version);
+
+    double search_time = search_timer.elapsed() / 1000000.0;
+    times[0] = search_time;
     // find the notes in _query_nn that should be updated to include location
+
+    diskann::Timer update_timer;
+
     std::vector<unsigned> to_stitch;
-    for(auto nbh : visited){
+    for(auto nbor : best_L_nodes){
+      unsigned nbh = nbor.id; 
       { 
         assert(nbh <= _max_query_points);
         LockGuard guard(_query_nn_locks[nbh]);
@@ -1740,7 +1752,12 @@ namespace diskann {
       }
     } 
 
+    double update_time = update_timer.elapsed() / 1000000.0;
+    times[1] = update_time;
+
     // robustStitch location based on the nodes in to_stitch
+
+    diskann::Timer stitch_timer; 
 
     size_t total_capacity = _indexingRange - _final_graph[location].size();
     size_t capacity;
@@ -1766,6 +1783,9 @@ namespace diskann {
         }
       } 
     }
+    double stitch_time = stitch_timer.elapsed() / 1000000.0;
+    times[2] = stitch_time;
+    return times; 
   }
 
 
@@ -3367,8 +3387,10 @@ namespace diskann {
   }
 
   template<typename T, typename TagT>
-  int Index<T, TagT>::insert_point(const T *point, const TagT tag) {
+  std::pair<int, std::vector<double>> Index<T, TagT>::insert_point(const T *point, const TagT tag) {
     assert(_has_built);
+
+    std::vector<double> stitch_times(3, 0.0);
 
     std::shared_lock<std::shared_timed_mutex> update_lock(_update_lock);
 
@@ -3386,7 +3408,7 @@ namespace diskann {
       std::shared_lock<std::shared_timed_mutex> tsl(_tag_lock);
       if (_enable_tags &&
           (_tag_to_location.find(tag) != _tag_to_location.end())) {
-        return -1;
+        abort();
       }
     }
 
@@ -3480,31 +3502,27 @@ namespace diskann {
       }
     }
 
+    std::vector<double> times;
     assert(_final_graph[location].size() <= range);
     if (_support_eager_delete) {
-      num_pruned = inter_insert(location, pruned_list, 1);
+      auto pair = inter_insert(location, pruned_list, 1);
+      num_pruned = pair.first;
+      times = pair.second;
     } else {
-      num_pruned = inter_insert(location, pruned_list, 0);
+      auto pair = inter_insert(location, pruned_list, 0);
+      num_pruned = pair.first;
+      times = pair.second;
     }
-    // if(_queries_present){
-    //   bool run = false;
-    //   tsl::robin_set<unsigned> old_stitch_set;
-    //   {
-    //     LockGuard guard(_stitch_lock);
-    //     _stitch_set.insert(location);
-    //     if(_stitch_set.size() >= 50000){
-    //       _stitch_set.swap(old_stitch_set);
-    //       run = true;
-    //     }
-    //   }
-    //   if(run){
-    //     tsl::robin_set<unsigned> dummy_set;
-    //     populate_query_nn(dummy_set);
-    //     robust_stitch(old_stitch_set);
-    //   } 
-    // }
-    if(_queries_present) insert_and_stitch(location);
-    return num_pruned;
+    stitch_times[0] += times[0];
+    stitch_times[1] += times[1];
+    stitch_times[2] += times[2];
+    if(_queries_present){
+      auto Times = insert_and_stitch(location);
+      stitch_times[0] += Times[0];
+      stitch_times[1] += Times[1];
+      stitch_times[2] += Times[2];
+    } 
+    return std::make_pair(num_pruned, times);
   }
 
   template<typename T, typename TagT>
