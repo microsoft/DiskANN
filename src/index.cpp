@@ -2210,11 +2210,14 @@ namespace diskann {
       std::sort(expanded_nghrs.begin(), expanded_nghrs.end());
       occlude_list(expanded_nghrs, alpha, range, maxc, result);
 
-      _final_graph[(_u32) i].clear();
-      for (auto j : result) {
-        if (j.id != (_u32) i &&
-            (old_delete_set.find(j.id) == old_delete_set.end()))
-          _final_graph[(_u32) i].push_back(j.id);
+      {
+        _final_graph[i].clear();
+
+        for (auto j : result) {
+          if (j.id != (_u32) i &&
+              (old_delete_set.find(j.id) == old_delete_set.end()))
+            _final_graph[(_u32) i].push_back(j.id);
+        }
       }
     }
   }
@@ -2438,32 +2441,24 @@ namespace diskann {
       }
     }
 
+    size_t num_dangling = 0;
     for (unsigned old = 0; old < _max_points + _num_frozen_pts; ++old) {
       if ((new_location[old] < _max_points)  // If point continues to exist
           || (old >= _max_points && old < _max_points + _num_frozen_pts)) {
         for (size_t i = 0; i < _final_graph[old].size(); ++i) {
-          if (new_location[_final_graph[old][i]] > _final_graph[old][i] &&
-              (_final_graph[old][i] < _max_points ||
-               _final_graph[old][i] > _max_points + _num_frozen_pts)) {
-            std::stringstream sstream;
-            sstream << "Error in compact_data(). _final_graph[" << old << "]["
-                    << i << "] = " << _final_graph[old][i]
-                    << " has new location "
-                    << new_location[_final_graph[old][i]]
-                    << " that is greater than its old location." << std::endl;
-            throw diskann::ANNException(sstream.str(), -1, __FUNCSIG__,
-                                        __FILE__, __LINE__);
-          }
           if (empty_locations.find(_final_graph[old][i]) !=
               empty_locations.end()) {
+            ++num_dangling;
             std::stringstream sstream;
             sstream << "Error in compact_data(). _final_graph[" << old << "]["
                     << i << "] = " << _final_graph[old][i]
-                    << " which is a blank location." << std::endl;
-            throw diskann::ANNException(sstream.str(), -1, __FUNCSIG__,
-                                        __FILE__, __LINE__);
+                    << " which is a location not associated with any tag.";
+            diskann::cerr << sstream.str() << std::endl;
+            // throw diskann::ANNException(sstream.str(), -1, __FUNCSIG__,
+            //                            __FILE__, __LINE__);
+          } else {
+            _final_graph[old][i] = new_location[_final_graph[old][i]];
           }
-          _final_graph[old][i] = new_location[_final_graph[old][i]];
         }
 
         if (_support_eager_delete)
@@ -2486,6 +2481,8 @@ namespace diskann {
         _final_graph[old].clear();
       }
     }
+    diskann::cerr << "#dangling references after data compaction: "
+                  << num_dangling << std::endl;
 
     _tag_to_location.clear();
     for (auto iter : _location_to_tag) {
