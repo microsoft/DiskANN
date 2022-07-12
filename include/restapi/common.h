@@ -13,5 +13,5 @@ namespace diskann {
                            TAGS_KEY = "tags", QUERY_ID_KEY = "query_id",
                            ERROR_MESSAGE_KEY = "error", L_KEY = "Ls",
                            TIME_TAKEN_KEY = "time_taken_in_us",
-                           PARTITION_KEY = "partition";
+                           PARTITION_KEY = "partition", UNKNOWN_ERROR = "unknown_error";
 }  // namespace diskann
