@@ -1419,12 +1419,12 @@ namespace diskann {
             }
           }
         }
-        if(_queries_present){
-          auto times = insert_and_stitch(des);
-          stitch_times[0] += times[0];
-          stitch_times[1] += times[1];
-          stitch_times[2] += times[2];
-        }
+        // if(_queries_present){
+        //   auto times = insert_and_stitch(des);
+        //   stitch_times[0] += times[0];
+        //   stitch_times[1] += times[1];
+        //   stitch_times[2] += times[2];
+        // }
       }
     }
     return std::make_pair(num_pruned, stitch_times);
@@ -1757,7 +1757,8 @@ namespace diskann {
         LockGuard guard(_locks[location]);
         while (c < (int) capacity &&
                j < (int) _query_nn[query_ctr].size() &&
-               _final_graph[location].size() < _indexingRange) {
+               _final_graph[location].size() < _indexingRange &&
+               _query_nn[query_ctr][j].distance != std::numeric_limits<float>::max()) {
           auto candidate = _query_nn[query_ctr][j].id;
           assert(candidate < _max_points + _num_frozen_pts);
           if (candidate != location &&
@@ -2921,7 +2922,7 @@ namespace diskann {
               (old_delete_set.find(j.id) == old_delete_set.end()))
             _final_graph[(_u32) i].push_back(j.id);
         }
-        if(_queries_present) insert_and_stitch((_u32) i);
+        // if(_queries_present) insert_and_stitch((_u32) i);
       }
     }
     return std::make_pair(modify, prune);
