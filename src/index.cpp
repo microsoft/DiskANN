@@ -653,7 +653,7 @@ namespace diskann {
 #endif
     _num_points_lock.lock();
 
-    size_t tags_file_num_pts = 0, flags_file_num_pts = 0, graph_num_pts = 0,
+    size_t tags_file_num_pts = 0, graph_num_pts = 0,
            data_file_num_pts = 0;
 
     if (!_save_as_one_file) {
@@ -687,19 +687,6 @@ namespace diskann {
              << " points from datafile, " << graph_num_pts
              << " from graph, and " << tags_file_num_pts
              << " tags, with num_frozen_pts being set to " << _num_frozen_pts
-             << " in constructor." << std::endl;
-      diskann::cerr << stream.str() << std::endl;
-      aligned_free(_data);
-      throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
-                                  __LINE__);
-    }
-
-    if (_queries_present && flags_file_num_pts != tags_file_num_pts) {
-      std::stringstream stream;
-      stream << "ERROR: When loading index, loaded " << tags_file_num_pts
-             << " points from tag file, " << graph_num_pts
-             << " from graph, and " << flags_file_num_pts
-             << " flags, with num_frozen_pts being set to " << _num_frozen_pts
              << " in constructor." << std::endl;
       diskann::cerr << stream.str() << std::endl;
       aligned_free(_data);
@@ -1789,7 +1776,7 @@ namespace diskann {
   }
 
   template<typename T, typename TagT>
-  void Index<T, TagT>::erase_query_nn(tsl::robin_set<unsigned> delete_set){
+  void Index<T, TagT>::erase_query_nn(tsl::robin_set<unsigned> &delete_set){
 #pragma omp parallel for schedule(dynamic)
     for (_s64 node_ctr = (_s64) 0; node_ctr < (_s64) _max_query_points;
          ++node_ctr) {
@@ -1801,17 +1788,17 @@ namespace diskann {
             new_pool.push_back(nbor);
           }
         }
-        if(new_pool.size() != _indexingRange){
-          while(new_pool.size() != _indexingRange){
-            new_pool.push_back(Neighbor(0, std::numeric_limits<float>::max(), false));
+        if(new_pool.size() != _indexingRange*2){
+          size_t k = new_pool.size();
+          new_pool.resize(_indexingRange*2);
+          for(size_t j = k; j<_indexingRange*2; j++){
+            new_pool[j].distance = std::numeric_limits<float>::max();
           }
-          _query_nn[node_ctr].clear();
-          for(size_t i=0; i<_indexingRange; i++){
-            _query_nn[node_ctr][i] = new_pool[i];
-          }
+          _query_nn[node_ctr] = new_pool;
         }
       }
     }
+    // return;
   }
 
 
@@ -3031,7 +3018,11 @@ namespace diskann {
       delete_policy = 1;
     }
 
-    if(_queries_present) erase_query_nn(old_delete_set);
+    if(_queries_present){
+      std::cout << "Removing deleted nodes from query_nn ... ";
+      erase_query_nn(old_delete_set);
+      std::cout << " done" << std::endl; 
+    } 
 
     auto start = std::chrono::high_resolution_clock::now();
 #pragma omp parallel for num_threads(num_threads) schedule(dynamic)

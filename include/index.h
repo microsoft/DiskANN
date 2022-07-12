@@ -385,7 +385,7 @@ namespace diskann {
     void robust_stitch(tsl::robin_set<unsigned> pruned_nodes); 
 
     std::vector<double> insert_and_stitch(unsigned location);
-    void erase_query_nn(tsl::robin_set<unsigned> delete_set);
+    void erase_query_nn(tsl::robin_set<unsigned> &delete_set);
 
     // WARNING: Do not call reserve_location() without acquiring change_lock_
     int  reserve_location();
