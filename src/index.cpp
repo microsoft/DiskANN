@@ -1690,7 +1690,7 @@ namespace diskann {
 
     std::vector<double> times(3);
 
-    auto                  L = _indexingQueueSize/2;
+    auto                  L = _indexingQueueSize;
     std::vector<unsigned> init_ids;
     init_ids.emplace_back(_query_start);
     tsl::robin_set<unsigned> visited;
@@ -1788,10 +1788,10 @@ namespace diskann {
             new_pool.push_back(nbor);
           }
         }
-        if(new_pool.size() != _indexingRange*2){
+        if(new_pool.size() != _indexingRange){
           size_t k = new_pool.size();
-          new_pool.resize(_indexingRange*2);
-          for(size_t j = k; j<_indexingRange*2; j++){
+          new_pool.resize(_indexingRange);
+          for(size_t j = k; j<_indexingRange; j++){
             new_pool[j].distance = std::numeric_limits<float>::max();
           }
           _query_nn[node_ctr] = new_pool;
@@ -1813,10 +1813,10 @@ namespace diskann {
 #pragma omp parallel for schedule(dynamic)
       for (_s64 node_ctr = (_s64) 0; node_ctr < (_s64) _max_query_points;
            ++node_ctr) {
-        _query_nn[node_ctr].reserve(_indexingRange*2+1);
+        _query_nn[node_ctr].reserve(_indexingRange+1);
       }
 
-    auto                  L = _indexingQueueSize*2;
+    auto                  L = _indexingQueueSize;
     std::vector<unsigned> init_ids;
     init_ids.emplace_back(_start);
 #pragma omp parallel for schedule(dynamic)
@@ -1840,9 +1840,9 @@ namespace diskann {
 
       std::sort(pool.begin(), pool.end());
       size_t k = pool.size();
-      if(k < _indexingRange*2){
-        pool.resize(_indexingRange*2);
-        for(size_t j=k; j<_indexingRange*2; j++){
+      if(k < _indexingRange){
+        pool.resize(_indexingRange);
+        for(size_t j=k; j<_indexingRange; j++){
           pool[j].distance = std::numeric_limits<float>::max();
         }
       }
