@@ -167,6 +167,11 @@ namespace diskann {
             response[ERROR_MESSAGE_KEY] = web::json::value::string(ex.what());
             return std::make_pair(web::http::status_codes::InternalError,
                                   response);
+          } catch (...) {
+            std:cerr << "Uncaught exception while processing query: " << queryId;
+            web::json::value response = prepareResponse(queryId, K);
+            response[ERROR_MESSAGE_KEY] = web::json::value::string(UNKNOWN_ERROR);
+            return std::make_pair(web::http::status_codes::InternalError, response);
           }
         })
         .then([=](std::pair<short unsigned int, web::json::value> response_status) {
