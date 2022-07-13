@@ -153,7 +153,7 @@ add_definitions(-DMKL_ILP64)
 # The DLL itself needs to be linked to tcmalloc only if DISKANN_RELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS
 # is enabled.
 if (MSVC)
-    if (NOT EXISTS "${CMAKE_SOURCE_DIR}/gperftools/gperftools.sln")
+    if (NOT EXISTS "${PROJECT_SOURCE_DIR}/gperftools/gperftools.sln")
         message(FATAL_ERROR "The gperftools submodule was not found. "
                 "Please check-out git submodules by doing 'git submodule init' followed by 'git submodule update'")
     endif()
@@ -171,7 +171,7 @@ if (MSVC)
                            /property:Platform="x64"
                            /p:PlatformToolset=v${MSVC_TOOLSET_VERSION}
                            /p:WindowsTargetPlatformVersion=${CMAKE_VS_WINDOWS_TARGET_PLATFORM_VERSION}
-                       WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/gperftools)
+                       WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}/gperftools)
 
     add_library(libtcmalloc_minimal_for_exe STATIC IMPORTED)
     add_library(libtcmalloc_minimal_for_dll STATIC IMPORTED)
