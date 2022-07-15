@@ -25,7 +25,7 @@ int build_in_memory_index(const diskann::Metric& metric,
                           const std::string& data_path, const unsigned R,
                           const unsigned L, const float alpha,
                           const std::string& save_path,
-                          const unsigned     num_threads) {
+                          const unsigned     num_threads, std::string reorder_prefix) {
   diskann::Parameters paras;
   paras.Set<unsigned>("R", R);
   paras.Set<unsigned>("L", L);
@@ -41,6 +41,11 @@ int build_in_memory_index(const diskann::Metric& metric,
   diskann::Index<T, TagT> index(metric, data_dim, data_num, false, false);
   auto                    s = std::chrono::high_resolution_clock::now();
   index.build(data_path.c_str(), data_num, paras);
+  _u32 sector_len = data_dim*sizeof(T) + (R+1)*sizeof(_u32);
+  _u32 nodes_per_sector = 4096/sector_len; 
+  if (reorder_prefix != "") {
+    index.sector_reordering(reorder_prefix, nodes_per_sector, num_threads);
+  }
 
   std::chrono::duration<double> diff =
       std::chrono::high_resolution_clock::now() - s;
@@ -55,6 +60,7 @@ int main(int argc, char** argv) {
   std::string data_type, dist_fn, data_path, index_path_prefix;
   unsigned    num_threads, R, L;
   float       alpha;
+  std::string reorder_prefix = "";
 
   po::options_description desc{"Arguments"};
   try {
@@ -85,6 +91,11 @@ int main(int argc, char** argv) {
         po::value<uint32_t>(&num_threads)->default_value(omp_get_num_procs()),
         "Number of threads used for building index (defaults to "
         "omp_get_num_procs())");
+    desc.add_options()(
+        "reorder_output_file",
+        po::value<std::string>(&reorder_prefix)->default_value(""),
+        "Optionally compute a better reordering of points, default is not to");
+
 
     po::variables_map vm;
     po::store(po::parse_command_line(argc, argv, desc), vm);
@@ -118,13 +129,13 @@ int main(int argc, char** argv) {
                   << std::endl;
     if (data_type == std::string("int8"))
       return build_in_memory_index<int8_t>(metric, data_path, R, L, alpha,
-                                           index_path_prefix, num_threads);
+                                           index_path_prefix, num_threads,reorder_prefix);
     else if (data_type == std::string("uint8"))
       return build_in_memory_index<uint8_t>(metric, data_path, R, L, alpha,
-                                            index_path_prefix, num_threads);
+                                            index_path_prefix, num_threads,reorder_prefix);
     else if (data_type == std::string("float"))
       return build_in_memory_index<float>(metric, data_path, R, L, alpha,
-                                          index_path_prefix, num_threads);
+                                          index_path_prefix, num_threads,reorder_prefix);
     else {
       std::cout << "Unsupported type. Use one of int8, uint8 or float."
                 << std::endl;
