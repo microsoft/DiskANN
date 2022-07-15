@@ -1920,6 +1920,165 @@ namespace diskann {
     _has_built = true;
   }
 
+template<typename T, typename TagT>
+void Index<T, TagT>::partition_packing(
+      unsigned *p_order, const unsigned seed_node, const unsigned omega,
+      std::unordered_set<unsigned> &initial, boost::dynamic_bitset<> &deleted) {
+    std::unordered_map<unsigned, unsigned> counts;
+
+    p_order[0] = seed_node;
+
+    for (unsigned i = 1; i < omega; i++) {
+      unsigned ve = p_order[i - 1];
+      for (unsigned j = 0; j < _final_graph[ve].size(); j++) {
+        if (deleted[_final_graph[ve][j]] == false) {
+          if (counts.find(_final_graph[ve][j]) == counts.end()) {
+            counts[_final_graph[ve][j]] = 0;
+          }
+          counts[_final_graph[ve][j]] += 1;
+        }
+      }
+      for (unsigned j = 0; j < _in_graph[ve].size(); j++) {
+        if (deleted[_in_graph[ve][j]] == false) {
+          if (counts.find(_in_graph[ve][j]) == counts.end()) {
+            counts[_in_graph[ve][j]] = 0;
+          }
+          counts[_in_graph[ve][j]] += 1;
+        }
+        for (unsigned k = 0; k < _final_graph[_in_graph[ve][j]].size(); k++) {
+          if (deleted[_final_graph[_in_graph[ve][j]][k]] == false) {
+            if (counts.find(_final_graph[_in_graph[ve][j]][k]) ==
+                counts.end()) {
+              counts[_final_graph[_in_graph[ve][j]][k]] = 0;
+            }
+            counts[_final_graph[_in_graph[ve][j]][k]] += 1;
+          }
+        }
+      }
+
+      bool found = false;
+      while (counts.size() > 0) {
+        auto     max_it = counts.begin();
+        unsigned max_val = max_it->second;
+        for (auto itr = counts.begin(); itr != counts.end(); itr++) {
+          if (itr->second > max_val) {
+            max_it = itr;
+            max_val = itr->second;
+          }
+        }
+#pragma omp critical
+        {
+          if (deleted[max_it->first] == false) {
+            deleted[max_it->first] = true;
+            initial.erase(max_it->first);
+            found = true;
+          } else {
+            counts.erase(max_it->first);
+          }
+        }
+        if (found) {
+          p_order[i] = max_it->first;
+          counts.erase(p_order[i]);
+          break;
+        }
+      }
+      while (!found) {
+        for (auto itr = initial.begin(); itr != initial.end(); itr++) {
+          if (deleted[*itr] == false) {
+            p_order[i] = *(itr);
+            break;
+          }
+        }
+#pragma omp critical
+        {
+          if (deleted[p_order[i]] == false) {
+            deleted[p_order[i]] = true;
+            initial.erase(p_order[i]);
+            found = true;
+          }
+        }
+
+        if (found) {
+          counts.erase(p_order[i]);
+          break;
+        }
+      }
+    }
+  }
+
+  template<typename T, typename TagT>
+  void Index<T,TagT>::sector_reordering(
+      const std::string filename, const unsigned omega, const unsigned threads) {
+    std::vector<unsigned>        p_order(_nd);
+    std::vector<unsigned>        o_order(_nd);
+    std::unordered_set<unsigned> initial;
+    boost::dynamic_bitset<>      deleted{_nd, 0};
+
+
+    _in_graph.reserve(_nd);
+    _in_graph.resize(_nd);
+
+
+
+    std::vector<std::mutex> in_locks (_nd);
+
+#pragma omp parallel for schedule(dynamic, 128)    
+    for (unsigned i = 0; i < _final_graph.size(); i++) {
+      for (unsigned j = 0; j < _final_graph[i].size(); j++) {
+        {
+          LockGuard lock(in_locks[_final_graph[i][j]]);
+        _in_graph[_final_graph[i][j]].emplace_back(i);
+        }
+      }
+    }
+    std::cout<<"In-graph computed. Now going to work on ordering.\n" << std::endl;
+
+    for (unsigned i = 0; i < _nd; i++) {
+      initial.insert(i);
+    }
+
+#pragma omp parallel for schedule(dynamic, 1) num_threads(threads)
+    for (unsigned i = 0; i < _nd / omega; i++) {
+      unsigned seed_node;
+#pragma omp    critical
+      {
+        seed_node = *(initial.begin());
+        deleted[seed_node] = true;
+        initial.erase(initial.begin());
+      }
+      partition_packing(p_order.data() + i * omega, seed_node, omega, initial,
+                        deleted);
+    }
+
+    if (_nd % omega != 0) {
+      for (unsigned i = (_nd / omega) * omega; i < _nd; i++) {
+        p_order[i] = *(initial.begin());
+        initial.erase(initial.begin());
+      }
+    }
+
+    std::ofstream out(filename + "_loc_to_id.bin",
+                      std::ios::binary | std::ios::out);
+    _u32 nr = _nd;
+    _u32 nd = 1;
+    out.write((char *) &nr, sizeof(_u32));
+    out.write((char *) &nd, sizeof(_u32));    
+    out.write((char *) p_order.data(), _nd * sizeof(unsigned));
+    out.close();
+
+    for (unsigned i = 0; i < _nd; i++) {
+      o_order[p_order[i]] = i;
+    }
+
+    std::ofstream outer(filename + "_id_to_loc.bin",
+                        std::ios::binary | std::ios::out);
+    outer.write((char *) &nr, sizeof(_u32));
+    outer.write((char *) &nd, sizeof(_u32));    
+    outer.write((char *) o_order.data(), _nd * sizeof(unsigned));
+    outer.close();
+  }
+
+
   template<typename T, typename TagT>
   template<typename IdType>
   std::pair<uint32_t, uint32_t> Index<T, TagT>::search(const T *      query,
