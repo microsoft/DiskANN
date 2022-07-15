@@ -208,10 +208,10 @@ namespace diskann {
 
     uint32_t num_threads_srch = searchParams.Get<uint32_t>("num_threads");
     uint32_t num_threads_indx = indexParams.Get<uint32_t>("num_threads");
-    uint32_t num_threads = std::max(num_threads_srch, num_threads_indx);
+    uint32_t num_scratch_spaces = num_threads_srch + num_threads_indx;
     uint32_t search_l = searchParams.Get<uint32_t>("L");
 
-    initialize_query_scratch(num_threads, search_l, _indexingQueueSize,
+    initialize_query_scratch(num_scratch_spaces, search_l, _indexingQueueSize,
                              _indexingRange, dim);
   }
 
@@ -702,7 +702,9 @@ namespace diskann {
 #else
 
     _u64 file_offset = 0;  // will need this for single file format support
-    std::ifstream in(filename, std::ios::binary);
+    std::ifstream in;
+    in.exceptions(std::ios::badbit | std::ios::failbit);
+    in.open(filename, std::ios::binary);
     in.seekg(file_offset, in.beg);
     in.read((char *) &expected_file_size, sizeof(_u64));
     in.read((char *) &_max_observed_degree, sizeof(unsigned));
@@ -2273,10 +2275,10 @@ namespace diskann {
     bool expected_consolidate_value = false;
     if (_consolidate_active.compare_exchange_strong(expected_consolidate_value,
                                                     true) == false) {
-      throw ANNException(
-          "Attenpting to run consolidation while another consolidation "
-          "instance is active",
-          -1, __FUNCSIG__, __FILE__, __LINE__);
+      std::string err(
+          "Attempting to consolidate while another instance is active");
+      diskann::cerr << err << std::endl;
+      throw ANNException(err, -1, __FUNCSIG__, __FILE__, __LINE__);
     }
 
     tsl::robin_set<unsigned> old_delete_set;
@@ -2292,7 +2294,6 @@ namespace diskann {
                                      ? omp_get_num_threads()
                                      : params.Get<unsigned>("num_threads");
 
-    diskann::cout << "Starting to process dangling edges... " << std::endl;
     diskann::Timer timer;
 #pragma omp parallel for num_threads(num_threads) schedule(dynamic, 8192)
     for (_s64 loc = 0; loc < (_s64) _max_points; loc++) {
@@ -2313,10 +2314,8 @@ namespace diskann {
     }
     if (_support_eager_delete)
       update_in_graph();
-    diskann::cout << "done with dangling edges." << std::endl;
 
     size_t ret_nd = release_locations(old_delete_set);
-    diskann::cout << "Returned empty slots and updated nd." << std::endl;
 
     if (!_conc_consolidate) {
       update_lock.unlock();
@@ -2449,13 +2448,12 @@ namespace diskann {
           if (empty_locations.find(_final_graph[old][i]) !=
               empty_locations.end()) {
             ++num_dangling;
-            std::stringstream sstream;
-            sstream << "Error in compact_data(). _final_graph[" << old << "]["
-                    << i << "] = " << _final_graph[old][i]
-                    << " which is a location not associated with any tag.";
-            diskann::cerr << sstream.str() << std::endl;
-            // throw diskann::ANNException(sstream.str(), -1, __FUNCSIG__,
-            //                            __FILE__, __LINE__);
+            diskann::cerr << "Error in compact_data(). _final_graph[" << old
+                          << "][" << i << "] = " << _final_graph[old][i]
+                          << " which is a location not associated with any tag."
+                          << std::endl;
+            _final_graph[old].erase(_final_graph[old].begin() + i);
+            i--;
           } else {
             _final_graph[old][i] = new_location[_final_graph[old][i]];
           }
@@ -2805,7 +2803,7 @@ namespace diskann {
       std::unique_lock<std::shared_timed_mutex> l(_delete_lock);
 
       if (_tag_to_location.find(tag) == _tag_to_location.end()) {
-        diskann::cerr << "Delete tag not found" << std::endl;
+        diskann::cerr << "Delete tag not found " << tag << std::endl;
         return -1;
       }
       assert(_tag_to_location[tag] < _max_points);
