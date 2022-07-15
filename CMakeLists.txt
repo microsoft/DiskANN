@@ -132,9 +132,12 @@ if (MSVC)
 else()
 	# expected path for manual intel mkl installs
 	set(OMP_PATH /opt/intel/oneapi/compiler/2022.0.2/linux/compiler/lib/intel64_lin/ CACHE PATH "Intel OneAPI OpenMP library implementation path")
-	set(MKL_ROOT /opt/intel/oneapi/mkl/latest CACHE PATH "Intel OneAPI MKL library implementation path")
+	#	set(MKL_ROOT /opt/intel/oneapi/mkl/latest CACHE PATH "Intel OneAPI MKL library implementation path")
+	set(INTEL_ROOT /opt/intel/compilers_and_libraries/linux)
+	set(MKL_ROOT ${INTEL_ROOT}/mkl)
 	link_directories(${OMP_PATH} ${MKL_ROOT}/lib/intel64)
 	include_directories(${MKL_ROOT}/include)
+
 
 	# expected path for apt packaged intel mkl installs
 	link_directories(/usr/lib/x86_64-linux-gnu/mkl)

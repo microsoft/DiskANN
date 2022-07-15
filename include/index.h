@@ -172,6 +172,12 @@ namespace diskann {
     DISKANN_DLLEXPORT void search_with_optimized_layout(const T *query,
                                                         size_t K, size_t L,
                                                         unsigned *indices);
+    DISKANN_DLLEXPORT void partition_packing(
+      unsigned *p_order, const unsigned seed_node, const unsigned omega,
+      std::unordered_set<unsigned> &initial, boost::dynamic_bitset<> &deleted);
+
+    DISKANN_DLLEXPORT  void sector_reordering(
+      const std::string filename, const unsigned omega, const unsigned threads);
 
     // Added search overload that takes L as parameter, so that we
     // can customize L on a per-query basis without tampering with "Parameters"

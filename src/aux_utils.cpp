@@ -545,15 +545,386 @@ namespace diskann {
     return 0;
   }
 
+   void load_partial_graph(const std::vector<unsigned>        &nodes,
+                          std::vector<std::vector<unsigned>> &in_graph,
+                          std::vector<std::vector<unsigned>> &final_graph,
+                          const _u64 num_nodes, const std::string &filename) {
+    final_graph.reserve(num_nodes);
+    final_graph.resize(num_nodes);
+    for (unsigned i = 0; i < final_graph.size(); i++) {
+      final_graph[i].resize(0);
+    }
+    std::ifstream in(filename, std::ios::binary);
+    size_t        expected_file_size;
+    unsigned      width, ep;
+    in.read((char *) &expected_file_size, sizeof(_u64));
+    in.read((char *) &width, sizeof(unsigned));
+    in.read((char *) &ep, sizeof(unsigned));
+    diskann::cout << "Loading vamana index " << filename << "..." << std::flush;
+
+    size_t   cc = 0;
+    unsigned nnodes = 0;
+    auto     it = nodes.begin();
+    while (!in.eof() && it != nodes.end()) {
+      unsigned k;
+      unsigned node_id = *it;
+      while (nnodes < node_id) {
+        in.read((char *) &k, sizeof(unsigned));
+        in.seekg(k * sizeof(unsigned), std::ios::cur);
+        nnodes++;
+      }
+      in.read((char *) &k, sizeof(unsigned));
+      if (in.eof())
+        break;
+      cc += k;
+      final_graph[node_id].resize(k);
+      in.read((char *) final_graph[node_id].data(), k * sizeof(unsigned));
+      it++;
+      nnodes++;
+      if (nnodes % 10000000 == 0)
+        diskann::cout << "." << std::flush;
+    }
+    if (nnodes - 1 != nodes[nodes.size() - 1]) {
+      diskann::cout << "ERROR. mismatch in number of points. Graph has "
+                    << nodes[nodes.size() - 1]
+                    << " as the final point and loaded dataset has "
+                    << nnodes - 1 << " as the final point." << std::endl;
+      return;
+    }
+
+    diskann::cout << "..done. Index has " << nodes.size() << " nodes and " << cc
+                  << " out-edges" << std::endl;
+    in_graph.reserve(num_nodes);
+    in_graph.resize(num_nodes);
+    for (unsigned i = 0; i < in_graph.size(); i++) {
+      in_graph[i].resize(0);
+    }
+    for (unsigned i = 0; i < final_graph.size(); i++) {
+      for (unsigned j = 0; j < final_graph[i].size(); j++) {
+        in_graph[final_graph[i][j]].emplace_back(i);
+      }
+    }
+  }
+
+  void partition_packing(
+      unsigned *p_order, const unsigned seed_node, const unsigned omega,
+      std::unordered_set<unsigned> &initial, boost::dynamic_bitset<> &deleted,
+      const std::vector<std::vector<unsigned>> &in_graph,
+      const std::vector<std::vector<unsigned>> &final_graph) {
+    std::unordered_map<unsigned, unsigned> counts;
+    p_order[0] = seed_node;
+
+    for (unsigned i = 1; i < omega; i++) {
+      unsigned ve = p_order[i - 1];
+      for (unsigned j = 0; j < final_graph[ve].size(); j++) {
+        if (deleted[final_graph[ve][j]] == false) {
+          if (counts.find(final_graph[ve][j]) == counts.end()) {
+            counts[final_graph[ve][j]] = 0;
+          }
+          counts[final_graph[ve][j]] += 1;
+        }
+      }
+      for (unsigned j = 0; j < in_graph[ve].size(); j++) {
+        if (deleted[in_graph[ve][j]] == false) {
+          if (counts.find(in_graph[ve][j]) == counts.end()) {
+            counts[in_graph[ve][j]] = 0;
+          }
+          counts[in_graph[ve][j]] += 1;
+        }
+        for (unsigned k = 0; k < final_graph[in_graph[ve][j]].size(); k++) {
+          if (deleted[final_graph[in_graph[ve][j]][k]] == false) {
+            if (counts.find(final_graph[in_graph[ve][j]][k]) == counts.end()) {
+              counts[final_graph[in_graph[ve][j]][k]] = 0;
+            }
+            counts[final_graph[in_graph[ve][j]][k]] += 1;
+          }
+        }
+      }
+
+      bool found = false;
+      while (counts.size() > 0 && initial.size() > 10 * omega) {
+        auto     max_it = counts.begin();
+        unsigned max_val = max_it->second;
+        for (auto itr = counts.begin(); itr != counts.end(); itr++) {
+          if (itr->second > max_val) {
+            max_it = itr;
+            max_val = itr->second;
+          }
+        }
+        #pragma omp critical
+        {
+          if (deleted[max_it->first] == false) {
+            deleted[max_it->first] = true;
+            initial.erase(max_it->first);
+            found = true;
+          } else {
+            counts.erase(max_it->first);
+          }
+        }
+        if (found) {
+          p_order[i] = max_it->first;
+          counts.erase(p_order[i]);
+          break;
+        }
+      }
+      while (!found) {
+        #pragma omp critical
+        {
+          for (auto itr = initial.begin(); itr != initial.end(); itr++) {
+            if (deleted[*itr] == false) {
+              p_order[i] = *(itr);
+              break;
+            }
+          }
+          if (deleted[p_order[i]] == false) {
+            deleted[p_order[i]] = true;
+            initial.erase(p_order[i]);
+            found = true;
+          }
+        }
+
+        if (found) {
+          counts.erase(p_order[i]);
+          break;
+        }
+      }
+    }
+  }
+
+  void greedy_ordering(const std::string                         filename,
+                       const std::vector<std::vector<unsigned>> &in_graph,
+                       const std::vector<std::vector<unsigned>> &final_graph,
+                       std::vector<unsigned>                    &p_order,
+                       std::unordered_set<unsigned>             &initial,
+                       boost::dynamic_bitset<> &deleted, const _u64 nd,
+                       const unsigned omega, const unsigned threads) {
+      #pragma omp parallel for schedule(dynamic, 1) num_threads(threads)
+        for (int32_t i = 0; i < (int32_t) (nd / omega); i++) {
+          unsigned seed_node;
+          #pragma omp critical
+          {
+            seed_node = *(initial.begin());
+            deleted[seed_node] = true;
+            initial.erase(initial.begin());
+          }
+          partition_packing(p_order.data() + i * omega, seed_node, omega, initial,
+                            deleted, in_graph, final_graph);
+        }
+
+      if (nd % omega != 0) {
+        for (unsigned i = (nd / omega) * omega; i < nd; i++) {
+          p_order[i] = *(initial.begin());
+          initial.erase(initial.begin());
+        }
+      }
+      _u32          ndim = 1;
+      std::ofstream out(filename + "_index_to_id.bin",
+                        std::ios::binary | std::ios::out);
+      out.write((char *) &nd, sizeof(_u32));
+      out.write((char *) &ndim, sizeof(_u32));
+      out.write((char *) p_order.data(), nd * sizeof(unsigned));
+      out.close();
+  }
+
+  void process_partial_graph(const std::vector<unsigned> &nodes,
+                             const unsigned               reorder_id,
+                             const _u64 nnodes,
+                             const unsigned omega, const unsigned threads,
+                             const std::string &output_vamana) {
+    std::chrono::duration<double> diff;
+    auto                          s = std::chrono::high_resolution_clock::now();
+    std::vector<std::vector<unsigned>> final_graph, in_graph;
+    diskann::load_partial_graph(nodes, in_graph, final_graph, nnodes,
+                                output_vamana);
+    std::vector<unsigned>        p_order(nodes.size());
+    std::unordered_set<unsigned> initial;
+    boost::dynamic_bitset<>      deleted{nnodes, 0};
+    deleted.set();
+    for (unsigned i = 0; i < nodes.size(); i++) {
+      deleted[nodes[i]] = false;
+      initial.insert(nodes[i]);
+    }
+
+    diskann::greedy_ordering(output_vamana + std::to_string(reorder_id),
+                             in_graph, final_graph, p_order, initial, deleted,
+                             nodes.size(), omega, threads);
+    diff = std::chrono::high_resolution_clock::now() - s;
+    diskann::cout << "Reordering Time: " << diff.count() << " seconds..."
+                  << std::endl;
+  }
+
+  void reorder_merged_shards(const std::string &idmaps_prefix,
+                             const std::string &idmaps_suffix,
+                             const _u32 nshards, 
+                             const unsigned omega, const unsigned threads,
+                             _u64 max_shard_elements, const _u64 nnodes,
+                             const std::string &output_vamana) {
+    diskann::cout << "Starting sharded reordering..." << std::endl;
+
+    std::map<_u32, unsigned, std::greater<_u32>> sector_order;
+    for (_u32 shard = 0; shard < nshards; shard++) {
+      uint32_t    npts32;
+      std::string fname = idmaps_prefix + std::to_string(shard) + idmaps_suffix;
+      std::ifstream reader(fname.c_str(), std::ios::binary);
+      reader.read((char *) &npts32, sizeof(uint32_t));
+      sector_order.insert(std::make_pair(npts32, shard));
+    }
+
+    max_shard_elements =
+        std::max(max_shard_elements, (_u64) (sector_order.begin()->first));
+    diskann::cout << "Max Shard Elements: " << max_shard_elements << std::endl;
+    std::vector<unsigned>   idmap, node_ids;
+    boost::dynamic_bitset<> global_reordered{nnodes, 0};
+    _u64                    cur_size = 0;
+    unsigned                reorder_shard_id = 0;
+    for (auto &elem : sector_order) {
+      _u64 unique_count = 0;
+      read_idmap(idmaps_prefix + std::to_string(elem.second) + idmaps_suffix,
+                 idmap);
+      for (auto &x : idmap) {
+        if (global_reordered[x] == false) {
+          unique_count += 1;
+        }
+      }
+      if (cur_size + unique_count <= max_shard_elements) {
+        for (auto &x : idmap) {
+          if (global_reordered[x] == false) {
+            node_ids.push_back(x);
+            global_reordered[x] = true;
+          }
+        }
+        cur_size = node_ids.size();
+      } else {
+        std::sort(node_ids.begin(), node_ids.end());
+        diskann::process_partial_graph(node_ids, reorder_shard_id, 
+                                       nnodes, omega, threads, output_vamana);
+        node_ids.clear();
+        for (auto &x : idmap) {
+          if (global_reordered[x] == false) {
+            node_ids.push_back(x);
+            global_reordered[x] = true;
+          }
+        }
+        cur_size = node_ids.size();
+        reorder_shard_id += 1;
+      }
+    }
+
+    if (node_ids.size() != 0) {
+      std::sort(node_ids.begin(), node_ids.end());
+      diskann::process_partial_graph(node_ids, reorder_shard_id, 
+                                     nnodes, omega, threads, output_vamana);
+      reorder_shard_id += 1;
+    }
+
+    std::vector<unsigned> p_order(nnodes), o_order(nnodes);
+    size_t                cur_elements = 0;
+    for (unsigned i = 0; i < reorder_shard_id; i++) {
+      _u32      num_elements, num_dim=1;
+      std::string filename =
+          output_vamana + std::to_string(i) + "_index_to_id.bin";
+      std::ifstream reader(filename.c_str(), std::ios::binary);
+      reader.read((char *) &num_elements, sizeof(_u32));
+      reader.read((char *) &num_dim, sizeof(_u32));
+      reader.read((char *) (p_order.data() + cur_elements),
+                  num_elements * sizeof(unsigned));
+      cur_elements += num_elements;
+      reader.close();
+      std::remove(filename.c_str());
+    }
+
+    _u32 nr = nnodes;
+    _u32 nd = 1;
+    std::ofstream out(output_vamana + "_index_to_id.bin",
+                      std::ios::binary | std::ios::out);
+    out.write((char *) &nr, sizeof(_u32));
+    out.write((char *) &nd, sizeof(_u32));
+    out.write((char *) p_order.data(), nnodes * sizeof(unsigned));
+    out.close();
+
+    for (unsigned i = 0; i < nnodes; i++) {
+      o_order[p_order[i]] = i;
+    }
+
+    std::ofstream outer(output_vamana + "_id_to_index.bin",
+                        std::ios::binary | std::ios::out);
+    outer.write((char *) &nr, sizeof(_u32));
+    outer.write((char *) &nd, sizeof(_u32));
+    outer.write((char *) o_order.data(), nnodes * sizeof(unsigned));
+    outer.close();
+
+    diskann::cout << "Finished sharded reordering..." << std::endl;
+  }
+
+  void reorder_compressed_pq_vectors(const std::string disk_pq_compressed_vectors_path,
+                           const std::string lorder_file, const bool reorder_sector_layout, 
+                           const std::string reordered_disk_pq_compressed_vectors_path) {
+    if(reorder_sector_layout == false)
+      return;
+    
+    std::ifstream compressed_file_reader(disk_pq_compressed_vectors_path, std::ios::binary);
+    unsigned num_points;
+    _u32  num_pq_chunks_u32;
+    _u64  write_blk_size = 64 * 1024 * 1024;
+    compressed_file_reader.read((char *) &num_points, sizeof(uint32_t));
+    compressed_file_reader.read((char *) &num_pq_chunks_u32, sizeof(uint32_t));
+
+    _u64 npts_lorder, ndims_lorder;
+    std::unique_ptr<_u32[]> lorder_data;
+    
+    try {
+      diskann::load_bin<uint32_t>(lorder_file, lorder_data, npts_lorder, ndims_lorder);        
+    } catch (std::system_error &e) {
+      diskann::cout << "Error in Opening file\ncls";
+      throw FileException(lorder_file, e, __FUNCSIG__, __FILE__,
+                          __LINE__);
+    }
+    if (npts_lorder != num_points){
+        throw diskann::ANNException(
+            "Mismatch in number of points between reordered data file and compressed vector file",
+            -1, __FUNCSIG__, __FILE__, __LINE__);
+    }
+
+    cached_ofstream reordered_compressed_file_writer(reordered_disk_pq_compressed_vectors_path, write_blk_size);
+    std::unique_ptr<uint8_t[]> curr_vector = 
+                    std::make_unique<uint8_t[]>(num_pq_chunks_u32);
+    std::unique_ptr<char[]> reordered_compressed_base =
+                   std::make_unique<char[]>(num_points * num_pq_chunks_u32 + 2 * sizeof(uint32_t));
+    diskann::cout << "Reordering the compressed vector" << std::endl;
+    _u64 original_location_if_reordering;
+    *(_u32 *) (reordered_compressed_base.get()) = num_points;
+    *(_u32 *) (reordered_compressed_base.get() + sizeof(_u32)) = num_pq_chunks_u32;
+    for (_u64 curr_node_id = 0; curr_node_id < (_u64)num_points; curr_node_id++) {
+      original_location_if_reordering = lorder_data[curr_node_id];
+      compressed_file_reader.seekg(original_location_if_reordering * num_pq_chunks_u32 * sizeof(uint8_t) 
+                                  + 2 * sizeof(_u32),  std::ios::beg);
+      compressed_file_reader.read((char *) curr_vector.get(), sizeof(uint8_t) * num_pq_chunks_u32);
+            
+        // copy curr_vector into reordered_compressed_base
+      memcpy((char *)(reordered_compressed_base.get() + 2 * sizeof(_u32) +
+                     (curr_node_id * num_pq_chunks_u32)), curr_vector.get(), num_pq_chunks_u32 * sizeof(uint8_t));
+    }
+    reordered_compressed_file_writer.write(reordered_compressed_base.get(), 
+                                            2 * sizeof(_u32) + num_points * num_pq_chunks_u32 * sizeof(uint8_t));
+    diskann::cout << "Written Reordered compressed vector" << std::endl;
+  }
+
+
   template<typename T>
   int build_merged_vamana_index(std::string     base_file,
                                 diskann::Metric compareMetric, unsigned L,
                                 unsigned R, double sampling_rate,
                                 double ram_budget, std::string mem_index_path,
                                 std::string medoids_file,
-                                std::string centroids_file) {
+                                std::string centroids_file, bool use_sector_reordering,
+                                std::chrono::duration<double>& reorderingBuildIndex) {
     size_t base_num, base_dim;
     diskann::get_bin_metadata(base_file, base_num, base_dim);
+
+    unsigned omega =
+        SECTOR_LEN / (((R + 1) * sizeof(unsigned)) + (base_dim * sizeof(T)));
+    diskann::cout << "Omega: " << omega << std::endl;
+
 
     double full_index_ram =
         estimate_ram_usage(base_num, base_dim, sizeof(T), R);
@@ -574,7 +945,12 @@ namespace diskann {
           std::unique_ptr<diskann::Index<T>>(new diskann::Index<T>(
               compareMetric, base_dim, base_num, false, false));
       _pvamanaIndex->build(base_file.c_str(), base_num, paras);
-
+      if(use_sector_reordering){
+         auto s= std::chrono::high_resolution_clock::now();
+        _pvamanaIndex->sector_reordering(mem_index_path.c_str(), omega, omp_get_max_threads());
+         auto e = std::chrono::high_resolution_clock::now();
+         reorderingBuildIndex += e - s;
+      }
       _pvamanaIndex->save(mem_index_path.c_str());
       std::remove(medoids_file.c_str());
       std::remove(centroids_file.c_str());
@@ -584,6 +960,10 @@ namespace diskann {
     int         num_parts =
         partition_with_ram_budget<T>(base_file, sampling_rate, ram_budget,
                                      2 * R / 3, merged_index_prefix, 2);
+
+    _u64 max_shard_elements = (_u64) (ram_budget * 1024 * 1024 * 1024) /
+                              ((R + 30) * 2 * sizeof(unsigned));
+    max_shard_elements = std::min(max_shard_elements, base_num);
 
     std::string cur_centroid_filepath = merged_index_prefix + "_centroids.bin";
     std::rename(cur_centroid_filepath.c_str(), centroids_file.c_str());
@@ -624,6 +1004,17 @@ namespace diskann {
     diskann::merge_shards(merged_index_prefix + "_subshard-", "_mem.index",
                           merged_index_prefix + "_subshard-", "_ids_uint32.bin",
                           num_parts, R, mem_index_path, medoids_file);
+
+   if (use_sector_reordering) {
+      auto s = std::chrono::high_resolution_clock::now();      
+      _u32 threads = omp_get_max_threads();
+      diskann::reorder_merged_shards(
+          merged_index_prefix + "_subshard-", "_ids_uint32.bin", num_parts, 
+          omega, threads, max_shard_elements, base_num, mem_index_path);
+
+      auto e = std::chrono::high_resolution_clock::now();
+      reorderingBuildIndex += e - s;
+    }
 
     // delete tempFiles
     for (int p = 0; p < num_parts; p++) {
@@ -702,14 +1093,14 @@ namespace diskann {
   template<typename T>
   void create_disk_layout(const std::string base_file,
                           const std::string mem_index_file,
-                          const std::string output_file,
-                          const std::string reorder_data_file) {
+                          const std::string output_file, const bool reorder_sector_layout, 
+                          const std::string lorder_file, const std::string porder_file,
+      const bool rerank_disk_pq, const std::string rerank_data_file) {
     unsigned npts, ndims;
 
     // amount to read or write in one shot
-    _u64            read_blk_size = 64 * 1024 * 1024;
-    _u64            write_blk_size = read_blk_size;
-    cached_ifstream base_reader(base_file, read_blk_size);
+    _u64            write_blk_size = 64 * 1024 * 1024;
+    std::ifstream base_reader(base_file, std::ios::binary);
     base_reader.read((char *) &npts, sizeof(uint32_t));
     base_reader.read((char *) &ndims, sizeof(uint32_t));
 
@@ -718,37 +1109,61 @@ namespace diskann {
     ndims_64 = ndims;
 
     // Check if we need to append data for re-ordering
-    bool          append_reorder_data = false;
-    std::ifstream reorder_data_reader;
+    bool          append_rerank_data = false;
+    std::ifstream rerank_file_reader;
 
-    unsigned npts_reorder_file = 0, ndims_reorder_file = 0;
-    if (reorder_data_file != std::string("")) {
-      append_reorder_data = true;
-      size_t reorder_data_file_size = get_file_size(reorder_data_file);
-      reorder_data_reader.exceptions(std::ofstream::failbit |
+    unsigned npts_rerank_file = 0, ndims_rerank_file = 0;
+    if (rerank_disk_pq) { // WARNING: rerank must be float!
+      append_rerank_data = true;
+      size_t rerank_data_file_size = get_file_size(rerank_data_file);
+      rerank_file_reader.exceptions(std::ofstream::failbit |
                                      std::ofstream::badbit);
 
       try {
-        reorder_data_reader.open(reorder_data_file, std::ios::binary);
-        reorder_data_reader.read((char *) &npts_reorder_file, sizeof(unsigned));
-        reorder_data_reader.read((char *) &ndims_reorder_file,
+        rerank_file_reader.open(rerank_data_file, std::ios::binary);
+        rerank_file_reader.read((char *) &npts_rerank_file, sizeof(unsigned));
+        rerank_file_reader.read((char *) &ndims_rerank_file,
                                  sizeof(unsigned));
-        if (npts_reorder_file != npts)
+        if (npts_rerank_file != npts)
           throw ANNException(
               "Mismatch in num_points between reorder data file and base file",
               -1, __FUNCSIG__, __FILE__, __LINE__);
-        if (reorder_data_file_size != 8 + sizeof(float) *
-                                              (size_t) npts_reorder_file *
-                                              (size_t) ndims_reorder_file)
-          throw ANNException("Discrepancy in reorder data file size ", -1,
+        if (rerank_data_file_size != 8 + sizeof(float) *
+                                              (size_t) npts_rerank_file *
+                                              (size_t) ndims_rerank_file)
+          throw diskann::ANNException("Discrepancy in reorder data file size ", -1,
                              __FUNCSIG__, __FILE__, __LINE__);
       } catch (std::system_error &e) {
-        throw FileException(reorder_data_file, e, __FUNCSIG__, __FILE__,
+        throw FileException(rerank_data_file, e, __FUNCSIG__, __FILE__,
                             __LINE__);
       }
     }
 
-    // create cached reader + writer
+    //lorder -> Location to point/Id file
+    //porder -> Id to location file
+    _u64 npts_lorder, ndims_lorder, npts_porder, ndims_porder;
+    std::unique_ptr<_u32[]> lorder_data, porder_data;
+    if(reorder_sector_layout){
+      try {
+        diskann::load_bin<uint32_t>(lorder_file, lorder_data, npts_lorder, ndims_lorder);        
+      } catch (std::system_error &e) {
+        throw FileException(lorder_file, e, __FUNCSIG__, __FILE__,
+                            __LINE__);
+      }
+      try{
+        diskann::load_bin<uint32_t>(porder_file, porder_data, npts_porder, ndims_porder);
+      }catch (std::system_error &e) {
+        throw FileException(porder_file, e, __FUNCSIG__, __FILE__,
+                            __LINE__);
+      }        
+      if (npts_lorder != npts && npts_porder != npts){
+          throw diskann::ANNException(
+              "Mismatch in number of points between reordered data file and base file",
+              -1, __FUNCSIG__, __FILE__, __LINE__);
+      }
+    }
+
+     // create cached reader + writer
     size_t actual_file_size = get_file_size(mem_index_file);
     diskann::cout << "Vamana index file size=" << actual_file_size << std::endl;
     std::ifstream   vamana_reader(mem_index_file, std::ios::binary);
@@ -782,6 +1197,8 @@ namespace diskann {
       vamana_frozen_loc = medoid;
     max_node_len =
         (((_u64) width_u32 + 1) * sizeof(unsigned)) + (ndims_64 * sizeof(T));
+    if (reorder_sector_layout)
+        max_node_len += sizeof(_u32); // each node now containts first four bytes representing the real id
     nnodes_per_sector = SECTOR_LEN / max_node_len;
 
     diskann::cout << "medoid: " << medoid << "B" << std::endl;
@@ -792,82 +1209,115 @@ namespace diskann {
     // SECTOR_LEN buffer for each sector
     std::unique_ptr<char[]> sector_buf = std::make_unique<char[]>(SECTOR_LEN);
     std::unique_ptr<char[]> node_buf = std::make_unique<char[]>(max_node_len);
-    unsigned &nnbrs = *(unsigned *) (node_buf.get() + ndims_64 * sizeof(T));
-    unsigned *nhood_buf =
+    _u64 bytes_for_real_id = reorder_sector_layout == true ? sizeof(_u32) : 0;
+    char* vector_buf = (char*) node_buf.get() + bytes_for_real_id;
+    unsigned &nnbrs = *(unsigned *) (node_buf.get() + ndims_64 * sizeof(T) + bytes_for_real_id);
+    unsigned *nhood_buf = 
         (unsigned *) (node_buf.get() + (ndims_64 * sizeof(T)) +
-                      sizeof(unsigned));
+                      sizeof(unsigned) + bytes_for_real_id);
 
     // number of sectors (1 for meta data)
     _u64 n_sectors = ROUND_UP(npts_64, nnodes_per_sector) / nnodes_per_sector;
-    _u64 n_reorder_sectors = 0;
+    _u64 num_rerank_sectors = 0;
     _u64 n_data_nodes_per_sector = 0;
 
-    if (append_reorder_data) {
-      n_data_nodes_per_sector =
-          SECTOR_LEN / (ndims_reorder_file * sizeof(float));
-      n_reorder_sectors =
+    if (append_rerank_data) {
+      n_data_nodes_per_sector = 
+        SECTOR_LEN / (ndims_rerank_file * sizeof(float));
+      num_rerank_sectors =
           ROUND_UP(npts_64, n_data_nodes_per_sector) / n_data_nodes_per_sector;
     }
     _u64 disk_index_file_size =
-        (n_sectors + n_reorder_sectors + 1) * SECTOR_LEN;
+        (n_sectors + num_rerank_sectors + 1) * SECTOR_LEN;   
 
     std::vector<_u64> output_file_meta;
     output_file_meta.push_back(npts_64);
     output_file_meta.push_back(ndims_64);
+    if(reorder_sector_layout){
+    output_file_meta.push_back(porder_data[medoid]);
+    } else {
     output_file_meta.push_back(medoid);
+    }
     output_file_meta.push_back(max_node_len);
     output_file_meta.push_back(nnodes_per_sector);
     output_file_meta.push_back(vamana_frozen_num);
     output_file_meta.push_back(vamana_frozen_loc);
-    output_file_meta.push_back((_u64) append_reorder_data);
-    if (append_reorder_data) {
+    output_file_meta.push_back(reorder_sector_layout);
+    output_file_meta.push_back((_u64) append_rerank_data);
+    if (append_rerank_data) {
       output_file_meta.push_back(n_sectors + 1);
-      output_file_meta.push_back(ndims_reorder_file);
+      output_file_meta.push_back(ndims_rerank_file);
       output_file_meta.push_back(n_data_nodes_per_sector);
     }
     output_file_meta.push_back(disk_index_file_size);
 
     diskann_writer.write(sector_buf.get(), SECTOR_LEN);
 
+    
+    std::vector<size_t> vamana_node_offsets;    
+    if (reorder_sector_layout) {
+      vamana_node_offsets.resize(npts_64);
+      unsigned nnbrs;
+      for (_u64 i = 0; i < npts_64; i++) {
+        vamana_node_offsets[i] = vamana_reader.tellg();
+        vamana_reader.read((char *) &nnbrs, sizeof(unsigned));
+        vamana_reader.seekg(nnbrs * sizeof(unsigned), vamana_reader.cur);
+      }
+    }
+
     std::unique_ptr<T[]> cur_node_coords = std::make_unique<T[]>(ndims_64);
     diskann::cout << "# sectors: " << n_sectors << std::endl;
     _u64 cur_node_id = 0;
+    _u64 original_location_if_reordering = cur_node_id;
     for (_u64 sector = 0; sector < n_sectors; sector++) {
       if (sector % 100000 == 0) {
         diskann::cout << "Sector #" << sector << "written" << std::endl;
       }
       memset(sector_buf.get(), 0, SECTOR_LEN);
       for (_u64 sector_node_id = 0;
-           sector_node_id < nnodes_per_sector && cur_node_id < npts_64;
-           sector_node_id++) {
+          sector_node_id < nnodes_per_sector && cur_node_id < npts_64;
+          sector_node_id++) {
+        original_location_if_reordering = cur_node_id;
         memset(node_buf.get(), 0, max_node_len);
-        // read cur node's nnbrs
+        /* read cur node's nnbrs.
+        if sector reordering is carried out, vamana reader need 
+        to point to the particular location*/
+        if(reorder_sector_layout){
+          original_location_if_reordering = lorder_data[cur_node_id];
+          vamana_reader.seekg(vamana_node_offsets[original_location_if_reordering], std::ios::beg);
+          memcpy(node_buf.get(),
+                &(lorder_data[cur_node_id]), sizeof(_u32)); // first four bytes is the real-id if sector reordering is enabled 
+        }
         vamana_reader.read((char *) &nnbrs, sizeof(unsigned));
-
+        
         // sanity checks on nnbrs
         assert(nnbrs > 0);
-        assert(nnbrs <= width_u32);
 
         // read node's nhood
-        vamana_reader.read((char *) nhood_buf,
-                           (std::min)(nnbrs, width_u32) * sizeof(unsigned));
+        vamana_reader.read((char *) nhood_buf, (std::min)(nnbrs, width_u32) * sizeof(unsigned));
+        
+        //Put the new location of each neighbor if sector reordering is enabled
+        if(reorder_sector_layout){
+          unsigned old_nbr;
+          for(unsigned nbr=0; nbr < (unsigned)(std::min)(nnbrs, width_u32); nbr++ ){
+            old_nbr = nhood_buf[nbr];
+            // New neighbor after reordering
+            nhood_buf[nbr] = porder_data[old_nbr];
+          }
+        }
+
         if (nnbrs > width_u32) {
           vamana_reader.seekg((nnbrs - width_u32) * sizeof(unsigned),
                               vamana_reader.cur);
         }
 
         // write coords of node first
-        //  T *node_coords = data + ((_u64) ndims_64 * cur_node_id);
+        if(reorder_sector_layout){
+          base_reader.seekg(original_location_if_reordering * sizeof(T) * ndims_64 + 2 * sizeof(_u32),
+                            std::ios::beg);
+        }
         base_reader.read((char *) cur_node_coords.get(), sizeof(T) * ndims_64);
-        memcpy(node_buf.get(), cur_node_coords.get(), ndims_64 * sizeof(T));
-
-        // write nnbrs
-        *(unsigned *) (node_buf.get() + ndims_64 * sizeof(T)) =
-            (std::min)(nnbrs, width_u32);
-
-        // write nhood next
-        memcpy(node_buf.get() + ndims_64 * sizeof(T) + sizeof(unsigned),
-               nhood_buf, (std::min)(nnbrs, width_u32) * sizeof(unsigned));
+        memcpy(vector_buf, cur_node_coords.get(), ndims_64 * sizeof(T));
 
         // get offset into sector_buf
         char *sector_node_buf =
@@ -880,13 +1330,14 @@ namespace diskann {
       // flush sector to disk
       diskann_writer.write(sector_buf.get(), SECTOR_LEN);
     }
-    if (append_reorder_data) {
+
+    if (append_rerank_data) {
       diskann::cout << "Index written. Appending reorder data..." << std::endl;
 
-      auto                    vec_len = ndims_reorder_file * sizeof(float);
+      auto                    vec_len = ndims_rerank_file * sizeof(float);
       std::unique_ptr<char[]> vec_buf = std::make_unique<char[]>(vec_len);
 
-      for (_u64 sector = 0; sector < n_reorder_sectors; sector++) {
+      for (_u64 sector = 0; sector < num_rerank_sectors; sector++) {
         if (sector % 100000 == 0) {
           diskann::cout << "Reorder data Sector #" << sector << "written"
                         << std::endl;
@@ -899,7 +1350,7 @@ namespace diskann {
              sector_node_id < npts_64;
              sector_node_id++) {
           memset(vec_buf.get(), 0, vec_len);
-          reorder_data_reader.read(vec_buf.get(), vec_len);
+          rerank_file_reader.read(vec_buf.get(), vec_len);
 
           // copy node buf into sector_node_buf
           memcpy(sector_buf.get() + (sector_node_id * vec_len), vec_buf.get(),
@@ -919,7 +1370,7 @@ namespace diskann {
   template<typename T>
   int build_disk_index(const char *dataFilePath, const char *indexFilePath,
                        const char *    indexBuildParameters,
-                       diskann::Metric compareMetric, bool use_opq) {
+                       diskann::Metric compareMetric, bool use_opq, bool use_sector_reordering) {
     std::stringstream parser;
     parser << std::string(indexBuildParameters);
     std::string              cur_param;
@@ -965,10 +1416,10 @@ namespace diskann {
         use_disk_pq = false;
     }
 
-    bool reorder_data = false;
+    bool rerank_data = false;
     if (param_list.size() == 7) {
       if (1 == atoi(param_list[6].c_str())) {
-        reorder_data = true;
+        rerank_data = true;
       }
     }
 
@@ -1101,30 +1552,48 @@ namespace diskann {
                                     (uint32_t) num_pq_chunks, pq_pivots_path,
                                     pq_compressed_vectors_path, use_opq);
 
+
     delete[] train_data;
 
     train_data = nullptr;
-// Gopal. Splitting diskann_dll into separate DLLs for search and build.
-// This code should only be available in the "build" DLL.
-#if defined(RELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS) && \
-    defined(DISKANN_BUILD)
-    MallocExtension::instance()->ReleaseFreeMemory();
-#endif
+    // Gopal. Splitting diskann_dll into separate DLLs for search and build.
+    // This code should only be available in the "build" DLL.
+    #if defined(RELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS) && defined(DISKANN_BUILD)
+        MallocExtension::instance()->ReleaseFreeMemory();
+    #endif
 
+    
+    std::chrono::duration<double> totalReorderingOverhead;
+    
     diskann::build_merged_vamana_index<T>(
         data_file_to_use.c_str(), diskann::Metric::L2, L, R, p_val,
-        indexing_ram_budget, mem_index_path, medoids_path, centroids_path);
+        indexing_ram_budget, mem_index_path, medoids_path, centroids_path, use_sector_reordering, totalReorderingOverhead);
 
+    std::string reordering_location_to_id_file = mem_index_path + "_index_to_id.bin";
+    std::string reordering_id_to_location_file = mem_index_path + "_id_to_index.bin";
+    std::string reordered_pq_compressed_vectors_path = 
+        index_prefix_path + "_reodered_index_pq_compressed.bin";
+    //      reorder compressed pq vectors;
+    if(use_sector_reordering){
+      auto startReorderCV = std::chrono::high_resolution_clock::now();
+      diskann::reorder_compressed_pq_vectors(pq_compressed_vectors_path, reordering_location_to_id_file,
+                                              use_sector_reordering, reordered_pq_compressed_vectors_path);
+      diskann::copy_file(reordered_pq_compressed_vectors_path, pq_compressed_vectors_path);
+      auto endReorderCV = std::chrono::high_resolution_clock::now();
+      totalReorderingOverhead += endReorderCV-startReorderCV;
+    }
     if (!use_disk_pq) {
       diskann::create_disk_layout<T>(data_file_to_use.c_str(), mem_index_path,
-                                     disk_index_path);
+                                     disk_index_path, use_sector_reordering, reordering_location_to_id_file, reordering_id_to_location_file);
     } else {
-      if (!reorder_data)
-        diskann::create_disk_layout<_u8>(disk_pq_compressed_vectors_path,
-                                         mem_index_path, disk_index_path);
+      if (!rerank_data)
+        diskann::create_disk_layout<_u8>(disk_pq_compressed_vectors_path, mem_index_path, disk_index_path,
+            use_sector_reordering, reordering_location_to_id_file,
+            reordering_id_to_location_file);
       else
-        diskann::create_disk_layout<_u8>(disk_pq_compressed_vectors_path,
-                                         mem_index_path, disk_index_path,
+        diskann::create_disk_layout<_u8>(disk_pq_compressed_vectors_path, mem_index_path, disk_index_path,
+            use_sector_reordering, reordering_location_to_id_file,
+            reordering_id_to_location_file, true,
                                          data_file_to_use.c_str());
     }
 
@@ -1142,6 +1611,9 @@ namespace diskann {
 
     auto                          e = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> diff = e - s;
+    if(use_sector_reordering){
+      diskann::cout << "Total Rerodering time: " << totalReorderingOverhead.count() << std::endl;
+    }
     diskann::cout << "Indexing time: " << diff.count() << std::endl;
 
     return 0;
@@ -1149,13 +1621,19 @@ namespace diskann {
 
   template DISKANN_DLLEXPORT void create_disk_layout<int8_t>(
       const std::string base_file, const std::string mem_index_file,
-      const std::string output_file, const std::string reorder_data_file);
+      const std::string output_file, const bool reorder_sector_layout,
+      const std::string lorder_file, const std::string porder_file,
+      const bool rerank_disk_pq, const std::string rerank_data_file);
   template DISKANN_DLLEXPORT void create_disk_layout<uint8_t>(
       const std::string base_file, const std::string mem_index_file,
-      const std::string output_file, const std::string reorder_data_file);
+      const std::string output_file, const bool reorder_sector_layout,
+      const std::string lorder_file, const std::string porder_file,
+      const bool rerank_disk_pq, const std::string rerank_data_file);
   template DISKANN_DLLEXPORT void create_disk_layout<float>(
       const std::string base_file, const std::string mem_index_file,
-      const std::string output_file, const std::string reorder_data_file);
+      const std::string output_file, const bool reorder_sector_layout,
+      const std::string lorder_file, const std::string porder_file,
+      const bool rerank_disk_pq, const std::string rerank_data_file);
 
   template DISKANN_DLLEXPORT int8_t *load_warmup<int8_t>(
       const std::string &cache_warmup_file, uint64_t &warmup_num,
@@ -1198,29 +1676,35 @@ namespace diskann {
   template DISKANN_DLLEXPORT int build_disk_index<int8_t>(
       const char *dataFilePath, const char *indexFilePath,
       const char *indexBuildParameters, diskann::Metric compareMetric,
-      bool use_opq);
+      bool use_opq, bool use_sector_reordering);
   template DISKANN_DLLEXPORT int build_disk_index<uint8_t>(
       const char *dataFilePath, const char *indexFilePath,
       const char *indexBuildParameters, diskann::Metric compareMetric,
-      bool use_opq);
+      bool use_opq, bool use_sector_reordering);
   template DISKANN_DLLEXPORT int build_disk_index<float>(
       const char *dataFilePath, const char *indexFilePath,
       const char *indexBuildParameters, diskann::Metric compareMetric,
-      bool use_opq);
+      bool use_opq, bool use_sector_reordering);
 
-  template DISKANN_DLLEXPORT int build_merged_vamana_index<int8_t>(
-      std::string base_file, diskann::Metric compareMetric, unsigned L,
-      unsigned R, double sampling_rate, double ram_budget,
-      std::string mem_index_path, std::string medoids_path,
-      std::string centroids_file);
-  template DISKANN_DLLEXPORT int build_merged_vamana_index<float>(
-      std::string base_file, diskann::Metric compareMetric, unsigned L,
-      unsigned R, double sampling_rate, double ram_budget,
-      std::string mem_index_path, std::string medoids_path,
-      std::string centroids_file);
-  template DISKANN_DLLEXPORT int build_merged_vamana_index<uint8_t>(
-      std::string base_file, diskann::Metric compareMetric, unsigned L,
-      unsigned R, double sampling_rate, double ram_budget,
-      std::string mem_index_path, std::string medoids_path,
-      std::string centroids_file);
+  template DISKANN_DLLEXPORT int build_merged_vamana_index<int8_t>(std::string     base_file,
+                                diskann::Metric compareMetric, unsigned L,
+                                unsigned R, double sampling_rate,
+                                double ram_budget, std::string mem_index_path,
+                                std::string medoids_file,
+                                std::string centroids_file, bool use_sector_reordering,
+                                std::chrono::duration<double>& reorderingBuildIndex);
+  template DISKANN_DLLEXPORT int build_merged_vamana_index<float>(std::string     base_file,
+                                diskann::Metric compareMetric, unsigned L,
+                                unsigned R, double sampling_rate,
+                                double ram_budget, std::string mem_index_path,
+                                std::string medoids_file,
+                                std::string centroids_file, bool use_sector_reordering,
+                                std::chrono::duration<double>& reorderingBuildIndex);
+  template DISKANN_DLLEXPORT int build_merged_vamana_index<uint8_t>(std::string     base_file,
+                                diskann::Metric compareMetric, unsigned L,
+                                unsigned R, double sampling_rate,
+                                double ram_budget, std::string mem_index_path,
+                                std::string medoids_file,
+                                std::string centroids_file, bool use_sector_reordering,
+                                std::chrono::duration<double>& reorderingBuildIndex);
 };  // namespace diskann

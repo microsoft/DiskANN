@@ -16,8 +16,8 @@ int main(int argc, char** argv) {
   std::string data_type, dist_fn, data_path, index_path_prefix;
   unsigned    num_threads, R, L, disk_PQ;
   float       B, M;
-  bool        append_reorder_data = false;
   bool        use_opq = false;
+  bool        append_rerank_data = false, reorder_sector = false;
 
   po::options_description desc{"Arguments"};
   try {
@@ -53,10 +53,14 @@ int main(int argc, char** argv) {
                        po::value<uint32_t>(&disk_PQ)->default_value(0),
                        "Number of bytes to which vectors should be compressed "
                        "on SSD; 0 for no compression");
-    desc.add_options()("append_reorder_data",
+    desc.add_options()("append_rerank_data",
                        po::bool_switch()->default_value(false),
                        "Include full precision data in the index. Use only in "
                        "conjuction with compressed data on SSD.");
+    desc.add_options()("reorder_sector",
+                       po::bool_switch()->default_value(false),
+                       "Reorder the graph nodes present in the disk for "
+                       "IO improvement.");
 
     desc.add_options()("use_opq", po::bool_switch()->default_value(false),
                        "Use Optimized Product Quantization (OPQ).");
@@ -68,10 +72,12 @@ int main(int argc, char** argv) {
       return 0;
     }
     po::notify(vm);
-    if (vm["append_reorder_data"].as<bool>())
-      append_reorder_data = true;
     if (vm["use_opq"].as<bool>())
       use_opq = true;
+    if (vm["append_rerank_data"].as<bool>())
+      append_rerank_data = true;
+    if (vm["reorder_sector"].as<bool>())
+      reorder_sector = true;
   } catch (const std::exception& ex) {
     std::cerr << ex.what() << '\n';
     return -1;
@@ -88,7 +94,7 @@ int main(int argc, char** argv) {
     return -1;
   }
 
-  if (append_reorder_data) {
+  if (append_rerank_data) {
     if (disk_PQ == 0) {
       std::cout << "Error: It is not necessary to append data for reordering "
                    "when vectors are not compressed on disk."
@@ -109,21 +115,21 @@ int main(int argc, char** argv) {
                        std::string(std::to_string(M)) + " " +
                        std::string(std::to_string(num_threads)) + " " +
                        std::string(std::to_string(disk_PQ)) + " " +
-                       std::string(std::to_string(append_reorder_data));
+                       std::string(std::to_string(append_rerank_data));
 
   try {
     if (data_type == std::string("int8"))
       return diskann::build_disk_index<int8_t>(data_path.c_str(),
                                                index_path_prefix.c_str(),
-                                               params.c_str(), metric, use_opq);
+                                               params.c_str(), metric, use_opq, reorder_sector);
     else if (data_type == std::string("uint8"))
       return diskann::build_disk_index<uint8_t>(
           data_path.c_str(), index_path_prefix.c_str(), params.c_str(), metric,
-          use_opq);
+          use_opq, reorder_sector);
     else if (data_type == std::string("float"))
       return diskann::build_disk_index<float>(data_path.c_str(),
                                               index_path_prefix.c_str(),
-                                              params.c_str(), metric, use_opq);
+                                              params.c_str(), metric, use_opq, reorder_sector);
     else {
       diskann::cerr << "Error. Unsupported data type" << std::endl;
       return -1;

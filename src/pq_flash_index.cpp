@@ -40,16 +40,17 @@
 
 // returns region of `node_buf` containing [NNBRS][NBR_ID(_u32)]
 #define OFFSET_TO_NODE_NHOOD(node_buf) \
-  (unsigned *) ((char *) node_buf + disk_bytes_per_point)
+  (unsigned *) ((char *) node_buf + disk_bytes_per_point + sizeof(_u32)*use_sector_reordering)
 
 // returns region of `node_buf` containing [COORD(T)]
-#define OFFSET_TO_NODE_COORDS(node_buf) (T *) (node_buf)
+#define OFFSET_TO_NODE_COORDS(node_buf) \
+  (T *) (node_buf + sizeof(_u32) * use_sector_reordering)
 
-// sector # beyond the end of graph where data for id is present for reordering
+// sector # beyond the end of graph where data for id is present for reranking
 #define VECTOR_SECTOR_NO(id) \
-  (((_u64)(id)) / nvecs_per_sector + reorder_data_start_sector)
+  (((_u64)(id)) / nvecs_per_sector + rerank_data_start_sector)
 
-// sector # beyond the end of graph where data for id is present for reordering
+// sector # beyond the end of graph where data for id is present for reranking
 #define VECTOR_SECTOR_OFFSET(id) \
   ((((_u64)(id)) % nvecs_per_sector) * data_dim * sizeof(float))
 
@@ -207,6 +208,10 @@ namespace diskann {
     diskann::cout << "Loading the cache list into memory.." << std::flush;
     _u64 num_cached_nodes = node_list.size();
 
+    actual_id_for_cached_nodes.reserve(node_list.size() * 1.2);
+    coord_cache.reserve(node_list.size() * 1.2);
+    nhood_cache.reserve(node_list.size() * 1.2);
+
     // borrow thread data
     ThreadData<T> this_thread_data = this->thread_data.pop();
     while (this_thread_data.scratch.sector_scratch == nullptr) {
@@ -256,6 +261,9 @@ namespace diskann {
 #endif
         auto &nhood = nhoods[i];
         char *node_buf = OFFSET_TO_NODE(nhood.second, nhood.first);
+        if (use_sector_reordering) {
+          actual_id_for_cached_nodes[nhood.first] = *((_u32 *) node_buf);
+        }
         T *   node_coords = OFFSET_TO_NODE_COORDS(node_buf);
         T *   cached_coords = coord_cache_buf + node_idx * aligned_dim;
         memcpy(cached_coords, node_coords, disk_bytes_per_point);
@@ -570,6 +578,7 @@ namespace diskann {
     this->disk_index_file = disk_index_file;
 
     if (pq_file_num_centroids != 256) {
+      diskann::cout << "Number of centroids: " <<pq_file_num_centroids <<std::endl;
       diskann::cout << "Error. Number of PQ centroids is not 256. Exitting."
                     << std::endl;
       return -1;
@@ -698,15 +707,19 @@ namespace diskann {
                     << ". Will not output it at search time." << std::endl;
     }
 
-    READ_U64(index_metadata, this->reorder_data_exists);
-    if (this->reorder_data_exists) {
+    _u64 tmp_for_reorder; //metadata for whether sector reordering is done or not
+    READ_U64(index_metadata, tmp_for_reorder);
+    this->use_sector_reordering = (bool) tmp_for_reorder;
+
+    READ_U64(index_metadata, this->rerank_data_exists);
+    if (this->rerank_data_exists) {
       if (this->use_disk_index_pq == false) {
         throw ANNException(
-            "Reordering is designed for used with disk PQ compression option",
+            "Reranking is designed for used with disk PQ compression option",
             -1, __FUNCSIG__, __FILE__, __LINE__);
       }
-      READ_U64(index_metadata, this->reorder_data_start_sector);
-      READ_U64(index_metadata, this->ndims_reorder_vecs);
+      READ_U64(index_metadata, this->rerank_data_start_sector);
+      READ_U64(index_metadata, this->ndims_rerank_vecs);
       READ_U64(index_metadata, this->nvecs_per_sector);
     }
 
@@ -826,7 +839,7 @@ namespace diskann {
                                            const _u64 l_search, _u64 *indices,
                                            float *     distances,
                                            const _u64  beam_width,
-                                           const bool  use_reorder_data,
+                                           const bool  rerank_at_end,
                                            QueryStats *stats) {
     cached_beam_search(query1, k_search, l_search, indices, distances,
                        beam_width, std::numeric_limits<_u32>::max(),
@@ -919,6 +932,8 @@ namespace diskann {
 
     std::vector<Neighbor> full_retset;
     full_retset.reserve(4096);
+    tsl::robin_set<_u32> full_inserted;
+    full_inserted.reserve(4096);
     _u32                        best_medoid = 0;
     float                       best_dist = (std::numeric_limits<float>::max)();
     std::vector<SimpleNeighbor> medoid_dists;
@@ -1041,8 +1056,16 @@ namespace diskann {
                 disk_pq_table.l2_distance(  // disk_pq does not support OPQ yet
                     query_float, (_u8 *) node_fp_coords_copy);
         }
-        full_retset.push_back(
-            Neighbor((unsigned) cached_nhood.first, cur_expanded_dist, true));
+        _u32 actual_id = cached_nhood.first;
+        if (use_sector_reordering) {
+          actual_id = actual_id_for_cached_nodes[actual_id];
+        }
+        if (!use_sector_reordering || (use_sector_reordering && full_inserted.find(actual_id) == full_inserted.end())) {
+         full_retset.push_back(
+             Neighbor((unsigned) actual_id, cur_expanded_dist, true));
+          if (use_sector_reordering)
+            full_inserted.insert(actual_id);
+        }
 
         _u64      nnbrs = cached_nhood.second.first;
         unsigned *node_nbrs = cached_nhood.second.second;
@@ -1095,8 +1118,20 @@ namespace diskann {
 #else
       for (auto &frontier_nhood : frontier_nhoods) {
 #endif
+//        _u32  actual_id = frontier_nhood.first;
+        _u32 first_node_in_sector = nnodes_per_sector * ((_u32) (frontier_nhood.first / nnodes_per_sector));
+        for (_u32 i = first_node_in_sector; i < first_node_in_sector + nnodes_per_sector && i < num_points; i++) {
+          if (!use_sector_reordering && i!=frontier_nhood.first)
+            continue;
+          _u32  actual_id = i;
+
         char *node_disk_buf =
-            OFFSET_TO_NODE(frontier_nhood.second, frontier_nhood.first);
+           OFFSET_TO_NODE(frontier_nhood.second, actual_id);
+
+        if (use_sector_reordering) {
+          actual_id = * ((_u32 *) node_disk_buf);
+        }
+
         unsigned *node_buf = OFFSET_TO_NODE_NHOOD(node_disk_buf);
         _u64      nnbrs = (_u64)(*node_buf);
         T *       node_fp_coords = OFFSET_TO_NODE_COORDS(node_disk_buf);
@@ -1119,8 +1154,13 @@ namespace diskann {
             cur_expanded_dist = disk_pq_table.l2_distance(
                 query_float, (_u8 *) node_fp_coords_copy);
         }
-        full_retset.push_back(
-            Neighbor(frontier_nhood.first, cur_expanded_dist, true));
+        if (!use_sector_reordering || (use_sector_reordering && full_inserted.find(actual_id) == full_inserted.end())) {
+          full_retset.push_back(
+             Neighbor(actual_id, cur_expanded_dist, true));
+          if (use_sector_reordering)
+            full_inserted.insert(actual_id);
+        }
+        
         unsigned *node_nbrs = (node_buf + 1);
         // compute node_nbrs <-> query dist in PQ space
         cpu_timer.reset();
@@ -1161,6 +1201,7 @@ namespace diskann {
         if (stats != nullptr) {
           stats->cpu_us += (double) cpu_timer.elapsed();
         }
+        }
       }
 
       // update best inserted position
@@ -1178,19 +1219,19 @@ namespace diskann {
                 return left.distance < right.distance;
               });
 
-    if (use_reorder_data) {
-      if (!(this->reorder_data_exists)) {
+    if (rerank_at_end) {
+      if (!(this->rerank_data_exists)) {
         throw ANNException(
-            "Requested use of reordering data which does not exist in index "
+            "Requested use of reranking data which does not exist in index "
             "file",
             -1, __FUNCSIG__, __FILE__, __LINE__);
       }
 
       std::vector<AlignedRead> vec_read_reqs;
 
-      if (full_retset.size() > k_search * FULL_PRECISION_REORDER_MULTIPLIER)
+      if (full_retset.size() > k_search * FULL_PRECISION_RERANK_MULTIPLIER)
         full_retset.erase(
-            full_retset.begin() + k_search * FULL_PRECISION_REORDER_MULTIPLIER,
+            full_retset.begin() + k_search * FULL_PRECISION_RERANK_MULTIPLIER,
             full_retset.end());
 
       for (size_t i = 0; i < full_retset.size(); ++i) {

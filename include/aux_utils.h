@@ -12,6 +12,9 @@
 #include <memory>
 #include <random>
 #include <set>
+#include <unordered_set>
+#include <boost/dynamic_bitset.hpp>
+
 #ifdef __APPLE__
 #else
 #include <malloc.h>
@@ -96,12 +99,44 @@ namespace diskann {
       const std::string &infile, const std::string &indexPrefix,
       diskann::Metric &distMetric);
 
+  DISKANN_DLLEXPORT void load_partial_graph(
+      const std::vector<unsigned>        &nodes,
+      std::vector<std::vector<unsigned>> &in_graph,
+      std::vector<std::vector<unsigned>> &final_graph, const _u64 num_nodes,
+      const std::string &filename);
+
+  DISKANN_DLLEXPORT void partition_packing(
+      unsigned *p_order, const unsigned seed_node, const unsigned omega,
+      std::unordered_set<unsigned> &initial, boost::dynamic_bitset<> &deleted,
+      const std::vector<std::vector<unsigned>> &in_graph,
+      const std::vector<std::vector<unsigned>> &final_graph);
+
+  DISKANN_DLLEXPORT void greedy_ordering(
+      const std::string                         filename,
+      const std::vector<std::vector<unsigned>> &in_graph,
+      const std::vector<std::vector<unsigned>> &final_graph,
+      std::vector<unsigned> &p_order, std::unordered_set<unsigned> &initial,
+      boost::dynamic_bitset<> &deleted, const _u64 nd, const unsigned omega,
+      const unsigned threads);
+
+  DISKANN_DLLEXPORT void process_partial_graph(
+      const std::vector<unsigned> &nodes, const unsigned reorder_id,
+      const _u64 nnodes, const unsigned omega,
+      const unsigned threads, const std::string &output_vamana);
+
+  DISKANN_DLLEXPORT void reorder_merged_shards(
+      const std::string &idmaps_prefix, const std::string &idmaps_suffix,
+      const _u32 nshards, const unsigned omega,
+      const unsigned threads, _u64 max_shard_elements, const _u64 nnodes,
+      const std::string &output_vamana);
+
+
   template<typename T>
   DISKANN_DLLEXPORT int build_merged_vamana_index(
       std::string base_file, diskann::Metric _compareMetric, unsigned L,
       unsigned R, double sampling_rate, double ram_budget,
       std::string mem_index_path, std::string medoids_file,
-      std::string centroids_file);
+      std::string centroids_file, bool use_sector_reordering, std::chrono::duration<double>& reorderingBuildIndex);
 
   template<typename T>
   DISKANN_DLLEXPORT uint32_t optimize_beamwidth(
@@ -114,12 +149,15 @@ namespace diskann {
                                          const char *    indexFilePath,
                                          const char *    indexBuildParameters,
                                          diskann::Metric _compareMetric,
-                                         bool            use_opq = false);
+                                         bool            use_opq = false, bool use_sector_reordering = false);
 
-  template<typename T>
+    template<typename T>
   DISKANN_DLLEXPORT void create_disk_layout(
       const std::string base_file, const std::string mem_index_file,
-      const std::string output_file,
-      const std::string reorder_data_file = std::string(""));
+      const std::string output_file, bool reorder_sector_layout = false,
+      const std::string lorder_file = "", const std::string porder_file = "",
+      bool              rerank_disk_pq = false,
+      const std::string float_data_file_for_reranking =
+          "");  // rerank file data must be floating point
 
 }  // namespace diskann
