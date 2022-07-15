@@ -24,7 +24,7 @@
 #define MAX_N_SECTOR_READS 128
 #define MAX_PQ_CHUNKS 256
 
-#define FULL_PRECISION_REORDER_MULTIPLIER 3
+#define FULL_PRECISION_RERANK_MULTIPLIER 3
 
 namespace diskann {
   template<typename T>
@@ -122,7 +122,7 @@ namespace diskann {
     _u64 max_node_len = 0, nnodes_per_sector = 0, max_degree = 0;
 
     // Data used for searching with re-order vectors
-    _u64 ndims_reorder_vecs = 0, reorder_data_start_sector = 0,
+    _u64 ndims_rerank_vecs = 0, rerank_data_start_sector = 0,
          nvecs_per_sector = 0;
 
     diskann::Metric metric = diskann::Metric::L2;
@@ -140,6 +140,8 @@ namespace diskann {
                              // PQ for disk data (very large dimensionality)
     _u64 aligned_dim = 0;
     _u64 disk_bytes_per_point = 0;
+
+    bool use_sector_reordering = false;
 
     std::string                        disk_index_file;
     std::vector<std::pair<_u32, _u32>> node_visit_counter;
@@ -182,12 +184,14 @@ namespace diskann {
     T *                       coord_cache_buf = nullptr;
     tsl::robin_map<_u32, T *> coord_cache;
 
+    tsl::robin_map<_u32, _u32> actual_id_for_cached_nodes; // in case sector reordering is present
+
     // thread-specific scratch
     ConcurrentQueue<ThreadData<T>> thread_data;
     _u64                           max_nthreads;
     bool                           load_flag = false;
     bool                           count_visited_nodes = false;
-    bool                           reorder_data_exists = false;
+    bool                           rerank_data_exists = false;
     _u64                           reoreder_data_offset = 0;
 
 #ifdef EXEC_ENV_OLS
