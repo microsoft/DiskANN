@@ -134,7 +134,7 @@ void build_with_query_data(const std::string& data_path, const unsigned L,
         std::cout << "Re-inserting the same " << 10000
                   << " points from the index..." << std::endl;
         diskann::Timer insert_timer;
-#pragma omp parallel for num_threads(1) schedule(dynamic)
+#pragma omp parallel for num_threads(thread_count) schedule(dynamic)
         for (int64_t k = num_points - 10000;
              k < (int64_t) num_points; k++) {
           index.insert_point(&data_load[k * aligned_dim],

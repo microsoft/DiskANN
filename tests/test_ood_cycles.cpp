@@ -345,7 +345,7 @@ void test_batch_deletes(const std::string& data_path, const unsigned L,
       std::cout << "Re-inserting the same " << points_in_part
                 << " points from the index..." << std::endl;
       diskann::Timer insert_timer;
-#pragma omp parallel for num_threads(1) schedule(dynamic)
+#pragma omp parallel for num_threads(thread_count) schedule(dynamic)
       for (int64_t k = points_seen;
            k < (int64_t) points_seen + points_in_part; k++) {
         index.insert_point(&data_load[indices[k] * aligned_dim],
