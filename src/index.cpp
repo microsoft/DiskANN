@@ -296,6 +296,8 @@ namespace diskann {
       _query_graph.resize(_max_query_points);
       _query_nn.reserve(_max_query_points);
       _query_nn.resize(_max_query_points);
+      _marked_graph.reserve(_max_points + _num_frozen_pts);
+      _marked_graph.resize(_max_points + _num_frozen_pts);
       _query_locks = std::vector<std::mutex>(_max_query_points);
       _query_nn_locks = std::vector<std::mutex>(_max_query_points);
     }
@@ -440,7 +442,7 @@ namespace diskann {
     if (version == 0)
       return save_graph_internal(graph_file, _final_graph, _nd, _num_frozen_pts,
                                  _max_observed_degree, _start);
-    else 
+    else
       return save_graph_internal(graph_file, _query_graph, _max_query_points, 0,
                                  _max_observed_qdegree, _query_start);
     // else
@@ -653,8 +655,7 @@ namespace diskann {
 #endif
     _num_points_lock.lock();
 
-    size_t tags_file_num_pts = 0, graph_num_pts = 0,
-           data_file_num_pts = 0;
+    size_t tags_file_num_pts = 0, graph_num_pts = 0, data_file_num_pts = 0;
 
     if (!_save_as_one_file) {
       // For DLVS Store, we will not support saving the index in multiple files.
@@ -1167,28 +1168,33 @@ namespace diskann {
   void Index<T, TagT>::occlude_list(std::vector<Neighbor> &pool,
                                     const float alpha, const unsigned degree,
                                     const unsigned         maxc,
-                                    std::vector<Neighbor> &result, const int version) {
+                                    std::vector<Neighbor> &result,
+                                    const int              version) {
     auto               pool_size = (_u32) pool.size();
     std::vector<float> occlude_factor(pool_size, 0);
     occlude_list(pool, alpha, degree, maxc, result, occlude_factor, version);
   }
 
-    template<typename T, typename TagT>
+  template<typename T, typename TagT>
   void Index<T, TagT>::occlude_list(std::vector<Neighbor> &pool,
                                     const float alpha, const unsigned degree,
                                     const unsigned         maxc,
                                     std::vector<Neighbor> &result,
-                                    std::vector<float> &   occlude_factor, const int version){
-    if(version == 0) occlude_list_internal(pool, alpha, degree, maxc, result, occlude_factor, _data);
-    else occlude_list_internal(pool, alpha, degree, maxc, result, occlude_factor, _query_data);
+                                    std::vector<float> &   occlude_factor,
+                                    const int              version) {
+    if (version == 0)
+      occlude_list_internal(pool, alpha, degree, maxc, result, occlude_factor,
+                            _data);
+    else
+      occlude_list_internal(pool, alpha, degree, maxc, result, occlude_factor,
+                            _query_data);
   }
 
   template<typename T, typename TagT>
-  void Index<T, TagT>::occlude_list_internal(std::vector<Neighbor> &pool,
-                                    const float alpha, const unsigned degree,
-                                    const unsigned         maxc,
-                                    std::vector<Neighbor> &result,
-                                    std::vector<float> &   occlude_factor, T* data) {
+  void Index<T, TagT>::occlude_list_internal(
+      std::vector<Neighbor> &pool, const float alpha, const unsigned degree,
+      const unsigned maxc, std::vector<Neighbor> &result,
+      std::vector<float> &occlude_factor, T *data) {
     if (pool.empty())
       return;
     assert(std::is_sorted(pool.begin(), pool.end()));
@@ -1236,18 +1242,17 @@ namespace diskann {
   template<typename T, typename TagT>
   void Index<T, TagT>::prune_neighbors(const unsigned         location,
                                        std::vector<Neighbor> &pool,
-                                       std::vector<unsigned> &pruned_list, const int version) {
+                                       std::vector<unsigned> &pruned_list,
+                                       const int              version) {
     prune_neighbors(location, pool, _indexingRange, _indexingMaxC,
                     _indexingAlpha, pruned_list, version);
   }
 
   template<typename T, typename TagT>
-  void Index<T, TagT>::prune_neighbors(const unsigned         location,
-                                       std::vector<Neighbor> &pool,
-                                       const _u32             range,
-                                       const _u32  max_candidate_size,
-                                       const float alpha,
-                                       std::vector<unsigned> &pruned_list, const int version) {
+  void Index<T, TagT>::prune_neighbors(
+      const unsigned location, std::vector<Neighbor> &pool, const _u32 range,
+      const _u32 max_candidate_size, const float alpha,
+      std::vector<unsigned> &pruned_list, const int version) {
     if (pool.size() == 0) {
       std::stringstream ss;
       ss << "Thread id:" << std::this_thread::get_id()
@@ -1266,8 +1271,8 @@ namespace diskann {
     result.reserve(range);
     std::vector<float> occlude_factor(pool.size(), 0);
 
-    occlude_list(pool, alpha, range, max_candidate_size, result,
-                 occlude_factor, version);
+    occlude_list(pool, alpha, range, max_candidate_size, result, occlude_factor,
+                 version);
 
     // Add all the nodes in result into a variable called cut_graph
     // So this contains all the neighbors of id location
@@ -1334,9 +1339,9 @@ namespace diskann {
   }
 
   template<typename T, typename TagT>
-  std::pair<int, std::vector<double>> Index<T, TagT>::inter_insert(unsigned               n,
-                                    std::vector<unsigned> &pruned_list,
-                                    const _u32 range, bool update_in_graph) {
+  std::pair<int, std::vector<double>> Index<T, TagT>::inter_insert(
+      unsigned n, std::vector<unsigned> &pruned_list, const _u32 range,
+      bool update_in_graph) {
     std::vector<double> stitch_times(3, 0.0);
 
     const auto &src_pool = pruned_list;
@@ -1431,9 +1436,8 @@ namespace diskann {
   }
 
   template<typename T, typename TagT>
-  std::pair<int, std::vector<double>> Index<T, TagT>::inter_insert(unsigned               n,
-                                    std::vector<unsigned> &pruned_list,
-                                    bool                   update_in_graph) {
+  std::pair<int, std::vector<double>> Index<T, TagT>::inter_insert(
+      unsigned n, std::vector<unsigned> &pruned_list, bool update_in_graph) {
     return inter_insert(n, pruned_list, _indexingRange, update_in_graph);
   }
 
@@ -1687,7 +1691,6 @@ namespace diskann {
   // and add them to the _query_nn field
   template<typename T, typename TagT>
   std::vector<double> Index<T, TagT>::insert_and_stitch(unsigned location) {
-
     std::vector<double> times(3);
 
     auto                  L = _indexingQueueSize;
@@ -1705,7 +1708,7 @@ namespace diskann {
     tsl::robin_set<unsigned> inserted_into_pool_rs;
     boost::dynamic_bitset<>  inserted_into_pool_bs;
 
-    int version = 1; //flag to search in query graph
+    int version = 1;  // flag to search in query graph
 
     diskann::Timer search_timer;
 
@@ -1720,102 +1723,385 @@ namespace diskann {
     diskann::Timer update_timer;
 
     std::vector<unsigned> to_stitch;
-    for(auto nbor : best_L_nodes){
-      unsigned nbh = nbor.id; 
-      { 
+    for (auto nbor : best_L_nodes) {
+      unsigned nbh = nbor.id;
+      {
         assert(nbh <= _max_query_points);
         LockGuard guard(_query_nn_locks[nbh]);
-        float dist =
-                    _distance->compare(_query_data + _aligned_dim * (size_t) nbh,
-                                       _data + _aligned_dim * (size_t) location,
-                                       (unsigned) _aligned_dim);
-        if((_query_nn[nbh][_query_nn[nbh].size()-1]).distance > dist){
+        float     dist = _distance->compare(
+            _query_data + _aligned_dim * (size_t) nbh,
+            _data + _aligned_dim * (size_t) location, (unsigned) _aligned_dim);
+        if ((_query_nn[nbh][_query_nn[nbh].size() - 1]).distance > dist) {
           size_t k = _query_nn[nbh].size();
-          int result = InsertIntoPool(_query_nn[nbh].data(), k, Neighbor(location, dist, true));
-          if(result != (int) k+1){
+          int    result = InsertIntoPool(_query_nn[nbh].data(), k,
+                                      Neighbor(location, dist, true));
+          if (result != (int) k + 1) {
             to_stitch.push_back(nbh);
           }
         }
       }
-    } 
+    }
 
     double update_time = update_timer.elapsed() / 1000000.0;
     times[1] = update_time;
 
     // robustStitch location based on the nodes in to_stitch
 
-    diskann::Timer stitch_timer; 
+    diskann::Timer stitch_timer;
 
     size_t total_capacity = _indexingRange - _final_graph[location].size();
     size_t capacity;
-    if(to_stitch.size() == 0) capacity = 0;
-    else capacity = std::floor(total_capacity/ (double) to_stitch.size());
-    for(auto query_ctr : to_stitch){
-      int c = 0; //number of nodes added to _final_graph[nbh]
-      int j = 0; //iter count over _query_nn[query_ctr]
-      { 
+    if (to_stitch.size() == 0)
+      capacity = 0;
+    else
+      capacity = std::floor(total_capacity / (double) to_stitch.size());
+    for (auto query_ctr : to_stitch) {
+      int c = 0;  // number of nodes added to _final_graph[nbh]
+      int j = 0;  // iter count over _query_nn[query_ctr]
+      std::vector<unsigned> back_edges;
+      {
         LockGuard guard(_locks[location]);
-        while (c < (int) capacity &&
-               j < (int) _query_nn[query_ctr].size() &&
+        while (c < (int) capacity && j < (int) _query_nn[query_ctr].size() &&
                _final_graph[location].size() < _indexingRange &&
-               _query_nn[query_ctr][j].distance != std::numeric_limits<float>::max()) {
+               _query_nn[query_ctr][j].distance !=
+                   std::numeric_limits<float>::max()) {
           auto candidate = _query_nn[query_ctr][j].id;
           assert(candidate < _max_points + _num_frozen_pts);
           if (candidate != location &&
-              (std::find(_final_graph[location].begin(), _final_graph[location].end(),
-                         candidate) == _final_graph[location].end())) {  
+              (std::find(_final_graph[location].begin(),
+                         _final_graph[location].end(),
+                         candidate) == _final_graph[location].end())) {
             _final_graph[location].push_back(candidate);
+            _marked_graph[location].push_back(candidate);
+            back_edges.push_back(candidate);
             c++;
           }
           j++;
         }
-      } 
+      }
+      for (unsigned candidate : back_edges) {
+        {
+          LockGuard guard(_locks[candidate]);
+          if (std::find(_final_graph[candidate].begin(),
+                        _final_graph[candidate].end(),
+                        location) == _final_graph[candidate].end() &&
+              _final_graph[candidate].size() <
+                  GRAPH_SLACK_FACTOR * _indexingRange) {
+            _final_graph[candidate].push_back(location);
+            _marked_graph[candidate].push_back(location);
+          }
+        }
+      }
     }
     double stitch_time = stitch_timer.elapsed() / 1000000.0;
     times[2] = stitch_time;
-    return times; 
+    return times;
   }
 
+  // L = adjacency list of a query node
+  // L = {a, b, c}
+  // L corresponds to q
+  // but maybe a is actually much closer to some q'
+
+  //   template<typename T, typename TagT>
+  //   void Index<T, TagT>::delete_and_stitch(tsl::robin_set<unsigned>
+  //   &delete_set) {
+  //     tsl::robin_set<unsigned> to_stitch;
+  //     std::mutex               stitch_lock;
+
+  // #pragma omp parallel for schedule(dynamic)
+  //     for (_s64 node_ctr = (_s64) 0; node_ctr < (_s64) _max_query_points;
+  //          ++node_ctr) {
+  //       std::vector<Neighbor> new_pool;
+  //       std::vector<unsigned> deleted_nbh;
+  //       {
+  //         LockGuard guard(_query_nn_locks[node_ctr]);
+  //         for (auto nbor : _query_nn[node_ctr]) {
+  //           if (delete_set.find(nbor.id) == delete_set.end()) {
+  //             new_pool.push_back(nbor);
+  //           } else deleted_nbh.push_back(nbor.id);
+  //         }
+  //       }
+  //       if (new_pool.size() != _indexingRange) {
+  //         {
+  //           LockGuard guard(stitch_lock);
+  //           for(auto nbor : new_pool) to_stitch.insert(nbor.id);
+  //         }
+  //         size_t k = new_pool.size();
+  //         new_pool.resize(_indexingRange);
+  //         for (size_t j = k; j < _indexingRange; j++) {
+  //           new_pool[j].distance = std::numeric_limits<float>::max();
+  //         }
+
+  //         //replace deleted node with its nearest neighbor
+  //         for(unsigned p : deleted_nbh){
+  //           auto                  L = _indexingQueueSize;
+  //           std::vector<unsigned> init_ids;
+  //           init_ids.emplace_back(_start);
+  //           tsl::robin_set<unsigned> visited;
+  //           std::vector<Neighbor>    pool;
+  //           pool.reserve(L * 2);
+  //           visited.reserve(L * 2);
+  //           const T *node_coords = _data + _aligned_dim * p;
+
+  //           std::vector<unsigned> des;
+  //           std::vector<Neighbor> best_L_nodes;
+  //           best_L_nodes.resize(L + 1);
+  //           tsl::robin_set<unsigned> inserted_into_pool_rs;
+  //           boost::dynamic_bitset<>  inserted_into_pool_bs;
+
+  //           iterate_to_fixed_point(node_coords, L, init_ids, pool, visited,
+  //                                  best_L_nodes, des, inserted_into_pool_rs,
+  //                                  inserted_into_pool_bs);
+
+  //           std::sort(best_L_nodes.begin(), best_L_nodes.end());
+  //           unsigned id = best_L_nodes[0].id;
+  //           assert(id >= 0 && id < _max_points+_num_frozen_pts &&
+  //           delete_set.find(id) == delete_set.end()); float dist =
+  //                 _distance->compare(_data + _aligned_dim * (size_t) id,
+  //                                    _query_data + _aligned_dim * (size_t)
+  //                                    node_ctr, (unsigned) _aligned_dim);
+
+  //           InsertIntoPool(new_pool.data(), _indexingRange, Neighbor(id,
+  //           dist, true));
+  //         }
+  //         {
+  //           LockGuard guard(_query_nn_locks[node_ctr]);
+  //           _query_nn[node_ctr] = new_pool;
+  //         }
+  //       }
+
+  //     }
+  //     std::cout << "Number of nodes to restitch: " << to_stitch.size() <<
+  //     std::endl; robust_stitch(to_stitch);
+
+  //   }
+
   template<typename T, typename TagT>
-  void Index<T, TagT>::erase_query_nn(tsl::robin_set<unsigned> &delete_set){
-#pragma omp parallel for schedule(dynamic)
+  void Index<T, TagT>::erase_query_nn(tsl::robin_set<unsigned> &delete_set) {
+    // std::unordered_map<unsigned, std::set<unsigned>> new_edges;
+    // std::vector<std::mutex> locks(_max_points + _num_frozen_pts);
+    // tsl::robin_set<unsigned> to_stitch;
+    // std::mutex               stitch_lock;
+    // tsl::robin_set<unsigned> to_refresh;
+    // #pragma omp parallel for schedule(dynamic)
     for (_s64 node_ctr = (_s64) 0; node_ctr < (_s64) _max_query_points;
          ++node_ctr) {
       std::vector<Neighbor> new_pool;
       {
         LockGuard guard(_query_nn_locks[node_ctr]);
-        for(auto nbor : _query_nn[node_ctr]){
-          if(delete_set.find(nbor.id) == delete_set.end()){
+        for (auto nbor : _query_nn[node_ctr]) {
+          if (delete_set.find(nbor.id) == delete_set.end()) {
             new_pool.push_back(nbor);
           }
         }
-        if(new_pool.size() != _indexingRange){
+        if (new_pool.size() != _indexingRange) {
           size_t k = new_pool.size();
           new_pool.resize(_indexingRange);
-          for(size_t j = k; j<_indexingRange; j++){
+          for (size_t j = k; j < _indexingRange; j++) {
             new_pool[j].distance = std::numeric_limits<float>::max();
           }
           _query_nn[node_ctr] = new_pool;
+          // to_refresh.insert(node_ctr);
+          // for (auto nbor : new_pool) {
+          //   {
+          //     LockGuard guard(stitch_lock);
+          //     to_stitch.insert(nbor.id);
+          //   }
+          // }
         }
       }
     }
-    // return;
+    // std::cout << "Number of nodes to restitch: " << to_stitch.size() <<
+    // std::endl; std::cout << "Number of nodes to refresh: " <<
+    // to_refresh.size() << std::endl;
+
+    //   auto                  L = _indexingQueueSize;
+    //   std::vector<unsigned> init_ids;
+    //   init_ids.emplace_back(_start);
+    // #pragma omp parallel for schedule(dynamic)
+    //   for (size_t node_ctr = 0; node_ctr < _max_query_points;
+    //        ++node_ctr) {
+    //     if (to_refresh.find(node_ctr) != to_refresh.end()) {
+    //       tsl::robin_set<unsigned> visited;
+    //       std::vector<Neighbor>    pool;
+    //       pool.reserve(L * 2);
+    //       visited.reserve(L * 2);
+    //       const T *node_coords = _query_data + _aligned_dim * node_ctr;
+
+    //       std::vector<unsigned> des;
+    //       std::vector<Neighbor> best_L_nodes;
+    //       best_L_nodes.resize(L + 1);
+    //       tsl::robin_set<unsigned> inserted_into_pool_rs;
+    //       boost::dynamic_bitset<>  inserted_into_pool_bs;
+
+    //       iterate_to_fixed_point(node_coords, L, init_ids, pool, visited,
+    //                              best_L_nodes, des, inserted_into_pool_rs,
+    //                              inserted_into_pool_bs);
+
+    //       {
+    //         LockGuard guard(_query_nn_locks[node_ctr]);
+    //         for(auto nbor : pool){
+    //           InsertIntoPool(_query_nn[node_ctr].data(), _indexingRange,
+    //           nbor);
+    //         }
+    //       }
+    //     }
+    //   }
+    //   robust_stitch(to_stitch);
   }
 
+  // the marked graph may go out of date after inserts and need to be refreshed
+  template<typename T, typename TagT>
+  void Index<T, TagT>::update_marked_graph() {
+#pragma omp parallel for schedule(dynamic)
+    for (size_t i = 0; i < _max_points + _num_frozen_pts; i++) {
+      std::vector<unsigned> new_out;
+      for (auto nbh : _marked_graph[i]) {
+        if (std::find(_final_graph[i].begin(), _final_graph[i].end(), nbh) !=
+            _final_graph[i].end())
+          new_out.push_back(nbh);
+      }
+      if (new_out.size() < _marked_graph[i].size())
+        _marked_graph[i] = new_out;
+    }
+  }
+
+  template<typename T, typename TagT>
+  void Index<T, TagT>::delete_from_marked_graph(
+      tsl::robin_set<unsigned> &delete_set, const unsigned &range,
+      const unsigned &maxc, const float &alpha) {
+#pragma omp parallel for schedule(dynamic)
+    for (size_t i = 0; i < _max_points + _num_frozen_pts; i++) {
+      bool modify = false;
+      if (delete_set.find(i) == delete_set.end()) {
+        std::set<unsigned> new_out;
+        for (auto nbh : _marked_graph[i]) {
+          if (delete_set.find(nbh) == delete_set.end())
+            new_out.insert(nbh);
+          else {
+            modify = true;
+            for (auto twohop : _marked_graph[nbh]) {
+              if (delete_set.find(twohop) == delete_set.end())
+                new_out.insert(twohop);
+            }
+          }
+        }
+        if (modify) {
+          for (auto nbh : _final_graph[i]) {
+            if (delete_set.find(nbh) == delete_set.end())
+              new_out.insert(nbh);
+          }
+          if (new_out.size() <= GRAPH_SLACK_FACTOR * range) {
+            _final_graph[i].clear();
+            for (auto nbh : new_out)
+              _final_graph[i].push_back(nbh);
+          } else {
+            std::vector<Neighbor> expanded_nghrs;
+            std::vector<Neighbor> result;
+            for (auto j : new_out) {
+              expanded_nghrs.push_back(
+                  Neighbor(j,
+                           _distance->compare(_data + _aligned_dim * i,
+                                              _data + _aligned_dim * (size_t) j,
+                                              (unsigned) _aligned_dim),
+                           true));
+            }
+            std::sort(expanded_nghrs.begin(), expanded_nghrs.end());
+            occlude_list(expanded_nghrs, alpha, range, maxc, result);
+
+            _final_graph[(_u32) i].clear();
+            for (auto j : result) {
+              if (j.id != (_u32) i)
+                _final_graph[(_u32) i].push_back(j.id);
+            }
+          }
+        }
+      }
+    }
+
+    // #pragma omp parallel for schedule(dynamic)
+    //     for(size_t i = 0; i < _max_points + _num_frozen_pts; i++){
+    //       if(delete_set.find(i) == delete_set.end()){
+    //         std::vector<unsigned> new_out;
+    //         for(auto nbh : _marked_graph[i]){
+    //           if(delete_set.find(nbh) == delete_set.end())
+    //           new_out.push_back(nbh);
+    //         }
+    //         if(new_out.size() < _marked_graph[i].size()) _marked_graph[i] =
+    //         new_out;
+    //       }
+    //       else _marked_graph[i].clear();
+    //     }
+  }
+
+  template<typename T, typename TagT>
+  void Index<T, TagT>::query_nn_stats() {
+    std::vector<int> degrees(_max_query_points);
+#pragma omp parallel for schedule(dynamic)
+    for (size_t node_ctr = 0; node_ctr < _max_query_points; node_ctr++) {
+      int degree = 0;
+      for (Neighbor nbor : _query_nn[node_ctr]) {
+        if (nbor.distance != std::numeric_limits<float>::max()) {
+          degree += 1;
+        }
+      }
+      degrees[node_ctr] = degree;
+    }
+
+    std::cout << "Average degree: "
+              << std::accumulate(degrees.begin(), degrees.end(), 0.0) /
+                     ((float) _max_query_points)
+              << std::endl;
+
+    std::vector<int> indegrees(_max_points + _num_frozen_pts, 0);
+
+#pragma omp parallel for schedule(dynamic)
+    for (size_t node_ctr = 0; node_ctr < _max_query_points; node_ctr++) {
+      for (Neighbor nbor : _query_nn[node_ctr]) {
+        unsigned node = nbor.id;
+        {
+          LockGuard guard(_locks[node]);
+          indegrees[node]++;
+        }
+      }
+    }
+
+    std::sort(indegrees.begin(), indegrees.end());
+    std::reverse(indegrees.begin(), indegrees.end());
+    int max_deg = indegrees[0];
+
+    std::cout << "Max indegree: " << max_deg << std::endl;
+
+    std::unordered_map<int, int> histogram;
+    for (int j = 0; j < max_deg + 1; j++) {
+      histogram[j] = 0;
+    }
+    // int hist_index = 0;
+    for (int j : indegrees) {
+      histogram[j]++;
+    }
+
+    for (int j = 0; j < max_deg + 1; j++) {
+      if (histogram[j] > 0)
+        std::cout << "Number of nodes of degree " << j << " : " << histogram[j]
+                  << std::endl;
+    }
+  }
 
   // find the nearest neighbors in _final_graph of every point in _query_graph
   // and add them to the _query_nn field
   template<typename T, typename TagT>
   void Index<T, TagT>::populate_query_nn() {
-    std::cout << "Finding nearest neighbors of query nodes... " << std::endl; 
+    std::cout << "Finding nearest neighbors of query nodes... " << std::endl;
 
     diskann::Timer query_timer;
 
 #pragma omp parallel for schedule(dynamic)
-      for (_s64 node_ctr = (_s64) 0; node_ctr < (_s64) _max_query_points;
-           ++node_ctr) {
-        _query_nn[node_ctr].reserve(_indexingRange+1);
-      }
+    for (_s64 node_ctr = (_s64) 0; node_ctr < (_s64) _max_query_points;
+         ++node_ctr) {
+      _query_nn[node_ctr].reserve(_indexingRange + 1);
+    }
 
     auto                  L = _indexingQueueSize;
     std::vector<unsigned> init_ids;
@@ -1841,9 +2127,9 @@ namespace diskann {
 
       std::sort(pool.begin(), pool.end());
       size_t k = pool.size();
-      if(k < _indexingRange){
-        pool.resize(_indexingRange);
-        for(size_t j=k; j<_indexingRange; j++){
+      pool.resize(_indexingRange);
+      if (k < _indexingRange) {
+        for (size_t j = k; j < _indexingRange; j++) {
           pool[j].distance = std::numeric_limits<float>::max();
         }
       }
@@ -1851,71 +2137,76 @@ namespace diskann {
     }
 
     double seconds = query_timer.elapsed() / 1000000.0;
-    std::cout << "Time for finding query nearest neighbors: "
-              << seconds << "s" << std::endl;
+    std::cout << "Time for finding query nearest neighbors: " << seconds << "s"
+              << std::endl;
   }
 
   template<typename T, typename TagT>
-  void Index<T, TagT>::robust_stitch(tsl::robin_set<unsigned> pruned_nodes) {
+  void Index<T, TagT>::robust_stitch(tsl::robin_set<unsigned> &pruned_nodes) {
     std::cout << "Beginning RobustStitch routine... " << std::endl;
     std::unordered_map<unsigned, int> query_indegree;
     std::unordered_map<unsigned, int> per_node_capacity;
 
-    for(unsigned node : pruned_nodes){
+    for (unsigned node : pruned_nodes) {
       query_indegree[node] = 0;
       per_node_capacity[node] = 0;
     }
 
     diskann::Timer stitch_timer;
-    //calculate the in-degrees of every node in pruned_nodes
+    // calculate the in-degrees of every node in pruned_nodes
     for (_s64 query_ctr = 0; query_ctr < (_s64) _max_query_points;
-         query_ctr++) { 
-      //need a lock on _query_nn[query_ctr] here unless we totally ditch concurrent updates to _query_nn
+         query_ctr++) {
+      // need a lock on _query_nn[query_ctr] here unless we totally ditch
+      // concurrent updates to _query_nn
       for (auto nbh : _query_nn[query_ctr]) {
-        if(pruned_nodes.find(nbh.id) != pruned_nodes.end()) query_indegree[nbh.id]++;
+        if (pruned_nodes.find(nbh.id) != pruned_nodes.end())
+          query_indegree[nbh.id]++;
       }
     }
 
-//calculate the capacity of every node in pruned_nodes
+// calculate the capacity of every node in pruned_nodes
 #pragma omp parallel for schedule(dynamic, 65536)
-    for (_s64 node = 0; node < (_s64) _nd;
-         node++) {
-      if(pruned_nodes.find(node) != pruned_nodes.end()){
+    for (_s64 node = 0; node < (_s64) _nd; node++) {
+      if (pruned_nodes.find(node) != pruned_nodes.end()) {
         int total_capacity;
-      {
-        LockGuard guard(_locks[node]);
-        total_capacity = _indexingRange - (int) (_final_graph[node].size());
-      }
-      if (query_indegree[node] != 0) {
-        int per_query_capacity =
-            std::floor(total_capacity / ((double) query_indegree[node]));
-        per_node_capacity[node] = per_query_capacity;
-      }
+        {
+          LockGuard guard(_locks[node]);
+          total_capacity = _indexingRange - (int) (_final_graph[node].size());
+        }
+        if (query_indegree[node] != 0) {
+          int per_query_capacity =
+              std::floor(total_capacity / ((double) query_indegree[node]));
+          per_node_capacity[node] = per_query_capacity;
+        }
       }
     }
 
     std::cout << "Stitching nodes now..." << std::endl;
 
-
-//stitch every node in pruned_nodes with nonzero capacity
+// stitch every node in pruned_nodes with nonzero capacity
 #pragma omp parallel for schedule(dynamic, 65536)
     for (_s64 query_ctr = 0; query_ctr < (_s64) _max_query_points;
          query_ctr++) {
       for (auto nbor : _query_nn[query_ctr]) {
         unsigned nbh = nbor.id;
-        if (per_node_capacity[nbh] > 0 && (pruned_nodes.find(nbh) != pruned_nodes.end())){
-          int c = 0; //number of nodes added to _final_graph[nbh]
-          int j = 0; //iter count over _query_nn[query_ctr]
+        if (per_node_capacity[nbh] > 0 &&
+            (pruned_nodes.find(nbh) != pruned_nodes.end())) {
+          int c = 0;  // number of nodes added to _final_graph[nbh]
+          int j = 0;  // iter count over _query_nn[query_ctr]
           {
             LockGuard guard(_locks[nbh]);
             while (c < per_node_capacity[nbh] &&
                    j < (int) _query_nn[query_ctr].size() &&
-                   _final_graph[nbh].size() < _indexingRange) {
+                   _final_graph[nbh].size() <
+                       _indexingRange) {  // TODO fix zeroth neighbor issue
               auto candidate = _query_nn[query_ctr][j].id;
               if (candidate != nbh &&
                   (std::find(_final_graph[nbh].begin(), _final_graph[nbh].end(),
-                             candidate) == _final_graph[nbh].end())) {
+                             candidate) == _final_graph[nbh].end()) &&
+                  _query_nn[query_ctr][j].distance !=
+                      std::numeric_limits<float>::max()) {
                 _final_graph[nbh].push_back(candidate);
+                _marked_graph[nbh].push_back(candidate);
                 c++;
               }
               j++;
@@ -1926,8 +2217,7 @@ namespace diskann {
     }
 
     double seconds = stitch_timer.elapsed() / 1000000.0;
-    std::cout << "RobustStitch time: "
-              << seconds << "s" << std::endl;
+    std::cout << "RobustStitch time: " << seconds << "s" << std::endl;
   }
 
   template<typename T, typename TagT>
@@ -1947,11 +2237,11 @@ namespace diskann {
       }
     }
 
-
 #pragma omp parallel for schedule(dynamic, 65536)
     for (_s64 node_ctr = 0; node_ctr < (_s64) _nd; node_ctr++) {
       auto node = node_ctr;
 
+      _marked_graph[node_ctr].reserve(_indexingRange);
       int total_capacity = _indexingRange - (int) (_final_graph[node].size());
       if (query_indegree[node] != 0) {
         int per_query_capacity =
@@ -1966,10 +2256,10 @@ namespace diskann {
          query_ctr++) {
       for (auto nbor : _query_nn[query_ctr]) {
         unsigned nbh = nbor.id;
-        if (per_node_capacity[nbh] > 0){
+        if (per_node_capacity[nbh] > 0) {
           changed[nbh] = 1;
-          int c = 0; //number of nodes added to _final_graph[nbh]
-          int j = 0; //iter count over _query_nn[query_ctr]
+          int c = 0;  // number of nodes added to _final_graph[nbh]
+          int j = 0;  // iter count over _query_nn[query_ctr]
           while (c < per_node_capacity[nbh] &&
                  j < (int) _query_nn[query_ctr].size() &&
                  _final_graph[nbh].size() < _indexingRange) {
@@ -1978,6 +2268,7 @@ namespace diskann {
                 (std::find(_final_graph[nbh].begin(), _final_graph[nbh].end(),
                            candidate) == _final_graph[nbh].end())) {
               _final_graph[nbh].push_back(candidate);
+              _marked_graph[nbh].push_back(candidate);
               c++;
             }
             j++;
@@ -1987,8 +2278,7 @@ namespace diskann {
     }
 
     double seconds = stitch_timer.elapsed() / 1000000.0;
-    std::cout << "RobustStitch time: "
-              << seconds << "s" << std::endl;
+    std::cout << "RobustStitch time: " << seconds << "s" << std::endl;
     std::cout << "Number of nodes stitched: "
               << std::accumulate(changed.begin(), changed.end(), 0)
               << std::endl;
@@ -2082,7 +2372,7 @@ namespace diskann {
       update_in_graph();  // copying values to in_graph
     }
 
-    if(!_queries_present){
+    if (!_queries_present) {
       size_t max = 0, min = SIZE_MAX, total = 0, cnt = 0;
       for (size_t i = 0; i < _nd; i++) {
         auto &pool = _final_graph[i];
@@ -2092,14 +2382,13 @@ namespace diskann {
         if (pool.size() < 2)
           cnt++;
       }
-      diskann::cout << "Index built with degree: max:" << max
-                    << "  avg:" << (float) total / (float) (_nd + _num_frozen_pts)
+      diskann::cout << "Index built with degree: max:" << max << "  avg:"
+                    << (float) total / (float) (_nd + _num_frozen_pts)
                     << "  min:" << min << "  count(deg<2):" << cnt << std::endl;
 
       _max_observed_degree = (std::max)((unsigned) max, _max_observed_degree);
       _has_built = true;
     }
-    
 
     if (_queries_present) {
       std::cout << "Beginning query index build" << std::endl;
@@ -2121,13 +2410,15 @@ namespace diskann {
 
       _max_observed_qdegree = (std::max)((unsigned) max, _max_observed_qdegree);
 
-
-      // tsl::robin_set<unsigned> dummy_set; 
+      // tsl::robin_set<unsigned> dummy_set;
       // bool from_empty = true;
       populate_query_nn();
       robust_stitch();
 
-      max = 0; min = SIZE_MAX; total = 0; cnt = 0;
+      max = 0;
+      min = SIZE_MAX;
+      total = 0;
+      cnt = 0;
       for (size_t i = 0; i < _nd; i++) {
         auto &pool = _final_graph[i];
         max = (std::max)(max, pool.size());
@@ -2136,14 +2427,13 @@ namespace diskann {
         if (pool.size() < 2)
           cnt++;
       }
-      diskann::cout << "Index built with degree: max:" << max
-                    << "  avg:" << (float) total / (float) (_nd + _num_frozen_pts)
+      diskann::cout << "Index built with degree: max:" << max << "  avg:"
+                    << (float) total / (float) (_nd + _num_frozen_pts)
                     << "  min:" << min << "  count(deg<2):" << cnt << std::endl;
 
       _max_observed_degree = (std::max)((unsigned) max, _max_observed_degree);
       _has_built = true;
     }
-
   }
 
   template<typename T, typename TagT>
@@ -2157,9 +2447,6 @@ namespace diskann {
            _aligned_dim * num_points_to_load * sizeof(T));
     if (query_data != nullptr) {
       if (_queries_present) {
-        // memcpy((char *) (_data + _aligned_dim * num_points_to_load),
-        //        (char *) query_data,
-        //        _aligned_dim * num_query_points_to_load * sizeof(T));
         memcpy((char *) _query_data, (char *) query_data,
                _aligned_dim * num_query_points_to_load * sizeof(T));
       } else {
@@ -3019,11 +3306,8 @@ namespace diskann {
       delete_policy = 1;
     }
 
-    if(_queries_present){
-      std::cout << "Removing deleted nodes from query_nn ... ";
-      erase_query_nn(old_delete_set);
-      std::cout << " done" << std::endl; 
-    } 
+    if (_queries_present)
+      update_marked_graph();
 
     auto start = std::chrono::high_resolution_clock::now();
 #pragma omp parallel for num_threads(num_threads) schedule(dynamic)
@@ -3053,6 +3337,14 @@ namespace diskann {
         }
       }
     }
+
+    if (_queries_present) {
+      std::cout << "Removing deleted nodes from query_nn ... ";
+      erase_query_nn(old_delete_set);
+      delete_from_marked_graph(old_delete_set, range, maxc, alpha);
+      std::cout << " done" << std::endl;
+    }
+
     if (_support_eager_delete)
       update_in_graph();
 
@@ -3072,8 +3364,8 @@ namespace diskann {
       old_delete_set.clear();
     }
 
-    //call stitch routine here
-    //including swapping prune sets
+    // call stitch routine here
+    // including swapping prune sets
 
     expected_consolidate_value = true;
     if (_consolidate_active.compare_exchange_strong(expected_consolidate_value,
@@ -3083,8 +3375,6 @@ namespace diskann {
 
     if (!_conc_consolidate)
       update_lock.unlock();
-
-
 
     compact_data();
 
@@ -3231,6 +3521,12 @@ namespace diskann {
           _final_graph[old][i] = new_location[_final_graph[old][i]];
         }
 
+        if (_queries_present) {
+          for (size_t i = 0; i < _marked_graph[old].size(); i++) {
+            _marked_graph[old][i] = new_location[_marked_graph[old][i]];
+          }
+        }
+
         if (_support_eager_delete)
           for (size_t i = 0; i < _in_graph[old].size(); ++i) {
             if (new_location[_in_graph[old][i]] <= _in_graph[old][i])
@@ -3242,6 +3538,9 @@ namespace diskann {
         if (new_location[old] != old) {
           assert(new_location[old] < old);
           _final_graph[new_location[old]].swap(_final_graph[old]);
+          if (_queries_present)
+            _marked_graph[new_location[old]].swap(_marked_graph[old]);
+
           if (_support_eager_delete)
             _in_graph[new_location[old]].swap(_in_graph[old]);
           memcpy((void *) (_data + _aligned_dim * (size_t) new_location[old]),
@@ -3255,6 +3554,16 @@ namespace diskann {
 
       } else {
         _final_graph[old].clear();
+        if (_queries_present)
+          _marked_graph[old].clear();
+      }
+    }
+    if (_queries_present) {
+      for (unsigned query_ctr = 0; query_ctr < _max_query_points; query_ctr++) {
+        for (auto nbor : _query_nn[query_ctr]) {
+          unsigned old = nbor.id;
+          nbor.id = new_location[old];
+        }
       }
     }
     stop = std::chrono::high_resolution_clock::now();
@@ -3271,6 +3580,8 @@ namespace diskann {
 
     for (_u64 old = _nd; old < _max_points; ++old) {
       _final_graph[old].clear();
+      if (_queries_present)
+        _marked_graph[old].clear();
     }
     _delete_set.clear();
     _empty_slots.clear();
@@ -3394,7 +3705,8 @@ namespace diskann {
   }
 
   template<typename T, typename TagT>
-  std::pair<int, std::vector<double>> Index<T, TagT>::insert_point(const T *point, const TagT tag) {
+  std::pair<int, std::vector<double>> Index<T, TagT>::insert_point(
+      const T *point, const TagT tag) {
     assert(_has_built);
 
     std::vector<double> stitch_times(3, 0.0);
@@ -3523,17 +3835,19 @@ namespace diskann {
     stitch_times[0] += times[0];
     stitch_times[1] += times[1];
     stitch_times[2] += times[2];
-    if(_queries_present){
+
+    if (_queries_present) {
       auto Times = insert_and_stitch(location);
       stitch_times[0] += Times[0];
       stitch_times[1] += Times[1];
       stitch_times[2] += Times[2];
-    } 
+    }
+
     return std::make_pair(num_pruned, times);
   }
 
   template<typename T, typename TagT>
-  int Index<T, TagT>::cleanup(){
+  int Index<T, TagT>::cleanup() {
     // tsl::robin_set<unsigned> dummy_set;
     populate_query_nn();
     robust_stitch();

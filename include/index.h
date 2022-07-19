@@ -245,6 +245,7 @@ namespace diskann {
     DISKANN_DLLEXPORT int get_vector_by_tag(TagT &tag, T *vec);
 
     DISKANN_DLLEXPORT void print_status() const;
+    DISKANN_DLLEXPORT void query_nn_stats();
 
     // This variable MUST be updated if the number of entries in the metadata
     // change.
@@ -381,11 +382,14 @@ namespace diskann {
                        const int version);
 
     void populate_query_nn();
+    void update_marked_graph();
+    void delete_from_marked_graph(tsl::robin_set<unsigned> &delete_set, const unsigned &range, const unsigned &maxc, const float &alpha);
     void robust_stitch(); 
-    void robust_stitch(tsl::robin_set<unsigned> pruned_nodes); 
+    void robust_stitch(tsl::robin_set<unsigned> &pruned_nodes); 
 
     std::vector<double> insert_and_stitch(unsigned location);
     void erase_query_nn(tsl::robin_set<unsigned> &delete_set);
+    void delete_and_stitch(tsl::robin_set<unsigned> &delete_set);
 
     // WARNING: Do not call reserve_location() without acquiring change_lock_
     int  reserve_location();
@@ -431,6 +435,7 @@ namespace diskann {
     // Query graph data structures
     T *                                _query_data = nullptr;
     std::vector<std::vector<unsigned>> _query_graph;
+    std::vector<std::vector<unsigned>> _marked_graph; 
     std::vector<std::vector<Neighbor>> _query_nn;     
 
     // Dimensions
