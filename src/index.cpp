@@ -1779,19 +1779,19 @@ namespace diskann {
           j++;
         }
       }
-      for (unsigned candidate : back_edges) {
-        {
-          LockGuard guard(_locks[candidate]);
-          if (std::find(_final_graph[candidate].begin(),
-                        _final_graph[candidate].end(),
-                        location) == _final_graph[candidate].end() &&
-              _final_graph[candidate].size() <
-                  GRAPH_SLACK_FACTOR * _indexingRange) {
-            _final_graph[candidate].push_back(location);
-            _marked_graph[candidate].push_back(location);
-          }
-        }
-      }
+      // for (unsigned candidate : back_edges) {
+      //   {
+      //     LockGuard guard(_locks[candidate]);
+      //     if (std::find(_final_graph[candidate].begin(),
+      //                   _final_graph[candidate].end(),
+      //                   location) == _final_graph[candidate].end() &&
+      //         _final_graph[candidate].size() <
+      //             GRAPH_SLACK_FACTOR * _indexingRange) {
+      //       _final_graph[candidate].push_back(location);
+      //       _marked_graph[candidate].push_back(location);
+      //     }
+      //   }
+      // }
     }
     double stitch_time = stitch_timer.elapsed() / 1000000.0;
     times[2] = stitch_time;
@@ -1884,7 +1884,7 @@ namespace diskann {
     // tsl::robin_set<unsigned> to_stitch;
     // std::mutex               stitch_lock;
     // tsl::robin_set<unsigned> to_refresh;
-    // #pragma omp parallel for schedule(dynamic)
+#pragma omp parallel for schedule(dynamic)
     for (_s64 node_ctr = (_s64) 0; node_ctr < (_s64) _max_query_points;
          ++node_ctr) {
       std::vector<Neighbor> new_pool;
@@ -1912,6 +1912,23 @@ namespace diskann {
         }
       }
     }
+#pragma omp parallel for schedule(dynamic)
+    for (size_t node_ctr =  0; node_ctr < _max_points + _num_frozen_pts;
+         ++node_ctr){
+      std::vector<unsigned> new_nbh;
+      for(auto nbh : _final_graph[node_ctr]){
+        if(std::find(_marked_graph[node_ctr].begin(), _marked_graph[node_ctr].end(), nbh) == _marked_graph[node_ctr].end()) new_nbh.push_back(nbh);
+      }
+      if(new_nbh.size() < _final_graph[node_ctr].size()){
+        _final_graph[node_ctr].clear();
+        _final_graph[node_ctr] = new_nbh;
+      }
+      _marked_graph[node_ctr].clear();
+    }
+
+    populate_query_nn();
+    robust_stitch(); 
+
     // std::cout << "Number of nodes to restitch: " << to_stitch.size() <<
     // std::endl; std::cout << "Number of nodes to refresh: " <<
     // to_refresh.size() << std::endl;
@@ -2126,14 +2143,24 @@ namespace diskann {
                              inserted_into_pool_bs);
 
       std::sort(pool.begin(), pool.end());
-      size_t k = pool.size();
-      pool.resize(_indexingRange);
-      if (k < _indexingRange) {
-        for (size_t j = k; j < _indexingRange; j++) {
-          pool[j].distance = std::numeric_limits<float>::max();
+
+      if(_query_nn[node_ctr].empty()){
+        size_t k = pool.size();
+        pool.resize(_indexingRange);
+        if (k < _indexingRange) {
+          for (size_t j = k; j < _indexingRange; j++) {
+            pool[j].distance = std::numeric_limits<float>::max();
+          }
+        }
+        _query_nn[node_ctr] = pool;
+      } else{
+        for(auto nbor : pool){
+          if(nbor.distance < _query_nn[node_ctr][_query_nn[node_ctr].size()-1].distance) InsertIntoPool(_query_nn[node_ctr].data(), _indexingRange, nbor);
+          else break;
         }
       }
-      _query_nn[node_ctr] = pool;
+
+      
     }
 
     double seconds = query_timer.elapsed() / 1000000.0;
@@ -2266,7 +2293,8 @@ namespace diskann {
             auto candidate = _query_nn[query_ctr][j].id;
             if (candidate != nbh &&
                 (std::find(_final_graph[nbh].begin(), _final_graph[nbh].end(),
-                           candidate) == _final_graph[nbh].end())) {
+                           candidate) == _final_graph[nbh].end())
+                && _query_nn[query_ctr][j].distance != std::numeric_limits<float>::max()) {
               _final_graph[nbh].push_back(candidate);
               _marked_graph[nbh].push_back(candidate);
               c++;
@@ -3306,8 +3334,8 @@ namespace diskann {
       delete_policy = 1;
     }
 
-    if (_queries_present)
-      update_marked_graph();
+    // if (_queries_present)
+      // update_marked_graph();
 
     auto start = std::chrono::high_resolution_clock::now();
 #pragma omp parallel for num_threads(num_threads) schedule(dynamic)
@@ -3341,7 +3369,7 @@ namespace diskann {
     if (_queries_present) {
       std::cout << "Removing deleted nodes from query_nn ... ";
       erase_query_nn(old_delete_set);
-      delete_from_marked_graph(old_delete_set, range, maxc, alpha);
+      // delete_from_marked_graph(old_delete_set, range, maxc, alpha);
       std::cout << " done" << std::endl;
     }
 
