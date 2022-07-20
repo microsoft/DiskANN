@@ -339,7 +339,7 @@ void test_batch_deletes(const std::string& data_path, const unsigned L,
 
       delete_times.push_back(elapsedSeconds);
 
-      index.query_nn_stats();
+      // index.query_nn_stats();
 
       // RE-INSERTIONS
       std::cout << "Re-inserting the same " << points_in_part
@@ -359,15 +359,15 @@ void test_batch_deletes(const std::string& data_path, const unsigned L,
 
       insert_times.push_back(elapsedSeconds);
 
-      index.query_nn_stats();
+      // index.query_nn_stats();
 
       points_seen += points_in_part;
-      const auto save_path_inc =
-          get_save_filename(save_path + ".after-cycle-", 0, 0);
-      index.save(save_path_inc.c_str());
+      // const auto save_path_inc =
+      //     get_save_filename(save_path + ".after-cycle-", 0, 0);
+      index.save(save_path.c_str());
 
       
-      search_memory_index<T>(metric, save_path_inc, res_path, query_file,
+      search_memory_index<T>(metric, save_path, res_path, query_file,
                              gt_file, thread_count, 10, Lvec, true, true,
                              history);
     }

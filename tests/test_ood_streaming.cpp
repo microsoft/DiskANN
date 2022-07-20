@@ -111,14 +111,18 @@ void build_with_query_data(const std::string& data_path, const unsigned L,
   std::cout << "Inserted points in " << seconds << " seconds" << std::endl;
   std::cout << "Time spent searching query index " << std::accumulate(search_times.begin(), search_times.end(), 0.0) << std::endl; 
   std::cout << "Time spent updating query graph " << std::accumulate(update_times.begin(), update_times.end(), 0.0) << std::endl; 
-  std::cout << "Time spent stitching base points " << std::accumulate(stitch_times.begin(), stitch_times.end(), 0.0) << std::endl; 
+  std::cout << "Time spent stitching base points " << std::accumulate(stitch_times.begin(), stitch_times.end(), 0.0) << std::endl;
+
+    std::vector<int64_t> indices(num_points);
+    std::iota(indices.begin(), indices.end(), 0);
+    std::random_shuffle(indices.begin(), indices.end()); 
 
   std::cout << "Deleting " << 10000
                   << " points from the index..." << std::endl;
         index.enable_delete();
         tsl::robin_set<TagT> deletes;
-        for (int k = num_points - 10000; k < num_points; k++) {
-          deletes.insert(static_cast<TagT>(k));
+        for (int k = 0; k < 10000; k++) {
+          deletes.insert(static_cast<TagT>(indices[k]));
         }
         std::vector<TagT> failed_deletes;
         index.lazy_delete(deletes, failed_deletes);
@@ -135,10 +139,10 @@ void build_with_query_data(const std::string& data_path, const unsigned L,
                   << " points from the index..." << std::endl;
         diskann::Timer insert_timer;
 #pragma omp parallel for num_threads(thread_count) schedule(dynamic)
-        for (int64_t k = num_points - 10000;
-             k < (int64_t) num_points; k++) {
-          index.insert_point(&data_load[k * aligned_dim],
-                                  static_cast<TagT>(k));
+        for (int64_t k = 0;
+             k < (int64_t) 10000; k++) {
+          index.insert_point(&data_load[indices[k] * aligned_dim],
+                                  static_cast<TagT>(indices[k]));
         }
         elapsedSeconds = insert_timer.elapsed() / 1000000.0;
 
