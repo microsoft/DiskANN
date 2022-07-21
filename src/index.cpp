@@ -1887,14 +1887,14 @@ namespace diskann {
 #pragma omp parallel for schedule(dynamic)
     for (size_t node_ctr =  0; node_ctr < _max_points + _num_frozen_pts;
          ++node_ctr){
-      // std::vector<unsigned> new_nbh;
-      // for(auto nbh : _final_graph[node_ctr]){
-      //   if(std::find(_marked_graph[node_ctr].begin(), _marked_graph[node_ctr].end(), nbh) == _marked_graph[node_ctr].end()) new_nbh.push_back(nbh);
-      // }
-      // if(new_nbh.size() < _final_graph[node_ctr].size()){
-      //   _final_graph[node_ctr].clear();
-      //   _final_graph[node_ctr] = new_nbh;
-      // }
+      std::vector<unsigned> new_nbh;
+      for(auto nbh : _final_graph[node_ctr]){
+        if(std::find(_marked_graph[node_ctr].begin(), _marked_graph[node_ctr].end(), nbh) == _marked_graph[node_ctr].end()) new_nbh.push_back(nbh);
+      }
+      if(new_nbh.size() < _final_graph[node_ctr].size()){
+        _final_graph[node_ctr].clear();
+        _final_graph[node_ctr] = new_nbh;
+      }
       _marked_graph[node_ctr].clear();
     }
 
