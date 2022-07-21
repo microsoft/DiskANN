@@ -225,8 +225,10 @@ namespace diskann {
 
   // get_bin_metadata functions START
   inline void get_bin_metadata_impl(std::basic_istream<char>& reader,
-                                    size_t& nrows, size_t& ncols) {
+                                    size_t& nrows, size_t& ncols,
+                                    size_t offset = 0) {
     int nrows_32, ncols_32;
+    reader.seekg(offset, reader.beg);
     reader.read((char*) &nrows_32, sizeof(int));
     reader.read((char*) &ncols_32, sizeof(int));
     nrows = nrows_32;
@@ -236,19 +238,26 @@ namespace diskann {
 #ifdef EXEC_ENV_OLS
   inline void get_bin_metadata(MemoryMappedFiles& files,
                                const std::string& bin_file, size_t& nrows,
-                               size_t& ncols) {
+                               size_t& ncols, size_t offset = 0) {
     diskann::cout << "Getting metadata for file: " << bin_file << std::endl;
-    auto                     fc = files.getContent(bin_file);
-    auto                     cb = ContentBuf((char*) fc._content, fc._size);
-    std::basic_istream<char> reader(&cb);
-    get_bin_metadata_impl(reader, nrows, ncols);
+    auto fc = files.getContent(bin_file);
+    // auto                     cb = ContentBuf((char*) fc._content, fc._size);
+    // std::basic_istream<char> reader(&cb);
+    // get_bin_metadata_impl(reader, nrows, ncols, offset);
+
+    int      nrows_32, ncols_32;
+    int32_t* metadata_ptr = (int32_t*) ((char*) fc._content + offset);
+    nrows_32 = *metadata_ptr;
+    ncols_32 = *(metadata_ptr + 1);
+    nrows = nrows_32;
+    ncols = ncols_32;
   }
 #endif
 
   inline void get_bin_metadata(const std::string& bin_file, size_t& nrows,
-                               size_t& ncols) {
+                               size_t& ncols, size_t offset = 0) {
     std::ifstream reader(bin_file.c_str(), std::ios::binary);
-    get_bin_metadata_impl(reader, nrows, ncols);
+    get_bin_metadata_impl(reader, nrows, ncols, offset);
   }
   // get_bin_metadata functions END
 
@@ -266,30 +275,18 @@ namespace diskann {
 
   // load_bin functions START
   template<typename T>
-  inline void load_bin_impl(std::basic_istream<char>& reader,
-                            size_t actual_file_size, T*& data, size_t& npts,
-                            size_t& dim) {
+  inline void load_bin_impl(std::basic_istream<char>& reader, T*& data,
+                            size_t& npts, size_t& dim, size_t file_offset = 0) {
     int npts_i32, dim_i32;
+
+    reader.seekg(file_offset, reader.beg);
     reader.read((char*) &npts_i32, sizeof(int));
     reader.read((char*) &dim_i32, sizeof(int));
     npts = (unsigned) npts_i32;
     dim = (unsigned) dim_i32;
 
-    diskann::cout << "Metadata: #pts = " << npts << ", #dims = " << dim << "..."
-                  << std::endl;
-
-    size_t expected_actual_file_size =
-        npts * dim * sizeof(T) + 2 * sizeof(uint32_t);
-    if (actual_file_size != expected_actual_file_size) {
-      std::stringstream stream;
-      stream << "Error. File size mismatch. Actual size is " << actual_file_size
-             << " while expected size is  " << expected_actual_file_size
-             << " npts = " << npts << " dim = " << dim
-             << " size of <T>= " << sizeof(T) << std::endl;
-      diskann::cout << stream.str();
-      throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
-                                  __LINE__);
-    }
+    std::cout << "Metadata: #pts = " << npts << ", #dims = " << dim << "..."
+              << std::endl;
 
     data = new T[npts * dim];
     reader.read((char*) data, npts * dim * sizeof(T));
@@ -298,51 +295,59 @@ namespace diskann {
 #ifdef EXEC_ENV_OLS
   template<typename T>
   inline void load_bin(MemoryMappedFiles& files, const std::string& bin_file,
-                       T*& data, size_t& npts, size_t& dim) {
-    diskann::cout << "Reading bin file " << bin_file.c_str() << "... "
-                  << std::endl;
-
+                       T*& data, size_t& npts, size_t& dim, size_t offset = 0) {
+    diskann::cout << "Reading bin file " << bin_file.c_str()
+                  << " at offset: " << offset << "..." << std::endl;
     auto fc = files.getContent(bin_file);
 
     uint32_t  t_npts, t_dim;
-    uint32_t* contentAsIntPtr = (uint32_t*) (fc._content);
+    uint32_t* contentAsIntPtr = (uint32_t*) ((char*) fc._content + offset);
     t_npts = *(contentAsIntPtr);
     t_dim = *(contentAsIntPtr + 1);
 
     npts = t_npts;
     dim = t_dim;
 
-    auto actual_file_size = npts * dim * sizeof(T) + 2 * sizeof(uint32_t);
-    if (actual_file_size != fc._size) {
-      std::stringstream stream;
-      stream << "Error. File size mismatch. Actual size is " << fc._size
-             << " while expected size is  " << actual_file_size
-             << " npts = " << npts << " dim = " << dim
-             << " size of <T>= " << sizeof(T) << std::endl;
-      throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
-                                  __LINE__);
-    }
-
-    data =
-        (T*) ((char*) fc._content + 2 * sizeof(uint32_t));  // No need to copy!
+    data = (T*) ((char*) fc._content + offset +
+                 2 * sizeof(uint32_t));  // No need to copy!
   }
+
+  class AlignedFileReader;
+  DISKANN_DLLEXPORT void get_bin_metadata(AlignedFileReader& reader,
+                                          size_t& npts, size_t& ndim,
+                                          size_t offset = 0);
+  template<typename T>
+  DISKANN_DLLEXPORT void load_bin(AlignedFileReader& reader, T*& data,
+                                  size_t& npts, size_t& ndim,
+                                  size_t offset = 0);
+  template<typename T>
+  DISKANN_DLLEXPORT void load_bin(AlignedFileReader&    reader,
+                                  std::unique_ptr<T[]>& data, size_t& npts,
+                                  size_t& ndim, size_t offset = 0);
+
+  template<typename T>
+  DISKANN_DLLEXPORT void copy_aligned_data_from_file(AlignedFileReader& reader,
+                                                     T*& data, size_t& npts,
+                                                     size_t&       dim,
+                                                     const size_t& rounded_dim,
+                                                     size_t        offset = 0);
+
+  // Unlike load_bin, assumes that data is already allocated 'size' entries
+  template<typename T>
+  DISKANN_DLLEXPORT void read_array(AlignedFileReader& reader, T* data,
+                                    size_t size, size_t offset = 0);
+
+  template<typename T>
+  DISKANN_DLLEXPORT void read_value(AlignedFileReader& reader, T& value,
+                                    size_t offset = 0);
 #endif
-
-  inline void wait_for_keystroke() {
-    int a;
-    std::cout << "Press any number to continue.." << std::endl;
-    std::cin >> a;
-  }
 
   template<typename T>
   inline void load_bin(const std::string& bin_file, T*& data, size_t& npts,
-                       size_t& dim) {
-    // OLS
-    //_u64            read_blk_size = 64 * 1024 * 1024;
-    // cached_ifstream reader(bin_file, read_blk_size);
-    // size_t actual_file_size = reader.get_file_size();
-    // END OLS
+                       size_t& dim, size_t offset = 0) {
 
+      diskann::cout << "Reading bin file " << bin_file.c_str() << " ..."
+                  << std::endl;
     std::ifstream reader;
     reader.exceptions(std::ifstream::failbit | std::ifstream::badbit);
 
@@ -350,13 +355,18 @@ namespace diskann {
       diskann::cout << "Opening bin file " << bin_file.c_str() << "... "
                     << std::endl;
       reader.open(bin_file, std::ios::binary | std::ios::ate);
-      uint64_t fsize = reader.tellg();
       reader.seekg(0);
-      load_bin_impl<T>(reader, fsize, data, npts, dim);
+      load_bin_impl<T>(reader, data, npts, dim, offset);
     } catch (std::system_error& e) {
       throw FileException(bin_file, e, __FUNCSIG__, __FILE__, __LINE__);
     }
     diskann::cout << "done." << std::endl;
+  }
+
+  inline void wait_for_keystroke() {
+    int a;
+    std::cout << "Press any number to continue.." << std::endl;
+    std::cin >> a;
   }
   // load_bin functions END
 
@@ -541,41 +551,66 @@ namespace diskann {
 #ifdef EXEC_ENV_OLS
   template<typename T>
   inline void load_bin(MemoryMappedFiles& files, const std::string& bin_file,
-                       std::unique_ptr<T[]>& data, size_t& npts, size_t& dim) {
+                       std::unique_ptr<T[]>& data, size_t& npts, size_t& dim,
+                       size_t offset = 0) {
     T* ptr;
-    load_bin<T>(files, bin_file, ptr, npts, dim);
+    load_bin<T>(files, bin_file, ptr, npts, dim, offset);
     data.reset(ptr);
   }
 #endif
 
   template<typename T>
   inline void load_bin(const std::string& bin_file, std::unique_ptr<T[]>& data,
-                       size_t& npts, size_t& dim) {
+                       size_t& npts, size_t& dim, size_t offset = 0) {
     T* ptr;
-    load_bin<T>(bin_file, ptr, npts, dim);
+    load_bin<T>(bin_file, ptr, npts, dim, offset);
     data.reset(ptr);
+  }
+
+  inline void open_file_to_write(std::ofstream&     writer,
+                                 const std::string& filename) {
+    writer.exceptions(std::ofstream::failbit | std::ofstream::badbit);
+    if (!file_exists(filename))
+      writer.open(filename, std::ios::binary | std::ios::out);
+    else
+      writer.open(filename, std::ios::binary | std::ios::in | std::ios::out);
+
+    if (writer.fail()) {
+      char buff[1024];
+#ifdef _WINDOWS
+      strerror_s(buff, 1024, errno);
+#else
+      strerror_r(errno, buff, 1024);
+#endif
+      diskann::cerr << std::string("Failed to open file") + filename +
+                           " for write because " + buff
+                    << std::endl;
+      throw diskann::ANNException(std::string("Failed to open file ") +
+                                      filename + " for write because: " + buff,
+                                  -1);
+    }
   }
 
   template<typename T>
   inline uint64_t save_bin(const std::string& filename, T* data, size_t npts,
-                           size_t ndims) {
-    std::ofstream writer(filename, std::ios::binary | std::ios::out);
+                           size_t ndims, size_t offset = 0) {
+    std::ofstream writer;
+    open_file_to_write(writer, filename);
+
     diskann::cout << "Writing bin: " << filename.c_str() << std::endl;
-    int npts_i32 = (int) npts, ndims_i32 = (int) ndims;
+    writer.seekp(offset, writer.beg);
+    int    npts_i32 = (int) npts, ndims_i32 = (int) ndims;
+    size_t bytes_written = npts * ndims * sizeof(T) + 2 * sizeof(uint32_t);
     writer.write((char*) &npts_i32, sizeof(int));
     writer.write((char*) &ndims_i32, sizeof(int));
     diskann::cout << "bin: #pts = " << npts << ", #dims = " << ndims
-                  << ", size = " << npts * ndims * sizeof(T) + 2 * sizeof(int)
-                  << "B" << std::endl;
+                  << ", size = " << bytes_written << "B" << std::endl;
 
-    //    data = new T[npts_u64 * ndims_u64];
     writer.write((char*) data, npts * ndims * sizeof(T));
     writer.close();
-    size_t bytes_written = npts * ndims * sizeof(T) + 2 * sizeof(uint32_t);
     diskann::cout << "Finished writing bin." << std::endl;
     return bytes_written;
   }
-
   // load_aligned_bin functions START
 
   template<typename T>

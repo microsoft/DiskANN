@@ -9,12 +9,9 @@
 
 namespace diskann {
   class FixedChunkPQTable {
-    // data_dim = n_chunks * chunk_size;
     float* tables =
-        nullptr;  // pq_tables = float* [[2^8 * [chunk_size]] * n_chunks]
-    //    _u64   n_chunks;    // n_chunks = # of chunks ndims is split into
-    //    _u64   chunk_size;  // chunk_size = chunk size of each dimension chunk
-    _u64   ndims = 0;  // ndims = chunk_size * n_chunks
+        nullptr;  // pq_tables = float array of size [256 * ndims]
+    _u64   ndims = 0;  // ndims = true dimension of vectors
     _u64   n_chunks = 0;
     _u32*  chunk_offsets = nullptr;
     _u32*  rearrangement = nullptr;
@@ -41,89 +38,115 @@ namespace diskann {
 
 #ifdef EXEC_ENV_OLS
     void load_pq_centroid_bin(MemoryMappedFiles& files,
-                              const char* pq_table_file, size_t num_chunks){
+                              const char* pq_table_file, size_t num_chunks) {
 #else
     void load_pq_centroid_bin(const char* pq_table_file, size_t num_chunks) {
 #endif
-        std::string rearrangement_file = std::string(pq_table_file) +
-                                         "_rearrangement_perm.bin";
-    std::string chunk_offset_file =
-        std::string(pq_table_file) + "_chunk_offsets.bin";
-    std::string centroid_file = std::string(pq_table_file) + "_centroid.bin";
 
-    // bin structure: [256][ndims][ndims(float)]
-    uint64_t numr, numc;
-    size_t   npts_u64, ndims_u64;
+      _u64 nr, nc;
 #ifdef EXEC_ENV_OLS
-    diskann::load_bin<float>(files, pq_table_file, tables, npts_u64, ndims_u64);
+    _u64* file_offset_data;  // since load_bin only sets the pointer, no need
+                             // to delete.
+    diskann::load_bin<_u64>(files, pq_table_file, file_offset_data, nr, nc);
 #else
-      diskann::load_bin<float>(pq_table_file, tables, npts_u64, ndims_u64);
+      std::unique_ptr<_u64[]> file_offset_data;
+      diskann::load_bin<_u64>(pq_table_file, file_offset_data, nr, nc);
 #endif
-    this->ndims = ndims_u64;
 
-    if (file_exists(chunk_offset_file)) {
-#ifdef EXEC_ENV_OLS
-      diskann::load_bin<_u32>(files, rearrangement_file, rearrangement, numr,
-                              numc);
-#else
-        diskann::load_bin<_u32>(rearrangement_file, rearrangement, numr, numc);
-#endif
-      if (numr != ndims_u64 || numc != 1) {
-        diskann::cerr << "Error loading rearrangement file" << std::endl;
-        throw diskann::ANNException("Error loading rearrangement file", -1,
-                                    __FUNCSIG__, __FILE__, __LINE__);
-      }
-
-#ifdef EXEC_ENV_OLS
-      diskann::load_bin<_u32>(files, chunk_offset_file, chunk_offsets, numr,
-                              numc);
-#else
-        diskann::load_bin<_u32>(chunk_offset_file, chunk_offsets, numr, numc);
-#endif
-      if (numc != 1 || (numr != num_chunks + 1 && num_chunks != 0)) {
-        diskann::cerr << "Error loading chunk offsets file. numc: " << numc
-                      << " (should be 1). numr: " << numr << " (should be "
-                      << num_chunks + 1 << ")" << std::endl;
-        throw diskann::ANNException("Error loading chunk offsets file", -1,
-                                    __FUNCSIG__, __FILE__, __LINE__);
-      }
-      std::cout << "PQ data has " << numr - 1 << " bytes per point."
-                << std::endl;
-      this->n_chunks = numr - 1;
-
-#ifdef EXEC_ENV_OLS
-      diskann::load_bin<float>(files, centroid_file, centroid, numr, numc);
-#else
-        diskann::load_bin<float>(centroid_file, centroid, numr, numc);
-#endif
-      if (numc != 1 || numr != ndims_u64) {
-        diskann::cerr << "Error loading centroid file" << std::endl;
-        throw diskann::ANNException("Error loading centroid file", -1,
-                                    __FUNCSIG__, __FILE__, __LINE__);
-      }
-    } else {
-      this->n_chunks = num_chunks;
-      rearrangement = new uint32_t[ndims];
-
-      uint64_t chunk_size = DIV_ROUND_UP(ndims, num_chunks);
-      for (uint32_t d = 0; d < ndims; d++)
-        rearrangement[d] = d;
-      chunk_offsets = new uint32_t[num_chunks + 1];
-      for (uint32_t d = 0; d <= num_chunks; d++)
-        chunk_offsets[d] = (_u32)(std::min)(ndims, d * chunk_size);
-      centroid = new float[ndims];
-      std::memset(centroid, 0, ndims * sizeof(float));
+    if (nr != 5) {
+      diskann::cout << "Error reading pq_pivots file " << pq_table_file
+                    << ". Offsets dont contain correct metadata, # offsets = "
+                    << nr << ", but expecting " << 5;
+      throw diskann::ANNException(
+          "Error reading pq_pivots file at offsets data.", -1, __FUNCSIG__,
+          __FILE__, __LINE__);
     }
 
-    diskann::cout << "PQ Pivots: #ctrs: " << npts_u64
-                  << ", #dims: " << ndims_u64 << ", #chunks: " << n_chunks
+    diskann::cout << "Offsets: " << file_offset_data[0] << " "
+                  << file_offset_data[1] << " " << file_offset_data[2] << " "
+                  << file_offset_data[3] << " " << file_offset_data[4]
                   << std::endl;
-    //      assert((_u64) ndims_u32 == n_chunks * chunk_size);
-    // alloc and compute transpose
-    tables_T = new float[256 * ndims_u64];
+
+#ifdef EXEC_ENV_OLS
+    diskann::load_bin<float>(files, pq_table_file, tables, nr, nc,
+                             file_offset_data[0]);
+#else
+      diskann::load_bin<float>(pq_table_file, tables, nr, nc,
+                               file_offset_data[0]);
+#endif
+
+    if ((nr != NUM_PQ_CENTROIDS)) {
+      diskann::cout << "Error reading pq_pivots file " << pq_table_file
+                    << ". file_num_centers  = " << nr << " but expecting "
+                    << NUM_PQ_CENTROIDS << " centers";
+      throw diskann::ANNException(
+          "Error reading pq_pivots file at pivots data.", -1, __FUNCSIG__,
+          __FILE__, __LINE__);
+    }
+
+    this->ndims = nc;
+
+#ifdef EXEC_ENV_OLS
+    diskann::load_bin<float>(files, pq_table_file, centroid, nr, nc,
+                             file_offset_data[1]);
+#else
+    diskann::load_bin<float>(pq_table_file, centroid, nr, nc,
+                               file_offset_data[1]);
+#endif
+
+    if ((nr != this->ndims) || (nc != 1)) {
+      diskann::cerr << "Error reading centroids from pq_pivots file "
+                    << pq_table_file << ". file_dim  = " << nr
+                    << ", file_cols = " << nc << " but expecting "
+                    << this->ndims << " entries in 1 dimension.";
+      throw diskann::ANNException(
+          "Error reading pq_pivots file at centroid data.", -1, __FUNCSIG__,
+          __FILE__, __LINE__);
+    }
+
+#ifdef EXEC_ENV_OLS
+    diskann::load_bin<uint32_t>(files, pq_table_file, rearrangement,
+                                nr, nc, file_offset_data[2]);
+#else
+    diskann::load_bin<uint32_t>(pq_table_file, rearrangement, nr, nc,
+                                  file_offset_data[2]);
+#endif
+    if ((nr != this->ndims) || (nc != 1)) {
+      diskann::cerr << "Error reading re-arrangement data pq_pivots file "
+                    << pq_table_file << ". file_dim  = " << nr
+                    << ", file_cols = " << nc << " but expecting "
+                    << this->ndims << " entries in 1 dimension.";
+      throw diskann::ANNException(
+          "Error reading pq_pivots file at re-arrangement data.", -1,
+          __FUNCSIG__, __FILE__, __LINE__);
+    }
+
+#ifdef EXEC_ENV_OLS
+    diskann::load_bin<uint32_t>(files, pq_table_file, chunk_offsets,
+                                nr, nc, file_offset_data[3]);
+#else
+    diskann::load_bin<uint32_t>(pq_table_file, chunk_offsets, nr, nc,
+                                  file_offset_data[3]);
+#endif
+
+    if (nc != 1 || (nr != num_chunks + 1 && num_chunks != 0)) {
+      diskann::cerr << "Error loading chunk offsets file. numc: " << nc
+                    << " (should be 1). numr: " << nr << " (should be "
+                    << num_chunks + 1 << " or 0 if we need to infer)" << std::endl;
+      throw diskann::ANNException("Error loading chunk offsets file", -1,
+                                  __FUNCSIG__, __FILE__, __LINE__);
+    }
+
+    this->n_chunks = nr - 1;
+    diskann::cout << "Loaded PQ Pivots: #ctrs: " << NUM_PQ_CENTROIDS
+                  << ", #dims: " << this->ndims
+                  << ", #chunks: " << this->n_chunks << std::endl;
+
+        // alloc and compute transpose
+    tables_T = new float[256 * this->ndims];
     for (_u64 i = 0; i < 256; i++) {
-      for (_u64 j = 0; j < ndims_u64; j++) {
-        tables_T[j * 256 + i] = tables[i * ndims_u64 + j];
+      for (_u64 j = 0; j < this->ndims; j++) {
+        tables_T[j * 256 + i] = tables[i * this->ndims + j];
       }
     }
   }

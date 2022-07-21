@@ -220,7 +220,7 @@ int generate_pq_pivots(const float *passed_train_data, size_t num_train,
 
   std::unique_ptr<float[]> full_pivot_data;
 
-  if (file_exists(pq_pivots_path)) {
+  if (file_exists(pq_pivots_path)) { //RKNOTE:FIX TO HANDLE NEW PQ FILE FORMAT
     size_t file_dim, file_num_centers;
     diskann::load_bin<float>(pq_pivots_path, full_pivot_data, file_num_centers,
                              file_dim);
@@ -353,17 +353,29 @@ int generate_pq_pivots(const float *passed_train_data, size_t num_train,
     }
   }
 
-  diskann::save_bin<float>(pq_pivots_path.c_str(), full_pivot_data.get(),
-                           (size_t) num_centers, dim);
-  std::string centroids_path = pq_pivots_path + "_centroid.bin";
-  diskann::save_bin<float>(centroids_path.c_str(), centroid.get(), (size_t) dim,
-                           1);
-  std::string rearrangement_path = pq_pivots_path + "_rearrangement_perm.bin";
-  diskann::save_bin<uint32_t>(rearrangement_path.c_str(), rearrangement.data(),
-                              rearrangement.size(), 1);
-  std::string chunk_offsets_path = pq_pivots_path + "_chunk_offsets.bin";
-  diskann::save_bin<uint32_t>(chunk_offsets_path.c_str(), chunk_offsets.data(),
-                              chunk_offsets.size(), 1);
+  std::vector<size_t> cumul_bytes(5, 0);
+  cumul_bytes[0] = METADATA_SIZE;
+  cumul_bytes[1] =
+      cumul_bytes[0] +
+      diskann::save_bin<float>(pq_pivots_path.c_str(), full_pivot_data.get(),
+                               (size_t) num_centers, dim, cumul_bytes[0]);
+  cumul_bytes[2] = cumul_bytes[1] + diskann::save_bin<float>(
+                                        pq_pivots_path.c_str(), centroid.get(),
+                                        (size_t) dim, 1, cumul_bytes[1]);
+  cumul_bytes[3] =
+      cumul_bytes[2] +
+      diskann::save_bin<uint32_t>(pq_pivots_path.c_str(), rearrangement.data(),
+                                  rearrangement.size(), 1, cumul_bytes[2]);
+  cumul_bytes[4] =
+      cumul_bytes[3] +
+      diskann::save_bin<uint32_t>(pq_pivots_path.c_str(), chunk_offsets.data(),
+                                  chunk_offsets.size(), 1, cumul_bytes[3]);
+  diskann::save_bin<_u64>(pq_pivots_path.c_str(), cumul_bytes.data(),
+                          cumul_bytes.size(), 1, 0);
+
+  diskann::cout << "Saved pq pivot data to " << pq_pivots_path << " of size "
+                << cumul_bytes[cumul_bytes.size() - 1] << "B." << std::endl;
+
   return 0;
 }
 
@@ -394,60 +406,74 @@ int generate_pq_data_from_pivots(const std::string data_file,
   std::string inflated_pq_file = pq_compressed_vectors_path + "_inflated.bin";
 
   if (!file_exists(pq_pivots_path)) {
-    diskann::cout << "ERROR: PQ k-means pivot file not found" << std::endl;
+    std::cout << "ERROR: PQ k-means pivot file not found" << std::endl;
     throw diskann::ANNException("PQ k-means pivot file not found", -1);
   } else {
-    uint64_t numr, numc;
+    _u64                    nr, nc;
+    std::unique_ptr<_u64[]> file_offset_data;
 
-    std::string centroids_path = pq_pivots_path + "_centroid.bin";
-    diskann::load_bin<float>(centroids_path.c_str(), centroid, numr, numc);
+    diskann::load_bin<_u64>(pq_pivots_path.c_str(), file_offset_data, nr, nc,
+                            0);
 
-    if (numr != dim || numc != 1) {
-      diskann::cout << "Error reading centroid file." << std::endl;
-      throw diskann::ANNException("Error reading centroid file.", -1,
-                                  __FUNCSIG__, __FILE__, __LINE__);
-    }
-    std::string rearrangement_path = pq_pivots_path + "_rearrangement_perm.bin";
-    diskann::load_bin<uint32_t>(rearrangement_path.c_str(), rearrangement, numr,
-                                numc);
-    if (numr != dim || numc != 1) {
-      diskann::cout << "Error reading rearrangement file." << std::endl;
-      throw diskann::ANNException("Error reading rearrangement file.", -1,
-                                  __FUNCSIG__, __FILE__, __LINE__);
-    }
-    std::string chunk_offsets_path = pq_pivots_path + "_chunk_offsets.bin";
-    diskann::load_bin<uint32_t>(chunk_offsets_path.c_str(), chunk_offsets, numr,
-                                numc);
-    if (numr != (uint64_t) num_pq_chunks + 1 || numc != 1) {
-      diskann::cout << "Error reading chunk offsets file." << std::endl;
-      throw diskann::ANNException("Error reading chunk offsets file.", -1,
-                                  __FUNCSIG__, __FILE__, __LINE__);
+    if (nr != 5) {
+      diskann::cout << "Error reading pq_pivots file " << pq_pivots_path
+                    << ". Offsets dont contain correct metadata, # offsets = "
+                    << nr << ", but expecting 5.";
+      throw diskann::ANNException(
+          "Error reading pq_pivots file at offsets data.", -1, __FUNCSIG__,
+          __FILE__, __LINE__);
     }
 
-    size_t file_num_centers;
-    size_t file_dim;
-    diskann::load_bin<float>(pq_pivots_path, full_pivot_data, file_num_centers,
-                             file_dim);
+    diskann::load_bin<float>(pq_pivots_path.c_str(), full_pivot_data, nr, nc,
+                             file_offset_data[0]);
 
-    if (file_num_centers != num_centers) {
-      std::stringstream stream;
-      stream << "ERROR: file number of PQ centers " << file_num_centers
-             << " does "
-                "not match input argument "
-             << num_centers << std::endl;
-      diskann::cout << stream.str() << std::endl;
-      throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
-                                  __LINE__);
+    if ((nr != num_centers) || (nc != dim)) {
+      diskann::cout << "Error reading pq_pivots file " << pq_pivots_path
+                    << ". file_num_centers  = " << nr << ", file_dim = " << nc
+                    << " but expecting " << num_centers << " centers in " << dim
+                    << " dimensions.";
+      throw diskann::ANNException(
+          "Error reading pq_pivots file at pivots data.", -1, __FUNCSIG__,
+          __FILE__, __LINE__);
     }
-    if (file_dim != dim) {
-      std::stringstream stream;
-      stream << "ERROR: PQ pivot dimension does "
-                "not match base file dimension"
-             << std::endl;
-      diskann::cout << stream.str() << std::endl;
-      throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
-                                  __LINE__);
+
+    diskann::load_bin<float>(pq_pivots_path.c_str(), centroid, nr, nc,
+                             file_offset_data[1]);
+
+    if ((nr != dim) || (nc != 1)) {
+      diskann::cout << "Error reading pq_pivots file " << pq_pivots_path
+                    << ". file_dim  = " << nr << ", file_cols = " << nc
+                    << " but expecting " << dim << " entries in 1 dimension.";
+      throw diskann::ANNException(
+          "Error reading pq_pivots file at centroid data.", -1, __FUNCSIG__,
+          __FILE__, __LINE__);
     }
+
+    diskann::load_bin<uint32_t>(pq_pivots_path.c_str(), rearrangement, nr, nc,
+                                file_offset_data[2]);
+
+    if ((nr != dim) || (nc != 1)) {
+      diskann::cout << "Error reading pq_pivots file " << pq_pivots_path
+                    << ". file_dim  = " << nr << ", file_cols = " << nc
+                    << " but expecting " << dim << " entries in 1 dimension.";
+      throw diskann::ANNException(
+          "Error reading pq_pivots file at re-arrangement data.", -1,
+          __FUNCSIG__, __FILE__, __LINE__);
+    }
+
+    diskann::load_bin<uint32_t>(pq_pivots_path.c_str(), chunk_offsets, nr, nc,
+                                file_offset_data[3]);
+
+    if (nr != (uint64_t) num_pq_chunks + 1 || nc != 1) {
+      diskann::cout
+          << "Error reading pq_pivots file at chunk offsets; file has nr=" << nr
+          << ",nc=" << nc << ", expecting nr=" << num_pq_chunks + 1 << ", nc=1."
+          << std::endl;
+      throw diskann::ANNException(
+          "Error reading pq_pivots file at chunk offsets.", -1, __FUNCSIG__,
+          __FILE__, __LINE__);
+    }
+
     diskann::cout << "Loaded PQ pivot information" << std::endl;
   }
 
