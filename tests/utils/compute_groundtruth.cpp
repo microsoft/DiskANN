@@ -17,6 +17,7 @@
 #include <omp.h>
 #include <mkl.h>
 #include <boost/program_options.hpp>
+#include <unordered_map>
 
 #ifdef _WINDOWS
 #include <malloc.h>
@@ -344,7 +345,8 @@ inline void save_groundtruth_as_one_file(const std::string filename,
 template<typename T>
 int aux_main(const std::string &base_file, const std::string &query_file,
              const std::string &gt_file, size_t k,
-             const diskann::Metric &metric) {
+             const diskann::Metric &metric,
+             const std::string     &tags_file = std::string("")) {
   size_t npoints, nqueries, dim;
 
   float *base_data;
@@ -352,6 +354,34 @@ int aux_main(const std::string &base_file, const std::string &query_file,
 
   int num_parts = get_num_parts<T>(base_file.c_str());
   load_bin_as_float<T>(query_file.c_str(), query_data, nqueries, dim, 0);
+
+  // load tags
+  std::unordered_map<std::uint32_t, std::uint32_t> location_to_tag;
+  if (!tags_file.empty()) {
+    size_t         file_dim, file_num_points;
+    std::uint32_t *tag_data;
+    diskann::load_bin<std::uint32_t>(tags_file, tag_data, file_num_points,
+                                     file_dim);
+    if (file_dim != 1) {
+      diskann::cerr << "tags file error" << std::endl;
+      throw diskann::ANNException("tag file error", -1, __FUNCSIG__, __FILE__,
+                                  __LINE__);
+    }
+
+    // check if the point count match
+    size_t raw_pts, raw_dim;
+    diskann::get_bin_metadata(base_file, raw_pts, raw_dim);
+    if (raw_pts != file_num_points) {
+      diskann::cerr << "point num in tags file mismatch" << std::endl;
+      throw diskann::ANNException("point num in tags file mismatch", -1,
+                                  __FUNCSIG__, __FILE__, __LINE__);
+    }
+
+    for (std::uint32_t i = 0; i < static_cast<std::uint32_t>(file_num_points);
+         i++) {
+      location_to_tag[i] = tag_data[i];
+    }
+  }
 
   std::vector<std::vector<std::pair<uint32_t, float>>> results(nqueries);
 
@@ -385,7 +415,13 @@ int aux_main(const std::string &base_file, const std::string &query_file,
     std::vector<std::pair<uint32_t, float>> &cur_res = results[i];
     std::sort(cur_res.begin(), cur_res.end(), custom_dist);
     for (_u64 j = 0; j < k; j++) {
-      closest_points[i * k + j] = (int32_t) cur_res[j].first;
+      if (!tags_file.empty()) {
+        std::uint32_t index_with_tag = location_to_tag[cur_res[j].first];
+        closest_points[i * k + j] = (int32_t) index_with_tag;
+      } else {
+        closest_points[i * k + j] = (int32_t) cur_res[j].first;
+      }
+
       if (metric == diskann::Metric::INNER_PRODUCT)
         dist_closest_points[i * k + j] = -cur_res[j].second;
       else
@@ -402,7 +438,7 @@ int aux_main(const std::string &base_file, const std::string &query_file,
 }
 
 int main(int argc, char **argv) {
-  std::string data_type, dist_fn, base_file, query_file, gt_file;
+  std::string data_type, dist_fn, base_file, query_file, gt_file, tags_file;
   uint64_t    K;
 
   try {
@@ -426,6 +462,10 @@ int main(int argc, char **argv) {
         "File name for the writing ground truth in binary format");
     desc.add_options()("K", po::value<uint64_t>(&K)->required(),
                        "Number of ground truth nearest neighbors to compute");
+    desc.add_options()(
+        "tags_file",
+        po::value<std::string>(&tags_file)->default_value(std::string()),
+        "File containing the tags in binary format");
 
     po::variables_map vm;
     po::store(po::parse_command_line(argc, argv, desc), vm);
@@ -461,11 +501,11 @@ int main(int argc, char **argv) {
 
   try {
     if (data_type == std::string("float"))
-      aux_main<float>(base_file, query_file, gt_file, K, metric);
+      aux_main<float>(base_file, query_file, gt_file, K, metric, tags_file);
     if (data_type == std::string("int8"))
-      aux_main<int8_t>(base_file, query_file, gt_file, K, metric);
+      aux_main<int8_t>(base_file, query_file, gt_file, K, metric, tags_file);
     if (data_type == std::string("uint8"))
-      aux_main<uint8_t>(base_file, query_file, gt_file, K, metric);
+      aux_main<uint8_t>(base_file, query_file, gt_file, K, metric, tags_file);
   } catch (const std::exception &e) {
     std::cout << std::string(e.what()) << std::endl;
     diskann::cerr << "Compute GT failed." << std::endl;
