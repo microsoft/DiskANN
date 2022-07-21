@@ -2248,6 +2248,7 @@ namespace diskann {
       }
 
       {
+        std::shared_lock<std::shared_timed_mutex> ul(_update_lock);
         std::shared_lock<std::shared_timed_mutex> tl(_tag_lock);
         std::shared_lock<std::shared_timed_mutex> dl(_delete_lock);
         if (_location_to_tag.size() + _delete_set.size() != _nd) {
