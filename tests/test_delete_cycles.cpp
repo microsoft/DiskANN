@@ -34,7 +34,7 @@ int search_memory_index(diskann::Metric& metric, const std::string& index_path,
                         std::string& truthset_file, const unsigned num_threads,
                         const unsigned               recall_at,
                         const std::vector<unsigned>& Lvec, const bool dynamic,
-                        const bool tags, std::vector<float>& history) {
+                        const bool tags, std::vector<std::vector<float>>& history) {
   // Load the query file
   T*        query = nullptr;
   unsigned* gt_ids = nullptr;
@@ -146,7 +146,7 @@ int search_memory_index(diskann::Metric& metric, const std::string& index_path,
       recall = diskann::calculate_recall(query_num, gt_ids, gt_dists, gt_dim,
                                          query_result_ids[test_id].data(),
                                          recall_at, recall_at);
-      history.push_back(recall);
+      history[test_id].push_back(recall);
     }
 
     std::sort(latency_stats.begin(), latency_stats.end());
@@ -266,6 +266,20 @@ void test_batch_deletes(const std::string& data_path, const unsigned L,
   std::cout << std::endl;
   std::cout << std::endl;
 
+  std::vector<std::vector<float>> history(5);
+
+  std::vector<unsigned> Lvec;
+  Lvec.push_back(10);
+  Lvec.push_back(20);
+  Lvec.push_back(50);
+  Lvec.push_back(100);
+  Lvec.push_back(200);
+
+  diskann::Metric metric;
+  metric = diskann::Metric::L2;
+  search_memory_index<T>(metric, save_path, res_path, query_file,
+                             gt_file, thread_count, 10, Lvec, true, true,
+                             history);
   // CYCLING START
 
   for (const int delete_policy : Dvec) {
@@ -284,8 +298,6 @@ void test_batch_deletes(const std::string& data_path, const unsigned L,
 
     std::vector<double> delete_times;
     std::vector<double> insert_times;
-
-    std::vector<float> history;
 
     for (int i = 0; i < rounds; i++) {
       std::cout << "ROUND " << i + 1 << std::endl;
@@ -326,7 +338,7 @@ void test_batch_deletes(const std::string& data_path, const unsigned L,
         std::cout << "Re-inserting the same " << points_in_part
                   << " points from the index..." << std::endl;
         diskann::Timer insert_timer;
-#pragma omp parallel for num_threads(1) schedule(dynamic)
+#pragma omp parallel for num_threads(thread_count) schedule(dynamic)
         for (int64_t k = points_seen;
              k < (int64_t) points_seen + points_in_part; k++) {
           indexCycle.insert_point(&data_load[indices[k] * aligned_dim],
@@ -340,26 +352,22 @@ void test_batch_deletes(const std::string& data_path, const unsigned L,
 
         insert_times.push_back(elapsedSeconds);
 
-        // indexCycle.print_status();
+        indexCycle.save(save_path.c_str());
 
-        points_seen += points_in_part;
-        const auto save_path_inc =
-            get_save_filename(save_path + ".after-cycle-", 0, 0);
-        indexCycle.save(save_path_inc.c_str());
 
-        std::vector<unsigned> Lvec;
-        Lvec.push_back(100);
-        diskann::Metric metric;
-        metric = diskann::Metric::L2;
-        search_memory_index<T>(metric, save_path_inc, res_path, query_file,
+        search_memory_index<T>(metric, save_path, res_path, query_file,
                                gt_file, thread_count, 10, Lvec, true, true,
                                history);
       }
     }
 
-    std::cout << "Recall List: " << std::endl;
-    for (const float rec : history)
-      std::cout << rec << std::endl;
+    std::cout << "Recall Lists: " << std::endl;
+  for (int i=0; i<5; i++){
+    std::cout << "Recall at L = " << Lvec[i] << std::endl; 
+    std::vector<float> recall_list = history[i];
+    for(float rec : recall_list) std::cout << rec << std::endl;
+    std::cout << std::endl; 
+  }
 
     double avg_delete = ((double) std::accumulate(delete_times.begin(),
                                                   delete_times.end(), 0.0)) /

@@ -1339,16 +1339,13 @@ namespace diskann {
   }
 
   template<typename T, typename TagT>
-  std::pair<int, std::vector<double>> Index<T, TagT>::inter_insert(
+  void Index<T, TagT>::inter_insert(
       unsigned n, std::vector<unsigned> &pruned_list, const _u32 range,
       bool update_in_graph) {
-    std::vector<double> stitch_times(3, 0.0);
 
     const auto &src_pool = pruned_list;
 
     assert(!src_pool.empty());
-
-    int num_pruned = 0;
 
     for (auto des : src_pool) {
       // des.id is the id of the neighbors of n
@@ -1370,7 +1367,6 @@ namespace diskann {
           } else {
             copy_of_neighbors = des_pool;
             prune_needed = true;
-            num_pruned++;
           }
         }
       }  // des lock is released by this point
@@ -1424,21 +1420,13 @@ namespace diskann {
             }
           }
         }
-        // if(_queries_present){
-        //   auto times = insert_and_stitch(des);
-        //   stitch_times[0] += times[0];
-        //   stitch_times[1] += times[1];
-        //   stitch_times[2] += times[2];
-        // }
       }
-    }
-    return std::make_pair(num_pruned, stitch_times);
-  }
+    }  }
 
   template<typename T, typename TagT>
-  std::pair<int, std::vector<double>> Index<T, TagT>::inter_insert(
+  void Index<T, TagT>::inter_insert(
       unsigned n, std::vector<unsigned> &pruned_list, bool update_in_graph) {
-    return inter_insert(n, pruned_list, _indexingRange, update_in_graph);
+    inter_insert(n, pruned_list, _indexingRange, update_in_graph);
   }
 
   template<typename T, typename TagT>
@@ -1690,8 +1678,7 @@ namespace diskann {
   // find the nearest neighbors in _final_graph of every point in _query_graph
   // and add them to the _query_nn field
   template<typename T, typename TagT>
-  std::vector<double> Index<T, TagT>::insert_and_stitch(unsigned location) {
-    std::vector<double> times(3);
+  void Index<T, TagT>::insert_and_stitch(unsigned location) {
 
     auto                  L = _indexingQueueSize;
     std::vector<unsigned> init_ids;
@@ -1710,17 +1697,11 @@ namespace diskann {
 
     int version = 1;  // flag to search in query graph
 
-    diskann::Timer search_timer;
-
     iterate_to_fixed_point(node_coords, L, init_ids, pool, visited,
                            best_L_nodes, des, inserted_into_pool_rs,
                            inserted_into_pool_bs, true, false, version);
 
-    double search_time = search_timer.elapsed() / 1000000.0;
-    times[0] = search_time;
-    // find the notes in _query_nn that should be updated to include location
-
-    diskann::Timer update_timer;
+    // find the nodes in _query_nn that should be updated to include location
 
     std::vector<unsigned> to_stitch;
     for (auto nbor : best_L_nodes) {
@@ -1742,12 +1723,7 @@ namespace diskann {
       }
     }
 
-    double update_time = update_timer.elapsed() / 1000000.0;
-    times[1] = update_time;
-
     // robustStitch location based on the nodes in to_stitch
-
-    diskann::Timer stitch_timer;
 
     size_t total_capacity = _indexingRange - _final_graph[location].size();
     size_t capacity;
@@ -1793,9 +1769,6 @@ namespace diskann {
       //   }
       // }
     }
-    double stitch_time = stitch_timer.elapsed() / 1000000.0;
-    times[2] = stitch_time;
-    return times;
   }
 
   // L = adjacency list of a query node
@@ -1878,13 +1851,11 @@ namespace diskann {
   //   }
 
   template<typename T, typename TagT>
-  void Index<T, TagT>::erase_query_nn(tsl::robin_set<unsigned> &delete_set) {
+  void Index<T, TagT>::delete_and_restitch(tsl::robin_set<unsigned> &delete_set) {
     // std::unordered_map<unsigned, std::set<unsigned>> new_edges;
     // std::vector<std::mutex> locks(_max_points + _num_frozen_pts);
     tsl::robin_set<unsigned> to_stitch;
-    std::mutex               stitch_lock;
     tsl::robin_set<unsigned> to_refresh;
-// #pragma omp parallel for schedule(dynamic)
     for (_s64 node_ctr = (_s64) 0; node_ctr < (_s64) _max_query_points;
          ++node_ctr) {
       std::vector<Neighbor> new_pool;
@@ -1898,10 +1869,7 @@ namespace diskann {
       }
       if (new_pool.size() != _indexingRange) {
         for (auto nbor : new_pool) {
-          {
-            LockGuard guard(stitch_lock);
-            to_stitch.insert(nbor.id);
-          }
+          to_stitch.insert(nbor.id);
         }
         size_t k = new_pool.size();
         new_pool.resize(_indexingRange);
@@ -3243,7 +3211,6 @@ namespace diskann {
               (old_delete_set.find(j.id) == old_delete_set.end()))
             _final_graph[(_u32) i].push_back(j.id);
         }
-        // if(_queries_present) insert_and_stitch((_u32) i);
       }
     }
     return std::make_pair(modify, prune);
@@ -3373,10 +3340,8 @@ namespace diskann {
     }
 
     if (_queries_present) {
-      std::cout << "Removing deleted nodes from query_nn ... ";
-      erase_query_nn(old_delete_set);
-      // delete_from_marked_graph(old_delete_set, range, maxc, alpha);
-      std::cout << " done" << std::endl;
+      std::cout << "Removing deleted nodes from query_nn ... " << std::endl; 
+      delete_and_restitch(old_delete_set);
     }
 
     if (_support_eager_delete)
@@ -3743,11 +3708,9 @@ namespace diskann {
   }
 
   template<typename T, typename TagT>
-  std::pair<int, std::vector<double>> Index<T, TagT>::insert_point(
+  int Index<T, TagT>::insert_point(
       const T *point, const TagT tag) {
     assert(_has_built);
-
-    std::vector<double> stitch_times(3, 0.0);
 
     std::shared_lock<std::shared_timed_mutex> update_lock(_update_lock);
 
@@ -3788,8 +3751,6 @@ namespace diskann {
             -1, __FUNCSIG__, __FILE__, __LINE__);
       }
     }
-
-    int num_pruned;
 
     {
       std::unique_lock<std::shared_timed_mutex> lock(_tag_lock);
@@ -3859,29 +3820,18 @@ namespace diskann {
       }
     }
 
-    std::vector<double> times;
+    if (_queries_present) {
+      insert_and_stitch(location);
+    }
+
     assert(_final_graph[location].size() <= range);
     if (_support_eager_delete) {
-      auto pair = inter_insert(location, pruned_list, 1);
-      num_pruned = pair.first;
-      times = pair.second;
+      inter_insert(location, pruned_list, 1);
     } else {
-      auto pair = inter_insert(location, pruned_list, 0);
-      num_pruned = pair.first;
-      times = pair.second;
-    }
-    stitch_times[0] += times[0];
-    stitch_times[1] += times[1];
-    stitch_times[2] += times[2];
-
-    if (_queries_present) {
-      auto Times = insert_and_stitch(location);
-      stitch_times[0] += Times[0];
-      stitch_times[1] += Times[1];
-      stitch_times[2] += Times[2];
+      inter_insert(location, pruned_list, 0);
     }
 
-    return std::make_pair(num_pruned, times);
+    return 0;
   }
 
   template<typename T, typename TagT>

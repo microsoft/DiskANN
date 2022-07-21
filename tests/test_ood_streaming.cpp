@@ -87,19 +87,13 @@ void build_with_query_data(const std::string& data_path, const unsigned L,
 
   diskann::Timer index_timer;
 
-  std::vector<int> num_pruned(num_points - num_initial_points, 0);
-
   std::vector<double> search_times(num_points - num_initial_points, 0.0);
   std::vector<double> update_times(num_points - num_initial_points, 0.0);
   std::vector<double> stitch_times(num_points - num_initial_points, 0.0);
 
 #pragma omp parallel for num_threads(thread_count) schedule(dynamic)
   for (int64_t j = num_initial_points; j < (int64_t) num_points; j++) {
-    auto pair = index.insert_point(&data_load[j * aligned_dim], static_cast<TagT>(j));
-    num_pruned[j - num_initial_points] = pair.first;
-    search_times[j - num_initial_points] = pair.second[0];
-    update_times[j - num_initial_points] = pair.second[1];
-    stitch_times[j - num_initial_points] = pair.second[2];
+    index.insert_point(&data_load[j * aligned_dim], static_cast<TagT>(j));
   }
 
   // index.cleanup();
@@ -109,9 +103,6 @@ void build_with_query_data(const std::string& data_path, const unsigned L,
   double seconds = index_timer.elapsed() / 1000000.0;
 
   std::cout << "Inserted points in " << seconds << " seconds" << std::endl;
-  std::cout << "Time spent searching query index " << std::accumulate(search_times.begin(), search_times.end(), 0.0) << std::endl; 
-  std::cout << "Time spent updating query graph " << std::accumulate(update_times.begin(), update_times.end(), 0.0) << std::endl; 
-  std::cout << "Time spent stitching base points " << std::accumulate(stitch_times.begin(), stitch_times.end(), 0.0) << std::endl;
 
     std::vector<int64_t> indices(num_points);
     std::iota(indices.begin(), indices.end(), 0);
