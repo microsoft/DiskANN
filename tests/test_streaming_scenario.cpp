@@ -196,7 +196,7 @@ void build_incremental_index(const std::string& data_path, const unsigned L,
         "ERROR: max_points_to_insert < active_window + consolidate_interval",
         -1, __FUNCSIG__, __FILE__, __LINE__);
 
-  if (consolidate_interval < max_points_to_insert / 100)
+  if (consolidate_interval < max_points_to_insert / 1000)
     throw diskann::ANNException("ERROR: consolidate_interval is too small", -1,
                                 __FUNCSIG__, __FILE__, __LINE__);
 
