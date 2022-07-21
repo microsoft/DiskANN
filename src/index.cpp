@@ -1898,48 +1898,48 @@ namespace diskann {
       _marked_graph[node_ctr].clear();
     }
 
-    // populate_query_nn();
+    populate_query_nn();
     
 
-    std::cout << "Number of nodes to restitch: " << to_stitch.size() <<
-    std::endl; std::cout << "Number of nodes to refresh: " <<
-    to_refresh.size() << std::endl;
+    // std::cout << "Number of nodes to restitch: " << to_stitch.size() <<
+    // std::endl; std::cout << "Number of nodes to refresh: " <<
+    // to_refresh.size() << std::endl;
 
-      auto                  L = _indexingQueueSize;
-      std::vector<unsigned> init_ids;
-      init_ids.emplace_back(_start);
-    #pragma omp parallel for schedule(dynamic)
-      for (size_t node_ctr = 0; node_ctr < _max_query_points;
-           ++node_ctr) {
-        if (to_refresh.find(node_ctr) != to_refresh.end()) {
-          tsl::robin_set<unsigned> visited;
-          std::vector<Neighbor>    pool;
-          pool.reserve(L * 2);
-          visited.reserve(L * 2);
-          const T *node_coords = _query_data + _aligned_dim * node_ctr;
+    //   auto                  L = _indexingQueueSize;
+    //   std::vector<unsigned> init_ids;
+    //   init_ids.emplace_back(_start);
+    // #pragma omp parallel for schedule(dynamic)
+    //   for (size_t node_ctr = 0; node_ctr < _max_query_points;
+    //        ++node_ctr) {
+    //     if (to_refresh.find(node_ctr) != to_refresh.end()) {
+    //       tsl::robin_set<unsigned> visited;
+    //       std::vector<Neighbor>    pool;
+    //       pool.reserve(L * 2);
+    //       visited.reserve(L * 2);
+    //       const T *node_coords = _query_data + _aligned_dim * node_ctr;
 
-          std::vector<unsigned> des;
-          std::vector<Neighbor> best_L_nodes;
-          best_L_nodes.resize(L + 1);
-          tsl::robin_set<unsigned> inserted_into_pool_rs;
-          boost::dynamic_bitset<>  inserted_into_pool_bs;
+    //       std::vector<unsigned> des;
+    //       std::vector<Neighbor> best_L_nodes;
+    //       best_L_nodes.resize(L + 1);
+    //       tsl::robin_set<unsigned> inserted_into_pool_rs;
+    //       boost::dynamic_bitset<>  inserted_into_pool_bs;
 
-          iterate_to_fixed_point(node_coords, L, init_ids, pool, visited,
-                                 best_L_nodes, des, inserted_into_pool_rs,
-                                 inserted_into_pool_bs);
+    //       iterate_to_fixed_point(node_coords, L, init_ids, pool, visited,
+    //                              best_L_nodes, des, inserted_into_pool_rs,
+    //                              inserted_into_pool_bs);
 
-          {
-            LockGuard guard(_query_nn_locks[node_ctr]);
-            for(auto nbor : pool){
-              InsertIntoPool(_query_nn[node_ctr].data(), _indexingRange,
-              nbor);
-            }
-          }
-        }
-      }
-    robust_stitch(to_stitch);
+    //       {
+    //         LockGuard guard(_query_nn_locks[node_ctr]);
+    //         for(auto nbor : pool){
+    //           InsertIntoPool(_query_nn[node_ctr].data(), _indexingRange,
+    //           nbor);
+    //         }
+    //       }
+    //     }
+    //   }
+    // robust_stitch(to_stitch);
 
-    // robust_stitch(); 
+    robust_stitch(); 
   }
 
   // the marked graph may go out of date after inserts and need to be refreshed
