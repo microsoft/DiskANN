@@ -42,7 +42,7 @@ if (MSVC)
 
     message(STATUS "Invoking nuget to download Boost, OpenMP and MKL dependencies...")
     configure_file(${PROJECT_SOURCE_DIR}/windows/packages.config.in ${DISKANN_MSVC_PACKAGES_CONFIG})
-    exec_program(${NUGET_EXE} ARGS install ${DISKANN_MSVC_PACKAGES_CONFIG} -ExcludeVersion -OutputDirectory ${DISKANN_MSVC_PACKAGES})
+    exec_program(${NUGET_EXE} ARGS install \"${DISKANN_MSVC_PACKAGES_CONFIG}\" -ExcludeVersion -OutputDirectory \"${DISKANN_MSVC_PACKAGES}\")
     message(STATUS "Finished setting up nuget dependencies")
 endif()
 
