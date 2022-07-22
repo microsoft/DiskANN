@@ -380,12 +380,12 @@ namespace diskann {
                        const int version);
 
     void populate_query_nn();
-    void update_marked_graph();
-    void delete_from_marked_graph(tsl::robin_set<unsigned> &delete_set, const unsigned &range, const unsigned &maxc, const float &alpha);
+    // void update_marked_graph();
+    // void delete_from_marked_graph(tsl::robin_set<unsigned> &delete_set, const unsigned &range, const unsigned &maxc, const float &alpha);
     void robust_stitch(); 
     void robust_stitch(tsl::robin_set<unsigned> &pruned_nodes); 
 
-    void delete_stitched_edges(unsigned location);
+    void delete_stitched_edges(unsigned location, unsigned query);
     void insert_and_stitch(unsigned location);
     void delete_and_restitch(tsl::robin_set<unsigned> &delete_set);
     void delete_and_stitch(tsl::robin_set<unsigned> &delete_set);
@@ -435,8 +435,8 @@ namespace diskann {
     // Query graph data structures
     T *                                _query_data = nullptr;
     std::vector<std::vector<unsigned>> _query_graph;
-    std::vector<std::vector<unsigned>> _marked_graph; 
-    std::vector<int> _stitch_count;
+    std::vector<std::unordered_map<unsigned, std::vector<unsigned>>> _marked_graph; 
+    // std::vector<int> _stitch_count;
     std::vector<std::vector<Neighbor>> _query_nn;     
 
     // Dimensions
