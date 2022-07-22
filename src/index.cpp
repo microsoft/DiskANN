@@ -1748,7 +1748,7 @@ namespace diskann {
             {
               LockGuard guard(_locks[prev_id]);
               // _stitch_count[prev_id]--;
-              delete_stitched_edges(prev_id, nbh);
+              // delete_stitched_edges(prev_id, nbh);
             }
             // }
           }
@@ -2179,7 +2179,7 @@ namespace diskann {
               {
                 LockGuard guard(_locks[prev_id]);
                 // _stitch_count[prev_id]--;
-                delete_stitched_edges(prev_id, node_ctr);
+                // delete_stitched_edges(prev_id, node_ctr);
               }
               // }
             }
