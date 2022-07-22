@@ -3624,9 +3624,10 @@ namespace diskann {
 
     for (_u64 old = _nd; old < _max_points; ++old) {
       _final_graph[old].clear();
-      if (_queries_present)
+      if (_queries_present){
         _marked_graph[old].clear();
         _stitch_count[old] = 0;
+      }
     }
     _delete_set.clear();
     _empty_slots.clear();
