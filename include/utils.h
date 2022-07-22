@@ -85,7 +85,7 @@ inline bool file_exists(const std::string& name, bool dirCheck = false) {
         diskann::cout << "Invalid argument passed to stat()" << std::endl;
         break;
       case ENOENT:
-// file is not existing, not an issue, so we won't cout anything.
+        // file is not existing, not an issue, so we won't cout anything.
         break;
       default:
         diskann::cout << "Unexpected error in stat():" << errno << std::endl;
@@ -345,8 +345,7 @@ namespace diskann {
   template<typename T>
   inline void load_bin(const std::string& bin_file, T*& data, size_t& npts,
                        size_t& dim, size_t offset = 0) {
-
-      diskann::cout << "Reading bin file " << bin_file.c_str() << " ..."
+    diskann::cout << "Reading bin file " << bin_file.c_str() << " ..."
                   << std::endl;
     std::ifstream reader;
     reader.exceptions(std::ifstream::failbit | std::ifstream::badbit);
@@ -533,8 +532,10 @@ namespace diskann {
 
     std::cout << "GT count percentiles:" << std::endl;
     for (_u32 p = 0; p < 100; p += 5)
-      std::cout << "percentile " << p << ": "
-                << gt_stats[static_cast<size_t>(std::floor((p / 100.0) * gt_num))] << std::endl;
+      std::cout
+          << "percentile " << p << ": "
+          << gt_stats[static_cast<size_t>(std::floor((p / 100.0) * gt_num))]
+          << std::endl;
     std::cout << "percentile 100"
               << ": " << gt_stats[gt_num - 1] << std::endl;
 

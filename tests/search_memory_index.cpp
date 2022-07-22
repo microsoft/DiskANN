@@ -49,7 +49,8 @@ int search_memory_index(diskann::Metric& metric, const std::string& index_path,
     }
     calc_recall_flag = true;
   } else {
-    diskann::cout <<" Truthset file " << truthset_file << " not found. Not computing recall." << std::endl;
+    diskann::cout << " Truthset file " << truthset_file
+                  << " not found. Not computing recall." << std::endl;
   }
 
   // Load the index
@@ -67,7 +68,7 @@ int search_memory_index(diskann::Metric& metric, const std::string& index_path,
   std::string recall_string = "Recall@" + std::to_string(recall_at);
   std::cout << std::setw(4) << "Ls" << std::setw(12) << "QPS " << std::setw(18)
             << "Avg dist cmps" << std::setw(20) << "Mean Latency (mus)"
-            << std::setw(15) << "99.9 Latency"; 
+            << std::setw(15) << "99.9 Latency";
   if (calc_recall_flag)
     std::cout << std::setw(12) << recall_string;
   std::cout << std::endl;
@@ -133,9 +134,9 @@ int search_memory_index(diskann::Metric& metric, const std::string& index_path,
               << avg_cmps << std::setw(20) << (float) mean_latency
               << std::setw(15)
               << (float) latency_stats[(_u64)(0.999 * query_num)];
-    if(calc_recall_flag) 
-      std::cout<<std::setw(12) << recall; 
-    std::cout<< std::endl;
+    if (calc_recall_flag)
+      std::cout << std::setw(12) << recall;
+    std::cout << std::endl;
   }
 
   std::cout << "Done searching. Now saving results " << std::endl;
@@ -214,10 +215,13 @@ int main(int argc, char** argv) {
     metric = diskann::Metric::L2;
   } else if (dist_fn == std::string("cosine")) {
     metric = diskann::Metric::COSINE;
-  } else if ((dist_fn == std::string("fast_l2")) && (data_type == std::string("float"))) {
+  } else if ((dist_fn == std::string("fast_l2")) &&
+             (data_type == std::string("float"))) {
     metric = diskann::Metric::FAST_L2;
   } else {
-    std::cout << "Unsupported distance function. Currently only l2/ cosine are supported in general, and mips/fast_l2 only for floating point data."
+    std::cout << "Unsupported distance function. Currently only l2/ cosine are "
+                 "supported in general, and mips/fast_l2 only for floating "
+                 "point data."
               << std::endl;
     return -1;
   }

@@ -121,64 +121,65 @@ void inner_prod_to_points(
     delete[] ones_vec;
 }
 
-void exact_knn(const size_t dim, const size_t k,
-               int *const closest_points,  // k * num_queries preallocated, col
-                                           // major, queries columns
-               float *const dist_closest_points,  // k * num_queries
-                                                  // preallocated, Dist to
-                                                  // corresponding closes_points
-               size_t             npoints,
-               float * points_in,  // points in Col major
-               size_t nqueries,  float * queries_in,
-               diskann::Metric metric = diskann::Metric::L2)  // queries in Col major
+void exact_knn(
+    const size_t dim, const size_t k,
+    int *const closest_points,         // k * num_queries preallocated, col
+                                       // major, queries columns
+    float *const dist_closest_points,  // k * num_queries
+                                       // preallocated, Dist to
+                                       // corresponding closes_points
+    size_t npoints,
+    float *points_in,  // points in Col major
+    size_t nqueries, float *queries_in,
+    diskann::Metric metric = diskann::Metric::L2)  // queries in Col major
 {
   float *points_l2sq = new float[npoints];
   float *queries_l2sq = new float[nqueries];
   compute_l2sq(points_l2sq, points_in, npoints, dim);
   compute_l2sq(queries_l2sq, queries_in, nqueries, dim);
 
-  float* points = points_in;
-  float* queries = queries_in;
+  float *points = points_in;
+  float *queries = queries_in;
 
-  if (metric == diskann::Metric::COSINE) { // we convert cosine distance as normalized L2 distnace
-    points = new float[npoints*dim];
-    queries = new float[nqueries*dim];
+  if (metric == diskann::Metric::COSINE) {  // we convert cosine distance as
+                                            // normalized L2 distnace
+    points = new float[npoints * dim];
+    queries = new float[nqueries * dim];
 #pragma omp parallel for schedule(static, 4096)
-    for (_s64 i =0; i < npoints; i++) {
+    for (_s64 i = 0; i < npoints; i++) {
       float norm = std::sqrt(points_l2sq[i]);
-      if (norm==0) {
+      if (norm == 0) {
         norm = std::numeric_limits<float>::epsilon();
       }
-      for (_u32 j=0; j < dim; j++) {
-        points[i*dim + j] = points_in[i*dim+j]/ norm;
+      for (_u32 j = 0; j < dim; j++) {
+        points[i * dim + j] = points_in[i * dim + j] / norm;
       }
     }
 
 #pragma omp parallel for schedule(static, 4096)
-    for (_s64 i =0; i < nqueries; i++) {
+    for (_s64 i = 0; i < nqueries; i++) {
       float norm = std::sqrt(queries_l2sq[i]);
-      if (norm==0) {
+      if (norm == 0) {
         norm = std::numeric_limits<float>::epsilon();
       }
-      for (_u32 j=0; j < dim; j++) {
-        queries[i*dim + j] = queries_in[i*dim +j]/ norm;
+      for (_u32 j = 0; j < dim; j++) {
+        queries[i * dim + j] = queries_in[i * dim + j] / norm;
       }
     }
-    //recalculate norms after normalizing, they should all be one. 
-  compute_l2sq(points_l2sq, points, npoints, dim);
-  compute_l2sq(queries_l2sq, queries, nqueries, dim);
+    // recalculate norms after normalizing, they should all be one.
+    compute_l2sq(points_l2sq, points, npoints, dim);
+    compute_l2sq(queries_l2sq, queries, nqueries, dim);
   }
-
 
   std::cout << "Going to compute " << k << " NNs for " << nqueries
             << " queries over " << npoints << " points in " << dim
             << " dimensions using";
-  if (metric==diskann::Metric::INNER_PRODUCT)
+  if (metric == diskann::Metric::INNER_PRODUCT)
     std::cout << " MIPS ";
-  else if(metric==diskann::Metric::COSINE)
+  else if (metric == diskann::Metric::COSINE)
     std::cout << " Cosine ";
   else
-    std::cout << " L2 ";  
+    std::cout << " L2 ";
   std::cout << "distance fn. " << std::endl;
 
   size_t q_batch_size = (1 << 9);
@@ -336,7 +337,8 @@ inline void save_groundtruth_as_one_file(const std::string filename,
 
 template<typename T>
 int aux_main(const std::string &base_file, const std::string &query_file,
-             const std::string &gt_file, size_t k, const diskann::Metric &metric) {
+             const std::string &gt_file, size_t k,
+             const diskann::Metric &metric) {
   size_t npoints, nqueries, dim;
 
   float *base_data;
@@ -446,22 +448,21 @@ int main(int argc, char **argv) {
   } else if (dist_fn == std::string("cosine")) {
     metric = diskann::Metric::COSINE;
   } else {
-    std::cerr << "Unsupported distance function. Use l2/mips/cosine." << std::endl;
+    std::cerr << "Unsupported distance function. Use l2/mips/cosine."
+              << std::endl;
     return -1;
   }
 
-try {
-  if (data_type == std::string("float"))
-    aux_main<float>(base_file, query_file, gt_file, K, metric);
-  if (data_type == std::string("int8"))
-    aux_main<int8_t>(base_file, query_file, gt_file, K, metric);
-  if (data_type == std::string("uint8"))
-    aux_main<uint8_t>(base_file, query_file, gt_file, K, metric);
-}
-catch (const std::exception& e) {
+  try {
+    if (data_type == std::string("float"))
+      aux_main<float>(base_file, query_file, gt_file, K, metric);
+    if (data_type == std::string("int8"))
+      aux_main<int8_t>(base_file, query_file, gt_file, K, metric);
+    if (data_type == std::string("uint8"))
+      aux_main<uint8_t>(base_file, query_file, gt_file, K, metric);
+  } catch (const std::exception &e) {
     std::cout << std::string(e.what()) << std::endl;
     diskann::cerr << "Compute GT failed." << std::endl;
     return -1;
   }
 }
-

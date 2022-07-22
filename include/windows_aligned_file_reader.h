@@ -35,10 +35,10 @@ class WindowsAlignedFileReader : public AlignedFileReader {
 
   DISKANN_DLLEXPORT virtual void register_thread() override;
   DISKANN_DLLEXPORT virtual void deregister_thread() override {
-      // TODO: Needs implementation.
+    // TODO: Needs implementation.
   }
   DISKANN_DLLEXPORT virtual void deregister_all_threads() override {
-      // TODO: Needs implementation.
+    // TODO: Needs implementation.
   }
   DISKANN_DLLEXPORT virtual IOContext &get_ctx() override;
 

@@ -161,9 +161,7 @@ namespace diskann {
 
     // insertions possible only when id corresponding to tag does not already
     // exist in the graph
-    DISKANN_DLLEXPORT int insert_point(
-        const T *point, 
-        const TagT tag);  
+    DISKANN_DLLEXPORT int insert_point(const T *point, const TagT tag);
 
     // call before triggering deleteions - sets important flags required for
     // deletion related operations
@@ -233,12 +231,13 @@ namespace diskann {
     // change.
     DISKANN_DLLEXPORT static const int METADATA_ROWS = 5;
 
-    // For Bulk Index FastL2 search, we interleave the data with graph 
+    // For Bulk Index FastL2 search, we interleave the data with graph
     DISKANN_DLLEXPORT void optimize_index_layout();
 
     // For FastL2 search on optimized layout
-    DISKANN_DLLEXPORT void search_with_optimized_layout(const T *query, size_t K,
-                                                 size_t L, unsigned *indices);
+    DISKANN_DLLEXPORT void search_with_optimized_layout(const T *query,
+                                                        size_t K, size_t L,
+                                                        unsigned *indices);
 
     /*  Internals of the library */
    protected:
@@ -293,8 +292,8 @@ namespace diskann {
                          std::vector<unsigned> &pruned_list);
 
     void prune_neighbors(const unsigned location, std::vector<Neighbor> &pool,
-                         const _u32 range, const _u32 max_candidate_size, const float alpha,
-                         std::vector<unsigned> &pruned_list);
+                         const _u32 range, const _u32 max_candidate_size,
+                         const float alpha, std::vector<unsigned> &pruned_list);
 
     void occlude_list(std::vector<Neighbor> &pool, const float alpha,
                       const unsigned degree, const unsigned maxc,
@@ -307,7 +306,7 @@ namespace diskann {
 
     void batch_inter_insert(unsigned                     n,
                             const std::vector<unsigned> &pruned_list,
-                            const _u32 range,
+                            const _u32                   range,
                             std::vector<unsigned> &      need_to_sync);
 
     void batch_inter_insert(unsigned                     n,
@@ -319,7 +318,6 @@ namespace diskann {
 
     void inter_insert(unsigned n, std::vector<unsigned> &pruned_list,
                       bool update_in_graph);
-
 
     void link(Parameters &parameters);
 
@@ -362,9 +360,10 @@ namespace diskann {
     unsigned     _ep = 0;
     size_t       _max_range_of_loaded_graph = 0;
     bool         _saturate_graph = false;
-    bool         _save_as_one_file = false; // plan to support in next version to avoid too many files per index
-    bool         _dynamic_index = false;
-    bool         _enable_tags = false;
+    bool _save_as_one_file = false;  // plan to support in next version to avoid
+                                     // too many files per index
+    bool _dynamic_index = false;
+    bool _enable_tags = false;
     // Using normalied L2 for cosine.
     bool _normalize_vecs = false;
 
