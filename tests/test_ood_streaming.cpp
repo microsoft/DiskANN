@@ -98,7 +98,7 @@ void build_with_query_data(const std::string& data_path, const unsigned L,
 
   // index.cleanup();
 
-  index.query_nn_stats();
+  // index.query_nn_stats();
 
   double seconds = index_timer.elapsed() / 1000000.0;
 

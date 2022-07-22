@@ -233,8 +233,6 @@ namespace diskann {
     DISKANN_DLLEXPORT void compact_frozen_point();
     DISKANN_DLLEXPORT void compact_data_for_search();
 
-    DISKANN_DLLEXPORT int cleanup();
-
     DISKANN_DLLEXPORT void consolidate(Parameters &parameters);
 
     // DISKANN_DLLEXPORT void save_index_as_one_file(bool flag);
@@ -387,9 +385,11 @@ namespace diskann {
     void robust_stitch(); 
     void robust_stitch(tsl::robin_set<unsigned> &pruned_nodes); 
 
+    void delete_stitched_edges(unsigned location);
     void insert_and_stitch(unsigned location);
     void delete_and_restitch(tsl::robin_set<unsigned> &delete_set);
     void delete_and_stitch(tsl::robin_set<unsigned> &delete_set);
+
 
     // WARNING: Do not call reserve_location() without acquiring change_lock_
     int  reserve_location();
@@ -436,6 +436,7 @@ namespace diskann {
     T *                                _query_data = nullptr;
     std::vector<std::vector<unsigned>> _query_graph;
     std::vector<std::vector<unsigned>> _marked_graph; 
+    std::vector<int> _stitch_count;
     std::vector<std::vector<Neighbor>> _query_nn;     
 
     // Dimensions
