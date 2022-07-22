@@ -220,7 +220,7 @@ int generate_pq_pivots(const float *passed_train_data, size_t num_train,
 
   std::unique_ptr<float[]> full_pivot_data;
 
-  if (file_exists(pq_pivots_path)) { //RKNOTE:FIX TO HANDLE NEW PQ FILE FORMAT
+  if (file_exists(pq_pivots_path)) {  // RKNOTE:FIX TO HANDLE NEW PQ FILE FORMAT
     size_t file_dim, file_num_centers;
     diskann::load_bin<float>(pq_pivots_path, full_pivot_data, file_num_centers,
                              file_dim);

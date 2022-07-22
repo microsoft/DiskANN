@@ -821,7 +821,7 @@ namespace diskann {
     output_file_meta.push_back(vamana_frozen_loc);
     output_file_meta.push_back((_u64) append_reorder_data);
     if (append_reorder_data) {
-      output_file_meta.push_back(n_sectors+1);
+      output_file_meta.push_back(n_sectors + 1);
       output_file_meta.push_back(ndims_reorder_file);
       output_file_meta.push_back(n_data_nodes_per_sector);
     }

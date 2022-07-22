@@ -555,9 +555,11 @@ namespace diskann {
 
     size_t pq_file_dim, pq_file_num_centroids;
 #ifdef EXEC_ENV_OLS
-    get_bin_metadata(files, pq_table_bin, pq_file_num_centroids, pq_file_dim, METADATA_SIZE);
+    get_bin_metadata(files, pq_table_bin, pq_file_num_centroids, pq_file_dim,
+                     METADATA_SIZE);
 #else
-    get_bin_metadata(pq_table_bin, pq_file_num_centroids, pq_file_dim, METADATA_SIZE);
+    get_bin_metadata(pq_table_bin, pq_file_num_centroids, pq_file_dim,
+                     METADATA_SIZE);
 #endif
 
     this->disk_index_file = disk_index_file;
@@ -647,12 +649,13 @@ namespace diskann {
     std::ifstream index_metadata(disk_index_file, std::ios::binary);
 #endif
 
-    _u32  nr, nc; // metadata itself is stored as bin format (nr is number of metadata, nc should be 1)
+    _u32 nr, nc;  // metadata itself is stored as bin format (nr is number of
+                  // metadata, nc should be 1)
     READ_U32(index_metadata, nr);
     READ_U32(index_metadata, nc);
 
     _u64 disk_nnodes;
-    _u64 disk_ndims; // can be disk PQ dim if disk_PQ is set to true
+    _u64 disk_ndims;  // can be disk PQ dim if disk_PQ is set to true
     READ_U64(index_metadata, disk_nnodes);
     READ_U64(index_metadata, disk_ndims);
 

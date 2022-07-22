@@ -345,8 +345,7 @@ namespace diskann {
   template<typename T>
   inline void load_bin(const std::string& bin_file, T*& data, size_t& npts,
                        size_t& dim, size_t offset = 0) {
-
-      diskann::cout << "Reading bin file " << bin_file.c_str() << " ..."
+    diskann::cout << "Reading bin file " << bin_file.c_str() << " ..."
                   << std::endl;
     std::ifstream reader;
     reader.exceptions(std::ifstream::failbit | std::ifstream::badbit);
