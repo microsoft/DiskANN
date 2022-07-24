@@ -1925,7 +1925,7 @@ namespace diskann {
 //       _marked_graph[node_ctr].clear();
 //     }
 
-    populate_query_nn();
+    // populate_query_nn();
 
     // std::cout << "Number of nodes to restitch: " << to_stitch.size() <<
     // std::endl; std::cout << "Number of nodes to refresh: " <<
@@ -1965,7 +1965,7 @@ namespace diskann {
     //   }
     // robust_stitch(to_stitch);
 
-    robust_stitch();
+    // robust_stitch();
   }
 
   template<typename T, typename TagT>
@@ -3387,44 +3387,44 @@ namespace diskann {
       delete_policy = 1;
     }
 
-    size_t max = 0, min = 1 << 30, total = 0, cnt = 0;
-    for (size_t i = 0; i < (_nd + _num_frozen_pts); i++) {
-      auto &pool = _final_graph[i];
-      max = (std::max)(max, pool.size());
-      min = (std::min)(min, pool.size());
-      total += pool.size();
-      if (pool.size() < 2)
-        cnt++;
-    }
-    if (min > max)
-      min = max;
-    if (_nd > 0) {
-      diskann::cout << "BEFORE DELETING MARKED EDGES" << std::endl;
-      diskann::cout << "Index has degree: max:" << max << "  avg:"
-                    << (float) total / (float) (_nd + _num_frozen_pts)
-                    << "  min:" << min << "  count(deg<2):" << cnt << std::endl;
-                  }
+    // size_t max = 0, min = 1 << 30, total = 0, cnt = 0;
+    // for (size_t i = 0; i < (_nd + _num_frozen_pts); i++) {
+    //   auto &pool = _final_graph[i];
+    //   max = (std::max)(max, pool.size());
+    //   min = (std::min)(min, pool.size());
+    //   total += pool.size();
+    //   if (pool.size() < 2)
+    //     cnt++;
+    // }
+    // if (min > max)
+    //   min = max;
+    // if (_nd > 0) {
+    //   diskann::cout << "BEFORE DELETING MARKED EDGES" << std::endl;
+    //   diskann::cout << "Index has degree: max:" << max << "  avg:"
+    //                 << (float) total / (float) (_nd + _num_frozen_pts)
+    //                 << "  min:" << min << "  count(deg<2):" << cnt << std::endl;
+    //               }
 
 
-    if (_queries_present) delete_marked_edges();
+    // if (_queries_present) delete_marked_edges();
 
-    max = 0; min = 1 << 30; total = 0; cnt = 0;
-    for (size_t i = 0; i < (_nd + _num_frozen_pts); i++) {
-      auto &pool = _final_graph[i];
-      max = (std::max)(max, pool.size());
-      min = (std::min)(min, pool.size());
-      total += pool.size();
-      if (pool.size() < 2)
-        cnt++;
-    }
-    if (min > max)
-      min = max;
-    if (_nd > 0) {
-      diskann::cout << "AFTER DELETING MARKED EDGES" << std::endl; 
-      diskann::cout << "Index has degree: max:" << max << "  avg:"
-                    << (float) total / (float) (_nd + _num_frozen_pts)
-                    << "  min:" << min << "  count(deg<2):" << cnt << std::endl;
-    }
+    // max = 0; min = 1 << 30; total = 0; cnt = 0;
+    // for (size_t i = 0; i < (_nd + _num_frozen_pts); i++) {
+    //   auto &pool = _final_graph[i];
+    //   max = (std::max)(max, pool.size());
+    //   min = (std::min)(min, pool.size());
+    //   total += pool.size();
+    //   if (pool.size() < 2)
+    //     cnt++;
+    // }
+    // if (min > max)
+    //   min = max;
+    // if (_nd > 0) {
+    //   diskann::cout << "AFTER DELETING MARKED EDGES" << std::endl; 
+    //   diskann::cout << "Index has degree: max:" << max << "  avg:"
+    //                 << (float) total / (float) (_nd + _num_frozen_pts)
+    //                 << "  min:" << min << "  count(deg<2):" << cnt << std::endl;
+    // }
 
     auto start = std::chrono::high_resolution_clock::now();
 #pragma omp parallel for num_threads(num_threads) schedule(dynamic)
