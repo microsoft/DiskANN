@@ -1691,7 +1691,7 @@ namespace diskann {
       _final_graph[location].clear();
       _final_graph[location] = new_nbh;
     }
-    _marked_graph[location][query].clear();
+    _marked_graph[location].erase(query);
   }
 
   // find the nearest neighbors in _final_graph of every point in _query_graph
@@ -1745,11 +1745,14 @@ namespace diskann {
             // }
             // if(!(prev_id == 0 && prev_dist ==
             // std::numeric_limits<float>::max())){
-            {
-              LockGuard guard(_locks[prev_id]);
-              // _stitch_count[prev_id]--;
-              // delete_stitched_edges(prev_id, nbh);
+            if(prev_id !=0 && _marked_graph[prev_id][nbh].size()!=0){
+              {
+                LockGuard guard(_locks[prev_id]);
+                // _stitch_count[prev_id]--;
+                delete_stitched_edges(prev_id, nbh);
+              }
             }
+            
             // }
           }
         }
@@ -1871,8 +1874,8 @@ namespace diskann {
   template<typename T, typename TagT>
   void Index<T, TagT>::delete_and_restitch(
       tsl::robin_set<unsigned> &delete_set) {
-    tsl::robin_set<unsigned> to_stitch;
-    tsl::robin_set<unsigned> to_refresh;
+    // tsl::robin_set<unsigned> to_stitch;
+    // tsl::robin_set<unsigned> to_refresh;
 #pragma omp parallel for schedule(dynamic)
     for (_s64 node_ctr = (_s64) 0; node_ctr < (_s64) _max_query_points;
          ++node_ctr) {
@@ -1901,26 +1904,26 @@ namespace diskann {
         // to_refresh.insert(node_ctr);
       }
     }
-#pragma omp parallel for schedule(dynamic)
-    for (size_t node_ctr = 0; node_ctr < _max_points + _num_frozen_pts;
-         ++node_ctr) {
-      std::vector<unsigned> new_nbh;
-      std::vector<unsigned> to_delete;
-      for (auto pair : _marked_graph[node_ctr]) {
-        for (auto nbh : pair.second)
-          to_delete.push_back(nbh);
-      }
-      for (auto nbh : _final_graph[node_ctr]) {
-        if (std::find(to_delete.begin(), to_delete.end(), nbh) ==
-            to_delete.end())
-          new_nbh.push_back(nbh);
-      }
-      if (new_nbh.size() < _final_graph[node_ctr].size()) {
-        _final_graph[node_ctr].clear();
-        _final_graph[node_ctr] = new_nbh;
-      }
-      _marked_graph[node_ctr].clear();
-    }
+// #pragma omp parallel for schedule(dynamic)
+//     for (size_t node_ctr = 0; node_ctr < _max_points + _num_frozen_pts;
+//          ++node_ctr) {
+//       std::vector<unsigned> new_nbh;
+//       std::vector<unsigned> to_delete;
+//       for (auto pair : _marked_graph[node_ctr]) {
+//         for (auto nbh : pair.second)
+//           to_delete.push_back(nbh);
+//       }
+//       for (auto nbh : _final_graph[node_ctr]) {
+//         if (std::find(to_delete.begin(), to_delete.end(), nbh) ==
+//             to_delete.end())
+//           new_nbh.push_back(nbh);
+//       }
+//       if (new_nbh.size() < _final_graph[node_ctr].size()) {
+//         _final_graph[node_ctr].clear();
+//         _final_graph[node_ctr] = new_nbh;
+//       }
+//       _marked_graph[node_ctr].clear();
+//     }
 
     populate_query_nn();
 
@@ -1963,6 +1966,30 @@ namespace diskann {
     // robust_stitch(to_stitch);
 
     robust_stitch();
+  }
+
+  template<typename T, typename TagT>
+  void Index<T, TagT>::delete_marked_edges(){
+#pragma omp parallel for schedule(dynamic)
+    for (size_t node_ctr = 0; node_ctr < _max_points + _num_frozen_pts;
+         ++node_ctr) {
+      std::vector<unsigned> new_nbh;
+      std::vector<unsigned> to_delete;
+      for (auto pair : _marked_graph[node_ctr]) {
+        for (auto nbh : pair.second)
+          to_delete.push_back(nbh);
+      }
+      for (auto nbh : _final_graph[node_ctr]) {
+        if (std::find(to_delete.begin(), to_delete.end(), nbh) ==
+            to_delete.end())
+          new_nbh.push_back(nbh);
+      }
+      if (new_nbh.size() < _final_graph[node_ctr].size()) {
+        _final_graph[node_ctr].clear();
+        _final_graph[node_ctr] = new_nbh;
+      }
+      _marked_graph[node_ctr].clear();
+    }
   }
 
   // the marked graph may go out of date after inserts and need to be refreshed
@@ -2179,7 +2206,7 @@ namespace diskann {
               {
                 LockGuard guard(_locks[prev_id]);
                 // _stitch_count[prev_id]--;
-                // delete_stitched_edges(prev_id, node_ctr);
+                delete_stitched_edges(prev_id, node_ctr);
               }
               // }
             }
@@ -3360,8 +3387,44 @@ namespace diskann {
       delete_policy = 1;
     }
 
-    // if (_queries_present)
-    // update_marked_graph();
+    size_t max = 0, min = 1 << 30, total = 0, cnt = 0;
+    for (size_t i = 0; i < (_nd + _num_frozen_pts); i++) {
+      auto &pool = _final_graph[i];
+      max = (std::max)(max, pool.size());
+      min = (std::min)(min, pool.size());
+      total += pool.size();
+      if (pool.size() < 2)
+        cnt++;
+    }
+    if (min > max)
+      min = max;
+    if (_nd > 0) {
+      diskann::cout << "BEFORE DELETING MARKED EDGES" << std::endl;
+      diskann::cout << "Index has degree: max:" << max << "  avg:"
+                    << (float) total / (float) (_nd + _num_frozen_pts)
+                    << "  min:" << min << "  count(deg<2):" << cnt << std::endl;
+                  }
+
+
+    if (_queries_present) delete_marked_edges();
+
+    max = 0; min = 1 << 30; total = 0; cnt = 0;
+    for (size_t i = 0; i < (_nd + _num_frozen_pts); i++) {
+      auto &pool = _final_graph[i];
+      max = (std::max)(max, pool.size());
+      min = (std::min)(min, pool.size());
+      total += pool.size();
+      if (pool.size() < 2)
+        cnt++;
+    }
+    if (min > max)
+      min = max;
+    if (_nd > 0) {
+      diskann::cout << "AFTER DELETING MARKED EDGES" << std::endl; 
+      diskann::cout << "Index has degree: max:" << max << "  avg:"
+                    << (float) total / (float) (_nd + _num_frozen_pts)
+                    << "  min:" << min << "  count(deg<2):" << cnt << std::endl;
+    }
 
     auto start = std::chrono::high_resolution_clock::now();
 #pragma omp parallel for num_threads(num_threads) schedule(dynamic)
