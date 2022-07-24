@@ -85,7 +85,7 @@ inline bool file_exists(const std::string& name, bool dirCheck = false) {
         diskann::cout << "Invalid argument passed to stat()" << std::endl;
         break;
       case ENOENT:
-// file is not existing, not an issue, so we won't cout anything.
+        // file is not existing, not an issue, so we won't cout anything.
         break;
       default:
         diskann::cout << "Unexpected error in stat():" << errno << std::endl;
@@ -523,8 +523,10 @@ namespace diskann {
 
     std::cout << "GT count percentiles:" << std::endl;
     for (_u32 p = 0; p < 100; p += 5)
-      std::cout << "percentile " << p << ": "
-                << gt_stats[static_cast<size_t>(std::floor((p / 100.0) * gt_num))] << std::endl;
+      std::cout
+          << "percentile " << p << ": "
+          << gt_stats[static_cast<size_t>(std::floor((p / 100.0) * gt_num))]
+          << std::endl;
     std::cout << "percentile 100"
               << ": " << gt_stats[gt_num - 1] << std::endl;
 
@@ -566,7 +568,6 @@ namespace diskann {
     source.close();
     dest.close();
   }
-
 
   template<typename T>
   inline uint64_t save_bin(const std::string& filename, T* data, size_t npts,

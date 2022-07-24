@@ -75,7 +75,7 @@ void compute_l2sq(float *const points_l2sq, const float *const matrix,
 
 void distsq_to_points(
     const size_t dim,
-    float       *dist_matrix,  // Col Major, cols are queries, rows are points
+    float *      dist_matrix,  // Col Major, cols are queries, rows are points
     size_t npoints, const float *const points,
     const float *const points_l2sq,  // points in Col major
     size_t nqueries, const float *const queries,
@@ -103,7 +103,7 @@ void distsq_to_points(
 
 void inner_prod_to_points(
     const size_t dim,
-    float       *dist_matrix,  // Col Major, cols are queries, rows are points
+    float *      dist_matrix,  // Col Major, cols are queries, rows are points
     size_t npoints, const float *const points, size_t nqueries,
     const float *const queries,
     float *ones_vec = NULL)  // Scratchspace of num_data size and init to 1.0
@@ -208,28 +208,28 @@ void exact_knn(
       for (_u64 p = 0; p < k; p++)
         point_dist.emplace(
             p, dist_matrix[(ptrdiff_t) p +
-                           (ptrdiff_t) (q - q_b) * (ptrdiff_t) npoints]);
+                           (ptrdiff_t)(q - q_b) * (ptrdiff_t) npoints]);
       for (_u64 p = k; p < npoints; p++) {
         if (point_dist.top().second >
             dist_matrix[(ptrdiff_t) p +
-                        (ptrdiff_t) (q - q_b) * (ptrdiff_t) npoints])
+                        (ptrdiff_t)(q - q_b) * (ptrdiff_t) npoints])
           point_dist.emplace(
               p, dist_matrix[(ptrdiff_t) p +
-                             (ptrdiff_t) (q - q_b) * (ptrdiff_t) npoints]);
+                             (ptrdiff_t)(q - q_b) * (ptrdiff_t) npoints]);
         if (point_dist.size() > k)
           point_dist.pop();
       }
       for (ptrdiff_t l = 0; l < (ptrdiff_t) k; ++l) {
-        closest_points[(ptrdiff_t) (k - 1 - l) +
-                       (ptrdiff_t) q * (ptrdiff_t) k] = point_dist.top().first;
-        dist_closest_points[(ptrdiff_t) (k - 1 - l) +
+        closest_points[(ptrdiff_t)(k - 1 - l) + (ptrdiff_t) q * (ptrdiff_t) k] =
+            point_dist.top().first;
+        dist_closest_points[(ptrdiff_t)(k - 1 - l) +
                             (ptrdiff_t) q * (ptrdiff_t) k] =
             point_dist.top().second;
         point_dist.pop();
       }
       assert(std::is_sorted(
           dist_closest_points + (ptrdiff_t) q * (ptrdiff_t) k,
-          dist_closest_points + (ptrdiff_t) (q + 1) * (ptrdiff_t) k));
+          dist_closest_points + (ptrdiff_t)(q + 1) * (ptrdiff_t) k));
     }
     std::cout << "Computed exact k-NN for queries: [" << q_b << "," << q_e
               << ")" << std::endl;
@@ -316,7 +316,7 @@ inline std::vector<size_t> load_filtered_bin_as_float(
   reader.read((char *) &npts_i32, sizeof(int));
   reader.read((char *) &ndims_i32, sizeof(int));
   uint64_t start_id = part_num * PARTSIZE;
-  uint64_t end_id = (std::min) (start_id + PARTSIZE, (uint64_t) npts_i32);
+  uint64_t end_id = (std::min)(start_id + PARTSIZE, (uint64_t) npts_i32);
   npts = end_id - start_id;
   ndims = (unsigned) ndims_i32;
   uint64_t nptsuint64_t = (uint64_t) npts;
@@ -357,7 +357,6 @@ inline std::vector<size_t> load_filtered_bin_as_float(
             << npoints_filt << " points matching the filter." << std::endl;
   return rev_map;
 }
-
 
 template<typename T>
 inline void save_bin(const std::string filename, T *data, size_t npts,
@@ -431,14 +430,12 @@ inline void parse_label_file_into_vec(
             << pts_to_labels.size() << " points" << std::endl;
 }
 
-
 template<typename T>
 int aux_main(const std::string &base_file, const std::string &label_file,
              const std::string &query_file, const std::string &gt_file,
              size_t k, const std::string &filter_label,
-             const std::string &universal_label, 
-             const diskann::Metric &metric,
-             const std::string     &tags_file = std::string("")) {
+             const std::string &universal_label, const diskann::Metric &metric,
+             const std::string &tags_file = std::string("")) {
   size_t npoints, nqueries, dim, npoints_filt;
 
   float *base_data;
@@ -477,14 +474,13 @@ int aux_main(const std::string &base_file, const std::string &label_file,
 
   std::vector<std::vector<std::pair<uint32_t, float>>> results(nqueries);
 
-  int   *closest_points = new int[nqueries * k];
+  int *  closest_points = new int[nqueries * k];
   float *dist_closest_points = new float[nqueries * k];
 
   std::vector<std::vector<std::string>> pts_to_labels;
   if (filter_label != "")
     parse_label_file_into_vec(npoints, label_file, pts_to_labels);
   std::vector<size_t> rev_map;
-
 
   for (int p = 0; p < num_parts; p++) {
     size_t start_id = p * PARTSIZE;
@@ -493,9 +489,9 @@ int aux_main(const std::string &base_file, const std::string &label_file,
     } else {
       rev_map = load_filtered_bin_as_float<T>(
           base_file.c_str(), base_data, npoints, dim, p, label_file.c_str(),
-          filter_label, universal_label, npoints_filt, pts_to_labels);    
+          filter_label, universal_label, npoints_filt, pts_to_labels);
     }
-    int   *closest_points_part = new int[nqueries * k];
+    int *  closest_points_part = new int[nqueries * k];
     float *dist_closest_points_part = new float[nqueries * k];
 
     _u32 part_k;
@@ -511,17 +507,15 @@ int aux_main(const std::string &base_file, const std::string &label_file,
       }
     }
 
-
     for (_u64 i = 0; i < nqueries; i++) {
       for (_u64 j = 0; j < part_k; j++) {
         if (filter_label == "") {
           results[i].push_back(std::make_pair(
-              (uint32_t) (closest_points_part[i * k + j] + start_id),
+              (uint32_t)(closest_points_part[i * k + j] + start_id),
               dist_closest_points_part[i * k + j]));
-        }
-        else {
+        } else {
           results[i].push_back(std::make_pair(
-              (uint32_t) (rev_map[closest_points_part[i * part_k + j]]),
+              (uint32_t)(rev_map[closest_points_part[i * part_k + j]]),
               dist_closest_points_part[i * part_k + j]));
         }
       }
@@ -568,8 +562,9 @@ int aux_main(const std::string &base_file, const std::string &label_file,
 }
 
 int main(int argc, char **argv) {
-  std::string data_type, dist_fn, base_file, query_file, gt_file, tags_file, label_file, filter_label, universal_label;
-  uint64_t    K;
+  std::string data_type, dist_fn, base_file, query_file, gt_file, tags_file,
+      label_file, filter_label, universal_label;
+  uint64_t K;
 
   try {
     po::options_description desc{"Arguments"};
@@ -587,10 +582,9 @@ int main(int argc, char **argv) {
     desc.add_options()("query_file",
                        po::value<std::string>(&query_file)->required(),
                        "File containing the query vectors in binary format");
-    desc.add_options()(
-        "label_file",
-        po::value<std::string>(&label_file)->default_value(""),
-        "Input labels file in txt format if present");
+    desc.add_options()("label_file",
+                       po::value<std::string>(&label_file)->default_value(""),
+                       "Input labels file in txt format if present");
     desc.add_options()("filter_label",
                        po::value<std::string>(&filter_label)->default_value(""),
                        "Input filter label if doing filtered groundtruth");
@@ -643,15 +637,14 @@ int main(int argc, char **argv) {
 
   try {
     if (data_type == std::string("float"))
-      aux_main<float>(base_file, label_file, query_file, gt_file, K, filter_label, universal_label, metric, tags_file);
+      aux_main<float>(base_file, label_file, query_file, gt_file, K,
+                      filter_label, universal_label, metric, tags_file);
     if (data_type == std::string("int8"))
       aux_main<int8_t>(base_file, label_file, query_file, gt_file, K,
-                       filter_label, universal_label, metric,
-                       tags_file);
+                       filter_label, universal_label, metric, tags_file);
     if (data_type == std::string("uint8"))
       aux_main<uint8_t>(base_file, label_file, query_file, gt_file, K,
-                        filter_label, universal_label, metric,
-                        tags_file);
+                        filter_label, universal_label, metric, tags_file);
   } catch (const std::exception &e) {
     std::cout << std::string(e.what()) << std::endl;
     diskann::cerr << "Compute GT failed." << std::endl;

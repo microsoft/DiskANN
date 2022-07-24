@@ -25,7 +25,9 @@ int build_in_memory_index(const diskann::Metric& metric,
                           const std::string& data_path, const unsigned R,
                           const unsigned L, const float alpha,
                           const std::string& save_path,
-                          const unsigned     num_threads, const std::string &label_file, const std::string &universal_label, const _u32 Lf) {
+                          const unsigned     num_threads,
+                          const std::string& label_file,
+                          const std::string& universal_label, const _u32 Lf) {
   diskann::Parameters paras;
   paras.Set<unsigned>("R", R);
   paras.Set<unsigned>("L", L);
@@ -43,12 +45,11 @@ int build_in_memory_index(const diskann::Metric& metric,
   auto                    s = std::chrono::high_resolution_clock::now();
   if (label_file != "") {
     index.build(data_path.c_str(), data_num, paras);
-  }
-  else {
+  } else {
     if (universal_label != "") {
       index.set_universal_label(universal_label);
     }
-      index.build_filtered_index(data_path.c_str(), label_file, data_num, paras);
+    index.build_filtered_index(data_path.c_str(), label_file, data_num, paras);
   }
   std::chrono::duration<double> diff =
       std::chrono::high_resolution_clock::now() - s;
@@ -60,9 +61,10 @@ int build_in_memory_index(const diskann::Metric& metric,
 }
 
 int main(int argc, char** argv) {
-  std::string data_type, dist_fn, data_path, index_path_prefix, label_file, universal_label;
-  unsigned    num_threads, R, L, Lf;
-  float       alpha;
+  std::string data_type, dist_fn, data_path, index_path_prefix, label_file,
+      universal_label;
+  unsigned num_threads, R, L, Lf;
+  float    alpha;
 
   po::options_description desc{"Arguments"};
   try {
@@ -93,17 +95,17 @@ int main(int argc, char** argv) {
         po::value<uint32_t>(&num_threads)->default_value(omp_get_num_procs()),
         "Number of threads used for building index (defaults to "
         "omp_get_num_procs())");
-    desc.add_options()(
-        "label_file",
-        po::value<std::string>(&label_file)->default_value(""),
-        "Input label file in txt format if present");
+    desc.add_options()("label_file",
+                       po::value<std::string>(&label_file)->default_value(""),
+                       "Input label file in txt format if present");
     desc.add_options()(
         "universal_label",
         po::value<std::string>(&universal_label)->default_value(""),
         "Universal label, if using it, only in conjunction with labels_file");
-    desc.add_options()(
-        "FilteredLbuild,Lf", po::value<uint32_t>(&Lf)->default_value(0),
-        "Build complexity for filtered points, higher value results in better graphs");
+    desc.add_options()("FilteredLbuild,Lf",
+                       po::value<uint32_t>(&Lf)->default_value(0),
+                       "Build complexity for filtered points, higher value "
+                       "results in better graphs");
 
     po::variables_map vm;
     po::store(po::parse_command_line(argc, argv, desc), vm);
@@ -137,7 +139,8 @@ int main(int argc, char** argv) {
                   << std::endl;
     if (data_type == std::string("int8"))
       return build_in_memory_index<int8_t>(metric, data_path, R, L, alpha,
-                                           index_path_prefix, num_threads, label_file, universal_label, Lf);
+                                           index_path_prefix, num_threads,
+                                           label_file, universal_label, Lf);
     else if (data_type == std::string("uint8"))
       return build_in_memory_index<uint8_t>(metric, data_path, R, L, alpha,
                                             index_path_prefix, num_threads,

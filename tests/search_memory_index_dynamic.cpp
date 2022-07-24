@@ -77,9 +77,9 @@ int search_memory_index(diskann::Metric& metric, const std::string& index_path,
             << std::endl;
 
   std::vector<std::vector<uint32_t>> query_result_ids(Lvec.size());
-  std::vector<std::vector<float>> query_result_dists(Lvec.size());
-  std::vector<float>              latency_stats(query_num, 0);
-  std::vector<unsigned>           cmp_stats(query_num, 0);
+  std::vector<std::vector<float>>    query_result_dists(Lvec.size());
+  std::vector<float>                 latency_stats(query_num, 0);
+  std::vector<unsigned>              cmp_stats(query_num, 0);
 
   // index.enable_delete();
   // index.disable_delete(paras, true);

@@ -42,16 +42,16 @@ namespace diskann {
 
   template<typename T>
   struct InMemQueryScratch {
-    std::vector<Neighbor>    *_pool = nullptr;
+    std::vector<Neighbor> *   _pool = nullptr;
     tsl::robin_set<unsigned> *_visited = nullptr;
-    std::vector<unsigned>    *_des = nullptr;
-    std::vector<Neighbor>    *_best_l_nodes = nullptr;
+    std::vector<unsigned> *   _des = nullptr;
+    std::vector<Neighbor> *   _best_l_nodes = nullptr;
     tsl::robin_set<unsigned> *_inserted_into_pool_rs = nullptr;
-    boost::dynamic_bitset<>  *_inserted_into_pool_bs = nullptr;
+    boost::dynamic_bitset<> * _inserted_into_pool_bs = nullptr;
 
-    T        *aligned_query = nullptr;
+    T *       aligned_query = nullptr;
     uint32_t *indices = nullptr;
-    float    *interim_dists = nullptr;
+    float *   interim_dists = nullptr;
 
     uint32_t search_l;
     uint32_t indexing_l;
@@ -135,18 +135,18 @@ namespace diskann {
     // Batch build from a file. Optionally pass tags vector.
     DISKANN_DLLEXPORT void build(
         const char *filename, const size_t num_points_to_load,
-        Parameters              &parameters,
+        Parameters &             parameters,
         const std::vector<TagT> &tags = std::vector<TagT>());
 
     // Batch build from a file. Optionally pass tags file.
-    DISKANN_DLLEXPORT void build(const char  *filename,
+    DISKANN_DLLEXPORT void build(const char * filename,
                                  const size_t num_points_to_load,
-                                 Parameters  &parameters,
-                                 const char  *tag_filename);
+                                 Parameters & parameters,
+                                 const char * tag_filename);
 
     // Batch build from a data array, which must pad vectors to aligned_dim
     DISKANN_DLLEXPORT void build(const T *data, const size_t num_points_to_load,
-                                 Parameters              &parameters,
+                                 Parameters &             parameters,
                                  const std::vector<TagT> &tags);
 
     // Bootstrap an index with zero points for further incremental build
@@ -155,11 +155,10 @@ namespace diskann {
     // Filtered Support
     DISKANN_DLLEXPORT void build_filtered_index(
         const char *filename, const std::string &label_file,
-         const size_t num_points_to_load, Parameters &parameters,
-         const std::vector<TagT> &tags = std::vector<TagT>());
+        const size_t num_points_to_load, Parameters &parameters,
+        const std::vector<TagT> &tags = std::vector<TagT>());
 
     DISKANN_DLLEXPORT void set_universal_label(const std::string &label);
-
 
     // For Bulk Index FastL2 search, we interleave the data with graph
     DISKANN_DLLEXPORT void optimize_index_layout();
@@ -179,7 +178,7 @@ namespace diskann {
     // Initialize space for res_vectors before calling.
     DISKANN_DLLEXPORT size_t search_with_tags(const T *query, const uint64_t K,
                                               const unsigned L, TagT *tags,
-                                              float            *distances,
+                                              float *           distances,
                                               std::vector<T *> &res_vectors);
 
     template<typename IndexType>
@@ -204,9 +203,9 @@ namespace diskann {
     // if tag not found. Do not call if _eager_delete was called earlier and
     // data was not consolidated.
     DISKANN_DLLEXPORT void lazy_delete(const std::vector<TagT> &tags,
-                                       std::vector<TagT>       &failed_tags);
+                                       std::vector<TagT> &      failed_tags);
 
-        // Call after a series of lazy deletions
+    // Call after a series of lazy deletions
     // Returns number of live points left after consolidation
     // If _conc_consolidates is set in the ctor, then this call can be invoked
     // alongside inserts and lazy deletes, else it acquires _update_lock
@@ -259,7 +258,7 @@ namespace diskann {
     Index<T, TagT> &operator=(const Index<T, TagT> &) = delete;
 
     // Use after _data and _nd have been populated
-    void build_with_data_populated(Parameters              &parameters,
+    void build_with_data_populated(Parameters &             parameters,
                                    const std::vector<TagT> &tags);
 
     // generates 1 frozen point that will never be deleted from the graph
@@ -271,54 +270,53 @@ namespace diskann {
 
     void parse_label_file(const std::string &map_file);
 
-
     // called only when _eager_delete is to be supported
     void update_in_graph();
 
     template<typename IDType>
-    std::pair<uint32_t, uint32_t> search_impl(const T *query, const size_t K,
-                                              const unsigned L, IDType *indices,
-                                              float                *distances,
-                                              InMemQueryScratch<T> &scratch,
-                                              bool use_filters = false,
-                                              const std::string &filter_label = std::string());
+    std::pair<uint32_t, uint32_t> search_impl(
+        const T *query, const size_t K, const unsigned L, IDType *indices,
+        float *distances, InMemQueryScratch<T> &scratch,
+        bool               use_filters = false,
+        const std::string &filter_label = std::string());
 
     std::pair<uint32_t, uint32_t> iterate_to_fixed_point(
         const T *node_coords, const unsigned Lindex,
         const std::vector<unsigned> &init_ids,
-        std::vector<Neighbor>       &expanded_nodes_info,
-        tsl::robin_set<unsigned>    &expanded_nodes_ids,
+        std::vector<Neighbor> &      expanded_nodes_info,
+        tsl::robin_set<unsigned> &   expanded_nodes_ids,
         std::vector<Neighbor> &best_L_nodes, bool use_filter,
-        const std::vector<std::string> &filters,
-        std::vector<unsigned> &des,
+        const std::vector<std::string> &filters, std::vector<unsigned> &des,
         tsl::robin_set<unsigned> &inserted_into_pool_rs,
         boost::dynamic_bitset<> &inserted_into_pool_bs, bool ret_frozen = true,
         bool search_invocation = false);
 
     void get_expanded_nodes(const size_t node, const unsigned Lindex,
-                            std::vector<unsigned>     init_ids,
-                            std::vector<Neighbor>    &expanded_nodes_info,
-        tsl::robin_set<unsigned> &expanded_nodes_ids, bool use_filter,
-        const std::vector<std::string> &filters, std::vector<unsigned>    &des,
-                            std::vector<Neighbor>    &best_L_nodes,
-                            tsl::robin_set<unsigned> &inserted_into_pool_rs,
-                            boost::dynamic_bitset<>  &inserted_into_pool_bs);
-
-    void get_expanded_nodes(const size_t node, const unsigned Lindex,
                             std::vector<unsigned>           init_ids,
                             std::vector<Neighbor> &         expanded_nodes_info,
                             tsl::robin_set<unsigned> &      expanded_nodes_ids,
+                            bool                            use_filter,
+                            const std::vector<std::string> &filters,
                             std::vector<unsigned> &         des,
                             std::vector<Neighbor> &         best_L_nodes,
                             tsl::robin_set<unsigned> &inserted_into_pool_rs,
                             boost::dynamic_bitset<> & inserted_into_pool_bs);
 
+    void get_expanded_nodes(const size_t node, const unsigned Lindex,
+                            std::vector<unsigned>     init_ids,
+                            std::vector<Neighbor> &   expanded_nodes_info,
+                            tsl::robin_set<unsigned> &expanded_nodes_ids,
+                            std::vector<unsigned> &   des,
+                            std::vector<Neighbor> &   best_L_nodes,
+                            tsl::robin_set<unsigned> &inserted_into_pool_rs,
+                            boost::dynamic_bitset<> & inserted_into_pool_bs);
 
     // get_expanded_nodes for insertion. Must investigate to see if perf can
     // be improved here as well using the same technique as above.
-    void get_expanded_nodes(const size_t node_id, const unsigned Lindex,
-                            std::vector<unsigned>     init_ids,
-                            std::vector<Neighbor>    &expanded_nodes_info,
+    void get_expanded_nodes(
+        const size_t node_id, const unsigned Lindex,
+        std::vector<unsigned>     init_ids,
+        std::vector<Neighbor> &   expanded_nodes_info,
         tsl::robin_set<unsigned> &expanded_nodes_ids, bool use_filter = false,
         const std::vector<std::string> &filters = std::vector<std::string>());
 
@@ -336,17 +334,17 @@ namespace diskann {
     void occlude_list(std::vector<Neighbor> &pool, const float alpha,
                       const unsigned degree, const unsigned maxc,
                       std::vector<Neighbor> &result,
-                      std::vector<float>    &occlude_factor);
+                      std::vector<float> &   occlude_factor);
 
     // add reverse links from all the visited nodes to node n.
     void batch_inter_insert(unsigned                     n,
                             const std::vector<unsigned> &pruned_list,
                             const _u32                   range,
-                            std::vector<unsigned>       &need_to_sync);
+                            std::vector<unsigned> &      need_to_sync);
 
     void batch_inter_insert(unsigned                     n,
                             const std::vector<unsigned> &pruned_list,
-                            std::vector<unsigned>       &need_to_sync);
+                            std::vector<unsigned> &      need_to_sync);
 
     // add reverse links from all the visited nodes to node n.
     void inter_insert(unsigned n, std::vector<unsigned> &pruned_list,
@@ -360,20 +358,19 @@ namespace diskann {
 
     int    reserve_location();
     size_t release_location(int location);
-    size_t release_locations(tsl::robin_set<unsigned>& locations);
+    size_t release_locations(tsl::robin_set<unsigned> &locations);
 
     // Resize the index when no slots are left for insertion.
     // MUST acquire _num_points_lock and _update_lock before calling.
     // Anything else in a MT environment will lead to an inconsistent index.
     void resize(size_t new_max_points);
 
-    // Take an unique lock on _update_lock before calling either of these functions
-    // renumber nodes, update tag and location maps and compact the graph, mode
-    // = _consolidated_order in case of lazy deletion and _compacted_order in
-    // case of eager deletion
+    // Take an unique lock on _update_lock before calling either of these
+    // functions renumber nodes, update tag and location maps and compact the
+    // graph, mode = _consolidated_order in case of lazy deletion and
+    // _compacted_order in case of eager deletion
     DISKANN_DLLEXPORT void compact_data();
     DISKANN_DLLEXPORT void compact_frozen_point();
-
 
     // Remove deleted nodes from adj list of node i and absorb edges from
     // deleted neighbors Acquire _locks[i] prior to calling for thread-safety
@@ -402,7 +399,7 @@ namespace diskann {
     Distance<T> *_distance = nullptr;
 
     // Data
-    T    *_data = nullptr;
+    T *   _data = nullptr;
     char *_opt_graph;
 
     // Graph related data structures
@@ -438,9 +435,8 @@ namespace diskann {
     std::string                           _labels_file;
     std::unordered_map<std::string, _u32> _filter_to_medoid_id;
     std::unordered_map<_u32, _u32>        _medoid_counts;
-    bool        _use_universal_label = false;
-    std::string _universal_label = "";
-
+    bool                                  _use_universal_label = false;
+    std::string                           _universal_label = "";
 
     // Indexing parameters
     uint32_t _indexingQueueSize;
@@ -456,7 +452,7 @@ namespace diskann {
     std::unordered_map<TagT, unsigned> _tag_to_location;
     std::unordered_map<unsigned, TagT> _location_to_tag;
 
-    tsl::robin_set<unsigned> _delete_set;
+    tsl::robin_set<unsigned>     _delete_set;
     natural_number_set<unsigned> _empty_slots;
 
     bool _support_eager_delete =

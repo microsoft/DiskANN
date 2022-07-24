@@ -84,8 +84,8 @@ namespace {
 
 namespace diskann {
   template<typename T>
-  PQFlashIndex<T>::PQFlashIndex(
-      std::shared_ptr<AlignedFileReader> &fileReader, diskann::Metric m)
+  PQFlashIndex<T>::PQFlashIndex(std::shared_ptr<AlignedFileReader> &fileReader,
+                                diskann::Metric                     m)
       : reader(fileReader), metric(m) {
     if (m == diskann::Metric::COSINE || m == diskann::Metric::INNER_PRODUCT) {
       if (std::is_floating_point<T>::value) {
@@ -104,8 +104,6 @@ namespace diskann {
     this->dist_cmp.reset(diskann::get_distance_function<T>(m));
     this->dist_cmp_float.reset(diskann::get_distance_function<float>(m));
   }
-
-
 
   template<typename T>
   PQFlashIndex<T>::~PQFlashIndex() {
@@ -202,7 +200,6 @@ namespace diskann {
       diskann::aligned_free((void *) scratch.aligned_query_T);
 
       delete scratch.visited;
-
     }
     this->reader->deregister_all_threads();
   }
@@ -252,7 +249,9 @@ namespace diskann {
 
       _u64 node_idx = start_idx;
       for (_u32 i = 0; i < read_reqs.size(); i++) {
-#if defined(_WINDOWS) && defined(USE_BING_INFRA) // this block is to handle failed reads in production settings
+#if defined(_WINDOWS) && \
+    defined(USE_BING_INFRA)  // this block is to handle failed reads in
+                             // production settings
         if ((*ctx.m_pRequestsStatus)[i] != IOContext::READ_SUCCESS) {
           continue;
         }
@@ -267,8 +266,8 @@ namespace diskann {
         // insert node nhood into nhood_cache
         unsigned *node_nhood = OFFSET_TO_NODE_NHOOD(node_buf);
 
-        auto      nnbrs = *node_nhood;
-        unsigned *nbrs = node_nhood + 1;
+        auto                        nnbrs = *node_nhood;
+        unsigned *                  nbrs = node_nhood + 1;
         std::pair<_u32, unsigned *> cnhood;
         cnhood.first = nnbrs;
         cnhood.second = nhood_cache_buf + node_idx * (max_degree + 1);
@@ -436,7 +435,9 @@ namespace diskann {
 
         // process each nhood buf
         for (_u32 i = 0; i < read_reqs.size(); i++) {
-#if defined(_WINDOWS) && defined(USE_BING_INFRA) // this block is to handle read failures in production settings
+#if defined(_WINDOWS) && \
+    defined(USE_BING_INFRA)  // this block is to handle read failures in
+                             // production settings
           if ((*ctx.m_pRequestsStatus)[i] != IOContext::READ_SUCCESS) {
             continue;
           }
@@ -543,7 +544,7 @@ namespace diskann {
     this->thread_data.push_notify_all();
   }
 
-template<typename T>
+  template<typename T>
   inline int32_t PQFlashIndex<T>::get_filter_number(
       const std::string &filter_label) {
     int idx = -1;
@@ -618,7 +619,7 @@ template<typename T>
       _u32 &num_lbls_in_cur_pt = _pts_to_labels[counter];
       num_lbls_in_cur_pt = 0;
       counter++;
-      getline(iss, token, '\t'); // first token contains metadata, not used
+      getline(iss, token, '\t');  // first token contains metadata, not used
       getline(iss, token, '\t');
       std::istringstream new_iss(token);
       while (getline(new_iss, token, ',')) {
@@ -659,7 +660,6 @@ template<typename T>
       _universal_filter_num = (_u32) temp_filter_num;
     }
   }
-
 
 #ifdef EXEC_ENV_OLS
   template<typename T>
@@ -709,12 +709,10 @@ template<typename T>
       }
     }
 
-    
     std::string pq_table_bin = std::string(index_prefix) + "_pq_pivots.bin";
     std::string pq_compressed_vectors =
         std::string(index_prefix) + "_pq_compressed.bin";
-    std::string disk_index_file =
-        std::string(index_prefix) + "_disk.index";
+    std::string disk_index_file = std::string(index_prefix) + "_disk.index";
     std::string medoids_file = std::string(disk_index_file) + "_medoids.bin";
     std::string centroids_file =
         std::string(disk_index_file) + "_centroids.bin";
@@ -788,7 +786,9 @@ template<typename T>
       disk_pq_table.load_pq_centroid_bin(disk_pq_pivots_path.c_str(), 0);
 #endif
       disk_pq_n_chunks = disk_pq_table.get_num_chunks();
-      disk_bytes_per_point = disk_pq_n_chunks * sizeof(_u8); // revising disk_bytes_per_point since DISK PQ is used.
+      disk_bytes_per_point =
+          disk_pq_n_chunks *
+          sizeof(_u8);  // revising disk_bytes_per_point since DISK PQ is used.
       std::cout << "Disk index uses PQ data compressed down to "
                 << disk_pq_n_chunks << " bytes per point." << std::endl;
     }
@@ -992,14 +992,12 @@ template<typename T>
                        beam_width, false, "", use_reorder_data, stats);
   }
 
-
   template<typename T>
-  void PQFlashIndex<T>::cached_beam_search(const T *query1, const _u64 k_search,
-                                           const _u64 l_search, _u64 *indices,
-                                           float *     distances, const _u64 beam_width, const bool use_filter,
-      const std::string &filter_label,
-                                           const bool  use_reorder_data,
-                                           QueryStats *stats) {
+  void PQFlashIndex<T>::cached_beam_search(
+      const T *query1, const _u64 k_search, const _u64 l_search, _u64 *indices,
+      float *distances, const _u64 beam_width, const bool use_filter,
+      const std::string &filter_label, const bool use_reorder_data,
+      QueryStats *stats) {
     int32_t filter_num = 0;
     if (use_filter) {
       filter_num = get_filter_number(filter_label);
@@ -1084,8 +1082,8 @@ template<typename T>
 
     std::vector<Neighbor> full_retset;
     full_retset.reserve(4096);
-    _u32                        best_medoid = 0;
-    float                       best_dist = (std::numeric_limits<float>::max)();
+    _u32  best_medoid = 0;
+    float best_dist = (std::numeric_limits<float>::max)();
     if (!use_filter) {
       std::vector<SimpleNeighbor> medoid_dists;
       for (_u64 cur_m = 0; cur_m < num_medoids; cur_m++) {
@@ -1097,13 +1095,12 @@ template<typename T>
           best_dist = cur_expanded_dist;
         }
       }
-    }
-    else if (_filter_to_medoid_id.find(filter_label) != _filter_to_medoid_id.end()) {
+    } else if (_filter_to_medoid_id.find(filter_label) !=
+               _filter_to_medoid_id.end()) {
       best_medoid = _filter_to_medoid_id[filter_label];
     } else {
-      throw ANNException(
-          "Cannot find medoid for specified filter.",
-          -1, __FUNCSIG__, __FILE__, __LINE__);
+      throw ANNException("Cannot find medoid for specified filter.", -1,
+                         __FUNCSIG__, __FILE__, __LINE__);
     }
 
     compute_dists(&best_medoid, 1, dist_scratch);
@@ -1122,11 +1119,11 @@ template<typename T>
     unsigned k = 0;
 
     // cleared every iteration
-    std::vector<unsigned>                    frontier;
+    std::vector<unsigned> frontier;
     frontier.reserve(2 * beam_width);
     std::vector<std::pair<unsigned, char *>> frontier_nhoods;
     frontier_nhoods.reserve(2 * beam_width);
-    std::vector<AlignedRead>                 frontier_read_reqs;
+    std::vector<AlignedRead> frontier_read_reqs;
     frontier_read_reqs.reserve(2 * beam_width);
     std::vector<std::pair<unsigned, std::pair<unsigned, unsigned *>>>
         cached_nhoods;

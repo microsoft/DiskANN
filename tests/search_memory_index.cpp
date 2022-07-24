@@ -31,7 +31,7 @@ int search_memory_index(diskann::Metric& metric, const std::string& index_path,
                         std::string& truthset_file, const unsigned num_threads,
                         const unsigned               recall_at,
                         const std::vector<unsigned>& Lvec, const bool dynamic,
-                        const bool tags, const std::string &filter_label) {
+                        const bool tags, const std::string& filter_label) {
   // Load the query file
   T*        query = nullptr;
   unsigned* gt_ids = nullptr;
@@ -100,7 +100,6 @@ int search_memory_index(diskann::Metric& metric, const std::string& index_path,
   }
 
   for (uint32_t test_id = 0; test_id < Lvec.size(); test_id++) {
-    
     _u64 L = Lvec[test_id];
     if (L < recall_at) {
       diskann::cout << "Ignoring search with L:" << L
@@ -116,13 +115,13 @@ int search_memory_index(diskann::Metric& metric, const std::string& index_path,
 #pragma omp parallel for schedule(dynamic, 1)
     for (int64_t i = 0; i < (int64_t) query_num; i++) {
       auto qs = std::chrono::high_resolution_clock::now();
-    if (filtered_search) {
-      auto retval = index.search_with_filters(
-          query + i * query_aligned_dim, filter_label, recall_at, L,
-          query_result_ids[test_id].data() + i * recall_at,
-          query_result_dists[test_id].data() + i * recall_at);
-      cmp_stats[i] = retval.second;
-    } else if (metric == diskann::FAST_L2) {
+      if (filtered_search) {
+        auto retval = index.search_with_filters(
+            query + i * query_aligned_dim, filter_label, recall_at, L,
+            query_result_ids[test_id].data() + i * recall_at,
+            query_result_dists[test_id].data() + i * recall_at);
+        cmp_stats[i] = retval.second;
+      } else if (metric == diskann::FAST_L2) {
         index.search_with_optimized_layout(
             query + i * query_aligned_dim, recall_at, L,
             query_result_ids[test_id].data() + i * recall_at);
@@ -294,8 +293,8 @@ int main(int argc, char** argv) {
     }
 
     else if (data_type == std::string("uint8")) {
-      return search_memory_index<uint8_t>(metric, index_path_prefix,
-                                          result_path, query_file, gt_file,
+      return search_memory_index<uint8_t>(
+          metric, index_path_prefix, result_path, query_file, gt_file,
           num_threads, K, Lvec, dynamic, tags, filter_label);
     } else if (data_type == std::string("float")) {
       return search_memory_index<float>(metric, index_path_prefix, result_path,

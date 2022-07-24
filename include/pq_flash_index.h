@@ -96,9 +96,8 @@ namespace diskann {
     DISKANN_DLLEXPORT void cached_beam_search(
         const T *query, const _u64 k_search, const _u64 l_search, _u64 *res_ids,
         float *res_dists, const _u64 beam_width, const bool use_filter,
-        const std::string &filter_label, 
-        const bool use_reorder_data = false, QueryStats *stats = nullptr);
-
+        const std::string &filter_label, const bool use_reorder_data = false,
+        QueryStats *stats = nullptr);
 
     DISKANN_DLLEXPORT void cached_beam_search(
         const T *query, const _u64 k_search, const _u64 l_search, _u64 *res_ids,
@@ -211,7 +210,7 @@ namespace diskann {
     bool                           reorder_data_exists = false;
     _u64                           reoreder_data_offset = 0;
 
-   // filter support
+    // filter support
     _u32 *                                _pts_to_label_offsets = nullptr;
     _u32 *                                _pts_to_labels = nullptr;
     tsl::robin_set<std::string>           _labels;
@@ -219,7 +218,6 @@ namespace diskann {
     bool                                  _use_universal_label;
     _u32                                  _universal_filter_num;
     std::vector<std::string>              _filter_list;
-
 
 #ifdef EXEC_ENV_OLS
     // Set to a larger value than the actual header to accommodate
