@@ -127,6 +127,13 @@ namespace diskann {
       this->destroy_thread_data();
       reader->close();
     }
+    if (_pts_to_label_offsets != nullptr) {
+      delete[] _pts_to_label_offsets;
+    }
+
+    if (_pts_to_labels != nullptr) {
+      delete[] _pts_to_labels;
+    }
   }
 
   template<typename T>
@@ -536,6 +543,124 @@ namespace diskann {
     this->thread_data.push_notify_all();
   }
 
+template<typename T>
+  inline int32_t PQFlashIndex<T>::get_filter_number(
+      const std::string &filter_label) {
+    int idx = -1;
+    for (_u32 i = 0; i < _filter_list.size(); i++) {
+      if (_filter_list[i] == filter_label) {
+        idx = i;
+        break;
+      }
+    }
+    return idx;
+  }
+
+  template<typename T>
+  void PQFlashIndex<T>::get_label_file_metadata(std::string map_file,
+                                                _u32 &      num_pts,
+                                                _u32 &      num_total_labels) {
+    std::ifstream infile(map_file);
+    std::string   line, token;
+    num_pts = 0;
+    num_total_labels = 0;
+
+    while (std::getline(infile, line)) {
+      std::istringstream iss(line);
+      while (getline(iss, token, ',')) {
+        token.erase(std::remove(token.begin(), token.end(), '\n'), token.end());
+        token.erase(std::remove(token.begin(), token.end(), '\r'), token.end());
+        num_total_labels++;
+      }
+      num_pts++;
+    }
+
+    std::cout << "Labels file metadata: num_points: " << num_pts
+              << ", #total_labels: " << num_total_labels << std::endl;
+    infile.close();
+  }
+
+  template<typename T>
+  inline bool PQFlashIndex<T>::find_label_in_point(_u32 point_id,
+                                                   _u32 label_id) {
+    _u32 start_vec = _pts_to_label_offsets[point_id];
+    _u32 num_lbls = _pts_to_labels[start_vec];
+    bool ret_val = false;
+    for (_u32 i = 0; i < num_lbls; i++) {
+      if (_pts_to_labels[start_vec + 1 + i] == label_id) {
+        ret_val = true;
+        break;
+      }
+    }
+    return ret_val;
+  }
+  template<typename T>
+  void PQFlashIndex<T>::parse_label_file(const std::string &map_file) {
+    //_filtered_ann = 1;
+
+    std::ifstream infile(map_file);
+    std::string   line, token;
+    _u32          line_cnt = 0;
+
+    _u32 num_pts_in_label_file;
+    _u32 num_total_labels;
+    get_label_file_metadata(map_file, num_pts_in_label_file, num_total_labels);
+
+    _pts_to_label_offsets = new _u32[num_pts_in_label_file];
+    _pts_to_labels = new _u32[num_pts_in_label_file + num_total_labels];
+    _u32 counter = 0;
+
+    while (std::getline(infile, line)) {
+      std::istringstream iss(line);
+      std::vector<_u32>  lbls(0);
+
+      _pts_to_label_offsets[line_cnt] = counter;
+      _u32 &num_lbls_in_cur_pt = _pts_to_labels[counter];
+      num_lbls_in_cur_pt = 0;
+      counter++;
+      getline(iss, token, '\t'); // first token contains metadata, not used
+      getline(iss, token, '\t');
+      std::istringstream new_iss(token);
+      while (getline(new_iss, token, ',')) {
+        token.erase(std::remove(token.begin(), token.end(), '\n'), token.end());
+        token.erase(std::remove(token.begin(), token.end(), '\r'), token.end());
+        if (_labels.find(token) == _labels.end()) {
+          _filter_list.emplace_back(token);
+        }
+        int32_t filter_num = get_filter_number(token);
+        if (filter_num == -1) {
+          std::cout << "Error!! " << std::endl;
+          exit(-1);
+        }
+        _pts_to_labels[counter++] = filter_num;
+        num_lbls_in_cur_pt++;
+        _labels.insert(token);
+      }
+
+      if (num_lbls_in_cur_pt == 0) {
+        std::cout << "No label found for point " << line_cnt << std::endl;
+        exit(-1);
+      }
+      line_cnt++;
+    }
+    // MallocExtension::instance()->ReleaseFreeMemory();
+    infile.close();
+  }
+
+  template<typename T>
+  void PQFlashIndex<T>::set_universal_label(const std::string &label) {
+    int32_t temp_filter_num = get_filter_number(label);
+    if (temp_filter_num == -1) {
+      std::cout << "Error, could not find universal label. Exitting."
+                << std::endl;
+      exit(-1);
+    } else {
+      _use_universal_label = true;
+      _universal_filter_num = (_u32) temp_filter_num;
+    }
+  }
+
+
 #ifdef EXEC_ENV_OLS
   template<typename T>
   int PQFlashIndex<T>::load(MemoryMappedFiles &files, uint32_t num_threads,
@@ -544,6 +669,47 @@ namespace diskann {
   template<typename T>
   int PQFlashIndex<T>::load(uint32_t num_threads, const char *index_prefix) {
 #endif
+
+    std::string labels_file = std ::string(disk_index_file) + "_labels.txt";
+    std::string labels_to_medoids =
+        std ::string(disk_index_file) + "_labels_to_medoids.txt";
+    if (file_exists(labels_file)) {
+      parse_label_file(labels_file);
+      if (file_exists(labels_to_medoids)) {
+        std::ifstream medoid_stream(labels_to_medoids);
+
+        std::string line, token;
+        //        unsigned    line_cnt = 0;
+
+        _filter_to_medoid_id.clear();
+
+        while (std::getline(medoid_stream, line)) {
+          std::istringstream iss(line);
+          _u32               cnt = 0;
+          _u32               medoid;
+          std::string        label;
+          while (std::getline(iss, token, ',')) {
+            if (cnt == 0)
+              label = token;
+            else
+              medoid = (_u32) stoul(token);
+            cnt++;
+          }
+          _filter_to_medoid_id[label] = medoid;
+        }
+      }
+      std::string univ_label_file =
+          std ::string(disk_index_file) + "_universal_label.txt";
+      if (file_exists(univ_label_file)) {
+        std::ifstream universal_label_reader(univ_label_file);
+        std::string   univ_label;
+        universal_label_reader >> univ_label;
+        universal_label_reader.close();
+        set_universal_label(univ_label);
+      }
+    }
+
+    
     std::string pq_table_bin = std::string(index_prefix) + "_pq_pivots.bin";
     std::string pq_compressed_vectors =
         std::string(index_prefix) + "_pq_compressed.bin";
@@ -822,6 +988,30 @@ namespace diskann {
                                            const _u64  beam_width,
                                            const bool  use_reorder_data,
                                            QueryStats *stats) {
+    cached_beam_search(query1, k_search, l_search, indices, distances,
+                       beam_width, false, "", use_reorder_data, stats);
+  }
+
+
+  template<typename T>
+  void PQFlashIndex<T>::cached_beam_search(const T *query1, const _u64 k_search,
+                                           const _u64 l_search, _u64 *indices,
+                                           float *     distances, const _u64 beam_width, const bool use_filter,
+      const std::string &filter_label,
+                                           const bool  use_reorder_data,
+                                           QueryStats *stats) {
+    int32_t filter_num = 0;
+    if (use_filter) {
+      filter_num = get_filter_number(filter_label);
+      if (filter_num < 0) {
+        if (!_use_universal_label) {
+          return;
+        } else {
+          filter_num = _universal_filter_num;
+        }
+      }
+    }
+
     ThreadData<T> data = this->thread_data.pop();
     while (data.scratch.sector_scratch == nullptr) {
       this->thread_data.wait_for_push_notify();
@@ -896,15 +1086,24 @@ namespace diskann {
     full_retset.reserve(4096);
     _u32                        best_medoid = 0;
     float                       best_dist = (std::numeric_limits<float>::max)();
-    std::vector<SimpleNeighbor> medoid_dists;
-    for (_u64 cur_m = 0; cur_m < num_medoids; cur_m++) {
-      float cur_expanded_dist = dist_cmp_float->compare(
-          query_float, centroid_data + aligned_dim * cur_m,
-          (unsigned) aligned_dim);
-      if (cur_expanded_dist < best_dist) {
-        best_medoid = medoids[cur_m];
-        best_dist = cur_expanded_dist;
+    if (!use_filter) {
+      std::vector<SimpleNeighbor> medoid_dists;
+      for (_u64 cur_m = 0; cur_m < num_medoids; cur_m++) {
+        float cur_expanded_dist = dist_cmp_float->compare(
+            query_float, centroid_data + aligned_dim * cur_m,
+            (unsigned) aligned_dim);
+        if (cur_expanded_dist < best_dist) {
+          best_medoid = medoids[cur_m];
+          best_dist = cur_expanded_dist;
+        }
       }
+    }
+    else if (_filter_to_medoid_id.find(filter_label) != _filter_to_medoid_id.end()) {
+      best_medoid = _filter_to_medoid_id[filter_label];
+    } else {
+      throw ANNException(
+          "Cannot find medoid for specified filter.",
+          -1, __FUNCSIG__, __FILE__, __LINE__);
     }
 
     compute_dists(&best_medoid, 1, dist_scratch);
@@ -1036,6 +1235,9 @@ namespace diskann {
             continue;
           } else {
             visited.insert(id);
+            if (use_filter && !find_label_in_point(id, filter_num) &&
+                !find_label_in_point(id, _universal_filter_num))
+              continue;
             cmps++;
             float dist = dist_scratch[m];
             if (dist >= retset[cur_list_size - 1].distance &&
@@ -1112,6 +1314,9 @@ namespace diskann {
             continue;
           } else {
             visited.insert(id);
+            if (use_filter && !find_label_in_point(id, filter_num) &&
+                !find_label_in_point(id, _universal_filter_num))
+              continue;
             cmps++;
             float dist = dist_scratch[m];
             if (stats != nullptr) {

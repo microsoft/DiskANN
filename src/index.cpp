@@ -439,6 +439,40 @@ namespace diskann {
     }
 
     if (!_save_as_one_file) {
+
+      if (_filtered_index) {
+        if (_filter_to_medoid_id.size() > 0) {
+          std::ofstream medoid_writer(std::string(filename) +
+                                      "_labels_to_medoids.txt");
+          for (auto iter : _filter_to_medoid_id) {
+            medoid_writer << iter.first << ", " << iter.second << std::endl;
+            // std::cout << iter.first << ", " << iter.second << std::endl;
+          }
+          medoid_writer.close();
+        }
+
+          if (_use_universal_label) {
+            std::ofstream universal_label_writer(std::string(filename) +
+                                                 "_universal_label.txt");
+            universal_label_writer << _universal_label << std::endl;
+            universal_label_writer.close();
+          }
+
+          if (_pts_to_labels.size() > 0) {
+            std::ofstream label_writer(std::string(filename) + "_labels.txt");
+            for (_u32 i = 0; i < _pts_to_labels.size(); i++) {
+              label_writer << i << '\t';
+              for (_u32 j = 0; j < (_pts_to_labels[i].size() - 1); j++) {
+                label_writer << _pts_to_labels[i][j] << ",";
+              }
+              if (_pts_to_labels[i].size() != 0)
+                label_writer << _pts_to_labels[i][_pts_to_labels[i].size() - 1];
+              label_writer << std::endl;
+            }
+            label_writer.close();
+          }
+      }
+
       std::string graph_file = std::string(filename);
       std::string tags_file = std::string(filename) + ".tags";
       std::string data_file = std::string(filename) + ".data";
@@ -608,6 +642,51 @@ namespace diskann {
     _has_built = true;
 
     size_t tags_file_num_pts = 0, graph_num_pts = 0, data_file_num_pts = 0;
+
+    std::string mem_index_file(filename);
+    std::string labels_file = mem_index_file + "_labels.txt";
+    std::string labels_to_medoids = mem_index_file + "_labels_to_medoids.txt";
+    if (file_exists(labels_file)) {
+      parse_label_file(labels_file);
+      if (file_exists(labels_to_medoids)) {
+        std::ifstream medoid_stream(labels_to_medoids);
+
+        std::string line, token;
+        unsigned    line_cnt = 0;
+
+        _filter_to_medoid_id.clear();
+
+        while (std::getline(medoid_stream, line)) {
+          std::istringstream iss(line);
+          _u32               cnt = 0;
+          _u32               medoid = 0;
+          std::string        label;
+          while (std::getline(iss, token, ',')) {
+            token.erase(std::remove(token.begin(), token.end(), '\n'),
+                        token.end());
+            token.erase(std::remove(token.begin(), token.end(), '\r'),
+                        token.end());
+            if (cnt == 0)
+              label = token;
+            else
+              medoid = (_u32) stoul(token);
+            cnt++;
+          }
+          _filter_to_medoid_id[label] = medoid;
+          line_cnt++;
+        }
+      }
+
+      std::string universal_label_file(filename);
+      universal_label_file += "_universal_label.txt";
+      if (file_exists(universal_label_file)) {
+        std::ifstream universal_label_reader(universal_label_file);
+        universal_label_reader >> _universal_label;
+        _use_universal_label = true;
+        universal_label_reader.close();
+      }
+    }
+
 
     if (!_save_as_one_file) {
       // For DLVS Store, we will not support saving the index in multiple files.
@@ -879,7 +958,8 @@ namespace diskann {
       const std::vector<unsigned> &init_ids,
       std::vector<Neighbor> &      expanded_nodes_info,
       tsl::robin_set<unsigned> &   expanded_nodes_ids,
-      std::vector<Neighbor> &best_L_nodes, std::vector<unsigned> &des,
+      std::vector<Neighbor> &best_L_nodes, bool use_filter,
+      const std::vector<std::string> &filter_label, std::vector<unsigned> &des,
       tsl::robin_set<unsigned> &inserted_into_pool_rs,
       boost::dynamic_bitset<> &inserted_into_pool_bs, bool ret_frozen,
       bool search_invocation) {
@@ -917,6 +997,25 @@ namespace diskann {
             std::string("Wrong id") + std::to_string(id), -1, __FUNCSIG__,
             __FILE__, __LINE__);
       }
+
+      if (use_filter) {
+        std::vector<std::string> common_filters;
+        auto &                   x = _pts_to_labels[id];
+        std::set_intersection(filter_label.begin(), filter_label.end(),
+                              x.begin(), x.end(),
+                              std::back_inserter(common_filters));
+        if (_use_universal_label) {
+          if (std::find(filter_label.begin(), filter_label.end(),
+                        _universal_label) != filter_label.end() ||
+              std::find(x.begin(), x.end(), _universal_label) != x.end())
+            common_filters.emplace_back(_universal_label);
+        }
+
+        if (common_filters.size() == 0)
+          continue;
+      }
+
+
       nn = Neighbor(id,
                     _distance->compare(_data + _aligned_dim * (size_t) id,
                                        node_coords, (unsigned) _aligned_dim),
@@ -951,8 +1050,10 @@ namespace diskann {
         if (!(best_L_nodes[k].id == _start && _num_frozen_pts > 0 &&
               !ret_frozen)) {
           if (!search_invocation) {
-            expanded_nodes_info.emplace_back(best_L_nodes[k]);
-            expanded_nodes_ids.insert(n);
+            if (expanded_nodes_ids.find(n) == expanded_nodes_ids.end()) {
+              expanded_nodes_info.emplace_back(best_L_nodes[k]);
+              expanded_nodes_ids.insert(n);
+            }
           }
         }
         des.clear();
@@ -966,6 +1067,24 @@ namespace diskann {
               throw diskann::ANNException(msg.str(), -1, __FUNCSIG__, __FILE__,
                                           __LINE__);
             }
+            if (use_filter) { // RKNOTE: NEED TO CHECK IF THIS CORRECT WITH LOCKS ETC.
+              _u32                     id = _final_graph[n][m];
+              std::vector<std::string> common_filters;
+              auto &                   x = _pts_to_labels[id];
+              std::set_intersection(filter_label.begin(), filter_label.end(),
+                                    x.begin(), x.end(),
+                                    std::back_inserter(common_filters));
+              if (_use_universal_label) {
+                if (std::find(filter_label.begin(), filter_label.end(),
+                              _universal_label) != filter_label.end() ||
+                    std::find(x.begin(), x.end(), _universal_label) != x.end())
+                  common_filters.emplace_back(_universal_label);
+              }
+
+              if (common_filters.size() == 0)
+                continue;
+            }
+
             des.emplace_back(_final_graph[n][m]);
           }
         } else {
@@ -977,6 +1096,26 @@ namespace diskann {
               throw diskann::ANNException(msg.str(), -1, __FUNCSIG__, __FILE__,
                                           __LINE__);
             }
+
+            if (use_filter) {  // RKNOTE: NEED TO CHECK IF THIS CORRECT WITH
+                               // LOCKS ETC.
+              _u32                     id = _final_graph[n][m];
+              std::vector<std::string> common_filters;
+              auto &                   x = _pts_to_labels[id];
+              std::set_intersection(filter_label.begin(), filter_label.end(),
+                                    x.begin(), x.end(),
+                                    std::back_inserter(common_filters));
+              if (_use_universal_label) {
+                if (std::find(filter_label.begin(), filter_label.end(),
+                              _universal_label) != filter_label.end() ||
+                    std::find(x.begin(), x.end(), _universal_label) != x.end())
+                  common_filters.emplace_back(_universal_label);
+              }
+
+              if (common_filters.size() == 0)
+                continue;
+            }
+
             des.emplace_back(_final_graph[n][m]);
           }
         }
@@ -1031,7 +1170,8 @@ namespace diskann {
       const size_t node_id, const unsigned Lindex,
       std::vector<unsigned>     init_ids,
       std::vector<Neighbor> &   expanded_nodes_info,
-      tsl::robin_set<unsigned> &expanded_nodes_ids, std::vector<unsigned> &des,
+      tsl::robin_set<unsigned> &expanded_nodes_ids,  bool use_filter,
+      const std::vector<std::string> &filter_labels, std::vector<unsigned> &des,
       std::vector<Neighbor> &   best_L_nodes,
       tsl::robin_set<unsigned> &inserted_into_pool_rs,
       boost::dynamic_bitset<> & inserted_into_pool_bs) {
@@ -1041,7 +1181,8 @@ namespace diskann {
       init_ids.emplace_back(_start);
 
     iterate_to_fixed_point(node_coords, Lindex, init_ids, expanded_nodes_info,
-                           expanded_nodes_ids, best_L_nodes, des,
+                           expanded_nodes_ids, best_L_nodes, use_filter,
+                           filter_labels, des,
                            inserted_into_pool_rs, inserted_into_pool_bs);
   }
 
@@ -1050,7 +1191,24 @@ namespace diskann {
       const size_t node_id, const unsigned Lindex,
       std::vector<unsigned>     init_ids,
       std::vector<Neighbor> &   expanded_nodes_info,
-      tsl::robin_set<unsigned> &expanded_nodes_ids) {
+      tsl::robin_set<unsigned> &expanded_nodes_ids, std::vector<unsigned> &des,
+      std::vector<Neighbor> &   best_L_nodes,
+      tsl::robin_set<unsigned> &inserted_into_pool_rs,
+      boost::dynamic_bitset<> & inserted_into_pool_bs) {
+    std::vector<std::string> dummy_labels(0);
+    get_expanded_nodes(node_id, Lindex, init_ids, expanded_nodes_info,
+                       expanded_nodes_ids, false, dummy_labels, des,
+                       best_L_nodes, inserted_into_pool_rs,
+                       inserted_into_pool_bs);
+  }
+
+  template<typename T, typename TagT>
+  void Index<T, TagT>::get_expanded_nodes(
+      const size_t node_id, const unsigned Lindex,
+      std::vector<unsigned>     init_ids,
+      std::vector<Neighbor> &   expanded_nodes_info,
+      tsl::robin_set<unsigned> &expanded_nodes_ids, bool use_filter,
+      const std::vector<std::string> &filter_labels) {
     const T *node_coords = _data + _aligned_dim * node_id;
 
     if (init_ids.size() == 0)
@@ -1063,7 +1221,8 @@ namespace diskann {
     boost::dynamic_bitset<>  inserted_into_pool_bs;
 
     iterate_to_fixed_point(node_coords, Lindex, init_ids, expanded_nodes_info,
-                           expanded_nodes_ids, best_L_nodes, des,
+                           expanded_nodes_ids, best_L_nodes, use_filter,
+                           filter_labels, des,
                            inserted_into_pool_rs, inserted_into_pool_bs);
   }
 
@@ -1105,6 +1264,23 @@ namespace diskann {
         for (unsigned t = start + 1; t < pool.size() && t < maxc; t++) {
           if (occlude_factor[t] > alpha)
             continue;
+
+          bool prune_allowed = true;
+          if (_filtered_index) {
+            _u32 a = p.id;
+            _u32 b = pool[t].id;
+            for (auto &x : _pts_to_labels[b]) {
+              if (std::find(_pts_to_labels[a].begin(), _pts_to_labels[a].end(),
+                            x) == _pts_to_labels[a].end()) {
+                prune_allowed = false;
+              }
+              if (!prune_allowed)
+                break;
+            }
+          }
+          if (!prune_allowed)
+            continue;
+
           float djk = _distance->compare(
               _data + _aligned_dim * (size_t) pool[t].id,
               _data + _aligned_dim * (size_t) p.id, (unsigned) _aligned_dim);
@@ -1331,6 +1507,10 @@ namespace diskann {
     _indexingMaxC = parameters.Get<unsigned>("C");
     const float last_round_alpha = parameters.Get<float>("alpha");
     unsigned    L = _indexingQueueSize;
+    _u32 Lf = 0;
+    if (_filtered_index) {
+      Lf = parameters.Get<unsigned>("Lf");  // candidate list size for filtered build
+    }
 
     std::vector<unsigned> Lvec;
     Lvec.push_back(L);
@@ -1419,7 +1599,18 @@ namespace diskann {
           std::vector<Neighbor> pool;
           pool.reserve(L * 2);
           visited.reserve(L * 2);
+          if (!_filtered_index)
           get_expanded_nodes(node, L, init_ids, pool, visited);
+          else {
+            std::vector<_u32> filter_specific_start_nodes;
+            for (auto &x : _pts_to_labels[node])
+              filter_specific_start_nodes.emplace_back(_filter_to_medoid_id[x]);
+
+            get_expanded_nodes(node, Lf, filter_specific_start_nodes, pool,
+                               visited, true, _pts_to_labels[node]);
+            // get_expanded_nodes(node, L / 2, init_ids, pool, visited);
+          }
+
           // check the neighbors of the query that are not part of
           // visited, check their distance to the query, and add it to
           if (!_final_graph[node].empty())
@@ -1808,6 +1999,116 @@ namespace diskann {
   }
 
   template<typename T, typename TagT>
+  void Index<T, TagT>::parse_label_file(const std::string &map_file) {
+    std::ifstream infile(map_file);
+    std::string   line, token;
+    unsigned      line_cnt = 0;
+
+    while (std::getline(infile, line)) {
+      line_cnt++;
+    }
+    _pts_to_labels.resize(line_cnt, std::vector<std::string>());
+
+    infile.clear();
+    infile.seekg(0, std::ios::beg);
+    while (std::getline(infile, line)) {
+      std::istringstream       iss(line);
+      std::vector<std::string> lbls(0);
+      // long int              val;
+      getline(iss, token, '\t');
+      _u32 i = (_u32) std::stoul(token);
+      getline(iss, token, '\t');
+      std::istringstream new_iss(token);
+      while (getline(new_iss, token, ',')) {
+        token.erase(std::remove(token.begin(), token.end(), '\n'), token.end());
+        token.erase(std::remove(token.begin(), token.end(), '\r'), token.end());
+        lbls.push_back(token);
+        _labels.insert(token);
+      }
+      if (lbls.size() <= 0) {
+        std::cout << "No label found";
+        exit(-1);
+      }
+      std::sort(lbls.begin(), lbls.end());
+      _pts_to_labels[i] = lbls;
+      line_cnt++;
+    }
+    std::cout << "Identified " << _labels.size() << " distinct label(s)"
+              << std::endl;
+  }
+
+  template<typename T, typename TagT>
+  void Index<T, TagT>::set_universal_label(const std::string &label) {
+    _use_universal_label = true;
+    _universal_label = label;
+  }
+
+  template<typename T, typename TagT>
+  void Index<T, TagT>::build_filtered_index(const char * filename, const std::string &label_file, 
+                                            const size_t num_points_to_load,
+                                            Parameters & parameters,
+                                      const std::vector<TagT> &tags) {
+    _labels_file = label_file;
+    _filtered_index = true;
+    _filter_to_medoid_id.clear();
+    parse_label_file(label_file);  // determines medoid for each label and
+                                   // identifies the points to label mapping
+
+    _u32 counter = 0;
+#pragma omp parallel for schedule(dynamic, 1)
+    for (int lbl = 0; lbl < _labels.size(); lbl++) {
+      auto itr = _labels.begin();
+      std::advance(itr, lbl);
+      auto &x = *itr;
+      std::vector<_u32> filtered_points;
+      for (_u32 i = 0; i < _nd; i++) {
+        if (std::find(_pts_to_labels[i].begin(), _pts_to_labels[i].end(), x) !=
+                _pts_to_labels[i].end() ||
+            (_use_universal_label &&
+             (std::find(_pts_to_labels[i].begin(), _pts_to_labels[i].end(),
+                        _universal_label) != _pts_to_labels[i].end())))
+          filtered_points.emplace_back(i);
+      }
+      if (filtered_points.size() != 0) {
+#pragma omp critical
+        {
+          _u32 num_cands = 25;
+          _u32 best_medoid;
+          _u32 best_medoid_count = std::numeric_limits<_u32>::max();
+          for (_u32 cnd = 0; cnd < num_cands; cnd++) {
+            _u32 cur_cnd = filtered_points[rand() % filtered_points.size()];
+            _u32 cur_cnt = std::numeric_limits<_u32>::max();
+            if (_medoid_counts.find(cur_cnd) == _medoid_counts.end()) {
+              _medoid_counts[cur_cnd] = 0;
+              cur_cnt = 0;
+            } else {
+              cur_cnt = _medoid_counts[cur_cnd];
+            }
+            if (cur_cnt < best_medoid_count || cnd == 0) {
+              best_medoid_count = cur_cnt;
+              best_medoid = cur_cnd;
+            }
+          }
+
+          _filter_to_medoid_id[x] = best_medoid;
+          _medoid_counts[best_medoid]++;
+          std::stringstream a;
+//          a << "Medoid of " << x << " is " << best_medoid << std::endl;
+//          std::cout << a.str();
+        }
+      }
+#pragma omp critical
+      counter++;
+      std::stringstream a;
+      a << ((100.0 * counter) / _labels.size()) << "\% processed \r";
+      std::cout << a.str() << std::flush;
+    }
+
+    this->build(filename, num_points_to_load, parameters, tags);
+  }
+
+
+  template<typename T, typename TagT>
   template<typename IdType>
   std::pair<uint32_t, uint32_t> Index<T, TagT>::search(const T *      query,
                                                        const size_t   K,
@@ -1824,7 +2125,8 @@ namespace diskann {
   template<typename IdType>
   std::pair<uint32_t, uint32_t> Index<T, TagT>::search_impl(
       const T *query, const size_t K, const unsigned L, IdType *indices,
-      float *distances, InMemQueryScratch<T> &scratch) {
+      float *distances, InMemQueryScratch<T> &scratch, bool use_filters,
+      const std::string &filter_label) {
     std::vector<Neighbor> &   expanded_nodes_info = scratch.pool();
     tsl::robin_set<unsigned> &expanded_nodes_ids = scratch.visited();
     std::vector<unsigned> &   des = scratch.des();
@@ -1835,12 +2137,23 @@ namespace diskann {
         scratch.inserted_into_pool_bs();
 
     std::vector<unsigned> init_ids;
+    std::vector<std::string> filter_vec;
 
     std::shared_lock<std::shared_timed_mutex> lock(_update_lock);
 
-    if (init_ids.size() == 0) {
+    if (use_filters) {
+      if (_filter_to_medoid_id.find(filter_label) != _filter_to_medoid_id.end())
+        init_ids.emplace_back(_filter_to_medoid_id[filter_label]);
+      else {
+        diskann::cout << "No filtered medoid found. exitting " << std::endl; //RKNOTE: If universal label found start there
+        throw diskann::ANNException("No filtered medoid found. exitting ", -1);
+      }
+      filter_vec.emplace_back(filter_label);
+    } else {
       init_ids.emplace_back(_start);
     }
+
+
     T *aligned_query = scratch.aligned_query;
     memcpy(aligned_query, query, _dim * sizeof(T));
 
@@ -1850,7 +2163,7 @@ namespace diskann {
 
     auto retval = iterate_to_fixed_point(
         aligned_query, L, init_ids, expanded_nodes_info, expanded_nodes_ids,
-        best_L_nodes, des, inserted_into_pool_rs, inserted_into_pool_bs, true,
+        best_L_nodes, use_filters, filter_vec, des, inserted_into_pool_rs, inserted_into_pool_bs, true,
         true);
 
     size_t pos = 0;
@@ -1923,6 +2236,20 @@ namespace diskann {
 
     return pos;
   }
+
+  template<typename T, typename TagT>
+  template<typename IndexType>
+  std::pair<uint32_t, uint32_t> Index<T, TagT>::search_with_filters(
+      const T *query, const std::string &filter_label, const size_t K,
+      const unsigned L, IndexType *indices, float *distance) {
+
+    ScratchStoreManager<T> manager(_query_scratch);
+    auto                   scratch = manager.scratch_space();
+
+    return search_impl(query, K, L, indices, distance,
+                       scratch, true, filter_label);
+  }
+
 
   template<typename T, typename TagT>
   size_t Index<T, TagT>::get_num_points() {
@@ -3093,5 +3420,128 @@ namespace diskann {
                              Index<int8_t, uint32_t>::search<uint32_t>(const int8_t *query, const size_t K,
                                             const unsigned L, uint32_t *indices,
                                             float *distances);
+
+  template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t>
+                             Index<float, uint64_t>::search<uint64_t>(const float *query, const size_t K,
+                                           const unsigned L, uint64_t *indices,
+                                           float *distances);
+  template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t>
+                             Index<float, uint64_t>::search<uint32_t>(const float *query, const size_t K,
+                                           const unsigned L, uint32_t *indices,
+                                           float *distances);
+  template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t>
+                             Index<uint8_t, uint64_t>::search<uint64_t>(const uint8_t *query,
+                                             const size_t K, const unsigned L,
+                                             uint64_t *indices,
+                                             float *   distances);
+  template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t>
+                             Index<uint8_t, uint64_t>::search<uint32_t>(const uint8_t *query,
+                                             const size_t K, const unsigned L,
+                                             uint32_t *indices,
+                                             float *   distances);
+  template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t>
+                             Index<int8_t, uint64_t>::search<uint64_t>(const int8_t *query, const size_t K,
+                                            const unsigned L, uint64_t *indices,
+                                            float *distances);
+  template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t>
+                             Index<int8_t, uint64_t>::search<uint32_t>(const int8_t *query, const size_t K,
+                                            const unsigned L, uint32_t *indices,
+                                            float *distances);
+  // TagT==uint32_t
+  template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t>
+                             Index<float, uint32_t>::search<uint64_t>(const float *query, const size_t K,
+                                           const unsigned L, uint64_t *indices,
+                                           float *distances);
+  template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t>
+                             Index<float, uint32_t>::search<uint32_t>(const float *query, const size_t K,
+                                           const unsigned L, uint32_t *indices,
+                                           float *distances);
+  template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t>
+                             Index<uint8_t, uint32_t>::search<uint64_t>(const uint8_t *query,
+                                             const size_t K, const unsigned L,
+                                             uint64_t *indices,
+                                             float *   distances);
+  template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t>
+                             Index<uint8_t, uint32_t>::search<uint32_t>(const uint8_t *query,
+                                             const size_t K, const unsigned L,
+                                             uint32_t *indices,
+                                             float *   distances);
+  template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t>
+                             Index<int8_t, uint32_t>::search<uint64_t>(const int8_t *query, const size_t K,
+                                            const unsigned L, uint64_t *indices,
+                                            float *distances);
+  template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t>
+                             Index<int8_t, uint32_t>::search<uint32_t>(const int8_t *query, const size_t K,
+                                            const unsigned L, uint32_t *indices,
+                                            float *distances);
+
+
+
+
+    template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t>
+  Index<float, uint64_t>::search_with_filters<uint64_t>(const float *query, const std::string &filter_label, const size_t K,
+                                           const unsigned L, uint64_t *indices,
+                                           float *distances);
+  template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t>
+    Index<float, uint64_t>::search_with_filters<uint32_t>(
+        const float *query, const std::string &filter_label, const size_t K,
+                                           const unsigned L, uint32_t *indices,
+                                           float *distances);
+  template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t>
+  Index<uint8_t, uint64_t>::search_with_filters<uint64_t>(
+      const uint8_t *query, const std::string &filter_label, 
+                                             const size_t K, const unsigned L,
+                                             uint64_t *indices,
+                                             float *   distances);
+  template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t>
+  Index<uint8_t, uint64_t>::search_with_filters<uint32_t>(
+      const uint8_t *query, const std::string &filter_label, 
+                                             const size_t K, const unsigned L,
+                                             uint32_t *indices,
+                                             float *   distances);
+  template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t>
+  Index<int8_t, uint64_t>::search_with_filters<uint64_t>(
+      const int8_t *query, const std::string &filter_label, const size_t K,
+                                            const unsigned L, uint64_t *indices,
+                                            float *distances);
+  template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t>
+  Index<int8_t, uint64_t>::search_with_filters<uint32_t>(
+      const int8_t *query, const std::string &filter_label, const size_t K,
+                                            const unsigned L, uint32_t *indices,
+                                            float *distances);
+  // TagT==uint32_t
+  template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t>
+  Index<float, uint32_t>::search_with_filters<uint64_t>(
+      const float *query, const std::string &filter_label, const size_t K,
+                                           const unsigned L, uint64_t *indices,
+                                           float *distances);
+  template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t>
+  Index<float, uint32_t>::search_with_filters<uint32_t>(
+      const float *query, const std::string &filter_label, const size_t K,
+                                           const unsigned L, uint32_t *indices,
+                                           float *distances);
+  template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t>
+  Index<uint8_t, uint32_t>::search_with_filters<uint64_t>(
+      const uint8_t *query, const std::string &filter_label, 
+                                             const size_t K, const unsigned L,
+                                             uint64_t *indices,
+                                             float *   distances);
+  template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t>
+  Index<uint8_t, uint32_t>::search_with_filters<uint32_t>(
+      const uint8_t *query, const std::string &filter_label, 
+                                             const size_t K, const unsigned L,
+                                             uint32_t *indices,
+                                             float *   distances);
+  template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t>
+  Index<int8_t, uint32_t>::search_with_filters<uint64_t>(
+      const int8_t *query, const std::string &filter_label, const size_t K,
+                                            const unsigned L, uint64_t *indices,
+                                            float *distances);
+  template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t>
+  Index<int8_t, uint32_t>::search_with_filters<uint32_t>(
+      const int8_t *query, const std::string &filter_label, const size_t K,
+                                            const unsigned L, uint32_t *indices,
+                                            float *distances);
+
 
 }  // namespace diskann

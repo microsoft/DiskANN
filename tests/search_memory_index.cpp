@@ -31,7 +31,7 @@ int search_memory_index(diskann::Metric& metric, const std::string& index_path,
                         std::string& truthset_file, const unsigned num_threads,
                         const unsigned               recall_at,
                         const std::vector<unsigned>& Lvec, const bool dynamic,
-                        const bool tags) {
+                        const bool tags, const std::string &filter_label) {
   // Load the query file
   T*        query = nullptr;
   unsigned* gt_ids = nullptr;
@@ -53,6 +53,10 @@ int search_memory_index(diskann::Metric& metric, const std::string& index_path,
     diskann::cout << " Truthset file " << truthset_file
                   << " not found. Not computing recall." << std::endl;
   }
+
+  bool filtered_search = false;
+  if (filter_label != "")
+    filtered_search = true;
 
   diskann::Index<T, uint32_t> index(metric, query_dim, 0, dynamic, tags);
   index.load(index_path.c_str(), num_threads,
@@ -112,7 +116,13 @@ int search_memory_index(diskann::Metric& metric, const std::string& index_path,
 #pragma omp parallel for schedule(dynamic, 1)
     for (int64_t i = 0; i < (int64_t) query_num; i++) {
       auto qs = std::chrono::high_resolution_clock::now();
-      if (metric == diskann::FAST_L2) {
+    if (filtered_search) {
+      auto retval = index.search_with_filters(
+          query + i * query_aligned_dim, filter_label, recall_at, L,
+          query_result_ids[test_id].data() + i * recall_at,
+          query_result_dists[test_id].data() + i * recall_at);
+      cmp_stats[i] = retval.second;
+    } else if (metric == diskann::FAST_L2) {
         index.search_with_optimized_layout(
             query + i * query_aligned_dim, recall_at, L,
             query_result_ids[test_id].data() + i * recall_at);
@@ -192,7 +202,7 @@ int search_memory_index(diskann::Metric& metric, const std::string& index_path,
 
 int main(int argc, char** argv) {
   std::string data_type, dist_fn, index_path_prefix, result_path, query_file,
-      gt_file;
+      gt_file, filter_label;
   unsigned              num_threads, K;
   std::vector<unsigned> Lvec;
   bool                  dynamic, tags;
@@ -214,6 +224,11 @@ int main(int argc, char** argv) {
     desc.add_options()("query_file",
                        po::value<std::string>(&query_file)->required(),
                        "Query file in binary format");
+    desc.add_options()(
+        "filter_label",
+        po::value<std::string>(&filter_label)->default_value(std::string("")),
+        "Filter Label for Filtered Search");
+
     desc.add_options()(
         "gt_file",
         po::value<std::string>(&gt_file)->default_value(std::string("null")),
@@ -275,17 +290,17 @@ int main(int argc, char** argv) {
     if (data_type == std::string("int8")) {
       return search_memory_index<int8_t>(metric, index_path_prefix, result_path,
                                          query_file, gt_file, num_threads, K,
-                                         Lvec, dynamic, tags);
+                                         Lvec, dynamic, tags, filter_label);
     }
 
     else if (data_type == std::string("uint8")) {
       return search_memory_index<uint8_t>(metric, index_path_prefix,
                                           result_path, query_file, gt_file,
-                                          num_threads, K, Lvec, dynamic, tags);
+          num_threads, K, Lvec, dynamic, tags, filter_label);
     } else if (data_type == std::string("float")) {
       return search_memory_index<float>(metric, index_path_prefix, result_path,
                                         query_file, gt_file, num_threads, K,
-                                        Lvec, dynamic, tags);
+                                        Lvec, dynamic, tags, filter_label);
     } else {
       std::cout << "Unsupported type. Use float/int8/uint8" << std::endl;
       return -1;

@@ -57,13 +57,17 @@ int search_disk_index(
     const std::string& result_output_prefix, const std::string& query_file,
     std::string& gt_file, const unsigned num_threads, const unsigned recall_at,
     const unsigned beamwidth, const unsigned num_nodes_to_cache,
-    const std::vector<unsigned>& Lvec, const bool use_reorder_data = false) {
+    const std::vector<unsigned>& Lvec, const bool use_reorder_data = false,
+    const std::string& filter_label = "") {
   diskann::cout << "Search parameters: #threads: " << num_threads << ", ";
   if (beamwidth <= 0)
     diskann::cout << "beamwidth to be optimized for each L value" << std::endl;
   else
     diskann::cout << " beamwidth: " << beamwidth << std::endl;
 
+  bool        filtered_search = false;
+  if (filter_label != "")
+    filtered_search = true;
   std::string warmup_query_file = index_path_prefix + "_sample_data.bin";
 
   // load query bin
@@ -207,11 +211,20 @@ int search_disk_index(
 
 #pragma omp parallel for schedule(dynamic, 1)
     for (_s64 i = 0; i < (int64_t) query_num; i++) {
-      _pFlashIndex->cached_beam_search(
-          query + (i * query_aligned_dim), recall_at, L,
-          query_result_ids_64.data() + (i * recall_at),
-          query_result_dists[test_id].data() + (i * recall_at),
-          optimized_beamwidth, use_reorder_data, stats + i);
+      if (!filtered_search) {
+        _pFlashIndex->cached_beam_search(
+            query + (i * query_aligned_dim), recall_at, L,
+            query_result_ids_64.data() + (i * recall_at),
+            query_result_dists[test_id].data() + (i * recall_at),
+            optimized_beamwidth, use_reorder_data, stats + i);
+      }
+      else {
+        _pFlashIndex->cached_beam_search(
+            query + (i * query_aligned_dim), recall_at, L,
+            query_result_ids_64.data() + (i * recall_at),
+            query_result_dists[test_id].data() + (i * recall_at),
+            optimized_beamwidth, true, filter_label, use_reorder_data, stats + i);
+      }
     }
     auto                          e = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> diff = e - s;
@@ -281,7 +294,7 @@ int search_disk_index(
 
 int main(int argc, char** argv) {
   std::string data_type, dist_fn, index_path_prefix, result_path_prefix,
-      query_file, gt_file;
+      query_file, gt_file, filter_label;
   unsigned              num_threads, K, W, num_nodes_to_cache;
   std::vector<unsigned> Lvec;
   bool                  use_reorder_data = false;
@@ -303,6 +316,10 @@ int main(int argc, char** argv) {
     desc.add_options()("query_file",
                        po::value<std::string>(&query_file)->required(),
                        "Query file in binary format");
+    desc.add_options()(
+        "filter_label",
+        po::value<std::string>(&filter_label)->default_value(std::string("")),
+        "Filter Label for Filtered Search");
     desc.add_options()(
         "gt_file",
         po::value<std::string>(&gt_file)->default_value(std::string("null")),
@@ -374,15 +391,17 @@ int main(int argc, char** argv) {
     if (data_type == std::string("float"))
       return search_disk_index<float>(
           metric, index_path_prefix, result_path_prefix, query_file, gt_file,
-          num_threads, K, W, num_nodes_to_cache, Lvec, use_reorder_data);
+          num_threads, K, W, num_nodes_to_cache, Lvec, use_reorder_data, filter_label);
     else if (data_type == std::string("int8"))
       return search_disk_index<int8_t>(
           metric, index_path_prefix, result_path_prefix, query_file, gt_file,
-          num_threads, K, W, num_nodes_to_cache, Lvec, use_reorder_data);
+                                       num_threads, K, W, num_nodes_to_cache,
+                                       Lvec, use_reorder_data, filter_label);
     else if (data_type == std::string("uint8"))
       return search_disk_index<uint8_t>(
           metric, index_path_prefix, result_path_prefix, query_file, gt_file,
-          num_threads, K, W, num_nodes_to_cache, Lvec, use_reorder_data);
+                                        num_threads, K, W, num_nodes_to_cache,
+                                        Lvec, use_reorder_data, filter_label);
     else {
       std::cerr << "Unsupported data type. Use float or int8 or uint8"
                 << std::endl;
