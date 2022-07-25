@@ -104,42 +104,42 @@ void build_with_query_data(const std::string& data_path, const unsigned L,
 
   std::cout << "Inserted points in " << seconds << " seconds" << std::endl;
 
-    std::vector<int64_t> indices(num_points);
-    std::iota(indices.begin(), indices.end(), 0);
-    std::random_shuffle(indices.begin(), indices.end()); 
+    // std::vector<int64_t> indices(num_points);
+    // std::iota(indices.begin(), indices.end(), 0);
+    // std::random_shuffle(indices.begin(), indices.end()); 
 
-  std::cout << "Deleting " << 10000
-                  << " points from the index..." << std::endl;
-        index.enable_delete();
-        tsl::robin_set<TagT> deletes;
-        for (int k = 0; k < 10000; k++) {
-          deletes.insert(static_cast<TagT>(indices[k]));
-        }
-        std::vector<TagT> failed_deletes;
-        index.lazy_delete(deletes, failed_deletes);
-        omp_set_num_threads(thread_count);
-        diskann::Timer delete_timer;
-        index.consolidate_deletes(paras);
-        double elapsedSeconds = delete_timer.elapsed() / 1000000.0;
+//   std::cout << "Deleting " << 10000
+//                   << " points from the index..." << std::endl;
+//         index.enable_delete();
+//         tsl::robin_set<TagT> deletes;
+//         for (int k = 0; k < 10000; k++) {
+//           deletes.insert(static_cast<TagT>(indices[k]));
+//         }
+//         std::vector<TagT> failed_deletes;
+//         index.lazy_delete(deletes, failed_deletes);
+//         omp_set_num_threads(thread_count);
+//         diskann::Timer delete_timer;
+//         index.consolidate_deletes(paras);
+//         double elapsedSeconds = delete_timer.elapsed() / 1000000.0;
 
-        std::cout << "Deleted " << 10000 << " points in "
-                  << elapsedSeconds << " seconds" << std::endl;
+//         std::cout << "Deleted " << 10000 << " points in "
+//                   << elapsedSeconds << " seconds" << std::endl;
 
-        // RE-INSERTIONS
-        std::cout << "Re-inserting the same " << 10000
-                  << " points from the index..." << std::endl;
-        diskann::Timer insert_timer;
-#pragma omp parallel for num_threads(thread_count) schedule(dynamic)
-        for (int64_t k = 0;
-             k < (int64_t) 10000; k++) {
-          index.insert_point(&data_load[indices[k] * aligned_dim],
-                                  static_cast<TagT>(indices[k]));
-        }
-        elapsedSeconds = insert_timer.elapsed() / 1000000.0;
+//         // RE-INSERTIONS
+//         std::cout << "Re-inserting the same " << 10000
+//                   << " points from the index..." << std::endl;
+//         diskann::Timer insert_timer;
+// #pragma omp parallel for num_threads(thread_count) schedule(dynamic)
+//         for (int64_t k = 0;
+//              k < (int64_t) 10000; k++) {
+//           index.insert_point(&data_load[indices[k] * aligned_dim],
+//                                   static_cast<TagT>(indices[k]));
+//         }
+//         elapsedSeconds = insert_timer.elapsed() / 1000000.0;
 
-        std::cout << "Inserted " << 10000 << " points in "
-                  << elapsedSeconds << " seconds" << std::endl;
-        std::cout << std::endl;
+//         std::cout << "Inserted " << 10000 << " points in "
+//                   << elapsedSeconds << " seconds" << std::endl;
+//         std::cout << std::endl;
 
 
 
