@@ -2023,8 +2023,8 @@ void Index<T, TagT>::partition_packing(
     std::vector<std::mutex> in_locks (_nd);
 
 #pragma omp parallel for schedule(dynamic, 128)    
-    for (unsigned i = 0; i < _final_graph.size(); i++) {
-      for (unsigned j = 0; j < _final_graph[i].size(); j++) {
+    for (_s64 i = 0; i < _final_graph.size(); i++) {
+      for (_s64 j = 0; j < _final_graph[i].size(); j++) {
         {
           LockGuard lock(in_locks[_final_graph[i][j]]);
         _in_graph[_final_graph[i][j]].emplace_back(i);
@@ -2038,7 +2038,7 @@ void Index<T, TagT>::partition_packing(
     }
 
 #pragma omp parallel for schedule(dynamic, 1) num_threads(threads)
-    for (unsigned i = 0; i < _nd / omega; i++) {
+    for (_s64 i = 0; i < _nd / omega; i++) {
       unsigned seed_node;
 #pragma omp    critical
       {
