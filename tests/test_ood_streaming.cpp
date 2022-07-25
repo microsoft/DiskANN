@@ -100,6 +100,8 @@ void build_with_query_data(const std::string& data_path, const unsigned L,
 
   // index.query_nn_stats();
 
+  index.marked_graph_stats();
+
   double seconds = index_timer.elapsed() / 1000000.0;
 
   std::cout << "Inserted points in " << seconds << " seconds" << std::endl;

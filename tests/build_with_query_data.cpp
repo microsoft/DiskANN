@@ -80,6 +80,7 @@ void build_with_query_data(const std::string& data_path, const unsigned L,
   std::iota(tags.begin(), tags.end(), 0);
 
   index.build(data_load, num_points, paras, tags, query_load, num_query_points);
+  index.marked_graph_stats();
 
   index.save(save_path.c_str());
 }

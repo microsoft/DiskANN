@@ -1733,17 +1733,17 @@ namespace diskann {
             _data + _aligned_dim * (size_t) location, (unsigned) _aligned_dim);
         if ((_query_nn[nbh][_query_nn[nbh].size() - 1]).distance > dist) {
           size_t   k = _query_nn[nbh].size();
-          unsigned prev_id = (_query_nn[nbh][_query_nn[nbh].size() - 1]).id;
+          // unsigned prev_id = (_query_nn[nbh][_query_nn[nbh].size() - 1]).id;
           int result = InsertIntoPool(_query_nn[nbh].data(), k,
                                       Neighbor(location, dist, true));
           if (result != (int) k + 1) {
             to_stitch.push_back(nbh);
-            if(prev_id !=0 && _marked_graph[prev_id][nbh].size()!=0){
-              {
-                LockGuard guard(_locks[prev_id]);
-                delete_stitched_edges(prev_id, nbh);
-              }
-            }
+            // if(prev_id !=0 && _marked_graph[prev_id][nbh].size()!=0){
+            //   {
+            //     LockGuard guard(_locks[prev_id]);
+            //     delete_stitched_edges(prev_id, nbh);
+            //   }
+            // }
           }
         }
       }
@@ -1980,21 +1980,23 @@ namespace diskann {
   }
 
   // the marked graph may go out of date after inserts and need to be refreshed
-  //   template<typename T, typename TagT>
-  //   void Index<T, TagT>::update_marked_graph() {
-  // #pragma omp parallel for schedule(dynamic)
-  //     for (size_t i = 0; i < _max_points + _num_frozen_pts; i++) {
-  //       std::vector<unsigned> new_out;
-  //       for (auto nbh : _marked_graph[i]) {
-  //         if (std::find(_final_graph[i].begin(), _final_graph[i].end(), nbh)
-  //         !=
-  //             _final_graph[i].end())
-  //           new_out.push_back(nbh);
-  //       }
-  //       if (new_out.size() < _marked_graph[i].size())
-  //         _marked_graph[i] = new_out;
-  //     }
-  //   }
+    template<typename T, typename TagT>
+    void Index<T, TagT>::update_marked_graph() {
+  #pragma omp parallel for schedule(dynamic)
+      for (size_t i = 0; i < _max_points + _num_frozen_pts; i++) {
+        for(auto &pair : _marked_graph[i]){
+          std::vector<unsigned> new_nbh; 
+          for(unsigned nbh : pair.second){
+            if(std::find(_final_graph[i].begin(), _final_graph[i].end(), nbh) != _final_graph[i].end()){
+              new_nbh.push_back(nbh);
+            }
+          }
+          if(new_nbh.size() < pair.second.size()){
+            pair.second = new_nbh;
+          }
+        }
+      }
+    }
 
     template<typename T, typename TagT>
     void Index<T, TagT>::delete_from_marked_graph(tsl::robin_set<unsigned> &delete_set){
@@ -2015,6 +2017,32 @@ namespace diskann {
         }
         else _marked_graph[i].clear();
       }
+    }
+
+    template<typename T, typename TagT>
+    void Index<T, TagT>::marked_graph_stats(){
+      update_marked_graph();
+
+      size_t max = 0, min = 1 << 30, total = 0, nzcnt = 0;
+      for (size_t i = 0; i < (_nd + _num_frozen_pts); i++) {
+        std::vector<unsigned> pool;
+        for(auto pair : _marked_graph[i]){
+          for(unsigned nbh : pair.second) pool.push_back(nbh);
+        }
+        max = (std::max)(max, pool.size());
+        min = (std::min)(min, pool.size());
+        total += pool.size();
+        if (pool.size() != 0) nzcnt++;
+      }
+      if (min > max)
+        min = max;
+      if (_nd > 0) {
+        diskann::cout << "Index restricted to stitched edges has degree: max:" << max << "  avg:"
+                      << (float) total / (float) (_nd + _num_frozen_pts)
+                      << "  min:" << min << "  count(deg>0):" << nzcnt << std::endl;
+        diskann::cout << "Restricting to nonzero nodes, avg stitched degree is:  " << (float) total / (float) (nzcnt) << std::endl; 
+                    }
+
     }
 
   //   template<typename T, typename TagT>

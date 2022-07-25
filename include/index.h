@@ -244,6 +244,8 @@ namespace diskann {
 
     DISKANN_DLLEXPORT void print_status() const;
     DISKANN_DLLEXPORT void query_nn_stats();
+    DISKANN_DLLEXPORT void marked_graph_stats();
+
 
     // This variable MUST be updated if the number of entries in the metadata
     // change.
@@ -380,7 +382,7 @@ namespace diskann {
                        const int version);
 
     void populate_query_nn();
-    // void update_marked_graph();
+    void update_marked_graph();
     void delete_from_marked_graph(tsl::robin_set<unsigned> &delete_set);
     void robust_stitch(); 
     void robust_stitch(tsl::robin_set<unsigned> &pruned_nodes); 
