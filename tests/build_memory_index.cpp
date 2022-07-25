@@ -77,7 +77,7 @@ int main(int argc, char** argv) {
         "Lbuild,L", po::value<uint32_t>(&L)->default_value(100),
         "Build complexity, higher value results in better graphs");
     desc.add_options()(
-        "alpha", po::value<float>(&alpha)->default_value(1.2f),
+        "alpha", po::value<float>(&alpha)->default_value(1.20f),
         "alpha controls density and diameter of graph, set 1 for sparse graph, "
         "1.2 or 1.4 for denser graphs with lower diameter");
     desc.add_options()(

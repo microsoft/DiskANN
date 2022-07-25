@@ -180,7 +180,7 @@ namespace diskann {
         float *distances = nullptr);
 
     // Initialize space for res_vectors before calling.
-    DISKANN_DLLEXPORT size_t search_with_tags(const T *query, const uint64_t K,
+    DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> search_with_tags(const T *query, const uint64_t K,
                                               const unsigned L, TagT *tags,
                                               float *           distances,
                                               std::vector<T *> &res_vectors);
@@ -381,7 +381,7 @@ namespace diskann {
 
     void populate_query_nn();
     // void update_marked_graph();
-    // void delete_from_marked_graph(tsl::robin_set<unsigned> &delete_set, const unsigned &range, const unsigned &maxc, const float &alpha);
+    void delete_from_marked_graph(tsl::robin_set<unsigned> &delete_set);
     void robust_stitch(); 
     void robust_stitch(tsl::robin_set<unsigned> &pruned_nodes); 
 

@@ -1001,6 +1001,7 @@ namespace diskann {
 
     while (k < l) {
       unsigned nk = l;
+      hops++;
 
       if (best_L_nodes[k].flag) {
         best_L_nodes[k].flag = false;
@@ -1733,27 +1734,16 @@ namespace diskann {
         if ((_query_nn[nbh][_query_nn[nbh].size() - 1]).distance > dist) {
           size_t   k = _query_nn[nbh].size();
           unsigned prev_id = (_query_nn[nbh][_query_nn[nbh].size() - 1]).id;
-          // float prev_dist = (_query_nn[nbh][_query_nn[nbh].size() -
-          // 1]).distance;
           int result = InsertIntoPool(_query_nn[nbh].data(), k,
                                       Neighbor(location, dist, true));
           if (result != (int) k + 1) {
             to_stitch.push_back(nbh);
-            // {
-            //   LockGuard guard(_locks[location]);
-            //   _stitch_count[location]++;
-            // }
-            // if(!(prev_id == 0 && prev_dist ==
-            // std::numeric_limits<float>::max())){
             if(prev_id !=0 && _marked_graph[prev_id][nbh].size()!=0){
               {
                 LockGuard guard(_locks[prev_id]);
-                // _stitch_count[prev_id]--;
                 delete_stitched_edges(prev_id, nbh);
               }
             }
-            
-            // }
           }
         }
       }
@@ -1792,10 +1782,7 @@ namespace diskann {
     }
   }
 
-  // L = adjacency list of a query node
-  // L = {a, b, c}
-  // L corresponds to q
-  // but maybe a is actually much closer to some q'
+
 
   //   template<typename T, typename TagT>
   //   void Index<T, TagT>::delete_and_stitch(tsl::robin_set<unsigned>
@@ -2009,6 +1996,27 @@ namespace diskann {
   //     }
   //   }
 
+    template<typename T, typename TagT>
+    void Index<T, TagT>::delete_from_marked_graph(tsl::robin_set<unsigned> &delete_set){
+#pragma omp parallel for schedule(dynamic)
+      for(size_t i = 0; i < _max_points + _num_frozen_pts; i++){
+        if(delete_set.find(i) == delete_set.end()){
+          for(auto &pair : _marked_graph[i]){
+            std::vector<unsigned> new_nbh; 
+            for(unsigned nbh : pair.second){
+              if(delete_set.find(nbh) == delete_set.end()){
+                new_nbh.push_back(nbh);
+              }
+            }
+            if(new_nbh.size() < pair.second.size()){
+              pair.second = new_nbh;
+            }
+          }
+        }
+        else _marked_graph[i].clear();
+      }
+    }
+
   //   template<typename T, typename TagT>
   //   void Index<T, TagT>::delete_from_marked_graph(
   //       tsl::robin_set<unsigned> &delete_set, const unsigned &range,
@@ -2072,7 +2080,7 @@ namespace diskann {
   //     //           new_out.push_back(nbh);
   //     //         }
   //     //         if(new_out.size() < _marked_graph[i].size())
-  //     _marked_graph[i] =
+  //     // _marked_graph[i] =
   //     //         new_out;
   //     //       }
   //     //       else _marked_graph[i].clear();
@@ -2795,7 +2803,7 @@ namespace diskann {
   }
 
   template<typename T, typename TagT>
-  size_t Index<T, TagT>::search_with_tags(const T *query, const uint64_t K,
+  std::pair<uint32_t, uint32_t> Index<T, TagT>::search_with_tags(const T *query, const uint64_t K,
                                           const unsigned L, TagT *tags,
                                           float *           distances,
                                           std::vector<T *> &res_vectors) {
@@ -2810,7 +2818,7 @@ namespace diskann {
     }
     _u32 * indices = scratch.indices;
     float *dist_interim = scratch.interim_dists;
-    search_impl(query, L, L, indices, dist_interim, scratch);
+    auto retval = search_impl(query, L, L, indices, dist_interim, scratch);
 
     std::shared_lock<std::shared_timed_mutex> ulock(_update_lock);
     std::shared_lock<std::shared_timed_mutex> lock(_tag_lock);
@@ -2839,7 +2847,7 @@ namespace diskann {
           break;
       }
 
-    return pos;
+    return retval;
   }
 
   template<typename T, typename TagT>
@@ -3457,6 +3465,7 @@ namespace diskann {
 
     if (_queries_present) {
       std::cout << "Removing deleted nodes from query_nn ... " << std::endl;
+      delete_from_marked_graph(old_delete_set);
       delete_and_restitch(old_delete_set);
     }
 

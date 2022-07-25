@@ -433,7 +433,7 @@ int main(int argc, char** argv) {
         po::value<uint32_t>(&num_threads)->default_value(omp_get_num_procs()),
         "Number of threads used for building index (defaults to "
         "omp_get_num_procs())");
-    desc.add_options()("rounds", po::value<int>(&rounds)->default_value(1),
+    desc.add_options()("rounds", po::value<int>(&rounds)->default_value(2),
                        "Number of rounds");
 
     po::variables_map vm;
