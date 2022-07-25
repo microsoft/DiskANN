@@ -2229,6 +2229,17 @@ namespace diskann {
   template<typename T, typename TagT>
   consolidation_report Index<T, TagT>::consolidate_deletes(
       const Parameters &params) {
+    std::unique_lock<std::shared_timed_mutex> cl(_consolidate_lock,
+                                                 std::defer_lock);
+    if (not cl.try_lock()) {
+      diskann::cerr
+          << "Consildate delete function failed to acquire consolidate lock"
+          << std::endl;
+      return consolidation_report(
+          diskann::consolidation_report::status_code::LOCK_FAIL, 0,
+          0, 0, 0, 0, 0);
+    }
+
     diskann::cout << "Starting consolidate_deletes... ";
 
     if (!_enable_tags)
@@ -2252,35 +2263,26 @@ namespace diskann {
         std::shared_lock<std::shared_timed_mutex> tl(_tag_lock);
         std::shared_lock<std::shared_timed_mutex> dl(_delete_lock);
         if (_location_to_tag.size() + _delete_set.size() != _nd) {
-          std::stringstream err;
-          err << "Error: _location_to_tag.size (" << _location_to_tag.size()
-              << ")  + _delete_set.size (" << _delete_set.size() << ") != _nd("
-              << _nd << ")";
-          diskann::cerr << err.str() << std::endl;
-          throw diskann::ANNException(err.str(), -1, __FUNCSIG__, __FILE__,
-                                      __LINE__);
+          diskann::cerr << "Error: _location_to_tag.size ("
+                        << _location_to_tag.size() << ")  + _delete_set.size ("
+                        << _delete_set.size() << ") != _nd(" << _nd << ")";
+          return consolidation_report(diskann::consolidation_report::
+                                          status_code::INCONSISTENT_COUNT_ERROR,
+                                      0, 0, 0, 0, 0, 0);
         }
 
-        if (_location_to_tag.size() != _tag_to_location.size())
+        if (_location_to_tag.size() != _tag_to_location.size()) {
           throw diskann::ANNException(
               "_location_to_tag and _tag_to_location not of same size", -1,
               __FUNCSIG__, __FILE__, __LINE__);
+        }
       }
     }
-
+    
     std::unique_lock<std::shared_timed_mutex> update_lock(_update_lock,
                                                           std::defer_lock);
     if (!_conc_consolidate)
       update_lock.lock();
-
-    bool expected_consolidate_value = false;
-    if (_consolidate_active.compare_exchange_strong(expected_consolidate_value,
-                                                    true) == false) {
-      std::string err(
-          "Attempting to consolidate while another instance is active");
-      diskann::cerr << err << std::endl;
-      throw ANNException(err, -1, __FUNCSIG__, __FILE__, __LINE__);
-    }
 
     tsl::robin_set<unsigned> old_delete_set;
     {
@@ -2322,20 +2324,15 @@ namespace diskann {
       update_lock.unlock();
     }
 
-    expected_consolidate_value = true;
-    if (_consolidate_active.compare_exchange_strong(expected_consolidate_value,
-                                                    false) == false)
-      throw ANNException("Failed to change consolidation active to false", -1,
-                         __FUNCSIG__, __FILE__, __LINE__);
-
     if (_delete_set.size() == 0)
       _lazy_done = false;
 
     double duration = timer.elapsed() / 1000000.0;
     diskann::cout << " done in " << duration << " seconds." << std::endl;
-    return consolidation_report(ret_nd, this->_max_points, _empty_slots.size(),
-                                old_delete_set.size(), _delete_set.size(),
-                                duration);
+    return consolidation_report(
+        diskann::consolidation_report::status_code::SUCCESS, ret_nd,
+        this->_max_points, _empty_slots.size(), old_delete_set.size(),
+        _delete_set.size(), duration);
   }
 
   template<typename T, typename TagT>
@@ -2387,11 +2384,7 @@ namespace diskann {
       return;
     }
 
-    if (_consolidate_active) {
-      throw ANNException(
-          "Can not compact data while a consolidation is ongoing", -1,
-          __FUNCSIG__, __FILE__, __LINE__);
-    }
+    std::unique_lock<std::shared_timed_mutex> cl(_consolidate_lock);
 
     if (_delete_set.size() > 0) {
       throw ANNException(

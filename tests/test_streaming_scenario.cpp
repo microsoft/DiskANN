@@ -131,6 +131,28 @@ void delete_and_consolidate(diskann::Index<T, TagT>& index,
     std::cout << "lazy delete done." << std::endl;
 
     auto report = index.consolidate_deletes(delete_params);
+    while (report._status !=
+           diskann::consolidation_report::status_code::SUCCESS) {
+      int wait_time = 5;
+      if (report._status ==
+          diskann::consolidation_report::status_code::LOCK_FAIL) {
+        diskann::cerr << "Unable to acquire consolidate delete lock after "
+                      << "deleting points " << start << " to " << end
+                      << ". Will retry in " << wait_time << "seconds."
+                      << std::endl;
+      } else if (report._status == diskann::consolidation_report::status_code::
+                                       INCONSISTENT_COUNT_ERROR) {
+        diskann::cerr << "Inconsistent counts in data structure. "
+                      << "Will retry in " << wait_time << "seconds." << std::endl;
+      } else {
+        std::cerr << "Exiting after unknown error in consolidate delete"
+                  << std::endl;
+        exit(-1);
+      }
+      std::this_thread::sleep_for(std::chrono::seconds(wait_time));
+      report =
+          index.consolidate_deletes(delete_params);
+    }
     auto points_processed = report._active_points + report._slots_released;
     auto deletion_rate = points_processed / report._time;
     std::cout << "#active points: " << report._active_points << std::endl
@@ -142,8 +164,9 @@ void delete_and_consolidate(diskann::Index<T, TagT>& index,
               << "Deletion rate: "
               << deletion_rate / delete_params.Get<unsigned>("num_threads")
               << "/thread/sec   " << std::endl;
+
   } catch (std::system_error& e) {
-    std::cout << "Exiting after catching exception in deletion task: "
+    std::cerr << "Exiting after catching exception in deletion task: "
               << e.what() << std::endl;
     exit(-1);
   }
