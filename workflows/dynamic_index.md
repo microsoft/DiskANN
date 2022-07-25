@@ -4,12 +4,26 @@ Licensed under the MIT license. -->
 **Usage for dynamic indices**
 ================================
 
-A "dynamic" index refers to an index which supports insertion of new points into a previously built index as well as deletions of points in an existing index. The program found in `tests/test_insert_deletes_consolidate` tests this functionality. It allows the user to specify which points from the data file will be used
-to initially build the index, which points will be deleted from the index, and which points will be inserted into the index. Insertions and deletions can be performed sequentially or concurrently.
+A "dynamic" index refers to an index which supports insertion of new points into a (possibly previously built) index as well as deletions of points.
+While eager deletes can be supported by DiskANN, `lazy_deletes` are the preferred method. 
+A sequence of lazy deletions must be followed by an invocation of the `consolidate_deletes` method that frees up slots in the index and edits the graph to maintain good recall.
 
-When modifying the index sequentially, the user has the ability to take *snapshots*--that is, save the index to memory for every *m* insertions or deletions instead of only at the end of the build.
 
---------------------------------------------------------------
+The program `tests/test_insert_deletes_consolidate` demonstrates this functionality. It allows the user to specify which points from the data file will be used
+to initially build the index, which points will be deleted from the index, and which points will be inserted into the index.
+Insertions, searches and lazy deletions can be performed concurrently.
+Conslolidation of lazy deletes can be performed synchnronously or concurrently with insertions and deletions.
+When modifying the index sequentially, the user has the ability to take *snapshots*--
+that is, save the index to memory for every *m* insertions or deletions instead of only at the end of the build.
+
+The program `tests/test_streaming_scenario` simulates a scenario where the index actively maintains a sliding window of active points from a larger dataset.
+The program starts with an index build over the first `active_window` set of points from a data file. 
+The program then simultaneously inserts newer points drawn from the file and deletes older points from the index
+in chunks of `consolidate_interval` points so that the number of active points in the index is approximately `active_window`.
+It terminates when the end of data file is reached, and the final index has `active_window + consolidate_interval` number of points.
+
+`tests/test_insert_deletes_consolidate` to try inserting, lazy deletes and consolidate_delete 
+---------------------------------------------------------------------------------------------
 
 The arguments are as follows:
 
@@ -27,7 +41,26 @@ The arguments are as follows:
 12. **--points_per_checkpoint**: when inserting and deleting sequentially, each update is handled in points_per_checkpoint batches. When updating concurrently, insertions are handled in points_per_checkpoint batches but deletions are always processed in a single batch.
 13. **--checkpoints_per_snapshot**: when inserting and deleting sequentially, the graph is saved to memory every checkpoints_per_snapshot checkpoints. This is not currently supported for concurrent updates.
 14. **--points_to_delete_from_beginning**: how many points to delete from the index, starting in order of insertion. If deletions are concurrent with insertions, points_to_delete_from_beginning cannot be larger than beginning_index_size. 
-14. **--do_concurrent** (default false): whether to perform insertions and deletions concurrently or sequentially. If concurrent is specified, half the threads are used for insertions and half the threads are used for deletions. Note that insertions are performed before deletions if this flag is set to false, so in this case is possible to delete more than beginning_index_size points.
+14. **--do_concurrent** (default false): whether to perform conslidate_deletes and other updates concurrently or sequentially. If concurrent is specified, half the threads are used for insertions and half the threads are used for processing deletes. Note that insertions are performed before deletions if this flag is set to false, so in this case is possible to delete more than beginning_index_size points.
+
+`tests/test_streaming_scenario` to try inserting, lazy deletes and consolidate_delete 
+---------------------------------------------------------------------------------------------
+
+The arguments are as follows:
+
+1. **--data_type**: The type of dataset you wish to build an index on. float(32 bit), signed int8 and unsigned uint8 are supported. 
+2. **--dist_fn**: There are two distance functions supported: minimum Euclidean distance (l2) and maximum inner product (mips).
+3. **--data_file**: The input data over which to build an index, in .bin format. The first 4 bytes represent number of points as integer. The next 4 bytes represent the dimension of data as integer. The following `n*d*sizeof(T)` bytes contain the contents of the data one data point in time. sizeof(T) is 1 for byte indices, and 4 for float indices. This will be read by the program as int8_t for signed indices, uint8_t for unsigned indices or float for float indices.
+4. **--index_path_prefix**: The constructed index components will be saved to this path prefix.
+5. **-R (--max_degree)** (default is 64): the degree of the graph index, typically between 32 and 150. Larger R will result in larger indices and longer indexing times, but might yield better search quality. 
+6. **-L (--Lbuild)** (default is 100): the size of search list we maintain during index building. Typical values are between 75 to 400. Larger values will take more time to build but result in indices that provide higher recall for the same search complexity. Ensure that value of L is at least that of R value unless you need to build indices really quickly and can somewhat compromise on quality. 
+7. **--alpha** (default is 1.2): A float value between 1.0 and 1.5 which determines the diameter of the graph, which will be approximately *log n* to the base alpha. Typical values are between 1 to 1.5. 1 will yield the sparsest graph, 1.5 will yield denser graphs. 
+8. **--insert_threads**: number of threads used for inserting points in to the index. 
+9. **--consolidate_threads**: number of threads used for consolidating deletes to the index. 
+10. **--max_points_to_insert**: Maximum number of points from the data file to insert in to the index.
+11. **--active_window**: Approximate number of points in the index at any point.
+12. **--consolidate_interval**: Granularity at which insert and delete functions are called.
+
 
 
 To search the generated index, use the `tests/search_memory_index` program:
@@ -66,7 +99,30 @@ cd ..
 
 The example below tests the following scenario: using a file with 100000 points, the first 50000 points are used to initially build the index. Then, the first 25000 points are deleted from the index, while an additional 25000 points (i.e. points 50001 to 75000) are concurrently inserted into the index. Note that the memory index should be built **before** calculating the ground truth, since the memory index returns the slice of the sift100K dataset that was used to build the final graph (that is, points 25001-75000 in the original index).
 ```bash
-./tests/test_insert_deletes_consodlidate  --data_type float --dist_fn l2 --data_path data/sift/sift_learn.fbin --index_path_prefix data/sift/index_sift_learn_dynamic -R 32 -L 50 --alpha 1.2 -T 16 --points_to_skip 0 --max_points_to_insert 75000 --beginning_index_size 25000 --points_per_checkpoint 10000 --checkpoints_per_snapshot 0 --points_to_delete_from_beginning 25000 --start_deletes_after 50000 --do_concurrent true
+./tests/test_insert_deletes_consolidate  --data_type float --dist_fn l2 --data_path data/sift/sift_learn.fbin --index_path_prefix data/sift/index_sift_learn_dynamic -R 32 -L 50 --alpha 1.2 -T 16 --points_to_skip 0 --max_points_to_insert 75000 --beginning_index_size 25000 --points_per_checkpoint 10000 --checkpoints_per_snapshot 0 --points_to_delete_from_beginning 25000 --start_deletes_after 50000 --do_concurrent true
 ./tests/utils/compute_groundtruth  --data_type float --dist_fn l2 --base_file data/sift/index_sift_learn_dynamic.after_concurrent_change.data --query_file  data/sift/sift_query.fbin --gt_file data/sift/sift_query_learn_dynamic_gt100 --tags_file  data/sift/index_sift_learn_dynamic.after-concurrent-delete-del25000-75000.tags --K 10
- ./tests/search_memory_index  --data_type float --dist_fn l2 --index_path_prefix data/sift/index_sift_learn_dynamic.after_concurrent_change --query_file data/sift/sift_query.fbin  --gt_file data/sift/sift_query_learn_dynamic_gt100 -K 10 -L 10 20 30 40 50 100 --result_path data/sift/res --dynamic true
+./tests/search_memory_index  --data_type float --dist_fn l2 --index_path_prefix data/sift/index_sift_learn_dynamic.after_concurrent_change --query_file data/sift/sift_query.fbin  --gt_file data/sift/sift_query_learn_dynamic_gt100 -K 10 -L 10 20 30 40 50 100 --result_path data/sift/res --dynamic true
  ```
+
+ The example below tests the following scenario: using a file with 100000 points, insert 10000 points at a time. After the first 40000
+are inserted, start deleteing the first 10000 points while inserting points 40000--50000.  Then delete points 10000--20000 while inserting
+points 50000--60000 and so until the index is left with points 60000-100000.
+
+```
+type='float'
+data='data/sift/sift_learn.fbin'
+query='data/sift/sift_query.fbin'
+index_prefix='data/sift/idx_learn_str'
+result='data/sift/res'
+ins_thr=4
+cons_thr=4
+inserts=100000
+active=20000
+cons_int=10000
+index=${index_prefix}.after-streaming-act${active}-cons${cons_int}-max${inserts}
+gt=data/sift/gt100_learn-act${active}-cons${cons_int}-max${inserts}
+
+./tests/test_streaming_scenario  --data_type ${type} --dist_fn l2 --data_path ${data}  --index_path_prefix ${index_prefix} -R 64 -L 600 --alpha 1.2 --insert_threads ${ins_thr} --consolidate_threads ${cons_thr}  --max_points_to_insert ${inserts}  --active_window ${active} --consolidate_interval ${cons_int};
+./tests/utils/compute_groundtruth --data_type ${type} --dist_fn l2 --base_file ${index}.data  --query_file ${query}  --K 100 --gt_file ${gt} --tags_file  ${index}.tags
+./tests/search_memory_index  --data_type ${type} --dist_fn l2 --index_path_prefix ${index} --result_path ${result} --query_file ${query}  --gt_file ${gt}  -K 10 -L 20 40 60 80 100 -T 64 --dynamic true --tags 1
+```
