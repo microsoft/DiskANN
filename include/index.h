@@ -82,18 +82,27 @@ namespace diskann {
       return *_inserted_into_pool_bs;
     }
   };
-
+  
   struct consolidation_report {
-    size_t _active_points, _max_points, _empty_slots, _slots_released,
+    enum status_code {
+      SUCCESS = 0,
+      FAIL = 1,
+      LOCK_FAIL = 2,
+      INCONSISTENT_COUNT_ERROR = 3
+    };
+    status_code _status;
+    size_t      _active_points, _max_points, _empty_slots, _slots_released,
         _delete_set_size;
     double _time;
 
-    consolidation_report(size_t active_points, size_t max_points,
-                         size_t empty_slots, size_t slots_released,
-                         size_t delete_set_size, double time_secs)
-        : _active_points(active_points), _max_points(max_points),
-          _empty_slots(empty_slots), _slots_released(slots_released),
-          _delete_set_size(delete_set_size), _time(time_secs) {
+    consolidation_report(status_code status, size_t active_points,
+                         size_t max_points, size_t empty_slots,
+                         size_t slots_released, size_t delete_set_size,
+                         double time_secs)
+        : _status(status), _active_points(active_points),
+          _max_points(max_points), _empty_slots(empty_slots),
+          _slots_released(slots_released), _delete_set_size(delete_set_size),
+          _time(time_secs) {
     }
   };
 
@@ -424,20 +433,20 @@ namespace diskann {
     bool _is_saved = false;  // Gopal. Checking if the index is already saved.
     bool _conc_consolidate = false;  // use _lock while searching
 
-    std::atomic<bool> _consolidate_active =
-        ATOMIC_VAR_INIT(false);  // Is one instance of consolidate active
-
     std::vector<std::mutex> _locks;  // Per node lock, cardinality=max_points_
     std::vector<std::mutex> _locks_in;  // Per node lock
 
     std::mutex _num_points_lock;  // Lock to synchronously modify _nd
 
     std::shared_timed_mutex
+        _consolidate_lock;  // Ensure only consolidate is ever active
+    std::shared_timed_mutex
+        _update_lock;  // coordinate save() and changes to graph
+    std::shared_timed_mutex
         _tag_lock;  // RW lock for _tag_to_location and _location_to_tag
     std::shared_timed_mutex
         _delete_lock;  // RW Lock on _delete_set and _empty_slots
-    std::shared_timed_mutex
-        _update_lock;  // coordinate save() and changes to graph
+
 
     static const float INDEX_GROWTH_FACTOR;
   };
