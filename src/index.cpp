@@ -1463,7 +1463,7 @@ namespace diskann {
     std::vector<unsigned> Lvec;
     Lvec.push_back(L);
     Lvec.push_back(L);
-    const unsigned NUM_RNDS = 2;
+    const unsigned NUM_RNDS = 1;
     _indexingAlpha = 1.0f;
 
     /* visit_order is a vector that is initialized to the entire graph */
