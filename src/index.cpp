@@ -1733,17 +1733,17 @@ namespace diskann {
             _data + _aligned_dim * (size_t) location, (unsigned) _aligned_dim);
         if ((_query_nn[nbh][_query_nn[nbh].size() - 1]).distance > dist) {
           size_t   k = _query_nn[nbh].size();
-          unsigned prev_id = (_query_nn[nbh][_query_nn[nbh].size() - 1]).id;
+          // unsigned prev_id = (_query_nn[nbh][_query_nn[nbh].size() - 1]).id;
           int      result = InsertIntoPool(_query_nn[nbh].data(), k,
                                       Neighbor(location, dist, true));
           if (result != (int) k + 1) {
             to_stitch.push_back(nbh);
-            if (prev_id != 0 && _marked_graph[prev_id][nbh].size() != 0) {
-              {
-                LockGuard guard(_locks[prev_id]);
-                delete_stitched_edges(prev_id, nbh);
-              }
-            }
+            // if (prev_id != 0 && _marked_graph[prev_id][nbh].size() != 0) {
+            //   {
+            //     LockGuard guard(_locks[prev_id]);
+            //     delete_stitched_edges(prev_id, nbh);
+            //   }
+            // }
           }
         }
       }
@@ -1751,8 +1751,7 @@ namespace diskann {
 
     // robustStitch location based on the nodes in to_stitch
 
-    uint32_t inflated_range = _indexingRange + _indexingRange/5;
-    // std::cout << inflated_range << std::endl; 
+    uint32_t inflated_range = _indexingRange;
     size_t total_capacity = inflated_range - _final_graph[location].size();
     size_t capacity;
     if (to_stitch.size() == 0)
@@ -1891,6 +1890,7 @@ namespace diskann {
         // to_refresh.insert(node_ctr);
       }
     }
+    delete_from_marked_graph(delete_set);
     // #pragma omp parallel for schedule(dynamic)
     //     for (size_t node_ctr = 0; node_ctr < _max_points + _num_frozen_pts;
     //          ++node_ctr) {
@@ -1955,6 +1955,19 @@ namespace diskann {
     // robust_stitch();
   }
 
+  //checks whether an edge is from the marked graph or not
+  template<typename T, typename TagT>
+  bool Index<T, TagT>::is_marked(unsigned location, unsigned nbh) {
+    bool present = false;
+    for(auto& pair : _marked_graph[location]){
+      for(auto &candidate : pair.second){
+        if(candidate == nbh){return true;}
+      }
+    }
+    return present;
+  }
+
+  //removes every single marked edge
   template<typename T, typename TagT>
   void Index<T, TagT>::delete_marked_edges() {
 #pragma omp parallel for schedule(dynamic)
@@ -1979,7 +1992,7 @@ namespace diskann {
     }
   }
 
-  // the marked graph may go out of date after inserts and need to be refreshed
+  // updates marked graph to delete edges no longer present in it
   template<typename T, typename TagT>
   void Index<T, TagT>::update_marked_graph() {
 #pragma omp parallel for schedule(dynamic)
@@ -1999,6 +2012,7 @@ namespace diskann {
     }
   }
 
+  //takes in a delete set D and deletes all points in D + edges to those points
   template<typename T, typename TagT>
   void Index<T, TagT>::delete_from_marked_graph(
       tsl::robin_set<unsigned> &delete_set) {
@@ -2232,26 +2246,26 @@ namespace diskann {
         for (auto nbor : pool) {
           if (nbor.distance <
               _query_nn[node_ctr][_query_nn[node_ctr].size() - 1].distance) {
-            unsigned prev_id =
-                _query_nn[node_ctr][_query_nn[node_ctr].size() - 1].id;
+            // unsigned prev_id =
+            //     _query_nn[node_ctr][_query_nn[node_ctr].size() - 1].id;
             // unsigned prev_dist =
             // _query_nn[node_ctr][_query_nn[node_ctr].size()-1].distance;
-            int result = InsertIntoPool(_query_nn[node_ctr].data(),
+            InsertIntoPool(_query_nn[node_ctr].data(),
                                         _indexingRange, nbor);
-            if (result != (int) _indexingRange + 1) {
-              // {
-              //   LockGuard guard(_locks[nbor.id]);
-              //   _stitch_count[nbor.id]++;
-              // }
-              // if(!(prev_id == 0 && prev_dist ==
-              // std::numeric_limits<float>::max())){
-              {
-                LockGuard guard(_locks[prev_id]);
-                // _stitch_count[prev_id]--;
-                delete_stitched_edges(prev_id, node_ctr);
-              }
-              // }
-            }
+            // if (result != (int) _indexingRange + 1) {
+            //   // {
+            //   //   LockGuard guard(_locks[nbor.id]);
+            //   //   _stitch_count[nbor.id]++;
+            //   // }
+            //   // if(!(prev_id == 0 && prev_dist ==
+            //   // std::numeric_limits<float>::max())){
+            //   {
+            //     LockGuard guard(_locks[prev_id]);
+            //     // _stitch_count[prev_id]--;
+            //     delete_stitched_edges(prev_id, node_ctr);
+            //   }
+            //   // }
+            // }
           } else
             break;
         }
@@ -3499,7 +3513,7 @@ namespace diskann {
 
     if (_queries_present) {
       std::cout << "Removing deleted nodes from query_nn ... " << std::endl;
-      delete_from_marked_graph(old_delete_set);
+      // delete_from_marked_graph(old_delete_set);
       delete_and_restitch(old_delete_set);
     }
 

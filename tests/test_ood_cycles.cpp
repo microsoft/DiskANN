@@ -273,6 +273,8 @@ void test_batch_deletes(const std::string& data_path, const unsigned L,
 
   std::cout << "Inserted points in " << seconds << " seconds" << std::endl;
 
+  index.marked_graph_stats();
+
   index.save(save_path.c_str());
   std::cout << std::endl;
   std::cout << std::endl;
@@ -311,7 +313,7 @@ void test_batch_deletes(const std::string& data_path, const unsigned L,
     std::random_shuffle(indices.begin(), indices.end());
 
     int points_seen = 0;
-    for (int j = 0; j < parts; j++) {
+    for (int j = 0; j < parts/2; j++) {
       if (j == parts - 1)
         points_in_part = num_points - points_seen;
       else
@@ -355,7 +357,7 @@ void test_batch_deletes(const std::string& data_path, const unsigned L,
       std::cout << std::endl;
 
       insert_times.push_back(elapsedSeconds);
-
+      index.marked_graph_stats();
 
       points_seen += points_in_part;
       index.save(save_path.c_str());

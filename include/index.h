@@ -389,6 +389,7 @@ namespace diskann {
 
     void delete_stitched_edges(unsigned location, unsigned query);
     void delete_marked_edges();
+    bool is_marked(unsigned location, unsigned nbh);
     void insert_and_stitch(unsigned location);
     void delete_and_restitch(tsl::robin_set<unsigned> &delete_set);
     void delete_and_stitch(tsl::robin_set<unsigned> &delete_set);
