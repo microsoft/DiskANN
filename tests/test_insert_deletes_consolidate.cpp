@@ -9,17 +9,15 @@
 #include <timer.h>
 #include <boost/program_options.hpp>
 #include <future>
-
 #include "utils.h"
-
 #ifndef _WINDOWS
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #endif
-
 #include "memory_mapper.h"
 
+using std::random_shuffle;
 namespace po = boost::program_options;
 
 // load_aligned_bin modified to read pieces of the file, but using ifstream
@@ -64,9 +62,7 @@ inline void load_aligned_bin_part(const std::string& bin_file, T* data,
   }
 
   reader.seekg(2 * sizeof(uint32_t) + offset_points * dim * sizeof(T));
-
   const size_t rounded_dim = ROUND_UP(dim, 8);
-
   for (size_t i = 0; i < points_to_read; i++) {
     reader.read((char*) (data + i * rounded_dim), dim * sizeof(T));
     memset(data + i * rounded_dim + dim, 0, (rounded_dim - dim) * sizeof(T));
@@ -79,59 +75,115 @@ inline void load_aligned_bin_part(const std::string& bin_file, T* data,
 }
 
 std::string get_save_filename(const std::string& save_path,
-                              size_t points_to_skip, size_t points_deleted,
+                              size_t points_to_skip, float points_deleted,
+                              float  points_inserted,
                               size_t last_point_threshold) {
   std::string final_path = save_path;
   if (points_to_skip > 0) {
     final_path += "skip" + std::to_string(points_to_skip) + "-";
   }
-  if (points_deleted > 0) {
-    final_path += "del" + std::to_string(points_deleted) + "-";
+  if (points_deleted > 0 && points_inserted > 0) {
+    final_path += "insert" + std::to_string(points_inserted) + "-" + "delete" +
+                  std::to_string(points_deleted);
+  } else if (points_deleted == 0 && points_inserted > 0) {
+    final_path += "insert" + std::to_string(points_inserted);
+  } else if (points_deleted > 0 && points_inserted == 0) {
+    final_path += "delete" + std::to_string(points_deleted);
   }
-  final_path += std::to_string(last_point_threshold);
   return final_path;
 }
 
 template<typename T, typename TagT>
-void insert_till_next_checkpoint(diskann::Index<T, TagT>& index, size_t start,
-                                 size_t end, size_t thread_count, T* data,
-                                 size_t aligned_dim) {
+void insert_till_next_checkpoint(diskann::Index<T, TagT>& index,
+                                 size_t max_points, float insert_percentage,
+                                 float build_percentage, size_t thread_count,
+                                 T* data, size_t aligned_dim,
+                                 float                delete_percentage,
+                                 diskann::Parameters& delete_params) {
   diskann::Timer insert_timer;
+  int64_t        insert_points = max_points * insert_percentage;
+  int64_t        delete_points = max_points * delete_percentage;
+  int64_t        build_points = max_points * build_percentage;
+  if (delete_percentage == insert_percentage) {
+    std::cout << " random insertion and deletion" << std::endl;
+    std::vector<int> streaming_numbers;
+    for (int64_t j = 0; j < (int64_t) build_points - 1; j++) {
+      streaming_numbers.push_back(j);
+    }
+    random_shuffle(streaming_numbers.begin(), streaming_numbers.end());
 
 #pragma omp parallel for num_threads(thread_count) schedule(dynamic)
-  for (int64_t j = start; j < (int64_t) end; j++) {
-    index.insert_point(&data[(j - start) * aligned_dim], static_cast<TagT>(j));
-  }
-  const double elapsedSeconds = insert_timer.elapsed() / 1000000.0;
-  std::cout << "Insertion time " << elapsedSeconds << " seconds ("
-            << (end - start) / elapsedSeconds << " points/second overall, "
-            << (end - start) / elapsedSeconds / thread_count
-            << " per thread)\n ";
-}
+    for (int64_t i1 = 0; i1 < insert_points; i1++) {
+      int64_t k1 = streaming_numbers[i1];
+      index.insert_point(&data[k1 * aligned_dim], static_cast<TagT>(k1));
+    }
+    const double elapsedSeconds = insert_timer.elapsed() / 1000000.0;
+    std::cout << "Insertion time " << elapsedSeconds << " seconds ("
+              << insert_points / elapsedSeconds << " points/second overall, "
+              << insert_points / elapsedSeconds / thread_count
+              << " per thread)\n ";
 
-template<typename T, typename TagT>
-void delete_from_beginning(diskann::Index<T, TagT>& index,
-                           diskann::Parameters&     delete_params,
-                           size_t                   points_to_skip,
-                           size_t points_to_delete_from_beginning) {
-  try {
-    std::cout << std::endl
-              << "Lazy deleting points " << points_to_skip << " to "
-              << points_to_skip + points_to_delete_from_beginning << "... ";
-    for (size_t i = points_to_skip;
-         i < points_to_skip + points_to_delete_from_beginning; ++i)
-      index.lazy_delete(i);
-    std::cout << "done." << std::endl;
-
+    for (int64_t i2 = 0; i2 < delete_points; i2++) {
+      int64_t k2 = streaming_numbers[i2];
+      index.lazy_delete(k2);
+    }
     auto report = index.consolidate_deletes(delete_params);
     std::cout << "#active points: " << report._active_points << std::endl
               << "max points: " << report._max_points << std::endl
               << "empty slots: " << report._empty_slots << std::endl
               << "deletes processed: " << report._slots_released << std::endl
               << "latest delete size: " << report._delete_set_size << std::endl
-              << "rate: (" << points_to_delete_from_beginning / report._time
+              << "rate: (" << delete_points / report._time
               << " points/second overall, "
-              << points_to_delete_from_beginning / report._time /
+              << delete_points / report._time /
+                     delete_params.Get<unsigned>("num_threads")
+              << " per thread)" << std::endl;
+  } else if (insert_percentage > 0 && delete_percentage == 0) {
+    std::cout << " only insert randomly" << std::endl;
+#pragma omp parallel for num_threads(thread_count) schedule(dynamic)
+    for (int64_t i = build_points; i < insert_points + build_points; i++) {
+      index.insert_point(&data[i * aligned_dim], static_cast<TagT>(i));
+    }
+    const double elapsedSeconds = insert_timer.elapsed() / 1000000.0;
+    std::cout << "Insertion time " << elapsedSeconds << " seconds ("
+              << (max_points * insert_percentage) / elapsedSeconds
+              << " points/second overall, "
+              << (max_points * insert_percentage) / elapsedSeconds /
+                     thread_count
+              << " per thread)\n ";
+  }
+}
+
+template<typename T, typename TagT>
+void delete_from_beginning(diskann::Index<T, TagT>& index,
+                           diskann::Parameters&     delete_params,
+                           size_t max_points, float build_percentage,
+                           size_t points_to_skip, float delete_percentage) {
+  int64_t build_points = max_points * build_percentage;
+  try {
+    std::cout << std::endl
+              << "Lazy deleting points "
+              << " randomly ";
+    std::vector<int> delete_numbers;
+    for (int64_t j = 0; j < (int64_t) build_points - 1; j++) {
+      delete_numbers.push_back(j);
+    }
+    random_shuffle(delete_numbers.begin(), delete_numbers.end());
+
+    for (size_t i = points_to_skip;
+         i < (points_to_skip + max_points * delete_percentage); ++i) {
+      int64_t m = delete_numbers[i];
+      index.lazy_delete(m);
+    }
+    auto report = index.consolidate_deletes(delete_params);
+    std::cout << "#active points: " << report._active_points << std::endl
+              << "max points: " << report._max_points << std::endl
+              << "empty slots: " << report._empty_slots << std::endl
+              << "deletes processed: " << report._slots_released << std::endl
+              << "latest delete size: " << report._delete_set_size << std::endl
+              << "rate: (" << (max_points * delete_percentage) / report._time
+              << " points/second overall, "
+              << (max_points * delete_percentage) / report._time /
                      delete_params.Get<unsigned>("num_threads")
               << " per thread)" << std::endl;
   } catch (std::system_error& e) {
@@ -141,16 +193,16 @@ void delete_from_beginning(diskann::Index<T, TagT>& index,
 }
 
 template<typename T>
-void build_incremental_index(
-    const std::string& data_path, const unsigned L, const unsigned R,
-    const float alpha, const unsigned thread_count, size_t points_to_skip,
-    size_t max_points_to_insert, size_t beginning_index_size,
-    size_t points_per_checkpoint, size_t checkpoints_per_snapshot,
-    const std::string& save_path, size_t points_to_delete_from_beginning,
-    size_t start_deletes_after, bool concurrent) {
-  const unsigned C = 500;
-  const bool     saturate_graph = false;
-
+void build_incremental_index(const std::string& data_path, const unsigned L,
+                             const unsigned R, const float alpha,
+                             const unsigned thread_count, size_t points_to_skip,
+                             size_t max_points, float insert_percentage,
+                             float              build_percentage,
+                             const std::string& save_path,
+                             float              delete_percentage,
+                             size_t start_deletes_after, bool concurrent) {
+  const unsigned      C = 500;
+  const bool          saturate_graph = false;
   diskann::Parameters params;
   params.Set<unsigned>("L", L);
   params.Set<unsigned>("R", R);
@@ -159,26 +211,25 @@ void build_incremental_index(
   params.Set<bool>("saturate_graph", saturate_graph);
   params.Set<unsigned>("num_rnds", 1);
   params.Set<unsigned>("num_threads", thread_count);
-
   size_t dim, aligned_dim;
   size_t num_points;
 
   diskann::get_bin_metadata(data_path, num_points, dim);
   aligned_dim = ROUND_UP(dim, 8);
+  std::cout << "num_points = " << num_points << " "
+            << "dim = " << dim << std::endl;
+  std::cout << "aligned_dim = " << aligned_dim << std::endl;
 
   if (points_to_skip > num_points) {
     throw diskann::ANNException("Asked to skip more points than in data file",
                                 -1, __FUNCSIG__, __FILE__, __LINE__);
   }
-
-  if (max_points_to_insert == 0) {
-    max_points_to_insert = num_points;
+  if (max_points == 0) {
+    max_points = num_points;
   }
-
-  if (points_to_skip + max_points_to_insert > num_points) {
-    max_points_to_insert = num_points - points_to_skip;
-    std::cerr << "WARNING: Reducing max_points_to_insert to "
-              << max_points_to_insert
+  if (points_to_skip + max_points > num_points) {
+    max_points = num_points - points_to_skip;
+    std::cerr << "WARNING: Reducing max_points to " << max_points
               << " points since the data file has only that many" << std::endl;
   }
 
@@ -186,182 +237,88 @@ void build_incremental_index(
   unsigned   num_frozen = 1;
   const bool enable_tags = true;
   const bool support_eager_delete = false;
-
-  auto num_frozen_str = getenv("TTS_NUM_FROZEN");
-
+  auto       num_frozen_str = getenv("TTS_NUM_FROZEN");
   if (num_frozen_str != nullptr) {
     num_frozen = std::atoi(num_frozen_str);
     std::cout << "Overriding num_frozen to" << num_frozen << std::endl;
   }
 
-  diskann::Index<T, TagT> index(diskann::L2, dim, max_points_to_insert, true,
-                                params, params, enable_tags,
-                                support_eager_delete, concurrent);
+  diskann::Index<T, TagT> index(diskann::L2, dim, max_points, true, params,
+                                params, enable_tags, support_eager_delete,
+                                concurrent);
 
-  size_t       current_point_offset = points_to_skip;
-  const size_t last_point_threshold = points_to_skip + max_points_to_insert;
+  const size_t last_point_threshold = points_to_skip + max_points;
 
-  if (beginning_index_size > max_points_to_insert) {
-    beginning_index_size = max_points_to_insert;
+  if (max_points * insert_percentage > max_points) {
+    insert_percentage = 1;
     std::cerr << "WARNING: Reducing beginning index size to "
-              << beginning_index_size
+              << max_points * insert_percentage
               << " points since the data file has only that many" << std::endl;
   }
-  if (checkpoints_per_snapshot > 0 &&
-      beginning_index_size > points_per_checkpoint) {
-    beginning_index_size = points_per_checkpoint;
-    std::cerr << "WARNING: Reducing beginning index size to "
-              << beginning_index_size << std::endl;
+  int64_t build_point = max_points * build_percentage;
+  if (build_point == max_points) {
+    build_point = max_points * build_percentage - 1;
+  } else {
+    build_point = max_points * build_percentage;
   }
 
   T* data = nullptr;
-  diskann::alloc_aligned((void**) &data,
-                         std::max(points_per_checkpoint, beginning_index_size) *
-                             aligned_dim * sizeof(T),
+  diskann::alloc_aligned((void**) &data, build_point * aligned_dim * sizeof(T),
                          8 * sizeof(T));
 
-  std::vector<TagT> tags(beginning_index_size);
-  std::iota(tags.begin(), tags.end(), static_cast<TagT>(current_point_offset));
-
-  load_aligned_bin_part(data_path, data, current_point_offset,
-                        beginning_index_size);
+  std::vector<TagT> tags(build_point);
+  std::iota(tags.begin(), tags.end(), static_cast<TagT>(points_to_skip));
+  load_aligned_bin_part(data_path, data, points_to_skip, build_point);
   std::cout << "load aligned bin succeeded" << std::endl;
   diskann::Timer timer;
-
-  if (beginning_index_size > 0) {
-    index.build(data, beginning_index_size, params, tags);
+  if (build_point > 0) {
+    index.build(data, build_point, params, tags);
     index.enable_delete();
   } else {
     index.build_with_zero_points();
     index.enable_delete();
   }
-
   const double elapsedSeconds = timer.elapsed() / 1000000.0;
-  std::cout << "Initial non-incremental index build time for "
-            << beginning_index_size << " points took " << elapsedSeconds
-            << " seconds (" << beginning_index_size / elapsedSeconds
-            << " points/second)\n ";
+  std::cout << "Initial non-incremental index build time for " << build_point
+            << " points took " << elapsedSeconds << " seconds ("
+            << build_point / elapsedSeconds << " points/second)\n ";
 
-  current_point_offset = beginning_index_size;
-
-  if (points_to_delete_from_beginning > max_points_to_insert) {
-    points_to_delete_from_beginning =
-        static_cast<unsigned>(max_points_to_insert);
-    std::cerr << "WARNING: Reducing points to delete from beginning to "
-              << points_to_delete_from_beginning
-              << " points since the data file has only that many" << std::endl;
-  }
-
-  if (concurrent) {
-    int               sub_threads = (thread_count + 1) / 2;
-    bool              delete_launched = false;
-    std::future<void> delete_task;
-
-    diskann::Timer timer;
-
-    for (size_t start = current_point_offset; start < last_point_threshold;
-         start += points_per_checkpoint,
-                current_point_offset += points_per_checkpoint) {
-      const size_t end =
-          std::min(start + points_per_checkpoint, last_point_threshold);
-      std::cout << std::endl
-                << "Inserting from " << start << " to " << end << std::endl;
-
-      auto insert_task = std::async(std::launch::async, [&]() {
-        load_aligned_bin_part(data_path, data, start, end - start);
-        insert_till_next_checkpoint(index, start, end, sub_threads, data,
-                                    aligned_dim);
-      });
-      insert_task.wait();
-
-      if (!delete_launched && end >= start_deletes_after &&
-          end >= points_to_skip + points_to_delete_from_beginning) {
-        delete_launched = true;
-        params.Set<unsigned>("num_threads", sub_threads);
-
-        delete_task = std::async(std::launch::async, [&]() {
-          delete_from_beginning(index, params, points_to_skip,
-                                points_to_delete_from_beginning);
-        });
-      }
+  int64_t insert_index_size = max_points * insert_percentage;
+  if (insert_percentage > 0) {
+    if (delete_percentage > 0) {
+      load_aligned_bin_part(data_path, data, points_to_skip, build_point);
+    } else {
+      diskann::alloc_aligned(
+          (void**) &data,
+          (build_point + insert_index_size) * aligned_dim * sizeof(T),
+          8 * sizeof(T));
+      std::vector<TagT> tags(build_point + max_points * insert_percentage);
+      std::iota(tags.begin(), tags.end(), static_cast<TagT>(points_to_skip));
+      load_aligned_bin_part(data_path, data, points_to_skip,
+                            (build_point + insert_index_size));
     }
-    delete_task.wait();
-
-    std::cout << "Time Elapsed " << timer.elapsed() / 1000 << "ms\n";
-    const auto save_path_inc = get_save_filename(
-        save_path + ".after-concurrent-delete-", points_to_skip,
-        points_to_delete_from_beginning, last_point_threshold);
-    index.save(save_path_inc.c_str(), true);
-
+    insert_till_next_checkpoint(index, max_points, insert_percentage,
+                                build_percentage, thread_count, data,
+                                aligned_dim, delete_percentage, params);
   } else {
-    size_t last_snapshot_points_threshold = 0;
-    size_t num_checkpoints_till_snapshot = checkpoints_per_snapshot;
-
-    for (size_t start = current_point_offset; start < last_point_threshold;
-         start += points_per_checkpoint,
-                current_point_offset += points_per_checkpoint) {
-      const size_t end =
-          std::min(start + points_per_checkpoint, last_point_threshold);
-      std::cout << std::endl
-                << "Inserting from " << start << " to " << end << std::endl;
-
-      load_aligned_bin_part(data_path, data, start, end - start);
-      insert_till_next_checkpoint(index, start, end, thread_count, data,
-                                  aligned_dim);
-
-      if (checkpoints_per_snapshot > 0 &&
-          --num_checkpoints_till_snapshot == 0) {
-        diskann::Timer save_timer;
-
-        const auto save_path_inc =
-            get_save_filename(save_path + ".inc-", points_to_skip,
-                              points_to_delete_from_beginning, end);
-        index.save(save_path_inc.c_str(), false);
-        const double elapsedSeconds = save_timer.elapsed() / 1000000.0;
-        const size_t points_saved = end - points_to_skip;
-
-        std::cout << "Saved " << points_saved << " points in " << elapsedSeconds
-                  << " seconds (" << points_saved / elapsedSeconds
-                  << " points/second)\n";
-
-        num_checkpoints_till_snapshot = checkpoints_per_snapshot;
-        last_snapshot_points_threshold = end;
-      }
-
-      std::cout << "Number of points in the index post insertion " << end
-                << std::endl;
+    if (delete_percentage > 0) {
+      delete_from_beginning(index, params, max_points, build_percentage,
+                            points_to_skip, delete_percentage);
     }
-
-    if (checkpoints_per_snapshot >= 0 &&
-        last_snapshot_points_threshold != last_point_threshold) {
-      const auto save_path_inc = get_save_filename(
-          save_path + ".inc-", points_to_skip, points_to_delete_from_beginning,
-          last_point_threshold);
-      // index.save(save_path_inc.c_str(), false);
-    }
-
-    if (points_to_delete_from_beginning > 0) {
-      delete_from_beginning(index, params, points_to_skip,
-                            points_to_delete_from_beginning);
-    }
-    const auto save_path_inc = get_save_filename(
-        save_path + ".after-delete-", points_to_skip,
-        points_to_delete_from_beginning, last_point_threshold);
-    index.save(save_path_inc.c_str(), true);
   }
-
+  const auto save_path_inc = get_save_filename(
+      save_path + ".after-", points_to_skip, delete_percentage,
+      insert_percentage, last_point_threshold);
+  index.save(save_path_inc.c_str(), true);
   diskann::aligned_free(data);
 }
 
 int main(int argc, char** argv) {
   std::string data_type, dist_fn, data_path, index_path_prefix;
   unsigned    num_threads, R, L;
-  float       alpha;
-  size_t      points_to_skip, max_points_to_insert, beginning_index_size,
-      points_per_checkpoint, checkpoints_per_snapshot,
-      points_to_delete_from_beginning, start_deletes_after;
-  bool concurrent;
-
+  float       alpha, insert_percentage, build_percentage, delete_percentage;
+  size_t      points_to_skip, max_points, start_deletes_after;
+  bool        concurrent;
   po::options_description desc{"Arguments"};
   try {
     desc.add_options()("help,h", "Print information on arguments");
@@ -395,30 +352,22 @@ int main(int argc, char** argv) {
                        po::value<uint64_t>(&points_to_skip)->required(),
                        "Skip these first set of points from file");
     desc.add_options()(
-        "max_points_to_insert",
-        po::value<uint64_t>(&max_points_to_insert)->default_value(0),
+        "max_points", po::value<uint64_t>(&max_points)->default_value(0),
         "These number of points from the file are inserted after "
         "points_to_skip");
-    desc.add_options()("beginning_index_size",
-                       po::value<uint64_t>(&beginning_index_size)->required(),
+    desc.add_options()("insert_percentage",
+                       po::value<float>(&insert_percentage)->required(),
                        "Batch build will be called on these set of points");
-    desc.add_options()(
-        "points_per_checkpoint",
-        po::value<uint64_t>(&points_per_checkpoint)->required(),
-        "Insertions are done in batches of points_per_checkpoint");
-    desc.add_options()(
-        "checkpoints_per_snapshot",
-        po::value<uint64_t>(&checkpoints_per_snapshot)->required(),
-        "Save the index to disk every few checkpoints");
-    desc.add_options()(
-        "points_to_delete_from_beginning",
-        po::value<uint64_t>(&points_to_delete_from_beginning)->required(), "");
+    desc.add_options()("build_percentage",
+                       po::value<float>(&build_percentage)->required(),
+                       "build will be called on these set of points");
+    desc.add_options()("delete_percentage",
+                       po::value<float>(&delete_percentage)->required(), "");
     desc.add_options()("do_concurrent",
                        po::value<bool>(&concurrent)->default_value(false), "");
     desc.add_options()(
         "start_deletes_after",
         po::value<uint64_t>(&start_deletes_after)->default_value(0), "");
-
     po::variables_map vm;
     po::store(po::parse_command_line(argc, argv, desc), vm);
     if (vm.count("help")) {
@@ -430,26 +379,22 @@ int main(int argc, char** argv) {
     std::cerr << ex.what() << '\n';
     return -1;
   }
-
   try {
     if (data_type == std::string("int8"))
       build_incremental_index<int8_t>(
-          data_path, L, R, alpha, num_threads, points_to_skip,
-          max_points_to_insert, beginning_index_size, points_per_checkpoint,
-          checkpoints_per_snapshot, index_path_prefix,
-          points_to_delete_from_beginning, start_deletes_after, concurrent);
+          data_path, L, R, alpha, num_threads, points_to_skip, max_points,
+          insert_percentage, build_percentage, index_path_prefix,
+          delete_percentage, start_deletes_after, concurrent);
     else if (data_type == std::string("uint8"))
       build_incremental_index<uint8_t>(
-          data_path, L, R, alpha, num_threads, points_to_skip,
-          max_points_to_insert, beginning_index_size, points_per_checkpoint,
-          checkpoints_per_snapshot, index_path_prefix,
-          points_to_delete_from_beginning, start_deletes_after, concurrent);
+          data_path, L, R, alpha, num_threads, points_to_skip, max_points,
+          insert_percentage, build_percentage, index_path_prefix,
+          delete_percentage, start_deletes_after, concurrent);
     else if (data_type == std::string("float"))
       build_incremental_index<float>(
-          data_path, L, R, alpha, num_threads, points_to_skip,
-          max_points_to_insert, beginning_index_size, points_per_checkpoint,
-          checkpoints_per_snapshot, index_path_prefix,
-          points_to_delete_from_beginning, start_deletes_after, concurrent);
+          data_path, L, R, alpha, num_threads, points_to_skip, max_points,
+          insert_percentage, build_percentage, index_path_prefix,
+          delete_percentage, start_deletes_after, concurrent);
     else
       std::cout << "Unsupported type. Use float/int8/uint8" << std::endl;
   } catch (const std::exception& e) {
@@ -459,6 +404,5 @@ int main(int argc, char** argv) {
     std::cerr << "Caught unknown exception" << std::endl;
     exit(-1);
   }
-
   return 0;
 }
