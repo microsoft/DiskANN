@@ -1751,7 +1751,9 @@ namespace diskann {
 
     // robustStitch location based on the nodes in to_stitch
 
-    size_t total_capacity = _indexingRange - _final_graph[location].size();
+    uint32_t inflated_range = _indexingRange + _indexingRange/10;
+    // std::cout << inflated_range << std::endl; 
+    size_t total_capacity = inflated_range - _final_graph[location].size();
     size_t capacity;
     if (to_stitch.size() == 0)
       capacity = 0;
