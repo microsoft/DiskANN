@@ -27,8 +27,7 @@ namespace po = boost::program_options;
 template<typename T>
 inline void load_aligned_bin_part(const std::string& bin_file, T* data,
                                   size_t offset_points, size_t points_to_read) {
-  diskann::Timer timer;
-  std::ifstream  reader;
+  std::ifstream reader;
   reader.exceptions(std::ios::failbit | std::ios::badbit);
   reader.open(bin_file, std::ios::binary | std::ios::ate);
   size_t actual_file_size = reader.tellg();
@@ -72,10 +71,6 @@ inline void load_aligned_bin_part(const std::string& bin_file, T* data,
     memset(data + i * rounded_dim + dim, 0, (rounded_dim - dim) * sizeof(T));
   }
   reader.close();
-
-  const double elapsedSeconds = timer.elapsed() / 1000000.0;
-  std::cout << "Read " << points_to_read << " points using non-cached reads in "
-            << elapsedSeconds << std::endl;
 }
 
 std::string get_save_filename(const std::string& save_path,
@@ -93,6 +88,8 @@ void insert_next_batch(diskann::Index<T, TagT>& index, size_t start, size_t end,
                        size_t insert_threads, T* data, size_t aligned_dim) {
   try {
     diskann::Timer insert_timer;
+    std::cout << std::endl
+              << "Inserting from " << start << " to " << end << std::endl;
 
     size_t num_failed = 0;
 #pragma omp parallel for num_threads(insert_threads) schedule(dynamic) \
@@ -143,15 +140,15 @@ void delete_and_consolidate(diskann::Index<T, TagT>& index,
       } else if (report._status == diskann::consolidation_report::status_code::
                                        INCONSISTENT_COUNT_ERROR) {
         diskann::cerr << "Inconsistent counts in data structure. "
-                      << "Will retry in " << wait_time << "seconds." << std::endl;
+                      << "Will retry in " << wait_time << "seconds."
+                      << std::endl;
       } else {
         std::cerr << "Exiting after unknown error in consolidate delete"
                   << std::endl;
         exit(-1);
       }
       std::this_thread::sleep_for(std::chrono::seconds(wait_time));
-      report =
-          index.consolidate_deletes(delete_params);
+      report = index.consolidate_deletes(delete_params);
     }
     auto points_processed = report._active_points + report._slots_released;
     auto deletion_rate = points_processed / report._time;
@@ -253,12 +250,17 @@ void build_incremental_index(const std::string& data_path, const unsigned L,
 
   std::vector<std::future<void>> delete_tasks;
 
-  for (size_t start = 0; start + consolidate_interval <= max_points_to_insert;
+  auto insert_task = std::async(std::launch::async, [&]() {
+    load_aligned_bin_part(data_path, data, 0, active_window);
+    insert_next_batch(index, 0, active_window, insert_threads, data,
+                      aligned_dim);
+  });
+  insert_task.wait();
+
+  for (size_t start = active_window;
+       start + consolidate_interval <= max_points_to_insert;
        start += consolidate_interval) {
     auto end = std::min(start + consolidate_interval, max_points_to_insert);
-    std::cout << std::endl
-              << "Inserting from " << start << " to " << end << std::endl;
-
     auto insert_task = std::async(std::launch::async, [&]() {
       load_aligned_bin_part(data_path, data, start, end - start);
       insert_next_batch(index, start, end, insert_threads, data, aligned_dim);
@@ -267,7 +269,6 @@ void build_incremental_index(const std::string& data_path, const unsigned L,
 
     if (delete_tasks.size() > 0)
       delete_tasks[delete_tasks.size() - 1].wait();
-
     if (start >= active_window + consolidate_interval) {
       auto start_del = start - active_window - consolidate_interval;
       auto end_del = start - active_window;
