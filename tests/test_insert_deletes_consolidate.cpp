@@ -85,9 +85,8 @@ std::string get_save_filename(const std::string& save_path,
   if (points_to_skip > 0) {
     final_path += "skip" + std::to_string(points_to_skip) + "-";
   }
-  if (points_deleted > 0) {
-    final_path += "del" + std::to_string(points_deleted) + "-";
-  }
+
+  final_path += "del" + std::to_string(points_deleted) + "-"; 
   final_path += std::to_string(last_point_threshold);
   return final_path;
 }
