@@ -55,6 +55,7 @@ int search_memory_index(diskann::Metric& metric, const std::string& index_path,
   }
 
   diskann::Index<T, uint32_t> index(metric, query_dim, 0, dynamic, tags);
+  std::cout << "Index class instantiated" << std::endl;
   index.load(index_path.c_str(), num_threads,
              *(std::max_element(Lvec.begin(), Lvec.end())));
   std::cout << "Index loaded" << std::endl;

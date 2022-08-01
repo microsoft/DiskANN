@@ -283,8 +283,9 @@ namespace diskann {
   Index<T, TagT>::~Index() {
     // Ensure that no other activity is happening before dtor()
     std::unique_lock<std::shared_timed_mutex> ul(_update_lock);
-    std::unique_lock<std::shared_timed_mutex> tul(_tag_lock);
-    std::unique_lock<std::shared_timed_mutex> tdl(_delete_lock);
+    std::unique_lock<std::shared_timed_mutex> cl(_consolidate_lock);
+    std::unique_lock<std::shared_timed_mutex> tl(_tag_lock);
+    std::unique_lock<std::shared_timed_mutex> dl(_delete_lock);
 
     for (auto &lock : _locks) {
       LockGuard lg(lock);
@@ -322,20 +323,6 @@ namespace diskann {
       scratch.setup(search_l, indexing_l, r, dim);
       _query_scratch.push(scratch);
     }
-  }
-
-  template<typename T, typename TagT>
-  void Index<T, TagT>::clear_index() {
-    memset(_data, 0,
-           _aligned_dim * (_max_points + _num_frozen_pts) * sizeof(T));
-    _nd = 0;
-    for (size_t i = 0; i < _final_graph.size(); i++)
-      _final_graph[i].clear();
-
-    _tag_to_location.clear();
-    _location_to_tag.clear();
-
-    // What about empty slots, delete_set, etc?
   }
 
   template<typename T, typename TagT>
@@ -424,8 +411,13 @@ namespace diskann {
   void Index<T, TagT>::save(const char *filename, bool compact_before_save) {
     // first check if no thread is inserting
     diskann::Timer                            timer;
-    std::unique_lock<std::shared_timed_mutex> lock(_update_lock);
-    _num_points_lock.lock();
+    
+    LockGuard                                 npl(_num_points_lock);
+    std::unique_lock<std::shared_timed_mutex> ul(_update_lock);
+    std::unique_lock<std::shared_timed_mutex> cl(_consolidate_lock);
+    std::unique_lock<std::shared_timed_mutex> tl(_tag_lock);
+    std::unique_lock<std::shared_timed_mutex> dl(_delete_lock);
+
 
     if (compact_before_save) {
       compact_data();
@@ -555,9 +547,8 @@ namespace diskann {
     }
 
     if (file_num_points > _max_points) {
-      //_num_points_lock is already locked in load()
+      //_num_points_lock and update lock already acquired in load()
       std::unique_lock<std::shared_timed_mutex> tl(_tag_lock);
-      std::unique_lock<std::shared_timed_mutex> growth_lock(_update_lock);
 
       resize(file_num_points);
     }
@@ -595,7 +586,7 @@ namespace diskann {
   }
 
   // load the index from file and update the max_degree, start (navigating
-  // node id), and _final_graph (adjacency list)
+  // node loc), and _final_graph (adjacency list)
   template<typename T, typename TagT>
 #ifdef EXEC_ENV_OLS
   void Index<T, TagT>::load(AlignedFileReader &reader, uint32_t num_threads,
@@ -604,7 +595,8 @@ namespace diskann {
   void Index<T, TagT>::load(const char *filename, uint32_t num_threads,
                             uint32_t search_l) {
 #endif
-    _num_points_lock.lock();
+    std::unique_lock<std::shared_timed_mutex> ul(_update_lock);
+
     _has_built = true;
 
     size_t tags_file_num_pts = 0, graph_num_pts = 0, data_file_num_pts = 0;
@@ -672,8 +664,6 @@ namespace diskann {
       initialize_query_scratch(num_threads, search_l, search_l,
                                (uint32_t) _max_range_of_loaded_graph, _dim);
     }
-
-    _num_points_lock.unlock();
   }
 
 #ifdef EXEC_ENV_OLS
@@ -743,7 +733,7 @@ namespace diskann {
     diskann::cout << "Loading vamana graph " << filename << "..." << std::flush;
 #endif
 
-    // Sanity check. If user provides more points than max_points
+    // If user provides more points than max_points
     // resize the _final_graph to the larger size.
     if (_max_points < expected_num_points) {
       diskann::cout << "Number of points in data: " << expected_num_points
@@ -911,10 +901,10 @@ namespace diskann {
 
     for (auto id : init_ids) {
       if (id >= _max_points + _num_frozen_pts) {
-        diskann::cerr << "Out of range id found as an edge : " << id
+        diskann::cerr << "Out of range loc found as an edge : " << id
                       << std::endl;
         throw diskann::ANNException(
-            std::string("Wrong id") + std::to_string(id), -1, __FUNCSIG__,
+            std::string("Wrong loc") + std::to_string(id), -1, __FUNCSIG__,
             __FILE__, __LINE__);
       }
       nn = Neighbor(id,
@@ -1144,7 +1134,7 @@ namespace diskann {
                                        std::vector<unsigned> &pruned_list) {
     if (pool.size() == 0) {
       std::stringstream ss;
-      ss << "Thread id:" << std::this_thread::get_id()
+      ss << "Thread loc:" << std::this_thread::get_id()
          << " Pool address: " << &pool << std::endl;
       std::cout << ss.str();
       throw diskann::ANNException("Pool passed to prune_neighbors is empty",
@@ -1163,8 +1153,6 @@ namespace diskann {
     occlude_list(pool, alpha, range, max_candidate_size, result,
                  occlude_factor);
 
-    // Add all the nodes in result into a variable called cut_graph
-    // So this contains all the neighbors of id location
     pruned_list.clear();
     assert(result.size() <= range);
     for (auto iter : result) {
@@ -1191,7 +1179,7 @@ namespace diskann {
     for (auto des : pruned_list) {
       if (des == n)
         continue;
-      // des.id is the id of the neighbors of n
+      // des.loc is the loc of the neighbors of n
       assert(des >= 0 && des < _max_points + _num_frozen_pts);
       if (des > _max_points)
         diskann::cout << "error. " << des << " exceeds max_pts" << std::endl;
@@ -1226,7 +1214,7 @@ namespace diskann {
     assert(!src_pool.empty());
 
     for (auto des : src_pool) {
-      // des.id is the id of the neighbors of n
+      // des.loc is the loc of the neighbors of n
       assert(des >= 0 && des < _max_points + _num_frozen_pts);
       // des_pool contains the neighbors of the neighbors of n
       std::vector<unsigned> copy_of_neighbors;
@@ -1894,8 +1882,8 @@ namespace diskann {
     float *dist_interim = scratch.interim_dists;
     search_impl(query, L, L, indices, dist_interim, scratch);
 
-    std::shared_lock<std::shared_timed_mutex> ulock(_update_lock);
-    std::shared_lock<std::shared_timed_mutex> lock(_tag_lock);
+    std::shared_lock<std::shared_timed_mutex> ul(_update_lock);
+    std::shared_lock<std::shared_timed_mutex> tl(_tag_lock);
     size_t                                    pos = 0;
 
     for (int i = 0; i < (int) L; ++i)
@@ -1990,28 +1978,25 @@ namespace diskann {
       return -1;
     }
 
-    unsigned id;  // since we will return if tag is not found, ok to leave it
+    unsigned loc;  // since we will return if tag is not found, ok to leave it
                   // uninitialized.
     {
-      std::shared_lock<std::shared_timed_mutex> lock(_tag_lock);
+      std::shared_lock<std::shared_timed_mutex> tl(_tag_lock);
       if (_tag_to_location.find(tag) == _tag_to_location.end()) {
         diskann::cerr << "Delete tag " << tag << " not found" << std::endl;
         return -1;
       }
-      id = _tag_to_location[tag];
+      loc = _tag_to_location[tag];
     }
 
     {
-      std::unique_lock<std::shared_timed_mutex> lock(_tag_lock);
+      std::unique_lock<std::shared_timed_mutex> tl(_tag_lock);
+      std::unique_lock<std::shared_timed_mutex> dl(_delete_lock);
       _location_to_tag.erase(_tag_to_location[tag]);
       _tag_to_location.erase(tag);
-    }
 
-    {
-      // id will be valid because if not, it'll return in the {} above.
-      std::unique_lock<std::shared_timed_mutex> lock(_delete_lock);
-      _delete_set.insert(id);
-      _empty_slots.insert(id);
+      _delete_set.insert(loc);
+      _empty_slots.insert(loc);
     }
 
     const unsigned range = parameters.Get<unsigned>("R");
@@ -2020,13 +2005,13 @@ namespace diskann {
 
     // delete point from out-neighbors' in-neighbor list
     {
-      LockGuard guard(_locks[id]);
-      for (size_t i = 0; i < _final_graph[id].size(); i++) {
-        unsigned j = _final_graph[id][i];
+      LockGuard guard(_locks[loc]);
+      for (size_t i = 0; i < _final_graph[loc].size(); i++) {
+        unsigned j = _final_graph[loc][i];
         {
           LockGuard guard(_locks_in[j]);
           for (unsigned k = 0; k < _in_graph[j].size(); k++) {
-            if (_in_graph[j][k] == id) {
+            if (_in_graph[j][k] == loc) {
               _in_graph[j].erase(_in_graph[j].begin() + k);
               break;
             }
@@ -2037,11 +2022,11 @@ namespace diskann {
 
     tsl::robin_set<unsigned> in_nbr;
     {
-      LockGuard guard(_locks_in[id]);
-      for (unsigned i = 0; i < _in_graph[id].size(); i++)
-        in_nbr.insert(_in_graph[id][i]);
+      LockGuard guard(_locks_in[loc]);
+      for (unsigned i = 0; i < _in_graph[loc].size(); i++)
+        in_nbr.insert(_in_graph[loc][i]);
     }
-    assert(_in_graph[id].size() == in_nbr.size());
+    assert(_in_graph[loc].size() == in_nbr.size());
 
     std::vector<Neighbor>    pool, tmp;
     tsl::robin_set<unsigned> visited;
@@ -2051,7 +2036,7 @@ namespace diskann {
 
     if (delete_mode == 2) {
       // constructing list of in-neighbors to be processed
-      get_expanded_nodes(id, Lindex, init_ids, pool, visited);
+      get_expanded_nodes(loc, Lindex, init_ids, pool, visited);
 
       for (auto node : visited) {
         if (in_nbr.find(node) != in_nbr.end()) {
@@ -2064,7 +2049,7 @@ namespace diskann {
     for (auto it : in_nbr) {
       LockGuard guard(_locks[it]);
       _final_graph[it].erase(
-          std::remove(_final_graph[it].begin(), _final_graph[it].end(), id),
+          std::remove(_final_graph[it].begin(), _final_graph[it].end(), loc),
           _final_graph[it].end());
     }
 
@@ -2088,20 +2073,20 @@ namespace diskann {
       {
         LockGuard guard(_locks[ngh]);
 
-        // constructing candidate set from out-neighbors of ngh and id
+        // constructing candidate set from out-neighbors of ngh and loc
         {  // should a shared reader lock on delete_lock be held here at the
            // beginning of the two for loops or should it be held and release
            // for ech iteration of the for loops? Which is faster?
 
           std::shared_lock<std::shared_timed_mutex> lock(_delete_lock);
-          for (auto j : _final_graph[id]) {
-            if ((j != id) && (j != ngh) &&
+          for (auto j : _final_graph[loc]) {
+            if ((j != loc) && (j != ngh) &&
                 (_delete_set.find(j) == _delete_set.end()))
               candidate_set.insert(j);
           }
 
           for (auto j : _final_graph[ngh]) {
-            if ((j != id) && (j != ngh) &&
+            if ((j != loc) && (j != ngh) &&
                 (_delete_set.find(j) == _delete_set.end()))
               candidate_set.insert(j);
           }
@@ -2152,10 +2137,10 @@ namespace diskann {
       }
     }
 
-    _final_graph[id].clear();
-    _in_graph[id].clear();
+    _final_graph[loc].clear();
+    _in_graph[loc].clear();
 
-    release_location(id);
+    release_location(loc);
 
     _eager_done = true;
     _data_compacted = false;
@@ -2229,19 +2214,6 @@ namespace diskann {
   template<typename T, typename TagT>
   consolidation_report Index<T, TagT>::consolidate_deletes(
       const Parameters &params) {
-    std::unique_lock<std::shared_timed_mutex> cl(_consolidate_lock,
-                                                 std::defer_lock);
-    if (not cl.try_lock()) {
-      diskann::cerr
-          << "Consildate delete function failed to acquire consolidate lock"
-          << std::endl;
-      return consolidation_report(
-          diskann::consolidation_report::status_code::LOCK_FAIL, 0,
-          0, 0, 0, 0, 0);
-    }
-
-    diskann::cout << "Starting consolidate_deletes... ";
-
     if (!_enable_tags)
       throw diskann::ANNException("Point tag array not instantiated", -1,
                                   __FUNCSIG__, __FILE__, __LINE__);
@@ -2278,11 +2250,24 @@ namespace diskann {
         }
       }
     }
-    
+
     std::unique_lock<std::shared_timed_mutex> update_lock(_update_lock,
                                                           std::defer_lock);
     if (!_conc_consolidate)
       update_lock.lock();
+
+    std::unique_lock<std::shared_timed_mutex> cl(_consolidate_lock,
+                                                 std::defer_lock);
+    if (not cl.try_lock()) {
+      diskann::cerr
+          << "Consildate delete function failed to acquire consolidate lock"
+          << std::endl;
+      return consolidation_report(
+          diskann::consolidation_report::status_code::LOCK_FAIL, 0, 0, 0, 0, 0,
+          0);
+    }
+
+    diskann::cout << "Starting consolidate_deletes... ";
 
     tsl::robin_set<unsigned> old_delete_set;
     {
@@ -2310,7 +2295,7 @@ namespace diskann {
         }
       }
     }
-    for (_s64 loc = _max_points; loc < (_s64)(_max_points + _num_frozen_pts);
+    for (_s64 loc = _max_points; loc < (_s64) (_max_points + _num_frozen_pts);
          loc++) {
       std::unique_lock<std::mutex> adj_list_lock(_locks[loc]);
       process_delete(old_delete_set, loc, range, maxc, alpha);
@@ -2333,12 +2318,6 @@ namespace diskann {
         diskann::consolidation_report::status_code::SUCCESS, ret_nd,
         this->_max_points, _empty_slots.size(), old_delete_set.size(),
         _delete_set.size(), duration);
-  }
-
-  template<typename T, typename TagT>
-  void Index<T, TagT>::consolidate(Parameters &parameters) {
-    consolidate_deletes(parameters);
-    compact_data();
   }
 
   template<typename T, typename TagT>
@@ -2371,6 +2350,7 @@ namespace diskann {
     }
   }
 
+  // Should be called after acquiring _update_lock
   template<typename T, typename TagT>
   void Index<T, TagT>::compact_data() {
     if (!_dynamic_index)
@@ -2788,30 +2768,26 @@ namespace diskann {
           "cannot proceed with lazy_deletes",
           -1, __FUNCSIG__, __FILE__, __LINE__);
     }
-    std::shared_lock<std::shared_timed_mutex> lock(_update_lock);
+    std::shared_lock<std::shared_timed_mutex> ul(_update_lock);
+    std::unique_lock<std::shared_timed_mutex> tl(_tag_lock);
+    std::unique_lock<std::shared_timed_mutex> dl(_delete_lock);
     _lazy_done = true;
     _data_compacted = false;
 
-    {
-      std::unique_lock<std::shared_timed_mutex> tl(_tag_lock);
-      std::unique_lock<std::shared_timed_mutex> l(_delete_lock);
-
-      if (_tag_to_location.find(tag) == _tag_to_location.end()) {
-        diskann::cerr << "Delete tag not found " << tag << std::endl;
-        return -1;
-      }
-      assert(_tag_to_location[tag] < _max_points);
-
-      const auto location = _tag_to_location[tag];
-      _delete_set.insert(location);
-      _location_to_tag.erase(location);
-      _tag_to_location.erase(tag);
+    if (_tag_to_location.find(tag) == _tag_to_location.end()) {
+      diskann::cerr << "Delete tag not found " << tag << std::endl;
+      return -1;
     }
+    assert(_tag_to_location[tag] < _max_points);
+
+    const auto location = _tag_to_location[tag];
+    _delete_set.insert(location);
+    _location_to_tag.erase(location);
+    _tag_to_location.erase(tag);
 
     return 0;
   }
 
-  // TODO: Check if this function needs a shared_lock on _tag_lock.
   template<typename T, typename TagT>
   void Index<T, TagT>::lazy_delete(const std::vector<TagT> &tags,
                                    std::vector<TagT> &      failed_tags) {
@@ -2825,10 +2801,12 @@ namespace diskann {
           "cannot proceed with lazy_deletes",
           -1, __FUNCSIG__, __FILE__, __LINE__);
     }
-    std::shared_lock<std::shared_timed_mutex> lock(_update_lock);
+    std::shared_lock<std::shared_timed_mutex> ul(_update_lock);
+    std::unique_lock<std::shared_timed_mutex> tl(_tag_lock);
+    std::unique_lock<std::shared_timed_mutex> dl(_delete_lock);
     _lazy_done = true;
     _data_compacted = false;
-
+    
     for (auto tag : tags) {
       if (_tag_to_location.find(tag) == _tag_to_location.end()) {
         failed_tags.push_back(tag);
@@ -2842,21 +2820,6 @@ namespace diskann {
   }
 
   template<typename T, typename TagT>
-  int Index<T, TagT>::extract_data(
-      T *ret_data, std::unordered_map<TagT, unsigned> &tag_to_location) {
-    if (!_data_compacted) {
-      diskann::cerr
-          << "Error! Data not compacted. Cannot give access to private data."
-          << std::endl;
-      return -1;
-    }
-    std::memset(ret_data, 0, (size_t) _aligned_dim * _nd * sizeof(T));
-    std::memcpy(ret_data, _data, (size_t)(_aligned_dim) *_nd * sizeof(T));
-    tag_to_location = _tag_to_location;
-    return 0;
-  }
-
-  template<typename T, typename TagT>
   bool Index<T, TagT>::is_index_saved() {
     return _is_saved;
   }
@@ -2864,7 +2827,7 @@ namespace diskann {
   template<typename T, typename TagT>
   void Index<T, TagT>::get_active_tags(tsl::robin_set<TagT> &active_tags) {
     active_tags.clear();
-    std::shared_lock<std::shared_timed_mutex> tul(_tag_lock);
+    std::shared_lock<std::shared_timed_mutex> tl(_tag_lock);
     for (auto iter : _tag_to_location) {
       active_tags.insert(iter.first);
     }
@@ -2893,6 +2856,11 @@ namespace diskann {
 
   template<typename T, typename TagT>
   void Index<T, TagT>::optimize_index_layout() {  // use after build or load
+    if (_dynamic_index)
+      throw ANNException(
+          "Optimize_index_layout not implemented for dyanmic indices", -1,
+          __FUNCSIG__, __FILE__, __LINE__);
+
     _data_len = (_aligned_dim + 1) * sizeof(float);
     _neighbor_len = (_max_observed_degree + 1) * sizeof(unsigned);
     _node_size = _data_len + _neighbor_len;
