@@ -82,7 +82,7 @@ namespace diskann {
       return *_inserted_into_pool_bs;
     }
   };
-  
+
   struct consolidation_report {
     enum status_code {
       SUCCESS = 0,
@@ -182,8 +182,6 @@ namespace diskann {
                                               float            *distances,
                                               std::vector<T *> &res_vectors);
 
-    DISKANN_DLLEXPORT void clear_index();
-
     // Will fail if tag already in the index
     DISKANN_DLLEXPORT int insert_point(const T *point, const TagT tag);
 
@@ -201,7 +199,7 @@ namespace diskann {
     DISKANN_DLLEXPORT void lazy_delete(const std::vector<TagT> &tags,
                                        std::vector<TagT>       &failed_tags);
 
-        // Call after a series of lazy deletions
+    // Call after a series of lazy deletions
     // Returns number of live points left after consolidation
     // If _conc_consolidates is set in the ctor, then this call can be invoked
     // alongside inserts and lazy deletes, else it acquires _update_lock
@@ -213,9 +211,6 @@ namespace diskann {
     DISKANN_DLLEXPORT int eager_delete(const TagT        tag,
                                        const Parameters &parameters,
                                        int               delete_mode = 1);
-    // return _data and tag_to_location offset
-    DISKANN_DLLEXPORT int extract_data(
-        T *ret_data, std::unordered_map<TagT, unsigned> &tag_to_location);
 
     DISKANN_DLLEXPORT void prune_all_nbrs(const Parameters &parameters);
 
@@ -226,8 +221,6 @@ namespace diskann {
     DISKANN_DLLEXPORT void reposition_frozen_point_to_end();
     DISKANN_DLLEXPORT void reposition_point(unsigned old_location,
                                             unsigned new_location);
-
-    DISKANN_DLLEXPORT void consolidate(Parameters &parameters);
 
     // DISKANN_DLLEXPORT void save_index_as_one_file(bool flag);
 
@@ -337,20 +330,19 @@ namespace diskann {
 
     int    reserve_location();
     size_t release_location(int location);
-    size_t release_locations(tsl::robin_set<unsigned>& locations);
+    size_t release_locations(tsl::robin_set<unsigned> &locations);
 
     // Resize the index when no slots are left for insertion.
     // MUST acquire _num_points_lock and _update_lock before calling.
-    // Anything else in a MT environment will lead to an inconsistent index.
     void resize(size_t new_max_points);
 
-    // Take an unique lock on _update_lock before calling either of these functions
-    // renumber nodes, update tag and location maps and compact the graph, mode
-    // = _consolidated_order in case of lazy deletion and _compacted_order in
-    // case of eager deletion
+    // Take an unique lock on _update_lock and _consolidate_lock
+    // before calling these functions.
+    // Renumber nodes, update tag and location maps and compact the
+    // graph, mode = _consolidated_order in case of lazy deletion and
+    // _compacted_order in case of eager deletion
     DISKANN_DLLEXPORT void compact_data();
     DISKANN_DLLEXPORT void compact_frozen_point();
-
 
     // Remove deleted nodes from adj list of node i and absorb edges from
     // deleted neighbors Acquire _locks[i] prior to calling for thread-safety
@@ -361,12 +353,12 @@ namespace diskann {
     void initialize_query_scratch(uint32_t num_threads, uint32_t search_l,
                                   uint32_t indexing_l, uint32_t r, size_t dim);
 
-    // Do not call without acquiring appropriate locks, call ::save() instead.
-    DISKANN_DLLEXPORT _u64 save_graph(std::string filename);
-    DISKANN_DLLEXPORT _u64 save_data(std::string filename);
-    DISKANN_DLLEXPORT _u64 save_tags(std::string filename);
-    DISKANN_DLLEXPORT _u64 save_delete_list(const std::string &filename);
-
+    // Do not call without acquiring appropriate locks
+    // call public member functions save and load to invoke these.
+    DISKANN_DLLEXPORT _u64   save_graph(std::string filename);
+    DISKANN_DLLEXPORT _u64   save_data(std::string filename);
+    DISKANN_DLLEXPORT _u64   save_tags(std::string filename);
+    DISKANN_DLLEXPORT _u64   save_delete_list(const std::string &filename);
     DISKANN_DLLEXPORT size_t load_graph(const std::string filename,
                                         size_t            expected_num_points);
     DISKANN_DLLEXPORT size_t load_data(std::string filename0);
@@ -421,7 +413,7 @@ namespace diskann {
     std::unordered_map<TagT, unsigned> _tag_to_location;
     std::unordered_map<unsigned, TagT> _location_to_tag;
 
-    tsl::robin_set<unsigned> _delete_set;
+    tsl::robin_set<unsigned>     _delete_set;
     natural_number_set<unsigned> _empty_slots;
 
     bool _support_eager_delete =
@@ -436,17 +428,18 @@ namespace diskann {
     std::vector<std::mutex> _locks;  // Per node lock, cardinality=max_points_
     std::vector<std::mutex> _locks_in;  // Per node lock
 
+    // If acquiring multiple locks below, acquire locks in the order below
+
     std::mutex _num_points_lock;  // Lock to synchronously modify _nd
 
+    std::shared_timed_mutex  // RW mutex between save/load (exclusive lock) and
+        _update_lock;        // search/inserts/deletes/consolidate (shared lock)
     std::shared_timed_mutex
-        _consolidate_lock;  // Ensure only consolidate is ever active
-    std::shared_timed_mutex
-        _update_lock;  // coordinate save() and changes to graph
+        _consolidate_lock;  // Ensure only one consolidate is ever active
     std::shared_timed_mutex
         _tag_lock;  // RW lock for _tag_to_location and _location_to_tag
     std::shared_timed_mutex
         _delete_lock;  // RW Lock on _delete_set and _empty_slots
-
 
     static const float INDEX_GROWTH_FACTOR;
   };
