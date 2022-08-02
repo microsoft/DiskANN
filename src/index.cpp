@@ -409,15 +409,7 @@ namespace diskann {
 
   template<typename T, typename TagT>
   void Index<T, TagT>::save(const char *filename, bool compact_before_save) {
-    // first check if no thread is inserting
-    diskann::Timer                            timer;
-    
-    LockGuard                                 npl(_num_points_lock);
-    std::unique_lock<std::shared_timed_mutex> ul(_update_lock);
-    std::unique_lock<std::shared_timed_mutex> cl(_consolidate_lock);
-    std::unique_lock<std::shared_timed_mutex> tl(_tag_lock);
-    std::unique_lock<std::shared_timed_mutex> dl(_delete_lock);
-
+    diskann::Timer timer;
 
     if (compact_before_save) {
       compact_data();
@@ -429,6 +421,11 @@ namespace diskann {
             __FUNCSIG__, __FILE__, __LINE__);
       }
     }
+
+    std::unique_lock<std::shared_timed_mutex> ul(_update_lock);
+    std::unique_lock<std::shared_timed_mutex> cl(_consolidate_lock);
+    std::unique_lock<std::shared_timed_mutex> tl(_tag_lock);
+    std::unique_lock<std::shared_timed_mutex> dl(_delete_lock);
 
     if (!_save_as_one_file) {
       std::string graph_file = std::string(filename);
@@ -456,7 +453,6 @@ namespace diskann {
 
     reposition_frozen_point_to_end();
 
-    _num_points_lock.unlock();
     diskann::cout << "Time taken for save: " << timer.elapsed() / 1000000.0
                   << "s." << std::endl;
   }
@@ -547,9 +543,7 @@ namespace diskann {
     }
 
     if (file_num_points > _max_points) {
-      //_num_points_lock and update lock already acquired in load()
-      std::unique_lock<std::shared_timed_mutex> tl(_tag_lock);
-
+      // update and tag lock acquired in load() before calling load_data
       resize(file_num_points);
     }
 
@@ -596,6 +590,7 @@ namespace diskann {
                             uint32_t search_l) {
 #endif
     std::unique_lock<std::shared_timed_mutex> ul(_update_lock);
+    std::unique_lock<std::shared_timed_mutex> tl(_tag_lock);
 
     _has_built = true;
 
@@ -2139,7 +2134,8 @@ namespace diskann {
 
     _final_graph[loc].clear();
     _in_graph[loc].clear();
-
+    
+    std::unique_lock<std::shared_timed_mutex> tl(_tag_lock);
     release_location(loc);
 
     _eager_done = true;
@@ -2209,7 +2205,6 @@ namespace diskann {
     }
   }
 
-  // Do not call consolidate_deletes() if you have not locked _num_points_lock.
   // Returns number of live points left after consolidation
   template<typename T, typename TagT>
   consolidation_report Index<T, TagT>::consolidate_deletes(
@@ -2223,31 +2218,28 @@ namespace diskann {
                          __FILE__, __LINE__);
 
     {
-      LockGuard guard(_num_points_lock);
+      std::shared_lock<std::shared_timed_mutex> ul(_update_lock);
+      std::shared_lock<std::shared_timed_mutex> tl(_tag_lock);
+      std::shared_lock<std::shared_timed_mutex> dl(_delete_lock);
       if (_empty_slots.size() + _nd != _max_points) {
         std::string err = "#empty slots + nd != max points";
         diskann::cerr << err << std::endl;
         throw ANNException(err, -1, __FUNCSIG__, __FILE__, __LINE__);
       }
 
-      {
-        std::shared_lock<std::shared_timed_mutex> ul(_update_lock);
-        std::shared_lock<std::shared_timed_mutex> tl(_tag_lock);
-        std::shared_lock<std::shared_timed_mutex> dl(_delete_lock);
-        if (_location_to_tag.size() + _delete_set.size() != _nd) {
-          diskann::cerr << "Error: _location_to_tag.size ("
-                        << _location_to_tag.size() << ")  + _delete_set.size ("
-                        << _delete_set.size() << ") != _nd(" << _nd << ")";
-          return consolidation_report(diskann::consolidation_report::
-                                          status_code::INCONSISTENT_COUNT_ERROR,
-                                      0, 0, 0, 0, 0, 0);
-        }
+      if (_location_to_tag.size() + _delete_set.size() != _nd) {
+        diskann::cerr << "Error: _location_to_tag.size ("
+                      << _location_to_tag.size() << ")  + _delete_set.size ("
+                      << _delete_set.size() << ") != _nd(" << _nd << ") ";
+        return consolidation_report(diskann::consolidation_report::status_code::
+                                        INCONSISTENT_COUNT_ERROR,
+                                    0, 0, 0, 0, 0, 0);
+      }
 
-        if (_location_to_tag.size() != _tag_to_location.size()) {
-          throw diskann::ANNException(
-              "_location_to_tag and _tag_to_location not of same size", -1,
-              __FUNCSIG__, __FILE__, __LINE__);
-        }
+      if (_location_to_tag.size() != _tag_to_location.size()) {
+        throw diskann::ANNException(
+            "_location_to_tag and _tag_to_location not of same size", -1,
+            __FUNCSIG__, __FILE__, __LINE__);
       }
     }
 
@@ -2303,6 +2295,7 @@ namespace diskann {
     if (_support_eager_delete)
       update_in_graph();
 
+    std::unique_lock<std::shared_timed_mutex> tl(_tag_lock);
     size_t ret_nd = release_locations(old_delete_set);
 
     if (!_conc_consolidate) {
@@ -2482,7 +2475,6 @@ namespace diskann {
 
   template<typename T, typename TagT>
   int Index<T, TagT>::reserve_location() {
-    LockGuard guard(_num_points_lock);
     if (_nd >= _max_points) {
       return -1;
     }
@@ -2494,8 +2486,8 @@ namespace diskann {
       // consecutive locations.
       location = (unsigned) _nd;
     } else {
-      // no need of delete_lock here, _num_points_lock will ensure no other
-      // thread executes this block of code
+      // no need of delete_lock here, _tag_lock will ensure lazy delete does
+      // not update empty slots
       assert(_empty_slots.size() != 0);
       assert(_empty_slots.size() + _nd == _max_points);
 
@@ -2509,8 +2501,6 @@ namespace diskann {
 
   template<typename T, typename TagT>
   size_t Index<T, TagT>::release_location(int location) {
-    LockGuard guard(_num_points_lock);
-
     if (_empty_slots.is_in_set(location))
       throw ANNException(
           "Trying to release location, but location already in empty slots", -1,
@@ -2524,8 +2514,6 @@ namespace diskann {
   template<typename T, typename TagT>
   size_t Index<T, TagT>::release_locations(
       tsl::robin_set<unsigned> &locations) {
-    LockGuard guard(_num_points_lock);
-
     for (auto location : locations) {
       if (_empty_slots.is_in_set(location))
         throw ANNException(
@@ -2625,21 +2613,31 @@ namespace diskann {
   int Index<T, TagT>::insert_point(const T *point, const TagT tag) {
     assert(_has_built);
 
-    std::shared_lock<std::shared_timed_mutex> update_lock(_update_lock);
-
+    std::shared_lock<std::shared_timed_mutex> shared_ul(_update_lock);
+    std::unique_lock<std::shared_timed_mutex> tl(_tag_lock);
+   
     // Find a vacant location in the data array to insert the new point
     auto location = reserve_location();
     if (location == -1) {
 #if EXPAND_IF_FULL
-      update_lock.unlock();
-      std::unique_lock<std::shared_timed_mutex> growth_lock(_update_lock);
+      tl.unlock();
+      shared_ul.unlock();
 
-      if (_nd >= _max_points) {
-        auto new_max_points = (size_t)(_max_points * INDEX_GROWTH_FACTOR);
-        resize(new_max_points);
+      {
+        std::unique_lock<std::shared_timed_mutex> ul(_update_lock);
+        tl.lock();
+
+        if (_nd >= _max_points) {
+          auto new_max_points = (size_t) (_max_points * INDEX_GROWTH_FACTOR);
+          resize(new_max_points);
+        }
+
+        tl.unlock();
+        ul.unlock();
       }
-      growth_lock.unlock();
-      update_lock.lock();
+
+      shared_ul.lock();
+      tl.lock();
 
       location = reserve_location();
       if (location == -1) {
@@ -2654,7 +2652,6 @@ namespace diskann {
 
     // Insert tag and mapping to location
     if (_enable_tags) {
-      std::unique_lock<std::shared_timed_mutex> lock(_tag_lock);
 
       if (_tag_to_location.find(tag) != _tag_to_location.end()) {
         release_location(location);
@@ -2664,6 +2661,7 @@ namespace diskann {
       _tag_to_location[tag] = location;
       _location_to_tag[location] = tag;
     }
+    tl.unlock();
 
     // Copy the vector in to the data array
     auto offset_data = _data + (size_t) _aligned_dim * location;

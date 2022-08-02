@@ -328,6 +328,7 @@ namespace diskann {
     // Create the graph, update periodically in NUM_SYNCS batches
     void link(Parameters &parameters);
 
+    // Acquire _tag_lock before calling
     int    reserve_location();
     size_t release_location(int location);
     size_t release_locations(tsl::robin_set<unsigned> &locations);
@@ -429,9 +430,6 @@ namespace diskann {
     std::vector<std::mutex> _locks_in;  // Per node lock
 
     // If acquiring multiple locks below, acquire locks in the order below
-
-    std::mutex _num_points_lock;  // Lock to synchronously modify _nd
-
     std::shared_timed_mutex  // RW mutex between save/load (exclusive lock) and
         _update_lock;        // search/inserts/deletes/consolidate (shared lock)
     std::shared_timed_mutex
