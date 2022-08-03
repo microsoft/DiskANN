@@ -754,18 +754,17 @@ namespace diskann {
     //lorder -> Location to point/Id file
     //porder -> Id to location file
     unsigned npts_lorder, ndims_lorder, npts_porder, ndims_porder;
-    std::unique_ptr<char[]> lorder_data = std::make_unique<char[]>(npts_64);
-    std::unique_ptr<char[]> porder_data = std::make_unique<char[]>(npts_64);
+    unsigned *lorder_data, *porder_data;
     if(lorder_file != std::string("") && porder_file != std::string("")){
       reorder_data = true;
       try {
-        diskann::load_bin<T>(lorder_file, lorder_data, npts_lorder, ndims_lorder);        
+        diskann::load_bin<uint32_t>(lorder_file, lorder_data, npts_lorder, ndims_lorder);        
       } catch (std::system_error &e) {
         throw FileException(lorder_file, e, __FUNCSIG__, __FILE__,
                             __LINE__);
       }
       try{
-        diskann::load_bin<T>(porder_file, porder_data, npts_porder, ndims_porder);
+        diskann::load_bin<uint32_t>(porder_file, porder_data, npts_porder, ndims_porder);
       }catch (std::system_error &e) {
         throw FileException(porder_file, e, __FUNCSIG__, __FILE__,
                             __LINE__);
@@ -844,12 +843,11 @@ namespace diskann {
     // write first sector with metadata
     *(_u64 *) (sector_buf.get() + 0 * sizeof(_u64)) = disk_index_file_size;
     *(_u64 *) (sector_buf.get() + 1 * sizeof(_u64)) = npts_64;
-    *(_u64 *) (sector_buf.get() + 2 * sizeof(_u64)) = medoid;
-    /*if(reorder_data){
-      *(_u64 *) (sector_buf.get() + 2 * sizeof(_u64)) = medoid;  
+    if(reorder_data){
+      *(_u64 *) (sector_buf.get() + 2 * sizeof(_u64)) = lorder_data[medoid];
     }else{
       *(_u64 *) (sector_buf.get() + 2 * sizeof(_u64)) = medoid;
-    }*/
+    }
     *(_u64 *) (sector_buf.get() + 3 * sizeof(_u64)) = max_node_len;
     *(_u64 *) (sector_buf.get() + 4 * sizeof(_u64)) = nnodes_per_sector;
     *(_u64 *) (sector_buf.get() + 5 * sizeof(_u64)) = vamana_frozen_num;
@@ -865,12 +863,11 @@ namespace diskann {
     diskann_writer.write(sector_buf.get(), SECTOR_LEN);
 
     
-    unsigned  dummyUnsigned, loc_id;
-    std::unique_ptr<char[]> dummy_buf = std::make_unique<char[]>(max_node_len);
+    unsigned  nnbrs_old, loc_id;
     for (_u64 i = 0; i < npts_64; i++) {
       pos_vamana_reader[i] = vamana_reader.tellg();
-      vamana_reader.read((char *) &dummyUnsigned, sizeof(unsigned));
-      vamana_reader.read((char *) dummy_buf.get(), dummyUnsigned * sizeof(unsigned));
+      vamana_reader.read((char *) &nnbrs_old, sizeof(unsigned));
+      vamana_reader.seekg( nnbrs_old * sizeof(unsigned), vamana_reader.cur)
     }
 
     std::unique_ptr<T[]> cur_node_coords = std::make_unique<T[]>(ndims_64);
@@ -889,7 +886,7 @@ namespace diskann {
         if sector reordering is carried out, vamana reader need 
         to point to the particular location*/
         if(reorder_data){
-          loc_id = *(unsigned *) (lorder_data.get() + cur_node_id * sizeof(unsigned));
+          loc_id = lorder_data[cur_node_id];
           vamana_reader.seekg(pos_vamana_reader[loc_id], std::ios::beg);
         }
         vamana_reader.read((char *) &nnbrs, sizeof(unsigned));
@@ -903,11 +900,11 @@ namespace diskann {
         
         //Fetch corresponding nhood from new list after reordering
         if(reorder_data){
-          unsigned old_neighbor, new_neighbor;
-          for(unsigned i=0; i< (unsigned)(std::min)(nnbrs, width_u32); i++ ){
-            old_neighbor = *(unsigned *) (nhood_buf + i);
-            new_neighbor = *(unsigned *) (porder_data.get() +  old_neighbor * sizeof(unsigned));
-            *(unsigned *) (nhood_buf + i) = new_neighbor;
+          unsigned old_nbr;
+          for(unsigned nbr=0; nbr < (unsigned)(std::min)(nnbrs, width_u32); nbr++ ){
+            old_nbr = nhood_buf[nbr];
+            // New neighbor after reordering
+            nhood_buf[nbr] = porder_data[old_nbr];
           }
         }
 
