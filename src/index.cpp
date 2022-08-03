@@ -579,7 +579,7 @@ namespace diskann {
     return npts;
   }
 
-  // load the index from file and update the max_degree, start (navigating
+  // load the index from file and update the max_degree, cur (navigating
   // node loc), and _final_graph (adjacency list)
   template<typename T, typename TagT>
 #ifdef EXEC_ENV_OLS
@@ -1057,56 +1057,51 @@ namespace diskann {
                                     const float alpha, const unsigned degree,
                                     const unsigned         maxc,
                                     std::vector<Neighbor> &result) {
-    auto               pool_size = (_u32) pool.size();
-    std::vector<float> occlude_factor(pool_size, 0);
-    occlude_list(pool, alpha, degree, maxc, result, occlude_factor);
-  }
-
-  template<typename T, typename TagT>
-  void Index<T, TagT>::occlude_list(std::vector<Neighbor> &pool,
-                                    const float alpha, const unsigned degree,
-                                    const unsigned         maxc,
-                                    std::vector<Neighbor> &result,
-                                    std::vector<float> &   occlude_factor) {
-    if (pool.empty())
+    if (pool.size() == 0)
       return;
+
     assert(std::is_sorted(pool.begin(), pool.end()));
-    assert(!pool.empty());
+    if (pool.size() > maxc)
+      pool.resize(maxc);
+    std::vector<float> occlude_factor(pool.size(), 0);
 
     float cur_alpha = 1;
     while (cur_alpha <= alpha && result.size() < degree) {
-      unsigned start = 0;
-      float eps = cur_alpha + 0.01f;  // used for MIPS, where we store a value
-                                      // of eps in cur_alpha to
+      // used for MIPS, where we store a value of eps in cur_alpha to
       // denote pruned out entries which we can skip in later rounds.
-      while (result.size() < degree && (start) < pool.size() && start < maxc) {
-        auto &p = pool[start];
-        if (occlude_factor[start] > cur_alpha) {
-          start++;
+      float eps = cur_alpha + 0.01f;
+
+      for (auto iter = pool.begin();
+           result.size() < degree && iter != pool.end(); ++iter) {
+        if (occlude_factor[iter - pool.begin()] > cur_alpha) {
           continue;
         }
-        occlude_factor[start] = std::numeric_limits<float>::max();
-        result.push_back(p);
-        for (unsigned t = start + 1; t < pool.size() && t < maxc; t++) {
+        occlude_factor[iter - pool.begin()] = std::numeric_limits<float>::max();
+        result.push_back(*iter);
+        for (auto iter2 = iter + 1; iter2 != pool.end(); iter2++) {
+          auto t = iter2 - pool.begin();
           if (occlude_factor[t] > alpha)
             continue;
-          float djk = _distance->compare(
-              _data + _aligned_dim * (size_t) pool[t].id,
-              _data + _aligned_dim * (size_t) p.id, (unsigned) _aligned_dim);
+          float djk =
+              _distance->compare(_data + _aligned_dim * (size_t) iter2->id,
+                                 _data + _aligned_dim * (size_t) iter->id,
+                                 (unsigned) _aligned_dim);
           if (_dist_metric == diskann::Metric::L2 ||
               _dist_metric == diskann::Metric::COSINE) {
-            occlude_factor[t] =
-                std::max(occlude_factor[t], pool[t].distance / djk);
+            if (djk == 0.0)
+              occlude_factor[t] = std::numeric_limits<float>::max();
+            else
+              occlude_factor[t] =
+                  std::max(occlude_factor[t], iter2->distance / djk);
           } else if (_dist_metric == diskann::Metric::INNER_PRODUCT) {
             // Improvization for flipping max and min dist for MIPS
-            float x = -pool[t].distance;
+            float x = -iter2->distance;
             float y = -djk;
             if (y > cur_alpha * x) {
               occlude_factor[t] = std::max(occlude_factor[t], eps);
             }
           }
         }
-        start++;
       }
       cur_alpha *= 1.2;
     }
@@ -1143,10 +1138,8 @@ namespace diskann {
 
     std::vector<Neighbor> result;
     result.reserve(range);
-    std::vector<float> occlude_factor(pool.size(), 0);
 
-    occlude_list(pool, alpha, range, max_candidate_size, result,
-                 occlude_factor);
+    occlude_list(pool, alpha, range, max_candidate_size, result);
 
     pruned_list.clear();
     assert(result.size() <= range);
@@ -2387,12 +2380,12 @@ namespace diskann {
       new_location[old_location] = old_location;
     }
 
-    // If start node is removed, replace it.
+    // If cur node is removed, replace it.
     if (_delete_set.find(_start) != _delete_set.end()) {
-      diskann::cerr << "Replacing start node which has been deleted... "
+      diskann::cerr << "Replacing cur node which has been deleted... "
                     << std::flush;
       auto old_ep = _start;
-      // First active neighbor of old start node is new start node
+      // First active neighbor of old cur node is new cur node
       for (auto iter : _final_graph[_start])
         if (_delete_set.find(iter) != _delete_set.end()) {
           _start = iter;
@@ -2400,7 +2393,7 @@ namespace diskann {
         }
       if (_start == old_ep) {
         throw diskann::ANNException(
-            "ERROR: Did not find a replacement for start node.", -1,
+            "ERROR: Did not find a replacement for cur node.", -1,
             __FUNCSIG__, __FILE__, __LINE__);
       } else {
         assert(_delete_set.find(_start) == _delete_set.end());
