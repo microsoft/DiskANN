@@ -303,11 +303,6 @@ namespace diskann {
                       const unsigned degree, const unsigned maxc,
                       std::vector<Neighbor> &result);
 
-    void occlude_list(std::vector<Neighbor> &pool, const float alpha,
-                      const unsigned degree, const unsigned maxc,
-                      std::vector<Neighbor> &result,
-                      std::vector<float>    &occlude_factor);
-
     // add reverse links from all the visited nodes to node n.
     void batch_inter_insert(unsigned                     n,
                             const std::vector<unsigned> &pruned_list,
