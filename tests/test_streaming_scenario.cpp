@@ -334,20 +334,21 @@ int main(int argc, char** argv) {
                        po::value<uint32_t>(&consolidate_threads)
                            ->default_value(omp_get_num_procs() / 2),
                        "Number of threads used for consolidating deletes to "
-                       "the index (defaults to "
-                       "omp_get_num_procs()/2)");
+                       "the index (defaults to omp_get_num_procs()/2)");
 
     desc.add_options()(
         "max_points_to_insert",
         po::value<uint64_t>(&max_points_to_insert)->default_value(0),
-        "These number of points from the file are inserted after "
-        "points_to_skip");
+        "The number of points from the file that the program streams over ");
     desc.add_options()("active_window",
                        po::value<uint64_t>(&active_window)->required(),
-                       "Batch build will be called on these set of points");
-    desc.add_options()("consolidate_interval",
-                       po::value<uint64_t>(&consolidate_interval)->required(),
-                       "");
+                       "Program maintains an index over an active window of "
+                       "this size that slides through the data");
+    desc.add_options()(
+        "consolidate_interval",
+        po::value<uint64_t>(&consolidate_interval)->required(),
+        "The program simultaneously adds this number of points to the right of "
+        "the window while deleting the same number from the left");
 
     po::variables_map vm;
     po::store(po::parse_command_line(argc, argv, desc), vm);
