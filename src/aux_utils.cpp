@@ -844,7 +844,7 @@ namespace diskann {
     *(_u64 *) (sector_buf.get() + 0 * sizeof(_u64)) = disk_index_file_size;
     *(_u64 *) (sector_buf.get() + 1 * sizeof(_u64)) = npts_64;
     if(reorder_data){
-      *(_u64 *) (sector_buf.get() + 2 * sizeof(_u64)) = lorder_data[medoid];
+      *(_u64 *) (sector_buf.get() + 2 * sizeof(_u64)) = porder_data[medoid];
     }else{
       *(_u64 *) (sector_buf.get() + 2 * sizeof(_u64)) = medoid;
     }
