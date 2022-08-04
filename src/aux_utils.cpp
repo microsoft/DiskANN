@@ -544,6 +544,314 @@ namespace diskann {
     return 0;
   }
 
+   void load_partial_graph(const std::vector<unsigned>        &nodes,
+                          std::vector<std::vector<unsigned>> &in_graph,
+                          std::vector<std::vector<unsigned>> &final_graph,
+                          const _u64 num_nodes, const std::string &filename) {
+    final_graph.reserve(num_nodes);
+    final_graph.resize(num_nodes);
+    for (unsigned i = 0; i < final_graph.size(); i++) {
+      final_graph[i].resize(0);
+    }
+    std::ifstream in(filename, std::ios::binary);
+    size_t        expected_file_size;
+    unsigned      width, ep;
+    in.read((char *) &expected_file_size, sizeof(_u64));
+    in.read((char *) &width, sizeof(unsigned));
+    in.read((char *) &ep, sizeof(unsigned));
+    diskann::cout << "Loading vamana index " << filename << "..." << std::flush;
+
+    size_t   cc = 0;
+    unsigned nnodes = 0;
+    auto     it = nodes.begin();
+    while (!in.eof() && it != nodes.end()) {
+      unsigned k;
+      unsigned node_id = *it;
+      while (nnodes < node_id) {
+        in.read((char *) &k, sizeof(unsigned));
+        in.seekg(k * sizeof(unsigned), std::ios::cur);
+        nnodes++;
+      }
+      in.read((char *) &k, sizeof(unsigned));
+      if (in.eof())
+        break;
+      cc += k;
+      final_graph[node_id].resize(k);
+      in.read((char *) final_graph[node_id].data(), k * sizeof(unsigned));
+      it++;
+      nnodes++;
+      if (nnodes % 10000000 == 0)
+        diskann::cout << "." << std::flush;
+    }
+    if (nnodes - 1 != nodes[nodes.size() - 1]) {
+      diskann::cout << "ERROR. mismatch in number of points. Graph has "
+                    << nodes[nodes.size() - 1]
+                    << " as the final point and loaded dataset has "
+                    << nnodes - 1 << " as the final point." << std::endl;
+      return;
+    }
+
+    diskann::cout << "..done. Index has " << nodes.size() << " nodes and " << cc
+                  << " out-edges" << std::endl;
+    in_graph.reserve(num_nodes);
+    in_graph.resize(num_nodes);
+    for (unsigned i = 0; i < in_graph.size(); i++) {
+      in_graph[i].resize(0);
+    }
+    for (unsigned i = 0; i < final_graph.size(); i++) {
+      for (unsigned j = 0; j < final_graph[i].size(); j++) {
+        in_graph[final_graph[i][j]].emplace_back(i);
+      }
+    }
+  }
+
+  void partition_packing(
+      unsigned *p_order, const unsigned seed_node, const unsigned omega,
+      std::unordered_set<unsigned> &initial, boost::dynamic_bitset<> &deleted,
+      const std::vector<std::vector<unsigned>> &in_graph,
+      const std::vector<std::vector<unsigned>> &final_graph) {
+    std::unordered_map<unsigned, unsigned> counts;
+    p_order[0] = seed_node;
+
+    for (unsigned i = 1; i < omega; i++) {
+      unsigned ve = p_order[i - 1];
+      for (unsigned j = 0; j < final_graph[ve].size(); j++) {
+        if (deleted[final_graph[ve][j]] == false) {
+          if (counts.find(final_graph[ve][j]) == counts.end()) {
+            counts[final_graph[ve][j]] = 0;
+          }
+          counts[final_graph[ve][j]] += 1;
+        }
+      }
+      for (unsigned j = 0; j < in_graph[ve].size(); j++) {
+        if (deleted[in_graph[ve][j]] == false) {
+          if (counts.find(in_graph[ve][j]) == counts.end()) {
+            counts[in_graph[ve][j]] = 0;
+          }
+          counts[in_graph[ve][j]] += 1;
+        }
+        for (unsigned k = 0; k < final_graph[in_graph[ve][j]].size(); k++) {
+          if (deleted[final_graph[in_graph[ve][j]][k]] == false) {
+            if (counts.find(final_graph[in_graph[ve][j]][k]) == counts.end()) {
+              counts[final_graph[in_graph[ve][j]][k]] = 0;
+            }
+            counts[final_graph[in_graph[ve][j]][k]] += 1;
+          }
+        }
+      }
+
+      bool found = false;
+      while (counts.size() > 0 && initial.size() > 10 * omega) {
+        auto     max_it = counts.begin();
+        unsigned max_val = max_it->second;
+        for (auto itr = counts.begin(); itr != counts.end(); itr++) {
+          if (itr->second > max_val) {
+            max_it = itr;
+            max_val = itr->second;
+          }
+        }
+#pragma omp critical
+        {
+          if (deleted[max_it->first] == false) {
+            deleted[max_it->first] = true;
+            initial.erase(max_it->first);
+            found = true;
+          } else {
+            counts.erase(max_it->first);
+          }
+        }
+        if (found) {
+          p_order[i] = max_it->first;
+          counts.erase(p_order[i]);
+          break;
+        }
+      }
+      while (!found) {
+        for (auto itr = initial.begin(); itr != initial.end(); itr++) {
+          if (deleted[*itr] == false) {
+            p_order[i] = *(itr);
+            break;
+          }
+        }
+#pragma omp critical
+        {
+          if (deleted[p_order[i]] == false) {
+            deleted[p_order[i]] = true;
+            initial.erase(p_order[i]);
+            found = true;
+          }
+        }
+
+        if (found) {
+          counts.erase(p_order[i]);
+          break;
+        }
+      }
+    }
+  }
+
+  void greedy_ordering(const std::string                         filename,
+                       const std::vector<std::vector<unsigned>> &in_graph,
+                       const std::vector<std::vector<unsigned>> &final_graph,
+                       std::vector<unsigned>                    &p_order,
+                       std::unordered_set<unsigned>             &initial,
+                       boost::dynamic_bitset<> &deleted, const _u64 nd,
+                       const unsigned omega, const unsigned threads) {
+#pragma omp parallel for schedule(dynamic, 1) num_threads(threads)
+    for (int32_t i = 0; i < nd / omega; i++) {
+      unsigned seed_node;
+#pragma omp critical
+      {
+        seed_node = *(initial.begin());
+        deleted[seed_node] = true;
+        initial.erase(initial.begin());
+      }
+      partition_packing(p_order.data() + i * omega, seed_node, omega, initial,
+                        deleted, in_graph, final_graph);
+    }
+
+    if (nd % omega != 0) {
+      for (unsigned i = (nd / omega) * omega; i < nd; i++) {
+        p_order[i] = *(initial.begin());
+        initial.erase(initial.begin());
+      }
+    }
+
+    std::ofstream out(filename + "_index_to_id.bin",
+                      std::ios::binary | std::ios::out);
+    out.write((char *) &nd, sizeof(size_t));
+    out.write((char *) p_order.data(), nd * sizeof(unsigned));
+    out.close();
+  }
+
+  void process_partial_graph(const std::vector<unsigned> &nodes,
+                             const unsigned               reorder_id,
+                             const unsigned max_degree, const _u64 nnodes,
+                             const unsigned omega, const unsigned threads,
+                             const std::string &output_vamana) {
+    std::chrono::duration<double> diff;
+    auto                          s = std::chrono::high_resolution_clock::now();
+    std::vector<std::vector<unsigned>> final_graph, in_graph;
+    diskann::load_partial_graph(nodes, in_graph, final_graph, nnodes,
+                                output_vamana);
+    std::vector<unsigned>        p_order(nodes.size());
+    std::unordered_set<unsigned> initial;
+    boost::dynamic_bitset<>      deleted{nnodes, 0};
+    deleted.set();
+    for (unsigned i = 0; i < nodes.size(); i++) {
+      deleted[nodes[i]] = false;
+      initial.insert(nodes[i]);
+    }
+
+    diskann::greedy_ordering(output_vamana + std::to_string(reorder_id),
+                             in_graph, final_graph, p_order, initial, deleted,
+                             nodes.size(), omega, threads);
+    diff = std::chrono::high_resolution_clock::now() - s;
+    diskann::cout << "Reordering Time: " << diff.count() << " seconds..."
+                  << std::endl;
+  }
+
+  void reorder_merged_shards(const std::string &idmaps_prefix,
+                             const std::string &idmaps_suffix,
+                             const _u32 nshards, const unsigned max_degree,
+                             const unsigned omega, const unsigned threads,
+                             _u64 max_shard_elements, const _u64 nnodes,
+                             const std::string &output_vamana) {
+    diskann::cout << "Starting sharded reordering..." << std::endl;
+
+    std::map<_u32, unsigned, std::greater<_u32>> sector_order;
+    for (_u32 shard = 0; shard < nshards; shard++) {
+      uint32_t    npts32;
+      std::string fname = idmaps_prefix + std::to_string(shard) + idmaps_suffix;
+      std::ifstream reader(fname.c_str(), std::ios::binary);
+      reader.read((char *) &npts32, sizeof(uint32_t));
+      sector_order.insert(std::make_pair(npts32, shard));
+    }
+
+    max_shard_elements =
+        std::max(max_shard_elements, (_u64) (sector_order.begin()->first));
+    diskann::cout << "Max Shard Elements: " << max_shard_elements << std::endl;
+    std::vector<unsigned>   idmap, node_ids;
+    boost::dynamic_bitset<> global_reordered{nnodes, 0};
+    _u64                    cur_size = 0;
+    unsigned                reorder_shard_id = 0;
+    for (auto &elem : sector_order) {
+      _u64 unique_count = 0;
+      read_idmap(idmaps_prefix + std::to_string(elem.second) + idmaps_suffix,
+                 idmap);
+      for (auto &x : idmap) {
+        if (global_reordered[x] == false) {
+          unique_count += 1;
+        }
+      }
+      if (cur_size + unique_count <= max_shard_elements) {
+        for (auto &x : idmap) {
+          if (global_reordered[x] == false) {
+            node_ids.push_back(x);
+            global_reordered[x] = true;
+          }
+        }
+        cur_size = node_ids.size();
+      } else {
+        std::sort(node_ids.begin(), node_ids.end());
+        diskann::process_partial_graph(node_ids, reorder_shard_id, max_degree,
+                                       nnodes, omega, threads, output_vamana);
+        node_ids.clear();
+        for (auto &x : idmap) {
+          if (global_reordered[x] == false) {
+            node_ids.push_back(x);
+            global_reordered[x] = true;
+          }
+        }
+        cur_size = node_ids.size();
+        reorder_shard_id += 1;
+      }
+    }
+
+    if (node_ids.size() != 0) {
+      std::sort(node_ids.begin(), node_ids.end());
+      diskann::process_partial_graph(node_ids, reorder_shard_id, max_degree,
+                                     nnodes, omega, threads, output_vamana);
+      reorder_shard_id += 1;
+    }
+
+    std::vector<unsigned> p_order(nnodes), o_order(nnodes);
+    size_t                cur_elements = 0;
+    for (unsigned i = 0; i < reorder_shard_id; i++) {
+      size_t      num_elements;
+      std::string filename =
+          output_vamana + std::to_string(i) + "_index_to_id.bin";
+      std::ifstream reader(filename.c_str(), std::ios::binary);
+      reader.read((char *) &num_elements, sizeof(size_t));
+      reader.read((char *) (p_order.data() + cur_elements),
+                  num_elements * sizeof(unsigned));
+      cur_elements += num_elements;
+      reader.close();
+      std::remove(filename.c_str());
+    }
+
+
+    std::ofstream out(output_vamana + "_index_to_id.bin",
+                      std::ios::binary | std::ios::out);
+    out.write((char *) &nnodes, sizeof(size_t));
+    out.write((char *) p_order.data(), nnodes * sizeof(unsigned));
+    out.close();
+
+    for (unsigned i = 0; i < nnodes; i++) {
+      o_order[p_order[i]] = i;
+    }
+
+    std::ofstream outer(output_vamana + "_id_to_index.bin",
+                        std::ios::binary | std::ios::out);
+    outer.write((char *) &nnodes, sizeof(size_t));
+    outer.write((char *) o_order.data(), nnodes * sizeof(unsigned));
+    outer.close();
+
+    diskann::cout << "Finished sharded reordering..." << std::endl;
+  }
+
+
+
   template<typename T>
   int build_merged_vamana_index(std::string     base_file,
                                 diskann::Metric compareMetric, unsigned L,
@@ -553,6 +861,11 @@ namespace diskann {
                                 std::string centroids_file) {
     size_t base_num, base_dim;
     diskann::get_bin_metadata(base_file, base_num, base_dim);
+
+    unsigned omega =
+        SECTOR_LEN / (((R + 1) * sizeof(unsigned)) + (base_dim * sizeof(T)));
+    diskann::cout << "Omega: " << omega << std::endl;
+
 
     double full_index_ram =
         estimate_ram_usage(base_num, base_dim, sizeof(T), R);
@@ -583,6 +896,10 @@ namespace diskann {
     int         num_parts =
         partition_with_ram_budget<T>(base_file, sampling_rate, ram_budget,
                                      2 * R / 3, merged_index_prefix, 2);
+
+    _u64 max_shard_elements = (_u64) (ram_budget * 1024 * 1024 * 1024) /
+                              ((R + 30) * 2 * sizeof(unsigned));
+    max_shard_elements = std::min(max_shard_elements, base_num);
 
     std::string cur_centroid_filepath = merged_index_prefix + "_centroids.bin";
     std::rename(cur_centroid_filepath.c_str(), centroids_file.c_str());
@@ -623,6 +940,11 @@ namespace diskann {
     diskann::merge_shards(merged_index_prefix + "_subshard-", "_mem.index",
                           merged_index_prefix + "_subshard-", "_ids_uint32.bin",
                           num_parts, R, mem_index_path, medoids_file);
+
+    _u32 threads = omp_get_max_threads();
+    diskann::reorder_merged_shards(
+        merged_index_prefix + "_subshard-", "_ids_uint32.bin", num_parts, R,
+        omega, threads, max_shard_elements, base_num, mem_index_path);
 
     // delete tempFiles
     for (int p = 0; p < num_parts; p++) {

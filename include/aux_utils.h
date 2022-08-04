@@ -12,6 +12,9 @@
 #include <memory>
 #include <random>
 #include <set>
+#include <unordered_set>
+#include <boost/dynamic_bitset.hpp>
+
 #ifdef __APPLE__
 #else
 #include <malloc.h>
@@ -95,6 +98,38 @@ namespace diskann {
   DISKANN_DLLEXPORT std::string preprocess_base_file(
       const std::string &infile, const std::string &indexPrefix,
       diskann::Metric &distMetric);
+
+  DISKANN_DLLEXPORT void load_partial_graph(
+      const std::vector<unsigned>        &nodes,
+      std::vector<std::vector<unsigned>> &in_graph,
+      std::vector<std::vector<unsigned>> &final_graph, const _u64 num_nodes,
+      const std::string &filename);
+
+  DISKANN_DLLEXPORT void partition_packing(
+      unsigned *p_order, const unsigned seed_node, const unsigned omega,
+      std::unordered_set<unsigned> &initial, boost::dynamic_bitset<> &deleted,
+      const std::vector<std::vector<unsigned>> &in_graph,
+      const std::vector<std::vector<unsigned>> &final_graph);
+
+  DISKANN_DLLEXPORT void greedy_ordering(
+      const std::string                         filename,
+      const std::vector<std::vector<unsigned>> &in_graph,
+      const std::vector<std::vector<unsigned>> &final_graph,
+      std::vector<unsigned> &p_order, std::unordered_set<unsigned> &initial,
+      boost::dynamic_bitset<> &deleted, const _u64 nd, const unsigned omega,
+      const unsigned threads);
+
+  DISKANN_DLLEXPORT void process_partial_graph(
+      const std::vector<unsigned> &nodes, const unsigned reorder_id,
+      const unsigned max_degree, const _u64 nnodes, const unsigned omega,
+      const unsigned threads, const std::string &output_vamana);
+
+  DISKANN_DLLEXPORT void reorder_merged_shards(
+      const std::string &idmaps_prefix, const std::string &idmaps_suffix,
+      const _u32 nshards, const unsigned max_degree, const unsigned omega,
+      const unsigned threads, _u64 max_shard_elements, const _u64 nnodes,
+      const std::string &output_vamana);
+
 
   template<typename T>
   DISKANN_DLLEXPORT int build_merged_vamana_index(
