@@ -43,7 +43,7 @@ int build_in_memory_index(const diskann::Metric& metric,
 
   diskann::Index<T, TagT> index(metric, data_dim, data_num, false, false);
   auto                    s = std::chrono::high_resolution_clock::now();
-  if (label_file != "") {
+  if (label_file == "") {
     index.build(data_path.c_str(), data_num, paras);
   } else {
     if (universal_label != "") {
