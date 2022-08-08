@@ -136,7 +136,7 @@ namespace diskann {
       std::string base_file, diskann::Metric _compareMetric, unsigned L,
       unsigned R, double sampling_rate, double ram_budget,
       std::string mem_index_path, std::string medoids_file,
-      std::string centroids_file);
+      std::string centroids_file, bool use_sector_reordering);
 
   template<typename T>
   DISKANN_DLLEXPORT uint32_t optimize_beamwidth(
@@ -148,12 +148,15 @@ namespace diskann {
   DISKANN_DLLEXPORT int build_disk_index(const char *    dataFilePath,
                                           const char *    indexFilePath,
                                           const char *    indexBuildParameters,
-                                          diskann::Metric _compareMetric);
+                                          diskann::Metric _compareMetric, const bool use_sector_reordering = false);
 
-  template<typename T>
-  DISKANN_DLLEXPORT void create_disk_layout(const std::string base_file,
-                                            const std::string mem_index_file,
-                                            const std::string output_file,
-                                            const std::string reorder_data_file = std::string(""));
+    template<typename T>
+  DISKANN_DLLEXPORT void create_disk_layout(
+      const std::string base_file, const std::string mem_index_file,
+      const std::string output_file, bool reorder_sector_layout = false,
+      const std::string lorder_file = "", const std::string porder_file = "",
+      bool              rerank_disk_pq = false,
+      const std::string float_data_file_for_reranking =
+          "");  // rerank file data must be floating point
 
 }  // namespace diskann
