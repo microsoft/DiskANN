@@ -13,6 +13,7 @@
 #include <unordered_map>
 #include "tsl/robin_set.h"
 #include "tsl/robin_map.h"
+#include "tsl/sparse_map.h"
 
 #include "boost_dynamic_bitset_fwd.h"
 #include "distance.h"
@@ -406,7 +407,7 @@ namespace diskann {
     ConcurrentQueue<InMemQueryScratch<T>> _query_scratch;
 
     // data structures, flags and locks for dynamic indexing
-    std::unordered_map<TagT, unsigned> _tag_to_location;
+    tsl::sparse_map<TagT, unsigned> _tag_to_location;
     std::unordered_map<unsigned, TagT> _location_to_tag;
 
     tsl::robin_set<unsigned>     _delete_set;
