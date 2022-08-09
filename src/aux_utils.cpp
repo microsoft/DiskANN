@@ -697,10 +697,10 @@ namespace diskann {
                        std::unordered_set<unsigned>             &initial,
                        boost::dynamic_bitset<> &deleted, const _u64 nd,
                        const unsigned omega, const unsigned threads) {
-#pragma omp parallel for schedule(dynamic, 1) num_threads(threads)
-    for (int32_t i = 0; i < nd / omega; i++) {
-      unsigned seed_node;
-#pragma omp critical
+      #pragma omp parallel for schedule(dynamic, 1) num_threads(threads)
+          for (int32_t i = 0; i < nd / omega; i++) {
+            unsigned seed_node;
+      #pragma omp critical
       {
         seed_node = *(initial.begin());
         deleted[seed_node] = true;
@@ -850,6 +850,58 @@ namespace diskann {
     diskann::cout << "Finished sharded reordering..." << std::endl;
   }
 
+  void reorder_compressed_pq_vectors(const std::string disk_pq_compressed_vectors_path,
+                           const std::string lorder_file, const bool reorder_sector_layout, 
+                           const std::string reordered_disk_pq_compressed_vectors_path) {
+    if(reorder_sector_layout == false)
+      return;
+    
+    std::ifstream compressed_file_reader(disk_pq_compressed_vectors_path, std::ios::binary);
+    unsigned num_points;
+    _u32  num_pq_chunks_u32;
+    _u64  write_blk_size = 64 * 1024 * 1024;
+    compressed_file_reader.read((char *) &num_points, sizeof(uint32_t));
+    compressed_file_reader.read((char *) &num_pq_chunks_u32, sizeof(uint32_t));
+
+    _u64 npts_lorder, ndims_lorder;
+    std::unique_ptr<_u32[]> lorder_data;
+    
+    try {
+      diskann::load_bin<uint32_t>(lorder_file, lorder_data, npts_lorder, ndims_lorder);        
+    } catch (std::system_error &e) {
+      diskann::cout << "Error in Opening file\ncls";
+      throw FileException(lorder_file, e, __FUNCSIG__, __FILE__,
+                          __LINE__);
+    }
+    if (npts_lorder != num_points){
+        throw diskann::ANNException(
+            "Mismatch in number of points between reordered data file and compressed vector file",
+            -1, __FUNCSIG__, __FILE__, __LINE__);
+    }
+    
+    cached_ofstream reordered_compressed_file_writer(reordered_disk_pq_compressed_vectors_path, write_blk_size);
+    std::unique_ptr<uint8_t[]> curr_vector = 
+                    std::make_unique<uint8_t[]>(num_pq_chunks_u32);
+    std::unique_ptr<char[]> reordered_compressed_base =
+                   std::make_unique<char[]>(num_points * num_pq_chunks_u32 + 2 * sizeof(uint32_t));
+    diskann::cout << "Reordering the compressed vector" << std::endl;
+    _u64 original_location_if_reordering;
+    *(_u32 *) (reordered_compressed_base.get()) = num_points;
+    *(_u32 *) (reordered_compressed_base.get() + sizeof(_u32)) = num_pq_chunks_u32;
+    for (_u64 curr_node_id = 0; curr_node_id < (_u64)num_points; curr_node_id++) {
+      original_location_if_reordering = lorder_data[curr_node_id];
+      compressed_file_reader.seekg(original_location_if_reordering * num_pq_chunks_u32 * sizeof(uint8_t) 
+                                  + 2 * sizeof(_u32),  std::ios::beg);
+      compressed_file_reader.read((char *) curr_vector.get(), sizeof(uint8_t) * num_pq_chunks_u32);
+            
+        // copy curr_vector into reordered_compressed_base
+      memcpy((char *)(reordered_compressed_base.get() + 2 * sizeof(_u32) +
+                     (curr_node_id * num_pq_chunks_u32)), curr_vector.get(), num_pq_chunks_u32 * sizeof(uint8_t));
+    }
+    reordered_compressed_file_writer.write(reordered_compressed_base.get(), 
+                                            2 * sizeof(_u32) + num_points * num_pq_chunks_u32 * sizeof(uint8_t));
+    diskann::cout << "Written Reordered compressed vector" << std::endl;
+  }
 
 
   template<typename T>
@@ -886,7 +938,7 @@ namespace diskann {
           std::unique_ptr<diskann::Index<T>>(new diskann::Index<T>(
               compareMetric, base_dim, base_num, false, false));
       _pvamanaIndex->build(base_file.c_str(), base_num, paras);
-
+      _pvamanaIndex->sector_reordering(mem_index_path.c_str(), omega, omp_get_max_threads());
       _pvamanaIndex->save(mem_index_path.c_str());
       std::remove(medoids_file.c_str());
       std::remove(centroids_file.c_str());
@@ -1495,23 +1547,26 @@ namespace diskann {
     delete[] train_data;
 
     train_data = nullptr;
-// Gopal. Splitting diskann_dll into separate DLLs for search and build.
-// This code should only be available in the "build" DLL.
-#if defined(RELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS) && defined(DISKANN_BUILD)
-    MallocExtension::instance()->ReleaseFreeMemory();
-#endif
+    // Gopal. Splitting diskann_dll into separate DLLs for search and build.
+    // This code should only be available in the "build" DLL.
+    #if defined(RELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS) && defined(DISKANN_BUILD)
+        MallocExtension::instance()->ReleaseFreeMemory();
+    #endif
 
     diskann::build_merged_vamana_index<T>(
         data_file_to_use.c_str(), diskann::Metric::L2, L, R, p_val,
         indexing_ram_budget, mem_index_path, medoids_path, centroids_path, use_sector_reordering);
 
-
-    if (use_sector_reordering) {
-      //      reorder_pq_vectors;
-    }
     std::string reordering_location_to_id_file = mem_index_path + "_index_to_id.bin";
     std::string reordering_id_to_location_file = mem_index_path + "_id_to_index.bin";
-
+    std::string reordered_disk_pq_compressed_vectors_path = 
+        index_prefix_path + "_disk.reodered_index_pq_compressed.bin";
+    
+    //      reorder compressed pq vectors;
+    if(use_sector_reordering){
+    diskann::reorder_compressed_pq_vectors(disk_pq_compressed_vectors_path, reordering_location_to_id_file,
+                                              use_sector_reordering, reordered_disk_pq_compressed_vectors_path);
+    }
     if (!use_disk_pq) {
       diskann::create_disk_layout<T>(data_file_to_use.c_str(), mem_index_path,
                                      disk_index_path, use_sector_reordering, reordering_location_to_id_file, reordering_id_to_location_file);

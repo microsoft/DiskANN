@@ -2057,7 +2057,7 @@ void Index<T, TagT>::partition_packing(
       }
     }
 
-    std::ofstream out(filename + "_loc_to_id.bin",
+    std::ofstream out(filename + "_index_to_id.bin",
                       std::ios::binary | std::ios::out);
     _u32 nr = _nd;
     _u32 nd = 1;
@@ -2070,7 +2070,7 @@ void Index<T, TagT>::partition_packing(
       o_order[p_order[i]] = i;
     }
 
-    std::ofstream outer(filename + "_id_to_loc.bin",
+    std::ofstream outer(filename + "_id_to_index.bin",
                         std::ios::binary | std::ios::out);
     outer.write((char *) &nr, sizeof(_u32));
     outer.write((char *) &nd, sizeof(_u32));    
