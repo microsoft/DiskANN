@@ -499,7 +499,7 @@ namespace diskann {
       TagT tag = *(tag_data + i);
       if (_delete_set.find(i) == _delete_set.end()) {
         _location_to_tag[i] = tag;
-        _tag_to_location[tag] = (_u32) i;
+        _tag_to_location[tag] = i;
       }
     }
     diskann::cout << "Tags loaded." << std::endl;
@@ -1622,7 +1622,8 @@ namespace diskann {
     }
     if (_enable_tags) {
       for (size_t i = 0; i < tags.size(); ++i) {
-        _tag_to_location[tags[i]] = (unsigned) i;
+        auto tag_iter = _tag_to_location.find(tags[i]);
+        tag_iter.value() = (unsigned) i;
         _location_to_tag[(unsigned) i] = tags[i];
       }
     }
