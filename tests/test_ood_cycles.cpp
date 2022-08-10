@@ -273,7 +273,7 @@ void test_batch_deletes(const std::string& data_path, const unsigned L,
 
   std::cout << "Inserted points in " << seconds << " seconds" << std::endl;
 
-  index.marked_graph_stats();
+  index.stitched_graph_stats();
 
   index.save(save_path.c_str());
   std::cout << std::endl;
@@ -313,12 +313,12 @@ void test_batch_deletes(const std::string& data_path, const unsigned L,
     std::random_shuffle(indices.begin(), indices.end());
 
     int points_seen = 0;
-    for (int j = 0; j < parts/2; j++) {
+    for (int j = 0; j < 5; j++) {
       if (j == parts - 1)
         points_in_part = num_points - points_seen;
       else
         points_in_part = num_points / parts;
-
+        
       // DELETIONS
       std::cout << "Deleting " << points_in_part
                 << " points from the index..." << std::endl;
@@ -339,7 +339,8 @@ void test_batch_deletes(const std::string& data_path, const unsigned L,
 
       delete_times.push_back(elapsedSeconds);
 
-
+      index.graph_stats();
+      index.stitched_graph_stats();
       // RE-INSERTIONS
       std::cout << "Re-inserting the same " << points_in_part
                 << " points from the index..." << std::endl;
@@ -348,7 +349,7 @@ void test_batch_deletes(const std::string& data_path, const unsigned L,
       for (int64_t k = points_seen;
            k < (int64_t) points_seen + points_in_part; k++) {
         index.insert_point(&data_load[indices[k] * aligned_dim],
-                                static_cast<TagT>(indices[k]));
+                                static_cast<TagT>(indices[k]), true);
       }
       elapsedSeconds = insert_timer.elapsed() / 1000000.0;
 
@@ -357,7 +358,9 @@ void test_batch_deletes(const std::string& data_path, const unsigned L,
       std::cout << std::endl;
 
       insert_times.push_back(elapsedSeconds);
-      index.marked_graph_stats();
+
+      index.graph_stats();
+      index.stitched_graph_stats();
 
       points_seen += points_in_part;
       index.save(save_path.c_str());

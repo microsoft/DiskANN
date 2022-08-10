@@ -87,35 +87,56 @@ void build_with_query_data(const std::string& data_path, const unsigned L,
 
   diskann::Timer index_timer;
 
-  std::vector<double> search_times(num_points - num_initial_points, 0.0);
-  std::vector<double> update_times(num_points - num_initial_points, 0.0);
-  std::vector<double> stitch_times(num_points - num_initial_points, 0.0);
+//   int parts = 10;
+//   size_t m = num_points/parts;
+
+// for(int i=0; i<parts; i++){
+//   int64_t start;
+//   int64_t end;
+//   if(i==0){
+//     start = num_initial_points;
+//     end = m;
+//   }else{
+//     start = i*m;
+//     end = i*m+m;
+//   }
+//   std::cout << "Starting round " << i << " of insertions" << std::endl;
+//   // std::cout << "Inserting points " << start << " through " << end << std::endl; 
+// #pragma omp parallel for num_threads(thread_count) schedule(dynamic)
+//   for (int64_t j = start; j < end; j++) {
+//     index.insert_point(&data_load[j * aligned_dim], static_cast<TagT>(j));
+//   }
+//   index.graph_stats();
+//   index.marked_graph_stats();
+// }
 
 #pragma omp parallel for num_threads(thread_count) schedule(dynamic)
   for (int64_t j = num_initial_points; j < (int64_t) num_points; j++) {
     index.insert_point(&data_load[j * aligned_dim], static_cast<TagT>(j));
   }
 
-  // index.cleanup();
+  index.graph_stats();
 
-  // index.query_nn_stats();
-
-  index.marked_graph_stats();
+  index.stitched_graph_stats();
 
   double seconds = index_timer.elapsed() / 1000000.0;
 
   std::cout << "Inserted points in " << seconds << " seconds" << std::endl;
 
-    // std::vector<int64_t> indices(num_points);
-    // std::iota(indices.begin(), indices.end(), 0);
-    // std::random_shuffle(indices.begin(), indices.end()); 
+  index.save(save_path.c_str());
+
+//     int64_t start = num_points - num_points/20 - 1;
+//     int64_t end = num_points;
+//     // std::vector<int64_t> indices(num_points/20);
+//     // std::iota(indices.begin(), indices.end(), num_points - num_points/20-1);
+//     // std::random_shuffle(indices.begin(), indices.end()); 
 
 //   std::cout << "Deleting " << 10000
 //                   << " points from the index..." << std::endl;
 //         index.enable_delete();
 //         tsl::robin_set<TagT> deletes;
-//         for (int k = 0; k < 10000; k++) {
-//           deletes.insert(static_cast<TagT>(indices[k]));
+//         for (int64_t k = start; k < end; k++) {
+//           deletes.insert(static_cast<TagT>(k));
 //         }
 //         std::vector<TagT> failed_deletes;
 //         index.lazy_delete(deletes, failed_deletes);
@@ -127,15 +148,18 @@ void build_with_query_data(const std::string& data_path, const unsigned L,
 //         std::cout << "Deleted " << 10000 << " points in "
 //                   << elapsedSeconds << " seconds" << std::endl;
 
+//         index.graph_stats();
+//         index.marked_graph_stats();
+
 //         // RE-INSERTIONS
 //         std::cout << "Re-inserting the same " << 10000
 //                   << " points from the index..." << std::endl;
 //         diskann::Timer insert_timer;
 // #pragma omp parallel for num_threads(thread_count) schedule(dynamic)
-//         for (int64_t k = 0;
-//              k < (int64_t) 10000; k++) {
-//           index.insert_point(&data_load[indices[k] * aligned_dim],
-//                                   static_cast<TagT>(indices[k]));
+//         for (int64_t k = start;
+//              k < (int64_t) end; k++) {
+//           index.insert_point(&data_load[k * aligned_dim],
+//                                   static_cast<TagT>(k));
 //         }
 //         elapsedSeconds = insert_timer.elapsed() / 1000000.0;
 
@@ -143,10 +167,11 @@ void build_with_query_data(const std::string& data_path, const unsigned L,
 //                   << elapsedSeconds << " seconds" << std::endl;
 //         std::cout << std::endl;
 
+//         index.graph_stats();
+//         index.marked_graph_stats();
+//   auto new_save = save_path + ".inc";
 
-
-
-  index.save(save_path.c_str());
+//   index.save(new_save.c_str());
 }
 
 int main(int argc, char** argv) {

@@ -188,7 +188,7 @@ namespace diskann {
     DISKANN_DLLEXPORT void clear_index();
 
     // Will fail if tag already in the index
-    int insert_point(const T *point, const TagT tag);
+    int insert_point(const T *point, const TagT tag, bool for_test = true);
 
     // call this before issuing deleteions to sets relevant flags
     DISKANN_DLLEXPORT int enable_delete();
@@ -244,7 +244,8 @@ namespace diskann {
 
     DISKANN_DLLEXPORT void print_status() const;
     DISKANN_DLLEXPORT void query_nn_stats();
-    DISKANN_DLLEXPORT void marked_graph_stats();
+    DISKANN_DLLEXPORT void stitched_graph_stats();
+    DISKANN_DLLEXPORT void graph_stats();
 
 
     // This variable MUST be updated if the number of entries in the metadata
@@ -382,17 +383,10 @@ namespace diskann {
                        const int version);
 
     void populate_query_nn();
-    void update_marked_graph();
-    void delete_from_marked_graph(tsl::robin_set<unsigned> &delete_set);
+    void delete_from_stitched_graph(tsl::robin_set<unsigned> &delete_set);
     void robust_stitch(); 
-    void robust_stitch(tsl::robin_set<unsigned> &pruned_nodes); 
-
-    void delete_stitched_edges(unsigned location, unsigned query);
-    void delete_marked_edges();
-    bool is_marked(unsigned location, unsigned nbh);
     void insert_and_stitch(unsigned location);
     void delete_and_restitch(tsl::robin_set<unsigned> &delete_set);
-    void delete_and_stitch(tsl::robin_set<unsigned> &delete_set);
 
 
     // WARNING: Do not call reserve_location() without acquiring change_lock_
@@ -439,7 +433,7 @@ namespace diskann {
     // Query graph data structures
     T *                                _query_data = nullptr;
     std::vector<std::vector<unsigned>> _query_graph;
-    std::vector<std::unordered_map<unsigned, std::vector<unsigned>>> _marked_graph; 
+    std::vector<std::vector<unsigned>> _stitched_graph; 
     // std::vector<int> _stitch_count;
     std::vector<std::vector<Neighbor>> _query_nn;     
 
