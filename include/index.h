@@ -16,6 +16,7 @@
 
 #include "boost_dynamic_bitset_fwd.h"
 #include "distance.h"
+#include "locking.h"
 #include "natural_number_set.h"
 #include "neighbor.h"
 #include "parameters.h"
@@ -33,7 +34,7 @@ namespace diskann {
     double size_of_data = ((double) size) * ROUND_UP(dim, 8) * datasize;
     double size_of_graph =
         ((double) size) * degree * sizeof(unsigned) * GRAPH_SLACK_FACTOR;
-    double size_of_locks = ((double) size) * sizeof(std::mutex);
+    double size_of_locks = ((double) size) * sizeof(non_recursive_mutex);
     double size_of_outer_vector = ((double) size) * sizeof(ptrdiff_t);
 
     return OVERHEAD_FACTOR * (size_of_data + size_of_graph + size_of_locks +
@@ -421,8 +422,8 @@ namespace diskann {
     bool _is_saved = false;  // Gopal. Checking if the index is already saved.
     bool _conc_consolidate = false;  // use _lock while searching
 
-    std::vector<std::mutex> _locks;  // Per node lock, cardinality=max_points_
-    std::vector<std::mutex> _locks_in;  // Per node lock
+    std::vector<non_recursive_mutex> _locks;  // Per node lock, cardinality=max_points_
+    std::vector<non_recursive_mutex> _locks_in;  // Per node lock
 
     // If acquiring multiple locks below, acquire locks in the order below
     std::shared_timed_mutex  // RW mutex between save/load (exclusive lock) and

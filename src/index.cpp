@@ -43,7 +43,6 @@
 #define MAX_POINTS_FOR_USING_BITSET 10000000
 
 namespace diskann {
-
   template<typename T>
   inline T diskann_max(T left, T right) {
     return left > right ? left : right;
@@ -273,10 +272,10 @@ namespace diskann {
       this->_distance = get_distance_function<T>(m);
     }
 
-    _locks = std::vector<std::mutex>(_max_points + _num_frozen_pts);
+    _locks = std::vector<non_recursive_mutex>(_max_points + _num_frozen_pts);
 
     if (_support_eager_delete)
-      _locks_in = std::vector<std::mutex>(_max_points + _num_frozen_pts);
+      _locks_in = std::vector<non_recursive_mutex>(_max_points + _num_frozen_pts);
   }
 
   template<typename T, typename TagT>
@@ -2273,7 +2272,7 @@ namespace diskann {
       if (old_delete_set.find((_u32) loc) == old_delete_set.end() &&
           not _empty_slots.is_in_set((_u32) loc)) {
         if (_conc_consolidate) {
-          std::unique_lock<std::mutex> adj_list_lock(_locks[loc]);
+          LockGuard adj_list_lock(_locks[loc]);
           process_delete(old_delete_set, loc, range, maxc, alpha);
         } else {
           process_delete(old_delete_set, loc, range, maxc, alpha);
@@ -2282,7 +2281,7 @@ namespace diskann {
     }
     for (_s64 loc = _max_points; loc < (_s64) (_max_points + _num_frozen_pts);
          loc++) {
-      std::unique_lock<std::mutex> adj_list_lock(_locks[loc]);
+      LockGuard adj_list_lock(_locks[loc]);
       process_delete(old_delete_set, loc, range, maxc, alpha);
     }
     if (_support_eager_delete)
@@ -2582,10 +2581,10 @@ namespace diskann {
                     8 * sizeof(T));
 #endif
     _final_graph.resize(new_max_points + 1);
-    _locks = std::vector<std::mutex>(new_max_points + 1);
+    _locks = std::vector<non_recursive_mutex>(new_max_points + 1);
     if (_support_eager_delete) {
       _in_graph.resize(new_max_points + 1);
-      _locks_in = std::vector<std::mutex>(new_max_points + 1);
+      _locks_in = std::vector<non_recursive_mutex>(new_max_points + 1);
     }
 
     reposition_point((_u32) _max_points, (_u32) new_max_points);
