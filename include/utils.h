@@ -460,7 +460,7 @@ namespace diskann {
       dists = new float[npts * dim];
       reader.read((char*) dists, npts * dim * sizeof(float));
     }
-    float min_dist = std::numeric_limits<float>::max();
+    float min_dist = (std::numeric_limits<float>::max)();
     float max_dist = 0;
     groundtruth.resize(npts);
     for (_u32 i = 0; i < npts; i++) {

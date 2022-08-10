@@ -1,0 +1,273 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" ToolsVersion="16.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <Import Project="$(EnvironmentConfig)" Condition="Exists('$(EnvironmentConfig)')" />
+  <PropertyGroup>
+    <PreferredToolArchitecture>x64</PreferredToolArchitecture>
+  </PropertyGroup>
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{F01DB9F2-493A-38CF-9138-9CBC98CCAB2E}</ProjectGuid>
+    <Keyword>Win32Proj</Keyword>
+    <Platform>x64</Platform>
+    <ProjectName>diskann</ProjectName>
+    <VCProjectUpgraderObjectName>NoUpgrade</VCProjectUpgraderObjectName>
+  </PropertyGroup>
+  <Import Project="$(ExtendedTargetsPath)\Microsoft.Cpp.Default.props" Condition="exists('$(ExtendedTargetsPath)\Microsoft.Cpp.Default.props')" />
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" Condition="!exists('$(ExtendedTargetsPath)\Microsoft.Cpp.Default.props')" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+    <ConfigurationType>DynamicLibrary</ConfigurationType>
+    <CharacterSet>MultiByte</CharacterSet>
+    <PlatformToolset>v142</PlatformToolset>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>DynamicLibrary</ConfigurationType>
+    <CharacterSet>MultiByte</CharacterSet>
+    <PlatformToolset>v142</PlatformToolset>
+  </PropertyGroup>
+  <PropertyGroup>
+    <BoostLibraryPath>$(PackagesRoot)\Boost.Library</BoostLibraryPath>
+    <BoostLibraryPath Condition="Exists('..\build\packages\boost')">..\build\packages\boost</BoostLibraryPath>
+  </PropertyGroup>
+  <PropertyGroup>
+    <MKLLibraryPath>$(Pkgintelmkl_static_win_x64)\lib\native</MKLLibraryPath>
+    <MKLLibraryPath Condition="Exists('..\build\packages\intelmkl.static.win-x64\lib\native')">..\build\packages\intelmkl.static.win-x64\lib\native</MKLLibraryPath>
+  </PropertyGroup>
+  <PropertyGroup>
+    <IntelOpenMP>$(Pkgintelopenmp_devel_win)\lib\native</IntelOpenMP>
+    <IntelOpenMP Condition="Exists('..\build\packages\intelopenmp.devel.win\lib\native')">..\build\packages\intelopenmp.devel.win\lib\native</IntelOpenMP>
+  </PropertyGroup>
+  <Import Project="$(ExtendedTargetsPath)\Microsoft.Cpp.props" Condition="exists('$(ExtendedTargetsPath)\Microsoft.Cpp.props')" />
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" Condition="!exists('$(ExtendedTargetsPath)\Microsoft.Cpp.props')" />
+  <Import Project="$(PackagesRoot)\Boost.Library\exports.props" Condition="exists('$(PackagesRoot)\Boost.Library\exports.props')" />
+  <ImportGroup Label="ExtensionSettings">
+  </ImportGroup>
+<!--  <ImportGroup Label="PropertySheets">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup> -->
+  <PropertyGroup Label="UserMacros" />
+  <PropertyGroup>
+    <TargetName Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">diskann</TargetName>
+    <TargetExt Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">.dll</TargetExt>
+    <LinkIncremental Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</LinkIncremental>
+    <GenerateManifest Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</GenerateManifest>
+    <TargetName Condition="'$(Configuration)|$(Platform)'=='Release|x64'">diskann</TargetName>
+    <TargetExt Condition="'$(Configuration)|$(Platform)'=='Release|x64'">.dll</TargetExt>
+    <LinkIncremental Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</LinkIncremental>
+    <GenerateManifest Condition="'$(Configuration)|$(Platform)'=='Release|x64'">true</GenerateManifest>
+  </PropertyGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <ClCompile>
+      <AdditionalIncludeDirectories>
+        $(IntelOpenMP)\include;
+        ..\include;
+        $(BoostLibraryPath)\lib\native\include;
+        $(MKLLibraryPath)\include;
+        %(AdditionalIncludeDirectories)
+      </AdditionalIncludeDirectories>
+      <AdditionalOptions>%(AdditionalOptions) /openmp:experimental /Zc:twoPhase-</AdditionalOptions>
+      <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
+      <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
+      <BufferSecurityCheck>false</BufferSecurityCheck>
+      <CallingConvention>Cdecl</CallingConvention>
+      <ConformanceMode>true</ConformanceMode>
+      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+      <EnableEnhancedInstructionSet>AdvancedVectorExtensions2</EnableEnhancedInstructionSet>
+      <ExceptionHandling>Sync</ExceptionHandling>
+      <FavorSizeOrSpeed>Speed</FavorSizeOrSpeed>
+      <FloatingPointExceptions>false</FloatingPointExceptions>
+      <FloatingPointModel>Fast</FloatingPointModel>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <InlineFunctionExpansion>Disabled</InlineFunctionExpansion>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
+      <OmitFramePointers>true</OmitFramePointers>
+      <Optimization>Disabled</Optimization>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <RemoveUnreferencedCodeData>true</RemoveUnreferencedCodeData>
+      <RuntimeTypeInfo>true</RuntimeTypeInfo>
+      <SuppressStartupBanner>true</SuppressStartupBanner>
+      <TreatWarningAsError>false</TreatWarningAsError>
+      <DisableSpecificWarnings>4244;4267;%(DisableSpecificWarnings)</DisableSpecificWarnings>
+      <UseFullPaths>true</UseFullPaths>
+      <WarningLevel>Level3</WarningLevel>
+      <WholeProgramOptimization>true</WholeProgramOptimization>
+      <PreprocessorDefinitions>WIN32;_WINDOWS;_USRDLL;_WINDLL;MKL_ILP64;USE_AVX2;USE_ACCELERATED_PQ;NOMINMAX;UNICODE;diskann_EXPORTS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ObjectFileName>$(IntDir)</ObjectFileName>
+    </ClCompile>
+    <ResourceCompile>
+      <PreprocessorDefinitions>WIN32;_DEBUG;_WINDOWS;_USRDLL;_WINDLL;MKL_ILP64;USE_AVX2;USE_ACCELERATED_PQ;NOMINMAX;UNICODE;diskann_EXPORTS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>
+        $(IntelOpenMP)\include;
+        ..\include;
+        $(BoostLibraryPath)\lib\native\include;
+        $(MKLLibraryPath)\include;
+        %(AdditionalIncludeDirectories)
+      </AdditionalIncludeDirectories>
+    </ResourceCompile>
+    <Midl>
+      <AdditionalIncludeDirectories>
+        $(IntelOpenMP)\include;
+        ..\include;
+        $(BoostLibraryPath)\lib\native\include;
+        $(MKLLibraryPath)\include;
+        %(AdditionalIncludeDirectories)
+      </AdditionalIncludeDirectories>
+      <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
+      <HeaderFileName>%(Filename).h</HeaderFileName>
+      <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
+      <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
+      <ProxyFileName>%(Filename)_p.c</ProxyFileName>
+    </Midl>
+    <Link>
+      <AdditionalDependencies>
+        $(IntelOpenMP)\win-x64\libiomp5md.lib;
+        $(MKLLibraryPath)\win-x64\mkl_intel_ilp64.lib;
+        $(MKLLibraryPath)\win-x64\mkl_core.lib;
+        $(MKLLibraryPath)\win-x64\mkl_intel_thread.lib;
+        kernel32.lib;
+        user32.lib;
+        gdi32.lib;
+        winspool.lib;
+        shell32.lib;
+        ole32.lib;
+        oleaut32.lib;
+        uuid.lib;
+        comdlg32.lib;
+        advapi32.lib;
+      </AdditionalDependencies>
+      <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
+      <EnableCOMDATFolding>true</EnableCOMDATFolding>
+      <GenerateDebugInformation>DebugFull</GenerateDebugInformation>
+      <IgnoreSpecificDefaultLibraries>VCOMP.LIB;VCOMPD.LIB;%(IgnoreSpecificDefaultLibraries)</IgnoreSpecificDefaultLibraries>
+      <LinkDLL>true</LinkDLL>
+      <LinkTimeCodeGeneration>UseLinkTimeCodeGeneration</LinkTimeCodeGeneration>
+      <OptimizeReferences>true</OptimizeReferences>
+      <SubSystem>Console</SubSystem>
+    </Link>
+    <ProjectReference>
+      <LinkLibraryDependencies>false</LinkLibraryDependencies>
+    </ProjectReference>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <ClCompile>
+      <AdditionalIncludeDirectories>
+        $(IntelOpenMP)\include;
+        ..\include;
+        $(BoostLibraryPath)\lib\native\include;
+        $(MKLLibraryPath)\include;
+        %(AdditionalIncludeDirectories)
+      </AdditionalIncludeDirectories>
+      <AdditionalOptions>%(AdditionalOptions) /openmp:experimental /Zc:twoPhase-</AdditionalOptions>
+      <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
+      <BufferSecurityCheck>false</BufferSecurityCheck>
+      <CallingConvention>Cdecl</CallingConvention>
+      <ConformanceMode>true</ConformanceMode>
+      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+      <EnableEnhancedInstructionSet>AdvancedVectorExtensions2</EnableEnhancedInstructionSet>
+      <ExceptionHandling>Sync</ExceptionHandling>
+      <FavorSizeOrSpeed>Speed</FavorSizeOrSpeed>
+      <FloatingPointExceptions>false</FloatingPointExceptions>
+      <FloatingPointModel>Fast</FloatingPointModel>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <InlineFunctionExpansion>AnySuitable</InlineFunctionExpansion>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
+      <OmitFramePointers>true</OmitFramePointers>
+      <Optimization>MaxSpeed</Optimization>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <RemoveUnreferencedCodeData>true</RemoveUnreferencedCodeData>
+      <RuntimeTypeInfo>true</RuntimeTypeInfo>
+      <SuppressStartupBanner>true</SuppressStartupBanner>
+      <TreatWarningAsError>false</TreatWarningAsError>
+      <DisableSpecificWarnings>4244;4267;%(DisableSpecificWarnings)</DisableSpecificWarnings>
+      <UseFullPaths>true</UseFullPaths>
+      <WarningLevel>Level3</WarningLevel>
+      <WholeProgramOptimization>true</WholeProgramOptimization>
+      <PreprocessorDefinitions>WIN32;_WINDOWS;NDEBUG;_USRDLL;_WINDLL;MKL_ILP64;USE_AVX2;USE_ACCELERATED_PQ;NOMINMAX;UNICODE;diskann_EXPORTS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ObjectFileName>$(IntDir)</ObjectFileName>
+    </ClCompile>
+    <ResourceCompile>
+      <PreprocessorDefinitions>WIN32;_WINDOWS;NDEBUG;_USRDLL;_WINDLL;MKL_ILP64;USE_AVX2;USE_ACCELERATED_PQ;NOMINMAX;UNICODE;diskann_EXPORTS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>
+        $(IntelOpenMP)\include;
+        ..\include;
+        $(BoostLibraryPath)\lib\native\include;
+        $(MKLLibraryPath)\include;
+        %(AdditionalIncludeDirectories)
+      </AdditionalIncludeDirectories>
+    </ResourceCompile>
+    <Midl>
+      <AdditionalIncludeDirectories>
+        $(IntelOpenMP)\include;
+        ..\include;
+        $(BoostLibraryPath);
+        $(MKLLibraryPath)\include;
+        %(AdditionalIncludeDirectories)
+      </AdditionalIncludeDirectories>
+      <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
+      <HeaderFileName>%(Filename).h</HeaderFileName>
+      <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
+      <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
+      <ProxyFileName>%(Filename)_p.c</ProxyFileName>
+    </Midl>
+    <Link>
+      <AdditionalDependencies>
+        $(IntelOpenMP)\win-x64\libiomp5md.lib;
+        $(MKLLibraryPath)\win-x64\mkl_intel_ilp64.lib;
+        $(MKLLibraryPath)\win-x64\mkl_core.lib;
+        $(MKLLibraryPath)\win-x64\mkl_intel_thread.lib;
+        kernel32.lib;
+        user32.lib;
+        gdi32.lib;
+        winspool.lib;
+        shell32.lib;
+        ole32.lib;
+        oleaut32.lib;
+        uuid.lib;
+        comdlg32.lib;
+        advapi32.lib
+      </AdditionalDependencies>
+      <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
+      <EnableCOMDATFolding>true</EnableCOMDATFolding>
+      <GenerateDebugInformation>DebugFull</GenerateDebugInformation>
+      <IgnoreSpecificDefaultLibraries>VCOMP.LIB;VCOMPD.LIB;%(IgnoreSpecificDefaultLibraries)</IgnoreSpecificDefaultLibraries>
+      <LinkDLL>true</LinkDLL>
+      <LinkTimeCodeGeneration>UseLinkTimeCodeGeneration</LinkTimeCodeGeneration>
+      <OptimizeReferences>true</OptimizeReferences>
+      <SubSystem>Console</SubSystem>
+    </Link>
+    <ProjectReference>
+      <LinkLibraryDependencies>false</LinkLibraryDependencies>
+    </ProjectReference>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClCompile Include="..\src\dll\dllmain.cpp" />
+    <ClCompile Include="..\src\partition_and_pq.cpp" />
+    <ClCompile Include="..\src\pq_flash_index.cpp" />
+    <ClCompile Include="..\src\logger.cpp" />
+    <ClCompile Include="..\src\utils.cpp" />
+    <ClCompile Include="..\src\windows_aligned_file_reader.cpp" />
+    <ClCompile Include="..\src\distance.cpp" />
+    <ClCompile Include="..\src\memory_mapper.cpp" />
+    <ClCompile Include="..\src\index.cpp" />
+    <ClCompile Include="..\src\math_utils.cpp" />
+    <ClCompile Include="..\src\aux_utils.cpp" />
+    <ClCompile Include="..\src\ann_exception.cpp" />
+    <ClCompile Include="..\src\natural_number_set.cpp" />
+  </ItemGroup>
+  <Import Project="$(ExtendedTargetsPath)\Microsoft.Cpp.targets" Condition="exists('$(ExtendedTargetsPath)\Microsoft.Cpp.targets')" />
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" Condition="!exists('$(ExtendedTargetsPath)\Microsoft.Cpp.targets')" />
+  <ImportGroup Label="ExtensionTargets">
+  </ImportGroup>
+</Project>

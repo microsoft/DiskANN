@@ -35,7 +35,7 @@ void WindowsAlignedFileReader::register_thread() {
                                FILE_FLAG_OVERLAPPED | FILE_FLAG_RANDOM_ACCESS,
                            NULL);
   if (ctx.fhandle == INVALID_HANDLE_VALUE) {
-    diskann::cout << "Error opening " << m_filename.c_str()
+    diskann::cout << "Error opening " << std::string(m_filename.begin(), m_filename.end())
                   << " -- error=" << GetLastError() << std::endl;
   }
 
