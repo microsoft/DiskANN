@@ -1,0 +1,20 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="16.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <CustomBuild Include="D:\dev\DiskANN\build3\CMakeFiles\c436c12dd86813eecb2abd070c7d4437\libtcmalloc_minimal.lib.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="D:\dev\DiskANN\build3\CMakeFiles\4c696b74e391cebd779e1363e40dfe02\build_libtcmalloc_minimal.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="D:\dev\DiskANN\CMakeLists.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="D:\dev\DiskANN\build3\CMakeFiles\build_libtcmalloc_minimal" />
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="CMake Rules">
+      <UniqueIdentifier>{C0C94A0A-6CC3-31AD-A362-6ED358DBE6D6}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>
