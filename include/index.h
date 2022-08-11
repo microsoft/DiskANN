@@ -10,7 +10,6 @@
 #include <sstream>
 #include <stack>
 #include <string>
-#include <unordered_map>
 #include "tsl/robin_set.h"
 #include "tsl/robin_map.h"
 #include "tsl/sparse_map.h"
@@ -18,6 +17,7 @@
 #include "boost_dynamic_bitset_fwd.h"
 #include "distance.h"
 #include "locking.h"
+#include "natural_number_map.h"
 #include "natural_number_set.h"
 #include "neighbor.h"
 #include "parameters.h"
@@ -409,7 +409,7 @@ namespace diskann {
 
     // data structures, flags and locks for dynamic indexing
     tsl::sparse_map<TagT, unsigned> _tag_to_location;
-    std::unordered_map<unsigned, TagT> _location_to_tag;
+    natural_number_map<unsigned, TagT> _location_to_tag;
 
     tsl::robin_set<unsigned>     _delete_set;
     natural_number_set<unsigned> _empty_slots;

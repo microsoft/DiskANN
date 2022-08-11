@@ -38,8 +38,8 @@ namespace diskann {
     // Values that are currently in set.
     std::vector<T> _values_vector;
 
-    // Values that are currently in set where each bit being set to 1
-    // means that its index is in the set.
+    // Values that are in the set have the corresponding bit index set
+    // to 1.
     //
     // Use a pointer here to allow for forward declaration of dynamic_bitset
     // in public headers to avoid making boost a dependency for clients
