@@ -11,7 +11,6 @@
 #include <string>
 #include "tsl/robin_set.h"
 #include "tsl/robin_map.h"
-#include <unordered_map>
 
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -276,6 +275,11 @@ namespace diskann {
 
     if (_support_eager_delete)
       _locks_in = std::vector<non_recursive_mutex>(_max_points + _num_frozen_pts);
+
+    if (enable_tags) {
+      _location_to_tag.reserve(max_points + _num_frozen_pts);
+      _tag_to_location.reserve(max_points + _num_frozen_pts);
+    }
   }
 
   template<typename T, typename TagT>
@@ -333,8 +337,9 @@ namespace diskann {
     size_t tag_bytes_written;
     TagT * tag_data = new TagT[_nd + _num_frozen_pts];
     for (_u32 i = 0; i < _nd; i++) {
-      if (_location_to_tag.find(i) != _location_to_tag.end()) {
-        tag_data[i] = _location_to_tag[i];
+      TagT tag;
+      if (_location_to_tag.try_get(i, tag)) {
+        tag_data[i] = tag;
       } else {
         // catering to future when tagT can be any type.
         std::memset((char *) &tag_data[i], 0, sizeof(TagT));
@@ -497,7 +502,7 @@ namespace diskann {
     for (_u32 i = 0; i < (_u32) num_data_points; i++) {
       TagT tag = *(tag_data + i);
       if (_delete_set.find(i) == _delete_set.end()) {
-        _location_to_tag[i] = tag;
+        _location_to_tag.set(i, tag);
         _tag_to_location[tag] = i;
       }
     }
@@ -1622,7 +1627,7 @@ namespace diskann {
     if (_enable_tags) {
       for (size_t i = 0; i < tags.size(); ++i) {
         _tag_to_location[tags[i]] = (unsigned) i;
-        _location_to_tag[(unsigned) i] = tags[i];
+        _location_to_tag.set(static_cast<unsigned>(i), tags[i]);
       }
     }
 
@@ -1873,9 +1878,11 @@ namespace diskann {
     std::shared_lock<std::shared_timed_mutex> tl(_tag_lock);
     size_t                                    pos = 0;
 
-    for (int i = 0; i < (int) L; ++i)
-      if (_location_to_tag.find(indices[i]) != _location_to_tag.end()) {
-        tags[pos] = _location_to_tag[indices[i]];
+    for (int i = 0; i < (int) L; ++i) {
+      TagT tag;
+
+      if (_location_to_tag.try_get(indices[i], tag)) {
+        tags[pos] = tag;
 
         if (res_vectors.size() > 0) {
           memcpy(res_vectors[pos], _data + ((size_t) indices[i]) * _aligned_dim,
@@ -1895,6 +1902,7 @@ namespace diskann {
         if (pos == K || pos == res_vectors.size())
           break;
       }
+    }
 
     return pos;
   }
@@ -2367,7 +2375,7 @@ namespace diskann {
     _u32           new_counter = 0;
     std::set<_u32> empty_locations;
     for (_u32 old_location = 0; old_location < _max_points; old_location++) {
-      if (_location_to_tag.find(old_location) != _location_to_tag.end()) {
+      if (_location_to_tag.contains(old_location)) {
         new_location[old_location] = new_counter;
         new_counter++;
       } else {
@@ -2442,12 +2450,15 @@ namespace diskann {
                   << num_dangling << std::endl;
 
     _tag_to_location.clear();
-    for (auto iter : _location_to_tag) {
-      _tag_to_location[iter.second] = new_location[iter.first];
+    for (auto pos = _location_to_tag.find_first();
+         pos.is_valid();
+         pos = _location_to_tag.find_next(pos)) {
+      const auto tag = _location_to_tag.get(pos);
+      _tag_to_location[tag] = new_location[pos._key];
     }
     _location_to_tag.clear();
     for (auto iter : _tag_to_location) {
-      _location_to_tag[iter.second] = iter.first;
+      _location_to_tag.set(iter.second, iter.first);
     }
 
     for (_u64 old = _nd; old < _max_points; ++old) {
@@ -2651,7 +2662,7 @@ namespace diskann {
       }
 
       _tag_to_location[tag] = location;
-      _location_to_tag[location] = tag;
+      _location_to_tag.set(location, tag);
     }
     tl.unlock();
 
@@ -2698,8 +2709,10 @@ namespace diskann {
     } else {
       std::unique_lock<std::shared_timed_mutex> lock(_tag_lock);
       pruned_list.push_back(_start);
-      for (auto iter : _location_to_tag) {
-        pruned_list.push_back(iter.first);
+      for (auto pos = _location_to_tag.find_first();
+           pos.is_valid();
+           pos = _location_to_tag.find_next(pos)) {
+        pruned_list.push_back(pos._key);
         if (pruned_list.size() >= _indexingRange)
           break;
       }
@@ -2732,7 +2745,7 @@ namespace diskann {
 
       for (auto link : pruned_list) {
         if (_conc_consolidate)
-          if (_location_to_tag.find(link) == _location_to_tag.end())
+          if (!_location_to_tag.contains(link))
             continue;
         _final_graph[location].emplace_back(link);
         if (_support_eager_delete) {
