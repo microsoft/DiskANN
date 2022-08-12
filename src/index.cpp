@@ -274,17 +274,12 @@ namespace diskann {
     _locks = std::vector<non_recursive_mutex>(_max_points + _num_frozen_pts);
 
     if (_support_eager_delete)
-<<<<<<< HEAD
       _locks_in = std::vector<non_recursive_mutex>(_max_points + _num_frozen_pts);
 
     if (enable_tags) {
       _location_to_tag.reserve(max_points + _num_frozen_pts);
       _tag_to_location.reserve(max_points + _num_frozen_pts);
     }
-=======
-      _locks_in =
-          std::vector<non_recursive_mutex>(_max_points + _num_frozen_pts);
->>>>>>> added methods to set the starting point
   }
 
   template<typename T, typename TagT>
