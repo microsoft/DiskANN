@@ -176,6 +176,7 @@ void build_incremental_index(const std::string& data_path, const unsigned L,
                              const unsigned consolidate_threads,
                              size_t max_points_to_insert, size_t active_window,
                              size_t             consolidate_interval,
+                             const unsigned     start_point_norm,
                              const std::string& save_path) {
   const unsigned C = 500;
   const bool     saturate_graph = false;
@@ -235,7 +236,7 @@ void build_incremental_index(const std::string& data_path, const unsigned L,
   diskann::Index<T, TagT> index(
       diskann::L2, dim, active_window + 4 * consolidate_interval, true, params,
       params, enable_tags, support_eager_delete, true);
-  index.build_with_zero_points();
+  index.set_start_point_at_random(static_cast<T>(start_point_norm));
   index.enable_delete();
 
   T* data = nullptr;
@@ -295,7 +296,7 @@ void build_incremental_index(const std::string& data_path, const unsigned L,
 
 int main(int argc, char** argv) {
   std::string data_type, dist_fn, data_path, index_path_prefix;
-  unsigned    insert_threads, consolidate_threads;
+  unsigned    insert_threads, consolidate_threads, start_point_norm;
   unsigned    R, L;
   float       alpha;
   size_t      max_points_to_insert, active_window, consolidate_interval;
@@ -349,12 +350,23 @@ int main(int argc, char** argv) {
         po::value<uint64_t>(&consolidate_interval)->required(),
         "The program simultaneously adds this number of points to the right of "
         "the window while deleting the same number from the left");
+    desc.add_options()(
+        "start_point_norm",
+        po::value<uint32_t>(&start_point_norm)->default_value(0),
+        "Set the start point to a random point on a sphere of this radius");
 
     po::variables_map vm;
     po::store(po::parse_command_line(argc, argv, desc), vm);
     if (vm.count("help")) {
       std::cout << desc;
       return 0;
+    }
+
+    if (start_point_norm == 0) {
+      std::cout << "When beginning_index_size is 0, use a start point with  "
+                   "appropriate norm"
+                << std::endl;
+      return -1;
     }
     po::notify(vm);
   } catch (const std::exception& ex) {
@@ -367,17 +379,17 @@ int main(int argc, char** argv) {
       build_incremental_index<int8_t>(data_path, L, R, alpha, insert_threads,
                                       consolidate_threads, max_points_to_insert,
                                       active_window, consolidate_interval,
-                                      index_path_prefix);
+                                      start_point_norm, index_path_prefix);
     else if (data_type == std::string("uint8"))
-      build_incremental_index<uint8_t>(data_path, L, R, alpha, insert_threads,
-                                       consolidate_threads,
-                                       max_points_to_insert, active_window,
-                                       consolidate_interval, index_path_prefix);
+      build_incremental_index<uint8_t>(
+          data_path, L, R, alpha, insert_threads, consolidate_threads,
+          max_points_to_insert, active_window, consolidate_interval,
+          start_point_norm, index_path_prefix);
     else if (data_type == std::string("float"))
       build_incremental_index<float>(data_path, L, R, alpha, insert_threads,
                                      consolidate_threads, max_points_to_insert,
                                      active_window, consolidate_interval,
-                                     index_path_prefix);
+                                     start_point_norm, index_path_prefix);
     else
       std::cout << "Unsupported type. Use float/int8/uint8" << std::endl;
   } catch (const std::exception& e) {
