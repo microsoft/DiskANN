@@ -274,12 +274,17 @@ namespace diskann {
     _locks = std::vector<non_recursive_mutex>(_max_points + _num_frozen_pts);
 
     if (_support_eager_delete)
+<<<<<<< HEAD
       _locks_in = std::vector<non_recursive_mutex>(_max_points + _num_frozen_pts);
 
     if (enable_tags) {
       _location_to_tag.reserve(max_points + _num_frozen_pts);
       _tag_to_location.reserve(max_points + _num_frozen_pts);
     }
+=======
+      _locks_in =
+          std::vector<non_recursive_mutex>(_max_points + _num_frozen_pts);
+>>>>>>> added methods to set the starting point
   }
 
   template<typename T, typename TagT>
@@ -1598,10 +1603,37 @@ namespace diskann {
   }
 
   template<typename T, typename TagT>
-  void Index<T, TagT>::build_with_zero_points() {
-    generate_frozen_point();
+  void Index<T, TagT>::set_start_point(T *data) {
+    std::unique_lock<std::shared_timed_mutex> ul(_update_lock);
+    std::unique_lock<std::shared_timed_mutex> tl(_tag_lock);
+    if (_nd > 0)
+      throw ANNException("Can not set starting point for a non-empty index", -1,
+                         __FUNCSIG__, __FILE__, __LINE__);
+
+    memcpy(_data + _aligned_dim * _max_points, data, _aligned_dim * sizeof(T));
     _has_built = true;
-    diskann::cout << "Index bootstrapped with zero points" << std::endl;
+    diskann::cout << "Index start point set" << std::endl;
+  }
+
+  template<typename T, typename TagT>
+  void Index<T, TagT>::set_start_point_at_random(T radius) {
+    std::vector<double>        real_vec;
+    std::random_device         rd{};
+    std::mt19937               gen{rd()};
+    std::normal_distribution<> d{0.0, 1.0};
+    double                     norm_sq = 0.0;
+    for (size_t i = 0; i < _aligned_dim; ++i) {
+      auto r = d(gen);
+      real_vec.push_back(r);
+      norm_sq += r * r;
+    }
+
+    double         norm = std::sqrt(norm_sq);
+    std::vector<T> start_vec;
+    for (auto iter : real_vec)
+      start_vec.push_back(static_cast<T>(iter * radius / norm));
+
+    set_start_point(start_vec.data());
   }
 
   template<typename T, typename TagT>
@@ -1974,7 +2006,7 @@ namespace diskann {
     }
 
     unsigned loc;  // since we will return if tag is not found, ok to leave it
-                  // uninitialized.
+                   // uninitialized.
     {
       std::shared_lock<std::shared_timed_mutex> tl(_tag_lock);
       if (_tag_to_location.find(tag) == _tag_to_location.end()) {
@@ -2134,7 +2166,7 @@ namespace diskann {
 
     _final_graph[loc].clear();
     _in_graph[loc].clear();
-    
+
     std::unique_lock<std::shared_timed_mutex> tl(_tag_lock);
     release_location(loc);
 
@@ -2287,7 +2319,7 @@ namespace diskann {
         }
       }
     }
-    for (_s64 loc = _max_points; loc < (_s64) (_max_points + _num_frozen_pts);
+    for (_s64 loc = _max_points; loc < (_s64)(_max_points + _num_frozen_pts);
          loc++) {
       LockGuard adj_list_lock(_locks[loc]);
       process_delete(old_delete_set, loc, range, maxc, alpha);
@@ -2400,8 +2432,8 @@ namespace diskann {
         }
       if (_start == old_ep) {
         throw diskann::ANNException(
-            "ERROR: Did not find a replacement for cur node.", -1,
-            __FUNCSIG__, __FILE__, __LINE__);
+            "ERROR: Did not find a replacement for cur node.", -1, __FUNCSIG__,
+            __FILE__, __LINE__);
       } else {
         assert(_delete_set.find(_start) == _delete_set.end());
       }
@@ -2618,7 +2650,7 @@ namespace diskann {
 
     std::shared_lock<std::shared_timed_mutex> shared_ul(_update_lock);
     std::unique_lock<std::shared_timed_mutex> tl(_tag_lock);
-   
+
     // Find a vacant location in the data array to insert the new point
     auto location = reserve_location();
     if (location == -1) {
@@ -2631,7 +2663,7 @@ namespace diskann {
         tl.lock();
 
         if (_nd >= _max_points) {
-          auto new_max_points = (size_t) (_max_points * INDEX_GROWTH_FACTOR);
+          auto new_max_points = (size_t)(_max_points * INDEX_GROWTH_FACTOR);
           resize(new_max_points);
         }
 
@@ -2655,7 +2687,6 @@ namespace diskann {
 
     // Insert tag and mapping to location
     if (_enable_tags) {
-
       if (_tag_to_location.find(tag) != _tag_to_location.end()) {
         release_location(location);
         return -1;
@@ -2809,7 +2840,7 @@ namespace diskann {
     std::unique_lock<std::shared_timed_mutex> dl(_delete_lock);
     _lazy_done = true;
     _data_compacted = false;
-    
+
     for (auto tag : tags) {
       if (_tag_to_location.find(tag) == _tag_to_location.end()) {
         failed_tags.push_back(tag);
