@@ -443,12 +443,10 @@ namespace diskann {
     if (version == 0)
       return save_graph_internal(graph_file, _final_graph, _nd, _num_frozen_pts,
                                  _max_observed_degree, _start);
-    else
-      return save_graph_internal(graph_file, _query_graph, _max_query_points, 0,
-                                 _max_observed_qdegree, _query_start);
-    // else
-    //   return save_graph_internal(graph_file, _query_nn, _max_query_points, 0,
-    //                              _indexingRange, 0);
+    else{
+      return save_graph_internal(graph_file, _stitched_graph, _nd, _num_frozen_pts,
+                                 _max_observed_sdegree, _start);
+    }
   }
 
   template<typename T, typename TagT>
@@ -478,16 +476,14 @@ namespace diskann {
       std::string tags_file = std::string(filename) + ".tags";
       std::string data_file = std::string(filename) + ".data";
       std::string delete_list_file = std::string(filename) + ".del";
-      std::string query_data_file = std::string(filename) + ".qdata";
-      std::string query_graph_file = std::string(filename) + ".qgraph";
-      // std::string query_nn_file = std::string(filename) + ".qnn";
+      std::string stitched_graph_file = std::string(filename) + ".stitch";
 
       // Because the save_* functions use append mode, ensure that
       // the files are deleted before save. Ideally, we should check
       // the error code for delete_file, but will ignore now because
       // delete should succeed if save will succeed.
-      delete_file(graph_file);
-      save_graph(graph_file);
+      delete_file(stitched_graph_file);
+      save_graph(stitched_graph_file);
       delete_file(data_file);
       save_data(data_file);
       delete_file(tags_file);
@@ -495,12 +491,9 @@ namespace diskann {
       delete_file(delete_list_file);
       save_delete_list(delete_list_file);
       if (_queries_present) {
-        delete_file(query_data_file);
-        save_data(query_data_file);
-        delete_file(query_graph_file);
-        save_graph(query_graph_file, 1);
-        // delete_file(query_nn_file);
-        // save_graph(query_nn_file, 2);
+        _max_observed_sdegree = GRAPH_SLACK_FACTOR*_stitchingRange+1;
+        delete_file(graph_file);
+        save_graph(graph_file, 1);
       }
 
     } else {
@@ -665,6 +658,8 @@ namespace diskann {
       std::string tags_file = std::string(filename) + ".tags";
       std::string delete_set_file = std::string(filename) + ".del";
       std::string graph_file = std::string(filename);
+      std::string stitched_graph_file;
+      if(_queries_present) stitched_graph_file = std::string(filename) + ".stitch";
       data_file_num_pts = load_data(data_file);
       if (file_exists(delete_set_file)) {
         load_delete_set(delete_set_file);
@@ -673,6 +668,8 @@ namespace diskann {
         tags_file_num_pts = load_tags(tags_file);
       }
       graph_num_pts = load_graph(graph_file, data_file_num_pts);
+      // int version = 1;
+      if(_queries_present) load_graph(stitched_graph_file, data_file_num_pts, 1);
 #endif
 
     } else {
@@ -729,12 +726,42 @@ namespace diskann {
 #ifdef EXEC_ENV_OLS
   template<typename T, typename TagT>
   size_t Index<T, TagT>::load_graph(AlignedFileReader &reader,
-                                    size_t             expected_num_points) {
+                                    size_t             expected_num_points,
+                                    const int version) {
 #else
 
   template<typename T, typename TagT>
   size_t Index<T, TagT>::load_graph(std::string filename,
-                                    size_t      expected_num_points) {
+                                    size_t      expected_num_points,
+                                    const int version) {
+#endif
+
+
+#ifdef EXEC_ENV_OLS
+    if(version == 0) return load_graph_internal(reader, expected_num_points, _max_observed_degree, _final_graph);
+    else return load_graph_internal(reader, expected_num_points, _max_observed_sdegree, _stitched_graph);
+                                    }
+#else
+    if(version == 0) return load_graph_internal(filename, expected_num_points, _max_observed_degree, _final_graph);
+    else return load_graph_internal(filename, expected_num_points, _max_observed_sdegree, _stitched_graph);
+                                    }
+#endif
+
+    
+
+#ifdef EXEC_ENV_OLS
+  template<typename T, typename TagT>
+  size_t Index<T, TagT>::load_graph_internal(AlignedFileReader &reader,
+                                    size_t             expected_num_points,
+                                    unsigned &max_observed_degree,
+                                    std::vector<std::vector<unsigned>> &final_graph) {
+#else
+
+  template<typename T, typename TagT>
+  size_t Index<T, TagT>::load_graph_internal(std::string filename,
+                                    size_t      expected_num_points,
+                                    unsigned &max_observed_degree,
+                                    std::vector<std::vector<unsigned>> &final_graph) {
 #endif
     size_t expected_file_size;
     _u64   file_frozen_pts;
@@ -745,7 +772,7 @@ namespace diskann {
     read_array(reader, header.get(), header_size);
 
     expected_file_size = *((_u64 *) header.get());
-    _max_observed_degree = *((_u32 *) (header.get() + sizeof(_u64)));
+    max_observed_degree = *((_u32 *) (header.get() + sizeof(_u64)));
     _start = *((_u32 *) (header.get() + sizeof(_u64) + sizeof(unsigned)));
     file_frozen_pts = *((_u64 *) (header.get() + sizeof(_u64) +
                                   sizeof(unsigned) + sizeof(unsigned)));
@@ -755,7 +782,7 @@ namespace diskann {
     std::ifstream in(filename, std::ios::binary);
     in.seekg(file_offset, in.beg);
     in.read((char *) &expected_file_size, sizeof(_u64));
-    in.read((char *) &_max_observed_degree, sizeof(unsigned));
+    in.read((char *) &max_observed_degree, sizeof(unsigned));
     in.read((char *) &_start, sizeof(unsigned));
     in.read((char *) &file_frozen_pts, sizeof(_u64));
     _u64 vamana_metadata_size =
@@ -764,7 +791,7 @@ namespace diskann {
 #endif
     diskann::cout << "From graph header, expected_file_size: "
                   << expected_file_size
-                  << ", _max_observed_degree: " << _max_observed_degree
+                  << ", _max_observed_degree: " << max_observed_degree
                   << ", _start: " << _start
                   << ", file_frozen_pts: " << file_frozen_pts << std::endl;
 
@@ -798,7 +825,7 @@ namespace diskann {
                     << " is greater than max_points: " << _max_points
                     << " Setting max points to: " << expected_num_points
                     << std::endl;
-      _final_graph.resize(expected_num_points + _num_frozen_pts);
+      final_graph.resize(expected_num_points + _num_frozen_pts);
       _max_points = expected_num_points;
     }
 #ifdef EXEC_ENV_OLS
@@ -814,7 +841,7 @@ namespace diskann {
       read_array(reader, tmp.data(), k, graph_offset);
       graph_offset += k * sizeof(_u32);
       cc += k;
-      _final_graph[nodes_read].swap(tmp);
+      final_graph[nodes_read].swap(tmp);
       nodes_read++;
       if (nodes_read % 1000000 == 0) {
         diskann::cout << "." << std::flush;
@@ -829,25 +856,27 @@ namespace diskann {
     size_t   cc = 0;
     unsigned nodes_read = 0;
     while (bytes_read != expected_file_size) {
+      if(max_observed_degree == _max_observed_sdegree) std::cout << "here1" << std::endl;
       unsigned k;
       in.read((char *) &k, sizeof(unsigned));
       if (k == 0) {
-        diskann::cerr << "ERROR: Point found with no out-neighbors, point#"
-                      << nodes_read << std::endl;
+        // diskann::cerr << "ERROR: Point found with no out-neighbors, point#"
+        //               << nodes_read << std::endl;
       }
-
+      if(max_observed_degree == _max_observed_sdegree) std::cout << "here2" << std::endl; 
       cc += k;
       ++nodes_read;
       std::vector<unsigned> tmp(k);
       tmp.reserve(k);
       in.read((char *) tmp.data(), k * sizeof(unsigned));
-      _final_graph[nodes_read - 1].swap(tmp);
+      final_graph[nodes_read - 1].swap(tmp);
       bytes_read += sizeof(uint32_t) * ((_u64) k + 1);
       if (nodes_read % 10000000 == 0)
         diskann::cout << "." << std::flush;
       if (k > _max_range_of_loaded_graph) {
         _max_range_of_loaded_graph = k;
       }
+      if(max_observed_degree == _max_observed_sdegree) std::cout << "here3" << std::endl; 
     }
 #endif
 
@@ -940,7 +969,7 @@ namespace diskann {
       boost::dynamic_bitset<> &inserted_into_pool_bs, T *data,
       size_t &max_points, size_t &num_frozen_pts,
       std::vector<std::vector<unsigned>> &final_graph, const unsigned &start,
-      bool ret_frozen, bool search_invocation, const int version) {
+      bool ret_frozen, bool search_invocation, const int version, const bool include_stitched) {
     for (unsigned i = 0; i < Lsize + 1; i++) {
       best_L_nodes[i].distance = std::numeric_limits<float>::max();
     }
@@ -1024,6 +1053,11 @@ namespace diskann {
             }
              des.emplace_back(final_graph[n][m]);
           }
+          if(_queries_present && include_stitched && version==0){
+              for(unsigned &m : _stitched_graph[n]){
+                des.emplace_back(m);
+              }
+          }
         } else {
           for (unsigned m = 0; m < final_graph[n].size(); m++) {
             if (final_graph[n][m] >= max_points + num_frozen_pts) {
@@ -1088,20 +1122,20 @@ namespace diskann {
       std::vector<Neighbor> &best_L_nodes, std::vector<unsigned> &des,
       tsl::robin_set<unsigned> &inserted_into_pool_rs,
       boost::dynamic_bitset<> &inserted_into_pool_bs, bool ret_frozen,
-      bool search_invocation, const int version) {
+      bool search_invocation, const int version, const bool include_stitched) {
     if (version == 0)
       return iterate_to_fixed_point_internal(
           node_coords, Lsize, init_ids, expanded_nodes_info, expanded_nodes_ids,
           best_L_nodes, des, inserted_into_pool_rs, inserted_into_pool_bs,
           _data, _max_points, _num_frozen_pts, _final_graph, _start, ret_frozen,
-          search_invocation, version);
+          search_invocation, version, include_stitched);
     else {
       size_t num_frozen_points = 0;
       return iterate_to_fixed_point_internal(
           node_coords, Lsize, init_ids, expanded_nodes_info, expanded_nodes_ids,
           best_L_nodes, des, inserted_into_pool_rs, inserted_into_pool_bs,
           _query_data, _max_query_points, num_frozen_points, _query_graph,
-          _query_start, ret_frozen, search_invocation, version);
+          _query_start, ret_frozen, search_invocation, version, include_stitched);
     }
   }
 
@@ -1113,7 +1147,8 @@ namespace diskann {
       tsl::robin_set<unsigned> &expanded_nodes_ids, std::vector<unsigned> &des,
       std::vector<Neighbor> &   best_L_nodes,
       tsl::robin_set<unsigned> &inserted_into_pool_rs,
-      boost::dynamic_bitset<> & inserted_into_pool_bs) {
+      boost::dynamic_bitset<> & inserted_into_pool_bs,
+      const bool include_stitched) {
     const T *node_coords = _data + _aligned_dim * node_id;
 
     if (init_ids.size() == 0)
@@ -1121,7 +1156,7 @@ namespace diskann {
 
     iterate_to_fixed_point(node_coords, Lindex, init_ids, expanded_nodes_info,
                            expanded_nodes_ids, best_L_nodes, des,
-                           inserted_into_pool_rs, inserted_into_pool_bs);
+                           inserted_into_pool_rs, inserted_into_pool_bs, true, false, 0, include_stitched);
   }
 
   template<typename T, typename TagT>
@@ -1460,10 +1495,12 @@ namespace diskann {
     if (num_threads != 0)
       omp_set_num_threads(num_threads);
 
+   
     _indexingQueueSize = parameters.Get<unsigned>("L");  // Search list size
     _indexingRange = parameters.Get<unsigned>("R");
     _indexingMaxC = parameters.Get<unsigned>("C");
     const float last_round_alpha = parameters.Get<float>("alpha");
+    if(_queries_present) _stitchingRange = parameters.Get<unsigned>("S");
     unsigned    L = _indexingQueueSize;
 
     std::vector<unsigned> Lvec;
@@ -1715,7 +1752,7 @@ namespace diskann {
     std::vector<unsigned> to_stitch;
     for (auto nbor : best_L_nodes) {
       unsigned nbh = nbor.id;
-      // std::vector<unsigned> eliminated_vertices;
+      std::vector<unsigned> eliminated_vertices;
       {
         assert(nbh <= _max_query_points);
         LockGuard guard(_query_nn_locks[nbh]);
@@ -1724,14 +1761,31 @@ namespace diskann {
             _data + _aligned_dim * (size_t) location, (unsigned) _aligned_dim);
         if ((_query_nn[nbh][_query_nn[nbh].size() - 1]).distance > dist) {
           size_t   k = _query_nn[nbh].size();
-          // unsigned prev_id = (_query_nn[nbh][_query_nn[nbh].size() - 1]).id;
+          unsigned prev_id = (_query_nn[nbh][_query_nn[nbh].size() - 1]).id;
           int      result = InsertIntoPool(_query_nn[nbh].data(), k,
                                       Neighbor(location, dist, true));
           if (result != (int) k + 1) {
             to_stitch.push_back(nbh);
-            // if (prev_id != 0) {
-            //   eliminated_vertices.push_back(prev_id);
-            // }
+            if (prev_id != 0) {
+              eliminated_vertices.push_back(prev_id);
+            }
+          }
+        }
+      }
+      for(unsigned &el: eliminated_vertices){
+        {
+          LockGuard guard(_locks[el]);
+          {
+            LockGuard guard(_query_nn_locks[nbh]);
+            std::vector<unsigned> new_stitched;
+            for(auto &cand : _stitched_graph[el]){
+              bool include = true;
+              for(int j=0; j<(int) _stitchingRange; j++){
+                if(cand == _query_nn[nbh][j].id) include = false;
+              }
+              if(include) new_stitched.push_back(cand);
+            }
+            if(new_stitched.size() < _stitched_graph[el].size()) _stitched_graph[el] = new_stitched;
           }
         }
       }
@@ -1741,32 +1795,30 @@ namespace diskann {
     {
       LockGuard guard(_locks[location]);
       // uint32_t inflated_range = _indexingRange*1.1;
-      size_t total_capacity = _indexingRange - _final_graph[location].size();
+      // size_t total_capacity = _indexingRange - _final_graph[location].size();
       size_t capacity;
       if (to_stitch.size() == 0)
         capacity = 0;
       else
-        capacity = std::floor(total_capacity / (double) to_stitch.size())+1;
+        capacity = std::floor(_stitchingRange / (double) to_stitch.size())+1;
       for (auto query_ctr : to_stitch) {
         int c = 0;  // number of nodes added to _final_graph[nbh]
         int j = 0;  // iter count over _query_nn[query_ctr]
         {
           LockGuard guard(_query_nn_locks[query_ctr]);
-          while (c < (int) capacity && j < (int) _query_nn[query_ctr].size() &&
-                _final_graph[location].size() < _indexingRange &&
-                _query_nn[query_ctr][j].distance !=
-                    std::numeric_limits<float>::max()) {
+          while (c < (int) capacity && j < (int) _query_nn[query_ctr].size() && 
+            _stitched_graph[location].size() <= GRAPH_SLACK_FACTOR*_stitchingRange) {
             auto candidate = _query_nn[query_ctr][j].id;
             assert(candidate < _max_points + _num_frozen_pts);
-            if (candidate != location &&
-                (std::find(_final_graph[location].begin(),
-                          _final_graph[location].end(),
-                          candidate) == _final_graph[location].end())) {
-              _final_graph[location].push_back(candidate);
-              if(std::find(_stitched_graph[location].begin(), _stitched_graph[location].end(), candidate) 
-                  == _stitched_graph[location].end()){
-                  _stitched_graph[location].push_back(candidate);
-                }
+            bool not_self = (candidate != location);
+            bool not_fake = (_query_nn[query_ctr][j].distance !=
+                    std::numeric_limits<float>::max());
+            bool not_in_base = (std::find(_final_graph[location].begin(), _final_graph[location].end(),
+                           candidate) == _final_graph[location].end());
+            bool not_in_stitched = (std::find(_stitched_graph[location].begin(), _stitched_graph[location].end(), candidate) 
+                == _stitched_graph[location].end());
+            if (not_self && not_fake && not_in_base && not_in_stitched) {
+              _stitched_graph[location].push_back(candidate);
               c++;
             }
             j++;
@@ -1804,29 +1856,30 @@ namespace diskann {
         }
       }
     }
-    delete_from_stitched_graph(delete_set);
+    populate_query_nn();
+    robust_stitch();
   }
 
-  //takes in a delete set D and deletes all points in D + edges to those points
-  template<typename T, typename TagT>
-  void Index<T, TagT>::delete_from_stitched_graph(
-      tsl::robin_set<unsigned> &delete_set) {
-#pragma omp parallel for schedule(dynamic)
-    for (size_t i = 0; i < _max_points + _num_frozen_pts; i++) {
-      if (delete_set.find(i) == delete_set.end()) {
-          std::vector<unsigned> new_nbh;
-          for (unsigned nbh : _stitched_graph[i]) {
-            if (delete_set.find(nbh) == delete_set.end()) {
-              new_nbh.push_back(nbh);
-            }
-          }
-          if (new_nbh.size() < _stitched_graph[i].size()) {
-            _stitched_graph[i] = new_nbh;
-          }
-      } else
-        _stitched_graph[i].clear();
-    }
-  }
+//   //takes in a delete set D and deletes all points in D + edges to those points
+//   template<typename T, typename TagT>
+//   void Index<T, TagT>::delete_from_stitched_graph(
+//       tsl::robin_set<unsigned> &delete_set) {
+// #pragma omp parallel for schedule(dynamic)
+//     for (size_t i = 0; i < _max_points + _num_frozen_pts; i++) {
+//       if (delete_set.find(i) == delete_set.end()) {
+//           std::vector<unsigned> new_nbh;
+//           for (unsigned nbh : _stitched_graph[i]) {
+//             if (delete_set.find(nbh) == delete_set.end()) {
+//               new_nbh.push_back(nbh);
+//             }
+//           }
+//           if (new_nbh.size() < _stitched_graph[i].size()) {
+//             _stitched_graph[i] = new_nbh;
+//           }
+//       } else
+//         _stitched_graph[i].clear();
+//     }
+//   }
 
   template<typename T, typename TagT>
   void Index<T, TagT>::graph_stats() {
@@ -1875,62 +1928,6 @@ namespace diskann {
                     << std::endl;
       diskann::cout << "Restricting to nonzero nodes, avg stitched degree is:  "
                     << (float) total / (float) (nzcnt) << std::endl;
-    }
-  }
-
-  
-
-  template<typename T, typename TagT>
-  void Index<T, TagT>::query_nn_stats() {
-    std::vector<int> degrees(_max_query_points);
-#pragma omp parallel for schedule(dynamic)
-    for (size_t node_ctr = 0; node_ctr < _max_query_points; node_ctr++) {
-      int degree = 0;
-      for (Neighbor nbor : _query_nn[node_ctr]) {
-        if (nbor.distance != std::numeric_limits<float>::max()) {
-          degree += 1;
-        }
-      }
-      degrees[node_ctr] = degree;
-    }
-
-    std::cout << "Average degree: "
-              << std::accumulate(degrees.begin(), degrees.end(), 0.0) /
-                     ((float) _max_query_points)
-              << std::endl;
-
-    std::vector<int> indegrees(_max_points + _num_frozen_pts, 0);
-
-#pragma omp parallel for schedule(dynamic)
-    for (size_t node_ctr = 0; node_ctr < _max_query_points; node_ctr++) {
-      for (Neighbor nbor : _query_nn[node_ctr]) {
-        unsigned node = nbor.id;
-        {
-          LockGuard guard(_locks[node]);
-          indegrees[node]++;
-        }
-      }
-    }
-
-    std::sort(indegrees.begin(), indegrees.end());
-    std::reverse(indegrees.begin(), indegrees.end());
-    int max_deg = indegrees[0];
-
-    std::cout << "Max indegree: " << max_deg << std::endl;
-
-    std::unordered_map<int, int> histogram;
-    for (int j = 0; j < max_deg + 1; j++) {
-      histogram[j] = 0;
-    }
-    // int hist_index = 0;
-    for (int j : indegrees) {
-      histogram[j]++;
-    }
-
-    for (int j = 0; j < max_deg + 1; j++) {
-      if (histogram[j] > 0)
-        std::cout << "Number of nodes of degree " << j << " : " << histogram[j]
-                  << std::endl;
     }
   }
 
@@ -2001,9 +1998,9 @@ namespace diskann {
   template<typename T, typename TagT>
   void Index<T, TagT>::robust_stitch() {
     std::cout << "Beginning RobustStitch routine... " << std::endl;
-    std::vector<int> changed(_nd);
+    std::vector<int> changed(_max_points + _num_frozen_pts, 0);
 
-    std::vector<int> query_indegree(_nd, 0);
+    std::vector<int> query_indegree(_max_points + _num_frozen_pts, 0);
     std::vector<int> per_node_capacity(_nd, 0);
 
     diskann::Timer stitch_timer;
@@ -2016,14 +2013,13 @@ namespace diskann {
     }
 
 #pragma omp parallel for schedule(dynamic, 65536)
-    for (_s64 node_ctr = 0; node_ctr < (_s64) _nd; node_ctr++) {
-      auto node = node_ctr;
-
-      int total_capacity = _indexingRange - (int) (_final_graph[node].size());
-      if (query_indegree[node] != 0) {
-        int per_query_capacity =
-            std::floor(total_capacity / ((double) query_indegree[node]));
-        per_node_capacity[node] = per_query_capacity;
+    for (_s64 node_ctr = 0; node_ctr < (_s64) (_max_points + _num_frozen_pts); node_ctr++) {
+      if (query_indegree[node_ctr] != 0) {  
+        per_node_capacity[node_ctr] = std::floor(_stitchingRange / ((double) query_indegree[node_ctr]))+1;
+      }
+      {
+        LockGuard guard(_locks[node_ctr]);
+        _stitched_graph[node_ctr].clear();
       }
     }
 
@@ -2033,28 +2029,25 @@ namespace diskann {
          query_ctr++) {
       for (auto nbor : _query_nn[query_ctr]) {
         unsigned nbh = nbor.id;
-        if (per_node_capacity[nbh] > 0) {
-          changed[nbh] = 1;
-          int c = 0;  // number of nodes added to _final_graph[nbh]
-          int j = 0;  // iter count over _query_nn[query_ctr]
-          while (c < per_node_capacity[nbh] &&
-                 j < (int) _query_nn[query_ctr].size() &&
-                 _final_graph[nbh].size() < _indexingRange) {
-            auto candidate = _query_nn[query_ctr][j].id;
-            if (candidate != nbh &&
-                (std::find(_final_graph[nbh].begin(), _final_graph[nbh].end(),
-                           candidate) == _final_graph[nbh].end()) &&
-                _query_nn[query_ctr][j].distance !=
-                    std::numeric_limits<float>::max()) {
-              _final_graph[nbh].push_back(candidate);
-              if(std::find(_stitched_graph[nbh].begin(), _stitched_graph[nbh].end(), candidate) 
-                == _stitched_graph[nbh].end()){
-                _stitched_graph[nbh].push_back(candidate);
-              }
-              c++;
-            }
-            j++;
+        changed[nbh] = 1;
+        int c = 0;  // number of nodes added to _final_graph[nbh]
+        int j = 0;  // iter count over _query_nn[query_ctr]
+        while (c < per_node_capacity[nbh] &&
+                j < (int) _query_nn[query_ctr].size() &&
+                _stitched_graph[nbh].size() < GRAPH_SLACK_FACTOR*_stitchingRange) {
+          auto candidate = _query_nn[query_ctr][j].id;
+          bool not_self = (candidate != nbh);
+          bool not_fake = (_query_nn[query_ctr][j].distance !=
+                  std::numeric_limits<float>::max());
+          bool not_in_base = (std::find(_final_graph[nbh].begin(), _final_graph[nbh].end(),
+                          candidate) == _final_graph[nbh].end());
+          bool not_in_stitched = (std::find(_stitched_graph[nbh].begin(), _stitched_graph[nbh].end(), candidate) 
+              == _stitched_graph[nbh].end());
+          if (not_self && not_fake && not_in_base && not_in_stitched) {
+            _stitched_graph[nbh].push_back(candidate);
+            c++;
           }
+          j++;
         }
       }
     }
@@ -2190,7 +2183,6 @@ namespace diskann {
                     << "  avg:" << (float) total / (float) (_max_query_points)
                     << "  min:" << min << "  count(deg<2):" << cnt << std::endl;
 
-      _max_observed_qdegree = (std::max)((unsigned) max, _max_observed_qdegree);
 
       // tsl::robin_set<unsigned> dummy_set;
       // bool from_empty = true;
@@ -3139,9 +3131,6 @@ namespace diskann {
       old_delete_set.clear();
     }
 
-    // call stitch routine here
-    // including swapping prune sets
-
     expected_consolidate_value = true;
     if (_consolidate_active.compare_exchange_strong(expected_consolidate_value,
                                                     false) == false)
@@ -3489,7 +3478,7 @@ namespace diskann {
   }
 
   template<typename T, typename TagT>
-  int Index<T, TagT>::insert_point(const T *point, const TagT tag, bool for_test) {
+  int Index<T, TagT>::insert_point(const T *point, const TagT tag) {
     assert(_has_built);
 
     std::shared_lock<std::shared_timed_mutex> update_lock(_update_lock);
@@ -3555,7 +3544,7 @@ namespace diskann {
     std::vector<unsigned> init_ids;
     get_expanded_nodes(location, Lindex, init_ids, pool, visited, scratch.des(),
                        scratch.best_l_nodes(), scratch.inserted_into_pool_rs(),
-                       scratch.inserted_into_pool_bs());
+                       scratch.inserted_into_pool_bs(), false);
 
     for (unsigned i = 0; i < pool.size(); i++) {
       if (pool[i].id == (unsigned) location) {
@@ -3607,7 +3596,7 @@ namespace diskann {
       inter_insert(location, pruned_list, 0);
     }
 
-    if (_queries_present && for_test) {
+    if (_queries_present) {
       insert_and_stitch(location);
     }
 

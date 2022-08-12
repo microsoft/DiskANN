@@ -29,7 +29,7 @@ namespace po = boost::program_options;
 
 template<typename T>
 void build_with_query_data(const std::string& data_path, const unsigned L,
-                           const unsigned R, const float alpha,
+                           const unsigned R, const unsigned S, const float alpha,
                            const unsigned     thread_count,
                            const std::string& save_path,
                            const std::string& query_path) {
@@ -39,6 +39,7 @@ void build_with_query_data(const std::string& data_path, const unsigned L,
   diskann::Parameters paras;
   paras.Set<unsigned>("L", L);
   paras.Set<unsigned>("R", R);
+  paras.Set<unsigned>("S", S);
   paras.Set<unsigned>("C", C);
   paras.Set<float>("alpha", alpha);
   paras.Set<bool>("saturate_graph", saturate_graph);
@@ -107,7 +108,7 @@ void build_with_query_data(const std::string& data_path, const unsigned L,
 //     index.insert_point(&data_load[j * aligned_dim], static_cast<TagT>(j));
 //   }
 //   index.graph_stats();
-//   index.marked_graph_stats();
+//   index.stitched_graph_stats();
 // }
 
 #pragma omp parallel for num_threads(thread_count) schedule(dynamic)
@@ -123,60 +124,60 @@ void build_with_query_data(const std::string& data_path, const unsigned L,
 
   std::cout << "Inserted points in " << seconds << " seconds" << std::endl;
 
-  index.save(save_path.c_str());
+  // index.save(save_path.c_str());
 
-//     int64_t start = num_points - num_points/20 - 1;
-//     int64_t end = num_points;
-//     // std::vector<int64_t> indices(num_points/20);
-//     // std::iota(indices.begin(), indices.end(), num_points - num_points/20-1);
-//     // std::random_shuffle(indices.begin(), indices.end()); 
+    int64_t start = num_points - num_points/20 - 1;
+    int64_t end = num_points;
+    // std::vector<int64_t> indices(num_points/20);
+    // std::iota(indices.begin(), indices.end(), num_points - num_points/20-1);
+    // std::random_shuffle(indices.begin(), indices.end()); 
 
-//   std::cout << "Deleting " << 10000
-//                   << " points from the index..." << std::endl;
-//         index.enable_delete();
-//         tsl::robin_set<TagT> deletes;
-//         for (int64_t k = start; k < end; k++) {
-//           deletes.insert(static_cast<TagT>(k));
-//         }
-//         std::vector<TagT> failed_deletes;
-//         index.lazy_delete(deletes, failed_deletes);
-//         omp_set_num_threads(thread_count);
-//         diskann::Timer delete_timer;
-//         index.consolidate_deletes(paras);
-//         double elapsedSeconds = delete_timer.elapsed() / 1000000.0;
+  std::cout << "Deleting " << 10000
+                  << " points from the index..." << std::endl;
+        index.enable_delete();
+        tsl::robin_set<TagT> deletes;
+        for (int64_t k = start; k < end; k++) {
+          deletes.insert(static_cast<TagT>(k));
+        }
+        std::vector<TagT> failed_deletes;
+        index.lazy_delete(deletes, failed_deletes);
+        omp_set_num_threads(thread_count);
+        diskann::Timer delete_timer;
+        index.consolidate_deletes(paras);
+        double elapsedSeconds = delete_timer.elapsed() / 1000000.0;
 
-//         std::cout << "Deleted " << 10000 << " points in "
-//                   << elapsedSeconds << " seconds" << std::endl;
+        std::cout << "Deleted " << 10000 << " points in "
+                  << elapsedSeconds << " seconds" << std::endl;
 
-//         index.graph_stats();
-//         index.marked_graph_stats();
+        index.graph_stats();
+        index.stitched_graph_stats();
 
-//         // RE-INSERTIONS
-//         std::cout << "Re-inserting the same " << 10000
-//                   << " points from the index..." << std::endl;
-//         diskann::Timer insert_timer;
-// #pragma omp parallel for num_threads(thread_count) schedule(dynamic)
-//         for (int64_t k = start;
-//              k < (int64_t) end; k++) {
-//           index.insert_point(&data_load[k * aligned_dim],
-//                                   static_cast<TagT>(k));
-//         }
-//         elapsedSeconds = insert_timer.elapsed() / 1000000.0;
+        // RE-INSERTIONS
+        std::cout << "Re-inserting the same " << 10000
+                  << " points from the index..." << std::endl;
+        diskann::Timer insert_timer;
+#pragma omp parallel for num_threads(thread_count) schedule(dynamic)
+        for (int64_t k = start;
+             k < (int64_t) end; k++) {
+          index.insert_point(&data_load[k * aligned_dim],
+                                  static_cast<TagT>(k));
+        }
+        elapsedSeconds = insert_timer.elapsed() / 1000000.0;
 
-//         std::cout << "Inserted " << 10000 << " points in "
-//                   << elapsedSeconds << " seconds" << std::endl;
-//         std::cout << std::endl;
+        std::cout << "Inserted " << 10000 << " points in "
+                  << elapsedSeconds << " seconds" << std::endl;
+        std::cout << std::endl;
 
-//         index.graph_stats();
-//         index.marked_graph_stats();
-//   auto new_save = save_path + ".inc";
+        index.graph_stats();
+        index.stitched_graph_stats();
+  auto new_save = save_path + ".inc";
 
-//   index.save(new_save.c_str());
+  index.save(new_save.c_str());
 }
 
 int main(int argc, char** argv) {
   std::string data_type, data_path, save_path, query_file;
-  unsigned    num_threads, R, L;
+  unsigned    num_threads, R, L, S;
   float       alpha;
 
   po::options_description desc{"Arguments"};
@@ -197,6 +198,9 @@ int main(int argc, char** argv) {
     desc.add_options()("max_degree,R",
                        po::value<uint32_t>(&R)->default_value(64),
                        "Maximum graph degree");
+    desc.add_options()("max_stitched_degree,S",
+                       po::value<uint32_t>(&S)->default_value(12),
+                       "Maximum stitched graph degree");
     desc.add_options()(
         "Lbuild,L", po::value<uint32_t>(&L)->default_value(100),
         "Build complexity, higher value results in better graphs");
@@ -224,13 +228,13 @@ int main(int argc, char** argv) {
 
   try {
     if (data_type == std::string("int8"))
-      build_with_query_data<int8_t>(data_path, L, R, alpha, num_threads,
+      build_with_query_data<int8_t>(data_path, L, R, S, alpha, num_threads,
                                     save_path, query_file);
     else if (data_type == std::string("uint8"))
-      build_with_query_data<uint8_t>(data_path, L, R, alpha, num_threads,
+      build_with_query_data<uint8_t>(data_path, L, R, S, alpha, num_threads,
                                      save_path, query_file);
     else if (data_type == std::string("float"))
-      build_with_query_data<float>(data_path, L, R, alpha, num_threads,
+      build_with_query_data<float>(data_path, L, R, S, alpha, num_threads,
                                    save_path, query_file);
     else
       std::cout << "Unsupported type. Use float/int8/uint8" << std::endl;

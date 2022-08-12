@@ -132,7 +132,12 @@ namespace diskann {
     DISKANN_DLLEXPORT void   load(const char *index_file, uint32_t num_threads,
                                   uint32_t search_l);
     DISKANN_DLLEXPORT size_t load_graph(const std::string filename,
-                                        size_t            expected_num_points);
+                                        size_t            expected_num_points,
+                                        const int version = 0);
+    DISKANN_DLLEXPORT size_t load_graph_internal(const std::string filename,
+                                        size_t            expected_num_points,
+                                        unsigned &max_observed_degree,
+                                        std::vector<std::vector<unsigned>> &final_graph);
     DISKANN_DLLEXPORT size_t load_data(std::string filename0);
     DISKANN_DLLEXPORT size_t load_tags(const std::string tag_file_name);
     DISKANN_DLLEXPORT size_t load_delete_set(const std::string &filename);
@@ -188,7 +193,7 @@ namespace diskann {
     DISKANN_DLLEXPORT void clear_index();
 
     // Will fail if tag already in the index
-    int insert_point(const T *point, const TagT tag, bool for_test = true);
+    int insert_point(const T *point, const TagT tag);
 
     // call this before issuing deleteions to sets relevant flags
     DISKANN_DLLEXPORT int enable_delete();
@@ -243,7 +248,6 @@ namespace diskann {
     DISKANN_DLLEXPORT int get_vector_by_tag(TagT &tag, T *vec);
 
     DISKANN_DLLEXPORT void print_status() const;
-    DISKANN_DLLEXPORT void query_nn_stats();
     DISKANN_DLLEXPORT void stitched_graph_stats();
     DISKANN_DLLEXPORT void graph_stats();
 
@@ -295,7 +299,7 @@ namespace diskann {
         size_t &max_points, size_t &num_frozen_pts,
         std::vector<std::vector<unsigned>> &final_graph, const unsigned &start,
         bool ret_frozen = true, bool search_invocation = false,
-        const int version = 0);
+        const int version = 0, bool include_stitched = true);
 
     std::pair<uint32_t, uint32_t> iterate_to_fixed_point(
         const T *node_coords, const unsigned Lindex,
@@ -305,7 +309,7 @@ namespace diskann {
         std::vector<Neighbor> &best_L_nodes, std::vector<unsigned> &des,
         tsl::robin_set<unsigned> &inserted_into_pool_rs,
         boost::dynamic_bitset<> &inserted_into_pool_bs, bool ret_frozen = true,
-        bool search_invocation = false, const int version = 0);
+        bool search_invocation = false, const int version = 0, bool include_stitched = true);
 
     void get_expanded_nodes(const size_t node, const unsigned Lindex,
                             std::vector<unsigned>     init_ids,
@@ -314,7 +318,8 @@ namespace diskann {
                             std::vector<unsigned> &   des,
                             std::vector<Neighbor> &   best_L_nodes,
                             tsl::robin_set<unsigned> &inserted_into_pool_rs,
-                            boost::dynamic_bitset<> & inserted_into_pool_bs);
+                            boost::dynamic_bitset<> & inserted_into_pool_bs,
+                            const bool include_stitched = true);
 
     void get_expanded_nodes_internal(
         const size_t node_id, const unsigned Lindex,
@@ -383,7 +388,7 @@ namespace diskann {
                        const int version);
 
     void populate_query_nn();
-    void delete_from_stitched_graph(tsl::robin_set<unsigned> &delete_set);
+    // void delete_from_stitched_graph(tsl::robin_set<unsigned> &delete_set);
     void robust_stitch(); 
     void insert_and_stitch(unsigned location);
     void delete_and_restitch(tsl::robin_set<unsigned> &delete_set);
@@ -449,7 +454,7 @@ namespace diskann {
     size_t _neighbor_len;
 
     unsigned _max_observed_degree = 0;
-    unsigned _max_observed_qdegree = 0;
+    unsigned _max_observed_sdegree = 0;
     unsigned _start = 0;
     unsigned _query_start = 0;
 
@@ -463,6 +468,7 @@ namespace diskann {
     // Indexing parameters
     uint32_t _indexingQueueSize;
     uint32_t _indexingRange;
+    uint32_t _stitchingRange;
     uint32_t _indexingMaxC;
     float    _indexingAlpha;
     uint32_t _search_queue_size;

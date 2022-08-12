@@ -27,9 +27,11 @@
 
 namespace po = boost::program_options;
 
+
+
 template<typename T>
 void build_with_query_data(const std::string& data_path, const unsigned L,
-                           const unsigned R, const float alpha,
+                           const unsigned R, const unsigned S, const float alpha,
                            const unsigned     thread_count,
                            const std::string& save_path,
                            const std::string& query_path) {
@@ -39,6 +41,7 @@ void build_with_query_data(const std::string& data_path, const unsigned L,
   diskann::Parameters paras;
   paras.Set<unsigned>("L", L);
   paras.Set<unsigned>("R", R);
+  paras.Set<unsigned>("S", S);
   paras.Set<unsigned>("C", C);
   paras.Set<float>("alpha", alpha);
   paras.Set<bool>("saturate_graph", saturate_graph);
@@ -87,7 +90,7 @@ void build_with_query_data(const std::string& data_path, const unsigned L,
 
 int main(int argc, char** argv) {
   std::string data_type, data_path, save_path, query_file;
-  unsigned    num_threads, R, L;
+  unsigned    num_threads, R, L, S;
   float       alpha;
 
   po::options_description desc{"Arguments"};
@@ -108,6 +111,9 @@ int main(int argc, char** argv) {
     desc.add_options()("max_degree,R",
                        po::value<uint32_t>(&R)->default_value(64),
                        "Maximum graph degree");
+    desc.add_options()("max_stitched,S",
+                       po::value<uint32_t>(&S)->default_value(12),
+                       "Maximum stitched graph degree");
     desc.add_options()(
         "Lbuild,L", po::value<uint32_t>(&L)->default_value(100),
         "Build complexity, higher value results in better graphs");
@@ -135,13 +141,13 @@ int main(int argc, char** argv) {
 
   try {
     if (data_type == std::string("int8"))
-      build_with_query_data<int8_t>(data_path, L, R, alpha, num_threads,
+      build_with_query_data<int8_t>(data_path, L, R, S, alpha, num_threads,
                                     save_path, query_file);
     else if (data_type == std::string("uint8"))
-      build_with_query_data<uint8_t>(data_path, L, R, alpha, num_threads,
+      build_with_query_data<uint8_t>(data_path, L, R, S, alpha, num_threads,
                                      save_path, query_file);
     else if (data_type == std::string("float"))
-      build_with_query_data<float>(data_path, L, R, alpha, num_threads,
+      build_with_query_data<float>(data_path, L, R, S, alpha, num_threads,
                                    save_path, query_file);
     else
       std::cout << "Unsupported type. Use float/int8/uint8" << std::endl;

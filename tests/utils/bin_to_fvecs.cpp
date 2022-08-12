@@ -2,7 +2,7 @@
 // Licensed under the MIT license.
 
 #include <iostream>
-#include "util.h"
+#include "utils.h"
 
 void block_convert(std::ifstream& writr, std::ofstream& readr, float* read_buf,
                    float* write_buf, _u64 npts, _u64 ndims) {
@@ -28,7 +28,7 @@ int main(int argc, char** argv) {
   readr.read((char*) &ndims_s32, sizeof(_s32));
   size_t npts = npts_s32;
   size_t ndims = ndims_s32;
-  _u32   ndims_u32 = (_u32) ndims_s32;
+  _u32   ndims_u32 = (_u32) ndims_s32;       
   //  _u64          fsize = writr.tellg();
   readr.seekg(0, std::ios::beg);
 

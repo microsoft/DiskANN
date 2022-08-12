@@ -205,7 +205,7 @@ std::string get_save_filename(const std::string& save_path,
 // in batches of 10% graph size
 template<typename T>
 void test_batch_deletes(const std::string& data_path, const unsigned L,
-                        const unsigned R, const float alpha,
+                        const unsigned R, const unsigned S, const float alpha,
                         const unsigned            thread_count,
                         const std::string& save_path, const std::string& query_path, const int rounds,
                         std::string& gt_file, const std::string& query_file,
@@ -216,6 +216,7 @@ void test_batch_deletes(const std::string& data_path, const unsigned L,
   diskann::Parameters paras;
   paras.Set<unsigned>("L", L);
   paras.Set<unsigned>("R", R);
+  paras.Set<unsigned>("S", S);
   paras.Set<unsigned>("C", C);
   paras.Set<float>("alpha", alpha);
   paras.Set<bool>("saturate_graph", saturate_graph);
@@ -349,7 +350,7 @@ void test_batch_deletes(const std::string& data_path, const unsigned L,
       for (int64_t k = points_seen;
            k < (int64_t) points_seen + points_in_part; k++) {
         index.insert_point(&data_load[indices[k] * aligned_dim],
-                                static_cast<TagT>(indices[k]), true);
+                                static_cast<TagT>(indices[k]));
       }
       elapsedSeconds = insert_timer.elapsed() / 1000000.0;
 
@@ -396,7 +397,7 @@ void test_batch_deletes(const std::string& data_path, const unsigned L,
 
 int main(int argc, char** argv) {
   std::string data_type, data_path, save_path, sample_query_path, gt_file, query_file, res_path;
-  unsigned    num_threads, R, L;
+  unsigned    num_threads, R, L, S;
   float       alpha;
   int                 rounds;
 
@@ -426,6 +427,9 @@ int main(int argc, char** argv) {
     desc.add_options()("max_degree,R",
                        po::value<uint32_t>(&R)->default_value(64),
                        "Maximum graph degree");
+    desc.add_options()("max_stitched_degree,S",
+                       po::value<uint32_t>(&S)->default_value(12),
+                       "Maximum stitched graph degree");
     desc.add_options()(
         "Lbuild,L", po::value<uint32_t>(&L)->default_value(100),
         "Build complexity, higher value results in better graphs");
@@ -455,15 +459,15 @@ int main(int argc, char** argv) {
 
   try {
     if (data_type == std::string("int8"))
-      test_batch_deletes<int8_t>(data_path, L, R, alpha, num_threads,
+      test_batch_deletes<int8_t>(data_path, L, R, S, alpha, num_threads,
                                  save_path, sample_query_path, rounds, gt_file, query_file,
                                  res_path);
     else if (data_type == std::string("uint8"))
-      test_batch_deletes<uint8_t>(data_path, L, R, alpha, num_threads,
+      test_batch_deletes<uint8_t>(data_path, L, R, S, alpha, num_threads,
                                   save_path, sample_query_path, rounds, gt_file, query_file,
                                   res_path);
     else if (data_type == std::string("float"))
-      test_batch_deletes<float>(data_path, L, R, alpha, num_threads,
+      test_batch_deletes<float>(data_path, L, R, S, alpha, num_threads,
                                 save_path, sample_query_path, rounds, gt_file, query_file,
                                 res_path);
     else

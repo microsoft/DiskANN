@@ -30,7 +30,7 @@ int search_memory_index(diskann::Metric& metric, const std::string& index_path,
                         std::string& truthset_file, const unsigned num_threads,
                         const unsigned               recall_at,
                         const std::vector<unsigned>& Lvec, const bool dynamic,
-                        const bool tags) {
+                        const bool tags, const bool stitch) {
   // Load the query file
   T*        query = nullptr;
   unsigned* gt_ids = nullptr;
@@ -55,9 +55,8 @@ int search_memory_index(diskann::Metric& metric, const std::string& index_path,
 
   bool support_eager_delete = false;
   bool concurrent_consolidate = false;
-  bool queries_present = false;
 
-  diskann::Index<T, uint32_t> index(metric, query_dim, 1, dynamic, tags, support_eager_delete, concurrent_consolidate, queries_present);
+  diskann::Index<T, uint32_t> index(metric, query_dim, 1, dynamic, tags, support_eager_delete, concurrent_consolidate, stitch);
   index.load(index_path.c_str(), num_threads,
              *(std::max_element(Lvec.begin(), Lvec.end())));
   std::cout << "Index loaded" << std::endl;
@@ -191,7 +190,7 @@ int main(int argc, char** argv) {
       gt_file;
   unsigned              num_threads, K;
   std::vector<unsigned> Lvec;
-  bool                  dynamic, tags;
+  bool                  dynamic, tags, stitch;
 
   po::options_description desc{"Arguments"};
   try {
@@ -229,6 +228,8 @@ int main(int argc, char** argv) {
                        "Whether the index is dynamic. Default false.");
     desc.add_options()("tags", po::value<bool>(&tags)->default_value(false),
                        "Whether to search with tags. Default false.");
+    desc.add_options()("stitch", po::value<bool>(&stitch)->default_value(false),
+                       "Whether to load a stitched graph. Default false.");     
 
     po::variables_map vm;
     po::store(po::parse_command_line(argc, argv, desc), vm);
@@ -264,17 +265,17 @@ int main(int argc, char** argv) {
     if (data_type == std::string("int8")) {
       return search_memory_index<int8_t>(metric, index_path_prefix, result_path,
                                          query_file, gt_file, num_threads, K,
-                                         Lvec, dynamic, tags);
+                                         Lvec, dynamic, tags, stitch);
     }
 
     else if (data_type == std::string("uint8")) {
       return search_memory_index<uint8_t>(metric, index_path_prefix,
                                           result_path, query_file, gt_file,
-                                          num_threads, K, Lvec, dynamic, tags);
+                                          num_threads, K, Lvec, dynamic, tags, stitch);
     } else if (data_type == std::string("float")) {
       return search_memory_index<float>(metric, index_path_prefix, result_path,
                                         query_file, gt_file, num_threads, K,
-                                        Lvec, dynamic, tags);
+                                        Lvec, dynamic, tags, stitch);
     } else {
       std::cout << "Unsupported type. Use float/int8/uint8" << std::endl;
       return -1;
