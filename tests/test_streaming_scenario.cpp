@@ -352,7 +352,7 @@ int main(int argc, char** argv) {
         "the window while deleting the same number from the left");
     desc.add_options()(
         "start_point_norm",
-        po::value<uint32_t>(&start_point_norm)->default_value(0),
+        po::value<uint32_t>(&start_point_norm)->required(),
         "Set the start point to a random point on a sphere of this radius");
 
     po::variables_map vm;
