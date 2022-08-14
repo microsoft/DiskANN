@@ -40,8 +40,9 @@ The arguments are as follows:
 11. **--beginning_index_size**: how many points to build the initial index with. The number of points inserted dynamically will be max_points_to_insert - beginning_index_size. 
 12. **--points_per_checkpoint**: when inserting and deleting sequentially, each update is handled in points_per_checkpoint batches. When updating concurrently, insertions are handled in points_per_checkpoint batches but deletions are always processed in a single batch.
 13. **--checkpoints_per_snapshot**: when inserting and deleting sequentially, the graph is saved to memory every checkpoints_per_snapshot checkpoints. This is not currently supported for concurrent updates.
-14. **--points_to_delete_from_beginning**: how many points to delete from the index, starting in order of insertion. If deletions are concurrent with insertions, points_to_delete_from_beginning cannot be larger than beginning_index_size. 
-14. **--do_concurrent** (default false): whether to perform conslidate_deletes and other updates concurrently or sequentially. If concurrent is specified, half the threads are used for insertions and half the threads are used for processing deletes. Note that insertions are performed before deletions if this flag is set to false, so in this case is possible to delete more than beginning_index_size points.
+14. **--points_to_delete_from_beginning**: how many points to delete from the index, starting in order of insertion. If deletions are concurrent with insertions, points_to_delete_from_beginning cannot be larger than beginning_index_size.
+15. **--start_point_norm**: Set the starting node to a random point on a sphere of this radius. A reasonable choice is to set this to the average norm of the data set. Use when starting an index with zero points. 
+16. **--do_concurrent** (default false): whether to perform conslidate_deletes and other updates concurrently or sequentially. If concurrent is specified, half the threads are used for insertions and half the threads are used for processing deletes. Note that insertions are performed before deletions if this flag is set to false, so in this case is possible to delete more than beginning_index_size points.
 
 `tests/test_streaming_scenario` to try inserting, lazy deletes and consolidate_delete 
 ---------------------------------------------------------------------------------------------
@@ -60,6 +61,7 @@ The arguments are as follows:
 10. **--max_points_to_insert**: Maximum number of points from the data file to insert in to the index.
 11. **--active_window**: Approximate number of points in the index at any point.
 12. **--consolidate_interval**: Granularity at which insert and delete functions are called.
+13. **--start_point_norm**: Set the starting node to a random point on a sphere of this radius.  A reasonable choice is to set this to the average norm of the data stream.
 
 
 
@@ -122,7 +124,7 @@ cons_int=10000
 index=${index_prefix}.after-streaming-act${active}-cons${cons_int}-max${inserts}
 gt=data/sift/gt100_learn-act${active}-cons${cons_int}-max${inserts}
 
-./tests/test_streaming_scenario  --data_type ${type} --dist_fn l2 --data_path ${data}  --index_path_prefix ${index_prefix} -R 64 -L 600 --alpha 1.2 --insert_threads ${ins_thr} --consolidate_threads ${cons_thr}  --max_points_to_insert ${inserts}  --active_window ${active} --consolidate_interval ${cons_int};
+./tests/test_streaming_scenario  --data_type ${type} --dist_fn l2 --data_path ${data}  --index_path_prefix ${index_prefix} -R 64 -L 600 --alpha 1.2 --insert_threads ${ins_thr} --consolidate_threads ${cons_thr}  --max_points_to_insert ${inserts}  --active_window ${active} --consolidate_interval ${cons_int} --start_point_norm 508;
 ./tests/utils/compute_groundtruth --data_type ${type} --dist_fn l2 --base_file ${index}.data  --query_file ${query}  --K 100 --gt_file ${gt} --tags_file  ${index}.tags
 ./tests/search_memory_index  --data_type ${type} --dist_fn l2 --index_path_prefix ${index} --result_path ${result} --query_file ${query}  --gt_file ${gt}  -K 10 -L 20 40 60 80 100 -T 64 --dynamic true --tags 1
 ```

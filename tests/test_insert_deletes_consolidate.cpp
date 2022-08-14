@@ -86,7 +86,7 @@ std::string get_save_filename(const std::string& save_path,
     final_path += "skip" + std::to_string(points_to_skip) + "-";
   }
 
-  final_path += "del" + std::to_string(points_deleted) + "-"; 
+  final_path += "del" + std::to_string(points_deleted) + "-";
   final_path += std::to_string(last_point_threshold);
   return final_path;
 }
@@ -144,9 +144,10 @@ void build_incremental_index(
     const std::string& data_path, const unsigned L, const unsigned R,
     const float alpha, const unsigned thread_count, size_t points_to_skip,
     size_t max_points_to_insert, size_t beginning_index_size,
-    size_t points_per_checkpoint, size_t checkpoints_per_snapshot,
-    const std::string& save_path, size_t points_to_delete_from_beginning,
-    size_t start_deletes_after, bool concurrent) {
+    unsigned start_point_norm, size_t points_per_checkpoint,
+    size_t checkpoints_per_snapshot, const std::string& save_path,
+    size_t points_to_delete_from_beginning, size_t start_deletes_after,
+    bool concurrent) {
   const unsigned C = 500;
   const bool     saturate_graph = false;
 
@@ -231,7 +232,7 @@ void build_incremental_index(
     index.build(data, beginning_index_size, params, tags);
     index.enable_delete();
   } else {
-    index.build_with_zero_points();
+    index.set_start_point_at_random(static_cast<T>(start_point_norm));
     index.enable_delete();
   }
 
@@ -354,7 +355,7 @@ void build_incremental_index(
 
 int main(int argc, char** argv) {
   std::string data_type, dist_fn, data_path, index_path_prefix;
-  unsigned    num_threads, R, L;
+  unsigned    num_threads, R, L, start_point_norm;
   float       alpha;
   size_t      points_to_skip, max_points_to_insert, beginning_index_size,
       points_per_checkpoint, checkpoints_per_snapshot,
@@ -417,6 +418,10 @@ int main(int argc, char** argv) {
     desc.add_options()(
         "start_deletes_after",
         po::value<uint64_t>(&start_deletes_after)->default_value(0), "");
+    desc.add_options()(
+        "start_point_norm",
+        po::value<uint32_t>(&start_point_norm)->default_value(0),
+        "Set the start point to a random point on a sphere of this radius");
 
     po::variables_map vm;
     po::store(po::parse_command_line(argc, argv, desc), vm);
@@ -424,6 +429,13 @@ int main(int argc, char** argv) {
       std::cout << desc;
       return 0;
     }
+    if (beginning_index_size == 0)
+      if (start_point_norm) {
+        std::cout << "When beginning_index_size is 0, use a start point with  "
+                     "appropriate norm"
+                  << std::endl;
+        return -1;
+      }
     po::notify(vm);
   } catch (const std::exception& ex) {
     std::cerr << ex.what() << '\n';
@@ -434,20 +446,20 @@ int main(int argc, char** argv) {
     if (data_type == std::string("int8"))
       build_incremental_index<int8_t>(
           data_path, L, R, alpha, num_threads, points_to_skip,
-          max_points_to_insert, beginning_index_size, points_per_checkpoint,
-          checkpoints_per_snapshot, index_path_prefix,
+          max_points_to_insert, beginning_index_size, start_point_norm,
+          points_per_checkpoint, checkpoints_per_snapshot, index_path_prefix,
           points_to_delete_from_beginning, start_deletes_after, concurrent);
     else if (data_type == std::string("uint8"))
       build_incremental_index<uint8_t>(
           data_path, L, R, alpha, num_threads, points_to_skip,
-          max_points_to_insert, beginning_index_size, points_per_checkpoint,
-          checkpoints_per_snapshot, index_path_prefix,
+          max_points_to_insert, beginning_index_size, start_point_norm,
+          points_per_checkpoint, checkpoints_per_snapshot, index_path_prefix,
           points_to_delete_from_beginning, start_deletes_after, concurrent);
     else if (data_type == std::string("float"))
       build_incremental_index<float>(
           data_path, L, R, alpha, num_threads, points_to_skip,
-          max_points_to_insert, beginning_index_size, points_per_checkpoint,
-          checkpoints_per_snapshot, index_path_prefix,
+          max_points_to_insert, beginning_index_size, start_point_norm,
+          points_per_checkpoint, checkpoints_per_snapshot, index_path_prefix,
           points_to_delete_from_beginning, start_deletes_after, concurrent);
     else
       std::cout << "Unsupported type. Use float/int8/uint8" << std::endl;

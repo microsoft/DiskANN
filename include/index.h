@@ -160,8 +160,10 @@ namespace diskann {
                                  Parameters              &parameters,
                                  const std::vector<TagT> &tags);
 
-    // Bootstrap an index with zero points for further incremental build
-    DISKANN_DLLEXPORT void build_with_zero_points();
+    // Set starting point of an index before inserting any points incrementally
+    DISKANN_DLLEXPORT void set_start_point(T *data);
+    // Set starting point to a random point on a sphere of certain radius
+    DISKANN_DLLEXPORT void set_start_point_at_random(T radius);
 
     // For Bulk Index FastL2 search, we interleave the data with graph
     DISKANN_DLLEXPORT void optimize_index_layout();
