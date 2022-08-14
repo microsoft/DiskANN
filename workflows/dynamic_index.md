@@ -99,11 +99,27 @@ cd ..
 ./tests/utils/fvecs_to_bin data/sift/sift_query.fvecs data/sift/sift_query.fbin
 ```
 
-The example below tests the following scenario: using a file with 100000 points, the first 50000 points are used to initially build the index. Then, the first 25000 points are deleted from the index, while an additional 25000 points (i.e. points 50001 to 75000) are concurrently inserted into the index. Note that the memory index should be built **before** calculating the ground truth, since the memory index returns the slice of the sift100K dataset that was used to build the final graph (that is, points 25001-75000 in the original index).
+The example below tests the following scenario: using a file with 100000 points, the index is incrementally constructed point by point. After the first 50000 ponts are inserted, another concurrent job deletes the first 25000 points from the index and consolidates the index (edit the graph and cleans up resources). At the same time an additional 25000 points (i.e. points 50001 to 75000) are concurrently inserted into the index. Note that the index should be built **before** calculating the ground truth, since the memory index returns the slice of the sift100K dataset that was used to build the final graph (that is, points 25001-75000 in the original index).
 ```bash
-./tests/test_insert_deletes_consolidate  --data_type float --dist_fn l2 --data_path data/sift/sift_learn.fbin --index_path_prefix data/sift/index_sift_learn_dynamic -R 32 -L 50 --alpha 1.2 -T 16 --points_to_skip 0 --max_points_to_insert 75000 --beginning_index_size 25000 --points_per_checkpoint 10000 --checkpoints_per_snapshot 0 --points_to_delete_from_beginning 25000 --start_deletes_after 50000 --do_concurrent true
-./tests/utils/compute_groundtruth  --data_type float --dist_fn l2 --base_file data/sift/index_sift_learn_dynamic.after_concurrent_change.data --query_file  data/sift/sift_query.fbin --gt_file data/sift/sift_query_learn_dynamic_gt100 --tags_file  data/sift/index_sift_learn_dynamic.after-concurrent-delete-del25000-75000.tags --K 10
-./tests/search_memory_index  --data_type float --dist_fn l2 --index_path_prefix data/sift/index_sift_learn_dynamic.after_concurrent_change --query_file data/sift/sift_query.fbin  --gt_file data/sift/sift_query_learn_dynamic_gt100 -K 10 -L 10 20 30 40 50 100 --result_path data/sift/res --dynamic true
+type='float'
+data='data/sift/sift_learn.fbin'
+query='data/sift/sift_query.fbin'
+index_prefix='data/sift/index'
+result='data/sift/res'
+deletes=25000
+inserts=75000
+deletes_after=50000
+pts_per_checkpoint=10000
+begin=0
+thr=64
+index=${index_prefix}.after-concurrent-delete-del${deletes}-${inserts}
+gt_file=data/sift/gt100_learn-conc-${deletes}-${inserts}
+
+ ~/DiskANN/build/tests/test_insert_deletes_consolidate  --data_type ${type} --dist_fn l2 --data_path ${data}  --index_path_prefix ${index_prefix} -R 64 -L 300 --alpha 1.2 -T ${thr} --points_to_skip 0 --max_points_to_insert ${inserts} --beginning_index_size ${begin} --points_per_checkpoint ${pts_per_checkpoint} --checkpoints_per_snapshot 0 --points_to_delete_from_beginning ${deletes} --start_deletes_after ${deletes_after} --do_concurrent true;
+
+ ~/DiskANN/build/tests/utils/compute_groundtruth --data_type ${type} --dist_fn l2 --base_file ${index}.data  --query_file ${query}  --K 100 --gt_file ${gt_file} --tags_file  ${index}.tags
+
+~/DiskANN/build/tests/search_memory_index  --data_type ${type} --dist_fn l2 --index_path_prefix ${index} --result_path ${result} --query_file ${query}  --gt_file ${gt_file}  -K 10 -L 20 40 60 80 100 -T ${thr} --dynamic true --tags 1
  ```
 
  The example below tests the following scenario: using a file with 100000 points, insert 10000 points at a time. After the first 40000
@@ -116,8 +132,8 @@ data='data/sift/sift_learn.fbin'
 query='data/sift/sift_query.fbin'
 index_prefix='data/sift/idx_learn_str'
 result='data/sift/res'
-ins_thr=4
-cons_thr=4
+ins_thr=16
+cons_thr=16
 inserts=100000
 active=20000
 cons_int=10000
