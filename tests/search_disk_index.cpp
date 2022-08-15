@@ -112,7 +112,7 @@ int search_disk_index(
   //_pFlashIndex->cache_bfs_levels(num_nodes_to_cache, node_list);
   if (num_nodes_to_cache > 0)
     _pFlashIndex->generate_cache_list_from_sample_queries(
-      warmup_query_file, 15, 6, num_nodes_to_cache, num_threads, node_list);
+        warmup_query_file, 15, 6, num_nodes_to_cache, num_threads, node_list);
   _pFlashIndex->load_cache_list(node_list);
   node_list.clear();
   node_list.shrink_to_fit();
@@ -150,10 +150,10 @@ int search_disk_index(
 
 #pragma omp parallel for schedule(dynamic, 1)
     for (_s64 i = 0; i < (int64_t) warmup_num; i++) {
-      _pFlashIndex->cached_beam_search(
-          warmup + (i * warmup_aligned_dim), 1, warmup_L,
-          warmup_result_ids_64.data() + (i * 1),
-          warmup_result_dists.data() + (i * 1), 4);
+      _pFlashIndex->cached_beam_search(warmup + (i * warmup_aligned_dim), 1,
+                                       warmup_L,
+                                       warmup_result_ids_64.data() + (i * 1),
+                                       warmup_result_dists.data() + (i * 1), 4);
     }
     diskann::cout << "..done" << std::endl;
   }

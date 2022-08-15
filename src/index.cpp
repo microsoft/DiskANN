@@ -2478,8 +2478,7 @@ namespace diskann {
                   << num_dangling << std::endl;
 
     _tag_to_location.clear();
-    for (auto pos = _location_to_tag.find_first();
-         pos.is_valid();
+    for (auto pos = _location_to_tag.find_first(); pos.is_valid();
          pos = _location_to_tag.find_next(pos)) {
       const auto tag = _location_to_tag.get(pos);
       _tag_to_location[tag] = new_location[pos._key];
@@ -2737,8 +2736,7 @@ namespace diskann {
     } else {
       std::unique_lock<std::shared_timed_mutex> lock(_tag_lock);
       pruned_list.push_back(_start);
-      for (auto pos = _location_to_tag.find_first();
-           pos.is_valid();
+      for (auto pos = _location_to_tag.find_first(); pos.is_valid();
            pos = _location_to_tag.find_next(pos)) {
         pruned_list.push_back(pos._key);
         if (pruned_list.size() >= _indexingRange)

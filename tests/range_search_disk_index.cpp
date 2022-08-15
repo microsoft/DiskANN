@@ -342,17 +342,17 @@ int main(int argc, char** argv) {
 
   try {
     if (data_type == std::string("float"))
-      return search_disk_index<float>(
-          metric, index_path_prefix, query_file, gt_file,
-          num_threads, range, W, num_nodes_to_cache, Lvec);
+      return search_disk_index<float>(metric, index_path_prefix, query_file,
+                                      gt_file, num_threads, range, W,
+                                      num_nodes_to_cache, Lvec);
     else if (data_type == std::string("int8"))
-      return search_disk_index<int8_t>(
-          metric, index_path_prefix, query_file, gt_file,
-          num_threads, range, W, num_nodes_to_cache, Lvec);
+      return search_disk_index<int8_t>(metric, index_path_prefix, query_file,
+                                       gt_file, num_threads, range, W,
+                                       num_nodes_to_cache, Lvec);
     else if (data_type == std::string("uint8"))
-      return search_disk_index<uint8_t>(
-          metric, index_path_prefix, query_file, gt_file,
-          num_threads, range, W, num_nodes_to_cache, Lvec);
+      return search_disk_index<uint8_t>(metric, index_path_prefix, query_file,
+                                        gt_file, num_threads, range, W,
+                                        num_nodes_to_cache, Lvec);
     else {
       std::cerr << "Unsupported data type. Use float or int8 or uint8"
                 << std::endl;

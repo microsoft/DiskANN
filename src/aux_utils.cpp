@@ -10,7 +10,8 @@
 #include <string>
 #include <vector>
 
-#if defined(RELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS) && defined(DISKANN_BUILD)
+#if defined(RELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS) && \
+    defined(DISKANN_BUILD)
 #include "gperftools/malloc_extension.h"
 #endif
 
@@ -70,8 +71,8 @@ namespace diskann {
       reader.read(dump, cur_block_size);
       writer.write(dump, cur_block_size);
     }
-//    reader.close();
-//    writer.close();
+    //    reader.close();
+    //    writer.close();
 
     delete[] dump;
     std::vector<_u64> new_meta;
@@ -667,8 +668,8 @@ namespace diskann {
         pFlashIndex->cached_beam_search(
             tuning_sample + (i * tuning_sample_aligned_dim), 1, L,
             tuning_sample_result_ids_64.data() + (i * 1),
-            tuning_sample_result_dists.data() + (i * 1), cur_bw, 
-            false, stats + i);
+            tuning_sample_result_dists.data() + (i * 1), cur_bw, false,
+            stats + i);
       }
       auto e = std::chrono::high_resolution_clock::now();
       std::chrono::duration<double> diff = e - s;
@@ -802,8 +803,8 @@ namespace diskann {
     _u64 n_data_nodes_per_sector = 0;
 
     if (append_reorder_data) {
-      n_data_nodes_per_sector = 
-        SECTOR_LEN / (ndims_reorder_file * sizeof(float));
+      n_data_nodes_per_sector =
+          SECTOR_LEN / (ndims_reorder_file * sizeof(float));
       n_reorder_sectors =
           ROUND_UP(npts_64, n_data_nodes_per_sector) / n_data_nodes_per_sector;
     }
@@ -913,8 +914,8 @@ namespace diskann {
 
   template<typename T>
   int build_disk_index(const char *dataFilePath, const char *indexFilePath,
-                        const char *    indexBuildParameters,
-                        diskann::Metric compareMetric) {
+                       const char *    indexBuildParameters,
+                       diskann::Metric compareMetric) {
     std::stringstream parser;
     parser << std::string(indexBuildParameters);
     std::string              cur_param;
@@ -1095,7 +1096,8 @@ namespace diskann {
     train_data = nullptr;
 // Gopal. Splitting diskann_dll into separate DLLs for search and build.
 // This code should only be available in the "build" DLL.
-#if defined(RELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS) && defined(DISKANN_BUILD)
+#if defined(RELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS) && \
+    defined(DISKANN_BUILD)
     MallocExtension::instance()->ReleaseFreeMemory();
 #endif
 

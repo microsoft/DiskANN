@@ -22,7 +22,8 @@ namespace diskann {
   template<typename T>
   class natural_number_set {
    public:
-    static_assert(std::is_trivial<T>::value, "Identifier must be a trivial type");
+    static_assert(std::is_trivial<T>::value,
+                  "Identifier must be a trivial type");
 
     natural_number_set();
 
