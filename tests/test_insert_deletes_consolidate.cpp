@@ -431,7 +431,7 @@ int main(int argc, char** argv) {
     }
     po::notify(vm);
     if (beginning_index_size == 0)
-      if (start_point_norm) {
+      if (start_point_norm == 0) {
         std::cout << "When beginning_index_size is 0, use a start point with  "
                      "appropriate norm"
                   << std::endl;
