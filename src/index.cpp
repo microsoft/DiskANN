@@ -244,20 +244,19 @@ namespace diskann {
     if (_max_points == 0) {
       _max_points = 1;
     }
-
+    const size_t total_internal_points = _max_points + _num_frozen_pts;
     alloc_aligned(((void **) &_data),
-                  (_max_points + _num_frozen_pts) * _aligned_dim * sizeof(T),
+                  total_internal_points * _aligned_dim * sizeof(T),
                   8 * sizeof(T));
-    std::memset(_data, 0,
-                (_max_points + _num_frozen_pts) * _aligned_dim * sizeof(T));
+    std::memset(_data, 0, total_internal_points * _aligned_dim * sizeof(T));
 
     _start = (unsigned) _max_points;
 
-    _final_graph.resize(_max_points + _num_frozen_pts);
+    _final_graph.resize(total_internal_points);
 
     if (_support_eager_delete) {
-      _in_graph.reserve(_max_points + _num_frozen_pts);
-      _in_graph.resize(_max_points + _num_frozen_pts);
+      _in_graph.reserve(total_internal_points);
+      _in_graph.resize(total_internal_points);
     }
 
     if (m == diskann::Metric::COSINE && std::is_floating_point<T>::value) {
@@ -271,14 +270,14 @@ namespace diskann {
       this->_distance = get_distance_function<T>(m);
     }
 
-    _locks = std::vector<non_recursive_mutex>(_max_points + _num_frozen_pts);
+    _locks = std::vector<non_recursive_mutex>(total_internal_points);
 
     if (_support_eager_delete)
-      _locks_in = std::vector<non_recursive_mutex>(_max_points + _num_frozen_pts);
+      _locks_in = std::vector<non_recursive_mutex>(total_internal_points);
 
     if (enable_tags) {
-      _location_to_tag.reserve(max_points + _num_frozen_pts);
-      _tag_to_location.reserve(max_points + _num_frozen_pts);
+      _location_to_tag.reserve(total_internal_points);
+      _tag_to_location.reserve(total_internal_points);
     }
   }
 
@@ -499,6 +498,8 @@ namespace diskann {
 
     size_t num_data_points =
         _num_frozen_pts > 0 ? file_num_points - 1 : file_num_points;
+    _location_to_tag.reserve(num_data_points);
+    _tag_to_location.reserve(num_data_points);
     for (_u32 i = 0; i < (_u32) num_data_points; i++) {
       TagT tag = *(tag_data + i);
       if (_delete_set.find(i) == _delete_set.end()) {
@@ -2629,6 +2630,7 @@ namespace diskann {
     _max_points = new_max_points;
     _start = (_u32) new_max_points;
 
+    _empty_slots.reserve(_max_points);
     for (auto i = _nd; i < _max_points; i++) {
       _empty_slots.insert((uint32_t) i);
     }
