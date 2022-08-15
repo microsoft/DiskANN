@@ -176,7 +176,7 @@ void build_incremental_index(const std::string& data_path, const unsigned L,
                              const unsigned consolidate_threads,
                              size_t max_points_to_insert, size_t active_window,
                              size_t             consolidate_interval,
-                             const unsigned     start_point_norm,
+                             const float        start_point_norm,
                              const std::string& save_path) {
   const unsigned C = 500;
   const bool     saturate_graph = false;
@@ -296,9 +296,9 @@ void build_incremental_index(const std::string& data_path, const unsigned L,
 
 int main(int argc, char** argv) {
   std::string data_type, dist_fn, data_path, index_path_prefix;
-  unsigned    insert_threads, consolidate_threads, start_point_norm;
+  unsigned    insert_threads, consolidate_threads;
   unsigned    R, L;
-  float       alpha;
+  float       alpha, start_point_norm;
   size_t      max_points_to_insert, active_window, consolidate_interval;
 
   po::options_description desc{"Arguments"};
@@ -351,8 +351,7 @@ int main(int argc, char** argv) {
         "The program simultaneously adds this number of points to the right of "
         "the window while deleting the same number from the left");
     desc.add_options()(
-        "start_point_norm",
-        po::value<uint32_t>(&start_point_norm)->required(),
+        "start_point_norm", po::value<float>(&start_point_norm)->required(),
         "Set the start point to a random point on a sphere of this radius");
 
     po::variables_map vm;
@@ -361,14 +360,13 @@ int main(int argc, char** argv) {
       std::cout << desc;
       return 0;
     }
-
+    po::notify(vm);
     if (start_point_norm == 0) {
-      std::cout << "When beginning_index_size is 0, use a start point with  "
+      std::cout << "When beginning_index_size is 0, use a start point with "
                    "appropriate norm"
                 << std::endl;
       return -1;
     }
-    po::notify(vm);
   } catch (const std::exception& ex) {
     std::cerr << ex.what() << '\n';
     return -1;
