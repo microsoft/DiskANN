@@ -144,7 +144,7 @@ void build_incremental_index(
     const std::string& data_path, const unsigned L, const unsigned R,
     const float alpha, const unsigned thread_count, size_t points_to_skip,
     size_t max_points_to_insert, size_t beginning_index_size,
-    unsigned start_point_norm, size_t points_per_checkpoint,
+    float start_point_norm, size_t points_per_checkpoint,
     size_t checkpoints_per_snapshot, const std::string& save_path,
     size_t points_to_delete_from_beginning, size_t start_deletes_after,
     bool concurrent) {
@@ -355,8 +355,8 @@ void build_incremental_index(
 
 int main(int argc, char** argv) {
   std::string data_type, dist_fn, data_path, index_path_prefix;
-  unsigned    num_threads, R, L, start_point_norm;
-  float       alpha;
+  unsigned    num_threads, R, L;
+  float       alpha, start_point_norm;
   size_t      points_to_skip, max_points_to_insert, beginning_index_size,
       points_per_checkpoint, checkpoints_per_snapshot,
       points_to_delete_from_beginning, start_deletes_after;
@@ -420,7 +420,7 @@ int main(int argc, char** argv) {
         po::value<uint64_t>(&start_deletes_after)->default_value(0), "");
     desc.add_options()(
         "start_point_norm",
-        po::value<uint32_t>(&start_point_norm)->default_value(0),
+        po::value<float>(&start_point_norm)->default_value(0),
         "Set the start point to a random point on a sphere of this radius");
 
     po::variables_map vm;
@@ -429,6 +429,7 @@ int main(int argc, char** argv) {
       std::cout << desc;
       return 0;
     }
+    po::notify(vm);
     if (beginning_index_size == 0)
       if (start_point_norm) {
         std::cout << "When beginning_index_size is 0, use a start point with  "
@@ -436,7 +437,6 @@ int main(int argc, char** argv) {
                   << std::endl;
         return -1;
       }
-    po::notify(vm);
   } catch (const std::exception& ex) {
     std::cerr << ex.what() << '\n';
     return -1;
