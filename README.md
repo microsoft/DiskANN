@@ -1,7 +1,8 @@
 # DiskANN
 
-The goal of the project is to build scalable, performant and cost-effective approximate nearest neighbor search algorithms.
-This release has the code from the [DiskANN paper](https://papers.nips.cc/paper/9527-rand-nsg-fast-accurate-billion-point-nearest-neighbor-search-on-a-single-node.pdf) published in NeurIPS 2019, and improvements. 
+The goal of the project is to build scalable, performant, streaming and cost-effective approximate nearest neighbor search algorithms for trillion-scale vector search.
+This release has the code from the [DiskANN paper](https://papers.nips.cc/paper/9527-rand-nsg-fast-accurate-billion-point-nearest-neighbor-search-on-a-single-node.pdf) published in NeurIPS 2019, 
+the [streaming DiskANN paper](https://arxiv.org/abs/2105.09613) and improvements. 
 This code reuses and builds upon some of the [code for NSG](https://github.com/ZJULearning/nsg) algorithm.
 
 This project has adopted the [Microsoft Open Source Code of Conduct](https://opensource.microsoft.com/codeofconduct/).
@@ -17,7 +18,7 @@ See [guidelines](CONTRIBUTING.md) for contributing to this project.
 Install the following packages through apt-get
 
 ```bash
-sudo apt install cmake g++ libaio-dev libgoogle-perftools-dev clang-format libboost-dev
+sudo apt install cmake g++ libaio-dev libgoogle-perftools-dev clang-format libboost-all-dev
 ```
 
 ### Install Intel MKL
@@ -37,7 +38,7 @@ sudo sh l_BaseKit_p_2022.1.2.146.sh -a --components intel.oneapi.lin.mkl.devel -
 
 ### Build
 ```bash
-mkdir build && cd build && cmake .. && make -j 
+mkdir build && cd build && cmake -DCMAKE_BUILD_TYPE=Release .. && make -j 
 ```
 
 ## Windows build:
@@ -83,4 +84,5 @@ Please see the following pages on using the compiled code:
 
 - [Commandline interface for building and search SSD based indices](workflows/SSD_index.md)  
 - [Commandline interface for building and search in memory indices](workflows/in_memory_index.md) 
+- [Commandline examples for using in-memory streaming indices](workflows/dynamic_index.md)
 - To be added: Python interfaces and docker files
