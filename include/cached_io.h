@@ -178,7 +178,6 @@ class cached_ofstream {
     writer.seekp(0);
   }
 
-
  private:
   // underlying ofstream
   std::ofstream writer;

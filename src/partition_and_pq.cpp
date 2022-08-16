@@ -16,7 +16,8 @@
 #include <sstream>
 #include <string>
 
-#if defined(RELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS) && defined(DISKANN_BUILD)
+#if defined(RELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS) && \
+    defined(DISKANN_BUILD)
 #include "gperftools/malloc_extension.h"
 #endif
 
@@ -219,7 +220,7 @@ int generate_pq_pivots(const float *passed_train_data, size_t num_train,
 
   std::unique_ptr<float[]> full_pivot_data;
 
-  if (file_exists(pq_pivots_path)) { 
+  if (file_exists(pq_pivots_path)) {
     size_t file_dim, file_num_centers;
     diskann::load_bin<float>(pq_pivots_path, full_pivot_data, file_num_centers,
                              file_dim, METADATA_SIZE);
@@ -597,7 +598,8 @@ int generate_pq_data_from_pivots(const std::string data_file,
   }
 // Gopal. Splitting diskann_dll into separate DLLs for search and build.
 // This code should only be available in the "build" DLL.
-#if defined(RELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS) && defined(DISKANN_BUILD)
+#if defined(RELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS) && \
+    defined(DISKANN_BUILD)
   MallocExtension::instance()->ReleaseFreeMemory();
 #endif
   compressed_file_writer.close();
@@ -1055,17 +1057,17 @@ int partition_with_ram_budget(const std::string data_file,
 // Instantations of supported templates
 
 template void DISKANN_DLLEXPORT
-              gen_random_slice<int8_t>(const std::string base_file,
+                                gen_random_slice<int8_t>(const std::string base_file,
                          const std::string output_prefix, double sampling_rate);
 template void DISKANN_DLLEXPORT gen_random_slice<uint8_t>(
     const std::string base_file, const std::string output_prefix,
     double sampling_rate);
 template void DISKANN_DLLEXPORT
-              gen_random_slice<float>(const std::string base_file,
+gen_random_slice<float>(const std::string base_file,
                         const std::string output_prefix, double sampling_rate);
 
 template void DISKANN_DLLEXPORT
-              gen_random_slice<float>(const float *inputdata, size_t npts, size_t ndims,
+                                gen_random_slice<float>(const float *inputdata, size_t npts, size_t ndims,
                         double p_val, float *&sampled_data, size_t &slice_size);
 template void DISKANN_DLLEXPORT gen_random_slice<uint8_t>(
     const uint8_t *inputdata, size_t npts, size_t ndims, double p_val,

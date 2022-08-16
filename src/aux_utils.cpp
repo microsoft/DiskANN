@@ -912,7 +912,8 @@ namespace diskann {
     diskann_writer.close();
     diskann::save_bin<_u64>(output_file, output_file_meta.data(),
                             output_file_meta.size(), 1, 0);
-    diskann::cout << "Output disk index file written to " << output_file << std::endl;
+    diskann::cout << "Output disk index file written to " << output_file
+                  << std::endl;
   }
 
   template<typename T>
