@@ -84,8 +84,8 @@ namespace {
 
 namespace diskann {
   template<typename T>
-  PQFlashIndex<T>::PQFlashIndex(
-      std::shared_ptr<AlignedFileReader> &fileReader, diskann::Metric m)
+  PQFlashIndex<T>::PQFlashIndex(std::shared_ptr<AlignedFileReader> &fileReader,
+                                diskann::Metric                     m)
       : reader(fileReader), metric(m) {
     if (m == diskann::Metric::COSINE || m == diskann::Metric::INNER_PRODUCT) {
       if (std::is_floating_point<T>::value) {
@@ -104,8 +104,6 @@ namespace diskann {
     this->dist_cmp.reset(diskann::get_distance_function<T>(m));
     this->dist_cmp_float.reset(diskann::get_distance_function<float>(m));
   }
-
-
 
   template<typename T>
   PQFlashIndex<T>::~PQFlashIndex() {
@@ -195,7 +193,6 @@ namespace diskann {
       diskann::aligned_free((void *) scratch.aligned_query_T);
 
       delete scratch.visited;
-
     }
     this->reader->deregister_all_threads();
   }
@@ -245,7 +242,9 @@ namespace diskann {
 
       _u64 node_idx = start_idx;
       for (_u32 i = 0; i < read_reqs.size(); i++) {
-#if defined(_WINDOWS) && defined(USE_BING_INFRA) // this block is to handle failed reads in production settings
+#if defined(_WINDOWS) && \
+    defined(USE_BING_INFRA)  // this block is to handle failed reads in
+                             // production settings
         if ((*ctx.m_pRequestsStatus)[i] != IOContext::READ_SUCCESS) {
           continue;
         }
@@ -260,8 +259,8 @@ namespace diskann {
         // insert node nhood into nhood_cache
         unsigned *node_nhood = OFFSET_TO_NODE_NHOOD(node_buf);
 
-        auto      nnbrs = *node_nhood;
-        unsigned *nbrs = node_nhood + 1;
+        auto                        nnbrs = *node_nhood;
+        unsigned *                  nbrs = node_nhood + 1;
         std::pair<_u32, unsigned *> cnhood;
         cnhood.first = nnbrs;
         cnhood.second = nhood_cache_buf + node_idx * (max_degree + 1);
@@ -429,7 +428,9 @@ namespace diskann {
 
         // process each nhood buf
         for (_u32 i = 0; i < read_reqs.size(); i++) {
-#if defined(_WINDOWS) && defined(USE_BING_INFRA) // this block is to handle read failures in production settings
+#if defined(_WINDOWS) && \
+    defined(USE_BING_INFRA)  // this block is to handle read failures in
+                             // production settings
           if ((*ctx.m_pRequestsStatus)[i] != IOContext::READ_SUCCESS) {
             continue;
           }
@@ -547,8 +548,7 @@ namespace diskann {
     std::string pq_table_bin = std::string(index_prefix) + "_pq_pivots.bin";
     std::string pq_compressed_vectors =
         std::string(index_prefix) + "_pq_compressed.bin";
-    std::string disk_index_file =
-        std::string(index_prefix) + "_disk.index";
+    std::string disk_index_file = std::string(index_prefix) + "_disk.index";
     std::string medoids_file = std::string(disk_index_file) + "_medoids.bin";
     std::string centroids_file =
         std::string(disk_index_file) + "_centroids.bin";
@@ -622,7 +622,9 @@ namespace diskann {
       disk_pq_table.load_pq_centroid_bin(disk_pq_pivots_path.c_str(), 0);
 #endif
       disk_pq_n_chunks = disk_pq_table.get_num_chunks();
-      disk_bytes_per_point = disk_pq_n_chunks * sizeof(_u8); // revising disk_bytes_per_point since DISK PQ is used.
+      disk_bytes_per_point =
+          disk_pq_n_chunks *
+          sizeof(_u8);  // revising disk_bytes_per_point since DISK PQ is used.
       std::cout << "Disk index uses PQ data compressed down to "
                 << disk_pq_n_chunks << " bytes per point." << std::endl;
     }
@@ -923,11 +925,11 @@ namespace diskann {
     unsigned k = 0;
 
     // cleared every iteration
-    std::vector<unsigned>                    frontier;
+    std::vector<unsigned> frontier;
     frontier.reserve(2 * beam_width);
     std::vector<std::pair<unsigned, char *>> frontier_nhoods;
     frontier_nhoods.reserve(2 * beam_width);
-    std::vector<AlignedRead>                 frontier_read_reqs;
+    std::vector<AlignedRead> frontier_read_reqs;
     frontier_read_reqs.reserve(2 * beam_width);
     std::vector<std::pair<unsigned, std::pair<unsigned, unsigned *>>>
         cached_nhoods;

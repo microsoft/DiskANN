@@ -28,67 +28,6 @@ namespace diskann {
     }
   };
 
-  typedef std::lock_guard<std::mutex> LockGuard;
-  struct nhood {
-    std::mutex            lock;
-    std::vector<Neighbor> pool;
-    unsigned              M;
-
-    std::vector<unsigned> nn_old;
-    std::vector<unsigned> nn_new;
-    std::vector<unsigned> rnn_old;
-    std::vector<unsigned> rnn_new;
-
-    nhood() {
-    }
-    nhood(unsigned l, unsigned s, std::mt19937 &rng, unsigned N) {
-      M = s;
-      nn_new.resize(s * 2);
-      GenRandom(rng, &nn_new[0], (unsigned) nn_new.size(), N);
-      nn_new.reserve(s * 2);
-      pool.reserve(l);
-    }
-
-    nhood(const nhood &other) {
-      M = other.M;
-      std::copy(other.nn_new.begin(), other.nn_new.end(),
-                std::back_inserter(nn_new));
-      nn_new.reserve(other.nn_new.capacity());
-      pool.reserve(other.pool.capacity());
-    }
-    void insert(unsigned id, float dist) {
-      LockGuard guard(lock);
-      if (dist > pool.front().distance)
-        return;
-      for (unsigned i = 0; i < pool.size(); i++) {
-        if (id == pool[i].id)
-          return;
-      }
-      if (pool.size() < pool.capacity()) {
-        pool.push_back(Neighbor(id, dist, true));
-        std::push_heap(pool.begin(), pool.end());
-      } else {
-        std::pop_heap(pool.begin(), pool.end());
-        pool[pool.size() - 1] = Neighbor(id, dist, true);
-        std::push_heap(pool.begin(), pool.end());
-      }
-    }
-
-    template<typename C>
-    void join(C callback) const {
-      for (unsigned const i : nn_new) {
-        for (unsigned const j : nn_new) {
-          if (i < j) {
-            callback(i, j);
-          }
-        }
-        for (unsigned j : nn_old) {
-          callback(i, j);
-        }
-      }
-    }
-  };
-
   struct SimpleNeighbor {
     unsigned id;
     float    distance;

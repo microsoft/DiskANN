@@ -23,7 +23,7 @@ namespace diskann {
             package_string(std::string("FUNC"), funcSig) +
                 package_string(std::string("FILE"), fileName) +
                 package_string(std::string("LINE"), std::to_string(lineNum)) +
-                message,
+                "  " + message,
             errorCode) {
   }
 

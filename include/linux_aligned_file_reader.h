@@ -25,7 +25,6 @@ class LinuxAlignedFileReader : public AlignedFileReader {
   void deregister_thread();
   void deregister_all_threads();
 
-
   // Open & close ops
   // Blocking calls
   void open(const std::string &fname);

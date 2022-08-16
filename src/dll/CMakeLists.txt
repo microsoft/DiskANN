@@ -2,7 +2,8 @@
 # Licensed under the MIT license.
 
 add_library(${PROJECT_NAME} SHARED dllmain.cpp ../partition_and_pq.cpp ../pq_flash_index.cpp ../logger.cpp ../utils.cpp 
-    ../windows_aligned_file_reader.cpp ../distance.cpp ../memory_mapper.cpp ../index.cpp ../math_utils.cpp ../aux_utils.cpp ../ann_exception.cpp)
+    ../windows_aligned_file_reader.cpp ../distance.cpp ../memory_mapper.cpp ../index.cpp ../math_utils.cpp ../aux_utils.cpp
+    ../ann_exception.cpp ../natural_number_set.cpp ../natural_number_map.cpp)
 
 set(TARGET_DIR "$<$<CONFIG:Debug>:${CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG}>$<$<CONFIG:Release>:${CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE}>")
 set(DISKANN_DLL_IMPLIB "${TARGET_DIR}/${PROJECT_NAME}.lib")

@@ -140,16 +140,15 @@ int main(int argc, char** argv) {
     return -1;
   }
 
-  if (data_type == std::string("int8") ||
-      data_type == std::string("uint8")) {
-      if (norm > 127) {
-        std::cerr
-            << "Error: for int8/uint8 datatypes, L2 norm can not be greater "
-               "than 127"
-            << std::endl;
-        return -1;
-      }
+  if (data_type == std::string("int8") || data_type == std::string("uint8")) {
+    if (norm > 127) {
+      std::cerr
+          << "Error: for int8/uint8 datatypes, L2 norm can not be greater "
+             "than 127"
+          << std::endl;
+      return -1;
     }
+  }
 
   try {
     std::ofstream writer;

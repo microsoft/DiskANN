@@ -34,7 +34,7 @@ jobs:
     - name: build
       if: runner.os != 'Windows'
       run: |
-        mkdir build && cd build && cmake .. && make -j
+        mkdir build && cd build && cmake -DCMAKE_BUILD_TYPE=Release .. && make -j
 
     - name: Add VisualStudio command line tools into path
       if: runner.os == 'Windows'
@@ -93,7 +93,16 @@ jobs:
       run: |   
         ${{ env.diskann_built_tests }}/build_disk_index --data_type float --dist_fn mips --data_path ./rand_float_10D_10K_norm1.0.bin --index_path_prefix ./disk_index_mips_rand_float_10D_10K_norm1.0_diskpq_sharded -R 16 -L 32 -B 0.00003 -M 0.00006 --PQ_disk_bytes 5
         ${{ env.diskann_built_tests }}/search_disk_index --data_type float --dist_fn l2 --index_path_prefix ./disk_index_mips_rand_float_10D_10K_norm1.0_diskpq_sharded --result_path /tmp/res --query_file ./rand_float_10D_10K_norm1.0.bin --gt_file ./mips_rand_float_10D_10K_norm1.0_self_gt100 --recall_at 5 -L 10 12 14 16 -W 2 --num_nodes_to_cache 10 -T 16
-    
+    - name:  build and search an incremental index
+      run: |
+        ${{ env.diskann_built_tests }}/test_insert_deletes_consolidate --data_type float --dist_fn l2 --data_path rand_float_10D_10K_norm1.0.bin --index_path_prefix index_ins_del -R 64 -L 300 --alpha 1.2 -T 8 --points_to_skip 0 --max_points_to_insert 7500 --beginning_index_size 0 --points_per_checkpoint 1000 --checkpoints_per_snapshot 0 --points_to_delete_from_beginning 2500 --start_deletes_after 5000 --do_concurrent true --start_point_norm 3.2;
+        ${{ env.diskann_built_utils }}/compute_groundtruth --data_type float --dist_fn l2 --base_file index_ins_del.after-concurrent-delete-del2500-7500.data --query_file rand_float_10D_10K_norm1.0.bin --K 100 --gt_file gt100_random10D_10K-conc-2500-7500 --tags_file index_ins_del.after-concurrent-delete-del2500-7500.tags
+        ${{ env.diskann_built_tests }}/search_memory_index --data_type float --dist_fn l2 --index_path_prefix index_ins_del.after-concurrent-delete-del2500-7500 --result_path res_ins_del --query_file rand_float_10D_10K_norm1.0.bin --gt_file gt100_random10D_10K-conc-2500-7500 -K 10 -L 20 40 60 80 100 -T 8 --dynamic true --tags 1
+    - name:  test a streaming index
+      run: |
+        ${{ env.diskann_built_tests }}/test_streaming_scenario --data_type float --dist_fn l2 --data_path rand_float_10D_10K_norm1.0.bin --index_path_prefix index_stream -R 64 -L 600 --alpha 1.2 --insert_threads 4 --consolidate_threads 4 --max_points_to_insert 10000 --active_window 4000 --consolidate_interval 2000 --start_point_norm 3.2
+        ${{ env.diskann_built_utils }}/compute_groundtruth --data_type float --dist_fn l2 --base_file index_stream.after-streaming-act4000-cons2000-max10000.data --query_file rand_float_10D_10K_norm1.0.bin --K 100 --gt_file gt100_base-act4000-cons2000-max10000 --tags_file index_stream.after-streaming-act4000-cons2000-max10000.tags
+        ${{ env.diskann_built_tests }}/search_memory_index --data_type float --dist_fn l2 --index_path_prefix index_stream.after-streaming-act4000-cons2000-max10000 --result_path res_stream --query_file rand_float_10D_10K_norm1.0.bin --gt_file gt100_base-act4000-cons2000-max10000 -K 10 -L 20 40 60 80 100 -T 64 --dynamic true --tags 1
 
 
     - name: Generate 10K random int8 points in 10 dims and compute GT
@@ -122,7 +131,16 @@ jobs:
       run: |   
         ${{ env.diskann_built_tests }}/build_disk_index --data_type int8 --dist_fn l2 --data_path ./rand_int8_10D_10K_norm50.0.bin --index_path_prefix ./disk_index_l2_rand_int8_10D_10K_norm50.0_diskpq_oneshot -R 16 -L 32 -B 0.00003 -M 1 --PQ_disk_bytes 5
         ${{ env.diskann_built_tests }}/search_disk_index --data_type int8 --dist_fn l2 --index_path_prefix ./disk_index_l2_rand_int8_10D_10K_norm50.0_diskpq_oneshot --result_path /tmp/res --query_file ./rand_int8_10D_10K_norm50.0.bin --gt_file ./l2_rand_int8_10D_10K_norm50.0_self_gt100 --recall_at 5 -L 10 12 14 16 -W 2 --num_nodes_to_cache 10 -T 16
-
+    - name:  build and search an incremental index
+      run: |
+        ${{ env.diskann_built_tests }}/test_insert_deletes_consolidate --data_type int8 --dist_fn l2 --data_path rand_int8_10D_10K_norm50.0.bin --index_path_prefix index_ins_del -R 64 -L 300 --alpha 1.2 -T 8 --points_to_skip 0 --max_points_to_insert 7500 --beginning_index_size 0 --points_per_checkpoint 1000 --checkpoints_per_snapshot 0 --points_to_delete_from_beginning 2500 --start_deletes_after 5000 --do_concurrent true --start_point_norm 200;
+        ${{ env.diskann_built_utils }}/compute_groundtruth --data_type int8 --dist_fn l2 --base_file index_ins_del.after-concurrent-delete-del2500-7500.data --query_file rand_int8_10D_10K_norm50.0.bin --K 100 --gt_file gt100_random10D_10K-conc-2500-7500 --tags_file index_ins_del.after-concurrent-delete-del2500-7500.tags
+        ${{ env.diskann_built_tests }}/search_memory_index --data_type int8 --dist_fn l2 --index_path_prefix index_ins_del.after-concurrent-delete-del2500-7500 --result_path res_ins_del --query_file rand_int8_10D_10K_norm50.0.bin --gt_file gt100_random10D_10K-conc-2500-7500 -K 10 -L 20 40 60 80 100 -T 8 --dynamic true --tags 1
+    - name:  test a streaming index
+      run: |
+        ${{ env.diskann_built_tests }}/test_streaming_scenario --data_type int8 --dist_fn l2 --data_path rand_int8_10D_10K_norm50.0.bin --index_path_prefix index_stream -R 64 -L 600 --alpha 1.2 --insert_threads 4 --consolidate_threads 4 --max_points_to_insert 10000 --active_window 4000 --consolidate_interval 2000 --start_point_norm 200
+        ${{ env.diskann_built_utils }}/compute_groundtruth --data_type int8 --dist_fn l2 --base_file index_stream.after-streaming-act4000-cons2000-max10000.data --query_file rand_int8_10D_10K_norm50.0.bin --K 100 --gt_file gt100_base-act4000-cons2000-max10000 --tags_file index_stream.after-streaming-act4000-cons2000-max10000.tags
+        ${{ env.diskann_built_tests }}/search_memory_index --data_type int8 --dist_fn l2 --index_path_prefix index_stream.after-streaming-act4000-cons2000-max10000 --result_path res_stream --query_file rand_int8_10D_10K_norm50.0.bin --gt_file gt100_base-act4000-cons2000-max10000 -K 10 -L 20 40 60 80 100 -T 64 --dynamic true --tags 1
 
 
     - name: Generate 10K random uint8 points in 10 dims and compute GT
@@ -151,3 +169,13 @@ jobs:
       run: |   
         ${{ env.diskann_built_tests }}/build_disk_index --data_type uint8 --dist_fn l2 --data_path ./rand_uint8_10D_10K_norm50.0.bin --index_path_prefix ./disk_index_l2_rand_uint8_10D_10K_norm50.0_diskpq_oneshot -R 16 -L 32 -B 0.00003 -M 1 --PQ_disk_bytes 5
         ${{ env.diskann_built_tests }}/search_disk_index --data_type uint8 --dist_fn l2 --index_path_prefix ./disk_index_l2_rand_uint8_10D_10K_norm50.0_diskpq_oneshot --result_path /tmp/res --query_file ./rand_uint8_10D_10K_norm50.0.bin --gt_file ./l2_rand_uint8_10D_10K_norm50.0_self_gt100 --recall_at 5 -L 10 12 14 16 -W 2 --num_nodes_to_cache 10 -T 16
+    - name:  build and search an incremental index
+      run: |
+        ${{ env.diskann_built_tests }}/test_insert_deletes_consolidate --data_type uint8 --dist_fn l2 --data_path rand_uint8_10D_10K_norm50.0.bin --index_path_prefix index_ins_del -R 64 -L 300 --alpha 1.2 -T 8 --points_to_skip 0 --max_points_to_insert 7500 --beginning_index_size 0 --points_per_checkpoint 1000 --checkpoints_per_snapshot 0 --points_to_delete_from_beginning 2500 --start_deletes_after 5000 --do_concurrent true --start_point_norm 200;
+        ${{ env.diskann_built_utils }}/compute_groundtruth --data_type uint8 --dist_fn l2 --base_file index_ins_del.after-concurrent-delete-del2500-7500.data --query_file rand_uint8_10D_10K_norm50.0.bin --K 100 --gt_file gt100_random10D_10K-conc-2500-7500 --tags_file index_ins_del.after-concurrent-delete-del2500-7500.tags
+        ${{ env.diskann_built_tests }}/search_memory_index --data_type uint8 --dist_fn l2 --index_path_prefix index_ins_del.after-concurrent-delete-del2500-7500 --result_path res_ins_del --query_file rand_uint8_10D_10K_norm50.0.bin --gt_file gt100_random10D_10K-conc-2500-7500 -K 10 -L 20 40 60 80 100 -T 8 --dynamic true --tags 1
+    - name:  test a streaming index
+      run: |
+        ${{ env.diskann_built_tests }}/test_streaming_scenario --data_type uint8 --dist_fn l2 --data_path rand_uint8_10D_10K_norm50.0.bin --index_path_prefix index_stream -R 64 -L 600 --alpha 1.2 --insert_threads 4 --consolidate_threads 4 --max_points_to_insert 10000 --active_window 4000 --consolidate_interval 2000 --start_point_norm 200
+        ${{ env.diskann_built_utils }}/compute_groundtruth --data_type uint8 --dist_fn l2 --base_file index_stream.after-streaming-act4000-cons2000-max10000.data --query_file rand_uint8_10D_10K_norm50.0.bin --K 100 --gt_file gt100_base-act4000-cons2000-max10000 --tags_file index_stream.after-streaming-act4000-cons2000-max10000.tags
+        ${{ env.diskann_built_tests }}/search_memory_index --data_type uint8 --dist_fn l2 --index_path_prefix index_stream.after-streaming-act4000-cons2000-max10000 --result_path res_stream --query_file rand_uint8_10D_10K_norm50.0.bin --gt_file gt100_base-act4000-cons2000-max10000 -K 10 -L 20 40 60 80 100 -T 64 --dynamic true --tags 1

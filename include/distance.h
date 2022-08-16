@@ -48,13 +48,11 @@ namespace diskann {
     }
   };
 
-
   class DistanceCosineFloat : public Distance<float> {
    public:
     DISKANN_DLLEXPORT virtual float compare(const float *a, const float *b,
                                             uint32_t length) const;
   };
-
 
   class DistanceL2Float : public Distance<float> {
    public:
@@ -80,20 +78,17 @@ namespace diskann {
                                             uint32_t length) const;
   };
 
-
   class SlowDistanceCosineUInt8 : public Distance<uint8_t> {
    public:
     DISKANN_DLLEXPORT virtual float compare(const uint8_t *a, const uint8_t *b,
                                             uint32_t length) const;
   };
 
-
   class DistanceL2UInt8 : public Distance<uint8_t> {
    public:
     DISKANN_DLLEXPORT virtual float compare(const uint8_t *a, const uint8_t *b,
                                             uint32_t size) const;
   };
-
 
   template<typename T>
   class DistanceInnerProduct : public Distance<T> {
@@ -118,7 +113,6 @@ namespace diskann {
     float norm(const T *a, unsigned size) const;
     float compare(const T *a, const T *b, float norm, unsigned size) const;
   };
-
 
   class AVXDistanceInnerProductFloat : public Distance<float> {
    public:
