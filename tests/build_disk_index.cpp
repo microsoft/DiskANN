@@ -17,6 +17,8 @@ int main(int argc, char** argv) {
   unsigned    num_threads, R, L, disk_PQ;
   float       B, M;
   bool        append_reorder_data = false;
+  unsigned num_starting_points;
+  std::string selection_strategy_of_starting_points;
 
   po::options_description desc{"Arguments"};
   try {
@@ -56,6 +58,14 @@ int main(int argc, char** argv) {
                        po::bool_switch()->default_value(false),
                        "Include full precision data in the index. Use only in "
                        "conjuction with compressed data on SSD.");
+    desc.add_options()(
+        "num_starting_points",
+        po::value<uint32_t>(&num_starting_points)->default_value(0),
+        "Number of starting points used for building index (defaults to 0");
+    desc.add_options()(
+        "selection_strategy_of_starting_points",
+        po::value<std::string>(&selection_strategy_of_starting_points)->default_value("random"),
+        "selection stragey to select starting points (defaults to random");
 
     po::variables_map vm;
     po::store(po::parse_command_line(argc, argv, desc), vm);
@@ -103,7 +113,9 @@ int main(int argc, char** argv) {
                        std::string(std::to_string(M)) + " " +
                        std::string(std::to_string(num_threads)) + " " +
                        std::string(std::to_string(disk_PQ)) + " " +
-                       std::string(std::to_string(append_reorder_data));
+                       std::string(std::to_string(append_reorder_data) + " " +
+                       selection_strategy_of_starting_points + " " +
+                       std::string(std::to_string(num_starting_points)));
 
   try {
     if (data_type == std::string("int8"))

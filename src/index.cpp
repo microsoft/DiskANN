@@ -22,6 +22,7 @@
 #include <time.h>
 
 #include "common_includes.h"
+#include "constants.h"
 #include "logger.h"
 #include "exceptions.h"
 #include "aligned_file_reader.h"
@@ -343,6 +344,60 @@ namespace diskann {
   }
 
   template<typename T, typename TagT>
+  void Index<T, TagT>::select_starting_points(
+      Parameters &parameters,
+      std::mt19937 &gen,
+      std::set<unsigned> &unique_start_points) {
+
+    auto strategy = parameters.Get<std::string>(
+        Constants::selection_strategy_of_starting_points,
+        Constants::random);
+    auto num_starting_points =
+        parameters.Get<unsigned>(Constants::num_starting_points, 0);
+    if (num_starting_points == 0) {
+      return;
+    }
+
+    if (_nd < num_starting_points + 1) {
+      std::cerr << "NodeCount = " << _nd
+                << ", num_starting_points = " << num_starting_points
+                << ". Too few nodes so skip to select_starting_points." << std::endl;
+      return;
+    }
+
+    if (strategy == Constants::random) {
+      _starting_points.reserve(num_starting_points);
+      while (num_starting_points + 1 > unique_start_points.size()) {
+        auto nodeId = gen() % _nd;
+        if (unique_start_points.insert(nodeId).second) {
+          _starting_points.emplace_back(nodeId);
+        }
+      }
+    } else {
+    
+        std::cout << "Do not support starting points selection stratey "
+                + strategy << std::endl; 
+    }
+
+    std::cout << "Select " << num_starting_points
+              << " starting points with strategy " + strategy << std::endl; 
+  }
+
+  template<typename T, typename TagT>
+  void Index<T, TagT>::save_starting_points(
+      const std::string& result_file_prefix)
+  {
+    if (_starting_points.empty()) {
+      return;
+    }
+
+    std::sort(_starting_points.begin(), _starting_points.end());
+    auto id_file = result_file_prefix + Constants::starting_points_id_file_suffix;
+    save_bin<unsigned>(id_file, _starting_points.data(),
+                       _starting_points.size(), 1);
+  }
+
+  template<typename T, typename TagT>
   void Index<T, TagT>::clear_index() {
     memset(_data, 0,
            _aligned_dim * (_max_points + _num_frozen_pts) * sizeof(T));
@@ -465,6 +520,7 @@ namespace diskann {
       save_tags(tags_file);
       delete_file(delete_list_file);
       save_delete_list(delete_list_file);
+      save_starting_points(graph_file);
     } else {
         diskann::cout<<"Save index in a single file currently not supported. Not saving the index." << std::endl;
     }
@@ -1458,6 +1514,7 @@ namespace diskann {
     // random other nodes
     std::set<unsigned> unique_start_points;
     unique_start_points.insert(_ep);
+    select_starting_points(parameters, gen, unique_start_points);
 
     std::vector<unsigned> init_ids;
     for (auto pt : unique_start_points)

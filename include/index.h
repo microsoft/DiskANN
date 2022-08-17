@@ -348,6 +348,13 @@ namespace diskann {
     void initialize_query_scratch(uint32_t num_threads, uint32_t search_l,
                                   uint32_t indexing_l, uint32_t r, size_t dim);
 
+    void select_starting_points(
+        Parameters &parameters,
+        std::mt19937& gen,
+        std::set<unsigned> &unique_start_points);
+
+    void save_starting_points(const std::string& result_file_prefix);
+
    private:
     Metric       _dist_metric = diskann::L2;
     size_t       _dim = 0;
@@ -367,6 +374,7 @@ namespace diskann {
     bool         _enable_tags = false;
     // Using normalied L2 for cosine.
     bool _normalize_vecs = false;
+    std::vector<unsigned> _starting_points;
 
     // Indexing parameters
     uint32_t _indexingQueueSize, _indexingRange, _indexingMaxC;

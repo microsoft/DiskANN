@@ -265,7 +265,7 @@ int generate_pq_pivots(const float *passed_train_data, size_t num_train,
 
   std::vector<std::vector<uint32_t>> bin_to_dims(num_pq_chunks);
   tsl::robin_map<uint32_t, uint32_t> dim_to_bin;
-  std::vector<float>                 bin_loads(num_pq_chunks, 0);
+  std::vector<float>                 bin_loads(num_pq_chunks, 0); //TODO the value of this value is always zero, maybe this is a bug
 
   // Process dimensions not inserted by previous loop
   for (uint32_t d = 0; d < dim; d++) {

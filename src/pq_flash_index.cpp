@@ -21,6 +21,8 @@
 #include "cosine_similarity.h"
 #include "tsl/robin_set.h"
 
+#include "constants.h"
+
 #ifdef _WINDOWS
 #include "windows_aligned_file_reader.h"
 #else
@@ -552,6 +554,8 @@ namespace diskann {
     std::string medoids_file = std::string(disk_index_file) + "_medoids.bin";
     std::string centroids_file =
         std::string(disk_index_file) + "_centroids.bin";
+    
+    load_starting_points(index_prefix);
 
     size_t pq_file_dim, pq_file_num_centroids;
 #ifdef EXEC_ENV_OLS
@@ -907,13 +911,21 @@ namespace diskann {
       }
     }
 
-    compute_dists(&best_medoid, 1, dist_scratch);
-    retset[0].id = best_medoid;
-    retset[0].distance = dist_scratch[0];
-    retset[0].flag = true;
+    std::vector<_u32> init_nodes;
+    init_nodes.reserve(l_search + 1);
+    init_nodes.emplace_back(best_medoid);
     visited.insert(best_medoid);
+    select_starting_points(query1, l_search, visited, init_nodes);
 
-    unsigned cur_list_size = 1;
+    compute_dists(init_nodes.data(), init_nodes.size(), dist_scratch);
+    for (_u32 i = 0; i < init_nodes.size(); ++i) {
+      
+      retset[i].id = init_nodes[i];
+      retset[i].distance = dist_scratch[i];
+      retset[i].flag = true;
+    }
+
+    unsigned cur_list_size = init_nodes.size();
 
     std::sort(retset.begin(), retset.begin() + cur_list_size);
 
@@ -1271,6 +1283,99 @@ namespace diskann {
     distances.resize(res_count);
     return res_count;
   }
+
+  template<typename T>
+  void PQFlashIndex<T>::set_starting_points_setting(
+      unsigned           num_starting_points,
+      const std::string &selection_strategy_of_starting_points) {
+    this->num_starting_points = num_starting_points;
+    this->selection_strategy_of_starting_points =
+        selection_strategy_of_starting_points;
+    if (num_starting_points > 0) {
+      std::cout << "set_starting_points_setting selection_strategy_of_starting_points = "
+                << this->selection_strategy_of_starting_points
+                << ", num_starting_points = " << this->num_starting_points
+                << std::endl;
+    }
+  }
+
+  template<typename T>
+  void PQFlashIndex<T>::load_starting_points(const std::string &index_prefix) {
+    auto id_file = index_prefix + Constants::starting_points_id_file_suffix;
+    if (!file_exists(id_file)) {
+      return;
+    }
+
+    auto data_file = index_prefix + Constants::starting_points_data_file_suffix;
+    std::unique_ptr<unsigned[]> ids;
+    size_t                      id_num, id_dim, data_num;
+    load_bin<unsigned>(id_file, ids, id_num, id_dim);
+    load_bin<T>(data_file, starting_points_data, data_num,
+                starting_points_data_dim);
+    if (id_num != data_num || id_dim != 1 ||
+        starting_points_data == nullptr) {
+      std::cout << "Invalid starting points id or data files: id_num=" << id_num
+                << ", data_num=" << data_num << ", id_dim=" << id_dim
+                << ", data_dim=" << starting_points_data_dim << std::endl;
+      return;
+    }
+
+    starting_points.resize(id_num);
+    for (unsigned i = 0; i < id_num; ++i) {
+      starting_points[i] = ids[i];
+    }
+
+    std::cout << "Loaded " << id_num << " starting points" << std::endl;
+  }
+
+  template<typename T>
+  void PQFlashIndex<T>::select_starting_points(
+      const T* query1,
+      _u64 l_search,
+      tsl::robin_set<_u64> &visited,
+      std::vector<unsigned> &init_nodes) {
+      
+      if (num_starting_points == 0 || starting_points.size() == 0) {
+        return;
+      }
+
+      auto init_size = init_nodes.size();
+      auto max_size = std::min(l_search, init_nodes.size() + std::min((size_t)num_starting_points, starting_points.size()));
+      if (selection_strategy_of_starting_points == Constants::random) {
+        std::vector<unsigned> ids = starting_points;
+        std::random_shuffle(ids.begin(), ids.end());
+        for (unsigned i = 0; i < ids.size() && init_nodes.size() < max_size;
+             ++i) {
+          auto id = ids[i];
+          if (visited.emplace(id).second) {
+            init_nodes.emplace_back(id);
+          }
+        }
+      } else {
+        std::vector<std::pair<float, unsigned>> dists; // distance, node id
+        dists.reserve(starting_points.size());
+        auto start = starting_points_data.get();
+        for (auto id : starting_points) {
+          auto dist =
+              dist_cmp->compare(query1, start, starting_points_data_dim);
+          dists.emplace_back(dist, id);
+          start += starting_points_data_dim;
+        }
+
+        std::sort(dists.begin(), dists.end());
+        for (unsigned i = 0; i < dists.size() && init_nodes.size() < max_size;
+             ++i) {
+          auto id = dists[i].second;
+          if (visited.emplace(id).second) {
+            init_nodes.emplace_back(id);
+          }
+        }
+      }
+
+      if (init_nodes.size() - init_size == 0) {
+        std::cout << "Selected 0 nodes as starting points." << std::endl;
+      }
+    }
 
 #ifdef EXEC_ENV_OLS
   template<typename T>

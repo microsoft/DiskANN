@@ -24,7 +24,7 @@
 #include "percentile_stats.h"
 #include "pq_flash_index.h"
 #include "tsl/robin_set.h"
-
+#include "constants.h"
 #include "utils.h"
 
 namespace diskann {
@@ -363,6 +363,71 @@ namespace diskann {
     reader.close();
   }
 
+  template<typename T>
+  void retrieve_starting_points_data(
+      const std::string& base_file,
+      const std::string& index_prefix) {
+    
+    auto id_file = index_prefix + Constants::starting_points_id_file_suffix;
+    if (!file_exists(id_file)) {
+      return;
+    }
+
+    auto data_file = index_prefix + Constants::starting_points_data_file_suffix;
+    retrieve_shard_data_from_ids<T>(
+        base_file,
+        id_file, data_file);
+    std::cout << "Retrieve data for starting points from " << base_file
+              << " to "
+              << data_file << " for " << id_file << std::endl;
+  }
+
+  void merge_starting_points(const std::string &vamana_prefix,
+                            const std::string &vamana_suffix,
+                            const _u64 nshards,
+                            const std::vector<std::vector<unsigned>>& idmaps,
+                            const std::string &output_vamana) {
+    std::unordered_set<unsigned> starting_points;
+    for (_u64 shard = 0; shard < nshards; shard++) {
+      auto prefix = vamana_prefix + std::to_string(shard) + vamana_suffix;
+      auto in_id_file = prefix + Constants::starting_points_id_file_suffix;
+      if (!file_exists(in_id_file)) {
+        continue;
+      }
+
+      size_t id_num, id_dim;
+      std::unique_ptr<unsigned[]> ids;
+      load_bin<unsigned>(in_id_file, ids, id_num, id_dim);
+      if (ids == nullptr || id_num <= 0) {
+        std::cerr << "Got null or zero starting points from " + in_id_file << std::endl;
+        continue;
+      }
+
+      std::cout << "Got " << id_num << " starting points from " + in_id_file
+                << std::endl;
+      auto &idmap = idmaps[shard];
+      for (size_t i = 0; i < id_num; ++i) {
+        starting_points.insert(idmap[ids[i]]);
+      }
+    }
+
+    if (starting_points.empty()) {
+      return;
+    }
+
+    std::cout << "merge_starting_points got " << starting_points.size()
+              << " starting points" << std::endl;
+    std::vector<unsigned> points;
+    points.reserve(starting_points.size());
+    points.assign(starting_points.begin(), starting_points.end());
+    std::sort(points.begin(), points.end());
+    size_t npts = points.size(), dim = 1;
+    save_bin<unsigned>(output_vamana + Constants::starting_points_id_file_suffix,
+        points.data(),
+        npts,
+        dim);
+  }
+
   int merge_shards(const std::string &vamana_prefix,
                    const std::string &vamana_suffix,
                    const std::string &idmaps_prefix,
@@ -378,6 +443,9 @@ namespace diskann {
       read_idmap(idmaps_prefix + std::to_string(shard) + idmaps_suffix,
                  idmaps[shard]);
     }
+
+    merge_starting_points(vamana_prefix,
+        vamana_suffix, nshards, idmaps, output_vamana);
 
     // find max node id
     _u64 nnodes = 0;
@@ -550,7 +618,9 @@ namespace diskann {
                                 unsigned R, double sampling_rate,
                                 double ram_budget, std::string mem_index_path,
                                 std::string medoids_file,
-                                std::string centroids_file) {
+                                std::string centroids_file,
+                                const std::string& selection_stragegy_of_starting_points,
+                                unsigned num_starting_points) {
     size_t base_num, base_dim;
     diskann::get_bin_metadata(base_file, base_num, base_dim);
 
@@ -568,6 +638,8 @@ namespace diskann {
       paras.Set<unsigned>("num_rnds", 2);
       paras.Set<bool>("saturate_graph", 1);
       paras.Set<std::string>("save_path", mem_index_path);
+      paras.Set<std::string>(Constants::selection_strategy_of_starting_points, selection_stragegy_of_starting_points);
+      paras.Set<unsigned>(Constants::num_starting_points, num_starting_points);
 
       std::unique_ptr<diskann::Index<T>> _pvamanaIndex =
           std::unique_ptr<diskann::Index<T>>(new diskann::Index<T>(
@@ -608,6 +680,9 @@ namespace diskann {
       paras.Set<unsigned>("num_rnds", 2);
       paras.Set<bool>("saturate_graph", 0);
       paras.Set<std::string>("save_path", shard_index_file);
+      paras.Set<std::string>(Constants::selection_strategy_of_starting_points,
+                             selection_stragegy_of_starting_points);
+      paras.Set<unsigned>(Constants::num_starting_points, num_starting_points / num_parts + (num_starting_points % num_parts > p));
 
       _u64 shard_base_dim, shard_base_pts;
       get_bin_metadata(shard_base_file, shard_base_pts, shard_base_dim);
@@ -623,8 +698,8 @@ namespace diskann {
     diskann::merge_shards(merged_index_prefix + "_subshard-", "_mem.index",
                           merged_index_prefix + "_subshard-", "_ids_uint32.bin",
                           num_parts, R, mem_index_path, medoids_file);
-
     // delete tempFiles
+    //TODO remove temp starting_points 
     for (int p = 0; p < num_parts; p++) {
       std::string shard_base_file =
           merged_index_prefix + "_subshard-" + std::to_string(p) + ".bin";
@@ -633,7 +708,11 @@ namespace diskann {
       std::string shard_index_file =
           merged_index_prefix + "_subshard-" + std::to_string(p) + "_mem.index";
       std::string shard_index_file_data = shard_index_file + ".data";
+      auto starting_points_id_file = shard_index_file + Constants::starting_points_id_file_suffix;
 
+      if (file_exists(starting_points_id_file)) {
+        std::remove(starting_points_id_file.c_str());
+      }
       std::remove(shard_base_file.c_str());
       std::remove(shard_id_file.c_str());
       std::remove(shard_index_file.c_str());
@@ -923,7 +1002,8 @@ namespace diskann {
       param_list.push_back(cur_param);
     }
     if (param_list.size() != 5 && param_list.size() != 6 &&
-        param_list.size() != 7) {
+        param_list.size() != 7
+        && param_list.size() != 9) {
       diskann::cout
           << "Correct usage of parameters is R (max degree) "
              "L (indexing list size, better if >= R)"
@@ -933,6 +1013,8 @@ namespace diskann {
              "B' (PQ bytes for disk index: optional parameter for "
              "very large dimensional data)"
              "reorder (set true to include full precision in data file"
+             "selection_stragegy_of_starting_points (default value is random)"
+             "num_starting_points (default value is 0)"
              ": optional paramter, use only when using disk PQ"
           << std::endl;
       return -1;
@@ -965,6 +1047,17 @@ namespace diskann {
       if (1 == atoi(param_list[6].c_str())) {
         reorder_data = true;
       }
+    }
+
+    auto selection_stragegy_of_starting_points = Constants::random;
+    unsigned     num_starting_points = 0;
+    if (param_list.size() == 9) {
+      selection_stragegy_of_starting_points = param_list[7];
+      num_starting_points = atoi(param_list[8].c_str());
+      std::cout << "selection_stragegy_of_starting_points = "
+                << selection_stragegy_of_starting_points
+                << ", num_starting_points = " << num_starting_points
+                << std::endl;
     }
 
     std::string base_file(dataFilePath);
@@ -1101,7 +1194,19 @@ namespace diskann {
 
     diskann::build_merged_vamana_index<T>(
         data_file_to_use.c_str(), diskann::Metric::L2, L, R, p_val,
-        indexing_ram_budget, mem_index_path, medoids_path, centroids_path);
+        indexing_ram_budget, mem_index_path, medoids_path, centroids_path,
+        selection_stragegy_of_starting_points, num_starting_points);
+
+    auto old_starting_points_id_file =
+        mem_index_path + Constants::starting_points_id_file_suffix;
+    if (file_exists(old_starting_points_id_file)) {
+      auto new_starting_points_id_file =
+          index_prefix_path + Constants::starting_points_id_file_suffix;
+      auto new_starting_points_data_file =
+          index_prefix_path + Constants::starting_points_data_file_suffix;
+      std::rename(old_starting_points_id_file.c_str(), new_starting_points_id_file.c_str());
+      retrieve_starting_points_data<T>(data_file_to_use, index_prefix_path);
+    }
 
     if (!use_disk_pq) {
       diskann::create_disk_layout<T>(data_file_to_use.c_str(), mem_index_path,
@@ -1197,15 +1302,21 @@ namespace diskann {
       std::string base_file, diskann::Metric compareMetric, unsigned L,
       unsigned R, double sampling_rate, double ram_budget,
       std::string mem_index_path, std::string medoids_path,
-      std::string centroids_file);
+      std::string centroids_file,
+      const std::string& selection_stragegy_of_starting_points,
+      unsigned    num_starting_points);
   template DISKANN_DLLEXPORT int build_merged_vamana_index<float>(
       std::string base_file, diskann::Metric compareMetric, unsigned L,
       unsigned R, double sampling_rate, double ram_budget,
       std::string mem_index_path, std::string medoids_path,
-      std::string centroids_file);
+      std::string centroids_file,
+      const std::string &selection_stragegy_of_starting_points,
+      unsigned    num_starting_points);
   template DISKANN_DLLEXPORT int build_merged_vamana_index<uint8_t>(
       std::string base_file, diskann::Metric compareMetric, unsigned L,
       unsigned R, double sampling_rate, double ram_budget,
       std::string mem_index_path, std::string medoids_path,
-      std::string centroids_file);
+      std::string centroids_file,
+      const std::string &selection_stragegy_of_starting_points,
+      unsigned    num_starting_points);
 };  // namespace diskann
