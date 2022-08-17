@@ -166,9 +166,9 @@ namespace diskann {
         const float* centers_dim_vec = tables_T + (256 * j);
         for (_u64 idx = 0; idx < 256; idx++) {
           double diff =
-              centers_dim_vec[idx] * (query_vec[permuted_dim_in_query] -
+              centers_dim_vec[idx] - (query_vec[permuted_dim_in_query] -
                                       centroid[permuted_dim_in_query]);
-          chunk_dists[idx] -= (float) (diff);
+          chunk_dists[idx] += (float) (diff * diff);
         }
       }
     }
