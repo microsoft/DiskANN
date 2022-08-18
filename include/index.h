@@ -189,7 +189,7 @@ namespace diskann {
     // Will fail if tag already in the index
     DISKANN_DLLEXPORT int insert_point(const T *point, const TagT tag);
 
-    // call this before issuing deleteions to sets relevant flags
+    // call this before issuing deletions to sets relevant flags
     DISKANN_DLLEXPORT int enable_delete();
 
     // Record deleted point now and restructure graph later. Return -1 if tag
@@ -324,7 +324,6 @@ namespace diskann {
     void inter_insert(unsigned n, std::vector<unsigned> &pruned_list,
                       bool update_in_graph);
 
-    // Create the graph, update periodically in NUM_SYNCS batches
     void link(Parameters &parameters);
 
     // Acquire _tag_lock before calling
