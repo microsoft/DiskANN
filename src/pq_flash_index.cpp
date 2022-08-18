@@ -555,9 +555,11 @@ namespace diskann {
 
     size_t pq_file_dim, pq_file_num_centroids;
 #ifdef EXEC_ENV_OLS
-    get_bin_metadata(files, pq_table_bin, pq_file_num_centroids, pq_file_dim);
+    get_bin_metadata(files, pq_table_bin, pq_file_num_centroids, pq_file_dim,
+                     METADATA_SIZE);
 #else
-    get_bin_metadata(pq_table_bin, pq_file_num_centroids, pq_file_dim);
+    get_bin_metadata(pq_table_bin, pq_file_num_centroids, pq_file_dim,
+                     METADATA_SIZE);
 #endif
 
     this->disk_index_file = disk_index_file;
@@ -647,19 +649,16 @@ namespace diskann {
     std::ifstream index_metadata(disk_index_file, std::ios::binary);
 #endif
 
-    size_t actual_index_size = get_file_size(disk_index_file);
-    size_t expected_file_size;
-    READ_U64(index_metadata, expected_file_size);
-    if (actual_index_size != expected_file_size) {
-      diskann::cout << "File size mismatch for " << disk_index_file
-                    << " (size: " << actual_index_size << ")"
-                    << " with meta-data size: " << expected_file_size
-                    << std::endl;
-      return -1;
-    }
+    _u32 nr, nc;  // metadata itself is stored as bin format (nr is number of
+                  // metadata, nc should be 1)
+    READ_U32(index_metadata, nr);
+    READ_U32(index_metadata, nc);
 
     _u64 disk_nnodes;
+    _u64 disk_ndims;  // can be disk PQ dim if disk_PQ is set to true
     READ_U64(index_metadata, disk_nnodes);
+    READ_U64(index_metadata, disk_ndims);
+
     if (disk_nnodes != num_points) {
       diskann::cout << "Mismatch in #points for compressed data file and disk "
                        "index file: "
@@ -824,6 +823,16 @@ namespace diskann {
                                            const _u64  beam_width,
                                            const bool  use_reorder_data,
                                            QueryStats *stats) {
+    cached_beam_search(query1, k_search, l_search, indices, distances,
+                       beam_width, std::numeric_limits<_u32>::max(),
+                       use_reorder_data, stats);
+  }
+
+  template<typename T>
+  void PQFlashIndex<T>::cached_beam_search(
+      const T *query1, const _u64 k_search, const _u64 l_search, _u64 *indices,
+      float *distances, const _u64 beam_width, const _u32 io_limit,
+      const bool use_reorder_data, QueryStats *stats) {
     ThreadData<T> data = this->thread_data.pop();
     while (data.scratch.sector_scratch == nullptr) {
       this->thread_data.wait_for_push_notify();
@@ -935,7 +944,7 @@ namespace diskann {
         cached_nhoods;
     cached_nhoods.reserve(2 * beam_width);
 
-    while (k < cur_list_size) {
+    while (k < cur_list_size && num_ios < io_limit) {
       auto nk = cur_list_size;
       // clear iteration state
       frontier.clear();
