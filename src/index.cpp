@@ -1983,14 +1983,14 @@ void Index<T, TagT>::partition_packing(
         }
       }
       while (!found) {
-        for (auto itr = initial.begin(); itr != initial.end(); itr++) {
-          if (deleted[*itr] == false) {
-            p_order[i] = *(itr);
-            break;
-          }
-        }
-#pragma omp critical
+        #pragma omp critical
         {
+          for (auto itr = initial.begin(); itr != initial.end(); itr++) {
+            if (deleted[*itr] == false) {
+              p_order[i] = *(itr);
+              break;
+            }
+          }
           if (deleted[p_order[i]] == false) {
             deleted[p_order[i]] = true;
             initial.erase(p_order[i]);
