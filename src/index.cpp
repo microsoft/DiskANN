@@ -1058,6 +1058,74 @@ namespace diskann {
   }
 
   template<typename T, typename TagT>
+  void Index<T, TagT>::search_for_point_and_add_links(int location, _u32 Lindex, std::vector<Neighbor> &pool, tsl::robin_set<unsigned> &visited, std::vector<unsigned> &des, std::vector<Neighbor> &best_l_nodes, tsl::robin_set<unsigned> &inserted_into_pool_rs, boost::dynamic_bitset<> &inserted_into_pool_bs) {
+          std::vector<unsigned> init_ids;
+      get_expanded_nodes(location, Lindex, init_ids, pool, visited,
+                         des, best_l_nodes,
+                         inserted_into_pool_rs,
+                         inserted_into_pool_bs);
+
+      for (unsigned i = 0; i < pool.size(); i++) {
+        if (pool[i].id == (unsigned) location) {
+          pool.erase(pool.begin() + i);
+          visited.erase((unsigned) location);
+          i--;
+        } else if (_delete_set.find(pool[i].id) != _delete_set.end()) {
+          pool.erase(pool.begin() + i);
+          visited.erase((unsigned) pool[i].id);
+          i--;
+        }
+      }
+
+    std::vector<unsigned> pruned_list;
+      prune_neighbors(location, pool, pruned_list);
+
+    assert(!pruned_list.empty());
+    assert(_final_graph.size() == _max_points + _num_frozen_pts);
+
+    if (_support_eager_delete) {
+      for (unsigned i = 0; i < _final_graph[location].size(); i++) {
+        {
+          LockGuard guard(_locks_in[_final_graph[location][i]]);
+          _in_graph[_final_graph[location][i]].erase(
+              std::remove(_in_graph[_final_graph[location][i]].begin(),
+                          _in_graph[_final_graph[location][i]].end(), location),
+              _in_graph[_final_graph[location][i]].end());
+        }
+      }
+    }
+
+    {
+      std::shared_lock<std::shared_timed_mutex> tlock(_tag_lock,
+                                                      std::defer_lock);
+      if (_conc_consolidate)
+        tlock.lock();
+
+      LockGuard guard(_locks[location]);
+      _final_graph[location].clear();
+      _final_graph[location].shrink_to_fit();
+      _final_graph[location].reserve((_u64)(_indexingRange * GRAPH_SLACK_FACTOR * 1.05));
+
+      for (auto link : pruned_list) {
+        if (_conc_consolidate)
+          if (!_location_to_tag.contains(link))
+            continue;
+        _final_graph[location].emplace_back(link);
+        if (_support_eager_delete) {
+          LockGuard guard(_locks_in[link]);
+          _in_graph[link].emplace_back(location);
+        }
+      }
+
+      if (_conc_consolidate)
+        tlock.unlock();
+    }
+
+    assert(_final_graph[location].size() <= range);
+    inter_insert(location, pruned_list, _support_eager_delete);
+  }
+
+  template<typename T, typename TagT>
   void Index<T, TagT>::occlude_list(std::vector<Neighbor> &pool,
                                     const float alpha, const unsigned degree,
                                     const unsigned         maxc,
@@ -2703,7 +2771,6 @@ namespace diskann {
     }
 
     // Find and add appropriate graph edges
-    unsigned              range = _indexingRange;
     unsigned              Lindex = _indexingQueueSize;
     std::vector<unsigned> pruned_list;
 
@@ -2713,69 +2780,7 @@ namespace diskann {
       tsl::robin_set<unsigned> &visited = scratch.visited();
       pool.clear();
       visited.clear();
-      std::vector<unsigned> init_ids;
-      get_expanded_nodes(location, Lindex, init_ids, pool, visited,
-                         scratch.des(), scratch.best_l_nodes(),
-                         scratch.inserted_into_pool_rs(),
-                         scratch.inserted_into_pool_bs());
-
-      for (unsigned i = 0; i < pool.size(); i++) {
-        if (pool[i].id == (unsigned) location) {
-          pool.erase(pool.begin() + i);
-          visited.erase((unsigned) location);
-          i--;
-        } else if (_delete_set.find(pool[i].id) != _delete_set.end()) {
-          pool.erase(pool.begin() + i);
-          visited.erase((unsigned) pool[i].id);
-          i--;
-        }
-      }
-
-      prune_neighbors(location, pool, pruned_list);
-
-    assert(!pruned_list.empty());
-    assert(_final_graph.size() == _max_points + _num_frozen_pts);
-
-    if (_support_eager_delete) {
-      for (unsigned i = 0; i < _final_graph[location].size(); i++) {
-        {
-          LockGuard guard(_locks_in[_final_graph[location][i]]);
-          _in_graph[_final_graph[location][i]].erase(
-              std::remove(_in_graph[_final_graph[location][i]].begin(),
-                          _in_graph[_final_graph[location][i]].end(), location),
-              _in_graph[_final_graph[location][i]].end());
-        }
-      }
-    }
-
-    {
-      std::shared_lock<std::shared_timed_mutex> tlock(_tag_lock,
-                                                      std::defer_lock);
-      if (_conc_consolidate)
-        tlock.lock();
-
-      LockGuard guard(_locks[location]);
-      _final_graph[location].clear();
-      _final_graph[location].shrink_to_fit();
-      _final_graph[location].reserve((_u64)(range * GRAPH_SLACK_FACTOR * 1.05));
-
-      for (auto link : pruned_list) {
-        if (_conc_consolidate)
-          if (!_location_to_tag.contains(link))
-            continue;
-        _final_graph[location].emplace_back(link);
-        if (_support_eager_delete) {
-          LockGuard guard(_locks_in[link]);
-          _in_graph[link].emplace_back(location);
-        }
-      }
-
-      if (_conc_consolidate)
-        tlock.unlock();
-    }
-
-    assert(_final_graph[location].size() <= range);
-    inter_insert(location, pruned_list, _support_eager_delete);
+      search_for_point_and_add_links(location, _indexingQueueSize, pool, visited, scratch.des(), scratch.best_l_nodes(), scratch.inserted_into_pool_rs(), scratch.inserted_into_pool_bs());
     return 0;
   }
 
