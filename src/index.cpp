@@ -2707,7 +2707,6 @@ namespace diskann {
     unsigned              Lindex = _indexingQueueSize;
     std::vector<unsigned> pruned_list;
 
-    if (_nd >= _indexingRange) {
       ScratchStoreManager<T>    manager(_query_scratch);
       auto                      scratch = manager.scratch_space();
       std::vector<Neighbor> &   pool = scratch.pool();
@@ -2733,16 +2732,7 @@ namespace diskann {
       }
 
       prune_neighbors(location, pool, pruned_list);
-    } else {
-      std::unique_lock<std::shared_timed_mutex> lock(_tag_lock);
-      pruned_list.push_back(_start);
-      for (auto pos = _location_to_tag.find_first(); pos.is_valid();
-           pos = _location_to_tag.find_next(pos)) {
-        pruned_list.push_back(pos._key);
-        if (pruned_list.size() >= _indexingRange)
-          break;
-      }
-    }
+
     assert(!pruned_list.empty());
     assert(_final_graph.size() == _max_points + _num_frozen_pts);
 
