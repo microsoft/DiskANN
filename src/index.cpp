@@ -1126,7 +1126,7 @@ namespace diskann {
         tlock.unlock();
     }
 
-    assert(_final_graph[location].size() <= range);
+    assert(_final_graph[location].size() <= _indexingRange);
     inter_insert(location, pruned_list, _support_eager_delete);
   }
 
