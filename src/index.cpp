@@ -1058,27 +1058,31 @@ namespace diskann {
   }
 
   template<typename T, typename TagT>
-  void Index<T, TagT>::search_for_point_and_add_links(int location, _u32 Lindex, std::vector<Neighbor> &pool, tsl::robin_set<unsigned> &visited, std::vector<unsigned> &des, std::vector<Neighbor> &best_l_nodes, tsl::robin_set<unsigned> &inserted_into_pool_rs, boost::dynamic_bitset<> &inserted_into_pool_bs) {
-          std::vector<unsigned> init_ids;
-      get_expanded_nodes(location, Lindex, init_ids, pool, visited,
-                         des, best_l_nodes,
-                         inserted_into_pool_rs,
-                         inserted_into_pool_bs);
+  void Index<T, TagT>::search_for_point_and_add_links(
+      int location, _u32 Lindex, std::vector<Neighbor> &pool,
+      tsl::robin_set<unsigned> &visited, std::vector<unsigned> &des,
+      std::vector<Neighbor> &   best_l_nodes,
+      tsl::robin_set<unsigned> &inserted_into_pool_rs,
+      boost::dynamic_bitset<> & inserted_into_pool_bs) {
+    std::vector<unsigned> init_ids;
+    get_expanded_nodes(location, Lindex, init_ids, pool, visited, des,
+                       best_l_nodes, inserted_into_pool_rs,
+                       inserted_into_pool_bs);
 
-      for (unsigned i = 0; i < pool.size(); i++) {
-        if (pool[i].id == (unsigned) location) {
-          pool.erase(pool.begin() + i);
-          visited.erase((unsigned) location);
-          i--;
-        } else if (_delete_set.find(pool[i].id) != _delete_set.end()) {
-          pool.erase(pool.begin() + i);
-          visited.erase((unsigned) pool[i].id);
-          i--;
-        }
+    for (unsigned i = 0; i < pool.size(); i++) {
+      if (pool[i].id == (unsigned) location) {
+        pool.erase(pool.begin() + i);
+        visited.erase((unsigned) location);
+        i--;
+      } else if (_delete_set.find(pool[i].id) != _delete_set.end()) {
+        pool.erase(pool.begin() + i);
+        visited.erase((unsigned) pool[i].id);
+        i--;
       }
+    }
 
     std::vector<unsigned> pruned_list;
-      prune_neighbors(location, pool, pruned_list);
+    prune_neighbors(location, pool, pruned_list);
 
     assert(!pruned_list.empty());
     assert(_final_graph.size() == _max_points + _num_frozen_pts);
@@ -1104,7 +1108,8 @@ namespace diskann {
       LockGuard guard(_locks[location]);
       _final_graph[location].clear();
       _final_graph[location].shrink_to_fit();
-      _final_graph[location].reserve((_u64)(_indexingRange * GRAPH_SLACK_FACTOR * 1.05));
+      _final_graph[location].reserve(
+          (_u64)(_indexingRange * GRAPH_SLACK_FACTOR * 1.05));
 
       for (auto link : pruned_list) {
         if (_conc_consolidate)
@@ -1364,7 +1369,6 @@ namespace diskann {
     if (num_threads != 0)
       omp_set_num_threads(num_threads);
 
-
     _saturate_graph = parameters.Get<bool>("saturate_graph");
 
     if (num_threads != 0)
@@ -1410,19 +1414,21 @@ namespace diskann {
 
 #pragma omp parallel for schedule(dynamic, 2048)
     for (_s64 node_ctr = 0; node_ctr < (_s64)(visit_order.size()); node_ctr++) {
-      auto node = visit_order[node_ctr];
-      std::vector<Neighbor> pool;
+      auto                     node = visit_order[node_ctr];
+      std::vector<Neighbor>    pool;
       tsl::robin_set<unsigned> visited;
-      pool.reserve(_indexingQueueSize*2);
-      visited.reserve(_indexingQueueSize*2);
+      pool.reserve(_indexingQueueSize * 2);
+      visited.reserve(_indexingQueueSize * 2);
       std::vector<unsigned> des;
-      des.reserve(_indexingRange*GRAPH_SLACK_FACTOR);
+      des.reserve(_indexingRange * GRAPH_SLACK_FACTOR);
       std::vector<Neighbor> best_L_nodes;
       best_L_nodes.resize(_indexingQueueSize + 1);
       tsl::robin_set<unsigned> inserted_into_pool_rs;
       boost::dynamic_bitset<>  inserted_into_pool_bs;
 
-      search_for_point_and_add_links(node, _indexingQueueSize, pool,  visited, des, best_L_nodes,  inserted_into_pool_rs, inserted_into_pool_bs);
+      search_for_point_and_add_links(node, _indexingQueueSize, pool, visited,
+                                     des, best_L_nodes, inserted_into_pool_rs,
+                                     inserted_into_pool_bs);
     }
 
     if (_nd > 0) {
@@ -2621,13 +2627,16 @@ namespace diskann {
     // Find and add appropriate graph edges
     std::vector<unsigned> pruned_list;
 
-      ScratchStoreManager<T>    manager(_query_scratch);
-      auto                      scratch = manager.scratch_space();
-      std::vector<Neighbor> &   pool = scratch.pool();
-      tsl::robin_set<unsigned> &visited = scratch.visited();
-      pool.clear();
-      visited.clear();
-      search_for_point_and_add_links(location, _indexingQueueSize, pool, visited, scratch.des(), scratch.best_l_nodes(), scratch.inserted_into_pool_rs(), scratch.inserted_into_pool_bs());
+    ScratchStoreManager<T>    manager(_query_scratch);
+    auto                      scratch = manager.scratch_space();
+    std::vector<Neighbor> &   pool = scratch.pool();
+    tsl::robin_set<unsigned> &visited = scratch.visited();
+    pool.clear();
+    visited.clear();
+    search_for_point_and_add_links(location, _indexingQueueSize, pool, visited,
+                                   scratch.des(), scratch.best_l_nodes(),
+                                   scratch.inserted_into_pool_rs(),
+                                   scratch.inserted_into_pool_bs());
     return 0;
   }
 
