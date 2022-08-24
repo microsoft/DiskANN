@@ -1429,6 +1429,10 @@ namespace diskann {
       search_for_point_and_add_links(node, _indexingQueueSize, pool, visited,
                                      des, best_L_nodes, inserted_into_pool_rs,
                                      inserted_into_pool_bs);
+
+      if (node_ctr % 100000 == 0) {
+        std::cout<<"\r" << (100.0*node_ctr)/(visit_order.size()) <<"\% of index build completed." << std::flush;
+      }                                     
     }
 
     if (_nd > 0) {
