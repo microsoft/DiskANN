@@ -1058,6 +1058,79 @@ namespace diskann {
   }
 
   template<typename T, typename TagT>
+  void Index<T, TagT>::search_for_point_and_add_links(
+      int location, _u32 Lindex, std::vector<Neighbor> &pool,
+      tsl::robin_set<unsigned> &visited, std::vector<unsigned> &des,
+      std::vector<Neighbor> &   best_l_nodes,
+      tsl::robin_set<unsigned> &inserted_into_pool_rs,
+      boost::dynamic_bitset<> & inserted_into_pool_bs) {
+    std::vector<unsigned> init_ids;
+    get_expanded_nodes(location, Lindex, init_ids, pool, visited, des,
+                       best_l_nodes, inserted_into_pool_rs,
+                       inserted_into_pool_bs);
+
+    for (unsigned i = 0; i < pool.size(); i++) {
+      if (pool[i].id == (unsigned) location) {
+        pool.erase(pool.begin() + i);
+        visited.erase((unsigned) location);
+        i--;
+      } else if (_delete_set.find(pool[i].id) != _delete_set.end()) {
+        pool.erase(pool.begin() + i);
+        visited.erase((unsigned) pool[i].id);
+        i--;
+      }
+    }
+
+    std::vector<unsigned> pruned_list;
+    prune_neighbors(location, pool, pruned_list);
+
+    assert(!pruned_list.empty());
+    assert(_final_graph.size() == _max_points + _num_frozen_pts);
+
+    if (_support_eager_delete) {
+      for (unsigned i = 0; i < _final_graph[location].size(); i++) {
+        {
+          LockGuard guard(_locks_in[_final_graph[location][i]]);
+          _in_graph[_final_graph[location][i]].erase(
+              std::remove(_in_graph[_final_graph[location][i]].begin(),
+                          _in_graph[_final_graph[location][i]].end(), location),
+              _in_graph[_final_graph[location][i]].end());
+        }
+      }
+    }
+
+    {
+      std::shared_lock<std::shared_timed_mutex> tlock(_tag_lock,
+                                                      std::defer_lock);
+      if (_conc_consolidate)
+        tlock.lock();
+
+      LockGuard guard(_locks[location]);
+      _final_graph[location].clear();
+      _final_graph[location].shrink_to_fit();
+      _final_graph[location].reserve(
+          (_u64)(_indexingRange * GRAPH_SLACK_FACTOR * 1.05));
+
+      for (auto link : pruned_list) {
+        if (_conc_consolidate)
+          if (!_location_to_tag.contains(link))
+            continue;
+        _final_graph[location].emplace_back(link);
+        if (_support_eager_delete) {
+          LockGuard guard(_locks_in[link]);
+          _in_graph[link].emplace_back(location);
+        }
+      }
+
+      if (_conc_consolidate)
+        tlock.unlock();
+    }
+
+    assert(_final_graph[location].size() <= _indexingRange);
+    inter_insert(location, pruned_list, _support_eager_delete);
+  }
+
+  template<typename T, typename TagT>
   void Index<T, TagT>::occlude_list(std::vector<Neighbor> &pool,
                                     const float alpha, const unsigned degree,
                                     const unsigned         maxc,
@@ -1296,12 +1369,6 @@ namespace diskann {
     if (num_threads != 0)
       omp_set_num_threads(num_threads);
 
-    uint32_t num_syncs =
-        (unsigned) DIV_ROUND_UP(_nd + _num_frozen_pts, (64 * 64));
-    if (num_syncs < 40)
-      num_syncs = 40;
-    diskann::cout << "Number of syncs: " << num_syncs << std::endl;
-
     _saturate_graph = parameters.Get<bool>("saturate_graph");
 
     if (num_threads != 0)
@@ -1310,14 +1377,7 @@ namespace diskann {
     _indexingQueueSize = parameters.Get<unsigned>("L");  // Search list size
     _indexingRange = parameters.Get<unsigned>("R");
     _indexingMaxC = parameters.Get<unsigned>("C");
-    const float last_round_alpha = parameters.Get<float>("alpha");
-    unsigned    L = _indexingQueueSize;
-
-    std::vector<unsigned> Lvec;
-    Lvec.push_back(L);
-    Lvec.push_back(L);
-    const unsigned NUM_RNDS = 2;
-    _indexingAlpha = 1.0f;
+    _indexingAlpha = parameters.Get<float>("alpha");
 
     /* visit_order is a vector that is initialized to the entire graph */
     std::vector<unsigned>          visit_order;
@@ -1347,172 +1407,38 @@ namespace diskann {
           (size_t)(std::ceil(_indexingRange * GRAPH_SLACK_FACTOR * 1.05)));
     }
 
-    std::random_device               rd;
-    std::mt19937                     gen(rd());
-    std::uniform_real_distribution<> dis(0, 1);
-
-    // creating a initial list to begin the search process. it has _start and
-    // random other nodes
-    std::set<unsigned> unique_start_points;
-    unique_start_points.insert(_start);
-
     std::vector<unsigned> init_ids;
-    for (auto pt : unique_start_points)
-      init_ids.emplace_back(pt);
+    init_ids.emplace_back(_start);
 
     diskann::Timer link_timer;
-    for (uint32_t rnd_no = 0; rnd_no < NUM_RNDS; rnd_no++) {
-      L = Lvec[rnd_no];
 
-      if (rnd_no == NUM_RNDS - 1) {
-        if (last_round_alpha > 1)
-          _indexingAlpha = last_round_alpha;
-      }
+#pragma omp parallel for schedule(dynamic, 2048)
+    for (_s64 node_ctr = 0; node_ctr < (_s64)(visit_order.size()); node_ctr++) {
+      auto                     node = visit_order[node_ctr];
+      std::vector<Neighbor>    pool;
+      tsl::robin_set<unsigned> visited;
+      pool.reserve(_indexingQueueSize * 2);
+      visited.reserve(_indexingQueueSize * 2);
+      std::vector<unsigned> des;
+      des.reserve(_indexingRange * GRAPH_SLACK_FACTOR);
+      std::vector<Neighbor> best_L_nodes;
+      best_L_nodes.resize(_indexingQueueSize + 1);
+      tsl::robin_set<unsigned> inserted_into_pool_rs;
+      boost::dynamic_bitset<>  inserted_into_pool_bs;
 
-      double   sync_time = 0, total_sync_time = 0;
-      double   inter_time = 0, total_inter_time = 0;
-      size_t   inter_count = 0, total_inter_count = 0;
-      unsigned progress_counter = 0;
+      search_for_point_and_add_links(node, _indexingQueueSize, pool, visited,
+                                     des, best_L_nodes, inserted_into_pool_rs,
+                                     inserted_into_pool_bs);
 
-      size_t round_size = DIV_ROUND_UP(_nd, num_syncs);  // size of each batch
-      std::vector<unsigned> need_to_sync(_max_points + _num_frozen_pts, 0);
-
-      std::vector<std::vector<unsigned>> pruned_list_vector(round_size);
-
-      for (uint32_t sync_num = 0; sync_num < num_syncs; sync_num++) {
-        size_t start_id = sync_num * round_size;
-        size_t end_id =
-            (std::min)(_nd + _num_frozen_pts, (sync_num + 1) * round_size);
-
-        auto s = std::chrono::high_resolution_clock::now();
-        std::chrono::duration<double> diff;
-
-#pragma omp parallel for schedule(dynamic)
-        for (_s64 node_ctr = (_s64) start_id; node_ctr < (_s64) end_id;
-             ++node_ctr) {
-          auto                     node = visit_order[node_ctr];
-          size_t                   node_offset = node_ctr - start_id;
-          tsl::robin_set<unsigned> visited;
-          std::vector<unsigned> &pruned_list = pruned_list_vector[node_offset];
-          // get nearest neighbors of n in tmp. pool contains all the
-          // points that were checked along with their distance from
-          // n. visited contains all the points visited, just the ids
-          std::vector<Neighbor> pool;
-          pool.reserve(L * 2);
-          visited.reserve(L * 2);
-          get_expanded_nodes(node, L, init_ids, pool, visited);
-          // check the neighbors of the query that are not part of
-          // visited, check their distance to the query, and add it to
-          if (!_final_graph[node].empty())
-            for (auto id : _final_graph[node]) {
-              if (visited.find(id) == visited.end() && id != node) {
-                float dist =
-                    _distance->compare(_data + _aligned_dim * (size_t) node,
-                                       _data + _aligned_dim * (size_t) id,
-                                       (unsigned) _aligned_dim);
-                pool.emplace_back(Neighbor(id, dist, true));
-                visited.insert(id);
-              }
-            }
-          prune_neighbors(node, pool, pruned_list);
-        }
-        diff = std::chrono::high_resolution_clock::now() - s;
-        sync_time += diff.count();
-
-// prune_neighbors will check pool, and remove some of the points and
-// create a cut_graph, which contains neighbors for point n
-#pragma omp parallel for schedule(dynamic, 64)
-        for (_s64 node_ctr = (_s64) start_id; node_ctr < (_s64) end_id;
-             ++node_ctr) {
-          _u64                   node = visit_order[node_ctr];
-          size_t                 node_offset = node_ctr - start_id;
-          std::vector<unsigned> &pruned_list = pruned_list_vector[node_offset];
-          _final_graph[node].clear();
-          for (auto id : pruned_list)
-            _final_graph[node].emplace_back(id);
-        }
-        s = std::chrono::high_resolution_clock::now();
-
-#pragma omp parallel for schedule(dynamic, 64)
-        for (_s64 node_ctr = start_id; node_ctr < (_s64) end_id; ++node_ctr) {
-          auto                   node = visit_order[node_ctr];
-          _u64                   node_offset = node_ctr - start_id;
-          std::vector<unsigned> &pruned_list = pruned_list_vector[node_offset];
-          batch_inter_insert(node, pruned_list, need_to_sync);
-          pruned_list.clear();
-          pruned_list.shrink_to_fit();
-        }
-
-#pragma omp parallel for schedule(dynamic, 65536)
-        for (_s64 node_ctr = 0; node_ctr < (_s64)(visit_order.size());
-             node_ctr++) {
-          auto node = visit_order[node_ctr];
-          if (need_to_sync[node] != 0) {
-            need_to_sync[node] = 0;
-            inter_count++;
-            tsl::robin_set<unsigned> dummy_visited(0);
-            std::vector<Neighbor>    dummy_pool(0);
-            std::vector<unsigned>    new_out_neighbors;
-
-            for (auto cur_nbr : _final_graph[node]) {
-              if (dummy_visited.find(cur_nbr) == dummy_visited.end() &&
-                  cur_nbr != node) {
-                float dist =
-                    _distance->compare(_data + _aligned_dim * (size_t) node,
-                                       _data + _aligned_dim * (size_t) cur_nbr,
-                                       (unsigned) _aligned_dim);
-                dummy_pool.emplace_back(Neighbor(cur_nbr, dist, true));
-                dummy_visited.insert(cur_nbr);
-              }
-            }
-            prune_neighbors(node, dummy_pool, new_out_neighbors);
-
-            _final_graph[node].clear();
-            for (auto id : new_out_neighbors)
-              _final_graph[node].emplace_back(id);
-          }
-        }
-
-        diff = std::chrono::high_resolution_clock::now() - s;
-        inter_time += diff.count();
-
-        if ((sync_num * 100) / num_syncs > progress_counter) {
-          diskann::cout.precision(4);
-          diskann::cout << "Completed  (round: " << rnd_no
-                        << ", sync: " << sync_num << "/" << num_syncs
-                        << " with L " << L << ")"
-                        << " sync_time: " << sync_time << "s"
-                        << "; inter_time: " << inter_time << "s" << std::endl;
-
-          total_sync_time += sync_time;
-          total_inter_time += inter_time;
-          total_inter_count += inter_count;
-          sync_time = 0;
-          inter_time = 0;
-          inter_count = 0;
-          progress_counter += 5;
-        }
-      }
-// Gopal. Splitting nsg_dll into separate DLLs for search and build.
-// This code should only be available in the "build" DLL.
-#if defined(RELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS) && \
-    defined(DISKANN_BUILD)
-      MallocExtension::instance()->ReleaseFreeMemory();
-#endif
-      if (_nd > 0) {
-        diskann::cout << "Completed Pass " << rnd_no << " of data using L=" << L
-                      << " and alpha=" << parameters.Get<float>("alpha")
-                      << ". Stats: ";
-        diskann::cout << "search+prune_time=" << total_sync_time
-                      << "s, inter_time=" << total_inter_time
-                      << "s, inter_count=" << total_inter_count << std::endl;
-      }
+      if (node_ctr % 100000 == 0) {
+        std::cout<<"\r" << (100.0*node_ctr)/(visit_order.size()) <<"\% of index build completed." << std::flush;
+      }                                     
     }
 
     if (_nd > 0) {
       diskann::cout << "Starting final cleanup.." << std::flush;
     }
-#pragma omp parallel for schedule(dynamic, 65536)
+#pragma omp parallel for schedule(dynamic, 2048)
     for (_s64 node_ctr = 0; node_ctr < (_s64)(visit_order.size()); node_ctr++) {
       auto node = visit_order[node_ctr];
       if (_final_graph[node].size() > _indexingRange) {
@@ -2703,89 +2629,18 @@ namespace diskann {
     }
 
     // Find and add appropriate graph edges
-    unsigned              range = _indexingRange;
-    unsigned              Lindex = _indexingQueueSize;
     std::vector<unsigned> pruned_list;
 
-    if (_nd >= _indexingRange) {
-      ScratchStoreManager<T>    manager(_query_scratch);
-      auto                      scratch = manager.scratch_space();
-      std::vector<Neighbor> &   pool = scratch.pool();
-      tsl::robin_set<unsigned> &visited = scratch.visited();
-      pool.clear();
-      visited.clear();
-      std::vector<unsigned> init_ids;
-      get_expanded_nodes(location, Lindex, init_ids, pool, visited,
-                         scratch.des(), scratch.best_l_nodes(),
-                         scratch.inserted_into_pool_rs(),
-                         scratch.inserted_into_pool_bs());
-
-      for (unsigned i = 0; i < pool.size(); i++) {
-        if (pool[i].id == (unsigned) location) {
-          pool.erase(pool.begin() + i);
-          visited.erase((unsigned) location);
-          i--;
-        } else if (_delete_set.find(pool[i].id) != _delete_set.end()) {
-          pool.erase(pool.begin() + i);
-          visited.erase((unsigned) pool[i].id);
-          i--;
-        }
-      }
-
-      prune_neighbors(location, pool, pruned_list);
-    } else {
-      std::unique_lock<std::shared_timed_mutex> lock(_tag_lock);
-      pruned_list.push_back(_start);
-      for (auto pos = _location_to_tag.find_first(); pos.is_valid();
-           pos = _location_to_tag.find_next(pos)) {
-        pruned_list.push_back(pos._key);
-        if (pruned_list.size() >= _indexingRange)
-          break;
-      }
-    }
-    assert(!pruned_list.empty());
-    assert(_final_graph.size() == _max_points + _num_frozen_pts);
-
-    if (_support_eager_delete) {
-      for (unsigned i = 0; i < _final_graph[location].size(); i++) {
-        {
-          LockGuard guard(_locks_in[_final_graph[location][i]]);
-          _in_graph[_final_graph[location][i]].erase(
-              std::remove(_in_graph[_final_graph[location][i]].begin(),
-                          _in_graph[_final_graph[location][i]].end(), location),
-              _in_graph[_final_graph[location][i]].end());
-        }
-      }
-    }
-
-    {
-      std::shared_lock<std::shared_timed_mutex> tlock(_tag_lock,
-                                                      std::defer_lock);
-      if (_conc_consolidate)
-        tlock.lock();
-
-      LockGuard guard(_locks[location]);
-      _final_graph[location].clear();
-      _final_graph[location].shrink_to_fit();
-      _final_graph[location].reserve((_u64)(range * GRAPH_SLACK_FACTOR * 1.05));
-
-      for (auto link : pruned_list) {
-        if (_conc_consolidate)
-          if (!_location_to_tag.contains(link))
-            continue;
-        _final_graph[location].emplace_back(link);
-        if (_support_eager_delete) {
-          LockGuard guard(_locks_in[link]);
-          _in_graph[link].emplace_back(location);
-        }
-      }
-
-      if (_conc_consolidate)
-        tlock.unlock();
-    }
-
-    assert(_final_graph[location].size() <= range);
-    inter_insert(location, pruned_list, _support_eager_delete);
+    ScratchStoreManager<T>    manager(_query_scratch);
+    auto                      scratch = manager.scratch_space();
+    std::vector<Neighbor> &   pool = scratch.pool();
+    tsl::robin_set<unsigned> &visited = scratch.visited();
+    pool.clear();
+    visited.clear();
+    search_for_point_and_add_links(location, _indexingQueueSize, pool, visited,
+                                   scratch.des(), scratch.best_l_nodes(),
+                                   scratch.inserted_into_pool_rs(),
+                                   scratch.inserted_into_pool_bs());
     return 0;
   }
 

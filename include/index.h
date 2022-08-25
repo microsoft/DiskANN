@@ -296,6 +296,13 @@ namespace diskann {
                             std::vector<Neighbor> &   expanded_nodes_info,
                             tsl::robin_set<unsigned> &expanded_nodes_ids);
 
+    void search_for_point_and_add_links(
+        int location, _u32 Lindex, std::vector<Neighbor> &pool,
+        tsl::robin_set<unsigned> &visited, std::vector<unsigned> &des,
+        std::vector<Neighbor> &   best_L_nodes,
+        tsl::robin_set<unsigned> &inserted_into_pool_rs,
+        boost::dynamic_bitset<> & inserted_into_pool_bs);
+
     void prune_neighbors(const unsigned location, std::vector<Neighbor> &pool,
                          std::vector<unsigned> &pruned_list);
 
