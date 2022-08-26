@@ -2,13 +2,23 @@
 // emails: t-gollapudis@microsoft.com, t-varunsi@microsoft.com
 
 #include <boost/program_options.hpp>
+#include <bits/types/struct_iovec.h>
+#include <fcntl.h>
 #include <omp.h>
+#include <sys/mman.h>
+#include <sys/uio.h>
+#include <unistd.h>
+#include <cstring>
 #include <tuple>
 
 #include "index.h"
 
 
 namespace po = boost::program_options;
+
+// oh god
+#define   LIKELY(condition) __builtin_expect(static_cast<bool>(condition), 1)
+#define UNLIKELY(condition) __builtin_expect(static_cast<bool>(condition), 0)
 
 // custom types (for readability)
 typedef std::string label;
@@ -80,7 +90,13 @@ inline size_t handle_args(int argc, char **argv, std::string &data_type, std::st
 	return 1;
 }
 
-
+/*
+ * Parses the label datafile, which has the following line format:
+ * 						point_id -> \t -> comma-separated labels
+ *
+ * Returns three objects in via std::tuple:
+ * 1. the label universe as a set
+ */
 parse_label_file_return_values parse_label_file (std::string label_data_path, std::string universal_label) {
 	std::ifstream label_data_stream(label_data_path);
   std::string   line, token;
@@ -146,6 +162,80 @@ parse_label_file_return_values parse_label_file (std::string label_data_path, st
 	return std::make_tuple(point_ids_to_labels, labels_to_number_of_points, all_labels);
 }
 
+
+/*
+ * For each label, generates a file containing all vectors that have said label.
+ * Utilizes platform-specific functions mmap and writev.
+ */
+template<typename T>
+void generate_label_specific_vector_files(std::string input_data_path, tsl::robin_map<label, _u32> labels_to_number_of_points,
+																		 std::vector<label_set> point_ids_to_labels, label_set all_labels) {
+	void *memblock;
+  int input_data_fd;
+	_u8 SCALING = 2 * sizeof(_u32);
+  struct stat sb;
+
+	// UNLIKELY moves the branch instr. body elsewhere, opening up cache space
+	// for code that actually executes
+	input_data_fd = open(input_data_path.c_str(), O_RDONLY, 0444);
+	if (UNLIKELY(input_data_fd == -1))
+		throw;
+	if (UNLIKELY(fstat(input_data_fd, &sb)))
+		throw;
+
+	// mmap could be faster than just doing a regular sequential read?
+	memblock = mmap(nullptr, sb.st_size, PROT_READ, MAP_PRIVATE, input_data_fd, 0);
+	if (UNLIKELY(memblock == MAP_FAILED))
+		throw;
+	
+	const char* begin = static_cast<char const*>(memblock);
+	
+	_u32 number_of_points, dimension;
+	std::memcpy(&number_of_points, begin, sizeof(_u32));
+	std::memcpy(&dimension, begin + sizeof(_u32), sizeof(_u32));
+
+	// iovec necessary for using writev
+	tsl::robin_map<label, iovec> label_to_vectors_map;
+	for (_u32 point_id = 0; point_id < number_of_points; point_id++) {
+		for (const auto &label : point_ids_to_labels[point_id]) {
+			// first add metadata before adding vectors
+			if (!label_to_vectors_map.count(label)) {
+				iovec curr_iovec;
+				curr_iovec.iov_base = malloc(SCALING + labels_to_number_of_points[label] * dimension * sizeof(T));	
+				std::memcpy((char *) curr_iovec.iov_base, &labels_to_number_of_points[label], sizeof(_u32));
+				curr_iovec.iov_len = sizeof(_u32);
+				std::memcpy((char *) curr_iovec.iov_base + curr_iovec.iov_len, &dimension, sizeof(_u32));
+				curr_iovec.iov_len += sizeof(_u32);
+				label_to_vectors_map[label] = curr_iovec;
+			}
+			char *current_iovec_buffer = (char *) label_to_vectors_map[label].iov_base;
+			size_t *current_iovec_buffer_size = &label_to_vectors_map[label].iov_len;
+			std::memcpy(current_iovec_buffer + *current_iovec_buffer_size, begin + SCALING + dimension * point_id, sizeof(T) * dimension);
+			*current_iovec_buffer_size += sizeof(T) * dimension;
+		}
+	}
+
+	for (const auto &label : all_labels) {
+  	int label_input_data_fd;
+		std::string curr_label_input_data_path(input_data_path + "_" + label);
+
+		label_input_data_fd = open(curr_label_input_data_path.c_str(), O_CREAT | O_WRONLY, 0644);
+		if (UNLIKELY(label_input_data_fd == -1))
+			throw;
+
+		// using writev leads to one write syscall per label file
+		int return_value = writev(label_input_data_fd, &label_to_vectors_map[label], 1);
+		if (UNLIKELY(return_value == -1))
+			throw;
+
+		free(label_to_vectors_map[label].iov_base);
+		close(label_input_data_fd);
+	}
+
+	munmap(memblock, sb.st_size);
+	close(input_data_fd);
+}
+
 int main(int argc, char **argv) {
 	// 1. handle cmdline inputs
 	std::string data_type, input_data_path, final_index_path_prefix, label_data_path, universal_label;
@@ -162,6 +252,13 @@ int main(int argc, char **argv) {
 	std::tie(point_ids_to_labels, labels_to_number_of_points, all_labels) = parse_label_file(label_data_path, universal_label);
 
 	// TODO: 3. for each label, make a separate data file
+	if (data_type == "uint8")
+		generate_label_specific_vector_files<uint8_t>(input_data_path, labels_to_number_of_points, point_ids_to_labels, all_labels);
+	else if (data_type == "int8")
+		generate_label_specific_vector_files<int8_t>(input_data_path, labels_to_number_of_points, point_ids_to_labels, all_labels);
+	else if (data_type == "float")
+		generate_label_specific_vector_files<float>(input_data_path, labels_to_number_of_points, point_ids_to_labels, all_labels);
+
 	// TODO: 4. for each created data file, create a vanilla diskANN index
 	// TODO: 5. "stitch" the indices together
 	// TODO: 6. run a prune on the stitched index, and save to disk
