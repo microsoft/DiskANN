@@ -746,7 +746,7 @@ namespace diskann {
 #ifdef EXEC_ENV_OLS
     _u32 nodes_read = 0;
     _u64 cc = 0;
-    _u64 graph_offset = file_offset + header_size;
+    _u64 graph_offset = header_size;
     while (nodes_read < expected_num_points) {
       _u32 k;
       read_value(reader, k, graph_offset);
