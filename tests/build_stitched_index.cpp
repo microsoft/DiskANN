@@ -11,6 +11,7 @@
 #include <chrono>
 #include <cstring>
 #include <tuple>
+#include <random>
 
 #include "index.h"
 
@@ -24,18 +25,31 @@ namespace po = boost::program_options;
 // custom types (for readability)
 typedef std::string label;
 typedef tsl::robin_set<label> label_set;
+typedef std::string path;
 
 // structs for returning multiple items from a function
 typedef std::tuple<std::vector<label_set>, tsl::robin_map<label, _u32>, label_set> parse_label_file_return_values;
+typedef std::tuple<std::vector<std::vector<_u32>>, _u64> load_label_index_return_values;
+typedef std::tuple<std::vector<tsl::robin_set<_u32>>, _u64> stitch_indices_return_values;
 
+
+/*
+ * Inline function to generate a random integer in a range.
+ */
+inline size_t random(size_t range_from, size_t range_to) {
+  std::random_device                    rand_dev;
+  std::mt19937                          generator(rand_dev());
+  std::uniform_int_distribution<size_t> distr(range_from, range_to);
+  return distr(generator);
+}
 
 /*
  * Inline function to handle command line parsing.
  *
  * Arguments are merely the inputs from the command line.
  */
-inline size_t handle_args(int argc, char **argv, std::string &data_type, std::string &input_data_path, 
-													std::string &final_index_path_prefix, std::string &label_data_path, std::string &universal_label, 
+inline size_t handle_args(int argc, char **argv, std::string &data_type, path &input_data_path, 
+													path &final_index_path_prefix, path &label_data_path, std::string &universal_label, 
 													unsigned &num_threads, unsigned &R, unsigned &L, unsigned &stitched_R, float &alpha) {
 	po::options_description desc{"Arguments"};
   try {
@@ -44,10 +58,10 @@ inline size_t handle_args(int argc, char **argv, std::string &data_type, std::st
                        po::value<std::string>(&data_type)->required(),
                        "data type <int8/uint8/float>");
     desc.add_options()("data_path",
-                       po::value<std::string>(&input_data_path)->required(),
+                       po::value<path>(&input_data_path)->required(),
                        "Input data file in bin format");
     desc.add_options()("index_path_prefix",
-                       po::value<std::string>(&final_index_path_prefix)->required(),
+                       po::value<path>(&final_index_path_prefix)->required(),
                        "Path prefix for saving index file components");
     desc.add_options()("max_degree,R",
                        po::value<uint32_t>(&R)->default_value(64),
@@ -69,11 +83,11 @@ inline size_t handle_args(int argc, char **argv, std::string &data_type, std::st
         "omp_get_num_procs())");
     desc.add_options()(
         "label_file",
-        po::value<std::string>(&label_data_path)->default_value(""),
+        po::value<path>(&label_data_path)->default_value(""),
         "Input label file in txt format if present");
     desc.add_options()(
         "universal_label",
-        po::value<std::string>(&universal_label)->default_value(""),
+        po::value<label>(&universal_label)->default_value(""),
         "Universal label, if using it, only in conjunction with labels_file");
 
     po::variables_map vm;
@@ -98,7 +112,7 @@ inline size_t handle_args(int argc, char **argv, std::string &data_type, std::st
  * Returns three objects in via std::tuple:
  * 1. the label universe as a set
  */
-parse_label_file_return_values parse_label_file (std::string label_data_path, std::string universal_label) {
+parse_label_file_return_values parse_label_file (path label_data_path, std::string universal_label) {
 	std::ifstream label_data_stream(label_data_path);
   std::string   line, token;
   unsigned      line_cnt = 0;
@@ -172,11 +186,11 @@ parse_label_file_return_values parse_label_file (std::string label_data_path, st
  * 		input_data_path + "_" + label
  */
 template<typename T>
-void generate_label_specific_vector_files(std::string input_data_path, tsl::robin_map<label, _u32> labels_to_number_of_points,
+tsl::robin_map<label, std::vector<_u32>> generate_label_specific_vector_files(path input_data_path, tsl::robin_map<label, _u32> labels_to_number_of_points,
 																		 std::vector<label_set> point_ids_to_labels, label_set all_labels) {
 	void *memblock;
   int input_data_fd;
-	_u8 SCALING = 2 * sizeof(_u32);
+	const _u8 METADATA = 2 * sizeof(_u32);
   struct stat sb;
 
 	auto file_writing_timer = std::chrono::high_resolution_clock::now();
@@ -193,7 +207,7 @@ void generate_label_specific_vector_files(std::string input_data_path, tsl::robi
 	if (UNLIKELY(memblock == MAP_FAILED))
 		throw;
 	
-	const char* begin = static_cast<char const*>(memblock);
+	const char *begin = static_cast<char const*>(memblock);
 	
 	_u32 number_of_points, dimension;
 	std::memcpy(&number_of_points, begin, sizeof(_u32));
@@ -209,7 +223,7 @@ void generate_label_specific_vector_files(std::string input_data_path, tsl::robi
 			// first add metadata before adding vectors
 			if (!label_to_vectors_map.count(label)) {
 				iovec curr_iovec;
-				curr_iovec.iov_base = malloc(SCALING + labels_to_number_of_points[label] * dimension * sizeof(T));	
+				curr_iovec.iov_base = malloc(METADATA + labels_to_number_of_points[label] * dimension * sizeof(T));	
 				std::memcpy((char *) curr_iovec.iov_base, &labels_to_number_of_points[label], sizeof(_u32));
 				curr_iovec.iov_len = sizeof(_u32);
 				std::memcpy((char *) curr_iovec.iov_base + curr_iovec.iov_len, &dimension, sizeof(_u32));
@@ -219,7 +233,7 @@ void generate_label_specific_vector_files(std::string input_data_path, tsl::robi
 			}
 			char *current_iovec_buffer = (char *) label_to_vectors_map[label].iov_base;
 			size_t *current_iovec_buffer_size = &label_to_vectors_map[label].iov_len;
-			std::memcpy(current_iovec_buffer + *current_iovec_buffer_size, begin + SCALING + dimension * point_id, sizeof(T) * dimension);
+			std::memcpy(current_iovec_buffer + *current_iovec_buffer_size, begin + METADATA + dimension * point_id, sizeof(T) * dimension);
 			*current_iovec_buffer_size += sizeof(T) * dimension;
 			label_id_to_orig_id[label].push_back(point_id);
 		}
@@ -249,6 +263,8 @@ void generate_label_specific_vector_files(std::string input_data_path, tsl::robi
 
 	munmap(memblock, sb.st_size);
 	close(input_data_fd);
+	
+	return label_id_to_orig_id;
 }
 
 
@@ -260,7 +276,7 @@ void generate_label_specific_vector_files(std::string input_data_path, tsl::robi
  *  final_index_path_prefix + "_" + label
  */
 template <typename T>
-void generate_label_indices(std::string input_data_path, std::string final_index_path_prefix,
+void generate_label_indices(path input_data_path, path final_index_path_prefix,
 														label_set all_labels, unsigned R, unsigned L, float alpha, 
 														unsigned num_threads) {
 	diskann::Parameters label_index_build_parameters;
@@ -276,8 +292,8 @@ void generate_label_indices(std::string input_data_path, std::string final_index
 	auto diskann_cout_buffer = diskann::cout.rdbuf(nullptr);
 	auto std_cout_buffer = std::cout.rdbuf(nullptr);
 	for (const auto &label : all_labels) {
-		std::string curr_label_input_data_path(input_data_path + "_" + label);
-		std::string curr_label_index_path(final_index_path_prefix + "_" + label);
+		path curr_label_input_data_path(input_data_path + "_" + label);
+		path curr_label_index_path(final_index_path_prefix + "_" + label);
 
 		size_t number_of_label_points, dimension;
 		diskann::get_bin_metadata(curr_label_input_data_path, number_of_label_points, dimension);
@@ -298,6 +314,82 @@ void generate_label_indices(std::string input_data_path, std::string final_index
 }
 
 
+/*
+ * Manually loads a graph index in from a given file.
+ * 
+ * Returns both the graph index and the size of the file in bytes.
+ */
+load_label_index_return_values load_label_index(path label_index_path, _u32 label_number_of_points) {
+	std::ifstream label_index_stream;
+	label_index_stream.exceptions(std::ios::badbit | std::ios::failbit);
+	label_index_stream.open(label_index_path, std::ios::binary);
+
+	_u64 index_file_size, index_num_frozen_points;
+	_u32 index_max_observed_degree, index_entry_point;
+	const size_t INDEX_METADATA = 2 * sizeof(_u64) + 2 * sizeof(_u32);
+	label_index_stream.read((char *) &index_file_size, sizeof(_u64));
+	label_index_stream.read((char *) &index_max_observed_degree, sizeof(_u32));
+	label_index_stream.read((char *) &index_entry_point, sizeof(_u32));
+	label_index_stream.read((char *) &index_num_frozen_points, sizeof(_u64));
+	size_t bytes_read = INDEX_METADATA;
+
+	std::vector<std::vector<_u32>> label_index(label_number_of_points);
+	_u32 nodes_read = 0;
+	while (bytes_read != index_file_size) {
+		_u32 current_node_num_neighbors;
+		label_index_stream.read((char *) &current_node_num_neighbors, sizeof(_u32));
+		nodes_read++;
+		
+		std::vector<_u32> current_node_neighbors(current_node_num_neighbors);
+		label_index_stream.read((char *) current_node_neighbors.data(), current_node_num_neighbors * sizeof(_u32));
+		label_index[nodes_read - 1].swap(current_node_neighbors);
+		bytes_read += sizeof(_u32) * (current_node_num_neighbors + 1);
+	}
+	
+	return std::make_tuple(label_index, index_file_size);
+}
+
+
+/*
+ * Unions the per-label graph indices together via the following policy:
+ *  - any two nodes can only have at most one edge between them -
+ * 
+ * Returns the "stitched" graph and its expected file size.
+ */
+template <typename T>
+stitch_indices_return_values stitch_label_indices(path final_index_path_prefix, _u32 total_number_of_points, label_set all_labels, 
+													tsl::robin_map<label, _u32> labels_to_number_of_points, 
+													tsl::robin_map<label, _u32> &label_entry_points,
+													tsl::robin_map<label, std::vector<_u32>> label_id_to_orig_id_map) {
+	size_t final_index_size = 0;
+	std::vector<tsl::robin_set<_u32>> stitched_graph(total_number_of_points);
+	
+	for (const auto &label : all_labels) {
+		path curr_label_index_path(final_index_path_prefix + "_" + label);
+		std::vector<std::vector<_u32>> curr_label_index;
+		_u64 curr_label_index_size;
+		_u32 curr_label_entry_point;
+		std::tie(curr_label_index, curr_label_index_size) = load_label_index(curr_label_index_path, labels_to_number_of_points[label]);
+		final_index_size += curr_label_index_size;
+		curr_label_entry_point = random(0, curr_label_index.size());
+		label_entry_points[label] = label_id_to_orig_id_map[label][curr_label_entry_point];
+	
+		for (_u32 node_point = 0; node_point < curr_label_index.size(); node_point++) {
+			_u32 original_point_id = label_id_to_orig_id_map[label][node_point];
+			for (auto &node_neighbor : curr_label_index[node_point]) {
+				_u32 original_neighbor_id = label_id_to_orig_id_map[label][node_neighbor];
+				if (!stitched_graph[original_point_id].count(original_neighbor_id))
+					stitched_graph[original_point_id].insert(original_neighbor_id);
+				else
+				 	final_index_size -= sizeof(T);
+			}
+		}
+	}
+
+	return std::make_tuple(stitched_graph, final_index_size);
+}
+
+
 int main(int argc, char **argv) {
 	// 1. handle cmdline inputs
 	std::string data_type, input_data_path, final_index_path_prefix, label_data_path, universal_label;
@@ -314,12 +406,15 @@ int main(int argc, char **argv) {
 	std::tie(point_ids_to_labels, labels_to_number_of_points, all_labels) = parse_label_file(label_data_path, universal_label);
 
 	// 3. for each label, make a separate data file
+	tsl::robin_map<label, std::vector<_u32>> label_id_to_orig_id_map;
+	_u32 total_number_of_points = point_ids_to_labels.size();
+	
 	if (data_type == "uint8")
-		generate_label_specific_vector_files<uint8_t>(input_data_path, labels_to_number_of_points, point_ids_to_labels, all_labels);
+		label_id_to_orig_id_map = generate_label_specific_vector_files<uint8_t>(input_data_path, labels_to_number_of_points, point_ids_to_labels, all_labels);
 	else if (data_type == "int8")
-		generate_label_specific_vector_files<int8_t>(input_data_path, labels_to_number_of_points, point_ids_to_labels, all_labels);
+		label_id_to_orig_id_map = generate_label_specific_vector_files<int8_t>(input_data_path, labels_to_number_of_points, point_ids_to_labels, all_labels);
 	else if (data_type == "float")
-		generate_label_specific_vector_files<float>(input_data_path, labels_to_number_of_points, point_ids_to_labels, all_labels);
+		label_id_to_orig_id_map = generate_label_specific_vector_files<float>(input_data_path, labels_to_number_of_points, point_ids_to_labels, all_labels);
 
 	// 4. for each created data file, create a vanilla diskANN index
 	if (data_type == "uint8")
@@ -330,5 +425,16 @@ int main(int argc, char **argv) {
 		generate_label_indices<float>(input_data_path, final_index_path_prefix, all_labels, R, L, alpha, num_threads);
 
 	// TODO: 5. "stitch" the indices together
+	std::vector<tsl::robin_set<_u32>> stitched_graph;
+	tsl::robin_map<label, _u32> label_entry_points;
+	_u64 stitched_graph_size;
+
+	if (data_type == "uint8")
+		std::tie(stitched_graph, stitched_graph_size) = stitch_label_indices<uint8_t>(final_index_path_prefix, total_number_of_points, all_labels, labels_to_number_of_points, label_entry_points, label_id_to_orig_id_map);
+	else if (data_type == "int8")
+		std::tie(stitched_graph, stitched_graph_size) = stitch_label_indices<int8_t>(final_index_path_prefix, total_number_of_points, all_labels, labels_to_number_of_points, label_entry_points, label_id_to_orig_id_map);
+	else if (data_type == "float")
+		std::tie(stitched_graph, stitched_graph_size) = stitch_label_indices<float>(final_index_path_prefix, total_number_of_points, all_labels, labels_to_number_of_points, label_entry_points, label_id_to_orig_id_map);
+
 	// TODO: 6. run a prune on the stitched index, and save to disk
 }
