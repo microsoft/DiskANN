@@ -8,6 +8,7 @@
 #include <sys/mman.h>
 #include <sys/uio.h>
 #include <unistd.h>
+#include <chrono>
 #include <cstring>
 #include <tuple>
 
@@ -156,7 +157,7 @@ parse_label_file_return_values parse_label_file (std::string label_data_path, st
 			labels_to_number_of_points[label]++;
 	}
 
-	std::cout << "Identified " << all_labels.size() << " distinct label(s)"
+	std::cout << "Identified " << all_labels.size() << " distinct label(s) \n"
 						<< std::endl;
 
 	return std::make_tuple(point_ids_to_labels, labels_to_number_of_points, all_labels);
@@ -166,6 +167,9 @@ parse_label_file_return_values parse_label_file (std::string label_data_path, st
 /*
  * For each label, generates a file containing all vectors that have said label.
  * Utilizes platform-specific functions mmap and writev.
+ *
+ * Each data file is saved under the following format:
+ * 		input_data_path + "_" + label
  */
 template<typename T>
 void generate_label_specific_vector_files(std::string input_data_path, tsl::robin_map<label, _u32> labels_to_number_of_points,
@@ -175,6 +179,7 @@ void generate_label_specific_vector_files(std::string input_data_path, tsl::robi
 	_u8 SCALING = 2 * sizeof(_u32);
   struct stat sb;
 
+	auto file_writing_timer = std::chrono::high_resolution_clock::now();
 	// UNLIKELY moves the branch instr. body elsewhere, opening up cache space
 	// for code that actually executes
 	input_data_fd = open(input_data_path.c_str(), O_RDONLY, 0444);
@@ -196,6 +201,9 @@ void generate_label_specific_vector_files(std::string input_data_path, tsl::robi
 
 	// iovec necessary for using writev
 	tsl::robin_map<label, iovec> label_to_vectors_map;
+
+	// mapping from id in label file to original file
+	tsl::robin_map<label, std::vector<_u32>> label_id_to_orig_id;
 	for (_u32 point_id = 0; point_id < number_of_points; point_id++) {
 		for (const auto &label : point_ids_to_labels[point_id]) {
 			// first add metadata before adding vectors
@@ -207,14 +215,17 @@ void generate_label_specific_vector_files(std::string input_data_path, tsl::robi
 				std::memcpy((char *) curr_iovec.iov_base + curr_iovec.iov_len, &dimension, sizeof(_u32));
 				curr_iovec.iov_len += sizeof(_u32);
 				label_to_vectors_map[label] = curr_iovec;
+				label_id_to_orig_id[label].reserve(labels_to_number_of_points[label]);
 			}
 			char *current_iovec_buffer = (char *) label_to_vectors_map[label].iov_base;
 			size_t *current_iovec_buffer_size = &label_to_vectors_map[label].iov_len;
 			std::memcpy(current_iovec_buffer + *current_iovec_buffer_size, begin + SCALING + dimension * point_id, sizeof(T) * dimension);
 			*current_iovec_buffer_size += sizeof(T) * dimension;
+			label_id_to_orig_id[label].push_back(point_id);
 		}
 	}
 
+	// write each label iovec to resp. file
 	for (const auto &label : all_labels) {
   	int label_input_data_fd;
 		std::string curr_label_input_data_path(input_data_path + "_" + label);
@@ -232,9 +243,60 @@ void generate_label_specific_vector_files(std::string input_data_path, tsl::robi
 		close(label_input_data_fd);
 	}
 
+	std::chrono::duration<double> file_writing_time = std::chrono::high_resolution_clock::now() - file_writing_timer;
+	std::cout << "generated " << all_labels.size() << " label-specific vector files for index building in time "
+		<< file_writing_time.count() << "\n" << std::endl;
+
 	munmap(memblock, sb.st_size);
 	close(input_data_fd);
 }
+
+
+/*
+ * Using passed in parameters and files generated from step 3, 
+ * builds a vanilla diskANN index for each label.
+ *
+ * Each index is saved under the following path:
+ *  final_index_path_prefix + "_" + label
+ */
+template <typename T>
+void generate_label_indices(std::string input_data_path, std::string final_index_path_prefix,
+														label_set all_labels, unsigned R, unsigned L, float alpha, 
+														unsigned num_threads) {
+	diskann::Parameters label_index_build_parameters;
+	label_index_build_parameters.Set<unsigned>("R", R);
+	label_index_build_parameters.Set<unsigned>("L", L);
+	label_index_build_parameters.Set<unsigned>("C", 750);  // maximum candidate set size du
+	label_index_build_parameters.Set<bool>("saturate_graph", 0);
+	label_index_build_parameters.Set<float>("alpha", alpha);
+	label_index_build_parameters.Set<unsigned>("num_threads", num_threads);
+
+	// for each label, build an index on resp. points
+	double total_indexing_time = 0.0;
+	auto diskann_cout_buffer = diskann::cout.rdbuf(nullptr);
+	auto std_cout_buffer = std::cout.rdbuf(nullptr);
+	for (const auto &label : all_labels) {
+		std::string curr_label_input_data_path(input_data_path + "_" + label);
+		std::string curr_label_index_path(final_index_path_prefix + "_" + label);
+
+		size_t number_of_label_points, dimension;
+		diskann::get_bin_metadata(curr_label_input_data_path, number_of_label_points, dimension);
+		diskann::Index<T> index(diskann::Metric::L2, dimension, number_of_label_points, false, false);
+
+		auto index_build_timer = std::chrono::high_resolution_clock::now();
+		index.build(curr_label_input_data_path.c_str(), number_of_label_points, label_index_build_parameters);
+		std::chrono::duration<double> current_indexing_time =
+      std::chrono::high_resolution_clock::now() - index_build_timer;
+	
+		total_indexing_time += current_indexing_time.count();
+  	index.save(curr_label_index_path.c_str());
+	}
+	diskann::cout.rdbuf(diskann_cout_buffer);
+	std::cout.rdbuf(std_cout_buffer);
+
+	std::cout << "generated per-label indices in " << total_indexing_time << " seconds\n" << std::endl;
+}
+
 
 int main(int argc, char **argv) {
 	// 1. handle cmdline inputs
@@ -251,7 +313,7 @@ int main(int argc, char **argv) {
  	
 	std::tie(point_ids_to_labels, labels_to_number_of_points, all_labels) = parse_label_file(label_data_path, universal_label);
 
-	// TODO: 3. for each label, make a separate data file
+	// 3. for each label, make a separate data file
 	if (data_type == "uint8")
 		generate_label_specific_vector_files<uint8_t>(input_data_path, labels_to_number_of_points, point_ids_to_labels, all_labels);
 	else if (data_type == "int8")
@@ -259,7 +321,14 @@ int main(int argc, char **argv) {
 	else if (data_type == "float")
 		generate_label_specific_vector_files<float>(input_data_path, labels_to_number_of_points, point_ids_to_labels, all_labels);
 
-	// TODO: 4. for each created data file, create a vanilla diskANN index
+	// 4. for each created data file, create a vanilla diskANN index
+	if (data_type == "uint8")
+		generate_label_indices<uint8_t>(input_data_path, final_index_path_prefix, all_labels, R, L, alpha, num_threads);
+	else if (data_type == "int8")
+		generate_label_indices<int8_t>(input_data_path, final_index_path_prefix, all_labels, R, L, alpha, num_threads);
+	else if (data_type == "float")
+		generate_label_indices<float>(input_data_path, final_index_path_prefix, all_labels, R, L, alpha, num_threads);
+
 	// TODO: 5. "stitch" the indices together
 	// TODO: 6. run a prune on the stitched index, and save to disk
 }
