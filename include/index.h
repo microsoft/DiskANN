@@ -140,8 +140,6 @@ namespace diskann {
                                 bool        compact_before_save = false);
 
     // Load functions
-    DISKANN_DLLEXPORT void load(const char *index_file, uint32_t num_threads,
-                                uint32_t search_l);
 #ifdef EXEC_ENV_OLS
     DISKANN_DLLEXPORT void load(AlignedFileReader &reader,
                                 uint32_t num_threads, uint32_t search_l);
