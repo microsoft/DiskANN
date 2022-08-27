@@ -131,12 +131,12 @@ namespace diskann {
 
     if (file_exists(rotmat_file)) {
 #ifdef EXEC_ENV_OLS
-      diskann::load_bin<_u32>(files, rotmat_file, rotmat_T, numr,
-                              numc);
+      diskann::load_bin<_u32>(files, rotmat_file, rotmat_T, nr,
+                              nc);
 #else
-        diskann::load_bin<float>(rotmat_file, rotmat_T, numr, numc);
+        diskann::load_bin<float>(rotmat_file, rotmat_T, nr, nc);
 #endif
-      if (numr != ndims_u64 || numc != ndims_u64) {
+      if (nr != this->ndims || nc != this->ndims) {
         diskann::cerr << "Error loading rotation matrix file" << std::endl;
         throw diskann::ANNException("Error loading rotation matrix file", -1,
                                     __FUNCSIG__, __FILE__, __LINE__);
