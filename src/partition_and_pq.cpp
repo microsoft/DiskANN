@@ -28,6 +28,7 @@
 #include "tsl/robin_set.h"
 #include "utils.h"
 
+#include "mkl_cblas.h"
 #include "mkl_lapacke.h"
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -610,7 +611,7 @@ std::cout<<"\nRotated and quantized row: " << std::endl;
       cumul_bytes[2] +
       diskann::save_bin<uint32_t>(opq_pivots_path.c_str(), chunk_offsets.data(),
                                   chunk_offsets.size(), 1, cumul_bytes[2]);
-  diskann::save_bin<_u64>(pq_pivots_path.c_str(), cumul_bytes.data(),
+  diskann::save_bin<_u64>(opq_pivots_path.c_str(), cumul_bytes.data(),
                           cumul_bytes.size(), 1, 0);
 
   diskann::cout << "Saved opq pivot data to " << opq_pivots_path << " of size "
@@ -712,9 +713,9 @@ int generate_pq_data_from_pivots(const std::string data_file,
 
     if (use_opq) {
     std::string rotmat_path = pq_pivots_path + "_rotation_matrix.bin";
-    diskann::load_bin<float>(rotmat_path.c_str(), rotmat_T, numr,
-                                numc);
-    if (numr != (uint64_t) dim || numc != dim) {
+    diskann::load_bin<float>(rotmat_path.c_str(), rotmat_T, nr,
+                                nc);
+    if (nr != (uint64_t) dim || nc != dim) {
       diskann::cout << "Error reading rotation matrix file." << std::endl;
       throw diskann::ANNException("Error reading rotation matrix file.", -1,
                                   __FUNCSIG__, __FILE__, __LINE__);
