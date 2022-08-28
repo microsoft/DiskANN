@@ -58,10 +58,8 @@ int main(int argc, char** argv) {
                        "Include full precision data in the index. Use only in "
                        "conjuction with compressed data on SSD.");
 
-    desc.add_options()("use_opq",
-                       po::bool_switch()->default_value(false),
+    desc.add_options()("use_opq", po::bool_switch()->default_value(false),
                        "Use Optimized Product Quantization (OPQ).");
-
 
     po::variables_map vm;
     po::store(po::parse_command_line(argc, argv, desc), vm);
@@ -115,14 +113,17 @@ int main(int argc, char** argv) {
 
   try {
     if (data_type == std::string("int8"))
-      return diskann::build_disk_index<int8_t>(
-          data_path.c_str(), index_path_prefix.c_str(), params.c_str(), metric, use_opq);
+      return diskann::build_disk_index<int8_t>(data_path.c_str(),
+                                               index_path_prefix.c_str(),
+                                               params.c_str(), metric, use_opq);
     else if (data_type == std::string("uint8"))
       return diskann::build_disk_index<uint8_t>(
-          data_path.c_str(), index_path_prefix.c_str(), params.c_str(), metric, use_opq);
+          data_path.c_str(), index_path_prefix.c_str(), params.c_str(), metric,
+          use_opq);
     else if (data_type == std::string("float"))
-      return diskann::build_disk_index<float>(
-          data_path.c_str(), index_path_prefix.c_str(), params.c_str(), metric, use_opq);
+      return diskann::build_disk_index<float>(data_path.c_str(),
+                                              index_path_prefix.c_str(),
+                                              params.c_str(), metric, use_opq);
     else {
       diskann::cerr << "Error. Unsupported data type" << std::endl;
       return -1;

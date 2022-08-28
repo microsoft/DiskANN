@@ -12,11 +12,12 @@ namespace diskann {
     float* tables = nullptr;  // pq_tables = float array of size [256 * ndims]
     _u64   ndims = 0;         // ndims = true dimension of vectors
     _u64   n_chunks = 0;
-    bool use_rotation = false;
+    bool   use_rotation = false;
     _u32*  chunk_offsets = nullptr;
     float* centroid = nullptr;
     float* tables_T = nullptr;  // same as pq_tables, but col-major
     float* rotmat_T = nullptr;
+
    public:
     FixedChunkPQTable() {
     }
@@ -44,8 +45,8 @@ namespace diskann {
 #endif
 
         _u64 nr, nc;
-    std::string rotmat_file = std::string(pq_table_file) +
-                                         "_rotation_matrix.bin";
+    std::string rotmat_file =
+        std::string(pq_table_file) + "_rotation_matrix.bin";
 
 #ifdef EXEC_ENV_OLS
     _u64* file_offset_data;  // since load_bin only sets the pointer, no need
@@ -67,8 +68,7 @@ namespace diskann {
 
     diskann::cout << "Offsets: " << file_offset_data[0] << " "
                   << file_offset_data[1] << " " << file_offset_data[2] << " "
-                  << file_offset_data[3] 
-                  << std::endl;
+                  << file_offset_data[3] << std::endl;
 
 #ifdef EXEC_ENV_OLS
     diskann::load_bin<float>(files, pq_table_file, tables, nr, nc,
@@ -131,8 +131,7 @@ namespace diskann {
 
     if (file_exists(rotmat_file)) {
 #ifdef EXEC_ENV_OLS
-      diskann::load_bin<_u32>(files, rotmat_file, rotmat_T, nr,
-                              nc);
+      diskann::load_bin<_u32>(files, rotmat_file, rotmat_T, nr, nc);
 #else
         diskann::load_bin<float>(rotmat_file, rotmat_T, nr, nc);
 #endif
@@ -159,21 +158,21 @@ namespace diskann {
   }
 
   void preprocess_query(float* query_vec) {
-      for (_u32 d=0; d < ndims; d++) {
-        query_vec[d] -= centroid[d];
-      }
-      std::vector<float> tmp(ndims,0);
-      if (use_rotation) {
-      for (_u32 d=0; d < ndims; d++) {
-        for (_u32 d1=0; d1 < ndims; d1++) {
-        tmp[d] += query_vec[d1]*rotmat_T[d1*ndims+d];
+    for (_u32 d = 0; d < ndims; d++) {
+      query_vec[d] -= centroid[d];
+    }
+    std::vector<float> tmp(ndims, 0);
+    if (use_rotation) {
+      for (_u32 d = 0; d < ndims; d++) {
+        for (_u32 d1 = 0; d1 < ndims; d1++) {
+          tmp[d] += query_vec[d1] * rotmat_T[d1 * ndims + d];
         }
       }
-      std::memcpy(query_vec, tmp.data(), ndims*sizeof(float));    
-      }
+      std::memcpy(query_vec, tmp.data(), ndims * sizeof(float));
+    }
   }
 
-// assumes pre-processed query
+  // assumes pre-processed query
   void populate_chunk_distances(const float* query_vec, float* dist_vec) {
     memset(dist_vec, 0, 256 * n_chunks * sizeof(float));
     // chunk wise distance computation
@@ -183,8 +182,7 @@ namespace diskann {
       for (_u64 j = chunk_offsets[chunk]; j < chunk_offsets[chunk + 1]; j++) {
         const float* centers_dim_vec = tables_T + (256 * j);
         for (_u64 idx = 0; idx < 256; idx++) {
-          double diff =
-              centers_dim_vec[idx] - (query_vec[j]);
+          double diff = centers_dim_vec[idx] - (query_vec[j]);
           chunk_dists[idx] += (float) (diff * diff);
         }
       }
@@ -196,8 +194,7 @@ namespace diskann {
     for (_u64 chunk = 0; chunk < n_chunks; chunk++) {
       for (_u64 j = chunk_offsets[chunk]; j < chunk_offsets[chunk + 1]; j++) {
         const float* centers_dim_vec = tables_T + (256 * j);
-        float        diff = centers_dim_vec[base_vec[chunk]] -
-                     (query_vec[j]);
+        float        diff = centers_dim_vec[base_vec[chunk]] - (query_vec[j]);
         res += diff * diff;
       }
     }
@@ -209,10 +206,9 @@ namespace diskann {
     for (_u64 chunk = 0; chunk < n_chunks; chunk++) {
       for (_u64 j = chunk_offsets[chunk]; j < chunk_offsets[chunk + 1]; j++) {
         const float* centers_dim_vec = tables_T + (256 * j);
-        float        diff =
-            centers_dim_vec[base_vec[chunk]] *
-            query_vec[j];  // assumes centroid is 0 to
-                                               // prevent translation errors
+        float        diff = centers_dim_vec[base_vec[chunk]] *
+                     query_vec[j];  // assumes centroid is 0 to
+                                    // prevent translation errors
         res += diff;
       }
     }
@@ -220,13 +216,12 @@ namespace diskann {
                   // conversion)
   }
 
-// assumes no rotation is involved
+  // assumes no rotation is involved
   void inflate_vector(_u8* base_vec, float* out_vec) {
     for (_u64 chunk = 0; chunk < n_chunks; chunk++) {
       for (_u64 j = chunk_offsets[chunk]; j < chunk_offsets[chunk + 1]; j++) {
         const float* centers_dim_vec = tables_T + (256 * j);
-        out_vec[j] =
-            centers_dim_vec[base_vec[chunk]] + centroid[j];
+        out_vec[j] = centers_dim_vec[base_vec[chunk]] + centroid[j];
       }
     }
   }
@@ -241,11 +236,10 @@ namespace diskann {
         const float* centers_dim_vec = tables_T + (256 * j);
         for (_u64 idx = 0; idx < 256; idx++) {
           double prod =
-              centers_dim_vec[idx] *
-              query_vec[j];  // assumes that we are not
-                                                 // shifting the vectors to mean
-                                                 // zero, i.e., centroid array
-                                                 // should be all zeros
+              centers_dim_vec[idx] * query_vec[j];  // assumes that we are not
+                                                    // shifting the vectors to
+                                                    // mean zero, i.e., centroid
+                                                    // array should be all zeros
           chunk_dists[idx] -=
               (float) prod;  // returning negative to keep the search code clean
                              // (max inner product vs min distance)

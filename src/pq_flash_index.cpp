@@ -162,13 +162,11 @@ namespace diskann {
                                this->aligned_dim * sizeof(float),
                                8 * sizeof(float));
 
-
         memset(scratch.coord_scratch, 0, MAX_N_CMPS * this->aligned_dim);
         memset(scratch.aligned_query_T, 0, this->aligned_dim * sizeof(T));
         memset(scratch.aligned_query_float, 0,
                this->aligned_dim * sizeof(float));
-        memset(scratch.rotated_query, 0,
-               this->aligned_dim * sizeof(float));
+        memset(scratch.rotated_query, 0, this->aligned_dim * sizeof(float));
 
         ThreadData<T> data;
         data.ctx = ctx;
@@ -855,10 +853,11 @@ namespace diskann {
     float        query_norm = 0;
     const T *    query = data.scratch.aligned_query_T;
     const float *query_float = data.scratch.aligned_query_float;
-    float *query_rotated = data.scratch.rotated_query;
+    float *      query_rotated = data.scratch.rotated_query;
 
-
-    for (uint32_t i = 0; i < this->data_dim; i++) { // if data_dim is 1 more than real dim for inner product is this correct?
+    for (uint32_t i = 0; i < this->data_dim;
+         i++) {  // if data_dim is 1 more than real dim for inner product is
+                 // this correct?
       data.scratch.aligned_query_float[i] = query1[i];
       data.scratch.aligned_query_T[i] = query1[i];
       query_rotated[i] = query1[i];
@@ -893,7 +892,8 @@ namespace diskann {
     _u64 &sector_scratch_idx = query_scratch->sector_idx;
 
     // query <-> PQ chunk centers distances
-    pq_table.preprocess_query(query_rotated); // center the query and rotate if we have a rotation matrix
+    pq_table.preprocess_query(query_rotated);  // center the query and rotate if
+                                               // we have a rotation matrix
     float *pq_dists = query_scratch->aligned_pqtable_dist_scratch;
     pq_table.populate_chunk_distances(query_rotated, pq_dists);
 
@@ -1034,8 +1034,9 @@ namespace diskann {
             cur_expanded_dist = disk_pq_table.inner_product(
                 query_float, (_u8 *) node_fp_coords_copy);
           else
-            cur_expanded_dist = disk_pq_table.l2_distance( // disk_pq does not support OPQ yet
-                query_float, (_u8 *) node_fp_coords_copy);
+            cur_expanded_dist =
+                disk_pq_table.l2_distance(  // disk_pq does not support OPQ yet
+                    query_float, (_u8 *) node_fp_coords_copy);
         }
         full_retset.push_back(
             Neighbor((unsigned) cached_nhood.first, cur_expanded_dist, true));
