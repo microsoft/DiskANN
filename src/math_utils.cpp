@@ -199,56 +199,6 @@ namespace math_utils {
       delete[] pts_norms_squared;
   }
 
-  void singular_value_decomposition(
-      long long int m,    // number of rows in matrix
-      long long int n,    // number of columns in matrix
-      long long int lda,  // leading dimension of matrix
-      double*       a)          // pointer to top-left corner
-  {
-    // Setup a buffer to hold the singular values:
-    int     numberOfSingularValues = m < n ? m : n;
-    double* s = new double[numberOfSingularValues];
-
-    // Setup buffers to hold the matrices U and Vt:
-    double* u = new double[m * m];
-    double* vt = new double[n * n];
-
-    // Workspace and status variables:
-    double         workSize;
-    double*        work = &workSize;
-    long long int  lwork = -1;
-    long long int* iwork = new long long int[8 * numberOfSingularValues];
-    long long int  info = 0;
-
-    // Call dgesdd_ with lwork = -1 to query optimal workspace size:
-    dgesdd_("A", &m, &n, a, &lda, s, u, &m, vt, &n, work, &lwork, iwork, &info);
-    if (info)  // handle error conditions here
-
-      // Optimal workspace size is returned in work[0].
-      lwork = workSize;
-    work = new double[lwork];
-
-    // Call dgesdd_ to do the actual computation:
-    dgesdd_("A", &m, &n, a, &lda, s, u, &m, vt, &n, work, &lwork, iwork, &info);
-    if (info)  // handle error conditions here
-
-      // Cleanup workspace:
-      delete[] work;
-    delete[] iwork;
-
-    // do something useful with U, S, Vt ...
-    for (_u32 i = 0; i < numberOfSingularValues; i++) {
-      std::cout << s[i] << " ";
-    }
-
-    std::cout << std::endl;
-
-    // and then clean them up too:
-    delete[] s;
-    delete[] u;
-    delete[] vt;
-  }
-
   // if to_subtract is 1, will subtract nearest center from each row. Else will
   // add. Output will be in data_load iself.
   // Nearest centers need to be provided in closst_centers.
