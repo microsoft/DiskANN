@@ -483,6 +483,14 @@ namespace diskann {
     std::string labels_file = mem_index_file + "_labels.txt";
     std::string labels_to_medoids = mem_index_file + "_labels_to_medoids.txt";
     if (file_exists(labels_file)) {
+      std::string universal_label_file(filename);
+      universal_label_file += "_universal_label.txt";
+      if (file_exists(universal_label_file)) {
+        std::ifstream universal_label_reader(universal_label_file);
+        universal_label_reader >> _universal_label;
+        _use_universal_label = true;
+        universal_label_reader.close();
+      }
       parse_label_file(labels_file);
       if (file_exists(labels_to_medoids)) {
         std::ifstream medoid_stream(labels_to_medoids);
@@ -514,14 +522,7 @@ namespace diskann {
         }
       }
 
-      std::string universal_label_file(filename);
-      universal_label_file += "_universal_label.txt";
-      if (file_exists(universal_label_file)) {
-        std::ifstream universal_label_reader(universal_label_file);
-        universal_label_reader >> _universal_label;
-        _use_universal_label = true;
-        universal_label_reader.close();
-      }
+      
     }
 
     if (!_save_as_one_file) {
@@ -688,13 +689,13 @@ namespace diskann {
       }
     }
 #else
-
     size_t   bytes_read = vamana_metadata_size;
     size_t   cc = 0;
     unsigned nodes_read = 0;
     while (bytes_read != expected_file_size) {
       unsigned k;
       in.read((char *) &k, sizeof(unsigned));
+
       if (k == 0) {
         diskann::cerr << "ERROR: Point found with no out-neighbors, point#"
                       << nodes_read << std::endl;
@@ -1375,6 +1376,65 @@ namespace diskann {
       diskann::cout << "done. Link time: "
                     << ((double) link_timer.elapsed() / (double) 1000000) << "s"
                     << std::endl;
+    }
+  }
+
+  template<typename T, typename TagT>
+  void Index<T, TagT>::prune_all_nbrs(const Parameters &parameters) {
+    const unsigned range = parameters.Get<unsigned>("R");
+    const unsigned maxc = parameters.Get<unsigned>("C");
+    const float alpha = parameters.Get<unsigned>("alpha");
+    _filtered_index = true;
+
+    diskann::Timer timer;
+#pragma omp parallel for
+    for (_s64 node = 0; node < (_s64)(_max_points + _num_frozen_pts); node++) {
+      if ((size_t) node < _nd || (size_t) node == _max_points) {
+        if (_final_graph[node].size() > range) {
+          tsl::robin_set<unsigned> dummy_visited(0);
+          std::vector<Neighbor>    dummy_pool(0);
+          std::vector<unsigned>    new_out_neighbors;
+
+					ScratchStoreManager<InMemQueryScratch<T>> manager(_query_scratch);
+      		auto scratch = manager.scratch_space();
+
+          for (auto cur_nbr : _final_graph[node]) {
+            if (dummy_visited.find(cur_nbr) == dummy_visited.end() &&
+                cur_nbr != node) {
+              float dist =
+                  _distance->compare(_data + _aligned_dim * (size_t) node,
+                                     _data + _aligned_dim * (size_t) cur_nbr,
+                                     (unsigned) _aligned_dim);
+              dummy_pool.emplace_back(Neighbor(cur_nbr, dist, true));
+              dummy_visited.insert(cur_nbr);
+            }
+          }
+          
+          prune_neighbors((_u32) node, dummy_pool, range, maxc, alpha, new_out_neighbors, scratch);
+          _final_graph[node].clear();
+          for (auto id : new_out_neighbors)
+            _final_graph[node].emplace_back(id);
+        }
+      }
+    }
+
+    diskann::cout << "Prune time : " << timer.elapsed() / 1000 << "ms"
+                  << std::endl;
+    size_t max = 0, min = 1 << 30, total = 0, cnt = 0;
+    for (size_t i = 0; i < (_nd + _num_frozen_pts); i++) {
+      std::vector<unsigned> pool = _final_graph[i];
+      max = (std::max)(max, pool.size());
+      min = (std::min)(min, pool.size());
+      total += pool.size();
+      if (pool.size() < 2)
+        cnt++;
+    }
+    if (min > max)
+      min = max;
+    if (_nd > 0) {
+      diskann::cout << "Index built with degree: max:" << max << "  avg:"
+                    << (float) total / (float) (_nd + _num_frozen_pts)
+                    << "  min:" << min << "  count(deg<2):" << cnt << std::endl;
     }
   }
 
