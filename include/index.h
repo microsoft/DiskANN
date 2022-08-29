@@ -192,6 +192,8 @@ namespace diskann {
     DISKANN_DLLEXPORT consolidation_report
     consolidate_deletes(const Parameters &parameters);
 
+		DISKANN_DLLEXPORT void prune_all_nbrs(const Parameters &parameters);
+
     DISKANN_DLLEXPORT bool is_index_saved();
 
     // repositions frozen points to the end of _data - if they have been moved
