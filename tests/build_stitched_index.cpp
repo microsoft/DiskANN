@@ -356,7 +356,7 @@ load_label_index_return_values load_label_index(path label_index_path, _u32 labe
     label_index[nodes_read - 1].swap(current_node_neighbors);
     bytes_read += sizeof(_u32) * (current_node_num_neighbors + 1);
   }
-  
+
   return std::make_tuple(label_index, index_file_size);
 }
 
@@ -366,7 +366,6 @@ void save_full_index(path final_index_path_prefix, path input_data_path,
                      tsl::robin_map<label, _u32> entry_points,
                      label universal_label, path label_data_path) {
 
-  std::cout << "test 1" << std::endl;
   auto saving_index_timer = std::chrono::high_resolution_clock::now();
   std::ifstream original_label_data_stream;
   original_label_data_stream.exceptions(std::ios::badbit | std::ios::failbit);
@@ -378,7 +377,6 @@ void save_full_index(path final_index_path_prefix, path input_data_path,
   original_label_data_stream.close();
   new_label_data_stream.close();
 
-  std::cout << "test 1" << std::endl;
   std::ifstream original_input_data_stream;
   original_input_data_stream.exceptions(std::ios::badbit | std::ios::failbit);
   original_input_data_stream.open(input_data_path, std::ios::binary);
@@ -387,19 +385,17 @@ void save_full_index(path final_index_path_prefix, path input_data_path,
   new_input_data_stream.open(final_index_path_prefix + ".data", std::ios::binary);
   new_input_data_stream << original_input_data_stream.rdbuf();
   original_input_data_stream.close();
-  new_label_data_stream.close();
+  new_input_data_stream.close();
 
-  std::cout << "test 1" << std::endl;
   std::ofstream labels_to_medoids_writer;
   labels_to_medoids_writer.exceptions(std::ios::badbit | std::ios::failbit);
   labels_to_medoids_writer.open(final_index_path_prefix + "_labels_to_medoids.txt");
   for (auto iter : entry_points) {
-    std::cout << iter.first << ", " << iter.second << std::endl;;
+    //std::cout << iter.first << ", " << iter.second << std::endl;;
     labels_to_medoids_writer << iter.first << ", " << iter.second << std::endl;
   }
   labels_to_medoids_writer.close();
 
-  std::cout << "test 1" << std::endl;
   if (universal_label != "") {
     std::ofstream universal_label_writer;
     universal_label_writer.exceptions(std::ios::badbit | std::ios::failbit);
@@ -408,7 +404,6 @@ void save_full_index(path final_index_path_prefix, path input_data_path,
     universal_label_writer.close();
   }
 
-  std::cout << "test 1" << std::endl;
   _u64 index_num_frozen_points = 0, index_num_edges = 0;
   _u32 index_max_observed_degree = 0, index_entry_point = 0;
   for (auto& point_neighbors : stitched_graph) {
@@ -440,7 +435,6 @@ void save_full_index(path final_index_path_prefix, path input_data_path,
     throw;
   }
   
-  std::cout << "test 1" << std::endl;
   char *begin = static_cast<char *>(memblock);
   std::memcpy(begin, &final_index_size, sizeof(_u64));
   std::memcpy(begin + sizeof(_u64), &index_max_observed_degree, sizeof(_u32));
@@ -449,13 +443,10 @@ void save_full_index(path final_index_path_prefix, path input_data_path,
   size_t bytes_written = METADATA;
   for (_u32 node_point = 0; node_point < stitched_graph.size(); node_point++) {
     _u32 current_node_num_neighbors = stitched_graph[node_point].size();
+    std::vector<_u32> current_node_neighbors = stitched_graph[node_point];
     std::memcpy(begin + bytes_written, &current_node_num_neighbors, sizeof(_u32));
-    bytes_written += sizeof(_u32);
-    
-    for (const auto &current_node_neighbor : stitched_graph[node_point]) {
-      std::memcpy(begin + bytes_written, &current_node_neighbor, sizeof(_u32));
-      bytes_written += sizeof(_u32);
-    }
+    std::memcpy(begin + bytes_written, &current_node_neighbors, current_node_num_neighbors * sizeof(_u32));
+    bytes_written += (current_node_num_neighbors + 1) * sizeof(_u32);
     index_num_edges += current_node_num_neighbors;
   }
 
@@ -480,8 +471,8 @@ void save_full_index(path final_index_path_prefix, path input_data_path,
 
   std::chrono::duration<double> saving_index_time = std::chrono::high_resolution_clock::now() - saving_index_timer;
   std::cout << "Stitched graph written in " << saving_index_time.count() << " seconds" << std::endl;
-  std::cout << "Average degree: " << ((float) index_num_edges) / ((float) (stitched_graph.size())) << std::endl;
-  std::cout << "Max degree: " << index_max_observed_degree << std::endl;
+  std::cout << "Stitched graph average degree: " << ((float) index_num_edges) / ((float) (stitched_graph.size())) << std::endl;
+  std::cout << "Stitched graph max degree: " << index_max_observed_degree << std::endl;
 }
 
 
@@ -490,6 +481,7 @@ void save_full_index(path final_index_path_prefix, path input_data_path,
  *  - any two nodes can only have at most one edge between them -
  * 
  * Returns the "stitched" graph and its expected file size.
+ * NOTE: final_index_size is currently unset, but will be soon
  */
 template <typename T>
 stitch_indices_return_values stitch_label_indices(path final_index_path_prefix, _u32 total_number_of_points, label_set all_labels, 
@@ -499,15 +491,14 @@ stitch_indices_return_values stitch_label_indices(path final_index_path_prefix, 
   size_t final_index_size = 0;
   std::vector<std::vector<_u32>> stitched_graph(total_number_of_points);
   
-  
   auto stitching_index_timer = std::chrono::high_resolution_clock::now();
+  _u32 number_of_duplicate_edges = 0;
   for (const auto &label : all_labels) {
     path curr_label_index_path(final_index_path_prefix + "_" + label);
     std::vector<std::vector<_u32>> curr_label_index;
     _u64 curr_label_index_size;
     _u32 curr_label_entry_point;
     std::tie(curr_label_index, curr_label_index_size) = load_label_index(curr_label_index_path, labels_to_number_of_points[label]);
-    final_index_size += curr_label_index_size;
     curr_label_entry_point = random(0, curr_label_index.size());
     label_entry_points[label] = label_id_to_orig_id_map[label][curr_label_entry_point];
   
@@ -516,17 +507,18 @@ stitch_indices_return_values stitch_label_indices(path final_index_path_prefix, 
       for (auto &node_neighbor : curr_label_index[node_point]) {
         _u32 original_neighbor_id = label_id_to_orig_id_map[label][node_neighbor];
         std::vector<_u32> curr_point_neighbors = stitched_graph[original_point_id];
-        if (std::find(curr_point_neighbors.begin(), curr_point_neighbors.end(), original_neighbor_id) == curr_point_neighbors.end())
+        if (std::find(curr_point_neighbors.begin(), curr_point_neighbors.end(), original_neighbor_id) == curr_point_neighbors.end()) {
           stitched_graph[original_point_id].push_back(original_neighbor_id);
+          final_index_size += sizeof(_u32);
+        }
         else
-          final_index_size -= sizeof(T);
+          number_of_duplicate_edges++;
       }
     }
   }
 
-  size_t METADATA = 2 * sizeof(_u64) + 2 * sizeof(_u32);
-  final_index_size -= all_labels.size() * METADATA;
-  final_index_size += METADATA;
+  const size_t METADATA = 2 * sizeof(_u64) + 2 * sizeof(_u32);
+  final_index_size += (total_number_of_points * sizeof(_u32) + METADATA);
 
   std::chrono::duration<double> stitching_index_time = std::chrono::high_resolution_clock::now() - stitching_index_timer;
   std::cout << "stitched graph generated in memory in " << stitching_index_time.count() << " seconds" << std::endl;
