@@ -82,7 +82,9 @@ namespace diskann {
 #ifdef EXEC_ENV_OLS
     str[num] = '\0';  // Safe. See the c'tor.
     // Invoke the OLS custom logging function.
-    g_logger(_logLevel, str);
+    if (g_logger) {
+      g_logger(_logLevel, str);
+    }
 #else
     fwrite(str, sizeof(char), num, _fp);
     fflush(_fp);
