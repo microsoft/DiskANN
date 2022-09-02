@@ -20,7 +20,7 @@ project(diskann)
 if(MSVC)
 	cmake_minimum_required(VERSION 3.15)
 else()
-	cmake_minimum_required(VERSION 2.8)
+	cmake_minimum_required(VERSION 3.9)
 endif()
 
 set(CMAKE_STANDARD 14)
@@ -241,4 +241,8 @@ if (MSVC)
     message(STATUS "The ${PROJECT_NAME}.sln has been created, opened it from VisualStudio to build Release or Debug configurations.\n"
                    "Alternatively, use MSBuild to build:\n\n"
                    "msbuild.exe ${PROJECT_NAME}.sln /m /nologo /t:Build /p:Configuration=\"Release\" /property:Platform=\"x64\"\n")
+endif()
+
+if (RESTAPI)
+    add_subdirectory(tests/restapi)
 endif()
