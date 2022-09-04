@@ -61,11 +61,11 @@ inline size_t random(size_t range_from, size_t range_to) {
 }
 
 /*
- * Inline function to handle command line parsing.
+ * function to handle command line parsing.
  *
  * Arguments are merely the inputs from the command line.
  */
-inline size_t handle_args(int argc, char **argv, std::string &data_type, path &input_data_path, 
+size_t handle_args(int argc, char **argv, std::string &data_type, path &input_data_path, 
                           path &final_index_path_prefix, path &label_data_path, std::string &universal_label, 
                           unsigned &num_threads, unsigned &R, unsigned &L, unsigned &stitched_R, float &alpha) {
   po::options_description desc{"Arguments"};
@@ -261,7 +261,7 @@ tsl::robin_map<label, std::vector<_u32>> generate_label_specific_vector_files(pa
       char *current_iovec_buffer = (char *) label_to_iovec_map[label].iov_base;
       size_t *current_iovec_buffer_size = &label_to_iovec_map[label].iov_len;
       std::memcpy(current_iovec_buffer + *current_iovec_buffer_size, curr_point, VECTOR_SIZE);
-      *current_iovec_buffer_size += sizeof(T) * dimension;
+      *current_iovec_buffer_size += VECTOR_SIZE;
       label_id_to_orig_id[label].push_back(point_id);
     }
     
@@ -276,7 +276,7 @@ tsl::robin_map<label, std::vector<_u32>> generate_label_specific_vector_files(pa
   // write each label iovec to resp. file
   for (const auto &label : all_labels) {
     int label_input_data_fd;
-    std::string curr_label_input_data_path(input_data_path + "_" + label);
+    path curr_label_input_data_path(input_data_path + "_" + label);
 
     label_input_data_fd = open(curr_label_input_data_path.c_str(), O_CREAT | O_WRONLY, (mode_t) 0644);
     if (UNLIKELY(label_input_data_fd == -1))
@@ -539,6 +539,7 @@ stitch_indices_return_values stitch_label_indices(path final_index_path_prefix, 
     std::vector<std::vector<_u32>> curr_label_index;
     _u64 curr_label_index_size;
     _u32 curr_label_entry_point;
+
     std::tie(curr_label_index, curr_label_index_size) = load_label_index(curr_label_index_path, labels_to_number_of_points[label]);
     curr_label_entry_point = random(0, curr_label_index.size());
     label_entry_points[label] = label_id_to_orig_id_map[label][curr_label_entry_point];
