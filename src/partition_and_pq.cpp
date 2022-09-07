@@ -282,8 +282,6 @@ int generate_pq_pivots(const float *passed_train_data, size_t num_train,
         cur_best_load = bin_loads[b];
       }
     }
-    //    diskann::cout << " Pushing " << d << " into bin #: " << cur_best
-    //                  << std::endl;
     bin_to_dims[cur_best].push_back(d);
     if (bin_to_dims[cur_best].size() == high_val) {
       cur_num_high++;
@@ -386,7 +384,7 @@ int generate_opq_pivots(const float *passed_train_data, size_t num_train,
   std::unique_ptr<float[]> full_pivot_data;
 
   // rotation matrix for OPQ
-  std::unique_ptr<float[]> rotmat_T;
+  std::unique_ptr<float[]> rotmat_tr;
 
   // matrices for SVD
   std::unique_ptr<float[]> Umat = std::make_unique<float[]>(dim * dim);
@@ -405,15 +403,12 @@ int generate_opq_pivots(const float *passed_train_data, size_t num_train,
                          // compute PQ. This needs to be set to false when using
                          // PQ for MIPS as such translations dont preserve inner
                          // products.
-    //                         std::cout<<"Centroid of data: "<< std::endl;
     for (uint64_t d = 0; d < dim; d++) {
       for (uint64_t p = 0; p < num_train; p++) {
         centroid[d] += train_data[p * dim + d];
       }
       centroid[d] /= num_train;
-      //      std::cout<<centroid[d]<<" ";
     }
-    //    std::cout<<std::endl;
     for (uint64_t d = 0; d < dim; d++) {
       for (uint64_t p = 0; p < num_train; p++) {
         train_data[p * dim + d] -= centroid[d];
@@ -446,8 +441,6 @@ int generate_opq_pivots(const float *passed_train_data, size_t num_train,
         cur_best_load = bin_loads[b];
       }
     }
-    //    diskann::cout << " Pushing " << d << " into bin #: " << cur_best
-    //                  << std::endl;
     bin_to_dims[cur_best].push_back(d);
     if (bin_to_dims[cur_best].size() == high_val) {
       cur_num_high++;
@@ -467,17 +460,17 @@ int generate_opq_pivots(const float *passed_train_data, size_t num_train,
   chunk_offsets.push_back(dim);
 
   full_pivot_data.reset(new float[num_centers * dim]);
-  rotmat_T.reset(new float[dim * dim]);
+  rotmat_tr.reset(new float[dim * dim]);
 
-  std::memset(rotmat_T.get(), 0, dim * dim * sizeof(float));
+  std::memset(rotmat_tr.get(), 0, dim * dim * sizeof(float));
   for (_u32 d1 = 0; d1 < dim; d1++)
-    *(rotmat_T.get() + d1 * dim + d1) = 1;
+    *(rotmat_tr.get() + d1 * dim + d1) = 1;
 
   for (_u32 rnd = 0; rnd < MAX_OPQ_ITERS; rnd++) {
     // rotate the training data using the current rotation matrix
     cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans, (MKL_INT) num_train,
                 (MKL_INT) dim, (MKL_INT) dim, 1.0f, train_data.get(),
-                (MKL_INT) dim, rotmat_T.get(), (MKL_INT) dim, 0.0f,
+                (MKL_INT) dim, rotmat_tr.get(), (MKL_INT) dim, 0.0f,
                 rotated_train_data.get(), (MKL_INT) dim);
 
     // compute the PQ pivots on the rotated space
@@ -534,23 +527,7 @@ int generate_opq_pivots(const float *passed_train_data, size_t num_train,
             cur_pivot_data.get() + (_u64) closest_center[j] * cur_chunk_size,
             cur_chunk_size * sizeof(float));
       }
-      //    std::cout<<"Closest center in chunk " << i <<" is "<<
-      //    closest_center[1] << std::endl;
     }
-
-    /*std::cout<<"Original row: " << std::endl;
-      for (_u32 d1 = 0; d1 < dim; d1++) {
-        std::cout<<train_data[dim+d1] <<" ";
-      }
-    std::cout<<"\nRotated and quantized row: " << std::endl;
-      for (_u32 d1 = 0; d1 < dim; d1++) {
-        std::cout<<rotated_and_quantized_train_data[dim+d1] <<" ";
-      }
-
-      diskann::save_bin<float>(opq_pivots_path.c_str(), full_pivot_data.get(),
-                               (size_t) num_centers, dim);
-      std::string centroids_path = opq_pivots_path + "_centroid.bin";
-    */
 
     // compute the correlation matrix between the original data and the
     // quantized data to compute the new rotation
@@ -558,14 +535,6 @@ int generate_opq_pivots(const float *passed_train_data, size_t num_train,
                 (MKL_INT) dim, (MKL_INT) num_train, 1.0f, train_data.get(),
                 (MKL_INT) dim, rotated_and_quantized_train_data.get(),
                 (MKL_INT) dim, 0.0f, correlation_matrix.get(), (MKL_INT) dim);
-
-    /*    for (_u32 d1 = 0; d1 < dim; d1++) {
-          for (_u32 d2 = 0; d2 < dim; d2++) {
-            std::cout<<correlation_matrix[d1*dim + d2] <<" ";
-          }
-          std::cout<<std::endl;
-        }
-    */
 
     // compute the SVD of the correlation matrix to help determine the new
     // rotation matrix
@@ -579,26 +548,11 @@ int generate_opq_pivots(const float *passed_train_data, size_t num_train,
       exit(-1);
     }
 
-    /*  std::cout<<"Top sigular values: " << std::endl;
-      for (_u32 s1 = 0; s1 < dim; s1++)
-      std::cout<<singular_values[s1] <<" ";
-      std::cout<< std::endl;
-  */
     // compute the new rotation matrix from the singular vectors as R^T = U V^T
     cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans, (MKL_INT) dim,
                 (MKL_INT) dim, (MKL_INT) dim, 1.0f, Umat.get(), (MKL_INT) dim,
-                Vmat_T.get(), (MKL_INT) dim, 0.0f, rotmat_T.get(),
+                Vmat_T.get(), (MKL_INT) dim, 0.0f, rotmat_tr.get(),
                 (MKL_INT) dim);
-
-    /*    for (_u32 d1 = 0; d1 < dim; d1++) {
-          for (_u32 d2 = 0; d2 < dim; d2++) {
-            std::cout<<rotmat_T[d1*dim + d2] <<" ";
-          }
-          std::cout<<std::endl;
-        } */
-
-    // int a;
-    // std::cin >> a;
   }
 
   std::vector<size_t> cumul_bytes(4, 0);
@@ -621,7 +575,7 @@ int generate_opq_pivots(const float *passed_train_data, size_t num_train,
                 << cumul_bytes[cumul_bytes.size() - 1] << "B." << std::endl;
 
   std::string rotmat_path = opq_pivots_path + "_rotation_matrix.bin";
-  diskann::save_bin<float>(rotmat_path.c_str(), rotmat_T.get(), dim, dim);
+  diskann::save_bin<float>(rotmat_path.c_str(), rotmat_tr.get(), dim, dim);
 
   return 0;
 }
@@ -647,7 +601,7 @@ int generate_pq_data_from_pivots(const std::string data_file,
   size_t dim = basedim32;
 
   std::unique_ptr<float[]>    full_pivot_data;
-  std::unique_ptr<float[]>    rotmat_T;
+  std::unique_ptr<float[]>    rotmat_tr;
   std::unique_ptr<float[]>    centroid;
   std::unique_ptr<uint32_t[]> chunk_offsets;
 
@@ -712,7 +666,7 @@ int generate_pq_data_from_pivots(const std::string data_file,
 
     if (use_opq) {
       std::string rotmat_path = pq_pivots_path + "_rotation_matrix.bin";
-      diskann::load_bin<float>(rotmat_path.c_str(), rotmat_T, nr, nc);
+      diskann::load_bin<float>(rotmat_path.c_str(), rotmat_tr, nr, nc);
       if (nr != (uint64_t) dim || nc != dim) {
         diskann::cout << "Error reading rotation matrix file." << std::endl;
         throw diskann::ANNException("Error reading rotation matrix file.", -1,
@@ -784,7 +738,7 @@ int generate_pq_data_from_pivots(const std::string data_file,
       // rotate the current block with the trained rotation matrix before PQ
       cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
                   (MKL_INT) cur_blk_size, (MKL_INT) dim, (MKL_INT) dim, 1.0f,
-                  block_data_float.get(), (MKL_INT) dim, rotmat_T.get(),
+                  block_data_float.get(), (MKL_INT) dim, rotmat_tr.get(),
                   (MKL_INT) dim, 0.0f, block_data_tmp.get(), (MKL_INT) dim);
       std::memcpy(block_data_float.get(), block_data_tmp.get(),
                   cur_blk_size * dim * sizeof(float));

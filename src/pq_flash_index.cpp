@@ -856,8 +856,7 @@ namespace diskann {
     float *      query_rotated = data.scratch.rotated_query;
 
     for (uint32_t i = 0; i < this->data_dim;
-         i++) {  // if data_dim is 1 more than real dim for inner product is
-                 // this correct?
+         i++) {  // need to check if this is correct for MIPS search
       data.scratch.aligned_query_float[i] = query1[i];
       data.scratch.aligned_query_T[i] = query1[i];
       query_rotated[i] = query1[i];
