@@ -36,7 +36,7 @@ void teardown(const utility::string_t& address) {
 int main(int argc, char* argv[]) {
   if (argc != 6 && argc != 5) {
     std::cout << "Usage: inmem_server ip_addr:port data_type<float/int8/uint8>"
-                 " data_file index_file [tags_file]"
+                 " data_file index_file num_threads l_search [tags_file]"
               << std::endl;
     exit(1);
   }
@@ -44,23 +44,25 @@ int main(int argc, char* argv[]) {
   std::string address(argv[1]);
   const char* data_file = argv[3];
   const char* index_file = argv[4];
-  const char* tags_file = argc == 6 ? argv[5] : nullptr;
+  const unsigned num_threads = atoi(argv[5]);
+  const unsigned l_search = atoi(argv[6]);
+  const char* tags_file = argc == 8 ? argv[7] : nullptr;
 
   const std::string typestring(argv[2]);
   if (typestring == std::string("float")) {
     auto searcher =
         std::unique_ptr<diskann::BaseSearch>(new diskann::InMemorySearch<float>(
-            data_file, index_file, tags_file, diskann::L2));
+            data_file, index_file, tags_file, diskann::L2, num_threads, l_search));
     g_inMemorySearch.push_back(std::move(searcher));
   } else if (typestring == std::string("int8")) {
     auto searcher = std::unique_ptr<diskann::BaseSearch>(
         new diskann::InMemorySearch<int8_t>(data_file, index_file, tags_file,
-                                            diskann::L2));
+                                            diskann::L2, num_threads, l_search));
     g_inMemorySearch.push_back(std::move(searcher));
   } else if (typestring == std::string("uint8")) {
     auto searcher = std::unique_ptr<diskann::BaseSearch>(
         new diskann::InMemorySearch<uint8_t>(data_file, index_file, tags_file,
-                                             diskann::L2));
+                                             diskann::L2, num_threads, l_search));
     g_inMemorySearch.push_back(std::move(searcher));
   } else {
     std::cerr << "Unsupported data type " << argv[2] << std::endl;

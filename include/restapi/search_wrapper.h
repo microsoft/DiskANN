@@ -102,8 +102,14 @@ namespace diskann {
   template<typename T>
   class InMemorySearch : public BaseSearch {
    public:
-    InMemorySearch(const char* baseFile, const char* indexFile,
-                   const char* tagsFile, Metric m);
+    InMemorySearch(
+        const char* baseFile,
+        const char* indexFile,
+        const char* tagsFile,
+        Metric m,
+        uint32_t num_threads,
+        uint32_t search_l
+    );
     virtual ~InMemorySearch();
 
     SearchResult search(const T* query, const unsigned int dimensions,

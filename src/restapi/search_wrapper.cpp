@@ -87,13 +87,21 @@ namespace diskann {
   }
 
   template<typename T>
-  InMemorySearch<T>::InMemorySearch(const char* baseFile, const char* indexFile,
-                                    const char* tagsFile, Metric m)
-      : BaseSearch(tagsFile) {
-    _index = std::unique_ptr<diskann::Index<T>>(
-        new diskann::Index<T>(m, baseFile, 0, false));
+  InMemorySearch<T>::InMemorySearch(
+          const char* baseFile,
+          const char* indexFile,
+          const char* tagsFile,
+          Metric m,
+          uint32_t num_threads,
+          uint32_t search_l
+  ): BaseSearch(tagsFile) {
 
-    _index->load(indexFile);
+    size_t dimensions, total_points = 0;
+    diskann::get_bin_metadata(baseFile, total_points, dimensions);
+    _index = std::unique_ptr<diskann::Index<T>>(
+        new diskann::Index<T>(m, dimensions, total_points, false));
+
+    _index->load(indexFile, num_threads, search_l);
   }
 
   template<typename T>
@@ -145,15 +153,15 @@ namespace diskann {
     reader.reset(ptr);
 #endif
 
-    _index = std::unique_ptr<diskann::PQFlashIndex<T>>(
-        new diskann::PQFlashIndex<T>(reader, m));
-
     std::string index_prefix_path(indexPrefix);
     std::string pq_prefix = index_prefix_path + "_pq";
     std::string disk_index_file = index_prefix_path + "_disk.index";
     std::string warmup_query_file = index_prefix_path + "_sample_data.bin";
 
-    _index->load(num_threads, pq_prefix.c_str(), disk_index_file.c_str());
+    _index = std::unique_ptr<diskann::PQFlashIndex<T>>(
+        new diskann::PQFlashIndex<T>(reader, m));
+
+    _index->load(num_threads, pq_prefix.c_str());
 
     std::vector<uint32_t> node_list;
     std::cout << "Caching " << num_nodes_to_cache
