@@ -857,6 +857,9 @@ namespace diskann {
 
     for (uint32_t i = 0; i < this->data_dim;
          i++) {  // need to check if this is correct for MIPS search
+      if ((i == (this->data_dim - 1)) &&
+          (metric == diskann::Metric::INNER_PRODUCT))
+        break;
       data.scratch.aligned_query_float[i] = query1[i];
       data.scratch.aligned_query_T[i] = query1[i];
       query_rotated[i] = query1[i];
@@ -869,6 +872,7 @@ namespace diskann {
       query_norm = std::sqrt(query_norm);
       data.scratch.aligned_query_T[this->data_dim - 1] = 0;
       data.scratch.aligned_query_float[this->data_dim - 1] = 0;
+      query_rotated[this->data_dim - 1] = 0;
       for (uint32_t i = 0; i < this->data_dim - 1; i++) {
         data.scratch.aligned_query_T[i] /= query_norm;
         data.scratch.aligned_query_float[i] /= query_norm;
