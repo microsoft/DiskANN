@@ -571,6 +571,7 @@ namespace diskann {
     this->disk_index_file = disk_index_file;
 
     if (pq_file_num_centroids != 256) {
+      diskann::cout << "Number of centroids: " <<pq_file_num_centroids <<std::endl;
       diskann::cout << "Error. Number of PQ centroids is not 256. Exitting."
                     << std::endl;
       return -1;
@@ -906,6 +907,8 @@ namespace diskann {
 
     std::vector<Neighbor> full_retset;
     full_retset.reserve(4096);
+    tsl::robin_set<_u32> full_inserted;
+    full_inserted.reserve(4096);
     _u32                        best_medoid = 0;
     float                       best_dist = (std::numeric_limits<float>::max)();
     std::vector<SimpleNeighbor> medoid_dists;
@@ -1031,8 +1034,12 @@ namespace diskann {
         if (use_sector_reordering) {
           actual_id = actual_id_for_cached_nodes[actual_id];
         }
-        full_retset.push_back(
-            Neighbor((unsigned) actual_id, cur_expanded_dist, true));
+        if (!use_sector_reordering || (use_sector_reordering && full_inserted.find(actual_id) == full_inserted.end())) {
+         full_retset.push_back(
+             Neighbor((unsigned) actual_id, cur_expanded_dist, true));
+          if (use_sector_reordering)
+            full_inserted.insert(actual_id);
+        }
 
         _u64      nnbrs = cached_nhood.second.first;
         unsigned *node_nbrs = cached_nhood.second.second;
@@ -1086,8 +1093,14 @@ namespace diskann {
       for (auto &frontier_nhood : frontier_nhoods) {
 #endif
         _u32  actual_id = frontier_nhood.first;
+        _u32 first_node_in_sector = nnodes_per_sector * ((_u32) (frontier_nhood.first / nnodes_per_sector));
+        for (_u32 i = first_node_in_sector; i < first_node_in_sector + nnodes_per_sector && i < num_points; i++) {
+          if (!use_sector_reordering && i!=frontier_nhood.first)
+            continue;
+          _u32  actual_id = i;
+
         char *node_disk_buf =
-            OFFSET_TO_NODE(frontier_nhood.second, frontier_nhood.first);
+           OFFSET_TO_NODE(frontier_nhood.second, actual_id);
 
         if (use_sector_reordering) {
           actual_id = * ((_u32 *) node_disk_buf);
@@ -1115,8 +1128,13 @@ namespace diskann {
             cur_expanded_dist = disk_pq_table.l2_distance(
                 query_float, (_u8 *) node_fp_coords_copy);
         }
-        full_retset.push_back(
-            Neighbor(actual_id, cur_expanded_dist, true));
+        if (!use_sector_reordering || (use_sector_reordering && full_inserted.find(actual_id) == full_inserted.end())) {
+          full_retset.push_back(
+             Neighbor(actual_id, cur_expanded_dist, true));
+          if (use_sector_reordering)
+            full_inserted.insert(actual_id);
+        }
+        
         unsigned *node_nbrs = (node_buf + 1);
         // compute node_nbrs <-> query dist in PQ space
         cpu_timer.reset();
@@ -1156,6 +1174,7 @@ namespace diskann {
 
         if (stats != nullptr) {
           stats->cpu_us += (double) cpu_timer.elapsed();
+        }
         }
       }
 

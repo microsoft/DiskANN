@@ -883,7 +883,7 @@ namespace diskann {
             "Mismatch in number of points between reordered data file and compressed vector file",
             -1, __FUNCSIG__, __FILE__, __LINE__);
     }
-    
+
     cached_ofstream reordered_compressed_file_writer(reordered_disk_pq_compressed_vectors_path, write_blk_size);
     std::unique_ptr<uint8_t[]> curr_vector = 
                     std::make_unique<uint8_t[]>(num_pq_chunks_u32);
@@ -1199,10 +1199,12 @@ namespace diskann {
     // SECTOR_LEN buffer for each sector
     std::unique_ptr<char[]> sector_buf = std::make_unique<char[]>(SECTOR_LEN);
     std::unique_ptr<char[]> node_buf = std::make_unique<char[]>(max_node_len);
-    unsigned &nnbrs = *(unsigned *) (node_buf.get() + ndims_64 * sizeof(T));
+    _u64 bytes_for_real_id = reorder_sector_layout == true ? sizeof(_u32) : 0;
+    char* vector_buf = (char*) node_buf.get() + bytes_for_real_id;
+    unsigned &nnbrs = *(unsigned *) (node_buf.get() + ndims_64 * sizeof(T) + bytes_for_real_id);
     unsigned *nhood_buf = 
         (unsigned *) (node_buf.get() + (ndims_64 * sizeof(T)) +
-                      sizeof(unsigned));
+                      sizeof(unsigned) + bytes_for_real_id);
 
     // number of sectors (1 for meta data)
     _u64 n_sectors = ROUND_UP(npts_64, nnodes_per_sector) / nnodes_per_sector;
@@ -1252,9 +1254,10 @@ namespace diskann {
     diskann_writer.write(sector_buf.get(), SECTOR_LEN);
 
     
-    std::vector<size_t> vamana_node_offsets(npts_64);    
+    std::vector<size_t> vamana_node_offsets;    
     if (reorder_sector_layout) {
-      unsigned nnbrs, loc_id;
+      vamana_node_offsets.resize(npts_64);
+      unsigned nnbrs;
       for (_u64 i = 0; i < npts_64; i++) {
         vamana_node_offsets[i] = vamana_reader.tellg();
         vamana_reader.read((char *) &nnbrs, sizeof(unsigned));
@@ -1265,7 +1268,7 @@ namespace diskann {
     std::unique_ptr<T[]> cur_node_coords = std::make_unique<T[]>(ndims_64);
     diskann::cout << "# sectors: " << n_sectors << std::endl;
     _u64 cur_node_id = 0;
-    _u64 original_location_if_reordering;
+    _u64 original_location_if_reordering = cur_node_id;
     for (_u64 sector = 0; sector < n_sectors; sector++) {
       if (sector % 100000 == 0) {
         diskann::cout << "Sector #" << sector << "written" << std::endl;
@@ -1274,28 +1277,26 @@ namespace diskann {
       for (_u64 sector_node_id = 0;
           sector_node_id < nnodes_per_sector && cur_node_id < npts_64;
           sector_node_id++) {
+        original_location_if_reordering = cur_node_id;
         memset(node_buf.get(), 0, max_node_len);
-        _u64 write_offset_within_node = 0;
         /* read cur node's nnbrs.
         if sector reordering is carried out, vamana reader need 
         to point to the particular location*/
         if(reorder_sector_layout){
           original_location_if_reordering = lorder_data[cur_node_id];
           vamana_reader.seekg(vamana_node_offsets[original_location_if_reordering], std::ios::beg);
-          memcpy(node_buf.get() + write_offset_within_node,
-                 &(lorder_data[cur_node_id]), sizeof(_u32));
-          write_offset_within_node += sizeof(_u32);
+          memcpy(node_buf.get(),
+                &(lorder_data[cur_node_id]), sizeof(_u32)); // first four bytes is the real-id if sector reordering is enabled 
         }
         vamana_reader.read((char *) &nnbrs, sizeof(unsigned));
         
         // sanity checks on nnbrs
         assert(nnbrs > 0);
-        assert(nnbrs <= width_u32);
 
         // read node's nhood
         vamana_reader.read((char *) nhood_buf, (std::min)(nnbrs, width_u32) * sizeof(unsigned));
         
-        //Fetch corresponding nhood from new list after reordering
+        //Put the new location of each neighbor if sector reordering is enabled
         if(reorder_sector_layout){
           unsigned old_nbr;
           for(unsigned nbr=0; nbr < (unsigned)(std::min)(nnbrs, width_u32); nbr++ ){
@@ -1316,15 +1317,7 @@ namespace diskann {
                             std::ios::beg);
         }
         base_reader.read((char *) cur_node_coords.get(), sizeof(T) * ndims_64);
-        memcpy(node_buf.get() + write_offset_within_node, cur_node_coords.get(), ndims_64 * sizeof(T));
-        write_offset_within_node += ndims_64 * sizeof(T);
-        // write neighbors
-        *(unsigned *) (node_buf.get() + write_offset_within_node) =
-            (std::min)(nnbrs, width_u32);
-        write_offset_within_node += sizeof(_u32);
-        // write nhood next
-        memcpy(node_buf.get() + write_offset_within_node,
-              nhood_buf, (std::min)(nnbrs, width_u32) * sizeof(unsigned));
+        memcpy(vector_buf, cur_node_coords.get(), ndims_64 * sizeof(T));
 
         // get offset into sector_buf
         char *sector_node_buf =
@@ -1571,6 +1564,7 @@ namespace diskann {
     if(use_sector_reordering){
       diskann::reorder_compressed_pq_vectors(pq_compressed_vectors_path, reordering_location_to_id_file,
                                               use_sector_reordering, reordered_pq_compressed_vectors_path);
+      diskann::copy_file(reordered_pq_compressed_vectors_path, pq_compressed_vectors_path);
     }
     if (!use_disk_pq) {
       diskann::create_disk_layout<T>(data_file_to_use.c_str(), mem_index_path,

@@ -70,7 +70,7 @@ int main(int argc, char** argv) {
     po::notify(vm);
     if (vm["append_rerank_data"].as<bool>())
       append_rerank_data = true;
-    if (vm["reorder_sector"].as<bool>() == true)
+    if (vm["reorder_sector"].as<bool>())
       reorder_sector = true;
   } catch (const std::exception& ex) {
     std::cerr << ex.what() << '\n';
