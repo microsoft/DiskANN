@@ -44,7 +44,12 @@ int build_in_memory_index(const diskann::Metric& metric,
   _u32 sector_len = data_dim*sizeof(T) + (R+1)*sizeof(_u32);
   _u32 nodes_per_sector = 4096/sector_len; 
   if (reorder_prefix != "") {
+    std::chrono::duration<double> totalReorderingOverhead;
+    auto s = std::chrono::high_resolution_clock::now();    
     index.sector_reordering(reorder_prefix, nodes_per_sector, num_threads);
+    auto e = std::chrono::high_resolution_clock::now();
+    totalReorderingOverhead = e-s;
+    std::cout << "Total Rerodering time: " << totalReorderingOverhead.count() << std::endl;
   }
 
   std::chrono::duration<double> diff =
