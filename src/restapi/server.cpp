@@ -217,12 +217,16 @@ namespace diskann {
 
     dimensions = static_cast<unsigned int>(queryArr.size());
     unsigned new_dim = ROUND_UP(dimensions, 8);
+    std::cout << "Before diskann:alloc_aligned" << std::endl;
     diskann::alloc_aligned((void**) &queryVector, new_dim * sizeof(T),
                            8 * sizeof(T));
+    std::cout << "After diskann:alloc_aligned, before memset" << std::endl;
     memset(queryVector, 0, new_dim * sizeof(float));
+    std::cout << "After memset" << std::endl;
     for (size_t i = 0; i < queryArr.size(); i++) {
       queryVector[i] = (float) queryArr[i].as_double();
     }
+    std::cout << "Parsed JSON payload" << std::endl;
   }
 
   template<typename T>

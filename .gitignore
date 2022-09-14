@@ -360,3 +360,4 @@ build/
 .idea/
 cmake-build-debug/
 
+tests/python/venv

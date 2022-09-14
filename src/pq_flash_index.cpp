@@ -565,7 +565,8 @@ namespace diskann {
     this->disk_index_file = disk_index_file;
 
     if (pq_file_num_centroids != 256) {
-      diskann::cout << "Error. Number of PQ centroids is not 256. Exitting."
+      diskann::cout << "Error. Number of PQ centroids is not 256. Exiting.  Retrieved: " <<
+                    pq_file_num_centroids << " from file: " << pq_table_bin
                     << std::endl;
       return -1;
     }

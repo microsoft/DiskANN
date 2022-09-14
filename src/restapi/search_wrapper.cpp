@@ -154,14 +154,13 @@ namespace diskann {
 #endif
 
     std::string index_prefix_path(indexPrefix);
-    std::string pq_prefix = index_prefix_path + "_pq";
     std::string disk_index_file = index_prefix_path + "_disk.index";
     std::string warmup_query_file = index_prefix_path + "_sample_data.bin";
 
     _index = std::unique_ptr<diskann::PQFlashIndex<T>>(
         new diskann::PQFlashIndex<T>(reader, m));
 
-    _index->load(num_threads, pq_prefix.c_str());
+    _index->load(num_threads, index_prefix_path.c_str());
 
     std::vector<uint32_t> node_list;
     std::cout << "Caching " << num_nodes_to_cache
