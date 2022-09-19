@@ -185,7 +185,9 @@ namespace diskann {
     float*    distances = new float[K];
 
     auto startTime = std::chrono::high_resolution_clock::now();
+    DAX_DEBUG;
     _index->cached_beam_search(query, K, Ls, indices_u64, distances, DEFAULT_W);
+    DAX_DEBUG;
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(
                         std::chrono::high_resolution_clock::now() - startTime)
                         .count();
@@ -194,12 +196,13 @@ namespace diskann {
 
     std::string* tags = nullptr;
     if (_tags_enabled) {
+      DAX_DEBUG;
       tags = new std::string[K];
       lookup_tags(K, indices, tags);
     }
-
+    DAX_DEBUG;
     SearchResult result(K, (unsigned int) duration, indices, distances, tags);
-
+    DAX_DEBUG;
     delete[] indices_u64;
     delete[] indices;
     delete[] distances;

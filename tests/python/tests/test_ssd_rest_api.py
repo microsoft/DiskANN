@@ -67,14 +67,13 @@ class TestSSDRestApi(unittest.TestCase):
         return self._rest_process.poll() is None  # None means the process has no return status code yet
 
     def test_responds(self):
-
-query = [0.0] * 100
-json_payload = {
-    "Ls": 256,  # moar power rabbit
-    "query_id": 1234,
-    "query": query,
-    "k": 10
-}
+        query = [0.0] * 100
+        json_payload = {
+            "Ls": 256,  # moar power rabbit
+            "query_id": 1234,
+            "query": query,
+            "k": 10
+        }
         try:
             response = requests.post(self._rest_address, json=json_payload)
             if response.status_code != 200:
