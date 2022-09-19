@@ -158,6 +158,10 @@ inline int delete_file(const std::string& fileName) {
   }
 }
 
+#ifdef EXEC_ENV_OLS
+class AlignedFileReader;
+#endif
+
 namespace diskann {
   static const size_t MAX_SIZE_OF_STREAMBUF = 2LL * 1024 * 1024 * 1024;
 
@@ -312,7 +316,6 @@ namespace diskann {
                  2 * sizeof(uint32_t));  // No need to copy!
   }
 
-  class AlignedFileReader;
   DISKANN_DLLEXPORT void get_bin_metadata(AlignedFileReader& reader,
                                           size_t& npts, size_t& ndim,
                                           size_t offset = 0);
