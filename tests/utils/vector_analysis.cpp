@@ -28,7 +28,7 @@ int analyze_norm(std::string base_file) {
   diskann::load_bin<T>(base_file, data, npts, ndims);
   std::vector<float> norms(npts, 0);
 #pragma omp parallel for schedule(dynamic)
-  for (_s64 i = 0; i < npts; i++) {
+  for (_s64 i = 0; i < (_s64) npts; i++) {
     for (_u32 d = 0; d < ndims; d++)
       norms[i] += data[i * ndims + d] * data[i * ndims + d];
     norms[i] = std::sqrt(norms[i]);
@@ -51,7 +51,7 @@ int normalize_base(std::string base_file, std::string out_file) {
   diskann::load_bin<T>(base_file, data, npts, ndims);
   //  std::vector<float> norms(npts, 0);
 #pragma omp parallel for schedule(dynamic)
-  for (_s64 i = 0; i < npts; i++) {
+  for (_s64 i = 0; i < (_s64) npts; i++) {
     float pt_norm = 0;
     for (_u32 d = 0; d < ndims; d++)
       pt_norm += data[i * ndims + d] * data[i * ndims + d];
@@ -74,7 +74,7 @@ int augment_base(std::string base_file, std::string out_file,
   std::vector<float> norms(npts, 0);
   float              max_norm = 0;
 #pragma omp parallel for schedule(dynamic)
-  for (_s64 i = 0; i < npts; i++) {
+  for (_s64 i = 0; i < (_s64) npts; i++) {
     for (_u32 d = 0; d < ndims; d++)
       norms[i] += data[i * ndims + d] * data[i * ndims + d];
     max_norm = norms[i] > max_norm ? norms[i] : max_norm;

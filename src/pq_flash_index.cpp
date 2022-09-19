@@ -1092,7 +1092,7 @@ namespace diskann {
 #else
       for (auto &frontier_nhood : frontier_nhoods) {
 #endif
-        _u32  actual_id = frontier_nhood.first;
+//        _u32  actual_id = frontier_nhood.first;
         _u32 first_node_in_sector = nnodes_per_sector * ((_u32) (frontier_nhood.first / nnodes_per_sector));
         for (_u32 i = first_node_in_sector; i < first_node_in_sector + nnodes_per_sector && i < num_points; i++) {
           if (!use_sector_reordering && i!=frontier_nhood.first)

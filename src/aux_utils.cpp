@@ -698,7 +698,7 @@ namespace diskann {
                        boost::dynamic_bitset<> &deleted, const _u64 nd,
                        const unsigned omega, const unsigned threads) {
       #pragma omp parallel for schedule(dynamic, 1) num_threads(threads)
-        for (int32_t i = 0; i < nd / omega; i++) {
+        for (int32_t i = 0; i < (int32_t) (nd / omega); i++) {
           unsigned seed_node;
           #pragma omp critical
           {
@@ -727,7 +727,7 @@ namespace diskann {
 
   void process_partial_graph(const std::vector<unsigned> &nodes,
                              const unsigned               reorder_id,
-                             const unsigned max_degree, const _u64 nnodes,
+                             const _u64 nnodes,
                              const unsigned omega, const unsigned threads,
                              const std::string &output_vamana) {
     std::chrono::duration<double> diff;
@@ -754,7 +754,7 @@ namespace diskann {
 
   void reorder_merged_shards(const std::string &idmaps_prefix,
                              const std::string &idmaps_suffix,
-                             const _u32 nshards, const unsigned max_degree,
+                             const _u32 nshards, 
                              const unsigned omega, const unsigned threads,
                              _u64 max_shard_elements, const _u64 nnodes,
                              const std::string &output_vamana) {
@@ -795,7 +795,7 @@ namespace diskann {
         cur_size = node_ids.size();
       } else {
         std::sort(node_ids.begin(), node_ids.end());
-        diskann::process_partial_graph(node_ids, reorder_shard_id, max_degree,
+        diskann::process_partial_graph(node_ids, reorder_shard_id, 
                                        nnodes, omega, threads, output_vamana);
         node_ids.clear();
         for (auto &x : idmap) {
@@ -811,7 +811,7 @@ namespace diskann {
 
     if (node_ids.size() != 0) {
       std::sort(node_ids.begin(), node_ids.end());
-      diskann::process_partial_graph(node_ids, reorder_shard_id, max_degree,
+      diskann::process_partial_graph(node_ids, reorder_shard_id, 
                                      nnodes, omega, threads, output_vamana);
       reorder_shard_id += 1;
     }
@@ -1008,7 +1008,7 @@ namespace diskann {
       auto s = std::chrono::high_resolution_clock::now();      
       _u32 threads = omp_get_max_threads();
       diskann::reorder_merged_shards(
-          merged_index_prefix + "_subshard-", "_ids_uint32.bin", num_parts, R,
+          merged_index_prefix + "_subshard-", "_ids_uint32.bin", num_parts, 
           omega, threads, max_shard_elements, base_num, mem_index_path);
 
       auto e = std::chrono::high_resolution_clock::now();
@@ -1685,22 +1685,25 @@ namespace diskann {
       const char *indexBuildParameters, diskann::Metric compareMetric,
       bool use_sector_reordering);
 
-  template DISKANN_DLLEXPORT int build_merged_vamana_index<int8_t>(
-      std::string base_file, diskann::Metric compareMetric, unsigned L,
-      unsigned R, double sampling_rate, double ram_budget,
-      std::string mem_index_path, std::string medoids_path,
-      std::string centroids_file, bool use_sector_reordering,
-      std::chrono::duration<double> reorderingTime);
-  template DISKANN_DLLEXPORT int build_merged_vamana_index<float>(
-      std::string base_file, diskann::Metric compareMetric, unsigned L,
-      unsigned R, double sampling_rate, double ram_budget,
-      std::string mem_index_path, std::string medoids_path,
-      std::string centroids_file, bool use_sector_reordering, 
-      std::chrono::duration<double> reorderingTime);
-  template DISKANN_DLLEXPORT int build_merged_vamana_index<uint8_t>(
-      std::string base_file, diskann::Metric compareMetric, unsigned L,
-      unsigned R, double sampling_rate, double ram_budget,
-      std::string mem_index_path, std::string medoids_path,
-      std::string centroids_file, bool use_sector_reordering,
-      std::chrono::duration<double> reorderingTime);
+  template DISKANN_DLLEXPORT int build_merged_vamana_index<int8_t>(std::string     base_file,
+                                diskann::Metric compareMetric, unsigned L,
+                                unsigned R, double sampling_rate,
+                                double ram_budget, std::string mem_index_path,
+                                std::string medoids_file,
+                                std::string centroids_file, bool use_sector_reordering,
+                                std::chrono::duration<double>& reorderingBuildIndex);
+  template DISKANN_DLLEXPORT int build_merged_vamana_index<float>(std::string     base_file,
+                                diskann::Metric compareMetric, unsigned L,
+                                unsigned R, double sampling_rate,
+                                double ram_budget, std::string mem_index_path,
+                                std::string medoids_file,
+                                std::string centroids_file, bool use_sector_reordering,
+                                std::chrono::duration<double>& reorderingBuildIndex);
+  template DISKANN_DLLEXPORT int build_merged_vamana_index<uint8_t>(std::string     base_file,
+                                diskann::Metric compareMetric, unsigned L,
+                                unsigned R, double sampling_rate,
+                                double ram_budget, std::string mem_index_path,
+                                std::string medoids_file,
+                                std::string centroids_file, bool use_sector_reordering,
+                                std::chrono::duration<double>& reorderingBuildIndex);
 };  // namespace diskann

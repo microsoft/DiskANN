@@ -121,12 +121,12 @@ namespace diskann {
 
   DISKANN_DLLEXPORT void process_partial_graph(
       const std::vector<unsigned> &nodes, const unsigned reorder_id,
-      const unsigned max_degree, const _u64 nnodes, const unsigned omega,
+      const _u64 nnodes, const unsigned omega,
       const unsigned threads, const std::string &output_vamana);
 
   DISKANN_DLLEXPORT void reorder_merged_shards(
       const std::string &idmaps_prefix, const std::string &idmaps_suffix,
-      const _u32 nshards, const unsigned max_degree, const unsigned omega,
+      const _u32 nshards, const unsigned omega,
       const unsigned threads, _u64 max_shard_elements, const _u64 nnodes,
       const std::string &output_vamana);
 
