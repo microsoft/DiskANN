@@ -1983,14 +1983,14 @@ void Index<T, TagT>::partition_packing(
         }
       }
       while (!found) {
-        for (auto itr = initial.begin(); itr != initial.end(); itr++) {
-          if (deleted[*itr] == false) {
-            p_order[i] = *(itr);
-            break;
-          }
-        }
-#pragma omp critical
+        #pragma omp critical
         {
+          for (auto itr = initial.begin(); itr != initial.end(); itr++) {
+            if (deleted[*itr] == false) {
+              p_order[i] = *(itr);
+              break;
+            }
+          }
           if (deleted[p_order[i]] == false) {
             deleted[p_order[i]] = true;
             initial.erase(p_order[i]);
@@ -2023,7 +2023,7 @@ void Index<T, TagT>::partition_packing(
     std::vector<std::mutex> in_locks (_nd);
 
 #pragma omp parallel for schedule(dynamic, 128)    
-    for (int32_t i = 0; i < _final_graph.size(); i++) {
+    for (int32_t i = 0; i < (int32_t)(_final_graph.size()); i++) {
       for (unsigned j = 0; j < _final_graph[i].size(); j++) {
         {
           LockGuard lock(in_locks[_final_graph[i][j]]);
@@ -2038,7 +2038,7 @@ void Index<T, TagT>::partition_packing(
     }
 
 #pragma omp parallel for schedule(dynamic, 1) num_threads(threads)
-    for (int32_t i = 0; i < _nd / omega; i++) {
+    for (int32_t i = 0; i < (int32_t)(_nd / omega); i++) {
       unsigned seed_node;
 #pragma omp    critical
       {
@@ -2057,7 +2057,7 @@ void Index<T, TagT>::partition_packing(
       }
     }
 
-    std::ofstream out(filename + "_loc_to_id.bin",
+    std::ofstream out(filename + "_index_to_id.bin",
                       std::ios::binary | std::ios::out);
     _u32 nr = _nd;
     _u32 nd = 1;
@@ -2070,7 +2070,7 @@ void Index<T, TagT>::partition_packing(
       o_order[p_order[i]] = i;
     }
 
-    std::ofstream outer(filename + "_id_to_loc.bin",
+    std::ofstream outer(filename + "_id_to_index.bin",
                         std::ios::binary | std::ios::out);
     outer.write((char *) &nr, sizeof(_u32));
     outer.write((char *) &nd, sizeof(_u32));    
