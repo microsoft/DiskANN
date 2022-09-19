@@ -15,8 +15,8 @@ namespace diskann {
     bool   use_rotation = false;
     _u32*  chunk_offsets = nullptr;
     float* centroid = nullptr;
-    float* tables_T = nullptr;  // same as pq_tables, but col-major
-    float* rotmat_T = nullptr;
+    float* tables_tr = nullptr;  // same as pq_tables, but col-major
+    float* rotmat_tr = nullptr;
 
    public:
     FixedChunkPQTable() {
@@ -26,14 +26,14 @@ namespace diskann {
 #ifndef EXEC_ENV_OLS
       if (tables != nullptr)
         delete[] tables;
-      if (tables_T != nullptr)
-        delete[] tables_T;
+      if (tables_tr != nullptr)
+        delete[] tables_tr;
       if (chunk_offsets != nullptr)
         delete[] chunk_offsets;
       if (centroid != nullptr)
         delete[] centroid;
-      if (rotmat_T != nullptr)
-        delete[] rotmat_T;
+      if (rotmat_tr != nullptr)
+        delete[] rotmat_tr;
 #endif
     }
 
@@ -133,7 +133,7 @@ namespace diskann {
 #ifdef EXEC_ENV_OLS
       diskann::load_bin<_u32>(files, rotmat_file, rotmat_T, nr, nc);
 #else
-        diskann::load_bin<float>(rotmat_file, rotmat_T, nr, nc);
+        diskann::load_bin<float>(rotmat_file, rotmat_tr, nr, nc);
 #endif
       if (nr != this->ndims || nc != this->ndims) {
         diskann::cerr << "Error loading rotation matrix file" << std::endl;
@@ -144,10 +144,10 @@ namespace diskann {
     }
 
     // alloc and compute transpose
-    tables_T = new float[256 * this->ndims];
+    tables_tr = new float[256 * this->ndims];
     for (_u64 i = 0; i < 256; i++) {
       for (_u64 j = 0; j < this->ndims; j++) {
-        tables_T[j * 256 + i] = tables[i * this->ndims + j];
+        tables_tr[j * 256 + i] = tables[i * this->ndims + j];
       }
     }
   }
@@ -165,7 +165,7 @@ namespace diskann {
     if (use_rotation) {
       for (_u32 d = 0; d < ndims; d++) {
         for (_u32 d1 = 0; d1 < ndims; d1++) {
-          tmp[d] += query_vec[d1] * rotmat_T[d1 * ndims + d];
+          tmp[d] += query_vec[d1] * rotmat_tr[d1 * ndims + d];
         }
       }
       std::memcpy(query_vec, tmp.data(), ndims * sizeof(float));
@@ -180,7 +180,7 @@ namespace diskann {
       // sum (q-c)^2 for the dimensions associated with this chunk
       float* chunk_dists = dist_vec + (256 * chunk);
       for (_u64 j = chunk_offsets[chunk]; j < chunk_offsets[chunk + 1]; j++) {
-        const float* centers_dim_vec = tables_T + (256 * j);
+        const float* centers_dim_vec = tables_tr + (256 * j);
         for (_u64 idx = 0; idx < 256; idx++) {
           double diff = centers_dim_vec[idx] - (query_vec[j]);
           chunk_dists[idx] += (float) (diff * diff);
@@ -193,7 +193,7 @@ namespace diskann {
     float res = 0;
     for (_u64 chunk = 0; chunk < n_chunks; chunk++) {
       for (_u64 j = chunk_offsets[chunk]; j < chunk_offsets[chunk + 1]; j++) {
-        const float* centers_dim_vec = tables_T + (256 * j);
+        const float* centers_dim_vec = tables_tr + (256 * j);
         float        diff = centers_dim_vec[base_vec[chunk]] - (query_vec[j]);
         res += diff * diff;
       }
@@ -205,7 +205,7 @@ namespace diskann {
     float res = 0;
     for (_u64 chunk = 0; chunk < n_chunks; chunk++) {
       for (_u64 j = chunk_offsets[chunk]; j < chunk_offsets[chunk + 1]; j++) {
-        const float* centers_dim_vec = tables_T + (256 * j);
+        const float* centers_dim_vec = tables_tr + (256 * j);
         float        diff = centers_dim_vec[base_vec[chunk]] *
                      query_vec[j];  // assumes centroid is 0 to
                                     // prevent translation errors
@@ -220,7 +220,7 @@ namespace diskann {
   void inflate_vector(_u8* base_vec, float* out_vec) {
     for (_u64 chunk = 0; chunk < n_chunks; chunk++) {
       for (_u64 j = chunk_offsets[chunk]; j < chunk_offsets[chunk + 1]; j++) {
-        const float* centers_dim_vec = tables_T + (256 * j);
+        const float* centers_dim_vec = tables_tr + (256 * j);
         out_vec[j] = centers_dim_vec[base_vec[chunk]] + centroid[j];
       }
     }
@@ -233,7 +233,7 @@ namespace diskann {
       // sum (q-c)^2 for the dimensions associated with this chunk
       float* chunk_dists = dist_vec + (256 * chunk);
       for (_u64 j = chunk_offsets[chunk]; j < chunk_offsets[chunk + 1]; j++) {
-        const float* centers_dim_vec = tables_T + (256 * j);
+        const float* centers_dim_vec = tables_tr + (256 * j);
         for (_u64 idx = 0; idx < 256; idx++) {
           double prod =
               centers_dim_vec[idx] * query_vec[j];  // assumes that we are not
