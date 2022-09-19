@@ -113,7 +113,8 @@ namespace diskann {
   DISKANN_DLLEXPORT int build_disk_index(const char *    dataFilePath,
                                          const char *    indexFilePath,
                                          const char *    indexBuildParameters,
-                                         diskann::Metric _compareMetric);
+                                         diskann::Metric _compareMetric,
+                                         bool            use_opq = false);
 
   template<typename T>
   DISKANN_DLLEXPORT void create_disk_layout(

@@ -263,9 +263,9 @@ namespace diskann {
       // This is safe because T is float inside the if block.
       this->_distance = (Distance<T> *) new AVXNormalizedCosineDistanceFloat();
       this->_normalize_vecs = true;
-      std::cout << "Normalizing vectors and using L2 for cosine "
-                   "AVXNormalizedCosineDistanceFloat()."
-                << std::endl;
+      diskann::cout << "Normalizing vectors and using L2 for cosine "
+                       "AVXNormalizedCosineDistanceFloat()."
+                    << std::endl;
     } else {
       this->_distance = get_distance_function<T>(m);
     }
@@ -1204,7 +1204,7 @@ namespace diskann {
       std::stringstream ss;
       ss << "Thread loc:" << std::this_thread::get_id()
          << " Pool address: " << &pool << std::endl;
-      std::cout << ss.str();
+      diskann::cout << ss.str();
       throw diskann::ANNException("Pool passed to prune_neighbors is empty",
                                   -1);
     }
@@ -1431,8 +1431,9 @@ namespace diskann {
                                      inserted_into_pool_bs);
 
       if (node_ctr % 100000 == 0) {
-        std::cout<<"\r" << (100.0*node_ctr)/(visit_order.size()) <<"\% of index build completed." << std::flush;
-      }                                     
+        diskann::cout << "\r" << (100.0 * node_ctr) / (visit_order.size())
+                      << "\% of index build completed." << std::flush;
+      }
     }
 
     if (_nd > 0) {
