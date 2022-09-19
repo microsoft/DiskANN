@@ -1,42 +1,26 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT license.
 
-#include <math_utils.h>
-#include <omp.h>
-#include <algorithm>
-#include <chrono>
 #include <cmath>
 #include <cstdio>
-#include <ctime>
 #include <iostream>
-#include <iomanip>
-#include <iterator>
-#include <map>
-#include <set>
 #include <sstream>
 #include <string>
+
+#include <omp.h>
+#include "mkl.h"
+#include "tsl/robin_map.h"
+#include "tsl/robin_set.h"
 
 #if defined(RELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS) && \
     defined(DISKANN_BUILD)
 #include "gperftools/malloc_extension.h"
 #endif
 
-#include "logger.h"
-#include "exceptions.h"
+#include "utils.h"
+#include "math_utils.h"
 #include "index.h"
 #include "parameters.h"
-#include "tsl/robin_set.h"
-#include "utils.h"
-
-#include "mkl_cblas.h"
-#include "mkl_lapacke.h"
-#include <fcntl.h>
-#include <sys/stat.h>
-#include <time.h>
-#include <typeinfo>
-#include <tsl/robin_map.h>
-
-#include <cassert>
 #include "memory_mapper.h"
 #include "partition_and_pq.h"
 #ifdef _WINDOWS
