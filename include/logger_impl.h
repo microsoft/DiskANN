@@ -6,26 +6,8 @@
 #include <sstream>
 #include <mutex>
 
-#ifdef EXEC_ENV_OLS
-#include "IANNIndex.h"
-#include "ANNLogging.h"
-#endif
-
 #include "ann_exception.h"
-
-#ifndef EXEC_ENV_OLS
-namespace ANNIndex {
-  enum LogLevel {
-    LL_Debug = 0,
-    LL_Info,
-    LL_Status,
-    LL_Warning,
-    LL_Error,
-    LL_Assert,
-    LL_Count
-  };
-};
-#endif
+#include "logger.h"
 
 namespace diskann {
   class ANNStreamBuf : public std::basic_streambuf<char> {
@@ -46,7 +28,7 @@ namespace diskann {
     char*              _buf;
     int                _bufIndex;
     std::mutex         _mutex;
-    ANNIndex::LogLevel _logLevel;
+    LogLevel _logLevel;
 
     int  flush();
     void logImpl(char* str, int numchars);

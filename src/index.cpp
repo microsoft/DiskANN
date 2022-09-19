@@ -418,7 +418,7 @@ namespace diskann {
       compact_data();
       compact_frozen_point();
     } else {
-      if (not _data_compacted) {
+      if (!_data_compacted) {
         throw ANNException(
             "Index save for non-compacted index is not yet implemented", -1,
             __FUNCSIG__, __FILE__, __LINE__);
@@ -746,7 +746,7 @@ namespace diskann {
 #ifdef EXEC_ENV_OLS
     _u32 nodes_read = 0;
     _u64 cc = 0;
-    _u64 graph_offset = file_offset + header_size;
+    _u64 graph_offset = header_size;
     while (nodes_read < expected_num_points) {
       _u32 k;
       read_value(reader, k, graph_offset);
@@ -2205,7 +2205,7 @@ namespace diskann {
 
     std::unique_lock<std::shared_timed_mutex> cl(_consolidate_lock,
                                                  std::defer_lock);
-    if (not cl.try_lock()) {
+    if (!cl.try_lock()) {
       diskann::cerr
           << "Consildate delete function failed to acquire consolidate lock"
           << std::endl;
@@ -2233,7 +2233,7 @@ namespace diskann {
 #pragma omp parallel for num_threads(num_threads) schedule(dynamic, 8192)
     for (_s64 loc = 0; loc < (_s64) _max_points; loc++) {
       if (old_delete_set.find((_u32) loc) == old_delete_set.end() &&
-          not _empty_slots.is_in_set((_u32) loc)) {
+          !_empty_slots.is_in_set((_u32) loc)) {
         if (_conc_consolidate) {
           LockGuard adj_list_lock(_locks[loc]);
           process_delete(old_delete_set, loc, range, maxc, alpha);
