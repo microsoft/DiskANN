@@ -843,14 +843,14 @@ namespace diskann {
                                            QueryStats *stats) {
     cached_beam_search(query1, k_search, l_search, indices, distances,
                        beam_width, std::numeric_limits<_u32>::max(),
-                       use_reorder_data, stats);
+                       rerank_at_end, stats);
   }
 
   template<typename T>
   void PQFlashIndex<T>::cached_beam_search(
       const T *query1, const _u64 k_search, const _u64 l_search, _u64 *indices,
       float *distances, const _u64 beam_width, const _u32 io_limit,
-      const bool use_reorder_data, QueryStats *stats) {
+      const bool rerank_at_end, QueryStats *stats) {
     ThreadData<T> data = this->thread_data.pop();
     while (data.scratch.sector_scratch == nullptr) {
       this->thread_data.wait_for_push_notify();

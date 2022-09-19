@@ -1597,6 +1597,22 @@ namespace diskann {
                                          data_file_to_use.c_str());
     }
 
+        std::string medoids_file = disk_index_path + "_medoids.bin";
+        if (use_sector_reordering && file_exists(medoids_file)) {
+        _u32* medoid_ids;
+        _u64 num_medoids, dummy;
+        _u32* id_to_loc;
+        _u64 npts_file;
+        diskann::load_bin<_u32>(medoids_file, medoid_ids, num_medoids, dummy);
+        diskann::load_bin<_u32>(reordering_id_to_location_file, id_to_loc, npts_file, dummy);
+        for (_u32 i = 0; i < num_medoids; i++) {
+            medoid_ids[i] = id_to_loc[medoid_ids[i]];
+        }
+        delete[] id_to_loc;
+        diskann::save_bin<_u32>(medoids_file, medoid_ids, num_medoids, 1);
+        delete[] medoid_ids;
+        }
+
     double ten_percent_points = std::ceil(points_num * 0.1);
     double num_sample_points = ten_percent_points > MAX_SAMPLE_POINTS_FOR_WARMUP
                                    ? MAX_SAMPLE_POINTS_FOR_WARMUP

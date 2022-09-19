@@ -188,11 +188,11 @@ int search_disk_index(
   for (uint32_t test_id = 0; test_id < Lvec.size(); test_id++) {
     _u64 L = Lvec[test_id];
 
-    if (L < recall_at) {
-      diskann::cout << "Ignoring search with L:" << L
-                    << " since it's smaller than K:" << recall_at << std::endl;
-      continue;
-    }
+//    if (L < recall_at) {
+//      diskann::cout << "Ignoring search with L:" << L
+//                    << " since it's smaller than K:" << recall_at << std::endl;
+//      continue;
+//    }
 
     if (beamwidth <= 0) {
       diskann::cout << "Tuning beamwidth.." << std::endl;
