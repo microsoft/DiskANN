@@ -5,21 +5,29 @@ import time
 import argparse
 from diskannpy import Metric, Parameters, DiskANNFloatIndex
 
+# parser = argparse.ArgumentParser()
+# parser.add_argument('data_path', type=str, help='Path to the input base set of vectors.')
+# parser.add_argument('save_path', type=str, help='Path to the built index.')
+# parser.add_argument('R', type=int, help='Graph degree.')
+# parser.add_argument('L', type=int, help='Index build complexity.')
+# parser.add_argument('B', type=float, help='Memory budget in GB for the final index.')
+# parser.add_argument('M', type=float, help='Memory budget in GB for the index construction.')
+# parser.add_argument('T', type=int, help='Number of threads for index construction.')
 
-parser = argparse.ArgumentParser()
-parser.add_argument('data_path', type=str, help='Path to the input base set of vectors.')
-parser.add_argument('save_path', type=str, help='Path to the built index.')
-parser.add_argument('R', type=int, help='Graph degree.')
-parser.add_argument('L', type=int, help='Index build complexity.')
-parser.add_argument('B', type=float, help='Memory budget in GB for the final index.')
-parser.add_argument('M', type=float, help='Memory budget in GB for the index construction.')
-parser.add_argument('T', type=int, help='Number of threads for index construction.')
+data_path = '/home/ubuntu/dataset/sift/sift_base_with_header.fvecs'
+save_path = '/home/ubuntu/graphs/diskann/py_sift1M.bin'
+R=32
+L=125
+B=3
+M=3
+T=1
 
-args = parser.parse_args()
+# args = parser.parse_args()
 
 start = time.time()
-index = DiskANNFloatIndex(diskannpy.L2)
-index.build(args.data_path, args.save_path, args.R, args.L, args.B, args.M, args.T)
+index = DiskANNFloatIndex(Metric.L2)
+print("start build")
+index.build(data_path, save_path, R, L, B, M, T)
 end = time.time()
 
 print("Indexing Time: " + str(end - start) + " seconds")

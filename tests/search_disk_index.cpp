@@ -152,11 +152,16 @@ int search_disk_index(int argc, char** argv) {
   //_pFlashIndex->cache_bfs_levels(num_nodes_to_cache, node_list);
   _pFlashIndex->generate_cache_list_from_sample_queries(
        warmup_query_file, 15, 6, num_nodes_to_cache, num_threads, node_list);
+  diskann::cout << "generate cache list from sample queries done.\n";
   _pFlashIndex->load_cache_list(node_list);
+  diskann::cout << "shrink to fit...";
   node_list.clear();
   node_list.shrink_to_fit();
+  diskann::cout << "done.\n Set num threads...";
 
   omp_set_num_threads(num_threads);
+
+  diskann::cout <<"done\n";
 
   uint64_t warmup_L = 20;
   uint64_t warmup_num = 0, warmup_dim = 0, warmup_aligned_dim = 0;
@@ -167,7 +172,7 @@ int search_disk_index(int argc, char** argv) {
       diskann::load_aligned_bin<T>(warmup_query_file, warmup, warmup_num,
                                    warmup_dim, warmup_aligned_dim);
     } else {
-      warmup_num = (std::min)((_u32) 150000, (_u32) 15000 * num_threads);
+      warmup_num = (std::min)((_u32) 150000, (_u32) num_nodes_to_cache * num_threads);
       warmup_dim = query_dim;
       warmup_aligned_dim = query_aligned_dim;
       diskann::alloc_aligned(((void**) &warmup),
@@ -223,13 +228,14 @@ int search_disk_index(int argc, char** argv) {
     _u64 L = Lvec[test_id];
 
     if (beamwidth <= 0) {
-      //    diskann::cout<<"Tuning beamwidth.." << std::endl;
+         diskann::cout<<"Tuning beamwidth.." << std::endl;
       optimized_beamwidth =
           optimize_beamwidth(_pFlashIndex, warmup, warmup_num,
                              warmup_aligned_dim, L, optimized_beamwidth);
     } else
       optimized_beamwidth = beamwidth;
 
+    std::cout << "beam width = " << optimized_beamwidth << std::endl;
     query_result_ids[test_id].resize(recall_at * query_num);
     query_result_dists[test_id].resize(recall_at * query_num);
 
@@ -237,13 +243,16 @@ int search_disk_index(int argc, char** argv) {
 
     std::vector<uint64_t> query_result_ids_64(recall_at * query_num);
     auto                  s = std::chrono::high_resolution_clock::now();
+
 #pragma omp parallel for schedule(dynamic, 1)
     for (_s64 i = 0; i < (int64_t) query_num; i++) {
+      // std::cout<<i<<std::endl;
       _pFlashIndex->cached_beam_search(
           query + (i * query_aligned_dim), recall_at, L,
           query_result_ids_64.data() + (i * recall_at),
           query_result_dists[test_id].data() + (i * recall_at),
           optimized_beamwidth, stats + i);
+          if(i%1000 == 0) std::cout<<i<<std::endl;
     }
     auto                          e = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> diff = e - s;

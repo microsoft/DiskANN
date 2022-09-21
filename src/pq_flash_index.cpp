@@ -609,7 +609,8 @@ namespace diskann {
 #endif
 
     if (pq_file_num_centroids != 256) {
-      diskann::cout << "Error. Number of PQ centroids is not 256. Exitting."
+      diskann::cout << "Error. Number of PQ centroids is not 256, "<< pq_file_num_centroids 
+                    <<" instead. Read this data from file " << pq_table_bin << " Exitting."
                     << std::endl;
       return -1;
     }

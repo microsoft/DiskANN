@@ -334,11 +334,13 @@ PYBIND11_MODULE(diskannpy, m) {
         load_truthset(path, id_ptr, dist_ptr, num, dims);
         // TODO: Remove redundant copies.
         ids.assign(id_ptr, id_ptr + num * dims);
+        if(dist_ptr)
         distances.assign(dist_ptr, dist_ptr + num * dims);
         auto l = py::list(2);
         l[0] = py::int_(num);
         l[1] = py::int_(dims);
         delete[] id_ptr;
+        if(dist_ptr)
         delete[] dist_ptr;
         return l;
       },

@@ -356,3 +356,10 @@ MigrationBackup/
 /.vs
 /out/build/x64-Debug
 cscope*
+
+/build/
+/python/vamanapy.egg-info/
+/python/build/
+/python/*.so
+/.vscode/
+/python/diskannpy.egg-info/

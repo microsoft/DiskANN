@@ -5,26 +5,36 @@ import time
 import argparse
 import numpy as np
 import diskannpy
+from diskannpy import Metric
 
 
-parser = argparse.ArgumentParser()
-parser.add_argument('query_path', type=str, help='Path to the input query set of vectors.')
-parser.add_argument('ground_truth_path', type=str, help='Path to the input groundtruth set.')
-parser.add_argument('index_path_prefix', type=str, help='Path prefix for index files.')
-parser.add_argument('output_path_prefix', type=str, help='Prefix for the generated output files.')
-parser.add_argument('K', type=int, help='k value for recall@K.')
-parser.add_argument('W', type=int, help='Beamwidth for search.')
-parser.add_argument('T', type=int, help='Number of threads to use for search.')
-parser.add_argument('C', type=int, help='Number of nodes to cache for search.')
+# parser = argparse.ArgumentParser()
+# parser.add_argument('query_path', type=str, help='Path to the input query set of vectors.')
+# parser.add_argument('ground_truth_path', type=str, help='Path to the input groundtruth set.')
+# parser.add_argument('index_path_prefix', type=str, help='Path prefix for index files.')
+# parser.add_argument('output_path_prefix', type=str, help='Prefix for the generated output files.')
+# parser.add_argument('K', type=int, help='k value for recall@K.')
+# parser.add_argument('W', type=int, help='Beamwidth for search.')
+# parser.add_argument('T', type=int, help='Number of threads to use for search.')
+# parser.add_argument('C', type=int, help='Number of nodes to cache for search.')
+# args = parser.parse_args()
+
+query_path = '/home/ubuntu/dataset/sift/sift_query_with_header.fvecs'
+ground_truth_path = '/home/ubuntu/dataset/sift/sift_gt_with_header.ivecs'
+index_path_prefix = '/home/ubuntu/graphs/diskann/py_sift1M.bin'
+output_path_prefix = '/home/ubuntu/DiskANN/python/logs/diskann_'
+K=10
+W = 1
+T=1
+C = 10
 
 
-args = parser.parse_args()
 
-recall_at = args.K
-W = args.W
+recall_at = K
+W = W
 # Use multi-threaded search only for batch mode.
-num_threads = args.T
-num_nodes_to_cache = args.C
+num_threads = T
+num_nodes_to_cache = C
 single_query_mode = False
 l_search = [40, 50, 60, 70, 80, 90, 100, 110, 120]
 
@@ -32,12 +42,13 @@ l_search = [40, 50, 60, 70, 80, 90, 100, 110, 120]
 query_data = diskannpy.VectorFloat()
 ground_truth_ids = diskannpy.VectorUnsigned()
 ground_truth_dists = diskannpy.VectorFloat()
-
-num_queries, query_dims, query_aligned_dims = diskannpy.load_aligned_bin_float(args.query_path, query_data)
-num_ground_truth, ground_truth_dims = diskannpy.load_truthset(args.ground_truth_path, ground_truth_ids, ground_truth_dists)
-
-index = diskannpy.DiskANNFloatIndex(diskannpy.L2)
-if index.load_index(args.index_path_prefix, num_threads, num_nodes_to_cache) != 0:
+print('231')
+num_queries, query_dims, query_aligned_dims = diskannpy.load_aligned_bin_float(query_path, query_data)
+num_ground_truth, ground_truth_dims = diskannpy.load_truthset(ground_truth_path, ground_truth_ids, ground_truth_dists)
+print('here')
+index = diskannpy.DiskANNFloatIndex(Metric.L2)
+print(1)
+if index.load_index(index_path_prefix, num_threads, num_nodes_to_cache) != 0:
         print("Index load failed")
 else:
     print("Index Loaded")
@@ -72,7 +83,7 @@ else:
                 "{:>20}".format("{:.2f}".format(latency_stats[int((0.999 * num_queries))]))
                 + "{:>15}".format("{:.2f}".format(recall)))
 
-            result_path = args.output_path_prefix + "_" + str(L) + "_idx_uint32.bin"
+            result_path = output_path_prefix + "_" + str(L) + "_idx_uint32.bin"
             diskannpy.save_bin_u32(result_path, query_result_ids, num_queries, recall_at)
     else:
         print("Ls     QPS     Mean Latency (mus)   Recall@10")
@@ -101,5 +112,5 @@ else:
                   "{:>15}".format("{:.2f}".format(mean_latency)) +
                   "{:>15}".format("{:.2f}".format(recall)))
 
-            result_path = args.output_path_prefix + "_" + str(L) + "_idx_uint32.bin"
+            result_path = output_path_prefix + "_" + str(L) + "_idx_uint32.bin"
             diskannpy.save_bin_u32(result_path, query_result_ids, num_queries, recall_at)
