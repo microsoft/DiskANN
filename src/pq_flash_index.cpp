@@ -565,8 +565,7 @@ namespace diskann {
     this->disk_index_file = disk_index_file;
 
     if (pq_file_num_centroids != 256) {
-      diskann::cout << "Error. Number of PQ centroids is not 256. Exiting.  Retrieved: " <<
-                    pq_file_num_centroids << " from file: " << pq_table_bin
+      diskann::cout << "Error. Number of PQ centroids is not 256. Exiting."
                     << std::endl;
       return -1;
     }
@@ -834,34 +833,27 @@ namespace diskann {
       const T *query1, const _u64 k_search, const _u64 l_search, _u64 *indices,
       float *distances, const _u64 beam_width, const _u32 io_limit,
       const bool use_reorder_data, QueryStats *stats) {
-        DAX_DEBUG;
     ThreadData<T> data = this->thread_data.pop();
-      DAX_DEBUG;
     while (data.scratch.sector_scratch == nullptr) {
-        DAX_DEBUG;
       this->thread_data.wait_for_push_notify();
-        DAX_DEBUG;
       data = this->thread_data.pop();
     }
 
     if (beam_width > MAX_N_SECTOR_READS)
       throw ANNException("Beamwidth can not be higher than MAX_N_SECTOR_READS",
                          -1, __FUNCSIG__, __FILE__, __LINE__);
-    DAX_DEBUG;
 
     // copy query to thread specific aligned and allocated memory (for distance
     // calculations we need aligned data)
     float        query_norm = 0;
     const T *    query = data.scratch.aligned_query_T;
     const float *query_float = data.scratch.aligned_query_float;
-      DAX_DEBUG;
 
     for (uint32_t i = 0; i < this->data_dim; i++) {
       data.scratch.aligned_query_float[i] = query1[i];
       data.scratch.aligned_query_T[i] = query1[i];
       query_norm += query1[i] * query1[i];
     }
-      DAX_DEBUG;
 
     // if inner product, we laso normalize the query and set the last coordinate
     // to 0 (this is the extra coordindate used to convert MIPS to L2 search)
@@ -874,14 +866,12 @@ namespace diskann {
         data.scratch.aligned_query_float[i] /= query_norm;
       }
     }
-      DAX_DEBUG;
 
     IOContext &ctx = data.ctx;
     auto       query_scratch = &(data.scratch);
 
     // reset query
     query_scratch->reset();
-      DAX_DEBUG;
 
     // pointers to buffers for data
     T *   data_buf = query_scratch->coord_scratch;
@@ -892,7 +882,6 @@ namespace diskann {
     char *sector_scratch = query_scratch->sector_scratch;
     _u64 &sector_scratch_idx = query_scratch->sector_idx;
 
-      DAX_DEBUG;
     // query <-> PQ chunk centers distances
     float *pq_dists = query_scratch->aligned_pqtable_dist_scratch;
     pq_table.populate_chunk_distances(query_float, pq_dists);
@@ -910,7 +899,6 @@ namespace diskann {
       ::pq_dist_lookup(pq_coord_scratch, n_ids, this->n_chunks, pq_dists,
                        dists_out);
     };
-      DAX_DEBUG;
     Timer                 query_timer, io_timer, cpu_timer;
     std::vector<Neighbor> retset(l_search + 1);
     tsl::robin_set<_u64> &visited = *(query_scratch->visited);
@@ -929,7 +917,6 @@ namespace diskann {
         best_dist = cur_expanded_dist;
       }
     }
-      DAX_DEBUG;
 
     compute_dists(&best_medoid, 1, dist_scratch);
     retset[0].id = best_medoid;
@@ -957,7 +944,6 @@ namespace diskann {
         cached_nhoods;
     cached_nhoods.reserve(2 * beam_width);
 
-      DAX_DEBUG;
     while (k < cur_list_size && num_ios < io_limit) {
       auto nk = cur_list_size;
       // clear iteration state
@@ -992,7 +978,6 @@ namespace diskann {
         }
         marker++;
       }
-        DAX_DEBUG;
 
       // read nhoods of frontier ids
       if (!frontier.empty()) {
@@ -1014,23 +999,16 @@ namespace diskann {
           }
           num_ios++;
         }
-          DAX_DEBUG;
         io_timer.reset();
-          DAX_DEBUG;
 #ifdef USE_BING_INFRA
         reader->read(frontier_read_reqs, ctx, true);  // async reader windows.
 #else
-          DAX_DEBUG;
         reader->read(frontier_read_reqs, ctx);  // synchronous IO linux
-          DAX_DEBUG;
 #endif
         if (stats != nullptr) {
-            DAX_DEBUG;
           stats->io_us += (double) io_timer.elapsed();
-            DAX_DEBUG;
         }
       }
-        DAX_DEBUG;
 
       // process cached nhoods
       for (auto &cached_nhood : cached_nhoods) {

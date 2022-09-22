@@ -21,30 +21,3 @@
     LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
     OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
     SOFTWARE
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-query = [0.0] * 100
-json_payload = {
-    "Ls": 256,  # moar power rabbit
-    "query_id": 1234,
-    "query": query,
-    "k": 10
-}
-
-response = requests.post("http://127.0.0.1:10067/", json=json_payload)
-

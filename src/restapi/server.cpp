@@ -45,12 +45,8 @@ namespace diskann {
       std::vector<std::unique_ptr<diskann::BaseSearch>>& multi_searcher,
       const std::string&                                 typestring)
       : _multi_search(multi_searcher.size() > 1 ? true : false) {
-
-      DAX_DEBUG;
-    std::cerr << "DAX Multi Search Enabled? " << _multi_search << std::endl;
-    for (auto& searcher : multi_searcher) {
-        _multi_searcher.push_back(std::move(searcher));
-    }
+    for (auto& searcher : multi_searcher)
+      _multi_searcher.push_back(std::move(searcher));
 
     _listener =
         std::unique_ptr<web::http::experimental::listener::http_listener>(
@@ -99,7 +95,7 @@ namespace diskann {
         for (size_t i = 0; i < numsearchers; ++i) {
           if (results[i].get_distances()[pos[i]] < best_distance) {
             best_distance = results[i].get_distances()[pos[i]];
-            best_partition = i;          
+            best_partition = i;
           }
         }
           best_distances[k] = best_distance;
@@ -141,29 +137,13 @@ namespace diskann {
             parseJson(body, K, queryId, queryVector, dimensions, Ls);
 
             auto startTime = std::chrono::high_resolution_clock::now();
-            DAX_DEBUG;
             std::vector<diskann::SearchResult> results;
 
-            DAX_DEBUG;
-            for (auto& searcher : _multi_searcher) {
-                DAX_DEBUG;
-                auto temp = searcher->search(queryVector, dimensions, (unsigned int) K, Ls);
-                DAX_DEBUG;
-                results.push_back(temp);
-                DAX_DEBUG;
-            }
-
-            DAX_DEBUG;
+            for (auto& searcher : _multi_searcher)
+              results.push_back(searcher->search(queryVector, dimensions, (unsigned int) K, Ls));
             diskann::SearchResult result = aggregate_results(K, results);
-
-            DAX_DEBUG;
             diskann::aligned_free(queryVector);
-
-              DAX_DEBUG;
-
             web::json::value response = prepareResponse(queryId, K);
-
-              DAX_DEBUG;
             response[INDICES_KEY] = idsToJsonArray(result);
             response[DISTANCES_KEY] = distancesToJsonArray(result);
             if (result.tags_enabled())
@@ -235,16 +215,12 @@ namespace diskann {
 
     dimensions = static_cast<unsigned int>(queryArr.size());
     unsigned new_dim = ROUND_UP(dimensions, 8);
-    std::cerr << "Before diskann:alloc_aligned" << std::endl;
     diskann::alloc_aligned((void**) &queryVector, new_dim * sizeof(T),
                            8 * sizeof(T));
-    std::cerr << "After diskann:alloc_aligned, before memset" << std::endl;
     memset(queryVector, 0, new_dim * sizeof(float));
-    std::cerr << "After memset" << std::endl;
     for (size_t i = 0; i < queryArr.size(); i++) {
       queryVector[i] = (float) queryArr[i].as_double();
     }
-    std::cout << "Parsed JSON payload" << std::endl;
   }
 
   template<typename T>
