@@ -13,7 +13,7 @@ bool generate_pq(const std::string& data_path,
                  const float sampling_rate) {
   std::string pq_pivots_path = index_prefix_path + "_pq_pivots.bin";
   std::string pq_compressed_vectors_path =
-      index_prefix_path + "_compressed.bin";
+      index_prefix_path + "_pq_compressed.bin";
 
   // generates random sample and sets it to train_data and updates train_size
   size_t train_size, train_dim;
@@ -23,10 +23,13 @@ bool generate_pq(const std::string& data_path,
   std::cout << "For computing pivots, loaded sample data of size " << train_size
             << std::endl;
 
-  generate_pq_pivots(train_data, train_size, train_dim, num_pq_centers,
-                     num_pq_chunks, KMEANS_ITERS_FOR_PQ, pq_pivots_path);
+  //  generate_pq_pivots(train_data, train_size, train_dim, num_pq_centers,
+  //                     num_pq_chunks, KMEANS_ITERS_FOR_PQ, pq_pivots_path);
+  generate_opq_pivots(train_data, train_size, train_dim, num_pq_centers,
+                      num_pq_chunks, pq_pivots_path, true);
   generate_pq_data_from_pivots<T>(data_path, num_pq_centers, num_pq_chunks,
-                                  pq_pivots_path, pq_compressed_vectors_path);
+                                  pq_pivots_path, pq_compressed_vectors_path,
+                                  true);
 
   delete[] train_data;
 

@@ -254,8 +254,6 @@ namespace kmeans {
                                         num_centers, 1, closest_center,
                                         closest_docs, docs_l2sq);
 
-    //	diskann::cout << "closest centerss calculation done " << std::endl;
-
     memset(centers, 0, sizeof(float) * (size_t) num_centers * (size_t) dim);
 
 #pragma omp parallel for schedule(static, 1)
@@ -335,9 +333,6 @@ namespace kmeans {
       residual = lloyds_iter(data, num_points, dim, centers, num_centers,
                              docs_l2sq, closest_docs, closest_center);
 
-      diskann::cout << "Lloyd's iter " << i
-                    << "  dist_sq residual: " << residual << std::endl;
-
       if (((i != 0) && ((old_residual - residual) / residual) < 0.00001) ||
           (residual < std::numeric_limits<float>::epsilon())) {
         diskann::cout << "Residuals unchanged: " << old_residual << " becomes "
@@ -360,12 +355,9 @@ namespace kmeans {
                         float* pivot_data, size_t num_centers) {
     //	pivot_data = new float[num_centers * dim];
 
-    std::vector<size_t> picked;
-    diskann::cout << "Selecting " << num_centers << " pivots from "
-                  << num_points << " points using ";
-    std::random_device rd;
-    auto               x = rd();
-    diskann::cout << "random seed " << x << std::endl;
+    std::vector<size_t>                   picked;
+    std::random_device                    rd;
+    auto                                  x = rd();
     std::mt19937                          generator(x);
     std::uniform_int_distribution<size_t> distribution(0, num_points - 1);
 
@@ -392,12 +384,9 @@ namespace kmeans {
       return;
     }
 
-    std::vector<size_t> picked;
-    diskann::cout << "Selecting " << num_centers << " pivots from "
-                  << num_points << " points using ";
-    std::random_device rd;
-    auto               x = rd();
-    diskann::cout << "random seed " << x << ": " << std::flush;
+    std::vector<size_t>                   picked;
+    std::random_device                    rd;
+    auto                                  x = rd();
     std::mt19937                          generator(x);
     std::uniform_real_distribution<>      distribution(0, 1);
     std::uniform_int_distribution<size_t> int_dist(0, num_points - 1);
@@ -455,10 +444,7 @@ namespace kmeans {
                                                data + tmp_pivot * dim, dim));
       }
       num_picked++;
-      if (num_picked % 32 == 0)
-        diskann::cout << "." << std::flush;
     }
-    diskann::cout << "done." << std::endl;
     delete[] dist;
   }
 
