@@ -230,7 +230,7 @@ namespace diskann {
                   << std::endl;
   }
 
- #ifdef EXEC_ENV_OLS
+#ifdef EXEC_ENV_OLS
   void get_bin_metadata(AlignedFileReader& reader, size_t& npts, size_t& ndim,
                         size_t offset) {
     std::vector<AlignedRead> readReqs;

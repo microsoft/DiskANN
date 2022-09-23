@@ -144,8 +144,8 @@ namespace diskann {
     DISKANN_DLLEXPORT void load(AlignedFileReader &reader, uint32_t num_threads,
                                 uint32_t search_l);
 #else
-    DISKANN_DLLEXPORT void load(const char *index_file, uint32_t num_threads,
-                                uint32_t search_l);
+    DISKANN_DLLEXPORT void   load(const char *index_file, uint32_t num_threads,
+                                  uint32_t search_l);
 #endif
 
     // get some private variables
@@ -370,12 +370,12 @@ namespace diskann {
 
     // Do not call without acquiring appropriate locks
     // call public member functions save and load to invoke these.
-    DISKANN_DLLEXPORT _u64   save_graph(std::string filename);
-    DISKANN_DLLEXPORT _u64   save_data(std::string filename);
-    DISKANN_DLLEXPORT _u64   save_tags(std::string filename);
-    DISKANN_DLLEXPORT _u64   save_delete_list(const std::string &filename);
+    DISKANN_DLLEXPORT _u64 save_graph(std::string filename);
+    DISKANN_DLLEXPORT _u64 save_data(std::string filename);
+    DISKANN_DLLEXPORT _u64 save_tags(std::string filename);
+    DISKANN_DLLEXPORT _u64 save_delete_list(const std::string &filename);
 #ifdef EXEC_ENV_OLS
-    DISKANN_DLLEXPORT size_t load_graph(AlignedFileReader &reade,
+    DISKANN_DLLEXPORT size_t load_graph(AlignedFileReader &reader,
                                         size_t             expected_num_points);
     DISKANN_DLLEXPORT size_t load_data(AlignedFileReader &reader);
     DISKANN_DLLEXPORT size_t load_tags(AlignedFileReader &reader);
@@ -449,7 +449,7 @@ namespace diskann {
     bool _conc_consolidate = false;  // use _lock while searching
 
     std::vector<non_recursive_mutex>
-                                     _locks;  // Per node lock, cardinality=max_points_
+        _locks;  // Per node lock, cardinality=max_points_
     std::vector<non_recursive_mutex> _locks_in;  // Per node lock
 
     // If acquiring multiple locks below, acquire locks in the order below

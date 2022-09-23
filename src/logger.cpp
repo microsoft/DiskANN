@@ -33,8 +33,7 @@ namespace diskann {
           "The custom logger only supports stdout and stderr.", -1);
     }
     _fp = fp;
-    _logLevel = (_fp == stdout) ? LogLevel::LL_Info
-                                : LogLevel::LL_Error;
+    _logLevel = (_fp == stdout) ? LogLevel::LL_Info : LogLevel::LL_Error;
 #ifdef EXEC_ENV_OLS
     _buf = new char[BUFFER_SIZE + 1];  // See comment in the header
 #else
