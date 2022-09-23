@@ -24,11 +24,11 @@ namespace diskann {
     DISKANN_DLLEXPORT virtual int sync();
 
    private:
-    FILE*              _fp;
-    char*              _buf;
-    int                _bufIndex;
-    std::mutex         _mutex;
-    LogLevel _logLevel;
+    FILE*      _fp;
+    char*      _buf;
+    int        _bufIndex;
+    std::mutex _mutex;
+    LogLevel   _logLevel;
 
     int  flush();
     void logImpl(char* str, int numchars);
