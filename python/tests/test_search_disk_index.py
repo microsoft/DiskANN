@@ -42,12 +42,9 @@ l_search = [40, 50, 60, 70, 80, 90, 100, 110, 120]
 query_data = diskannpy.VectorFloat()
 ground_truth_ids = diskannpy.VectorUnsigned()
 ground_truth_dists = diskannpy.VectorFloat()
-print('231')
 num_queries, query_dims, query_aligned_dims = diskannpy.load_aligned_bin_float(query_path, query_data)
 num_ground_truth, ground_truth_dims = diskannpy.load_truthset(ground_truth_path, ground_truth_ids, ground_truth_dists)
-print('here')
 index = diskannpy.DiskANNFloatIndex(Metric.L2)
-print(1)
 if index.load_index(index_path_prefix, num_threads, num_nodes_to_cache) != 0:
         print("Index load failed")
 else:
