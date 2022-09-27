@@ -1748,8 +1748,8 @@ void Index<T, TagT>::partition_packing(
       std::unordered_set<unsigned> &initial, boost::dynamic_bitset<> &deleted) {
     std::unordered_map<unsigned, unsigned> counts;
 
-    p_order[0] = seed_node;    
-    std::vector<non_recursive_mutex> porder_locks(omega);
+    p_order[0] = seed_node;
+    
     for (unsigned i = 1; i < omega; i++) {
       unsigned ve = p_order[i - 1];
       for (unsigned j = 0; j < _final_graph[ve].size(); j++) {
