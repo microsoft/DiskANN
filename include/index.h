@@ -450,7 +450,7 @@ namespace diskann {
         _tag_lock;  // RW lock for _tag_to_location and _location_to_tag
     std::shared_timed_mutex
         _delete_lock;  // RW Lock on _delete_set and _empty_slots
-
     static const float INDEX_GROWTH_FACTOR;
+    non_recursive_mutex _reorder_del_lock;
   };
 }  // namespace diskann

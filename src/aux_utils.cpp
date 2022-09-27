@@ -610,10 +610,10 @@ namespace diskann {
       unsigned *p_order, const unsigned seed_node, const unsigned omega,
       std::unordered_set<unsigned> &initial, boost::dynamic_bitset<> &deleted,
       const std::vector<std::vector<unsigned>> &in_graph,
-      const std::vector<std::vector<unsigned>> &final_graph) {
+      const std::vector<std::vector<unsigned>> &final_graph,
+      non_recursive_mutex &del_lock) {
     std::unordered_map<unsigned, unsigned> counts;
     p_order[0] = seed_node;
-
     for (unsigned i = 1; i < omega; i++) {
       unsigned ve = p_order[i - 1];
       for (unsigned j = 0; j < final_graph[ve].size(); j++) {
@@ -651,8 +651,8 @@ namespace diskann {
             max_val = itr->second;
           }
         }
-        #pragma omp critical
         {
+          LockGuard guard(del_lock);
           if (deleted[max_it->first] == false) {
             deleted[max_it->first] = true;
             initial.erase(max_it->first);
@@ -668,8 +668,8 @@ namespace diskann {
         }
       }
       while (!found) {
-        #pragma omp critical
         {
+          LockGuard guard(del_lock);
           for (auto itr = initial.begin(); itr != initial.end(); itr++) {
             if (deleted[*itr] == false) {
               p_order[i] = *(itr);
@@ -698,17 +698,18 @@ namespace diskann {
                        std::unordered_set<unsigned>             &initial,
                        boost::dynamic_bitset<> &deleted, const _u64 nd,
                        const unsigned omega, const unsigned threads) {
+      non_recursive_mutex del_lock;
       #pragma omp parallel for schedule(dynamic, 1) num_threads(threads)
         for (int32_t i = 0; i < (int32_t) (nd / omega); i++) {
           unsigned seed_node;
-          #pragma omp critical
           {
+            LockGuard guard(del_lock);
             seed_node = *(initial.begin());
             deleted[seed_node] = true;
             initial.erase(initial.begin());
           }
           partition_packing(p_order.data() + i * omega, seed_node, omega, initial,
-                            deleted, in_graph, final_graph);
+                            deleted, in_graph, final_graph, del_lock);
         }
 
       if (nd % omega != 0) {
@@ -862,6 +863,8 @@ namespace diskann {
     if(reorder_sector_layout == false)
       return;
     
+    std::chrono::duration<double> reorderingCompVector;
+    auto startReorderCV = std::chrono::high_resolution_clock::now();
     std::ifstream compressed_file_reader(disk_pq_compressed_vectors_path, std::ios::binary);
     unsigned num_points;
     _u32  num_pq_chunks_u32;
@@ -907,6 +910,9 @@ namespace diskann {
     reordered_compressed_file_writer.write(reordered_compressed_base.get(), 
                                             2 * sizeof(_u32) + num_points * num_pq_chunks_u32 * sizeof(uint8_t));
     diskann::cout << "Written Reordered compressed vector" << std::endl;
+    auto endReorderCV = std::chrono::high_resolution_clock::now();
+    reorderingCompVector = endReorderCV-startReorderCV;
+    diskann::cout << "Time taken for reordering compressed vector " << reorderingCompVector.count() << std::endl; 
   }
 
 
@@ -916,8 +922,7 @@ namespace diskann {
                                 unsigned R, double sampling_rate,
                                 double ram_budget, std::string mem_index_path,
                                 std::string medoids_file,
-                                std::string centroids_file, bool use_sector_reordering,
-                                std::chrono::duration<double>& reorderingBuildIndex) {
+                                std::string centroids_file, bool use_sector_reordering) {
     size_t base_num, base_dim;
     diskann::get_bin_metadata(base_file, base_num, base_dim);
 
@@ -946,10 +951,13 @@ namespace diskann {
               compareMetric, base_dim, base_num, false, false));
       _pvamanaIndex->build(base_file.c_str(), base_num, paras);
       if(use_sector_reordering){
+         std::chrono::duration<double> reorderingMemIndex;
          auto s= std::chrono::high_resolution_clock::now();
         _pvamanaIndex->sector_reordering(mem_index_path.c_str(), omega, omp_get_max_threads());
          auto e = std::chrono::high_resolution_clock::now();
-         reorderingBuildIndex += e - s;
+         reorderingMemIndex = e - s;
+         diskann::cout << "Reordering Time for Memory Index: " << reorderingMemIndex.count() << std::endl;
+       
       }
       _pvamanaIndex->save(mem_index_path.c_str());
       std::remove(medoids_file.c_str());
@@ -1006,6 +1014,7 @@ namespace diskann {
                           num_parts, R, mem_index_path, medoids_file);
 
    if (use_sector_reordering) {
+      std::chrono::duration<double> reorderingDiskIndex;
       auto s = std::chrono::high_resolution_clock::now();      
       _u32 threads = omp_get_max_threads();
       diskann::reorder_merged_shards(
@@ -1013,7 +1022,8 @@ namespace diskann {
           omega, threads, max_shard_elements, base_num, mem_index_path);
 
       auto e = std::chrono::high_resolution_clock::now();
-      reorderingBuildIndex += e - s;
+      reorderingDiskIndex = e - s;
+      diskann::cout << "Reordering Time for Disk Index: " << reorderingDiskIndex.count() << std::endl;
     }
 
     // delete tempFiles
@@ -1562,12 +1572,10 @@ namespace diskann {
         MallocExtension::instance()->ReleaseFreeMemory();
     #endif
 
-    
-    std::chrono::duration<double> totalReorderingOverhead;
-    
+       
     diskann::build_merged_vamana_index<T>(
         data_file_to_use.c_str(), diskann::Metric::L2, L, R, p_val,
-        indexing_ram_budget, mem_index_path, medoids_path, centroids_path, use_sector_reordering, totalReorderingOverhead);
+        indexing_ram_budget, mem_index_path, medoids_path, centroids_path, use_sector_reordering);
 
     std::string reordering_location_to_id_file = mem_index_path + "_index_to_id.bin";
     std::string reordering_id_to_location_file = mem_index_path + "_id_to_index.bin";
@@ -1575,12 +1583,9 @@ namespace diskann {
         index_prefix_path + "_reodered_index_pq_compressed.bin";
     //      reorder compressed pq vectors;
     if(use_sector_reordering){
-      auto startReorderCV = std::chrono::high_resolution_clock::now();
       diskann::reorder_compressed_pq_vectors(pq_compressed_vectors_path, reordering_location_to_id_file,
                                               use_sector_reordering, reordered_pq_compressed_vectors_path);
       diskann::copy_file(reordered_pq_compressed_vectors_path, pq_compressed_vectors_path);
-      auto endReorderCV = std::chrono::high_resolution_clock::now();
-      totalReorderingOverhead += endReorderCV-startReorderCV;
     }
     if (!use_disk_pq) {
       diskann::create_disk_layout<T>(data_file_to_use.c_str(), mem_index_path,
@@ -1627,9 +1632,6 @@ namespace diskann {
 
     auto                          e = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> diff = e - s;
-    if(use_sector_reordering){
-      diskann::cout << "Total Rerodering time: " << totalReorderingOverhead.count() << std::endl;
-    }
     diskann::cout << "Indexing time: " << diff.count() << std::endl;
 
     return 0;
@@ -1707,20 +1709,17 @@ namespace diskann {
                                 unsigned R, double sampling_rate,
                                 double ram_budget, std::string mem_index_path,
                                 std::string medoids_file,
-                                std::string centroids_file, bool use_sector_reordering,
-                                std::chrono::duration<double>& reorderingBuildIndex);
+                                std::string centroids_file, bool use_sector_reordering);
   template DISKANN_DLLEXPORT int build_merged_vamana_index<float>(std::string     base_file,
                                 diskann::Metric compareMetric, unsigned L,
                                 unsigned R, double sampling_rate,
                                 double ram_budget, std::string mem_index_path,
                                 std::string medoids_file,
-                                std::string centroids_file, bool use_sector_reordering,
-                                std::chrono::duration<double>& reorderingBuildIndex);
+                                std::string centroids_file, bool use_sector_reordering);
   template DISKANN_DLLEXPORT int build_merged_vamana_index<uint8_t>(std::string     base_file,
                                 diskann::Metric compareMetric, unsigned L,
                                 unsigned R, double sampling_rate,
                                 double ram_budget, std::string mem_index_path,
                                 std::string medoids_file,
-                                std::string centroids_file, bool use_sector_reordering,
-                                std::chrono::duration<double>& reorderingBuildIndex);
+                                std::string centroids_file, bool use_sector_reordering);
 };  // namespace diskann
