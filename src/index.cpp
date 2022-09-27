@@ -1749,7 +1749,7 @@ void Index<T, TagT>::partition_packing(
     std::unordered_map<unsigned, unsigned> counts;
 
     p_order[0] = seed_node;
-
+    
     for (unsigned i = 1; i < omega; i++) {
       unsigned ve = p_order[i - 1];
       for (unsigned j = 0; j < _final_graph[ve].size(); j++) {
@@ -1788,8 +1788,8 @@ void Index<T, TagT>::partition_packing(
             max_val = itr->second;
           }
         }
-#pragma omp critical
         {
+          LockGuard guard(_reorder_del_lock);
           if (deleted[max_it->first] == false) {
             deleted[max_it->first] = true;
             initial.erase(max_it->first);
@@ -1805,8 +1805,8 @@ void Index<T, TagT>::partition_packing(
         }
       }
       while (!found) {
-        #pragma omp critical
         {
+          LockGuard guard(_reorder_del_lock);
           for (auto itr = initial.begin(); itr != initial.end(); itr++) {
             if (deleted[*itr] == false) {
               p_order[i] = *(itr);
@@ -1842,8 +1842,8 @@ void Index<T, TagT>::partition_packing(
 
 
 
-    std::vector<std::mutex> in_locks (_nd);
-
+    std::vector<non_recursive_mutex> in_locks(_nd);
+    
 #pragma omp parallel for schedule(dynamic, 128)    
     for (_s64 i = 0; i < (_s64)(_final_graph.size()); i++) {
       for (unsigned j = 0; j < _final_graph[i].size(); j++) {
@@ -1862,8 +1862,8 @@ void Index<T, TagT>::partition_packing(
 #pragma omp parallel for schedule(dynamic, 1) num_threads(threads)
     for (_s64 i = 0; i < (_s64)(_nd / omega); i++) {
       unsigned seed_node;
-#pragma omp    critical
       {
+        LockGuard guard(_reorder_del_lock);
         seed_node = *(initial.begin());
         deleted[seed_node] = true;
         initial.erase(initial.begin());
