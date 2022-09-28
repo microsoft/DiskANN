@@ -56,7 +56,7 @@ int main(int argc, char* argv[]) {
   }
   std::ifstream tags_in(tags_paths);
   if (!tags_in.is_open()) {
-    std::cerr << "Could not open " << index_prefix_paths << std::endl;
+    std::cerr << "Could not open " << tags_paths << std::endl;
     exit(-1);
   }
   std::string prefix, tagfile;

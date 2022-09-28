@@ -20,7 +20,14 @@ def output_vectors(
     tsv_to_bin_path = os.path.join(diskann_build_path, "tests", "utils", "tsv_to_bin")
 
     number_of_points, dimensions = vectors.shape
-    args = [tsv_to_bin_path, "float", vectors_as_tsv_path, vectors_as_bin_path, str(dimensions), str(number_of_points)]
+    args = [
+        tsv_to_bin_path,
+        "float",
+        vectors_as_tsv_path,
+        vectors_as_bin_path,
+        str(dimensions),
+        str(number_of_points)
+    ]
     completed = subprocess.run(args, timeout=timeout)
     if completed.returncode != 0:
         raise Exception(f"Unable to convert tsv to binary using tsv_to_bin, completed_process: {completed}")
@@ -41,7 +48,7 @@ def build_ssd_index(
         "--data_type", "float",
         "--dist_fn", "l2",
         "--data_path", vectors_as_bin_path,
-        "--index_path_prefix", temporary_file_path,
+        "--index_path_prefix", os.path.join(temporary_file_path, "smoke_test"),
         "-R", "64",
         "-L", "100",
         "--search_DRAM_budget", "1",

@@ -160,7 +160,11 @@ namespace diskann {
     _index = std::unique_ptr<diskann::PQFlashIndex<T>>(
         new diskann::PQFlashIndex<T>(reader, m));
 
-    _index->load(num_threads, index_prefix_path.c_str());
+    int res = _index->load(num_threads, index_prefix_path.c_str());
+
+    if (res != 0) {
+        std::cerr << "Unable to load index. Status code: " << res << "." << std::endl;
+    }
 
     std::vector<uint32_t> node_list;
     std::cout << "Caching " << num_nodes_to_cache
@@ -176,13 +180,13 @@ namespace diskann {
   }
 
   template<typename T>
-  SearchResult PQFlashSearch<T>::search(const T*           query,
+  SearchResult PQFlashSearch<T>::search(const T* query,
                                         const unsigned int dimensions,
                                         const unsigned int K,
                                         const unsigned int Ls) {
-    _u64*     indices_u64 = new _u64[K];
+    _u64* indices_u64 = new _u64[K];
     unsigned* indices = new unsigned[K];
-    float*    distances = new float[K];
+    float* distances = new float[K];
 
     auto startTime = std::chrono::high_resolution_clock::now();
     _index->cached_beam_search(query, K, Ls, indices_u64, distances, DEFAULT_W);
