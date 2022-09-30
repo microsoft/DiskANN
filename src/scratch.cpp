@@ -39,6 +39,7 @@ namespace diskann {
     _pool.reserve(l_to_use * 10);
     _visited.reserve(l_to_use * 2);
     _best_l_nodes.resize(l_to_use + 1);
+    _init_ids.reserve(l_to_use + 1);
     _inserted_into_pool_rs.reserve(l_to_use * 20);
     _inserted_into_pool_bs = new boost::dynamic_bitset<>();
   }
@@ -50,6 +51,7 @@ namespace diskann {
     _pool.clear();
     _visited.clear();
     _des.clear();
+    _init_ids.clear();
     _inserted_into_pool_rs.clear();
     _inserted_into_pool_bs->reset();
   }
@@ -92,6 +94,7 @@ namespace diskann {
     visited.clear();
     retset.clear();
     full_retset.clear();
+    init_nodes.clear();
   }
 
   template<typename T>

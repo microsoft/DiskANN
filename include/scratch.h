@@ -56,6 +56,9 @@ namespace diskann {
     boost::dynamic_bitset<> &inserted_into_pool_bs() {
       return *_inserted_into_pool_bs;
     }
+    std::vector<unsigned> &init_ids() {
+      return _init_ids;
+    }
 
     T *aligned_query() {
       return this->_aligned_query;
@@ -74,6 +77,7 @@ namespace diskann {
     std::vector<Neighbor>    _best_l_nodes;
     tsl::robin_set<unsigned> _inserted_into_pool_rs;
     boost::dynamic_bitset<> *_inserted_into_pool_bs;
+    std::vector<unsigned>    _init_ids;
 
     T        *_aligned_query = nullptr;
     uint32_t *_indices = nullptr;
@@ -101,6 +105,7 @@ namespace diskann {
     tsl::robin_set<_u64>  visited;
     std::vector<Neighbor> retset;
     std::vector<Neighbor> full_retset;
+    std::vector<_u32>     init_nodes;
 
     SSDQueryScratch(size_t aligned_dim, size_t visited_reserve);
     ~SSDQueryScratch();
