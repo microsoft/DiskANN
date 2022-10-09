@@ -390,6 +390,9 @@ namespace diskann {
     std::vector<uint64_t> tmp_result_ids_64(sample_num, 0);
     std::vector<float>    tmp_result_dists(sample_num, 0);
 
+    sample_num = std::min(sample_num, (unsigned long)(num_nodes_to_cache * 100));
+    printf("sample number = %lu", sample_num);
+
 #pragma omp parallel for schedule(dynamic, 1) num_threads(nthreads)
     for (_s64 i = 0; i < (int64_t) sample_num; i++) {
       cached_beam_search(samples + (i * sample_aligned_dim), 1, l_search,
@@ -609,7 +612,8 @@ namespace diskann {
 #endif
 
     if (pq_file_num_centroids != 256) {
-      diskann::cout << "Error. Number of PQ centroids is not 256. Exitting."
+      diskann::cout << "Error. Number of PQ centroids is not 256, "<< pq_file_num_centroids 
+                    <<" instead. Read this data from file " << pq_table_bin << " Exitting."
                     << std::endl;
       return -1;
     }
