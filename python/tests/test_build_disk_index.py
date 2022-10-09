@@ -14,8 +14,8 @@ from diskannpy import Metric, Parameters, DiskANNFloatIndex
 # parser.add_argument('M', type=float, help='Memory budget in GB for the index construction.')
 # parser.add_argument('T', type=int, help='Number of threads for index construction.')
 
-data_path = '/home/ubuntu/dataset/sift/sift_base_with_header.fvecs'
-save_path = '/home/ubuntu/graphs/diskann/py_sift1M.bin'
+data_path = '/data/wzy/dataset/sift/sift_base_with_header.fvecs'
+save_path = '/data/wzy/graphs/diskann/py_sift1M.bin'
 R=32
 L=125
 B=3

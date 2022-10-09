@@ -31,7 +31,7 @@
 #endif
 #endif
 
-#define WARMUP false
+#define WARMUP true
 
 void print_stats(std::string category, std::vector<float> percentiles,
                  std::vector<float> results) {
@@ -91,7 +91,7 @@ int search_disk_index(int argc, char** argv) {
   _u64        recall_at = std::atoi(argv[ctr++]);
   std::string result_output_prefix(argv[ctr++]);
 
-  bool calc_recall_flag = false;
+  bool calc_recall_flag = true;
 
   for (; ctr < (_u32) argc; ctr++) {
     _u64 curL = std::atoi(argv[ctr]);
@@ -122,6 +122,10 @@ int search_disk_index(int argc, char** argv) {
           << "Error. Mismatch in number of queries and ground truth data"
           << std::endl;
     }
+        diskann::cout
+        << "load ground truth from " << truthset_bin
+        << std::endl;
+
     calc_recall_flag = true;
   }
 
@@ -167,6 +171,7 @@ int search_disk_index(int argc, char** argv) {
   uint64_t warmup_num = 0, warmup_dim = 0, warmup_aligned_dim = 0;
   T*       warmup = nullptr;
 
+  diskann::cout << "warm up query file: " << warmup_query_file << std::endl;
   if (WARMUP) {
     if (file_exists(warmup_query_file)) {
       diskann::load_aligned_bin<T>(warmup_query_file, warmup, warmup_num,

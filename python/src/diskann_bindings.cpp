@@ -191,6 +191,46 @@ struct DiskANNIndex {
     return std::make_pair(std::make_pair(ids, dists), collective_stats);
   }
 
+  auto batch_search_numpy_input_search_ls(
+      py::array_t<T, py::array::c_style | py::array::forcecast> &queries,
+      const _u64 dim, const _u64 num_queries, const _u64 knn,
+      const std::vector<_u64> & l_searchs, const _u64 beam_width, const int num_threads) {
+    py::array_t<unsigned> ids({num_queries, knn});
+    py::array_t<float>    dists({num_queries, knn});
+
+    std::vector<_u64>    u64_ids(knn * num_queries);
+    diskann::QueryStats *stats = new diskann::QueryStats[num_queries];
+
+#pragma omp parallel for schedule(dynamic, 1)
+    for (_u64 i = 0; i < num_queries; i++) {
+      pq_flash_index->cached_beam_search(
+          queries.data(i), knn, l_searchs[i], u64_ids.data() + i * knn,
+          dists.mutable_data(i), beam_width, stats + i);
+    }
+
+    auto r = ids.mutable_unchecked();
+    for (_u64 i = 0; i < num_queries; ++i)
+      for (_u64 j = 0; j < knn; ++j)
+        r(i, j) = (unsigned) u64_ids[i * knn + j];
+
+    std::unordered_map<std::string, double> collective_stats;
+    collective_stats["mean_latency"] = diskann::get_mean_stats(
+        stats, num_queries,
+        [](const diskann::QueryStats &stats) { return stats.total_us; });
+    collective_stats["latency_999"] = diskann::get_percentile_stats(
+        stats, num_queries, 0.999,
+        [](const diskann::QueryStats &stats) { return stats.total_us; });
+    collective_stats["mean_ssd_ios"] = diskann::get_mean_stats(
+        stats, num_queries,
+        [](const diskann::QueryStats &stats) { return stats.n_ios; });
+    collective_stats["mean_dist_comps"] = diskann::get_mean_stats(
+        stats, num_queries,
+        [](const diskann::QueryStats &stats) { return stats.n_cmps; });
+    delete[] stats;
+    return std::make_pair(std::make_pair(ids, dists), collective_stats);
+  }
+
+
   auto batch_range_search_numpy_input(
       py::array_t<T, py::array::c_style | py::array::forcecast> &queries,
       const _u64 dim, const _u64 num_queries, const double range,
@@ -463,6 +503,10 @@ PYBIND11_MODULE(diskannpy, m) {
            &DiskANNIndex<float>::batch_search_numpy_input, py::arg("queries"),
            py::arg("dim"), py::arg("num_queries"), py::arg("knn"),
            py::arg("l_search"), py::arg("beam_width"), py::arg("num_threads"))
+      .def("batch_search_numpy_input_search_ls",
+           &DiskANNIndex<float>::batch_search_numpy_input_search_ls, py::arg("queries"),
+           py::arg("dim"), py::arg("num_queries"), py::arg("knn"),
+           py::arg("l_searchs"), py::arg("beam_width"), py::arg("num_threads"))
       .def("batch_range_search_numpy_input",
            &DiskANNIndex<float>::batch_range_search_numpy_input,
            py::arg("queries"), py::arg("dim"), py::arg("num_queries"),
@@ -513,6 +557,10 @@ PYBIND11_MODULE(diskannpy, m) {
            &DiskANNIndex<int8_t>::batch_search_numpy_input, py::arg("queries"),
            py::arg("dim"), py::arg("num_queries"), py::arg("knn"),
            py::arg("l_search"), py::arg("beam_width"), py::arg("num_threads"))
+      .def("batch_search_numpy_input_search_ls",
+           &DiskANNIndex<int8_t>::batch_search_numpy_input_search_ls, py::arg("queries"),
+           py::arg("dim"), py::arg("num_queries"), py::arg("knn"),
+           py::arg("l_searchs"), py::arg("beam_width"), py::arg("num_threads"))
       .def("batch_range_search_numpy_input",
            &DiskANNIndex<int8_t>::batch_range_search_numpy_input,
            py::arg("queries"), py::arg("dim"), py::arg("num_queries"),
@@ -565,6 +613,10 @@ PYBIND11_MODULE(diskannpy, m) {
            &DiskANNIndex<uint8_t>::batch_search_numpy_input, py::arg("queries"),
            py::arg("dim"), py::arg("num_queries"), py::arg("knn"),
            py::arg("l_search"), py::arg("beam_width"), py::arg("num_threads"))
+      .def("batch_search_numpy_input_search_ls",
+           &DiskANNIndex<uint8_t>::batch_search_numpy_input_search_ls, py::arg("queries"),
+           py::arg("dim"), py::arg("num_queries"), py::arg("knn"),
+           py::arg("l_searchs"), py::arg("beam_width"), py::arg("num_threads"))
       .def("batch_range_search_numpy_input",
            &DiskANNIndex<uint8_t>::batch_range_search_numpy_input,
            py::arg("queries"), py::arg("dim"), py::arg("num_queries"),

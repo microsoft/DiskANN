@@ -1,12 +1,14 @@
 # Copyright (c) Microsoft Corporation. All rights reserved.
 # Licensed under the MIT license.
 
+
+import diskannpy
+from diskannpy import Metric
+import faiss
+import hnswlib
 import time
 import argparse
 import numpy as np
-import diskannpy
-from diskannpy import Metric
-
 
 # parser = argparse.ArgumentParser()
 # parser.add_argument('query_path', type=str, help='Path to the input query set of vectors.')
@@ -19,14 +21,14 @@ from diskannpy import Metric
 # parser.add_argument('C', type=int, help='Number of nodes to cache for search.')
 # args = parser.parse_args()
 
-query_path = '/home/ubuntu/dataset/sift/sift_query_with_header.fvecs'
-ground_truth_path = '/home/ubuntu/dataset/sift/sift_gt_with_header.ivecs'
-index_path_prefix = '/home/ubuntu/graphs/diskann/py_sift1M.bin'
-output_path_prefix = '/home/ubuntu/DiskANN/python/logs/diskann_'
-K=10
+query_path = '/data/datasets/sift1M/sift_query.bin'
+ground_truth_path = '/data/datasets/sift1M/sift_groundtruth.bin'
+index_path_prefix = '/data/wzy/graphs/diskann/sift1M.bin'
+output_path_prefix = '/data/wzy/DiskANN/logs/python_'
+K= 10
 W = 1
-T=1
-C = 10
+T= 1
+C = 200
 
 
 
@@ -35,11 +37,12 @@ W = W
 # Use multi-threaded search only for batch mode.
 num_threads = T
 num_nodes_to_cache = C
-single_query_mode = False
-l_search = [40, 50, 60, 70, 80, 90, 100, 110, 120]
+single_query_mode = True
+l_search = [10,20,30,40, 50, 60, 70, 80, 90, 100, 110, 120]
 
 
 query_data = diskannpy.VectorFloat()
+query_data.append(0)
 ground_truth_ids = diskannpy.VectorUnsigned()
 ground_truth_dists = diskannpy.VectorFloat()
 num_queries, query_dims, query_aligned_dims = diskannpy.load_aligned_bin_float(query_path, query_data)
