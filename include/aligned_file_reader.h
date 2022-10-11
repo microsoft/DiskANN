@@ -42,7 +42,7 @@ struct IOContext {
   // reader should signal this memory after IO completion
   // TODO: WindowsAlignedFileReader can be modified to take advantage of this
   //   and can largely share code with the file reader for Bing.
-  volatile long m_completeCount = 0;
+  mutable volatile long m_completeCount = 0;
 
   IOContext()
       : m_pRequestsStatus(new std::vector<Status>()),
