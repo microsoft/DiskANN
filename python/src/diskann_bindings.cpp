@@ -203,6 +203,7 @@ struct DiskANNIndex {
 
 #pragma omp parallel for schedule(dynamic, 1)
     for (_u64 i = 0; i < num_queries; i++) {
+      if(l_searchs[i] == 0) continue;
       pq_flash_index->cached_beam_search(
           queries.data(i), knn, l_searchs[i], u64_ids.data() + i * knn,
           dists.mutable_data(i), beam_width, stats + i);
