@@ -157,6 +157,8 @@ namespace diskann {
         diskann::alloc_aligned((void **) &scratch.aligned_query_float,
                                this->aligned_dim * sizeof(float),
                                8 * sizeof(float));
+        diskann::alloc_aligned((void**)&scratch.aligned_nbr_scratch,
+                              (_u64)MAX_GRAPH_DEGREE * sizeof(unsigned), 256);
         scratch.visited = new tsl::robin_set<_u64>(4096);
         diskann::alloc_aligned((void **) &scratch.rotated_query,
                                this->aligned_dim * sizeof(float),
@@ -194,6 +196,7 @@ namespace diskann {
       diskann::aligned_free((void *) scratch.aligned_pqtable_dist_scratch);
       diskann::aligned_free((void *) scratch.aligned_dist_scratch);
       diskann::aligned_free((void *) scratch.aligned_query_float);
+      diskann::aligned_free((void *) scratch.aligned_nbr_scratch);
       diskann::aligned_free((void *) scratch.rotated_query);
       diskann::aligned_free((void *) scratch.aligned_query_T);
 
@@ -902,6 +905,7 @@ namespace diskann {
 
     // query <-> neighbor list
     float *dist_scratch = query_scratch->aligned_dist_scratch;
+    unsigned *nbr_scratch = query_scratch->aligned_nbr_scratch;
     _u8 *  pq_coord_scratch = query_scratch->aligned_pq_coord_scratch;
 
     // lambda to batch compute query<-> node distances in PQ space
@@ -1049,35 +1053,41 @@ namespace diskann {
 
         // compute node_nbrs <-> query dists in PQ space
         cpu_timer.reset();
-        compute_dists(node_nbrs, nnbrs, dist_scratch);
+
+        _u64 nnbrs_filtered = 0;
+        for (_u64 m = 0; m < nnbrs; ++m) {
+          unsigned id = node_nbrs[m];
+          if (visited.find(id) == visited.end()) {
+            nbr_scratch[nnbrs_filtered] = id;
+            nnbrs_filtered++;
+          }
+        }
+
+        compute_dists(nbr_scratch, nnbrs_filtered, dist_scratch);
         if (stats != nullptr) {
           stats->n_cmps += (double) nnbrs;
           stats->cpu_us += (double) cpu_timer.elapsed();
         }
 
         // process prefetched nhood
-        for (_u64 m = 0; m < nnbrs; ++m) {
-          unsigned id = node_nbrs[m];
-          if (visited.find(id) != visited.end()) {
+        for (_u64 m = 0; m < nnbrs_filtered; ++m) {
+          unsigned id = nbr_scratch[m];
+          visited.insert(id);
+          cmps++;
+          float dist = dist_scratch[m];
+          if (dist >= retset[cur_list_size - 1].distance &&
+              (cur_list_size == l_search))
             continue;
-          } else {
-            visited.insert(id);
-            cmps++;
-            float dist = dist_scratch[m];
-            if (dist >= retset[cur_list_size - 1].distance &&
-                (cur_list_size == l_search))
-              continue;
-            Neighbor nn(id, dist, true);
-            // Return position in sorted list where nn inserted.
-            auto r = InsertIntoPool(retset.data(), cur_list_size, nn);
-            if (cur_list_size < l_search)
-              ++cur_list_size;
-            if (r < nk)
-              // nk logs the best position in the retset that was
-              // updated due to neighbors of n.
-              nk = r;
+          Neighbor nn(id, dist, true);
+          // Return position in sorted list where nn inserted.
+          auto r = InsertIntoPool(retset.data(), cur_list_size, nn);
+          if (cur_list_size < l_search)
+            ++cur_list_size;
+          if (r < nk)
+            // nk logs the best position in the retset that was
+            // updated due to neighbors of n.
+            nk = r;
           }
-        }
       }
 #ifdef USE_BING_INFRA
       // process each frontier nhood - compute distances to unvisited nodes
@@ -1124,7 +1134,17 @@ namespace diskann {
         unsigned *node_nbrs = (node_buf + 1);
         // compute node_nbrs <-> query dist in PQ space
         cpu_timer.reset();
-        compute_dists(node_nbrs, nnbrs, dist_scratch);
+
+        _u64 nnbrs_filtered = 0;
+        for (_u64 m = 0; m < nnbrs; ++m) {
+          unsigned id = node_nbrs[m];
+          if (visited.find(id) == visited.end()) {
+            nbr_scratch[nnbrs_filtered] = id;
+            nnbrs_filtered++;
+          }
+        }
+
+        compute_dists(nbr_scratch, nnbrs_filtered, dist_scratch);
         if (stats != nullptr) {
           stats->n_cmps += (double) nnbrs;
           stats->cpu_us += (double) cpu_timer.elapsed();
@@ -1132,30 +1152,26 @@ namespace diskann {
 
         cpu_timer.reset();
         // process prefetch-ed nhood
-        for (_u64 m = 0; m < nnbrs; ++m) {
-          unsigned id = node_nbrs[m];
-          if (visited.find(id) != visited.end()) {
-            continue;
-          } else {
-            visited.insert(id);
-            cmps++;
-            float dist = dist_scratch[m];
-            if (stats != nullptr) {
-              stats->n_cmps++;
-            }
-            if (dist >= retset[cur_list_size - 1].distance &&
-                (cur_list_size == l_search))
-              continue;
-            Neighbor nn(id, dist, true);
-            auto     r = InsertIntoPool(
-                retset.data(), cur_list_size,
-                nn);  // Return position in sorted list where nn inserted.
-            if (cur_list_size < l_search)
-              ++cur_list_size;
-            if (r < nk)
-              nk = r;  // nk logs the best position in the retset that was
-                       // updated due to neighbors of n.
+        for (_u64 m = 0; m < nnbrs_filtered; ++m) {
+          unsigned id = nbr_scratch[m];
+          visited.insert(id);
+          cmps++;
+          float dist = dist_scratch[m];
+          if (stats != nullptr) {
+            stats->n_cmps++;
           }
+          if (dist >= retset[cur_list_size - 1].distance &&
+              (cur_list_size == l_search))
+            continue;
+          Neighbor nn(id, dist, true);
+          auto     r = InsertIntoPool(
+              retset.data(), cur_list_size,
+              nn);  // Return position in sorted list where nn inserted.
+          if (cur_list_size < l_search)
+            ++cur_list_size;
+          if (r < nk)
+            nk = r;  // nk logs the best position in the retset that was
+                      // updated due to neighbors of n.
         }
 
         if (stats != nullptr) {
