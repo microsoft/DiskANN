@@ -69,11 +69,11 @@ struct DiskANNIndex {
 
   int load_index(const std::string &index_path_prefix, const int num_threads,
                  const size_t num_nodes_to_cache, int cache_mechanism) {
-    const std::string pq_path = index_path_prefix + std::string("_pq");
+    //const std::string pq_path = index_path_prefix + std::string("_pq");
     const std::string index_path =
         index_path_prefix + std::string("_disk.index");
     int load_success =
-        pq_flash_index->load(num_threads, pq_path.c_str(), index_path.c_str());
+        pq_flash_index->load(num_threads, index_path.c_str());
     if (load_success != 0) {
       std::cout << "Index load failed" << std::endl;
       return load_success;
@@ -175,16 +175,16 @@ struct DiskANNIndex {
         r(i, j) = (unsigned) u64_ids[i * knn + j];
 
     std::unordered_map<std::string, double> collective_stats;
-    collective_stats["mean_latency"] = diskann::get_mean_stats(
+    collective_stats["mean_latency"] = diskann::get_mean_stats<double>(
         stats, num_queries,
         [](const diskann::QueryStats &stats) { return stats.total_us; });
-    collective_stats["latency_999"] = diskann::get_percentile_stats(
+    collective_stats["latency_999"] = diskann::get_percentile_stats<double>(
         stats, num_queries, 0.999,
         [](const diskann::QueryStats &stats) { return stats.total_us; });
-    collective_stats["mean_ssd_ios"] = diskann::get_mean_stats(
+    collective_stats["mean_ssd_ios"] = diskann::get_mean_stats<double>(
         stats, num_queries,
         [](const diskann::QueryStats &stats) { return stats.n_ios; });
-    collective_stats["mean_dist_comps"] = diskann::get_mean_stats(
+    collective_stats["mean_dist_comps"] = diskann::get_mean_stats<double>(
         stats, num_queries,
         [](const diskann::QueryStats &stats) { return stats.n_cmps; });
     delete[] stats;
@@ -234,16 +234,16 @@ struct DiskANNIndex {
     }
 
     std::unordered_map<std::string, double> collective_stats;
-    collective_stats["mean_latency"] = diskann::get_mean_stats(
+    collective_stats["mean_latency"] = diskann::get_mean_stats<double>(
         stats, num_queries,
         [](const diskann::QueryStats &stats) { return stats.total_us; });
-    collective_stats["latency_999"] = diskann::get_percentile_stats(
+    collective_stats["latency_999"] = diskann::get_percentile_stats<double>(
         stats, num_queries, 0.999,
         [](const diskann::QueryStats &stats) { return stats.total_us; });
-    collective_stats["mean_ssd_ios"] = diskann::get_mean_stats(
+    collective_stats["mean_ssd_ios"] = diskann::get_mean_stats<double>(
         stats, num_queries,
         [](const diskann::QueryStats &stats) { return stats.n_ios; });
-    collective_stats["mean_dist_comps"] = diskann::get_mean_stats(
+    collective_stats["mean_dist_comps"] = diskann::get_mean_stats<double>(
         stats, num_queries,
         [](const diskann::QueryStats &stats) { return stats.n_cmps; });
     delete[] stats;

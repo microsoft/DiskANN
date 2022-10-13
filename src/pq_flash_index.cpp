@@ -1287,7 +1287,7 @@ namespace diskann {
   diskann::Metric PQFlashIndex<T>::get_metric() {
         return this->metric;
   }
-  
+
 #ifdef EXEC_ENV_OLS
   template<typename T>
   char *PQFlashIndex<T>::getHeaderBytes() {

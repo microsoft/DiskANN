@@ -242,3 +242,24 @@ if (MSVC)
                    "Alternatively, use MSBuild to build:\n\n"
                    "msbuild.exe ${PROJECT_NAME}.sln /m /nologo /t:Build /p:Configuration=\"Release\" /property:Platform=\"x64\"\n")
 endif()
+
+if(PYBIND)
+    # Scikit-Build does not add your site-packages to the search path
+    # automatically, so we need to add it _or_ the pybind11 specific directory
+    # here.
+    execute_process(COMMAND python -c "import pybind11; print(pybind11.get_cmake_dir())"
+            OUTPUT_VARIABLE _tmp_dir
+            OUTPUT_STRIP_TRAILING_WHITESPACE COMMAND_ECHO STDOUT)
+    list(APPEND CMAKE_PREFIX_PATH "${_tmp_dir}")
+
+    # Now we can find pybind11
+    find_package(pybind11 CONFIG REQUIRED)
+
+    pybind11_add_module(diskannpy MODULE python/src/diskann_bindings.cpp)
+
+    target_compile_definitions(diskannpy PRIVATE VERSION_INFO=0.9.9) # wtf is this
+
+    #install(TARGETS diskannpy DESTINATION .)
+endif()
+
+
