@@ -1094,7 +1094,7 @@ namespace diskann {
 #ifdef USE_BING_INFRA
       // process each frontier nhood - compute distances to unvisited nodes
       int completedIndex = -1;
-      long requestCount = (long)frontier_read_reqs.size();
+      long requestCount = static_cast<long>(frontier_read_reqs.size());
       // If we issued read requests and if a read is complete or there are reads
       // in wait state, then enter the while loop.
       while (requestCount > 0 &&
