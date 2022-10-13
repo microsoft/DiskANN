@@ -807,17 +807,29 @@ namespace diskann {
   bool getNextCompletedRequest(const IOContext &ctx, size_t size,
                                int &completedIndex) {
     bool waitsRemaining = false;
-    for (int i = 0; i < size; i++) {
-      auto ithStatus = (*ctx.m_pRequestsStatus)[i];
-      if (ithStatus == IOContext::Status::READ_SUCCESS) {
-        completedIndex = i;
-        return true;
-      } else if (ithStatus == IOContext::Status::READ_WAIT) {
-        waitsRemaining = true;
+    long completeCount = ctx.m_completeCount;
+    do {
+      for (int i = 0; i < size; i++) {
+        auto ithStatus = (*ctx.m_pRequestsStatus)[i];
+        if (ithStatus == IOContext::Status::READ_SUCCESS) {
+          completedIndex = i;
+          return true;
+        } else if (ithStatus == IOContext::Status::READ_WAIT) {
+          waitsRemaining = true;
+        }
       }
-    }
+
+      // if we didn't find one in READ_SUCCESS, wait for one to complete.
+      if (waitsRemaining) {
+        WaitOnAddress(&ctx.m_completeCount, &completeCount,
+                      sizeof(completeCount), 100);
+          // this assumes the knowledge of the reader behavior (implicit
+          // contract). need better factoring?
+      }
+    } while (waitsRemaining);
+
     completedIndex = -1;
-    return waitsRemaining;
+    return false;
   }
 #endif
 
@@ -1082,14 +1094,12 @@ namespace diskann {
 #ifdef USE_BING_INFRA
       // process each frontier nhood - compute distances to unvisited nodes
       int completedIndex = -1;
+      long requestCount = static_cast<long>(frontier_read_reqs.size());
       // If we issued read requests and if a read is complete or there are reads
       // in wait state, then enter the while loop.
-      while (frontier_read_reqs.size() > 0 &&
-             getNextCompletedRequest(ctx, frontier_read_reqs.size(),
-                                     completedIndex)) {
-        if (completedIndex == -1) {  // all reads are waiting
-          continue;
-        }
+      while (requestCount > 0 &&
+             getNextCompletedRequest(ctx, requestCount, completedIndex)) {
+        assert(completedIndex >= 0);
         auto &frontier_nhood = frontier_nhoods[completedIndex];
         (*ctx.m_pRequestsStatus)[completedIndex] = IOContext::PROCESS_COMPLETE;
 #else
@@ -1244,6 +1254,9 @@ namespace diskann {
       }
     }
 
+#ifdef USE_BING_INFRA
+    ctx.m_completeCount = 0;
+#endif
     this->thread_data.push(data);
     this->thread_data.push_notify_all();
 
