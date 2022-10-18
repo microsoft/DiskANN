@@ -357,3 +357,13 @@ MigrationBackup/
 cscope*
 
 build/
+
+# jetbrains specific stuff
+.idea/
+cmake-build-debug/
+
+#python extension module ignores
+python/diskannpy.egg-info/
+python/dist/
+python/venv/
+

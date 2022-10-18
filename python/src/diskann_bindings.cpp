@@ -256,7 +256,11 @@ struct DiskANNIndex {
 
 PYBIND11_MODULE(diskannpy, m) {
   m.doc() = "DiskANN Python Bindings";
-  m.attr("__version__") = "0.2.0";
+#ifdef VERSION_INFO
+  m.attr("__version__") = VERSION_INFO;
+#else
+  m.attr("__version__") = "dev";
+#endif
 
   py::bind_vector<std::vector<unsigned>>(m, "VectorUnsigned");
   py::bind_vector<std::vector<float>>(m, "VectorFloat");
