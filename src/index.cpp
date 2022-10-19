@@ -23,7 +23,6 @@
 #include "math_utils.h"
 #include "memory_mapper.h"
 #include "parameters.h"
-#include "partition_and_pq.h"
 #include "timer.h"
 #include "utils.h"
 #include "windows_customizations.h"

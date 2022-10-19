@@ -3,7 +3,7 @@
 
 #include "math_utils.h"
 #include "pq.h"
-#include "partition_and_pq.h"
+#include "partition.h"
 
 
 #define KMEANS_ITERS_FOR_PQ 15

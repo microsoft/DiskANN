@@ -22,7 +22,7 @@
 #include "index.h"
 #include "parameters.h"
 #include "memory_mapper.h"
-#include "partition_and_pq.h"
+#include "partition.h"
 #ifdef _WINDOWS
 #include <xmmintrin.h>
 #endif
