@@ -1,9 +1,0 @@
-[build-system]
-requires = [
-    "setuptools>=59.6",
-    "pybind11>=2.10.0",
-    "cmake>=3.22",
-    "numpy>=1.23", # earlier versions might be fine, relax this if necessary
-    "scikit-build>=0.15.0",
-]
-build-backend = "setuptools.build_meta"

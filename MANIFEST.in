@@ -1,0 +1,11 @@
+include MANIFEST.in
+include *.txt
+include *.md
+include setup.py
+include pyproject.toml
+recursive-include gperftools *
+recursive-include include *
+recursive-include python *
+prune python/tests
+recursive-include src *
+recursive-include tests *

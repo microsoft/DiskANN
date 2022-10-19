@@ -61,9 +61,11 @@ target_link_libraries(merge_shards ${PROJECT_NAME} ${DISKANN_TOOLS_TCMALLOC_LINK
 add_executable(create_disk_layout create_disk_layout.cpp)
 target_link_libraries(create_disk_layout ${PROJECT_NAME} ${DISKANN_ASYNC_LIB} ${DISKANN_TOOLS_TCMALLOC_LINK_OPTIONS})
 
-
 # formatter
 if (LINUX)
-	add_custom_command(TARGET gen_random_slice PRE_BUILD COMMAND clang-format -i ../../../include/*.h ../../../include/dll/*.h ../../../src/*.cpp  ../../../tests/*.cpp ../../../src/dll/*.cpp ../../../tests/utils/*.cpp)
+	# this does not work with the relative paths in the python build.
+	# ideally we will specify a custom target like https://arcanis.me/en/2015/10/17/cppcheck-and-clang-format and have
+	# our cicd balk if we try to do a PR over improperly formatted code
+	#add_custom_command(TARGET gen_random_slice PRE_BUILD COMMAND clang-format -i ../../../include/*.h ../../../include/dll/*.h ../../../src/*.cpp  ../../../tests/*.cpp ../../../src/dll/*.cpp ../../../tests/utils/*.cpp)
 endif()
 

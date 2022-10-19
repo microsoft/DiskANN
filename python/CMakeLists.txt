@@ -1,7 +1,13 @@
 # Copyright (c) Microsoft Corporation. All rights reserved.
 # Licensed under the MIT license.
 
-execute_process(COMMAND python -c "import pybind11; print(pybind11.get_cmake_dir())"
+if (PYTHON_EXECUTABLE)
+    set(Python3_EXECUTABLE ${PYTHON_EXECUTABLE})
+endif()
+
+find_package(Python3 COMPONENTS Interpreter Development NumPy REQUIRED)
+
+execute_process(COMMAND ${Python3_EXECUTABLE} -c "import pybind11; print(pybind11.get_cmake_dir())"
         OUTPUT_VARIABLE _tmp_dir
         OUTPUT_STRIP_TRAILING_WHITESPACE COMMAND_ECHO STDOUT)
 list(APPEND CMAKE_PREFIX_PATH "${_tmp_dir}")
@@ -9,7 +15,7 @@ list(APPEND CMAKE_PREFIX_PATH "${_tmp_dir}")
 # Now we can find pybind11
 find_package(pybind11 CONFIG REQUIRED)
 
-execute_process(COMMAND python -c "import numpy; print(numpy.get_include())"
+execute_process(COMMAND ${Python3_EXECUTABLE} -c "import numpy; print(numpy.get_include())"
         OUTPUT_VARIABLE _numpy_include
         OUTPUT_STRIP_TRAILING_WHITESPACE COMMAND_ECHO STDOUT)
 
@@ -38,4 +44,12 @@ endif()
 set_target_properties(diskannpy PROPERTIES CXX_VISIBILITY_PRESET "hidden"
         CUDA_VISIBILITY_PRESET "hidden")
 
-target_compile_definitions(diskannpy PRIVATE VERSION_INFO="0.2.0")
+# generally, the VERSION_INFO flag is set by pyproject.toml, by way of setup.py.
+# attempts to locate the version within CMake fail because the version has to be available
+# to pyproject.toml for the sdist to work after we build it.
+
+if(NOT VERSION_INFO)
+    message(STATUS "No -DVERSION_INFO specified allegedly")
+    set(VERSION_INFO "0.0.0dev")
+endif()
+target_compile_definitions(diskannpy PRIVATE VERSION_INFO="${VERSION_INFO}")

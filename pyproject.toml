@@ -1,0 +1,25 @@
+[build-system]
+requires = [
+    "setuptools>=59.6",
+    "pybind11>=2.10.0",
+    "cmake>=3.22",
+    "numpy>=1.23", # earlier versions might be fine, relax this if necessary
+    "wheel",
+]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "diskannpy"
+version = "0.4.0"
+
+description = "DiskANN Python extension module"
+# readme = "../README.md"
+requires-python = ">=3.7"
+license = {text = "MIT License"}
+dependencies = [
+    "numpy"
+]
+authors = [
+    {name = "Harsha Vardhan Simhadri", email = "harshasi@microsoft.com"},
+    {name = "Dax Pryce", email = "daxpryce@microsoft.com"}
+]
