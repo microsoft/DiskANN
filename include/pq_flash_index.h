@@ -14,7 +14,7 @@
 #include "neighbor.h"
 #include "parameters.h"
 #include "percentile_stats.h"
-#include "pq_table.h"
+#include "pq.h"
 #include "utils.h"
 #include "windows_customizations.h"
 

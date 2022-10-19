@@ -1,50 +1,38 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT license.
 
-#pragma once
 
-#include "utils.h"
-
-#define NUM_PQ_CENTROIDS 256
+#include "pq.h"
 
 namespace diskann {
-  class FixedChunkPQTable {
-    float* tables = nullptr;  // pq_tables = float array of size [256 * ndims]
-    _u64   ndims = 0;         // ndims = true dimension of vectors
-    _u64   n_chunks = 0;
-    bool   use_rotation = false;
-    _u32*  chunk_offsets = nullptr;
-    float* centroid = nullptr;
-    float* tables_tr = nullptr;  // same as pq_tables, but col-major
-    float* rotmat_tr = nullptr;
+  FixedChunkPQTable::FixedChunkPQTable() {
+  }
 
-   public:
-    FixedChunkPQTable() {
-    }
-
-    virtual ~FixedChunkPQTable() {
+  FixedChunkPQTable::~FixedChunkPQTable() {
 #ifndef EXEC_ENV_OLS
-      if (tables != nullptr)
-        delete[] tables;
-      if (tables_tr != nullptr)
-        delete[] tables_tr;
-      if (chunk_offsets != nullptr)
-        delete[] chunk_offsets;
-      if (centroid != nullptr)
-        delete[] centroid;
-      if (rotmat_tr != nullptr)
-        delete[] rotmat_tr;
+    if (tables != nullptr)
+      delete[] tables;
+    if (tables_tr != nullptr)
+      delete[] tables_tr;
+    if (chunk_offsets != nullptr)
+      delete[] chunk_offsets;
+    if (centroid != nullptr)
+      delete[] centroid;
+    if (rotmat_tr != nullptr)
+      delete[] rotmat_tr;
 #endif
-    }
+  }
 
 #ifdef EXEC_ENV_OLS
-    void load_pq_centroid_bin(MemoryMappedFiles& files,
-                              const char* pq_table_file, size_t num_chunks){
+  void FixedChunkPQTable::load_pq_centroid_bin(MemoryMappedFiles& files,
+                                               const char*        pq_table_file,
+                                               size_t             num_chunks) {
 #else
-    void load_pq_centroid_bin(const char* pq_table_file, size_t num_chunks) {
+  void FixedChunkPQTable::load_pq_centroid_bin(const char* pq_table_file,
+                                               size_t      num_chunks) {
 #endif
 
-        _u64 nr, nc;
+    _u64        nr, nc;
     std::string rotmat_file =
         std::string(pq_table_file) + "_rotation_matrix.bin";
 
@@ -53,8 +41,8 @@ namespace diskann {
                              // to delete.
     diskann::load_bin<_u64>(files, pq_table_file, file_offset_data, nr, nc);
 #else
-      std::unique_ptr<_u64[]> file_offset_data;
-      diskann::load_bin<_u64>(pq_table_file, file_offset_data, nr, nc);
+    std::unique_ptr<_u64[]> file_offset_data;
+    diskann::load_bin<_u64>(pq_table_file, file_offset_data, nr, nc);
 #endif
 
     if (nr != 4) {
@@ -74,8 +62,8 @@ namespace diskann {
     diskann::load_bin<float>(files, pq_table_file, tables, nr, nc,
                              file_offset_data[0]);
 #else
-      diskann::load_bin<float>(pq_table_file, tables, nr, nc,
-                               file_offset_data[0]);
+    diskann::load_bin<float>(pq_table_file, tables, nr, nc,
+                             file_offset_data[0]);
 #endif
 
     if ((nr != NUM_PQ_CENTROIDS)) {
@@ -93,8 +81,8 @@ namespace diskann {
     diskann::load_bin<float>(files, pq_table_file, centroid, nr, nc,
                              file_offset_data[1]);
 #else
-      diskann::load_bin<float>(pq_table_file, centroid, nr, nc,
-                               file_offset_data[1]);
+    diskann::load_bin<float>(pq_table_file, centroid, nr, nc,
+                             file_offset_data[1]);
 #endif
 
     if ((nr != this->ndims) || (nc != 1)) {
@@ -111,8 +99,8 @@ namespace diskann {
     diskann::load_bin<uint32_t>(files, pq_table_file, chunk_offsets, nr, nc,
                                 file_offset_data[2]);
 #else
-      diskann::load_bin<uint32_t>(pq_table_file, chunk_offsets, nr, nc,
-                                  file_offset_data[2]);
+    diskann::load_bin<uint32_t>(pq_table_file, chunk_offsets, nr, nc,
+                                file_offset_data[2]);
 #endif
 
     if (nc != 1 || (nr != num_chunks + 1 && num_chunks != 0)) {
@@ -131,7 +119,7 @@ namespace diskann {
 
     if (file_exists(rotmat_file)) {
 #ifdef EXEC_ENV_OLS
-      diskann::load_bin<float>(files, rotmat_file, (float *&)rotmat_tr, nr, nc);
+      diskann::load_bin<float>(files, rotmat_file, (float*&) rotmat_tr, nr, nc);
 #else
       diskann::load_bin<float>(rotmat_file, rotmat_tr, nr, nc);
 #endif
@@ -152,12 +140,11 @@ namespace diskann {
     }
   }
 
-  _u32
-  get_num_chunks() {
+  _u32 FixedChunkPQTable::get_num_chunks() {
     return static_cast<_u32>(n_chunks);
   }
 
-  void preprocess_query(float* query_vec) {
+  void FixedChunkPQTable::preprocess_query(float* query_vec) {
     for (_u32 d = 0; d < ndims; d++) {
       query_vec[d] -= centroid[d];
     }
@@ -173,7 +160,8 @@ namespace diskann {
   }
 
   // assumes pre-processed query
-  void populate_chunk_distances(const float* query_vec, float* dist_vec) {
+  void FixedChunkPQTable::populate_chunk_distances(const float* query_vec,
+                                                   float*       dist_vec) {
     memset(dist_vec, 0, 256 * n_chunks * sizeof(float));
     // chunk wise distance computation
     for (_u64 chunk = 0; chunk < n_chunks; chunk++) {
@@ -189,7 +177,7 @@ namespace diskann {
     }
   }
 
-  float l2_distance(const float* query_vec, _u8* base_vec) {
+  float FixedChunkPQTable::l2_distance(const float* query_vec, _u8* base_vec) {
     float res = 0;
     for (_u64 chunk = 0; chunk < n_chunks; chunk++) {
       for (_u64 j = chunk_offsets[chunk]; j < chunk_offsets[chunk + 1]; j++) {
@@ -201,7 +189,8 @@ namespace diskann {
     return res;
   }
 
-  float inner_product(const float* query_vec, _u8* base_vec) {
+  float FixedChunkPQTable::inner_product(const float* query_vec,
+                                         _u8*         base_vec) {
     float res = 0;
     for (_u64 chunk = 0; chunk < n_chunks; chunk++) {
       for (_u64 j = chunk_offsets[chunk]; j < chunk_offsets[chunk + 1]; j++) {
@@ -217,7 +206,7 @@ namespace diskann {
   }
 
   // assumes no rotation is involved
-  void inflate_vector(_u8* base_vec, float* out_vec) {
+  void FixedChunkPQTable::inflate_vector(_u8* base_vec, float* out_vec) {
     for (_u64 chunk = 0; chunk < n_chunks; chunk++) {
       for (_u64 j = chunk_offsets[chunk]; j < chunk_offsets[chunk + 1]; j++) {
         const float* centers_dim_vec = tables_tr + (256 * j);
@@ -226,7 +215,8 @@ namespace diskann {
     }
   }
 
-  void populate_chunk_inner_products(const float* query_vec, float* dist_vec) {
+  void FixedChunkPQTable::populate_chunk_inner_products(const float* query_vec,
+                                                        float*       dist_vec) {
     memset(dist_vec, 0, 256 * n_chunks * sizeof(float));
     // chunk wise distance computation
     for (_u64 chunk = 0; chunk < n_chunks; chunk++) {
@@ -247,5 +237,4 @@ namespace diskann {
       }
     }
   }
-};  // namespace diskann
 }  // namespace diskann
