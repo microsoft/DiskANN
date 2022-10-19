@@ -15,8 +15,6 @@
 
 #include "windows_customizations.h"
 
-#define MAX_OPQ_ITERS 20
-
 template<typename T>
 void gen_random_slice(const std::string base_file,
                       const std::string output_prefix, double sampling_rate);
@@ -60,22 +58,3 @@ int partition_with_ram_budget(const std::string data_file,
                               const double sampling_rate, double ram_budget,
                               size_t            graph_degree,
                               const std::string prefix_path, size_t k_base);
-
-DISKANN_DLLEXPORT int generate_pq_pivots(
-    const float *train_data, size_t num_train, unsigned dim,
-    unsigned num_centers, unsigned num_pq_chunks, unsigned max_k_means_reps,
-    std::string pq_pivots_path, bool make_zero_mean = false);
-
-DISKANN_DLLEXPORT int generate_opq_pivots(const float *train_data,
-                                          size_t num_train, unsigned dim,
-                                          unsigned    num_centers,
-                                          unsigned    num_pq_chunks,
-                                          std::string opq_pivots_path,
-                                          bool        make_zero_mean = false);
-
-template<typename T>
-int generate_pq_data_from_pivots(const std::string data_file,
-                                 unsigned num_centers, unsigned num_pq_chunks,
-                                 std::string pq_pivots_path,
-                                 std::string pq_compressed_vectors_path,
-                                 bool        use_opq = false);
