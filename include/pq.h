@@ -46,4 +46,11 @@ namespace diskann {
 
     void populate_chunk_inner_products(const float* query_vec, float* dist_vec);
   }; 
+
+  void aggregate_coords(const unsigned* ids, const _u64 n_ids,
+                        const _u8* all_coords, const _u64 ndims, _u8* out);
+
+  void pq_dist_lookup(const _u8* pq_ids, const _u64 n_pts,
+                      const _u64 pq_nchunks, const float* pq_dists,
+                      float* dists_out);
 }  // namespace diskann
