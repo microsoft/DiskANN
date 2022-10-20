@@ -165,8 +165,6 @@ class AlignedFileReader;
 namespace diskann {
   static const size_t MAX_SIZE_OF_STREAMBUF = 2LL * 1024 * 1024 * 1024;
 
-  enum Metric { L2 = 0, INNER_PRODUCT = 1, COSINE = 2, FAST_L2 = 3, PQ = 4 };
-
   inline void alloc_aligned(void** ptr, size_t size, size_t align) {
     *ptr = nullptr;
     assert(IS_ALIGNED(size, align));
@@ -878,8 +876,6 @@ namespace diskann {
   DISKANN_DLLEXPORT void normalize_data_file(const std::string& inFileName,
                                              const std::string& outFileName);
 
-  template<typename T>
-  Distance<T>* get_distance_function(Metric m);
 };  // namespace diskann
 
 struct PivotContainer {
@@ -900,16 +896,6 @@ struct PivotContainer {
   size_t piv_id;
   float  piv_dist;
 };
-
-/*
-inline bool file_exists(const std::string& name) {
-  struct stat buffer;
-  auto        val = stat(name.c_str(), &buffer);
-  diskann::cout << " Stat(" << name.c_str() << ") returned: " << val
-                << std::endl;
-  return (val == 0);
-}
-*/
 
 inline bool validate_index_file_size(std::ifstream& in) {
   if (!in.is_open())
