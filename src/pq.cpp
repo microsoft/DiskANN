@@ -1,8 +1,10 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT license.
 
+#include "mkl.h"
+
 #include "pq.h"
-#include "math_utils.cpp"
+#include "math_utils.h"
 #include "tsl/robin_map.h"
 
 // block size for reading/ processing large files and matrices in blocks

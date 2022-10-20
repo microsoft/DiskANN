@@ -8,7 +8,6 @@
 #include <string>
 
 #include <omp.h>
-#include "mkl.h"
 #include "tsl/robin_map.h"
 #include "tsl/robin_set.h"
 
