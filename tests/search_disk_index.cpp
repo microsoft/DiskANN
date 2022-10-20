@@ -15,7 +15,7 @@
 #include "index.h"
 #include "math_utils.h"
 #include "memory_mapper.h"
-#include "partition_and_pq.h"
+#include "partition.h"
 #include "timer.h"
 #include "utils.h"
 #include "percentile_stats.h"

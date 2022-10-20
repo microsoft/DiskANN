@@ -12,13 +12,13 @@
 #include <map>
 #include <sstream>
 #include <string>
-#include "partition_and_pq.h"
-#include "utils.h"
-
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <time.h>
 #include <typeinfo>
+
+#include "partition.h"
+#include "utils.h"
 
 template<typename T>
 int analyze_norm(std::string base_file) {
