@@ -139,6 +139,8 @@ namespace diskann {
         memset(scratch.aligned_query_float, 0,
                this->aligned_dim * sizeof(float));
         memset(scratch.rotated_query, 0, this->aligned_dim * sizeof(float));
+        
+        scratch.full_retset.reserve(4096);
 
         ThreadData<T> data;
         data.ctx = ctx;
@@ -901,8 +903,8 @@ namespace diskann {
     std::vector<Neighbor> retset(l_search + 1);
     tsl::robin_set<_u64> &visited = *(query_scratch->visited);
 
-    std::vector<Neighbor> full_retset;
-    full_retset.reserve(4096);
+    std::vector<Neighbor>& full_retset = query_scratch->full_retset;
+    full_retset.clear();
     _u32                        best_medoid = 0;
     float                       best_dist = (std::numeric_limits<float>::max)();
     std::vector<SimpleNeighbor> medoid_dists;

@@ -48,6 +48,8 @@ namespace diskann {
 
     tsl::robin_set<_u64> *visited = nullptr;
 
+    std::vector<Neighbor> full_retset;
+
     void reset() {
       coord_idx = 0;
       sector_idx = 0;
