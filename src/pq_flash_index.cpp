@@ -100,7 +100,7 @@ namespace diskann {
   }
 
   template<typename T>
-  void PQFlashIndex<T>::setup_thread_data(_u64 nthreads) {
+  void PQFlashIndex<T>::setup_thread_data(_u64 nthreads, _u64 visited_reserve) {
     diskann::cout << "Setting up thread-specific contexts for nthreads: "
                   << nthreads << std::endl;
 // omp parallel for to generate unique thread IDs
@@ -129,7 +129,7 @@ namespace diskann {
         diskann::alloc_aligned((void **) &scratch.aligned_query_float,
                                this->aligned_dim * sizeof(float),
                                8 * sizeof(float));
-        scratch.visited = new tsl::robin_set<_u64>(4096);
+        scratch.visited = new tsl::robin_set<_u64>(visited_reserve);
         diskann::alloc_aligned((void **) &scratch.rotated_query,
                                this->aligned_dim * sizeof(float),
                                8 * sizeof(float));
@@ -140,7 +140,7 @@ namespace diskann {
                this->aligned_dim * sizeof(float));
         memset(scratch.rotated_query, 0, this->aligned_dim * sizeof(float));
         
-        scratch.full_retset.reserve(4096);
+        scratch.full_retset.reserve(visited_reserve);
 
         ThreadData<T> data;
         data.ctx = ctx;

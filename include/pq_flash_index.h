@@ -118,7 +118,8 @@ namespace diskann {
 
    protected:
     DISKANN_DLLEXPORT void use_medoids_data_as_centroids();
-    DISKANN_DLLEXPORT void setup_thread_data(_u64 nthreads);
+    DISKANN_DLLEXPORT void setup_thread_data(_u64 nthreads,
+                                             _u64 visited_reserve = 4096);
     DISKANN_DLLEXPORT void destroy_thread_data();
 
    private:
