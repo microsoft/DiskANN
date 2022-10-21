@@ -868,6 +868,7 @@ namespace diskann {
       tsl::robin_set<unsigned> &inserted_into_pool_rs,
       boost::dynamic_bitset<> &inserted_into_pool_bs, bool ret_frozen,
       bool search_invocation) {
+
     for (unsigned i = 0; i < Lsize + 1; i++) {
       best_L_nodes[i].distance = std::numeric_limits<float>::max();
     }

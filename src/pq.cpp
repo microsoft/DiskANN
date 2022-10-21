@@ -72,18 +72,17 @@ namespace diskann {
                     << file_offset_data[1] << " " << file_offset_data[2] << " "
                     << file_offset_data[3] << file_offset_data[4] << std::endl;
     } else {
-      throw diskann::ANNException(
-          "Wrong number of offsets in pq_pivots", -1, __FUNCSIG__,
-          __FILE__, __LINE__);
+      throw diskann::ANNException("Wrong number of offsets in pq_pivots", -1,
+                                  __FUNCSIG__, __FILE__, __LINE__);
     }
 
 #ifdef EXEC_ENV_OLS
 
-      diskann::load_bin<float>(files, pq_table_file, tables, nr, nc,
-                               file_offset_data[0]);
+    diskann::load_bin<float>(files, pq_table_file, tables, nr, nc,
+                             file_offset_data[0]);
 #else
-      diskann::load_bin<float>(pq_table_file, tables, nr, nc,
-                               file_offset_data[0]);
+    diskann::load_bin<float>(pq_table_file, tables, nr, nc,
+                             file_offset_data[0]);
 #endif
 
     if ((nr != NUM_PQ_CENTROIDS)) {
@@ -114,20 +113,18 @@ namespace diskann {
           "Error reading pq_pivots file at centroid data.", -1, __FUNCSIG__,
           __FILE__, __LINE__);
     }
-    
-    int chunk_offsets_index = 2;
-    if (use_old_filetype) 
-    {
-        chunk_offsets_index = 3;
-    } 
-#ifdef EXEC_ENV_OLS
-      diskann::load_bin<uint32_t>(files, pq_table_file, chunk_offsets, nr, nc,
-                                  file_offset_data[chunk_offsets_index]);
-#else
-      diskann::load_bin<uint32_t>(pq_table_file, chunk_offsets, nr, nc,
-                                  file_offset_data[chunk_offsets_index]);
-#endif
 
+    int chunk_offsets_index = 2;
+    if (use_old_filetype) {
+      chunk_offsets_index = 3;
+    }
+#ifdef EXEC_ENV_OLS
+    diskann::load_bin<uint32_t>(files, pq_table_file, chunk_offsets, nr, nc,
+                                file_offset_data[chunk_offsets_index]);
+#else
+    diskann::load_bin<uint32_t>(pq_table_file, chunk_offsets, nr, nc,
+                                file_offset_data[chunk_offsets_index]);
+#endif
 
     if (nc != 1 || (nr != num_chunks + 1 && num_chunks != 0)) {
       diskann::cerr << "Error loading chunk offsets file. numc: " << nc
@@ -296,7 +293,7 @@ namespace diskann {
   // num_pq_chunks (if it divides dimension, else rounded) chunks, and runs
   // k-means in each chunk to compute the PQ pivots and stores in bin format in
   // file pq_pivots_path as a s num_centers*dim floating point binary file
-  int generate_pq_pivots(const float* passed_train_data, size_t num_train,
+  int generate_pq_pivots(const float* const passed_train_data, size_t num_train,
                          unsigned dim, unsigned num_centers,
                          unsigned num_pq_chunks, unsigned max_k_means_reps,
                          std::string pq_pivots_path, bool make_zero_mean) {
@@ -923,6 +920,60 @@ namespace diskann {
     return 0;
   }
 
+  template<typename T>
+  void generate_disk_quantized_data(std::string data_file_to_use,
+                                    std::string disk_pq_pivots_path,
+                                    std::string disk_pq_compressed_vectors_path,
+                                    diskann::Metric    compareMetric,
+                                    const float* const train_data,
+                                    const size_t       train_data_size,
+                                    const size_t dim, size_t& disk_pq_dims) {
+    if (disk_pq_dims > dim)
+      disk_pq_dims = dim;
+
+    std::cout << "Compressing base for disk-PQ into " << disk_pq_dims
+              << " chunks " << std::endl;
+    generate_pq_pivots(train_data, train_data_size, (uint32_t) dim, 256,
+                       (uint32_t) disk_pq_dims, NUM_KMEANS_REPS_PQ,
+                       disk_pq_pivots_path, false);
+    if (compareMetric == diskann::Metric::INNER_PRODUCT)
+      generate_pq_data_from_pivots<float>(
+          data_file_to_use.c_str(), 256, (uint32_t) disk_pq_dims,
+          disk_pq_pivots_path, disk_pq_compressed_vectors_path);
+    else
+      generate_pq_data_from_pivots<T>(
+          data_file_to_use.c_str(), 256, (uint32_t) disk_pq_dims,
+          disk_pq_pivots_path, disk_pq_compressed_vectors_path);
+  }
+
+  template<typename T>
+  void generate_quantized_data(const std::string  data_file_to_use,
+                               const std::string  pq_pivots_path,
+                               const std::string  pq_compressed_vectors_path,
+                               diskann::Metric    compareMetric,
+                               const float* const train_data,
+                               const size_t train_data_size, const size_t dim,
+                               const size_t num_pq_chunks, const bool use_opq) {
+    bool make_zero_mean = true;
+    if (compareMetric == diskann::Metric::INNER_PRODUCT)
+      make_zero_mean = false;
+    if (use_opq)  // we also do not center the data for OPQ
+      make_zero_mean = false;
+
+    if (!use_opq) {
+      generate_pq_pivots(train_data, train_data_size, (uint32_t) dim,
+                         NUM_PQ_CENTROIDS, (uint32_t) num_pq_chunks,
+                         NUM_KMEANS_REPS_PQ, pq_pivots_path, make_zero_mean);
+    } else {
+      generate_opq_pivots(train_data, train_data_size, (_u32) dim,
+                          NUM_PQ_CENTROIDS, (_u32) num_pq_chunks,
+                          pq_pivots_path, make_zero_mean);
+    }
+    generate_pq_data_from_pivots<T>(data_file_to_use.c_str(), NUM_PQ_CENTROIDS,
+                                    (uint32_t) num_pq_chunks, pq_pivots_path,
+                                    pq_compressed_vectors_path, use_opq);
+  }
+
   // Instantations of supported templates
 
   template DISKANN_DLLEXPORT int generate_pq_data_from_pivots<int8_t>(
@@ -937,4 +988,43 @@ namespace diskann {
       const std::string data_file, unsigned num_centers, unsigned num_pq_chunks,
       std::string pq_pivots_path, std::string pq_compressed_vectors_path,
       bool use_opq);
+
+  template DISKANN_DLLEXPORT void generate_disk_quantized_data<int8_t>(
+      std::string data_file_to_use, std::string disk_pq_pivots_path,
+      std::string     disk_pq_compressed_vectors_path,
+      diskann::Metric compareMetric, const float* const train_data,
+      const size_t train_data_size, const size_t dim, size_t& disk_pq_dims);
+
+  template DISKANN_DLLEXPORT void generate_disk_quantized_data<uint8_t>(
+      std::string data_file_to_use, std::string disk_pq_pivots_path,
+      std::string     disk_pq_compressed_vectors_path,
+      diskann::Metric compareMetric, const float* const train_data,
+      const size_t train_data_size, const size_t dim, size_t& disk_pq_dims);
+
+  template DISKANN_DLLEXPORT void generate_disk_quantized_data<float>(
+      std::string data_file_to_use, std::string disk_pq_pivots_path,
+      std::string     disk_pq_compressed_vectors_path,
+      diskann::Metric compareMetric, const float* const train_data,
+      const size_t train_data_size, const size_t dim, size_t& disk_pq_dims);
+
+  template DISKANN_DLLEXPORT void generate_quantized_data<int8_t>(
+      const std::string data_file_to_use, const std::string pq_pivots_path,
+      const std::string pq_compressed_vectors_path,
+      diskann::Metric compareMetric, const float* const train_data,
+      const size_t train_data_size, const size_t dim,
+      const size_t num_pq_chunks, const bool use_opq);
+
+  template DISKANN_DLLEXPORT void generate_quantized_data<uint8_t>(
+      const std::string data_file_to_use, const std::string pq_pivots_path,
+      const std::string pq_compressed_vectors_path,
+      diskann::Metric compareMetric, const float* const train_data,
+      const size_t train_data_size, const size_t dim,
+      const size_t num_pq_chunks, const bool use_opq);
+
+  template DISKANN_DLLEXPORT void generate_quantized_data<float>(
+      const std::string data_file_to_use, const std::string pq_pivots_path,
+      const std::string pq_compressed_vectors_path,
+      diskann::Metric compareMetric, const float* const train_data,
+      const size_t train_data_size, const size_t dim,
+      const size_t num_pq_chunks, const bool use_opq);
 }  // namespace diskann

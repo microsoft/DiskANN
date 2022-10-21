@@ -67,7 +67,7 @@ namespace diskann {
       unsigned num_queries, std::vector<std::vector<_u32>> &groundtruth,
       std::vector<std::vector<_u32>> &our_results);
 
-  DISKANN_DLLEXPORT void read_idmap(const std::string &    fname,
+  DISKANN_DLLEXPORT void read_idmap(const std::string     &fname,
                                     std::vector<unsigned> &ivecs);
 
 #ifdef EXEC_ENV_OLS
@@ -110,9 +110,9 @@ namespace diskann {
       uint32_t nthreads, uint32_t start_bw = 2);
 
   template<typename T>
-  DISKANN_DLLEXPORT int build_disk_index(const char *    dataFilePath,
-                                         const char *    indexFilePath,
-                                         const char *    indexBuildParameters,
+  DISKANN_DLLEXPORT int build_disk_index(const char     *dataFilePath,
+                                         const char     *indexFilePath,
+                                         const char     *indexBuildParameters,
                                          diskann::Metric _compareMetric,
                                          bool            use_opq = false);
 
