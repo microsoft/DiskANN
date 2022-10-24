@@ -46,14 +46,16 @@ namespace diskann {
     float *aligned_query_float = nullptr;
     float *rotated_query = nullptr;
 
-    tsl::robin_set<_u64> *visited = nullptr;
-
+    tsl::robin_set<_u64>  visited;
+    std::vector<Neighbor> retset;
     std::vector<Neighbor> full_retset;
 
     void reset() {
       coord_idx = 0;
       sector_idx = 0;
-      visited->clear();  // does not deallocate memory.
+      visited.clear();  // does not deallocate memory.
+      retset.clear();
+      full_retset.clear();
     }
   };
 
@@ -192,12 +194,12 @@ namespace diskann {
     tsl::robin_map<_u32, T *> coord_cache;
 
     // thread-specific scratch
-    ConcurrentQueue<ThreadData<T>> thread_data;
-    _u64                           max_nthreads;
-    bool                           load_flag = false;
-    bool                           count_visited_nodes = false;
-    bool                           reorder_data_exists = false;
-    _u64                           reoreder_data_offset = 0;
+    ConcurrentQueue<ThreadData<T> *> thread_data;
+    _u64                             max_nthreads;
+    bool                             load_flag = false;
+    bool                             count_visited_nodes = false;
+    bool                             reorder_data_exists = false;
+    _u64                             reoreder_data_offset = 0;
 
 #ifdef EXEC_ENV_OLS
     // Set to a larger value than the actual header to accommodate
