@@ -29,7 +29,7 @@
 namespace diskann {
   template<typename T>
   struct QueryScratch {
-    T *  coord_scratch = nullptr;  // MUST BE AT LEAST [MAX_N_CMPS * data_dim]
+    T   *coord_scratch = nullptr;  // MUST BE AT LEAST [MAX_N_CMPS * data_dim]
     _u64 coord_idx = 0;            // index of next [data_dim] scratch to use
 
     char *sector_scratch =
@@ -42,7 +42,7 @@ namespace diskann {
         nullptr;  // MUST BE AT LEAST diskann MAX_DEGREE
     _u8 *aligned_pq_coord_scratch =
         nullptr;  // MUST BE AT LEAST  [N_CHUNKS * MAX_DEGREE]
-    T *    aligned_query_T = nullptr;
+    T     *aligned_query_T = nullptr;
     float *aligned_query_float = nullptr;
     float *rotated_query = nullptr;
 
@@ -50,20 +50,19 @@ namespace diskann {
     std::vector<Neighbor> retset;
     std::vector<Neighbor> full_retset;
 
-    void reset() {
-      coord_idx = 0;
-      sector_idx = 0;
-      visited.clear();  // does not deallocate memory.
-      retset.clear();
-      full_retset.clear();
-    }
+    QueryScratch(size_t aligned_dim, size_t visited_reserve);
+    ~QueryScratch();
+
+    void reset();
   };
 
   template<typename T>
   struct ThreadData {
     QueryScratch<T> scratch;
     IOContext       ctx;
-  };
+
+    ThreadData(size_t aligned_dim, size_t visited_reserve);
+  }; 
 
   template<typename T>
   class PQFlashIndex {
