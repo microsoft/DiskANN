@@ -2569,8 +2569,12 @@ namespace diskann {
   }
 
   template<typename T, typename TagT>
-  int Index<T, TagT>::insert_point(const T *point, const TagT tag) {
+  int Index<T, TagT>::insert_point(const T *point, const TagT& tag) {
     assert(_has_built);
+    if (tag == static_cast<TagT>(0)) 
+      throw diskann::ANNException(
+            "Do not insert point with tag 0. That is reserved for points hidden from the user.",
+            -1, __FUNCSIG__, __FILE__, __LINE__);
 
     std::shared_lock<std::shared_timed_mutex> shared_ul(_update_lock);
     std::unique_lock<std::shared_timed_mutex> tl(_tag_lock);
