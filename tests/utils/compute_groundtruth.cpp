@@ -75,7 +75,7 @@ void compute_l2sq(float *const points_l2sq, const float *const matrix,
 
 void distsq_to_points(
     const size_t dim,
-    float *      dist_matrix,  // Col Major, cols are queries, rows are points
+    float       *dist_matrix,  // Col Major, cols are queries, rows are points
     size_t npoints, const float *const points,
     const float *const points_l2sq,  // points in Col major
     size_t nqueries, const float *const queries,
@@ -103,7 +103,7 @@ void distsq_to_points(
 
 void inner_prod_to_points(
     const size_t dim,
-    float *      dist_matrix,  // Col Major, cols are queries, rows are points
+    float       *dist_matrix,  // Col Major, cols are queries, rows are points
     size_t npoints, const float *const points, size_t nqueries,
     const float *const queries,
     float *ones_vec = NULL)  // Scratchspace of num_data size and init to 1.0
@@ -208,28 +208,28 @@ void exact_knn(
       for (_u64 p = 0; p < k; p++)
         point_dist.emplace(
             p, dist_matrix[(ptrdiff_t) p +
-                           (ptrdiff_t)(q - q_b) * (ptrdiff_t) npoints]);
+                           (ptrdiff_t) (q - q_b) * (ptrdiff_t) npoints]);
       for (_u64 p = k; p < npoints; p++) {
         if (point_dist.top().second >
             dist_matrix[(ptrdiff_t) p +
-                        (ptrdiff_t)(q - q_b) * (ptrdiff_t) npoints])
+                        (ptrdiff_t) (q - q_b) * (ptrdiff_t) npoints])
           point_dist.emplace(
               p, dist_matrix[(ptrdiff_t) p +
-                             (ptrdiff_t)(q - q_b) * (ptrdiff_t) npoints]);
+                             (ptrdiff_t) (q - q_b) * (ptrdiff_t) npoints]);
         if (point_dist.size() > k)
           point_dist.pop();
       }
       for (ptrdiff_t l = 0; l < (ptrdiff_t) k; ++l) {
-        closest_points[(ptrdiff_t)(k - 1 - l) + (ptrdiff_t) q * (ptrdiff_t) k] =
-            point_dist.top().first;
-        dist_closest_points[(ptrdiff_t)(k - 1 - l) +
+        closest_points[(ptrdiff_t) (k - 1 - l) +
+                       (ptrdiff_t) q * (ptrdiff_t) k] = point_dist.top().first;
+        dist_closest_points[(ptrdiff_t) (k - 1 - l) +
                             (ptrdiff_t) q * (ptrdiff_t) k] =
             point_dist.top().second;
         point_dist.pop();
       }
       assert(std::is_sorted(
           dist_closest_points + (ptrdiff_t) q * (ptrdiff_t) k,
-          dist_closest_points + (ptrdiff_t)(q + 1) * (ptrdiff_t) k));
+          dist_closest_points + (ptrdiff_t) (q + 1) * (ptrdiff_t) k));
     }
     std::cout << "Computed exact k-NN for queries: [" << q_b << "," << q_e
               << ")" << std::endl;
@@ -346,18 +346,20 @@ template<typename T>
 int aux_main(const std::string &base_file, const std::string &query_file,
              const std::string &gt_file, size_t k,
              const diskann::Metric &metric,
-             const std::string &    tags_file = std::string("")) {
+             const std::string     &tags_file = std::string("")) {
   size_t npoints, nqueries, dim;
 
   float *base_data;
   float *query_data;
+
+  const bool tags_enabled = tags_file.empty() ? false : true;
 
   int num_parts = get_num_parts<T>(base_file.c_str());
   load_bin_as_float<T>(query_file.c_str(), query_data, nqueries, dim, 0);
 
   // load tags
   std::unordered_map<std::uint32_t, std::uint32_t> location_to_tag;
-  if (!tags_file.empty()) {
+  if (tags_enabled) {
     size_t         file_dim, file_num_points;
     std::uint32_t *tag_data;
     diskann::load_bin<std::uint32_t>(tags_file, tag_data, file_num_points,
@@ -368,7 +370,7 @@ int aux_main(const std::string &base_file, const std::string &query_file,
                                   __LINE__);
     }
 
-    // check if the point count match
+    // check if the point counts match
     size_t raw_pts, raw_dim;
     diskann::get_bin_metadata(base_file, raw_pts, raw_dim);
     if (raw_pts != file_num_points) {
@@ -385,13 +387,13 @@ int aux_main(const std::string &base_file, const std::string &query_file,
 
   std::vector<std::vector<std::pair<uint32_t, float>>> results(nqueries);
 
-  int *  closest_points = new int[nqueries * k];
+  int   *closest_points = new int[nqueries * k];
   float *dist_closest_points = new float[nqueries * k];
 
   for (int p = 0; p < num_parts; p++) {
     size_t start_id = p * PARTSIZE;
     load_bin_as_float<T>(base_file.c_str(), base_data, npoints, dim, p);
-    int *  closest_points_part = new int[nqueries * k];
+    int   *closest_points_part = new int[nqueries * k];
     float *dist_closest_points_part = new float[nqueries * k];
 
     exact_knn(dim, k, closest_points_part, dist_closest_points_part, npoints,
@@ -399,8 +401,11 @@ int aux_main(const std::string &base_file, const std::string &query_file,
 
     for (_u64 i = 0; i < nqueries; i++) {
       for (_u64 j = 0; j < k; j++) {
+        if (tags_enabled)
+          if (location_to_tag[closest_points_part[i * k + j] + start_id] == 0)
+            continue;
         results[i].push_back(std::make_pair(
-            (uint32_t)(closest_points_part[i * k + j] + start_id),
+            (uint32_t) (closest_points_part[i * k + j] + start_id),
             dist_closest_points_part[i * k + j]));
       }
     }
@@ -415,7 +420,7 @@ int aux_main(const std::string &base_file, const std::string &query_file,
     std::vector<std::pair<uint32_t, float>> &cur_res = results[i];
     std::sort(cur_res.begin(), cur_res.end(), custom_dist);
     for (_u64 j = 0; j < k; j++) {
-      if (!tags_file.empty()) {
+      if (tags_enabled) {
         std::uint32_t index_with_tag = location_to_tag[cur_res[j].first];
         closest_points[i * k + j] = (int32_t) index_with_tag;
       } else {
