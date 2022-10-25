@@ -51,6 +51,8 @@ namespace diskann {
     diskann::load_bin<_u64>(pq_table_file, file_offset_data, nr, nc);
 #endif
 
+    bool use_old_filetype = false;
+
     if (nr != 4 && nr != 5) {
       diskann::cout << "Error reading pq_pivots file " << pq_table_file
                     << ". Offsets dont contain correct metadata, # offsets = "
@@ -65,6 +67,7 @@ namespace diskann {
                     << file_offset_data[1] << " " << file_offset_data[2] << " "
                     << file_offset_data[3] << std::endl;
     } else if (nr == 5) {
+      use_old_filetype = true;
       diskann::cout << "Offsets: " << file_offset_data[0] << " "
                     << file_offset_data[1] << " " << file_offset_data[2] << " "
                     << file_offset_data[3] << file_offset_data[4] << std::endl;
@@ -74,8 +77,6 @@ namespace diskann {
           __FILE__, __LINE__);
     }
 
-    if (nr == 4)
-    {
 #ifdef EXEC_ENV_OLS
 
       diskann::load_bin<float>(files, pq_table_file, tables, nr, nc,
@@ -84,21 +85,6 @@ namespace diskann {
       diskann::load_bin<float>(pq_table_file, tables, nr, nc,
                                file_offset_data[0]);
 #endif
-    } else if (nr == 5) {
-#ifdef EXEC_ENV_OLS
-
-      diskann::load_bin<float>(files, pq_table_file, tables, nr, nc,
-                               file_offset_data[3]);
-#else
-      diskann::load_bin<float>(pq_table_file, tables, nr, nc,
-                               file_offset_data[3]);
-#endif
-    } else 
-    {
-      throw diskann::ANNException("Wrong number of offsets in pq_pivots", -1,
-                                  __FUNCSIG__, __FILE__, __LINE__);
-    }
-
 
     if ((nr != NUM_PQ_CENTROIDS)) {
       diskann::cout << "Error reading pq_pivots file " << pq_table_file
@@ -129,13 +115,26 @@ namespace diskann {
           __FILE__, __LINE__);
     }
 
+    if (use_old_filetype) 
+    {
 #ifdef EXEC_ENV_OLS
-    diskann::load_bin<uint32_t>(files, pq_table_file, chunk_offsets, nr, nc,
-                                file_offset_data[2]);
+      diskann::load_bin<uint32_t>(files, pq_table_file, chunk_offsets, nr, nc,
+                                  file_offset_data[3]);
 #else
-    diskann::load_bin<uint32_t>(pq_table_file, chunk_offsets, nr, nc,
-                                file_offset_data[2]);
+      diskann::load_bin<uint32_t>(pq_table_file, chunk_offsets, nr, nc,
+                                  file_offset_data[3]);
 #endif
+    } else 
+    {
+#ifdef EXEC_ENV_OLS
+      diskann::load_bin<uint32_t>(files, pq_table_file, chunk_offsets, nr, nc,
+                                  file_offset_data[2]);
+#else
+      diskann::load_bin<uint32_t>(pq_table_file, chunk_offsets, nr, nc,
+                                  file_offset_data[2]);
+#endif
+    }
+
 
     if (nc != 1 || (nr != num_chunks + 1 && num_chunks != 0)) {
       diskann::cerr << "Error loading chunk offsets file. numc: " << nc
