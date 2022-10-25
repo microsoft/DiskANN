@@ -51,26 +51,54 @@ namespace diskann {
     diskann::load_bin<_u64>(pq_table_file, file_offset_data, nr, nc);
 #endif
 
-    if (nr != 4) {
+    if (nr != 4 && nr != 5) {
       diskann::cout << "Error reading pq_pivots file " << pq_table_file
                     << ". Offsets dont contain correct metadata, # offsets = "
-                    << nr << ", but expecting " << 4;
+                    << nr << ", but expecting " << 4 << "or" << 5;
       throw diskann::ANNException(
           "Error reading pq_pivots file at offsets data.", -1, __FUNCSIG__,
           __FILE__, __LINE__);
     }
 
-    diskann::cout << "Offsets: " << file_offset_data[0] << " "
-                  << file_offset_data[1] << " " << file_offset_data[2] << " "
-                  << file_offset_data[3] << std::endl;
+    if (nr == 4) {
+      diskann::cout << "Offsets: " << file_offset_data[0] << " "
+                    << file_offset_data[1] << " " << file_offset_data[2] << " "
+                    << file_offset_data[3] << std::endl;
+    } else if (nr == 5) {
+      diskann::cout << "Offsets: " << file_offset_data[0] << " "
+                    << file_offset_data[1] << " " << file_offset_data[2] << " "
+                    << file_offset_data[3] << file_offset_data[4] << std::endl;
+    } else {
+      throw diskann::ANNException(
+          "Wrong number of offsets in pq_pivots", -1, __FUNCSIG__,
+          __FILE__, __LINE__);
+    }
 
+    if (nr == 4)
+    {
 #ifdef EXEC_ENV_OLS
-    diskann::load_bin<float>(files, pq_table_file, tables, nr, nc,
-                             file_offset_data[0]);
+
+      diskann::load_bin<float>(files, pq_table_file, tables, nr, nc,
+                               file_offset_data[0]);
 #else
-    diskann::load_bin<float>(pq_table_file, tables, nr, nc,
-                             file_offset_data[0]);
+      diskann::load_bin<float>(pq_table_file, tables, nr, nc,
+                               file_offset_data[0]);
 #endif
+    } else if (nr == 5) {
+#ifdef EXEC_ENV_OLS
+
+      diskann::load_bin<float>(files, pq_table_file, tables, nr, nc,
+                               file_offset_data[3]);
+#else
+      diskann::load_bin<float>(pq_table_file, tables, nr, nc,
+                               file_offset_data[3]);
+#endif
+    } else 
+    {
+      throw diskann::ANNException("Wrong number of offsets in pq_pivots", -1,
+                                  __FUNCSIG__, __FILE__, __LINE__);
+    }
+
 
     if ((nr != NUM_PQ_CENTROIDS)) {
       diskann::cout << "Error reading pq_pivots file " << pq_table_file
