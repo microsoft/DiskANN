@@ -9,6 +9,8 @@
 
 // block size for reading/processing large files and matrices in blocks
 #define BLOCK_SIZE 5000000
+#define OLD_PQ_NUM_METADATA 5
+#define NEW_PQ_NUM_METADATA 4
 
 namespace diskann {
   FixedChunkPQTable::FixedChunkPQTable() {
@@ -51,13 +53,20 @@ namespace diskann {
     diskann::load_bin<_u64>(pq_table_file, file_offset_data, nr, nc);
 #endif
 
-    if (nr != 4) {
+    bool using_old_pq_format = false; // old PQ format includes a rearrangement_perm file which is no longer used
+
+    if (nr != NEW_PQ_NUM_METADATA && nr != OLD_PQ_NUM_METADATA) {
       diskann::cout << "Error reading pq_pivots file " << pq_table_file
                     << ". Offsets dont contain correct metadata, # offsets = "
-                    << nr << ", but expecting " << 4;
+                    << nr;
       throw diskann::ANNException(
           "Error reading pq_pivots file at offsets data.", -1, __FUNCSIG__,
           __FILE__, __LINE__);
+    }
+
+    if (nr == OLD_PQ_NUM_METADATA) {
+      using_old_pq_format = true;
+      diskann::cout << "Using old PQ format, but skipping rearrangement permutation file." << std::endl;
     }
 
     diskann::cout << "Offsets: " << file_offset_data[0] << " "
@@ -101,12 +110,17 @@ namespace diskann {
           __FILE__, __LINE__);
     }
 
+_u64 chunk_offset_file_location = file_offset_data[2];
+if (using_old_pq_format) {
+  chunk_offset_file_location = file_offset_data[3];
+}
+
 #ifdef EXEC_ENV_OLS
     diskann::load_bin<uint32_t>(files, pq_table_file, chunk_offsets, nr, nc,
-                                file_offset_data[2]);
+                                chunk_offset_file_location);
 #else
     diskann::load_bin<uint32_t>(pq_table_file, chunk_offsets, nr, nc,
-                                file_offset_data[2]);
+                                chunk_offset_file_location);
 #endif
 
     if (nc != 1 || (nr != num_chunks + 1 && num_chunks != 0)) {
