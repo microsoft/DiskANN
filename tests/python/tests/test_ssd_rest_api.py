@@ -22,6 +22,7 @@ class TestSSDRestApi(unittest.TestCase):
     def setUpClass(cls):
         if "DISKANN_REST_SERVER" in os.environ:
             cls._rest_address = os.environ["DISKANN_REST_SERVER"]
+            cls._cleanup_lambda = lambda : None
         else:
             if "DISKANN_BUILD_DIR" not in os.environ:
                 raise Exception("We require the environment variable DISKANN_BUILD_DIR be set to the diskann build directory on disk")
