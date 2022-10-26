@@ -580,16 +580,14 @@ namespace diskann {
     if (writer.fail()) {
       char buff[1024];
 #ifdef _WINDOWS
-      strerror_s(buff, 1024, errno);
+      char* error_str = strerror_s(buff, 1024, errno);
 #else
-      strerror_r(errno, buff, 1024);
+      char* error_str = strerror_r(errno, buff, 1024);
 #endif
-      diskann::cerr << std::string("Failed to open file") + filename +
-                           " for write because " + buff
-                    << std::endl;
-      throw diskann::ANNException(std::string("Failed to open file ") +
-                                      filename + " for write because: " + buff,
-                                  -1);
+      std::string error_message = std::string("Failed to open file") + filename +
+          " for write because " + ((0 == error_str) ? buff : error_str);
+      diskann::cerr << error_message << std::endl;
+      throw diskann::ANNException(error_message, -1);
     }
   }
 
