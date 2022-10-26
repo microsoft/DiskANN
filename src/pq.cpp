@@ -56,7 +56,7 @@ namespace diskann {
     if (nr != 4 && nr != 5) {
       diskann::cout << "Error reading pq_pivots file " << pq_table_file
                     << ". Offsets dont contain correct metadata, # offsets = "
-                    << nr << ", but expecting " << 4 << "or" << 5;
+                    << nr << ", but expecting " << 4 << " or " << 5;
       throw diskann::ANNException(
           "Error reading pq_pivots file at offsets data.", -1, __FUNCSIG__,
           __FILE__, __LINE__);
@@ -114,26 +114,19 @@ namespace diskann {
           "Error reading pq_pivots file at centroid data.", -1, __FUNCSIG__,
           __FILE__, __LINE__);
     }
-
+    
+    int chunk_offsets_index = 2;
     if (use_old_filetype) 
     {
+        chunk_offsets_index = 3;
+    } 
 #ifdef EXEC_ENV_OLS
       diskann::load_bin<uint32_t>(files, pq_table_file, chunk_offsets, nr, nc,
-                                  file_offset_data[3]);
+                                  file_offset_data[chunk_offsets_index]);
 #else
       diskann::load_bin<uint32_t>(pq_table_file, chunk_offsets, nr, nc,
-                                  file_offset_data[3]);
+                                  file_offset_data[chunk_offsets_index]);
 #endif
-    } else 
-    {
-#ifdef EXEC_ENV_OLS
-      diskann::load_bin<uint32_t>(files, pq_table_file, chunk_offsets, nr, nc,
-                                  file_offset_data[2]);
-#else
-      diskann::load_bin<uint32_t>(pq_table_file, chunk_offsets, nr, nc,
-                                  file_offset_data[2]);
-#endif
-    }
 
 
     if (nc != 1 || (nr != num_chunks + 1 && num_chunks != 0)) {
