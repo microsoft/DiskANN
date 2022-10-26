@@ -141,7 +141,6 @@ namespace diskann {
                                   const unsigned num_threads,
                                   const char* tagsFile, Metric m)
       : BaseSearch(tagsFile) {
-    std::shared_ptr<AlignedFileReader> reader = nullptr;
 #ifdef _WINDOWS
 #ifndef USE_BING_INFRA
     reader.reset(new WindowsAlignedFileReader());
@@ -170,12 +169,7 @@ namespace diskann {
     std::cout << "Caching " << num_nodes_to_cache
               << " BFS nodes around medoid(s)" << std::endl;
     _index->cache_bfs_levels(num_nodes_to_cache, node_list);
-    //_index->generate_cache_list_from_sample_queries(
-    ///    warmup_query_file, 15, 6, num_nodes_to_cache, num_threads,
-    ///    node_list);
     _index->load_cache_list(node_list);
-    node_list.clear();
-    node_list.shrink_to_fit();
     omp_set_num_threads(num_threads);
   }
 

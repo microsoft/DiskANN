@@ -133,5 +133,6 @@ namespace diskann {
    private:
     unsigned int                              _dimensions, _numPoints;
     std::unique_ptr<diskann::PQFlashIndex<T>> _index;
+    std::shared_ptr<AlignedFileReader> reader;
   };
 }  // namespace diskann
