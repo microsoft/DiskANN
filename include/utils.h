@@ -48,15 +48,16 @@ typedef int FileHandle;
 // https://github.com/Microsoft/BLAS-on-flash/blob/master/include/utils.h
 // round up X to the nearest multiple of Y
 #define ROUND_UP(X, Y) \
-  ((((uint64_t)(X) / (Y)) + ((uint64_t)(X) % (Y) != 0)) * (Y))
+  ((((uint64_t) (X) / (Y)) + ((uint64_t) (X) % (Y) != 0)) * (Y))
 
-#define DIV_ROUND_UP(X, Y) (((uint64_t)(X) / (Y)) + ((uint64_t)(X) % (Y) != 0))
+#define DIV_ROUND_UP(X, Y) \
+  (((uint64_t) (X) / (Y)) + ((uint64_t) (X) % (Y) != 0))
 
 // round down X to the nearest multiple of Y
-#define ROUND_DOWN(X, Y) (((uint64_t)(X) / (Y)) * (Y))
+#define ROUND_DOWN(X, Y) (((uint64_t) (X) / (Y)) * (Y))
 
 // alignment tests
-#define IS_ALIGNED(X, Y) ((uint64_t)(X) % (uint64_t)(Y) == 0)
+#define IS_ALIGNED(X, Y) ((uint64_t) (X) % (uint64_t) (Y) == 0)
 #define IS_512_ALIGNED(X) IS_ALIGNED(X, 512)
 #define IS_4096_ALIGNED(X) IS_ALIGNED(X, 4096)
 #define METADATA_SIZE \
@@ -156,6 +157,10 @@ inline int delete_file(const std::string& fileName) {
     return 0;
   }
 }
+
+#ifdef EXEC_ENV_OLS
+class AlignedFileReader;
+#endif
 
 namespace diskann {
   static const size_t MAX_SIZE_OF_STREAMBUF = 2LL * 1024 * 1024 * 1024;
@@ -311,7 +316,6 @@ namespace diskann {
                  2 * sizeof(uint32_t));  // No need to copy!
   }
 
-  class AlignedFileReader;
   DISKANN_DLLEXPORT void get_bin_metadata(AlignedFileReader& reader,
                                           size_t& npts, size_t& ndim,
                                           size_t offset = 0);
@@ -937,7 +941,7 @@ inline void normalize(T* arr, size_t dim) {
   }
   sum = sqrt(sum);
   for (uint32_t i = 0; i < dim; i++) {
-    arr[i] = (T)(arr[i] / sum);
+    arr[i] = (T) (arr[i] / sum);
   }
 }
 

@@ -4,10 +4,6 @@
 #include <cstring>
 #include <iostream>
 
-#ifdef EXEC_ENV_OLS
-#include "ANNLoggingImpl.hpp"
-#endif
-
 #include "logger_impl.h"
 #include "windows_customizations.h"
 
@@ -19,6 +15,14 @@ namespace diskann {
   DISKANN_DLLEXPORT std::basic_ostream<char> cout(&coutBuff);
   DISKANN_DLLEXPORT std::basic_ostream<char> cerr(&cerrBuff);
 
+#ifdef EXEC_ENV_OLS
+  std::function<void(LogLevel, const char*)> g_logger;
+
+  void SetCustomLogger(std::function<void(LogLevel, const char*)> logger) {
+    g_logger = logger;
+  }
+#endif
+
   ANNStreamBuf::ANNStreamBuf(FILE* fp) {
     if (fp == nullptr) {
       throw diskann::ANNException(
@@ -29,8 +33,7 @@ namespace diskann {
           "The custom logger only supports stdout and stderr.", -1);
     }
     _fp = fp;
-    _logLevel = (_fp == stdout) ? ANNIndex::LogLevel::LL_Info
-                                : ANNIndex::LogLevel::LL_Error;
+    _logLevel = (_fp == stdout) ? LogLevel::LL_Info : LogLevel::LL_Error;
 #ifdef EXEC_ENV_OLS
     _buf = new char[BUFFER_SIZE + 1];  // See comment in the header
 #else
@@ -77,7 +80,10 @@ namespace diskann {
   void ANNStreamBuf::logImpl(char* str, int num) {
 #ifdef EXEC_ENV_OLS
     str[num] = '\0';  // Safe. See the c'tor.
-    DiskANNLogging(_logLevel, str);
+    // Invoke the OLS custom logging function.
+    if (g_logger) {
+      g_logger(_logLevel, str);
+    }
 #else
     fwrite(str, sizeof(char), num, _fp);
     fflush(_fp);

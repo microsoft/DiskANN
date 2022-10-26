@@ -32,5 +32,5 @@ jobs:
 
     - name: Run configure and build
       run: |
-        mkdir build && cd build && cmake .. && msbuild diskann.sln /m /nologo /t:Build /p:Configuration="Release" /property:Platform="x64"
+        mkdir build && cd build && cmake .. && msbuild diskann.sln /m /nologo /t:Build /p:Configuration="Release" /property:Platform="x64" -consoleloggerparameters:"ErrorsOnly;Summary"
       shell: cmd

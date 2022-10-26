@@ -21,8 +21,8 @@
 #include "index.h"
 #include "mkl.h"
 #include "omp.h"
-#include "partition_and_pq.h"
 #include "percentile_stats.h"
+#include "partition.h"
 #include "pq_flash_index.h"
 #include "tsl/robin_set.h"
 

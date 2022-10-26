@@ -13,7 +13,7 @@
 #include "math_utils.h"
 #include "memory_mapper.h"
 #include "pq_flash_index.h"
-#include "partition_and_pq.h"
+#include "partition.h"
 #include "timer.h"
 
 #ifndef _WINDOWS
