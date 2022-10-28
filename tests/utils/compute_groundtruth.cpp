@@ -418,19 +418,27 @@ int aux_main(const std::string &base_file, const std::string &query_file,
   for (_u64 i = 0; i < nqueries; i++) {
     std::vector<std::pair<uint32_t, float>> &cur_res = results[i];
     std::sort(cur_res.begin(), cur_res.end(), custom_dist);
-    for (_u64 j = 0; j < k; j++) {
+    _u64 j = 0;
+    for (auto iter : cur_res) {
+      if (j == k)
+        break;
       if (!tags_file.empty()) {
-        std::uint32_t index_with_tag = location_to_tag[cur_res[j].first];
+        std::uint32_t index_with_tag = location_to_tag[iter.first];
         closest_points[i * k + j] = (int32_t) index_with_tag;
       } else {
-        closest_points[i * k + j] = (int32_t) cur_res[j].first;
+        closest_points[i * k + j] = (int32_t) iter.first;
       }
 
       if (metric == diskann::Metric::INNER_PRODUCT)
-        dist_closest_points[i * k + j] = -cur_res[j].second;
+        dist_closest_points[i * k + j] = -iter.second;
       else
-        dist_closest_points[i * k + j] = cur_res[j].second;
+        dist_closest_points[i * k + j] = iter.second;
+
+      ++j;
     }
+    if (j < k)
+      std::cout << "WARNING: found less than k GT entries for query " << i
+                << std::endl;
   }
 
   save_groundtruth_as_one_file(gt_file, closest_points, dist_closest_points,
