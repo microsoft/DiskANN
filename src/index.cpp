@@ -2744,8 +2744,8 @@ namespace diskann {
   void Index<T, TagT>::count_nodes_at_bfs_levels() const {
     boost::dynamic_bitset<> visited(_max_points + _num_frozen_pts);
 
-    size_t                   MAX_BFS_LEVELS = 32;
-    tsl::robin_set<unsigned> bfs_sets[MAX_BFS_LEVELS];
+    size_t MAX_BFS_LEVELS = 32;
+    auto   bfs_sets = new tsl::robin_set<unsigned>[MAX_BFS_LEVELS];
 
     if (_dynamic_index)
       for (unsigned i = _max_points; i < _max_points + _num_frozen_pts; ++i) {
@@ -2767,13 +2767,15 @@ namespace diskann {
         break;
       for (auto node : bfs_sets[l]) {
         for (auto nghbr : _final_graph[node]) {
-          if (not visited.test(nghbr)) {
+          if (!visited.test(nghbr)) {
             visited.set(nghbr);
             bfs_sets[l + 1].insert(nghbr);
           }
         }
       }
     }
+
+    delete[] bfs_sets;
   }
 
   template<typename T, typename TagT>
