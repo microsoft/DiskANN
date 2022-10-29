@@ -2747,18 +2747,16 @@ namespace diskann {
     size_t MAX_BFS_LEVELS = 32;
     auto   bfs_sets = new tsl::robin_set<unsigned>[MAX_BFS_LEVELS];
 
-    if (_dynamic_index)
+    if (_dynamic_index) {
       for (unsigned i = _max_points; i < _max_points + _num_frozen_pts; ++i) {
-        for (auto node : _final_graph[i]) {
-          bfs_sets[0].insert(node);
-          visited.set(node);
-        }
+        bfs_sets[0].insert(i);
+        visited.set(i);
       }
-    else
-      for (auto node : _final_graph[_start]) {
-        bfs_sets[0].insert(node);
-        visited.set(node);
-      }
+    }
+    else {
+      bfs_sets[0].insert(_start);
+      visited.set(_start);
+    }
 
     for (size_t l = 0; l < MAX_BFS_LEVELS - 1; ++l) {
       diskann::cout << "Number of nodes at BFS level " << l << " is "
