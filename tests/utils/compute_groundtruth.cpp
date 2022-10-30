@@ -277,7 +277,7 @@ inline void load_bin_as_float(const char *filename, float *&data,
   reader.read((char *) &ndims_i32, sizeof(int));
   uint64_t start_id = part_num * PARTSIZE;
   uint64_t end_id = (std::min)(start_id + PARTSIZE, (uint64_t) npts_i32);
-  npts_u64 = (uint64_t) end_id - (uint64_t) start_id;
+  npts_u64 = end_id - start_id;
   ndims_u64 = (uint64_t) ndims_i32;
   std::cout << "#pts in part = " << npts_u64 << ", #dims = " << ndims_u64
             << ", size = " << npts_u64 * ndims_u64 * sizeof(T) << "B"

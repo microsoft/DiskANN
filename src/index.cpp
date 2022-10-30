@@ -2569,7 +2569,7 @@ namespace diskann {
   }
 
   template<typename T, typename TagT>
-  int Index<T, TagT>::insert_point(const T *point, const TagT& tag) {
+  int Index<T, TagT>::insert_point(const T *point, const TagT tag) {
     assert(_has_built);
     if (tag == static_cast<TagT>(0)) 
       throw diskann::ANNException(

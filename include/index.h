@@ -196,7 +196,7 @@ namespace diskann {
                                               std::vector<T *> &res_vectors);
 
     // Will fail if tag already in the index or if tag=0.
-    DISKANN_DLLEXPORT int insert_point(const T *point, const TagT &tag);
+    DISKANN_DLLEXPORT int insert_point(const T *point, const TagT tag);
 
     // call this before issuing deletions to sets relevant flags
     DISKANN_DLLEXPORT int enable_delete();
