@@ -244,6 +244,8 @@ namespace diskann {
 
     DISKANN_DLLEXPORT void print_status() const;
 
+    DISKANN_DLLEXPORT void count_nodes_at_bfs_levels() const;
+
     // This variable MUST be updated if the number of entries in the metadata
     // change.
     DISKANN_DLLEXPORT static const int METADATA_ROWS = 5;
