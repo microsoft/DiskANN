@@ -1509,8 +1509,8 @@ namespace diskann {
     size_t max = 0, min = 1 << 30, total = 0, cnt = 0;
     for (size_t i = 0; i < (_nd + _num_frozen_pts); i++) {
       auto &pool = _final_graph[i];
-      max = (std::max)(max, pool.size());
-      min = (std::min)(min, pool.size());
+      max = std::max(max, pool.size());
+      min = std::min(min, pool.size());
       total += pool.size();
       if (pool.size() < 2)
         cnt++;
@@ -1595,8 +1595,8 @@ namespace diskann {
     size_t max = 0, min = SIZE_MAX, total = 0, cnt = 0;
     for (size_t i = 0; i < _nd; i++) {
       auto &pool = _final_graph[i];
-      max = (std::max)(max, pool.size());
-      min = (std::min)(min, pool.size());
+      max = std::max(max, pool.size());
+      min = std::min(min, pool.size());
       total += pool.size();
       if (pool.size() < 2)
         cnt++;
@@ -1605,7 +1605,7 @@ namespace diskann {
                   << "  avg:" << (float) total / (float) (_nd + _num_frozen_pts)
                   << "  min:" << min << "  count(deg<2):" << cnt << std::endl;
 
-    _max_observed_degree = (std::max)((unsigned) max, _max_observed_degree);
+    _max_observed_degree = std::max((unsigned) max, _max_observed_degree);
     _has_built = true;
   }
 

@@ -450,9 +450,9 @@ namespace diskann {
     bool _is_saved = false;  // Gopal. Checking if the index is already saved.
     bool _conc_consolidate = false;  // use _lock while searching
 
-    std::vector<non_recursive_mutex>
-                                     _locks;  // Per node lock, cardinality=max_points_
-    std::vector<non_recursive_mutex> _locks_in;  // Per node lock
+    // Per node lock, cardinality=max_points_
+    std::vector<non_recursive_mutex> _locks;
+    std::vector<non_recursive_mutex> _locks_in;
 
     // If acquiring multiple locks below, acquire locks in the order below
     std::shared_timed_mutex  // RW mutex between save/load (exclusive lock) and
