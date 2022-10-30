@@ -55,7 +55,7 @@ int main(int argc, char** argv) {
                                     true, true);
   {
     std::vector<TagT> tags(num_points - num_incr);
-    std::iota(tags.begin(), tags.end(), 0);
+    std::iota(tags.begin(), tags.end(), 1);
 
     if (argc > 10) {
       std::string frozen_points_file(argv[10]);
@@ -77,7 +77,7 @@ int main(int argc, char** argv) {
     diskann::Timer timer;
     for (size_t i = num_points - num_incr; i < num_points; ++i) {
       index.insert_point(data_load + i * aligned_dim, paras, pool, tmp, visited,
-                         cut_graph, i);
+                         cut_graph, i + 1);
     }
     std::cout << "Incremental time: " << timer.elapsed() / 1000 << "ms\n";
     auto save_path_inc = save_path + ".inc";
@@ -86,7 +86,7 @@ int main(int argc, char** argv) {
 
   tsl::robin_set<unsigned> delete_list;
   while (delete_list.size() < num_incr)
-    delete_list.insert(rand() % num_points);
+    delete_list.insert(1 + (rand() % num_points));
   std::cout << "Deleting " << delete_list.size() << " elements" << std::endl;
 
   {

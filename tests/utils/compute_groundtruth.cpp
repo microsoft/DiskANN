@@ -265,8 +265,9 @@ inline int get_num_parts(const char *filename) {
 }
 
 template<typename T>
-inline void load_bin_as_float(const char *filename, float *&data, size_t &npts_u64,
-                              size_t &ndims_u64, int part_num) {
+inline void load_bin_as_float(const char *filename, float *&data,
+                              size_t &npts_u64, size_t &ndims_u64,
+                              int part_num) {
   std::ifstream reader;
   reader.exceptions(std::ios::failbit | std::ios::badbit);
   reader.open(filename, std::ios::binary);
@@ -276,10 +277,9 @@ inline void load_bin_as_float(const char *filename, float *&data, size_t &npts_u
   reader.read((char *) &ndims_i32, sizeof(int));
   uint64_t start_id = part_num * PARTSIZE;
   uint64_t end_id = (std::min)(start_id + PARTSIZE, (uint64_t) npts_i32);
-  npts_u64 = (uint64_t) end_id - (uint64_t) start_id;
+  npts_u64 = end_id - start_id;
   ndims_u64 = (uint64_t) ndims_i32;
-  std::cout << "#pts in part = " << npts_u64
-            << ", #dims = " << ndims_u64
+  std::cout << "#pts in part = " << npts_u64 << ", #dims = " << ndims_u64
             << ", size = " << npts_u64 * ndims_u64 * sizeof(T) << "B"
             << std::endl;
 
@@ -294,8 +294,8 @@ inline void load_bin_as_float(const char *filename, float *&data, size_t &npts_u
   for (int64_t i = 0; i < (int64_t) npts_u64; i++) {
     for (int64_t j = 0; j < (int64_t) ndims_u64; j++) {
       float cur_val_float = (float) data_T[i * ndims_u64 + j];
-      std::memcpy((char *) (data + i * ndims_u64 + j),
-                  (char *) &cur_val_float, sizeof(float));
+      std::memcpy((char *) (data + i * ndims_u64 + j), (char *) &cur_val_float,
+                  sizeof(float));
     }
   }
   delete[] data_T;
@@ -351,6 +351,8 @@ int aux_main(const std::string &base_file, const std::string &query_file,
   float *base_data;
   float *query_data;
 
+  const bool tags_enabled = tags_file.empty() ? false : true;
+
   int num_parts = get_num_parts<T>(base_file.c_str());
   load_bin_as_float<T>(query_file.c_str(), query_data, nqueries, dim, 0);
   if (nqueries > PARTSIZE)
@@ -360,8 +362,8 @@ int aux_main(const std::string &base_file, const std::string &query_file,
               << std::endl;
 
   // load tags
-  std::vector<std::uint32_t> location_to_tag;
-  if (!tags_file.empty()) {
+  std::vector<uint32_t> location_to_tag;
+  if (tags_enabled) {
     size_t         tag_file_ndims, tag_file_npts;
     std::uint32_t *tag_data;
     diskann::load_bin<std::uint32_t>(tags_file, tag_data, tag_file_npts,
@@ -381,7 +383,7 @@ int aux_main(const std::string &base_file, const std::string &query_file,
                                   __FUNCSIG__, __FILE__, __LINE__);
     }
 
-    location_to_tag.assign(tag_data, tag_data + tag_file_npts); 
+    location_to_tag.assign(tag_data, tag_data + tag_file_npts);
     delete[] tag_data;
   }
 
@@ -393,7 +395,7 @@ int aux_main(const std::string &base_file, const std::string &query_file,
   for (int p = 0; p < num_parts; p++) {
     size_t start_id = p * PARTSIZE;
     load_bin_as_float<T>(base_file.c_str(), base_data, npoints, dim, p);
-    int   *closest_points_part = new int[nqueries * k];
+    int *  closest_points_part = new int[nqueries * k];
     float *dist_closest_points_part = new float[nqueries * k];
 
     auto nr = std::min(npoints, k);
@@ -403,6 +405,9 @@ int aux_main(const std::string &base_file, const std::string &query_file,
 
     for (_u64 i = 0; i < nqueries; i++) {
       for (_u64 j = 0; j < nr; j++) {
+        if (tags_enabled)
+          if (location_to_tag[closest_points_part[i * k + j] + start_id] == 0)
+            continue;
         results[i].push_back(std::make_pair(
             (uint32_t)(closest_points_part[i * nr + j] + start_id),
             dist_closest_points_part[i * nr + j]));
@@ -418,11 +423,11 @@ int aux_main(const std::string &base_file, const std::string &query_file,
   for (_u64 i = 0; i < nqueries; i++) {
     std::vector<std::pair<uint32_t, float>> &cur_res = results[i];
     std::sort(cur_res.begin(), cur_res.end(), custom_dist);
-    _u64 j = 0;
+    size_t j = 0;
     for (auto iter : cur_res) {
       if (j == k)
         break;
-      if (!tags_file.empty()) {
+      if (tags_enabled) {
         std::uint32_t index_with_tag = location_to_tag[iter.first];
         closest_points[i * k + j] = (int32_t) index_with_tag;
       } else {

@@ -144,8 +144,8 @@ namespace diskann {
     DISKANN_DLLEXPORT void load(AlignedFileReader &reader, uint32_t num_threads,
                                 uint32_t search_l);
 #else
-    DISKANN_DLLEXPORT void   load(const char *index_file, uint32_t num_threads,
-                                  uint32_t search_l);
+    DISKANN_DLLEXPORT void load(const char *index_file, uint32_t num_threads,
+                                uint32_t search_l);
 #endif
 
     // get some private variables
@@ -195,7 +195,7 @@ namespace diskann {
                                               float *           distances,
                                               std::vector<T *> &res_vectors);
 
-    // Will fail if tag already in the index
+    // Will fail if tag already in the index or if tag=0.
     DISKANN_DLLEXPORT int insert_point(const T *point, const TagT tag);
 
     // call this before issuing deletions to sets relevant flags
@@ -217,7 +217,7 @@ namespace diskann {
     // If _conc_consolidates is set in the ctor, then this call can be invoked
     // alongside inserts and lazy deletes, else it acquires _update_lock
     DISKANN_DLLEXPORT consolidation_report
-    consolidate_deletes(const Parameters &parameters);
+                      consolidate_deletes(const Parameters &parameters);
 
     // Delete point from graph and restructure it immediately. Do not call if
     // _lazy_delete was called earlier and data was not consolidated
@@ -450,9 +450,9 @@ namespace diskann {
     bool _is_saved = false;  // Gopal. Checking if the index is already saved.
     bool _conc_consolidate = false;  // use _lock while searching
 
-    std::vector<non_recursive_mutex>
-        _locks;  // Per node lock, cardinality=max_points_
-    std::vector<non_recursive_mutex> _locks_in;  // Per node lock
+    // Per node lock, cardinality=max_points_
+    std::vector<non_recursive_mutex> _locks;
+    std::vector<non_recursive_mutex> _locks_in;
 
     // If acquiring multiple locks below, acquire locks in the order below
     std::shared_timed_mutex  // RW mutex between save/load (exclusive lock) and

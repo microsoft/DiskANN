@@ -99,7 +99,8 @@ void insert_till_next_checkpoint(diskann::Index<T, TagT>& index, size_t start,
 
 #pragma omp parallel for num_threads(thread_count) schedule(dynamic)
   for (int64_t j = start; j < (int64_t) end; j++) {
-    index.insert_point(&data[(j - start) * aligned_dim], static_cast<TagT>(j));
+    index.insert_point(&data[(j - start) * aligned_dim],
+                       1 + static_cast<TagT>(j));
   }
   const double elapsedSeconds = insert_timer.elapsed() / 1000000.0;
   std::cout << "Insertion time " << elapsedSeconds << " seconds ("
@@ -119,7 +120,7 @@ void delete_from_beginning(diskann::Index<T, TagT>& index,
               << points_to_skip + points_to_delete_from_beginning << "... ";
     for (size_t i = points_to_skip;
          i < points_to_skip + points_to_delete_from_beginning; ++i)
-      index.lazy_delete(i);
+      index.lazy_delete(i + 1);  // Since tags are data location + 1
     std::cout << "done." << std::endl;
 
     auto report = index.consolidate_deletes(delete_params);
@@ -221,7 +222,8 @@ void build_incremental_index(
                          8 * sizeof(T));
 
   std::vector<TagT> tags(beginning_index_size);
-  std::iota(tags.begin(), tags.end(), static_cast<TagT>(current_point_offset));
+  std::iota(tags.begin(), tags.end(),
+            1 + static_cast<TagT>(current_point_offset));
 
   load_aligned_bin_part(data_path, data, current_point_offset,
                         beginning_index_size);
