@@ -831,7 +831,7 @@ namespace diskann {
       throw diskann::ANNException(stream.str(), -1);
     }
 
-    _u32 disk_pq_dims = 0;
+    size_t disk_pq_dims = 0;
     bool use_disk_pq = false;
 
     // if there is a 6th parameter, it means we compress the disk index
@@ -946,7 +946,7 @@ namespace diskann {
       generate_disk_quantized_data<T>(data_file_to_use, disk_pq_pivots_path,
                                       disk_pq_compressed_vectors_path,
                                       compareMetric, train_data, train_size,
-                                      disk_pq_dims, dim);
+                                      dim, disk_pq_dims);
     }
 
     generate_quantized_data<T>(
