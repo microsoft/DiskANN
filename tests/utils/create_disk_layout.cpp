@@ -8,9 +8,9 @@
 #include <limits>
 #include <vector>
 
-#include "aux_utils.h"
-#include "cached_io.h"
 #include "utils.h"
+#include "disk_utils.h"
+#include "cached_io.h"
 
 template<typename T>
 int create_disk_layout(char **argv) {

@@ -16,7 +16,7 @@
 #endif
 
 #include "logger.h"
-#include "aux_utils.h"
+#include "disk_utils.h"
 #include "cached_io.h"
 #include "index.h"
 #include "mkl.h"
@@ -25,8 +25,6 @@
 #include "partition.h"
 #include "pq_flash_index.h"
 #include "tsl/robin_set.h"
-
-#include "utils.h"
 
 namespace diskann {
 
