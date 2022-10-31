@@ -38,6 +38,7 @@ typedef int FileHandle;
 #include "ann_exception.h"
 #include "common_includes.h"
 #include "windows_customizations.h"
+#include "tsl/robin_set.h"
 
 #ifdef EXEC_ENV_OLS
 #include "content_buf.h"
@@ -558,6 +559,19 @@ namespace diskann {
     data.reset(ptr);
   }
 #endif
+
+  DISKANN_DLLEXPORT double calculate_recall(
+      unsigned num_queries, unsigned* gold_std, float* gs_dist, unsigned dim_gs,
+      unsigned* our_results, unsigned dim_or, unsigned recall_at);
+
+  DISKANN_DLLEXPORT double calculate_recall(
+      unsigned num_queries, unsigned* gold_std, float* gs_dist, unsigned dim_gs,
+      unsigned* our_results, unsigned dim_or, unsigned recall_at,
+      const tsl::robin_set<unsigned>& active_tags);
+
+  DISKANN_DLLEXPORT double calculate_range_search_recall(
+      unsigned num_queries, std::vector<std::vector<_u32>>& groundtruth,
+      std::vector<std::vector<_u32>>& our_results);
 
   template<typename T>
   inline void load_bin(const std::string& bin_file, std::unique_ptr<T[]>& data,
