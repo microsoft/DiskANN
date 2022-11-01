@@ -334,7 +334,7 @@ void build_incremental_index(
                 << std::endl;
     }
 
-    if (checkpoints_per_snapshot >= 0 &&
+    if (checkpoints_per_snapshot > 0 &&
         last_snapshot_points_threshold != last_point_threshold) {
       const auto save_path_inc = get_save_filename(
           save_path + ".inc-", points_to_skip, points_to_delete_from_beginning,
