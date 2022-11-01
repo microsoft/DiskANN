@@ -17,10 +17,9 @@
 #include <unistd.h>
 #endif
 
-#include "aux_utils.h"
+#include "utils.h"
 #include "index.h"
 #include "memory_mapper.h"
-#include "utils.h"
 
 namespace po = boost::program_options;
 

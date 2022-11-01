@@ -811,10 +811,6 @@ namespace diskann {
     return 0;
   }
 
-  /**************************************************************
-   *      Support for Static Index Building and Searching
-   **************************************************************/
-
   /* This function finds out the navigating node, which is the medoid node
    * in the graph.
    */
@@ -872,6 +868,7 @@ namespace diskann {
       tsl::robin_set<unsigned> &inserted_into_pool_rs,
       boost::dynamic_bitset<> &inserted_into_pool_bs, bool ret_frozen,
       bool search_invocation) {
+
     for (unsigned i = 0; i < Lsize + 1; i++) {
       best_L_nodes[i].distance = std::numeric_limits<float>::max();
     }
@@ -1870,10 +1867,6 @@ namespace diskann {
   size_t Index<T, TagT>::get_max_points() {
     return _max_points;
   }
-
-  /*************************************************
-   *      Support for Incremental Update
-   *************************************************/
 
   template<typename T, typename TagT>
   int Index<T, TagT>::generate_frozen_point() {

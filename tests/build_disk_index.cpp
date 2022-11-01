@@ -4,11 +4,11 @@
 #include <omp.h>
 #include <boost/program_options.hpp>
 
-#include "aux_utils.h"
-#include "index.h"
-#include "math_utils.h"
-#include "partition.h"
 #include "utils.h"
+#include "disk_utils.h"
+#include "math_utils.h"
+#include "index.h"
+#include "partition.h"
 
 namespace po = boost::program_options;
 

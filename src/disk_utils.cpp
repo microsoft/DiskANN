@@ -16,7 +16,7 @@
 #endif
 
 #include "logger.h"
-#include "aux_utils.h"
+#include "disk_utils.h"
 #include "cached_io.h"
 #include "index.h"
 #include "mkl.h"
@@ -25,8 +25,6 @@
 #include "partition.h"
 #include "pq_flash_index.h"
 #include "tsl/robin_set.h"
-
-#include "utils.h"
 
 namespace diskann {
 
@@ -63,7 +61,7 @@ namespace diskann {
     }
 
     size_t num_blocks = DIV_ROUND_UP(fsize, read_blk_size);
-    char * dump = new char[read_blk_size];
+    char  *dump = new char[read_blk_size];
     for (_u64 i = 0; i < num_blocks; i++) {
       size_t cur_block_size = read_blk_size > fsize - (i * read_blk_size)
                                   ? fsize - (i * read_blk_size)
@@ -101,13 +99,13 @@ namespace diskann {
   size_t calculate_num_pq_chunks(double final_index_ram_limit,
                                  size_t points_num, uint32_t dim,
                                  const std::vector<std::string> &param_list) {
-    size_t num_pq_chunks =
-        (size_t)(std::floor)(_u64(final_index_ram_limit / (double) points_num));
+    size_t num_pq_chunks = (size_t) (std::floor)(
+        _u64(final_index_ram_limit / (double) points_num));
     diskann::cout << "Calculated num_pq_chunks :" << num_pq_chunks << std::endl;
     if (param_list.size() >= 6) {
       float compress_ratio = (float) atof(param_list[5].c_str());
       if (compress_ratio > 0 && compress_ratio <= 1) {
-        size_t chunks_by_cr = (size_t)(std::floor)(compress_ratio * dim);
+        size_t chunks_by_cr = (size_t) (std::floor)(compress_ratio * dim);
 
         if (chunks_by_cr > 0 && chunks_by_cr < num_pq_chunks) {
           diskann::cout << "Compress ratio:" << compress_ratio
@@ -134,125 +132,6 @@ namespace diskann {
     diskann::cout << "Compressing " << dim << "-dimensional data into "
                   << num_pq_chunks << " bytes per vector." << std::endl;
     return num_pq_chunks;
-  }
-
-  double calculate_recall(unsigned num_queries, unsigned *gold_std,
-                          float *gs_dist, unsigned dim_gs,
-                          unsigned *our_results, unsigned dim_or,
-                          unsigned recall_at) {
-    double             total_recall = 0;
-    std::set<unsigned> gt, res;
-
-    for (size_t i = 0; i < num_queries; i++) {
-      gt.clear();
-      res.clear();
-      unsigned *gt_vec = gold_std + dim_gs * i;
-      unsigned *res_vec = our_results + dim_or * i;
-      size_t    tie_breaker = recall_at;
-      if (gs_dist != nullptr) {
-        tie_breaker = recall_at - 1;
-        float *gt_dist_vec = gs_dist + dim_gs * i;
-        while (tie_breaker < dim_gs &&
-               gt_dist_vec[tie_breaker] == gt_dist_vec[recall_at - 1])
-          tie_breaker++;
-      }
-
-      gt.insert(gt_vec, gt_vec + tie_breaker);
-      res.insert(res_vec,
-                 res_vec + recall_at);  // change to recall_at for recall k@k or
-                                        // dim_or for k@dim_or
-      unsigned cur_recall = 0;
-      for (auto &v : gt) {
-        if (res.find(v) != res.end()) {
-          cur_recall++;
-        }
-      }
-      total_recall += cur_recall;
-    }
-    return total_recall / (num_queries) * (100.0 / recall_at);
-  }
-
-  double calculate_recall(unsigned num_queries, unsigned *gold_std,
-                          float *gs_dist, unsigned dim_gs,
-                          unsigned *our_results, unsigned dim_or,
-                          unsigned                        recall_at,
-                          const tsl::robin_set<unsigned> &active_tags) {
-    double             total_recall = 0;
-    std::set<unsigned> gt, res;
-    bool               printed = false;
-    for (size_t i = 0; i < num_queries; i++) {
-      gt.clear();
-      res.clear();
-      unsigned *gt_vec = gold_std + dim_gs * i;
-      unsigned *res_vec = our_results + dim_or * i;
-      size_t    tie_breaker = recall_at;
-      unsigned  active_points_count = 0;
-      unsigned  cur_counter = 0;
-      while (active_points_count < recall_at && cur_counter < dim_gs) {
-        if (active_tags.find(*(gt_vec + cur_counter)) != active_tags.end()) {
-          active_points_count++;
-        }
-        cur_counter++;
-      }
-      if (active_tags.empty())
-        cur_counter = recall_at;
-
-      if ((active_points_count < recall_at && !active_tags.empty()) &&
-          !printed) {
-        diskann::cout << "Warning: Couldn't find enough closest neighbors "
-                      << active_points_count << "/" << recall_at
-                      << " from "
-                         "truthset for query # "
-                      << i << ". Will result in under-reported value of recall."
-                      << std::endl;
-        printed = true;
-      }
-      if (gs_dist != nullptr) {
-        tie_breaker = cur_counter - 1;
-        float *gt_dist_vec = gs_dist + dim_gs * i;
-        while (tie_breaker < dim_gs &&
-               gt_dist_vec[tie_breaker] == gt_dist_vec[cur_counter - 1])
-          tie_breaker++;
-      }
-
-      gt.insert(gt_vec, gt_vec + tie_breaker);
-      res.insert(res_vec, res_vec + recall_at);
-      unsigned cur_recall = 0;
-      for (auto &v : res) {
-        if (gt.find(v) != gt.end()) {
-          cur_recall++;
-        }
-      }
-      total_recall += cur_recall;
-    }
-    return ((double) (total_recall / (num_queries))) *
-           ((double) (100.0 / recall_at));
-  }
-
-  double calculate_range_search_recall(
-      unsigned num_queries, std::vector<std::vector<_u32>> &groundtruth,
-      std::vector<std::vector<_u32>> &our_results) {
-    double             total_recall = 0;
-    std::set<unsigned> gt, res;
-
-    for (size_t i = 0; i < num_queries; i++) {
-      gt.clear();
-      res.clear();
-
-      gt.insert(groundtruth[i].begin(), groundtruth[i].end());
-      res.insert(our_results[i].begin(), our_results[i].end());
-      unsigned cur_recall = 0;
-      for (auto &v : gt) {
-        if (res.find(v) != res.end()) {
-          cur_recall++;
-        }
-      }
-      if (gt.size() != 0)
-        total_recall += ((100.0 * cur_recall) / gt.size());
-      else
-        total_recall += 100;
-    }
-    return total_recall / (num_queries);
   }
 
   template<typename T>
@@ -283,7 +162,7 @@ namespace diskann {
   T *load_warmup(MemoryMappedFiles &files, const std::string &cache_warmup_file,
                  uint64_t &warmup_num, uint64_t warmup_dim,
                  uint64_t warmup_aligned_dim) {
-    T *      warmup = nullptr;
+    T       *warmup = nullptr;
     uint64_t file_dim, file_aligned_dim;
 
     if (files.fileExists(cache_warmup_file)) {
@@ -316,7 +195,7 @@ namespace diskann {
   template<typename T>
   T *load_warmup(const std::string &cache_warmup_file, uint64_t &warmup_num,
                  uint64_t warmup_dim, uint64_t warmup_aligned_dim) {
-    T *      warmup = nullptr;
+    T       *warmup = nullptr;
     uint64_t file_dim, file_aligned_dim;
 
     if (file_exists(cache_warmup_file)) {
@@ -660,7 +539,7 @@ namespace diskann {
     while (!stop_flag) {
       std::vector<uint64_t> tuning_sample_result_ids_64(tuning_sample_num, 0);
       std::vector<float>    tuning_sample_result_dists(tuning_sample_num, 0);
-      diskann::QueryStats * stats = new diskann::QueryStats[tuning_sample_num];
+      diskann::QueryStats  *stats = new diskann::QueryStats[tuning_sample_num];
 
       auto s = std::chrono::high_resolution_clock::now();
 #pragma omp parallel for schedule(dynamic, 1) num_threads(nthreads)
@@ -687,7 +566,7 @@ namespace diskann {
       if (qps > max_qps && lat_999 < (15000) + mean_latency * 2) {
         max_qps = qps;
         best_bw = cur_bw;
-        cur_bw = (uint32_t)(std::ceil)((float) cur_bw * 1.1f);
+        cur_bw = (uint32_t) (std::ceil)((float) cur_bw * 1.1f);
       } else {
         stop_flag = true;
       }
@@ -918,7 +797,7 @@ namespace diskann {
 
   template<typename T>
   int build_disk_index(const char *dataFilePath, const char *indexFilePath,
-                       const char *    indexBuildParameters,
+                       const char     *indexBuildParameters,
                        diskann::Metric compareMetric, bool use_opq) {
     std::stringstream parser;
     parser << std::string(indexBuildParameters);
@@ -952,7 +831,7 @@ namespace diskann {
       throw diskann::ANNException(stream.str(), -1);
     }
 
-    _u32 disk_pq_dims = 0;
+    size_t disk_pq_dims = 0;
     bool use_disk_pq = false;
 
     // if there is a 6th parameter, it means we compress the disk index
@@ -1042,7 +921,7 @@ namespace diskann {
     diskann::get_bin_metadata(data_file_to_use.c_str(), points_num, dim);
 
     size_t num_pq_chunks =
-        (size_t)(std::floor)(_u64(final_index_ram_limit / points_num));
+        (size_t) (std::floor)(_u64(final_index_ram_limit / points_num));
 
     num_pq_chunks = num_pq_chunks <= 0 ? 1 : num_pq_chunks;
     num_pq_chunks = num_pq_chunks > dim ? dim : num_pq_chunks;
@@ -1060,50 +939,23 @@ namespace diskann {
     // train_size
     gen_random_slice<T>(data_file_to_use.c_str(), p_val, train_data, train_size,
                         train_dim);
+    diskann::cout << "Training data with " << train_size << " samples loaded."
+                  << std::endl;
 
     if (use_disk_pq) {
-      if (disk_pq_dims > dim)
-        disk_pq_dims = dim;
-
-      std::cout << "Compressing base for disk-PQ into " << disk_pq_dims
-                << " chunks " << std::endl;
-      generate_pq_pivots(train_data, train_size, (uint32_t) dim, 256,
-                         (uint32_t) disk_pq_dims, NUM_KMEANS_REPS,
-                         disk_pq_pivots_path, false);
-      if (compareMetric == diskann::Metric::INNER_PRODUCT)
-        generate_pq_data_from_pivots<float>(
-            data_file_to_use.c_str(), 256, (uint32_t) disk_pq_dims,
-            disk_pq_pivots_path, disk_pq_compressed_vectors_path);
-      else
-        generate_pq_data_from_pivots<T>(
-            data_file_to_use.c_str(), 256, (uint32_t) disk_pq_dims,
-            disk_pq_pivots_path, disk_pq_compressed_vectors_path);
+      generate_disk_quantized_data<T>(data_file_to_use, disk_pq_pivots_path,
+                                      disk_pq_compressed_vectors_path,
+                                      compareMetric, train_data, train_size,
+                                      dim, disk_pq_dims);
     }
-    diskann::cout << "Training data loaded of size " << train_size << std::endl;
 
-    // don't translate data to make zero mean for PQ compression. We must not
-    // translate for inner product search.
-    bool make_zero_mean = true;
-    if (compareMetric == diskann::Metric::INNER_PRODUCT)
-      make_zero_mean = false;
-    if (use_opq)  // we also do not center the data for OPQ
-      make_zero_mean = false;
-
-    if (!use_opq) {
-      generate_pq_pivots(train_data, train_size, (uint32_t) dim, 256,
-                         (uint32_t) num_pq_chunks, NUM_KMEANS_REPS,
-                         pq_pivots_path, make_zero_mean);
-    } else {
-      generate_opq_pivots(train_data, train_size, (_u32) dim, 256,
-                          (_u32) num_pq_chunks, pq_pivots_path, make_zero_mean);
-    }
-    generate_pq_data_from_pivots<T>(data_file_to_use.c_str(), 256,
-                                    (uint32_t) num_pq_chunks, pq_pivots_path,
-                                    pq_compressed_vectors_path, use_opq);
+    generate_quantized_data<T>(
+        data_file_to_use, pq_pivots_path, pq_compressed_vectors_path,
+        compareMetric, train_data, train_size, dim, num_pq_chunks, use_opq);
 
     delete[] train_data;
-
     train_data = nullptr;
+
 // Gopal. Splitting diskann_dll into separate DLLs for search and build.
 // This code should only be available in the "build" DLL.
 #if defined(RELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS) && \

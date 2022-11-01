@@ -38,6 +38,7 @@ typedef int FileHandle;
 #include "ann_exception.h"
 #include "common_includes.h"
 #include "windows_customizations.h"
+#include "tsl/robin_set.h"
 
 #ifdef EXEC_ENV_OLS
 #include "content_buf.h"
@@ -164,8 +165,6 @@ class AlignedFileReader;
 
 namespace diskann {
   static const size_t MAX_SIZE_OF_STREAMBUF = 2LL * 1024 * 1024 * 1024;
-
-  enum Metric { L2 = 0, INNER_PRODUCT = 1, COSINE = 2, FAST_L2 = 3, PQ = 4 };
 
   inline void alloc_aligned(void** ptr, size_t size, size_t align) {
     *ptr = nullptr;
@@ -561,6 +560,19 @@ namespace diskann {
   }
 #endif
 
+  DISKANN_DLLEXPORT double calculate_recall(
+      unsigned num_queries, unsigned* gold_std, float* gs_dist, unsigned dim_gs,
+      unsigned* our_results, unsigned dim_or, unsigned recall_at);
+
+  DISKANN_DLLEXPORT double calculate_recall(
+      unsigned num_queries, unsigned* gold_std, float* gs_dist, unsigned dim_gs,
+      unsigned* our_results, unsigned dim_or, unsigned recall_at,
+      const tsl::robin_set<unsigned>& active_tags);
+
+  DISKANN_DLLEXPORT double calculate_range_search_recall(
+      unsigned num_queries, std::vector<std::vector<_u32>>& groundtruth,
+      std::vector<std::vector<_u32>>& our_results);
+
   template<typename T>
   inline void load_bin(const std::string& bin_file, std::unique_ptr<T[]>& data,
                        size_t& npts, size_t& dim, size_t offset = 0) {
@@ -878,8 +890,6 @@ namespace diskann {
   DISKANN_DLLEXPORT void normalize_data_file(const std::string& inFileName,
                                              const std::string& outFileName);
 
-  template<typename T>
-  Distance<T>* get_distance_function(Metric m);
 };  // namespace diskann
 
 struct PivotContainer {
@@ -900,16 +910,6 @@ struct PivotContainer {
   size_t piv_id;
   float  piv_dist;
 };
-
-/*
-inline bool file_exists(const std::string& name) {
-  struct stat buffer;
-  auto        val = stat(name.c_str(), &buffer);
-  diskann::cout << " Stat(" << name.c_str() << ") returned: " << val
-                << std::endl;
-  return (val == 0);
-}
-*/
 
 inline bool validate_index_file_size(std::ifstream& in) {
   if (!in.is_open())
