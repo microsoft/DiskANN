@@ -7,6 +7,7 @@
 
 #define NUM_PQ_CENTROIDS 256
 #define MAX_OPQ_ITERS 20
+#define NUM_KMEANS_REPS_PQ 12
 
 namespace diskann {
   class FixedChunkPQTable {
@@ -46,7 +47,7 @@ namespace diskann {
     void inflate_vector(_u8* base_vec, float* out_vec);
 
     void populate_chunk_inner_products(const float* query_vec, float* dist_vec);
-  }; 
+  };
 
   void aggregate_coords(const unsigned* ids, const _u64 n_ids,
                         const _u8* all_coords, const _u64 ndims, _u8* out);
@@ -54,9 +55,9 @@ namespace diskann {
   void pq_dist_lookup(const _u8* pq_ids, const _u64 n_pts,
                       const _u64 pq_nchunks, const float* pq_dists,
                       float* dists_out);
-  
+
   DISKANN_DLLEXPORT int generate_pq_pivots(
-      const float* train_data, size_t num_train, unsigned dim,
+      const float* const train_data, size_t num_train, unsigned dim,
       unsigned num_centers, unsigned num_pq_chunks, unsigned max_k_means_reps,
       std::string pq_pivots_path, bool make_zero_mean = false);
 
@@ -73,4 +74,22 @@ namespace diskann {
                                    std::string pq_pivots_path,
                                    std::string pq_compressed_vectors_path,
                                    bool        use_opq = false);
+
+  template<typename T>
+  void generate_disk_quantized_data(std::string data_file_to_use,
+                                    std::string disk_pq_pivots_path,
+                                    std::string disk_pq_compressed_vectors_path,
+                                    diskann::Metric    compareMetric,
+                                    const float* const train_data,
+                                    const size_t       train_data_size,
+                                    const size_t dim, size_t& disk_pq_dims);
+
+  template<typename T>
+  void generate_quantized_data(const std::string  data_file_to_use,
+                               const std::string  pq_pivots_path,
+                               const std::string  pq_compressed_vectors_path,
+                               diskann::Metric    compareMetric,
+                               const float* const train_data,
+                               const size_t train_data_size, const size_t dim,
+                               const size_t num_pq_chunks, const bool use_opq);
 }  // namespace diskann

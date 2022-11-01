@@ -96,7 +96,7 @@ void insert_next_batch(diskann::Index<T, TagT>& index, size_t start, size_t end,
     reduction(+:num_failed)
     for (int64_t j = start; j < (int64_t) end; j++) {
       if (index.insert_point(&data[(j - start) * aligned_dim],
-                             static_cast<TagT>(j)) != 0) {
+                             1 + static_cast<TagT>(j)) != 0) {
         std::cerr << "Insert failed " << j << std::endl;
         num_failed++;
       }
@@ -124,7 +124,7 @@ void delete_and_consolidate(diskann::Index<T, TagT>& index,
     std::cout << std::endl
               << "Lazy deleting points " << start << " to " << end << "... ";
     for (size_t i = start; i < end; ++i)
-      index.lazy_delete(i);
+      index.lazy_delete(1 + i);
     std::cout << "lazy delete done." << std::endl;
 
     auto report = index.consolidate_deletes(delete_params);

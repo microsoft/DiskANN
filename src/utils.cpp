@@ -56,128 +56,18 @@ bool cpuHasAvx2Support() {
   }
   return false;
 }
-#endif
 
-#ifdef _WINDOWS
 bool AvxSupportedCPU = cpuHasAvxSupport();
 bool Avx2SupportedCPU = cpuHasAvx2Support();
+
 #else
+
 bool Avx2SupportedCPU = true;
 bool AvxSupportedCPU = false;
 #endif
 
 namespace diskann {
-  // Get the right distance function for the given metric.
-  template<>
-  diskann::Distance<float>* get_distance_function(diskann::Metric m) {
-    if (m == diskann::Metric::L2) {
-      if (Avx2SupportedCPU) {
-        diskann::cout << "L2: Using AVX2 distance computation DistanceL2Float"
-                      << std::endl;
-        return new diskann::DistanceL2Float();
-      } else if (AvxSupportedCPU) {
-        diskann::cout
-            << "L2: AVX2 not supported. Using AVX distance computation"
-            << std::endl;
-        return new diskann::AVXDistanceL2Float();
-      } else {
-        diskann::cout << "L2: Older CPU. Using slow distance computation"
-                      << std::endl;
-        return new diskann::SlowDistanceL2Float();
-      }
-    } else if (m == diskann::Metric::COSINE) {
-      diskann::cout << "Cosine: Using either AVX or AVX2 implementation"
-                    << std::endl;
-      return new diskann::DistanceCosineFloat();
-    } else if (m == diskann::Metric::INNER_PRODUCT) {
-      diskann::cout << "Inner product: Using AVX2 implementation "
-                       "AVXDistanceInnerProductFloat"
-                    << std::endl;
-      return new diskann::AVXDistanceInnerProductFloat();
-    } else if (m == diskann::Metric::FAST_L2) {
-      diskann::cout << "Fast_L2: Using AVX2 implementation with norm "
-                       "memoization DistanceFastL2<float>"
-                    << std::endl;
-      return new diskann::DistanceFastL2<float>();
-    } else {
-      std::stringstream stream;
-      stream << "Only L2, cosine, and inner product supported for floating "
-                "point vectors as of now. Email "
-                "{gopalsr, harshasi, rakri}@microsoft.com if you need support "
-                "for any other metric."
-             << std::endl;
-      diskann::cerr << stream.str() << std::endl;
-      throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
-                                  __LINE__);
-    }
-  }
-
-  template<>
-  diskann::Distance<int8_t>* get_distance_function(diskann::Metric m) {
-    if (m == diskann::Metric::L2) {
-      if (Avx2SupportedCPU) {
-        diskann::cout << "Using AVX2 distance computation DistanceL2Int8."
-                      << std::endl;
-        return new diskann::DistanceL2Int8();
-      } else if (AvxSupportedCPU) {
-        diskann::cout << "AVX2 not supported. Using AVX distance computation"
-                      << std::endl;
-        return new diskann::AVXDistanceL2Int8();
-      } else {
-        diskann::cout << "Older CPU. Using slow distance computation "
-                         "SlowDistanceL2Int<int8_t>."
-                      << std::endl;
-        return new diskann::SlowDistanceL2Int<int8_t>();
-      }
-    } else if (m == diskann::Metric::COSINE) {
-      diskann::cout << "Using either AVX or AVX2 for Cosine similarity "
-                       "DistanceCosineInt8."
-                    << std::endl;
-      return new diskann::DistanceCosineInt8();
-    } else {
-      std::stringstream stream;
-      stream << "Only L2 and cosine supported for signed byte vectors as of "
-                "now. Email "
-                "{gopalsr, harshasi, rakri}@microsoft.com if you need support "
-                "for any other metric."
-             << std::endl;
-      diskann::cerr << stream.str() << std::endl;
-      throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
-                                  __LINE__);
-    }
-  }
-
-  template<>
-  diskann::Distance<uint8_t>* get_distance_function(diskann::Metric m) {
-    if (m == diskann::Metric::L2) {
-#ifdef _WINDOWS
-      diskann::cout
-          << "WARNING: AVX/AVX2 distance function not defined for Uint8. Using "
-             "slow version. "
-             "Contact gopalsr@microsoft.com if you need AVX/AVX2 support."
-          << std::endl;
-#endif
-      return new diskann::DistanceL2UInt8();
-    } else if (m == diskann::Metric::COSINE) {
-      diskann::cout
-          << "AVX/AVX2 distance function not defined for Uint8. Using "
-             "slow version SlowDistanceCosineUint8() "
-             "Contact gopalsr@microsoft.com if you need AVX/AVX2 support."
-          << std::endl;
-      return new diskann::SlowDistanceCosineUInt8();
-    } else {
-      std::stringstream stream;
-      stream << "Only L2 and cosine supported for unsigned byte vectors as of "
-                "now. Email "
-                "{gopalsr, harshasi, rakri}@microsoft.com if you need support "
-                "for any other metric."
-             << std::endl;
-      diskann::cerr << stream.str() << std::endl;
-      throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
-                                  __LINE__);
-    }
-  }
-
+  
   void block_convert(std::ofstream& writr, std::ifstream& readr,
                      float* read_buf, _u64 npts, _u64 ndims) {
     readr.read((char*) read_buf, npts * ndims * sizeof(float));
@@ -229,6 +119,126 @@ namespace diskann {
     diskann::cout << "Wrote normalized points to file: " << outFileName
                   << std::endl;
   }
+
+    double calculate_recall(unsigned num_queries, unsigned* gold_std,
+                          float* gs_dist, unsigned dim_gs,
+                          unsigned* our_results, unsigned dim_or,
+                          unsigned recall_at) {
+    double             total_recall = 0;
+    std::set<unsigned> gt, res;
+
+    for (size_t i = 0; i < num_queries; i++) {
+      gt.clear();
+      res.clear();
+      unsigned* gt_vec = gold_std + dim_gs * i;
+      unsigned* res_vec = our_results + dim_or * i;
+      size_t    tie_breaker = recall_at;
+      if (gs_dist != nullptr) {
+        tie_breaker = recall_at - 1;
+        float* gt_dist_vec = gs_dist + dim_gs * i;
+        while (tie_breaker < dim_gs &&
+               gt_dist_vec[tie_breaker] == gt_dist_vec[recall_at - 1])
+          tie_breaker++;
+      }
+
+      gt.insert(gt_vec, gt_vec + tie_breaker);
+      res.insert(res_vec,
+                 res_vec + recall_at);  // change to recall_at for recall k@k or
+                                        // dim_or for k@dim_or
+      unsigned cur_recall = 0;
+      for (auto& v : gt) {
+        if (res.find(v) != res.end()) {
+          cur_recall++;
+        }
+      }
+      total_recall += cur_recall;
+    }
+    return total_recall / (num_queries) * (100.0 / recall_at);
+  }
+
+  double calculate_recall(unsigned num_queries, unsigned* gold_std,
+                          float* gs_dist, unsigned dim_gs,
+                          unsigned* our_results, unsigned dim_or,
+                          unsigned                        recall_at,
+                          const tsl::robin_set<unsigned>& active_tags) {
+    double             total_recall = 0;
+    std::set<unsigned> gt, res;
+    bool               printed = false;
+    for (size_t i = 0; i < num_queries; i++) {
+      gt.clear();
+      res.clear();
+      unsigned* gt_vec = gold_std + dim_gs * i;
+      unsigned* res_vec = our_results + dim_or * i;
+      size_t    tie_breaker = recall_at;
+      unsigned  active_points_count = 0;
+      unsigned  cur_counter = 0;
+      while (active_points_count < recall_at && cur_counter < dim_gs) {
+        if (active_tags.find(*(gt_vec + cur_counter)) != active_tags.end()) {
+          active_points_count++;
+        }
+        cur_counter++;
+      }
+      if (active_tags.empty())
+        cur_counter = recall_at;
+
+      if ((active_points_count < recall_at && !active_tags.empty()) &&
+          !printed) {
+        diskann::cout << "Warning: Couldn't find enough closest neighbors "
+                      << active_points_count << "/" << recall_at
+                      << " from "
+                         "truthset for query # "
+                      << i << ". Will result in under-reported value of recall."
+                      << std::endl;
+        printed = true;
+      }
+      if (gs_dist != nullptr) {
+        tie_breaker = cur_counter - 1;
+        float* gt_dist_vec = gs_dist + dim_gs * i;
+        while (tie_breaker < dim_gs &&
+               gt_dist_vec[tie_breaker] == gt_dist_vec[cur_counter - 1])
+          tie_breaker++;
+      }
+
+      gt.insert(gt_vec, gt_vec + tie_breaker);
+      res.insert(res_vec, res_vec + recall_at);
+      unsigned cur_recall = 0;
+      for (auto& v : res) {
+        if (gt.find(v) != gt.end()) {
+          cur_recall++;
+        }
+      }
+      total_recall += cur_recall;
+    }
+    return ((double) (total_recall / (num_queries))) *
+           ((double) (100.0 / recall_at));
+  }
+
+  double calculate_range_search_recall(
+      unsigned num_queries, std::vector<std::vector<_u32>>& groundtruth,
+      std::vector<std::vector<_u32>>& our_results) {
+    double             total_recall = 0;
+    std::set<unsigned> gt, res;
+
+    for (size_t i = 0; i < num_queries; i++) {
+      gt.clear();
+      res.clear();
+
+      gt.insert(groundtruth[i].begin(), groundtruth[i].end());
+      res.insert(our_results[i].begin(), our_results[i].end());
+      unsigned cur_recall = 0;
+      for (auto& v : gt) {
+        if (res.find(v) != res.end()) {
+          cur_recall++;
+        }
+      }
+      if (gt.size() != 0)
+        total_recall += ((100.0 * cur_recall) / gt.size());
+      else
+        total_recall += 100;
+    }
+    return total_recall / (num_queries);
+  }
+
 
 #ifdef EXEC_ENV_OLS
   void get_bin_metadata(AlignedFileReader& reader, size_t& npts, size_t& ndim,
