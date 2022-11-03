@@ -65,7 +65,7 @@ namespace diskann {
 
   template<typename T>
   QueryScratch<T>::QueryScratch(size_t aligned_dim, size_t visited_reserve) {
-    _u64 coord_alloc_size = ROUND_UP(MAX_N_CMPS * aligned_dim, 256);
+    _u64 coord_alloc_size = ROUND_UP(MAX_N_CMPS * aligned_dim * sizeof(T), 256);
 
     diskann::alloc_aligned((void **) &coord_scratch, coord_alloc_size, 256);
     diskann::alloc_aligned((void **) &sector_scratch,
@@ -85,7 +85,7 @@ namespace diskann {
     diskann::alloc_aligned((void **) &rotated_query,
                            aligned_dim * sizeof(float), 8 * sizeof(float));
 
-    memset(coord_scratch, 0, MAX_N_CMPS * aligned_dim);
+    memset(coord_scratch, 0, MAX_N_CMPS * aligned_dim * sizeof(T));
     memset(aligned_query_T, 0, aligned_dim * sizeof(T));
     memset(aligned_query_float, 0, aligned_dim * sizeof(float));
     memset(rotated_query, 0, aligned_dim * sizeof(float));
