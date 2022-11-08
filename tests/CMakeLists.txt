@@ -29,3 +29,12 @@ target_link_libraries(test_insert_deletes_consolidate ${PROJECT_NAME} ${DISKANN_
 
 add_executable(search_memory_index_dynamic search_memory_index_dynamic.cpp)
 target_link_libraries(search_memory_index_dynamic ${PROJECT_NAME} ${DISKANN_TOOLS_TCMALLOC_LINK_OPTIONS} Boost::program_options)
+
+if (JNI)
+    add_executable(diskann_with_java_io diskann_with_java_io.cpp)
+    target_link_libraries(diskann_with_java_io ${PROJECT_NAME}
+            ${DISKANN_TOOLS_TCMALLOC_LINK_OPTIONS}
+            Boost::program_options
+            /usr/lib/jvm/java-18-openjdk-amd64/lib/server/libjvm.so
+    )
+endif()
