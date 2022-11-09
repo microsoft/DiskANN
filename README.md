@@ -18,7 +18,7 @@ See [guidelines](CONTRIBUTING.md) for contributing to this project.
 Install the following packages through apt-get
 
 ```bash
-sudo apt install cmake g++ libaio-dev libgoogle-perftools-dev clang-format libboost-all-dev
+sudo apt install make cmake g++ libaio-dev libgoogle-perftools-dev clang-format libboost-all-dev
 ```
 
 ### Install Intel MKL
