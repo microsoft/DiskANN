@@ -39,10 +39,9 @@ namespace diskann {
   Index<T, TagT>::Index(Metric m, const size_t dim, const size_t max_points,
                         const bool dynamic_index, const Parameters &indexParams,
                         const Parameters &searchParams, const bool enable_tags,
-                        const bool support_eager_delete,
                         const bool concurrent_consolidate)
       : Index(m, dim, max_points, dynamic_index, enable_tags,
-              support_eager_delete, concurrent_consolidate) {
+              concurrent_consolidate) {
     _indexingQueueSize = indexParams.Get<uint32_t>("L");
     _indexingRange = indexParams.Get<uint32_t>("R");
     _indexingMaxC = indexParams.Get<uint32_t>("C");
@@ -60,20 +59,13 @@ namespace diskann {
   template<typename T, typename TagT>
   Index<T, TagT>::Index(Metric m, const size_t dim, const size_t max_points,
                         const bool dynamic_index, const bool enable_tags,
-                        const bool support_eager_delete,
                         const bool concurrent_consolidate)
       : _dist_metric(m), _dim(dim), _max_points(max_points),
         _dynamic_index(dynamic_index), _enable_tags(enable_tags),
-        _support_eager_delete(support_eager_delete),
         _conc_consolidate(concurrent_consolidate) {
     if (dynamic_index && !enable_tags) {
       throw ANNException("ERROR: Dynamic Indexing must have tags enabled.", -1,
                          __FUNCSIG__, __FILE__, __LINE__);
-    }
-    if (support_eager_delete && !dynamic_index) {
-      throw ANNException(
-          "ERROR: Eager deletes must have dynamic indexing enabled.", -1,
-          __FUNCSIG__, __FILE__, __LINE__);
     }
 
     // data stored to _nd * aligned_dim matrix with necessary zero-padding
@@ -98,11 +90,6 @@ namespace diskann {
 
     _final_graph.resize(total_internal_points);
 
-    if (_support_eager_delete) {
-      _in_graph.reserve(total_internal_points);
-      _in_graph.resize(total_internal_points);
-    }
-
     if (m == diskann::Metric::COSINE && std::is_floating_point<T>::value) {
       // This is safe because T is float inside the if block.
       this->_distance = (Distance<T> *) new AVXNormalizedCosineDistanceFloat();
@@ -115,9 +102,6 @@ namespace diskann {
     }
 
     _locks = std::vector<non_recursive_mutex>(total_internal_points);
-
-    if (_support_eager_delete)
-      _locks_in = std::vector<non_recursive_mutex>(total_internal_points);
 
     if (enable_tags) {
       _location_to_tag.reserve(total_internal_points);
@@ -134,9 +118,6 @@ namespace diskann {
     std::unique_lock<std::shared_timed_mutex> dl(_delete_lock);
 
     for (auto &lock : _locks) {
-      LockGuard lg(lock);
-    }
-    for (auto &lock : _locks_in) {
       LockGuard lg(lock);
     }
 
@@ -896,18 +877,6 @@ namespace diskann {
     assert(!pruned_list.empty());
     assert(_final_graph.size() == _max_points + _num_frozen_pts);
 
-    if (_support_eager_delete) {
-      for (unsigned i = 0; i < _final_graph[location].size(); i++) {
-        {
-          LockGuard guard(_locks_in[_final_graph[location][i]]);
-          _in_graph[_final_graph[location][i]].erase(
-              std::remove(_in_graph[_final_graph[location][i]].begin(),
-                          _in_graph[_final_graph[location][i]].end(), location),
-              _in_graph[_final_graph[location][i]].end());
-        }
-      }
-    }
-
     {
       std::shared_lock<std::shared_timed_mutex> tlock(_tag_lock,
                                                       std::defer_lock);
@@ -925,10 +894,6 @@ namespace diskann {
           if (!_location_to_tag.contains(link))
             continue;
         _final_graph[location].emplace_back(link);
-        if (_support_eager_delete) {
-          LockGuard guard(_locks_in[link]);
-          _in_graph[link].emplace_back(location);
-        }
       }
 
       if (_conc_consolidate)
@@ -936,7 +901,7 @@ namespace diskann {
     }
 
     assert(_final_graph[location].size() <= _indexingRange);
-    inter_insert(location, pruned_list, _support_eager_delete);
+    inter_insert(location, pruned_list);
   }
 
   template<typename T, typename TagT>
@@ -1083,7 +1048,7 @@ namespace diskann {
   template<typename T, typename TagT>
   void Index<T, TagT>::inter_insert(unsigned               n,
                                     std::vector<unsigned> &pruned_list,
-                                    const _u32 range, bool update_in_graph) {
+                                    const _u32 range) {
     const auto &src_pool = pruned_list;
 
     assert(!src_pool.empty());
@@ -1100,10 +1065,6 @@ namespace diskann {
         if (std::find(des_pool.begin(), des_pool.end(), n) == des_pool.end()) {
           if (des_pool.size() < (_u64) (GRAPH_SLACK_FACTOR * range)) {
             des_pool.emplace_back(n);
-            if (update_in_graph) {
-              LockGuard guard(_locks_in[n]);
-              _in_graph[n].emplace_back(des);
-            }
             prune_needed = false;
           } else {
             copy_of_neighbors = des_pool;
@@ -1137,28 +1098,10 @@ namespace diskann {
         prune_neighbors(des, dummy_pool, new_out_neighbors);
         {
           LockGuard guard(_locks[des]);
-          // updating in_graph of out-neighbors of des
-          if (update_in_graph) {
-            for (auto out_nbr : _final_graph[des]) {
-              {
-                LockGuard guard(_locks_in[out_nbr]);
-                for (unsigned i = 0; i < _in_graph[out_nbr].size(); i++) {
-                  if (_in_graph[out_nbr][i] == des) {
-                    _in_graph[out_nbr].erase(_in_graph[out_nbr].begin() + i);
-                    break;
-                  }
-                }
-              }
-            }
-          }
-
+          
           _final_graph[des].clear();
           for (auto new_nbr : new_out_neighbors) {
             _final_graph[des].emplace_back(new_nbr);
-            if (update_in_graph) {
-              LockGuard guard(_locks_in[new_nbr]);
-              _in_graph[new_nbr].emplace_back(des);
-            }
           }
         }
       }
@@ -1167,9 +1110,8 @@ namespace diskann {
 
   template<typename T, typename TagT>
   void Index<T, TagT>::inter_insert(unsigned               n,
-                                    std::vector<unsigned> &pruned_list,
-                                    bool                   update_in_graph) {
-    inter_insert(n, pruned_list, _indexingRange, update_in_graph);
+                                    std::vector<unsigned> &pruned_list) {
+    inter_insert(n, pruned_list, _indexingRange);
   }
 
   template<typename T, typename TagT>
@@ -1205,11 +1147,6 @@ namespace diskann {
       _start = (unsigned) _max_points;
     else
       _start = calculate_entry_point();
-
-    if (_support_eager_delete) {
-      _in_graph.reserve(_max_points + _num_frozen_pts);
-      _in_graph.resize(_max_points + _num_frozen_pts);
-    }
 
     for (uint64_t p = 0; p < _nd; p++) {
       _final_graph[p].reserve(
@@ -1399,10 +1336,6 @@ namespace diskann {
 
     generate_frozen_point();
     link(parameters);
-
-    if (_support_eager_delete) {
-      update_in_graph();  // copying values to in_graph
-    }
 
     size_t max = 0, min = SIZE_MAX, total = 0, cnt = 0;
     for (size_t i = 0; i < _nd; i++) {
@@ -1707,25 +1640,7 @@ namespace diskann {
     }
 
     _lazy_done = false;
-    _eager_done = false;
-
-    if (_support_eager_delete) {
-      _in_graph.resize(_max_points + _num_frozen_pts);
-      _in_graph.reserve(_max_points + _num_frozen_pts);
-      update_in_graph();
-    }
     return 0;
-  }
-
-  template<typename T, typename TagT>
-  void Index<T, TagT>::update_in_graph() {
-    for (unsigned i = 0; i < _in_graph.size(); i++)
-      _in_graph[i].clear();
-
-    for (size_t i = 0; i < _final_graph.size();
-         i++)  // copying to in-neighbor graph
-      for (size_t j = 0; j < _final_graph[i].size(); j++)
-        _in_graph[_final_graph[i][j]].emplace_back((_u32) i);
   }
 
   template<typename T, typename TagT>
@@ -1786,10 +1701,6 @@ namespace diskann {
     if (!_enable_tags)
       throw diskann::ANNException("Point tag array not instantiated", -1,
                                   __FUNCSIG__, __FILE__, __LINE__);
-
-    if (_eager_done)
-      throw ANNException("Can not consolidates eager deletes.", -1, __FUNCSIG__,
-                         __FILE__, __LINE__);
 
     {
       std::shared_lock<std::shared_timed_mutex> ul(_update_lock);
@@ -1866,8 +1777,6 @@ namespace diskann {
       LockGuard adj_list_lock(_locks[loc]);
       process_delete(old_delete_set, loc, range, maxc, alpha);
     }
-    if (_support_eager_delete)
-      update_in_graph();
 
     std::unique_lock<std::shared_timed_mutex> tl(_tag_lock);
     size_t ret_nd = release_locations(old_delete_set);
@@ -1901,9 +1810,6 @@ namespace diskann {
 
           _final_graph[_nd].clear();
           _final_graph[_nd].swap(_final_graph[_max_points]);
-
-          if (_support_eager_delete)
-            update_in_graph();
 
           memcpy((void *) (_data + _aligned_dim * _nd),
                  _data + (size_t) _aligned_dim * _max_points, sizeof(T) * _dim);
@@ -2000,18 +1906,11 @@ namespace diskann {
           }
         }
 
-        if (_support_eager_delete)
-          for (size_t i = 0; i < _in_graph[old].size(); ++i) {
-            if (new_location[_in_graph[old][i]] <= _in_graph[old][i])
-              _in_graph[old][i] = new_location[_in_graph[old][i]];
-          }
-
         // Move the data and adj list to the correct position
         if (new_location[old] != old) {
           assert(new_location[old] < old);
           _final_graph[new_location[old]].swap(_final_graph[old]);
-          if (_support_eager_delete)
-            _in_graph[new_location[old]].swap(_in_graph[old]);
+
           memcpy((void *) (_data + _aligned_dim * (size_t) new_location[old]),
                  (void *) (_data + _aligned_dim * (size_t) old),
                  _aligned_dim * sizeof(T));
@@ -2043,7 +1942,6 @@ namespace diskann {
       _empty_slots.insert((uint32_t) i);
     }
 
-    _eager_done = false;
     _data_compacted = true;
     diskann::cout << "Time taken for compact_data: "
                   << timer.elapsed() / 1000000. << "s." << std::endl;
@@ -2121,9 +2019,6 @@ namespace diskann {
 
     _final_graph[old_location].clear();
 
-    if (_support_eager_delete) {
-      update_in_graph();
-    }
     memcpy((void *) (_data + (size_t) _aligned_dim * new_location),
            _data + (size_t) _aligned_dim * old_location,
            sizeof(T) * _aligned_dim);
@@ -2166,10 +2061,6 @@ namespace diskann {
 #endif
     _final_graph.resize(new_max_points + 1);
     _locks = std::vector<non_recursive_mutex>(new_max_points + 1);
-    if (_support_eager_delete) {
-      _in_graph.resize(new_max_points + 1);
-      _locks_in = std::vector<non_recursive_mutex>(new_max_points + 1);
-    }
 
     reposition_point((_u32) _max_points, (_u32) new_max_points);
     _max_points = new_max_points;
@@ -2269,12 +2160,6 @@ namespace diskann {
 
   template<typename T, typename TagT>
   int Index<T, TagT>::lazy_delete(const TagT &tag) {
-    if ((_eager_done) && (!_data_compacted)) {
-      throw ANNException(
-          "Eager delete requests were issued but data was not compacted, "
-          "cannot proceed with lazy_deletes",
-          -1, __FUNCSIG__, __FILE__, __LINE__);
-    }
     std::shared_lock<std::shared_timed_mutex> ul(_update_lock);
     std::unique_lock<std::shared_timed_mutex> tl(_tag_lock);
     std::unique_lock<std::shared_timed_mutex> dl(_delete_lock);
@@ -2301,12 +2186,6 @@ namespace diskann {
     if (failed_tags.size() > 0) {
       throw ANNException("failed_tags should be passed as an empty list", -1,
                          __FUNCSIG__, __FILE__, __LINE__);
-    }
-    if ((_eager_done) && (!_data_compacted)) {
-      throw ANNException(
-          "Eager delete requests were issued but data was not compacted, "
-          "cannot proceed with lazy_deletes",
-          -1, __FUNCSIG__, __FILE__, __LINE__);
     }
     std::shared_lock<std::shared_timed_mutex> ul(_update_lock);
     std::unique_lock<std::shared_timed_mutex> tl(_tag_lock);
@@ -2354,8 +2233,7 @@ namespace diskann {
                   << std::endl;
     diskann::cout << std::boolalpha
                   << "Data compacted: " << this->_data_compacted
-                  << " Lazy done: " << this->_lazy_done
-                  << " Eager done: " << this->_eager_done << std::endl;
+                  << " Lazy done: " << this->_lazy_done << std::endl;
     diskann::cout << "---------------------------------------------------------"
                      "------------"
                   << std::endl;
