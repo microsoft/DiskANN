@@ -1120,8 +1120,8 @@ namespace diskann {
          node_ctr++) {
       auto node = visit_order[node_ctr];
 
-      ScratchStoreManager<T> manager(_query_scratch);
-      auto                   scratch = manager.scratch_space();
+      ScratchStoreManager<InMemQueryScratch<T>> manager(_query_scratch);
+      auto scratch = manager.scratch_space();
 
       search_for_point_and_add_links(node, _indexingQueueSize, scratch);
 
@@ -1402,8 +1402,8 @@ namespace diskann {
                                                        const unsigned L,
                                                        IdType        *indices,
                                                        float *distances) {
-    ScratchStoreManager<T> manager(_query_scratch);
-    auto                   scratch = manager.scratch_space();
+    ScratchStoreManager<InMemQueryScratch<T>> manager(_query_scratch);
+    auto                                      scratch = manager.scratch_space();
 
     return search_impl(query, K, L, indices, distances, scratch);
   }
@@ -1454,8 +1454,8 @@ namespace diskann {
                                           const unsigned L, TagT *tags,
                                           float            *distances,
                                           std::vector<T *> &res_vectors) {
-    ScratchStoreManager<T> manager(_query_scratch);
-    auto                   scratch = manager.scratch_space();
+    ScratchStoreManager<InMemQueryScratch<T>> manager(_query_scratch);
+    auto                                      scratch = manager.scratch_space();
 
     if (L > scratch->search_l) {
       scratch->resize_for_query(L);
@@ -2052,8 +2052,8 @@ namespace diskann {
     // Find and add appropriate graph edges
     std::vector<unsigned> pruned_list;
 
-    ScratchStoreManager<T> manager(_query_scratch);
-    auto                   scratch = manager.scratch_space();
+    ScratchStoreManager<InMemQueryScratch<T>> manager(_query_scratch);
+    auto                                      scratch = manager.scratch_space();
     search_for_point_and_add_links(location, _indexingQueueSize, scratch);
     return 0;
   }

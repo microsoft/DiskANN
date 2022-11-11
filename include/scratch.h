@@ -100,9 +100,9 @@ namespace diskann {
   template<typename T>
   class ScratchStoreManager {
    public:
-    diskann::InMemQueryScratch<T>           *_scratch;
-    ConcurrentQueue<InMemQueryScratch<T> *> &_query_scratch;
-    ScratchStoreManager(ConcurrentQueue<InMemQueryScratch<T> *> &query_scratch)
+    T                    *_scratch;
+    ConcurrentQueue<T *> &_query_scratch;
+    ScratchStoreManager(ConcurrentQueue<T *> &query_scratch)
         : _query_scratch(query_scratch) {
       _scratch = query_scratch.pop();
       while (_scratch == nullptr) {
@@ -110,7 +110,7 @@ namespace diskann {
         _scratch = query_scratch.pop();
       }
     }
-    InMemQueryScratch<T> *scratch_space() {
+    T *scratch_space() {
       return _scratch;
     }
 
