@@ -637,9 +637,6 @@ namespace diskann {
     return 0;
   }
 
-  /* This function finds out the navigating node, which is the medoid node
-   * in the graph.
-   */
   template<typename T, typename TagT>
   unsigned Index<T, TagT>::calculate_entry_point() {
     // allocate and init centroid
@@ -689,8 +686,7 @@ namespace diskann {
       const T *query, const unsigned Lsize,
       const std::vector<unsigned> &init_ids, InMemQueryScratch<T> &scratch,
       bool ret_frozen, bool search_invocation) {
-    std::vector<Neighbor>    &expanded_nodes_info = scratch.pool();
-    tsl::robin_set<unsigned> &expanded_nodes_ids = scratch.visited();
+    std::vector<Neighbor>    &expanded_nodes = scratch.pool();
     std::vector<unsigned>    &des = scratch.des();
     std::vector<Neighbor>    &best_L_nodes = scratch.best_l_nodes();
     tsl::robin_set<unsigned> &inserted_into_pool_rs =
@@ -707,10 +703,9 @@ namespace diskann {
     for (unsigned i = 0; i < Lsize + 1; i++) {
       best_L_nodes[i].distance = std::numeric_limits<float>::max();
     }
-    if (!search_invocation) {
-      expanded_nodes_ids.clear();
-      expanded_nodes_info.clear();
-      des.clear();
+    if (expanded_nodes.size() > 0 || des.size() > 0) {
+      throw ANNException("ERROR: Clear scratch space before passing.", -1,
+                         __FUNCSIG__, __FILE__, __LINE__);
     }
 
     unsigned l = 0;
@@ -759,23 +754,23 @@ namespace diskann {
 
     // sort best_L_nodes based on distance of each point to node_coords
     std::sort(best_L_nodes.begin(), best_L_nodes.begin() + l);
-    unsigned k = 0;
+    unsigned best_unchanged = 0;
     uint32_t hops = 0;
     uint32_t cmps = 0;
 
-    while (k < l) {
-      unsigned nk = l;
+    while (best_unchanged < l) {
+      unsigned best_inserted_position = l;
 
-      if (best_L_nodes[k].flag) {
-        best_L_nodes[k].flag = false;
-        auto n = best_L_nodes[k].id;
-        if (best_L_nodes[k].id != _start || _num_frozen_pts == 0 ||
-            ret_frozen) {
-          if (!search_invocation) {
-            expanded_nodes_info.emplace_back(best_L_nodes[k]);
-            expanded_nodes_ids.insert(n);
-          }
+      if (best_L_nodes[best_unchanged].flag == false) {  // Expanded before
+        best_unchanged++;
+      } else {
+        best_L_nodes[best_unchanged].flag = false;
+        auto n = best_L_nodes[best_unchanged].id;
+        if (!search_invocation && (best_L_nodes[best_unchanged].id != _start ||
+                                   _num_frozen_pts == 0 || ret_frozen)) {
+          expanded_nodes.emplace_back(best_L_nodes[best_unchanged]);
         }
+
         des.clear();
         if (_dynamic_index) {
           LockGuard guard(_locks[n]);
@@ -829,20 +824,20 @@ namespace diskann {
               continue;
 
             Neighbor nn(id, dist, true);
-            unsigned r = InsertIntoPool(best_L_nodes.data(), l, nn);
+            unsigned inserted_position =
+                InsertIntoPool(best_L_nodes.data(), l, nn);
             if (l < Lsize)
               ++l;
-            if (r < nk)
-              nk = r;
+            if (inserted_position < best_inserted_position)
+              best_inserted_position = inserted_position;
           }
         }
 
-        if (nk <= k)
-          k = nk;
+        if (best_inserted_position <= best_unchanged)
+          best_unchanged = best_inserted_position;
         else
-          ++k;
-      } else
-        k++;
+          ++best_unchanged;
+      }
     }
     return std::make_pair(hops, cmps);
   }
@@ -856,17 +851,14 @@ namespace diskann {
     iterate_to_fixed_point(_data + _aligned_dim * location, Lindex, init_ids,
                            scratch, true, false);
 
-    auto &visited = scratch.visited();
     auto &pool = scratch.pool();
 
     for (unsigned i = 0; i < pool.size(); i++) {
       if (pool[i].id == (unsigned) location) {
         pool.erase(pool.begin() + i);
-        visited.erase((unsigned) location);
         i--;
       } else if (_delete_set.find(pool[i].id) != _delete_set.end()) {
         pool.erase(pool.begin() + i);
-        visited.erase((unsigned) pool[i].id);
         i--;
       }
     }
