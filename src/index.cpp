@@ -62,7 +62,7 @@ namespace diskann {
                         const bool concurrent_consolidate)
       : _dist_metric(m), _dim(dim), _max_points(max_points),
         _dynamic_index(dynamic_index), _enable_tags(enable_tags),
-        _conc_consolidate(concurrent_consolidate) {
+        _conc_consolidate(concurrent_consolidate), _query_scratch(nullptr) {
     if (dynamic_index && !enable_tags) {
       throw ANNException("ERROR: Dynamic Indexing must have tags enabled.", -1,
                          __FUNCSIG__, __FILE__, __LINE__);
@@ -131,12 +131,12 @@ namespace diskann {
     }
 
     while (!_query_scratch.empty()) {
-      auto val = _query_scratch.pop();
-      while (val.indices == nullptr) {
+      auto scratch = _query_scratch.pop();
+      while (scratch == nullptr) {
         _query_scratch.wait_for_push_notify();
-        val = _query_scratch.pop();
+        scratch = _query_scratch.pop();
       }
-      val.destroy();
+      scratch->destroy();
     }
   }
 
@@ -146,8 +146,8 @@ namespace diskann {
                                                 uint32_t indexing_l, uint32_t r,
                                                 size_t dim) {
     for (uint32_t i = 0; i < num_threads; i++) {
-      InMemQueryScratch<T> scratch;
-      scratch.setup(search_l, indexing_l, r, dim);
+      auto scratch = new InMemQueryScratch<T>;
+      scratch->setup(search_l, indexing_l, r, dim);
       _query_scratch.push(scratch);
     }
   }
@@ -684,17 +684,17 @@ namespace diskann {
   template<typename T, typename TagT>
   std::pair<uint32_t, uint32_t> Index<T, TagT>::iterate_to_fixed_point(
       const T *query, const unsigned Lsize,
-      const std::vector<unsigned> &init_ids, InMemQueryScratch<T> &scratch,
+      const std::vector<unsigned> &init_ids, InMemQueryScratch<T> *scratch,
       bool ret_frozen, bool search_invocation) {
-    std::vector<Neighbor>    &expanded_nodes = scratch.pool();
-    std::vector<unsigned>    &des = scratch.des();
-    std::vector<Neighbor>    &best_L_nodes = scratch.best_l_nodes();
+    std::vector<Neighbor>    &expanded_nodes = scratch->pool();
+    std::vector<unsigned>    &des = scratch->des();
+    std::vector<Neighbor>    &best_L_nodes = scratch->best_l_nodes();
     tsl::robin_set<unsigned> &inserted_into_pool_rs =
-        scratch.inserted_into_pool_rs();
+        scratch->inserted_into_pool_rs();
     boost::dynamic_bitset<> &inserted_into_pool_bs =
-        scratch.inserted_into_pool_bs();
+        scratch->inserted_into_pool_bs();
 
-    T *aligned_query = scratch.aligned_query;
+    T *aligned_query = scratch->aligned_query;
     memcpy(aligned_query, query, _dim * sizeof(T));
     if (_normalize_vecs) {
       normalize((float *) aligned_query, _dim);
@@ -844,14 +844,14 @@ namespace diskann {
 
   template<typename T, typename TagT>
   void Index<T, TagT>::search_for_point_and_add_links(
-      int location, _u32 Lindex, InMemQueryScratch<T> &scratch) {
+      int location, _u32 Lindex, InMemQueryScratch<T> *scratch) {
     std::vector<unsigned> init_ids;
     init_ids.emplace_back(_start);
 
     iterate_to_fixed_point(_data + _aligned_dim * location, Lindex, init_ids,
                            scratch, true, false);
 
-    auto &pool = scratch.pool();
+    auto &pool = scratch->pool();
 
     for (unsigned i = 0; i < pool.size(); i++) {
       if (pool[i].id == (unsigned) location) {
@@ -1412,7 +1412,7 @@ namespace diskann {
   template<typename IdType>
   std::pair<uint32_t, uint32_t> Index<T, TagT>::search_impl(
       const T *query, const size_t K, const unsigned L, IdType *indices,
-      float *distances, InMemQueryScratch<T> &scratch) {
+      float *distances, InMemQueryScratch<T> *scratch) {
     std::vector<unsigned> init_ids;
 
     std::shared_lock<std::shared_timed_mutex> lock(_update_lock);
@@ -1424,7 +1424,7 @@ namespace diskann {
     auto retval =
         iterate_to_fixed_point(query, L, init_ids, scratch, true, true);
 
-    auto best_L_nodes = scratch.best_l_nodes();
+    auto best_L_nodes = scratch->best_l_nodes();
 
     size_t pos = 0;
     for (auto it : best_L_nodes) {
@@ -1457,14 +1457,14 @@ namespace diskann {
     ScratchStoreManager<T> manager(_query_scratch);
     auto                   scratch = manager.scratch_space();
 
-    if (L > scratch.search_l) {
-      scratch.resize_for_query(L);
+    if (L > scratch->search_l) {
+      scratch->resize_for_query(L);
       diskann::cout << "Expanding query scratch_space. Was created with Lsize: "
-                    << scratch.search_l << " but search L is: " << L
+                    << scratch->search_l << " but search L is: " << L
                     << std::endl;
     }
-    _u32  *indices = scratch.indices;
-    float *dist_interim = scratch.interim_dists;
+    _u32  *indices = scratch->indices;
+    float *dist_interim = scratch->interim_dists;
     search_impl(query, L, L, indices, dist_interim, scratch);
 
     std::shared_lock<std::shared_timed_mutex> ul(_update_lock);

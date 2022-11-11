@@ -151,11 +151,11 @@ namespace diskann {
     DISKANN_DLLEXPORT int enable_delete();
 
     // Record deleted point now and restructure graph later. Return -1 if tag
-    // not found, 0 if OK. 
+    // not found, 0 if OK.
     DISKANN_DLLEXPORT int lazy_delete(const TagT &tag);
 
     // Record deleted points now and restructure graph later. Add to failed_tags
-    // if tag not found. 
+    // if tag not found.
     DISKANN_DLLEXPORT void lazy_delete(const std::vector<TagT> &tags,
                                        std::vector<TagT>       &failed_tags);
 
@@ -215,15 +215,15 @@ namespace diskann {
     std::pair<uint32_t, uint32_t> search_impl(const T *query, const size_t K,
                                               const unsigned L, IDType *indices,
                                               float                *distances,
-                                              InMemQueryScratch<T> &scratch);
+                                              InMemQueryScratch<T> *scratch);
 
     std::pair<uint32_t, uint32_t> iterate_to_fixed_point(
         const T *node_coords, const unsigned Lindex,
-        const std::vector<unsigned> &init_ids, InMemQueryScratch<T> &scratch,
+        const std::vector<unsigned> &init_ids, InMemQueryScratch<T> *scratch,
         bool ret_frozen = true, bool search_invocation = false);
 
     void search_for_point_and_add_links(int location, _u32 Lindex,
-                                        InMemQueryScratch<T> &scratch);
+                                        InMemQueryScratch<T> *scratch);
 
     void prune_neighbors(const unsigned location, std::vector<Neighbor> &pool,
                          std::vector<unsigned> &pruned_list);
@@ -331,7 +331,7 @@ namespace diskann {
     uint32_t _search_queue_size;
 
     // Query scratch data structures
-    ConcurrentQueue<InMemQueryScratch<T>> _query_scratch;
+    ConcurrentQueue<InMemQueryScratch<T> *> _query_scratch;
 
     // data structures, flags and locks for dynamic indexing
     tsl::sparse_map<TagT, unsigned>    _tag_to_location;
