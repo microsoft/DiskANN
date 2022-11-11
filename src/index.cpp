@@ -1011,41 +1011,6 @@ namespace diskann {
   }
 
   template<typename T, typename TagT>
-  void Index<T, TagT>::batch_inter_insert(
-      unsigned n, const std::vector<unsigned> &pruned_list, const _u32 range,
-      std::vector<unsigned> &need_to_sync) {
-    // assert(!src_pool.empty());
-
-    for (auto des : pruned_list) {
-      if (des == n)
-        continue;
-      // des.loc is the loc of the neighbors of n
-      assert(des < _max_points + _num_frozen_pts);
-      if (des > _max_points)
-        diskann::cout << "error. " << des << " exceeds max_pts" << std::endl;
-      // des_pool contains the neighbors of the neighbors of n
-
-      {
-        LockGuard guard(_locks[des]);
-        if (std::find(_final_graph[des].begin(), _final_graph[des].end(), n) ==
-            _final_graph[des].end()) {
-          _final_graph[des].push_back(n);
-          if (_final_graph[des].size() >
-              (unsigned) (range * GRAPH_SLACK_FACTOR))
-            need_to_sync[des] = 1;
-        }
-      }  // des lock is released by this point
-    }
-  }
-
-  template<typename T, typename TagT>
-  void Index<T, TagT>::batch_inter_insert(
-      unsigned n, const std::vector<unsigned> &pruned_list,
-      std::vector<unsigned> &need_to_sync) {
-    batch_inter_insert(n, pruned_list, _indexingRange, need_to_sync);
-  }
-
-  template<typename T, typename TagT>
   void Index<T, TagT>::inter_insert(unsigned               n,
                                     std::vector<unsigned> &pruned_list,
                                     const _u32             range) {
@@ -1208,59 +1173,6 @@ namespace diskann {
       diskann::cout << "done. Link time: "
                     << ((double) link_timer.elapsed() / (double) 1000000) << "s"
                     << std::endl;
-    }
-  }
-
-  template<typename T, typename TagT>
-  void Index<T, TagT>::prune_all_nbrs(const Parameters &parameters) {
-    const unsigned range = parameters.Get<unsigned>("R");
-
-    diskann::Timer timer;
-#pragma omp parallel for
-    for (_s64 node = 0; node < (_s64) (_max_points + _num_frozen_pts); node++) {
-      if ((size_t) node < _nd || (size_t) node == _max_points) {
-        if (_final_graph[node].size() > range) {
-          tsl::robin_set<unsigned> dummy_visited(0);
-          std::vector<Neighbor>    dummy_pool(0);
-          std::vector<unsigned>    new_out_neighbors;
-
-          for (auto cur_nbr : _final_graph[node]) {
-            if (dummy_visited.find(cur_nbr) == dummy_visited.end() &&
-                cur_nbr != node) {
-              float dist =
-                  _distance->compare(_data + _aligned_dim * (size_t) node,
-                                     _data + _aligned_dim * (size_t) cur_nbr,
-                                     (unsigned) _aligned_dim);
-              dummy_pool.emplace_back(Neighbor(cur_nbr, dist, true));
-              dummy_visited.insert(cur_nbr);
-            }
-          }
-          prune_neighbors((_u32) node, dummy_pool, new_out_neighbors);
-
-          _final_graph[node].clear();
-          for (auto id : new_out_neighbors)
-            _final_graph[node].emplace_back(id);
-        }
-      }
-    }
-
-    diskann::cout << "Prune time : " << timer.elapsed() / 1000 << "ms"
-                  << std::endl;
-    size_t max = 0, min = 1 << 30, total = 0, cnt = 0;
-    for (size_t i = 0; i < (_nd + _num_frozen_pts); i++) {
-      auto &pool = _final_graph[i];
-      max = std::max(max, pool.size());
-      min = std::min(min, pool.size());
-      total += pool.size();
-      if (pool.size() < 2)
-        cnt++;
-    }
-    if (min > max)
-      min = max;
-    if (_nd > 0) {
-      diskann::cout << "Index built with degree: max:" << max << "  avg:"
-                    << (float) total / (float) (_nd + _num_frozen_pts)
-                    << "  min:" << min << "  count(deg<2):" << cnt << std::endl;
     }
   }
 
