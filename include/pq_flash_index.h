@@ -17,45 +17,11 @@
 #include "pq.h"
 #include "utils.h"
 #include "windows_customizations.h"
+#include "scratch.h"
 
-#define MAX_GRAPH_DEGREE 512
-#define MAX_N_CMPS 16384
-#define SECTOR_LEN (_u64) 4096
-#define MAX_N_SECTOR_READS 128
 #define FULL_PRECISION_REORDER_MULTIPLIER 3
 
 namespace diskann {
-
-  template<typename T>
-  struct QueryScratch {
-    T   *coord_scratch = nullptr;  // MUST BE AT LEAST [MAX_N_CMPS * data_dim]
-    _u64 coord_idx = 0;            // index of next [data_dim] scratch to use
-
-    char *sector_scratch =
-        nullptr;          // MUST BE AT LEAST [MAX_N_SECTOR_READS * SECTOR_LEN]
-    _u64 sector_idx = 0;  // index of next [SECTOR_LEN] scratch to use
-
-    T *aligned_query_T = nullptr;
-
-    PQScratch<T> *_pq_scratch;
-
-    tsl::robin_set<_u64>  visited;
-    std::vector<Neighbor> retset;
-    std::vector<Neighbor> full_retset;
-
-    QueryScratch(size_t aligned_dim, size_t visited_reserve);
-    ~QueryScratch();
-
-    void reset();
-  };
-
-  template<typename T>
-  struct ThreadData {
-    QueryScratch<T> scratch;
-    IOContext       ctx;
-
-    ThreadData(size_t aligned_dim, size_t visited_reserve);
-  };
 
   template<typename T>
   class PQFlashIndex {
@@ -186,12 +152,12 @@ namespace diskann {
     tsl::robin_map<_u32, T *> coord_cache;
 
     // thread-specific scratch
-    ConcurrentQueue<ThreadData<T> *> thread_data;
-    _u64                             max_nthreads;
-    bool                             load_flag = false;
-    bool                             count_visited_nodes = false;
-    bool                             reorder_data_exists = false;
-    _u64                             reoreder_data_offset = 0;
+    ConcurrentQueue<SSDThreadData<T> *> thread_data;
+    _u64                                max_nthreads;
+    bool                                load_flag = false;
+    bool                                count_visited_nodes = false;
+    bool                                reorder_data_exists = false;
+    _u64                                reoreder_data_offset = 0;
 
 #ifdef EXEC_ENV_OLS
     // Set to a larger value than the actual header to accommodate
