@@ -769,8 +769,8 @@ namespace diskann {
       if (best_L_nodes[k].flag) {
         best_L_nodes[k].flag = false;
         auto n = best_L_nodes[k].id;
-        if (!(best_L_nodes[k].id == _start && _num_frozen_pts > 0 &&
-              !ret_frozen)) {
+        if (best_L_nodes[k].id != _start || _num_frozen_pts == 0 ||
+            ret_frozen) {
           if (!search_invocation) {
             expanded_nodes_info.emplace_back(best_L_nodes[k]);
             expanded_nodes_ids.insert(n);
@@ -802,7 +802,7 @@ namespace diskann {
           }
         }
 
-        for (unsigned m = 0; m < des.size(); ++m) {
+        for (size_t m = 0; m < des.size(); ++m) {
           unsigned id = des[m];
           bool     id_is_missing = fast_iterate ? inserted_into_pool_bs[id] == 0
                                                 : inserted_into_pool_rs.find(id) ==
@@ -813,7 +813,7 @@ namespace diskann {
             } else {
               inserted_into_pool_rs.insert(id);
             }
-            if ((m + 1) < des.size()) {
+            if (m + 1 < des.size()) {
               auto nextn = des[m + 1];
               diskann::prefetch_vector(
                   (const char *) _data + _aligned_dim * (size_t) nextn,
@@ -854,7 +854,7 @@ namespace diskann {
     init_ids.emplace_back(_start);
 
     iterate_to_fixed_point(_data + _aligned_dim * location, Lindex, init_ids,
-                           scratch, false, false);
+                           scratch, true, false);
 
     auto &visited = scratch.visited();
     auto &pool = scratch.pool();
@@ -1048,7 +1048,7 @@ namespace diskann {
   template<typename T, typename TagT>
   void Index<T, TagT>::inter_insert(unsigned               n,
                                     std::vector<unsigned> &pruned_list,
-                                    const _u32 range) {
+                                    const _u32             range) {
     const auto &src_pool = pruned_list;
 
     assert(!src_pool.empty());
@@ -1098,7 +1098,7 @@ namespace diskann {
         prune_neighbors(des, dummy_pool, new_out_neighbors);
         {
           LockGuard guard(_locks[des]);
-          
+
           _final_graph[des].clear();
           for (auto new_nbr : new_out_neighbors) {
             _final_graph[des].emplace_back(new_nbr);
@@ -2150,10 +2150,6 @@ namespace diskann {
 
     ScratchStoreManager<T> manager(_query_scratch);
     auto                   scratch = manager.scratch_space();
-    // std::vector<Neighbor> &   pool = scratch.pool();
-    // tsl::robin_set<unsigned> &visited = scratch.visited();
-    // pool.clear();
-    // visited.clear();
     search_for_point_and_add_links(location, _indexingQueueSize, scratch);
     return 0;
   }
