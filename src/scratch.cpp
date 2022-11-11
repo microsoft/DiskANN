@@ -124,6 +124,49 @@ namespace diskann {
     search_l = indexing_l = r = 0;
   }
 
+  template<typename T>
+  void SSDQueryScratch<T>::reset() {
+    coord_idx = 0;
+    sector_idx = 0;
+    visited.clear();
+    retset.clear();
+    full_retset.clear();
+  }
+
+  template<typename T>
+  SSDQueryScratch<T>::SSDQueryScratch(size_t aligned_dim,
+                                      size_t visited_reserve) {
+    _u64 coord_alloc_size = ROUND_UP(MAX_N_CMPS * aligned_dim, 256);
+
+    diskann::alloc_aligned((void **) &coord_scratch, coord_alloc_size, 256);
+    diskann::alloc_aligned((void **) &sector_scratch,
+                           (_u64) MAX_N_SECTOR_READS * (_u64) SECTOR_LEN,
+                           SECTOR_LEN);
+    diskann::alloc_aligned((void **) &aligned_query_T, aligned_dim * sizeof(T),
+                           8 * sizeof(T));
+
+    _pq_scratch = new PQScratch<T>(MAX_GRAPH_DEGREE, aligned_dim);
+
+    memset(coord_scratch, 0, MAX_N_CMPS * aligned_dim);
+    memset(aligned_query_T, 0, aligned_dim * sizeof(T));
+
+    visited.reserve(visited_reserve);
+    full_retset.reserve(visited_reserve);
+  }
+
+  template<typename T>
+  SSDQueryScratch<T>::~SSDQueryScratch() {
+    diskann::aligned_free((void *) coord_scratch);
+    diskann::aligned_free((void *) sector_scratch);
+
+    delete[] _pq_scratch;
+  }
+
+  template<typename T>
+  SSDThreadData<T>::SSDThreadData(size_t aligned_dim, size_t visited_reserve)
+      : scratch(aligned_dim, visited_reserve) {
+  }
+
   template DISKANN_DLLEXPORT InMemQueryScratch<int8_t>::InMemQueryScratch();
   template DISKANN_DLLEXPORT InMemQueryScratch<uint8_t>::InMemQueryScratch();
   template DISKANN_DLLEXPORT InMemQueryScratch<float>::InMemQueryScratch();
@@ -149,5 +192,13 @@ namespace diskann {
   template DISKANN_DLLEXPORT void InMemQueryScratch<int8_t>::destroy();
   template DISKANN_DLLEXPORT void InMemQueryScratch<uint8_t>::destroy();
   template DISKANN_DLLEXPORT void InMemQueryScratch<float>::destroy();
+
+  template class SSDQueryScratch<_u8>;
+  template class SSDQueryScratch<_s8>;
+  template class SSDQueryScratch<float>;
+
+  template class SSDThreadData<_u8>;
+  template class SSDThreadData<_s8>;
+  template class SSDThreadData<float>;
 
 }  // namespace diskann

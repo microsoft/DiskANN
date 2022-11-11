@@ -54,66 +54,6 @@
   ((((_u64) (id)) % nvecs_per_sector) * data_dim * sizeof(float))
 
 namespace diskann {
-  template<typename T>
-  void QueryScratch<T>::reset() {
-    coord_idx = 0;
-    sector_idx = 0;
-    visited.clear();
-    retset.clear();
-    full_retset.clear();
-  }
-
-  template<typename T>
-  QueryScratch<T>::QueryScratch(size_t aligned_dim, size_t visited_reserve) {
-    _u64 coord_alloc_size = ROUND_UP(MAX_N_CMPS * aligned_dim, 256);
-
-    diskann::alloc_aligned((void **) &coord_scratch, coord_alloc_size, 256);
-    diskann::alloc_aligned((void **) &sector_scratch,
-                           (_u64) MAX_N_SECTOR_READS * (_u64) SECTOR_LEN,
-                           SECTOR_LEN);
-    diskann::alloc_aligned((void **) &aligned_query_T, aligned_dim * sizeof(T),
-                           8 * sizeof(T));
-
-    _pq_scratch = new PQScratch<T>(MAX_GRAPH_DEGREE, aligned_dim);
-
-    /*diskann::alloc_aligned(
-        (void **) &aligned_pq_coord_scratch,
-        (_u64) MAX_GRAPH_DEGREE * (_u64) MAX_PQ_CHUNKS * sizeof(_u8), 256);
-    diskann::alloc_aligned((void **) &aligned_pqtable_dist_scratch,
-                           256 * (_u64) MAX_PQ_CHUNKS * sizeof(float), 256);
-    diskann::alloc_aligned((void **) &aligned_dist_scratch,
-                           (_u64) MAX_GRAPH_DEGREE * sizeof(float), 256);
-
-    diskann::alloc_aligned((void **) &aligned_query_float,
-                           aligned_dim * sizeof(float), 8 * sizeof(float));
-    diskann::alloc_aligned((void **) &rotated_query,
-                           aligned_dim * sizeof(float), 8 * sizeof(float));*/
-
-    memset(coord_scratch, 0, MAX_N_CMPS * aligned_dim);
-    memset(aligned_query_T, 0, aligned_dim * sizeof(T));
-
-    visited.reserve(visited_reserve);
-    full_retset.reserve(visited_reserve);
-  }
-
-  template<typename T>
-  QueryScratch<T>::~QueryScratch() {
-    diskann::aligned_free((void *) coord_scratch);
-    diskann::aligned_free((void *) sector_scratch);
-    /*  diskann::aligned_free((void *) aligned_pq_coord_scratch);
-      diskann::aligned_free((void *) aligned_pqtable_dist_scratch);
-      diskann::aligned_free((void *) aligned_dist_scratch);
-      diskann::aligned_free((void *) aligned_query_float);
-      diskann::aligned_free((void *) rotated_query);
-      diskann::aligned_free((void *) aligned_query_T);*/
-
-    delete[] _pq_scratch;
-  }
-
-  template<typename T>
-  ThreadData<T>::ThreadData(size_t aligned_dim, size_t visited_reserve)
-      : scratch(aligned_dim, visited_reserve) {
-  }
 
   template<typename T>
   PQFlashIndex<T>::PQFlashIndex(std::shared_ptr<AlignedFileReader> &fileReader,
@@ -168,8 +108,8 @@ namespace diskann {
     for (_s64 thread = 0; thread < (_s64) nthreads; thread++) {
 #pragma omp critical
       {
-        ThreadData<T> *data =
-            new ThreadData<T>(this->aligned_dim, visited_reserve);
+        SSDThreadData<T> *data =
+            new SSDThreadData<T>(this->aligned_dim, visited_reserve);
         this->reader->register_thread();
         data->ctx = this->reader->get_ctx();
         this->thread_data.push(data);
@@ -1319,14 +1259,6 @@ namespace diskann {
 #endif
 
   // instantiations
-  template class QueryScratch<_u8>;
-  template class QueryScratch<_s8>;
-  template class QueryScratch<float>;
-
-  template class ThreadData<_u8>;
-  template class ThreadData<_s8>;
-  template class ThreadData<float>;
-
   template class PQFlashIndex<_u8>;
   template class PQFlashIndex<_s8>;
   template class PQFlashIndex<float>;
