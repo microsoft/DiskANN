@@ -136,7 +136,7 @@ namespace diskann {
         _query_scratch.wait_for_push_notify();
         scratch = _query_scratch.pop();
       }
-      scratch->destroy();
+      delete scratch;
     }
   }
 
@@ -146,8 +146,7 @@ namespace diskann {
                                                 uint32_t indexing_l, uint32_t r,
                                                 size_t dim) {
     for (uint32_t i = 0; i < num_threads; i++) {
-      auto scratch = new InMemQueryScratch<T>;
-      scratch->setup(search_l, indexing_l, r, dim);
+      auto scratch = new InMemQueryScratch<T>(search_l, indexing_l, r, dim);
       _query_scratch.push(scratch);
     }
   }
@@ -694,7 +693,7 @@ namespace diskann {
     boost::dynamic_bitset<> &inserted_into_pool_bs =
         scratch->inserted_into_pool_bs();
 
-    T *aligned_query = scratch->aligned_query;
+    T *aligned_query = scratch->aligned_query();
     memcpy(aligned_query, query, _dim * sizeof(T));
     if (_normalize_vecs) {
       normalize((float *) aligned_query, _dim);
@@ -1462,8 +1461,8 @@ namespace diskann {
                     << scratch->search_l << " but search L is: " << L
                     << std::endl;
     }
-    _u32  *indices = scratch->indices;
-    float *dist_interim = scratch->interim_dists;
+    _u32  *indices = scratch->indices();
+    float *dist_interim = scratch->interim_dists();
     search_impl(query, L, L, indices, dist_interim, scratch);
 
     std::shared_lock<std::shared_timed_mutex> ul(_update_lock);
