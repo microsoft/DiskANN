@@ -8,7 +8,7 @@
 
 namespace diskann {
   //
-  // Functions to manage scratch space for in-memoey based search
+  // Functions to manage scratch space for in-memory index based search
   //
   template<typename T>
   InMemQueryScratch<T>::InMemQueryScratch(uint32_t search_l,
@@ -133,34 +133,15 @@ namespace diskann {
     scratch.reset();
   }
 
-  template DISKANN_DLLEXPORT InMemQueryScratch<int8_t>::~InMemQueryScratch();
-  template DISKANN_DLLEXPORT InMemQueryScratch<uint8_t>::~InMemQueryScratch();
-  template DISKANN_DLLEXPORT InMemQueryScratch<float>::~InMemQueryScratch();
+  template DISKANN_DLLEXPORT class InMemQueryScratch<int8_t>;
+  template DISKANN_DLLEXPORT class InMemQueryScratch<uint8_t>;
+  template DISKANN_DLLEXPORT class InMemQueryScratch<float>;
 
-  template DISKANN_DLLEXPORT InMemQueryScratch<int8_t>::InMemQueryScratch(
-      uint32_t search_l, uint32_t indexing_l, uint32_t r, size_t dim);
-  template DISKANN_DLLEXPORT InMemQueryScratch<uint8_t>::InMemQueryScratch(
-      uint32_t search_l, uint32_t indexing_l, uint32_t r, size_t dim);
-  template DISKANN_DLLEXPORT InMemQueryScratch<float>::InMemQueryScratch(
-      uint32_t search_l, uint32_t indexing_l, uint32_t r, size_t dim);
+  template DISKANN_DLLEXPORT class SSDQueryScratch<_u8>;
+  template DISKANN_DLLEXPORT class SSDQueryScratch<_s8>;
+  template DISKANN_DLLEXPORT class SSDQueryScratch<float>;
 
-  template DISKANN_DLLEXPORT void InMemQueryScratch<int8_t>::clear();
-  template DISKANN_DLLEXPORT void InMemQueryScratch<uint8_t>::clear();
-  template DISKANN_DLLEXPORT void InMemQueryScratch<float>::clear();
-
-  template DISKANN_DLLEXPORT void InMemQueryScratch<int8_t>::resize_for_query(
-      uint32_t new_search_l);
-  template DISKANN_DLLEXPORT void InMemQueryScratch<uint8_t>::resize_for_query(
-      uint32_t new_search_l);
-  template DISKANN_DLLEXPORT void InMemQueryScratch<float>::resize_for_query(
-      uint32_t new_search_l);
-
-  template class SSDQueryScratch<_u8>;
-  template class SSDQueryScratch<_s8>;
-  template class SSDQueryScratch<float>;
-
-  template class SSDThreadData<_u8>;
-  template class SSDThreadData<_s8>;
-  template class SSDThreadData<float>;
-
+  template DISKANN_DLLEXPORT class SSDThreadData<_u8>;
+  template DISKANN_DLLEXPORT class SSDThreadData<_s8>;
+  template DISKANN_DLLEXPORT class SSDThreadData<float>;
 }  // namespace diskann

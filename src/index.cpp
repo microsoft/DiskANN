@@ -130,14 +130,8 @@ namespace diskann {
       this->_data = nullptr;
     }
 
-    while (!_query_scratch.empty()) {
-      auto scratch = _query_scratch.pop();
-      while (scratch == nullptr) {
-        _query_scratch.wait_for_push_notify();
-        scratch = _query_scratch.pop();
-      }
-      delete scratch;
-    }
+    ScratchStoreManager<InMemQueryScratch<T>> manager(_query_scratch);
+    manager.destroy();
   }
 
   template<typename T, typename TagT>

@@ -94,7 +94,10 @@ namespace diskann {
     }
 
     if (load_flag) {
-      this->destroy_thread_data();
+      diskann::cout << "Clearing scratch" << std::endl;
+      ScratchStoreManager<SSDThreadData<T>> manager(this->thread_data);
+      manager.destroy();
+      this->reader->deregister_all_threads();
       reader->close();
     }
   }
@@ -119,32 +122,13 @@ namespace diskann {
   }
 
   template<typename T>
-  void PQFlashIndex<T>::destroy_thread_data() {
-    diskann::cout << "Clearing scratch" << std::endl;
-    assert(this->thread_data.size() == this->max_nthreads);
-    while (this->thread_data.size() > 0) {
-      auto data = this->thread_data.pop();
-      while (data->scratch.sector_scratch == nullptr) {
-        this->thread_data.wait_for_push_notify();
-        data = this->thread_data.pop();
-      }
-      delete data;
-    }
-    this->reader->deregister_all_threads();
-  }
-
-  template<typename T>
   void PQFlashIndex<T>::load_cache_list(std::vector<uint32_t> &node_list) {
     diskann::cout << "Loading the cache list into memory.." << std::flush;
     _u64 num_cached_nodes = node_list.size();
 
     // borrow thread data
-    auto this_thread_data = this->thread_data.pop();
-    while (this_thread_data->scratch.sector_scratch == nullptr) {
-      this->thread_data.wait_for_push_notify();
-      this_thread_data = this->thread_data.pop();
-    }
-
+    ScratchStoreManager<SSDThreadData<T>> manager(this->thread_data);
+    auto       this_thread_data = manager.scratch_space();
     IOContext &ctx = this_thread_data->ctx;
 
     nhood_cache_buf = new unsigned[num_cached_nodes * (max_degree + 1)];
@@ -206,9 +190,6 @@ namespace diskann {
         node_idx++;
       }
     }
-    // return thread data
-    this->thread_data.push(this_thread_data);
-    this->thread_data.push_notify_all();
     diskann::cout << "..done." << std::endl;
   }
 
@@ -298,12 +279,8 @@ namespace diskann {
     diskann::cout << "Caching " << num_nodes_to_cache << "..." << std::endl;
 
     // borrow thread data
-    auto this_thread_data = this->thread_data.pop();
-    while (this_thread_data->scratch.sector_scratch == nullptr) {
-      this->thread_data.wait_for_push_notify();
-      this_thread_data = this->thread_data.pop();
-    }
-
+    ScratchStoreManager<SSDThreadData<T>> manager(this->thread_data);
+    auto       this_thread_data = manager.scratch_space();
     IOContext &ctx = this_thread_data->ctx;
 
     std::unique_ptr<tsl::robin_set<unsigned>> cur_level, prev_level;
@@ -412,11 +389,6 @@ namespace diskann {
     diskann::cout << "Level: " << lvl << std::flush;
     diskann::cout << ". #nodes: " << node_list.size() - prev_node_list_size
                   << ", #nodes thus far: " << node_list.size() << std::endl;
-
-    // return thread data
-    this->thread_data.push(this_thread_data);
-    this->thread_data.push_notify_all();
-
     diskann::cout << "done" << std::endl;
   }
 
@@ -429,12 +401,9 @@ namespace diskann {
     std::memset(centroid_data, 0, num_medoids * aligned_dim * sizeof(float));
 
     // borrow ctx
-    auto data = this->thread_data.pop();
-    while (data->scratch.sector_scratch == nullptr) {
-      this->thread_data.wait_for_push_notify();
-      data = this->thread_data.pop();
-    }
-    IOContext &ctx = data->ctx;
+    ScratchStoreManager<SSDThreadData<T>> manager(this->thread_data);
+    auto                                  data = manager.scratch_space();
+    IOContext                            &ctx = data->ctx;
     diskann::cout << "Loading centroid data from medoids vector data of "
                   << num_medoids << " medoid(s)" << std::endl;
     for (uint64_t cur_m = 0; cur_m < num_medoids; cur_m++) {
@@ -467,10 +436,6 @@ namespace diskann {
       aligned_free(medoid_buf);
       delete[] medoid_coords;
     }
-
-    // return ctx
-    this->thread_data.push(data);
-    this->thread_data.push_notify_all();
   }
 
 #ifdef EXEC_ENV_OLS
@@ -785,14 +750,11 @@ namespace diskann {
       throw ANNException("Beamwidth can not be higher than MAX_N_SECTOR_READS",
                          -1, __FUNCSIG__, __FILE__, __LINE__);
 
-    auto data = this->thread_data.pop();
-    while (data->scratch.sector_scratch == nullptr) {
-      this->thread_data.wait_for_push_notify();
-      data = this->thread_data.pop();
-    }
-    IOContext &ctx = data->ctx;
-    auto       query_scratch = &(data->scratch);
-    auto       pq_query_scratch = query_scratch->_pq_scratch;
+    ScratchStoreManager<SSDThreadData<T>> manager(this->thread_data);
+    auto                                  data = manager.scratch_space();
+    IOContext                            &ctx = data->ctx;
+    auto                                  query_scratch = &(data->scratch);
+    auto pq_query_scratch = query_scratch->_pq_scratch;
 
     // reset query scratch
     query_scratch->reset();
@@ -873,9 +835,6 @@ namespace diskann {
     }
 
     compute_dists(&best_medoid, 1, dist_scratch);
-    /*retset[0].id = best_medoid;
-    retset[0].distance = dist_scratch[0];
-    retset[0].flag = true;*/
     retset.push_back(Neighbor(best_medoid, dist_scratch[0], true));
     visited.insert(best_medoid);
 
@@ -1186,10 +1145,6 @@ namespace diskann {
 #ifdef USE_BING_INFRA
     ctx.m_completeCount = 0;
 #endif
-    this->thread_data.push(data);
-    this->thread_data.push_notify_all();
-
-    // std::cout << num_ios << " " <<stats << std::endl;
 
     if (stats != nullptr) {
       stats->total_us = (double) query_timer.elapsed();
