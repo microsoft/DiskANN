@@ -22,7 +22,9 @@
 #define MAX_N_SECTOR_READS 128
 
 namespace diskann {
-
+  //
+  // Scratch space for in-memory index based search
+  //
   template<typename T>
   class InMemQueryScratch {
    public:
@@ -78,6 +80,10 @@ namespace diskann {
     float    *_interim_dists = nullptr;
   };
 
+  //
+  // Scratch space for SSD index based search
+  //
+
   template<typename T>
   class SSDQueryScratch {
    public:
@@ -112,12 +118,12 @@ namespace diskann {
     void clear();
   };
 
+  //
   // Class to avoid the hassle of pushing and popping the query scratch.
+  //
   template<typename T>
   class ScratchStoreManager {
    public:
-    T                    *_scratch;
-    ConcurrentQueue<T *> &_scratch_pool;
     ScratchStoreManager(ConcurrentQueue<T *> &query_scratch)
         : _scratch_pool(query_scratch) {
       _scratch = query_scratch.pop();
@@ -136,7 +142,20 @@ namespace diskann {
       _scratch_pool.push_notify_all();
     }
 
+    void destroy() {
+      while (!_scratch_pool.empty()) {
+        auto scratch = _scratch_pool.pop();
+        while (scratch == nullptr) {
+          _scratch_pool.wait_for_push_notify();
+          scratch = _scratch_pool.pop();
+        }
+        delete scratch;
+      }
+    }
+
    private:
+    T                    *_scratch;
+    ConcurrentQueue<T *> &_scratch_pool;
     ScratchStoreManager(const ScratchStoreManager<T> &);
     ScratchStoreManager &operator=(const ScratchStoreManager<T> &);
   };
