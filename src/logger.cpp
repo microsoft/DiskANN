@@ -41,7 +41,7 @@ namespace diskann {
 #endif
 
     std::memset(_buf, 0, (BUFFER_SIZE) * sizeof(char));
-    setp(_buf, _buf + BUFFER_SIZE);
+    setp(_buf, _buf + BUFFER_SIZE - 1);
   }
 
   ANNStreamBuf::~ANNStreamBuf() {
