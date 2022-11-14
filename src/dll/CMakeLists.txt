@@ -9,7 +9,7 @@ set(TARGET_DIR "$<$<CONFIG:Debug>:${CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG}>$<$<CO
 set(DISKANN_DLL_IMPLIB "${TARGET_DIR}/${PROJECT_NAME}.lib")
 
 target_compile_definitions(${PROJECT_NAME} PRIVATE _USRDLL _WINDLL)
-target_compile_options(${PROJECT_NAME} PRIVATE /MD /GL)
+target_compile_options(${PROJECT_NAME} PRIVATE /GL)
 target_include_directories(${PROJECT_NAME} PRIVATE ${DISKANN_MKL_INCLUDE_DIRECTORIES})
 
 target_link_options(${PROJECT_NAME} PRIVATE /DLL /IMPLIB:${DISKANN_DLL_IMPLIB} /LTCG)
