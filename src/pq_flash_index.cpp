@@ -770,13 +770,10 @@ namespace diskann {
     // to 0 (this is the extra coordindate used to convert MIPS to L2 search)
     if (metric == diskann::Metric::INNER_PRODUCT) {
       for (size_t i = 0; i < this->data_dim - 1; i++) {
-        query_float[i] = query1[i];
+        aligned_query_T[i] = query1[i];
         query_norm += query1[i] * query1[i];
       }
       query_norm = std::sqrt(query_norm);
-      for (size_t i = 0; i < this->data_dim - 1; i++) {
-        aligned_query_T[i] /= query_norm;
-      }
       aligned_query_T[this->data_dim - 1] = 0;
       pq_query_scratch->set(this->data_dim, aligned_query_T, query_norm);
     } else {
