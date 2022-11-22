@@ -775,7 +775,10 @@ namespace diskann {
       }
       query_norm = std::sqrt(query_norm);
       aligned_query_T[this->data_dim - 1] = 0;
-      pq_query_scratch->set(this->data_dim, aligned_query_T, query_norm);
+      for (size_t i = 0; i < this->data_dim - 1; i++) {
+        aligned_query_T[i] /= query_norm;
+      }
+      pq_query_scratch->set(this->data_dim, aligned_query_T);
     } else {
       for (size_t i = 0; i < this->data_dim; i++) {
         aligned_query_T[i] = query1[i];
