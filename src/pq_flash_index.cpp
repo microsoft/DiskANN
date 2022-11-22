@@ -825,7 +825,6 @@ namespace diskann {
 
     _u32                        best_medoid = 0;
     float                       best_dist = (std::numeric_limits<float>::max)();
-    std::vector<SimpleNeighbor> medoid_dists;
     for (_u64 cur_m = 0; cur_m < num_medoids; cur_m++) {
       float cur_expanded_dist = dist_cmp_float->compare(
           query_float, centroid_data + aligned_dim * cur_m,
