@@ -186,7 +186,6 @@ void build_incremental_index(
   using TagT = uint32_t;
   unsigned   num_frozen = 1;
   const bool enable_tags = true;
-  const bool support_eager_delete = false;
 
   auto num_frozen_str = getenv("TTS_NUM_FROZEN");
 
@@ -196,8 +195,7 @@ void build_incremental_index(
   }
 
   diskann::Index<T, TagT> index(diskann::L2, dim, max_points_to_insert, true,
-                                params, params, enable_tags,
-                                support_eager_delete, concurrent);
+                                params, params, enable_tags, concurrent);
 
   size_t       current_point_offset = points_to_skip;
   const size_t last_point_threshold = points_to_skip + max_points_to_insert;
@@ -334,7 +332,7 @@ void build_incremental_index(
                 << std::endl;
     }
 
-    if (checkpoints_per_snapshot >= 0 &&
+    if (checkpoints_per_snapshot > 0 &&
         last_snapshot_points_threshold != last_point_threshold) {
       const auto save_path_inc = get_save_filename(
           save_path + ".inc-", points_to_skip, points_to_delete_from_beginning,
