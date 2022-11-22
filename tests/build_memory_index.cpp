@@ -25,7 +25,8 @@ int build_in_memory_index(const diskann::Metric& metric,
                           const std::string& data_path, const unsigned R,
                           const unsigned L, const float alpha,
                           const std::string& save_path,
-                          const unsigned     num_threads) {
+                          const unsigned num_threads, const bool use_pq_build,
+                          const size_t num_pq_bytes, const bool use_opq) {
   diskann::Parameters paras;
   paras.Set<unsigned>("R", R);
   paras.Set<unsigned>("L", L);
@@ -38,7 +39,8 @@ int build_in_memory_index(const diskann::Metric& metric,
   _u64 data_num, data_dim;
   diskann::get_bin_metadata(data_path, data_num, data_dim);
 
-  diskann::Index<T, TagT> index(metric, data_dim, data_num, false, false);
+  diskann::Index<T, TagT> index(metric, data_dim, data_num, false, false, false,
+                                use_pq_build, num_pq_bytes, use_opq);
   auto                    s = std::chrono::high_resolution_clock::now();
   index.build(data_path.c_str(), data_num, paras);
 
@@ -53,8 +55,9 @@ int build_in_memory_index(const diskann::Metric& metric,
 
 int main(int argc, char** argv) {
   std::string data_type, dist_fn, data_path, index_path_prefix;
-  unsigned    num_threads, R, L;
+  unsigned    num_threads, R, L, num_pq_bytes;
   float       alpha;
+  bool        use_pq_build, use_opq;
 
   po::options_description desc{"Arguments"};
   try {
@@ -85,6 +88,15 @@ int main(int argc, char** argv) {
         po::value<uint32_t>(&num_threads)->default_value(omp_get_num_procs()),
         "Number of threads used for building index (defaults to "
         "omp_get_num_procs())");
+    desc.add_options()(
+        "use_pq_build", po::bool_switch()->default_value(false),
+        "Use PQ based distance comparisons for constructing the graph");
+    desc.add_options()("num_pq_bytes",
+                       po::value<uint32_t>(&num_pq_bytes)->default_value(0),
+                       "Number of PQ bytes to compress vectors to");
+    desc.add_options()(
+        "use_opq", po::bool_switch()->default_value(false),
+        "Set true for OPQ compression, and false for PQ compression");
 
     po::variables_map vm;
     po::store(po::parse_command_line(argc, argv, desc), vm);
@@ -93,6 +105,14 @@ int main(int argc, char** argv) {
       return 0;
     }
     po::notify(vm);
+    use_pq_build = vm["use_pq_build"].as<bool>();
+    use_opq = vm["use_opq"].as<bool>();
+    if (use_pq_build && num_pq_bytes == 0) {
+      std::cerr
+          << "ERROR: for PQ based build, set num_pq_bytes to a positive value."
+          << std::endl;
+      return -1;
+    }
   } catch (const std::exception& ex) {
     std::cerr << ex.what() << '\n';
     return -1;
@@ -118,13 +138,16 @@ int main(int argc, char** argv) {
                   << std::endl;
     if (data_type == std::string("int8"))
       return build_in_memory_index<int8_t>(metric, data_path, R, L, alpha,
-                                           index_path_prefix, num_threads);
+                                           index_path_prefix, num_threads,
+                                           use_pq_build, num_pq_bytes, use_opq);
     else if (data_type == std::string("uint8"))
-      return build_in_memory_index<uint8_t>(metric, data_path, R, L, alpha,
-                                            index_path_prefix, num_threads);
+      return build_in_memory_index<uint8_t>(
+          metric, data_path, R, L, alpha, index_path_prefix, num_threads,
+          use_pq_build, num_pq_bytes, use_opq);
     else if (data_type == std::string("float"))
       return build_in_memory_index<float>(metric, data_path, R, L, alpha,
-                                          index_path_prefix, num_threads);
+                                          index_path_prefix, num_threads,
+                                          use_pq_build, num_pq_bytes, use_opq);
     else {
       std::cout << "Unsupported type. Use one of int8, uint8 or float."
                 << std::endl;
