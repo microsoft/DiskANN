@@ -309,13 +309,6 @@ namespace diskann {
     std::memcpy(train_data.get(), passed_train_data,
                 num_train * dim * sizeof(float));
 
-    for (uint64_t i = 0; i < num_train; i++) {
-      for (uint64_t j = 0; j < dim; j++) {
-        if (passed_train_data[i * dim + j] != train_data[i * dim + j])
-          diskann::cout << "error in copy" << std::endl;
-      }
-    }
-
     std::unique_ptr<float[]> full_pivot_data;
 
     if (file_exists(pq_pivots_path)) {
