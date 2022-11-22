@@ -86,7 +86,7 @@ namespace diskann {
       std::string base_file, diskann::Metric _compareMetric, unsigned L,
       unsigned R, double sampling_rate, double ram_budget,
       std::string mem_index_path, std::string medoids_file,
-      std::string centroids_file);
+      std::string centroids_file, size_t build_pq_bytes, bool use_opq);
 
   template<typename T>
   DISKANN_DLLEXPORT uint32_t optimize_beamwidth(

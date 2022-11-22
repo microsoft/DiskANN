@@ -34,50 +34,66 @@ namespace diskann {
 
     ~InMemQueryScratch();
     InMemQueryScratch(uint32_t search_l, uint32_t indexing_l, uint32_t r,
-                      size_t dim);
+                      uint32_t maxc, size_t dim, bool init_pq_scratch = false);
     void resize_for_query(uint32_t new_search_l);
     void clear();
 
-    std::vector<Neighbor> &pool() {
+    inline std::vector<Neighbor> &pool() {
       return _pool;
     }
-    std::vector<unsigned> &des() {
-      return _des;
-    }
-    tsl::robin_set<unsigned> &visited() {
+    inline tsl::robin_set<unsigned> &visited() {
       return _visited;
     }
     std::vector<Neighbor> &best_l_nodes() {
       return _best_l_nodes;
     }
-    tsl::robin_set<unsigned> &inserted_into_pool_rs() {
+    inline tsl::robin_set<unsigned> &inserted_into_pool_rs() {
       return _inserted_into_pool_rs;
     }
-    boost::dynamic_bitset<> &inserted_into_pool_bs() {
+    inline boost::dynamic_bitset<> &inserted_into_pool_bs() {
       return *_inserted_into_pool_bs;
     }
+    inline std::vector<unsigned> &id_scratch() {
+      return _id_scratch;
+    }
+    inline float *dist_scratch() {
+      return _dist_scratch;
+    }
 
-    T *aligned_query() {
-      return this->_aligned_query;
+    inline T *aligned_query() {
+      return _aligned_query;
     }
-    uint32_t *indices() {
-      return this->_indices;
+    inline uint32_t *indices() {
+      return _indices;
     }
-    float *interim_dists() {
-      return this->_interim_dists;
+    inline float *interim_dists() {
+      return _interim_dists;
+    }
+
+    inline std::vector<float> &occlude_factor() {
+      return _occlude_factor;
+    }
+
+    inline PQScratch<T> *pq_scratch() {
+      return _pq_scratch;
     }
 
    private:
     std::vector<Neighbor>    _pool;
     tsl::robin_set<unsigned> _visited;
-    std::vector<unsigned>    _des;
     std::vector<Neighbor>    _best_l_nodes;
     tsl::robin_set<unsigned> _inserted_into_pool_rs;
     boost::dynamic_bitset<> *_inserted_into_pool_bs;
+    std::vector<unsigned>    _id_scratch;
+    float                   *_dist_scratch = nullptr;
 
     T        *_aligned_query = nullptr;
     uint32_t *_indices = nullptr;
     float    *_interim_dists = nullptr;
+
+    std::vector<float> _occlude_factor;
+
+    PQScratch<T> *_pq_scratch = nullptr;
   };
 
   //
