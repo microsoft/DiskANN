@@ -1,5 +1,5 @@
-# Copyright (c) Microsoft Corporation. All rights reserved.
-# Licensed under the MIT license.
+#Copyright(c) Microsoft Corporation.All rights reserved.
+#Licensed under the MIT                        license.
 
 set(CMAKE_CXX_STANDARD 14)
 
@@ -10,7 +10,7 @@ else()
     set(CPP_SOURCES ann_exception.cpp disk_utils.cpp distance.cpp index.cpp
         linux_aligned_file_reader.cpp math_utils.cpp natural_number_map.cpp
         natural_number_set.cpp memory_mapper.cpp partition.cpp pq.cpp
-        pq_flash_index.cpp logger.cpp utils.cpp)
+        pq_flash_index.cpp scratch.cpp logger.cpp utils.cpp)
     if (RESTAPI)
         list(APPEND CPP_SOURCES restapi/search_wrapper.cpp restapi/server.cpp)
     endif()
