@@ -818,7 +818,7 @@ namespace diskann {
               continue;
 
             Neighbor nn(id, dist, true);
-            unsigned inserted_position = InsertIntoPool(best_L_nodes, l, nn);
+            unsigned inserted_position = InsertIntoPool(best_L_nodes.data(), l, nn);
             if (l < Lsize)
               ++l;
             if (inserted_position < best_inserted_position)
@@ -2277,7 +2277,7 @@ namespace diskann {
           if (dist >= retset[L - 1].distance)
             continue;
           Neighbor nn(id, dist, true);
-          int      r = InsertIntoPool(retset, L, nn);
+          int      r = InsertIntoPool(retset.data(), L, nn);
 
           // if(L+1 < retset.size()) ++L;
           if (r < nk)
