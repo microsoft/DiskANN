@@ -32,7 +32,6 @@ typedef int FileHandle;
 #include "windows_customizations.h"
 
 namespace diskann {
-  const size_t   MAX_PQ_TRAINING_SET_SIZE = 256000;
   const size_t   MAX_SAMPLE_POINTS_FOR_WARMUP = 100000;
   const double   PQ_TRAINING_SET_FRACTION = 0.1;
   const double   SPACE_FOR_CACHED_NODES_IN_GB = 0.25;

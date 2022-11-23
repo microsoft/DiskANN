@@ -5,9 +5,12 @@
 
 #include "utils.h"
 
-#define NUM_PQ_CENTROIDS 256
+#define NUM_PQ_BITS 8
+#define NUM_PQ_CENTROIDS (1 << NUM_PQ_BITS)
 #define MAX_OPQ_ITERS 20
 #define NUM_KMEANS_REPS_PQ 12
+#define MAX_PQ_TRAINING_SET_SIZE 256000
+#define MAX_PQ_CHUNKS 256
 
 namespace diskann {
   class FixedChunkPQTable {
@@ -49,6 +52,46 @@ namespace diskann {
     void populate_chunk_inner_products(const float* query_vec, float* dist_vec);
   };
 
+  template<typename T>
+  struct PQScratch {
+    float* aligned_pqtable_dist_scratch =
+        nullptr;  // MUST BE AT LEAST [256 * NCHUNKS]
+    float* aligned_dist_scratch =
+        nullptr;  // MUST BE AT LEAST diskann MAX_DEGREE
+    _u8* aligned_pq_coord_scratch =
+        nullptr;  // MUST BE AT LEAST  [N_CHUNKS * MAX_DEGREE]
+    float* rotated_query = nullptr;
+    float* aligned_query_float = nullptr;
+
+    PQScratch(size_t graph_degree, size_t aligned_dim) {
+      diskann::alloc_aligned(
+          (void**) &aligned_pq_coord_scratch,
+          (_u64) graph_degree * (_u64) MAX_PQ_CHUNKS * sizeof(_u8), 256);
+      diskann::alloc_aligned((void**) &aligned_pqtable_dist_scratch,
+                             256 * (_u64) MAX_PQ_CHUNKS * sizeof(float), 256);
+      diskann::alloc_aligned((void**) &aligned_dist_scratch,
+                             (_u64) graph_degree * sizeof(float), 256);
+      diskann::alloc_aligned((void**) &aligned_query_float,
+                             aligned_dim * sizeof(float), 8 * sizeof(float));
+      diskann::alloc_aligned((void**) &rotated_query,
+                             aligned_dim * sizeof(float), 8 * sizeof(float));
+
+      memset(aligned_query_float, 0, aligned_dim * sizeof(float));
+      memset(rotated_query, 0, aligned_dim * sizeof(float));
+    }
+
+    void set(size_t dim, T* query, const float norm = 1.0f) {
+      for (size_t d = 0; d < dim; ++d) {
+        if (norm != 1.0f)
+          rotated_query[d] = aligned_query_float[d] =
+              static_cast<float>(query[d]) / norm;
+        else
+          rotated_query[d] = aligned_query_float[d] =
+              static_cast<float>(query[d]);
+      }
+    }
+  };
+
   void aggregate_coords(const unsigned* ids, const _u64 n_ids,
                         const _u8* all_coords, const _u64 ndims, _u8* out);
 
@@ -76,20 +119,17 @@ namespace diskann {
                                    bool        use_opq = false);
 
   template<typename T>
-  void generate_disk_quantized_data(std::string data_file_to_use,
-                                    std::string disk_pq_pivots_path,
-                                    std::string disk_pq_compressed_vectors_path,
-                                    diskann::Metric    compareMetric,
-                                    const float* const train_data,
-                                    const size_t       train_data_size,
-                                    const size_t dim, size_t& disk_pq_dims);
+  void generate_disk_quantized_data(
+      const std::string data_file_to_use, const std::string disk_pq_pivots_path,
+      const std::string     disk_pq_compressed_vectors_path,
+      const diskann::Metric compareMetric, const double p_val,
+      size_t& disk_pq_dims);
 
   template<typename T>
-  void generate_quantized_data(const std::string  data_file_to_use,
-                               const std::string  pq_pivots_path,
-                               const std::string  pq_compressed_vectors_path,
-                               diskann::Metric    compareMetric,
-                               const float* const train_data,
-                               const size_t train_data_size, const size_t dim,
-                               const size_t num_pq_chunks, const bool use_opq);
+  void generate_quantized_data(const std::string     data_file_to_use,
+                               const std::string     pq_pivots_path,
+                               const std::string     pq_compressed_vectors_path,
+                               const diskann::Metric compareMetric,
+                               const double p_val, const size_t num_pq_chunks,
+                               const bool use_opq);
 }  // namespace diskann

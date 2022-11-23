@@ -17,11 +17,7 @@
 # Some variables like MSVC are defined only after project(), so put that first.
 project(diskann)
 
-if(MSVC)
-	cmake_minimum_required(VERSION 3.15)
-else()
-	cmake_minimum_required(VERSION 2.8)
-endif()
+cmake_minimum_required(VERSION 3.15)
 
 set(CMAKE_STANDARD 14)
 
