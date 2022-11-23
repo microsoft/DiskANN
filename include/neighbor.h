@@ -48,21 +48,22 @@ namespace diskann {
     std::vector<SimpleNeighbor> pool;
   };
 
-  static inline unsigned InsertIntoPool(std::vector<Neighbor> &neighbors,
-                                        unsigned K, Neighbor nn) {
+static inline unsigned InsertIntoPool(Neighbor *addr, unsigned K,
+                                        Neighbor nn) {
     // find the location to insert
     unsigned left = 0, right = K - 1;
-    if (neighbors[left].distance > nn.distance) {
-      neighbors.insert(neighbors.begin() + left, nn);
+    if (addr[left].distance > nn.distance) {
+      memmove((char *) &addr[left + 1], &addr[left], K * sizeof(Neighbor));
+      addr[left] = nn;
       return left;
     }
-    if (neighbors[right].distance < nn.distance) {
-      neighbors.push_back(nn);
+    if (addr[right].distance < nn.distance) {
+      addr[K] = nn;
       return K;
     }
     while (right > 1 && left < right - 1) {
       unsigned mid = (left + right) / 2;
-      if (neighbors[mid].distance > nn.distance)
+      if (addr[mid].distance > nn.distance)
         right = mid;
       else
         left = mid;
@@ -70,16 +71,17 @@ namespace diskann {
     // check equal ID
 
     while (left > 0) {
-      if (neighbors[left].distance < nn.distance)
+      if (addr[left].distance < nn.distance)
         break;
-      if (neighbors[left].id == nn.id)
+      if (addr[left].id == nn.id)
         return K + 1;
       left--;
     }
-    if (neighbors[left].id == nn.id || neighbors[right].id == nn.id)
+    if (addr[left].id == nn.id || addr[right].id == nn.id)
       return K + 1;
-
-    neighbors.insert(neighbors.begin() + right, nn);
+    memmove((char *) &addr[right + 1], &addr[right],
+            (K - right) * sizeof(Neighbor));
+    addr[right] = nn;
     return right;
   }
 }  // namespace diskann
