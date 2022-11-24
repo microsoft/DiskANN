@@ -10,6 +10,7 @@
 #include "tsl/robin_map.h"
 #include "boost/dynamic_bitset.hpp"
 
+#include "constants.h"
 #include "logger.h"
 #include "exceptions.h"
 #include "aligned_file_reader.h"
@@ -146,6 +147,59 @@ namespace diskann {
   }
 
   template<typename T, typename TagT>
+  void Index<T, TagT>::select_extra_start_points(
+      Parameters &                  parameters,
+      std::unordered_set<unsigned> &unique_start_points) {
+    auto strategy = parameters.Get<std::string>(
+        Constants::selection_strategy_of_extra_start_points, Constants::random);
+    auto num_extra_start_points =
+        parameters.Get<unsigned>(Constants::num_extra_start_points, 0);
+    if (num_extra_start_points == 0) {
+      return;
+    }
+
+    if (_nd < num_extra_start_points + 1) {
+      std::cerr << "NodeCount = " << _nd
+                << ", num_extra_start_points = " << num_extra_start_points
+                << ". Too few nodes so skip to select_extra_start_points."
+                << std::endl;
+      return;
+    }
+
+    if (strategy == Constants::random) {
+      std::mt19937 gen(time(nullptr));
+      _extra_start_points.reserve(num_extra_start_points);
+      while (num_extra_start_points + 1 > unique_start_points.size()) {
+        auto nodeId = gen() % _nd;
+        if (unique_start_points.insert(nodeId).second) {
+          _extra_start_points.emplace_back(nodeId);
+        }
+      }
+    } else {
+      std::cout << "Do not support starting points selection stratey " +
+                       strategy
+                << std::endl;
+    }
+
+    std::cout << "Select extra " << num_extra_start_points
+              << " starting points with strategy " + strategy << std::endl;
+  }
+
+  template<typename T, typename TagT>
+  void Index<T, TagT>::save_extra_start_points(
+      const std::string &result_file_prefix) {
+    if (_extra_start_points.empty()) {
+      return;
+    }
+
+    std::sort(_extra_start_points.begin(), _extra_start_points.end());
+    auto id_file =
+        result_file_prefix + Constants::extra_start_points_id_file_suffix;
+    save_bin<unsigned>(id_file, _extra_start_points.data(),
+                       _extra_start_points.size(), 1);
+  }
+
+  template<typename T, typename TagT>
   _u64 Index<T, TagT>::save_tags(std::string tags_file) {
     if (!_enable_tags) {
       diskann::cout << "Not saving tags as they are not enabled." << std::endl;
@@ -266,6 +320,7 @@ namespace diskann {
       save_tags(tags_file);
       delete_file(delete_list_file);
       save_delete_list(delete_list_file);
+      save_extra_start_points(graph_file);
     } else {
       diskann::cout << "Save index in a single file currently not supported. "
                        "Not saving the index."
@@ -838,8 +893,12 @@ namespace diskann {
   template<typename T, typename TagT>
   void Index<T, TagT>::search_for_point_and_add_links(
       int location, _u32 Lindex, InMemQueryScratch<T> *scratch) {
-    std::vector<unsigned> init_ids;
+    std::vector<unsigned>& init_ids = scratch->init_ids();
     init_ids.emplace_back(_start);
+    if (!_extra_start_points.empty()) {
+      init_ids.reserve(init_ids.size() + _extra_start_points.size());
+      init_ids.insert(init_ids.end(), _extra_start_points.begin(), _extra_start_points.end());
+    }
 
     iterate_to_fixed_point(_data + _aligned_dim * location, Lindex, init_ids,
                            scratch, true, false);
@@ -1103,8 +1162,11 @@ namespace diskann {
           (size_t) (std::ceil(_indexingRange * GRAPH_SLACK_FACTOR * 1.05)));
     }
 
-    std::vector<unsigned> init_ids;
-    init_ids.emplace_back(_start);
+    // creating a initial list to begin the search process. it has _start and
+    // random other nodes
+    std::unordered_set<unsigned> unique_start_points;
+    unique_start_points.insert(_start);
+    select_extra_start_points(parameters, unique_start_points);
 
     diskann::Timer link_timer;
 

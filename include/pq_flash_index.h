@@ -74,6 +74,10 @@ namespace diskann {
                                         const _u64          min_beam_width,
                                         QueryStats         *stats = nullptr);
 
+    DISKANN_DLLEXPORT void set_extra_start_points_setting(
+        unsigned           num_extra_start_points,
+        const std::string &selection_strategy_of_extra_start_points);
+
     std::shared_ptr<AlignedFileReader> &reader;
 
    protected:
@@ -142,6 +146,11 @@ namespace diskann {
     // closest centroid as the starting point of search
     float *centroid_data = nullptr;
 
+    unsigned              num_extra_start_points;
+    std::string           selection_strategy_of_extra_start_points;
+    std::unique_ptr<T[]>  extra_start_points_data;
+    std::vector<unsigned> extra_start_points;
+
     // nhood_cache
     unsigned                                     *nhood_cache_buf = nullptr;
     tsl::robin_map<_u32, std::pair<_u32, _u32 *>> nhood_cache;
@@ -165,5 +174,10 @@ namespace diskann {
     static const int HEADER_SIZE = SECTOR_LEN;
     char            *getHeaderBytes();
 #endif
+
+    void load_extra_start_points(const std::string &index_prefix);
+    void add_extra_start_points(const T *query1, _u64 l_search,
+                                tsl::robin_set<_u64> & visited,
+                                std::vector<unsigned> &init_nodes);
   };
 }  // namespace diskann

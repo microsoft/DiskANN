@@ -58,7 +58,8 @@ int search_disk_index(
     std::string& gt_file, const unsigned num_threads, const unsigned recall_at,
     const unsigned beamwidth, const unsigned num_nodes_to_cache,
     const _u32 search_io_limit, const std::vector<unsigned>& Lvec,
-    const bool use_reorder_data = false) {
+    const bool use_reorder_data = false, unsigned num_extra_start_points = 0,
+    const std::string& selection_strategy_of_extra_start_points = "") {
   diskann::cout << "Search parameters: #threads: " << num_threads << ", ";
   if (beamwidth <= 0)
     diskann::cout << "beamwidth to be optimized for each L value" << std::flush;
@@ -110,6 +111,9 @@ int search_disk_index(
   if (res != 0) {
     return res;
   }
+
+  _pFlashIndex->set_extra_start_points_setting(
+      num_extra_start_points, selection_strategy_of_extra_start_points);
   // cache bfs levels
   std::vector<uint32_t> node_list;
   diskann::cout << "Caching " << num_nodes_to_cache
@@ -166,15 +170,23 @@ int search_disk_index(
   diskann::cout.setf(std::ios_base::fixed, std::ios_base::floatfield);
   diskann::cout.precision(2);
 
+  std::ofstream stats_file;
+  stats_file.open("stats.tsv", std::ios::app);
+  stats_file << std::endl;
   std::string recall_string = "Recall@" + std::to_string(recall_at);
   diskann::cout << std::setw(6) << "L" << std::setw(12) << "Beamwidth"
                 << std::setw(16) << "QPS" << std::setw(16) << "Mean Latency"
                 << std::setw(16) << "99.9 Latency" << std::setw(16)
                 << "Mean IOs" << std::setw(16) << "CPU (s)";
+  stats_file
+      << "#ExtraStartPointsForSearching\tSelectionStrategy\tL\tBeamwidth\tQPS"
+      << "\tMean Latency\t99.9 Latency\tMean IOs\t99.9 IOs\tCPU (s)";
   if (calc_recall_flag) {
     diskann::cout << std::setw(16) << recall_string << std::endl;
+    stats_file << "\t" << recall_string;
   } else
     diskann::cout << std::endl;
+  stats_file << std::endl;
   diskann::cout
       << "==============================================================="
          "======================================================="
@@ -238,6 +250,10 @@ int search_disk_index(
         stats, query_num,
         [](const diskann::QueryStats& stats) { return stats.n_ios; });
 
+    auto ios_999 = diskann::get_percentile_stats<float>(
+        stats, query_num, 0.999,
+        [](const diskann::QueryStats& stats) { return stats.n_ios; });
+
     auto mean_cpuus = diskann::get_mean_stats<float>(
         stats, query_num,
         [](const diskann::QueryStats& stats) { return stats.cpu_us; });
@@ -253,13 +269,22 @@ int search_disk_index(
                   << std::setw(16) << qps << std::setw(16) << mean_latency
                   << std::setw(16) << latency_999 << std::setw(16) << mean_ios
                   << std::setw(16) << mean_cpuus;
+    stats_file << num_extra_start_points << "\t"
+               << selection_strategy_of_extra_start_points << "\t" << L << "\t"
+               << optimized_beamwidth << "\t" << qps << "\t" << mean_latency
+               << "\t" << latency_999 << "\t" << mean_ios << "\t" << ios_999
+               << "\t" << mean_cpuus;
     if (calc_recall_flag) {
       diskann::cout << std::setw(16) << recall << std::endl;
+      stats_file << "\t" << recall;
     } else
       diskann::cout << std::endl;
+
+    stats_file << std::endl;
     delete[] stats;
   }
 
+  stats_file.close();
   diskann::cout << "Done searching. Now saving results " << std::endl;
   _u64 test_id = 0;
   for (auto L : Lvec) {
@@ -290,6 +315,8 @@ int main(int argc, char** argv) {
   unsigned              num_threads, K, W, num_nodes_to_cache, search_io_limit;
   std::vector<unsigned> Lvec;
   bool                  use_reorder_data = false;
+  unsigned              num_extra_start_points;
+  std::string           selection_strategy_of_extra_start_points;
 
   po::options_description desc{"Arguments"};
   try {
@@ -336,6 +363,15 @@ int main(int argc, char** argv) {
                        po::bool_switch()->default_value(false),
                        "Include full precision data in the index. Use only in "
                        "conjuction with compressed data on SSD.");
+    desc.add_options()(
+        "num_extra_start_points",
+        po::value<uint32_t>(&num_extra_start_points)->default_value(0),
+        "Number of extra starting points used for searching index (defaults to 0");
+    desc.add_options()(
+        "selection_strategy_of_extra_start_points",
+        po::value<std::string>(&selection_strategy_of_extra_start_points)
+            ->default_value("closest"),
+        "selection stragey to select extra starting points (defaults to \"closest\")");
 
     po::variables_map vm;
     po::store(po::parse_command_line(argc, argv, desc), vm);
@@ -381,20 +417,23 @@ int main(int argc, char** argv) {
 
   try {
     if (data_type == std::string("float"))
-      return search_disk_index<float>(metric, index_path_prefix,
-                                      result_path_prefix, query_file, gt_file,
-                                      num_threads, K, W, num_nodes_to_cache,
-                                      search_io_limit, Lvec, use_reorder_data);
+      return search_disk_index<float>(
+          metric, index_path_prefix, result_path_prefix, query_file, gt_file,
+          num_threads, K, W, num_nodes_to_cache, search_io_limit, Lvec,
+          use_reorder_data, num_extra_start_points,
+          selection_strategy_of_extra_start_points);
     else if (data_type == std::string("int8"))
-      return search_disk_index<int8_t>(metric, index_path_prefix,
-                                       result_path_prefix, query_file, gt_file,
-                                       num_threads, K, W, num_nodes_to_cache,
-                                       search_io_limit, Lvec, use_reorder_data);
+      return search_disk_index<int8_t>(
+          metric, index_path_prefix, result_path_prefix, query_file, gt_file,
+          num_threads, K, W, num_nodes_to_cache, search_io_limit, Lvec,
+          use_reorder_data, num_extra_start_points,
+          selection_strategy_of_extra_start_points);
     else if (data_type == std::string("uint8"))
       return search_disk_index<uint8_t>(
           metric, index_path_prefix, result_path_prefix, query_file, gt_file,
           num_threads, K, W, num_nodes_to_cache, search_io_limit, Lvec,
-          use_reorder_data);
+          use_reorder_data, num_extra_start_points,
+          selection_strategy_of_extra_start_points);
     else {
       std::cerr << "Unsupported data type. Use float or int8 or uint8"
                 << std::endl;
