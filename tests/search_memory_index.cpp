@@ -175,12 +175,12 @@ int search_memory_index(diskann::Metric& metric, const std::string& index_path,
     if (tags) {
       std::cout << std::setw(4) << L << std::setw(12) << displayed_qps
                 << std::setw(20) << (float) mean_latency << std::setw(15)
-                << (float) latency_stats[(_u64)(0.999 * query_num)];
+                << (float) latency_stats[(_u64) (0.999 * query_num)];
     } else {
       std::cout << std::setw(4) << L << std::setw(12) << displayed_qps
                 << std::setw(18) << avg_cmps << std::setw(20)
                 << (float) mean_latency << std::setw(15)
-                << (float) latency_stats[(_u64)(0.999 * query_num)];
+                << (float) latency_stats[(_u64) (0.999 * query_num)];
     }
     for (float recall : recalls) {
       std::cout << std::setw(12) << recall;

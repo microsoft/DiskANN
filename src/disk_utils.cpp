@@ -832,7 +832,7 @@ namespace diskann {
     }
 
     size_t disk_pq_dims = 0;
-    bool use_disk_pq = false;
+    bool   use_disk_pq = false;
 
     // if there is a 6th parameter, it means we compress the disk index
     // vectors also using PQ data (for very large dimensionality data). If the
@@ -919,7 +919,14 @@ namespace diskann {
     size_t points_num, dim;
 
     diskann::get_bin_metadata(data_file_to_use.c_str(), points_num, dim);
+    const double p_val =
+        ((double) MAX_PQ_TRAINING_SET_SIZE / (double) points_num);
 
+    if (use_disk_pq) {
+      generate_disk_quantized_data<T>(data_file_to_use, disk_pq_pivots_path,
+                                      disk_pq_compressed_vectors_path,
+                                      compareMetric, p_val, disk_pq_dims);
+    }
     size_t num_pq_chunks =
         (size_t) (std::floor)(_u64(final_index_ram_limit / points_num));
 
@@ -931,30 +938,9 @@ namespace diskann {
     diskann::cout << "Compressing " << dim << "-dimensional data into "
                   << num_pq_chunks << " bytes per vector." << std::endl;
 
-    size_t train_size, train_dim;
-    float *train_data;
-
-    double p_val = ((double) MAX_PQ_TRAINING_SET_SIZE / (double) points_num);
-    // generates random sample and sets it to train_data and updates
-    // train_size
-    gen_random_slice<T>(data_file_to_use.c_str(), p_val, train_data, train_size,
-                        train_dim);
-    diskann::cout << "Training data with " << train_size << " samples loaded."
-                  << std::endl;
-
-    if (use_disk_pq) {
-      generate_disk_quantized_data<T>(data_file_to_use, disk_pq_pivots_path,
-                                      disk_pq_compressed_vectors_path,
-                                      compareMetric, train_data, train_size,
-                                      dim, disk_pq_dims);
-    }
-
-    generate_quantized_data<T>(
-        data_file_to_use, pq_pivots_path, pq_compressed_vectors_path,
-        compareMetric, train_data, train_size, dim, num_pq_chunks, use_opq);
-
-    delete[] train_data;
-    train_data = nullptr;
+    generate_quantized_data<T>(data_file_to_use, pq_pivots_path,
+                               pq_compressed_vectors_path, compareMetric, p_val,
+                               num_pq_chunks, use_opq);
 
 // Gopal. Splitting diskann_dll into separate DLLs for search and build.
 // This code should only be available in the "build" DLL.
