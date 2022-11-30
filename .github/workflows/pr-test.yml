@@ -33,7 +33,7 @@ jobs:
     - name: Clang Format Check
       if: runner.os != 'Windows'
       run: |
-        mkdir build && cd build && cmake ..
+        mkdir build && cd build && cmake -DCMAKE_BUILD_TYPE=Release ..
         # make checkformat - this will be turned on after all files are clang-formatted
 
     - name: build
