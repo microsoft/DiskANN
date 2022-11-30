@@ -242,3 +242,6 @@ if (MSVC)
                    "Alternatively, use MSBuild to build:\n\n"
                    "msbuild.exe ${PROJECT_NAME}.sln /m /nologo /t:Build /p:Configuration=\"Release\" /property:Platform=\"x64\"\n")
 endif()
+
+include(clang-format.cmake)
+

@@ -30,11 +30,16 @@ jobs:
             wget https://registrationcenter-download.intel.com/akdlm/irc_nas/18487/l_BaseKit_p_2022.1.2.146.sh
             sudo sh l_BaseKit_p_2022.1.2.146.sh -a --components intel.oneapi.lin.mkl.devel --action install --eula accept -s
         fi
+    - name: Clang Format Check
+      if: runner.os != 'Windows'
+      run: |
+        mkdir build && cd build && cmake ..
+        # make checkformat - this will be turned on after all files are clang-formatted
 
     - name: build
       if: runner.os != 'Windows'
       run: |
-        mkdir build && cd build && cmake -DCMAKE_BUILD_TYPE=Release .. && make -j
+        make -j
 
     - name: Add VisualStudio command line tools into path
       if: runner.os == 'Windows'
