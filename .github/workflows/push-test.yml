@@ -15,7 +15,7 @@ jobs:
         # make checkformat -- eventually I'll turn this on, but not until all our files are clang-formatted
     - name: build
       run: |
-        make -j
+        cd build && make -j
 
   windows-build:
     name: Build for ${{ matrix.os }}

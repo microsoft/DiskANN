@@ -39,7 +39,7 @@ jobs:
     - name: build
       if: runner.os != 'Windows'
       run: |
-        make -j
+        cd build && make -j
 
     - name: Add VisualStudio command line tools into path
       if: runner.os == 'Windows'
