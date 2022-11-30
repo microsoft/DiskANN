@@ -982,6 +982,7 @@ namespace diskann {
     if (pool.size() == 0)
       return;
 
+    // Truncate pool at maxc and initialize scratch spaces
     assert(std::is_sorted(pool.begin(), pool.end()));
     if (pool.size() > maxc)
       pool.resize(maxc);
@@ -1002,39 +1003,15 @@ namespace diskann {
         occlude_factor[iter - pool.begin()] = std::numeric_limits<float>::max();
         result.push_back(*iter);
 
-        // Compute distances from iter to points from iter+1 to pool.end()
-        auto   dist_scratch = scratch->dist_scratch();
-        auto   id_scratch = scratch->id_scratch();
-        size_t l = 0;
-        for (auto iter2 = iter + 1; iter2 != pool.end(); iter2++) {
-          auto t = iter2 - pool.begin();
-          if (occlude_factor[t] < alpha)
-            if (_pq_dist)
-              id_scratch.push_back(iter2->id);
-            else
-              dist_scratch[l++] =
-                  _distance->compare(_data + _aligned_dim * (size_t) iter2->id,
-                                     _data + _aligned_dim * (size_t) iter->id,
-                                     (unsigned) _aligned_dim);
-        }
-        if (_pq_dist) {
-          PQScratch<T> *pq_scratch = scratch->pq_scratch();
-          auto          pq_coord_scratch = pq_scratch->aligned_pq_coord_scratch;
-          auto          pq_dists = pq_scratch->aligned_pqtable_dist_scratch;
-
-          diskann::aggregate_coords(id_scratch.data(), id_scratch.size(),
-                                    _pq_data, _num_pq_chunks, pq_coord_scratch);
-          diskann::pq_dist_lookup(pq_coord_scratch, id_scratch.size(),
-                                  _num_pq_chunks, pq_dists, dist_scratch);
-        }
-
         // Update occlude factor for points from iter+1 to pool.end()
-        l = 0;
         for (auto iter2 = iter + 1; iter2 != pool.end(); iter2++) {
           auto t = iter2 - pool.begin();
           if (occlude_factor[t] > alpha)
             continue;
-          float djk = dist_scratch[l++];
+          float djk =
+              _distance->compare(_data + _aligned_dim * (size_t) iter2->id,
+                                 _data + _aligned_dim * (size_t) iter->id,
+                                 (unsigned) _aligned_dim);
           if (_dist_metric == diskann::Metric::L2 ||
               _dist_metric == diskann::Metric::COSINE) {
             occlude_factor[t] =
@@ -1069,15 +1046,19 @@ namespace diskann {
       const _u32 max_candidate_size, const float alpha,
       std::vector<unsigned> &pruned_list, InMemQueryScratch<T> *scratch) {
     if (pool.size() == 0) {
-      std::stringstream ss;
-      ss << "Thread loc:" << std::this_thread::get_id()
-         << " Pool address: " << &pool << std::endl;
-      diskann::cout << ss.str();
-      throw diskann::ANNException("Pool passed to prune_neighbors is empty",
-                                  -1);
+      throw diskann::ANNException("Pool passed to prune_neighbors is empty", -1,
+                                  __FUNCSIG__, __FILE__, __LINE__);
     }
 
     _max_observed_degree = (std::max)(_max_observed_degree, range);
+
+    // If using _pq_build, over-ride the PQ distances with actual distances
+    if (_pq_dist) {
+      for (auto iter : pool)
+        iter.distance = _distance->compare(
+            _data + _aligned_dim * (size_t) iter.id,
+            _data + _aligned_dim * (size_t) location, (unsigned) _aligned_dim);
+    }
 
     // sort the pool based on distance to query
     std::sort(pool.begin(), pool.end());
@@ -1465,8 +1446,11 @@ namespace diskann {
       double p_val =
           std::min(1.0, ((double) MAX_PQ_TRAINING_SET_SIZE / (double) _nd));
 
-      auto pq_pivots_file = std::string(filename) + "_pq_pivots.bin";
-      auto pq_compressed_file = std::string(filename) + "_pq_compressed.bin";
+      std::string suffix = _use_opq ? "_opq" : "_pq";
+      suffix += std::to_string(_num_pq_chunks);
+      auto pq_pivots_file = std::string(filename) + suffix + "_pivots.bin";
+      auto pq_compressed_file =
+          std::string(filename) + suffix + "_compressed.bin";
       generate_quantized_data<T>(std::string(filename), pq_pivots_file,
                                  pq_compressed_file, _dist_metric, p_val,
                                  _num_pq_chunks, _use_opq);
@@ -1475,7 +1459,6 @@ namespace diskann {
                                        file_num_points, _num_pq_chunks,
                                        _num_pq_chunks);
       _pq_table.load_pq_centroid_bin(pq_pivots_file.c_str(), _num_pq_chunks);
-
     }
 
     copy_aligned_data_from_file<T>(filename, _data, file_num_points, file_dim,
