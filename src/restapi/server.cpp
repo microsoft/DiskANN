@@ -90,7 +90,7 @@ namespace diskann {
 
       for (size_t k = 0; k < K; ++k) {
         float best_distance = std::numeric_limits<float>::max();
-        unsigned best_partition;
+        unsigned best_partition = 0;
 
         for (size_t i = 0; i < numsearchers; ++i) {
           if (results[i].get_distances()[pos[i]] < best_distance) {
