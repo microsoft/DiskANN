@@ -12,11 +12,29 @@ from tempfile import TemporaryDirectory
 
 from .disk_ann_util import build_ssd_index
 
-
 _VECTOR_DIMS = 100
 _RNG_SEED = 12345
 
+def is_ascending(lst):
+    prev = float("inf")
+    for x in lst:
+        if x > prev:
+            return False;
+        prev = x
+    return True
+
 class TestSSDRestApi(unittest.TestCase):
+    VECTOR_KEY = "query"
+    K_KEY = "k"
+    INDICES_KEY = "indices"
+    DISTANCES_KEY = "distances"
+    TAGS_KEY = "tags"
+    QUERY_ID_KEY = "query_id"
+    ERROR_MESSAGE_KEY = "error"
+    L_KEY = "Ls"
+    TIME_TAKEN_KEY = "time_taken_in_us"
+    PARTITION_KEY = "partition"
+    UNKNOWN_ERROR = "unknown_error"
 
     @classmethod
     def setUpClass(cls):
@@ -88,6 +106,55 @@ class TestSSDRestApi(unittest.TestCase):
         try:
             response = requests.post(self._rest_address, json=json_payload)
             self.assertEqual(200, response.status_code, "Expected a successful request")
+            jsonobj = response.json()
+            self.assertAlmostEqual(10, len(jsonobj[self.DISTANCES_KEY]), "Expected 10 distances")
+            self.assertAlmostEqual(10, len(jsonobj[self.INDICES_KEY]), "Expected 10 indexes")
         except Exception:
-            raise Exception(f"Rest process status code is: {self._rest_process.poll()}")
+            if hasattr(self, "_rest_process"):
+                raise Exception(f"Rest process status code is: {self._rest_process.poll()}")
+            else:
+                raise Exception(f"Client only mode, k: {k}")
 
+    def test_server_responds_valid_k(self):
+        rng = np.random.default_rng(_RNG_SEED)
+        query = rng.random((_VECTOR_DIMS), dtype=float).tolist()
+        k_list = [1, 5, 10, 20]
+        for k in k_list:
+            json_payload = {
+                "Ls": 32,
+                "query_id": 1234,
+                "query": query,
+                "k": k
+            }
+            try:
+                response = requests.post(self._rest_address, json=json_payload)
+                self.assertEqual(200, response.status_code, "Expected a successful request")
+                jsonobj = response.json()
+                self.assertAlmostEqual(k, len(jsonobj[self.DISTANCES_KEY]), "Expected 10 distances")
+                self.assertAlmostEqual(k, len(jsonobj[self.INDICES_KEY]), "Expected 10 indexes")
+                self.assertTrue(is_ascending(jsonobj[self.DISTANCES_KEY]))
+            except Exception:
+                if hasattr(self, "_rest_process"):
+                    raise Exception(f"Rest process status code is: {self._rest_process.poll()}")
+                else:
+                    raise Exception(f"Client only mode, k: {k}")
+
+    def test_server_responds_invalid_k(self):
+        rng = np.random.default_rng(_RNG_SEED)
+        query = rng.random((_VECTOR_DIMS), dtype=float).tolist()
+        k_list = [-1, 0]
+        for k in k_list:
+            json_payload = {
+                "Ls": 32,
+                "query_id": 1234,
+                "query": query,
+                "k": k
+            }
+            try:
+                response = requests.post(self._rest_address, json=json_payload)
+                self.assertEqual(500, response.status_code, "Expected a successful request")
+            except Exception:
+                if hasattr(self, "_rest_process"):
+                    raise Exception(f"Rest process status code is: {self._rest_process.poll()}")
+                else:
+                    raise Exception(f"Client only mode, k: {k}")
