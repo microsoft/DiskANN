@@ -681,7 +681,8 @@ namespace diskann {
       bool ret_frozen, bool search_invocation) {
     std::vector<Neighbor>    &expanded_nodes = scratch->pool();
     std::vector<unsigned>    &des = scratch->des();
-    std::vector<Neighbor>    &best_L_nodes = scratch->best_l_nodes();
+    NeighborSet              &best_L_nodes = scratch->best_l_nodes();
+    best_L_nodes.reserve(Lsize);
     tsl::robin_set<unsigned> &inserted_into_pool_rs =
         scratch->inserted_into_pool_rs();
     boost::dynamic_bitset<> &inserted_into_pool_bs =
@@ -728,17 +729,16 @@ namespace diskann {
       }
       nn = Neighbor(id,
                     _distance->compare(_data + _aligned_dim * (size_t) id,
-                                       aligned_query, (unsigned) _aligned_dim),
-                    true);
+                                       aligned_query, (unsigned) _aligned_dim));
       if (fast_iterate) {
         if (inserted_into_pool_bs[id] == 0) {
           inserted_into_pool_bs[id] = 1;
-          best_L_nodes[l++] = nn;
+          best_L_nodes.insert(nn);
         }
       } else {
         if (inserted_into_pool_rs.find(id) == inserted_into_pool_rs.end()) {
           inserted_into_pool_rs.insert(id);
-          best_L_nodes[l++] = nn;
+          best_L_nodes.insert(nn);
         }
       }
       if (l == Lsize)
@@ -746,90 +746,71 @@ namespace diskann {
     }
 
     // sort best_L_nodes based on distance of each point to node_coords
-    std::sort(best_L_nodes.begin(), best_L_nodes.begin() + l);
-    unsigned best_unchanged = 0;
     uint32_t hops = 0;
     uint32_t cmps = 0;
 
-    while (best_unchanged < l) {
-      unsigned best_inserted_position = l;
+    while (best_L_nodes.has_next()) {
+      auto nbr = best_L_nodes.pop();
+      auto n = nbr.id;
+      if (!search_invocation &&
+          (n != _start || _num_frozen_pts == 0 || ret_frozen)) {
+        expanded_nodes.emplace_back(nbr);
+      }
 
-      if (best_L_nodes[best_unchanged].flag == false) {  // Expanded before
-        best_unchanged++;
+      des.clear();
+      if (_dynamic_index) {
+        LockGuard guard(_locks[n]);
+        for (unsigned m = 0; m < _final_graph[n].size(); m++) {
+          if (_final_graph[n][m] >= _max_points + _num_frozen_pts) {
+            std::stringstream msg;
+            msg << "Out of range edge " << _final_graph[n][m]
+                << " found at vertex " << n << std::endl;
+            throw diskann::ANNException(msg.str(), -1, __FUNCSIG__, __FILE__,
+                                        __LINE__);
+          }
+          des.emplace_back(_final_graph[n][m]);
+        }
       } else {
-        best_L_nodes[best_unchanged].flag = false;
-        auto n = best_L_nodes[best_unchanged].id;
-        if (!search_invocation && (best_L_nodes[best_unchanged].id != _start ||
-                                   _num_frozen_pts == 0 || ret_frozen)) {
-          expanded_nodes.emplace_back(best_L_nodes[best_unchanged]);
-        }
-
-        des.clear();
-        if (_dynamic_index) {
-          LockGuard guard(_locks[n]);
-          for (unsigned m = 0; m < _final_graph[n].size(); m++) {
-            if (_final_graph[n][m] >= _max_points + _num_frozen_pts) {
-              std::stringstream msg;
-              msg << "Out of range edge " << _final_graph[n][m]
-                  << " found at vertex " << n << std::endl;
-              throw diskann::ANNException(msg.str(), -1, __FUNCSIG__, __FILE__,
-                                          __LINE__);
-            }
-            des.emplace_back(_final_graph[n][m]);
+        for (unsigned m = 0; m < _final_graph[n].size(); m++) {
+          if (_final_graph[n][m] >= _max_points + _num_frozen_pts) {
+            std::stringstream msg;
+            msg << "Out of range edge " << _final_graph[n][m]
+                << " found at vertex " << n << std::endl;
+            msg << " max pts, num_frozen = " << _max_points << ", "
+                << _num_frozen_pts << std::endl;
+            throw diskann::ANNException(msg.str(), -1, __FUNCSIG__, __FILE__,
+                                        __LINE__);
           }
-        } else {
-          for (unsigned m = 0; m < _final_graph[n].size(); m++) {
-            if (_final_graph[n][m] >= _max_points + _num_frozen_pts) {
-              std::stringstream msg;
-              msg << "Out of range edge " << _final_graph[n][m]
-                  << " found at vertex " << n << std::endl;
-              msg <<" max pts, num_frozen = " << _max_points <<", " << _num_frozen_pts << std::endl;
-              throw diskann::ANNException(msg.str(), -1, __FUNCSIG__, __FILE__,
-                                          __LINE__);
-            }
-            des.emplace_back(_final_graph[n][m]);
-          }
+          des.emplace_back(_final_graph[n][m]);
         }
+      }
 
-        for (size_t m = 0; m < des.size(); ++m) {
-          unsigned id = des[m];
-          bool     id_is_missing = fast_iterate ? inserted_into_pool_bs[id] == 0
-                                                : inserted_into_pool_rs.find(id) ==
-                                                  inserted_into_pool_rs.end();
-          if (id_is_missing) {
-            if (fast_iterate) {
-              inserted_into_pool_bs[id] = 1;
-            } else {
-              inserted_into_pool_rs.insert(id);
-            }
-            if (m + 1 < des.size()) {
-              auto nextn = des[m + 1];
-              diskann::prefetch_vector(
-                  (const char *) _data + _aligned_dim * (size_t) nextn,
-                  sizeof(T) * _aligned_dim);
-            }
-
-            cmps++;
-            float dist = _distance->compare(aligned_query,
-                                            _data + _aligned_dim * (size_t) id,
-                                            (unsigned) _aligned_dim);
-
-            if (dist >= best_L_nodes[l - 1].distance && (l == Lsize))
-              continue;
-
-            Neighbor nn(id, dist, true);
-            unsigned inserted_position = InsertIntoPool(best_L_nodes.data(), l, nn);
-            if (l < Lsize)
-              ++l;
-            if (inserted_position < best_inserted_position)
-              best_inserted_position = inserted_position;
+      for (size_t m = 0; m < des.size(); ++m) {
+        unsigned id = des[m];
+        bool     id_is_missing = fast_iterate ? inserted_into_pool_bs[id] == 0
+                                          : inserted_into_pool_rs.find(id) ==
+                                                inserted_into_pool_rs.end();
+        if (id_is_missing) {
+          if (fast_iterate) {
+            inserted_into_pool_bs[id] = 1;
+          } else {
+            inserted_into_pool_rs.insert(id);
           }
-        }
+          if (m + 1 < des.size()) {
+            auto nextn = des[m + 1];
+            diskann::prefetch_vector(
+                (const char *) _data + _aligned_dim * (size_t) nextn,
+                sizeof(T) * _aligned_dim);
+          }
 
-        if (best_inserted_position <= best_unchanged)
-          best_unchanged = best_inserted_position;
-        else
-          ++best_unchanged;
+          cmps++;
+          float dist = _distance->compare(aligned_query,
+                                          _data + _aligned_dim * (size_t) id,
+                                          (unsigned) _aligned_dim);
+
+          Neighbor nn(id, dist);
+          best_L_nodes.insert(nn);
+        }
       }
     }
     return std::make_pair(hops, cmps);
@@ -1040,7 +1021,7 @@ namespace diskann {
                 _distance->compare(_data + _aligned_dim * (size_t) des,
                                    _data + _aligned_dim * (size_t) cur_nbr,
                                    (unsigned) _aligned_dim);
-            dummy_pool.emplace_back(Neighbor(cur_nbr, dist, true));
+            dummy_pool.emplace_back(Neighbor(cur_nbr, dist));
             dummy_visited.insert(cur_nbr);
           }
         }
@@ -1143,7 +1124,7 @@ namespace diskann {
                 _distance->compare(_data + _aligned_dim * (size_t) node,
                                    _data + _aligned_dim * (size_t) cur_nbr,
                                    (unsigned) _aligned_dim);
-            dummy_pool.emplace_back(Neighbor(cur_nbr, dist, true));
+            dummy_pool.emplace_back(Neighbor(cur_nbr, dist));
             dummy_visited.insert(cur_nbr);
           }
         }
@@ -1398,6 +1379,12 @@ namespace diskann {
     ScratchStoreManager<InMemQueryScratch<T>> manager(_query_scratch);
     auto                                      scratch = manager.scratch_space();
 
+    if (L > scratch->search_l) {
+      scratch->resize_for_query(L);
+      diskann::cout << "Expanding query scratch_space. Was created with Lsize: "
+                    << scratch->search_l << " but search L is: " << L
+                    << std::endl;
+    }
     return search_impl(query, K, L, indices, distances, scratch);
   }
 
@@ -1420,18 +1407,18 @@ namespace diskann {
     auto best_L_nodes = scratch->best_l_nodes();
 
     size_t pos = 0;
-    for (auto it : best_L_nodes) {
-      if (it.id < _max_points) {
-        indices[pos] =
-            (IdType) it.id;  // safe because our indices are always uint32_t and
-                             // IDType will be uint32_t or uint64_t
+    for (int i = 0; i < best_L_nodes.size(); ++i) {
+      if (best_L_nodes[i].id < _max_points) {
+        indices[pos] = (IdType) best_L_nodes[i]
+                           .id;  // safe because our indices are always uint32_t
+                                 // and IDType will be uint32_t or uint64_t
         if (distances != nullptr) {
 #ifdef EXEC_ENV_OLS
           distances[pos] = it.distance;  // DLVS expects negative distances
 #else
           distances[pos] = _dist_metric == diskann::Metric::INNER_PRODUCT
-                               ? -1 * it.distance
-                               : it.distance;
+                               ? -1 * best_L_nodes[i].distance
+                               : best_L_nodes[i].distance;
 #endif
         }
         pos++;
@@ -1569,11 +1556,9 @@ namespace diskann {
     if (modify) {
       for (auto j : candidate_set) {
         expanded_nghrs.push_back(
-            Neighbor(j,
-                     _distance->compare(_data + _aligned_dim * i,
-                                        _data + _aligned_dim * (size_t) j,
-                                        (unsigned) _aligned_dim),
-                     true));
+            Neighbor(j, _distance->compare(_data + _aligned_dim * i,
+                                           _data + _aligned_dim * (size_t) j,
+                                           (unsigned) _aligned_dim)));
       }
 
       std::sort(expanded_nghrs.begin(), expanded_nghrs.end());
@@ -2203,7 +2188,7 @@ namespace diskann {
                                                     unsigned *indices) {
     DistanceFastL2<T> *dist_fast = (DistanceFastL2<T> *) _distance;
 
-    std::vector<Neighbor> retset(L + 1);
+    NeighborSet retset(L);
     std::vector<unsigned> init_ids(L);
 
     boost::dynamic_bitset<> flags{_nd, 0};
@@ -2243,51 +2228,36 @@ namespace diskann {
       x++;
       float dist =
           dist_fast->compare(x, query, norm_x, (unsigned) _aligned_dim);
-      retset[i] = Neighbor(id, dist, true);
+      retset.insert(Neighbor(id, dist));
       flags[id] = true;
       L++;
     }
 
-    std::sort(retset.begin(), retset.begin() + L);
-    int k = 0;
-    while (k < (int) L) {
-      int nk = L;
-
-      if (retset[k].flag) {
-        retset[k].flag = false;
-        unsigned n = retset[k].id;
-
-        _mm_prefetch(_opt_graph + _node_size * n + _data_len, _MM_HINT_T0);
-        unsigned *neighbors =
-            (unsigned *) (_opt_graph + _node_size * n + _data_len);
-        unsigned MaxM = *neighbors;
-        neighbors++;
-        for (unsigned m = 0; m < MaxM; ++m)
-          _mm_prefetch(_opt_graph + _node_size * neighbors[m], _MM_HINT_T0);
-        for (unsigned m = 0; m < MaxM; ++m) {
-          unsigned id = neighbors[m];
-          if (flags[id])
-            continue;
-          flags[id] = 1;
-          T    *data = (T *) (_opt_graph + _node_size * id);
-          float norm = *data;
-          data++;
-          float dist =
-              dist_fast->compare(query, data, norm, (unsigned) _aligned_dim);
-          if (dist >= retset[L - 1].distance)
-            continue;
-          Neighbor nn(id, dist, true);
-          int      r = InsertIntoPool(retset.data(), L, nn);
-
-          // if(L+1 < retset.size()) ++L;
-          if (r < nk)
-            nk = r;
-        }
+    while (retset.has_next()) {
+      auto nbr = retset.pop();
+      auto n = nbr.id;
+      _mm_prefetch(_opt_graph + _node_size * n + _data_len, _MM_HINT_T0);
+      unsigned *neighbors =
+          (unsigned *) (_opt_graph + _node_size * n + _data_len);
+      unsigned MaxM = *neighbors;
+      neighbors++;
+      for (unsigned m = 0; m < MaxM; ++m)
+        _mm_prefetch(_opt_graph + _node_size * neighbors[m], _MM_HINT_T0);
+      for (unsigned m = 0; m < MaxM; ++m) {
+        unsigned id = neighbors[m];
+        if (flags[id])
+          continue;
+        flags[id] = 1;
+        T *   data = (T *) (_opt_graph + _node_size * id);
+        float norm = *data;
+        data++;
+        float dist =
+            dist_fast->compare(query, data, norm, (unsigned) _aligned_dim);
+        if (dist >= retset[L - 1].distance)
+          continue;
+        Neighbor nn(id, dist);
+        retset.insert(nn);
       }
-      if (nk <= k)
-        k = nk;
-      else
-        ++k;
     }
     for (size_t i = 0; i < K; i++) {
       indices[i] = retset[i].id;

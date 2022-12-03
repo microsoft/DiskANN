@@ -13,16 +13,16 @@ namespace diskann {
   struct Neighbor {
     unsigned id;
     float    distance;
-    bool     flag;
+    bool     checked;
 
     Neighbor() = default;
-    Neighbor(unsigned id, float distance, bool f)
-        : id{id}, distance{distance}, flag(f) {
+    Neighbor(unsigned id, float distance)
+        : id{id}, distance{distance}, checked(false) {
     }
 
     inline bool operator<(const Neighbor &other) const {
       return distance < other.distance ||
-          (distance == other.distance && id < other.id);
+             (distance == other.distance && id < other.id);
     }
 
     inline bool operator==(const Neighbor &other) const {
@@ -30,40 +30,83 @@ namespace diskann {
     }
   };
 
-  static inline unsigned InsertIntoPool(Neighbor *addr, unsigned K,
-                                        Neighbor nn) {
-    // find the location to insert
-    unsigned left = 0, right = K - 1;
-    if (addr[left].distance > nn.distance) {
-      memmove((char *) &addr[left + 1], &addr[left], K * sizeof(Neighbor));
-      addr[left] = nn;
-      return left;
-    }
-    if (addr[right].distance < nn.distance) {
-      addr[K] = nn;
-      return K;
-    }
-    while (right > 1 && left < right - 1) {
-      unsigned mid = (left + right) / 2;
-      if (addr[mid].distance > nn.distance)
-        right = mid;
-      else
-        left = mid;
-    }
-    // check equal ID
+  // Invariant: after every `insert` and `pop`, `cur_` points to
+  //            the first Neighbor which is unchecked.
+  class NeighborSet {
+   public:
+    NeighborSet() = default;
 
-    while (left > 0) {
-      if (addr[left].distance < nn.distance)
-        break;
-      if (addr[left].id == nn.id)
-        return K + 1;
-      left--;
+    explicit NeighborSet(size_t capacity)
+        : size_(0), capacity_(capacity), data_(capacity_ + 1) {
     }
-    if (addr[left].id == nn.id || addr[right].id == nn.id)
-      return K + 1;
-    memmove((char *) &addr[right + 1], &addr[right],
-            (K - right) * sizeof(Neighbor));
-    addr[right] = nn;
-    return right;
-  }
+
+    void insert(const Neighbor &nbr) {
+      if (size_ == capacity_ && nbr.distance >= data_[size_ - 1].distance) {
+        return;
+      }
+      int lo = 0, hi = size_;
+      while (lo < hi) {
+        int mid = (lo + hi) >> 1;
+        if (data_[mid].distance > nbr.distance) {
+          hi = mid;
+        } else {
+          lo = mid + 1;
+        }
+      }
+      std::memmove(&data_[lo + 1], &data_[lo], (size_ - lo) * sizeof(Neighbor));
+      data_[lo] = {nbr.id, nbr.distance};
+      if (size_ < capacity_) {
+        size_++;
+      }
+      if (lo < cur_) {
+        cur_ = lo;
+      }
+    }
+
+    Neighbor pop() {
+      data_[cur_].checked = true;
+      size_t pre = cur_;
+      while (cur_ < size_ && data_[cur_].checked) {
+        cur_++;
+      }
+      return data_[pre];
+    }
+
+    bool has_next() const {
+      return cur_ < size_;
+    }
+
+    size_t size() const {
+      return size_;
+    }
+
+    size_t capacity() const {
+      return capacity_;
+    }
+
+    void reserve(size_t capacity) {
+      if (capacity + 1 > data_.size()) {
+        data_.resize(capacity + 1);
+      }
+      capacity_ = capacity;
+    }
+
+    Neighbor &operator[](size_t i) {
+      return data_[i];
+    }
+
+    Neighbor operator[](size_t i) const {
+      return data_[i];
+    }
+
+    void clear() {
+      size_ = 0;
+      cur_ = 0;
+    }
+
+   private:
+    size_t                size_, capacity_, cur_;
+    std::vector<Neighbor> data_;
+  };
+
 }  // namespace diskann
