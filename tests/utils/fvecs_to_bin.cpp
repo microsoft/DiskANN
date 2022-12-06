@@ -30,28 +30,24 @@ void block_convert_byte(std::ifstream& reader, std::ofstream& writer, _u8* read_
 }
 
 int main(int argc, char** argv) {
-  if (argc < 3 || argc > 4) {
+  if (argc != 4) {
     std::cout << argv[0]
-              << " input_vecs output_bin (optional)datatype<int8/uint8/float>"
+              << " <float/int8/uint8> input_vecs output_bin"
               << std::endl;
     exit(-1);
   }
 
   int datasize = sizeof(float);
 
-  if (argc == 4) {
-    if (strcmp(argv[3], "uint8") == 0 || strcmp(argv[3], "int8") == 0) {
-      datasize = sizeof(_u8);
-      std::cout << "Input/output datatype " << argv[3]
-                << std::endl;
-    } else if (strcmp(argv[3], "float") != 0) {
-      std::cout << "datatype arg invalid"
-                << std::endl;
-      exit(-1);
-    }
+  if (strcmp(argv[1], "uint8") == 0 || strcmp(argv[1], "int8") == 0) {
+    datasize = sizeof(_u8);
+  } else if (strcmp(argv[1], "float") != 0) {
+    std::cout << "Error: type not supported. Use float/int8/uint8"
+              << std::endl;
+    exit(-1);
   }
 
-  std::ifstream reader(argv[1], std::ios::binary | std::ios::ate);
+  std::ifstream reader(argv[2], std::ios::binary | std::ios::ate);
   _u64          fsize = reader.tellg();
   reader.seekg(0, std::ios::beg);
 
@@ -66,7 +62,7 @@ int main(int argc, char** argv) {
   _u64 blk_size = 131072;
   _u64 nblks = ROUND_UP(npts, blk_size) / blk_size;
   std::cout << "# blks: " << nblks << std::endl;
-  std::ofstream writer(argv[2], std::ios::binary);
+  std::ofstream writer(argv[3], std::ios::binary);
   _s32          npts_s32 = (_s32) npts;
   _s32          ndims_s32 = (_s32) ndims;
   writer.write((char*) &npts_s32, sizeof(_s32));
