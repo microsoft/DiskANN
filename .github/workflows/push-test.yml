@@ -12,7 +12,7 @@ jobs:
     - name: Clang Format Check
       run: |
         mkdir build && cd build && cmake ..
-        # make checkformat -- eventually I'll turn this on, but not until all our files are clang-formatted
+        make checkformat
     - name: build
       run: |
         cd build && make -j

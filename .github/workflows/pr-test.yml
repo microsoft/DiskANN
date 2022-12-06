@@ -34,7 +34,7 @@ jobs:
       if: runner.os != 'Windows'
       run: |
         mkdir build && cd build && cmake -DCMAKE_BUILD_TYPE=Release ..
-        # make checkformat - this will be turned on after all files are clang-formatted
+        make checkformat
 
     - name: build
       if: runner.os != 'Windows'
