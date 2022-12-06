@@ -14,7 +14,6 @@ if (NOT MSVC)
 		checkformat
 		COMMAND /usr/bin/clang-format
 		--dry-run
-		-Werror
 		${ALL_SOURCE_FILES}
 	)
 endif()
