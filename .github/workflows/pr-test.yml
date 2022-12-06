@@ -30,10 +30,14 @@ jobs:
             wget https://registrationcenter-download.intel.com/akdlm/irc_nas/18487/l_BaseKit_p_2022.1.2.146.sh
             sudo sh l_BaseKit_p_2022.1.2.146.sh -a --components intel.oneapi.lin.mkl.devel --action install --eula accept -s
         fi
-    - name: Clang Format Check
+    - name: Ubuntu CMake Configure
       if: runner.os != 'Windows'
       run: |
         mkdir build && cd build && cmake -DCMAKE_BUILD_TYPE=Release ..
+
+    - name: Clang Format Check
+      if: ${{ matrix.os == 'ubuntu-latest' }}
+      run: |
         make checkformat
 
     - name: build
