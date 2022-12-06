@@ -74,6 +74,8 @@ namespace diskann {
                                         const _u64          min_beam_width,
                                         QueryStats         *stats = nullptr);
 
+    DISKANN_DLLEXPORT _u64 get_data_dim();
+
     std::shared_ptr<AlignedFileReader> &reader;
 
    protected:
