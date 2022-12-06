@@ -38,7 +38,7 @@ jobs:
     - name: Clang Format Check
       if: ${{ matrix.os == 'ubuntu-latest' }}
       run: |
-        make checkformat
+        cd build && make checkformat
 
     - name: build
       if: runner.os != 'Windows'
