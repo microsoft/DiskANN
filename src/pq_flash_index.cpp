@@ -1196,6 +1196,11 @@ namespace diskann {
     return res_count;
   }
 
+  template<typename T>
+  _u64 PQFlashIndex<T>::get_data_dim() {
+    return data_dim;
+  }
+
 #ifdef EXEC_ENV_OLS
   template<typename T>
   char *PQFlashIndex<T>::getHeaderBytes() {
