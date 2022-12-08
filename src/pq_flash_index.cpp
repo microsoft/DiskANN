@@ -1118,10 +1118,7 @@ namespace diskann {
             dist_cmp->compare(aligned_query_T, (T *) location, this->data_dim);
       }
 
-      std::sort(full_retset.begin(), full_retset.end(),
-                [](const Neighbor &left, const Neighbor &right) {
-                  return left.distance < right.distance;
-                });
+      std::sort(full_retset.begin(), full_retset.end());
     }
 
     // copy k_search values
