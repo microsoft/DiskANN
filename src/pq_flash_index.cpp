@@ -1072,10 +1072,7 @@ namespace diskann {
     }
 
     // re-sort by distance
-    std::sort(full_retset.begin(), full_retset.end(),
-              [](const Neighbor &left, const Neighbor &right) {
-                return left.distance < right.distance;
-              });
+    std::sort(full_retset.begin(), full_retset.end());
 
     if (use_reorder_data) {
       if (!(this->reorder_data_exists)) {
