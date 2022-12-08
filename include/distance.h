@@ -2,7 +2,7 @@
 #include "windows_customizations.h"
 
 namespace diskann {
-  enum Metric { L2 = 0, INNER_PRODUCT = 1, COSINE = 2, FAST_L2 = 3};
+  enum Metric { L2 = 0, INNER_PRODUCT = 1, COSINE = 2, FAST_L2 = 3 };
 
   template<typename T>
   class Distance {
