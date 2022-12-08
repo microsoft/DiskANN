@@ -9,8 +9,6 @@
 namespace diskann {
   class Server {
    public:
-    // Server(web::uri& url, std::unique_ptr<diskann::BaseSearch>& searcher,
-    //        const std::string& typestring);
     Server(web::uri&                                          url,
            std::vector<std::unique_ptr<diskann::BaseSearch>>& multi_searcher,
            const std::string&                                 typestring);
