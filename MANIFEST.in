@@ -6,6 +6,7 @@ include pyproject.toml
 recursive-include gperftools *
 recursive-include include *
 recursive-include python *
+recursive-include windows *
 prune python/tests
 recursive-include src *
 recursive-include tests *
