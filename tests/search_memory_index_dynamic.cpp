@@ -17,7 +17,6 @@
 #include <unistd.h>
 #endif
 
-#include "aux_utils.h"
 #include "index.h"
 #include "memory_mapper.h"
 #include "utils.h"
@@ -54,7 +53,6 @@ int search_memory_index(diskann::Metric& metric, const std::string& index_path,
   }
 
   // Load the index
-  // diskann::Index<T, uint32_t> index(metric, query_dim, 0, false);
   diskann::Index<T, uint32_t> index(metric, query_dim, 0, true, true, false);
   index.load(index_path.c_str(), num_threads,
              *(std::max_element(Lvec.begin(), Lvec.end())));

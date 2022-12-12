@@ -2,6 +2,7 @@
 #include "windows_customizations.h"
 
 namespace diskann {
+  enum Metric { L2 = 0, INNER_PRODUCT = 1, COSINE = 2, FAST_L2 = 3};
 
   template<typename T>
   class Distance {
@@ -28,24 +29,6 @@ namespace diskann {
    public:
     DISKANN_DLLEXPORT virtual float compare(const int8_t *a, const int8_t *b,
                                             uint32_t length) const;
-  };
-
-  // Slow implementations of the distance functions to get diskann to
-  // work in pre-AVX machines. Performance here is not a concern, so we are
-  // using the simplest possible implementation.
-  template<typename T>
-  class SlowDistanceL2Int : public Distance<T> {
-   public:
-    // Implementing here because this is a template function
-    DISKANN_DLLEXPORT virtual float compare(const T *a, const T *b,
-                                            uint32_t length) const {
-      uint32_t result = 0;
-      for (uint32_t i = 0; i < length; i++) {
-        result += ((int32_t)((int16_t) a[i] - (int16_t) b[i])) *
-                  ((int32_t)((int16_t) a[i] - (int16_t) b[i]));
-      }
-      return (float) result;
-    }
   };
 
   class DistanceCosineFloat : public Distance<float> {
@@ -90,13 +73,28 @@ namespace diskann {
                                             uint32_t size) const;
   };
 
+  // Simple implementations for non-AVX machines. Compiler can optimize.
+  template<typename T>
+  class SlowDistanceL2Int : public Distance<T> {
+   public:
+    // Implementing here because this is a template function
+    DISKANN_DLLEXPORT virtual float compare(const T *a, const T *b,
+                                            uint32_t length) const {
+      uint32_t result = 0;
+      for (uint32_t i = 0; i < length; i++) {
+        result += ((int32_t) ((int16_t) a[i] - (int16_t) b[i])) *
+                  ((int32_t) ((int16_t) a[i] - (int16_t) b[i]));
+      }
+      return (float) result;
+    }
+  };
+
   template<typename T>
   class DistanceInnerProduct : public Distance<T> {
    public:
-    float inner_product(const T *a, const T *b, unsigned size) const;
-    float compare(const T *a, const T *b, unsigned size) const {
-      // since we use normally minimization objective for distance
-      // comparisons, we are returning 1/x.
+    inline float inner_product(const T *a, const T *b, unsigned size) const;
+
+    inline float compare(const T *a, const T *b, unsigned size) const {
       float result = inner_product(a, b, size);
       //      if (result < 0)
       //      return std::numeric_limits<float>::max();
@@ -132,5 +130,8 @@ namespace diskann {
       return 1.0f + _innerProduct.compare(a, b, length);
     }
   };
+
+  template<typename T>
+  Distance<T> *get_distance_function(Metric m);
 
 }  // namespace diskann

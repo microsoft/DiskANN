@@ -10,7 +10,7 @@
 #include <string>
 #include <vector>
 
-#include "aux_utils.h"
+#include "disk_utils.h"
 #include "cached_io.h"
 #include "utils.h"
 

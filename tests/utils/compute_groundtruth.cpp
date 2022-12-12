@@ -265,8 +265,9 @@ inline int get_num_parts(const char *filename) {
 }
 
 template<typename T>
-inline void load_bin_as_float(const char *filename, float *&data, size_t &npts,
-                              size_t &ndims, int part_num) {
+inline void load_bin_as_float(const char *filename, float *&data,
+                              size_t &npts_u64, size_t &ndims_u64,
+                              int part_num) {
   std::ifstream reader;
   reader.exceptions(std::ios::failbit | std::ios::badbit);
   reader.open(filename, std::ios::binary);
@@ -276,27 +277,25 @@ inline void load_bin_as_float(const char *filename, float *&data, size_t &npts,
   reader.read((char *) &ndims_i32, sizeof(int));
   uint64_t start_id = part_num * PARTSIZE;
   uint64_t end_id = (std::min)(start_id + PARTSIZE, (uint64_t) npts_i32);
-  npts = end_id - start_id;
-  ndims = (unsigned) ndims_i32;
-  uint64_t nptsuint64_t = (uint64_t) npts;
-  uint64_t ndimsuint64_t = (uint64_t) ndims;
-  std::cout << "#pts in part = " << npts << ", #dims = " << ndims
-            << ", size = " << nptsuint64_t * ndimsuint64_t * sizeof(T) << "B"
+  npts_u64 = end_id - start_id;
+  ndims_u64 = (uint64_t) ndims_i32;
+  std::cout << "#pts in part = " << npts_u64 << ", #dims = " << ndims_u64
+            << ", size = " << npts_u64 * ndims_u64 * sizeof(T) << "B"
             << std::endl;
 
-  reader.seekg(start_id * ndims * sizeof(T) + 2 * sizeof(uint32_t),
+  reader.seekg(start_id * ndims_u64 * sizeof(T) + 2 * sizeof(uint32_t),
                std::ios::beg);
-  T *data_T = new T[nptsuint64_t * ndimsuint64_t];
-  reader.read((char *) data_T, sizeof(T) * nptsuint64_t * ndimsuint64_t);
+  T *data_T = new T[npts_u64 * ndims_u64];
+  reader.read((char *) data_T, sizeof(T) * npts_u64 * ndims_u64);
   std::cout << "Finished reading part of the bin file." << std::endl;
   reader.close();
-  data = aligned_malloc<float>(nptsuint64_t * ndimsuint64_t, ALIGNMENT);
+  data = aligned_malloc<float>(npts_u64 * ndims_u64, ALIGNMENT);
 #pragma omp parallel for schedule(dynamic, 32768)
-  for (int64_t i = 0; i < (int64_t) nptsuint64_t; i++) {
-    for (int64_t j = 0; j < (int64_t) ndimsuint64_t; j++) {
-      float cur_val_float = (float) data_T[i * ndimsuint64_t + j];
-      std::memcpy((char *) (data + i * ndimsuint64_t + j),
-                  (char *) &cur_val_float, sizeof(float));
+  for (int64_t i = 0; i < (int64_t) npts_u64; i++) {
+    for (int64_t j = 0; j < (int64_t) ndims_u64; j++) {
+      float cur_val_float = (float) data_T[i * ndims_u64 + j];
+      std::memcpy((char *) (data + i * ndims_u64 + j), (char *) &cur_val_float,
+                  sizeof(float));
     }
   }
   delete[] data_T;
@@ -352,35 +351,40 @@ int aux_main(const std::string &base_file, const std::string &query_file,
   float *base_data;
   float *query_data;
 
+  const bool tags_enabled = tags_file.empty() ? false : true;
+
   int num_parts = get_num_parts<T>(base_file.c_str());
   load_bin_as_float<T>(query_file.c_str(), query_data, nqueries, dim, 0);
+  if (nqueries > PARTSIZE)
+    std::cerr << "WARNING: #Queries provided (" << nqueries
+              << ") is greater than " << PARTSIZE
+              << ". Computing GT only for the first " << PARTSIZE << " queries."
+              << std::endl;
 
   // load tags
-  std::unordered_map<std::uint32_t, std::uint32_t> location_to_tag;
-  if (!tags_file.empty()) {
-    size_t         file_dim, file_num_points;
+  std::vector<uint32_t> location_to_tag;
+  if (tags_enabled) {
+    size_t         tag_file_ndims, tag_file_npts;
     std::uint32_t *tag_data;
-    diskann::load_bin<std::uint32_t>(tags_file, tag_data, file_num_points,
-                                     file_dim);
-    if (file_dim != 1) {
+    diskann::load_bin<std::uint32_t>(tags_file, tag_data, tag_file_npts,
+                                     tag_file_ndims);
+    if (tag_file_ndims != 1) {
       diskann::cerr << "tags file error" << std::endl;
       throw diskann::ANNException("tag file error", -1, __FUNCSIG__, __FILE__,
                                   __LINE__);
     }
 
     // check if the point count match
-    size_t raw_pts, raw_dim;
-    diskann::get_bin_metadata(base_file, raw_pts, raw_dim);
-    if (raw_pts != file_num_points) {
+    size_t base_file_npts, base_file_ndims;
+    diskann::get_bin_metadata(base_file, base_file_npts, base_file_ndims);
+    if (base_file_npts != tag_file_npts) {
       diskann::cerr << "point num in tags file mismatch" << std::endl;
       throw diskann::ANNException("point num in tags file mismatch", -1,
                                   __FUNCSIG__, __FILE__, __LINE__);
     }
 
-    for (std::uint32_t i = 0; i < static_cast<std::uint32_t>(file_num_points);
-         i++) {
-      location_to_tag[i] = tag_data[i];
-    }
+    location_to_tag.assign(tag_data, tag_data + tag_file_npts);
+    delete[] tag_data;
   }
 
   std::vector<std::vector<std::pair<uint32_t, float>>> results(nqueries);
@@ -394,14 +398,19 @@ int aux_main(const std::string &base_file, const std::string &query_file,
     int *  closest_points_part = new int[nqueries * k];
     float *dist_closest_points_part = new float[nqueries * k];
 
-    exact_knn(dim, k, closest_points_part, dist_closest_points_part, npoints,
+    auto nr = std::min(npoints, k);
+
+    exact_knn(dim, nr, closest_points_part, dist_closest_points_part, npoints,
               base_data, nqueries, query_data, metric);
 
     for (_u64 i = 0; i < nqueries; i++) {
-      for (_u64 j = 0; j < k; j++) {
+      for (_u64 j = 0; j < nr; j++) {
+        if (tags_enabled)
+          if (location_to_tag[closest_points_part[i * k + j] + start_id] == 0)
+            continue;
         results[i].push_back(std::make_pair(
-            (uint32_t)(closest_points_part[i * k + j] + start_id),
-            dist_closest_points_part[i * k + j]));
+            (uint32_t)(closest_points_part[i * nr + j] + start_id),
+            dist_closest_points_part[i * nr + j]));
       }
     }
 
@@ -414,19 +423,27 @@ int aux_main(const std::string &base_file, const std::string &query_file,
   for (_u64 i = 0; i < nqueries; i++) {
     std::vector<std::pair<uint32_t, float>> &cur_res = results[i];
     std::sort(cur_res.begin(), cur_res.end(), custom_dist);
-    for (_u64 j = 0; j < k; j++) {
-      if (!tags_file.empty()) {
-        std::uint32_t index_with_tag = location_to_tag[cur_res[j].first];
+    size_t j = 0;
+    for (auto iter : cur_res) {
+      if (j == k)
+        break;
+      if (tags_enabled) {
+        std::uint32_t index_with_tag = location_to_tag[iter.first];
         closest_points[i * k + j] = (int32_t) index_with_tag;
       } else {
-        closest_points[i * k + j] = (int32_t) cur_res[j].first;
+        closest_points[i * k + j] = (int32_t) iter.first;
       }
 
       if (metric == diskann::Metric::INNER_PRODUCT)
-        dist_closest_points[i * k + j] = -cur_res[j].second;
+        dist_closest_points[i * k + j] = -iter.second;
       else
-        dist_closest_points[i * k + j] = cur_res[j].second;
+        dist_closest_points[i * k + j] = iter.second;
+
+      ++j;
     }
+    if (j < k)
+      std::cout << "WARNING: found less than k GT entries for query " << i
+                << std::endl;
   }
 
   save_groundtruth_as_one_file(gt_file, closest_points, dist_closest_points,

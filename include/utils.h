@@ -33,12 +33,12 @@ typedef int FileHandle;
 #endif
 
 #include "distance.h"
-#include "utils.h"
 #include "logger.h"
 #include "cached_io.h"
 #include "ann_exception.h"
 #include "common_includes.h"
 #include "windows_customizations.h"
+#include "tsl/robin_set.h"
 
 #ifdef EXEC_ENV_OLS
 #include "content_buf.h"
@@ -49,15 +49,16 @@ typedef int FileHandle;
 // https://github.com/Microsoft/BLAS-on-flash/blob/master/include/utils.h
 // round up X to the nearest multiple of Y
 #define ROUND_UP(X, Y) \
-  ((((uint64_t)(X) / (Y)) + ((uint64_t)(X) % (Y) != 0)) * (Y))
+  ((((uint64_t) (X) / (Y)) + ((uint64_t) (X) % (Y) != 0)) * (Y))
 
-#define DIV_ROUND_UP(X, Y) (((uint64_t)(X) / (Y)) + ((uint64_t)(X) % (Y) != 0))
+#define DIV_ROUND_UP(X, Y) \
+  (((uint64_t) (X) / (Y)) + ((uint64_t) (X) % (Y) != 0))
 
 // round down X to the nearest multiple of Y
-#define ROUND_DOWN(X, Y) (((uint64_t)(X) / (Y)) * (Y))
+#define ROUND_DOWN(X, Y) (((uint64_t) (X) / (Y)) * (Y))
 
 // alignment tests
-#define IS_ALIGNED(X, Y) ((uint64_t)(X) % (uint64_t)(Y) == 0)
+#define IS_ALIGNED(X, Y) ((uint64_t) (X) % (uint64_t) (Y) == 0)
 #define IS_512_ALIGNED(X) IS_ALIGNED(X, 512)
 #define IS_4096_ALIGNED(X) IS_ALIGNED(X, 4096)
 #define METADATA_SIZE \
@@ -158,10 +159,12 @@ inline int delete_file(const std::string& fileName) {
   }
 }
 
+#ifdef EXEC_ENV_OLS
+class AlignedFileReader;
+#endif
+
 namespace diskann {
   static const size_t MAX_SIZE_OF_STREAMBUF = 2LL * 1024 * 1024 * 1024;
-
-  enum Metric { L2 = 0, INNER_PRODUCT = 1, COSINE = 2, FAST_L2 = 3, PQ = 4 };
 
   inline void alloc_aligned(void** ptr, size_t size, size_t align) {
     *ptr = nullptr;
@@ -312,7 +315,6 @@ namespace diskann {
                  2 * sizeof(uint32_t));  // No need to copy!
   }
 
-  class AlignedFileReader;
   DISKANN_DLLEXPORT void get_bin_metadata(AlignedFileReader& reader,
                                           size_t& npts, size_t& ndim,
                                           size_t offset = 0);
@@ -557,6 +559,19 @@ namespace diskann {
     data.reset(ptr);
   }
 #endif
+
+  DISKANN_DLLEXPORT double calculate_recall(
+      unsigned num_queries, unsigned* gold_std, float* gs_dist, unsigned dim_gs,
+      unsigned* our_results, unsigned dim_or, unsigned recall_at);
+
+  DISKANN_DLLEXPORT double calculate_recall(
+      unsigned num_queries, unsigned* gold_std, float* gs_dist, unsigned dim_gs,
+      unsigned* our_results, unsigned dim_or, unsigned recall_at,
+      const tsl::robin_set<unsigned>& active_tags);
+
+  DISKANN_DLLEXPORT double calculate_range_search_recall(
+      unsigned num_queries, std::vector<std::vector<_u32>>& groundtruth,
+      std::vector<std::vector<_u32>>& our_results);
 
   template<typename T>
   inline void load_bin(const std::string& bin_file, std::unique_ptr<T[]>& data,
@@ -875,8 +890,6 @@ namespace diskann {
   DISKANN_DLLEXPORT void normalize_data_file(const std::string& inFileName,
                                              const std::string& outFileName);
 
-  template<typename T>
-  Distance<T>* get_distance_function(Metric m);
 };  // namespace diskann
 
 struct PivotContainer {
@@ -897,16 +910,6 @@ struct PivotContainer {
   size_t piv_id;
   float  piv_dist;
 };
-
-/*
-inline bool file_exists(const std::string& name) {
-  struct stat buffer;
-  auto        val = stat(name.c_str(), &buffer);
-  diskann::cout << " Stat(" << name.c_str() << ") returned: " << val
-                << std::endl;
-  return (val == 0);
-}
-*/
 
 inline bool validate_index_file_size(std::ifstream& in) {
   if (!in.is_open())
@@ -938,7 +941,7 @@ inline void normalize(T* arr, size_t dim) {
   }
   sum = sqrt(sum);
   for (uint32_t i = 0; i < dim; i++) {
-    arr[i] = (T)(arr[i] / sum);
+    arr[i] = (T) (arr[i] / sum);
   }
 }
 

@@ -96,7 +96,7 @@ void insert_next_batch(diskann::Index<T, TagT>& index, size_t start, size_t end,
     reduction(+:num_failed)
     for (int64_t j = start; j < (int64_t) end; j++) {
       if (index.insert_point(&data[(j - start) * aligned_dim],
-                             static_cast<TagT>(j)) != 0) {
+                             1 + static_cast<TagT>(j)) != 0) {
         std::cerr << "Insert failed " << j << std::endl;
         num_failed++;
       }
@@ -124,7 +124,7 @@ void delete_and_consolidate(diskann::Index<T, TagT>& index,
     std::cout << std::endl
               << "Lazy deleting points " << start << " to " << end << "... ";
     for (size_t i = start; i < end; ++i)
-      index.lazy_delete(i);
+      index.lazy_delete(1 + i);
     std::cout << "lazy delete done." << std::endl;
 
     auto report = index.consolidate_deletes(delete_params);
@@ -224,7 +224,6 @@ void build_incremental_index(const std::string& data_path, const unsigned L,
   using TagT = uint32_t;
   unsigned   num_frozen = 1;
   const bool enable_tags = true;
-  const bool support_eager_delete = false;
 
   auto num_frozen_str = getenv("TTS_NUM_FROZEN");
 
@@ -233,9 +232,9 @@ void build_incremental_index(const std::string& data_path, const unsigned L,
     std::cout << "Overriding num_frozen to" << num_frozen << std::endl;
   }
 
-  diskann::Index<T, TagT> index(
-      diskann::L2, dim, active_window + 4 * consolidate_interval, true, params,
-      params, enable_tags, support_eager_delete, true);
+  diskann::Index<T, TagT> index(diskann::L2, dim,
+                                active_window + 4 * consolidate_interval, true,
+                                params, params, enable_tags, true);
   index.set_start_point_at_random(static_cast<T>(start_point_norm));
   index.enable_delete();
 

@@ -12,7 +12,7 @@
 #include <map>
 #include <sstream>
 #include <string>
-#include "partition_and_pq.h"
+#include "partition.h"
 #include "utils.h"
 
 #include <fcntl.h>

@@ -21,31 +21,13 @@ namespace diskann {
     }
 
     inline bool operator<(const Neighbor &other) const {
-      return distance < other.distance;
+      return distance < other.distance ||
+          (distance == other.distance && id < other.id);
     }
+
     inline bool operator==(const Neighbor &other) const {
       return (id == other.id);
     }
-  };
-
-  struct SimpleNeighbor {
-    unsigned id;
-    float    distance;
-
-    SimpleNeighbor() = default;
-    SimpleNeighbor(unsigned id, float distance) : id(id), distance(distance) {
-    }
-
-    inline bool operator<(const SimpleNeighbor &other) const {
-      return distance < other.distance;
-    }
-
-    inline bool operator==(const SimpleNeighbor &other) const {
-      return id == other.id;
-    }
-  };
-  struct SimpleNeighbors {
-    std::vector<SimpleNeighbor> pool;
   };
 
   static inline unsigned InsertIntoPool(Neighbor *addr, unsigned K,
