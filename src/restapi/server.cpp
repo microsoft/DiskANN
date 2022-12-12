@@ -12,33 +12,6 @@
 #include <restapi/server.h>
 
 namespace diskann {
-  const unsigned int DEFAULT_L = 100;
-
-  // Server::Server(web::uri& uri, std::unique_ptr<diskann::BaseSearch>&
-  // searcher,
-  //                const std::string& typestring)
-  //     : _multi_searcher(std::vector<diskann::BaseSearch>{searcher}),
-  //     _multi_search(false) {
-  //   _listener =
-  //       std::unique_ptr<web::http::experimental::listener::http_listener>(
-  //           new web::http::experimental::listener::http_listener(uri));
-  //   if (typestring == std::string("float")) {
-  //     _listener->support(
-  //         std::bind(&Server::handle_post<float>, this,
-  //         std::placeholders::_1));
-  //   } else if (typestring == std::string("int8_t")) {
-  //     _listener->support(
-  //         web::http::methods::POST,
-  //         std::bind(&Server::handle_post<int8_t>, this,
-  //         std::placeholders::_1));
-  //   } else if (typestring == std::string("uint8_t")) {
-  //     _listener->support(web::http::methods::POST,
-  //                        std::bind(&Server::handle_post<uint8_t>, this,
-  //                                  std::placeholders::_1));
-  //   } else {
-  //     throw "Unsupported type in server constuctor";
-  //   }
-  // }
 
   Server::Server(
       web::uri&                                          uri,

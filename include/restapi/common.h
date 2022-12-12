@@ -14,4 +14,6 @@ namespace diskann {
                            ERROR_MESSAGE_KEY = "error", L_KEY = "Ls",
                            TIME_TAKEN_KEY = "time_taken_in_us",
                            PARTITION_KEY = "partition", UNKNOWN_ERROR = "unknown_error";
+  const unsigned int DEFAULT_L = 100;
+
 }  // namespace diskann
