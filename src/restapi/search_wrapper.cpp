@@ -49,8 +49,8 @@ namespace diskann {
       this->_partitions_enabled = false;
   }
 
-  BaseSearch::BaseSearch(const char* tagsFile) {
-    if (tagsFile != nullptr) {
+  BaseSearch::BaseSearch(const std::string& tagsFile) {
+    if (tagsFile.size() != 0) {
       std::ifstream in(tagsFile);
 
       if (!in.is_open()) {
@@ -88,9 +88,9 @@ namespace diskann {
 
   template<typename T>
   InMemorySearch<T>::InMemorySearch(
-          const char* baseFile,
-          const char* indexFile,
-          const char* tagsFile,
+          const std::string& baseFile,
+          const std::string& indexFile,
+          const std::string& tagsFile,
           Metric m,
           uint32_t num_threads,
           uint32_t search_l
@@ -101,7 +101,7 @@ namespace diskann {
     _index = std::unique_ptr<diskann::Index<T>>(
         new diskann::Index<T>(m, dimensions, total_points, false));
 
-    _index->load(indexFile, num_threads, search_l);
+    _index->load(indexFile.c_str(), num_threads, search_l);
   }
 
   template<typename T>
@@ -136,10 +136,10 @@ namespace diskann {
   }
 
   template<typename T>
-  PQFlashSearch<T>::PQFlashSearch(const char*    indexPrefix,
+  PQFlashSearch<T>::PQFlashSearch(const std::string&    indexPrefix,
                                   const unsigned num_nodes_to_cache,
                                   const unsigned num_threads,
-                                  const char* tagsFile, Metric m)
+                                  const std::string& tagsFile, Metric m)
       : BaseSearch(tagsFile) {
 #ifdef _WINDOWS
 #ifndef USE_BING_INFRA

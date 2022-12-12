@@ -73,7 +73,7 @@ namespace diskann {
 
   class BaseSearch {
    public:
-    BaseSearch(const char* tagsFile = nullptr);
+    BaseSearch(const std::string& tagsFile = nullptr);
     virtual SearchResult search(const float*       query,
                                 const unsigned int dimensions,
                                 const unsigned int K, const unsigned int Ls) {
@@ -102,13 +102,13 @@ namespace diskann {
   template<typename T>
   class InMemorySearch : public BaseSearch {
    public:
-    InMemorySearch(
-        const char* baseFile,
-        const char* indexFile,
-        const char* tagsFile,
-        Metric m,
-        uint32_t num_threads,
-        uint32_t search_l
+       InMemorySearch(
+           const std::string& baseFile,
+           const std::string& indexFile,
+           const std::string& tagsFile,
+           Metric m,
+           uint32_t num_threads,
+           uint32_t search_l
     );
     virtual ~InMemorySearch();
 
@@ -123,8 +123,8 @@ namespace diskann {
   template<typename T>
   class PQFlashSearch : public BaseSearch {
    public:
-    PQFlashSearch(const char* indexPrefix, const unsigned num_nodes_to_cache,
-                  const unsigned num_threads, const char* tagsFile, Metric m);
+    PQFlashSearch(const std::string & indexPrefix, const unsigned num_nodes_to_cache,
+                  const unsigned num_threads, const std::string& tagsFile, Metric m);
     virtual ~PQFlashSearch();
 
     SearchResult search(const T* query, const unsigned int dimensions,

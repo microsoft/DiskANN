@@ -7,10 +7,15 @@
 #include <string>
 #include <cstdlib>
 #include <codecvt>
+#include <boost/program_options.hpp>
+#include <omp.h>
+
+
 
 #include <restapi/server.h>
 
 using namespace diskann;
+namespace po = boost::program_options;
 
 std::unique_ptr<Server>                           g_httpServer(nullptr);
 std::vector<std::unique_ptr<diskann::BaseSearch>> g_ssdSearch;
@@ -34,37 +39,57 @@ void teardown(const utility::string_t& address) {
 }
 
 int main(int argc, char* argv[]) {
-  if (argc != 6 && argc != 7) {
-    std::cout << "Usage: ssd_server ip_addr:port data_type<float/int8/uint8> "
-                 "index_file_prefix num_nodes_to_cache num_threads [tags_file]"
-              << std::endl;
-    exit(1);
+  std::string data_type, index_path_prefix, address, tags_file;
+  uint32_t num_nodes_to_cache;
+  uint32_t num_threads;
+
+  po::options_description desc{ "Arguments" };
+  try {
+    desc.add_options()("help,h", "Print information on arguments");
+    desc.add_options()("data_type",
+        po::value<std::string>(&data_type)->required(),
+        "data type <int8/uint8/float>");
+    desc.add_options()("address",
+        po::value<std::string>(&address)->required(),
+        "Web server address");
+    desc.add_options()("index_path_prefix",
+        po::value<std::string>(&index_path_prefix)->required(),
+        "Path prefix for saving index file components");
+    desc.add_options()(
+        "num_nodes_to_cache",
+        po::value<uint32_t>(&num_nodes_to_cache)->default_value(0),
+        "Number of nodes to cache during search");
+    desc.add_options()(
+        "num_threads,T",
+        po::value<uint32_t>(&num_threads)->default_value(omp_get_num_procs()),
+        "Number of threads used for building index (defaults to "
+        "omp_get_num_procs())");
+    desc.add_options()("tags_file",
+        po::value<std::string>(&tags_file)->default_value(std::string()),
+        "Tags file location");
+  } catch (const std::exception& ex) {
+      std::cerr << ex.what() << std::endl;
+      return -1;
   }
 
-  // auto address = getHostingAddress(argv[1]);
-  std::string address(argv[1]);
-  auto        index_prefix = argv[3];
-  unsigned    num_nodes_to_cache = atoi(argv[4]);
-  unsigned    num_threads = atoi(argv[5]);
-  const char* tags_file = argc == 7 ? argv[6] : nullptr;
 
-  const std::string typestring(argv[2]);
-  if (typestring == std::string("float")) {
+  if (data_type == std::string("float")) {
     auto searcher = std::unique_ptr<diskann::BaseSearch>(
-        new diskann::PQFlashSearch<float>(index_prefix, num_nodes_to_cache,
-                                          num_threads, tags_file, diskann::L2));
+        new diskann::PQFlashSearch<float>(
+            index_path_prefix, num_nodes_to_cache, num_threads, 
+            tags_file, diskann::L2));
     g_ssdSearch.push_back(std::move(searcher));
-  } else if (typestring == std::string("int8")) {
+  } else if (data_type == std::string("int8")) {
     auto searcher =
         std::unique_ptr<diskann::BaseSearch>(new diskann::PQFlashSearch<int8_t>(
-            index_prefix, num_nodes_to_cache, num_threads, tags_file,
-            diskann::L2));
+            index_path_prefix, num_nodes_to_cache, num_threads, 
+            tags_file, diskann::L2));
     g_ssdSearch.push_back(std::move(searcher));
-  } else if (typestring == std::string("uint8")) {
+  } else if (data_type == std::string("uint8")) {
     auto searcher = std::unique_ptr<diskann::BaseSearch>(
-        new diskann::PQFlashSearch<uint8_t>(index_prefix, num_nodes_to_cache,
-                                            num_threads, tags_file,
-                                            diskann::L2));
+        new diskann::PQFlashSearch<uint8_t>(
+            index_path_prefix, num_nodes_to_cache, num_threads, 
+            tags_file, diskann::L2));
     g_ssdSearch.push_back(std::move(searcher));
   } else {
     std::cerr << "Unsupported data type " << argv[2] << std::endl;
@@ -72,7 +97,7 @@ int main(int argc, char* argv[]) {
 
   while (1) {
     try {
-      setup(address, typestring);
+      setup(address, data_type);
       std::cout << "Type 'exit' (case-sensitive) to exit" << std::endl;
       std::string line;
       std::getline(std::cin, line);
