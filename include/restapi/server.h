@@ -42,7 +42,6 @@ namespace diskann {
    private:
     bool                                                              _isDebug;
     std::unique_ptr<web::http::experimental::listener::http_listener> _listener;
-    // std::unique_ptr<diskann::BaseSearch>& _searcher;
     const bool                                        _multi_search;
     std::vector<std::unique_ptr<diskann::BaseSearch>> _multi_searcher;
   };
