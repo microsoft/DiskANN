@@ -14,7 +14,7 @@ namespace po = boost::program_options;
 
 int main(int argc, char** argv) {
   std::string data_type, dist_fn, data_path, index_path_prefix;
-  unsigned    num_threads, R, L, disk_PQ;
+  unsigned    num_threads, R, L, disk_PQ, build_PQ;
   float       B, M;
   bool        append_reorder_data = false;
   bool        use_opq = false;
@@ -57,6 +57,9 @@ int main(int argc, char** argv) {
                        po::bool_switch()->default_value(false),
                        "Include full precision data in the index. Use only in "
                        "conjuction with compressed data on SSD.");
+    desc.add_options()(
+        "build_PQ_bytes", po::value<uint32_t>(&build_PQ)->default_value(0),
+        "Number of PQ bytes to build the index; 0 for full precision build");
 
     desc.add_options()("use_opq", po::bool_switch()->default_value(false),
                        "Use Optimized Product Quantization (OPQ).");
@@ -109,7 +112,8 @@ int main(int argc, char** argv) {
                        std::string(std::to_string(M)) + " " +
                        std::string(std::to_string(num_threads)) + " " +
                        std::string(std::to_string(disk_PQ)) + " " +
-                       std::string(std::to_string(append_reorder_data));
+                       std::string(std::to_string(append_reorder_data)) + " " +
+                       std::string(std::to_string(build_PQ));
 
   try {
     if (data_type == std::string("int8"))

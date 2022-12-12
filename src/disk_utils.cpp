@@ -430,7 +430,8 @@ namespace diskann {
                                 unsigned R, double sampling_rate,
                                 double ram_budget, std::string mem_index_path,
                                 std::string medoids_file,
-                                std::string centroids_file) {
+                                std::string centroids_file,
+                                size_t build_pq_bytes, bool use_opq) {
     size_t base_num, base_dim;
     diskann::get_bin_metadata(base_file, base_num, base_dim);
 
@@ -451,7 +452,8 @@ namespace diskann {
 
       std::unique_ptr<diskann::Index<T>> _pvamanaIndex =
           std::unique_ptr<diskann::Index<T>>(new diskann::Index<T>(
-              compareMetric, base_dim, base_num, false, false));
+              compareMetric, base_dim, base_num, false, false, false,
+              build_pq_bytes > 0, build_pq_bytes, use_opq));
       _pvamanaIndex->build(base_file.c_str(), base_num, paras);
 
       _pvamanaIndex->save(mem_index_path.c_str());
@@ -492,9 +494,9 @@ namespace diskann {
       _u64 shard_base_dim, shard_base_pts;
       get_bin_metadata(shard_base_file, shard_base_pts, shard_base_dim);
       std::unique_ptr<diskann::Index<T>> _pvamanaIndex =
-          std::unique_ptr<diskann::Index<T>>(
-              new diskann::Index<T>(compareMetric, shard_base_dim,
-                                    shard_base_pts, false));  // TODO: Single?
+          std::unique_ptr<diskann::Index<T>>(new diskann::Index<T>(
+              compareMetric, shard_base_dim, shard_base_pts, false, false,
+              false, build_pq_bytes > 0, build_pq_bytes, use_opq));
       _pvamanaIndex->build(shard_base_file.c_str(), shard_base_pts, paras);
       _pvamanaIndex->save(shard_index_file.c_str());
       std::remove(shard_base_file.c_str());
@@ -806,18 +808,19 @@ namespace diskann {
     while (parser >> cur_param) {
       param_list.push_back(cur_param);
     }
-    if (param_list.size() != 5 && param_list.size() != 6 &&
-        param_list.size() != 7) {
+    if (param_list.size() < 5 || param_list.size() > 8) {
       diskann::cout
-          << "Correct usage of parameters is R (max degree) "
-             "L (indexing list size, better if >= R)"
-             "B (RAM limit of final index in GB)"
-             "M (memory limit while indexing)"
-             "T (number of threads for indexing)"
+          << "Correct usage of parameters is R (max degree)\n"
+             "L (indexing list size, better if >= R)\n"
+             "B (RAM limit of final index in GB)\n"
+             "M (memory limit while indexing)\n"
+             "T (number of threads for indexing)\n"
              "B' (PQ bytes for disk index: optional parameter for "
-             "very large dimensional data)"
+             "very large dimensional data)\n"
              "reorder (set true to include full precision in data file"
-             ": optional paramter, use only when using disk PQ"
+             ": optional paramter, use only when using disk PQ\n"
+             "build_PQ_byte (number of PQ bytes for inde build; set 0 to use "
+             "full precision vectors)"
           << std::endl;
       return -1;
     }
@@ -833,11 +836,12 @@ namespace diskann {
 
     size_t disk_pq_dims = 0;
     bool   use_disk_pq = false;
+    size_t build_pq_bytes = 0;
 
     // if there is a 6th parameter, it means we compress the disk index
     // vectors also using PQ data (for very large dimensionality data). If the
     // provided parameter is 0, it means we store full vectors.
-    if (param_list.size() == 6 || param_list.size() == 7) {
+    if (param_list.size() > 5) {
       disk_pq_dims = atoi(param_list[5].c_str());
       use_disk_pq = true;
       if (disk_pq_dims == 0)
@@ -845,10 +849,14 @@ namespace diskann {
     }
 
     bool reorder_data = false;
-    if (param_list.size() == 7) {
+    if (param_list.size() >= 7) {
       if (1 == atoi(param_list[6].c_str())) {
         reorder_data = true;
       }
+    }
+
+    if (param_list.size() == 8) {
+      build_pq_bytes = atoi(param_list[7].c_str());
     }
 
     std::string base_file(dataFilePath);
@@ -951,7 +959,8 @@ namespace diskann {
 
     diskann::build_merged_vamana_index<T>(
         data_file_to_use.c_str(), diskann::Metric::L2, L, R, p_val,
-        indexing_ram_budget, mem_index_path, medoids_path, centroids_path);
+        indexing_ram_budget, mem_index_path, medoids_path, centroids_path,
+        build_pq_bytes, use_opq);
 
     if (!use_disk_pq) {
       diskann::create_disk_layout<T>(data_file_to_use.c_str(), mem_index_path,
@@ -1050,15 +1059,15 @@ namespace diskann {
       std::string base_file, diskann::Metric compareMetric, unsigned L,
       unsigned R, double sampling_rate, double ram_budget,
       std::string mem_index_path, std::string medoids_path,
-      std::string centroids_file);
+      std::string centroids_file, size_t build_pq_bytes, bool use_opq);
   template DISKANN_DLLEXPORT int build_merged_vamana_index<float>(
       std::string base_file, diskann::Metric compareMetric, unsigned L,
       unsigned R, double sampling_rate, double ram_budget,
       std::string mem_index_path, std::string medoids_path,
-      std::string centroids_file);
+      std::string centroids_file, size_t build_pq_bytes, bool use_opq);
   template DISKANN_DLLEXPORT int build_merged_vamana_index<uint8_t>(
       std::string base_file, diskann::Metric compareMetric, unsigned L,
       unsigned R, double sampling_rate, double ram_budget,
       std::string mem_index_path, std::string medoids_path,
-      std::string centroids_file);
+      std::string centroids_file, size_t build_pq_bytes, bool use_opq);
 };  // namespace diskann
