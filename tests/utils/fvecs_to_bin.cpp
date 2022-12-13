@@ -6,7 +6,8 @@
 
 // Convert float types
 void block_convert_float(std::ifstream& reader, std::ofstream& writer,
-                   float* read_buf, float* write_buf, _u64 npts, _u64 ndims) {
+                         float* read_buf, float* write_buf, _u64 npts,
+                         _u64 ndims) {
   reader.read((char*) read_buf,
               npts * (ndims * sizeof(float) + sizeof(unsigned)));
   for (_u64 i = 0; i < npts; i++) {
@@ -17,8 +18,8 @@ void block_convert_float(std::ifstream& reader, std::ofstream& writer,
 }
 
 // Convert byte types
-void block_convert_byte(std::ifstream& reader, std::ofstream& writer, _u8* read_buf,
-                   _u8* write_buf, _u64 npts, _u64 ndims) {
+void block_convert_byte(std::ifstream& reader, std::ofstream& writer,
+                        _u8* read_buf, _u8* write_buf, _u64 npts, _u64 ndims) {
   reader.read((char*) read_buf,
               npts * (ndims * sizeof(_u8) + sizeof(unsigned)));
   for (_u64 i = 0; i < npts; i++) {
@@ -31,8 +32,7 @@ void block_convert_byte(std::ifstream& reader, std::ofstream& writer, _u8* read_
 
 int main(int argc, char** argv) {
   if (argc != 4) {
-    std::cout << argv[0]
-              << " <float/int8/uint8> input_vecs output_bin"
+    std::cout << argv[0] << " <float/int8/uint8> input_vecs output_bin"
               << std::endl;
     exit(-1);
   }
@@ -42,8 +42,7 @@ int main(int argc, char** argv) {
   if (strcmp(argv[1], "uint8") == 0 || strcmp(argv[1], "int8") == 0) {
     datasize = sizeof(_u8);
   } else if (strcmp(argv[1], "float") != 0) {
-    std::cout << "Error: type not supported. Use float/int8/uint8"
-              << std::endl;
+    std::cout << "Error: type not supported. Use float/int8/uint8" << std::endl;
     exit(-1);
   }
 
@@ -76,7 +75,7 @@ int main(int argc, char** argv) {
     _u64 cblk_size = std::min(npts - i * blk_size, blk_size);
     if (datasize == sizeof(float)) {
       block_convert_float(reader, writer, (float*) read_buf, (float*) write_buf,
-                    cblk_size, ndims);
+                          cblk_size, ndims);
     } else {
       block_convert_byte(reader, writer, read_buf, write_buf, cblk_size, ndims);
     }

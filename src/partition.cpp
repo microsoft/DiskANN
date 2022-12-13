@@ -42,8 +42,8 @@ void gen_random_slice(const std::string base_file,
       std::string(output_prefix + "_ids.bin").c_str(), std::ios::binary);
 
   std::random_device
-               rd;  // Will be used to obtain a seed for the random number engine
-  auto         x = rd();
+       rd;  // Will be used to obtain a seed for the random number engine
+  auto x = rd();
   std::mt19937 generator(
       x);  // Standard mersenne_twister_engine seeded with rd()
   std::uniform_real_distribution<float> distribution(0, 1);
@@ -146,13 +146,13 @@ template<typename T>
 void gen_random_slice(const T *inputdata, size_t npts, size_t ndims,
                       double p_val, float *&sampled_data, size_t &slice_size) {
   std::vector<std::vector<float>> sampled_vectors;
-  const T *                       cur_vector_T;
+  const T                        *cur_vector_T;
 
   p_val = p_val < 1 ? p_val : 1;
 
   std::random_device
-               rd;  // Will be used to obtain a seed for the random number engine
-  size_t       x = rd();
+         rd;  // Will be used to obtain a seed for the random number engine
+  size_t x = rd();
   std::mt19937 generator(
       (unsigned) x);  // Standard mersenne_twister_engine seeded with rd()
   std::uniform_real_distribution<float> distribution(0, 1);
@@ -176,7 +176,6 @@ void gen_random_slice(const T *inputdata, size_t npts, size_t ndims,
   }
 }
 
-
 int estimate_cluster_sizes(float *test_data_float, size_t num_test,
                            float *pivots, const size_t num_centers,
                            const size_t test_dim, const size_t k_base,
@@ -190,7 +189,7 @@ int estimate_cluster_sizes(float *test_data_float, size_t num_test,
   }
 
   size_t block_size = num_test <= BLOCK_SIZE ? num_test : BLOCK_SIZE;
-  _u32 * block_closest_centers = new _u32[block_size * k_base];
+  _u32  *block_closest_centers = new _u32[block_size * k_base];
   float *block_data_float;
 
   size_t num_blocks = DIV_ROUND_UP(num_test, block_size);
@@ -294,7 +293,7 @@ int shard_data_into_clusters(const std::string data_file, float *pivots,
     for (size_t p = 0; p < cur_blk_size; p++) {
       for (size_t p1 = 0; p1 < k_base; p1++) {
         size_t   shard_id = block_closest_centers[p * k_base + p1];
-        uint32_t original_point_map_id = (uint32_t)(start_id + p);
+        uint32_t original_point_map_id = (uint32_t) (start_id + p);
         shard_data_writer[shard_id].write(
             (char *) (block_data_T.get() + p * dim), sizeof(T) * dim);
         shard_idmap_writer[shard_id].write((char *) &original_point_map_id,
@@ -390,7 +389,7 @@ int shard_data_into_clusters_only_ids(const std::string data_file,
     for (size_t p = 0; p < cur_blk_size; p++) {
       for (size_t p1 = 0; p1 < k_base; p1++) {
         size_t   shard_id = block_closest_centers[p * k_base + p1];
-        uint32_t original_point_map_id = (uint32_t)(start_id + p);
+        uint32_t original_point_map_id = (uint32_t) (start_id + p);
         shard_idmap_writer[shard_id].write((char *) &original_point_map_id,
                                            sizeof(uint32_t));
         shard_counts[shard_id]++;
@@ -459,7 +458,7 @@ int retrieve_shard_data_from_ids(const std::string data_file,
                      sizeof(T) * (cur_blk_size * dim));
 
     for (size_t p = 0; p < cur_blk_size; p++) {
-      uint32_t original_point_map_id = (uint32_t)(start_id + p);
+      uint32_t original_point_map_id = (uint32_t) (start_id + p);
       if (cur_pos == shard_size)
         break;
       if (original_point_map_id == shard_ids[cur_pos]) {
@@ -592,9 +591,9 @@ int partition_with_ram_budget(const std::string data_file,
                            train_dim, k_base, cluster_sizes);
 
     for (auto &p : cluster_sizes) {
-      p = (_u64)(p /
-                 sampling_rate);  // to account for the fact that p is the size
-                                  // of the shard over the testing sample.
+      p = (_u64) (p /
+                  sampling_rate);  // to account for the fact that p is the size
+                                   // of the shard over the testing sample.
       double cur_shard_ram_estimate =
           diskann::estimate_ram_usage(p, train_dim, sizeof(T), graph_degree);
 
@@ -625,7 +624,7 @@ int partition_with_ram_budget(const std::string data_file,
 // Instantations of supported templates
 
 template void DISKANN_DLLEXPORT
-                                gen_random_slice<int8_t>(const std::string base_file,
+gen_random_slice<int8_t>(const std::string base_file,
                          const std::string output_prefix, double sampling_rate);
 template void DISKANN_DLLEXPORT gen_random_slice<uint8_t>(
     const std::string base_file, const std::string output_prefix,
@@ -635,7 +634,7 @@ gen_random_slice<float>(const std::string base_file,
                         const std::string output_prefix, double sampling_rate);
 
 template void DISKANN_DLLEXPORT
-                                gen_random_slice<float>(const float *inputdata, size_t npts, size_t ndims,
+gen_random_slice<float>(const float *inputdata, size_t npts, size_t ndims,
                         double p_val, float *&sampled_data, size_t &slice_size);
 template void DISKANN_DLLEXPORT gen_random_slice<uint8_t>(
     const uint8_t *inputdata, size_t npts, size_t ndims, double p_val,

@@ -243,6 +243,9 @@ if (MSVC)
                    "msbuild.exe ${PROJECT_NAME}.sln /m /nologo /t:Build /p:Configuration=\"Release\" /property:Platform=\"x64\"\n")
 endif()
 
+include(clang-format.cmake)
+
+
 if(PYBIND)
     add_subdirectory(python)
 endif()

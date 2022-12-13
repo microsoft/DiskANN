@@ -823,8 +823,8 @@ namespace diskann {
     std::vector<Neighbor> &full_retset = query_scratch->full_retset;
     retset.reserve(l_search + 1);
 
-    _u32                        best_medoid = 0;
-    float                       best_dist = (std::numeric_limits<float>::max)();
+    _u32  best_medoid = 0;
+    float best_dist = (std::numeric_limits<float>::max)();
     for (_u64 cur_m = 0; cur_m < num_medoids; cur_m++) {
       float cur_expanded_dist = dist_cmp_float->compare(
           query_float, centroid_data + aligned_dim * cur_m,

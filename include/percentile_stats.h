@@ -45,7 +45,7 @@ namespace diskann {
     std::sort(vals.begin(), vals.end(),
               [](const T &left, const T &right) { return left < right; });
 
-    auto retval = vals[(uint64_t)(percentile * len)];
+    auto retval = vals[(uint64_t) (percentile * len)];
     vals.clear();
     return retval;
   }
