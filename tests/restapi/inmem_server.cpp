@@ -67,6 +67,13 @@ int main(int argc, char* argv[]) {
         desc.add_options()("tags_file",
             po::value<std::string>(&tags_file)->default_value(std::string()),
             "Tags file location");
+        po::variables_map vm;
+        po::store(po::parse_command_line(argc, argv, desc), vm);
+        if (vm.count("help")) {
+            std::cout << desc;
+            return 0;
+        }
+        po::notify(vm);
     }
     catch (const std::exception& ex) {
         std::cerr << ex.what() << std::endl;

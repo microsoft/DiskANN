@@ -22,7 +22,7 @@ std::vector<std::unique_ptr<diskann::BaseSearch>> g_ssdSearch;
 
 void setup(const utility::string_t& address, const std::string& typestring) {
   web::http::uri_builder uriBldr(address);
-  auto                   uri = uriBldr.to_uri();
+  auto uri = uriBldr.to_uri();
 
   std::cout << "Attempting to start server on " << uri.to_string() << std::endl;
 
@@ -54,7 +54,7 @@ int main(int argc, char* argv[]) {
         "Web server address");
     desc.add_options()("index_path_prefix",
         po::value<std::string>(&index_path_prefix)->required(),
-        "Path prefix for saving index file components");
+        "Path prefix for loading index file components");
     desc.add_options()(
         "num_nodes_to_cache",
         po::value<uint32_t>(&num_nodes_to_cache)->default_value(0),
@@ -67,6 +67,13 @@ int main(int argc, char* argv[]) {
     desc.add_options()("tags_file",
         po::value<std::string>(&tags_file)->default_value(std::string()),
         "Tags file location");
+    po::variables_map vm;
+    po::store(po::parse_command_line(argc, argv, desc), vm);
+    if (vm.count("help")) {
+        std::cout << desc;
+        return 0;
+    }
+    po::notify(vm);
   } catch (const std::exception& ex) {
       std::cerr << ex.what() << std::endl;
       return -1;
@@ -93,6 +100,7 @@ int main(int argc, char* argv[]) {
     g_ssdSearch.push_back(std::move(searcher));
   } else {
     std::cerr << "Unsupported data type " << argv[2] << std::endl;
+    exit(-1);
   }
 
   while (1) {

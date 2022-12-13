@@ -7,10 +7,13 @@
 #include <string>
 #include <cstdlib>
 #include <codecvt>
+#include <boost/program_options.hpp>
+#include <omp.h>
 
 #include <restapi/server.h>
 
 using namespace diskann;
+namespace po = boost::program_options;
 
 std::unique_ptr<Server>                           g_httpServer(nullptr);
 std::vector<std::unique_ptr<diskann::BaseSearch>> g_ssdSearch;
@@ -34,94 +37,122 @@ void teardown(const utility::string_t& address) {
 }
 
 int main(int argc, char* argv[]) {
-  if (argc != 6 && argc != 7) {
-    std::cout << "Usage: multiple_ssdserver ip_addr:port data_type<float/int8/uint8> "
-                 "index_prefix_paths num_nodes_to_cache num_threads [tags_file]"
-              << std::endl;
-    exit(-1);
-  }
+    std::string data_type, index_prefix_paths, address, tags_file;
+    uint32_t num_nodes_to_cache;
+    uint32_t num_threads;
 
-  // auto address = getHostingAddress(argv[1]);
-  std::string address(argv[1]);
-  auto        index_prefix_paths = argv[3];
-  unsigned    num_nodes_to_cache = atoi(argv[4]);
-  unsigned    num_threads = atoi(argv[5]);
-  const char* tags_paths = argc == 7 ? argv[6] : nullptr;
-
-  std::vector<std::pair<std::string, std::string>> index_tag_paths;
-  std::ifstream index_in(index_prefix_paths);
-  if (!index_in.is_open()) {
-    std::cerr << "Could not open " << index_prefix_paths << std::endl;
-    exit(-1);
-  }
-  std::ifstream tags_in(tags_paths);
-  if (!tags_in.is_open()) {
-    std::cerr << "Could not open " << tags_paths << std::endl;
-    exit(-1);
-  }
-  std::string prefix, tagfile;
-  while (std::getline(index_in, prefix)) {
-    if (std::getline(tags_in, tagfile)) {
-      index_tag_paths.push_back(std::make_pair(prefix, tagfile));
-    } else {
-      std::cerr << "The number of tags specified does not match the number of "
-                   "indices specified"
-                << std::endl;
-      exit(-1);
-    }
-  }
-  index_in.close();
-  tags_in.close();
-
-  const std::string typestring(argv[2]);
-  if (typestring == std::string("float")) {
-    for (auto& index_tag : index_tag_paths) {
-      auto searcher = std::unique_ptr<diskann::BaseSearch>(
-          new diskann::PQFlashSearch<float>(index_tag.first.c_str(),
-                                            num_nodes_to_cache, num_threads,
-                                            index_tag.second.c_str(), diskann::L2));
-      g_ssdSearch.push_back(std::move(searcher));
-    }
-
-  } else if (typestring == std::string("int8")) {
-    for (auto& index_tag : index_tag_paths) {
-      auto searcher = std::unique_ptr<diskann::BaseSearch>(
-          new diskann::PQFlashSearch<int8_t>(index_tag.first.c_str(),
-                                             num_nodes_to_cache, num_threads,
-                                             index_tag.second.c_str(), diskann::L2));
-      g_ssdSearch.push_back(std::move(searcher));
-    }
-  } else if (typestring == std::string("uint8")) {
-    for (auto& index_tag : index_tag_paths) {
-      auto searcher = std::unique_ptr<diskann::BaseSearch>(
-          new diskann::PQFlashSearch<uint8_t>(index_tag.first.c_str(),
-                                              num_nodes_to_cache, num_threads,
-                                              index_tag.second.c_str(), diskann::L2));
-      g_ssdSearch.push_back(std::move(searcher));
-    }
-  } else {
-    std::cerr << "Unsupported data type " << argv[2] << std::endl;
-  }
-
-  while (1) {
+    po::options_description desc{ "Arguments" };
     try {
-      setup(address, typestring);
-      std::cout << "Type 'exit' (case-sensitive) to exit" << std::endl;
-      std::string line;
-      std::getline(std::cin, line);
-      if (line == "exit") {
-        teardown(address);
-        g_httpServer->close().wait();
-        exit(0);
-      }
-    } catch (const std::exception& ex) {
-      std::cerr << "Exception occurred: " << ex.what() << std::endl;
-      std::cerr << "Restarting HTTP server";
-      teardown(address);
-    } catch (...) {
-      std::cerr << "Unknown exception occurreed" << std::endl;
-      std::cerr << "Restarting HTTP server";
-      teardown(address);
+        desc.add_options()("help,h", "Print information on arguments");
+        desc.add_options()("address",
+            po::value<std::string>(&address)->required(),
+            "Web server address");
+        desc.add_options()("data_type",
+            po::value<std::string>(&data_type)->required(),
+            "data type <int8/uint8/float>");
+        desc.add_options()("index_prefix_paths",
+            po::value<std::string>(&index_prefix_paths)->required(),
+            "Path prefix for loading index file components");
+        desc.add_options()(
+            "num_nodes_to_cache",
+            po::value<uint32_t>(&num_nodes_to_cache)->default_value(0),
+            "Number of nodes to cache during search");
+        desc.add_options()(
+            "num_threads,T",
+            po::value<uint32_t>(&num_threads)->default_value(omp_get_num_procs()),
+            "Number of threads used for building index (defaults to "
+            "omp_get_num_procs())");
+        desc.add_options()("tags_file",
+            po::value<std::string>(&tags_file)->default_value(std::string()),
+            "Tags file location");
+
+        po::variables_map vm;
+        po::store(po::parse_command_line(argc, argv, desc), vm);
+        if (vm.count("help")) {
+            std::cout << desc;
+            return 0;
+        }
+        po::notify(vm);
     }
-  }
+    catch (const std::exception& ex) {
+        std::cerr << ex.what() << std::endl;
+        return -1;
+    }
+    
+    std::vector<std::pair<std::string, std::string>> index_tag_paths;
+    std::ifstream index_in(index_prefix_paths);
+    if (!index_in.is_open()) {
+        std::cerr << "Could not open " << index_prefix_paths << std::endl;
+        exit(-1);
+    }
+    std::ifstream tags_in(tags_file);
+    if (!tags_in.is_open()) {
+        std::cerr << "Could not open " << tags_file << std::endl;
+        exit(-1);
+    }
+    std::string prefix, tagfile;
+    while (std::getline(index_in, prefix)) {
+        if (std::getline(tags_in, tagfile)) {
+            index_tag_paths.push_back(std::make_pair(prefix, tagfile));
+        } else {
+            std::cerr << "The number of tags specified does not match the number of "
+                "indices specified" << std::endl;
+            exit(-1);
+        }
+    }
+    index_in.close();
+    tags_in.close();
+
+    const std::string typestring(argv[2]);
+    if (typestring == std::string("float")) {
+        for (auto& index_tag : index_tag_paths) {
+            auto searcher = std::unique_ptr<diskann::BaseSearch>(
+                new diskann::PQFlashSearch<float>(index_tag.first.c_str(),
+                                                num_nodes_to_cache, num_threads,
+                                                index_tag.second.c_str(), diskann::L2));
+            g_ssdSearch.push_back(std::move(searcher));
+        }
+
+    } else if (typestring == std::string("int8")) {
+            for (auto& index_tag : index_tag_paths) {
+                auto searcher = std::unique_ptr<diskann::BaseSearch>(
+                    new diskann::PQFlashSearch<int8_t>(index_tag.first.c_str(),
+                    num_nodes_to_cache, num_threads,
+                    index_tag.second.c_str(), diskann::L2));
+                g_ssdSearch.push_back(std::move(searcher));
+            }
+    } else if (typestring == std::string("uint8")) {
+        for (auto& index_tag : index_tag_paths) {
+            auto searcher = std::unique_ptr<diskann::BaseSearch>(
+                new diskann::PQFlashSearch<uint8_t>(index_tag.first.c_str(),
+                                                    num_nodes_to_cache, num_threads,
+                                                    index_tag.second.c_str(), diskann::L2));
+            g_ssdSearch.push_back(std::move(searcher));
+        }
+    } else {
+        std::cerr << "Unsupported data type " << argv[2] << std::endl;
+        exit(-1);
+    }
+
+    while (1) {
+        try {
+            setup(address, typestring);
+            std::cout << "Type 'exit' (case-sensitive) to exit" << std::endl;
+            std::string line;
+            std::getline(std::cin, line);
+            if (line == "exit") {
+                teardown(address);
+                g_httpServer->close().wait();
+                exit(0);
+            }
+        } catch (const std::exception& ex) {
+            std::cerr << "Exception occurred: " << ex.what() << std::endl;
+            std::cerr << "Restarting HTTP server";
+            teardown(address);
+        } catch (...) {
+            std::cerr << "Unknown exception occurreed" << std::endl;
+            std::cerr << "Restarting HTTP server";
+            teardown(address);
+        }
+    }
 }
