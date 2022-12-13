@@ -1443,8 +1443,8 @@ namespace diskann {
     }
 
     if (_pq_dist) {
-      double p_val =
-          std::min(1.0, ((double) MAX_PQ_TRAINING_SET_SIZE / (double) _nd));
+      double p_val = std::min(
+          1.0, ((double) MAX_PQ_TRAINING_SET_SIZE / (double) file_num_points));
 
       std::string suffix = _use_opq ? "_opq" : "_pq";
       suffix += std::to_string(_num_pq_chunks);
