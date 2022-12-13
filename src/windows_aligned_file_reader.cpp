@@ -90,7 +90,7 @@ void WindowsAlignedFileReader::read(std::vector<AlignedRead>& read_reqs,
     // batch start/end
     _u64 batch_start = MAX_IO_DEPTH * i;
     _u64 batch_size =
-        std::min((_u64)(n_reqs - batch_start), (_u64) MAX_IO_DEPTH);
+        std::min((_u64) (n_reqs - batch_start), (_u64) MAX_IO_DEPTH);
 
     // fill OVERLAPPED and issue them
     for (_u64 j = 0; j < batch_size; j++) {

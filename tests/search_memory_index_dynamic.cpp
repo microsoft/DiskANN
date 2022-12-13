@@ -136,7 +136,7 @@ int search_memory_index(diskann::Metric& metric, const std::string& index_path,
     std::cout << std::setw(4) << L << std::setw(12) << qps << std::setw(18)
               << avg_cmps << std::setw(20) << (float) mean_latency
               << std::setw(15)
-              << (float) latency_stats[(_u64)(0.999 * query_num)];
+              << (float) latency_stats[(_u64) (0.999 * query_num)];
     if (calc_recall_flag)
       std::cout << std::setw(12) << recall;
     std::cout << std::endl;

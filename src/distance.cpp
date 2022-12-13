@@ -72,7 +72,7 @@ namespace diskann {
   //
   // L2 distance functions.
   //
-  
+
   float DistanceL2Int8::compare(const int8_t *a, const int8_t *b,
                                 uint32_t size) const {
     int32_t result = 0;
@@ -80,7 +80,7 @@ namespace diskann {
 #ifdef _WINDOWS
 #ifdef USE_AVX2
     __m256 r = _mm256_setzero_ps();
-    char * pX = (char *) a, *pY = (char *) b;
+    char  *pX = (char *) a, *pY = (char *) b;
     while (size >= 32) {
       __m256i r1 = _mm256_subs_epi8(_mm256_loadu_si256((__m256i *) pX),
                                     _mm256_loadu_si256((__m256i *) pY));
@@ -102,16 +102,16 @@ namespace diskann {
 #else
 #pragma omp simd reduction(+ : result) aligned(a, b : 8)
     for (_s32 i = 0; i < (_s32) size; i++) {
-      result += ((int32_t)((int16_t) a[i] - (int16_t) b[i])) *
-                ((int32_t)((int16_t) a[i] - (int16_t) b[i]));
+      result += ((int32_t) ((int16_t) a[i] - (int16_t) b[i])) *
+                ((int32_t) ((int16_t) a[i] - (int16_t) b[i]));
     }
     return (float) result;
 #endif
 #else
 #pragma omp simd reduction(+ : result) aligned(a, b : 8)
     for (int32_t i = 0; i < (int32_t) size; i++) {
-      result += ((int32_t)((int16_t) a[i] - (int16_t) b[i])) *
-                ((int32_t)((int16_t) a[i] - (int16_t) b[i]));
+      result += ((int32_t) ((int16_t) a[i] - (int16_t) b[i])) *
+                ((int32_t) ((int16_t) a[i] - (int16_t) b[i]));
     }
     return (float) result;
 #endif
@@ -124,8 +124,8 @@ namespace diskann {
 #pragma omp simd reduction(+ : result) aligned(a, b : 8)
 #endif
     for (int32_t i = 0; i < (int32_t) size; i++) {
-      result += ((int32_t)((int16_t) a[i] - (int16_t) b[i])) *
-                ((int32_t)((int16_t) a[i] - (int16_t) b[i]));
+      result += ((int32_t) ((int16_t) a[i] - (int16_t) b[i])) *
+                ((int32_t) ((int16_t) a[i] - (int16_t) b[i]));
     }
     return (float) result;
   }
@@ -143,7 +143,7 @@ namespace diskann {
     float result = 0;
 #ifdef USE_AVX2
     // assume size is divisible by 8
-    uint16_t niters = (uint16_t)(size / 8);
+    uint16_t niters = (uint16_t) (size / 8);
     __m256   sum = _mm256_setzero_ps();
     for (uint16_t j = 0; j < niters; j++) {
       // scope is a[8j:8j+7], b[8j:8j+7]

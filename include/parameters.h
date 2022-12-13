@@ -45,7 +45,7 @@ namespace diskann {
 
     template<typename ParamType>
     inline ParamType Get(const std::string &name,
-                         const ParamType &  default_value) {
+                         const ParamType   &default_value) {
       try {
         return Get<ParamType>(name);
       } catch (std::invalid_argument e) {
