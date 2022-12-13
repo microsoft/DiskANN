@@ -7,10 +7,13 @@
 #include <string>
 #include <cstdlib>
 #include <codecvt>
+#include <boost/program_options.hpp>
+
 
 #include <restapi/server.h>
 
 using namespace diskann;
+namespace po = boost::program_options;
 
 std::unique_ptr<Server>                           g_httpServer(nullptr);
 std::vector<std::unique_ptr<diskann::BaseSearch>> g_inMemorySearch;
@@ -34,59 +37,80 @@ void teardown(const utility::string_t& address) {
 }
 
 int main(int argc, char* argv[]) {
-  if (argc != 7 && argc != 8) {
-    std::cout << "Usage: inmem_server ip_addr:port data_type<float/int8/uint8>"
-                 " data_file index_file num_threads l_search [tags_file]"
-              << std::endl;
-    exit(1);
-  }
+    std::string data_type, index_file, data_file, address, tags_file;
+    uint32_t num_threads;
+    uint32_t l_search;
 
-  std::string address(argv[1]);
-  const char* data_file = argv[3];
-  const char* index_file = argv[4];
-  const unsigned num_threads = atoi(argv[5]);
-  const unsigned l_search = atoi(argv[6]);
-  const char* tags_file = argc == 8 ? argv[7] : nullptr;
+    po::options_description desc{ "Arguments" };
+    try {
+        desc.add_options()("help,h", "Print information on arguments");
+        desc.add_options()("data_type",
+            po::value<std::string>(&data_type)->required(),
+            "data type <int8/uint8/float>");
+        desc.add_options()("address",
+            po::value<std::string>(&address)->required(),
+            "Web server address");
+        desc.add_options()("data_file",
+            po::value<std::string>(&data_file)->required(),
+            "File containing the data found in the index");
+        desc.add_options()("index_path_prefix",
+            po::value<std::string>(&index_file)->required(),
+            "Path prefix for saving index file components");
+        desc.add_options()(
+            "num_threads,T",
+            po::value<uint32_t>(&num_threads)->required(),
+            "Number of threads used for building index");
+        desc.add_options()(
+            "l_search",
+            po::value<uint32_t>(&l_search)->required(),
+            "Value of L");
+        desc.add_options()("tags_file",
+            po::value<std::string>(&tags_file)->default_value(std::string()),
+            "Tags file location");
+    }
+    catch (const std::exception& ex) {
+        std::cerr << ex.what() << std::endl;
+        return -1;
+    }
 
-  const std::string typestring(argv[2]);
-  if (typestring == std::string("float")) {
-    auto searcher =
+    if (data_type == std::string("float")) {
+        auto searcher =
         std::unique_ptr<diskann::BaseSearch>(new diskann::InMemorySearch<float>(
             data_file, index_file, tags_file, diskann::L2, num_threads, l_search));
-    g_inMemorySearch.push_back(std::move(searcher));
-  } else if (typestring == std::string("int8")) {
-    auto searcher = std::unique_ptr<diskann::BaseSearch>(
-        new diskann::InMemorySearch<int8_t>(data_file, index_file, tags_file,
-                                            diskann::L2, num_threads, l_search));
-    g_inMemorySearch.push_back(std::move(searcher));
-  } else if (typestring == std::string("uint8")) {
-    auto searcher = std::unique_ptr<diskann::BaseSearch>(
-        new diskann::InMemorySearch<uint8_t>(data_file, index_file, tags_file,
-                                             diskann::L2, num_threads, l_search));
-    g_inMemorySearch.push_back(std::move(searcher));
-  } else {
-    std::cerr << "Unsupported data type " << argv[2] << std::endl;
-  }
-
-  while (1) {
-    try {
-      setup(address, typestring);
-      std::cout << "Type 'exit' (case-sensitive) to exit" << std::endl;
-      std::string line;
-      std::getline(std::cin, line);
-      if (line == "exit") {
-        teardown(address);
-        g_httpServer->close().wait();
-        exit(0);
-      }
-    } catch (const std::exception& ex) {
-      std::cerr << "Exception occurred: " << ex.what() << std::endl;
-      std::cerr << "Restarting HTTP server";
-      teardown(address);
-    } catch (...) {
-      std::cerr << "Unknown exception occurreed" << std::endl;
-      std::cerr << "Restarting HTTP server";
-      teardown(address);
+        g_inMemorySearch.push_back(std::move(searcher));
+    } else if (data_type == std::string("int8")) {
+        auto searcher = std::unique_ptr<diskann::BaseSearch>(
+            new diskann::InMemorySearch<int8_t>(data_file, index_file, tags_file,
+                diskann::L2, num_threads, l_search));
+        g_inMemorySearch.push_back(std::move(searcher));
+    } else if (data_type == std::string("uint8")) {
+        auto searcher = std::unique_ptr<diskann::BaseSearch>(
+            new diskann::InMemorySearch<uint8_t>(data_file, index_file, tags_file,
+                diskann::L2, num_threads, l_search));
+        g_inMemorySearch.push_back(std::move(searcher));
+    } else {
+        std::cerr << "Unsupported data type " << argv[2] << std::endl;
     }
-  }
+
+    while (1) {
+        try {
+            setup(address, data_type);
+            std::cout << "Type 'exit' (case-sensitive) to exit" << std::endl;
+            std::string line;
+            std::getline(std::cin, line);
+            if (line == "exit") {
+                teardown(address);
+                g_httpServer->close().wait();
+                exit(0);
+            }
+        } catch (const std::exception& ex) {
+            std::cerr << "Exception occurred: " << ex.what() << std::endl;
+            std::cerr << "Restarting HTTP server";
+            teardown(address);
+        } catch (...) {
+            std::cerr << "Unknown exception occurreed" << std::endl;
+            std::cerr << "Restarting HTTP server";
+            teardown(address);
+        }
+    }
 }
