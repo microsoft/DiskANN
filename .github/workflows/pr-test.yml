@@ -24,9 +24,9 @@ jobs:
       if: runner.os != 'Windows'
       run: |
         if [ "${{ matrix.os }}" != "ubuntu-18.04" ]; then
-            sudo apt install cmake g++ libaio-dev libgoogle-perftools-dev clang-format libboost-dev libboost-program-options-dev libmkl-full-dev
+            sudo apt-get install cmake g++ libaio-dev libgoogle-perftools-dev clang-format libboost-dev libboost-program-options-dev libmkl-full-dev
         else
-            sudo apt install cmake g++ libaio-dev libgoogle-perftools-dev clang-format libboost-dev libboost-program-options-dev
+            sudo apt-get install cmake g++ libaio-dev libgoogle-perftools-dev clang-format libboost-dev libboost-program-options-dev
             wget https://registrationcenter-download.intel.com/akdlm/irc_nas/18487/l_BaseKit_p_2022.1.2.146.sh
             sudo sh l_BaseKit_p_2022.1.2.146.sh -a --components intel.oneapi.lin.mkl.devel --action install --eula accept -s
         fi
