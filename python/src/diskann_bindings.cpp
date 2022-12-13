@@ -11,8 +11,13 @@
 #include <pybind11/stl_bind.h>
 #include <pybind11/operators.h>
 
+#ifdef _WINDOWS
+#include "windows_aligned_file_reader.h"
+#else
 #include "linux_aligned_file_reader.h"
-#include "aux_utils.h"
+#endif
+
+#include "disk_utils.h"
 #include "pq_flash_index.h"
 
 PYBIND11_MAKE_OPAQUE(std::vector<unsigned>);
@@ -24,14 +29,17 @@ PYBIND11_MAKE_OPAQUE(std::vector<uint8_t>);
 namespace py = pybind11;
 using namespace diskann;
 
-#ifdef __linux__
 template<class T>
 struct DiskANNIndex {
   PQFlashIndex<T> *                  pq_flash_index;
   std::shared_ptr<AlignedFileReader> reader;
 
   DiskANNIndex(diskann::Metric metric) {
+#ifdef _WINDOWS
+    reader = std::make_shared<WindowsAlignedFileReader>();
+#else
     reader = std::make_shared<LinuxAlignedFileReader>();
+#endif
     pq_flash_index = new PQFlashIndex<T>(reader, metric);
   }
 
@@ -47,15 +55,15 @@ struct DiskANNIndex {
     std::vector<uint32_t> node_list;
     pq_flash_index->cache_bfs_levels(num_nodes_to_cache, node_list);
     pq_flash_index->load_cache_list(node_list);
-    std::cout << "loaded index, cached " << node_list.size()
-              << " nodes based on BFS." << std::endl;
+    //diskann::cout << "loaded index, cached " << node_list.size()
+    //          << " nodes based on BFS." << std::endl;
   }
 
   void cache_sample_paths(size_t             num_nodes_to_cache,
                           const std::string &warmup_query_file,
                           uint32_t           num_threads) {
     if (!file_exists(warmup_query_file)) {
-      std::cout << "No warm up query file exists." << std::endl;
+      //std::cout << "No warm up query file exists." << std::endl;
       return;
     }
 
@@ -63,8 +71,8 @@ struct DiskANNIndex {
     pq_flash_index->generate_cache_list_from_sample_queries(
         warmup_query_file, 15, 4, num_nodes_to_cache, num_threads, node_list);
     pq_flash_index->load_cache_list(node_list);
-    std::cout << "loaded index, cached " << node_list.size()
-              << " nodes based on sample search paths." << std::endl;
+    //std::cout << "loaded index, cached " << node_list.size()
+    //          << " nodes based on sample search paths." << std::endl;
   }
 
   int load_index(const std::string &index_path_prefix, const int num_threads,
@@ -75,7 +83,7 @@ struct DiskANNIndex {
     int load_success =
         pq_flash_index->load(num_threads, index_path.c_str());
     if (load_success != 0) {
-      std::cout << "Index load failed" << std::endl;
+      //std::cout << "Index load failed" << std::endl;
       return load_success;
     }
     if (cache_mechanism == 0) {
@@ -87,9 +95,17 @@ struct DiskANNIndex {
     } else if (cache_mechanism == 2) {
       cache_bfs_levels(num_nodes_to_cache);
     } else {
-      std::cout << "Invalid choice of caching mechanism." << std::endl;
+      //std::cout << "Invalid choice of caching mechanism." << std::endl;
     }
     return 0;
+  }
+
+  int _build_disk_index_float(const char     *dataFilePath,
+                              const char     *indexFilePath,
+                              const char     *indexBuildParameters,
+                              diskann::Metric compareMetric) {
+    return diskann::build_disk_index<float>(data_file_path, index_prefix_path,
+                                            params.c_str(), self.get_metric());
   }
 
   void search(std::vector<T> &query, const _u64 query_idx, const _u64 dim,
@@ -119,7 +135,7 @@ struct DiskANNIndex {
     }
     omp_set_num_threads(num_threads);
 #pragma omp parallel for schedule(dynamic, 1)
-    for (_u64 q = 0; q < num_queries; ++q) {
+    for (int64_t q = 0; q < num_queries; ++q) {
       std::vector<_u64> u64_ids(knn);
 
       pq_flash_index->cached_beam_search(queries.data() + q * dim, knn,
@@ -163,7 +179,7 @@ struct DiskANNIndex {
     diskann::QueryStats *stats = new diskann::QueryStats[num_queries];
 
 #pragma omp parallel for schedule(dynamic, 1)
-    for (_u64 i = 0; i < num_queries; i++) {
+    for (int64_t i = 0; i < num_queries; i++) {
       pq_flash_index->cached_beam_search(
           queries.data(i), knn, l_search, u64_ids.data() + i * knn,
           dists.mutable_data(i), beam_width, stats + i);
@@ -198,8 +214,8 @@ struct DiskANNIndex {
       const int num_threads) {
     py::array_t<unsigned> offsets(num_queries + 1);
 
-    std::vector<std::vector<_u64>>  u64_ids(num_queries);
-    std::vector<std::vector<float>> dists(num_queries);
+    std::vector<std::vector<_u64> >  u64_ids(num_queries);
+    std::vector<std::vector<float> > dists(num_queries);
 
     auto offsets_mutable = offsets.mutable_unchecked();
     offsets_mutable(0) = 0;
@@ -207,7 +223,7 @@ struct DiskANNIndex {
     diskann::QueryStats *stats = new diskann::QueryStats[num_queries];
 
 #pragma omp parallel for schedule(dynamic, 1)
-    for (_u64 i = 0; i < num_queries; i++) {
+    for (int64_t i = 0; i < num_queries; i++) {
       _u32 res_count = pq_flash_index->range_search(
           queries.data(i), range, min_list_size, max_list_size, u64_ids[i],
           dists[i], beam_width, stats + i);
@@ -252,8 +268,6 @@ struct DiskANNIndex {
   }
 };
 
-#endif
-
 PYBIND11_MODULE(diskannpy, m) {
   m.doc() = "DiskANN Python Bindings";
 #ifdef VERSION_INFO
@@ -262,10 +276,10 @@ PYBIND11_MODULE(diskannpy, m) {
   m.attr("__version__") = "dev";
 #endif
 
-  py::bind_vector<std::vector<unsigned>>(m, "VectorUnsigned");
-  py::bind_vector<std::vector<float>>(m, "VectorFloat");
-  py::bind_vector<std::vector<int8_t>>(m, "VectorInt8");
-  py::bind_vector<std::vector<uint8_t>>(m, "VectorUInt8");
+  py::bind_vector<std::vector<unsigned> >(m, "VectorUnsigned");
+  py::bind_vector<std::vector<float> >(m, "VectorFloat");
+  py::bind_vector<std::vector<int8_t> >(m, "VectorInt8");
+  py::bind_vector<std::vector<uint8_t> >(m, "VectorUInt8");
 
 
   py::enum_<Metric>(m, "Metric")
@@ -294,16 +308,13 @@ PYBIND11_MODULE(diskannpy, m) {
       .def(py::self < py::self)
       .def(py::self == py::self);
 
-  py::class_<SimpleNeighbor>(m, "SimpleNeighbor")
-      .def(py::init<>())
-      .def(py::init<unsigned, float>())
-      .def(py::self < py::self)
-      .def(py::self == py::self);
-
   py::class_<AlignedFileReader>(m, "AlignedFileReader");
 
-  py::class_<LinuxAlignedFileReader>(m, "LinuxAlignedFileReader")
-      .def(py::init<>());
+#ifdef _WINDOWS
+  py::class_<WindowsAlignedFileReader>(m, "WindowsAlignedFileReader").def(py::init<>());
+#else
+  py::class_<LinuxAlignedFileReader>(m, "LinuxAlignedFileReader").def(py::init<>());
+#endif
 
   m.def(
       "omp_set_num_threads",
@@ -440,9 +451,9 @@ PYBIND11_MODULE(diskannpy, m) {
          size_t dims) { save_bin<_u32>(file_name, data.data(), npts, dims); },
       py::arg("file_name"), py::arg("data"), py::arg("npts"), py::arg("dims"));
 
-  py::class_<DiskANNIndex<float>>(m, "DiskANNFloatIndex")
+  py::class_<DiskANNIndex<float> >(m, "DiskANNFloatIndex")
       .def(py::init([](diskann::Metric metric) {
-        return std::unique_ptr<DiskANNIndex<float>>(
+        return std::unique_ptr<DiskANNIndex<float> >(
             new DiskANNIndex<float>(metric));
       }))
       .def("cache_bfs_levels", &DiskANNIndex<float>::cache_bfs_levels,
@@ -480,8 +491,9 @@ PYBIND11_MODULE(diskannpy, m) {
                                  " " + std::to_string(final_index_ram_limit) +
                                  " " + std::to_string(indexing_ram_budget) +
                                  " " + std::to_string(num_threads);
-            if (pq_disk_bytes > 0)
+            if (pq_disk_bytes > 0) {
               params = params + " " + std::to_string(pq_disk_bytes);
+            }
             diskann::build_disk_index<float>(data_file_path, index_prefix_path,
                                              params.c_str(), self.get_metric());
           },
@@ -490,9 +502,9 @@ PYBIND11_MODULE(diskannpy, m) {
           py::arg("indexing_ram_limit"), py::arg("num_threads"),
           py::arg("pq_disk_bytes") = 0);
 
-  py::class_<DiskANNIndex<int8_t>>(m, "DiskANNInt8Index")
+  py::class_<DiskANNIndex<int8_t> >(m, "DiskANNInt8Index")
       .def(py::init([](diskann::Metric metric) {
-        return std::unique_ptr<DiskANNIndex<int8_t>>(
+        return std::unique_ptr<DiskANNIndex<int8_t> >(
             new DiskANNIndex<int8_t>(metric));
       }))
       .def("cache_bfs_levels", &DiskANNIndex<int8_t>::cache_bfs_levels,
@@ -542,9 +554,9 @@ PYBIND11_MODULE(diskannpy, m) {
           py::arg("pq_disk_bytes") = 0);
 
   
-  py::class_<DiskANNIndex<uint8_t>>(m, "DiskANNUInt8Index")
+  py::class_<DiskANNIndex<uint8_t> >(m, "DiskANNUInt8Index")
       .def(py::init([](diskann::Metric metric) {
-        return std::unique_ptr<DiskANNIndex<uint8_t>>(
+        return std::unique_ptr<DiskANNIndex<uint8_t> >(
             new DiskANNIndex<uint8_t>(metric));
       }))
       .def("cache_bfs_levels", &DiskANNIndex<uint8_t>::cache_bfs_levels,
