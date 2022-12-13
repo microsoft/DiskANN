@@ -68,10 +68,15 @@ class TestSSDRestApi(unittest.TestCase):
 
             args = [
                 ssd_server_path,
+                "--address",
                 cls._rest_address,
+                "--data_type",
                 "float",
+                "--index_path_prefix",
                 os.path.join(cls._build_dir, "smoke_test"),
+                "--num_nodes_to_cache",
                 str(_VECTOR_DIMS),
+                "--num_threads",
                 "1"
             ]
 
