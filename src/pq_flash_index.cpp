@@ -821,7 +821,7 @@ namespace diskann {
     tsl::robin_set<_u64>  &visited = query_scratch->visited;
     std::vector<Neighbor> &retset = query_scratch->retset;
     std::vector<Neighbor> &full_retset = query_scratch->full_retset;
-    retset.reserve(l_search + 1);
+    retset.resize(l_search + 1);
 
     _u32  best_medoid = 0;
     float best_dist = (std::numeric_limits<float>::max)();
@@ -836,7 +836,7 @@ namespace diskann {
     }
 
     compute_dists(&best_medoid, 1, dist_scratch);
-    retset.push_back(Neighbor(best_medoid, dist_scratch[0], true));
+    retset[0] = Neighbor(best_medoid, dist_scratch[0], true);
     visited.insert(best_medoid);
 
     unsigned cur_list_size = 1;
