@@ -95,8 +95,8 @@ mkdir -p DiskANN/build/data && cd DiskANN/build/data
 wget ftp://ftp.irisa.fr/local/texmex/corpus/sift.tar.gz
 tar -xf sift.tar.gz
 cd ..
-./tests/utils/fvecs_to_bin data/sift/sift_learn.fvecs data/sift/sift_learn.fbin
-./tests/utils/fvecs_to_bin data/sift/sift_query.fvecs data/sift/sift_query.fbin
+./tests/utils/fvecs_to_bin float data/sift/sift_learn.fvecs data/sift/sift_learn.fbin
+./tests/utils/fvecs_to_bin float data/sift/sift_query.fvecs data/sift/sift_query.fbin
 ```
 
 The example below tests the following scenario: using a file with 100000 points, the index is incrementally constructed point by point. After the first 50000 ponts are inserted, another concurrent job deletes the first 25000 points from the index and consolidates the index (edit the graph and cleans up resources). At the same time an additional 25000 points (i.e. points 50001 to 75000) are concurrently inserted into the index. Note that the index should be built **before** calculating the ground truth, since the memory index returns the slice of the sift100K dataset that was used to build the final graph (that is, points 25001-75000 in the original index).
