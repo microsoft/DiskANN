@@ -1,4 +1,5 @@
 name: Build and Release Python Wheels
+on: [push]
 jobs:
   build_wheels: 
     name: Build wheels on ${{ matrix.os }}
