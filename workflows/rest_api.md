@@ -38,7 +38,7 @@ The service searches each of the indices and aggregate the results based on dist
 Querying the service
 --------------------
 Issue a json query with the following fields
-- "k" : The nunber of nearest neighbors needed
+- "k" : The number of nearest neighbors needed
 - "query" : The query vector with a listing of co-ordinates.
 - "query_id" : An id to track the query. Use a unique number to keep track of queries, or "0" if you do not want to keep track.
 - "Ls" : query complexity. Higher Ls takes more milliseconds to process but offers higher recall. Default to 256 if you don't want to tune this. 
