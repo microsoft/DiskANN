@@ -783,7 +783,8 @@ namespace diskann {
               std::stringstream msg;
               msg << "Out of range edge " << _final_graph[n][m]
                   << " found at vertex " << n << std::endl;
-              msg <<" max pts, num_frozen = " << _max_points <<", " << _num_frozen_pts << std::endl;
+              msg << " max pts, num_frozen = " << _max_points << ", "
+                  << _num_frozen_pts << std::endl;
               throw diskann::ANNException(msg.str(), -1, __FUNCSIG__, __FILE__,
                                           __LINE__);
             }
@@ -818,7 +819,8 @@ namespace diskann {
               continue;
 
             Neighbor nn(id, dist, true);
-            unsigned inserted_position = InsertIntoPool(best_L_nodes.data(), l, nn);
+            unsigned inserted_position =
+                InsertIntoPool(best_L_nodes.data(), l, nn);
             if (l < Lsize)
               ++l;
             if (inserted_position < best_inserted_position)

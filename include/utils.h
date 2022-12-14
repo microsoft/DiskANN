@@ -109,14 +109,14 @@ typedef uint8_t  _u8;
 typedef int8_t   _s8;
 inline void      open_file_to_write(std::ofstream&     writer,
                                     const std::string& filename) {
-  writer.exceptions(std::ofstream::failbit | std::ofstream::badbit);
-  if (!file_exists(filename))
+       writer.exceptions(std::ofstream::failbit | std::ofstream::badbit);
+       if (!file_exists(filename))
     writer.open(filename, std::ios::binary | std::ios::out);
   else
     writer.open(filename, std::ios::binary | std::ios::in | std::ios::out);
 
   if (writer.fail()) {
-    char buff[1024];
+         char buff[1024];
 #ifdef _WINDOWS
     strerror_s(buff, 1024, errno);
 #else

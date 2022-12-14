@@ -12,7 +12,7 @@ void block_convert(std::ofstream& writer, int8_t* write_buf,
   for (_u64 i = 0; i < npts; i++) {
     for (_u64 d = 0; d < ndims; d++) {
       write_buf[d + i * ndims] =
-          (int8_t)((read_buf[d + i * ndims] - bias) * (254.0 / scale));
+          (int8_t) ((read_buf[d + i * ndims] - bias) * (254.0 / scale));
     }
   }
   writer.write((char*) write_buf, npts * ndims);

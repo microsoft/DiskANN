@@ -257,3 +257,5 @@ if (RESTAPI)
     endif()
     add_subdirectory(tests/restapi)
 endif()
+
+include(clang-format.cmake)

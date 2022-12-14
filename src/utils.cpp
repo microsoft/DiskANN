@@ -67,7 +67,7 @@ bool AvxSupportedCPU = false;
 #endif
 
 namespace diskann {
-  
+
   void block_convert(std::ofstream& writr, std::ifstream& readr,
                      float* read_buf, _u64 npts, _u64 ndims) {
     readr.read((char*) read_buf, npts * ndims * sizeof(float));
@@ -120,7 +120,7 @@ namespace diskann {
                   << std::endl;
   }
 
-    double calculate_recall(unsigned num_queries, unsigned* gold_std,
+  double calculate_recall(unsigned num_queries, unsigned* gold_std,
                           float* gs_dist, unsigned dim_gs,
                           unsigned* our_results, unsigned dim_or,
                           unsigned recall_at) {
@@ -238,7 +238,6 @@ namespace diskann {
     }
     return total_recall / (num_queries);
   }
-
 
 #ifdef EXEC_ENV_OLS
   void get_bin_metadata(AlignedFileReader& reader, size_t& npts, size_t& ndim,

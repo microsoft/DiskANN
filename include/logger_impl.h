@@ -50,9 +50,9 @@ namespace diskann {
 #ifdef EXEC_ENV_OLS
     static const int BUFFER_SIZE = 1024;
 #else
-    //Allocating an arbitrarily small buffer here because the overflow() and
-    //other function implementations push the BUFFER_SIZE chars into the 
-    //buffer before flushing to fwrite.  
+    // Allocating an arbitrarily small buffer here because the overflow() and
+    // other function implementations push the BUFFER_SIZE chars into the
+    // buffer before flushing to fwrite.
     static const int BUFFER_SIZE = 4;
 #endif
 

@@ -9,9 +9,13 @@ jobs:
     - name: Install deps
       run: |
         sudo apt install cmake g++ libaio-dev libgoogle-perftools-dev libunwind-dev clang-format libboost-dev libboost-program-options-dev libmkl-full-dev
+    - name: Clang Format Check
+      run: |
+        mkdir build && cd build && cmake ..
+        make checkformat
     - name: build
       run: |
-        mkdir build && cd build && cmake .. && make -j
+        cd build && make -j
 
   windows-build:
     name: Build for ${{ matrix.os }}
