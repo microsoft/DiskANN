@@ -1,6 +1,8 @@
 # Copyright (c) Microsoft Corporation. All rights reserved.
 # Licensed under the MIT license.
 
+set(CMAKE_CXX_STANDARD 14)
+
 if (PYTHON_EXECUTABLE)
     set(Python3_EXECUTABLE ${PYTHON_EXECUTABLE})
 endif()
@@ -23,40 +25,17 @@ execute_process(COMMAND ${Python3_EXECUTABLE} -c "import numpy; print(numpy.get_
 # the following is fairly synonymous with pybind11_add_module, but we need more target_link_libraries
 # see https://pybind11.readthedocs.io/en/latest/compiling.html#advanced-interface-library-targets for more details
 add_library(diskannpy MODULE src/diskann_bindings.cpp)
-if(MSVC)
-    target_link_options(diskannpy PRIVATE /MACHINE:x64)
-    target_link_libraries(
-            diskannpy 
-            debug 
-            pybind11::module
-            pybind11::lto
-            pybind11::windows_extras
-            ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG}/diskann.lib
-            ${DISKANN_TOOLS_TCMALLOC_LINK_OPTIONS}
-            ${DISKANN_ASYNC_LIB}
-    )
-    target_link_libraries(
-            diskannpy 
-            optimized 
-            pybind11::module
-            pybind11::lto
-            pybind11::windows_extras
-            ${CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE}/diskann.lib
-            ${DISKANN_TOOLS_TCMALLOC_LINK_OPTIONS}
-            ${DISKANN_ASYNC_LIB}
-    )
-else()
-    target_link_libraries(
-            diskannpy
-            PRIVATE
-            pybind11::module
-            pybind11::lto
-            pybind11::windows_extras
-            ${PROJECT_NAME}
-            ${DISKANN_TOOLS_TCMALLOC_LINK_OPTIONS}
-            ${DISKANN_ASYNC_LIB}
-    )
-endif()
+
+target_link_libraries(
+        diskannpy
+        PRIVATE
+        pybind11::module
+        pybind11::lto
+        pybind11::windows_extras
+        ${PROJECT_NAME}
+        ${DISKANN_TOOLS_TCMALLOC_LINK_OPTIONS}
+        ${DISKANN_ASYNC_LIB}
+)
 
 pybind11_extension(diskannpy)
 if(NOT MSVC AND NOT ${CMAKE_BUILD_TYPE} MATCHES Debug|RelWithDebInfo)
