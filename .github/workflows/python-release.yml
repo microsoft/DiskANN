@@ -10,16 +10,13 @@ jobs:
     steps:
       - uses: actions/checkout@v3
       - uses: actions/setup-python@v3
-      - name: Install system pre-reqs
-        if: runner.os != 'Windows'
-        run: |
-          sudo apt install make cmake g++ libaio-dev libgoogle-perftools-dev libunwind-dev clang-format libboost-dev libboost-program-options-dev libmkl-full-dev
       - name: Install cibuildwheel
         run: python -m pip install cibuildwheel==2.11.3
       - name: build wheels
         run: python -m cibuildwheel --output-dir wheelhouse
         env:
           CIBW_BUILD_FRONTEND: "build"
+          CIBW_BEFORE_ALL_LINUX: "apt install make cmake g++ libaio-dev libgoogle-perftools-dev libunwind-dev clang-format libboost-dev libboost-program-options-dev libmkl-full-dev"
       - uses: actions/upload-artifact@v3
         with:
           path: ./wheelhouse/*.whl
