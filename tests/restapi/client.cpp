@@ -4,6 +4,9 @@
 #include <ctime>
 #include <functional>
 #include <iomanip>
+// Copyright (c) Microsoft Corporation. All rights reserved.
+// Licensed under the MIT license.
+
 #include <string>
 #include <cstdlib>
 #include <codecvt>
