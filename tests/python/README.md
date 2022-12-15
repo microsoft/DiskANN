@@ -1,3 +1,6 @@
+<!-- Copyright (c) Microsoft Corporation. All rights reserved.
+   Licensed under the MIT license. -->
+
 # Integration Tests
 The following tests use Python to prepare, run, verify, and tear down the rest api services.
 
