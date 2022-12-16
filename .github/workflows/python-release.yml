@@ -1,5 +1,7 @@
 name: Build and Release Python Wheels
-on: [push]
+on:
+  release:
+    types: [published]
 jobs:
   build_wheels: 
     name: Build wheels on ${{ matrix.os }}
@@ -30,21 +32,10 @@ jobs:
         run: |
           sha256sum wheelhouse/*.whl > checksums.txt
           cat checksums.txt
-      - name: Set up Python3.8
-        uses: actions/setup-python@v3
+          GITHUB_REF
+      - name: Update release with SHA256 and Artifacts
+        uses: johnwbyrd/update-release@v1
         with:
-          python-version: 3.10
-      - name: Release Tag from Version
-        run: |
-          pip install wheelhouse/diskannpy-*-cp310*.whl
-          DISKANNPY_VERSION=$(python -c 'import diskannpy; print(diskannpy.__version__)')
-          echo "DISKANNPY_VERSION=$DISKANNPY_VERSION" >> $GITHUB_ENV
-      - name: Create Github Release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ${{ env.DISKANNPY_VERSION }}
-          release_name: diskannpy-${{ env.DISKANNPY_VERSION }}
-          body_path: "checksums.txt"
+          token: ${{ secrets.GITHUB_TOKEN }}
+          files: wheelhouse/*.whl checksums.txt
 
