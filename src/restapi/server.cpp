@@ -178,9 +178,9 @@ namespace diskann {
                               : DEFAULT_L;
     k = val.at(K_KEY).as_integer();
 
-    if (k <= 0) {
+    if (k <= 0 || k > Ls) {
       throw new std::invalid_argument(
-          "Num of expected NN (k) must be greater than zero.");
+          "Num of expected NN (k) must be greater than zero and less than or equal to Ls.");
     }
     if (queryArr.size() == 0) {
       throw new std::invalid_argument("Query vector has zero elements.");
