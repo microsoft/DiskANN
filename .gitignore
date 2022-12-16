@@ -368,3 +368,7 @@ python/dist/
 python/venv/
 
 **/*.egg-info
+wheelhouse/*
+dist/*
+venv*/**
+*.swp

@@ -23,3 +23,19 @@ authors = [
     {name = "Harsha Vardhan Simhadri", email = "harshasi@microsoft.com"},
     {name = "Dax Pryce", email = "daxpryce@microsoft.com"}
 ]
+
+[tool.cibuildwheel]
+manylinux-x86_64-image = "manylinux_2_24"
+build-frontend = "build"
+archs = ["x86_64"]
+skip = "pp* *musllinux*"
+
+
+[tool.cibuildwheel.linux]
+before-all = """\
+    apt-get update && \
+    apt-get -y upgrade && \
+    apt-get install -y wget make cmake g++ libaio-dev libgoogle-perftools-dev libunwind-dev clang-format libboost-dev libboost-program-options-dev && \
+    wget https://registrationcenter-download.intel.com/akdlm/irc_nas/18487/l_BaseKit_p_2022.1.2.146.sh && \
+    sh l_BaseKit_p_2022.1.2.146.sh -a --components intel.oneapi.lin.mkl.devel --action install --eula accept -s --ignore-errors \
+"""
