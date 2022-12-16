@@ -39,7 +39,7 @@ void teardown(const utility::string_t& address) {
 }
 
 int main(int argc, char* argv[]) {
-  std::string data_type, index_path_prefix, address, tags_file;
+  std::string data_type, index_path_prefix, address, dist_fn, tags_file;
   uint32_t num_nodes_to_cache;
   uint32_t num_threads;
 
@@ -64,6 +64,8 @@ int main(int argc, char* argv[]) {
         po::value<uint32_t>(&num_threads)->default_value(omp_get_num_procs()),
         "Number of threads used for building index (defaults to "
         "omp_get_num_procs())");
+    desc.add_options()("dist_fn", po::value<std::string>(&dist_fn)->default_value("l2"),
+        "distance function <l2/mips>");
     desc.add_options()("tags_file",
         po::value<std::string>(&tags_file)->default_value(std::string()),
         "Tags file location");
@@ -79,24 +81,35 @@ int main(int argc, char* argv[]) {
       return -1;
   }
 
+  diskann::Metric metric;
+  if (dist_fn == std::string("l2"))
+      metric = diskann::Metric::L2;
+  else if (dist_fn == std::string("mips"))
+      metric = diskann::Metric::INNER_PRODUCT;
+  else {
+      std::cout << "Error. Only l2 and mips distance functions are supported"
+          << std::endl;
+      return -1;
+  }
+
 
   if (data_type == std::string("float")) {
     auto searcher = std::unique_ptr<diskann::BaseSearch>(
         new diskann::PQFlashSearch<float>(
             index_path_prefix, num_nodes_to_cache, num_threads, 
-            tags_file, diskann::L2));
+            tags_file, metric));
     g_ssdSearch.push_back(std::move(searcher));
   } else if (data_type == std::string("int8")) {
     auto searcher =
         std::unique_ptr<diskann::BaseSearch>(new diskann::PQFlashSearch<int8_t>(
             index_path_prefix, num_nodes_to_cache, num_threads, 
-            tags_file, diskann::L2));
+            tags_file, metric));
     g_ssdSearch.push_back(std::move(searcher));
   } else if (data_type == std::string("uint8")) {
     auto searcher = std::unique_ptr<diskann::BaseSearch>(
         new diskann::PQFlashSearch<uint8_t>(
             index_path_prefix, num_nodes_to_cache, num_threads, 
-            tags_file, diskann::L2));
+            tags_file, metric));
     g_ssdSearch.push_back(std::move(searcher));
   } else {
     std::cerr << "Unsupported data type " << argv[2] << std::endl;
