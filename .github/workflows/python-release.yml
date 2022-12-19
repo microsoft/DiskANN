@@ -34,8 +34,10 @@ jobs:
           cat checksums.txt
           GITHUB_REF
       - name: Update release with SHA256 and Artifacts
-        uses: johnwbyrd/update-release@v1
+        uses: softprops/action-gh-release@v1
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          files: wheelhouse/*.whl checksums.txt
+          files: |
+            wheelhouse/*.whl 
+            checksums.txt
 
