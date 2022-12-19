@@ -15,7 +15,7 @@ jobs:
       - name: Install cibuildwheel
         run: python -m pip install cibuildwheel==2.11.3
       - name: build wheels
-        run: mkdir wheelhouse && echo "python -m cibuildwheel --output-dir wheelhouse" > wheelhouse/placeholder.whl
+        run: python -m cibuildwheel --output-dir wheelhouse
       - uses: actions/upload-artifact@v3
         with:
           name: wheelhouse
