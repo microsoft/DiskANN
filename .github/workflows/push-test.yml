@@ -26,6 +26,7 @@ jobs:
         pip install -r tests/python/requirements.txt
     - name: Run REST Integration Tests
       run: |
+        export DISKANN_BUILD_DIR=`pwd`/build
         cd tests/python
         python -m unittest
   windows-build:
