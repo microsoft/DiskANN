@@ -15,7 +15,7 @@ jobs:
       - name: Install cibuildwheel
         run: python -m pip install cibuildwheel==2.11.3
       - name: build wheels
-        run: python -m cibuildwheel --output-dir wheelhouse
+        run: mkdir wheelhouse && echo "python -m cibuildwheel --output-dir wheelhouse" > wheelhouse/placeholder.whl
       - uses: actions/upload-artifact@v3
         with:
           name: wheelhouse
@@ -32,7 +32,6 @@ jobs:
         run: |
           sha256sum wheelhouse/*.whl > checksums.txt
           cat checksums.txt
-          GITHUB_REF
       - name: Update release with SHA256 and Artifacts
         uses: softprops/action-gh-release@v1
         with:
