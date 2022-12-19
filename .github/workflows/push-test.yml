@@ -17,6 +17,17 @@ jobs:
       run: |
         cd build && make -j
 
+    - name: Set up Python
+      uses: actions/setup-python@v3
+      with:
+        python-version: "3.10"
+    - name: Install dependencies
+      run: |
+        pip install -r tests/python/requirements.txt
+    - name: Run REST Integration Tests
+      run: |
+        cd tests/python
+        python -m unittest
   windows-build:
     name: Build for ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
