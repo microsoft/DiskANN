@@ -28,6 +28,10 @@ execute_process(COMMAND ${Python3_EXECUTABLE} -c "import numpy; print(numpy.get_
 # see https://pybind11.readthedocs.io/en/latest/compiling.html#advanced-interface-library-targets for more details
 add_library(diskannpy MODULE src/diskann_bindings.cpp)
 
+if (MSVC)
+	target_compile_options(diskannpy PRIVATE /U_WINDLL)
+endif()
+
 target_link_libraries(
         diskannpy
         PRIVATE
