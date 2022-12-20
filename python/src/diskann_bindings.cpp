@@ -100,14 +100,6 @@ struct DiskANNIndex {
     return 0;
   }
 
-  int _build_disk_index_float(const char     *dataFilePath,
-                              const char     *indexFilePath,
-                              const char     *indexBuildParameters,
-                              diskann::Metric compareMetric) {
-    return diskann::build_disk_index<float>(dataFilePath, indexFilePath,
-                                            indexBuildParameters, compareMetric);
-  }
-
   void search(std::vector<T> &query, const _u64 query_idx, const _u64 dim,
               const _u64 num_queries, const _u64 knn, const _u64 l_search,
               const _u64 beam_width, std::vector<unsigned> &ids,
