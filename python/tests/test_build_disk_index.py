@@ -3,6 +3,7 @@
 
 import time
 import argparse
+import diskannpy
 from diskannpy import Metric, Parameters, DiskANNFloatIndex
 
 
