@@ -27,7 +27,6 @@ authors = [
 [tool.cibuildwheel]
 manylinux-x86_64-image = "manylinux_2_24"
 build-frontend = "build"
-archs = ["x86_64"]
 skip = "pp* *musllinux*"
 
 
