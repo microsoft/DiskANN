@@ -19,10 +19,6 @@ jobs:
       uses: actions/checkout@v2
       with:
           submodules: true
-    - name: Install python
-      uses: actions/setup-python@v3
-      with:
-        python-version: "3.10"
     - name: Install dependencies
       if: runner.os != 'Windows'
       run: |
@@ -33,7 +29,6 @@ jobs:
             wget https://registrationcenter-download.intel.com/akdlm/irc_nas/18487/l_BaseKit_p_2022.1.2.146.sh
             sudo sh l_BaseKit_p_2022.1.2.146.sh -a --components intel.oneapi.lin.mkl.devel --action install --eula accept -s
         fi
-        pip install -r tests/python/requirements.txt
     - name: Ubuntu CMake Configure
       if: runner.os != 'Windows'
       run: |
@@ -192,8 +187,3 @@ jobs:
         ${{ env.diskann_built_tests }}/test_streaming_scenario --data_type uint8 --dist_fn l2 --data_path rand_uint8_10D_10K_norm50.0.bin --index_path_prefix index_stream -R 64 -L 600 --alpha 1.2 --insert_threads 4 --consolidate_threads 4 --max_points_to_insert 10000 --active_window 4000 --consolidate_interval 2000 --start_point_norm 200
         ${{ env.diskann_built_utils }}/compute_groundtruth --data_type uint8 --dist_fn l2 --base_file index_stream.after-streaming-act4000-cons2000-max10000.data --query_file rand_uint8_10D_10K_norm50.0.bin --K 100 --gt_file gt100_base-act4000-cons2000-max10000 --tags_file index_stream.after-streaming-act4000-cons2000-max10000.tags
         ${{ env.diskann_built_tests }}/search_memory_index --data_type uint8 --dist_fn l2 --index_path_prefix index_stream.after-streaming-act4000-cons2000-max10000 --result_path res_stream --query_file rand_uint8_10D_10K_norm50.0.bin --gt_file gt100_base-act4000-cons2000-max10000 -K 10 -L 20 40 60 80 100 -T 64 --dynamic true --tags 1
-#    - name: test an SSD server for REST endpoint
-#      if: runner.os != 'Windows'
-#      run: |
-#        cd tests/python
-#        python -m unittest
