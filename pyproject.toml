@@ -28,7 +28,7 @@ authors = [
 manylinux-x86_64-image = "manylinux_2_24"
 build-frontend = "build"
 skip = "pp* *musllinux*"
-test-command = "python -m unittest {package}/tests"
+test-command = "python -m unittest discover -s {package}/tests"
 
 
 [tool.cibuildwheel.linux]
