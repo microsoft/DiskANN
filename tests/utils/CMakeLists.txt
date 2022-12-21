@@ -14,6 +14,8 @@ add_executable(float_bin_to_int8 float_bin_to_int8.cpp)
 
 add_executable(ivecs_to_bin ivecs_to_bin.cpp)
 
+add_executable(count_bfs_levels count_bfs_levels.cpp)
+
 add_executable(tsv_to_bin tsv_to_bin.cpp)
 
 add_executable(bin_to_tsv bin_to_tsv.cpp)

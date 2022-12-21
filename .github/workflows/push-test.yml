@@ -1,4 +1,4 @@
-name: DiskANN Build
+name: DiskANN Push Build
 on: [push]
 jobs:
   ubuntu-latest-build:

@@ -55,15 +55,12 @@ struct DiskANNIndex {
     std::vector<uint32_t> node_list;
     pq_flash_index->cache_bfs_levels(num_nodes_to_cache, node_list);
     pq_flash_index->load_cache_list(node_list);
-    //diskann::cout << "loaded index, cached " << node_list.size()
-    //          << " nodes based on BFS." << std::endl;
   }
 
   void cache_sample_paths(size_t             num_nodes_to_cache,
                           const std::string &warmup_query_file,
                           uint32_t           num_threads) {
     if (!file_exists(warmup_query_file)) {
-      //std::cout << "No warm up query file exists." << std::endl;
       return;
     }
 
@@ -71,19 +68,15 @@ struct DiskANNIndex {
     pq_flash_index->generate_cache_list_from_sample_queries(
         warmup_query_file, 15, 4, num_nodes_to_cache, num_threads, node_list);
     pq_flash_index->load_cache_list(node_list);
-    //std::cout << "loaded index, cached " << node_list.size()
-    //          << " nodes based on sample search paths." << std::endl;
   }
 
   int load_index(const std::string &index_path_prefix, const int num_threads,
                  const size_t num_nodes_to_cache, int cache_mechanism) {
-    //const std::string pq_path = index_path_prefix + std::string("_pq");
     const std::string index_path =
         index_path_prefix + std::string("_disk.index");
     int load_success =
         pq_flash_index->load(num_threads, index_path.c_str());
     if (load_success != 0) {
-      //std::cout << "Index load failed" << std::endl;
       return load_success;
     }
     if (cache_mechanism == 0) {
@@ -94,8 +87,6 @@ struct DiskANNIndex {
       cache_sample_paths(num_nodes_to_cache, sample_file, num_threads);
     } else if (cache_mechanism == 2) {
       cache_bfs_levels(num_nodes_to_cache);
-    } else {
-      //std::cout << "Invalid choice of caching mechanism." << std::endl;
     }
     return 0;
   }

@@ -28,6 +28,7 @@ authors = [
 manylinux-x86_64-image = "manylinux_2_24"
 build-frontend = "build"
 skip = "pp* *musllinux*"
+test-command = "unittest {package}/tests"
 
 
 [tool.cibuildwheel.linux]

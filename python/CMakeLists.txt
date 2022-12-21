@@ -57,7 +57,6 @@ set_target_properties(diskannpy PROPERTIES CXX_VISIBILITY_PRESET "hidden"
 # to pyproject.toml for the sdist to work after we build it.
 
 if(NOT VERSION_INFO)
-    message(STATUS "No -DVERSION_INFO specified allegedly")
     set(VERSION_INFO "0.0.0dev")
 endif()
 target_compile_definitions(diskannpy PRIVATE VERSION_INFO="${VERSION_INFO}")
