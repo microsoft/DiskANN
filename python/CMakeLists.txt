@@ -30,8 +30,6 @@ add_library(diskannpy MODULE src/diskann_bindings.cpp)
 
 if (MSVC)
 	target_compile_options(diskannpy PRIVATE /U_WINDLL)
-else()
-    target_compile_options(diskannpy PRIVATE -fPIC)
 endif()
 
 target_link_libraries(
