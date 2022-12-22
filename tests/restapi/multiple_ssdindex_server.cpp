@@ -116,8 +116,7 @@ int main(int argc, char* argv[]) {
     index_in.close();
     tags_in.close();
 
-    const std::string typestring(argv[2]);
-    if (typestring == std::string("float")) {
+    if (data_type == std::string("float")) {
         for (auto& index_tag : index_tag_paths) {
             auto searcher = std::unique_ptr<diskann::BaseSearch>(
                 new diskann::PQFlashSearch<float>(index_tag.first.c_str(),
@@ -126,7 +125,7 @@ int main(int argc, char* argv[]) {
             g_ssdSearch.push_back(std::move(searcher));
         }
 
-    } else if (typestring == std::string("int8")) {
+    } else if (data_type == std::string("int8")) {
             for (auto& index_tag : index_tag_paths) {
                 auto searcher = std::unique_ptr<diskann::BaseSearch>(
                     new diskann::PQFlashSearch<int8_t>(index_tag.first.c_str(),
@@ -134,7 +133,7 @@ int main(int argc, char* argv[]) {
                     index_tag.second.c_str(), metric));
                 g_ssdSearch.push_back(std::move(searcher));
             }
-    } else if (typestring == std::string("uint8")) {
+    } else if (data_type == std::string("uint8")) {
         for (auto& index_tag : index_tag_paths) {
             auto searcher = std::unique_ptr<diskann::BaseSearch>(
                 new diskann::PQFlashSearch<uint8_t>(index_tag.first.c_str(),
@@ -143,13 +142,13 @@ int main(int argc, char* argv[]) {
             g_ssdSearch.push_back(std::move(searcher));
         }
     } else {
-        std::cerr << "Unsupported data type " << argv[2] << std::endl;
+        std::cerr << "Unsupported data type " << data_type << std::endl;
         exit(-1);
     }
 
     while (1) {
         try {
-            setup(address, typestring);
+            setup(address, data_type);
             std::cout << "Type 'exit' (case-sensitive) to exit" << std::endl;
             std::string line;
             std::getline(std::cin, line);
