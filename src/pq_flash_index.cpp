@@ -959,16 +959,13 @@ namespace diskann {
         // process prefetched nhood
         for (_u64 m = 0; m < nnbrs; ++m) {
           unsigned id = node_nbrs[m];
-          if (visited.find(id) != visited.end()) {
-            continue;
-          } else {
-            visited.insert(id);
+          if (visited.insert(id).second) {
             cmps++;
             float dist = dist_scratch[m];
-            if (dist >= retset[cur_list_size - 1].distance &&
+            Neighbor nn(id, dist, true);
+            if (retset[cur_list_size - 1] < nn &&
                 (cur_list_size == l_search))
               continue;
-            Neighbor nn(id, dist, true);
             // Return position in sorted list where nn inserted.
             auto r = InsertIntoPool(retset.data(), cur_list_size, nn);
             if (cur_list_size < l_search)
