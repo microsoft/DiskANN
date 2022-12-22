@@ -963,7 +963,8 @@ namespace diskann {
             cmps++;
             float dist = dist_scratch[m];
             Neighbor nn(id, dist, true);
-            if (retset[cur_list_size - 1] < nn &&
+            Neighbor &lastResult = retset[cur_list_size - 1];
+            if ((lastResult < nn || lastResult == nn) &&
                 (cur_list_size == l_search))
               continue;
             // Return position in sorted list where nn inserted.
@@ -1030,19 +1031,17 @@ namespace diskann {
         // process prefetch-ed nhood
         for (_u64 m = 0; m < nnbrs; ++m) {
           unsigned id = node_nbrs[m];
-          if (visited.find(id) != visited.end()) {
-            continue;
-          } else {
-            visited.insert(id);
+          if (visited.insert(id).second) {
             cmps++;
             float dist = dist_scratch[m];
             if (stats != nullptr) {
               stats->n_cmps++;
             }
-            if (dist >= retset[cur_list_size - 1].distance &&
+            Neighbor nn(id, dist, true);
+            Neighbor &lastResult = retset[cur_list_size - 1];
+            if ((lastResult < nn || lastResult == nn) &&
                 (cur_list_size == l_search))
               continue;
-            Neighbor nn(id, dist, true);
             auto     r = InsertIntoPool(
                     retset.data(), cur_list_size,
                     nn);  // Return position in sorted list where nn inserted.
