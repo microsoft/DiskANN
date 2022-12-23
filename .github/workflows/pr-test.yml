@@ -19,8 +19,7 @@ jobs:
       uses: actions/checkout@v2
       with:
           submodules: true
-
-    - name: Install deps
+    - name: Install dependencies
       if: runner.os != 'Windows'
       run: |
         if [ "${{ matrix.os }}" != "ubuntu-18.04" ]; then

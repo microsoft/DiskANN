@@ -8,10 +8,10 @@ jobs:
       uses: actions/checkout@v2
     - name: Install deps
       run: |
-        sudo apt install cmake g++ libaio-dev libgoogle-perftools-dev libunwind-dev clang-format libboost-dev libboost-program-options-dev libmkl-full-dev
+        sudo apt install cmake g++ libaio-dev libgoogle-perftools-dev libunwind-dev clang-format libboost-dev libboost-program-options-dev libmkl-full-dev libcpprest-dev
     - name: Clang Format Check
       run: |
-        mkdir build && cd build && cmake ..
+        mkdir build && cd build && cmake -DRESTAPI=True -DCMAKE_BUILD_TYPE=Release ..
         make checkformat
     - name: build
       run: |

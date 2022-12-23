@@ -357,3 +357,7 @@ MigrationBackup/
 cscope*
 
 build/
+.idea/
+cmake-build-debug/
+
+tests/python/venv

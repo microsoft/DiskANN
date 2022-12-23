@@ -57,14 +57,14 @@ namespace diskann {
 
   template<typename T>
   PQFlashIndex<T>::PQFlashIndex(std::shared_ptr<AlignedFileReader> &fileReader,
-                                diskann::Metric                     m)
+                                diskann::Metric m)
       : reader(fileReader), metric(m) {
     if (m == diskann::Metric::COSINE || m == diskann::Metric::INNER_PRODUCT) {
       if (std::is_floating_point<T>::value) {
         diskann::cout << "Cosine metric chosen for (normalized) float data."
                          "Changing distance to L2 to boost accuracy."
                       << std::endl;
-        m = diskann::Metric::L2;
+        metric = diskann::Metric::L2;
       } else {
         diskann::cerr << "WARNING: Cannot normalize integral data types."
                       << " This may result in erroneous results or poor recall."
@@ -73,8 +73,8 @@ namespace diskann {
       }
     }
 
-    this->dist_cmp.reset(diskann::get_distance_function<T>(m));
-    this->dist_cmp_float.reset(diskann::get_distance_function<float>(m));
+    this->dist_cmp.reset(diskann::get_distance_function<T>(metric));
+    this->dist_cmp_float.reset(diskann::get_distance_function<float>(metric));
   }
 
   template<typename T>
@@ -466,7 +466,7 @@ namespace diskann {
     this->disk_index_file = disk_index_file;
 
     if (pq_file_num_centroids != 256) {
-      diskann::cout << "Error. Number of PQ centroids is not 256. Exitting."
+      diskann::cout << "Error. Number of PQ centroids is not 256. Exiting."
                     << std::endl;
       return -1;
     }

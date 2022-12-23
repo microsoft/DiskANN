@@ -196,9 +196,5 @@ void LinuxAlignedFileReader::read(std::vector<AlignedRead> &read_reqs,
     diskann::cout << "Async currently not supported in linux." << std::endl;
   }
   assert(this->file_desc != -1);
-  //#pragma omp critical
-  //	std::cout << "thread: " << std::this_thread::get_id() << ", crtx: " <<
-  // ctx
-  //<< "\n";
   execute_io(ctx, this->file_desc, read_reqs);
 }
