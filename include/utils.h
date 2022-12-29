@@ -596,12 +596,10 @@ namespace diskann {
 #else
       strerror_r(errno, buff, 1024);
 #endif
-      diskann::cerr << std::string("Failed to open file") + filename +
-                           " for write because " + buff
-                    << std::endl;
-      throw diskann::ANNException(std::string("Failed to open file ") +
-                                      filename + " for write because: " + buff,
-                                  -1);
+      std::string error_message = std::string("Failed to open file") + filename +
+          " for write because " + buff;
+      diskann::cerr << error_message << std::endl;
+      throw diskann::ANNException(error_message, -1);
     }
   }
 

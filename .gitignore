@@ -365,7 +365,6 @@ cmake-build-debug/
 #python extension module ignores
 python/diskannpy.egg-info/
 python/dist/
-python/venv/
 
 **/*.egg-info
 wheelhouse/*

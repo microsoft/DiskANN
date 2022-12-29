@@ -34,18 +34,18 @@ namespace diskann {
                                         Neighbor nn) {
     // find the location to insert
     unsigned left = 0, right = K - 1;
-    if (addr[left].distance > nn.distance) {
+    if (nn < addr[left]) {
       memmove((char *) &addr[left + 1], &addr[left], K * sizeof(Neighbor));
       addr[left] = nn;
       return left;
     }
-    if (addr[right].distance < nn.distance) {
+    if (addr[right] < nn) {
       addr[K] = nn;
       return K;
     }
     while (right > 1 && left < right - 1) {
       unsigned mid = (left + right) / 2;
-      if (addr[mid].distance > nn.distance)
+      if (nn < addr[mid])
         right = mid;
       else
         left = mid;
@@ -53,7 +53,7 @@ namespace diskann {
     // check equal ID
 
     while (left > 0) {
-      if (addr[left].distance < nn.distance)
+      if (addr[left] < nn)
         break;
       if (addr[left].id == nn.id)
         return K + 1;

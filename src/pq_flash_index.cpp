@@ -57,14 +57,14 @@ namespace diskann {
 
   template<typename T>
   PQFlashIndex<T>::PQFlashIndex(std::shared_ptr<AlignedFileReader> &fileReader,
-                                diskann::Metric                     m)
+                                diskann::Metric m)
       : reader(fileReader), metric(m) {
     if (m == diskann::Metric::COSINE || m == diskann::Metric::INNER_PRODUCT) {
       if (std::is_floating_point<T>::value) {
         diskann::cout << "Cosine metric chosen for (normalized) float data."
                          "Changing distance to L2 to boost accuracy."
                       << std::endl;
-        m = diskann::Metric::L2;
+        metric = diskann::Metric::L2;
       } else {
         diskann::cerr << "WARNING: Cannot normalize integral data types."
                       << " This may result in erroneous results or poor recall."
@@ -73,8 +73,8 @@ namespace diskann {
       }
     }
 
-    this->dist_cmp.reset(diskann::get_distance_function<T>(m));
-    this->dist_cmp_float.reset(diskann::get_distance_function<float>(m));
+    this->dist_cmp.reset(diskann::get_distance_function<T>(metric));
+    this->dist_cmp_float.reset(diskann::get_distance_function<float>(metric));
   }
 
   template<typename T>
@@ -466,7 +466,7 @@ namespace diskann {
     this->disk_index_file = disk_index_file;
 
     if (pq_file_num_centroids != 256) {
-      diskann::cout << "Error. Number of PQ centroids is not 256. Exitting."
+      diskann::cout << "Error. Number of PQ centroids is not 256. Exiting."
                     << std::endl;
       return -1;
     }
@@ -959,16 +959,14 @@ namespace diskann {
         // process prefetched nhood
         for (_u64 m = 0; m < nnbrs; ++m) {
           unsigned id = node_nbrs[m];
-          if (visited.find(id) != visited.end()) {
-            continue;
-          } else {
-            visited.insert(id);
+          if (visited.insert(id).second) {
             cmps++;
             float dist = dist_scratch[m];
-            if (dist >= retset[cur_list_size - 1].distance &&
+            Neighbor nn(id, dist, true);
+            Neighbor &lastResult = retset[cur_list_size - 1];
+            if ((lastResult < nn || lastResult == nn) &&
                 (cur_list_size == l_search))
               continue;
-            Neighbor nn(id, dist, true);
             // Return position in sorted list where nn inserted.
             auto r = InsertIntoPool(retset.data(), cur_list_size, nn);
             if (cur_list_size < l_search)
@@ -1033,19 +1031,17 @@ namespace diskann {
         // process prefetch-ed nhood
         for (_u64 m = 0; m < nnbrs; ++m) {
           unsigned id = node_nbrs[m];
-          if (visited.find(id) != visited.end()) {
-            continue;
-          } else {
-            visited.insert(id);
+          if (visited.insert(id).second) {
             cmps++;
             float dist = dist_scratch[m];
             if (stats != nullptr) {
               stats->n_cmps++;
             }
-            if (dist >= retset[cur_list_size - 1].distance &&
+            Neighbor nn(id, dist, true);
+            Neighbor &lastResult = retset[cur_list_size - 1];
+            if ((lastResult < nn || lastResult == nn) &&
                 (cur_list_size == l_search))
               continue;
-            Neighbor nn(id, dist, true);
             auto     r = InsertIntoPool(
                     retset.data(), cur_list_size,
                     nn);  // Return position in sorted list where nn inserted.
@@ -1072,10 +1068,7 @@ namespace diskann {
     }
 
     // re-sort by distance
-    std::sort(full_retset.begin(), full_retset.end(),
-              [](const Neighbor &left, const Neighbor &right) {
-                return left.distance < right.distance;
-              });
+    std::sort(full_retset.begin(), full_retset.end());
 
     if (use_reorder_data) {
       if (!(this->reorder_data_exists)) {
@@ -1121,10 +1114,7 @@ namespace diskann {
             dist_cmp->compare(aligned_query_T, (T *) location, this->data_dim);
       }
 
-      std::sort(full_retset.begin(), full_retset.end(),
-                [](const Neighbor &left, const Neighbor &right) {
-                  return left.distance < right.distance;
-                });
+      std::sort(full_retset.begin(), full_retset.end());
     }
 
     // copy k_search values
