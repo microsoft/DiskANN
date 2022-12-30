@@ -19,6 +19,12 @@ Please see [How to create a Minimal, Reproducible example](https://stackoverflow
 
 ```
 
+## Dataset Description
+Please tell us about the shape and datatype of your data, (e.g. 128 dimensions, 12.3 billion points, floats)
+- Dimensions: 
+- Number of Points:
+- Data type: 
+
 ## Error 
 ```
 Paste the full error, with any sensitive information minimally redacted and marked $$REDACTED$$
