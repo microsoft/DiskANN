@@ -5,16 +5,29 @@
 
 #include "common_includes.h"
 #include "utils.h"
+#include <immintrin.h>
+#include <boost/dynamic_bitset.hpp>
 
 namespace math_utils {
 
   float calc_distance(float* vec_1, float* vec_2, size_t dim);
+
+  void fast_l2_compute(const __m512* a_vecs, const float* b, float scalar,
+                       bool flag, __m512* c_vecs, _u16 n_iters);
+  void fast_mips_compute(const float* a, float scalar, bool flag,
+                         __m512* b_vecs, _u16 n_iters);
 
   // compute l2-squared norms of data stored in row major num_points * dim,
   // needs
   // to be pre-allocated
   void compute_vecs_l2sq(float* vecs_l2sq, float* data, const size_t num_points,
                          const size_t dim);
+  void compute_query_points_ip(float*                   column_matrix,
+                               const float* const       query_data,
+                               const float* const       data,
+                               const std::vector<_u32>* q_closest,
+                               const float scalar, const size_t num_query,
+                               const size_t num_points, const size_t dim);
 
   void rotate_data_randomly(float* data, size_t num_points, size_t dim,
                             float* rot_mat, float*& new_mat,
@@ -34,6 +47,21 @@ namespace math_utils {
       const float* const centers, const size_t num_centers,
       const float* const docs_l2sq, const float* const centers_l2sq,
       uint32_t* center_index, float* const dist_matrix, size_t k = 1);
+  void compute_closest_centers_in_block(
+      const float* const data, const float* const query_data,
+      const std::vector<_u32>* q_closest, const boost::dynamic_bitset<>& flags,
+      const size_t num_points, const size_t num_query, const size_t dim,
+      const float* const centers, const size_t num_centers,
+      const float* const docs_l2sq, const float* const centers_l2sq,
+      uint32_t* center_index, float* const dist_matrix, size_t k = 1,
+      size_t num_avg = 1);
+  void compute_mips_centers_in_block(
+      const float* const data, const float* const query_data,
+      const std::vector<_u32>* q_closest, const boost::dynamic_bitset<>& flags,
+      const size_t num_points, const size_t num_query, const size_t dim,
+      const float* const centers, const size_t num_centers,
+      uint32_t* center_index, float* const dist_matrix, size_t k = 1,
+      size_t num_avg = 1);
 
   // Given data in num_points * new_dim row major
   // Pivots stored in full_pivot_data as k * new_dim row major
@@ -47,6 +75,15 @@ namespace math_utils {
 
   void compute_closest_centers(float* data, size_t num_points, size_t dim,
                                float* pivot_data, size_t num_centers, size_t k,
+                               uint32_t*            closest_centers_ivf,
+                               std::vector<size_t>* inverted_index = NULL,
+                               float*               pts_norms_squared = NULL);
+  void compute_closest_centers(float* data, float* query_data,
+                               std::vector<_u32>*       q_closest,
+                               boost::dynamic_bitset<>& flags,
+                               size_t num_points, size_t num_query,
+                               size_t num_avg, size_t dim, float* pivot_data,
+                               size_t num_centers, size_t k, bool use_mips,
                                uint32_t*            closest_centers_ivf,
                                std::vector<size_t>* inverted_index = NULL,
                                float*               pts_norms_squared = NULL);

@@ -10,7 +10,6 @@
 
 #include "index.h"
 #include "disk_utils.h"
-#include "math_utils.h"
 #include "memory_mapper.h"
 #include "pq_flash_index.h"
 #include "partition.h"

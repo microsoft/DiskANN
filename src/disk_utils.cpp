@@ -806,10 +806,15 @@ namespace diskann {
     while (parser >> cur_param) {
       param_list.push_back(cur_param);
     }
-    if (param_list.size() != 5 && param_list.size() != 6 &&
-        param_list.size() != 7) {
+    if (param_list.size() != 10 && param_list.size() != 11 &&
+        param_list.size() != 12) {
       diskann::cout
-          << "Correct usage of parameters is R (max degree) "
+          << "Correct usage of parameters is sample_query_path (path to query samples)"
+             "base_to_query_sets_path (path to query ids per base point)"
+             "use_apq (whether to use APQ for compression)"
+             "use_mips (whether to use MIPS formulation for APQ)"
+             "max_queries_per_point (max number of query ids per base point)"
+             "R (max degree)"
              "L (indexing list size, better if >= R)"
              "B (RAM limit of final index in GB)"
              "M (memory limit while indexing)"
@@ -837,16 +842,16 @@ namespace diskann {
     // if there is a 6th parameter, it means we compress the disk index
     // vectors also using PQ data (for very large dimensionality data). If the
     // provided parameter is 0, it means we store full vectors.
-    if (param_list.size() == 6 || param_list.size() == 7) {
-      disk_pq_dims = atoi(param_list[5].c_str());
+    if (param_list.size() == 11 || param_list.size() == 12) {
+      disk_pq_dims = atoi(param_list[10].c_str());
       use_disk_pq = true;
       if (disk_pq_dims == 0)
         use_disk_pq = false;
     }
 
     bool reorder_data = false;
-    if (param_list.size() == 7) {
-      if (1 == atoi(param_list[6].c_str())) {
+    if (param_list.size() == 12) {
+      if (1 == atoi(param_list[11].c_str())) {
         reorder_data = true;
       }
     }
@@ -868,6 +873,8 @@ namespace diskann {
     // optional, used if disk index must store pq data
     std::string disk_pq_compressed_vectors_path =
         index_prefix_path + "_disk.index_pq_compressed.bin";
+    std::string sample_query_file(param_list[0].c_str());
+    std::string base_to_query_sets_file(param_list[1].c_str());
 
     // output a new base file which contains extra dimension with sqrt(1 -
     // ||x||^2/M^2) for every x, M is max norm of all points. Extra space on
@@ -886,23 +893,26 @@ namespace diskann {
       diskann::save_bin<float>(norm_file, &max_norm_of_base, 1, 1);
     }
 
-    unsigned R = (unsigned) atoi(param_list[0].c_str());
-    unsigned L = (unsigned) atoi(param_list[1].c_str());
+    bool     use_mips = (bool) atoi(param_list[2].c_str());
+    bool     use_apq = (bool) atoi(param_list[3].c_str());
+    unsigned max_q = (unsigned) atoi(param_list[4].c_str());
+    unsigned R = (unsigned) atoi(param_list[5].c_str());
+    unsigned L = (unsigned) atoi(param_list[6].c_str());
 
-    double final_index_ram_limit = get_memory_budget(param_list[2]);
+    double final_index_ram_limit = get_memory_budget(param_list[7]);
     if (final_index_ram_limit <= 0) {
       std::cerr << "Insufficient memory budget (or string was not in right "
                    "format). Should be > 0."
                 << std::endl;
       return -1;
     }
-    double indexing_ram_budget = (float) atof(param_list[3].c_str());
+    double indexing_ram_budget = (float) atof(param_list[8].c_str());
     if (indexing_ram_budget <= 0) {
       std::cerr << "Not building index. Please provide more RAM budget"
                 << std::endl;
       return -1;
     }
-    _u32 num_threads = (_u32) atoi(param_list[4].c_str());
+    _u32 num_threads = (_u32) atoi(param_list[9].c_str());
 
     if (num_threads != 0) {
       omp_set_num_threads(num_threads);
@@ -928,7 +938,7 @@ namespace diskann {
                                       compareMetric, p_val, disk_pq_dims);
     }
     size_t num_pq_chunks =
-        (size_t) (std::floor)(_u64(final_index_ram_limit / points_num));
+        (size_t)(std::floor)(_u64(final_index_ram_limit / points_num));
 
     num_pq_chunks = num_pq_chunks <= 0 ? 1 : num_pq_chunks;
     num_pq_chunks = num_pq_chunks > dim ? dim : num_pq_chunks;
@@ -938,9 +948,10 @@ namespace diskann {
     diskann::cout << "Compressing " << dim << "-dimensional data into "
                   << num_pq_chunks << " bytes per vector." << std::endl;
 
-    generate_quantized_data<T>(data_file_to_use, pq_pivots_path,
-                               pq_compressed_vectors_path, compareMetric, p_val,
-                               num_pq_chunks, use_opq);
+    generate_quantized_data<T>(
+        data_file_to_use, sample_query_file, base_to_query_sets_file,
+        pq_pivots_path, pq_compressed_vectors_path, compareMetric, p_val,
+        num_pq_chunks, max_q, use_opq, use_apq, use_mips);
 
 // Gopal. Splitting diskann_dll into separate DLLs for search and build.
 // This code should only be available in the "build" DLL.

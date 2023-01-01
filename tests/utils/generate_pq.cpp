@@ -8,10 +8,13 @@
 #define KMEANS_ITERS_FOR_PQ 15
 
 template<typename T>
-bool generate_pq(const std::string& data_path,
+bool generate_pq(const std::string& data_path, const std::string& query_path,
+                 const std::string& base_to_query_sets_path,
                  const std::string& index_prefix_path,
                  const size_t num_pq_centers, const size_t num_pq_chunks,
-                 const float sampling_rate, const bool opq) {
+                 const bool use_mips, const size_t max_q,
+                 const float sampling_rate, const bool opq,
+                 const bool use_apq) {
   std::string pq_pivots_path = index_prefix_path + "_pq_pivots.bin";
   std::string pq_compressed_vectors_path =
       index_prefix_path + "_pq_compressed.bin";
@@ -34,9 +37,10 @@ bool generate_pq(const std::string& data_path,
                                 num_pq_centers, num_pq_chunks,
                                 KMEANS_ITERS_FOR_PQ, pq_pivots_path);
   }
-  diskann::generate_pq_data_from_pivots<T>(data_path, num_pq_centers,
-                                           num_pq_chunks, pq_pivots_path,
-                                           pq_compressed_vectors_path, true);
+  diskann::generate_pq_data_from_pivots<T>(
+      data_path, num_pq_centers, num_pq_chunks, pq_pivots_path,
+      pq_compressed_vectors_path, true, query_path, base_to_query_sets_path,
+      use_mips, use_apq, max_q);
 
   delete[] train_data;
 
@@ -44,30 +48,40 @@ bool generate_pq(const std::string& data_path,
 }
 
 int main(int argc, char** argv) {
-  if (argc != 7) {
-    std::cout << "Usage: \n"
-              << argv[0]
-              << "  <data_type[float/uint8/int8]>   <data_file[.bin]>"
-                 "  <PQ_prefix_path>  <target-bytes/data-point>  "
-                 "<sampling_rate> <PQ(0)/OPQ(1)>"
-              << std::endl;
+  if (argc != 11) {
+    std::cout
+        << "Usage: \n"
+        << argv[0]
+        << "  <data_type[float/uint8/int8]>   <data_file[.bin]>"
+           "  <query_file[.bin]>  <base_to_query_sets_file[.bin]>  "
+           "<PQ_prefix_path>  <target-bytes/data-point>  <use_mips>  "
+           "<max_queries_per_point>  <sampling_rate>  <PQ(0)/OPQ(1)/APQ(2)>"
+        << std::endl;
   } else {
     const std::string data_path(argv[2]);
-    const std::string index_prefix_path(argv[3]);
+    const std::string query_path(argv[3]);
+    const std::string base_to_query_sets_path(argv[4]);
+    const std::string index_prefix_path(argv[5]);
     const size_t      num_pq_centers = 256;
-    const size_t      num_pq_chunks = (size_t) atoi(argv[4]);
-    const float       sampling_rate = atof(argv[5]);
-    const bool        opq = atoi(argv[6]) == 0 ? false : true;
+    const size_t      num_pq_chunks = (size_t) atoi(argv[6]);
+    bool              use_mips = atoi(argv[7]) == 0 ? false : true;
+    const size_t      max_q = (size_t) atoi(argv[8]);
+    const float       sampling_rate = atof(argv[9]);
+    const bool        opq = atoi(argv[10]) == 0 ? false : true;
+    bool              use_apq = atoi(argv[10]) == 2 ? true : false;
 
     if (std::string(argv[1]) == std::string("float"))
-      generate_pq<float>(data_path, index_prefix_path, num_pq_centers,
-                         num_pq_chunks, sampling_rate, opq);
+      generate_pq<float>(data_path, query_path, base_to_query_sets_path,
+                         index_prefix_path, num_pq_centers, num_pq_chunks,
+                         use_mips, max_q, sampling_rate, opq, use_apq);
     else if (std::string(argv[1]) == std::string("int8"))
-      generate_pq<int8_t>(data_path, index_prefix_path, num_pq_centers,
-                          num_pq_chunks, sampling_rate, opq);
+      generate_pq<int8_t>(data_path, query_path, base_to_query_sets_path,
+                          index_prefix_path, num_pq_centers, num_pq_chunks,
+                          use_mips, max_q, sampling_rate, opq, use_apq);
     else if (std::string(argv[1]) == std::string("uint8"))
-      generate_pq<uint8_t>(data_path, index_prefix_path, num_pq_centers,
-                           num_pq_chunks, sampling_rate, opq);
+      generate_pq<uint8_t>(data_path, query_path, base_to_query_sets_path,
+                           index_prefix_path, num_pq_centers, num_pq_chunks,
+                           use_mips, max_q, sampling_rate, opq, use_apq);
     else
       std::cout << "Error. wrong file type" << std::endl;
   }

@@ -14,7 +14,6 @@
 #include "index.h"
 #include "utils.h"
 #include "disk_utils.h"
-#include "math_utils.h"
 #include "memory_mapper.h"
 #include "partition.h"
 #include "timer.h"

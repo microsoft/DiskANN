@@ -681,11 +681,11 @@ namespace diskann {
   // If the numbber of centers is < 256, it stores as byte vector, else as
   // 4-byte vector in binary format.
   template<typename T>
-  int generate_pq_data_from_pivots(const std::string data_file,
-                                   unsigned num_centers, unsigned num_pq_chunks,
-                                   std::string pq_pivots_path,
-                                   std::string pq_compressed_vectors_path,
-                                   bool        use_opq) {
+  int generate_pq_data_from_pivots(
+      const std::string data_file, unsigned num_centers, unsigned num_pq_chunks,
+      std::string pq_pivots_path, std::string pq_compressed_vectors_path,
+      bool use_opq, std::string sample_query_file, std::string base_to_query_sets_file,
+      bool use_mips, bool use_apq, unsigned max_q) {
     _u64            read_blk_size = 64 * 1024 * 1024;
     cached_ifstream base_reader(data_file, read_blk_size);
     _u32            npts32;
@@ -695,12 +695,29 @@ namespace diskann {
     size_t num_points = npts32;
     size_t dim = basedim32;
 
-    std::unique_ptr<float[]>    full_pivot_data;
+    if (use_apq && (!file_exists(base_to_query_sets_file) ||
+                    !file_exists(sample_query_file) || max_q == 0)) {
+      diskann::cout << "Incomplete information provided Accurate PQ."
+                    << std::endl;
+      throw diskann::ANNException(
+          "Incomplete information provided Accurate PQ.", -1, __FUNCSIG__,
+          __FILE__, __LINE__);
+    }
+    std::unique_ptr<float[]>    full_pivot_data, query_data;
     std::unique_ptr<float[]>    rotmat_tr;
     std::unique_ptr<float[]>    centroid;
     std::unique_ptr<uint32_t[]> chunk_offsets;
 
     std::string inflated_pq_file = pq_compressed_vectors_path + "_inflated.bin";
+
+    size_t num_query = 0, dummy_dim = 0;
+    if (use_apq) {
+      std::unique_ptr<T[]> query_temp;
+      diskann::load_bin<T>(sample_query_file, query_temp, num_query, dummy_dim);
+      query_data = std::make_unique<float[]>(num_query * dummy_dim);
+      diskann::convert_types<T, float>(query_temp.get(), query_data.get(),
+                                       num_query, dummy_dim);
+    }
 
     if (!file_exists(pq_pivots_path)) {
       std::cout << "ERROR: PQ k-means pivot file not found" << std::endl;
@@ -772,6 +789,8 @@ namespace diskann {
       diskann::cout << "Loaded PQ pivot information" << std::endl;
     }
 
+    boost::dynamic_bitset<> flags{num_points, 0};
+    flags.set();
     std::ofstream compressed_file_writer(pq_compressed_vectors_path,
                                          std::ios::binary);
     _u32          num_pq_chunks_u32 = num_pq_chunks;
@@ -804,10 +823,45 @@ namespace diskann {
 
     size_t num_blocks = DIV_ROUND_UP(num_points, block_size);
 
+    std::ifstream in(base_to_query_sets_file, std::ios::binary);
+    _u32          expected_file_size;
+    if (use_apq) {
+      in.read((char*) &expected_file_size, sizeof(_u32));
+    }
+
     for (size_t block = 0; block < num_blocks; block++) {
       size_t start_id = block * block_size;
       size_t end_id = (std::min)((block + 1) * block_size, num_points);
       size_t cur_blk_size = end_id - start_id;
+
+      boost::dynamic_bitset<>        cur_flags{block_size, 0};
+      std::vector<std::vector<_u32>> q_closest;
+      q_closest.clear();
+      q_closest.reserve(cur_blk_size);
+      size_t nnodes = 0;
+      if (use_apq) {
+        for (size_t i = start_id; i < end_id; i++) {
+          if (flags[i] == true) {
+            cur_flags[i - start_id] = true;
+          }
+        }
+        while (!in.eof() && nnodes < cur_blk_size) {
+          unsigned j, k;
+          in.read((char*) &j, sizeof(unsigned));
+          in.read((char*) &k, sizeof(unsigned));
+          if (in.eof()) {
+            break;
+          }
+          ++nnodes;
+          std::vector<_u32> tmp(k + 1);
+          tmp[0] = j;
+          if (k != 0) {
+            in.read((char*) (tmp.data() + 1), k * sizeof(unsigned));
+          }
+          tmp.resize(std::min((k + 1), max_q + 1));
+          q_closest.emplace_back(tmp);
+        }
+      }
 
       base_reader.read((char*) (block_data_T.get()),
                        sizeof(T) * (cur_blk_size * dim));
@@ -848,6 +902,9 @@ namespace diskann {
             std::make_unique<float[]>(num_centers * cur_chunk_size);
         std::unique_ptr<float[]> cur_data =
             std::make_unique<float[]>(cur_blk_size * cur_chunk_size);
+        std::unique_ptr<float[]> cur_query =
+            use_apq ? std::make_unique<float[]>(num_query * cur_chunk_size)
+                    : nullptr;
         std::unique_ptr<uint32_t[]> closest_center =
             std::make_unique<uint32_t[]>(cur_blk_size);
 
@@ -858,6 +915,16 @@ namespace diskann {
                 block_data_float[j * dim + chunk_offsets[i] + k];
         }
 
+        if (use_apq) {
+#pragma omp parallel for schedule(static, 8192)
+          for (int64_t j = 0; j < (_s64) num_query; j++) {
+            for (uint64_t k = 0; k < cur_chunk_size; k++)
+              cur_query[j * cur_chunk_size + k] =
+                  query_data[j * dim + chunk_offsets[i] + k] -
+                  centroid[chunk_offsets[i] + k];
+          }
+        }
+
 #pragma omp parallel for schedule(static, 1)
         for (int64_t j = 0; j < (_s64) num_centers; j++) {
           std::memcpy(cur_pivot_data.get() + j * cur_chunk_size,
@@ -865,9 +932,17 @@ namespace diskann {
                       cur_chunk_size * sizeof(float));
         }
 
-        math_utils::compute_closest_centers(
-            cur_data.get(), cur_blk_size, cur_chunk_size, cur_pivot_data.get(),
-            num_centers, 1, closest_center.get());
+        if (use_apq) {
+          math_utils::compute_closest_centers(
+              cur_data.get(), cur_query.get(), q_closest.data(), cur_flags,
+              cur_blk_size, num_query, max_q, cur_chunk_size,
+              cur_pivot_data.get(), num_centers, 1, use_mips,
+              closest_center.get());
+        } else {
+          math_utils::compute_closest_centers(
+              cur_data.get(), cur_blk_size, cur_chunk_size,
+              cur_pivot_data.get(), num_centers, 1, closest_center.get());
+        }
 
 #pragma omp parallel for schedule(static, 8192)
         for (int64_t j = 0; j < (_s64) cur_blk_size; j++) {
@@ -950,11 +1025,14 @@ namespace diskann {
 
   template<typename T>
   void generate_quantized_data(const std::string data_file_to_use,
+                               const std::string sample_query_file,
+                               const std::string base_to_query_sets_file,
                                const std::string pq_pivots_path,
                                const std::string pq_compressed_vectors_path,
                                diskann::Metric   compareMetric,
                                const double p_val, const size_t num_pq_chunks,
-                               const bool use_opq) {
+                               const unsigned max_q, const bool use_opq,
+                               const bool use_apq, const bool use_mips) {
     size_t train_size, train_dim;
     float* train_data;
 
@@ -981,7 +1059,8 @@ namespace diskann {
     }
     generate_pq_data_from_pivots<T>(data_file_to_use.c_str(), NUM_PQ_CENTROIDS,
                                     (uint32_t) num_pq_chunks, pq_pivots_path,
-                                    pq_compressed_vectors_path, use_opq);
+                                    pq_compressed_vectors_path, use_opq, sample_query_file,
+                                    base_to_query_sets_file, use_mips, use_apq, max_q);
 
     delete[] train_data;
   }
@@ -991,15 +1070,18 @@ namespace diskann {
   template DISKANN_DLLEXPORT int generate_pq_data_from_pivots<int8_t>(
       const std::string data_file, unsigned num_centers, unsigned num_pq_chunks,
       std::string pq_pivots_path, std::string pq_compressed_vectors_path,
-      bool use_opq);
+      bool use_opq, std::string sample_query_file, std::string base_to_query_sets_file,
+      bool use_mips, bool use_apq, unsigned max_q);
   template DISKANN_DLLEXPORT int generate_pq_data_from_pivots<uint8_t>(
       const std::string data_file, unsigned num_centers, unsigned num_pq_chunks,
       std::string pq_pivots_path, std::string pq_compressed_vectors_path,
-      bool use_opq);
+      bool use_opq, std::string sample_query_file, std::string base_to_query_sets_file,
+      bool use_mips, bool use_apq, unsigned max_q);
   template DISKANN_DLLEXPORT int generate_pq_data_from_pivots<float>(
       const std::string data_file, unsigned num_centers, unsigned num_pq_chunks,
       std::string pq_pivots_path, std::string pq_compressed_vectors_path,
-      bool use_opq);
+      bool use_opq, std::string sample_query_file, std::string base_to_query_sets_file,
+      bool use_mips, bool use_apq, unsigned max_q);
 
   template DISKANN_DLLEXPORT void generate_disk_quantized_data<int8_t>(
       const std::string data_file_to_use, const std::string disk_pq_pivots_path,
@@ -1017,20 +1099,29 @@ namespace diskann {
       diskann::Metric compareMetric, const double p_val, size_t& disk_pq_dims);
 
   template DISKANN_DLLEXPORT void generate_quantized_data<int8_t>(
-      const std::string data_file_to_use, const std::string pq_pivots_path,
+      const std::string data_file_to_use, const std::string sample_query_file,
+      const std::string base_to_query_sets_file,
+      const std::string pq_pivots_path,
       const std::string pq_compressed_vectors_path,
       diskann::Metric compareMetric, const double p_val,
-      const size_t num_pq_chunks, const bool use_opq);
+      const size_t num_pq_chunks, const unsigned max_q, const bool use_opq,
+      const bool use_apq, const bool use_mips);
 
   template DISKANN_DLLEXPORT void generate_quantized_data<uint8_t>(
-      const std::string data_file_to_use, const std::string pq_pivots_path,
+      const std::string data_file_to_use, const std::string sample_query_file,
+      const std::string base_to_query_sets_file,
+      const std::string pq_pivots_path,
       const std::string pq_compressed_vectors_path,
       diskann::Metric compareMetric, const double p_val,
-      const size_t num_pq_chunks, const bool use_opq);
+      const size_t num_pq_chunks, const unsigned max_q, const bool use_opq,
+      const bool use_apq, const bool use_mips);
 
   template DISKANN_DLLEXPORT void generate_quantized_data<float>(
-      const std::string data_file_to_use, const std::string pq_pivots_path,
+      const std::string data_file_to_use, const std::string sample_query_file,
+      const std::string base_to_query_sets_file,
+      const std::string pq_pivots_path,
       const std::string pq_compressed_vectors_path,
       diskann::Metric compareMetric, const double p_val,
-      const size_t num_pq_chunks, const bool use_opq);
+      const size_t num_pq_chunks, const unsigned max_q, const bool use_opq,
+      const bool use_apq, const bool use_mips);
 }  // namespace diskann

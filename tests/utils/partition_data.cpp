@@ -2,7 +2,6 @@
 // Licensed under the MIT license.
 
 #include <index.h>
-#include <math_utils.h>
 #include "cached_io.h"
 #include "partition.h"
 

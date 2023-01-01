@@ -13,11 +13,14 @@
 namespace po = boost::program_options;
 
 int main(int argc, char** argv) {
-  std::string data_type, dist_fn, data_path, index_path_prefix;
-  unsigned    num_threads, R, L, disk_PQ;
-  float       B, M;
-  bool        append_reorder_data = false;
-  bool        use_opq = false;
+  std::string data_type, dist_fn, data_path, index_path_prefix,
+      sample_query_path, base_to_query_sets_path;
+  unsigned num_threads, R, L, disk_PQ, max_queries_per_point;
+  float    B, M;
+  bool     append_reorder_data = false;
+  bool     use_opq = false;
+  bool     use_apq = false;
+  bool     use_mips = false;
 
   po::options_description desc{"Arguments"};
   try {
@@ -30,6 +33,14 @@ int main(int argc, char** argv) {
     desc.add_options()("data_path",
                        po::value<std::string>(&data_path)->required(),
                        "Input data file in bin format");
+    desc.add_options()(
+        "sample_query_path",
+        po::value<std::string>(&sample_query_path)->default_value(""),
+        "Sample query file in bin format");
+    desc.add_options()(
+        "base_to_query_sets_path",
+        po::value<std::string>(&base_to_query_sets_path)->default_value(""),
+        "Base-to-query-sets file in bin format");
     desc.add_options()("index_path_prefix",
                        po::value<std::string>(&index_path_prefix)->required(),
                        "Path prefix for saving index file components");
@@ -53,13 +64,18 @@ int main(int argc, char** argv) {
                        po::value<uint32_t>(&disk_PQ)->default_value(0),
                        "Number of bytes to which vectors should be compressed "
                        "on SSD; 0 for no compression");
+    desc.add_options()(
+        "max_queries_per_point",
+        po::value<uint32_t>(&max_queries_per_point)->default_value(0),
+        "Maximum number of queries per base point to be considered for APQ");
     desc.add_options()("append_reorder_data",
                        po::bool_switch()->default_value(false),
                        "Include full precision data in the index. Use only in "
                        "conjuction with compressed data on SSD.");
-
     desc.add_options()("use_opq", po::bool_switch()->default_value(false),
                        "Use Optimized Product Quantization (OPQ).");
+    desc.add_options()("use_apq", po::bool_switch()->default_value(false),
+                       "Use Accurate Product Quantization (APQ).");
 
     po::variables_map vm;
     po::store(po::parse_command_line(argc, argv, desc), vm);
@@ -72,17 +88,20 @@ int main(int argc, char** argv) {
       append_reorder_data = true;
     if (vm["use_opq"].as<bool>())
       use_opq = true;
+    if (vm["use_apq"].as<bool>())
+      use_apq = true;
   } catch (const std::exception& ex) {
     std::cerr << ex.what() << '\n';
     return -1;
   }
 
   diskann::Metric metric;
-  if (dist_fn == std::string("l2"))
+  if (dist_fn == std::string("l2")) {
     metric = diskann::Metric::L2;
-  else if (dist_fn == std::string("mips"))
+  } else if (dist_fn == std::string("mips")) {
     metric = diskann::Metric::INNER_PRODUCT;
-  else {
+    use_mips = true;
+  } else {
     std::cout << "Error. Only l2 and mips distance functions are supported"
               << std::endl;
     return -1;
@@ -103,7 +122,12 @@ int main(int argc, char** argv) {
     }
   }
 
-  std::string params = std::string(std::to_string(R)) + " " +
+  std::string params = std::string(sample_query_path) + " " +
+                       std::string(base_to_query_sets_path) + " " +
+                       std::string(std::to_string((unsigned) use_apq)) + " " +
+                       std::string(std::to_string((unsigned) use_mips)) + " " +
+                       std::string(std::to_string(max_queries_per_point)) +
+                       " " + std::string(std::to_string(R)) + " " +
                        std::string(std::to_string(L)) + " " +
                        std::string(std::to_string(B)) + " " +
                        std::string(std::to_string(M)) + " " +

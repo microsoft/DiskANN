@@ -112,11 +112,12 @@ namespace diskann {
                                             bool        make_zero_mean = false);
 
   template<typename T>
-  int generate_pq_data_from_pivots(const std::string data_file,
-                                   unsigned num_centers, unsigned num_pq_chunks,
-                                   std::string pq_pivots_path,
-                                   std::string pq_compressed_vectors_path,
-                                   bool        use_opq = false);
+  int generate_pq_data_from_pivots(
+      const std::string data_file, unsigned num_centers, unsigned num_pq_chunks,
+      std::string pq_pivots_path, std::string pq_compressed_vectors_path,
+      bool use_opq = false, std::string sample_query_file = "",
+      std::string base_to_query_sets_file = "", bool use_mips = false,
+      bool use_apq = false, unsigned max_q = 0);
 
   template<typename T>
   void generate_disk_quantized_data(
@@ -127,9 +128,12 @@ namespace diskann {
 
   template<typename T>
   void generate_quantized_data(const std::string     data_file_to_use,
+                               const std::string     sample_query_file,
+                               const std::string     base_to_query_sets_file,
                                const std::string     pq_pivots_path,
                                const std::string     pq_compressed_vectors_path,
                                const diskann::Metric compareMetric,
                                const double p_val, const size_t num_pq_chunks,
-                               const bool use_opq);
+                               const unsigned max_q, const bool use_opq,
+                               const bool use_apq, const bool use_mips);
 }  // namespace diskann

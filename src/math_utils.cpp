@@ -18,6 +18,34 @@ namespace math_utils {
     return dist;
   }
 
+  inline void fast_l2_compute(const __m512* a_vecs, const float* b,
+                              float scalar, bool flag, __m512* c_vecs,
+                              _u16 n_iters) {
+    __m512       b_vec, tmp_vec;
+    const __m512 tmp_vec_scalar = _mm512_set1_ps(scalar);
+    for (_u16 j = 0; j < n_iters; j++) {
+      b_vec = _mm512_load_ps(b + 16 * j);
+      tmp_vec = _mm512_add_ps(a_vecs[j], b_vec);
+      tmp_vec = _mm512_add_ps(tmp_vec, tmp_vec_scalar);
+      if (flag)
+        tmp_vec = _mm512_abs_ps(tmp_vec);
+      c_vecs[j] = _mm512_add_ps(tmp_vec, c_vecs[j]);
+    }
+  }
+
+  inline void fast_mips_compute(const float* a, float scalar, bool flag,
+                                __m512* b_vecs, _u16 n_iters) {
+    __m512       a_vec, tmp_vec;
+    const __m512 tmp_vec_scalar = _mm512_set1_ps(scalar);
+    for (_u16 j = 0; j < n_iters; j++) {
+      a_vec = _mm512_load_ps(a + 16 * j);
+      tmp_vec = _mm512_add_ps(a_vec, tmp_vec_scalar);
+      if (flag)
+        tmp_vec = _mm512_abs_ps(tmp_vec);
+      b_vecs[j] = _mm512_add_ps(tmp_vec, b_vecs[j]);
+    }
+  }
+
   // compute l2-squared norms of data stored in row major num_points * dim,
   // needs
   // to be pre-allocated
@@ -28,6 +56,29 @@ namespace math_utils {
       vecs_l2sq[n_iter] =
           cblas_snrm2((MKL_INT) dim, (data + (n_iter * dim)), 1);
       vecs_l2sq[n_iter] *= vecs_l2sq[n_iter];
+    }
+  }
+
+  void compute_query_points_ip(float*                   column_matrix,
+                               const float* const       query_data,
+                               const float* const       data,
+                               const std::vector<_u32>* q_closest,
+                               const float scalar, const size_t num_query,
+                               const size_t num_points, const size_t dim,
+                               const size_t num_avg) {
+#pragma omp parallel for schedule(static, 8192)
+    for (size_t n_iter = 0; n_iter < num_points; n_iter++) {
+      std::unique_ptr<float[]> select_query =
+          std::make_unique<float[]>(num_avg * dim);
+      for (size_t q_iter = 1; q_iter < q_closest[n_iter].size(); q_iter++) {
+        std::memcpy(select_query.get() + (q_iter - 1) * dim,
+                    query_data + (q_closest[n_iter][q_iter] * dim),
+                    dim * sizeof(float));
+      }
+      cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasTrans, (MKL_INT) num_avg,
+                  (MKL_INT) 1, (MKL_INT) dim, scalar, select_query.get(),
+                  (MKL_INT) dim, data + dim * n_iter, (MKL_INT) dim, 0.0f,
+                  (column_matrix + n_iter * num_avg), (MKL_INT) 1);
     }
   }
 
@@ -126,6 +177,182 @@ namespace math_utils {
     delete[] ones_b;
   }
 
+  void compute_closest_centers_in_block(
+      const float* const data, const float* const query_data,
+      const std::vector<_u32>* q_closest, const boost::dynamic_bitset<>& flags,
+      const size_t num_points, const size_t num_query, const size_t dim,
+      const float* const centers, const size_t num_centers,
+      const float* const docs_l2sq, const float* const centers_l2sq,
+      uint32_t* center_index, float* const dist_matrix, size_t k,
+      size_t num_avg) {
+    if (k > num_centers) {
+      diskann::cout << "ERROR: k (" << k << ") > num_center(" << num_centers
+                    << ")" << std::endl;
+      return;
+    }
+
+    float* ones_a = new float[num_centers];
+    float* ones_b = new float[num_points];
+    float* column_matrix = new float[num_points * num_avg];
+    float* row_matrix = new float[num_query * num_centers];
+
+    for (size_t i = 0; i < num_centers; i++) {
+      ones_a[i] = 1.0;
+    }
+    for (size_t i = 0; i < num_points; i++) {
+      ones_b[i] = 1.0;
+    }
+
+    cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasTrans, (MKL_INT) num_points,
+                (MKL_INT) num_centers, (MKL_INT) 1, -1.0f, docs_l2sq,
+                (MKL_INT) 1, ones_a, (MKL_INT) 1, 0.0f, dist_matrix,
+                (MKL_INT) num_centers);
+
+    cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasTrans, (MKL_INT) num_points,
+                (MKL_INT) num_centers, (MKL_INT) 1, 1.0f, ones_b, (MKL_INT) 1,
+                centers_l2sq, (MKL_INT) 1, 1.0f, dist_matrix,
+                (MKL_INT) num_centers);
+
+    cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasTrans, (MKL_INT) num_query,
+                (MKL_INT) num_centers, (MKL_INT) dim, -2.0f, query_data,
+                (MKL_INT) dim, centers, (MKL_INT) dim, 0.0f, row_matrix,
+                (MKL_INT) num_centers);
+
+    math_utils::compute_query_points_ip(column_matrix, query_data, data,
+                                        q_closest, 2.0f, num_query, num_points,
+                                        dim, num_avg);
+
+    _u16 n_iters = num_centers / 16;
+#pragma omp parallel for schedule(static, 8192)
+    for (size_t i = 0; i < num_points; i++) {
+      size_t minimum = std::min(num_avg, (size_t)(q_closest[i].size() - 1)) + 1;
+      size_t top_k = q_closest[i][0];
+      const _u32* query_set = q_closest[i].data();
+      float*      column = column_matrix + i * num_avg;
+      float*      dist = dist_matrix + i * num_centers;
+      __m512      a_vecs[16], c_vecs[16];
+      for (_u16 iter = 0; iter < n_iters; iter++) {
+        a_vecs[iter] = _mm512_load_ps(dist + 16 * iter);
+        c_vecs[iter] = _mm512_setzero_ps();
+      }
+      for (size_t kk = 1; kk < minimum; kk++) {
+        float* row = row_matrix + query_set[kk] * num_centers;
+        math_utils::fast_l2_compute(&a_vecs[0], row, column[kk - 1], top_k < kk,
+                                    &c_vecs[0], n_iters);
+      }
+      for (_u16 iter = 0; iter < n_iters; iter++) {
+        _mm512_store_ps((void*) (dist + 16 * iter), c_vecs[iter]);
+      }
+    }
+
+    if (k == 1) {
+#pragma omp parallel for schedule(static, 8192)
+      for (int64_t i = 0; i < (_s64) num_points; i++) {
+        float  min = std::numeric_limits<float>::max();
+        float* current = dist_matrix + (i * num_centers);
+        for (size_t j = 0; j < num_centers; j++) {
+          if (current[j] < min) {
+            center_index[i] = (uint32_t) j;
+            min = current[j];
+          }
+        }
+      }
+    } else {
+#pragma omp parallel for schedule(static, 8192)
+      for (int64_t i = 0; i < (_s64) num_points; i++) {
+        std::priority_queue<PivotContainer> top_k_queue;
+        float* current = dist_matrix + (i * num_centers);
+        for (size_t j = 0; j < num_centers; j++) {
+          PivotContainer this_piv(j, current[j]);
+          top_k_queue.push(this_piv);
+        }
+        for (size_t j = 0; j < k; j++) {
+          PivotContainer this_piv = top_k_queue.top();
+          center_index[i * k + j] = (uint32_t) this_piv.piv_id;
+          top_k_queue.pop();
+        }
+      }
+    }
+    delete[] ones_a;
+    delete[] ones_b;
+    delete[] row_matrix;
+    delete[] column_matrix;
+  }
+
+  void compute_mips_centers_in_block(
+      const float* const data, const float* const query_data,
+      const std::vector<_u32>* q_closest, const boost::dynamic_bitset<>& flags,
+      const size_t num_points, const size_t num_query, const size_t dim,
+      const float* const centers, const size_t num_centers,
+      uint32_t* center_index, float* const dist_matrix, size_t k,
+      size_t num_avg) {
+    if (k > num_centers) {
+      diskann::cout << "ERROR: k (" << k << ") > num_center(" << num_centers
+                    << ")" << std::endl;
+      return;
+    }
+    float* column_matrix = new float[num_points * num_avg];
+    float* row_matrix = new float[num_query * num_centers];
+    cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasTrans, (MKL_INT) num_query,
+                (MKL_INT) num_centers, (MKL_INT) dim, -1.0f, query_data,
+                (MKL_INT) dim, centers, (MKL_INT) dim, 0.0f, row_matrix,
+                (MKL_INT) num_centers);
+    math_utils::compute_query_points_ip(column_matrix, query_data, data,
+                                        q_closest, 1.0f, num_query, num_points,
+                                        dim, num_avg);
+    _u16 n_iters = num_centers / 16;
+#pragma omp parallel for schedule(static, 8192)
+    for (size_t i = 0; i < num_points; i++) {
+      size_t minimum = std::min(num_avg, (size_t)(q_closest[i].size() - 1)) + 1;
+      size_t top_k = q_closest[i][0];
+      const _u32* query_set = q_closest[i].data();
+      float*      column = column_matrix + i * num_avg;
+      float*      dist = dist_matrix + i * num_centers;
+      __m512      b_vecs[16];
+      for (_u16 iter = 0; iter < n_iters; iter++) {
+        b_vecs[iter] = _mm512_setzero_ps();
+      }
+      for (size_t kk = 1; kk < minimum; kk++) {
+        float* row = row_matrix + query_set[kk] * num_centers;
+        math_utils::fast_mips_compute(row, column[kk - 1], top_k < kk,
+                                      &b_vecs[0], n_iters);
+      }
+      for (_u16 iter = 0; iter < n_iters; iter++) {
+        _mm512_store_ps((void*) (dist + 16 * iter), b_vecs[iter]);
+      }
+    }
+    if (k == 1) {
+#pragma omp parallel for schedule(static, 8192)
+      for (int64_t i = 0; i < (_s64) num_points; i++) {
+        float  min = std::numeric_limits<float>::max();
+        float* current = dist_matrix + (i * num_centers);
+        for (size_t j = 0; j < num_centers; j++) {
+          if (current[j] < min) {
+            center_index[i] = (uint32_t) j;
+            min = current[j];
+          }
+        }
+      }
+    } else {
+#pragma omp parallel for schedule(static, 8192)
+      for (int64_t i = 0; i < (_s64) num_points; i++) {
+        std::priority_queue<PivotContainer> top_k_queue;
+        float* current = dist_matrix + (i * num_centers);
+        for (size_t j = 0; j < num_centers; j++) {
+          PivotContainer this_piv(j, current[j]);
+          top_k_queue.push(this_piv);
+        }
+        for (size_t j = 0; j < k; j++) {
+          PivotContainer this_piv = top_k_queue.top();
+          center_index[i * k + j] = (uint32_t) this_piv.piv_id;
+          top_k_queue.pop();
+        }
+      }
+    }
+    delete[] row_matrix;
+    delete[] column_matrix;
+  }
+
   // Given data in num_points * new_dim row major
   // Pivots stored in full_pivot_data as num_centers * new_dim row major
   // Calculate the k closest pivot for each point and store it in vector
@@ -180,6 +407,98 @@ namespace math_utils {
       for (int64_t j = cur_blk * PAR_BLOCK_SIZE;
            j <
            std::min((_s64) num_points, (_s64) ((cur_blk + 1) * PAR_BLOCK_SIZE));
+           j++) {
+        for (size_t l = 0; l < k; l++) {
+          size_t this_center_id =
+              closest_centers[(j - cur_blk * PAR_BLOCK_SIZE) * k + l];
+          closest_centers_ivf[j * k + l] = (uint32_t) this_center_id;
+          if (inverted_index != NULL) {
+#pragma omp critical
+            inverted_index[this_center_id].push_back(j);
+          }
+        }
+      }
+    }
+    delete[] closest_centers;
+    delete[] distance_matrix;
+    delete[] pivs_norms_squared;
+    if (!is_norm_given_for_pts)
+      delete[] pts_norms_squared;
+  }
+
+  void compute_closest_centers(
+      float* data, float* query_data, std::vector<_u32>* q_closest,
+      boost::dynamic_bitset<>& flags, size_t num_points, size_t num_query,
+      size_t num_avg, size_t dim, float* pivot_data, size_t num_centers,
+      size_t k, bool use_mips, uint32_t* closest_centers_ivf,
+      std::vector<size_t>* inverted_index, float* pts_norms_squared) {
+    if (k > num_centers) {
+      diskann::cout << "ERROR: k (" << k << ") > num_center(" << num_centers
+                    << ")" << std::endl;
+      return;
+    }
+
+    bool is_norm_given_for_pts = (pts_norms_squared != NULL);
+
+    float* pivs_norms_squared = new float[num_centers];
+    if (!is_norm_given_for_pts)
+      pts_norms_squared = new float[num_points];
+
+    size_t PAR_BLOCK_SIZE = num_points;
+    size_t N_BLOCKS = (num_points % PAR_BLOCK_SIZE) == 0
+                          ? (num_points / PAR_BLOCK_SIZE)
+                          : (num_points / PAR_BLOCK_SIZE) + 1;
+
+    if (!is_norm_given_for_pts)
+      math_utils::compute_vecs_l2sq(pts_norms_squared, data, num_points, dim);
+    math_utils::compute_vecs_l2sq(pivs_norms_squared, pivot_data, num_centers,
+                                  dim);
+    uint32_t* closest_centers = new uint32_t[PAR_BLOCK_SIZE * k];
+    float*    distance_matrix = new float[num_centers * PAR_BLOCK_SIZE];
+
+    for (size_t cur_blk = 0; cur_blk < N_BLOCKS; cur_blk++) {
+      float* data_cur_blk = data + cur_blk * PAR_BLOCK_SIZE * dim;
+      size_t num_pts_blk =
+          std::min(PAR_BLOCK_SIZE, num_points - cur_blk * PAR_BLOCK_SIZE);
+      float* pts_norms_blk = pts_norms_squared + cur_blk * PAR_BLOCK_SIZE;
+      std::cout << "At the new membership function" << std::endl;
+      math_utils::compute_closest_centers_in_block(
+          data_cur_blk, num_pts_blk, dim, pivot_data, num_centers,
+          pts_norms_blk, pivs_norms_squared, closest_centers, distance_matrix,
+          k);
+      std::unique_ptr<uint32_t[]> cur_closest_centers =
+          std::make_unique<uint32_t[]>(num_pts_blk * k);
+      std::cout << "Averaging over " << num_avg << " closest query points for "
+                << num_pts_blk << " base points..." << std::endl;
+      if (use_mips) {
+        math_utils::compute_mips_centers_in_block(
+            data_cur_blk, query_data, q_closest, flags, num_pts_blk, num_query,
+            dim, pivot_data, num_centers, cur_closest_centers.get(),
+            distance_matrix, k, num_avg);
+      } else {
+        math_utils::compute_closest_centers_in_block(
+            data_cur_blk, query_data, q_closest, flags, num_pts_blk, num_query,
+            dim, pivot_data, num_centers, pts_norms_blk, pivs_norms_squared,
+            cur_closest_centers.get(), distance_matrix, k, num_avg);
+      }
+      size_t dummy = 0;
+      for (int64_t j = cur_blk * PAR_BLOCK_SIZE;
+           j <
+           std::min((_s64) num_points, (_s64)((cur_blk + 1) * PAR_BLOCK_SIZE));
+           j++) {
+        if (flags[j] == true) {
+          for (size_t l = 0; l < k; l++) {
+            closest_centers[(j - cur_blk * PAR_BLOCK_SIZE) * k + l] =
+                cur_closest_centers[dummy * k + l];
+          }
+          dummy += 1;
+        }
+      }
+
+#pragma omp parallel for schedule(static, 1)
+      for (int64_t j = cur_blk * PAR_BLOCK_SIZE;
+           j <
+           std::min((_s64) num_points, (_s64)((cur_blk + 1) * PAR_BLOCK_SIZE));
            j++) {
         for (size_t l = 0; l < k; l++) {
           size_t this_center_id =
