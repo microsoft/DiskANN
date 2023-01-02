@@ -88,9 +88,9 @@ int main(int argc, char** argv) {
         po::value<uint32_t>(&num_threads)->default_value(omp_get_num_procs()),
         "Number of threads used for building index (defaults to "
         "omp_get_num_procs())");
-    desc.add_options()("num_pq_bytes",
-                       po::value<uint32_t>(&build_PQ_bytes)->default_value(0),
-                       "Number of PQ bytes to compress vectors to");
+    desc.add_options()(
+        "num_pq_bytes", po::value<uint32_t>(&build_PQ_bytes)->default_value(0),
+        "Number of PQ bytes to build the index; 0 for full precision build");
     desc.add_options()(
         "use_opq", po::bool_switch()->default_value(false),
         "Set true for OPQ compression, and false for PQ compression");
