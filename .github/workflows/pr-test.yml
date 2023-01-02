@@ -1,4 +1,4 @@
-name: DiskANN Build and run
+name: DiskANN Pull Request Build and Test
 on: [pull_request]
 jobs:
   build-and-run:
@@ -187,3 +187,12 @@ jobs:
         ${{ env.diskann_built_tests }}/test_streaming_scenario --data_type uint8 --dist_fn l2 --data_path rand_uint8_10D_10K_norm50.0.bin --index_path_prefix index_stream -R 64 -L 600 --alpha 1.2 --insert_threads 4 --consolidate_threads 4 --max_points_to_insert 10000 --active_window 4000 --consolidate_interval 2000 --start_point_norm 200
         ${{ env.diskann_built_utils }}/compute_groundtruth --data_type uint8 --dist_fn l2 --base_file index_stream.after-streaming-act4000-cons2000-max10000.data --query_file rand_uint8_10D_10K_norm50.0.bin --K 100 --gt_file gt100_base-act4000-cons2000-max10000 --tags_file index_stream.after-streaming-act4000-cons2000-max10000.tags
         ${{ env.diskann_built_tests }}/search_memory_index --data_type uint8 --dist_fn l2 --index_path_prefix index_stream.after-streaming-act4000-cons2000-max10000 --result_path res_stream --query_file rand_uint8_10D_10K_norm50.0.bin --gt_file gt100_base-act4000-cons2000-max10000 -K 10 -L 20 40 60 80 100 -T 64 --dynamic true --tags 1
+
+    - uses: actions/setup-python@v3
+    - name: Install cibuildwheel
+      run: python -m pip install cibuildwheel==2.11.3
+    - name: build wheels
+      run: python -m cibuildwheel --output-dir wheelhouse
+      env:
+        CIBW_ARCHS_WINDOWS: AMD64
+        CIBW_ARCHS_LINUX: x86_64

@@ -78,6 +78,8 @@ namespace diskann {
 
     std::shared_ptr<AlignedFileReader> &reader;
 
+    DISKANN_DLLEXPORT diskann::Metric get_metric();
+
    protected:
     DISKANN_DLLEXPORT void use_medoids_data_as_centroids();
     DISKANN_DLLEXPORT void setup_thread_data(_u64 nthreads,

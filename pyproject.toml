@@ -1,0 +1,41 @@
+[build-system]
+requires = [
+    "setuptools>=59.6",
+    "pybind11>=2.10.0",
+    "cmake>=3.22",
+    "numpy>=1.21", 
+    "wheel",
+]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "diskannpy"
+version = "0.4.0"
+
+description = "DiskANN Python extension module"
+# readme = "../README.md"
+requires-python = ">=3.7"
+license = {text = "MIT License"}
+dependencies = [
+    "numpy"
+]
+authors = [
+    {name = "Harsha Vardhan Simhadri", email = "harshasi@microsoft.com"},
+    {name = "Dax Pryce", email = "daxpryce@microsoft.com"}
+]
+
+[tool.cibuildwheel]
+manylinux-x86_64-image = "manylinux_2_24"
+build-frontend = "build"
+skip = "pp* *musllinux*"
+test-command = "python -m unittest discover -s {package}/tests"
+
+
+[tool.cibuildwheel.linux]
+before-all = """\
+    apt-get update && \
+    apt-get -y upgrade && \
+    apt-get install -y wget make cmake g++ libaio-dev libgoogle-perftools-dev libunwind-dev clang-format libboost-dev libboost-program-options-dev && \
+    wget https://registrationcenter-download.intel.com/akdlm/irc_nas/18487/l_BaseKit_p_2022.1.2.146.sh && \
+    sh l_BaseKit_p_2022.1.2.146.sh -a --components intel.oneapi.lin.mkl.devel --action install --eula accept -s --ignore-errors \
+"""
