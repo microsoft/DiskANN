@@ -135,19 +135,19 @@ if (MSVC)
         "${DISKANN_MKL_LIB_PATH}/mkl_core.lib"
         "${DISKANN_MKL_LIB_PATH}/mkl_intel_thread.lib")
 else()
-	# expected path for manual intel mkl installs
-	set(OMP_PATH /opt/intel/oneapi/compiler/2022.0.2/linux/compiler/lib/intel64_lin/ CACHE PATH "Intel OneAPI OpenMP library implementation path")
-	set(MKL_ROOT /opt/intel/oneapi/mkl/latest CACHE PATH "Intel OneAPI MKL library implementation path")
-	link_directories(${OMP_PATH} ${MKL_ROOT}/lib/intel64)
-	include_directories(${MKL_ROOT}/include)
+    # expected path for manual intel mkl installs
+    set(OMP_PATH /opt/intel/oneapi/compiler/2022.0.2/linux/compiler/lib/intel64_lin/ CACHE PATH "Intel OneAPI OpenMP library implementation path")
+    set(MKL_ROOT /opt/intel/oneapi/mkl/latest CACHE PATH "Intel OneAPI MKL library implementation path")
+    link_directories(${OMP_PATH} ${MKL_ROOT}/lib/intel64)
+    include_directories(${MKL_ROOT}/include)
 
-	# expected path for apt packaged intel mkl installs
-	link_directories(/usr/lib/x86_64-linux-gnu/mkl)
-	include_directories(/usr/include/mkl)
+    # expected path for apt packaged intel mkl installs
+    link_directories(/usr/lib/x86_64-linux-gnu/mkl)
+    include_directories(/usr/include/mkl)
 
-	# compile flags and link libraries
+    # compile flags and link libraries
     add_compile_options(-m64 -Wl,--no-as-needed)
-	link_libraries(mkl_intel_ilp64 mkl_intel_thread mkl_core iomp5 pthread m dl)
+    link_libraries(mkl_intel_ilp64 mkl_intel_thread mkl_core iomp5 pthread m dl)
 endif()
 
 add_definitions(-DMKL_ILP64)
