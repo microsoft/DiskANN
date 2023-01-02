@@ -88,19 +88,19 @@ jobs:
     - name: build and search disk index (one shot graph build, L2, no diskPQ) 
       run: |   
         ${{ env.diskann_built_tests }}/build_disk_index --data_type float --dist_fn l2 --data_path ./rand_float_10D_10K_norm1.0.bin --index_path_prefix ./disk_index_l2_rand_float_10D_10K_norm1.0_diskfull_oneshot -R 16 -L 32 -B 0.00003 -M 1 
-        ${{ env.diskann_built_tests }}/search_disk_index --data_type float --dist_fn l2 --index_path_prefix ./disk_index_l2_rand_float_10D_10K_norm1.0_diskfull_oneshot --result_path /tmp/res --query_file ./rand_float_10D_10K_norm1.0.bin --gt_file ./l2_rand_float_10D_10K_norm1.0_self_gt100 --recall_at 5 -L 10 12 14 16 -W 2 --num_nodes_to_cache 10 -T 16
+        ${{ env.diskann_built_tests }}/search_disk_index --data_type float --dist_fn l2 --index_path_prefix ./disk_index_l2_rand_float_10D_10K_norm1.0_diskfull_oneshot --result_path /tmp/res --query_file ./rand_float_10D_10K_norm1.0.bin --gt_file ./l2_rand_float_10D_10K_norm1.0_self_gt100 --recall_at 5 -L 5 10 -W 2 --num_nodes_to_cache 10 -T 16
     - name: build and search disk index (sharded graph build, L2, no diskPQ) 
       run: |   
         ${{ env.diskann_built_tests }}/build_disk_index --data_type float --dist_fn l2 --data_path ./rand_float_10D_10K_norm1.0.bin --index_path_prefix ./disk_index_l2_rand_float_10D_10K_norm1.0_diskfull_sharded -R 16 -L 32 -B 0.00003 -M 0.00006
-        ${{ env.diskann_built_tests }}/search_disk_index --data_type float --dist_fn l2 --index_path_prefix ./disk_index_l2_rand_float_10D_10K_norm1.0_diskfull_sharded --result_path /tmp/res --query_file ./rand_float_10D_10K_norm1.0.bin --gt_file ./l2_rand_float_10D_10K_norm1.0_self_gt100 --recall_at 5 -L 10 12 14 16 -W 2 --num_nodes_to_cache 10 -T 16
+        ${{ env.diskann_built_tests }}/search_disk_index --data_type float --dist_fn l2 --index_path_prefix ./disk_index_l2_rand_float_10D_10K_norm1.0_diskfull_sharded --result_path /tmp/res --query_file ./rand_float_10D_10K_norm1.0.bin --gt_file ./l2_rand_float_10D_10K_norm1.0_self_gt100 --recall_at 5 -L 5 10 -W 2 --num_nodes_to_cache 10 -T 16
     - name: build and search disk index (one shot graph build, L2, diskPQ) 
       run: |   
         ${{ env.diskann_built_tests }}/build_disk_index --data_type float --dist_fn l2 --data_path ./rand_float_10D_10K_norm1.0.bin --index_path_prefix ./disk_index_l2_rand_float_10D_10K_norm1.0_diskpq_oneshot -R 16 -L 32 -B 0.00003 -M 1 --PQ_disk_bytes 5
-        ${{ env.diskann_built_tests }}/search_disk_index --data_type float --dist_fn l2 --index_path_prefix ./disk_index_l2_rand_float_10D_10K_norm1.0_diskpq_oneshot --result_path /tmp/res --query_file ./rand_float_10D_10K_norm1.0.bin --gt_file ./l2_rand_float_10D_10K_norm1.0_self_gt100 --recall_at 5 -L 10 12 14 16 -W 2 --num_nodes_to_cache 10 -T 16
+        ${{ env.diskann_built_tests }}/search_disk_index --data_type float --dist_fn l2 --index_path_prefix ./disk_index_l2_rand_float_10D_10K_norm1.0_diskpq_oneshot --result_path /tmp/res --query_file ./rand_float_10D_10K_norm1.0.bin --gt_file ./l2_rand_float_10D_10K_norm1.0_self_gt100 --recall_at 5 -L 5 10 -W 2 --num_nodes_to_cache 10 -T 16
     - name: build and search disk index (sharded graph build, MIPS, diskPQ) 
       run: |   
         ${{ env.diskann_built_tests }}/build_disk_index --data_type float --dist_fn mips --data_path ./rand_float_10D_10K_norm1.0.bin --index_path_prefix ./disk_index_mips_rand_float_10D_10K_norm1.0_diskpq_sharded -R 16 -L 32 -B 0.00003 -M 0.00006 --PQ_disk_bytes 5
-        ${{ env.diskann_built_tests }}/search_disk_index --data_type float --dist_fn l2 --index_path_prefix ./disk_index_mips_rand_float_10D_10K_norm1.0_diskpq_sharded --result_path /tmp/res --query_file ./rand_float_10D_10K_norm1.0.bin --gt_file ./mips_rand_float_10D_10K_norm1.0_self_gt100 --recall_at 5 -L 10 12 14 16 -W 2 --num_nodes_to_cache 10 -T 16
+        ${{ env.diskann_built_tests }}/search_disk_index --data_type float --dist_fn l2 --index_path_prefix ./disk_index_mips_rand_float_10D_10K_norm1.0_diskpq_sharded --result_path /tmp/res --query_file ./rand_float_10D_10K_norm1.0.bin --gt_file ./mips_rand_float_10D_10K_norm1.0_self_gt100 --recall_at 5 -L 5 10 -W 2 --num_nodes_to_cache 10 -T 16
     - name:  build and search an incremental index
       run: |
         ${{ env.diskann_built_tests }}/test_insert_deletes_consolidate --data_type float --dist_fn l2 --data_path rand_float_10D_10K_norm1.0.bin --index_path_prefix index_ins_del -R 64 -L 300 --alpha 1.2 -T 8 --points_to_skip 0 --max_points_to_insert 7500 --beginning_index_size 0 --points_per_checkpoint 1000 --checkpoints_per_snapshot 0 --points_to_delete_from_beginning 2500 --start_deletes_after 5000 --do_concurrent true --start_point_norm 3.2;
@@ -130,15 +130,15 @@ jobs:
     - name: build and search disk index (one shot graph build, L2, no diskPQ) 
       run: |   
         ${{ env.diskann_built_tests }}/build_disk_index --data_type int8 --dist_fn l2 --data_path ./rand_int8_10D_10K_norm50.0.bin --index_path_prefix ./disk_index_l2_rand_int8_10D_10K_norm50.0_diskfull_oneshot -R 16 -L 32 -B 0.00003 -M 1 
-        ${{ env.diskann_built_tests }}/search_disk_index --data_type int8 --dist_fn l2 --index_path_prefix ./disk_index_l2_rand_int8_10D_10K_norm50.0_diskfull_oneshot --result_path /tmp/res --query_file ./rand_int8_10D_10K_norm50.0.bin --gt_file ./l2_rand_int8_10D_10K_norm50.0_self_gt100 --recall_at 5 -L 10 12 14 16 -W 2 --num_nodes_to_cache 10 -T 16
+        ${{ env.diskann_built_tests }}/search_disk_index --data_type int8 --dist_fn l2 --index_path_prefix ./disk_index_l2_rand_int8_10D_10K_norm50.0_diskfull_oneshot --result_path /tmp/res --query_file ./rand_int8_10D_10K_norm50.0.bin --gt_file ./l2_rand_int8_10D_10K_norm50.0_self_gt100 --recall_at 5 -L 5 10 -W 2 --num_nodes_to_cache 10 -T 16
     - name: build and search disk index (sharded graph build, L2, no diskPQ) 
       run: |   
         ${{ env.diskann_built_tests }}/build_disk_index --data_type int8 --dist_fn l2 --data_path ./rand_int8_10D_10K_norm50.0.bin --index_path_prefix ./disk_index_l2_rand_int8_10D_10K_norm50.0_diskfull_sharded -R 16 -L 32 -B 0.00003 -M 0.00006
-        ${{ env.diskann_built_tests }}/search_disk_index --data_type int8 --dist_fn l2 --index_path_prefix ./disk_index_l2_rand_int8_10D_10K_norm50.0_diskfull_sharded --result_path /tmp/res --query_file ./rand_int8_10D_10K_norm50.0.bin --gt_file ./l2_rand_int8_10D_10K_norm50.0_self_gt100 --recall_at 5 -L 10 12 14 16 -W 2 --num_nodes_to_cache 10 -T 16
+        ${{ env.diskann_built_tests }}/search_disk_index --data_type int8 --dist_fn l2 --index_path_prefix ./disk_index_l2_rand_int8_10D_10K_norm50.0_diskfull_sharded --result_path /tmp/res --query_file ./rand_int8_10D_10K_norm50.0.bin --gt_file ./l2_rand_int8_10D_10K_norm50.0_self_gt100 --recall_at 5 -L 5 10 -W 2 --num_nodes_to_cache 10 -T 16
     - name: build and search disk index (one shot graph build, L2, diskPQ) 
       run: |   
         ${{ env.diskann_built_tests }}/build_disk_index --data_type int8 --dist_fn l2 --data_path ./rand_int8_10D_10K_norm50.0.bin --index_path_prefix ./disk_index_l2_rand_int8_10D_10K_norm50.0_diskpq_oneshot -R 16 -L 32 -B 0.00003 -M 1 --PQ_disk_bytes 5
-        ${{ env.diskann_built_tests }}/search_disk_index --data_type int8 --dist_fn l2 --index_path_prefix ./disk_index_l2_rand_int8_10D_10K_norm50.0_diskpq_oneshot --result_path /tmp/res --query_file ./rand_int8_10D_10K_norm50.0.bin --gt_file ./l2_rand_int8_10D_10K_norm50.0_self_gt100 --recall_at 5 -L 10 12 14 16 -W 2 --num_nodes_to_cache 10 -T 16
+        ${{ env.diskann_built_tests }}/search_disk_index --data_type int8 --dist_fn l2 --index_path_prefix ./disk_index_l2_rand_int8_10D_10K_norm50.0_diskpq_oneshot --result_path /tmp/res --query_file ./rand_int8_10D_10K_norm50.0.bin --gt_file ./l2_rand_int8_10D_10K_norm50.0_self_gt100 --recall_at 5 -L 5 10 -W 2 --num_nodes_to_cache 10 -T 16
     - name:  build and search an incremental index
       run: |
         ${{ env.diskann_built_tests }}/test_insert_deletes_consolidate --data_type int8 --dist_fn l2 --data_path rand_int8_10D_10K_norm50.0.bin --index_path_prefix index_ins_del -R 64 -L 300 --alpha 1.2 -T 8 --points_to_skip 0 --max_points_to_insert 7500 --beginning_index_size 0 --points_per_checkpoint 1000 --checkpoints_per_snapshot 0 --points_to_delete_from_beginning 2500 --start_deletes_after 5000 --do_concurrent true --start_point_norm 200;
@@ -168,15 +168,15 @@ jobs:
     - name: build and search disk index (one shot graph build, L2, no diskPQ) 
       run: |   
         ${{ env.diskann_built_tests }}/build_disk_index --data_type uint8 --dist_fn l2 --data_path ./rand_uint8_10D_10K_norm50.0.bin --index_path_prefix ./disk_index_l2_rand_uint8_10D_10K_norm50.0_diskfull_oneshot -R 16 -L 32 -B 0.00003 -M 1 
-        ${{ env.diskann_built_tests }}/search_disk_index --data_type uint8 --dist_fn l2 --index_path_prefix ./disk_index_l2_rand_uint8_10D_10K_norm50.0_diskfull_oneshot --result_path /tmp/res --query_file ./rand_uint8_10D_10K_norm50.0.bin --gt_file ./l2_rand_uint8_10D_10K_norm50.0_self_gt100 --recall_at 5 -L 10 12 14 16 -W 2 --num_nodes_to_cache 10 -T 16
+        ${{ env.diskann_built_tests }}/search_disk_index --data_type uint8 --dist_fn l2 --index_path_prefix ./disk_index_l2_rand_uint8_10D_10K_norm50.0_diskfull_oneshot --result_path /tmp/res --query_file ./rand_uint8_10D_10K_norm50.0.bin --gt_file ./l2_rand_uint8_10D_10K_norm50.0_self_gt100 --recall_at 5 -L 5 10 -W 2 --num_nodes_to_cache 10 -T 16
     - name: build and search disk index (sharded graph build, L2, no diskPQ) 
       run: |   
         ${{ env.diskann_built_tests }}/build_disk_index --data_type uint8 --dist_fn l2 --data_path ./rand_uint8_10D_10K_norm50.0.bin --index_path_prefix ./disk_index_l2_rand_uint8_10D_10K_norm50.0_diskfull_sharded -R 16 -L 32 -B 0.00003 -M 0.00006
-        ${{ env.diskann_built_tests }}/search_disk_index --data_type uint8 --dist_fn l2 --index_path_prefix ./disk_index_l2_rand_uint8_10D_10K_norm50.0_diskfull_sharded --result_path /tmp/res --query_file ./rand_uint8_10D_10K_norm50.0.bin --gt_file ./l2_rand_uint8_10D_10K_norm50.0_self_gt100 --recall_at 5 -L 10 12 14 16 -W 2 --num_nodes_to_cache 10 -T 16
+        ${{ env.diskann_built_tests }}/search_disk_index --data_type uint8 --dist_fn l2 --index_path_prefix ./disk_index_l2_rand_uint8_10D_10K_norm50.0_diskfull_sharded --result_path /tmp/res --query_file ./rand_uint8_10D_10K_norm50.0.bin --gt_file ./l2_rand_uint8_10D_10K_norm50.0_self_gt100 --recall_at 5 -L 5 10 -W 2 --num_nodes_to_cache 10 -T 16
     - name: build and search disk index (one shot graph build, L2, diskPQ) 
       run: |   
         ${{ env.diskann_built_tests }}/build_disk_index --data_type uint8 --dist_fn l2 --data_path ./rand_uint8_10D_10K_norm50.0.bin --index_path_prefix ./disk_index_l2_rand_uint8_10D_10K_norm50.0_diskpq_oneshot -R 16 -L 32 -B 0.00003 -M 1 --PQ_disk_bytes 5
-        ${{ env.diskann_built_tests }}/search_disk_index --data_type uint8 --dist_fn l2 --index_path_prefix ./disk_index_l2_rand_uint8_10D_10K_norm50.0_diskpq_oneshot --result_path /tmp/res --query_file ./rand_uint8_10D_10K_norm50.0.bin --gt_file ./l2_rand_uint8_10D_10K_norm50.0_self_gt100 --recall_at 5 -L 10 12 14 16 -W 2 --num_nodes_to_cache 10 -T 16
+        ${{ env.diskann_built_tests }}/search_disk_index --data_type uint8 --dist_fn l2 --index_path_prefix ./disk_index_l2_rand_uint8_10D_10K_norm50.0_diskpq_oneshot --result_path /tmp/res --query_file ./rand_uint8_10D_10K_norm50.0.bin --gt_file ./l2_rand_uint8_10D_10K_norm50.0_self_gt100 --recall_at 5 -L 5 10 -W 2 --num_nodes_to_cache 10 -T 16
     - name:  build and search an incremental index
       run: |
         ${{ env.diskann_built_tests }}/test_insert_deletes_consolidate --data_type uint8 --dist_fn l2 --data_path rand_uint8_10D_10K_norm50.0.bin --index_path_prefix index_ins_del -R 64 -L 300 --alpha 1.2 -T 8 --points_to_skip 0 --max_points_to_insert 7500 --beginning_index_size 0 --points_per_checkpoint 1000 --checkpoints_per_snapshot 0 --points_to_delete_from_beginning 2500 --start_deletes_after 5000 --do_concurrent true --start_point_norm 200;
