@@ -1,6 +1,8 @@
 # DiskANN
 
-The goal of the project is to build scalable, performant, streaming and cost-effective approximate nearest neighbor search algorithms for trillion-scale vector search.
+[![DiskANN Pull Request Build and Test](https://github.com/microsoft/DiskANN/actions/workflows/pr-test.yml/badge.svg)](https://github.com/microsoft/DiskANN/actions/workflows/pr-test.yml)
+
+The goal of the project is to build scalable, performant, streaming and cost-effective approximate nearest neighbor search algorithms for large-scale vector search.
 This release has the code from the [DiskANN paper](https://papers.nips.cc/paper/9527-rand-nsg-fast-accurate-billion-point-nearest-neighbor-search-on-a-single-node.pdf) published in NeurIPS 2019, 
 the [streaming DiskANN paper](https://arxiv.org/abs/2105.09613) and improvements. 
 This code reuses and builds upon some of the [code for NSG](https://github.com/ZJULearning/nsg) algorithm.
