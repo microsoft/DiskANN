@@ -22,10 +22,11 @@ namespace po = boost::program_options;
 
 template<typename T, typename TagT = uint32_t>
 int build_in_memory_index(const diskann::Metric& metric,
-                          const std::string& data_path, const unsigned R,
-                          const unsigned L, const float alpha,
-                          const std::string& save_path,
-                          const unsigned     num_threads) {
+                          const std::string& data_path,
+                          const std::string& sample_query_path,
+                          const unsigned R, const unsigned L,
+                          const float alpha, const std::string& save_path,
+                          const unsigned num_threads) {
   diskann::Parameters paras;
   paras.Set<unsigned>("R", R);
   paras.Set<unsigned>("L", L);
@@ -35,12 +36,14 @@ int build_in_memory_index(const diskann::Metric& metric,
   paras.Set<bool>("saturate_graph", 0);
   paras.Set<unsigned>("num_threads", num_threads);
 
-  _u64 data_num, data_dim;
+  _u64 data_num, data_dim, query_num, query_dim;
   diskann::get_bin_metadata(data_path, data_num, data_dim);
+  diskann::get_bin_metadata(sample_query_path, query_num, query_dim);
 
-  diskann::Index<T, TagT> index(metric, data_dim, data_num, false, false);
+  diskann::Index<T, TagT> index(metric, data_dim, data_num, query_num, false,
+                                false);
   auto                    s = std::chrono::high_resolution_clock::now();
-  index.build(data_path.c_str(), data_num, paras);
+  index.build(data_path.c_str(), sample_query_path.c_str(), data_num, paras);
 
   std::chrono::duration<double> diff =
       std::chrono::high_resolution_clock::now() - s;
@@ -52,7 +55,8 @@ int build_in_memory_index(const diskann::Metric& metric,
 }
 
 int main(int argc, char** argv) {
-  std::string data_type, dist_fn, data_path, index_path_prefix;
+  std::string data_type, dist_fn, data_path, sample_query_path,
+      index_path_prefix;
   unsigned    num_threads, R, L;
   float       alpha;
 
@@ -66,6 +70,9 @@ int main(int argc, char** argv) {
                        "distance function <l2/mips>");
     desc.add_options()("data_path",
                        po::value<std::string>(&data_path)->required(),
+                       "Input data file in bin format");
+    desc.add_options()("sample_query_path",
+                       po::value<std::string>(&sample_query_path)->required(),
                        "Input data file in bin format");
     desc.add_options()("index_path_prefix",
                        po::value<std::string>(&index_path_prefix)->required(),
@@ -117,14 +124,17 @@ int main(int argc, char** argv) {
                   << "  alpha: " << alpha << "  #threads: " << num_threads
                   << std::endl;
     if (data_type == std::string("int8"))
-      return build_in_memory_index<int8_t>(metric, data_path, R, L, alpha,
+      return build_in_memory_index<int8_t>(metric, data_path,
+                                           sample_query_path, R, L, alpha,
                                            index_path_prefix, num_threads);
     else if (data_type == std::string("uint8"))
-      return build_in_memory_index<uint8_t>(metric, data_path, R, L, alpha,
+      return build_in_memory_index<uint8_t>(metric, data_path,
+                                            sample_query_path, R, L, alpha,
                                             index_path_prefix, num_threads);
     else if (data_type == std::string("float"))
-      return build_in_memory_index<float>(metric, data_path, R, L, alpha,
-                                          index_path_prefix, num_threads);
+      return build_in_memory_index<float>(metric, data_path, sample_query_path,
+                                          R, L, alpha, index_path_prefix,
+                                          num_threads);
     else {
       std::cout << "Unsupported type. Use one of int8, uint8 or float."
                 << std::endl;

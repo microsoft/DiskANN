@@ -115,6 +115,7 @@ namespace diskann {
     // for loading a prexisting index.
     DISKANN_DLLEXPORT Index(Metric m, const size_t dim,
                             const size_t max_points = 1,
+                            const size_t max_query_points = 0,
                             const bool   dynamic_index = false,
                             const bool   enable_tags = false,
                             const bool   support_eager_delete = false,
@@ -122,6 +123,7 @@ namespace diskann {
 
     // Constructor for incremental index
     DISKANN_DLLEXPORT Index(Metric m, const size_t dim, const size_t max_points,
+                            const size_t      max_query_points,
                             const bool        dynamic_index,
                             const Parameters &indexParameters,
                             const Parameters &searchParameters,
@@ -145,12 +147,13 @@ namespace diskann {
 
     // Batch build from a file. Optionally pass tags vector.
     DISKANN_DLLEXPORT void build(
-        const char *filename, const size_t num_points_to_load,
-        Parameters &             parameters,
+        const char *filename, const char *query_filename,
+        const size_t num_points_to_load, Parameters &parameters,
         const std::vector<TagT> &tags = std::vector<TagT>());
 
     // Batch build from a file. Optionally pass tags file.
     DISKANN_DLLEXPORT void build(const char * filename,
+                                 const char * query_filename,
                                  const size_t num_points_to_load,
                                  Parameters & parameters,
                                  const char * tag_filename);
@@ -278,7 +281,7 @@ namespace diskann {
         std::vector<Neighbor> &best_L_nodes, std::vector<unsigned> &des,
         tsl::robin_set<unsigned> &inserted_into_pool_rs,
         boost::dynamic_bitset<> &inserted_into_pool_bs, bool ret_frozen = true,
-        bool search_invocation = false);
+        bool search_invocation = false, bool is_target = false);
 
     void get_expanded_nodes(const size_t node, const unsigned Lindex,
                             std::vector<unsigned>     init_ids,
@@ -297,15 +300,17 @@ namespace diskann {
                             tsl::robin_set<unsigned> &expanded_nodes_ids);
 
     void prune_neighbors(const unsigned location, std::vector<Neighbor> &pool,
-                         std::vector<unsigned> &pruned_list);
+                         std::vector<unsigned> &pruned_list,
+                         const bool primary_graph = true);
 
     void prune_neighbors(const unsigned location, std::vector<Neighbor> &pool,
                          const _u32 range, const _u32 max_candidate_size,
-                         const float alpha, std::vector<unsigned> &pruned_list);
+                         const float alpha, std::vector<unsigned> &pruned_list,
+                         const bool primary_graph);
 
     void occlude_list(std::vector<Neighbor> &pool, const float alpha,
                       const unsigned degree, const unsigned maxc,
-                      std::vector<Neighbor> &result);
+                      std::vector<Neighbor> &result, bool is_target = false);
 
     // add reverse links from all the visited nodes to node n.
     void batch_inter_insert(unsigned                     n,
@@ -371,17 +376,22 @@ namespace diskann {
 
     // Data
     T *   _data = nullptr;
+    T *   _query_data = nullptr;
     char *_opt_graph;
 
     // Graph related data structures
     std::vector<std::vector<unsigned>> _final_graph;
     std::vector<std::vector<unsigned>> _in_graph;
 
+    // Storing index for stitching
+    std::vector<unsigned> _robust_index;
+
     // Dimensions
     size_t _dim = 0;
     size_t _aligned_dim = 0;
     size_t _nd = 0;  // number of active points i.e. existing in the graph
     size_t _max_points = 0;  // total number of points in given data set
+    size_t _max_query_points = 0;  // total number of points in query data set
     size_t _num_frozen_pts = 0;
     size_t _max_range_of_loaded_graph = 0;
     size_t _node_size;
@@ -389,6 +399,7 @@ namespace diskann {
     size_t _neighbor_len;
 
     unsigned _max_observed_degree = 0;
+    unsigned _max_query_observed_degree = 0;
     unsigned _start = 0;
 
     bool _has_built = false;
@@ -397,6 +408,7 @@ namespace diskann {
     bool _dynamic_index = false;
     bool _enable_tags = false;
     bool _normalize_vecs = false;  // Using normalied L2 for cosine.
+    bool _save_robust_stitch_index = false;
 
     // Indexing parameters
     uint32_t _indexingQueueSize;

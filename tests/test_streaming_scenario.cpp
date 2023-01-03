@@ -234,7 +234,7 @@ void build_incremental_index(const std::string& data_path, const unsigned L,
   }
 
   diskann::Index<T, TagT> index(
-      diskann::L2, dim, active_window + 4 * consolidate_interval, true, params,
+      diskann::L2, dim, active_window + 4 * consolidate_interval, 0, true, params,
       params, enable_tags, support_eager_delete, true);
   index.set_start_point_at_random(static_cast<T>(start_point_norm));
   index.enable_delete();

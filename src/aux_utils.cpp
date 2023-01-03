@@ -419,9 +419,9 @@ namespace diskann {
     }
 
     size_t vamana_metadata_size =
-        sizeof(_u64) + sizeof(_u32) + sizeof(_u32) +
-        sizeof(_u64);  // expected file size + max degree + medoid_id +
-                       // frozen_point info
+        sizeof(_u64) + sizeof(_u32) + sizeof(_u32) + sizeof(_u32) +
+        sizeof(_u64); // expected file size + max degree + query max degree
+                      // medoid_id + frozen_point info
 
     // create cached vamana writers
     cached_ofstream merged_vamana_writer(output_vamana,
@@ -436,18 +436,23 @@ namespace diskann {
         sizeof(uint64_t));  // we will overwrite the index size at the end
 
     unsigned output_width = max_degree;
-    unsigned max_input_width = 0;
+    unsigned max_input_width = 0, max_query_width = 0;
     // read width from each vamana to advance buffer by sizeof(unsigned) bytes
     for (auto &reader : vamana_readers) {
-      unsigned input_width;
+      unsigned input_width, query_width;
       reader.read((char *) &input_width, sizeof(unsigned));
+      reader.read((char *) &query_width, sizeof(unsigned));
       max_input_width =
           input_width > max_input_width ? input_width : max_input_width;
+      max_query_width =
+          query_width > max_query_width ? query_width : max_query_width;
     }
 
     diskann::cout << "Max input width: " << max_input_width
+                  << ", max query width: " << max_query_width
                   << ", output width: " << output_width << std::endl;
 
+    merged_vamana_writer.write((char *) &output_width, sizeof(unsigned));
     merged_vamana_writer.write((char *) &output_width, sizeof(unsigned));
     std::ofstream medoid_writer(medoids_file.c_str(), std::ios::binary);
     _u32          nshards_u32 = (_u32) nshards;
@@ -485,14 +490,16 @@ namespace diskann {
     std::vector<bool>     nhood_set(nnodes, 0);
     std::vector<unsigned> final_nhood;
 
-    unsigned nnbrs = 0, shard_nnbrs = 0;
+    unsigned nnbrs = 0, shard_nnbrs = 0, robust_index_read = 0,
+             unique_index = 0;
     unsigned cur_id = 0;
     for (const auto &id_shard : node_shard) {
       unsigned node_id = id_shard.first;
       unsigned shard_id = id_shard.second;
       if (cur_id < node_id) {
         // Gopal. random_shuffle() is deprecated.
-        std::shuffle(final_nhood.begin(), final_nhood.end(), urng);
+        std::shuffle(final_nhood.begin() + unique_index, final_nhood.end(),
+                     urng);
         nnbrs =
             (unsigned) (std::min)(final_nhood.size(), (uint64_t) max_degree);
         // write into merged ofstream
@@ -504,6 +511,7 @@ namespace diskann {
           diskann::cout << "." << std::flush;
         }
         cur_id = node_id;
+        unique_index = 0;
         nnbrs = 0;
         for (auto &p : final_nhood)
           nhood_set[p] = 0;
@@ -511,6 +519,8 @@ namespace diskann {
       }
       // read from shard_id ifstream
       vamana_readers[shard_id].read((char *) &shard_nnbrs, sizeof(unsigned));
+      vamana_readers[shard_id].read((char *) &robust_index_read,
+                                    sizeof(unsigned));
       std::vector<unsigned> shard_nhood(shard_nnbrs);
       vamana_readers[shard_id].read((char *) shard_nhood.data(),
                                     shard_nnbrs * sizeof(unsigned));
@@ -519,13 +529,19 @@ namespace diskann {
       for (_u64 j = 0; j < shard_nnbrs; j++) {
         if (nhood_set[idmaps[shard_id][shard_nhood[j]]] == 0) {
           nhood_set[idmaps[shard_id][shard_nhood[j]]] = 1;
-          final_nhood.emplace_back(idmaps[shard_id][shard_nhood[j]]);
+          if (j < robust_index_read) {
+            final_nhood.emplace_back(idmaps[shard_id][shard_nhood[j]]);
+          } else {
+            final_nhood.insert(final_nhood.begin(),
+                               idmaps[shard_id][shard_nhood[j]]);
+            unique_index += 1;
+          }
         }
       }
     }
 
     // Gopal. random_shuffle() is deprecated.
-    std::shuffle(final_nhood.begin(), final_nhood.end(), urng);
+    std::shuffle(final_nhood.begin() + unique_index, final_nhood.end(), urng);
     nnbrs = (unsigned) (std::min)(final_nhood.size(), (uint64_t) max_degree);
     // write into merged ofstream
     merged_vamana_writer.write((char *) &nnbrs, sizeof(unsigned));
@@ -547,13 +563,16 @@ namespace diskann {
 
   template<typename T>
   int build_merged_vamana_index(std::string     base_file,
+                                std::string     sample_query_file,
                                 diskann::Metric compareMetric, unsigned L,
                                 unsigned R, double sampling_rate,
                                 double ram_budget, std::string mem_index_path,
                                 std::string medoids_file,
                                 std::string centroids_file) {
     size_t base_num, base_dim;
+    size_t query_num, query_dim;
     diskann::get_bin_metadata(base_file, base_num, base_dim);
+    diskann::get_bin_metadata(sample_query_file, query_num, query_dim);
 
     double full_index_ram =
         estimate_ram_usage(base_num, base_dim, sizeof(T), R);
@@ -568,12 +587,14 @@ namespace diskann {
       paras.Set<float>("alpha", 1.2f);
       paras.Set<unsigned>("num_rnds", 2);
       paras.Set<bool>("saturate_graph", 1);
+      paras.Set<bool>("save_robust_stitch_index", 0);
       paras.Set<std::string>("save_path", mem_index_path);
 
       std::unique_ptr<diskann::Index<T>> _pvamanaIndex =
           std::unique_ptr<diskann::Index<T>>(new diskann::Index<T>(
-              compareMetric, base_dim, base_num, false, false));
-      _pvamanaIndex->build(base_file.c_str(), base_num, paras);
+              compareMetric, base_dim, base_num, query_num, false, false));
+      _pvamanaIndex->build(base_file.c_str(), sample_query_file.c_str(),
+                           base_num, paras);
 
       _pvamanaIndex->save(mem_index_path.c_str());
       std::remove(medoids_file.c_str());
@@ -581,9 +602,11 @@ namespace diskann {
       return 0;
     }
     std::string merged_index_prefix = mem_index_path + "_tempFiles";
-    int         num_parts =
-        partition_with_ram_budget<T>(base_file, sampling_rate, ram_budget,
-                                     2 * R / 3, merged_index_prefix, 2);
+    std::string merged_sample_query_prefix =
+        mem_index_path + "_querySampleTempFiles";
+    int num_parts = partition_with_ram_budget<T>(
+        base_file, sample_query_file, sampling_rate, ram_budget, 2 * R / 3,
+        merged_index_prefix, merged_sample_query_prefix, 2, false);
 
     std::string cur_centroid_filepath = merged_index_prefix + "_centroids.bin";
     std::rename(cur_centroid_filepath.c_str(), centroids_file.c_str());
@@ -591,6 +614,17 @@ namespace diskann {
     for (int p = 0; p < num_parts; p++) {
       std::string shard_base_file =
           merged_index_prefix + "_subshard-" + std::to_string(p) + ".bin";
+      std::string shard_sample_query_file = merged_sample_query_prefix +
+                                            "_subshard-" + std::to_string(p) +
+                                            ".bin";
+      std::string shard_sample_query_id_file =
+          merged_sample_query_prefix + "_subshard-" + std::to_string(p) +
+          "_ids_uint32.bin";
+      if (file_exists(sample_query_file)) {
+        retrieve_shard_data_from_ids<T>(sample_query_file,
+                                        shard_sample_query_id_file,
+                                        shard_sample_query_file);
+      }
 
       std::string shard_ids_file = merged_index_prefix + "_subshard-" +
                                    std::to_string(p) + "_ids_uint32.bin";
@@ -608,17 +642,26 @@ namespace diskann {
       paras.Set<float>("alpha", 1.2f);
       paras.Set<unsigned>("num_rnds", 2);
       paras.Set<bool>("saturate_graph", 0);
+      paras.Set<bool>("save_robust_stitch_index", 1);
       paras.Set<std::string>("save_path", shard_index_file);
 
       _u64 shard_base_dim, shard_base_pts;
+      _u64 shard_query_dim, shard_query_pts;
       get_bin_metadata(shard_base_file, shard_base_pts, shard_base_dim);
+      get_bin_metadata(
+          shard_sample_query_file, shard_query_pts, shard_query_dim);
+      std::cout << "Building with " << shard_base_file << " base file and "
+                << shard_sample_query_file << " query file..." << std::endl;
       std::unique_ptr<diskann::Index<T>> _pvamanaIndex =
           std::unique_ptr<diskann::Index<T>>(
               new diskann::Index<T>(compareMetric, shard_base_dim,
-                                    shard_base_pts, false));  // TODO: Single?
-      _pvamanaIndex->build(shard_base_file.c_str(), shard_base_pts, paras);
+                                    shard_base_pts, shard_query_pts, false));  // TODO: Single?
+      _pvamanaIndex->build(
+          shard_base_file.c_str(), shard_sample_query_file.c_str(),
+          shard_base_pts, paras);
       _pvamanaIndex->save(shard_index_file.c_str());
       std::remove(shard_base_file.c_str());
+      std::remove(shard_sample_query_file.c_str());
     }
 
     diskann::merge_shards(merged_index_prefix + "_subshard-", "_mem.index",
@@ -629,14 +672,22 @@ namespace diskann {
     for (int p = 0; p < num_parts; p++) {
       std::string shard_base_file =
           merged_index_prefix + "_subshard-" + std::to_string(p) + ".bin";
+      std::string shard_sample_query_file = merged_sample_query_prefix +
+                                            "_subshard-" + std::to_string(p) +
+                                            ".bin";
       std::string shard_id_file = merged_index_prefix + "_subshard-" +
                                   std::to_string(p) + "_ids_uint32.bin";
+      std::string shard_sample_query_id_file =
+          merged_sample_query_prefix + "_subshard-" + std::to_string(p) +
+          "_ids_uint32.bin";
       std::string shard_index_file =
           merged_index_prefix + "_subshard-" + std::to_string(p) + "_mem.index";
       std::string shard_index_file_data = shard_index_file + ".data";
 
       std::remove(shard_base_file.c_str());
+      std::remove(shard_sample_query_file.c_str());
       std::remove(shard_id_file.c_str());
+      std::remove(shard_sample_query_id_file.c_str());
       std::remove(shard_index_file.c_str());
       std::remove(shard_index_file_data.c_str());
     }
@@ -755,7 +806,7 @@ namespace diskann {
     cached_ofstream diskann_writer(output_file, write_blk_size);
 
     // metadata: width, medoid
-    unsigned width_u32, medoid_u32;
+    unsigned width_u32, query_width_u32, medoid_u32;
     size_t   index_file_size;
 
     vamana_reader.read((char *) &index_file_size, sizeof(uint64_t));
@@ -772,6 +823,7 @@ namespace diskann {
     _u64 vamana_frozen_num = false, vamana_frozen_loc = 0;
 
     vamana_reader.read((char *) &width_u32, sizeof(unsigned));
+    vamana_reader.read((char *) &query_width_u32, sizeof(unsigned));
     vamana_reader.read((char *) &medoid_u32, sizeof(unsigned));
     vamana_reader.read((char *) &vamana_frozen_num, sizeof(_u64));
     // compute
@@ -917,7 +969,9 @@ namespace diskann {
   }
 
   template<typename T>
-  int build_disk_index(const char *dataFilePath, const char *indexFilePath,
+  int build_disk_index(const char *dataFilePath,
+                       const char *sampleQueryFilePath,
+                       const char *indexFilePath,
                        const char *    indexBuildParameters,
                        diskann::Metric compareMetric) {
     std::stringstream parser;
@@ -973,6 +1027,7 @@ namespace diskann {
     }
 
     std::string base_file(dataFilePath);
+    std::string sample_query_file(sampleQueryFilePath);
     std::string data_file_to_use = base_file;
     std::string index_prefix_path(indexFilePath);
     std::string pq_pivots_path = index_prefix_path + "_pq_pivots.bin";
@@ -1106,8 +1161,9 @@ namespace diskann {
 #endif
 
     diskann::build_merged_vamana_index<T>(
-        data_file_to_use.c_str(), diskann::Metric::L2, L, R, p_val,
-        indexing_ram_budget, mem_index_path, medoids_path, centroids_path);
+        data_file_to_use.c_str(), sample_query_file.c_str(),
+        diskann::Metric::L2, L, R, p_val, indexing_ram_budget, mem_index_path,
+        medoids_path, centroids_path);
 
     if (!use_disk_pq) {
       diskann::create_disk_layout<T>(data_file_to_use.c_str(), mem_index_path,
@@ -1190,28 +1246,31 @@ namespace diskann {
       uint32_t start_bw);
 
   template DISKANN_DLLEXPORT int build_disk_index<int8_t>(
-      const char *dataFilePath, const char *indexFilePath,
-      const char *indexBuildParameters, diskann::Metric compareMetric);
+      const char *dataFilePath, const char *sampleQueryFilePath,
+      const char *indexFilePath, const char *indexBuildParameters,
+      diskann::Metric compareMetric);
   template DISKANN_DLLEXPORT int build_disk_index<uint8_t>(
-      const char *dataFilePath, const char *indexFilePath,
-      const char *indexBuildParameters, diskann::Metric compareMetric);
+      const char *dataFilePath, const char *sampleQueryFilePath,
+      const char *indexFilePath, const char *indexBuildParameters,
+      diskann::Metric compareMetric);
   template DISKANN_DLLEXPORT int build_disk_index<float>(
-      const char *dataFilePath, const char *indexFilePath,
-      const char *indexBuildParameters, diskann::Metric compareMetric);
+      const char *dataFilePath, const char *sampleQueryFilePath,
+      const char *indexFilePath, const char *indexBuildParameters,
+      diskann::Metric compareMetric);
 
   template DISKANN_DLLEXPORT int build_merged_vamana_index<int8_t>(
-      std::string base_file, diskann::Metric compareMetric, unsigned L,
-      unsigned R, double sampling_rate, double ram_budget,
-      std::string mem_index_path, std::string medoids_path,
-      std::string centroids_file);
+      std::string base_file, std::string sample_query_file,
+      diskann::Metric compareMetric, unsigned L, unsigned R,
+      double sampling_rate, double ram_budget, std::string mem_index_path,
+      std::string medoids_path, std::string centroids_file);
   template DISKANN_DLLEXPORT int build_merged_vamana_index<float>(
-      std::string base_file, diskann::Metric compareMetric, unsigned L,
-      unsigned R, double sampling_rate, double ram_budget,
-      std::string mem_index_path, std::string medoids_path,
-      std::string centroids_file);
+      std::string base_file, std::string sample_query_file,
+      diskann::Metric compareMetric, unsigned L, unsigned R,
+      double sampling_rate, double ram_budget, std::string mem_index_path,
+      std::string medoids_path, std::string centroids_file);
   template DISKANN_DLLEXPORT int build_merged_vamana_index<uint8_t>(
-      std::string base_file, diskann::Metric compareMetric, unsigned L,
-      unsigned R, double sampling_rate, double ram_budget,
-      std::string mem_index_path, std::string medoids_path,
-      std::string centroids_file);
+      std::string base_file, std::string sample_query_file,
+      diskann::Metric compareMetric, unsigned L, unsigned R,
+      double sampling_rate, double ram_budget, std::string mem_index_path,
+      std::string medoids_path, std::string centroids_file);
 };  // namespace diskann

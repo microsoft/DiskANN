@@ -19,9 +19,9 @@
 #include "memory_mapper.h"
 
 int main(int argc, char** argv) {
-  if (argc != 10) {
+  if (argc != 11) {
     std::cout << "Correct usage: " << argv[0]
-              << " data_file L R C alpha num_rounds "
+              << " data_file sample_query_file L R C alpha num_rounds "
               << "save_graph_file #incr_points #frozen_points" << std::endl;
     exit(-1);
   }
@@ -32,14 +32,14 @@ int main(int argc, char** argv) {
   diskann::load_aligned_bin<float>(argv[1], data_load, num_points, dim,
                                    aligned_dim);
 
-  unsigned    L = (unsigned) atoi(argv[2]);
-  unsigned    R = (unsigned) atoi(argv[3]);
-  unsigned    C = (unsigned) atoi(argv[4]);
-  float       alpha = (float) std::atof(argv[5]);
-  unsigned    num_rnds = (unsigned) std::atoi(argv[6]);
-  std::string save_path(argv[7]);
-  unsigned    num_incr = (unsigned) atoi(argv[8]);
-  unsigned    num_frozen = (unsigned) atoi(argv[9]);
+  unsigned    L = (unsigned) atoi(argv[3]);
+  unsigned    R = (unsigned) atoi(argv[4]);
+  unsigned    C = (unsigned) atoi(argv[5]);
+  float       alpha = (float) std::atof(argv[6]);
+  unsigned    num_rnds = (unsigned) std::atoi(argv[7]);
+  std::string save_path(argv[8]);
+  unsigned    num_incr = (unsigned) atoi(argv[9]);
+  unsigned    num_frozen = (unsigned) atoi(argv[10]);
 
   diskann::Parameters paras;
   paras.Set<unsigned>("L", L);
@@ -50,15 +50,15 @@ int main(int argc, char** argv) {
   paras.Set<unsigned>("num_rnds", num_rnds);
 
   typedef int                 TagT;
-  diskann::Index<float, TagT> index(diskann::L2, argv[1], num_points,
+  diskann::Index<float, TagT> index(diskann::L2, argv[1], argv[2], num_points,
                                     num_points - num_incr, num_frozen, true,
                                     true, true);
   {
     std::vector<TagT> tags(num_points - num_incr);
     std::iota(tags.begin(), tags.end(), 0);
 
-    if (argc > 10) {
-      std::string frozen_points_file(argv[10]);
+    if (argc > 11) {
+      std::string frozen_points_file(argv[11]);
       index.generate_random_frozen_points(frozen_points_file.c_str());
     } else
       index.generate_random_frozen_points();

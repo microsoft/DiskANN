@@ -915,6 +915,102 @@ int retrieve_shard_data_from_ids(const std::string data_file,
   return 0;
 }
 
+template<typename T>
+int shard_data_into_groups(const std::string data_file,
+                           const size_t num_centers, const size_t dim,
+                           const size_t k_base, std::string prefix_path) {
+  _u64 read_blk_size = 64 * 1024 * 1024;
+  //  _u64 write_blk_size = 64 * 1024 * 1024;
+  // create cached reader + writer
+  cached_ifstream base_reader(data_file, read_blk_size);
+  _u32            npts32;
+  _u32            basedim32;
+  base_reader.read((char *) &npts32, sizeof(uint32_t));
+  base_reader.read((char *) &basedim32, sizeof(uint32_t));
+  size_t num_points = npts32;
+  if (basedim32 != dim) {
+    diskann::cout << "Error. dimensions dont match for train set and base set"
+                  << std::endl;
+    return -1;
+  }
+
+  std::unique_ptr<size_t[]> shard_counts =
+      std::make_unique<size_t[]>(num_centers);
+  std::vector<std::ofstream> shard_data_writer(num_centers);
+  std::vector<std::ofstream> shard_idmap_writer(num_centers);
+  _u32                       dummy_size = 0;
+  _u32                       const_one = 1;
+
+  for (size_t i = 0; i < num_centers; i++) {
+    std::string data_filename =
+        prefix_path + "_subshard-" + std::to_string(i) + ".bin";
+    std::string idmap_filename =
+        prefix_path + "_subshard-" + std::to_string(i) + "_ids_uint32.bin";
+    shard_data_writer[i] =
+        std::ofstream(data_filename.c_str(), std::ios::binary);
+    shard_idmap_writer[i] =
+        std::ofstream(idmap_filename.c_str(), std::ios::binary);
+    shard_data_writer[i].write((char *) &dummy_size, sizeof(uint32_t));
+    shard_data_writer[i].write((char *) &basedim32, sizeof(uint32_t));
+    shard_idmap_writer[i].write((char *) &dummy_size, sizeof(uint32_t));
+    shard_idmap_writer[i].write((char *) &const_one, sizeof(uint32_t));
+    shard_counts[i] = 0;
+  }
+
+  size_t block_size = num_points <= BLOCK_SIZE ? num_points : BLOCK_SIZE;
+  std::unique_ptr<T[]> block_data_T = std::make_unique<T[]>(block_size * dim);
+
+  size_t num_blocks = DIV_ROUND_UP(num_points, block_size);
+
+  for (size_t block = 0; block < num_blocks; block++) {
+    size_t start_id = block * block_size;
+    size_t end_id = (std::min)((block + 1) * block_size, num_points);
+    size_t cur_blk_size = end_id - start_id;
+
+    base_reader.read((char *) block_data_T.get(),
+                     sizeof(T) * (cur_blk_size * dim));
+
+    for (size_t p = 0; p < cur_blk_size; p++) {
+      unsigned base_id;
+      base_id = (p + (block * block_size)) / (num_points / num_centers);
+      for (size_t p1 = 0; p1 < k_base; p1++) {
+        size_t shard_id;
+        if (base_id + p1 >= num_centers) {
+          shard_id = (base_id + p1) % num_centers;
+        } else {
+          shard_id = base_id + p1;
+        }
+        uint32_t original_point_map_id = (uint32_t)(start_id + p);
+        shard_data_writer[shard_id].write(
+            (char *) (block_data_T.get() + p * dim), sizeof(T) * dim);
+        shard_idmap_writer[shard_id].write((char *) &original_point_map_id,
+                                           sizeof(uint32_t));
+        shard_counts[shard_id]++;
+      }
+    }
+  }
+
+  size_t total_count = 0;
+  diskann::cout << "Actual shard sizes: " << std::flush;
+  for (size_t i = 0; i < num_centers; i++) {
+    _u32 cur_shard_count = (_u32) shard_counts[i];
+    total_count += cur_shard_count;
+    diskann::cout << cur_shard_count << " ";
+    shard_data_writer[i].seekp(0);
+    shard_data_writer[i].write((char *) &cur_shard_count, sizeof(uint32_t));
+    shard_data_writer[i].close();
+    shard_idmap_writer[i].seekp(0);
+    shard_idmap_writer[i].write((char *) &cur_shard_count, sizeof(uint32_t));
+    shard_idmap_writer[i].close();
+  }
+
+  diskann::cout << "\n Partitioned " << num_points
+                << " with replication factor " << k_base << " to get "
+                << total_count << " points across " << num_centers << " shards "
+                << std::endl;
+  return 0;
+}
+
 // partitions a large base file into many shards using k-means hueristic
 // on a random sample generated using sampling_rate probability. After this, it
 // assignes each base point to the closest k_base nearest centers and creates
@@ -969,9 +1065,12 @@ int partition(const std::string data_file, const float sampling_rate,
 
 template<typename T>
 int partition_with_ram_budget(const std::string data_file,
+                              const std::string sample_query_file,
                               const double sampling_rate, double ram_budget,
-                              size_t            graph_degree,
-                              const std::string prefix_path, size_t k_base) {
+                              size_t graph_degree,
+                              const std::string prefix_path,
+                              const std::string sample_query_prefix_path,
+                              size_t k_base, bool same_as_base) {
   size_t train_dim;
   size_t num_train;
   float *train_data_float;
@@ -1048,6 +1147,15 @@ int partition_with_ram_budget(const std::string data_file,
 
   shard_data_into_clusters_only_ids<T>(data_file, pivot_data, num_parts,
                                        train_dim, k_base, prefix_path);
+  if (file_exists(std::string(sample_query_file))) {
+    if (same_as_base) {
+      shard_data_into_clusters<T>(sample_query_file, pivot_data, num_parts,
+                                  train_dim, k_base, sample_query_prefix_path);
+    } else {
+      shard_data_into_groups<T>(sample_query_file, num_parts, train_dim, k_base,
+                                sample_query_prefix_path);
+    }
+  }
   delete[] pivot_data;
   delete[] train_data_float;
   delete[] test_data_float;
@@ -1097,14 +1205,20 @@ template DISKANN_DLLEXPORT int partition<float>(
     size_t max_k_means_reps, const std::string prefix_path, size_t k_base);
 
 template DISKANN_DLLEXPORT int partition_with_ram_budget<int8_t>(
-    const std::string data_file, const double sampling_rate, double ram_budget,
-    size_t graph_degree, const std::string prefix_path, size_t k_base);
+    const std::string data_file, const std::string sample_query_file,
+    const double sampling_rate, double ram_budget, size_t graph_degree,
+    const std::string prefix_path, const std::string sample_query_prefix_path,
+    size_t k_base, bool same_as_base);
 template DISKANN_DLLEXPORT int partition_with_ram_budget<uint8_t>(
-    const std::string data_file, const double sampling_rate, double ram_budget,
-    size_t graph_degree, const std::string prefix_path, size_t k_base);
+    const std::string data_file, const std::string sample_query_file,
+    const double sampling_rate, double ram_budget, size_t graph_degree,
+    const std::string prefix_path, const std::string sample_query_prefix_path,
+    size_t k_base, bool same_as_base);
 template DISKANN_DLLEXPORT int partition_with_ram_budget<float>(
-    const std::string data_file, const double sampling_rate, double ram_budget,
-    size_t graph_degree, const std::string prefix_path, size_t k_base);
+    const std::string data_file, const std::string sample_query_file,
+    const double sampling_rate, double ram_budget, size_t graph_degree,
+    const std::string prefix_path, const std::string sample_query_prefix_path,
+    size_t k_base, bool same_as_base);
 
 template DISKANN_DLLEXPORT int retrieve_shard_data_from_ids<float>(
     const std::string data_file, std::string idmap_filename,

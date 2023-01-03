@@ -13,7 +13,8 @@
 namespace po = boost::program_options;
 
 int main(int argc, char** argv) {
-  std::string data_type, dist_fn, data_path, index_path_prefix;
+  std::string data_type, dist_fn, data_path, sample_query_path,
+      index_path_prefix;
   unsigned    num_threads, R, L, disk_PQ;
   float       B, M;
   bool        append_reorder_data = false;
@@ -28,6 +29,9 @@ int main(int argc, char** argv) {
                        "distance function <l2/mips>");
     desc.add_options()("data_path",
                        po::value<std::string>(&data_path)->required(),
+                       "Input data file in bin format");
+    desc.add_options()("sample_query_path",
+                       po::value<std::string>(&sample_query_path)->required(),
                        "Input data file in bin format");
     desc.add_options()("index_path_prefix",
                        po::value<std::string>(&index_path_prefix)->required(),
@@ -108,13 +112,16 @@ int main(int argc, char** argv) {
   try {
     if (data_type == std::string("int8"))
       return diskann::build_disk_index<int8_t>(
-          data_path.c_str(), index_path_prefix.c_str(), params.c_str(), metric);
+          data_path.c_str(), sample_query_path.c_str(),
+          index_path_prefix.c_str(), params.c_str(), metric);
     else if (data_type == std::string("uint8"))
       return diskann::build_disk_index<uint8_t>(
-          data_path.c_str(), index_path_prefix.c_str(), params.c_str(), metric);
+          data_path.c_str(), sample_query_path.c_str(),
+          index_path_prefix.c_str(), params.c_str(), metric);
     else if (data_type == std::string("float"))
       return diskann::build_disk_index<float>(
-          data_path.c_str(), index_path_prefix.c_str(), params.c_str(), metric);
+          data_path.c_str(), sample_query_path.c_str(),
+          index_path_prefix.c_str(), params.c_str(), metric);
     else {
       diskann::cerr << "Error. Unsupported data type" << std::endl;
       return -1;
