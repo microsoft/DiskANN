@@ -28,7 +28,7 @@ namespace diskann {
     web::json::value prepareResponse(const int64_t& queryId, const int k);
 
     template<class T>
-    void parseJson(const utility::string_t& body, int& k, int64_t& queryId,
+    void parseJson(const utility::string_t& body, unsigned int& k, int64_t& queryId,
                    T*& queryVector, unsigned int& dimensions, unsigned& Ls);
 
     web::json::value idsToJsonArray(const diskann::SearchResult& result);
