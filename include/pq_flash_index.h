@@ -2,12 +2,7 @@
 // Licensed under the MIT license.
 
 #pragma once
-#include <cassert>
-#include <sstream>
-#include <stack>
-#include <string>
-#include "tsl/robin_map.h"
-#include "tsl/robin_set.h"
+#include "common_includes.h"
 
 #include "aligned_file_reader.h"
 #include "concurrent_queue.h"
@@ -18,6 +13,9 @@
 #include "utils.h"
 #include "windows_customizations.h"
 #include "scratch.h"
+#include "tsl/robin_map.h"
+#include "tsl/robin_set.h"
+
 
 #define FULL_PRECISION_REORDER_MULTIPLIER 3
 

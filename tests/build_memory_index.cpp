@@ -1,11 +1,11 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT license.
 
-#include <index.h>
 #include <omp.h>
-#include <string.h>
+#include <cstring>
 #include <boost/program_options.hpp>
 
+#include "index.h"
 #include "utils.h"
 
 #ifndef _WINDOWS

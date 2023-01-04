@@ -21,5 +21,14 @@ namespace diskann {
                  _clock::now() - check_point)
           .count();
     }
+
+    float elapsed_seconds() const {
+      return (float) elapsed() / 1000000.0;
+    }
+
+    std::string elapsed_seconds_for_step(const std::string& step) const {
+      return std::string("Time for ") + step + std::string(": ") +
+             std::to_string(elapsed_seconds()) + std::string(" seconds");
+    }
   };
 }  // namespace diskann

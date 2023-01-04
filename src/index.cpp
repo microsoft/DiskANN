@@ -3,23 +3,14 @@
 
 #include <type_traits>
 #include <omp.h>
-#include <shared_mutex>
-#include "common_includes.h"
 
 #include "tsl/robin_set.h"
 #include "tsl/robin_map.h"
 #include "boost/dynamic_bitset.hpp"
 
-#include "logger.h"
-#include "exceptions.h"
-#include "aligned_file_reader.h"
-#include "math_utils.h"
 #include "memory_mapper.h"
-#include "parameters.h"
 #include "timer.h"
-#include "utils.h"
 #include "windows_customizations.h"
-#include "ann_exception.h"
 #if defined(RELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS) && \
     defined(DISKANN_BUILD)
 #include "gperftools/malloc_extension.h"

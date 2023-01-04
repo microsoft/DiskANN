@@ -1,14 +1,7 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT license.
 
-#include <algorithm>
-#include <atomic>
-#include <cassert>
-#include <fstream>
-#include <iostream>
-#include <set>
-#include <string>
-#include <vector>
+#include "common_includes.h"
 
 #if defined(RELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS) && \
     defined(DISKANN_BUILD)
@@ -24,6 +17,7 @@
 #include "percentile_stats.h"
 #include "partition.h"
 #include "pq_flash_index.h"
+#include "timer.h"
 #include "tsl/robin_set.h"
 
 namespace diskann {
@@ -462,13 +456,18 @@ namespace diskann {
       return 0;
     }
     std::string merged_index_prefix = mem_index_path + "_tempFiles";
+
+    Timer timer;
     int         num_parts =
         partition_with_ram_budget<T>(base_file, sampling_rate, ram_budget,
                                      2 * R / 3, merged_index_prefix, 2);
+    diskann::cout << timer.elapsed_seconds_for_step("partitioning data")
+                  << std::endl;
 
     std::string cur_centroid_filepath = merged_index_prefix + "_centroids.bin";
     std::rename(cur_centroid_filepath.c_str(), centroids_file.c_str());
 
+    timer.reset();
     for (int p = 0; p < num_parts; p++) {
       std::string shard_base_file =
           merged_index_prefix + "_subshard-" + std::to_string(p) + ".bin";
@@ -501,10 +500,13 @@ namespace diskann {
       _pvamanaIndex->save(shard_index_file.c_str());
       std::remove(shard_base_file.c_str());
     }
+    diskann::cout << timer.elapsed_seconds_for_step("building indices on shards") << std::endl;
 
+    timer.reset();
     diskann::merge_shards(merged_index_prefix + "_subshard-", "_mem.index",
                           merged_index_prefix + "_subshard-", "_ids_uint32.bin",
                           num_parts, R, mem_index_path, medoids_file);
+   diskann::cout << timer.elapsed_seconds_for_step("merging indices") << std::endl;
 
     // delete tempFiles
     for (int p = 0; p < num_parts; p++) {
@@ -881,6 +883,7 @@ namespace diskann {
     // ||x||^2/M^2) for every x, M is max norm of all points. Extra space on
     // disk needed!
     if (compareMetric == diskann::Metric::INNER_PRODUCT) {
+      Timer timer;
       std::cout << "Using Inner Product search, so need to pre-process base "
                    "data into temp file. Please ensure there is additional "
                    "(n*(d+1)*4) bytes for storing pre-processed base vectors, "
@@ -892,6 +895,9 @@ namespace diskann {
           diskann::prepare_base_for_inner_products<T>(base_file, prepped_base);
       std::string norm_file = disk_index_path + "_max_base_norm.bin";
       diskann::save_bin<float>(norm_file, &max_norm_of_base, 1, 1);
+      diskann::cout << timer.elapsed_seconds_for_step(
+                           "preprocessing data for inner product")
+                    << std::endl;
     }
 
     unsigned R = (unsigned) atoi(param_list[0].c_str());
@@ -926,6 +932,7 @@ namespace diskann {
 
     size_t points_num, dim;
 
+    Timer timer;
     diskann::get_bin_metadata(data_file_to_use.c_str(), points_num, dim);
     const double p_val =
         ((double) MAX_PQ_TRAINING_SET_SIZE / (double) points_num);
@@ -949,6 +956,7 @@ namespace diskann {
     generate_quantized_data<T>(data_file_to_use, pq_pivots_path,
                                pq_compressed_vectors_path, compareMetric, p_val,
                                num_pq_chunks, use_opq);
+    diskann::cout << timer.elapsed_seconds_for_step("generating quantized data") << std::endl;
 
 // Gopal. Splitting diskann_dll into separate DLLs for search and build.
 // This code should only be available in the "build" DLL.
@@ -957,11 +965,16 @@ namespace diskann {
     MallocExtension::instance()->ReleaseFreeMemory();
 #endif
 
+    timer.reset();
     diskann::build_merged_vamana_index<T>(
         data_file_to_use.c_str(), diskann::Metric::L2, L, R, p_val,
         indexing_ram_budget, mem_index_path, medoids_path, centroids_path,
         build_pq_bytes, use_opq);
+    diskann::cout << timer.elapsed_seconds_for_step(
+                         "building merged vamana index")
+                  << std::endl;
 
+    timer.reset();
     if (!use_disk_pq) {
       diskann::create_disk_layout<T>(data_file_to_use.c_str(), mem_index_path,
                                      disk_index_path);
@@ -974,6 +987,8 @@ namespace diskann {
                                          mem_index_path, disk_index_path,
                                          data_file_to_use.c_str());
     }
+    diskann::cout << timer.elapsed_seconds_for_step("generating disk layout")
+                  << std::endl;
 
     double ten_percent_points = std::ceil(points_num * 0.1);
     double num_sample_points = ten_percent_points > MAX_SAMPLE_POINTS_FOR_WARMUP

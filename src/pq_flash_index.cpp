@@ -1,25 +1,12 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT license.
 
-#include "logger.h"
-#include "pq_flash_index.h"
-#include <malloc.h>
-#include "percentile_stats.h"
 
-#include <omp.h>
-#include <atomic>
-#include <chrono>
-#include <cmath>
-#include <iterator>
-#include <thread>
-#include "distance.h"
-#include "exceptions.h"
-#include "parameters.h"
+#include "common_includes.h"
+
 #include "timer.h"
-#include "utils.h"
-
+#include "pq_flash_index.h"
 #include "cosine_similarity.h"
-#include "tsl/robin_set.h"
 
 #ifdef _WINDOWS
 #include "windows_aligned_file_reader.h"
