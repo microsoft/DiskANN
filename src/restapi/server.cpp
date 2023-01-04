@@ -102,7 +102,7 @@ namespace diskann {
     message.extract_string(true)
         .then([=](utility::string_t body) {
           int64_t queryId = -1;
-          int     K = 0;
+          unsigned int     K = 0;
           try {
             T*           queryVector = nullptr;
             unsigned int dimensions = 0;
@@ -165,7 +165,7 @@ namespace diskann {
   }
 
   template<class T>
-  void Server::parseJson(const utility::string_t& body, int& k,
+  void Server::parseJson(const utility::string_t& body, unsigned int& k,
                          int64_t& queryId, T*& queryVector,
                          unsigned int& dimensions, unsigned& Ls) {
     std::cout << body << std::endl;
