@@ -22,6 +22,7 @@
 #define GRAPH_SLACK_FACTOR 1.3
 #define OVERHEAD_FACTOR 1.1
 #define EXPAND_IF_FULL 0
+#define DEFAULT_MAXC 750
 
 namespace diskann {
   inline double estimate_ram_usage(_u64 size, _u32 dim, _u32 datasize,

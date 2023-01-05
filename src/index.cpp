@@ -59,7 +59,7 @@ namespace diskann {
         _dynamic_index(dynamic_index), _enable_tags(enable_tags),
         _conc_consolidate(concurrent_consolidate), _query_scratch(nullptr),
         _pq_dist(pq_dist_build), _num_pq_chunks(num_pq_chunks),
-        _use_opq(use_opq) {
+        _use_opq(use_opq), _indexingMaxC(DEFAULT_MAXC) {
     if (dynamic_index && !enable_tags) {
       throw ANNException("ERROR: Dynamic Indexing must have tags enabled.", -1,
                          __FUNCSIG__, __FILE__, __LINE__);
