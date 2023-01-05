@@ -1,22 +1,15 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT license.
 
-#include <atomic>
-#include <cstring>
-#include <iomanip>
-#include <omp.h>
-#include <pq_flash_index.h>
-#include <set>
-#include <string.h>
-#include <time.h>
+#include "common_includes.h"
 #include <boost/program_options.hpp>
 
 #include "index.h"
-#include "utils.h"
 #include "disk_utils.h"
 #include "math_utils.h"
 #include "memory_mapper.h"
 #include "partition.h"
+#include "pq_flash_index.h"
 #include "timer.h"
 #include "percentile_stats.h"
 

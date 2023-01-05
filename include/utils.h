@@ -2,23 +2,10 @@
 // Licensed under the MIT license.
 
 #pragma once
-#include <fcntl.h>
-#include <algorithm>
 #include <errno.h>
 
-#include <cassert>
-#include <cstdlib>
-#include <cstring>
-#include <fstream>
-#include <iostream>
-#include <limits.h>
+#include "common_includes.h"
 
-#include <string>
-#include <memory>
-#include <random>
-#include <set>
-#include <sstream>
-#include <string.h>
 #ifdef __APPLE__
 #else
 #include <malloc.h>
@@ -36,7 +23,6 @@ typedef int FileHandle;
 #include "logger.h"
 #include "cached_io.h"
 #include "ann_exception.h"
-#include "common_includes.h"
 #include "windows_customizations.h"
 #include "tsl/robin_set.h"
 

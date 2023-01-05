@@ -13,7 +13,8 @@ namespace diskann {
   template<typename T>
   InMemQueryScratch<T>::InMemQueryScratch(uint32_t search_l,
                                           uint32_t indexing_l, uint32_t r,
-                                          size_t dim)
+                                          uint32_t maxc, size_t dim,
+                                          bool init_pq_scratch)
       : search_l(search_l), indexing_l(indexing_l), r(r) {
     if (search_l == 0 || indexing_l == 0 || r == 0 || dim == 0) {
       std::stringstream ss;
@@ -35,12 +36,19 @@ namespace diskann {
 
     auto l_to_use = std::max(search_l, indexing_l);
 
-    _des.reserve(2 * r);
     _pool.reserve(l_to_use * 10);
     _visited.reserve(l_to_use * 2);
     _best_l_nodes.resize(l_to_use + 1);
     _inserted_into_pool_rs.reserve(l_to_use * 20);
     _inserted_into_pool_bs = new boost::dynamic_bitset<>();
+    _id_scratch.reserve(2 * r);
+    _dist_scratch = new float[std::max(2 * r, maxc)];
+    _occlude_factor.reserve(maxc);
+
+    if (init_pq_scratch)
+      _pq_scratch = new PQScratch<T>(MAX_GRAPH_DEGREE, aligned_dim);
+    else
+      _pq_scratch = nullptr;
   }
 
   template<typename T>
@@ -49,9 +57,10 @@ namespace diskann {
     memset(_interim_dists, 0, sizeof(float) * search_l);
     _pool.clear();
     _visited.clear();
-    _des.clear();
     _inserted_into_pool_rs.clear();
     _inserted_into_pool_bs->reset();
+    _id_scratch.clear();
+    _occlude_factor.clear();
   }
 
   template<typename T>
@@ -76,10 +85,13 @@ namespace diskann {
 
     delete[] _indices;
     delete[] _interim_dists;
+    delete[] _dist_scratch;
 
     if (_aligned_query != nullptr) {
       aligned_free(_aligned_query);
     }
+
+    delete _pq_scratch;
   }
 
   //

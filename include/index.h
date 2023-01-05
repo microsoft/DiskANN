@@ -3,11 +3,7 @@
 
 #pragma once
 
-#include <atomic>
-#include <cassert>
-#include <shared_mutex>
-#include <sstream>
-#include <string>
+#include "common_includes.h"
 
 #ifdef EXEC_ENV_OLS
 #include "aligned_file_reader.h"
@@ -26,6 +22,7 @@
 #define GRAPH_SLACK_FACTOR 1.3
 #define OVERHEAD_FACTOR 1.1
 #define EXPAND_IF_FULL 0
+#define DEFAULT_MAXC 750
 
 namespace diskann {
   inline double estimate_ram_usage(_u64 size, _u32 dim, _u32 datasize,
@@ -72,7 +69,10 @@ namespace diskann {
                             const size_t max_points = 1,
                             const bool   dynamic_index = false,
                             const bool   enable_tags = false,
-                            const bool   concurrent_consolidate = false);
+                            const bool   concurrent_consolidate = false,
+                            const bool   pq_dist_build = false,
+                            const size_t num_pq_chunks = 0,
+                            const bool   use_opq = false);
 
     // Constructor for incremental index
     DISKANN_DLLEXPORT Index(Metric m, const size_t dim, const size_t max_points,
@@ -80,7 +80,10 @@ namespace diskann {
                             const Parameters &indexParameters,
                             const Parameters &searchParameters,
                             const bool        enable_tags = false,
-                            const bool        concurrent_consolidate = false);
+                            const bool        concurrent_consolidate = false,
+                            const bool        pq_dist_build = false,
+                            const size_t      num_pq_chunks = 0,
+                            const bool        use_opq = false);
 
     DISKANN_DLLEXPORT ~Index();
 
@@ -226,21 +229,25 @@ namespace diskann {
                                         InMemQueryScratch<T> *scratch);
 
     void prune_neighbors(const unsigned location, std::vector<Neighbor> &pool,
-                         std::vector<unsigned> &pruned_list);
+                         std::vector<unsigned> &pruned_list,
+                         InMemQueryScratch<T>  *scratch);
 
     void prune_neighbors(const unsigned location, std::vector<Neighbor> &pool,
                          const _u32 range, const _u32 max_candidate_size,
-                         const float alpha, std::vector<unsigned> &pruned_list);
+                         const float alpha, std::vector<unsigned> &pruned_list,
+                         InMemQueryScratch<T> *scratch);
 
     void occlude_list(std::vector<Neighbor> &pool, const float alpha,
                       const unsigned degree, const unsigned maxc,
-                      std::vector<Neighbor> &result);
+                      std::vector<Neighbor> &result,
+                      InMemQueryScratch<T>  *scratch);
 
     // add reverse links from all the visited nodes to node n.
     void inter_insert(unsigned n, std::vector<unsigned> &pruned_list,
-                      const _u32 range);
+                      const _u32 range, InMemQueryScratch<T> *scratch);
 
-    void inter_insert(unsigned n, std::vector<unsigned> &pruned_list);
+    void inter_insert(unsigned n, std::vector<unsigned> &pruned_list,
+                      InMemQueryScratch<T> *scratch);
 
     void link(Parameters &parameters);
 
@@ -265,10 +272,11 @@ namespace diskann {
     // deleted neighbors Acquire _locks[i] prior to calling for thread-safety
     void process_delete(const tsl::robin_set<unsigned> &old_delete_set,
                         size_t i, const unsigned &range, const unsigned &maxc,
-                        const float &alpha);
+                        const float &alpha, InMemQueryScratch<T> *scratch);
 
     void initialize_query_scratch(uint32_t num_threads, uint32_t search_l,
-                                  uint32_t indexing_l, uint32_t r, size_t dim);
+                                  uint32_t indexing_l, uint32_t r,
+                                  uint32_t maxc, size_t dim);
 
     // Do not call without acquiring appropriate locks
     // call public member functions save and load to invoke these.
@@ -339,6 +347,14 @@ namespace diskann {
 
     tsl::robin_set<unsigned>     _delete_set;
     natural_number_set<unsigned> _empty_slots;
+
+    // Flags for PQ based distance calculation
+    bool              _pq_dist = false;
+    bool              _use_opq = false;
+    size_t            _num_pq_chunks = 0;
+    _u8              *_pq_data = nullptr;
+    bool              _pq_generated = false;
+    FixedChunkPQTable _pq_table;
 
     bool _lazy_done = false;      // true if lazy deletions have been made
     bool _data_compacted = true;  // true if data has been compacted
