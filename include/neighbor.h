@@ -13,11 +13,12 @@ namespace diskann {
   struct Neighbor {
     unsigned id;
     float    distance;
-    bool     flag;
+    bool     checked;
 
     Neighbor() = default;
-    Neighbor(unsigned id, float distance, bool f)
-        : id{id}, distance{distance}, flag(f) {
+
+    Neighbor(unsigned id, float distance)
+        : id{id}, distance{distance}, checked(false) {
     }
 
     inline bool operator<(const Neighbor &other) const {
@@ -30,40 +31,99 @@ namespace diskann {
     }
   };
 
-  static inline unsigned InsertIntoPool(Neighbor *addr, unsigned K,
-                                        Neighbor nn) {
-    // find the location to insert
-    unsigned left = 0, right = K - 1;
-    if (nn < addr[left]) {
-      memmove((char *) &addr[left + 1], &addr[left], K * sizeof(Neighbor));
-      addr[left] = nn;
-      return left;
-    }
-    if (addr[right] < nn) {
-      addr[K] = nn;
-      return K;
-    }
-    while (right > 1 && left < right - 1) {
-      unsigned mid = (left + right) / 2;
-      if (nn < addr[mid])
-        right = mid;
-      else
-        left = mid;
-    }
-    // check equal ID
+  // Invariant: after every `insert` and `pop`, `cur_` points to
+  //            the first Neighbor which is unchecked.
+  class NeighborSet {
+   public:
 
-    while (left > 0) {
-      if (addr[left] < nn)
-        break;
-      if (addr[left].id == nn.id)
-        return K + 1;
-      left--;
+    NeighborSet() : size_(0), capacity_(0), cur_(0) {
     }
-    if (addr[left].id == nn.id || addr[right].id == nn.id)
-      return K + 1;
-    memmove((char *) &addr[right + 1], &addr[right],
-            (K - right) * sizeof(Neighbor));
-    addr[right] = nn;
-    return right;
-  }
+
+    explicit NeighborSet(size_t capacity)
+        : size_(0), capacity_(capacity), cur_(0), data_(capacity_ + 1) {
+    }
+    
+    // Inserts the item ordered into the set up to the sets capacity.
+    // The item will be dropped if it is the same id as an exiting 
+    // set item or it has a greated distance than the final
+    // item in the set. The set cursor that is used to pop() the 
+    // next item will be set to the lowest index of an uncheck item 
+    void insert(const Neighbor &nbr) {
+      if (size_ == capacity_ && data_[size_ - 1] < nbr) {
+        return;
+      }
+
+      int lo = 0, hi = size_;
+      while (lo < hi) {
+        int mid = (lo + hi) >> 1;
+        if (nbr < data_[mid]) {
+          hi = mid;
+          // Make sure the same id isn't inserted into the set
+        } else if (data_[mid].id == nbr.id) { 
+          return;
+        } else {
+          lo = mid + 1;
+        }
+      }
+
+      if (lo < capacity_) {
+        std::memmove(&data_[lo + 1], &data_[lo],
+                     (size_ - lo) * sizeof(Neighbor));
+      }
+      data_[lo] = {nbr.id, nbr.distance};
+      if (size_ < capacity_) {
+        size_++;
+      }
+      if (lo < cur_) {
+        cur_ = lo;
+      }
+    }
+
+    Neighbor pop() {
+      data_[cur_].checked = true;
+      size_t pre = cur_;
+      while (cur_ < size_ && data_[cur_].checked) {
+        cur_++;
+      }
+      return data_[pre];
+    }
+
+    
+    bool has_next() const {
+      return cur_ < size_;
+    }
+
+    size_t size() const {
+      return size_;
+    }
+
+    size_t capacity() const {
+      return capacity_;
+    }
+
+    void reserve(size_t capacity) {
+      if (capacity + 1 > data_.size()) {
+        data_.resize(capacity + 1);
+      }
+      capacity_ = capacity;
+    }
+
+    Neighbor &operator[](size_t i) {
+      return data_[i];
+    }
+
+    Neighbor operator[](size_t i) const {
+      return data_[i];
+    }
+
+    void clear() {
+      size_ = 0;
+      cur_ = 0;
+    }
+
+   private:
+    size_t size_, capacity_, cur_;
+    std::vector<Neighbor> data_;
+  };
+
 }  // namespace diskann
