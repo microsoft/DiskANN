@@ -45,7 +45,7 @@ jobs:
           TWINE_USERNAME: ${{ secrets.PYPI_USERNAME }}
           TWINE_PASSWORD: ${{ secrets.PYPI_PASSWORD }}
         run: |
-          twine upload --repository testpypi wheelhouse/*.whl
+          twine upload wheelhouse/*.whl
       - name: Update release with SHA256 and Artifacts
         uses: softprops/action-gh-release@v1
         with:
