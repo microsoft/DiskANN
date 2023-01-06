@@ -707,8 +707,8 @@ namespace diskann {
       const T *query, const unsigned Lsize,
       const std::vector<unsigned> &init_ids, InMemQueryScratch<T> *scratch,
       bool ret_frozen, bool search_invocation) {
-    std::vector<Neighbor>    &expanded_nodes = scratch->pool();
-    NeighborSet           &best_L_nodes = scratch->best_l_nodes();
+    std::vector<Neighbor> &expanded_nodes = scratch->pool();
+    NeighborPriorityQueue &best_L_nodes = scratch->best_l_nodes();
     best_L_nodes.reserve(Lsize);
     tsl::robin_set<unsigned> &inserted_into_pool_rs =
         scratch->inserted_into_pool_rs();
@@ -812,15 +812,13 @@ namespace diskann {
         Neighbor nn = Neighbor(id, distance);
         best_L_nodes.insert(nn);
       }
-      if (best_L_nodes.size() == Lsize)
-        break;
     }
 
     uint32_t hops = 0;
     uint32_t cmps = 0;
 
-    while (best_L_nodes.has_next()) {
-      auto nbr = best_L_nodes.pop();   
+    while (best_L_nodes.has_unexpanded_node()) {
+      auto nbr = best_L_nodes.closest_unexpanded();   
       auto n = nbr.id;
       // Add node to expanded nodes to create pool for prune later
       if (!search_invocation &&
@@ -852,7 +850,7 @@ namespace diskann {
         }
       }
 
-      // Compute to distances to the expanded, previously unvisted nodes
+      // Compute distances to unvisited nodes in the expansion
       if (_pq_dist) {
         compute_dists(id_scratch.data(), id_scratch.size(), dist_scratch);
 
@@ -2312,7 +2310,7 @@ namespace diskann {
                                                     unsigned *indices) {
     DistanceFastL2<T> *dist_fast = (DistanceFastL2<T> *) _distance;
 
-    NeighborSet           retset(L);
+    NeighborPriorityQueue retset(L);
     std::vector<unsigned> init_ids(L);
 
     boost::dynamic_bitset<> flags{_nd, 0};
@@ -2357,8 +2355,8 @@ namespace diskann {
       L++;
     }
 
-    while (retset.has_next()) {
-      auto nbr = retset.pop();
+    while (retset.has_unexpanded_node()) {
+      auto nbr = retset.closest_unexpanded();
       auto n = nbr.id;
       _mm_prefetch(_opt_graph + _node_size * n + _data_len, _MM_HINT_T0);
       unsigned *neighbors =

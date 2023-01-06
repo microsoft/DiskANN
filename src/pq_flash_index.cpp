@@ -806,7 +806,7 @@ namespace diskann {
     Timer query_timer, io_timer, cpu_timer;
 
     tsl::robin_set<_u64> &visited = query_scratch->visited;
-    NeighborSet          &retset = query_scratch->retset;
+    NeighborPriorityQueue &retset = query_scratch->retset;
     retset.reserve(l_search);
     std::vector<Neighbor> &full_retset = query_scratch->full_retset;
 
@@ -842,7 +842,7 @@ namespace diskann {
         cached_nhoods;
     cached_nhoods.reserve(2 * beam_width);
 
-    while (retset.has_next() && num_ios < io_limit) {
+    while (retset.has_unexpanded_node() && num_ios < io_limit) {
       // clear iteration state
       frontier.clear();
       frontier_nhoods.clear();
@@ -851,9 +851,9 @@ namespace diskann {
       sector_scratch_idx = 0;
       // find new beam
       _u32 num_seen = 0;
-      while (retset.has_next() && frontier.size() < beam_width &&
+      while (retset.has_unexpanded_node() && frontier.size() < beam_width &&
              num_seen < beam_width) {
-        auto nbr = retset.pop();
+        auto nbr = retset.closest_unexpanded();
         num_seen++;
         auto iter = nhood_cache.find(nbr.id);
         if (iter != nhood_cache.end()) {

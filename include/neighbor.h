@@ -13,12 +13,12 @@ namespace diskann {
   struct Neighbor {
     unsigned id;
     float    distance;
-    bool     checked;
+    bool     expanded;
 
     Neighbor() = default;
 
     Neighbor(unsigned id, float distance)
-        : id{id}, distance{distance}, checked(false) {
+        : id{id}, distance{distance}, expanded(false) {
     }
 
     inline bool operator<(const Neighbor &other) const {
@@ -31,16 +31,16 @@ namespace diskann {
     }
   };
 
-  // Invariant: after every `insert` and `pop`, `cur_` points to
-  //            the first Neighbor which is unchecked.
-  class NeighborSet {
+  // Invariant: after every `insert` and `closest_unexpanded()`, `_cur` points to
+  //            the first Neighbor which is unexpanded.
+  class NeighborPriorityQueue {
    public:
 
-    NeighborSet() : size_(0), capacity_(0), cur_(0) {
+    NeighborPriorityQueue() : _size(0), _capacity(0), _cur(0) {
     }
 
-    explicit NeighborSet(size_t capacity)
-        : size_(0), capacity_(capacity), cur_(0), data_(capacity_ + 1) {
+    explicit NeighborPriorityQueue(size_t capacity)
+        : _size(0), _capacity(capacity), _cur(0), _data(capacity + 1) {
     }
     
     // Inserts the item ordered into the set up to the sets capacity.
@@ -49,81 +49,80 @@ namespace diskann {
     // item in the set. The set cursor that is used to pop() the 
     // next item will be set to the lowest index of an uncheck item 
     void insert(const Neighbor &nbr) {
-      if (size_ == capacity_ && data_[size_ - 1] < nbr) {
+      if (_size == _capacity && _data[_size - 1] < nbr) {
         return;
       }
 
-      int lo = 0, hi = size_;
+      size_t lo = 0, hi = _size;
       while (lo < hi) {
-        int mid = (lo + hi) >> 1;
-        if (nbr < data_[mid]) {
+        size_t mid = (lo + hi) >> 1;
+        if (nbr < _data[mid]) {
           hi = mid;
           // Make sure the same id isn't inserted into the set
-        } else if (data_[mid].id == nbr.id) { 
+        } else if (_data[mid].id == nbr.id) { 
           return;
         } else {
           lo = mid + 1;
         }
       }
 
-      if (lo < capacity_) {
-        std::memmove(&data_[lo + 1], &data_[lo],
-                     (size_ - lo) * sizeof(Neighbor));
+      if (lo < _capacity) {
+        std::memmove(&_data[lo + 1], &_data[lo],
+                     (_size - lo) * sizeof(Neighbor));
       }
-      data_[lo] = {nbr.id, nbr.distance};
-      if (size_ < capacity_) {
-        size_++;
+      _data[lo] = {nbr.id, nbr.distance};
+      if (_size < _capacity) {
+        _size++;
       }
-      if (lo < cur_) {
-        cur_ = lo;
+      if (lo < _cur) {
+        _cur = lo;
       }
     }
 
-    Neighbor pop() {
-      data_[cur_].checked = true;
-      size_t pre = cur_;
-      while (cur_ < size_ && data_[cur_].checked) {
-        cur_++;
+    Neighbor closest_unexpanded() {
+      _data[_cur].expanded = true;
+      size_t pre = _cur;
+      while (_cur < _size && _data[_cur].expanded) {
+        _cur++;
       }
-      return data_[pre];
+      return _data[pre];
     }
-
     
-    bool has_next() const {
-      return cur_ < size_;
+    bool has_unexpanded_node() const {
+      return _cur < _size;
     }
 
     size_t size() const {
-      return size_;
+      return _size;
     }
 
     size_t capacity() const {
-      return capacity_;
+      return _capacity;
     }
 
     void reserve(size_t capacity) {
-      if (capacity + 1 > data_.size()) {
-        data_.resize(capacity + 1);
+      if (capacity + 1 > _data.size()) {
+        _data.resize(capacity + 1);
       }
-      capacity_ = capacity;
+      _capacity = capacity;
     }
 
     Neighbor &operator[](size_t i) {
-      return data_[i];
+      return _data[i];
     }
 
     Neighbor operator[](size_t i) const {
-      return data_[i];
+      return _data[i];
     }
 
     void clear() {
-      size_ = 0;
-      cur_ = 0;
+      _size = 0;
+      _cur = 0;
     }
 
    private:
-    size_t size_, capacity_, cur_;
-    std::vector<Neighbor> data_;
+    size_t _size, _capacity, _cur;
+    std::vector<Neighbor> _data;
   };
 
 }  // namespace diskann
