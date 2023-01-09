@@ -2427,6 +2427,9 @@ namespace diskann {
                   << timer.elapsed() / 1000000. << "s." << std::endl;
   }
 
+  //
+  // Assumed that the caller holds unique _tag_lock before calling this
+  //
   template<typename T, typename TagT>
   int Index<T, TagT>::reserve_location() {
     if (_nd >= _max_points) {
@@ -2453,6 +2456,9 @@ namespace diskann {
     return location;
   }
 
+  //
+  // Assumed that the caller holds unique _tag_lock before calling this
+  //
   template<typename T, typename TagT>
   size_t Index<T, TagT>::release_location(int location) {
     if (_empty_slots.is_in_set(location))
@@ -2465,6 +2471,9 @@ namespace diskann {
     return _nd;
   }
 
+  //
+  // Assumed that the caller holds unique _tag_lock before calling this
+  //
   template<typename T, typename TagT>
   size_t Index<T, TagT>::release_locations(
       tsl::robin_set<unsigned> &locations) {
