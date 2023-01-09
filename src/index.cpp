@@ -1058,9 +1058,9 @@ namespace diskann {
   void Index<T, TagT>::search_for_point_and_add_links(
       int location, _u32 Lindex, std::vector<Neighbor> &pool,
       tsl::robin_set<unsigned> &visited, std::vector<unsigned> &des,
-      std::vector<Neighbor> &   best_l_nodes,
+      std::vector<Neighbor>    &best_l_nodes,
       tsl::robin_set<unsigned> &inserted_into_pool_rs,
-      boost::dynamic_bitset<> & inserted_into_pool_bs) {
+      boost::dynamic_bitset<>  &inserted_into_pool_bs) {
     std::vector<unsigned> init_ids;
     get_expanded_nodes(location, Lindex, init_ids, pool, visited, des,
                        best_l_nodes, inserted_into_pool_rs,
@@ -1070,10 +1070,6 @@ namespace diskann {
       if (pool[i].id == (unsigned) location) {
         pool.erase(pool.begin() + i);
         visited.erase((unsigned) location);
-        i--;
-      } else if (_delete_set->find(pool[i].id) != _delete_set->end()) {
-        pool.erase(pool.begin() + i);
-        visited.erase((unsigned) pool[i].id);
         i--;
       }
     }
@@ -1106,7 +1102,7 @@ namespace diskann {
       _final_graph[location].clear();
       _final_graph[location].shrink_to_fit();
       _final_graph[location].reserve(
-          (_u64)(_indexingRange * GRAPH_SLACK_FACTOR * 1.05));
+          (_u64) (_indexingRange * GRAPH_SLACK_FACTOR * 1.05));
 
       for (auto link : pruned_list) {
         if (_conc_consolidate)
