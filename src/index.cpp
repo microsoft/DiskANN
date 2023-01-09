@@ -2104,15 +2104,24 @@ namespace diskann {
 
   template<typename T, typename TagT>
   inline void Index<T, TagT>::process_delete(
-      const std::unique_ptr<tsl::robin_set<unsigned>> &old_delete_set, size_t i,
-      const unsigned &range, const unsigned &maxc, const float &alpha) {
-    tsl::robin_set<unsigned> candidate_set;
-    std::vector<Neighbor>    expanded_nghrs;
-    std::vector<Neighbor>    result;
+      const std::unique_ptr<tsl::robin_set<unsigned>> &old_delete_set,
+      size_t loc, const unsigned &range, const unsigned &maxc,
+      const float &alpha, const bool lock_adj_list) {
+    std::vector<Neighbor> expanded_nghrs;
+    std::vector<Neighbor> prunest_list;
 
-    bool modify = false;
+    std::shared_lock<std::shared_timed_mutex> dl(_delete_lock);
 
-    for (auto ngh : _final_graph[(_u32) i]) {
+    // If this is not true, then deadlock could result
+    assert(old_delete_set.find(loc) == old_delete_set.end());
+
+    if (lock_adj_list)
+      _locks[loc].lock();
+
+    bool  modify = false;
+    auto &adj_list = _final_graph[loc];           // create an alias
+    std::sort(adj_list.begin(), adj_list.end());  // To avoid deadlocks
+    for (auto ngh : adj_list) {
       if (old_delete_set->find(ngh) != old_delete_set->end()) {
         modify = true;
 
@@ -2121,36 +2130,37 @@ namespace diskann {
           _locks[ngh].lock();
         for (auto j : _final_graph[ngh])
           if (old_delete_set->find(j) == old_delete_set->end())
-            candidate_set.insert(j);
+            expanded_nghrs.push_back(Neighbor(j, 0, true));
         if (_conc_consolidate)
           _locks[ngh].unlock();
       } else {
-        candidate_set.insert(ngh);
+        expanded_nghrs.push_back(Neighbor(ngh, 0, true));
       }
     }
     if (modify) {
-      for (auto j : candidate_set) {
-        expanded_nghrs.push_back(
-            Neighbor(j,
-                     _distance->compare(_data + _aligned_dim * i,
-                                        _data + _aligned_dim * (size_t) j,
-                                        (unsigned) _aligned_dim),
-                     true));
+      for (size_t j = 0; j < expanded_nghrs.size(); ++j) {
+        auto ngh_id = expanded_nghrs[j].id;
+        expanded_nghrs[j].distance = _distance->compare(
+            _data + _aligned_dim * loc, _data + _aligned_dim * (size_t) ngh_id,
+            (unsigned) _aligned_dim);
       }
 
       std::sort(expanded_nghrs.begin(), expanded_nghrs.end());
-      occlude_list(expanded_nghrs, alpha, range, maxc, result);
+      occlude_list(expanded_nghrs, alpha, range, maxc, prunest_list);
 
       {
-        _final_graph[i].clear();
+        _final_graph[loc].clear();
 
-        for (auto j : result) {
-          if (j.id != (_u32) i &&
-              (old_delete_set->find(j.id) == old_delete_set->end()))
-            _final_graph[(_u32) i].push_back(j.id);
+        for (auto ngh : prunest_list) {
+          if (ngh.id != (_u32) loc &&
+              (old_delete_set->find(ngh.id) == old_delete_set->end()))
+            _final_graph[loc].push_back(ngh.id);
         }
       }
     }
+
+    if (lock_adj_list)
+      _locks[loc].unlock();
   }
 
   // Returns number of live points left after consolidation
@@ -2230,20 +2240,14 @@ namespace diskann {
     for (_s64 loc = 0; loc < (_s64) _max_points; loc++) {
       if (old_delete_set->find((_u32) loc) == old_delete_set->end() &&
           !_empty_slots.is_in_set((_u32) loc)) {
-        if (_conc_consolidate) {
-          LockGuard adj_list_lock(_locks[loc]);
-          process_delete(old_delete_set, loc, range, maxc, alpha);
-          num_adj_list_processed += 1;
-        } else {
-          process_delete(old_delete_set, loc, range, maxc, alpha);
-          num_adj_list_processed += 1;
-        }
+        process_delete(old_delete_set, loc, range, maxc, alpha,
+                       _conc_consolidate ? true : false);
+        num_adj_list_processed += 1;
       }
     }
     for (_s64 loc = _max_points; loc < (_s64) (_max_points + _num_frozen_pts);
          loc++) {
-      LockGuard adj_list_lock(_locks[loc]);
-      process_delete(old_delete_set, loc, range, maxc, alpha);
+      process_delete(old_delete_set, loc, range, maxc, alpha, true);
       num_adj_list_processed += 1;
     }
     if (_support_eager_delete)

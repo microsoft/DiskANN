@@ -364,11 +364,13 @@ namespace diskann {
     DISKANN_DLLEXPORT void compact_frozen_point();
 
     // Remove deleted nodes from adj list of node i and absorb edges from
-    // deleted neighbors Acquire _locks[i] prior to calling for thread-safety
+    // deleted neighbors. 
+    // Acquires shared lock on _delete_lock 
+    // Also acquires _locks[i] if lock_adj_list is set to true
     void process_delete(
         const std::unique_ptr<tsl::robin_set<unsigned>> &old_delete_set,
         size_t i, const unsigned &range, const unsigned &maxc,
-        const float &alpha);
+        const float &alpha, const bool lock_adj_list);
 
     void initialize_query_scratch(uint32_t num_threads, uint32_t search_l,
                                   uint32_t indexing_l, uint32_t r, size_t dim);
