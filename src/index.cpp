@@ -220,7 +220,8 @@ namespace diskann {
       : _dist_metric(m), _dim(dim), _max_points(max_points),
         _dynamic_index(dynamic_index), _enable_tags(enable_tags),
         _support_eager_delete(support_eager_delete),
-        _conc_consolidate(concurrent_consolidate) {
+        _conc_consolidate(concurrent_consolidate),
+        _delete_set(new tsl::robin_set<unsigned>) {
     if (dynamic_index && !enable_tags) {
       throw diskann::ANNException(
           "ERROR: Dynamic Indexing must have tags enabled.", -1, __FUNCSIG__,
@@ -397,16 +398,16 @@ namespace diskann {
 
   template<typename T, typename TagT>
   _u64 Index<T, TagT>::save_delete_list(const std::string &filename) {
-    if (_delete_set.size() == 0) {
+    if (_delete_set->size() == 0) {
       return 0;
     }
     std::unique_ptr<_u32[]> delete_list =
-        std::make_unique<_u32[]>(_delete_set.size());
+        std::make_unique<_u32[]>(_delete_set->size());
     _u32 i = 0;
-    for (auto &del : _delete_set) {
+    for (auto &del : *_delete_set) {
       delete_list[i++] = del;
     }
-    return save_bin<_u32>(filename, delete_list.get(), _delete_set.size(), 1);
+    return save_bin<_u32>(filename, delete_list.get(), _delete_set->size(), 1);
   }
 
   template<typename T, typename TagT>
@@ -501,7 +502,7 @@ namespace diskann {
     _tag_to_location.reserve(num_data_points);
     for (_u32 i = 0; i < (_u32) num_data_points; i++) {
       TagT tag = *(tag_data + i);
-      if (_delete_set.find(i) == _delete_set.end()) {
+      if (_delete_set->find(i) == _delete_set->end()) {
         _location_to_tag.set(i, tag);
         _tag_to_location[tag] = i;
       }
@@ -578,7 +579,7 @@ namespace diskann {
 #endif
     assert(ndim == 1);
     for (uint32_t i = 0; i < npts; i++) {
-      _delete_set.insert(delete_list[i]);
+      _delete_set->insert(delete_list[i]);
     }
     return npts;
   }
@@ -645,7 +646,7 @@ namespace diskann {
       _empty_slots.insert((uint32_t) i);
     }
 
-    _lazy_done = _delete_set.size() != 0;
+    _lazy_done = _delete_set->size() != 0;
 
     reposition_frozen_point_to_end();
     diskann::cout << "Num frozen points:" << _num_frozen_pts << " _nd: " << _nd
@@ -1070,7 +1071,7 @@ namespace diskann {
         pool.erase(pool.begin() + i);
         visited.erase((unsigned) location);
         i--;
-      } else if (_delete_set.find(pool[i].id) != _delete_set.end()) {
+      } else if (_delete_set->find(pool[i].id) != _delete_set->end()) {
         pool.erase(pool.begin() + i);
         visited.erase((unsigned) pool[i].id);
         i--;
@@ -1937,7 +1938,7 @@ namespace diskann {
       _location_to_tag.erase(_tag_to_location[tag]);
       _tag_to_location.erase(tag);
 
-      _delete_set.insert(loc);
+      _delete_set->insert(loc);
       _empty_slots.insert(loc);
     }
 
@@ -2008,7 +2009,7 @@ namespace diskann {
 
       {
         std::shared_lock<std::shared_timed_mutex> lock(_delete_lock);
-        if (_delete_set.find(ngh) != _delete_set.end())
+        if (_delete_set->find(ngh) != _delete_set->end())
           continue;
       }
 
@@ -2023,13 +2024,13 @@ namespace diskann {
           std::shared_lock<std::shared_timed_mutex> lock(_delete_lock);
           for (auto j : _final_graph[loc]) {
             if ((j != loc) && (j != ngh) &&
-                (_delete_set.find(j) == _delete_set.end()))
+                (_delete_set->find(j) == _delete_set->end()))
               candidate_set.insert(j);
           }
 
           for (auto j : _final_graph[ngh]) {
             if ((j != loc) && (j != ngh) &&
-                (_delete_set.find(j) == _delete_set.end()))
+                (_delete_set->find(j) == _delete_set->end()))
               candidate_set.insert(j);
           }
         }
@@ -2064,7 +2065,7 @@ namespace diskann {
           std::shared_lock<std::shared_timed_mutex> lock(_delete_lock);
           for (size_t i = 0; i < result.size(); i++) {
             auto j = result[i];
-            if (_delete_set.find(j.id) == _delete_set.end()) {
+            if (_delete_set->find(j.id) == _delete_set->end()) {
               _final_graph[ngh].push_back(j.id);
               {
                 LockGuard guard(_locks_in[j.id]);
@@ -2103,7 +2104,7 @@ namespace diskann {
 
   template<typename T, typename TagT>
   inline void Index<T, TagT>::process_delete(
-      const tsl::robin_set<unsigned> &old_delete_set, size_t i,
+      const std::unique_ptr<tsl::robin_set<unsigned>> &old_delete_set, size_t i,
       const unsigned &range, const unsigned &maxc, const float &alpha) {
     tsl::robin_set<unsigned> candidate_set;
     std::vector<Neighbor>    expanded_nghrs;
@@ -2112,14 +2113,14 @@ namespace diskann {
     bool modify = false;
 
     for (auto ngh : _final_graph[(_u32) i]) {
-      if (old_delete_set.find(ngh) != old_delete_set.end()) {
+      if (old_delete_set->find(ngh) != old_delete_set->end()) {
         modify = true;
 
         // Add outgoing links from
         if (_conc_consolidate)
           _locks[ngh].lock();
         for (auto j : _final_graph[ngh])
-          if (old_delete_set.find(j) == old_delete_set.end())
+          if (old_delete_set->find(j) == old_delete_set->end())
             candidate_set.insert(j);
         if (_conc_consolidate)
           _locks[ngh].unlock();
@@ -2145,7 +2146,7 @@ namespace diskann {
 
         for (auto j : result) {
           if (j.id != (_u32) i &&
-              (old_delete_set.find(j.id) == old_delete_set.end()))
+              (old_delete_set->find(j.id) == old_delete_set->end()))
             _final_graph[(_u32) i].push_back(j.id);
         }
       }
@@ -2174,10 +2175,10 @@ namespace diskann {
         throw ANNException(err, -1, __FUNCSIG__, __FILE__, __LINE__);
       }
 
-      if (_location_to_tag.size() + _delete_set.size() != _nd) {
+      if (_location_to_tag.size() + _delete_set->size() != _nd) {
         diskann::cerr << "Error: _location_to_tag.size ("
-                      << _location_to_tag.size() << ")  + _delete_set.size ("
-                      << _delete_set.size() << ") != _nd(" << _nd << ") ";
+                      << _location_to_tag.size() << ")  + _delete_set->size ("
+                      << _delete_set->size() << ") != _nd(" << _nd << ") ";
         return consolidation_report(diskann::consolidation_report::status_code::
                                         INCONSISTENT_COUNT_ERROR,
                                     0, 0, 0, 0, 0, 0, 0);
@@ -2208,10 +2209,11 @@ namespace diskann {
 
     diskann::cout << "Starting consolidate_deletes... ";
 
-    tsl::robin_set<unsigned> old_delete_set;
+    std::unique_ptr<tsl::robin_set<unsigned>> old_delete_set(
+        new tsl::robin_set<unsigned>);
     {
       std::unique_lock<std::shared_timed_mutex> dl(_delete_lock);
-      _delete_set.swap(old_delete_set);
+      std::swap(_delete_set, old_delete_set);
     }
 
     const unsigned range = params.Get<unsigned>("R");
@@ -2226,7 +2228,7 @@ namespace diskann {
 #pragma omp parallel for num_threads(num_threads) schedule(dynamic, 8192) \
     reduction(+:num_adj_list_processed)
     for (_s64 loc = 0; loc < (_s64) _max_points; loc++) {
-      if (old_delete_set.find((_u32) loc) == old_delete_set.end() &&
+      if (old_delete_set->find((_u32) loc) == old_delete_set->end() &&
           !_empty_slots.is_in_set((_u32) loc)) {
         if (_conc_consolidate) {
           LockGuard adj_list_lock(_locks[loc]);
@@ -2238,7 +2240,7 @@ namespace diskann {
         }
       }
     }
-    for (_s64 loc = _max_points; loc < (_s64)(_max_points + _num_frozen_pts);
+    for (_s64 loc = _max_points; loc < (_s64) (_max_points + _num_frozen_pts);
          loc++) {
       LockGuard adj_list_lock(_locks[loc]);
       process_delete(old_delete_set, loc, range, maxc, alpha);
@@ -2249,20 +2251,26 @@ namespace diskann {
 
     std::unique_lock<std::shared_timed_mutex> tl(_tag_lock);
     size_t ret_nd = release_locations(old_delete_set);
+    size_t max_points = _max_points;
+    auto   empty_slots_size = _empty_slots.size();
+
+    std::shared_lock<std::shared_timed_mutex> dl(_delete_lock);
+    auto delete_set_size = _delete_set->size();
+    auto old_delete_set_size = old_delete_set->size();
 
     if (!_conc_consolidate) {
       update_lock.unlock();
     }
 
-    if (_delete_set.size() == 0)
+    if (_delete_set->size() == 0)
       _lazy_done = false;
 
     double duration = timer.elapsed() / 1000000.0;
     diskann::cout << " done in " << duration << " seconds." << std::endl;
     return consolidation_report(
         diskann::consolidation_report::status_code::SUCCESS, ret_nd,
-        this->_max_points, _empty_slots.size(), old_delete_set.size(),
-        _delete_set.size(), num_adj_list_processed, duration);
+        max_points, empty_slots_size, old_delete_set_size,
+        delete_set_size, num_adj_list_processed, duration);
   }
 
   template<typename T, typename TagT>
@@ -2311,11 +2319,11 @@ namespace diskann {
 
     std::unique_lock<std::shared_timed_mutex> cl(_consolidate_lock);
 
-    if (_delete_set.size() > 0) {
+    if (_delete_set->size() > 0) {
       throw ANNException(
           "Can not compact data when index has non-trivial _delete_set of "
           "size: " +
-              std::to_string(_delete_set.size()),
+              std::to_string(_delete_set->size()),
           -1, __FUNCSIG__, __FILE__, __LINE__);
     }
 
@@ -2340,13 +2348,13 @@ namespace diskann {
     }
 
     // If cur node is removed, replace it.
-    if (_delete_set.find(_start) != _delete_set.end()) {
+    if (_delete_set->find(_start) != _delete_set->end()) {
       diskann::cerr << "Replacing cur node which has been deleted... "
                     << std::flush;
       auto old_ep = _start;
       // First active neighbor of old cur node is new cur node
       for (auto iter : _final_graph[_start])
-        if (_delete_set.find(iter) != _delete_set.end()) {
+        if (_delete_set->find(iter) != _delete_set->end()) {
           _start = iter;
           break;
         }
@@ -2355,7 +2363,7 @@ namespace diskann {
             "ERROR: Did not find a replacement for cur node.", -1, __FUNCSIG__,
             __FILE__, __LINE__);
       } else {
-        assert(_delete_set.find(_start) == _delete_set.end());
+        assert(_delete_set->find(_start) == _delete_set->end());
       }
     }
 
@@ -2415,7 +2423,7 @@ namespace diskann {
     for (_u64 old = _nd; old < _max_points; ++old) {
       _final_graph[old].clear();
     }
-    _delete_set.clear();
+    _delete_set->clear();
     _empty_slots.clear();
     for (auto i = _nd; i < _max_points; i++) {
       _empty_slots.insert((uint32_t) i);
@@ -2449,7 +2457,7 @@ namespace diskann {
       assert(_empty_slots.size() + _nd == _max_points);
 
       location = _empty_slots.pop_any();
-      _delete_set.erase(location);
+      _delete_set->erase(location);
     }
 
     ++_nd;
@@ -2476,8 +2484,8 @@ namespace diskann {
   //
   template<typename T, typename TagT>
   size_t Index<T, TagT>::release_locations(
-      tsl::robin_set<unsigned> &locations) {
-    for (auto location : locations) {
+      std::unique_ptr<tsl::robin_set<unsigned>> &locations) {
+    for (auto location : *locations) {
       if (_empty_slots.is_in_set(location))
         throw ANNException(
             "Trying to release location, but location already in empty slots",
@@ -2677,7 +2685,7 @@ namespace diskann {
     assert(_tag_to_location[tag] < _max_points);
 
     const auto location = _tag_to_location[tag];
-    _delete_set.insert(location);
+    _delete_set->insert(location);
     _location_to_tag.erase(location);
     _tag_to_location.erase(tag);
 
@@ -2708,7 +2716,7 @@ namespace diskann {
         failed_tags.push_back(tag);
       } else {
         const auto location = _tag_to_location[tag];
-        _delete_set.insert(location);
+        _delete_set->insert(location);
         _location_to_tag.erase(location);
         _tag_to_location.erase(tag);
       }

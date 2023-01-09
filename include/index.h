@@ -348,7 +348,8 @@ namespace diskann {
     // Acquire _tag_lock before calling
     int    reserve_location();
     size_t release_location(int location);
-    size_t release_locations(tsl::robin_set<unsigned> &locations);
+    size_t release_locations(
+        std::unique_ptr<tsl::robin_set<unsigned>> &locations);
 
     // Resize the index when no slots are left for insertion.
     // MUST acquire _num_points_lock and _update_lock before calling.
@@ -364,9 +365,10 @@ namespace diskann {
 
     // Remove deleted nodes from adj list of node i and absorb edges from
     // deleted neighbors Acquire _locks[i] prior to calling for thread-safety
-    void process_delete(const tsl::robin_set<unsigned> &old_delete_set,
-                        size_t i, const unsigned &range, const unsigned &maxc,
-                        const float &alpha);
+    void process_delete(
+        const std::unique_ptr<tsl::robin_set<unsigned>> &old_delete_set,
+        size_t i, const unsigned &range, const unsigned &maxc,
+        const float &alpha);
 
     void initialize_query_scratch(uint32_t num_threads, uint32_t search_l,
                                   uint32_t indexing_l, uint32_t r, size_t dim);
@@ -438,9 +440,9 @@ namespace diskann {
     // data structures, flags and locks for dynamic indexing
     tsl::sparse_map<TagT, unsigned>    _tag_to_location;
     natural_number_map<unsigned, TagT> _location_to_tag;
+    natural_number_set<unsigned>       _empty_slots;
 
-    tsl::robin_set<unsigned>     _delete_set;
-    natural_number_set<unsigned> _empty_slots;
+    std::unique_ptr<tsl::robin_set<unsigned>> _delete_set;
 
     bool _support_eager_delete =
         false;  // Enables in-graph, requires more space
