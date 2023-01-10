@@ -362,18 +362,17 @@ namespace diskann {
     bool _is_saved = false;  // Gopal. Checking if the index is already saved.
     bool _conc_consolidate = false;  // use _lock while searching
 
-    // Per node lock, cardinality=max_points_
-    std::vector<non_recursive_mutex> _locks;
-
     // If acquiring multiple locks below, acquire locks in the order below
     std::shared_timed_mutex  // RW mutex between save/load (exclusive lock) and
         _update_lock;        // search/inserts/deletes/consolidate (shared lock)
     std::shared_timed_mutex
         _consolidate_lock;  // Ensure only one consolidate is ever active
-    std::shared_timed_mutex
-        _tag_lock;  // RW lock for _tag_to_location and _location_to_tag
-    std::shared_timed_mutex
-        _delete_lock;  // RW Lock on _delete_set and _empty_slots
+    std::shared_timed_mutex _tag_lock;  // RW lock for _tag_to_location,
+                                        // _location_to_tag, _empty_slots, _nd
+    std::shared_timed_mutex _delete_lock;  // RW Lock on _delete_set
+
+    // Per node lock, cardinality=max_points_
+    std::vector<non_recursive_mutex> _locks;
 
     static const float INDEX_GROWTH_FACTOR;
   };
