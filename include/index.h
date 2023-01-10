@@ -45,16 +45,17 @@ namespace diskann {
     };
     status_code _status;
     size_t      _active_points, _max_points, _empty_slots, _slots_released,
-        _delete_set_size;
+        _delete_set_size, _num_calls_to_process_delete;
     double _time;
 
     consolidation_report(status_code status, size_t active_points,
                          size_t max_points, size_t empty_slots,
                          size_t slots_released, size_t delete_set_size,
-                         double time_secs)
+                         size_t num_calls_to_process_delete, double time_secs)
         : _status(status), _active_points(active_points),
           _max_points(max_points), _empty_slots(empty_slots),
           _slots_released(slots_released), _delete_set_size(delete_set_size),
+          _num_calls_to_process_delete(num_calls_to_process_delete),
           _time(time_secs) {
     }
   };
@@ -245,10 +246,12 @@ namespace diskann {
 
     void link(Parameters &parameters);
 
-    // Acquire _tag_lock before calling
+    // Acquire exclusive _tag_lock and _delete_lock before calling
     int    reserve_location();
+
+    // Acquire _tag_lock before calling
     size_t release_location(int location);
-    size_t release_locations(tsl::robin_set<unsigned> &locations);
+    size_t release_locations(const tsl::robin_set<unsigned> &locations);
 
     // Resize the index when no slots are left for insertion.
     // MUST acquire _num_points_lock and _update_lock before calling.
@@ -263,9 +266,11 @@ namespace diskann {
     DISKANN_DLLEXPORT void compact_frozen_point();
 
     // Remove deleted nodes from adj list of node i and absorb edges from
-    // deleted neighbors Acquire _locks[i] prior to calling for thread-safety
+    // deleted neighbors.
+    // Acquires shared lock on _delete_lock
+    // Also acquires _locks[i] if lock_adj_list is set to true
     void process_delete(const tsl::robin_set<unsigned> &old_delete_set,
-                        size_t i, const unsigned &range, const unsigned &maxc,
+                        size_t loc, const unsigned &range, const unsigned &maxc,
                         const float &alpha, InMemQueryScratch<T> *scratch);
 
     void initialize_query_scratch(uint32_t num_threads, uint32_t search_l,
@@ -338,9 +343,9 @@ namespace diskann {
     // data structures, flags and locks for dynamic indexing
     tsl::sparse_map<TagT, unsigned>    _tag_to_location;
     natural_number_map<unsigned, TagT> _location_to_tag;
+    natural_number_set<unsigned>       _empty_slots;
 
-    tsl::robin_set<unsigned>     _delete_set;
-    natural_number_set<unsigned> _empty_slots;
+    std::unique_ptr<tsl::robin_set<unsigned>> _delete_set;
 
     // Flags for PQ based distance calculation
     bool              _pq_dist = false;
@@ -355,18 +360,17 @@ namespace diskann {
     bool _is_saved = false;  // Gopal. Checking if the index is already saved.
     bool _conc_consolidate = false;  // use _lock while searching
 
-    // Per node lock, cardinality=max_points_
-    std::vector<non_recursive_mutex> _locks;
-
     // If acquiring multiple locks below, acquire locks in the order below
     std::shared_timed_mutex  // RW mutex between save/load (exclusive lock) and
         _update_lock;        // search/inserts/deletes/consolidate (shared lock)
     std::shared_timed_mutex
         _consolidate_lock;  // Ensure only one consolidate is ever active
-    std::shared_timed_mutex
-        _tag_lock;  // RW lock for _tag_to_location and _location_to_tag
-    std::shared_timed_mutex
-        _delete_lock;  // RW Lock on _delete_set and _empty_slots
+    std::shared_timed_mutex _tag_lock;  // RW lock for _tag_to_location,
+                                        // _location_to_tag, _empty_slots, _nd
+    std::shared_timed_mutex _delete_lock;  // RW Lock on _delete_set
+
+    // Per node lock, cardinality=max_points_
+    std::vector<non_recursive_mutex> _locks;
 
     static const float INDEX_GROWTH_FACTOR;
   };
