@@ -51,7 +51,8 @@ int search_disk_index(
     std::string& gt_file, const unsigned num_threads, const unsigned recall_at,
     const unsigned beamwidth, const unsigned num_nodes_to_cache,
     const _u32 search_io_limit, const std::vector<unsigned>& Lvec,
-    const bool use_reorder_data = false) {
+    const bool use_reorder_data = false,
+    const std::string& filter_label = "") {
   diskann::cout << "Search parameters: #threads: " << num_threads << ", ";
   if (beamwidth <= 0)
     diskann::cout << "beamwidth to be optimized for each L value" << std::flush;
@@ -61,6 +62,10 @@ int search_disk_index(
     diskann::cout << "." << std::endl;
   else
     diskann::cout << ", io_limit: " << search_io_limit << "." << std::endl;
+
+  bool filtered_search = false;
+  if (filter_label != "")
+    filtered_search = true;
 
   std::string warmup_query_file = index_path_prefix + "_sample_data.bin";
 
@@ -205,12 +210,20 @@ int search_disk_index(
 
 #pragma omp parallel for schedule(dynamic, 1)
     for (_s64 i = 0; i < (int64_t) query_num; i++) {
-      _pFlashIndex->cached_beam_search(
-          query + (i * query_aligned_dim), recall_at, L,
-          query_result_ids_64.data() + (i * recall_at),
-          query_result_dists[test_id].data() + (i * recall_at),
-          optimized_beamwidth, search_io_limit, use_reorder_data, stats + i);
-    }
+      if (!filtered_search) {
+        _pFlashIndex->cached_beam_search(
+            query + (i * query_aligned_dim), recall_at, L,
+            query_result_ids_64.data() + (i * recall_at),
+            query_result_dists[test_id].data() + (i * recall_at),
+            optimized_beamwidth, use_reorder_data, stats + i);
+      } else {
+        _pFlashIndex->cached_beam_search(
+            query + (i * query_aligned_dim), recall_at, L,
+            query_result_ids_64.data() + (i * recall_at),
+            query_result_dists[test_id].data() + (i * recall_at),
+            optimized_beamwidth, true, filter_label, use_reorder_data,
+            stats + i);
+      }    }
     auto                          e = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> diff = e - s;
     float qps = (1.0 * query_num) / (1.0 * diff.count());
@@ -279,7 +292,7 @@ int search_disk_index(
 
 int main(int argc, char** argv) {
   std::string data_type, dist_fn, index_path_prefix, result_path_prefix,
-      query_file, gt_file;
+      query_file, gt_file, filter_label;
   unsigned              num_threads, K, W, num_nodes_to_cache, search_io_limit;
   std::vector<unsigned> Lvec;
   bool                  use_reorder_data = false;
@@ -329,6 +342,10 @@ int main(int argc, char** argv) {
                        po::bool_switch()->default_value(false),
                        "Include full precision data in the index. Use only in "
                        "conjuction with compressed data on SSD.");
+    desc.add_options()(
+        "filter_label",
+        po::value<std::string>(&filter_label)->default_value(std::string("")),
+        "Filter Label for Filtered Search");                       
 
     po::variables_map vm;
     po::store(po::parse_command_line(argc, argv, desc), vm);
@@ -377,17 +394,17 @@ int main(int argc, char** argv) {
       return search_disk_index<float>(metric, index_path_prefix,
                                       result_path_prefix, query_file, gt_file,
                                       num_threads, K, W, num_nodes_to_cache,
-                                      search_io_limit, Lvec, use_reorder_data);
+                                      search_io_limit, Lvec, use_reorder_data, filter_label);
     else if (data_type == std::string("int8"))
       return search_disk_index<int8_t>(metric, index_path_prefix,
                                        result_path_prefix, query_file, gt_file,
                                        num_threads, K, W, num_nodes_to_cache,
-                                       search_io_limit, Lvec, use_reorder_data);
+                                       search_io_limit, Lvec, use_reorder_data, filter_label);
     else if (data_type == std::string("uint8"))
       return search_disk_index<uint8_t>(
           metric, index_path_prefix, result_path_prefix, query_file, gt_file,
           num_threads, K, W, num_nodes_to_cache, search_io_limit, Lvec,
-          use_reorder_data);
+          use_reorder_data, filter_label);
     else {
       std::cerr << "Unsupported data type. Use float or int8 or uint8"
                 << std::endl;

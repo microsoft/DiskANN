@@ -546,6 +546,21 @@ namespace diskann {
   }
 #endif
 
+
+  inline void copy_file(std::string in_file, std::string out_file) {
+    std::ifstream source(in_file, std::ios::binary);
+    std::ofstream dest(out_file, std::ios::binary);
+
+    std::istreambuf_iterator<char> begin_source(source);
+    std::istreambuf_iterator<char> end_source;
+    std::ostreambuf_iterator<char> begin_dest(dest);
+    std::copy(begin_source, end_source, begin_dest);
+
+    source.close();
+    dest.close();
+  }
+
+
   DISKANN_DLLEXPORT double calculate_recall(
       unsigned num_queries, unsigned* gold_std, float* gs_dist, unsigned dim_gs,
       unsigned* our_results, unsigned dim_or, unsigned recall_at);

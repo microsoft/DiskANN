@@ -121,6 +121,16 @@ namespace diskann {
                                  Parameters              &parameters,
                                  const std::vector<TagT> &tags);
 
+
+// Filtered Support
+    DISKANN_DLLEXPORT void build_filtered_index(
+        const char *filename, const std::string &label_file,
+        const size_t num_points_to_load, Parameters &parameters,
+        const std::vector<TagT> &tags = std::vector<TagT>());
+
+    DISKANN_DLLEXPORT void set_universal_label(const std::string &label);
+
+
     // Set starting point of an index before inserting any points incrementally
     DISKANN_DLLEXPORT void set_start_point(T *data);
     // Set starting point to a random point on a sphere of certain radius
@@ -146,6 +156,13 @@ namespace diskann {
                                               const unsigned L, TagT *tags,
                                               float            *distances,
                                               std::vector<T *> &res_vectors);
+
+// Filter support search
+    template<typename IndexType>
+    DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> search_with_filters(
+        const T *query, const std::string &filter_label, const size_t K,
+        const unsigned L, IndexType *indices, float *distances);
+
 
     // Will fail if tag already in the index or if tag=0.
     DISKANN_DLLEXPORT int insert_point(const T *point, const TagT tag);
@@ -214,19 +231,25 @@ namespace diskann {
     // determines navigating node of the graph by calculating medoid of data
     unsigned calculate_entry_point();
 
+    void parse_label_file(const std::string &map_file);
+
     template<typename IDType>
     std::pair<uint32_t, uint32_t> search_impl(const T *query, const size_t K,
                                               const unsigned L, IDType *indices,
                                               float                *distances,
-                                              InMemQueryScratch<T> *scratch);
+                                              InMemQueryScratch<T> *scratch,
+        bool               use_filters = false,
+        const std::string &filter_label = std::string());
 
     std::pair<uint32_t, uint32_t> iterate_to_fixed_point(
         const T *node_coords, const unsigned Lindex,
-        const std::vector<unsigned> &init_ids, InMemQueryScratch<T> *scratch,
+        const std::vector<unsigned> &init_ids, InMemQueryScratch<T> *scratch,  bool use_filter,
+        const std::vector<std::string> &filters, 
         bool ret_frozen = true, bool search_invocation = false);
 
     void search_for_point_and_add_links(int location, _u32 Lindex,
-                                        InMemQueryScratch<T> *scratch);
+                                        InMemQueryScratch<T> *scratch, bool use_filter = false,
+                            const std::vector<std::string> &filters  = std::vector<std::string>(), _u32 filteredLindex = 0);
 
     void prune_neighbors(const unsigned location, std::vector<Neighbor> &pool,
                          std::vector<unsigned> &pruned_list,
@@ -330,6 +353,19 @@ namespace diskann {
     bool _dynamic_index = false;
     bool _enable_tags = false;
     bool _normalize_vecs = false;  // Using normalied L2 for cosine.
+
+
+   // Filter Support
+
+    bool                                  _filtered_index = false;
+    std::vector<std::vector<std::string>> _pts_to_labels;
+    tsl::robin_set<std::string>           _labels;
+    std::string                           _labels_file;
+    std::unordered_map<std::string, _u32> _filter_to_medoid_id;
+    std::unordered_map<_u32, _u32>        _medoid_counts;
+    bool                                  _use_universal_label = false;
+    std::string                           _universal_label = "";
+
 
     // Indexing parameters
     uint32_t _indexingQueueSize;
