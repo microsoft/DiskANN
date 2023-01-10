@@ -37,6 +37,13 @@ namespace diskann {
     DISKANN_DLLEXPORT int  load(uint32_t num_threads, const char *index_prefix);
 #endif
 
+#ifdef EXEC_ENV_OLS
+    DISKANN_DLLEXPORT int load(diskann::MemoryMappedFiles& files, 
+      uint32_t num_threads, const char* index_filepath, const char* pivots_filepath, const char* compressed_filepath);
+#else
+    DISKANN_DLLEXPORT int  load(uint32_t num_threads, const char* index_filepath, const char* pivots_filepath, const char* compressed_filepath);
+#endif
+
     DISKANN_DLLEXPORT void load_cache_list(std::vector<uint32_t> &node_list);
 
 #ifdef EXEC_ENV_OLS
