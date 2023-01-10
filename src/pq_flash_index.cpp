@@ -805,10 +805,10 @@ namespace diskann {
     };
     Timer query_timer, io_timer, cpu_timer;
 
-    tsl::robin_set<_u64>  &visited = query_scratch->visited;
-    std::vector<Neighbor> &retset = query_scratch->retset;
+    tsl::robin_set<_u64> &visited = query_scratch->visited;
+    NeighborPriorityQueue &retset = query_scratch->retset;
+    retset.reserve(l_search);
     std::vector<Neighbor> &full_retset = query_scratch->full_retset;
-    retset.reserve(l_search + 1);
 
     _u32  best_medoid = 0;
     float best_dist = (std::numeric_limits<float>::max)();
@@ -823,12 +823,8 @@ namespace diskann {
     }
 
     compute_dists(&best_medoid, 1, dist_scratch);
-    retset.push_back(Neighbor(best_medoid, dist_scratch[0], true));
+    retset.insert(Neighbor(best_medoid, dist_scratch[0]));
     visited.insert(best_medoid);
-
-    unsigned cur_list_size = 1;
-
-    std::sort(retset.begin(), retset.begin() + cur_list_size);
 
     unsigned cmps = 0;
     unsigned hops = 0;
@@ -846,8 +842,7 @@ namespace diskann {
         cached_nhoods;
     cached_nhoods.reserve(2 * beam_width);
 
-    while (k < cur_list_size && num_ios < io_limit) {
-      auto nk = cur_list_size;
+    while (retset.has_unexpanded_node() && num_ios < io_limit) {
       // clear iteration state
       frontier.clear();
       frontier_nhoods.clear();
@@ -855,30 +850,25 @@ namespace diskann {
       cached_nhoods.clear();
       sector_scratch_idx = 0;
       // find new beam
-      _u32 marker = k;
       _u32 num_seen = 0;
-      while (marker < cur_list_size && frontier.size() < beam_width &&
+      while (retset.has_unexpanded_node() && frontier.size() < beam_width &&
              num_seen < beam_width) {
-        if (retset[marker].flag) {
-          num_seen++;
-          auto iter = nhood_cache.find(retset[marker].id);
-          if (iter != nhood_cache.end()) {
-            cached_nhoods.push_back(
-                std::make_pair(retset[marker].id, iter->second));
-            if (stats != nullptr) {
-              stats->n_cache_hits++;
-            }
-          } else {
-            frontier.push_back(retset[marker].id);
+        auto nbr = retset.closest_unexpanded();
+        num_seen++;
+        auto iter = nhood_cache.find(nbr.id);
+        if (iter != nhood_cache.end()) {
+          cached_nhoods.push_back(std::make_pair(nbr.id, iter->second));
+          if (stats != nullptr) {
+            stats->n_cache_hits++;
           }
-          retset[marker].flag = false;
-          if (this->count_visited_nodes) {
-            reinterpret_cast<std::atomic<_u32> &>(
-                this->node_visit_counter[retset[marker].id].second)
-                .fetch_add(1);
-          }
+        } else {
+          frontier.push_back(nbr.id);
         }
-        marker++;
+        if (this->count_visited_nodes) {
+          reinterpret_cast<std::atomic<_u32> &>(
+              this->node_visit_counter[nbr.id].second)
+              .fetch_add(1);
+        }
       }
 
       // read nhoods of frontier ids
@@ -930,7 +920,7 @@ namespace diskann {
                     query_float, (_u8 *) node_fp_coords_copy);
         }
         full_retset.push_back(
-            Neighbor((unsigned) cached_nhood.first, cur_expanded_dist, true));
+            Neighbor((unsigned) cached_nhood.first, cur_expanded_dist));
 
         _u64      nnbrs = cached_nhood.second.first;
         unsigned *node_nbrs = cached_nhood.second.second;
@@ -948,20 +938,9 @@ namespace diskann {
           unsigned id = node_nbrs[m];
           if (visited.insert(id).second) {
             cmps++;
-            float dist = dist_scratch[m];
-            Neighbor nn(id, dist, true);
-            Neighbor &lastResult = retset[cur_list_size - 1];
-            if ((lastResult < nn || lastResult == nn) &&
-                (cur_list_size == l_search))
-              continue;
-            // Return position in sorted list where nn inserted.
-            auto r = InsertIntoPool(retset.data(), cur_list_size, nn);
-            if (cur_list_size < l_search)
-              ++cur_list_size;
-            if (r < nk)
-              // nk logs the best position in the retset that was
-              // updated due to neighbors of n.
-              nk = r;
+            float    dist = dist_scratch[m];
+            Neighbor nn(id, dist);
+            retset.insert(nn);
           }
         }
       }
@@ -1004,7 +983,7 @@ namespace diskann {
                 query_float, (_u8 *) node_fp_coords_copy);
         }
         full_retset.push_back(
-            Neighbor(frontier_nhood.first, cur_expanded_dist, true));
+            Neighbor(frontier_nhood.first, cur_expanded_dist));
         unsigned *node_nbrs = (node_buf + 1);
         // compute node_nbrs <-> query dist in PQ space
         cpu_timer.reset();
@@ -1024,19 +1003,9 @@ namespace diskann {
             if (stats != nullptr) {
               stats->n_cmps++;
             }
-            Neighbor nn(id, dist, true);
-            Neighbor &lastResult = retset[cur_list_size - 1];
-            if ((lastResult < nn || lastResult == nn) &&
-                (cur_list_size == l_search))
-              continue;
-            auto     r = InsertIntoPool(
-                    retset.data(), cur_list_size,
-                    nn);  // Return position in sorted list where nn inserted.
-            if (cur_list_size < l_search)
-              ++cur_list_size;
-            if (r < nk)
-              nk = r;  // nk logs the best position in the retset that was
-                       // updated due to neighbors of n.
+
+            Neighbor nn(id, dist);
+            retset.insert(nn);
           }
         }
 
@@ -1044,12 +1013,6 @@ namespace diskann {
           stats->cpu_us += (double) cpu_timer.elapsed();
         }
       }
-
-      // update best inserted position
-      if (nk <= k)
-        k = nk;  // k is the best position in retset updated in this round.
-      else
-        ++k;
 
       hops++;
     }

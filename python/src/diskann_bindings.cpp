@@ -287,7 +287,7 @@ PYBIND11_MODULE(diskannpy, m) {
 
   py::class_<Neighbor>(m, "Neighbor")
       .def(py::init<>())
-      .def(py::init<unsigned, float, bool>())
+      .def(py::init<unsigned, float>())
       .def(py::self < py::self)
       .def(py::self == py::self);
 
