@@ -46,16 +46,17 @@ namespace diskann {
     };
     status_code _status;
     size_t      _active_points, _max_points, _empty_slots, _slots_released,
-        _delete_set_size;
+        _delete_set_size, _num_calls_to_process_delete;
     double _time;
 
     consolidation_report(status_code status, size_t active_points,
                          size_t max_points, size_t empty_slots,
                          size_t slots_released, size_t delete_set_size,
-                         double time_secs)
+                         size_t num_calls_to_process_delete, double time_secs)
         : _status(status), _active_points(active_points),
           _max_points(max_points), _empty_slots(empty_slots),
           _slots_released(slots_released), _delete_set_size(delete_set_size),
+          _num_calls_to_process_delete(num_calls_to_process_delete),
           _time(time_secs) {
     }
   };

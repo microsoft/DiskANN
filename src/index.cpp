@@ -1718,7 +1718,7 @@ namespace diskann {
                       << _delete_set.size() << ") != _nd(" << _nd << ") ";
         return consolidation_report(diskann::consolidation_report::status_code::
                                         INCONSISTENT_COUNT_ERROR,
-                                    0, 0, 0, 0, 0, 0);
+                                    0, 0, 0, 0, 0, 0, 0);
       }
 
       if (_location_to_tag.size() != _tag_to_location.size()) {
@@ -1741,7 +1741,7 @@ namespace diskann {
           << std::endl;
       return consolidation_report(
           diskann::consolidation_report::status_code::LOCK_FAIL, 0, 0, 0, 0, 0,
-          0);
+          0, 0);
     }
 
     diskann::cout << "Starting consolidate_deletes... ";
@@ -1759,8 +1759,10 @@ namespace diskann {
                                      ? omp_get_num_threads()
                                      : params.Get<unsigned>("num_threads");
 
+    unsigned       num_calls_to_process_delete = 0;
     diskann::Timer timer;
-#pragma omp parallel for num_threads(num_threads) schedule(dynamic, 8192)
+#pragma omp parallel for num_threads(num_threads) schedule(dynamic, 8192) \
+    reduction(+:num_calls_to_process_delete)
     for (_s64 loc = 0; loc < (_s64) _max_points; loc++) {
       if (old_delete_set.find((_u32) loc) == old_delete_set.end() &&
           !_empty_slots.is_in_set((_u32) loc)) {
@@ -1769,8 +1771,10 @@ namespace diskann {
         if (_conc_consolidate) {
           LockGuard adj_list_lock(_locks[loc]);
           process_delete(old_delete_set, loc, range, maxc, alpha, scratch);
+          num_calls_to_process_delete += 1;
         } else {
           process_delete(old_delete_set, loc, range, maxc, alpha, scratch);
+          num_calls_to_process_delete += 1;
         }
       }
     }
@@ -1780,6 +1784,7 @@ namespace diskann {
       ScratchStoreManager<InMemQueryScratch<T>> manager(_query_scratch);
       auto scratch = manager.scratch_space();
       process_delete(old_delete_set, loc, range, maxc, alpha, scratch);
+      num_calls_to_process_delete += 1;
     }
 
     std::unique_lock<std::shared_timed_mutex> tl(_tag_lock);
@@ -1797,7 +1802,7 @@ namespace diskann {
     return consolidation_report(
         diskann::consolidation_report::status_code::SUCCESS, ret_nd,
         this->_max_points, _empty_slots.size(), old_delete_set.size(),
-        _delete_set.size(), duration);
+        _delete_set.size(), num_calls_to_process_delete, duration);
   }
 
   template<typename T, typename TagT>
