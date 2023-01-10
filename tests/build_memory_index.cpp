@@ -26,10 +26,13 @@ int build_in_memory_index(const diskann::Metric& metric,
                           const unsigned L, const float alpha,
                           const std::string& save_path,
                           const unsigned num_threads, const bool use_pq_build,
-                          const size_t num_pq_bytes, const bool use_opq) {
+                          const size_t num_pq_bytes, const bool use_opq,
+                          const std::string& label_file,
+                          const std::string& universal_label, const _u32 Lf) {
   diskann::Parameters paras;
   paras.Set<unsigned>("R", R);
   paras.Set<unsigned>("L", L);
+  paras.Set<unsigned>("Lf", Lf);
   paras.Set<unsigned>(
       "C", 750);  // maximum candidate set size during pruning procedure
   paras.Set<float>("alpha", alpha);
@@ -42,8 +45,14 @@ int build_in_memory_index(const diskann::Metric& metric,
   diskann::Index<T, TagT> index(metric, data_dim, data_num, false, false, false,
                                 use_pq_build, num_pq_bytes, use_opq);
   auto                    s = std::chrono::high_resolution_clock::now();
-  index.build(data_path.c_str(), data_num, paras);
-
+  if (label_file == "") {
+    index.build(data_path.c_str(), data_num, paras);
+  } else {
+    if (universal_label != "") {
+      index.set_universal_label(std::stoul(universal_label));
+    }
+    index.build_filtered_index(data_path.c_str(), label_file, data_num, paras);
+  }
   std::chrono::duration<double> diff =
       std::chrono::high_resolution_clock::now() - s;
 
@@ -54,10 +63,11 @@ int build_in_memory_index(const diskann::Metric& metric,
 }
 
 int main(int argc, char** argv) {
-  std::string data_type, dist_fn, data_path, index_path_prefix;
-  unsigned    num_threads, R, L, build_PQ_bytes;
-  float       alpha;
-  bool        use_pq_build, use_opq;
+  std::string data_type, dist_fn, data_path, index_path_prefix, label_file,
+      universal_label;
+  unsigned num_threads, R, L, Lf, build_PQ_bytes;
+  float    alpha;
+  bool     use_pq_build, use_opq;
 
   po::options_description desc{"Arguments"};
   try {
@@ -89,12 +99,24 @@ int main(int argc, char** argv) {
         "Number of threads used for building index (defaults to "
         "omp_get_num_procs())");
     desc.add_options()(
-        "build_PQ_bytes", po::value<uint32_t>(&build_PQ_bytes)->default_value(0),
+        "build_PQ_bytes",
+        po::value<uint32_t>(&build_PQ_bytes)->default_value(0),
         "Number of PQ bytes to build the index; 0 for full precision build");
     desc.add_options()(
         "use_opq", po::bool_switch()->default_value(false),
         "Set true for OPQ compression while using PQ distance comparisons for "
         "building the index, and false for PQ compression");
+    desc.add_options()("label_file",
+                       po::value<std::string>(&label_file)->default_value(""),
+                       "Input label file in txt format if present");
+    desc.add_options()(
+        "universal_label",
+        po::value<std::string>(&universal_label)->default_value(""),
+        "Universal label, if using it, only in conjunction with labels_file");
+    desc.add_options()("FilteredLbuild,Lf",
+                       po::value<uint32_t>(&Lf)->default_value(0),
+                       "Build complexity for filtered points, higher value "
+                       "results in better graphs");
 
     po::variables_map vm;
     po::store(po::parse_command_line(argc, argv, desc), vm);
@@ -129,17 +151,20 @@ int main(int argc, char** argv) {
                   << "  alpha: " << alpha << "  #threads: " << num_threads
                   << std::endl;
     if (data_type == std::string("int8"))
-      return build_in_memory_index<int8_t>(metric, data_path, R, L, alpha,
-                                           index_path_prefix, num_threads,
-                                           use_pq_build, build_PQ_bytes, use_opq);
+      return build_in_memory_index<int8_t>(
+          metric, data_path, R, L, alpha, index_path_prefix, num_threads,
+          use_pq_build, build_PQ_bytes, use_opq, label_file, universal_label,
+          Lf);
     else if (data_type == std::string("uint8"))
       return build_in_memory_index<uint8_t>(
           metric, data_path, R, L, alpha, index_path_prefix, num_threads,
-          use_pq_build, build_PQ_bytes, use_opq);
+          use_pq_build, build_PQ_bytes, use_opq, label_file, universal_label,
+          Lf);
     else if (data_type == std::string("float"))
       return build_in_memory_index<float>(metric, data_path, R, L, alpha,
                                           index_path_prefix, num_threads,
-                                          use_pq_build, build_PQ_bytes, use_opq);
+                                          use_pq_build, build_PQ_bytes, use_opq,
+                                          label_file, universal_label, Lf);
     else {
       std::cout << "Unsupported type. Use one of int8, uint8 or float."
                 << std::endl;

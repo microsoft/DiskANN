@@ -92,6 +92,7 @@ typedef uint16_t _u16;
 typedef int16_t  _s16;
 typedef uint8_t  _u8;
 typedef int8_t   _s8;
+typedef unsigned label;
 inline void      open_file_to_write(std::ofstream&     writer,
                                     const std::string& filename) {
   writer.exceptions(std::ofstream::failbit | std::ofstream::badbit);
@@ -567,6 +568,19 @@ namespace diskann {
     data.reset(ptr);
   }
 #endif
+
+  inline void copy_file(std::string in_file, std::string out_file) {
+    std::ifstream source(in_file, std::ios::binary);
+    std::ofstream dest(out_file, std::ios::binary);
+
+    std::istreambuf_iterator<char> begin_source(source);
+    std::istreambuf_iterator<char> end_source;
+    std::ostreambuf_iterator<char> begin_dest(dest);
+    std::copy(begin_source, end_source, begin_dest);
+
+    source.close();
+    dest.close();
+  }
 
   DISKANN_DLLEXPORT double calculate_recall(
       unsigned num_queries, unsigned* gold_std, float* gs_dist, unsigned dim_gs,

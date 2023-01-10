@@ -12,7 +12,6 @@
 #include <codecvt>
 #include <boost/program_options.hpp>
 
-
 #include <cpprest/http_client.h>
 #include <restapi/common.h>
 
@@ -65,47 +64,40 @@ void query_loop(const std::string& ip_addr_port, const std::string& query_file,
 }
 
 int main(int argc, char* argv[]) {
-    std::string data_type, query_file, address;
-    uint32_t num_queries;
-    uint32_t l_search, k_value;
+  std::string data_type, query_file, address;
+  uint32_t    num_queries;
+  uint32_t    l_search, k_value;
 
-    po::options_description desc{ "Arguments" };
-    try {
-        desc.add_options()("help,h", "Print information on arguments");
-        desc.add_options()("data_type",
-            po::value<std::string>(&data_type)->required(),
-            "data type <int8/uint8/float>");
-        desc.add_options()("address",
-            po::value<std::string>(&address)->required(),
-            "Web server address");
-        desc.add_options()("query_file",
-            po::value<std::string>(&query_file)->required(),
-            "File containing the queries to search");
-        desc.add_options()(
-            "num_queries,Q",
-            po::value<uint32_t>(&num_queries)->required(),
-            "Number of queries to search");
-        desc.add_options()(
-            "l_search",
-            po::value<uint32_t>(&l_search)->required(),
-            "Value of L");
-        desc.add_options()(
-            "k_value,K",
-            po::value<uint32_t>(&k_value)->default_value(10),
-            "Value of K (default 10)");
-        po::variables_map vm;
-        po::store(po::parse_command_line(argc, argv, desc), vm);
-        if (vm.count("help")) {
-            std::cout << desc;
-            return 0;
-        }
-        po::notify(vm);
+  po::options_description desc{"Arguments"};
+  try {
+    desc.add_options()("help,h", "Print information on arguments");
+    desc.add_options()("data_type",
+                       po::value<std::string>(&data_type)->required(),
+                       "data type <int8/uint8/float>");
+    desc.add_options()("address", po::value<std::string>(&address)->required(),
+                       "Web server address");
+    desc.add_options()("query_file",
+                       po::value<std::string>(&query_file)->required(),
+                       "File containing the queries to search");
+    desc.add_options()("num_queries,Q",
+                       po::value<uint32_t>(&num_queries)->required(),
+                       "Number of queries to search");
+    desc.add_options()("l_search", po::value<uint32_t>(&l_search)->required(),
+                       "Value of L");
+    desc.add_options()("k_value,K",
+                       po::value<uint32_t>(&k_value)->default_value(10),
+                       "Value of K (default 10)");
+    po::variables_map vm;
+    po::store(po::parse_command_line(argc, argv, desc), vm);
+    if (vm.count("help")) {
+      std::cout << desc;
+      return 0;
     }
-    catch (const std::exception& ex) {
-        std::cerr << ex.what() << std::endl;
-        return -1;
-    }
-    
+    po::notify(vm);
+  } catch (const std::exception& ex) {
+    std::cerr << ex.what() << std::endl;
+    return -1;
+  }
 
   if (data_type == std::string("float")) {
     query_loop<float>(address, query_file, num_queries, l_search, k_value);
