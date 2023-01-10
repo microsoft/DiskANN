@@ -452,9 +452,9 @@ namespace diskann {
   template<typename T>
   int PQFlashIndex<T>::load(uint32_t num_threads, const char* index_filepath, const char* pivots_filepath, const char* compressed_filepath) {
 #endif
-    std::string pq_table_bin = pivots_file;
-    std::string pq_compressed_vectors = compressed_file;
-    std::string disk_index_file = index_file;
+    std::string pq_table_bin = pivots_filepath;
+    std::string pq_compressed_vectors = compressed_filepath;
+    std::string disk_index_file = index_filepath;
     std::string medoids_file = std::string(disk_index_file) + "_medoids.bin";
     std::string centroids_file =
       std::string(disk_index_file) + "_centroids.bin";
