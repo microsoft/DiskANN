@@ -952,7 +952,7 @@ namespace diskann {
 
             if (use_filter) {  // NOTE: NEED TO CHECK IF THIS CORRECT WITH
                                // NEW LOCKS.
-              _u32                     id = _final_graph[n][m];
+//              _u32                     id = _final_graph[n][m];
               std::vector<std::string> common_filters;
               auto &                   x = _pts_to_labels[id];
               std::set_intersection(filter_label.begin(), filter_label.end(),
@@ -1815,11 +1815,11 @@ template<typename T, typename TagT>
       init_ids.emplace_back(_start);
     }
 
-    T *aligned_query = scratch.aligned_query;
+    T *aligned_query = scratch->aligned_query();
     memcpy(aligned_query, query, _dim * sizeof(T));
 
     auto retval =
-        iterate_to_fixed_point(aligned_query, L, init_ids, scratch, use_filter, filter_vec, true, true);
+        iterate_to_fixed_point(aligned_query, L, init_ids, scratch, use_filters, filter_vec, true, true);
 
     auto best_L_nodes = scratch->best_l_nodes();
 
@@ -1851,8 +1851,8 @@ template<typename T, typename TagT>
   std::pair<uint32_t, uint32_t> Index<T, TagT>::search_with_filters(
       const T *query, const std::string &filter_label, const size_t K,
       const unsigned L, IndexType *indices, float *distance) {
-    ScratchStoreManager<T> manager(_query_scratch);
-    auto                   scratch = manager.scratch_space();
+    ScratchStoreManager<InMemQueryScratch<T>> manager(_query_scratch);
+    auto                                      scratch = manager.scratch_space();
 
     return search_impl(query, K, L, indices, distance, scratch, true,
                        filter_label);

@@ -430,14 +430,13 @@ inline void parse_label_file_into_vec(
             << pts_to_labels.size() << " points" << std::endl;
 }
 
-
 template<typename T>
-int aux_main(const std::string &base_file, const std::string &query_file,
-             const std::string &gt_file, size_t k, const std::string &filter_label,
-             const std::string &universal_label, 
-             const diskann::Metric &metric,
-             const std::string     &tags_file = std::string("")) {
-  size_t npoints, nqueries, dim;
+int aux_main(const std::string &base_file, const std::string &label_file,
+             const std::string &query_file, const std::string &gt_file,
+             size_t k, const std::string &filter_label,
+             const std::string &universal_label, const diskann::Metric &metric,
+             const std::string &tags_file = std::string("")) {
+  size_t npoints, nqueries, dim, npoints_filt;
 
   float *base_data;
   float *query_data;
@@ -514,14 +513,14 @@ int aux_main(const std::string &base_file, const std::string &query_file,
     }
 
     for (_u64 i = 0; i < nqueries; i++) {
-      for (_u64 j = 0; j < nr; j++) {
+      for (_u64 j = 0; j < part_k; j++) {
         if (tags_enabled)
           if (location_to_tag[closest_points_part[i * k + j] + start_id] == 0)
             continue;
         if (filter_label == "") {
           results[i].push_back(std::make_pair(
-              (uint32_t)(closest_points_part[i * k + j] + start_id),
-              dist_closest_points_part[i * k + j]));
+              (uint32_t)(closest_points_part[i * part_k + j] + start_id),
+              dist_closest_points_part[i * part_k + j]));
         } else {
           results[i].push_back(std::make_pair(
               (uint32_t)(rev_map[closest_points_part[i * part_k + j]]),
@@ -646,11 +645,11 @@ int main(int argc, char **argv) {
 
   try {
     if (data_type == std::string("float"))
-      aux_main<float>(base_file, query_file, gt_file, K,  filter_label, universal_label, metric, tags_file);
+      aux_main<float>(base_file, label_file, query_file, gt_file, K,  filter_label, universal_label, metric, tags_file);
     if (data_type == std::string("int8"))
-      aux_main<int8_t>(base_file, query_file, gt_file, K,  filter_label, universal_label,  metric, tags_file);
+      aux_main<int8_t>(base_file, label_file,  query_file, gt_file, K,  filter_label, universal_label,  metric, tags_file);
     if (data_type == std::string("uint8"))
-      aux_main<uint8_t>(base_file, query_file, gt_file, K,  filter_label, universal_label,  metric, tags_file);
+      aux_main<uint8_t>(base_file, label_file,  query_file, gt_file, K,  filter_label, universal_label,  metric, tags_file);
   } catch (const std::exception &e) {
     std::cout << std::string(e.what()) << std::endl;
     diskann::cerr << "Compute GT failed." << std::endl;
