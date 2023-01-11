@@ -584,7 +584,7 @@ namespace diskann {
                 "not exceed "
              << MAX_GRAPH_DEGREE << std::endl;
       throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
-        __LINE__);
+                                  __LINE__);
     }
 
     // setting up concept of frozen points in disk index for streaming-DiskANN
@@ -660,8 +660,7 @@ namespace diskann {
                "for the medoids "
             << std::endl;
         use_medoids_data_as_centroids();
-      }
-      else {
+      } else {
         size_t num_centroids, aligned_tmp_dim;
 #ifdef EXEC_ENV_OLS
         diskann::load_aligned_bin<float>(files, centroids_file, centroid_data,
@@ -683,8 +682,7 @@ namespace diskann {
                                       __LINE__);
         }
       }
-      }
-    else {
+    } else {
       num_medoids = 1;
       medoids = new uint32_t[1];
       medoids[0] = (_u32) (medoid_id_on_file);
