@@ -158,7 +158,7 @@ namespace diskann {
     // coord_cache
     T                        *coord_cache_buf = nullptr;
     tsl::robin_map<_u32, T *> coord_cache;
-
+    _u64 test_var;
     // thread-specific scratch
     ConcurrentQueue<SSDThreadData<T> *> thread_data;
     _u64                                max_nthreads;
