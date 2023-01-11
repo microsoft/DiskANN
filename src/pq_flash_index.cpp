@@ -435,7 +435,7 @@ namespace diskann {
 #endif
     std::string pq_table_bin = std::string(index_prefix) + "_pq_pivots.bin";
     std::string pq_compressed_vectors =
-      std::string(index_prefix) + "_pq_compressed.bin";
+        std::string(index_prefix) + "_pq_compressed.bin";
     std::string disk_index_file = std::string(index_prefix) + "_disk.index";
 #ifdef EXEC_ENV_OLS
     return load(files, num_threads, disk_index_file.c_str(), pq_table_bin.c_str(), pq_compressed_vectors.c_str());
@@ -457,22 +457,22 @@ namespace diskann {
     std::string disk_index_file = index_filepath;
     std::string medoids_file = std::string(disk_index_file) + "_medoids.bin";
     std::string centroids_file =
-      std::string(disk_index_file) + "_centroids.bin";
+        std::string(disk_index_file) + "_centroids.bin";
 
     size_t pq_file_dim, pq_file_num_centroids;
 #ifdef EXEC_ENV_OLS
     get_bin_metadata(files, pq_table_bin, pq_file_num_centroids, pq_file_dim,
-      METADATA_SIZE);
+                     METADATA_SIZE);
 #else
     get_bin_metadata(pq_table_bin, pq_file_num_centroids, pq_file_dim,
-      METADATA_SIZE);
+                     METADATA_SIZE);
 #endif
 
     this->disk_index_file = disk_index_file;
 
     if (pq_file_num_centroids != 256) {
       diskann::cout << "Error. Number of PQ centroids is not 256. Exiting."
-        << std::endl;
+                    << std::endl;
       return -1;
     }
 
@@ -487,10 +487,10 @@ namespace diskann {
     size_t npts_u64, nchunks_u64;
 #ifdef EXEC_ENV_OLS
     diskann::load_bin<_u8>(files, pq_compressed_vectors, this->data, npts_u64,
-      nchunks_u64);
+                           nchunks_u64);
 #else
     diskann::load_bin<_u8>(pq_compressed_vectors, this->data, npts_u64,
-      nchunks_u64);
+                           nchunks_u64);
 #endif
 
     this->num_points = npts_u64;
@@ -503,18 +503,18 @@ namespace diskann {
 #endif
 
     diskann::cout
-      << "Loaded PQ centroids and in-memory compressed vectors. #points: "
-      << num_points << " #dim: " << data_dim
-      << " #aligned_dim: " << aligned_dim << " #chunks: " << n_chunks
-      << std::endl;
+        << "Loaded PQ centroids and in-memory compressed vectors. #points: "
+        << num_points << " #dim: " << data_dim
+        << " #aligned_dim: " << aligned_dim << " #chunks: " << n_chunks
+        << std::endl;
 
     if (n_chunks > MAX_PQ_CHUNKS) {
       std::stringstream stream;
       stream << "Error loading index. Ensure that max PQ bytes for in-memory "
-        "PQ data does not exceed "
-        << MAX_PQ_CHUNKS << std::endl;
+                "PQ data does not exceed "
+             << MAX_PQ_CHUNKS << std::endl;
       throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
-        __LINE__);
+                                  __LINE__);
     }
 
     std::string disk_pq_pivots_path = this->disk_index_file + "_pq_pivots.bin";
@@ -531,13 +531,13 @@ namespace diskann {
 #endif
       disk_pq_n_chunks = disk_pq_table.get_num_chunks();
       disk_bytes_per_point =
-        disk_pq_n_chunks *
-        sizeof(_u8);  // revising disk_bytes_per_point since DISK PQ is used.
+          disk_pq_n_chunks *
+          sizeof(_u8);  // revising disk_bytes_per_point since DISK PQ is used.
       std::cout << "Disk index uses PQ data compressed down to "
-        << disk_pq_n_chunks << " bytes per point." << std::endl;
+                << disk_pq_n_chunks << " bytes per point." << std::endl;
     }
 
-    // read index metadata
+// read index metadata
 #ifdef EXEC_ENV_OLS
     // This is a bit tricky. We have to read the header from the
     // disk_index_file. But  this is now exclusively a preserve of the
@@ -548,7 +548,7 @@ namespace diskann {
     this->setup_thread_data(num_threads);
     this->max_nthreads = num_threads;
 
-    char* bytes = getHeaderBytes();
+    char                    *bytes = getHeaderBytes();
     ContentBuf               buf(bytes, HEADER_SIZE);
     std::basic_istream<char> index_metadata(&buf);
 #else
@@ -567,8 +567,8 @@ namespace diskann {
 
     if (disk_nnodes != num_points) {
       diskann::cout << "Mismatch in #points for compressed data file and disk "
-        "index file: "
-        << disk_nnodes << " vs " << num_points << std::endl;
+                       "index file: "
+                    << disk_nnodes << " vs " << num_points << std::endl;
       return -1;
     }
 
@@ -581,8 +581,8 @@ namespace diskann {
     if (max_degree > MAX_GRAPH_DEGREE) {
       std::stringstream stream;
       stream << "Error loading index. Ensure that max graph degree (R) does "
-        "not exceed "
-        << MAX_GRAPH_DEGREE << std::endl;
+                "not exceed "
+             << MAX_GRAPH_DEGREE << std::endl;
       throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
         __LINE__);
     }
@@ -595,16 +595,16 @@ namespace diskann {
       this->frozen_location = file_frozen_id;
     if (this->num_frozen_points == 1) {
       diskann::cout << " Detected frozen point in index at location "
-        << this->frozen_location
-        << ". Will not output it at search time." << std::endl;
+                    << this->frozen_location
+                    << ". Will not output it at search time." << std::endl;
     }
 
     READ_U64(index_metadata, this->reorder_data_exists);
     if (this->reorder_data_exists) {
       if (this->use_disk_index_pq == false) {
         throw ANNException(
-          "Reordering is designed for used with disk PQ compression option",
-          -1, __FUNCSIG__, __FILE__, __LINE__);
+            "Reordering is designed for used with disk PQ compression option",
+            -1, __FUNCSIG__, __FILE__, __LINE__);
       }
       READ_U64(index_metadata, this->reorder_data_start_sector);
       READ_U64(index_metadata, this->ndims_reorder_vecs);
@@ -635,7 +635,7 @@ namespace diskann {
     if (files.fileExists(medoids_file)) {
       size_t tmp_dim;
       diskann::load_bin<uint32_t>(files, medoids_file, medoids, num_medoids,
-        tmp_dim);
+                                  tmp_dim);
 #else
     if (file_exists(medoids_file)) {
       size_t tmp_dim;
@@ -645,10 +645,10 @@ namespace diskann {
       if (tmp_dim != 1) {
         std::stringstream stream;
         stream << "Error loading medoids file. Expected bin format of m times "
-          "1 vector of uint32_t."
-          << std::endl;
+                  "1 vector of uint32_t."
+               << std::endl;
         throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
-          __LINE__);
+                                    __LINE__);
       }
 #ifdef EXEC_ENV_OLS
       if (!files.fileExists(centroids_file)) {
@@ -656,38 +656,38 @@ namespace diskann {
       if (!file_exists(centroids_file)) {
 #endif
         diskann::cout
-          << "Centroid data file not found. Using corresponding vectors "
-          "for the medoids "
-          << std::endl;
+            << "Centroid data file not found. Using corresponding vectors "
+               "for the medoids "
+            << std::endl;
         use_medoids_data_as_centroids();
       }
       else {
         size_t num_centroids, aligned_tmp_dim;
 #ifdef EXEC_ENV_OLS
         diskann::load_aligned_bin<float>(files, centroids_file, centroid_data,
-          num_centroids, tmp_dim,
-          aligned_tmp_dim);
+                                         num_centroids, tmp_dim,
+                                         aligned_tmp_dim);
 #else
         diskann::load_aligned_bin<float>(centroids_file, centroid_data,
-          num_centroids, tmp_dim,
-          aligned_tmp_dim);
+                                         num_centroids, tmp_dim,
+                                         aligned_tmp_dim);
 #endif
         if (aligned_tmp_dim != aligned_dim || num_centroids != num_medoids) {
           std::stringstream stream;
           stream << "Error loading centroids data file. Expected bin format of "
-            "m times data_dim vector of float, where m is number of "
-            "medoids "
-            "in medoids file.";
+                    "m times data_dim vector of float, where m is number of "
+                    "medoids "
+                    "in medoids file.";
           diskann::cerr << stream.str() << std::endl;
           throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
-            __LINE__);
+                                      __LINE__);
         }
       }
       }
     else {
       num_medoids = 1;
       medoids = new uint32_t[1];
-      medoids[0] = (_u32)(medoid_id_on_file);
+      medoids[0] = (_u32) (medoid_id_on_file);
       use_medoids_data_as_centroids();
     }
 
@@ -695,11 +695,11 @@ namespace diskann {
 
     if (file_exists(norm_file) && metric == diskann::Metric::INNER_PRODUCT) {
       _u64   dumr, dumc;
-      float* norm_val;
+      float *norm_val;
       diskann::load_bin<float>(norm_file, norm_val, dumr, dumc);
       this->max_base_norm = norm_val[0];
       std::cout << "Setting re-scaling factor of base vectors to "
-        << this->max_base_norm << std::endl;
+                << this->max_base_norm << std::endl;
       delete[] norm_val;
     }
     diskann::cout << "done.." << std::endl;
