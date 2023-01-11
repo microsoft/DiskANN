@@ -252,8 +252,10 @@ namespace diskann {
 
     void link(Parameters &parameters);
 
-    // Acquire _tag_lock before calling
+    // Acquire exclusive _tag_lock and _delete_lock before calling
     int    reserve_location();
+
+    // Acquire _tag_lock before calling
     size_t release_location(int location);
     size_t release_locations(const tsl::robin_set<unsigned> &locations);
 

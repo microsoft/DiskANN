@@ -1956,6 +1956,9 @@ namespace diskann {
                   << timer.elapsed() / 1000000. << "s." << std::endl;
   }
 
+  // 
+  // Caller must hold unique _tag_lock and _delete_lock before calling this
+  //
   template<typename T, typename TagT>
   int Index<T, TagT>::reserve_location() {
     if (_nd >= _max_points) {
@@ -1969,8 +1972,6 @@ namespace diskann {
       // consecutive locations.
       location = (unsigned) _nd;
     } else {
-      // no need of delete_lock here, _tag_lock will ensure lazy delete does
-      // not update empty slots
       assert(_empty_slots.size() != 0);
       assert(_empty_slots.size() + _nd == _max_points);
 
@@ -2098,29 +2099,35 @@ namespace diskann {
 
     std::shared_lock<std::shared_timed_mutex> shared_ul(_update_lock);
     std::unique_lock<std::shared_timed_mutex> tl(_tag_lock);
+    std::unique_lock<std::shared_timed_mutex> dl(_delete_lock);
+
 
     // Find a vacant location in the data array to insert the new point
     auto location = reserve_location();
     if (location == -1) {
 #if EXPAND_IF_FULL
+      dl.unlock();
       tl.unlock();
       shared_ul.unlock();
 
       {
         std::unique_lock<std::shared_timed_mutex> ul(_update_lock);
         tl.lock();
+        dl.lock();
 
         if (_nd >= _max_points) {
           auto new_max_points = (size_t) (_max_points * INDEX_GROWTH_FACTOR);
           resize(new_max_points);
         }
 
+        dl.unlock();
         tl.unlock();
         ul.unlock();
       }
 
       shared_ul.lock();
       tl.lock();
+      dl.lock();
 
       location = reserve_location();
       if (location == -1) {
@@ -2132,6 +2139,7 @@ namespace diskann {
       return -1;
 #endif
     }
+    dl.unlock();
 
     // Insert tag and mapping to location
     if (_enable_tags) {
