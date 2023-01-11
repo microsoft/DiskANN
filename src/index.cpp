@@ -896,9 +896,6 @@ namespace diskann {
       if (pool[i].id == (unsigned) location) {
         pool.erase(pool.begin() + i);
         i--;
-      } else if (_delete_set->find(pool[i].id) != _delete_set->end()) {
-        pool.erase(pool.begin() + i);
-        i--;
       }
     }
 
