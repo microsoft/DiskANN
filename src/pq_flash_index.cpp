@@ -564,6 +564,8 @@ namespace diskann {
   std::string labels_file = std ::string(disk_index_file) + "_labels.txt";
     std::string labels_to_medoids =
         std ::string(disk_index_file) + "_labels_to_medoids.txt";
+   std::string dummy_map_file =
+        std ::string(disk_index_file) + "_dummy_map.txt";        
     if (file_exists(labels_file)) {
       parse_label_file(labels_file);
       if (file_exists(labels_to_medoids)) {
@@ -598,6 +600,36 @@ namespace diskann {
         universal_label_reader.close();
         set_universal_label(univ_label);
       }
+     if (file_exists(dummy_map_file)) {
+        std::ifstream dummy_map_stream(dummy_map_file);
+
+        std::string line, token;
+        //        unsigned    line_cnt = 0;
+
+        while (std::getline(dummy_map_stream, line)) {
+          std::istringstream iss(line);
+          _u32               cnt = 0;
+          _u32               dummy_id;
+          _u32               real_id;
+          while (std::getline(iss, token, ',')) {
+            if (cnt == 0)
+              dummy_id = (_u32) stoul(token);
+            else
+              real_id = (_u32) stoul(token);
+            cnt++;
+          }
+          _dummy_pts.insert(dummy_id);
+          _has_dummy_pts.insert(real_id);
+          _dummy_to_real_map[dummy_id] = real_id;
+
+          if (_real_to_dummy_map.find(real_id) == _real_to_dummy_map.end())
+            _real_to_dummy_map[real_id] = std::vector<_u32>();
+
+          _real_to_dummy_map[real_id].emplace_back(dummy_id);
+        }
+        dummy_map_stream.close();
+        std::cout << "Loaded dummy map" << std::endl;
+      }      
     }
 
     std::string pq_table_bin = std::string(index_prefix) + "_pq_pivots.bin";
@@ -1143,8 +1175,14 @@ template<typename T>
                 disk_pq_table.l2_distance(  // disk_pq does not support OPQ yet
                     query_float, (_u8 *) node_fp_coords_copy);
         }
-        full_retset.push_back(
-            Neighbor((unsigned) cached_nhood.first, cur_expanded_dist, true));
+          _u32  real_id = cached_nhood.first;
+          if (_dummy_pts.find(real_id) != _dummy_pts.end()) {
+            real_id = _dummy_to_real_map[real_id];
+            }
+          Neighbor real_nbr(real_id, cur_expanded_dist, true); 
+          if (std::find(full_retset.begin(), full_retset.end(), real_nbr) == full_retset.end()) {
+            full_retset.emplace_back(real_nbr);
+          }
 
         _u64      nnbrs = cached_nhood.second.first;
         unsigned *node_nbrs = cached_nhood.second.second;
@@ -1161,6 +1199,10 @@ template<typename T>
         for (_u64 m = 0; m < nnbrs; ++m) {
           unsigned id = node_nbrs[m];
           if (visited.insert(id).second) {
+
+            if (!use_filter && _dummy_pts.find(id) != _dummy_pts.end())
+              continue;
+
             if (use_filter && !find_label_in_point(id, filter_num) &&
                 !find_label_in_point(id, _universal_filter_num))
               continue;            
@@ -1220,6 +1262,17 @@ template<typename T>
             cur_expanded_dist = disk_pq_table.l2_distance(
                 query_float, (_u8 *) node_fp_coords_copy);
         }
+
+          _u32  real_id = frontier_nhood.first;
+          if (_dummy_pts.find(real_id) != _dummy_pts.end()) {
+            real_id = _dummy_to_real_map[real_id];
+            }
+          Neighbor real_nbr(real_id, cur_expanded_dist, true); 
+          if (std::find(full_retset.begin(), full_retset.end(), real_nbr) == full_retset.end()) {
+            full_retset.emplace_back(real_nbr);
+          }
+
+
         full_retset.push_back(
             Neighbor(frontier_nhood.first, cur_expanded_dist, true));
         unsigned *node_nbrs = (node_buf + 1);
@@ -1236,6 +1289,11 @@ template<typename T>
         for (_u64 m = 0; m < nnbrs; ++m) {
           unsigned id = node_nbrs[m];
           if (visited.insert(id).second) {
+
+            if (!use_filter && _dummy_pts.find(id) != _dummy_pts.end())
+              continue;
+
+
             if (use_filter && !find_label_in_point(id, filter_num) &&
                 !find_label_in_point(id, _universal_filter_num))
               continue;            
@@ -1327,6 +1385,11 @@ template<typename T>
     // copy k_search values
     for (_u64 i = 0; i < k_search; i++) {
       indices[i] = full_retset[i].id;
+
+      if (_dummy_pts.find(indices[i]) != _dummy_pts.end()) {
+        indices[i] = _dummy_to_real_map[indices[i]];
+      }
+
       if (distances != nullptr) {
         distances[i] = full_retset[i].distance;
         if (metric == diskann::Metric::INNER_PRODUCT) {

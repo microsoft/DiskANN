@@ -1678,12 +1678,13 @@ template<typename T, typename TagT>
 
     infile.clear();
     infile.seekg(0, std::ios::beg);
+    line_cnt = 0;
     while (std::getline(infile, line)) {
       std::istringstream       iss(line);
       std::vector<std::string> lbls(0);
       // long int              val;
-      getline(iss, token, '\t');
-      _u32 i = (_u32) std::stoul(token);
+//      getline(iss, token, '\t');
+//      _u32 i = (_u32) std::stoul(token);
       getline(iss, token, '\t');
       std::istringstream new_iss(token);
       while (getline(new_iss, token, ',')) {
@@ -1697,7 +1698,7 @@ template<typename T, typename TagT>
         exit(-1);
       }
       std::sort(lbls.begin(), lbls.end());
-      _pts_to_labels[i] = lbls;
+      _pts_to_labels[line_cnt] = lbls;
       line_cnt++;
     }
     std::cout << "Identified " << _labels.size() << " distinct label(s)"

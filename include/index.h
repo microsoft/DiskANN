@@ -367,6 +367,7 @@ namespace diskann {
     std::string                           _universal_label = "";
 
 
+
     // Indexing parameters
     uint32_t _indexingQueueSize;
     uint32_t _indexingRange;

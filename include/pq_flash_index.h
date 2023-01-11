@@ -199,6 +199,11 @@ namespace diskann {
     bool                                  _use_universal_label;
     _u32                                  _universal_filter_num;
     std::vector<std::string>              _filter_list;
+    tsl::robin_set<_u32>                    _dummy_pts;
+    tsl::robin_set<_u32>                    _has_dummy_pts;
+    tsl::robin_map<_u32, _u32>              _dummy_to_real_map;
+    tsl::robin_map<_u32, std::vector<_u32>> _real_to_dummy_map;
+
 
 
 #ifdef EXEC_ENV_OLS
