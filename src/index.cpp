@@ -1646,16 +1646,22 @@ namespace diskann {
 
   template<typename T, typename TagT>
   inline void Index<T, TagT>::process_delete(
-      const tsl::robin_set<unsigned> &old_delete_set, size_t i,
+      const tsl::robin_set<unsigned> &old_delete_set, size_t loc,
       const unsigned &range, const unsigned &maxc, const float &alpha,
-      InMemQueryScratch<T> *scratch) {
-    tsl::robin_set<unsigned> candidate_set;
-    std::vector<Neighbor>    expanded_nghrs;
-    std::vector<Neighbor>    result;
+      const bool lock_adj_list, InMemQueryScratch<T> *scratch) {
+    std::vector<Neighbor> expanded_nghrs;
+    std::vector<Neighbor> pruned_list;
 
-    bool modify = false;
+    std::shared_lock<std::shared_timed_mutex> dl(_delete_lock);
 
-    for (auto ngh : _final_graph[(_u32) i]) {
+    // If this condition were not true, deadlock could result
+    assert(old_delete_set.find(loc) == old_delete_set.end());
+
+    if (lock_adj_list)
+      _locks[loc].lock();
+
+    bool  modify = false;
+    for (auto ngh : _final_graph[loc]) {
       if (old_delete_set.find(ngh) != old_delete_set.end()) {
         modify = true;
 
@@ -1664,35 +1670,33 @@ namespace diskann {
           _locks[ngh].lock();
         for (auto j : _final_graph[ngh])
           if (old_delete_set.find(j) == old_delete_set.end())
-            candidate_set.insert(j);
+            expanded_nghrs.emplace_back(j, 0);
         if (_conc_consolidate)
           _locks[ngh].unlock();
       } else {
-        candidate_set.insert(ngh);
+        expanded_nghrs.emplace_back(ngh, 0);
       }
     }
     if (modify) {
-      for (auto j : candidate_set) {
-        expanded_nghrs.push_back(
-            Neighbor(j,
-                     _distance->compare(_data + _aligned_dim * i,
-                                        _data + _aligned_dim * (size_t) j,
-                                        (unsigned) _aligned_dim)));
+      for (auto iter : expanded_nghrs) {
+        size_t ngh_id = iter.id;
+        iter.distance = _distance->compare(_data + _aligned_dim * loc,
+                                           _data + _aligned_dim * ngh_id,
+                                           (unsigned) _aligned_dim);
       }
 
       std::sort(expanded_nghrs.begin(), expanded_nghrs.end());
-      occlude_list(expanded_nghrs, alpha, range, maxc, result, scratch);
+      occlude_list(expanded_nghrs, alpha, range, maxc, pruned_list, scratch);
 
-      {
-        _final_graph[i].clear();
-
-        for (auto j : result) {
-          if (j.id != (_u32) i &&
-              (old_delete_set.find(j.id) == old_delete_set.end()))
-            _final_graph[(_u32) i].push_back(j.id);
-        }
+      _final_graph[loc].clear();
+      for (auto ngh : pruned_list) {
+        if (ngh.id != (_u32) loc &&
+            (old_delete_set.find(ngh.id) == old_delete_set.end()))
+          _final_graph[loc].push_back(ngh.id);
       }
     }
+    if (lock_adj_list)
+      _locks[loc].unlock();
   }
 
   // Returns number of live points left after consolidation
@@ -1770,22 +1774,16 @@ namespace diskann {
           !_empty_slots.is_in_set((_u32) loc)) {
         ScratchStoreManager<InMemQueryScratch<T>> manager(_query_scratch);
         auto scratch = manager.scratch_space();
-        if (_conc_consolidate) {
-          LockGuard adj_list_lock(_locks[loc]);
-          process_delete(*old_delete_set, loc, range, maxc, alpha, scratch);
-          num_calls_to_process_delete += 1;
-        } else {
-          process_delete(*old_delete_set, loc, range, maxc, alpha, scratch);
-          num_calls_to_process_delete += 1;
-        }
+        process_delete(*old_delete_set, loc, range, maxc, alpha,
+                       _conc_consolidate ? true : false, scratch);
+        num_calls_to_process_delete += 1;
       }
     }
     for (_s64 loc = _max_points; loc < (_s64) (_max_points + _num_frozen_pts);
          loc++) {
-      LockGuard                                 adj_list_lock(_locks[loc]);
       ScratchStoreManager<InMemQueryScratch<T>> manager(_query_scratch);
       auto scratch = manager.scratch_space();
-      process_delete(*old_delete_set, loc, range, maxc, alpha, scratch);
+      process_delete(*old_delete_set, loc, range, maxc, alpha, true, scratch);
       num_calls_to_process_delete += 1;
     }
 
