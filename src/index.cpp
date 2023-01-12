@@ -715,7 +715,7 @@ namespace diskann {
         scratch->inserted_into_pool_rs();
     boost::dynamic_bitset<> &inserted_into_pool_bs =
         scratch->inserted_into_pool_bs();
-    auto id_scratch = scratch->id_scratch();
+    std::vector<unsigned> &id_scratch = scratch->id_scratch();
     auto dist_scratch = scratch->dist_scratch();
 
     T *aligned_query = scratch->aligned_query();
@@ -945,7 +945,7 @@ namespace diskann {
     assert(std::is_sorted(pool.begin(), pool.end()));
     if (pool.size() > maxc)
       pool.resize(maxc);
-    auto occlude_factor = scratch->occlude_factor();
+    std::vector<float> &occlude_factor = scratch->occlude_factor();
     occlude_factor.insert(occlude_factor.end(), pool.size(), 0);
 
     float cur_alpha = 1;
@@ -1510,7 +1510,7 @@ namespace diskann {
     auto retval =
         iterate_to_fixed_point(query, L, init_ids, scratch, true, true);
 
-    auto best_L_nodes = scratch->best_l_nodes();
+    NeighborPriorityQueue &best_L_nodes = scratch->best_l_nodes();
 
     size_t pos = 0;
     for (int i = 0; i < best_L_nodes.size(); ++i) {
