@@ -830,7 +830,7 @@ namespace diskann {
     };
     Timer query_timer, io_timer, cpu_timer;
 
-    tsl::robin_set<_u64> &visited = query_scratch->visited;
+    tsl::robin_set<_u64>  &visited = query_scratch->visited;
     NeighborPriorityQueue &retset = query_scratch->retset;
     retset.reserve(l_search);
     std::vector<Neighbor> &full_retset = query_scratch->full_retset;
