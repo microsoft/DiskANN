@@ -1173,7 +1173,7 @@ namespace diskann {
 
       if (node_ctr % 100000 == 0) {
         diskann::cout << "\r" << (100.0 * node_ctr) / (visit_order.size())
-                      << "\% of index build completed." << std::flush;
+                      << "% of index build completed." << std::flush;
       }
     }
 
