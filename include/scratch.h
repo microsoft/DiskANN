@@ -44,7 +44,7 @@ namespace diskann {
     inline tsl::robin_set<unsigned> &visited() {
       return _visited;
     }
-    std::vector<Neighbor> &best_l_nodes() {
+    inline NeighborPriorityQueue &best_l_nodes() {
       return _best_l_nodes;
     }
     inline tsl::robin_set<unsigned> &inserted_into_pool_rs() {
@@ -81,7 +81,7 @@ namespace diskann {
    private:
     std::vector<Neighbor>    _pool;
     tsl::robin_set<unsigned> _visited;
-    std::vector<Neighbor>    _best_l_nodes;
+    NeighborPriorityQueue    _best_l_nodes;
     tsl::robin_set<unsigned> _inserted_into_pool_rs;
     boost::dynamic_bitset<> *_inserted_into_pool_bs;
     std::vector<unsigned>    _id_scratch;
@@ -115,7 +115,7 @@ namespace diskann {
     PQScratch<T> *_pq_scratch;
 
     tsl::robin_set<_u64>  visited;
-    std::vector<Neighbor> retset;
+    NeighborPriorityQueue retset;
     std::vector<Neighbor> full_retset;
 
     SSDQueryScratch(size_t aligned_dim, size_t visited_reserve);
