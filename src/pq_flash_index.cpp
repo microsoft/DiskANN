@@ -1,7 +1,6 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT license.
 
-
 #include "common_includes.h"
 
 #include "timer.h"
@@ -44,7 +43,7 @@ namespace diskann {
 
   template<typename T>
   PQFlashIndex<T>::PQFlashIndex(std::shared_ptr<AlignedFileReader> &fileReader,
-                                diskann::Metric m)
+                                diskann::Metric                     m)
       : reader(fileReader), metric(m) {
     if (m == diskann::Metric::COSINE || m == diskann::Metric::INNER_PRODUCT) {
       if (std::is_floating_point<T>::value) {
@@ -438,19 +437,27 @@ namespace diskann {
         std::string(index_prefix) + "_pq_compressed.bin";
     std::string disk_index_file = std::string(index_prefix) + "_disk.index";
 #ifdef EXEC_ENV_OLS
-    return load(files, num_threads, disk_index_file.c_str(), pq_table_bin.c_str(), pq_compressed_vectors.c_str());
+    return load_from_separate_paths(files, num_threads, disk_index_file.c_str(),
+                                    pq_table_bin.c_str(),
+                                    pq_compressed_vectors.c_str());
 #else
-    return load(num_threads, disk_index_file.c_str(), pq_table_bin.c_str(), pq_compressed_vectors.c_str());
+    return load_from_separate_paths(num_threads, disk_index_file.c_str(),
+                                    pq_table_bin.c_str(),
+                                    pq_compressed_vectors.c_str());
 #endif
   }
 
 #ifdef EXEC_ENV_OLS
   template<typename T>
-  int PQFlashIndex<T>::load(diskann::MemoryMappedFiles& files,
-    uint32_t num_threads, const char* index_filepath, const char* pivots_filepath, const char* compressed_filepath) {
+  int PQFlashIndex<T>::load_from_separate_paths(
+      diskann::MemoryMappedFiles &files, uint32_t num_threads,
+      const char *index_filepath, const char *pivots_filepath,
+      const char *compressed_filepath) {
 #else
   template<typename T>
-  int PQFlashIndex<T>::load(uint32_t num_threads, const char* index_filepath, const char* pivots_filepath, const char* compressed_filepath) {
+  int PQFlashIndex<T>::load_from_separate_paths(
+      uint32_t num_threads, const char *index_filepath,
+      const char *pivots_filepath, const char *compressed_filepath) {
 #endif
     std::string pq_table_bin = pivots_filepath;
     std::string pq_compressed_vectors = compressed_filepath;
@@ -966,8 +973,8 @@ namespace diskann {
           unsigned id = node_nbrs[m];
           if (visited.insert(id).second) {
             cmps++;
-            float dist = dist_scratch[m];
-            Neighbor nn(id, dist, true);
+            float     dist = dist_scratch[m];
+            Neighbor  nn(id, dist, true);
             Neighbor &lastResult = retset[cur_list_size - 1];
             if ((lastResult < nn || lastResult == nn) &&
                 (cur_list_size == l_search))
@@ -1042,14 +1049,14 @@ namespace diskann {
             if (stats != nullptr) {
               stats->n_cmps++;
             }
-            Neighbor nn(id, dist, true);
+            Neighbor  nn(id, dist, true);
             Neighbor &lastResult = retset[cur_list_size - 1];
             if ((lastResult < nn || lastResult == nn) &&
                 (cur_list_size == l_search))
               continue;
-            auto     r = InsertIntoPool(
-                    retset.data(), cur_list_size,
-                    nn);  // Return position in sorted list where nn inserted.
+            auto r = InsertIntoPool(
+                retset.data(), cur_list_size,
+                nn);  // Return position in sorted list where nn inserted.
             if (cur_list_size < l_search)
               ++cur_list_size;
             if (r < nk)
@@ -1198,7 +1205,7 @@ namespace diskann {
 
   template<typename T>
   diskann::Metric PQFlashIndex<T>::get_metric() {
-        return this->metric;
+    return this->metric;
   }
 
 #ifdef EXEC_ENV_OLS
