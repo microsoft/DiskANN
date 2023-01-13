@@ -1068,6 +1068,7 @@ namespace diskann {
             prune_needed = false;
           } else {
             copy_of_neighbors = des_pool;
+            copy_of_neighbors.reserve(des_pool.size() + 1);
             prune_needed = true;
           }
         }
@@ -1099,10 +1100,7 @@ namespace diskann {
         {
           LockGuard guard(_locks[des]);
 
-          _final_graph[des].clear();
-          for (auto new_nbr : new_out_neighbors) {
-            _final_graph[des].emplace_back(new_nbr);
-          }
+          _final_graph[des] = new_out_neighbors;
         }
       }
     }
@@ -1685,7 +1683,7 @@ namespace diskann {
       occlude_list(expanded_nghrs, alpha, range, maxc, pruned_list, scratch);
 
       _final_graph[loc].clear();
-      for (auto ngh : pruned_list) {
+      for (const auto& ngh : pruned_list) {
         if (ngh.id != (_u32) loc &&
             (old_delete_set.find(ngh.id) == old_delete_set.end()))
           _final_graph[loc].push_back(ngh.id);
