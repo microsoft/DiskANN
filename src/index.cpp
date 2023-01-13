@@ -1783,6 +1783,12 @@ namespace diskann {
 
     std::unique_lock<std::shared_timed_mutex> tl(_tag_lock);
     size_t ret_nd = release_locations(*old_delete_set);
+    size_t max_points = _max_points;
+    size_t empty_slots_size = _empty_slots.size();
+
+    std::shared_lock<std::shared_timed_mutex> dl(_delete_lock);
+    size_t delete_set_size = _delete_set->size();
+    size_t old_delete_set_size = old_delete_set->size();
 
     if (!_conc_consolidate) {
       update_lock.unlock();
@@ -1794,9 +1800,9 @@ namespace diskann {
     double duration = timer.elapsed() / 1000000.0;
     diskann::cout << " done in " << duration << " seconds." << std::endl;
     return consolidation_report(
-        diskann::consolidation_report::status_code::SUCCESS, ret_nd,
-        this->_max_points, _empty_slots.size(), old_delete_set->size(),
-        _delete_set->size(), num_calls_to_process_delete, duration);
+        diskann::consolidation_report::status_code::SUCCESS, ret_nd, max_points,
+        empty_slots_size, old_delete_set_size, delete_set_size,
+        num_calls_to_process_delete, duration);
   }
 
   template<typename T, typename TagT>
