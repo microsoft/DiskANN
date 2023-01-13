@@ -1013,9 +1013,9 @@ namespace diskann {
 
     // If using _pq_build, over-ride the PQ distances with actual distances
     if (_pq_dist) {
-      for (auto iter : pool)
-        iter.distance = _distance->compare(
-            _data + _aligned_dim * (size_t) iter.id,
+      for (auto& ngh : pool)
+        ngh.distance = _distance->compare(
+            _data + _aligned_dim * (size_t) ngh.id,
             _data + _aligned_dim * (size_t) location, (unsigned) _aligned_dim);
     }
 
@@ -1675,10 +1675,9 @@ namespace diskann {
       }
     }
     if (modify) {
-      for (auto iter : expanded_nghrs) {
-        size_t ngh_id = iter.id;
-        iter.distance = _distance->compare(_data + _aligned_dim * loc,
-                                           _data + _aligned_dim * ngh_id,
+      for (auto& ngh : expanded_nghrs) {
+        ngh.distance = _distance->compare(_data + _aligned_dim * loc,
+                                           _data + _aligned_dim * ngh.id,
                                            (unsigned) _aligned_dim);
       }
 
