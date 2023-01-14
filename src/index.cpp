@@ -1643,54 +1643,53 @@ namespace diskann {
   inline void Index<T, TagT>::process_delete(
       const tsl::robin_set<unsigned> &old_delete_set, size_t loc,
       const unsigned &range, const unsigned &maxc, const float &alpha,
-      const bool lock_adj_list, InMemQueryScratch<T> *scratch) {
+      InMemQueryScratch<T> *scratch) {
     std::vector<Neighbor> expanded_nghrs;
     std::vector<Neighbor> pruned_list;
-
-    std::shared_lock<std::shared_timed_mutex> dl(_delete_lock);
 
     // If this condition were not true, deadlock could result
     assert(old_delete_set.find(loc) == old_delete_set.end());
 
-    if (lock_adj_list)
-      _locks[loc].lock();
+    std::vector<unsigned> adj_list;
+    {
+      // Acquire and release lock[loc] before acquiring locks for neighbors
+      std::unique_lock<non_recursive_mutex> adj_list_lock;
+      if (_conc_consolidate)
+        adj_list_lock = std::unique_lock<non_recursive_mutex>(_locks[loc]);
+      adj_list = _final_graph[loc];
+    }
 
-    bool  modify = false;
-    for (auto ngh : _final_graph[loc]) {
+    bool modify = false;
+    for (auto ngh : adj_list) {
       if (old_delete_set.find(ngh) != old_delete_set.end()) {
         modify = true;
 
-        // Add outgoing links from
+        std::unique_lock<non_recursive_mutex> ngh_lock;
         if (_conc_consolidate)
-          _locks[ngh].lock();
+          ngh_lock = std::unique_lock<non_recursive_mutex>(_locks[ngh]);
         for (auto j : _final_graph[ngh])
-          if (old_delete_set.find(j) == old_delete_set.end())
+          if (j != loc && old_delete_set.find(j) == old_delete_set.end())
             expanded_nghrs.emplace_back(j, 0);
-        if (_conc_consolidate)
-          _locks[ngh].unlock();
       } else {
         expanded_nghrs.emplace_back(ngh, 0);
       }
     }
     if (modify) {
-      for (auto& ngh : expanded_nghrs) {
+      for (auto &ngh : expanded_nghrs) {
         ngh.distance = _distance->compare(_data + _aligned_dim * loc,
-                                           _data + _aligned_dim * ngh.id,
-                                           (unsigned) _aligned_dim);
+                                          _data + _aligned_dim * ngh.id,
+                                          (unsigned) _aligned_dim);
       }
 
       std::sort(expanded_nghrs.begin(), expanded_nghrs.end());
       occlude_list(expanded_nghrs, alpha, range, maxc, pruned_list, scratch);
 
+      std::unique_lock<non_recursive_mutex> adj_list_lock(_locks[loc]);
       _final_graph[loc].clear();
-      for (const auto& ngh : pruned_list) {
-        if (ngh.id != (_u32) loc &&
-            (old_delete_set.find(ngh.id) == old_delete_set.end()))
-          _final_graph[loc].push_back(ngh.id);
+      for (const auto &ngh : pruned_list) {
+        _final_graph[loc].push_back(ngh.id);
       }
     }
-    if (lock_adj_list)
-      _locks[loc].unlock();
   }
 
   // Returns number of live points left after consolidation
@@ -1768,8 +1767,7 @@ namespace diskann {
           !_empty_slots.is_in_set((_u32) loc)) {
         ScratchStoreManager<InMemQueryScratch<T>> manager(_query_scratch);
         auto scratch = manager.scratch_space();
-        process_delete(*old_delete_set, loc, range, maxc, alpha,
-                       _conc_consolidate ? true : false, scratch);
+        process_delete(*old_delete_set, loc, range, maxc, alpha, scratch);
         num_calls_to_process_delete += 1;
       }
     }
@@ -1777,7 +1775,7 @@ namespace diskann {
          loc++) {
       ScratchStoreManager<InMemQueryScratch<T>> manager(_query_scratch);
       auto scratch = manager.scratch_space();
-      process_delete(*old_delete_set, loc, range, maxc, alpha, true, scratch);
+      process_delete(*old_delete_set, loc, range, maxc, alpha, scratch);
       num_calls_to_process_delete += 1;
     }
 

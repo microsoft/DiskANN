@@ -277,8 +277,7 @@ namespace diskann {
     // Also acquires _locks[i] if lock_adj_list is set to true
     void process_delete(const tsl::robin_set<unsigned> &old_delete_set,
                         size_t loc, const unsigned &range, const unsigned &maxc,
-                        const float &alpha, const bool lock_adj_list,
-                        InMemQueryScratch<T> *scratch);
+                        const float &alpha, InMemQueryScratch<T> *scratch);
 
     void initialize_query_scratch(uint32_t num_threads, uint32_t search_l,
                                   uint32_t indexing_l, uint32_t r,
