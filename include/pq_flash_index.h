@@ -16,7 +16,6 @@
 #include "tsl/robin_map.h"
 #include "tsl/robin_set.h"
 
-
 #define FULL_PRECISION_REORDER_MULTIPLIER 3
 
 namespace diskann {
@@ -34,7 +33,18 @@ namespace diskann {
                                uint32_t num_threads, const char *index_prefix);
 #else
     // load compressed data, and obtains the handle to the disk-resident index
-    DISKANN_DLLEXPORT int  load(uint32_t num_threads, const char *index_prefix);
+    DISKANN_DLLEXPORT int load(uint32_t num_threads, const char *index_prefix);
+#endif
+
+#ifdef EXEC_ENV_OLS
+    DISKANN_DLLEXPORT int load_from_separate_paths(
+        diskann::MemoryMappedFiles &files, uint32_t num_threads,
+        const char *index_filepath, const char *pivots_filepath,
+        const char *compressed_filepath);
+#else
+    DISKANN_DLLEXPORT int load_from_separate_paths(
+        uint32_t num_threads, const char *index_filepath,
+        const char *pivots_filepath, const char *compressed_filepath);
 #endif
 
     DISKANN_DLLEXPORT void load_cache_list(std::vector<uint32_t> &node_list);
