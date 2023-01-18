@@ -1486,11 +1486,13 @@ namespace diskann {
     ScratchStoreManager<InMemQueryScratch<T>> manager(_query_scratch);
     auto                                      scratch = manager.scratch_space();
 
-    if (L > scratch->search_l) {
-      scratch->resize_for_query(L);
-      diskann::cout << "Expanding query scratch_space. Was created with Lsize: "
-                    << scratch->search_l << " but search L is: " << L
-                    << std::endl;
+    if (L > scratch->get_L()) {
+      diskann::cout << "Attempting to expand query scratch_space. Was created "
+                    << "with Lsize: " << scratch->get_L()
+                    << " but search L is: " << L << std::endl;
+      scratch->resize_for_new_L(L);
+      diskann::cout << "Resize completed. Let scratch->L is "
+                    << scratch->get_L() << std::endl;
     }
 
     return search_impl(query, K, L, indices, distances, scratch);
@@ -1545,11 +1547,13 @@ namespace diskann {
     ScratchStoreManager<InMemQueryScratch<T>> manager(_query_scratch);
     auto                                      scratch = manager.scratch_space();
 
-    if (L > scratch->search_l) {
-      scratch->resize_for_query(L);
-      diskann::cout << "Expanding query scratch_space. Was created with Lsize: "
-                    << scratch->search_l << " but search L is: " << L
-                    << std::endl;
+    if (L > scratch->get_L()) {
+      diskann::cout << "Attempting to expand query scratch_space. Was created "
+                    << "with Lsize: " << scratch->get_L()
+                    << " but search L is: " << L << std::endl;
+      scratch->resize_for_new_L(L);
+      diskann::cout << "Resize completed. Let scratch->L is "
+                    << scratch->get_L() << std::endl;
     }
     _u32  *indices = scratch->indices();
     float *dist_interim = scratch->interim_dists();

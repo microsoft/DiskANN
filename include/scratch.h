@@ -28,15 +28,30 @@ namespace diskann {
   template<typename T>
   class InMemQueryScratch {
    public:
-    uint32_t search_l;
-    uint32_t indexing_l;
-    uint32_t r;
+
 
     ~InMemQueryScratch();
     InMemQueryScratch(uint32_t search_l, uint32_t indexing_l, uint32_t r,
                       uint32_t maxc, size_t dim, bool init_pq_scratch = false);
-    void resize_for_query(uint32_t new_search_l);
+    void resize_for_new_L(uint32_t new_search_l);
     void clear();
+
+    inline uint32_t get_L() {
+      return _L;
+    }
+    inline uint32_t get_R() {
+      return _R;
+    }
+    inline uint32_t get_maxc() {
+      return _maxc;
+    }
+
+    inline T *aligned_query() {
+      return _aligned_query;
+    }
+    inline PQScratch<T> *pq_scratch() {
+      return _pq_scratch;
+    }
 
     inline std::vector<Neighbor> &pool() {
       return _pool;
@@ -47,6 +62,10 @@ namespace diskann {
     inline NeighborPriorityQueue &best_l_nodes() {
       return _best_l_nodes;
     }
+    inline std::vector<float> &occlude_factor() {
+      return _occlude_factor;
+    }
+
     inline tsl::robin_set<unsigned> &inserted_into_pool_rs() {
       return _inserted_into_pool_rs;
     }
@@ -57,43 +76,38 @@ namespace diskann {
       return _id_scratch;
     }
     inline float *dist_scratch() {
-      return _dist_scratch;
+      return _dist_scratch.data();
     }
 
-    inline T *aligned_query() {
-      return _aligned_query;
-    }
     inline uint32_t *indices() {
-      return _indices;
+      return _indices.data();
     }
     inline float *interim_dists() {
-      return _interim_dists;
-    }
-
-    inline std::vector<float> &occlude_factor() {
-      return _occlude_factor;
-    }
-
-    inline PQScratch<T> *pq_scratch() {
-      return _pq_scratch;
+      return _interim_dists.data();
     }
 
    private:
+    uint32_t _L;
+    uint32_t _R;
+    uint32_t _maxc;
+    
+    T *_aligned_query = nullptr;
+
+    PQScratch<T> *_pq_scratch = nullptr;
+
     std::vector<Neighbor>    _pool;
     tsl::robin_set<unsigned> _visited;
     NeighborPriorityQueue    _best_l_nodes;
+    std::vector<float>       _occlude_factor;
+
     tsl::robin_set<unsigned> _inserted_into_pool_rs;
     boost::dynamic_bitset<> *_inserted_into_pool_bs;
-    std::vector<unsigned>    _id_scratch;
-    float                   *_dist_scratch = nullptr;
 
-    T        *_aligned_query = nullptr;
-    uint32_t *_indices = nullptr;
-    float    *_interim_dists = nullptr;
+    std::vector<unsigned> _id_scratch;
+    std::vector<float>    _dist_scratch;
 
-    std::vector<float> _occlude_factor;
-
-    PQScratch<T> *_pq_scratch = nullptr;
+    std::vector<uint32_t> _indices;        // only used by search
+    std::vector<float>    _interim_dists;  // only used by search
   };
 
   //
