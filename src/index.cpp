@@ -1492,6 +1492,10 @@ namespace diskann {
                                                        const unsigned L,
                                                        IdType        *indices,
                                                        float *distances) {
+    if (K > (uint64_t) L)
+      throw ANNException("Set L to a value of at least K", -1, __FUNCSIG__,
+                         __FILE__, __LINE__);
+    
     ScratchStoreManager<InMemQueryScratch<T>> manager(_query_scratch);
     auto                                      scratch = manager.scratch_space();
 
@@ -1547,6 +1551,9 @@ namespace diskann {
                                           const unsigned L, TagT *tags,
                                           float            *distances,
                                           std::vector<T *> &res_vectors) {
+    if (K > (uint64_t) L)
+      throw ANNException("Set L to a value of at least K", -1, __FUNCSIG__,
+                         __FILE__, __LINE__);
     ScratchStoreManager<InMemQueryScratch<T>> manager(_query_scratch);
     auto                                      scratch = manager.scratch_space();
 
