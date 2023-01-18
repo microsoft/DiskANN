@@ -46,7 +46,6 @@ namespace diskann {
   template<typename T>
   void InMemQueryScratch<T>::clear() {
     _pool.clear();
-    _visited.clear();
     _best_l_nodes.clear();
     _occlude_factor.clear();
 
@@ -71,7 +70,6 @@ namespace diskann {
     if (new_l > _L) {
       _L = new_l;
       _pool.reserve(_L * 10);
-      _visited.reserve(_L * 2);
       _best_l_nodes.reserve(_L);
 
       _inserted_into_pool_rs.reserve(_L * 20);

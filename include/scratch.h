@@ -56,9 +56,6 @@ namespace diskann {
     inline std::vector<Neighbor> &pool() {
       return _pool;
     }
-    inline tsl::robin_set<unsigned> &visited() {
-      return _visited;
-    }
     inline NeighborPriorityQueue &best_l_nodes() {
       return _best_l_nodes;
     }
@@ -96,7 +93,6 @@ namespace diskann {
     PQScratch<T> *_pq_scratch = nullptr;
 
     std::vector<Neighbor>    _pool;
-    tsl::robin_set<unsigned> _visited;
     NeighborPriorityQueue    _best_l_nodes;
     std::vector<float>       _occlude_factor;
 
