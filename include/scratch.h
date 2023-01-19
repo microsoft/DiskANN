@@ -16,6 +16,11 @@
 #include "pq.h"
 #include "aligned_file_reader.h"
 
+
+// In-mem index related limits
+#define GRAPH_SLACK_FACTOR 1.3
+
+// SSD Index related limits
 #define MAX_GRAPH_DEGREE 512
 #define MAX_N_CMPS 16384
 #define SECTOR_LEN (_u64) 4096
@@ -28,8 +33,6 @@ namespace diskann {
   template<typename T>
   class InMemQueryScratch {
    public:
-
-
     ~InMemQueryScratch();
     InMemQueryScratch(uint32_t search_l, uint32_t indexing_l, uint32_t r,
                       uint32_t maxc, size_t dim, bool init_pq_scratch = false);
@@ -87,23 +90,40 @@ namespace diskann {
     uint32_t _L;
     uint32_t _R;
     uint32_t _maxc;
-    
+
     T *_aligned_query = nullptr;
 
     PQScratch<T> *_pq_scratch = nullptr;
 
-    std::vector<Neighbor>    _pool;
-    NeighborPriorityQueue    _best_l_nodes;
-    std::vector<float>       _occlude_factor;
+    // _pool stores all neighbors explored from best_L_nodes.
+    // Usually around L+R, but could be higher.
+    // Initialized to 10L, but expands as needed.
+    std::vector<Neighbor> _pool;
+
+    // _best_l_nodes is reserved for storing best L entries
+    // Underlying storage is L+1 to support inserts
+    NeighborPriorityQueue _best_l_nodes;
+
+    // _occlude_factor.size() >= pool.size() in occlude_list function
+    // _pool is clipped to maxc in occlude_list before affecting _occlude_factor
+    // _occlude_factor is initialized to maxc size
+    std::vector<float> _occlude_factor;
 
     tsl::robin_set<unsigned> _inserted_into_pool_rs;
     boost::dynamic_bitset<> *_inserted_into_pool_bs;
 
+    // _id_scratch.size() must be > R*GRAPH_SLACK_FACTOR for iterate_to_fp
     std::vector<unsigned> _id_scratch;
-    std::vector<float>    _dist_scratch;
 
-    std::vector<uint32_t> _indices;        // only used by search
-    std::vector<float>    _interim_dists;  // only used by search
+    // _dist_scratch must be > R*GRAPH_SLACK_FACTOR for iterate_to_fp
+    // _dist_scratch should be at least the size of id_scratch
+    std::vector<float> _dist_scratch;
+
+    // Used as a buffer for search results, must be at least L in size
+    std::vector<uint32_t> _indices;
+
+    // Used as a buffer for search results, must be at least L in size
+    std::vector<float> _interim_dists;
   };
 
   //

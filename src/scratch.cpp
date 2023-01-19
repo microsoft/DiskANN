@@ -36,8 +36,8 @@ namespace diskann {
 
     _occlude_factor.reserve(maxc);
     _inserted_into_pool_bs = new boost::dynamic_bitset<>();
-    _id_scratch.reserve(2 * _R);
-    _dist_scratch.resize(std::max(2 * _R, _maxc));
+    _id_scratch.reserve(std::ceil(1.5 * GRAPH_SLACK_FACTOR * _R));
+    _dist_scratch.resize(std::ceil(1.5 * GRAPH_SLACK_FACTOR * _R));
     std::fill(_dist_scratch.begin(), _dist_scratch.end(), 0.0);
 
     resize_for_new_L(std::max(search_l, indexing_l));
@@ -55,7 +55,7 @@ namespace diskann {
     _id_scratch.clear();
 
     // For member variables where we return array to .data(), set values to 0
-    assert(_dist_scratch.size() == std::max(2 * _R, _maxc));
+    assert(_dist_scratch.size() == std::ceil(1.5 * GRAPH_SLACK_FACTOR * _R));
     std::fill(_dist_scratch.begin(), _dist_scratch.end(), 0.0);
 
     assert(_indices.size() == _L);
@@ -69,10 +69,10 @@ namespace diskann {
   void InMemQueryScratch<T>::resize_for_new_L(uint32_t new_l) {
     if (new_l > _L) {
       _L = new_l;
-      _pool.reserve(_L * 10);
+      _pool.reserve(3 * _L + _R);
       _best_l_nodes.reserve(_L);
 
-      _inserted_into_pool_rs.reserve(_L * 20);
+      _inserted_into_pool_rs.reserve(20 * _L);
 
       _indices.resize(_L);
       std::fill(_indices.begin(), _indices.end(), 0);

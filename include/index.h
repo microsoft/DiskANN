@@ -19,7 +19,6 @@
 #include "windows_customizations.h"
 #include "scratch.h"
 
-#define GRAPH_SLACK_FACTOR 1.3
 #define OVERHEAD_FACTOR 1.1
 #define EXPAND_IF_FULL 0
 #define DEFAULT_MAXC 750
