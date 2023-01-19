@@ -951,7 +951,10 @@ namespace diskann {
     assert(std::is_sorted(pool.begin(), pool.end()));
     if (pool.size() > maxc)
       pool.resize(maxc);
-    auto occlude_factor = scratch->occlude_factor();
+    auto &occlude_factor = scratch->occlude_factor();
+    // Clear occlude_list can be called with the same scratch more than once
+    // by search_for_point_and_add_link through inter_insert
+    occlude_factor.clear();  
     occlude_factor.insert(occlude_factor.end(), pool.size(), 0);
 
     float cur_alpha = 1;
