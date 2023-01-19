@@ -79,13 +79,6 @@ namespace diskann {
       return _dist_scratch;
     }
 
-    inline uint32_t *indices() {
-      return _indices.data();
-    }
-    inline float *interim_dists() {
-      return _interim_dists.data();
-    }
-
    private:
     uint32_t _L;
     uint32_t _R;
@@ -118,12 +111,6 @@ namespace diskann {
     // _dist_scratch must be > R*GRAPH_SLACK_FACTOR for iterate_to_fp
     // _dist_scratch should be at least the size of id_scratch
     std::vector<float> _dist_scratch;
-
-    // Used as a buffer for search results, must be at least L in size
-    std::vector<uint32_t> _indices;
-
-    // Used as a buffer for search results, must be at least L in size
-    std::vector<float> _interim_dists;
   };
 
   //

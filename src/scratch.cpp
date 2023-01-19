@@ -53,13 +53,6 @@ namespace diskann {
 
     _id_scratch.clear();
     _dist_scratch.clear();
-    
-    // For member variables where we return array to .data(), set values to 0
-    assert(_indices.size() == _L);
-    std::fill(_indices.begin(), _indices.end(), 0);
-
-    assert(_interim_dists.size() == _L);
-    std::fill(_interim_dists.begin(), _interim_dists.end(), 0.0);
   }
 
   template<typename T>
@@ -70,12 +63,6 @@ namespace diskann {
       _best_l_nodes.reserve(_L);
 
       _inserted_into_pool_rs.reserve(20 * _L);
-
-      _indices.resize(_L);
-      std::fill(_indices.begin(), _indices.end(), 0);
-
-      _interim_dists.resize(_L);
-      std::fill(_interim_dists.begin(), _interim_dists.end(), 0.0);
     }
   }
 

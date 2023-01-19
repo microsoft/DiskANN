@@ -952,8 +952,8 @@ namespace diskann {
     if (pool.size() > maxc)
       pool.resize(maxc);
     auto &occlude_factor = scratch->occlude_factor();
-    // Clear occlude_list can be called with the same scratch more than once
-    // by search_for_point_and_add_link through inter_insert
+    // occlude_list can be called with the same scratch more than once by
+    // search_for_point_and_add_link through inter_insert. 
     occlude_factor.clear();  
     occlude_factor.insert(occlude_factor.end(), pool.size(), 0);
 
@@ -1562,31 +1562,35 @@ namespace diskann {
       diskann::cout << "Resize completed. Let scratch->L is "
                     << scratch->get_L() << std::endl;
     }
-    _u32  *indices = scratch->indices();
-    float *dist_interim = scratch->interim_dists();
-    search_impl(query, L, L, indices, dist_interim, scratch);
 
     std::shared_lock<std::shared_timed_mutex> ul(_update_lock);
-    std::shared_lock<std::shared_timed_mutex> tl(_tag_lock);
-    size_t                                    pos = 0;
 
+    std::vector<unsigned> init_ids(1, _start);
+    iterate_to_fixed_point(query, L, init_ids, scratch, true, true);
+    NeighborPriorityQueue &best_L_nodes = scratch->best_l_nodes();
+    assert(best_L_nodes.size() <= L);
+
+    std::shared_lock<std::shared_timed_mutex> tl(_tag_lock);
+
+    size_t pos = 0;
     for (int i = 0; i < (int) L; ++i) {
       TagT tag;
+      auto node = best_L_nodes[i];
 
-      if (_location_to_tag.try_get(indices[i], tag)) {
+      if (_location_to_tag.try_get(node.id, tag)) {
         tags[pos] = tag;
 
         if (res_vectors.size() > 0) {
-          memcpy(res_vectors[pos], _data + ((size_t) indices[i]) * _aligned_dim,
+          memcpy(res_vectors[pos], _data + ((size_t) node.id) * _aligned_dim,
                  _dim * sizeof(T));
         }
 
         if (distances != nullptr) {
 #ifdef EXEC_ENV_OLS
-          distances[pos] = dist_interim[i];  // DLVS expects negative distances
+          distances[pos] = node.distance;  // DLVS expects negative distances
 #else
-          distances[pos] = _dist_metric == INNER_PRODUCT ? -1 * dist_interim[i]
-                                                         : dist_interim[i];
+          distances[pos] = _dist_metric == INNER_PRODUCT ? -1 * node.distance
+                                                         : node.distance;
 #endif
         }
         pos++;
