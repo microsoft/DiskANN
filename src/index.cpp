@@ -714,8 +714,10 @@ namespace diskann {
         scratch->inserted_into_pool_rs();
     boost::dynamic_bitset<> &inserted_into_pool_bs =
         scratch->inserted_into_pool_bs();
-    auto id_scratch = scratch->id_scratch();
-    auto dist_scratch = scratch->dist_scratch();
+    auto &id_scratch = scratch->id_scratch();
+    auto &dist_scratch = scratch->dist_scratch();
+    assert(id_scratch.size() == 0);
+    assert(dist_scratch.size() == 0);
 
     T *aligned_query = scratch->aligned_query();
     memcpy(aligned_query, query, _dim * sizeof(T));
@@ -827,6 +829,7 @@ namespace diskann {
       }
       // Find which of the nodes in des have not been visited before
       id_scratch.clear();
+      dist_scratch.clear();
       {
         if (_dynamic_index)
           _locks[n].lock();
@@ -852,9 +855,10 @@ namespace diskann {
 
       // Compute distances to unvisited nodes in the expansion
       if (_pq_dist) {
-        compute_dists(id_scratch.data(), id_scratch.size(), dist_scratch);
-
+        assert(dist_scratch.capacity() >= id_scratch.size());
+        compute_dists(id_scratch.data(), id_scratch.size(), dist_scratch.data());
       } else {
+        assert(dist_scratch.size() == 0);
         for (size_t m = 0; m < id_scratch.size(); ++m) {
           unsigned id = id_scratch[m];
 
@@ -865,9 +869,9 @@ namespace diskann {
                 sizeof(T) * _aligned_dim);
           }
 
-          dist_scratch[m] = _distance->compare(
+          dist_scratch.push_back( _distance->compare(
               aligned_query, _data + _aligned_dim * (size_t) id,
-              (unsigned) _aligned_dim);
+              (unsigned) _aligned_dim));
         }
       }
       cmps += id_scratch.size();

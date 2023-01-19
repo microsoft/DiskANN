@@ -75,8 +75,8 @@ namespace diskann {
     inline std::vector<unsigned> &id_scratch() {
       return _id_scratch;
     }
-    inline float *dist_scratch() {
-      return _dist_scratch.data();
+    inline std::vector<float> &dist_scratch() {
+      return _dist_scratch;
     }
 
     inline uint32_t *indices() {

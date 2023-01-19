@@ -37,8 +37,7 @@ namespace diskann {
     _occlude_factor.reserve(maxc);
     _inserted_into_pool_bs = new boost::dynamic_bitset<>();
     _id_scratch.reserve(std::ceil(1.5 * GRAPH_SLACK_FACTOR * _R));
-    _dist_scratch.resize(std::ceil(1.5 * GRAPH_SLACK_FACTOR * _R));
-    std::fill(_dist_scratch.begin(), _dist_scratch.end(), 0.0);
+    _dist_scratch.reserve(std::ceil(1.5 * GRAPH_SLACK_FACTOR * _R));
 
     resize_for_new_L(std::max(search_l, indexing_l));
   }
@@ -53,11 +52,9 @@ namespace diskann {
     _inserted_into_pool_bs->reset();
 
     _id_scratch.clear();
-
+    _dist_scratch.clear();
+    
     // For member variables where we return array to .data(), set values to 0
-    assert(_dist_scratch.size() == std::ceil(1.5 * GRAPH_SLACK_FACTOR * _R));
-    std::fill(_dist_scratch.begin(), _dist_scratch.end(), 0.0);
-
     assert(_indices.size() == _L);
     std::fill(_indices.begin(), _indices.end(), 0);
 
