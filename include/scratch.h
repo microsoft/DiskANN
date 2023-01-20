@@ -90,7 +90,7 @@ namespace diskann {
 
     // _pool stores all neighbors explored from best_L_nodes.
     // Usually around L+R, but could be higher.
-    // Initialized to 10L, but expands as needed.
+    // Initialized to 3L+R for some slack, expands as needed.
     std::vector<Neighbor> _pool;
 
     // _best_l_nodes is reserved for storing best L entries
@@ -102,7 +102,12 @@ namespace diskann {
     // _occlude_factor is initialized to maxc size
     std::vector<float> _occlude_factor;
 
+    // Capacity initialized to 20L
     tsl::robin_set<unsigned> _inserted_into_pool_rs;
+
+    // Use a pointer here to allow for forward declaration of dynamic_bitset
+    // in public headers to avoid making boost a dependency for clients
+    // of DiskANN.
     boost::dynamic_bitset<> *_inserted_into_pool_bs;
 
     // _id_scratch.size() must be > R*GRAPH_SLACK_FACTOR for iterate_to_fp

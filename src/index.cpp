@@ -955,7 +955,8 @@ namespace diskann {
     // occlude_list can be called with the same scratch more than once by
     // search_for_point_and_add_link through inter_insert. 
     occlude_factor.clear();  
-    occlude_factor.insert(occlude_factor.end(), pool.size(), 0);
+    // Initialize occlude_factor to pool.size() many 0.0f values for correctness
+    occlude_factor.insert(occlude_factor.end(), pool.size(), 0.0f);
 
     float cur_alpha = 1;
     while (cur_alpha <= alpha && result.size() < degree) {
@@ -1498,7 +1499,7 @@ namespace diskann {
                     << "with Lsize: " << scratch->get_L()
                     << " but search L is: " << L << std::endl;
       scratch->resize_for_new_L(L);
-      diskann::cout << "Resize completed. Let scratch->L is "
+      diskann::cout << "Resize completed. New scratch->L is "
                     << scratch->get_L() << std::endl;
     }
 
@@ -1559,7 +1560,7 @@ namespace diskann {
                     << "with Lsize: " << scratch->get_L()
                     << " but search L is: " << L << std::endl;
       scratch->resize_for_new_L(L);
-      diskann::cout << "Resize completed. Let scratch->L is "
+      diskann::cout << "Resize completed. New scratch->L is "
                     << scratch->get_L() << std::endl;
     }
 
@@ -1573,10 +1574,10 @@ namespace diskann {
     std::shared_lock<std::shared_timed_mutex> tl(_tag_lock);
 
     size_t pos = 0;
-    for (int i = 0; i < (int) L; ++i) {
-      TagT tag;
+    for (size_t i = 0; i < best_L_nodes.size(); ++i) {
       auto node = best_L_nodes[i];
 
+      TagT tag;
       if (_location_to_tag.try_get(node.id, tag)) {
         tags[pos] = tag;
 
