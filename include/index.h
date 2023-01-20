@@ -213,12 +213,6 @@ namespace diskann {
     // determines navigating node of the graph by calculating medoid of data
     unsigned calculate_entry_point();
 
-    template<typename IDType>
-    std::pair<uint32_t, uint32_t> search_impl(const T *query, const size_t K,
-                                              const unsigned L, IDType *indices,
-                                              float                *distances,
-                                              InMemQueryScratch<T> *scratch);
-
     std::pair<uint32_t, uint32_t> iterate_to_fixed_point(
         const T *node_coords, const unsigned Lindex,
         const std::vector<unsigned> &init_ids, InMemQueryScratch<T> *scratch,

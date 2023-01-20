@@ -1503,26 +1503,15 @@ namespace diskann {
                     << scratch->get_L() << std::endl;
     }
 
-    return search_impl(query, K, L, indices, distances, scratch);
-  }
-
-  template<typename T, typename TagT>
-  template<typename IdType>
-  std::pair<uint32_t, uint32_t> Index<T, TagT>::search_impl(
-      const T *query, const size_t K, const unsigned L, IdType *indices,
-      float *distances, InMemQueryScratch<T> *scratch) {
     std::vector<unsigned> init_ids;
+    init_ids.push_back(_start);
 
     std::shared_lock<std::shared_timed_mutex> lock(_update_lock);
-
-    if (init_ids.size() == 0) {
-      init_ids.emplace_back(_start);
-    }
 
     auto retval =
         iterate_to_fixed_point(query, L, init_ids, scratch, true, true);
 
-    auto best_L_nodes = scratch->best_l_nodes();
+    auto &best_L_nodes = scratch->best_l_nodes();
 
     size_t pos = 0;
     for (int i = 0; i < best_L_nodes.size(); ++i) {
@@ -1532,7 +1521,8 @@ namespace diskann {
                                  // and IDType will be uint32_t or uint64_t
         if (distances != nullptr) {
 #ifdef EXEC_ENV_OLS
-          distances[pos] = it.distance;  // DLVS expects negative distances
+          distances[pos] =
+              bes_L_nodes[i].distance;  // DLVS expects negative distances
 #else
           distances[pos] = _dist_metric == diskann::Metric::INNER_PRODUCT
                                ? -1 * best_L_nodes[i].distance
@@ -1544,6 +1534,10 @@ namespace diskann {
       if (pos == K)
         break;
     }
+    if (pos < K) {
+      diskann::cerr << "Found fewer than K elements for query" << std::endl;
+    }
+
     return retval;
   }
 
