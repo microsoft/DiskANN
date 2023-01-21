@@ -1523,7 +1523,7 @@ namespace diskann {
         if (distances != nullptr) {
 #ifdef EXEC_ENV_OLS
           distances[pos] =
-              bes_L_nodes[i].distance;  // DLVS expects negative distances
+              best_L_nodes[i].distance;  // DLVS expects negative distances
 #else
           distances[pos] = _dist_metric == diskann::Metric::INNER_PRODUCT
                                ? -1 * best_L_nodes[i].distance
