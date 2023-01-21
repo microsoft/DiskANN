@@ -717,7 +717,6 @@ namespace diskann {
     auto &id_scratch = scratch->id_scratch();
     auto &dist_scratch = scratch->dist_scratch();
     assert(id_scratch.size() == 0);
-    assert(dist_scratch.size() == 0);
 
     T *aligned_query = scratch->aligned_query();
     memcpy(aligned_query, query, _dim * sizeof(T));
@@ -778,13 +777,13 @@ namespace diskann {
     };
 
     // Lambda to batch compute query<-> node distances in PQ space
-    auto compute_dists = [this, pq_coord_scratch, pq_dists](const unsigned *ids,
-                                                            const _u64 n_ids,
-                                                            float *dists_out) {
-      diskann::aggregate_coords(ids, n_ids, this->_pq_data,
-                                this->_num_pq_chunks, pq_coord_scratch);
-      diskann::pq_dist_lookup(pq_coord_scratch, n_ids, this->_num_pq_chunks,
-                              pq_dists, dists_out);
+    auto compute_dists = [this, pq_coord_scratch, pq_dists](
+                             const std::vector<unsigned> &ids,
+                             std::vector<float>          &dists_out) {
+      diskann::aggregate_coords(ids, this->_pq_data, this->_num_pq_chunks,
+                                pq_coord_scratch);
+      diskann::pq_dist_lookup(pq_coord_scratch, ids.size(),
+                              this->_num_pq_chunks, pq_dists, dists_out);
     };
 
     // Initialize the candidate pool with starting points
@@ -856,7 +855,7 @@ namespace diskann {
       // Compute distances to unvisited nodes in the expansion
       if (_pq_dist) {
         assert(dist_scratch.capacity() >= id_scratch.size());
-        compute_dists(id_scratch.data(), id_scratch.size(), dist_scratch.data());
+        compute_dists(id_scratch, dist_scratch);
       } else {
         assert(dist_scratch.size() == 0);
         for (size_t m = 0; m < id_scratch.size(); ++m) {
