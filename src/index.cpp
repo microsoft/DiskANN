@@ -938,11 +938,11 @@ namespace diskann {
   }
 
   template<typename T, typename TagT>
-  void Index<T, TagT>::occlude_list(std::vector<Neighbor> &pool,
-                                    const float alpha, const unsigned degree,
-                                    const unsigned         maxc,
-                                    std::vector<Neighbor> &result,
-                                    InMemQueryScratch<T>  *scratch) {
+  void Index<T, TagT>::occlude_list(
+      const unsigned location, std::vector<Neighbor> &pool, const float alpha,
+      const unsigned degree, const unsigned maxc, std::vector<unsigned> &result,
+      InMemQueryScratch<T>                 *scratch,
+      const tsl::robin_set<unsigned> *const delete_set_ptr) {
     if (pool.size() == 0)
       return;
 
@@ -952,8 +952,8 @@ namespace diskann {
       pool.resize(maxc);
     auto &occlude_factor = scratch->occlude_factor();
     // occlude_list can be called with the same scratch more than once by
-    // search_for_point_and_add_link through inter_insert. 
-    occlude_factor.clear();  
+    // search_for_point_and_add_link through inter_insert.
+    occlude_factor.clear();
     // Initialize occlude_factor to pool.size() many 0.0f values for correctness
     occlude_factor.insert(occlude_factor.end(), pool.size(), 0.0f);
 
@@ -968,8 +968,15 @@ namespace diskann {
         if (occlude_factor[iter - pool.begin()] > cur_alpha) {
           continue;
         }
+        // Set the entry to float::max so that is not considered again
         occlude_factor[iter - pool.begin()] = std::numeric_limits<float>::max();
-        result.push_back(*iter);
+        // Add the entry to the result if its not been deleted, and doesn't add a self loop
+        if (delete_set_ptr == nullptr ||
+            delete_set_ptr->find(iter->id) == delete_set_ptr->end()) {
+          if (iter->id != location) {
+            result.push_back(iter->id);
+          }
+        }
 
         // Update occlude factor for points from iter+1 to pool.end()
         for (auto iter2 = iter + 1; iter2 != pool.end(); iter2++) {
@@ -1028,27 +1035,22 @@ namespace diskann {
             _data + _aligned_dim * (size_t) location, (unsigned) _aligned_dim);
     }
 
-    // sort the pool based on distance to query
+    // sort the pool based on distance to query and prune it with occlude_list
     std::sort(pool.begin(), pool.end());
-
-    std::vector<Neighbor> result;
-    result.reserve(range);
-
-    occlude_list(pool, alpha, range, max_candidate_size, result, scratch);
-
     pruned_list.clear();
-    assert(result.size() <= range);
-    for (auto iter : result) {
-      if (iter.id != location)
-        pruned_list.emplace_back(iter.id);
-    }
+    pruned_list.reserve(range);
+    occlude_list(location, pool, alpha, range, max_candidate_size, pruned_list,
+                 scratch);
+    assert(pruned_list.size() <= range);
 
     if (_saturate_graph && alpha > 1) {
-      for (uint32_t i = 0; i < pool.size() && pruned_list.size() < range; i++) {
-        if ((std::find(pruned_list.begin(), pruned_list.end(), pool[i].id) ==
+      for (const auto &node : pool) {
+        if (pruned_list.size() >= range)
+          break;
+        if ((std::find(pruned_list.begin(), pruned_list.end(), node.id) ==
              pruned_list.end()) &&
-            pool[i].id != location)
-          pruned_list.emplace_back(pool[i].id);
+            node.id != location)
+          pruned_list.push_back(node.id);
       }
     }
   }
@@ -1659,7 +1661,6 @@ namespace diskann {
       InMemQueryScratch<T> *scratch) {
     tsl::robin_set<unsigned> candidate_set;
     std::vector<Neighbor>    expanded_nghrs;
-    std::vector<Neighbor>    result;
 
     bool modify = false;
 
@@ -1682,24 +1683,14 @@ namespace diskann {
     if (modify) {
       for (auto j : candidate_set) {
         expanded_nghrs.push_back(
-            Neighbor(j,
-                     _distance->compare(_data + _aligned_dim * i,
-                                        _data + _aligned_dim * (size_t) j,
-                                        (unsigned) _aligned_dim)));
+            Neighbor(j, _distance->compare(_data + _aligned_dim * i,
+                                           _data + _aligned_dim * (size_t) j,
+                                           (unsigned) _aligned_dim)));
       }
 
       std::sort(expanded_nghrs.begin(), expanded_nghrs.end());
-      occlude_list(expanded_nghrs, alpha, range, maxc, result, scratch);
-
-      {
-        _final_graph[i].clear();
-
-        for (auto j : result) {
-          if (j.id != (_u32) i &&
-              (old_delete_set.find(j.id) == old_delete_set.end()))
-            _final_graph[(_u32) i].push_back(j.id);
-        }
-      }
+      occlude_list(i, expanded_nghrs, alpha, range, maxc, _final_graph[i],
+                   scratch, &old_delete_set);
     }
   }
 

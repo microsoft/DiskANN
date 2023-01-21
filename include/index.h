@@ -230,10 +230,11 @@ namespace diskann {
                          const float alpha, std::vector<unsigned> &pruned_list,
                          InMemQueryScratch<T> *scratch);
 
-    void occlude_list(std::vector<Neighbor> &pool, const float alpha,
-                      const unsigned degree, const unsigned maxc,
-                      std::vector<Neighbor> &result,
-                      InMemQueryScratch<T>  *scratch);
+    void occlude_list(
+        const unsigned location, std::vector<Neighbor> &pool, const float alpha,
+        const unsigned degree, const unsigned maxc,
+        std::vector<unsigned> &result, InMemQueryScratch<T> *scratch,
+        const tsl::robin_set<unsigned> *const delete_set_ptr = nullptr);
 
     // add reverse links from all the visited nodes to node n.
     void inter_insert(unsigned n, std::vector<unsigned> &pruned_list,
