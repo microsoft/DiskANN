@@ -1520,11 +1520,11 @@ namespace diskann {
     auto &best_L_nodes = scratch->best_l_nodes();
 
     size_t pos = 0;
-    for (int i = 0; i < best_L_nodes.size() && i < L; ++i) {
+    for (int i = 0; i < best_L_nodes.size(); ++i) {
       if (best_L_nodes[i].id < _max_points) {
-        indices[pos] = (IdType) best_L_nodes[i]
-                           .id;  // safe because our indices are always uint32_t
-                                 // and IDType will be uint32_t or uint64_t
+        // safe because Index uses uint32_t ids internally 
+        // and IDType will be uint32_t or uint64_t
+        indices[pos] = (IdType) best_L_nodes[i].id;
         if (distances != nullptr) {
 #ifdef EXEC_ENV_OLS
           // DLVS expects negative distances
