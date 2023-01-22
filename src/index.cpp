@@ -1492,6 +1492,11 @@ namespace diskann {
                                                        const unsigned L,
                                                        IdType        *indices,
                                                        float *distances) {
+    if (K > (uint64_t) L) {
+      throw ANNException("Set L to a value of at least K", -1, __FUNCSIG__,
+                         __FILE__, __LINE__);
+    }
+
     ScratchStoreManager<InMemQueryScratch<T>> manager(_query_scratch);
     auto                                      scratch = manager.scratch_space();
 
@@ -1517,13 +1522,13 @@ namespace diskann {
     size_t pos = 0;
     for (int i = 0; i < best_L_nodes.size(); ++i) {
       if (best_L_nodes[i].id < _max_points) {
-        indices[pos] = (IdType) best_L_nodes[i]
-                           .id;  // safe because our indices are always uint32_t
-                                 // and IDType will be uint32_t or uint64_t
+        // safe because Index uses uint32_t ids internally 
+        // and IDType will be uint32_t or uint64_t
+        indices[pos] = (IdType) best_L_nodes[i].id;
         if (distances != nullptr) {
 #ifdef EXEC_ENV_OLS
-          distances[pos] =
-              best_L_nodes[i].distance;  // DLVS expects negative distances
+          // DLVS expects negative distances
+          distances[pos] = best_L_nodes[i].distance;
 #else
           distances[pos] = _dist_metric == diskann::Metric::INNER_PRODUCT
                                ? -1 * best_L_nodes[i].distance
@@ -1547,6 +1552,10 @@ namespace diskann {
                                           const unsigned L, TagT *tags,
                                           float            *distances,
                                           std::vector<T *> &res_vectors) {
+    if (K > (uint64_t) L) {
+      throw ANNException("Set L to a value of at least K", -1, __FUNCSIG__,
+                         __FILE__, __LINE__);
+    }
     ScratchStoreManager<InMemQueryScratch<T>> manager(_query_scratch);
     auto                                      scratch = manager.scratch_space();
 
