@@ -16,6 +16,11 @@
 #include "pq.h"
 #include "aligned_file_reader.h"
 
+
+// In-mem index related limits
+#define GRAPH_SLACK_FACTOR 1.3
+
+// SSD Index related limits
 #define MAX_GRAPH_DEGREE 512
 #define MAX_N_CMPS 16384
 #define SECTOR_LEN (_u64) 4096
@@ -28,25 +33,39 @@ namespace diskann {
   template<typename T>
   class InMemQueryScratch {
    public:
-    uint32_t search_l;
-    uint32_t indexing_l;
-    uint32_t r;
-
     ~InMemQueryScratch();
     InMemQueryScratch(uint32_t search_l, uint32_t indexing_l, uint32_t r,
                       uint32_t maxc, size_t dim, bool init_pq_scratch = false);
-    void resize_for_query(uint32_t new_search_l);
+    void resize_for_new_L(uint32_t new_search_l);
     void clear();
+
+    inline uint32_t get_L() {
+      return _L;
+    }
+    inline uint32_t get_R() {
+      return _R;
+    }
+    inline uint32_t get_maxc() {
+      return _maxc;
+    }
+
+    inline T *aligned_query() {
+      return _aligned_query;
+    }
+    inline PQScratch<T> *pq_scratch() {
+      return _pq_scratch;
+    }
 
     inline std::vector<Neighbor> &pool() {
       return _pool;
     }
-    inline tsl::robin_set<unsigned> &visited() {
-      return _visited;
-    }
     inline NeighborPriorityQueue &best_l_nodes() {
       return _best_l_nodes;
     }
+    inline std::vector<float> &occlude_factor() {
+      return _occlude_factor;
+    }
+
     inline tsl::robin_set<unsigned> &inserted_into_pool_rs() {
       return _inserted_into_pool_rs;
     }
@@ -56,44 +75,47 @@ namespace diskann {
     inline std::vector<unsigned> &id_scratch() {
       return _id_scratch;
     }
-    inline float *dist_scratch() {
+    inline std::vector<float> &dist_scratch() {
       return _dist_scratch;
     }
 
-    inline T *aligned_query() {
-      return _aligned_query;
-    }
-    inline uint32_t *indices() {
-      return _indices;
-    }
-    inline float *interim_dists() {
-      return _interim_dists;
-    }
-
-    inline std::vector<float> &occlude_factor() {
-      return _occlude_factor;
-    }
-
-    inline PQScratch<T> *pq_scratch() {
-      return _pq_scratch;
-    }
-
    private:
-    std::vector<Neighbor>    _pool;
-    tsl::robin_set<unsigned> _visited;
-    NeighborPriorityQueue    _best_l_nodes;
-    tsl::robin_set<unsigned> _inserted_into_pool_rs;
-    boost::dynamic_bitset<> *_inserted_into_pool_bs;
-    std::vector<unsigned>    _id_scratch;
-    float                   *_dist_scratch = nullptr;
+    uint32_t _L;
+    uint32_t _R;
+    uint32_t _maxc;
 
-    T        *_aligned_query = nullptr;
-    uint32_t *_indices = nullptr;
-    float    *_interim_dists = nullptr;
-
-    std::vector<float> _occlude_factor;
+    T *_aligned_query = nullptr;
 
     PQScratch<T> *_pq_scratch = nullptr;
+
+    // _pool stores all neighbors explored from best_L_nodes.
+    // Usually around L+R, but could be higher.
+    // Initialized to 3L+R for some slack, expands as needed.
+    std::vector<Neighbor> _pool;
+
+    // _best_l_nodes is reserved for storing best L entries
+    // Underlying storage is L+1 to support inserts
+    NeighborPriorityQueue _best_l_nodes;
+
+    // _occlude_factor.size() >= pool.size() in occlude_list function
+    // _pool is clipped to maxc in occlude_list before affecting _occlude_factor
+    // _occlude_factor is initialized to maxc size
+    std::vector<float> _occlude_factor;
+
+    // Capacity initialized to 20L
+    tsl::robin_set<unsigned> _inserted_into_pool_rs;
+
+    // Use a pointer here to allow for forward declaration of dynamic_bitset
+    // in public headers to avoid making boost a dependency for clients
+    // of DiskANN.
+    boost::dynamic_bitset<> *_inserted_into_pool_bs;
+
+    // _id_scratch.size() must be > R*GRAPH_SLACK_FACTOR for iterate_to_fp
+    std::vector<unsigned> _id_scratch;
+
+    // _dist_scratch must be > R*GRAPH_SLACK_FACTOR for iterate_to_fp
+    // _dist_scratch should be at least the size of id_scratch
+    std::vector<float> _dist_scratch;
   };
 
   //

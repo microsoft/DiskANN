@@ -714,8 +714,9 @@ namespace diskann {
         scratch->inserted_into_pool_rs();
     boost::dynamic_bitset<> &inserted_into_pool_bs =
         scratch->inserted_into_pool_bs();
-    auto id_scratch = scratch->id_scratch();
-    auto dist_scratch = scratch->dist_scratch();
+    auto &id_scratch = scratch->id_scratch();
+    auto &dist_scratch = scratch->dist_scratch();
+    assert(id_scratch.size() == 0);
 
     T *aligned_query = scratch->aligned_query();
     memcpy(aligned_query, query, _dim * sizeof(T));
@@ -776,13 +777,13 @@ namespace diskann {
     };
 
     // Lambda to batch compute query<-> node distances in PQ space
-    auto compute_dists = [this, pq_coord_scratch, pq_dists](const unsigned *ids,
-                                                            const _u64 n_ids,
-                                                            float *dists_out) {
-      diskann::aggregate_coords(ids, n_ids, this->_pq_data,
-                                this->_num_pq_chunks, pq_coord_scratch);
-      diskann::pq_dist_lookup(pq_coord_scratch, n_ids, this->_num_pq_chunks,
-                              pq_dists, dists_out);
+    auto compute_dists = [this, pq_coord_scratch, pq_dists](
+                             const std::vector<unsigned> &ids,
+                             std::vector<float>          &dists_out) {
+      diskann::aggregate_coords(ids, this->_pq_data, this->_num_pq_chunks,
+                                pq_coord_scratch);
+      diskann::pq_dist_lookup(pq_coord_scratch, ids.size(),
+                              this->_num_pq_chunks, pq_dists, dists_out);
     };
 
     // Initialize the candidate pool with starting points
@@ -827,6 +828,7 @@ namespace diskann {
       }
       // Find which of the nodes in des have not been visited before
       id_scratch.clear();
+      dist_scratch.clear();
       {
         if (_dynamic_index)
           _locks[n].lock();
@@ -852,9 +854,10 @@ namespace diskann {
 
       // Compute distances to unvisited nodes in the expansion
       if (_pq_dist) {
-        compute_dists(id_scratch.data(), id_scratch.size(), dist_scratch);
-
+        assert(dist_scratch.capacity() >= id_scratch.size());
+        compute_dists(id_scratch, dist_scratch);
       } else {
+        assert(dist_scratch.size() == 0);
         for (size_t m = 0; m < id_scratch.size(); ++m) {
           unsigned id = id_scratch[m];
 
@@ -865,9 +868,9 @@ namespace diskann {
                 sizeof(T) * _aligned_dim);
           }
 
-          dist_scratch[m] = _distance->compare(
+          dist_scratch.push_back( _distance->compare(
               aligned_query, _data + _aligned_dim * (size_t) id,
-              (unsigned) _aligned_dim);
+              (unsigned) _aligned_dim));
         }
       }
       cmps += id_scratch.size();
@@ -935,11 +938,11 @@ namespace diskann {
   }
 
   template<typename T, typename TagT>
-  void Index<T, TagT>::occlude_list(std::vector<Neighbor> &pool,
-                                    const float alpha, const unsigned degree,
-                                    const unsigned         maxc,
-                                    std::vector<Neighbor> &result,
-                                    InMemQueryScratch<T>  *scratch) {
+  void Index<T, TagT>::occlude_list(
+      const unsigned location, std::vector<Neighbor> &pool, const float alpha,
+      const unsigned degree, const unsigned maxc, std::vector<unsigned> &result,
+      InMemQueryScratch<T>                 *scratch,
+      const tsl::robin_set<unsigned> *const delete_set_ptr) {
     if (pool.size() == 0)
       return;
 
@@ -947,8 +950,12 @@ namespace diskann {
     assert(std::is_sorted(pool.begin(), pool.end()));
     if (pool.size() > maxc)
       pool.resize(maxc);
-    auto occlude_factor = scratch->occlude_factor();
-    occlude_factor.insert(occlude_factor.end(), pool.size(), 0);
+    auto &occlude_factor = scratch->occlude_factor();
+    // occlude_list can be called with the same scratch more than once by
+    // search_for_point_and_add_link through inter_insert.
+    occlude_factor.clear();
+    // Initialize occlude_factor to pool.size() many 0.0f values for correctness
+    occlude_factor.insert(occlude_factor.end(), pool.size(), 0.0f);
 
     float cur_alpha = 1;
     while (cur_alpha <= alpha && result.size() < degree) {
@@ -961,8 +968,15 @@ namespace diskann {
         if (occlude_factor[iter - pool.begin()] > cur_alpha) {
           continue;
         }
+        // Set the entry to float::max so that is not considered again
         occlude_factor[iter - pool.begin()] = std::numeric_limits<float>::max();
-        result.push_back(*iter);
+        // Add the entry to the result if its not been deleted, and doesn't add a self loop
+        if (delete_set_ptr == nullptr ||
+            delete_set_ptr->find(iter->id) == delete_set_ptr->end()) {
+          if (iter->id != location) {
+            result.push_back(iter->id);
+          }
+        }
 
         // Update occlude factor for points from iter+1 to pool.end()
         for (auto iter2 = iter + 1; iter2 != pool.end(); iter2++) {
@@ -1021,27 +1035,22 @@ namespace diskann {
             _data + _aligned_dim * (size_t) location, (unsigned) _aligned_dim);
     }
 
-    // sort the pool based on distance to query
+    // sort the pool based on distance to query and prune it with occlude_list
     std::sort(pool.begin(), pool.end());
-
-    std::vector<Neighbor> result;
-    result.reserve(range);
-
-    occlude_list(pool, alpha, range, max_candidate_size, result, scratch);
-
     pruned_list.clear();
-    assert(result.size() <= range);
-    for (auto iter : result) {
-      if (iter.id != location)
-        pruned_list.emplace_back(iter.id);
-    }
+    pruned_list.reserve(range);
+    occlude_list(location, pool, alpha, range, max_candidate_size, pruned_list,
+                 scratch);
+    assert(pruned_list.size() <= range);
 
     if (_saturate_graph && alpha > 1) {
-      for (uint32_t i = 0; i < pool.size() && pruned_list.size() < range; i++) {
-        if ((std::find(pruned_list.begin(), pruned_list.end(), pool[i].id) ==
+      for (const auto &node : pool) {
+        if (pruned_list.size() >= range)
+          break;
+        if ((std::find(pruned_list.begin(), pruned_list.end(), node.id) ==
              pruned_list.end()) &&
-            pool[i].id != location)
-          pruned_list.emplace_back(pool[i].id);
+            node.id != location)
+          pruned_list.push_back(node.id);
       }
     }
   }
@@ -1486,33 +1495,24 @@ namespace diskann {
     ScratchStoreManager<InMemQueryScratch<T>> manager(_query_scratch);
     auto                                      scratch = manager.scratch_space();
 
-    if (L > scratch->search_l) {
-      scratch->resize_for_query(L);
-      diskann::cout << "Expanding query scratch_space. Was created with Lsize: "
-                    << scratch->search_l << " but search L is: " << L
-                    << std::endl;
+    if (L > scratch->get_L()) {
+      diskann::cout << "Attempting to expand query scratch_space. Was created "
+                    << "with Lsize: " << scratch->get_L()
+                    << " but search L is: " << L << std::endl;
+      scratch->resize_for_new_L(L);
+      diskann::cout << "Resize completed. New scratch->L is "
+                    << scratch->get_L() << std::endl;
     }
 
-    return search_impl(query, K, L, indices, distances, scratch);
-  }
-
-  template<typename T, typename TagT>
-  template<typename IdType>
-  std::pair<uint32_t, uint32_t> Index<T, TagT>::search_impl(
-      const T *query, const size_t K, const unsigned L, IdType *indices,
-      float *distances, InMemQueryScratch<T> *scratch) {
     std::vector<unsigned> init_ids;
+    init_ids.push_back(_start);
 
     std::shared_lock<std::shared_timed_mutex> lock(_update_lock);
-
-    if (init_ids.size() == 0) {
-      init_ids.emplace_back(_start);
-    }
 
     auto retval =
         iterate_to_fixed_point(query, L, init_ids, scratch, true, true);
 
-    auto best_L_nodes = scratch->best_l_nodes();
+    auto &best_L_nodes = scratch->best_l_nodes();
 
     size_t pos = 0;
     for (int i = 0; i < best_L_nodes.size(); ++i) {
@@ -1522,7 +1522,8 @@ namespace diskann {
                                  // and IDType will be uint32_t or uint64_t
         if (distances != nullptr) {
 #ifdef EXEC_ENV_OLS
-          distances[pos] = it.distance;  // DLVS expects negative distances
+          distances[pos] =
+              best_L_nodes[i].distance;  // DLVS expects negative distances
 #else
           distances[pos] = _dist_metric == diskann::Metric::INNER_PRODUCT
                                ? -1 * best_L_nodes[i].distance
@@ -1534,6 +1535,10 @@ namespace diskann {
       if (pos == K)
         break;
     }
+    if (pos < K) {
+      diskann::cerr << "Found fewer than K elements for query" << std::endl;
+    }
+
     return retval;
   }
 
@@ -1545,37 +1550,43 @@ namespace diskann {
     ScratchStoreManager<InMemQueryScratch<T>> manager(_query_scratch);
     auto                                      scratch = manager.scratch_space();
 
-    if (L > scratch->search_l) {
-      scratch->resize_for_query(L);
-      diskann::cout << "Expanding query scratch_space. Was created with Lsize: "
-                    << scratch->search_l << " but search L is: " << L
-                    << std::endl;
+    if (L > scratch->get_L()) {
+      diskann::cout << "Attempting to expand query scratch_space. Was created "
+                    << "with Lsize: " << scratch->get_L()
+                    << " but search L is: " << L << std::endl;
+      scratch->resize_for_new_L(L);
+      diskann::cout << "Resize completed. New scratch->L is "
+                    << scratch->get_L() << std::endl;
     }
-    _u32  *indices = scratch->indices();
-    float *dist_interim = scratch->interim_dists();
-    search_impl(query, L, L, indices, dist_interim, scratch);
 
     std::shared_lock<std::shared_timed_mutex> ul(_update_lock);
+
+    std::vector<unsigned> init_ids(1, _start);
+    iterate_to_fixed_point(query, L, init_ids, scratch, true, true);
+    NeighborPriorityQueue &best_L_nodes = scratch->best_l_nodes();
+    assert(best_L_nodes.size() <= L);
+
     std::shared_lock<std::shared_timed_mutex> tl(_tag_lock);
-    size_t                                    pos = 0;
 
-    for (int i = 0; i < (int) L; ++i) {
+    size_t pos = 0;
+    for (size_t i = 0; i < best_L_nodes.size(); ++i) {
+      auto node = best_L_nodes[i];
+
       TagT tag;
-
-      if (_location_to_tag.try_get(indices[i], tag)) {
+      if (_location_to_tag.try_get(node.id, tag)) {
         tags[pos] = tag;
 
         if (res_vectors.size() > 0) {
-          memcpy(res_vectors[pos], _data + ((size_t) indices[i]) * _aligned_dim,
+          memcpy(res_vectors[pos], _data + ((size_t) node.id) * _aligned_dim,
                  _dim * sizeof(T));
         }
 
         if (distances != nullptr) {
 #ifdef EXEC_ENV_OLS
-          distances[pos] = dist_interim[i];  // DLVS expects negative distances
+          distances[pos] = node.distance;  // DLVS expects negative distances
 #else
-          distances[pos] = _dist_metric == INNER_PRODUCT ? -1 * dist_interim[i]
-                                                         : dist_interim[i];
+          distances[pos] = _dist_metric == INNER_PRODUCT ? -1 * node.distance
+                                                         : node.distance;
 #endif
         }
         pos++;
@@ -1650,7 +1661,6 @@ namespace diskann {
       InMemQueryScratch<T> *scratch) {
     tsl::robin_set<unsigned> candidate_set;
     std::vector<Neighbor>    expanded_nghrs;
-    std::vector<Neighbor>    result;
 
     bool modify = false;
 
@@ -1673,24 +1683,14 @@ namespace diskann {
     if (modify) {
       for (auto j : candidate_set) {
         expanded_nghrs.push_back(
-            Neighbor(j,
-                     _distance->compare(_data + _aligned_dim * i,
-                                        _data + _aligned_dim * (size_t) j,
-                                        (unsigned) _aligned_dim)));
+            Neighbor(j, _distance->compare(_data + _aligned_dim * i,
+                                           _data + _aligned_dim * (size_t) j,
+                                           (unsigned) _aligned_dim)));
       }
 
       std::sort(expanded_nghrs.begin(), expanded_nghrs.end());
-      occlude_list(expanded_nghrs, alpha, range, maxc, result, scratch);
-
-      {
-        _final_graph[i].clear();
-
-        for (auto j : result) {
-          if (j.id != (_u32) i &&
-              (old_delete_set.find(j.id) == old_delete_set.end()))
-            _final_graph[(_u32) i].push_back(j.id);
-        }
-      }
+      occlude_list(i, expanded_nghrs, alpha, range, maxc, _final_graph[i],
+                   scratch, &old_delete_set);
     }
   }
 

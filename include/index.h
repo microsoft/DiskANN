@@ -19,7 +19,6 @@
 #include "windows_customizations.h"
 #include "scratch.h"
 
-#define GRAPH_SLACK_FACTOR 1.3
 #define OVERHEAD_FACTOR 1.1
 #define EXPAND_IF_FULL 0
 #define DEFAULT_MAXC 750
@@ -214,12 +213,6 @@ namespace diskann {
     // determines navigating node of the graph by calculating medoid of data
     unsigned calculate_entry_point();
 
-    template<typename IDType>
-    std::pair<uint32_t, uint32_t> search_impl(const T *query, const size_t K,
-                                              const unsigned L, IDType *indices,
-                                              float                *distances,
-                                              InMemQueryScratch<T> *scratch);
-
     std::pair<uint32_t, uint32_t> iterate_to_fixed_point(
         const T *node_coords, const unsigned Lindex,
         const std::vector<unsigned> &init_ids, InMemQueryScratch<T> *scratch,
@@ -237,10 +230,11 @@ namespace diskann {
                          const float alpha, std::vector<unsigned> &pruned_list,
                          InMemQueryScratch<T> *scratch);
 
-    void occlude_list(std::vector<Neighbor> &pool, const float alpha,
-                      const unsigned degree, const unsigned maxc,
-                      std::vector<Neighbor> &result,
-                      InMemQueryScratch<T>  *scratch);
+    void occlude_list(
+        const unsigned location, std::vector<Neighbor> &pool, const float alpha,
+        const unsigned degree, const unsigned maxc,
+        std::vector<unsigned> &result, InMemQueryScratch<T> *scratch,
+        const tsl::robin_set<unsigned> *const delete_set_ptr = nullptr);
 
     // add reverse links from all the visited nodes to node n.
     void inter_insert(unsigned n, std::vector<unsigned> &pruned_list,

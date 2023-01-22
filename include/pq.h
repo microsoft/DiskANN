@@ -92,6 +92,14 @@ namespace diskann {
     }
   };
 
+  void aggregate_coords(const std::vector<unsigned>& ids, const _u8* all_coords,
+                        const _u64 ndims, _u8* out);
+
+  void pq_dist_lookup(const _u8* pq_ids, const _u64 n_pts,
+                      const _u64 pq_nchunks, const float* pq_dists,
+                      std::vector<float>& dists_out);
+
+  // Need to replace calls to these with calls to vector& based functions above
   void aggregate_coords(const unsigned* ids, const _u64 n_ids,
                         const _u8* all_coords, const _u64 ndims, _u8* out);
 
