@@ -160,7 +160,13 @@ namespace diskann {
 #else
     *ptr = ::_aligned_malloc(size, align);  // note the swapped arguments!
 #endif
-    assert(*ptr != nullptr);
+    if (*ptr == nullptr) {
+      std::stringstream stream;
+      stream << "Memory Allocation Failed.";
+      diskann::cerr << stream.str()
+                    << std::endl;
+      throw diskann::ANNException(stream.str(), -1);
+    }
   }
 
   inline void realloc_aligned(void** ptr, size_t size, size_t align) {
