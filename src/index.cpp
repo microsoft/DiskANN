@@ -943,6 +943,7 @@ namespace diskann {
 
     // Truncate pool at maxc and initialize scratch spaces
     assert(std::is_sorted(pool.begin(), pool.end()));
+    assert(result.size() == 0);
     if (pool.size() > maxc)
       pool.resize(maxc);
     std::vector<float> &occlude_factor = scratch->occlude_factor();
@@ -1695,6 +1696,7 @@ namespace diskann {
       }
       std::sort(expanded_nghrs.begin(), expanded_nghrs.end());
       std::unique_lock<non_recursive_mutex> adj_list_lock(_locks[loc]);
+      _final_graph[loc].clear(); // so we can pass it as the output buffer for occlude_list
       occlude_list(loc, expanded_nghrs, alpha, range, maxc, _final_graph[loc],
                    scratch, &old_delete_set);
     }

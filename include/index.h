@@ -231,6 +231,8 @@ namespace diskann {
                          const float alpha, std::vector<unsigned> &pruned_list,
                          InMemQueryScratch<T> *scratch);
 
+    // Prunes candidates in @pool to a shorter list @result
+    // @pool must be sorted before calling
     void occlude_list(
         const unsigned location, std::vector<Neighbor> &pool, const float alpha,
         const unsigned degree, const unsigned maxc,
