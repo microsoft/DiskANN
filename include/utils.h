@@ -163,16 +163,17 @@ namespace diskann {
     print_error_and_terminate(stream);
   }
 
-  inline void report_misallignment_of_requested_size() {
+  inline void report_misalignment_of_requested_size(size_t align) {
     std::stringstream stream;
-    stream << "Requested memory size is misalligned and can not be allocated.";
+    stream << "Requested memory size is not a multiple of " << align
+           << ". Can not be allocated.";
     print_error_and_terminate(stream);
   }
 
   inline void alloc_aligned(void** ptr, size_t size, size_t align) {
     *ptr = nullptr;
     if (IS_ALIGNED(size, align) == 0)
-      report_misallignment_of_requested_size();
+      report_misalignment_of_requested_size(align);
 #ifndef _WINDOWS
     *ptr = ::aligned_alloc(align, size);
 #else
@@ -184,7 +185,7 @@ namespace diskann {
 
   inline void realloc_aligned(void** ptr, size_t size, size_t align) {
     if (IS_ALIGNED(size, align) == 0)
-      report_misallignment_of_requested_size();
+      report_misalignment_of_requested_size(align);
 #ifdef _WINDOWS
     *ptr = ::_aligned_realloc(*ptr, size, align);
 #else
