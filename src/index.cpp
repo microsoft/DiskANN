@@ -1659,7 +1659,8 @@ namespace diskann {
       const tsl::robin_set<unsigned> &old_delete_set, size_t loc,
       const unsigned &range, const unsigned &maxc, const float &alpha,
       InMemQueryScratch<T> *scratch) {
-    std::vector<Neighbor> expanded_nghrs;
+    tsl::robin_set<unsigned> expanded_nodes_set; 
+    std::vector<Neighbor> expanded_nghrs_vec; 
 
     // If this condition were not true, deadlock could result
     assert(old_delete_set.find(loc) == old_delete_set.end());
@@ -1674,30 +1675,32 @@ namespace diskann {
     }
 
     bool modify = false;
-    for (auto ngh : adj_list) {
-      if (old_delete_set.find(ngh) != old_delete_set.end()) {
+    for (auto loc : adj_list) {
+      if (old_delete_set.find(loc) != old_delete_set.end()) {
         modify = true;
 
         std::unique_lock<non_recursive_mutex> ngh_lock;
         if (_conc_consolidate)
-          ngh_lock = std::unique_lock<non_recursive_mutex>(_locks[ngh]);
-        for (auto j : _final_graph[ngh])
+          ngh_lock = std::unique_lock<non_recursive_mutex>(_locks[loc]);
+        for (auto j : _final_graph[loc])
           if (j != loc && old_delete_set.find(j) == old_delete_set.end())
-            expanded_nghrs.emplace_back(j, 0);
+            expanded_nodes_set.insert(j);
       } else {
-        expanded_nghrs.emplace_back(ngh, 0);
+        expanded_nodes_set.insert(loc);
       }
     }
     if (modify) {
-      for (auto &ngh : expanded_nghrs) {
-        ngh.distance = _distance->compare(_data + _aligned_dim * loc,
-                                          _data + _aligned_dim * ngh.id,
-                                          (unsigned) _aligned_dim);
+      // Create a pool of Neibhgor candidates from the expanded_nodes_set
+      for (auto &ngh : expanded_nodes_set) {
+        expanded_nghrs_vec.emplace_back(
+            ngh, _distance->compare(_data + _aligned_dim * loc,
+                                    _data + _aligned_dim * ngh,
+                                    (unsigned) _aligned_dim));
       }
-      std::sort(expanded_nghrs.begin(), expanded_nghrs.end());
+      std::sort(expanded_nghrs_vec.begin(), expanded_nghrs_vec.end());
       std::unique_lock<non_recursive_mutex> adj_list_lock(_locks[loc]);
       _final_graph[loc].clear(); // so we can pass it as the output buffer for occlude_list
-      occlude_list(loc, expanded_nghrs, alpha, range, maxc, _final_graph[loc],
+      occlude_list(loc, expanded_nghrs_vec, alpha, range, maxc, _final_graph[loc],
                    scratch, &old_delete_set);
     }
   }
