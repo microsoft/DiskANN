@@ -35,16 +35,15 @@ typedef int FileHandle;
 // https://github.com/Microsoft/BLAS-on-flash/blob/master/include/utils.h
 // round up X to the nearest multiple of Y
 #define ROUND_UP(X, Y) \
-  ((((uint64_t) (X) / (Y)) + ((uint64_t) (X) % (Y) != 0)) * (Y))
+  ((((uint64_t)(X) / (Y)) + ((uint64_t)(X) % (Y) != 0)) * (Y))
 
-#define DIV_ROUND_UP(X, Y) \
-  (((uint64_t) (X) / (Y)) + ((uint64_t) (X) % (Y) != 0))
+#define DIV_ROUND_UP(X, Y) (((uint64_t)(X) / (Y)) + ((uint64_t)(X) % (Y) != 0))
 
 // round down X to the nearest multiple of Y
-#define ROUND_DOWN(X, Y) (((uint64_t) (X) / (Y)) * (Y))
+#define ROUND_DOWN(X, Y) (((uint64_t)(X) / (Y)) * (Y))
 
 // alignment tests
-#define IS_ALIGNED(X, Y) ((uint64_t) (X) % (uint64_t) (Y) == 0)
+#define IS_ALIGNED(X, Y) ((uint64_t)(X) % (uint64_t)(Y) == 0)
 #define IS_512_ALIGNED(X) IS_ALIGNED(X, 512)
 #define IS_4096_ALIGNED(X) IS_ALIGNED(X, 4096)
 #define METADATA_SIZE \
@@ -95,14 +94,14 @@ typedef uint8_t  _u8;
 typedef int8_t   _s8;
 inline void      open_file_to_write(std::ofstream&     writer,
                                     const std::string& filename) {
-       writer.exceptions(std::ofstream::failbit | std::ofstream::badbit);
-       if (!file_exists(filename))
+  writer.exceptions(std::ofstream::failbit | std::ofstream::badbit);
+  if (!file_exists(filename))
     writer.open(filename, std::ios::binary | std::ios::out);
   else
     writer.open(filename, std::ios::binary | std::ios::in | std::ios::out);
 
   if (writer.fail()) {
-         char buff[1024];
+    char buff[1024];
 #ifdef _WINDOWS
     strerror_s(buff, 1024, errno);
 #else
@@ -152,19 +151,41 @@ class AlignedFileReader;
 namespace diskann {
   static const size_t MAX_SIZE_OF_STREAMBUF = 2LL * 1024 * 1024 * 1024;
 
+  inline void print_error_and_terminate(std::stringstream& error_stream) {
+    diskann::cerr << error_stream.str() << std::endl;
+    throw diskann::ANNException(error_stream.str(), -1, __FUNCSIG__, __FILE__,
+                                __LINE__);
+  }
+
+  inline void report_memory_allocation_failure() {
+    std::stringstream stream;
+    stream << "Memory Allocation Failed.";
+    print_error_and_terminate(stream);
+  }
+
+  inline void report_misalignment_of_requested_size(size_t align) {
+    std::stringstream stream;
+    stream << "Requested memory size is not a multiple of " << align
+           << ". Can not be allocated.";
+    print_error_and_terminate(stream);
+  }
+
   inline void alloc_aligned(void** ptr, size_t size, size_t align) {
     *ptr = nullptr;
-    assert(IS_ALIGNED(size, align));
+    if (IS_ALIGNED(size, align) == 0)
+      report_misalignment_of_requested_size(align);
 #ifndef _WINDOWS
     *ptr = ::aligned_alloc(align, size);
 #else
     *ptr = ::_aligned_malloc(size, align);  // note the swapped arguments!
 #endif
-    assert(*ptr != nullptr);
+    if (*ptr == nullptr)
+      report_memory_allocation_failure();
   }
 
   inline void realloc_aligned(void** ptr, size_t size, size_t align) {
-    assert(IS_ALIGNED(size, align));
+    if (IS_ALIGNED(size, align) == 0)
+      report_misalignment_of_requested_size(align);
 #ifdef _WINDOWS
     *ptr = ::_aligned_realloc(*ptr, size, align);
 #else
@@ -172,7 +193,8 @@ namespace diskann {
                      "left it out for now."
                   << std::endl;
 #endif
-    assert(*ptr != nullptr);
+    if (*ptr == nullptr)
+      report_memory_allocation_failure();
   }
 
   inline void check_stop(std::string arnd) {
@@ -582,8 +604,8 @@ namespace diskann {
 #else
       strerror_r(errno, buff, 1024);
 #endif
-      std::string error_message = std::string("Failed to open file") + filename +
-          " for write because " + buff;
+      std::string error_message = std::string("Failed to open file") +
+                                  filename + " for write because " + buff;
       diskann::cerr << error_message << std::endl;
       throw diskann::ANNException(error_message, -1);
     }
@@ -925,7 +947,7 @@ inline void normalize(T* arr, size_t dim) {
   }
   sum = sqrt(sum);
   for (uint32_t i = 0; i < dim; i++) {
-    arr[i] = (T) (arr[i] / sum);
+    arr[i] = (T)(arr[i] / sum);
   }
 }
 
