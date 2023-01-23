@@ -341,6 +341,9 @@ namespace diskann {
     ConcurrentQueue<InMemQueryScratch<T> *> _query_scratch;
 
     // data structures, flags and locks for dynamic indexing
+    // lazy_delete removes entry from _location_to_tag and _tag_to_location
+    // If _location_to_tag does not resolve a location, it was deleted.
+    // _empty_slots has unallocated slots and those freed by ::consolidate_delete
     tsl::sparse_map<TagT, unsigned>    _tag_to_location;
     natural_number_map<unsigned, TagT> _location_to_tag;
     natural_number_set<unsigned>       _empty_slots;

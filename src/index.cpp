@@ -1841,15 +1841,17 @@ namespace diskann {
     if (!_dynamic_index)
       throw ANNException("Can not compact a non-dynamic index", -1, __FUNCSIG__,
                          __FILE__, __LINE__);
-
+    
+    std::unique_lock<std::shared_timed_mutex> ul(_update_lock);
+    std::unique_lock<std::shared_timed_mutex> cl(_consolidate_lock);
+    std::unique_lock<std::shared_timed_mutex> tl(_tag_lock);
+    std::unique_lock<std::shared_timed_mutex> dl(_delete_lock);
     if (_data_compacted) {
       diskann::cerr
           << "Warning! Calling compact_data() when _data_compacted is true!"
           << std::endl;
       return;
     }
-
-    std::unique_lock<std::shared_timed_mutex> cl(_consolidate_lock);
 
     if (_delete_set->size() > 0) {
       throw ANNException(
@@ -1901,22 +1903,24 @@ namespace diskann {
 
     size_t num_dangling = 0;
     for (unsigned old = 0; old < _max_points + _num_frozen_pts; ++old) {
+      std::vector<unsigned> new_adj_list;
+
       if ((new_location[old] < _max_points)  // If point continues to exist
           || (old >= _max_points && old < _max_points + _num_frozen_pts)) {
-        for (size_t i = 0; i < _final_graph[old].size(); ++i) {
-          if (empty_locations.find(_final_graph[old][i]) !=
-              empty_locations.end()) {
+        new_adj_list.clear();
+        for (auto ngh_iter : _final_graph[old]) {
+          if (empty_locations.find(ngh_iter) != empty_locations.end()) {
             ++num_dangling;
             diskann::cerr << "Error in compact_data(). _final_graph[" << old
-                          << "][" << i << "] = " << _final_graph[old][i]
+                          << "] has neighbor " << ngh_iter
                           << " which is a location not associated with any tag."
                           << std::endl;
-            _final_graph[old].erase(_final_graph[old].begin() + i);
-            i--;
+
           } else {
-            _final_graph[old][i] = new_location[_final_graph[old][i]];
+            new_adj_list.push_back(new_location[ngh_iter]);
           }
         }
+        _final_graph[old].swap(new_adj_list);
 
         // Move the data and adj list to the correct position
         if (new_location[old] != old) {
@@ -1941,14 +1945,13 @@ namespace diskann {
       _tag_to_location[tag] = new_location[pos._key];
     }
     _location_to_tag.clear();
-    for (auto iter : _tag_to_location) {
+    for (const auto &iter : _tag_to_location) {
       _location_to_tag.set(iter.second, iter.first);
     }
 
     for (_u64 old = _nd; old < _max_points; ++old) {
       _final_graph[old].clear();
     }
-    _delete_set->clear();
     _empty_slots.clear();
     for (auto i = _nd; i < _max_points; i++) {
       _empty_slots.insert((uint32_t) i);
