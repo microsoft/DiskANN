@@ -355,7 +355,6 @@ namespace diskann {
     bool              _pq_generated = false;
     FixedChunkPQTable _pq_table;
 
-    bool _lazy_done = false;      // true if lazy deletions have been made
     bool _data_compacted = true;  // true if data has been compacted
     bool _is_saved = false;  // Gopal. Checking if the index is already saved.
     bool _conc_consolidate = false;  // use _lock while searching

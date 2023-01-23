@@ -486,8 +486,6 @@ namespace diskann {
       _empty_slots.insert((uint32_t) i);
     }
 
-    _lazy_done = _delete_set->size() != 0;
-
     reposition_frozen_point_to_end();
     diskann::cout << "Num frozen points:" << _num_frozen_pts << " _nd: " << _nd
                   << " _start: " << _start
@@ -1652,7 +1650,6 @@ namespace diskann {
       }
     }
 
-    _lazy_done = false;
     return 0;
   }
 
@@ -1802,9 +1799,6 @@ namespace diskann {
     if (!_conc_consolidate) {
       update_lock.unlock();
     }
-
-    if (_delete_set->size() == 0)
-      _lazy_done = false;
 
     double duration = timer.elapsed() / 1000000.0;
     diskann::cout << " done in " << duration << " seconds." << std::endl;
@@ -2185,7 +2179,6 @@ namespace diskann {
     std::shared_lock<std::shared_timed_mutex> ul(_update_lock);
     std::unique_lock<std::shared_timed_mutex> tl(_tag_lock);
     std::unique_lock<std::shared_timed_mutex> dl(_delete_lock);
-    _lazy_done = true;
     _data_compacted = false;
 
     if (_tag_to_location.find(tag) == _tag_to_location.end()) {
@@ -2212,7 +2205,6 @@ namespace diskann {
     std::shared_lock<std::shared_timed_mutex> ul(_update_lock);
     std::unique_lock<std::shared_timed_mutex> tl(_tag_lock);
     std::unique_lock<std::shared_timed_mutex> dl(_delete_lock);
-    _lazy_done = true;
     _data_compacted = false;
 
     for (auto tag : tags) {
@@ -2254,8 +2246,7 @@ namespace diskann {
     diskann::cout << "Number of empty slots: " << _empty_slots.size()
                   << std::endl;
     diskann::cout << std::boolalpha
-                  << "Data compacted: " << this->_data_compacted
-                  << " Lazy done: " << this->_lazy_done << std::endl;
+                  << "Data compacted: " << this->_data_compacted << std::endl;
     diskann::cout << "---------------------------------------------------------"
                      "------------"
                   << std::endl;
