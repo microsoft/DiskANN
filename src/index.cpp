@@ -1704,7 +1704,7 @@ namespace diskann {
                    scratch, &old_delete_set);
     }
   }
-
+   
   // Returns number of live points left after consolidation
   template<typename T, typename TagT>
   consolidation_report Index<T, TagT>::consolidate_deletes(
@@ -1762,6 +1762,11 @@ namespace diskann {
     {
       std::unique_lock<std::shared_timed_mutex> dl(_delete_lock);
       std::swap(_delete_set, old_delete_set);
+    }
+
+    if (old_delete_set->find(_start) != old_delete_set->end()) {
+      throw diskann::ANNException("ERROR: start node has been deleted", -1,
+                                  __FUNCSIG__, __FILE__, __LINE__);
     }
 
     const unsigned range = params.Get<unsigned>("R");
@@ -1886,24 +1891,10 @@ namespace diskann {
       new_location[old_location] = old_location;
     }
 
-    // If cur node is removed, replace it.
-    if (_delete_set->find(_start) != _delete_set->end()) {
-      diskann::cerr << "Replacing cur node which has been deleted... "
-                    << std::flush;
-      auto old_ep = _start;
-      // First active neighbor of old cur node is new cur node
-      for (auto iter : _final_graph[_start])
-        if (_delete_set->find(iter) != _delete_set->end()) {
-          _start = iter;
-          break;
-        }
-      if (_start == old_ep) {
-        throw diskann::ANNException(
-            "ERROR: Did not find a replacement for cur node.", -1, __FUNCSIG__,
-            __FILE__, __LINE__);
-      } else {
-        assert(_delete_set->find(_start) == _delete_set->end());
-      }
+    // If start node is removed, throw an exception
+    if (!_location_to_tag.contains(_start)) {
+      throw diskann::ANNException("ERROR: Start node deleted.", -1, __FUNCSIG__,
+                                  __FILE__, __LINE__);
     }
 
     size_t num_dangling = 0;
