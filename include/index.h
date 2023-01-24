@@ -184,7 +184,7 @@ namespace diskann {
     // memory should be allocated for vec before calling this function
     DISKANN_DLLEXPORT int get_vector_by_tag(TagT &tag, T *vec);
 
-    DISKANN_DLLEXPORT void print_status() const;
+    DISKANN_DLLEXPORT void print_status();
 
     DISKANN_DLLEXPORT void count_nodes_at_bfs_levels() const;
 

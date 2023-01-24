@@ -2233,7 +2233,12 @@ namespace diskann {
   }
 
   template<typename T, typename TagT>
-  void Index<T, TagT>::print_status() const {
+  void Index<T, TagT>::print_status() {
+    std::shared_lock<std::shared_timed_mutex> ul(_update_lock);
+    std::shared_lock<std::shared_timed_mutex> cl(_consolidate_lock);
+    std::shared_lock<std::shared_timed_mutex> tl(_tag_lock);
+    std::shared_lock<std::shared_timed_mutex> dl(_delete_lock);
+
     diskann::cout << "------------------- Index object: " << (uint64_t) this
                   << " -------------------" << std::endl;
     diskann::cout << "Number of points: " << _nd << std::endl;
