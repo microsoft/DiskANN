@@ -29,7 +29,7 @@
 
 // WORKS FOR UPTO 2 BILLION POINTS (as we use INT INSTEAD OF UNSIGNED)
 
-#define PARTSIZE 10000000
+#define PARTSIZE (1<<23)
 #define ALIGNMENT 512
 
 namespace po = boost::program_options;
@@ -363,9 +363,10 @@ int aux_main(const std::string &base_file, const std::string &query_file,
 
   // load tags
   std::vector<uint32_t> location_to_tag;
+  unsigned              num_location_with_zero_tag = 0;
   if (tags_enabled) {
     size_t         tag_file_ndims, tag_file_npts;
-    std::uint32_t *tag_data;
+    uint32_t *tag_data;
     diskann::load_bin<std::uint32_t>(tags_file, tag_data, tag_file_npts,
                                      tag_file_ndims);
     if (tag_file_ndims != 1) {
@@ -384,6 +385,9 @@ int aux_main(const std::string &base_file, const std::string &query_file,
     }
 
     location_to_tag.assign(tag_data, tag_data + tag_file_npts);
+    for (auto tag : location_to_tag)
+      if (tag==0)
+          num_location_with_zero_tag++;
     delete[] tag_data;
   }
 
@@ -398,7 +402,8 @@ int aux_main(const std::string &base_file, const std::string &query_file,
     int   *closest_points_part = new int[nqueries * k];
     float *dist_closest_points_part = new float[nqueries * k];
 
-    auto nr = std::min(npoints, k);
+    // Ask for num_location_with_zero_tag more results since as many can have zero tag
+    auto nr = std::min(npoints, (k+num_location_with_zero_tag));
 
     exact_knn(dim, nr, closest_points_part, dist_closest_points_part, npoints,
               base_data, nqueries, query_data, metric);
