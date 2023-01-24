@@ -1892,7 +1892,7 @@ namespace diskann {
     }
 
     // If start node is removed, throw an exception
-    if (!_location_to_tag.contains(_start)) {
+    if (_start < _max_points && !_location_to_tag.contains(_start)) {
       throw diskann::ANNException("ERROR: Start node deleted.", -1, __FUNCSIG__,
                                   __FILE__, __LINE__);
     }
