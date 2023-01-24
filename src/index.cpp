@@ -1644,7 +1644,10 @@ namespace diskann {
       return -2;
     }
 
-    std::unique_lock<std::shared_timed_mutex> update_lock(_update_lock);
+    std::unique_lock<std::shared_timed_mutex> ul(_update_lock);
+    std::unique_lock<std::shared_timed_mutex> tl(_tag_lock);
+    std::unique_lock<std::shared_timed_mutex> dl(_delete_lock);
+
     if (_data_compacted) {
       for (unsigned slot = (unsigned) _nd; slot < _max_points; ++slot) {
         _empty_slots.insert(slot);
