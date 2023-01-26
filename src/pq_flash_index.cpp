@@ -367,6 +367,7 @@ namespace diskann {
            cur_level->size() == 0);
 
     node_list.clear();
+    node_list.reserve(node_set.size() + cur_level->size());
     for (auto node : node_set)
       node_list.push_back(node);
     for (auto node : *cur_level)
