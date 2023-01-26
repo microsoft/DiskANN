@@ -1693,9 +1693,9 @@ namespace diskann {
       }
     }
     if (modify) {
+      std::unique_lock<non_recursive_mutex> adj_list_lock(_locks[loc]);
       _final_graph[loc].clear();  // so we can pass it as the output buffer
                                   // for occlude_list
-      std::unique_lock<non_recursive_mutex> adj_list_lock(_locks[loc]);
       if (expanded_nodes_set.size() <= range) {
         for (auto &ngh : expanded_nodes_set)
           _final_graph[loc].push_back(ngh);
