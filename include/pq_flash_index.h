@@ -62,7 +62,8 @@ namespace diskann {
 #endif
 
     DISKANN_DLLEXPORT void cache_bfs_levels(_u64 num_nodes_to_cache,
-                                            std::vector<uint32_t> &node_list);
+                                            std::vector<uint32_t> &node_list,
+                                            const bool shuffle = false);
 
     DISKANN_DLLEXPORT void cached_beam_search(
         const T *query, const _u64 k_search, const _u64 l_search, _u64 *res_ids,
