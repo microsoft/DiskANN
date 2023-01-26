@@ -51,7 +51,7 @@ int search_disk_index(
     std::string& gt_file, const unsigned num_threads, const unsigned recall_at,
     const unsigned beamwidth, const unsigned num_nodes_to_cache,
     const _u32 search_io_limit, const std::vector<unsigned>& Lvec,
-    const bool use_reorder_data = false) {
+    const bool use_reorder_data, const float fail_if_recall_below) {
   diskann::cout << "Search parameters: #threads: " << num_threads << ", ";
   if (beamwidth <= 0)
     diskann::cout << "beamwidth to be optimized for each L value" << std::flush;
@@ -178,6 +178,8 @@ int search_disk_index(
 
   uint32_t optimized_beamwidth = 2;
 
+  float best_recall = 0.0;
+
   for (uint32_t test_id = 0; test_id < Lvec.size(); test_id++) {
     _u64 L = Lvec[test_id];
 
@@ -240,6 +242,7 @@ int search_disk_index(
       recall = diskann::calculate_recall(query_num, gt_ids, gt_dists, gt_dim,
                                          query_result_ids[test_id].data(),
                                          recall_at, recall_at);
+      best_recall = std::max(recall, best_recall);
     }
 
     diskann::cout << std::setw(6) << L << std::setw(12) << optimized_beamwidth
@@ -274,7 +277,7 @@ int search_disk_index(
   diskann::aligned_free(query);
   if (warmup != nullptr)
     diskann::aligned_free(warmup);
-  return 0;
+  return best_recall >= fail_if_recall_below ? 0 : -1;
 }
 
 int main(int argc, char** argv) {
@@ -283,6 +286,7 @@ int main(int argc, char** argv) {
   unsigned              num_threads, K, W, num_nodes_to_cache, search_io_limit;
   std::vector<unsigned> Lvec;
   bool                  use_reorder_data = false;
+  float                 fail_if_recall_below = 0.0f;
 
   po::options_description desc{"Arguments"};
   try {
@@ -329,6 +333,11 @@ int main(int argc, char** argv) {
                        po::bool_switch()->default_value(false),
                        "Include full precision data in the index. Use only in "
                        "conjuction with compressed data on SSD.");
+    desc.add_options()(
+        "fail_if_recall_below",
+        po::value<float>(&fail_if_recall_below)->default_value(0.0f),
+        "If set to a value >0 and <100%, program returns -1 if best recall "
+        "found is below this threshold. ");
 
     po::variables_map vm;
     po::store(po::parse_command_line(argc, argv, desc), vm);
@@ -374,20 +383,20 @@ int main(int argc, char** argv) {
 
   try {
     if (data_type == std::string("float"))
-      return search_disk_index<float>(metric, index_path_prefix,
-                                      result_path_prefix, query_file, gt_file,
-                                      num_threads, K, W, num_nodes_to_cache,
-                                      search_io_limit, Lvec, use_reorder_data);
+      return search_disk_index<float>(
+          metric, index_path_prefix, result_path_prefix, query_file, gt_file,
+          num_threads, K, W, num_nodes_to_cache, search_io_limit, Lvec,
+          use_reorder_data, fail_if_recall_below);
     else if (data_type == std::string("int8"))
-      return search_disk_index<int8_t>(metric, index_path_prefix,
-                                       result_path_prefix, query_file, gt_file,
-                                       num_threads, K, W, num_nodes_to_cache,
-                                       search_io_limit, Lvec, use_reorder_data);
+      return search_disk_index<int8_t>(
+          metric, index_path_prefix, result_path_prefix, query_file, gt_file,
+          num_threads, K, W, num_nodes_to_cache, search_io_limit, Lvec,
+          use_reorder_data, fail_if_recall_below);
     else if (data_type == std::string("uint8"))
       return search_disk_index<uint8_t>(
           metric, index_path_prefix, result_path_prefix, query_file, gt_file,
           num_threads, K, W, num_nodes_to_cache, search_io_limit, Lvec,
-          use_reorder_data);
+          use_reorder_data, fail_if_recall_below);
     else {
       std::cerr << "Unsupported data type. Use float or int8 or uint8"
                 << std::endl;

@@ -106,6 +106,8 @@ int search_memory_index(diskann::Metric& metric, const std::string& index_path,
     query_result_tags.resize(recall_at * query_num);
   }
 
+  float best_recall = 0.0;
+
   for (uint32_t test_id = 0; test_id < Lvec.size(); test_id++) {
     _u64 L = Lvec[test_id];
     if (L < recall_at) {
@@ -185,6 +187,7 @@ int search_memory_index(diskann::Metric& metric, const std::string& index_path,
     }
     for (float recall : recalls) {
       std::cout << std::setw(12) << recall;
+      best_recall = std::max(recall, best_recall);
     }
     std::cout << std::endl;
   }
@@ -206,8 +209,9 @@ int search_memory_index(diskann::Metric& metric, const std::string& index_path,
 
   diskann::aligned_free(query);
 
-  return 0;
+  return best_recall >= fail_if_recall_below ? 0 : -1;
 }
+
 
 int main(int argc, char** argv) {
   std::string data_type, dist_fn, index_path_prefix, result_path, query_file,
