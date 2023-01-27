@@ -1913,7 +1913,7 @@ namespace diskann {
 
       if ((new_location[old] < _max_points)  // If point continues to exist
           || (old >= _max_points && old < _max_points + _num_frozen_pts)) {
-        new_adj_list.clear();
+        new_adj_list.reserve(_final_graph[old].size());
         for (auto ngh_iter : _final_graph[old]) {
           if (empty_locations.find(ngh_iter) != empty_locations.end()) {
             ++num_dangling;
