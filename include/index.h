@@ -228,8 +228,9 @@ namespace diskann {
         const std::vector<unsigned> &init_ids, InMemQueryScratch<T> *scratch,
         bool ret_frozen = true, bool search_invocation = false);
 
-    void search_for_point_and_add_links(int location, _u32 Lindex,
-                                        InMemQueryScratch<T> *scratch);
+    void search_for_point_and_prune(int location, _u32 Lindex,
+                                    std::vector<unsigned> &pruned_list,
+                                    InMemQueryScratch<T>  *scratch);
 
     void prune_neighbors(const unsigned location, std::vector<Neighbor> &pool,
                          std::vector<unsigned> &pruned_list,
@@ -315,7 +316,7 @@ namespace diskann {
 
     // Data
     T    *_data = nullptr;
-    char *_opt_graph;
+    char *_opt_graph = nullptr;
 
     // Graph related data structures
     std::vector<std::vector<unsigned>> _final_graph;

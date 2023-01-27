@@ -150,7 +150,9 @@ namespace diskann {
       aligned_free(this->_data);
       this->_data = nullptr;
     }
-    delete[] _opt_graph;
+    if (_opt_graph != nullptr) {
+      delete[] _opt_graph;
+    }
 
     ScratchStoreManager<InMemQueryScratch<T>> manager(_query_scratch);
     manager.destroy();
@@ -885,8 +887,9 @@ namespace diskann {
   }
 
   template<typename T, typename TagT>
-  void Index<T, TagT>::search_for_point_and_add_links(
-      int location, _u32 Lindex, InMemQueryScratch<T> *scratch) {
+  void Index<T, TagT>::search_for_point_and_prune(
+      int location, _u32 Lindex, std::vector<unsigned> &pruned_list,
+      InMemQueryScratch<T> *scratch) {
     std::vector<unsigned> init_ids;
     init_ids.emplace_back(_start);
 
@@ -902,37 +905,15 @@ namespace diskann {
       }
     }
 
-    std::vector<unsigned> pruned_list;
+    if (pruned_list.size() > 0) {
+      throw diskann::ANNException("ERROR: non-empty pruned_list passed", -1,
+                                  __FUNCSIG__, __FILE__, __LINE__);
+    }
+
     prune_neighbors(location, pool, pruned_list, scratch);
 
     assert(!pruned_list.empty());
     assert(_final_graph.size() == _max_points + _num_frozen_pts);
-
-    {
-      std::shared_lock<std::shared_timed_mutex> tlock(_tag_lock,
-                                                      std::defer_lock);
-      if (_conc_consolidate)
-        tlock.lock();
-
-      LockGuard guard(_locks[location]);
-      _final_graph[location].clear();
-      _final_graph[location].shrink_to_fit();
-      _final_graph[location].reserve(
-          (_u64) (_indexingRange * GRAPH_SLACK_FACTOR * 1.05));
-
-      for (auto link : pruned_list) {
-        if (_conc_consolidate)
-          if (!_location_to_tag.contains(link))
-            continue;
-        _final_graph[location].emplace_back(link);
-      }
-
-      if (_conc_consolidate)
-        tlock.unlock();
-    }
-
-    assert(_final_graph[location].size() <= _indexingRange);
-    inter_insert(location, pruned_list, scratch);
   }
 
   template<typename T, typename TagT>
@@ -1176,7 +1157,18 @@ namespace diskann {
       ScratchStoreManager<InMemQueryScratch<T>> manager(_query_scratch);
       auto scratch = manager.scratch_space();
 
-      search_for_point_and_add_links(node, _indexingQueueSize, scratch);
+      std::vector<unsigned> pruned_list;
+      search_for_point_and_prune(node, _indexingQueueSize, pruned_list,
+                                 scratch);
+      {
+        LockGuard guard(_locks[node]);
+        _final_graph[node].reserve(
+            (_u64) (_indexingRange * GRAPH_SLACK_FACTOR * 1.05));
+        _final_graph[node] = pruned_list;
+        assert(_final_graph[node].size() <= _indexingRange);
+      }
+
+      inter_insert(node, pruned_list, scratch);
 
       if (node_ctr % 100000 == 0) {
         diskann::cout << "\r" << (100.0 * node_ctr) / (visit_order.size())
@@ -1239,9 +1231,6 @@ namespace diskann {
 
   template<typename T, typename TagT>
   void Index<T, TagT>::set_start_point_at_random(T radius) {
-    std::unique_lock<std::shared_timed_mutex> ul(_update_lock);
-    std::unique_lock<std::shared_timed_mutex> tl(_tag_lock);
-
     std::vector<double>        real_vec;
     std::random_device         rd{};
     std::mt19937               gen{rd()};
@@ -2127,7 +2116,6 @@ namespace diskann {
     std::unique_lock<std::shared_timed_mutex> tl(_tag_lock);
     std::unique_lock<std::shared_timed_mutex> dl(_delete_lock);
 
-
     // Find a vacant location in the data array to insert the new point
     auto location = reserve_location();
     if (location == -1) {
@@ -2191,7 +2179,34 @@ namespace diskann {
     // Find and add appropriate graph edges
     ScratchStoreManager<InMemQueryScratch<T>> manager(_query_scratch);
     auto                                      scratch = manager.scratch_space();
-    search_for_point_and_add_links(location, _indexingQueueSize, scratch);
+    std::vector<unsigned>                     pruned_list;
+    search_for_point_and_prune(location, _indexingQueueSize, pruned_list,
+                               scratch);
+    {
+      std::shared_lock<std::shared_timed_mutex> tlock(_tag_lock,
+                                                      std::defer_lock);
+      if (_conc_consolidate)
+        tlock.lock();
+
+      LockGuard guard(_locks[location]);
+      _final_graph[location].clear();
+      _final_graph[location].reserve(
+          (_u64) (_indexingRange * GRAPH_SLACK_FACTOR * 1.05));
+
+      for (auto link : pruned_list) {
+        if (_conc_consolidate)
+          if (!_location_to_tag.contains(link))
+            continue;
+        _final_graph[location].emplace_back(link);
+      }
+      assert(_final_graph[location].size() <= _indexingRange);
+
+      if (_conc_consolidate)
+        tlock.unlock();
+    }
+
+    inter_insert(location, pruned_list, scratch);
+
     return 0;
   }
 
