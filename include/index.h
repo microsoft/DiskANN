@@ -62,6 +62,14 @@ namespace diskann {
 
   template<typename T, typename TagT = uint32_t>
   class Index {
+    /**************************************************************************
+     *
+     * Public functions acquire one or more of _update_lock, _consolidate_lock,
+     * _tag_lock, _delete_lock before calling protected functions which DO NOT
+     * acquire these locks. They might acquire locks on _locks[i]
+     *
+     **************************************************************************/
+
    public:
     // Constructor for Bulk operations and for creating the index object solely
     // for loading a prexisting index.
@@ -126,7 +134,7 @@ namespace diskann {
     // Set starting point to a random point on a sphere of certain radius
     DISKANN_DLLEXPORT void set_start_point_at_random(T radius);
 
-    // For Bulk Index FastL2 search, we interleave the data with graph
+    // For FastL2 search on a static index, we interleave the data with graph
     DISKANN_DLLEXPORT void optimize_index_layout();
 
     // For FastL2 search on optimized layout
@@ -186,7 +194,7 @@ namespace diskann {
 
     DISKANN_DLLEXPORT void print_status();
 
-    DISKANN_DLLEXPORT void count_nodes_at_bfs_levels() const;
+    DISKANN_DLLEXPORT void count_nodes_at_bfs_levels();
 
     // This variable MUST be updated if the number of entries in the metadata
     // change.
@@ -204,6 +212,7 @@ namespace diskann {
     Index<T, TagT> &operator=(const Index<T, TagT> &) = delete;
 
     // Use after _data and _nd have been populated
+    // Acquire exclusive _update_lock before calling
     void build_with_data_populated(Parameters              &parameters,
                                    const std::vector<TagT> &tags);
 
@@ -211,7 +220,7 @@ namespace diskann {
     // This is not visible to the user
     int generate_frozen_point();
 
-    // determines navigating node of the graph by calculating medoid of data
+    // determines navigating node of the graph by calculating medoid of datafopt
     unsigned calculate_entry_point();
 
     std::pair<uint32_t, uint32_t> iterate_to_fixed_point(
@@ -246,21 +255,22 @@ namespace diskann {
     void inter_insert(unsigned n, std::vector<unsigned> &pruned_list,
                       InMemQueryScratch<T> *scratch);
 
+    // Acquire exclusive _update_lock before calling
     void link(Parameters &parameters);
 
     // Acquire exclusive _tag_lock and _delete_lock before calling
-    int    reserve_location();
+    int reserve_location();
 
-    // Acquire _tag_lock before calling
+    // Acquire exclusive _tag_lock before calling
     size_t release_location(int location);
     size_t release_locations(const tsl::robin_set<unsigned> &locations);
 
     // Resize the index when no slots are left for insertion.
-    // MUST acquire _num_points_lock and _update_lock before calling.
+    // Acquire exclusive _update_lock and _tag_lock before calling.
     void resize(size_t new_max_points);
 
-    // Take an unique lock on _update_lock and _consolidate_lock
-    // before calling these functions.
+    // Acquire unique lock on _update_lock, _consolidate_lock, _tag_lock
+    // and _delete_lock before calling these functions.
     // Renumber nodes, update tag and location maps and compact the
     // graph, mode = _consolidated_order in case of lazy deletion and
     // _compacted_order in case of eager deletion
@@ -269,7 +279,6 @@ namespace diskann {
 
     // Remove deleted nodes from adjacency list of node loc
     // Replace removed neighbors with second order neighbors.
-    // Acquires shared lock on _delete_lock
     // Also acquires _locks[i] for i = loc and out-neighbors of loc.
     void process_delete(const tsl::robin_set<unsigned> &old_delete_set,
                         size_t loc, const unsigned range, const unsigned maxc,
@@ -342,16 +351,6 @@ namespace diskann {
     // Query scratch data structures
     ConcurrentQueue<InMemQueryScratch<T> *> _query_scratch;
 
-    // data structures, flags and locks for dynamic indexing
-    // lazy_delete removes entry from _location_to_tag and _tag_to_location
-    // If _location_to_tag does not resolve a location, it was deleted.
-    // _empty_slots has unallocated slots and those freed by ::consolidate_delete
-    tsl::sparse_map<TagT, unsigned>    _tag_to_location;
-    natural_number_map<unsigned, TagT> _location_to_tag;
-    natural_number_set<unsigned>       _empty_slots;
-
-    std::unique_ptr<tsl::robin_set<unsigned>> _delete_set;
-
     // Flags for PQ based distance calculation
     bool              _pq_dist = false;
     bool              _use_opq = false;
@@ -360,20 +359,37 @@ namespace diskann {
     bool              _pq_generated = false;
     FixedChunkPQTable _pq_table;
 
+    //
+    // Data structures, locks and flags for dynamic indexing and tags
+    //
+
+    // lazy_delete removes entry from _location_to_tag and _tag_to_location. If
+    // _location_to_tag does not resolve a location, infer that it was deleted.
+    tsl::sparse_map<TagT, unsigned>    _tag_to_location;
+    natural_number_map<unsigned, TagT> _location_to_tag;
+
+    // _empty_slots has unallocated slots and those freed by consolidate_delete.
+    // _delete_set has locations marked deleted by lazy_delete. Will not be
+    // immediately available for insert. consolidate_delete will release these
+    // slots to _empty_slots.
+    natural_number_set<unsigned>              _empty_slots;
+    std::unique_ptr<tsl::robin_set<unsigned>> _delete_set;
+
     bool _data_compacted = true;  // true if data has been compacted
     bool _is_saved = false;  // Gopal. Checking if the index is already saved.
     bool _conc_consolidate = false;  // use _lock while searching
 
-    // If acquiring multiple locks below, acquire locks in the order below
+    // Acquire locks in the order below when acquiring multiple locks
     std::shared_timed_mutex  // RW mutex between save/load (exclusive lock) and
         _update_lock;        // search/inserts/deletes/consolidate (shared lock)
-    std::shared_timed_mutex
-        _consolidate_lock;  // Ensure only one consolidate is ever active
-    std::shared_timed_mutex _tag_lock;  // RW lock for _tag_to_location,
-                                        // _location_to_tag, _empty_slots, _nd
-    std::shared_timed_mutex _delete_lock;  // RW Lock on _delete_set
+    std::shared_timed_mutex  // Ensure only one consolidate or compact_data is
+        _consolidate_lock;   // ever active
+    std::shared_timed_mutex  // RW lock for _tag_to_location,
+        _tag_lock;           // _location_to_tag, _empty_slots, _nd, _max_points
+    std::shared_timed_mutex  // RW Lock on _delete_set and _data_compacted
+        _delete_lock;        // variable
 
-    // Per node lock, cardinality=max_points_
+    // Per node lock, cardinality=_max_points
     std::vector<non_recursive_mutex> _locks;
 
     static const float INDEX_GROWTH_FACTOR;

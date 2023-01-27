@@ -150,6 +150,7 @@ namespace diskann {
       aligned_free(this->_data);
       this->_data = nullptr;
     }
+    delete[] _opt_graph;
 
     ScratchStoreManager<InMemQueryScratch<T>> manager(_query_scratch);
     manager.destroy();
@@ -254,6 +255,11 @@ namespace diskann {
   void Index<T, TagT>::save(const char *filename, bool compact_before_save) {
     diskann::Timer timer;
 
+    std::unique_lock<std::shared_timed_mutex> ul(_update_lock);
+    std::unique_lock<std::shared_timed_mutex> cl(_consolidate_lock);
+    std::unique_lock<std::shared_timed_mutex> tl(_tag_lock);
+    std::unique_lock<std::shared_timed_mutex> dl(_delete_lock);
+
     if (compact_before_save) {
       compact_data();
       compact_frozen_point();
@@ -264,11 +270,6 @@ namespace diskann {
             __FUNCSIG__, __FILE__, __LINE__);
       }
     }
-
-    std::unique_lock<std::shared_timed_mutex> ul(_update_lock);
-    std::unique_lock<std::shared_timed_mutex> cl(_consolidate_lock);
-    std::unique_lock<std::shared_timed_mutex> tl(_tag_lock);
-    std::unique_lock<std::shared_timed_mutex> dl(_delete_lock);
 
     if (!_save_as_one_file) {
       std::string graph_file = std::string(filename);
@@ -435,7 +436,9 @@ namespace diskann {
                             uint32_t search_l) {
 #endif
     std::unique_lock<std::shared_timed_mutex> ul(_update_lock);
+    std::unique_lock<std::shared_timed_mutex> cl(_consolidate_lock);
     std::unique_lock<std::shared_timed_mutex> tl(_tag_lock);
+    std::unique_lock<std::shared_timed_mutex> dl(_delete_lock);
 
     _has_built = true;
 
@@ -1024,7 +1027,7 @@ namespace diskann {
 
     _max_observed_degree = (std::max)(_max_observed_degree, range);
 
-    // If using _pq_build, over-ride the PQ distances with actual distances
+    // If using _pq_build, over-write the PQ distances with actual distances
     if (_pq_dist) {
       for (auto& ngh : pool)
         ngh.distance = _distance->compare(
@@ -1075,15 +1078,15 @@ namespace diskann {
             des_pool.emplace_back(n);
             prune_needed = false;
           } else {
-            copy_of_neighbors = des_pool;
             copy_of_neighbors.reserve(des_pool.size() + 1);
+            copy_of_neighbors = des_pool;
+            copy_of_neighbors.push_back(n);
             prune_needed = true;
           }
         }
       }  // des lock is released by this point
 
       if (prune_needed) {
-        copy_of_neighbors.push_back(n);
         tsl::robin_set<unsigned> dummy_visited(0);
         std::vector<Neighbor>    dummy_pool(0);
 
@@ -1236,6 +1239,9 @@ namespace diskann {
 
   template<typename T, typename TagT>
   void Index<T, TagT>::set_start_point_at_random(T radius) {
+    std::unique_lock<std::shared_timed_mutex> ul(_update_lock);
+    std::unique_lock<std::shared_timed_mutex> tl(_tag_lock);
+
     std::vector<double>        real_vec;
     std::random_device         rd{};
     std::mt19937               gen{rd()};
@@ -1326,13 +1332,18 @@ namespace diskann {
           __FUNCSIG__, __FILE__, __LINE__);
     }
 
-    _nd = num_points_to_load;
+    std::unique_lock<std::shared_timed_mutex> ul(_update_lock);
+    
+    {
+      std::unique_lock<std::shared_timed_mutex> tl(_tag_lock);
+      _nd = num_points_to_load;
 
-    memcpy((char *) _data, (char *) data, _aligned_dim * _nd * sizeof(T));
+      memcpy((char *) _data, (char *) data, _aligned_dim * _nd * sizeof(T));
 
-    if (_normalize_vecs) {
-      for (uint64_t i = 0; i < num_points_to_load; i++) {
-        normalize(_data + _aligned_dim * i, _aligned_dim);
+      if (_normalize_vecs) {
+        for (uint64_t i = 0; i < num_points_to_load; i++) {
+          normalize(_data + _aligned_dim * i, _aligned_dim);
+        }
       }
     }
 
@@ -1344,6 +1355,7 @@ namespace diskann {
                              const size_t             num_points_to_load,
                              Parameters              &parameters,
                              const std::vector<TagT> &tags) {
+    std::unique_lock<std::shared_timed_mutex> ul(_update_lock);
     if (num_points_to_load == 0)
       throw ANNException("Do not call build with 0 points", -1, __FUNCSIG__,
                          __FILE__, __LINE__);
@@ -1437,7 +1449,10 @@ namespace diskann {
     diskann::cout << "Using only first " << num_points_to_load
                   << " from file.. " << std::endl;
 
-    _nd = num_points_to_load;
+    {
+      std::unique_lock<std::shared_timed_mutex> tl(_tag_lock);
+      _nd = num_points_to_load;
+    }
     build_with_data_populated(parameters, tags);
   }
 
@@ -1448,6 +1463,7 @@ namespace diskann {
     std::vector<TagT> tags;
 
     if (_enable_tags) {
+      std::unique_lock<std::shared_timed_mutex> tl(_tag_lock);
       if (tag_filename == nullptr) {
         throw ANNException("Tag filename is null, while _enable_tags is set",
                            -1, __FUNCSIG__, __FILE__, __LINE__);
@@ -1602,11 +1618,13 @@ namespace diskann {
 
   template<typename T, typename TagT>
   size_t Index<T, TagT>::get_num_points() {
+    std::shared_lock<std::shared_timed_mutex> tl(_tag_lock);
     return _nd;
   }
 
   template<typename T, typename TagT>
   size_t Index<T, TagT>::get_max_points() {
+    std::shared_lock<std::shared_timed_mutex> tl(_tag_lock);
     return _max_points;
   }
 
@@ -1861,11 +1879,7 @@ namespace diskann {
     if (!_dynamic_index)
       throw ANNException("Can not compact a non-dynamic index", -1, __FUNCSIG__,
                          __FILE__, __LINE__);
-    
-    std::unique_lock<std::shared_timed_mutex> ul(_update_lock);
-    std::unique_lock<std::shared_timed_mutex> cl(_consolidate_lock);
-    std::unique_lock<std::shared_timed_mutex> tl(_tag_lock);
-    std::unique_lock<std::shared_timed_mutex> dl(_delete_lock);
+
     if (_data_compacted) {
       diskann::cerr
           << "Warning! Calling compact_data() when _data_compacted is true!"
@@ -2265,7 +2279,9 @@ namespace diskann {
   }
 
   template<typename T, typename TagT>
-  void Index<T, TagT>::count_nodes_at_bfs_levels() const {
+  void Index<T, TagT>::count_nodes_at_bfs_levels() {
+    std::unique_lock<std::shared_timed_mutex> ul(_update_lock);
+
     boost::dynamic_bitset<> visited(_max_points + _num_frozen_pts);
 
     size_t MAX_BFS_LEVELS = 32;
@@ -2301,15 +2317,16 @@ namespace diskann {
 
   template<typename T, typename TagT>
   void Index<T, TagT>::optimize_index_layout() {  // use after build or load
-    if (_dynamic_index)
-      throw ANNException(
+    if (_dynamic_index) {
+      throw diskann::ANNException(
           "Optimize_index_layout not implemented for dyanmic indices", -1,
           __FUNCSIG__, __FILE__, __LINE__);
+    }
 
     _data_len = (_aligned_dim + 1) * sizeof(float);
     _neighbor_len = (_max_observed_degree + 1) * sizeof(unsigned);
     _node_size = _data_len + _neighbor_len;
-    _opt_graph = (char *) malloc(_node_size * _nd);
+    _opt_graph = new char[_node_size * _nd];
     DistanceFastL2<T> *dist_fast = (DistanceFastL2<T> *) _distance;
     for (unsigned i = 0; i < _nd; i++) {
       char *cur_node_offset = _opt_graph + i * _node_size;
