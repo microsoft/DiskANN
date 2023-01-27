@@ -1701,6 +1701,7 @@ namespace diskann {
           _final_graph[loc].push_back(ngh);
       } else {
         // Create a pool of Neighbor candidates from the expanded_nodes_set
+        expanded_nghrs_vec.reserve(expanded_nodes_set.size());
         for (auto &ngh : expanded_nodes_set) {
           expanded_nghrs_vec.emplace_back(
               ngh, _distance->compare(_data + _aligned_dim * loc,
@@ -1874,7 +1875,7 @@ namespace diskann {
 
     if (_delete_set->size() > 0) {
       throw ANNException(
-          "Can not compact data when index has non-trivial _delete_set of "
+          "Can not compact data when index has non-empty _delete_set of "
           "size: " +
               std::to_string(_delete_set->size()),
           -1, __FUNCSIG__, __FILE__, __LINE__);
@@ -2174,8 +2175,6 @@ namespace diskann {
     }
 
     // Find and add appropriate graph edges
-    std::vector<unsigned> pruned_list;
-
     ScratchStoreManager<InMemQueryScratch<T>> manager(_query_scratch);
     auto                                      scratch = manager.scratch_space();
     search_for_point_and_add_links(location, _indexingQueueSize, scratch);

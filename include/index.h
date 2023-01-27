@@ -267,10 +267,10 @@ namespace diskann {
     DISKANN_DLLEXPORT void compact_data();
     DISKANN_DLLEXPORT void compact_frozen_point();
 
-    // Remove deleted nodes from adj list of node i and absorb edges from
-    // deleted neighbors.
+    // Remove deleted nodes from adjacency list of node loc
+    // Replace removed neighbors with second order neighbors.
     // Acquires shared lock on _delete_lock
-    // Also acquires _locks[i] if lock_adj_list is set to true
+    // Also acquires _locks[i] for i = loc and out-neighbors of loc.
     void process_delete(const tsl::robin_set<unsigned> &old_delete_set,
                         size_t loc, const unsigned range, const unsigned maxc,
                         const float alpha, InMemQueryScratch<T> *scratch);
