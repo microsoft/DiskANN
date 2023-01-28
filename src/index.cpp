@@ -292,7 +292,6 @@ namespace diskann {
         if (_pts_to_labels.size() > 0) {
           std::ofstream label_writer(std::string(filename) + "_labels.txt");
           for (_u32 i = 0; i < _pts_to_labels.size(); i++) {
-            label_writer << i << '\t';
             for (_u32 j = 0; j < (_pts_to_labels[i].size() - 1); j++) {
               label_writer << _pts_to_labels[i][j] << ",";
             }
