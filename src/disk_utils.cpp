@@ -1196,19 +1196,19 @@ namespace diskann {
     // into replica dummy points which evenly distribute the filters. The rest
     // of index build happens on the augmented base and labels
     std::string augmented_data_file, augmented_labels_file;
-    if (use_filters) {
-      augmented_data_file = index_prefix_path + "_augmented_data.bin";
-      augmented_labels_file = index_prefix_path + "_augmented_labels.txt";
-      dummy_remap_file = index_prefix_path + "_dummy_remap.txt";
+    if (use_filters) {      
       if (filter_threshold != 0) {
+        augmented_data_file = index_prefix_path + "_augmented_data.bin";
+        augmented_labels_file = index_prefix_path + "_augmented_labels.txt";
+        dummy_remap_file = index_prefix_path + "_dummy_remap.txt";
         breakup_dense_points<T>(
             data_file_to_use, label_file, filter_threshold, augmented_data_file,
             augmented_labels_file,
             dummy_remap_file);  // RKNOTE: This has large memory footprint, need
                                 // to make this streaming
+        data_file_to_use = augmented_data_file;
+        labels_file_to_use = augmented_labels_file;
       }
-      data_file_to_use = augmented_data_file;
-      labels_file_to_use = augmented_labels_file;
     }
 
 
