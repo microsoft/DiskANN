@@ -31,7 +31,8 @@ int search_memory_index(diskann::Metric& metric, const std::string& index_path,
                         const unsigned num_threads, const unsigned recall_at,
                         const bool                   print_all_recalls,
                         const std::vector<unsigned>& Lvec, const bool dynamic,
-                        const bool tags, const bool show_qps_per_thread) {
+                        const bool tags, const bool show_qps_per_thread,
+                        const float fail_if_recall_below) {
   // Load the query file
   T*        query = nullptr;
   unsigned* gt_ids = nullptr;
@@ -104,6 +105,8 @@ int search_memory_index(diskann::Metric& metric, const std::string& index_path,
   if (tags) {
     query_result_tags.resize(recall_at * query_num);
   }
+
+  float best_recall = 0.0;
 
   for (uint32_t test_id = 0; test_id < Lvec.size(); test_id++) {
     _u64 L = Lvec[test_id];
@@ -184,6 +187,7 @@ int search_memory_index(diskann::Metric& metric, const std::string& index_path,
     }
     for (float recall : recalls) {
       std::cout << std::setw(12) << recall;
+      best_recall = std::max(recall, best_recall);
     }
     std::cout << std::endl;
   }
@@ -205,8 +209,9 @@ int search_memory_index(diskann::Metric& metric, const std::string& index_path,
 
   diskann::aligned_free(query);
 
-  return 0;
+  return best_recall >= fail_if_recall_below ? 0 : -1;
 }
+
 
 int main(int argc, char** argv) {
   std::string data_type, dist_fn, index_path_prefix, result_path, query_file,
@@ -214,6 +219,7 @@ int main(int argc, char** argv) {
   unsigned              num_threads, K;
   std::vector<unsigned> Lvec;
   bool                  print_all_recalls, dynamic, tags, show_qps_per_thread;
+  float                 fail_if_recall_below = 0.0f;
 
   po::options_description desc{"Arguments"};
   try {
@@ -257,6 +263,11 @@ int main(int argc, char** argv) {
     desc.add_options()("qps_per_thread", po::bool_switch(&show_qps_per_thread),
                        "Print overall QPS divided by the number of threads in "
                        "the output table");
+    desc.add_options()(
+        "fail_if_recall_below",
+        po::value<float>(&fail_if_recall_below)->default_value(0.0f),
+        "If set to a value >0 and <100%, program returns -1 if best recall "
+        "found is below this threshold. ");
 
     po::variables_map vm;
     po::store(po::parse_command_line(argc, argv, desc), vm);
@@ -295,24 +306,30 @@ int main(int argc, char** argv) {
     return -1;
   }
 
+  if (fail_if_recall_below < 0.0 || fail_if_recall_below >= 100.0) {
+    std::cerr << "fail_if_recall_below parameter must be between 0 and 100%"
+              << std::endl;
+    return -1;
+  }
+
   try {
     if (data_type == std::string("int8")) {
-      return search_memory_index<int8_t>(metric, index_path_prefix, result_path,
-                                         query_file, gt_file, num_threads, K,
-                                         print_all_recalls, Lvec, dynamic, tags,
-                                         show_qps_per_thread);
+      return search_memory_index<int8_t>(
+          metric, index_path_prefix, result_path, query_file, gt_file,
+          num_threads, K, print_all_recalls, Lvec, dynamic, tags,
+          show_qps_per_thread, fail_if_recall_below);
     }
 
     else if (data_type == std::string("uint8")) {
       return search_memory_index<uint8_t>(
           metric, index_path_prefix, result_path, query_file, gt_file,
           num_threads, K, print_all_recalls, Lvec, dynamic, tags,
-          show_qps_per_thread);
+          show_qps_per_thread, fail_if_recall_below);
     } else if (data_type == std::string("float")) {
-      return search_memory_index<float>(metric, index_path_prefix, result_path,
-                                        query_file, gt_file, num_threads, K,
-                                        print_all_recalls, Lvec, dynamic, tags,
-                                        show_qps_per_thread);
+      return search_memory_index<float>(
+          metric, index_path_prefix, result_path, query_file, gt_file,
+          num_threads, K, print_all_recalls, Lvec, dynamic, tags,
+          show_qps_per_thread, fail_if_recall_below);
     } else {
       std::cout << "Unsupported type. Use float/int8/uint8" << std::endl;
       return -1;
