@@ -247,11 +247,12 @@ namespace diskann {
 
   template<typename T>
   void PQFlashIndex<T>::cache_bfs_levels(_u64 num_nodes_to_cache,
-                                         std::vector<uint32_t> &node_list) {
+                                         std::vector<uint32_t> &node_list,
+                                         const bool             shuffle) {
     std::random_device rng;
     std::mt19937       urng(rng());
 
-    node_list.clear();
+    tsl::robin_set<uint32_t> node_set;
 
     // Do not cache more than 10% of the nodes in the index
     _u64 tenp_nodes = (_u64) (std::round(this->num_points * 0.1));
@@ -278,8 +279,8 @@ namespace diskann {
     }
 
     _u64     lvl = 1;
-    uint64_t prev_node_list_size = 0;
-    while ((node_list.size() + cur_level->size() < num_nodes_to_cache) &&
+    uint64_t prev_node_set_size = 0;
+    while ((node_set.size() + cur_level->size() < num_nodes_to_cache) &&
            cur_level->size() != 0) {
       // swap prev_level and cur_level
       std::swap(prev_level, cur_level);
@@ -289,15 +290,17 @@ namespace diskann {
       std::vector<unsigned> nodes_to_expand;
 
       for (const unsigned &id : *prev_level) {
-        if (std::find(node_list.begin(), node_list.end(), id) !=
-            node_list.end()) {
+        if (node_set.find(id) != node_set.end()) {
           continue;
         }
-        node_list.push_back(id);
+        node_set.insert(id);
         nodes_to_expand.push_back(id);
       }
 
-      std::shuffle(nodes_to_expand.begin(), nodes_to_expand.end(), urng);
+      if (shuffle)
+        std::shuffle(nodes_to_expand.begin(), nodes_to_expand.end(), urng);
+      else
+        std::sort(nodes_to_expand.begin(), nodes_to_expand.end());
 
       diskann::cout << "Level: " << lvl << std::flush;
       bool finish_flag = false;
@@ -314,7 +317,7 @@ namespace diskann {
         for (size_t cur_pt = start; cur_pt < end; cur_pt++) {
           char *buf = nullptr;
           alloc_aligned((void **) &buf, SECTOR_LEN, SECTOR_LEN);
-          nhoods.push_back(std::make_pair(nodes_to_expand[cur_pt], buf));
+          nhoods.emplace_back(nodes_to_expand[cur_pt], buf);
           AlignedRead read;
           read.len = SECTOR_LEN;
           read.buf = buf;
@@ -343,11 +346,10 @@ namespace diskann {
           unsigned *nbrs = node_nhood + 1;
           // explore next level
           for (_u64 j = 0; j < nnbrs && !finish_flag; j++) {
-            if (std::find(node_list.begin(), node_list.end(), nbrs[j]) ==
-                node_list.end()) {
+            if (node_set.find(nbrs[j]) == node_set.end()) {
               cur_level->insert(nbrs[j]);
             }
-            if (cur_level->size() + node_list.size() >= num_nodes_to_cache) {
+            if (cur_level->size() + node_set.size() >= num_nodes_to_cache) {
               finish_flag = true;
             }
           }
@@ -355,25 +357,24 @@ namespace diskann {
         }
       }
 
-      diskann::cout << ". #nodes: " << node_list.size() - prev_node_list_size
+      diskann::cout << ". #nodes: " << node_set.size() - prev_node_set_size
                     << ", #nodes thus far: " << node_list.size() << std::endl;
-      prev_node_list_size = node_list.size();
+      prev_node_set_size = node_set.size();
       lvl++;
     }
 
-    std::vector<uint32_t> cur_level_node_list;
-    for (const unsigned &p : *cur_level)
-      cur_level_node_list.push_back(p);
+    assert(node_set.size() + cur_level->size() == num_nodes_to_cache ||
+           cur_level->size() == 0);
 
-    std::shuffle(cur_level_node_list.begin(), cur_level_node_list.end(), urng);
-    size_t residual = num_nodes_to_cache - node_list.size();
-
-    for (size_t i = 0; i < (std::min)(residual, cur_level_node_list.size());
-         i++)
-      node_list.push_back(cur_level_node_list[i]);
+    node_list.clear();
+    node_list.reserve(node_set.size() + cur_level->size());
+    for (auto node : node_set)
+      node_list.push_back(node);
+    for (auto node : *cur_level)
+      node_list.push_back(node);
 
     diskann::cout << "Level: " << lvl << std::flush;
-    diskann::cout << ". #nodes: " << node_list.size() - prev_node_list_size
+    diskann::cout << ". #nodes: " << node_list.size() - prev_node_set_size
                   << ", #nodes thus far: " << node_list.size() << std::endl;
     diskann::cout << "done" << std::endl;
   }
