@@ -1197,9 +1197,9 @@ namespace diskann {
     // of index build happens on the augmented base and labels
     std::string augmented_data_file, augmented_labels_file;
     if (use_filters) {      
+      augmented_data_file = index_prefix_path + "_augmented_data.bin";
+      augmented_labels_file = index_prefix_path + "_augmented_labels.txt"; 
       if (filter_threshold != 0) {
-        augmented_data_file = index_prefix_path + "_augmented_data.bin";
-        augmented_labels_file = index_prefix_path + "_augmented_labels.txt";
         dummy_remap_file = index_prefix_path + "_dummy_remap.txt";
         breakup_dense_points<T>(
             data_file_to_use, label_file, filter_threshold, augmented_data_file,
@@ -1274,6 +1274,13 @@ namespace diskann {
     diskann::cout << timer.elapsed_seconds_for_step("generating disk layout")
                   << std::endl;
 
+    double ten_percent_points = std::ceil(points_num * 0.1);
+    double num_sample_points = ten_percent_points > MAX_SAMPLE_POINTS_FOR_WARMUP
+                                   ? MAX_SAMPLE_POINTS_FOR_WARMUP
+                                   : ten_percent_points;
+    double sample_sampling_rate = num_sample_points / points_num;
+    gen_random_slice<T>(data_file_to_use.c_str(), sample_base_prefix,
+                        sample_sampling_rate);
     if (use_filters) {
       copy_file(mem_labels_file, disk_labels_file);
       std::remove(mem_labels_file.c_str());
@@ -1284,14 +1291,6 @@ namespace diskann {
       std::remove(augmented_data_file.c_str());
       std::remove(augmented_labels_file.c_str());
     }
-
-    double ten_percent_points = std::ceil(points_num * 0.1);
-    double num_sample_points = ten_percent_points > MAX_SAMPLE_POINTS_FOR_WARMUP
-                                   ? MAX_SAMPLE_POINTS_FOR_WARMUP
-                                   : ten_percent_points;
-    double sample_sampling_rate = num_sample_points / points_num;
-    gen_random_slice<T>(data_file_to_use.c_str(), sample_base_prefix,
-                        sample_sampling_rate);
 
     std::remove(mem_index_path.c_str());
     if (use_disk_pq)
