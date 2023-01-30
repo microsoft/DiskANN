@@ -55,7 +55,7 @@ namespace diskann {
     }
 
     size_t num_blocks = DIV_ROUND_UP(fsize, read_blk_size);
-    char  *dump = new char[read_blk_size];
+    char * dump = new char[read_blk_size];
     for (_u64 i = 0; i < num_blocks; i++) {
       size_t cur_block_size = read_blk_size > fsize - (i * read_blk_size)
                                   ? fsize - (i * read_blk_size)
@@ -93,13 +93,13 @@ namespace diskann {
   size_t calculate_num_pq_chunks(double final_index_ram_limit,
                                  size_t points_num, uint32_t dim,
                                  const std::vector<std::string> &param_list) {
-    size_t num_pq_chunks = (size_t) (std::floor)(
-        _u64(final_index_ram_limit / (double) points_num));
+    size_t num_pq_chunks =
+        (size_t)(std::floor)(_u64(final_index_ram_limit / (double) points_num));
     diskann::cout << "Calculated num_pq_chunks :" << num_pq_chunks << std::endl;
     if (param_list.size() >= 6) {
       float compress_ratio = (float) atof(param_list[5].c_str());
       if (compress_ratio > 0 && compress_ratio <= 1) {
-        size_t chunks_by_cr = (size_t) (std::floor)(compress_ratio * dim);
+        size_t chunks_by_cr = (size_t)(std::floor)(compress_ratio * dim);
 
         if (chunks_by_cr > 0 && chunks_by_cr < num_pq_chunks) {
           diskann::cout << "Compress ratio:" << compress_ratio
@@ -156,7 +156,7 @@ namespace diskann {
   T *load_warmup(MemoryMappedFiles &files, const std::string &cache_warmup_file,
                  uint64_t &warmup_num, uint64_t warmup_dim,
                  uint64_t warmup_aligned_dim) {
-    T       *warmup = nullptr;
+    T *      warmup = nullptr;
     uint64_t file_dim, file_aligned_dim;
 
     if (files.fileExists(cache_warmup_file)) {
@@ -189,7 +189,7 @@ namespace diskann {
   template<typename T>
   T *load_warmup(const std::string &cache_warmup_file, uint64_t &warmup_num,
                  uint64_t warmup_dim, uint64_t warmup_aligned_dim) {
-    T       *warmup = nullptr;
+    T *      warmup = nullptr;
     uint64_t file_dim, file_aligned_dim;
 
     if (file_exists(cache_warmup_file)) {
@@ -284,8 +284,7 @@ namespace diskann {
               });
     diskann::cout << "Finished computing node -> shards map" << std::endl;
 
-
-// will merge all the labels to medoids files of each shard into one
+    // will merge all the labels to medoids files of each shard into one
     // combined file
     if (use_filters) {
       std::unordered_map<std::string, std::vector<_u32>>
@@ -332,7 +331,6 @@ namespace diskann {
       }
       mapping_writer.close();
     }
-
 
     // create cached vamana readers
     std::vector<cached_ifstream> vamana_readers(nshards);
@@ -436,7 +434,7 @@ namespace diskann {
       // read from shard_id ifstream
       vamana_readers[shard_id].read((char *) &shard_nnbrs, sizeof(unsigned));
 
-     if (shard_nnbrs == 0) {
+      if (shard_nnbrs == 0) {
         std::cout << "WARNING: shard #" << shard_id << ", node_id " << node_id
                   << " has 0 nbrs" << std::endl;
       }
@@ -477,8 +475,7 @@ namespace diskann {
     return 0;
   }
 
-
-// TODO: Make this a streaming implementation to avoid exceeding the memory
+  // TODO: Make this a streaming implementation to avoid exceeding the memory
   // budget
   template<typename T>
   void breakup_dense_points(const std::string data_file,
@@ -594,24 +591,23 @@ namespace diskann {
       delete[] ids;
   }
 
-
-
   template<typename T>
-  int build_merged_vamana_index(std::string     base_file,
-                                diskann::Metric compareMetric, unsigned L,
-                                unsigned R, double sampling_rate,
-                                double ram_budget, std::string mem_index_path,
-                                std::string medoids_file,
-                                std::string centroids_file,
-                                size_t build_pq_bytes, bool use_opq, bool use_filters,
-      const std::string &label_file, const std::string &labels_to_medoids_file,
+  int build_merged_vamana_index(
+      std::string base_file, diskann::Metric compareMetric, unsigned L,
+      unsigned R, double sampling_rate, double ram_budget,
+      std::string mem_index_path, std::string medoids_file,
+      std::string centroids_file, size_t build_pq_bytes, bool use_opq,
+      bool use_filters, const std::string &label_file,
+      const std::string &labels_to_medoids_file,
       const std::string &universal_label, const _u32 Lf) {
     size_t base_num, base_dim;
     diskann::get_bin_metadata(base_file, base_num, base_dim);
 
     double full_index_ram =
         estimate_ram_usage(base_num, base_dim, sizeof(T), R);
-    if (full_index_ram < ram_budget * 1024 * 1024 * 1024) { // TODO: Make this honest when there is filter support
+    if (full_index_ram <
+        ram_budget * 1024 * 1024 *
+            1024) {  // TODO: Make this honest when there is filter support
       diskann::cout << "Full index fits in RAM budget, should consume at most "
                     << full_index_ram / (1024 * 1024 * 1024)
                     << "GiBs, so building in one shot" << std::endl;
@@ -657,7 +653,6 @@ namespace diskann {
       return 0;
     }
 
-
     // where the universal label is to be saved in the final graph
     std::string final_index_universal_label_file =
         mem_index_path + "_universal_label.txt";
@@ -665,7 +660,7 @@ namespace diskann {
     std::string merged_index_prefix = mem_index_path + "_tempFiles";
 
     Timer timer;
-    int         num_parts =
+    int   num_parts =
         partition_with_ram_budget<T>(base_file, sampling_rate, ram_budget,
                                      2 * R / 3, merged_index_prefix, 2);
     diskann::cout << timer.elapsed_seconds_for_step("partitioning data")
@@ -717,9 +712,9 @@ namespace diskann {
         }
         _pvamanaIndex->build_filtered_index(
             shard_base_file.c_str(), shard_labels_file, shard_base_pts, paras);
-      }      
+      }
       _pvamanaIndex->save(shard_index_file.c_str());
-     // copy universal label file from first shard to the final destination
+      // copy universal label file from first shard to the final destination
       // index, since all shards anyway share the universal label
       if (p == 0) {
         std::string shard_universal_label_file =
@@ -732,14 +727,17 @@ namespace diskann {
 
       std::remove(shard_base_file.c_str());
     }
-    diskann::cout << timer.elapsed_seconds_for_step("building indices on shards") << std::endl;
+    diskann::cout << timer.elapsed_seconds_for_step(
+                         "building indices on shards")
+                  << std::endl;
 
     timer.reset();
     diskann::merge_shards(merged_index_prefix + "_subshard-", "_mem.index",
                           merged_index_prefix + "_subshard-", "_ids_uint32.bin",
                           num_parts, R, mem_index_path, medoids_file,
                           use_filters, labels_to_medoids_file);
-   diskann::cout << timer.elapsed_seconds_for_step("merging indices") << std::endl;
+    diskann::cout << timer.elapsed_seconds_for_step("merging indices")
+                  << std::endl;
 
     // delete tempFiles
     for (int p = 0; p < num_parts; p++) {
@@ -748,7 +746,7 @@ namespace diskann {
       std::string shard_id_file = merged_index_prefix + "_subshard-" +
                                   std::to_string(p) + "_ids_uint32.bin";
       std::string shard_labels_file = merged_index_prefix + "_subshard-" +
-                                      std::to_string(p) + "_labels.txt";                                  
+                                      std::to_string(p) + "_labels.txt";
       std::string shard_index_file =
           merged_index_prefix + "_subshard-" + std::to_string(p) + "_mem.index";
       std::string shard_index_file_data = shard_index_file + ".data";
@@ -767,7 +765,7 @@ namespace diskann {
         std::remove(shard_index_label_file.c_str());
         std::remove(shard_index_label_map_file.c_str());
         std::remove(shard_index_univ_label_file.c_str());
-      }      
+      }
     }
     return 0;
   }
@@ -789,7 +787,7 @@ namespace diskann {
     while (!stop_flag) {
       std::vector<uint64_t> tuning_sample_result_ids_64(tuning_sample_num, 0);
       std::vector<float>    tuning_sample_result_dists(tuning_sample_num, 0);
-      diskann::QueryStats  *stats = new diskann::QueryStats[tuning_sample_num];
+      diskann::QueryStats * stats = new diskann::QueryStats[tuning_sample_num];
 
       auto s = std::chrono::high_resolution_clock::now();
 #pragma omp parallel for schedule(dynamic, 1) num_threads(nthreads)
@@ -816,7 +814,7 @@ namespace diskann {
       if (qps > max_qps && lat_999 < (15000) + mean_latency * 2) {
         max_qps = qps;
         best_bw = cur_bw;
-        cur_bw = (uint32_t) (std::ceil)((float) cur_bw * 1.1f);
+        cur_bw = (uint32_t)(std::ceil)((float) cur_bw * 1.1f);
       } else {
         stop_flag = true;
       }
@@ -1047,9 +1045,9 @@ namespace diskann {
 
   template<typename T>
   int build_disk_index(const char *dataFilePath, const char *indexFilePath,
-                       const char     *indexBuildParameters,
-                       diskann::Metric compareMetric, bool use_opq, bool use_filters,
-                       const std::string &label_file,
+                       const char *    indexBuildParameters,
+                       diskann::Metric compareMetric, bool use_opq,
+                       bool use_filters, const std::string &label_file,
                        const std::string &universal_label,
                        const _u32 filter_threshold, const _u32 Lf) {
     std::stringstream parser;
@@ -1211,7 +1209,6 @@ namespace diskann {
       }
     }
 
-
     size_t points_num, dim;
 
     Timer timer;
@@ -1225,7 +1222,7 @@ namespace diskann {
                                       compareMetric, p_val, disk_pq_dims);
     }
     size_t num_pq_chunks =
-        (size_t) (std::floor)(_u64(final_index_ram_limit / points_num));
+        (size_t)(std::floor)(_u64(final_index_ram_limit / points_num));
 
     num_pq_chunks = num_pq_chunks <= 0 ? 1 : num_pq_chunks;
     num_pq_chunks = num_pq_chunks > dim ? dim : num_pq_chunks;
@@ -1238,7 +1235,8 @@ namespace diskann {
     generate_quantized_data<T>(data_file_to_use, pq_pivots_path,
                                pq_compressed_vectors_path, compareMetric, p_val,
                                num_pq_chunks, use_opq);
-    diskann::cout << timer.elapsed_seconds_for_step("generating quantized data") << std::endl;
+    diskann::cout << timer.elapsed_seconds_for_step("generating quantized data")
+                  << std::endl;
 
 // Gopal. Splitting diskann_dll into separate DLLs for search and build.
 // This code should only be available in the "build" DLL.
@@ -1251,9 +1249,8 @@ namespace diskann {
     diskann::build_merged_vamana_index<T>(
         data_file_to_use.c_str(), diskann::Metric::L2, L, R, p_val,
         indexing_ram_budget, mem_index_path, medoids_path, centroids_path,
-        build_pq_bytes, use_opq,
-        use_filters, labels_file_to_use, labels_to_medoids_path,
-        universal_label, Lf);
+        build_pq_bytes, use_opq, use_filters, labels_file_to_use,
+        labels_to_medoids_path, universal_label, Lf);
     diskann::cout << timer.elapsed_seconds_for_step(
                          "building merged vamana index")
                   << std::endl;
@@ -1354,22 +1351,19 @@ namespace diskann {
   template DISKANN_DLLEXPORT int build_disk_index<int8_t>(
       const char *dataFilePath, const char *indexFilePath,
       const char *indexBuildParameters, diskann::Metric compareMetric,
-      bool use_opq,
-      bool use_filters, const std::string &label_file,
+      bool use_opq, bool use_filters, const std::string &label_file,
       const std::string &universal_label, const _u32 filter_threshold,
       const _u32 Lf);
   template DISKANN_DLLEXPORT int build_disk_index<uint8_t>(
       const char *dataFilePath, const char *indexFilePath,
       const char *indexBuildParameters, diskann::Metric compareMetric,
-      bool use_opq,
-      bool use_filters, const std::string &label_file,
+      bool use_opq, bool use_filters, const std::string &label_file,
       const std::string &universal_label, const _u32 filter_threshold,
       const _u32 Lf);
   template DISKANN_DLLEXPORT int build_disk_index<float>(
       const char *dataFilePath, const char *indexFilePath,
       const char *indexBuildParameters, diskann::Metric compareMetric,
-      bool use_opq,
-      bool use_filters, const std::string &label_file,
+      bool use_opq, bool use_filters, const std::string &label_file,
       const std::string &universal_label, const _u32 filter_threshold,
       const _u32 Lf);
 
@@ -1377,21 +1371,24 @@ namespace diskann {
       std::string base_file, diskann::Metric compareMetric, unsigned L,
       unsigned R, double sampling_rate, double ram_budget,
       std::string mem_index_path, std::string medoids_path,
-      std::string centroids_file, size_t build_pq_bytes, bool use_opq, bool use_filters,
-      const std::string &label_file, const std::string &labels_to_medoids_file,
+      std::string centroids_file, size_t build_pq_bytes, bool use_opq,
+      bool use_filters, const std::string &label_file,
+      const std::string &labels_to_medoids_file,
       const std::string &universal_label, const _u32 Lf);
   template DISKANN_DLLEXPORT int build_merged_vamana_index<float>(
       std::string base_file, diskann::Metric compareMetric, unsigned L,
       unsigned R, double sampling_rate, double ram_budget,
       std::string mem_index_path, std::string medoids_path,
-      std::string centroids_file, size_t build_pq_bytes, bool use_opq, bool use_filters,
-      const std::string &label_file, const std::string &labels_to_medoids_file,
+      std::string centroids_file, size_t build_pq_bytes, bool use_opq,
+      bool use_filters, const std::string &label_file,
+      const std::string &labels_to_medoids_file,
       const std::string &universal_label, const _u32 Lf);
   template DISKANN_DLLEXPORT int build_merged_vamana_index<uint8_t>(
       std::string base_file, diskann::Metric compareMetric, unsigned L,
       unsigned R, double sampling_rate, double ram_budget,
       std::string mem_index_path, std::string medoids_path,
-      std::string centroids_file, size_t build_pq_bytes, bool use_opq, bool use_filters,
-      const std::string &label_file, const std::string &labels_to_medoids_file,
+      std::string centroids_file, size_t build_pq_bytes, bool use_opq,
+      bool use_filters, const std::string &label_file,
+      const std::string &labels_to_medoids_file,
       const std::string &universal_label, const _u32 Lf);
 };  // namespace diskann

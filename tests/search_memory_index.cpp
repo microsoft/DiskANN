@@ -31,7 +31,8 @@ int search_memory_index(diskann::Metric& metric, const std::string& index_path,
                         const unsigned num_threads, const unsigned recall_at,
                         const bool                   print_all_recalls,
                         const std::vector<unsigned>& Lvec, const bool dynamic,
-                        const bool tags, const bool show_qps_per_thread, const std::string& filter_label) {
+                        const bool tags, const bool show_qps_per_thread,
+                        const std::string& filter_label) {
   // Load the query file
   T*        query = nullptr;
   unsigned* gt_ids = nullptr;
@@ -52,10 +53,9 @@ int search_memory_index(diskann::Metric& metric, const std::string& index_path,
   } else {
     diskann::cout << " Truthset file " << truthset_file
                   << " not found. Not computing recall." << std::endl;
-
   }
 
- bool filtered_search = false;
+  bool filtered_search = false;
   if (filter_label != "")
     filtered_search = true;
 
@@ -128,13 +128,13 @@ int search_memory_index(diskann::Metric& metric, const std::string& index_path,
 #pragma omp parallel for schedule(dynamic, 1)
     for (int64_t i = 0; i < (int64_t) query_num; i++) {
       auto qs = std::chrono::high_resolution_clock::now();
-     if (filtered_search) {
+      if (filtered_search) {
         auto retval = index.search_with_filters(
             query + i * query_aligned_dim, filter_label, recall_at, L,
             query_result_ids[test_id].data() + i * recall_at,
             query_result_dists[test_id].data() + i * recall_at);
         cmp_stats[i] = retval.second;
-      } else if (metric == diskann::FAST_L2) {        
+      } else if (metric == diskann::FAST_L2) {
         index.search_with_optimized_layout(
             query + i * query_aligned_dim, recall_at, L,
             query_result_ids[test_id].data() + i * recall_at);
@@ -188,12 +188,12 @@ int search_memory_index(diskann::Metric& metric, const std::string& index_path,
     if (tags) {
       std::cout << std::setw(4) << L << std::setw(12) << displayed_qps
                 << std::setw(20) << (float) mean_latency << std::setw(15)
-                << (float) latency_stats[(_u64) (0.999 * query_num)];
+                << (float) latency_stats[(_u64)(0.999 * query_num)];
     } else {
       std::cout << std::setw(4) << L << std::setw(12) << displayed_qps
                 << std::setw(18) << avg_cmps << std::setw(20)
                 << (float) mean_latency << std::setw(15)
-                << (float) latency_stats[(_u64) (0.999 * query_num)];
+                << (float) latency_stats[(_u64)(0.999 * query_num)];
     }
     for (float recall : recalls) {
       std::cout << std::setw(12) << recall;
