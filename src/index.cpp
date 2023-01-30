@@ -1666,6 +1666,9 @@ namespace diskann {
 
 template<typename T, typename TagT>
   void Index<T, TagT>::parse_label_file(const std::string &map_file) {
+    // old Format of Label txt file: id \t filters with comma separators
+    // new Format of Label txt file: filters with comma separators
+
     std::ifstream infile(map_file);
     std::string   line, token;
     unsigned      line_cnt = 0;
@@ -1682,8 +1685,8 @@ template<typename T, typename TagT>
       std::istringstream       iss(line);
       std::vector<std::string> lbls(0);
       // long int              val;
-//      getline(iss, token, '\t');
-//      _u32 i = (_u32) std::stoul(token);
+      // getline(iss, token, '\t');
+      // _u32 i = (_u32) std::stoul(token);
       getline(iss, token, '\t');
       std::istringstream new_iss(token);
       while (getline(new_iss, token, ',')) {
