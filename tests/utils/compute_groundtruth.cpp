@@ -75,7 +75,7 @@ void compute_l2sq(float *const points_l2sq, const float *const matrix,
 
 void distsq_to_points(
     const size_t dim,
-    float       *dist_matrix,  // Col Major, cols are queries, rows are points
+    float *      dist_matrix,  // Col Major, cols are queries, rows are points
     size_t npoints, const float *const points,
     const float *const points_l2sq,  // points in Col major
     size_t nqueries, const float *const queries,
@@ -103,7 +103,7 @@ void distsq_to_points(
 
 void inner_prod_to_points(
     const size_t dim,
-    float       *dist_matrix,  // Col Major, cols are queries, rows are points
+    float *      dist_matrix,  // Col Major, cols are queries, rows are points
     size_t npoints, const float *const points, size_t nqueries,
     const float *const queries,
     float *ones_vec = NULL)  // Scratchspace of num_data size and init to 1.0
@@ -208,28 +208,28 @@ void exact_knn(
       for (_u64 p = 0; p < k; p++)
         point_dist.emplace(
             p, dist_matrix[(ptrdiff_t) p +
-                           (ptrdiff_t) (q - q_b) * (ptrdiff_t) npoints]);
+                           (ptrdiff_t)(q - q_b) * (ptrdiff_t) npoints]);
       for (_u64 p = k; p < npoints; p++) {
         if (point_dist.top().second >
             dist_matrix[(ptrdiff_t) p +
-                        (ptrdiff_t) (q - q_b) * (ptrdiff_t) npoints])
+                        (ptrdiff_t)(q - q_b) * (ptrdiff_t) npoints])
           point_dist.emplace(
               p, dist_matrix[(ptrdiff_t) p +
-                             (ptrdiff_t) (q - q_b) * (ptrdiff_t) npoints]);
+                             (ptrdiff_t)(q - q_b) * (ptrdiff_t) npoints]);
         if (point_dist.size() > k)
           point_dist.pop();
       }
       for (ptrdiff_t l = 0; l < (ptrdiff_t) k; ++l) {
-        closest_points[(ptrdiff_t) (k - 1 - l) +
-                       (ptrdiff_t) q * (ptrdiff_t) k] = point_dist.top().first;
-        dist_closest_points[(ptrdiff_t) (k - 1 - l) +
+        closest_points[(ptrdiff_t)(k - 1 - l) + (ptrdiff_t) q * (ptrdiff_t) k] =
+            point_dist.top().first;
+        dist_closest_points[(ptrdiff_t)(k - 1 - l) +
                             (ptrdiff_t) q * (ptrdiff_t) k] =
             point_dist.top().second;
         point_dist.pop();
       }
       assert(std::is_sorted(
           dist_closest_points + (ptrdiff_t) q * (ptrdiff_t) k,
-          dist_closest_points + (ptrdiff_t) (q + 1) * (ptrdiff_t) k));
+          dist_closest_points + (ptrdiff_t)(q + 1) * (ptrdiff_t) k));
     }
     std::cout << "Computed exact k-NN for queries: [" << q_b << "," << q_e
               << ")" << std::endl;
@@ -396,7 +396,6 @@ inline void save_groundtruth_as_one_file(const std::string filename,
   std::cout << "Finished writing truthset" << std::endl;
 }
 
-
 inline void parse_label_file_into_vec(
     size_t &line_cnt, const std::string &map_file,
     std::vector<std::vector<std::string>> &pts_to_labels) {
@@ -409,7 +408,7 @@ inline void parse_label_file_into_vec(
     std::istringstream       iss(line);
     std::vector<std::string> lbls(0);
 
-    //getline(iss, token, '\t');
+    // getline(iss, token, '\t');
     getline(iss, token, '\t');
     std::istringstream new_iss(token);
     while (getline(new_iss, token, ',')) {
@@ -479,7 +478,7 @@ int aux_main(const std::string &base_file, const std::string &label_file,
 
   std::vector<std::vector<std::pair<uint32_t, float>>> results(nqueries);
 
-  int   *closest_points = new int[nqueries * k];
+  int *  closest_points = new int[nqueries * k];
   float *dist_closest_points = new float[nqueries * k];
 
   std::vector<std::vector<std::string>> pts_to_labels;
@@ -489,7 +488,7 @@ int aux_main(const std::string &base_file, const std::string &label_file,
 
   for (int p = 0; p < num_parts; p++) {
     size_t start_id = p * PARTSIZE;
-   if (filter_label == "") {
+    if (filter_label == "") {
       load_bin_as_float<T>(base_file.c_str(), base_data, npoints, dim, p);
     } else {
       rev_map = load_filtered_bin_as_float<T>(
@@ -499,7 +498,7 @@ int aux_main(const std::string &base_file, const std::string &label_file,
     int *  closest_points_part = new int[nqueries * k];
     float *dist_closest_points_part = new float[nqueries * k];
 
-   _u32 part_k;
+    _u32 part_k;
     if (filter_label == "") {
       part_k = k < npoints ? k : npoints;
       exact_knn(dim, part_k, closest_points_part, dist_closest_points_part,
@@ -525,7 +524,7 @@ int aux_main(const std::string &base_file, const std::string &label_file,
           results[i].push_back(std::make_pair(
               (uint32_t)(rev_map[closest_points_part[i * part_k + j]]),
               dist_closest_points_part[i * part_k + j]));
-        }      
+        }
       }
     }
 
@@ -572,7 +571,7 @@ int aux_main(const std::string &base_file, const std::string &label_file,
 int main(int argc, char **argv) {
   std::string data_type, dist_fn, base_file, query_file, gt_file, tags_file,
       label_file, filter_label, universal_label;
-  uint64_t    K;
+  uint64_t K;
 
   try {
     po::options_description desc{"Arguments"};
@@ -645,11 +644,14 @@ int main(int argc, char **argv) {
 
   try {
     if (data_type == std::string("float"))
-      aux_main<float>(base_file, label_file, query_file, gt_file, K,  filter_label, universal_label, metric, tags_file);
+      aux_main<float>(base_file, label_file, query_file, gt_file, K,
+                      filter_label, universal_label, metric, tags_file);
     if (data_type == std::string("int8"))
-      aux_main<int8_t>(base_file, label_file,  query_file, gt_file, K,  filter_label, universal_label,  metric, tags_file);
+      aux_main<int8_t>(base_file, label_file, query_file, gt_file, K,
+                       filter_label, universal_label, metric, tags_file);
     if (data_type == std::string("uint8"))
-      aux_main<uint8_t>(base_file, label_file,  query_file, gt_file, K,  filter_label, universal_label,  metric, tags_file);
+      aux_main<uint8_t>(base_file, label_file, query_file, gt_file, K,
+                        filter_label, universal_label, metric, tags_file);
   } catch (const std::exception &e) {
     std::cout << std::string(e.what()) << std::endl;
     diskann::cerr << "Compute GT failed." << std::endl;
