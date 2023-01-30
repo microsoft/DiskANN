@@ -1700,10 +1700,9 @@ namespace diskann {
       }
     }
     if (modify) {
-      std::unique_lock<non_recursive_mutex> adj_list_lock(_locks[loc]);
-      _final_graph[loc].clear();  // so we can pass it as the output buffer
-                                  // for occlude_list
       if (expanded_nodes_set.size() <= range) {
+        std::unique_lock<non_recursive_mutex> adj_list_lock(_locks[loc]);
+        _final_graph[loc].clear();
         for (auto &ngh : expanded_nodes_set)
           _final_graph[loc].push_back(ngh);
       } else {
@@ -1716,6 +1715,8 @@ namespace diskann {
                                       (unsigned) _aligned_dim));
         }
         std::sort(expanded_nghrs_vec.begin(), expanded_nghrs_vec.end());
+        std::unique_lock<non_recursive_mutex> adj_list_lock(_locks[loc]);
+        _final_graph[loc].clear();  // To use as output buffer for occlude_list
         occlude_list(loc, expanded_nghrs_vec, alpha, range, maxc,
                      _final_graph[loc], scratch, &old_delete_set);
       }
