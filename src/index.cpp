@@ -1669,8 +1669,9 @@ namespace diskann {
       const tsl::robin_set<unsigned> &old_delete_set, size_t loc,
       const unsigned range, const unsigned maxc, const float alpha,
       InMemQueryScratch<T> *scratch) {
-    tsl::robin_set<unsigned> expanded_nodes_set;
-    std::vector<Neighbor>    expanded_nghrs_vec;
+    tsl::robin_set<unsigned> &expanded_nodes_set =
+        scratch->expanded_nodes_set();
+    std::vector<Neighbor> &expanded_nghrs_vec = scratch->expanded_nodes_vec();
 
     // If this condition were not true, deadlock could result
     assert(old_delete_set.find(loc) == old_delete_set.end());
@@ -1699,6 +1700,7 @@ namespace diskann {
             expanded_nodes_set.insert(j);
       }
     }
+
     if (modify) {
       if (expanded_nodes_set.size() <= range) {
         std::unique_lock<non_recursive_mutex> adj_list_lock(_locks[loc]);
@@ -1715,13 +1717,16 @@ namespace diskann {
                                       (unsigned) _aligned_dim));
         }
         std::sort(expanded_nghrs_vec.begin(), expanded_nghrs_vec.end());
-        std::unique_lock<non_recursive_mutex> adj_list_lock(_locks[loc]);
-        _final_graph[loc].clear();  // To use as output buffer for occlude_list
+        std::vector<unsigned> &occlude_list_output =
+            scratch->occlude_list_output();
         occlude_list(loc, expanded_nghrs_vec, alpha, range, maxc,
-                     _final_graph[loc], scratch, &old_delete_set);
+                     occlude_list_output, scratch, &old_delete_set);
+        std::unique_lock<non_recursive_mutex> adj_list_lock(_locks[loc]);
+        _final_graph[loc] = occlude_list_output;
       }
     }
   }
+  
    
   // Returns number of live points left after consolidation
   template<typename T, typename TagT>
