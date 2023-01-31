@@ -607,7 +607,7 @@ namespace diskann {
         estimate_ram_usage(base_num, base_dim, sizeof(T), R);
 
     // TODO: Make this honest when there is filter support
-    if (full_index_ram < ram_budget * 1024 * 1024 * 1024) {  
+    if (full_index_ram < ram_budget * 1024 * 1024 * 1024) {
       diskann::cout << "Full index fits in RAM budget, should consume at most "
                     << full_index_ram / (1024 * 1024 * 1024)
                     << "GiBs, so building in one shot" << std::endl;

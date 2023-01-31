@@ -51,8 +51,7 @@ int search_disk_index(
     std::string& gt_file, const unsigned num_threads, const unsigned recall_at,
     const unsigned beamwidth, const unsigned num_nodes_to_cache,
     const _u32 search_io_limit, const std::vector<unsigned>& Lvec,
-    const bool use_reorder_data = false,
-    const std::string& filter_label = "") {
+    const bool use_reorder_data = false, const std::string& filter_label = "") {
   diskann::cout << "Search parameters: #threads: " << num_threads << ", ";
   if (beamwidth <= 0)
     diskann::cout << "beamwidth to be optimized for each L value" << std::flush;
@@ -223,7 +222,8 @@ int search_disk_index(
             query_result_dists[test_id].data() + (i * recall_at),
             optimized_beamwidth, true, filter_label, use_reorder_data,
             stats + i);
-      }    }
+      }
+    }
     auto                          e = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> diff = e - s;
     float qps = (1.0 * query_num) / (1.0 * diff.count());
@@ -345,7 +345,7 @@ int main(int argc, char** argv) {
     desc.add_options()(
         "filter_label",
         po::value<std::string>(&filter_label)->default_value(std::string("")),
-        "Filter Label for Filtered Search");                       
+        "Filter Label for Filtered Search");
 
     po::variables_map vm;
     po::store(po::parse_command_line(argc, argv, desc), vm);
@@ -391,15 +391,15 @@ int main(int argc, char** argv) {
 
   try {
     if (data_type == std::string("float"))
-      return search_disk_index<float>(metric, index_path_prefix,
-                                      result_path_prefix, query_file, gt_file,
-                                      num_threads, K, W, num_nodes_to_cache,
-                                      search_io_limit, Lvec, use_reorder_data, filter_label);
+      return search_disk_index<float>(
+          metric, index_path_prefix, result_path_prefix, query_file, gt_file,
+          num_threads, K, W, num_nodes_to_cache, search_io_limit, Lvec,
+          use_reorder_data, filter_label);
     else if (data_type == std::string("int8"))
-      return search_disk_index<int8_t>(metric, index_path_prefix,
-                                       result_path_prefix, query_file, gt_file,
-                                       num_threads, K, W, num_nodes_to_cache,
-                                       search_io_limit, Lvec, use_reorder_data, filter_label);
+      return search_disk_index<int8_t>(
+          metric, index_path_prefix, result_path_prefix, query_file, gt_file,
+          num_threads, K, W, num_nodes_to_cache, search_io_limit, Lvec,
+          use_reorder_data, filter_label);
     else if (data_type == std::string("uint8"))
       return search_disk_index<uint8_t>(
           metric, index_path_prefix, result_path_prefix, query_file, gt_file,

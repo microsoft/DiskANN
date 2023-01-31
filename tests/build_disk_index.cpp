@@ -15,10 +15,10 @@ namespace po = boost::program_options;
 int main(int argc, char** argv) {
   std::string data_type, dist_fn, data_path, index_path_prefix, label_file,
       universal_label;
-  unsigned    num_threads, R, L, disk_PQ, build_PQ, Lf, filter_threshold;
-  float       B, M;
-  bool        append_reorder_data = false;
-  bool        use_opq = false;
+  unsigned num_threads, R, L, disk_PQ, build_PQ, Lf, filter_threshold;
+  float    B, M;
+  bool     append_reorder_data = false;
+  bool     use_opq = false;
 
   po::options_description desc{"Arguments"};
   try {
@@ -80,7 +80,6 @@ int main(int argc, char** argv) {
                        po::value<uint32_t>(&filter_threshold)->default_value(0),
                        "Threshold for breaking-up points with many labels");
 
-
     po::variables_map vm;
     po::store(po::parse_command_line(argc, argv, desc), vm);
     if (vm.count("help")) {
@@ -101,7 +100,6 @@ int main(int argc, char** argv) {
   if (label_file != "") {
     use_filters = true;
   }
-
 
   diskann::Metric metric;
   if (dist_fn == std::string("l2"))
@@ -140,20 +138,20 @@ int main(int argc, char** argv) {
 
   try {
     if (data_type == std::string("int8"))
-      return diskann::build_disk_index<int8_t>(data_path.c_str(),
-                                               index_path_prefix.c_str(),
-                                               params.c_str(), metric, use_opq,
-          use_filters, label_file, universal_label, filter_threshold, Lf);
+      return diskann::build_disk_index<int8_t>(
+          data_path.c_str(), index_path_prefix.c_str(), params.c_str(), metric,
+          use_opq, use_filters, label_file, universal_label, filter_threshold,
+          Lf);
     else if (data_type == std::string("uint8"))
       return diskann::build_disk_index<uint8_t>(
           data_path.c_str(), index_path_prefix.c_str(), params.c_str(), metric,
-          use_opq,
-          use_filters, label_file, universal_label, filter_threshold, Lf);
+          use_opq, use_filters, label_file, universal_label, filter_threshold,
+          Lf);
     else if (data_type == std::string("float"))
-      return diskann::build_disk_index<float>(data_path.c_str(),
-                                              index_path_prefix.c_str(),
-                                              params.c_str(), metric, use_opq,
-          use_filters, label_file, universal_label, filter_threshold, Lf);
+      return diskann::build_disk_index<float>(
+          data_path.c_str(), index_path_prefix.c_str(), params.c_str(), metric,
+          use_opq, use_filters, label_file, universal_label, filter_threshold,
+          Lf);
     else {
       diskann::cerr << "Error. Unsupported data type" << std::endl;
       return -1;
