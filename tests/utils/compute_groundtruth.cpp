@@ -408,7 +408,6 @@ inline void parse_label_file_into_vec(
     std::istringstream       iss(line);
     std::vector<std::string> lbls(0);
 
-    // getline(iss, token, '\t');
     getline(iss, token, '\t');
     std::istringstream new_iss(token);
     while (getline(new_iss, token, ',')) {
