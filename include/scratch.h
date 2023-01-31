@@ -48,14 +48,12 @@ namespace diskann {
     inline uint32_t get_maxc() {
       return _maxc;
     }
-
     inline T *aligned_query() {
       return _aligned_query;
     }
     inline PQScratch<T> *pq_scratch() {
       return _pq_scratch;
     }
-
     inline std::vector<Neighbor> &pool() {
       return _pool;
     }
@@ -65,7 +63,6 @@ namespace diskann {
     inline std::vector<float> &occlude_factor() {
       return _occlude_factor;
     }
-
     inline tsl::robin_set<unsigned> &inserted_into_pool_rs() {
       return _inserted_into_pool_rs;
     }
@@ -77,6 +74,15 @@ namespace diskann {
     }
     inline std::vector<float> &dist_scratch() {
       return _dist_scratch;
+    }
+    inline tsl::robin_set<unsigned> &expanded_nodes_set() {
+      return _expanded_nodes_set;
+    }
+    inline std::vector<Neighbor> &expanded_nodes_vec() {
+      return _expanded_nghrs_vec;
+    }
+    inline std::vector<unsigned> &occlude_list_output() {
+      return _occlude_list_output;
     }
 
    private:
@@ -116,6 +122,11 @@ namespace diskann {
     // _dist_scratch must be > R*GRAPH_SLACK_FACTOR for iterate_to_fp
     // _dist_scratch should be at least the size of id_scratch
     std::vector<float> _dist_scratch;
+
+    //  Buffers used in process delete, capacity increases as needed
+    tsl::robin_set<unsigned> _expanded_nodes_set;
+    std::vector<Neighbor>    _expanded_nghrs_vec;
+    std::vector<unsigned>    _occlude_list_output;
   };
 
   //

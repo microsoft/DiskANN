@@ -53,6 +53,10 @@ namespace diskann {
 
     _id_scratch.clear();
     _dist_scratch.clear();
+
+    _expanded_nodes_set.clear();
+    _expanded_nghrs_vec.clear();
+    _occlude_list_output.clear();
   }
 
   template<typename T>
