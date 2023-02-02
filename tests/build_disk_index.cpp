@@ -97,8 +97,10 @@ int main(int argc, char** argv) {
   }
 
   bool use_filters = false;
+	diskann::label int_universal_label = UINT_MAX;
   if (label_file != "") {
     use_filters = true;
+		int_universal_label = (diskann::label) std::stoul(universal_label);
   }
 
   diskann::Metric metric;
@@ -138,20 +140,20 @@ int main(int argc, char** argv) {
 
   try {
     if (data_type == std::string("int8"))
-      return diskann::build_disk_index<int8_t>(
-          data_path.c_str(), index_path_prefix.c_str(), params.c_str(), metric,
-          use_opq, use_filters, label_file, universal_label, filter_threshold,
-          Lf);
+      return diskann::build_disk_index<int8_t>(data_path.c_str(),
+                                               index_path_prefix.c_str(),
+                                               params.c_str(), metric, use_opq,
+          use_filters, label_file, int_universal_label, filter_threshold, Lf);
     else if (data_type == std::string("uint8"))
       return diskann::build_disk_index<uint8_t>(
           data_path.c_str(), index_path_prefix.c_str(), params.c_str(), metric,
-          use_opq, use_filters, label_file, universal_label, filter_threshold,
-          Lf);
+          use_opq,
+          use_filters, label_file, int_universal_label, filter_threshold, Lf);
     else if (data_type == std::string("float"))
-      return diskann::build_disk_index<float>(
-          data_path.c_str(), index_path_prefix.c_str(), params.c_str(), metric,
-          use_opq, use_filters, label_file, universal_label, filter_threshold,
-          Lf);
+      return diskann::build_disk_index<float>(data_path.c_str(),
+                                              index_path_prefix.c_str(),
+                                              params.c_str(), metric, use_opq,
+          use_filters, label_file, int_universal_label, filter_threshold, Lf);
     else {
       diskann::cerr << "Error. Unsupported data type" << std::endl;
       return -1;

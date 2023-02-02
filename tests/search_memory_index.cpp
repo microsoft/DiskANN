@@ -58,6 +58,7 @@ int search_memory_index(diskann::Metric& metric, const std::string& index_path,
   bool filtered_search = false;
   if (filter_label != "")
     filtered_search = true;
+	diskann::label int_filter_label = (diskann::label) std::stoul(filter_label);
 
   using TagT = uint32_t;
   diskann::Index<T, TagT> index(metric, query_dim, 0, dynamic, tags);
@@ -130,7 +131,7 @@ int search_memory_index(diskann::Metric& metric, const std::string& index_path,
       auto qs = std::chrono::high_resolution_clock::now();
       if (filtered_search) {
         auto retval = index.search_with_filters(
-            query + i * query_aligned_dim, filter_label, recall_at, L,
+            query + i * query_aligned_dim, int_filter_label, recall_at, L,
             query_result_ids[test_id].data() + i * recall_at,
             query_result_dists[test_id].data() + i * recall_at);
         cmp_stats[i] = retval.second;

@@ -94,7 +94,7 @@ DISKANN_DLLEXPORT void extract_shard_labels(
       std::string centroids_file, size_t build_pq_bytes, bool use_opq, bool use_filters = false,
       const std::string &label_file = std::string(""),
       const std::string &labels_to_medoids_file = std::string(""),
-      const std::string &universal_label = "", const _u32 Lf = 0);
+      const label &universal_label = UINT_MAX, const _u32 Lf = 0);
 
   template<typename T>
   DISKANN_DLLEXPORT uint32_t optimize_beamwidth(
@@ -111,7 +111,7 @@ DISKANN_DLLEXPORT void extract_shard_labels(
       bool               use_filters = false,
       const std::string &label_file =
           std::string(""),  // default is empty string for no label_file
-      const std::string &universal_label = "", const _u32 filter_threshold = 0,
+      const label &universal_label = UINT_MAX, const _u32 filter_threshold = 0,
       const _u32 Lf = 0);  // default is empty string for no universal label););
 
 

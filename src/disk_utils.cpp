@@ -599,7 +599,7 @@ namespace diskann {
       std::string centroids_file, size_t build_pq_bytes, bool use_opq,
       bool use_filters, const std::string &label_file,
       const std::string &labels_to_medoids_file,
-      const std::string &universal_label, const _u32 Lf) {
+      const label &universal_label, const _u32 Lf) {
     size_t base_num, base_dim;
     diskann::get_bin_metadata(base_file, base_num, base_dim);
 
@@ -631,7 +631,7 @@ namespace diskann {
       if (!use_filters)
         _pvamanaIndex->build(base_file.c_str(), base_num, paras);
       else {
-        if (universal_label != "") {  //  indicates no universal label
+        if (universal_label != UINT_MAX) {  //  indicates no universal label
           _pvamanaIndex->set_universal_label(universal_label);
         }
         _pvamanaIndex->build_filtered_index(base_file.c_str(), label_file,
@@ -707,7 +707,7 @@ namespace diskann {
       } else {
         diskann::extract_shard_labels(label_file, shard_ids_file,
                                       shard_labels_file);
-        if (universal_label != "") {  //  indicates no universal label
+        if (universal_label != UINT_MAX) {  //  indicates no universal label
           _pvamanaIndex->set_universal_label(universal_label);
         }
         _pvamanaIndex->build_filtered_index(
@@ -719,7 +719,7 @@ namespace diskann {
       if (p == 0) {
         std::string shard_universal_label_file =
             shard_index_file + "_universal_label.txt";
-        if (universal_label != "") {
+        if (universal_label != UINT_MAX) {
           copy_file(shard_universal_label_file,
                     final_index_universal_label_file);
         }
@@ -1048,7 +1048,7 @@ namespace diskann {
                        const char *    indexBuildParameters,
                        diskann::Metric compareMetric, bool use_opq,
                        bool use_filters, const std::string &label_file,
-                       const std::string &universal_label,
+                       const label &universal_label,
                        const _u32 filter_threshold, const _u32 Lf) {
     std::stringstream parser;
     parser << std::string(indexBuildParameters);
@@ -1281,7 +1281,7 @@ namespace diskann {
     if (use_filters) {
       copy_file(mem_labels_file, disk_labels_file);
       std::remove(mem_labels_file.c_str());
-      if (universal_label != "") {
+      if (universal_label != UINT_MAX) {
         copy_file(mem_univ_label_file, disk_univ_label_file);
         std::remove(mem_univ_label_file.c_str());
       }
@@ -1352,19 +1352,19 @@ namespace diskann {
       const char *dataFilePath, const char *indexFilePath,
       const char *indexBuildParameters, diskann::Metric compareMetric,
       bool use_opq, bool use_filters, const std::string &label_file,
-      const std::string &universal_label, const _u32 filter_threshold,
+      const label &universal_label, const _u32 filter_threshold,
       const _u32 Lf);
   template DISKANN_DLLEXPORT int build_disk_index<uint8_t>(
       const char *dataFilePath, const char *indexFilePath,
       const char *indexBuildParameters, diskann::Metric compareMetric,
       bool use_opq, bool use_filters, const std::string &label_file,
-      const std::string &universal_label, const _u32 filter_threshold,
+      const label &universal_label, const _u32 filter_threshold,
       const _u32 Lf);
   template DISKANN_DLLEXPORT int build_disk_index<float>(
       const char *dataFilePath, const char *indexFilePath,
       const char *indexBuildParameters, diskann::Metric compareMetric,
       bool use_opq, bool use_filters, const std::string &label_file,
-      const std::string &universal_label, const _u32 filter_threshold,
+      const label &universal_label, const _u32 filter_threshold,
       const _u32 Lf);
 
   template DISKANN_DLLEXPORT int build_merged_vamana_index<int8_t>(
@@ -1374,7 +1374,7 @@ namespace diskann {
       std::string centroids_file, size_t build_pq_bytes, bool use_opq,
       bool use_filters, const std::string &label_file,
       const std::string &labels_to_medoids_file,
-      const std::string &universal_label, const _u32 Lf);
+      const label &universal_label, const _u32 Lf);
   template DISKANN_DLLEXPORT int build_merged_vamana_index<float>(
       std::string base_file, diskann::Metric compareMetric, unsigned L,
       unsigned R, double sampling_rate, double ram_budget,
@@ -1382,7 +1382,7 @@ namespace diskann {
       std::string centroids_file, size_t build_pq_bytes, bool use_opq,
       bool use_filters, const std::string &label_file,
       const std::string &labels_to_medoids_file,
-      const std::string &universal_label, const _u32 Lf);
+      const label &universal_label, const _u32 Lf);
   template DISKANN_DLLEXPORT int build_merged_vamana_index<uint8_t>(
       std::string base_file, diskann::Metric compareMetric, unsigned L,
       unsigned R, double sampling_rate, double ram_budget,
@@ -1390,5 +1390,5 @@ namespace diskann {
       std::string centroids_file, size_t build_pq_bytes, bool use_opq,
       bool use_filters, const std::string &label_file,
       const std::string &labels_to_medoids_file,
-      const std::string &universal_label, const _u32 Lf);
+      const label &universal_label, const _u32 Lf);
 };  // namespace diskann
