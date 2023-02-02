@@ -55,9 +55,9 @@ int search_memory_index(diskann::Metric& metric, const std::string& index_path,
                   << " not found. Not computing recall." << std::endl;
   }
 
-  bool filtered_search = false;
-  diskann::label filter_label_as_num = -1;
-  if (filter_label != ""){
+  bool  filtered_search = false;
+  label filter_label_as_num = UINT_MAX;
+  if (filter_label != "") {
     filter_label_as_num = std::stoul(filter_label);
     filtered_search = true;
   }
@@ -191,12 +191,12 @@ int search_memory_index(diskann::Metric& metric, const std::string& index_path,
     if (tags) {
       std::cout << std::setw(4) << L << std::setw(12) << displayed_qps
                 << std::setw(20) << (float) mean_latency << std::setw(15)
-                << (float) latency_stats[(_u64)(0.999 * query_num)];
+                << (float) latency_stats[(_u64) (0.999 * query_num)];
     } else {
       std::cout << std::setw(4) << L << std::setw(12) << displayed_qps
                 << std::setw(18) << avg_cmps << std::setw(20)
                 << (float) mean_latency << std::setw(15)
-                << (float) latency_stats[(_u64)(0.999 * query_num)];
+                << (float) latency_stats[(_u64) (0.999 * query_num)];
     }
     for (float recall : recalls) {
       std::cout << std::setw(12) << recall;
