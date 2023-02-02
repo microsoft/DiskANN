@@ -287,7 +287,7 @@ namespace diskann {
     // will merge all the labels to medoids files of each shard into one
     // combined file
     if (use_filters) {
-      std::unordered_map<std::string, std::vector<_u32>>
+      std::unordered_map<unsigned, std::vector<_u32>>
           global_label_to_medoids;
 
       for (_u64 i = 0; i < nshards; i++) {
@@ -302,16 +302,19 @@ namespace diskann {
           std::istringstream iss(line);
           _u32               cnt = 0;
           _u32               medoid;
-          std::string        label;
+          label        label;
           while (std::getline(iss, token, ',')) {
             token.erase(std::remove(token.begin(), token.end(), '\n'),
                         token.end());
             token.erase(std::remove(token.begin(), token.end(), '\r'),
                         token.end());
+            
+            unsigned token_as_num = std::stoul(token);
+
             if (cnt == 0)
-              label = token;
+              label = token_as_num;
             else
-              medoid = (_u32) stoul(token);
+              medoid = token_as_num;
             cnt++;
           }
           global_label_to_medoids[label].push_back(idmaps[i][medoid]);
@@ -494,7 +497,7 @@ namespace diskann {
 
     _u32 point_cnt = 0;
 
-    std::vector<std::vector<std::string>> labels_per_point;
+    std::vector<std::vector<label>> labels_per_point;
     labels_per_point.resize(npts);
 
     _u32 dense_pts = 0;
@@ -517,7 +520,8 @@ namespace diskann {
                       token.end());
           token.erase(std::remove(token.begin(), token.end(), '\r'),
                       token.end());
-          labels_per_point[label_host].push_back(token);
+          unsigned token_as_num = std::stoul(token);
+          labels_per_point[label_host].push_back(token_as_num);
           lbl_cnt++;
         }
         point_cnt++;
@@ -632,7 +636,7 @@ namespace diskann {
         _pvamanaIndex->build(base_file.c_str(), base_num, paras);
       else {
         if (universal_label != "") {  //  indicates no universal label
-          _pvamanaIndex->set_universal_label(universal_label);
+          _pvamanaIndex->set_universal_label(std::stoul(universal_label));
         }
         _pvamanaIndex->build_filtered_index(base_file.c_str(), label_file,
                                             base_num, paras);
@@ -708,7 +712,7 @@ namespace diskann {
         diskann::extract_shard_labels(label_file, shard_ids_file,
                                       shard_labels_file);
         if (universal_label != "") {  //  indicates no universal label
-          _pvamanaIndex->set_universal_label(universal_label);
+          _pvamanaIndex->set_universal_label(std::stoul(universal_label));
         }
         _pvamanaIndex->build_filtered_index(
             shard_base_file.c_str(), shard_labels_file, shard_base_pts, paras);
