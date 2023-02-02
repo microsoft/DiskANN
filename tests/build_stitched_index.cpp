@@ -11,8 +11,9 @@
 #include <chrono>
 #include <cstdio>
 #include <cstring>
-#include <tuple>
 #include <random>
+#include <string>
+#include <tuple>
 
 #include "index.h"
 #include "parameters.h"
@@ -28,7 +29,7 @@ namespace po = boost::program_options;
 #define PBWIDTH 60
 
 // custom types (for readability)
-typedef std::string label;
+typedef unsigned label;
 typedef tsl::robin_set<label> label_set;
 typedef std::string path;
 
@@ -66,7 +67,7 @@ inline size_t random(size_t range_from, size_t range_to) {
  * Arguments are merely the inputs from the command line.
  */
 size_t handle_args(int argc, char **argv, std::string &data_type, path &input_data_path, 
-                          path &final_index_path_prefix, path &label_data_path, std::string &universal_label, 
+                          path &final_index_path_prefix, path &label_data_path, label &universal_label, 
                           unsigned &num_threads, unsigned &R, unsigned &L, unsigned &stitched_R, float &alpha) {
   po::options_description desc{"Arguments"};
   try {
@@ -104,7 +105,7 @@ size_t handle_args(int argc, char **argv, std::string &data_type, path &input_da
         "Input label file in txt format if present");
     desc.add_options()(
         "universal_label",
-        po::value<label>(&universal_label)->default_value(""),
+        po::value<label>(&universal_label)->default_value(65537),
         "Universal label, if using it, only in conjunction with labels_file");
 
     po::variables_map vm;
@@ -129,7 +130,7 @@ size_t handle_args(int argc, char **argv, std::string &data_type, path &input_da
  * Returns three objects in via std::tuple:
  * 1. the label universe as a set
  */
-parse_label_file_return_values parse_label_file (path label_data_path, std::string universal_label) {
+parse_label_file_return_values parse_label_file (path label_data_path, label universal_label) {
   std::ifstream label_data_stream(label_data_path);
   std::string   line, token;
   unsigned      line_cnt = 0;
@@ -163,13 +164,14 @@ parse_label_file_return_values parse_label_file (path label_data_path, std::stri
       token.erase(std::remove(token.begin(), token.end(), '\r'), token.end());
 
       // if token is empty, there's no labels for the point
-      if (token == universal_label) {
+			unsigned token_as_num = std::stoul(token);
+      if (token_as_num == universal_label) {
         points_with_universal_label.push_back(point_id);
         current_universal_label_check = true;
       } else {
-        all_labels.insert(token);
-        current_labels.insert(token);
-        labels_to_number_of_points[token]++;
+        all_labels.insert(token_as_num);
+        current_labels.insert(token_as_num);
+        labels_to_number_of_points[token_as_num]++;
       }
     }
 
@@ -276,7 +278,7 @@ tsl::robin_map<label, std::vector<_u32>> generate_label_specific_vector_files(pa
   // write each label iovec to resp. file
   for (const auto &label : all_labels) {
     int label_input_data_fd;
-    path curr_label_input_data_path(input_data_path + "_" + label);
+    path curr_label_input_data_path(input_data_path + "_" + std::to_string(label));
 
     label_input_data_fd = open(curr_label_input_data_path.c_str(), O_CREAT | O_WRONLY, (mode_t) 0644);
     if (UNLIKELY(label_input_data_fd == -1))
@@ -326,12 +328,11 @@ void generate_label_indices(path input_data_path, path final_index_path_prefix,
   std::cout.setstate(std::ios_base::failbit);
   diskann::cout.setstate(std::ios_base::failbit);
   for (const auto &label : all_labels) {
-    path curr_label_input_data_path(input_data_path + "_" + label);
-    path curr_label_index_path(final_index_path_prefix + "_" + label);
+    path curr_label_input_data_path(input_data_path + "_" + std::to_string(label));
+    path curr_label_index_path(final_index_path_prefix + "_" + std::to_string(label));
     
     size_t number_of_label_points, dimension;
     diskann::get_bin_metadata(curr_label_input_data_path, number_of_label_points, dimension);
-    std::cout << number_of_label_points << " " << dimension << std::endl;
     diskann::Index<T> index(diskann::Metric::L2, dimension, number_of_label_points, false, false);
 
     auto index_build_timer = std::chrono::high_resolution_clock::now();
@@ -435,7 +436,7 @@ void save_full_index(path final_index_path_prefix, path input_data_path,
   labels_to_medoids_writer.close();
 
   // aux. file 4
-  if (universal_label != "") {
+  if (universal_label != 65537) {
     std::ofstream universal_label_writer;
     universal_label_writer.exceptions(std::ios::badbit | std::ios::failbit);
     universal_label_writer.open(final_index_path_prefix + "_universal_label.txt");
@@ -535,7 +536,7 @@ stitch_indices_return_values stitch_label_indices(path final_index_path_prefix, 
   
   auto stitching_index_timer = std::chrono::high_resolution_clock::now();
   for (const auto &label : all_labels) {
-    path curr_label_index_path(final_index_path_prefix + "_" + label);
+    path curr_label_index_path(final_index_path_prefix + "_" + std::to_string(label));
     std::vector<std::vector<_u32>> curr_label_index;
     _u64 curr_label_index_size;
     _u32 curr_label_entry_point;
@@ -609,8 +610,8 @@ void prune_and_save(path final_index_path_prefix, path input_data_path, std::vec
  */
 void clean_up_artifacts(path input_data_path, path final_index_path_prefix, label_set all_labels) {
   for (const auto &label : all_labels) {
-    path curr_label_input_data_path(input_data_path + "_" + label);
-    path curr_label_index_path(final_index_path_prefix + "_" + label);
+    path curr_label_input_data_path(input_data_path + "_" + std::to_string(label));
+    path curr_label_index_path(final_index_path_prefix + "_" + std::to_string(label));
     path curr_label_index_path_data(curr_label_index_path + ".data");
 
     if (std::remove(curr_label_index_path.c_str()) != 0)
@@ -627,7 +628,7 @@ int main(int argc, char **argv) {
   // 1. handle cmdline inputs
   std::string data_type;
   path input_data_path, final_index_path_prefix, label_data_path;
-  label universal_label;
+	label universal_label;
   unsigned num_threads, R, L, stitched_R;
   float alpha;
 
