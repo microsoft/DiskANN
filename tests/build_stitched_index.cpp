@@ -655,7 +655,7 @@ void prune_and_save(path final_index_path_prefix, path input_data_path,
                           number_of_label_points, false, false);
 
   // not searching this index, set search_l to 0
-  index.load(final_index_path_prefix.c_str(), 0, 1);
+  index.load(final_index_path_prefix.c_str(), num_threads, 1);
 
   diskann::Parameters paras;
   paras.Set<unsigned>("R", stitched_R);
