@@ -512,7 +512,7 @@ namespace diskann {
       if (file_exists(universal_label_file)) {
         std::ifstream universal_label_reader(universal_label_file);
         universal_label_reader >> _universal_label;
-        _use_universal_label = true;  // to check
+        _use_universal_label = true;
         universal_label_reader.close();
       }
     }
