@@ -55,7 +55,7 @@ namespace diskann {
     }
 
     size_t num_blocks = DIV_ROUND_UP(fsize, read_blk_size);
-    char * dump = new char[read_blk_size];
+    char  *dump = new char[read_blk_size];
     for (_u64 i = 0; i < num_blocks; i++) {
       size_t cur_block_size = read_blk_size > fsize - (i * read_blk_size)
                                   ? fsize - (i * read_blk_size)
@@ -93,13 +93,13 @@ namespace diskann {
   size_t calculate_num_pq_chunks(double final_index_ram_limit,
                                  size_t points_num, uint32_t dim,
                                  const std::vector<std::string> &param_list) {
-    size_t num_pq_chunks =
-        (size_t)(std::floor)(_u64(final_index_ram_limit / (double) points_num));
+    size_t num_pq_chunks = (size_t) (std::floor)(
+        _u64(final_index_ram_limit / (double) points_num));
     diskann::cout << "Calculated num_pq_chunks :" << num_pq_chunks << std::endl;
     if (param_list.size() >= 6) {
       float compress_ratio = (float) atof(param_list[5].c_str());
       if (compress_ratio > 0 && compress_ratio <= 1) {
-        size_t chunks_by_cr = (size_t)(std::floor)(compress_ratio * dim);
+        size_t chunks_by_cr = (size_t) (std::floor)(compress_ratio * dim);
 
         if (chunks_by_cr > 0 && chunks_by_cr < num_pq_chunks) {
           diskann::cout << "Compress ratio:" << compress_ratio
@@ -156,7 +156,7 @@ namespace diskann {
   T *load_warmup(MemoryMappedFiles &files, const std::string &cache_warmup_file,
                  uint64_t &warmup_num, uint64_t warmup_dim,
                  uint64_t warmup_aligned_dim) {
-    T *      warmup = nullptr;
+    T       *warmup = nullptr;
     uint64_t file_dim, file_aligned_dim;
 
     if (files.fileExists(cache_warmup_file)) {
@@ -189,7 +189,7 @@ namespace diskann {
   template<typename T>
   T *load_warmup(const std::string &cache_warmup_file, uint64_t &warmup_num,
                  uint64_t warmup_dim, uint64_t warmup_aligned_dim) {
-    T *      warmup = nullptr;
+    T       *warmup = nullptr;
     uint64_t file_dim, file_aligned_dim;
 
     if (file_exists(cache_warmup_file)) {
@@ -287,8 +287,7 @@ namespace diskann {
     // will merge all the labels to medoids files of each shard into one
     // combined file
     if (use_filters) {
-      std::unordered_map<unsigned, std::vector<_u32>>
-          global_label_to_medoids;
+      std::unordered_map<unsigned, std::vector<_u32>> global_label_to_medoids;
 
       for (_u64 i = 0; i < nshards; i++) {
         std::ifstream mapping_reader;
@@ -302,13 +301,13 @@ namespace diskann {
           std::istringstream iss(line);
           _u32               cnt = 0;
           _u32               medoid;
-          label        label;
+          label              label;
           while (std::getline(iss, token, ',')) {
             token.erase(std::remove(token.begin(), token.end(), '\n'),
                         token.end());
             token.erase(std::remove(token.begin(), token.end(), '\r'),
                         token.end());
-            
+
             unsigned token_as_num = std::stoul(token);
 
             if (cnt == 0)
@@ -488,7 +487,7 @@ namespace diskann {
                             const std::string out_metadata_file) {
     std::string   token, line;
     std::ifstream labels_stream(labels_file);
-    T *           data;
+    T            *data;
     _u64          npts, ndims;
     diskann::load_bin<T>(data_file, data, npts, ndims);
 
@@ -791,7 +790,7 @@ namespace diskann {
     while (!stop_flag) {
       std::vector<uint64_t> tuning_sample_result_ids_64(tuning_sample_num, 0);
       std::vector<float>    tuning_sample_result_dists(tuning_sample_num, 0);
-      diskann::QueryStats * stats = new diskann::QueryStats[tuning_sample_num];
+      diskann::QueryStats  *stats = new diskann::QueryStats[tuning_sample_num];
 
       auto s = std::chrono::high_resolution_clock::now();
 #pragma omp parallel for schedule(dynamic, 1) num_threads(nthreads)
@@ -818,7 +817,7 @@ namespace diskann {
       if (qps > max_qps && lat_999 < (15000) + mean_latency * 2) {
         max_qps = qps;
         best_bw = cur_bw;
-        cur_bw = (uint32_t)(std::ceil)((float) cur_bw * 1.1f);
+        cur_bw = (uint32_t) (std::ceil)((float) cur_bw * 1.1f);
       } else {
         stop_flag = true;
       }
@@ -1049,7 +1048,7 @@ namespace diskann {
 
   template<typename T>
   int build_disk_index(const char *dataFilePath, const char *indexFilePath,
-                       const char *    indexBuildParameters,
+                       const char     *indexBuildParameters,
                        diskann::Metric compareMetric, bool use_opq,
                        bool use_filters, const std::string &label_file,
                        const std::string &universal_label,
@@ -1226,7 +1225,7 @@ namespace diskann {
                                       compareMetric, p_val, disk_pq_dims);
     }
     size_t num_pq_chunks =
-        (size_t)(std::floor)(_u64(final_index_ram_limit / points_num));
+        (size_t) (std::floor)(_u64(final_index_ram_limit / points_num));
 
     num_pq_chunks = num_pq_chunks <= 0 ? 1 : num_pq_chunks;
     num_pq_chunks = num_pq_chunks > dim ? dim : num_pq_chunks;

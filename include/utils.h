@@ -93,6 +93,7 @@ typedef uint16_t _u16;
 typedef int16_t  _s16;
 typedef uint8_t  _u8;
 typedef int8_t   _s8;
+typedef unsigned label;
 inline void      open_file_to_write(std::ofstream&     writer,
                                     const std::string& filename) {
        writer.exceptions(std::ofstream::failbit | std::ofstream::badbit);
@@ -546,7 +547,6 @@ namespace diskann {
   }
 #endif
 
-
   inline void copy_file(std::string in_file, std::string out_file) {
     std::ifstream source(in_file, std::ios::binary);
     std::ofstream dest(out_file, std::ios::binary);
@@ -559,7 +559,6 @@ namespace diskann {
     source.close();
     dest.close();
   }
-
 
   DISKANN_DLLEXPORT double calculate_recall(
       unsigned num_queries, unsigned* gold_std, float* gs_dist, unsigned dim_gs,
@@ -597,8 +596,8 @@ namespace diskann {
 #else
       strerror_r(errno, buff, 1024);
 #endif
-      std::string error_message = std::string("Failed to open file") + filename +
-          " for write because " + buff;
+      std::string error_message = std::string("Failed to open file") +
+                                  filename + " for write because " + buff;
       diskann::cerr << error_message << std::endl;
       throw diskann::ANNException(error_message, -1);
     }
