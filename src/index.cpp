@@ -787,239 +787,235 @@ namespace diskann {
   std::pair<uint32_t, uint32_t> Index<T, TagT>::iterate_to_fixed_point(
       const T *query, const unsigned Lsize,
       const std::vector<unsigned> &init_ids, InMemQueryScratch<T> *scratch,
-      bool use_filter, const std::vector<label>& filter_label,
-      bool ret_frozen, bool search_invocation) {
-      std::vector<Neighbor>& expanded_nodes = scratch->pool();
-      NeighborPriorityQueue& best_L_nodes = scratch->best_l_nodes();
-      best_L_nodes.reserve(Lsize);
-      tsl::robin_set<unsigned>& inserted_into_pool_rs =
-          scratch->inserted_into_pool_rs();
-      boost::dynamic_bitset<>& inserted_into_pool_bs =
-          scratch->inserted_into_pool_bs();
-      std::vector<unsigned>& id_scratch = scratch->id_scratch();
-      std::vector<float>& dist_scratch = scratch->dist_scratch();
-      assert(id_scratch.size() == 0);
-      T* aligned_query = scratch->aligned_query();
-      memcpy(aligned_query, query, _dim * sizeof(T));
-      if (_normalize_vecs) {
-          normalize((float*)aligned_query, _dim);
+      bool use_filter, const std::vector<label> &filter_label, bool ret_frozen,
+      bool search_invocation) {
+    std::vector<Neighbor> &expanded_nodes = scratch->pool();
+    NeighborPriorityQueue &best_L_nodes = scratch->best_l_nodes();
+    best_L_nodes.reserve(Lsize);
+    tsl::robin_set<unsigned> &inserted_into_pool_rs =
+        scratch->inserted_into_pool_rs();
+    boost::dynamic_bitset<> &inserted_into_pool_bs =
+        scratch->inserted_into_pool_bs();
+    std::vector<unsigned> &id_scratch = scratch->id_scratch();
+    std::vector<float>    &dist_scratch = scratch->dist_scratch();
+    assert(id_scratch.size() == 0);
+    T *aligned_query = scratch->aligned_query();
+    memcpy(aligned_query, query, _dim * sizeof(T));
+    if (_normalize_vecs) {
+      normalize((float *) aligned_query, _dim);
+    }
+
+    float *query_float;
+    float *query_rotated;
+    float *pq_dists;
+    _u8   *pq_coord_scratch;
+    // Intialize PQ related scratch to use PQ based distances
+    if (_pq_dist) {
+      // Get scratch spaces
+      PQScratch<T> *pq_query_scratch = scratch->pq_scratch();
+      query_float = pq_query_scratch->aligned_query_float;
+      query_rotated = pq_query_scratch->rotated_query;
+      pq_dists = pq_query_scratch->aligned_pqtable_dist_scratch;
+
+      // Copy query vector to float and then to "rotated" query
+      for (size_t d = 0; d < _dim; d++) {
+        query_float[d] = (float) aligned_query[d];
+      }
+      pq_query_scratch->set(_dim, aligned_query);
+
+      // center the query and rotate if we have a rotation matrix
+      _pq_table.preprocess_query(query_rotated);
+      _pq_table.populate_chunk_distances(query_rotated, pq_dists);
+
+      pq_coord_scratch = pq_query_scratch->aligned_pq_coord_scratch;
+    }
+
+    if (expanded_nodes.size() > 0 || id_scratch.size() > 0) {
+      throw ANNException("ERROR: Clear scratch space before passing.", -1,
+                         __FUNCSIG__, __FILE__, __LINE__);
+    }
+
+    // Decide whether to use bitset or robin set to mark visited nodes
+    auto total_num_points = _max_points + _num_frozen_pts;
+    bool fast_iterate = total_num_points <= MAX_POINTS_FOR_USING_BITSET;
+
+    if (fast_iterate) {
+      if (inserted_into_pool_bs.size() < total_num_points) {
+        // hopefully using 2X will reduce the number of allocations.
+        auto resize_size = 2 * total_num_points > MAX_POINTS_FOR_USING_BITSET
+                               ? MAX_POINTS_FOR_USING_BITSET
+                               : 2 * total_num_points;
+        inserted_into_pool_bs.resize(resize_size);
+      }
+    }
+
+    // Lambda to determine if a node has been visited
+    auto is_not_visited = [this, fast_iterate, &inserted_into_pool_bs,
+                           &inserted_into_pool_rs](const unsigned id) {
+      return fast_iterate ? inserted_into_pool_bs[id] == 0
+                          : inserted_into_pool_rs.find(id) ==
+                                inserted_into_pool_rs.end();
+    };
+
+    // Lambda to batch compute query<-> node distances in PQ space
+    auto compute_dists = [this, pq_coord_scratch, pq_dists](
+                             const std::vector<unsigned> &ids,
+                             std::vector<float>          &dists_out) {
+      diskann::aggregate_coords(ids, this->_pq_data, this->_num_pq_chunks,
+                                pq_coord_scratch);
+      diskann::pq_dist_lookup(pq_coord_scratch, ids.size(),
+                              this->_num_pq_chunks, pq_dists, dists_out);
+    };
+
+    // Initialize the candidate pool with starting points
+    for (auto id : init_ids) {
+      if (id >= _max_points + _num_frozen_pts) {
+        diskann::cerr << "Out of range loc found as an edge : " << id
+                      << std::endl;
+        throw diskann::ANNException(
+            std::string("Wrong loc") + std::to_string(id), -1, __FUNCSIG__,
+            __FILE__, __LINE__);
       }
 
-      float* query_float;
-      float* query_rotated;
-      float* pq_dists;
-      _u8* pq_coord_scratch;
-      // Intialize PQ related scratch to use PQ based distances
-      if (_pq_dist) {
-          // Get scratch spaces
-          PQScratch<T>* pq_query_scratch = scratch->pq_scratch();
-          query_float = pq_query_scratch->aligned_query_float;
-          query_rotated = pq_query_scratch->rotated_query;
-          pq_dists = pq_query_scratch->aligned_pqtable_dist_scratch;
+      if (use_filter) {
+        std::vector<label> common_filters;
+        auto              &x = _pts_to_labels[id];
+        std::set_intersection(filter_label.begin(), filter_label.end(),
+                              x.begin(), x.end(),
+                              std::back_inserter(common_filters));
+        if (_use_universal_label) {
+          if (std::find(filter_label.begin(), filter_label.end(),
+                        _universal_label) != filter_label.end() ||
+              std::find(x.begin(), x.end(), _universal_label) != x.end())
+            common_filters.emplace_back(_universal_label);
+        }
 
-          // Copy query vector to float and then to "rotated" query
-          for (size_t d = 0; d < _dim; d++) {
-              query_float[d] = (float)aligned_query[d];
+        if (common_filters.size() == 0)
+          continue;
+      }
+
+      if (is_not_visited(id)) {
+        if (fast_iterate) {
+          inserted_into_pool_bs[id] = 1;
+        } else {
+          inserted_into_pool_rs.insert(id);
+        }
+
+        float distance;
+        if (_pq_dist)
+          pq_dist_lookup(pq_coord_scratch, 1, this->_num_pq_chunks, pq_dists,
+                         &distance);
+        else
+          distance = _distance->compare(_data + _aligned_dim * (size_t) id,
+                                        aligned_query, (unsigned) _aligned_dim);
+        Neighbor nn = Neighbor(id, distance);
+        best_L_nodes.insert(nn);
+      }
+    }
+
+    uint32_t hops = 0;
+    uint32_t cmps = 0;
+
+    while (best_L_nodes.has_unexpanded_node()) {
+      auto nbr = best_L_nodes.closest_unexpanded();
+      auto n = nbr.id;
+
+      // Add node to expanded nodes to create pool for prune later
+      if (!search_invocation &&
+          (n != _start || _num_frozen_pts == 0 || ret_frozen)) {
+        if (!use_filter) {
+          expanded_nodes.emplace_back(nbr);
+        } else {  // in filter based indexing, the same point might invoke
+          // multiple iterate_to_fixed_points, so need to be careful
+          // not to add the same item to pool multiple times.
+          if (std::find(expanded_nodes.begin(), expanded_nodes.end(), nbr) ==
+              expanded_nodes.end()) {
+            expanded_nodes.emplace_back(nbr);
           }
-          pq_query_scratch->set(_dim, aligned_query);
-
-          // center the query and rotate if we have a rotation matrix
-          _pq_table.preprocess_query(query_rotated);
-          _pq_table.populate_chunk_distances(query_rotated, pq_dists);
-
-          pq_coord_scratch = pq_query_scratch->aligned_pq_coord_scratch;
+        }
       }
 
-      if (expanded_nodes.size() > 0 || id_scratch.size() > 0) {
-          throw ANNException("ERROR: Clear scratch space before passing.", -1,
-              __FUNCSIG__, __FILE__, __LINE__);
-      }
-
-      // Decide whether to use bitset or robin set to mark visited nodes
-      auto total_num_points = _max_points + _num_frozen_pts;
-      bool fast_iterate = total_num_points <= MAX_POINTS_FOR_USING_BITSET;
-
-      if (fast_iterate) {
-          if (inserted_into_pool_bs.size() < total_num_points) {
-              // hopefully using 2X will reduce the number of allocations.
-              auto resize_size = 2 * total_num_points > MAX_POINTS_FOR_USING_BITSET
-                  ? MAX_POINTS_FOR_USING_BITSET
-                  : 2 * total_num_points;
-              inserted_into_pool_bs.resize(resize_size);
-          }
-      }
-
-      // Lambda to determine if a node has been visited
-      auto is_not_visited = [this, fast_iterate, &inserted_into_pool_bs,
-          &inserted_into_pool_rs](const unsigned id) {
-          return fast_iterate ? inserted_into_pool_bs[id] == 0
-              : inserted_into_pool_rs.find(id) ==
-              inserted_into_pool_rs.end();
-      };
-
-      // Lambda to batch compute query<-> node distances in PQ space
-      auto compute_dists = [this, pq_coord_scratch, pq_dists](
-          const std::vector<unsigned>& ids,
-          std::vector<float>& dists_out) {
-              diskann::aggregate_coords(ids, this->_pq_data, this->_num_pq_chunks,
-                  pq_coord_scratch);
-              diskann::pq_dist_lookup(pq_coord_scratch, ids.size(),
-                  this->_num_pq_chunks, pq_dists, dists_out);
-      };
-
-      // Initialize the candidate pool with starting points
-      for (auto id : init_ids) {
-          if (id >= _max_points + _num_frozen_pts) {
-              diskann::cerr << "Out of range loc found as an edge : " << id
-                  << std::endl;
-              throw diskann::ANNException(
-                  std::string("Wrong loc") + std::to_string(id), -1, __FUNCSIG__,
-                  __FILE__, __LINE__);
-          }
+      // Find which of the nodes in des have not been visited before
+      id_scratch.clear();
+      dist_scratch.clear();
+      {
+        if (_dynamic_index)
+          _locks[n].lock();
+        for (auto id : _final_graph[n]) {
+          assert(id < _max_points + _num_frozen_pts);
 
           if (use_filter) {
-              std::vector<label> common_filters;
-              auto& x = _pts_to_labels[id];
-              std::set_intersection(filter_label.begin(), filter_label.end(),
-                  x.begin(), x.end(),
-                  std::back_inserter(common_filters));
-              if (_use_universal_label) {
-                  if (std::find(filter_label.begin(), filter_label.end(),
-                      _universal_label) != filter_label.end() ||
-                      std::find(x.begin(), x.end(), _universal_label) != x.end())
-                      common_filters.emplace_back(_universal_label);
-              }
+            // NOTE: NEED TO CHECK IF THIS CORRECT WITH NEW LOCKS.
+            std::vector<label> common_filters;
+            auto              &x = _pts_to_labels[id];
+            std::set_intersection(filter_label.begin(), filter_label.end(),
+                                  x.begin(), x.end(),
+                                  std::back_inserter(common_filters));
+            if (_use_universal_label) {
+              if (std::find(filter_label.begin(), filter_label.end(),
+                            _universal_label) != filter_label.end() ||
+                  std::find(x.begin(), x.end(), _universal_label) != x.end())
+                common_filters.emplace_back(_universal_label);
+            }
 
-              if (common_filters.size() == 0)
-                  continue;
+            if (common_filters.size() == 0)
+              continue;
           }
 
           if (is_not_visited(id)) {
-              if (fast_iterate) {
-                  inserted_into_pool_bs[id] = 1;
-              }
-              else {
-                  inserted_into_pool_rs.insert(id);
-              }
-
-              float distance;
-              if (_pq_dist)
-                  pq_dist_lookup(pq_coord_scratch, 1, this->_num_pq_chunks, pq_dists,
-                      &distance);
-              else
-                  distance = _distance->compare(_data + _aligned_dim * (size_t)id,
-                      aligned_query, (unsigned)_aligned_dim);
-              Neighbor nn = Neighbor(id, distance);
-              best_L_nodes.insert(nn);
+            id_scratch.push_back(id);
           }
+        }
+
+        if (_dynamic_index)
+          _locks[n].unlock();
       }
 
-      uint32_t hops = 0;
-      uint32_t cmps = 0;
-
-      while (best_L_nodes.has_unexpanded_node()) {
-          auto nbr = best_L_nodes.closest_unexpanded();
-          auto n = nbr.id;
-
-          // Add node to expanded nodes to create pool for prune later
-          if (!search_invocation &&
-              (n != _start || _num_frozen_pts == 0 || ret_frozen)) {
-              if (!use_filter) {
-                  expanded_nodes.emplace_back(nbr);
-              }
-              else {  // in filter based indexing, the same point might invoke
-                  // multiple iterate_to_fixed_points, so need to be careful
-                  // not to add the same item to pool multiple times.
-                  if (std::find(expanded_nodes.begin(), expanded_nodes.end(),
-                      nbr) == expanded_nodes.end()) {
-                      expanded_nodes.emplace_back(nbr);
-                  }
-              }
-          }
-
-          // Find which of the nodes in des have not been visited before
-          id_scratch.clear();
-          dist_scratch.clear();
-          {
-              if (_dynamic_index)
-                  _locks[n].lock();
-              for (auto id : _final_graph[n]) {
-                  assert(id < _max_points + _num_frozen_pts);
-
-                  if (use_filter) {
-                      // NOTE: NEED TO CHECK IF THIS CORRECT WITH NEW LOCKS.
-                      std::vector<label> common_filters;
-                      auto& x = _pts_to_labels[id];
-                      std::set_intersection(filter_label.begin(), filter_label.end(),
-                          x.begin(), x.end(),
-                          std::back_inserter(common_filters));
-                      if (_use_universal_label) {
-                          if (std::find(filter_label.begin(), filter_label.end(),
-                              _universal_label) != filter_label.end() ||
-                              std::find(x.begin(), x.end(), _universal_label) != x.end())
-                              common_filters.emplace_back(_universal_label);
-                      }
-
-                      if (common_filters.size() == 0)
-                          continue;
-                  }
-
-                  if (is_not_visited(id)) {
-                      id_scratch.push_back(id);
-                  }
-              }
-
-              if (_dynamic_index)
-                  _locks[n].unlock();
-          }
-
-          // Mark nodes visited
-          for (auto id : id_scratch) {
-              if (fast_iterate) {
-                  inserted_into_pool_bs[id] = 1;
-              }
-              else {
-                  inserted_into_pool_rs.insert(id);
-              }
-          }
-
-          // Compute distances to unvisited nodes in the expansion
-          if (_pq_dist) {
-              assert(dist_scratch.capacity() >= id_scratch.size());
-              compute_dists(id_scratch, dist_scratch);
-          }
-          else {
-              assert(dist_scratch.size() == 0);
-              for (size_t m = 0; m < id_scratch.size(); ++m) {
-                  unsigned id = id_scratch[m];
-
-                  if (m + 1 < id_scratch.size()) {
-                      auto nextn = id_scratch[m + 1];
-                      diskann::prefetch_vector(
-                          (const char*)_data + _aligned_dim * (size_t)nextn,
-                          sizeof(T) * _aligned_dim);
-                  }
-
-                  dist_scratch.push_back(_distance->compare(
-                      aligned_query, _data + _aligned_dim * (size_t)id,
-                      (unsigned)_aligned_dim));
-              }
-          }
-          cmps += id_scratch.size();
-
-          // Insert <id, dist> pairs into the pool of candidates
-          for (size_t m = 0; m < id_scratch.size(); ++m) {
-              best_L_nodes.insert(Neighbor(id_scratch[m], dist_scratch[m]));
-          }
+      // Mark nodes visited
+      for (auto id : id_scratch) {
+        if (fast_iterate) {
+          inserted_into_pool_bs[id] = 1;
+        } else {
+          inserted_into_pool_rs.insert(id);
+        }
       }
-      return std::make_pair(hops, cmps);
+
+      // Compute distances to unvisited nodes in the expansion
+      if (_pq_dist) {
+        assert(dist_scratch.capacity() >= id_scratch.size());
+        compute_dists(id_scratch, dist_scratch);
+      } else {
+        assert(dist_scratch.size() == 0);
+        for (size_t m = 0; m < id_scratch.size(); ++m) {
+          unsigned id = id_scratch[m];
+
+          if (m + 1 < id_scratch.size()) {
+            auto nextn = id_scratch[m + 1];
+            diskann::prefetch_vector(
+                (const char *) _data + _aligned_dim * (size_t) nextn,
+                sizeof(T) * _aligned_dim);
+          }
+
+          dist_scratch.push_back(_distance->compare(
+              aligned_query, _data + _aligned_dim * (size_t) id,
+              (unsigned) _aligned_dim));
+        }
+      }
+      cmps += id_scratch.size();
+
+      // Insert <id, dist> pairs into the pool of candidates
+      for (size_t m = 0; m < id_scratch.size(); ++m) {
+        best_L_nodes.insert(Neighbor(id_scratch[m], dist_scratch[m]));
+      }
+    }
+    return std::make_pair(hops, cmps);
   }
 
   template<typename T, typename TagT>
   void Index<T, TagT>::search_for_point_and_prune(
-      int location, _u32 Lindex, std::vector<unsigned>& pruned_list,
-      InMemQueryScratch<T>* scratch, bool use_filter,
-      const std::vector<label>& filters, _u32 filteredLindex) {
+      int location, _u32 Lindex, std::vector<unsigned> &pruned_list,
+      InMemQueryScratch<T> *scratch, bool use_filter,
+      const std::vector<label> &filters, _u32 filteredLindex) {
     std::vector<unsigned> init_ids;
     init_ids.emplace_back(_start);
 
@@ -1078,7 +1074,6 @@ namespace diskann {
     // Initialize occlude_factor to pool.size() many 0.0f values for correctness
     occlude_factor.insert(occlude_factor.end(), pool.size(), 0.0f);
 
-
     float cur_alpha = 1;
     while (cur_alpha <= alpha && result.size() < degree) {
       // used for MIPS, where we store a value of eps in cur_alpha to
@@ -1092,7 +1087,8 @@ namespace diskann {
         }
         // Set the entry to float::max so that is not considered again
         occlude_factor[iter - pool.begin()] = std::numeric_limits<float>::max();
-        // Add the entry to the result if its not been deleted, and doesn't add a self loop
+        // Add the entry to the result if its not been deleted, and doesn't add
+        // a self loop
         if (delete_set_ptr == nullptr ||
             delete_set_ptr->find(iter->id) == delete_set_ptr->end()) {
           if (iter->id != location) {
@@ -1168,7 +1164,7 @@ namespace diskann {
 
     // If using _pq_build, over-write the PQ distances with actual distances
     if (_pq_dist) {
-      for (auto& ngh : pool)
+      for (auto &ngh : pool)
         ngh.distance = _distance->compare(
             _data + _aligned_dim * (size_t) ngh.id,
             _data + _aligned_dim * (size_t) location, (unsigned) _aligned_dim);
@@ -1485,7 +1481,7 @@ namespace diskann {
     }
 
     std::unique_lock<std::shared_timed_mutex> ul(_update_lock);
-    
+
     {
       std::unique_lock<std::shared_timed_mutex> tl(_tag_lock);
       _nd = num_points_to_load;
@@ -1783,17 +1779,20 @@ namespace diskann {
                     << scratch->get_L() << std::endl;
     }
 
+    std::vector<unsigned> dummy;
     std::vector<unsigned> init_ids;
     init_ids.push_back(_start);
     std::shared_lock<std::shared_timed_mutex> lock(_update_lock);
-    auto retval =
-        iterate_to_fixed_point(query, L, init_ids, scratch, true, true);
+
+    auto retval = iterate_to_fixed_point(query, L, init_ids, scratch, false,
+                                         dummy, true, true);
+
     NeighborPriorityQueue &best_L_nodes = scratch->best_l_nodes();
 
     size_t pos = 0;
     for (int i = 0; i < best_L_nodes.size(); ++i) {
       if (best_L_nodes[i].id < _max_points) {
-        // safe because Index uses uint32_t ids internally 
+        // safe because Index uses uint32_t ids internally
         // and IDType will be uint32_t or uint64_t
         indices[pos] = (IdType) best_L_nodes[i].id;
         if (distances != nullptr) {
@@ -1819,77 +1818,76 @@ namespace diskann {
   }
 
   template<typename T, typename TagT>
-  template<typename IndexType>
+  template<typename IdType>
   std::pair<uint32_t, uint32_t> Index<T, TagT>::search_with_filters(
       const T *query, const label &filter_label, const size_t K,
-      const unsigned L, IndexType *indices, float *distance) {
-      if (K > (uint64_t)L) {
-          throw ANNException("Set L to a value of at least K", -1, __FUNCSIG__,
-              __FILE__, __LINE__);
-      }
+      const unsigned L, IdType *indices, float *distances) {
+    if (K > (uint64_t) L) {
+      throw ANNException("Set L to a value of at least K", -1, __FUNCSIG__,
+                         __FILE__, __LINE__);
+    }
 
-      ScratchStoreManager<InMemQueryScratch<T>> manager(_query_scratch);
-      auto                                      scratch = manager.scratch_space();
+    ScratchStoreManager<InMemQueryScratch<T>> manager(_query_scratch);
+    auto                                      scratch = manager.scratch_space();
 
-      if (L > scratch->get_L()) {
-          diskann::cout << "Attempting to expand query scratch_space. Was created "
-              << "with Lsize: " << scratch->get_L()
-              << " but search L is: " << L << std::endl;
-          scratch->resize_for_new_L(L);
-          diskann::cout << "Resize completed. New scratch->L is "
-              << scratch->get_L() << std::endl;
-      }
+    if (L > scratch->get_L()) {
+      diskann::cout << "Attempting to expand query scratch_space. Was created "
+                    << "with Lsize: " << scratch->get_L()
+                    << " but search L is: " << L << std::endl;
+      scratch->resize_for_new_L(L);
+      diskann::cout << "Resize completed. New scratch->L is "
+                    << scratch->get_L() << std::endl;
+    }
 
-      std::vector<label>    filter_vec;
-      std::vector<unsigned> init_ids;
-      init_ids.push_back(_start);
-      std::shared_lock<std::shared_timed_mutex> lock(_update_lock);
+    std::vector<label>    filter_vec;
+    std::vector<unsigned> init_ids;
+    init_ids.push_back(_start);
+    std::shared_lock<std::shared_timed_mutex> lock(_update_lock);
 
-      if (_filter_to_medoid_id.find(filter_label) != _filter_to_medoid_id.end()) {
-          init_ids.emplace_back(_filter_to_medoid_id[filter_label]);
-      }
-      else {
-          diskann::cout
-              << "No filtered medoid found. exitting "
-              << std::endl;  // RKNOTE: If universal label found start there
-          throw diskann::ANNException("No filtered medoid found. exitting ", -1);
-      }
-      filter_vec.emplace_back(filter_label);
+    if (_filter_to_medoid_id.find(filter_label) != _filter_to_medoid_id.end()) {
+      init_ids.emplace_back(_filter_to_medoid_id[filter_label]);
+    } else {
+      diskann::cout
+          << "No filtered medoid found. exitting "
+          << std::endl;  // RKNOTE: If universal label found start there
+      throw diskann::ANNException("No filtered medoid found. exitting ", -1);
+    }
+    filter_vec.emplace_back(filter_label);
 
-      T* aligned_query = scratch->aligned_query();
-      memcpy(aligned_query, query, _dim * sizeof(T));
+    T *aligned_query = scratch->aligned_query();
+    memcpy(aligned_query, query, _dim * sizeof(T));
 
-      auto retval = iterate_to_fixed_point(aligned_query, L, init_ids, scratch,
-          true, filter_vec, true, true);
+    auto retval = iterate_to_fixed_point(aligned_query, L, init_ids, scratch,
+                                         true, filter_vec, true, true);
 
-      auto best_L_nodes = scratch->best_l_nodes();
+    auto best_L_nodes = scratch->best_l_nodes();
 
-      size_t pos = 0;
-      for (int i = 0; i < best_L_nodes.size(); ++i) {
-          if (best_L_nodes[i].id < _max_points) {
-              // safe because Index uses uint32_t ids internally
-              // and IDType will be uint32_t or uint64_t
-              indices[pos] = (IdType)best_L_nodes[i].id;
-              if (distances != nullptr) {
+    size_t pos = 0;
+    for (int i = 0; i < best_L_nodes.size(); ++i) {
+      if (best_L_nodes[i].id < _max_points) {
+        // safe because Index uses uint32_t ids internally
+        // and IDType will be uint32_t or uint64_t
+        indices[pos] = (IdType) best_L_nodes[i].id;
+        if (distances != nullptr) {
 #ifdef EXEC_ENV_OLS
-                  // DLVS expects negative distances
-                  distances[pos] = best_L_nodes[i].distance;
+          // DLVS expects negative distances
+          distances[pos] = best_L_nodes[i].distance;
 #else
-                  distances[pos] = _dist_metric == diskann::Metric::INNER_PRODUCT
-                      ? -1 * best_L_nodes[i].distance
-                      : best_L_nodes[i].distance;
+          distances[pos] = _dist_metric == diskann::Metric::INNER_PRODUCT
+                               ? -1 * best_L_nodes[i].distance
+                               : best_L_nodes[i].distance;
 #endif
-              }
-              pos++;
-          }
-          if (pos == K)
-              break;
+        }
+        pos++;
       }
-      if (pos < K) {
-          diskann::cerr << "Found fewer than K elements for query" << std::endl;
-      }
+      if (pos == K)
+        break;
+    }
+    if (pos < K) {
+      diskann::cerr << "Found fewer than K elements for query" << std::endl;
+    }
 
-      return retval;
+    return retval;
   }
 
   template<typename T, typename TagT>
@@ -1916,7 +1914,10 @@ namespace diskann {
     std::shared_lock<std::shared_timed_mutex> ul(_update_lock);
 
     std::vector<unsigned> init_ids(1, _start);
-    iterate_to_fixed_point(query, L, init_ids, scratch, true, true);
+    std::vector<label>    dummy;
+
+    iterate_to_fixed_point(query, L, init_ids, scratch, false, dummy, true,
+                           true);
     NeighborPriorityQueue &best_L_nodes = scratch->best_l_nodes();
     assert(best_L_nodes.size() <= L);
 
@@ -2074,8 +2075,7 @@ namespace diskann {
       }
     }
   }
-  
-   
+
   // Returns number of live points left after consolidation
   template<typename T, typename TagT>
   consolidation_report Index<T, TagT>::consolidate_deletes(
@@ -2325,7 +2325,7 @@ namespace diskann {
                   << timer.elapsed() / 1000000. << "s." << std::endl;
   }
 
-  // 
+  //
   // Caller must hold unique _tag_lock and _delete_lock before calling this
   //
   template<typename T, typename TagT>

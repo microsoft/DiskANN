@@ -1254,17 +1254,6 @@ namespace diskann {
             cur_expanded_dist = disk_pq_table.l2_distance(
                 query_float, (_u8 *) node_fp_coords_copy);
         }
-
-        _u32 real_id = frontier_nhood.first;
-        if (_dummy_pts.find(real_id) != _dummy_pts.end()) {
-          real_id = _dummy_to_real_map[real_id];
-        }
-        Neighbor real_nbr(real_id, cur_expanded_dist, true);
-        if (std::find(full_retset.begin(), full_retset.end(), real_nbr) ==
-            full_retset.end()) {
-          full_retset.emplace_back(real_nbr);
-        }
-
         full_retset.push_back(
             Neighbor(frontier_nhood.first, cur_expanded_dist));
         unsigned *node_nbrs = (node_buf + 1);

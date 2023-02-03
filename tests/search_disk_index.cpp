@@ -51,7 +51,8 @@ int search_disk_index(
     std::string& gt_file, const unsigned num_threads, const unsigned recall_at,
     const unsigned beamwidth, const unsigned num_nodes_to_cache,
     const _u32 search_io_limit, const std::vector<unsigned>& Lvec,
-    const bool use_reorder_data, const float fail_if_recall_below) {
+    const float fail_if_recall_below, const bool use_reorder_data = false,
+    const std::string& filter_label = "") {
   diskann::cout << "Search parameters: #threads: " << num_threads << ", ";
   if (beamwidth <= 0)
     diskann::cout << "beamwidth to be optimized for each L value" << std::flush;
@@ -347,6 +348,10 @@ int main(int argc, char** argv) {
                        "Include full precision data in the index. Use only in "
                        "conjuction with compressed data on SSD.");
     desc.add_options()(
+        "filter_label",
+        po::value<std::string>(&filter_label)->default_value(std::string("")),
+        "Filter Label for Filtered Search");
+    desc.add_options()(
         "fail_if_recall_below",
         po::value<float>(&fail_if_recall_below)->default_value(0.0f),
         "If set to a value >0 and <100%, program returns -1 if best recall "
@@ -399,17 +404,17 @@ int main(int argc, char** argv) {
       return search_disk_index<float>(
           metric, index_path_prefix, result_path_prefix, query_file, gt_file,
           num_threads, K, W, num_nodes_to_cache, search_io_limit, Lvec,
-          use_reorder_data, fail_if_recall_below);
+          fail_if_recall_below, use_reorder_data, filter_label);
     else if (data_type == std::string("int8"))
       return search_disk_index<int8_t>(
           metric, index_path_prefix, result_path_prefix, query_file, gt_file,
           num_threads, K, W, num_nodes_to_cache, search_io_limit, Lvec,
-          use_reorder_data, fail_if_recall_below);
+          fail_if_recall_below, use_reorder_data, filter_label);
     else if (data_type == std::string("uint8"))
       return search_disk_index<uint8_t>(
           metric, index_path_prefix, result_path_prefix, query_file, gt_file,
           num_threads, K, W, num_nodes_to_cache, search_io_limit, Lvec,
-          use_reorder_data, fail_if_recall_below);
+          fail_if_recall_below, use_reorder_data, filter_label);
     else {
       std::cerr << "Unsupported data type. Use float or int8 or uint8"
                 << std::endl;
