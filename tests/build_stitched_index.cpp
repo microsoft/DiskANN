@@ -2,18 +2,18 @@
 // email: t-gollapudis@microsoft.com
 
 #include <boost/program_options.hpp>
-#include <bits/types/struct_iovec.h>
-#include <fcntl.h>
-#include <omp.h>
-#include <sys/mman.h>
-#include <sys/uio.h>
-#include <unistd.h>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <random>
 #include <string>
 #include <tuple>
+
+#include <fcntl.h>
+#include <omp.h>
+#include <sys/mman.h>
+#include <sys/uio.h>
+#include <unistd.h>
 
 #include "index.h"
 #include "parameters.h"
@@ -125,11 +125,13 @@ size_t handle_args(int argc, char **argv, std::string &data_type,
 }
 
 /*
- * Parses the label datafile, which has the following line format:
- *            point_id -> \t -> comma-separated labels
+ * Parses the label datafile, which has comma-separated labels on
+ * each line. Line i corresponds to point id i.
  *
- * Returns three objects in via std::tuple:
- * 1. the label universe as a set
+ * Returns three objects via std::tuple:
+ * 1. map: key is point id, value is vector of labels said point has
+ * 2. map: key is label, value is number of points with the label
+ * 3. the label universe as a set
  */
 parse_label_file_return_values parse_label_file(path  label_data_path,
                                                 label universal_label) {
@@ -149,17 +151,15 @@ parse_label_file_return_values parse_label_file(path  label_data_path,
   label_set                   all_labels;
 
   std::vector<_u32> points_with_universal_label;
+	line_cnt = 0;
   while (std::getline(label_data_stream, line)) {
-    std::istringstream current_point_and_labels(line);
+    std::istringstream current_labels_comma_separated(line);
     label_set          current_labels;
 
     // get point id
-    getline(current_point_and_labels, token, '\t');
-    _u32 point_id = (_u32) std::stoul(token);
+    _u32 point_id = line_cnt;
 
     // parse comma separated labels
-    getline(current_point_and_labels, token, '\t');
-    std::istringstream current_labels_comma_separated(token);
     bool               current_universal_label_check = false;
     while (getline(current_labels_comma_separated, token, ',')) {
       token.erase(std::remove(token.begin(), token.end(), '\n'), token.end());
@@ -182,6 +182,7 @@ parse_label_file_return_values parse_label_file(path  label_data_path,
       exit(-1);
     }
     point_ids_to_labels[point_id] = current_labels;
+		line_cnt++;
   }
 
   // for every point with universal label, set its label set to all labels
@@ -257,6 +258,10 @@ tsl::robin_map<label, std::vector<_u32>> generate_label_specific_vector_files(
   for (const auto &label : all_labels) {
     iovec *label_iovecs =
         (iovec *) malloc(labels_to_number_of_points[label] * sizeof(iovec));
+		if (UNLIKELY(label_iovecs == nullptr)) {
+			close(input_data_fd);
+			throw;
+		}
     label_to_iovec_map[label] = label_iovecs;
     label_to_curr_iovec[label] = 0;
     label_id_to_orig_id[label].reserve(labels_to_number_of_points[label]);
