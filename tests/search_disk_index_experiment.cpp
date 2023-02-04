@@ -45,13 +45,14 @@ void print_stats(std::string category, std::vector<float> percentiles,
 }
 
 template<typename T>
-int search_disk_index(
-    diskann::Metric& metric, const std::string& index_path_prefix,
+int search_disk_index_sharded(
+    diskann::Metric& metric, const std::string& index_group_path_prefix,
+    const unsigned num_shards,
     const std::string& result_output_prefix, const std::string& query_file,
     std::string& gt_file, const unsigned num_threads, const unsigned recall_at,
     const unsigned beamwidth, const unsigned num_nodes_to_cache,
     const _u32 search_io_limit, const std::vector<unsigned>& Lvec,
-    const bool use_reorder_data, const float fail_if_recall_below) {
+    const bool use_reorder_data) {
   diskann::cout << "Search parameters: #threads: " << num_threads << ", ";
   if (beamwidth <= 0)
     diskann::cout << "beamwidth to be optimized for each L value" << std::flush;
@@ -61,8 +62,6 @@ int search_disk_index(
     diskann::cout << "." << std::endl;
   else
     diskann::cout << ", io_limit: " << search_io_limit << "." << std::endl;
-
-  std::string warmup_query_file = index_path_prefix + "_sample_data.bin";
 
   // load query bin
   T*        query = nullptr;
@@ -84,183 +83,294 @@ int search_disk_index(
     calc_recall_flag = true;
   }
 
-  std::shared_ptr<AlignedFileReader> reader = nullptr;
+  std::vector<std::vector<std::vector<std::pair<float, uint32_t>>>> global_query_result_topK(Lvec.size(),
+      std::vector<std::vector<std::pair<float, uint32_t>>>(query_num));
+  // global_query_result_topK[test_id][query_id] contains the current top
+  // (usually at most K = recall_at) results, as pairs <dist, global_id>,
+  // aggregated over (already processed) shards
+
+  for (unsigned shard_id = 1; shard_id <= num_shards; ++shard_id) {
+
+      std::shared_ptr<AlignedFileReader> reader = nullptr;
 #ifdef _WINDOWS
 #ifndef USE_BING_INFRA
-  reader.reset(new WindowsAlignedFileReader());
+      reader.reset(new WindowsAlignedFileReader());
 #else
-  reader.reset(new diskann::BingAlignedFileReader());
+      reader.reset(new diskann::BingAlignedFileReader());
 #endif
 #else
-  reader.reset(new LinuxAlignedFileReader());
+      reader.reset(new LinuxAlignedFileReader());
 #endif
 
-  std::unique_ptr<diskann::PQFlashIndex<T>> _pFlashIndex(
-      new diskann::PQFlashIndex<T>(reader, metric));
+      std::unique_ptr<diskann::PQFlashIndex<T>> _pFlashIndex(
+          new diskann::PQFlashIndex<T>(reader, metric));
 
-  int res = _pFlashIndex->load(num_threads, index_path_prefix.c_str());
+      const std::string index_path_prefix = index_group_path_prefix + "_subshard-" + std::to_string(shard_id);
+      int res = _pFlashIndex->load(num_threads, index_path_prefix.c_str());
 
-  if (res != 0) {
-    return res;
-  }
-  // cache bfs levels
-  std::vector<uint32_t> node_list;
-  diskann::cout << "Caching " << num_nodes_to_cache
-                << " BFS nodes around medoid(s)" << std::endl;
-  //_pFlashIndex->cache_bfs_levels(num_nodes_to_cache, node_list);
-  if (num_nodes_to_cache > 0)
-    _pFlashIndex->generate_cache_list_from_sample_queries(
-        warmup_query_file, 15, 6, num_nodes_to_cache, num_threads, node_list);
-  _pFlashIndex->load_cache_list(node_list);
-  node_list.clear();
-  node_list.shrink_to_fit();
-
-  omp_set_num_threads(num_threads);
-
-  uint64_t warmup_L = 20;
-  uint64_t warmup_num = 0, warmup_dim = 0, warmup_aligned_dim = 0;
-  T*       warmup = nullptr;
-
-  if (WARMUP) {
-    if (file_exists(warmup_query_file)) {
-      diskann::load_aligned_bin<T>(warmup_query_file, warmup, warmup_num,
-                                   warmup_dim, warmup_aligned_dim);
-    } else {
-      warmup_num = (std::min)((_u32) 150000, (_u32) 15000 * num_threads);
-      warmup_dim = query_dim;
-      warmup_aligned_dim = query_aligned_dim;
-      diskann::alloc_aligned(((void**) &warmup),
-                             warmup_num * warmup_aligned_dim * sizeof(T),
-                             8 * sizeof(T));
-      std::memset(warmup, 0, warmup_num * warmup_aligned_dim * sizeof(T));
-      std::random_device              rd;
-      std::mt19937                    gen(rd());
-      std::uniform_int_distribution<> dis(-128, 127);
-      for (uint32_t i = 0; i < warmup_num; i++) {
-        for (uint32_t d = 0; d < warmup_dim; d++) {
-          warmup[i * warmup_aligned_dim + d] = (T) dis(gen);
-        }
+      if (res != 0) {
+          return res;
       }
-    }
-    diskann::cout << "Warming up index... " << std::flush;
-    std::vector<uint64_t> warmup_result_ids_64(warmup_num, 0);
-    std::vector<float>    warmup_result_dists(warmup_num, 0);
+
+      // load ids_uint32.bin
+      const std::string local_id_to_global_id_file = index_path_prefix + "_ids_uint32.bin";
+      uint32_t* local_id_to_global_id;
+      size_t local_id_to_global_id_num, local_id_to_global_id_dim;
+      diskann::load_bin<uint32_t>(local_id_to_global_id_file, local_id_to_global_id,
+          local_id_to_global_id_num, local_id_to_global_id_dim);
+      assert(local_id_to_global_id_dim == 1);
+      // TODO check if local_id_to_global_id_num == number of points in index shard?
+
+      // cache bfs levels
+      std::vector<uint32_t> node_list;
+      diskann::cout << "Caching " << num_nodes_to_cache
+          << " BFS nodes around medoid(s)" << std::endl;
+      //_pFlashIndex->cache_bfs_levels(num_nodes_to_cache, node_list);
+      std::string warmup_query_file = index_path_prefix + "_sample_data.bin";
+      if (num_nodes_to_cache > 0)
+          _pFlashIndex->generate_cache_list_from_sample_queries(
+              warmup_query_file, 15, 6, num_nodes_to_cache, num_threads, node_list);
+      _pFlashIndex->load_cache_list(node_list);
+      node_list.clear();
+      node_list.shrink_to_fit();
+
+      omp_set_num_threads(num_threads);
+
+      uint64_t warmup_L = 20;
+      uint64_t warmup_num = 0, warmup_dim = 0, warmup_aligned_dim = 0;
+      T* warmup = nullptr;
+
+      if (WARMUP) {
+          if (file_exists(warmup_query_file)) {
+              diskann::load_aligned_bin<T>(warmup_query_file, warmup, warmup_num,
+                  warmup_dim, warmup_aligned_dim);
+          } else {
+              warmup_num = (std::min)((_u32)150000, (_u32)15000 * num_threads);
+              warmup_dim = query_dim;
+              warmup_aligned_dim = query_aligned_dim;
+              diskann::alloc_aligned(((void**)&warmup),
+                  warmup_num * warmup_aligned_dim * sizeof(T),
+                  8 * sizeof(T));
+              std::memset(warmup, 0, warmup_num * warmup_aligned_dim * sizeof(T));
+              std::random_device              rd;
+              std::mt19937                    gen(rd());
+              std::uniform_int_distribution<> dis(-128, 127);
+              for (uint32_t i = 0; i < warmup_num; i++) {
+                  for (uint32_t d = 0; d < warmup_dim; d++) {
+                      warmup[i * warmup_aligned_dim + d] = (T)dis(gen);
+                  }
+              }
+          }
+          diskann::cout << "Warming up index... " << std::flush;
+          std::vector<uint64_t> warmup_result_ids_64(warmup_num, 0);
+          std::vector<float>    warmup_result_dists(warmup_num, 0);
 
 #pragma omp parallel for schedule(dynamic, 1)
-    for (_s64 i = 0; i < (int64_t) warmup_num; i++) {
-      _pFlashIndex->cached_beam_search(warmup + (i * warmup_aligned_dim), 1,
-                                       warmup_L,
-                                       warmup_result_ids_64.data() + (i * 1),
-                                       warmup_result_dists.data() + (i * 1), 4);
-    }
-    diskann::cout << "..done" << std::endl;
-  }
+          for (_s64 i = 0; i < (int64_t)warmup_num; i++) {
+              _pFlashIndex->cached_beam_search(warmup + (i * warmup_aligned_dim), 1,
+                  warmup_L,
+                  warmup_result_ids_64.data() + (i * 1),
+                  warmup_result_dists.data() + (i * 1), 4);
+          }
+          diskann::cout << "..done" << std::endl;
+      }
 
-  diskann::cout.setf(std::ios_base::fixed, std::ios_base::floatfield);
-  diskann::cout.precision(2);
+      diskann::cout.setf(std::ios_base::fixed, std::ios_base::floatfield);
+      diskann::cout.precision(2);
 
-  std::string recall_string = "Recall@" + std::to_string(recall_at);
-  diskann::cout << std::setw(6) << "L" << std::setw(12) << "Beamwidth"
-                << std::setw(16) << "QPS" << std::setw(16) << "Mean Latency"
-                << std::setw(16) << "99.9 Latency" << std::setw(16)
-                << "Mean IOs" << std::setw(16) << "CPU (s)";
-  if (calc_recall_flag) {
-    diskann::cout << std::setw(16) << recall_string << std::endl;
-  } else
-    diskann::cout << std::endl;
-  diskann::cout
-      << "==============================================================="
-         "======================================================="
-      << std::endl;
+      std::string recall_string = "Recall@" + std::to_string(recall_at);
+      diskann::cout << std::setw(6) << "L" << std::setw(12) << "Beamwidth"
+          << std::setw(16) << "QPS" << std::setw(16) << "Mean Latency"
+          << std::setw(16) << "99.9 Latency" << std::setw(16)
+          << "Mean IOs" << std::setw(16) << "CPU (s)";
+      if (calc_recall_flag) {
+          diskann::cout << std::setw(16) << recall_string << std::endl;
+      } else
+          diskann::cout << std::endl;
+      diskann::cout
+          << "==============================================================="
+          "======================================================="
+          << std::endl;
 
-  std::vector<std::vector<uint32_t>> query_result_ids(Lvec.size());
-  std::vector<std::vector<float>>    query_result_dists(Lvec.size());
+      std::vector<std::vector<uint32_t>> shard_query_result_local_ids(Lvec.size());
+      std::vector<std::vector<uint32_t>> shard_query_result_global_ids(Lvec.size());
+      std::vector<std::vector<float>>    shard_query_result_dists(Lvec.size());
 
-  uint32_t optimized_beamwidth = 2;
+      uint32_t optimized_beamwidth = 2;
 
-  float best_recall = 0.0;
+      for (uint32_t test_id = 0; test_id < Lvec.size(); test_id++) {
+          _u64 L = Lvec[test_id];
 
+          /*
+          // we DO NOT ignore L < K in the sharded version
+          if (L < recall_at) {
+            diskann::cout << "Ignoring search with L:" << L
+                          << " since it's smaller than K:" << recall_at << std::endl;
+            continue;
+          }
+          */
+
+          const unsigned minKL = L < recall_at ? L : recall_at;
+
+          if (beamwidth <= 0) {
+              diskann::cout << "Tuning beamwidth.." << std::endl;
+              optimized_beamwidth =
+                  optimize_beamwidth(_pFlashIndex, warmup, warmup_num,
+                      warmup_aligned_dim, L, optimized_beamwidth);
+          } else
+              optimized_beamwidth = beamwidth;
+
+          shard_query_result_local_ids[test_id].resize(minKL * query_num);
+          shard_query_result_global_ids[test_id].resize(minKL * query_num);
+          shard_query_result_dists[test_id].resize(minKL * query_num);
+
+          auto stats = new diskann::QueryStats[query_num];
+
+          std::vector<uint64_t> shard_query_result_local_ids_64(minKL * query_num);
+          auto                  s = std::chrono::high_resolution_clock::now();
+
+#pragma omp parallel for schedule(dynamic, 1)
+          for (_s64 i = 0; i < (int64_t)query_num; i++) {
+              _pFlashIndex->cached_beam_search(
+                  query + (i * query_aligned_dim), minKL, L,
+                  shard_query_result_local_ids_64.data() + (i * minKL),
+                  shard_query_result_dists[test_id].data() + (i * minKL),
+                  optimized_beamwidth, search_io_limit, use_reorder_data, stats + i);
+          }
+          auto                          e = std::chrono::high_resolution_clock::now();
+          std::chrono::duration<double> diff = e - s;
+          float qps = (1.0 * query_num) / (1.0 * diff.count());
+
+          diskann::convert_types<uint64_t, uint32_t>(shard_query_result_local_ids_64.data(),
+              shard_query_result_local_ids[test_id].data(),
+              query_num, minKL);
+
+          // renumber shard_query_result_local_ids to shard_query_result_global_ids
+          for (_s64 j = 0; j < (int64_t)query_num * minKL; ++j) {
+              shard_query_result_global_ids[test_id][j] =
+                  local_id_to_global_id[shard_query_result_local_ids[test_id][j]];
+          }
+
+          // copy shard_query_result_ids[test_id] to global_query_result_topK[test_id]
+          for (_s64 i = 0; i < (int64_t)query_num; i++) {
+              for (int j = 0; j < minKL; ++j) {
+                  global_query_result_topK[test_id][i].emplace_back(
+                      shard_query_result_dists[test_id][j],
+                      shard_query_result_global_ids[test_id][j]
+                  );
+              }
+              // sort global_query_result_topK[test_id] and leave only best K points
+              std::sort(global_query_result_topK[test_id][i].begin(),
+                  global_query_result_topK[test_id][i].end());
+              if (global_query_result_topK[test_id][i].size() > recall_at) {
+                  global_query_result_topK[test_id][i].erase(
+                      global_query_result_topK[test_id][i].begin() + recall_at,
+                      global_query_result_topK[test_id][i].end()
+                  );
+              }
+          }
+
+          /*
+          auto mean_latency = diskann::get_mean_stats<float>(
+              stats, query_num,
+              [](const diskann::QueryStats& stats) { return stats.total_us; });
+
+          auto latency_999 = diskann::get_percentile_stats<float>(
+              stats, query_num, 0.999,
+              [](const diskann::QueryStats& stats) { return stats.total_us; });
+          */
+
+          auto mean_ios = diskann::get_mean_stats<unsigned>(
+              stats, query_num,
+              [](const diskann::QueryStats& stats) { return stats.n_ios; });
+
+          auto mean_cpuus = diskann::get_mean_stats<float>(
+              stats, query_num,
+              [](const diskann::QueryStats& stats) { return stats.cpu_us; });
+
+          /*
+          float shard_recall = 0;
+          if (calc_recall_flag) {
+              std::vector<uint32_t> resids; // = shard_query_result_global_ids[test_id];
+              // `resids` is shard_query_result_ids[test_id] but filled up with junk:
+              // if L < recall_at, then minKL = L < recall_at = K,
+              // which could be an issue for `calculate_recall`,
+              // so we fill up the vector with extra junk elements
+              if (L < recall_at) {
+                  // TODO if wanting to use this, fill up resids with some junk
+              }
+
+              shard_recall = diskann::calculate_recall(query_num, gt_ids, gt_dists, gt_dim,
+                  resids.data(),
+                  recall_at, recall_at);
+          }
+          */
+
+          diskann::cout << std::setw(6) << L << std::setw(12) << optimized_beamwidth
+              << std::setw(16) << qps
+              // << std::setw(16) << mean_latency
+              // << std::setw(16) << latency_999
+              << std::setw(16) << mean_ios
+              << std::setw(16) << mean_cpuus;
+          //if (calc_recall_flag) {
+          //    diskann::cout << std::setw(16) << shard_recall << std::endl;
+          //}
+          //else
+              diskann::cout << std::endl;
+          delete[] stats;
+      } // end loop over L-values
+
+      delete[] local_id_to_global_id;
+
+      if (warmup != nullptr)
+          diskann::aligned_free(warmup);
+
+  } // end loop over shards
+
+  // now compute aggregate statistics over all shards
   for (uint32_t test_id = 0; test_id < Lvec.size(); test_id++) {
-    _u64 L = Lvec[test_id];
+      _u64 L = Lvec[test_id];
+      const unsigned minKL = L < recall_at ? L : recall_at;
+      float global_recall = 0;
+      if (calc_recall_flag) {
+          if (num_shards * minKL < recall_at) {
+              assert(false);
+              // would need to handle this somehow;
+              // leaving as TODO as this should probably never happen
+          }
 
-    if (L < recall_at) {
-      diskann::cout << "Ignoring search with L:" << L
-                    << " since it's smaller than K:" << recall_at << std::endl;
-      continue;
-    }
+          std::vector<uint32_t> global_query_result_topK_ids;
+          for (_s64 i = 0; i < (int64_t)query_num; i++) {
+              assert(global_query_result_topK[test_id][i].size() == recall_at);
+              for (const std::pair<float, uint32_t>& p : global_query_result_topK[test_id][i]) {
+                  global_query_result_topK_ids.push_back(p.second);
+              }
+          }
 
-    if (beamwidth <= 0) {
-      diskann::cout << "Tuning beamwidth.." << std::endl;
-      optimized_beamwidth =
-          optimize_beamwidth(_pFlashIndex, warmup, warmup_num,
-                             warmup_aligned_dim, L, optimized_beamwidth);
-    } else
-      optimized_beamwidth = beamwidth;
+          global_recall = diskann::calculate_recall(query_num, gt_ids, gt_dists, gt_dim,
+              global_query_result_topK_ids.data(),
+              recall_at, recall_at);
+      }
 
-    query_result_ids[test_id].resize(recall_at * query_num);
-    query_result_dists[test_id].resize(recall_at * query_num);
-
-    auto stats = new diskann::QueryStats[query_num];
-
-    std::vector<uint64_t> query_result_ids_64(recall_at * query_num);
-    auto                  s = std::chrono::high_resolution_clock::now();
-
-#pragma omp parallel for schedule(dynamic, 1)
-    for (_s64 i = 0; i < (int64_t) query_num; i++) {
-      _pFlashIndex->cached_beam_search(
-          query + (i * query_aligned_dim), recall_at, L,
-          query_result_ids_64.data() + (i * recall_at),
-          query_result_dists[test_id].data() + (i * recall_at),
-          optimized_beamwidth, search_io_limit, use_reorder_data, stats + i);
-    }
-    auto                          e = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double> diff = e - s;
-    float qps = (1.0 * query_num) / (1.0 * diff.count());
-
-    diskann::convert_types<uint64_t, uint32_t>(query_result_ids_64.data(),
-                                               query_result_ids[test_id].data(),
-                                               query_num, recall_at);
-
-    auto mean_latency = diskann::get_mean_stats<float>(
-        stats, query_num,
-        [](const diskann::QueryStats& stats) { return stats.total_us; });
-
-    auto latency_999 = diskann::get_percentile_stats<float>(
-        stats, query_num, 0.999,
-        [](const diskann::QueryStats& stats) { return stats.total_us; });
-
-    auto mean_ios = diskann::get_mean_stats<unsigned>(
-        stats, query_num,
-        [](const diskann::QueryStats& stats) { return stats.n_ios; });
-
-    auto mean_cpuus = diskann::get_mean_stats<float>(
-        stats, query_num,
-        [](const diskann::QueryStats& stats) { return stats.cpu_us; });
-
-    float recall = 0;
-    if (calc_recall_flag) {
-      recall = diskann::calculate_recall(query_num, gt_ids, gt_dists, gt_dim,
-                                         query_result_ids[test_id].data(),
-                                         recall_at, recall_at);
-      best_recall = std::max(recall, best_recall);
-    }
-
-    diskann::cout << std::setw(6) << L << std::setw(12) << optimized_beamwidth
-                  << std::setw(16) << qps << std::setw(16) << mean_latency
-                  << std::setw(16) << latency_999 << std::setw(16) << mean_ios
-                  << std::setw(16) << mean_cpuus;
-    if (calc_recall_flag) {
-      diskann::cout << std::setw(16) << recall << std::endl;
-    } else
-      diskann::cout << std::endl;
-    delete[] stats;
+      diskann::cout << std::setw(6) << L
+          //<< std::setw(12) << optimized_beamwidth
+          //<< std::setw(16) << qps
+          // << std::setw(16) << mean_latency
+          // << std::setw(16) << latency_999
+          //<< std::setw(16) << mean_ios
+          //<< std::setw(16) << mean_cpuus
+          ;
+      if (calc_recall_flag) {
+          diskann::cout << std::setw(16) << global_recall << std::endl;
+      }
   }
 
+  /*
   diskann::cout << "Done searching. Now saving results " << std::endl;
   _u64 test_id = 0;
   for (auto L : Lvec) {
-    if (L < recall_at)
-      continue;
+    //if (L < recall_at)
+    //  continue;
 
     std::string cur_result_path =
         result_output_prefix + "_" + std::to_string(L) + "_idx_uint32.bin";
@@ -273,20 +383,23 @@ int search_disk_index(
                              query_result_dists[test_id++].data(), query_num,
                              recall_at);
   }
+  */
 
   diskann::aligned_free(query);
-  if (warmup != nullptr)
-    diskann::aligned_free(warmup);
-  return best_recall >= fail_if_recall_below ? 0 : -1;
+  return 0;
 }
 
+// differences between this and the base search_disk_index script:
+// * index_path_prefix -> index_group_path_prefix (will be appended with: _subshard-1.bin etc.)
+// * num_shards
+// no fail_if_recall_below
+
 int main(int argc, char** argv) {
-  std::string data_type, dist_fn, index_path_prefix, result_path_prefix,
+  std::string data_type, dist_fn, index_group_path_prefix, result_path_prefix,
       query_file, gt_file;
-  unsigned              num_threads, K, W, num_nodes_to_cache, search_io_limit;
+  unsigned              num_threads, K, W, num_nodes_to_cache, search_io_limit, num_shards;
   std::vector<unsigned> Lvec;
   bool                  use_reorder_data = false;
-  float                 fail_if_recall_below = 0.0f;
 
   po::options_description desc{"Arguments"};
   try {
@@ -296,9 +409,9 @@ int main(int argc, char** argv) {
                        "data type <int8/uint8/float>");
     desc.add_options()("dist_fn", po::value<std::string>(&dist_fn)->required(),
                        "distance function <l2/mips/fast_l2>");
-    desc.add_options()("index_path_prefix",
-                       po::value<std::string>(&index_path_prefix)->required(),
-                       "Path prefix to the index");
+    desc.add_options()("index_group_path_prefix",
+                       po::value<std::string>(&index_group_path_prefix)->required(),
+                       "Path prefix to the index shards");
     desc.add_options()("result_path",
                        po::value<std::string>(&result_path_prefix)->required(),
                        "Path prefix for saving results of the queries");
@@ -309,8 +422,10 @@ int main(int argc, char** argv) {
         "gt_file",
         po::value<std::string>(&gt_file)->default_value(std::string("null")),
         "ground truth file for the queryset");
+    desc.add_options()("num_shards", po::value<uint32_t>(&num_shards)->required(),
+        "Number of index shards");
     desc.add_options()("recall_at,K", po::value<uint32_t>(&K)->required(),
-                       "Number of neighbors to be returned");
+        "Number of neighbors to be returned");
     desc.add_options()("search_list,L",
                        po::value<std::vector<unsigned>>(&Lvec)->multitoken(),
                        "List of L values of search");
@@ -333,11 +448,6 @@ int main(int argc, char** argv) {
                        po::bool_switch()->default_value(false),
                        "Include full precision data in the index. Use only in "
                        "conjuction with compressed data on SSD.");
-    desc.add_options()(
-        "fail_if_recall_below",
-        po::value<float>(&fail_if_recall_below)->default_value(0.0f),
-        "If set to a value >0 and <100%, program returns -1 if best recall "
-        "found is below this threshold. ");
 
     po::variables_map vm;
     po::store(po::parse_command_line(argc, argv, desc), vm);
@@ -383,20 +493,20 @@ int main(int argc, char** argv) {
 
   try {
     if (data_type == std::string("float"))
-      return search_disk_index<float>(
-          metric, index_path_prefix, result_path_prefix, query_file, gt_file,
+      return search_disk_index_sharded<float>(
+          metric, index_group_path_prefix, num_shards, result_path_prefix, query_file, gt_file,
           num_threads, K, W, num_nodes_to_cache, search_io_limit, Lvec,
-          use_reorder_data, fail_if_recall_below);
+          use_reorder_data);
     else if (data_type == std::string("int8"))
-      return search_disk_index<int8_t>(
-          metric, index_path_prefix, result_path_prefix, query_file, gt_file,
+      return search_disk_index_sharded<int8_t>(
+          metric, index_group_path_prefix, num_shards, result_path_prefix, query_file, gt_file,
           num_threads, K, W, num_nodes_to_cache, search_io_limit, Lvec,
-          use_reorder_data, fail_if_recall_below);
+          use_reorder_data);
     else if (data_type == std::string("uint8"))
-      return search_disk_index<uint8_t>(
-          metric, index_path_prefix, result_path_prefix, query_file, gt_file,
+      return search_disk_index_sharded<uint8_t>(
+          metric, index_group_path_prefix, num_shards, result_path_prefix, query_file, gt_file,
           num_threads, K, W, num_nodes_to_cache, search_io_limit, Lvec,
-          use_reorder_data, fail_if_recall_below);
+          use_reorder_data);
     else {
       std::cerr << "Unsupported data type. Use float or int8 or uint8"
                 << std::endl;
