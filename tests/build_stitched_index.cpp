@@ -9,13 +9,13 @@
 #include <string>
 #include <tuple>
 
-#include <fcntl.h>
 #include <omp.h>
-#include <sys/mman.h>
+#ifndef _WINDOWS
 #include <sys/uio.h>
-#include <unistd.h>
+#endif
 
 #include "index.h"
+#include "memory_mapper.h"
 #include "parameters.h"
 #include "utils.h"
 
@@ -107,7 +107,7 @@ size_t handle_args(int argc, char **argv, std::string &data_type,
                        "Input label file in txt format if present");
     desc.add_options()(
         "universal_label",
-        po::value<label>(&universal_label)->default_value(65537),
+        po::value<label>(&universal_label)->default_value(UINT32_MAX),
         "Universal label, if using it, only in conjunction with labels_file");
 
     po::variables_map vm;
@@ -151,7 +151,7 @@ parse_label_file_return_values parse_label_file(path  label_data_path,
   label_set                   all_labels;
 
   std::vector<_u32> points_with_universal_label;
-	line_cnt = 0;
+  line_cnt = 0;
   while (std::getline(label_data_stream, line)) {
     std::istringstream current_labels_comma_separated(line);
     label_set          current_labels;
@@ -160,7 +160,7 @@ parse_label_file_return_values parse_label_file(path  label_data_path,
     _u32 point_id = line_cnt;
 
     // parse comma separated labels
-    bool               current_universal_label_check = false;
+    bool current_universal_label_check = false;
     while (getline(current_labels_comma_separated, token, ',')) {
       token.erase(std::remove(token.begin(), token.end(), '\n'), token.end());
       token.erase(std::remove(token.begin(), token.end(), '\r'), token.end());
@@ -182,7 +182,7 @@ parse_label_file_return_values parse_label_file(path  label_data_path,
       exit(-1);
     }
     point_ids_to_labels[point_id] = current_labels;
-		line_cnt++;
+    line_cnt++;
   }
 
   // for every point with universal label, set its label set to all labels
@@ -204,7 +204,9 @@ parse_label_file_return_values parse_label_file(path  label_data_path,
 /*
  * For each label, generates a file containing all vectors that have said label.
  * Also copies data from original bin file to new dimension-aligned file.
- * Utilizes platform-specific functions mmap and writev.
+ *
+ * Utilizes POSIX functions mmap and writev in order to minimize memory
+ * overhead, so we include an STL version as well.
  *
  * Each data file is saved under the following format:
  *    input_data_path + "_" + label
@@ -214,42 +216,21 @@ tsl::robin_map<label, std::vector<_u32>> generate_label_specific_vector_files(
     path                        input_data_path,
     tsl::robin_map<label, _u32> labels_to_number_of_points,
     std::vector<label_set> point_ids_to_labels, label_set all_labels) {
-  void *       input_memblock;
-  int          input_data_fd;
-  struct stat  input_data_st;
-  const size_t METADATA = 2 * sizeof(_u32);
-  auto         file_writing_timer = std::chrono::high_resolution_clock::now();
+  auto file_writing_timer = std::chrono::high_resolution_clock::now();
+  diskann::MemoryMapper input_data(input_data_path);
+  char *                input_start = input_data.getBuf();
 
-  // UNLIKELY moves the branch instr. body elsewhere, opening up icache space
-  // for code that actually executes (but this is probably irrelevant unless
-  // there is a massive number of labels)
-  input_data_fd = open(input_data_path.c_str(), O_RDONLY, (mode_t) 0444);
-  if (UNLIKELY(input_data_fd == -1))
-    throw;
-  if (UNLIKELY(fstat(input_data_fd, &input_data_st))) {
-    close(input_data_fd);
-    throw;
-  }
-
-  input_memblock = mmap(nullptr, input_data_st.st_size, PROT_READ, MAP_SHARED,
-                        input_data_fd, 0);
-  if (UNLIKELY(input_memblock == MAP_FAILED)) {
-    close(input_data_fd);
-    throw;
-  }
-
-  char *input_start = static_cast<char *>(input_memblock);
-  _u32  number_of_points, dimension;
+  _u32 number_of_points, dimension;
   std::memcpy(&number_of_points, input_start, sizeof(_u32));
   std::memcpy(&dimension, input_start + sizeof(_u32), sizeof(_u32));
-  const _u32 VECTOR_SIZE = dimension * sizeof(T);
+  const _u32   VECTOR_SIZE = dimension * sizeof(T);
+  const size_t METADATA = 2 * sizeof(_u32);
   if (number_of_points != point_ids_to_labels.size()) {
     std::cerr << "Error: number of points in labels file and data file differ."
               << std::endl;
     throw;
   }
 
-  // iovecs necessary for using writev
   tsl::robin_map<label, iovec *>           label_to_iovec_map;
   tsl::robin_map<label, _u32>              label_to_curr_iovec;
   tsl::robin_map<label, std::vector<_u32>> label_id_to_orig_id;
@@ -258,10 +239,9 @@ tsl::robin_map<label, std::vector<_u32>> generate_label_specific_vector_files(
   for (const auto &label : all_labels) {
     iovec *label_iovecs =
         (iovec *) malloc(labels_to_number_of_points[label] * sizeof(iovec));
-		if (UNLIKELY(label_iovecs == nullptr)) {
-			close(input_data_fd);
-			throw;
-		}
+    if (UNLIKELY(label_iovecs == nullptr)) {
+      throw;
+    }
     label_to_iovec_map[label] = label_iovecs;
     label_to_curr_iovec[label] = 0;
     label_id_to_orig_id[label].reserve(labels_to_number_of_points[label]);
@@ -328,12 +308,82 @@ tsl::robin_map<label, std::vector<_u32>> generate_label_specific_vector_files(
     close(label_input_data_fd);
   }
 
-  // un-mmap (or munmap)
-  if (UNLIKELY(munmap(input_memblock, input_data_st.st_size) == -1)) {
-    close(input_data_fd);
+  std::chrono::duration<double> file_writing_time =
+      std::chrono::high_resolution_clock::now() - file_writing_timer;
+  std::cout << "generated " << all_labels.size()
+            << " label-specific vector files for index building in time "
+            << file_writing_time.count() << "\n"
+            << std::endl;
+
+  return label_id_to_orig_id;
+}
+
+// for use on systems without writev (i.e. Windows)
+template<typename T>
+tsl::robin_map<label, std::vector<_u32>>
+generate_label_specific_vector_files_compat(
+    path                        input_data_path,
+    tsl::robin_map<label, _u32> labels_to_number_of_points,
+    std::vector<label_set> point_ids_to_labels, label_set all_labels) {
+  auto file_writing_timer = std::chrono::high_resolution_clock::now();
+  diskann::MemoryMapper input_data(input_data_path);
+  char *                input_start = input_data.getBuf();
+
+  _u32 number_of_points, dimension;
+  std::memcpy(&number_of_points, input_start, sizeof(_u32));
+  std::memcpy(&dimension, input_start + sizeof(_u32), sizeof(_u32));
+  const _u32   VECTOR_SIZE = dimension * sizeof(T);
+  const size_t METADATA = 2 * sizeof(_u32);
+  if (number_of_points != point_ids_to_labels.size()) {
+    std::cerr << "Error: number of points in labels file and data file differ."
+              << std::endl;
     throw;
   }
-  close(input_data_fd);
+
+  tsl::robin_map<label, char *>            labels_to_vectors;
+  tsl::robin_map<label, _u32>              labels_to_curr_vector;
+  tsl::robin_map<label, std::vector<_u32>> label_id_to_orig_id;
+
+  for (const auto &label : all_labels) {
+    _u32  number_of_label_pts = labels_to_number_of_points[label];
+    char *vectors = (char *) malloc(number_of_label_pts * VECTOR_SIZE);
+    if (UNLIKELY(vectors == nullptr)) {
+      throw;
+    }
+    labels_to_vectors[label] = vectors;
+    labels_to_curr_vector[label] = 0;
+    label_id_to_orig_id[label].reserve(number_of_label_pts);
+  }
+
+  for (_u32 point_id = 0; point_id < number_of_points; point_id++) {
+    const char *curr_point = input_start + METADATA + (VECTOR_SIZE * point_id);
+    for (const auto &label : point_ids_to_labels[point_id]) {
+      char *curr_label_vector_ptr =
+          labels_to_vectors[label] +
+          (labels_to_curr_vector[label] * VECTOR_SIZE);
+      memcpy(curr_label_vector_ptr, curr_point, VECTOR_SIZE);
+      labels_to_curr_vector[label]++;
+      label_id_to_orig_id[label].push_back(point_id);
+    }
+  }
+
+  for (const auto &label : all_labels) {
+    path curr_label_input_data_path(input_data_path + "_" +
+                                    std::to_string(label));
+    _u32 number_of_label_pts = labels_to_number_of_points[label];
+
+    std::ofstream label_file_stream;
+    label_file_stream.exceptions(std::ios::badbit | std::ios::failbit);
+    label_file_stream.open(curr_label_input_data_path);
+
+    label_file_stream.write((char *) &number_of_label_pts, sizeof(_u32));
+    label_file_stream.write((char *) &dimension, sizeof(_u32));
+    label_file_stream.write((char *) labels_to_vectors[label],
+                            number_of_label_pts * VECTOR_SIZE);
+
+    free(labels_to_vectors[label]);
+    label_file_stream.close();
+  }
 
   std::chrono::duration<double> file_writing_time =
       std::chrono::high_resolution_clock::now() - file_writing_timer;
@@ -486,8 +536,8 @@ void save_full_index(path final_index_path_prefix, path input_data_path,
     labels_to_medoids_writer << iter.first << ", " << iter.second << std::endl;
   labels_to_medoids_writer.close();
 
-  // aux. file 4
-  if (universal_label != 65537) {
+  // aux. file 4 (only if we're using a universal label)
+  if (universal_label != UINT32_MAX) {
     std::ofstream universal_label_writer;
     universal_label_writer.exceptions(std::ios::badbit | std::ios::failbit);
     universal_label_writer.open(final_index_path_prefix +
@@ -497,56 +547,34 @@ void save_full_index(path final_index_path_prefix, path input_data_path,
   }
 
   // main index
-  _u64 index_num_frozen_points = 0, index_num_edges = 0;
-  _u32 index_max_observed_degree = 0, index_entry_point = 0;
+  _u64         index_num_frozen_points = 0, index_num_edges = 0;
+  _u32         index_max_observed_degree = 0, index_entry_point = 0;
+  const size_t METADATA = 2 * sizeof(_u64) + 2 * sizeof(_u32);
   for (auto &point_neighbors : stitched_graph) {
     index_max_observed_degree =
         std::max(index_max_observed_degree, (_u32) point_neighbors.size());
   }
 
-  void *       memblock;
-  const size_t METADATA = 2 * sizeof(_u64) + 2 * sizeof(_u32);
-  struct stat  sb;
-  int          stitched_graph_fd;
+  std::ofstream stitched_graph_writer;
+  stitched_graph_writer.exceptions(std::ios::badbit | std::ios::failbit);
+  stitched_graph_writer.open(final_index_path_prefix);
 
-  stitched_graph_fd =
-      open(final_index_path_prefix.c_str(), O_RDWR | O_CREAT, (mode_t) 0644);
-  if (UNLIKELY(stitched_graph_fd == -1))
-    throw;
-  if (UNLIKELY(fstat(stitched_graph_fd, &sb))) {
-    close(stitched_graph_fd);
-    throw;
-  }
+  stitched_graph_writer.write((char *) &final_index_size, sizeof(_u64));
+  stitched_graph_writer.write((char *) &index_max_observed_degree,
+                              sizeof(_u32));
+  stitched_graph_writer.write((char *) &index_entry_point, sizeof(_u32));
+  stitched_graph_writer.write((char *) &index_num_frozen_points, sizeof(_u64));
 
-  if (UNLIKELY(ftruncate(stitched_graph_fd, final_index_size) == -1)) {
-    close(stitched_graph_fd);
-    throw;
-  }
-
-  // mmap could be faster than just doing a regular sequential write?
-  memblock = mmap(nullptr, final_index_size, PROT_READ | PROT_WRITE, MAP_SHARED,
-                  stitched_graph_fd, 0);
-  if (UNLIKELY(memblock == MAP_FAILED)) {
-    close(stitched_graph_fd);
-    throw;
-  }
-
-  char *begin = static_cast<char *>(memblock);
-  std::memcpy(begin, &final_index_size, sizeof(_u64));
-  std::memcpy(begin + sizeof(_u64), &index_max_observed_degree, sizeof(_u32));
-  std::memcpy(begin + sizeof(_u64) + sizeof(_u32), &index_entry_point,
-              sizeof(_u32));
-  std::memcpy(begin + sizeof(_u64) + 2 * sizeof(_u32), &index_num_frozen_points,
-              sizeof(_u64));
   size_t bytes_written = METADATA;
   for (_u32 node_point = 0; node_point < stitched_graph.size(); node_point++) {
     _u32 current_node_num_neighbors = stitched_graph[node_point].size();
     std::vector<_u32> current_node_neighbors = stitched_graph[node_point];
-    std::memcpy(begin + bytes_written, &current_node_num_neighbors,
-                sizeof(_u32));
+    stitched_graph_writer.write((char *) &current_node_num_neighbors,
+                                sizeof(_u32));
     bytes_written += sizeof(_u32);
     for (const auto &current_node_neighbor : current_node_neighbors) {
-      std::memcpy(begin + bytes_written, &current_node_neighbor, sizeof(_u32));
+      stitched_graph_writer.write((char *) &current_node_neighbor,
+                                  sizeof(_u32));
       bytes_written += sizeof(_u32);
     }
     index_num_edges += current_node_num_neighbors;
@@ -558,20 +586,7 @@ void save_full_index(path final_index_path_prefix, path input_data_path,
     throw;
   }
 
-  if (UNLIKELY(msync(memblock, final_index_size, MS_SYNC) == -1)) {
-    std::cerr << "Error: could not sync memory-mapped writes to disk"
-              << std::endl;
-    close(stitched_graph_fd);
-    throw;
-  }
-
-  if (UNLIKELY(munmap(memblock, final_index_size) == -1)) {
-    std::cerr << "Error: could not release the memory-mapped file" << std::endl;
-    close(stitched_graph_fd);
-    throw;
-  }
-
-  close(stitched_graph_fd);
+  stitched_graph_writer.close();
 
   std::chrono::duration<double> saving_index_time =
       std::chrono::high_resolution_clock::now() - saving_index_timer;
@@ -643,6 +658,13 @@ stitch_indices_return_values stitch_label_indices(
   return std::make_tuple(stitched_graph, final_index_size);
 }
 
+/*
+ * Applies the prune_neighbors function from src/index.cpp to
+ * every node in the stitched graph.
+ *
+ * This is an optional step, hence the saving of both the full
+ * and pruned graph.
+ */
 template<typename T>
 void prune_and_save(path final_index_path_prefix, path input_data_path,
                     std::vector<std::vector<_u32>> stitched_graph,
@@ -733,6 +755,7 @@ int main(int argc, char **argv) {
   tsl::robin_map<label, std::vector<_u32>> label_id_to_orig_id_map;
   _u32 total_number_of_points = point_ids_to_labels.size();
 
+#ifndef _WINDOWS
   if (data_type == "uint8")
     label_id_to_orig_id_map = generate_label_specific_vector_files<uint8_t>(
         input_data_path, labels_to_number_of_points, point_ids_to_labels,
@@ -747,6 +770,25 @@ int main(int argc, char **argv) {
         all_labels);
   else
     throw;
+#else
+  if (data_type == "uint8")
+    label_id_to_orig_id_map =
+        generate_label_specific_vector_files_compat<uint8_t>(
+            input_data_path, labels_to_number_of_points, point_ids_to_labels,
+            all_labels);
+  else if (data_type == "int8")
+    label_id_to_orig_id_map =
+        generate_label_specific_vector_files_compat<int8_t>(
+            input_data_path, labels_to_number_of_points, point_ids_to_labels,
+            all_labels);
+  else if (data_type == "float")
+    label_id_to_orig_id_map =
+        generate_label_specific_vector_files_compat<float>(
+            input_data_path, labels_to_number_of_points, point_ids_to_labels,
+            all_labels);
+  else
+    throw;
+#endif
 
   // 4. for each created data file, create a vanilla diskANN index
   if (data_type == "uint8")
