@@ -22,8 +22,6 @@
 namespace po = boost::program_options;
 
 // macros
-#define LIKELY(condition) __builtin_expect(static_cast<bool>(condition), 1)
-#define UNLIKELY(condition) __builtin_expect(static_cast<bool>(condition), 0)
 #define PBSTR "||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||"
 #define PBWIDTH 60
 
@@ -239,7 +237,7 @@ tsl::robin_map<label, std::vector<_u32>> generate_label_specific_vector_files(
   for (const auto &label : all_labels) {
     iovec *label_iovecs =
         (iovec *) malloc(labels_to_number_of_points[label] * sizeof(iovec));
-    if (UNLIKELY(label_iovecs == nullptr)) {
+    if (label_iovecs == nullptr) {
       throw;
     }
     label_to_iovec_map[label] = label_iovecs;
@@ -271,14 +269,13 @@ tsl::robin_map<label, std::vector<_u32>> generate_label_specific_vector_files(
     label_input_data_fd =
         open(curr_label_input_data_path.c_str(),
              O_CREAT | O_WRONLY | O_TRUNC | O_APPEND, (mode_t) 0644);
-    if (UNLIKELY(label_input_data_fd == -1))
+    if (label_input_data_fd == -1)
       throw;
 
     // write metadata
     _u32 metadata[2] = {curr_num_pts, dimension};
     int  return_value = write(label_input_data_fd, metadata, sizeof(_u32) * 2);
-    if (UNLIKELY(return_value == -1)) {
-      close(label_input_data_fd);
+    if (return_value == -1) {
       throw;
     }
 
@@ -289,7 +286,7 @@ tsl::robin_map<label, std::vector<_u32>> generate_label_specific_vector_files(
       return_value =
           writev(label_input_data_fd,
                  (label_to_iovec_map[label] + (IOV_MAX * i)), IOV_MAX);
-      if (UNLIKELY(return_value == -1)) {
+      if (return_value == -1) {
         close(label_input_data_fd);
         throw;
       }
@@ -299,7 +296,7 @@ tsl::robin_map<label, std::vector<_u32>> generate_label_specific_vector_files(
     return_value =
         writev(label_input_data_fd, (label_to_iovec_map[label] + (IOV_MAX * i)),
                curr_num_pts);
-    if (UNLIKELY(return_value == -1)) {
+    if (return_value == -1) {
       close(label_input_data_fd);
       throw;
     }
@@ -347,7 +344,7 @@ generate_label_specific_vector_files_compat(
   for (const auto &label : all_labels) {
     _u32  number_of_label_pts = labels_to_number_of_points[label];
     char *vectors = (char *) malloc(number_of_label_pts * VECTOR_SIZE);
-    if (UNLIKELY(vectors == nullptr)) {
+    if (vectors == nullptr) {
       throw;
     }
     labels_to_vectors[label] = vectors;
@@ -580,7 +577,7 @@ void save_full_index(path final_index_path_prefix, path input_data_path,
     index_num_edges += current_node_num_neighbors;
   }
 
-  if (UNLIKELY(bytes_written != final_index_size)) {
+  if (bytes_written != final_index_size) {
     std::cerr << "Error: written bytes does not match allocated space"
               << std::endl;
     throw;
