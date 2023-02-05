@@ -118,7 +118,10 @@ int search_disk_index_sharded(
       size_t local_id_to_global_id_num, local_id_to_global_id_dim;
       diskann::load_bin<uint32_t>(local_id_to_global_id_file, local_id_to_global_id,
           local_id_to_global_id_num, local_id_to_global_id_dim);
-      assert(local_id_to_global_id_dim == 1);
+      if (local_id_to_global_id_dim != 1) {
+          diskann::cout << "something wrong with the _ids_uint32 file" << std::endl;
+          return -1;
+      }
       // TODO check if local_id_to_global_id_num == number of points in index shard?
 
       // cache bfs levels
@@ -255,8 +258,8 @@ int search_disk_index_sharded(
           for (_s64 i = 0; i < (int64_t)query_num; i++) {
               for (int j = 0; j < minKL; ++j) {
                   global_query_result_topK[test_id][i].emplace_back(
-                      shard_query_result_dists[test_id][j],
-                      shard_query_result_global_ids[test_id][j]
+                      shard_query_result_dists[test_id][i * minKL + j],
+                      shard_query_result_global_ids[test_id][i * minKL + j]
                   );
               }
               // sort global_query_result_topK[test_id] and leave only best K points
@@ -330,18 +333,19 @@ int search_disk_index_sharded(
   // now compute aggregate statistics over all shards
   for (uint32_t test_id = 0; test_id < Lvec.size(); test_id++) {
       _u64 L = Lvec[test_id];
-      const unsigned minKL = L < recall_at ? L : recall_at;
       float global_recall = 0;
       if (calc_recall_flag) {
-          if (num_shards * minKL < recall_at) {
-              assert(false);
-              // would need to handle this somehow;
-              // leaving as TODO as this should probably never happen
+          if (num_shards * L < recall_at) {
+              continue; // ignore this L
+              // TODO: handle this better?
           }
 
           std::vector<uint32_t> global_query_result_topK_ids;
           for (_s64 i = 0; i < (int64_t)query_num; i++) {
-              assert(global_query_result_topK[test_id][i].size() == recall_at);
+              if (global_query_result_topK[test_id][i].size() != recall_at) {
+                  diskann::cout << "implementation error?" << std::endl;
+                  return -1;
+              }
               for (const std::pair<float, uint32_t>& p : global_query_result_topK[test_id][i]) {
                   global_query_result_topK_ids.push_back(p.second);
               }
