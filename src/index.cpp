@@ -1405,7 +1405,7 @@ namespace diskann {
                   _distance->compare(_data + _aligned_dim * (size_t) node,
                                      _data + _aligned_dim * (size_t) cur_nbr,
                                      (unsigned) _aligned_dim);
-              dummy_pool.emplace_back(Neighbor(cur_nbr, dist, true));
+              dummy_pool.emplace_back(Neighbor(cur_nbr, dist));
               dummy_visited.insert(cur_nbr);
             }
           }
