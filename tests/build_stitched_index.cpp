@@ -1,5 +1,5 @@
-// author: Siddharth Gollapudi
-// email: t-gollapudis@microsoft.com
+// Copyright (c) Microsoft Corporation. All rights reserved.
+// Licensed under the MIT license.
 
 #include <boost/program_options.hpp>
 #include <chrono>
@@ -106,7 +106,9 @@ size_t handle_args(int argc, char **argv, std::string &data_type,
     desc.add_options()(
         "universal_label",
         po::value<label>(&universal_label)->default_value(UINT32_MAX),
-        "Universal label, if using it, only in conjunction with labels_file");
+        "If a point comes with the specified universal label (and only the "
+        "univ. "
+        "label), then the point is considered to have every possible label");
 
     po::variables_map vm;
     po::store(po::parse_command_line(argc, argv, desc), vm);
