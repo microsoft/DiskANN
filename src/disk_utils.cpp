@@ -1125,7 +1125,6 @@ namespace diskann {
 
     std::string labels_to_medoids_path =
         disk_index_path + "_labels_to_medoids.txt";
-    std::string mem_labels_file = mem_index_path + "_labels.txt";
     std::string disk_labels_file = disk_index_path + "_labels.txt";
     std::string mem_univ_label_file = mem_index_path + "_universal_label.txt";
     std::string disk_univ_label_file = disk_index_path + "_universal_label.txt";
@@ -1283,7 +1282,7 @@ namespace diskann {
                         sample_sampling_rate);
     if (use_filters) {
       copy_file(labels_file_to_use, disk_labels_file);
-      std::remove(mem_labels_file.c_str());
+      std::remove(disk_labels_file.c_str());
       if (universal_label != "") {
         copy_file(mem_univ_label_file, disk_univ_label_file);
         std::remove(mem_univ_label_file.c_str());
