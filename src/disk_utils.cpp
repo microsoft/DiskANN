@@ -1282,7 +1282,7 @@ namespace diskann {
     gen_random_slice<T>(data_file_to_use.c_str(), sample_base_prefix,
                         sample_sampling_rate);
     if (use_filters) {
-      copy_file(mem_labels_file, disk_labels_file);
+      copy_file(labels_file_to_use, disk_labels_file);
       std::remove(mem_labels_file.c_str());
       if (universal_label != "") {
         copy_file(mem_univ_label_file, disk_univ_label_file);
