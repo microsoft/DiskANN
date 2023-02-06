@@ -483,14 +483,6 @@ namespace diskann {
     std::string labels_file = mem_index_file + "_labels.txt";
     std::string labels_to_medoids = mem_index_file + "_labels_to_medoids.txt";
     if (file_exists(labels_file)) {
-      std::string universal_label_file(filename);
-      universal_label_file += "_universal_label.txt";
-      if (file_exists(universal_label_file)) {
-        std::ifstream universal_label_reader(universal_label_file);
-        universal_label_reader >> _universal_label;
-        _use_universal_label = true;
-        universal_label_reader.close();
-      }
       parse_label_file(labels_file);
       if (file_exists(labels_to_medoids)) {
         std::ifstream medoid_stream(labels_to_medoids);
@@ -522,7 +514,14 @@ namespace diskann {
         }
       }
 
-      
+			std::string universal_label_file(filename);
+      universal_label_file += "_universal_label.txt";
+      if (file_exists(universal_label_file)) {
+        std::ifstream universal_label_reader(universal_label_file);
+        universal_label_reader >> _universal_label;
+        _use_universal_label = true;
+        universal_label_reader.close();
+      }
     }
 
     if (!_save_as_one_file) {
