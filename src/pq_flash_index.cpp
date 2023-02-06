@@ -507,7 +507,6 @@ namespace diskann {
       _u32 &num_lbls_in_cur_pt = _pts_to_labels[counter];
       num_lbls_in_cur_pt = 0;
       counter++;
-      //getline(iss, token, '\t');  // first token contains metadata, not used
       getline(iss, token, '\t');
       std::istringstream new_iss(token);
       while (getline(new_iss, token, ',')) {
