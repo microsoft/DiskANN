@@ -983,7 +983,7 @@ namespace diskann {
           }
         }
       }
-      cur_alpha *= 1.2;
+      cur_alpha *= 1.2f;
     }
   }
 
@@ -2422,7 +2422,7 @@ namespace diskann {
       auto nbr = retset.closest_unexpanded();
       auto n = nbr.id;
       _mm_prefetch(_opt_graph + _node_size * n + _data_len, _MM_HINT_T0);
-      unsigned *neighbors =
+      neighbors =
           (unsigned *) (_opt_graph + _node_size * n + _data_len);
       unsigned MaxM = *neighbors;
       neighbors++;

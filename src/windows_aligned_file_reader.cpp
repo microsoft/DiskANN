@@ -10,7 +10,7 @@
 #define SECTOR_LEN 4096
 
 void WindowsAlignedFileReader::open(const std::string& fname) {
-  m_filename = std::wstring(fname.begin(), fname.end());
+  m_filename = fname;
   this->register_thread();
 }
 
@@ -36,7 +36,7 @@ void WindowsAlignedFileReader::register_thread() {
                            NULL);
   if (ctx.fhandle == INVALID_HANDLE_VALUE) {
     diskann::cout << "Error opening "
-                  << std::string(m_filename.begin(), m_filename.end())
+                  << m_filename
                   << " -- error=" << GetLastError() << std::endl;
   }
 

@@ -855,7 +855,6 @@ namespace diskann {
     unsigned cmps = 0;
     unsigned hops = 0;
     unsigned num_ios = 0;
-    unsigned k = 0;
 
     // cleared every iteration
     std::vector<unsigned> frontier;

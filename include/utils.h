@@ -31,6 +31,8 @@ typedef int FileHandle;
 #include "memory_mapped_files.h"
 #endif
 
+#undef max
+#undef min
 // taken from
 // https://github.com/Microsoft/BLAS-on-flash/blob/master/include/utils.h
 // round up X to the nearest multiple of Y
