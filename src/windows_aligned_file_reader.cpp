@@ -11,6 +11,7 @@
 
 void WindowsAlignedFileReader::open(const std::string& fname) {
   m_filename = fname;
+  m_wfilename = std::wstring(fname.begin(), fname.end());
   this->register_thread();
 }
 
@@ -29,11 +30,19 @@ void WindowsAlignedFileReader::register_thread() {
   }
 
   IOContext ctx;
+#ifdef UNICODE
+  ctx.fhandle = CreateFile(m_wfilename.c_str(), GENERIC_READ, FILE_SHARE_READ,
+                           NULL, OPEN_EXISTING,
+                           FILE_ATTRIBUTE_READONLY | FILE_FLAG_NO_BUFFERING |
+                               FILE_FLAG_OVERLAPPED | FILE_FLAG_RANDOM_ACCESS,
+                           NULL);
+#else
   ctx.fhandle = CreateFile(m_filename.c_str(), GENERIC_READ, FILE_SHARE_READ,
                            NULL, OPEN_EXISTING,
                            FILE_ATTRIBUTE_READONLY | FILE_FLAG_NO_BUFFERING |
                                FILE_FLAG_OVERLAPPED | FILE_FLAG_RANDOM_ACCESS,
                            NULL);
+#endif
   if (ctx.fhandle == INVALID_HANDLE_VALUE) {
     diskann::cout << "Error opening "
                   << m_filename
