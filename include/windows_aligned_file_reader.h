@@ -20,7 +20,7 @@
 class WindowsAlignedFileReader : public AlignedFileReader {
  private:
   std::string m_filename;
-  std::string m_wfilename;
+  std::wstring m_wfilename;
 
  protected:
   // virtual IOContext createContext();
