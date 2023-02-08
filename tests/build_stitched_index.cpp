@@ -408,8 +408,8 @@ void generate_label_indices(path input_data_path, path final_index_path_prefix,
   diskann::Parameters label_index_build_parameters;
   label_index_build_parameters.Set<unsigned>("R", R);
   label_index_build_parameters.Set<unsigned>("L", L);
-  label_index_build_parameters.Set<unsigned>(
-      "C", 750);  // maximum candidate set size during prune
+  label_index_build_parameters.Set<unsigned>("C", 750);
+	label_index_build_parameters.Set<unsigned>("Lf", 0);
   label_index_build_parameters.Set<bool>("saturate_graph", 0);
   label_index_build_parameters.Set<float>("alpha", alpha);
   label_index_build_parameters.Set<unsigned>("num_threads", num_threads);
