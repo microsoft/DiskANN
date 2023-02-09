@@ -240,7 +240,7 @@ namespace diskann {
     // determines navigating node of the graph by calculating medoid of datafopt
     unsigned calculate_entry_point();
 
-    void parse_label_file(const std::string &map_file);
+    size_t parse_label_file(const std::string &map_file);
 
     std::pair<uint32_t, uint32_t> iterate_to_fixed_point(
         const T *node_coords, const unsigned Lindex,
