@@ -323,6 +323,7 @@ namespace diskann {
       }
 
       std::ofstream mapping_writer(labels_to_medoids_file);
+      assert(mapping_writer.is_open());
       for (auto iter : global_label_to_medoids) {
         mapping_writer << iter.first << ", ";
         auto &vec = iter.second;
@@ -534,6 +535,7 @@ namespace diskann {
       diskann::cout << labels_per_point.size() << " is the new number of points"
                     << std::endl;
       std::ofstream label_writer(out_labels_file);
+      assert(label_writer.is_open());
       for (_u32 i = 0; i < labels_per_point.size(); i++) {
         for (_u32 j = 0; j < (labels_per_point[i].size() - 1); j++) {
           label_writer << labels_per_point[i][j] << ",";
@@ -551,6 +553,7 @@ namespace diskann {
       data = (T *) std::realloc((void *) data,
                                 labels_per_point.size() * ndims * sizeof(T));
       std::ofstream dummy_writer(out_metadata_file);
+      assert(dummy_writer.is_open());
       for (auto i = dummy_pt_ids.begin(); i != dummy_pt_ids.end(); i++) {
         dummy_writer << i->first << "," << i->second << std::endl;
         std::memcpy(data + i->first * ndims, data + i->second * ndims,
@@ -566,7 +569,7 @@ namespace diskann {
       const std::string &in_label_file, const std::string &shard_ids_bin,
       const std::string &shard_label_file) {  // assumes ith row is for ith
                                               // point in labels file
-    std::cout << "Extracting labels for shard" << std::endl;
+    diskann::cout << "Extracting labels for shard" << std::endl;
 
     _u32 *ids = nullptr;
     _u64  num_ids, tmp_dim;
@@ -578,6 +581,8 @@ namespace diskann {
     std::ifstream label_reader(in_label_file);
     std::ofstream label_writer(shard_label_file);
 
+    assert(label_reader.is_open());
+    assert(label_writer.is_open());
     if (label_reader && label_writer) {
       while (std::getline(label_reader, cur_line)) {
         if (shard_counter >= num_ids) {

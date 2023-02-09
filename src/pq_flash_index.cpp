@@ -464,7 +464,7 @@ namespace diskann {
       num_pts++;
     }
 
-    std::cout << "Labels file metadata: num_points: " << num_pts
+    diskann::cout << "Labels file metadata: num_points: " << num_pts
               << ", #total_labels: " << num_total_labels << std::endl;
     infile.close();
   }
@@ -484,55 +484,64 @@ namespace diskann {
     return ret_val;
   }
   template<typename T>
-  void PQFlashIndex<T>::parse_label_file(const std::string &map_file) {
+  void PQFlashIndex<T>::parse_label_file(const std::string &label_file) {
     //_filtered_ann = 1;
 
-    std::ifstream infile(map_file);
+    std::ifstream infile(label_file);
+    
     std::string   line, token;
     _u32          line_cnt = 0;
 
     _u32 num_pts_in_label_file;
     _u32 num_total_labels;
-    get_label_file_metadata(map_file, num_pts_in_label_file, num_total_labels);
-
+    get_label_file_metadata(label_file, num_pts_in_label_file, num_total_labels);
+    assert(num_pts_in_label_file == this->num_points);
+    
     _pts_to_label_offsets = new _u32[num_pts_in_label_file];
     _pts_to_labels = new _u32[num_pts_in_label_file + num_total_labels];
     _u32 counter = 0;
+    infile.clear();
+    infile.seekg(0, std::ios::beg);
+    assert(infile.is_open());
+    try {
+      while (std::getline(infile, line)) {
+        std::istringstream iss(line);
+        std::vector<_u32>  lbls(0);
 
-    while (std::getline(infile, line)) {
-      std::istringstream iss(line);
-      std::vector<_u32>  lbls(0);
-
-      _pts_to_label_offsets[line_cnt] = counter;
-      _u32 &num_lbls_in_cur_pt = _pts_to_labels[counter];
-      num_lbls_in_cur_pt = 0;
-      counter++;
-      //getline(iss, token, '\t');  // first token contains metadata, not used
-      getline(iss, token, '\t');
-      std::istringstream new_iss(token);
-      while (getline(new_iss, token, ',')) {
-        token.erase(std::remove(token.begin(), token.end(), '\n'), token.end());
-        token.erase(std::remove(token.begin(), token.end(), '\r'), token.end());
-        if (_labels.find(token) == _labels.end()) {
-          _filter_list.emplace_back(token);
+        _pts_to_label_offsets[line_cnt] = counter;
+        _u32 &num_lbls_in_cur_pt = _pts_to_labels[counter];
+        num_lbls_in_cur_pt = 0;
+        counter++;
+        getline(iss, token, '\t');
+        std::istringstream new_iss(token);
+        while (getline(new_iss, token, ',')) {
+          token.erase(std::remove(token.begin(), token.end(), '\n'),
+                      token.end());
+          token.erase(std::remove(token.begin(), token.end(), '\r'),
+                      token.end());
+          if (_labels.find(token) == _labels.end()) {
+            _filter_list.emplace_back(token);
+          }
+          int32_t filter_num = get_filter_number(token);
+          if (filter_num == -1) {
+            diskann::cout << "Error!! " << std::endl;
+            exit(-1);
+          }
+          _pts_to_labels[counter++] = filter_num;
+          num_lbls_in_cur_pt++;
+          _labels.insert(token);
         }
-        int32_t filter_num = get_filter_number(token);
-        if (filter_num == -1) {
-          std::cout << "Error!! " << std::endl;
+
+        if (num_lbls_in_cur_pt == 0) {
+          diskann::cout << "No label found for point " << line_cnt << std::endl;
           exit(-1);
         }
-        _pts_to_labels[counter++] = filter_num;
-        num_lbls_in_cur_pt++;
-        _labels.insert(token);
+        line_cnt++;
       }
-
-      if (num_lbls_in_cur_pt == 0) {
-        std::cout << "No label found for point " << line_cnt << std::endl;
-        exit(-1);
-      }
-      line_cnt++;
+    }catch (std::system_error &e) {
+      throw FileException(label_file, e, __FUNCSIG__, __FILE__,
+                          __LINE__);
     }
-    // MallocExtension::instance()->ReleaseFreeMemory();
     infile.close();
   }
 
@@ -540,7 +549,7 @@ namespace diskann {
   void PQFlashIndex<T>::set_universal_label(const std::string &label) {
     int32_t temp_filter_num = get_filter_number(label);
     if (temp_filter_num == -1) {
-      std::cout << "Error, could not find universal label. Exitting."
+      diskann::cout << "Error, could not find universal label. Exitting."
                 << std::endl;
       exit(-1);
     } else {
@@ -596,71 +605,6 @@ namespace diskann {
         std ::string(disk_index_file) + "_labels_to_medoids.txt";
     std::string dummy_map_file =
         std ::string(disk_index_file) + "_dummy_map.txt";
-    if (file_exists(labels_file)) {
-      parse_label_file(labels_file);
-      if (file_exists(labels_to_medoids)) {
-        std::ifstream medoid_stream(labels_to_medoids);
-
-        std::string line, token;
-        //        unsigned    line_cnt = 0;
-
-        _filter_to_medoid_id.clear();
-
-        while (std::getline(medoid_stream, line)) {
-          std::istringstream iss(line);
-          _u32               cnt = 0;
-          _u32               medoid;
-          std::string        label;
-          while (std::getline(iss, token, ',')) {
-            if (cnt == 0)
-              label = token;
-            else
-              medoid = (_u32) stoul(token);
-            cnt++;
-          }
-          _filter_to_medoid_id[label] = medoid;
-        }
-      }
-      std::string univ_label_file =
-          std ::string(disk_index_file) + "_universal_label.txt";
-      if (file_exists(univ_label_file)) {
-        std::ifstream universal_label_reader(univ_label_file);
-        std::string   univ_label;
-        universal_label_reader >> univ_label;
-        universal_label_reader.close();
-        set_universal_label(univ_label);
-      }
-      if (file_exists(dummy_map_file)) {
-        std::ifstream dummy_map_stream(dummy_map_file);
-
-        std::string line, token;
-        //        unsigned    line_cnt = 0;
-
-        while (std::getline(dummy_map_stream, line)) {
-          std::istringstream iss(line);
-          _u32               cnt = 0;
-          _u32               dummy_id;
-          _u32               real_id;
-          while (std::getline(iss, token, ',')) {
-            if (cnt == 0)
-              dummy_id = (_u32) stoul(token);
-            else
-              real_id = (_u32) stoul(token);
-            cnt++;
-          }
-          _dummy_pts.insert(dummy_id);
-          _has_dummy_pts.insert(real_id);
-          _dummy_to_real_map[dummy_id] = real_id;
-
-          if (_real_to_dummy_map.find(real_id) == _real_to_dummy_map.end())
-            _real_to_dummy_map[real_id] = std::vector<_u32>();
-
-          _real_to_dummy_map[real_id].emplace_back(dummy_id);
-        }
-        dummy_map_stream.close();
-        std::cout << "Loaded dummy map" << std::endl;
-      }
-    }
 
     size_t pq_file_dim, pq_file_num_centroids;
 #ifdef EXEC_ENV_OLS
@@ -699,6 +643,73 @@ namespace diskann {
     this->num_points = npts_u64;
     this->n_chunks = nchunks_u64;
 
+    if (file_exists(labels_file)) {
+      parse_label_file(labels_file);
+      if (file_exists(labels_to_medoids)) {
+        std::ifstream medoid_stream(labels_to_medoids);
+        assert(medoid_stream.is_open());
+        std::string line, token;
+        _filter_to_medoid_id.clear();
+
+        try {
+          while (std::getline(medoid_stream, line)) {
+            std::istringstream iss(line);
+            _u32               cnt = 0;
+            _u32               medoid;
+            std::string        label;
+            while (std::getline(iss, token, ',')) {
+              if (cnt == 0)
+                label = token;
+              else
+                medoid = (_u32) stoul(token);
+              cnt++;
+            }
+            _filter_to_medoid_id[label] = medoid;
+          }
+        } catch (std::system_error &e) {
+          throw FileException(labels_to_medoids, e, __FUNCSIG__, __FILE__,
+                              __LINE__);
+        }
+      }
+      std::string univ_label_file =
+          std ::string(disk_index_file) + "_universal_label.txt";
+      if (file_exists(univ_label_file)) {
+        std::ifstream universal_label_reader(univ_label_file);
+        std::string   univ_label;
+        universal_label_reader >> univ_label;
+        universal_label_reader.close();
+        set_universal_label(univ_label);
+      }
+      if (file_exists(dummy_map_file)) {
+        std::ifstream dummy_map_stream(dummy_map_file);
+
+        std::string line, token;
+        while (std::getline(dummy_map_stream, line)) {
+          std::istringstream iss(line);
+          _u32               cnt = 0;
+          _u32               dummy_id;
+          _u32               real_id;
+          while (std::getline(iss, token, ',')) {
+            if (cnt == 0)
+              dummy_id = (_u32) stoul(token);
+            else
+              real_id = (_u32) stoul(token);
+            cnt++;
+          }
+          _dummy_pts.insert(dummy_id);
+          _has_dummy_pts.insert(real_id);
+          _dummy_to_real_map[dummy_id] = real_id;
+
+          if (_real_to_dummy_map.find(real_id) == _real_to_dummy_map.end())
+            _real_to_dummy_map[real_id] = std::vector<_u32>();
+
+          _real_to_dummy_map[real_id].emplace_back(dummy_id);
+        }
+        dummy_map_stream.close();
+        diskann::cout << "Loaded dummy map" << std::endl;
+      }
+    }
+
 #ifdef EXEC_ENV_OLS
     pq_table.load_pq_centroid_bin(files, pq_table_bin.c_str(), nchunks_u64);
 #else
@@ -736,7 +747,7 @@ namespace diskann {
       disk_bytes_per_point =
           disk_pq_n_chunks *
           sizeof(_u8);  // revising disk_bytes_per_point since DISK PQ is used.
-      std::cout << "Disk index uses PQ data compressed down to "
+      diskann::cout << "Disk index uses PQ data compressed down to "
                 << disk_pq_n_chunks << " bytes per point." << std::endl;
     }
 

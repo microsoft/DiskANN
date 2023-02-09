@@ -327,14 +327,11 @@ inline std::vector<size_t> load_filtered_bin_as_float(
   std::cout << "start and end ids: " << start_id << ", " << end_id << std::endl;
   reader.seekg(start_id * ndims * sizeof(T) + 2 * sizeof(uint32_t),
                std::ios::beg);
-  //    data = new T[nptsuint64_t * ndimsuint64_t];
   T *data_T = new T[nptsuint64_t * ndimsuint64_t];
   reader.read((char *) data_T, sizeof(T) * nptsuint64_t * ndimsuint64_t);
   std::cout << "Finished reading part of the bin file." << std::endl;
   reader.close();
-  //  data =  (nptsuint64_t*ndimsuint64_t, ALIGNMENT);
   data = aligned_malloc<float>(nptsuint64_t * ndimsuint64_t, ALIGNMENT);
-  //#pragma omp parallel for schedule(dynamic, 32768)
   for (int64_t i = 0; i < (int64_t) nptsuint64_t; i++) {
     if (std::find(pts_to_labels[start_id + i].begin(),
                   pts_to_labels[start_id + i].end(),
