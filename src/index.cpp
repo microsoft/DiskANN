@@ -1157,8 +1157,9 @@ namespace diskann {
       const _u32 max_candidate_size, const float alpha,
       std::vector<unsigned> &pruned_list, InMemQueryScratch<T> *scratch) {
     if (pool.size() == 0) {
-      throw diskann::ANNException("Pool passed to prune_neighbors is empty", -1,
-                                  __FUNCSIG__, __FILE__, __LINE__);
+			// if the pool is empty, behave like a noop
+			pruned_list.clear();
+			return;
     }
 
     _max_observed_degree = (std::max)(_max_observed_degree, range);
