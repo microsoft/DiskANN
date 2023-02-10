@@ -89,7 +89,7 @@ Please see the following pages on using the compiled code:
 - [Commandline examples for using in-memory streaming indices](workflows/dynamic_index.md)
 - To be added: Python interfaces and docker files
 
-Please cite this package in your work as:
+Please cite this software in your work as:
 
 ```
 @misc{diskann-github,
