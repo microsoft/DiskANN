@@ -146,13 +146,15 @@ namespace diskann {
     // can customize L on a per-query basis without tampering with "Parameters"
     template<typename IDType>
     DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> search(
-        const T *query, const size_t K, const unsigned L, IDType *indices,
+        const T *query, const size_t K, const unsigned L,
+        const unsigned max_dist_cmp, IDType *indices,
         float *distances = nullptr);
 
     // Initialize space for res_vectors before calling.
     DISKANN_DLLEXPORT size_t search_with_tags(const T *query, const uint64_t K,
-                                              const unsigned L, TagT *tags,
-                                              float            *distances,
+                                              const unsigned L,
+                                              const unsigned max_dst_cmp,
+                                              TagT *tags, float *distances,
                                               std::vector<T *> &res_vectors);
 
     // Will fail if tag already in the index or if tag=0.
@@ -225,6 +227,7 @@ namespace diskann {
 
     std::pair<uint32_t, uint32_t> iterate_to_fixed_point(
         const T *node_coords, const unsigned Lindex,
+        const unsigned max_dist_cmp, 
         const std::vector<unsigned> &init_ids, InMemQueryScratch<T> *scratch,
         bool ret_frozen = true, bool search_invocation = false);
 
