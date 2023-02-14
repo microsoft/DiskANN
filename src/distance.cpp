@@ -204,13 +204,13 @@ namespace diskann {
   // https://github.com/microsoft/SPTAG/blob/main/AnnService/src/Core/Common/DistanceUtils.cpp
 
   float DistanceL2UInt8::compare(const uint8_t *a, const uint8_t *b,
-                                 uint32_t length, float break_distance) const {
+                                 uint32_t size, float break_distance) const {
 #ifdef _WINDOWS
-    const uint8_t *end16 = a + ((length >> 4) << 4);
-    const uint8_t *end1 = a + length;
+    const uint8_t *end16 = a + ((size >> 4) << 4);
+    const uint8_t *end1 = a + size;
  
      __m128 diff128 = _mm_setzero_ps();
-    const uint8_t *testdist = length / 2 + a;
+    const uint8_t *testdist = size / 2 + a;
      float diff = 0;
  
      while (a < end16) {
