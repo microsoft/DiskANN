@@ -18,6 +18,11 @@ The arguments are as follows:
 10. **--PQ_disk_bytes**  (default is 0): Use 0 to store uncompressed data on SSD. This allows the index to asymptote to 100% recall. If your vectors are too large to store in SSD, this parameter provides the option to compress the vectors using PQ for storing on SSD. This will trade off recall. You would also want this to be greater than the number of bytes used for the PQ compressed data stored in-memory
 11. **--build_PQ_bytes** (default is 0): Set to a positive value less than the dimensionality of the data to enable faster index build with PQ based distance comparisons. 
 12. **--use_opq**: use the flag to use OPQ rather than PQ compression. OPQ is more space efficient for some high dimensional datasets, but also needs a bit more build time.
+13. **--label_file**: Required for filter diskann. The input label file in txt format where each line corresponds to the label associated with graph node(=line number). Each line contains comma separated labels in integer format.
+14. **--universal_label: Required for filter diskann. if universal label is used, provide the label in conjunction with labels_file.
+15. **--FilteredLbuild (default is 0): Required for filter diskann. Build complexity for filtered points. higher the FilteredLbuild value results in better graphs.
+16. **-F (--filter_threshold) ( default is 0): Required for filter diskann. Threshold for breaking-up points with many labels. No break-up happens for value 0. Graph nodes with number of labels > F will be splitted such that number of labels associated with the node will always be <= F.
+
 
 To search the SSD-index, use the `tests/search_disk_index` program. 
 -------------------------------------------------------------------
@@ -35,7 +40,7 @@ The arguments are as follows:
 9. **K**: search for *K* neighbors and measure *K*-recall@*K*, meaning the intersection between the retrieved top-*K* nearest neighbors and ground truth *K* nearest neighbors.
 10. **result_output_prefix**: Search results will be stored in files with specified prefix, in bin format.
 11. **-L (--search_list)**: A list of search_list sizes to perform search with. Larger parameters will result in slower latencies, but higher accuracies. Must be atleast the value of *K* in arg (9).
-
+12. **--filter_label**: Required for Filtered Index search. The filter label of the query.
 
 Example with BIGANN:
 --------------------
