@@ -50,8 +50,9 @@ namespace diskann {
                                             uint32_t size,
         float break_distance = std::numeric_limits<float>::max()) const;
 #else
-    DISKANN_DLLEXPORT virtual float compare(const float *a, const float *b,
-                                            uint32_t size) const
+    DISKANN_DLLEXPORT virtual float compare(const float *a, const float *b, 
+        uint32_t size,
+        float break_distance = std::numeric_limits<float>::max()) const
         __attribute__((hot));
 #endif
   };
