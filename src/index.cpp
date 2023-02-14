@@ -782,11 +782,13 @@ namespace diskann {
     // Lambda to batch compute query<-> node distances in PQ space
     auto compute_dists = [this, pq_coord_scratch, pq_dists](
                              const std::vector<unsigned> &ids,
-                             std::vector<float>          &dists_out) {
+                             std::vector<float>          &dists_out,
+                             float                        break_distance) {
       diskann::aggregate_coords(ids, this->_pq_data, this->_num_pq_chunks,
                                 pq_coord_scratch);
       diskann::pq_dist_lookup(pq_coord_scratch, ids.size(),
-                              this->_num_pq_chunks, pq_dists, dists_out);
+                              this->_num_pq_chunks, pq_dists, dists_out,
+                              break_distance);
     };
 
     // Initialize the candidate pool with starting points
@@ -809,10 +811,11 @@ namespace diskann {
         float distance;
         if (_pq_dist)
           pq_dist_lookup(pq_coord_scratch, 1, this->_num_pq_chunks, pq_dists,
-                         &distance);
+                         &distance, std::numeric_limits<float>::max());
         else
           distance = _distance->compare(_data + _aligned_dim * (size_t) id,
-                                        aligned_query, (unsigned) _aligned_dim);
+                                        aligned_query, (unsigned) _aligned_dim,
+                                        best_L_nodes.max_distance());
         Neighbor nn = Neighbor(id, distance);
         best_L_nodes.insert(nn);
       }
@@ -858,7 +861,7 @@ namespace diskann {
       // Compute distances to unvisited nodes in the expansion
       if (_pq_dist) {
         assert(dist_scratch.capacity() >= id_scratch.size());
-        compute_dists(id_scratch, dist_scratch);
+        compute_dists(id_scratch, dist_scratch, best_L_nodes.max_distance());
       } else {
         assert(dist_scratch.size() == 0);
         for (size_t m = 0; m < id_scratch.size(); ++m) {
@@ -873,7 +876,7 @@ namespace diskann {
 
           dist_scratch.push_back( _distance->compare(
               aligned_query, _data + _aligned_dim * (size_t) id,
-              (unsigned) _aligned_dim));
+              (unsigned) _aligned_dim, best_L_nodes.max_distance()));
         }
       }
       cmps += id_scratch.size();
@@ -2411,8 +2414,8 @@ namespace diskann {
       T    *x = (T *) (_opt_graph + _node_size * id);
       float norm_x = *x;
       x++;
-      float dist =
-          dist_fast->compare(x, query, norm_x, (unsigned) _aligned_dim);
+      float dist = dist_fast->compare(x, query, norm_x, (unsigned) _aligned_dim,
+                                      retset.max_distance());
       retset.insert(Neighbor(id, dist));
       flags[id] = true;
       L++;
@@ -2436,8 +2439,8 @@ namespace diskann {
         T    *data = (T *) (_opt_graph + _node_size * id);
         float norm = *data;
         data++;
-        float dist =
-            dist_fast->compare(query, data, norm, (unsigned) _aligned_dim);
+        float dist = dist_fast->compare(
+            query, data, norm, (unsigned) _aligned_dim, retset.max_distance());
         Neighbor nn(id, dist);
         retset.insert(nn);
       }

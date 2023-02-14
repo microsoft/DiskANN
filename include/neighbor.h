@@ -100,6 +100,11 @@ namespace diskann {
       return _capacity;
     }
 
+    float max_distance() {
+      return _size < _capacity ? (std::numeric_limits<float>::max)()
+                               : _data[_size - 1].distance;
+    }
+
     void reserve(size_t capacity) {
       if (capacity + 1 > _data.size()) {
         _data.resize(capacity + 1);

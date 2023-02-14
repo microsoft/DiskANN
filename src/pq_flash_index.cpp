@@ -823,11 +823,12 @@ namespace diskann {
     // lambda to batch compute query<-> node distances in PQ space
     auto compute_dists = [this, pq_coord_scratch, pq_dists](const unsigned *ids,
                                                             const _u64 n_ids,
-                                                            float *dists_out) {
+                                                            float *dists_out, 
+                                                            float break_distance) {
       diskann::aggregate_coords(ids, n_ids, this->data, this->n_chunks,
                                 pq_coord_scratch);
       diskann::pq_dist_lookup(pq_coord_scratch, n_ids, this->n_chunks, pq_dists,
-                              dists_out);
+                              dists_out, break_distance);
     };
     Timer query_timer, io_timer, cpu_timer;
 
@@ -848,7 +849,8 @@ namespace diskann {
       }
     }
 
-    compute_dists(&best_medoid, 1, dist_scratch);
+    compute_dists(&best_medoid, 1, dist_scratch,
+                  std::numeric_limits<float>::max());
     retset.insert(Neighbor(best_medoid, dist_scratch[0]));
     visited.insert(best_medoid);
 
@@ -934,8 +936,8 @@ namespace diskann {
         T    *node_fp_coords_copy = global_cache_iter->second;
         float cur_expanded_dist;
         if (!use_disk_index_pq) {
-          cur_expanded_dist = dist_cmp->compare(
-              aligned_query_T, node_fp_coords_copy, (unsigned) aligned_dim);
+          cur_expanded_dist = dist_cmp->compare(aligned_query_T, node_fp_coords_copy,
+                                (unsigned) aligned_dim, retset.max_distance());
         } else {
           if (metric == diskann::Metric::INNER_PRODUCT)
             cur_expanded_dist = disk_pq_table.inner_product(
@@ -953,7 +955,7 @@ namespace diskann {
 
         // compute node_nbrs <-> query dists in PQ space
         cpu_timer.reset();
-        compute_dists(node_nbrs, nnbrs, dist_scratch);
+        compute_dists(node_nbrs, nnbrs, dist_scratch, retset.max_distance());
         if (stats != nullptr) {
           stats->n_cmps += (double) nnbrs;
           stats->cpu_us += (double) cpu_timer.elapsed();
@@ -998,8 +1000,8 @@ namespace diskann {
         memcpy(node_fp_coords_copy, node_fp_coords, disk_bytes_per_point);
         float cur_expanded_dist;
         if (!use_disk_index_pq) {
-          cur_expanded_dist = dist_cmp->compare(
-              aligned_query_T, node_fp_coords_copy, (unsigned) aligned_dim);
+          cur_expanded_dist = dist_cmp->compare(aligned_query_T, node_fp_coords_copy,
+                                (unsigned) aligned_dim, retset.max_distance());
         } else {
           if (metric == diskann::Metric::INNER_PRODUCT)
             cur_expanded_dist = disk_pq_table.inner_product(
@@ -1013,7 +1015,7 @@ namespace diskann {
         unsigned *node_nbrs = (node_buf + 1);
         // compute node_nbrs <-> query dist in PQ space
         cpu_timer.reset();
-        compute_dists(node_nbrs, nnbrs, dist_scratch);
+        compute_dists(node_nbrs, nnbrs, dist_scratch, retset.max_distance());
         if (stats != nullptr) {
           stats->n_cmps += (double) nnbrs;
           stats->cpu_us += (double) cpu_timer.elapsed();
