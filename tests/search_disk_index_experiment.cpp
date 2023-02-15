@@ -90,10 +90,10 @@ int search_disk_index_sharded(
   // aggregated over (already processed) shards
 
   // global stats
-  double global_time_spent = 0.0; // to compute global QPS
-  std::vector<double> latency_max_per_shard(query_num, 0.0);
-  std::vector<double> global_n_ios(query_num, 0.0);
-  std::vector<double> global_cpu_us(query_num, 0.0);
+  std::vector<double> global_time_spent(Lvec.size(), 0.0); // to compute global QPS
+  std::vector<std::vector<double>> latency_max_per_shard(Lvec.size(), std::vector<double>(query_num, 0.0));
+  std::vector<std::vector<double>> global_n_ios(Lvec.size(), std::vector<double>(query_num, 0.0));
+  std::vector<std::vector<double>> global_cpu_us(Lvec.size(), std::vector<double>(query_num, 0.0));
 
   for (unsigned shard_id = 1; shard_id <= num_shards; ++shard_id) {
 
@@ -274,11 +274,11 @@ int search_disk_index_sharded(
           }
 
           // aggregate local into global stats
-          global_time_spent += diff.count();
+          global_time_spent[test_id] += diff.count();
           for (_s64 i = 0; i < (int64_t)query_num; i++) {
-              latency_max_per_shard[i] = latency_max_per_shard[i] > local_stats[i].total_us ? latency_max_per_shard[i] : local_stats[i].total_us;
-              global_n_ios[i] += local_stats[i].n_ios;
-              global_cpu_us[i] += local_stats[i].cpu_us;
+              latency_max_per_shard[test_id][i] = latency_max_per_shard[test_id][i] > local_stats[i].total_us ? latency_max_per_shard[test_id][i] : local_stats[i].total_us;
+              global_n_ios[test_id][i] += local_stats[i].n_ios;
+              global_cpu_us[test_id][i] += local_stats[i].cpu_us;
           }
 
           auto local_mean_latency = diskann::get_mean_stats<float>(
@@ -354,20 +354,20 @@ int search_disk_index_sharded(
   }
   diskann::cout
       << "==============================================================="
-      "======================================================="
+      "======================================================================="
       << std::endl;
 
   for (uint32_t test_id = 0; test_id < Lvec.size(); test_id++) {
       _u64 L = Lvec[test_id];
 
-      const float global_qps = (1.0 * query_num) / (1.0 * global_time_spent);
+      const float global_qps = (1.0 * query_num) / (1.0 * global_time_spent[test_id]);
       const float global_qps_per_thread = global_qps / num_threads;
-      const double global_mean_latency = std::accumulate(latency_max_per_shard.begin(),
-          latency_max_per_shard.end(), 0.0) / query_num;
-      std::sort(latency_max_per_shard.begin(), latency_max_per_shard.end());
-      const double global_latency_999 = latency_max_per_shard[(uint64_t)(0.999 * query_num)];
-      const double global_mean_ios = std::accumulate(global_n_ios.begin(), global_n_ios.end(), 0.0) / query_num;
-      const double global_mean_cpuus = std::accumulate(global_cpu_us.begin(), global_cpu_us.end(), 0.0) / query_num;
+      const double global_mean_latency = std::accumulate(latency_max_per_shard[test_id].begin(),
+          latency_max_per_shard[test_id].end(), 0.0) / query_num;
+      std::sort(latency_max_per_shard[test_id].begin(), latency_max_per_shard[test_id].end());
+      const double global_latency_999 = latency_max_per_shard[test_id][(uint64_t)(0.999 * query_num)];
+      const double global_mean_ios = std::accumulate(global_n_ios[test_id].begin(), global_n_ios[test_id].end(), 0.0) / query_num;
+      const double global_mean_cpuus = std::accumulate(global_cpu_us[test_id].begin(), global_cpu_us[test_id].end(), 0.0) / query_num;
 
       float global_recall = 0;
       if (calc_recall_flag) {
