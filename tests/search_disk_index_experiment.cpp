@@ -256,7 +256,7 @@ int search_disk_index_sharded(
 
           // copy shard_query_result_ids[test_id] to global_query_result_topK[test_id]
           for (_s64 i = 0; i < (int64_t)query_num; i++) {
-              for (int j = 0; j < minKL; ++j) {
+              for (unsigned j = 0; j < minKL; ++j) {
                   global_query_result_topK[test_id][i].emplace_back(
                       shard_query_result_dists[test_id][i * minKL + j],
                       shard_query_result_global_ids[test_id][i * minKL + j]
