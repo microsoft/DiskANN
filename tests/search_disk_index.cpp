@@ -161,7 +161,7 @@ int search_disk_index(
 
   std::string recall_string = "Recall@" + std::to_string(recall_at);
   diskann::cout << std::setw(6) << "L" << std::setw(12) << "Beamwidth"
-                << std::setw(16) << "QPS" << std::setw(16) << "Mean Latency"
+                << std::setw(16) << "QPS" << std::setw(16) << "QPS/thread" << std::setw(16) << "Mean Latency"
                 << std::setw(16) << "99.9 Latency" << std::setw(16)
                 << "Mean IOs" << std::setw(16) << "CPU (s)";
   if (calc_recall_flag) {
@@ -216,6 +216,7 @@ int search_disk_index(
     auto                          e = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> diff = e - s;
     float qps = (1.0 * query_num) / (1.0 * diff.count());
+    const float qps_per_thread = qps / num_threads;
 
     diskann::convert_types<uint64_t, uint32_t>(query_result_ids_64.data(),
                                                query_result_ids[test_id].data(),
@@ -246,7 +247,7 @@ int search_disk_index(
     }
 
     diskann::cout << std::setw(6) << L << std::setw(12) << optimized_beamwidth
-                  << std::setw(16) << qps << std::setw(16) << mean_latency
+                  << std::setw(16) << qps << std::setw(16) << qps_per_thread << std::setw(16) << mean_latency
                   << std::setw(16) << latency_999 << std::setw(16) << mean_ios
                   << std::setw(16) << mean_cpuus;
     if (calc_recall_flag) {
@@ -256,22 +257,26 @@ int search_disk_index(
     delete[] stats;
   }
 
-  diskann::cout << "Done searching. Now saving results " << std::endl;
-  _u64 test_id = 0;
-  for (auto L : Lvec) {
-    if (L < recall_at)
-      continue;
+  if (result_output_prefix == "null" || result_output_prefix == "NULL") {
+    diskann::cout << "Done search. Results won't be saved (null path)." << std::endl;
+  } else {
+    diskann::cout << "Done searching. Now saving results " << std::endl;
+    _u64 test_id = 0;
+    for (auto L : Lvec) {
+      if (L < recall_at)
+        continue;
 
-    std::string cur_result_path =
-        result_output_prefix + "_" + std::to_string(L) + "_idx_uint32.bin";
-    diskann::save_bin<_u32>(cur_result_path, query_result_ids[test_id].data(),
-                            query_num, recall_at);
+      std::string cur_result_path =
+          result_output_prefix + "_" + std::to_string(L) + "_idx_uint32.bin";
+      diskann::save_bin<_u32>(cur_result_path, query_result_ids[test_id].data(),
+                              query_num, recall_at);
 
-    cur_result_path =
-        result_output_prefix + "_" + std::to_string(L) + "_dists_float.bin";
-    diskann::save_bin<float>(cur_result_path,
-                             query_result_dists[test_id++].data(), query_num,
-                             recall_at);
+      cur_result_path =
+          result_output_prefix + "_" + std::to_string(L) + "_dists_float.bin";
+      diskann::save_bin<float>(cur_result_path,
+                               query_result_dists[test_id++].data(), query_num,
+                               recall_at);
+    }
   }
 
   diskann::aligned_free(query);

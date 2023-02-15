@@ -89,6 +89,12 @@ int search_disk_index_sharded(
   // (usually at most K = recall_at) results, as pairs <dist, global_id>,
   // aggregated over (already processed) shards
 
+  // global stats
+  double global_time_spent = 0.0; // to compute global QPS
+  std::vector<double> latency_max_per_shard(query_num, 0.0);
+  std::vector<double> global_n_ios(query_num, 0.0);
+  std::vector<double> global_cpu_us(query_num, 0.0);
+
   for (unsigned shard_id = 1; shard_id <= num_shards; ++shard_id) {
 
       std::shared_ptr<AlignedFileReader> reader = nullptr;
@@ -183,12 +189,12 @@ int search_disk_index_sharded(
 
       std::string recall_string = "Recall@" + std::to_string(recall_at);
       diskann::cout << std::setw(6) << "L" << std::setw(12) << "Beamwidth"
-          << std::setw(16) << "QPS" << std::setw(16) << "Mean Latency"
+          << std::setw(16) << "QPS" << std::setw(16) << "QPS/thread" << std::setw(16) << "Mean Latency"
           << std::setw(16) << "99.9 Latency" << std::setw(16)
           << "Mean IOs" << std::setw(16) << "CPU (s)";
-      if (calc_recall_flag) {
-          diskann::cout << std::setw(16) << recall_string << std::endl;
-      } else
+      //if (calc_recall_flag) {
+      //    diskann::cout << std::setw(16) << recall_string << std::endl;
+      //} else
           diskann::cout << std::endl;
       diskann::cout
           << "==============================================================="
@@ -204,14 +210,7 @@ int search_disk_index_sharded(
       for (uint32_t test_id = 0; test_id < Lvec.size(); test_id++) {
           _u64 L = Lvec[test_id];
 
-          /*
           // we DO NOT ignore L < K in the sharded version
-          if (L < recall_at) {
-            diskann::cout << "Ignoring search with L:" << L
-                          << " since it's smaller than K:" << recall_at << std::endl;
-            continue;
-          }
-          */
 
           const unsigned minKL = L < recall_at ? L : recall_at;
 
@@ -227,7 +226,7 @@ int search_disk_index_sharded(
           shard_query_result_global_ids[test_id].resize(minKL * query_num);
           shard_query_result_dists[test_id].resize(minKL * query_num);
 
-          auto stats = new diskann::QueryStats[query_num];
+          auto local_stats = std::make_unique<diskann::QueryStats[]>(query_num);
 
           std::vector<uint64_t> shard_query_result_local_ids_64(minKL * query_num);
           auto                  s = std::chrono::high_resolution_clock::now();
@@ -238,11 +237,12 @@ int search_disk_index_sharded(
                   query + (i * query_aligned_dim), minKL, L,
                   shard_query_result_local_ids_64.data() + (i * minKL),
                   shard_query_result_dists[test_id].data() + (i * minKL),
-                  optimized_beamwidth, search_io_limit, use_reorder_data, stats + i);
+                  optimized_beamwidth, search_io_limit, use_reorder_data, local_stats.get() + i);
           }
           auto                          e = std::chrono::high_resolution_clock::now();
           std::chrono::duration<double> diff = e - s;
-          float qps = (1.0 * query_num) / (1.0 * diff.count());
+          const float local_qps = (1.0 * query_num) / (1.0 * diff.count());
+          const float local_qps_per_thread = local_qps / num_threads;
 
           diskann::convert_types<uint64_t, uint32_t>(shard_query_result_local_ids_64.data(),
               shard_query_result_local_ids[test_id].data(),
@@ -273,22 +273,28 @@ int search_disk_index_sharded(
               }
           }
 
-          /*
-          auto mean_latency = diskann::get_mean_stats<float>(
-              stats, query_num,
+          // aggregate local into global stats
+          global_time_spent += diff.count();
+          for (_s64 i = 0; i < (int64_t)query_num; i++) {
+              latency_max_per_shard[i] = latency_max_per_shard[i] > local_stats[i].total_us ? latency_max_per_shard[i] : local_stats[i].total_us;
+              global_n_ios[i] += local_stats[i].n_ios;
+              global_cpu_us[i] += local_stats[i].cpu_us;
+          }
+
+          auto local_mean_latency = diskann::get_mean_stats<float>(
+              local_stats.get(), query_num,
               [](const diskann::QueryStats& stats) { return stats.total_us; });
 
-          auto latency_999 = diskann::get_percentile_stats<float>(
-              stats, query_num, 0.999,
+          auto local_latency_999 = diskann::get_percentile_stats<float>(
+              local_stats.get(), query_num, 0.999,
               [](const diskann::QueryStats& stats) { return stats.total_us; });
-          */
 
-          auto mean_ios = diskann::get_mean_stats<unsigned>(
-              stats, query_num,
+          auto local_mean_ios = diskann::get_mean_stats<unsigned>(
+              local_stats.get(), query_num,
               [](const diskann::QueryStats& stats) { return stats.n_ios; });
 
-          auto mean_cpuus = diskann::get_mean_stats<float>(
-              stats, query_num,
+          auto local_mean_cpuus = diskann::get_mean_stats<float>(
+              local_stats.get(), query_num,
               [](const diskann::QueryStats& stats) { return stats.cpu_us; });
 
           /*
@@ -310,17 +316,17 @@ int search_disk_index_sharded(
           */
 
           diskann::cout << std::setw(6) << L << std::setw(12) << optimized_beamwidth
-              << std::setw(16) << qps
-              // << std::setw(16) << mean_latency
-              // << std::setw(16) << latency_999
-              << std::setw(16) << mean_ios
-              << std::setw(16) << mean_cpuus;
+              << std::setw(16) << local_qps
+              << std::setw(16) << local_qps_per_thread
+              << std::setw(16) << local_mean_latency
+              << std::setw(16) << local_latency_999
+              << std::setw(16) << local_mean_ios
+              << std::setw(16) << local_mean_cpuus;
           //if (calc_recall_flag) {
           //    diskann::cout << std::setw(16) << shard_recall << std::endl;
           //}
           //else
               diskann::cout << std::endl;
-          delete[] stats;
       } // end loop over L-values
 
       delete[] local_id_to_global_id;
@@ -330,9 +336,39 @@ int search_disk_index_sharded(
 
   } // end loop over shards
 
-  // now compute aggregate statistics over all shards
+
+  // now compute and display aggregate statistics over all shards
+  std::string recall_string = "Recall@" + std::to_string(recall_at);
+  diskann::cout << std::setw(6) << "L"
+      //<< std::setw(12) << "Beamwidth"
+      << std::setw(16) << "QPS"
+      << std::setw(16) << "QPS/thread"
+      << std::setw(16) << "Mean Latency"
+      << std::setw(16) << "99.9 Latency"
+      << std::setw(16) << "Mean IOs"
+      << std::setw(16) << "CPU (s)";
+  if (calc_recall_flag) {
+      diskann::cout << std::setw(16) << recall_string << std::endl;
+  } else {
+      diskann::cout << std::endl;
+  }
+  diskann::cout
+      << "==============================================================="
+      "======================================================="
+      << std::endl;
+
   for (uint32_t test_id = 0; test_id < Lvec.size(); test_id++) {
       _u64 L = Lvec[test_id];
+
+      const float global_qps = (1.0 * query_num) / (1.0 * global_time_spent);
+      const float global_qps_per_thread = global_qps / num_threads;
+      const double global_mean_latency = std::accumulate(latency_max_per_shard.begin(),
+          latency_max_per_shard.end(), 0.0) / query_num;
+      std::sort(latency_max_per_shard.begin(), latency_max_per_shard.end());
+      const double global_latency_999 = latency_max_per_shard[(uint64_t)(0.999 * query_num)];
+      const double global_mean_ios = std::accumulate(global_n_ios.begin(), global_n_ios.end(), 0.0) / query_num;
+      const double global_mean_cpuus = std::accumulate(global_cpu_us.begin(), global_cpu_us.end(), 0.0) / query_num;
+
       float global_recall = 0;
       if (calc_recall_flag) {
           if (num_shards * L < recall_at) {
@@ -358,36 +394,16 @@ int search_disk_index_sharded(
 
       diskann::cout << std::setw(6) << L
           //<< std::setw(12) << optimized_beamwidth
-          //<< std::setw(16) << qps
-          // << std::setw(16) << mean_latency
-          // << std::setw(16) << latency_999
-          //<< std::setw(16) << mean_ios
-          //<< std::setw(16) << mean_cpuus
-          ;
+          << std::setw(16) << global_qps
+          << std::setw(16) << global_qps_per_thread
+          << std::setw(16) << global_mean_latency
+          << std::setw(16) << global_latency_999
+          << std::setw(16) << global_mean_ios
+          << std::setw(16) << global_mean_cpuus;
       if (calc_recall_flag) {
           diskann::cout << std::setw(16) << global_recall << std::endl;
       }
   }
-
-  /*
-  diskann::cout << "Done searching. Now saving results " << std::endl;
-  _u64 test_id = 0;
-  for (auto L : Lvec) {
-    //if (L < recall_at)
-    //  continue;
-
-    std::string cur_result_path =
-        result_output_prefix + "_" + std::to_string(L) + "_idx_uint32.bin";
-    diskann::save_bin<_u32>(cur_result_path, query_result_ids[test_id].data(),
-                            query_num, recall_at);
-
-    cur_result_path =
-        result_output_prefix + "_" + std::to_string(L) + "_dists_float.bin";
-    diskann::save_bin<float>(cur_result_path,
-                             query_result_dists[test_id++].data(), query_num,
-                             recall_at);
-  }
-  */
 
   diskann::aligned_free(query);
   return 0;
@@ -397,6 +413,7 @@ int search_disk_index_sharded(
 // * index_path_prefix -> index_group_path_prefix (will be appended with: _subshard-1.bin etc.)
 // * num_shards
 // no fail_if_recall_below
+// results are not saved (result_path can be given but will be ignored)
 
 int main(int argc, char** argv) {
   std::string data_type, dist_fn, index_group_path_prefix, result_path_prefix,
@@ -417,7 +434,7 @@ int main(int argc, char** argv) {
                        po::value<std::string>(&index_group_path_prefix)->required(),
                        "Path prefix to the index shards");
     desc.add_options()("result_path",
-                       po::value<std::string>(&result_path_prefix)->required(),
+                       po::value<std::string>(&result_path_prefix)->default_value(std::string("null")),
                        "Path prefix for saving results of the queries");
     desc.add_options()("query_file",
                        po::value<std::string>(&query_file)->required(),
