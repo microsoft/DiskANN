@@ -44,6 +44,11 @@ void print_stats(std::string category, std::vector<float> percentiles,
   diskann::cout << std::endl;
 }
 
+template <typename T1, typename T2>
+void apply_max(T1& x, T2& y) {
+    if (x < y) x = y;
+}
+
 template<typename T>
 int search_disk_index_sharded(
     diskann::Metric& metric, const std::string& index_group_path_prefix,
@@ -118,16 +123,9 @@ int search_disk_index_sharded(
           return res;
       }
 
-      // load ids_uint32.bin
       const std::string local_id_to_global_id_file = index_path_prefix + "_ids_uint32.bin";
-      uint32_t* local_id_to_global_id;
-      size_t local_id_to_global_id_num, local_id_to_global_id_dim;
-      diskann::load_bin<uint32_t>(local_id_to_global_id_file, local_id_to_global_id,
-          local_id_to_global_id_num, local_id_to_global_id_dim);
-      if (local_id_to_global_id_dim != 1) {
-          diskann::cout << "something wrong with the _ids_uint32 file" << std::endl;
-          return -1;
-      }
+      std::vector<unsigned> local_id_to_global_id;
+      diskann::read_idmap(local_id_to_global_id_file, local_id_to_global_id);
       // TODO check if local_id_to_global_id_num == number of points in index shard?
 
       // cache bfs levels
@@ -276,7 +274,7 @@ int search_disk_index_sharded(
           // aggregate local into global stats
           global_time_spent[test_id] += diff.count();
           for (_s64 i = 0; i < (int64_t)query_num; i++) {
-              latency_max_per_shard[test_id][i] = latency_max_per_shard[test_id][i] > local_stats[i].total_us ? latency_max_per_shard[test_id][i] : local_stats[i].total_us;
+              apply_max(latency_max_per_shard[test_id][i], local_stats[i].total_us);
               global_n_ios[test_id][i] += local_stats[i].n_ios;
               global_cpu_us[test_id][i] += local_stats[i].cpu_us;
           }
@@ -328,8 +326,6 @@ int search_disk_index_sharded(
           //else
               diskann::cout << std::endl;
       } // end loop over L-values
-
-      delete[] local_id_to_global_id;
 
       if (warmup != nullptr)
           diskann::aligned_free(warmup);
