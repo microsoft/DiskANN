@@ -20,7 +20,7 @@
 
 namespace po = boost::program_options;
 
-template<typename T, typename TagT = uint32_t>
+template<typename T, typename TagT = uint32_t, typename LabelT = uint32_t>
 int build_in_memory_index(const diskann::Metric& metric,
                           const std::string& data_path, const unsigned R,
                           const unsigned L, const float alpha,
@@ -42,14 +42,15 @@ int build_in_memory_index(const diskann::Metric& metric,
   _u64 data_num, data_dim;
   diskann::get_bin_metadata(data_path, data_num, data_dim);
 
-  diskann::Index<T, TagT> index(metric, data_dim, data_num, false, false, false,
-                                use_pq_build, num_pq_bytes, use_opq);
+  diskann::Index<T, TagT, LabelT> index(metric, data_dim, data_num, false, false, false,
+                              use_pq_build, num_pq_bytes, use_opq);
   auto                    s = std::chrono::high_resolution_clock::now();
   if (label_file == "") {
     index.build(data_path.c_str(), data_num, paras);
   } else {
     if (universal_label != "") {
-      index.set_universal_label(std::stoul(universal_label));
+      LabelT unv_label_as_num = std::stoul(universal_label);
+      index.set_universal_label(unv_label_as_num);
     }
     index.build_filtered_index(data_path.c_str(), label_file, data_num, paras);
   }
@@ -64,7 +65,7 @@ int build_in_memory_index(const diskann::Metric& metric,
 
 int main(int argc, char** argv) {
   std::string data_type, dist_fn, data_path, index_path_prefix, label_file,
-      universal_label;
+      universal_label, label_type;
   unsigned num_threads, R, L, Lf, build_PQ_bytes;
   float    alpha;
   bool     use_pq_build, use_opq;
@@ -117,6 +118,9 @@ int main(int argc, char** argv) {
                        po::value<uint32_t>(&Lf)->default_value(0),
                        "Build complexity for filtered points, higher value "
                        "results in better graphs");
+    desc.add_options()("label_type", 
+         po::value<std::string>(&label_type)->default_value("ushort"),
+        "label type <uint/ushort>");
 
     po::variables_map vm;
     po::store(po::parse_command_line(argc, argv, desc), vm);
@@ -150,25 +154,49 @@ int main(int argc, char** argv) {
     diskann::cout << "Starting index build with R: " << R << "  Lbuild: " << L
                   << "  alpha: " << alpha << "  #threads: " << num_threads
                   << std::endl;
-    if (data_type == std::string("int8"))
-      return build_in_memory_index<int8_t>(
-          metric, data_path, R, L, alpha, index_path_prefix, num_threads,
-          use_pq_build, build_PQ_bytes, use_opq, label_file, universal_label,
-          Lf);
-    else if (data_type == std::string("uint8"))
-      return build_in_memory_index<uint8_t>(
-          metric, data_path, R, L, alpha, index_path_prefix, num_threads,
-          use_pq_build, build_PQ_bytes, use_opq, label_file, universal_label,
-          Lf);
-    else if (data_type == std::string("float"))
-      return build_in_memory_index<float>(metric, data_path, R, L, alpha,
-                                          index_path_prefix, num_threads,
-                                          use_pq_build, build_PQ_bytes, use_opq,
-                                          label_file, universal_label, Lf);
-    else {
-      std::cout << "Unsupported type. Use one of int8, uint8 or float."
-                << std::endl;
-      return -1;
+    if(label_file != "" && label_type == "uint16"){
+      if (data_type == std::string("int8"))
+        return build_in_memory_index<int8_t, uint16_t>(
+            metric, data_path, R, L, alpha, index_path_prefix, num_threads,
+            use_pq_build, build_PQ_bytes, use_opq, label_file, universal_label,
+            Lf);
+      else if (data_type == std::string("uint8"))
+        return build_in_memory_index<uint8_t, uint16_t>(
+            metric, data_path, R, L, alpha, index_path_prefix, num_threads,
+            use_pq_build, build_PQ_bytes, use_opq, label_file, universal_label,
+            Lf);
+      else if (data_type == std::string("float"))
+        return build_in_memory_index<float, uint16_t>(metric, data_path, R, L, alpha,
+                                            index_path_prefix, num_threads,
+                                            use_pq_build, build_PQ_bytes, use_opq,
+                                            label_file, universal_label, Lf);
+      else {
+        std::cout << "Unsupported type. Use one of int8, uint8 or float."
+                  << std::endl;
+        return -1;
+      }
+    }
+    else{
+      if (data_type == std::string("int8"))
+        return build_in_memory_index<int8_t>(
+            metric, data_path, R, L, alpha, index_path_prefix, num_threads,
+            use_pq_build, build_PQ_bytes, use_opq, label_file, universal_label,
+            Lf);
+      else if (data_type == std::string("uint8"))
+        return build_in_memory_index<uint8_t>(
+            metric, data_path, R, L, alpha, index_path_prefix, num_threads,
+            use_pq_build, build_PQ_bytes, use_opq, label_file, universal_label,
+            Lf);
+      else if (data_type == std::string("float"))
+        return build_in_memory_index<float>(metric, data_path, R, L, alpha,
+                                            index_path_prefix, num_threads,
+                                            use_pq_build, build_PQ_bytes, use_opq,
+                                            label_file, universal_label, Lf);
+      else {
+        std::cout << "Unsupported type. Use one of int8, uint8 or float."
+                  << std::endl;
+        return -1;
+      }
     }
   } catch (const std::exception& e) {
     std::cout << std::string(e.what()) << std::endl;
