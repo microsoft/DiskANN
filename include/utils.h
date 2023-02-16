@@ -92,7 +92,7 @@ typedef uint16_t _u16;
 typedef int16_t  _s16;
 typedef uint8_t  _u8;
 typedef int8_t   _s8;
-typedef unsigned label;
+
 inline void      open_file_to_write(std::ofstream&     writer,
                                     const std::string& filename) {
   writer.exceptions(std::ofstream::failbit | std::ofstream::badbit);

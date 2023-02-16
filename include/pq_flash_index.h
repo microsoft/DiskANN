@@ -20,7 +20,7 @@
 
 namespace diskann {
 
-  template<typename T>
+  template<typename T, typename LabelT = uint32_t>
   class PQFlashIndex {
    public:
     DISKANN_DLLEXPORT PQFlashIndex(
@@ -73,7 +73,7 @@ namespace diskann {
     DISKANN_DLLEXPORT void cached_beam_search(
         const T *query, const _u64 k_search, const _u64 l_search, _u64 *res_ids,
         float *res_dists, const _u64 beam_width, const bool use_filter,
-        const std::string &filter_label, const bool use_reorder_data = false,
+        const LabelT &filter_label, const bool use_reorder_data = false,
         QueryStats *stats = nullptr);        
 
     DISKANN_DLLEXPORT void cached_beam_search(
@@ -84,12 +84,8 @@ namespace diskann {
     DISKANN_DLLEXPORT void cached_beam_search(
         const T *query, const _u64 k_search, const _u64 l_search, _u64 *res_ids,
         float *res_dists, const _u64 beam_width, const bool use_filter,
-        const std::string &filter_label, const _u32 io_limit, const bool use_reorder_data = false,
-        QueryStats *stats = nullptr);        
-
-
-
-
+        const LabelT &filter_label, const _u32 io_limit, const bool use_reorder_data = false,
+        QueryStats *stats = nullptr);  
 
     DISKANN_DLLEXPORT _u32 range_search(const T *query1, const double range,
                                         const _u64          min_l_search,
@@ -111,7 +107,7 @@ namespace diskann {
                                              _u64 visited_reserve = 4096);
 
     DISKANN_DLLEXPORT inline int32_t get_filter_number(
-        const std::string &filter_label);
+        const LabelT &filter_label);
 
     DISKANN_DLLEXPORT void get_label_file_metadata(std::string map_file,
                                                    _u32 &      num_pts,
@@ -122,7 +118,7 @@ namespace diskann {
 
     DISKANN_DLLEXPORT void parse_label_file(const std::string &map_file);
 
-    DISKANN_DLLEXPORT void set_universal_label(const std::string &label);
+    DISKANN_DLLEXPORT void set_universal_label(const LabelT &label);
 
 
    private:
@@ -205,11 +201,11 @@ namespace diskann {
     // filter support
     _u32 *                                _pts_to_label_offsets = nullptr;
     _u32 *                                _pts_to_labels = nullptr;
-    tsl::robin_set<std::string>           _labels;
-    std::unordered_map<std::string, _u32> _filter_to_medoid_id;
+    tsl::robin_set<LabelT>                _labels;
+    std::unordered_map<LabelT, _u32>      _filter_to_medoid_id;
     bool                                  _use_universal_label;
     _u32                                  _universal_filter_num;
-    std::vector<std::string>              _filter_list;
+    std::vector<LabelT>              _filter_list;
     tsl::robin_set<_u32>                    _dummy_pts;
     tsl::robin_set<_u32>                    _has_dummy_pts;
     tsl::robin_map<_u32, _u32>              _dummy_to_real_map;

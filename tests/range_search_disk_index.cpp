@@ -47,7 +47,7 @@ void print_stats(std::string category, std::vector<float> percentiles,
   diskann::cout << std::endl;
 }
 
-template<typename T>
+template<typename T, typename LabelT = uint32_t>
 int search_disk_index(diskann::Metric&   metric,
                       const std::string& index_path_prefix,
                       const std::string& query_file, std::string& gt_file,
@@ -99,8 +99,8 @@ int search_disk_index(diskann::Metric&   metric,
   reader.reset(new LinuxAlignedFileReader());
 #endif
 
-  std::unique_ptr<diskann::PQFlashIndex<T>> _pFlashIndex(
-      new diskann::PQFlashIndex<T>(reader, metric));
+  std::unique_ptr<diskann::PQFlashIndex<T,LabelT>> _pFlashIndex(
+      new diskann::PQFlashIndex<T,LabelT>(reader, metric));
 
   int res = _pFlashIndex->load(num_threads, index_path_prefix.c_str());
 
