@@ -59,7 +59,6 @@ int search_memory_index(diskann::Metric& metric, const std::string& index_path,
   bool  filtered_search = false;
   label filter_label_as_num = UINT_MAX;
   if (filter_label != "") {
-    filter_label_as_num = std::stoul(filter_label);
     filtered_search = true;
   }
 
@@ -135,6 +134,7 @@ int search_memory_index(diskann::Metric& metric, const std::string& index_path,
     for (int64_t i = 0; i < (int64_t) query_num; i++) {
       auto qs = std::chrono::high_resolution_clock::now();
       if (filtered_search) {
+        filter_label_as_num = index.get_converted_label(filter_label);
         auto retval = index.search_with_filters(
             query + i * query_aligned_dim, filter_label_as_num, recall_at, L,
             query_result_ids[test_id].data() + i * recall_at,

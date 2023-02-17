@@ -25,6 +25,9 @@ typedef int FileHandle;
 #include "ann_exception.h"
 #include "windows_customizations.h"
 #include "tsl/robin_set.h"
+#include <unordered_map>
+#include <sstream>
+#include <iostream>     
 
 #ifdef EXEC_ENV_OLS
 #include "content_buf.h"
@@ -143,6 +146,72 @@ inline int delete_file(const std::string& fileName) {
   } else {
     return 0;
   }
+}
+
+inline void convert_labels_string_to_int(const std::string& inFileName,
+  const std::string& outFileName,
+  const std::string& mapFileName,
+  const std::string& unv_label) {
+  std::unordered_map<std::string, _u32> string_int_map;
+  if(unv_label != "")
+      string_int_map[unv_label] = 0;
+  std::ofstream label_writer(outFileName);
+  std::ifstream label_reader(inFileName);
+  
+  std::string line, token;
+  while (std::getline(label_reader, line)) {
+    std::istringstream new_iss(line);
+    std::vector<_u32>lbls;
+    while (getline(new_iss, token, ',')) {
+        token.erase(std::remove(token.begin(), token.end(), '\n'), token.end());
+        token.erase(std::remove(token.begin(), token.end(), '\r'), token.end());
+        if (string_int_map.find(token) == string_int_map.end()) {
+            int nextId = string_int_map.size();
+            string_int_map[token] = nextId;
+        }
+        lbls.push_back(string_int_map[token]);
+    }    
+    if (lbls.size() <= 0) {
+        std::cout << "No label found";
+        exit(-1);
+    }
+    for (size_t j = 0; j < lbls.size(); j++) {
+        if(j != lbls.size()-1)
+            label_writer << lbls[j] << ",";
+        else
+            label_writer << lbls[j] << std::endl;
+    }
+  }
+  label_writer.close();
+
+  std::ofstream map_writer(mapFileName);
+  for (auto mp :string_int_map) {
+      map_writer << mp.first << "\t" <<mp.second <<std::endl;
+  }
+  map_writer.close();
+}
+inline std::unordered_map<std::string, _u32> load_label_map(
+                                const std::string& labels_map_file) {
+  std::unordered_map<std::string, _u32> string_to_int_mp;
+  std::ifstream map_reader(labels_map_file);
+  std::string line, token;
+  while (std::getline(map_reader, line)) {
+    _u32  cnt = 0;
+    std::istringstream new_iss(line);
+    while (getline(new_iss, token, ',')) {
+        token.erase(std::remove(token.begin(), token.end(), '\n'), token.end());
+        _u32 token_as_num;
+        std::string label_str;
+        if(cnt == 0){
+          label_str = token;
+        }
+        else{
+          token_as_num = std::stoul(token);
+          string_to_int_mp[label_str] = token_as_num;
+        }
+    }    
+  }
+  return string_to_int_mp;
 }
 
 #ifdef EXEC_ENV_OLS

@@ -64,8 +64,11 @@ int search_disk_index(
     diskann::cout << ", io_limit: " << search_io_limit << "." << std::endl;
 
   bool filtered_search = false;
-  if (filter_label != "")
+
+  label filter_label_as_num = UINT_MAX;
+  if (filter_label != "") {
     filtered_search = true;
+  }
 
   std::string warmup_query_file = index_path_prefix + "_sample_data.bin";
 
@@ -219,11 +222,12 @@ int search_disk_index(
             query_result_dists[test_id].data() + (i * recall_at),
             optimized_beamwidth, use_reorder_data, stats + i);
       } else {
+        filter_label_as_num = _pFlashIndex->get_converted_label(filter_label);
         _pFlashIndex->cached_beam_search(
             query + (i * query_aligned_dim), recall_at, L,
             query_result_ids_64.data() + (i * recall_at),
             query_result_dists[test_id].data() + (i * recall_at),
-            optimized_beamwidth, true, filter_label, use_reorder_data,
+            optimized_beamwidth, true, filter_label_as_num, use_reorder_data,
             stats + i);
       }
     }

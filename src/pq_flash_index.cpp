@@ -434,7 +434,7 @@ namespace diskann {
 
   template<typename T>
   inline int32_t PQFlashIndex<T>::get_filter_number(
-      const std::string &filter_label) {
+      const label &filter_label) {
     int idx = -1;
     for (_u32 i = 0; i < _filter_list.size(); i++) {
       if (_filter_list[i] == filter_label) {
@@ -483,6 +483,20 @@ namespace diskann {
     }
     return ret_val;
   }
+
+  template<typename T>
+  label PQFlashIndex<T>::get_converted_label(const std::string &filter_label){
+    if(_label_map.find(filter_label) != _label_map.end()){
+      return _label_map[filter_label];
+    }
+    std::stringstream stream;
+    stream << "Unable to find label in the Label Map";
+    diskann::cerr << stream.str() << std::endl;
+    throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
+                                __LINE__);
+    exit(-1);
+  }
+  
   template<typename T>
   void PQFlashIndex<T>::parse_label_file(const std::string &map_file) {
     //_filtered_ann = 1;
@@ -512,17 +526,18 @@ namespace diskann {
       while (getline(new_iss, token, ',')) {
         token.erase(std::remove(token.begin(), token.end(), '\n'), token.end());
         token.erase(std::remove(token.begin(), token.end(), '\r'), token.end());
-        if (_labels.find(token) == _labels.end()) {
-          _filter_list.emplace_back(token);
+        label token_as_num = std::stoul(token);
+        if (_labels.find(token_as_num) == _labels.end()) {
+          _filter_list.emplace_back(token_as_num);
         }
-        int32_t filter_num = get_filter_number(token);
+        int32_t filter_num = get_filter_number(token_as_num);
         if (filter_num == -1) {
           std::cout << "Error!! " << std::endl;
           exit(-1);
         }
         _pts_to_labels[counter++] = filter_num;
         num_lbls_in_cur_pt++;
-        _labels.insert(token);
+        _labels.insert(token_as_num);
       }
 
       if (num_lbls_in_cur_pt == 0) {
@@ -536,8 +551,8 @@ namespace diskann {
   }
 
   template<typename T>
-  void PQFlashIndex<T>::set_universal_label(const std::string &label) {
-    int32_t temp_filter_num = get_filter_number(label);
+  void PQFlashIndex<T>::set_universal_label(const label &filter_label) {
+    int32_t temp_filter_num = get_filter_number(filter_label);
     if (temp_filter_num == -1) {
       std::cout << "Error, could not find universal label. Exitting."
                 << std::endl;
@@ -593,10 +608,13 @@ namespace diskann {
     std::string labels_file = std ::string(disk_index_file) + "_labels.txt";
     std::string labels_to_medoids =
         std ::string(disk_index_file) + "_labels_to_medoids.txt";
+    std::string labels_map_file = 
+        std ::string(disk_index_file) + "_labels_map.txt";
     std::string dummy_map_file =
         std ::string(disk_index_file) + "_dummy_map.txt";
     if (file_exists(labels_file)) {
       parse_label_file(labels_file);
+      _label_map = load_label_map(labels_map_file);
       if (file_exists(labels_to_medoids)) {
         std::ifstream medoid_stream(labels_to_medoids);
 
@@ -609,10 +627,11 @@ namespace diskann {
           std::istringstream iss(line);
           _u32               cnt = 0;
           _u32               medoid;
-          std::string        label;
+          label              label;
           while (std::getline(iss, token, ',')) {
+            unsigned token_as_num = std::stoul(token);
             if (cnt == 0)
-              label = token;
+              label = token_as_num;
             else
               medoid = (_u32) stoul(token);
             cnt++;
@@ -625,9 +644,10 @@ namespace diskann {
       if (file_exists(univ_label_file)) {
         std::ifstream universal_label_reader(univ_label_file);
         std::string   univ_label;
+        label univ_label_as_num = std::stoul(univ_label);
         universal_label_reader >> univ_label;
-        universal_label_reader.close();
-        set_universal_label(univ_label);
+        universal_label_reader.close();        
+        set_universal_label(univ_label_as_num);
       }
       if (file_exists(dummy_map_file)) {
         std::ifstream dummy_map_stream(dummy_map_file);
@@ -952,7 +972,7 @@ namespace diskann {
   void PQFlashIndex<T>::cached_beam_search(
       const T *query1, const _u64 k_search, const _u64 l_search, _u64 *indices,
       float *distances, const _u64 beam_width, const bool use_filter,
-      const std::string &filter_label, const bool use_reorder_data,
+      const label &filter_label, const bool use_reorder_data,
       QueryStats *stats) {
     cached_beam_search(query1, k_search, l_search, indices, distances,
                        beam_width, use_filter, filter_label,
@@ -965,9 +985,9 @@ namespace diskann {
       const T *query1, const _u64 k_search, const _u64 l_search, _u64 *indices,
       float *distances, const _u64 beam_width, const _u32 io_limit,
       const bool use_reorder_data, QueryStats *stats) {
-    std::string dummy_filter_string;
+    label dummy_filter;
     cached_beam_search(query1, k_search, l_search, indices, distances,
-                       beam_width, false, dummy_filter_string,
+                       beam_width, false, dummy_filter,
                        std::numeric_limits<_u32>::max(), use_reorder_data,
                        stats);
   }
@@ -976,7 +996,7 @@ namespace diskann {
   void PQFlashIndex<T>::cached_beam_search(
       const T *query1, const _u64 k_search, const _u64 l_search, _u64 *indices,
       float *distances, const _u64 beam_width, const bool use_filter,
-      const std::string &filter_label, const _u32 io_limit,
+      const label &filter_label, const _u32 io_limit,
       const bool use_reorder_data, QueryStats *stats) {
     int32_t filter_num = 0;
     if (use_filter) {

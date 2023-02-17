@@ -482,8 +482,10 @@ namespace diskann {
     std::string mem_index_file(filename);
     std::string labels_file = mem_index_file + "_labels.txt";
     std::string labels_to_medoids = mem_index_file + "_labels_to_medoids.txt";
+    std::string labels_map_file = mem_index_file + "_labels_map.txt";
     if (file_exists(labels_file)) {
       parse_label_file(labels_file);
+      _label_map = load_label_map(labels_map_file);
       if (file_exists(labels_to_medoids)) {
         std::ifstream medoid_stream(labels_to_medoids);
 
@@ -1704,6 +1706,19 @@ namespace diskann {
       }
     }
     build(filename, num_points_to_load, parameters, tags);
+  }
+
+  template<typename T, typename TagT>
+  label Index<T, TagT>::get_converted_label(const std::string &filter_label){
+    if(_label_map.find(filter_label) != _label_map.end()){
+      return _label_map[filter_label];
+    }
+    std::stringstream stream;
+    stream << "Unable to find label in the Label Map";
+    diskann::cerr << stream.str() << std::endl;
+    throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
+                                __LINE__);
+    exit(-1);
   }
 
   template<typename T, typename TagT>

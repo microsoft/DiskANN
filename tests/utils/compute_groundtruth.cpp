@@ -305,9 +305,9 @@ inline void load_bin_as_float(const char *filename, float *&data,
 template<typename T>
 inline std::vector<size_t> load_filtered_bin_as_float(
     const char *filename, float *&data, size_t &npts, size_t &ndims,
-    int part_num, const char *label_file, const std::string &filter_label,
-    const std::string &universal_label, size_t &npoints_filt,
-    std::vector<std::vector<std::string>> &pts_to_labels) {
+    int part_num, const char *label_file, const label &filter_label,
+    const label &universal_label, size_t &npoints_filt,
+    std::vector<std::vector<label>> &pts_to_labels) {
   std::ifstream reader(filename, std::ios::binary);
   std::cout << "Reading bin file " << filename << " ...\n";
   int                 npts_i32, ndims_i32;
@@ -398,23 +398,24 @@ inline void save_groundtruth_as_one_file(const std::string filename,
 
 inline void parse_label_file_into_vec(
     size_t &line_cnt, const std::string &map_file,
-    std::vector<std::vector<std::string>> &pts_to_labels) {
+    std::vector<std::vector<label>> &pts_to_labels) {
   std::ifstream         infile(map_file);
   std::string           line, token;
-  std::set<std::string> labels;
+  std::set<label> labels;
   infile.clear();
   infile.seekg(0, std::ios::beg);
   while (std::getline(infile, line)) {
     std::istringstream       iss(line);
-    std::vector<std::string> lbls(0);
+    std::vector<label> lbls;
 
     getline(iss, token, '\t');
     std::istringstream new_iss(token);
     while (getline(new_iss, token, ',')) {
       token.erase(std::remove(token.begin(), token.end(), '\n'), token.end());
       token.erase(std::remove(token.begin(), token.end(), '\r'), token.end());
-      lbls.push_back(token);
-      labels.insert(token);
+      label token_as_num = std::stoul(token);
+      lbls.push_back(token_as_num);
+      labels.insert(token_as_num);
     }
     if (lbls.size() <= 0) {
       std::cout << "No label found";
@@ -480,9 +481,15 @@ int aux_main(const std::string &base_file, const std::string &label_file,
   int *  closest_points = new int[nqueries * k];
   float *dist_closest_points = new float[nqueries * k];
 
-  std::vector<std::vector<std::string>> pts_to_labels;
-  if (filter_label != "")
-    parse_label_file_into_vec(npoints, label_file, pts_to_labels);
+  std::vector<std::vector<label>> pts_to_labels;
+  std::string labels_file_to_use, labels_map_file;
+  if (filter_label != ""){
+    labels_file_to_use = label_file + "_formatted.txt";
+    labels_map_file = label_file + "_labels_map.txt";
+    convert_labels_string_to_int(label_file, labels_file_to_use,
+                                labels_map_file, universal_label);
+    parse_label_file_into_vec(npoints, labels_file_to_use, pts_to_labels);
+  }
   std::vector<size_t> rev_map;
 
   for (int p = 0; p < num_parts; p++) {
@@ -490,9 +497,15 @@ int aux_main(const std::string &base_file, const std::string &label_file,
     if (filter_label == "") {
       load_bin_as_float<T>(base_file.c_str(), base_data, npoints, dim, p);
     } else {
+      labels_map_file = label_file + "_labels_map.txt";
+      std::unordered_map<std::string, _u32> label_map = load_label_map(labels_map_file);
+      label filter_label_to_use = label_map[filter_label];
+      label unv_label_to_use;
+      if(universal_label != "")
+        unv_label_to_use = label_map[universal_label];
       rev_map = load_filtered_bin_as_float<T>(
           base_file.c_str(), base_data, npoints, dim, p, label_file.c_str(),
-          filter_label, universal_label, npoints_filt, pts_to_labels);
+          filter_label_to_use, unv_label_to_use, npoints_filt, pts_to_labels);
     }
     int *  closest_points_part = new int[nqueries * k];
     float *dist_closest_points_part = new float[nqueries * k];
