@@ -19,9 +19,9 @@ The arguments are as follows:
 11. **--build_PQ_bytes** (default is 0): Set to a positive value less than the dimensionality of the data to enable faster index build with PQ based distance comparisons. 
 12. **--use_opq**: use the flag to use OPQ rather than PQ compression. OPQ is more space efficient for some high dimensional datasets, but also needs a bit more build time.
 13. **--label_file**: Required for filter diskann. The input label file in txt format where each line corresponds to the label associated with graph node(=line number). Each line contains comma separated labels in integer format.
-14. **--universal_label: Required for filter diskann. if universal label is used, provide the label in conjunction with labels_file.
+14. **--universal_label: Required for filter diskann. If universal label is used, provide the label in conjunction with labels_file.
 15. **--FilteredLbuild (default is 0): Required for filter diskann. Build complexity for filtered points. higher the FilteredLbuild value results in better graphs.
-16. **-F (--filter_threshold) ( default is 0): Required for filter diskann. Threshold for breaking-up points with many labels. No break-up happens for value 0. Graph nodes with number of labels > F will be splitted such that number of labels associated with the node will always be <= F.
+16. **-F (--filter_threshold) ( default is 0): Required for filter diskann. Threshold for breaking-up points with many labels. No break-up happens for value 0. Graph nodes with number of labels > F will be split such that number of labels associated with the node will always be <= F.
 
 
 To search the SSD-index, use the `tests/search_disk_index` program. 
