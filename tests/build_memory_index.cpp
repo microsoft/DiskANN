@@ -156,17 +156,17 @@ int main(int argc, char** argv) {
                   << std::endl;
     if(label_file != "" && label_type == "uint16"){
       if (data_type == std::string("int8"))
-        return build_in_memory_index<int8_t, uint16_t>(
+        return build_in_memory_index<int8_t, uint32_t, uint16_t>(
             metric, data_path, R, L, alpha, index_path_prefix, num_threads,
             use_pq_build, build_PQ_bytes, use_opq, label_file, universal_label,
             Lf);
       else if (data_type == std::string("uint8"))
-        return build_in_memory_index<uint8_t, uint16_t>(
+        return build_in_memory_index<uint8_t, uint32_t, uint16_t>(
             metric, data_path, R, L, alpha, index_path_prefix, num_threads,
             use_pq_build, build_PQ_bytes, use_opq, label_file, universal_label,
             Lf);
       else if (data_type == std::string("float"))
-        return build_in_memory_index<float, uint16_t>(metric, data_path, R, L, alpha,
+        return build_in_memory_index<float, uint32_t, uint16_t>(metric, data_path, R, L, alpha,
                                             index_path_prefix, num_threads,
                                             use_pq_build, build_PQ_bytes, use_opq,
                                             label_file, universal_label, Lf);
