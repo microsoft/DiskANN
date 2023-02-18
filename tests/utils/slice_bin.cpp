@@ -42,7 +42,7 @@ int aux_main(const std::string &input_file,
   uint64_t pts_remain = nptstotal;
   uint32_t next_pt_id = 0;
 
-  for (int slice = 1; pts_remain > 0; ++slice) {
+  for (unsigned slice = 1; pts_remain > 0; ++slice) {
     if (num_shards != 0 && slice > num_shards) {
       break;
     }
@@ -145,10 +145,10 @@ int main(int argc, char** argv) {
   try {
     if (data_type == std::string("float")) {
       return aux_main<float>(input_file, output_file_prefix, num_shards, shard_size);
-    } else if (data_type == std::string("float")) {
-      return aux_main<float>(input_file, output_file_prefix, num_shards, shard_size);
-    } else if (data_type == std::string("float")) {
-      return aux_main<float>(input_file, output_file_prefix, num_shards, shard_size);
+    } else if (data_type == std::string("int8")) {
+      return aux_main<int8_t>(input_file, output_file_prefix, num_shards, shard_size);
+    } else if (data_type == std::string("uint8")) {
+      return aux_main<uint8_t>(input_file, output_file_prefix, num_shards, shard_size);
     } else {
       std::cerr << "Unsupported data type. Use float or int8 or uint8"
                 << std::endl;
