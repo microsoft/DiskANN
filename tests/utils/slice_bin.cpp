@@ -49,7 +49,7 @@ int aux_main(const std::string &input_file,
     const std::string output_filename = output_file_prefix + "_subshard-" + std::to_string(slice) + ".bin";
     std::ofstream writer(output_filename, std::ios::binary);
 
-    int32_t pts_to_copy32 = std::min((int32_t)pts_remain, num_pts_per_shard);
+    int32_t pts_to_copy32 = std::min((int32_t)pts_remain, (int32_t)num_pts_per_shard);
     pts_remain -= pts_to_copy32;
 
     writer.write((char*)&pts_to_copy32, sizeof(int32_t));
