@@ -818,6 +818,7 @@ namespace diskann {
 
     // query <-> neighbor list
     float *dist_scratch = pq_query_scratch->aligned_dist_scratch;
+    uint64_t max_nnbrs = pq_query_scratch->max_nnbrs;
     _u8   *pq_coord_scratch = pq_query_scratch->aligned_pq_coord_scratch;
 
     // lambda to batch compute query<-> node distances in PQ space
@@ -948,7 +949,7 @@ namespace diskann {
         full_retset.push_back(
             Neighbor((unsigned) cached_nhood.first, cur_expanded_dist));
 
-        _u64      nnbrs = cached_nhood.second.first;
+        _u64      nnbrs = std::min(max_nnbrs, cached_nhood.second.first);
         unsigned *node_nbrs = cached_nhood.second.second;
 
         // compute node_nbrs <-> query dists in PQ space
@@ -987,7 +988,7 @@ namespace diskann {
         char *node_disk_buf =
             OFFSET_TO_NODE(frontier_nhood.second, frontier_nhood.first);
         unsigned *node_buf = OFFSET_TO_NODE_NHOOD(node_disk_buf);
-        _u64      nnbrs = (_u64) (*node_buf);
+        _u64      nnbrs = std::min(max_nnbrs, (_u64) (*node_buf));
         T        *node_fp_coords = OFFSET_TO_NODE_COORDS(node_disk_buf);
         //        assert(data_buf_idx < MAX_N_CMPS);
         if (data_buf_idx == MAX_N_CMPS)
