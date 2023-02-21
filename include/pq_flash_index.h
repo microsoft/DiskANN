@@ -87,6 +87,8 @@ namespace diskann {
         const LabelT &filter_label, const _u32 io_limit, const bool use_reorder_data = false,
         QueryStats *stats = nullptr);  
 
+    DISKANN_DLLEXPORT LabelT get_converted_label(const std::string &filter_label);
+
     DISKANN_DLLEXPORT _u32 range_search(const T *query1, const double range,
                                         const _u64          min_l_search,
                                         const _u64          max_l_search,
@@ -120,6 +122,8 @@ namespace diskann {
 
     DISKANN_DLLEXPORT void set_universal_label(const LabelT &label);
 
+    std::unordered_map<std::string, LabelT> load_label_map(const std::string &map_file);
+
 
    private:
     // index info
@@ -127,6 +131,7 @@ namespace diskann {
     // offset in sector: [(i % nnodes_per_sector) * max_node_len]
     // nnbrs of node `i`: *(unsigned*) (buf)
     // nbrs of node `i`: ((unsigned*)buf) + 1
+    
     _u64 max_node_len = 0, nnodes_per_sector = 0, max_degree = 0;
 
     // Data used for searching with re-order vectors
@@ -210,6 +215,7 @@ namespace diskann {
     tsl::robin_set<_u32>                    _has_dummy_pts;
     tsl::robin_map<_u32, _u32>              _dummy_to_real_map;
     tsl::robin_map<_u32, std::vector<_u32>> _real_to_dummy_map;
+    std::unordered_map<std::string, LabelT> _label_map;
 
 
 

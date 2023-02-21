@@ -219,7 +219,7 @@ int search_disk_index(
             query_result_dists[test_id].data() + (i * recall_at),
             optimized_beamwidth, use_reorder_data, stats + i);
       } else {
-        LabelT label_for_search =  std::stoul(filter_label);
+        LabelT label_for_search =  _pFlashIndex->get_converted_label(filter_label);
         _pFlashIndex->cached_beam_search(
             query + (i * query_aligned_dim), recall_at, L,
             query_result_ids_64.data() + (i * recall_at),
