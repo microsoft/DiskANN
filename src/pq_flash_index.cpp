@@ -952,8 +952,8 @@ namespace diskann {
         _u64 nnbrs = cached_nhood.second.first;
         if (nnbrs > max_nnbrs) {
             std::stringstream stream;
-            stream << "Unexpected number of neighbors in graph file. Expected "
-                   << max_nnbrs << ", but got" << nnbrs << "for neighbor id " << cached_nhood.first;
+            stream << "Unexpected number of neighbors in graph file. Expected "s
+                   << max_nnbrs << ", but got"s << nnbrs << "for neighbor id "s << cached_nhood.first;
             nnbrs = max_nnbrs;
             diskann::cerr << stream.str() << std::endl;
         }
@@ -998,9 +998,9 @@ namespace diskann {
         _u64      nnbrs = (_u64) (*node_buf);
         if (nnbrs > max_nnbrs) {
           std::stringstream stream;
-          stream << "Unexpected number of neighbors in graph file. Expected "
-                 << max_nnbrs ", but got" << nnbrs << "for neighbor id "
-                 << cached_nhood.first;
+          stream << "Unexpected number of neighbors in graph file. Expected "s
+                 << max_nnbrs << ", but got"s << nnbrs << "for neighbor id "s
+                 << frontier_nhood.first;
           nnbrs = max_nnbrs;
           diskann::cerr << stream.str() << std::endl;
         }
