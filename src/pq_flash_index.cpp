@@ -825,10 +825,19 @@ namespace diskann {
     auto compute_dists = [this, pq_coord_scratch, pq_dists](const unsigned *ids,
                                                             const _u64 n_ids,
                                                             float *dists_out) {
-      diskann::aggregate_coords(ids, n_ids, this->data, this->n_chunks,
-                                pq_coord_scratch);
-      diskann::pq_dist_lookup(pq_coord_scratch, n_ids, this->n_chunks, pq_dists,
-                              dists_out);
+      try {
+          diskann::aggregate_coords(ids, n_ids, this->data, this->n_chunks,
+                                    pq_coord_scratch);
+          diskann::pq_dist_lookup(pq_coord_scratch, n_ids, this->n_chunks,
+                                  pq_dists, dists_out);
+      } catch (const std::exception& e) {
+        std::stringstream stream;
+        stream << "Caught exception while computing PQ distances :"s << e.what();
+        diskann::cerr << stream.str() << std::endl;
+        // Make sure no invalid neighbor gets selected
+        for (int i = 0; i < n_ids; i++) {
+            dists_out[i] = std::numeric_limits<float>::max();
+        }
     };
     Timer query_timer, io_timer, cpu_timer;
 
