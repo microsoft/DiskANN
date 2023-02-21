@@ -279,9 +279,9 @@ namespace diskann {
         if (_filter_to_medoid_id.size() > 0) {
           std::ofstream medoid_writer(std::string(filename) +
                                       "_labels_to_medoids.txt");
+          assert(medoid_writer.is_open());
           for (auto iter : _filter_to_medoid_id) {
             medoid_writer << iter.first << ", " << iter.second << std::endl;
-            // std::cout << iter.first << ", " << iter.second << std::endl;
           }
           medoid_writer.close();
         }
@@ -289,12 +289,14 @@ namespace diskann {
         if (_use_universal_label) {
           std::ofstream universal_label_writer(std::string(filename) +
                                                "_universal_label.txt");
+          assert(universal_label_writer.is_open());
           universal_label_writer << _universal_label << std::endl;
           universal_label_writer.close();
         }
 
         if (_pts_to_labels.size() > 0) {
           std::ofstream label_writer(std::string(filename) + "_labels.txt");
+          assert(label_writer.is_open());
           for (_u32 i = 0; i < _pts_to_labels.size(); i++) {
             for (_u32 j = 0; j < (_pts_to_labels[i].size() - 1); j++) {
               label_writer << _pts_to_labels[i][j] << ",";
@@ -477,55 +479,13 @@ namespace diskann {
 
     _has_built = true;
 
-    size_t tags_file_num_pts = 0, graph_num_pts = 0, data_file_num_pts = 0;
+    size_t tags_file_num_pts = 0, graph_num_pts = 0, data_file_num_pts = 0,label_num_pts = 0;
 
     std::string mem_index_file(filename);
     std::string labels_file = mem_index_file + "_labels.txt";
     std::string labels_to_medoids = mem_index_file + "_labels_to_medoids.txt";
     std::string labels_map_file = mem_index_file + "_labels_map.txt";
-    if (file_exists(labels_file)) {
-      _label_map = load_label_map(labels_map_file);
-      parse_label_file(labels_file);
-      if (file_exists(labels_to_medoids)) {
-        std::ifstream medoid_stream(labels_to_medoids);
-
-        std::string line, token;
-        unsigned    line_cnt = 0;
-
-        _filter_to_medoid_id.clear();
-
-        while (std::getline(medoid_stream, line)) {
-          std::istringstream iss(line);
-          _u32               cnt = 0;
-          _u32               medoid = 0;
-          LabelT              label;
-          while (std::getline(iss, token, ',')) {
-            token.erase(std::remove(token.begin(), token.end(), '\n'),
-                        token.end());
-            token.erase(std::remove(token.begin(), token.end(), '\r'),
-                        token.end());
-            LabelT token_as_num = std::stoul(token);
-            if (cnt == 0)
-              label = token_as_num;
-            else
-              medoid = token_as_num;
-            cnt++;
-          }
-          _filter_to_medoid_id[label] = medoid;
-          line_cnt++;
-        }
-      }
-
-			std::string universal_label_file(filename);
-      universal_label_file += "_universal_label.txt";
-      if (file_exists(universal_label_file)) {
-        std::ifstream universal_label_reader(universal_label_file);
-        universal_label_reader >> _universal_label;
-        _use_universal_label = true;
-        universal_label_reader.close();
-      }
-    }
-
+    
     if (!_save_as_one_file) {
       // For DLVS Store, we will not support saving the index in multiple files.
 #ifndef EXEC_ENV_OLS
@@ -562,6 +522,51 @@ namespace diskann {
       aligned_free(_data);
       throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
                                   __LINE__);
+    }
+
+    if (file_exists(labels_file)) {
+      _label_map = load_label_map(labels_map_file);
+      parse_label_file(labels_file, label_num_pts);
+      assert(label_num_pts == data_file_num_pts);
+      if (file_exists(labels_to_medoids)) {
+        std::ifstream medoid_stream(labels_to_medoids);
+        assert(label_num_pts == data_file_num_pts);
+        std::string line, token;
+        unsigned    line_cnt = 0;
+
+        _filter_to_medoid_id.clear();
+
+        while (std::getline(medoid_stream, line)) {
+          std::istringstream iss(line);
+          _u32               cnt = 0;
+          _u32               medoid = 0;
+          LabelT              label;
+          while (std::getline(iss, token, ',')) {
+            token.erase(std::remove(token.begin(), token.end(), '\n'),
+                        token.end());
+            token.erase(std::remove(token.begin(), token.end(), '\r'),
+                        token.end());
+            LabelT token_as_num = std::stoul(token);
+            if (cnt == 0)
+              label = token_as_num;
+            else
+              medoid = token_as_num;
+            cnt++;
+          }
+          _filter_to_medoid_id[label] = medoid;
+          line_cnt++;
+        }
+      }
+
+			std::string universal_label_file(filename);
+      universal_label_file += "_universal_label.txt";
+      if (file_exists(universal_label_file)) {
+        std::ifstream universal_label_reader(universal_label_file);
+        assert(label_num_pts == data_file_num_pts);
+        universal_label_reader >> _universal_label;
+        _use_universal_label = true;
+        universal_label_reader.close();
+      }
     }
 
     _nd = data_file_num_pts - _num_frozen_pts;
@@ -1740,10 +1745,11 @@ namespace diskann {
   }
 
   template<typename T, typename TagT, typename LabelT>
-  void Index<T, TagT, LabelT>::parse_label_file(const std::string &map_file) {
+  void Index<T, TagT, LabelT>::parse_label_file(const std::string &label_file, size_t &num_points) {
     // Format of Label txt file: filters with comma separators
 
-    std::ifstream infile(map_file);
+    std::ifstream infile(label_file);
+    assert(infile.is_open());
     std::string   line, token;
     unsigned      line_cnt = 0;
 
@@ -1755,28 +1761,34 @@ namespace diskann {
     infile.clear();
     infile.seekg(0, std::ios::beg);
     line_cnt = 0;
-    while (std::getline(infile, line)) {
-      std::istringstream iss(line);
-      std::vector<LabelT> lbls(0);
-      getline(iss, token, '\t');
-      std::istringstream new_iss(token);
-      while (getline(new_iss, token, ',')) {
-        token.erase(std::remove(token.begin(), token.end(), '\n'), token.end());
-        token.erase(std::remove(token.begin(), token.end(), '\r'), token.end());
-        LabelT token_as_num = std::stoul(token);
-        lbls.push_back(token_as_num);
-        _labels.insert(token_as_num);
+    try {
+      while (std::getline(infile, line)) {
+        std::istringstream iss(line);
+        std::vector<LabelT> lbls(0);
+        getline(iss, token, '\t');
+        std::istringstream new_iss(token);
+        while (getline(new_iss, token, ',')) {
+          token.erase(std::remove(token.begin(), token.end(), '\n'), token.end());
+          token.erase(std::remove(token.begin(), token.end(), '\r'), token.end());
+          LabelT token_as_num = std::stoul(token);
+          lbls.push_back(token_as_num);
+          _labels.insert(token_as_num);
+        }
+        if (lbls.size() <= 0) {
+          diskann::cout << "No label found";
+          exit(-1);
+        }
+        std::sort(lbls.begin(), lbls.end());
+        _pts_to_labels[line_cnt] = lbls;
+        line_cnt++;
       }
-      if (lbls.size() <= 0) {
-        std::cout << "No label found";
-        exit(-1);
-      }
-      std::sort(lbls.begin(), lbls.end());
-      _pts_to_labels[line_cnt] = lbls;
-      line_cnt++;
+      diskann::cout << "Identified " << _labels.size() << " distinct label(s)"
+                << std::endl;
+      num_points = line_cnt;
+    } catch (std::system_error &e) {
+      throw FileException(label_file, e, __FUNCSIG__, __FILE__, __LINE__);
     }
-    std::cout << "Identified " << _labels.size() << " distinct label(s)"
-              << std::endl;
+
   }
 
   template<typename T, typename TagT, typename LabelT>
@@ -1794,9 +1806,10 @@ namespace diskann {
     _labels_file = label_file;
     _filtered_index = true;
     _filter_to_medoid_id.clear();
-    parse_label_file(label_file);  // determines medoid for each label and
+    size_t num_points_labels = 0;
+    parse_label_file(label_file, num_points_labels);  // determines medoid for each label and
                                    // identifies the points to label mapping
-
+    assert(label_num_pts != num_points_to_load);
     _u32 counter = 0;
 #pragma omp parallel for schedule(dynamic, 1)
     for (int lbl = 0; lbl < _labels.size(); lbl++) {
@@ -1836,15 +1849,13 @@ namespace diskann {
           _filter_to_medoid_id[x] = best_medoid;
           _medoid_counts[best_medoid]++;
           std::stringstream a;
-          // a << "Medoid of " << x << " is " << best_medoid <<
-          // std::endl; std::cout << a.str();
         }
       }
 #pragma omp critical
       counter++;
       std::stringstream a;
       a << ((100.0 * counter) / _labels.size()) << "\% processed \r";
-      std::cout << a.str() << std::flush;
+      diskann::cout << a.str() << std::flush;
     }
 
     this->build(filename, num_points_to_load, parameters, tags);

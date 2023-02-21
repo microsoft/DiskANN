@@ -75,7 +75,7 @@ namespace diskann {
                                      const _u64 nshards, unsigned max_degree,
                                      const std::string &output_vamana,
                                      const std::string &medoids_file, bool use_filters = false,
-      const std::string &labels_to_medoids_file = std::string(""));
+                                     const std::string &labels_to_medoids_file = std::string(""));
 
 DISKANN_DLLEXPORT void extract_shard_labels(
       const std::string &in_label_file, const std::string &shard_ids_bin,

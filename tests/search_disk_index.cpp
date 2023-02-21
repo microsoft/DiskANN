@@ -452,4 +452,5 @@ int main(int argc, char** argv) {
     diskann::cerr << "Index search failed." << std::endl;
     return -1;
   }
+
 }
