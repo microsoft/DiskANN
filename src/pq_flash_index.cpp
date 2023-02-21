@@ -446,6 +446,38 @@ namespace diskann {
   }
 
   template<typename T, typename LabelT>
+  std::unordered_map<std::string, LabelT> PQFlashIndex<T,LabelT>::load_label_map(
+                                const std::string& labels_map_file) {
+    std::unordered_map<std::string, LabelT> string_to_int_mp;
+    std::ifstream map_reader(labels_map_file);
+    std::string line, token;
+    LabelT token_as_num;
+    std::string label_str;
+    while (std::getline(map_reader, line)) {
+      std::istringstream  iss(line);
+      getline(iss, token, '\t');
+      label_str = token;
+      getline(iss, token, '\t');
+      token_as_num = std::stoul(token);
+      string_to_int_mp[label_str] = token_as_num;
+    }
+    return string_to_int_mp;
+  }
+
+  template<typename T, typename LabelT>
+  LabelT PQFlashIndex<T,LabelT>::get_converted_label(const std::string &filter_label){
+    if(_label_map.find(filter_label) != _label_map.end()){
+      return _label_map[filter_label];
+    }
+    std::stringstream stream;
+    stream << "Unable to find label in the Label Map";
+    diskann::cerr << stream.str() << std::endl;
+    throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
+                                __LINE__);
+    exit(-1);
+  }
+
+  template<typename T, typename LabelT>
   void PQFlashIndex<T,LabelT>::get_label_file_metadata(std::string map_file,
                                                 _u32 &      num_pts,
                                                 _u32 &      num_total_labels) {
@@ -596,8 +628,12 @@ namespace diskann {
         std ::string(disk_index_file) + "_labels_to_medoids.txt";
     std::string dummy_map_file =
         std ::string(disk_index_file) + "_dummy_map.txt";
+    std::string labels_map_file = 
+        std ::string(disk_index_file) + "_labels_map.txt";
+
     if (file_exists(labels_file)) {
       parse_label_file(labels_file);
+      _label_map = load_label_map(labels_map_file);
       if (file_exists(labels_to_medoids)) {
         std::ifstream medoid_stream(labels_to_medoids);
 

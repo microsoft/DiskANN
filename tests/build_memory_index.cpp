@@ -38,6 +38,9 @@ int build_in_memory_index(const diskann::Metric& metric,
   paras.Set<float>("alpha", alpha);
   paras.Set<bool>("saturate_graph", 0);
   paras.Set<unsigned>("num_threads", num_threads);
+  std::string labels_file_to_use = save_path + "_label_formatted.txt";
+  std::string mem_labels_int_map_file = save_path + "_labels_map.txt";
+    
 
   _u64 data_num, data_dim;
   diskann::get_bin_metadata(data_path, data_num, data_dim);
@@ -48,18 +51,21 @@ int build_in_memory_index(const diskann::Metric& metric,
   if (label_file == "") {
     index.build(data_path.c_str(), data_num, paras);
   } else {
+    convert_labels_string_to_int(label_file, labels_file_to_use, 
+                                  mem_labels_int_map_file, universal_label);
     if (universal_label != "") {
       LabelT unv_label_as_num = std::stoul(universal_label);
       index.set_universal_label(unv_label_as_num);
     }
-    index.build_filtered_index(data_path.c_str(), label_file, data_num, paras);
+    index.build_filtered_index(data_path.c_str(), labels_file_to_use, data_num, paras);
   }
   std::chrono::duration<double> diff =
       std::chrono::high_resolution_clock::now() - s;
 
   std::cout << "Indexing time: " << diff.count() << "\n";
   index.save(save_path.c_str());
-
+  if(label_file != "")
+    std::remove(labels_file_to_use.c_str());
   return 0;
 }
 

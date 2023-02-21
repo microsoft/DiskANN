@@ -138,6 +138,9 @@ namespace diskann {
 
     DISKANN_DLLEXPORT void set_universal_label(const LabelT &label);
 
+    //Get converted integer label from string to int map (_label_map)
+    DISKANN_DLLEXPORT LabelT get_converted_label(const std::string &filter_label);
+
     // Set starting point of an index before inserting any points incrementally
     DISKANN_DLLEXPORT void set_start_point(T *data);
     // Set starting point to a random point on a sphere of certain radius
@@ -240,7 +243,9 @@ namespace diskann {
     // determines navigating node of the graph by calculating medoid of datafopt
     unsigned calculate_entry_point();
 
-    void parse_label_file(const std::string &map_file);
+    void parse_label_file(const std::string &label_file);
+
+    std::unordered_map<std::string, LabelT> load_label_map(const std::string &map_file);
 
     std::pair<uint32_t, uint32_t> iterate_to_fixed_point(
         const T *node_coords, const unsigned Lindex,
@@ -375,6 +380,7 @@ namespace diskann {
     bool                            _use_universal_label = false;
     LabelT                           _universal_label = 0;
     uint32_t                        _filterIndexingQueueSize;
+    std::unordered_map<std::string, LabelT> _label_map;
 
     // Indexing parameters
     uint32_t _indexingQueueSize;

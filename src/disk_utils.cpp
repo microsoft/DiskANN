@@ -635,7 +635,7 @@ namespace diskann {
         _pvamanaIndex->build(base_file.c_str(), base_num, paras);
       else {
         if (universal_label != "") {  //  indicates no universal label
-        LabelT unv_label_as_num = std::stoul(universal_label);
+        LabelT unv_label_as_num = 0;
           _pvamanaIndex->set_universal_label(unv_label_as_num);
         }
         _pvamanaIndex->build_filtered_index(base_file.c_str(), label_file,
@@ -712,7 +712,7 @@ namespace diskann {
         diskann::extract_shard_labels(label_file, shard_ids_file,
                                       shard_labels_file);
         if (universal_label != "") {  //  indicates no universal label
-          LabelT unv_label_as_num= std::stoul(universal_label);
+          LabelT unv_label_as_num= 0;
           _pvamanaIndex->set_universal_label(unv_label_as_num);
         }
         _pvamanaIndex->build_filtered_index(
@@ -1115,8 +1115,9 @@ namespace diskann {
 
     std::string base_file(dataFilePath);
     std::string data_file_to_use = base_file;
-    std::string labels_file_to_use = label_file;
-    std::string index_prefix_path(indexFilePath);
+    std::string labels_file_original = label_file;
+    std::string index_prefix_path(indexFilePath);    
+    std::string labels_file_to_use = index_prefix_path + "_label_formatted.txt";
     std::string pq_pivots_path = index_prefix_path + "_pq_pivots.bin";
     std::string pq_compressed_vectors_path =
         index_prefix_path + "_pq_compressed.bin";
@@ -1131,6 +1132,7 @@ namespace diskann {
     std::string disk_labels_file = disk_index_path + "_labels.txt";
     std::string mem_univ_label_file = mem_index_path + "_universal_label.txt";
     std::string disk_univ_label_file = disk_index_path + "_universal_label.txt";
+    std::string disk_labels_int_map_file = disk_index_path + "_labels_map.txt";
     std::string dummy_remap_file =
         disk_index_path +
         "_dummy_remap.txt";  // remap will be used if we break-up points of high
@@ -1200,12 +1202,14 @@ namespace diskann {
     // of index build happens on the augmented base and labels
     std::string augmented_data_file, augmented_labels_file;
     if (use_filters) {
+      convert_labels_string_to_int(labels_file_original, labels_file_to_use, 
+                                  disk_labels_int_map_file, universal_label);
       augmented_data_file = index_prefix_path + "_augmented_data.bin";
       augmented_labels_file = index_prefix_path + "_augmented_labels.txt";
       if (filter_threshold != 0) {
         dummy_remap_file = index_prefix_path + "_dummy_remap.txt";
         breakup_dense_points<T>(
-            data_file_to_use, label_file, filter_threshold, augmented_data_file,
+            data_file_to_use, labels_file_to_use, filter_threshold, augmented_data_file,
             augmented_labels_file,
             dummy_remap_file);  // RKNOTE: This has large memory footprint, need
                                 // to make this streaming
@@ -1292,6 +1296,7 @@ namespace diskann {
       }
       std::remove(augmented_data_file.c_str());
       std::remove(augmented_labels_file.c_str());
+      std::remove(labels_file_to_use.c_str());
     }
 
     std::remove(mem_index_path.c_str());
