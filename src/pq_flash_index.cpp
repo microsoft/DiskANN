@@ -949,11 +949,11 @@ namespace diskann {
         full_retset.push_back(
             Neighbor((unsigned) cached_nhood.first, cur_expanded_dist));
 
-        _u64      nnbrs = cached_nhood.second.first;
+        _u64 nnbrs = cached_nhood.second.first;
         if (nnbrs > max_nnbrs) {
             std::stringstream stream;
             stream << "Unexpected number of neighbors in graph file. Expected "
-                   << max_nnbrs ", but got" << nnbrs << "for neighbor id " << cached_nhood.first;
+                   << max_nnbrs << ", but got" << nnbrs << "for neighbor id " << cached_nhood.first;
             nnbrs = max_nnbrs;
             diskann::cerr << stream.str() << std::endl;
         }
