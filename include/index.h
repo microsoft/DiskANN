@@ -243,7 +243,7 @@ namespace diskann {
     // determines navigating node of the graph by calculating medoid of datafopt
     unsigned calculate_entry_point();
 
-    void parse_label_file(const std::string &label_file);
+    void parse_label_file(const std::string &label_file, size_t &num_pts_labels);
 
     std::unordered_map<std::string, LabelT> load_label_map(const std::string &map_file);
 
