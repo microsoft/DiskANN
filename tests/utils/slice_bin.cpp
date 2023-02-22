@@ -42,8 +42,8 @@ int aux_main(const std::string &input_file,
   uint64_t pts_remain = nptstotal;
   uint32_t next_pt_id = 0;
 
-  for (unsigned slice = 1; pts_remain > 0; ++slice) {
-    if (num_shards != 0 && slice > num_shards) {
+  for (unsigned slice = 0; pts_remain > 0; ++slice) {
+    if (num_shards != 0 && slice >= num_shards) {
       break;
     }
     const std::string output_filename = output_file_prefix + "_subshard-" + std::to_string(slice) + ".bin";
@@ -103,7 +103,7 @@ int aux_main(const std::string &input_file,
 //
 // Output files will be: output_file_prefix_subshard-X.bin
 //                   and output_file_prefix_subshard-X_ids_uint32.bin
-// where X = 1,2,3,...
+// where X = 0,1,2,...
 
 int main(int argc, char** argv) {
   std::string input_file, output_file_prefix;
@@ -122,7 +122,7 @@ int main(int argc, char** argv) {
                        "Path to the .bin file");
     desc.add_options()("output_file_prefix",
                        po::value<std::string>(&output_file_prefix)->required(),
-                       "Output file prefix. Will generate files like this_subshard-5.bin and this_subshard-X_ids_uint32.bin");
+                       "Output file prefix. Will generate files like this_subshard-0.bin and this_subshard-0_ids_uint32.bin");
     desc.add_options()("num_shards",
                        po::value<unsigned>(&num_shards)->default_value(0),
                        "Number of shards. Default (0) is to partition the entire .bin file");

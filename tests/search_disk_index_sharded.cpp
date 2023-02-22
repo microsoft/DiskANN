@@ -100,7 +100,7 @@ int search_disk_index_sharded(
   std::vector<std::vector<double>> global_n_ios(Lvec.size(), std::vector<double>(query_num, 0.0));
   std::vector<std::vector<double>> global_cpu_us(Lvec.size(), std::vector<double>(query_num, 0.0));
 
-  for (unsigned shard_id = 1; shard_id <= num_shards; ++shard_id) {
+  for (unsigned shard_id = 0; shard_id < num_shards; ++shard_id) {
 
       std::shared_ptr<AlignedFileReader> reader = nullptr;
 #ifdef _WINDOWS
