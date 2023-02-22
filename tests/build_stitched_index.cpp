@@ -734,13 +734,20 @@ int main(int argc, char **argv) {
   std::string data_type;
   path        input_data_path, final_index_path_prefix, label_data_path;
   label       universal_label;
+  std::string universal_label_str;
   unsigned    num_threads, R, L, stitched_R;
   float       alpha;
-
+  
   auto index_timer = std::chrono::high_resolution_clock::now();
   handle_args(argc, argv, data_type, input_data_path, final_index_path_prefix,
               label_data_path, universal_label, num_threads, R, L, stitched_R,
               alpha);
+
+  path labels_file_to_use = final_index_path_prefix + "_label_formatted.txt";
+  path labels_map_file = final_index_path_prefix + "_labels_map.txt";
+
+  convert_labels_string_to_int(label_data_path, labels_file_to_use, 
+                                  labels_map_file, universal_label_str);
 
   // 2. parse label file and create necessary data structures
   std::vector<label_set>      point_ids_to_labels;
@@ -748,7 +755,7 @@ int main(int argc, char **argv) {
   label_set                   all_labels;
 
   std::tie(point_ids_to_labels, labels_to_number_of_points, all_labels) =
-      parse_label_file(label_data_path, universal_label);
+      parse_label_file(labels_file_to_use, universal_label);
 
   // 3. for each label, make a separate data file
   tsl::robin_map<label, std::vector<_u32>> label_id_to_orig_id_map;
@@ -830,21 +837,21 @@ int main(int argc, char **argv) {
   // 5a. save the stitched graph to disk
   save_full_index(final_index_path_prefix, input_data_path, stitched_graph_size,
                   stitched_graph, label_entry_points, universal_label,
-                  label_data_path);
+                  labels_file_to_use);
 
   // 6. run a prune on the stitched index, and save to disk
   if (data_type == "uint8")
     prune_and_save<uint8_t>(final_index_path_prefix, input_data_path,
                             stitched_graph, stitched_R, label_entry_points,
-                            universal_label, label_data_path, num_threads);
+                            universal_label, labels_file_to_use, num_threads);
   else if (data_type == "int8")
     prune_and_save<int8_t>(final_index_path_prefix, input_data_path,
                            stitched_graph, stitched_R, label_entry_points,
-                           universal_label, label_data_path, num_threads);
+                           universal_label, labels_file_to_use, num_threads);
   else if (data_type == "float")
     prune_and_save<float>(final_index_path_prefix, input_data_path,
                           stitched_graph, stitched_R, label_entry_points,
-                          universal_label, label_data_path, num_threads);
+                          universal_label, labels_file_to_use, num_threads);
   else
     throw;
 
