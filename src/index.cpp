@@ -1809,7 +1809,7 @@ namespace diskann {
     size_t num_points_labels = 0;
     parse_label_file(label_file, num_points_labels);  // determines medoid for each label and
                                    // identifies the points to label mapping
-    assert(label_num_pts != num_points_to_load);
+    assert(num_points_labels != num_points_to_load);
     _u32 counter = 0;
 #pragma omp parallel for schedule(dynamic, 1)
     for (int lbl = 0; lbl < _labels.size(); lbl++) {
