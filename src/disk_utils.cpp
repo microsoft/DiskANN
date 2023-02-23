@@ -802,7 +802,8 @@ namespace diskann {
   template<typename T>
   int build_disk_index(const char *dataFilePath, const char *indexFilePath,
                        const char     *indexBuildParameters,
-                       diskann::Metric compareMetric, bool use_opq) {
+                       diskann::Metric compareMetric, bool use_opq,
+                       unsigned search_PQ) {
     std::stringstream parser;
     parser << std::string(indexBuildParameters);
     std::string              cur_param;
@@ -903,37 +904,44 @@ namespace diskann {
     unsigned R = (unsigned) atoi(param_list[0].c_str());
     unsigned L = (unsigned) atoi(param_list[1].c_str());
 
-    double final_index_ram_limit = get_memory_budget(param_list[2]);
-    if (final_index_ram_limit <= 0) {
-      std::cerr << "Insufficient memory budget (or string was not in right "
-                   "format). Should be > 0."
+    size_t points_num, dim;
+
+    diskann::get_bin_metadata(data_file_to_use.c_str(), points_num, dim);
+
+    double final_index_ram_limit;
+    if (search_PQ == 0) {
+        final_index_ram_limit = get_memory_budget(param_list[2]);
+        if (final_index_ram_limit <= 0) {
+            std::cerr << "Insufficient memory budget (or string was not in right "
+                "format). Should be > 0."
                 << std::endl;
-      return -1;
+            return -1;
+        }
     }
-    double indexing_ram_budget = (float) atof(param_list[3].c_str());
+    else {
+        final_index_ram_limit = (search_PQ + 0.1) * points_num;
+    }
+    double indexing_ram_budget = (float)atof(param_list[3].c_str());
     if (indexing_ram_budget <= 0) {
-      std::cerr << "Not building index. Please provide more RAM budget"
-                << std::endl;
-      return -1;
+        std::cerr << "Not building index. Please provide more RAM budget"
+            << std::endl;
+        return -1;
     }
-    _u32 num_threads = (_u32) atoi(param_list[4].c_str());
+    _u32 num_threads = (_u32)atoi(param_list[4].c_str());
 
     if (num_threads != 0) {
-      omp_set_num_threads(num_threads);
-      mkl_set_num_threads(num_threads);
+        omp_set_num_threads(num_threads);
+        mkl_set_num_threads(num_threads);
     }
 
     diskann::cout << "Starting index build: R=" << R << " L=" << L
-                  << " Query RAM budget: " << final_index_ram_limit
-                  << " Indexing ram budget: " << indexing_ram_budget
-                  << " T: " << num_threads << std::endl;
+        << " Query RAM budget: " << final_index_ram_limit
+        << " Indexing ram budget: " << indexing_ram_budget
+        << " T: " << num_threads << std::endl;
 
     auto s = std::chrono::high_resolution_clock::now();
-
-    size_t points_num, dim;
-
     Timer timer;
-    diskann::get_bin_metadata(data_file_to_use.c_str(), points_num, dim);
+
     const double p_val =
         ((double) MAX_PQ_TRAINING_SET_SIZE / (double) points_num);
 
@@ -1060,15 +1068,15 @@ namespace diskann {
   template DISKANN_DLLEXPORT int build_disk_index<int8_t>(
       const char *dataFilePath, const char *indexFilePath,
       const char *indexBuildParameters, diskann::Metric compareMetric,
-      bool use_opq);
+      bool use_opq, unsigned search_PQ);
   template DISKANN_DLLEXPORT int build_disk_index<uint8_t>(
       const char *dataFilePath, const char *indexFilePath,
       const char *indexBuildParameters, diskann::Metric compareMetric,
-      bool use_opq);
+      bool use_opq, unsigned search_PQ);
   template DISKANN_DLLEXPORT int build_disk_index<float>(
       const char *dataFilePath, const char *indexFilePath,
       const char *indexBuildParameters, diskann::Metric compareMetric,
-      bool use_opq);
+      bool use_opq, unsigned search_PQ);
 
   template DISKANN_DLLEXPORT int build_merged_vamana_index<int8_t>(
       std::string base_file, diskann::Metric compareMetric, unsigned L,

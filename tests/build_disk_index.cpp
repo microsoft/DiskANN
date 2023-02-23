@@ -14,7 +14,7 @@ namespace po = boost::program_options;
 
 int main(int argc, char** argv) {
   std::string data_type, dist_fn, data_path, index_path_prefix;
-  unsigned    num_threads, R, L, disk_PQ, build_PQ;
+  unsigned    num_threads, R, L, disk_PQ, build_PQ, search_PQ;
   float       B, M;
   bool        append_reorder_data = false;
   bool        use_opq = false;
@@ -39,9 +39,12 @@ int main(int argc, char** argv) {
     desc.add_options()(
         "Lbuild,L", po::value<uint32_t>(&L)->default_value(100),
         "Build complexity, higher value results in better graphs");
-    desc.add_options()("search_DRAM_budget,B", po::value<float>(&B)->required(),
+    desc.add_options()("search_DRAM_budget,B", po::value<float>(&B)->default_value(-1.0),
                        "DRAM budget in GB for searching the index to set the "
                        "compressed level for data while search happens");
+    desc.add_options()("search_PQ_bytes", po::value<unsigned>(&search_PQ)->default_value(0),
+                       "Bytes to use per vector in the PQ compression for search"
+                       "(provide either this or search_DRAM_budget)");
     desc.add_options()("build_DRAM_budget,M", po::value<float>(&M)->required(),
                        "DRAM budget in GB for building the index");
     desc.add_options()(
@@ -91,6 +94,13 @@ int main(int argc, char** argv) {
     return -1;
   }
 
+  if ((B < 0) == (search_PQ == 0)) {
+    std::cout << "Error. Exactly one of search_DRAM_budget (B) or search_PQ_bytes"
+                 " should be provided"
+              << std::endl;
+    return -1;
+  }
+
   if (append_reorder_data) {
     if (disk_PQ == 0) {
       std::cout << "Error: It is not necessary to append data for reordering "
@@ -119,15 +129,15 @@ int main(int argc, char** argv) {
     if (data_type == std::string("int8"))
       return diskann::build_disk_index<int8_t>(data_path.c_str(),
                                                index_path_prefix.c_str(),
-                                               params.c_str(), metric, use_opq);
+                                               params.c_str(), metric, use_opq, search_PQ);
     else if (data_type == std::string("uint8"))
       return diskann::build_disk_index<uint8_t>(
           data_path.c_str(), index_path_prefix.c_str(), params.c_str(), metric,
-          use_opq);
+          use_opq, search_PQ);
     else if (data_type == std::string("float"))
       return diskann::build_disk_index<float>(data_path.c_str(),
                                               index_path_prefix.c_str(),
-                                              params.c_str(), metric, use_opq);
+                                              params.c_str(), metric, use_opq, search_PQ);
     else {
       diskann::cerr << "Error. Unsupported data type" << std::endl;
       return -1;

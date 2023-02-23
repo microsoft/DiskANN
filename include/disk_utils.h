@@ -99,7 +99,8 @@ namespace diskann {
                                          const char     *indexFilePath,
                                          const char     *indexBuildParameters,
                                          diskann::Metric _compareMetric,
-                                         bool            use_opq = false);
+                                         bool            use_opq = false,
+                                         unsigned        search_PQ = 0);
 
   template<typename T>
   DISKANN_DLLEXPORT void create_disk_layout(
