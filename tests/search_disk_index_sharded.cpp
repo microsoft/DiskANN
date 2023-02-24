@@ -57,7 +57,7 @@ int search_disk_index_sharded(
     std::string& gt_file, const unsigned num_threads, const unsigned recall_at,
     const unsigned beamwidth, const unsigned num_nodes_to_cache,
     const _u32 search_io_limit, const std::vector<unsigned>& Lvec,
-    const bool use_reorder_data) {
+    const bool use_reorder_data, const std::string& mode, unsigned num_closest_shards) {
   diskann::cout << "Search parameters: #threads: " << num_threads << ", ";
   if (beamwidth <= 0)
     diskann::cout << "beamwidth to be optimized for each L value" << std::flush;
@@ -76,6 +76,49 @@ int search_disk_index_sharded(
   diskann::load_aligned_bin<T>(query_file, query, query_num, query_dim,
                                query_aligned_dim);
 
+  // assign queries to shards
+  std::vector<std::vector<size_t>> query_ids_for_shard(num_shards);
+  if (mode == "all") {
+    for (unsigned shard_id = 0; shard_id < num_shards; ++shard_id) {
+      // all queries for all shards
+      for (size_t query_id = 0; query_id < query_num; ++query_id) {
+        query_ids_for_shard[shard_id].push_back(query_id);
+      }
+    }
+  } else if (mode == "kmeans") {
+    const std::string centroids_file =
+        index_group_path_prefix + "_centroids.bin";
+    size_t num_centroids, dim_centroids;
+    std::unique_ptr<float[]> centroids;
+    diskann::load_bin<float>(centroids_file, centroids, num_centroids,
+                             dim_centroids);
+    if (num_centroids != num_shards) {
+      diskann::cout << "number of centroids not equal to the number of shards"
+                    << std::endl;
+      return -1;
+    }
+    if (dim_centroids != query_dim) {
+      diskann::cout << "dimension of centroids file not equal to the dimension "
+                       "of query file"
+                    << std::endl;
+      return -1;
+    }
+    std::unique_ptr<float[]> query_float;
+    diskann::convert_types<T, float>(query, query_float.get(), query_num,
+                                     query_dim);
+    std::unique_ptr<uint32_t[]> closest_centers_ivf =
+        std::make_unique<uint32_t[]>(query_num * num_closest_shards);
+    //math_utils::compute_closest_centers(
+    //    query_float.get(), query_num, query_dim, centroids.get(), num_centroids,
+    //    (size_t) num_closest_shards, closest_centers_ivf.get(), query_ids_for_shard.data(), nullptr);
+    math_utils::calc_distance(nullptr, nullptr, 0); // nonsense, just to test if linking will fail
+    diskann::cout << "number of queries per shard:";
+    for (const auto& it : query_ids_for_shard) {
+      diskann::cout << " " << it.size();
+    }
+    diskann::cout << std::endl;
+  }
+
   bool calc_recall_flag = false;
   if (gt_file != std::string("null") && gt_file != std::string("NULL") &&
       file_exists(gt_file)) {
@@ -84,6 +127,7 @@ int search_disk_index_sharded(
       diskann::cout
           << "Error. Mismatch in number of queries and ground truth data"
           << std::endl;
+      return -1;
     }
     calc_recall_flag = true;
   }
@@ -205,6 +249,8 @@ int search_disk_index_sharded(
 
       uint32_t optimized_beamwidth = 2;
 
+      const size_t query_num_this_shard = query_ids_for_shard[shard_id].size();
+
       for (uint32_t test_id = 0; test_id < Lvec.size(); test_id++) {
           _u64 L = Lvec[test_id];
 
@@ -220,44 +266,51 @@ int search_disk_index_sharded(
           } else
               optimized_beamwidth = beamwidth;
 
-          shard_query_result_local_ids[test_id].resize(minKL * query_num);
-          shard_query_result_global_ids[test_id].resize(minKL * query_num);
-          shard_query_result_dists[test_id].resize(minKL * query_num);
+          shard_query_result_local_ids[test_id].resize(minKL *
+                                                       query_num_this_shard);
+          shard_query_result_global_ids[test_id].resize(minKL *
+                                                        query_num_this_shard);
+          shard_query_result_dists[test_id].resize(minKL *
+                                                   query_num_this_shard);
 
-          auto local_stats = std::make_unique<diskann::QueryStats[]>(query_num);
+          auto local_stats =
+              std::make_unique<diskann::QueryStats[]>(query_num_this_shard);
 
-          std::vector<uint64_t> shard_query_result_local_ids_64(minKL * query_num);
+          std::vector<uint64_t> shard_query_result_local_ids_64(
+              minKL * query_num_this_shard);
           auto                  s = std::chrono::high_resolution_clock::now();
 
 #pragma omp parallel for schedule(dynamic, 1)
-          for (_s64 i = 0; i < (int64_t)query_num; i++) {
+          for (_s64 j = 0; j < (_s64)query_num_this_shard; ++j) {
+              const _s64 i = query_ids_for_shard[shard_id][j];
               _pFlashIndex->cached_beam_search(
                   query + (i * query_aligned_dim), minKL, L,
-                  shard_query_result_local_ids_64.data() + (i * minKL),
-                  shard_query_result_dists[test_id].data() + (i * minKL),
-                  optimized_beamwidth, search_io_limit, use_reorder_data, local_stats.get() + i);
+                  shard_query_result_local_ids_64.data() + (j * minKL),
+                  shard_query_result_dists[test_id].data() + (j * minKL),
+                  optimized_beamwidth, search_io_limit, use_reorder_data, local_stats.get() + j);
           }
           auto                          e = std::chrono::high_resolution_clock::now();
           std::chrono::duration<double> diff = e - s;
-          const float local_qps = (1.0 * query_num) / (1.0 * diff.count());
+          const float local_qps = (1.0 * query_num_this_shard) / (1.0 * diff.count());
           const float local_qps_per_thread = local_qps / num_threads;
 
           diskann::convert_types<uint64_t, uint32_t>(shard_query_result_local_ids_64.data(),
               shard_query_result_local_ids[test_id].data(),
-              query_num, minKL);
+              query_num_this_shard, minKL);
 
           // renumber shard_query_result_local_ids to shard_query_result_global_ids
-          for (_s64 j = 0; j < (int64_t)query_num * minKL; ++j) {
+          for (_s64 j = 0; j < (int64_t)query_num_this_shard * minKL; ++j) {
               shard_query_result_global_ids[test_id][j] =
                   local_id_to_global_id[shard_query_result_local_ids[test_id][j]];
           }
 
           // copy shard_query_result_ids[test_id] to global_query_result_topK[test_id]
-          for (_s64 i = 0; i < (int64_t)query_num; i++) {
-              for (unsigned j = 0; j < minKL; ++j) {
+          for (size_t j = 0; j < query_num_this_shard; ++j) {
+              const size_t i = query_ids_for_shard[shard_id][j];
+              for (unsigned k = 0; k < minKL; ++k) {
                   global_query_result_topK[test_id][i].emplace_back(
-                      shard_query_result_dists[test_id][i * minKL + j],
-                      shard_query_result_global_ids[test_id][i * minKL + j]
+                      shard_query_result_dists[test_id][j * minKL + k],
+                      shard_query_result_global_ids[test_id][j * minKL + k]
                   );
               }
               // sort global_query_result_topK[test_id] and leave only best K points
@@ -273,26 +326,27 @@ int search_disk_index_sharded(
 
           // aggregate local into global stats
           global_time_spent[test_id] += diff.count();
-          for (_s64 i = 0; i < (int64_t)query_num; i++) {
-              apply_max(latency_max_per_shard[test_id][i], local_stats[i].total_us);
-              global_n_ios[test_id][i] += local_stats[i].n_ios;
-              global_cpu_us[test_id][i] += local_stats[i].cpu_us;
+          for (size_t j = 0; j < query_num_this_shard; ++j) {
+              const size_t i = query_ids_for_shard[shard_id][j];
+              apply_max(latency_max_per_shard[test_id][i], local_stats[j].total_us);
+              global_n_ios[test_id][i] += local_stats[j].n_ios;
+              global_cpu_us[test_id][i] += local_stats[j].cpu_us;
           }
 
           auto local_mean_latency = diskann::get_mean_stats<float>(
-              local_stats.get(), query_num,
+              local_stats.get(), query_num_this_shard,
               [](const diskann::QueryStats& stats) { return stats.total_us; });
 
           auto local_latency_999 = diskann::get_percentile_stats<float>(
-              local_stats.get(), query_num, 0.999,
+              local_stats.get(), query_num_this_shard, 0.999,
               [](const diskann::QueryStats& stats) { return stats.total_us; });
 
           auto local_mean_ios = diskann::get_mean_stats<unsigned>(
-              local_stats.get(), query_num,
+              local_stats.get(), query_num_this_shard,
               [](const diskann::QueryStats& stats) { return stats.n_ios; });
 
           auto local_mean_cpuus = diskann::get_mean_stats<float>(
-              local_stats.get(), query_num,
+              local_stats.get(), query_num_this_shard,
               [](const diskann::QueryStats& stats) { return stats.cpu_us; });
 
           /*
@@ -413,8 +467,8 @@ int search_disk_index_sharded(
 
 int main(int argc, char** argv) {
   std::string data_type, dist_fn, index_group_path_prefix, result_path_prefix,
-      query_file, gt_file;
-  unsigned              num_threads, K, W, num_nodes_to_cache, search_io_limit, num_shards;
+      query_file, gt_file, mode;
+  unsigned              num_threads, K, W, num_nodes_to_cache, search_io_limit, num_shards, num_closest_shards;
   std::vector<unsigned> Lvec;
   bool                  use_reorder_data = false;
 
@@ -465,6 +519,15 @@ int main(int argc, char** argv) {
                        po::bool_switch()->default_value(false),
                        "Include full precision data in the index. Use only in "
                        "conjuction with compressed data on SSD.");
+    desc.add_options()(
+        "mode",
+        po::value<std::string>(&mode)->default_value(std::string("all")),
+        "Mode of execution: which shards to ask each query: all (default) / "
+        "kmeans");
+    desc.add_options()(
+        "num_closest_shards",
+        po::value<unsigned>(&num_closest_shards)->default_value(0),
+        "Number of closest shards to ask (in kmeans mode)");
 
     po::variables_map vm;
     po::store(po::parse_command_line(argc, argv, desc), vm);
@@ -494,6 +557,17 @@ int main(int argc, char** argv) {
     return -1;
   }
 
+  if (mode != "all" && mode != "kmeans") {
+    std::cout << "mode should be kmeans or all" << std::endl;
+    return -1;
+  }
+
+  if (mode == "kmeans" && num_closest_shards <= 0) {
+    std::cout
+        << "when mode=kmeans, num_closest_shards must be given and positive"
+        << std::endl;
+  }
+
   if ((data_type != std::string("float")) &&
       (metric == diskann::Metric::INNER_PRODUCT)) {
     std::cout << "Currently support only floating point data for Inner Product."
@@ -513,17 +587,15 @@ int main(int argc, char** argv) {
       return search_disk_index_sharded<float>(
           metric, index_group_path_prefix, num_shards, result_path_prefix, query_file, gt_file,
           num_threads, K, W, num_nodes_to_cache, search_io_limit, Lvec,
-          use_reorder_data);
+          use_reorder_data, mode, num_closest_shards);
     else if (data_type == std::string("int8"))
       return search_disk_index_sharded<int8_t>(
           metric, index_group_path_prefix, num_shards, result_path_prefix, query_file, gt_file,
-          num_threads, K, W, num_nodes_to_cache, search_io_limit, Lvec,
-          use_reorder_data);
+          num_threads, K, W, num_nodes_to_cache, search_io_limit, Lvec, use_reorder_data, mode, num_closest_shards);
     else if (data_type == std::string("uint8"))
       return search_disk_index_sharded<uint8_t>(
           metric, index_group_path_prefix, num_shards, result_path_prefix, query_file, gt_file,
-          num_threads, K, W, num_nodes_to_cache, search_io_limit, Lvec,
-          use_reorder_data);
+          num_threads, K, W, num_nodes_to_cache, search_io_limit, Lvec, use_reorder_data, mode, num_closest_shards);
     else {
       std::cerr << "Unsupported data type. Use float or int8 or uint8"
                 << std::endl;
