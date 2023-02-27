@@ -45,7 +45,8 @@ namespace math_utils {
   // those
   // values
 
-  void compute_closest_centers(float* data, size_t num_points, size_t dim,
+  DISKANN_DLLEXPORT void compute_closest_centers(
+      float* data, size_t num_points, size_t dim,
                                float* pivot_data, size_t num_centers, size_t k,
                                uint32_t*            closest_centers_ivf,
                                std::vector<size_t>* inverted_index = NULL,
