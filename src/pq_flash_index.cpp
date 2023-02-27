@@ -531,47 +531,42 @@ namespace diskann {
     _pts_to_label_offsets = new _u32[num_pts_in_label_file];
     _pts_to_labels = new _u32[num_pts_in_label_file + num_total_labels];
     _u32 counter = 0;
-    
-    try{     
-      while (std::getline(infile, line)) {
-        std::istringstream iss(line);
-        std::vector<_u32>  lbls(0);
+        
+    while (std::getline(infile, line)) {
+      std::istringstream iss(line);
+      std::vector<_u32>  lbls(0);
 
-        _pts_to_label_offsets[line_cnt] = counter;
-        _u32 &num_lbls_in_cur_pt = _pts_to_labels[counter];
-        num_lbls_in_cur_pt = 0;
-        counter++;
-        getline(iss, token, '\t');
-        std::istringstream new_iss(token);
-        while (getline(new_iss, token, ',')) {
-          token.erase(std::remove(token.begin(), token.end(), '\n'), token.end());
-          token.erase(std::remove(token.begin(), token.end(), '\r'), token.end());
-          LabelT token_as_num = std::stoul(token);
-          if (_labels.find(token_as_num) == _labels.end()) {
-            _filter_list.emplace_back(token_as_num);
-          }
-          int32_t filter_num = get_filter_number(token_as_num);
-          if (filter_num == -1) {
-            diskann::cout << "Error!! " << std::endl;
-            exit(-1);
-          }
-          _pts_to_labels[counter++] = filter_num;
-          num_lbls_in_cur_pt++;
-          _labels.insert(token_as_num);
+      _pts_to_label_offsets[line_cnt] = counter;
+      _u32 &num_lbls_in_cur_pt = _pts_to_labels[counter];
+      num_lbls_in_cur_pt = 0;
+      counter++;
+      getline(iss, token, '\t');
+      std::istringstream new_iss(token);
+      while (getline(new_iss, token, ',')) {
+        token.erase(std::remove(token.begin(), token.end(), '\n'), token.end());
+        token.erase(std::remove(token.begin(), token.end(), '\r'), token.end());
+        LabelT token_as_num = std::stoul(token);
+        if (_labels.find(token_as_num) == _labels.end()) {
+          _filter_list.emplace_back(token_as_num);
         }
-
-        if (num_lbls_in_cur_pt == 0) {
-          diskann::cout << "No label found for point " << line_cnt << std::endl;
+        int32_t filter_num = get_filter_number(token_as_num);
+        if (filter_num == -1) {
+          diskann::cout << "Error!! " << std::endl;
           exit(-1);
         }
-        line_cnt++;
+        _pts_to_labels[counter++] = filter_num;
+        num_lbls_in_cur_pt++;
+        _labels.insert(token_as_num);
       }
-      infile.close();
-      num_points_labels = line_cnt;
-    }catch (std::system_error &e) {
-      throw FileException(label_file, e, __FUNCSIG__, __FILE__,
-                          __LINE__);
+
+      if (num_lbls_in_cur_pt == 0) {
+        diskann::cout << "No label found for point " << line_cnt << std::endl;
+        exit(-1);
+      }
+      line_cnt++;
     }
+    infile.close();
+    num_points_labels = line_cnt;
   }
 
   template<typename T, typename LabelT>

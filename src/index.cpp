@@ -1761,34 +1761,29 @@ namespace diskann {
     infile.clear();
     infile.seekg(0, std::ios::beg);
     line_cnt = 0;
-    try {
-      while (std::getline(infile, line)) {
-        std::istringstream iss(line);
-        std::vector<LabelT> lbls(0);
-        getline(iss, token, '\t');
-        std::istringstream new_iss(token);
-        while (getline(new_iss, token, ',')) {
-          token.erase(std::remove(token.begin(), token.end(), '\n'), token.end());
-          token.erase(std::remove(token.begin(), token.end(), '\r'), token.end());
-          LabelT token_as_num = std::stoul(token);
-          lbls.push_back(token_as_num);
-          _labels.insert(token_as_num);
-        }
-        if (lbls.size() <= 0) {
-          diskann::cout << "No label found";
-          exit(-1);
-        }
-        std::sort(lbls.begin(), lbls.end());
-        _pts_to_labels[line_cnt] = lbls;
-        line_cnt++;
-      }
-      diskann::cout << "Identified " << _labels.size() << " distinct label(s)"
-                << std::endl;
-      num_points = line_cnt;
-    } catch (std::system_error &e) {
-      throw FileException(label_file, e, __FUNCSIG__, __FILE__, __LINE__);
-    }
 
+    while (std::getline(infile, line)) {
+      std::istringstream iss(line);
+      std::vector<LabelT> lbls(0);
+      getline(iss, token, '\t');
+      std::istringstream new_iss(token);
+      while (getline(new_iss, token, ',')) {
+        token.erase(std::remove(token.begin(), token.end(), '\n'), token.end());
+        token.erase(std::remove(token.begin(), token.end(), '\r'), token.end());
+        LabelT token_as_num = std::stoul(token);
+        lbls.push_back(token_as_num);
+        _labels.insert(token_as_num);
+      }
+      if (lbls.size() <= 0) {
+        diskann::cout << "No label found";
+        exit(-1);
+      }
+      std::sort(lbls.begin(), lbls.end());
+      _pts_to_labels[line_cnt] = lbls;
+      line_cnt++;
+    }
+    diskann::cout << "Identified " << _labels.size() << " distinct label(s)"
+              << std::endl;  
   }
 
   template<typename T, typename TagT, typename LabelT>
