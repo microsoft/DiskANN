@@ -103,7 +103,7 @@ int search_disk_index_sharded(
                     << std::endl;
       return -1;
     }
-    std::unique_ptr<float[]> query_float;
+    std::unique_ptr<float[]> query_float = std::make_unique<float[]>(query_num * query_dim);
     diskann::convert_types<T, float>(query, query_float.get(), query_num,
                                      query_dim);
     std::unique_ptr<uint32_t[]> closest_centers_ivf =
@@ -111,7 +111,6 @@ int search_disk_index_sharded(
     math_utils::compute_closest_centers(
         query_float.get(), query_num, query_dim, centroids.get(), num_centroids,
         (size_t) num_closest_shards, closest_centers_ivf.get(), query_ids_for_shard.data());
-    // linking of previous line fails under Windows for me :(
     diskann::cout << "number of queries per shard:";
     for (const auto& it : query_ids_for_shard) {
       diskann::cout << " " << it.size();
