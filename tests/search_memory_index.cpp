@@ -64,7 +64,6 @@ int search_memory_index(diskann::Metric& metric, const std::string& index_path,
     index.optimize_index_layout();
 
   std::cout << "Using " << num_threads << " threads to search" << std::endl;
-  diskann::Parameters paras;
   std::cout.setf(std::ios_base::fixed, std::ios_base::floatfield);
   std::cout.precision(2);
   const std::string qps_title = show_qps_per_thread ? "QPS/thread" : "QPS";
@@ -178,12 +177,12 @@ int search_memory_index(diskann::Metric& metric, const std::string& index_path,
     if (tags) {
       std::cout << std::setw(4) << L << std::setw(12) << displayed_qps
                 << std::setw(20) << (float) mean_latency << std::setw(15)
-                << (float) latency_stats[(_u64) (0.999 * query_num)];
+                << (float) latency_stats[(_u64)(0.999 * query_num)];
     } else {
       std::cout << std::setw(4) << L << std::setw(12) << displayed_qps
                 << std::setw(18) << avg_cmps << std::setw(20)
                 << (float) mean_latency << std::setw(15)
-                << (float) latency_stats[(_u64) (0.999 * query_num)];
+                << (float) latency_stats[(_u64)(0.999 * query_num)];
     }
     for (float recall : recalls) {
       std::cout << std::setw(12) << recall;
@@ -211,7 +210,6 @@ int search_memory_index(diskann::Metric& metric, const std::string& index_path,
 
   return best_recall >= fail_if_recall_below ? 0 : -1;
 }
-
 
 int main(int argc, char** argv) {
   std::string data_type, dist_fn, index_path_prefix, result_path, query_file,

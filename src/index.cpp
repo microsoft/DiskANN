@@ -28,22 +28,24 @@ namespace diskann {
   // (bin), and initialize max_points
   template<typename T, typename TagT>
   Index<T, TagT>::Index(Metric m, const size_t dim, const size_t max_points,
-                        const bool dynamic_index, const Parameters &indexParams,
-                        const Parameters &searchParams, const bool enable_tags,
-                        const bool concurrent_consolidate,
+                        const bool                dynamic_index,
+                        const MutationParameters &indexParams,
+                        const SearchParameters &  searchParams,
+                        const bool                enable_tags,
+                        const bool                concurrent_consolidate,
                         const bool pq_dist_build, const size_t num_pq_chunks,
                         const bool use_opq)
       : Index(m, dim, max_points, dynamic_index, enable_tags,
               concurrent_consolidate) {
-    _indexingQueueSize = indexParams.Get<uint32_t>("L");
-    _indexingRange = indexParams.Get<uint32_t>("R");
-    _indexingMaxC = indexParams.Get<uint32_t>("C");
-    _indexingAlpha = indexParams.Get<float>("alpha");
+    _indexingQueueSize = indexParams.get_search_list_size();
+    _indexingRange = indexParams.get_max_degree();
+    _indexingMaxC = indexParams.get_max_occlusion_size();
+    _indexingAlpha = indexParams.get_alpha();
 
-    uint32_t num_threads_srch = searchParams.Get<uint32_t>("num_threads");
-    uint32_t num_threads_indx = indexParams.Get<uint32_t>("num_threads");
+    uint32_t num_threads_srch = searchParams.get_num_threads();
+    uint32_t num_threads_indx = indexParams.get_num_threads();
     uint32_t num_scratch_spaces = num_threads_srch + num_threads_indx;
-    uint32_t search_l = searchParams.Get<uint32_t>("L");
+    uint32_t search_l = searchParams.get_search_list_size();
 
     initialize_query_scratch(num_scratch_spaces, search_l, _indexingQueueSize,
                              _indexingRange, _indexingMaxC, dim);
@@ -177,7 +179,7 @@ namespace diskann {
       return 0;
     }
     size_t tag_bytes_written;
-    TagT  *tag_data = new TagT[_nd + _num_frozen_pts];
+    TagT * tag_data = new TagT[_nd + _num_frozen_pts];
     for (_u32 i = 0; i < _nd; i++) {
       TagT tag;
       if (_location_to_tag.try_get(i, tag)) {
@@ -230,7 +232,7 @@ namespace diskann {
       max_degree = _final_graph[i].size() > max_degree
                        ? (_u32) _final_graph[i].size()
                        : max_degree;
-      index_size += (_u64) (sizeof(unsigned) * (GK + 1));
+      index_size += (_u64)(sizeof(unsigned) * (GK + 1));
     }
     out.seekp(file_offset, out.beg);
     out.write((char *) &index_size, sizeof(uint64_t));
@@ -321,7 +323,7 @@ namespace diskann {
     }
 
     size_t file_dim, file_num_points;
-    TagT  *tag_data;
+    TagT * tag_data;
 #ifdef EXEC_ENV_OLS
     load_bin<TagT>(reader, tag_data, file_num_points, file_dim);
 #else
@@ -681,7 +683,7 @@ namespace diskann {
 #pragma omp parallel for schedule(static, 65536)
     for (_s64 i = 0; i < (_s64) _nd; i++) {
       // extract point and distance reference
-      float   &dist = distances[i];
+      float &  dist = distances[i];
       const T *cur_vec = _data + (i * (size_t) _aligned_dim);
       dist = 0;
       float diff = 0;
@@ -719,7 +721,7 @@ namespace diskann {
     boost::dynamic_bitset<> &inserted_into_pool_bs =
         scratch->inserted_into_pool_bs();
     std::vector<unsigned> &id_scratch = scratch->id_scratch();
-    std::vector<float> &dist_scratch = scratch->dist_scratch();
+    std::vector<float> &   dist_scratch = scratch->dist_scratch();
     assert(id_scratch.size() == 0);
     T *aligned_query = scratch->aligned_query();
     memcpy(aligned_query, query, _dim * sizeof(T));
@@ -730,7 +732,7 @@ namespace diskann {
     float *query_float;
     float *query_rotated;
     float *pq_dists;
-    _u8   *pq_coord_scratch;
+    _u8 *  pq_coord_scratch;
     // Intialize PQ related scratch to use PQ based distances
     if (_pq_dist) {
       // Get scratch spaces
@@ -782,7 +784,7 @@ namespace diskann {
     // Lambda to batch compute query<-> node distances in PQ space
     auto compute_dists = [this, pq_coord_scratch, pq_dists](
                              const std::vector<unsigned> &ids,
-                             std::vector<float>          &dists_out) {
+                             std::vector<float> &         dists_out) {
       diskann::aggregate_coords(ids, this->_pq_data, this->_num_pq_chunks,
                                 pq_coord_scratch);
       diskann::pq_dist_lookup(pq_coord_scratch, ids.size(),
@@ -822,7 +824,7 @@ namespace diskann {
     uint32_t cmps = 0;
 
     while (best_L_nodes.has_unexpanded_node()) {
-      auto nbr = best_L_nodes.closest_unexpanded();   
+      auto nbr = best_L_nodes.closest_unexpanded();
       auto n = nbr.id;
       // Add node to expanded nodes to create pool for prune later
       if (!search_invocation &&
@@ -871,7 +873,7 @@ namespace diskann {
                 sizeof(T) * _aligned_dim);
           }
 
-          dist_scratch.push_back( _distance->compare(
+          dist_scratch.push_back(_distance->compare(
               aligned_query, _data + _aligned_dim * (size_t) id,
               (unsigned) _aligned_dim));
         }
@@ -920,7 +922,7 @@ namespace diskann {
   void Index<T, TagT>::occlude_list(
       const unsigned location, std::vector<Neighbor> &pool, const float alpha,
       const unsigned degree, const unsigned maxc, std::vector<unsigned> &result,
-      InMemQueryScratch<T>                 *scratch,
+      InMemQueryScratch<T> *                scratch,
       const tsl::robin_set<unsigned> *const delete_set_ptr) {
     if (pool.size() == 0)
       return;
@@ -937,7 +939,6 @@ namespace diskann {
     // Initialize occlude_factor to pool.size() many 0.0f values for correctness
     occlude_factor.insert(occlude_factor.end(), pool.size(), 0.0f);
 
-
     float cur_alpha = 1;
     while (cur_alpha <= alpha && result.size() < degree) {
       // used for MIPS, where we store a value of eps in cur_alpha to
@@ -951,7 +952,8 @@ namespace diskann {
         }
         // Set the entry to float::max so that is not considered again
         occlude_factor[iter - pool.begin()] = std::numeric_limits<float>::max();
-        // Add the entry to the result if its not been deleted, and doesn't add a self loop
+        // Add the entry to the result if its not been deleted, and doesn't add
+        // a self loop
         if (delete_set_ptr == nullptr ||
             delete_set_ptr->find(iter->id) == delete_set_ptr->end()) {
           if (iter->id != location) {
@@ -991,7 +993,7 @@ namespace diskann {
   void Index<T, TagT>::prune_neighbors(const unsigned         location,
                                        std::vector<Neighbor> &pool,
                                        std::vector<unsigned> &pruned_list,
-                                       InMemQueryScratch<T>  *scratch) {
+                                       InMemQueryScratch<T> * scratch) {
     prune_neighbors(location, pool, _indexingRange, _indexingMaxC,
                     _indexingAlpha, pruned_list, scratch);
   }
@@ -1010,7 +1012,7 @@ namespace diskann {
 
     // If using _pq_build, over-write the PQ distances with actual distances
     if (_pq_dist) {
-      for (auto& ngh : pool)
+      for (auto &ngh : pool)
         ngh.distance = _distance->compare(
             _data + _aligned_dim * (size_t) ngh.id,
             _data + _aligned_dim * (size_t) location, (unsigned) _aligned_dim);
@@ -1040,7 +1042,7 @@ namespace diskann {
   void Index<T, TagT>::inter_insert(unsigned               n,
                                     std::vector<unsigned> &pruned_list,
                                     const _u32             range,
-                                    InMemQueryScratch<T>  *scratch) {
+                                    InMemQueryScratch<T> * scratch) {
     const auto &src_pool = pruned_list;
 
     assert(!src_pool.empty());
@@ -1053,9 +1055,9 @@ namespace diskann {
       bool                  prune_needed = false;
       {
         LockGuard guard(_locks[des]);
-        auto     &des_pool = _final_graph[des];
+        auto &    des_pool = _final_graph[des];
         if (std::find(des_pool.begin(), des_pool.end(), n) == des_pool.end()) {
-          if (des_pool.size() < (_u64) (GRAPH_SLACK_FACTOR * range)) {
+          if (des_pool.size() < (_u64)(GRAPH_SLACK_FACTOR * range)) {
             des_pool.emplace_back(n);
             prune_needed = false;
           } else {
@@ -1072,7 +1074,7 @@ namespace diskann {
         std::vector<Neighbor>    dummy_pool(0);
 
         size_t reserveSize =
-            (size_t) (std::ceil(1.05 * GRAPH_SLACK_FACTOR * range));
+            (size_t)(std::ceil(1.05 * GRAPH_SLACK_FACTOR * range));
         dummy_visited.reserve(reserveSize);
         dummy_pool.reserve(reserveSize);
 
@@ -1101,25 +1103,25 @@ namespace diskann {
   template<typename T, typename TagT>
   void Index<T, TagT>::inter_insert(unsigned               n,
                                     std::vector<unsigned> &pruned_list,
-                                    InMemQueryScratch<T>  *scratch) {
+                                    InMemQueryScratch<T> * scratch) {
     inter_insert(n, pruned_list, _indexingRange, scratch);
   }
 
   template<typename T, typename TagT>
-  void Index<T, TagT>::link(Parameters &parameters) {
-    unsigned num_threads = parameters.Get<unsigned>("num_threads");
+  void Index<T, TagT>::link(const MutationParameters &parameters) {
+    uint32_t num_threads = parameters.get_num_threads();
     if (num_threads != 0)
       omp_set_num_threads(num_threads);
 
-    _saturate_graph = parameters.Get<bool>("saturate_graph");
+    _saturate_graph = parameters.is_saturate_graph();
 
     if (num_threads != 0)
       omp_set_num_threads(num_threads);
 
-    _indexingQueueSize = parameters.Get<unsigned>("L");  // Search list size
-    _indexingRange = parameters.Get<unsigned>("R");
-    _indexingMaxC = parameters.Get<unsigned>("C");
-    _indexingAlpha = parameters.Get<float>("alpha");
+    _indexingQueueSize = parameters.get_search_list_size();  // Search list size
+    _indexingRange = parameters.get_max_degree();
+    _indexingMaxC = parameters.get_max_occlusion_size();
+    _indexingAlpha = parameters.get_alpha();
 
     /* visit_order is a vector that is initialized to the entire graph */
     std::vector<unsigned>          visit_order;
@@ -1141,7 +1143,7 @@ namespace diskann {
 
     for (uint64_t p = 0; p < _nd; p++) {
       _final_graph[p].reserve(
-          (size_t) (std::ceil(_indexingRange * GRAPH_SLACK_FACTOR * 1.05)));
+          (size_t)(std::ceil(_indexingRange * GRAPH_SLACK_FACTOR * 1.05)));
     }
 
     std::vector<unsigned> init_ids;
@@ -1150,8 +1152,7 @@ namespace diskann {
     diskann::Timer link_timer;
 
 #pragma omp parallel for schedule(dynamic, 2048)
-    for (_s64 node_ctr = 0; node_ctr < (_s64) (visit_order.size());
-         node_ctr++) {
+    for (_s64 node_ctr = 0; node_ctr < (_s64)(visit_order.size()); node_ctr++) {
       auto node = visit_order[node_ctr];
 
       ScratchStoreManager<InMemQueryScratch<T>> manager(_query_scratch);
@@ -1163,7 +1164,7 @@ namespace diskann {
       {
         LockGuard guard(_locks[node]);
         _final_graph[node].reserve(
-            (_u64) (_indexingRange * GRAPH_SLACK_FACTOR * 1.05));
+            (_u64)(_indexingRange * GRAPH_SLACK_FACTOR * 1.05));
         _final_graph[node] = pruned_list;
         assert(_final_graph[node].size() <= _indexingRange);
       }
@@ -1180,8 +1181,7 @@ namespace diskann {
       diskann::cout << "Starting final cleanup.." << std::flush;
     }
 #pragma omp parallel for schedule(dynamic, 2048)
-    for (_s64 node_ctr = 0; node_ctr < (_s64) (visit_order.size());
-         node_ctr++) {
+    for (_s64 node_ctr = 0; node_ctr < (_s64)(visit_order.size()); node_ctr++) {
       auto node = visit_order[node_ctr];
       if (_final_graph[node].size() > _indexingRange) {
         ScratchStoreManager<InMemQueryScratch<T>> manager(_query_scratch);
@@ -1252,7 +1252,7 @@ namespace diskann {
 
   template<typename T, typename TagT>
   void Index<T, TagT>::build_with_data_populated(
-      Parameters &parameters, const std::vector<TagT> &tags) {
+      const MutationParameters &parameters, const std::vector<TagT> &tags) {
     diskann::cout << "Starting index build with " << _nd << " points... "
                   << std::endl;
 
@@ -1277,10 +1277,10 @@ namespace diskann {
       }
     }
 
-    uint32_t index_R = parameters.Get<uint32_t>("R");
-    uint32_t num_threads_index = parameters.Get<uint32_t>("num_threads");
-    uint32_t index_L = parameters.Get<uint32_t>("L");
-    uint32_t maxc = parameters.Get<uint32_t>("C");
+    uint32_t index_R = parameters.get_max_degree();
+    uint32_t num_threads_index = parameters.get_num_threads();
+    uint32_t index_L = parameters.get_search_list_size();
+    uint32_t maxc = parameters.get_max_occlusion_size();
 
     if (_query_scratch.size() == 0) {
       initialize_query_scratch(5 + num_threads_index, index_L, index_L, index_R,
@@ -1309,8 +1309,8 @@ namespace diskann {
 
   template<typename T, typename TagT>
   void Index<T, TagT>::build(const T *data, const size_t num_points_to_load,
-                             Parameters              &parameters,
-                             const std::vector<TagT> &tags) {
+                             const MutationParameters &parameters,
+                             const std::vector<TagT> & tags) {
     if (num_points_to_load == 0) {
       throw ANNException("Do not call build with 0 points", -1, __FUNCSIG__,
                          __FILE__, __LINE__);
@@ -1322,7 +1322,7 @@ namespace diskann {
     }
 
     std::unique_lock<std::shared_timed_mutex> ul(_update_lock);
-    
+
     {
       std::unique_lock<std::shared_timed_mutex> tl(_tag_lock);
       _nd = num_points_to_load;
@@ -1340,10 +1340,10 @@ namespace diskann {
   }
 
   template<typename T, typename TagT>
-  void Index<T, TagT>::build(const char              *filename,
-                             const size_t             num_points_to_load,
-                             Parameters              &parameters,
-                             const std::vector<TagT> &tags) {
+  void Index<T, TagT>::build(const char *              filename,
+                             const size_t              num_points_to_load,
+                             const MutationParameters &parameters,
+                             const std::vector<TagT> & tags) {
     std::unique_lock<std::shared_timed_mutex> ul(_update_lock);
     if (num_points_to_load == 0)
       throw ANNException("Do not call build with 0 points", -1, __FUNCSIG__,
@@ -1446,9 +1446,10 @@ namespace diskann {
   }
 
   template<typename T, typename TagT>
-  void Index<T, TagT>::build(const char  *filename,
-                             const size_t num_points_to_load,
-                             Parameters &parameters, const char *tag_filename) {
+  void Index<T, TagT>::build(const char *              filename,
+                             const size_t              num_points_to_load,
+                             const MutationParameters &parameters,
+                             const char *              tag_filename) {
     std::vector<TagT> tags;
 
     if (_enable_tags) {
@@ -1460,7 +1461,7 @@ namespace diskann {
         if (file_exists(tag_filename)) {
           diskann::cout << "Loading tags from " << tag_filename
                         << " for vamana index build" << std::endl;
-          TagT  *tag_data = nullptr;
+          TagT * tag_data = nullptr;
           size_t npts, ndim;
           diskann::load_bin(tag_filename, tag_data, npts, ndim);
           if (npts < num_points_to_load) {
@@ -1487,10 +1488,10 @@ namespace diskann {
 
   template<typename T, typename TagT>
   template<typename IdType>
-  std::pair<uint32_t, uint32_t> Index<T, TagT>::search(const T       *query,
+  std::pair<uint32_t, uint32_t> Index<T, TagT>::search(const T *      query,
                                                        const size_t   K,
                                                        const unsigned L,
-                                                       IdType        *indices,
+                                                       IdType *       indices,
                                                        float *distances) {
     if (K > (uint64_t) L) {
       throw ANNException("Set L to a value of at least K", -1, __FUNCSIG__,
@@ -1512,14 +1513,14 @@ namespace diskann {
     std::vector<unsigned> init_ids;
     init_ids.push_back(_start);
     std::shared_lock<std::shared_timed_mutex> lock(_update_lock);
-    auto retval =
+    auto                                      retval =
         iterate_to_fixed_point(query, L, init_ids, scratch, true, true);
     NeighborPriorityQueue &best_L_nodes = scratch->best_l_nodes();
 
     size_t pos = 0;
     for (int i = 0; i < best_L_nodes.size(); ++i) {
       if (best_L_nodes[i].id < _max_points) {
-        // safe because Index uses uint32_t ids internally 
+        // safe because Index uses uint32_t ids internally
         // and IDType will be uint32_t or uint64_t
         indices[pos] = (IdType) best_L_nodes[i].id;
         if (distances != nullptr) {
@@ -1547,7 +1548,7 @@ namespace diskann {
   template<typename T, typename TagT>
   size_t Index<T, TagT>::search_with_tags(const T *query, const uint64_t K,
                                           const unsigned L, TagT *tags,
-                                          float            *distances,
+                                          float *           distances,
                                           std::vector<T *> &res_vectors) {
     if (K > (uint64_t) L) {
       throw ANNException("Set L to a value of at least K", -1, __FUNCSIG__,
@@ -1726,12 +1727,11 @@ namespace diskann {
       }
     }
   }
-  
-   
+
   // Returns number of live points left after consolidation
   template<typename T, typename TagT>
   consolidation_report Index<T, TagT>::consolidate_deletes(
-      const Parameters &params) {
+      const MutationParameters &params) {
     if (!_enable_tags)
       throw diskann::ANNException("Point tag array not instantiated", -1,
                                   __FUNCSIG__, __FILE__, __LINE__);
@@ -1792,12 +1792,12 @@ namespace diskann {
                                   __FUNCSIG__, __FILE__, __LINE__);
     }
 
-    const unsigned range = params.Get<unsigned>("R");
-    const unsigned maxc = params.Get<unsigned>("C");
-    const float    alpha = params.Get<float>("alpha");
-    const unsigned num_threads = params.Get<unsigned>("num_threads") == 0
+    const unsigned range = params.get_max_degree();
+    const unsigned maxc = params.get_max_occlusion_size();
+    const float    alpha = params.get_alpha();
+    const unsigned num_threads = params.get_num_threads() == 0
                                      ? omp_get_num_threads()
-                                     : params.Get<unsigned>("num_threads");
+                                     : params.get_num_threads();
 
     unsigned       num_calls_to_process_delete = 0;
     diskann::Timer timer;
@@ -1812,7 +1812,7 @@ namespace diskann {
         num_calls_to_process_delete += 1;
       }
     }
-    for (_s64 loc = _max_points; loc < (_s64) (_max_points + _num_frozen_pts);
+    for (_s64 loc = _max_points; loc < (_s64)(_max_points + _num_frozen_pts);
          loc++) {
       ScratchStoreManager<InMemQueryScratch<T>> manager(_query_scratch);
       auto scratch = manager.scratch_space();
@@ -1977,7 +1977,7 @@ namespace diskann {
                   << timer.elapsed() / 1000000. << "s." << std::endl;
   }
 
-  // 
+  //
   // Caller must hold unique _tag_lock and _delete_lock before calling this
   //
   template<typename T, typename TagT>
@@ -2136,7 +2136,7 @@ namespace diskann {
         dl.lock();
 
         if (_nd >= _max_points) {
-          auto new_max_points = (size_t) (_max_points * INDEX_GROWTH_FACTOR);
+          auto new_max_points = (size_t)(_max_points * INDEX_GROWTH_FACTOR);
           resize(new_max_points);
         }
 
@@ -2197,7 +2197,7 @@ namespace diskann {
       LockGuard guard(_locks[location]);
       _final_graph[location].clear();
       _final_graph[location].reserve(
-          (_u64) (_indexingRange * GRAPH_SLACK_FACTOR * 1.05));
+          (_u64)(_indexingRange * GRAPH_SLACK_FACTOR * 1.05));
 
       for (auto link : pruned_list) {
         if (_conc_consolidate)
@@ -2239,7 +2239,7 @@ namespace diskann {
 
   template<typename T, typename TagT>
   void Index<T, TagT>::lazy_delete(const std::vector<TagT> &tags,
-                                   std::vector<TagT>       &failed_tags) {
+                                   std::vector<TagT> &      failed_tags) {
     if (failed_tags.size() > 0) {
       throw ANNException("failed_tags should be passed as an empty list", -1,
                          __FUNCSIG__, __FILE__, __LINE__);
@@ -2378,7 +2378,7 @@ namespace diskann {
 
     boost::dynamic_bitset<> flags{_nd, 0};
     unsigned                tmp_l = 0;
-    unsigned               *neighbors =
+    unsigned *              neighbors =
         (unsigned *) (_opt_graph + _node_size * _start + _data_len);
     unsigned MaxM_ep = *neighbors;
     neighbors++;
@@ -2408,7 +2408,7 @@ namespace diskann {
       unsigned id = init_ids[i];
       if (id >= _nd)
         continue;
-      T    *x = (T *) (_opt_graph + _node_size * id);
+      T *   x = (T *) (_opt_graph + _node_size * id);
       float norm_x = *x;
       x++;
       float dist =
@@ -2433,7 +2433,7 @@ namespace diskann {
         if (flags[id])
           continue;
         flags[id] = 1;
-        T    *data = (T *) (_opt_graph + _node_size * id);
+        T *   data = (T *) (_opt_graph + _node_size * id);
         float norm = *data;
         data++;
         float dist =
@@ -2467,56 +2467,56 @@ namespace diskann {
   template DISKANN_DLLEXPORT class Index<uint8_t, uint64_t>;
 
   template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t>
-  Index<float, uint64_t>::search<uint64_t>(const float *query, const size_t K,
+                             Index<float, uint64_t>::search<uint64_t>(const float *query, const size_t K,
                                            const unsigned L, uint64_t *indices,
                                            float *distances);
   template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t>
-  Index<float, uint64_t>::search<uint32_t>(const float *query, const size_t K,
+                             Index<float, uint64_t>::search<uint32_t>(const float *query, const size_t K,
                                            const unsigned L, uint32_t *indices,
                                            float *distances);
   template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t>
-  Index<uint8_t, uint64_t>::search<uint64_t>(const uint8_t *query,
+                             Index<uint8_t, uint64_t>::search<uint64_t>(const uint8_t *query,
                                              const size_t K, const unsigned L,
                                              uint64_t *indices,
-                                             float    *distances);
+                                             float *   distances);
   template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t>
-  Index<uint8_t, uint64_t>::search<uint32_t>(const uint8_t *query,
+                             Index<uint8_t, uint64_t>::search<uint32_t>(const uint8_t *query,
                                              const size_t K, const unsigned L,
                                              uint32_t *indices,
-                                             float    *distances);
+                                             float *   distances);
   template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t>
-  Index<int8_t, uint64_t>::search<uint64_t>(const int8_t *query, const size_t K,
+                             Index<int8_t, uint64_t>::search<uint64_t>(const int8_t *query, const size_t K,
                                             const unsigned L, uint64_t *indices,
                                             float *distances);
   template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t>
-  Index<int8_t, uint64_t>::search<uint32_t>(const int8_t *query, const size_t K,
+                             Index<int8_t, uint64_t>::search<uint32_t>(const int8_t *query, const size_t K,
                                             const unsigned L, uint32_t *indices,
                                             float *distances);
   // TagT==uint32_t
   template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t>
-  Index<float, uint32_t>::search<uint64_t>(const float *query, const size_t K,
+                             Index<float, uint32_t>::search<uint64_t>(const float *query, const size_t K,
                                            const unsigned L, uint64_t *indices,
                                            float *distances);
   template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t>
-  Index<float, uint32_t>::search<uint32_t>(const float *query, const size_t K,
+                             Index<float, uint32_t>::search<uint32_t>(const float *query, const size_t K,
                                            const unsigned L, uint32_t *indices,
                                            float *distances);
   template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t>
-  Index<uint8_t, uint32_t>::search<uint64_t>(const uint8_t *query,
+                             Index<uint8_t, uint32_t>::search<uint64_t>(const uint8_t *query,
                                              const size_t K, const unsigned L,
                                              uint64_t *indices,
-                                             float    *distances);
+                                             float *   distances);
   template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t>
-  Index<uint8_t, uint32_t>::search<uint32_t>(const uint8_t *query,
+                             Index<uint8_t, uint32_t>::search<uint32_t>(const uint8_t *query,
                                              const size_t K, const unsigned L,
                                              uint32_t *indices,
-                                             float    *distances);
+                                             float *   distances);
   template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t>
-  Index<int8_t, uint32_t>::search<uint64_t>(const int8_t *query, const size_t K,
+                             Index<int8_t, uint32_t>::search<uint64_t>(const int8_t *query, const size_t K,
                                             const unsigned L, uint64_t *indices,
                                             float *distances);
   template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t>
-  Index<int8_t, uint32_t>::search<uint32_t>(const int8_t *query, const size_t K,
+                             Index<int8_t, uint32_t>::search<uint32_t>(const int8_t *query, const size_t K,
                                             const unsigned L, uint32_t *indices,
                                             float *distances);
 

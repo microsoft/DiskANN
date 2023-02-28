@@ -84,14 +84,14 @@ namespace diskann {
 
     // Constructor for incremental index
     DISKANN_DLLEXPORT Index(Metric m, const size_t dim, const size_t max_points,
-                            const bool        dynamic_index,
-                            const Parameters &indexParameters,
-                            const Parameters &searchParameters,
-                            const bool        enable_tags = false,
-                            const bool        concurrent_consolidate = false,
-                            const bool        pq_dist_build = false,
-                            const size_t      num_pq_chunks = 0,
-                            const bool        use_opq = false);
+                            const bool                dynamic_index,
+                            const MutationParameters &indexParameters,
+                            const SearchParameters &  searchParameters,
+                            const bool                enable_tags = false,
+                            const bool   concurrent_consolidate = false,
+                            const bool   pq_dist_build = false,
+                            const size_t num_pq_chunks = 0,
+                            const bool   use_opq = false);
 
     DISKANN_DLLEXPORT ~Index();
 
@@ -115,19 +115,19 @@ namespace diskann {
     // Batch build from a file. Optionally pass tags vector.
     DISKANN_DLLEXPORT void build(
         const char *filename, const size_t num_points_to_load,
-        Parameters              &parameters,
-        const std::vector<TagT> &tags = std::vector<TagT>());
+        const MutationParameters &parameters,
+        const std::vector<TagT> & tags = std::vector<TagT>());
 
     // Batch build from a file. Optionally pass tags file.
-    DISKANN_DLLEXPORT void build(const char  *filename,
-                                 const size_t num_points_to_load,
-                                 Parameters  &parameters,
-                                 const char  *tag_filename);
+    DISKANN_DLLEXPORT void build(const char *              filename,
+                                 const size_t              num_points_to_load,
+                                 const MutationParameters &parameters,
+                                 const char *              tag_filename);
 
     // Batch build from a data array, which must pad vectors to aligned_dim
     DISKANN_DLLEXPORT void build(const T *data, const size_t num_points_to_load,
-                                 Parameters              &parameters,
-                                 const std::vector<TagT> &tags);
+                                 const MutationParameters &parameters,
+                                 const std::vector<TagT> & tags);
 
     // Set starting point of an index before inserting any points incrementally
     DISKANN_DLLEXPORT void set_start_point(T *data);
@@ -152,7 +152,7 @@ namespace diskann {
     // Initialize space for res_vectors before calling.
     DISKANN_DLLEXPORT size_t search_with_tags(const T *query, const uint64_t K,
                                               const unsigned L, TagT *tags,
-                                              float            *distances,
+                                              float *           distances,
                                               std::vector<T *> &res_vectors);
 
     // Will fail if tag already in the index or if tag=0.
@@ -168,14 +168,14 @@ namespace diskann {
     // Record deleted points now and restructure graph later. Add to failed_tags
     // if tag not found.
     DISKANN_DLLEXPORT void lazy_delete(const std::vector<TagT> &tags,
-                                       std::vector<TagT>       &failed_tags);
+                                       std::vector<TagT> &      failed_tags);
 
     // Call after a series of lazy deletions
     // Returns number of live points left after consolidation
     // If _conc_consolidates is set in the ctor, then this call can be invoked
     // alongside inserts and lazy deletes, else it acquires _update_lock
     DISKANN_DLLEXPORT consolidation_report
-    consolidate_deletes(const Parameters &parameters);
+    consolidate_deletes(const MutationParameters &parameters);
 
     DISKANN_DLLEXPORT bool is_index_saved();
 
@@ -213,8 +213,8 @@ namespace diskann {
 
     // Use after _data and _nd have been populated
     // Acquire exclusive _update_lock before calling
-    void build_with_data_populated(Parameters              &parameters,
-                                   const std::vector<TagT> &tags);
+    void build_with_data_populated(const MutationParameters &parameters,
+                                   const std::vector<TagT> & tags);
 
     // generates 1 frozen point that will never be deleted from the graph
     // This is not visible to the user
@@ -230,11 +230,11 @@ namespace diskann {
 
     void search_for_point_and_prune(int location, _u32 Lindex,
                                     std::vector<unsigned> &pruned_list,
-                                    InMemQueryScratch<T>  *scratch);
+                                    InMemQueryScratch<T> * scratch);
 
     void prune_neighbors(const unsigned location, std::vector<Neighbor> &pool,
                          std::vector<unsigned> &pruned_list,
-                         InMemQueryScratch<T>  *scratch);
+                         InMemQueryScratch<T> * scratch);
 
     void prune_neighbors(const unsigned location, std::vector<Neighbor> &pool,
                          const _u32 range, const _u32 max_candidate_size,
@@ -257,7 +257,7 @@ namespace diskann {
                       InMemQueryScratch<T> *scratch);
 
     // Acquire exclusive _update_lock before calling
-    void link(Parameters &parameters);
+    void link(const MutationParameters &parameters);
 
     // Acquire exclusive _tag_lock and _delete_lock before calling
     int reserve_location();
@@ -315,7 +315,7 @@ namespace diskann {
     Distance<T> *_distance = nullptr;
 
     // Data
-    T    *_data = nullptr;
+    T *   _data = nullptr;
     char *_opt_graph = nullptr;
 
     // Graph related data structures
@@ -356,7 +356,7 @@ namespace diskann {
     bool              _pq_dist = false;
     bool              _use_opq = false;
     size_t            _num_pq_chunks = 0;
-    _u8              *_pq_data = nullptr;
+    _u8 *             _pq_data = nullptr;
     bool              _pq_generated = false;
     FixedChunkPQTable _pq_table;
 
