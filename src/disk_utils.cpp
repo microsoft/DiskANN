@@ -55,7 +55,7 @@ namespace diskann {
     }
 
     size_t num_blocks = DIV_ROUND_UP(fsize, read_blk_size);
-    char  *dump = new char[read_blk_size];
+    char * dump = new char[read_blk_size];
     for (_u64 i = 0; i < num_blocks; i++) {
       size_t cur_block_size = read_blk_size > fsize - (i * read_blk_size)
                                   ? fsize - (i * read_blk_size)
@@ -93,13 +93,13 @@ namespace diskann {
   size_t calculate_num_pq_chunks(double final_index_ram_limit,
                                  size_t points_num, uint32_t dim,
                                  const std::vector<std::string> &param_list) {
-    size_t num_pq_chunks = (size_t) (std::floor)(
-        _u64(final_index_ram_limit / (double) points_num));
+    size_t num_pq_chunks =
+        (size_t)(std::floor)(_u64(final_index_ram_limit / (double) points_num));
     diskann::cout << "Calculated num_pq_chunks :" << num_pq_chunks << std::endl;
     if (param_list.size() >= 6) {
       float compress_ratio = (float) atof(param_list[5].c_str());
       if (compress_ratio > 0 && compress_ratio <= 1) {
-        size_t chunks_by_cr = (size_t) (std::floor)(compress_ratio * dim);
+        size_t chunks_by_cr = (size_t)(std::floor)(compress_ratio * dim);
 
         if (chunks_by_cr > 0 && chunks_by_cr < num_pq_chunks) {
           diskann::cout << "Compress ratio:" << compress_ratio
@@ -156,7 +156,7 @@ namespace diskann {
   T *load_warmup(MemoryMappedFiles &files, const std::string &cache_warmup_file,
                  uint64_t &warmup_num, uint64_t warmup_dim,
                  uint64_t warmup_aligned_dim) {
-    T       *warmup = nullptr;
+    T *      warmup = nullptr;
     uint64_t file_dim, file_aligned_dim;
 
     if (files.fileExists(cache_warmup_file)) {
@@ -189,7 +189,7 @@ namespace diskann {
   template<typename T>
   T *load_warmup(const std::string &cache_warmup_file, uint64_t &warmup_num,
                  uint64_t warmup_dim, uint64_t warmup_aligned_dim) {
-    T       *warmup = nullptr;
+    T *      warmup = nullptr;
     uint64_t file_dim, file_aligned_dim;
 
     if (file_exists(cache_warmup_file)) {
@@ -435,22 +435,14 @@ namespace diskann {
       diskann::cout << "Full index fits in RAM budget, should consume at most "
                     << full_index_ram / (1024 * 1024 * 1024)
                     << "GiBs, so building in one shot" << std::endl;
-      diskann::Parameters paras;
-      paras.Set<unsigned>("L", (unsigned) L);
-      paras.Set<unsigned>("R", (unsigned) R);
-      paras.Set<unsigned>("C", 750);
-      paras.Set<float>("alpha", 1.2f);
-      paras.Set<unsigned>("num_rnds", 2);
-      paras.Set<bool>("saturate_graph", 1);
-      paras.Set<std::string>("save_path", mem_index_path);
+      diskann::MutationParameters paras(L, R, false);
 
-      std::unique_ptr<diskann::Index<T>> _pvamanaIndex =
-          std::unique_ptr<diskann::Index<T>>(new diskann::Index<T>(
-              compareMetric, base_dim, base_num, false, false, false,
-              build_pq_bytes > 0, build_pq_bytes, use_opq));
-      _pvamanaIndex->build(base_file.c_str(), base_num, paras);
+      diskann::Index<T> _pvamanaIndex(compareMetric, base_dim, base_num, false,
+                                      false, false, build_pq_bytes > 0,
+                                      build_pq_bytes, use_opq);
+      _pvamanaIndex.build(base_file.c_str(), base_num, paras);
 
-      _pvamanaIndex->save(mem_index_path.c_str());
+      _pvamanaIndex.save(mem_index_path.c_str());
       std::remove(medoids_file.c_str());
       std::remove(centroids_file.c_str());
       return 0;
@@ -458,7 +450,7 @@ namespace diskann {
     std::string merged_index_prefix = mem_index_path + "_tempFiles";
 
     Timer timer;
-    int         num_parts =
+    int   num_parts =
         partition_with_ram_budget<T>(base_file, sampling_rate, ram_budget,
                                      2 * R / 3, merged_index_prefix, 2);
     diskann::cout << timer.elapsed_seconds_for_step("partitioning data")
@@ -481,32 +473,27 @@ namespace diskann {
       std::string shard_index_file =
           merged_index_prefix + "_subshard-" + std::to_string(p) + "_mem.index";
 
-      diskann::Parameters paras;
-      paras.Set<unsigned>("L", L);
-      paras.Set<unsigned>("R", (2 * (R / 3)));
-      paras.Set<unsigned>("C", 750);
-      paras.Set<float>("alpha", 1.2f);
-      paras.Set<unsigned>("num_rnds", 2);
-      paras.Set<bool>("saturate_graph", 0);
-      paras.Set<std::string>("save_path", shard_index_file);
+      diskann::MutationParameters paras(L, (2 * (R / 3)), false);
 
       _u64 shard_base_dim, shard_base_pts;
       get_bin_metadata(shard_base_file, shard_base_pts, shard_base_dim);
-      std::unique_ptr<diskann::Index<T>> _pvamanaIndex =
-          std::unique_ptr<diskann::Index<T>>(new diskann::Index<T>(
-              compareMetric, shard_base_dim, shard_base_pts, false, false,
-              false, build_pq_bytes > 0, build_pq_bytes, use_opq));
-      _pvamanaIndex->build(shard_base_file.c_str(), shard_base_pts, paras);
-      _pvamanaIndex->save(shard_index_file.c_str());
+      diskann::Index<T> _pvamanaIndex(
+          compareMetric, shard_base_dim, shard_base_pts, false, false, false,
+          build_pq_bytes > 0, build_pq_bytes, use_opq);
+      _pvamanaIndex.build(shard_base_file.c_str(), shard_base_pts, paras);
+      _pvamanaIndex.save(shard_index_file.c_str());
       std::remove(shard_base_file.c_str());
     }
-    diskann::cout << timer.elapsed_seconds_for_step("building indices on shards") << std::endl;
+    diskann::cout << timer.elapsed_seconds_for_step(
+                         "building indices on shards")
+                  << std::endl;
 
     timer.reset();
     diskann::merge_shards(merged_index_prefix + "_subshard-", "_mem.index",
                           merged_index_prefix + "_subshard-", "_ids_uint32.bin",
                           num_parts, R, mem_index_path, medoids_file);
-   diskann::cout << timer.elapsed_seconds_for_step("merging indices") << std::endl;
+    diskann::cout << timer.elapsed_seconds_for_step("merging indices")
+                  << std::endl;
 
     // delete tempFiles
     for (int p = 0; p < num_parts; p++) {
@@ -543,7 +530,7 @@ namespace diskann {
     while (!stop_flag) {
       std::vector<uint64_t> tuning_sample_result_ids_64(tuning_sample_num, 0);
       std::vector<float>    tuning_sample_result_dists(tuning_sample_num, 0);
-      diskann::QueryStats  *stats = new diskann::QueryStats[tuning_sample_num];
+      diskann::QueryStats * stats = new diskann::QueryStats[tuning_sample_num];
 
       auto s = std::chrono::high_resolution_clock::now();
 #pragma omp parallel for schedule(dynamic, 1) num_threads(nthreads)
@@ -570,7 +557,7 @@ namespace diskann {
       if (qps > max_qps && lat_999 < (15000) + mean_latency * 2) {
         max_qps = qps;
         best_bw = cur_bw;
-        cur_bw = (uint32_t) (std::ceil)((float) cur_bw * 1.1f);
+        cur_bw = (uint32_t)(std::ceil)((float) cur_bw * 1.1f);
       } else {
         stop_flag = true;
       }
@@ -801,7 +788,7 @@ namespace diskann {
 
   template<typename T>
   int build_disk_index(const char *dataFilePath, const char *indexFilePath,
-                       const char     *indexBuildParameters,
+                       const char *    indexBuildParameters,
                        diskann::Metric compareMetric, bool use_opq) {
     std::stringstream parser;
     parser << std::string(indexBuildParameters);
@@ -943,7 +930,7 @@ namespace diskann {
                                       compareMetric, p_val, disk_pq_dims);
     }
     size_t num_pq_chunks =
-        (size_t) (std::floor)(_u64(final_index_ram_limit / points_num));
+        (size_t)(std::floor)(_u64(final_index_ram_limit / points_num));
 
     num_pq_chunks = num_pq_chunks <= 0 ? 1 : num_pq_chunks;
     num_pq_chunks = num_pq_chunks > dim ? dim : num_pq_chunks;
@@ -956,7 +943,8 @@ namespace diskann {
     generate_quantized_data<T>(data_file_to_use, pq_pivots_path,
                                pq_compressed_vectors_path, compareMetric, p_val,
                                num_pq_chunks, use_opq);
-    diskann::cout << timer.elapsed_seconds_for_step("generating quantized data") << std::endl;
+    diskann::cout << timer.elapsed_seconds_for_step("generating quantized data")
+                  << std::endl;
 
 // Gopal. Splitting diskann_dll into separate DLLs for search and build.
 // This code should only be available in the "build" DLL.

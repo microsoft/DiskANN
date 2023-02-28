@@ -117,9 +117,9 @@ void insert_next_batch(diskann::Index<T, TagT>& index, size_t start, size_t end,
 }
 
 template<typename T, typename TagT>
-void delete_and_consolidate(diskann::Index<T, TagT>& index,
-                            diskann::Parameters& delete_params, size_t start,
-                            size_t end) {
+void delete_and_consolidate(diskann::Index<T, TagT>&           index,
+                            const diskann::MutationParameters& delete_params,
+                            size_t start, size_t end) {
   try {
     std::cout << std::endl
               << "Lazy deleting points " << start << " to " << end << "... ";
@@ -159,7 +159,7 @@ void delete_and_consolidate(diskann::Index<T, TagT>& index,
               << "latest delete size: " << report._delete_set_size << std::endl
               << "Deletion rate: " << deletion_rate << "/sec   "
               << "Deletion rate: "
-              << deletion_rate / delete_params.Get<unsigned>("num_threads")
+              << deletion_rate / delete_params.get_num_threads()
               << "/thread/sec   " << std::endl;
 
   } catch (std::system_error& e) {
@@ -178,25 +178,15 @@ void build_incremental_index(const std::string& data_path, const unsigned L,
                              size_t             consolidate_interval,
                              const float        start_point_norm,
                              const std::string& save_path) {
-  const unsigned C = 500;
+  const uint32_t max_occlusion_size = 500;
   const bool     saturate_graph = false;
+  const uint32_t num_rounds = 1;
 
-  diskann::Parameters params;
-  params.Set<unsigned>("L", L);
-  params.Set<unsigned>("R", R);
-  params.Set<unsigned>("C", C);
-  params.Set<float>("alpha", alpha);
-  params.Set<bool>("saturate_graph", saturate_graph);
-  params.Set<unsigned>("num_rnds", 1);
-  params.Set<unsigned>("num_threads", insert_threads);
-  diskann::Parameters delete_params;
-  delete_params.Set<unsigned>("L", L);
-  delete_params.Set<unsigned>("R", R);
-  delete_params.Set<unsigned>("C", C);
-  delete_params.Set<float>("alpha", alpha);
-  delete_params.Set<bool>("saturate_graph", saturate_graph);
-  delete_params.Set<unsigned>("num_rnds", 1);
-  delete_params.Set<unsigned>("num_threads", consolidate_threads);
+  diskann::MutationParameters params(L, R, saturate_graph, max_occlusion_size,
+                                     alpha, num_rounds, insert_threads);
+  diskann::SearchParameters   searchParams(L, insert_threads);
+  diskann::MutationParameters delete_params(L, R, saturate_graph, alpha,
+                                            num_rounds, consolidate_threads);
 
   size_t dim, aligned_dim;
   size_t num_points;
@@ -234,7 +224,7 @@ void build_incremental_index(const std::string& data_path, const unsigned L,
 
   diskann::Index<T, TagT> index(diskann::L2, dim,
                                 active_window + 4 * consolidate_interval, true,
-                                params, params, enable_tags, true);
+                                params, searchParams, enable_tags, true);
   index.set_start_point_at_random(static_cast<T>(start_point_norm));
   index.enable_delete();
 
@@ -274,7 +264,7 @@ void build_incremental_index(const std::string& data_path, const unsigned L,
       auto start_del = start - active_window - consolidate_interval;
       auto end_del = start - active_window;
 
-      params.Set<unsigned>("num_threads", consolidate_threads);
+      // params.Set<unsigned>("num_threads", consolidate_threads);
 
       delete_tasks.emplace_back(std::async(std::launch::async, [&]() {
         delete_and_consolidate(index, delete_params, start_del, end_del);

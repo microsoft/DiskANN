@@ -2,82 +2,79 @@
 // Licensed under the MIT license.
 
 #pragma once
-#include <sstream>
+
 #include <typeinfo>
-#include <unordered_map>
+#include "defaults.h"
 
 namespace diskann {
-
-  class Parameters {
+  class MutationParameters {
    public:
-    Parameters() {
-      int *p = new int;
-      *p = 0;
-      params["num_threads"] = p;
-    }
+    MutationParameters(
+        const uint32_t list_size, const uint32_t max_degree,
+        const bool     saturate_graph,
+        const uint32_t max_occlusion_size = defaults::MAX_OCCLUSION_SIZE,
+        const float    alpha = defaults::ALPHA,
+        const uint32_t num_rounds = defaults::NUM_ROUNDS,
+        const uint32_t num_threads = defaults::NUM_THREADS)
+        : _list_size(list_size), _max_degree(max_degree),
+          _saturate_graph(saturate_graph),
+          _max_occlusion_size(max_occlusion_size), _alpha(alpha),
+          _num_rounds(num_rounds), _num_threads(num_threads){};
 
-    template<typename ParamType>
-    inline void Set(const std::string &name, const ParamType &value) {
-      //      ParamType *ptr = (ParamType *) malloc(sizeof(ParamType));
-      if (params.find(name) != params.end()) {
-        free(params[name]);
-      }
-      ParamType *ptr = new ParamType;
-      *ptr = value;
-      params[name] = (void *) ptr;
-    }
+    MutationParameters(const MutationParameters &) = delete;
+    MutationParameters &operator=(const MutationParameters &) = delete;
 
-    template<typename ParamType>
-    inline ParamType Get(const std::string &name) const {
-      auto item = params.find(name);
-      if (item == params.end()) {
-        throw std::invalid_argument("Invalid parameter name.");
-      } else {
-        // return ConvertStrToValue<ParamType>(item->second);
-        if (item->second == nullptr) {
-          throw std::invalid_argument(std::string("Parameter ") + name +
-                                      " has value null.");
-        } else {
-          return *(static_cast<ParamType *>(item->second));
-        }
-      }
+    uint32_t get_max_degree() const {
+      return _max_degree;
     }
-
-    template<typename ParamType>
-    inline ParamType Get(const std::string &name,
-                         const ParamType   &default_value) {
-      try {
-        return Get<ParamType>(name);
-      } catch (std::invalid_argument e) {
-        return default_value;
-      }
+    uint32_t get_search_list_size() const {
+      return _list_size;
     }
-
-    ~Parameters() {
-      for (auto iter = params.begin(); iter != params.end(); iter++) {
-        if (iter->second != nullptr)
-          free(iter->second);
-        // delete iter->second;
-      }
+    uint32_t get_max_occlusion_size() const {
+      return _max_occlusion_size;
+    }
+    float get_alpha() const {
+      return _alpha;
+    }
+    uint32_t get_num_rounds() const {
+      return _num_rounds;
+    }
+    bool is_saturate_graph() const {
+      return _saturate_graph;
+    }
+    uint32_t get_num_threads() const {
+      return _num_threads;
     }
 
    private:
-    std::unordered_map<std::string, void *> params;
+    uint32_t _list_size;
+    uint32_t _max_degree;
+    bool     _saturate_graph;
+    uint32_t _max_occlusion_size;
+    float    _alpha;
+    uint32_t _num_rounds;
+    uint32_t _num_threads;
+  };
 
-    Parameters(const Parameters &);
-    Parameters &operator=(const Parameters &);
+  class SearchParameters {
+   public:
+    SearchParameters(const uint32_t list_size,
+                     const uint32_t num_threads = defaults::NUM_THREADS)
+        : _list_size(list_size), _num_threads(num_threads){};
 
-    template<typename ParamType>
-    inline ParamType ConvertStrToValue(const std::string &str) const {
-      std::stringstream sstream(str);
-      ParamType         value;
-      if (!(sstream >> value) || !sstream.eof()) {
-        std::stringstream err;
-        err << "Failed to convert value '" << str
-            << "' to type: " << typeid(value).name();
-        throw std::runtime_error(err.str());
-      }
-      return value;
+    SearchParameters(const SearchParameters &) = delete;
+    SearchParameters &operator=(const SearchParameters &) = delete;
+
+    uint32_t get_search_list_size() const {
+      return _list_size;
     }
+
+    uint32_t get_num_threads() const {
+      return _num_threads;
+    }
+
+   private:
+    uint32_t _list_size;
+    uint32_t _num_threads;
   };
 }  // namespace diskann

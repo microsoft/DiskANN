@@ -110,9 +110,9 @@ void insert_till_next_checkpoint(diskann::Index<T, TagT>& index, size_t start,
 }
 
 template<typename T, typename TagT>
-void delete_from_beginning(diskann::Index<T, TagT>& index,
-                           diskann::Parameters&     delete_params,
-                           size_t                   points_to_skip,
+void delete_from_beginning(diskann::Index<T, TagT>&           index,
+                           const diskann::MutationParameters& delete_params,
+                           size_t                             points_to_skip,
                            size_t points_to_delete_from_beginning) {
   try {
     std::cout << std::endl
@@ -132,7 +132,7 @@ void delete_from_beginning(diskann::Index<T, TagT>& index,
               << "rate: (" << points_to_delete_from_beginning / report._time
               << " points/second overall, "
               << points_to_delete_from_beginning / report._time /
-                     delete_params.Get<unsigned>("num_threads")
+                     delete_params.get_num_threads()
               << " per thread)" << std::endl;
   } catch (std::system_error& e) {
     std::cout << "Exception caught in deletion thread: " << e.what()
@@ -149,17 +149,12 @@ void build_incremental_index(
     size_t checkpoints_per_snapshot, const std::string& save_path,
     size_t points_to_delete_from_beginning, size_t start_deletes_after,
     bool concurrent) {
-  const unsigned C = 500;
-  const bool     saturate_graph = false;
+  const uint32_t max_occlusion_size = 500;
+  const uint32_t num_rounds = 1;
 
-  diskann::Parameters params;
-  params.Set<unsigned>("L", L);
-  params.Set<unsigned>("R", R);
-  params.Set<unsigned>("C", C);
-  params.Set<float>("alpha", alpha);
-  params.Set<bool>("saturate_graph", saturate_graph);
-  params.Set<unsigned>("num_rnds", 1);
-  params.Set<unsigned>("num_threads", thread_count);
+  diskann::MutationParameters params(L, R, false, max_occlusion_size, alpha,
+                                     num_rounds, thread_count);
+  diskann::SearchParameters   searchParams(L, thread_count);
 
   size_t dim, aligned_dim;
   size_t num_points;
@@ -195,7 +190,7 @@ void build_incremental_index(
   }
 
   diskann::Index<T, TagT> index(diskann::L2, dim, max_points_to_insert, true,
-                                params, params, enable_tags, concurrent);
+                                params, searchParams, enable_tags, concurrent);
 
   size_t       current_point_offset = points_to_skip;
   const size_t last_point_threshold = points_to_skip + max_points_to_insert;
@@ -277,7 +272,10 @@ void build_incremental_index(
       if (!delete_launched && end >= start_deletes_after &&
           end >= points_to_skip + points_to_delete_from_beginning) {
         delete_launched = true;
-        params.Set<unsigned>("num_threads", sub_threads);
+        diskann::MutationParameters deleteParameters(
+            params.get_search_list_size(), params.get_max_degree(),
+            params.is_saturate_graph(), params.get_max_occlusion_size(),
+            params.get_alpha(), params.get_num_rounds(), sub_threads);
 
         delete_task = std::async(std::launch::async, [&]() {
           delete_from_beginning(index, params, points_to_skip,
