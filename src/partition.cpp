@@ -260,6 +260,13 @@ int shard_data_into_clusters(const std::string data_file, float *pivots,
         std::ofstream(data_filename.c_str(), std::ios::binary);
     shard_idmap_writer[i] =
         std::ofstream(idmap_filename.c_str(), std::ios::binary);
+    if (shard_data_writer[i].fail() || shard_idmap_writer[i].fail()) {
+      diskann::cout << "Error: failed to open shard file for writing. Check "
+                       "limit for max number for open files (on Linux, run "
+                       "ulimit -n to check and ulimit -n 12000 to set)"
+                    << std::endl;
+      return -1;
+    }
     shard_data_writer[i].write((char *) &dummy_size, sizeof(uint32_t));
     shard_data_writer[i].write((char *) &basedim32, sizeof(uint32_t));
     shard_idmap_writer[i].write((char *) &dummy_size, sizeof(uint32_t));

@@ -107,7 +107,7 @@ int search_disk_index_sharded(
     diskann::convert_types<T, float>(query, query_float.get(), query_num,
                                      query_dim);
     std::unique_ptr<uint32_t[]> closest_centers_ivf =
-        std::make_unique<uint32_t[]>(query_num * num_closest_shards);
+        std::make_unique<uint32_t[]>(query_num * num_closest_shards); // won't be used
     math_utils::compute_closest_centers(
         query_float.get(), query_num, query_dim, centroids.get(), num_centroids,
         (size_t) num_closest_shards, closest_centers_ivf.get(), query_ids_for_shard.data());
@@ -117,11 +117,11 @@ int search_disk_index_sharded(
     }
     diskann::cout << std::endl;
 
-    // filter away those L for which we would get less than K points per query
+    // filter away those L for which we would get fewer than K points per query
     const size_t Lvec_size_before_filtering = Lvec.size();
     Lvec.erase(std::remove_if(Lvec.begin(), Lvec.end(),
-                              [&](const unsigned& L) {
-                                return 1LL * L * num_closest_shards < recall_at;
+                              [&](const _u64& L) {
+                                return L * num_closest_shards < recall_at;
                               }),
         Lvec.end());
     if (Lvec.size() != Lvec_size_before_filtering) {
