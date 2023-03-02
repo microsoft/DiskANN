@@ -8,7 +8,7 @@
 
 namespace math_utils {
 
-  float calc_distance(float* vec_1, float* vec_2, size_t dim);
+  DISKANN_DLLEXPORT float calc_distance(float* vec_1, float* vec_2, size_t dim);
 
   // compute l2-squared norms of data stored in row major num_points * dim,
   // needs
