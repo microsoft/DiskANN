@@ -33,7 +33,6 @@ void stats_analysis(const std::string labels_file, std::string univeral_label,
                     _u32 density = 10) {
   std::string   token, line;
   std::ifstream labels_stream(labels_file);
-  // int           cnt[51] = {0};
   std::unordered_map<std::string, _u32> label_counts;
   std::string                           label_with_max_points;
   _u32                                  max_points = 0;
@@ -68,20 +67,11 @@ void stats_analysis(const std::string labels_file, std::string univeral_label,
             << (float) dense_pts / (float) labels_per_point.size() << std::endl;
   std::sort(labels_per_point.begin(), labels_per_point.end());
 
-  /*  for (_u32 p = 90; p < 100; p += 1) {
-      std::cout << labels_per_point[(p * labels_per_point.size()) / 100.0]
-                << std::endl;
-    }
-    std::cout << labels_per_point[labels_per_point.size() - 1] << std::endl;
-  */
-
   std::vector<std::pair<std::string, _u32>> label_count_vec;
 
   for (auto it = label_counts.begin(); it != label_counts.end(); it++) {
     auto& lbl = *it;
     label_count_vec.emplace_back(std::make_pair(lbl.first, lbl.second));
-    //    std::cout << "Label " << lbl.first << " has " << lbl.second
-    //              << " data points" << std::endl;
     if (lbl.second > max_points) {
       max_points = lbl.second;
       label_with_max_points = lbl.first;
