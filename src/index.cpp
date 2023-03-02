@@ -1764,54 +1764,49 @@ namespace diskann {
     parse_label_file(label_file);  // determines medoid for each label and
                                    // identifies the points to label mapping
 
-    _u32 counter = 0;
+    std::unordered_map<LabelT, std::vector<_u32>> label_to_points;
 #pragma omp parallel for schedule(dynamic, 1)
     for (int lbl = 0; lbl < _labels.size(); lbl++) {
       auto itr = _labels.begin();
       std::advance(itr, lbl);
-      auto &            x = *itr;
-      std::vector<_u32> filtered_points;
-      for (_u32 i = 0; i < num_points_to_load; i++) {
-        if (std::find(_pts_to_labels[i].begin(), _pts_to_labels[i].end(), x) !=
-                _pts_to_labels[i].end() ||
-            (_use_universal_label &&
-             (std::find(_pts_to_labels[i].begin(), _pts_to_labels[i].end(),
-                        _universal_label) != _pts_to_labels[i].end())))
-          filtered_points.emplace_back(i);
-      }
-      if (filtered_points.size() != 0) {
-#pragma omp critical
-        {
-          _u32 num_cands = 25;
-          _u32 best_medoid;
-          _u32 best_medoid_count = std::numeric_limits<_u32>::max();
-          for (_u32 cnd = 0; cnd < num_cands; cnd++) {
-            _u32 cur_cnd = filtered_points[rand() % filtered_points.size()];
-            _u32 cur_cnt = std::numeric_limits<_u32>::max();
-            if (_medoid_counts.find(cur_cnd) == _medoid_counts.end()) {
-              _medoid_counts[cur_cnd] = 0;
-              cur_cnt = 0;
-            } else {
-              cur_cnt = _medoid_counts[cur_cnd];
-            }
-            if (cur_cnt < best_medoid_count || cnd == 0) {
-              best_medoid_count = cur_cnt;
-              best_medoid = cur_cnd;
-            }
-          }
+      auto &x = *itr;
 
-          _filter_to_medoid_id[x] = best_medoid;
-          _medoid_counts[best_medoid]++;
-          std::stringstream a;
-          // a << "Medoid of " << x << " is " << best_medoid <<
-          // std::endl; std::cout << a.str();
+      std::vector<_u32> labeled_points;
+      for (_u32 point_id = 0; point_id < num_points_to_load; point_id++) {
+        if (std::find(_pts_to_labels[point_id].begin(),
+                      _pts_to_labels[point_id].end(),
+                      x) != _pts_to_labels[point_id].end() ||
+            (_use_universal_label &&
+             (std::find(_pts_to_labels[point_id].begin(),
+                        _pts_to_labels[point_id].end(),
+                        _universal_label) != _pts_to_labels[point_id].end())))
+          labeled_points.emplace_back(point_id);
+      }
+      label_to_points[x] = labeled_points;
+    }
+
+    _u32 best_medoid_count = std::numeric_limits<_u32>::max();
+    _u32 num_cands = 25;
+    for (auto itr = _labels.begin(); itr != _labels.end(); itr++) {
+      auto &curr_label = *itr;
+      _u32  best_medoid;
+      auto  labeled_points = label_to_points[curr_label];
+      for (_u32 cnd = 0; cnd < num_cands; cnd++) {
+        _u32 cur_cnd = labeled_points[rand() % labeled_points.size()];
+        _u32 cur_cnt = std::numeric_limits<_u32>::max();
+        if (_medoid_counts.find(cur_cnd) == _medoid_counts.end()) {
+          _medoid_counts[cur_cnd] = 0;
+          cur_cnt = 0;
+        } else {
+          cur_cnt = _medoid_counts[cur_cnd];
+        }
+        if (cur_cnt < best_medoid_count) {
+          best_medoid_count = cur_cnt;
+          best_medoid = cur_cnd;
         }
       }
-#pragma omp critical
-      counter++;
-      std::stringstream a;
-      a << ((100.0 * counter) / _labels.size()) << "\% processed \r";
-      std::cout << a.str() << std::flush;
+      _filter_to_medoid_id[curr_label] = best_medoid;
+      _medoid_counts[best_medoid]++;
     }
 
     this->build(filename, num_points_to_load, parameters, tags);
