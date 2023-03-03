@@ -72,7 +72,7 @@ int main(int argc, char** argv) {
         "universal_label",
         po::value<std::string>(&universal_label)->default_value(""),
         "Universal label, if using it, only in conjunction with labels_file");
-    desc.add_options()("FilteredLbuild,Lf",
+    desc.add_options()("filtered_Lbuild,Lf",
                        po::value<uint32_t>(&Lf)->default_value(0),
                        "Build complexity for filtered points, higher value "
                        "results in better graphs");

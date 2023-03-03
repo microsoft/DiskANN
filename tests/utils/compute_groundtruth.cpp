@@ -308,7 +308,12 @@ inline std::vector<size_t> load_filtered_bin_as_float(
     int part_num, const char *label_file, const std::string &filter_label,
     const std::string &universal_label, size_t &npoints_filt,
     std::vector<std::vector<std::string>> &pts_to_labels) {
+
   std::ifstream reader(filename, std::ios::binary);
+  if (reader.fail()) {
+    throw diskann::ANNException(std::string("Failed to open file ") + filename, -1);
+  }
+
   std::cout << "Reading bin file " << filename << " ...\n";
   int                 npts_i32, ndims_i32;
   std::vector<size_t> rev_map;
@@ -327,10 +332,12 @@ inline std::vector<size_t> load_filtered_bin_as_float(
   std::cout << "start and end ids: " << start_id << ", " << end_id << std::endl;
   reader.seekg(start_id * ndims * sizeof(T) + 2 * sizeof(uint32_t),
                std::ios::beg);
+
   T *data_T = new T[nptsuint64_t * ndimsuint64_t];
   reader.read((char *) data_T, sizeof(T) * nptsuint64_t * ndimsuint64_t);
   std::cout << "Finished reading part of the bin file." << std::endl;
   reader.close();
+
   data = aligned_malloc<float>(nptsuint64_t * ndimsuint64_t, ALIGNMENT);
   
   for (int64_t i = 0; i < (int64_t) nptsuint64_t; i++) {

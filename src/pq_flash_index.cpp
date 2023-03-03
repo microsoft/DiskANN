@@ -515,12 +515,15 @@ namespace diskann {
     }
     return ret_val;
   }
+
   template<typename T, typename LabelT>
   void PQFlashIndex<T,LabelT>::parse_label_file(const std::string &label_file, size_t &num_points_labels) {
-    //_filtered_ann = 1;
-    
+
     std::ifstream infile(label_file);
-    assert(infile.is_open());
+    if (infile.fail()) {
+      throw diskann::ANNException(std::string("Failed to open file ") + label_file, -1);
+    }
+
     std::string   line, token;
     _u32          line_cnt = 0;
 

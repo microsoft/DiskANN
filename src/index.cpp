@@ -279,7 +279,9 @@ namespace diskann {
         if (_filter_to_medoid_id.size() > 0) {
           std::ofstream medoid_writer(std::string(filename) +
                                       "_labels_to_medoids.txt");
-          assert(medoid_writer.is_open());
+          if (medoid_writer.fail()) {
+            throw diskann::ANNException(std::string("Failed to open file ") + filename, -1);
+          }
           for (auto iter : _filter_to_medoid_id) {
             medoid_writer << iter.first << ", " << iter.second << std::endl;
           }
@@ -558,7 +560,7 @@ namespace diskann {
         }
       }
 
-			std::string universal_label_file(filename);
+      std::string universal_label_file(filename);
       universal_label_file += "_universal_label.txt";
       if (file_exists(universal_label_file)) {
         std::ifstream universal_label_reader(universal_label_file);
@@ -1749,7 +1751,10 @@ namespace diskann {
     // Format of Label txt file: filters with comma separators
 
     std::ifstream infile(label_file);
-    assert(infile.is_open());
+    if (infile.fail()) {
+      throw diskann::ANNException(std::string("Failed to open file ") + label_file, -1);
+    }
+
     std::string   line, token;
     unsigned      line_cnt = 0;
 
@@ -1783,7 +1788,7 @@ namespace diskann {
       line_cnt++;
     }
     diskann::cout << "Identified " << _labels.size() << " distinct label(s)"
-              << std::endl;  
+              << std::endl;
   }
 
   template<typename T, typename TagT, typename LabelT>

@@ -204,13 +204,13 @@ namespace diskann {
     _u64                                reoreder_data_offset = 0;
 
     // filter support
-    _u32 *                                _pts_to_label_offsets = nullptr;
-    _u32 *                                _pts_to_labels = nullptr;
-    tsl::robin_set<LabelT>                _labels;
-    std::unordered_map<LabelT, _u32>      _filter_to_medoid_id;
-    bool                                  _use_universal_label;
-    _u32                                  _universal_filter_num;
-    std::vector<LabelT>              _filter_list;
+    _u32 *                                  _pts_to_label_offsets = nullptr;
+    _u32 *                                  _pts_to_labels = nullptr;
+    tsl::robin_set<LabelT>                  _labels;
+    std::unordered_map<LabelT, _u32>        _filter_to_medoid_id;
+    bool                                    _use_universal_label;
+    _u32                                    _universal_filter_num;
+    std::vector<LabelT>                     _filter_list;
     tsl::robin_set<_u32>                    _dummy_pts;
     tsl::robin_set<_u32>                    _has_dummy_pts;
     tsl::robin_map<_u32, _u32>              _dummy_to_real_map;
