@@ -219,7 +219,7 @@ int search_disk_index_sharded(
                             << std::endl;
             }
             const float kth_distance =
-                global_query_result_topK[test_id][query_id][recall_at - 1].first;
+                sqrt(global_query_result_topK[test_id][query_id][recall_at - 1].first);
             unsigned cur_num_shards_that_will_be_asked = 0;
             for (unsigned s1 = 0; s1 < num_shards; ++s1) {
               // should s1 be asked?
