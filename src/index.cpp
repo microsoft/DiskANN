@@ -1424,7 +1424,11 @@ namespace diskann {
       copy_aligned_data_from_file<_u8>(pq_compressed_file.c_str(), _pq_data,
                                        file_num_points, _num_pq_chunks,
                                        _num_pq_chunks);
-      _pq_table.load_pq_centroid_bin(pq_pivots_file.c_str(), _num_pq_chunks);
+#ifdef EXEC_ENV_OLS
+      //pq_table.load_pq_centroid_bin(files, pq_pivots_file.c_str(), _num_pq_chunks);
+#else
+      pq_table.load_pq_centroid_bin(pq_pivots_file.c_str(), _num_pq_chunks);
+#endif
     }
 
     copy_aligned_data_from_file<T>(filename, _data, file_num_points, file_dim,
