@@ -266,17 +266,24 @@ int search_disk_index_sharded(
         // query_ids_for_shard prepared
         // as well as num_shards_that_will_be_asked (for statistics)
 
-        diskann::cout << "numbers of shards that will be asked for each query:"
+        std::ofstream voronoi_stats(std::string("voronoi_stats") +
+                                    std::to_string(rand()));
+        voronoi_stats << "numbers of shards that will be asked for each query:"
                       << std::endl;
         for (uint32_t test_id = 0; test_id < Lvec.size(); test_id++) {
-          diskann::cout << "L = " << Lvec[test_id] << std::endl;
+          voronoi_stats << "L = " << Lvec[test_id] << std::endl;
           for (const unsigned cur_num :
                num_shards_that_will_be_asked[test_id]) {
-            diskann::cout << cur_num << " ";
+            voronoi_stats << cur_num << " ";
           }
-          diskann::cout << std::endl;
+          voronoi_stats << std::endl;
         }
+        voronoi_stats.close();
         // maybe this is too much output
+        diskann::cout << std::endl
+                      << std::endl
+                      << "Voronoi computations complete" << std::endl
+                      << std::endl;
 
         latency_max_per_shard_second_phase.assign(
             Lvec.size(), std::vector<double>(query_num, 0.0));
@@ -601,6 +608,8 @@ int search_disk_index_sharded(
           << std::setw(16) << global_mean_cpuus;
       if (calc_recall_flag) {
           diskann::cout << std::setw(16) << global_recall << std::endl;
+      } else {
+          diskann::cout << std::endl;
       }
   }
 
