@@ -1427,9 +1427,9 @@ namespace diskann {
 #ifdef EXEC_ENV_OLS
       throw ANNException("load_pq_centroid_bin should not be called when EXEC_ENV_OLS is defined.",
                          -1, __FUNCSIG__, __FILE__, __LINE__);
-      //pq_table.load_pq_centroid_bin(files, pq_pivots_file.c_str(), _num_pq_chunks);
+      //_pq_table.load_pq_centroid_bin(files, pq_pivots_file.c_str(), _num_pq_chunks);
 #else
-      pq_table.load_pq_centroid_bin(pq_pivots_file.c_str(), _num_pq_chunks);
+      _pq_table.load_pq_centroid_bin(pq_pivots_file.c_str(), _num_pq_chunks);
 #endif
     }
 
