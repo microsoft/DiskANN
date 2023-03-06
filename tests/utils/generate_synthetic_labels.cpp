@@ -70,7 +70,12 @@ int main(int argc, char** argv) {
           outfile << j;
           label_written = true;
         }
+        if (!label_written) {
+          outfile << 0;
+          label_written = true;
+        }
       }
+
 
       if (i < num_points - 1) {
         outfile << '\n';
