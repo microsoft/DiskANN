@@ -383,6 +383,7 @@ generate_label_specific_vector_files_compat(
     label_file_stream.close();
     free(labels_to_vectors[label]);
   }
+
   input_data_stream.close();
 
 
