@@ -342,7 +342,7 @@ generate_label_specific_vector_files_compat(
   tsl::robin_map<label, std::vector<_u32>> label_id_to_orig_id;
 
   for (const auto &label : all_labels) {
-    _u32  number_of_label_pts = labels_to_number_of_points[label];
+    _u32 number_of_label_pts = labels_to_number_of_points[label];
     char *vectors = (char *) malloc(number_of_label_pts * VECTOR_SIZE);
     if (vectors == nullptr) {
       throw;
@@ -373,16 +373,16 @@ generate_label_specific_vector_files_compat(
 
     std::ofstream label_file_stream;
     label_file_stream.exceptions(std::ios::badbit | std::ios::failbit);
-    label_file_stream.open(curr_label_input_data_path);
-
+    label_file_stream.open(curr_label_input_data_path, std::ios_base::binary);
     label_file_stream.write((char *) &number_of_label_pts, sizeof(_u32));
     label_file_stream.write((char *) &dimension, sizeof(_u32));
     label_file_stream.write((char *) labels_to_vectors[label],
                             number_of_label_pts * VECTOR_SIZE);
 
-    free(labels_to_vectors[label]);
     label_file_stream.close();
+    free(labels_to_vectors[label]);
   }
+  input_data_stream.close();
 
   std::chrono::duration<double> file_writing_time =
       std::chrono::high_resolution_clock::now() - file_writing_timer;
@@ -556,7 +556,7 @@ void save_full_index(path final_index_path_prefix, path input_data_path,
 
   std::ofstream stitched_graph_writer;
   stitched_graph_writer.exceptions(std::ios::badbit | std::ios::failbit);
-  stitched_graph_writer.open(final_index_path_prefix);
+  stitched_graph_writer.open(final_index_path_prefix, std::ios_base::binary);
 
   stitched_graph_writer.write((char *) &final_index_size, sizeof(_u64));
   stitched_graph_writer.write((char *) &index_max_observed_degree,
