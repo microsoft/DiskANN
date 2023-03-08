@@ -665,7 +665,9 @@ stitch_indices_return_values stitch_label_indices(
  * and pruned graph.
  */
 template<typename T>
-void prune_and_save(path final_index_path_prefix, path input_data_path,
+void prune_and_save(path final_index_path_prefix,
+                    path full_index_path_prefix,
+                    path input_data_path,
                     std::vector<std::vector<_u32>> stitched_graph,
                     unsigned                       stitched_R,
                     tsl::robin_map<label, _u32>    label_entry_points,
@@ -681,7 +683,7 @@ void prune_and_save(path final_index_path_prefix, path input_data_path,
                           number_of_label_points, false, false);
 
   // not searching this index, set search_l to 0
-  index.load(final_index_path_prefix.c_str(), num_threads, 1);
+  index.load(full_index_path_prefix.c_str(), num_threads, 1);
 
   diskann::Parameters paras;
   paras.Set<unsigned>("R", stitched_R);
@@ -692,7 +694,7 @@ void prune_and_save(path final_index_path_prefix, path input_data_path,
   std::cout << "parsing labels" << std::endl;
 
   index.prune_all_nbrs(paras);
-  index.save((final_index_path_prefix + "_pruned").c_str());
+  index.save((final_index_path_prefix).c_str());
 
   diskann::cout.rdbuf(diskann_cout_buffer);
   std::cout.rdbuf(std_cout_buffer);
@@ -833,23 +835,23 @@ int main(int argc, char **argv) {
         label_id_to_orig_id_map);
   else
     throw;
-
+  path full_index_path_prefix = final_index_path_prefix + "_full";
   // 5a. save the stitched graph to disk
-  save_full_index(final_index_path_prefix, input_data_path, stitched_graph_size,
+  save_full_index(full_index_path_prefix, input_data_path, stitched_graph_size,
                   stitched_graph, label_entry_points, universal_label,
                   labels_file_to_use);
 
   // 6. run a prune on the stitched index, and save to disk
   if (data_type == "uint8")
-    prune_and_save<uint8_t>(final_index_path_prefix, input_data_path,
+    prune_and_save<uint8_t>(final_index_path_prefix, full_index_path_prefix, input_data_path,
                             stitched_graph, stitched_R, label_entry_points,
                             universal_label, labels_file_to_use, num_threads);
   else if (data_type == "int8")
-    prune_and_save<int8_t>(final_index_path_prefix, input_data_path,
+    prune_and_save<int8_t>(final_index_path_prefix, full_index_path_prefix, input_data_path,
                            stitched_graph, stitched_R, label_entry_points,
                            universal_label, labels_file_to_use, num_threads);
   else if (data_type == "float")
-    prune_and_save<float>(final_index_path_prefix, input_data_path,
+    prune_and_save<float>(final_index_path_prefix, full_index_path_prefix, input_data_path,
                           stitched_graph, stitched_R, label_entry_points,
                           universal_label, labels_file_to_use, num_threads);
   else
