@@ -166,7 +166,7 @@ inline void convert_labels_string_to_int(const std::string& inFileName,
         token.erase(std::remove(token.begin(), token.end(), '\n'), token.end());
         token.erase(std::remove(token.begin(), token.end(), '\r'), token.end());
         if (string_int_map.find(token) == string_int_map.end()) {
-            int nextId = string_int_map.size()+1;
+            int nextId = string_int_map.size() + 1;
             string_int_map[token] = nextId;
         }
         lbls.push_back(string_int_map[token]);
@@ -176,7 +176,7 @@ inline void convert_labels_string_to_int(const std::string& inFileName,
         exit(-1);
     }
     for (size_t j = 0; j < lbls.size(); j++) {
-        if(j != lbls.size()-1)
+        if (j != lbls.size() - 1)
             label_writer << lbls[j] << ",";
         else
             label_writer << lbls[j] << std::endl;

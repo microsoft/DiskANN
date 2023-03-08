@@ -1733,6 +1733,7 @@ namespace diskann {
     }
     return string_to_int_mp;
   }
+
   template<typename T, typename TagT, typename LabelT>
   LabelT Index<T, TagT, LabelT>::get_converted_label(const std::string &filter_label){
     if(_label_map.find(filter_label) != _label_map.end()){
