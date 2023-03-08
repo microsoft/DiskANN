@@ -237,7 +237,7 @@ generate_label_specific_vector_files(
   // setup iovec list for each label
   for (const auto &lbl : all_labels) {
     iovec *label_iovecs =
-        (iovec *) malloc(labels_to_number_of_points[label] * sizeof(iovec));
+        (iovec *) malloc(labels_to_number_of_points[lbl] * sizeof(iovec));
     if (label_iovecs == nullptr) {
       throw;
     }
