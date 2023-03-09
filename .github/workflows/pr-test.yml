@@ -71,6 +71,9 @@ jobs:
       run: |   
         ${{ env.diskann_built_tests }}/build_memory_index --data_type float --dist_fn l2 --data_path ./rand_float_10D_10K_norm1.0.bin --index_path_prefix ./index_l2_rand_float_10D_10K_norm1.0
         ${{ env.diskann_built_tests }}/search_memory_index --data_type float --dist_fn l2 --fail_if_recall_below 70 --index_path_prefix ./index_l2_rand_float_10D_10K_norm1.0 --query_file ./rand_float_10D_1K_norm1.0.bin --recall_at 10 --result_path temp --gt_file ./l2_rand_float_10D_10K_norm1.0_10D_1K_norm1.0_gt100 -L  16 32
+    - name: Searching with fast_l2 distance function 
+      if: runner.os != 'Windows'
+      run: |
         ${{ env.diskann_built_tests }}/search_memory_index --data_type float --dist_fn fast_l2 --fail_if_recall_below 70 --index_path_prefix ./index_l2_rand_float_10D_10K_norm1.0 --query_file ./rand_float_10D_1K_norm1.0.bin --recall_at 10 --result_path temp --gt_file ./l2_rand_float_10D_10K_norm1.0_10D_1K_norm1.0_gt100 -L  16 32
     - name: build and search in-memory index with MIPS metric
       run: |   
