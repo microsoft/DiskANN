@@ -480,6 +480,11 @@ namespace diskann {
 
   // TODO: Make this a streaming implementation to avoid exceeding the memory
   // budget
+  /* If the number of filters per point N exceeds the graph degree R, 
+    then it is difficult to have edges to all labels from this point.
+    This function break up such dense points to have only a threshold of maximum T labels per point 
+    It divides one graph nodes to multiple nodes and append the new nodes at the end.
+    The dummy map contains the real graph id of the new nodes added to the graph */
   template<typename T>
   void breakup_dense_points(const std::string data_file,
                             const std::string labels_file, _u32 density,

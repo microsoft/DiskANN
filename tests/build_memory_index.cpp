@@ -115,7 +115,9 @@ int main(int argc, char** argv) {
         "building the index, and false for PQ compression");
     desc.add_options()("label_file",
                        po::value<std::string>(&label_file)->default_value(""),
-                       "Input label file in txt format if present");
+                       "Input label file in txt format for Filtered Index search.
+                       The file should contain comma separated filters for each node 
+                       with each line corresponding to a graph node");
     desc.add_options()(
         "universal_label",
         po::value<std::string>(&universal_label)->default_value(""),
@@ -125,8 +127,9 @@ int main(int argc, char** argv) {
                        "Build complexity for filtered points, higher value "
                        "results in better graphs");
     desc.add_options()("label_type", 
-         po::value<std::string>(&label_type)->default_value("ushort"),
-        "label type <uint/ushort>");
+         po::value<std::string>(&label_type)->default_value("uint"),
+        "Storage type of Labels <uint/ushort>, default value is uint which will 
+         consume memory 4 bytes per filter");
 
     po::variables_map vm;
     po::store(po::parse_command_line(argc, argv, desc), vm);
@@ -160,7 +163,7 @@ int main(int argc, char** argv) {
     diskann::cout << "Starting index build with R: " << R << "  Lbuild: " << L
                   << "  alpha: " << alpha << "  #threads: " << num_threads
                   << std::endl;
-    if(label_file != "" && label_type == "uint16"){
+    if(label_file != "" && label_type == "ushort"){
       if (data_type == std::string("int8"))
         return build_in_memory_index<int8_t, uint32_t, uint16_t>(
             metric, data_path, R, L, alpha, index_path_prefix, num_threads,
