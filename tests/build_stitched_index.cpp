@@ -380,6 +380,9 @@ generate_label_specific_vector_files_compat(
   }
   input_data_stream.close();
 
+  input_data_stream.close();
+
+
   std::chrono::duration<double> file_writing_time =
       std::chrono::high_resolution_clock::now() - file_writing_timer;
   std::cout << "generated " << all_labels.size()
