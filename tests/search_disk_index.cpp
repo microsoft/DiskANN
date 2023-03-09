@@ -219,7 +219,8 @@ int search_disk_index(
             query_result_dists[test_id].data() + (i * recall_at),
             optimized_beamwidth, use_reorder_data, stats + i);
       } else {
-        LabelT label_for_search =  _pFlashIndex->get_converted_label(filter_label);
+        LabelT label_for_search =
+            _pFlashIndex->get_converted_label(filter_label);
         _pFlashIndex->cached_beam_search(
             query + (i * query_aligned_dim), recall_at, L,
             query_result_ids_64.data() + (i * recall_at),
@@ -352,9 +353,11 @@ int main(int argc, char** argv) {
         "filter_label",
         po::value<std::string>(&filter_label)->default_value(std::string("")),
         "Filter Label for Filtered Search");
-    desc.add_options()("label_type", po::value<std::string>(&label_type)->default_value("uint"),
-                       "Storage type of Labels <uint/ushort>, default value is uint which will 
-                       consume memory 4 bytes per filter");
+    desc.add_options()(
+        "label_type",
+        po::value<std::string>(&label_type)->default_value("uint"),
+        "Storage type of Labels <uint/ushort>, default value is uint which "
+        "will consume memory 4 bytes per filter");
     desc.add_options()(
         "fail_if_recall_below",
         po::value<float>(&fail_if_recall_below)->default_value(0.0f),
@@ -404,7 +407,7 @@ int main(int argc, char** argv) {
   }
 
   try {
-    if(filter_label != "" && label_type == "ushort"){
+    if (filter_label != "" && label_type == "ushort") {
       if (data_type == std::string("float"))
         return search_disk_index<float, uint16_t>(
             metric, index_path_prefix, result_path_prefix, query_file, gt_file,
@@ -425,8 +428,7 @@ int main(int argc, char** argv) {
                   << std::endl;
         return -1;
       }
-    }
-    else{
+    } else {
       if (data_type == std::string("float"))
         return search_disk_index<float>(
             metric, index_path_prefix, result_path_prefix, query_file, gt_file,
@@ -453,5 +455,4 @@ int main(int argc, char** argv) {
     diskann::cerr << "Index search failed." << std::endl;
     return -1;
   }
-
 }

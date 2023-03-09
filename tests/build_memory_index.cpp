@@ -40,31 +40,32 @@ int build_in_memory_index(const diskann::Metric& metric,
   paras.Set<unsigned>("num_threads", num_threads);
   std::string labels_file_to_use = save_path + "_label_formatted.txt";
   std::string mem_labels_int_map_file = save_path + "_labels_map.txt";
-    
 
   _u64 data_num, data_dim;
   diskann::get_bin_metadata(data_path, data_num, data_dim);
 
-  diskann::Index<T, TagT, LabelT> index(metric, data_dim, data_num, false, false, false,
-                              use_pq_build, num_pq_bytes, use_opq);
-  auto                    s = std::chrono::high_resolution_clock::now();
+  diskann::Index<T, TagT, LabelT> index(metric, data_dim, data_num, false,
+                                        false, false, use_pq_build,
+                                        num_pq_bytes, use_opq);
+  auto                            s = std::chrono::high_resolution_clock::now();
   if (label_file == "") {
     index.build(data_path.c_str(), data_num, paras);
   } else {
-    convert_labels_string_to_int(label_file, labels_file_to_use, 
-                                  mem_labels_int_map_file, universal_label);
+    convert_labels_string_to_int(label_file, labels_file_to_use,
+                                 mem_labels_int_map_file, universal_label);
     if (universal_label != "") {
       LabelT unv_label_as_num = std::stoul(universal_label);
       index.set_universal_label(unv_label_as_num);
     }
-    index.build_filtered_index(data_path.c_str(), labels_file_to_use, data_num, paras);
+    index.build_filtered_index(data_path.c_str(), labels_file_to_use, data_num,
+                               paras);
   }
   std::chrono::duration<double> diff =
       std::chrono::high_resolution_clock::now() - s;
 
   std::cout << "Indexing time: " << diff.count() << "\n";
   index.save(save_path.c_str());
-  if(label_file != "")
+  if (label_file != "")
     std::remove(labels_file_to_use.c_str());
   return 0;
 }
@@ -113,11 +114,11 @@ int main(int argc, char** argv) {
         "use_opq", po::bool_switch()->default_value(false),
         "Set true for OPQ compression while using PQ distance comparisons for "
         "building the index, and false for PQ compression");
-    desc.add_options()("label_file",
-                       po::value<std::string>(&label_file)->default_value(""),
-                       "Input label file in txt format for Filtered Index search.
-                       The file should contain comma separated filters for each node 
-                       with each line corresponding to a graph node");
+    desc.add_options()(
+        "label_file", po::value<std::string>(&label_file)->default_value(""),
+        "Input label file in txt format for Filtered Index search. "
+        "The file should contain comma separated filters for each node "
+        "with each line corresponding to a graph node");
     desc.add_options()(
         "universal_label",
         po::value<std::string>(&universal_label)->default_value(""),
@@ -126,10 +127,11 @@ int main(int argc, char** argv) {
                        po::value<uint32_t>(&Lf)->default_value(0),
                        "Build complexity for filtered points, higher value "
                        "results in better graphs");
-    desc.add_options()("label_type", 
-         po::value<std::string>(&label_type)->default_value("uint"),
-        "Storage type of Labels <uint/ushort>, default value is uint which will 
-         consume memory 4 bytes per filter");
+    desc.add_options()(
+        "label_type",
+        po::value<std::string>(&label_type)->default_value("uint"),
+        "Storage type of Labels <uint/ushort>, default value is uint which "
+        "will consume memory 4 bytes per filter");
 
     po::variables_map vm;
     po::store(po::parse_command_line(argc, argv, desc), vm);
@@ -163,7 +165,7 @@ int main(int argc, char** argv) {
     diskann::cout << "Starting index build with R: " << R << "  Lbuild: " << L
                   << "  alpha: " << alpha << "  #threads: " << num_threads
                   << std::endl;
-    if(label_file != "" && label_type == "ushort"){
+    if (label_file != "" && label_type == "ushort") {
       if (data_type == std::string("int8"))
         return build_in_memory_index<int8_t, uint32_t, uint16_t>(
             metric, data_path, R, L, alpha, index_path_prefix, num_threads,
@@ -175,17 +177,16 @@ int main(int argc, char** argv) {
             use_pq_build, build_PQ_bytes, use_opq, label_file, universal_label,
             Lf);
       else if (data_type == std::string("float"))
-        return build_in_memory_index<float, uint32_t, uint16_t>(metric, data_path, R, L, alpha,
-                                            index_path_prefix, num_threads,
-                                            use_pq_build, build_PQ_bytes, use_opq,
-                                            label_file, universal_label, Lf);
+        return build_in_memory_index<float, uint32_t, uint16_t>(
+            metric, data_path, R, L, alpha, index_path_prefix, num_threads,
+            use_pq_build, build_PQ_bytes, use_opq, label_file, universal_label,
+            Lf);
       else {
         std::cout << "Unsupported type. Use one of int8, uint8 or float."
                   << std::endl;
         return -1;
       }
-    }
-    else{
+    } else {
       if (data_type == std::string("int8"))
         return build_in_memory_index<int8_t>(
             metric, data_path, R, L, alpha, index_path_prefix, num_threads,
@@ -197,10 +198,10 @@ int main(int argc, char** argv) {
             use_pq_build, build_PQ_bytes, use_opq, label_file, universal_label,
             Lf);
       else if (data_type == std::string("float"))
-        return build_in_memory_index<float>(metric, data_path, R, L, alpha,
-                                            index_path_prefix, num_threads,
-                                            use_pq_build, build_PQ_bytes, use_opq,
-                                            label_file, universal_label, Lf);
+        return build_in_memory_index<float>(
+            metric, data_path, R, L, alpha, index_path_prefix, num_threads,
+            use_pq_build, build_PQ_bytes, use_opq, label_file, universal_label,
+            Lf);
       else {
         std::cout << "Unsupported type. Use one of int8, uint8 or float."
                   << std::endl;

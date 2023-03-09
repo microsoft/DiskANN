@@ -23,7 +23,7 @@
 
 namespace po = boost::program_options;
 
-template<typename T, typename LabelT = uint32_t >
+template<typename T, typename LabelT = uint32_t>
 int search_memory_index(diskann::Metric& metric, const std::string& index_path,
                         const std::string& result_path_prefix,
                         const std::string& query_file,
@@ -56,7 +56,7 @@ int search_memory_index(diskann::Metric& metric, const std::string& index_path,
                   << " not found. Not computing recall." << std::endl;
   }
 
-  bool  filtered_search = false;
+  bool filtered_search = false;
   if (filter_label != "") {
     filtered_search = true;
   }
@@ -134,7 +134,7 @@ int search_memory_index(diskann::Metric& metric, const std::string& index_path,
       auto qs = std::chrono::high_resolution_clock::now();
       if (filtered_search) {
         LabelT filter_label_as_num = index.get_converted_label(filter_label);
-        auto retval = index.search_with_filters(
+        auto   retval = index.search_with_filters(
             query + i * query_aligned_dim, filter_label_as_num, recall_at, L,
             query_result_ids[test_id].data() + i * recall_at,
             query_result_dists[test_id].data() + i * recall_at);
@@ -256,9 +256,11 @@ int main(int argc, char** argv) {
         "filter_label",
         po::value<std::string>(&filter_label)->default_value(std::string("")),
         "Filter Label for Filtered Search");
-    desc.add_options()("label_type", po::value<std::string>(&label_type)->default_value("uint"),
-                       "Storage type of Labels <uint/ushort>, default value is uint which will 
-                       consume memory 4 bytes per filter");
+    desc.add_options()(
+        "label_type",
+        po::value<std::string>(&label_type)->default_value("uint"),
+        "Storage type of Labels <uint/ushort>, default value is uint which "
+        "will consume memory 4 bytes per filter");
     desc.add_options()(
         "gt_file",
         po::value<std::string>(&gt_file)->default_value(std::string("null")),
@@ -334,7 +336,7 @@ int main(int argc, char** argv) {
   }
 
   try {
-    if(filter_label != "" && label_type == "ushort"){
+    if (filter_label != "" && label_type == "ushort") {
       if (data_type == std::string("int8")) {
         return search_memory_index<int8_t, uint16_t>(
             metric, index_path_prefix, result_path, query_file, gt_file,
@@ -354,8 +356,7 @@ int main(int argc, char** argv) {
         std::cout << "Unsupported type. Use float/int8/uint8" << std::endl;
         return -1;
       }
-    }
-    else{
+    } else {
       if (data_type == std::string("int8")) {
         return search_memory_index<int8_t>(
             metric, index_path_prefix, result_path, query_file, gt_file,
