@@ -230,9 +230,9 @@ generate_label_specific_vector_files(
     throw;
   }
 
-  tsl::robin_map<label, iovec *>           label_to_iovec_map;
-  tsl::robin_map<label, _u32>              label_to_curr_iovec;
-  tsl::robin_map<label, std::vector<_u32>> label_id_to_orig_id;
+  tsl::robin_map<std::string, iovec *>           label_to_iovec_map;
+  tsl::robin_map<std::string, _u32>              label_to_curr_iovec;
+  tsl::robin_map<std::string, std::vector<_u32>> label_id_to_orig_id;
 
   // setup iovec list for each label
   for (const auto &lbl : all_labels) {
@@ -264,7 +264,7 @@ generate_label_specific_vector_files(
   for (const auto &lbl : all_labels) {
     int  label_input_data_fd;
     path curr_label_input_data_path(input_data_path + "_" +
-                                    std::to_string(lbl));
+                                    lbl);
     _u32 curr_num_pts = labels_to_number_of_points[lbl];
 
     label_input_data_fd =
