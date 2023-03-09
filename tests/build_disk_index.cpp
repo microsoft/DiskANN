@@ -67,21 +67,28 @@ int main(int argc, char** argv) {
 
     desc.add_options()("label_file",
                        po::value<std::string>(&label_file)->default_value(""),
-                       "Input label file in txt format if present");
+                       "Input label file in txt format for Filtered Index build.
+                       The file should contain comma separated filters for each node 
+                       with each line corresponding to a graph node");
     desc.add_options()(
         "universal_label",
         po::value<std::string>(&universal_label)->default_value(""),
-        "Universal label, if using it, only in conjunction with labels_file");
+        "Universal label, Use only in conjuction with label file for filtered 
+        index build. If a graph node has all the labels against it, we can assign 
+        a special universal filter to the point instead of comma separated filters
+        for that point");
     desc.add_options()("filtered_Lbuild,Lf",
                        po::value<uint32_t>(&Lf)->default_value(0),
                        "Build complexity for filtered points, higher value "
                        "results in better graphs");
     desc.add_options()("filter_threshold,F",
                        po::value<uint32_t>(&filter_threshold)->default_value(0),
-                       "Threshold for breaking-up points with many labels");
+                       "Threshold to break up the existing nodes to generate new graph
+                       internally where each node has a maximum F labels.");
     desc.add_options()("label_type", 
-         po::value<std::string>(&label_type)->default_value("ushort"),
-        "label type <uint32/uint16> ");                  
+         po::value<std::string>(&label_type)->default_value("uint"),
+        "Storage type of Labels <uint/ushort>, default value is uint which will 
+         consume memory 4 bytes per filter");                  
 
     po::variables_map vm;
     po::store(po::parse_command_line(argc, argv, desc), vm);
@@ -140,7 +147,7 @@ int main(int argc, char** argv) {
                        std::string(std::to_string(build_PQ));
 
   try {
-    if(label_file != "" && label_type == "uint16"){
+    if(label_file != "" && label_type == "ushort"){
       if (data_type == std::string("int8"))
         return diskann::build_disk_index<int8_t,uint16_t>(
             data_path.c_str(), index_path_prefix.c_str(), params.c_str(), metric,

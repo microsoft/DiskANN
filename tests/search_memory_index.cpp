@@ -256,8 +256,9 @@ int main(int argc, char** argv) {
         "filter_label",
         po::value<std::string>(&filter_label)->default_value(std::string("")),
         "Filter Label for Filtered Search");
-    desc.add_options()("label_type", po::value<std::string>(&label_type)->default_value("uint32"),
-                       "Type of label for Search <uint16/uint32>, default value is uint32");
+    desc.add_options()("label_type", po::value<std::string>(&label_type)->default_value("uint"),
+                       "Storage type of Labels <uint/ushort>, default value is uint which will 
+                       consume memory 4 bytes per filter");
     desc.add_options()(
         "gt_file",
         po::value<std::string>(&gt_file)->default_value(std::string("null")),
@@ -333,7 +334,7 @@ int main(int argc, char** argv) {
   }
 
   try {
-    if(filter_label != "" && label_type == "uint16"){
+    if(filter_label != "" && label_type == "ushort"){
       if (data_type == std::string("int8")) {
         return search_memory_index<int8_t, uint16_t>(
             metric, index_path_prefix, result_path, query_file, gt_file,
