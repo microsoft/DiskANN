@@ -818,16 +818,32 @@ namespace diskann {
 
     // query <-> neighbor list
     float *dist_scratch = pq_query_scratch->aligned_dist_scratch;
+    uint64_t max_nnbrs = pq_query_scratch->max_nnbrs;
     _u8   *pq_coord_scratch = pq_query_scratch->aligned_pq_coord_scratch;
 
     // lambda to batch compute query<-> node distances in PQ space
     auto compute_dists = [this, pq_coord_scratch, pq_dists](const unsigned *ids,
                                                             const _u64 n_ids,
                                                             float *dists_out) {
-      diskann::aggregate_coords(ids, n_ids, this->data, this->n_chunks,
-                                pq_coord_scratch);
-      diskann::pq_dist_lookup(pq_coord_scratch, n_ids, this->n_chunks, pq_dists,
-                              dists_out);
+          bool valid = true;
+          for (unsigned i = 0; i < n_ids; i++) {
+              if (ids[i] > this->num_points) {
+                  valid = false;
+                  break;
+              }
+          }
+          if (!valid) {
+              for (unsigned i = 0; i < n_ids; i++) {
+                dists_out[i] = std::numeric_limits<float>::max();
+              }
+              diskann::cerr << "Found invalid ID in compute_dists" << std::endl;
+              return;
+          }
+
+          diskann::aggregate_coords(ids, n_ids, this->data, this->n_chunks,
+                                    pq_coord_scratch);
+          diskann::pq_dist_lookup(pq_coord_scratch, n_ids, this->n_chunks,
+                                  pq_dists, dists_out);
     };
     Timer query_timer, io_timer, cpu_timer;
 
@@ -948,7 +964,14 @@ namespace diskann {
         full_retset.push_back(
             Neighbor((unsigned) cached_nhood.first, cur_expanded_dist));
 
-        _u64      nnbrs = cached_nhood.second.first;
+        _u64 nnbrs = cached_nhood.second.first;
+        if (nnbrs > max_nnbrs) {
+            std::stringstream stream;
+            stream << "Unexpected number of neighbors in graph file. Expected "s
+                   << max_nnbrs << ", but got"s << nnbrs << "for neighbor id "s << cached_nhood.first;
+            nnbrs = max_nnbrs;
+            diskann::cerr << stream.str() << std::endl;
+        }
         unsigned *node_nbrs = cached_nhood.second.second;
 
         // compute node_nbrs <-> query dists in PQ space
@@ -988,6 +1011,14 @@ namespace diskann {
             OFFSET_TO_NODE(frontier_nhood.second, frontier_nhood.first);
         unsigned *node_buf = OFFSET_TO_NODE_NHOOD(node_disk_buf);
         _u64      nnbrs = (_u64) (*node_buf);
+        if (nnbrs > max_nnbrs) {
+          std::stringstream stream;
+          stream << "Unexpected number of neighbors in graph file. Expected "s
+                 << max_nnbrs << ", but got"s << nnbrs << "for neighbor id "s
+                 << frontier_nhood.first;
+          nnbrs = max_nnbrs;
+          diskann::cerr << stream.str() << std::endl;
+        }
         T        *node_fp_coords = OFFSET_TO_NODE_COORDS(node_disk_buf);
         //        assert(data_buf_idx < MAX_N_CMPS);
         if (data_buf_idx == MAX_N_CMPS)

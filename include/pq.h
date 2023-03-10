@@ -62,6 +62,7 @@ namespace diskann {
         nullptr;  // MUST BE AT LEAST  [N_CHUNKS * MAX_DEGREE]
     float* rotated_query = nullptr;
     float* aligned_query_float = nullptr;
+    size_t max_nnbrs = 0;
 
     PQScratch(size_t graph_degree, size_t aligned_dim) {
       diskann::alloc_aligned(
@@ -75,6 +76,7 @@ namespace diskann {
                              aligned_dim * sizeof(float), 8 * sizeof(float));
       diskann::alloc_aligned((void**) &rotated_query,
                              aligned_dim * sizeof(float), 8 * sizeof(float));
+      max_nnbrs = graph_degree;
 
       memset(aligned_query_float, 0, aligned_dim * sizeof(float));
       memset(rotated_query, 0, aligned_dim * sizeof(float));
