@@ -32,6 +32,7 @@ int search_memory_index(diskann::Metric& metric, const std::string& index_path,
                         const bool                   print_all_recalls,
                         const std::vector<unsigned>& Lvec, const bool dynamic,
                         const bool tags, const bool show_qps_per_thread,
+                        const unsigned max_dist_cmp,
                         const float fail_if_recall_below) {
   // Load the query file
   T*        query = nullptr;
@@ -129,9 +130,9 @@ int search_memory_index(diskann::Metric& metric, const std::string& index_path,
             query + i * query_aligned_dim, recall_at, L,
             query_result_ids[test_id].data() + i * recall_at);
       } else if (tags) {
-        index.search_with_tags(query + i * query_aligned_dim, recall_at, L,
-                               query_result_tags.data() + i * recall_at,
-                               nullptr, res);
+        index.search_with_tags(
+            query + i * query_aligned_dim, recall_at, L, max_dist_cmp,
+            query_result_tags.data() + i * recall_at, nullptr, res);
         for (int64_t r = 0; r < (int64_t) recall_at; r++) {
           query_result_ids[test_id][recall_at * i + r] =
               query_result_tags[recall_at * i + r];
@@ -139,7 +140,7 @@ int search_memory_index(diskann::Metric& metric, const std::string& index_path,
       } else {
         cmp_stats[i] =
             index
-                .search(query + i * query_aligned_dim, recall_at, L,
+                .search(query + i * query_aligned_dim, recall_at, L, max_dist_cmp,
                         query_result_ids[test_id].data() + i * recall_at)
                 .second;
       }
@@ -216,7 +217,7 @@ int search_memory_index(diskann::Metric& metric, const std::string& index_path,
 int main(int argc, char** argv) {
   std::string data_type, dist_fn, index_path_prefix, result_path, query_file,
       gt_file;
-  unsigned              num_threads, K;
+  unsigned              num_threads, K, max_dist_cmp;
   std::vector<unsigned> Lvec;
   bool                  print_all_recalls, dynamic, tags, show_qps_per_thread;
   float                 fail_if_recall_below = 0.0f;
@@ -263,6 +264,12 @@ int main(int argc, char** argv) {
     desc.add_options()("qps_per_thread", po::bool_switch(&show_qps_per_thread),
                        "Print overall QPS divided by the number of threads in "
                        "the output table");
+    desc.add_options()(
+        "max_dist_cmp",
+        po::value<unsigned>(&max_dist_cmp)
+            ->default_value(std::numeric_limits<unsigned int>::max()),
+        "Maximum number of distance comparisons before search "
+        "terminates");
     desc.add_options()(
         "fail_if_recall_below",
         po::value<float>(&fail_if_recall_below)->default_value(0.0f),
@@ -317,19 +324,18 @@ int main(int argc, char** argv) {
       return search_memory_index<int8_t>(
           metric, index_path_prefix, result_path, query_file, gt_file,
           num_threads, K, print_all_recalls, Lvec, dynamic, tags,
-          show_qps_per_thread, fail_if_recall_below);
+          show_qps_per_thread, max_dist_cmp, fail_if_recall_below);
     }
-
     else if (data_type == std::string("uint8")) {
       return search_memory_index<uint8_t>(
           metric, index_path_prefix, result_path, query_file, gt_file,
           num_threads, K, print_all_recalls, Lvec, dynamic, tags,
-          show_qps_per_thread, fail_if_recall_below);
+          show_qps_per_thread, max_dist_cmp, fail_if_recall_below);
     } else if (data_type == std::string("float")) {
       return search_memory_index<float>(
           metric, index_path_prefix, result_path, query_file, gt_file,
           num_threads, K, print_all_recalls, Lvec, dynamic, tags,
-          show_qps_per_thread, fail_if_recall_below);
+          show_qps_per_thread, max_dist_cmp, fail_if_recall_below);
     } else {
       std::cout << "Unsupported type. Use float/int8/uint8" << std::endl;
       return -1;
