@@ -64,7 +64,7 @@ inline size_t random(size_t range_from, size_t range_to) {
  *
  * Arguments are merely the inputs from the command line.
  */
-size_t handle_args(int argc, char **argv, std::string &data_type,
+void handle_args(int argc, char **argv, std::string &data_type,
                    path &input_data_path, path &final_index_path_prefix,
                    path &label_data_path, std::string &universal_label,
                    unsigned &num_threads, unsigned &R, unsigned &L,
@@ -120,7 +120,6 @@ size_t handle_args(int argc, char **argv, std::string &data_type,
     std::cerr << ex.what() << '\n';
     throw;
   }
-  return 1;
 }
 
 /*

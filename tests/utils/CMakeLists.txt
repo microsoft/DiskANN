@@ -68,3 +68,6 @@ target_link_libraries(create_disk_layout ${PROJECT_NAME} ${DISKANN_ASYNC_LIB} ${
 
 add_executable(generate_synthetic_labels generate_synthetic_labels.cpp)
 target_link_libraries(generate_synthetic_labels ${PROJECT_NAME} Boost::program_options)
+
+add_executable(stats_label_data stats_label_data.cpp)
+target_link_libraries(stats_label_data ${PROJECT_NAME} Boost::program_options)

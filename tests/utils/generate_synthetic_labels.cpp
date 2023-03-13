@@ -72,7 +72,7 @@ class ZipfDistribution {
   private:
     int                                          num_labels;
     const int                                    num_points;
-    const double                                 distribution_factor = 0.8;
+    const double                                 distribution_factor = 0.7;
     std::knuth_b                                 rand_engine;
     const std::uniform_real_distribution<double> uniform_zero_to_one;
 
