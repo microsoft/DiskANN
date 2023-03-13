@@ -49,6 +49,28 @@ void apply_max(T1& x, T2& y) {
     if (x < y) x = y;
 }
 
+void sort_and_leave_best_K(std::vector<std::pair<float, uint32_t>>& vec,
+                           const unsigned                           K) {
+    std::sort(vec.begin(), vec.end());
+
+    // remove elements that are not unique (looking at their ID)
+    // should work even if distance (the float) is a bit unstable
+    std::unordered_set<uint32_t> present_ids;
+    auto                         next_dest = vec.begin();
+    for (auto it = vec.begin(); it != vec.end(); ++it) {
+        if (present_ids.insert(it->second).second == true) {
+          *next_dest = *it;
+          ++next_dest;
+        }
+    }
+    vec.erase(next_dest, vec.end());
+
+    if (vec.size() > K) {
+        vec.erase(vec.begin() + K, vec.end());
+    }
+}
+
+
 // Consider a ball centered at q, of radius r. Is every point in this ball closer to c2 than to c1?
 bool is_ball_entirely_on_one_side(float* q, float* c1, float* c2, size_t dim,
                                float r) {
@@ -105,6 +127,7 @@ int search_disk_index_sharded(
     calc_recall_flag = true;
   }
 
+  /*
   if (mode == "kmeans" || mode == "kmeans_voronoi") {
     // filter away those L for which we would get fewer than K points per
     // query
@@ -120,6 +143,7 @@ int search_disk_index_sharded(
           << std::endl;
     }
   }
+  */
 
   std::vector<std::vector<std::vector<std::pair<float, uint32_t>>>>
       global_query_result_topK(
@@ -208,18 +232,21 @@ int search_disk_index_sharded(
         }
 
         // in second phase of kmeans_voronoi, we ask all those remaining shards that cannot be ruled out
+        // TODO: ask only some maximum number of these; also, explore using smaller L in second phase
         std::vector<std::vector<unsigned>> num_shards_that_will_be_asked(
             Lvec.size());
         for (uint32_t test_id = 0; test_id < Lvec.size(); test_id++) {
           for (size_t query_id = 0; query_id < query_num; ++query_id) {
-            if (global_query_result_topK[test_id][query_id].size() <
+            float kth_distance;
+            if (global_query_result_topK[test_id][query_id].size() >=
                 recall_at) {
-              diskann::cout << "implementation error? in phase 2 every query "
-                               "should have K results already"
-                            << std::endl;
+              kth_distance = sqrt(
+                  global_query_result_topK[test_id][query_id][recall_at - 1]
+                      .first);
+            } else {
+              kth_distance = -1.0;
             }
-            const float kth_distance =
-                sqrt(global_query_result_topK[test_id][query_id][recall_at - 1].first);
+            
             unsigned cur_num_shards_that_will_be_asked = 0;
             for (unsigned s1 = 0; s1 < num_shards; ++s1) {
               // should s1 be asked?
@@ -241,6 +268,8 @@ int search_disk_index_sharded(
               // other center
               for (unsigned s2 = 0; s2 < num_shards; ++s2) {
                 if (s2 == s1)
+                  continue;
+                if (kth_distance < 0)
                   continue;
                 if (is_ball_entirely_on_one_side(
                         query_float.get() + query_id * query_dim,
@@ -266,8 +295,7 @@ int search_disk_index_sharded(
         // query_ids_for_shard prepared
         // as well as num_shards_that_will_be_asked (for statistics)
 
-        std::ofstream voronoi_stats(std::string("voronoi_stats") +
-                                    std::to_string(rand()));
+        std::ofstream voronoi_stats("voronoi_stats");
         voronoi_stats << "numbers of shards that will be asked for each query:"
                       << std::endl;
         for (uint32_t test_id = 0; test_id < Lvec.size(); test_id++) {
@@ -293,6 +321,24 @@ int search_disk_index_sharded(
         diskann::cout << " " << it.size();
       }
       diskann::cout << std::endl;
+    } else if (mode == "manual") {
+      // read query IDs to be asked of each shard from files
+      // filename: PREFIX_subshard-X_query_ids_uint32.bin
+      for (unsigned shard_id = 0; shard_id < num_shards; ++shard_id) {
+        const std::string query_ids_path =
+            index_group_path_prefix + "_subshard-" + std::to_string(shard_id) +
+            "_query_ids_uint32.bin";
+        std::vector<unsigned> query_ids_for_this_shard_32;
+        diskann::read_idmap(query_ids_path, query_ids_for_this_shard_32);
+        // convert vector<uint32_t> to vector<size_t>
+        query_ids_for_shard[0][shard_id].assign(
+            query_ids_for_this_shard_32.begin(),
+            query_ids_for_this_shard_32.end());
+      }
+      // this will be later copied from 0 to all test_ids
+    } else {
+      diskann::cout << "Implementation error: unsupported mode?" << std::endl;
+      return -1;
     }
 
     if (phase == 1) {
@@ -476,14 +522,7 @@ int search_disk_index_sharded(
                 shard_query_result_dists[test_id][j * minKL + k],
                 shard_query_result_global_ids[test_id][j * minKL + k]);
           }
-          // sort global_query_result_topK[test_id] and leave only best K points
-          std::sort(global_query_result_topK[test_id][i].begin(),
-                    global_query_result_topK[test_id][i].end());
-          if (global_query_result_topK[test_id][i].size() > recall_at) {
-            global_query_result_topK[test_id][i].erase(
-                global_query_result_topK[test_id][i].begin() + recall_at,
-                global_query_result_topK[test_id][i].end());
-          }
+          sort_and_leave_best_K(global_query_result_topK[test_id][i], recall_at);
         }
 
         // aggregate local into global stats
@@ -577,19 +616,19 @@ int search_disk_index_sharded(
 
       float global_recall = 0;
       if (calc_recall_flag) {
-          if (global_query_result_topK[test_id][0].size() < recall_at) {
-              continue; // ignore this L
-              // TODO: handle this better?
-          }
-
           std::vector<uint32_t> global_query_result_topK_ids;
           for (_s64 i = 0; i < (int64_t)query_num; i++) {
-              if (global_query_result_topK[test_id][i].size() != recall_at) {
+              if (global_query_result_topK[test_id][i].size() > recall_at) {
                   diskann::cout << "implementation error?" << std::endl;
                   return -1;
               }
               for (const std::pair<float, uint32_t>& p : global_query_result_topK[test_id][i]) {
                   global_query_result_topK_ids.push_back(p.second);
+              }
+              // if size less than K, fill it up with junk
+              while (global_query_result_topK_ids.size() < recall_at * (i+1)) {
+                  global_query_result_topK_ids.push_back(
+                      std::numeric_limits<uint32_t>::max());
               }
           }
 
@@ -681,7 +720,7 @@ int main(int argc, char** argv) {
         "mode",
         po::value<std::string>(&mode)->default_value(std::string("all")),
         "Mode of execution: which shards to ask each query: all (default) / "
-        "kmeans / kmeans_voronoi");
+        "kmeans / kmeans_voronoi / manual (read this from files)");
     desc.add_options()(
         "num_closest_shards",
         po::value<unsigned>(&num_closest_shards)->default_value(0),
@@ -715,8 +754,9 @@ int main(int argc, char** argv) {
     return -1;
   }
 
-  if (mode != "all" && mode != "kmeans" && mode != "kmeans_voronoi") {
-    std::cout << "mode should be kmeans, kmeans_voronoi or all" << std::endl;
+  if (mode != "all" && mode != "kmeans" && mode != "kmeans_voronoi" &&
+      mode != "manual") {
+    std::cout << "mode should be kmeans, kmeans_voronoi, manual or all" << std::endl;
     return -1;
   }
 
