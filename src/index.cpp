@@ -1812,7 +1812,7 @@ namespace diskann {
                                    // identifies the points to label mapping
 
     std::unordered_map<LabelT, std::vector<_u32>> label_to_points;
-#pragma omp parallel for schedule(dynamic, 1)
+
     for (int lbl = 0; lbl < _labels.size(); lbl++) {
       auto itr = _labels.begin();
       std::advance(itr, lbl);
@@ -1820,19 +1820,26 @@ namespace diskann {
 
       std::vector<_u32> labeled_points;
       for (_u32 point_id = 0; point_id < num_points_to_load; point_id++) {
-        if (std::find(_pts_to_labels[point_id].begin(), _pts_to_labels[point_id].end(), x) !=
-                _pts_to_labels[point_id].end() ||
+        bool pt_has_lbl = std::find(_pts_to_labels[point_id].begin(),
+                                    _pts_to_labels[point_id].end(),
+                                    x) != _pts_to_labels[point_id].end();
+
+        bool pt_has_univ_lbl =
             (_use_universal_label &&
-             (std::find(_pts_to_labels[point_id].begin(), _pts_to_labels[point_id].end(),
-                        _universal_label) != _pts_to_labels[point_id].end())))
+             (std::find(_pts_to_labels[point_id].begin(),
+                        _pts_to_labels[point_id].end(),
+                        _universal_label) != _pts_to_labels[point_id].end()));
+
+        if (pt_has_lbl || pt_has_univ_lbl) {
           labeled_points.emplace_back(point_id);
+        }
       }
       label_to_points[x] = labeled_points;
     }
 
-    _u32 best_medoid_count = std::numeric_limits<_u32>::max();
     _u32 num_cands = 25;
     for (auto itr = _labels.begin(); itr != _labels.end(); itr++) {
+      _u32  best_medoid_count = std::numeric_limits<_u32>::max();
       auto &curr_label = *itr;
       _u32  best_medoid;
       auto  labeled_points = label_to_points[curr_label];
