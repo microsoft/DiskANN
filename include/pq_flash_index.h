@@ -108,23 +108,18 @@ namespace diskann {
     DISKANN_DLLEXPORT void setup_thread_data(_u64 nthreads,
                                              _u64 visited_reserve = 4096);
 
+    DISKANN_DLLEXPORT void set_universal_label(const LabelT &label);
+
+   private:
+    DISKANN_DLLEXPORT inline bool point_has_label(_u32 point_id, _u32 label_id);
+    std::unordered_map<std::string, LabelT> load_label_map(const std::string &map_file);
+    DISKANN_DLLEXPORT void parse_label_file(const std::string &map_file, size_t &num_pts_labels);
+    DISKANN_DLLEXPORT void get_label_file_metadata(std::string map_file,
+                                                   _u32       &num_pts,
+                                                   _u32 &num_total_labels);
     DISKANN_DLLEXPORT inline int32_t get_filter_number(
         const LabelT &filter_label);
 
-    DISKANN_DLLEXPORT void get_label_file_metadata(std::string map_file,
-                                                   _u32 &      num_pts,
-                                                   _u32 &num_total_labels);
-
-    DISKANN_DLLEXPORT inline bool point_has_label(_u32 point_id, _u32 label_id);
-
-    DISKANN_DLLEXPORT void parse_label_file(const std::string &map_file, size_t &num_pts_labels);
-
-    DISKANN_DLLEXPORT void set_universal_label(const LabelT &label);
-
-    std::unordered_map<std::string, LabelT> load_label_map(const std::string &map_file);
-
-
-   private:
     // index info
     // nhood of node `i` is in sector: [i / nnodes_per_sector]
     // offset in sector: [(i % nnodes_per_sector) * max_node_len]
