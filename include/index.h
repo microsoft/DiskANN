@@ -256,7 +256,6 @@ namespace diskann {
     void search_for_point_and_prune(
         int location, _u32 Lindex, std::vector<unsigned> &pruned_list,
         InMemQueryScratch<T> *scratch, bool use_filter = false,
-        const std::vector<LabelT> &filters = std::vector<LabelT>(),
         _u32                      filteredLindex = 0);
 
     void prune_neighbors(const unsigned location, std::vector<Neighbor> &pool,

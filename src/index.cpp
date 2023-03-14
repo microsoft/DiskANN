@@ -1024,8 +1024,7 @@ namespace diskann {
   template<typename T, typename TagT, typename LabelT>
   void Index<T, TagT, LabelT>::search_for_point_and_prune(
       int location, _u32 Lindex, std::vector<unsigned> &pruned_list,
-      InMemQueryScratch<T> *scratch, bool use_filter,
-      const std::vector<LabelT> &filters, _u32 filteredLindex) {
+      InMemQueryScratch<T> *scratch, bool use_filter, _u32 filteredLindex) {
     std::vector<unsigned> init_ids;
     init_ids.emplace_back(_start);
 
@@ -1324,9 +1323,9 @@ namespace diskann {
 
       std::vector<unsigned> pruned_list;
       if (_filtered_index) {
-        search_for_point_and_prune(
-            node, _indexingQueueSize, pruned_list, scratch, _filtered_index,
-            _pts_to_labels[node], _filterIndexingQueueSize);
+        search_for_point_and_prune(node, _indexingQueueSize, pruned_list,
+                                   scratch, _filtered_index,
+                                   _filterIndexingQueueSize);
 
       } else {
         search_for_point_and_prune(node, _indexingQueueSize, pruned_list,
@@ -2645,8 +2644,7 @@ namespace diskann {
     std::vector<unsigned>                     pruned_list;
     if (_filtered_index) {
       search_for_point_and_prune(location, _indexingQueueSize, pruned_list,
-                                 scratch, true, _pts_to_labels[location],
-                                 _filterIndexingQueueSize);
+                                 scratch, true, _filterIndexingQueueSize);
     } else {
       search_for_point_and_prune(location, _indexingQueueSize, pruned_list,
                                  scratch);
