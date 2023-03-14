@@ -85,6 +85,11 @@ We now need to make label file for our vectors. For convenience, we've included 
 Note : `distribution_type` can be `rand` or `zipf`
 
 This will genearate label file with 10000 data points with 50 distinct labels, ranging from 1 to 50 assigned using zipf distribution (0 is the universal label).
+
+Label count for each unique label in the generated label file can be printed with help of following command
+```bash
+  build/tests/utils/stats_label_data.exe --labels_file ./rand_labels_50_10K.txt --universal_label 0
+```
 	
 Note that neither approach is designed for use with random synthetic labels, which will lead to unpredictable accuracy at search time.
 

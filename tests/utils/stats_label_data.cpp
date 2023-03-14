@@ -14,6 +14,7 @@
 #include <cstring>
 #include <iomanip>
 #include <set>
+#include <boost/program_options.hpp>
 
 #include "utils.h"
 
@@ -25,6 +26,7 @@
 #else
 #include <Windows.h>
 #endif
+namespace po = boost::program_options;
 
 void stats_analysis(const std::string labels_file, std::string univeral_label,
                     _u32 density = 10) {
@@ -118,19 +120,29 @@ void stats_analysis(const std::string labels_file, std::string univeral_label,
 }
 
 int main(int argc, char** argv) {
-  if (argc != 3 && argc != 4) {
-    std::cout << "Usage:\n"
-              << argv[0]
-              << " [labels_file] [universal_label (use \"null\") if none] "
-                 "[optional: density threshold]\n";
-    exit(-1);
-  }
+  std::string       labels_file, universal_label;
+  _u32              density;
 
-  const std::string labels_file(argv[1]);
-  const std::string universal_label(argv[2]);
-  _u32              density = 1;
-  if (argc == 4) {
-    density = std::atoi(argv[3]);
+  po::options_description desc{"Arguments"};
+  try {
+    desc.add_options()("help,h", "Print information on arguments");
+    desc.add_options()("labels_file",
+                       po::value<std::string>(&labels_file)->required(),
+                       "path to labels data file.");
+    desc.add_options()("universal_label", po::value<std::string>(&universal_label)->required(),
+                       "Universal label used in labels file.");
+    desc.add_options()("density", po::value<_u32>(&density)->default_value(1),
+                       "Number of labels each point in labels file, defaults to 1");
+    po::variables_map vm;
+    po::store(po::parse_command_line(argc, argv, desc), vm);
+    if (vm.count("help")) {
+      std::cout << desc;
+      return 0;
+    }
+    po::notify(vm);
+  } catch (const std::exception& e) {
+    std::cerr << e.what() << '\n';
+    return -1;
   }
   stats_analysis(labels_file, universal_label, density);
 }
