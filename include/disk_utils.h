@@ -113,7 +113,7 @@ DISKANN_DLLEXPORT void extract_shard_labels(
       const std::string &label_file =
           std::string(""),  // default is empty string for no label_file
       const std::string &universal_label = "", const _u32 filter_threshold = 0,
-      const _u32 Lf = 0);  // default is empty string for no universal label););
+      const _u32 Lf = 0);  // default is empty string for no universal label
 
 
   template<typename T>
