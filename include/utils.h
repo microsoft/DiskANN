@@ -166,7 +166,7 @@ inline void convert_labels_string_to_int(const std::string& inFileName,
         token.erase(std::remove(token.begin(), token.end(), '\n'), token.end());
         token.erase(std::remove(token.begin(), token.end(), '\r'), token.end());
         if (string_int_map.find(token) == string_int_map.end()) {
-            int nextId = string_int_map.size() + 1;
+            _u32 nextId = (_u32)string_int_map.size() + 1;
             string_int_map[token] = nextId;
         }
         lbls.push_back(string_int_map[token]);
