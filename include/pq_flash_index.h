@@ -115,8 +115,7 @@ namespace diskann {
                                                    _u32 &      num_pts,
                                                    _u32 &num_total_labels);
 
-    DISKANN_DLLEXPORT inline bool find_label_in_point(_u32 point_id,
-                                                      _u32 label_id);
+    DISKANN_DLLEXPORT inline bool point_has_label(_u32 point_id, _u32 label_id);
 
     DISKANN_DLLEXPORT void parse_label_file(const std::string &map_file, size_t &num_pts_labels);
 

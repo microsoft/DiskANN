@@ -502,7 +502,7 @@ namespace diskann {
   }
 
   template<typename T, typename LabelT>
-  inline bool PQFlashIndex<T,LabelT>::find_label_in_point(_u32 point_id,
+  inline bool PQFlashIndex<T,LabelT>::point_has_label(_u32 point_id,
                                                    _u32 label_id) {
     _u32 start_vec = _pts_to_label_offsets[point_id];
     _u32 num_lbls = _pts_to_labels[start_vec];
@@ -1251,8 +1251,8 @@ namespace diskann {
             if (!use_filter && _dummy_pts.find(id) != _dummy_pts.end())
               continue;
 
-            if (use_filter && !find_label_in_point(id, filter_num) &&
-                !find_label_in_point(id, _universal_filter_num))
+            if (use_filter && !point_has_label(id, filter_num) &&
+                !point_has_label(id, _universal_filter_num))
               continue;
             cmps++;
             float    dist = dist_scratch[m];
@@ -1318,8 +1318,8 @@ namespace diskann {
             if (!use_filter && _dummy_pts.find(id) != _dummy_pts.end())
               continue;
 
-            if (use_filter && !find_label_in_point(id, filter_num) &&
-                !find_label_in_point(id, _universal_filter_num))
+            if (use_filter && !point_has_label(id, filter_num) &&
+                !point_has_label(id, _universal_filter_num))
               continue;
             cmps++;
             float dist = dist_scratch[m];
