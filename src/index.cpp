@@ -155,8 +155,10 @@ namespace diskann {
       delete[] _opt_graph;
     }
 
-    ScratchStoreManager<InMemQueryScratch<T>> manager(_query_scratch);
-    manager.destroy();
+    if (_query_scratch.empty()) {
+      ScratchStoreManager<InMemQueryScratch<T>> manager(_query_scratch);
+      manager.destroy();
+    }
   }
 
   template<typename T, typename TagT, typename LabelT>
