@@ -139,7 +139,7 @@ namespace diskann {
     DISKANN_DLLEXPORT void set_universal_label(const LabelT &label);
 
     //Get converted integer label from string to int map (_label_map)
-    DISKANN_DLLEXPORT LabelT get_converted_label(const std::string &filter_label);
+    DISKANN_DLLEXPORT LabelT get_converted_label(const std::string &raw_label);
 
     // Set starting point of an index before inserting any points incrementally
     DISKANN_DLLEXPORT void set_start_point(T *data);
@@ -374,7 +374,7 @@ namespace diskann {
     std::vector<std::vector<LabelT>> _pts_to_labels;
     tsl::robin_set<LabelT>           _labels;
     std::string                     _labels_file;
-    std::unordered_map<LabelT, _u32> _filter_to_medoid_id;
+    std::unordered_map<LabelT, _u32> _label_to_medoid_id;
     std::unordered_map<_u32, _u32>  _medoid_counts;
     bool                            _use_universal_label = false;
     LabelT                           _universal_label = 0;

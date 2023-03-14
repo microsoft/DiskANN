@@ -276,13 +276,13 @@ namespace diskann {
 
     if (!_save_as_one_file) {
       if (_filtered_index) {
-        if (_filter_to_medoid_id.size() > 0) {
+        if (_label_to_medoid_id.size() > 0) {
           std::ofstream medoid_writer(std::string(filename) +
                                       "_labels_to_medoids.txt");
           if (medoid_writer.fail()) {
             throw diskann::ANNException(std::string("Failed to open file ") + filename, -1);
           }
-          for (auto iter : _filter_to_medoid_id) {
+          for (auto iter : _label_to_medoid_id) {
             medoid_writer << iter.first << ", " << iter.second << std::endl;
           }
           medoid_writer.close();
@@ -536,7 +536,7 @@ namespace diskann {
         std::string line, token;
         unsigned    line_cnt = 0;
 
-        _filter_to_medoid_id.clear();
+        _label_to_medoid_id.clear();
 
         while (std::getline(medoid_stream, line)) {
           std::istringstream iss(line);
@@ -555,7 +555,7 @@ namespace diskann {
               medoid = token_as_num;
             cnt++;
           }
-          _filter_to_medoid_id[label] = medoid;
+          _label_to_medoid_id[label] = medoid;
           line_cnt++;
         }
       }
@@ -1036,7 +1036,7 @@ namespace diskann {
     } else {
       std::vector<_u32> filter_specific_start_nodes;
       for (auto &x : _pts_to_labels[location])
-        filter_specific_start_nodes.emplace_back(_filter_to_medoid_id[x]);
+        filter_specific_start_nodes.emplace_back(_label_to_medoid_id[x]);
       iterate_to_fixed_point(_data + _aligned_dim * location, filteredLindex,
                              filter_specific_start_nodes, scratch, true,
                              _pts_to_labels[location], true, false);
@@ -1734,9 +1734,9 @@ namespace diskann {
   }
 
   template<typename T, typename TagT, typename LabelT>
-  LabelT Index<T, TagT, LabelT>::get_converted_label(const std::string &filter_label){
-    if(_label_map.find(filter_label) != _label_map.end()){
-      return _label_map[filter_label];
+  LabelT Index<T, TagT, LabelT>::get_converted_label(const std::string &raw_label){
+    if(_label_map.find(raw_label) != _label_map.end()){
+      return _label_map[raw_label];
     }
     std::stringstream stream;
     stream << "Unable to find label in the Label Map";
@@ -1805,7 +1805,7 @@ namespace diskann {
                                             const std::vector<TagT> &tags) {
     _labels_file = label_file;
     _filtered_index = true;
-    _filter_to_medoid_id.clear();
+    _label_to_medoid_id.clear();
     size_t num_points_labels = 0;
     parse_label_file(label_file, num_points_labels);  // determines medoid for each label and
                                    // identifies the points to label mapping
@@ -1856,7 +1856,7 @@ namespace diskann {
           best_medoid = cur_cnd;
         }
       }
-      _filter_to_medoid_id[curr_label] = best_medoid;
+      _label_to_medoid_id[curr_label] = best_medoid;
       _medoid_counts[best_medoid]++;
     }
 
@@ -1952,8 +1952,8 @@ namespace diskann {
     init_ids.push_back(_start);
     std::shared_lock<std::shared_timed_mutex> lock(_update_lock);
 
-    if (_filter_to_medoid_id.find(filter_label) != _filter_to_medoid_id.end()) {
-      init_ids.emplace_back(_filter_to_medoid_id[filter_label]);
+    if (_label_to_medoid_id.find(filter_label) != _label_to_medoid_id.end()) {
+      init_ids.emplace_back(_label_to_medoid_id[filter_label]);
     } else {
       diskann::cout
           << "No filtered medoid found. exitting "
