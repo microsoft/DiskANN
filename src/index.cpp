@@ -155,7 +155,7 @@ namespace diskann {
       delete[] _opt_graph;
     }
 
-    if (_query_scratch.empty()) {
+    if (!_query_scratch.empty()) {
       ScratchStoreManager<InMemQueryScratch<T>> manager(_query_scratch);
       manager.destroy();
     }
