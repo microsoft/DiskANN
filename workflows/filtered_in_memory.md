@@ -61,6 +61,9 @@ Searching a filtered index uses the `tests/search_memory_index.cpp`:
 9. **`-K`**: search for *K* neighbors and measure *K*-recall@*K*, meaning the intersection between the retrieved top-*K* nearest neighbors and ground truth *K* nearest neighbors.
 10. **`-L (--search_list)`**: A list of search_list sizes to perform search with. Larger parameters will result in slower latencies, but higher accuracies. Must be atleast the value of *K* in (7).
 
+Example with Randomly Generated Label file:
+------------------------------------------
+
 
 Example with SIFT10K:
 --------------------
@@ -79,21 +82,23 @@ build/tests/utils/fvecs_to_bin float siftsmall/siftsmall_base.fvecs siftsmall/si
 build/tests/utils/fvecs_to_bin float siftsmall/siftsmall_query.fvecs siftsmall/siftsmall_query.bin
 ```
 
-We now need to acquire a labels file for our vectors. For convenience, we've included a synthetic label file, which can be found here (add link to hosting). The file has the following characteristics:
-1. 48 distinct filters, ranging from 2 to 49 (1 is the universal label)
-2. For each point, we determine the number of filters by uniformly sampling a number between 1 and 15
-3. We then uniformly sample that many filters from the 48 distinct filters
-	i. if the first sampled filter is the universal label, we stop sampling
+We now need to make label file for our vectors. For convenience, we've included a synthetic label generator through which we can generate label file as follow
+```bash
+  build/tests/utils/generate_synthetic_labels  --num_labels 50 --num_points 10000  --output_file ./rand_labels_50_10K.txt --distribution_type zipf
+```
+Note : `distribution_type` can be `rand` or `zipf`
+
+This will genearate label file with 10000 data points with 50 distinct labels, ranging from 1 to 50 assigned using zipf distribution (0 is the universal label).
 	
-Note that neither approach is designed for use with random synthetic labels, which will lead to relatively poor accuracy at search time.
+Note that neither approach is designed for use with random synthetic labels, which will lead to unpredictable accuracy at search time.
 
 Now build and search the index and measure the recall using ground truth computed using bruteforce. We search for results with the filter 35.
 ```bash
-build/tests/utils/compute_groundtruth --data_type float --dist_fn l2 --base_file siftsmall/siftsmall_base.bin --query_file siftsmall_query.bin --gt_file siftsmall/siftsmall_gt_35.bin --K 100 --labels_file DOWNLOADED_FILE_HERE --filter_label 35 --universal_label 1
-build/tests/build_memory_index  --data_type float --dist_fn l2 --data_path siftsmall/siftsmall_base.bin --index_path_prefix siftsmall/siftsmall_R32_L50_filtered_index -R 32 --FilteredLbuild 50 --alpha 1.2 --label_file DOWNLOADED_FILE_HERE --universal_label 1
-build/tests/build_stitched_index --data_type float --data_path siftsmall/siftsmall_base.bin --index_path_prefix siftsmall/siftsmall_R20_L40_SR32_stitched_index -R 20 -L 40 --stitched_R 32 --alpha 1.2 --label_file DOWNLOADED_FILE_HERE --universal_label 1
-build/tests/search_memory_index  --data_type float --dist_fn l2 --index_path_prefix data/sift/siftsmall_R20_L40_SR32_stitched_index_pruned --query_file siftsmall/siftsmall_query.bin --gt_file siftsmall/siftsmall_gt_35.bin --filter_label 35 -K 10 -L 10 20 30 40 50 100 --result_path siftsmall/stitched_search_results\
-build/tests/search_memory_index  --data_type float --dist_fn l2 --index_path_prefix data/sift/siftsmall_R20_L40_SR32_filtered_index --query_file siftsmall/siftsmall_query.bin --gt_file siftsmall/siftsmall_gt_35.bin --filter_label 35 -K 10 -L 10 20 30 40 50 100 --result_path siftsmall/stitched_search_results
+build/tests/utils/compute_groundtruth --data_type float --dist_fn l2 --base_file siftsmall/siftsmall_base.bin --query_file siftsmall_query.bin --gt_file siftsmall/siftsmall_gt_35.bin --K 100 --label_file ./rand_labels_50_10K.txt --filter_label 35 --universal_label 0
+build/tests/build_memory_index  --data_type float --dist_fn l2 --data_path siftsmall/siftsmall_base.bin --index_path_prefix siftsmall/siftsmall_R32_L50_filtered_index -R 32 --FilteredLbuild 50 --alpha 1.2 --label_file ./rand_labels_50_10K.txt --universal_label 0
+build/tests/build_stitched_index --data_type float --data_path siftsmall/siftsmall_base.bin --index_path_prefix siftsmall/siftsmall_R20_L40_SR32_stitched_index -R 20 -L 40 --stitched_R 32 --alpha 1.2 --label_file ./rand_labels_50_10K.txt --universal_label 0
+build/tests/search_memory_index  --data_type float --dist_fn l2 --index_path_prefix data/sift/siftsmall_R20_L40_SR32_stitched_index --query_file siftsmall/siftsmall_query.bin --gt_file siftsmall/siftsmall_gt_35.bin --filter_label 35 -K 10 -L 10 20 30 40 50 100 --result_path siftsmall/stitched_search_results
+build/tests/search_memory_index  --data_type float --dist_fn l2 --index_path_prefix data/sift/siftsmall_R20_L40_SR32_filtered_index --query_file siftsmall/siftsmall_query.bin --gt_file siftsmall/siftsmall_gt_35.bin --filter_label 35 -K 10 -L 10 20 30 40 50 100 --result_path siftsmall/filtered_search_results
 ```
 
  The output of both searches is listed below. The throughput (Queries/sec) as well as mean and 99.9 latency in microseconds for each `L` parameter provided. (Measured on a physical machine with a Intel(R) Xeon(R) W-2145 CPU and 64 GB RAM)
@@ -101,20 +106,20 @@ build/tests/search_memory_index  --data_type float --dist_fn l2 --index_path_pre
  Stitched Index
   Ls         QPS     Avg dist cmps  Mean Latency (mus)   99.9 Latency   Recall@10
 =================================================================================
-  10    80288.78             90.44              175.58         398.62       52.50
-  30    41677.12            154.38              351.84         765.38       61.90
-  50    31420.77            207.59              477.37        1264.98       68.00
-  70    26391.41            250.98              563.65        1166.31       70.20
-  90    20471.83            302.62              728.71        1705.29       75.60
- 110    21771.90            342.98              692.21        1513.30       78.30
+  10    31324.39             37.33              116.79         311.90       17.80
+  20    91357.57             44.36              193.06        1042.30       17.90
+  30    69314.48             49.89              258.09        1398.00       18.20
+  40    61421.29             60.52              289.08        1515.00       18.60
+  50    54203.48             70.27              294.26         685.10       19.40
+ 100    52904.45             79.00              336.26        1018.80       19.50
 
 Filtered Index
-  Ls         QPS     Avg dist cmps  Mean Latency (mus)   99.9 Latency   Recall@10
+ Ls         QPS     Avg dist cmps  Mean Latency (mus)   99.9 Latency   Recall@10
 =================================================================================
-  10    87430.77             69.55              152.44         304.30       44.60
-  30    43449.09            129.77              336.20         862.56       57.00
-  50    28010.05            181.85              529.60        1122.27       63.40
-  70    21700.51            226.09              690.24        1539.50       66.10
-  90    20074.48            260.94              752.44        1523.90       66.80
- 110    18615.28            295.63              802.22        1192.37       67.20
+  10    69671.84             21.48               45.25         146.20       11.60
+  20   168577.20             38.94              100.54         547.90       18.20
+  30   127129.41             52.95              126.83         768.40       19.70
+  40   106349.04             62.38              167.23         899.10       20.90
+  50    89952.33             70.95              189.12        1070.80       22.10
+ 100    56899.00            112.26              304.67         636.60       23.80
  ```
