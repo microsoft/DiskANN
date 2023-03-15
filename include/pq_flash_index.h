@@ -20,7 +20,7 @@
 
 namespace diskann {
 
-  template<typename T>
+  template<typename T, typename LabelT = uint32_t>
   class PQFlashIndex {
    public:
     DISKANN_DLLEXPORT PQFlashIndex(
@@ -72,8 +72,23 @@ namespace diskann {
 
     DISKANN_DLLEXPORT void cached_beam_search(
         const T *query, const _u64 k_search, const _u64 l_search, _u64 *res_ids,
+        float *res_dists, const _u64 beam_width, const bool use_filter,
+        const LabelT &filter_label, const bool use_reorder_data = false,
+        QueryStats *stats = nullptr);
+
+    DISKANN_DLLEXPORT void cached_beam_search(
+        const T *query, const _u64 k_search, const _u64 l_search, _u64 *res_ids,
         float *res_dists, const _u64 beam_width, const _u32 io_limit,
         const bool use_reorder_data = false, QueryStats *stats = nullptr);
+
+    DISKANN_DLLEXPORT void cached_beam_search(
+        const T *query, const _u64 k_search, const _u64 l_search, _u64 *res_ids,
+        float *res_dists, const _u64 beam_width, const bool use_filter,
+        const LabelT &filter_label, const _u32 io_limit,
+        const bool use_reorder_data = false, QueryStats *stats = nullptr);
+
+    DISKANN_DLLEXPORT LabelT
+    get_converted_label(const std::string &filter_label);
 
     DISKANN_DLLEXPORT _u32 range_search(const T *query1, const double range,
                                         const _u64          min_l_search,
@@ -94,12 +109,26 @@ namespace diskann {
     DISKANN_DLLEXPORT void setup_thread_data(_u64 nthreads,
                                              _u64 visited_reserve = 4096);
 
+    DISKANN_DLLEXPORT void set_universal_label(const LabelT &label);
+
    private:
+    DISKANN_DLLEXPORT inline bool point_has_label(_u32 point_id, _u32 label_id);
+    std::unordered_map<std::string, LabelT> load_label_map(
+        const std::string &map_file);
+    DISKANN_DLLEXPORT void parse_label_file(const std::string &map_file,
+                                            size_t            &num_pts_labels);
+    DISKANN_DLLEXPORT void get_label_file_metadata(std::string map_file,
+                                                   _u32       &num_pts,
+                                                   _u32 &num_total_labels);
+    DISKANN_DLLEXPORT inline int32_t get_filter_number(
+        const LabelT &filter_label);
+
     // index info
     // nhood of node `i` is in sector: [i / nnodes_per_sector]
     // offset in sector: [(i % nnodes_per_sector) * max_node_len]
     // nnbrs of node `i`: *(unsigned*) (buf)
     // nbrs of node `i`: ((unsigned*)buf) + 1
+
     _u64 max_node_len = 0, nnodes_per_sector = 0, max_degree = 0;
 
     // Data used for searching with re-order vectors
@@ -170,6 +199,20 @@ namespace diskann {
     bool                                count_visited_nodes = false;
     bool                                reorder_data_exists = false;
     _u64                                reoreder_data_offset = 0;
+
+    // filter support
+    _u32                                   *_pts_to_label_offsets = nullptr;
+    _u32                                   *_pts_to_labels = nullptr;
+    tsl::robin_set<LabelT>                  _labels;
+    std::unordered_map<LabelT, _u32>        _filter_to_medoid_id;
+    bool                                    _use_universal_label;
+    _u32                                    _universal_filter_num;
+    std::vector<LabelT>                     _filter_list;
+    tsl::robin_set<_u32>                    _dummy_pts;
+    tsl::robin_set<_u32>                    _has_dummy_pts;
+    tsl::robin_map<_u32, _u32>              _dummy_to_real_map;
+    tsl::robin_map<_u32, std::vector<_u32>> _real_to_dummy_map;
+    std::unordered_map<std::string, LabelT> _label_map;
 
 #ifdef EXEC_ENV_OLS
     // Set to a larger value than the actual header to accommodate

@@ -160,6 +160,8 @@ void build_incremental_index(
   params.Set<bool>("saturate_graph", saturate_graph);
   params.Set<unsigned>("num_rnds", 1);
   params.Set<unsigned>("num_threads", thread_count);
+  params.Set<int>("Lf", 0);  // TODO: get this from params and default to some
+                             // value to make it backward compatible.
 
   size_t dim, aligned_dim;
   size_t num_points;

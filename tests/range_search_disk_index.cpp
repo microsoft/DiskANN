@@ -47,7 +47,7 @@ void print_stats(std::string category, std::vector<float> percentiles,
   diskann::cout << std::endl;
 }
 
-template<typename T>
+template<typename T, typename LabelT = uint32_t>
 int search_disk_index(diskann::Metric&   metric,
                       const std::string& index_path_prefix,
                       const std::string& query_file, std::string& gt_file,
@@ -99,8 +99,8 @@ int search_disk_index(diskann::Metric&   metric,
   reader.reset(new LinuxAlignedFileReader());
 #endif
 
-  std::unique_ptr<diskann::PQFlashIndex<T>> _pFlashIndex(
-      new diskann::PQFlashIndex<T>(reader, metric));
+  std::unique_ptr<diskann::PQFlashIndex<T, LabelT>> _pFlashIndex(
+      new diskann::PQFlashIndex<T, LabelT>(reader, metric));
 
   int res = _pFlashIndex->load(num_threads, index_path_prefix.c_str());
 
@@ -202,8 +202,8 @@ int search_disk_index(diskann::Metric&   metric,
       std::vector<_u64>  indices;
       std::vector<float> distances;
       _u32               res_count = _pFlashIndex->range_search(
-                        query + (i * query_aligned_dim), search_range, L, max_list_size,
-                        indices, distances, optimized_beamwidth, stats + i);
+          query + (i * query_aligned_dim), search_range, L, max_list_size,
+          indices, distances, optimized_beamwidth, stats + i);
       query_result_ids[test_id][i].reserve(res_count);
       query_result_ids[test_id][i].resize(res_count);
       for (_u32 idx = 0; idx < res_count; idx++)

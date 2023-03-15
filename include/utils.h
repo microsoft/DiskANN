@@ -31,19 +31,24 @@ typedef int FileHandle;
 #include "memory_mapped_files.h"
 #endif
 
+#include <unordered_map>
+#include <sstream>
+#include <iostream>
+
 // taken from
 // https://github.com/Microsoft/BLAS-on-flash/blob/master/include/utils.h
 // round up X to the nearest multiple of Y
 #define ROUND_UP(X, Y) \
-  ((((uint64_t)(X) / (Y)) + ((uint64_t)(X) % (Y) != 0)) * (Y))
+  ((((uint64_t) (X) / (Y)) + ((uint64_t) (X) % (Y) != 0)) * (Y))
 
-#define DIV_ROUND_UP(X, Y) (((uint64_t)(X) / (Y)) + ((uint64_t)(X) % (Y) != 0))
+#define DIV_ROUND_UP(X, Y) \
+  (((uint64_t) (X) / (Y)) + ((uint64_t) (X) % (Y) != 0))
 
 // round down X to the nearest multiple of Y
-#define ROUND_DOWN(X, Y) (((uint64_t)(X) / (Y)) * (Y))
+#define ROUND_DOWN(X, Y) (((uint64_t) (X) / (Y)) * (Y))
 
 // alignment tests
-#define IS_ALIGNED(X, Y) ((uint64_t)(X) % (uint64_t)(Y) == 0)
+#define IS_ALIGNED(X, Y) ((uint64_t) (X) % (uint64_t) (Y) == 0)
 #define IS_512_ALIGNED(X) IS_ALIGNED(X, 512)
 #define IS_4096_ALIGNED(X) IS_ALIGNED(X, 4096)
 #define METADATA_SIZE \
@@ -92,8 +97,9 @@ typedef uint16_t _u16;
 typedef int16_t  _s16;
 typedef uint8_t  _u8;
 typedef int8_t   _s8;
-inline void      open_file_to_write(std::ofstream&     writer,
-                                    const std::string& filename) {
+
+inline void open_file_to_write(std::ofstream&     writer,
+                               const std::string& filename) {
   writer.exceptions(std::ofstream::failbit | std::ofstream::badbit);
   if (!file_exists(filename))
     writer.open(filename, std::ios::binary | std::ios::out);
@@ -142,6 +148,48 @@ inline int delete_file(const std::string& fileName) {
   } else {
     return 0;
   }
+}
+
+inline void convert_labels_string_to_int(const std::string& inFileName,
+                                         const std::string& outFileName,
+                                         const std::string& mapFileName,
+                                         const std::string& unv_label) {
+  std::unordered_map<std::string, _u32> string_int_map;
+  std::ofstream                         label_writer(outFileName);
+  std::ifstream                         label_reader(inFileName);
+  if (unv_label != "")
+    string_int_map[unv_label] = 0;
+  std::string line, token;
+  while (std::getline(label_reader, line)) {
+    std::istringstream new_iss(line);
+    std::vector<_u32>  lbls;
+    while (getline(new_iss, token, ',')) {
+      token.erase(std::remove(token.begin(), token.end(), '\n'), token.end());
+      token.erase(std::remove(token.begin(), token.end(), '\r'), token.end());
+      if (string_int_map.find(token) == string_int_map.end()) {
+        _u32 nextId = (_u32) string_int_map.size() + 1;
+        string_int_map[token] = nextId;
+      }
+      lbls.push_back(string_int_map[token]);
+    }
+    if (lbls.size() <= 0) {
+      std::cout << "No label found";
+      exit(-1);
+    }
+    for (size_t j = 0; j < lbls.size(); j++) {
+      if (j != lbls.size() - 1)
+        label_writer << lbls[j] << ",";
+      else
+        label_writer << lbls[j] << std::endl;
+    }
+  }
+  label_writer.close();
+
+  std::ofstream map_writer(mapFileName);
+  for (auto mp : string_int_map) {
+    map_writer << mp.first << "\t" << mp.second << std::endl;
+  }
+  map_writer.close();
 }
 
 #ifdef EXEC_ENV_OLS
@@ -568,6 +616,19 @@ namespace diskann {
   }
 #endif
 
+  inline void copy_file(std::string in_file, std::string out_file) {
+    std::ifstream source(in_file, std::ios::binary);
+    std::ofstream dest(out_file, std::ios::binary);
+
+    std::istreambuf_iterator<char> begin_source(source);
+    std::istreambuf_iterator<char> end_source;
+    std::ostreambuf_iterator<char> begin_dest(dest);
+    std::copy(begin_source, end_source, begin_dest);
+
+    source.close();
+    dest.close();
+  }
+
   DISKANN_DLLEXPORT double calculate_recall(
       unsigned num_queries, unsigned* gold_std, float* gs_dist, unsigned dim_gs,
       unsigned* our_results, unsigned dim_or, unsigned recall_at);
@@ -947,7 +1008,7 @@ inline void normalize(T* arr, size_t dim) {
   }
   sum = sqrt(sum);
   for (uint32_t i = 0; i < dim; i++) {
-    arr[i] = (T)(arr[i] / sum);
+    arr[i] = (T) (arr[i] / sum);
   }
 }
 

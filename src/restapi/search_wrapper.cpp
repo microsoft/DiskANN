@@ -87,15 +87,11 @@ namespace diskann {
   }
 
   template<typename T>
-  InMemorySearch<T>::InMemorySearch(
-          const std::string& baseFile,
-          const std::string& indexFile,
-          const std::string& tagsFile,
-          Metric m,
-          uint32_t num_threads,
-          uint32_t search_l
-  ): BaseSearch(tagsFile) {
-
+  InMemorySearch<T>::InMemorySearch(const std::string& baseFile,
+                                    const std::string& indexFile,
+                                    const std::string& tagsFile, Metric m,
+                                    uint32_t num_threads, uint32_t search_l)
+      : BaseSearch(tagsFile) {
     size_t dimensions, total_points = 0;
     diskann::get_bin_metadata(baseFile, total_points, dimensions);
     _index = std::unique_ptr<diskann::Index<T>>(
@@ -136,9 +132,9 @@ namespace diskann {
   }
 
   template<typename T>
-  PQFlashSearch<T>::PQFlashSearch(const std::string&    indexPrefix,
-                                  const unsigned num_nodes_to_cache,
-                                  const unsigned num_threads,
+  PQFlashSearch<T>::PQFlashSearch(const std::string& indexPrefix,
+                                  const unsigned     num_nodes_to_cache,
+                                  const unsigned     num_threads,
                                   const std::string& tagsFile, Metric m)
       : BaseSearch(tagsFile) {
 #ifdef _WINDOWS
@@ -162,7 +158,8 @@ namespace diskann {
     int res = _index->load(num_threads, index_prefix_path.c_str());
 
     if (res != 0) {
-        std::cerr << "Unable to load index. Status code: " << res << "." << std::endl;
+      std::cerr << "Unable to load index. Status code: " << res << "."
+                << std::endl;
     }
 
     std::vector<uint32_t> node_list;
@@ -174,13 +171,13 @@ namespace diskann {
   }
 
   template<typename T>
-  SearchResult PQFlashSearch<T>::search(const T* query,
+  SearchResult PQFlashSearch<T>::search(const T*           query,
                                         const unsigned int dimensions,
                                         const unsigned int K,
                                         const unsigned int Ls) {
-    _u64* indices_u64 = new _u64[K];
+    _u64*     indices_u64 = new _u64[K];
     unsigned* indices = new unsigned[K];
-    float* distances = new float[K];
+    float*    distances = new float[K];
 
     auto startTime = std::chrono::high_resolution_clock::now();
     _index->cached_beam_search(query, K, Ls, indices_u64, distances, DEFAULT_W);

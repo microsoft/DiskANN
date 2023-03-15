@@ -62,7 +62,7 @@ namespace diskann {
       std::vector<size_t> pos(numsearchers, 0);
 
       for (size_t k = 0; k < K; ++k) {
-        float best_distance = std::numeric_limits<float>::max();
+        float    best_distance = std::numeric_limits<float>::max();
         unsigned best_partition = 0;
 
         for (size_t i = 0; i < numsearchers; ++i) {
@@ -71,20 +71,23 @@ namespace diskann {
             best_partition = i;
           }
         }
-          best_distances[k] = best_distance;
-          best_indices[k] =  results[best_partition].get_indices()[pos[best_partition]];
-          best_partitions[k] = best_partition;
-          if (results[best_partition].tags_enabled())
-              best_tags[k] = results[best_partition].get_tags()[pos[best_partition]];
-          std::cout << best_partition << " " << pos[best_partition] << std::endl;
-          pos[best_partition]++;
+        best_distances[k] = best_distance;
+        best_indices[k] =
+            results[best_partition].get_indices()[pos[best_partition]];
+        best_partitions[k] = best_partition;
+        if (results[best_partition].tags_enabled())
+          best_tags[k] =
+              results[best_partition].get_tags()[pos[best_partition]];
+        std::cout << best_partition << " " << pos[best_partition] << std::endl;
+        pos[best_partition]++;
       }
 
       unsigned int total_time = 0;
       for (size_t i = 0; i < numsearchers; ++i)
         total_time += results[i].get_time();
-      diskann::SearchResult result = SearchResult(
-          K, total_time, best_indices, best_distances, best_tags, best_partitions);
+      diskann::SearchResult result =
+          SearchResult(K, total_time, best_indices, best_distances, best_tags,
+                       best_partitions);
 
       delete[] best_indices;
       delete[] best_distances;
@@ -101,8 +104,8 @@ namespace diskann {
   void Server::handle_post(web::http::http_request message) {
     message.extract_string(true)
         .then([=](utility::string_t body) {
-          int64_t queryId = -1;
-          unsigned int     K = 0;
+          int64_t      queryId = -1;
+          unsigned int K = 0;
           try {
             T*           queryVector = nullptr;
             unsigned int dimensions = 0;
@@ -113,7 +116,8 @@ namespace diskann {
             std::vector<diskann::SearchResult> results;
 
             for (auto& searcher : _multi_searcher)
-              results.push_back(searcher->search(queryVector, dimensions, (unsigned int) K, Ls));
+              results.push_back(searcher->search(queryVector, dimensions,
+                                                 (unsigned int) K, Ls));
             diskann::SearchResult result = aggregate_results(K, results);
             diskann::aligned_free(queryVector);
             web::json::value response = prepareResponse(queryId, K);
@@ -139,13 +143,17 @@ namespace diskann {
             return std::make_pair(web::http::status_codes::InternalError,
                                   response);
           } catch (...) {
-            std::cerr << "Uncaught exception while processing query: " << queryId;
+            std::cerr << "Uncaught exception while processing query: "
+                      << queryId;
             web::json::value response = prepareResponse(queryId, K);
-            response[ERROR_MESSAGE_KEY] = web::json::value::string(UNKNOWN_ERROR);
-            return std::make_pair(web::http::status_codes::InternalError, response);
+            response[ERROR_MESSAGE_KEY] =
+                web::json::value::string(UNKNOWN_ERROR);
+            return std::make_pair(web::http::status_codes::InternalError,
+                                  response);
           }
         })
-        .then([=](std::pair<short unsigned int, web::json::value> response_status) {
+        .then([=](std::pair<short unsigned int, web::json::value>
+                      response_status) {
           try {
             message.reply(response_status.first, response_status.second).wait();
           } catch (const std::exception& ex) {
@@ -180,7 +188,8 @@ namespace diskann {
 
     if (k <= 0 || k > Ls) {
       throw new std::invalid_argument(
-          "Num of expected NN (k) must be greater than zero and less than or equal to Ls.");
+          "Num of expected NN (k) must be greater than zero and less than or "
+          "equal to Ls.");
     }
     if (queryArr.size() == 0) {
       throw new std::invalid_argument("Query vector has zero elements.");

@@ -25,13 +25,12 @@ PYBIND11_MAKE_OPAQUE(std::vector<float>);
 PYBIND11_MAKE_OPAQUE(std::vector<int8_t>);
 PYBIND11_MAKE_OPAQUE(std::vector<uint8_t>);
 
-
 namespace py = pybind11;
 using namespace diskann;
 
 template<class T>
 struct DiskANNIndex {
-  PQFlashIndex<T> *                  pq_flash_index;
+  PQFlashIndex<T>                   *pq_flash_index;
   std::shared_ptr<AlignedFileReader> reader;
 
   DiskANNIndex(diskann::Metric metric) {
@@ -74,8 +73,7 @@ struct DiskANNIndex {
                  const size_t num_nodes_to_cache, int cache_mechanism) {
     const std::string index_path =
         index_path_prefix + std::string("_disk.index");
-    int load_success =
-        pq_flash_index->load(num_threads, index_path.c_str());
+    int load_success = pq_flash_index->load(num_threads, index_path.c_str());
     if (load_success != 0) {
       return load_success;
     }
@@ -197,8 +195,8 @@ struct DiskANNIndex {
       const int num_threads) {
     py::array_t<unsigned> offsets(num_queries + 1);
 
-    std::vector<std::vector<_u64> >  u64_ids(num_queries);
-    std::vector<std::vector<float> > dists(num_queries);
+    std::vector<std::vector<_u64>>  u64_ids(num_queries);
+    std::vector<std::vector<float>> dists(num_queries);
 
     auto offsets_mutable = offsets.mutable_unchecked();
     offsets_mutable(0) = 0;
@@ -246,8 +244,9 @@ struct DiskANNIndex {
         stats, num_queries,
         [](const diskann::QueryStats &stats) { return stats.n_cmps; });
     delete[] stats;
-    return std::make_pair(std::make_pair(offsets, std::make_pair(ids, res_dists)),
-                          collective_stats);
+    return std::make_pair(
+        std::make_pair(offsets, std::make_pair(ids, res_dists)),
+        collective_stats);
   }
 };
 
@@ -259,16 +258,15 @@ PYBIND11_MODULE(diskannpy, m) {
   m.attr("__version__") = "dev";
 #endif
 
-  py::bind_vector<std::vector<unsigned> >(m, "VectorUnsigned");
-  py::bind_vector<std::vector<float> >(m, "VectorFloat");
-  py::bind_vector<std::vector<int8_t> >(m, "VectorInt8");
-  py::bind_vector<std::vector<uint8_t> >(m, "VectorUInt8");
-
+  py::bind_vector<std::vector<unsigned>>(m, "VectorUnsigned");
+  py::bind_vector<std::vector<float>>(m, "VectorFloat");
+  py::bind_vector<std::vector<int8_t>>(m, "VectorInt8");
+  py::bind_vector<std::vector<uint8_t>>(m, "VectorUInt8");
 
   py::enum_<Metric>(m, "Metric")
-    .value("L2", Metric::L2)
-    .value("INNER_PRODUCT", Metric::INNER_PRODUCT)
-    .export_values();
+      .value("L2", Metric::L2)
+      .value("INNER_PRODUCT", Metric::INNER_PRODUCT)
+      .export_values();
 
   py::class_<Parameters>(m, "Parameters")
       .def(py::init<>())
@@ -294,9 +292,11 @@ PYBIND11_MODULE(diskannpy, m) {
   py::class_<AlignedFileReader>(m, "AlignedFileReader");
 
 #ifdef _WINDOWS
-  py::class_<WindowsAlignedFileReader>(m, "WindowsAlignedFileReader").def(py::init<>());
+  py::class_<WindowsAlignedFileReader>(m, "WindowsAlignedFileReader")
+      .def(py::init<>());
 #else
-  py::class_<LinuxAlignedFileReader>(m, "LinuxAlignedFileReader").def(py::init<>());
+  py::class_<LinuxAlignedFileReader>(m, "LinuxAlignedFileReader")
+      .def(py::init<>());
 #endif
 
   m.def(
@@ -327,7 +327,7 @@ PYBIND11_MODULE(diskannpy, m) {
       [](const std::string &path, std::vector<unsigned> &ids,
          std::vector<float> &distances) {
         unsigned *id_ptr = nullptr;
-        float *   dist_ptr = nullptr;
+        float    *dist_ptr = nullptr;
         size_t    num, dims;
         load_truthset(path, id_ptr, dist_ptr, num, dims);
         // TODO: Remove redundant copies.
@@ -349,7 +349,7 @@ PYBIND11_MODULE(diskannpy, m) {
          const unsigned ground_truth_dims, std::vector<unsigned> &results,
          const unsigned result_dims, const unsigned recall_at) {
         unsigned *gti_ptr = ground_truth_ids.data();
-        float *   gtd_ptr = ground_truth_dists.data();
+        float    *gtd_ptr = ground_truth_dists.data();
         unsigned *r_ptr = results.data();
 
         double             total_recall = 0;
@@ -390,10 +390,10 @@ PYBIND11_MODULE(diskannpy, m) {
          std::vector<float> &ground_truth_dists,
          const unsigned      ground_truth_dims,
          py::array_t<unsigned, py::array::c_style | py::array::forcecast>
-             &          results,
+                       &results,
          const unsigned result_dims, const unsigned recall_at) {
         unsigned *gti_ptr = ground_truth_ids.data();
-        float *   gtd_ptr = ground_truth_dists.data();
+        float    *gtd_ptr = ground_truth_dists.data();
         unsigned *r_ptr = results.mutable_data();
 
         double             total_recall = 0;
@@ -434,9 +434,9 @@ PYBIND11_MODULE(diskannpy, m) {
          size_t dims) { save_bin<_u32>(file_name, data.data(), npts, dims); },
       py::arg("file_name"), py::arg("data"), py::arg("npts"), py::arg("dims"));
 
-  py::class_<DiskANNIndex<float> >(m, "DiskANNFloatIndex")
+  py::class_<DiskANNIndex<float>>(m, "DiskANNFloatIndex")
       .def(py::init([](diskann::Metric metric) {
-        return std::unique_ptr<DiskANNIndex<float> >(
+        return std::unique_ptr<DiskANNIndex<float>>(
             new DiskANNIndex<float>(metric));
       }))
       .def("cache_bfs_levels", &DiskANNIndex<float>::cache_bfs_levels,
@@ -462,8 +462,8 @@ PYBIND11_MODULE(diskannpy, m) {
       .def("batch_range_search_numpy_input",
            &DiskANNIndex<float>::batch_range_search_numpy_input,
            py::arg("queries"), py::arg("dim"), py::arg("num_queries"),
-           py::arg("range"), py::arg("min_list_size"), py::arg("max_list_size"), py::arg("beam_width"),
-           py::arg("num_threads"))
+           py::arg("range"), py::arg("min_list_size"), py::arg("max_list_size"),
+           py::arg("beam_width"), py::arg("num_threads"))
       .def(
           "build",
           [](DiskANNIndex<float> &self, const char *data_file_path,
@@ -485,13 +485,13 @@ PYBIND11_MODULE(diskannpy, m) {
           py::arg("indexing_ram_limit"), py::arg("num_threads"),
           py::arg("pq_disk_bytes") = 0);
 
-  py::class_<DiskANNIndex<int8_t> >(m, "DiskANNInt8Index")
+  py::class_<DiskANNIndex<int8_t>>(m, "DiskANNInt8Index")
       .def(py::init([](diskann::Metric metric) {
-        return std::unique_ptr<DiskANNIndex<int8_t> >(
+        return std::unique_ptr<DiskANNIndex<int8_t>>(
             new DiskANNIndex<int8_t>(metric));
       }))
       .def("cache_bfs_levels", &DiskANNIndex<int8_t>::cache_bfs_levels,
-        py::arg("num_nodes_to_cache"))
+           py::arg("num_nodes_to_cache"))
       .def("load_index", &DiskANNIndex<int8_t>::load_index,
            py::arg("index_path_prefix"), py::arg("num_threads"),
            py::arg("num_nodes_to_cache"), py::arg("cache_mechanism") = 1)
@@ -513,8 +513,8 @@ PYBIND11_MODULE(diskannpy, m) {
       .def("batch_range_search_numpy_input",
            &DiskANNIndex<int8_t>::batch_range_search_numpy_input,
            py::arg("queries"), py::arg("dim"), py::arg("num_queries"),
-           py::arg("range"), py::arg("min_list_size"), py::arg("max_list_size"), py::arg("beam_width"),
-           py::arg("num_threads"))
+           py::arg("range"), py::arg("min_list_size"), py::arg("max_list_size"),
+           py::arg("beam_width"), py::arg("num_threads"))
       .def(
           "build",
           [](DiskANNIndex<int8_t> &self, const char *data_file_path,
@@ -536,10 +536,9 @@ PYBIND11_MODULE(diskannpy, m) {
           py::arg("indexing_ram_limit"), py::arg("num_threads"),
           py::arg("pq_disk_bytes") = 0);
 
-  
-  py::class_<DiskANNIndex<uint8_t> >(m, "DiskANNUInt8Index")
+  py::class_<DiskANNIndex<uint8_t>>(m, "DiskANNUInt8Index")
       .def(py::init([](diskann::Metric metric) {
-        return std::unique_ptr<DiskANNIndex<uint8_t> >(
+        return std::unique_ptr<DiskANNIndex<uint8_t>>(
             new DiskANNIndex<uint8_t>(metric));
       }))
       .def("cache_bfs_levels", &DiskANNIndex<uint8_t>::cache_bfs_levels,
@@ -565,8 +564,8 @@ PYBIND11_MODULE(diskannpy, m) {
       .def("batch_range_search_numpy_input",
            &DiskANNIndex<uint8_t>::batch_range_search_numpy_input,
            py::arg("queries"), py::arg("dim"), py::arg("num_queries"),
-           py::arg("range"), py::arg("min_list_size"), py::arg("max_list_size"), py::arg("beam_width"),
-           py::arg("num_threads"))
+           py::arg("range"), py::arg("min_list_size"), py::arg("max_list_size"),
+           py::arg("beam_width"), py::arg("num_threads"))
       .def(
           "build",
           [](DiskANNIndex<uint8_t> &self, const char *data_file_path,
