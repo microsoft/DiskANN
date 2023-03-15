@@ -301,7 +301,7 @@ namespace diskann {
           std::istringstream iss(line);
           _u32               cnt = 0;
           _u32               medoid;
-          _u32              label;
+          _u32               label;
           while (std::getline(iss, token, ',')) {
             token.erase(std::remove(token.begin(), token.end(), '\n'),
                         token.end());
@@ -438,8 +438,8 @@ namespace diskann {
       vamana_readers[shard_id].read((char *) &shard_nnbrs, sizeof(unsigned));
 
       if (shard_nnbrs == 0) {
-        diskann::cout << "WARNING: shard #" << shard_id << ", node_id " << node_id
-                  << " has 0 nbrs" << std::endl;
+        diskann::cout << "WARNING: shard #" << shard_id << ", node_id "
+                      << node_id << " has 0 nbrs" << std::endl;
       }
 
       std::vector<unsigned> shard_nhood(shard_nnbrs);
@@ -480,11 +480,12 @@ namespace diskann {
 
   // TODO: Make this a streaming implementation to avoid exceeding the memory
   // budget
-  /* If the number of filters per point N exceeds the graph degree R, 
+  /* If the number of filters per point N exceeds the graph degree R,
     then it is difficult to have edges to all labels from this point.
-    This function break up such dense points to have only a threshold of maximum T labels per point 
-    It divides one graph nodes to multiple nodes and append the new nodes at the end.
-    The dummy map contains the real graph id of the new nodes added to the graph */
+    This function break up such dense points to have only a threshold of maximum
+    T labels per point  It divides one graph nodes to multiple nodes and append
+    the new nodes at the end. The dummy map contains the real graph id of the
+    new nodes added to the graph */
   template<typename T>
   void breakup_dense_points(const std::string data_file,
                             const std::string labels_file, _u32 density,
@@ -636,15 +637,16 @@ namespace diskann {
         paras.Set<bool>("saturate_graph", 0);
       using TagT = uint32_t;
       paras.Set<std::string>("save_path", mem_index_path);
-      std::unique_ptr<diskann::Index<T,TagT,LabelT>> _pvamanaIndex = 
-              std::unique_ptr<diskann::Index<T,TagT,LabelT>>(new diskann::Index<T,TagT,LabelT>(
-              compareMetric, base_dim, base_num, false, false, false,
-              build_pq_bytes > 0, build_pq_bytes, use_opq));    
+      std::unique_ptr<diskann::Index<T, TagT, LabelT>> _pvamanaIndex =
+          std::unique_ptr<diskann::Index<T, TagT, LabelT>>(
+              new diskann::Index<T, TagT, LabelT>(
+                  compareMetric, base_dim, base_num, false, false, false,
+                  build_pq_bytes > 0, build_pq_bytes, use_opq));
       if (!use_filters)
         _pvamanaIndex->build(base_file.c_str(), base_num, paras);
       else {
         if (universal_label != "") {  //  indicates no universal label
-        LabelT unv_label_as_num = 0;
+          LabelT unv_label_as_num = 0;
           _pvamanaIndex->set_universal_label(unv_label_as_num);
         }
         _pvamanaIndex->build_filtered_index(base_file.c_str(), label_file,
@@ -721,7 +723,7 @@ namespace diskann {
         diskann::extract_shard_labels(label_file, shard_ids_file,
                                       shard_labels_file);
         if (universal_label != "") {  //  indicates no universal label
-          LabelT unv_label_as_num= 0;
+          LabelT unv_label_as_num = 0;
           _pvamanaIndex->set_universal_label(unv_label_as_num);
         }
         _pvamanaIndex->build_filtered_index(
@@ -790,9 +792,9 @@ namespace diskann {
   // 99.9 latency not blowing up
   template<typename T, typename LabelT>
   uint32_t optimize_beamwidth(
-      std::unique_ptr<diskann::PQFlashIndex<T, LabelT>> &pFlashIndex, T *tuning_sample,
-      _u64 tuning_sample_num, _u64 tuning_sample_aligned_dim, uint32_t L,
-      uint32_t nthreads, uint32_t start_bw) {
+      std::unique_ptr<diskann::PQFlashIndex<T, LabelT>> &pFlashIndex,
+      T *tuning_sample, _u64 tuning_sample_num, _u64 tuning_sample_aligned_dim,
+      uint32_t L, uint32_t nthreads, uint32_t start_bw) {
     uint32_t cur_bw = start_bw;
     double   max_qps = 0;
     uint32_t best_bw = start_bw;
@@ -1125,7 +1127,7 @@ namespace diskann {
     std::string base_file(dataFilePath);
     std::string data_file_to_use = base_file;
     std::string labels_file_original = label_file;
-    std::string index_prefix_path(indexFilePath);    
+    std::string index_prefix_path(indexFilePath);
     std::string labels_file_to_use = index_prefix_path + "_label_formatted.txt";
     std::string pq_pivots_path = index_prefix_path + "_pq_pivots.bin";
     std::string pq_compressed_vectors_path =
@@ -1211,15 +1213,15 @@ namespace diskann {
     // of index build happens on the augmented base and labels
     std::string augmented_data_file, augmented_labels_file;
     if (use_filters) {
-      convert_labels_string_to_int(labels_file_original, labels_file_to_use, 
-                                  disk_labels_int_map_file, universal_label);
+      convert_labels_string_to_int(labels_file_original, labels_file_to_use,
+                                   disk_labels_int_map_file, universal_label);
       augmented_data_file = index_prefix_path + "_augmented_data.bin";
       augmented_labels_file = index_prefix_path + "_augmented_labels.txt";
       if (filter_threshold != 0) {
         dummy_remap_file = index_prefix_path + "_dummy_remap.txt";
         breakup_dense_points<T>(
-            data_file_to_use, labels_file_to_use, filter_threshold, augmented_data_file,
-            augmented_labels_file,
+            data_file_to_use, labels_file_to_use, filter_threshold,
+            augmented_data_file, augmented_labels_file,
             dummy_remap_file);  // RKNOTE: This has large memory footprint, need
                                 // to make this streaming
         data_file_to_use = augmented_data_file;
@@ -1351,33 +1353,33 @@ namespace diskann {
       uint64_t &warmup_num, uint64_t warmup_dim, uint64_t warmup_aligned_dim);
 #endif
 
-  template DISKANN_DLLEXPORT uint32_t optimize_beamwidth<int8_t,uint32_t>(
+  template DISKANN_DLLEXPORT uint32_t optimize_beamwidth<int8_t, uint32_t>(
       std::unique_ptr<diskann::PQFlashIndex<int8_t, uint32_t>> &pFlashIndex,
       int8_t *tuning_sample, _u64 tuning_sample_num,
       _u64 tuning_sample_aligned_dim, uint32_t L, uint32_t nthreads,
       uint32_t start_bw);
-  template DISKANN_DLLEXPORT uint32_t optimize_beamwidth<uint8_t,uint32_t>(
+  template DISKANN_DLLEXPORT uint32_t optimize_beamwidth<uint8_t, uint32_t>(
       std::unique_ptr<diskann::PQFlashIndex<uint8_t, uint32_t>> &pFlashIndex,
       uint8_t *tuning_sample, _u64 tuning_sample_num,
       _u64 tuning_sample_aligned_dim, uint32_t L, uint32_t nthreads,
       uint32_t start_bw);
-  template DISKANN_DLLEXPORT uint32_t optimize_beamwidth<float,uint32_t>(
+  template DISKANN_DLLEXPORT uint32_t optimize_beamwidth<float, uint32_t>(
       std::unique_ptr<diskann::PQFlashIndex<float, uint32_t>> &pFlashIndex,
       float *tuning_sample, _u64 tuning_sample_num,
       _u64 tuning_sample_aligned_dim, uint32_t L, uint32_t nthreads,
       uint32_t start_bw);
-  
-  template DISKANN_DLLEXPORT uint32_t optimize_beamwidth<int8_t,uint16_t>(
+
+  template DISKANN_DLLEXPORT uint32_t optimize_beamwidth<int8_t, uint16_t>(
       std::unique_ptr<diskann::PQFlashIndex<int8_t, uint16_t>> &pFlashIndex,
       int8_t *tuning_sample, _u64 tuning_sample_num,
       _u64 tuning_sample_aligned_dim, uint32_t L, uint32_t nthreads,
       uint32_t start_bw);
-  template DISKANN_DLLEXPORT uint32_t optimize_beamwidth<uint8_t,uint16_t>(
+  template DISKANN_DLLEXPORT uint32_t optimize_beamwidth<uint8_t, uint16_t>(
       std::unique_ptr<diskann::PQFlashIndex<uint8_t, uint16_t>> &pFlashIndex,
       uint8_t *tuning_sample, _u64 tuning_sample_num,
       _u64 tuning_sample_aligned_dim, uint32_t L, uint32_t nthreads,
       uint32_t start_bw);
-  template DISKANN_DLLEXPORT uint32_t optimize_beamwidth<float,uint16_t>(
+  template DISKANN_DLLEXPORT uint32_t optimize_beamwidth<float, uint16_t>(
       std::unique_ptr<diskann::PQFlashIndex<float, uint16_t>> &pFlashIndex,
       float *tuning_sample, _u64 tuning_sample_num,
       _u64 tuning_sample_aligned_dim, uint32_t L, uint32_t nthreads,
@@ -1386,42 +1388,42 @@ namespace diskann {
   template DISKANN_DLLEXPORT int build_disk_index<int8_t, uint32_t>(
       const char *dataFilePath, const char *indexFilePath,
       const char *indexBuildParameters, diskann::Metric compareMetric,
-      bool use_opq, bool use_filters, const std::string &label_file, 
-      const std::string &universal_label, 
-      const _u32 filter_threshold,const _u32 Lf);
+      bool use_opq, bool use_filters, const std::string &label_file,
+      const std::string &universal_label, const _u32 filter_threshold,
+      const _u32 Lf);
   template DISKANN_DLLEXPORT int build_disk_index<uint8_t, uint32_t>(
       const char *dataFilePath, const char *indexFilePath,
       const char *indexBuildParameters, diskann::Metric compareMetric,
       bool use_opq, bool use_filters, const std::string &label_file,
-      const std::string &universal_label, 
-      const _u32 filter_threshold, const _u32 Lf);
+      const std::string &universal_label, const _u32 filter_threshold,
+      const _u32 Lf);
   template DISKANN_DLLEXPORT int build_disk_index<float, uint32_t>(
       const char *dataFilePath, const char *indexFilePath,
       const char *indexBuildParameters, diskann::Metric compareMetric,
       bool use_opq, bool use_filters, const std::string &label_file,
-      const std::string &universal_label, 
-      const _u32 filter_threshold, const _u32 Lf);
-  //LabelT = uint16
+      const std::string &universal_label, const _u32 filter_threshold,
+      const _u32 Lf);
+  // LabelT = uint16
   template DISKANN_DLLEXPORT int build_disk_index<int8_t, uint16_t>(
       const char *dataFilePath, const char *indexFilePath,
       const char *indexBuildParameters, diskann::Metric compareMetric,
-      bool use_opq, bool use_filters, const std::string &label_file, 
-      const std::string &universal_label, 
-      const _u32 filter_threshold,const _u32 Lf);
+      bool use_opq, bool use_filters, const std::string &label_file,
+      const std::string &universal_label, const _u32 filter_threshold,
+      const _u32 Lf);
   template DISKANN_DLLEXPORT int build_disk_index<uint8_t, uint16_t>(
       const char *dataFilePath, const char *indexFilePath,
       const char *indexBuildParameters, diskann::Metric compareMetric,
       bool use_opq, bool use_filters, const std::string &label_file,
-      const std::string &universal_label, 
-      const _u32 filter_threshold, const _u32 Lf);
+      const std::string &universal_label, const _u32 filter_threshold,
+      const _u32 Lf);
   template DISKANN_DLLEXPORT int build_disk_index<float, uint16_t>(
       const char *dataFilePath, const char *indexFilePath,
       const char *indexBuildParameters, diskann::Metric compareMetric,
       bool use_opq, bool use_filters, const std::string &label_file,
-      const std::string &universal_label, 
-      const _u32 filter_threshold, const _u32 Lf);
+      const std::string &universal_label, const _u32 filter_threshold,
+      const _u32 Lf);
 
-  template DISKANN_DLLEXPORT int build_merged_vamana_index<int8_t,uint32_t>(
+  template DISKANN_DLLEXPORT int build_merged_vamana_index<int8_t, uint32_t>(
       std::string base_file, diskann::Metric compareMetric, unsigned L,
       unsigned R, double sampling_rate, double ram_budget,
       std::string mem_index_path, std::string medoids_path,
@@ -1429,7 +1431,7 @@ namespace diskann {
       bool use_filters, const std::string &label_file,
       const std::string &labels_to_medoids_file,
       const std::string &universal_label, const _u32 Lf);
-  template DISKANN_DLLEXPORT int build_merged_vamana_index<float,uint32_t>(
+  template DISKANN_DLLEXPORT int build_merged_vamana_index<float, uint32_t>(
       std::string base_file, diskann::Metric compareMetric, unsigned L,
       unsigned R, double sampling_rate, double ram_budget,
       std::string mem_index_path, std::string medoids_path,
@@ -1437,7 +1439,7 @@ namespace diskann {
       bool use_filters, const std::string &label_file,
       const std::string &labels_to_medoids_file,
       const std::string &universal_label, const _u32 Lf);
-  template DISKANN_DLLEXPORT int build_merged_vamana_index<uint8_t,uint32_t>(
+  template DISKANN_DLLEXPORT int build_merged_vamana_index<uint8_t, uint32_t>(
       std::string base_file, diskann::Metric compareMetric, unsigned L,
       unsigned R, double sampling_rate, double ram_budget,
       std::string mem_index_path, std::string medoids_path,
@@ -1446,7 +1448,7 @@ namespace diskann {
       const std::string &labels_to_medoids_file,
       const std::string &universal_label, const _u32 Lf);
   // Label=16_t
-  template DISKANN_DLLEXPORT int build_merged_vamana_index<int8_t,uint16_t>(
+  template DISKANN_DLLEXPORT int build_merged_vamana_index<int8_t, uint16_t>(
       std::string base_file, diskann::Metric compareMetric, unsigned L,
       unsigned R, double sampling_rate, double ram_budget,
       std::string mem_index_path, std::string medoids_path,
@@ -1454,7 +1456,7 @@ namespace diskann {
       bool use_filters, const std::string &label_file,
       const std::string &labels_to_medoids_file,
       const std::string &universal_label, const _u32 Lf);
-  template DISKANN_DLLEXPORT int build_merged_vamana_index<float,uint16_t>(
+  template DISKANN_DLLEXPORT int build_merged_vamana_index<float, uint16_t>(
       std::string base_file, diskann::Metric compareMetric, unsigned L,
       unsigned R, double sampling_rate, double ram_budget,
       std::string mem_index_path, std::string medoids_path,
@@ -1462,7 +1464,7 @@ namespace diskann {
       bool use_filters, const std::string &label_file,
       const std::string &labels_to_medoids_file,
       const std::string &universal_label, const _u32 Lf);
-  template DISKANN_DLLEXPORT int build_merged_vamana_index<uint8_t,uint16_t>(
+  template DISKANN_DLLEXPORT int build_merged_vamana_index<uint8_t, uint16_t>(
       std::string base_file, diskann::Metric compareMetric, unsigned L,
       unsigned R, double sampling_rate, double ram_budget,
       std::string mem_index_path, std::string medoids_path,

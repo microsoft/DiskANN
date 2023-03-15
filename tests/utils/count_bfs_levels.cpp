@@ -27,8 +27,8 @@ template<typename T>
 void bfs_count(const std::string& index_path, unsigned data_dims) {
   using TagT = uint32_t;
   using LabelT = uint32_t;
-  diskann::Index<T, TagT, LabelT> index(diskann::Metric::L2, data_dims, 0, false,
-                                false);
+  diskann::Index<T, TagT, LabelT> index(diskann::Metric::L2, data_dims, 0,
+                                        false, false);
   std::cout << "Index class instantiated" << std::endl;
   index.load(index_path.c_str(), 1, 100);
   std::cout << "Index loaded" << std::endl;

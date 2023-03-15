@@ -30,8 +30,8 @@ namespace po = boost::program_options;
 
 void stats_analysis(const std::string labels_file, std::string univeral_label,
                     _u32 density = 10) {
-  std::string   token, line;
-  std::ifstream labels_stream(labels_file);
+  std::string                           token, line;
+  std::ifstream                         labels_stream(labels_file);
   std::unordered_map<std::string, _u32> label_counts;
   std::string                           label_with_max_points;
   _u32                                  max_points = 0;
@@ -86,9 +86,9 @@ void stats_analysis(const std::string labels_file, std::string univeral_label,
 
   for (float p = 0; p < 1; p += 0.05) {
     std::cout << "Percentile " << (100 * p) << "\t"
-              << label_count_vec[(_u32)(p * label_count_vec.size())].first
+              << label_count_vec[(_u32) (p * label_count_vec.size())].first
               << " with count="
-              << label_count_vec[(_u32)(p * label_count_vec.size())].second
+              << label_count_vec[(_u32) (p * label_count_vec.size())].second
               << std::endl;
   }
 
@@ -120,8 +120,8 @@ void stats_analysis(const std::string labels_file, std::string univeral_label,
 }
 
 int main(int argc, char** argv) {
-  std::string       labels_file, universal_label;
-  _u32              density;
+  std::string labels_file, universal_label;
+  _u32        density;
 
   po::options_description desc{"Arguments"};
   try {
@@ -129,10 +129,12 @@ int main(int argc, char** argv) {
     desc.add_options()("labels_file",
                        po::value<std::string>(&labels_file)->required(),
                        "path to labels data file.");
-    desc.add_options()("universal_label", po::value<std::string>(&universal_label)->required(),
+    desc.add_options()("universal_label",
+                       po::value<std::string>(&universal_label)->required(),
                        "Universal label used in labels file.");
-    desc.add_options()("density", po::value<_u32>(&density)->default_value(1),
-                       "Number of labels each point in labels file, defaults to 1");
+    desc.add_options()(
+        "density", po::value<_u32>(&density)->default_value(1),
+        "Number of labels each point in labels file, defaults to 1");
     po::variables_map vm;
     po::store(po::parse_command_line(argc, argv, desc), vm);
     if (vm.count("help")) {

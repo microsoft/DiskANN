@@ -84,8 +84,9 @@ std::string get_save_filename(const std::string& save_path,
 }
 
 template<typename T, typename TagT, typename LabelT>
-void insert_next_batch(diskann::Index<T, TagT, LabelT>& index, size_t start, size_t end,
-                       size_t insert_threads, T* data, size_t aligned_dim) {
+void insert_next_batch(diskann::Index<T, TagT, LabelT>& index, size_t start,
+                       size_t end, size_t insert_threads, T* data,
+                       size_t aligned_dim) {
   try {
     diskann::Timer insert_timer;
     std::cout << std::endl
@@ -234,9 +235,9 @@ void build_incremental_index(const std::string& data_path, const unsigned L,
     std::cout << "Overriding num_frozen to" << num_frozen << std::endl;
   }
 
-  diskann::Index<T, TagT,LabelT> index(diskann::L2, dim,
-                                active_window + 4 * consolidate_interval, true,
-                                params, params, enable_tags, true);
+  diskann::Index<T, TagT, LabelT> index(
+      diskann::L2, dim, active_window + 4 * consolidate_interval, true, params,
+      params, enable_tags, true);
   index.set_start_point_at_random(static_cast<T>(start_point_norm));
   index.enable_delete();
 

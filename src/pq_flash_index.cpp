@@ -18,7 +18,7 @@
 #define READ_UNSIGNED(stream, val) stream.read((char *) &val, sizeof(unsigned))
 
 // sector # on disk where node_id is present with in the graph part
-#define NODE_SECTOR_NO(node_id) (((_u64)(node_id)) / nnodes_per_sector + 1)
+#define NODE_SECTOR_NO(node_id) (((_u64) (node_id)) / nnodes_per_sector + 1)
 
 // obtains region of sector containing node
 #define OFFSET_TO_NODE(sector_buf, node_id) \
@@ -33,17 +33,17 @@
 
 // sector # beyond the end of graph where data for id is present for reordering
 #define VECTOR_SECTOR_NO(id) \
-  (((_u64)(id)) / nvecs_per_sector + reorder_data_start_sector)
+  (((_u64) (id)) / nvecs_per_sector + reorder_data_start_sector)
 
 // sector # beyond the end of graph where data for id is present for reordering
 #define VECTOR_SECTOR_OFFSET(id) \
-  ((((_u64)(id)) % nvecs_per_sector) * data_dim * sizeof(float))
+  ((((_u64) (id)) % nvecs_per_sector) * data_dim * sizeof(float))
 
 namespace diskann {
 
   template<typename T, typename LabelT>
-  PQFlashIndex<T,LabelT>::PQFlashIndex(std::shared_ptr<AlignedFileReader> &fileReader,
-                                diskann::Metric                     m)
+  PQFlashIndex<T, LabelT>::PQFlashIndex(
+      std::shared_ptr<AlignedFileReader> &fileReader, diskann::Metric m)
       : reader(fileReader), metric(m) {
     if (m == diskann::Metric::COSINE || m == diskann::Metric::INNER_PRODUCT) {
       if (std::is_floating_point<T>::value) {
@@ -64,7 +64,7 @@ namespace diskann {
   }
 
   template<typename T, typename LabelT>
-  PQFlashIndex<T,LabelT>::~PQFlashIndex() {
+  PQFlashIndex<T, LabelT>::~PQFlashIndex() {
 #ifndef EXEC_ENV_OLS
     if (data != nullptr) {
       delete[] data;
@@ -96,7 +96,8 @@ namespace diskann {
   }
 
   template<typename T, typename LabelT>
-  void PQFlashIndex<T,LabelT>::setup_thread_data(_u64 nthreads, _u64 visited_reserve) {
+  void PQFlashIndex<T, LabelT>::setup_thread_data(_u64 nthreads,
+                                                  _u64 visited_reserve) {
     diskann::cout << "Setting up thread-specific contexts for nthreads: "
                   << nthreads << std::endl;
 // omp parallel for to generate unique thread IDs
@@ -115,7 +116,8 @@ namespace diskann {
   }
 
   template<typename T, typename LabelT>
-  void PQFlashIndex<T,LabelT>::load_cache_list(std::vector<uint32_t> &node_list) {
+  void PQFlashIndex<T, LabelT>::load_cache_list(
+      std::vector<uint32_t> &node_list) {
     diskann::cout << "Loading the cache list into memory.." << std::flush;
     _u64 num_cached_nodes = node_list.size();
 
@@ -142,7 +144,7 @@ namespace diskann {
       std::vector<std::pair<_u32, char *>> nhoods;
       for (_u64 node_idx = start_idx; node_idx < end_idx; node_idx++) {
         AlignedRead read;
-        char *      buf = nullptr;
+        char       *buf = nullptr;
         alloc_aligned((void **) &buf, SECTOR_LEN, SECTOR_LEN);
         nhoods.push_back(std::make_pair(node_list[node_idx], buf));
         read.len = SECTOR_LEN;
@@ -164,8 +166,8 @@ namespace diskann {
 #endif
         auto &nhood = nhoods[i];
         char *node_buf = OFFSET_TO_NODE(nhood.second, nhood.first);
-        T *   node_coords = OFFSET_TO_NODE_COORDS(node_buf);
-        T *   cached_coords = coord_cache_buf + node_idx * aligned_dim;
+        T    *node_coords = OFFSET_TO_NODE_COORDS(node_buf);
+        T    *cached_coords = coord_cache_buf + node_idx * aligned_dim;
         memcpy(cached_coords, node_coords, disk_bytes_per_point);
         coord_cache.insert(std::make_pair(nhood.first, cached_coords));
 
@@ -173,7 +175,7 @@ namespace diskann {
         unsigned *node_nhood = OFFSET_TO_NODE_NHOOD(node_buf);
 
         auto                        nnbrs = *node_nhood;
-        unsigned *                  nbrs = node_nhood + 1;
+        unsigned                   *nbrs = node_nhood + 1;
         std::pair<_u32, unsigned *> cnhood;
         cnhood.first = nnbrs;
         cnhood.second = nhood_cache_buf + node_idx * (max_degree + 1);
@@ -188,13 +190,13 @@ namespace diskann {
 
 #ifdef EXEC_ENV_OLS
   template<typename T, typename LabelT>
-  void PQFlashIndex<T,LabelT>::generate_cache_list_from_sample_queries(
+  void PQFlashIndex<T, LabelT>::generate_cache_list_from_sample_queries(
       MemoryMappedFiles &files, std::string sample_bin, _u64 l_search,
       _u64 beamwidth, _u64 num_nodes_to_cache, uint32_t nthreads,
       std::vector<uint32_t> &node_list) {
 #else
   template<typename T, typename LabelT>
-  void PQFlashIndex<T,LabelT>::generate_cache_list_from_sample_queries(
+  void PQFlashIndex<T, LabelT>::generate_cache_list_from_sample_queries(
       std::string sample_bin, _u64 l_search, _u64 beamwidth,
       _u64 num_nodes_to_cache, uint32_t nthreads,
       std::vector<uint32_t> &node_list) {
@@ -208,7 +210,7 @@ namespace diskann {
     }
 
     _u64 sample_num, sample_dim, sample_aligned_dim;
-    T *  samples;
+    T   *samples;
 
 #ifdef EXEC_ENV_OLS
     if (files.fileExists(sample_bin)) {
@@ -253,16 +255,16 @@ namespace diskann {
   }
 
   template<typename T, typename LabelT>
-  void PQFlashIndex<T,LabelT>::cache_bfs_levels(_u64 num_nodes_to_cache,
-                                         std::vector<uint32_t> &node_list,
-                                         const bool             shuffle) {
+  void PQFlashIndex<T, LabelT>::cache_bfs_levels(
+      _u64 num_nodes_to_cache, std::vector<uint32_t> &node_list,
+      const bool shuffle) {
     std::random_device rng;
     std::mt19937       urng(rng());
 
     tsl::robin_set<uint32_t> node_set;
 
     // Do not cache more than 10% of the nodes in the index
-    _u64 tenp_nodes = (_u64)(std::round(this->num_points * 0.1));
+    _u64 tenp_nodes = (_u64) (std::round(this->num_points * 0.1));
     if (num_nodes_to_cache > tenp_nodes) {
       diskann::cout << "Reducing nodes to cache from: " << num_nodes_to_cache
                     << " to: " << tenp_nodes
@@ -347,7 +349,7 @@ namespace diskann {
           auto &nhood = nhoods[i];
 
           // insert node coord into coord_cache
-          char *    node_buf = OFFSET_TO_NODE(nhood.second, nhood.first);
+          char     *node_buf = OFFSET_TO_NODE(nhood.second, nhood.first);
           unsigned *node_nhood = OFFSET_TO_NODE_NHOOD(node_buf);
           _u64      nnbrs = (_u64) *node_nhood;
           unsigned *nbrs = node_nhood + 1;
@@ -387,7 +389,7 @@ namespace diskann {
   }
 
   template<typename T, typename LabelT>
-  void PQFlashIndex<T,LabelT>::use_medoids_data_as_centroids() {
+  void PQFlashIndex<T, LabelT>::use_medoids_data_as_centroids() {
     if (centroid_data != nullptr)
       aligned_free(centroid_data);
     alloc_aligned(((void **) &centroid_data),
@@ -397,7 +399,7 @@ namespace diskann {
     // borrow ctx
     ScratchStoreManager<SSDThreadData<T>> manager(this->thread_data);
     auto                                  data = manager.scratch_space();
-    IOContext &                           ctx = data->ctx;
+    IOContext                            &ctx = data->ctx;
     diskann::cout << "Loading centroid data from medoids vector data of "
                   << num_medoids << " medoid(s)" << std::endl;
     for (uint64_t cur_m = 0; cur_m < num_medoids; cur_m++) {
@@ -433,7 +435,7 @@ namespace diskann {
   }
 
   template<typename T, typename LabelT>
-  inline int32_t PQFlashIndex<T,LabelT>::get_filter_number(
+  inline int32_t PQFlashIndex<T, LabelT>::get_filter_number(
       const LabelT &filter_label) {
     int idx = -1;
     for (_u32 i = 0; i < _filter_list.size(); i++) {
@@ -446,15 +448,15 @@ namespace diskann {
   }
 
   template<typename T, typename LabelT>
-  std::unordered_map<std::string, LabelT> PQFlashIndex<T,LabelT>::load_label_map(
-                                const std::string& labels_map_file) {
+  std::unordered_map<std::string, LabelT>
+  PQFlashIndex<T, LabelT>::load_label_map(const std::string &labels_map_file) {
     std::unordered_map<std::string, LabelT> string_to_int_mp;
-    std::ifstream map_reader(labels_map_file);
-    std::string line, token;
-    LabelT token_as_num;
-    std::string label_str;
+    std::ifstream                           map_reader(labels_map_file);
+    std::string                             line, token;
+    LabelT                                  token_as_num;
+    std::string                             label_str;
     while (std::getline(map_reader, line)) {
-      std::istringstream  iss(line);
+      std::istringstream iss(line);
       getline(iss, token, '\t');
       label_str = token;
       getline(iss, token, '\t');
@@ -465,8 +467,9 @@ namespace diskann {
   }
 
   template<typename T, typename LabelT>
-  LabelT PQFlashIndex<T,LabelT>::get_converted_label(const std::string &filter_label){
-    if(_label_map.find(filter_label) != _label_map.end()){
+  LabelT PQFlashIndex<T, LabelT>::get_converted_label(
+      const std::string &filter_label) {
+    if (_label_map.find(filter_label) != _label_map.end()) {
       return _label_map[filter_label];
     }
     std::stringstream stream;
@@ -478,9 +481,8 @@ namespace diskann {
   }
 
   template<typename T, typename LabelT>
-  void PQFlashIndex<T,LabelT>::get_label_file_metadata(std::string map_file,
-                                                _u32 &      num_pts,
-                                                _u32 &      num_total_labels) {
+  void PQFlashIndex<T, LabelT>::get_label_file_metadata(
+      std::string map_file, _u32 &num_pts, _u32 &num_total_labels) {
     std::ifstream infile(map_file);
     std::string   line, token;
     num_pts = 0;
@@ -497,13 +499,13 @@ namespace diskann {
     }
 
     diskann::cout << "Labels file metadata: num_points: " << num_pts
-              << ", #total_labels: " << num_total_labels << std::endl;
+                  << ", #total_labels: " << num_total_labels << std::endl;
     infile.close();
   }
 
   template<typename T, typename LabelT>
-  inline bool PQFlashIndex<T,LabelT>::point_has_label(_u32 point_id,
-                                                   _u32 label_id) {
+  inline bool PQFlashIndex<T, LabelT>::point_has_label(_u32 point_id,
+                                                       _u32 label_id) {
     _u32 start_vec = _pts_to_label_offsets[point_id];
     _u32 num_lbls = _pts_to_labels[start_vec];
     bool ret_val = false;
@@ -517,24 +519,26 @@ namespace diskann {
   }
 
   template<typename T, typename LabelT>
-  void PQFlashIndex<T,LabelT>::parse_label_file(const std::string &label_file, size_t &num_points_labels) {
-
+  void PQFlashIndex<T, LabelT>::parse_label_file(const std::string &label_file,
+                                                 size_t &num_points_labels) {
     std::ifstream infile(label_file);
     if (infile.fail()) {
-      throw diskann::ANNException(std::string("Failed to open file ") + label_file, -1);
+      throw diskann::ANNException(
+          std::string("Failed to open file ") + label_file, -1);
     }
 
-    std::string   line, token;
-    _u32          line_cnt = 0;
+    std::string line, token;
+    _u32        line_cnt = 0;
 
     _u32 num_pts_in_label_file;
     _u32 num_total_labels;
-    get_label_file_metadata(label_file, num_pts_in_label_file, num_total_labels);
+    get_label_file_metadata(label_file, num_pts_in_label_file,
+                            num_total_labels);
 
     _pts_to_label_offsets = new _u32[num_pts_in_label_file];
     _pts_to_labels = new _u32[num_pts_in_label_file + num_total_labels];
     _u32 counter = 0;
-        
+
     while (std::getline(infile, line)) {
       std::istringstream iss(line);
       std::vector<_u32>  lbls(0);
@@ -573,11 +577,11 @@ namespace diskann {
   }
 
   template<typename T, typename LabelT>
-  void PQFlashIndex<T,LabelT>::set_universal_label(const LabelT &label) {
+  void PQFlashIndex<T, LabelT>::set_universal_label(const LabelT &label) {
     int32_t temp_filter_num = get_filter_number(label);
     if (temp_filter_num == -1) {
       diskann::cout << "Error, could not find universal label. Exitting."
-                << std::endl;
+                    << std::endl;
       exit(-1);
     } else {
       _use_universal_label = true;
@@ -587,11 +591,13 @@ namespace diskann {
 
 #ifdef EXEC_ENV_OLS
   template<typename T, typename LabelT>
-  int PQFlashIndex<T,LabelT>::load(MemoryMappedFiles &files, uint32_t num_threads,
-                            const char *index_prefix) {
+  int PQFlashIndex<T, LabelT>::load(MemoryMappedFiles &files,
+                                    uint32_t           num_threads,
+                                    const char        *index_prefix) {
 #else
   template<typename T, typename LabelT>
-  int PQFlashIndex<T,LabelT>::load(uint32_t num_threads, const char *index_prefix) {
+  int PQFlashIndex<T, LabelT>::load(uint32_t    num_threads,
+                                    const char *index_prefix) {
 #endif
     std::string pq_table_bin = std::string(index_prefix) + "_pq_pivots.bin";
     std::string pq_compressed_vectors =
@@ -610,13 +616,13 @@ namespace diskann {
 
 #ifdef EXEC_ENV_OLS
   template<typename T, typename LabelT>
-  int PQFlashIndex<T,LabelT>::load_from_separate_paths(
+  int PQFlashIndex<T, LabelT>::load_from_separate_paths(
       diskann::MemoryMappedFiles &files, uint32_t num_threads,
       const char *index_filepath, const char *pivots_filepath,
       const char *compressed_filepath) {
 #else
   template<typename T, typename LabelT>
-  int PQFlashIndex<T,LabelT>::load_from_separate_paths(
+  int PQFlashIndex<T, LabelT>::load_from_separate_paths(
       uint32_t num_threads, const char *index_filepath,
       const char *pivots_filepath, const char *compressed_filepath) {
 #endif
@@ -632,7 +638,7 @@ namespace diskann {
         std ::string(disk_index_file) + "_labels_to_medoids.txt";
     std::string dummy_map_file =
         std ::string(disk_index_file) + "_dummy_map.txt";
-    std::string labels_map_file = 
+    std::string labels_map_file =
         std ::string(disk_index_file) + "_labels_map.txt";
     size_t num_pts_in_label_file = 0;
 
@@ -674,20 +680,20 @@ namespace diskann {
     this->n_chunks = nchunks_u64;
     if (file_exists(labels_file)) {
       parse_label_file(labels_file, num_pts_in_label_file);
-      assert(num_pts_in_label_file==this->num_points);     
+      assert(num_pts_in_label_file == this->num_points);
       _label_map = load_label_map(labels_map_file);
       if (file_exists(labels_to_medoids)) {
         std::ifstream medoid_stream(labels_to_medoids);
         assert(medoid_stream.is_open());
         std::string line, token;
-        
+
         _filter_to_medoid_id.clear();
         try {
           while (std::getline(medoid_stream, line)) {
             std::istringstream iss(line);
             _u32               cnt = 0;
             _u32               medoid;
-            LabelT              label;
+            LabelT             label;
             while (std::getline(iss, token, ',')) {
               if (cnt == 0)
                 label = std::stoul(token);
@@ -707,17 +713,17 @@ namespace diskann {
       if (file_exists(univ_label_file)) {
         std::ifstream universal_label_reader(univ_label_file);
         assert(universal_label_reader.is_open());
-        std::string   univ_label;
+        std::string univ_label;
         universal_label_reader >> univ_label;
         universal_label_reader.close();
-        LabelT  label_as_num = std::stoul(univ_label);
+        LabelT label_as_num = std::stoul(univ_label);
         set_universal_label(label_as_num);
       }
       if (file_exists(dummy_map_file)) {
         std::ifstream dummy_map_stream(dummy_map_file);
         assert(dummy_map_stream.is_open());
         std::string line, token;
-        
+
         while (std::getline(dummy_map_stream, line)) {
           std::istringstream iss(line);
           _u32               cnt = 0;
@@ -782,7 +788,7 @@ namespace diskann {
           disk_pq_n_chunks *
           sizeof(_u8);  // revising disk_bytes_per_point since DISK PQ is used.
       diskann::cout << "Disk index uses PQ data compressed down to "
-                << disk_pq_n_chunks << " bytes per point." << std::endl;
+                    << disk_pq_n_chunks << " bytes per point." << std::endl;
     }
 
 // read index metadata
@@ -796,7 +802,7 @@ namespace diskann {
     this->setup_thread_data(num_threads);
     this->max_nthreads = num_threads;
 
-    char *                   bytes = getHeaderBytes();
+    char                    *bytes = getHeaderBytes();
     ContentBuf               buf(bytes, HEADER_SIZE);
     std::basic_istream<char> index_metadata(&buf);
 #else
@@ -933,7 +939,7 @@ namespace diskann {
     } else {
       num_medoids = 1;
       medoids = new uint32_t[1];
-      medoids[0] = (_u32)(medoid_id_on_file);
+      medoids[0] = (_u32) (medoid_id_on_file);
       use_medoids_data_as_centroids();
     }
 
@@ -945,7 +951,7 @@ namespace diskann {
       diskann::load_bin<float>(norm_file, norm_val, dumr, dumc);
       this->max_base_norm = norm_val[0];
       diskann::cout << "Setting re-scaling factor of base vectors to "
-                << this->max_base_norm << std::endl;
+                    << this->max_base_norm << std::endl;
       delete[] norm_val;
     }
     diskann::cout << "done.." << std::endl;
@@ -983,19 +989,17 @@ namespace diskann {
 #endif
 
   template<typename T, typename LabelT>
-  void PQFlashIndex<T,LabelT>::cached_beam_search(const T *query1, const _u64 k_search,
-                                           const _u64 l_search, _u64 *indices,
-                                           float *     distances,
-                                           const _u64  beam_width,
-                                           const bool  use_reorder_data,
-                                           QueryStats *stats) {
+  void PQFlashIndex<T, LabelT>::cached_beam_search(
+      const T *query1, const _u64 k_search, const _u64 l_search, _u64 *indices,
+      float *distances, const _u64 beam_width, const bool use_reorder_data,
+      QueryStats *stats) {
     cached_beam_search(query1, k_search, l_search, indices, distances,
                        beam_width, std::numeric_limits<_u32>::max(),
                        use_reorder_data, stats);
   }
 
   template<typename T, typename LabelT>
-  void PQFlashIndex<T,LabelT>::cached_beam_search(
+  void PQFlashIndex<T, LabelT>::cached_beam_search(
       const T *query1, const _u64 k_search, const _u64 l_search, _u64 *indices,
       float *distances, const _u64 beam_width, const bool use_filter,
       const LabelT &filter_label, const bool use_reorder_data,
@@ -1007,11 +1011,11 @@ namespace diskann {
   }
 
   template<typename T, typename LabelT>
-  void PQFlashIndex<T,LabelT>::cached_beam_search(
+  void PQFlashIndex<T, LabelT>::cached_beam_search(
       const T *query1, const _u64 k_search, const _u64 l_search, _u64 *indices,
       float *distances, const _u64 beam_width, const _u32 io_limit,
       const bool use_reorder_data, QueryStats *stats) {
-    LabelT dummy_filter=0;
+    LabelT dummy_filter = 0;
     cached_beam_search(query1, k_search, l_search, indices, distances,
                        beam_width, false, dummy_filter,
                        std::numeric_limits<_u32>::max(), use_reorder_data,
@@ -1019,7 +1023,7 @@ namespace diskann {
   }
 
   template<typename T, typename LabelT>
-  void PQFlashIndex<T,LabelT>::cached_beam_search(
+  void PQFlashIndex<T, LabelT>::cached_beam_search(
       const T *query1, const _u64 k_search, const _u64 l_search, _u64 *indices,
       float *distances, const _u64 beam_width, const bool use_filter,
       const LabelT &filter_label, const _u32 io_limit,
@@ -1042,7 +1046,7 @@ namespace diskann {
 
     ScratchStoreManager<SSDThreadData<T>> manager(this->thread_data);
     auto                                  data = manager.scratch_space();
-    IOContext &                           ctx = data->ctx;
+    IOContext                            &ctx = data->ctx;
     auto                                  query_scratch = &(data->scratch);
     auto pq_query_scratch = query_scratch->_pq_scratch;
 
@@ -1052,7 +1056,7 @@ namespace diskann {
     // copy query to thread specific aligned and allocated memory (for distance
     // calculations we need aligned data)
     float  query_norm = 0;
-    T *    aligned_query_T = query_scratch->aligned_query_T;
+    T     *aligned_query_T = query_scratch->aligned_query_T;
     float *query_float = pq_query_scratch->aligned_query_float;
     float *query_rotated = pq_query_scratch->rotated_query;
 
@@ -1079,7 +1083,7 @@ namespace diskann {
     }
 
     // pointers to buffers for data
-    T *   data_buf = query_scratch->coord_scratch;
+    T    *data_buf = query_scratch->coord_scratch;
     _u64 &data_buf_idx = query_scratch->coord_idx;
     _mm_prefetch((char *) data_buf, _MM_HINT_T1);
 
@@ -1095,7 +1099,7 @@ namespace diskann {
 
     // query <-> neighbor list
     float *dist_scratch = pq_query_scratch->aligned_dist_scratch;
-    _u8 *  pq_coord_scratch = pq_query_scratch->aligned_pq_coord_scratch;
+    _u8   *pq_coord_scratch = pq_query_scratch->aligned_pq_coord_scratch;
 
     // lambda to batch compute query<-> node distances in PQ space
     auto compute_dists = [this, pq_coord_scratch, pq_dists](const unsigned *ids,
@@ -1108,8 +1112,8 @@ namespace diskann {
     };
     Timer query_timer, io_timer, cpu_timer;
 
-    tsl::robin_set<_u64>& visited = query_scratch->visited;
-    NeighborPriorityQueue& retset = query_scratch->retset;
+    tsl::robin_set<_u64>  &visited = query_scratch->visited;
+    NeighborPriorityQueue &retset = query_scratch->retset;
     retset.reserve(l_search);
     std::vector<Neighbor> &full_retset = query_scratch->full_retset;
 
@@ -1216,7 +1220,7 @@ namespace diskann {
       // process cached nhoods
       for (auto &cached_nhood : cached_nhoods) {
         auto  global_cache_iter = coord_cache.find(cached_nhood.first);
-        T *   node_fp_coords_copy = global_cache_iter->second;
+        T    *node_fp_coords_copy = global_cache_iter->second;
         float cur_expanded_dist;
         if (!use_disk_index_pq) {
           cur_expanded_dist = dist_cmp->compare(
@@ -1231,7 +1235,7 @@ namespace diskann {
                     query_float, (_u8 *) node_fp_coords_copy);
         }
         full_retset.push_back(
-            Neighbor((unsigned)cached_nhood.first, cur_expanded_dist));
+            Neighbor((unsigned) cached_nhood.first, cur_expanded_dist));
 
         _u64      nnbrs = cached_nhood.second.first;
         unsigned *node_nbrs = cached_nhood.second.second;
@@ -1278,8 +1282,8 @@ namespace diskann {
         char *node_disk_buf =
             OFFSET_TO_NODE(frontier_nhood.second, frontier_nhood.first);
         unsigned *node_buf = OFFSET_TO_NODE_NHOOD(node_disk_buf);
-        _u64      nnbrs = (_u64)(*node_buf);
-        T *       node_fp_coords = OFFSET_TO_NODE_COORDS(node_disk_buf);
+        _u64      nnbrs = (_u64) (*node_buf);
+        T        *node_fp_coords = OFFSET_TO_NODE_COORDS(node_disk_buf);
         //        assert(data_buf_idx < MAX_N_CMPS);
         if (data_buf_idx == MAX_N_CMPS)
           data_buf_idx = 0;
@@ -1424,13 +1428,11 @@ namespace diskann {
   // indices and distances need to be pre-allocated of size l_search and the
   // return value is the number of matching hits.
   template<typename T, typename LabelT>
-  _u32 PQFlashIndex<T,LabelT>::range_search(const T *query1, const double range,
-                                     const _u64          min_l_search,
-                                     const _u64          max_l_search,
-                                     std::vector<_u64> & indices,
-                                     std::vector<float> &distances,
-                                     const _u64          min_beam_width,
-                                     QueryStats *        stats) {
+  _u32 PQFlashIndex<T, LabelT>::range_search(
+      const T *query1, const double range, const _u64 min_l_search,
+      const _u64 max_l_search, std::vector<_u64> &indices,
+      std::vector<float> &distances, const _u64 min_beam_width,
+      QueryStats *stats) {
     _u32 res_count = 0;
 
     bool stop_flag = false;
@@ -1453,7 +1455,7 @@ namespace diskann {
         } else if (i == l_search - 1)
           res_count = l_search;
       }
-      if (res_count < (_u32)(l_search / 2.0))
+      if (res_count < (_u32) (l_search / 2.0))
         stop_flag = true;
       l_search = l_search * 2;
       if (l_search > max_l_search)
@@ -1465,22 +1467,22 @@ namespace diskann {
   }
 
   template<typename T, typename LabelT>
-  _u64 PQFlashIndex<T,LabelT>::get_data_dim() {
+  _u64 PQFlashIndex<T, LabelT>::get_data_dim() {
     return data_dim;
   }
 
   template<typename T, typename LabelT>
-  diskann::Metric PQFlashIndex<T,LabelT>::get_metric() {
+  diskann::Metric PQFlashIndex<T, LabelT>::get_metric() {
     return this->metric;
   }
 
 #ifdef EXEC_ENV_OLS
   template<typename T, typename LabelT>
-  char *PQFlashIndex<T,LabelT>::getHeaderBytes() {
-    IOContext & ctx = reader->get_ctx();
+  char *PQFlashIndex<T, LabelT>::getHeaderBytes() {
+    IOContext  &ctx = reader->get_ctx();
     AlignedRead readReq;
-    readReq.buf = new char[PQFlashIndex<T,LabelT>::HEADER_SIZE];
-    readReq.len = PQFlashIndex<T,LabelT>::HEADER_SIZE;
+    readReq.buf = new char[PQFlashIndex<T, LabelT>::HEADER_SIZE];
+    readReq.len = PQFlashIndex<T, LabelT>::HEADER_SIZE;
     readReq.offset = 0;
 
     std::vector<AlignedRead> readReqs;

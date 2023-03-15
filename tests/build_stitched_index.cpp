@@ -65,10 +65,10 @@ inline size_t random(size_t range_from, size_t range_to) {
  * Arguments are merely the inputs from the command line.
  */
 void handle_args(int argc, char **argv, std::string &data_type,
-                   path &input_data_path, path &final_index_path_prefix,
-                   path &label_data_path, std::string &universal_label,
-                   unsigned &num_threads, unsigned &R, unsigned &L,
-                   unsigned &stitched_R, float &alpha) {
+                 path &input_data_path, path &final_index_path_prefix,
+                 path &label_data_path, std::string &universal_label,
+                 unsigned &num_threads, unsigned &R, unsigned &L,
+                 unsigned &stitched_R, float &alpha) {
   po::options_description desc{"Arguments"};
   try {
     desc.add_options()("help,h", "Print information on arguments");
@@ -262,8 +262,7 @@ generate_label_specific_vector_files(
   // write each label iovec to resp. file
   for (const auto &lbl : all_labels) {
     int  label_input_data_fd;
-    path curr_label_input_data_path(input_data_path + "_" +
-                                    lbl);
+    path curr_label_input_data_path(input_data_path + "_" + lbl);
     _u32 curr_num_pts = labels_to_number_of_points[lbl];
 
     label_input_data_fd =
