@@ -75,7 +75,7 @@ void compute_l2sq(float *const points_l2sq, const float *const matrix,
 
 void distsq_to_points(
     const size_t dim,
-    float *      dist_matrix,  // Col Major, cols are queries, rows are points
+    float       *dist_matrix,  // Col Major, cols are queries, rows are points
     size_t npoints, const float *const points,
     const float *const points_l2sq,  // points in Col major
     size_t nqueries, const float *const queries,
@@ -103,7 +103,7 @@ void distsq_to_points(
 
 void inner_prod_to_points(
     const size_t dim,
-    float *      dist_matrix,  // Col Major, cols are queries, rows are points
+    float       *dist_matrix,  // Col Major, cols are queries, rows are points
     size_t npoints, const float *const points, size_t nqueries,
     const float *const queries,
     float *ones_vec = NULL)  // Scratchspace of num_data size and init to 1.0
@@ -208,28 +208,28 @@ void exact_knn(
       for (_u64 p = 0; p < k; p++)
         point_dist.emplace(
             p, dist_matrix[(ptrdiff_t) p +
-                           (ptrdiff_t)(q - q_b) * (ptrdiff_t) npoints]);
+                           (ptrdiff_t) (q - q_b) * (ptrdiff_t) npoints]);
       for (_u64 p = k; p < npoints; p++) {
         if (point_dist.top().second >
             dist_matrix[(ptrdiff_t) p +
-                        (ptrdiff_t)(q - q_b) * (ptrdiff_t) npoints])
+                        (ptrdiff_t) (q - q_b) * (ptrdiff_t) npoints])
           point_dist.emplace(
               p, dist_matrix[(ptrdiff_t) p +
-                             (ptrdiff_t)(q - q_b) * (ptrdiff_t) npoints]);
+                             (ptrdiff_t) (q - q_b) * (ptrdiff_t) npoints]);
         if (point_dist.size() > k)
           point_dist.pop();
       }
       for (ptrdiff_t l = 0; l < (ptrdiff_t) k; ++l) {
-        closest_points[(ptrdiff_t)(k - 1 - l) + (ptrdiff_t) q * (ptrdiff_t) k] =
-            point_dist.top().first;
-        dist_closest_points[(ptrdiff_t)(k - 1 - l) +
+        closest_points[(ptrdiff_t) (k - 1 - l) +
+                       (ptrdiff_t) q * (ptrdiff_t) k] = point_dist.top().first;
+        dist_closest_points[(ptrdiff_t) (k - 1 - l) +
                             (ptrdiff_t) q * (ptrdiff_t) k] =
             point_dist.top().second;
         point_dist.pop();
       }
       assert(std::is_sorted(
           dist_closest_points + (ptrdiff_t) q * (ptrdiff_t) k,
-          dist_closest_points + (ptrdiff_t)(q + 1) * (ptrdiff_t) k));
+          dist_closest_points + (ptrdiff_t) (q + 1) * (ptrdiff_t) k));
     }
     std::cout << "Computed exact k-NN for queries: [" << q_b << "," << q_e
               << ")" << std::endl;
@@ -308,10 +308,10 @@ inline std::vector<size_t> load_filtered_bin_as_float(
     int part_num, const char *label_file, const std::string &filter_label,
     const std::string &universal_label, size_t &npoints_filt,
     std::vector<std::vector<std::string>> &pts_to_labels) {
-
   std::ifstream reader(filename, std::ios::binary);
   if (reader.fail()) {
-    throw diskann::ANNException(std::string("Failed to open file ") + filename, -1);
+    throw diskann::ANNException(std::string("Failed to open file ") + filename,
+                                -1);
   }
 
   std::cout << "Reading bin file " << filename << " ...\n";
@@ -339,7 +339,7 @@ inline std::vector<size_t> load_filtered_bin_as_float(
   reader.close();
 
   data = aligned_malloc<float>(nptsuint64_t * ndimsuint64_t, ALIGNMENT);
-  
+
   for (int64_t i = 0; i < (int64_t) nptsuint64_t; i++) {
     if (std::find(pts_to_labels[start_id + i].begin(),
                   pts_to_labels[start_id + i].end(),
@@ -481,7 +481,7 @@ int aux_main(const std::string &base_file, const std::string &label_file,
 
   std::vector<std::vector<std::pair<uint32_t, float>>> results(nqueries);
 
-  int *  closest_points = new int[nqueries * k];
+  int   *closest_points = new int[nqueries * k];
   float *dist_closest_points = new float[nqueries * k];
 
   std::vector<std::vector<std::string>> pts_to_labels;
@@ -498,7 +498,7 @@ int aux_main(const std::string &base_file, const std::string &label_file,
           base_file.c_str(), base_data, npoints, dim, p, label_file.c_str(),
           filter_label, universal_label, npoints_filt, pts_to_labels);
     }
-    int *  closest_points_part = new int[nqueries * k];
+    int   *closest_points_part = new int[nqueries * k];
     float *dist_closest_points_part = new float[nqueries * k];
 
     _u32 part_k;
@@ -521,11 +521,11 @@ int aux_main(const std::string &base_file, const std::string &label_file,
             continue;
         if (filter_label == "") {
           results[i].push_back(std::make_pair(
-              (uint32_t)(closest_points_part[i * part_k + j] + start_id),
+              (uint32_t) (closest_points_part[i * part_k + j] + start_id),
               dist_closest_points_part[i * part_k + j]));
         } else {
           results[i].push_back(std::make_pair(
-              (uint32_t)(rev_map[closest_points_part[i * part_k + j]]),
+              (uint32_t) (rev_map[closest_points_part[i * part_k + j]]),
               dist_closest_points_part[i * part_k + j]));
         }
       }

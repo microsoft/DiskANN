@@ -30,7 +30,7 @@ using namespace diskann;
 
 template<class T>
 struct DiskANNIndex {
-  PQFlashIndex<T> *                  pq_flash_index;
+  PQFlashIndex<T>                   *pq_flash_index;
   std::shared_ptr<AlignedFileReader> reader;
 
   DiskANNIndex(diskann::Metric metric) {
@@ -327,7 +327,7 @@ PYBIND11_MODULE(diskannpy, m) {
       [](const std::string &path, std::vector<unsigned> &ids,
          std::vector<float> &distances) {
         unsigned *id_ptr = nullptr;
-        float *   dist_ptr = nullptr;
+        float    *dist_ptr = nullptr;
         size_t    num, dims;
         load_truthset(path, id_ptr, dist_ptr, num, dims);
         // TODO: Remove redundant copies.
@@ -349,7 +349,7 @@ PYBIND11_MODULE(diskannpy, m) {
          const unsigned ground_truth_dims, std::vector<unsigned> &results,
          const unsigned result_dims, const unsigned recall_at) {
         unsigned *gti_ptr = ground_truth_ids.data();
-        float *   gtd_ptr = ground_truth_dists.data();
+        float    *gtd_ptr = ground_truth_dists.data();
         unsigned *r_ptr = results.data();
 
         double             total_recall = 0;
@@ -390,10 +390,10 @@ PYBIND11_MODULE(diskannpy, m) {
          std::vector<float> &ground_truth_dists,
          const unsigned      ground_truth_dims,
          py::array_t<unsigned, py::array::c_style | py::array::forcecast>
-             &          results,
+                       &results,
          const unsigned result_dims, const unsigned recall_at) {
         unsigned *gti_ptr = ground_truth_ids.data();
-        float *   gtd_ptr = ground_truth_dists.data();
+        float    *gtd_ptr = ground_truth_dists.data();
         unsigned *r_ptr = results.mutable_data();
 
         double             total_recall = 0;

@@ -116,18 +116,18 @@ namespace diskann {
     // Batch build from a file. Optionally pass tags vector.
     DISKANN_DLLEXPORT void build(
         const char *filename, const size_t num_points_to_load,
-        Parameters &             parameters,
+        Parameters              &parameters,
         const std::vector<TagT> &tags = std::vector<TagT>());
 
     // Batch build from a file. Optionally pass tags file.
-    DISKANN_DLLEXPORT void build(const char * filename,
+    DISKANN_DLLEXPORT void build(const char  *filename,
                                  const size_t num_points_to_load,
-                                 Parameters & parameters,
-                                 const char * tag_filename);
+                                 Parameters  &parameters,
+                                 const char  *tag_filename);
 
     // Batch build from a data array, which must pad vectors to aligned_dim
     DISKANN_DLLEXPORT void build(const T *data, const size_t num_points_to_load,
-                                 Parameters &             parameters,
+                                 Parameters              &parameters,
                                  const std::vector<TagT> &tags);
 
     // Filtered Support
@@ -138,7 +138,7 @@ namespace diskann {
 
     DISKANN_DLLEXPORT void set_universal_label(const LabelT &label);
 
-    //Get converted integer label from string to int map (_label_map)
+    // Get converted integer label from string to int map (_label_map)
     DISKANN_DLLEXPORT LabelT get_converted_label(const std::string &raw_label);
 
     // Set starting point of an index before inserting any points incrementally
@@ -164,7 +164,7 @@ namespace diskann {
     // Initialize space for res_vectors before calling.
     DISKANN_DLLEXPORT size_t search_with_tags(const T *query, const uint64_t K,
                                               const unsigned L, TagT *tags,
-                                              float *           distances,
+                                              float            *distances,
                                               std::vector<T *> &res_vectors);
 
     // Filter support search
@@ -186,7 +186,7 @@ namespace diskann {
     // Record deleted points now and restructure graph later. Add to failed_tags
     // if tag not found.
     DISKANN_DLLEXPORT void lazy_delete(const std::vector<TagT> &tags,
-                                       std::vector<TagT> &      failed_tags);
+                                       std::vector<TagT>       &failed_tags);
 
     // Call after a series of lazy deletions
     // Returns number of live points left after consolidation
@@ -233,7 +233,7 @@ namespace diskann {
 
     // Use after _data and _nd have been populated
     // Acquire exclusive _update_lock before calling
-    void build_with_data_populated(Parameters &             parameters,
+    void build_with_data_populated(Parameters              &parameters,
                                    const std::vector<TagT> &tags);
 
     // generates 1 frozen point that will never be deleted from the graph
@@ -243,9 +243,11 @@ namespace diskann {
     // determines navigating node of the graph by calculating medoid of datafopt
     unsigned calculate_entry_point();
 
-    void parse_label_file(const std::string &label_file, size_t &num_pts_labels);
+    void parse_label_file(const std::string &label_file,
+                          size_t            &num_pts_labels);
 
-    std::unordered_map<std::string, LabelT> load_label_map(const std::string &map_file);
+    std::unordered_map<std::string, LabelT> load_label_map(
+        const std::string &map_file);
 
     std::pair<uint32_t, uint32_t> iterate_to_fixed_point(
         const T *node_coords, const unsigned Lindex,
@@ -253,14 +255,15 @@ namespace diskann {
         bool use_filter, const std::vector<LabelT> &filters,
         bool ret_frozen = true, bool search_invocation = false);
 
-    void search_for_point_and_prune(
-        int location, _u32 Lindex, std::vector<unsigned> &pruned_list,
-        InMemQueryScratch<T> *scratch, bool use_filter = false,
-        _u32                      filteredLindex = 0);
+    void search_for_point_and_prune(int location, _u32 Lindex,
+                                    std::vector<unsigned> &pruned_list,
+                                    InMemQueryScratch<T>  *scratch,
+                                    bool                   use_filter = false,
+                                    _u32                   filteredLindex = 0);
 
     void prune_neighbors(const unsigned location, std::vector<Neighbor> &pool,
                          std::vector<unsigned> &pruned_list,
-                         InMemQueryScratch<T> * scratch);
+                         InMemQueryScratch<T>  *scratch);
 
     void prune_neighbors(const unsigned location, std::vector<Neighbor> &pool,
                          const _u32 range, const _u32 max_candidate_size,
@@ -341,7 +344,7 @@ namespace diskann {
     Distance<T> *_distance = nullptr;
 
     // Data
-    T *   _data = nullptr;
+    T    *_data = nullptr;
     char *_opt_graph = nullptr;
 
     // Graph related data structures
@@ -370,15 +373,15 @@ namespace diskann {
 
     // Filter Support
 
-    bool                            _filtered_index = false;
-    std::vector<std::vector<LabelT>> _pts_to_labels;
-    tsl::robin_set<LabelT>           _labels;
-    std::string                     _labels_file;
-    std::unordered_map<LabelT, _u32> _label_to_medoid_id;
-    std::unordered_map<_u32, _u32>  _medoid_counts;
-    bool                            _use_universal_label = false;
-    LabelT                           _universal_label = 0;
-    uint32_t                        _filterIndexingQueueSize;
+    bool                                    _filtered_index = false;
+    std::vector<std::vector<LabelT>>        _pts_to_labels;
+    tsl::robin_set<LabelT>                  _labels;
+    std::string                             _labels_file;
+    std::unordered_map<LabelT, _u32>        _label_to_medoid_id;
+    std::unordered_map<_u32, _u32>          _medoid_counts;
+    bool                                    _use_universal_label = false;
+    LabelT                                  _universal_label = 0;
+    uint32_t                                _filterIndexingQueueSize;
     std::unordered_map<std::string, LabelT> _label_map;
 
     // Indexing parameters
@@ -395,7 +398,7 @@ namespace diskann {
     bool              _pq_dist = false;
     bool              _use_opq = false;
     size_t            _num_pq_chunks = 0;
-    _u8 *             _pq_data = nullptr;
+    _u8              *_pq_data = nullptr;
     bool              _pq_generated = false;
     FixedChunkPQTable _pq_table;
 

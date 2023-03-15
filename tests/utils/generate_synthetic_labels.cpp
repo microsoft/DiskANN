@@ -12,14 +12,13 @@ namespace po = boost::program_options;
 class ZipfDistribution {
  public:
   ZipfDistribution(int num_points, int num_labels)
-      : uniform_zero_to_one(std::uniform_real_distribution<>(0.0, 1.0))
-      , num_points(num_points)
-      , num_labels(num_labels)
-  {}
+      : uniform_zero_to_one(std::uniform_real_distribution<>(0.0, 1.0)),
+        num_points(num_points), num_labels(num_labels) {
+  }
 
   std::unordered_map<int, int> createDistributionMap() {
     std::unordered_map<int, int> map;
-    int                          primary_label_freq = ceil(num_points * distribution_factor);
+    int primary_label_freq = ceil(num_points * distribution_factor);
     for (int i{1}; i < num_labels + 1; i++) {
       map[i] = ceil(primary_label_freq / i);
     }
@@ -33,9 +32,9 @@ class ZipfDistribution {
       bool label_written = false;
       for (auto it = distribution_map.cbegin(), next_it = it;
            it != distribution_map.cend(); it = next_it) {
-
         next_it++;
-        auto label_selection_probability = std::bernoulli_distribution(distribution_factor/(double)it->first);
+        auto label_selection_probability = std::bernoulli_distribution(
+            distribution_factor / (double) it->first);
         if (label_selection_probability(rand_engine)) {
           if (label_written) {
             outfile << ',';
@@ -69,13 +68,12 @@ class ZipfDistribution {
     outfile.close();
   }
 
-  private:
-    int                                          num_labels;
-    const int                                    num_points;
-    const double                                 distribution_factor = 0.7;
-    std::knuth_b                                 rand_engine;
-    const std::uniform_real_distribution<double> uniform_zero_to_one;
-
+ private:
+  int                                          num_labels;
+  const int                                    num_points;
+  const double                                 distribution_factor = 0.7;
+  std::knuth_b                                 rand_engine;
+  const std::uniform_real_distribution<double> uniform_zero_to_one;
 };
 
 int main(int argc, char** argv) {
@@ -95,9 +93,10 @@ int main(int argc, char** argv) {
     desc.add_options()("num_labels,L",
                        po::value<uint64_t>(&num_labels)->required(),
                        "Number of unique labels, up to 5000");
-    desc.add_options()("distribution_type,DT",
+    desc.add_options()(
+        "distribution_type,DT",
         po::value<std::string>(&distribution_type)->default_value("random"),
-                       "Distribution function for labels <random/zipf> defaults to random");
+        "Distribution function for labels <random/zipf> defaults to random");
 
     po::variables_map vm;
     po::store(po::parse_command_line(argc, argv, desc), vm);
@@ -134,7 +133,7 @@ int main(int argc, char** argv) {
     if (distribution_type == "zipf") {
       ZipfDistribution zipf(num_points, num_labels);
       zipf.writeDistribution(outfile);
-    }else if (distribution_type == "random") {
+    } else if (distribution_type == "random") {
       for (int i = 0; i < num_points; i++) {
         bool label_written = false;
         for (int j = 1; j <= num_labels; j++) {
@@ -155,7 +154,7 @@ int main(int argc, char** argv) {
         }
       }
     }
-    if (outfile.is_open()){
+    if (outfile.is_open()) {
       outfile.close();
     }
 
