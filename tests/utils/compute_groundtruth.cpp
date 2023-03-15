@@ -303,6 +303,66 @@ inline void load_bin_as_float(const char *filename, float *&data,
 }
 
 template<typename T>
+inline std::vector<size_t> load_filtered_bin_as_float(
+    const char *filename, float *&data, size_t &npts, size_t &ndims,
+    int part_num, const char *label_file, const std::string &filter_label,
+    const std::string &universal_label, size_t &npoints_filt,
+    std::vector<std::vector<std::string>> &pts_to_labels) {
+  std::ifstream reader(filename, std::ios::binary);
+  if (reader.fail()) {
+    throw diskann::ANNException(std::string("Failed to open file ") + filename,
+                                -1);
+  }
+
+  std::cout << "Reading bin file " << filename << " ...\n";
+  int                 npts_i32, ndims_i32;
+  std::vector<size_t> rev_map;
+  reader.read((char *) &npts_i32, sizeof(int));
+  reader.read((char *) &ndims_i32, sizeof(int));
+  uint64_t start_id = part_num * PARTSIZE;
+  uint64_t end_id = (std::min)(start_id + PARTSIZE, (uint64_t) npts_i32);
+  npts = end_id - start_id;
+  ndims = (unsigned) ndims_i32;
+  uint64_t nptsuint64_t = (uint64_t) npts;
+  uint64_t ndimsuint64_t = (uint64_t) ndims;
+  npoints_filt = 0;
+  std::cout << "#pts in part = " << npts << ", #dims = " << ndims
+            << ", size = " << nptsuint64_t * ndimsuint64_t * sizeof(T) << "B"
+            << std::endl;
+  std::cout << "start and end ids: " << start_id << ", " << end_id << std::endl;
+  reader.seekg(start_id * ndims * sizeof(T) + 2 * sizeof(uint32_t),
+               std::ios::beg);
+
+  T *data_T = new T[nptsuint64_t * ndimsuint64_t];
+  reader.read((char *) data_T, sizeof(T) * nptsuint64_t * ndimsuint64_t);
+  std::cout << "Finished reading part of the bin file." << std::endl;
+  reader.close();
+
+  data = aligned_malloc<float>(nptsuint64_t * ndimsuint64_t, ALIGNMENT);
+
+  for (int64_t i = 0; i < (int64_t) nptsuint64_t; i++) {
+    if (std::find(pts_to_labels[start_id + i].begin(),
+                  pts_to_labels[start_id + i].end(),
+                  filter_label) != pts_to_labels[start_id + i].end() ||
+        std::find(pts_to_labels[start_id + i].begin(),
+                  pts_to_labels[start_id + i].end(),
+                  universal_label) != pts_to_labels[start_id + i].end()) {
+      rev_map.push_back(start_id + i);
+      for (int64_t j = 0; j < (int64_t) ndimsuint64_t; j++) {
+        float cur_val_float = (float) data_T[i * ndimsuint64_t + j];
+        std::memcpy((char *) (data + npoints_filt * ndimsuint64_t + j),
+                    (char *) &cur_val_float, sizeof(float));
+      }
+      npoints_filt++;
+    }
+  }
+  delete[] data_T;
+  std::cout << "Finished converting part data to float.. identified "
+            << npoints_filt << " points matching the filter." << std::endl;
+  return rev_map;
+}
+
+template<typename T>
 inline void save_bin(const std::string filename, T *data, size_t npts,
                      size_t ndims) {
   std::ofstream writer;
@@ -334,19 +394,51 @@ inline void save_groundtruth_as_one_file(const std::string filename,
             << 2 * npts * ndims * sizeof(unsigned) + 2 * sizeof(int) << "B"
             << std::endl;
 
-  //    data = new T[npts_u64 * ndims_u64];
   writer.write((char *) data, npts * ndims * sizeof(uint32_t));
   writer.write((char *) distances, npts * ndims * sizeof(float));
   writer.close();
   std::cout << "Finished writing truthset" << std::endl;
 }
 
+inline void parse_label_file_into_vec(
+    size_t &line_cnt, const std::string &map_file,
+    std::vector<std::vector<std::string>> &pts_to_labels) {
+  std::ifstream         infile(map_file);
+  std::string           line, token;
+  std::set<std::string> labels;
+  infile.clear();
+  infile.seekg(0, std::ios::beg);
+  while (std::getline(infile, line)) {
+    std::istringstream       iss(line);
+    std::vector<std::string> lbls(0);
+
+    getline(iss, token, '\t');
+    std::istringstream new_iss(token);
+    while (getline(new_iss, token, ',')) {
+      token.erase(std::remove(token.begin(), token.end(), '\n'), token.end());
+      token.erase(std::remove(token.begin(), token.end(), '\r'), token.end());
+      lbls.push_back(token);
+      labels.insert(token);
+    }
+    if (lbls.size() <= 0) {
+      std::cout << "No label found";
+      exit(-1);
+    }
+    std::sort(lbls.begin(), lbls.end());
+    pts_to_labels.push_back(lbls);
+  }
+  std::cout << "Identified " << labels.size()
+            << " distinct label(s), and populated labels for "
+            << pts_to_labels.size() << " points" << std::endl;
+}
+
 template<typename T>
-int aux_main(const std::string &base_file, const std::string &query_file,
-             const std::string &gt_file, size_t k,
-             const diskann::Metric &metric,
-             const std::string     &tags_file = std::string("")) {
-  size_t npoints, nqueries, dim;
+int aux_main(const std::string &base_file, const std::string &label_file,
+             const std::string &query_file, const std::string &gt_file,
+             size_t k, const std::string &filter_label,
+             const std::string &universal_label, const diskann::Metric &metric,
+             const std::string &tags_file = std::string("")) {
+  size_t npoints, nqueries, dim, npoints_filt;
 
   float *base_data;
   float *query_data;
@@ -392,25 +484,50 @@ int aux_main(const std::string &base_file, const std::string &query_file,
   int   *closest_points = new int[nqueries * k];
   float *dist_closest_points = new float[nqueries * k];
 
+  std::vector<std::vector<std::string>> pts_to_labels;
+  if (filter_label != "")
+    parse_label_file_into_vec(npoints, label_file, pts_to_labels);
+  std::vector<size_t> rev_map;
+
   for (int p = 0; p < num_parts; p++) {
     size_t start_id = p * PARTSIZE;
-    load_bin_as_float<T>(base_file.c_str(), base_data, npoints, dim, p);
+    if (filter_label == "") {
+      load_bin_as_float<T>(base_file.c_str(), base_data, npoints, dim, p);
+    } else {
+      rev_map = load_filtered_bin_as_float<T>(
+          base_file.c_str(), base_data, npoints, dim, p, label_file.c_str(),
+          filter_label, universal_label, npoints_filt, pts_to_labels);
+    }
     int   *closest_points_part = new int[nqueries * k];
     float *dist_closest_points_part = new float[nqueries * k];
 
-    auto nr = std::min(npoints, k);
-
-    exact_knn(dim, nr, closest_points_part, dist_closest_points_part, npoints,
-              base_data, nqueries, query_data, metric);
+    _u32 part_k;
+    if (filter_label == "") {
+      part_k = k < npoints ? k : npoints;
+      exact_knn(dim, part_k, closest_points_part, dist_closest_points_part,
+                npoints, base_data, nqueries, query_data, metric);
+    } else {
+      part_k = k < npoints_filt ? k : npoints_filt;
+      if (npoints_filt > 0) {
+        exact_knn(dim, part_k, closest_points_part, dist_closest_points_part,
+                  npoints_filt, base_data, nqueries, query_data, metric);
+      }
+    }
 
     for (_u64 i = 0; i < nqueries; i++) {
-      for (_u64 j = 0; j < nr; j++) {
+      for (_u64 j = 0; j < part_k; j++) {
         if (tags_enabled)
           if (location_to_tag[closest_points_part[i * k + j] + start_id] == 0)
             continue;
-        results[i].push_back(std::make_pair(
-            (uint32_t) (closest_points_part[i * nr + j] + start_id),
-            dist_closest_points_part[i * nr + j]));
+        if (filter_label == "") {
+          results[i].push_back(std::make_pair(
+              (uint32_t) (closest_points_part[i * part_k + j] + start_id),
+              dist_closest_points_part[i * part_k + j]));
+        } else {
+          results[i].push_back(std::make_pair(
+              (uint32_t) (rev_map[closest_points_part[i * part_k + j]]),
+              dist_closest_points_part[i * part_k + j]));
+        }
       }
     }
 
@@ -455,8 +572,9 @@ int aux_main(const std::string &base_file, const std::string &query_file,
 }
 
 int main(int argc, char **argv) {
-  std::string data_type, dist_fn, base_file, query_file, gt_file, tags_file;
-  uint64_t    K;
+  std::string data_type, dist_fn, base_file, query_file, gt_file, tags_file,
+      label_file, filter_label, universal_label;
+  uint64_t K;
 
   try {
     po::options_description desc{"Arguments"};
@@ -474,6 +592,17 @@ int main(int argc, char **argv) {
     desc.add_options()("query_file",
                        po::value<std::string>(&query_file)->required(),
                        "File containing the query vectors in binary format");
+    desc.add_options()("label_file",
+                       po::value<std::string>(&label_file)->default_value(""),
+                       "Input labels file in txt format if present");
+    desc.add_options()("filter_label",
+                       po::value<std::string>(&filter_label)->default_value(""),
+                       "Input filter label if doing filtered groundtruth");
+    desc.add_options()(
+        "universal_label",
+        po::value<std::string>(&universal_label)->default_value(""),
+        "Universal label, if using it, only in conjunction with label_file");
+
     desc.add_options()(
         "gt_file", po::value<std::string>(&gt_file)->required(),
         "File name for the writing ground truth in binary format");
@@ -518,11 +647,14 @@ int main(int argc, char **argv) {
 
   try {
     if (data_type == std::string("float"))
-      aux_main<float>(base_file, query_file, gt_file, K, metric, tags_file);
+      aux_main<float>(base_file, label_file, query_file, gt_file, K,
+                      filter_label, universal_label, metric, tags_file);
     if (data_type == std::string("int8"))
-      aux_main<int8_t>(base_file, query_file, gt_file, K, metric, tags_file);
+      aux_main<int8_t>(base_file, label_file, query_file, gt_file, K,
+                       filter_label, universal_label, metric, tags_file);
     if (data_type == std::string("uint8"))
-      aux_main<uint8_t>(base_file, query_file, gt_file, K, metric, tags_file);
+      aux_main<uint8_t>(base_file, label_file, query_file, gt_file, K,
+                        filter_label, universal_label, metric, tags_file);
   } catch (const std::exception &e) {
     std::cout << std::string(e.what()) << std::endl;
     diskann::cerr << "Compute GT failed." << std::endl;

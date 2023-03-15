@@ -13,11 +13,12 @@
 namespace po = boost::program_options;
 
 int main(int argc, char** argv) {
-  std::string data_type, dist_fn, data_path, index_path_prefix, codebook_prefix;
-  unsigned    num_threads, R, L, disk_PQ, build_PQ, QD;
-  float       B, M;
-  bool        append_reorder_data = false;
-  bool        use_opq = false;
+  std::string data_type, dist_fn, data_path, index_path_prefix, codebook_prefix, label_file,
+      universal_label, label_type;
+  unsigned num_threads, R, L, disk_PQ, build_PQ, QD, Lf, filter_threshold;
+  float    B, M;
+  bool     append_reorder_data = false;
+  bool     use_opq = false;
 
   po::options_description desc{"Arguments"};
   try {
@@ -67,9 +68,34 @@ int main(int argc, char** argv) {
     desc.add_options()(
         "build_PQ_bytes", po::value<uint32_t>(&build_PQ)->default_value(0),
         "Number of PQ bytes to build the index; 0 for full precision build");
-
     desc.add_options()("use_opq", po::bool_switch()->default_value(false),
                        "Use Optimized Product Quantization (OPQ).");
+    desc.add_options()(
+        "label_file", po::value<std::string>(&label_file)->default_value(""),
+        "Input label file in txt format for Filtered Index build ."
+        "The file should contain comma separated filters for each node "
+        "with each line corresponding to a graph node");
+    desc.add_options()(
+        "universal_label",
+        po::value<std::string>(&universal_label)->default_value(""),
+        "Universal label, Use only in conjuction with label file for filtered "
+        "index build. If a graph node has all the labels against it, we can "
+        "assign a special universal filter to the point instead of comma "
+        "separated filters for that point");
+    desc.add_options()("filtered_Lbuild,Lf",
+                       po::value<uint32_t>(&Lf)->default_value(0),
+                       "Build complexity for filtered points, higher value "
+                       "results in better graphs");
+    desc.add_options()(
+        "filter_threshold,F",
+        po::value<uint32_t>(&filter_threshold)->default_value(0),
+        "Threshold to break up the existing nodes to generate new graph "
+        "internally where each node has a maximum F labels.");
+    desc.add_options()(
+        "label_type",
+        po::value<std::string>(&label_type)->default_value("uint"),
+        "Storage type of Labels <uint/ushort>, default value is uint which "
+        "will consume memory 4 bytes per filter");
 
 
     po::variables_map vm;
@@ -88,6 +114,11 @@ int main(int argc, char** argv) {
     return -1;
   }
   codebook_prefix = codebook_prefix == "0"? "" : codebook_prefix;
+
+  bool use_filters = false;
+  if (label_file != "") {
+    use_filters = true;
+  }
 
   diskann::Metric metric;
   if (dist_fn == std::string("l2"))
@@ -126,21 +157,47 @@ int main(int argc, char** argv) {
                        std::string(std::to_string(QD));
 
   try {
+    if (label_file != "" && label_type == "ushort") {
     if (data_type == std::string("int8"))
-      return diskann::build_disk_index<int8_t>(
-          data_path.c_str(), index_path_prefix.c_str(), params.c_str(),
-          codebook_prefix.c_str(), metric, use_opq);
-    else if (data_type == std::string("uint8"))
-      return diskann::build_disk_index<uint8_t>(
-          data_path.c_str(), index_path_prefix.c_str(), params.c_str(),
-          codebook_prefix.c_str(), metric, use_opq);
-    else if (data_type == std::string("float"))
-      return diskann::build_disk_index<float>(
-          data_path.c_str(), index_path_prefix.c_str(), params.c_str(),
-          codebook_prefix.c_str(), metric, use_opq);
-    else {
-      diskann::cerr << "Error. Unsupported data type" << std::endl;
-      return -1;
+      return diskann::build_disk_index<int8_t>(data_path.c_str(),
+                                               index_path_prefix.c_str(),
+                                               params.c_str(), metric, use_opq);
+            metric, use_opq, use_filters, label_file, universal_label,
+            filter_threshold, Lf);
+      else if (data_type == std::string("uint8"))
+        return diskann::build_disk_index<uint8_t, uint16_t>(
+            data_path.c_str(), index_path_prefix.c_str(), params.c_str(),
+            metric, use_opq, use_filters, label_file, universal_label,
+            filter_threshold, Lf);
+      else if (data_type == std::string("float"))
+        return diskann::build_disk_index<float, uint16_t>(
+            data_path.c_str(), index_path_prefix.c_str(), params.c_str(),
+            metric, use_opq, use_filters, label_file, universal_label,
+            filter_threshold, Lf);
+      else {
+        diskann::cerr << "Error. Unsupported data type" << std::endl;
+        return -1;
+      }
+    } else {
+      if (data_type == std::string("int8"))
+        return diskann::build_disk_index<int8_t>(
+            data_path.c_str(), index_path_prefix.c_str(), params.c_str(),
+            metric, use_opq, use_filters, label_file, universal_label,
+            filter_threshold, Lf);
+      else if (data_type == std::string("uint8"))
+        return diskann::build_disk_index<uint8_t>(
+            data_path.c_str(), index_path_prefix.c_str(), params.c_str(),
+            metric, use_opq, use_filters, label_file, universal_label,
+            filter_threshold, Lf);
+      else if (data_type == std::string("float"))
+        return diskann::build_disk_index<float>(
+            data_path.c_str(), index_path_prefix.c_str(), params.c_str(),
+            metric, use_opq, use_filters, label_file, universal_label,
+            filter_threshold, Lf);
+      else {
+        diskann::cerr << "Error. Unsupported data type" << std::endl;
+        return -1;
+      }
     }
   } catch (const std::exception& e) {
     std::cout << std::string(e.what()) << std::endl;

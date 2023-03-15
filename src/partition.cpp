@@ -29,7 +29,7 @@
 // block size for reading/ processing large files and matrices in blocks
 #define BLOCK_SIZE 5000000
 
-//#define SAVE_INFLATED_PQ true
+// #define SAVE_INFLATED_PQ true
 
 template<typename T>
 void gen_random_slice(const std::string base_file,
@@ -591,9 +591,9 @@ int partition_with_ram_budget(const std::string data_file,
                            train_dim, k_base, cluster_sizes);
 
     for (auto &p : cluster_sizes) {
-      p = (_u64) (p /
-                  sampling_rate);  // to account for the fact that p is the size
-                                   // of the shard over the testing sample.
+      // to account for the fact that p is the size of the shard over the
+      // testing sample.
+      p = (_u64) (p / sampling_rate);
       double cur_shard_ram_estimate =
           diskann::estimate_ram_usage(p, train_dim, sizeof(T), graph_degree);
 

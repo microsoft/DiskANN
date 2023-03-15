@@ -83,9 +83,10 @@ std::string get_save_filename(const std::string& save_path,
   return final_path;
 }
 
-template<typename T, typename TagT>
-void insert_next_batch(diskann::Index<T, TagT>& index, size_t start, size_t end,
-                       size_t insert_threads, T* data, size_t aligned_dim) {
+template<typename T, typename TagT, typename LabelT>
+void insert_next_batch(diskann::Index<T, TagT, LabelT>& index, size_t start,
+                       size_t end, size_t insert_threads, T* data,
+                       size_t aligned_dim) {
   try {
     diskann::Timer insert_timer;
     std::cout << std::endl
@@ -116,8 +117,8 @@ void insert_next_batch(diskann::Index<T, TagT>& index, size_t start, size_t end,
   }
 }
 
-template<typename T, typename TagT>
-void delete_and_consolidate(diskann::Index<T, TagT>& index,
+template<typename T, typename TagT, typename LabelT>
+void delete_and_consolidate(diskann::Index<T, TagT, LabelT>& index,
                             diskann::Parameters& delete_params, size_t start,
                             size_t end) {
   try {
@@ -189,6 +190,7 @@ void build_incremental_index(const std::string& data_path, const unsigned L,
   params.Set<bool>("saturate_graph", saturate_graph);
   params.Set<unsigned>("num_rnds", 1);
   params.Set<unsigned>("num_threads", insert_threads);
+  params.Set<unsigned>("Lf", 0);
   diskann::Parameters delete_params;
   delete_params.Set<unsigned>("L", L);
   delete_params.Set<unsigned>("R", R);
@@ -222,6 +224,7 @@ void build_incremental_index(const std::string& data_path, const unsigned L,
                                 __FUNCSIG__, __FILE__, __LINE__);
 
   using TagT = uint32_t;
+  using LabelT = uint32_t;
   unsigned   num_frozen = 1;
   const bool enable_tags = true;
 
@@ -232,9 +235,9 @@ void build_incremental_index(const std::string& data_path, const unsigned L,
     std::cout << "Overriding num_frozen to" << num_frozen << std::endl;
   }
 
-  diskann::Index<T, TagT> index(diskann::L2, dim,
-                                active_window + 4 * consolidate_interval, true,
-                                params, params, enable_tags, true);
+  diskann::Index<T, TagT, LabelT> index(
+      diskann::L2, dim, active_window + 4 * consolidate_interval, true, params,
+      params, enable_tags, true);
   index.set_start_point_at_random(static_cast<T>(start_point_norm));
   index.enable_delete();
 
