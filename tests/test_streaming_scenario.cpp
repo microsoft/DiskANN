@@ -189,6 +189,7 @@ void build_incremental_index(const std::string& data_path, const unsigned L,
   params.Set<bool>("saturate_graph", saturate_graph);
   params.Set<unsigned>("num_rnds", 1);
   params.Set<unsigned>("num_threads", insert_threads);
+  params.Set<unsigned>("Lf", 0);
   diskann::Parameters delete_params;
   delete_params.Set<unsigned>("L", L);
   delete_params.Set<unsigned>("R", R);
