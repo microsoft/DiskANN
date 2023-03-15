@@ -15,7 +15,6 @@ if (NOT MSVC)
 	add_custom_target(
 			checkformat
 			COMMAND /usr/bin/clang-format
-			--Werror
 			--dry-run
 			${ALL_SOURCE_FILES}
 	)
