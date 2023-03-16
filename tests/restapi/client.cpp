@@ -7,13 +7,13 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT license.
 
-#include <string>
-#include <cstdlib>
-#include <codecvt>
-#include <boost/program_options.hpp>
-
 #include <cpprest/http_client.h>
 #include <restapi/common.h>
+
+#include <boost/program_options.hpp>
+#include <codecvt>
+#include <cstdlib>
+#include <string>
 
 using namespace web;
 using namespace web::http;
@@ -22,19 +22,19 @@ using namespace web::http::client;
 using namespace diskann;
 namespace po = boost::program_options;
 
-template<typename T>
+template <typename T>
 void query_loop(const std::string& ip_addr_port, const std::string& query_file,
                 const unsigned nq, const unsigned Ls, const unsigned k_value) {
   web::http::client::http_client client(U(ip_addr_port));
 
-  T*     data;
+  T* data;
   size_t npts = 1, ndims = 128, rounded_dim = 128;
   diskann::load_aligned_bin<T>(query_file, data, npts, ndims, rounded_dim);
 
   for (unsigned i = 0; i < nq; ++i) {
-    T*                      vec = data + i * rounded_dim;
+    T* vec = data + i * rounded_dim;
     web::http::http_request http_query(methods::POST);
-    web::json::value        queryJson = web::json::value::object();
+    web::json::value queryJson = web::json::value::object();
     queryJson[QUERY_ID_KEY] = i;
     queryJson[K_KEY] = k_value;
     queryJson[L_KEY] = Ls;
@@ -65,8 +65,8 @@ void query_loop(const std::string& ip_addr_port, const std::string& query_file,
 
 int main(int argc, char* argv[]) {
   std::string data_type, query_file, address;
-  uint32_t    num_queries;
-  uint32_t    l_search, k_value;
+  uint32_t num_queries;
+  uint32_t l_search, k_value;
 
   po::options_description desc{"Arguments"};
   try {

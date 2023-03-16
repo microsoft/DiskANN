@@ -2,13 +2,14 @@
 // Licensed under the MIT license.
 
 #include <omp.h>
+
 #include <boost/program_options.hpp>
 
-#include "utils.h"
 #include "disk_utils.h"
-#include "math_utils.h"
 #include "index.h"
+#include "math_utils.h"
 #include "partition.h"
+#include "utils.h"
 
 namespace po = boost::program_options;
 
@@ -16,9 +17,9 @@ int main(int argc, char** argv) {
   std::string data_type, dist_fn, data_path, index_path_prefix, label_file,
       universal_label, label_type;
   unsigned num_threads, R, L, disk_PQ, build_PQ, Lf, filter_threshold;
-  float    B, M;
-  bool     append_reorder_data = false;
-  bool     use_opq = false;
+  float B, M;
+  bool append_reorder_data = false;
+  bool use_opq = false;
 
   po::options_description desc{"Arguments"};
   try {
@@ -97,10 +98,8 @@ int main(int argc, char** argv) {
       return 0;
     }
     po::notify(vm);
-    if (vm["append_reorder_data"].as<bool>())
-      append_reorder_data = true;
-    if (vm["use_opq"].as<bool>())
-      use_opq = true;
+    if (vm["append_reorder_data"].as<bool>()) append_reorder_data = true;
+    if (vm["use_opq"].as<bool>()) use_opq = true;
   } catch (const std::exception& ex) {
     std::cerr << ex.what() << '\n';
     return -1;

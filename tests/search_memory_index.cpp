@@ -1,14 +1,15 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT license.
 
+#include <omp.h>
+#include <string.h>
+
+#include <algorithm>
+#include <boost/program_options.hpp>
 #include <cstring>
 #include <iomanip>
-#include <algorithm>
 #include <numeric>
-#include <omp.h>
 #include <set>
-#include <string.h>
-#include <boost/program_options.hpp>
 
 #ifndef _WINDOWS
 #include <sys/mman.h>
@@ -23,22 +24,22 @@
 
 namespace po = boost::program_options;
 
-template<typename T, typename LabelT = uint32_t>
+template <typename T, typename LabelT = uint32_t>
 int search_memory_index(diskann::Metric& metric, const std::string& index_path,
                         const std::string& result_path_prefix,
                         const std::string& query_file,
                         const std::string& truthset_file,
                         const unsigned num_threads, const unsigned recall_at,
-                        const bool                   print_all_recalls,
+                        const bool print_all_recalls,
                         const std::vector<unsigned>& Lvec, const bool dynamic,
                         const bool tags, const bool show_qps_per_thread,
                         const std::string& filter_label,
-                        const float        fail_if_recall_below) {
+                        const float fail_if_recall_below) {
   // Load the query file
-  T*        query = nullptr;
+  T* query = nullptr;
   unsigned* gt_ids = nullptr;
-  float*    gt_dists = nullptr;
-  size_t    query_num, query_dim, query_aligned_dim, gt_num, gt_dim;
+  float* gt_dists = nullptr;
+  size_t query_num, query_dim, query_aligned_dim, gt_num, gt_dim;
   diskann::load_aligned_bin<T>(query_file, query, query_num, query_dim,
                                query_aligned_dim);
 
@@ -67,15 +68,14 @@ int search_memory_index(diskann::Metric& metric, const std::string& index_path,
   index.load(index_path.c_str(), num_threads,
              *(std::max_element(Lvec.begin(), Lvec.end())));
   std::cout << "Index loaded" << std::endl;
-  if (metric == diskann::FAST_L2)
-    index.optimize_index_layout();
+  if (metric == diskann::FAST_L2) index.optimize_index_layout();
 
   std::cout << "Using " << num_threads << " threads to search" << std::endl;
   diskann::Parameters paras;
   std::cout.setf(std::ios_base::fixed, std::ios_base::floatfield);
   std::cout.precision(2);
   const std::string qps_title = show_qps_per_thread ? "QPS/thread" : "QPS";
-  unsigned          table_width = 0;
+  unsigned table_width = 0;
   if (tags) {
     std::cout << std::setw(4) << "Ls" << std::setw(12) << qps_title
               << std::setw(20) << "Mean Latency (mus)" << std::setw(15)
@@ -87,7 +87,7 @@ int search_memory_index(diskann::Metric& metric, const std::string& index_path,
               << "Mean Latency (mus)" << std::setw(15) << "99.9 Latency";
     table_width += 4 + 12 + 18 + 20 + 15;
   }
-  unsigned       recalls_to_print = 0;
+  unsigned recalls_to_print = 0;
   const unsigned first_recall = print_all_recalls ? 1 : recall_at;
   if (calc_recall_flag) {
     for (unsigned curr_recall = first_recall; curr_recall <= recall_at;
@@ -101,9 +101,9 @@ int search_memory_index(diskann::Metric& metric, const std::string& index_path,
   std::cout << std::string(table_width, '=') << std::endl;
 
   std::vector<std::vector<uint32_t>> query_result_ids(Lvec.size());
-  std::vector<std::vector<float>>    query_result_dists(Lvec.size());
-  std::vector<float>                 latency_stats(query_num, 0);
-  std::vector<unsigned>              cmp_stats;
+  std::vector<std::vector<float>> query_result_dists(Lvec.size());
+  std::vector<float> latency_stats(query_num, 0);
+  std::vector<unsigned> cmp_stats;
   if (not tags) {
     cmp_stats = std::vector<unsigned>(query_num, 0);
   }
@@ -130,11 +130,11 @@ int search_memory_index(diskann::Metric& metric, const std::string& index_path,
     auto s = std::chrono::high_resolution_clock::now();
     omp_set_num_threads(num_threads);
 #pragma omp parallel for schedule(dynamic, 1)
-    for (int64_t i = 0; i < (int64_t) query_num; i++) {
+    for (int64_t i = 0; i < (int64_t)query_num; i++) {
       auto qs = std::chrono::high_resolution_clock::now();
       if (filtered_search) {
         LabelT filter_label_as_num = index.get_converted_label(filter_label);
-        auto   retval = index.search_with_filters(
+        auto retval = index.search_with_filters(
             query + i * query_aligned_dim, filter_label_as_num, recall_at, L,
             query_result_ids[test_id].data() + i * recall_at,
             query_result_dists[test_id].data() + i * recall_at);
@@ -147,7 +147,7 @@ int search_memory_index(diskann::Metric& metric, const std::string& index_path,
         index.search_with_tags(query + i * query_aligned_dim, recall_at, L,
                                query_result_tags.data() + i * recall_at,
                                nullptr, res);
-        for (int64_t r = 0; r < (int64_t) recall_at; r++) {
+        for (int64_t r = 0; r < (int64_t)recall_at; r++) {
           query_result_ids[test_id][recall_at * i + r] =
               query_result_tags[recall_at * i + r];
         }
@@ -167,8 +167,7 @@ int search_memory_index(diskann::Metric& metric, const std::string& index_path,
 
     float displayed_qps = static_cast<float>(query_num) / diff.count();
 
-    if (show_qps_per_thread)
-      displayed_qps /= num_threads;
+    if (show_qps_per_thread) displayed_qps /= num_threads;
 
     std::vector<float> recalls;
     if (calc_recall_flag) {
@@ -187,18 +186,18 @@ int search_memory_index(diskann::Metric& metric, const std::string& index_path,
         static_cast<float>(query_num);
 
     float avg_cmps =
-        (float) std::accumulate(cmp_stats.begin(), cmp_stats.end(), 0) /
-        (float) query_num;
+        (float)std::accumulate(cmp_stats.begin(), cmp_stats.end(), 0) /
+        (float)query_num;
 
     if (tags) {
       std::cout << std::setw(4) << L << std::setw(12) << displayed_qps
-                << std::setw(20) << (float) mean_latency << std::setw(15)
-                << (float) latency_stats[(_u64) (0.999 * query_num)];
+                << std::setw(20) << (float)mean_latency << std::setw(15)
+                << (float)latency_stats[(_u64)(0.999 * query_num)];
     } else {
       std::cout << std::setw(4) << L << std::setw(12) << displayed_qps
                 << std::setw(18) << avg_cmps << std::setw(20)
-                << (float) mean_latency << std::setw(15)
-                << (float) latency_stats[(_u64) (0.999 * query_num)];
+                << (float)mean_latency << std::setw(15)
+                << (float)latency_stats[(_u64)(0.999 * query_num)];
     }
     for (float recall : recalls) {
       std::cout << std::setw(12) << recall;
@@ -230,10 +229,10 @@ int search_memory_index(diskann::Metric& metric, const std::string& index_path,
 int main(int argc, char** argv) {
   std::string data_type, dist_fn, index_path_prefix, result_path, query_file,
       gt_file, filter_label, label_type;
-  unsigned              num_threads, K;
+  unsigned num_threads, K;
   std::vector<unsigned> Lvec;
-  bool                  print_all_recalls, dynamic, tags, show_qps_per_thread;
-  float                 fail_if_recall_below = 0.0f;
+  bool print_all_recalls, dynamic, tags, show_qps_per_thread;
+  float fail_if_recall_below = 0.0f;
 
   po::options_description desc{"Arguments"};
   try {

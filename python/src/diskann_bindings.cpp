@@ -2,14 +2,14 @@
 // Licensed under the MIT license.
 
 #include <omp.h>
-#include <string>
-#include <memory>
-
 #include <pybind11/numpy.h>
+#include <pybind11/operators.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 #include <pybind11/stl_bind.h>
-#include <pybind11/operators.h>
+
+#include <memory>
+#include <string>
 
 #ifdef _WINDOWS
 #include "windows_aligned_file_reader.h"
@@ -28,9 +28,9 @@ PYBIND11_MAKE_OPAQUE(std::vector<uint8_t>);
 namespace py = pybind11;
 using namespace diskann;
 
-template<class T>
+template <class T>
 struct DiskANNIndex {
-  PQFlashIndex<T>                   *pq_flash_index;
+  PQFlashIndex<T> *pq_flash_index;
   std::shared_ptr<AlignedFileReader> reader;
 
   DiskANNIndex(diskann::Metric metric) {
@@ -42,13 +42,9 @@ struct DiskANNIndex {
     pq_flash_index = new PQFlashIndex<T>(reader, metric);
   }
 
-  ~DiskANNIndex() {
-    delete pq_flash_index;
-  }
+  ~DiskANNIndex() { delete pq_flash_index; }
 
-  auto get_metric() {
-    return pq_flash_index->get_metric();
-  }
+  auto get_metric() { return pq_flash_index->get_metric(); }
 
   void cache_bfs_levels(size_t num_nodes_to_cache) {
     std::vector<uint32_t> node_list;
@@ -56,9 +52,9 @@ struct DiskANNIndex {
     pq_flash_index->load_cache_list(node_list);
   }
 
-  void cache_sample_paths(size_t             num_nodes_to_cache,
+  void cache_sample_paths(size_t num_nodes_to_cache,
                           const std::string &warmup_query_file,
-                          uint32_t           num_threads) {
+                          uint32_t num_threads) {
     if (!file_exists(warmup_query_file)) {
       return;
     }
@@ -102,8 +98,7 @@ struct DiskANNIndex {
     pq_flash_index->cached_beam_search(
         query.data() + (query_idx * dim), knn, l_search, _u64_ids.data(),
         dists.data() + (query_idx * knn), beam_width, &stats);
-    for (_u64 i = 0; i < knn; i++)
-      ids[(query_idx * knn) + i] = _u64_ids[i];
+    for (_u64 i = 0; i < knn; i++) ids[(query_idx * knn) + i] = _u64_ids[i];
   }
 
   void batch_search(std::vector<T> &queries, const _u64 dim,
@@ -122,8 +117,7 @@ struct DiskANNIndex {
       pq_flash_index->cached_beam_search(queries.data() + q * dim, knn,
                                          l_search, u64_ids.data(),
                                          dists.data() + q * knn, beam_width);
-      for (_u64 i = 0; i < knn; i++)
-        ids[(q * knn) + i] = u64_ids[i];
+      for (_u64 i = 0; i < knn; i++) ids[(q * knn) + i] = u64_ids[i];
     }
   }
 
@@ -132,19 +126,18 @@ struct DiskANNIndex {
       const _u64 dim, const _u64 knn, const _u64 l_search,
       const _u64 beam_width) {
     py::array_t<unsigned> ids(knn);
-    py::array_t<float>    dists(knn);
+    py::array_t<float> dists(knn);
 
     std::vector<unsigned> u32_ids(knn);
-    std::vector<_u64>     u64_ids(knn);
-    QueryStats            stats;
+    std::vector<_u64> u64_ids(knn);
+    QueryStats stats;
 
     pq_flash_index->cached_beam_search(query.data(), knn, l_search,
                                        u64_ids.data(), dists.mutable_data(),
                                        beam_width, &stats);
 
     auto r = ids.mutable_unchecked<1>();
-    for (_u64 i = 0; i < knn; ++i)
-      r(i) = (unsigned) u64_ids[i];
+    for (_u64 i = 0; i < knn; ++i) r(i) = (unsigned)u64_ids[i];
 
     return std::make_pair(ids, dists);
   }
@@ -154,9 +147,9 @@ struct DiskANNIndex {
       const _u64 dim, const _u64 num_queries, const _u64 knn,
       const _u64 l_search, const _u64 beam_width, const int num_threads) {
     py::array_t<unsigned> ids({num_queries, knn});
-    py::array_t<float>    dists({num_queries, knn});
+    py::array_t<float> dists({num_queries, knn});
 
-    std::vector<_u64>    u64_ids(knn * num_queries);
+    std::vector<_u64> u64_ids(knn * num_queries);
     diskann::QueryStats *stats = new diskann::QueryStats[num_queries];
 
 #pragma omp parallel for schedule(dynamic, 1)
@@ -168,8 +161,7 @@ struct DiskANNIndex {
 
     auto r = ids.mutable_unchecked();
     for (_u64 i = 0; i < num_queries; ++i)
-      for (_u64 j = 0; j < knn; ++j)
-        r(i, j) = (unsigned) u64_ids[i * knn + j];
+      for (_u64 j = 0; j < knn; ++j) r(i, j) = (unsigned)u64_ids[i * knn + j];
 
     std::unordered_map<std::string, double> collective_stats;
     collective_stats["mean_latency"] = diskann::get_mean_stats<double>(
@@ -195,7 +187,7 @@ struct DiskANNIndex {
       const int num_threads) {
     py::array_t<unsigned> offsets(num_queries + 1);
 
-    std::vector<std::vector<_u64>>  u64_ids(num_queries);
+    std::vector<std::vector<_u64>> u64_ids(num_queries);
     std::vector<std::vector<float>> dists(num_queries);
 
     auto offsets_mutable = offsets.mutable_unchecked();
@@ -217,14 +209,14 @@ struct DiskANNIndex {
     }
 
     py::array_t<unsigned> ids(total_res_count);
-    py::array_t<float>    res_dists(total_res_count);
+    py::array_t<float> res_dists(total_res_count);
 
-    auto   ids_mutable = ids.mutable_unchecked();
-    auto   res_dists_mutable = res_dists.mutable_unchecked();
+    auto ids_mutable = ids.mutable_unchecked();
+    auto res_dists_mutable = res_dists.mutable_unchecked();
     size_t pos = 0;
     for (_u64 i = 0; i < num_queries; ++i) {
       for (_u64 j = 0; j < offsets_mutable(i + 1); ++j) {
-        ids_mutable(pos) = (unsigned) u64_ids[i][j];
+        ids_mutable(pos) = (unsigned)u64_ids[i][j];
         res_dists_mutable(pos++) = dists[i][j];
       }
       offsets_mutable(i + 1) = offsets_mutable(i) + offsets_mutable(i + 1);
@@ -327,8 +319,8 @@ PYBIND11_MODULE(diskannpy, m) {
       [](const std::string &path, std::vector<unsigned> &ids,
          std::vector<float> &distances) {
         unsigned *id_ptr = nullptr;
-        float    *dist_ptr = nullptr;
-        size_t    num, dims;
+        float *dist_ptr = nullptr;
+        size_t num, dims;
         load_truthset(path, id_ptr, dist_ptr, num, dims);
         // TODO: Remove redundant copies.
         ids.assign(id_ptr, id_ptr + num * dims);
@@ -349,10 +341,10 @@ PYBIND11_MODULE(diskannpy, m) {
          const unsigned ground_truth_dims, std::vector<unsigned> &results,
          const unsigned result_dims, const unsigned recall_at) {
         unsigned *gti_ptr = ground_truth_ids.data();
-        float    *gtd_ptr = ground_truth_dists.data();
+        float *gtd_ptr = ground_truth_dists.data();
         unsigned *r_ptr = results.data();
 
-        double             total_recall = 0;
+        double total_recall = 0;
         std::set<unsigned> gt, res;
         for (size_t i = 0; i < num_queries; i++) {
           gt.clear();
@@ -388,15 +380,15 @@ PYBIND11_MODULE(diskannpy, m) {
       "calculate_recall_numpy_input",
       [](const unsigned num_queries, std::vector<unsigned> &ground_truth_ids,
          std::vector<float> &ground_truth_dists,
-         const unsigned      ground_truth_dims,
+         const unsigned ground_truth_dims,
          py::array_t<unsigned, py::array::c_style | py::array::forcecast>
-                       &results,
+             &results,
          const unsigned result_dims, const unsigned recall_at) {
         unsigned *gti_ptr = ground_truth_ids.data();
-        float    *gtd_ptr = ground_truth_dists.data();
+        float *gtd_ptr = ground_truth_dists.data();
         unsigned *r_ptr = results.mutable_data();
 
-        double             total_recall = 0;
+        double total_recall = 0;
         std::set<unsigned> gt, res;
         for (size_t i = 0; i < num_queries; i++) {
           gt.clear();

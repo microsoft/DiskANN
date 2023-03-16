@@ -3,6 +3,10 @@
 
 #pragma once
 
+#include <fcntl.h>
+#include <omp.h>
+#include <sys/stat.h>
+
 #include <algorithm>
 #include <atomic>
 #include <cassert>
@@ -12,15 +16,12 @@
 #include <cstdio>
 #include <cstring>
 #include <ctime>
-#include <fcntl.h>
 #include <fstream>
-#include <iostream>
 #include <iomanip>
-#include <omp.h>
+#include <iostream>
 #include <queue>
 #include <random>
 #include <set>
 #include <shared_mutex>
-#include <sys/stat.h>
 #include <sstream>
 #include <vector>

@@ -10,8 +10,8 @@
 #include <string>
 #include <vector>
 
-#include "disk_utils.h"
 #include "cached_io.h"
+#include "disk_utils.h"
 #include "utils.h"
 
 int main(int argc, char **argv) {
@@ -29,8 +29,8 @@ int main(int argc, char **argv) {
   std::string vamana_suffix(argv[2]);
   std::string idmaps_prefix(argv[3]);
   std::string idmaps_suffix(argv[4]);
-  _u64        nshards = (_u64) std::atoi(argv[5]);
-  _u32        max_degree = (_u64) std::atoi(argv[6]);
+  _u64 nshards = (_u64)std::atoi(argv[5]);
+  _u32 max_degree = (_u64)std::atoi(argv[6]);
   std::string output_index(argv[7]);
   std::string output_medoids(argv[8]);
 

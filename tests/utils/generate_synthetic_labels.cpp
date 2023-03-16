@@ -1,11 +1,13 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT license.
 
+#include <math.h>
+
+#include <boost/program_options.hpp>
+#include <cmath>
 #include <iostream>
 #include <random>
-#include <boost/program_options.hpp>
-#include <math.h>
-#include <cmath>
+
 #include "utils.h"
 
 namespace po = boost::program_options;
@@ -13,8 +15,8 @@ class ZipfDistribution {
  public:
   ZipfDistribution(int num_points, int num_labels)
       : uniform_zero_to_one(std::uniform_real_distribution<>(0.0, 1.0)),
-        num_points(num_points), num_labels(num_labels) {
-  }
+        num_points(num_points),
+        num_labels(num_labels) {}
 
   std::unordered_map<int, int> createDistributionMap() {
     std::unordered_map<int, int> map;
@@ -34,7 +36,7 @@ class ZipfDistribution {
            it != distribution_map.cend(); it = next_it) {
         next_it++;
         auto label_selection_probability = std::bernoulli_distribution(
-            distribution_factor / (double) it->first);
+            distribution_factor / (double)it->first);
         if (label_selection_probability(rand_engine)) {
           if (label_written) {
             outfile << ',';
@@ -69,16 +71,16 @@ class ZipfDistribution {
   }
 
  private:
-  int                                          num_labels;
-  const int                                    num_points;
-  const double                                 distribution_factor = 0.7;
-  std::knuth_b                                 rand_engine;
+  int num_labels;
+  const int num_points;
+  const double distribution_factor = 0.7;
+  std::knuth_b rand_engine;
   const std::uniform_real_distribution<double> uniform_zero_to_one;
 };
 
 int main(int argc, char** argv) {
   std::string output_file, distribution_type;
-  _u64        num_labels, num_points;
+  _u64 num_labels, num_points;
 
   try {
     po::options_description desc{"Arguments"};

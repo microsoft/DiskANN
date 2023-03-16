@@ -6,88 +6,86 @@
 #include <cassert>
 #include <cstdio>
 #include <iostream>
+
 #include "tsl/robin_map.h"
 #include "utils.h"
 #define MAX_EVENTS 1024
 
 namespace {
-  typedef struct io_event io_event_t;
-  typedef struct iocb     iocb_t;
+typedef struct io_event io_event_t;
+typedef struct iocb iocb_t;
 
-  void execute_io(io_context_t ctx, int fd, std::vector<AlignedRead> &read_reqs,
-                  uint64_t n_retries = 0) {
+void execute_io(io_context_t ctx, int fd, std::vector<AlignedRead> &read_reqs,
+                uint64_t n_retries = 0) {
 #ifdef DEBUG
-    for (auto &req : read_reqs) {
-      assert(IS_ALIGNED(req.len, 512));
-      // std::cout << "request:"<<req.offset<<":"<<req.len << std::endl;
-      assert(IS_ALIGNED(req.offset, 512));
-      assert(IS_ALIGNED(req.buf, 512));
-      // assert(malloc_usable_size(req.buf) >= req.len);
-    }
+  for (auto &req : read_reqs) {
+    assert(IS_ALIGNED(req.len, 512));
+    // std::cout << "request:"<<req.offset<<":"<<req.len << std::endl;
+    assert(IS_ALIGNED(req.offset, 512));
+    assert(IS_ALIGNED(req.buf, 512));
+    // assert(malloc_usable_size(req.buf) >= req.len);
+  }
 #endif
 
-    // break-up requests into chunks of size MAX_EVENTS each
-    uint64_t n_iters = ROUND_UP(read_reqs.size(), MAX_EVENTS) / MAX_EVENTS;
-    for (uint64_t iter = 0; iter < n_iters; iter++) {
-      uint64_t n_ops =
-          std::min((uint64_t) read_reqs.size() - (iter * MAX_EVENTS),
-                   (uint64_t) MAX_EVENTS);
-      std::vector<iocb_t *>    cbs(n_ops, nullptr);
-      std::vector<io_event_t>  evts(n_ops);
-      std::vector<struct iocb> cb(n_ops);
-      for (uint64_t j = 0; j < n_ops; j++) {
-        io_prep_pread(cb.data() + j, fd, read_reqs[j + iter * MAX_EVENTS].buf,
-                      read_reqs[j + iter * MAX_EVENTS].len,
-                      read_reqs[j + iter * MAX_EVENTS].offset);
-      }
+  // break-up requests into chunks of size MAX_EVENTS each
+  uint64_t n_iters = ROUND_UP(read_reqs.size(), MAX_EVENTS) / MAX_EVENTS;
+  for (uint64_t iter = 0; iter < n_iters; iter++) {
+    uint64_t n_ops = std::min((uint64_t)read_reqs.size() - (iter * MAX_EVENTS),
+                              (uint64_t)MAX_EVENTS);
+    std::vector<iocb_t *> cbs(n_ops, nullptr);
+    std::vector<io_event_t> evts(n_ops);
+    std::vector<struct iocb> cb(n_ops);
+    for (uint64_t j = 0; j < n_ops; j++) {
+      io_prep_pread(cb.data() + j, fd, read_reqs[j + iter * MAX_EVENTS].buf,
+                    read_reqs[j + iter * MAX_EVENTS].len,
+                    read_reqs[j + iter * MAX_EVENTS].offset);
+    }
 
-      // initialize `cbs` using `cb` array
-      //
+    // initialize `cbs` using `cb` array
+    //
 
-      for (uint64_t i = 0; i < n_ops; i++) {
-        cbs[i] = cb.data() + i;
-      }
+    for (uint64_t i = 0; i < n_ops; i++) {
+      cbs[i] = cb.data() + i;
+    }
 
-      uint64_t n_tries = 0;
-      while (n_tries <= n_retries) {
-        // issue reads
-        int64_t ret = io_submit(ctx, (int64_t) n_ops, cbs.data());
-        // if requests didn't get accepted
-        if (ret != (int64_t) n_ops) {
-          std::cerr << "io_submit() failed; returned " << ret
+    uint64_t n_tries = 0;
+    while (n_tries <= n_retries) {
+      // issue reads
+      int64_t ret = io_submit(ctx, (int64_t)n_ops, cbs.data());
+      // if requests didn't get accepted
+      if (ret != (int64_t)n_ops) {
+        std::cerr << "io_submit() failed; returned " << ret
+                  << ", expected=" << n_ops << ", ernno=" << errno << "="
+                  << ::strerror(-ret) << ", try #" << n_tries + 1;
+        std::cout << "ctx: " << ctx << "\n";
+        exit(-1);
+      } else {
+        // wait on io_getevents
+        ret = io_getevents(ctx, (int64_t)n_ops, (int64_t)n_ops, evts.data(),
+                           nullptr);
+        // if requests didn't complete
+        if (ret != (int64_t)n_ops) {
+          std::cerr << "io_getevents() failed; returned " << ret
                     << ", expected=" << n_ops << ", ernno=" << errno << "="
                     << ::strerror(-ret) << ", try #" << n_tries + 1;
-          std::cout << "ctx: " << ctx << "\n";
           exit(-1);
         } else {
-          // wait on io_getevents
-          ret = io_getevents(ctx, (int64_t) n_ops, (int64_t) n_ops, evts.data(),
-                             nullptr);
-          // if requests didn't complete
-          if (ret != (int64_t) n_ops) {
-            std::cerr << "io_getevents() failed; returned " << ret
-                      << ", expected=" << n_ops << ", ernno=" << errno << "="
-                      << ::strerror(-ret) << ", try #" << n_tries + 1;
-            exit(-1);
-          } else {
-            break;
-          }
+          break;
         }
       }
-      // disabled since req.buf could be an offset into another buf
-      /*
-      for (auto &req : read_reqs) {
-        // corruption check
-        assert(malloc_usable_size(req.buf) >= req.len);
-      }
-      */
     }
+    // disabled since req.buf could be an offset into another buf
+    /*
+    for (auto &req : read_reqs) {
+      // corruption check
+      assert(malloc_usable_size(req.buf) >= req.len);
+    }
+    */
   }
+}
 }  // namespace
 
-LinuxAlignedFileReader::LinuxAlignedFileReader() {
-  this->file_desc = -1;
-}
+LinuxAlignedFileReader::LinuxAlignedFileReader() { this->file_desc = -1; }
 
 LinuxAlignedFileReader::~LinuxAlignedFileReader() {
   int64_t ret;
@@ -119,7 +117,7 @@ io_context_t &LinuxAlignedFileReader::get_ctx() {
 }
 
 void LinuxAlignedFileReader::register_thread() {
-  auto                         my_id = std::this_thread::get_id();
+  auto my_id = std::this_thread::get_id();
   std::unique_lock<std::mutex> lk(ctx_mut);
   if (ctx_map.find(my_id) != ctx_map.end()) {
     std::cerr << "multiple calls to register_thread from the same thread"
@@ -127,7 +125,7 @@ void LinuxAlignedFileReader::register_thread() {
     return;
   }
   io_context_t ctx = 0;
-  int          ret = io_setup(MAX_EVENTS, &ctx);
+  int ret = io_setup(MAX_EVENTS, &ctx);
   if (ret != 0) {
     lk.unlock();
     assert(errno != EAGAIN);
@@ -143,7 +141,7 @@ void LinuxAlignedFileReader::register_thread() {
 }
 
 void LinuxAlignedFileReader::deregister_thread() {
-  auto                         my_id = std::this_thread::get_id();
+  auto my_id = std::this_thread::get_id();
   std::unique_lock<std::mutex> lk(ctx_mut);
   assert(ctx_map.find(my_id) != ctx_map.end());
 

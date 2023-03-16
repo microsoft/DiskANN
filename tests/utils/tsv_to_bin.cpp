@@ -2,13 +2,14 @@
 // Licensed under the MIT license.
 
 #include <iostream>
+
 #include "utils.h"
 
 void block_convert_float(std::ifstream& reader, std::ofstream& writer,
                          _u64 npts, _u64 ndims) {
   auto read_buf = new float[npts * (ndims + 1)];
 
-  auto  cursor = read_buf;
+  auto cursor = read_buf;
   float val;
 
   for (_u64 i = 0; i < npts; i++) {
@@ -18,7 +19,7 @@ void block_convert_float(std::ifstream& reader, std::ofstream& writer,
       cursor++;
     }
   }
-  writer.write((char*) read_buf, npts * ndims * sizeof(float));
+  writer.write((char*)read_buf, npts * ndims * sizeof(float));
   delete[] read_buf;
 }
 
@@ -27,16 +28,16 @@ void block_convert_int8(std::ifstream& reader, std::ofstream& writer, _u64 npts,
   auto read_buf = new int8_t[npts * (ndims + 1)];
 
   auto cursor = read_buf;
-  int  val;
+  int val;
 
   for (_u64 i = 0; i < npts; i++) {
     for (_u64 d = 0; d < ndims; ++d) {
       reader >> val;
-      *cursor = (int8_t) val;
+      *cursor = (int8_t)val;
       cursor++;
     }
   }
-  writer.write((char*) read_buf, npts * ndims * sizeof(uint8_t));
+  writer.write((char*)read_buf, npts * ndims * sizeof(uint8_t));
   delete[] read_buf;
 }
 
@@ -45,16 +46,16 @@ void block_convert_uint8(std::ifstream& reader, std::ofstream& writer,
   auto read_buf = new uint8_t[npts * (ndims + 1)];
 
   auto cursor = read_buf;
-  int  val;
+  int val;
 
   for (_u64 i = 0; i < npts; i++) {
     for (_u64 d = 0; d < ndims; ++d) {
       reader >> val;
-      *cursor = (uint8_t) val;
+      *cursor = (uint8_t)val;
       cursor++;
     }
   }
-  writer.write((char*) read_buf, npts * ndims * sizeof(uint8_t));
+  writer.write((char*)read_buf, npts * ndims * sizeof(uint8_t));
   delete[] read_buf;
 }
 
@@ -86,10 +87,10 @@ int main(int argc, char** argv) {
   _u64 nblks = ROUND_UP(npts, blk_size) / blk_size;
   std::cout << "# blks: " << nblks << std::endl;
   std::ofstream writer(argv[3], std::ios::binary);
-  auto          npts_s32 = (_u32) npts;
-  auto          ndims_s32 = (_u32) ndims;
-  writer.write((char*) &npts_s32, sizeof(_u32));
-  writer.write((char*) &ndims_s32, sizeof(_u32));
+  auto npts_s32 = (_u32)npts;
+  auto ndims_s32 = (_u32)ndims;
+  writer.write((char*)&npts_s32, sizeof(_u32));
+  writer.write((char*)&ndims_s32, sizeof(_u32));
 
   for (_u64 i = 0; i < nblks; i++) {
     _u64 cblk_size = std::min(npts - i * blk_size, blk_size);

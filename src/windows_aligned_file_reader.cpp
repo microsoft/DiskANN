@@ -4,7 +4,9 @@
 #ifdef _WINDOWS
 #ifndef USE_BING_INFRA
 #include "windows_aligned_file_reader.h"
+
 #include <iostream>
+
 #include "utils.h"
 
 #define SECTOR_LEN 4096
@@ -91,16 +93,16 @@ void WindowsAlignedFileReader::read(std::vector<AlignedRead>& read_reqs,
     // batch start/end
     _u64 batch_start = MAX_IO_DEPTH * i;
     _u64 batch_size =
-        std::min((_u64) (n_reqs - batch_start), (_u64) MAX_IO_DEPTH);
+        std::min((_u64)(n_reqs - batch_start), (_u64)MAX_IO_DEPTH);
 
     // fill OVERLAPPED and issue them
     for (_u64 j = 0; j < batch_size; j++) {
       AlignedRead& req = read_reqs[batch_start + j];
-      OVERLAPPED&  os = ctx.reqs[j];
+      OVERLAPPED& os = ctx.reqs[j];
 
-      _u64  offset = req.offset;
-      _u64  nbytes = req.len;
-      char* read_buf = (char*) req.buf;
+      _u64 offset = req.offset;
+      _u64 nbytes = req.len;
+      char* read_buf = (char*)req.buf;
       assert(IS_ALIGNED(read_buf, SECTOR_LEN));
       assert(IS_ALIGNED(offset, SECTOR_LEN));
       assert(IS_ALIGNED(nbytes, SECTOR_LEN));
@@ -120,9 +122,9 @@ void WindowsAlignedFileReader::read(std::vector<AlignedRead>& read_reqs,
                       << std::endl;
       }
     }
-    DWORD       n_read = 0;
-    _u64        n_complete = 0;
-    ULONG_PTR   completion_key = 0;
+    DWORD n_read = 0;
+    _u64 n_complete = 0;
+    ULONG_PTR completion_key = 0;
     OVERLAPPED* lp_os;
     while (n_complete < batch_size) {
       if (GetQueuedCompletionStatus(ctx.iocp, &n_read, &completion_key, &lp_os,
@@ -144,7 +146,7 @@ void WindowsAlignedFileReader::read(std::vector<AlignedRead>& read_reqs,
           std::this_thread::sleep_for(5us);
         } else {
           // completion packet for failed IO dequeued
-          auto              op_idx = lp_os - ctx.reqs.data();
+          auto op_idx = lp_os - ctx.reqs.data();
           std::stringstream stream;
           stream << "I/O failed , offset: " << read_reqs[op_idx].offset
                  << "with error code: " << GetLastError() << std::endl;

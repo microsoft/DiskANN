@@ -1,7 +1,11 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT license.
 
+#include <fcntl.h>
 #include <omp.h>
+#include <sys/stat.h>
+#include <time.h>
+
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -12,23 +16,20 @@
 #include <map>
 #include <sstream>
 #include <string>
-#include <fcntl.h>
-#include <sys/stat.h>
-#include <time.h>
 #include <typeinfo>
 
 #include "partition.h"
 #include "utils.h"
 
-template<typename T>
+template <typename T>
 int analyze_norm(std::string base_file) {
   std::cout << "Analyzing data norms" << std::endl;
-  T*   data;
+  T* data;
   _u64 npts, ndims;
   diskann::load_bin<T>(base_file, data, npts, ndims);
   std::vector<float> norms(npts, 0);
 #pragma omp parallel for schedule(dynamic)
-  for (_s64 i = 0; i < (_s64) npts; i++) {
+  for (_s64 i = 0; i < (_s64)npts; i++) {
     for (_u32 d = 0; d < ndims; d++)
       norms[i] += data[i * ndims + d] * data[i * ndims + d];
     norms[i] = std::sqrt(norms[i]);
@@ -43,15 +44,15 @@ int analyze_norm(std::string base_file) {
   return 0;
 }
 
-template<typename T>
+template <typename T>
 int normalize_base(std::string base_file, std::string out_file) {
   std::cout << "Normalizing base" << std::endl;
-  T*   data;
+  T* data;
   _u64 npts, ndims;
   diskann::load_bin<T>(base_file, data, npts, ndims);
   //  std::vector<float> norms(npts, 0);
 #pragma omp parallel for schedule(dynamic)
-  for (_s64 i = 0; i < (_s64) npts; i++) {
+  for (_s64 i = 0; i < (_s64)npts; i++) {
     float pt_norm = 0;
     for (_u32 d = 0; d < ndims; d++)
       pt_norm += data[i * ndims + d] * data[i * ndims + d];
@@ -64,17 +65,17 @@ int normalize_base(std::string base_file, std::string out_file) {
   return 0;
 }
 
-template<typename T>
+template <typename T>
 int augment_base(std::string base_file, std::string out_file,
                  bool prep_base = true) {
   std::cout << "Analyzing data norms" << std::endl;
-  T*   data;
+  T* data;
   _u64 npts, ndims;
   diskann::load_bin<T>(base_file, data, npts, ndims);
   std::vector<float> norms(npts, 0);
-  float              max_norm = 0;
+  float max_norm = 0;
 #pragma omp parallel for schedule(dynamic)
-  for (_s64 i = 0; i < (_s64) npts; i++) {
+  for (_s64 i = 0; i < (_s64)npts; i++) {
     for (_u32 d = 0; d < ndims; d++)
       norms[i] += data[i * ndims + d] * data[i * ndims + d];
     max_norm = norms[i] > max_norm ? norms[i] : max_norm;
@@ -82,7 +83,7 @@ int augment_base(std::string base_file, std::string out_file,
   //  std::sort(norms.begin(), norms.end());
   max_norm = std::sqrt(max_norm);
   std::cout << "Max norm: " << max_norm << std::endl;
-  T*   new_data;
+  T* new_data;
   _u64 newdims = ndims + 1;
   new_data = new T[npts * newdims];
   for (_u64 i = 0; i < npts; i++) {
@@ -110,10 +111,10 @@ int augment_base(std::string base_file, std::string out_file,
   return 0;
 }
 
-template<typename T>
+template <typename T>
 int aux_main(char** argv) {
   std::string base_file(argv[2]);
-  _u32        option = atoi(argv[3]);
+  _u32 option = atoi(argv[3]);
   if (option == 1)
     analyze_norm<T>(base_file);
   else if (option == 2)

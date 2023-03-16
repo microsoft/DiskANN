@@ -1,16 +1,17 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT license.
 
-#include "logger.h"
 #include "memory_mapper.h"
+
 #include <iostream>
 #include <sstream>
+
+#include "logger.h"
 
 using namespace diskann;
 
 MemoryMapper::MemoryMapper(const std::string& filename)
-    : MemoryMapper(filename.c_str()) {
-}
+    : MemoryMapper(filename.c_str()) {}
 
 MemoryMapper::MemoryMapper(const char* filename) {
 #ifndef _WINDOWS
@@ -26,7 +27,7 @@ MemoryMapper::MemoryMapper(const char* filename) {
   }
   _fileSize = sb.st_size;
   diskann::cout << "File Size: " << _fileSize << std::endl;
-  _buf = (char*) mmap(NULL, _fileSize, PROT_READ, MAP_PRIVATE, _fd, 0);
+  _buf = (char*)mmap(NULL, _fileSize, PROT_READ, MAP_PRIVATE, _fd, 0);
 #else
   _bareFile = CreateFileA(filename, GENERIC_READ | GENERIC_EXECUTE, 0, NULL,
                           OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
@@ -47,7 +48,7 @@ MemoryMapper::MemoryMapper(const char* filename) {
     throw std::exception(message.str().c_str());
   }
 
-  _buf = (char*) MapViewOfFile(_fd, FILE_MAP_READ, 0, 0, 0);
+  _buf = (char*)MapViewOfFile(_fd, FILE_MAP_READ, 0, 0, 0);
   if (_buf == nullptr) {
     std::ostringstream message;
     message << "MapViewOfFile(" << filename
@@ -65,13 +66,9 @@ MemoryMapper::MemoryMapper(const char* filename) {
   }
 #endif
 }
-char* MemoryMapper::getBuf() {
-  return _buf;
-}
+char* MemoryMapper::getBuf() { return _buf; }
 
-size_t MemoryMapper::getFileSize() {
-  return _fileSize;
-}
+size_t MemoryMapper::getFileSize() { return _fileSize; }
 
 MemoryMapper::~MemoryMapper() {
 #ifndef _WINDOWS

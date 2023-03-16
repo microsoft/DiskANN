@@ -5,8 +5,8 @@
 
 #define MAX_IO_DEPTH 128
 
-#include <vector>
 #include <atomic>
+#include <vector>
 
 #ifndef _WINDOWS
 #include <fcntl.h>
@@ -19,13 +19,14 @@ typedef io_context_t IOContext;
 
 #ifndef USE_BING_INFRA
 struct IOContext {
-  HANDLE                  fhandle = NULL;
-  HANDLE                  iocp = NULL;
+  HANDLE fhandle = NULL;
+  HANDLE iocp = NULL;
   std::vector<OVERLAPPED> reqs;
 };
 #else
-#include "IDiskPriorityIO.h"
 #include <atomic>
+
+#include "IDiskPriorityIO.h"
 // TODO: Caller code is very callous about copying IOContext objects
 // all over the place. MUST verify that it won't cause leaks/logical
 // errors.
@@ -34,9 +35,9 @@ struct IOContext {
 struct IOContext {
   enum Status { READ_WAIT = 0, READ_SUCCESS, READ_FAILED, PROCESS_COMPLETE };
 
-  std::shared_ptr<ANNIndex::IDiskPriorityIO>               m_pDiskIO = nullptr;
-  std::shared_ptr<std::vector<ANNIndex::AsyncReadRequest>> m_pRequests;
-  std::shared_ptr<std::vector<Status>>                     m_pRequestsStatus;
+  std::shared_ptr<ANNIndex::IDiskPriorityIO> m_pDiskIO = nullptr;
+  std::shared_ptr<std::vector<ANNIndex::AsyncReadRequest> > m_pRequests;
+  std::shared_ptr<std::vector<Status> > m_pRequestsStatus;
 
   // waitonaddress on this memory to wait for IO completion signal
   // reader should signal this memory after IO completion
@@ -56,9 +57,11 @@ struct IOContext {
 #endif
 
 #include <malloc.h>
+
 #include <cstdio>
 #include <mutex>
 #include <thread>
+
 #include "tsl/robin_map.h"
 #include "utils.h"
 
@@ -66,10 +69,9 @@ struct IOContext {
 struct AlignedRead {
   uint64_t offset;  // where to read from
   uint64_t len;     // how much to read
-  void*    buf;     // where to read into
+  void* buf;        // where to read into
 
-  AlignedRead() : offset(0), len(0), buf(nullptr) {
-  }
+  AlignedRead() : offset(0), len(0), buf(nullptr) {}
 
   AlignedRead(uint64_t offset, uint64_t len, void* buf)
       : offset(offset), len(len), buf(buf) {
@@ -83,7 +85,7 @@ struct AlignedRead {
 class AlignedFileReader {
  protected:
   tsl::robin_map<std::thread::id, IOContext> ctx_map;
-  std::mutex                                 ctx_mut;
+  std::mutex ctx_mut;
 
  public:
   // returns the thread-specific context

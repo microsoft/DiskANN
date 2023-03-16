@@ -1,14 +1,15 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT license.
 
+#include <omp.h>
+#include <string.h>
+
+#include <algorithm>
+#include <boost/program_options.hpp>
 #include <cstring>
 #include <iomanip>
-#include <algorithm>
 #include <numeric>
-#include <omp.h>
 #include <set>
-#include <string.h>
-#include <boost/program_options.hpp>
 
 #ifndef _WINDOWS
 #include <sys/mman.h>
@@ -17,13 +18,13 @@
 #include <unistd.h>
 #endif
 
-#include "utils.h"
 #include "index.h"
 #include "memory_mapper.h"
+#include "utils.h"
 
 namespace po = boost::program_options;
 
-template<typename T>
+template <typename T>
 void bfs_count(const std::string& index_path, unsigned data_dims) {
   using TagT = uint32_t;
   using LabelT = uint32_t;
@@ -37,7 +38,7 @@ void bfs_count(const std::string& index_path, unsigned data_dims) {
 
 int main(int argc, char** argv) {
   std::string data_type, index_path_prefix;
-  unsigned    data_dims;
+  unsigned data_dims;
 
   po::options_description desc{"Arguments"};
   try {

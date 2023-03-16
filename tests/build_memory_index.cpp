@@ -2,8 +2,9 @@
 // Licensed under the MIT license.
 
 #include <omp.h>
-#include <cstring>
+
 #include <boost/program_options.hpp>
+#include <cstring>
 
 #include "index.h"
 #include "utils.h"
@@ -15,12 +16,12 @@
 #include <Windows.h>
 #endif
 
-#include "memory_mapper.h"
 #include "ann_exception.h"
+#include "memory_mapper.h"
 
 namespace po = boost::program_options;
 
-template<typename T, typename TagT = uint32_t, typename LabelT = uint32_t>
+template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t>
 int build_in_memory_index(const diskann::Metric& metric,
                           const std::string& data_path, const unsigned R,
                           const unsigned L, const float alpha,
@@ -47,7 +48,7 @@ int build_in_memory_index(const diskann::Metric& metric,
   diskann::Index<T, TagT, LabelT> index(metric, data_dim, data_num, false,
                                         false, false, use_pq_build,
                                         num_pq_bytes, use_opq);
-  auto                            s = std::chrono::high_resolution_clock::now();
+  auto s = std::chrono::high_resolution_clock::now();
   if (label_file == "") {
     index.build(data_path.c_str(), data_num, paras);
   } else {
@@ -65,8 +66,7 @@ int build_in_memory_index(const diskann::Metric& metric,
 
   std::cout << "Indexing time: " << diff.count() << "\n";
   index.save(save_path.c_str());
-  if (label_file != "")
-    std::remove(labels_file_to_use.c_str());
+  if (label_file != "") std::remove(labels_file_to_use.c_str());
   return 0;
 }
 
@@ -74,8 +74,8 @@ int main(int argc, char** argv) {
   std::string data_type, dist_fn, data_path, index_path_prefix, label_file,
       universal_label, label_type;
   unsigned num_threads, R, L, Lf, build_PQ_bytes;
-  float    alpha;
-  bool     use_pq_build, use_opq;
+  float alpha;
+  bool use_pq_build, use_opq;
 
   po::options_description desc{"Arguments"};
   try {

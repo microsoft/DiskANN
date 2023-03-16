@@ -1,7 +1,11 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT license.
 
+#include <fcntl.h>
 #include <omp.h>
+#include <sys/stat.h>
+#include <time.h>
+
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -12,19 +16,16 @@
 #include <map>
 #include <sstream>
 #include <string>
+#include <typeinfo>
+
 #include "partition.h"
 #include "utils.h"
 
-#include <fcntl.h>
-#include <sys/stat.h>
-#include <time.h>
-#include <typeinfo>
-
-template<typename T>
+template <typename T>
 int aux_main(char** argv) {
   std::string base_file(argv[2]);
   std::string output_prefix(argv[3]);
-  float       sampling_rate = (float) (std::atof(argv[4]));
+  float sampling_rate = (float)(std::atof(argv[4]));
   gen_random_slice<T>(base_file, output_prefix, sampling_rate);
   return 0;
 }

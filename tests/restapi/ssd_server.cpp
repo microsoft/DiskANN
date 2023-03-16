@@ -1,26 +1,26 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT license.
 
+#include <omp.h>
+#include <restapi/server.h>
+
+#include <boost/program_options.hpp>
+#include <codecvt>
+#include <cstdlib>
 #include <ctime>
 #include <functional>
 #include <iomanip>
 #include <string>
-#include <cstdlib>
-#include <codecvt>
-#include <boost/program_options.hpp>
-#include <omp.h>
-
-#include <restapi/server.h>
 
 using namespace diskann;
 namespace po = boost::program_options;
 
-std::unique_ptr<Server>                           g_httpServer(nullptr);
+std::unique_ptr<Server> g_httpServer(nullptr);
 std::vector<std::unique_ptr<diskann::BaseSearch>> g_ssdSearch;
 
 void setup(const utility::string_t& address, const std::string& typestring) {
   web::http::uri_builder uriBldr(address);
-  auto                   uri = uriBldr.to_uri();
+  auto uri = uriBldr.to_uri();
 
   std::cout << "Attempting to start server on " << uri.to_string() << std::endl;
 
@@ -38,8 +38,8 @@ void teardown(const utility::string_t& address) {
 
 int main(int argc, char* argv[]) {
   std::string data_type, index_path_prefix, address, dist_fn, tags_file;
-  uint32_t    num_nodes_to_cache;
-  uint32_t    num_threads;
+  uint32_t num_nodes_to_cache;
+  uint32_t num_threads;
 
   po::options_description desc{"Arguments"};
   try {

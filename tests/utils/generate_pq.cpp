@@ -2,12 +2,12 @@
 // Licensed under the MIT license.
 
 #include "math_utils.h"
-#include "pq.h"
 #include "partition.h"
+#include "pq.h"
 
 #define KMEANS_ITERS_FOR_PQ 15
 
-template<typename T>
+template <typename T>
 bool generate_pq(const std::string& data_path,
                  const std::string& index_prefix_path,
                  const size_t num_pq_centers, const size_t num_pq_chunks,
@@ -54,10 +54,10 @@ int main(int argc, char** argv) {
   } else {
     const std::string data_path(argv[2]);
     const std::string index_prefix_path(argv[3]);
-    const size_t      num_pq_centers = 256;
-    const size_t      num_pq_chunks = (size_t) atoi(argv[4]);
-    const float       sampling_rate = atof(argv[5]);
-    const bool        opq = atoi(argv[6]) == 0 ? false : true;
+    const size_t num_pq_centers = 256;
+    const size_t num_pq_chunks = (size_t)atoi(argv[4]);
+    const float sampling_rate = atof(argv[5]);
+    const bool opq = atoi(argv[6]) == 0 ? false : true;
 
     if (std::string(argv[1]) == std::string("float"))
       generate_pq<float>(data_path, index_prefix_path, num_pq_centers,

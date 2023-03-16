@@ -2,13 +2,14 @@
 // Licensed under the MIT license.
 
 #include <index.h>
-#include <numeric>
 #include <omp.h>
 #include <string.h>
 #include <time.h>
 #include <timer.h>
+
 #include <boost/program_options.hpp>
 #include <future>
+#include <numeric>
 
 #include "utils.h"
 
@@ -24,21 +25,21 @@ namespace po = boost::program_options;
 
 // load_aligned_bin modified to read pieces of the file, but using ifstream
 // instead of cached_ifstream.
-template<typename T>
+template <typename T>
 inline void load_aligned_bin_part(const std::string& bin_file, T* data,
                                   size_t offset_points, size_t points_to_read) {
   diskann::Timer timer;
-  std::ifstream  reader;
+  std::ifstream reader;
   reader.exceptions(std::ios::failbit | std::ios::badbit);
   reader.open(bin_file, std::ios::binary | std::ios::ate);
   size_t actual_file_size = reader.tellg();
   reader.seekg(0, std::ios::beg);
 
   int npts_i32, dim_i32;
-  reader.read((char*) &npts_i32, sizeof(int));
-  reader.read((char*) &dim_i32, sizeof(int));
-  size_t npts = (unsigned) npts_i32;
-  size_t dim = (unsigned) dim_i32;
+  reader.read((char*)&npts_i32, sizeof(int));
+  reader.read((char*)&dim_i32, sizeof(int));
+  size_t npts = (unsigned)npts_i32;
+  size_t dim = (unsigned)dim_i32;
 
   size_t expected_actual_file_size =
       npts * dim * sizeof(T) + 2 * sizeof(uint32_t);
@@ -68,7 +69,7 @@ inline void load_aligned_bin_part(const std::string& bin_file, T* data,
   const size_t rounded_dim = ROUND_UP(dim, 8);
 
   for (size_t i = 0; i < points_to_read; i++) {
-    reader.read((char*) (data + i * rounded_dim), dim * sizeof(T));
+    reader.read((char*)(data + i * rounded_dim), dim * sizeof(T));
     memset(data + i * rounded_dim + dim, 0, (rounded_dim - dim) * sizeof(T));
   }
   reader.close();
@@ -91,14 +92,14 @@ std::string get_save_filename(const std::string& save_path,
   return final_path;
 }
 
-template<typename T, typename TagT>
+template <typename T, typename TagT>
 void insert_till_next_checkpoint(diskann::Index<T, TagT>& index, size_t start,
                                  size_t end, size_t thread_count, T* data,
                                  size_t aligned_dim) {
   diskann::Timer insert_timer;
 
 #pragma omp parallel for num_threads(thread_count) schedule(dynamic)
-  for (int64_t j = start; j < (int64_t) end; j++) {
+  for (int64_t j = start; j < (int64_t)end; j++) {
     index.insert_point(&data[(j - start) * aligned_dim],
                        1 + static_cast<TagT>(j));
   }
@@ -109,10 +110,10 @@ void insert_till_next_checkpoint(diskann::Index<T, TagT>& index, size_t start,
             << " per thread)\n ";
 }
 
-template<typename T, typename TagT>
+template <typename T, typename TagT>
 void delete_from_beginning(diskann::Index<T, TagT>& index,
-                           diskann::Parameters&     delete_params,
-                           size_t                   points_to_skip,
+                           diskann::Parameters& delete_params,
+                           size_t points_to_skip,
                            size_t points_to_delete_from_beginning) {
   try {
     std::cout << std::endl
@@ -140,7 +141,7 @@ void delete_from_beginning(diskann::Index<T, TagT>& index,
   }
 }
 
-template<typename T>
+template <typename T>
 void build_incremental_index(
     const std::string& data_path, const unsigned L, const unsigned R,
     const float alpha, const unsigned thread_count, size_t points_to_skip,
@@ -150,7 +151,7 @@ void build_incremental_index(
     size_t points_to_delete_from_beginning, size_t start_deletes_after,
     bool concurrent) {
   const unsigned C = 500;
-  const bool     saturate_graph = false;
+  const bool saturate_graph = false;
 
   diskann::Parameters params;
   params.Set<unsigned>("L", L);
@@ -186,7 +187,7 @@ void build_incremental_index(
   }
 
   using TagT = uint32_t;
-  unsigned   num_frozen = 1;
+  unsigned num_frozen = 1;
   const bool enable_tags = true;
 
   auto num_frozen_str = getenv("TTS_NUM_FROZEN");
@@ -199,7 +200,7 @@ void build_incremental_index(
   diskann::Index<T, TagT> index(diskann::L2, dim, max_points_to_insert, true,
                                 params, params, enable_tags, concurrent);
 
-  size_t       current_point_offset = points_to_skip;
+  size_t current_point_offset = points_to_skip;
   const size_t last_point_threshold = points_to_skip + max_points_to_insert;
 
   if (beginning_index_size > max_points_to_insert) {
@@ -216,7 +217,7 @@ void build_incremental_index(
   }
 
   T* data = nullptr;
-  diskann::alloc_aligned((void**) &data,
+  diskann::alloc_aligned((void**)&data,
                          std::max(points_per_checkpoint, beginning_index_size) *
                              aligned_dim * sizeof(T),
                          8 * sizeof(T));
@@ -255,8 +256,8 @@ void build_incremental_index(
   }
 
   if (concurrent) {
-    int               sub_threads = (thread_count + 1) / 2;
-    bool              delete_launched = false;
+    int sub_threads = (thread_count + 1) / 2;
+    bool delete_launched = false;
     std::future<void> delete_task;
 
     diskann::Timer timer;
@@ -357,9 +358,9 @@ void build_incremental_index(
 
 int main(int argc, char** argv) {
   std::string data_type, dist_fn, data_path, index_path_prefix;
-  unsigned    num_threads, R, L;
-  float       alpha, start_point_norm;
-  size_t      points_to_skip, max_points_to_insert, beginning_index_size,
+  unsigned num_threads, R, L;
+  float alpha, start_point_norm;
+  size_t points_to_skip, max_points_to_insert, beginning_index_size,
       points_per_checkpoint, checkpoints_per_snapshot,
       points_to_delete_from_beginning, start_deletes_after;
   bool concurrent;

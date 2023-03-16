@@ -7,14 +7,13 @@
 #include <iostream>
 #include <sstream>
 
-#include "logger.h"
 #include "ann_exception.h"
+#include "logger.h"
 
 // sequential cached reads
 class cached_ifstream {
  public:
-  cached_ifstream() {
-  }
+  cached_ifstream() {}
   cached_ifstream(const std::string& filename, uint64_t cacheSize)
       : cache_size(cacheSize), cur_off(0) {
     reader.exceptions(std::ifstream::failbit | std::ifstream::badbit);
@@ -46,9 +45,7 @@ class cached_ifstream {
     }
   }
 
-  size_t get_file_size() {
-    return fsize;
-  }
+  size_t get_file_size() { return fsize; }
 
   void read(char* read_buf, uint64_t n_bytes) {
     assert(cache_buf != nullptr);
@@ -121,9 +118,7 @@ class cached_ofstream {
     }
   }
 
-  ~cached_ofstream() {
-    this->close();
-  }
+  ~cached_ofstream() { this->close(); }
 
   void close() {
     // dump any remaining data in memory
@@ -136,14 +131,11 @@ class cached_ofstream {
       cache_buf = nullptr;
     }
 
-    if (writer.is_open())
-      writer.close();
+    if (writer.is_open()) writer.close();
     diskann::cout << "Finished writing " << fsize << "B" << std::endl;
   }
 
-  size_t get_file_size() {
-    return fsize;
-  }
+  size_t get_file_size() { return fsize; }
   // writes n_bytes from write_buf to the underlying ofstream/cache
   void write(char* write_buf, uint64_t n_bytes) {
     assert(cache_buf != nullptr);

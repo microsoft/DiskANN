@@ -1,25 +1,27 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT license.
 
+#include <omp.h>
+
 #include <atomic>
+#include <boost/program_options.hpp>
 #include <cstring>
 #include <iomanip>
-#include <omp.h>
 #include <set>
-#include <boost/program_options.hpp>
 
-#include "index.h"
 #include "disk_utils.h"
+#include "index.h"
 #include "math_utils.h"
 #include "memory_mapper.h"
-#include "pq_flash_index.h"
 #include "partition.h"
+#include "pq_flash_index.h"
 #include "timer.h"
 
 #ifndef _WINDOWS
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
+
 #include "linux_aligned_file_reader.h"
 #else
 #ifdef USE_BING_INFRA
@@ -47,13 +49,13 @@ void print_stats(std::string category, std::vector<float> percentiles,
   diskann::cout << std::endl;
 }
 
-template<typename T, typename LabelT = uint32_t>
-int search_disk_index(diskann::Metric&   metric,
+template <typename T, typename LabelT = uint32_t>
+int search_disk_index(diskann::Metric& metric,
                       const std::string& index_path_prefix,
                       const std::string& query_file, std::string& gt_file,
                       const unsigned num_threads, const float search_range,
-                      const unsigned               beamwidth,
-                      const unsigned               num_nodes_to_cache,
+                      const unsigned beamwidth,
+                      const unsigned num_nodes_to_cache,
                       const std::vector<unsigned>& Lvec) {
   std::string pq_prefix = index_path_prefix + "_pq";
   std::string disk_index_file = index_path_prefix + "_disk.index";
@@ -66,7 +68,7 @@ int search_disk_index(diskann::Metric&   metric,
     diskann::cout << " beamwidth: " << beamwidth << std::endl;
 
   // load query bin
-  T*                             query = nullptr;
+  T* query = nullptr;
   std::vector<std::vector<_u32>> groundtruth_ids;
   size_t query_num, query_dim, query_aligned_dim, gt_num;
   diskann::load_aligned_bin<T>(query_file, query, query_num, query_dim,
@@ -122,35 +124,35 @@ int search_disk_index(diskann::Metric&   metric,
 
   uint64_t warmup_L = 20;
   uint64_t warmup_num = 0, warmup_dim = 0, warmup_aligned_dim = 0;
-  T*       warmup = nullptr;
+  T* warmup = nullptr;
 
   if (WARMUP) {
     if (file_exists(warmup_query_file)) {
       diskann::load_aligned_bin<T>(warmup_query_file, warmup, warmup_num,
                                    warmup_dim, warmup_aligned_dim);
     } else {
-      warmup_num = (std::min)((_u32) 150000, (_u32) 15000 * num_threads);
+      warmup_num = (std::min)((_u32)150000, (_u32)15000 * num_threads);
       warmup_dim = query_dim;
       warmup_aligned_dim = query_aligned_dim;
-      diskann::alloc_aligned(((void**) &warmup),
+      diskann::alloc_aligned(((void**)&warmup),
                              warmup_num * warmup_aligned_dim * sizeof(T),
                              8 * sizeof(T));
       std::memset(warmup, 0, warmup_num * warmup_aligned_dim * sizeof(T));
-      std::random_device              rd;
-      std::mt19937                    gen(rd());
+      std::random_device rd;
+      std::mt19937 gen(rd());
       std::uniform_int_distribution<> dis(-128, 127);
       for (uint32_t i = 0; i < warmup_num; i++) {
         for (uint32_t d = 0; d < warmup_dim; d++) {
-          warmup[i * warmup_aligned_dim + d] = (T) dis(gen);
+          warmup[i * warmup_aligned_dim + d] = (T)dis(gen);
         }
       }
     }
     diskann::cout << "Warming up index... " << std::flush;
     std::vector<uint64_t> warmup_result_ids_64(warmup_num, 0);
-    std::vector<float>    warmup_result_dists(warmup_num, 0);
+    std::vector<float> warmup_result_dists(warmup_num, 0);
 
 #pragma omp parallel for schedule(dynamic, 1)
-    for (_s64 i = 0; i < (int64_t) warmup_num; i++) {
+    for (_s64 i = 0; i < (int64_t)warmup_num; i++) {
       _pFlashIndex->cached_beam_search(warmup + (i * warmup_aligned_dim), 1,
                                        warmup_L,
                                        warmup_result_ids_64.data() + (i * 1),
@@ -198,10 +200,10 @@ int search_disk_index(diskann::Metric&   metric,
 
     auto s = std::chrono::high_resolution_clock::now();
 #pragma omp parallel for schedule(dynamic, 1)
-    for (_s64 i = 0; i < (int64_t) query_num; i++) {
-      std::vector<_u64>  indices;
+    for (_s64 i = 0; i < (int64_t)query_num; i++) {
+      std::vector<_u64> indices;
       std::vector<float> distances;
-      _u32               res_count = _pFlashIndex->range_search(
+      _u32 res_count = _pFlashIndex->range_search(
           query + (i * query_aligned_dim), search_range, L, max_list_size,
           indices, distances, optimized_beamwidth, stats + i);
       query_result_ids[test_id][i].reserve(res_count);
@@ -209,7 +211,7 @@ int search_disk_index(diskann::Metric&   metric,
       for (_u32 idx = 0; idx < res_count; idx++)
         query_result_ids[test_id][i][idx] = indices[idx];
     }
-    auto                          e = std::chrono::high_resolution_clock::now();
+    auto e = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> diff = e - s;
     auto qps = (1.0 * query_num) / (1.0 * diff.count());
 
@@ -259,17 +261,16 @@ int search_disk_index(diskann::Metric&   metric,
   diskann::cout << "Done searching. " << std::endl;
 
   diskann::aligned_free(query);
-  if (warmup != nullptr)
-    diskann::aligned_free(warmup);
+  if (warmup != nullptr) diskann::aligned_free(warmup);
   return 0;
 }
 
 int main(int argc, char** argv) {
   std::string data_type, dist_fn, index_path_prefix, result_path_prefix,
       query_file, gt_file;
-  unsigned              num_threads, W, num_nodes_to_cache;
+  unsigned num_threads, W, num_nodes_to_cache;
   std::vector<unsigned> Lvec;
-  float                 range;
+  float range;
 
   po::options_description desc{"Arguments"};
   try {

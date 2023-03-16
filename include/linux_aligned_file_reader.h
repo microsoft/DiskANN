@@ -8,9 +8,9 @@
 
 class LinuxAlignedFileReader : public AlignedFileReader {
  private:
-  uint64_t     file_sz;
-  FileHandle   file_desc;
-  io_context_t bad_ctx = (io_context_t) -1;
+  uint64_t file_sz;
+  FileHandle file_desc;
+  io_context_t bad_ctx = (io_context_t)-1;
 
  public:
   LinuxAlignedFileReader();
