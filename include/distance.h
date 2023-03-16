@@ -111,8 +111,9 @@ template <typename T> class DistanceInnerProduct : public Distance<T>
 };
 
 template <typename T> class DistanceFastL2 : public DistanceInnerProduct<T>
-{ // currently defined only for float.
-  // templated for future use.
+{
+    // currently defined only for float.
+    // templated for future use.
   public:
     float norm(const T *a, unsigned size) const;
     float compare(const T *a, const T *b, float norm, unsigned size) const;
