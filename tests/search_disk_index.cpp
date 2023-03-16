@@ -1,23 +1,22 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT license.
 
+#include "common_includes.h"
 #include <boost/program_options.hpp>
 
-#include "common_includes.h"
-#include "disk_utils.h"
 #include "index.h"
+#include "disk_utils.h"
 #include "math_utils.h"
 #include "memory_mapper.h"
 #include "partition.h"
-#include "percentile_stats.h"
 #include "pq_flash_index.h"
 #include "timer.h"
+#include "percentile_stats.h"
 
 #ifndef _WINDOWS
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
-
 #include "linux_aligned_file_reader.h"
 #else
 #ifdef USE_BING_INFRA
@@ -45,7 +44,7 @@ void print_stats(std::string category, std::vector<float> percentiles,
   diskann::cout << std::endl;
 }
 
-template <typename T, typename LabelT = uint32_t>
+template<typename T, typename LabelT = uint32_t>
 int search_disk_index(
     diskann::Metric& metric, const std::string& index_path_prefix,
     const std::string& result_output_prefix, const std::string& query_file,
@@ -65,15 +64,16 @@ int search_disk_index(
     diskann::cout << ", io_limit: " << search_io_limit << "." << std::endl;
 
   bool filtered_search = false;
-  if (filter_label != "") filtered_search = true;
+  if (filter_label != "")
+    filtered_search = true;
 
   std::string warmup_query_file = index_path_prefix + "_sample_data.bin";
 
   // load query bin
-  T* query = nullptr;
+  T*        query = nullptr;
   unsigned* gt_ids = nullptr;
-  float* gt_dists = nullptr;
-  size_t query_num, query_dim, query_aligned_dim, gt_num, gt_dim;
+  float*    gt_dists = nullptr;
+  size_t    query_num, query_dim, query_aligned_dim, gt_num, gt_dim;
   diskann::load_aligned_bin<T>(query_file, query, query_num, query_dim,
                                query_aligned_dim);
 
@@ -124,35 +124,35 @@ int search_disk_index(
 
   uint64_t warmup_L = 20;
   uint64_t warmup_num = 0, warmup_dim = 0, warmup_aligned_dim = 0;
-  T* warmup = nullptr;
+  T*       warmup = nullptr;
 
   if (WARMUP) {
     if (file_exists(warmup_query_file)) {
       diskann::load_aligned_bin<T>(warmup_query_file, warmup, warmup_num,
                                    warmup_dim, warmup_aligned_dim);
     } else {
-      warmup_num = (std::min)((_u32)150000, (_u32)15000 * num_threads);
+      warmup_num = (std::min)((_u32) 150000, (_u32) 15000 * num_threads);
       warmup_dim = query_dim;
       warmup_aligned_dim = query_aligned_dim;
-      diskann::alloc_aligned(((void**)&warmup),
+      diskann::alloc_aligned(((void**) &warmup),
                              warmup_num * warmup_aligned_dim * sizeof(T),
                              8 * sizeof(T));
       std::memset(warmup, 0, warmup_num * warmup_aligned_dim * sizeof(T));
-      std::random_device rd;
-      std::mt19937 gen(rd());
+      std::random_device              rd;
+      std::mt19937                    gen(rd());
       std::uniform_int_distribution<> dis(-128, 127);
       for (uint32_t i = 0; i < warmup_num; i++) {
         for (uint32_t d = 0; d < warmup_dim; d++) {
-          warmup[i * warmup_aligned_dim + d] = (T)dis(gen);
+          warmup[i * warmup_aligned_dim + d] = (T) dis(gen);
         }
       }
     }
     diskann::cout << "Warming up index... " << std::flush;
     std::vector<uint64_t> warmup_result_ids_64(warmup_num, 0);
-    std::vector<float> warmup_result_dists(warmup_num, 0);
+    std::vector<float>    warmup_result_dists(warmup_num, 0);
 
 #pragma omp parallel for schedule(dynamic, 1)
-    for (_s64 i = 0; i < (int64_t)warmup_num; i++) {
+    for (_s64 i = 0; i < (int64_t) warmup_num; i++) {
       _pFlashIndex->cached_beam_search(warmup + (i * warmup_aligned_dim), 1,
                                        warmup_L,
                                        warmup_result_ids_64.data() + (i * 1),
@@ -179,7 +179,7 @@ int search_disk_index(
       << std::endl;
 
   std::vector<std::vector<uint32_t>> query_result_ids(Lvec.size());
-  std::vector<std::vector<float>> query_result_dists(Lvec.size());
+  std::vector<std::vector<float>>    query_result_dists(Lvec.size());
 
   uint32_t optimized_beamwidth = 2;
 
@@ -208,10 +208,10 @@ int search_disk_index(
     auto stats = new diskann::QueryStats[query_num];
 
     std::vector<uint64_t> query_result_ids_64(recall_at * query_num);
-    auto s = std::chrono::high_resolution_clock::now();
+    auto                  s = std::chrono::high_resolution_clock::now();
 
 #pragma omp parallel for schedule(dynamic, 1)
-    for (_s64 i = 0; i < (int64_t)query_num; i++) {
+    for (_s64 i = 0; i < (int64_t) query_num; i++) {
       if (!filtered_search) {
         _pFlashIndex->cached_beam_search(
             query + (i * query_aligned_dim), recall_at, L,
@@ -229,7 +229,7 @@ int search_disk_index(
             stats + i);
       }
     }
-    auto e = std::chrono::high_resolution_clock::now();
+    auto                          e = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> diff = e - s;
     float qps = (1.0 * query_num) / (1.0 * diff.count());
 
@@ -275,7 +275,8 @@ int search_disk_index(
   diskann::cout << "Done searching. Now saving results " << std::endl;
   _u64 test_id = 0;
   for (auto L : Lvec) {
-    if (L < recall_at) continue;
+    if (L < recall_at)
+      continue;
 
     std::string cur_result_path =
         result_output_prefix + "_" + std::to_string(L) + "_idx_uint32.bin";
@@ -290,17 +291,18 @@ int search_disk_index(
   }
 
   diskann::aligned_free(query);
-  if (warmup != nullptr) diskann::aligned_free(warmup);
+  if (warmup != nullptr)
+    diskann::aligned_free(warmup);
   return best_recall >= fail_if_recall_below ? 0 : -1;
 }
 
 int main(int argc, char** argv) {
   std::string data_type, dist_fn, index_path_prefix, result_path_prefix,
       query_file, gt_file, filter_label, label_type;
-  unsigned num_threads, K, W, num_nodes_to_cache, search_io_limit;
+  unsigned              num_threads, K, W, num_nodes_to_cache, search_io_limit;
   std::vector<unsigned> Lvec;
-  bool use_reorder_data = false;
-  float fail_if_recall_below = 0.0f;
+  bool                  use_reorder_data = false;
+  float                 fail_if_recall_below = 0.0f;
 
   po::options_description desc{"Arguments"};
   try {
@@ -369,7 +371,8 @@ int main(int argc, char** argv) {
       return 0;
     }
     po::notify(vm);
-    if (vm["use_reorder_data"].as<bool>()) use_reorder_data = true;
+    if (vm["use_reorder_data"].as<bool>())
+      use_reorder_data = true;
   } catch (const std::exception& ex) {
     std::cerr << ex.what() << '\n';
     return -1;

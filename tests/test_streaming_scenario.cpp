@@ -2,14 +2,13 @@
 // Licensed under the MIT license.
 
 #include <index.h>
+#include <numeric>
 #include <omp.h>
 #include <string.h>
 #include <time.h>
 #include <timer.h>
-
 #include <boost/program_options.hpp>
 #include <future>
-#include <numeric>
 
 #include "utils.h"
 
@@ -25,7 +24,7 @@ namespace po = boost::program_options;
 
 // load_aligned_bin modified to read pieces of the file, but using ifstream
 // instead of cached_ifstream.
-template <typename T>
+template<typename T>
 inline void load_aligned_bin_part(const std::string& bin_file, T* data,
                                   size_t offset_points, size_t points_to_read) {
   std::ifstream reader;
@@ -35,10 +34,10 @@ inline void load_aligned_bin_part(const std::string& bin_file, T* data,
   reader.seekg(0, std::ios::beg);
 
   int npts_i32, dim_i32;
-  reader.read((char*)&npts_i32, sizeof(int));
-  reader.read((char*)&dim_i32, sizeof(int));
-  size_t npts = (unsigned)npts_i32;
-  size_t dim = (unsigned)dim_i32;
+  reader.read((char*) &npts_i32, sizeof(int));
+  reader.read((char*) &dim_i32, sizeof(int));
+  size_t npts = (unsigned) npts_i32;
+  size_t dim = (unsigned) dim_i32;
 
   size_t expected_actual_file_size =
       npts * dim * sizeof(T) + 2 * sizeof(uint32_t);
@@ -68,7 +67,7 @@ inline void load_aligned_bin_part(const std::string& bin_file, T* data,
   const size_t rounded_dim = ROUND_UP(dim, 8);
 
   for (size_t i = 0; i < points_to_read; i++) {
-    reader.read((char*)(data + i * rounded_dim), dim * sizeof(T));
+    reader.read((char*) (data + i * rounded_dim), dim * sizeof(T));
     memset(data + i * rounded_dim + dim, 0, (rounded_dim - dim) * sizeof(T));
   }
   reader.close();
@@ -84,7 +83,7 @@ std::string get_save_filename(const std::string& save_path,
   return final_path;
 }
 
-template <typename T, typename TagT, typename LabelT>
+template<typename T, typename TagT, typename LabelT>
 void insert_next_batch(diskann::Index<T, TagT, LabelT>& index, size_t start,
                        size_t end, size_t insert_threads, T* data,
                        size_t aligned_dim) {
@@ -96,7 +95,7 @@ void insert_next_batch(diskann::Index<T, TagT, LabelT>& index, size_t start,
     size_t num_failed = 0;
 #pragma omp parallel for num_threads(insert_threads) schedule(dynamic) \
     reduction(+:num_failed)
-    for (int64_t j = start; j < (int64_t)end; j++) {
+    for (int64_t j = start; j < (int64_t) end; j++) {
       if (index.insert_point(&data[(j - start) * aligned_dim],
                              1 + static_cast<TagT>(j)) != 0) {
         std::cerr << "Insert failed " << j << std::endl;
@@ -118,14 +117,15 @@ void insert_next_batch(diskann::Index<T, TagT, LabelT>& index, size_t start,
   }
 }
 
-template <typename T, typename TagT, typename LabelT>
+template<typename T, typename TagT, typename LabelT>
 void delete_and_consolidate(diskann::Index<T, TagT, LabelT>& index,
                             diskann::Parameters& delete_params, size_t start,
                             size_t end) {
   try {
     std::cout << std::endl
               << "Lazy deleting points " << start << " to " << end << "... ";
-    for (size_t i = start; i < end; ++i) index.lazy_delete(1 + i);
+    for (size_t i = start; i < end; ++i)
+      index.lazy_delete(1 + i);
     std::cout << "lazy delete done." << std::endl;
 
     auto report = index.consolidate_deletes(delete_params);
@@ -170,17 +170,17 @@ void delete_and_consolidate(diskann::Index<T, TagT, LabelT>& index,
   }
 }
 
-template <typename T>
+template<typename T>
 void build_incremental_index(const std::string& data_path, const unsigned L,
                              const unsigned R, const float alpha,
                              const unsigned insert_threads,
                              const unsigned consolidate_threads,
                              size_t max_points_to_insert, size_t active_window,
-                             size_t consolidate_interval,
-                             const float start_point_norm,
+                             size_t             consolidate_interval,
+                             const float        start_point_norm,
                              const std::string& save_path) {
   const unsigned C = 500;
-  const bool saturate_graph = false;
+  const bool     saturate_graph = false;
 
   diskann::Parameters params;
   params.Set<unsigned>("L", L);
@@ -225,7 +225,7 @@ void build_incremental_index(const std::string& data_path, const unsigned L,
 
   using TagT = uint32_t;
   using LabelT = uint32_t;
-  unsigned num_frozen = 1;
+  unsigned   num_frozen = 1;
   const bool enable_tags = true;
 
   auto num_frozen_str = getenv("TTS_NUM_FROZEN");
@@ -243,7 +243,7 @@ void build_incremental_index(const std::string& data_path, const unsigned L,
 
   T* data = nullptr;
   diskann::alloc_aligned(
-      (void**)&data,
+      (void**) &data,
       std::max(consolidate_interval, active_window) * aligned_dim * sizeof(T),
       8 * sizeof(T));
 
@@ -271,7 +271,8 @@ void build_incremental_index(const std::string& data_path, const unsigned L,
     });
     insert_task.wait();
 
-    if (delete_tasks.size() > 0) delete_tasks[delete_tasks.size() - 1].wait();
+    if (delete_tasks.size() > 0)
+      delete_tasks[delete_tasks.size() - 1].wait();
     if (start >= active_window + consolidate_interval) {
       auto start_del = start - active_window - consolidate_interval;
       auto end_del = start - active_window;
@@ -283,7 +284,8 @@ void build_incremental_index(const std::string& data_path, const unsigned L,
       }));
     }
   }
-  if (delete_tasks.size() > 0) delete_tasks[delete_tasks.size() - 1].wait();
+  if (delete_tasks.size() > 0)
+    delete_tasks[delete_tasks.size() - 1].wait();
 
   std::cout << "Time Elapsed " << timer.elapsed() / 1000 << "ms\n";
   const auto save_path_inc =
@@ -296,10 +298,10 @@ void build_incremental_index(const std::string& data_path, const unsigned L,
 
 int main(int argc, char** argv) {
   std::string data_type, dist_fn, data_path, index_path_prefix;
-  unsigned insert_threads, consolidate_threads;
-  unsigned R, L;
-  float alpha, start_point_norm;
-  size_t max_points_to_insert, active_window, consolidate_interval;
+  unsigned    insert_threads, consolidate_threads;
+  unsigned    R, L;
+  float       alpha, start_point_norm;
+  size_t      max_points_to_insert, active_window, consolidate_interval;
 
   po::options_description desc{"Arguments"};
   try {

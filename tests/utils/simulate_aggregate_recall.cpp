@@ -1,10 +1,10 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT license.
 
-#include <cmath>
-#include <cstdlib>
 #include <iostream>
+#include <cstdlib>
 #include <random>
+#include <cmath>
 
 inline float aggregate_recall(const unsigned k_aggr, const unsigned k,
                               const unsigned npart, unsigned* count,
@@ -14,17 +14,17 @@ inline float aggregate_recall(const unsigned k_aggr, const unsigned k,
     size_t max_found = std::min(count[i], k);
     found += recalls[max_found - 1] * max_found;
   }
-  return found / (float)k_aggr;
+  return found / (float) k_aggr;
 }
 
 void simulate(const unsigned k_aggr, const unsigned k, const unsigned npart,
               const unsigned nsim, const std::vector<float>& recalls) {
-  std::random_device r;
-  std::default_random_engine randeng(r());
+  std::random_device                 r;
+  std::default_random_engine         randeng(r());
   std::uniform_int_distribution<int> uniform_dist(0, npart - 1);
 
   unsigned* count = new unsigned[npart];
-  double aggr_recall = 0;
+  double    aggr_recall = 0;
 
   for (unsigned i = 0; i < nsim; ++i) {
     for (unsigned p = 0; p < npart; ++p) {
@@ -36,7 +36,7 @@ void simulate(const unsigned k_aggr, const unsigned k, const unsigned npart,
     aggr_recall += aggregate_recall(k_aggr, k, npart, count, recalls);
   }
 
-  std::cout << "Aggregate recall is " << aggr_recall / (double)nsim
+  std::cout << "Aggregate recall is " << aggr_recall / (double) nsim
             << std::endl;
   delete[] count;
 }

@@ -2,7 +2,6 @@
 // Licensed under the MIT license.
 
 #include <iostream>
-
 #include "utils.h"
 
 int main(int argc, char** argv) {
@@ -12,7 +11,7 @@ int main(int argc, char** argv) {
   }
 
   int8_t* input;
-  size_t npts, nd;
+  size_t  npts, nd;
   diskann::load_bin<int8_t>(argv[1], input, npts, nd);
   float* output = new float[npts * nd];
   diskann::convert_types<int8_t, float>(input, output, npts, nd);

@@ -1,4 +1,0 @@
----
-DisableFormat: true
-SortIncludes: false  # never only works on clang-format 13.0.  it is absurd that DisableFormat doesn't disable this too.
-...

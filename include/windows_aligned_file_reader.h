@@ -12,7 +12,6 @@
 #include <cstdio>
 #include <mutex>
 #include <thread>
-
 #include "aligned_file_reader.h"
 #include "tsl/robin_map.h"
 #include "utils.h"

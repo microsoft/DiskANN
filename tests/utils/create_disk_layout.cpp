@@ -8,11 +8,11 @@
 #include <limits>
 #include <vector>
 
-#include "cached_io.h"
-#include "disk_utils.h"
 #include "utils.h"
+#include "disk_utils.h"
+#include "cached_io.h"
 
-template <typename T>
+template<typename T>
 int create_disk_layout(char **argv) {
   std::string base_file(argv[2]);
   std::string vamana_file(argv[3]);

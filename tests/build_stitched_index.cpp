@@ -1,8 +1,6 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT license.
 
-#include <omp.h>
-
 #include <boost/program_options.hpp>
 #include <chrono>
 #include <cstdio>
@@ -10,6 +8,8 @@
 #include <random>
 #include <string>
 #include <tuple>
+
+#include <omp.h>
 #ifndef _WINDOWS
 #include <sys/uio.h>
 #endif
@@ -27,7 +27,7 @@ namespace po = boost::program_options;
 
 // custom types (for readability)
 typedef tsl::robin_set<std::string> label_set;
-typedef std::string path;
+typedef std::string                 path;
 
 // structs for returning multiple items from a function
 typedef std::tuple<std::vector<label_set>, tsl::robin_map<std::string, _u32>,
@@ -42,8 +42,8 @@ typedef std::tuple<std::vector<std::vector<_u32>>, _u64>
  * Inline function to display progress bar.
  */
 inline void print_progress(double percentage) {
-  int val = (int)(percentage * 100);
-  int lpad = (int)(percentage * PBWIDTH);
+  int val = (int) (percentage * 100);
+  int lpad = (int) (percentage * PBWIDTH);
   int rpad = PBWIDTH - lpad;
   printf("\r%3d%% [%.*s%*s]", val, lpad, PBSTR, rpad, "");
   fflush(stdout);
@@ -53,8 +53,8 @@ inline void print_progress(double percentage) {
  * Inline function to generate a random integer in a range.
  */
 inline size_t random(size_t range_from, size_t range_to) {
-  std::random_device rand_dev;
-  std::mt19937 generator(rand_dev());
+  std::random_device                    rand_dev;
+  std::mt19937                          generator(rand_dev());
   std::uniform_int_distribution<size_t> distr(range_from, range_to);
   return distr(generator);
 }
@@ -131,27 +131,28 @@ void handle_args(int argc, char **argv, std::string &data_type,
  * 2. map: key is label, value is number of points with the label
  * 3. the label universe as a set
  */
-parse_label_file_return_values parse_label_file(path label_data_path,
+parse_label_file_return_values parse_label_file(path        label_data_path,
                                                 std::string universal_label) {
   std::ifstream label_data_stream(label_data_path);
-  std::string line, token;
-  unsigned line_cnt = 0;
+  std::string   line, token;
+  unsigned      line_cnt = 0;
 
   // allows us to reserve space for the points_to_labels vector
-  while (std::getline(label_data_stream, line)) line_cnt++;
+  while (std::getline(label_data_stream, line))
+    line_cnt++;
   label_data_stream.clear();
   label_data_stream.seekg(0, std::ios::beg);
 
   // values to return
-  std::vector<label_set> point_ids_to_labels(line_cnt);
+  std::vector<label_set>            point_ids_to_labels(line_cnt);
   tsl::robin_map<std::string, _u32> labels_to_number_of_points;
-  label_set all_labels;
+  label_set                         all_labels;
 
   std::vector<_u32> points_with_universal_label;
   line_cnt = 0;
   while (std::getline(label_data_stream, line)) {
     std::istringstream current_labels_comma_separated(line);
-    label_set current_labels;
+    label_set          current_labels;
 
     // get point id
     _u32 point_id = line_cnt;
@@ -185,7 +186,8 @@ parse_label_file_return_values parse_label_file(path label_data_path,
   // also, increment the count for number of points a label has
   for (const auto &point_id : points_with_universal_label) {
     point_ids_to_labels[point_id] = all_labels;
-    for (const auto &lbl : all_labels) labels_to_number_of_points[lbl]++;
+    for (const auto &lbl : all_labels)
+      labels_to_number_of_points[lbl]++;
   }
 
   std::cout << "Identified " << all_labels.size() << " distinct label(s) for "
@@ -206,20 +208,20 @@ parse_label_file_return_values parse_label_file(path label_data_path,
  * Each data file is saved under the following format:
  *    input_data_path + "_" + label
  */
-template <typename T>
+template<typename T>
 tsl::robin_map<std::string, std::vector<_u32>>
 generate_label_specific_vector_files(
-    path input_data_path,
+    path                              input_data_path,
     tsl::robin_map<std::string, _u32> labels_to_number_of_points,
     std::vector<label_set> point_ids_to_labels, label_set all_labels) {
   auto file_writing_timer = std::chrono::high_resolution_clock::now();
   diskann::MemoryMapper input_data(input_data_path);
-  char *input_start = input_data.getBuf();
+  char                 *input_start = input_data.getBuf();
 
   _u32 number_of_points, dimension;
   std::memcpy(&number_of_points, input_start, sizeof(_u32));
   std::memcpy(&dimension, input_start + sizeof(_u32), sizeof(_u32));
-  const _u32 VECTOR_SIZE = dimension * sizeof(T);
+  const _u32   VECTOR_SIZE = dimension * sizeof(T);
   const size_t METADATA = 2 * sizeof(_u32);
   if (number_of_points != point_ids_to_labels.size()) {
     std::cerr << "Error: number of points in labels file and data file differ."
@@ -227,14 +229,14 @@ generate_label_specific_vector_files(
     throw;
   }
 
-  tsl::robin_map<std::string, iovec *> label_to_iovec_map;
-  tsl::robin_map<std::string, _u32> label_to_curr_iovec;
+  tsl::robin_map<std::string, iovec *>           label_to_iovec_map;
+  tsl::robin_map<std::string, _u32>              label_to_curr_iovec;
   tsl::robin_map<std::string, std::vector<_u32>> label_id_to_orig_id;
 
   // setup iovec list for each label
   for (const auto &lbl : all_labels) {
     iovec *label_iovecs =
-        (iovec *)malloc(labels_to_number_of_points[lbl] * sizeof(iovec));
+        (iovec *) malloc(labels_to_number_of_points[lbl] * sizeof(iovec));
     if (label_iovecs == nullptr) {
       throw;
     }
@@ -259,18 +261,19 @@ generate_label_specific_vector_files(
 
   // write each label iovec to resp. file
   for (const auto &lbl : all_labels) {
-    int label_input_data_fd;
+    int  label_input_data_fd;
     path curr_label_input_data_path(input_data_path + "_" + lbl);
     _u32 curr_num_pts = labels_to_number_of_points[lbl];
 
     label_input_data_fd =
         open(curr_label_input_data_path.c_str(),
-             O_CREAT | O_WRONLY | O_TRUNC | O_APPEND, (mode_t)0644);
-    if (label_input_data_fd == -1) throw;
+             O_CREAT | O_WRONLY | O_TRUNC | O_APPEND, (mode_t) 0644);
+    if (label_input_data_fd == -1)
+      throw;
 
     // write metadata
     _u32 metadata[2] = {curr_num_pts, dimension};
-    int return_value = write(label_input_data_fd, metadata, sizeof(_u32) * 2);
+    int  return_value = write(label_input_data_fd, metadata, sizeof(_u32) * 2);
     if (return_value == -1) {
       throw;
     }
@@ -311,18 +314,18 @@ generate_label_specific_vector_files(
 }
 
 // for use on systems without writev (i.e. Windows)
-template <typename T>
+template<typename T>
 tsl::robin_map<std::string, std::vector<_u32>>
 generate_label_specific_vector_files_compat(
-    path input_data_path,
+    path                              input_data_path,
     tsl::robin_map<std::string, _u32> labels_to_number_of_points,
     std::vector<label_set> point_ids_to_labels, label_set all_labels) {
-  auto file_writing_timer = std::chrono::high_resolution_clock::now();
+  auto          file_writing_timer = std::chrono::high_resolution_clock::now();
   std::ifstream input_data_stream(input_data_path);
 
   _u32 number_of_points, dimension;
-  input_data_stream.read((char *)&number_of_points, sizeof(_u32));
-  input_data_stream.read((char *)&dimension, sizeof(_u32));
+  input_data_stream.read((char *) &number_of_points, sizeof(_u32));
+  input_data_stream.read((char *) &dimension, sizeof(_u32));
   const _u32 VECTOR_SIZE = dimension * sizeof(T);
   if (number_of_points != point_ids_to_labels.size()) {
     std::cerr << "Error: number of points in labels file and data file differ."
@@ -330,13 +333,13 @@ generate_label_specific_vector_files_compat(
     throw;
   }
 
-  tsl::robin_map<std::string, char *> labels_to_vectors;
-  tsl::robin_map<std::string, _u32> labels_to_curr_vector;
+  tsl::robin_map<std::string, char *>            labels_to_vectors;
+  tsl::robin_map<std::string, _u32>              labels_to_curr_vector;
   tsl::robin_map<std::string, std::vector<_u32>> label_id_to_orig_id;
 
   for (const auto &lbl : all_labels) {
-    _u32 number_of_label_pts = labels_to_number_of_points[lbl];
-    char *vectors = (char *)malloc(number_of_label_pts * VECTOR_SIZE);
+    _u32  number_of_label_pts = labels_to_number_of_points[lbl];
+    char *vectors = (char *) malloc(number_of_label_pts * VECTOR_SIZE);
     if (vectors == nullptr) {
       throw;
     }
@@ -346,7 +349,7 @@ generate_label_specific_vector_files_compat(
   }
 
   for (_u32 point_id = 0; point_id < number_of_points; point_id++) {
-    char *curr_vector = (char *)malloc(VECTOR_SIZE);
+    char *curr_vector = (char *) malloc(VECTOR_SIZE);
     input_data_stream.read(curr_vector, VECTOR_SIZE);
     for (const auto &lbl : point_ids_to_labels[point_id]) {
       char *curr_label_vector_ptr =
@@ -365,9 +368,9 @@ generate_label_specific_vector_files_compat(
     std::ofstream label_file_stream;
     label_file_stream.exceptions(std::ios::badbit | std::ios::failbit);
     label_file_stream.open(curr_label_input_data_path, std::ios_base::binary);
-    label_file_stream.write((char *)&number_of_label_pts, sizeof(_u32));
-    label_file_stream.write((char *)&dimension, sizeof(_u32));
-    label_file_stream.write((char *)labels_to_vectors[lbl],
+    label_file_stream.write((char *) &number_of_label_pts, sizeof(_u32));
+    label_file_stream.write((char *) &dimension, sizeof(_u32));
+    label_file_stream.write((char *) labels_to_vectors[lbl],
                             number_of_label_pts * VECTOR_SIZE);
 
     label_file_stream.close();
@@ -392,7 +395,7 @@ generate_label_specific_vector_files_compat(
  * Each index is saved under the following path:
  *  final_index_path_prefix + "_" + label
  */
-template <typename T>
+template<typename T>
 void generate_label_indices(path input_data_path, path final_index_path_prefix,
                             label_set all_labels, unsigned R, unsigned L,
                             float alpha, unsigned num_threads) {
@@ -427,7 +430,7 @@ void generate_label_indices(path input_data_path, path final_index_path_prefix,
         std::chrono::high_resolution_clock::now() - index_build_timer;
 
     total_indexing_time += current_indexing_time.count();
-    indexing_percentage += (1 / (double)all_labels.size());
+    indexing_percentage += (1 / (double) all_labels.size());
     print_progress(indexing_percentage);
 
     index.save(curr_label_index_path.c_str());
@@ -451,24 +454,24 @@ load_label_index_return_values load_label_index(path label_index_path,
   label_index_stream.exceptions(std::ios::badbit | std::ios::failbit);
   label_index_stream.open(label_index_path, std::ios::binary);
 
-  _u64 index_file_size, index_num_frozen_points;
-  _u32 index_max_observed_degree, index_entry_point;
+  _u64         index_file_size, index_num_frozen_points;
+  _u32         index_max_observed_degree, index_entry_point;
   const size_t INDEX_METADATA = 2 * sizeof(_u64) + 2 * sizeof(_u32);
-  label_index_stream.read((char *)&index_file_size, sizeof(_u64));
-  label_index_stream.read((char *)&index_max_observed_degree, sizeof(_u32));
-  label_index_stream.read((char *)&index_entry_point, sizeof(_u32));
-  label_index_stream.read((char *)&index_num_frozen_points, sizeof(_u64));
+  label_index_stream.read((char *) &index_file_size, sizeof(_u64));
+  label_index_stream.read((char *) &index_max_observed_degree, sizeof(_u32));
+  label_index_stream.read((char *) &index_entry_point, sizeof(_u32));
+  label_index_stream.read((char *) &index_num_frozen_points, sizeof(_u64));
   size_t bytes_read = INDEX_METADATA;
 
   std::vector<std::vector<_u32>> label_index(label_number_of_points);
-  _u32 nodes_read = 0;
+  _u32                           nodes_read = 0;
   while (bytes_read != index_file_size) {
     _u32 current_node_num_neighbors;
-    label_index_stream.read((char *)&current_node_num_neighbors, sizeof(_u32));
+    label_index_stream.read((char *) &current_node_num_neighbors, sizeof(_u32));
     nodes_read++;
 
     std::vector<_u32> current_node_neighbors(current_node_num_neighbors);
-    label_index_stream.read((char *)current_node_neighbors.data(),
+    label_index_stream.read((char *) current_node_neighbors.data(),
                             current_node_num_neighbors * sizeof(_u32));
     label_index[nodes_read - 1].swap(current_node_neighbors);
     bytes_read += sizeof(_u32) * (current_node_num_neighbors + 1);
@@ -486,12 +489,12 @@ load_label_index_return_values load_label_index(path label_index_path,
  *  4. labels (redundant for static indices)
  */
 void save_full_index(path final_index_path_prefix, path input_data_path,
-                     _u64 final_index_size,
-                     std::vector<std::vector<_u32>> stitched_graph,
+                     _u64                              final_index_size,
+                     std::vector<std::vector<_u32>>    stitched_graph,
                      tsl::robin_map<std::string, _u32> entry_points,
                      std::string universal_label, path label_data_path) {
   // aux. file 1
-  auto saving_index_timer = std::chrono::high_resolution_clock::now();
+  auto          saving_index_timer = std::chrono::high_resolution_clock::now();
   std::ifstream original_label_data_stream;
   original_label_data_stream.exceptions(std::ios::badbit | std::ios::failbit);
   original_label_data_stream.open(label_data_path, std::ios::binary);
@@ -535,32 +538,34 @@ void save_full_index(path final_index_path_prefix, path input_data_path,
   }
 
   // main index
-  _u64 index_num_frozen_points = 0, index_num_edges = 0;
-  _u32 index_max_observed_degree = 0, index_entry_point = 0;
+  _u64         index_num_frozen_points = 0, index_num_edges = 0;
+  _u32         index_max_observed_degree = 0, index_entry_point = 0;
   const size_t METADATA = 2 * sizeof(_u64) + 2 * sizeof(_u32);
   for (auto &point_neighbors : stitched_graph) {
     index_max_observed_degree =
-        std::max(index_max_observed_degree, (_u32)point_neighbors.size());
+        std::max(index_max_observed_degree, (_u32) point_neighbors.size());
   }
 
   std::ofstream stitched_graph_writer;
   stitched_graph_writer.exceptions(std::ios::badbit | std::ios::failbit);
   stitched_graph_writer.open(final_index_path_prefix, std::ios_base::binary);
 
-  stitched_graph_writer.write((char *)&final_index_size, sizeof(_u64));
-  stitched_graph_writer.write((char *)&index_max_observed_degree, sizeof(_u32));
-  stitched_graph_writer.write((char *)&index_entry_point, sizeof(_u32));
-  stitched_graph_writer.write((char *)&index_num_frozen_points, sizeof(_u64));
+  stitched_graph_writer.write((char *) &final_index_size, sizeof(_u64));
+  stitched_graph_writer.write((char *) &index_max_observed_degree,
+                              sizeof(_u32));
+  stitched_graph_writer.write((char *) &index_entry_point, sizeof(_u32));
+  stitched_graph_writer.write((char *) &index_num_frozen_points, sizeof(_u64));
 
   size_t bytes_written = METADATA;
   for (_u32 node_point = 0; node_point < stitched_graph.size(); node_point++) {
     _u32 current_node_num_neighbors = stitched_graph[node_point].size();
     std::vector<_u32> current_node_neighbors = stitched_graph[node_point];
-    stitched_graph_writer.write((char *)&current_node_num_neighbors,
+    stitched_graph_writer.write((char *) &current_node_num_neighbors,
                                 sizeof(_u32));
     bytes_written += sizeof(_u32);
     for (const auto &current_node_neighbor : current_node_neighbors) {
-      stitched_graph_writer.write((char *)&current_node_neighbor, sizeof(_u32));
+      stitched_graph_writer.write((char *) &current_node_neighbor,
+                                  sizeof(_u32));
       bytes_written += sizeof(_u32);
     }
     index_num_edges += current_node_num_neighbors;
@@ -579,7 +584,7 @@ void save_full_index(path final_index_path_prefix, path input_data_path,
   std::cout << "Stitched graph written in " << saving_index_time.count()
             << " seconds" << std::endl;
   std::cout << "Stitched graph average degree: "
-            << ((float)index_num_edges) / ((float)(stitched_graph.size()))
+            << ((float) index_num_edges) / ((float) (stitched_graph.size()))
             << std::endl;
   std::cout << "Stitched graph max degree: " << index_max_observed_degree
             << std::endl
@@ -592,22 +597,22 @@ void save_full_index(path final_index_path_prefix, path input_data_path,
  *
  * Returns the "stitched" graph and its expected file size.
  */
-template <typename T>
+template<typename T>
 stitch_indices_return_values stitch_label_indices(
     path final_index_path_prefix, _u32 total_number_of_points,
-    label_set all_labels,
-    tsl::robin_map<std::string, _u32> labels_to_number_of_points,
-    tsl::robin_map<std::string, _u32> &label_entry_points,
+    label_set                                      all_labels,
+    tsl::robin_map<std::string, _u32>              labels_to_number_of_points,
+    tsl::robin_map<std::string, _u32>             &label_entry_points,
     tsl::robin_map<std::string, std::vector<_u32>> label_id_to_orig_id_map) {
-  size_t final_index_size = 0;
+  size_t                         final_index_size = 0;
   std::vector<std::vector<_u32>> stitched_graph(total_number_of_points);
 
   auto stitching_index_timer = std::chrono::high_resolution_clock::now();
   for (const auto &lbl : all_labels) {
     path curr_label_index_path(final_index_path_prefix + "_" + lbl);
     std::vector<std::vector<_u32>> curr_label_index;
-    _u64 curr_label_index_size;
-    _u32 curr_label_entry_point;
+    _u64                           curr_label_index_size;
+    _u32                           curr_label_entry_point;
 
     std::tie(curr_label_index, curr_label_index_size) = load_label_index(
         curr_label_index_path, labels_to_number_of_points[lbl]);
@@ -649,18 +654,18 @@ stitch_indices_return_values stitch_label_indices(
  * This is an optional step, hence the saving of both the full
  * and pruned graph.
  */
-template <typename T>
+template<typename T>
 void prune_and_save(path final_index_path_prefix, path full_index_path_prefix,
-                    path input_data_path,
-                    std::vector<std::vector<_u32>> stitched_graph,
-                    unsigned stitched_R,
+                    path                              input_data_path,
+                    std::vector<std::vector<_u32>>    stitched_graph,
+                    unsigned                          stitched_R,
                     tsl::robin_map<std::string, _u32> label_entry_points,
                     std::string universal_label, path label_data_path,
                     unsigned num_threads) {
   size_t dimension, number_of_label_points;
-  auto diskann_cout_buffer = diskann::cout.rdbuf(nullptr);
-  auto std_cout_buffer = std::cout.rdbuf(nullptr);
-  auto pruning_index_timer = std::chrono::high_resolution_clock::now();
+  auto   diskann_cout_buffer = diskann::cout.rdbuf(nullptr);
+  auto   std_cout_buffer = std::cout.rdbuf(nullptr);
+  auto   pruning_index_timer = std::chrono::high_resolution_clock::now();
 
   diskann::get_bin_metadata(input_data_path, number_of_label_points, dimension);
   diskann::Index<T> index(diskann::Metric::L2, dimension,
@@ -704,19 +709,22 @@ void clean_up_artifacts(path input_data_path, path final_index_path_prefix,
     path curr_label_index_path(final_index_path_prefix + "_" + lbl);
     path curr_label_index_path_data(curr_label_index_path + ".data");
 
-    if (std::remove(curr_label_index_path.c_str()) != 0) throw;
-    if (std::remove(curr_label_input_data_path.c_str()) != 0) throw;
-    if (std::remove(curr_label_index_path_data.c_str()) != 0) throw;
+    if (std::remove(curr_label_index_path.c_str()) != 0)
+      throw;
+    if (std::remove(curr_label_input_data_path.c_str()) != 0)
+      throw;
+    if (std::remove(curr_label_index_path_data.c_str()) != 0)
+      throw;
   }
 }
 
 int main(int argc, char **argv) {
   // 1. handle cmdline inputs
   std::string data_type;
-  path input_data_path, final_index_path_prefix, label_data_path;
+  path        input_data_path, final_index_path_prefix, label_data_path;
   std::string universal_label;
-  unsigned num_threads, R, L, stitched_R;
-  float alpha;
+  unsigned    num_threads, R, L, stitched_R;
+  float       alpha;
 
   auto index_timer = std::chrono::high_resolution_clock::now();
   handle_args(argc, argv, data_type, input_data_path, final_index_path_prefix,
@@ -730,9 +738,9 @@ int main(int argc, char **argv) {
                                labels_map_file, universal_label);
 
   // 2. parse label file and create necessary data structures
-  std::vector<label_set> point_ids_to_labels;
+  std::vector<label_set>            point_ids_to_labels;
   tsl::robin_map<std::string, _u32> labels_to_number_of_points;
-  label_set all_labels;
+  label_set                         all_labels;
 
   std::tie(point_ids_to_labels, labels_to_number_of_points, all_labels) =
       parse_label_file(labels_file_to_use, universal_label);
@@ -790,9 +798,9 @@ int main(int argc, char **argv) {
     throw;
 
   // 5. "stitch" the indices together
-  std::vector<std::vector<_u32>> stitched_graph;
+  std::vector<std::vector<_u32>>    stitched_graph;
   tsl::robin_map<std::string, _u32> label_entry_points;
-  _u64 stitched_graph_size;
+  _u64                              stitched_graph_size;
 
   if (data_type == "uint8")
     std::tie(stitched_graph, stitched_graph_size) =

@@ -1,18 +1,17 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT license.
 
-#include <restapi/in_memory_search.h>
 #include <restapi/server.h>
-
+#include <restapi/in_memory_search.h>
 #include <codecvt>
 #include <iostream>
 
-std::unique_ptr<Server> g_httpServer(nullptr);
+std::unique_ptr<Server>                  g_httpServer(nullptr);
 std::unique_ptr<diskann::InMemorySearch> g_inMemorySearch(nullptr);
 
 void setup(const utility::string_t& address) {
   web::http::uri_builder uriBldr(address);
-  auto uri = uriBldr.to_uri();
+  auto                   uri = uriBldr.to_uri();
 
   std::wcout << L"Attempting to start server on " << uri.to_string()
              << std::endl;
