@@ -269,26 +269,58 @@ namespace diskann {
     }
   }
 
-   void pq_dist_lookup(const _u8* pq_ids, const _u64 n_pts,
+  // Alternate version of the function with the outer loop on pq chunks
+  // This is less optimized for breaking on the break_distance arg 
+  // but better for memory access. Needs more testing
+  // void pq_dist_lookup(const _u8* pq_ids, const _u64 n_pts,
+  //                    const _u64 pq_nchunks, const float* pq_dists,
+  //                    std::vector<float>& dists_out, float break_distance) {
+  //  //_mm_prefetch((char*) dists_out, _MM_HINT_T0);
+  //  _mm_prefetch((char*) pq_ids, _MM_HINT_T0);
+  //  _mm_prefetch((char*) (pq_ids + 64), _MM_HINT_T0);
+  //  _mm_prefetch((char*) (pq_ids + 128), _MM_HINT_T0);
+  //  dists_out.clear();
+  //  dists_out.resize(n_pts, 0);
+  //   for (_u64 chunk = 0; chunk < pq_nchunks; chunk++) {
+  //     const float* chunk_dists = pq_dists + 256 * chunk;
+  //     if (chunk < pq_nchunks - 1) {
+  //       _mm_prefetch((char*) (chunk_dists + 256), _MM_HINT_T0);
+  //     }
+  //     for (_u64 idx = 0; idx < n_pts; idx++) {
+  //       if (dists_out[idx] < break_distance) {
+  //        _u8 pq_centerid = pq_ids[pq_nchunks * idx + chunk];
+  //        dists_out[idx] += chunk_dists[pq_centerid];
+  //       }
+  //     }
+  //   }
+  //}  
+
+  void pq_dist_lookup(const _u8* pq_ids, const _u64 n_pts,
                       const _u64 pq_nchunks, const float* pq_dists,
-                      std::vector<float> &dists_out) {
+                      std::vector<float>& dists_out, float break_distance) {
     //_mm_prefetch((char*) dists_out, _MM_HINT_T0);
     _mm_prefetch((char*) pq_ids, _MM_HINT_T0);
     _mm_prefetch((char*) (pq_ids + 64), _MM_HINT_T0);
     _mm_prefetch((char*) (pq_ids + 128), _MM_HINT_T0);
     dists_out.clear();
     dists_out.resize(n_pts, 0);
-    for (_u64 chunk = 0; chunk < pq_nchunks; chunk++) {
-      const float* chunk_dists = pq_dists + 256 * chunk;
-      if (chunk < pq_nchunks - 1) {
-        _mm_prefetch((char*) (chunk_dists + 256), _MM_HINT_T0);
+
+    _u64 idsOffset = 0;
+    for (_u64 idx = 0; idx < n_pts; idx++) {
+      _u64 chunkOffset = 0;
+
+      for (_u64 chunk = 0; chunk < pq_nchunks; chunk++) {
+        const _u8*   pcid = &pq_ids[idsOffset + chunk];
+        const float* chunk_dists = pq_dists + chunkOffset;
+        chunkOffset += 256;
+        const float* pDist = chunk_dists + *pcid;
+        dists_out[idx] += *pDist;
+        if (dists_out[idx] > break_distance)
+          break;
       }
-      for (_u64 idx = 0; idx < n_pts; idx++) {
-        _u8 pq_centerid = pq_ids[pq_nchunks * idx + chunk];
-        dists_out[idx] += chunk_dists[pq_centerid];
-      }
+      idsOffset += pq_nchunks;
     }
-  }
+  }  
 
 
   // Need to replace calls to these functions with calls to vector& based functions above
@@ -299,23 +331,55 @@ namespace diskann {
     }
   }
 
+  // Alternate version of the function with the outer loop on pq chunks 
+  // This is less optimized for breaking on the break_distance arg
+  // but better for memory access. Needs more testing
+  //void pq_dist_lookup(const _u8* pq_ids, const _u64 n_pts,
+  //                    const _u64 pq_nchunks, const float* pq_dists,
+  //                    float* dists_out, float break_distance) {
+  //  _mm_prefetch((char*) dists_out, _MM_HINT_T0);
+  //  _mm_prefetch((char*) pq_ids, _MM_HINT_T0);
+  //  _mm_prefetch((char*) (pq_ids + 64), _MM_HINT_T0);
+  //  _mm_prefetch((char*) (pq_ids + 128), _MM_HINT_T0);
+  //  memset(dists_out, 0, n_pts * sizeof(float));
+
+  //  for (_u64 chunk = 0; chunk < pq_nchunks; chunk++) {
+  //    const float* chunk_dists = pq_dists + 256 * chunk;
+  //    if (chunk < pq_nchunks - 1) {
+  //      _mm_prefetch((char*) (chunk_dists + 256), _MM_HINT_T0);
+  //    }
+  //    for (_u64 idx = 0; idx < n_pts; idx++) {
+  //      if (dists_out[idx] < break_distance) {
+  //        _u8 pq_centerid = pq_ids[pq_nchunks * idx + chunk];
+  //        dists_out[idx] += chunk_dists[pq_centerid];
+  //      }
+  //    }
+  //  }
+  //}
+
   void pq_dist_lookup(const _u8* pq_ids, const _u64 n_pts,
                       const _u64 pq_nchunks, const float* pq_dists,
-                      float* dists_out) {
+                      float* dists_out, float break_distance) {
     _mm_prefetch((char*) dists_out, _MM_HINT_T0);
     _mm_prefetch((char*) pq_ids, _MM_HINT_T0);
     _mm_prefetch((char*) (pq_ids + 64), _MM_HINT_T0);
     _mm_prefetch((char*) (pq_ids + 128), _MM_HINT_T0);
     memset(dists_out, 0, n_pts * sizeof(float));
-    for (_u64 chunk = 0; chunk < pq_nchunks; chunk++) {
-      const float* chunk_dists = pq_dists + 256 * chunk;
-      if (chunk < pq_nchunks - 1) {
-        _mm_prefetch((char*) (chunk_dists + 256), _MM_HINT_T0);
+
+    _u64 idsOffset = 0;
+    for (_u64 idx = 0; idx < n_pts; idx++) {
+      _u64 chunkOffset = 0;
+
+      for (_u64 chunk = 0; chunk < pq_nchunks; chunk++) {
+        const _u8 *pcid = &pq_ids[idsOffset + chunk];
+        const float *chunk_dists = pq_dists + chunkOffset;
+        chunkOffset += 256;
+        const float *pDist = chunk_dists + *pcid;
+        dists_out[idx] += *pDist;
+        if (dists_out[idx] > break_distance)
+          break;
       }
-      for (_u64 idx = 0; idx < n_pts; idx++) {
-        _u8 pq_centerid = pq_ids[pq_nchunks * idx + chunk];
-        dists_out[idx] += chunk_dists[pq_centerid];
-      }
+      idsOffset += pq_nchunks;
     }
   }
 
