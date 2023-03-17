@@ -52,7 +52,7 @@ class Parameters
         }
     }
 
-    template <typename ParamType> inline ParamType Get(const std::string &name, const ParamType &default_value)
+    template <typename ParamType> inline ParamType Get(const std::string &name, const ParamType &default_value) const
     {
         try
         {

@@ -75,7 +75,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     DISKANN_DLLEXPORT Index(Metric m, const size_t dim, const size_t max_points = 1, const bool dynamic_index = false,
                             const bool enable_tags = false, const bool concurrent_consolidate = false,
                             const bool pq_dist_build = false, const size_t num_pq_chunks = 0,
-                            const bool use_opq = false);
+                            const bool use_opq = false, const size_t num_frozen_pts = 0);
 
     // Constructor for incremental index
     DISKANN_DLLEXPORT Index(Metric m, const size_t dim, const size_t max_points, const bool dynamic_index,
@@ -93,6 +93,9 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 #ifdef EXEC_ENV_OLS
     DISKANN_DLLEXPORT void load(AlignedFileReader &reader, uint32_t num_threads, uint32_t search_l);
 #else
+    // Reads the number of frozen points from graph's metadata file section.
+    DISKANN_DLLEXPORT static size_t get_graph_num_frozen_points(const std::string &graph_file);
+
     DISKANN_DLLEXPORT void load(const char *index_file, uint32_t num_threads, uint32_t search_l);
 #endif
 
@@ -122,10 +125,13 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     // Get converted integer label from string to int map (_label_map)
     DISKANN_DLLEXPORT LabelT get_converted_label(const std::string &raw_label);
 
-    // Set starting point of an index before inserting any points incrementally
-    DISKANN_DLLEXPORT void set_start_point(T *data);
-    // Set starting point to a random point on a sphere of certain radius
-    DISKANN_DLLEXPORT void set_start_point_at_random(T radius);
+    // Set starting point of an index before inserting any points incrementally.
+    // The data count should be equal to _num_frozen_pts * _aligned_dim.
+    DISKANN_DLLEXPORT void set_start_points(const T *data, size_t data_count);
+    // Set starting points to random points on a sphere of certain radius.
+    // A fixed random seed can be specified for scenarios where it's important
+    // to have higher consistency between index builds.
+    DISKANN_DLLEXPORT void set_start_points_at_random(T radius, unsigned int random_seed = 0);
 
     // For FastL2 search on a static index, we interleave the data with graph
     DISKANN_DLLEXPORT void optimize_index_layout();
@@ -176,7 +182,8 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     // repositions frozen points to the end of _data - if they have been moved
     // during deletion
     DISKANN_DLLEXPORT void reposition_frozen_point_to_end();
-    DISKANN_DLLEXPORT void reposition_point(unsigned old_location, unsigned new_location);
+    DISKANN_DLLEXPORT void reposition_points(unsigned old_location_start, unsigned new_location_start,
+                                             unsigned num_locations);
 
     // DISKANN_DLLEXPORT void save_index_as_one_file(bool flag);
 
@@ -210,7 +217,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 
     // generates 1 frozen point that will never be deleted from the graph
     // This is not visible to the user
-    int generate_frozen_point();
+    void generate_frozen_point();
 
     // determines navigating node of the graph by calculating medoid of datafopt
     unsigned calculate_entry_point();
@@ -219,11 +226,13 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 
     std::unordered_map<std::string, LabelT> load_label_map(const std::string &map_file);
 
+    // Returns the locations of start point and frozen points suitable for use with iterate_to_fixed_point.
+    std::vector<unsigned> get_init_ids();
+
     std::pair<uint32_t, uint32_t> iterate_to_fixed_point(const T *node_coords, const unsigned Lindex,
                                                          const std::vector<unsigned> &init_ids,
                                                          InMemQueryScratch<T> *scratch, bool use_filter,
-                                                         const std::vector<LabelT> &filters, bool ret_frozen = true,
-                                                         bool search_invocation = false);
+                                                         const std::vector<LabelT> &filters, bool search_invocation);
 
     void search_for_point_and_prune(int location, _u32 Lindex, std::vector<unsigned> &pruned_list,
                                     InMemQueryScratch<T> *scratch, bool use_filter = false, _u32 filteredLindex = 0);
@@ -312,6 +321,10 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     size_t _aligned_dim = 0;
     size_t _nd = 0;         // number of active points i.e. existing in the graph
     size_t _max_points = 0; // total number of points in given data set
+    // Number of points which are used as initial candidates when iterating to
+    // closest point(s). These are not visible externally and won't be returned
+    // by search. DiskANN forces at least 1 frozen point for dynamic index.
+    // The frozen points have consecutive locations. See also _start below.
     size_t _num_frozen_pts = 0;
     size_t _max_range_of_loaded_graph = 0;
     size_t _node_size;
@@ -319,6 +332,9 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     size_t _neighbor_len;
 
     unsigned _max_observed_degree = 0;
+    // Start point of the search. When _num_frozen_pts is greater than zero,
+    // this is the location of the first frozen point. Otherwise, this is a
+    // location of one of the points in index.
     unsigned _start = 0;
 
     bool _has_built = false;
@@ -346,7 +362,6 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     uint32_t _indexingRange;
     uint32_t _indexingMaxC;
     float _indexingAlpha;
-    uint32_t _search_queue_size;
 
     // Query scratch data structures
     ConcurrentQueue<InMemQueryScratch<T> *> _query_scratch;
