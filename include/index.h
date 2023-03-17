@@ -23,46 +23,44 @@
 #define EXPAND_IF_FULL 0
 #define DEFAULT_MAXC 750
 
-namespace diskann {
+namespace diskann
+{
 
-  inline double estimate_ram_usage(_u64 size, _u32 dim, _u32 datasize,
-                                   _u32 degree) {
-    double size_of_data = ((double) size) * ROUND_UP(dim, 8) * datasize;
-    double size_of_graph =
-        ((double) size) * degree * sizeof(unsigned) * GRAPH_SLACK_FACTOR;
-    double size_of_locks = ((double) size) * sizeof(non_recursive_mutex);
-    double size_of_outer_vector = ((double) size) * sizeof(ptrdiff_t);
+inline double estimate_ram_usage(_u64 size, _u32 dim, _u32 datasize, _u32 degree)
+{
+    double size_of_data = ((double)size) * ROUND_UP(dim, 8) * datasize;
+    double size_of_graph = ((double)size) * degree * sizeof(unsigned) * GRAPH_SLACK_FACTOR;
+    double size_of_locks = ((double)size) * sizeof(non_recursive_mutex);
+    double size_of_outer_vector = ((double)size) * sizeof(ptrdiff_t);
 
-    return OVERHEAD_FACTOR * (size_of_data + size_of_graph + size_of_locks +
-                              size_of_outer_vector);
-  }
+    return OVERHEAD_FACTOR * (size_of_data + size_of_graph + size_of_locks + size_of_outer_vector);
+}
 
-  struct consolidation_report {
-    enum status_code {
-      SUCCESS = 0,
-      FAIL = 1,
-      LOCK_FAIL = 2,
-      INCONSISTENT_COUNT_ERROR = 3
+struct consolidation_report
+{
+    enum status_code
+    {
+        SUCCESS = 0,
+        FAIL = 1,
+        LOCK_FAIL = 2,
+        INCONSISTENT_COUNT_ERROR = 3
     };
     status_code _status;
-    size_t      _active_points, _max_points, _empty_slots, _slots_released,
-        _delete_set_size, _num_calls_to_process_delete;
+    size_t _active_points, _max_points, _empty_slots, _slots_released, _delete_set_size, _num_calls_to_process_delete;
     double _time;
 
-    consolidation_report(status_code status, size_t active_points,
-                         size_t max_points, size_t empty_slots,
-                         size_t slots_released, size_t delete_set_size,
-                         size_t num_calls_to_process_delete, double time_secs)
-        : _status(status), _active_points(active_points),
-          _max_points(max_points), _empty_slots(empty_slots),
+    consolidation_report(status_code status, size_t active_points, size_t max_points, size_t empty_slots,
+                         size_t slots_released, size_t delete_set_size, size_t num_calls_to_process_delete,
+                         double time_secs)
+        : _status(status), _active_points(active_points), _max_points(max_points), _empty_slots(empty_slots),
           _slots_released(slots_released), _delete_set_size(delete_set_size),
-          _num_calls_to_process_delete(num_calls_to_process_delete),
-          _time(time_secs) {
+          _num_calls_to_process_delete(num_calls_to_process_delete), _time(time_secs)
+    {
     }
-  };
+};
 
-  template<typename T, typename TagT = uint32_t, typename LabelT = uint32_t>
-  class Index {
+template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> class Index
+{
     /**************************************************************************
      *
      * Public functions acquire one or more of _update_lock, _consolidate_lock,
@@ -71,42 +69,31 @@ namespace diskann {
      *
      **************************************************************************/
 
-   public:
+  public:
     // Constructor for Bulk operations and for creating the index object solely
     // for loading a prexisting index.
-    DISKANN_DLLEXPORT Index(Metric m, const size_t dim,
-                            const size_t max_points = 1,
-                            const bool   dynamic_index = false,
-                            const bool   enable_tags = false,
-                            const bool   concurrent_consolidate = false,
-                            const bool   pq_dist_build = false,
-                            const size_t num_pq_chunks = 0,
-                            const bool   use_opq = false);
+    DISKANN_DLLEXPORT Index(Metric m, const size_t dim, const size_t max_points = 1, const bool dynamic_index = false,
+                            const bool enable_tags = false, const bool concurrent_consolidate = false,
+                            const bool pq_dist_build = false, const size_t num_pq_chunks = 0,
+                            const bool use_opq = false);
 
     // Constructor for incremental index
-    DISKANN_DLLEXPORT Index(Metric m, const size_t dim, const size_t max_points,
-                            const bool        dynamic_index,
-                            const Parameters &indexParameters,
-                            const Parameters &searchParameters,
-                            const bool        enable_tags = false,
-                            const bool        concurrent_consolidate = false,
-                            const bool        pq_dist_build = false,
-                            const size_t      num_pq_chunks = 0,
-                            const bool        use_opq = false);
+    DISKANN_DLLEXPORT Index(Metric m, const size_t dim, const size_t max_points, const bool dynamic_index,
+                            const Parameters &indexParameters, const Parameters &searchParameters,
+                            const bool enable_tags = false, const bool concurrent_consolidate = false,
+                            const bool pq_dist_build = false, const size_t num_pq_chunks = 0,
+                            const bool use_opq = false);
 
     DISKANN_DLLEXPORT ~Index();
 
     // Saves graph, data, metadata and associated tags.
-    DISKANN_DLLEXPORT void save(const char *filename,
-                                bool        compact_before_save = false);
+    DISKANN_DLLEXPORT void save(const char *filename, bool compact_before_save = false);
 
     // Load functions
 #ifdef EXEC_ENV_OLS
-    DISKANN_DLLEXPORT void load(AlignedFileReader &reader, uint32_t num_threads,
-                                uint32_t search_l);
+    DISKANN_DLLEXPORT void load(AlignedFileReader &reader, uint32_t num_threads, uint32_t search_l);
 #else
-    DISKANN_DLLEXPORT void   load(const char *index_file, uint32_t num_threads,
-                                  uint32_t search_l);
+    DISKANN_DLLEXPORT void load(const char *index_file, uint32_t num_threads, uint32_t search_l);
 #endif
 
     // get some private variables
@@ -114,27 +101,21 @@ namespace diskann {
     DISKANN_DLLEXPORT size_t get_max_points();
 
     // Batch build from a file. Optionally pass tags vector.
-    DISKANN_DLLEXPORT void build(
-        const char *filename, const size_t num_points_to_load,
-        Parameters              &parameters,
-        const std::vector<TagT> &tags = std::vector<TagT>());
+    DISKANN_DLLEXPORT void build(const char *filename, const size_t num_points_to_load, Parameters &parameters,
+                                 const std::vector<TagT> &tags = std::vector<TagT>());
 
     // Batch build from a file. Optionally pass tags file.
-    DISKANN_DLLEXPORT void build(const char  *filename,
-                                 const size_t num_points_to_load,
-                                 Parameters  &parameters,
-                                 const char  *tag_filename);
+    DISKANN_DLLEXPORT void build(const char *filename, const size_t num_points_to_load, Parameters &parameters,
+                                 const char *tag_filename);
 
     // Batch build from a data array, which must pad vectors to aligned_dim
-    DISKANN_DLLEXPORT void build(const T *data, const size_t num_points_to_load,
-                                 Parameters              &parameters,
+    DISKANN_DLLEXPORT void build(const T *data, const size_t num_points_to_load, Parameters &parameters,
                                  const std::vector<TagT> &tags);
 
     // Filtered Support
-    DISKANN_DLLEXPORT void build_filtered_index(
-        const char *filename, const std::string &label_file,
-        const size_t num_points_to_load, Parameters &parameters,
-        const std::vector<TagT> &tags = std::vector<TagT>());
+    DISKANN_DLLEXPORT void build_filtered_index(const char *filename, const std::string &label_file,
+                                                const size_t num_points_to_load, Parameters &parameters,
+                                                const std::vector<TagT> &tags = std::vector<TagT>());
 
     DISKANN_DLLEXPORT void set_universal_label(const LabelT &label);
 
@@ -150,28 +131,23 @@ namespace diskann {
     DISKANN_DLLEXPORT void optimize_index_layout();
 
     // For FastL2 search on optimized layout
-    DISKANN_DLLEXPORT void search_with_optimized_layout(const T *query,
-                                                        size_t K, size_t L,
-                                                        unsigned *indices);
+    DISKANN_DLLEXPORT void search_with_optimized_layout(const T *query, size_t K, size_t L, unsigned *indices);
 
     // Added search overload that takes L as parameter, so that we
     // can customize L on a per-query basis without tampering with "Parameters"
-    template<typename IDType>
-    DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> search(
-        const T *query, const size_t K, const unsigned L, IDType *indices,
-        float *distances = nullptr);
+    template <typename IDType>
+    DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> search(const T *query, const size_t K, const unsigned L,
+                                                           IDType *indices, float *distances = nullptr);
 
     // Initialize space for res_vectors before calling.
-    DISKANN_DLLEXPORT size_t search_with_tags(const T *query, const uint64_t K,
-                                              const unsigned L, TagT *tags,
-                                              float            *distances,
-                                              std::vector<T *> &res_vectors);
+    DISKANN_DLLEXPORT size_t search_with_tags(const T *query, const uint64_t K, const unsigned L, TagT *tags,
+                                              float *distances, std::vector<T *> &res_vectors);
 
     // Filter support search
-    template<typename IndexType>
-    DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> search_with_filters(
-        const T *query, const LabelT &filter_label, const size_t K,
-        const unsigned L, IndexType *indices, float *distances);
+    template <typename IndexType>
+    DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> search_with_filters(const T *query, const LabelT &filter_label,
+                                                                        const size_t K, const unsigned L,
+                                                                        IndexType *indices, float *distances);
 
     // Will fail if tag already in the index or if tag=0.
     DISKANN_DLLEXPORT int insert_point(const T *point, const TagT tag);
@@ -185,15 +161,13 @@ namespace diskann {
 
     // Record deleted points now and restructure graph later. Add to failed_tags
     // if tag not found.
-    DISKANN_DLLEXPORT void lazy_delete(const std::vector<TagT> &tags,
-                                       std::vector<TagT>       &failed_tags);
+    DISKANN_DLLEXPORT void lazy_delete(const std::vector<TagT> &tags, std::vector<TagT> &failed_tags);
 
     // Call after a series of lazy deletions
     // Returns number of live points left after consolidation
     // If _conc_consolidates is set in the ctor, then this call can be invoked
     // alongside inserts and lazy deletes, else it acquires _update_lock
-    DISKANN_DLLEXPORT consolidation_report
-    consolidate_deletes(const Parameters &parameters);
+    DISKANN_DLLEXPORT consolidation_report consolidate_deletes(const Parameters &parameters);
 
     DISKANN_DLLEXPORT void prune_all_nbrs(const Parameters &parameters);
 
@@ -202,8 +176,7 @@ namespace diskann {
     // repositions frozen points to the end of _data - if they have been moved
     // during deletion
     DISKANN_DLLEXPORT void reposition_frozen_point_to_end();
-    DISKANN_DLLEXPORT void reposition_point(unsigned old_location,
-                                            unsigned new_location);
+    DISKANN_DLLEXPORT void reposition_point(unsigned old_location, unsigned new_location);
 
     // DISKANN_DLLEXPORT void save_index_as_one_file(bool flag);
 
@@ -226,15 +199,14 @@ namespace diskann {
     //
     // ********************************
 
-   protected:
+  protected:
     // No copy/assign.
     Index(const Index<T, TagT, LabelT> &) = delete;
     Index<T, TagT, LabelT> &operator=(const Index<T, TagT, LabelT> &) = delete;
 
     // Use after _data and _nd have been populated
     // Acquire exclusive _update_lock before calling
-    void build_with_data_populated(Parameters              &parameters,
-                                   const std::vector<TagT> &tags);
+    void build_with_data_populated(Parameters &parameters, const std::vector<TagT> &tags);
 
     // generates 1 frozen point that will never be deleted from the graph
     // This is not visible to the user
@@ -243,47 +215,36 @@ namespace diskann {
     // determines navigating node of the graph by calculating medoid of datafopt
     unsigned calculate_entry_point();
 
-    void parse_label_file(const std::string &label_file,
-                          size_t            &num_pts_labels);
+    void parse_label_file(const std::string &label_file, size_t &num_pts_labels);
 
-    std::unordered_map<std::string, LabelT> load_label_map(
-        const std::string &map_file);
+    std::unordered_map<std::string, LabelT> load_label_map(const std::string &map_file);
 
-    std::pair<uint32_t, uint32_t> iterate_to_fixed_point(
-        const T *node_coords, const unsigned Lindex,
-        const std::vector<unsigned> &init_ids, InMemQueryScratch<T> *scratch,
-        bool use_filter, const std::vector<LabelT> &filters,
-        bool ret_frozen = true, bool search_invocation = false);
+    std::pair<uint32_t, uint32_t> iterate_to_fixed_point(const T *node_coords, const unsigned Lindex,
+                                                         const std::vector<unsigned> &init_ids,
+                                                         InMemQueryScratch<T> *scratch, bool use_filter,
+                                                         const std::vector<LabelT> &filters, bool ret_frozen = true,
+                                                         bool search_invocation = false);
 
-    void search_for_point_and_prune(int location, _u32 Lindex,
-                                    std::vector<unsigned> &pruned_list,
-                                    InMemQueryScratch<T>  *scratch,
-                                    bool                   use_filter = false,
-                                    _u32                   filteredLindex = 0);
+    void search_for_point_and_prune(int location, _u32 Lindex, std::vector<unsigned> &pruned_list,
+                                    InMemQueryScratch<T> *scratch, bool use_filter = false, _u32 filteredLindex = 0);
 
-    void prune_neighbors(const unsigned location, std::vector<Neighbor> &pool,
-                         std::vector<unsigned> &pruned_list,
-                         InMemQueryScratch<T>  *scratch);
+    void prune_neighbors(const unsigned location, std::vector<Neighbor> &pool, std::vector<unsigned> &pruned_list,
+                         InMemQueryScratch<T> *scratch);
 
-    void prune_neighbors(const unsigned location, std::vector<Neighbor> &pool,
-                         const _u32 range, const _u32 max_candidate_size,
-                         const float alpha, std::vector<unsigned> &pruned_list,
+    void prune_neighbors(const unsigned location, std::vector<Neighbor> &pool, const _u32 range,
+                         const _u32 max_candidate_size, const float alpha, std::vector<unsigned> &pruned_list,
                          InMemQueryScratch<T> *scratch);
 
     // Prunes candidates in @pool to a shorter list @result
     // @pool must be sorted before calling
-    void occlude_list(
-        const unsigned location, std::vector<Neighbor> &pool, const float alpha,
-        const unsigned degree, const unsigned maxc,
-        std::vector<unsigned> &result, InMemQueryScratch<T> *scratch,
-        const tsl::robin_set<unsigned> *const delete_set_ptr = nullptr);
+    void occlude_list(const unsigned location, std::vector<Neighbor> &pool, const float alpha, const unsigned degree,
+                      const unsigned maxc, std::vector<unsigned> &result, InMemQueryScratch<T> *scratch,
+                      const tsl::robin_set<unsigned> *const delete_set_ptr = nullptr);
 
     // add reverse links from all the visited nodes to node n.
-    void inter_insert(unsigned n, std::vector<unsigned> &pruned_list,
-                      const _u32 range, InMemQueryScratch<T> *scratch);
+    void inter_insert(unsigned n, std::vector<unsigned> &pruned_list, const _u32 range, InMemQueryScratch<T> *scratch);
 
-    void inter_insert(unsigned n, std::vector<unsigned> &pruned_list,
-                      InMemQueryScratch<T> *scratch);
+    void inter_insert(unsigned n, std::vector<unsigned> &pruned_list, InMemQueryScratch<T> *scratch);
 
     // Acquire exclusive _update_lock before calling
     void link(Parameters &parameters);
@@ -310,12 +271,10 @@ namespace diskann {
     // Remove deleted nodes from adjacency list of node loc
     // Replace removed neighbors with second order neighbors.
     // Also acquires _locks[i] for i = loc and out-neighbors of loc.
-    void process_delete(const tsl::robin_set<unsigned> &old_delete_set,
-                        size_t loc, const unsigned range, const unsigned maxc,
-                        const float alpha, InMemQueryScratch<T> *scratch);
+    void process_delete(const tsl::robin_set<unsigned> &old_delete_set, size_t loc, const unsigned range,
+                        const unsigned maxc, const float alpha, InMemQueryScratch<T> *scratch);
 
-    void initialize_query_scratch(uint32_t num_threads, uint32_t search_l,
-                                  uint32_t indexing_l, uint32_t r,
+    void initialize_query_scratch(uint32_t num_threads, uint32_t search_l, uint32_t indexing_l, uint32_t r,
                                   uint32_t maxc, size_t dim);
 
     // Do not call without acquiring appropriate locks
@@ -325,26 +284,24 @@ namespace diskann {
     DISKANN_DLLEXPORT _u64 save_tags(std::string filename);
     DISKANN_DLLEXPORT _u64 save_delete_list(const std::string &filename);
 #ifdef EXEC_ENV_OLS
-    DISKANN_DLLEXPORT size_t load_graph(AlignedFileReader &reader,
-                                        size_t             expected_num_points);
+    DISKANN_DLLEXPORT size_t load_graph(AlignedFileReader &reader, size_t expected_num_points);
     DISKANN_DLLEXPORT size_t load_data(AlignedFileReader &reader);
     DISKANN_DLLEXPORT size_t load_tags(AlignedFileReader &reader);
     DISKANN_DLLEXPORT size_t load_delete_set(AlignedFileReader &reader);
 #else
-    DISKANN_DLLEXPORT size_t load_graph(const std::string filename,
-                                        size_t            expected_num_points);
+    DISKANN_DLLEXPORT size_t load_graph(const std::string filename, size_t expected_num_points);
     DISKANN_DLLEXPORT size_t load_data(std::string filename0);
     DISKANN_DLLEXPORT size_t load_tags(const std::string tag_file_name);
     DISKANN_DLLEXPORT size_t load_delete_set(const std::string &filename);
 #endif
 
-   private:
+  private:
     // Distance functions
-    Metric       _dist_metric = diskann::L2;
+    Metric _dist_metric = diskann::L2;
     Distance<T> *_distance = nullptr;
 
     // Data
-    T    *_data = nullptr;
+    T *_data = nullptr;
     char *_opt_graph = nullptr;
 
     // Graph related data structures
@@ -353,8 +310,8 @@ namespace diskann {
     // Dimensions
     size_t _dim = 0;
     size_t _aligned_dim = 0;
-    size_t _nd = 0;  // number of active points i.e. existing in the graph
-    size_t _max_points = 0;  // total number of points in given data set
+    size_t _nd = 0;         // number of active points i.e. existing in the graph
+    size_t _max_points = 0; // total number of points in given data set
     size_t _num_frozen_pts = 0;
     size_t _max_range_of_loaded_graph = 0;
     size_t _node_size;
@@ -366,40 +323,40 @@ namespace diskann {
 
     bool _has_built = false;
     bool _saturate_graph = false;
-    bool _save_as_one_file = false;  // plan to support in next version
+    bool _save_as_one_file = false; // plan to support in next version
     bool _dynamic_index = false;
     bool _enable_tags = false;
-    bool _normalize_vecs = false;  // Using normalied L2 for cosine.
+    bool _normalize_vecs = false; // Using normalied L2 for cosine.
 
     // Filter Support
 
-    bool                                    _filtered_index = false;
-    std::vector<std::vector<LabelT>>        _pts_to_labels;
-    tsl::robin_set<LabelT>                  _labels;
-    std::string                             _labels_file;
-    std::unordered_map<LabelT, _u32>        _label_to_medoid_id;
-    std::unordered_map<_u32, _u32>          _medoid_counts;
-    bool                                    _use_universal_label = false;
-    LabelT                                  _universal_label = 0;
-    uint32_t                                _filterIndexingQueueSize;
+    bool _filtered_index = false;
+    std::vector<std::vector<LabelT>> _pts_to_labels;
+    tsl::robin_set<LabelT> _labels;
+    std::string _labels_file;
+    std::unordered_map<LabelT, _u32> _label_to_medoid_id;
+    std::unordered_map<_u32, _u32> _medoid_counts;
+    bool _use_universal_label = false;
+    LabelT _universal_label = 0;
+    uint32_t _filterIndexingQueueSize;
     std::unordered_map<std::string, LabelT> _label_map;
 
     // Indexing parameters
     uint32_t _indexingQueueSize;
     uint32_t _indexingRange;
     uint32_t _indexingMaxC;
-    float    _indexingAlpha;
+    float _indexingAlpha;
     uint32_t _search_queue_size;
 
     // Query scratch data structures
     ConcurrentQueue<InMemQueryScratch<T> *> _query_scratch;
 
     // Flags for PQ based distance calculation
-    bool              _pq_dist = false;
-    bool              _use_opq = false;
-    size_t            _num_pq_chunks = 0;
-    _u8              *_pq_data = nullptr;
-    bool              _pq_generated = false;
+    bool _pq_dist = false;
+    bool _use_opq = false;
+    size_t _num_pq_chunks = 0;
+    _u8 *_pq_data = nullptr;
+    bool _pq_generated = false;
     FixedChunkPQTable _pq_table;
 
     //
@@ -408,33 +365,33 @@ namespace diskann {
 
     // lazy_delete removes entry from _location_to_tag and _tag_to_location. If
     // _location_to_tag does not resolve a location, infer that it was deleted.
-    tsl::sparse_map<TagT, unsigned>    _tag_to_location;
+    tsl::sparse_map<TagT, unsigned> _tag_to_location;
     natural_number_map<unsigned, TagT> _location_to_tag;
 
     // _empty_slots has unallocated slots and those freed by consolidate_delete.
     // _delete_set has locations marked deleted by lazy_delete. Will not be
     // immediately available for insert. consolidate_delete will release these
     // slots to _empty_slots.
-    natural_number_set<unsigned>              _empty_slots;
+    natural_number_set<unsigned> _empty_slots;
     std::unique_ptr<tsl::robin_set<unsigned>> _delete_set;
 
-    bool _data_compacted = true;  // true if data has been compacted
-    bool _is_saved = false;  // Gopal. Checking if the index is already saved.
-    bool _conc_consolidate = false;  // use _lock while searching
+    bool _data_compacted = true;    // true if data has been compacted
+    bool _is_saved = false;         // Gopal. Checking if the index is already saved.
+    bool _conc_consolidate = false; // use _lock while searching
 
     // Acquire locks in the order below when acquiring multiple locks
-    std::shared_timed_mutex  // RW mutex between save/load (exclusive lock) and
-        _update_lock;        // search/inserts/deletes/consolidate (shared lock)
-    std::shared_timed_mutex  // Ensure only one consolidate or compact_data is
-        _consolidate_lock;   // ever active
-    std::shared_timed_mutex  // RW lock for _tag_to_location,
-        _tag_lock;           // _location_to_tag, _empty_slots, _nd, _max_points
-    std::shared_timed_mutex  // RW Lock on _delete_set and _data_compacted
-        _delete_lock;        // variable
+    std::shared_timed_mutex // RW mutex between save/load (exclusive lock) and
+        _update_lock;       // search/inserts/deletes/consolidate (shared lock)
+    std::shared_timed_mutex // Ensure only one consolidate or compact_data is
+        _consolidate_lock;  // ever active
+    std::shared_timed_mutex // RW lock for _tag_to_location,
+        _tag_lock;          // _location_to_tag, _empty_slots, _nd, _max_points
+    std::shared_timed_mutex // RW Lock on _delete_set and _data_compacted
+        _delete_lock;       // variable
 
     // Per node lock, cardinality=_max_points
     std::vector<non_recursive_mutex> _locks;
 
     static const float INDEX_GROWTH_FACTOR;
-  };
-}  // namespace diskann
+};
+} // namespace diskann
