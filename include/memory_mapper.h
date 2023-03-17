@@ -15,9 +15,11 @@
 #endif
 #include <string>
 
-namespace diskann {
-  class MemoryMapper {
-   private:
+namespace diskann
+{
+class MemoryMapper
+{
+  private:
 #ifndef _WINDOWS
     int _fd;
 #else
@@ -25,17 +27,17 @@ namespace diskann {
     HANDLE _fd;
 
 #endif
-    char*       _buf;
-    size_t      _fileSize;
-    const char* _fileName;
+    char *_buf;
+    size_t _fileSize;
+    const char *_fileName;
 
-   public:
-    MemoryMapper(const char* filename);
-    MemoryMapper(const std::string& filename);
+  public:
+    MemoryMapper(const char *filename);
+    MemoryMapper(const std::string &filename);
 
-    char*  getBuf();
+    char *getBuf();
     size_t getFileSize();
 
     ~MemoryMapper();
-  };
-}  // namespace diskann
+};
+} // namespace diskann

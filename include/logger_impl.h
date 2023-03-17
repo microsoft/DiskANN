@@ -9,29 +9,32 @@
 #include "ann_exception.h"
 #include "logger.h"
 
-namespace diskann {
-  class ANNStreamBuf : public std::basic_streambuf<char> {
-   public:
-    DISKANN_DLLEXPORT explicit ANNStreamBuf(FILE* fp);
+namespace diskann
+{
+class ANNStreamBuf : public std::basic_streambuf<char>
+{
+  public:
+    DISKANN_DLLEXPORT explicit ANNStreamBuf(FILE *fp);
     DISKANN_DLLEXPORT ~ANNStreamBuf();
 
-    DISKANN_DLLEXPORT bool is_open() const {
-      return true;  // because stdout and stderr are always open.
+    DISKANN_DLLEXPORT bool is_open() const
+    {
+        return true; // because stdout and stderr are always open.
     }
-    DISKANN_DLLEXPORT void        close();
+    DISKANN_DLLEXPORT void close();
     DISKANN_DLLEXPORT virtual int underflow();
     DISKANN_DLLEXPORT virtual int overflow(int c);
     DISKANN_DLLEXPORT virtual int sync();
 
-   private:
-    FILE*      _fp;
-    char*      _buf;
-    int        _bufIndex;
+  private:
+    FILE *_fp;
+    char *_buf;
+    int _bufIndex;
     std::mutex _mutex;
-    LogLevel   _logLevel;
+    LogLevel _logLevel;
 
-    int  flush();
-    void logImpl(char* str, int numchars);
+    int flush();
+    void logImpl(char *str, int numchars);
 
 // Why the two buffer-sizes? If we are running normally, we are basically
 // interacting with a character output system, so we short-circuit the
@@ -56,7 +59,7 @@ namespace diskann {
     static const int BUFFER_SIZE = 4;
 #endif
 
-    ANNStreamBuf(const ANNStreamBuf&);
-    ANNStreamBuf& operator=(const ANNStreamBuf&);
-  };
-}  // namespace diskann
+    ANNStreamBuf(const ANNStreamBuf &);
+    ANNStreamBuf &operator=(const ANNStreamBuf &);
+};
+} // namespace diskann

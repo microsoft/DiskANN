@@ -115,36 +115,40 @@ int main(int argc, char** argv) {
   }
   codebook_prefix = codebook_prefix == "0"? "" : codebook_prefix;
 
-  bool use_filters = false;
-  if (label_file != "") {
-    use_filters = true;
-  }
-
-  diskann::Metric metric;
-  if (dist_fn == std::string("l2"))
-    metric = diskann::Metric::L2;
-  else if (dist_fn == std::string("mips"))
-    metric = diskann::Metric::INNER_PRODUCT;
-  else {
-    std::cout << "Error. Only l2 and mips distance functions are supported"
-              << std::endl;
-    return -1;
-  }
-
-  if (append_reorder_data) {
-    if (disk_PQ == 0) {
-      std::cout << "Error: It is not necessary to append data for reordering "
-                   "when vectors are not compressed on disk."
-                << std::endl;
-      return -1;
+    bool use_filters = false;
+    if (label_file != "")
+    {
+        use_filters = true;
     }
-    if (data_type != std::string("float")) {
-      std::cout << "Error: Appending data for reordering currently only "
-                   "supported for float data type."
-                << std::endl;
-      return -1;
+
+    diskann::Metric metric;
+    if (dist_fn == std::string("l2"))
+        metric = diskann::Metric::L2;
+    else if (dist_fn == std::string("mips"))
+        metric = diskann::Metric::INNER_PRODUCT;
+    else
+    {
+        std::cout << "Error. Only l2 and mips distance functions are supported" << std::endl;
+        return -1;
     }
-  }
+
+    if (append_reorder_data)
+    {
+        if (disk_PQ == 0)
+        {
+            std::cout << "Error: It is not necessary to append data for reordering "
+                         "when vectors are not compressed on disk."
+                      << std::endl;
+            return -1;
+        }
+        if (data_type != std::string("float"))
+        {
+            std::cout << "Error: Appending data for reordering currently only "
+                         "supported for float data type."
+                      << std::endl;
+            return -1;
+        }
+    }
 
   std::string params = std::string(std::to_string(R)) + " " +
                        std::string(std::to_string(L)) + " " +
