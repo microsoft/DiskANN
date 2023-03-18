@@ -2,10 +2,9 @@
 
 [![DiskANN Pull Request Build and Test](https://github.com/microsoft/DiskANN/actions/workflows/pr-test.yml/badge.svg)](https://github.com/microsoft/DiskANN/actions/workflows/pr-test.yml)
 
-The goal of the project is to build scalable, performant, streaming and cost-effective approximate nearest neighbor search algorithms for large-scale vector search.
-This release has the code from the [DiskANN paper](https://papers.nips.cc/paper/9527-rand-nsg-fast-accurate-billion-point-nearest-neighbor-search-on-a-single-node.pdf) published in NeurIPS 2019, 
-the [streaming DiskANN paper](https://arxiv.org/abs/2105.09613) and improvements. 
-This code reuses and builds upon some of the [code for NSG](https://github.com/ZJULearning/nsg) algorithm.
+DiskANN is a suite of scalable, accurate and cost-effective approximate nearest neighbor search algorithms for large-scale vector search that support real-time changes and simple filters.
+This code is based on ideas from the [DiskANN](https://papers.nips.cc/paper/9527-rand-nsg-fast-accurate-billion-point-nearest-neighbor-search-on-a-single-node.pdf), [streaming DiskANN](https://arxiv.org/abs/2105.09613) and the [Filtered-DiskANN](https://harsha-simhadri.org/pubs/Filtered-DiskANN23.pdf) papers with further improvements. 
+This code forked off from [code for NSG](https://github.com/ZJULearning/nsg) algorithm.
 
 This project has adopted the [Microsoft Open Source Code of Conduct](https://opensource.microsoft.com/codeofconduct/).
 For more information see the [Code of Conduct FAQ](https://opensource.microsoft.com/codeofconduct/faq/) or
