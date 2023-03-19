@@ -289,7 +289,7 @@ int aux_main(const std::string &input_file,
                               sample_gaussian_number() * error_magnitude;
           }
           const int64_t piece_id =
-              lsh_tree.route_to_piece<float>(dim, noised_query.get());
+              lsh_tree.route_to_piece(dim, noised_query.get());
           if (piece_id != -1) {
             const size_t shard_id = piece_to_shard[piece_id];
             // is this a new shard?
