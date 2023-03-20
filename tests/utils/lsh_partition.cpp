@@ -45,6 +45,8 @@ std::unique_ptr<float[]> sample_gaussian_vector(size_t dim) {
   return res;
 }
 
+size_t lsh_nodes_created = 0;
+
 template<typename T>
 class LSHTreeNode {
     std::unique_ptr<float[]> direction;
@@ -100,7 +102,7 @@ class LSHTreeNode {
           if (initial_partition.size() == 1) {
             build(p.second, dim, points, pieces, max_piece_size,
                   width * width_multiplier);
-            return;
+            return; // w/o incrementing lsh_nodes_created
           }
 
           LSHTreeNode* child = new LSHTreeNode;
@@ -109,6 +111,7 @@ class LSHTreeNode {
           children.emplace(p.first, std::make_pair(child, 0));
         }
       }
+      lsh_nodes_created++;
     }
 
     // returns -1 if it would get routed to an empty piece
@@ -251,6 +254,8 @@ int aux_main(const std::string &input_file,
     constexpr float                    initial_width = 1e30;
     // run the LSH partitioning into pieces
     lsh_tree.build(all_ids, dim, points.get(), pieces, max_shard_size, initial_width);
+    diskann::cout << lsh_nodes_created << " LSH tree nodes created"
+                  << std::endl;
 
     // bin-pack pieces into shards
     diskann::cout << "LSH partitioning finished. Now bin-packing pieces into shards..." << std::endl;
