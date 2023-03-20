@@ -190,7 +190,7 @@ int write_shards_to_disk(const std::string& output_file_prefix, const size_t num
         }
       }
       // write ids
-      shard_data_writer[shard_id].write(
+      shard_idmap_writer[shard_id].write(
           (char*) pieces[piece_id].data(),
           sizeof(uint32_t) * pieces[piece_id].size());
       shard_counts[shard_id] += pieces[piece_id].size();
@@ -230,6 +230,7 @@ int aux_main(const std::string &input_file,
     // (maybe first do LSH on a subsampled subset)
     size_t num_points, dim;
     std::unique_ptr<T[]> points;
+    diskann::cout << "Reading the dataset..." << std::endl;
     diskann::load_bin<T>(input_file, points, num_points, dim);
 
     std::vector<uint32_t> all_ids(num_points);
@@ -244,10 +245,12 @@ int aux_main(const std::string &input_file,
     lsh_tree.build(all_ids, dim, points.get(), pieces, max_shard_size, initial_width);
 
     // bin-pack pieces into shards
+    diskann::cout << "LSH partitioning finished. Now bin-packing pieces into shards..." << std::endl;
     const std::vector<size_t> piece_to_shard = bin_packing(pieces, max_shard_size);
     const size_t num_shards = piece_to_shard.back() + 1;
 
     // write shards to disk
+    diskann::cout << "Writing shards to disk..." << std::endl;
     int ret = write_shards_to_disk<T>(output_file_prefix, num_shards, false,
                                    points.get(), dim, pieces, piece_to_shard);
     if (ret != 0)
@@ -263,6 +266,7 @@ int aux_main(const std::string &input_file,
 
       size_t num_queries, query_dim;
       std::unique_ptr<T[]> queries;
+      diskann::cout << "Reading the query set..." << std::endl;
       diskann::load_bin<T>(query_file, queries, num_queries, query_dim);
       if (query_dim != dim) {
         diskann::cout << "dimension mismatch between dataset and query file"
@@ -272,6 +276,7 @@ int aux_main(const std::string &input_file,
 
       std::vector<std::vector<uint32_t>> query_pieces(pieces.size());
       for (size_t query_id = 0; query_id < num_queries; ++query_id) {
+        diskann::cout << "query_id = " << query_id << std::endl;
         // a variant of multi-probe LSH:
         // until you have `query_fanout` different shards,
         // add some random error to the query, and route to a shard
@@ -299,14 +304,19 @@ int aux_main(const std::string &input_file,
           }
           // increase magnitude of error for the next try
           if (error_magnitude == 0.0) {
-            error_magnitude = 1e-10; // some initial value
+            error_magnitude = 1e-15; // some initial value
           } else {
-            error_magnitude *= 2.0;
+            error_magnitude *= 1.1;
+            if (error_magnitude > 1e15) {
+              // time to give up
+              break;
+            }
           }
         }
       }
 
       // write routed queries to disk
+      diskann::cout << "Writing query assignments to disk..." << std::endl;
       int ret =
           write_shards_to_disk<T>(output_file_prefix, num_shards, true, nullptr,
                                   dim, query_pieces, piece_to_shard);
