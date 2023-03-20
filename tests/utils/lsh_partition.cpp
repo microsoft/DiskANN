@@ -95,8 +95,17 @@ class LSHTreeNode {
           pieces.emplace_back(std::move(p.second));
           children.emplace(p.first, std::make_pair(nullptr, piece_id));
         } else {
+
+          // optimization: contract nodes with just one child (trivial partitions)
+          if (initial_partition.size() == 1) {
+            build(p.second, dim, points, pieces, max_piece_size,
+                  width * width_multiplier);
+            return;
+          }
+
           LSHTreeNode* child = new LSHTreeNode;
-          child->build(p.second, dim, points, pieces, max_piece_size, width * width_multiplier);
+          child->build(p.second, dim, points, pieces, max_piece_size,
+                       width * width_multiplier);
           children.emplace(p.first, std::make_pair(child, 0));
         }
       }
