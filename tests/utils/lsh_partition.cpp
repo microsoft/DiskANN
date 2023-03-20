@@ -276,7 +276,8 @@ int aux_main(const std::string &input_file,
 
       std::vector<std::vector<uint32_t>> query_pieces(pieces.size());
       for (size_t query_id = 0; query_id < num_queries; ++query_id) {
-        diskann::cout << "query_id = " << query_id << std::endl;
+        if (query_id % 100 == 0)
+          diskann::cout << "query_id = " << query_id << std::endl;
         // a variant of multi-probe LSH:
         // until you have `query_fanout` different shards,
         // add some random error to the query, and route to a shard
@@ -306,7 +307,10 @@ int aux_main(const std::string &input_file,
           if (error_magnitude == 0.0) {
             error_magnitude = 1e-15; // some initial value
           } else {
-            error_magnitude *= 1.1;
+            if (error_magnitude < 1e-1)
+              error_magnitude *= 2.0;
+            else
+              error_magnitude *= 1.01;
             if (error_magnitude > 1e15) {
               // time to give up
               break;
@@ -323,6 +327,8 @@ int aux_main(const std::string &input_file,
       if (ret != 0)
         return ret;
     }
+
+    diskann::cout << "Produced " << num_shards << " shards" << std::endl;
     return 0;
 }
 
