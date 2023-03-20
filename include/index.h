@@ -171,6 +171,8 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 
     DISKANN_DLLEXPORT void prune_all_nbrs(const Parameters &parameters);
 
+    DISKANN_DLLEXPORT void prune_all_nbrs(const Parameters &parameters);
+
     DISKANN_DLLEXPORT bool is_index_saved();
 
     // repositions frozen points to the end of _data - if they have been moved
@@ -339,6 +341,19 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     bool _use_universal_label = false;
     LabelT _universal_label = 0;
     uint32_t _filterIndexingQueueSize;
+    std::unordered_map<std::string, LabelT> _label_map;
+
+    // Filter Support
+
+    bool                            _filtered_index = false;
+    std::vector<std::vector<LabelT>> _pts_to_labels;
+    tsl::robin_set<LabelT>           _labels;
+    std::string                     _labels_file;
+    std::unordered_map<LabelT, _u32> _label_to_medoid_id;
+    std::unordered_map<_u32, _u32>  _medoid_counts;
+    bool                            _use_universal_label = false;
+    LabelT                           _universal_label = 0;
+    uint32_t                        _filterIndexingQueueSize;
     std::unordered_map<std::string, LabelT> _label_map;
 
     // Indexing parameters
