@@ -65,10 +65,6 @@ int search_disk_index(
   else
     diskann::cout << ", io_limit: " << search_io_limit << "." << std::endl;
 
-    bool filtered_search = false;
-    if (filter_label != "")
-        filtered_search = true;
-
     std::string warmup_query_file = index_path_prefix + "_sample_data.bin";
 
     // load query bin
