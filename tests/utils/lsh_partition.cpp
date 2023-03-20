@@ -20,8 +20,7 @@ float dot_product(const T1* a, const T2* b, const size_t dim) {
 }
 
 float sample_random_number(bool normal) {
-  static std::random_device                    rd;
-  static auto                                  seed = rd();
+  constexpr unsigned                           seed = 3500; // lucky seed
   static std::mt19937                          generator(seed);
   static std::uniform_real_distribution<float> uniform_distribution(0, 1);
   static std::normal_distribution<float>       normal_distribution(0, 1);
