@@ -2990,7 +2990,7 @@ void Index<T, TagT, LabelT>::search_with_optimized_layout(const T *query, size_t
         auto nbr = retset.closest_unexpanded();
         auto n = nbr.id;
         _mm_prefetch(_opt_graph + _node_size * n + _data_len, _MM_HINT_T0);
-        unsigned *neighbors = (unsigned *)(_opt_graph + _node_size * n + _data_len);
+        neighbors = (unsigned *)(_opt_graph + _node_size * n + _data_len);
         unsigned MaxM = *neighbors;
         neighbors++;
         for (unsigned m = 0; m < MaxM; ++m)
