@@ -481,7 +481,7 @@ int aux_main(const std::string &base_file, const std::string &label_file, const 
       std::vector<size_t> rev_map;
 
       for (int p = 0; p < num_parts; p++)
-    {
+      {
         size_t start_id = p * PARTSIZE;
         if (!isFiltered)
         {
@@ -571,8 +571,8 @@ int aux_main(const std::string &base_file, const std::string &label_file, const 
       save_groundtruth_as_one_file(gt_file_name, closest_points, dist_closest_points, nqueries, k);
       delete[] closest_points;
       delete[] dist_closest_points;
-      diskann::aligned_free(query_data);
     }
+    diskann::aligned_free(query_data);
     
     return 0;
 }
