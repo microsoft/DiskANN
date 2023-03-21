@@ -18,7 +18,7 @@ void WindowsAlignedFileReader::open(const std::string &fname)
     m_filename = fname;
 #endif
 
-  this->register_thread();
+    this->register_thread();
 }
 
 void WindowsAlignedFileReader::close()

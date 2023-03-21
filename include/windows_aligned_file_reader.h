@@ -19,8 +19,7 @@
 
 class WindowsAlignedFileReader : public AlignedFileReader
 {
- private:
-
+  private:
 #ifdef UNICODE
     std::wstring m_filename;
 #else
