@@ -1014,9 +1014,10 @@ template <typename T> inline void normalize(T *arr, size_t dim)
         arr[i] = (T)(arr[i] / sum);
     }
 }
-template <typename T> inline std::vector<T> readFileLinesInVector(const std::string& filename)
+template <typename T> inline std::vector<T> readFileLinesInVector(const std::string& filename, bool unique=false)
 {
     std::vector<T> result;
+    std::set<T> elementSet;
     if (filename != "")
     {
         std::ifstream file(filename);
@@ -1040,7 +1041,14 @@ template <typename T> inline std::vector<T> readFileLinesInVector(const std::str
             {
                 line.erase(line.size() - 1);
             }
-            result.push_back(line);
+            if (!elementSet.count(line))
+            {
+               result.push_back(line);
+            }
+            if (unique)
+            {
+                elementSet.insert(line);
+            }
         }
         file.close();
     }
