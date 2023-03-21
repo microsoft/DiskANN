@@ -32,7 +32,6 @@ int search_memory_index(diskann::Metric& metric, const std::string& index_path,
                         const bool                   print_all_recalls,
                         const std::vector<unsigned>& Lvec, const bool dynamic,
                         const bool tags, const bool show_qps_per_thread,
-                        const std::string& filter_label,
                         const std::vector<std::string>& query_filters,
                         const float        fail_if_recall_below) {
   // Load the query file
@@ -58,12 +57,9 @@ int search_memory_index(diskann::Metric& metric, const std::string& index_path,
   }
 
   bool filtered_search = false;
-  if (filter_label != "") {
+  if (!query_filters.empty()){
     filtered_search = true;
-  }
-  if (query_filters.size() != 0){
-    filtered_search = true;
-    if (query_filters.size() != query_num){
+    if (query_filters.size()!= 1 && query_filters.size() != query_num){
       std::cout << "Error. Mismatch in number of queries and size of query filters file"
                 << std::endl;
       return -1; // To return -1 or some other error handling?
@@ -147,8 +143,9 @@ int search_memory_index(diskann::Metric& metric, const std::string& index_path,
       auto qs = std::chrono::high_resolution_clock::now();
       if (filtered_search) {
         LabelT filter_label_as_num;
-        if (filter_label != ""){
-          filter_label_as_num = index.get_converted_label(filter_label);
+        if (query_filters.size() == 1)
+        {
+          filter_label_as_num = index.get_converted_label(query_filters[0]);
         } else{
           filter_label_as_num = index.get_converted_label(query_filters[i]);
         }
@@ -250,7 +247,6 @@ int main(int argc, char** argv) {
   std::vector<unsigned> Lvec;
   bool                  print_all_recalls, dynamic, tags, show_qps_per_thread;
   float                 fail_if_recall_below = 0.0f;
-  std::vector<std::string> query_filters;
 
   po::options_description desc{"Arguments"};
   try {
@@ -372,28 +368,14 @@ int main(int argc, char** argv) {
     return -1;
   }
 
-
-  if (query_filters_file != ""){
-    std::ifstream file(query_filters_file);
-    std::string line;
-    while (std::getline(file, line)) {
-        if (line.empty()){
-          break;
-        }
-        if (!line.empty() && line.back() == '\r') {
-              line.erase(line.size() - 1);
-        }
-        if (!line.empty() && line.back() == '\n') {
-            line.erase(line.size() - 1);
-        }
-        if (line.find(',') != std::string::npos) { 
-            std::cerr << "Every query must have exactly one filter"
-              << std::endl;
-              return -1;
-        }
-        query_filters.push_back(line);         
-    }
-    file.close();
+  std::vector<std::string> query_filters;
+  if (filter_label != "")
+  {
+    query_filters.push_back(filter_label);
+  }
+  else if (query_filters_file !="")
+  {
+    query_filters = readFileLinesInVector<std::string>(query_filters_file);
   }
 
   try {
@@ -402,17 +384,17 @@ int main(int argc, char** argv) {
         return search_memory_index<int8_t, uint16_t>(
             metric, index_path_prefix, result_path, query_file, gt_file,
             num_threads, K, print_all_recalls, Lvec, dynamic, tags,
-            show_qps_per_thread, filter_label, query_filters, fail_if_recall_below);
+            show_qps_per_thread, query_filters, fail_if_recall_below);
       } else if (data_type == std::string("uint8")) {
         return search_memory_index<uint8_t, uint16_t>(
             metric, index_path_prefix, result_path, query_file, gt_file,
             num_threads, K, print_all_recalls, Lvec, dynamic, tags,
-            show_qps_per_thread, filter_label, query_filters, fail_if_recall_below);
+            show_qps_per_thread, query_filters, fail_if_recall_below);
       } else if (data_type == std::string("float")) {
         return search_memory_index<float, uint16_t>(
             metric, index_path_prefix, result_path, query_file, gt_file,
             num_threads, K, print_all_recalls, Lvec, dynamic, tags,
-            show_qps_per_thread, filter_label, query_filters, fail_if_recall_below);
+            show_qps_per_thread, query_filters, fail_if_recall_below);
       } else {
         std::cout << "Unsupported type. Use float/int8/uint8" << std::endl;
         return -1;
@@ -422,17 +404,17 @@ int main(int argc, char** argv) {
         return search_memory_index<int8_t>(
             metric, index_path_prefix, result_path, query_file, gt_file,
             num_threads, K, print_all_recalls, Lvec, dynamic, tags,
-            show_qps_per_thread, filter_label, query_filters, fail_if_recall_below);
+            show_qps_per_thread, query_filters, fail_if_recall_below);
       } else if (data_type == std::string("uint8")) {
         return search_memory_index<uint8_t>(
             metric, index_path_prefix, result_path, query_file, gt_file,
             num_threads, K, print_all_recalls, Lvec, dynamic, tags,
-            show_qps_per_thread, filter_label, query_filters, fail_if_recall_below);
+            show_qps_per_thread, query_filters, fail_if_recall_below);
       } else if (data_type == std::string("float")) {
         return search_memory_index<float>(
             metric, index_path_prefix, result_path, query_file, gt_file,
             num_threads, K, print_all_recalls, Lvec, dynamic, tags,
-            show_qps_per_thread, filter_label, query_filters, fail_if_recall_below);
+            show_qps_per_thread, query_filters, fail_if_recall_below);
       } else {
         std::cout << "Unsupported type. Use float/int8/uint8" << std::endl;
         return -1;

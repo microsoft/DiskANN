@@ -1014,6 +1014,42 @@ template <typename T> inline void normalize(T *arr, size_t dim)
         arr[i] = (T)(arr[i] / sum);
     }
 }
+template <typename T> inline std::vector<T> readFileLinesInVector(const std::string& filename)
+{
+    std::vector<T> result;
+    if (filename != "")
+    {
+        std::ifstream file(filename);
+        if (file.fail())
+        {
+            throw diskann::ANNException(std::string("Failed to open file ") + filename, -1);
+        }
+        std::string line;
+        while (std::getline(file, line))
+        {
+            if (line.empty())
+            {
+                break;
+            }
+            if (line.find(',') != std::string::npos)
+            {
+                std::cerr << "Every query must have exactly one filter" << std::endl;
+                exit(-1);
+            }
+            if (!line.empty() && (line.back() == '\r' || line.back() == '\n'))
+            {
+                line.erase(line.size() - 1);
+            }
+            result.push_back(line);
+        }
+        file.close();
+    }
+    else
+    {
+      throw diskann::ANNException(std::string("Failed to open file. filename can not be blank"), -1);
+    }
+    return result;
+}
 
 #ifdef _WINDOWS
 #include <intrin.h>
