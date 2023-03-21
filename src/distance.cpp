@@ -79,8 +79,6 @@ float SlowDistanceCosineUInt8::compare(const uint8_t *a, const uint8_t *b, uint3
 
 float DistanceL2Int8::compare(const int8_t *a, const int8_t *b, uint32_t size) const
 {
-    int32_t result = 0;
-
 #ifdef _WINDOWS
 #ifdef USE_AVX2
     __m256 r = _mm256_setzero_ps();
