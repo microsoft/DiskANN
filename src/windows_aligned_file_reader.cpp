@@ -9,7 +9,8 @@
 
 #define SECTOR_LEN 4096
 
-void WindowsAlignedFileReader::open(const std::string& fname) {
+void WindowsAlignedFileReader::open(const std::string& fname)
+{
 
 #ifdef UNICODE
   m_filename = std::wstring(fname.begin(), fname.end());

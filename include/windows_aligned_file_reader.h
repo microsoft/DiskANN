@@ -17,7 +17,8 @@
 #include "utils.h"
 #include "windows_customizations.h"
 
-class WindowsAlignedFileReader : public AlignedFileReader {
+class WindowsAlignedFileReader : public AlignedFileReader
+{
  private:
 #ifdef UNICODE
    std::wstring m_filename;
