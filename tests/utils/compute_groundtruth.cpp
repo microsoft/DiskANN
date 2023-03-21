@@ -421,24 +421,105 @@ inline void parse_label_file_into_vec(size_t &line_cnt, const std::string &map_f
 }
 
 template <typename T>
-int aux_main(const std::string &base_file, const std::string &label_file, const std::string &query_file,
-             const std::string &gt_file, size_t k, const std::string &universal_label, const diskann::Metric &metric,
-             const std::string &tags_file = std::string(""), const std::vector<std::string> &filter_labels = {})
+std::vector<std::vector<std::pair<uint32_t, float>>> processUnfilteredParts(const std::string &base_file,
+                                                                            size_t& nqueries, size_t &npoints,
+                                                                            size_t &dim, size_t& k, float *query_data,
+    const diskann::Metric &metric, std::vector<uint32_t> &location_to_tag)
 {
-    size_t npoints, nqueries, dim, npoints_filt;
-
     float *base_data;
-    float *query_data;
-
-    const bool tags_enabled = tags_file.empty() ? false : true;
-
     int num_parts = get_num_parts<T>(base_file.c_str());
-    load_bin_as_float<T>(query_file.c_str(), query_data, nqueries, dim, 0);
-    if (nqueries > PARTSIZE)
-        std::cerr << "WARNING: #Queries provided (" << nqueries << ") is greater than " << PARTSIZE
-                  << ". Computing GT only for the first " << PARTSIZE << " queries." << std::endl;
+    std::vector<std::vector<std::pair<uint32_t, float>>> res(nqueries);
+    for (int p = 0; p < num_parts; p++)
+    {
+        size_t start_id = p * PARTSIZE;
+        load_bin_as_float<T>(base_file.c_str(), base_data, npoints, dim, p);
 
-    // load tags
+        int *closest_points_part = new int[nqueries * k];
+        float *dist_closest_points_part = new float[nqueries * k];
+
+        _u32 part_k;
+         part_k = k < npoints ? k : npoints;
+         exact_knn(dim, part_k, closest_points_part, dist_closest_points_part, npoints, base_data, nqueries,
+                      query_data, metric);
+
+
+        for (_u64 i = 0; i < nqueries; i++)
+        {
+            for (_u64 j = 0; j < part_k; j++)
+            {
+                if (!location_to_tag.empty())
+                    if (location_to_tag[closest_points_part[i * k + j] + start_id] == 0)
+                        continue;
+
+                res[i].push_back(std::make_pair((uint32_t)(closest_points_part[i * part_k + j] + start_id),
+                                                        dist_closest_points_part[i * part_k + j]));
+                
+            }
+        }
+
+        delete[] closest_points_part;
+        delete[] dist_closest_points_part;
+
+        diskann::aligned_free(base_data);
+    }
+    return res;
+};
+template <typename T>
+std::vector<std::vector<std::pair<uint32_t, float>>> processFilteredParts(const std::string& base_file, const std::string& label_file,
+                                                                          std::string& filter_label, const std::string& universal_label,
+                                                                          size_t &nqueries, size_t &npoints, size_t &dim, size_t& k, float *query_data,
+                                                                          const diskann::Metric &metric, std::vector<uint32_t> &location_to_tag)
+{
+    size_t npoints_filt;
+    float *base_data;
+    std::vector<std::vector<std::pair<uint32_t, float>>> res(nqueries);
+    int num_parts = get_num_parts<T>(base_file.c_str());
+
+    std::vector<std::vector<std::string>> pts_to_labels;
+    parse_label_file_into_vec(npoints, label_file, pts_to_labels);
+
+
+    for (int p = 0; p < num_parts; p++)
+    {
+        size_t start_id = p * PARTSIZE;
+        std::vector<size_t> rev_map = load_filtered_bin_as_float<T>(base_file.c_str(), base_data, npoints, dim, p, label_file.c_str(),
+                                                    filter_label, universal_label, npoints_filt, pts_to_labels);
+
+        int *closest_points_part = new int[nqueries * k];
+        float *dist_closest_points_part = new float[nqueries * k];
+
+        _u32 part_k;
+        part_k = k < npoints_filt ? k : npoints_filt;
+        if (npoints_filt > 0)
+        {
+            exact_knn(dim, part_k, closest_points_part, dist_closest_points_part, npoints_filt, base_data, nqueries,
+                        query_data, metric);
+        }
+
+        for (_u64 i = 0; i < nqueries; i++)
+        {
+            for (_u64 j = 0; j < part_k; j++)
+            {
+                if (!location_to_tag.empty())
+                    if (location_to_tag[closest_points_part[i * k + j] + start_id] == 0)
+                        continue;
+
+                res[i].push_back(std::make_pair((uint32_t)(rev_map[closest_points_part[i * part_k + j]]),
+                                                        dist_closest_points_part[i * part_k + j]));
+            }
+        }
+
+        delete[] closest_points_part;
+        delete[] dist_closest_points_part;
+
+        diskann::aligned_free(base_data);
+    }
+    return res;
+};
+
+std::vector<uint32_t> loadTags(const std::string &tags_file, const std::string &base_file)
+{
+    const bool tags_enabled = tags_file.empty() ? false : true;
     std::vector<uint32_t> location_to_tag;
     if (tags_enabled)
     {
@@ -463,84 +544,45 @@ int aux_main(const std::string &base_file, const std::string &label_file, const 
         location_to_tag.assign(tag_data, tag_data + tag_file_npts);
         delete[] tag_data;
     }
+    return location_to_tag;
+}
 
-    std::vector<std::vector<std::string>> pts_to_labels;
-    bool isFiltered = false;
-    if (!filter_labels.empty())
-    {
-        isFiltered = true;
-        parse_label_file_into_vec(npoints, label_file, pts_to_labels);
-    }
+template <typename T>
+int aux_main(const std::string &base_file, const std::string &label_file, const std::string &query_file,
+             const std::string &gt_file, size_t k, const std::string &universal_label, const diskann::Metric &metric,
+             const std::string &tags_file = std::string(""), const std::vector<std::string> &filter_labels = {})
+{
+    size_t npoints, nqueries, dim, npoints_filt;
 
+    float *base_data;
+    float *query_data;
 
-    auto filter_idx = 0;
+    load_bin_as_float<T>(query_file.c_str(), query_data, nqueries, dim, 0);
+    if (nqueries > PARTSIZE)
+        std::cerr << "WARNING: #Queries provided (" << nqueries << ") is greater than " << PARTSIZE
+                  << ". Computing GT only for the first " << PARTSIZE << " queries." << std::endl;
+
+    // load tags
+    const bool tags_enabled = tags_file.empty() ? false : true;
+    std::vector<uint32_t> location_to_tag = loadTags(tags_file, base_file);
+
     // Execute the loop at least once in case of unfiltered gt computation
+    auto filter_idx = 0;
     do
     {
         int *closest_points = new int[nqueries * k];
         float *dist_closest_points = new float[nqueries * k];
-        std::vector<std::vector<std::pair<uint32_t, float>>> results(nqueries);
-        auto filter_label = isFiltered ? filter_labels[filter_idx] : "";
+        auto filter_label = filter_labels.empty() ? "" : filter_labels[filter_idx];
 
-        std::vector<size_t> rev_map;
-
-        for (int p = 0; p < num_parts; p++)
+        std::vector<std::vector<std::pair<uint32_t, float>>> results;
+        if (filter_labels.empty())
         {
-            size_t start_id = p * PARTSIZE;
-            if (!isFiltered)
-            {
-                load_bin_as_float<T>(base_file.c_str(), base_data, npoints, dim, p);
-            }
-            else
-            {
-                rev_map =
-                    load_filtered_bin_as_float<T>(base_file.c_str(), base_data, npoints, dim, p, label_file.c_str(),
-                                                  filter_label, universal_label, npoints_filt, pts_to_labels);
-            }
-            int *closest_points_part = new int[nqueries * k];
-            float *dist_closest_points_part = new float[nqueries * k];
-
-            _u32 part_k;
-            if (!isFiltered)
-            {
-                part_k = k < npoints ? k : npoints;
-                exact_knn(dim, part_k, closest_points_part, dist_closest_points_part, npoints, base_data, nqueries,
-                          query_data, metric);
-            }
-            else
-            {
-                part_k = k < npoints_filt ? k : npoints_filt;
-                if (npoints_filt > 0)
-                {
-                    exact_knn(dim, part_k, closest_points_part, dist_closest_points_part, npoints_filt, base_data,
-                              nqueries, query_data, metric);
-                }
-            }
-
-            for (_u64 i = 0; i < nqueries; i++)
-            {
-                for (_u64 j = 0; j < part_k; j++)
-                {
-                    if (tags_enabled)
-                        if (location_to_tag[closest_points_part[i * k + j] + start_id] == 0)
-                            continue;
-                    if (!isFiltered)
-                    {
-                        results[i].push_back(std::make_pair((uint32_t)(closest_points_part[i * part_k + j] + start_id),
-                                                            dist_closest_points_part[i * part_k + j]));
-                    }
-                    else
-                    {
-                        results[i].push_back(std::make_pair((uint32_t)(rev_map[closest_points_part[i * part_k + j]]),
-                                                            dist_closest_points_part[i * part_k + j]));
-                    }
-                }
-            }
-
-            delete[] closest_points_part;
-            delete[] dist_closest_points_part;
-
-            diskann::aligned_free(base_data);
+            results = processUnfilteredParts<T>(base_file, nqueries, npoints, dim, k, query_data, metric, location_to_tag);
+        }
+        else
+        {
+            results = processFilteredParts<T>(base_file, label_file, filter_label, universal_label, nqueries, npoints,
+                                                dim, k, query_data, metric, location_to_tag);
         }
 
         for (_u64 i = 0; i < nqueries; i++)
@@ -573,7 +615,7 @@ int aux_main(const std::string &base_file, const std::string &label_file, const 
                 std::cout << "WARNING: found less than k GT entries for query " << i << std::endl;
         }
 
-        std::string gt_file_name = gt_file + "_" + filter_label + ".bin";
+        std::string gt_file_name = gt_file + (filter_label == "" ? "" : ("_" + filter_label)) + ".bin";
         save_groundtruth_as_one_file(gt_file_name, closest_points, dist_closest_points, nqueries, k);
         delete[] closest_points;
         delete[] dist_closest_points;
@@ -711,7 +753,8 @@ int main(int argc, char **argv)
                            "Universal label, if using it, only in conjunction with label_file");
 
         desc.add_options()("gt_file", po::value<std::string>(&gt_file)->required(),
-                           "File name for the writing ground truth in binary format");
+                           "File name for the writing ground truth in binary format, please don' append .bin at end if no filter_label or filter_label_file is provided it will save the file with '.bin' at end."
+            "else it will save the file as filename_label.bin");
         desc.add_options()("K", po::value<uint64_t>(&K)->required(),
                            "Number of ground truth nearest neighbors to compute");
         desc.add_options()("tags_file", po::value<std::string>(&tags_file)->default_value(std::string()),
