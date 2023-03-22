@@ -566,62 +566,56 @@ int aux_main(const std::string &base_file, const std::string &label_file, const 
     const bool tags_enabled = tags_file.empty() ? false : true;
     std::vector<uint32_t> location_to_tag = loadTags(tags_file, base_file);
 
-    // Execute the loop at least once in case of unfiltered gt computation
-    auto filter_idx = 0;
-    do
+    int *closest_points = new int[nqueries * k];
+    float *dist_closest_points = new float[nqueries * k];
+    // this is just selecting 0 idx label so that functionality remains same 
+    auto filter_label = filter_labels.empty() ? "" : filter_labels[0];
+
+    std::vector<std::vector<std::pair<uint32_t, float>>> results;
+    if (filter_labels.empty())
     {
-        int *closest_points = new int[nqueries * k];
-        float *dist_closest_points = new float[nqueries * k];
-        auto filter_label = filter_labels.empty() ? "" : filter_labels[filter_idx];
+        results = processUnfilteredParts<T>(base_file, nqueries, npoints, dim, k, query_data, metric, location_to_tag);
+    }
+    else
+    {
+        results = processFilteredParts<T>(base_file, label_file, filter_label, universal_label, nqueries, npoints,
+                                            dim, k, query_data, metric, location_to_tag);
+    }
 
-        std::vector<std::vector<std::pair<uint32_t, float>>> results;
-        if (filter_labels.empty())
+    for (_u64 i = 0; i < nqueries; i++)
+    {
+        std::vector<std::pair<uint32_t, float>> &cur_res = results[i];
+        std::sort(cur_res.begin(), cur_res.end(), custom_dist);
+        size_t j = 0;
+        for (auto iter : cur_res)
         {
-            results = processUnfilteredParts<T>(base_file, nqueries, npoints, dim, k, query_data, metric, location_to_tag);
-        }
-        else
-        {
-            results = processFilteredParts<T>(base_file, label_file, filter_label, universal_label, nqueries, npoints,
-                                                dim, k, query_data, metric, location_to_tag);
-        }
-
-        for (_u64 i = 0; i < nqueries; i++)
-        {
-            std::vector<std::pair<uint32_t, float>> &cur_res = results[i];
-            std::sort(cur_res.begin(), cur_res.end(), custom_dist);
-            size_t j = 0;
-            for (auto iter : cur_res)
+            if (j == k)
+                break;
+            if (tags_enabled)
             {
-                if (j == k)
-                    break;
-                if (tags_enabled)
-                {
-                    std::uint32_t index_with_tag = location_to_tag[iter.first];
-                    closest_points[i * k + j] = (int32_t)index_with_tag;
-                }
-                else
-                {
-                    closest_points[i * k + j] = (int32_t)iter.first;
-                }
-
-                if (metric == diskann::Metric::INNER_PRODUCT)
-                    dist_closest_points[i * k + j] = -iter.second;
-                else
-                    dist_closest_points[i * k + j] = iter.second;
-
-                ++j;
+                std::uint32_t index_with_tag = location_to_tag[iter.first];
+                closest_points[i * k + j] = (int32_t)index_with_tag;
             }
-            if (j < k)
-                std::cout << "WARNING: found less than k GT entries for query " << i << std::endl;
+            else
+            {
+                closest_points[i * k + j] = (int32_t)iter.first;
+            }
+
+            if (metric == diskann::Metric::INNER_PRODUCT)
+                dist_closest_points[i * k + j] = -iter.second;
+            else
+                dist_closest_points[i * k + j] = iter.second;
+
+            ++j;
         }
+        if (j < k)
+            std::cout << "WARNING: found less than k GT entries for query " << i << std::endl;
+    }
 
-        std::string gt_file_name = gt_file + (filter_label == "" ? "" : ("_" + filter_label)) + ".bin";
-        save_groundtruth_as_one_file(gt_file_name, closest_points, dist_closest_points, nqueries, k);
-        delete[] closest_points;
-        delete[] dist_closest_points;
-        filter_idx++;
-    } while (filter_idx < filter_labels.size());
-
+    std::string gt_file_name = gt_file + (filter_label == "" ? "" : ("_" + filter_label)) + ".bin";
+    save_groundtruth_as_one_file(gt_file_name, closest_points, dist_closest_points, nqueries, k);
+    delete[] closest_points;
+    delete[] dist_closest_points;
     diskann::aligned_free(query_data);
 
       /*int *closest_points = new int[nqueries * k];
