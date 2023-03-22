@@ -86,8 +86,8 @@ class LSHTreeNode {
         initial_partition[bucket_id].push_back(point_id);
       }
 
-      // release memory (this could be done more aggressively if needed)
-      ids_to_partition.resize(0);
+      // release memory for ids_to_partition
+      std::vector<uint32_t>().swap(ids_to_partition);
 
       constexpr float width_multiplier = 0.8;
 
