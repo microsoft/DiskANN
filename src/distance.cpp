@@ -79,8 +79,6 @@ float SlowDistanceCosineUInt8::compare(const uint8_t *a, const uint8_t *b, uint3
 
 float DistanceL2Int8::compare(const int8_t *a, const int8_t *b, uint32_t size) const
 {
-    int32_t result = 0;
-
 #ifdef _WINDOWS
 #ifdef USE_AVX2
     __m256 r = _mm256_setzero_ps();
@@ -104,6 +102,7 @@ float DistanceL2Int8::compare(const int8_t *a, const int8_t *b, uint32_t size) c
     r = _mm256_hadd_ps(_mm256_hadd_ps(r, r), r);
     return r.m256_f32[0] + r.m256_f32[4];
 #else
+    int32_t result = 0;
 #pragma omp simd reduction(+ : result) aligned(a, b : 8)
     for (_s32 i = 0; i < (_s32)size; i++)
     {
@@ -112,6 +111,7 @@ float DistanceL2Int8::compare(const int8_t *a, const int8_t *b, uint32_t size) c
     return (float)result;
 #endif
 #else
+    int32_t result = 0;
 #pragma omp simd reduction(+ : result) aligned(a, b : 8)
     for (int32_t i = 0; i < (int32_t)size; i++)
     {

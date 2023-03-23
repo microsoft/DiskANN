@@ -265,17 +265,17 @@ template <class T> static void CosineSimilarityNormalize(T *pVector, uint32_t qt
 // template static void CosineSimilarityNormalize<double>(double* pVector,
 //                                                       size_t  qty);
 
-template <> void CosineSimilarityNormalize(__int8 *pVector, uint32_t qty)
+template <> void CosineSimilarityNormalize(__int8 * /*pVector*/, uint32_t /*qty*/)
 {
     throw std::runtime_error("For int8 type vector, you can not use cosine distance!");
 }
 
-template <> void CosineSimilarityNormalize(__int16 *pVector, uint32_t qty)
+template <> void CosineSimilarityNormalize(__int16 * /*pVector*/, uint32_t /*qty*/)
 {
     throw std::runtime_error("For int16 type vector, you can not use cosine distance!");
 }
 
-template <> void CosineSimilarityNormalize(int *pVector, uint32_t qty)
+template <> void CosineSimilarityNormalize(int * /*pVector*/, uint32_t /*qty*/)
 {
     throw std::runtime_error("For int type vector, you can not use cosine distance!");
 }

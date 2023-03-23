@@ -1178,7 +1178,6 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const _u64 k_s
     unsigned cmps = 0;
     unsigned hops = 0;
     unsigned num_ios = 0;
-    unsigned k = 0;
 
     // cleared every iteration
     std::vector<unsigned> frontier;
