@@ -203,10 +203,16 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     // No copy/assign.
     Index(const Index<T, TagT, LabelT> &) = delete;
     Index<T, TagT, LabelT> &operator=(const Index<T, TagT, LabelT> &) = delete;
+    bool _coalasce_writes = true;
+    // weighted average of records saved per save
+    int _avg_records_per_save = 0;  
 
     // Use after _data and _nd have been populated
     // Acquire exclusive _update_lock before calling
     void build_with_data_populated(Parameters &parameters, const std::vector<TagT> &tags);
+
+    // check if data going to be saved is small
+    inline void is_small_segment();
 
     // generates 1 frozen point that will never be deleted from the graph
     // This is not visible to the user

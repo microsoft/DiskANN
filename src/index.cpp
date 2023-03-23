@@ -263,9 +263,30 @@ _u64 Index<T, TagT, LabelT>::save_delete_list(const std::string &filename)
 }
 
 template <typename T, typename TagT, typename LabelT>
+inline bool Index<T, TagT, LabelT>::is_small_segment()
+{
+    if(!_coalasce_writes)
+        return true;
+
+    if(_label_to_medoid_id.size() >= (_avg_records_per_save) / 2)
+    {
+        _avg_records_per_save = 
+                    (2 * _avg_records_per_save + _label_to_medoid_id.size()) / 3
+        return true;
+    }
+    return false;
+}
+
+template <typename T, typename TagT, typename LabelT>
 void Index<T, TagT, LabelT>::save(const char *filename, bool compact_before_save)
 {
     diskann::Timer timer;
+
+    if(is_small_segment())
+    {
+        diskann::cout << "Small Write, will be coalasced into next write" << std::endl;
+        return;
+    }
 
     std::unique_lock<std::shared_timed_mutex> ul(_update_lock);
     std::unique_lock<std::shared_timed_mutex> cl(_consolidate_lock);
