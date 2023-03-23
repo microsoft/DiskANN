@@ -31,8 +31,8 @@ Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_point
                               const Parameters &indexParams, const Parameters &searchParams, const bool enable_tags,
                               const bool concurrent_consolidate, const bool pq_dist_build, const size_t num_pq_chunks,
                               const bool use_opq)
-    : Index(m, dim, max_points, dynamic_index, enable_tags, concurrent_consolidate,
-            indexParams.Get<size_t>("num_frozen_pts", 0))
+    : Index(m, dim, max_points, dynamic_index, enable_tags, concurrent_consolidate, pq_dist_build, num_pq_chunks,
+            use_opq, indexParams.Get<uint32_t>("num_frozen_pts", 0))
 {
     _indexingQueueSize = indexParams.Get<uint32_t>("L");
     _indexingRange = indexParams.Get<uint32_t>("R");
