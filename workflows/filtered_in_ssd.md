@@ -41,7 +41,7 @@ In order to evaluate the performance of our algorithms, we can compare its resul
 
 ## Searching a Filtered Index
 
-Searching a filtered index uses the `tests/search_memory_index.cpp`:
+Searching a filtered index uses the `tests/search_disk_index.cpp`:
 
 1. **--data_type**: The type of dataset you wish to build an index on. float(32 bit), signed int8 and unsigned uint8 are supported. Use the same data type as in arg (1) above used in building the index.
 2.  **--dist_fn**: There are two distance functions supported: minimum Euclidean distance (l2) and maximum inner product (mips). Use the same distance as in arg (2) above used in building the index.
@@ -55,3 +55,49 @@ Searching a filtered index uses the `tests/search_memory_index.cpp`:
 10. **--result_path**: Search results will be stored in files with specified prefix, in bin format.
 11. **-L (--search_list)**: A list of search_list sizes to perform search with. Larger parameters will result in slower latencies, but higher accuracies. Must be atleast the value of *K* in arg (9).
 12. **--filter_label**: The filter to be used when searching an index with filters. For each query, a search is performed with this filter.
+
+
+Example with SIFT10K:
+--------------------
+We demonstrate how to work through this pipeline using the SIFT10K dataset (http://corpus-texmex.irisa.fr/). Before starting, make sure you have compiled diskANN according to the instructions in the README and can see the following binaries (paths with respect to repository root):
+- `build/tests/utils/compute_groundtruth`
+- `build/tests/utils/fvecs_to_bin`
+- `build/tests/build_disk_index`
+- `build/tests/search_disk_index`
+
+Now, download the base and query set and convert the data to binary format:
+```bash
+wget ftp://ftp.irisa.fr/local/texmex/corpus/siftsmall.tar.gz
+tar -zxvf siftsmall.tar.gz
+build/tests/utils/fvecs_to_bin float siftsmall/siftsmall_base.fvecs siftsmall/siftsmall_base.bin
+build/tests/utils/fvecs_to_bin float siftsmall/siftsmall_query.fvecs siftsmall/siftsmall_query.bin
+```
+
+We now need to make label file for our vectors. For convenience, we've included a synthetic label generator through which we can generate label file as follow
+```bash
+  build/tests/utils/generate_synthetic_labels  --num_labels 50 --num_points 10000  --output_file ./rand_labels_50_10K.txt --distribution_type zipf
+```
+Note : `distribution_type` can be `rand` or `zipf`
+
+This will genearate label file with 10000 data points with 50 distinct labels, ranging from 1 to 50 assigned using zipf distribution (0 is the universal label).
+
+Now build and search the index and measure the recall using ground truth computed using bruteforce. We search for results with the filter 35.
+```bash
+build/tests/utils/compute_groundtruth --data_type float --dist_fn l2 --base_file siftsmall/siftsmall_base.bin --query_file siftsmall/siftsmall_query.bin --gt_file siftsmall_gt_35.bin --K 100 --label_file rand_labels_50_10K.txt --filter_label 35 --universal_label 0
+build/tests/build_disk_index --data_type float --dist_fn l2 --data_path siftsmall/siftsmall_base.bin --index_path_prefix data/sift/siftsmall_R32_L50_filtered -R 32 --FilteredLbuild 50 -B 1 -M 1 --label_file rand_labels_50_10K.txt --universal_label 0 -F 0
+build/tests/search_disk_index --data_type float --dist_fn l2 --index_path_prefix data/sift/siftsmall_R32_L50_filtered --result_path siftsmall/search_35 --query_file siftsmall/siftsmall_query.bin --gt_file siftsmall_gt_35.bin -K 10 -L 10 20 30 40 50 100 --filter_label 35 -W 4 -T 8
+```
+
+ The output of both searches is listed below. The throughput (Queries/sec) as well as mean and 99.9 latency in microseconds for each `L` parameter provided. (Measured on a physical machine with a 11th Gen Intel(R) Core(TM) i7-1185G7 CPU and 32 GB RAM)
+ 
+ ```
+Filtered Disk Index
+  L   Beamwidth             QPS    Mean Latency    99.9 Latency        Mean IOs         CPU (s)       Recall@10
+==================================================================================================================
+ 10           4         1922.02         4062.19        12849.00           15.49           66.19           11.80
+ 20           4         4609.91         1618.68         3438.00           30.66          140.48           17.20
+ 30           4         3377.83         2250.22         4631.00           42.70          202.39           20.70
+ 40           4         2707.77         2817.21         4889.00           51.46          267.03           22.00
+ 50           4         2191.56         3509.43         5943.00           60.80          349.10           23.50
+100           4         1257.92         6113.45         7321.00          109.08          609.42           23.90
+```
