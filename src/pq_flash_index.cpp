@@ -580,9 +580,8 @@ namespace diskann {
   void PQFlashIndex<T, LabelT>::set_universal_label(const LabelT &label) {
     int32_t temp_filter_num = get_filter_number(label);
     if (temp_filter_num == -1) {
-      diskann::cout << "Error, could not find universal label. Exitting."
+      diskann::cout << "Error, could not find universal label."
                     << std::endl;
-      exit(-1);
     } else {
       _use_universal_label = true;
       _universal_filter_num = (_u32) temp_filter_num;
