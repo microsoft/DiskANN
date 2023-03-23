@@ -31,14 +31,6 @@ typedef int FileHandle;
 #include "memory_mapped_files.h"
 #endif
 
-#ifdef max
-#undef max
-#endif
-
-#ifdef min
-#undef min
-#endif
-
 #include <unordered_map>
 #include <sstream>
 #include <iostream>
