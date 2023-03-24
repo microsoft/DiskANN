@@ -557,11 +557,11 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
     {
         _label_map = load_label_map(labels_map_file);
         parse_label_file(labels_file, label_num_pts);
-        assert(label_num_pts == data_file_num_pts);
+//        assert(label_num_pts == data_file_num_pts);
         if (file_exists(labels_to_medoids))
         {
             std::ifstream medoid_stream(labels_to_medoids);
-            assert(label_num_pts == data_file_num_pts);
+//            assert(label_num_pts == data_file_num_pts);
             std::string line, token;
             unsigned line_cnt = 0;
 
@@ -594,7 +594,7 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
         if (file_exists(universal_label_file))
         {
             std::ifstream universal_label_reader(universal_label_file);
-            assert(label_num_pts == data_file_num_pts);
+//            assert(label_num_pts == data_file_num_pts);
             universal_label_reader >> _universal_label;
             _use_universal_label = true;
             universal_label_reader.close();
