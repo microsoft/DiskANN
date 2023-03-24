@@ -1864,7 +1864,7 @@ void Index<T, TagT, LabelT>::parse_label_file(const std::string &label_file, siz
         _pts_to_labels[line_cnt] = lbls;
         line_cnt++;
     }
-    num_points=line_cnt;
+    num_points=(size_t)line_cnt;
     diskann::cout << "Identified " << _labels.size() << " distinct label(s)" << std::endl;
 }
 
