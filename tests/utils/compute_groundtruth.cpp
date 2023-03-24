@@ -18,6 +18,8 @@
 #include <mkl.h>
 #include <boost/program_options.hpp>
 #include <unordered_map>
+#include <tsl/robin_map.h>
+#include <tsl/robin_set.h>
 
 #ifdef _WINDOWS
 #include <malloc.h>
@@ -31,6 +33,10 @@
 
 #define PARTSIZE 10000000
 #define ALIGNMENT 512
+
+// custom types (for readability)
+typedef tsl::robin_set<std::string> label_set;
+typedef std::string                 path;
 
 namespace po = boost::program_options;
 
@@ -547,6 +553,80 @@ std::vector<uint32_t> loadTags(const std::string &tags_file, const std::string &
     return location_to_tag;
 }
 
+template<typename T>
+tsl::robin_map<std::string, std::vector<_u32>>
+generate_label_specific_vector_files_compat(
+    path                              input_data_path,
+    tsl::robin_map<std::string, _u32> labels_to_number_of_points,
+    std::vector<label_set> point_ids_to_labels, label_set all_labels) {
+  auto          file_writing_timer = std::chrono::high_resolution_clock::now();
+  std::ifstream input_data_stream(input_data_path);
+
+  _u32 number_of_points, dimension;
+  input_data_stream.read((char *) &number_of_points, sizeof(_u32));
+  input_data_stream.read((char *) &dimension, sizeof(_u32));
+
+  const _u32 VECTOR_SIZE = dimension * sizeof(T);
+  if (number_of_points != point_ids_to_labels.size()) {
+    std::cerr << "Error: number of points in labels file and data file differ."
+              << std::endl;
+    throw;
+  }
+
+  tsl::robin_map<std::string, char *>            labels_to_vectors;
+  tsl::robin_map<std::string, _u32>              labels_to_curr_vector;
+  tsl::robin_map<std::string, std::vector<_u32>> label_id_to_orig_id;
+
+  for (const auto &lbl : all_labels) {
+    _u32  number_of_label_pts = labels_to_number_of_points[lbl];
+    char *vectors = (char *) malloc(number_of_label_pts * VECTOR_SIZE);
+    if (vectors == nullptr) {
+      throw;
+    }
+    labels_to_vectors[lbl] = vectors;
+    labels_to_curr_vector[lbl] = 0;
+    label_id_to_orig_id[lbl].reserve(number_of_label_pts);
+  }
+  for (_u32 point_id = 0; point_id < number_of_points; point_id++) {
+    char *curr_vector = (char *) malloc(VECTOR_SIZE);
+    input_data_stream.read(curr_vector, VECTOR_SIZE);
+    for (const auto &lbl : point_ids_to_labels[point_id]) {
+      char *curr_label_vector_ptr =
+          labels_to_vectors[lbl] + (labels_to_curr_vector[lbl] * VECTOR_SIZE);
+      memcpy(curr_label_vector_ptr, curr_vector, VECTOR_SIZE);
+      labels_to_curr_vector[lbl]++;
+      label_id_to_orig_id[lbl].push_back(point_id);
+    }
+    free(curr_vector);
+  }
+  // here
+  for (const auto &lbl : all_labels) {
+    path curr_label_input_data_path(input_data_path + "_" + lbl);
+    _u32 number_of_label_pts = labels_to_number_of_points[lbl];
+
+    std::ofstream label_file_stream;
+    label_file_stream.exceptions(std::ios::badbit | std::ios::failbit);
+    label_file_stream.open(curr_label_input_data_path, std::ios_base::binary);
+    label_file_stream.write((char *) &number_of_label_pts, sizeof(_u32));
+    label_file_stream.write((char *) &dimension, sizeof(_u32));
+    label_file_stream.write((char *) labels_to_vectors[lbl],
+                            number_of_label_pts * VECTOR_SIZE);
+
+    label_file_stream.close();
+    free(labels_to_vectors[lbl]);
+  }
+  input_data_stream.close();
+
+  std::chrono::duration<double> file_writing_time =
+      std::chrono::high_resolution_clock::now() - file_writing_timer;
+  std::cout << "generated " << all_labels.size()
+            << " label-specific vector files for index building in time "
+            << file_writing_time.count() << "\n"
+            << std::endl;
+
+  return label_id_to_orig_id;
+}
+
 template <typename T>
 int aux_main(const std::string &base_file, const std::string &label_file, const std::string &query_file,
              const std::string &gt_file, size_t k, const std::string &universal_label, const diskann::Metric &metric,
@@ -612,7 +692,9 @@ int aux_main(const std::string &base_file, const std::string &label_file, const 
             std::cout << "WARNING: found less than k GT entries for query " << i << std::endl;
     }
 
-    std::string gt_file_name = gt_file + (filter_label == "" ? "" : ("_" + filter_label)) + ".bin";
+    // std::string gt_file_name = gt_file + (filter_label == "" ? "" : ("_" + filter_label)) + ".bin";
+    std::string gt_file_name = gt_file + (filter_label == "" ? "" : ("_" + filter_label));
+
     save_groundtruth_as_one_file(gt_file_name, closest_points, dist_closest_points, nqueries, k);
     delete[] closest_points;
     delete[] dist_closest_points;
@@ -721,6 +803,59 @@ int aux_main(const std::string &base_file, const std::string &label_file, const 
     return 0;
 }
 
+void load_truthset(const std::string& bin_file, uint32_t*& ids,
+                            float*& dists, size_t& npts, size_t& dim) {
+    _u64            read_blk_size = 64 * 1024 * 1024;
+    cached_ifstream reader(bin_file, read_blk_size);
+    diskann::cout << "Reading truthset file " << bin_file.c_str() << " ..."
+                  << std::endl;
+    size_t actual_file_size = reader.get_file_size();
+
+    int npts_i32, dim_i32;
+    reader.read((char*) &npts_i32, sizeof(int));
+    reader.read((char*) &dim_i32, sizeof(int));
+    npts = (unsigned) npts_i32;
+    dim = (unsigned) dim_i32;
+
+    diskann::cout << "Metadata: #pts = " << npts << ", #dims = " << dim
+                  << "... " << std::endl;
+
+    int truthset_type = -1;  // 1 means truthset has ids and distances, 2 means
+                             // only ids, -1 is error
+    size_t expected_file_size_with_dists =
+        2 * npts * dim * sizeof(uint32_t) + 2 * sizeof(uint32_t);
+
+    if (actual_file_size == expected_file_size_with_dists)
+      truthset_type = 1;
+
+    size_t expected_file_size_just_ids =
+        npts * dim * sizeof(uint32_t) + 2 * sizeof(uint32_t);
+
+    if (actual_file_size == expected_file_size_just_ids)
+      truthset_type = 2;
+
+    if (truthset_type == -1) {
+      std::stringstream stream;
+      stream << "Error. File size mismatch. File should have bin format, with "
+                "npts followed by ngt followed by npts*ngt ids and optionally "
+                "followed by npts*ngt distance values; actual size: "
+             << actual_file_size
+             << ", expected: " << expected_file_size_with_dists << " or "
+             << expected_file_size_just_ids;
+      diskann::cout << stream.str();
+      throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
+                                  __LINE__);
+    }
+
+    ids = new uint32_t[npts * dim];
+    reader.read((char*) ids, npts * dim * sizeof(uint32_t));
+
+    if (truthset_type == 1) {
+      dists = new float[npts * dim];
+      reader.read((char*) dists, npts * dim * sizeof(float));
+    }
+  }
+
 int main(int argc, char **argv)
 {
     std::string data_type, dist_fn, base_file, query_file, gt_file, tags_file, label_file, filter_label,
@@ -810,25 +945,169 @@ int main(int argc, char **argv)
     }
     else if (filter_label_file != "")
     {
-      filter_labels = readFileLinesInVector<std::string>(filter_label_file, true);
+      filter_labels = readFileLinesInVector<std::string>(filter_label_file, false);
     }
 
-    try
-    {
-        if (data_type == std::string("float"))
-            aux_main<float>(base_file, label_file, query_file, gt_file, K, universal_label, metric,
-                            tags_file, filter_labels);
-        if (data_type == std::string("int8"))
-            aux_main<int8_t>(base_file, label_file, query_file, gt_file, K, universal_label, metric,
-                             tags_file, filter_labels);
-        if (data_type == std::string("uint8"))
-            aux_main<uint8_t>(base_file, label_file, query_file, gt_file, K, universal_label, metric,
-                              tags_file, filter_labels);
+    if (filter_label == "" && filter_label_file == ""){
+        try
+        {
+            if (data_type == std::string("float"))
+                aux_main<float>(base_file, label_file, query_file, gt_file, K, universal_label, metric,
+                                tags_file, filter_labels);
+            if (data_type == std::string("int8"))
+                aux_main<int8_t>(base_file, label_file, query_file, gt_file, K, universal_label, metric,
+                                tags_file, filter_labels);
+            if (data_type == std::string("uint8"))
+                aux_main<uint8_t>(base_file, label_file, query_file, gt_file, K, universal_label, metric,
+                                tags_file, filter_labels);
+        }
+        catch (const std::exception &e)
+        {
+            std::cout << std::string(e.what()) << std::endl;
+            diskann::cerr << "Compute GT failed." << std::endl;
+            return -1;
+        }
+    }else{
+
+
+    
+
+    // Split up data and query bins into label specific ones
+    tsl::robin_map<std::string, _u32> labels_to_number_of_points;
+    tsl::robin_map<std::string, _u32> labels_to_number_of_queries;
+
+    label_set all_labels;
+    for (int i = 0; i < filter_labels.size(); i++){
+      std::string label = filter_labels[i];
+      all_labels.insert(label);
+      
+      if (labels_to_number_of_queries.find(label) == labels_to_number_of_queries.end()){
+        labels_to_number_of_queries[label] = 0;
+      }
+      labels_to_number_of_queries[label] += 1; 
     }
-    catch (const std::exception &e)
-    {
+
+    size_t npoints;
+    std::vector<std::vector<std::string>> point_to_labels;
+    parse_label_file_into_vec(npoints, label_file, point_to_labels);
+    std::vector<label_set> point_ids_to_labels(point_to_labels.size());
+    std::vector<label_set> query_ids_to_labels(filter_labels.size());
+
+    for (size_t i = 0; i < point_to_labels.size(); i++){
+      for (size_t j = 0; j < point_to_labels[i].size(); j++){
+        std::string label = point_to_labels[i][j];
+        if (all_labels.find(label) != all_labels.end()){
+          point_ids_to_labels[i].insert(point_to_labels[i][j]);
+          if (labels_to_number_of_points.find(label) == labels_to_number_of_points.end()){
+            labels_to_number_of_points[label] = 0;
+          }
+          labels_to_number_of_points[label] += 1;
+        }
+    }
+    }
+  
+    for (size_t i = 0; i < filter_labels.size(); i++){
+      query_ids_to_labels[i].insert(filter_labels[i]);
+    }
+
+    tsl::robin_map<std::string, std::vector<_u32>> label_id_to_orig_id; 
+    tsl::robin_map<std::string, std::vector<_u32>> label_query_id_to_orig_id;
+
+    if (data_type == std::string("float")){
+      label_id_to_orig_id = generate_label_specific_vector_files_compat<float>(
+      base_file, labels_to_number_of_points, point_ids_to_labels, all_labels);
+
+      label_query_id_to_orig_id = generate_label_specific_vector_files_compat<float>(
+      query_file, labels_to_number_of_queries, query_ids_to_labels, all_labels); // query_filters acts like query_ids_to_labels
+    }
+    else if (data_type == std::string("int8")){
+      label_id_to_orig_id = generate_label_specific_vector_files_compat<int8_t>(
+      base_file, labels_to_number_of_points, point_ids_to_labels, all_labels);
+
+      label_query_id_to_orig_id = generate_label_specific_vector_files_compat<int8_t>(
+      query_file, labels_to_number_of_queries, query_ids_to_labels, all_labels); // query_filters acts like query_ids_to_labels
+    }
+    else if (data_type == std::string("uint8")){
+      label_id_to_orig_id = generate_label_specific_vector_files_compat<uint8_t>(
+      base_file, labels_to_number_of_points, point_ids_to_labels, all_labels);
+
+      label_query_id_to_orig_id = generate_label_specific_vector_files_compat<uint8_t>(
+      query_file, labels_to_number_of_queries, query_ids_to_labels, all_labels); // query_filters acts like query_ids_to_labels
+    }
+    else{
+      diskann::cerr << "Invalid data type" << std::endl;
+      return -1;
+    }
+
+    // Generate label specific ground truths
+
+    try {
+        for (const auto& label : all_labels){
+            std::string filtered_base_file = base_file + "_" + label;
+            std::string filtered_query_file = query_file + "_" + label;
+            std::string filtered_gt_file = gt_file + "_" + label;
+            if (data_type == std::string("float"))
+            aux_main<float>(filtered_base_file, "", filtered_query_file, filtered_gt_file, K, "", metric, "");
+            if (data_type == std::string("int8"))
+            aux_main<int8_t>(filtered_base_file, "", filtered_query_file, filtered_gt_file, K, "", metric, "");
+            if (data_type == std::string("uint8"))
+            aux_main<uint8_t>(filtered_base_file, "", filtered_query_file, filtered_gt_file, K, "", metric, "");
+
+            // aux_main<float>(base_file, label_file, query_file, gt_file, K, universal_label, metric,
+            //                     tags_file, filter_labels);
+        }
+        } catch (const std::exception &e) {
         std::cout << std::string(e.what()) << std::endl;
         diskann::cerr << "Compute GT failed." << std::endl;
         return -1;
+        }
+    
+    // Combine the label specific ground truths to produce a single GT file
+
+    unsigned* gt_ids = nullptr;
+    float*    gt_dists = nullptr;
+    size_t gt_num, gt_dim;
+
+    std::vector<std::vector<int32_t>> final_gt_ids;
+    std::vector<std::vector<float>> final_gt_dists;
+
+    int query_num = 0;
+    for (const auto &lbl : all_labels){
+      query_num += labels_to_number_of_queries[lbl];
+    }
+    
+
+    for (size_t i = 0; i < query_num; i++){
+      final_gt_ids.push_back(std::vector<int32_t>(K));
+      final_gt_dists.push_back(std::vector<float>(K));
+    }
+
+
+    for (const auto &lbl : all_labels){
+      std::string filtered_gt_file = gt_file + "_" + lbl;
+      load_truthset(filtered_gt_file, gt_ids, gt_dists, gt_num, gt_dim);
+      
+      for (int i = 0; i < labels_to_number_of_queries[lbl]; i++){
+        int orig_query_id = label_query_id_to_orig_id[lbl][i];
+        for (int j = 0; j < K; j++){
+          final_gt_ids[orig_query_id][j] = label_id_to_orig_id[lbl][gt_ids[i*K + j]];
+          final_gt_dists[orig_query_id][j] = gt_dists[i*K + j];
+        }
+      }
+    }
+
+    int32_t closest_points[query_num * K];
+    float dist_closest_points[query_num * K];
+
+    for(int i = 0; i < query_num; i++){
+      for(int j = 0; j < K; j++){
+        closest_points[i*K + j] = final_gt_ids[i][j];
+        dist_closest_points[i*K + j] = final_gt_dists[i][j];
+
+      }
+    }
+
+    save_groundtruth_as_one_file(gt_file, closest_points, dist_closest_points,
+                               query_num, K);
     }
 }
