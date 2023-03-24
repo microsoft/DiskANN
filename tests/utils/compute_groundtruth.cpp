@@ -699,106 +699,6 @@ int aux_main(const std::string &base_file, const std::string &label_file, const 
     delete[] dist_closest_points;
     diskann::aligned_free(query_data);
 
-    /*int *closest_points = new int[nqueries * k];
-    float *dist_closest_points = new float[nqueries * k];
-    std::vector<std::vector<std::pair<uint32_t, float>>> results(nqueries);
-
-    std::vector<size_t> rev_map;
-
-    for (int p = 0; p < num_parts; p++)
-    {
-      size_t start_id = p * PARTSIZE;
-      if (!isFiltered)
-      {
-          load_bin_as_float<T>(base_file.c_str(), base_data, npoints, dim, p);
-      }
-      else
-      {
-          rev_map = load_filtered_bin_as_float<T>(base_file.c_str(), base_data, npoints, dim, p, label_file.c_str(),
-                                                  filter_label, universal_label, npoints_filt, pts_to_labels);
-      }
-      int *closest_points_part = new int[nqueries * k];
-      float *dist_closest_points_part = new float[nqueries * k];
-
-      _u32 part_k;
-      if (!isFiltered)
-      {
-          part_k = k < npoints ? k : npoints;
-          exact_knn(dim, part_k, closest_points_part, dist_closest_points_part, npoints, base_data, nqueries,
-                    query_data, metric);
-      }
-      else
-      {
-          part_k = k < npoints_filt ? k : npoints_filt;
-          if (npoints_filt > 0)
-          {
-              exact_knn(dim, part_k, closest_points_part, dist_closest_points_part, npoints_filt, base_data, nqueries,
-                        query_data, metric);
-          }
-      }
-
-      for (_u64 i = 0; i < nqueries; i++)
-      {
-          for (_u64 j = 0; j < part_k; j++)
-          {
-              if (tags_enabled)
-                  if (location_to_tag[closest_points_part[i * k + j] + start_id] == 0)
-                      continue;
-              if (!isFiltered)
-              {
-                  results[i].push_back(std::make_pair((uint32_t)(closest_points_part[i * part_k + j] + start_id),
-                                                      dist_closest_points_part[i * part_k + j]));
-              }
-              else
-              {
-                  results[i].push_back(std::make_pair((uint32_t)(rev_map[closest_points_part[i * part_k + j]]),
-                                                      dist_closest_points_part[i * part_k + j]));
-              }
-          }
-      }
-
-      delete[] closest_points_part;
-      delete[] dist_closest_points_part;
-
-      diskann::aligned_free(base_data);
-  }
-
-    for (_u64 i = 0; i < nqueries; i++)
-    {
-      std::vector<std::pair<uint32_t, float>> &cur_res = results[i];
-      std::sort(cur_res.begin(), cur_res.end(), custom_dist);
-      size_t j = 0;
-      for (auto iter : cur_res)
-      {
-          if (j == k)
-              break;
-          if (tags_enabled)
-          {
-              std::uint32_t index_with_tag = location_to_tag[iter.first];
-              closest_points[i * k + j] = (int32_t)index_with_tag;
-          }
-          else
-          {
-              closest_points[i * k + j] = (int32_t)iter.first;
-          }
-
-          if (metric == diskann::Metric::INNER_PRODUCT)
-              dist_closest_points[i * k + j] = -iter.second;
-          else
-              dist_closest_points[i * k + j] = iter.second;
-
-          ++j;
-      }
-      if (j < k)
-          std::cout << "WARNING: found less than k GT entries for query " << i << std::endl;
-  }
-
-    std::string gt_file_name = gt_file + "_" + filter_label + ".bin";
-    save_groundtruth_as_one_file(gt_file_name, closest_points, dist_closest_points, nqueries, k);
-    delete[] closest_points;
-    delete[] dist_closest_points;
-  diskann::aligned_free(query_data);*/
-
     return 0;
 }
 
@@ -944,7 +844,8 @@ int main(int argc, char **argv)
         filter_labels = readFileLinesInVector<std::string>(filter_label_file, false);
     }
 
-    if (filter_labels.empty())
+    // only when there is no filter label or 1 filter label for all queries
+    if (filter_labels.size() <= 0)
     {
         try
         {
@@ -966,8 +867,7 @@ int main(int argc, char **argv)
         }
     }
     else
-    {
-
+    { // Each query has its own filter label
         // Split up data and query bins into label specific ones
         tsl::robin_map<std::string, _u32> labels_to_number_of_points;
         tsl::robin_map<std::string, _u32> labels_to_number_of_queries;
