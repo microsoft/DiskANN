@@ -36,7 +36,7 @@
 
 // custom types (for readability)
 typedef tsl::robin_set<std::string> label_set;
-typedef std::string                 path;
+typedef std::string path;
 
 namespace po = boost::program_options;
 
@@ -428,9 +428,10 @@ inline void parse_label_file_into_vec(size_t &line_cnt, const std::string &map_f
 
 template <typename T>
 std::vector<std::vector<std::pair<uint32_t, float>>> processUnfilteredParts(const std::string &base_file,
-                                                                            size_t& nqueries, size_t &npoints,
-                                                                            size_t &dim, size_t& k, float *query_data,
-    const diskann::Metric &metric, std::vector<uint32_t> &location_to_tag)
+                                                                            size_t &nqueries, size_t &npoints,
+                                                                            size_t &dim, size_t &k, float *query_data,
+                                                                            const diskann::Metric &metric,
+                                                                            std::vector<uint32_t> &location_to_tag)
 {
     float *base_data;
     int num_parts = get_num_parts<T>(base_file.c_str());
@@ -444,10 +445,9 @@ std::vector<std::vector<std::pair<uint32_t, float>>> processUnfilteredParts(cons
         float *dist_closest_points_part = new float[nqueries * k];
 
         _u32 part_k;
-         part_k = k < npoints ? k : npoints;
-         exact_knn(dim, part_k, closest_points_part, dist_closest_points_part, npoints, base_data, nqueries,
-                      query_data, metric);
-
+        part_k = k < npoints ? k : npoints;
+        exact_knn(dim, part_k, closest_points_part, dist_closest_points_part, npoints, base_data, nqueries, query_data,
+                  metric);
 
         for (_u64 i = 0; i < nqueries; i++)
         {
@@ -458,8 +458,7 @@ std::vector<std::vector<std::pair<uint32_t, float>>> processUnfilteredParts(cons
                         continue;
 
                 res[i].push_back(std::make_pair((uint32_t)(closest_points_part[i * part_k + j] + start_id),
-                                                        dist_closest_points_part[i * part_k + j]));
-                
+                                                dist_closest_points_part[i * part_k + j]));
             }
         }
 
@@ -471,10 +470,10 @@ std::vector<std::vector<std::pair<uint32_t, float>>> processUnfilteredParts(cons
     return res;
 };
 template <typename T>
-std::vector<std::vector<std::pair<uint32_t, float>>> processFilteredParts(const std::string& base_file, const std::string& label_file,
-                                                                          std::string& filter_label, const std::string& universal_label,
-                                                                          size_t &nqueries, size_t &npoints, size_t &dim, size_t& k, float *query_data,
-                                                                          const diskann::Metric &metric, std::vector<uint32_t> &location_to_tag)
+std::vector<std::vector<std::pair<uint32_t, float>>> processFilteredParts(
+    const std::string &base_file, const std::string &label_file, std::string &filter_label,
+    const std::string &universal_label, size_t &nqueries, size_t &npoints, size_t &dim, size_t &k, float *query_data,
+    const diskann::Metric &metric, std::vector<uint32_t> &location_to_tag)
 {
     size_t npoints_filt;
     float *base_data;
@@ -484,12 +483,12 @@ std::vector<std::vector<std::pair<uint32_t, float>>> processFilteredParts(const 
     std::vector<std::vector<std::string>> pts_to_labels;
     parse_label_file_into_vec(npoints, label_file, pts_to_labels);
 
-
     for (int p = 0; p < num_parts; p++)
     {
         size_t start_id = p * PARTSIZE;
-        std::vector<size_t> rev_map = load_filtered_bin_as_float<T>(base_file.c_str(), base_data, npoints, dim, p, label_file.c_str(),
-                                                    filter_label, universal_label, npoints_filt, pts_to_labels);
+        std::vector<size_t> rev_map =
+            load_filtered_bin_as_float<T>(base_file.c_str(), base_data, npoints, dim, p, label_file.c_str(),
+                                          filter_label, universal_label, npoints_filt, pts_to_labels);
 
         int *closest_points_part = new int[nqueries * k];
         float *dist_closest_points_part = new float[nqueries * k];
@@ -499,7 +498,7 @@ std::vector<std::vector<std::pair<uint32_t, float>>> processFilteredParts(const 
         if (npoints_filt > 0)
         {
             exact_knn(dim, part_k, closest_points_part, dist_closest_points_part, npoints_filt, base_data, nqueries,
-                        query_data, metric);
+                      query_data, metric);
         }
 
         for (_u64 i = 0; i < nqueries; i++)
@@ -511,7 +510,7 @@ std::vector<std::vector<std::pair<uint32_t, float>>> processFilteredParts(const 
                         continue;
 
                 res[i].push_back(std::make_pair((uint32_t)(rev_map[closest_points_part[i * part_k + j]]),
-                                                        dist_closest_points_part[i * part_k + j]));
+                                                dist_closest_points_part[i * part_k + j]));
             }
         }
 
@@ -553,78 +552,78 @@ std::vector<uint32_t> loadTags(const std::string &tags_file, const std::string &
     return location_to_tag;
 }
 
-template<typename T>
-tsl::robin_map<std::string, std::vector<_u32>>
-generate_label_specific_vector_files_compat(
-    path                              input_data_path,
-    tsl::robin_map<std::string, _u32> labels_to_number_of_points,
-    std::vector<label_set> point_ids_to_labels, label_set all_labels) {
-  auto          file_writing_timer = std::chrono::high_resolution_clock::now();
-  std::ifstream input_data_stream(input_data_path);
+template <typename T>
+tsl::robin_map<std::string, std::vector<_u32>> generate_label_specific_vector_files_compat(
+    path input_data_path, tsl::robin_map<std::string, _u32> labels_to_number_of_points,
+    std::vector<label_set> point_ids_to_labels, label_set all_labels)
+{
+    auto file_writing_timer = std::chrono::high_resolution_clock::now();
+    std::ifstream input_data_stream(input_data_path);
 
-  _u32 number_of_points, dimension;
-  input_data_stream.read((char *) &number_of_points, sizeof(_u32));
-  input_data_stream.read((char *) &dimension, sizeof(_u32));
+    _u32 number_of_points, dimension;
+    input_data_stream.read((char *)&number_of_points, sizeof(_u32));
+    input_data_stream.read((char *)&dimension, sizeof(_u32));
 
-  const _u32 VECTOR_SIZE = dimension * sizeof(T);
-  if (number_of_points != point_ids_to_labels.size()) {
-    std::cerr << "Error: number of points in labels file and data file differ."
+    const _u32 VECTOR_SIZE = dimension * sizeof(T);
+    if (number_of_points != point_ids_to_labels.size())
+    {
+        std::cerr << "Error: number of points in labels file and data file differ." << std::endl;
+        throw;
+    }
+
+    tsl::robin_map<std::string, char *> labels_to_vectors;
+    tsl::robin_map<std::string, _u32> labels_to_curr_vector;
+    tsl::robin_map<std::string, std::vector<_u32>> label_id_to_orig_id;
+
+    for (const auto &lbl : all_labels)
+    {
+        _u32 number_of_label_pts = labels_to_number_of_points[lbl];
+        char *vectors = (char *)malloc(number_of_label_pts * VECTOR_SIZE);
+        if (vectors == nullptr)
+        {
+            throw;
+        }
+        labels_to_vectors[lbl] = vectors;
+        labels_to_curr_vector[lbl] = 0;
+        label_id_to_orig_id[lbl].reserve(number_of_label_pts);
+    }
+    for (_u32 point_id = 0; point_id < number_of_points; point_id++)
+    {
+        char *curr_vector = (char *)malloc(VECTOR_SIZE);
+        input_data_stream.read(curr_vector, VECTOR_SIZE);
+        for (const auto &lbl : point_ids_to_labels[point_id])
+        {
+            char *curr_label_vector_ptr = labels_to_vectors[lbl] + (labels_to_curr_vector[lbl] * VECTOR_SIZE);
+            memcpy(curr_label_vector_ptr, curr_vector, VECTOR_SIZE);
+            labels_to_curr_vector[lbl]++;
+            label_id_to_orig_id[lbl].push_back(point_id);
+        }
+        free(curr_vector);
+    }
+    // here
+    for (const auto &lbl : all_labels)
+    {
+        path curr_label_input_data_path(input_data_path + "_" + lbl);
+        _u32 number_of_label_pts = labels_to_number_of_points[lbl];
+
+        std::ofstream label_file_stream;
+        label_file_stream.exceptions(std::ios::badbit | std::ios::failbit);
+        label_file_stream.open(curr_label_input_data_path, std::ios_base::binary);
+        label_file_stream.write((char *)&number_of_label_pts, sizeof(_u32));
+        label_file_stream.write((char *)&dimension, sizeof(_u32));
+        label_file_stream.write((char *)labels_to_vectors[lbl], number_of_label_pts * VECTOR_SIZE);
+
+        label_file_stream.close();
+        free(labels_to_vectors[lbl]);
+    }
+    input_data_stream.close();
+
+    std::chrono::duration<double> file_writing_time = std::chrono::high_resolution_clock::now() - file_writing_timer;
+    std::cout << "generated " << all_labels.size() << " label-specific vector files for index building in time "
+              << file_writing_time.count() << "\n"
               << std::endl;
-    throw;
-  }
 
-  tsl::robin_map<std::string, char *>            labels_to_vectors;
-  tsl::robin_map<std::string, _u32>              labels_to_curr_vector;
-  tsl::robin_map<std::string, std::vector<_u32>> label_id_to_orig_id;
-
-  for (const auto &lbl : all_labels) {
-    _u32  number_of_label_pts = labels_to_number_of_points[lbl];
-    char *vectors = (char *) malloc(number_of_label_pts * VECTOR_SIZE);
-    if (vectors == nullptr) {
-      throw;
-    }
-    labels_to_vectors[lbl] = vectors;
-    labels_to_curr_vector[lbl] = 0;
-    label_id_to_orig_id[lbl].reserve(number_of_label_pts);
-  }
-  for (_u32 point_id = 0; point_id < number_of_points; point_id++) {
-    char *curr_vector = (char *) malloc(VECTOR_SIZE);
-    input_data_stream.read(curr_vector, VECTOR_SIZE);
-    for (const auto &lbl : point_ids_to_labels[point_id]) {
-      char *curr_label_vector_ptr =
-          labels_to_vectors[lbl] + (labels_to_curr_vector[lbl] * VECTOR_SIZE);
-      memcpy(curr_label_vector_ptr, curr_vector, VECTOR_SIZE);
-      labels_to_curr_vector[lbl]++;
-      label_id_to_orig_id[lbl].push_back(point_id);
-    }
-    free(curr_vector);
-  }
-  // here
-  for (const auto &lbl : all_labels) {
-    path curr_label_input_data_path(input_data_path + "_" + lbl);
-    _u32 number_of_label_pts = labels_to_number_of_points[lbl];
-
-    std::ofstream label_file_stream;
-    label_file_stream.exceptions(std::ios::badbit | std::ios::failbit);
-    label_file_stream.open(curr_label_input_data_path, std::ios_base::binary);
-    label_file_stream.write((char *) &number_of_label_pts, sizeof(_u32));
-    label_file_stream.write((char *) &dimension, sizeof(_u32));
-    label_file_stream.write((char *) labels_to_vectors[lbl],
-                            number_of_label_pts * VECTOR_SIZE);
-
-    label_file_stream.close();
-    free(labels_to_vectors[lbl]);
-  }
-  input_data_stream.close();
-
-  std::chrono::duration<double> file_writing_time =
-      std::chrono::high_resolution_clock::now() - file_writing_timer;
-  std::cout << "generated " << all_labels.size()
-            << " label-specific vector files for index building in time "
-            << file_writing_time.count() << "\n"
-            << std::endl;
-
-  return label_id_to_orig_id;
+    return label_id_to_orig_id;
 }
 
 template <typename T>
@@ -648,7 +647,7 @@ int aux_main(const std::string &base_file, const std::string &label_file, const 
 
     int *closest_points = new int[nqueries * k];
     float *dist_closest_points = new float[nqueries * k];
-    // this is just selecting 0 idx label so that functionality remains same 
+    // this is just selecting 0 idx label so that functionality remains same
     auto filter_label = filter_labels.empty() ? "" : filter_labels[0];
 
     std::vector<std::vector<std::pair<uint32_t, float>>> results;
@@ -658,8 +657,8 @@ int aux_main(const std::string &base_file, const std::string &label_file, const 
     }
     else
     {
-        results = processFilteredParts<T>(base_file, label_file, filter_label, universal_label, nqueries, npoints,
-                                            dim, k, query_data, metric, location_to_tag);
+        results = processFilteredParts<T>(base_file, label_file, filter_label, universal_label, nqueries, npoints, dim,
+                                          k, query_data, metric, location_to_tag);
     }
 
     for (_u64 i = 0; i < nqueries; i++)
@@ -700,161 +699,157 @@ int aux_main(const std::string &base_file, const std::string &label_file, const 
     delete[] dist_closest_points;
     diskann::aligned_free(query_data);
 
-      /*int *closest_points = new int[nqueries * k];
-      float *dist_closest_points = new float[nqueries * k];
-      std::vector<std::vector<std::pair<uint32_t, float>>> results(nqueries);
+    /*int *closest_points = new int[nqueries * k];
+    float *dist_closest_points = new float[nqueries * k];
+    std::vector<std::vector<std::pair<uint32_t, float>>> results(nqueries);
 
-      std::vector<size_t> rev_map;
+    std::vector<size_t> rev_map;
 
-      for (int p = 0; p < num_parts; p++)
+    for (int p = 0; p < num_parts; p++)
+    {
+      size_t start_id = p * PARTSIZE;
+      if (!isFiltered)
       {
-        size_t start_id = p * PARTSIZE;
-        if (!isFiltered)
-        {
-            load_bin_as_float<T>(base_file.c_str(), base_data, npoints, dim, p);
-        }
-        else
-        {
-            rev_map = load_filtered_bin_as_float<T>(base_file.c_str(), base_data, npoints, dim, p, label_file.c_str(),
-                                                    filter_label, universal_label, npoints_filt, pts_to_labels);
-        }
-        int *closest_points_part = new int[nqueries * k];
-        float *dist_closest_points_part = new float[nqueries * k];
+          load_bin_as_float<T>(base_file.c_str(), base_data, npoints, dim, p);
+      }
+      else
+      {
+          rev_map = load_filtered_bin_as_float<T>(base_file.c_str(), base_data, npoints, dim, p, label_file.c_str(),
+                                                  filter_label, universal_label, npoints_filt, pts_to_labels);
+      }
+      int *closest_points_part = new int[nqueries * k];
+      float *dist_closest_points_part = new float[nqueries * k];
 
-        _u32 part_k;
-        if (!isFiltered)
-        {
-            part_k = k < npoints ? k : npoints;
-            exact_knn(dim, part_k, closest_points_part, dist_closest_points_part, npoints, base_data, nqueries,
-                      query_data, metric);
-        }
-        else
-        {
-            part_k = k < npoints_filt ? k : npoints_filt;
-            if (npoints_filt > 0)
-            {
-                exact_knn(dim, part_k, closest_points_part, dist_closest_points_part, npoints_filt, base_data, nqueries,
-                          query_data, metric);
-            }
-        }
-
-        for (_u64 i = 0; i < nqueries; i++)
-        {
-            for (_u64 j = 0; j < part_k; j++)
-            {
-                if (tags_enabled)
-                    if (location_to_tag[closest_points_part[i * k + j] + start_id] == 0)
-                        continue;
-                if (!isFiltered)
-                {
-                    results[i].push_back(std::make_pair((uint32_t)(closest_points_part[i * part_k + j] + start_id),
-                                                        dist_closest_points_part[i * part_k + j]));
-                }
-                else
-                {
-                    results[i].push_back(std::make_pair((uint32_t)(rev_map[closest_points_part[i * part_k + j]]),
-                                                        dist_closest_points_part[i * part_k + j]));
-                }
-            }
-        }
-
-        delete[] closest_points_part;
-        delete[] dist_closest_points_part;
-
-        diskann::aligned_free(base_data);
-    }
+      _u32 part_k;
+      if (!isFiltered)
+      {
+          part_k = k < npoints ? k : npoints;
+          exact_knn(dim, part_k, closest_points_part, dist_closest_points_part, npoints, base_data, nqueries,
+                    query_data, metric);
+      }
+      else
+      {
+          part_k = k < npoints_filt ? k : npoints_filt;
+          if (npoints_filt > 0)
+          {
+              exact_knn(dim, part_k, closest_points_part, dist_closest_points_part, npoints_filt, base_data, nqueries,
+                        query_data, metric);
+          }
+      }
 
       for (_u64 i = 0; i < nqueries; i++)
       {
-        std::vector<std::pair<uint32_t, float>> &cur_res = results[i];
-        std::sort(cur_res.begin(), cur_res.end(), custom_dist);
-        size_t j = 0;
-        for (auto iter : cur_res)
-        {
-            if (j == k)
-                break;
-            if (tags_enabled)
-            {
-                std::uint32_t index_with_tag = location_to_tag[iter.first];
-                closest_points[i * k + j] = (int32_t)index_with_tag;
-            }
-            else
-            {
-                closest_points[i * k + j] = (int32_t)iter.first;
-            }
+          for (_u64 j = 0; j < part_k; j++)
+          {
+              if (tags_enabled)
+                  if (location_to_tag[closest_points_part[i * k + j] + start_id] == 0)
+                      continue;
+              if (!isFiltered)
+              {
+                  results[i].push_back(std::make_pair((uint32_t)(closest_points_part[i * part_k + j] + start_id),
+                                                      dist_closest_points_part[i * part_k + j]));
+              }
+              else
+              {
+                  results[i].push_back(std::make_pair((uint32_t)(rev_map[closest_points_part[i * part_k + j]]),
+                                                      dist_closest_points_part[i * part_k + j]));
+              }
+          }
+      }
 
-            if (metric == diskann::Metric::INNER_PRODUCT)
-                dist_closest_points[i * k + j] = -iter.second;
-            else
-                dist_closest_points[i * k + j] = iter.second;
+      delete[] closest_points_part;
+      delete[] dist_closest_points_part;
 
-            ++j;
-        }
-        if (j < k)
-            std::cout << "WARNING: found less than k GT entries for query " << i << std::endl;
-    }
+      diskann::aligned_free(base_data);
+  }
 
-      std::string gt_file_name = gt_file + "_" + filter_label + ".bin";
-      save_groundtruth_as_one_file(gt_file_name, closest_points, dist_closest_points, nqueries, k);
-      delete[] closest_points;
-      delete[] dist_closest_points;
-    diskann::aligned_free(query_data);*/
+    for (_u64 i = 0; i < nqueries; i++)
+    {
+      std::vector<std::pair<uint32_t, float>> &cur_res = results[i];
+      std::sort(cur_res.begin(), cur_res.end(), custom_dist);
+      size_t j = 0;
+      for (auto iter : cur_res)
+      {
+          if (j == k)
+              break;
+          if (tags_enabled)
+          {
+              std::uint32_t index_with_tag = location_to_tag[iter.first];
+              closest_points[i * k + j] = (int32_t)index_with_tag;
+          }
+          else
+          {
+              closest_points[i * k + j] = (int32_t)iter.first;
+          }
+
+          if (metric == diskann::Metric::INNER_PRODUCT)
+              dist_closest_points[i * k + j] = -iter.second;
+          else
+              dist_closest_points[i * k + j] = iter.second;
+
+          ++j;
+      }
+      if (j < k)
+          std::cout << "WARNING: found less than k GT entries for query " << i << std::endl;
+  }
+
+    std::string gt_file_name = gt_file + "_" + filter_label + ".bin";
+    save_groundtruth_as_one_file(gt_file_name, closest_points, dist_closest_points, nqueries, k);
+    delete[] closest_points;
+    delete[] dist_closest_points;
+  diskann::aligned_free(query_data);*/
 
     return 0;
 }
 
-void load_truthset(const std::string& bin_file, uint32_t*& ids,
-                            float*& dists, size_t& npts, size_t& dim) {
-    _u64            read_blk_size = 64 * 1024 * 1024;
+void load_truthset(const std::string &bin_file, uint32_t *&ids, float *&dists, size_t &npts, size_t &dim)
+{
+    _u64 read_blk_size = 64 * 1024 * 1024;
     cached_ifstream reader(bin_file, read_blk_size);
-    diskann::cout << "Reading truthset file " << bin_file.c_str() << " ..."
-                  << std::endl;
+    diskann::cout << "Reading truthset file " << bin_file.c_str() << " ..." << std::endl;
     size_t actual_file_size = reader.get_file_size();
 
     int npts_i32, dim_i32;
-    reader.read((char*) &npts_i32, sizeof(int));
-    reader.read((char*) &dim_i32, sizeof(int));
-    npts = (unsigned) npts_i32;
-    dim = (unsigned) dim_i32;
+    reader.read((char *)&npts_i32, sizeof(int));
+    reader.read((char *)&dim_i32, sizeof(int));
+    npts = (unsigned)npts_i32;
+    dim = (unsigned)dim_i32;
 
-    diskann::cout << "Metadata: #pts = " << npts << ", #dims = " << dim
-                  << "... " << std::endl;
+    diskann::cout << "Metadata: #pts = " << npts << ", #dims = " << dim << "... " << std::endl;
 
-    int truthset_type = -1;  // 1 means truthset has ids and distances, 2 means
-                             // only ids, -1 is error
-    size_t expected_file_size_with_dists =
-        2 * npts * dim * sizeof(uint32_t) + 2 * sizeof(uint32_t);
+    int truthset_type = -1; // 1 means truthset has ids and distances, 2 means
+                            // only ids, -1 is error
+    size_t expected_file_size_with_dists = 2 * npts * dim * sizeof(uint32_t) + 2 * sizeof(uint32_t);
 
     if (actual_file_size == expected_file_size_with_dists)
-      truthset_type = 1;
+        truthset_type = 1;
 
-    size_t expected_file_size_just_ids =
-        npts * dim * sizeof(uint32_t) + 2 * sizeof(uint32_t);
+    size_t expected_file_size_just_ids = npts * dim * sizeof(uint32_t) + 2 * sizeof(uint32_t);
 
     if (actual_file_size == expected_file_size_just_ids)
-      truthset_type = 2;
+        truthset_type = 2;
 
-    if (truthset_type == -1) {
-      std::stringstream stream;
-      stream << "Error. File size mismatch. File should have bin format, with "
-                "npts followed by ngt followed by npts*ngt ids and optionally "
-                "followed by npts*ngt distance values; actual size: "
-             << actual_file_size
-             << ", expected: " << expected_file_size_with_dists << " or "
-             << expected_file_size_just_ids;
-      diskann::cout << stream.str();
-      throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
-                                  __LINE__);
+    if (truthset_type == -1)
+    {
+        std::stringstream stream;
+        stream << "Error. File size mismatch. File should have bin format, with "
+                  "npts followed by ngt followed by npts*ngt ids and optionally "
+                  "followed by npts*ngt distance values; actual size: "
+               << actual_file_size << ", expected: " << expected_file_size_with_dists << " or "
+               << expected_file_size_just_ids;
+        diskann::cout << stream.str();
+        throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
     }
 
     ids = new uint32_t[npts * dim];
-    reader.read((char*) ids, npts * dim * sizeof(uint32_t));
+    reader.read((char *)ids, npts * dim * sizeof(uint32_t));
 
-    if (truthset_type == 1) {
-      dists = new float[npts * dim];
-      reader.read((char*) dists, npts * dim * sizeof(float));
+    if (truthset_type == 1)
+    {
+        dists = new float[npts * dim];
+        reader.read((char *)dists, npts * dim * sizeof(float));
     }
-  }
+}
 
 int main(int argc, char **argv)
 {
@@ -882,8 +877,9 @@ int main(int argc, char **argv)
                            "Universal label, if using it, only in conjunction with label_file");
 
         desc.add_options()("gt_file", po::value<std::string>(&gt_file)->required(),
-                           "File name for the writing ground truth in binary format, please don' append .bin at end if no filter_label or filter_label_file is provided it will save the file with '.bin' at end."
-            "else it will save the file as filename_label.bin");
+                           "File name for the writing ground truth in binary format, please don' append .bin at end if "
+                           "no filter_label or filter_label_file is provided it will save the file with '.bin' at end."
+                           "else it will save the file as filename_label.bin");
         desc.add_options()("K", po::value<uint64_t>(&K)->required(),
                            "Number of ground truth nearest neighbors to compute");
         desc.add_options()("tags_file", po::value<std::string>(&tags_file)->default_value(std::string()),
@@ -941,25 +937,26 @@ int main(int argc, char **argv)
     std::vector<std::string> filter_labels;
     if (filter_label != "")
     {
-      filter_labels.push_back(filter_label);
+        filter_labels.push_back(filter_label);
     }
     else if (filter_label_file != "")
     {
-      filter_labels = readFileLinesInVector<std::string>(filter_label_file, false);
+        filter_labels = readFileLinesInVector<std::string>(filter_label_file, false);
     }
 
-    if (filter_label == "" && filter_label_file == ""){
+    if (filter_labels.empty())
+    {
         try
         {
             if (data_type == std::string("float"))
-                aux_main<float>(base_file, label_file, query_file, gt_file, K, universal_label, metric,
-                                tags_file, filter_labels);
+                aux_main<float>(base_file, label_file, query_file, gt_file, K, universal_label, metric, tags_file,
+                                filter_labels);
             if (data_type == std::string("int8"))
-                aux_main<int8_t>(base_file, label_file, query_file, gt_file, K, universal_label, metric,
-                                tags_file, filter_labels);
+                aux_main<int8_t>(base_file, label_file, query_file, gt_file, K, universal_label, metric, tags_file,
+                                 filter_labels);
             if (data_type == std::string("uint8"))
-                aux_main<uint8_t>(base_file, label_file, query_file, gt_file, K, universal_label, metric,
-                                tags_file, filter_labels);
+                aux_main<uint8_t>(base_file, label_file, query_file, gt_file, K, universal_label, metric, tags_file,
+                                  filter_labels);
         }
         catch (const std::exception &e)
         {
@@ -967,147 +964,167 @@ int main(int argc, char **argv)
             diskann::cerr << "Compute GT failed." << std::endl;
             return -1;
         }
-    }else{
-
-
-    
-
-    // Split up data and query bins into label specific ones
-    tsl::robin_map<std::string, _u32> labels_to_number_of_points;
-    tsl::robin_map<std::string, _u32> labels_to_number_of_queries;
-
-    label_set all_labels;
-    for (int i = 0; i < filter_labels.size(); i++){
-      std::string label = filter_labels[i];
-      all_labels.insert(label);
-      
-      if (labels_to_number_of_queries.find(label) == labels_to_number_of_queries.end()){
-        labels_to_number_of_queries[label] = 0;
-      }
-      labels_to_number_of_queries[label] += 1; 
     }
+    else
+    {
 
-    size_t npoints;
-    std::vector<std::vector<std::string>> point_to_labels;
-    parse_label_file_into_vec(npoints, label_file, point_to_labels);
-    std::vector<label_set> point_ids_to_labels(point_to_labels.size());
-    std::vector<label_set> query_ids_to_labels(filter_labels.size());
+        // Split up data and query bins into label specific ones
+        tsl::robin_map<std::string, _u32> labels_to_number_of_points;
+        tsl::robin_map<std::string, _u32> labels_to_number_of_queries;
 
-    for (size_t i = 0; i < point_to_labels.size(); i++){
-      for (size_t j = 0; j < point_to_labels[i].size(); j++){
-        std::string label = point_to_labels[i][j];
-        if (all_labels.find(label) != all_labels.end()){
-          point_ids_to_labels[i].insert(point_to_labels[i][j]);
-          if (labels_to_number_of_points.find(label) == labels_to_number_of_points.end()){
-            labels_to_number_of_points[label] = 0;
-          }
-          labels_to_number_of_points[label] += 1;
+        label_set all_labels;
+        for (int i = 0; i < filter_labels.size(); i++)
+        {
+            std::string label = filter_labels[i];
+            all_labels.insert(label);
+
+            if (labels_to_number_of_queries.find(label) == labels_to_number_of_queries.end())
+            {
+                labels_to_number_of_queries[label] = 0;
+            }
+            labels_to_number_of_queries[label] += 1;
         }
-    }
-    }
-  
-    for (size_t i = 0; i < filter_labels.size(); i++){
-      query_ids_to_labels[i].insert(filter_labels[i]);
-    }
 
-    tsl::robin_map<std::string, std::vector<_u32>> label_id_to_orig_id; 
-    tsl::robin_map<std::string, std::vector<_u32>> label_query_id_to_orig_id;
+        size_t npoints;
+        std::vector<std::vector<std::string>> point_to_labels;
+        parse_label_file_into_vec(npoints, label_file, point_to_labels);
+        std::vector<label_set> point_ids_to_labels(point_to_labels.size());
+        std::vector<label_set> query_ids_to_labels(filter_labels.size());
 
-    if (data_type == std::string("float")){
-      label_id_to_orig_id = generate_label_specific_vector_files_compat<float>(
-      base_file, labels_to_number_of_points, point_ids_to_labels, all_labels);
-
-      label_query_id_to_orig_id = generate_label_specific_vector_files_compat<float>(
-      query_file, labels_to_number_of_queries, query_ids_to_labels, all_labels); // query_filters acts like query_ids_to_labels
-    }
-    else if (data_type == std::string("int8")){
-      label_id_to_orig_id = generate_label_specific_vector_files_compat<int8_t>(
-      base_file, labels_to_number_of_points, point_ids_to_labels, all_labels);
-
-      label_query_id_to_orig_id = generate_label_specific_vector_files_compat<int8_t>(
-      query_file, labels_to_number_of_queries, query_ids_to_labels, all_labels); // query_filters acts like query_ids_to_labels
-    }
-    else if (data_type == std::string("uint8")){
-      label_id_to_orig_id = generate_label_specific_vector_files_compat<uint8_t>(
-      base_file, labels_to_number_of_points, point_ids_to_labels, all_labels);
-
-      label_query_id_to_orig_id = generate_label_specific_vector_files_compat<uint8_t>(
-      query_file, labels_to_number_of_queries, query_ids_to_labels, all_labels); // query_filters acts like query_ids_to_labels
-    }
-    else{
-      diskann::cerr << "Invalid data type" << std::endl;
-      return -1;
-    }
-
-    // Generate label specific ground truths
-
-    try {
-        for (const auto& label : all_labels){
-            std::string filtered_base_file = base_file + "_" + label;
-            std::string filtered_query_file = query_file + "_" + label;
-            std::string filtered_gt_file = gt_file + "_" + label;
-            if (data_type == std::string("float"))
-            aux_main<float>(filtered_base_file, "", filtered_query_file, filtered_gt_file, K, "", metric, "");
-            if (data_type == std::string("int8"))
-            aux_main<int8_t>(filtered_base_file, "", filtered_query_file, filtered_gt_file, K, "", metric, "");
-            if (data_type == std::string("uint8"))
-            aux_main<uint8_t>(filtered_base_file, "", filtered_query_file, filtered_gt_file, K, "", metric, "");
-
-            // aux_main<float>(base_file, label_file, query_file, gt_file, K, universal_label, metric,
-            //                     tags_file, filter_labels);
+        for (size_t i = 0; i < point_to_labels.size(); i++)
+        {
+            for (size_t j = 0; j < point_to_labels[i].size(); j++)
+            {
+                std::string label = point_to_labels[i][j];
+                if (all_labels.find(label) != all_labels.end())
+                {
+                    point_ids_to_labels[i].insert(point_to_labels[i][j]);
+                    if (labels_to_number_of_points.find(label) == labels_to_number_of_points.end())
+                    {
+                        labels_to_number_of_points[label] = 0;
+                    }
+                    labels_to_number_of_points[label] += 1;
+                }
+            }
         }
-        } catch (const std::exception &e) {
-        std::cout << std::string(e.what()) << std::endl;
-        diskann::cerr << "Compute GT failed." << std::endl;
-        return -1;
+
+        for (size_t i = 0; i < filter_labels.size(); i++)
+        {
+            query_ids_to_labels[i].insert(filter_labels[i]);
         }
-    
-    // Combine the label specific ground truths to produce a single GT file
 
-    unsigned* gt_ids = nullptr;
-    float*    gt_dists = nullptr;
-    size_t gt_num, gt_dim;
+        tsl::robin_map<std::string, std::vector<_u32>> label_id_to_orig_id;
+        tsl::robin_map<std::string, std::vector<_u32>> label_query_id_to_orig_id;
 
-    std::vector<std::vector<int32_t>> final_gt_ids;
-    std::vector<std::vector<float>> final_gt_dists;
+        if (data_type == std::string("float"))
+        {
+            label_id_to_orig_id = generate_label_specific_vector_files_compat<float>(
+                base_file, labels_to_number_of_points, point_ids_to_labels, all_labels);
 
-    int query_num = 0;
-    for (const auto &lbl : all_labels){
-      query_num += labels_to_number_of_queries[lbl];
-    }
-    
-
-    for (size_t i = 0; i < query_num; i++){
-      final_gt_ids.push_back(std::vector<int32_t>(K));
-      final_gt_dists.push_back(std::vector<float>(K));
-    }
-
-
-    for (const auto &lbl : all_labels){
-      std::string filtered_gt_file = gt_file + "_" + lbl;
-      load_truthset(filtered_gt_file, gt_ids, gt_dists, gt_num, gt_dim);
-      
-      for (int i = 0; i < labels_to_number_of_queries[lbl]; i++){
-        int orig_query_id = label_query_id_to_orig_id[lbl][i];
-        for (int j = 0; j < K; j++){
-          final_gt_ids[orig_query_id][j] = label_id_to_orig_id[lbl][gt_ids[i*K + j]];
-          final_gt_dists[orig_query_id][j] = gt_dists[i*K + j];
+            label_query_id_to_orig_id = generate_label_specific_vector_files_compat<float>(
+                query_file, labels_to_number_of_queries, query_ids_to_labels,
+                all_labels); // query_filters acts like query_ids_to_labels
         }
-      }
-    }
+        else if (data_type == std::string("int8"))
+        {
+            label_id_to_orig_id = generate_label_specific_vector_files_compat<int8_t>(
+                base_file, labels_to_number_of_points, point_ids_to_labels, all_labels);
 
-    int32_t closest_points[query_num * K];
-    float dist_closest_points[query_num * K];
+            label_query_id_to_orig_id = generate_label_specific_vector_files_compat<int8_t>(
+                query_file, labels_to_number_of_queries, query_ids_to_labels,
+                all_labels); // query_filters acts like query_ids_to_labels
+        }
+        else if (data_type == std::string("uint8"))
+        {
+            label_id_to_orig_id = generate_label_specific_vector_files_compat<uint8_t>(
+                base_file, labels_to_number_of_points, point_ids_to_labels, all_labels);
 
-    for(int i = 0; i < query_num; i++){
-      for(int j = 0; j < K; j++){
-        closest_points[i*K + j] = final_gt_ids[i][j];
-        dist_closest_points[i*K + j] = final_gt_dists[i][j];
+            label_query_id_to_orig_id = generate_label_specific_vector_files_compat<uint8_t>(
+                query_file, labels_to_number_of_queries, query_ids_to_labels,
+                all_labels); // query_filters acts like query_ids_to_labels
+        }
+        else
+        {
+            diskann::cerr << "Invalid data type" << std::endl;
+            return -1;
+        }
 
-      }
-    }
+        // Generate label specific ground truths
 
-    save_groundtruth_as_one_file(gt_file, closest_points, dist_closest_points,
-                               query_num, K);
+        try
+        {
+            for (const auto &label : all_labels)
+            {
+                std::string filtered_base_file = base_file + "_" + label;
+                std::string filtered_query_file = query_file + "_" + label;
+                std::string filtered_gt_file = gt_file + "_" + label;
+                if (data_type == std::string("float"))
+                    aux_main<float>(filtered_base_file, "", filtered_query_file, filtered_gt_file, K, "", metric, "");
+                if (data_type == std::string("int8"))
+                    aux_main<int8_t>(filtered_base_file, "", filtered_query_file, filtered_gt_file, K, "", metric, "");
+                if (data_type == std::string("uint8"))
+                    aux_main<uint8_t>(filtered_base_file, "", filtered_query_file, filtered_gt_file, K, "", metric, "");
+
+                // aux_main<float>(base_file, label_file, query_file, gt_file, K, universal_label, metric,
+                //                     tags_file, filter_labels);
+            }
+        }
+        catch (const std::exception &e)
+        {
+            std::cout << std::string(e.what()) << std::endl;
+            diskann::cerr << "Compute GT failed." << std::endl;
+            return -1;
+        }
+
+        // Combine the label specific ground truths to produce a single GT file
+
+        unsigned *gt_ids = nullptr;
+        float *gt_dists = nullptr;
+        size_t gt_num, gt_dim;
+
+        std::vector<std::vector<int32_t>> final_gt_ids;
+        std::vector<std::vector<float>> final_gt_dists;
+
+        int query_num = 0;
+        for (const auto &lbl : all_labels)
+        {
+            query_num += labels_to_number_of_queries[lbl];
+        }
+
+        for (size_t i = 0; i < query_num; i++)
+        {
+            final_gt_ids.push_back(std::vector<int32_t>(K));
+            final_gt_dists.push_back(std::vector<float>(K));
+        }
+
+        for (const auto &lbl : all_labels)
+        {
+            std::string filtered_gt_file = gt_file + "_" + lbl;
+            load_truthset(filtered_gt_file, gt_ids, gt_dists, gt_num, gt_dim);
+
+            for (int i = 0; i < labels_to_number_of_queries[lbl]; i++)
+            {
+                int orig_query_id = label_query_id_to_orig_id[lbl][i];
+                for (int j = 0; j < K; j++)
+                {
+                    final_gt_ids[orig_query_id][j] = label_id_to_orig_id[lbl][gt_ids[i * K + j]];
+                    final_gt_dists[orig_query_id][j] = gt_dists[i * K + j];
+                }
+            }
+        }
+
+        int32_t *closest_points = new int32_t[query_num * K];
+        float *dist_closest_points = new float[query_num * K];
+
+        for (int i = 0; i < query_num; i++)
+        {
+            for (int j = 0; j < K; j++)
+            {
+                closest_points[i * K + j] = final_gt_ids[i][j];
+                dist_closest_points[i * K + j] = final_gt_dists[i][j];
+            }
+        }
+
+        save_groundtruth_as_one_file(gt_file, closest_points, dist_closest_points, query_num, K);
     }
 }
