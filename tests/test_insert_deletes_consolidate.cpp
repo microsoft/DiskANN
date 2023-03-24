@@ -137,9 +137,10 @@ void delete_from_beginning(diskann::Index<T, TagT> &index, diskann::Parameters &
 template <typename T>
 void build_incremental_index(const std::string &data_path, const unsigned L, const unsigned R, const float alpha,
                              const unsigned thread_count, size_t points_to_skip, size_t max_points_to_insert,
-                             size_t beginning_index_size, float start_point_norm, size_t points_per_checkpoint,
-                             size_t checkpoints_per_snapshot, const std::string &save_path,
-                             size_t points_to_delete_from_beginning, size_t start_deletes_after, bool concurrent)
+                             size_t beginning_index_size, float start_point_norm, unsigned num_start_pts,
+                             size_t points_per_checkpoint, size_t checkpoints_per_snapshot,
+                             const std::string &save_path, size_t points_to_delete_from_beginning,
+                             size_t start_deletes_after, bool concurrent)
 {
     const unsigned C = 500;
     const bool saturate_graph = false;
@@ -154,6 +155,7 @@ void build_incremental_index(const std::string &data_path, const unsigned L, con
     params.Set<unsigned>("num_threads", thread_count);
     params.Set<int>("Lf", 0); // TODO: get this from params and default to some
                               // value to make it backward compatible.
+    params.Set<unsigned>("num_frozen_pts", num_start_pts);
 
     size_t dim, aligned_dim;
     size_t num_points;
@@ -179,16 +181,7 @@ void build_incremental_index(const std::string &data_path, const unsigned L, con
     }
 
     using TagT = uint32_t;
-    unsigned num_frozen = 1;
     const bool enable_tags = true;
-
-    auto num_frozen_str = getenv("TTS_NUM_FROZEN");
-
-    if (num_frozen_str != nullptr)
-    {
-        num_frozen = std::atoi(num_frozen_str);
-        std::cout << "Overriding num_frozen to" << num_frozen << std::endl;
-    }
 
     diskann::Index<T, TagT> index(diskann::L2, dim, max_points_to_insert, true, params, params, enable_tags,
                                   concurrent);
@@ -226,7 +219,7 @@ void build_incremental_index(const std::string &data_path, const unsigned L, con
     }
     else
     {
-        index.set_start_point_at_random(static_cast<T>(start_point_norm));
+        index.set_start_points_at_random(static_cast<T>(start_point_norm));
         index.enable_delete();
     }
 
@@ -337,7 +330,7 @@ void build_incremental_index(const std::string &data_path, const unsigned L, con
 int main(int argc, char **argv)
 {
     std::string data_type, dist_fn, data_path, index_path_prefix;
-    unsigned num_threads, R, L;
+    unsigned num_threads, R, L, num_start_pts;
     float alpha, start_point_norm;
     size_t points_to_skip, max_points_to_insert, beginning_index_size, points_per_checkpoint, checkpoints_per_snapshot,
         points_to_delete_from_beginning, start_deletes_after;
@@ -379,6 +372,8 @@ int main(int argc, char **argv)
         desc.add_options()("start_deletes_after", po::value<uint64_t>(&start_deletes_after)->default_value(0), "");
         desc.add_options()("start_point_norm", po::value<float>(&start_point_norm)->default_value(0),
                            "Set the start point to a random point on a sphere of this radius");
+        desc.add_options()("num_start_points", po::value<unsigned>(&num_start_pts)->default_value(0),
+                           "Set the number of random start (frozen) points to use when inserting and searching");
 
         po::variables_map vm;
         po::store(po::parse_command_line(argc, argv, desc), vm);
@@ -407,17 +402,17 @@ int main(int argc, char **argv)
     {
         if (data_type == std::string("int8"))
             build_incremental_index<int8_t>(data_path, L, R, alpha, num_threads, points_to_skip, max_points_to_insert,
-                                            beginning_index_size, start_point_norm, points_per_checkpoint,
-                                            checkpoints_per_snapshot, index_path_prefix,
+                                            beginning_index_size, start_point_norm, num_start_pts,
+                                            points_per_checkpoint, checkpoints_per_snapshot, index_path_prefix,
                                             points_to_delete_from_beginning, start_deletes_after, concurrent);
         else if (data_type == std::string("uint8"))
             build_incremental_index<uint8_t>(data_path, L, R, alpha, num_threads, points_to_skip, max_points_to_insert,
-                                             beginning_index_size, start_point_norm, points_per_checkpoint,
-                                             checkpoints_per_snapshot, index_path_prefix,
+                                             beginning_index_size, start_point_norm, num_start_pts,
+                                             points_per_checkpoint, checkpoints_per_snapshot, index_path_prefix,
                                              points_to_delete_from_beginning, start_deletes_after, concurrent);
         else if (data_type == std::string("float"))
             build_incremental_index<float>(data_path, L, R, alpha, num_threads, points_to_skip, max_points_to_insert,
-                                           beginning_index_size, start_point_norm, points_per_checkpoint,
+                                           beginning_index_size, start_point_norm, num_start_pts, points_per_checkpoint,
                                            checkpoints_per_snapshot, index_path_prefix, points_to_delete_from_beginning,
                                            start_deletes_after, concurrent);
         else

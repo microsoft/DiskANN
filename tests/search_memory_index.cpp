@@ -60,7 +60,12 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
     }
 
     using TagT = uint32_t;
-    diskann::Index<T, TagT, LabelT> index(metric, query_dim, 0, dynamic, tags);
+    const bool concurrent = false, pq_dist_build = false, use_opq = false;
+    const size_t num_pq_chunks = 0;
+    using IndexType = diskann::Index<T, TagT, LabelT>;
+    const size_t num_frozen_pts = IndexType::get_graph_num_frozen_points(index_path);
+    IndexType index(metric, query_dim, 0, dynamic, tags, concurrent, pq_dist_build, num_pq_chunks, use_opq,
+                    num_frozen_pts);
     std::cout << "Index class instantiated" << std::endl;
     index.load(index_path.c_str(), num_threads, *(std::max_element(Lvec.begin(), Lvec.end())));
     std::cout << "Index loaded" << std::endl;
