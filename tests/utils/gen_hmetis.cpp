@@ -33,7 +33,8 @@ int aux_main(const std::string &gt_file,
                         << std::endl;
           return -1;
         }
-		hmetis << gt[i * gt_dim + j] << " ";
+        // hMetis vertex IDs are 1-based!
+        hmetis << gt[i * gt_dim + j] + 1 << " ";
 	  }
 	  hmetis << std::endl;
 	}
