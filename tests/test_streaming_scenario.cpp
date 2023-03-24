@@ -169,7 +169,7 @@ template <typename T>
 void build_incremental_index(const std::string &data_path, const unsigned L, const unsigned R, const float alpha,
                              const unsigned insert_threads, const unsigned consolidate_threads,
                              size_t max_points_to_insert, size_t active_window, size_t consolidate_interval,
-                             const float start_point_norm, const std::string &save_path)
+                             const float start_point_norm, unsigned num_start_pts, const std::string &save_path)
 {
     const unsigned C = 500;
     const bool saturate_graph = false;
@@ -183,6 +183,7 @@ void build_incremental_index(const std::string &data_path, const unsigned L, con
     params.Set<unsigned>("num_rnds", 1);
     params.Set<unsigned>("num_threads", insert_threads);
     params.Set<unsigned>("Lf", 0);
+    params.Set<unsigned>("num_frozen_pts", num_start_pts);
     diskann::Parameters delete_params;
     delete_params.Set<unsigned>("L", L);
     delete_params.Set<unsigned>("R", R);
@@ -215,20 +216,11 @@ void build_incremental_index(const std::string &data_path, const unsigned L, con
 
     using TagT = uint32_t;
     using LabelT = uint32_t;
-    unsigned num_frozen = 1;
     const bool enable_tags = true;
-
-    auto num_frozen_str = getenv("TTS_NUM_FROZEN");
-
-    if (num_frozen_str != nullptr)
-    {
-        num_frozen = std::atoi(num_frozen_str);
-        std::cout << "Overriding num_frozen to" << num_frozen << std::endl;
-    }
 
     diskann::Index<T, TagT, LabelT> index(diskann::L2, dim, active_window + 4 * consolidate_interval, true, params,
                                           params, enable_tags, true);
-    index.set_start_point_at_random(static_cast<T>(start_point_norm));
+    index.set_start_points_at_random(static_cast<T>(start_point_norm));
     index.enable_delete();
 
     T *data = nullptr;
@@ -286,7 +278,7 @@ int main(int argc, char **argv)
 {
     std::string data_type, dist_fn, data_path, index_path_prefix;
     unsigned insert_threads, consolidate_threads;
-    unsigned R, L;
+    unsigned R, L, num_start_pts;
     float alpha, start_point_norm;
     size_t max_points_to_insert, active_window, consolidate_interval;
 
@@ -325,6 +317,8 @@ int main(int argc, char **argv)
                            "the window while deleting the same number from the left");
         desc.add_options()("start_point_norm", po::value<float>(&start_point_norm)->required(),
                            "Set the start point to a random point on a sphere of this radius");
+        desc.add_options()("num_start_points", po::value<unsigned>(&num_start_pts)->default_value(0),
+                           "Set the number of random start (frozen) points to use when inserting and searching");
 
         po::variables_map vm;
         po::store(po::parse_command_line(argc, argv, desc), vm);
@@ -353,15 +347,15 @@ int main(int argc, char **argv)
         if (data_type == std::string("int8"))
             build_incremental_index<int8_t>(data_path, L, R, alpha, insert_threads, consolidate_threads,
                                             max_points_to_insert, active_window, consolidate_interval, start_point_norm,
-                                            index_path_prefix);
+                                            num_start_pts, index_path_prefix);
         else if (data_type == std::string("uint8"))
             build_incremental_index<uint8_t>(data_path, L, R, alpha, insert_threads, consolidate_threads,
                                              max_points_to_insert, active_window, consolidate_interval,
-                                             start_point_norm, index_path_prefix);
+                                             start_point_norm, num_start_pts, index_path_prefix);
         else if (data_type == std::string("float"))
             build_incremental_index<float>(data_path, L, R, alpha, insert_threads, consolidate_threads,
                                            max_points_to_insert, active_window, consolidate_interval, start_point_norm,
-                                           index_path_prefix);
+                                           num_start_pts, index_path_prefix);
         else
             std::cout << "Unsupported type. Use float/int8/uint8" << std::endl;
     }
