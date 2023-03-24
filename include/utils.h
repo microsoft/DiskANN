@@ -55,6 +55,10 @@ typedef int FileHandle;
 
 #define BUFFER_SIZE_FOR_CACHED_IO (_u64)1024 * (_u64)1048576
 
+#define PBSTR "||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||"
+#define PBWIDTH 60
+
+
 inline bool file_exists(const std::string &name, bool dirCheck = false)
 {
     int val;
@@ -693,6 +697,16 @@ inline uint64_t save_bin(const std::string &filename, T *data, size_t npts, size
     diskann::cout << "Finished writing bin." << std::endl;
     return bytes_written;
 }
+
+inline void print_progress(double percentage)
+{
+    int val = (int)(percentage * 100);
+    int lpad = (int)(percentage * PBWIDTH);
+    int rpad = PBWIDTH - lpad;
+    printf("\r%3d%% [%.*s%*s]", val, lpad, PBSTR, rpad, "");
+    fflush(stdout);
+}
+
 // load_aligned_bin functions START
 
 template <typename T>
