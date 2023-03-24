@@ -1014,7 +1014,7 @@ template <typename T> inline void normalize(T *arr, size_t dim)
         arr[i] = (T)(arr[i] / sum);
     }
 }
-template <typename T> inline std::vector<T> readFileLinesInVector(const std::string& filename, bool unique=false)
+template <typename T> inline std::vector<T> readFileLinesInVector(const std::string &filename, bool unique = false)
 {
     std::vector<T> result;
     std::set<T> elementSet;
@@ -1043,7 +1043,7 @@ template <typename T> inline std::vector<T> readFileLinesInVector(const std::str
             }
             if (!elementSet.count(line))
             {
-               result.push_back(line);
+                result.push_back(line);
             }
             if (unique)
             {
@@ -1054,9 +1054,30 @@ template <typename T> inline std::vector<T> readFileLinesInVector(const std::str
     }
     else
     {
-      throw diskann::ANNException(std::string("Failed to open file. filename can not be blank"), -1);
+        throw diskann::ANNException(std::string("Failed to open file. filename can not be blank"), -1);
     }
     return result;
+}
+
+inline void clean_up_artifacts(tsl::robin_set<std::string> paths_to_clean, tsl::robin_set<std::string> path_suffixes)
+{
+    try
+    {
+        for (const auto &path : paths_to_clean)
+        {
+            for (const auto &suffix : path_suffixes)
+            {
+                std::string curr_path_to_clean(path + "_" + suffix);
+                if (std::remove(curr_path_to_clean.c_str()) != 0)
+                    diskann::cout << "Warning: Unable to remove file :" << curr_path_to_clean << std::endl;
+            }
+        }
+    }
+    catch (const std::exception &e)
+    {
+        diskann::cout << "Warning: Unable to clean all artifacts" << std::endl;
+    }
+    diskann::cout << "Cleaned all artifacts" << std::endl;
 }
 
 #ifdef _WINDOWS

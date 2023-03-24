@@ -1026,5 +1026,10 @@ int main(int argc, char **argv)
         }
 
         save_groundtruth_as_one_file(gt_file, closest_points, dist_closest_points, query_num, K);
+
+        // cleanup artifacts
+        std::cout << "Cleaning up artifacts..." << std::endl;
+        tsl::robin_set<std::string> paths_to_clean{gt_file, base_file, query_file};
+        clean_up_artifacts(paths_to_clean, all_labels);
     }
 }
