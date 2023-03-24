@@ -19,20 +19,7 @@
 #include "parameters.h"
 #include "utils.h"
 
-
 namespace po = boost::program_options;
-
-// macros
-//#define PBSTR "||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||"
-//#define PBWIDTH 60
-
-// custom types (for readability)
-//typedef tsl::robin_set<std::string> label_set;
-//typedef std::string path;
-//
-//// structs for returning multiple items from a function
-//typedef std::tuple<std::vector<label_set>, tsl::robin_map<std::string, _u32>, label_set> parse_label_file_return_values;
-//typedef std::tuple<std::vector<std::vector<_u32>>, _u64> load_label_index_return_values;
 typedef std::tuple<std::vector<std::vector<_u32>>, _u64> stitch_indices_return_values;
 
 /*
@@ -108,7 +95,6 @@ void handle_args(int argc, char **argv, std::string &data_type, path &input_data
         throw;
     }
 }
-
 
 /*
  * For each label, generates a file containing all vectors that have said label.
@@ -217,81 +203,6 @@ tsl::robin_map<std::string, std::vector<_u32>> generate_label_specific_vector_fi
         free(label_to_iovec_map[lbl]);
         close(label_input_data_fd);
     }
-
-    std::chrono::duration<double> file_writing_time = std::chrono::high_resolution_clock::now() - file_writing_timer;
-    std::cout << "generated " << all_labels.size() << " label-specific vector files for index building in time "
-              << file_writing_time.count() << "\n"
-              << std::endl;
-
-    return label_id_to_orig_id;
-}
-
-// for use on systems without writev (i.e. Windows)
-template <typename T>
-tsl::robin_map<std::string, std::vector<_u32>> generate_label_specific_vector_files_compat(
-    path input_data_path, tsl::robin_map<std::string, _u32> labels_to_number_of_points,
-    std::vector<label_set> point_ids_to_labels, label_set all_labels)
-{
-    auto file_writing_timer = std::chrono::high_resolution_clock::now();
-    std::ifstream input_data_stream(input_data_path);
-
-    _u32 number_of_points, dimension;
-    input_data_stream.read((char *)&number_of_points, sizeof(_u32));
-    input_data_stream.read((char *)&dimension, sizeof(_u32));
-    const _u32 VECTOR_SIZE = dimension * sizeof(T);
-    if (number_of_points != point_ids_to_labels.size())
-    {
-        std::cerr << "Error: number of points in labels file and data file differ." << std::endl;
-        throw;
-    }
-
-    tsl::robin_map<std::string, char *> labels_to_vectors;
-    tsl::robin_map<std::string, _u32> labels_to_curr_vector;
-    tsl::robin_map<std::string, std::vector<_u32>> label_id_to_orig_id;
-
-    for (const auto &lbl : all_labels)
-    {
-        _u32 number_of_label_pts = labels_to_number_of_points[lbl];
-        char *vectors = (char *)malloc(number_of_label_pts * VECTOR_SIZE);
-        if (vectors == nullptr)
-        {
-            throw;
-        }
-        labels_to_vectors[lbl] = vectors;
-        labels_to_curr_vector[lbl] = 0;
-        label_id_to_orig_id[lbl].reserve(number_of_label_pts);
-    }
-
-    for (_u32 point_id = 0; point_id < number_of_points; point_id++)
-    {
-        char *curr_vector = (char *)malloc(VECTOR_SIZE);
-        input_data_stream.read(curr_vector, VECTOR_SIZE);
-        for (const auto &lbl : point_ids_to_labels[point_id])
-        {
-            char *curr_label_vector_ptr = labels_to_vectors[lbl] + (labels_to_curr_vector[lbl] * VECTOR_SIZE);
-            memcpy(curr_label_vector_ptr, curr_vector, VECTOR_SIZE);
-            labels_to_curr_vector[lbl]++;
-            label_id_to_orig_id[lbl].push_back(point_id);
-        }
-        free(curr_vector);
-    }
-
-    for (const auto &lbl : all_labels)
-    {
-        path curr_label_input_data_path(input_data_path + "_" + lbl);
-        _u32 number_of_label_pts = labels_to_number_of_points[lbl];
-
-        std::ofstream label_file_stream;
-        label_file_stream.exceptions(std::ios::badbit | std::ios::failbit);
-        label_file_stream.open(curr_label_input_data_path, std::ios_base::binary);
-        label_file_stream.write((char *)&number_of_label_pts, sizeof(_u32));
-        label_file_stream.write((char *)&dimension, sizeof(_u32));
-        label_file_stream.write((char *)labels_to_vectors[lbl], number_of_label_pts * VECTOR_SIZE);
-
-        label_file_stream.close();
-        free(labels_to_vectors[lbl]);
-    }
-    input_data_stream.close();
 
     std::chrono::duration<double> file_writing_time = std::chrono::high_resolution_clock::now() - file_writing_timer;
     std::cout << "generated " << all_labels.size() << " label-specific vector files for index building in time "
@@ -580,11 +491,14 @@ int main(int argc, char **argv)
 
     // 4. for each created data file, create a vanilla diskANN index
     if (data_type == "uint8")
-        diskann::generate_label_indices<uint8_t>(input_data_path, final_index_path_prefix, all_labels, R, L, alpha, num_threads);
+        diskann::generate_label_indices<uint8_t>(input_data_path, final_index_path_prefix, all_labels, R, L, alpha,
+                                                 num_threads);
     else if (data_type == "int8")
-        diskann::generate_label_indices<int8_t>(input_data_path, final_index_path_prefix, all_labels, R, L, alpha, num_threads);
+        diskann::generate_label_indices<int8_t>(input_data_path, final_index_path_prefix, all_labels, R, L, alpha,
+                                                num_threads);
     else if (data_type == "float")
-        diskann::generate_label_indices<float>(input_data_path, final_index_path_prefix, all_labels, R, L, alpha, num_threads);
+        diskann::generate_label_indices<float>(input_data_path, final_index_path_prefix, all_labels, R, L, alpha,
+                                               num_threads);
     else
         throw;
 

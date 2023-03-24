@@ -83,111 +83,111 @@ void generate_label_indices(path input_data_path, path final_index_path_prefix, 
  * Each data file is saved under the following format:
  *    input_data_path + "_" + label
  */
-//template <typename T>
-//tsl::robin_map<std::string, std::vector<_u32>> generate_label_specific_vector_files(
-//    path input_data_path, tsl::robin_map<std::string, _u32> labels_to_number_of_points,
-//    std::vector<label_set> point_ids_to_labels, label_set all_labels)
-//{
-//    auto file_writing_timer = std::chrono::high_resolution_clock::now();
-//    diskann::MemoryMapper input_data(input_data_path);
-//    char *input_start = input_data.getBuf();
-//
-//    _u32 number_of_points, dimension;
-//    std::memcpy(&number_of_points, input_start, sizeof(_u32));
-//    std::memcpy(&dimension, input_start + sizeof(_u32), sizeof(_u32));
-//    const _u32 VECTOR_SIZE = dimension * sizeof(T);
-//    const size_t METADATA = 2 * sizeof(_u32);
-//    if (number_of_points != point_ids_to_labels.size())
-//    {
-//        std::cerr << "Error: number of points in labels file and data file differ." << std::endl;
-//        throw;
-//    }
-//
-//    tsl::robin_map<std::string, iovec *> label_to_iovec_map;
-//    tsl::robin_map<std::string, _u32> label_to_curr_iovec;
-//    tsl::robin_map<std::string, std::vector<_u32>> label_id_to_orig_id;
-//
-//    // setup iovec list for each label
-//    for (const auto &lbl : all_labels)
-//    {
-//        iovec *label_iovecs = (iovec *)malloc(labels_to_number_of_points[lbl] * sizeof(iovec));
-//        if (label_iovecs == nullptr)
-//        {
-//            throw;
-//        }
-//        label_to_iovec_map[lbl] = label_iovecs;
-//        label_to_curr_iovec[lbl] = 0;
-//        label_id_to_orig_id[lbl].reserve(labels_to_number_of_points[lbl]);
-//    }
-//
-//    // each point added to corresponding per-label iovec list
-//    for (_u32 point_id = 0; point_id < number_of_points; point_id++)
-//    {
-//        char *curr_point = input_start + METADATA + (VECTOR_SIZE * point_id);
-//        iovec curr_iovec;
-//
-//        curr_iovec.iov_base = curr_point;
-//        curr_iovec.iov_len = VECTOR_SIZE;
-//        for (const auto &lbl : point_ids_to_labels[point_id])
-//        {
-//            *(label_to_iovec_map[lbl] + label_to_curr_iovec[lbl]) = curr_iovec;
-//            label_to_curr_iovec[lbl]++;
-//            label_id_to_orig_id[lbl].push_back(point_id);
-//        }
-//    }
-//
-//    // write each label iovec to resp. file
-//    for (const auto &lbl : all_labels)
-//    {
-//        int label_input_data_fd;
-//        path curr_label_input_data_path(input_data_path + "_" + lbl);
-//        _u32 curr_num_pts = labels_to_number_of_points[lbl];
-//
-//        label_input_data_fd =
-//            open(curr_label_input_data_path.c_str(), O_CREAT | O_WRONLY | O_TRUNC | O_APPEND, (mode_t)0644);
-//        if (label_input_data_fd == -1)
-//            throw;
-//
-//        // write metadata
-//        _u32 metadata[2] = {curr_num_pts, dimension};
-//        int return_value = write(label_input_data_fd, metadata, sizeof(_u32) * 2);
-//        if (return_value == -1)
-//        {
-//            throw;
-//        }
-//
-//        // limits on number of iovec structs per writev means we need to perform
-//        // multiple writevs
-//        size_t i = 0;
-//        while (curr_num_pts > IOV_MAX)
-//        {
-//            return_value = writev(label_input_data_fd, (label_to_iovec_map[lbl] + (IOV_MAX * i)), IOV_MAX);
-//            if (return_value == -1)
-//            {
-//                close(label_input_data_fd);
-//                throw;
-//            }
-//            curr_num_pts -= IOV_MAX;
-//            i += 1;
-//        }
-//        return_value = writev(label_input_data_fd, (label_to_iovec_map[lbl] + (IOV_MAX * i)), curr_num_pts);
-//        if (return_value == -1)
-//        {
-//            close(label_input_data_fd);
-//            throw;
-//        }
-//
-//        free(label_to_iovec_map[lbl]);
-//        close(label_input_data_fd);
-//    }
-//
-//    std::chrono::duration<double> file_writing_time = std::chrono::high_resolution_clock::now() - file_writing_timer;
-//    std::cout << "generated " << all_labels.size() << " label-specific vector files for index building in time "
-//              << file_writing_time.count() << "\n"
-//              << std::endl;
-//
-//    return label_id_to_orig_id;
-//}
+template <typename T>
+tsl::robin_map<std::string, std::vector<_u32>> generate_label_specific_vector_files(
+    path input_data_path, tsl::robin_map<std::string, _u32> labels_to_number_of_points,
+    std::vector<label_set> point_ids_to_labels, label_set all_labels)
+{
+    auto file_writing_timer = std::chrono::high_resolution_clock::now();
+    diskann::MemoryMapper input_data(input_data_path);
+    char *input_start = input_data.getBuf();
+
+    _u32 number_of_points, dimension;
+    std::memcpy(&number_of_points, input_start, sizeof(_u32));
+    std::memcpy(&dimension, input_start + sizeof(_u32), sizeof(_u32));
+    const _u32 VECTOR_SIZE = dimension * sizeof(T);
+    const size_t METADATA = 2 * sizeof(_u32);
+    if (number_of_points != point_ids_to_labels.size())
+    {
+        std::cerr << "Error: number of points in labels file and data file differ." << std::endl;
+        throw;
+    }
+
+    tsl::robin_map<std::string, iovec *> label_to_iovec_map;
+    tsl::robin_map<std::string, _u32> label_to_curr_iovec;
+    tsl::robin_map<std::string, std::vector<_u32>> label_id_to_orig_id;
+
+    // setup iovec list for each label
+    for (const auto &lbl : all_labels)
+    {
+        iovec *label_iovecs = (iovec *)malloc(labels_to_number_of_points[lbl] * sizeof(iovec));
+        if (label_iovecs == nullptr)
+        {
+            throw;
+        }
+        label_to_iovec_map[lbl] = label_iovecs;
+        label_to_curr_iovec[lbl] = 0;
+        label_id_to_orig_id[lbl].reserve(labels_to_number_of_points[lbl]);
+    }
+
+    // each point added to corresponding per-label iovec list
+    for (_u32 point_id = 0; point_id < number_of_points; point_id++)
+    {
+        char *curr_point = input_start + METADATA + (VECTOR_SIZE * point_id);
+        iovec curr_iovec;
+
+        curr_iovec.iov_base = curr_point;
+        curr_iovec.iov_len = VECTOR_SIZE;
+        for (const auto &lbl : point_ids_to_labels[point_id])
+        {
+            *(label_to_iovec_map[lbl] + label_to_curr_iovec[lbl]) = curr_iovec;
+            label_to_curr_iovec[lbl]++;
+            label_id_to_orig_id[lbl].push_back(point_id);
+        }
+    }
+
+    // write each label iovec to resp. file
+    for (const auto &lbl : all_labels)
+    {
+        int label_input_data_fd;
+        path curr_label_input_data_path(input_data_path + "_" + lbl);
+        _u32 curr_num_pts = labels_to_number_of_points[lbl];
+
+        label_input_data_fd =
+            open(curr_label_input_data_path.c_str(), O_CREAT | O_WRONLY | O_TRUNC | O_APPEND, (mode_t)0644);
+        if (label_input_data_fd == -1)
+            throw;
+
+        // write metadata
+        _u32 metadata[2] = {curr_num_pts, dimension};
+        int return_value = write(label_input_data_fd, metadata, sizeof(_u32) * 2);
+        if (return_value == -1)
+        {
+            throw;
+        }
+
+        // limits on number of iovec structs per writev means we need to perform
+        // multiple writevs
+        size_t i = 0;
+        while (curr_num_pts > IOV_MAX)
+        {
+            return_value = writev(label_input_data_fd, (label_to_iovec_map[lbl] + (IOV_MAX * i)), IOV_MAX);
+            if (return_value == -1)
+            {
+                close(label_input_data_fd);
+                throw;
+            }
+            curr_num_pts -= IOV_MAX;
+            i += 1;
+        }
+        return_value = writev(label_input_data_fd, (label_to_iovec_map[lbl] + (IOV_MAX * i)), curr_num_pts);
+        if (return_value == -1)
+        {
+            close(label_input_data_fd);
+            throw;
+        }
+
+        free(label_to_iovec_map[lbl]);
+        close(label_input_data_fd);
+    }
+
+    std::chrono::duration<double> file_writing_time = std::chrono::high_resolution_clock::now() - file_writing_timer;
+    std::cout << "generated " << all_labels.size() << " label-specific vector files for index building in time "
+              << file_writing_time.count() << "\n"
+              << std::endl;
+
+    return label_id_to_orig_id;
+}
 
 // for use on systems without writev (i.e. Windows)
 template <typename T>

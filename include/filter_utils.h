@@ -55,10 +55,10 @@ DISKANN_DLLEXPORT load_label_index_return_values load_label_index(path label_ind
 DISKANN_DLLEXPORT parse_label_file_return_values parse_label_file(path label_data_path, std::string universal_label);
 
 
-//template <typename T>
-//DISKANN_DLLEXPORT tsl::robin_map<std::string, std::vector<_u32>> generate_label_specific_vector_files(
-//    path input_data_path, tsl::robin_map<std::string, _u32> labels_to_number_of_points,
-//    std::vector<label_set> point_ids_to_labels, label_set all_labels);
+template <typename T>
+DISKANN_DLLEXPORT tsl::robin_map<std::string, std::vector<_u32>> generate_label_specific_vector_files(
+    path input_data_path, tsl::robin_map<std::string, _u32> labels_to_number_of_points,
+    std::vector<label_set> point_ids_to_labels, label_set all_labels);
 
 template <typename T>
 DISKANN_DLLEXPORT tsl::robin_map<std::string, std::vector<_u32>> generate_label_specific_vector_files_compat(
