@@ -606,8 +606,7 @@ template <typename T, typename LabelT> void PQFlashIndex<T, LabelT>::set_univers
     int32_t temp_filter_num = get_filter_number(label);
     if (temp_filter_num == -1)
     {
-        diskann::cout << "Error, could not find universal label. Exitting." << std::endl;
-        exit(-1);
+        diskann::cout << "Error, could not find universal label." << std::endl;
     }
     else
     {
