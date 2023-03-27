@@ -87,6 +87,7 @@ Please see the following pages on using the compiled code:
 - [Commandline interface for building and search in memory indices](workflows/in_memory_index.md) 
 - [Commandline examples for using in-memory streaming indices](workflows/dynamic_index.md)
 - [Commandline interface for building and search in memory indices with label data and filters](workflows/filtered_in_memory.md)
+- [Commandline interface for building and search SSD based indices with label data and filters](workflows/filtered_ssd_index.md)
 - To be added: Python interfaces and docker files
 
 Please cite this software in your work as:
