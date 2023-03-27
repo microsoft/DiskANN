@@ -384,7 +384,6 @@ parse_label_file_return_values parse_label_file(path label_data_path, std::strin
 }
 
 
-
 template DISKANN_DLLEXPORT void generate_label_indices<float>(path input_data_path, path final_index_path_prefix,
                                                               label_set all_labels, unsigned R, unsigned L, float alpha,
                                                               unsigned num_threads);

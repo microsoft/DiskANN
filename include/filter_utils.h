@@ -64,4 +64,35 @@ template <typename T>
 DISKANN_DLLEXPORT tsl::robin_map<std::string, std::vector<_u32>> generate_label_specific_vector_files_compat(
     path input_data_path, tsl::robin_map<std::string, _u32> labels_to_number_of_points,
     std::vector<label_set> point_ids_to_labels, label_set all_labels);
+
+inline std::vector<uint32_t> loadTags(const std::string &tags_file, const std::string &base_file)
+{
+    const bool tags_enabled = tags_file.empty() ? false : true;
+    std::vector<uint32_t> location_to_tag;
+    if (tags_enabled)
+    {
+        size_t tag_file_ndims, tag_file_npts;
+        std::uint32_t *tag_data;
+        diskann::load_bin<std::uint32_t>(tags_file, tag_data, tag_file_npts, tag_file_ndims);
+        if (tag_file_ndims != 1)
+        {
+            diskann::cerr << "tags file error" << std::endl;
+            throw diskann::ANNException("tag file error", -1, __FUNCSIG__, __FILE__, __LINE__);
+        }
+
+        // check if the point count match
+        size_t base_file_npts, base_file_ndims;
+        diskann::get_bin_metadata(base_file, base_file_npts, base_file_ndims);
+        if (base_file_npts != tag_file_npts)
+        {
+            diskann::cerr << "point num in tags file mismatch" << std::endl;
+            throw diskann::ANNException("point num in tags file mismatch", -1, __FUNCSIG__, __FILE__, __LINE__);
+        }
+
+        location_to_tag.assign(tag_data, tag_data + tag_file_npts);
+        delete[] tag_data;
+    }
+    return location_to_tag;
+}
+
 } // namespace diskann
