@@ -230,9 +230,9 @@ jobs:
         ${{ env.diskann_built_utils }}/rand_data_gen --data_type uint8 --output_file ./rand_uint8_10D_10K_norm50.0.bin -D 10 -N 10000 --norm 50.0
         ${{ env.diskann_built_utils }}/rand_data_gen --data_type uint8 --output_file ./rand_uint8_10D_1K_norm50.0.bin -D 10 -N 1000 --norm 50.0
         ${{ env.diskann_built_utils }}/generate_synthetic_labels  --num_labels 50 --num_points 10000  --output_file ./rand_labels_50_10K.txt --distribution_type random
-        ${{ env.diskann_built_utils }}/compute_groundtruth  --data_type uint8 --dist_fn l2 --universal_label 0 --filter_label 10 --base_file ./rand_uint8_10D_10K_norm50.0.bin --query_file ./rand_uint8_10D_1K_norm50.0.bin --label_file ./rand_labels_50_10K.txt --gt_file ./l2_rand_uint8_10D_10K_norm50.0_10D_1K_norm50.0_gt100_wlabel --K 100
-        ${{ env.diskann_built_utils }}/compute_groundtruth  --data_type uint8 --dist_fn mips --universal_label 0 --filter_label 10 --base_file ./rand_uint8_10D_10K_norm50.0.bin --query_file ./rand_uint8_10D_1K_norm50.0.bin --label_file ./rand_labels_50_10K.txt --gt_file ./mips_rand_uint8_10D_10K_norm50.0_10D_1K_norm50.0_gt100_wlabel --K 100
-        ${{ env.diskann_built_utils }}/compute_groundtruth  --data_type uint8 --dist_fn cosine --universal_label 0 --filter_label 10 --base_file ./rand_uint8_10D_10K_norm50.0.bin --query_file ./rand_uint8_10D_1K_norm50.0.bin --label_file ./rand_labels_50_10K.txt --gt_file ./cosine_rand_uint8_10D_10K_norm50.0_10D_1K_norm50.0_gt100_wlabel --K 100
+        ${{ env.diskann_built_utils }}/compute_groundtruth_for_filters  --data_type uint8 --dist_fn l2 --universal_label 0 --filter_label 10 --base_file ./rand_uint8_10D_10K_norm50.0.bin --query_file ./rand_uint8_10D_1K_norm50.0.bin --label_file ./rand_labels_50_10K.txt --gt_file ./l2_rand_uint8_10D_10K_norm50.0_10D_1K_norm50.0_gt100_wlabel --K 100
+        ${{ env.diskann_built_utils }}/compute_groundtruth_for_filters  --data_type uint8 --dist_fn mips --universal_label 0 --filter_label 10 --base_file ./rand_uint8_10D_10K_norm50.0.bin --query_file ./rand_uint8_10D_1K_norm50.0.bin --label_file ./rand_labels_50_10K.txt --gt_file ./mips_rand_uint8_10D_10K_norm50.0_10D_1K_norm50.0_gt100_wlabel --K 100
+        ${{ env.diskann_built_utils }}/compute_groundtruth_for_filters  --data_type uint8 --dist_fn cosine --universal_label 0 --filter_label 10 --base_file ./rand_uint8_10D_10K_norm50.0.bin --query_file ./rand_uint8_10D_1K_norm50.0.bin --label_file ./rand_labels_50_10K.txt --gt_file ./cosine_rand_uint8_10D_10K_norm50.0_10D_1K_norm50.0_gt100_wlabel --K 100
 
     - name: build and search in-memory index with labels using L2 and Cosine metrics (random distributed labels)
       if: success() || failure()
@@ -252,9 +252,9 @@ jobs:
       if: success() || failure()
       run: |
         ${{ env.diskann_built_utils }}/generate_synthetic_labels  --num_labels 50 --num_points 10000  --output_file ./zipf_labels_50_10K.txt --distribution_type zipf
-        ${{ env.diskann_built_utils }}/compute_groundtruth  --data_type uint8 --dist_fn l2 --universal_label 0 --filter_label 5 --base_file ./rand_uint8_10D_10K_norm50.0.bin --query_file ./rand_uint8_10D_1K_norm50.0.bin --label_file ./zipf_labels_50_10K.txt --gt_file ./l2_zipf_uint8_10D_10K_norm50.0_10D_1K_norm50.0_gt100_wlabel --K 100
-        ${{ env.diskann_built_utils }}/compute_groundtruth  --data_type uint8 --dist_fn mips --universal_label 0 --filter_label 5 --base_file ./rand_uint8_10D_10K_norm50.0.bin --query_file ./rand_uint8_10D_1K_norm50.0.bin --label_file ./zipf_labels_50_10K.txt --gt_file ./mips_zipf_uint8_10D_10K_norm50.0_10D_1K_norm50.0_gt100_wlabel --K 100
-        ${{ env.diskann_built_utils }}/compute_groundtruth  --data_type uint8 --dist_fn cosine --universal_label 0 --filter_label 5 --base_file ./rand_uint8_10D_10K_norm50.0.bin --query_file ./rand_uint8_10D_1K_norm50.0.bin --label_file ./zipf_labels_50_10K.txt --gt_file ./cosine_zipf_uint8_10D_10K_norm50.0_10D_1K_norm50.0_gt100_wlabel --K 100
+        ${{ env.diskann_built_utils }}/compute_groundtruth_for_filters  --data_type uint8 --dist_fn l2 --universal_label 0 --filter_label 5 --base_file ./rand_uint8_10D_10K_norm50.0.bin --query_file ./rand_uint8_10D_1K_norm50.0.bin --label_file ./zipf_labels_50_10K.txt --gt_file ./l2_zipf_uint8_10D_10K_norm50.0_10D_1K_norm50.0_gt100_wlabel --K 100
+        ${{ env.diskann_built_utils }}/compute_groundtruth_for_filters  --data_type uint8 --dist_fn mips --universal_label 0 --filter_label 5 --base_file ./rand_uint8_10D_10K_norm50.0.bin --query_file ./rand_uint8_10D_1K_norm50.0.bin --label_file ./zipf_labels_50_10K.txt --gt_file ./mips_zipf_uint8_10D_10K_norm50.0_10D_1K_norm50.0_gt100_wlabel --K 100
+        ${{ env.diskann_built_utils }}/compute_groundtruth_for_filters  --data_type uint8 --dist_fn cosine --universal_label 0 --filter_label 5 --base_file ./rand_uint8_10D_10K_norm50.0.bin --query_file ./rand_uint8_10D_1K_norm50.0.bin --label_file ./zipf_labels_50_10K.txt --gt_file ./cosine_zipf_uint8_10D_10K_norm50.0_10D_1K_norm50.0_gt100_wlabel --K 100
     - name: build and search in-memory index with labels using L2 and Cosine metrics (zipf distributed labels)
       if: success() || failure()
       run: |
@@ -270,17 +270,18 @@ jobs:
     - name : build and search in-memory and disk index (without universal label, zipf distributed)
       if: success() || failure()
       run: |
-        ${{ env.diskann_built_utils }}/compute_groundtruth  --data_type uint8 --dist_fn l2 --filter_label 5 --base_file ./rand_uint8_10D_10K_norm50.0.bin --query_file ./rand_uint8_10D_1K_norm50.0.bin --label_file ./zipf_labels_50_10K.txt --gt_file ./l2_zipf_uint8_10D_10K_norm50.0_10D_1K_norm50.0_gt100_wlabel_nouniversal --K 100
+        ${{ env.diskann_built_utils }}/compute_groundtruth_for_filters  --data_type uint8 --dist_fn l2 --filter_label 5 --base_file ./rand_uint8_10D_10K_norm50.0.bin --query_file ./rand_uint8_10D_1K_norm50.0.bin --label_file ./zipf_labels_50_10K.txt --gt_file ./l2_zipf_uint8_10D_10K_norm50.0_10D_1K_norm50.0_gt100_wlabel_nouniversal --K 100
         ${{ env.diskann_built_utils }}/build_memory_index --data_type uint8 --dist_fn l2 --FilteredLbuild 90 --data_path ./rand_uint8_10D_10K_norm50.0.bin --label_file ./zipf_labels_50_10K.txt --index_path_prefix ./index_l2_zipf_uint8_10D_10K_norm50_wlabel_nouniversal
         ${{ env.diskann_built_tests }}/build_disk_index --data_type uint8 --dist_fn l2  --filtered_Lbuild 90 --data_path ./rand_uint8_10D_10K_norm50.0.bin --label_file ./zipf_labels_50_10K.txt --index_path_prefix ./disk_index_l2_zipf_uint8_10D_10K_norm50_wlabel_nouniversal -R 16 -L 32 -B 0.00003 -M 1
         ${{ env.diskann_built_tests }}/search_memory_index --data_type uint8 --dist_fn l2 --filter_label 5 --fail_if_recall_below 70 --index_path_prefix ./index_l2_zipf_uint8_10D_10K_norm50_wlabel_nouniversal --query_file ./rand_uint8_10D_1K_norm50.0.bin --recall_at 10 --result_path temp --gt_file ./l2_zipf_uint8_10D_10K_norm50.0_10D_1K_norm50.0_gt100_wlabel_nouniversal -L  16 32
         ${{ env.diskann_built_tests }}/search_disk_index --data_type uint8 --dist_fn l2 --filter_label 5 --fail_if_recall_below 50 --index_path_prefix ./disk_index_l2_zipf_uint8_10D_10K_norm50_wlabel_nouniversal --result_path /tmp/res --query_file ./rand_uint8_10D_1K_norm50.0.bin --gt_file ./l2_zipf_uint8_10D_10K_norm50.0_10D_1K_norm50.0_gt100_wlabel_nouniversal --recall_at 5 -L 5 12 -W 2 --num_nodes_to_cache 10 -T 16
-    # -name: Generate combined GT for each query with a separate label and search 
-    #  if: success() || failure()
-    #  run: |
-    #     ${{ env.diskann_built_utils }}/compute_groundatruth  --data_type uint8 --dist_fn l2 --universal_label 0 --filter_label_file <path_to_query_label_file> --base_file ./rand_uint8_10D_10K_norm50.0.bin --query_file ./rand_uint8_10D_1K_norm50.0.bin --label_file ./zipf_labels_50_10K.txt --gt_file ./combined_l2_zipf_uint8_10D_10K_norm50.0_10D_1K_norm50.0_gt100_wlabel --K 100
-    #     ${{ env.diskann_built_tests }}/search_memory_index --dta_type uint8 --dist_fn l2 --query_filters_file <path_to_query_label_file> --fail_if_recall_below 70 --index_path_prefix ./index_l2_zipf_uint8_10D_10K_norm50_wlabel --query_file ./rand_uint8_10D_1K_norm50.0.bin --recall_at 10 --result_path temp --gt_file ./combined_l2_zipf_uint8_10D_10K_norm50.0_10D_1K_norm50.0_gt100_wlabel -L  16 32
-
+    - name: Generate combined GT for each query with a separate label and search 
+      if: success() || failure()
+      run: |
+        ${{ env.diskann_built_utils }}/generate_synthetic_labels  --num_labels 10 --num_points 1000  --output_file ./query_labels_1K.txt --distribution_type one_per_point
+        ${{ env.diskann_built_utils }}/compute_groundatruth  --data_type uint8 --dist_fn l2 --universal_label 0 --filter_label_file ./query_labels_1K.txt --base_file ./rand_uint8_10D_10K_norm50.0.bin --query_file ./rand_uint8_10D_1K_norm50.0.bin --label_file ./zipf_labels_50_10K.txt --gt_file ./combined_l2_zipf_uint8_10D_10K_norm50.0_10D_1K_norm50.0_gt100_wlabel --K 100
+        ${{ env.diskann_built_tests }}/build_memory_index --data_type uint8 --dist_fn l2 --FilteredLbuild 90 --universal_label 0 --data_path ./rand_uint8_10D_10K_norm50.0.bin --label_file ./zipf_labels_50_10K.txt --index_path_prefix ./index_l2_zipf_uint8_10D_10K_norm50_wlabel
+        ${{ env.diskann_built_tests }}/search_memory_index --dta_type uint8 --dist_fn l2 --query_filters_file ./query_labels_1K.txt --fail_if_recall_below 70 --index_path_prefix ./index_l2_zipf_uint8_10D_10K_norm50_wlabel --query_file ./rand_uint8_10D_1K_norm50.0.bin --recall_at 10 --result_path temp --gt_file ./combined_l2_zipf_uint8_10D_10K_norm50.0_10D_1K_norm50.0_gt100_wlabel -L  16 32
     - name: build and search in-memory index with pq_dist of 5 with 10 dimensions
       if: success() || failure()
       run: |
