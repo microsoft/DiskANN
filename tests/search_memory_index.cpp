@@ -361,7 +361,7 @@ int main(int argc, char **argv)
     }
     else if (query_filters_file != "")
     {
-        query_filters = readFileLinesInVector<std::string>(query_filters_file);
+        query_filters = read_file_to_vector_of_strings(query_filters_file);
     }
 
     try

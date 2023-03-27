@@ -838,7 +838,7 @@ int main(int argc, char **argv)
     }
     else if (filter_label_file != "")
     {
-        filter_labels = readFileLinesInVector<std::string>(filter_label_file, false);
+        filter_labels = read_file_to_vector_of_strings(filter_label_file, false);
     }
 
     // only when there is no filter label or 1 filter label for all queries
