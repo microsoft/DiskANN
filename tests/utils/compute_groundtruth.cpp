@@ -845,7 +845,7 @@ int main(int argc, char **argv)
     }
 
     // only when there is no filter label or 1 filter label for all queries
-    if (filter_labels.size() <= 0)
+    if (filter_labels.size() <= 1)
     {
         try
         {
