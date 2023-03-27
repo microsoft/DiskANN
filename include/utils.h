@@ -1014,10 +1014,11 @@ template <typename T> inline void normalize(T *arr, size_t dim)
         arr[i] = (T)(arr[i] / sum);
     }
 }
-template <typename T> inline std::vector<T> readFileLinesInVector(const std::string &filename, bool unique = false)
+
+inline std::vector<std::string> read_file_to_vector_of_strings(const std::string &filename, bool unique = false)
 {
-    std::vector<T> result;
-    std::set<T> elementSet;
+    std::vector<std::string> result;
+    std::set<std::string> elementSet;
     if (filename != "")
     {
         std::ifstream file(filename);
@@ -1072,12 +1073,12 @@ inline void clean_up_artifacts(tsl::robin_set<std::string> paths_to_clean, tsl::
                     diskann::cout << "Warning: Unable to remove file :" << curr_path_to_clean << std::endl;
             }
         }
+        diskann::cout << "Cleaned all artifacts" << std::endl;
     }
     catch (const std::exception &e)
     {
         diskann::cout << "Warning: Unable to clean all artifacts" << std::endl;
     }
-    diskann::cout << "Cleaned all artifacts" << std::endl;
 }
 
 #ifdef _WINDOWS
