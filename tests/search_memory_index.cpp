@@ -366,7 +366,7 @@ int main(int argc, char **argv)
 
     try
     {
-        if (filter_label != "" && label_type == "ushort")
+        if (!query_filters.empty() && label_type == "ushort")
         {
             if (data_type == std::string("int8"))
             {

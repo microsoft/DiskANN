@@ -691,10 +691,7 @@ int aux_main(const std::string &base_file, const std::string &label_file, const 
             std::cout << "WARNING: found less than k GT entries for query " << i << std::endl;
     }
 
-    // std::string gt_file_name = gt_file + (filter_label == "" ? "" : ("_" + filter_label)) + ".bin";
-    std::string gt_file_name = gt_file + (filter_label == "" ? "" : ("_" + filter_label));
-
-    save_groundtruth_as_one_file(gt_file_name, closest_points, dist_closest_points, nqueries, k);
+    save_groundtruth_as_one_file(gt_file, closest_points, dist_closest_points, nqueries, k);
     delete[] closest_points;
     delete[] dist_closest_points;
     diskann::aligned_free(query_data);
