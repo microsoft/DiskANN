@@ -21,79 +21,12 @@
 
 namespace diskann {
 
-  // This function was taken from: https://github.com/microsoft/SPTAG/blob/main/AnnService/src/Core/Common/DistanceUtils.cpp
-  inline __m128 _mm_sqdf_epu8(__m128i X, __m128i Y) {
-    __m128i zero = _mm_setzero_si128();
-
-    __m128i xlo = _mm_unpacklo_epi8(X, zero);
-    __m128i xhi = _mm_unpackhi_epi8(X, zero);
-    __m128i ylo = _mm_unpacklo_epi8(Y, zero);
-    __m128i yhi = _mm_unpackhi_epi8(Y, zero);
-
-    __m128i dlo = _mm_sub_epi16(xlo, ylo);
-    __m128i dhi = _mm_sub_epi16(xhi, yhi);
-
-    return _mm_cvtepi32_ps(
-        _mm_add_epi32(_mm_madd_epi16(dlo, dlo), _mm_madd_epi16(dhi, dhi)));
-  }
-
-  // This function was taken from:
-  // https://github.com/microsoft/SPTAG/blob/main/AnnService/src/Core/Common/DistanceUtils.cpp
-  inline __m128 _mm_sqdf_epi8(__m128i X, __m128i Y) {
-    __m128i zero = _mm_setzero_si128();
-
-    __m128i sign_x = _mm_cmplt_epi8(X, zero);
-    __m128i sign_y = _mm_cmplt_epi8(Y, zero);
-
-    __m128i xlo = _mm_unpacklo_epi8(X, sign_x);
-    __m128i xhi = _mm_unpackhi_epi8(X, sign_x);
-    __m128i ylo = _mm_unpacklo_epi8(Y, sign_y);
-    __m128i yhi = _mm_unpackhi_epi8(Y, sign_y);
-
-    __m128i dlo = _mm_sub_epi16(xlo, ylo);
-    __m128i dhi = _mm_sub_epi16(xhi, yhi);
-
-    return _mm_cvtepi32_ps(
-        _mm_add_epi32(_mm_madd_epi16(dlo, dlo), _mm_madd_epi16(dhi, dhi)));
-  }
-
-  // This function was taken from:
-  // https://github.com/microsoft/SPTAG/blob/main/AnnService/src/Core/Common/DistanceUtils.cpp
-  inline __m256 _mm256_sqdf_epi8(__m256i X, __m256i Y) {
-    __m256i zero = _mm256_setzero_si256();
-
-    __m256i sign_x = _mm256_cmpgt_epi8(zero, X);
-    __m256i sign_y = _mm256_cmpgt_epi8(zero, Y);
-
-    __m256i xlo = _mm256_unpacklo_epi8(X, sign_x);
-    __m256i xhi = _mm256_unpackhi_epi8(X, sign_x);
-    __m256i ylo = _mm256_unpacklo_epi8(Y, sign_y);
-    __m256i yhi = _mm256_unpackhi_epi8(Y, sign_y);
-
-    __m256i dlo = _mm256_sub_epi16(xlo, ylo);
-    __m256i dhi = _mm256_sub_epi16(xhi, yhi);
-
-    return _mm256_cvtepi32_ps(_mm256_add_epi32(_mm256_madd_epi16(dlo, dlo),
-                                               _mm256_madd_epi16(dhi, dhi)));
-  }
-
-  // This was taken from:
-  // https://github.com/microsoft/SPTAG/blob/main/AnnService/src/Core/Common/DistanceUtils.cpp
-#define REPEAT(type, ctype, delta, load, exec, acc, result) \
-  {                                                         \
-    type c1 = load((ctype *) (a));                         \
-    type c2 = load((ctype *) (b));                         \
-    a += delta;                                            \
-    b += delta;                                            \
-    result = acc(result, exec(c1, c2));                     \
-  }
-
   //
   // Cosine distance functions.
   //
 
-  float DistanceCosineInt8::compare(
-      const int8_t *a, const int8_t *b, uint32_t length, float break_distance) const {
+  float DistanceCosineInt8::compare(const int8_t *a, const int8_t *b,
+                                    uint32_t length) const {
 #ifdef _WINDOWS
     return diskann::CosineSimilarity2<int8_t>(a, b, length);
 #else
@@ -109,8 +42,7 @@ namespace diskann {
   }
 
   float DistanceCosineFloat::compare(const float *a, const float *b,
-                                     uint32_t length,
-                                     float    break_distance) const {
+                                     uint32_t length) const {
 #ifdef _WINDOWS
     return diskann::CosineSimilarity2<float>(a, b, length);
 #else
@@ -126,8 +58,7 @@ namespace diskann {
   }
 
   float SlowDistanceCosineUInt8::compare(const uint8_t *a, const uint8_t *b,
-                                         uint32_t length,
-                                         float    break_distance) const {
+                                         uint32_t length) const {
     int magA = 0, magB = 0, scalarProduct = 0;
     for (uint32_t i = 0; i < length; i++) {
       magA += ((uint32_t) a[i]) * ((uint32_t) a[i]);
@@ -142,46 +73,32 @@ namespace diskann {
   // L2 distance functions.
   //
 
-  float DistanceL2Int8::compare(const int8_t *a, const int8_t *b, 
-                                uint32_t size, float break_distance) const {
+  float DistanceL2Int8::compare(const int8_t *a, const int8_t *b,
+                                uint32_t size) const {
     int32_t result = 0;
 
 #ifdef _WINDOWS
 #ifdef USE_AVX2
-
-    const int8_t *pEnd32 = a + ((size >> 5) << 5);
-    const int8_t *pEnd1 = a + size;
-
-    __m256        diff256 = _mm256_setzero_ps();
-    const int8_t *testdist = size / 2 + a;
-    float         diff = 0;
-
-    while (a < pEnd32) {
-      REPEAT(__m256i, __m256i, 32, _mm256_loadu_si256, _mm256_sqdf_epi8,
-             _mm256_add_ps, diff256)
-
-      if (a >= testdist) {
-        __m128 diff128 = _mm_add_ps(_mm256_castps256_ps128(diff256),
-                                    _mm256_extractf128_ps(diff256, 1));
-        diff = diff128.m128_f32[0] + diff128.m128_f32[1] + 
-            diff128.m128_f32[2] + diff128.m128_f32[3];
-
-        if (diff > break_distance)
-          return diff;
-
-        testdist += (pEnd32 - a) / 2;
-      }
+    __m256 r = _mm256_setzero_ps();
+    char  *pX = (char *) a, *pY = (char *) b;
+    while (size >= 32) {
+      __m256i r1 = _mm256_subs_epi8(_mm256_loadu_si256((__m256i *) pX),
+                                    _mm256_loadu_si256((__m256i *) pY));
+      r = _mm256_add_ps(r, _mm256_mul_epi8(r1, r1));
+      pX += 32;
+      pY += 32;
+      size -= 32;
     }
-
-    while (a < pEnd1) {
-      float c1 = ((float) (*a++) - (float) (*b++));
-      diff += c1 * c1;
-
-      if (diff > break_distance)
-        return diff;
+    while (size > 0) {
+      __m128i r2 = _mm_subs_epi8(_mm_loadu_si128((__m128i *) pX),
+                                 _mm_loadu_si128((__m128i *) pY));
+      r = _mm256_add_ps(r, _mm256_mul32_pi8(r2, r2));
+      pX += 4;
+      pY += 4;
+      size -= 4;
     }
-    return diff;
-
+    r = _mm256_hadd_ps(_mm256_hadd_ps(r, r), r);
+    return r.m256_f32[0] + r.m256_f32[4];
 #else
 #pragma omp simd reduction(+ : result) aligned(a, b : 8)
     for (_s32 i = 0; i < (_s32) size; i++) {
@@ -200,68 +117,89 @@ namespace diskann {
 #endif
   }
 
-  // This function implementation was adapted from:
-  // https://github.com/microsoft/SPTAG/blob/main/AnnService/src/Core/Common/DistanceUtils.cpp
+
+  float DistanceL2Int8::compare(const int8_t *a, const int8_t *b, uint32_t size,
+                                float break_distance) const {
+    int32_t result = 0;
+
+#ifdef _WINDOWS
+#ifdef USE_AVX2
+
+    __m256   r = _mm256_setzero_ps();
+    char    *pX = (char *) a, *pY = (char *) b;
+    uint32_t testidx = size < 64 ? 0 : size / 2;
+    float    diff = 0;
+
+    while (size >= 32) {
+      __m256i r1 = _mm256_subs_epi8(_mm256_loadu_si256((__m256i *) pX),
+                                    _mm256_loadu_si256((__m256i *) pY));
+      r = _mm256_add_ps(r, _mm256_mul_epi8(r1, r1));
+
+      if (size <= testidx) {
+        r = _mm256_hadd_ps(_mm256_hadd_ps(r, r), r);
+        diff += r.m256_f32[0] + r.m256_f32[4];
+        if (diff > break_distance)
+          return diff;
+
+        r = _mm256_setzero_ps();
+        testidx = testidx / 2;
+      }
+      pX += 32;
+      pY += 32;
+      size -= 32;
+    }
+
+    while (size > 0) {
+      __m128i r2 = _mm_subs_epi8(_mm_loadu_si128((__m128i *) pX),
+                                 _mm_loadu_si128((__m128i *) pY));
+      r = _mm256_add_ps(r, _mm256_mul32_pi8(r2, r2));
+
+      r = _mm256_hadd_ps(_mm256_hadd_ps(r, r), r);
+      diff += r.m256_f32[0] + r.m256_f32[4];
+      if (diff > break_distance)
+        break;
+
+      r = _mm256_setzero_ps();
+      pX += 4;
+      pY += 4;
+      size -= 4;
+    }
+    return diff;
+#else
+    return DistanceL2Int8::compare(a, b, size);
+#endif
+#else
+    return DistanceL2Int8::compare(a, b, size);
+#endif
+  }
 
   float DistanceL2UInt8::compare(const uint8_t *a, const uint8_t *b,
-                                 uint32_t size, float break_distance) const {
-#ifdef _WINDOWS
-    const uint8_t *end16 = a + ((size >> 4) << 4);
-    const uint8_t *end1 = a + size;
- 
-     __m128 diff128 = _mm_setzero_ps();
-    const uint8_t *testdist = size / 2 + a;
-     float diff = 0;
- 
-     while (a < end16) {
-       REPEAT(__m128i, __m128i, 16, _mm_loadu_si128, _mm_sqdf_epu8,
-       _mm_add_ps, diff128)
-
-       if (a >= testdist) {
-         diff = diff128.m128_f32[0] + diff128.m128_f32[1] +
-                diff128.m128_f32[2] + diff128.m128_f32[3];
-         if (diff > break_distance)
-           return diff;
-
-         testdist += (end16 - a) / 2;
-       }
-     }
- 
-     while (a < end1) {
-       float c1 = ((float) (*a++) - (float) (*b++));
-         diff += c1 * c1;
- 
-         if (diff > break_distance)
-           return diff;
-     }
-     return diff;
-#else
+                                 uint32_t size) const {
     uint32_t result = 0;
+#ifndef _WINDOWS
 #pragma omp simd reduction(+ : result) aligned(a, b : 8)
+#endif
     for (int32_t i = 0; i < (int32_t) size; i++) {
       result += ((int32_t) ((int16_t) a[i] - (int16_t) b[i])) *
                 ((int32_t) ((int16_t) a[i] - (int16_t) b[i]));
     }
     return (float) result;
-#endif
   }
 
 #ifndef _WINDOWS
-  float DistanceL2Float::compare(const float *a, const float *b, uint32_t size,
-                                 float break_distance) const {
+  float DistanceL2Float::compare(const float *a, const float *b,
+                                 uint32_t size) const {
     a = (const float *) __builtin_assume_aligned(a, 32);
     b = (const float *) __builtin_assume_aligned(b, 32);
 #else
-  float DistanceL2Float::compare(const float *a, const float *b, uint32_t size,
-                                 float break_distance) const {
+  float DistanceL2Float::compare(const float *a, const float *b,
+                                 uint32_t size) const {
 #endif
 
     float result = 0;
 #ifdef USE_AVX2
     // assume size is divisible by 8
     uint16_t niters = (uint16_t) (size / 8);
-    //test for break_distance at the halfway point
-    uint16_t testidx = niters / 2;
     __m256   sum = _mm256_setzero_ps();
     for (uint16_t j = 0; j < niters; j++) {
       // scope is a[8j:8j+7], b[8j:8j+7]
@@ -277,22 +215,10 @@ namespace diskann {
       __m256 tmp_vec = _mm256_sub_ps(a_vec, b_vec);
 
       sum = _mm256_fmadd_ps(tmp_vec, tmp_vec, sum);
-
-      if (j >= testidx) {
-        // horizontal add sum
-        result = _mm256_reduce_add_ps(sum);
-        if (result > break_distance)
-           break;
-        //test for break_distance at the next halfway point
-        testidx += (niters - j) / 2;
-      }
     }
 
-    //complete remaining dimensions
-    for (uint32_t i = niters * 8; i < size; i++) {
-      result += (a[i] - b[i]) * (a[i] - b[i]);
-    }
-
+    // horizontal add sum
+    result = _mm256_reduce_add_ps(sum);
 #else
 #ifndef _WINDOWS
 #pragma omp simd reduction(+ : result) aligned(a, b : 32)
@@ -305,8 +231,7 @@ namespace diskann {
   }
 
   float SlowDistanceL2Float::compare(const float *a, const float *b,
-                                     uint32_t length,
-                                     float    break_distance) const {
+                                     uint32_t length) const {
     float result = 0.0f;
     for (uint32_t i = 0; i < length; i++) {
       result += (a[i] - b[i]) * (a[i] - b[i]);
@@ -315,47 +240,46 @@ namespace diskann {
   }
 
 #ifdef _WINDOWS
-
-  // This function implementation was adapted from:
-  // https://github.com/microsoft/SPTAG/blob/main/AnnService/src/Core/Common/DistanceUtils.cpp
-
   float AVXDistanceL2Int8::compare(const int8_t *a, const int8_t *b,
-                                   uint32_t length,
-                                   float    break_distance) const {
-    const int8_t *pEnd16 = a + ((length >> 4) << 4);
-    const int8_t *pEnd1 = a + length;
+                                   uint32_t length) const {
+    __m128  r = _mm_setzero_ps();
+    __m128i r1;
+    while (length >= 16) {
+      r1 = _mm_subs_epi8(_mm_load_si128((__m128i *) a),
+                         _mm_load_si128((__m128i *) b));
+      r = _mm_add_ps(r, _mm_mul_epi8(r1));
+      a += 16;
+      b += 16;
+      length -= 16;
+    }
+    r = _mm_hadd_ps(_mm_hadd_ps(r, r), r);
+    float res = r.m128_f32[0];
 
-    __m128 diff128 = _mm_setzero_ps();
-    const int8_t *testdist = length / 2 + a;
-    float   diff = 0;
-
-    while (a < pEnd16) {
-      REPEAT(__m128i, __m128i, 16, _mm_loadu_si128, _mm_sqdf_epi8, _mm_add_ps,
-             diff128)
-
-      if (a >= testdist) {
-        diff = diff128.m128_f32[0] + diff128.m128_f32[1] + diff128.m128_f32[2] +
-               diff128.m128_f32[3];
-        if (diff > break_distance)
-           return diff;
-
-        testdist += (pEnd16 - a) / 2;
-      }
+    if (length >= 8) {
+      __m128  r2 = _mm_setzero_ps();
+      __m128i r3 = _mm_subs_epi8(_mm_load_si128((__m128i *) (a - 8)),
+                                 _mm_load_si128((__m128i *) (b - 8)));
+      r2 = _mm_add_ps(r2, _mm_mulhi_epi8(r3));
+      a += 8;
+      b += 8;
+      length -= 8;
+      r2 = _mm_hadd_ps(_mm_hadd_ps(r2, r2), r2);
+      res += r2.m128_f32[0];
     }
 
-    while (a < pEnd1) {
-      float c1 = ((float) (*a++) - (float) (*b++));
-      diff += c1 * c1;
-
-      if (diff > break_distance)
-        return diff;
+    if (length >= 4) {
+      __m128  r2 = _mm_setzero_ps();
+      __m128i r3 = _mm_subs_epi8(_mm_load_si128((__m128i *) (a - 12)),
+                                 _mm_load_si128((__m128i *) (b - 12)));
+      r2 = _mm_add_ps(r2, _mm_mulhi_epi8_shift32(r3));
+      res += r2.m128_f32[0] + r2.m128_f32[1];
     }
-    return diff;
+
+    return res;
   }
 
   float AVXDistanceL2Float::compare(const float *a, const float *b,
-                                    uint32_t length,
-                                    float    break_distance) const {
+                                    uint32_t length) const {
     __m128 diff, v1, v2;
     __m128 sum = _mm_set1_ps(0);
 
@@ -373,12 +297,12 @@ namespace diskann {
            sum.m128_f32[3];
   }
 #else
-  float AVXDistanceL2Int8::compare(const int8_t *, const int8_t *, uint32_t,
-                                   float break_distance) const {
+  float AVXDistanceL2Int8::compare(const int8_t *, const int8_t *,
+                                   uint32_t) const {
     return 0;
   }
   float AVXDistanceL2Float::compare(const float *, const float *,
-                                    uint32_t, float) const {
+                                    uint32_t) const {
     return 0;
   }
 #endif
@@ -495,7 +419,7 @@ namespace diskann {
 
   template<typename T>
   float DistanceFastL2<T>::compare(const T *a, const T *b, float norm,
-                                   unsigned size, float break_distance) const {
+                                   unsigned size) const {
     float result = -2 * DistanceInnerProduct<T>::inner_product(a, b, size);
     result += norm;
     return result;
@@ -599,8 +523,7 @@ namespace diskann {
   }
 
   float AVXDistanceInnerProductFloat::compare(const float *a, const float *b,
-                                              uint32_t size,
-                                              float    break_distance) const {
+                                              uint32_t size) const {
     float result = 0.0f;
 #define AVX_DOT(addr1, addr2, dest, tmp1, tmp2) \
   tmp1 = _mm256_loadu_ps(addr1);                \
