@@ -75,3 +75,6 @@ target_link_libraries(lsh_partition ${PROJECT_NAME} ${DISKANN_TOOLS_TCMALLOC_LIN
 add_executable(gen_hmetis gen_hmetis.cpp)
 target_link_libraries(gen_hmetis ${PROJECT_NAME} ${DISKANN_TOOLS_TCMALLOC_LINK_OPTIONS} Boost::program_options)
 
+add_executable(partition_hmetis partition_hmetis.cpp)
+target_link_libraries(partition_hmetis ${PROJECT_NAME} ${DISKANN_TOOLS_TCMALLOC_LINK_OPTIONS} Boost::program_options)
+

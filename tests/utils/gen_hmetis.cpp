@@ -16,6 +16,8 @@ int aux_main(const std::string &gt_file,
     float* dists = nullptr;
     size_t num_queries, gt_dim;
     diskann::load_truthset(gt_file, gt, dists, num_queries, gt_dim);
+    if (dists != nullptr)
+      delete[] dists;
 
     if (gt_dim < K) {
 	  std::cout << "Ground truth dimension " << gt_dim
@@ -39,10 +41,7 @@ int aux_main(const std::string &gt_file,
 	  hmetis << std::endl;
 	}
 
-    delete[] gt;
-    if (dists != nullptr) {
-	  delete[] dists;
-	}
+    delete[] gt;	
         
     return 0;
 }
