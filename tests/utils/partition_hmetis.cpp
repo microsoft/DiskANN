@@ -273,8 +273,8 @@ int aux_main(const std::string &input_file,
         // now, each query goes to the top `query_fanout` many shards
         for (size_t query_id = 0; query_id < num_queries; ++query_id) {
           for (size_t j = 0;
-               j < query_fanout && j < query_to_gt_shards[query_id]; ++j) {
-            const size_t shard_id = query_to_gt_shards[query_id][j];
+               j < query_fanout && j < query_to_gt_shards[query_id].size(); ++j) {
+            const size_t shard_id = query_to_gt_shards[query_id][j].first;
             queries_routed_to_shard[shard_id].push_back(query_id);
           }
         }
