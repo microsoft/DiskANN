@@ -878,13 +878,13 @@ template <typename T> void save_Tvecs(const char *filename, T *data, size_t npts
     // create cached ofstream with 64MB cache
     cached_ofstream writer(fname, 64 * 1048576);
 
-    unsigned dims_u32 = (unsigned)ndims;
+    unsigned dimsuint32_t = (unsigned)ndims;
 
     // start writing
     for (size_t i = 0; i < npts; i++)
     {
         // write dims in u32
-        writer.write((char *)&dims_u32, sizeof(unsigned));
+        writer.write((char *)&dimsuint32_t, sizeof(unsigned));
 
         // get cur point in data
         T *cur_pt = data + i * ndims;
