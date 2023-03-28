@@ -187,7 +187,8 @@ int main(int argc, char **argv)
             for (int i = 0; i < num_points; i++)
             {
                 outfile << distr(gen);
-                outfile << '\n';
+                if (i != num_points - 1)
+                    outfile << '\n';
             }
         }
         if (outfile.is_open())

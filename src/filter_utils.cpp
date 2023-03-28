@@ -14,7 +14,6 @@
 #endif
 #include "filter_utils.h"
 #include "index.h"
-#include "memory_mapper.h"
 #include "parameters.h"
 #include "utils.h"
 

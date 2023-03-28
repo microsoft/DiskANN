@@ -31,7 +31,7 @@ typedef int FileHandle;
 
 #include "cached_io.h"
 #include "common_includes.h"
-
+#include "memory_mapper.h"
 #include "utils.h"
 #include "windows_customizations.h"
 

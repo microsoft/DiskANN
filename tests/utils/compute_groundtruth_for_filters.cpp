@@ -428,6 +428,50 @@ inline void parse_label_file_into_vec(size_t &line_cnt, const std::string &map_f
 }
 
 template <typename T>
+std::vector<std::vector<std::pair<uint32_t, float>>> processUnfilteredParts(const std::string &base_file,
+                                                                            size_t &nqueries, size_t &npoints,
+                                                                            size_t &dim, size_t &k, float *query_data,
+                                                                            const diskann::Metric &metric,
+                                                                            std::vector<uint32_t> &location_to_tag)
+{
+    float *base_data;
+    int num_parts = get_num_parts<T>(base_file.c_str());
+    std::vector<std::vector<std::pair<uint32_t, float>>> res(nqueries);
+    for (int p = 0; p < num_parts; p++)
+    {
+        size_t start_id = p * PARTSIZE;
+        load_bin_as_float<T>(base_file.c_str(), base_data, npoints, dim, p);
+
+        int *closest_points_part = new int[nqueries * k];
+        float *dist_closest_points_part = new float[nqueries * k];
+
+        _u32 part_k;
+        part_k = k < npoints ? k : npoints;
+        exact_knn(dim, part_k, closest_points_part, dist_closest_points_part, npoints, base_data, nqueries, query_data,
+                  metric);
+
+        for (_u64 i = 0; i < nqueries; i++)
+        {
+            for (_u64 j = 0; j < part_k; j++)
+            {
+                if (!location_to_tag.empty())
+                    if (location_to_tag[closest_points_part[i * k + j] + start_id] == 0)
+                        continue;
+
+                res[i].push_back(std::make_pair((uint32_t)(closest_points_part[i * part_k + j] + start_id),
+                                                dist_closest_points_part[i * part_k + j]));
+            }
+        }
+
+        delete[] closest_points_part;
+        delete[] dist_closest_points_part;
+
+        diskann::aligned_free(base_data);
+    }
+    return res;
+};
+
+template <typename T>
 std::vector<std::vector<std::pair<uint32_t, float>>> processFilteredParts(
     const std::string &base_file, const std::string &label_file, const std::string &filter_label,
     const std::string &universal_label, size_t &nqueries, size_t &npoints, size_t &dim, size_t &k, float *query_data,
@@ -439,15 +483,16 @@ std::vector<std::vector<std::pair<uint32_t, float>>> processFilteredParts(
     int num_parts = get_num_parts<T>(base_file.c_str());
 
     std::vector<std::vector<std::string>> pts_to_labels;
-    parse_label_file_into_vec(npoints, label_file, pts_to_labels);
+    if (filter_label != "")
+        parse_label_file_into_vec(npoints, label_file, pts_to_labels);
 
     for (int p = 0; p < num_parts; p++)
     {
         size_t start_id = p * PARTSIZE;
-        std::vector<size_t> rev_map =
-            load_filtered_bin_as_float<T>(base_file.c_str(), base_data, npoints, dim, p, label_file.c_str(),
-                                          filter_label, universal_label, npoints_filt, pts_to_labels);
-
+        std::vector<size_t> rev_map;
+        if (filter_label != "")
+            rev_map = load_filtered_bin_as_float<T>(base_file.c_str(), base_data, npoints, dim, p, label_file.c_str(),
+                                                    filter_label, universal_label, npoints_filt, pts_to_labels);
         int *closest_points_part = new int[nqueries * k];
         float *dist_closest_points_part = new float[nqueries * k];
 
@@ -503,9 +548,15 @@ int aux_main(const std::string &base_file, const std::string &label_file, const 
     float *dist_closest_points = new float[nqueries * k];
 
     std::vector<std::vector<std::pair<uint32_t, float>>> results;
-
-    results = processFilteredParts<T>(base_file, label_file, filter_label, universal_label, nqueries, npoints, dim, k,
-                                      query_data, metric, location_to_tag);
+    if (filter_label == "")
+    {
+        results = processUnfilteredParts<T>(base_file, nqueries, npoints, dim, k, query_data, metric, location_to_tag);
+    }
+    else
+    {
+        results = processFilteredParts<T>(base_file, label_file, filter_label, universal_label, nqueries, npoints, dim,
+                                          k, query_data, metric, location_to_tag);
+    }
 
     for (_u64 i = 0; i < nqueries; i++)
     {
