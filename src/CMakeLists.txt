@@ -8,6 +8,7 @@ if(MSVC)
 else()
     #file(GLOB CPP_SOURCES *.cpp)
     set(CPP_SOURCES ann_exception.cpp disk_utils.cpp distance.cpp index.cpp 
+        in_mem_graph_store.cpp in_mem_data_store.cpp
         linux_aligned_file_reader.cpp math_utils.cpp natural_number_map.cpp
         natural_number_set.cpp memory_mapper.cpp partition.cpp pq.cpp
         pq_flash_index.cpp scratch.cpp logger.cpp utils.cpp)
