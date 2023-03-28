@@ -494,7 +494,6 @@ LabelT PQFlashIndex<T, LabelT>::get_converted_label(const std::string &filter_la
     stream << "Unable to find label in the Label Map";
     diskann::cerr << stream.str() << std::endl;
     throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
-    exit(-1);
 }
 
 template <typename T, typename LabelT>

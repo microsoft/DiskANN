@@ -1816,7 +1816,6 @@ LabelT Index<T, TagT, LabelT>::get_converted_label(const std::string &raw_label)
     stream << "Unable to find label in the Label Map";
     diskann::cerr << stream.str() << std::endl;
     throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
-    exit(-1);
 }
 
 template <typename T, typename TagT, typename LabelT>
