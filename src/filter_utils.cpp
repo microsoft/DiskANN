@@ -9,9 +9,6 @@
 #include <tuple>
 
 #include <omp.h>
-#ifndef _WINDOWS
-#include <sys/uio.h>
-#endif
 #include "filter_utils.h"
 #include "index.h"
 #include "parameters.h"
