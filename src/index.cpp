@@ -69,7 +69,8 @@ Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_point
                                "index construction",
                                -1, __FUNCSIG__, __FILE__, __LINE__);
         if (m == diskann::Metric::INNER_PRODUCT)
-            throw ANNException("ERROR: Inner product metrics not yet supported with PQ distance "
+            throw ANNException("ERROR: Inner product metrics not yet supported "
+                               "with PQ distance "
                                "base index",
                                -1, __FUNCSIG__, __FILE__, __LINE__);
     }
@@ -172,7 +173,7 @@ void Index<T, TagT, LabelT>::initialize_query_scratch(uint32_t num_threads, uint
     }
 }
 
-template <typename T, typename TagT, typename LabelT> _u64 Index<T, TagT, LabelT>::save_tags(std::string tags_file)
+template <typename T, typename TagT, typename LabelT> size_t Index<T, TagT, LabelT>::save_tags(std::string tags_file)
 {
     if (!_enable_tags)
     {
@@ -181,7 +182,7 @@ template <typename T, typename TagT, typename LabelT> _u64 Index<T, TagT, LabelT
     }
     size_t tag_bytes_written;
     TagT *tag_data = new TagT[_nd + _num_frozen_pts];
-    for (_u32 i = 0; i < _nd; i++)
+    for (uint32_t i = 0; i < _nd; i++)
     {
         TagT tag;
         if (_location_to_tag.try_get(i, tag))
@@ -210,61 +211,63 @@ template <typename T, typename TagT, typename LabelT> _u64 Index<T, TagT, LabelT
     return tag_bytes_written;
 }
 
-template <typename T, typename TagT, typename LabelT> _u64 Index<T, TagT, LabelT>::save_data(std::string data_file)
+template <typename T, typename TagT, typename LabelT> size_t Index<T, TagT, LabelT>::save_data(std::string data_file)
 {
-    // Note: at this point, either _nd == _max_points or any frozen points have been
-    // temporarily moved to _nd, so _nd + _num_frozen_points is the valid location limit.
+    // Note: at this point, either _nd == _max_points or any frozen points have
+    // been temporarily moved to _nd, so _nd + _num_frozen_points is the valid
+    // location limit.
     return save_data_in_base_dimensions(data_file, _data, _nd + _num_frozen_pts, _dim, _aligned_dim);
 }
 
 // save the graph index on a file as an adjacency list. For each point,
 // first store the number of neighbors, and then the neighbor list (each as
 // 4 byte unsigned)
-template <typename T, typename TagT, typename LabelT> _u64 Index<T, TagT, LabelT>::save_graph(std::string graph_file)
+template <typename T, typename TagT, typename LabelT> size_t Index<T, TagT, LabelT>::save_graph(std::string graph_file)
 {
     std::ofstream out;
     open_file_to_write(out, graph_file);
 
-    _u64 file_offset = 0; // we will use this if we want
+    size_t file_offset = 0; // we will use this if we want
     out.seekp(file_offset, out.beg);
-    _u64 index_size = 24;
-    _u32 max_degree = 0;
+    size_t index_size = 24;
+    uint32_t max_degree = 0;
     out.write((char *)&index_size, sizeof(uint64_t));
     out.write((char *)&_max_observed_degree, sizeof(unsigned));
     unsigned ep_u32 = _start;
     out.write((char *)&ep_u32, sizeof(unsigned));
-    out.write((char *)&_num_frozen_pts, sizeof(_u64));
-    // Note: at this point, either _nd == _max_points or any frozen points have been
-    // temporarily moved to _nd, so _nd + _num_frozen_points is the valid location limit.
+    out.write((char *)&_num_frozen_pts, sizeof(size_t));
+    // Note: at this point, either _nd == _max_points or any frozen points have
+    // been temporarily moved to _nd, so _nd + _num_frozen_points is the valid
+    // location limit.
     for (unsigned i = 0; i < _nd + _num_frozen_pts; i++)
     {
         unsigned GK = (unsigned)_final_graph[i].size();
         out.write((char *)&GK, sizeof(unsigned));
         out.write((char *)_final_graph[i].data(), GK * sizeof(unsigned));
-        max_degree = _final_graph[i].size() > max_degree ? (_u32)_final_graph[i].size() : max_degree;
-        index_size += (_u64)(sizeof(unsigned) * (GK + 1));
+        max_degree = _final_graph[i].size() > max_degree ? (uint32_t)_final_graph[i].size() : max_degree;
+        index_size += (size_t)(sizeof(unsigned) * (GK + 1));
     }
     out.seekp(file_offset, out.beg);
     out.write((char *)&index_size, sizeof(uint64_t));
-    out.write((char *)&max_degree, sizeof(_u32));
+    out.write((char *)&max_degree, sizeof(uint32_t));
     out.close();
     return index_size; // number of bytes written
 }
 
 template <typename T, typename TagT, typename LabelT>
-_u64 Index<T, TagT, LabelT>::save_delete_list(const std::string &filename)
+size_t Index<T, TagT, LabelT>::save_delete_list(const std::string &filename)
 {
     if (_delete_set->size() == 0)
     {
         return 0;
     }
-    std::unique_ptr<_u32[]> delete_list = std::make_unique<_u32[]>(_delete_set->size());
-    _u32 i = 0;
+    std::unique_ptr<uint32_t[]> delete_list = std::make_unique<uint32_t[]>(_delete_set->size());
+    uint32_t i = 0;
     for (auto &del : *_delete_set)
     {
         delete_list[i++] = del;
     }
-    return save_bin<_u32>(filename, delete_list.get(), _delete_set->size(), 1);
+    return save_bin<uint32_t>(filename, delete_list.get(), _delete_set->size(), 1);
 }
 
 template <typename T, typename TagT, typename LabelT>
@@ -321,9 +324,9 @@ void Index<T, TagT, LabelT>::save(const char *filename, bool compact_before_save
             {
                 std::ofstream label_writer(std::string(filename) + "_labels.txt");
                 assert(label_writer.is_open());
-                for (_u32 i = 0; i < _pts_to_labels.size(); i++)
+                for (uint32_t i = 0; i < _pts_to_labels.size(); i++)
                 {
-                    for (_u32 j = 0; j < (_pts_to_labels[i].size() - 1); j++)
+                    for (uint32_t j = 0; j < (_pts_to_labels[i].size() - 1); j++)
                     {
                         label_writer << _pts_to_labels[i][j] << ",";
                     }
@@ -360,7 +363,8 @@ void Index<T, TagT, LabelT>::save(const char *filename, bool compact_before_save
                       << std::endl;
     }
 
-    // If frozen points were temporarily compacted to _nd, move back to _max_points.
+    // If frozen points were temporarily compacted to _nd, move back to
+    // _max_points.
     reposition_frozen_point_to_end();
 
     diskann::cout << "Time taken for save: " << timer.elapsed() / 1000000.0 << "s." << std::endl;
@@ -407,7 +411,7 @@ size_t Index<T, TagT, LabelT>::load_tags(const std::string tag_filename)
     const size_t num_data_points = file_num_points - _num_frozen_pts;
     _location_to_tag.reserve(num_data_points);
     _tag_to_location.reserve(num_data_points);
-    for (_u32 i = 0; i < (_u32)num_data_points; i++)
+    for (uint32_t i = 0; i < (uint32_t)num_data_points; i++)
     {
         TagT tag = *(tag_data + i);
         if (_delete_set->find(i) == _delete_set->end())
@@ -480,13 +484,13 @@ template <typename T, typename TagT, typename LabelT>
 size_t Index<T, TagT, LabelT>::load_delete_set(const std::string &filename)
 {
 #endif
-    std::unique_ptr<_u32[]> delete_list;
-    _u64 npts, ndim;
+    std::unique_ptr<uint32_t[]> delete_list;
+    size_t npts, ndim;
 
 #ifdef EXEC_ENV_OLS
-    diskann::load_bin<_u32>(reader, delete_list, npts, ndim);
+    diskann::load_bin<uint32_t>(reader, delete_list, npts, ndim);
 #else
-    diskann::load_bin<_u32>(filename, delete_list, npts, ndim);
+    diskann::load_bin<uint32_t>(filename, delete_list, npts, ndim);
 #endif
     assert(ndim == 1);
     for (uint32_t i = 0; i < npts; i++)
@@ -522,7 +526,8 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
 
     if (!_save_as_one_file)
     {
-        // For DLVS Store, we will not support saving the index in multiple files.
+        // For DLVS Store, we will not support saving the index in multiple
+        // files.
 #ifndef EXEC_ENV_OLS
         std::string data_file = std::string(filename) + ".data";
         std::string tags_file = std::string(filename) + ".tags";
@@ -576,8 +581,8 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
             while (std::getline(medoid_stream, line))
             {
                 std::istringstream iss(line);
-                _u32 cnt = 0;
-                _u32 medoid = 0;
+                uint32_t cnt = 0;
+                uint32_t medoid = 0;
                 LabelT label;
                 while (std::getline(iss, token, ','))
                 {
@@ -638,16 +643,16 @@ size_t Index<T, TagT, LabelT>::get_graph_num_frozen_points(const std::string &gr
 {
     size_t expected_file_size;
     unsigned max_observed_degree, start;
-    _u64 file_frozen_pts;
+    size_t file_frozen_pts;
 
     std::ifstream in;
     in.exceptions(std::ios::badbit | std::ios::failbit);
 
     in.open(graph_file, std::ios::binary);
-    in.read((char *)&expected_file_size, sizeof(_u64));
+    in.read((char *)&expected_file_size, sizeof(size_t));
     in.read((char *)&max_observed_degree, sizeof(unsigned));
     in.read((char *)&start, sizeof(unsigned));
-    in.read((char *)&file_frozen_pts, sizeof(_u64));
+    in.read((char *)&file_frozen_pts, sizeof(size_t));
 
     return file_frozen_pts;
 }
@@ -664,29 +669,29 @@ size_t Index<T, TagT, LabelT>::load_graph(std::string filename, size_t expected_
 {
 #endif
     size_t expected_file_size;
-    _u64 file_frozen_pts;
+    size_t file_frozen_pts;
 
 #ifdef EXEC_ENV_OLS
-    int header_size = 2 * sizeof(_u64) + 2 * sizeof(unsigned);
+    int header_size = 2 * sizeof(size_t) + 2 * sizeof(unsigned);
     std::unique_ptr<char[]> header = std::make_unique<char[]>(header_size);
     read_array(reader, header.get(), header_size);
 
-    expected_file_size = *((_u64 *)header.get());
-    _max_observed_degree = *((_u32 *)(header.get() + sizeof(_u64)));
-    _start = *((_u32 *)(header.get() + sizeof(_u64) + sizeof(unsigned)));
-    file_frozen_pts = *((_u64 *)(header.get() + sizeof(_u64) + sizeof(unsigned) + sizeof(unsigned)));
+    expected_file_size = *((size_t *)header.get());
+    _max_observed_degree = *((uint32_t *)(header.get() + sizeof(size_t)));
+    _start = *((uint32_t *)(header.get() + sizeof(size_t) + sizeof(unsigned)));
+    file_frozen_pts = *((size_t *)(header.get() + sizeof(size_t) + sizeof(unsigned) + sizeof(unsigned)));
 #else
 
-    _u64 file_offset = 0; // will need this for single file format support
+    size_t file_offset = 0; // will need this for single file format support
     std::ifstream in;
     in.exceptions(std::ios::badbit | std::ios::failbit);
     in.open(filename, std::ios::binary);
     in.seekg(file_offset, in.beg);
-    in.read((char *)&expected_file_size, sizeof(_u64));
+    in.read((char *)&expected_file_size, sizeof(size_t));
     in.read((char *)&_max_observed_degree, sizeof(unsigned));
     in.read((char *)&_start, sizeof(unsigned));
-    in.read((char *)&file_frozen_pts, sizeof(_u64));
-    _u64 vamana_metadata_size = sizeof(_u64) + sizeof(_u32) + sizeof(_u32) + sizeof(_u64);
+    in.read((char *)&file_frozen_pts, sizeof(size_t));
+    size_t vamana_metadata_size = sizeof(size_t) + sizeof(uint32_t) + sizeof(uint32_t) + sizeof(size_t);
 
 #endif
     diskann::cout << "From graph header, expected_file_size: " << expected_file_size
@@ -732,18 +737,18 @@ size_t Index<T, TagT, LabelT>::load_graph(std::string filename, size_t expected_
         _max_points = expected_max_points;
     }
 #ifdef EXEC_ENV_OLS
-    _u32 nodes_read = 0;
-    _u64 cc = 0;
-    _u64 graph_offset = header_size;
+    uint32_t nodes_read = 0;
+    size_t cc = 0;
+    size_t graph_offset = header_size;
     while (nodes_read < expected_num_points)
     {
-        _u32 k;
+        uint32_t k;
         read_value(reader, k, graph_offset);
-        graph_offset += sizeof(_u32);
-        std::vector<_u32> tmp(k);
+        graph_offset += sizeof(uint32_t);
+        std::vector<uint32_t> tmp(k);
         tmp.reserve(k);
         read_array(reader, tmp.data(), k, graph_offset);
-        graph_offset += k * sizeof(_u32);
+        graph_offset += k * sizeof(uint32_t);
         cc += k;
         _final_graph[nodes_read].swap(tmp);
         nodes_read++;
@@ -776,7 +781,7 @@ size_t Index<T, TagT, LabelT>::load_graph(std::string filename, size_t expected_
         tmp.reserve(k);
         in.read((char *)tmp.data(), k * sizeof(unsigned));
         _final_graph[nodes_read - 1].swap(tmp);
-        bytes_read += sizeof(uint32_t) * ((_u64)k + 1);
+        bytes_read += sizeof(uint32_t) * ((size_t)k + 1);
         if (nodes_read % 10000000 == 0)
             diskann::cout << "." << std::flush;
         if (k > _max_range_of_loaded_graph)
@@ -829,7 +834,7 @@ template <typename T, typename TagT, typename LabelT> unsigned Index<T, TagT, La
     // compute all to one distance
     float *distances = new float[_nd]();
 #pragma omp parallel for schedule(static, 65536)
-    for (_s64 i = 0; i < (_s64)_nd; i++)
+    for (int64_t i = 0; i < (int64_t)_nd; i++)
     {
         // extract point and distance reference
         float &dist = distances[i];
@@ -900,7 +905,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
     float *query_float;
     float *query_rotated;
     float *pq_dists;
-    _u8 *pq_coord_scratch;
+    char *pq_coord_scratch;
     // Intialize PQ related scratch to use PQ based distances
     if (_pq_dist)
     {
@@ -1119,9 +1124,10 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
 }
 
 template <typename T, typename TagT, typename LabelT>
-void Index<T, TagT, LabelT>::search_for_point_and_prune(int location, _u32 Lindex, std::vector<unsigned> &pruned_list,
+void Index<T, TagT, LabelT>::search_for_point_and_prune(int location, uint32_t Lindex,
+                                                        std::vector<unsigned> &pruned_list,
                                                         InMemQueryScratch<T> *scratch, bool use_filter,
-                                                        _u32 filteredLindex)
+                                                        uint32_t filteredLindex)
 {
     const std::vector<unsigned> init_ids = get_init_ids();
     const std::vector<LabelT> unused_filter_label;
@@ -1133,7 +1139,7 @@ void Index<T, TagT, LabelT>::search_for_point_and_prune(int location, _u32 Linde
     }
     else
     {
-        std::vector<_u32> filter_specific_start_nodes;
+        std::vector<uint32_t> filter_specific_start_nodes;
         for (auto &x : _pts_to_labels[location])
             filter_specific_start_nodes.emplace_back(_label_to_medoid_id[x]);
         iterate_to_fixed_point(_data + _aligned_dim * location, filteredLindex, filter_specific_start_nodes, scratch,
@@ -1198,8 +1204,8 @@ void Index<T, TagT, LabelT>::occlude_list(const unsigned location, std::vector<N
             }
             // Set the entry to float::max so that is not considered again
             occlude_factor[iter - pool.begin()] = std::numeric_limits<float>::max();
-            // Add the entry to the result if its not been deleted, and doesn't add
-            // a self loop
+            // Add the entry to the result if its not been deleted, and doesn't
+            // add a self loop
             if (delete_set_ptr == nullptr || delete_set_ptr->find(iter->id) == delete_set_ptr->end())
             {
                 if (iter->id != location)
@@ -1218,8 +1224,8 @@ void Index<T, TagT, LabelT>::occlude_list(const unsigned location, std::vector<N
                 bool prune_allowed = true;
                 if (_filtered_index)
                 {
-                    _u32 a = iter->id;
-                    _u32 b = iter2->id;
+                    uint32_t a = iter->id;
+                    uint32_t b = iter2->id;
                     for (auto &x : _pts_to_labels[b])
                     {
                         if (std::find(_pts_to_labels[a].begin(), _pts_to_labels[a].end(), x) == _pts_to_labels[a].end())
@@ -1264,8 +1270,8 @@ void Index<T, TagT, LabelT>::prune_neighbors(const unsigned location, std::vecto
 }
 
 template <typename T, typename TagT, typename LabelT>
-void Index<T, TagT, LabelT>::prune_neighbors(const unsigned location, std::vector<Neighbor> &pool, const _u32 range,
-                                             const _u32 max_candidate_size, const float alpha,
+void Index<T, TagT, LabelT>::prune_neighbors(const unsigned location, std::vector<Neighbor> &pool, const uint32_t range,
+                                             const uint32_t max_candidate_size, const float alpha,
                                              std::vector<unsigned> &pruned_list, InMemQueryScratch<T> *scratch)
 {
     if (pool.size() == 0)
@@ -1306,7 +1312,7 @@ void Index<T, TagT, LabelT>::prune_neighbors(const unsigned location, std::vecto
 }
 
 template <typename T, typename TagT, typename LabelT>
-void Index<T, TagT, LabelT>::inter_insert(unsigned n, std::vector<unsigned> &pruned_list, const _u32 range,
+void Index<T, TagT, LabelT>::inter_insert(unsigned n, std::vector<unsigned> &pruned_list, const uint32_t range,
                                           InMemQueryScratch<T> *scratch)
 {
     const auto &src_pool = pruned_list;
@@ -1325,7 +1331,7 @@ void Index<T, TagT, LabelT>::inter_insert(unsigned n, std::vector<unsigned> &pru
             auto &des_pool = _final_graph[des];
             if (std::find(des_pool.begin(), des_pool.end(), n) == des_pool.end())
             {
-                if (des_pool.size() < (_u64)(GRAPH_SLACK_FACTOR * range))
+                if (des_pool.size() < (size_t)(GRAPH_SLACK_FACTOR * range))
                 {
                     des_pool.emplace_back(n);
                     prune_needed = false;
@@ -1423,7 +1429,7 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
     diskann::Timer link_timer;
 
 #pragma omp parallel for schedule(dynamic, 2048)
-    for (_s64 node_ctr = 0; node_ctr < (_s64)(visit_order.size()); node_ctr++)
+    for (int64_t node_ctr = 0; node_ctr < (int64_t)(visit_order.size()); node_ctr++)
     {
         auto node = visit_order[node_ctr];
 
@@ -1442,7 +1448,7 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
         }
         {
             LockGuard guard(_locks[node]);
-            _final_graph[node].reserve((_u64)(_indexingRange * GRAPH_SLACK_FACTOR * 1.05));
+            _final_graph[node].reserve((size_t)(_indexingRange * GRAPH_SLACK_FACTOR * 1.05));
             _final_graph[node] = pruned_list;
             assert(_final_graph[node].size() <= _indexingRange);
         }
@@ -1461,7 +1467,7 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
         diskann::cout << "Starting final cleanup.." << std::flush;
     }
 #pragma omp parallel for schedule(dynamic, 2048)
-    for (_s64 node_ctr = 0; node_ctr < (_s64)(visit_order.size()); node_ctr++)
+    for (int64_t node_ctr = 0; node_ctr < (int64_t)(visit_order.size()); node_ctr++)
     {
         auto node = visit_order[node_ctr];
         if (_final_graph[node].size() > _indexingRange)
@@ -1506,7 +1512,7 @@ void Index<T, TagT, LabelT>::prune_all_nbrs(const Parameters &parameters)
 
     diskann::Timer timer;
 #pragma omp parallel for
-    for (_s64 node = 0; node < (_s64)(_max_points + _num_frozen_pts); node++)
+    for (int64_t node = 0; node < (int64_t)(_max_points + _num_frozen_pts); node++)
     {
         if ((size_t)node < _nd || (size_t)node >= _max_points)
         {
@@ -1530,7 +1536,7 @@ void Index<T, TagT, LabelT>::prune_all_nbrs(const Parameters &parameters)
                     }
                 }
 
-                prune_neighbors((_u32)node, dummy_pool, range, maxc, alpha, new_out_neighbors, scratch);
+                prune_neighbors((uint32_t)node, dummy_pool, range, maxc, alpha, new_out_neighbors, scratch);
                 _final_graph[node].clear();
                 for (auto id : new_out_neighbors)
                     _final_graph[node].emplace_back(id);
@@ -1771,11 +1777,12 @@ void Index<T, TagT, LabelT>::build(const char *filename, const size_t num_points
         generate_quantized_data<T>(std::string(filename), pq_pivots_file, pq_compressed_file, _dist_metric, p_val,
                                    _num_pq_chunks, _use_opq);
 
-        copy_aligned_data_from_file<_u8>(pq_compressed_file.c_str(), _pq_data, file_num_points, _num_pq_chunks,
-                                         _num_pq_chunks);
+        copy_aligned_data_from_file<char>(pq_compressed_file.c_str(), _pq_data, file_num_points, _num_pq_chunks,
+                                          _num_pq_chunks);
 #ifdef EXEC_ENV_OLS
-        throw ANNException("load_pq_centroid_bin should not be called when EXEC_ENV_OLS is defined.", -1, __FUNCSIG__,
-                           __FILE__, __LINE__);
+        throw ANNException("load_pq_centroid_bin should not be called when "
+                           "EXEC_ENV_OLS is defined.",
+                           -1, __FUNCSIG__, __FILE__, __LINE__);
 #else
         _pq_table.load_pq_centroid_bin(pq_pivots_file.c_str(), _num_pq_chunks);
 #endif
@@ -1947,7 +1954,7 @@ void Index<T, TagT, LabelT>::build_filtered_index(const char *filename, const st
                      num_points_labels); // determines medoid for each label and
                                          // identifies the points to label mapping
 
-    std::unordered_map<LabelT, std::vector<_u32>> label_to_points;
+    std::unordered_map<LabelT, std::vector<uint32_t>> label_to_points;
 
     for (int lbl = 0; lbl < _labels.size(); lbl++)
     {
@@ -1955,8 +1962,8 @@ void Index<T, TagT, LabelT>::build_filtered_index(const char *filename, const st
         std::advance(itr, lbl);
         auto &x = *itr;
 
-        std::vector<_u32> labeled_points;
-        for (_u32 point_id = 0; point_id < num_points_to_load; point_id++)
+        std::vector<uint32_t> labeled_points;
+        for (uint32_t point_id = 0; point_id < num_points_to_load; point_id++)
         {
             bool pt_has_lbl = std::find(_pts_to_labels[point_id].begin(), _pts_to_labels[point_id].end(), x) !=
                               _pts_to_labels[point_id].end();
@@ -1973,17 +1980,17 @@ void Index<T, TagT, LabelT>::build_filtered_index(const char *filename, const st
         label_to_points[x] = labeled_points;
     }
 
-    _u32 num_cands = 25;
+    uint32_t num_cands = 25;
     for (auto itr = _labels.begin(); itr != _labels.end(); itr++)
     {
-        _u32 best_medoid_count = std::numeric_limits<_u32>::max();
+        uint32_t best_medoid_count = std::numeric_limits<uint32_t>::max();
         auto &curr_label = *itr;
-        _u32 best_medoid;
+        uint32_t best_medoid;
         auto labeled_points = label_to_points[curr_label];
-        for (_u32 cnd = 0; cnd < num_cands; cnd++)
+        for (uint32_t cnd = 0; cnd < num_cands; cnd++)
         {
-            _u32 cur_cnd = labeled_points[rand() % labeled_points.size()];
-            _u32 cur_cnt = std::numeric_limits<_u32>::max();
+            uint32_t cur_cnd = labeled_points[rand() % labeled_points.size()];
+            uint32_t cur_cnt = std::numeric_limits<uint32_t>::max();
             if (_medoid_counts.find(cur_cnd) == _medoid_counts.end())
             {
                 _medoid_counts[cur_cnd] = 0;
@@ -2037,7 +2044,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search(const T *query, con
     NeighborPriorityQueue &best_L_nodes = scratch->best_l_nodes();
 
     size_t pos = 0;
-    for (int i = 0; i < best_L_nodes.size(); ++i)
+    for (size_t i = 0; i < best_L_nodes.size(); ++i)
     {
         if (best_L_nodes[i].id < _max_points)
         {
@@ -2114,7 +2121,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
     auto best_L_nodes = scratch->best_l_nodes();
 
     size_t pos = 0;
-    for (int i = 0; i < best_L_nodes.size(); ++i)
+    for (size_t i = 0; i < best_L_nodes.size(); ++i)
     {
         if (best_L_nodes[i].id < _max_points)
         {
@@ -2408,9 +2415,9 @@ consolidation_report Index<T, TagT, LabelT>::consolidate_deletes(const Parameter
     unsigned num_calls_to_process_delete = 0;
     diskann::Timer timer;
 #pragma omp parallel for num_threads(num_threads) schedule(dynamic, 8192) reduction(+ : num_calls_to_process_delete)
-    for (_s64 loc = 0; loc < (_s64)_max_points; loc++)
+    for (int64_t loc = 0; loc < (int64_t)_max_points; loc++)
     {
-        if (old_delete_set->find((_u32)loc) == old_delete_set->end() && !_empty_slots.is_in_set((_u32)loc))
+        if (old_delete_set->find((uint32_t)loc) == old_delete_set->end() && !_empty_slots.is_in_set((uint32_t)loc))
         {
             ScratchStoreManager<InMemQueryScratch<T>> manager(_query_scratch);
             auto scratch = manager.scratch_space();
@@ -2418,7 +2425,7 @@ consolidation_report Index<T, TagT, LabelT>::consolidate_deletes(const Parameter
             num_calls_to_process_delete += 1;
         }
     }
-    for (_s64 loc = _max_points; loc < (_s64)(_max_points + _num_frozen_pts); loc++)
+    for (int64_t loc = _max_points; loc < (int64_t)(_max_points + _num_frozen_pts); loc++)
     {
         ScratchStoreManager<InMemQueryScratch<T>> manager(_query_scratch);
         auto scratch = manager.scratch_space();
@@ -2452,7 +2459,7 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
     if (_nd < _max_points && _num_frozen_pts > 0)
     {
         reposition_points(_max_points, _nd, _num_frozen_pts);
-        _start = (_u32)_nd;
+        _start = (uint32_t)_nd;
     }
 }
 
@@ -2478,11 +2485,11 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
 
     diskann::Timer timer;
 
-    std::vector<unsigned> new_location = std::vector<unsigned>(_max_points + _num_frozen_pts, (_u32)UINT32_MAX);
+    std::vector<unsigned> new_location = std::vector<unsigned>(_max_points + _num_frozen_pts, UINT32_MAX);
 
-    _u32 new_counter = 0;
-    std::set<_u32> empty_locations;
-    for (_u32 old_location = 0; old_location < _max_points; old_location++)
+    uint32_t new_counter = 0;
+    std::set<uint32_t> empty_locations;
+    for (uint32_t old_location = 0; old_location < _max_points; old_location++)
     {
         if (_location_to_tag.contains(old_location))
         {
@@ -2494,7 +2501,7 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
             empty_locations.insert(old_location);
         }
     }
-    for (_u32 old_location = _max_points; old_location < _max_points + _num_frozen_pts; old_location++)
+    for (uint32_t old_location = _max_points; old_location < _max_points + _num_frozen_pts; old_location++)
     {
         new_location[old_location] = old_location;
     }
@@ -2558,7 +2565,7 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
         _location_to_tag.set(iter.second, iter.first);
     }
 
-    for (_u64 old = _nd; old < _max_points; ++old)
+    for (size_t old = _nd; old < _max_points; ++old)
     {
         _final_graph[old].clear();
     }
@@ -2620,8 +2627,9 @@ size_t Index<T, TagT, LabelT>::release_locations(const tsl::robin_set<unsigned> 
     for (auto location : locations)
     {
         if (_empty_slots.is_in_set(location))
-            throw ANNException("Trying to release location, but location already in empty slots", -1, __FUNCSIG__,
-                               __FILE__, __LINE__);
+            throw ANNException("Trying to release location, but location "
+                               "already in empty slots",
+                               -1, __FUNCSIG__, __FILE__, __LINE__);
         _empty_slots.insert(location);
 
         _nd--;
@@ -2642,9 +2650,9 @@ void Index<T, TagT, LabelT>::reposition_points(unsigned old_location_start, unsi
         return;
     }
 
-    // Update pointers to the moved nodes. Note: the computation is correct even when
-    // new_location_start < old_location_start given the C++ unsigned integer arithmetic
-    // rules.
+    // Update pointers to the moved nodes. Note: the computation is correct even
+    // when new_location_start < old_location_start given the C++ unsigned
+    // integer arithmetic rules.
     const unsigned location_delta = new_location_start - old_location_start;
 
     for (unsigned i = 0; i < _max_points + _num_frozen_pts; i++)
@@ -2652,11 +2660,13 @@ void Index<T, TagT, LabelT>::reposition_points(unsigned old_location_start, unsi
             if (loc >= old_location_start && loc < old_location_start + num_locations)
                 loc += location_delta;
 
-    // The [start, end) interval which will contain obsolete points to be cleared.
+    // The [start, end) interval which will contain obsolete points to be
+    // cleared.
     unsigned mem_clear_loc_start = old_location_start;
     unsigned mem_clear_loc_end_limit = old_location_start + num_locations;
 
-    // Move the adjacency lists. Make sure that overlapping ranges are handled correctly.
+    // Move the adjacency lists. Make sure that overlapping ranges are handled
+    // correctly.
     if (new_location_start < old_location_start)
     {
         // New location before the old location: copy the entries in order
@@ -2667,7 +2677,8 @@ void Index<T, TagT, LabelT>::reposition_points(unsigned old_location_start, unsi
             _final_graph[new_location_start + loc_offset].swap(_final_graph[old_location_start + loc_offset]);
         }
 
-        // If ranges are overlapping, make sure not to clear the newly copied data.
+        // If ranges are overlapping, make sure not to clear the newly copied
+        // data.
         if (mem_clear_loc_start < new_location_start + num_locations)
         {
             // Clear only after the end of the new range.
@@ -2684,7 +2695,8 @@ void Index<T, TagT, LabelT>::reposition_points(unsigned old_location_start, unsi
             _final_graph[new_location_start + loc_offset - 1u].swap(_final_graph[old_location_start + loc_offset - 1u]);
         }
 
-        // If ranges are overlapping, make sure not to clear the newly copied data.
+        // If ranges are overlapping, make sure not to clear the newly copied
+        // data.
         if (mem_clear_loc_end_limit > new_location_start)
         {
             // Clear only up to the beginning of the new range.
@@ -2710,8 +2722,8 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
         return;
     }
 
-    reposition_points((_u32)_nd, (_u32)_max_points, (_u32)_num_frozen_pts);
-    _start = (_u32)_max_points;
+    reposition_points((uint32_t)_nd, (uint32_t)_max_points, (uint32_t)_num_frozen_pts);
+    _start = (uint32_t)_max_points;
 }
 
 template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT>::resize(size_t new_max_points)
@@ -2734,8 +2746,8 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
 
     if (_num_frozen_pts != 0)
     {
-        reposition_points((_u32)_max_points, (_u32)new_max_points, (_u32)_num_frozen_pts);
-        _start = (_u32)new_max_points;
+        reposition_points((uint32_t)_max_points, (uint32_t)new_max_points, (uint32_t)_num_frozen_pts);
+        _start = (uint32_t)new_max_points;
     }
 
     _max_points = new_max_points;
@@ -2755,7 +2767,8 @@ int Index<T, TagT, LabelT>::insert_point(const T *point, const TagT tag)
     assert(_has_built);
     if (tag == static_cast<TagT>(0))
     {
-        throw diskann::ANNException("Do not insert point with tag 0. That is reserved for points hidden "
+        throw diskann::ANNException("Do not insert point with tag 0. That is "
+                                    "reserved for points hidden "
                                     "from the user.",
                                     -1, __FUNCSIG__, __FILE__, __LINE__);
     }
@@ -2796,8 +2809,9 @@ int Index<T, TagT, LabelT>::insert_point(const T *point, const TagT tag)
         location = reserve_location();
         if (location == -1)
         {
-            throw diskann::ANNException("Cannot reserve location even after expanding graph. Terminating.", -1,
-                                        __FUNCSIG__, __FILE__, __LINE__);
+            throw diskann::ANNException("Cannot reserve location even after "
+                                        "expanding graph. Terminating.",
+                                        -1, __FUNCSIG__, __FILE__, __LINE__);
         }
 #else
         return -1;
@@ -2848,7 +2862,7 @@ int Index<T, TagT, LabelT>::insert_point(const T *point, const TagT tag)
 
         LockGuard guard(_locks[location]);
         _final_graph[location].clear();
-        _final_graph[location].reserve((_u64)(_indexingRange * GRAPH_SLACK_FACTOR * 1.05));
+        _final_graph[location].reserve((size_t)(_indexingRange * GRAPH_SLACK_FACTOR * 1.05));
 
         for (auto link : pruned_list)
         {

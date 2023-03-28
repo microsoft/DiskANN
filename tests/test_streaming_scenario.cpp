@@ -208,8 +208,9 @@ void build_incremental_index(const std::string &data_path, const unsigned L, con
         throw diskann::ANNException("num_points < max_points_to_insert", -1, __FUNCSIG__, __FILE__, __LINE__);
 
     if (max_points_to_insert < active_window + consolidate_interval)
-        throw diskann::ANNException("ERROR: max_points_to_insert < active_window + consolidate_interval", -1,
-                                    __FUNCSIG__, __FILE__, __LINE__);
+        throw diskann::ANNException("ERROR: max_points_to_insert < "
+                                    "active_window + consolidate_interval",
+                                    -1, __FUNCSIG__, __FILE__, __LINE__);
 
     if (consolidate_interval < max_points_to_insert / 1000)
         throw diskann::ANNException("ERROR: consolidate_interval is too small", -1, __FUNCSIG__, __FILE__, __LINE__);
@@ -296,7 +297,8 @@ int main(int argc, char **argv)
         desc.add_options()("Lbuild,L", po::value<uint32_t>(&L)->default_value(100),
                            "Build complexity, higher value results in better graphs");
         desc.add_options()("alpha", po::value<float>(&alpha)->default_value(1.2f),
-                           "alpha controls density and diameter of graph, set 1 for sparse graph, "
+                           "alpha controls density and diameter of graph, set "
+                           "1 for sparse graph, "
                            "1.2 or 1.4 for denser graphs with lower diameter");
         desc.add_options()("insert_threads",
                            po::value<uint32_t>(&insert_threads)->default_value(omp_get_num_procs() / 2),
@@ -308,17 +310,20 @@ int main(int argc, char **argv)
                            "the index (defaults to omp_get_num_procs()/2)");
 
         desc.add_options()("max_points_to_insert", po::value<uint64_t>(&max_points_to_insert)->default_value(0),
-                           "The number of points from the file that the program streams over ");
+                           "The number of points from the file that the program streams "
+                           "over ");
         desc.add_options()("active_window", po::value<uint64_t>(&active_window)->required(),
                            "Program maintains an index over an active window of "
                            "this size that slides through the data");
         desc.add_options()("consolidate_interval", po::value<uint64_t>(&consolidate_interval)->required(),
-                           "The program simultaneously adds this number of points to the right of "
+                           "The program simultaneously adds this number of points to the "
+                           "right of "
                            "the window while deleting the same number from the left");
         desc.add_options()("start_point_norm", po::value<float>(&start_point_norm)->required(),
                            "Set the start point to a random point on a sphere of this radius");
         desc.add_options()("num_start_points", po::value<unsigned>(&num_start_pts)->default_value(0),
-                           "Set the number of random start (frozen) points to use when inserting and searching");
+                           "Set the number of random start (frozen) points to use when "
+                           "inserting and searching");
 
         po::variables_map vm;
         po::store(po::parse_command_line(argc, argv, desc), vm);

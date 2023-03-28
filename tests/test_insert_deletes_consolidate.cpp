@@ -350,7 +350,8 @@ int main(int argc, char **argv)
         desc.add_options()("Lbuild,L", po::value<uint32_t>(&L)->default_value(100),
                            "Build complexity, higher value results in better graphs");
         desc.add_options()("alpha", po::value<float>(&alpha)->default_value(1.2f),
-                           "alpha controls density and diameter of graph, set 1 for sparse graph, "
+                           "alpha controls density and diameter of graph, set "
+                           "1 for sparse graph, "
                            "1.2 or 1.4 for denser graphs with lower diameter");
         desc.add_options()("num_threads,T", po::value<uint32_t>(&num_threads)->default_value(omp_get_num_procs()),
                            "Number of threads used for building index (defaults to "
@@ -373,7 +374,8 @@ int main(int argc, char **argv)
         desc.add_options()("start_point_norm", po::value<float>(&start_point_norm)->default_value(0),
                            "Set the start point to a random point on a sphere of this radius");
         desc.add_options()("num_start_points", po::value<unsigned>(&num_start_pts)->default_value(0),
-                           "Set the number of random start (frozen) points to use when inserting and searching");
+                           "Set the number of random start (frozen) points to use when "
+                           "inserting and searching");
 
         po::variables_map vm;
         po::store(po::parse_command_line(argc, argv, desc), vm);
@@ -386,7 +388,8 @@ int main(int argc, char **argv)
         if (beginning_index_size == 0)
             if (start_point_norm == 0)
             {
-                std::cout << "When beginning_index_size is 0, use a start point with  "
+                std::cout << "When beginning_index_size is 0, use a start "
+                             "point with  "
                              "appropriate norm"
                           << std::endl;
                 return -1;

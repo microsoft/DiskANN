@@ -35,9 +35,9 @@ template <typename Key, typename Value> class natural_number_map
     struct position
     {
         size_t _key;
-        // The number of keys that were enumerated when iterating through the map
-        // so far. Used to early-terminate enumeration when ithere
-        // are no more entries in the map.
+        // The number of keys that were enumerated when iterating through the
+        // map so far. Used to early-terminate enumeration when ithere are no
+        // more entries in the map.
         size_t _keys_already_enumerated;
 
         // Returns whether it's valid to access the element at this position in

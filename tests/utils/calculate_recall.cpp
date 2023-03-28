@@ -31,7 +31,9 @@ int main(int argc, char **argv)
 
     if (points_num_gs != points_num_or)
     {
-        std::cout << "Error. Number of queries mismatch in ground truth and our results" << std::endl;
+        std::cout << "Error. Number of queries mismatch in ground truth and "
+                     "our results"
+                  << std::endl;
         return -1;
     }
     points_num = points_num_gs;

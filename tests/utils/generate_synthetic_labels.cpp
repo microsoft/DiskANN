@@ -91,7 +91,7 @@ class ZipfDistribution
 int main(int argc, char **argv)
 {
     std::string output_file, distribution_type;
-    _u64 num_labels, num_points;
+    size_t num_labels, num_points;
 
     try
     {
@@ -104,7 +104,8 @@ int main(int argc, char **argv)
         desc.add_options()("num_labels,L", po::value<uint64_t>(&num_labels)->required(),
                            "Number of unique labels, up to 5000");
         desc.add_options()("distribution_type,DT", po::value<std::string>(&distribution_type)->default_value("random"),
-                           "Distribution function for labels <random/zipf> defaults to random");
+                           "Distribution function for labels <random/zipf> defaults to "
+                           "random");
 
         po::variables_map vm;
         po::store(po::parse_command_line(argc, argv, desc), vm);

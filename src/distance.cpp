@@ -616,7 +616,8 @@ template <> diskann::Distance<uint8_t> *get_distance_function(diskann::Metric m)
     if (m == diskann::Metric::L2)
     {
 #ifdef _WINDOWS
-        diskann::cout << "WARNING: AVX/AVX2 distance function not defined for Uint8. Using "
+        diskann::cout << "WARNING: AVX/AVX2 distance function not defined for Uint8. "
+                         "Using "
                          "slow version. "
                          "Contact gopalsr@microsoft.com if you need AVX/AVX2 support."
                       << std::endl;

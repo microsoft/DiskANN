@@ -73,20 +73,20 @@ bool AvxSupportedCPU = false;
 namespace diskann
 {
 
-void block_convert(std::ofstream &writr, std::ifstream &readr, float *read_buf, _u64 npts, _u64 ndims)
+void block_convert(std::ofstream &writr, std::ifstream &readr, float *read_buf, size_t npts, size_t ndims)
 {
     readr.read((char *)read_buf, npts * ndims * sizeof(float));
-    _u32 ndims_u32 = (_u32)ndims;
+    uint32_t ndims_u32 = (uint32_t)ndims;
 #pragma omp parallel for
-    for (_s64 i = 0; i < (_s64)npts; i++)
+    for (int64_t i = 0; i < (int64_t)npts; i++)
     {
         float norm_pt = std::numeric_limits<float>::epsilon();
-        for (_u32 dim = 0; dim < ndims_u32; dim++)
+        for (uint32_t dim = 0; dim < ndims_u32; dim++)
         {
             norm_pt += *(read_buf + i * ndims + dim) * *(read_buf + i * ndims + dim);
         }
         norm_pt = std::sqrt(norm_pt);
-        for (_u32 dim = 0; dim < ndims_u32; dim++)
+        for (uint32_t dim = 0; dim < ndims_u32; dim++)
         {
             *(read_buf + i * ndims + dim) = *(read_buf + i * ndims + dim) / norm_pt;
         }
@@ -100,24 +100,25 @@ void normalize_data_file(const std::string &inFileName, const std::string &outFi
     std::ofstream writr(outFileName, std::ios::binary);
 
     int npts_s32, ndims_s32;
-    readr.read((char *)&npts_s32, sizeof(_s32));
-    readr.read((char *)&ndims_s32, sizeof(_s32));
+    readr.read((char *)&npts_s32, sizeof(int32_t));
+    readr.read((char *)&ndims_s32, sizeof(int32_t));
 
-    writr.write((char *)&npts_s32, sizeof(_s32));
-    writr.write((char *)&ndims_s32, sizeof(_s32));
+    writr.write((char *)&npts_s32, sizeof(int32_t));
+    writr.write((char *)&ndims_s32, sizeof(int32_t));
 
-    _u64 npts = (_u64)npts_s32, ndims = (_u64)ndims_s32;
+    size_t npts = (size_t)npts_s32;
+    size_t ndims = (size_t)ndims_s32;
     diskann::cout << "Normalizing FLOAT vectors in file: " << inFileName << std::endl;
     diskann::cout << "Dataset: #pts = " << npts << ", # dims = " << ndims << std::endl;
 
-    _u64 blk_size = 131072;
-    _u64 nblks = ROUND_UP(npts, blk_size) / blk_size;
+    size_t blk_size = 131072;
+    size_t nblks = ROUND_UP(npts, blk_size) / blk_size;
     diskann::cout << "# blks: " << nblks << std::endl;
 
     float *read_buf = new float[npts * ndims];
-    for (_u64 i = 0; i < nblks; i++)
+    for (size_t i = 0; i < nblks; i++)
     {
-        _u64 cblk_size = std::min(npts - i * blk_size, blk_size);
+        size_t cblk_size = std::min(npts - i * blk_size, blk_size);
         block_convert(writr, readr, read_buf, cblk_size, ndims);
     }
     delete[] read_buf;
@@ -148,8 +149,8 @@ double calculate_recall(unsigned num_queries, unsigned *gold_std, float *gs_dist
 
         gt.insert(gt_vec, gt_vec + tie_breaker);
         res.insert(res_vec,
-                   res_vec + recall_at); // change to recall_at for recall k@k or
-                                         // dim_or for k@dim_or
+                   res_vec + recall_at); // change to recall_at for recall k@k
+                                         // or dim_or for k@dim_or
         unsigned cur_recall = 0;
         for (auto &v : gt)
         {
@@ -222,8 +223,8 @@ double calculate_recall(unsigned num_queries, unsigned *gold_std, float *gs_dist
     return ((double)(total_recall / (num_queries))) * ((double)(100.0 / recall_at));
 }
 
-double calculate_range_search_recall(unsigned num_queries, std::vector<std::vector<_u32>> &groundtruth,
-                                     std::vector<std::vector<_u32>> &our_results)
+double calculate_range_search_recall(unsigned num_queries, std::vector<std::vector<uint32_t>> &groundtruth,
+                                     std::vector<std::vector<uint32_t>> &our_results)
 {
     double total_recall = 0;
     std::set<unsigned> gt, res;

@@ -22,7 +22,7 @@
 // SSD Index related limits
 #define MAX_GRAPH_DEGREE 512
 #define MAX_N_CMPS 16384
-#define SECTOR_LEN (_u64)4096
+#define SECTOR_LEN (size_t)4096
 #define MAX_N_SECTOR_READS 128
 
 namespace diskann
@@ -152,16 +152,16 @@ template <typename T> class SSDQueryScratch
 {
   public:
     T *coord_scratch = nullptr; // MUST BE AT LEAST [MAX_N_CMPS * data_dim]
-    _u64 coord_idx = 0;         // index of next [data_dim] scratch to use
+    size_t coord_idx = 0;       // index of next [data_dim] scratch to use
 
     char *sector_scratch = nullptr; // MUST BE AT LEAST [MAX_N_SECTOR_READS * SECTOR_LEN]
-    _u64 sector_idx = 0;            // index of next [SECTOR_LEN] scratch to use
+    size_t sector_idx = 0;          // index of next [SECTOR_LEN] scratch to use
 
     T *aligned_query_T = nullptr;
 
     PQScratch<T> *_pq_scratch;
 
-    tsl::robin_set<_u64> visited;
+    tsl::robin_set<size_t> visited;
     NeighborPriorityQueue retset;
     std::vector<Neighbor> full_retset;
 

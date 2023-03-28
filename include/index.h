@@ -26,7 +26,7 @@
 namespace diskann
 {
 
-inline double estimate_ram_usage(_u64 size, _u32 dim, _u32 datasize, _u32 degree)
+inline double estimate_ram_usage(size_t size, uint32_t dim, uint32_t datasize, uint32_t degree)
 {
     double size_of_data = ((double)size) * ROUND_UP(dim, 8) * datasize;
     double size_of_graph = ((double)size) * degree * sizeof(unsigned) * GRAPH_SLACK_FACTOR;
@@ -226,7 +226,8 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 
     std::unordered_map<std::string, LabelT> load_label_map(const std::string &map_file);
 
-    // Returns the locations of start point and frozen points suitable for use with iterate_to_fixed_point.
+    // Returns the locations of start point and frozen points suitable for use
+    // with iterate_to_fixed_point.
     std::vector<unsigned> get_init_ids();
 
     std::pair<uint32_t, uint32_t> iterate_to_fixed_point(const T *node_coords, const unsigned Lindex,
@@ -234,14 +235,15 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
                                                          InMemQueryScratch<T> *scratch, bool use_filter,
                                                          const std::vector<LabelT> &filters, bool search_invocation);
 
-    void search_for_point_and_prune(int location, _u32 Lindex, std::vector<unsigned> &pruned_list,
-                                    InMemQueryScratch<T> *scratch, bool use_filter = false, _u32 filteredLindex = 0);
+    void search_for_point_and_prune(int location, uint32_t Lindex, std::vector<unsigned> &pruned_list,
+                                    InMemQueryScratch<T> *scratch, bool use_filter = false,
+                                    uint32_t filteredLindex = 0);
 
     void prune_neighbors(const unsigned location, std::vector<Neighbor> &pool, std::vector<unsigned> &pruned_list,
                          InMemQueryScratch<T> *scratch);
 
-    void prune_neighbors(const unsigned location, std::vector<Neighbor> &pool, const _u32 range,
-                         const _u32 max_candidate_size, const float alpha, std::vector<unsigned> &pruned_list,
+    void prune_neighbors(const unsigned location, std::vector<Neighbor> &pool, const uint32_t range,
+                         const uint32_t max_candidate_size, const float alpha, std::vector<unsigned> &pruned_list,
                          InMemQueryScratch<T> *scratch);
 
     // Prunes candidates in @pool to a shorter list @result
@@ -251,7 +253,8 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
                       const tsl::robin_set<unsigned> *const delete_set_ptr = nullptr);
 
     // add reverse links from all the visited nodes to node n.
-    void inter_insert(unsigned n, std::vector<unsigned> &pruned_list, const _u32 range, InMemQueryScratch<T> *scratch);
+    void inter_insert(unsigned n, std::vector<unsigned> &pruned_list, const uint32_t range,
+                      InMemQueryScratch<T> *scratch);
 
     void inter_insert(unsigned n, std::vector<unsigned> &pruned_list, InMemQueryScratch<T> *scratch);
 
@@ -288,10 +291,10 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 
     // Do not call without acquiring appropriate locks
     // call public member functions save and load to invoke these.
-    DISKANN_DLLEXPORT _u64 save_graph(std::string filename);
-    DISKANN_DLLEXPORT _u64 save_data(std::string filename);
-    DISKANN_DLLEXPORT _u64 save_tags(std::string filename);
-    DISKANN_DLLEXPORT _u64 save_delete_list(const std::string &filename);
+    DISKANN_DLLEXPORT size_t save_graph(std::string filename);
+    DISKANN_DLLEXPORT size_t save_data(std::string filename);
+    DISKANN_DLLEXPORT size_t save_tags(std::string filename);
+    DISKANN_DLLEXPORT size_t save_delete_list(const std::string &filename);
 #ifdef EXEC_ENV_OLS
     DISKANN_DLLEXPORT size_t load_graph(AlignedFileReader &reader, size_t expected_num_points);
     DISKANN_DLLEXPORT size_t load_data(AlignedFileReader &reader);
@@ -350,8 +353,8 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     std::vector<std::vector<LabelT>> _pts_to_labels;
     tsl::robin_set<LabelT> _labels;
     std::string _labels_file;
-    std::unordered_map<LabelT, _u32> _label_to_medoid_id;
-    std::unordered_map<_u32, _u32> _medoid_counts;
+    std::unordered_map<LabelT, uint32_t> _label_to_medoid_id;
+    std::unordered_map<uint32_t, uint32_t> _medoid_counts;
     bool _use_universal_label = false;
     LabelT _universal_label = 0;
     uint32_t _filterIndexingQueueSize;
@@ -370,7 +373,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     bool _pq_dist = false;
     bool _use_opq = false;
     size_t _num_pq_chunks = 0;
-    _u8 *_pq_data = nullptr;
+    char *_pq_data = nullptr;
     bool _pq_generated = false;
     FixedChunkPQTable _pq_table;
 

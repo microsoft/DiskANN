@@ -63,7 +63,7 @@ DISKANN_DLLEXPORT T *load_warmup(const std::string &cache_warmup_file, uint64_t 
 
 DISKANN_DLLEXPORT int merge_shards(const std::string &vamana_prefix, const std::string &vamana_suffix,
                                    const std::string &idmaps_prefix, const std::string &idmaps_suffix,
-                                   const _u64 nshards, unsigned max_degree, const std::string &output_vamana,
+                                   const uint64_t nshards, unsigned max_degree, const std::string &output_vamana,
                                    const std::string &medoids_file, bool use_filters = false,
                                    const std::string &labels_to_medoids_file = std::string(""));
 
@@ -82,20 +82,21 @@ DISKANN_DLLEXPORT int build_merged_vamana_index(std::string base_file, diskann::
                                                 bool use_filters = false,
                                                 const std::string &label_file = std::string(""),
                                                 const std::string &labels_to_medoids_file = std::string(""),
-                                                const std::string &universal_label = "", const _u32 Lf = 0);
+                                                const std::string &universal_label = "", const uint32_t Lf = 0);
 
 template <typename T, typename LabelT>
 DISKANN_DLLEXPORT uint32_t optimize_beamwidth(std::unique_ptr<diskann::PQFlashIndex<T, LabelT>> &_pFlashIndex,
-                                              T *tuning_sample, _u64 tuning_sample_num, _u64 tuning_sample_aligned_dim,
-                                              uint32_t L, uint32_t nthreads, uint32_t start_bw = 2);
+                                              T *tuning_sample, uint64_t tuning_sample_num,
+                                              uint64_t tuning_sample_aligned_dim, uint32_t L, uint32_t nthreads,
+                                              uint32_t start_bw = 2);
 
 template <typename T, typename LabelT = uint32_t>
 DISKANN_DLLEXPORT int build_disk_index(
     const char *dataFilePath, const char *indexFilePath, const char *indexBuildParameters,
     diskann::Metric _compareMetric, bool use_opq = false, bool use_filters = false,
     const std::string &label_file = std::string(""), // default is empty string for no label_file
-    const std::string &universal_label = "", const _u32 filter_threshold = 0,
-    const _u32 Lf = 0); // default is empty string for no universal label
+    const std::string &universal_label = "", const uint32_t filter_threshold = 0,
+    const uint32_t Lf = 0); // default is empty string for no universal label
 
 template <typename T>
 DISKANN_DLLEXPORT void create_disk_layout(const std::string base_file, const std::string mem_index_file,

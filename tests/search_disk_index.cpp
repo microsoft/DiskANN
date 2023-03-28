@@ -50,16 +50,16 @@ template <typename T, typename LabelT = uint32_t>
 int search_disk_index(diskann::Metric &metric, const std::string &index_path_prefix,
                       const std::string &result_output_prefix, const std::string &query_file, std::string &gt_file,
                       const unsigned num_threads, const unsigned recall_at, const unsigned beamwidth,
-                      const unsigned num_nodes_to_cache, const _u32 search_io_limit, const std::vector<unsigned> &Lvec,
-                      const float fail_if_recall_below, const bool use_reorder_data = false,
-                      const std::string &filter_label = "")
+                      const unsigned num_nodes_to_cache, const uint32_t search_io_limit,
+                      const std::vector<unsigned> &Lvec, const float fail_if_recall_below,
+                      const bool use_reorder_data = false, const std::string &filter_label = "")
 {
     diskann::cout << "Search parameters: #threads: " << num_threads << ", ";
     if (beamwidth <= 0)
         diskann::cout << "beamwidth to be optimized for each L value" << std::flush;
     else
         diskann::cout << " beamwidth: " << beamwidth << std::flush;
-    if (search_io_limit == std::numeric_limits<_u32>::max())
+    if (search_io_limit == std::numeric_limits<uint32_t>::max())
         diskann::cout << "." << std::endl;
     else
         diskann::cout << ", io_limit: " << search_io_limit << "." << std::endl;
@@ -133,7 +133,7 @@ int search_disk_index(diskann::Metric &metric, const std::string &index_path_pre
         }
         else
         {
-            warmup_num = (std::min)((_u32)150000, (_u32)15000 * num_threads);
+            warmup_num = (std::min)((uint32_t)150000, (uint32_t)15000 * num_threads);
             warmup_dim = query_dim;
             warmup_aligned_dim = query_aligned_dim;
             diskann::alloc_aligned(((void **)&warmup), warmup_num * warmup_aligned_dim * sizeof(T), 8 * sizeof(T));
@@ -154,7 +154,7 @@ int search_disk_index(diskann::Metric &metric, const std::string &index_path_pre
         std::vector<float> warmup_result_dists(warmup_num, 0);
 
 #pragma omp parallel for schedule(dynamic, 1)
-        for (_s64 i = 0; i < (int64_t)warmup_num; i++)
+        for (int64_t i = 0; i < (int64_t)warmup_num; i++)
         {
             _pFlashIndex->cached_beam_search(warmup + (i * warmup_aligned_dim), 1, warmup_L,
                                              warmup_result_ids_64.data() + (i * 1),
@@ -189,7 +189,7 @@ int search_disk_index(diskann::Metric &metric, const std::string &index_path_pre
 
     for (uint32_t test_id = 0; test_id < Lvec.size(); test_id++)
     {
-        _u64 L = Lvec[test_id];
+        uint64_t L = Lvec[test_id];
 
         if (L < recall_at)
         {
@@ -215,7 +215,7 @@ int search_disk_index(diskann::Metric &metric, const std::string &index_path_pre
         auto s = std::chrono::high_resolution_clock::now();
 
 #pragma omp parallel for schedule(dynamic, 1)
-        for (_s64 i = 0; i < (int64_t)query_num; i++)
+        for (int64_t i = 0; i < (int64_t)query_num; i++)
         {
             if (!filtered_search)
             {
@@ -273,14 +273,14 @@ int search_disk_index(diskann::Metric &metric, const std::string &index_path_pre
     }
 
     diskann::cout << "Done searching. Now saving results " << std::endl;
-    _u64 test_id = 0;
+    uint64_t test_id = 0;
     for (auto L : Lvec)
     {
         if (L < recall_at)
             continue;
 
         std::string cur_result_path = result_output_prefix + "_" + std::to_string(L) + "_idx_uint32.bin";
-        diskann::save_bin<_u32>(cur_result_path, query_result_ids[test_id].data(), query_num, recall_at);
+        diskann::save_bin<uint32_t>(cur_result_path, query_result_ids[test_id].data(), query_num, recall_at);
 
         cur_result_path = result_output_prefix + "_" + std::to_string(L) + "_dists_float.bin";
         diskann::save_bin<float>(cur_result_path, query_result_dists[test_id++].data(), query_num, recall_at);
@@ -324,7 +324,7 @@ int main(int argc, char **argv)
         desc.add_options()("num_nodes_to_cache", po::value<uint32_t>(&num_nodes_to_cache)->default_value(0),
                            "Beamwidth for search");
         desc.add_options()("search_io_limit",
-                           po::value<uint32_t>(&search_io_limit)->default_value(std::numeric_limits<_u32>::max()),
+                           po::value<uint32_t>(&search_io_limit)->default_value(std::numeric_limits<uint32_t>::max()),
                            "Max #IOs for search");
         desc.add_options()("num_threads,T", po::value<uint32_t>(&num_threads)->default_value(omp_get_num_procs()),
                            "Number of threads used for building index (defaults to "

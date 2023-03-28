@@ -95,8 +95,8 @@ class cached_ifstream
                 reader.read(cache_buf, cache_size);
                 cur_off = 0;
             }
-            // note that if size_left < cache_size, then cur_off = cache_size, so
-            // subsequent reads will all be directly from file
+            // note that if size_left < cache_size, then cur_off = cache_size,
+            // so subsequent reads will all be directly from file
         }
     }
 

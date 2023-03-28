@@ -123,7 +123,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
 
     for (uint32_t test_id = 0; test_id < Lvec.size(); test_id++)
     {
-        _u64 L = Lvec[test_id];
+        uint64_t L = Lvec[test_id];
         if (L < recall_at)
         {
             diskann::cout << "Ignoring search with L:" << L << " since it's smaller than K:" << recall_at << std::endl;
@@ -200,13 +200,13 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
         if (tags)
         {
             std::cout << std::setw(4) << L << std::setw(12) << displayed_qps << std::setw(20) << (float)mean_latency
-                      << std::setw(15) << (float)latency_stats[(_u64)(0.999 * query_num)];
+                      << std::setw(15) << (float)latency_stats[(uint64_t)(0.999 * query_num)];
         }
         else
         {
             std::cout << std::setw(4) << L << std::setw(12) << displayed_qps << std::setw(18) << avg_cmps
                       << std::setw(20) << (float)mean_latency << std::setw(15)
-                      << (float)latency_stats[(_u64)(0.999 * query_num)];
+                      << (float)latency_stats[(uint64_t)(0.999 * query_num)];
         }
         for (float recall : recalls)
         {
@@ -217,7 +217,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
     }
 
     std::cout << "Done searching. Now saving results " << std::endl;
-    _u64 test_id = 0;
+    uint64_t test_id = 0;
     for (auto L : Lvec)
     {
         if (L < recall_at)
@@ -226,7 +226,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
             continue;
         }
         std::string cur_result_path = result_path_prefix + "_" + std::to_string(L) + "_idx_uint32.bin";
-        diskann::save_bin<_u32>(cur_result_path, query_result_ids[test_id].data(), query_num, recall_at);
+        diskann::save_bin<uint32_t>(cur_result_path, query_result_ids[test_id].data(), query_num, recall_at);
         test_id++;
     }
 
