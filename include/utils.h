@@ -58,7 +58,6 @@ typedef int FileHandle;
 #define PBSTR "||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||"
 #define PBWIDTH 60
 
-
 inline bool file_exists(const std::string &name, bool dirCheck = false)
 {
     int val;
