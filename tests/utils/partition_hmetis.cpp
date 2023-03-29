@@ -119,7 +119,7 @@ int aux_main(const std::string &input_file,
 					<< std::endl;
 	  return -1;
 	}
-    size_t                num_shards = -1;
+    size_t                num_shards = 0;
     std::vector<size_t> shard_of_point;
     constexpr size_t      definitely_no_more_shards_than_this = 10'000;
     for (size_t i = 0; i < num_points; ++i) {
@@ -130,7 +130,7 @@ int aux_main(const std::string &input_file,
 				  << std::endl;
 		return -1;
       }
-      num_shards = std::max(num_shards, shard_id);
+      num_shards = std::max(num_shards, shard_id + 1);
 	  shard_of_point.push_back(shard_id); // metis partition IDs are 0-based!
     }
     std::vector<std::vector<uint32_t>> points_routed_to_shard(num_shards);
@@ -213,7 +213,7 @@ int aux_main(const std::string &input_file,
         // 1. average fanout
         float avg_fanout = 0.0;
         for (size_t query_id = 0; query_id < num_queries; ++query_id) {
-          avg_fanout += query_to_gt_shards.size();
+          avg_fanout += query_to_gt_shards[query_id].size();
         }
         avg_fanout /= num_queries;
         diskann::cout << "Average fanout: " << avg_fanout << std::endl
@@ -224,7 +224,7 @@ int aux_main(const std::string &input_file,
         std::vector<size_t> num_queries_with_fanout(max_interesting_fanout + 1,
                                                     0);
         for (size_t query_id = 0; query_id < num_queries; ++query_id) {
-          num_queries_with_fanout[std::min(query_to_gt_shards.size(),
+          num_queries_with_fanout[std::min(query_to_gt_shards[query_id].size(),
                                            max_interesting_fanout)]++;
         }
         diskann::cout << "Histogram of fanouts:" << std::endl;
@@ -259,8 +259,8 @@ int aux_main(const std::string &input_file,
                         << std::fixed
                         << 100.0 * total_recalled_points / (K * num_queries)
                         << "%\n";
-          diskann::cout << std::endl;
         }
+        diskann::cout << std::endl;
 
         delete[] gt;
       }
