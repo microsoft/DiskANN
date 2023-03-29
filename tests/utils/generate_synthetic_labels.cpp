@@ -104,7 +104,7 @@ int main(int argc, char **argv)
         desc.add_options()("num_labels,L", po::value<uint64_t>(&num_labels)->required(),
                            "Number of unique labels, up to 5000");
         desc.add_options()("distribution_type,DT", po::value<std::string>(&distribution_type)->default_value("random"),
-                           "Distribution function for labels <random/zipf> defaults to random");
+                           "Distribution function for labels <random/zipf/one_per_point> defaults to random");
 
         po::variables_map vm;
         po::store(po::parse_command_line(argc, argv, desc), vm);
@@ -176,6 +176,19 @@ int main(int argc, char **argv)
                 {
                     outfile << '\n';
                 }
+            }
+        }
+        else if (distribution_type == "one_per_point")
+        {
+            std::random_device rd;                                // obtain a random number from hardware
+            std::mt19937 gen(rd());                               // seed the generator
+            std::uniform_int_distribution<> distr(0, num_labels); // define the range
+
+            for (int i = 0; i < num_points; i++)
+            {
+                outfile << distr(gen);
+                if (i != num_points - 1)
+                    outfile << '\n';
             }
         }
         if (outfile.is_open())

@@ -26,6 +26,7 @@
 #else
 #include <stdlib.h>
 #endif
+
 #include "filter_utils.h"
 #include "utils.h"
 
@@ -298,6 +299,65 @@ inline void load_bin_as_float(const char *filename, float *&data, size_t &npts_u
     std::cout << "Finished converting part data to float." << std::endl;
 }
 
+template <typename T>
+inline std::vector<size_t> load_filtered_bin_as_float(const char *filename, float *&data, size_t &npts, size_t &ndims,
+                                                      int part_num, const char *label_file,
+                                                      const std::string &filter_label,
+                                                      const std::string &universal_label, size_t &npoints_filt,
+                                                      std::vector<std::vector<std::string>> &pts_to_labels)
+{
+    std::ifstream reader(filename, std::ios::binary);
+    if (reader.fail())
+    {
+        throw diskann::ANNException(std::string("Failed to open file ") + filename, -1);
+    }
+
+    std::cout << "Reading bin file " << filename << " ...\n";
+    int npts_i32, ndims_i32;
+    std::vector<size_t> rev_map;
+    reader.read((char *)&npts_i32, sizeof(int));
+    reader.read((char *)&ndims_i32, sizeof(int));
+    uint64_t start_id = part_num * PARTSIZE;
+    uint64_t end_id = (std::min)(start_id + PARTSIZE, (uint64_t)npts_i32);
+    npts = end_id - start_id;
+    ndims = (unsigned)ndims_i32;
+    uint64_t nptsuint64_t = (uint64_t)npts;
+    uint64_t ndimsuint64_t = (uint64_t)ndims;
+    npoints_filt = 0;
+    std::cout << "#pts in part = " << npts << ", #dims = " << ndims
+              << ", size = " << nptsuint64_t * ndimsuint64_t * sizeof(T) << "B" << std::endl;
+    std::cout << "start and end ids: " << start_id << ", " << end_id << std::endl;
+    reader.seekg(start_id * ndims * sizeof(T) + 2 * sizeof(uint32_t), std::ios::beg);
+
+    T *data_T = new T[nptsuint64_t * ndimsuint64_t];
+    reader.read((char *)data_T, sizeof(T) * nptsuint64_t * ndimsuint64_t);
+    std::cout << "Finished reading part of the bin file." << std::endl;
+    reader.close();
+
+    data = aligned_malloc<float>(nptsuint64_t * ndimsuint64_t, ALIGNMENT);
+
+    for (int64_t i = 0; i < (int64_t)nptsuint64_t; i++)
+    {
+        if (std::find(pts_to_labels[start_id + i].begin(), pts_to_labels[start_id + i].end(), filter_label) !=
+                pts_to_labels[start_id + i].end() ||
+            std::find(pts_to_labels[start_id + i].begin(), pts_to_labels[start_id + i].end(), universal_label) !=
+                pts_to_labels[start_id + i].end())
+        {
+            rev_map.push_back(start_id + i);
+            for (int64_t j = 0; j < (int64_t)ndimsuint64_t; j++)
+            {
+                float cur_val_float = (float)data_T[i * ndimsuint64_t + j];
+                std::memcpy((char *)(data + npoints_filt * ndimsuint64_t + j), (char *)&cur_val_float, sizeof(float));
+            }
+            npoints_filt++;
+        }
+    }
+    delete[] data_T;
+    std::cout << "Finished converting part data to float.. identified " << npoints_filt
+              << " points matching the filter." << std::endl;
+    return rev_map;
+}
+
 template <typename T> inline void save_bin(const std::string filename, T *data, size_t npts, size_t ndims)
 {
     std::ofstream writer;
@@ -331,6 +391,40 @@ inline void save_groundtruth_as_one_file(const std::string filename, int32_t *da
     writer.write((char *)distances, npts * ndims * sizeof(float));
     writer.close();
     std::cout << "Finished writing truthset" << std::endl;
+}
+
+inline void parse_label_file_into_vec(size_t &line_cnt, const std::string &map_file,
+                                      std::vector<std::vector<std::string>> &pts_to_labels)
+{
+    std::ifstream infile(map_file);
+    std::string line, token;
+    std::set<std::string> labels;
+    infile.clear();
+    infile.seekg(0, std::ios::beg);
+    while (std::getline(infile, line))
+    {
+        std::istringstream iss(line);
+        std::vector<std::string> lbls(0);
+
+        getline(iss, token, '\t');
+        std::istringstream new_iss(token);
+        while (getline(new_iss, token, ','))
+        {
+            token.erase(std::remove(token.begin(), token.end(), '\n'), token.end());
+            token.erase(std::remove(token.begin(), token.end(), '\r'), token.end());
+            lbls.push_back(token);
+            labels.insert(token);
+        }
+        if (lbls.size() <= 0)
+        {
+            std::cout << "No label found";
+            exit(-1);
+        }
+        std::sort(lbls.begin(), lbls.end());
+        pts_to_labels.push_back(lbls);
+    }
+    std::cout << "Identified " << labels.size() << " distinct label(s), and populated labels for "
+              << pts_to_labels.size() << " points" << std::endl;
 }
 
 template <typename T>
@@ -378,8 +472,63 @@ std::vector<std::vector<std::pair<uint32_t, float>>> processUnfilteredParts(cons
 };
 
 template <typename T>
-int aux_main(const std::string &base_file, const std::string &query_file, const std::string &gt_file, size_t k,
-             const diskann::Metric &metric, const std::string &tags_file = std::string(""))
+std::vector<std::vector<std::pair<uint32_t, float>>> processFilteredParts(
+    const std::string &base_file, const std::string &label_file, const std::string &filter_label,
+    const std::string &universal_label, size_t &nqueries, size_t &npoints, size_t &dim, size_t &k, float *query_data,
+    const diskann::Metric &metric, std::vector<uint32_t> &location_to_tag)
+{
+    size_t npoints_filt;
+    float *base_data;
+    std::vector<std::vector<std::pair<uint32_t, float>>> res(nqueries);
+    int num_parts = get_num_parts<T>(base_file.c_str());
+
+    std::vector<std::vector<std::string>> pts_to_labels;
+    if (filter_label != "")
+        parse_label_file_into_vec(npoints, label_file, pts_to_labels);
+
+    for (int p = 0; p < num_parts; p++)
+    {
+        size_t start_id = p * PARTSIZE;
+        std::vector<size_t> rev_map;
+        if (filter_label != "")
+            rev_map = load_filtered_bin_as_float<T>(base_file.c_str(), base_data, npoints, dim, p, label_file.c_str(),
+                                                    filter_label, universal_label, npoints_filt, pts_to_labels);
+        int *closest_points_part = new int[nqueries * k];
+        float *dist_closest_points_part = new float[nqueries * k];
+
+        _u32 part_k;
+        part_k = k < npoints_filt ? k : npoints_filt;
+        if (npoints_filt > 0)
+        {
+            exact_knn(dim, part_k, closest_points_part, dist_closest_points_part, npoints_filt, base_data, nqueries,
+                      query_data, metric);
+        }
+
+        for (_u64 i = 0; i < nqueries; i++)
+        {
+            for (_u64 j = 0; j < part_k; j++)
+            {
+                if (!location_to_tag.empty())
+                    if (location_to_tag[closest_points_part[i * k + j] + start_id] == 0)
+                        continue;
+
+                res[i].push_back(std::make_pair((uint32_t)(rev_map[closest_points_part[i * part_k + j]]),
+                                                dist_closest_points_part[i * part_k + j]));
+            }
+        }
+
+        delete[] closest_points_part;
+        delete[] dist_closest_points_part;
+
+        diskann::aligned_free(base_data);
+    }
+    return res;
+};
+
+template <typename T>
+int aux_main(const std::string &base_file, const std::string &label_file, const std::string &query_file,
+             const std::string &gt_file, size_t k, const std::string &universal_label, const diskann::Metric &metric,
+             const std::string &filter_label, const std::string &tags_file = std::string(""))
 {
     size_t npoints, nqueries, dim, npoints_filt;
 
@@ -398,8 +547,16 @@ int aux_main(const std::string &base_file, const std::string &query_file, const 
     int *closest_points = new int[nqueries * k];
     float *dist_closest_points = new float[nqueries * k];
 
-    std::vector<std::vector<std::pair<uint32_t, float>>> results =
-        processUnfilteredParts<T>(base_file, nqueries, npoints, dim, k, query_data, metric, location_to_tag);
+    std::vector<std::vector<std::pair<uint32_t, float>>> results;
+    if (filter_label == "")
+    {
+        results = processUnfilteredParts<T>(base_file, nqueries, npoints, dim, k, query_data, metric, location_to_tag);
+    }
+    else
+    {
+        results = processFilteredParts<T>(base_file, label_file, filter_label, universal_label, nqueries, npoints, dim,
+                                          k, query_data, metric, location_to_tag);
+    }
 
     for (_u64 i = 0; i < nqueries; i++)
     {
@@ -490,7 +647,8 @@ void load_truthset(const std::string &bin_file, uint32_t *&ids, float *&dists, s
 
 int main(int argc, char **argv)
 {
-    std::string data_type, dist_fn, base_file, query_file, gt_file, tags_file;
+    std::string data_type, dist_fn, base_file, query_file, gt_file, tags_file, label_file, filter_label,
+        universal_label, filter_label_file;
     uint64_t K;
 
     try
@@ -505,6 +663,12 @@ int main(int argc, char **argv)
                            "File containing the base vectors in binary format");
         desc.add_options()("query_file", po::value<std::string>(&query_file)->required(),
                            "File containing the query vectors in binary format");
+        desc.add_options()("label_file", po::value<std::string>(&label_file)->default_value(""),
+                           "Input labels file in txt format if present");
+        desc.add_options()("filter_label", po::value<std::string>(&filter_label)->default_value(""),
+                           "Input filter label if doing filtered groundtruth");
+        desc.add_options()("universal_label", po::value<std::string>(&universal_label)->default_value(""),
+                           "Universal label, if using it, only in conjunction with label_file");
         desc.add_options()("gt_file", po::value<std::string>(&gt_file)->required(),
                            "File name for the writing ground truth in binary format, please don' append .bin at end if "
                            "no filter_label or filter_label_file is provided it will save the file with '.bin' at end."
@@ -513,6 +677,9 @@ int main(int argc, char **argv)
                            "Number of ground truth nearest neighbors to compute");
         desc.add_options()("tags_file", po::value<std::string>(&tags_file)->default_value(std::string()),
                            "File containing the tags in binary format");
+        desc.add_options()("filter_label_file",
+                           po::value<std::string>(&filter_label_file)->default_value(std::string("")),
+                           "Filter file for Queries for Filtered Search ");
 
         po::variables_map vm;
         po::store(po::parse_command_line(argc, argv, desc), vm);
@@ -535,6 +702,12 @@ int main(int argc, char **argv)
         return -1;
     }
 
+    if (filter_label != "" && filter_label_file != "")
+    {
+        std::cerr << "Only one of filter_label and query_filters_file should be provided" << std::endl;
+        return -1;
+    }
+
     diskann::Metric metric;
     if (dist_fn == std::string("l2"))
     {
@@ -554,19 +727,199 @@ int main(int argc, char **argv)
         return -1;
     }
 
-    try
+    std::vector<std::string> filter_labels;
+    if (filter_label != "")
     {
-        if (data_type == std::string("float"))
-            aux_main<float>(base_file, query_file, gt_file, K, metric, tags_file);
-        if (data_type == std::string("int8"))
-            aux_main<int8_t>(base_file, query_file, gt_file, K, metric, tags_file);
-        if (data_type == std::string("uint8"))
-            aux_main<uint8_t>(base_file, query_file, gt_file, K, metric, tags_file);
+        filter_labels.push_back(filter_label);
     }
-    catch (const std::exception &e)
+    else if (filter_label_file != "")
     {
-        std::cout << std::string(e.what()) << std::endl;
-        diskann::cerr << "Compute GT failed." << std::endl;
-        return -1;
+        filter_labels = read_file_to_vector_of_strings(filter_label_file, false);
+    }
+
+    // only when there is no filter label or 1 filter label for all queries
+    if (filter_labels.size() == 1)
+    {
+        try
+        {
+            if (data_type == std::string("float"))
+                aux_main<float>(base_file, label_file, query_file, gt_file, K, universal_label, metric,
+                                filter_labels[0], tags_file);
+            if (data_type == std::string("int8"))
+                aux_main<int8_t>(base_file, label_file, query_file, gt_file, K, universal_label, metric,
+                                 filter_labels[0], tags_file);
+            if (data_type == std::string("uint8"))
+                aux_main<uint8_t>(base_file, label_file, query_file, gt_file, K, universal_label, metric,
+                                  filter_labels[0], tags_file);
+        }
+        catch (const std::exception &e)
+        {
+            std::cout << std::string(e.what()) << std::endl;
+            diskann::cerr << "Compute GT failed." << std::endl;
+            return -1;
+        }
+    }
+    else
+    { // Each query has its own filter label
+        // Split up data and query bins into label specific ones
+        tsl::robin_map<std::string, _u32> labels_to_number_of_points;
+        tsl::robin_map<std::string, _u32> labels_to_number_of_queries;
+
+        label_set all_labels;
+        for (int i = 0; i < filter_labels.size(); i++)
+        {
+            std::string label = filter_labels[i];
+            all_labels.insert(label);
+
+            if (labels_to_number_of_queries.find(label) == labels_to_number_of_queries.end())
+            {
+                labels_to_number_of_queries[label] = 0;
+            }
+            labels_to_number_of_queries[label] += 1;
+        }
+
+        size_t npoints;
+        std::vector<std::vector<std::string>> point_to_labels;
+        parse_label_file_into_vec(npoints, label_file, point_to_labels);
+        std::vector<label_set> point_ids_to_labels(point_to_labels.size());
+        std::vector<label_set> query_ids_to_labels(filter_labels.size());
+
+        for (size_t i = 0; i < point_to_labels.size(); i++)
+        {
+            for (size_t j = 0; j < point_to_labels[i].size(); j++)
+            {
+                std::string label = point_to_labels[i][j];
+                if (all_labels.find(label) != all_labels.end())
+                {
+                    point_ids_to_labels[i].insert(point_to_labels[i][j]);
+                    if (labels_to_number_of_points.find(label) == labels_to_number_of_points.end())
+                    {
+                        labels_to_number_of_points[label] = 0;
+                    }
+                    labels_to_number_of_points[label] += 1;
+                }
+            }
+        }
+
+        for (size_t i = 0; i < filter_labels.size(); i++)
+        {
+            query_ids_to_labels[i].insert(filter_labels[i]);
+        }
+
+        tsl::robin_map<std::string, std::vector<_u32>> label_id_to_orig_id;
+        tsl::robin_map<std::string, std::vector<_u32>> label_query_id_to_orig_id;
+
+        if (data_type == std::string("float"))
+        {
+            label_id_to_orig_id = diskann::generate_label_specific_vector_files_compat<float>(
+                base_file, labels_to_number_of_points, point_ids_to_labels, all_labels);
+
+            label_query_id_to_orig_id = diskann::generate_label_specific_vector_files_compat<float>(
+                query_file, labels_to_number_of_queries, query_ids_to_labels,
+                all_labels); // query_filters acts like query_ids_to_labels
+        }
+        else if (data_type == std::string("int8"))
+        {
+            label_id_to_orig_id = diskann::generate_label_specific_vector_files_compat<int8_t>(
+                base_file, labels_to_number_of_points, point_ids_to_labels, all_labels);
+
+            label_query_id_to_orig_id = diskann::generate_label_specific_vector_files_compat<int8_t>(
+                query_file, labels_to_number_of_queries, query_ids_to_labels,
+                all_labels); // query_filters acts like query_ids_to_labels
+        }
+        else if (data_type == std::string("uint8"))
+        {
+            label_id_to_orig_id = diskann::generate_label_specific_vector_files_compat<uint8_t>(
+                base_file, labels_to_number_of_points, point_ids_to_labels, all_labels);
+
+            label_query_id_to_orig_id = diskann::generate_label_specific_vector_files_compat<uint8_t>(
+                query_file, labels_to_number_of_queries, query_ids_to_labels,
+                all_labels); // query_filters acts like query_ids_to_labels
+        }
+        else
+        {
+            diskann::cerr << "Invalid data type" << std::endl;
+            return -1;
+        }
+
+        // Generate label specific ground truths
+
+        try
+        {
+            for (const auto &label : all_labels)
+            {
+                std::string filtered_base_file = base_file + "_" + label;
+                std::string filtered_query_file = query_file + "_" + label;
+                std::string filtered_gt_file = gt_file + "_" + label;
+                if (data_type == std::string("float"))
+                    aux_main<float>(filtered_base_file, "", filtered_query_file, filtered_gt_file, K, "", metric, "");
+                if (data_type == std::string("int8"))
+                    aux_main<int8_t>(filtered_base_file, "", filtered_query_file, filtered_gt_file, K, "", metric, "");
+                if (data_type == std::string("uint8"))
+                    aux_main<uint8_t>(filtered_base_file, "", filtered_query_file, filtered_gt_file, K, "", metric, "");
+            }
+        }
+        catch (const std::exception &e)
+        {
+            std::cout << std::string(e.what()) << std::endl;
+            diskann::cerr << "Compute GT failed." << std::endl;
+            return -1;
+        }
+
+        // Combine the label specific ground truths to produce a single GT file
+
+        unsigned *gt_ids = nullptr;
+        float *gt_dists = nullptr;
+        size_t gt_num, gt_dim;
+
+        std::vector<std::vector<int32_t>> final_gt_ids;
+        std::vector<std::vector<float>> final_gt_dists;
+
+        int query_num = 0;
+        for (const auto &lbl : all_labels)
+        {
+            query_num += labels_to_number_of_queries[lbl];
+        }
+
+        for (size_t i = 0; i < query_num; i++)
+        {
+            final_gt_ids.push_back(std::vector<int32_t>(K));
+            final_gt_dists.push_back(std::vector<float>(K));
+        }
+
+        for (const auto &lbl : all_labels)
+        {
+            std::string filtered_gt_file = gt_file + "_" + lbl;
+            load_truthset(filtered_gt_file, gt_ids, gt_dists, gt_num, gt_dim);
+
+            for (int i = 0; i < labels_to_number_of_queries[lbl]; i++)
+            {
+                int orig_query_id = label_query_id_to_orig_id[lbl][i];
+                for (int j = 0; j < K; j++)
+                {
+                    final_gt_ids[orig_query_id][j] = label_id_to_orig_id[lbl][gt_ids[i * K + j]];
+                    final_gt_dists[orig_query_id][j] = gt_dists[i * K + j];
+                }
+            }
+        }
+
+        int32_t *closest_points = new int32_t[query_num * K];
+        float *dist_closest_points = new float[query_num * K];
+
+        for (int i = 0; i < query_num; i++)
+        {
+            for (int j = 0; j < K; j++)
+            {
+                closest_points[i * K + j] = final_gt_ids[i][j];
+                dist_closest_points[i * K + j] = final_gt_dists[i][j];
+            }
+        }
+
+        save_groundtruth_as_one_file(gt_file, closest_points, dist_closest_points, query_num, K);
+
+        // cleanup artifacts
+        std::cout << "Cleaning up artifacts..." << std::endl;
+        tsl::robin_set<std::string> paths_to_clean{gt_file, base_file, query_file};
+        clean_up_artifacts(paths_to_clean, all_labels);
     }
 }
