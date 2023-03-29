@@ -50,9 +50,9 @@ template <typename T, typename LabelT = uint32_t>
 int search_disk_index(diskann::Metric &metric, const std::string &index_path_prefix,
                       const std::string &result_output_prefix, const std::string &query_file, std::string &gt_file,
                       const unsigned num_threads, const unsigned recall_at, const unsigned beamwidth,
-                      const unsigned num_nodes_to_cache, const uint32_t search_io_limit, const std::vector<unsigned> &Lvec,
-                      const float fail_if_recall_below, const std::vector<std::string> &query_filters,
-                      const bool use_reorder_data = false)
+                      const unsigned num_nodes_to_cache, const uint32_t search_io_limit,
+                      const std::vector<unsigned> &Lvec, const float fail_if_recall_below,
+                      const std::vector<std::string> &query_filters, const bool use_reorder_data = false)
 {
     diskann::cout << "Search parameters: #threads: " << num_threads << ", ";
     if (beamwidth <= 0)

@@ -271,14 +271,17 @@ template DISKANN_DLLEXPORT void generate_label_indices<int8_t>(path input_data_p
                                                                label_set all_labels, unsigned R, unsigned L,
                                                                float alpha, unsigned num_threads);
 
-template DISKANN_DLLEXPORT tsl::robin_map<std::string, std::vector<uint32_t>> generate_label_specific_vector_files_compat<
-    float>(path input_data_path, tsl::robin_map<std::string, uint32_t> labels_to_number_of_points,
-           std::vector<label_set> point_ids_to_labels, label_set all_labels);
-template DISKANN_DLLEXPORT tsl::robin_map<std::string, std::vector<uint32_t>> generate_label_specific_vector_files_compat<
-    uint8_t>(path input_data_path, tsl::robin_map<std::string, uint32_t> labels_to_number_of_points,
-             std::vector<label_set> point_ids_to_labels, label_set all_labels);
-template DISKANN_DLLEXPORT tsl::robin_map<std::string, std::vector<uint32_t>> generate_label_specific_vector_files_compat<
-    int8_t>(path input_data_path, tsl::robin_map<std::string, uint32_t> labels_to_number_of_points,
-            std::vector<label_set> point_ids_to_labels, label_set all_labels);
+template DISKANN_DLLEXPORT tsl::robin_map<std::string, std::vector<uint32_t>>
+generate_label_specific_vector_files_compat<float>(path input_data_path,
+                                                   tsl::robin_map<std::string, uint32_t> labels_to_number_of_points,
+                                                   std::vector<label_set> point_ids_to_labels, label_set all_labels);
+template DISKANN_DLLEXPORT tsl::robin_map<std::string, std::vector<uint32_t>>
+generate_label_specific_vector_files_compat<uint8_t>(path input_data_path,
+                                                     tsl::robin_map<std::string, uint32_t> labels_to_number_of_points,
+                                                     std::vector<label_set> point_ids_to_labels, label_set all_labels);
+template DISKANN_DLLEXPORT tsl::robin_map<std::string, std::vector<uint32_t>>
+generate_label_specific_vector_files_compat<int8_t>(path input_data_path,
+                                                    tsl::robin_map<std::string, uint32_t> labels_to_number_of_points,
+                                                    std::vector<label_set> point_ids_to_labels, label_set all_labels);
 
 } // namespace diskann
