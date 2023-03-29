@@ -55,6 +55,9 @@ typedef int FileHandle;
 
 #define BUFFER_SIZE_FOR_CACHED_IO (_u64)1024 * (_u64)1048576
 
+#define PBSTR "||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||"
+#define PBWIDTH 60
+
 inline bool file_exists(const std::string &name, bool dirCheck = false)
 {
     int val;
@@ -693,6 +696,16 @@ inline uint64_t save_bin(const std::string &filename, T *data, size_t npts, size
     diskann::cout << "Finished writing bin." << std::endl;
     return bytes_written;
 }
+
+inline void print_progress(double percentage)
+{
+    int val = (int)(percentage * 100);
+    int lpad = (int)(percentage * PBWIDTH);
+    int rpad = PBWIDTH - lpad;
+    printf("\r%3d%% [%.*s%*s]", val, lpad, PBSTR, rpad, "");
+    fflush(stdout);
+}
+
 // load_aligned_bin functions START
 
 template <typename T>
@@ -1012,6 +1025,72 @@ template <typename T> inline void normalize(T *arr, size_t dim)
     for (uint32_t i = 0; i < dim; i++)
     {
         arr[i] = (T)(arr[i] / sum);
+    }
+}
+
+inline std::vector<std::string> read_file_to_vector_of_strings(const std::string &filename, bool unique = false)
+{
+    std::vector<std::string> result;
+    std::set<std::string> elementSet;
+    if (filename != "")
+    {
+        std::ifstream file(filename);
+        if (file.fail())
+        {
+            throw diskann::ANNException(std::string("Failed to open file ") + filename, -1);
+        }
+        std::string line;
+        while (std::getline(file, line))
+        {
+            if (line.empty())
+            {
+                break;
+            }
+            if (line.find(',') != std::string::npos)
+            {
+                std::cerr << "Every query must have exactly one filter" << std::endl;
+                exit(-1);
+            }
+            if (!line.empty() && (line.back() == '\r' || line.back() == '\n'))
+            {
+                line.erase(line.size() - 1);
+            }
+            if (!elementSet.count(line))
+            {
+                result.push_back(line);
+            }
+            if (unique)
+            {
+                elementSet.insert(line);
+            }
+        }
+        file.close();
+    }
+    else
+    {
+        throw diskann::ANNException(std::string("Failed to open file. filename can not be blank"), -1);
+    }
+    return result;
+}
+
+inline void clean_up_artifacts(tsl::robin_set<std::string> paths_to_clean, tsl::robin_set<std::string> path_suffixes)
+{
+    try
+    {
+        for (const auto &path : paths_to_clean)
+        {
+            for (const auto &suffix : path_suffixes)
+            {
+                std::string curr_path_to_clean(path + "_" + suffix);
+                if (std::remove(curr_path_to_clean.c_str()) != 0)
+                    diskann::cout << "Warning: Unable to remove file :" << curr_path_to_clean << std::endl;
+            }
+        }
+        diskann::cout << "Cleaned all artifacts" << std::endl;
+    }
+    catch (const std::exception &e)
+    {
+        diskann::cout << "Warning: Unable to clean all artifacts" << std::endl;
     }
 }
 

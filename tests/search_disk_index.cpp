@@ -51,8 +51,8 @@ int search_disk_index(diskann::Metric &metric, const std::string &index_path_pre
                       const std::string &result_output_prefix, const std::string &query_file, std::string &gt_file,
                       const unsigned num_threads, const unsigned recall_at, const unsigned beamwidth,
                       const unsigned num_nodes_to_cache, const _u32 search_io_limit, const std::vector<unsigned> &Lvec,
-                      const float fail_if_recall_below, const bool use_reorder_data = false,
-                      const std::string &filter_label = "")
+                      const float fail_if_recall_below, const std::vector<std::string> &query_filters,
+                      const bool use_reorder_data = false)
 {
     diskann::cout << "Search parameters: #threads: " << num_threads << ", ";
     if (beamwidth <= 0)
@@ -64,10 +64,6 @@ int search_disk_index(diskann::Metric &metric, const std::string &index_path_pre
     else
         diskann::cout << ", io_limit: " << search_io_limit << "." << std::endl;
 
-    bool filtered_search = false;
-    if (filter_label != "")
-        filtered_search = true;
-
     std::string warmup_query_file = index_path_prefix + "_sample_data.bin";
 
     // load query bin
@@ -76,6 +72,17 @@ int search_disk_index(diskann::Metric &metric, const std::string &index_path_pre
     float *gt_dists = nullptr;
     size_t query_num, query_dim, query_aligned_dim, gt_num, gt_dim;
     diskann::load_aligned_bin<T>(query_file, query, query_num, query_dim, query_aligned_dim);
+
+    bool filtered_search = false;
+    if (!query_filters.empty())
+    {
+        filtered_search = true;
+        if (query_filters.size() != 1 && query_filters.size() != query_num)
+        {
+            std::cout << "Error. Mismatch in number of queries and size of query filters file" << std::endl;
+            return -1; // To return -1 or some other error handling?
+        }
+    }
 
     bool calc_recall_flag = false;
     if (gt_file != std::string("null") && gt_file != std::string("NULL") && file_exists(gt_file))
@@ -226,7 +233,15 @@ int search_disk_index(diskann::Metric &metric, const std::string &index_path_pre
             }
             else
             {
-                LabelT label_for_search = _pFlashIndex->get_converted_label(filter_label);
+                LabelT label_for_search;
+                if (query_filters.size() == 1)
+                { // one label for all queries
+                    label_for_search = _pFlashIndex->get_converted_label(query_filters[0]);
+                }
+                else
+                { // one label for each query
+                    label_for_search = _pFlashIndex->get_converted_label(query_filters[i]);
+                }
                 _pFlashIndex->cached_beam_search(
                     query + (i * query_aligned_dim), recall_at, L, query_result_ids_64.data() + (i * recall_at),
                     query_result_dists[test_id].data() + (i * recall_at), optimized_beamwidth, true, label_for_search,
@@ -295,7 +310,7 @@ int search_disk_index(diskann::Metric &metric, const std::string &index_path_pre
 int main(int argc, char **argv)
 {
     std::string data_type, dist_fn, index_path_prefix, result_path_prefix, query_file, gt_file, filter_label,
-        label_type;
+        label_type, query_filters_file;
     unsigned num_threads, K, W, num_nodes_to_cache, search_io_limit;
     std::vector<unsigned> Lvec;
     bool use_reorder_data = false;
@@ -334,6 +349,9 @@ int main(int argc, char **argv)
                            "conjuction with compressed data on SSD.");
         desc.add_options()("filter_label", po::value<std::string>(&filter_label)->default_value(std::string("")),
                            "Filter Label for Filtered Search");
+        desc.add_options()("query_filters_file",
+                           po::value<std::string>(&query_filters_file)->default_value(std::string("")),
+                           "Filter file for Queries for Filtered Search ");
         desc.add_options()("label_type", po::value<std::string>(&label_type)->default_value("uint"),
                            "Storage type of Labels <uint/ushort>, default value is uint which "
                            "will consume memory 4 bytes per filter");
@@ -393,22 +411,38 @@ int main(int argc, char **argv)
         return -1;
     }
 
+    if (filter_label != "" && query_filters_file != "")
+    {
+        std::cerr << "Only one of filter_label and query_filters_file should be provided" << std::endl;
+        return -1;
+    }
+
+    std::vector<std::string> query_filters;
+    if (filter_label != "")
+    {
+        query_filters.push_back(filter_label);
+    }
+    else if (query_filters_file != "")
+    {
+        query_filters = read_file_to_vector_of_strings(query_filters_file);
+    }
+
     try
     {
-        if (filter_label != "" && label_type == "ushort")
+        if (!query_filters.empty() && label_type == "ushort")
         {
             if (data_type == std::string("float"))
                 return search_disk_index<float, uint16_t>(
                     metric, index_path_prefix, result_path_prefix, query_file, gt_file, num_threads, K, W,
-                    num_nodes_to_cache, search_io_limit, Lvec, fail_if_recall_below, use_reorder_data, filter_label);
+                    num_nodes_to_cache, search_io_limit, Lvec, fail_if_recall_below, query_filters, use_reorder_data);
             else if (data_type == std::string("int8"))
                 return search_disk_index<int8_t, uint16_t>(
                     metric, index_path_prefix, result_path_prefix, query_file, gt_file, num_threads, K, W,
-                    num_nodes_to_cache, search_io_limit, Lvec, fail_if_recall_below, use_reorder_data, filter_label);
+                    num_nodes_to_cache, search_io_limit, Lvec, fail_if_recall_below, query_filters, use_reorder_data);
             else if (data_type == std::string("uint8"))
                 return search_disk_index<uint8_t, uint16_t>(
                     metric, index_path_prefix, result_path_prefix, query_file, gt_file, num_threads, K, W,
-                    num_nodes_to_cache, search_io_limit, Lvec, fail_if_recall_below, use_reorder_data, filter_label);
+                    num_nodes_to_cache, search_io_limit, Lvec, fail_if_recall_below, query_filters, use_reorder_data);
             else
             {
                 std::cerr << "Unsupported data type. Use float or int8 or uint8" << std::endl;
@@ -420,15 +454,15 @@ int main(int argc, char **argv)
             if (data_type == std::string("float"))
                 return search_disk_index<float>(metric, index_path_prefix, result_path_prefix, query_file, gt_file,
                                                 num_threads, K, W, num_nodes_to_cache, search_io_limit, Lvec,
-                                                fail_if_recall_below, use_reorder_data, filter_label);
+                                                fail_if_recall_below, query_filters, use_reorder_data);
             else if (data_type == std::string("int8"))
                 return search_disk_index<int8_t>(metric, index_path_prefix, result_path_prefix, query_file, gt_file,
                                                  num_threads, K, W, num_nodes_to_cache, search_io_limit, Lvec,
-                                                 fail_if_recall_below, use_reorder_data, filter_label);
+                                                 fail_if_recall_below, query_filters, use_reorder_data);
             else if (data_type == std::string("uint8"))
                 return search_disk_index<uint8_t>(metric, index_path_prefix, result_path_prefix, query_file, gt_file,
                                                   num_threads, K, W, num_nodes_to_cache, search_io_limit, Lvec,
-                                                  fail_if_recall_below, use_reorder_data, filter_label);
+                                                  fail_if_recall_below, query_filters, use_reorder_data);
             else
             {
                 std::cerr << "Unsupported data type. Use float or int8 or uint8" << std::endl;
