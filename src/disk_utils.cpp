@@ -1226,8 +1226,8 @@ void create_disk_layout(const std::string base_file, const std::string mem_index
       num_pq_chunks = atoi(param_list[8].c_str());
     }
 
-    diskann::cout << "Compressing " << dim << "-dimensional data into "
-                  << num_pq_chunks << " bytes per vector." << std::endl;
+    diskann::cout << "Compressing " << dim << "-dimensional data into " << num_pq_chunks << " bytes per vector."
+                  << std::endl;
 
     generate_quantized_data<T>(data_file_to_use, pq_pivots_path,
                                pq_compressed_vectors_path, compareMetric, p_val,
