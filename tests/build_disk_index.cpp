@@ -117,7 +117,7 @@ int main(int argc, char **argv)
         }
         if (data_type != std::string("float"))
         {
-            std::cout << "Error: Appending data for reordering currently only "
+            std::cout << "Error: Appending data for reordering currently only  "
                          "supported for float data type."
                       << std::endl;
             return -1;
