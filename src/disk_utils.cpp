@@ -1231,7 +1231,7 @@ void create_disk_layout(const std::string base_file, const std::string mem_index
 
     generate_quantized_data<T>(data_file_to_use, pq_pivots_path,
                                pq_compressed_vectors_path, compareMetric, p_val,
-                               num_pq_chunks, use_opq, , codebookPath);
+                               num_pq_chunks, use_opq, codebookPath);
     diskann::cout << timer.elapsed_seconds_for_step("generating quantized data") << std::endl;
 
 // Gopal. Splitting diskann_dll into separate DLLs for search and build.
@@ -1344,20 +1344,20 @@ template DISKANN_DLLEXPORT uint32_t optimize_beamwidth<float, uint16_t>(
     _u64 tuning_sample_aligned_dim, uint32_t L, uint32_t nthreads, uint32_t start_bw);
 
   template DISKANN_DLLEXPORT int build_disk_index<int8_t, uint32_t>(
-      const char *dataFilePath, const char *indexFilePath,
-      const char *indexBuildParameters, diskann::Metric compareMetric,
+      const char *dataFilePath, const char *indexFilePath, const char *indexBuildParameters, const char *codebookPath,
+    diskann::Metric compareMetric,
       bool use_opq, bool use_filters, const std::string &label_file,
       const std::string &universal_label, const _u32 filter_threshold,
       const _u32 Lf);
   template DISKANN_DLLEXPORT int build_disk_index<uint8_t, uint32_t>(
-      const char *dataFilePath, const char *indexFilePath,
-      const char *indexBuildParameters, diskann::Metric compareMetric,
+      const char *dataFilePath, const char *indexFilePath, const char *indexBuildParameters, const char *codebookPath,
+      diskann::Metric compareMetric,
       bool use_opq, bool use_filters, const std::string &label_file,
       const std::string &universal_label, const _u32 filter_threshold,
       const _u32 Lf);
   template DISKANN_DLLEXPORT int build_disk_index<float, uint32_t>(
-      const char *dataFilePath, const char *indexFilePath,
-      const char *indexBuildParameters, diskann::Metric compareMetric,
+      const char *dataFilePath, const char *indexFilePath, const char *indexBuildParameters, const char *codebookPath,
+      diskann::Metric compareMetric,
       bool use_opq, bool use_filters, const std::string &label_file,
       const std::string &universal_label, const _u32 filter_threshold,
       const _u32 Lf);
