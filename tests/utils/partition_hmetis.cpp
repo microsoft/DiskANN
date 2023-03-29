@@ -2,6 +2,7 @@
 // Licensed under the MIT license.
 
 #include "common_includes.h"
+#include "math_utils.h"
 #include <unordered_map>
 #include <boost/program_options.hpp>
 
@@ -112,6 +113,7 @@ int aux_main(const std::string &input_file,
     diskann::cout << "Reading the dataset..." << std::endl;
     diskann::load_bin<T>(input_file, points, num_points, dim);
 
+
     // load hmetis partitioning
     std::ifstream hmetis(hmetis_file);
     if (hmetis.fail()) {
@@ -138,12 +140,14 @@ int aux_main(const std::string &input_file,
 	  points_routed_to_shard[shard_of_point[point_id]].push_back(point_id);
 	}
 
+
     // write shards to disk
     diskann::cout << "Writing shards to disk..." << std::endl;
     int ret = write_shards_to_disk<T>(output_file_prefix, false, points.get(),
                                       dim, points_routed_to_shard);
     if (ret != 0)
       return ret;
+
 
     if (query_file != "") {
       // also partition the query set
@@ -163,10 +167,40 @@ int aux_main(const std::string &input_file,
         return -1;
       }
 
-      std::vector<std::vector<std::pair<size_t, size_t>>> query_to_gt_shards;
-      // query_to_gt_shards[query_id] is a sorted vector of pairs (shard_id, # good points in shard)
-      // that will be computed only if gt_file is given
-      // (and in that case we also display some statistics)
+      // compute centroids for each shard
+      std::unique_ptr<float[]> centroids =
+          std::make_unique<float[]>(num_shards * dim);
+      for (size_t shard_id = 0; shard_id < num_shards; ++shard_id) {
+        // compute centroid for shard_id
+        if (points_routed_to_shard[shard_id].empty()) {
+          for (int i = 0; i < dim; ++i) {
+            centroids[shard_id * dim + i] =
+                1e15;  // give it some stupid centroid
+          }
+        } else {
+          for (int i = 0; i < dim; ++i) {
+            centroids[shard_id * dim + i] = 0.0;
+          }
+          for (uint32_t point_id : points_routed_to_shard[shard_id]) {
+            for (int i = 0; i < dim; ++i) {
+              centroids[shard_id * dim + i] += points[point_id * dim + i];
+            }
+          }
+          for (int i = 0; i < dim; ++i) {
+            centroids[shard_id * dim + i] /=
+                points_routed_to_shard[shard_id].size();
+          }
+        }
+      }
+      diskann::cout << "Saving centroids" << std::endl;
+      const std::string centroids_filename =
+          output_file_prefix + "_centroids.bin";
+      diskann::save_bin<float>(centroids_filename, centroids.get(), num_shards,
+                               dim);
+      // done computing centroids
+
+      std::vector<std::unordered_map<size_t, size_t>> shard_to_count_of_GT_pts(
+          num_queries);
       if (gt_file != "") {
         // load ground truth
         uint32_t* gt = nullptr;
@@ -181,34 +215,84 @@ int aux_main(const std::string &input_file,
                     << K << std::endl;
           return -1;
         }
+        // ground truth loaded
 
-        // fill query_to_gt_shards[]
         for (size_t query_id = 0; query_id < num_queries; ++query_id) {
-          std::unordered_map<size_t, size_t> shard_to_count;
           for (size_t gt_id = 0; gt_id < K; ++gt_id) {
             size_t gt_point_id = gt[query_id * gt_dim + gt_id];
             size_t gt_shard_id = shard_of_point[gt_point_id];
-            shard_to_count[gt_shard_id]++;
+            shard_to_count_of_GT_pts[query_id][gt_shard_id]++;
           }
-          query_to_gt_shards.emplace_back(shard_to_count.begin(),
-                                          shard_to_count.end());
+        }
 
-          // sort query_to_gt_shards[query_id] by decreasing second
-          std::sort(query_to_gt_shards[query_id].begin(),
-                    query_to_gt_shards[query_id].end(),
+        delete[] gt;
+      } // else: shard_to_count_of_GT_pts[query_id] will be empty
+
+      std::vector<std::vector<std::pair<size_t, size_t>>> query_to_shards;
+      // query_to_shards[query_id] is a vector of pairs (shard_id, # GT points
+      // in shard) sorted by the order (preference) in which the shards will be
+      // asked (the # GT points can be 0 if the order is suboptimal)
+
+      // fill query_to_shards[]
+      if (mode == "from_ground_truth") {
+        for (size_t query_id = 0; query_id < num_queries; ++query_id) {
+          query_to_shards.emplace_back(
+              shard_to_count_of_GT_pts[query_id].begin(),
+              shard_to_count_of_GT_pts[query_id].end());
+
+          // sort query_to_shards[query_id] by decreasing second
+          std::sort(query_to_shards[query_id].begin(),
+                    query_to_shards[query_id].end(),
                     [](const std::pair<size_t, size_t>& a,
                        const std::pair<size_t, size_t>& b) {
                       return a.second > b.second;
                     });
         }
+        diskann::cout << "Computed the query -> shard assignment using ground "
+                         "truth (optimistically)"
+                      << std::endl;
+      } else if (mode == "centroids") {
+        std::unique_ptr<float[]> queries_float =
+            std::make_unique<float[]>(num_queries * dim);
+        diskann::convert_types<T, float>(queries.get(), queries_float.get(),
+                                         num_queries, dim);
+        // need to order all shards if we want to print statistics
+        // using the GT, otherwise query_fanout will be enough
+        const size_t num_shards_to_order =
+            (gt_file != "") ? num_shards : query_fanout;
+        std::unique_ptr<uint32_t[]> closest_centroids_ivf =
+            std::make_unique<uint32_t[]>(num_queries * num_shards_to_order);
+        math_utils::compute_closest_centers(
+            queries_float.get(), num_queries, dim, centroids.get(), num_shards,
+            num_shards_to_order, closest_centroids_ivf.get());
+        query_to_shards.emplace_back();
+        for (size_t query_id = 0; query_id < num_queries; ++query_id) {
+          for (int i = 0; i < num_shards; ++i) {
+            const size_t shard_id =
+                closest_centroids_ivf[query_id * num_shards_to_order + i];
+            query_to_shards[query_id].emplace_back(
+                shard_id, shard_to_count_of_GT_pts[query_id][shard_id]);
+            // shard_to_count_of_GT_pts[query_id][shard_id] will become 0 if wasn't present
+          }
+        }
 
-        diskann::cout
-            << "\nStatistics on fanout (as computed using ground truth):"
-            << std::endl;
+        diskann::cout << "Computed the query -> shard assignment using "
+                         "approximation by centroids"
+                      << std::endl;
+      } else {
+        diskann::cout << "unsupported mode?" << std::endl;
+        return -1;
+      }
+      // filled query_to_shards[]
+
+
+      if (gt_file != "") {
+        // compute and display some statistics
+        diskann::cout << "\nStatistics on fanout:" << std::endl;
         // 1. average fanout
         float avg_fanout = 0.0;
         for (size_t query_id = 0; query_id < num_queries; ++query_id) {
-          avg_fanout += query_to_gt_shards[query_id].size();
+          avg_fanout += query_to_shards[query_id].size();
         }
         avg_fanout /= num_queries;
         diskann::cout << "Average fanout: " << avg_fanout << std::endl
@@ -217,7 +301,7 @@ int aux_main(const std::string &input_file,
         // 1.5. "weighted average fanout"
         float weighted_avg_fanout = 0.0;
         for (size_t query_id = 0; query_id < num_queries; ++query_id) {
-          for (auto it : query_to_gt_shards[query_id]) {
+          for (auto it : query_to_shards[query_id]) {
             weighted_avg_fanout += (uint64_t) it.first * it.second;
           }
         }
@@ -227,21 +311,21 @@ int aux_main(const std::string &input_file,
                       << std::endl;
 
         // 2. histogram of fanouts
-        constexpr size_t max_interesting_fanout = 30;
+        constexpr size_t    max_interesting_fanout = 30;
         std::vector<size_t> num_queries_with_fanout(max_interesting_fanout + 1,
                                                     0);
         for (size_t query_id = 0; query_id < num_queries; ++query_id) {
-          num_queries_with_fanout[std::min(query_to_gt_shards[query_id].size(),
+          num_queries_with_fanout[std::min(query_to_shards[query_id].size(),
                                            max_interesting_fanout)]++;
         }
         diskann::cout << "Histogram of fanouts:" << std::endl;
         for (size_t fanout = 1; fanout <= max_interesting_fanout; ++fanout) {
-          diskann::cout << std::setw(2) << fanout;
+          diskann::cout << std::setprecision(2) << fanout;
           if (fanout < max_interesting_fanout)
             diskann::cout << " ";
           else
             diskann::cout << "+";
-          diskann::cout << " -- " << std::setw(3) << std::fixed
+          diskann::cout << " -- " << std::setprecision(2) << std::fixed
                         << 100.0 * num_queries_with_fanout[fanout] / num_queries
                         << "%\n";
         }
@@ -256,41 +340,32 @@ int aux_main(const std::string &input_file,
           size_t total_recalled_points = 0;
           // take the fanout-th shard for every query
           for (size_t query_id = 0; query_id < num_queries; ++query_id) {
-            if (query_to_gt_shards[query_id].size() >= fanout) {
+            if (query_to_shards[query_id].size() >= fanout) {
               coverage_of_query[query_id] +=
-                  query_to_gt_shards[query_id][fanout - 1].second;
+                  query_to_shards[query_id][fanout - 1].second;
             }
             total_recalled_points += coverage_of_query[query_id];
           }
-          diskann::cout << std::setw(2) << fanout << " -- " << std::setw(3)
-                        << std::fixed
+          diskann::cout << std::setw(2) << fanout << " -- "
+                        << std::setprecision(3) << std::fixed
                         << 100.0 * total_recalled_points / (K * num_queries)
                         << "%\n";
         }
         diskann::cout << std::endl;
-
-        delete[] gt;
-      }
+        // done computing statistics
+      }      
 
       // now we route queries
       std::vector<std::vector<uint32_t>> queries_routed_to_shard(num_shards);
-      if (mode == "xxxcentroids") {
-        // TODO
-      } else if (mode == "from_ground_truth") {
-        // we have computed query_to_gt_shards[] above
-        // now, each query goes to the top `query_fanout` many shards
-        for (size_t query_id = 0; query_id < num_queries; ++query_id) {
-          for (size_t j = 0;
-               j < query_fanout && j < query_to_gt_shards[query_id].size(); ++j) {
-            const size_t shard_id = query_to_gt_shards[query_id][j].first;
-            queries_routed_to_shard[shard_id].push_back(query_id);
-          }
+      // we have computed query_to_shards[] above
+      // now, each query goes to the top `query_fanout` many shards
+      for (size_t query_id = 0; query_id < num_queries; ++query_id) {
+        for (size_t j = 0;
+             j < query_fanout && j < query_to_shards[query_id].size(); ++j) {
+          const size_t shard_id = query_to_shards[query_id][j].first;
+          queries_routed_to_shard[shard_id].push_back(query_id);
         }
-      } else {
-        diskann::cout << "unsupported mode?" << std::endl;
-        return -1;
-      }
-      
+      }      
 
       // write routed queries to disk
       diskann::cout << "Writing query assignments to disk..." << std::endl;
@@ -311,8 +386,7 @@ int aux_main(const std::string &input_file,
 //                   and output_file_prefix_subshard-X_ids_uint32.bin
 //                   and output_file_prefix_subshard-X_query_ids_uint32.bin (optionally)
 // where X = 0,1,2,...
-
-// TODO produce _centroids.bin?
+// and also output_file_prefix_centroids.bin
 
 int main(int argc, char** argv) {
   std::string input_file, output_file_prefix, query_file, gt_file, hmetis_file, mode;
