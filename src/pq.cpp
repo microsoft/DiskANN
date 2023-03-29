@@ -205,7 +205,7 @@ void FixedChunkPQTable::populate_chunk_distances(const float *query_vec, float *
     }
 }
 
-float FixedChunkPQTable::l2_distance(const float *query_vec, char *base_vec)
+float FixedChunkPQTable::l2_distance(const float *query_vec, uint8_t *base_vec)
 {
     float res = 0;
     for (size_t chunk = 0; chunk < n_chunks; chunk++)
@@ -220,7 +220,7 @@ float FixedChunkPQTable::l2_distance(const float *query_vec, char *base_vec)
     return res;
 }
 
-float FixedChunkPQTable::inner_product(const float *query_vec, char *base_vec)
+float FixedChunkPQTable::inner_product(const float *query_vec, uint8_t *base_vec)
 {
     float res = 0;
     for (size_t chunk = 0; chunk < n_chunks; chunk++)
@@ -238,7 +238,7 @@ float FixedChunkPQTable::inner_product(const float *query_vec, char *base_vec)
 }
 
 // assumes no rotation is involved
-void FixedChunkPQTable::inflate_vector(char *base_vec, float *out_vec)
+void FixedChunkPQTable::inflate_vector(uint8_t *base_vec, float *out_vec)
 {
     for (size_t chunk = 0; chunk < n_chunks; chunk++)
     {
@@ -274,15 +274,15 @@ void FixedChunkPQTable::populate_chunk_inner_products(const float *query_vec, fl
     }
 }
 
-void aggregate_coords(const std::vector<unsigned> &ids, const char *all_coords, const size_t ndims, char *out)
+void aggregate_coords(const std::vector<unsigned> &ids, const uint8_t *all_coords, const size_t ndims, uint8_t *out)
 {
     for (size_t i = 0; i < ids.size(); i++)
     {
-        memcpy(out + i * ndims, all_coords + ids[i] * ndims, ndims * sizeof(char));
+        memcpy(out + i * ndims, all_coords + ids[i] * ndims, ndims * sizeof(uint8_t));
     }
 }
 
-void pq_dist_lookup(const char *pq_ids, const size_t n_pts, const size_t pq_nchunks, const float *pq_dists,
+void pq_dist_lookup(const uint8_t *pq_ids, const size_t n_pts, const size_t pq_nchunks, const float *pq_dists,
                     std::vector<float> &dists_out)
 {
     //_mm_prefetch((char*) dists_out, _MM_HINT_T0);
@@ -300,7 +300,7 @@ void pq_dist_lookup(const char *pq_ids, const size_t n_pts, const size_t pq_nchu
         }
         for (size_t idx = 0; idx < n_pts; idx++)
         {
-            char pq_centerid = pq_ids[pq_nchunks * idx + chunk];
+            uint8_t pq_centerid = pq_ids[pq_nchunks * idx + chunk];
             dists_out[idx] += chunk_dists[pq_centerid];
         }
     }
@@ -308,15 +308,16 @@ void pq_dist_lookup(const char *pq_ids, const size_t n_pts, const size_t pq_nchu
 
 // Need to replace calls to these functions with calls to vector& based
 // functions above
-void aggregate_coords(const unsigned *ids, const size_t n_ids, const char *all_coords, const size_t ndims, char *out)
+void aggregate_coords(const unsigned *ids, const size_t n_ids, const uint8_t *all_coords, const size_t ndims,
+                      uint8_t *out)
 {
     for (size_t i = 0; i < n_ids; i++)
     {
-        memcpy(out + i * ndims, all_coords + ids[i] * ndims, ndims * sizeof(char));
+        memcpy(out + i * ndims, all_coords + ids[i] * ndims, ndims * sizeof(uint8_t));
     }
 }
 
-void pq_dist_lookup(const char *pq_ids, const size_t n_pts, const size_t pq_nchunks, const float *pq_dists,
+void pq_dist_lookup(const uint8_t *pq_ids, const size_t n_pts, const size_t pq_nchunks, const float *pq_dists,
                     float *dists_out)
 {
     _mm_prefetch((char *)dists_out, _MM_HINT_T0);
@@ -333,7 +334,7 @@ void pq_dist_lookup(const char *pq_ids, const size_t n_pts, const size_t pq_nchu
         }
         for (size_t idx = 0; idx < n_pts; idx++)
         {
-            char pq_centerid = pq_ids[pq_nchunks * idx + chunk];
+            uint8_t pq_centerid = pq_ids[pq_nchunks * idx + chunk];
             dists_out[idx] += chunk_dists[pq_centerid];
         }
     }

@@ -142,7 +142,7 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
     // data: char * n_chunks
     // chunk_size = chunk size of each dimension chunk
     // pq_tables = float* [[2^8 * [chunk_size]] * n_chunks]
-    char *data = nullptr;
+    uint8_t *data = nullptr;
     uint64_t n_chunks;
     FixedChunkPQTable pq_table;
 

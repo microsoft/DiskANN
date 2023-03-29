@@ -443,7 +443,7 @@ template <typename T, typename LabelT> void PQFlashIndex<T, LabelT>::use_medoids
         }
         else
         {
-            disk_pq_table.inflate_vector((char *)medoid_coords, (centroid_data + cur_m * aligned_dim));
+            disk_pq_table.inflate_vector((uint8_t *)medoid_coords, (centroid_data + cur_m * aligned_dim));
         }
 
         aligned_free(medoid_buf);
@@ -689,9 +689,9 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
 
     size_t npts_u64, nchunks_u64;
 #ifdef EXEC_ENV_OLS
-    diskann::load_bin<char>(files, pq_compressed_vectors, this->data, npts_u64, nchunks_u64);
+    diskann::load_bin<uint8_t>(files, pq_compressed_vectors, this->data, npts_u64, nchunks_u64);
 #else
-    diskann::load_bin<char>(pq_compressed_vectors, this->data, npts_u64, nchunks_u64);
+    diskann::load_bin<uint8_t>(pq_compressed_vectors, this->data, npts_u64, nchunks_u64);
 #endif
 
     this->num_points = npts_u64;
@@ -1142,7 +1142,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
 
     // query <-> neighbor list
     float *dist_scratch = pq_query_scratch->aligned_dist_scratch;
-    char *pq_coord_scratch = pq_query_scratch->aligned_pq_coord_scratch;
+    uint8_t *pq_coord_scratch = pq_query_scratch->aligned_pq_coord_scratch;
 
     // lambda to batch compute query<-> node distances in PQ space
     auto compute_dists = [this, pq_coord_scratch, pq_dists](const unsigned *ids, const uint64_t n_ids,
@@ -1279,10 +1279,10 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
             else
             {
                 if (metric == diskann::Metric::INNER_PRODUCT)
-                    cur_expanded_dist = disk_pq_table.inner_product(query_float, (char *)node_fp_coords_copy);
+                    cur_expanded_dist = disk_pq_table.inner_product(query_float, (uint8_t *)node_fp_coords_copy);
                 else
                     cur_expanded_dist = disk_pq_table.l2_distance( // disk_pq does not support OPQ yet
-                        query_float, (char *)node_fp_coords_copy);
+                        query_float, (uint8_t *)node_fp_coords_copy);
             }
             full_retset.push_back(Neighbor((unsigned)cached_nhood.first, cur_expanded_dist));
 
@@ -1350,9 +1350,9 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
             else
             {
                 if (metric == diskann::Metric::INNER_PRODUCT)
-                    cur_expanded_dist = disk_pq_table.inner_product(query_float, (char *)node_fp_coords_copy);
+                    cur_expanded_dist = disk_pq_table.inner_product(query_float, (uint8_t *)node_fp_coords_copy);
                 else
-                    cur_expanded_dist = disk_pq_table.l2_distance(query_float, (char *)node_fp_coords_copy);
+                    cur_expanded_dist = disk_pq_table.l2_distance(query_float, (uint8_t *)node_fp_coords_copy);
             }
             full_retset.push_back(Neighbor(frontier_nhood.first, cur_expanded_dist));
             unsigned *node_nbrs = (node_buf + 1);

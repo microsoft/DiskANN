@@ -373,7 +373,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     bool _pq_dist = false;
     bool _use_opq = false;
     size_t _num_pq_chunks = 0;
-    char *_pq_data = nullptr;
+    uint8_t *_pq_data = nullptr;
     bool _pq_generated = false;
     FixedChunkPQTable _pq_table;
 

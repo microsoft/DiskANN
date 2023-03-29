@@ -905,7 +905,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
     float *query_float;
     float *query_rotated;
     float *pq_dists;
-    char *pq_coord_scratch;
+    uint8_t *pq_coord_scratch;
     // Intialize PQ related scratch to use PQ based distances
     if (_pq_dist)
     {
@@ -1777,8 +1777,8 @@ void Index<T, TagT, LabelT>::build(const char *filename, const size_t num_points
         generate_quantized_data<T>(std::string(filename), pq_pivots_file, pq_compressed_file, _dist_metric, p_val,
                                    _num_pq_chunks, _use_opq);
 
-        copy_aligned_data_from_file<char>(pq_compressed_file.c_str(), _pq_data, file_num_points, _num_pq_chunks,
-                                          _num_pq_chunks);
+        copy_aligned_data_from_file<uint8_t>(pq_compressed_file.c_str(), _pq_data, file_num_points, _num_pq_chunks,
+                                             _num_pq_chunks);
 #ifdef EXEC_ENV_OLS
         throw ANNException("load_pq_centroid_bin should not be called when "
                            "EXEC_ENV_OLS is defined.",

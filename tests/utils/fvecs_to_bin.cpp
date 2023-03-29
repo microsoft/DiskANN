@@ -17,16 +17,16 @@ void block_convert_float(std::ifstream &reader, std::ofstream &writer, float *re
 }
 
 // Convert byte types
-void block_convert_byte(std::ifstream &reader, std::ofstream &writer, char *read_buf, char *write_buf, size_t npts,
-                        size_t ndims)
+void block_convert_byte(std::ifstream &reader, std::ofstream &writer, uint8_t *read_buf, uint8_t *write_buf,
+                        size_t npts, size_t ndims)
 {
-    reader.read((char *)read_buf, npts * (ndims * sizeof(char) + sizeof(unsigned)));
+    reader.read((char *)read_buf, npts * (ndims * sizeof(uint8_t) + sizeof(unsigned)));
     for (size_t i = 0; i < npts; i++)
     {
         memcpy(write_buf + i * ndims, (read_buf + i * (ndims + sizeof(unsigned))) + sizeof(unsigned),
-               ndims * sizeof(char));
+               ndims * sizeof(uint8_t));
     }
-    writer.write((char *)write_buf, npts * ndims * sizeof(char));
+    writer.write((char *)write_buf, npts * ndims * sizeof(uint8_t));
 }
 
 int main(int argc, char **argv)
@@ -41,7 +41,7 @@ int main(int argc, char **argv)
 
     if (strcmp(argv[1], "uint8") == 0 || strcmp(argv[1], "int8") == 0)
     {
-        datasize = sizeof(char);
+        datasize = sizeof(uint8_t);
     }
     else if (strcmp(argv[1], "float") != 0)
     {
@@ -64,14 +64,14 @@ int main(int argc, char **argv)
     size_t nblks = ROUND_UP(npts, blk_size) / blk_size;
     std::cout << "# blks: " << nblks << std::endl;
     std::ofstream writer(argv[3], std::ios::binary);
-    int npts_s32 = (int)npts;
-    int ndims_s32 = (int)ndims;
-    writer.write((char *)&npts_s32, sizeof(int));
-    writer.write((char *)&ndims_s32, sizeof(int));
+    int32_t npts_s32 = (int32_t)npts;
+    int32_t ndims_s32 = (int32_t)ndims;
+    writer.write((char *)&npts_s32, sizeof(int32_t));
+    writer.write((char *)&ndims_s32, sizeof(int32_t));
 
     size_t chunknpts = std::min(npts, blk_size);
-    char *read_buf = new char[chunknpts * ((ndims * datasize) + sizeof(unsigned))];
-    char *write_buf = new char[chunknpts * ndims * datasize];
+    uint8_t *read_buf = new uint8_t[chunknpts * ((ndims * datasize) + sizeof(unsigned))];
+    uint8_t *write_buf = new uint8_t[chunknpts * ndims * datasize];
 
     for (size_t i = 0; i < nblks; i++)
     {

@@ -43,12 +43,12 @@ class FixedChunkPQTable
     // assumes pre-processed query
     void populate_chunk_distances(const float *query_vec, float *dist_vec);
 
-    float l2_distance(const float *query_vec, char *base_vec);
+    float l2_distance(const float *query_vec, uint8_t *base_vec);
 
-    float inner_product(const float *query_vec, char *base_vec);
+    float inner_product(const float *query_vec, uint8_t *base_vec);
 
     // assumes no rotation is involved
-    void inflate_vector(char *base_vec, float *out_vec);
+    void inflate_vector(uint8_t *base_vec, float *out_vec);
 
     void populate_chunk_inner_products(const float *query_vec, float *dist_vec);
 };
@@ -57,14 +57,14 @@ template <typename T> struct PQScratch
 {
     float *aligned_pqtable_dist_scratch = nullptr; // MUST BE AT LEAST [256 * NCHUNKS]
     float *aligned_dist_scratch = nullptr;         // MUST BE AT LEAST diskann MAX_DEGREE
-    char *aligned_pq_coord_scratch = nullptr;      // MUST BE AT LEAST  [N_CHUNKS * MAX_DEGREE]
+    uint8_t *aligned_pq_coord_scratch = nullptr;   // MUST BE AT LEAST  [N_CHUNKS * MAX_DEGREE]
     float *rotated_query = nullptr;
     float *aligned_query_float = nullptr;
 
     PQScratch(size_t graph_degree, size_t aligned_dim)
     {
         diskann::alloc_aligned((void **)&aligned_pq_coord_scratch,
-                               (size_t)graph_degree * (size_t)MAX_PQ_CHUNKS * sizeof(char), 256);
+                               (size_t)graph_degree * (size_t)MAX_PQ_CHUNKS * sizeof(uint8_t), 256);
         diskann::alloc_aligned((void **)&aligned_pqtable_dist_scratch, 256 * (size_t)MAX_PQ_CHUNKS * sizeof(float),
                                256);
         diskann::alloc_aligned((void **)&aligned_dist_scratch, (size_t)graph_degree * sizeof(float), 256);
@@ -87,15 +87,16 @@ template <typename T> struct PQScratch
     }
 };
 
-void aggregate_coords(const std::vector<unsigned> &ids, const char *all_coords, const size_t ndims, char *out);
+void aggregate_coords(const std::vector<unsigned> &ids, const uint8_t *all_coords, const size_t ndims, uint8_t *out);
 
-void pq_dist_lookup(const char *pq_ids, const size_t n_pts, const size_t pq_nchunks, const float *pq_dists,
+void pq_dist_lookup(const uint8_t *pq_ids, const size_t n_pts, const size_t pq_nchunks, const float *pq_dists,
                     std::vector<float> &dists_out);
 
 // Need to replace calls to these with calls to vector& based functions above
-void aggregate_coords(const unsigned *ids, const size_t n_ids, const char *all_coords, const size_t ndims, char *out);
+void aggregate_coords(const unsigned *ids, const size_t n_ids, const uint8_t *all_coords, const size_t ndims,
+                      uint8_t *out);
 
-void pq_dist_lookup(const char *pq_ids, const size_t n_pts, const size_t pq_nchunks, const float *pq_dists,
+void pq_dist_lookup(const uint8_t *pq_ids, const size_t n_pts, const size_t pq_nchunks, const float *pq_dists,
                     float *dists_out);
 
 DISKANN_DLLEXPORT int generate_pq_pivots(const float *const train_data, size_t num_train, unsigned dim,
