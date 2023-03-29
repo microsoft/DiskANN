@@ -104,7 +104,7 @@ float DistanceL2Int8::compare(const int8_t *a, const int8_t *b, uint32_t size) c
 #else
     int32_t result = 0;
 #pragma omp simd reduction(+ : result) aligned(a, b : 8)
-    for (_s32 i = 0; i < (_s32)size; i++)
+    for (int32_t i = 0; i < (int32_t)size; i++)
     {
         result += ((int32_t)((int16_t)a[i] - (int16_t)b[i])) * ((int32_t)((int16_t)a[i] - (int16_t)b[i]));
     }
