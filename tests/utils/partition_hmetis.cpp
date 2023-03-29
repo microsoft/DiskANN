@@ -125,13 +125,13 @@ int aux_main(const std::string &input_file,
     for (size_t i = 0; i < num_points; ++i) {
       size_t shard_id;
 	  hmetis >> shard_id;
-      if (shard_id < 1 || shard_id > definitely_no_more_shards_than_this) {
+      if (shard_id < 0 || shard_id >= definitely_no_more_shards_than_this) {
         diskann::cout << "Error: hmetis file contains invalid shard id"
 				  << std::endl;
 		return -1;
       }
       num_shards = std::max(num_shards, shard_id);
-	  shard_of_point.push_back(shard_id - 1); // metis partition IDs are 1-based!
+	  shard_of_point.push_back(shard_id); // metis partition IDs are 0-based!
     }
     std::vector<std::vector<uint32_t>> points_routed_to_shard(num_shards);
     for (size_t point_id = 0; point_id < num_points; ++point_id) {
