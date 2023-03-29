@@ -121,10 +121,11 @@ int aux_main(const std::string &input_file,
 	}
     size_t                num_shards = -1;
     std::vector<size_t> shard_of_point;
+    constexpr size_t      definitely_no_more_shards_than_this = 10'000;
     for (size_t i = 0; i < num_points; ++i) {
       size_t shard_id;
 	  hmetis >> shard_id;
-      if (shard_id < 1 || shard_id > num_shards) {
+      if (shard_id < 1 || shard_id > definitely_no_more_shards_than_this) {
         diskann::cout << "Error: hmetis file contains invalid shard id"
 				  << std::endl;
 		return -1;
