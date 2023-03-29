@@ -98,8 +98,9 @@ template <class T> struct DiskANNIndex
         return 0;
     }
 
-    void search(std::vector<T> &query, const uint64_t query_idx, const uint64_t dim, const uint64_t num_queries, const uint64_t knn,
-                const uint64_t l_search, const uint64_t beam_width, std::vector<unsigned> &ids, std::vector<float> &dists)
+    void search(std::vector<T> &query, const uint64_t query_idx, const uint64_t dim, const uint64_t num_queries,
+                const uint64_t knn, const uint64_t l_search, const uint64_t beam_width, std::vector<unsigned> &ids,
+                std::vector<float> &dists)
     {
         QueryStats stats;
         if (ids.size() < knn * num_queries)
@@ -115,8 +116,8 @@ template <class T> struct DiskANNIndex
     }
 
     void batch_search(std::vector<T> &queries, const uint64_t dim, const uint64_t num_queries, const uint64_t knn,
-                      const uint64_t l_search, const uint64_t beam_width, std::vector<unsigned> &ids, std::vector<float> &dists,
-                      const int num_threads)
+                      const uint64_t l_search, const uint64_t beam_width, std::vector<unsigned> &ids,
+                      std::vector<float> &dists, const int num_threads)
     {
         if (ids.size() < knn * num_queries)
         {
@@ -156,9 +157,9 @@ template <class T> struct DiskANNIndex
         return std::make_pair(ids, dists);
     }
 
-    auto batch_search_numpy_input(py::array_t<T, py::array::c_style | py::array::forcecast> &queries, const uint64_t dim,
-                                  const uint64_t num_queries, const uint64_t knn, const uint64_t l_search, const uint64_t beam_width,
-                                  const int num_threads)
+    auto batch_search_numpy_input(py::array_t<T, py::array::c_style | py::array::forcecast> &queries,
+                                  const uint64_t dim, const uint64_t num_queries, const uint64_t knn,
+                                  const uint64_t l_search, const uint64_t beam_width, const int num_threads)
     {
         py::array_t<unsigned> ids({num_queries, knn});
         py::array_t<float> dists({num_queries, knn});
@@ -193,8 +194,8 @@ template <class T> struct DiskANNIndex
 
     auto batch_range_search_numpy_input(py::array_t<T, py::array::c_style | py::array::forcecast> &queries,
                                         const uint64_t dim, const uint64_t num_queries, const double range,
-                                        const uint64_t min_list_size, const uint64_t max_list_size, const uint64_t beam_width,
-                                        const int num_threads)
+                                        const uint64_t min_list_size, const uint64_t max_list_size,
+                                        const uint64_t beam_width, const int num_threads)
     {
         py::array_t<unsigned> offsets(num_queries + 1);
 
@@ -210,7 +211,7 @@ template <class T> struct DiskANNIndex
         for (int64_t i = 0; i < num_queries; i++)
         {
             uint32_t res_count = pq_flash_index->range_search(queries.data(i), range, min_list_size, max_list_size,
-                                                          u64_ids[i], dists[i], beam_width, stats + i);
+                                                              u64_ids[i], dists[i], beam_width, stats + i);
             offsets_mutable(i + 1) = res_count;
         }
 

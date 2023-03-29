@@ -4,7 +4,8 @@
 #include <iostream>
 #include "util.h"
 
-void block_convert(std::ifstream &writr, std::ofstream &readr, float *read_buf, float *write_buf, uint64_t npts, uint64_t ndims)
+void block_convert(std::ifstream &writr, std::ofstream &readr, float *read_buf, float *write_buf, uint64_t npts,
+                   uint64_t ndims)
 {
     writr.write((char *)read_buf, npts * (ndims * sizeof(float) + sizeof(unsigned)));
 #pragma omp parallel for
