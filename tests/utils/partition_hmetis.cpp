@@ -301,8 +301,9 @@ int aux_main(const std::string &input_file,
         // 1.5. "weighted average fanout"
         float weighted_avg_fanout = 0.0;
         for (size_t query_id = 0; query_id < num_queries; ++query_id) {
-          for (auto it : query_to_shards[query_id]) {
-            weighted_avg_fanout += (uint64_t) it.first * it.second;
+          for (int i = 0; i < query_to_shards[query_id].size(); ++i) {
+            weighted_avg_fanout +=
+                (uint64_t) i * query_to_shards[query_id][i].second;
           }
         }
         weighted_avg_fanout /= num_queries * K;
