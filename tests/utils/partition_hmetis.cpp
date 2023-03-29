@@ -190,11 +190,6 @@ int aux_main(const std::string &input_file,
             size_t gt_shard_id = shard_of_point[gt_point_id];
             shard_to_count[gt_shard_id]++;
           }
-          /* query_to_gt_shards.emplace_back();
-          for (auto it : shard_to_count) {
-            query_to_gt_shards[query_id].push_back(
-                std::make_pair(it.first, it.second));
-          }*/
           query_to_gt_shards.emplace_back(shard_to_count.begin(),
                                           shard_to_count.end());
 
@@ -208,7 +203,7 @@ int aux_main(const std::string &input_file,
         }
 
         diskann::cout
-            << "Statistics on fanout (as computed using ground truth):"
+            << "\nStatistics on fanout (as computed using ground truth):"
             << std::endl;
         // 1. average fanout
         float avg_fanout = 0.0;
@@ -217,6 +212,18 @@ int aux_main(const std::string &input_file,
         }
         avg_fanout /= num_queries;
         diskann::cout << "Average fanout: " << avg_fanout << std::endl
+                      << std::endl;
+
+        // 1.5. "weighted average fanout"
+        float weighted_avg_fanout = 0.0;
+        for (size_t query_id = 0; query_id < num_queries; ++query_id) {
+          for (auto it : query_to_gt_shards[query_id]) {
+            weighted_avg_fanout += (uint64_t) it.first * it.second;
+          }
+        }
+        weighted_avg_fanout /= num_queries * K;
+        diskann::cout << "\"Weighted average\" fanout: " << weighted_avg_fanout
+                      << std::endl
                       << std::endl;
 
         // 2. histogram of fanouts
