@@ -98,6 +98,7 @@ namespace diskann {
   DISKANN_DLLEXPORT int build_disk_index(const char     *dataFilePath,
                                          const char     *indexFilePath,
                                          const char     *indexBuildParameters,
+                                         const char     *codebookPath,
                                          diskann::Metric _compareMetric,
                                          bool            use_opq = false);
 

@@ -10,7 +10,7 @@
 #define MAX_OPQ_ITERS 20
 #define NUM_KMEANS_REPS_PQ 12
 #define MAX_PQ_TRAINING_SET_SIZE 256000
-#define MAX_PQ_CHUNKS 256
+#define MAX_PQ_CHUNKS 384
 
 namespace diskann {
   class FixedChunkPQTable {
@@ -139,5 +139,6 @@ namespace diskann {
                                const std::string     pq_compressed_vectors_path,
                                const diskann::Metric compareMetric,
                                const double p_val, const size_t num_pq_chunks,
-                               const bool use_opq);
+                               const bool use_opq,
+                               const std::string codebook_path);
 }  // namespace diskann

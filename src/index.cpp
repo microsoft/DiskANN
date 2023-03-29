@@ -1419,7 +1419,7 @@ namespace diskann {
           std::string(filename) + suffix + "_compressed.bin";
       generate_quantized_data<T>(std::string(filename), pq_pivots_file,
                                  pq_compressed_file, _dist_metric, p_val,
-                                 _num_pq_chunks, _use_opq);
+                                 _num_pq_chunks, _use_opq, "");
 
       copy_aligned_data_from_file<_u8>(pq_compressed_file.c_str(), _pq_data,
                                        file_num_points, _num_pq_chunks,

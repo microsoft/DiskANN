@@ -458,7 +458,7 @@ namespace diskann {
     std::string merged_index_prefix = mem_index_path + "_tempFiles";
 
     Timer timer;
-    int         num_parts =
+    int   num_parts =
         partition_with_ram_budget<T>(base_file, sampling_rate, ram_budget,
                                      2 * R / 3, merged_index_prefix, 2);
     diskann::cout << timer.elapsed_seconds_for_step("partitioning data")
@@ -500,13 +500,16 @@ namespace diskann {
       _pvamanaIndex->save(shard_index_file.c_str());
       std::remove(shard_base_file.c_str());
     }
-    diskann::cout << timer.elapsed_seconds_for_step("building indices on shards") << std::endl;
+    diskann::cout << timer.elapsed_seconds_for_step(
+                         "building indices on shards")
+                  << std::endl;
 
     timer.reset();
     diskann::merge_shards(merged_index_prefix + "_subshard-", "_mem.index",
                           merged_index_prefix + "_subshard-", "_ids_uint32.bin",
                           num_parts, R, mem_index_path, medoids_file);
-   diskann::cout << timer.elapsed_seconds_for_step("merging indices") << std::endl;
+    diskann::cout << timer.elapsed_seconds_for_step("merging indices")
+                  << std::endl;
 
     // delete tempFiles
     for (int p = 0; p < num_parts; p++) {
@@ -801,8 +804,9 @@ namespace diskann {
 
   template<typename T>
   int build_disk_index(const char *dataFilePath, const char *indexFilePath,
-                       const char     *indexBuildParameters,
-                       diskann::Metric compareMetric, bool use_opq) {
+                       const char *indexBuildParameters,
+                       const char *codebookPath, diskann::Metric compareMetric,
+                       bool use_opq) {
     std::stringstream parser;
     parser << std::string(indexBuildParameters);
     std::string              cur_param;
@@ -810,7 +814,7 @@ namespace diskann {
     while (parser >> cur_param) {
       param_list.push_back(cur_param);
     }
-    if (param_list.size() < 5 || param_list.size() > 8) {
+    if (param_list.size() < 5 || param_list.size() > 9) {
       diskann::cout
           << "Correct usage of parameters is R (max degree)\n"
              "L (indexing list size, better if >= R)\n"
@@ -822,7 +826,8 @@ namespace diskann {
              "reorder (set true to include full precision in data file"
              ": optional paramter, use only when using disk PQ\n"
              "build_PQ_byte (number of PQ bytes for inde build; set 0 to use "
-             "full precision vectors)"
+             "full precision vectors)\n"
+             "QD Quantized Dimension"
           << std::endl;
       return -1;
     }
@@ -857,16 +862,18 @@ namespace diskann {
       }
     }
 
-    if (param_list.size() == 8) {
+    if (param_list.size() >= 8) {
       build_pq_bytes = atoi(param_list[7].c_str());
     }
 
     std::string base_file(dataFilePath);
     std::string data_file_to_use = base_file;
     std::string index_prefix_path(indexFilePath);
-    std::string pq_pivots_path = index_prefix_path + "_pq_pivots.bin";
-    std::string pq_compressed_vectors_path =
-        index_prefix_path + "_pq_compressed.bin";
+    std::string pq_pivots_path_base = codebookPath;
+    std::string pq_pivots_path = pq_pivots_path_base.empty()
+                                     ? index_prefix_path + "_pq_pivots.bin"
+                                     : pq_pivots_path_base + "_pq_pivots.bin";
+    std::string pq_compressed_vectors_path = index_prefix_path + "_pq_compressed.bin";
     std::string mem_index_path = index_prefix_path + "_mem.index";
     std::string disk_index_path = index_prefix_path + "_disk.index";
     std::string medoids_path = disk_index_path + "_medoids.bin";
@@ -950,13 +957,19 @@ namespace diskann {
     num_pq_chunks =
         num_pq_chunks > MAX_PQ_CHUNKS ? MAX_PQ_CHUNKS : num_pq_chunks;
 
+    if (param_list.size() >= 9 && atoi(param_list[8].c_str()) <= MAX_PQ_CHUNKS &&
+        atoi(param_list[8].c_str()) > 0) {
+      num_pq_chunks = atoi(param_list[8].c_str());
+    }
+
     diskann::cout << "Compressing " << dim << "-dimensional data into "
                   << num_pq_chunks << " bytes per vector." << std::endl;
 
     generate_quantized_data<T>(data_file_to_use, pq_pivots_path,
                                pq_compressed_vectors_path, compareMetric, p_val,
-                               num_pq_chunks, use_opq);
-    diskann::cout << timer.elapsed_seconds_for_step("generating quantized data") << std::endl;
+                               num_pq_chunks, use_opq, codebookPath);
+    diskann::cout << timer.elapsed_seconds_for_step("generating quantized data")
+                  << std::endl;
 
 // Gopal. Splitting diskann_dll into separate DLLs for search and build.
 // This code should only be available in the "build" DLL.
@@ -1059,16 +1072,16 @@ namespace diskann {
 
   template DISKANN_DLLEXPORT int build_disk_index<int8_t>(
       const char *dataFilePath, const char *indexFilePath,
-      const char *indexBuildParameters, diskann::Metric compareMetric,
-      bool use_opq);
+      const char *indexBuildParameters, const char *codebookPath,
+      diskann::Metric compareMetric, bool use_opq);
   template DISKANN_DLLEXPORT int build_disk_index<uint8_t>(
       const char *dataFilePath, const char *indexFilePath,
-      const char *indexBuildParameters, diskann::Metric compareMetric,
-      bool use_opq);
+      const char *indexBuildParameters, const char *codebookPath,
+      diskann::Metric compareMetric, bool use_opq);
   template DISKANN_DLLEXPORT int build_disk_index<float>(
       const char *dataFilePath, const char *indexFilePath,
-      const char *indexBuildParameters, diskann::Metric compareMetric,
-      bool use_opq);
+      const char *indexBuildParameters, const char *codebookPath,
+      diskann::Metric compareMetric, bool use_opq);
 
   template DISKANN_DLLEXPORT int build_merged_vamana_index<int8_t>(
       std::string base_file, diskann::Metric compareMetric, unsigned L,

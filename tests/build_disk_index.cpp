@@ -13,8 +13,8 @@
 namespace po = boost::program_options;
 
 int main(int argc, char** argv) {
-  std::string data_type, dist_fn, data_path, index_path_prefix;
-  unsigned    num_threads, R, L, disk_PQ, build_PQ;
+  std::string data_type, dist_fn, data_path, index_path_prefix, codebook_prefix;
+  unsigned    num_threads, R, L, disk_PQ, build_PQ, QD;
   float       B, M;
   bool        append_reorder_data = false;
   bool        use_opq = false;
@@ -49,6 +49,13 @@ int main(int argc, char** argv) {
         po::value<uint32_t>(&num_threads)->default_value(omp_get_num_procs()),
         "Number of threads used for building index (defaults to "
         "omp_get_num_procs())");
+    desc.add_options()("QD",
+                       po::value<uint32_t>(&QD)->default_value(0),
+                       " Quantized Dimension for compression");
+    desc.add_options()(
+        "codebook_prefix",
+        po::value<std::string>(&codebook_prefix)->default_value(""),
+        "Path prefix for pre-trained codebook");
     desc.add_options()("PQ_disk_bytes",
                        po::value<uint32_t>(&disk_PQ)->default_value(0),
                        "Number of bytes to which vectors should be compressed "
@@ -63,6 +70,7 @@ int main(int argc, char** argv) {
 
     desc.add_options()("use_opq", po::bool_switch()->default_value(false),
                        "Use Optimized Product Quantization (OPQ).");
+
 
     po::variables_map vm;
     po::store(po::parse_command_line(argc, argv, desc), vm);
@@ -79,6 +87,7 @@ int main(int argc, char** argv) {
     std::cerr << ex.what() << '\n';
     return -1;
   }
+  codebook_prefix = codebook_prefix == "0"? "" : codebook_prefix;
 
   diskann::Metric metric;
   if (dist_fn == std::string("l2"))
@@ -113,21 +122,22 @@ int main(int argc, char** argv) {
                        std::string(std::to_string(num_threads)) + " " +
                        std::string(std::to_string(disk_PQ)) + " " +
                        std::string(std::to_string(append_reorder_data)) + " " +
-                       std::string(std::to_string(build_PQ));
+                       std::string(std::to_string(build_PQ)) + " " +
+                       std::string(std::to_string(QD));
 
   try {
     if (data_type == std::string("int8"))
-      return diskann::build_disk_index<int8_t>(data_path.c_str(),
-                                               index_path_prefix.c_str(),
-                                               params.c_str(), metric, use_opq);
+      return diskann::build_disk_index<int8_t>(
+          data_path.c_str(), index_path_prefix.c_str(), params.c_str(),
+          codebook_prefix.c_str(), metric, use_opq);
     else if (data_type == std::string("uint8"))
       return diskann::build_disk_index<uint8_t>(
-          data_path.c_str(), index_path_prefix.c_str(), params.c_str(), metric,
-          use_opq);
+          data_path.c_str(), index_path_prefix.c_str(), params.c_str(),
+          codebook_prefix.c_str(), metric, use_opq);
     else if (data_type == std::string("float"))
-      return diskann::build_disk_index<float>(data_path.c_str(),
-                                              index_path_prefix.c_str(),
-                                              params.c_str(), metric, use_opq);
+      return diskann::build_disk_index<float>(
+          data_path.c_str(), index_path_prefix.c_str(), params.c_str(),
+          codebook_prefix.c_str(), metric, use_opq);
     else {
       diskann::cerr << "Error. Unsupported data type" << std::endl;
       return -1;
