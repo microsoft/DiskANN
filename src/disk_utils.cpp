@@ -1061,7 +1061,7 @@ int build_disk_index(const char *dataFilePath, const char *indexFilePath, const 
                          ": optional paramter, use only when using disk PQ\n"
                          "build_PQ_byte (number of PQ bytes for inde build; set 0 to use "
                          "full precision vectors)\n"
-                         "QD Quantized Dimension to overwrite the derived dim from B"
+                         "QD Quantized Dimension to overwrite the derived dim from B "
                       << std::endl;
         return -1;
     }
