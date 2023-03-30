@@ -32,7 +32,57 @@ void compute_centroid(const size_t dim, const T* points,
   }
 }
 
-template <typename T>
+template<typename T>
+void compute_geomedian(const size_t dim, const T* points,
+                      const std::vector<uint32_t>& point_ids, float* geomedian) {
+  if (point_ids.empty()) {
+    for (int i = 0; i < dim; ++i) {
+      geomedian[i] = 1e15;  // give it some stupid geomedian
+    }
+  } else if (point_ids.size() == 1) {
+    for (int i = 0; i < dim; ++i) {
+	  geomedian[i] = points[point_ids[0] * dim + i];
+	}
+  } else { // at least two points
+    // Weiszfeld algorithm
+    std::unique_ptr<float[]> second_vector = std::make_unique<float[]>(dim);
+    float*                   A[2] = {geomedian, second_vector.get()};
+    constexpr int            iterations = 100; // must be even
+
+    // initialization
+    for (int j = 0; j < 2; ++j) {
+      for (int i = 0; i < dim; ++i) {
+        A[j][i] =
+            (points[point_ids[0] * dim + i] + points[point_ids[1] * dim + i]) /
+            2;
+      } 
+    }
+
+    for (int iteration = 0; iteration < iterations; ++iteration) {
+      std::vector<float> numerator(dim, 0.0);
+      float              denominator = 0.0;
+      for (const uint32_t point_id : point_ids) {
+		float dist = 0.0;
+        for (int i = 0; i < dim; ++i) {
+		  dist += (points[point_id * dim + i] - A[iteration % 2][i]) *
+				  (points[point_id * dim + i] - A[iteration % 2][i]);
+		}
+		dist = sqrt(dist);
+        if (dist > 1e-9) {
+          for (int i = 0; i < dim; ++i) {
+			numerator[i] += points[point_id * dim + i] / dist;
+		  }
+		  denominator += 1.0 / dist;
+		}
+	  }
+      for (int i = 0; i < dim; ++i) {
+        A[1 - iteration % 2][i] = numerator[i] / denominator;
+      }
+    }
+  }
+}
+
+template<typename T>
 int write_shards_to_disk(const std::string& output_file_prefix,
                          const bool writing_queries, T* points, const size_t dim,
                          const std::vector<std::vector<uint32_t>>& points_routed_to_shard) {
@@ -189,19 +239,28 @@ int aux_main(const std::string &input_file,
         return -1;
       }
 
-      // compute centroids for each shard
+      // compute centroids/geomedians for each shard
       std::unique_ptr<float[]> centroids =
           std::make_unique<float[]>(num_shards * dim);
       for (size_t shard_id = 0; shard_id < num_shards; ++shard_id) {
-        compute_centroid<T>(dim, points.get(), points_routed_to_shard[shard_id],
-                         centroids.get() + shard_id * dim);
+        if (mode == "geomedian") {
+          compute_geomedian<T>(dim, points.get(),
+                               points_routed_to_shard[shard_id],
+                               centroids.get() + shard_id * dim);
+          diskann::cout << "Saving geomedians (as _centroids.bin)" << std::endl;
+        } else {
+          // mode can be from_ground_truth or centroid; in both cases we save centroids
+          compute_centroid<T>(dim, points.get(),
+                              points_routed_to_shard[shard_id],
+                              centroids.get() + shard_id * dim);
+        }
+        diskann::cout << "Saving centroids" << std::endl;
       }
-      diskann::cout << "Saving centroids" << std::endl;
       const std::string centroids_filename =
           output_file_prefix + "_centroids.bin";
       diskann::save_bin<float>(centroids_filename, centroids.get(), num_shards,
                                dim);
-      // done computing centroids
+      // done computing centroids/geomedians
 
       std::vector<std::unordered_map<size_t, size_t>> shard_to_count_of_GT_pts(
           num_queries);
@@ -255,7 +314,7 @@ int aux_main(const std::string &input_file,
         diskann::cout << "Computed the query -> shard assignment using ground "
                          "truth (optimistically)"
                       << std::endl;
-      } else if (mode == "centroids") {
+      } else if (mode == "centroids" || mode == "geomedian") {
         std::unique_ptr<float[]> queries_float =
             std::make_unique<float[]>(num_queries * dim);
         diskann::convert_types<T, float>(queries.get(), queries_float.get(),
@@ -369,7 +428,7 @@ int aux_main(const std::string &input_file,
             total_recalled_points += coverage_of_query[query_id];
           }
           diskann::cout << std::setw(2) << fanout << " -- "
-                        << std::setprecision(3) << std::fixed
+                        << std::setprecision(2) << std::fixed
                         << 100.0 * total_recalled_points / (K * num_queries)
                         << "%\n";
         }
