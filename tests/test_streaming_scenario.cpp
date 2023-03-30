@@ -114,8 +114,8 @@ void insert_next_batch(diskann::Index<T, TagT, LabelT> &index, size_t start, siz
 }
 
 template <typename T, typename TagT, typename LabelT>
-void delete_and_consolidate(diskann::Index<T, TagT, LabelT> &index, diskann::IndexWriteParameters &delete_params, size_t start,
-                            size_t end)
+void delete_and_consolidate(diskann::Index<T, TagT, LabelT> &index, diskann::IndexWriteParameters &delete_params,
+                            size_t start, size_t end)
 {
     try
     {
@@ -155,8 +155,7 @@ void delete_and_consolidate(diskann::Index<T, TagT, LabelT> &index, diskann::Ind
                   << "deletes processed: " << report._slots_released << std::endl
                   << "latest delete size: " << report._delete_set_size << std::endl
                   << "Deletion rate: " << deletion_rate << "/sec   "
-                  << "Deletion rate: " << deletion_rate / delete_params.num_threads << "/thread/sec   "
-                  << std::endl;
+                  << "Deletion rate: " << deletion_rate / delete_params.num_threads << "/thread/sec   " << std::endl;
     }
     catch (std::system_error &e)
     {
@@ -175,24 +174,23 @@ void build_incremental_index(const std::string &data_path, const unsigned L, con
     const bool saturate_graph = false;
 
     diskann::IndexWriteParameters params = diskann::IndexWriteParametersBuilder(L, R)
-                                            .with_max_occlusion_size(C)
-                                            .with_alpha(alpha)
-                                            .with_saturate_graph(saturate_graph)
-                                            .with_max_occlusion_size(1)
-                                            .with_max_occlusion_size(insert_threads)
-                                            .with_max_occlusion_size(num_start_pts)
-                                            .build();
+                                               .with_max_occlusion_size(C)
+                                               .with_alpha(alpha)
+                                               .with_saturate_graph(saturate_graph)
+                                               .with_max_occlusion_size(1)
+                                               .with_max_occlusion_size(insert_threads)
+                                               .with_max_occlusion_size(num_start_pts)
+                                               .build();
 
     diskann::IndexReadParameters search_params = diskann::IndexReadParameters(L, insert_threads);
 
     diskann::IndexWriteParameters delete_params = diskann::IndexWriteParametersBuilder(L, R)
-                                                   .with_max_occlusion_size(C)
-                                                   .with_alpha(alpha)
-                                                   .with_saturate_graph(saturate_graph)
-                                                   .with_max_occlusion_size(1)
-                                                   .with_max_occlusion_size(consolidate_threads)
-                                                   .build();
-
+                                                      .with_max_occlusion_size(C)
+                                                      .with_alpha(alpha)
+                                                      .with_saturate_graph(saturate_graph)
+                                                      .with_max_occlusion_size(1)
+                                                      .with_max_occlusion_size(consolidate_threads)
+                                                      .build();
 
     size_t dim, aligned_dim;
     size_t num_points;

@@ -28,9 +28,9 @@ namespace diskann
 // (bin), and initialize max_points
 template <typename T, typename TagT, typename LabelT>
 Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_points, const bool dynamic_index,
-                              const IndexWriteParameters &indexParams, const IndexReadParameters &searchParams, const bool enable_tags,
-                              const bool concurrent_consolidate, const bool pq_dist_build, const size_t num_pq_chunks,
-                              const bool use_opq)
+                              const IndexWriteParameters &indexParams, const IndexReadParameters &searchParams,
+                              const bool enable_tags, const bool concurrent_consolidate, const bool pq_dist_build,
+                              const size_t num_pq_chunks, const bool use_opq)
     : Index(m, dim, max_points, dynamic_index, enable_tags, concurrent_consolidate, pq_dist_build, num_pq_chunks,
             use_opq, indexParams.num_frozen_points)
 {
@@ -1374,7 +1374,8 @@ void Index<T, TagT, LabelT>::inter_insert(unsigned n, std::vector<unsigned> &pru
     inter_insert(n, pruned_list, _indexingRange, scratch);
 }
 
-template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT>::link(IndexWriteParameters &parameters)
+template <typename T, typename TagT, typename LabelT>
+void Index<T, TagT, LabelT>::link(IndexWriteParameters &parameters)
 {
     unsigned num_threads = parameters.num_threads;
     if (num_threads != 0)
@@ -1495,7 +1496,8 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
 }
 
 template <typename T, typename TagT, typename LabelT>
-void Index<T, TagT, LabelT>::prune_all_neighbors(const uint32_t max_degree, const uint32_t max_occlusion_size, const float alpha)
+void Index<T, TagT, LabelT>::prune_all_neighbors(const uint32_t max_degree, const uint32_t max_occlusion_size,
+                                                 const float alpha)
 {
     const unsigned range = max_degree;
     const unsigned maxc = max_occlusion_size;
@@ -1694,8 +1696,8 @@ void Index<T, TagT, LabelT>::build(const T *data, const size_t num_points_to_loa
 }
 
 template <typename T, typename TagT, typename LabelT>
-void Index<T, TagT, LabelT>::build(const char *filename, const size_t num_points_to_load, IndexWriteParameters &parameters,
-                                   const std::vector<TagT> &tags)
+void Index<T, TagT, LabelT>::build(const char *filename, const size_t num_points_to_load,
+                                   IndexWriteParameters &parameters, const std::vector<TagT> &tags)
 {
     std::unique_lock<std::shared_timed_mutex> ul(_update_lock);
     if (num_points_to_load == 0)
@@ -1797,8 +1799,8 @@ void Index<T, TagT, LabelT>::build(const char *filename, const size_t num_points
 }
 
 template <typename T, typename TagT, typename LabelT>
-void Index<T, TagT, LabelT>::build(const char *filename, const size_t num_points_to_load, IndexWriteParameters &parameters,
-                                   const char *tag_filename)
+void Index<T, TagT, LabelT>::build(const char *filename, const size_t num_points_to_load,
+                                   IndexWriteParameters &parameters, const char *tag_filename)
 {
     std::vector<TagT> tags;
 
@@ -2400,8 +2402,7 @@ consolidation_report Index<T, TagT, LabelT>::consolidate_deletes(const IndexWrit
     const unsigned range = params.max_degree;
     const unsigned maxc = params.max_occlusion_size;
     const float alpha = params.alpha;
-    const unsigned num_threads =
-        params.num_threads == 0 ? omp_get_num_threads() : params.num_threads;
+    const unsigned num_threads = params.num_threads == 0 ? omp_get_num_threads() : params.num_threads;
 
     unsigned num_calls_to_process_delete = 0;
     diskann::Timer timer;

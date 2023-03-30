@@ -106,8 +106,8 @@ void insert_till_next_checkpoint(diskann::Index<T, TagT> &index, size_t start, s
 }
 
 template <typename T, typename TagT>
-void delete_from_beginning(diskann::Index<T, TagT> &index, diskann::IndexWriteParameters &delete_params, size_t points_to_skip,
-                           size_t points_to_delete_from_beginning)
+void delete_from_beginning(diskann::Index<T, TagT> &index, diskann::IndexWriteParameters &delete_params,
+                           size_t points_to_skip, size_t points_to_delete_from_beginning)
 {
     try
     {
@@ -125,8 +125,8 @@ void delete_from_beginning(diskann::Index<T, TagT> &index, diskann::IndexWritePa
                   << "deletes processed: " << report._slots_released << std::endl
                   << "latest delete size: " << report._delete_set_size << std::endl
                   << "rate: (" << points_to_delete_from_beginning / report._time << " points/second overall, "
-                  << points_to_delete_from_beginning / report._time / delete_params.num_threads
-                  << " per thread)" << std::endl;
+                  << points_to_delete_from_beginning / report._time / delete_params.num_threads << " per thread)"
+                  << std::endl;
     }
     catch (std::system_error &e)
     {
@@ -144,12 +144,12 @@ void build_incremental_index(const std::string &data_path, const unsigned L, con
 {
 
     diskann::IndexWriteParameters params = diskann::IndexWriteParametersBuilder(L, R)
-                                           .with_max_occlusion_size(500) // C = 500
-                                           .with_alpha(alpha)
-                                           .with_max_occlusion_size(1)
-                                           .with_max_occlusion_size(thread_count)
-                                           .with_max_occlusion_size(num_start_pts)
-                                           .build();
+                                               .with_max_occlusion_size(500) // C = 500
+                                               .with_alpha(alpha)
+                                               .with_max_occlusion_size(1)
+                                               .with_max_occlusion_size(thread_count)
+                                               .with_max_occlusion_size(num_start_pts)
+                                               .build();
 
     diskann::IndexReadParameters read_params(L, thread_count);
 
@@ -256,9 +256,8 @@ void build_incremental_index(const std::string &data_path, const unsigned L, con
                 end >= points_to_skip + points_to_delete_from_beginning)
             {
                 delete_launched = true;
-                diskann::IndexWriteParameters delete_params = diskann::IndexWriteParametersBuilder(params)
-                                                                  .with_num_threads(sub_threads)
-                                                                  .build();
+                diskann::IndexWriteParameters delete_params =
+                    diskann::IndexWriteParametersBuilder(params).with_num_threads(sub_threads).build();
 
                 delete_task = std::async(std::launch::async, [&]() {
                     delete_from_beginning(index, delete_params, points_to_skip, points_to_delete_from_beginning);
