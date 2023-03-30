@@ -265,14 +265,14 @@ int aux_main(const std::string &input_file,
         math_utils::compute_closest_centers(
             queries_float.get(), num_queries, dim, centroids.get(), num_shards,
             num_shards_to_order, closest_centroids_ivf.get());
-        query_to_shards.emplace_back();
         for (size_t query_id = 0; query_id < num_queries; ++query_id) {
-          for (int i = 0; i < num_shards; ++i) {
+          query_to_shards.emplace_back();
+          for (int i = 0; i < num_shards_to_order; ++i) {
             const size_t shard_id =
                 closest_centroids_ivf[query_id * num_shards_to_order + i];
             query_to_shards[query_id].emplace_back(
                 shard_id, shard_to_count_of_GT_pts[query_id][shard_id]);
-            // shard_to_count_of_GT_pts[query_id][shard_id] will become 0 if wasn't present
+            // shard_to_count_of_GT_pts[query_id][shard_id] will be(come) 0 if wasn't present
           }
         }
 
