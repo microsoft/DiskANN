@@ -35,7 +35,8 @@ int estimate_cluster_sizes(float *test_data_float, size_t num_test,
 template<typename T>
 int shard_data_into_clusters(const std::string data_file, float *pivots,
                              const size_t num_centers, const size_t dim,
-                             const size_t k_base, std::string prefix_path);
+                             const size_t k_base, std::string prefix_path,
+                             bool write_hmetis_file = false);
 
 template<typename T>
 int shard_data_into_clusters_only_ids(const std::string data_file,
@@ -51,7 +52,8 @@ int retrieve_shard_data_from_ids(const std::string data_file,
 template<typename T>
 int partition(const std::string data_file, const float sampling_rate,
               size_t num_centers, size_t max_k_means_reps,
-              const std::string prefix_path, size_t k_base);
+              const std::string prefix_path, size_t k_base,
+              bool write_hmetis_file = false);
 
 template<typename T>
 int partition_with_ram_budget(const std::string data_file,

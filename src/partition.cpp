@@ -228,7 +228,8 @@ int estimate_cluster_sizes(float *test_data_float, size_t num_test,
 template<typename T>
 int shard_data_into_clusters(const std::string data_file, float *pivots,
                              const size_t num_centers, const size_t dim,
-                             const size_t k_base, std::string prefix_path) {
+                             const size_t k_base, std::string prefix_path,
+                             bool write_hmetis_file) {
   _u64 read_blk_size = 64 * 1024 * 1024;
   //  _u64 write_blk_size = 64 * 1024 * 1024;
   // create cached reader + writer
@@ -242,6 +243,12 @@ int shard_data_into_clusters(const std::string data_file, float *pivots,
     diskann::cout << "Error. dimensions dont match for train set and base set"
                   << std::endl;
     return -1;
+  }
+
+  std::ofstream hmetis;
+  if (write_hmetis_file) {
+    std::string hmetis_filename = prefix_path + ".hmetis";
+	hmetis.open(hmetis_filename);
   }
 
   std::unique_ptr<size_t[]> shard_counts =
@@ -306,6 +313,9 @@ int shard_data_into_clusters(const std::string data_file, float *pivots,
         shard_idmap_writer[shard_id].write((char *) &original_point_map_id,
                                            sizeof(uint32_t));
         shard_counts[shard_id]++;
+        if (write_hmetis_file) {
+          hmetis << shard_id << "\n";
+        }
       }
     }
   }
@@ -498,7 +508,8 @@ int retrieve_shard_data_from_ids(const std::string data_file,
 template<typename T>
 int partition(const std::string data_file, const float sampling_rate,
               size_t num_parts, size_t max_k_means_reps,
-              const std::string prefix_path, size_t k_base) {
+              const std::string prefix_path, size_t k_base,
+              bool write_hmetis_file) {
   size_t train_dim;
   size_t num_train;
   float *train_data_float;
@@ -535,7 +546,8 @@ int partition(const std::string data_file, const float sampling_rate,
   // closest clusters.
 
   shard_data_into_clusters<T>(data_file, pivot_data, num_parts, train_dim,
-                              k_base, prefix_path);
+                              k_base, prefix_path, write_hmetis_file);
+
   delete[] pivot_data;
   delete[] train_data_float;
   return 0;
@@ -662,13 +674,16 @@ template void DISKANN_DLLEXPORT gen_random_slice<int8_t>(
 
 template DISKANN_DLLEXPORT int partition<int8_t>(
     const std::string data_file, const float sampling_rate, size_t num_centers,
-    size_t max_k_means_reps, const std::string prefix_path, size_t k_base);
+    size_t max_k_means_reps, const std::string prefix_path, size_t k_base,
+    bool write_hmetis_file);
 template DISKANN_DLLEXPORT int partition<uint8_t>(
     const std::string data_file, const float sampling_rate, size_t num_centers,
-    size_t max_k_means_reps, const std::string prefix_path, size_t k_base);
+    size_t max_k_means_reps, const std::string prefix_path, size_t k_base,
+    bool write_hmetis_file);
 template DISKANN_DLLEXPORT int partition<float>(
     const std::string data_file, const float sampling_rate, size_t num_centers,
-    size_t max_k_means_reps, const std::string prefix_path, size_t k_base);
+    size_t max_k_means_reps, const std::string prefix_path, size_t k_base,
+    bool write_hmetis_file);
 
 template DISKANN_DLLEXPORT int partition_with_ram_budget<int8_t>(
     const std::string data_file, const double sampling_rate, double ram_budget,
