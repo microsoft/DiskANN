@@ -114,7 +114,7 @@ void insert_next_batch(diskann::Index<T, TagT, LabelT> &index, size_t start, siz
 }
 
 template <typename T, typename TagT, typename LabelT>
-void delete_and_consolidate(diskann::Index<T, TagT, LabelT> &index, diskann::Parameters &delete_params, size_t start,
+void delete_and_consolidate(diskann::Index<T, TagT, LabelT> &index, diskann::IndexWriteParameters &delete_params, size_t start,
                             size_t end)
 {
     try
@@ -155,7 +155,7 @@ void delete_and_consolidate(diskann::Index<T, TagT, LabelT> &index, diskann::Par
                   << "deletes processed: " << report._slots_released << std::endl
                   << "latest delete size: " << report._delete_set_size << std::endl
                   << "Deletion rate: " << deletion_rate << "/sec   "
-                  << "Deletion rate: " << deletion_rate / delete_params.Get<unsigned>("num_threads") << "/thread/sec   "
+                  << "Deletion rate: " << deletion_rate / delete_params.num_threads << "/thread/sec   "
                   << std::endl;
     }
     catch (std::system_error &e)
@@ -174,24 +174,25 @@ void build_incremental_index(const std::string &data_path, const unsigned L, con
     const unsigned C = 500;
     const bool saturate_graph = false;
 
-    diskann::Parameters params;
-    params.Set<unsigned>("L", L);
-    params.Set<unsigned>("R", R);
-    params.Set<unsigned>("C", C);
-    params.Set<float>("alpha", alpha);
-    params.Set<bool>("saturate_graph", saturate_graph);
-    params.Set<unsigned>("num_rnds", 1);
-    params.Set<unsigned>("num_threads", insert_threads);
-    params.Set<unsigned>("Lf", 0);
-    params.Set<unsigned>("num_frozen_pts", num_start_pts);
-    diskann::Parameters delete_params;
-    delete_params.Set<unsigned>("L", L);
-    delete_params.Set<unsigned>("R", R);
-    delete_params.Set<unsigned>("C", C);
-    delete_params.Set<float>("alpha", alpha);
-    delete_params.Set<bool>("saturate_graph", saturate_graph);
-    delete_params.Set<unsigned>("num_rnds", 1);
-    delete_params.Set<unsigned>("num_threads", consolidate_threads);
+    diskann::IndexWriteParameters params = diskann::IndexWriteParametersBuilder(L, R)
+                                            .with_max_occlusion_size(C)
+                                            .with_alpha(alpha)
+                                            .with_saturate_graph(saturate_graph)
+                                            .with_max_occlusion_size(1)
+                                            .with_max_occlusion_size(insert_threads)
+                                            .with_max_occlusion_size(num_start_pts)
+                                            .build();
+
+    diskann::IndexReadParameters search_params = diskann::IndexReadParameters(L, insert_threads);
+
+    diskann::IndexWriteParameters delete_params = diskann::IndexWriteParametersBuilder(L, R)
+                                                   .with_max_occlusion_size(C)
+                                                   .with_alpha(alpha)
+                                                   .with_saturate_graph(saturate_graph)
+                                                   .with_max_occlusion_size(1)
+                                                   .with_max_occlusion_size(consolidate_threads)
+                                                   .build();
+
 
     size_t dim, aligned_dim;
     size_t num_points;
@@ -219,7 +220,7 @@ void build_incremental_index(const std::string &data_path, const unsigned L, con
     const bool enable_tags = true;
 
     diskann::Index<T, TagT, LabelT> index(diskann::L2, dim, active_window + 4 * consolidate_interval, true, params,
-                                          params, enable_tags, true);
+                                          search_params, enable_tags, true);
     index.set_start_points_at_random(static_cast<T>(start_point_norm));
     index.enable_delete();
 
@@ -256,8 +257,6 @@ void build_incremental_index(const std::string &data_path, const unsigned L, con
         {
             auto start_del = start - active_window - consolidate_interval;
             auto end_del = start - active_window;
-
-            params.Set<unsigned>("num_threads", consolidate_threads);
 
             delete_tasks.emplace_back(std::async(
                 std::launch::async, [&]() { delete_and_consolidate(index, delete_params, start_del, end_del); }));

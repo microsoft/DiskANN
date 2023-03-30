@@ -106,7 +106,7 @@ void insert_till_next_checkpoint(diskann::Index<T, TagT> &index, size_t start, s
 }
 
 template <typename T, typename TagT>
-void delete_from_beginning(diskann::Index<T, TagT> &index, diskann::Parameters &delete_params, size_t points_to_skip,
+void delete_from_beginning(diskann::Index<T, TagT> &index, diskann::IndexWriteParameters &delete_params, size_t points_to_skip,
                            size_t points_to_delete_from_beginning)
 {
     try
@@ -125,7 +125,7 @@ void delete_from_beginning(diskann::Index<T, TagT> &index, diskann::Parameters &
                   << "deletes processed: " << report._slots_released << std::endl
                   << "latest delete size: " << report._delete_set_size << std::endl
                   << "rate: (" << points_to_delete_from_beginning / report._time << " points/second overall, "
-                  << points_to_delete_from_beginning / report._time / delete_params.Get<unsigned>("num_threads")
+                  << points_to_delete_from_beginning / report._time / delete_params.num_threads
                   << " per thread)" << std::endl;
     }
     catch (std::system_error &e)
@@ -142,20 +142,16 @@ void build_incremental_index(const std::string &data_path, const unsigned L, con
                              const std::string &save_path, size_t points_to_delete_from_beginning,
                              size_t start_deletes_after, bool concurrent)
 {
-    const unsigned C = 500;
-    const bool saturate_graph = false;
 
-    diskann::Parameters params;
-    params.Set<unsigned>("L", L);
-    params.Set<unsigned>("R", R);
-    params.Set<unsigned>("C", C);
-    params.Set<float>("alpha", alpha);
-    params.Set<bool>("saturate_graph", saturate_graph);
-    params.Set<unsigned>("num_rnds", 1);
-    params.Set<unsigned>("num_threads", thread_count);
-    params.Set<int>("Lf", 0); // TODO: get this from params and default to some
-                              // value to make it backward compatible.
-    params.Set<unsigned>("num_frozen_pts", num_start_pts);
+    diskann::IndexWriteParameters params = diskann::IndexWriteParametersBuilder(L, R)
+                                           .with_max_occlusion_size(500) // C = 500
+                                           .with_alpha(alpha)
+                                           .with_max_occlusion_size(1)
+                                           .with_max_occlusion_size(thread_count)
+                                           .with_max_occlusion_size(num_start_pts)
+                                           .build();
+
+    diskann::IndexReadParameters read_params(L, thread_count);
 
     size_t dim, aligned_dim;
     size_t num_points;
@@ -183,7 +179,7 @@ void build_incremental_index(const std::string &data_path, const unsigned L, con
     using TagT = uint32_t;
     const bool enable_tags = true;
 
-    diskann::Index<T, TagT> index(diskann::L2, dim, max_points_to_insert, true, params, params, enable_tags,
+    diskann::Index<T, TagT> index(diskann::L2, dim, max_points_to_insert, true, params, read_params, enable_tags,
                                   concurrent);
 
     size_t current_point_offset = points_to_skip;
@@ -260,10 +256,12 @@ void build_incremental_index(const std::string &data_path, const unsigned L, con
                 end >= points_to_skip + points_to_delete_from_beginning)
             {
                 delete_launched = true;
-                params.Set<unsigned>("num_threads", sub_threads);
+                diskann::IndexWriteParameters delete_params = diskann::IndexWriteParametersBuilder(params)
+                                                                  .with_num_threads(sub_threads)
+                                                                  .build();
 
                 delete_task = std::async(std::launch::async, [&]() {
-                    delete_from_beginning(index, params, points_to_skip, points_to_delete_from_beginning);
+                    delete_from_beginning(index, delete_params, points_to_skip, points_to_delete_from_beginning);
                 });
             }
         }
