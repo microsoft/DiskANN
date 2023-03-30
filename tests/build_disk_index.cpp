@@ -12,13 +12,14 @@
 
 namespace po = boost::program_options;
 
-int main(int argc, char** argv) {
-  std::string data_type, dist_fn, data_path, index_path_prefix, codebook_prefix, label_file,
-      universal_label, label_type;
-  unsigned num_threads, R, L, disk_PQ, build_PQ, QD, Lf, filter_threshold;
-  float    B, M;
-  bool     append_reorder_data = false;
-  bool     use_opq = false;
+int main(int argc, char **argv)
+{
+    std::string data_type, dist_fn, data_path, index_path_prefix, codebook_prefix, label_file, universal_label,
+        label_type;
+    unsigned num_threads, R, L, disk_PQ, build_PQ, QD, Lf, filter_threshold;
+    float B, M;
+    bool append_reorder_data = false;
+    bool use_opq = false;
 
     po::options_description desc{"Arguments"};
     try
@@ -41,8 +42,7 @@ int main(int argc, char** argv) {
         desc.add_options()("num_threads,T", po::value<uint32_t>(&num_threads)->default_value(omp_get_num_procs()),
                            "Number of threads used for building index (defaults to "
                            "omp_get_num_procs())");
-        desc.add_options()("QD",po::value<uint32_t>(&QD)->default_value(0),
-                           " Quantized Dimension for compression");
+        desc.add_options()("QD", po::value<uint32_t>(&QD)->default_value(0), " Quantized Dimension for compression");
         desc.add_options()("codebook_prefix", po::value<std::string>(&codebook_prefix)->default_value(""),
                            "Path prefix for pre-trained codebook");
         desc.add_options()("PQ_disk_bytes", po::value<uint32_t>(&disk_PQ)->default_value(0),
@@ -74,22 +74,24 @@ int main(int argc, char** argv) {
                            "Storage type of Labels <uint/ushort>, default value is uint which "
                            "will consume memory 4 bytes per filter");
 
-
-    po::variables_map vm;
-    po::store(po::parse_command_line(argc, argv, desc), vm);
-    if (vm.count("help")) {
-      std::cout << desc;
-      return 0;
+        po::variables_map vm;
+        po::store(po::parse_command_line(argc, argv, desc), vm);
+        if (vm.count("help"))
+        {
+            std::cout << desc;
+            return 0;
+        }
+        po::notify(vm);
+        if (vm["append_reorder_data"].as<bool>())
+            append_reorder_data = true;
+        if (vm["use_opq"].as<bool>())
+            use_opq = true;
     }
-    po::notify(vm);
-    if (vm["append_reorder_data"].as<bool>())
-      append_reorder_data = true;
-    if (vm["use_opq"].as<bool>())
-      use_opq = true;
-  } catch (const std::exception& ex) {
-    std::cerr << ex.what() << '\n';
-    return -1;
-  }
+    catch (const std::exception &ex)
+    {
+        std::cerr << ex.what() << '\n';
+        return -1;
+    }
 
     bool use_filters = false;
     if (label_file != "")
@@ -129,54 +131,56 @@ int main(int argc, char** argv) {
     std::string params = std::string(std::to_string(R)) + " " + std::string(std::to_string(L)) + " " +
                          std::string(std::to_string(B)) + " " + std::string(std::to_string(M)) + " " +
                          std::string(std::to_string(num_threads)) + " " + std::string(std::to_string(disk_PQ)) + " " +
-                         std::string(std::to_string(append_reorder_data)) + " " + std::string(std::to_string(build_PQ)) + " " + 
-                         std::string(std::to_string(QD));
+                         std::string(std::to_string(append_reorder_data)) + " " +
+                         std::string(std::to_string(build_PQ)) + " " + std::string(std::to_string(QD));
 
-  try {
-    if (label_file != "" && label_type == "ushort") {
-    if (data_type == std::string("int8"))
-      return diskann::build_disk_index<int8_t>(
-          data_path.c_str(),index_path_prefix.c_str(),
-          params.c_str(), codebook_prefix.c_str(),metric, use_opq, use_filters, label_file,
-          universal_label, filter_threshold, Lf);
-      else if (data_type == std::string("uint8"))
-        return diskann::build_disk_index<uint8_t, uint16_t>(data_path.c_str(), index_path_prefix.c_str(), params.c_str(),
-                                                          codebook_prefix.c_str(),
-            metric, use_opq, use_filters, label_file, universal_label,
-            filter_threshold, Lf);
-      else if (data_type == std::string("float"))
-        return diskann::build_disk_index<float, uint16_t>(data_path.c_str(), index_path_prefix.c_str(), params.c_str(),
-                                                          codebook_prefix.c_str(),
-            metric, use_opq, use_filters, label_file, universal_label,
-            filter_threshold, Lf);
-      else {
-        diskann::cerr << "Error. Unsupported data type" << std::endl;
-        return -1;
-      }
-    } else {
-      if (data_type == std::string("int8"))
-        return diskann::build_disk_index<int8_t>(
-            data_path.c_str(), index_path_prefix.c_str(), 
-            params.c_str(), codebook_prefix.c_str(),metric, use_opq, use_filters, label_file, universal_label,
-            filter_threshold, Lf);
-      else if (data_type == std::string("uint8"))
-        return diskann::build_disk_index<uint8_t>(
-            data_path.c_str(), index_path_prefix.c_str(), 
-            params.c_str(), codebook_prefix.c_str(), metric, use_opq, use_filters, label_file, universal_label,
-            filter_threshold, Lf);
-      else if (data_type == std::string("float"))
-        return diskann::build_disk_index<float>(
-            data_path.c_str(), index_path_prefix.c_str(), 
-            params.c_str(), codebook_prefix.c_str(),metric, use_opq, use_filters, label_file, universal_label,
-            filter_threshold, Lf);
-      else {
-        diskann::cerr << "Error. Unsupported data type" << std::endl;
-        return -1;
-      }
+    try
+    {
+        if (label_file != "" && label_type == "ushort")
+        {
+            if (data_type == std::string("int8"))
+                return diskann::build_disk_index<int8_t>(data_path.c_str(), index_path_prefix.c_str(), params.c_str(),
+                                                         codebook_prefix.c_str(), metric, use_opq, use_filters,
+                                                         label_file, universal_label, filter_threshold, Lf);
+            else if (data_type == std::string("uint8"))
+                return diskann::build_disk_index<uint8_t, uint16_t>(
+                    data_path.c_str(), index_path_prefix.c_str(), params.c_str(), codebook_prefix.c_str(), metric,
+                    use_opq, use_filters, label_file, universal_label, filter_threshold, Lf);
+            else if (data_type == std::string("float"))
+                return diskann::build_disk_index<float, uint16_t>(
+                    data_path.c_str(), index_path_prefix.c_str(), params.c_str(), codebook_prefix.c_str(), metric,
+                    use_opq, use_filters, label_file, universal_label, filter_threshold, Lf);
+            else
+            {
+                diskann::cerr << "Error. Unsupported data type" << std::endl;
+                return -1;
+            }
+        }
+        else
+        {
+            if (data_type == std::string("int8"))
+                return diskann::build_disk_index<int8_t>(data_path.c_str(), index_path_prefix.c_str(), params.c_str(),
+                                                         codebook_prefix.c_str(), metric, use_opq, use_filters,
+                                                         label_file, universal_label, filter_threshold, Lf);
+            else if (data_type == std::string("uint8"))
+                return diskann::build_disk_index<uint8_t>(data_path.c_str(), index_path_prefix.c_str(), params.c_str(),
+                                                          codebook_prefix.c_str(), metric, use_opq, use_filters,
+                                                          label_file, universal_label, filter_threshold, Lf);
+            else if (data_type == std::string("float"))
+                return diskann::build_disk_index<float>(data_path.c_str(), index_path_prefix.c_str(), params.c_str(),
+                                                        codebook_prefix.c_str(), metric, use_opq, use_filters,
+                                                        label_file, universal_label, filter_threshold, Lf);
+            else
+            {
+                diskann::cerr << "Error. Unsupported data type" << std::endl;
+                return -1;
+            }
+        }
     }
-  } catch (const std::exception& e) {
-    std::cout << std::string(e.what()) << std::endl;
-    diskann::cerr << "Index build failed." << std::endl;
-    return -1;
-  }
+    catch (const std::exception &e)
+    {
+        std::cout << std::string(e.what()) << std::endl;
+        diskann::cerr << "Index build failed." << std::endl;
+        return -1;
+    }
 }
