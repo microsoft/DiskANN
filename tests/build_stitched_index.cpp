@@ -51,8 +51,8 @@ inline size_t random(size_t range_from, size_t range_to)
  * Arguments are merely the inputs from the command line.
  */
 void handle_args(int argc, char **argv, std::string &data_type, path &input_data_path, path &final_index_path_prefix,
-                 path &label_data_path, std::string &universal_label, unsigned &num_threads, unsigned &R, unsigned &L,
-                 unsigned &stitched_R, float &alpha)
+                 path &label_data_path, std::string &universal_label, uint32_t &num_threads, uint32_t &R, uint32_t &L,
+                 uint32_t &stitched_R, float &alpha)
 {
     po::options_description desc{"Arguments"};
     try
@@ -265,9 +265,9 @@ stitch_indices_return_values stitch_label_indices(
  */
 template <typename T>
 void prune_and_save(path final_index_path_prefix, path full_index_path_prefix, path input_data_path,
-                    std::vector<std::vector<uint32_t>> stitched_graph, unsigned stitched_R,
+                    std::vector<std::vector<uint32_t>> stitched_graph, uint32_t stitched_R,
                     tsl::robin_map<std::string, uint32_t> label_entry_points, std::string universal_label,
-                    path label_data_path, unsigned num_threads)
+                    path label_data_path, uint32_t num_threads)
 {
     size_t dimension, number_of_label_points;
     auto diskann_cout_buffer = diskann::cout.rdbuf(nullptr);
@@ -281,8 +281,8 @@ void prune_and_save(path final_index_path_prefix, path full_index_path_prefix, p
     index.load(full_index_path_prefix.c_str(), num_threads, 1);
 
     diskann::Parameters paras;
-    paras.Set<unsigned>("R", stitched_R);
-    paras.Set<unsigned>("C", 750); // maximum candidate set size during pruning procedure
+    paras.Set<uint32_t>("R", stitched_R);
+    paras.Set<uint32_t>("C", 750); // maximum candidate set size during pruning procedure
     paras.Set<float>("alpha", 1.2);
     paras.Set<bool>("saturate_graph", 1);
     std::cout << "parsing labels" << std::endl;
@@ -327,7 +327,7 @@ int main(int argc, char **argv)
     std::string data_type;
     path input_data_path, final_index_path_prefix, label_data_path;
     std::string universal_label;
-    unsigned num_threads, R, L, stitched_R;
+    uint32_t num_threads, R, L, stitched_R;
     float alpha;
 
     auto index_timer = std::chrono::high_resolution_clock::now();
