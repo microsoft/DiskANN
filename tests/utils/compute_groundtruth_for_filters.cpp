@@ -216,7 +216,7 @@ void exact_knn(const size_t dim, const size_t k,
             maxPQIFCS point_dist;
             for (uint64_t p = 0; p < k; p++)
                 point_dist.emplace(p, dist_matrix[(ptrdiff_t)p + (ptrdiff_t)(q - q_b) * (ptrdiff_t)npoints]);
-            for (uint64_t p = k; p < npoints; p++)
+            for (size_t p = k; p < npoints; p++)
             {
                 if (point_dist.top().second > dist_matrix[(ptrdiff_t)p + (ptrdiff_t)(q - q_b) * (ptrdiff_t)npoints])
                     point_dist.emplace(p, dist_matrix[(ptrdiff_t)p + (ptrdiff_t)(q - q_b) * (ptrdiff_t)npoints]);
@@ -450,7 +450,7 @@ std::vector<std::vector<std::pair<uint32_t, float>>> processUnfilteredParts(cons
         exact_knn(dim, part_k, closest_points_part, dist_closest_points_part, npoints, base_data, nqueries, query_data,
                   metric);
 
-        for (uint64_t i = 0; i < nqueries; i++)
+        for (size_t i = 0; i < nqueries; i++)
         {
             for (uint64_t j = 0; j < part_k; j++)
             {
@@ -504,7 +504,7 @@ std::vector<std::vector<std::pair<uint32_t, float>>> processFilteredParts(
                       query_data, metric);
         }
 
-        for (uint64_t i = 0; i < nqueries; i++)
+        for (size_t i = 0; i < nqueries; i++)
         {
             for (uint64_t j = 0; j < part_k; j++)
             {
@@ -558,7 +558,7 @@ int aux_main(const std::string &base_file, const std::string &label_file, const 
                                           k, query_data, metric, location_to_tag);
     }
 
-    for (uint64_t i = 0; i < nqueries; i++)
+    for (size_t i = 0; i < nqueries; i++)
     {
         std::vector<std::pair<uint32_t, float>> &cur_res = results[i];
         std::sort(cur_res.begin(), cur_res.end(), custom_dist);
@@ -598,7 +598,7 @@ int aux_main(const std::string &base_file, const std::string &label_file, const 
 
 void load_truthset(const std::string &bin_file, uint32_t *&ids, float *&dists, size_t &npts, size_t &dim)
 {
-    uint64_t read_blk_size = 64 * 1024 * 1024;
+    size_t read_blk_size = 64 * 1024 * 1024;
     cached_ifstream reader(bin_file, read_blk_size);
     diskann::cout << "Reading truthset file " << bin_file.c_str() << " ..." << std::endl;
     size_t actual_file_size = reader.get_file_size();

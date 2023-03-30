@@ -1419,7 +1419,7 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
     else
         _start = calculate_entry_point();
 
-    for (uint64_t p = 0; p < _nd; p++)
+    for (size_t p = 0; p < _nd; p++)
     {
         _final_graph[p].reserve((size_t)(std::ceil(_indexingRange * GRAPH_SLACK_FACTOR * 1.05)));
     }
@@ -1690,7 +1690,7 @@ void Index<T, TagT, LabelT>::build(const T *data, const size_t num_points_to_loa
 
         if (_normalize_vecs)
         {
-            for (uint64_t i = 0; i < num_points_to_load; i++)
+            for (size_t i = 0; i < num_points_to_load; i++)
             {
                 normalize(_data + _aligned_dim * i, _aligned_dim);
             }
@@ -1789,7 +1789,7 @@ void Index<T, TagT, LabelT>::build(const char *filename, const size_t num_points
     copy_aligned_data_from_file<T>(filename, _data, file_num_points, file_dim, _aligned_dim);
     if (_normalize_vecs)
     {
-        for (uint64_t i = 0; i < file_num_points; i++)
+        for (size_t i = 0; i < file_num_points; i++)
         {
             normalize(_data + _aligned_dim * i, _aligned_dim);
         }

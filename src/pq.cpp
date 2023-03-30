@@ -836,7 +836,7 @@ int generate_pq_data_from_pivots(const std::string data_file, uint32_t num_cente
 
         diskann::cout << "Processing points  [" << start_id << ", " << end_id << ").." << std::flush;
 
-        for (uint64_t p = 0; p < cur_blk_size; p++)
+        for (size_t p = 0; p < cur_blk_size; p++)
         {
             for (uint64_t d = 0; d < dim; d++)
             {
@@ -844,7 +844,7 @@ int generate_pq_data_from_pivots(const std::string data_file, uint32_t num_cente
             }
         }
 
-        for (uint64_t p = 0; p < cur_blk_size; p++)
+        for (size_t p = 0; p < cur_blk_size; p++)
         {
             for (uint64_t d = 0; d < dim; d++)
             {
@@ -875,7 +875,7 @@ int generate_pq_data_from_pivots(const std::string data_file, uint32_t num_cente
 #pragma omp parallel for schedule(static, 8192)
             for (int64_t j = 0; j < (int64_t)cur_blk_size; j++)
             {
-                for (uint64_t k = 0; k < cur_chunk_size; k++)
+                for (size_t k = 0; k < cur_chunk_size; k++)
                     cur_data[j * cur_chunk_size + k] = block_data_float[j * dim + chunk_offsets[i] + k];
             }
 
@@ -894,7 +894,7 @@ int generate_pq_data_from_pivots(const std::string data_file, uint32_t num_cente
             {
                 block_compressed_base[j * num_pq_chunks + i] = closest_center[j];
 #ifdef SAVE_INFLATED_PQ
-                for (uint64_t k = 0; k < cur_chunk_size; k++)
+                for (size_t k = 0; k < cur_chunk_size; k++)
                     block_inflated_base[j * dim + chunk_offsets[i] + k] =
                         cur_pivot_data[closest_center[j] * cur_chunk_size + k] + centroid[chunk_offsets[i] + k];
 #endif

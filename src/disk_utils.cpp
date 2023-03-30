@@ -34,9 +34,9 @@ void add_new_file_to_single_index(std::string index_file, std::string new_file)
         throw diskann::ANNException(stream.str(), -1);
     }
     size_t index_ending_offset = metadata[nr - 1];
-    uint64_t read_blk_size = 64 * 1024 * 1024;
+    size_t read_blk_size = 64 * 1024 * 1024;
     cached_ofstream writer(index_file, read_blk_size);
-    uint64_t check_file_size = get_file_size(index_file);
+    size_t check_file_size = get_file_size(index_file);
     if (check_file_size != index_ending_offset)
     {
         std::stringstream stream;
@@ -839,8 +839,8 @@ void create_disk_layout(const std::string base_file, const std::string mem_index
     uint32_t npts, ndims;
 
     // amount to read or write in one shot
-    uint64_t read_blk_size = 64 * 1024 * 1024;
-    uint64_t write_blk_size = read_blk_size;
+    size_t read_blk_size = 64 * 1024 * 1024;
+    size_t write_blk_size = read_blk_size;
     cached_ifstream base_reader(base_file, read_blk_size);
     base_reader.read((char *)&npts, sizeof(uint32_t));
     base_reader.read((char *)&ndims, sizeof(uint32_t));

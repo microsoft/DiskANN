@@ -80,7 +80,7 @@ void WindowsAlignedFileReader::read(std::vector<AlignedRead> &read_reqs, IOConte
 {
     using namespace std::chrono_literals;
     // execute each request sequentially
-    uint64_t n_reqs = read_reqs.size();
+    size_t n_reqs = read_reqs.size();
     uint64_t n_batches = ROUND_UP(n_reqs, MAX_IO_DEPTH) / MAX_IO_DEPTH;
     for (uint64_t i = 0; i < n_batches; i++)
     {

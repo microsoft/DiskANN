@@ -33,7 +33,7 @@
 template <typename T>
 void gen_random_slice(const std::string base_file, const std::string output_prefix, double sampling_rate)
 {
-    uint64_t read_blk_size = 64 * 1024 * 1024;
+    size_t read_blk_size = 64 * 1024 * 1024;
     cached_ifstream base_reader(base_file.c_str(), read_blk_size);
     std::ofstream sample_writer(std::string(output_prefix + "_data.bin").c_str(), std::ios::binary);
     std::ofstream sample_id_writer(std::string(output_prefix + "_ids.bin").c_str(), std::ios::binary);
@@ -100,7 +100,7 @@ void gen_random_slice(const std::string data_file, double p_val, float *&sampled
     std::vector<std::vector<float>> sampled_vectors;
 
     // amount to read in one shot
-    uint64_t read_blk_size = 64 * 1024 * 1024;
+    size_t read_blk_size = 64 * 1024 * 1024;
     // create cached reader + writer
     cached_ifstream base_reader(data_file.c_str(), read_blk_size);
 
@@ -236,7 +236,7 @@ template <typename T>
 int shard_data_into_clusters(const std::string data_file, float *pivots, const size_t num_centers, const size_t dim,
                              const size_t k_base, std::string prefix_path)
 {
-    uint64_t read_blk_size = 64 * 1024 * 1024;
+    size_t read_blk_size = 64 * 1024 * 1024;
     //  uint64_t write_blk_size = 64 * 1024 * 1024;
     // create cached reader + writer
     cached_ifstream base_reader(data_file, read_blk_size);
@@ -328,7 +328,7 @@ template <typename T>
 int shard_data_into_clusters_only_ids(const std::string data_file, float *pivots, const size_t num_centers,
                                       const size_t dim, const size_t k_base, std::string prefix_path)
 {
-    uint64_t read_blk_size = 64 * 1024 * 1024;
+    size_t read_blk_size = 64 * 1024 * 1024;
     //  uint64_t write_blk_size = 64 * 1024 * 1024;
     // create cached reader + writer
     cached_ifstream base_reader(data_file, read_blk_size);
@@ -409,7 +409,7 @@ int shard_data_into_clusters_only_ids(const std::string data_file, float *pivots
 template <typename T>
 int retrieve_shard_data_from_ids(const std::string data_file, std::string idmap_filename, std::string data_filename)
 {
-    uint64_t read_blk_size = 64 * 1024 * 1024;
+    size_t read_blk_size = 64 * 1024 * 1024;
     //  uint64_t write_blk_size = 64 * 1024 * 1024;
     // create cached reader + writer
     cached_ifstream base_reader(data_file, read_blk_size);

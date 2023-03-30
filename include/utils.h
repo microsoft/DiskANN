@@ -114,12 +114,12 @@ inline void open_file_to_write(std::ofstream &writer, const std::string &filenam
     }
 }
 
-inline uint64_t get_file_size(const std::string &fname)
+inline size_t get_file_size(const std::string &fname)
 {
     std::ifstream reader(fname, std::ios::binary | std::ios::ate);
     if (!reader.fail() && reader.is_open())
     {
-        uint64_t end_pos = reader.tellg();
+        size_t end_pos = reader.tellg();
         reader.close();
         return end_pos;
     }
@@ -435,7 +435,7 @@ inline void wait_for_keystroke()
 
 inline void load_truthset(const std::string &bin_file, uint32_t *&ids, float *&dists, size_t &npts, size_t &dim)
 {
-    uint64_t read_blk_size = 64 * 1024 * 1024;
+    size_t read_blk_size = 64 * 1024 * 1024;
     cached_ifstream reader(bin_file, read_blk_size);
     diskann::cout << "Reading truthset file " << bin_file.c_str() << " ..." << std::endl;
     size_t actual_file_size = reader.get_file_size();
@@ -485,7 +485,7 @@ inline void load_truthset(const std::string &bin_file, uint32_t *&ids, float *&d
 inline void prune_truthset_for_range(const std::string &bin_file, float range,
                                      std::vector<std::vector<uint32_t>> &groundtruth, size_t &npts)
 {
-    uint64_t read_blk_size = 64 * 1024 * 1024;
+    size_t read_blk_size = 64 * 1024 * 1024;
     cached_ifstream reader(bin_file, read_blk_size);
     diskann::cout << "Reading truthset file " << bin_file.c_str() << "... " << std::endl;
     size_t actual_file_size = reader.get_file_size();
@@ -551,7 +551,7 @@ inline void prune_truthset_for_range(const std::string &bin_file, float range,
 inline void load_range_truthset(const std::string &bin_file, std::vector<std::vector<uint32_t>> &groundtruth,
                                 uint64_t &gt_num)
 {
-    uint64_t read_blk_size = 64 * 1024 * 1024;
+    size_t read_blk_size = 64 * 1024 * 1024;
     cached_ifstream reader(bin_file, read_blk_size);
     diskann::cout << "Reading truthset file " << bin_file.c_str() << "... " << std::flush;
     size_t actual_file_size = reader.get_file_size();
@@ -668,7 +668,7 @@ inline void open_file_to_write(std::ofstream &writer, const std::string &filenam
 }
 
 template <typename T>
-inline uint64_t save_bin(const std::string &filename, T *data, size_t npts, size_t ndims, size_t offset = 0)
+inline size_t save_bin(const std::string &filename, T *data, size_t npts, size_t ndims, size_t offset = 0)
 {
     std::ofstream writer;
     open_file_to_write(writer, filename);
@@ -831,11 +831,11 @@ template <typename T> float prepare_base_for_inner_products(const std::string in
 
     for (uint64_t b = 0; b < num_blocks; b++)
     {
-        uint64_t start_id = b * block_size;
-        uint64_t end_id = (b + 1) * block_size < npts ? (b + 1) * block_size : npts;
-        uint64_t block_pts = end_id - start_id;
+        size_t start_id = b * block_size;
+        size_t end_id = (b + 1) * block_size < npts ? (b + 1) * block_size : npts;
+        size_t block_pts = end_id - start_id;
         in_reader.read((char *)in_block_data.get(), block_pts * in_dims * sizeof(T));
-        for (uint64_t p = 0; p < block_pts; p++)
+        for (size_t p = 0; p < block_pts; p++)
         {
             for (uint64_t j = 0; j < in_dims; j++)
             {
@@ -850,11 +850,11 @@ template <typename T> float prepare_base_for_inner_products(const std::string in
     in_reader.seekg(2 * sizeof(uint32_t), std::ios::beg);
     for (uint64_t b = 0; b < num_blocks; b++)
     {
-        uint64_t start_id = b * block_size;
-        uint64_t end_id = (b + 1) * block_size < npts ? (b + 1) * block_size : npts;
-        uint64_t block_pts = end_id - start_id;
+        size_t start_id = b * block_size;
+        size_t end_id = (b + 1) * block_size < npts ? (b + 1) * block_size : npts;
+        size_t block_pts = end_id - start_id;
         in_reader.read((char *)in_block_data.get(), block_pts * in_dims * sizeof(T));
-        for (uint64_t p = 0; p < block_pts; p++)
+        for (size_t p = 0; p < block_pts; p++)
         {
             for (uint64_t j = 0; j < in_dims; j++)
             {
@@ -881,7 +881,7 @@ template <typename T> void save_Tvecs(const char *filename, T *data, size_t npts
     unsigned dims_u32 = (unsigned)ndims;
 
     // start writing
-    for (uint64_t i = 0; i < npts; i++)
+    for (size_t i = 0; i < npts; i++)
     {
         // write dims in u32
         writer.write((char *)&dims_u32, sizeof(unsigned));
@@ -892,13 +892,13 @@ template <typename T> void save_Tvecs(const char *filename, T *data, size_t npts
     }
 }
 template <typename T>
-inline uint64_t save_data_in_base_dimensions(const std::string &filename, T *data, size_t npts, size_t ndims,
+inline size_t save_data_in_base_dimensions(const std::string &filename, T *data, size_t npts, size_t ndims,
                                              size_t aligned_dim, size_t offset = 0)
 {
     std::ofstream writer; //(filename, std::ios::binary | std::ios::out);
     open_file_to_write(writer, filename);
     int npts_i32 = (int)npts, ndims_i32 = (int)ndims;
-    uint64_t bytes_written = 2 * sizeof(uint32_t) + npts * ndims * sizeof(T);
+    size_t bytes_written = 2 * sizeof(uint32_t) + npts * ndims * sizeof(T);
     writer.seekp(offset, writer.beg);
     writer.write((char *)&npts_i32, sizeof(int));
     writer.write((char *)&ndims_i32, sizeof(int));

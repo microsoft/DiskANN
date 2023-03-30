@@ -123,7 +123,7 @@ void PQFlashIndex<T, LabelT>::setup_thread_data(uint64_t nthreads, uint64_t visi
 template <typename T, typename LabelT> void PQFlashIndex<T, LabelT>::load_cache_list(std::vector<uint32_t> &node_list)
 {
     diskann::cout << "Loading the cache list into memory.." << std::flush;
-    uint64_t num_cached_nodes = node_list.size();
+    size_t num_cached_nodes = node_list.size();
 
     // borrow thread data
     ScratchStoreManager<SSDThreadData<T>> manager(this->thread_data);
@@ -133,20 +133,20 @@ template <typename T, typename LabelT> void PQFlashIndex<T, LabelT>::load_cache_
     nhood_cache_buf = new uint32_t[num_cached_nodes * (max_degree + 1)];
     memset(nhood_cache_buf, 0, num_cached_nodes * (max_degree + 1));
 
-    uint64_t coord_cache_buf_len = num_cached_nodes * aligned_dim;
+    size_t coord_cache_buf_len = num_cached_nodes * aligned_dim;
     diskann::alloc_aligned((void **)&coord_cache_buf, coord_cache_buf_len * sizeof(T), 8 * sizeof(T));
     memset(coord_cache_buf, 0, coord_cache_buf_len * sizeof(T));
 
     size_t BLOCK_SIZE = 8;
     size_t num_blocks = DIV_ROUND_UP(num_cached_nodes, BLOCK_SIZE);
 
-    for (uint64_t block = 0; block < num_blocks; block++)
+    for (size_t block = 0; block < num_blocks; block++)
     {
-        uint64_t start_idx = block * BLOCK_SIZE;
-        uint64_t end_idx = (std::min)(num_cached_nodes, (block + 1) * BLOCK_SIZE);
+        size_t start_idx = block * BLOCK_SIZE;
+        size_t end_idx = (std::min)(num_cached_nodes, (block + 1) * BLOCK_SIZE);
         std::vector<AlignedRead> read_reqs;
         std::vector<std::pair<uint32_t, char *>> nhoods;
-        for (uint64_t node_idx = start_idx; node_idx < end_idx; node_idx++)
+        for (size_t node_idx = start_idx; node_idx < end_idx; node_idx++)
         {
             AlignedRead read;
             char *buf = nullptr;
@@ -160,7 +160,7 @@ template <typename T, typename LabelT> void PQFlashIndex<T, LabelT>::load_cache_
 
         reader->read(read_reqs, ctx);
 
-        uint64_t node_idx = start_idx;
+        size_t node_idx = start_idx;
         for (uint32_t i = 0; i < read_reqs.size(); i++)
         {
 #if defined(_WINDOWS) && defined(USE_BING_INFRA) // this block is to handle failed reads in
