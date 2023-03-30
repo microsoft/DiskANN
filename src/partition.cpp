@@ -247,7 +247,7 @@ int shard_data_into_clusters(const std::string data_file, float *pivots,
 
   std::ofstream hmetis;
   if (write_hmetis_file) {
-    std::string hmetis_filename = prefix_path + ".hmetis";
+    std::string hmetis_filename = prefix_path + "_partition.hmetis";
 	hmetis.open(hmetis_filename);
   }
 
