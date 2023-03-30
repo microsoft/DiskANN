@@ -324,7 +324,7 @@ inline void save_groundtruth_as_one_file(const std::string filename, int32_t *da
     writer.write((char *)&ndims_i32, sizeof(int));
     std::cout << "Saving truthset in one file (npts, dim, npts*dim id-matrix, "
                  "npts*dim dist-matrix) with npts = "
-              << npts << ", dim = " << ndims << ", size = " << 2 * npts * ndims * sizeof(unsigned) + 2 * sizeof(int)
+              << npts << ", dim = " << ndims << ", size = " << 2 * npts * ndims * sizeof(uint32_t) + 2 * sizeof(int)
               << "B" << std::endl;
 
     writer.write((char *)data, npts * ndims * sizeof(uint32_t));
@@ -449,8 +449,8 @@ void load_truthset(const std::string &bin_file, uint32_t *&ids, float *&dists, s
     int npts_i32, dim_i32;
     reader.read((char *)&npts_i32, sizeof(int));
     reader.read((char *)&dim_i32, sizeof(int));
-    npts = (unsigned)npts_i32;
-    dim = (unsigned)dim_i32;
+    npts = (uint32_t)npts_i32;
+    dim = (uint32_t)dim_i32;
 
     diskann::cout << "Metadata: #pts = " << npts << ", #dims = " << dim << "... " << std::endl;
 

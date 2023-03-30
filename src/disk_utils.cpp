@@ -217,7 +217,7 @@ T *load_warmup(const std::string &cache_warmup_file, uint64_t &warmup_num, uint6
     Support for Merging Many Vamana Indices
  ***************************************************/
 
-void read_idmap(const std::string &fname, std::vector<unsigned> &ivecs)
+void read_idmap(const std::string &fname, std::vector<uint32_t> &ivecs)
 {
     uint32_t npts32, dim;
     size_t actual_file_size = get_file_size(fname);
@@ -239,13 +239,13 @@ void read_idmap(const std::string &fname, std::vector<unsigned> &ivecs)
 }
 
 int merge_shards(const std::string &vamana_prefix, const std::string &vamana_suffix, const std::string &idmaps_prefix,
-                 const std::string &idmaps_suffix, const uint64_t nshards, unsigned max_degree,
+                 const std::string &idmaps_suffix, const uint64_t nshards, uint32_t max_degree,
                  const std::string &output_vamana, const std::string &medoids_file, bool use_filters,
                  const std::string &labels_to_medoids_file)
 {
     // Read ID maps
     std::vector<std::string> vamana_names(nshards);
-    std::vector<std::vector<unsigned>> idmaps(nshards);
+    std::vector<std::vector<uint32_t>> idmaps(nshards);
     for (size_t shard = 0; shard < nshards; shard++)
     {
         vamana_names[shard] = vamana_prefix + std::to_string(shard) + vamana_suffix;
@@ -267,7 +267,7 @@ int merge_shards(const std::string &vamana_prefix, const std::string &vamana_suf
     diskann::cout << "# nodes: " << nnodes << ", max. degree: " << max_degree << std::endl;
 
     // compute inverse map: node -> shards
-    std::vector<std::pair<unsigned, unsigned>> node_shard;
+    std::vector<std::pair<uint32_t, uint32_t>> node_shard;
     node_shard.reserve(nelems);
     for (size_t shard = 0; shard < nshards; shard++)
     {
@@ -287,7 +287,7 @@ int merge_shards(const std::string &vamana_prefix, const std::string &vamana_suf
     // combined file
     if (use_filters)
     {
-        std::unordered_map<unsigned, std::vector<uint32_t>> global_label_to_medoids;
+        std::unordered_map<uint32_t, std::vector<uint32_t>> global_label_to_medoids;
 
         for (size_t i = 0; i < nshards; i++)
         {
@@ -296,7 +296,7 @@ int merge_shards(const std::string &vamana_prefix, const std::string &vamana_suf
             mapping_reader.open(map_file);
 
             std::string line, token;
-            unsigned line_cnt = 0;
+            uint32_t line_cnt = 0;
 
             while (std::getline(mapping_reader, line))
             {
@@ -309,7 +309,7 @@ int merge_shards(const std::string &vamana_prefix, const std::string &vamana_suf
                     token.erase(std::remove(token.begin(), token.end(), '\n'), token.end());
                     token.erase(std::remove(token.begin(), token.end(), '\r'), token.end());
 
-                    unsigned token_as_num = std::stoul(token);
+                    uint32_t token_as_num = std::stoul(token);
 
                     if (cnt == 0)
                         label = token_as_num;
@@ -360,19 +360,19 @@ int merge_shards(const std::string &vamana_prefix, const std::string &vamana_suf
     merged_vamana_writer.write((char *)&merged_index_size,
                                sizeof(uint64_t)); // we will overwrite the index size at the end
 
-    unsigned output_width = max_degree;
-    unsigned max_input_width = 0;
-    // read width from each vamana to advance buffer by sizeof(unsigned) bytes
+    uint32_t output_width = max_degree;
+    uint32_t max_input_width = 0;
+    // read width from each vamana to advance buffer by sizeof(uint32_t) bytes
     for (auto &reader : vamana_readers)
     {
-        unsigned input_width;
-        reader.read((char *)&input_width, sizeof(unsigned));
+        uint32_t input_width;
+        reader.read((char *)&input_width, sizeof(uint32_t));
         max_input_width = input_width > max_input_width ? input_width : max_input_width;
     }
 
     diskann::cout << "Max input width: " << max_input_width << ", output width: " << output_width << std::endl;
 
-    merged_vamana_writer.write((char *)&output_width, sizeof(unsigned));
+    merged_vamana_writer.write((char *)&output_width, sizeof(uint32_t));
     std::ofstream medoid_writer(medoids_file.c_str(), std::ios::binary);
     uint32_t nshards_u32 = (uint32_t)nshards;
     uint32_t one_val = 1;
@@ -384,9 +384,9 @@ int merge_shards(const std::string &vamana_prefix, const std::string &vamana_suf
                                       // Hence the final index will also not have any frozen points.
     for (uint64_t shard = 0; shard < nshards; shard++)
     {
-        unsigned medoid;
+        uint32_t medoid;
         // read medoid
-        vamana_readers[shard].read((char *)&medoid, sizeof(unsigned));
+        vamana_readers[shard].read((char *)&medoid, sizeof(uint32_t));
         vamana_readers[shard].read((char *)&vamana_index_frozen, sizeof(uint64_t));
         assert(vamana_index_frozen == false);
         // rename medoid
@@ -395,7 +395,7 @@ int merge_shards(const std::string &vamana_prefix, const std::string &vamana_suf
         medoid_writer.write((char *)&medoid, sizeof(uint32_t));
         // write renamed medoid
         if (shard == (nshards - 1)) //--> uncomment if running hierarchical
-            merged_vamana_writer.write((char *)&medoid, sizeof(unsigned));
+            merged_vamana_writer.write((char *)&medoid, sizeof(uint32_t));
     }
     merged_vamana_writer.write((char *)&merged_index_frozen, sizeof(uint64_t));
     medoid_writer.close();
@@ -407,23 +407,23 @@ int merge_shards(const std::string &vamana_prefix, const std::string &vamana_suf
     std::mt19937 urng(rng());
 
     std::vector<bool> nhood_set(nnodes, 0);
-    std::vector<unsigned> final_nhood;
+    std::vector<uint32_t> final_nhood;
 
-    unsigned nnbrs = 0, shard_nnbrs = 0;
-    unsigned cur_id = 0;
+    uint32_t nnbrs = 0, shard_nnbrs = 0;
+    uint32_t cur_id = 0;
     for (const auto &id_shard : node_shard)
     {
-        unsigned node_id = id_shard.first;
-        unsigned shard_id = id_shard.second;
+        uint32_t node_id = id_shard.first;
+        uint32_t shard_id = id_shard.second;
         if (cur_id < node_id)
         {
             // Gopal. random_shuffle() is deprecated.
             std::shuffle(final_nhood.begin(), final_nhood.end(), urng);
-            nnbrs = (unsigned)(std::min)(final_nhood.size(), (uint64_t)max_degree);
+            nnbrs = (uint32_t)(std::min)(final_nhood.size(), (uint64_t)max_degree);
             // write into merged ofstream
-            merged_vamana_writer.write((char *)&nnbrs, sizeof(unsigned));
-            merged_vamana_writer.write((char *)final_nhood.data(), nnbrs * sizeof(unsigned));
-            merged_index_size += (sizeof(unsigned) + nnbrs * sizeof(unsigned));
+            merged_vamana_writer.write((char *)&nnbrs, sizeof(uint32_t));
+            merged_vamana_writer.write((char *)final_nhood.data(), nnbrs * sizeof(uint32_t));
+            merged_index_size += (sizeof(uint32_t) + nnbrs * sizeof(uint32_t));
             if (cur_id % 499999 == 1)
             {
                 diskann::cout << "." << std::flush;
@@ -435,16 +435,16 @@ int merge_shards(const std::string &vamana_prefix, const std::string &vamana_suf
             final_nhood.clear();
         }
         // read from shard_id ifstream
-        vamana_readers[shard_id].read((char *)&shard_nnbrs, sizeof(unsigned));
+        vamana_readers[shard_id].read((char *)&shard_nnbrs, sizeof(uint32_t));
 
         if (shard_nnbrs == 0)
         {
             diskann::cout << "WARNING: shard #" << shard_id << ", node_id " << node_id << " has 0 nbrs" << std::endl;
         }
 
-        std::vector<unsigned> shard_nhood(shard_nnbrs);
+        std::vector<uint32_t> shard_nhood(shard_nnbrs);
         if (shard_nnbrs > 0)
-            vamana_readers[shard_id].read((char *)shard_nhood.data(), shard_nnbrs * sizeof(unsigned));
+            vamana_readers[shard_id].read((char *)shard_nhood.data(), shard_nnbrs * sizeof(uint32_t));
         // rename nodes
         for (uint64_t j = 0; j < shard_nnbrs; j++)
         {
@@ -458,14 +458,14 @@ int merge_shards(const std::string &vamana_prefix, const std::string &vamana_suf
 
     // Gopal. random_shuffle() is deprecated.
     std::shuffle(final_nhood.begin(), final_nhood.end(), urng);
-    nnbrs = (unsigned)(std::min)(final_nhood.size(), (uint64_t)max_degree);
+    nnbrs = (uint32_t)(std::min)(final_nhood.size(), (uint64_t)max_degree);
     // write into merged ofstream
-    merged_vamana_writer.write((char *)&nnbrs, sizeof(unsigned));
+    merged_vamana_writer.write((char *)&nnbrs, sizeof(uint32_t));
     if (nnbrs > 0)
     {
-        merged_vamana_writer.write((char *)final_nhood.data(), nnbrs * sizeof(unsigned));
+        merged_vamana_writer.write((char *)final_nhood.data(), nnbrs * sizeof(uint32_t));
     }
-    merged_index_size += (sizeof(unsigned) + nnbrs * sizeof(unsigned));
+    merged_index_size += (sizeof(uint32_t) + nnbrs * sizeof(uint32_t));
     for (auto &p : final_nhood)
         nhood_set[p] = 0;
     final_nhood.clear();
@@ -528,7 +528,7 @@ void breakup_dense_points(const std::string data_file, const std::string labels_
                 }
                 token.erase(std::remove(token.begin(), token.end(), '\n'), token.end());
                 token.erase(std::remove(token.begin(), token.end(), '\r'), token.end());
-                unsigned token_as_num = std::stoul(token);
+                uint32_t token_as_num = std::stoul(token);
                 labels_per_point[label_host].push_back(token_as_num);
                 lbl_cnt++;
             }
@@ -611,7 +611,7 @@ void extract_shard_labels(const std::string &in_label_file, const std::string &s
 }
 
 template <typename T, typename LabelT>
-int build_merged_vamana_index(std::string base_file, diskann::Metric compareMetric, unsigned L, unsigned R,
+int build_merged_vamana_index(std::string base_file, diskann::Metric compareMetric, uint32_t L, uint32_t R,
                               double sampling_rate, double ram_budget, std::string mem_index_path,
                               std::string medoids_file, std::string centroids_file, size_t build_pq_bytes, bool use_opq,
                               bool use_filters, const std::string &label_file,
@@ -629,12 +629,12 @@ int build_merged_vamana_index(std::string base_file, diskann::Metric compareMetr
         diskann::cout << "Full index fits in RAM budget, should consume at most "
                       << full_index_ram / (1024 * 1024 * 1024) << "GiBs, so building in one shot" << std::endl;
         diskann::Parameters paras;
-        paras.Set<unsigned>("L", (unsigned)L);
-        paras.Set<unsigned>("Lf", (unsigned)Lf);
-        paras.Set<unsigned>("R", (unsigned)R);
-        paras.Set<unsigned>("C", 750);
+        paras.Set<uint32_t>("L", (uint32_t)L);
+        paras.Set<uint32_t>("Lf", (uint32_t)Lf);
+        paras.Set<uint32_t>("R", (uint32_t)R);
+        paras.Set<uint32_t>("C", 750);
         paras.Set<float>("alpha", 1.2f);
-        paras.Set<unsigned>("num_rnds", 2);
+        paras.Set<uint32_t>("num_rnds", 2);
         if (!use_filters)
             paras.Set<bool>("saturate_graph", 1);
         else
@@ -699,12 +699,12 @@ int build_merged_vamana_index(std::string base_file, diskann::Metric compareMetr
         std::string shard_index_file = merged_index_prefix + "_subshard-" + std::to_string(p) + "_mem.index";
 
         diskann::Parameters paras;
-        paras.Set<unsigned>("L", L);
-        paras.Set<unsigned>("Lf", Lf);
-        paras.Set<unsigned>("R", (2 * (R / 3)));
-        paras.Set<unsigned>("C", 750);
+        paras.Set<uint32_t>("L", L);
+        paras.Set<uint32_t>("Lf", Lf);
+        paras.Set<uint32_t>("R", (2 * (R / 3)));
+        paras.Set<uint32_t>("C", 750);
         paras.Set<float>("alpha", 1.2f);
-        paras.Set<unsigned>("num_rnds", 2);
+        paras.Set<uint32_t>("num_rnds", 2);
         paras.Set<bool>("saturate_graph", 0);
         paras.Set<std::string>("save_path", shard_index_file);
 
@@ -836,7 +836,7 @@ template <typename T>
 void create_disk_layout(const std::string base_file, const std::string mem_index_file, const std::string output_file,
                         const std::string reorder_data_file)
 {
-    unsigned npts, ndims;
+    uint32_t npts, ndims;
 
     // amount to read or write in one shot
     uint64_t read_blk_size = 64 * 1024 * 1024;
@@ -853,7 +853,7 @@ void create_disk_layout(const std::string base_file, const std::string mem_index
     bool append_reorder_data = false;
     std::ifstream reorder_data_reader;
 
-    unsigned npts_reorder_file = 0, ndims_reorder_file = 0;
+    uint32_t npts_reorder_file = 0, ndims_reorder_file = 0;
     if (reorder_data_file != std::string(""))
     {
         append_reorder_data = true;
@@ -863,8 +863,8 @@ void create_disk_layout(const std::string base_file, const std::string mem_index
         try
         {
             reorder_data_reader.open(reorder_data_file, std::ios::binary);
-            reorder_data_reader.read((char *)&npts_reorder_file, sizeof(unsigned));
-            reorder_data_reader.read((char *)&ndims_reorder_file, sizeof(unsigned));
+            reorder_data_reader.read((char *)&npts_reorder_file, sizeof(uint32_t));
+            reorder_data_reader.read((char *)&ndims_reorder_file, sizeof(uint32_t));
             if (npts_reorder_file != npts)
                 throw ANNException("Mismatch in num_points between reorder "
                                    "data file and base file",
@@ -885,7 +885,7 @@ void create_disk_layout(const std::string base_file, const std::string mem_index
     cached_ofstream diskann_writer(output_file, write_blk_size);
 
     // metadata: width, medoid
-    unsigned width_u32, medoid_u32;
+    uint32_t width_u32, medoid_u32;
     size_t index_file_size;
 
     vamana_reader.read((char *)&index_file_size, sizeof(uint64_t));
@@ -900,8 +900,8 @@ void create_disk_layout(const std::string base_file, const std::string mem_index
     }
     uint64_t vamana_frozen_num = false, vamana_frozen_loc = 0;
 
-    vamana_reader.read((char *)&width_u32, sizeof(unsigned));
-    vamana_reader.read((char *)&medoid_u32, sizeof(unsigned));
+    vamana_reader.read((char *)&width_u32, sizeof(uint32_t));
+    vamana_reader.read((char *)&medoid_u32, sizeof(uint32_t));
     vamana_reader.read((char *)&vamana_frozen_num, sizeof(uint64_t));
     // compute
     uint64_t medoid, max_node_len, nnodes_per_sector;
@@ -909,7 +909,7 @@ void create_disk_layout(const std::string base_file, const std::string mem_index
     medoid = (uint64_t)medoid_u32;
     if (vamana_frozen_num == 1)
         vamana_frozen_loc = medoid;
-    max_node_len = (((uint64_t)width_u32 + 1) * sizeof(unsigned)) + (ndims_64 * sizeof(T));
+    max_node_len = (((uint64_t)width_u32 + 1) * sizeof(uint32_t)) + (ndims_64 * sizeof(T));
     nnodes_per_sector = SECTOR_LEN / max_node_len;
 
     diskann::cout << "medoid: " << medoid << "B" << std::endl;
@@ -919,8 +919,8 @@ void create_disk_layout(const std::string base_file, const std::string mem_index
     // SECTOR_LEN buffer for each sector
     std::unique_ptr<char[]> sector_buf = std::make_unique<char[]>(SECTOR_LEN);
     std::unique_ptr<char[]> node_buf = std::make_unique<char[]>(max_node_len);
-    unsigned &nnbrs = *(unsigned *)(node_buf.get() + ndims_64 * sizeof(T));
-    unsigned *nhood_buf = (unsigned *)(node_buf.get() + (ndims_64 * sizeof(T)) + sizeof(unsigned));
+    uint32_t &nnbrs = *(uint32_t *)(node_buf.get() + ndims_64 * sizeof(T));
+    uint32_t *nhood_buf = (uint32_t *)(node_buf.get() + (ndims_64 * sizeof(T)) + sizeof(uint32_t));
 
     // number of sectors (1 for meta data)
     uint64_t n_sectors = ROUND_UP(npts_64, nnodes_per_sector) / nnodes_per_sector;
@@ -967,17 +967,17 @@ void create_disk_layout(const std::string base_file, const std::string mem_index
         {
             memset(node_buf.get(), 0, max_node_len);
             // read cur node's nnbrs
-            vamana_reader.read((char *)&nnbrs, sizeof(unsigned));
+            vamana_reader.read((char *)&nnbrs, sizeof(uint32_t));
 
             // sanity checks on nnbrs
             assert(nnbrs > 0);
             assert(nnbrs <= width_u32);
 
             // read node's nhood
-            vamana_reader.read((char *)nhood_buf, (std::min)(nnbrs, width_u32) * sizeof(unsigned));
+            vamana_reader.read((char *)nhood_buf, (std::min)(nnbrs, width_u32) * sizeof(uint32_t));
             if (nnbrs > width_u32)
             {
-                vamana_reader.seekg((nnbrs - width_u32) * sizeof(unsigned), vamana_reader.cur);
+                vamana_reader.seekg((nnbrs - width_u32) * sizeof(uint32_t), vamana_reader.cur);
             }
 
             // write coords of node first
@@ -986,11 +986,11 @@ void create_disk_layout(const std::string base_file, const std::string mem_index
             memcpy(node_buf.get(), cur_node_coords.get(), ndims_64 * sizeof(T));
 
             // write nnbrs
-            *(unsigned *)(node_buf.get() + ndims_64 * sizeof(T)) = (std::min)(nnbrs, width_u32);
+            *(uint32_t *)(node_buf.get() + ndims_64 * sizeof(T)) = (std::min)(nnbrs, width_u32);
 
             // write nhood next
-            memcpy(node_buf.get() + ndims_64 * sizeof(T) + sizeof(unsigned), nhood_buf,
-                   (std::min)(nnbrs, width_u32) * sizeof(unsigned));
+            memcpy(node_buf.get() + ndims_64 * sizeof(T) + sizeof(uint32_t), nhood_buf,
+                   (std::min)(nnbrs, width_u32) * sizeof(uint32_t));
 
             // get offset into sector_buf
             char *sector_node_buf = sector_buf.get() + (sector_node_id * max_node_len);
@@ -1150,8 +1150,8 @@ int build_disk_index(const char *dataFilePath, const char *indexFilePath, const 
         diskann::cout << timer.elapsed_seconds_for_step("preprocessing data for inner product") << std::endl;
     }
 
-    unsigned R = (unsigned)atoi(param_list[0].c_str());
-    unsigned L = (unsigned)atoi(param_list[1].c_str());
+    uint32_t R = (uint32_t)atoi(param_list[0].c_str());
+    uint32_t L = (uint32_t)atoi(param_list[1].c_str());
 
     double final_index_ram_limit = get_memory_budget(param_list[2]);
     if (final_index_ram_limit <= 0)
@@ -1374,33 +1374,33 @@ template DISKANN_DLLEXPORT int build_disk_index<float, uint16_t>(const char *dat
                                                                  const uint32_t filter_threshold, const uint32_t Lf);
 
 template DISKANN_DLLEXPORT int build_merged_vamana_index<int8_t, uint32_t>(
-    std::string base_file, diskann::Metric compareMetric, unsigned L, unsigned R, double sampling_rate,
+    std::string base_file, diskann::Metric compareMetric, uint32_t L, uint32_t R, double sampling_rate,
     double ram_budget, std::string mem_index_path, std::string medoids_path, std::string centroids_file,
     size_t build_pq_bytes, bool use_opq, bool use_filters, const std::string &label_file,
     const std::string &labels_to_medoids_file, const std::string &universal_label, const uint32_t Lf);
 template DISKANN_DLLEXPORT int build_merged_vamana_index<float, uint32_t>(
-    std::string base_file, diskann::Metric compareMetric, unsigned L, unsigned R, double sampling_rate,
+    std::string base_file, diskann::Metric compareMetric, uint32_t L, uint32_t R, double sampling_rate,
     double ram_budget, std::string mem_index_path, std::string medoids_path, std::string centroids_file,
     size_t build_pq_bytes, bool use_opq, bool use_filters, const std::string &label_file,
     const std::string &labels_to_medoids_file, const std::string &universal_label, const uint32_t Lf);
 template DISKANN_DLLEXPORT int build_merged_vamana_index<uint8_t, uint32_t>(
-    std::string base_file, diskann::Metric compareMetric, unsigned L, unsigned R, double sampling_rate,
+    std::string base_file, diskann::Metric compareMetric, uint32_t L, uint32_t R, double sampling_rate,
     double ram_budget, std::string mem_index_path, std::string medoids_path, std::string centroids_file,
     size_t build_pq_bytes, bool use_opq, bool use_filters, const std::string &label_file,
     const std::string &labels_to_medoids_file, const std::string &universal_label, const uint32_t Lf);
 // Label=16_t
 template DISKANN_DLLEXPORT int build_merged_vamana_index<int8_t, uint16_t>(
-    std::string base_file, diskann::Metric compareMetric, unsigned L, unsigned R, double sampling_rate,
+    std::string base_file, diskann::Metric compareMetric, uint32_t L, uint32_t R, double sampling_rate,
     double ram_budget, std::string mem_index_path, std::string medoids_path, std::string centroids_file,
     size_t build_pq_bytes, bool use_opq, bool use_filters, const std::string &label_file,
     const std::string &labels_to_medoids_file, const std::string &universal_label, const uint32_t Lf);
 template DISKANN_DLLEXPORT int build_merged_vamana_index<float, uint16_t>(
-    std::string base_file, diskann::Metric compareMetric, unsigned L, unsigned R, double sampling_rate,
+    std::string base_file, diskann::Metric compareMetric, uint32_t L, uint32_t R, double sampling_rate,
     double ram_budget, std::string mem_index_path, std::string medoids_path, std::string centroids_file,
     size_t build_pq_bytes, bool use_opq, bool use_filters, const std::string &label_file,
     const std::string &labels_to_medoids_file, const std::string &universal_label, const uint32_t Lf);
 template DISKANN_DLLEXPORT int build_merged_vamana_index<uint8_t, uint16_t>(
-    std::string base_file, diskann::Metric compareMetric, unsigned L, unsigned R, double sampling_rate,
+    std::string base_file, diskann::Metric compareMetric, uint32_t L, uint32_t R, double sampling_rate,
     double ram_budget, std::string mem_index_path, std::string medoids_path, std::string centroids_file,
     size_t build_pq_bytes, bool use_opq, bool use_filters, const std::string &label_file,
     const std::string &labels_to_medoids_file, const std::string &universal_label, const uint32_t Lf);

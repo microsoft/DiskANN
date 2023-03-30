@@ -130,7 +130,7 @@ template <typename T, typename LabelT> void PQFlashIndex<T, LabelT>::load_cache_
     auto this_thread_data = manager.scratch_space();
     IOContext &ctx = this_thread_data->ctx;
 
-    nhood_cache_buf = new unsigned[num_cached_nodes * (max_degree + 1)];
+    nhood_cache_buf = new uint32_t[num_cached_nodes * (max_degree + 1)];
     memset(nhood_cache_buf, 0, num_cached_nodes * (max_degree + 1));
 
     uint64_t coord_cache_buf_len = num_cached_nodes * aligned_dim;
@@ -178,14 +178,14 @@ template <typename T, typename LabelT> void PQFlashIndex<T, LabelT>::load_cache_
             coord_cache.insert(std::make_pair(nhood.first, cached_coords));
 
             // insert node nhood into nhood_cache
-            unsigned *node_nhood = OFFSET_TO_NODE_NHOOD(node_buf);
+            uint32_t *node_nhood = OFFSET_TO_NODE_NHOOD(node_buf);
 
             auto nnbrs = *node_nhood;
-            unsigned *nbrs = node_nhood + 1;
-            std::pair<uint32_t, unsigned *> cnhood;
+            uint32_t *nbrs = node_nhood + 1;
+            std::pair<uint32_t, uint32_t *> cnhood;
             cnhood.first = nnbrs;
             cnhood.second = nhood_cache_buf + node_idx * (max_degree + 1);
-            memcpy(cnhood.second, nbrs, nnbrs * sizeof(unsigned));
+            memcpy(cnhood.second, nbrs, nnbrs * sizeof(uint32_t));
             nhood_cache.insert(std::make_pair(nhood.first, cnhood));
             aligned_free(nhood.second);
             node_idx++;
@@ -288,9 +288,9 @@ void PQFlashIndex<T, LabelT>::cache_bfs_levels(uint64_t num_nodes_to_cache, std:
     auto this_thread_data = manager.scratch_space();
     IOContext &ctx = this_thread_data->ctx;
 
-    std::unique_ptr<tsl::robin_set<unsigned>> cur_level, prev_level;
-    cur_level = std::make_unique<tsl::robin_set<unsigned>>();
-    prev_level = std::make_unique<tsl::robin_set<unsigned>>();
+    std::unique_ptr<tsl::robin_set<uint32_t>> cur_level, prev_level;
+    cur_level = std::make_unique<tsl::robin_set<uint32_t>>();
+    prev_level = std::make_unique<tsl::robin_set<uint32_t>>();
 
     for (uint64_t miter = 0; miter < num_medoids; miter++)
     {
@@ -306,9 +306,9 @@ void PQFlashIndex<T, LabelT>::cache_bfs_levels(uint64_t num_nodes_to_cache, std:
         // clear cur_level
         cur_level->clear();
 
-        std::vector<unsigned> nodes_to_expand;
+        std::vector<uint32_t> nodes_to_expand;
 
-        for (const unsigned &id : *prev_level)
+        for (const uint32_t &id : *prev_level)
         {
             if (node_set.find(id) != node_set.end())
             {
@@ -364,9 +364,9 @@ void PQFlashIndex<T, LabelT>::cache_bfs_levels(uint64_t num_nodes_to_cache, std:
 
                 // insert node coord into coord_cache
                 char *node_buf = OFFSET_TO_NODE(nhood.second, nhood.first);
-                unsigned *node_nhood = OFFSET_TO_NODE_NHOOD(node_buf);
+                uint32_t *node_nhood = OFFSET_TO_NODE_NHOOD(node_buf);
                 uint64_t nnbrs = (uint64_t)*node_nhood;
-                unsigned *nbrs = node_nhood + 1;
+                uint32_t *nbrs = node_nhood + 1;
                 // explore next level
                 for (uint64_t j = 0; j < nnbrs && !finish_flag; j++)
                 {
@@ -854,7 +854,7 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
     READ_U64(index_metadata, medoid_id_on_file);
     READ_U64(index_metadata, max_node_len);
     READ_U64(index_metadata, nnodes_per_sector);
-    max_degree = ((max_node_len - disk_bytes_per_point) / sizeof(unsigned)) - 1;
+    max_degree = ((max_node_len - disk_bytes_per_point) / sizeof(uint32_t)) - 1;
 
     if (max_degree > MAX_GRAPH_DEGREE)
     {
@@ -1144,7 +1144,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
     uint8_t *pq_coord_scratch = pq_query_scratch->aligned_pq_coord_scratch;
 
     // lambda to batch compute query<-> node distances in PQ space
-    auto compute_dists = [this, pq_coord_scratch, pq_dists](const unsigned *ids, const uint64_t n_ids,
+    auto compute_dists = [this, pq_coord_scratch, pq_dists](const uint32_t *ids, const uint64_t n_ids,
                                                             float *dists_out) {
         diskann::aggregate_coords(ids, n_ids, this->data, this->n_chunks, pq_coord_scratch);
         diskann::pq_dist_lookup(pq_coord_scratch, n_ids, this->n_chunks, pq_dists, dists_out);
@@ -1163,7 +1163,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
         for (uint64_t cur_m = 0; cur_m < num_medoids; cur_m++)
         {
             float cur_expanded_dist =
-                dist_cmp_float->compare(query_float, centroid_data + aligned_dim * cur_m, (unsigned)aligned_dim);
+                dist_cmp_float->compare(query_float, centroid_data + aligned_dim * cur_m, (uint32_t)aligned_dim);
             if (cur_expanded_dist < best_dist)
             {
                 best_medoid = medoids[cur_m];
@@ -1184,18 +1184,18 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
     retset.insert(Neighbor(best_medoid, dist_scratch[0]));
     visited.insert(best_medoid);
 
-    unsigned cmps = 0;
-    unsigned hops = 0;
-    unsigned num_ios = 0;
+    uint32_t cmps = 0;
+    uint32_t hops = 0;
+    uint32_t num_ios = 0;
 
     // cleared every iteration
-    std::vector<unsigned> frontier;
+    std::vector<uint32_t> frontier;
     frontier.reserve(2 * beam_width);
-    std::vector<std::pair<unsigned, char *>> frontier_nhoods;
+    std::vector<std::pair<uint32_t, char *>> frontier_nhoods;
     frontier_nhoods.reserve(2 * beam_width);
     std::vector<AlignedRead> frontier_read_reqs;
     frontier_read_reqs.reserve(2 * beam_width);
-    std::vector<std::pair<unsigned, std::pair<unsigned, unsigned *>>> cached_nhoods;
+    std::vector<std::pair<uint32_t, std::pair<uint32_t, uint32_t *>>> cached_nhoods;
     cached_nhoods.reserve(2 * beam_width);
 
     while (retset.has_unexpanded_node() && num_ios < io_limit)
@@ -1273,7 +1273,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
             float cur_expanded_dist;
             if (!use_disk_index_pq)
             {
-                cur_expanded_dist = dist_cmp->compare(aligned_query_T, node_fp_coords_copy, (unsigned)aligned_dim);
+                cur_expanded_dist = dist_cmp->compare(aligned_query_T, node_fp_coords_copy, (uint32_t)aligned_dim);
             }
             else
             {
@@ -1283,10 +1283,10 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
                     cur_expanded_dist = disk_pq_table.l2_distance( // disk_pq does not support OPQ yet
                         query_float, (uint8_t *)node_fp_coords_copy);
             }
-            full_retset.push_back(Neighbor((unsigned)cached_nhood.first, cur_expanded_dist));
+            full_retset.push_back(Neighbor((uint32_t)cached_nhood.first, cur_expanded_dist));
 
             uint64_t nnbrs = cached_nhood.second.first;
-            unsigned *node_nbrs = cached_nhood.second.second;
+            uint32_t *node_nbrs = cached_nhood.second.second;
 
             // compute node_nbrs <-> query dists in PQ space
             cpu_timer.reset();
@@ -1300,7 +1300,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
             // process prefetched nhood
             for (uint64_t m = 0; m < nnbrs; ++m)
             {
-                unsigned id = node_nbrs[m];
+                uint32_t id = node_nbrs[m];
                 if (visited.insert(id).second)
                 {
                     if (!use_filter && _dummy_pts.find(id) != _dummy_pts.end())
@@ -1331,7 +1331,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
         {
 #endif
             char *node_disk_buf = OFFSET_TO_NODE(frontier_nhood.second, frontier_nhood.first);
-            unsigned *node_buf = OFFSET_TO_NODE_NHOOD(node_disk_buf);
+            uint32_t *node_buf = OFFSET_TO_NODE_NHOOD(node_disk_buf);
             uint64_t nnbrs = (uint64_t)(*node_buf);
             T *node_fp_coords = OFFSET_TO_NODE_COORDS(node_disk_buf);
             //        assert(data_buf_idx < MAX_N_CMPS);
@@ -1344,7 +1344,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
             float cur_expanded_dist;
             if (!use_disk_index_pq)
             {
-                cur_expanded_dist = dist_cmp->compare(aligned_query_T, node_fp_coords_copy, (unsigned)aligned_dim);
+                cur_expanded_dist = dist_cmp->compare(aligned_query_T, node_fp_coords_copy, (uint32_t)aligned_dim);
             }
             else
             {
@@ -1354,7 +1354,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
                     cur_expanded_dist = disk_pq_table.l2_distance(query_float, (uint8_t *)node_fp_coords_copy);
             }
             full_retset.push_back(Neighbor(frontier_nhood.first, cur_expanded_dist));
-            unsigned *node_nbrs = (node_buf + 1);
+            uint32_t *node_nbrs = (node_buf + 1);
             // compute node_nbrs <-> query dist in PQ space
             cpu_timer.reset();
             compute_dists(node_nbrs, nnbrs, dist_scratch);
@@ -1368,7 +1368,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
             // process prefetch-ed nhood
             for (uint64_t m = 0; m < nnbrs; ++m)
             {
-                unsigned id = node_nbrs[m];
+                uint32_t id = node_nbrs[m];
                 if (visited.insert(id).second)
                 {
                     if (!use_filter && _dummy_pts.find(id) != _dummy_pts.end())

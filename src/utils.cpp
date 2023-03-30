@@ -126,18 +126,18 @@ void normalize_data_file(const std::string &inFileName, const std::string &outFi
     diskann::cout << "Wrote normalized points to file: " << outFileName << std::endl;
 }
 
-double calculate_recall(unsigned num_queries, unsigned *gold_std, float *gs_dist, unsigned dim_gs,
-                        unsigned *our_results, unsigned dim_or, unsigned recall_at)
+double calculate_recall(uint32_t num_queries, uint32_t *gold_std, float *gs_dist, uint32_t dim_gs,
+                        uint32_t *our_results, uint32_t dim_or, uint32_t recall_at)
 {
     double total_recall = 0;
-    std::set<unsigned> gt, res;
+    std::set<uint32_t> gt, res;
 
     for (size_t i = 0; i < num_queries; i++)
     {
         gt.clear();
         res.clear();
-        unsigned *gt_vec = gold_std + dim_gs * i;
-        unsigned *res_vec = our_results + dim_or * i;
+        uint32_t *gt_vec = gold_std + dim_gs * i;
+        uint32_t *res_vec = our_results + dim_or * i;
         size_t tie_breaker = recall_at;
         if (gs_dist != nullptr)
         {
@@ -151,7 +151,7 @@ double calculate_recall(unsigned num_queries, unsigned *gold_std, float *gs_dist
         res.insert(res_vec,
                    res_vec + recall_at); // change to recall_at for recall k@k
                                          // or dim_or for k@dim_or
-        unsigned cur_recall = 0;
+        uint32_t cur_recall = 0;
         for (auto &v : gt)
         {
             if (res.find(v) != res.end())
@@ -164,22 +164,22 @@ double calculate_recall(unsigned num_queries, unsigned *gold_std, float *gs_dist
     return total_recall / (num_queries) * (100.0 / recall_at);
 }
 
-double calculate_recall(unsigned num_queries, unsigned *gold_std, float *gs_dist, unsigned dim_gs,
-                        unsigned *our_results, unsigned dim_or, unsigned recall_at,
-                        const tsl::robin_set<unsigned> &active_tags)
+double calculate_recall(uint32_t num_queries, uint32_t *gold_std, float *gs_dist, uint32_t dim_gs,
+                        uint32_t *our_results, uint32_t dim_or, uint32_t recall_at,
+                        const tsl::robin_set<uint32_t> &active_tags)
 {
     double total_recall = 0;
-    std::set<unsigned> gt, res;
+    std::set<uint32_t> gt, res;
     bool printed = false;
     for (size_t i = 0; i < num_queries; i++)
     {
         gt.clear();
         res.clear();
-        unsigned *gt_vec = gold_std + dim_gs * i;
-        unsigned *res_vec = our_results + dim_or * i;
+        uint32_t *gt_vec = gold_std + dim_gs * i;
+        uint32_t *res_vec = our_results + dim_or * i;
         size_t tie_breaker = recall_at;
-        unsigned active_points_count = 0;
-        unsigned cur_counter = 0;
+        uint32_t active_points_count = 0;
+        uint32_t cur_counter = 0;
         while (active_points_count < recall_at && cur_counter < dim_gs)
         {
             if (active_tags.find(*(gt_vec + cur_counter)) != active_tags.end())
@@ -210,7 +210,7 @@ double calculate_recall(unsigned num_queries, unsigned *gold_std, float *gs_dist
 
         gt.insert(gt_vec, gt_vec + tie_breaker);
         res.insert(res_vec, res_vec + recall_at);
-        unsigned cur_recall = 0;
+        uint32_t cur_recall = 0;
         for (auto &v : res)
         {
             if (gt.find(v) != gt.end())
@@ -223,11 +223,11 @@ double calculate_recall(unsigned num_queries, unsigned *gold_std, float *gs_dist
     return ((double)(total_recall / (num_queries))) * ((double)(100.0 / recall_at));
 }
 
-double calculate_range_search_recall(unsigned num_queries, std::vector<std::vector<uint32_t>> &groundtruth,
+double calculate_range_search_recall(uint32_t num_queries, std::vector<std::vector<uint32_t>> &groundtruth,
                                      std::vector<std::vector<uint32_t>> &our_results)
 {
     double total_recall = 0;
-    std::set<unsigned> gt, res;
+    std::set<uint32_t> gt, res;
 
     for (size_t i = 0; i < num_queries; i++)
     {
@@ -236,7 +236,7 @@ double calculate_range_search_recall(unsigned num_queries, std::vector<std::vect
 
         gt.insert(groundtruth[i].begin(), groundtruth[i].end());
         res.insert(our_results[i].begin(), our_results[i].end());
-        unsigned cur_recall = 0;
+        uint32_t cur_recall = 0;
         for (auto &v : gt)
         {
             if (res.find(v) != res.end())

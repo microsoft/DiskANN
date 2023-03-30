@@ -7,10 +7,10 @@
 void block_convert(std::ifstream &reader, std::ofstream &writer, float *read_buf, uint8_t *write_buf, size_t npts,
                    size_t ndims)
 {
-    reader.read((char *)read_buf, npts * (ndims * sizeof(float) + sizeof(unsigned)));
+    reader.read((char *)read_buf, npts * (ndims * sizeof(float) + sizeof(uint32_t)));
     for (size_t i = 0; i < npts; i++)
     {
-        memcpy(write_buf + i * (ndims + 4), read_buf + i * (ndims + 1), sizeof(unsigned));
+        memcpy(write_buf + i * (ndims + 4), read_buf + i * (ndims + 1), sizeof(uint32_t));
         for (size_t d = 0; d < ndims; d++)
             write_buf[i * (ndims + 4) + 4 + d] = (uint8_t)read_buf[i * (ndims + 1) + 1 + d];
     }
@@ -28,8 +28,8 @@ int main(int argc, char **argv)
     size_t fsize = reader.tellg();
     reader.seekg(0, std::ios::beg);
 
-    unsigned ndims_u32;
-    reader.read((char *)&ndims_u32, sizeof(unsigned));
+    uint32_t ndims_u32;
+    reader.read((char *)&ndims_u32, sizeof(uint32_t));
     reader.seekg(0, std::ios::beg);
     size_t ndims = (size_t)ndims_u32;
     size_t npts = fsize / ((ndims + 1) * sizeof(float));

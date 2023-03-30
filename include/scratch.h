@@ -71,7 +71,7 @@ template <typename T> class InMemQueryScratch
     {
         return _occlude_factor;
     }
-    inline tsl::robin_set<unsigned> &inserted_into_pool_rs()
+    inline tsl::robin_set<uint32_t> &inserted_into_pool_rs()
     {
         return _inserted_into_pool_rs;
     }
@@ -79,7 +79,7 @@ template <typename T> class InMemQueryScratch
     {
         return *_inserted_into_pool_bs;
     }
-    inline std::vector<unsigned> &id_scratch()
+    inline std::vector<uint32_t> &id_scratch()
     {
         return _id_scratch;
     }
@@ -87,7 +87,7 @@ template <typename T> class InMemQueryScratch
     {
         return _dist_scratch;
     }
-    inline tsl::robin_set<unsigned> &expanded_nodes_set()
+    inline tsl::robin_set<uint32_t> &expanded_nodes_set()
     {
         return _expanded_nodes_set;
     }
@@ -95,7 +95,7 @@ template <typename T> class InMemQueryScratch
     {
         return _expanded_nghrs_vec;
     }
-    inline std::vector<unsigned> &occlude_list_output()
+    inline std::vector<uint32_t> &occlude_list_output()
     {
         return _occlude_list_output;
     }
@@ -124,7 +124,7 @@ template <typename T> class InMemQueryScratch
     std::vector<float> _occlude_factor;
 
     // Capacity initialized to 20L
-    tsl::robin_set<unsigned> _inserted_into_pool_rs;
+    tsl::robin_set<uint32_t> _inserted_into_pool_rs;
 
     // Use a pointer here to allow for forward declaration of dynamic_bitset
     // in public headers to avoid making boost a dependency for clients
@@ -132,16 +132,16 @@ template <typename T> class InMemQueryScratch
     boost::dynamic_bitset<> *_inserted_into_pool_bs;
 
     // _id_scratch.size() must be > R*GRAPH_SLACK_FACTOR for iterate_to_fp
-    std::vector<unsigned> _id_scratch;
+    std::vector<uint32_t> _id_scratch;
 
     // _dist_scratch must be > R*GRAPH_SLACK_FACTOR for iterate_to_fp
     // _dist_scratch should be at least the size of id_scratch
     std::vector<float> _dist_scratch;
 
     //  Buffers used in process delete, capacity increases as needed
-    tsl::robin_set<unsigned> _expanded_nodes_set;
+    tsl::robin_set<uint32_t> _expanded_nodes_set;
     std::vector<Neighbor> _expanded_nghrs_vec;
-    std::vector<unsigned> _occlude_list_output;
+    std::vector<uint32_t> _occlude_list_output;
 };
 
 //

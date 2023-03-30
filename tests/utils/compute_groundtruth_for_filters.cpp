@@ -320,7 +320,7 @@ inline std::vector<size_t> load_filtered_bin_as_float(const char *filename, floa
     uint64_t start_id = part_num * PARTSIZE;
     uint64_t end_id = (std::min)(start_id + PARTSIZE, (uint64_t)npts_i32);
     npts = end_id - start_id;
-    ndims = (unsigned)ndims_i32;
+    ndims = (uint32_t)ndims_i32;
     uint64_t nptsuint64_t = (uint64_t)npts;
     uint64_t ndimsuint64_t = (uint64_t)ndims;
     npoints_filt = 0;
@@ -384,7 +384,7 @@ inline void save_groundtruth_as_one_file(const std::string filename, int32_t *da
     writer.write((char *)&ndims_i32, sizeof(int));
     std::cout << "Saving truthset in one file (npts, dim, npts*dim id-matrix, "
                  "npts*dim dist-matrix) with npts = "
-              << npts << ", dim = " << ndims << ", size = " << 2 * npts * ndims * sizeof(unsigned) + 2 * sizeof(int)
+              << npts << ", dim = " << ndims << ", size = " << 2 * npts * ndims * sizeof(uint32_t) + 2 * sizeof(int)
               << "B" << std::endl;
 
     writer.write((char *)data, npts * ndims * sizeof(uint32_t));
@@ -606,8 +606,8 @@ void load_truthset(const std::string &bin_file, uint32_t *&ids, float *&dists, s
     int npts_i32, dim_i32;
     reader.read((char *)&npts_i32, sizeof(int));
     reader.read((char *)&dim_i32, sizeof(int));
-    npts = (unsigned)npts_i32;
-    dim = (unsigned)dim_i32;
+    npts = (uint32_t)npts_i32;
+    dim = (uint32_t)dim_i32;
 
     diskann::cout << "Metadata: #pts = " << npts << ", #dims = " << dim << "... " << std::endl;
 
@@ -868,7 +868,7 @@ int main(int argc, char **argv)
 
         // Combine the label specific ground truths to produce a single GT file
 
-        unsigned *gt_ids = nullptr;
+        uint32_t *gt_ids = nullptr;
         float *gt_dists = nullptr;
         size_t gt_num, gt_dim;
 

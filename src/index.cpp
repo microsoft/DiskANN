@@ -54,7 +54,7 @@ Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_point
                               const size_t num_pq_chunks, const bool use_opq, const size_t num_frozen_pts)
     : _dist_metric(m), _dim(dim), _num_frozen_pts(num_frozen_pts), _max_points(max_points),
       _dynamic_index(dynamic_index), _enable_tags(enable_tags), _indexingMaxC(DEFAULT_MAXC), _query_scratch(nullptr),
-      _conc_consolidate(concurrent_consolidate), _delete_set(new tsl::robin_set<unsigned>), _pq_dist(pq_dist_build),
+      _conc_consolidate(concurrent_consolidate), _delete_set(new tsl::robin_set<uint32_t>), _pq_dist(pq_dist_build),
       _use_opq(use_opq), _num_pq_chunks(num_pq_chunks)
 {
     if (dynamic_index && !enable_tags)
@@ -100,7 +100,7 @@ Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_point
     alloc_aligned(((void **)&_data), total_internal_points * _aligned_dim * sizeof(T), 8 * sizeof(T));
     std::memset(_data, 0, total_internal_points * _aligned_dim * sizeof(T));
 
-    _start = (unsigned)_max_points;
+    _start = (uint32_t)_max_points;
 
     _final_graph.resize(total_internal_points);
 
@@ -221,7 +221,7 @@ template <typename T, typename TagT, typename LabelT> size_t Index<T, TagT, Labe
 
 // save the graph index on a file as an adjacency list. For each point,
 // first store the number of neighbors, and then the neighbor list (each as
-// 4 byte unsigned)
+// 4 byte uint32_t)
 template <typename T, typename TagT, typename LabelT> size_t Index<T, TagT, LabelT>::save_graph(std::string graph_file)
 {
     std::ofstream out;
@@ -232,20 +232,20 @@ template <typename T, typename TagT, typename LabelT> size_t Index<T, TagT, Labe
     size_t index_size = 24;
     uint32_t max_degree = 0;
     out.write((char *)&index_size, sizeof(uint64_t));
-    out.write((char *)&_max_observed_degree, sizeof(unsigned));
-    unsigned ep_u32 = _start;
-    out.write((char *)&ep_u32, sizeof(unsigned));
+    out.write((char *)&_max_observed_degree, sizeof(uint32_t));
+    uint32_t ep_u32 = _start;
+    out.write((char *)&ep_u32, sizeof(uint32_t));
     out.write((char *)&_num_frozen_pts, sizeof(size_t));
     // Note: at this point, either _nd == _max_points or any frozen points have
     // been temporarily moved to _nd, so _nd + _num_frozen_points is the valid
     // location limit.
-    for (unsigned i = 0; i < _nd + _num_frozen_pts; i++)
+    for (uint32_t i = 0; i < _nd + _num_frozen_pts; i++)
     {
-        unsigned GK = (unsigned)_final_graph[i].size();
-        out.write((char *)&GK, sizeof(unsigned));
-        out.write((char *)_final_graph[i].data(), GK * sizeof(unsigned));
+        uint32_t GK = (uint32_t)_final_graph[i].size();
+        out.write((char *)&GK, sizeof(uint32_t));
+        out.write((char *)_final_graph[i].data(), GK * sizeof(uint32_t));
         max_degree = _final_graph[i].size() > max_degree ? (uint32_t)_final_graph[i].size() : max_degree;
-        index_size += (size_t)(sizeof(unsigned) * (GK + 1));
+        index_size += (size_t)(sizeof(uint32_t) * (GK + 1));
     }
     out.seekp(file_offset, out.beg);
     out.write((char *)&index_size, sizeof(uint64_t));
@@ -573,7 +573,7 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
         {
             std::ifstream medoid_stream(labels_to_medoids);
             std::string line, token;
-            unsigned line_cnt = 0;
+            uint32_t line_cnt = 0;
 
             _label_to_medoid_id.clear();
 
@@ -640,7 +640,7 @@ template <typename T, typename TagT, typename LabelT>
 size_t Index<T, TagT, LabelT>::get_graph_num_frozen_points(const std::string &graph_file)
 {
     size_t expected_file_size;
-    unsigned max_observed_degree, start;
+    uint32_t max_observed_degree, start;
     size_t file_frozen_pts;
 
     std::ifstream in;
@@ -648,8 +648,8 @@ size_t Index<T, TagT, LabelT>::get_graph_num_frozen_points(const std::string &gr
 
     in.open(graph_file, std::ios::binary);
     in.read((char *)&expected_file_size, sizeof(size_t));
-    in.read((char *)&max_observed_degree, sizeof(unsigned));
-    in.read((char *)&start, sizeof(unsigned));
+    in.read((char *)&max_observed_degree, sizeof(uint32_t));
+    in.read((char *)&start, sizeof(uint32_t));
     in.read((char *)&file_frozen_pts, sizeof(size_t));
 
     return file_frozen_pts;
@@ -670,14 +670,14 @@ size_t Index<T, TagT, LabelT>::load_graph(std::string filename, size_t expected_
     size_t file_frozen_pts;
 
 #ifdef EXEC_ENV_OLS
-    int header_size = 2 * sizeof(size_t) + 2 * sizeof(unsigned);
+    int header_size = 2 * sizeof(size_t) + 2 * sizeof(uint32_t);
     std::unique_ptr<char[]> header = std::make_unique<char[]>(header_size);
     read_array(reader, header.get(), header_size);
 
     expected_file_size = *((size_t *)header.get());
     _max_observed_degree = *((uint32_t *)(header.get() + sizeof(size_t)));
-    _start = *((uint32_t *)(header.get() + sizeof(size_t) + sizeof(unsigned)));
-    file_frozen_pts = *((size_t *)(header.get() + sizeof(size_t) + sizeof(unsigned) + sizeof(unsigned)));
+    _start = *((uint32_t *)(header.get() + sizeof(size_t) + sizeof(uint32_t)));
+    file_frozen_pts = *((size_t *)(header.get() + sizeof(size_t) + sizeof(uint32_t) + sizeof(uint32_t)));
 #else
 
     size_t file_offset = 0; // will need this for single file format support
@@ -686,8 +686,8 @@ size_t Index<T, TagT, LabelT>::load_graph(std::string filename, size_t expected_
     in.open(filename, std::ios::binary);
     in.seekg(file_offset, in.beg);
     in.read((char *)&expected_file_size, sizeof(size_t));
-    in.read((char *)&_max_observed_degree, sizeof(unsigned));
-    in.read((char *)&_start, sizeof(unsigned));
+    in.read((char *)&_max_observed_degree, sizeof(uint32_t));
+    in.read((char *)&_start, sizeof(uint32_t));
     in.read((char *)&file_frozen_pts, sizeof(size_t));
     size_t vamana_metadata_size = sizeof(size_t) + sizeof(uint32_t) + sizeof(uint32_t) + sizeof(size_t);
 
@@ -762,11 +762,11 @@ size_t Index<T, TagT, LabelT>::load_graph(std::string filename, size_t expected_
 #else
     size_t bytes_read = vamana_metadata_size;
     size_t cc = 0;
-    unsigned nodes_read = 0;
+    uint32_t nodes_read = 0;
     while (bytes_read != expected_file_size)
     {
-        unsigned k;
-        in.read((char *)&k, sizeof(unsigned));
+        uint32_t k;
+        in.read((char *)&k, sizeof(uint32_t));
 
         if (k == 0)
         {
@@ -775,9 +775,9 @@ size_t Index<T, TagT, LabelT>::load_graph(std::string filename, size_t expected_
 
         cc += k;
         ++nodes_read;
-        std::vector<unsigned> tmp(k);
+        std::vector<uint32_t> tmp(k);
         tmp.reserve(k);
-        in.read((char *)tmp.data(), k * sizeof(unsigned));
+        in.read((char *)tmp.data(), k * sizeof(uint32_t));
         _final_graph[nodes_read - 1].swap(tmp);
         bytes_read += sizeof(uint32_t) * ((size_t)k + 1);
         if (nodes_read % 10000000 == 0)
@@ -808,13 +808,13 @@ template <typename T, typename TagT, typename LabelT> int Index<T, TagT, LabelT>
     return 0;
 }
 
-template <typename T, typename TagT, typename LabelT> unsigned Index<T, TagT, LabelT>::calculate_entry_point()
+template <typename T, typename TagT, typename LabelT> uint32_t Index<T, TagT, LabelT>::calculate_entry_point()
 {
     //  TODO: need to compute medoid with PQ data too, for now sample at random
     if (_pq_dist)
     {
         size_t r = (size_t)rand() * (size_t)RAND_MAX + (size_t)rand();
-        return (unsigned)(r % (size_t)_nd);
+        return (uint32_t)(r % (size_t)_nd);
     }
 
     // allocate and init centroid
@@ -846,9 +846,9 @@ template <typename T, typename TagT, typename LabelT> unsigned Index<T, TagT, La
         }
     }
     // find imin
-    unsigned min_idx = 0;
+    uint32_t min_idx = 0;
     float min_dist = distances[0];
-    for (unsigned i = 1; i < _nd; i++)
+    for (uint32_t i = 1; i < _nd; i++)
     {
         if (distances[i] < min_dist)
         {
@@ -862,14 +862,14 @@ template <typename T, typename TagT, typename LabelT> unsigned Index<T, TagT, La
     return min_idx;
 }
 
-template <typename T, typename TagT, typename LabelT> std::vector<unsigned> Index<T, TagT, LabelT>::get_init_ids()
+template <typename T, typename TagT, typename LabelT> std::vector<uint32_t> Index<T, TagT, LabelT>::get_init_ids()
 {
-    std::vector<unsigned> init_ids;
+    std::vector<uint32_t> init_ids;
     init_ids.reserve(1 + _num_frozen_pts);
 
     init_ids.emplace_back(_start);
 
-    for (unsigned frozen = _max_points; frozen < _max_points + _num_frozen_pts; frozen++)
+    for (uint32_t frozen = _max_points; frozen < _max_points + _num_frozen_pts; frozen++)
     {
         if (frozen != _start)
         {
@@ -882,15 +882,15 @@ template <typename T, typename TagT, typename LabelT> std::vector<unsigned> Inde
 
 template <typename T, typename TagT, typename LabelT>
 std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
-    const T *query, const unsigned Lsize, const std::vector<unsigned> &init_ids, InMemQueryScratch<T> *scratch,
+    const T *query, const uint32_t Lsize, const std::vector<uint32_t> &init_ids, InMemQueryScratch<T> *scratch,
     bool use_filter, const std::vector<LabelT> &filter_label, bool search_invocation)
 {
     std::vector<Neighbor> &expanded_nodes = scratch->pool();
     NeighborPriorityQueue &best_L_nodes = scratch->best_l_nodes();
     best_L_nodes.reserve(Lsize);
-    tsl::robin_set<unsigned> &inserted_into_pool_rs = scratch->inserted_into_pool_rs();
+    tsl::robin_set<uint32_t> &inserted_into_pool_rs = scratch->inserted_into_pool_rs();
     boost::dynamic_bitset<> &inserted_into_pool_bs = scratch->inserted_into_pool_bs();
-    std::vector<unsigned> &id_scratch = scratch->id_scratch();
+    std::vector<uint32_t> &id_scratch = scratch->id_scratch();
     std::vector<float> &dist_scratch = scratch->dist_scratch();
     assert(id_scratch.size() == 0);
     T *aligned_query = scratch->aligned_query();
@@ -948,13 +948,13 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
     }
 
     // Lambda to determine if a node has been visited
-    auto is_not_visited = [this, fast_iterate, &inserted_into_pool_bs, &inserted_into_pool_rs](const unsigned id) {
+    auto is_not_visited = [this, fast_iterate, &inserted_into_pool_bs, &inserted_into_pool_rs](const uint32_t id) {
         return fast_iterate ? inserted_into_pool_bs[id] == 0
                             : inserted_into_pool_rs.find(id) == inserted_into_pool_rs.end();
     };
 
     // Lambda to batch compute query<-> node distances in PQ space
-    auto compute_dists = [this, pq_coord_scratch, pq_dists](const std::vector<unsigned> &ids,
+    auto compute_dists = [this, pq_coord_scratch, pq_dists](const std::vector<uint32_t> &ids,
                                                             std::vector<float> &dists_out) {
         diskann::aggregate_coords(ids, this->_pq_data, this->_num_pq_chunks, pq_coord_scratch);
         diskann::pq_dist_lookup(pq_coord_scratch, ids.size(), this->_num_pq_chunks, pq_dists, dists_out);
@@ -1002,7 +1002,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
             if (_pq_dist)
                 pq_dist_lookup(pq_coord_scratch, 1, this->_num_pq_chunks, pq_dists, &distance);
             else
-                distance = _distance->compare(_data + _aligned_dim * (size_t)id, aligned_query, (unsigned)_aligned_dim);
+                distance = _distance->compare(_data + _aligned_dim * (size_t)id, aligned_query, (uint32_t)_aligned_dim);
             Neighbor nn = Neighbor(id, distance);
             best_L_nodes.insert(nn);
         }
@@ -1097,7 +1097,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
             assert(dist_scratch.size() == 0);
             for (size_t m = 0; m < id_scratch.size(); ++m)
             {
-                unsigned id = id_scratch[m];
+                uint32_t id = id_scratch[m];
 
                 if (m + 1 < id_scratch.size())
                 {
@@ -1107,7 +1107,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                 }
 
                 dist_scratch.push_back(
-                    _distance->compare(aligned_query, _data + _aligned_dim * (size_t)id, (unsigned)_aligned_dim));
+                    _distance->compare(aligned_query, _data + _aligned_dim * (size_t)id, (uint32_t)_aligned_dim));
             }
         }
         cmps += id_scratch.size();
@@ -1123,11 +1123,11 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
 
 template <typename T, typename TagT, typename LabelT>
 void Index<T, TagT, LabelT>::search_for_point_and_prune(int location, uint32_t Lindex,
-                                                        std::vector<unsigned> &pruned_list,
+                                                        std::vector<uint32_t> &pruned_list,
                                                         InMemQueryScratch<T> *scratch, bool use_filter,
                                                         uint32_t filteredLindex)
 {
-    const std::vector<unsigned> init_ids = get_init_ids();
+    const std::vector<uint32_t> init_ids = get_init_ids();
     const std::vector<LabelT> unused_filter_label;
 
     if (!use_filter)
@@ -1146,9 +1146,9 @@ void Index<T, TagT, LabelT>::search_for_point_and_prune(int location, uint32_t L
 
     auto &pool = scratch->pool();
 
-    for (unsigned i = 0; i < pool.size(); i++)
+    for (uint32_t i = 0; i < pool.size(); i++)
     {
-        if (pool[i].id == (unsigned)location)
+        if (pool[i].id == (uint32_t)location)
         {
             pool.erase(pool.begin() + i);
             i--;
@@ -1167,10 +1167,10 @@ void Index<T, TagT, LabelT>::search_for_point_and_prune(int location, uint32_t L
 }
 
 template <typename T, typename TagT, typename LabelT>
-void Index<T, TagT, LabelT>::occlude_list(const unsigned location, std::vector<Neighbor> &pool, const float alpha,
-                                          const unsigned degree, const unsigned maxc, std::vector<unsigned> &result,
+void Index<T, TagT, LabelT>::occlude_list(const uint32_t location, std::vector<Neighbor> &pool, const float alpha,
+                                          const uint32_t degree, const uint32_t maxc, std::vector<uint32_t> &result,
                                           InMemQueryScratch<T> *scratch,
-                                          const tsl::robin_set<unsigned> *const delete_set_ptr)
+                                          const tsl::robin_set<uint32_t> *const delete_set_ptr)
 {
     if (pool.size() == 0)
         return;
@@ -1238,7 +1238,7 @@ void Index<T, TagT, LabelT>::occlude_list(const unsigned location, std::vector<N
                     continue;
 
                 float djk = _distance->compare(_data + _aligned_dim * (size_t)iter2->id,
-                                               _data + _aligned_dim * (size_t)iter->id, (unsigned)_aligned_dim);
+                                               _data + _aligned_dim * (size_t)iter->id, (uint32_t)_aligned_dim);
                 if (_dist_metric == diskann::Metric::L2 || _dist_metric == diskann::Metric::COSINE)
                 {
                     occlude_factor[t] = (djk == 0) ? std::numeric_limits<float>::max()
@@ -1261,16 +1261,16 @@ void Index<T, TagT, LabelT>::occlude_list(const unsigned location, std::vector<N
 }
 
 template <typename T, typename TagT, typename LabelT>
-void Index<T, TagT, LabelT>::prune_neighbors(const unsigned location, std::vector<Neighbor> &pool,
-                                             std::vector<unsigned> &pruned_list, InMemQueryScratch<T> *scratch)
+void Index<T, TagT, LabelT>::prune_neighbors(const uint32_t location, std::vector<Neighbor> &pool,
+                                             std::vector<uint32_t> &pruned_list, InMemQueryScratch<T> *scratch)
 {
     prune_neighbors(location, pool, _indexingRange, _indexingMaxC, _indexingAlpha, pruned_list, scratch);
 }
 
 template <typename T, typename TagT, typename LabelT>
-void Index<T, TagT, LabelT>::prune_neighbors(const unsigned location, std::vector<Neighbor> &pool, const uint32_t range,
+void Index<T, TagT, LabelT>::prune_neighbors(const uint32_t location, std::vector<Neighbor> &pool, const uint32_t range,
                                              const uint32_t max_candidate_size, const float alpha,
-                                             std::vector<unsigned> &pruned_list, InMemQueryScratch<T> *scratch)
+                                             std::vector<uint32_t> &pruned_list, InMemQueryScratch<T> *scratch)
 {
     if (pool.size() == 0)
     {
@@ -1286,7 +1286,7 @@ void Index<T, TagT, LabelT>::prune_neighbors(const unsigned location, std::vecto
     {
         for (auto &ngh : pool)
             ngh.distance = _distance->compare(_data + _aligned_dim * (size_t)ngh.id,
-                                              _data + _aligned_dim * (size_t)location, (unsigned)_aligned_dim);
+                                              _data + _aligned_dim * (size_t)location, (uint32_t)_aligned_dim);
     }
 
     // sort the pool based on distance to query and prune it with occlude_list
@@ -1310,7 +1310,7 @@ void Index<T, TagT, LabelT>::prune_neighbors(const unsigned location, std::vecto
 }
 
 template <typename T, typename TagT, typename LabelT>
-void Index<T, TagT, LabelT>::inter_insert(unsigned n, std::vector<unsigned> &pruned_list, const uint32_t range,
+void Index<T, TagT, LabelT>::inter_insert(uint32_t n, std::vector<uint32_t> &pruned_list, const uint32_t range,
                                           InMemQueryScratch<T> *scratch)
 {
     const auto &src_pool = pruned_list;
@@ -1322,7 +1322,7 @@ void Index<T, TagT, LabelT>::inter_insert(unsigned n, std::vector<unsigned> &pru
         // des.loc is the loc of the neighbors of n
         assert(des < _max_points + _num_frozen_pts);
         // des_pool contains the neighbors of the neighbors of n
-        std::vector<unsigned> copy_of_neighbors;
+        std::vector<uint32_t> copy_of_neighbors;
         bool prune_needed = false;
         {
             LockGuard guard(_locks[des]);
@@ -1346,7 +1346,7 @@ void Index<T, TagT, LabelT>::inter_insert(unsigned n, std::vector<unsigned> &pru
 
         if (prune_needed)
         {
-            tsl::robin_set<unsigned> dummy_visited(0);
+            tsl::robin_set<uint32_t> dummy_visited(0);
             std::vector<Neighbor> dummy_pool(0);
 
             size_t reserveSize = (size_t)(std::ceil(1.05 * GRAPH_SLACK_FACTOR * range));
@@ -1358,12 +1358,12 @@ void Index<T, TagT, LabelT>::inter_insert(unsigned n, std::vector<unsigned> &pru
                 if (dummy_visited.find(cur_nbr) == dummy_visited.end() && cur_nbr != des)
                 {
                     float dist = _distance->compare(_data + _aligned_dim * (size_t)des,
-                                                    _data + _aligned_dim * (size_t)cur_nbr, (unsigned)_aligned_dim);
+                                                    _data + _aligned_dim * (size_t)cur_nbr, (uint32_t)_aligned_dim);
                     dummy_pool.emplace_back(Neighbor(cur_nbr, dist));
                     dummy_visited.insert(cur_nbr);
                 }
             }
-            std::vector<unsigned> new_out_neighbors;
+            std::vector<uint32_t> new_out_neighbors;
             prune_neighbors(des, dummy_pool, new_out_neighbors, scratch);
             {
                 LockGuard guard(_locks[des]);
@@ -1375,14 +1375,14 @@ void Index<T, TagT, LabelT>::inter_insert(unsigned n, std::vector<unsigned> &pru
 }
 
 template <typename T, typename TagT, typename LabelT>
-void Index<T, TagT, LabelT>::inter_insert(unsigned n, std::vector<unsigned> &pruned_list, InMemQueryScratch<T> *scratch)
+void Index<T, TagT, LabelT>::inter_insert(uint32_t n, std::vector<uint32_t> &pruned_list, InMemQueryScratch<T> *scratch)
 {
     inter_insert(n, pruned_list, _indexingRange, scratch);
 }
 
 template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT>::link(Parameters &parameters)
 {
-    unsigned num_threads = parameters.Get<unsigned>("num_threads");
+    uint32_t num_threads = parameters.Get<uint32_t>("num_threads");
     if (num_threads != 0)
         omp_set_num_threads(num_threads);
 
@@ -1391,31 +1391,31 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
     if (num_threads != 0)
         omp_set_num_threads(num_threads);
 
-    _indexingQueueSize = parameters.Get<unsigned>("L"); // Search list size
-    _filterIndexingQueueSize = parameters.Get<unsigned>("Lf");
-    _indexingRange = parameters.Get<unsigned>("R");
-    _indexingMaxC = parameters.Get<unsigned>("C");
+    _indexingQueueSize = parameters.Get<uint32_t>("L"); // Search list size
+    _filterIndexingQueueSize = parameters.Get<uint32_t>("Lf");
+    _indexingRange = parameters.Get<uint32_t>("R");
+    _indexingMaxC = parameters.Get<uint32_t>("C");
     _indexingAlpha = parameters.Get<float>("alpha");
 
     /* visit_order is a vector that is initialized to the entire graph */
-    std::vector<unsigned> visit_order;
+    std::vector<uint32_t> visit_order;
     std::vector<diskann::Neighbor> pool, tmp;
-    tsl::robin_set<unsigned> visited;
+    tsl::robin_set<uint32_t> visited;
     visit_order.reserve(_nd + _num_frozen_pts);
-    for (unsigned i = 0; i < (unsigned)_nd; i++)
+    for (uint32_t i = 0; i < (uint32_t)_nd; i++)
     {
         visit_order.emplace_back(i);
     }
 
     // If there are any frozen points, add them all.
-    for (unsigned frozen = _max_points; frozen < _max_points + _num_frozen_pts; frozen++)
+    for (uint32_t frozen = _max_points; frozen < _max_points + _num_frozen_pts; frozen++)
     {
         visit_order.emplace_back(frozen);
     }
 
     // if there are frozen points, the first such one is set to be the _start
     if (_num_frozen_pts > 0)
-        _start = (unsigned)_max_points;
+        _start = (uint32_t)_max_points;
     else
         _start = calculate_entry_point();
 
@@ -1434,7 +1434,7 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
         ScratchStoreManager<InMemQueryScratch<T>> manager(_query_scratch);
         auto scratch = manager.scratch_space();
 
-        std::vector<unsigned> pruned_list;
+        std::vector<uint32_t> pruned_list;
         if (_filtered_index)
         {
             search_for_point_and_prune(node, _indexingQueueSize, pruned_list, scratch, _filtered_index,
@@ -1473,16 +1473,16 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
             ScratchStoreManager<InMemQueryScratch<T>> manager(_query_scratch);
             auto scratch = manager.scratch_space();
 
-            tsl::robin_set<unsigned> dummy_visited(0);
+            tsl::robin_set<uint32_t> dummy_visited(0);
             std::vector<Neighbor> dummy_pool(0);
-            std::vector<unsigned> new_out_neighbors;
+            std::vector<uint32_t> new_out_neighbors;
 
             for (auto cur_nbr : _final_graph[node])
             {
                 if (dummy_visited.find(cur_nbr) == dummy_visited.end() && cur_nbr != node)
                 {
                     float dist = _distance->compare(_data + _aligned_dim * (size_t)node,
-                                                    _data + _aligned_dim * (size_t)cur_nbr, (unsigned)_aligned_dim);
+                                                    _data + _aligned_dim * (size_t)cur_nbr, (uint32_t)_aligned_dim);
                     dummy_pool.emplace_back(Neighbor(cur_nbr, dist));
                     dummy_visited.insert(cur_nbr);
                 }
@@ -1503,9 +1503,9 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
 template <typename T, typename TagT, typename LabelT>
 void Index<T, TagT, LabelT>::prune_all_nbrs(const Parameters &parameters)
 {
-    const unsigned range = parameters.Get<unsigned>("R");
-    const unsigned maxc = parameters.Get<unsigned>("C");
-    const float alpha = parameters.Get<unsigned>("alpha");
+    const uint32_t range = parameters.Get<uint32_t>("R");
+    const uint32_t maxc = parameters.Get<uint32_t>("C");
+    const float alpha = parameters.Get<uint32_t>("alpha");
     _filtered_index = true;
 
     diskann::Timer timer;
@@ -1516,9 +1516,9 @@ void Index<T, TagT, LabelT>::prune_all_nbrs(const Parameters &parameters)
         {
             if (_final_graph[node].size() > range)
             {
-                tsl::robin_set<unsigned> dummy_visited(0);
+                tsl::robin_set<uint32_t> dummy_visited(0);
                 std::vector<Neighbor> dummy_pool(0);
-                std::vector<unsigned> new_out_neighbors;
+                std::vector<uint32_t> new_out_neighbors;
 
                 ScratchStoreManager<InMemQueryScratch<T>> manager(_query_scratch);
                 auto scratch = manager.scratch_space();
@@ -1528,7 +1528,7 @@ void Index<T, TagT, LabelT>::prune_all_nbrs(const Parameters &parameters)
                     if (dummy_visited.find(cur_nbr) == dummy_visited.end() && cur_nbr != node)
                     {
                         float dist = _distance->compare(_data + _aligned_dim * (size_t)node,
-                                                        _data + _aligned_dim * (size_t)cur_nbr, (unsigned)_aligned_dim);
+                                                        _data + _aligned_dim * (size_t)cur_nbr, (uint32_t)_aligned_dim);
                         dummy_pool.emplace_back(Neighbor(cur_nbr, dist));
                         dummy_visited.insert(cur_nbr);
                     }
@@ -1548,7 +1548,7 @@ void Index<T, TagT, LabelT>::prune_all_nbrs(const Parameters &parameters)
     {
         if (i < _nd || i >= _max_points)
         {
-            const std::vector<unsigned> &pool = _final_graph[i];
+            const std::vector<uint32_t> &pool = _final_graph[i];
             max = (std::max)(max, pool.size());
             min = (std::min)(min, pool.size());
             total += pool.size();
@@ -1583,7 +1583,7 @@ void Index<T, TagT, LabelT>::set_start_points(const T *data, size_t data_count)
 }
 
 template <typename T, typename TagT, typename LabelT>
-void Index<T, TagT, LabelT>::set_start_points_at_random(T radius, unsigned int random_seed)
+void Index<T, TagT, LabelT>::set_start_points_at_random(T radius, uint32_t random_seed)
 {
     std::mt19937 gen{random_seed};
     std::normal_distribution<> d{0.0, 1.0};
@@ -1631,8 +1631,8 @@ void Index<T, TagT, LabelT>::build_with_data_populated(Parameters &parameters, c
     {
         for (size_t i = 0; i < tags.size(); ++i)
         {
-            _tag_to_location[tags[i]] = (unsigned)i;
-            _location_to_tag.set(static_cast<unsigned>(i), tags[i]);
+            _tag_to_location[tags[i]] = (uint32_t)i;
+            _location_to_tag.set(static_cast<uint32_t>(i), tags[i]);
         }
     }
 
@@ -1662,7 +1662,7 @@ void Index<T, TagT, LabelT>::build_with_data_populated(Parameters &parameters, c
     diskann::cout << "Index built with degree: max:" << max << "  avg:" << (float)total / (float)(_nd + _num_frozen_pts)
                   << "  min:" << min << "  count(deg<2):" << cnt << std::endl;
 
-    _max_observed_degree = std::max((unsigned)max, _max_observed_degree);
+    _max_observed_degree = std::max((uint32_t)max, _max_observed_degree);
     _has_built = true;
 }
 
@@ -1894,7 +1894,7 @@ void Index<T, TagT, LabelT>::parse_label_file(const std::string &label_file, siz
     }
 
     std::string line, token;
-    unsigned line_cnt = 0;
+    uint32_t line_cnt = 0;
 
     while (std::getline(infile, line))
     {
@@ -2014,7 +2014,7 @@ void Index<T, TagT, LabelT>::build_filtered_index(const char *filename, const st
 
 template <typename T, typename TagT, typename LabelT>
 template <typename IdType>
-std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search(const T *query, const size_t K, const unsigned L,
+std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search(const T *query, const size_t K, const uint32_t L,
                                                              IdType *indices, float *distances)
 {
     if (K > (uint64_t)L)
@@ -2034,7 +2034,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search(const T *query, con
     }
 
     const std::vector<LabelT> unused_filter_label;
-    const std::vector<unsigned> init_ids = get_init_ids();
+    const std::vector<uint32_t> init_ids = get_init_ids();
 
     std::shared_lock<std::shared_timed_mutex> lock(_update_lock);
 
@@ -2076,7 +2076,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search(const T *query, con
 template <typename T, typename TagT, typename LabelT>
 template <typename IdType>
 std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const T *query, const LabelT &filter_label,
-                                                                          const size_t K, const unsigned L,
+                                                                          const size_t K, const uint32_t L,
                                                                           IdType *indices, float *distances)
 {
     if (K > (uint64_t)L)
@@ -2096,7 +2096,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
     }
 
     std::vector<LabelT> filter_vec;
-    std::vector<unsigned> init_ids = get_init_ids();
+    std::vector<uint32_t> init_ids = get_init_ids();
 
     std::shared_lock<std::shared_timed_mutex> lock(_update_lock);
 
@@ -2151,7 +2151,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
 }
 
 template <typename T, typename TagT, typename LabelT>
-size_t Index<T, TagT, LabelT>::search_with_tags(const T *query, const uint64_t K, const unsigned L, TagT *tags,
+size_t Index<T, TagT, LabelT>::search_with_tags(const T *query, const uint64_t K, const uint32_t L, TagT *tags,
                                                 float *distances, std::vector<T *> &res_vectors)
 {
     if (K > (uint64_t)L)
@@ -2171,7 +2171,7 @@ size_t Index<T, TagT, LabelT>::search_with_tags(const T *query, const uint64_t K
 
     std::shared_lock<std::shared_timed_mutex> ul(_update_lock);
 
-    const std::vector<unsigned> init_ids = get_init_ids();
+    const std::vector<uint32_t> init_ids = get_init_ids();
     const std::vector<LabelT> unused_filter_label;
 
     iterate_to_fixed_point(query, L, init_ids, scratch, false, unused_filter_label, true);
@@ -2271,7 +2271,7 @@ template <typename T, typename TagT, typename LabelT> int Index<T, TagT, LabelT>
 
     if (_data_compacted)
     {
-        for (unsigned slot = (unsigned)_nd; slot < _max_points; ++slot)
+        for (uint32_t slot = (uint32_t)_nd; slot < _max_points; ++slot)
         {
             _empty_slots.insert(slot);
         }
@@ -2281,17 +2281,17 @@ template <typename T, typename TagT, typename LabelT> int Index<T, TagT, LabelT>
 }
 
 template <typename T, typename TagT, typename LabelT>
-inline void Index<T, TagT, LabelT>::process_delete(const tsl::robin_set<unsigned> &old_delete_set, size_t loc,
-                                                   const unsigned range, const unsigned maxc, const float alpha,
+inline void Index<T, TagT, LabelT>::process_delete(const tsl::robin_set<uint32_t> &old_delete_set, size_t loc,
+                                                   const uint32_t range, const uint32_t maxc, const float alpha,
                                                    InMemQueryScratch<T> *scratch)
 {
-    tsl::robin_set<unsigned> &expanded_nodes_set = scratch->expanded_nodes_set();
+    tsl::robin_set<uint32_t> &expanded_nodes_set = scratch->expanded_nodes_set();
     std::vector<Neighbor> &expanded_nghrs_vec = scratch->expanded_nodes_vec();
 
     // If this condition were not true, deadlock could result
     assert(old_delete_set.find(loc) == old_delete_set.end());
 
-    std::vector<unsigned> adj_list;
+    std::vector<uint32_t> adj_list;
     {
         // Acquire and release lock[loc] before acquiring locks for neighbors
         std::unique_lock<non_recursive_mutex> adj_list_lock;
@@ -2337,10 +2337,10 @@ inline void Index<T, TagT, LabelT>::process_delete(const tsl::robin_set<unsigned
             {
                 expanded_nghrs_vec.emplace_back(
                     ngh,
-                    _distance->compare(_data + _aligned_dim * loc, _data + _aligned_dim * ngh, (unsigned)_aligned_dim));
+                    _distance->compare(_data + _aligned_dim * loc, _data + _aligned_dim * ngh, (uint32_t)_aligned_dim));
             }
             std::sort(expanded_nghrs_vec.begin(), expanded_nghrs_vec.end());
-            std::vector<unsigned> &occlude_list_output = scratch->occlude_list_output();
+            std::vector<uint32_t> &occlude_list_output = scratch->occlude_list_output();
             occlude_list(loc, expanded_nghrs_vec, alpha, range, maxc, occlude_list_output, scratch, &old_delete_set);
             std::unique_lock<non_recursive_mutex> adj_list_lock(_locks[loc]);
             _final_graph[loc] = occlude_list_output;
@@ -2394,7 +2394,7 @@ consolidation_report Index<T, TagT, LabelT>::consolidate_deletes(const Parameter
 
     diskann::cout << "Starting consolidate_deletes... ";
 
-    std::unique_ptr<tsl::robin_set<unsigned>> old_delete_set(new tsl::robin_set<unsigned>);
+    std::unique_ptr<tsl::robin_set<uint32_t>> old_delete_set(new tsl::robin_set<uint32_t>);
     {
         std::unique_lock<std::shared_timed_mutex> dl(_delete_lock);
         std::swap(_delete_set, old_delete_set);
@@ -2405,13 +2405,13 @@ consolidation_report Index<T, TagT, LabelT>::consolidate_deletes(const Parameter
         throw diskann::ANNException("ERROR: start node has been deleted", -1, __FUNCSIG__, __FILE__, __LINE__);
     }
 
-    const unsigned range = params.Get<unsigned>("R");
-    const unsigned maxc = params.Get<unsigned>("C");
+    const uint32_t range = params.Get<uint32_t>("R");
+    const uint32_t maxc = params.Get<uint32_t>("C");
     const float alpha = params.Get<float>("alpha");
-    const unsigned num_threads =
-        params.Get<unsigned>("num_threads") == 0 ? omp_get_num_threads() : params.Get<unsigned>("num_threads");
+    const uint32_t num_threads =
+        params.Get<uint32_t>("num_threads") == 0 ? omp_get_num_threads() : params.Get<uint32_t>("num_threads");
 
-    unsigned num_calls_to_process_delete = 0;
+    uint32_t num_calls_to_process_delete = 0;
     diskann::Timer timer;
 #pragma omp parallel for num_threads(num_threads) schedule(dynamic, 8192) reduction(+ : num_calls_to_process_delete)
     for (int64_t loc = 0; loc < (int64_t)_max_points; loc++)
@@ -2484,7 +2484,7 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
 
     diskann::Timer timer;
 
-    std::vector<unsigned> new_location = std::vector<unsigned>(_max_points + _num_frozen_pts, UINT32_MAX);
+    std::vector<uint32_t> new_location = std::vector<uint32_t>(_max_points + _num_frozen_pts, UINT32_MAX);
 
     uint32_t new_counter = 0;
     std::set<uint32_t> empty_locations;
@@ -2512,9 +2512,9 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
     }
 
     size_t num_dangling = 0;
-    for (unsigned old = 0; old < _max_points + _num_frozen_pts; ++old)
+    for (uint32_t old = 0; old < _max_points + _num_frozen_pts; ++old)
     {
-        std::vector<unsigned> new_adj_list;
+        std::vector<uint32_t> new_adj_list;
 
         if ((new_location[old] < _max_points) // If point continues to exist
             || (old >= _max_points && old < _max_points + _num_frozen_pts))
@@ -2587,14 +2587,14 @@ template <typename T, typename TagT, typename LabelT> int Index<T, TagT, LabelT>
     {
         return -1;
     }
-    unsigned location;
+    uint32_t location;
     if (_data_compacted && _empty_slots.is_empty())
     {
         // This code path is encountered when enable_delete hasn't been
         // called yet, so no points have been deleted and _empty_slots
         // hasn't been filled in. In that case, just keep assigning
         // consecutive locations.
-        location = (unsigned)_nd;
+        location = (uint32_t)_nd;
     }
     else
     {
@@ -2621,7 +2621,7 @@ template <typename T, typename TagT, typename LabelT> size_t Index<T, TagT, Labe
 }
 
 template <typename T, typename TagT, typename LabelT>
-size_t Index<T, TagT, LabelT>::release_locations(const tsl::robin_set<unsigned> &locations)
+size_t Index<T, TagT, LabelT>::release_locations(const tsl::robin_set<uint32_t> &locations)
 {
     for (auto location : locations)
     {
@@ -2641,8 +2641,8 @@ size_t Index<T, TagT, LabelT>::release_locations(const tsl::robin_set<unsigned> 
 }
 
 template <typename T, typename TagT, typename LabelT>
-void Index<T, TagT, LabelT>::reposition_points(unsigned old_location_start, unsigned new_location_start,
-                                               unsigned num_locations)
+void Index<T, TagT, LabelT>::reposition_points(uint32_t old_location_start, uint32_t new_location_start,
+                                               uint32_t num_locations)
 {
     if (num_locations == 0 || old_location_start == new_location_start)
     {
@@ -2650,19 +2650,19 @@ void Index<T, TagT, LabelT>::reposition_points(unsigned old_location_start, unsi
     }
 
     // Update pointers to the moved nodes. Note: the computation is correct even
-    // when new_location_start < old_location_start given the C++ unsigned
+    // when new_location_start < old_location_start given the C++ uint32_t
     // integer arithmetic rules.
-    const unsigned location_delta = new_location_start - old_location_start;
+    const uint32_t location_delta = new_location_start - old_location_start;
 
-    for (unsigned i = 0; i < _max_points + _num_frozen_pts; i++)
+    for (uint32_t i = 0; i < _max_points + _num_frozen_pts; i++)
         for (auto &loc : _final_graph[i])
             if (loc >= old_location_start && loc < old_location_start + num_locations)
                 loc += location_delta;
 
     // The [start, end) interval which will contain obsolete points to be
     // cleared.
-    unsigned mem_clear_loc_start = old_location_start;
-    unsigned mem_clear_loc_end_limit = old_location_start + num_locations;
+    uint32_t mem_clear_loc_start = old_location_start;
+    uint32_t mem_clear_loc_end_limit = old_location_start + num_locations;
 
     // Move the adjacency lists. Make sure that overlapping ranges are handled
     // correctly.
@@ -2670,7 +2670,7 @@ void Index<T, TagT, LabelT>::reposition_points(unsigned old_location_start, unsi
     {
         // New location before the old location: copy the entries in order
         // to avoid modifying locations that are yet to be copied.
-        for (unsigned loc_offset = 0; loc_offset < num_locations; loc_offset++)
+        for (uint32_t loc_offset = 0; loc_offset < num_locations; loc_offset++)
         {
             assert(_final_graph[new_location_start + loc_offset].empty());
             _final_graph[new_location_start + loc_offset].swap(_final_graph[old_location_start + loc_offset]);
@@ -2688,7 +2688,7 @@ void Index<T, TagT, LabelT>::reposition_points(unsigned old_location_start, unsi
     {
         // Old location after the new location: copy from the end of the range
         // to avoid modifying locations that are yet to be copied.
-        for (unsigned loc_offset = num_locations; loc_offset > 0; loc_offset--)
+        for (uint32_t loc_offset = num_locations; loc_offset > 0; loc_offset--)
         {
             assert(_final_graph[new_location_start + loc_offset - 1u].empty());
             _final_graph[new_location_start + loc_offset - 1u].swap(_final_graph[old_location_start + loc_offset - 1u]);
@@ -2845,7 +2845,7 @@ int Index<T, TagT, LabelT>::insert_point(const T *point, const TagT tag)
     // Find and add appropriate graph edges
     ScratchStoreManager<InMemQueryScratch<T>> manager(_query_scratch);
     auto scratch = manager.scratch_space();
-    std::vector<unsigned> pruned_list;
+    std::vector<uint32_t> pruned_list;
     if (_filtered_index)
     {
         search_for_point_and_prune(location, _indexingQueueSize, pruned_list, scratch, true, _filterIndexingQueueSize);
@@ -2973,12 +2973,12 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
     boost::dynamic_bitset<> visited(_max_points + _num_frozen_pts);
 
     size_t MAX_BFS_LEVELS = 32;
-    auto bfs_sets = new tsl::robin_set<unsigned>[MAX_BFS_LEVELS];
+    auto bfs_sets = new tsl::robin_set<uint32_t>[MAX_BFS_LEVELS];
 
     bfs_sets[0].insert(_start);
     visited.set(_start);
 
-    for (unsigned i = _max_points; i < _max_points + _num_frozen_pts; ++i)
+    for (uint32_t i = _max_points; i < _max_points + _num_frozen_pts; ++i)
     {
         if (i != _start)
         {
@@ -3017,11 +3017,11 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
     }
 
     _data_len = (_aligned_dim + 1) * sizeof(float);
-    _neighbor_len = (_max_observed_degree + 1) * sizeof(unsigned);
+    _neighbor_len = (_max_observed_degree + 1) * sizeof(uint32_t);
     _node_size = _data_len + _neighbor_len;
     _opt_graph = new char[_node_size * _nd];
     DistanceFastL2<T> *dist_fast = (DistanceFastL2<T> *)_distance;
-    for (unsigned i = 0; i < _nd; i++)
+    for (uint32_t i = 0; i < _nd; i++)
     {
         char *cur_node_offset = _opt_graph + i * _node_size;
         float cur_norm = dist_fast->norm(_data + i * _aligned_dim, _aligned_dim);
@@ -3029,27 +3029,27 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
         std::memcpy(cur_node_offset + sizeof(float), _data + i * _aligned_dim, _data_len - sizeof(float));
 
         cur_node_offset += _data_len;
-        unsigned k = _final_graph[i].size();
-        std::memcpy(cur_node_offset, &k, sizeof(unsigned));
-        std::memcpy(cur_node_offset + sizeof(unsigned), _final_graph[i].data(), k * sizeof(unsigned));
-        std::vector<unsigned>().swap(_final_graph[i]);
+        uint32_t k = _final_graph[i].size();
+        std::memcpy(cur_node_offset, &k, sizeof(uint32_t));
+        std::memcpy(cur_node_offset + sizeof(uint32_t), _final_graph[i].data(), k * sizeof(uint32_t));
+        std::vector<uint32_t>().swap(_final_graph[i]);
     }
     _final_graph.clear();
     _final_graph.shrink_to_fit();
 }
 
 template <typename T, typename TagT, typename LabelT>
-void Index<T, TagT, LabelT>::search_with_optimized_layout(const T *query, size_t K, size_t L, unsigned *indices)
+void Index<T, TagT, LabelT>::search_with_optimized_layout(const T *query, size_t K, size_t L, uint32_t *indices)
 {
     DistanceFastL2<T> *dist_fast = (DistanceFastL2<T> *)_distance;
 
     NeighborPriorityQueue retset(L);
-    std::vector<unsigned> init_ids(L);
+    std::vector<uint32_t> init_ids(L);
 
     boost::dynamic_bitset<> flags{_nd, 0};
-    unsigned tmp_l = 0;
-    unsigned *neighbors = (unsigned *)(_opt_graph + _node_size * _start + _data_len);
-    unsigned MaxM_ep = *neighbors;
+    uint32_t tmp_l = 0;
+    uint32_t *neighbors = (uint32_t *)(_opt_graph + _node_size * _start + _data_len);
+    uint32_t MaxM_ep = *neighbors;
     neighbors++;
 
     for (; tmp_l < L && tmp_l < MaxM_ep; tmp_l++)
@@ -3060,7 +3060,7 @@ void Index<T, TagT, LabelT>::search_with_optimized_layout(const T *query, size_t
 
     while (tmp_l < L)
     {
-        unsigned id = rand() % _nd;
+        uint32_t id = rand() % _nd;
         if (flags[id])
             continue;
         flags[id] = true;
@@ -3068,23 +3068,23 @@ void Index<T, TagT, LabelT>::search_with_optimized_layout(const T *query, size_t
         tmp_l++;
     }
 
-    for (unsigned i = 0; i < init_ids.size(); i++)
+    for (uint32_t i = 0; i < init_ids.size(); i++)
     {
-        unsigned id = init_ids[i];
+        uint32_t id = init_ids[i];
         if (id >= _nd)
             continue;
         _mm_prefetch(_opt_graph + _node_size * id, _MM_HINT_T0);
     }
     L = 0;
-    for (unsigned i = 0; i < init_ids.size(); i++)
+    for (uint32_t i = 0; i < init_ids.size(); i++)
     {
-        unsigned id = init_ids[i];
+        uint32_t id = init_ids[i];
         if (id >= _nd)
             continue;
         T *x = (T *)(_opt_graph + _node_size * id);
         float norm_x = *x;
         x++;
-        float dist = dist_fast->compare(x, query, norm_x, (unsigned)_aligned_dim);
+        float dist = dist_fast->compare(x, query, norm_x, (uint32_t)_aligned_dim);
         retset.insert(Neighbor(id, dist));
         flags[id] = true;
         L++;
@@ -3095,21 +3095,21 @@ void Index<T, TagT, LabelT>::search_with_optimized_layout(const T *query, size_t
         auto nbr = retset.closest_unexpanded();
         auto n = nbr.id;
         _mm_prefetch(_opt_graph + _node_size * n + _data_len, _MM_HINT_T0);
-        neighbors = (unsigned *)(_opt_graph + _node_size * n + _data_len);
-        unsigned MaxM = *neighbors;
+        neighbors = (uint32_t *)(_opt_graph + _node_size * n + _data_len);
+        uint32_t MaxM = *neighbors;
         neighbors++;
-        for (unsigned m = 0; m < MaxM; ++m)
+        for (uint32_t m = 0; m < MaxM; ++m)
             _mm_prefetch(_opt_graph + _node_size * neighbors[m], _MM_HINT_T0);
-        for (unsigned m = 0; m < MaxM; ++m)
+        for (uint32_t m = 0; m < MaxM; ++m)
         {
-            unsigned id = neighbors[m];
+            uint32_t id = neighbors[m];
             if (flags[id])
                 continue;
             flags[id] = 1;
             T *data = (T *)(_opt_graph + _node_size * id);
             float norm = *data;
             data++;
-            float dist = dist_fast->compare(query, data, norm, (unsigned)_aligned_dim);
+            float dist = dist_fast->compare(query, data, norm, (uint32_t)_aligned_dim);
             Neighbor nn(id, dist);
             retset.insert(nn);
         }
@@ -3152,131 +3152,131 @@ template DISKANN_DLLEXPORT class Index<int8_t, uint64_t, uint16_t>;
 template DISKANN_DLLEXPORT class Index<uint8_t, uint64_t, uint16_t>;
 
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<float, uint64_t, uint32_t>::search<uint64_t>(
-    const float *query, const size_t K, const unsigned L, uint64_t *indices, float *distances);
+    const float *query, const size_t K, const uint32_t L, uint64_t *indices, float *distances);
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<float, uint64_t, uint32_t>::search<uint32_t>(
-    const float *query, const size_t K, const unsigned L, uint32_t *indices, float *distances);
+    const float *query, const size_t K, const uint32_t L, uint32_t *indices, float *distances);
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<uint8_t, uint64_t, uint32_t>::search<uint64_t>(
-    const uint8_t *query, const size_t K, const unsigned L, uint64_t *indices, float *distances);
+    const uint8_t *query, const size_t K, const uint32_t L, uint64_t *indices, float *distances);
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<uint8_t, uint64_t, uint32_t>::search<uint32_t>(
-    const uint8_t *query, const size_t K, const unsigned L, uint32_t *indices, float *distances);
+    const uint8_t *query, const size_t K, const uint32_t L, uint32_t *indices, float *distances);
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<int8_t, uint64_t, uint32_t>::search<uint64_t>(
-    const int8_t *query, const size_t K, const unsigned L, uint64_t *indices, float *distances);
+    const int8_t *query, const size_t K, const uint32_t L, uint64_t *indices, float *distances);
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<int8_t, uint64_t, uint32_t>::search<uint32_t>(
-    const int8_t *query, const size_t K, const unsigned L, uint32_t *indices, float *distances);
+    const int8_t *query, const size_t K, const uint32_t L, uint32_t *indices, float *distances);
 // TagT==uint32_t
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<float, uint32_t, uint32_t>::search<uint64_t>(
-    const float *query, const size_t K, const unsigned L, uint64_t *indices, float *distances);
+    const float *query, const size_t K, const uint32_t L, uint64_t *indices, float *distances);
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<float, uint32_t, uint32_t>::search<uint32_t>(
-    const float *query, const size_t K, const unsigned L, uint32_t *indices, float *distances);
+    const float *query, const size_t K, const uint32_t L, uint32_t *indices, float *distances);
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<uint8_t, uint32_t, uint32_t>::search<uint64_t>(
-    const uint8_t *query, const size_t K, const unsigned L, uint64_t *indices, float *distances);
+    const uint8_t *query, const size_t K, const uint32_t L, uint64_t *indices, float *distances);
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<uint8_t, uint32_t, uint32_t>::search<uint32_t>(
-    const uint8_t *query, const size_t K, const unsigned L, uint32_t *indices, float *distances);
+    const uint8_t *query, const size_t K, const uint32_t L, uint32_t *indices, float *distances);
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<int8_t, uint32_t, uint32_t>::search<uint64_t>(
-    const int8_t *query, const size_t K, const unsigned L, uint64_t *indices, float *distances);
+    const int8_t *query, const size_t K, const uint32_t L, uint64_t *indices, float *distances);
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<int8_t, uint32_t, uint32_t>::search<uint32_t>(
-    const int8_t *query, const size_t K, const unsigned L, uint32_t *indices, float *distances);
+    const int8_t *query, const size_t K, const uint32_t L, uint32_t *indices, float *distances);
 
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<float, uint64_t, uint32_t>::search_with_filters<
-    uint64_t>(const float *query, const uint32_t &filter_label, const size_t K, const unsigned L, uint64_t *indices,
+    uint64_t>(const float *query, const uint32_t &filter_label, const size_t K, const uint32_t L, uint64_t *indices,
               float *distances);
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<float, uint64_t, uint32_t>::search_with_filters<
-    uint32_t>(const float *query, const uint32_t &filter_label, const size_t K, const unsigned L, uint32_t *indices,
+    uint32_t>(const float *query, const uint32_t &filter_label, const size_t K, const uint32_t L, uint32_t *indices,
               float *distances);
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<uint8_t, uint64_t, uint32_t>::search_with_filters<
-    uint64_t>(const uint8_t *query, const uint32_t &filter_label, const size_t K, const unsigned L, uint64_t *indices,
+    uint64_t>(const uint8_t *query, const uint32_t &filter_label, const size_t K, const uint32_t L, uint64_t *indices,
               float *distances);
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<uint8_t, uint64_t, uint32_t>::search_with_filters<
-    uint32_t>(const uint8_t *query, const uint32_t &filter_label, const size_t K, const unsigned L, uint32_t *indices,
+    uint32_t>(const uint8_t *query, const uint32_t &filter_label, const size_t K, const uint32_t L, uint32_t *indices,
               float *distances);
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<int8_t, uint64_t, uint32_t>::search_with_filters<
-    uint64_t>(const int8_t *query, const uint32_t &filter_label, const size_t K, const unsigned L, uint64_t *indices,
+    uint64_t>(const int8_t *query, const uint32_t &filter_label, const size_t K, const uint32_t L, uint64_t *indices,
               float *distances);
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<int8_t, uint64_t, uint32_t>::search_with_filters<
-    uint32_t>(const int8_t *query, const uint32_t &filter_label, const size_t K, const unsigned L, uint32_t *indices,
+    uint32_t>(const int8_t *query, const uint32_t &filter_label, const size_t K, const uint32_t L, uint32_t *indices,
               float *distances);
 // TagT==uint32_t
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<float, uint32_t, uint32_t>::search_with_filters<
-    uint64_t>(const float *query, const uint32_t &filter_label, const size_t K, const unsigned L, uint64_t *indices,
+    uint64_t>(const float *query, const uint32_t &filter_label, const size_t K, const uint32_t L, uint64_t *indices,
               float *distances);
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<float, uint32_t, uint32_t>::search_with_filters<
-    uint32_t>(const float *query, const uint32_t &filter_label, const size_t K, const unsigned L, uint32_t *indices,
+    uint32_t>(const float *query, const uint32_t &filter_label, const size_t K, const uint32_t L, uint32_t *indices,
               float *distances);
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<uint8_t, uint32_t, uint32_t>::search_with_filters<
-    uint64_t>(const uint8_t *query, const uint32_t &filter_label, const size_t K, const unsigned L, uint64_t *indices,
+    uint64_t>(const uint8_t *query, const uint32_t &filter_label, const size_t K, const uint32_t L, uint64_t *indices,
               float *distances);
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<uint8_t, uint32_t, uint32_t>::search_with_filters<
-    uint32_t>(const uint8_t *query, const uint32_t &filter_label, const size_t K, const unsigned L, uint32_t *indices,
+    uint32_t>(const uint8_t *query, const uint32_t &filter_label, const size_t K, const uint32_t L, uint32_t *indices,
               float *distances);
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<int8_t, uint32_t, uint32_t>::search_with_filters<
-    uint64_t>(const int8_t *query, const uint32_t &filter_label, const size_t K, const unsigned L, uint64_t *indices,
+    uint64_t>(const int8_t *query, const uint32_t &filter_label, const size_t K, const uint32_t L, uint64_t *indices,
               float *distances);
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<int8_t, uint32_t, uint32_t>::search_with_filters<
-    uint32_t>(const int8_t *query, const uint32_t &filter_label, const size_t K, const unsigned L, uint32_t *indices,
+    uint32_t>(const int8_t *query, const uint32_t &filter_label, const size_t K, const uint32_t L, uint32_t *indices,
               float *distances);
 
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<float, uint64_t, uint16_t>::search<uint64_t>(
-    const float *query, const size_t K, const unsigned L, uint64_t *indices, float *distances);
+    const float *query, const size_t K, const uint32_t L, uint64_t *indices, float *distances);
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<float, uint64_t, uint16_t>::search<uint32_t>(
-    const float *query, const size_t K, const unsigned L, uint32_t *indices, float *distances);
+    const float *query, const size_t K, const uint32_t L, uint32_t *indices, float *distances);
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<uint8_t, uint64_t, uint16_t>::search<uint64_t>(
-    const uint8_t *query, const size_t K, const unsigned L, uint64_t *indices, float *distances);
+    const uint8_t *query, const size_t K, const uint32_t L, uint64_t *indices, float *distances);
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<uint8_t, uint64_t, uint16_t>::search<uint32_t>(
-    const uint8_t *query, const size_t K, const unsigned L, uint32_t *indices, float *distances);
+    const uint8_t *query, const size_t K, const uint32_t L, uint32_t *indices, float *distances);
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<int8_t, uint64_t, uint16_t>::search<uint64_t>(
-    const int8_t *query, const size_t K, const unsigned L, uint64_t *indices, float *distances);
+    const int8_t *query, const size_t K, const uint32_t L, uint64_t *indices, float *distances);
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<int8_t, uint64_t, uint16_t>::search<uint32_t>(
-    const int8_t *query, const size_t K, const unsigned L, uint32_t *indices, float *distances);
+    const int8_t *query, const size_t K, const uint32_t L, uint32_t *indices, float *distances);
 // TagT==uint32_t
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<float, uint32_t, uint16_t>::search<uint64_t>(
-    const float *query, const size_t K, const unsigned L, uint64_t *indices, float *distances);
+    const float *query, const size_t K, const uint32_t L, uint64_t *indices, float *distances);
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<float, uint32_t, uint16_t>::search<uint32_t>(
-    const float *query, const size_t K, const unsigned L, uint32_t *indices, float *distances);
+    const float *query, const size_t K, const uint32_t L, uint32_t *indices, float *distances);
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<uint8_t, uint32_t, uint16_t>::search<uint64_t>(
-    const uint8_t *query, const size_t K, const unsigned L, uint64_t *indices, float *distances);
+    const uint8_t *query, const size_t K, const uint32_t L, uint64_t *indices, float *distances);
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<uint8_t, uint32_t, uint16_t>::search<uint32_t>(
-    const uint8_t *query, const size_t K, const unsigned L, uint32_t *indices, float *distances);
+    const uint8_t *query, const size_t K, const uint32_t L, uint32_t *indices, float *distances);
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<int8_t, uint32_t, uint16_t>::search<uint64_t>(
-    const int8_t *query, const size_t K, const unsigned L, uint64_t *indices, float *distances);
+    const int8_t *query, const size_t K, const uint32_t L, uint64_t *indices, float *distances);
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<int8_t, uint32_t, uint16_t>::search<uint32_t>(
-    const int8_t *query, const size_t K, const unsigned L, uint32_t *indices, float *distances);
+    const int8_t *query, const size_t K, const uint32_t L, uint32_t *indices, float *distances);
 
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<float, uint64_t, uint16_t>::search_with_filters<
-    uint64_t>(const float *query, const uint16_t &filter_label, const size_t K, const unsigned L, uint64_t *indices,
+    uint64_t>(const float *query, const uint16_t &filter_label, const size_t K, const uint32_t L, uint64_t *indices,
               float *distances);
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<float, uint64_t, uint16_t>::search_with_filters<
-    uint32_t>(const float *query, const uint16_t &filter_label, const size_t K, const unsigned L, uint32_t *indices,
+    uint32_t>(const float *query, const uint16_t &filter_label, const size_t K, const uint32_t L, uint32_t *indices,
               float *distances);
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<uint8_t, uint64_t, uint16_t>::search_with_filters<
-    uint64_t>(const uint8_t *query, const uint16_t &filter_label, const size_t K, const unsigned L, uint64_t *indices,
+    uint64_t>(const uint8_t *query, const uint16_t &filter_label, const size_t K, const uint32_t L, uint64_t *indices,
               float *distances);
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<uint8_t, uint64_t, uint16_t>::search_with_filters<
-    uint32_t>(const uint8_t *query, const uint16_t &filter_label, const size_t K, const unsigned L, uint32_t *indices,
+    uint32_t>(const uint8_t *query, const uint16_t &filter_label, const size_t K, const uint32_t L, uint32_t *indices,
               float *distances);
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<int8_t, uint64_t, uint16_t>::search_with_filters<
-    uint64_t>(const int8_t *query, const uint16_t &filter_label, const size_t K, const unsigned L, uint64_t *indices,
+    uint64_t>(const int8_t *query, const uint16_t &filter_label, const size_t K, const uint32_t L, uint64_t *indices,
               float *distances);
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<int8_t, uint64_t, uint16_t>::search_with_filters<
-    uint32_t>(const int8_t *query, const uint16_t &filter_label, const size_t K, const unsigned L, uint32_t *indices,
+    uint32_t>(const int8_t *query, const uint16_t &filter_label, const size_t K, const uint32_t L, uint32_t *indices,
               float *distances);
 // TagT==uint32_t
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<float, uint32_t, uint16_t>::search_with_filters<
-    uint64_t>(const float *query, const uint16_t &filter_label, const size_t K, const unsigned L, uint64_t *indices,
+    uint64_t>(const float *query, const uint16_t &filter_label, const size_t K, const uint32_t L, uint64_t *indices,
               float *distances);
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<float, uint32_t, uint16_t>::search_with_filters<
-    uint32_t>(const float *query, const uint16_t &filter_label, const size_t K, const unsigned L, uint32_t *indices,
+    uint32_t>(const float *query, const uint16_t &filter_label, const size_t K, const uint32_t L, uint32_t *indices,
               float *distances);
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<uint8_t, uint32_t, uint16_t>::search_with_filters<
-    uint64_t>(const uint8_t *query, const uint16_t &filter_label, const size_t K, const unsigned L, uint64_t *indices,
+    uint64_t>(const uint8_t *query, const uint16_t &filter_label, const size_t K, const uint32_t L, uint64_t *indices,
               float *distances);
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<uint8_t, uint32_t, uint16_t>::search_with_filters<
-    uint32_t>(const uint8_t *query, const uint16_t &filter_label, const size_t K, const unsigned L, uint32_t *indices,
+    uint32_t>(const uint8_t *query, const uint16_t &filter_label, const size_t K, const uint32_t L, uint32_t *indices,
               float *distances);
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<int8_t, uint32_t, uint16_t>::search_with_filters<
-    uint64_t>(const int8_t *query, const uint16_t &filter_label, const size_t K, const unsigned L, uint64_t *indices,
+    uint64_t>(const int8_t *query, const uint16_t &filter_label, const size_t K, const uint32_t L, uint64_t *indices,
               float *distances);
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<int8_t, uint32_t, uint16_t>::search_with_filters<
-    uint32_t>(const int8_t *query, const uint16_t &filter_label, const size_t K, const unsigned L, uint32_t *indices,
+    uint32_t>(const int8_t *query, const uint16_t &filter_label, const size_t K, const uint32_t L, uint32_t *indices,
               float *distances);
 
 } // namespace diskann

@@ -51,8 +51,8 @@ void print_stats(std::string category, std::vector<float> percentiles, std::vect
 
 template <typename T, typename LabelT = uint32_t>
 int search_disk_index(diskann::Metric &metric, const std::string &index_path_prefix, const std::string &query_file,
-                      std::string &gt_file, const unsigned num_threads, const float search_range,
-                      const unsigned beamwidth, const unsigned num_nodes_to_cache, const std::vector<unsigned> &Lvec)
+                      std::string &gt_file, const uint32_t num_threads, const float search_range,
+                      const uint32_t beamwidth, const uint32_t num_nodes_to_cache, const std::vector<uint32_t> &Lvec)
 {
     std::string pq_prefix = index_path_prefix + "_pq";
     std::string disk_index_file = index_path_prefix + "_disk.index";
@@ -223,7 +223,7 @@ int search_disk_index(diskann::Metric &metric, const std::string &index_path_pre
         auto latency_999 = diskann::get_percentile_stats<float>(
             stats, query_num, 0.999, [](const diskann::QueryStats &stats) { return stats.total_us; });
 
-        auto mean_ios = diskann::get_mean_stats<unsigned>(stats, query_num,
+        auto mean_ios = diskann::get_mean_stats<uint32_t>(stats, query_num,
                                                           [](const diskann::QueryStats &stats) { return stats.n_ios; });
 
         float mean_cpuus = diskann::get_mean_stats<float>(
@@ -268,8 +268,8 @@ int search_disk_index(diskann::Metric &metric, const std::string &index_path_pre
 int main(int argc, char **argv)
 {
     std::string data_type, dist_fn, index_path_prefix, result_path_prefix, query_file, gt_file;
-    unsigned num_threads, W, num_nodes_to_cache;
-    std::vector<unsigned> Lvec;
+    uint32_t num_threads, W, num_nodes_to_cache;
+    std::vector<uint32_t> Lvec;
     float range;
 
     po::options_description desc{"Arguments"};
@@ -287,7 +287,7 @@ int main(int argc, char **argv)
                            "ground truth file for the queryset");
         desc.add_options()("range_threshold,K", po::value<float>(&range)->required(),
                            "Number of neighbors to be returned");
-        desc.add_options()("search_list,L", po::value<std::vector<unsigned>>(&Lvec)->multitoken(),
+        desc.add_options()("search_list,L", po::value<std::vector<uint32_t>>(&Lvec)->multitoken(),
                            "List of L values of search");
         desc.add_options()("beamwidth,W", po::value<uint32_t>(&W)->default_value(2), "Beamwidth for search");
         desc.add_options()("num_nodes_to_cache", po::value<uint32_t>(&num_nodes_to_cache)->default_value(100000),

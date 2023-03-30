@@ -105,8 +105,8 @@ void gen_random_slice(const std::string data_file, double p_val, float *&sampled
     cached_ifstream base_reader(data_file.c_str(), read_blk_size);
 
     // metadata: npts, ndims
-    base_reader.read((char *)&npts32, sizeof(unsigned));
-    base_reader.read((char *)&ndims32, sizeof(unsigned));
+    base_reader.read((char *)&npts32, sizeof(uint32_t));
+    base_reader.read((char *)&ndims32, sizeof(uint32_t));
     npts = npts32;
     ndims = ndims32;
 
@@ -115,7 +115,7 @@ void gen_random_slice(const std::string data_file, double p_val, float *&sampled
 
     std::random_device rd; // Will be used to obtain a seed for the random number
     size_t x = rd();
-    std::mt19937 generator((unsigned)x);
+    std::mt19937 generator((uint32_t)x);
     std::uniform_real_distribution<float> distribution(0, 1);
 
     for (size_t i = 0; i < npts; i++)
@@ -154,7 +154,7 @@ void gen_random_slice(const T *inputdata, size_t npts, size_t ndims, double p_va
 
     std::random_device rd; // Will be used to obtain a seed for the random number engine
     size_t x = rd();
-    std::mt19937 generator((unsigned)x); // Standard mersenne_twister_engine seeded with rd()
+    std::mt19937 generator((uint32_t)x); // Standard mersenne_twister_engine seeded with rd()
     std::uniform_real_distribution<float> distribution(0, 1);
 
     for (size_t i = 0; i < npts; i++)

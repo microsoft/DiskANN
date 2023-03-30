@@ -24,17 +24,17 @@ namespace diskann
  *  final_index_path_prefix + "_" + label
  */
 template <typename T>
-void generate_label_indices(path input_data_path, path final_index_path_prefix, label_set all_labels, unsigned R,
-                            unsigned L, float alpha, unsigned num_threads)
+void generate_label_indices(path input_data_path, path final_index_path_prefix, label_set all_labels, uint32_t R,
+                            uint32_t L, float alpha, uint32_t num_threads)
 {
     diskann::Parameters label_index_build_parameters;
-    label_index_build_parameters.Set<unsigned>("R", R);
-    label_index_build_parameters.Set<unsigned>("L", L);
-    label_index_build_parameters.Set<unsigned>("C", 750);
-    label_index_build_parameters.Set<unsigned>("Lf", 0);
+    label_index_build_parameters.Set<uint32_t>("R", R);
+    label_index_build_parameters.Set<uint32_t>("L", L);
+    label_index_build_parameters.Set<uint32_t>("C", 750);
+    label_index_build_parameters.Set<uint32_t>("Lf", 0);
     label_index_build_parameters.Set<bool>("saturate_graph", 0);
     label_index_build_parameters.Set<float>("alpha", alpha);
-    label_index_build_parameters.Set<unsigned>("num_threads", num_threads);
+    label_index_build_parameters.Set<uint32_t>("num_threads", num_threads);
 
     std::cout << "Generating indices per label..." << std::endl;
     // for each label, build an index on resp. points
@@ -192,7 +192,7 @@ parse_label_file_return_values parse_label_file(path label_data_path, std::strin
 {
     std::ifstream label_data_stream(label_data_path);
     std::string line, token;
-    unsigned line_cnt = 0;
+    uint32_t line_cnt = 0;
 
     // allows us to reserve space for the points_to_labels vector
     while (std::getline(label_data_stream, line))
@@ -262,14 +262,14 @@ parse_label_file_return_values parse_label_file(path label_data_path, std::strin
 }
 
 template DISKANN_DLLEXPORT void generate_label_indices<float>(path input_data_path, path final_index_path_prefix,
-                                                              label_set all_labels, unsigned R, unsigned L, float alpha,
-                                                              unsigned num_threads);
+                                                              label_set all_labels, uint32_t R, uint32_t L, float alpha,
+                                                              uint32_t num_threads);
 template DISKANN_DLLEXPORT void generate_label_indices<uint8_t>(path input_data_path, path final_index_path_prefix,
-                                                                label_set all_labels, unsigned R, unsigned L,
-                                                                float alpha, unsigned num_threads);
+                                                                label_set all_labels, uint32_t R, uint32_t L,
+                                                                float alpha, uint32_t num_threads);
 template DISKANN_DLLEXPORT void generate_label_indices<int8_t>(path input_data_path, path final_index_path_prefix,
-                                                               label_set all_labels, unsigned R, unsigned L,
-                                                               float alpha, unsigned num_threads);
+                                                               label_set all_labels, uint32_t R, uint32_t L,
+                                                               float alpha, uint32_t num_threads);
 
 template DISKANN_DLLEXPORT tsl::robin_map<std::string, std::vector<uint32_t>>
 generate_label_specific_vector_files_compat<float>(path input_data_path,

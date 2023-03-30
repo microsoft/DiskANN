@@ -274,7 +274,7 @@ void FixedChunkPQTable::populate_chunk_inner_products(const float *query_vec, fl
     }
 }
 
-void aggregate_coords(const std::vector<unsigned> &ids, const uint8_t *all_coords, const size_t ndims, uint8_t *out)
+void aggregate_coords(const std::vector<uint32_t> &ids, const uint8_t *all_coords, const size_t ndims, uint8_t *out)
 {
     for (size_t i = 0; i < ids.size(); i++)
     {
@@ -308,7 +308,7 @@ void pq_dist_lookup(const uint8_t *pq_ids, const size_t n_pts, const size_t pq_n
 
 // Need to replace calls to these functions with calls to vector& based
 // functions above
-void aggregate_coords(const unsigned *ids, const size_t n_ids, const uint8_t *all_coords, const size_t ndims,
+void aggregate_coords(const uint32_t *ids, const size_t n_ids, const uint8_t *all_coords, const size_t ndims,
                       uint8_t *out)
 {
     for (size_t i = 0; i < n_ids; i++)
@@ -345,8 +345,8 @@ void pq_dist_lookup(const uint8_t *pq_ids, const size_t n_pts, const size_t pq_n
 // num_pq_chunks (if it divides dimension, else rounded) chunks, and runs
 // k-means in each chunk to compute the PQ pivots and stores in bin format in
 // file pq_pivots_path as a s num_centers*dim floating point binary file
-int generate_pq_pivots(const float *const passed_train_data, size_t num_train, unsigned dim, unsigned num_centers,
-                       unsigned num_pq_chunks, unsigned max_k_means_reps, std::string pq_pivots_path,
+int generate_pq_pivots(const float *const passed_train_data, size_t num_train, uint32_t dim, uint32_t num_centers,
+                       uint32_t num_pq_chunks, uint32_t max_k_means_reps, std::string pq_pivots_path,
                        bool make_zero_mean)
 {
     if (num_pq_chunks > dim)
@@ -443,7 +443,7 @@ int generate_pq_pivots(const float *const passed_train_data, size_t num_train, u
     for (uint32_t b = 0; b < num_pq_chunks; b++)
     {
         if (b > 0)
-            chunk_offsets.push_back(chunk_offsets[b - 1] + (unsigned)bin_to_dims[b - 1].size());
+            chunk_offsets.push_back(chunk_offsets[b - 1] + (uint32_t)bin_to_dims[b - 1].size());
     }
     chunk_offsets.push_back(dim);
 
@@ -497,8 +497,8 @@ int generate_pq_pivots(const float *const passed_train_data, size_t num_train, u
     return 0;
 }
 
-int generate_opq_pivots(const float *passed_train_data, size_t num_train, unsigned dim, unsigned num_centers,
-                        unsigned num_pq_chunks, std::string opq_pivots_path, bool make_zero_mean)
+int generate_opq_pivots(const float *passed_train_data, size_t num_train, uint32_t dim, uint32_t num_centers,
+                        uint32_t num_pq_chunks, std::string opq_pivots_path, bool make_zero_mean)
 {
     if (num_pq_chunks > dim)
     {
@@ -594,7 +594,7 @@ int generate_opq_pivots(const float *passed_train_data, size_t num_train, unsign
     for (uint32_t b = 0; b < num_pq_chunks; b++)
     {
         if (b > 0)
-            chunk_offsets.push_back(chunk_offsets[b - 1] + (unsigned)bin_to_dims[b - 1].size());
+            chunk_offsets.push_back(chunk_offsets[b - 1] + (uint32_t)bin_to_dims[b - 1].size());
     }
     chunk_offsets.push_back(dim);
 
@@ -714,7 +714,7 @@ int generate_opq_pivots(const float *passed_train_data, size_t num_train, unsign
 // If the numbber of centers is < 256, it stores as byte vector, else as
 // 4-byte vector in binary format.
 template <typename T>
-int generate_pq_data_from_pivots(const std::string data_file, unsigned num_centers, unsigned num_pq_chunks,
+int generate_pq_data_from_pivots(const std::string data_file, uint32_t num_centers, uint32_t num_pq_chunks,
                                  std::string pq_pivots_path, std::string pq_compressed_vectors_path, bool use_opq)
 {
     size_t read_blk_size = 64 * 1024 * 1024;
@@ -994,16 +994,16 @@ void generate_quantized_data(const std::string data_file_to_use, const std::stri
 
 // Instantations of supported templates
 
-template DISKANN_DLLEXPORT int generate_pq_data_from_pivots<int8_t>(const std::string data_file, unsigned num_centers,
-                                                                    unsigned num_pq_chunks, std::string pq_pivots_path,
+template DISKANN_DLLEXPORT int generate_pq_data_from_pivots<int8_t>(const std::string data_file, uint32_t num_centers,
+                                                                    uint32_t num_pq_chunks, std::string pq_pivots_path,
                                                                     std::string pq_compressed_vectors_path,
                                                                     bool use_opq);
-template DISKANN_DLLEXPORT int generate_pq_data_from_pivots<uint8_t>(const std::string data_file, unsigned num_centers,
-                                                                     unsigned num_pq_chunks, std::string pq_pivots_path,
+template DISKANN_DLLEXPORT int generate_pq_data_from_pivots<uint8_t>(const std::string data_file, uint32_t num_centers,
+                                                                     uint32_t num_pq_chunks, std::string pq_pivots_path,
                                                                      std::string pq_compressed_vectors_path,
                                                                      bool use_opq);
-template DISKANN_DLLEXPORT int generate_pq_data_from_pivots<float>(const std::string data_file, unsigned num_centers,
-                                                                   unsigned num_pq_chunks, std::string pq_pivots_path,
+template DISKANN_DLLEXPORT int generate_pq_data_from_pivots<float>(const std::string data_file, uint32_t num_centers,
+                                                                   uint32_t num_pq_chunks, std::string pq_pivots_path,
                                                                    std::string pq_compressed_vectors_path,
                                                                    bool use_opq);
 

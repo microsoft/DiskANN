@@ -25,14 +25,14 @@ namespace po = boost::program_options;
 
 template <typename T, typename LabelT = uint32_t>
 int search_memory_index(diskann::Metric &metric, const std::string &index_path, const std::string &result_path_prefix,
-                        const std::string &query_file, const std::string &truthset_file, const unsigned num_threads,
-                        const unsigned recall_at, const bool print_all_recalls, const std::vector<unsigned> &Lvec,
+                        const std::string &query_file, const std::string &truthset_file, const uint32_t num_threads,
+                        const uint32_t recall_at, const bool print_all_recalls, const std::vector<uint32_t> &Lvec,
                         const bool dynamic, const bool tags, const bool show_qps_per_thread,
                         const std::vector<std::string> &query_filters, const float fail_if_recall_below)
 {
     // Load the query file
     T *query = nullptr;
-    unsigned *gt_ids = nullptr;
+    uint32_t *gt_ids = nullptr;
     float *gt_dists = nullptr;
     size_t query_num, query_dim, query_aligned_dim, gt_num, gt_dim;
     diskann::load_aligned_bin<T>(query_file, query, query_num, query_dim, query_aligned_dim);
@@ -82,7 +82,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
     std::cout.setf(std::ios_base::fixed, std::ios_base::floatfield);
     std::cout.precision(2);
     const std::string qps_title = show_qps_per_thread ? "QPS/thread" : "QPS";
-    unsigned table_width = 0;
+    uint32_t table_width = 0;
     if (tags)
     {
         std::cout << std::setw(4) << "Ls" << std::setw(12) << qps_title << std::setw(20) << "Mean Latency (mus)"
@@ -95,11 +95,11 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
                   << std::setw(20) << "Mean Latency (mus)" << std::setw(15) << "99.9 Latency";
         table_width += 4 + 12 + 18 + 20 + 15;
     }
-    unsigned recalls_to_print = 0;
-    const unsigned first_recall = print_all_recalls ? 1 : recall_at;
+    uint32_t recalls_to_print = 0;
+    const uint32_t first_recall = print_all_recalls ? 1 : recall_at;
     if (calc_recall_flag)
     {
-        for (unsigned curr_recall = first_recall; curr_recall <= recall_at; curr_recall++)
+        for (uint32_t curr_recall = first_recall; curr_recall <= recall_at; curr_recall++)
         {
             std::cout << std::setw(12) << ("Recall@" + std::to_string(curr_recall));
         }
@@ -112,10 +112,10 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
     std::vector<std::vector<uint32_t>> query_result_ids(Lvec.size());
     std::vector<std::vector<float>> query_result_dists(Lvec.size());
     std::vector<float> latency_stats(query_num, 0);
-    std::vector<unsigned> cmp_stats;
+    std::vector<uint32_t> cmp_stats;
     if (not tags)
     {
-        cmp_stats = std::vector<unsigned>(query_num, 0);
+        cmp_stats = std::vector<uint32_t>(query_num, 0);
     }
 
     std::vector<TagT> query_result_tags;
@@ -197,7 +197,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
         if (calc_recall_flag)
         {
             recalls.reserve(recalls_to_print);
-            for (unsigned curr_recall = first_recall; curr_recall <= recall_at; curr_recall++)
+            for (uint32_t curr_recall = first_recall; curr_recall <= recall_at; curr_recall++)
             {
                 recalls.push_back(diskann::calculate_recall(query_num, gt_ids, gt_dists, gt_dim,
                                                             query_result_ids[test_id].data(), recall_at, curr_recall));
@@ -252,8 +252,8 @@ int main(int argc, char **argv)
 {
     std::string data_type, dist_fn, index_path_prefix, result_path, query_file, gt_file, filter_label, label_type,
         query_filters_file;
-    unsigned num_threads, K;
-    std::vector<unsigned> Lvec;
+    uint32_t num_threads, K;
+    std::vector<uint32_t> Lvec;
     bool print_all_recalls, dynamic, tags, show_qps_per_thread;
     float fail_if_recall_below = 0.0f;
 
@@ -284,7 +284,7 @@ int main(int argc, char **argv)
         desc.add_options()("print_all_recalls", po::bool_switch(&print_all_recalls),
                            "Print recalls at all positions, from 1 up to specified "
                            "recall_at value");
-        desc.add_options()("search_list,L", po::value<std::vector<unsigned>>(&Lvec)->multitoken(),
+        desc.add_options()("search_list,L", po::value<std::vector<uint32_t>>(&Lvec)->multitoken(),
                            "List of L values of search");
         desc.add_options()("num_threads,T", po::value<uint32_t>(&num_threads)->default_value(omp_get_num_procs()),
                            "Number of threads used for building index (defaults to "

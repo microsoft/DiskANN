@@ -49,7 +49,7 @@ DISKANN_DLLEXPORT void add_new_file_to_single_index(std::string index_file, std:
 
 DISKANN_DLLEXPORT size_t calculate_num_pq_chunks(double final_index_ram_limit, size_t points_num, uint32_t dim);
 
-DISKANN_DLLEXPORT void read_idmap(const std::string &fname, std::vector<unsigned> &ivecs);
+DISKANN_DLLEXPORT void read_idmap(const std::string &fname, std::vector<uint32_t> &ivecs);
 
 #ifdef EXEC_ENV_OLS
 template <typename T>
@@ -63,7 +63,7 @@ DISKANN_DLLEXPORT T *load_warmup(const std::string &cache_warmup_file, uint64_t 
 
 DISKANN_DLLEXPORT int merge_shards(const std::string &vamana_prefix, const std::string &vamana_suffix,
                                    const std::string &idmaps_prefix, const std::string &idmaps_suffix,
-                                   const uint64_t nshards, unsigned max_degree, const std::string &output_vamana,
+                                   const uint64_t nshards, uint32_t max_degree, const std::string &output_vamana,
                                    const std::string &medoids_file, bool use_filters = false,
                                    const std::string &labels_to_medoids_file = std::string(""));
 
@@ -75,8 +75,8 @@ DISKANN_DLLEXPORT std::string preprocess_base_file(const std::string &infile, co
                                                    diskann::Metric &distMetric);
 
 template <typename T, typename LabelT = uint32_t>
-DISKANN_DLLEXPORT int build_merged_vamana_index(std::string base_file, diskann::Metric _compareMetric, unsigned L,
-                                                unsigned R, double sampling_rate, double ram_budget,
+DISKANN_DLLEXPORT int build_merged_vamana_index(std::string base_file, diskann::Metric _compareMetric, uint32_t L,
+                                                uint32_t R, double sampling_rate, double ram_budget,
                                                 std::string mem_index_path, std::string medoids_file,
                                                 std::string centroids_file, size_t build_pq_bytes, bool use_opq,
                                                 bool use_filters = false,

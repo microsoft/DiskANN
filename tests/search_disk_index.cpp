@@ -49,9 +49,9 @@ void print_stats(std::string category, std::vector<float> percentiles, std::vect
 template <typename T, typename LabelT = uint32_t>
 int search_disk_index(diskann::Metric &metric, const std::string &index_path_prefix,
                       const std::string &result_output_prefix, const std::string &query_file, std::string &gt_file,
-                      const unsigned num_threads, const unsigned recall_at, const unsigned beamwidth,
-                      const unsigned num_nodes_to_cache, const uint32_t search_io_limit,
-                      const std::vector<unsigned> &Lvec, const float fail_if_recall_below,
+                      const uint32_t num_threads, const uint32_t recall_at, const uint32_t beamwidth,
+                      const uint32_t num_nodes_to_cache, const uint32_t search_io_limit,
+                      const std::vector<uint32_t> &Lvec, const float fail_if_recall_below,
                       const std::vector<std::string> &query_filters, const bool use_reorder_data = false)
 {
     diskann::cout << "Search parameters: #threads: " << num_threads << ", ";
@@ -68,7 +68,7 @@ int search_disk_index(diskann::Metric &metric, const std::string &index_path_pre
 
     // load query bin
     T *query = nullptr;
-    unsigned *gt_ids = nullptr;
+    uint32_t *gt_ids = nullptr;
     float *gt_dists = nullptr;
     size_t query_num, query_dim, query_aligned_dim, gt_num, gt_dim;
     diskann::load_aligned_bin<T>(query_file, query, query_num, query_dim, query_aligned_dim);
@@ -261,7 +261,7 @@ int search_disk_index(diskann::Metric &metric, const std::string &index_path_pre
         auto latency_999 = diskann::get_percentile_stats<float>(
             stats, query_num, 0.999, [](const diskann::QueryStats &stats) { return stats.total_us; });
 
-        auto mean_ios = diskann::get_mean_stats<unsigned>(stats, query_num,
+        auto mean_ios = diskann::get_mean_stats<uint32_t>(stats, query_num,
                                                           [](const diskann::QueryStats &stats) { return stats.n_ios; });
 
         auto mean_cpuus = diskann::get_mean_stats<float>(stats, query_num,
@@ -311,8 +311,8 @@ int main(int argc, char **argv)
 {
     std::string data_type, dist_fn, index_path_prefix, result_path_prefix, query_file, gt_file, filter_label,
         label_type, query_filters_file;
-    unsigned num_threads, K, W, num_nodes_to_cache, search_io_limit;
-    std::vector<unsigned> Lvec;
+    uint32_t num_threads, K, W, num_nodes_to_cache, search_io_limit;
+    std::vector<uint32_t> Lvec;
     bool use_reorder_data = false;
     float fail_if_recall_below = 0.0f;
 
@@ -332,7 +332,7 @@ int main(int argc, char **argv)
         desc.add_options()("gt_file", po::value<std::string>(&gt_file)->default_value(std::string("null")),
                            "ground truth file for the queryset");
         desc.add_options()("recall_at,K", po::value<uint32_t>(&K)->required(), "Number of neighbors to be returned");
-        desc.add_options()("search_list,L", po::value<std::vector<unsigned>>(&Lvec)->multitoken(),
+        desc.add_options()("search_list,L", po::value<std::vector<uint32_t>>(&Lvec)->multitoken(),
                            "List of L values of search");
         desc.add_options()("beamwidth,W", po::value<uint32_t>(&W)->default_value(2),
                            "Beamwidth for search. Set 0 to optimize internally.");
