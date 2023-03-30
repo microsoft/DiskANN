@@ -292,7 +292,27 @@ int aux_main(const std::string &input_file,
         // 1. average fanout
         float avg_fanout = 0.0;
         for (size_t query_id = 0; query_id < num_queries; ++query_id) {
-          avg_fanout += query_to_shards[query_id].size();
+          // in from_ground_truth mode, we could just do:
+          //   avg_fanout += query_to_shards[query_id].size();
+          // in general,
+          // fanout means: how many shards, in the order that they will be asked
+          // (maybe suboptimal), do you need to ask to get 100% coverage?
+          size_t covered_gt_pts = 0;
+          for (int i = 0; i < query_to_shards[query_id].size(); ++i) {
+            covered_gt_pts += query_to_shards[query_id][i].second;
+            if (covered_gt_pts > K) {
+              diskann::cout << "implementation error?" << std::endl;
+              return -1;
+            }
+            if (covered_gt_pts == K) {
+              // i+1 is the fanout
+              avg_fanout += i+1;
+            }
+          }
+          if (covered_gt_pts != K) {
+            diskann::cout << "implementation error?" << std::endl;
+            return -1;
+          }
         }
         avg_fanout /= num_queries;
         diskann::cout << "Average fanout: " << avg_fanout << std::endl
@@ -321,7 +341,7 @@ int aux_main(const std::string &input_file,
         }
         diskann::cout << "Histogram of fanouts:" << std::endl;
         for (size_t fanout = 1; fanout <= max_interesting_fanout; ++fanout) {
-          diskann::cout << std::setprecision(2) << fanout;
+          diskann::cout << std::setw(2) << fanout;
           if (fanout < max_interesting_fanout)
             diskann::cout << " ";
           else
