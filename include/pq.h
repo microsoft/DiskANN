@@ -118,5 +118,6 @@ void generate_disk_quantized_data(const std::string data_file_to_use, const std:
 template <typename T>
 void generate_quantized_data(const std::string data_file_to_use, const std::string pq_pivots_path,
                              const std::string pq_compressed_vectors_path, const diskann::Metric compareMetric,
-                             const double p_val, const size_t num_pq_chunks, const bool use_opq, const std::string codebook_path);
+                             const double p_val, const size_t num_pq_chunks, const bool use_opq,
+                             const std::string codebook_path);
 } // namespace diskann
