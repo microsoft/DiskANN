@@ -10,6 +10,28 @@
 
 namespace po = boost::program_options;
 
+template<typename T>
+void compute_centroid(const size_t dim, const T* points,
+                      const std::vector<uint32_t>& point_ids, float* centroid) {
+  if (point_ids.empty()) {
+    for (int i = 0; i < dim; ++i) {
+      centroid[i] = 1e15;  // give it some stupid centroid
+    }
+  } else {
+    for (int i = 0; i < dim; ++i) {
+      centroid[i] = 0.0;
+    }
+    for (const uint32_t point_id : point_ids) {
+      for (int i = 0; i < dim; ++i) {
+        centroid[i] += points[point_id * dim + i];
+      }
+    }
+    for (int i = 0; i < dim; ++i) {
+      centroid[i] /= point_ids.size();
+    }
+  }
+}
+
 template <typename T>
 int write_shards_to_disk(const std::string& output_file_prefix,
                          const bool writing_queries, T* points, const size_t dim,
@@ -171,26 +193,8 @@ int aux_main(const std::string &input_file,
       std::unique_ptr<float[]> centroids =
           std::make_unique<float[]>(num_shards * dim);
       for (size_t shard_id = 0; shard_id < num_shards; ++shard_id) {
-        // compute centroid for shard_id
-        if (points_routed_to_shard[shard_id].empty()) {
-          for (int i = 0; i < dim; ++i) {
-            centroids[shard_id * dim + i] =
-                1e15;  // give it some stupid centroid
-          }
-        } else {
-          for (int i = 0; i < dim; ++i) {
-            centroids[shard_id * dim + i] = 0.0;
-          }
-          for (uint32_t point_id : points_routed_to_shard[shard_id]) {
-            for (int i = 0; i < dim; ++i) {
-              centroids[shard_id * dim + i] += points[point_id * dim + i];
-            }
-          }
-          for (int i = 0; i < dim; ++i) {
-            centroids[shard_id * dim + i] /=
-                points_routed_to_shard[shard_id].size();
-          }
-        }
+        compute_centroid<T>(dim, points.get(), points_routed_to_shard[shard_id],
+                         centroids.get() + shard_id * dim);
       }
       diskann::cout << "Saving centroids" << std::endl;
       const std::string centroids_filename =
@@ -289,30 +293,27 @@ int aux_main(const std::string &input_file,
       if (gt_file != "") {
         // compute and display some statistics
         diskann::cout << "\nStatistics on fanout:" << std::endl;
-        // 1. average fanout
-        float avg_fanout = 0.0;
+
+        // fanout means: how many shards, in the order that they will be asked
+        // (maybe suboptimal), do you need to ask to get 100% coverage?
+
+        // so, to compute this, we first adjust query_to_shards[]
+        // because there could be trailing empty shards
         for (size_t query_id = 0; query_id < num_queries; ++query_id) {
-          // in from_ground_truth mode, we could just do:
-          //   avg_fanout += query_to_shards[query_id].size();
-          // in general,
-          // fanout means: how many shards, in the order that they will be asked
-          // (maybe suboptimal), do you need to ask to get 100% coverage?
-          size_t covered_gt_pts = 0;
-          for (int i = 0; i < query_to_shards[query_id].size(); ++i) {
-            covered_gt_pts += query_to_shards[query_id][i].second;
-            if (covered_gt_pts > K) {
-              diskann::cout << "implementation error?" << std::endl;
-              return -1;
-            }
-            if (covered_gt_pts == K) {
-              // i+1 is the fanout
-              avg_fanout += i+1;
-            }
-          }
-          if (covered_gt_pts != K) {
+          if (query_to_shards[query_id].empty()) {
             diskann::cout << "implementation error?" << std::endl;
             return -1;
           }
+          while (query_to_shards[query_id].back().second == 0) {
+            query_to_shards[query_id].pop_back();
+          }
+        }
+        // now we have: fanout == query_to_shards[query_id].size()
+
+        // 1. average fanout
+        float avg_fanout = 0.0;
+        for (size_t query_id = 0; query_id < num_queries; ++query_id) {
+          avg_fanout += query_to_shards[query_id].size();
         }
         avg_fanout /= num_queries;
         diskann::cout << "Average fanout: " << avg_fanout << std::endl
@@ -432,12 +433,13 @@ int main(int argc, char** argv) {
           "gt_file",
           po::value<std::string>(&gt_file)->default_value(std::string("")),
           "Path to the ground truth .bin file (optional)");
-      desc.add_options()(
-          "mode,query_routing_mode",
-          po::value<std::string>(&mode)->default_value(std::string("centroids")),
-          "Path to the ground truth .bin file (optional)");
+      desc.add_options()("mode,query_routing_mode",
+                         po::value<std::string>(&mode)->default_value(
+                             std::string("centroids")),
+                         "How to route queries to shards (from_ground_truth / "
+                         "centroids / geomedian)");
       desc.add_options()("K,recall_at", po::value<unsigned>(&K)->default_value(0),
-                         "Points returned per query");
+                         "Number of points returned per query");
       desc.add_options()(
           "query_file",
           po::value<std::string>(&query_file)->default_value(std::string("")),
@@ -471,8 +473,8 @@ int main(int argc, char** argv) {
     return -1;
   }
 
-  if (mode != "centroids" && mode != "from_ground_truth") {
-    diskann::cout << "mode must be either centroids or from_ground_truth"
+  if (mode != "centroids" && mode != "geomedian" && mode != "from_ground_truth") {
+    diskann::cout << "mode must be centroids, geomedian or from_ground_truth"
                   << std::endl;
     return -1;
   }
