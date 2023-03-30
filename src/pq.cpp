@@ -963,7 +963,7 @@ void generate_disk_quantized_data(const std::string data_file_to_use, const std:
                                const std::string codebook_path) {
     size_t train_size, train_dim;
     float* train_data;
-    if (codebook_path.empty()) {  
+    if (!file_exists(codebook_path)) {  
         // instantiates train_data with random sample updates train_size
         gen_random_slice<T>(data_file_to_use.c_str(), p_val, train_data, train_size,
                             train_dim);

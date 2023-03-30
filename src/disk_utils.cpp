@@ -1063,7 +1063,7 @@ void create_disk_layout(const std::string base_file, const std::string mem_index
              ": optional paramter, use only when using disk PQ\n"
              "build_PQ_byte (number of PQ bytes for inde build; set 0 to use "
              "full precision vectors)\n"
-             "QD Quantized Dimension"
+             "QD Quantized Dimension to overwrite the derived dim from B"
           << std::endl;
       return -1;
     }
@@ -1111,7 +1111,8 @@ void create_disk_layout(const std::string base_file, const std::string mem_index
     std::string index_prefix_path(indexFilePath);
     std::string labels_file_to_use = index_prefix_path + "_label_formatted.txt";
     std::string pq_pivots_path_base = codebookPath;
-    std::string pq_pivots_path = pq_pivots_path_base.empty() ? index_prefix_path + "_pq_pivots.bin": pq_pivots_path_base + "_pq_pivots.bin";
+    std::string pq_pivots_path = file_exists(pq_pivots_path_base) ? pq_pivots_path_base + "_pq_pivots.bin"
+                                                                  : index_prefix_path + "_pq_pivots.bin";
     std::string pq_compressed_vectors_path = index_prefix_path + "_pq_compressed.bin";
     std::string mem_index_path = index_prefix_path + "_mem.index";
     std::string disk_index_path = index_prefix_path + "_disk.index";

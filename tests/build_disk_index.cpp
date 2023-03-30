@@ -90,7 +90,6 @@ int main(int argc, char** argv) {
     std::cerr << ex.what() << '\n';
     return -1;
   }
-  codebook_prefix = codebook_prefix == "0"? "" : codebook_prefix;
 
     bool use_filters = false;
     if (label_file != "")
