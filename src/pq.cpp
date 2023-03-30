@@ -963,7 +963,7 @@ void generate_quantized_data(const std::string data_file_to_use, const std::stri
 
     // instantiates train_data with random sample updates train_size
     gen_random_slice<T>(data_file_to_use.c_str(), p_val, train_data, train_size, train_dim);
-    diskann::cout << "Training data with " << train_size << " samples loaded." << std::endl;
+    diskann::cout << "Training data with " << train_size << " samples loaded. " << std::endl;
 
     bool make_zero_mean = true;
     if (compareMetric == diskann::Metric::INNER_PRODUCT)
