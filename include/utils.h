@@ -51,7 +51,7 @@ typedef int FileHandle;
     4096 // all metadata of individual sub-component files is written in first
          // 4KB for unified files
 
-#define BUFFER_SIZE_FOR_CACHED_IO (uint64_t)1024 * (uint64_t)1048576
+#define BUFFER_SIZE_FOR_CACHED_IO (size_t)1024 * (size_t)1048576
 
 #define PBSTR "||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||"
 #define PBWIDTH 60
