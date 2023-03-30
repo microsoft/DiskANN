@@ -1765,7 +1765,7 @@ void Index<T, TagT, LabelT>::build(const char *filename, const size_t num_points
         std::string suffix = _use_opq ? "_opq" : "_pq";
         suffix += std::to_string(_num_pq_chunks);
         auto pq_pivots_file = std::string(filename) + suffix + "_pivots.bin";
-        auto pq_compressed_file = std::string(filename) + suffix + "_compressed.bin";
+        auto pq_compressed_file = std::string(filename) + suffix + "_compressed.bin ";
         generate_quantized_data<T>(std::string(filename), pq_pivots_file, pq_compressed_file, _dist_metric, p_val,
                                    _num_pq_chunks, _use_opq);
 
