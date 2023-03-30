@@ -247,13 +247,18 @@ int aux_main(const std::string &input_file,
           compute_geomedian<T>(dim, points.get(),
                                points_routed_to_shard[shard_id],
                                centroids.get() + shard_id * dim);
-          diskann::cout << "Saving geomedians (as _centroids.bin)" << std::endl;
         } else {
           // mode can be from_ground_truth or centroid; in both cases we save centroids
           compute_centroid<T>(dim, points.get(),
                               points_routed_to_shard[shard_id],
                               centroids.get() + shard_id * dim);
         }
+      }
+      if (mode == "geomedian") {
+        diskann::cout << "Saving geomedians (as _centroids.bin)" << std::endl;
+      } else {
+        // mode can be from_ground_truth or centroid; in both cases we save
+        // centroids
         diskann::cout << "Saving centroids" << std::endl;
       }
       const std::string centroids_filename =
