@@ -20,7 +20,7 @@
 #include "utils.h"
 
 namespace po = boost::program_options;
-typedef std::tuple<std::vector<std::vector<_u32>>, _u64> stitch_indices_return_values;
+typedef std::tuple<std::vector<std::vector<uint32_t>>, uint64_t> stitch_indices_return_values;
 
 /*
  * Inline function to display progress bar.
@@ -51,8 +51,8 @@ inline size_t random(size_t range_from, size_t range_to)
  * Arguments are merely the inputs from the command line.
  */
 void handle_args(int argc, char **argv, std::string &data_type, path &input_data_path, path &final_index_path_prefix,
-                 path &label_data_path, std::string &universal_label, unsigned &num_threads, unsigned &R, unsigned &L,
-                 unsigned &stitched_R, float &alpha)
+                 path &label_data_path, std::string &universal_label, uint32_t &num_threads, uint32_t &R, uint32_t &L,
+                 uint32_t &stitched_R, float &alpha)
 {
     po::options_description desc{"Arguments"};
     try
@@ -68,7 +68,8 @@ void handle_args(int argc, char **argv, std::string &data_type, path &input_data
         desc.add_options()("stitched_R", po::value<uint32_t>(&stitched_R)->default_value(100),
                            "Degree to prune final graph down to");
         desc.add_options()("alpha", po::value<float>(&alpha)->default_value(1.2f),
-                           "alpha controls density and diameter of graph, set 1 for sparse graph, "
+                           "alpha controls density and diameter of graph, set "
+                           "1 for sparse graph, "
                            "1.2 or 1.4 for denser graphs with lower diameter");
         desc.add_options()("num_threads,T", po::value<uint32_t>(&num_threads)->default_value(omp_get_num_procs()),
                            "Number of threads used for building index (defaults to "
@@ -78,7 +79,8 @@ void handle_args(int argc, char **argv, std::string &data_type, path &input_data
         desc.add_options()("universal_label", po::value<std::string>(&universal_label)->default_value(""),
                            "If a point comes with the specified universal label (and only the "
                            "univ. "
-                           "label), then the point is considered to have every possible label");
+                           "label), then the point is considered to have every possible "
+                           "label");
 
         po::variables_map vm;
         po::store(po::parse_command_line(argc, argv, desc), vm);
@@ -104,9 +106,10 @@ void handle_args(int argc, char **argv, std::string &data_type, path &input_data
  *  3. data (redundant for static indices)
  *  4. labels (redundant for static indices)
  */
-void save_full_index(path final_index_path_prefix, path input_data_path, _u64 final_index_size,
-                     std::vector<std::vector<_u32>> stitched_graph, tsl::robin_map<std::string, _u32> entry_points,
-                     std::string universal_label, path label_data_path)
+void save_full_index(path final_index_path_prefix, path input_data_path, uint64_t final_index_size,
+                     std::vector<std::vector<uint32_t>> stitched_graph,
+                     tsl::robin_map<std::string, uint32_t> entry_points, std::string universal_label,
+                     path label_data_path)
 {
     // aux. file 1
     auto saving_index_timer = std::chrono::high_resolution_clock::now();
@@ -150,34 +153,34 @@ void save_full_index(path final_index_path_prefix, path input_data_path, _u64 fi
     }
 
     // main index
-    _u64 index_num_frozen_points = 0, index_num_edges = 0;
-    _u32 index_max_observed_degree = 0, index_entry_point = 0;
-    const size_t METADATA = 2 * sizeof(_u64) + 2 * sizeof(_u32);
+    uint64_t index_num_frozen_points = 0, index_num_edges = 0;
+    uint32_t index_max_observed_degree = 0, index_entry_point = 0;
+    const size_t METADATA = 2 * sizeof(uint64_t) + 2 * sizeof(uint32_t);
     for (auto &point_neighbors : stitched_graph)
     {
-        index_max_observed_degree = std::max(index_max_observed_degree, (_u32)point_neighbors.size());
+        index_max_observed_degree = std::max(index_max_observed_degree, (uint32_t)point_neighbors.size());
     }
 
     std::ofstream stitched_graph_writer;
     stitched_graph_writer.exceptions(std::ios::badbit | std::ios::failbit);
     stitched_graph_writer.open(final_index_path_prefix, std::ios_base::binary);
 
-    stitched_graph_writer.write((char *)&final_index_size, sizeof(_u64));
-    stitched_graph_writer.write((char *)&index_max_observed_degree, sizeof(_u32));
-    stitched_graph_writer.write((char *)&index_entry_point, sizeof(_u32));
-    stitched_graph_writer.write((char *)&index_num_frozen_points, sizeof(_u64));
+    stitched_graph_writer.write((char *)&final_index_size, sizeof(uint64_t));
+    stitched_graph_writer.write((char *)&index_max_observed_degree, sizeof(uint32_t));
+    stitched_graph_writer.write((char *)&index_entry_point, sizeof(uint32_t));
+    stitched_graph_writer.write((char *)&index_num_frozen_points, sizeof(uint64_t));
 
     size_t bytes_written = METADATA;
-    for (_u32 node_point = 0; node_point < stitched_graph.size(); node_point++)
+    for (uint32_t node_point = 0; node_point < stitched_graph.size(); node_point++)
     {
-        _u32 current_node_num_neighbors = stitched_graph[node_point].size();
-        std::vector<_u32> current_node_neighbors = stitched_graph[node_point];
-        stitched_graph_writer.write((char *)&current_node_num_neighbors, sizeof(_u32));
-        bytes_written += sizeof(_u32);
+        uint32_t current_node_num_neighbors = stitched_graph[node_point].size();
+        std::vector<uint32_t> current_node_neighbors = stitched_graph[node_point];
+        stitched_graph_writer.write((char *)&current_node_num_neighbors, sizeof(uint32_t));
+        bytes_written += sizeof(uint32_t);
         for (const auto &current_node_neighbor : current_node_neighbors)
         {
-            stitched_graph_writer.write((char *)&current_node_neighbor, sizeof(_u32));
-            bytes_written += sizeof(_u32);
+            stitched_graph_writer.write((char *)&current_node_neighbor, sizeof(uint32_t));
+            bytes_written += sizeof(uint32_t);
         }
         index_num_edges += current_node_num_neighbors;
     }
@@ -205,45 +208,46 @@ void save_full_index(path final_index_path_prefix, path input_data_path, _u64 fi
  */
 template <typename T>
 stitch_indices_return_values stitch_label_indices(
-    path final_index_path_prefix, _u32 total_number_of_points, label_set all_labels,
-    tsl::robin_map<std::string, _u32> labels_to_number_of_points, tsl::robin_map<std::string, _u32> &label_entry_points,
-    tsl::robin_map<std::string, std::vector<_u32>> label_id_to_orig_id_map)
+    path final_index_path_prefix, uint32_t total_number_of_points, label_set all_labels,
+    tsl::robin_map<std::string, uint32_t> labels_to_number_of_points,
+    tsl::robin_map<std::string, uint32_t> &label_entry_points,
+    tsl::robin_map<std::string, std::vector<uint32_t>> label_id_to_orig_id_map)
 {
     size_t final_index_size = 0;
-    std::vector<std::vector<_u32>> stitched_graph(total_number_of_points);
+    std::vector<std::vector<uint32_t>> stitched_graph(total_number_of_points);
 
     auto stitching_index_timer = std::chrono::high_resolution_clock::now();
     for (const auto &lbl : all_labels)
     {
         path curr_label_index_path(final_index_path_prefix + "_" + lbl);
-        std::vector<std::vector<_u32>> curr_label_index;
-        _u64 curr_label_index_size;
-        _u32 curr_label_entry_point;
+        std::vector<std::vector<uint32_t>> curr_label_index;
+        uint64_t curr_label_index_size;
+        uint32_t curr_label_entry_point;
 
         std::tie(curr_label_index, curr_label_index_size) =
             diskann::load_label_index(curr_label_index_path, labels_to_number_of_points[lbl]);
         curr_label_entry_point = random(0, curr_label_index.size());
         label_entry_points[lbl] = label_id_to_orig_id_map[lbl][curr_label_entry_point];
 
-        for (_u32 node_point = 0; node_point < curr_label_index.size(); node_point++)
+        for (uint32_t node_point = 0; node_point < curr_label_index.size(); node_point++)
         {
-            _u32 original_point_id = label_id_to_orig_id_map[lbl][node_point];
+            uint32_t original_point_id = label_id_to_orig_id_map[lbl][node_point];
             for (auto &node_neighbor : curr_label_index[node_point])
             {
-                _u32 original_neighbor_id = label_id_to_orig_id_map[lbl][node_neighbor];
-                std::vector<_u32> curr_point_neighbors = stitched_graph[original_point_id];
+                uint32_t original_neighbor_id = label_id_to_orig_id_map[lbl][node_neighbor];
+                std::vector<uint32_t> curr_point_neighbors = stitched_graph[original_point_id];
                 if (std::find(curr_point_neighbors.begin(), curr_point_neighbors.end(), original_neighbor_id) ==
                     curr_point_neighbors.end())
                 {
                     stitched_graph[original_point_id].push_back(original_neighbor_id);
-                    final_index_size += sizeof(_u32);
+                    final_index_size += sizeof(uint32_t);
                 }
             }
         }
     }
 
-    const size_t METADATA = 2 * sizeof(_u64) + 2 * sizeof(_u32);
-    final_index_size += (total_number_of_points * sizeof(_u32) + METADATA);
+    const size_t METADATA = 2 * sizeof(uint64_t) + 2 * sizeof(uint32_t);
+    final_index_size += (total_number_of_points * sizeof(uint32_t) + METADATA);
 
     std::chrono::duration<double> stitching_index_time =
         std::chrono::high_resolution_clock::now() - stitching_index_timer;
@@ -261,9 +265,9 @@ stitch_indices_return_values stitch_label_indices(
  */
 template <typename T>
 void prune_and_save(path final_index_path_prefix, path full_index_path_prefix, path input_data_path,
-                    std::vector<std::vector<_u32>> stitched_graph, unsigned stitched_R,
-                    tsl::robin_map<std::string, _u32> label_entry_points, std::string universal_label,
-                    path label_data_path, unsigned num_threads)
+                    std::vector<std::vector<uint32_t>> stitched_graph, uint32_t stitched_R,
+                    tsl::robin_map<std::string, uint32_t> label_entry_points, std::string universal_label,
+                    path label_data_path, uint32_t num_threads)
 {
     size_t dimension, number_of_label_points;
     auto diskann_cout_buffer = diskann::cout.rdbuf(nullptr);
@@ -277,8 +281,8 @@ void prune_and_save(path final_index_path_prefix, path full_index_path_prefix, p
     index.load(full_index_path_prefix.c_str(), num_threads, 1);
 
     diskann::Parameters paras;
-    paras.Set<unsigned>("R", stitched_R);
-    paras.Set<unsigned>("C", 750); // maximum candidate set size during pruning procedure
+    paras.Set<uint32_t>("R", stitched_R);
+    paras.Set<uint32_t>("C", 750); // maximum candidate set size during pruning procedure
     paras.Set<float>("alpha", 1.2);
     paras.Set<bool>("saturate_graph", 1);
     std::cout << "parsing labels" << std::endl;
@@ -323,7 +327,7 @@ int main(int argc, char **argv)
     std::string data_type;
     path input_data_path, final_index_path_prefix, label_data_path;
     std::string universal_label;
-    unsigned num_threads, R, L, stitched_R;
+    uint32_t num_threads, R, L, stitched_R;
     float alpha;
 
     auto index_timer = std::chrono::high_resolution_clock::now();
@@ -337,15 +341,15 @@ int main(int argc, char **argv)
 
     // 2. parse label file and create necessary data structures
     std::vector<label_set> point_ids_to_labels;
-    tsl::robin_map<std::string, _u32> labels_to_number_of_points;
+    tsl::robin_map<std::string, uint32_t> labels_to_number_of_points;
     label_set all_labels;
 
     std::tie(point_ids_to_labels, labels_to_number_of_points, all_labels) =
         diskann::parse_label_file(labels_file_to_use, universal_label);
 
     // 3. for each label, make a separate data file
-    tsl::robin_map<std::string, std::vector<_u32>> label_id_to_orig_id_map;
-    _u32 total_number_of_points = point_ids_to_labels.size();
+    tsl::robin_map<std::string, std::vector<uint32_t>> label_id_to_orig_id_map;
+    uint32_t total_number_of_points = point_ids_to_labels.size();
 
 #ifndef _WINDOWS
     if (data_type == "uint8")
@@ -387,9 +391,9 @@ int main(int argc, char **argv)
         throw;
 
     // 5. "stitch" the indices together
-    std::vector<std::vector<_u32>> stitched_graph;
-    tsl::robin_map<std::string, _u32> label_entry_points;
-    _u64 stitched_graph_size;
+    std::vector<std::vector<uint32_t>> stitched_graph;
+    tsl::robin_map<std::string, uint32_t> label_entry_points;
+    uint64_t stitched_graph_size;
 
     if (data_type == "uint8")
         std::tie(stitched_graph, stitched_graph_size) =

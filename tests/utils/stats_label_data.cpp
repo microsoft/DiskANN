@@ -28,26 +28,26 @@
 #endif
 namespace po = boost::program_options;
 
-void stats_analysis(const std::string labels_file, std::string univeral_label, _u32 density = 10)
+void stats_analysis(const std::string labels_file, std::string univeral_label, uint32_t density = 10)
 {
     std::string token, line;
     std::ifstream labels_stream(labels_file);
-    std::unordered_map<std::string, _u32> label_counts;
+    std::unordered_map<std::string, uint32_t> label_counts;
     std::string label_with_max_points;
-    _u32 max_points = 0;
+    uint32_t max_points = 0;
     long long sum = 0;
     long long point_cnt = 0;
     float avg_labels_per_pt, avg_labels_per_pt_incl_0, mean_label_size, mean_label_size_incl_0;
 
-    std::vector<_u32> labels_per_point;
-    _u32 dense_pts = 0;
+    std::vector<uint32_t> labels_per_point;
+    uint32_t dense_pts = 0;
     if (labels_stream.is_open())
     {
         while (getline(labels_stream, line))
         {
             point_cnt++;
             std::stringstream iss(line);
-            _u32 lbl_cnt = 0;
+            uint32_t lbl_cnt = 0;
             while (getline(iss, token, ','))
             {
                 lbl_cnt++;
@@ -69,7 +69,7 @@ void stats_analysis(const std::string labels_file, std::string univeral_label, _
               << " labels = " << (float)dense_pts / (float)labels_per_point.size() << std::endl;
     std::sort(labels_per_point.begin(), labels_per_point.end());
 
-    std::vector<std::pair<std::string, _u32>> label_count_vec;
+    std::vector<std::pair<std::string, uint32_t>> label_count_vec;
 
     for (auto it = label_counts.begin(); it != label_counts.end(); it++)
     {
@@ -84,14 +84,14 @@ void stats_analysis(const std::string labels_file, std::string univeral_label, _
     }
 
     sort(label_count_vec.begin(), label_count_vec.end(),
-         [](const std::pair<std::string, _u32> &lhs, const std::pair<std::string, _u32> &rhs) {
+         [](const std::pair<std::string, uint32_t> &lhs, const std::pair<std::string, uint32_t> &rhs) {
              return lhs.second < rhs.second;
          });
 
     for (float p = 0; p < 1; p += 0.05)
     {
-        std::cout << "Percentile " << (100 * p) << "\t" << label_count_vec[(_u32)(p * label_count_vec.size())].first
-                  << " with count=" << label_count_vec[(_u32)(p * label_count_vec.size())].second << std::endl;
+        std::cout << "Percentile " << (100 * p) << "\t" << label_count_vec[(size_t)(p * label_count_vec.size())].first
+                  << " with count=" << label_count_vec[(size_t)(p * label_count_vec.size())].second << std::endl;
     }
 
     std::cout << "Most common label "
@@ -117,7 +117,7 @@ void stats_analysis(const std::string labels_file, std::string univeral_label, _
 int main(int argc, char **argv)
 {
     std::string labels_file, universal_label;
-    _u32 density;
+    uint32_t density;
 
     po::options_description desc{"Arguments"};
     try
@@ -127,7 +127,7 @@ int main(int argc, char **argv)
                            "path to labels data file.");
         desc.add_options()("universal_label", po::value<std::string>(&universal_label)->required(),
                            "Universal label used in labels file.");
-        desc.add_options()("density", po::value<_u32>(&density)->default_value(1),
+        desc.add_options()("density", po::value<uint32_t>(&density)->default_value(1),
                            "Number of labels each point in labels file, defaults to 1");
         po::variables_map vm;
         po::store(po::parse_command_line(argc, argv, desc), vm);

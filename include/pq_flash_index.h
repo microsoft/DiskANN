@@ -48,45 +48,47 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
 
 #ifdef EXEC_ENV_OLS
     DISKANN_DLLEXPORT void generate_cache_list_from_sample_queries(MemoryMappedFiles &files, std::string sample_bin,
-                                                                   _u64 l_search, _u64 beamwidth,
-                                                                   _u64 num_nodes_to_cache, uint32_t nthreads,
+                                                                   uint64_t l_search, uint64_t beamwidth,
+                                                                   uint64_t num_nodes_to_cache, uint32_t nthreads,
                                                                    std::vector<uint32_t> &node_list);
 #else
-    DISKANN_DLLEXPORT void generate_cache_list_from_sample_queries(std::string sample_bin, _u64 l_search,
-                                                                   _u64 beamwidth, _u64 num_nodes_to_cache,
+    DISKANN_DLLEXPORT void generate_cache_list_from_sample_queries(std::string sample_bin, uint64_t l_search,
+                                                                   uint64_t beamwidth, uint64_t num_nodes_to_cache,
                                                                    uint32_t num_threads,
                                                                    std::vector<uint32_t> &node_list);
 #endif
 
-    DISKANN_DLLEXPORT void cache_bfs_levels(_u64 num_nodes_to_cache, std::vector<uint32_t> &node_list,
+    DISKANN_DLLEXPORT void cache_bfs_levels(uint64_t num_nodes_to_cache, std::vector<uint32_t> &node_list,
                                             const bool shuffle = false);
 
-    DISKANN_DLLEXPORT void cached_beam_search(const T *query, const _u64 k_search, const _u64 l_search, _u64 *res_ids,
-                                              float *res_dists, const _u64 beam_width,
+    DISKANN_DLLEXPORT void cached_beam_search(const T *query, const uint64_t k_search, const uint64_t l_search,
+                                              uint64_t *res_ids, float *res_dists, const uint64_t beam_width,
                                               const bool use_reorder_data = false, QueryStats *stats = nullptr);
 
-    DISKANN_DLLEXPORT void cached_beam_search(const T *query, const _u64 k_search, const _u64 l_search, _u64 *res_ids,
-                                              float *res_dists, const _u64 beam_width, const bool use_filter,
-                                              const LabelT &filter_label, const bool use_reorder_data = false,
+    DISKANN_DLLEXPORT void cached_beam_search(const T *query, const uint64_t k_search, const uint64_t l_search,
+                                              uint64_t *res_ids, float *res_dists, const uint64_t beam_width,
+                                              const bool use_filter, const LabelT &filter_label,
+                                              const bool use_reorder_data = false, QueryStats *stats = nullptr);
+
+    DISKANN_DLLEXPORT void cached_beam_search(const T *query, const uint64_t k_search, const uint64_t l_search,
+                                              uint64_t *res_ids, float *res_dists, const uint64_t beam_width,
+                                              const uint32_t io_limit, const bool use_reorder_data = false,
                                               QueryStats *stats = nullptr);
 
-    DISKANN_DLLEXPORT void cached_beam_search(const T *query, const _u64 k_search, const _u64 l_search, _u64 *res_ids,
-                                              float *res_dists, const _u64 beam_width, const _u32 io_limit,
-                                              const bool use_reorder_data = false, QueryStats *stats = nullptr);
-
-    DISKANN_DLLEXPORT void cached_beam_search(const T *query, const _u64 k_search, const _u64 l_search, _u64 *res_ids,
-                                              float *res_dists, const _u64 beam_width, const bool use_filter,
-                                              const LabelT &filter_label, const _u32 io_limit,
-                                              const bool use_reorder_data = false, QueryStats *stats = nullptr);
+    DISKANN_DLLEXPORT void cached_beam_search(const T *query, const uint64_t k_search, const uint64_t l_search,
+                                              uint64_t *res_ids, float *res_dists, const uint64_t beam_width,
+                                              const bool use_filter, const LabelT &filter_label,
+                                              const uint32_t io_limit, const bool use_reorder_data = false,
+                                              QueryStats *stats = nullptr);
 
     DISKANN_DLLEXPORT LabelT get_converted_label(const std::string &filter_label);
 
-    DISKANN_DLLEXPORT _u32 range_search(const T *query1, const double range, const _u64 min_l_search,
-                                        const _u64 max_l_search, std::vector<_u64> &indices,
-                                        std::vector<float> &distances, const _u64 min_beam_width,
-                                        QueryStats *stats = nullptr);
+    DISKANN_DLLEXPORT uint32_t range_search(const T *query1, const double range, const uint64_t min_l_search,
+                                            const uint64_t max_l_search, std::vector<uint64_t> &indices,
+                                            std::vector<float> &distances, const uint64_t min_beam_width,
+                                            QueryStats *stats = nullptr);
 
-    DISKANN_DLLEXPORT _u64 get_data_dim();
+    DISKANN_DLLEXPORT uint64_t get_data_dim();
 
     std::shared_ptr<AlignedFileReader> &reader;
 
@@ -94,15 +96,15 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
 
   protected:
     DISKANN_DLLEXPORT void use_medoids_data_as_centroids();
-    DISKANN_DLLEXPORT void setup_thread_data(_u64 nthreads, _u64 visited_reserve = 4096);
+    DISKANN_DLLEXPORT void setup_thread_data(uint64_t nthreads, uint64_t visited_reserve = 4096);
 
     DISKANN_DLLEXPORT void set_universal_label(const LabelT &label);
 
   private:
-    DISKANN_DLLEXPORT inline bool point_has_label(_u32 point_id, _u32 label_id);
+    DISKANN_DLLEXPORT inline bool point_has_label(uint32_t point_id, uint32_t label_id);
     std::unordered_map<std::string, LabelT> load_label_map(const std::string &map_file);
     DISKANN_DLLEXPORT void parse_label_file(const std::string &map_file, size_t &num_pts_labels);
-    DISKANN_DLLEXPORT void get_label_file_metadata(std::string map_file, _u32 &num_pts, _u32 &num_total_labels);
+    DISKANN_DLLEXPORT void get_label_file_metadata(std::string map_file, uint32_t &num_pts, uint32_t &num_total_labels);
     DISKANN_DLLEXPORT inline int32_t get_filter_number(const LabelT &filter_label);
 
     // index info
@@ -111,10 +113,10 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
     // nnbrs of node `i`: *(unsigned*) (buf)
     // nbrs of node `i`: ((unsigned*)buf) + 1
 
-    _u64 max_node_len = 0, nnodes_per_sector = 0, max_degree = 0;
+    uint64_t max_node_len = 0, nnodes_per_sector = 0, max_degree = 0;
 
     // Data used for searching with re-order vectors
-    _u64 ndims_reorder_vecs = 0, reorder_data_start_sector = 0, nvecs_per_sector = 0;
+    uint64_t ndims_reorder_vecs = 0, reorder_data_start_sector = 0, nvecs_per_sector = 0;
 
     diskann::Metric metric = diskann::Metric::L2;
 
@@ -123,25 +125,25 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
     float max_base_norm = 0.0f;
 
     // data info
-    _u64 num_points = 0;
-    _u64 num_frozen_points = 0;
-    _u64 frozen_location = 0;
-    _u64 data_dim = 0;
-    _u64 disk_data_dim = 0; // will be different from data_dim only if we use
-                            // PQ for disk data (very large dimensionality)
-    _u64 aligned_dim = 0;
-    _u64 disk_bytes_per_point = 0;
+    uint64_t num_points = 0;
+    uint64_t num_frozen_points = 0;
+    uint64_t frozen_location = 0;
+    uint64_t data_dim = 0;
+    uint64_t disk_data_dim = 0; // will be different from data_dim only if we use
+                                // PQ for disk data (very large dimensionality)
+    uint64_t aligned_dim = 0;
+    uint64_t disk_bytes_per_point = 0;
 
     std::string disk_index_file;
-    std::vector<std::pair<_u32, _u32>> node_visit_counter;
+    std::vector<std::pair<uint32_t, uint32_t>> node_visit_counter;
 
     // PQ data
     // n_chunks = # of chunks ndims is split into
-    // data: _u8 * n_chunks
+    // data: char * n_chunks
     // chunk_size = chunk size of each dimension chunk
     // pq_tables = float* [[2^8 * [chunk_size]] * n_chunks]
-    _u8 *data = nullptr;
-    _u64 n_chunks;
+    uint8_t *data = nullptr;
+    uint64_t n_chunks;
     FixedChunkPQTable pq_table;
 
     // distance comparator
@@ -150,7 +152,7 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
 
     // for very large datasets: we use PQ even for the disk resident index
     bool use_disk_index_pq = false;
-    _u64 disk_pq_n_chunks = 0;
+    uint64_t disk_pq_n_chunks = 0;
     FixedChunkPQTable disk_pq_table;
 
     // medoid/start info
@@ -167,32 +169,32 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
 
     // nhood_cache
     unsigned *nhood_cache_buf = nullptr;
-    tsl::robin_map<_u32, std::pair<_u32, _u32 *>> nhood_cache;
+    tsl::robin_map<uint32_t, std::pair<uint32_t, uint32_t *>> nhood_cache;
 
     // coord_cache
     T *coord_cache_buf = nullptr;
-    tsl::robin_map<_u32, T *> coord_cache;
+    tsl::robin_map<uint32_t, T *> coord_cache;
 
     // thread-specific scratch
     ConcurrentQueue<SSDThreadData<T> *> thread_data;
-    _u64 max_nthreads;
+    uint64_t max_nthreads;
     bool load_flag = false;
     bool count_visited_nodes = false;
     bool reorder_data_exists = false;
-    _u64 reoreder_data_offset = 0;
+    uint64_t reoreder_data_offset = 0;
 
     // filter support
-    _u32 *_pts_to_label_offsets = nullptr;
-    _u32 *_pts_to_labels = nullptr;
+    uint32_t *_pts_to_label_offsets = nullptr;
+    uint32_t *_pts_to_labels = nullptr;
     tsl::robin_set<LabelT> _labels;
-    std::unordered_map<LabelT, _u32> _filter_to_medoid_id;
+    std::unordered_map<LabelT, uint32_t> _filter_to_medoid_id;
     bool _use_universal_label;
-    _u32 _universal_filter_num;
+    uint32_t _universal_filter_num;
     std::vector<LabelT> _filter_list;
-    tsl::robin_set<_u32> _dummy_pts;
-    tsl::robin_set<_u32> _has_dummy_pts;
-    tsl::robin_map<_u32, _u32> _dummy_to_real_map;
-    tsl::robin_map<_u32, std::vector<_u32>> _real_to_dummy_map;
+    tsl::robin_set<uint32_t> _dummy_pts;
+    tsl::robin_set<uint32_t> _has_dummy_pts;
+    tsl::robin_map<uint32_t, uint32_t> _dummy_to_real_map;
+    tsl::robin_map<uint32_t, std::vector<uint32_t>> _real_to_dummy_map;
     std::unordered_map<std::string, LabelT> _label_map;
 
 #ifdef EXEC_ENV_OLS

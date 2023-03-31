@@ -21,23 +21,23 @@
 namespace po = boost::program_options;
 
 template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t>
-int build_in_memory_index(const diskann::Metric &metric, const std::string &data_path, const unsigned R,
-                          const unsigned L, const float alpha, const std::string &save_path, const unsigned num_threads,
+int build_in_memory_index(const diskann::Metric &metric, const std::string &data_path, const uint32_t R,
+                          const uint32_t L, const float alpha, const std::string &save_path, const uint32_t num_threads,
                           const bool use_pq_build, const size_t num_pq_bytes, const bool use_opq,
-                          const std::string &label_file, const std::string &universal_label, const _u32 Lf)
+                          const std::string &label_file, const std::string &universal_label, const uint32_t Lf)
 {
     diskann::Parameters paras;
-    paras.Set<unsigned>("R", R);
-    paras.Set<unsigned>("L", L);
-    paras.Set<unsigned>("Lf", Lf);
-    paras.Set<unsigned>("C", 750); // maximum candidate set size during pruning procedure
+    paras.Set<uint32_t>("R", R);
+    paras.Set<uint32_t>("L", L);
+    paras.Set<uint32_t>("Lf", Lf);
+    paras.Set<uint32_t>("C", 750); // maximum candidate set size during pruning procedure
     paras.Set<float>("alpha", alpha);
     paras.Set<bool>("saturate_graph", 0);
-    paras.Set<unsigned>("num_threads", num_threads);
+    paras.Set<uint32_t>("num_threads", num_threads);
     std::string labels_file_to_use = save_path + "_label_formatted.txt";
     std::string mem_labels_int_map_file = save_path + "_labels_map.txt";
 
-    _u64 data_num, data_dim;
+    size_t data_num, data_dim;
     diskann::get_bin_metadata(data_path, data_num, data_dim);
 
     diskann::Index<T, TagT, LabelT> index(metric, data_dim, data_num, false, false, false, use_pq_build, num_pq_bytes,
@@ -69,7 +69,7 @@ int build_in_memory_index(const diskann::Metric &metric, const std::string &data
 int main(int argc, char **argv)
 {
     std::string data_type, dist_fn, data_path, index_path_prefix, label_file, universal_label, label_type;
-    unsigned num_threads, R, L, Lf, build_PQ_bytes;
+    uint32_t num_threads, R, L, Lf, build_PQ_bytes;
     float alpha;
     bool use_pq_build, use_opq;
 
@@ -87,22 +87,26 @@ int main(int argc, char **argv)
         desc.add_options()("Lbuild,L", po::value<uint32_t>(&L)->default_value(100),
                            "Build complexity, higher value results in better graphs");
         desc.add_options()("alpha", po::value<float>(&alpha)->default_value(1.2f),
-                           "alpha controls density and diameter of graph, set 1 for sparse graph, "
+                           "alpha controls density and diameter of graph, set "
+                           "1 for sparse graph, "
                            "1.2 or 1.4 for denser graphs with lower diameter");
         desc.add_options()("num_threads,T", po::value<uint32_t>(&num_threads)->default_value(omp_get_num_procs()),
                            "Number of threads used for building index (defaults to "
                            "omp_get_num_procs())");
         desc.add_options()("build_PQ_bytes", po::value<uint32_t>(&build_PQ_bytes)->default_value(0),
-                           "Number of PQ bytes to build the index; 0 for full precision build");
+                           "Number of PQ bytes to build the index; 0 for full precision "
+                           "build");
         desc.add_options()("use_opq", po::bool_switch()->default_value(false),
-                           "Set true for OPQ compression while using PQ distance comparisons for "
+                           "Set true for OPQ compression while using PQ "
+                           "distance comparisons for "
                            "building the index, and false for PQ compression");
         desc.add_options()("label_file", po::value<std::string>(&label_file)->default_value(""),
                            "Input label file in txt format for Filtered Index search. "
                            "The file should contain comma separated filters for each node "
                            "with each line corresponding to a graph node");
         desc.add_options()("universal_label", po::value<std::string>(&universal_label)->default_value(""),
-                           "Universal label, if using it, only in conjunction with labels_file");
+                           "Universal label, if using it, only in conjunction with "
+                           "labels_file");
         desc.add_options()("FilteredLbuild,Lf", po::value<uint32_t>(&Lf)->default_value(0),
                            "Build complexity for filtered points, higher value "
                            "results in better graphs");

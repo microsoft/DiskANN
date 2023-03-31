@@ -23,7 +23,7 @@
 
 namespace po = boost::program_options;
 
-template <typename T> void bfs_count(const std::string &index_path, unsigned data_dims)
+template <typename T> void bfs_count(const std::string &index_path, uint32_t data_dims)
 {
     using TagT = uint32_t;
     using LabelT = uint32_t;
@@ -37,7 +37,7 @@ template <typename T> void bfs_count(const std::string &index_path, unsigned dat
 int main(int argc, char **argv)
 {
     std::string data_type, index_path_prefix;
-    unsigned data_dims;
+    uint32_t data_dims;
 
     po::options_description desc{"Arguments"};
     try
@@ -46,7 +46,7 @@ int main(int argc, char **argv)
         desc.add_options()("data_type", po::value<std::string>(&data_type)->required(), "data type <int8/uint8/float>");
         desc.add_options()("index_path_prefix", po::value<std::string>(&index_path_prefix)->required(),
                            "Path prefix to the index");
-        desc.add_options()("data_dims", po::value<unsigned>(&data_dims)->required(), "Dimensionality of the data");
+        desc.add_options()("data_dims", po::value<uint32_t>(&data_dims)->required(), "Dimensionality of the data");
 
         po::variables_map vm;
         po::store(po::parse_command_line(argc, argv, desc), vm);

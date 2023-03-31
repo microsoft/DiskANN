@@ -33,7 +33,7 @@
 template <typename T>
 void gen_random_slice(const std::string base_file, const std::string output_prefix, double sampling_rate)
 {
-    _u64 read_blk_size = 64 * 1024 * 1024;
+    size_t read_blk_size = 64 * 1024 * 1024;
     cached_ifstream base_reader(base_file.c_str(), read_blk_size);
     std::ofstream sample_writer(std::string(output_prefix + "_data.bin").c_str(), std::ios::binary);
     std::ofstream sample_id_writer(std::string(output_prefix + "_ids.bin").c_str(), std::ios::binary);
@@ -68,7 +68,7 @@ void gen_random_slice(const std::string base_file, const std::string output_pref
         if (sample < sampling_rate)
         {
             sample_writer.write((char *)cur_row.get(), sizeof(T) * nd);
-            uint32_t cur_i_u32 = (_u32)i;
+            uint32_t cur_i_u32 = (uint32_t)i;
             sample_id_writer.write((char *)&cur_i_u32, sizeof(uint32_t));
             num_sampled_pts_u32++;
         }
@@ -100,13 +100,13 @@ void gen_random_slice(const std::string data_file, double p_val, float *&sampled
     std::vector<std::vector<float>> sampled_vectors;
 
     // amount to read in one shot
-    _u64 read_blk_size = 64 * 1024 * 1024;
+    size_t read_blk_size = 64 * 1024 * 1024;
     // create cached reader + writer
     cached_ifstream base_reader(data_file.c_str(), read_blk_size);
 
     // metadata: npts, ndims
-    base_reader.read((char *)&npts32, sizeof(unsigned));
-    base_reader.read((char *)&ndims32, sizeof(unsigned));
+    base_reader.read((char *)&npts32, sizeof(uint32_t));
+    base_reader.read((char *)&ndims32, sizeof(uint32_t));
     npts = npts32;
     ndims = ndims32;
 
@@ -115,7 +115,7 @@ void gen_random_slice(const std::string data_file, double p_val, float *&sampled
 
     std::random_device rd; // Will be used to obtain a seed for the random number
     size_t x = rd();
-    std::mt19937 generator((unsigned)x);
+    std::mt19937 generator((uint32_t)x);
     std::uniform_real_distribution<float> distribution(0, 1);
 
     for (size_t i = 0; i < npts; i++)
@@ -154,7 +154,7 @@ void gen_random_slice(const T *inputdata, size_t npts, size_t ndims, double p_va
 
     std::random_device rd; // Will be used to obtain a seed for the random number engine
     size_t x = rd();
-    std::mt19937 generator((unsigned)x); // Standard mersenne_twister_engine seeded with rd()
+    std::mt19937 generator((uint32_t)x); // Standard mersenne_twister_engine seeded with rd()
     std::uniform_real_distribution<float> distribution(0, 1);
 
     for (size_t i = 0; i < npts; i++)
@@ -193,7 +193,7 @@ int estimate_cluster_sizes(float *test_data_float, size_t num_test, float *pivot
     }
 
     size_t block_size = num_test <= BLOCK_SIZE ? num_test : BLOCK_SIZE;
-    _u32 *block_closest_centers = new _u32[block_size * k_base];
+    uint32_t *block_closest_centers = new uint32_t[block_size * k_base];
     float *block_data_float;
 
     size_t num_blocks = DIV_ROUND_UP(num_test, block_size);
@@ -222,7 +222,7 @@ int estimate_cluster_sizes(float *test_data_float, size_t num_test, float *pivot
     diskann::cout << "Estimated cluster sizes: ";
     for (size_t i = 0; i < num_centers; i++)
     {
-        _u32 cur_shard_count = (_u32)shard_counts[i];
+        uint32_t cur_shard_count = (uint32_t)shard_counts[i];
         cluster_sizes.push_back((size_t)cur_shard_count);
         diskann::cout << cur_shard_count << " ";
     }
@@ -236,12 +236,12 @@ template <typename T>
 int shard_data_into_clusters(const std::string data_file, float *pivots, const size_t num_centers, const size_t dim,
                              const size_t k_base, std::string prefix_path)
 {
-    _u64 read_blk_size = 64 * 1024 * 1024;
-    //  _u64 write_blk_size = 64 * 1024 * 1024;
+    size_t read_blk_size = 64 * 1024 * 1024;
+    //  uint64_t write_blk_size = 64 * 1024 * 1024;
     // create cached reader + writer
     cached_ifstream base_reader(data_file, read_blk_size);
-    _u32 npts32;
-    _u32 basedim32;
+    uint32_t npts32;
+    uint32_t basedim32;
     base_reader.read((char *)&npts32, sizeof(uint32_t));
     base_reader.read((char *)&basedim32, sizeof(uint32_t));
     size_t num_points = npts32;
@@ -254,8 +254,8 @@ int shard_data_into_clusters(const std::string data_file, float *pivots, const s
     std::unique_ptr<size_t[]> shard_counts = std::make_unique<size_t[]>(num_centers);
     std::vector<std::ofstream> shard_data_writer(num_centers);
     std::vector<std::ofstream> shard_idmap_writer(num_centers);
-    _u32 dummy_size = 0;
-    _u32 const_one = 1;
+    uint32_t dummy_size = 0;
+    uint32_t const_one = 1;
 
     for (size_t i = 0; i < num_centers; i++)
     {
@@ -271,7 +271,7 @@ int shard_data_into_clusters(const std::string data_file, float *pivots, const s
     }
 
     size_t block_size = num_points <= BLOCK_SIZE ? num_points : BLOCK_SIZE;
-    std::unique_ptr<_u32[]> block_closest_centers = std::make_unique<_u32[]>(block_size * k_base);
+    std::unique_ptr<uint32_t[]> block_closest_centers = std::make_unique<uint32_t[]>(block_size * k_base);
     std::unique_ptr<T[]> block_data_T = std::make_unique<T[]>(block_size * dim);
     std::unique_ptr<float[]> block_data_float = std::make_unique<float[]>(block_size * dim);
 
@@ -306,7 +306,7 @@ int shard_data_into_clusters(const std::string data_file, float *pivots, const s
     diskann::cout << "Actual shard sizes: " << std::flush;
     for (size_t i = 0; i < num_centers; i++)
     {
-        _u32 cur_shard_count = (_u32)shard_counts[i];
+        uint32_t cur_shard_count = (uint32_t)shard_counts[i];
         total_count += cur_shard_count;
         diskann::cout << cur_shard_count << " ";
         shard_data_writer[i].seekp(0);
@@ -328,12 +328,12 @@ template <typename T>
 int shard_data_into_clusters_only_ids(const std::string data_file, float *pivots, const size_t num_centers,
                                       const size_t dim, const size_t k_base, std::string prefix_path)
 {
-    _u64 read_blk_size = 64 * 1024 * 1024;
-    //  _u64 write_blk_size = 64 * 1024 * 1024;
+    size_t read_blk_size = 64 * 1024 * 1024;
+    //  uint64_t write_blk_size = 64 * 1024 * 1024;
     // create cached reader + writer
     cached_ifstream base_reader(data_file, read_blk_size);
-    _u32 npts32;
-    _u32 basedim32;
+    uint32_t npts32;
+    uint32_t basedim32;
     base_reader.read((char *)&npts32, sizeof(uint32_t));
     base_reader.read((char *)&basedim32, sizeof(uint32_t));
     size_t num_points = npts32;
@@ -346,8 +346,8 @@ int shard_data_into_clusters_only_ids(const std::string data_file, float *pivots
     std::unique_ptr<size_t[]> shard_counts = std::make_unique<size_t[]>(num_centers);
 
     std::vector<std::ofstream> shard_idmap_writer(num_centers);
-    _u32 dummy_size = 0;
-    _u32 const_one = 1;
+    uint32_t dummy_size = 0;
+    uint32_t const_one = 1;
 
     for (size_t i = 0; i < num_centers; i++)
     {
@@ -359,7 +359,7 @@ int shard_data_into_clusters_only_ids(const std::string data_file, float *pivots
     }
 
     size_t block_size = num_points <= BLOCK_SIZE ? num_points : BLOCK_SIZE;
-    std::unique_ptr<_u32[]> block_closest_centers = std::make_unique<_u32[]>(block_size * k_base);
+    std::unique_ptr<uint32_t[]> block_closest_centers = std::make_unique<uint32_t[]>(block_size * k_base);
     std::unique_ptr<T[]> block_data_T = std::make_unique<T[]>(block_size * dim);
     std::unique_ptr<float[]> block_data_float = std::make_unique<float[]>(block_size * dim);
 
@@ -393,7 +393,7 @@ int shard_data_into_clusters_only_ids(const std::string data_file, float *pivots
     diskann::cout << "Actual shard sizes: " << std::flush;
     for (size_t i = 0; i < num_centers; i++)
     {
-        _u32 cur_shard_count = (_u32)shard_counts[i];
+        uint32_t cur_shard_count = (uint32_t)shard_counts[i];
         total_count += cur_shard_count;
         diskann::cout << cur_shard_count << " ";
         shard_idmap_writer[i].seekp(0);
@@ -409,29 +409,29 @@ int shard_data_into_clusters_only_ids(const std::string data_file, float *pivots
 template <typename T>
 int retrieve_shard_data_from_ids(const std::string data_file, std::string idmap_filename, std::string data_filename)
 {
-    _u64 read_blk_size = 64 * 1024 * 1024;
-    //  _u64 write_blk_size = 64 * 1024 * 1024;
+    size_t read_blk_size = 64 * 1024 * 1024;
+    //  uint64_t write_blk_size = 64 * 1024 * 1024;
     // create cached reader + writer
     cached_ifstream base_reader(data_file, read_blk_size);
-    _u32 npts32;
-    _u32 basedim32;
+    uint32_t npts32;
+    uint32_t basedim32;
     base_reader.read((char *)&npts32, sizeof(uint32_t));
     base_reader.read((char *)&basedim32, sizeof(uint32_t));
     size_t num_points = npts32;
     size_t dim = basedim32;
 
-    _u32 dummy_size = 0;
+    uint32_t dummy_size = 0;
 
     std::ofstream shard_data_writer(data_filename.c_str(), std::ios::binary);
     shard_data_writer.write((char *)&dummy_size, sizeof(uint32_t));
     shard_data_writer.write((char *)&basedim32, sizeof(uint32_t));
 
-    _u32 *shard_ids;
-    _u64 shard_size, tmp;
-    diskann::load_bin<_u32>(idmap_filename, shard_ids, shard_size, tmp);
+    uint32_t *shard_ids;
+    uint64_t shard_size, tmp;
+    diskann::load_bin<uint32_t>(idmap_filename, shard_ids, shard_size, tmp);
 
-    _u32 cur_pos = 0;
-    _u32 num_written = 0;
+    uint32_t cur_pos = 0;
+    uint32_t num_written = 0;
     std::cout << "Shard has " << shard_size << " points" << std::endl;
 
     size_t block_size = num_points <= BLOCK_SIZE ? num_points : BLOCK_SIZE;
@@ -495,7 +495,8 @@ int partition(const std::string data_file, const float sampling_rate, size_t num
 
     // kmeans_partitioning on training data
 
-    //  cur_file = cur_file + "_kmeans_partitioning-" + std::to_string(num_parts);
+    //  cur_file = cur_file + "_kmeans_partitioning-" +
+    //  std::to_string(num_parts);
     output_file = cur_file + "_centroids.bin";
 
     pivot_data = new float[num_parts * train_dim];
@@ -544,7 +545,8 @@ int partition_with_ram_budget(const std::string data_file, const double sampling
 
     // kmeans_partitioning on training data
 
-    //  cur_file = cur_file + "_kmeans_partitioning-" + std::to_string(num_parts);
+    //  cur_file = cur_file + "_kmeans_partitioning-" +
+    //  std::to_string(num_parts);
     output_file = cur_file + "_centroids.bin";
 
     while (!fit_in_ram)
@@ -572,7 +574,7 @@ int partition_with_ram_budget(const std::string data_file, const double sampling
         {
             // to account for the fact that p is the size of the shard over the
             // testing sample.
-            p = (_u64)(p / sampling_rate);
+            p = (uint64_t)(p / sampling_rate);
             double cur_shard_ram_estimate = diskann::estimate_ram_usage(p, train_dim, sizeof(T), graph_degree);
 
             if (cur_shard_ram_estimate > max_ram_usage)

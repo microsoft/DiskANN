@@ -41,16 +41,16 @@ void FixedChunkPQTable::load_pq_centroid_bin(const char *pq_table_file, size_t n
 {
 #endif
 
-    _u64 nr, nc;
+    uint64_t nr, nc;
     std::string rotmat_file = std::string(pq_table_file) + "_rotation_matrix.bin";
 
 #ifdef EXEC_ENV_OLS
-    _u64 *file_offset_data; // since load_bin only sets the pointer, no need
-                            // to delete.
-    diskann::load_bin<_u64>(files, pq_table_file, file_offset_data, nr, nc);
+    size_t *file_offset_data; // since load_bin only sets the pointer, no need
+                              // to delete.
+    diskann::load_bin<size_t>(files, pq_table_file, file_offset_data, nr, nc);
 #else
-    std::unique_ptr<_u64[]> file_offset_data;
-    diskann::load_bin<_u64>(pq_table_file, file_offset_data, nr, nc);
+    std::unique_ptr<size_t[]> file_offset_data;
+    diskann::load_bin<size_t>(pq_table_file, file_offset_data, nr, nc);
 #endif
 
     bool use_old_filetype = false;
@@ -150,32 +150,32 @@ void FixedChunkPQTable::load_pq_centroid_bin(const char *pq_table_file, size_t n
 
     // alloc and compute transpose
     tables_tr = new float[256 * this->ndims];
-    for (_u64 i = 0; i < 256; i++)
+    for (size_t i = 0; i < 256; i++)
     {
-        for (_u64 j = 0; j < this->ndims; j++)
+        for (size_t j = 0; j < this->ndims; j++)
         {
             tables_tr[j * 256 + i] = tables[i * this->ndims + j];
         }
     }
 }
 
-_u32 FixedChunkPQTable::get_num_chunks()
+uint32_t FixedChunkPQTable::get_num_chunks()
 {
-    return static_cast<_u32>(n_chunks);
+    return static_cast<uint32_t>(n_chunks);
 }
 
 void FixedChunkPQTable::preprocess_query(float *query_vec)
 {
-    for (_u32 d = 0; d < ndims; d++)
+    for (uint32_t d = 0; d < ndims; d++)
     {
         query_vec[d] -= centroid[d];
     }
     std::vector<float> tmp(ndims, 0);
     if (use_rotation)
     {
-        for (_u32 d = 0; d < ndims; d++)
+        for (uint32_t d = 0; d < ndims; d++)
         {
-            for (_u32 d1 = 0; d1 < ndims; d1++)
+            for (uint32_t d1 = 0; d1 < ndims; d1++)
             {
                 tmp[d] += query_vec[d1] * rotmat_tr[d1 * ndims + d];
             }
@@ -189,14 +189,14 @@ void FixedChunkPQTable::populate_chunk_distances(const float *query_vec, float *
 {
     memset(dist_vec, 0, 256 * n_chunks * sizeof(float));
     // chunk wise distance computation
-    for (_u64 chunk = 0; chunk < n_chunks; chunk++)
+    for (size_t chunk = 0; chunk < n_chunks; chunk++)
     {
         // sum (q-c)^2 for the dimensions associated with this chunk
         float *chunk_dists = dist_vec + (256 * chunk);
-        for (_u64 j = chunk_offsets[chunk]; j < chunk_offsets[chunk + 1]; j++)
+        for (size_t j = chunk_offsets[chunk]; j < chunk_offsets[chunk + 1]; j++)
         {
             const float *centers_dim_vec = tables_tr + (256 * j);
-            for (_u64 idx = 0; idx < 256; idx++)
+            for (size_t idx = 0; idx < 256; idx++)
             {
                 double diff = centers_dim_vec[idx] - (query_vec[j]);
                 chunk_dists[idx] += (float)(diff * diff);
@@ -205,12 +205,12 @@ void FixedChunkPQTable::populate_chunk_distances(const float *query_vec, float *
     }
 }
 
-float FixedChunkPQTable::l2_distance(const float *query_vec, _u8 *base_vec)
+float FixedChunkPQTable::l2_distance(const float *query_vec, uint8_t *base_vec)
 {
     float res = 0;
-    for (_u64 chunk = 0; chunk < n_chunks; chunk++)
+    for (size_t chunk = 0; chunk < n_chunks; chunk++)
     {
-        for (_u64 j = chunk_offsets[chunk]; j < chunk_offsets[chunk + 1]; j++)
+        for (size_t j = chunk_offsets[chunk]; j < chunk_offsets[chunk + 1]; j++)
         {
             const float *centers_dim_vec = tables_tr + (256 * j);
             float diff = centers_dim_vec[base_vec[chunk]] - (query_vec[j]);
@@ -220,12 +220,12 @@ float FixedChunkPQTable::l2_distance(const float *query_vec, _u8 *base_vec)
     return res;
 }
 
-float FixedChunkPQTable::inner_product(const float *query_vec, _u8 *base_vec)
+float FixedChunkPQTable::inner_product(const float *query_vec, uint8_t *base_vec)
 {
     float res = 0;
-    for (_u64 chunk = 0; chunk < n_chunks; chunk++)
+    for (size_t chunk = 0; chunk < n_chunks; chunk++)
     {
-        for (_u64 j = chunk_offsets[chunk]; j < chunk_offsets[chunk + 1]; j++)
+        for (size_t j = chunk_offsets[chunk]; j < chunk_offsets[chunk + 1]; j++)
         {
             const float *centers_dim_vec = tables_tr + (256 * j);
             float diff = centers_dim_vec[base_vec[chunk]] * query_vec[j]; // assumes centroid is 0 to
@@ -238,11 +238,11 @@ float FixedChunkPQTable::inner_product(const float *query_vec, _u8 *base_vec)
 }
 
 // assumes no rotation is involved
-void FixedChunkPQTable::inflate_vector(_u8 *base_vec, float *out_vec)
+void FixedChunkPQTable::inflate_vector(uint8_t *base_vec, float *out_vec)
 {
-    for (_u64 chunk = 0; chunk < n_chunks; chunk++)
+    for (size_t chunk = 0; chunk < n_chunks; chunk++)
     {
-        for (_u64 j = chunk_offsets[chunk]; j < chunk_offsets[chunk + 1]; j++)
+        for (size_t j = chunk_offsets[chunk]; j < chunk_offsets[chunk + 1]; j++)
         {
             const float *centers_dim_vec = tables_tr + (256 * j);
             out_vec[j] = centers_dim_vec[base_vec[chunk]] + centroid[j];
@@ -254,35 +254,35 @@ void FixedChunkPQTable::populate_chunk_inner_products(const float *query_vec, fl
 {
     memset(dist_vec, 0, 256 * n_chunks * sizeof(float));
     // chunk wise distance computation
-    for (_u64 chunk = 0; chunk < n_chunks; chunk++)
+    for (size_t chunk = 0; chunk < n_chunks; chunk++)
     {
         // sum (q-c)^2 for the dimensions associated with this chunk
         float *chunk_dists = dist_vec + (256 * chunk);
-        for (_u64 j = chunk_offsets[chunk]; j < chunk_offsets[chunk + 1]; j++)
+        for (size_t j = chunk_offsets[chunk]; j < chunk_offsets[chunk + 1]; j++)
         {
             const float *centers_dim_vec = tables_tr + (256 * j);
-            for (_u64 idx = 0; idx < 256; idx++)
+            for (size_t idx = 0; idx < 256; idx++)
             {
                 double prod = centers_dim_vec[idx] * query_vec[j]; // assumes that we are not
                                                                    // shifting the vectors to
                                                                    // mean zero, i.e., centroid
                                                                    // array should be all zeros
-                chunk_dists[idx] -= (float)prod;                   // returning negative to keep the search code clean
-                                                                   // (max inner product vs min distance)
+                chunk_dists[idx] -= (float)prod;                   // returning negative to keep the search code
+                                                                   // clean (max inner product vs min distance)
             }
         }
     }
 }
 
-void aggregate_coords(const std::vector<unsigned> &ids, const _u8 *all_coords, const _u64 ndims, _u8 *out)
+void aggregate_coords(const std::vector<uint32_t> &ids, const uint8_t *all_coords, const size_t ndims, uint8_t *out)
 {
-    for (_u64 i = 0; i < ids.size(); i++)
+    for (size_t i = 0; i < ids.size(); i++)
     {
-        memcpy(out + i * ndims, all_coords + ids[i] * ndims, ndims * sizeof(_u8));
+        memcpy(out + i * ndims, all_coords + ids[i] * ndims, ndims * sizeof(uint8_t));
     }
 }
 
-void pq_dist_lookup(const _u8 *pq_ids, const _u64 n_pts, const _u64 pq_nchunks, const float *pq_dists,
+void pq_dist_lookup(const uint8_t *pq_ids, const size_t n_pts, const size_t pq_nchunks, const float *pq_dists,
                     std::vector<float> &dists_out)
 {
     //_mm_prefetch((char*) dists_out, _MM_HINT_T0);
@@ -291,47 +291,50 @@ void pq_dist_lookup(const _u8 *pq_ids, const _u64 n_pts, const _u64 pq_nchunks, 
     _mm_prefetch((char *)(pq_ids + 128), _MM_HINT_T0);
     dists_out.clear();
     dists_out.resize(n_pts, 0);
-    for (_u64 chunk = 0; chunk < pq_nchunks; chunk++)
+    for (size_t chunk = 0; chunk < pq_nchunks; chunk++)
     {
         const float *chunk_dists = pq_dists + 256 * chunk;
         if (chunk < pq_nchunks - 1)
         {
             _mm_prefetch((char *)(chunk_dists + 256), _MM_HINT_T0);
         }
-        for (_u64 idx = 0; idx < n_pts; idx++)
+        for (size_t idx = 0; idx < n_pts; idx++)
         {
-            _u8 pq_centerid = pq_ids[pq_nchunks * idx + chunk];
+            uint8_t pq_centerid = pq_ids[pq_nchunks * idx + chunk];
             dists_out[idx] += chunk_dists[pq_centerid];
         }
     }
 }
 
-// Need to replace calls to these functions with calls to vector& based functions above
-void aggregate_coords(const unsigned *ids, const _u64 n_ids, const _u8 *all_coords, const _u64 ndims, _u8 *out)
+// Need to replace calls to these functions with calls to vector& based
+// functions above
+void aggregate_coords(const uint32_t *ids, const size_t n_ids, const uint8_t *all_coords, const size_t ndims,
+                      uint8_t *out)
 {
-    for (_u64 i = 0; i < n_ids; i++)
+    for (size_t i = 0; i < n_ids; i++)
     {
-        memcpy(out + i * ndims, all_coords + ids[i] * ndims, ndims * sizeof(_u8));
+        memcpy(out + i * ndims, all_coords + ids[i] * ndims, ndims * sizeof(uint8_t));
     }
 }
 
-void pq_dist_lookup(const _u8 *pq_ids, const _u64 n_pts, const _u64 pq_nchunks, const float *pq_dists, float *dists_out)
+void pq_dist_lookup(const uint8_t *pq_ids, const size_t n_pts, const size_t pq_nchunks, const float *pq_dists,
+                    float *dists_out)
 {
     _mm_prefetch((char *)dists_out, _MM_HINT_T0);
     _mm_prefetch((char *)pq_ids, _MM_HINT_T0);
     _mm_prefetch((char *)(pq_ids + 64), _MM_HINT_T0);
     _mm_prefetch((char *)(pq_ids + 128), _MM_HINT_T0);
     memset(dists_out, 0, n_pts * sizeof(float));
-    for (_u64 chunk = 0; chunk < pq_nchunks; chunk++)
+    for (size_t chunk = 0; chunk < pq_nchunks; chunk++)
     {
         const float *chunk_dists = pq_dists + 256 * chunk;
         if (chunk < pq_nchunks - 1)
         {
             _mm_prefetch((char *)(chunk_dists + 256), _MM_HINT_T0);
         }
-        for (_u64 idx = 0; idx < n_pts; idx++)
+        for (size_t idx = 0; idx < n_pts; idx++)
         {
-            _u8 pq_centerid = pq_ids[pq_nchunks * idx + chunk];
+            uint8_t pq_centerid = pq_ids[pq_nchunks * idx + chunk];
             dists_out[idx] += chunk_dists[pq_centerid];
         }
     }
@@ -342,8 +345,8 @@ void pq_dist_lookup(const _u8 *pq_ids, const _u64 n_pts, const _u64 pq_nchunks, 
 // num_pq_chunks (if it divides dimension, else rounded) chunks, and runs
 // k-means in each chunk to compute the PQ pivots and stores in bin format in
 // file pq_pivots_path as a s num_centers*dim floating point binary file
-int generate_pq_pivots(const float *const passed_train_data, size_t num_train, unsigned dim, unsigned num_centers,
-                       unsigned num_pq_chunks, unsigned max_k_means_reps, std::string pq_pivots_path,
+int generate_pq_pivots(const float *const passed_train_data, size_t num_train, uint32_t dim, uint32_t num_centers,
+                       uint32_t num_pq_chunks, uint32_t max_k_means_reps, std::string pq_pivots_path,
                        bool make_zero_mean)
 {
     if (num_pq_chunks > dim)
@@ -440,7 +443,7 @@ int generate_pq_pivots(const float *const passed_train_data, size_t num_train, u
     for (uint32_t b = 0; b < num_pq_chunks; b++)
     {
         if (b > 0)
-            chunk_offsets.push_back(chunk_offsets[b - 1] + (unsigned)bin_to_dims[b - 1].size());
+            chunk_offsets.push_back(chunk_offsets[b - 1] + (uint32_t)bin_to_dims[b - 1].size());
     }
     chunk_offsets.push_back(dim);
 
@@ -460,7 +463,7 @@ int generate_pq_pivots(const float *const passed_train_data, size_t num_train, u
                       << chunk_offsets[i + 1] << ")" << std::endl;
 
 #pragma omp parallel for schedule(static, 65536)
-        for (int64_t j = 0; j < (_s64)num_train; j++)
+        for (int64_t j = 0; j < (int64_t)num_train; j++)
         {
             std::memcpy(cur_data.get() + j * cur_chunk_size, train_data.get() + j * dim + chunk_offsets[i],
                         cur_chunk_size * sizeof(float));
@@ -486,7 +489,7 @@ int generate_pq_pivots(const float *const passed_train_data, size_t num_train, u
                      diskann::save_bin<float>(pq_pivots_path.c_str(), centroid.get(), (size_t)dim, 1, cumul_bytes[1]);
     cumul_bytes[3] = cumul_bytes[2] + diskann::save_bin<uint32_t>(pq_pivots_path.c_str(), chunk_offsets.data(),
                                                                   chunk_offsets.size(), 1, cumul_bytes[2]);
-    diskann::save_bin<_u64>(pq_pivots_path.c_str(), cumul_bytes.data(), cumul_bytes.size(), 1, 0);
+    diskann::save_bin<size_t>(pq_pivots_path.c_str(), cumul_bytes.data(), cumul_bytes.size(), 1, 0);
 
     diskann::cout << "Saved pq pivot data to " << pq_pivots_path << " of size " << cumul_bytes[cumul_bytes.size() - 1]
                   << "B." << std::endl;
@@ -494,8 +497,8 @@ int generate_pq_pivots(const float *const passed_train_data, size_t num_train, u
     return 0;
 }
 
-int generate_opq_pivots(const float *passed_train_data, size_t num_train, unsigned dim, unsigned num_centers,
-                        unsigned num_pq_chunks, std::string opq_pivots_path, bool make_zero_mean)
+int generate_opq_pivots(const float *passed_train_data, size_t num_train, uint32_t dim, uint32_t num_centers,
+                        uint32_t num_pq_chunks, std::string opq_pivots_path, bool make_zero_mean)
 {
     if (num_pq_chunks > dim)
     {
@@ -591,7 +594,7 @@ int generate_opq_pivots(const float *passed_train_data, size_t num_train, unsign
     for (uint32_t b = 0; b < num_pq_chunks; b++)
     {
         if (b > 0)
-            chunk_offsets.push_back(chunk_offsets[b - 1] + (unsigned)bin_to_dims[b - 1].size());
+            chunk_offsets.push_back(chunk_offsets[b - 1] + (uint32_t)bin_to_dims[b - 1].size());
     }
     chunk_offsets.push_back(dim);
 
@@ -599,10 +602,10 @@ int generate_opq_pivots(const float *passed_train_data, size_t num_train, unsign
     rotmat_tr.reset(new float[dim * dim]);
 
     std::memset(rotmat_tr.get(), 0, dim * dim * sizeof(float));
-    for (_u32 d1 = 0; d1 < dim; d1++)
+    for (uint32_t d1 = 0; d1 < dim; d1++)
         *(rotmat_tr.get() + d1 * dim + d1) = 1;
 
-    for (_u32 rnd = 0; rnd < MAX_OPQ_ITERS; rnd++)
+    for (uint32_t rnd = 0; rnd < MAX_OPQ_ITERS; rnd++)
     {
         // rotate the training data using the current rotation matrix
         cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans, (MKL_INT)num_train, (MKL_INT)dim, (MKL_INT)dim, 1.0f,
@@ -624,7 +627,7 @@ int generate_opq_pivots(const float *passed_train_data, size_t num_train, unsign
                           << chunk_offsets[i + 1] << ")" << std::endl;
 
 #pragma omp parallel for schedule(static, 65536)
-            for (int64_t j = 0; j < (_s64)num_train; j++)
+            for (int64_t j = 0; j < (int64_t)num_train; j++)
             {
                 std::memcpy(cur_data.get() + j * cur_chunk_size, rotated_train_data.get() + j * dim + chunk_offsets[i],
                             cur_chunk_size * sizeof(float));
@@ -644,7 +647,7 @@ int generate_opq_pivots(const float *passed_train_data, size_t num_train, unsign
                 }
             }
 
-            _u32 num_lloyds_iters = 8;
+            uint32_t num_lloyds_iters = 8;
             kmeans::run_lloyds(cur_data.get(), num_train, cur_chunk_size, cur_pivot_data.get(), num_centers,
                                num_lloyds_iters, NULL, closest_center.get());
 
@@ -654,10 +657,10 @@ int generate_opq_pivots(const float *passed_train_data, size_t num_train, unsign
                             cur_pivot_data.get() + j * cur_chunk_size, cur_chunk_size * sizeof(float));
             }
 
-            for (_u64 j = 0; j < num_train; j++)
+            for (size_t j = 0; j < num_train; j++)
             {
                 std::memcpy(rotated_and_quantized_train_data.get() + j * dim + chunk_offsets[i],
-                            cur_pivot_data.get() + (_u64)closest_center[j] * cur_chunk_size,
+                            cur_pivot_data.get() + (size_t)closest_center[j] * cur_chunk_size,
                             cur_chunk_size * sizeof(float));
             }
         }
@@ -670,7 +673,7 @@ int generate_opq_pivots(const float *passed_train_data, size_t num_train, unsign
 
         // compute the SVD of the correlation matrix to help determine the new
         // rotation matrix
-        _u32 errcode =
+        uint32_t errcode =
             LAPACKE_sgesdd(LAPACK_ROW_MAJOR, 'A', (MKL_INT)dim, (MKL_INT)dim, correlation_matrix.get(), (MKL_INT)dim,
                            singular_values.get(), Umat.get(), (MKL_INT)dim, Vmat_T.get(), (MKL_INT)dim);
 
@@ -694,7 +697,7 @@ int generate_opq_pivots(const float *passed_train_data, size_t num_train, unsign
                      diskann::save_bin<float>(opq_pivots_path.c_str(), centroid.get(), (size_t)dim, 1, cumul_bytes[1]);
     cumul_bytes[3] = cumul_bytes[2] + diskann::save_bin<uint32_t>(opq_pivots_path.c_str(), chunk_offsets.data(),
                                                                   chunk_offsets.size(), 1, cumul_bytes[2]);
-    diskann::save_bin<_u64>(opq_pivots_path.c_str(), cumul_bytes.data(), cumul_bytes.size(), 1, 0);
+    diskann::save_bin<size_t>(opq_pivots_path.c_str(), cumul_bytes.data(), cumul_bytes.size(), 1, 0);
 
     diskann::cout << "Saved opq pivot data to " << opq_pivots_path << " of size " << cumul_bytes[cumul_bytes.size() - 1]
                   << "B." << std::endl;
@@ -711,13 +714,13 @@ int generate_opq_pivots(const float *passed_train_data, size_t num_train, unsign
 // If the numbber of centers is < 256, it stores as byte vector, else as
 // 4-byte vector in binary format.
 template <typename T>
-int generate_pq_data_from_pivots(const std::string data_file, unsigned num_centers, unsigned num_pq_chunks,
+int generate_pq_data_from_pivots(const std::string data_file, uint32_t num_centers, uint32_t num_pq_chunks,
                                  std::string pq_pivots_path, std::string pq_compressed_vectors_path, bool use_opq)
 {
-    _u64 read_blk_size = 64 * 1024 * 1024;
+    size_t read_blk_size = 64 * 1024 * 1024;
     cached_ifstream base_reader(data_file, read_blk_size);
-    _u32 npts32;
-    _u32 basedim32;
+    uint32_t npts32;
+    uint32_t basedim32;
     base_reader.read((char *)&npts32, sizeof(uint32_t));
     base_reader.read((char *)&basedim32, sizeof(uint32_t));
     size_t num_points = npts32;
@@ -737,10 +740,10 @@ int generate_pq_data_from_pivots(const std::string data_file, unsigned num_cente
     }
     else
     {
-        _u64 nr, nc;
-        std::unique_ptr<_u64[]> file_offset_data;
+        size_t nr, nc;
+        std::unique_ptr<size_t[]> file_offset_data;
 
-        diskann::load_bin<_u64>(pq_pivots_path.c_str(), file_offset_data, nr, nc, 0);
+        diskann::load_bin<size_t>(pq_pivots_path.c_str(), file_offset_data, nr, nc, 0);
 
         if (nr != 4)
         {
@@ -796,7 +799,7 @@ int generate_pq_data_from_pivots(const std::string data_file, unsigned num_cente
     }
 
     std::ofstream compressed_file_writer(pq_compressed_vectors_path, std::ios::binary);
-    _u32 num_pq_chunks_u32 = num_pq_chunks;
+    uint32_t num_pq_chunks_u32 = num_pq_chunks;
 
     compressed_file_writer.write((char *)&num_points, sizeof(uint32_t));
     compressed_file_writer.write((char *)&num_pq_chunks_u32, sizeof(uint32_t));
@@ -812,8 +815,9 @@ int generate_pq_data_from_pivots(const std::string data_file, unsigned num_cente
     std::memset(block_inflated_base.get(), 0, block_size * dim * sizeof(float));
 #endif
 
-    std::unique_ptr<_u32[]> block_compressed_base = std::make_unique<_u32[]>(block_size * (_u64)num_pq_chunks);
-    std::memset(block_compressed_base.get(), 0, block_size * (_u64)num_pq_chunks * sizeof(uint32_t));
+    std::unique_ptr<uint32_t[]> block_compressed_base =
+        std::make_unique<uint32_t[]>(block_size * (size_t)num_pq_chunks);
+    std::memset(block_compressed_base.get(), 0, block_size * (size_t)num_pq_chunks * sizeof(uint32_t));
 
     std::unique_ptr<T[]> block_data_T = std::make_unique<T[]>(block_size * dim);
     std::unique_ptr<float[]> block_data_float = std::make_unique<float[]>(block_size * dim);
@@ -832,7 +836,7 @@ int generate_pq_data_from_pivots(const std::string data_file, unsigned num_cente
 
         diskann::cout << "Processing points  [" << start_id << ", " << end_id << ").." << std::flush;
 
-        for (uint64_t p = 0; p < cur_blk_size; p++)
+        for (size_t p = 0; p < cur_blk_size; p++)
         {
             for (uint64_t d = 0; d < dim; d++)
             {
@@ -840,7 +844,7 @@ int generate_pq_data_from_pivots(const std::string data_file, unsigned num_cente
             }
         }
 
-        for (uint64_t p = 0; p < cur_blk_size; p++)
+        for (size_t p = 0; p < cur_blk_size; p++)
         {
             for (uint64_t d = 0; d < dim; d++)
             {
@@ -850,7 +854,8 @@ int generate_pq_data_from_pivots(const std::string data_file, unsigned num_cente
 
         if (use_opq)
         {
-            // rotate the current block with the trained rotation matrix before PQ
+            // rotate the current block with the trained rotation matrix before
+            // PQ
             cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans, (MKL_INT)cur_blk_size, (MKL_INT)dim, (MKL_INT)dim,
                         1.0f, block_data_float.get(), (MKL_INT)dim, rotmat_tr.get(), (MKL_INT)dim, 0.0f,
                         block_data_tmp.get(), (MKL_INT)dim);
@@ -868,14 +873,14 @@ int generate_pq_data_from_pivots(const std::string data_file, unsigned num_cente
             std::unique_ptr<uint32_t[]> closest_center = std::make_unique<uint32_t[]>(cur_blk_size);
 
 #pragma omp parallel for schedule(static, 8192)
-            for (int64_t j = 0; j < (_s64)cur_blk_size; j++)
+            for (int64_t j = 0; j < (int64_t)cur_blk_size; j++)
             {
-                for (uint64_t k = 0; k < cur_chunk_size; k++)
+                for (size_t k = 0; k < cur_chunk_size; k++)
                     cur_data[j * cur_chunk_size + k] = block_data_float[j * dim + chunk_offsets[i] + k];
             }
 
 #pragma omp parallel for schedule(static, 1)
-            for (int64_t j = 0; j < (_s64)num_centers; j++)
+            for (int64_t j = 0; j < (int64_t)num_centers; j++)
             {
                 std::memcpy(cur_pivot_data.get() + j * cur_chunk_size,
                             full_pivot_data.get() + j * dim + chunk_offsets[i], cur_chunk_size * sizeof(float));
@@ -885,11 +890,11 @@ int generate_pq_data_from_pivots(const std::string data_file, unsigned num_cente
                                                 num_centers, 1, closest_center.get());
 
 #pragma omp parallel for schedule(static, 8192)
-            for (int64_t j = 0; j < (_s64)cur_blk_size; j++)
+            for (int64_t j = 0; j < (int64_t)cur_blk_size; j++)
             {
                 block_compressed_base[j * num_pq_chunks + i] = closest_center[j];
 #ifdef SAVE_INFLATED_PQ
-                for (uint64_t k = 0; k < cur_chunk_size; k++)
+                for (size_t k = 0; k < cur_chunk_size; k++)
                     block_inflated_base[j * dim + chunk_offsets[i] + k] =
                         cur_pivot_data[closest_center[j] * cur_chunk_size + k] + centroid[chunk_offsets[i] + k];
 #endif
@@ -978,7 +983,7 @@ void generate_quantized_data(const std::string data_file_to_use, const std::stri
     }
     else
     {
-        generate_opq_pivots(train_data, train_size, (_u32)train_dim, NUM_PQ_CENTROIDS, (_u32)num_pq_chunks,
+        generate_opq_pivots(train_data, train_size, (uint32_t)train_dim, NUM_PQ_CENTROIDS, (uint32_t)num_pq_chunks,
                             pq_pivots_path, make_zero_mean);
     }
     generate_pq_data_from_pivots<T>(data_file_to_use.c_str(), NUM_PQ_CENTROIDS, (uint32_t)num_pq_chunks, pq_pivots_path,
@@ -989,16 +994,16 @@ void generate_quantized_data(const std::string data_file_to_use, const std::stri
 
 // Instantations of supported templates
 
-template DISKANN_DLLEXPORT int generate_pq_data_from_pivots<int8_t>(const std::string data_file, unsigned num_centers,
-                                                                    unsigned num_pq_chunks, std::string pq_pivots_path,
+template DISKANN_DLLEXPORT int generate_pq_data_from_pivots<int8_t>(const std::string data_file, uint32_t num_centers,
+                                                                    uint32_t num_pq_chunks, std::string pq_pivots_path,
                                                                     std::string pq_compressed_vectors_path,
                                                                     bool use_opq);
-template DISKANN_DLLEXPORT int generate_pq_data_from_pivots<uint8_t>(const std::string data_file, unsigned num_centers,
-                                                                     unsigned num_pq_chunks, std::string pq_pivots_path,
+template DISKANN_DLLEXPORT int generate_pq_data_from_pivots<uint8_t>(const std::string data_file, uint32_t num_centers,
+                                                                     uint32_t num_pq_chunks, std::string pq_pivots_path,
                                                                      std::string pq_compressed_vectors_path,
                                                                      bool use_opq);
-template DISKANN_DLLEXPORT int generate_pq_data_from_pivots<float>(const std::string data_file, unsigned num_centers,
-                                                                   unsigned num_pq_chunks, std::string pq_pivots_path,
+template DISKANN_DLLEXPORT int generate_pq_data_from_pivots<float>(const std::string data_file, uint32_t num_centers,
+                                                                   uint32_t num_pq_chunks, std::string pq_pivots_path,
                                                                    std::string pq_compressed_vectors_path,
                                                                    bool use_opq);
 

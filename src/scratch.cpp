@@ -95,10 +95,10 @@ template <typename T> void SSDQueryScratch<T>::reset()
 
 template <typename T> SSDQueryScratch<T>::SSDQueryScratch(size_t aligned_dim, size_t visited_reserve)
 {
-    _u64 coord_alloc_size = ROUND_UP(MAX_N_CMPS * aligned_dim, 256);
+    size_t coord_alloc_size = ROUND_UP(MAX_N_CMPS * aligned_dim, 256);
 
     diskann::alloc_aligned((void **)&coord_scratch, coord_alloc_size, 256);
-    diskann::alloc_aligned((void **)&sector_scratch, (_u64)MAX_N_SECTOR_READS * (_u64)SECTOR_LEN, SECTOR_LEN);
+    diskann::alloc_aligned((void **)&sector_scratch, (size_t)MAX_N_SECTOR_READS * (size_t)SECTOR_LEN, SECTOR_LEN);
     diskann::alloc_aligned((void **)&aligned_query_T, aligned_dim * sizeof(T), 8 * sizeof(T));
 
     _pq_scratch = new PQScratch<T>(MAX_GRAPH_DEGREE, aligned_dim);
@@ -132,11 +132,11 @@ template DISKANN_DLLEXPORT class InMemQueryScratch<int8_t>;
 template DISKANN_DLLEXPORT class InMemQueryScratch<uint8_t>;
 template DISKANN_DLLEXPORT class InMemQueryScratch<float>;
 
-template DISKANN_DLLEXPORT class SSDQueryScratch<_u8>;
-template DISKANN_DLLEXPORT class SSDQueryScratch<_s8>;
+template DISKANN_DLLEXPORT class SSDQueryScratch<int8_t>;
+template DISKANN_DLLEXPORT class SSDQueryScratch<uint8_t>;
 template DISKANN_DLLEXPORT class SSDQueryScratch<float>;
 
-template DISKANN_DLLEXPORT class SSDThreadData<_u8>;
-template DISKANN_DLLEXPORT class SSDThreadData<_s8>;
+template DISKANN_DLLEXPORT class SSDThreadData<int8_t>;
+template DISKANN_DLLEXPORT class SSDThreadData<uint8_t>;
 template DISKANN_DLLEXPORT class SSDThreadData<float>;
 } // namespace diskann

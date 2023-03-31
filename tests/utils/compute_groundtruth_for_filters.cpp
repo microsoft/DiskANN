@@ -149,28 +149,28 @@ void exact_knn(const size_t dim, const size_t k,
         points = new float[npoints * dim];
         queries = new float[nqueries * dim];
 #pragma omp parallel for schedule(static, 4096)
-        for (_s64 i = 0; i < (_s64)npoints; i++)
+        for (int64_t i = 0; i < (int64_t)npoints; i++)
         {
             float norm = std::sqrt(points_l2sq[i]);
             if (norm == 0)
             {
                 norm = std::numeric_limits<float>::epsilon();
             }
-            for (_u32 j = 0; j < dim; j++)
+            for (uint32_t j = 0; j < dim; j++)
             {
                 points[i * dim + j] = points_in[i * dim + j] / norm;
             }
         }
 
 #pragma omp parallel for schedule(static, 4096)
-        for (_s64 i = 0; i < (_s64)nqueries; i++)
+        for (int64_t i = 0; i < (int64_t)nqueries; i++)
         {
             float norm = std::sqrt(queries_l2sq[i]);
             if (norm == 0)
             {
                 norm = std::numeric_limits<float>::epsilon();
             }
-            for (_u32 j = 0; j < dim; j++)
+            for (uint32_t j = 0; j < dim; j++)
             {
                 queries[i * dim + j] = queries_in[i * dim + j] / norm;
             }
@@ -193,7 +193,7 @@ void exact_knn(const size_t dim, const size_t k,
     size_t q_batch_size = (1 << 9);
     float *dist_matrix = new float[(size_t)q_batch_size * (size_t)npoints];
 
-    for (_u64 b = 0; b < div_round_up(nqueries, q_batch_size); ++b)
+    for (uint64_t b = 0; b < div_round_up(nqueries, q_batch_size); ++b)
     {
         int64_t q_b = b * q_batch_size;
         int64_t q_e = ((b + 1) * q_batch_size > nqueries) ? nqueries : (b + 1) * q_batch_size;
@@ -214,9 +214,9 @@ void exact_knn(const size_t dim, const size_t k,
         for (long long q = q_b; q < q_e; q++)
         {
             maxPQIFCS point_dist;
-            for (_u64 p = 0; p < k; p++)
+            for (uint64_t p = 0; p < k; p++)
                 point_dist.emplace(p, dist_matrix[(ptrdiff_t)p + (ptrdiff_t)(q - q_b) * (ptrdiff_t)npoints]);
-            for (_u64 p = k; p < npoints; p++)
+            for (size_t p = k; p < npoints; p++)
             {
                 if (point_dist.top().second > dist_matrix[(ptrdiff_t)p + (ptrdiff_t)(q - q_b) * (ptrdiff_t)npoints])
                     point_dist.emplace(p, dist_matrix[(ptrdiff_t)p + (ptrdiff_t)(q - q_b) * (ptrdiff_t)npoints]);
@@ -320,7 +320,7 @@ inline std::vector<size_t> load_filtered_bin_as_float(const char *filename, floa
     uint64_t start_id = part_num * PARTSIZE;
     uint64_t end_id = (std::min)(start_id + PARTSIZE, (uint64_t)npts_i32);
     npts = end_id - start_id;
-    ndims = (unsigned)ndims_i32;
+    ndims = (uint32_t)ndims_i32;
     uint64_t nptsuint64_t = (uint64_t)npts;
     uint64_t ndimsuint64_t = (uint64_t)ndims;
     npoints_filt = 0;
@@ -384,7 +384,7 @@ inline void save_groundtruth_as_one_file(const std::string filename, int32_t *da
     writer.write((char *)&ndims_i32, sizeof(int));
     std::cout << "Saving truthset in one file (npts, dim, npts*dim id-matrix, "
                  "npts*dim dist-matrix) with npts = "
-              << npts << ", dim = " << ndims << ", size = " << 2 * npts * ndims * sizeof(unsigned) + 2 * sizeof(int)
+              << npts << ", dim = " << ndims << ", size = " << 2 * npts * ndims * sizeof(uint32_t) + 2 * sizeof(int)
               << "B" << std::endl;
 
     writer.write((char *)data, npts * ndims * sizeof(uint32_t));
@@ -445,14 +445,14 @@ std::vector<std::vector<std::pair<uint32_t, float>>> processUnfilteredParts(cons
         int *closest_points_part = new int[nqueries * k];
         float *dist_closest_points_part = new float[nqueries * k];
 
-        _u32 part_k;
+        uint32_t part_k;
         part_k = k < npoints ? k : npoints;
         exact_knn(dim, part_k, closest_points_part, dist_closest_points_part, npoints, base_data, nqueries, query_data,
                   metric);
 
-        for (_u64 i = 0; i < nqueries; i++)
+        for (size_t i = 0; i < nqueries; i++)
         {
-            for (_u64 j = 0; j < part_k; j++)
+            for (uint64_t j = 0; j < part_k; j++)
             {
                 if (!location_to_tag.empty())
                     if (location_to_tag[closest_points_part[i * k + j] + start_id] == 0)
@@ -496,7 +496,7 @@ std::vector<std::vector<std::pair<uint32_t, float>>> processFilteredParts(
         int *closest_points_part = new int[nqueries * k];
         float *dist_closest_points_part = new float[nqueries * k];
 
-        _u32 part_k;
+        uint32_t part_k;
         part_k = k < npoints_filt ? k : npoints_filt;
         if (npoints_filt > 0)
         {
@@ -504,9 +504,9 @@ std::vector<std::vector<std::pair<uint32_t, float>>> processFilteredParts(
                       query_data, metric);
         }
 
-        for (_u64 i = 0; i < nqueries; i++)
+        for (size_t i = 0; i < nqueries; i++)
         {
-            for (_u64 j = 0; j < part_k; j++)
+            for (uint64_t j = 0; j < part_k; j++)
             {
                 if (!location_to_tag.empty())
                     if (location_to_tag[closest_points_part[i * k + j] + start_id] == 0)
@@ -558,7 +558,7 @@ int aux_main(const std::string &base_file, const std::string &label_file, const 
                                           k, query_data, metric, location_to_tag);
     }
 
-    for (_u64 i = 0; i < nqueries; i++)
+    for (size_t i = 0; i < nqueries; i++)
     {
         std::vector<std::pair<uint32_t, float>> &cur_res = results[i];
         std::sort(cur_res.begin(), cur_res.end(), custom_dist);
@@ -598,7 +598,7 @@ int aux_main(const std::string &base_file, const std::string &label_file, const 
 
 void load_truthset(const std::string &bin_file, uint32_t *&ids, float *&dists, size_t &npts, size_t &dim)
 {
-    _u64 read_blk_size = 64 * 1024 * 1024;
+    size_t read_blk_size = 64 * 1024 * 1024;
     cached_ifstream reader(bin_file, read_blk_size);
     diskann::cout << "Reading truthset file " << bin_file.c_str() << " ..." << std::endl;
     size_t actual_file_size = reader.get_file_size();
@@ -606,8 +606,8 @@ void load_truthset(const std::string &bin_file, uint32_t *&ids, float *&dists, s
     int npts_i32, dim_i32;
     reader.read((char *)&npts_i32, sizeof(int));
     reader.read((char *)&dim_i32, sizeof(int));
-    npts = (unsigned)npts_i32;
-    dim = (unsigned)dim_i32;
+    npts = (uint32_t)npts_i32;
+    dim = (uint32_t)dim_i32;
 
     diskann::cout << "Metadata: #pts = " << npts << ", #dims = " << dim << "... " << std::endl;
 
@@ -762,8 +762,8 @@ int main(int argc, char **argv)
     else
     { // Each query has its own filter label
         // Split up data and query bins into label specific ones
-        tsl::robin_map<std::string, _u32> labels_to_number_of_points;
-        tsl::robin_map<std::string, _u32> labels_to_number_of_queries;
+        tsl::robin_map<std::string, uint32_t> labels_to_number_of_points;
+        tsl::robin_map<std::string, uint32_t> labels_to_number_of_queries;
 
         label_set all_labels;
         for (int i = 0; i < filter_labels.size(); i++)
@@ -806,8 +806,8 @@ int main(int argc, char **argv)
             query_ids_to_labels[i].insert(filter_labels[i]);
         }
 
-        tsl::robin_map<std::string, std::vector<_u32>> label_id_to_orig_id;
-        tsl::robin_map<std::string, std::vector<_u32>> label_query_id_to_orig_id;
+        tsl::robin_map<std::string, std::vector<uint32_t>> label_id_to_orig_id;
+        tsl::robin_map<std::string, std::vector<uint32_t>> label_query_id_to_orig_id;
 
         if (data_type == std::string("float"))
         {
@@ -868,7 +868,7 @@ int main(int argc, char **argv)
 
         // Combine the label specific ground truths to produce a single GT file
 
-        unsigned *gt_ids = nullptr;
+        uint32_t *gt_ids = nullptr;
         float *gt_dists = nullptr;
         size_t gt_num, gt_dim;
 
