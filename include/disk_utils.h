@@ -93,7 +93,7 @@ template <typename T, typename LabelT = uint32_t>
 DISKANN_DLLEXPORT int build_disk_index(
     const char *dataFilePath, const char *indexFilePath, const char *indexBuildParameters,
     diskann::Metric _compareMetric, bool use_opq = false,
-    const std::string codebook_prefix = "", // default is empty for no codebook pass in
+    const std::string &codebook_prefix = "", // default is empty for no codebook pass in
     bool use_filters = false,
     const std::string &label_file = std::string(""), // default is empty string for no label_file
     const std::string &universal_label = "", const _u32 filter_threshold = 0,
