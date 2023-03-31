@@ -91,8 +91,10 @@ DISKANN_DLLEXPORT uint32_t optimize_beamwidth(std::unique_ptr<diskann::PQFlashIn
 
 template <typename T, typename LabelT = uint32_t>
 DISKANN_DLLEXPORT int build_disk_index(
-    const char *dataFilePath, const char *indexFilePath, const char *indexBuildParameters, const char *codebookPath,
-    diskann::Metric _compareMetric, bool use_opq = false, bool use_filters = false,
+    const char *dataFilePath, const char *indexFilePath, const char *indexBuildParameters,
+    diskann::Metric _compareMetric, bool use_opq = false,
+    const std::string codebook_prefix = "", // default is empty for no codebook pass in
+    bool use_filters = false,
     const std::string &label_file = std::string(""), // default is empty string for no label_file
     const std::string &universal_label = "", const _u32 filter_threshold = 0,
     const _u32 Lf = 0); // default is empty string for no universal label
