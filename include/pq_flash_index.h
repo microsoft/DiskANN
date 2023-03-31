@@ -125,9 +125,9 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
     float max_base_norm = 0.0f;
 
     // data info
-    size_t num_points = 0;
-    size_t num_frozen_points = 0;
-    size_t frozen_location = 0;
+    uint64_t num_points = 0;
+    uint64_t num_frozen_points = 0;
+    uint64_t frozen_location = 0;
     uint64_t data_dim = 0;
     uint64_t disk_data_dim = 0; // will be different from data_dim only if we use
                                 // PQ for disk data (very large dimensionality)

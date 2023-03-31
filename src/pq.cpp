@@ -41,7 +41,7 @@ void FixedChunkPQTable::load_pq_centroid_bin(const char *pq_table_file, size_t n
 {
 #endif
 
-    size_t nr, nc;
+    uint64_t nr, nc;
     std::string rotmat_file = std::string(pq_table_file) + "_rotation_matrix.bin";
 
 #ifdef EXEC_ENV_OLS

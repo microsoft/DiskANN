@@ -246,7 +246,7 @@ int merge_shards(const std::string &vamana_prefix, const std::string &vamana_suf
     // Read ID maps
     std::vector<std::string> vamana_names(nshards);
     std::vector<std::vector<uint32_t>> idmaps(nshards);
-    for (size_t shard = 0; shard < nshards; shard++)
+    for (uint64_t shard = 0; shard < nshards; shard++)
     {
         vamana_names[shard] = vamana_prefix + std::to_string(shard) + vamana_suffix;
         read_idmap(idmaps_prefix + std::to_string(shard) + idmaps_suffix, idmaps[shard]);

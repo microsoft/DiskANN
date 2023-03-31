@@ -831,11 +831,11 @@ template <typename T> float prepare_base_for_inner_products(const std::string in
 
     for (uint64_t b = 0; b < num_blocks; b++)
     {
-        size_t start_id = b * block_size;
-        size_t end_id = (b + 1) * block_size < npts ? (b + 1) * block_size : npts;
-        size_t block_pts = end_id - start_id;
+        uint64_t start_id = b * block_size;
+        uint64_t end_id = (b + 1) * block_size < npts ? (b + 1) * block_size : npts;
+        uint64_t block_pts = end_id - start_id;
         in_reader.read((char *)in_block_data.get(), block_pts * in_dims * sizeof(T));
-        for (size_t p = 0; p < block_pts; p++)
+        for (uint64_t p = 0; p < block_pts; p++)
         {
             for (uint64_t j = 0; j < in_dims; j++)
             {
@@ -850,11 +850,11 @@ template <typename T> float prepare_base_for_inner_products(const std::string in
     in_reader.seekg(2 * sizeof(uint32_t), std::ios::beg);
     for (uint64_t b = 0; b < num_blocks; b++)
     {
-        size_t start_id = b * block_size;
-        size_t end_id = (b + 1) * block_size < npts ? (b + 1) * block_size : npts;
-        size_t block_pts = end_id - start_id;
+        uint64_t start_id = b * block_size;
+        uint64_t end_id = (b + 1) * block_size < npts ? (b + 1) * block_size : npts;
+        uint64_t block_pts = end_id - start_id;
         in_reader.read((char *)in_block_data.get(), block_pts * in_dims * sizeof(T));
-        for (size_t p = 0; p < block_pts; p++)
+        for (uint64_t p = 0; p < block_pts; p++)
         {
             for (uint64_t j = 0; j < in_dims; j++)
             {

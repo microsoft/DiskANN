@@ -1329,7 +1329,7 @@ void Index<T, TagT, LabelT>::inter_insert(uint32_t n, std::vector<uint32_t> &pru
             auto &des_pool = _final_graph[des];
             if (std::find(des_pool.begin(), des_pool.end(), n) == des_pool.end())
             {
-                if (des_pool.size() < (size_t)(GRAPH_SLACK_FACTOR * range))
+                if (des_pool.size() < (uint64_t)(GRAPH_SLACK_FACTOR * range))
                 {
                     des_pool.emplace_back(n);
                     prune_needed = false;

@@ -17,8 +17,8 @@ namespace diskann
 class FixedChunkPQTable
 {
     float *tables = nullptr; // pq_tables = float array of size [256 * ndims]
-    size_t ndims = 0;        // ndims = true dimension of vectors
-    size_t n_chunks = 0;
+    uint64_t ndims = 0;      // ndims = true dimension of vectors
+    uint64_t n_chunks = 0;
     bool use_rotation = false;
     uint32_t *chunk_offsets = nullptr;
     float *centroid = nullptr;
@@ -87,13 +87,13 @@ template <typename T> struct PQScratch
     }
 };
 
-void aggregate_coords(const std::vector<unsigned> &ids, const uint8_t *all_coords, const size_t ndims, uint8_t *out);
+void aggregate_coords(const std::vector<unsigned> &ids, const uint8_t *all_coords, const uint64_t ndims, uint8_t *out);
 
 void pq_dist_lookup(const uint8_t *pq_ids, const size_t n_pts, const size_t pq_nchunks, const float *pq_dists,
                     std::vector<float> &dists_out);
 
 // Need to replace calls to these with calls to vector& based functions above
-void aggregate_coords(const unsigned *ids, const size_t n_ids, const uint8_t *all_coords, const size_t ndims,
+void aggregate_coords(const unsigned *ids, const uint64_t n_ids, const uint8_t *all_coords, const uint64_t ndims,
                       uint8_t *out);
 
 void pq_dist_lookup(const uint8_t *pq_ids, const size_t n_pts, const size_t pq_nchunks, const float *pq_dists,
@@ -120,5 +120,5 @@ void generate_disk_quantized_data(const std::string data_file_to_use, const std:
 template <typename T>
 void generate_quantized_data(const std::string data_file_to_use, const std::string pq_pivots_path,
                              const std::string pq_compressed_vectors_path, const diskann::Metric compareMetric,
-                             const double p_val, const size_t num_pq_chunks, const bool use_opq);
+                             const double p_val, const uint64_t num_pq_chunks, const bool use_opq);
 } // namespace diskann
