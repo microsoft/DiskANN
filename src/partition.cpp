@@ -33,13 +33,26 @@
 
 template<typename T>
 void gen_random_slice(const std::string base_file,
-                      const std::string output_prefix, double sampling_rate) {
+                      const std::string output_prefix,
+                      double sampling_rate,
+                      bool gen_complement) {
   _u64            read_blk_size = 64 * 1024 * 1024;
   cached_ifstream base_reader(base_file.c_str(), read_blk_size);
   std::ofstream sample_writer(std::string(output_prefix + "_data.bin").c_str(),
                               std::ios::binary);
   std::ofstream sample_id_writer(
       std::string(output_prefix + "_ids.bin").c_str(), std::ios::binary);
+
+  std::ofstream complement_writer;
+  std::ofstream complement_id_writer;
+  if (gen_complement) {
+      complement_writer.open(
+		std::string(output_prefix + "_complement_data.bin").c_str(),
+		std::ios::binary);
+      complement_id_writer.open(
+		std::string(output_prefix + "_complement_ids.bin").c_str(),
+		std::ios::binary);
+  }
 
   std::random_device
        rd;  // Will be used to obtain a seed for the random number engine
@@ -61,6 +74,12 @@ void gen_random_slice(const std::string base_file,
   sample_writer.write((char *) &nd_u32, sizeof(uint32_t));
   sample_id_writer.write((char *) &num_sampled_pts_u32, sizeof(uint32_t));
   sample_id_writer.write((char *) &one_const, sizeof(uint32_t));
+  if (gen_complement) {
+    complement_writer.write((char *) &num_sampled_pts_u32, sizeof(uint32_t));
+    complement_writer.write((char *) &nd_u32, sizeof(uint32_t));
+    complement_id_writer.write((char *) &num_sampled_pts_u32, sizeof(uint32_t));
+    complement_id_writer.write((char *) &one_const, sizeof(uint32_t));
+  }
 
   npts = npts_u32;
   nd = nd_u32;
@@ -69,11 +88,14 @@ void gen_random_slice(const std::string base_file,
   for (size_t i = 0; i < npts; i++) {
     base_reader.read((char *) cur_row.get(), sizeof(T) * nd);
     float sample = distribution(generator);
+    uint32_t cur_i_u32 = (_u32) i;
     if (sample < sampling_rate) {
       sample_writer.write((char *) cur_row.get(), sizeof(T) * nd);
-      uint32_t cur_i_u32 = (_u32) i;
       sample_id_writer.write((char *) &cur_i_u32, sizeof(uint32_t));
       num_sampled_pts_u32++;
+    } else if (gen_complement) {
+      complement_writer.write((char *) cur_row.get(), sizeof(T) * nd);
+      complement_id_writer.write((char *) &cur_i_u32, sizeof(uint32_t));
     }
   }
   sample_writer.seekp(0, std::ios::beg);
@@ -82,9 +104,21 @@ void gen_random_slice(const std::string base_file,
   sample_id_writer.write((char *) &num_sampled_pts_u32, sizeof(uint32_t));
   sample_writer.close();
   sample_id_writer.close();
+  if (gen_complement) {
+    const uint32_t num_nonsampled_pts_u32 = npts_u32 - num_sampled_pts_u32;
+    complement_writer.seekp(0, std::ios::beg);
+    complement_writer.write((char *) &num_nonsampled_pts_u32, sizeof(uint32_t));
+    complement_id_writer.seekp(0, std::ios::beg);
+    complement_id_writer.write((char *) &num_nonsampled_pts_u32, sizeof(uint32_t));
+    complement_writer.close();
+    complement_id_writer.close();
+  }
   diskann::cout << "Wrote " << num_sampled_pts_u32
                 << " points to sample file: " << output_prefix + "_data.bin"
                 << std::endl;
+  if (gen_complement) {
+    diskann::cout << "(and also wrote the complement)" << std::endl;
+  }
 }
 
 // streams data from the file, and samples each vector with probability p_val
@@ -642,15 +676,15 @@ int partition_with_ram_budget(const std::string data_file,
 
 // Instantations of supported templates
 
-template void DISKANN_DLLEXPORT
-gen_random_slice<int8_t>(const std::string base_file,
-                         const std::string output_prefix, double sampling_rate);
+template void DISKANN_DLLEXPORT gen_random_slice<int8_t>(
+    const std::string base_file, const std::string output_prefix,
+    double sampling_rate, bool gen_complement);
 template void DISKANN_DLLEXPORT gen_random_slice<uint8_t>(
     const std::string base_file, const std::string output_prefix,
-    double sampling_rate);
-template void DISKANN_DLLEXPORT
-gen_random_slice<float>(const std::string base_file,
-                        const std::string output_prefix, double sampling_rate);
+    double sampling_rate, bool gen_complement);
+template void DISKANN_DLLEXPORT gen_random_slice<float>(
+    const std::string base_file, const std::string output_prefix,
+    double sampling_rate, bool gen_complement);
 
 template void DISKANN_DLLEXPORT
 gen_random_slice<float>(const float *inputdata, size_t npts, size_t ndims,

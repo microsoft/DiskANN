@@ -20,30 +20,38 @@
 #include <time.h>
 #include <typeinfo>
 
-template<typename T>
-int aux_main(char** argv) {
-  std::string base_file(argv[2]);
-  std::string output_prefix(argv[3]);
-  float       sampling_rate = (float) (std::atof(argv[4]));
-  gen_random_slice<T>(base_file, output_prefix, sampling_rate);
-  return 0;
-}
-
 int main(int argc, char** argv) {
-  if (argc != 5) {
+  if (argc != 5 && argc != 6) {
     std::cout << argv[0]
               << " data_type [float/int8/uint8] base_bin_file "
                  "sample_output_prefix sampling_probability"
+                 " [optionally: --gen_complement]"
               << std::endl;
     exit(-1);
   }
 
+  if (argc == 6 && std::string(argv[5]) != std::string("--gen_complement")) {
+	std::cout << "Last parameter, if present, must be --gen_complement"
+			  << std::endl;
+	exit(-1);
+  }
+
+  std::string base_file(argv[2]);
+  std::string output_prefix(argv[3]);
+  float       sampling_rate = (float) (std::atof(argv[4]));
+  bool        gen_complement = false;
+  if (argc == 6)
+    gen_complement = true;
+
   if (std::string(argv[1]) == std::string("float")) {
-    aux_main<float>(argv);
+    gen_random_slice<float>(base_file, output_prefix, sampling_rate,
+                            gen_complement);
   } else if (std::string(argv[1]) == std::string("int8")) {
-    aux_main<int8_t>(argv);
+    gen_random_slice<int8_t>(base_file, output_prefix, sampling_rate,
+                            gen_complement);
   } else if (std::string(argv[1]) == std::string("uint8")) {
-    aux_main<uint8_t>(argv);
+    gen_random_slice<uint8_t>(base_file, output_prefix, sampling_rate,
+                             gen_complement);
   } else
     std::cout << "Unsupported type. Use float/int8/uint8." << std::endl;
   return 0;
