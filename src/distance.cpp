@@ -522,6 +522,34 @@ float AVXDistanceInnerProductFloat::compare(const float *a, const float *b, uint
     return -result;
 }
 
+uint32_t AVXNormalizedCosineDistanceFloat::new_dimension(uint32_t orig_dimension)
+{
+    return orig_dimension;
+}
+bool AVXNormalizedCosineDistanceFloat::normalization_required() const
+{
+    return true;
+}
+void AVXNormalizedCosineDistanceFloat::normalize_data_for_build(const float *original_data, const uint32_t num_points,
+                                                        const uint32_t orig_dim, float *normalized_data,
+                                                        bool modify_orig)
+{
+    if (!modify_orig)
+    {
+        throw diskann::ANNException("For cosine distance, modify_orig should be set to true for efficiency.", -1);
+    }
+    for (auto i = 0; i < num_points; i++)
+    {
+        normalize(original_data + i * orig_dim, orig_dim);
+    }
+}
+void AVXNormalizedCosineDistanceFloat::normalize_vector_for_search(const float *query_vec, const uint32_t query_dim,
+                                                                   float *scratch_space)
+{
+    normalize(query_vec, query_dim);
+}
+
+
 // Get the right distance function for the given metric.
 template <> diskann::Distance<float> *get_distance_function(diskann::Metric m)
 {
