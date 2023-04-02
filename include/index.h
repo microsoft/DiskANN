@@ -26,10 +26,10 @@
 namespace diskann
 {
 
-inline double estimate_ram_usage(_u64 size, _u32 dim, _u32 datasize, _u32 degree)
+inline double estimate_ram_usage(size_t size, uint32_t dim, uint32_t datasize, uint32_t degree)
 {
     double size_of_data = ((double)size) * ROUND_UP(dim, 8) * datasize;
-    double size_of_graph = ((double)size) * degree * sizeof(unsigned) * GRAPH_SLACK_FACTOR;
+    double size_of_graph = ((double)size) * degree * sizeof(uint32_t) * GRAPH_SLACK_FACTOR;
     double size_of_locks = ((double)size) * sizeof(non_recursive_mutex);
     double size_of_outer_vector = ((double)size) * sizeof(ptrdiff_t);
 
@@ -131,28 +131,28 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     // Set starting points to random points on a sphere of certain radius.
     // A fixed random seed can be specified for scenarios where it's important
     // to have higher consistency between index builds.
-    DISKANN_DLLEXPORT void set_start_points_at_random(T radius, unsigned int random_seed = 0);
+    DISKANN_DLLEXPORT void set_start_points_at_random(T radius, uint32_t random_seed = 0);
 
     // For FastL2 search on a static index, we interleave the data with graph
     DISKANN_DLLEXPORT void optimize_index_layout();
 
     // For FastL2 search on optimized layout
-    DISKANN_DLLEXPORT void search_with_optimized_layout(const T *query, size_t K, size_t L, unsigned *indices);
+    DISKANN_DLLEXPORT void search_with_optimized_layout(const T *query, size_t K, size_t L, uint32_t *indices);
 
     // Added search overload that takes L as parameter, so that we
     // can customize L on a per-query basis without tampering with "Parameters"
     template <typename IDType>
-    DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> search(const T *query, const size_t K, const unsigned L,
+    DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> search(const T *query, const size_t K, const uint32_t L,
                                                            IDType *indices, float *distances = nullptr);
 
     // Initialize space for res_vectors before calling.
-    DISKANN_DLLEXPORT size_t search_with_tags(const T *query, const uint64_t K, const unsigned L, TagT *tags,
+    DISKANN_DLLEXPORT size_t search_with_tags(const T *query, const uint64_t K, const uint32_t L, TagT *tags,
                                               float *distances, std::vector<T *> &res_vectors);
 
     // Filter support search
     template <typename IndexType>
     DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> search_with_filters(const T *query, const LabelT &filter_label,
-                                                                        const size_t K, const unsigned L,
+                                                                        const size_t K, const uint32_t L,
                                                                         IndexType *indices, float *distances);
 
     // Will fail if tag already in the index or if tag=0.
@@ -182,8 +182,8 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     // repositions frozen points to the end of _data - if they have been moved
     // during deletion
     DISKANN_DLLEXPORT void reposition_frozen_point_to_end();
-    DISKANN_DLLEXPORT void reposition_points(unsigned old_location_start, unsigned new_location_start,
-                                             unsigned num_locations);
+    DISKANN_DLLEXPORT void reposition_points(uint32_t old_location_start, uint32_t new_location_start,
+                                             uint32_t num_locations);
 
     // DISKANN_DLLEXPORT void save_index_as_one_file(bool flag);
 
@@ -220,40 +220,43 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     void generate_frozen_point();
 
     // determines navigating node of the graph by calculating medoid of datafopt
-    unsigned calculate_entry_point();
+    uint32_t calculate_entry_point();
 
     void parse_label_file(const std::string &label_file, size_t &num_pts_labels);
 
     std::unordered_map<std::string, LabelT> load_label_map(const std::string &map_file);
 
-    // Returns the locations of start point and frozen points suitable for use with iterate_to_fixed_point.
-    std::vector<unsigned> get_init_ids();
+    // Returns the locations of start point and frozen points suitable for use
+    // with iterate_to_fixed_point.
+    std::vector<uint32_t> get_init_ids();
 
-    std::pair<uint32_t, uint32_t> iterate_to_fixed_point(const T *node_coords, const unsigned Lindex,
-                                                         const std::vector<unsigned> &init_ids,
+    std::pair<uint32_t, uint32_t> iterate_to_fixed_point(const T *node_coords, const uint32_t Lindex,
+                                                         const std::vector<uint32_t> &init_ids,
                                                          InMemQueryScratch<T> *scratch, bool use_filter,
                                                          const std::vector<LabelT> &filters, bool search_invocation);
 
-    void search_for_point_and_prune(int location, _u32 Lindex, std::vector<unsigned> &pruned_list,
-                                    InMemQueryScratch<T> *scratch, bool use_filter = false, _u32 filteredLindex = 0);
+    void search_for_point_and_prune(int location, uint32_t Lindex, std::vector<uint32_t> &pruned_list,
+                                    InMemQueryScratch<T> *scratch, bool use_filter = false,
+                                    uint32_t filteredLindex = 0);
 
-    void prune_neighbors(const unsigned location, std::vector<Neighbor> &pool, std::vector<unsigned> &pruned_list,
+    void prune_neighbors(const uint32_t location, std::vector<Neighbor> &pool, std::vector<uint32_t> &pruned_list,
                          InMemQueryScratch<T> *scratch);
 
-    void prune_neighbors(const unsigned location, std::vector<Neighbor> &pool, const _u32 range,
-                         const _u32 max_candidate_size, const float alpha, std::vector<unsigned> &pruned_list,
+    void prune_neighbors(const uint32_t location, std::vector<Neighbor> &pool, const uint32_t range,
+                         const uint32_t max_candidate_size, const float alpha, std::vector<uint32_t> &pruned_list,
                          InMemQueryScratch<T> *scratch);
 
     // Prunes candidates in @pool to a shorter list @result
     // @pool must be sorted before calling
-    void occlude_list(const unsigned location, std::vector<Neighbor> &pool, const float alpha, const unsigned degree,
-                      const unsigned maxc, std::vector<unsigned> &result, InMemQueryScratch<T> *scratch,
-                      const tsl::robin_set<unsigned> *const delete_set_ptr = nullptr);
+    void occlude_list(const uint32_t location, std::vector<Neighbor> &pool, const float alpha, const uint32_t degree,
+                      const uint32_t maxc, std::vector<uint32_t> &result, InMemQueryScratch<T> *scratch,
+                      const tsl::robin_set<uint32_t> *const delete_set_ptr = nullptr);
 
     // add reverse links from all the visited nodes to node n.
-    void inter_insert(unsigned n, std::vector<unsigned> &pruned_list, const _u32 range, InMemQueryScratch<T> *scratch);
+    void inter_insert(uint32_t n, std::vector<uint32_t> &pruned_list, const uint32_t range,
+                      InMemQueryScratch<T> *scratch);
 
-    void inter_insert(unsigned n, std::vector<unsigned> &pruned_list, InMemQueryScratch<T> *scratch);
+    void inter_insert(uint32_t n, std::vector<uint32_t> &pruned_list, InMemQueryScratch<T> *scratch);
 
     // Acquire exclusive _update_lock before calling
     void link(Parameters &parameters);
@@ -263,7 +266,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 
     // Acquire exclusive _tag_lock before calling
     size_t release_location(int location);
-    size_t release_locations(const tsl::robin_set<unsigned> &locations);
+    size_t release_locations(const tsl::robin_set<uint32_t> &locations);
 
     // Resize the index when no slots are left for insertion.
     // Acquire exclusive _update_lock and _tag_lock before calling.
@@ -280,18 +283,18 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     // Remove deleted nodes from adjacency list of node loc
     // Replace removed neighbors with second order neighbors.
     // Also acquires _locks[i] for i = loc and out-neighbors of loc.
-    void process_delete(const tsl::robin_set<unsigned> &old_delete_set, size_t loc, const unsigned range,
-                        const unsigned maxc, const float alpha, InMemQueryScratch<T> *scratch);
+    void process_delete(const tsl::robin_set<uint32_t> &old_delete_set, size_t loc, const uint32_t range,
+                        const uint32_t maxc, const float alpha, InMemQueryScratch<T> *scratch);
 
     void initialize_query_scratch(uint32_t num_threads, uint32_t search_l, uint32_t indexing_l, uint32_t r,
                                   uint32_t maxc, size_t dim);
 
     // Do not call without acquiring appropriate locks
     // call public member functions save and load to invoke these.
-    DISKANN_DLLEXPORT _u64 save_graph(std::string filename);
-    DISKANN_DLLEXPORT _u64 save_data(std::string filename);
-    DISKANN_DLLEXPORT _u64 save_tags(std::string filename);
-    DISKANN_DLLEXPORT _u64 save_delete_list(const std::string &filename);
+    DISKANN_DLLEXPORT size_t save_graph(std::string filename);
+    DISKANN_DLLEXPORT size_t save_data(std::string filename);
+    DISKANN_DLLEXPORT size_t save_tags(std::string filename);
+    DISKANN_DLLEXPORT size_t save_delete_list(const std::string &filename);
 #ifdef EXEC_ENV_OLS
     DISKANN_DLLEXPORT size_t load_graph(AlignedFileReader &reader, size_t expected_num_points);
     DISKANN_DLLEXPORT size_t load_data(AlignedFileReader &reader);
@@ -314,7 +317,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     char *_opt_graph = nullptr;
 
     // Graph related data structures
-    std::vector<std::vector<unsigned>> _final_graph;
+    std::vector<std::vector<uint32_t>> _final_graph;
 
     // Dimensions
     size_t _dim = 0;
@@ -331,11 +334,11 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     size_t _data_len;
     size_t _neighbor_len;
 
-    unsigned _max_observed_degree = 0;
+    uint32_t _max_observed_degree = 0;
     // Start point of the search. When _num_frozen_pts is greater than zero,
     // this is the location of the first frozen point. Otherwise, this is a
     // location of one of the points in index.
-    unsigned _start = 0;
+    uint32_t _start = 0;
 
     bool _has_built = false;
     bool _saturate_graph = false;
@@ -350,8 +353,8 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     std::vector<std::vector<LabelT>> _pts_to_labels;
     tsl::robin_set<LabelT> _labels;
     std::string _labels_file;
-    std::unordered_map<LabelT, _u32> _label_to_medoid_id;
-    std::unordered_map<_u32, _u32> _medoid_counts;
+    std::unordered_map<LabelT, uint32_t> _label_to_medoid_id;
+    std::unordered_map<uint32_t, uint32_t> _medoid_counts;
     bool _use_universal_label = false;
     LabelT _universal_label = 0;
     uint32_t _filterIndexingQueueSize;
@@ -370,7 +373,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     bool _pq_dist = false;
     bool _use_opq = false;
     size_t _num_pq_chunks = 0;
-    _u8 *_pq_data = nullptr;
+    uint8_t *_pq_data = nullptr;
     bool _pq_generated = false;
     FixedChunkPQTable _pq_table;
 
@@ -380,15 +383,15 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 
     // lazy_delete removes entry from _location_to_tag and _tag_to_location. If
     // _location_to_tag does not resolve a location, infer that it was deleted.
-    tsl::sparse_map<TagT, unsigned> _tag_to_location;
-    natural_number_map<unsigned, TagT> _location_to_tag;
+    tsl::sparse_map<TagT, uint32_t> _tag_to_location;
+    natural_number_map<uint32_t, TagT> _location_to_tag;
 
     // _empty_slots has unallocated slots and those freed by consolidate_delete.
     // _delete_set has locations marked deleted by lazy_delete. Will not be
     // immediately available for insert. consolidate_delete will release these
     // slots to _empty_slots.
-    natural_number_set<unsigned> _empty_slots;
-    std::unique_ptr<tsl::robin_set<unsigned>> _delete_set;
+    natural_number_set<uint32_t> _empty_slots;
+    std::unique_ptr<tsl::robin_set<uint32_t>> _delete_set;
 
     bool _data_compacted = true;    // true if data has been compacted
     bool _is_saved = false;         // Gopal. Checking if the index is already saved.

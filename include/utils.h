@@ -2,6 +2,7 @@
 // Licensed under the MIT license.
 
 #pragma once
+
 #include <errno.h>
 
 #include "common_includes.h"
@@ -25,15 +26,12 @@ typedef int FileHandle;
 #include "ann_exception.h"
 #include "windows_customizations.h"
 #include "tsl/robin_set.h"
+#include "types.h"
 
 #ifdef EXEC_ENV_OLS
 #include "content_buf.h"
 #include "memory_mapped_files.h"
 #endif
-
-#include <unordered_map>
-#include <sstream>
-#include <iostream>
 
 // taken from
 // https://github.com/Microsoft/BLAS-on-flash/blob/master/include/utils.h
@@ -53,7 +51,7 @@ typedef int FileHandle;
     4096 // all metadata of individual sub-component files is written in first
          // 4KB for unified files
 
-#define BUFFER_SIZE_FOR_CACHED_IO (_u64)1024 * (_u64)1048576
+#define BUFFER_SIZE_FOR_CACHED_IO (size_t)1024 * (size_t)1048576
 
 #define PBSTR "||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||"
 #define PBWIDTH 60
@@ -66,8 +64,8 @@ inline bool file_exists(const std::string &name, bool dirCheck = false)
     val = stat(name.c_str(), &buffer);
 #else
     // It is the 21st century but Windows API still thinks in 32-bit terms.
-    // Turns out calling stat() on a file > 4GB results in errno = 132 (OVERFLOW).
-    // How silly is this!? So calling _stat64()
+    // Turns out calling stat() on a file > 4GB results in errno = 132
+    // (OVERFLOW). How silly is this!? So calling _stat64()
     struct _stat64 buffer;
     val = _stat64(name.c_str(), &buffer);
 #endif
@@ -95,15 +93,6 @@ inline bool file_exists(const std::string &name, bool dirCheck = false)
     }
 }
 
-typedef uint64_t _u64;
-typedef int64_t _s64;
-typedef uint32_t _u32;
-typedef int32_t _s32;
-typedef uint16_t _u16;
-typedef int16_t _s16;
-typedef uint8_t _u8;
-typedef int8_t _s8;
-
 inline void open_file_to_write(std::ofstream &writer, const std::string &filename)
 {
     writer.exceptions(std::ofstream::failbit | std::ofstream::badbit);
@@ -125,12 +114,12 @@ inline void open_file_to_write(std::ofstream &writer, const std::string &filenam
     }
 }
 
-inline _u64 get_file_size(const std::string &fname)
+inline size_t get_file_size(const std::string &fname)
 {
     std::ifstream reader(fname, std::ios::binary | std::ios::ate);
     if (!reader.fail() && reader.is_open())
     {
-        _u64 end_pos = reader.tellg();
+        size_t end_pos = reader.tellg();
         reader.close();
         return end_pos;
     }
@@ -149,7 +138,8 @@ inline int delete_file(const std::string &fileName)
         if (rc != 0)
         {
             diskann::cerr << "Could not delete file: " << fileName
-                          << " even though it exists. This might indicate a permissions issue. "
+                          << " even though it exists. This might indicate a permissions "
+                             "issue. "
                              "If you see this message, please contact the diskann team."
                           << std::endl;
         }
@@ -164,7 +154,7 @@ inline int delete_file(const std::string &fileName)
 inline void convert_labels_string_to_int(const std::string &inFileName, const std::string &outFileName,
                                          const std::string &mapFileName, const std::string &unv_label)
 {
-    std::unordered_map<std::string, _u32> string_int_map;
+    std::unordered_map<std::string, uint32_t> string_int_map;
     std::ofstream label_writer(outFileName);
     std::ifstream label_reader(inFileName);
     if (unv_label != "")
@@ -173,14 +163,14 @@ inline void convert_labels_string_to_int(const std::string &inFileName, const st
     while (std::getline(label_reader, line))
     {
         std::istringstream new_iss(line);
-        std::vector<_u32> lbls;
+        std::vector<uint32_t> lbls;
         while (getline(new_iss, token, ','))
         {
             token.erase(std::remove(token.begin(), token.end(), '\n'), token.end());
             token.erase(std::remove(token.begin(), token.end(), '\r'), token.end());
             if (string_int_map.find(token) == string_int_map.end())
             {
-                _u32 nextId = (_u32)string_int_map.size() + 1;
+                uint32_t nextId = (uint32_t)string_int_map.size() + 1;
                 string_int_map[token] = nextId;
             }
             lbls.push_back(string_int_map[token]);
@@ -445,7 +435,7 @@ inline void wait_for_keystroke()
 
 inline void load_truthset(const std::string &bin_file, uint32_t *&ids, float *&dists, size_t &npts, size_t &dim)
 {
-    _u64 read_blk_size = 64 * 1024 * 1024;
+    size_t read_blk_size = 64 * 1024 * 1024;
     cached_ifstream reader(bin_file, read_blk_size);
     diskann::cout << "Reading truthset file " << bin_file.c_str() << " ..." << std::endl;
     size_t actual_file_size = reader.get_file_size();
@@ -493,9 +483,9 @@ inline void load_truthset(const std::string &bin_file, uint32_t *&ids, float *&d
 }
 
 inline void prune_truthset_for_range(const std::string &bin_file, float range,
-                                     std::vector<std::vector<_u32>> &groundtruth, size_t &npts)
+                                     std::vector<std::vector<uint32_t>> &groundtruth, size_t &npts)
 {
-    _u64 read_blk_size = 64 * 1024 * 1024;
+    size_t read_blk_size = 64 * 1024 * 1024;
     cached_ifstream reader(bin_file, read_blk_size);
     diskann::cout << "Reading truthset file " << bin_file.c_str() << "... " << std::endl;
     size_t actual_file_size = reader.get_file_size();
@@ -504,8 +494,8 @@ inline void prune_truthset_for_range(const std::string &bin_file, float range,
     reader.read((char *)&npts_i32, sizeof(int));
     reader.read((char *)&dim_i32, sizeof(int));
     npts = (unsigned)npts_i32;
-    _u64 dim = (unsigned)dim_i32;
-    _u32 *ids;
+    uint64_t dim = (unsigned)dim_i32;
+    uint32_t *ids;
     float *dists;
 
     diskann::cout << "Metadata: #pts = " << npts << ", #dims = " << dim << "... " << std::endl;
@@ -539,10 +529,10 @@ inline void prune_truthset_for_range(const std::string &bin_file, float range,
     float min_dist = std::numeric_limits<float>::max();
     float max_dist = 0;
     groundtruth.resize(npts);
-    for (_u32 i = 0; i < npts; i++)
+    for (uint32_t i = 0; i < npts; i++)
     {
         groundtruth[i].clear();
-        for (_u32 j = 0; j < dim; j++)
+        for (uint32_t j = 0; j < dim; j++)
         {
             if (dists[i * dim + j] <= range)
             {
@@ -558,23 +548,24 @@ inline void prune_truthset_for_range(const std::string &bin_file, float range,
     delete[] dists;
 }
 
-inline void load_range_truthset(const std::string &bin_file, std::vector<std::vector<_u32>> &groundtruth, _u64 &gt_num)
+inline void load_range_truthset(const std::string &bin_file, std::vector<std::vector<uint32_t>> &groundtruth,
+                                uint64_t &gt_num)
 {
-    _u64 read_blk_size = 64 * 1024 * 1024;
+    size_t read_blk_size = 64 * 1024 * 1024;
     cached_ifstream reader(bin_file, read_blk_size);
     diskann::cout << "Reading truthset file " << bin_file.c_str() << "... " << std::flush;
     size_t actual_file_size = reader.get_file_size();
 
-    int npts_u32, total_u32;
-    reader.read((char *)&npts_u32, sizeof(int));
-    reader.read((char *)&total_u32, sizeof(int));
+    int nptsuint32_t, totaluint32_t;
+    reader.read((char *)&nptsuint32_t, sizeof(int));
+    reader.read((char *)&totaluint32_t, sizeof(int));
 
-    gt_num = (_u64)npts_u32;
-    _u64 total_res = (_u64)total_u32;
+    gt_num = (uint64_t)nptsuint32_t;
+    uint64_t total_res = (uint64_t)totaluint32_t;
 
     diskann::cout << "Metadata: #pts = " << gt_num << ", #total_results = " << total_res << "..." << std::endl;
 
-    size_t expected_file_size = 2 * sizeof(_u32) + gt_num * sizeof(_u32) + total_res * sizeof(_u32);
+    size_t expected_file_size = 2 * sizeof(uint32_t) + gt_num * sizeof(uint32_t) + total_res * sizeof(uint32_t);
 
     if (actual_file_size != expected_file_size)
     {
@@ -586,26 +577,26 @@ inline void load_range_truthset(const std::string &bin_file, std::vector<std::ve
     }
     groundtruth.clear();
     groundtruth.resize(gt_num);
-    std::vector<_u32> gt_count(gt_num);
+    std::vector<uint32_t> gt_count(gt_num);
 
-    reader.read((char *)gt_count.data(), sizeof(_u32) * gt_num);
+    reader.read((char *)gt_count.data(), sizeof(uint32_t) * gt_num);
 
-    std::vector<_u32> gt_stats(gt_count);
+    std::vector<uint32_t> gt_stats(gt_count);
     std::sort(gt_stats.begin(), gt_stats.end());
 
     std::cout << "GT count percentiles:" << std::endl;
-    for (_u32 p = 0; p < 100; p += 5)
+    for (uint32_t p = 0; p < 100; p += 5)
         std::cout << "percentile " << p << ": " << gt_stats[static_cast<size_t>(std::floor((p / 100.0) * gt_num))]
                   << std::endl;
     std::cout << "percentile 100"
               << ": " << gt_stats[gt_num - 1] << std::endl;
 
-    for (_u32 i = 0; i < gt_num; i++)
+    for (uint32_t i = 0; i < gt_num; i++)
     {
         groundtruth[i].clear();
         groundtruth[i].resize(gt_count[i]);
         if (gt_count[i] != 0)
-            reader.read((char *)groundtruth[i].data(), sizeof(_u32) * gt_count[i]);
+            reader.read((char *)groundtruth[i].data(), sizeof(uint32_t) * gt_count[i]);
     }
 }
 
@@ -642,8 +633,8 @@ DISKANN_DLLEXPORT double calculate_recall(unsigned num_queries, unsigned *gold_s
                                           const tsl::robin_set<unsigned> &active_tags);
 
 DISKANN_DLLEXPORT double calculate_range_search_recall(unsigned num_queries,
-                                                       std::vector<std::vector<_u32>> &groundtruth,
-                                                       std::vector<std::vector<_u32>> &our_results);
+                                                       std::vector<std::vector<uint32_t>> &groundtruth,
+                                                       std::vector<std::vector<uint32_t>> &our_results);
 
 template <typename T>
 inline void load_bin(const std::string &bin_file, std::unique_ptr<T[]> &data, size_t &npts, size_t &dim,
@@ -677,7 +668,7 @@ inline void open_file_to_write(std::ofstream &writer, const std::string &filenam
 }
 
 template <typename T>
-inline uint64_t save_bin(const std::string &filename, T *data, size_t npts, size_t ndims, size_t offset = 0)
+inline size_t save_bin(const std::string &filename, T *data, size_t npts, size_t ndims, size_t offset = 0)
 {
     std::ofstream writer;
     open_file_to_write(writer, filename);
@@ -791,7 +782,7 @@ template <typename InType, typename OutType>
 void convert_types(const InType *srcmat, OutType *destmat, size_t npts, size_t dim)
 {
 #pragma omp parallel for schedule(static, 65536)
-    for (int64_t i = 0; i < (_s64)npts; i++)
+    for (int64_t i = 0; i < (int64_t)npts; i++)
     {
         for (uint64_t j = 0; j < dim; j++)
         {
@@ -813,17 +804,17 @@ template <typename T> float prepare_base_for_inner_products(const std::string in
     std::cout << "Pre-processing base file by adding extra coordinate" << std::endl;
     std::ifstream in_reader(in_file.c_str(), std::ios::binary);
     std::ofstream out_writer(out_file.c_str(), std::ios::binary);
-    _u64 npts, in_dims, out_dims;
+    uint64_t npts, in_dims, out_dims;
     float max_norm = 0;
 
-    _u32 npts32, dims32;
+    uint32_t npts32, dims32;
     in_reader.read((char *)&npts32, sizeof(uint32_t));
     in_reader.read((char *)&dims32, sizeof(uint32_t));
 
     npts = npts32;
     in_dims = dims32;
     out_dims = in_dims + 1;
-    _u32 outdims32 = (_u32)out_dims;
+    uint32_t outdims32 = (uint32_t)out_dims;
 
     out_writer.write((char *)&npts32, sizeof(uint32_t));
     out_writer.write((char *)&outdims32, sizeof(uint32_t));
@@ -834,19 +825,19 @@ template <typename T> float prepare_base_for_inner_products(const std::string in
     std::unique_ptr<float[]> out_block_data = std::make_unique<float[]>(block_size * out_dims);
 
     std::memset(out_block_data.get(), 0, sizeof(float) * block_size * out_dims);
-    _u64 num_blocks = DIV_ROUND_UP(npts, block_size);
+    uint64_t num_blocks = DIV_ROUND_UP(npts, block_size);
 
     std::vector<float> norms(npts, 0);
 
-    for (_u64 b = 0; b < num_blocks; b++)
+    for (uint64_t b = 0; b < num_blocks; b++)
     {
-        _u64 start_id = b * block_size;
-        _u64 end_id = (b + 1) * block_size < npts ? (b + 1) * block_size : npts;
-        _u64 block_pts = end_id - start_id;
+        uint64_t start_id = b * block_size;
+        uint64_t end_id = (b + 1) * block_size < npts ? (b + 1) * block_size : npts;
+        uint64_t block_pts = end_id - start_id;
         in_reader.read((char *)in_block_data.get(), block_pts * in_dims * sizeof(T));
-        for (_u64 p = 0; p < block_pts; p++)
+        for (uint64_t p = 0; p < block_pts; p++)
         {
-            for (_u64 j = 0; j < in_dims; j++)
+            for (uint64_t j = 0; j < in_dims; j++)
             {
                 norms[start_id + p] += in_block_data[p * in_dims + j] * in_block_data[p * in_dims + j];
             }
@@ -856,16 +847,16 @@ template <typename T> float prepare_base_for_inner_products(const std::string in
 
     max_norm = std::sqrt(max_norm);
 
-    in_reader.seekg(2 * sizeof(_u32), std::ios::beg);
-    for (_u64 b = 0; b < num_blocks; b++)
+    in_reader.seekg(2 * sizeof(uint32_t), std::ios::beg);
+    for (uint64_t b = 0; b < num_blocks; b++)
     {
-        _u64 start_id = b * block_size;
-        _u64 end_id = (b + 1) * block_size < npts ? (b + 1) * block_size : npts;
-        _u64 block_pts = end_id - start_id;
+        uint64_t start_id = b * block_size;
+        uint64_t end_id = (b + 1) * block_size < npts ? (b + 1) * block_size : npts;
+        uint64_t block_pts = end_id - start_id;
         in_reader.read((char *)in_block_data.get(), block_pts * in_dims * sizeof(T));
-        for (_u64 p = 0; p < block_pts; p++)
+        for (uint64_t p = 0; p < block_pts; p++)
         {
-            for (_u64 j = 0; j < in_dims; j++)
+            for (uint64_t j = 0; j < in_dims; j++)
             {
                 out_block_data[p * out_dims + j] = in_block_data[p * in_dims + j] / max_norm;
             }
@@ -890,7 +881,7 @@ template <typename T> void save_Tvecs(const char *filename, T *data, size_t npts
     unsigned dims_u32 = (unsigned)ndims;
 
     // start writing
-    for (uint64_t i = 0; i < npts; i++)
+    for (size_t i = 0; i < npts; i++)
     {
         // write dims in u32
         writer.write((char *)&dims_u32, sizeof(unsigned));
@@ -901,13 +892,13 @@ template <typename T> void save_Tvecs(const char *filename, T *data, size_t npts
     }
 }
 template <typename T>
-inline uint64_t save_data_in_base_dimensions(const std::string &filename, T *data, size_t npts, size_t ndims,
-                                             size_t aligned_dim, size_t offset = 0)
+inline size_t save_data_in_base_dimensions(const std::string &filename, T *data, size_t npts, size_t ndims,
+                                           size_t aligned_dim, size_t offset = 0)
 {
     std::ofstream writer; //(filename, std::ios::binary | std::ios::out);
     open_file_to_write(writer, filename);
     int npts_i32 = (int)npts, ndims_i32 = (int)ndims;
-    _u64 bytes_written = 2 * sizeof(uint32_t) + npts * ndims * sizeof(T);
+    size_t bytes_written = 2 * sizeof(uint32_t) + npts * ndims * sizeof(T);
     writer.seekp(offset, writer.beg);
     writer.write((char *)&npts_i32, sizeof(int));
     writer.write((char *)&ndims_i32, sizeof(int));
@@ -965,7 +956,7 @@ inline void prefetch_vector_l2(const char *vec, size_t vecsize)
 }
 
 // NOTE: Implementation in utils.cpp.
-void block_convert(std::ofstream &writr, std::ifstream &readr, float *read_buf, _u64 npts, _u64 ndims);
+void block_convert(std::ofstream &writr, std::ifstream &readr, float *read_buf, uint64_t npts, uint64_t ndims);
 
 DISKANN_DLLEXPORT void normalize_data_file(const std::string &inFileName, const std::string &outFileName);
 

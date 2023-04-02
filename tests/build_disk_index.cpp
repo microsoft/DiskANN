@@ -14,9 +14,8 @@ namespace po = boost::program_options;
 
 int main(int argc, char **argv)
 {
-    std::string data_type, dist_fn, data_path, index_path_prefix, codebook_prefix, label_file, universal_label,
-        label_type;
-    unsigned num_threads, R, L, disk_PQ, build_PQ, QD, Lf, filter_threshold;
+    std::string data_type, dist_fn, data_path, index_path_prefix, codebook_prefix, label_file, universal_label, label_type;
+    uint32_t num_threads, R, L, disk_PQ, build_PQ, QD, Lf, filter_threshold;
     float B, M;
     bool append_reorder_data = false;
     bool use_opq = false;
@@ -52,7 +51,8 @@ int main(int argc, char **argv)
                            "Include full precision data in the index. Use only in "
                            "conjuction with compressed data on SSD.");
         desc.add_options()("build_PQ_bytes", po::value<uint32_t>(&build_PQ)->default_value(0),
-                           "Number of PQ bytes to build the index; 0 for full precision build");
+                           "Number of PQ bytes to build the index; 0 for full "
+                           "precision build");
         desc.add_options()("use_opq", po::bool_switch()->default_value(false),
                            "Use Optimized Product Quantization (OPQ).");
         desc.add_options()("label_file", po::value<std::string>(&label_file)->default_value(""),
@@ -60,8 +60,10 @@ int main(int argc, char **argv)
                            "The file should contain comma separated filters for each node "
                            "with each line corresponding to a graph node");
         desc.add_options()("universal_label", po::value<std::string>(&universal_label)->default_value(""),
-                           "Universal label, Use only in conjuction with label file for filtered "
-                           "index build. If a graph node has all the labels against it, we can "
+                           "Universal label, Use only in conjuction with label file for "
+                           "filtered "
+                           "index build. If a graph node has all the labels against it, we "
+                           "can "
                            "assign a special universal filter to the point instead of comma "
                            "separated filters for that point");
         desc.add_options()("FilteredLbuild,Lf", po::value<uint32_t>(&Lf)->default_value(0),

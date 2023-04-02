@@ -4,14 +4,14 @@
 #include <iostream>
 #include "utils.h"
 
-void block_convert(std::ofstream &writer, float *write_buf, std::ifstream &reader, int8_t *read_buf, _u64 npts,
-                   _u64 ndims, float bias, float scale)
+void block_convert(std::ofstream &writer, float *write_buf, std::ifstream &reader, int8_t *read_buf, size_t npts,
+                   size_t ndims, float bias, float scale)
 {
     reader.read((char *)read_buf, npts * ndims * sizeof(int8_t));
 
-    for (_u64 i = 0; i < npts; i++)
+    for (size_t i = 0; i < npts; i++)
     {
-        for (_u64 d = 0; d < ndims; d++)
+        for (size_t d = 0; d < ndims; d++)
         {
             write_buf[d + i * ndims] = (((float)read_buf[d + i * ndims] - bias) * scale);
         }
@@ -28,16 +28,16 @@ int main(int argc, char **argv)
     }
 
     std::ifstream reader(argv[1], std::ios::binary);
-    _u32 npts_u32;
-    _u32 ndims_u32;
-    reader.read((char *)&npts_u32, sizeof(_s32));
-    reader.read((char *)&ndims_u32, sizeof(_s32));
+    uint32_t npts_u32;
+    uint32_t ndims_u32;
+    reader.read((char *)&npts_u32, sizeof(uint32_t));
+    reader.read((char *)&ndims_u32, sizeof(uint32_t));
     size_t npts = npts_u32;
     size_t ndims = ndims_u32;
     std::cout << "Dataset: #pts = " << npts << ", # dims = " << ndims << std::endl;
 
-    _u64 blk_size = 131072;
-    _u64 nblks = ROUND_UP(npts, blk_size) / blk_size;
+    size_t blk_size = 131072;
+    size_t nblks = ROUND_UP(npts, blk_size) / blk_size;
 
     std::ofstream writer(argv[2], std::ios::binary);
     auto read_buf = new int8_t[blk_size * ndims];
@@ -45,12 +45,12 @@ int main(int argc, char **argv)
     float bias = atof(argv[3]);
     float scale = atof(argv[4]);
 
-    writer.write((char *)(&npts_u32), sizeof(_u32));
-    writer.write((char *)(&ndims_u32), sizeof(_u32));
+    writer.write((char *)(&npts_u32), sizeof(uint32_t));
+    writer.write((char *)(&ndims_u32), sizeof(uint32_t));
 
-    for (_u64 i = 0; i < nblks; i++)
+    for (size_t i = 0; i < nblks; i++)
     {
-        _u64 cblk_size = std::min(npts - i * blk_size, blk_size);
+        size_t cblk_size = std::min(npts - i * blk_size, blk_size);
         block_convert(writer, write_buf, reader, read_buf, cblk_size, ndims, bias, scale);
         std::cout << "Block #" << i << " written" << std::endl;
     }

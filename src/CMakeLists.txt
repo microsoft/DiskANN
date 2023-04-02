@@ -7,7 +7,7 @@ if(MSVC)
     add_subdirectory(dll)
 else()
     #file(GLOB CPP_SOURCES *.cpp)
-    set(CPP_SOURCES ann_exception.cpp disk_utils.cpp distance.cpp index.cpp
+    set(CPP_SOURCES ann_exception.cpp disk_utils.cpp distance.cpp index.cpp 
         linux_aligned_file_reader.cpp math_utils.cpp natural_number_map.cpp
         natural_number_set.cpp memory_mapper.cpp partition.cpp pq.cpp
         pq_flash_index.cpp scratch.cpp logger.cpp utils.cpp filter_utils.cpp)

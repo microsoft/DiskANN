@@ -11,7 +11,7 @@
 
 namespace po = boost::program_options;
 
-int block_write_float(std::ofstream &writer, _u64 ndims, _u64 npts, float norm)
+int block_write_float(std::ofstream &writer, size_t ndims, size_t npts, float norm)
 {
     auto vec = new float[ndims];
 
@@ -19,14 +19,14 @@ int block_write_float(std::ofstream &writer, _u64 ndims, _u64 npts, float norm)
     std::mt19937 gen{rd()};
     std::normal_distribution<> normal_rand{0, 1};
 
-    for (_u64 i = 0; i < npts; i++)
+    for (size_t i = 0; i < npts; i++)
     {
         float sum = 0;
-        for (_u64 d = 0; d < ndims; ++d)
+        for (size_t d = 0; d < ndims; ++d)
             vec[d] = normal_rand(gen);
-        for (_u64 d = 0; d < ndims; ++d)
+        for (size_t d = 0; d < ndims; ++d)
             sum += vec[d] * vec[d];
-        for (_u64 d = 0; d < ndims; ++d)
+        for (size_t d = 0; d < ndims; ++d)
             vec[d] = vec[d] * norm / std::sqrt(sum);
 
         writer.write((char *)vec, ndims * sizeof(float));
@@ -36,7 +36,7 @@ int block_write_float(std::ofstream &writer, _u64 ndims, _u64 npts, float norm)
     return 0;
 }
 
-int block_write_int8(std::ofstream &writer, _u64 ndims, _u64 npts, float norm)
+int block_write_int8(std::ofstream &writer, size_t ndims, size_t npts, float norm)
 {
     auto vec = new float[ndims];
     auto vec_T = new int8_t[ndims];
@@ -45,17 +45,17 @@ int block_write_int8(std::ofstream &writer, _u64 ndims, _u64 npts, float norm)
     std::mt19937 gen{rd()};
     std::normal_distribution<> normal_rand{0, 1};
 
-    for (_u64 i = 0; i < npts; i++)
+    for (size_t i = 0; i < npts; i++)
     {
         float sum = 0;
-        for (_u64 d = 0; d < ndims; ++d)
+        for (size_t d = 0; d < ndims; ++d)
             vec[d] = normal_rand(gen);
-        for (_u64 d = 0; d < ndims; ++d)
+        for (size_t d = 0; d < ndims; ++d)
             sum += vec[d] * vec[d];
-        for (_u64 d = 0; d < ndims; ++d)
+        for (size_t d = 0; d < ndims; ++d)
             vec[d] = vec[d] * norm / std::sqrt(sum);
 
-        for (_u64 d = 0; d < ndims; ++d)
+        for (size_t d = 0; d < ndims; ++d)
         {
             vec_T[d] = std::round<int>(vec[d]);
         }
@@ -68,7 +68,7 @@ int block_write_int8(std::ofstream &writer, _u64 ndims, _u64 npts, float norm)
     return 0;
 }
 
-int block_write_uint8(std::ofstream &writer, _u64 ndims, _u64 npts, float norm)
+int block_write_uint8(std::ofstream &writer, size_t ndims, size_t npts, float norm)
 {
     auto vec = new float[ndims];
     auto vec_T = new int8_t[ndims];
@@ -77,17 +77,17 @@ int block_write_uint8(std::ofstream &writer, _u64 ndims, _u64 npts, float norm)
     std::mt19937 gen{rd()};
     std::normal_distribution<> normal_rand{0, 1};
 
-    for (_u64 i = 0; i < npts; i++)
+    for (size_t i = 0; i < npts; i++)
     {
         float sum = 0;
-        for (_u64 d = 0; d < ndims; ++d)
+        for (size_t d = 0; d < ndims; ++d)
             vec[d] = normal_rand(gen);
-        for (_u64 d = 0; d < ndims; ++d)
+        for (size_t d = 0; d < ndims; ++d)
             sum += vec[d] * vec[d];
-        for (_u64 d = 0; d < ndims; ++d)
+        for (size_t d = 0; d < ndims; ++d)
             vec[d] = vec[d] * norm / std::sqrt(sum);
 
-        for (_u64 d = 0; d < ndims; ++d)
+        for (size_t d = 0; d < ndims; ++d)
         {
             vec_T[d] = 128 + std::round<int>(vec[d]);
         }
@@ -103,7 +103,7 @@ int block_write_uint8(std::ofstream &writer, _u64 ndims, _u64 npts, float norm)
 int main(int argc, char **argv)
 {
     std::string data_type, output_file;
-    _u64 ndims, npts;
+    size_t ndims, npts;
     float norm;
 
     try
@@ -149,7 +149,8 @@ int main(int argc, char **argv)
     {
         if (norm > 127)
         {
-            std::cerr << "Error: for int8/uint8 datatypes, L2 norm can not be greater "
+            std::cerr << "Error: for int8/uint8 datatypes, L2 norm can not be "
+                         "greater "
                          "than 127"
                       << std::endl;
             return -1;
@@ -161,19 +162,19 @@ int main(int argc, char **argv)
         std::ofstream writer;
         writer.exceptions(std::ofstream::failbit | std::ofstream::badbit);
         writer.open(output_file, std::ios::binary);
-        auto npts_s32 = (_u32)npts;
-        auto ndims_s32 = (_u32)ndims;
-        writer.write((char *)&npts_s32, sizeof(_u32));
-        writer.write((char *)&ndims_s32, sizeof(_u32));
+        auto npts_u32 = (uint32_t)npts;
+        auto ndims_u32 = (uint32_t)ndims;
+        writer.write((char *)&npts_u32, sizeof(uint32_t));
+        writer.write((char *)&ndims_u32, sizeof(uint32_t));
 
-        _u64 blk_size = 131072;
-        _u64 nblks = ROUND_UP(npts, blk_size) / blk_size;
+        size_t blk_size = 131072;
+        size_t nblks = ROUND_UP(npts, blk_size) / blk_size;
         std::cout << "# blks: " << nblks << std::endl;
 
         int ret = 0;
-        for (_u64 i = 0; i < nblks; i++)
+        for (size_t i = 0; i < nblks; i++)
         {
-            _u64 cblk_size = std::min(npts - i * blk_size, blk_size);
+            size_t cblk_size = std::min(npts - i * blk_size, blk_size);
             if (data_type == std::string("float"))
             {
                 ret = block_write_float(writer, ndims, cblk_size, norm);

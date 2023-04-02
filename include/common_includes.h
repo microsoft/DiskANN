@@ -23,4 +23,5 @@
 #include <shared_mutex>
 #include <sys/stat.h>
 #include <sstream>
+#include <unordered_map>
 #include <vector>

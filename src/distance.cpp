@@ -104,7 +104,7 @@ float DistanceL2Int8::compare(const int8_t *a, const int8_t *b, uint32_t size) c
 #else
     int32_t result = 0;
 #pragma omp simd reduction(+ : result) aligned(a, b : 8)
-    for (_s32 i = 0; i < (_s32)size; i++)
+    for (int32_t i = 0; i < (int32_t)size; i++)
     {
         result += ((int32_t)((int16_t)a[i] - (int16_t)b[i])) * ((int32_t)((int16_t)a[i] - (int16_t)b[i]));
     }
@@ -259,7 +259,7 @@ float AVXDistanceL2Float::compare(const float *, const float *, uint32_t) const
 }
 #endif
 
-template <typename T> float DistanceInnerProduct<T>::inner_product(const T *a, const T *b, unsigned size) const
+template <typename T> float DistanceInnerProduct<T>::inner_product(const T *a, const T *b, uint32_t size) const
 {
     if (!std::is_floating_point<T>::value)
     {
@@ -281,9 +281,9 @@ template <typename T> float DistanceInnerProduct<T>::inner_product(const T *a, c
     __m256 sum;
     __m256 l0, l1;
     __m256 r0, r1;
-    unsigned D = (size + 7) & ~7U;
-    unsigned DR = D % 16;
-    unsigned DD = D - DR;
+    uint32_t D = (size + 7) & ~7U;
+    uint32_t DR = D % 16;
+    uint32_t DD = D - DR;
     const float *l = (float *)a;
     const float *r = (float *)b;
     const float *e_l = l + DD;
@@ -296,7 +296,7 @@ template <typename T> float DistanceInnerProduct<T>::inner_product(const T *a, c
         AVX_DOT(e_l, e_r, sum, l0, r0);
     }
 
-    for (unsigned i = 0; i < DD; i += 16, l += 16, r += 16)
+    for (uint32_t i = 0; i < DD; i += 16, l += 16, r += 16)
     {
         AVX_DOT(l, r, sum, l0, r0);
         AVX_DOT(l + 8, r + 8, sum, l1, r1);
@@ -314,9 +314,9 @@ template <typename T> float DistanceInnerProduct<T>::inner_product(const T *a, c
     __m128 sum;
     __m128 l0, l1, l2, l3;
     __m128 r0, r1, r2, r3;
-    unsigned D = (size + 3) & ~3U;
-    unsigned DR = D % 16;
-    unsigned DD = D - DR;
+    uint32_t D = (size + 3) & ~3U;
+    uint32_t DR = D % 16;
+    uint32_t DD = D - DR;
     const float *l = a;
     const float *r = b;
     const float *e_l = l + DD;
@@ -335,7 +335,7 @@ template <typename T> float DistanceInnerProduct<T>::inner_product(const T *a, c
     default:
         break;
     }
-    for (unsigned i = 0; i < DD; i += 16, l += 16, r += 16)
+    for (uint32_t i = 0; i < DD; i += 16, l += 16, r += 16)
     {
         SSE_DOT(l, r, sum, l0, r0);
         SSE_DOT(l + 4, r + 4, sum, l1, r1);
@@ -372,14 +372,14 @@ template <typename T> float DistanceInnerProduct<T>::inner_product(const T *a, c
     return result;
 }
 
-template <typename T> float DistanceFastL2<T>::compare(const T *a, const T *b, float norm, unsigned size) const
+template <typename T> float DistanceFastL2<T>::compare(const T *a, const T *b, float norm, uint32_t size) const
 {
     float result = -2 * DistanceInnerProduct<T>::inner_product(a, b, size);
     result += norm;
     return result;
 }
 
-template <typename T> float DistanceFastL2<T>::norm(const T *a, unsigned size) const
+template <typename T> float DistanceFastL2<T>::norm(const T *a, uint32_t size) const
 {
     if (!std::is_floating_point<T>::value)
     {
@@ -397,9 +397,9 @@ template <typename T> float DistanceFastL2<T>::norm(const T *a, unsigned size) c
 
     __m256 sum;
     __m256 l0, l1;
-    unsigned D = (size + 7) & ~7U;
-    unsigned DR = D % 16;
-    unsigned DD = D - DR;
+    uint32_t D = (size + 7) & ~7U;
+    uint32_t DR = D % 16;
+    uint32_t DD = D - DR;
     const float *l = (float *)a;
     const float *e_l = l + DD;
     float unpack[8] __attribute__((aligned(32))) = {0, 0, 0, 0, 0, 0, 0, 0};
@@ -409,7 +409,7 @@ template <typename T> float DistanceFastL2<T>::norm(const T *a, unsigned size) c
     {
         AVX_L2NORM(e_l, sum, l0);
     }
-    for (unsigned i = 0; i < DD; i += 16, l += 16)
+    for (uint32_t i = 0; i < DD; i += 16, l += 16)
     {
         AVX_L2NORM(l, sum, l0);
         AVX_L2NORM(l + 8, sum, l1);
@@ -425,9 +425,9 @@ template <typename T> float DistanceFastL2<T>::norm(const T *a, unsigned size) c
 
     __m128 sum;
     __m128 l0, l1, l2, l3;
-    unsigned D = (size + 3) & ~3U;
-    unsigned DR = D % 16;
-    unsigned DD = D - DR;
+    uint32_t D = (size + 3) & ~3U;
+    uint32_t DR = D % 16;
+    uint32_t DD = D - DR;
     const float *l = a;
     const float *e_l = l + DD;
     float unpack[4] __attribute__((aligned(16))) = {0, 0, 0, 0};
@@ -444,7 +444,7 @@ template <typename T> float DistanceFastL2<T>::norm(const T *a, unsigned size) c
     default:
         break;
     }
-    for (unsigned i = 0; i < DD; i += 16, l += 16)
+    for (uint32_t i = 0; i < DD; i += 16, l += 16)
     {
         SSE_L2NORM(l, sum, l0);
         SSE_L2NORM(l + 4, sum, l1);
@@ -492,9 +492,9 @@ float AVXDistanceInnerProductFloat::compare(const float *a, const float *b, uint
     __m256 sum;
     __m256 l0, l1;
     __m256 r0, r1;
-    unsigned D = (size + 7) & ~7U;
-    unsigned DR = D % 16;
-    unsigned DD = D - DR;
+    uint32_t D = (size + 7) & ~7U;
+    uint32_t DR = D % 16;
+    uint32_t DD = D - DR;
     const float *l = (float *)a;
     const float *r = (float *)b;
     const float *e_l = l + DD;
@@ -511,7 +511,7 @@ float AVXDistanceInnerProductFloat::compare(const float *a, const float *b, uint
         AVX_DOT(e_l, e_r, sum, l0, r0);
     }
 
-    for (unsigned i = 0; i < DD; i += 16, l += 16, r += 16)
+    for (uint32_t i = 0; i < DD; i += 16, l += 16, r += 16)
     {
         AVX_DOT(l, r, sum, l0, r0);
         AVX_DOT(l + 8, r + 8, sum, l1, r1);
@@ -616,7 +616,8 @@ template <> diskann::Distance<uint8_t> *get_distance_function(diskann::Metric m)
     if (m == diskann::Metric::L2)
     {
 #ifdef _WINDOWS
-        diskann::cout << "WARNING: AVX/AVX2 distance function not defined for Uint8. Using "
+        diskann::cout << "WARNING: AVX/AVX2 distance function not defined for Uint8. "
+                         "Using "
                          "slow version. "
                          "Contact gopalsr@microsoft.com if you need AVX/AVX2 support."
                       << std::endl;
@@ -634,7 +635,7 @@ template <> diskann::Distance<uint8_t> *get_distance_function(diskann::Metric m)
     else
     {
         std::stringstream stream;
-        stream << "Only L2 and cosine supported for unsigned byte vectors." << std::endl;
+        stream << "Only L2 and cosine supported for uint32_t byte vectors." << std::endl;
         diskann::cerr << stream.str() << std::endl;
         throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
     }
