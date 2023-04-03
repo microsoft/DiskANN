@@ -959,10 +959,10 @@ void generate_disk_quantized_data(const std::string data_file_to_use, const std:
 }
 
 template <typename T>
-void generate_quantized_data(const std::string data_file_to_use, const std::string pq_pivots_path,
-                             const std::string pq_compressed_vectors_path, diskann::Metric compareMetric,
+void generate_quantized_data(const std::string &data_file_to_use, const std::string &pq_pivots_path,
+                             const std::string &pq_compressed_vectors_path, diskann::Metric compareMetric,
                              const double p_val, const size_t num_pq_chunks, const bool use_opq,
-                             const std::string codebook_prefix)
+                             const std::string &codebook_prefix)
 {
     size_t train_size, train_dim;
     float *train_data;
@@ -1031,24 +1031,24 @@ template DISKANN_DLLEXPORT void generate_disk_quantized_data<float>(const std::s
                                                                     diskann::Metric compareMetric, const double p_val,
                                                                     size_t &disk_pq_dims);
 
-template DISKANN_DLLEXPORT void generate_quantized_data<int8_t>(const std::string data_file_to_use,
-                                                                const std::string pq_pivots_path,
-                                                                const std::string pq_compressed_vectors_path,
+template DISKANN_DLLEXPORT void generate_quantized_data<int8_t>(const std::string &data_file_to_use,
+                                                                const std::string &pq_pivots_path,
+                                                                const std::string &pq_compressed_vectors_path,
                                                                 diskann::Metric compareMetric, const double p_val,
                                                                 const size_t num_pq_chunks, const bool use_opq,
-                                                                const std::string codebook_prefix);
+                                                                const std::string &codebook_prefix);
 
-template DISKANN_DLLEXPORT void generate_quantized_data<uint8_t>(const std::string data_file_to_use,
-                                                                 const std::string pq_pivots_path,
-                                                                 const std::string pq_compressed_vectors_path,
+template DISKANN_DLLEXPORT void generate_quantized_data<uint8_t>(const std::string &data_file_to_use,
+                                                                 const std::string &pq_pivots_path,
+                                                                 const std::string &pq_compressed_vectors_path,
                                                                  diskann::Metric compareMetric, const double p_val,
                                                                  const size_t num_pq_chunks, const bool use_opq,
-                                                                 const std::string codebook_prefix);
+                                                                 const std::string &codebook_prefix);
 
-template DISKANN_DLLEXPORT void generate_quantized_data<float>(const std::string data_file_to_use,
-                                                               const std::string pq_pivots_path,
-                                                               const std::string pq_compressed_vectors_path,
+template DISKANN_DLLEXPORT void generate_quantized_data<float>(const std::string &data_file_to_use,
+                                                               const std::string &pq_pivots_path,
+                                                               const std::string &pq_compressed_vectors_path,
                                                                diskann::Metric compareMetric, const double p_val,
                                                                const size_t num_pq_chunks, const bool use_opq,
-                                                               const std::string codebook_prefix);
+                                                               const std::string &codebook_prefix);
 } // namespace diskann
