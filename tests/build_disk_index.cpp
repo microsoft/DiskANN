@@ -34,7 +34,7 @@ int main(int argc, char **argv)
         desc.add_options()("max_degree,R", po::value<uint32_t>(&R)->default_value(64), "Maximum graph degree");
         desc.add_options()("Lbuild,L", po::value<uint32_t>(&L)->default_value(100),
                            "Build complexity, higher value results in better graphs");
-        desc.add_options()("search_DRAM_budget,B", po::value<float>(&B)->default_value(0),
+        desc.add_options()("search_DRAM_budget,B", po::value<float>(&B)->required(),
                            "DRAM budget in GB for searching the index to set the "
                            "compressed level for data while search happens");
         desc.add_options()("build_DRAM_budget,M", po::value<float>(&M)->required(),
@@ -129,12 +129,6 @@ int main(int argc, char **argv)
                       << std::endl;
             return -1;
         }
-    }
-
-    if (QD && B)
-    {
-        std::cout << "Error: error passing in both quantized dimension (QD) and search_DRAM_budget(B) " << std::endl;
-        return -1;
     }
 
     std::string params = std::string(std::to_string(R)) + " " + std::string(std::to_string(L)) + " " +
