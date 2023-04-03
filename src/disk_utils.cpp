@@ -1225,6 +1225,7 @@ int build_disk_index(const char *dataFilePath, const char *indexFilePath, const 
 
     if (param_list.size() >= 9 && atoi(param_list[8].c_str()) <= MAX_PQ_CHUNKS && atoi(param_list[8].c_str()) > 0)
     {
+        std::cout << "Use quantized dimension (QD) to overwrite derived quantized dimension from search_DRAM_budget (B)" << std::endl;
         num_pq_chunks = atoi(param_list[8].c_str());
     }
 
