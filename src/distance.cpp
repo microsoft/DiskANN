@@ -543,10 +543,27 @@ void AVXNormalizedCosineDistanceFloat::normalize_data_for_build(const float *ori
         normalize(original_data + i * orig_dim, orig_dim);
     }
 }
+
 void AVXNormalizedCosineDistanceFloat::normalize_vector_for_search(const float *query_vec, const uint32_t query_dim,
-                                                                   float *scratch_space)
+                                                                   float *query_scratch)
 {
-    normalize(query_vec, query_dim);
+    normalize_and_copy(query_vec, query_dim, query_scratch);
+}
+
+void AVXNormalizedCosineDistanceFloat::normalize_and_copy(const float *query_vec, const uint32_t query_dim,
+                                                          float *query_target) const
+{
+    float norm = 0.0f;
+    for (auto i = 0; i < query_dim; i++)
+    {
+        norm += query_vec[i];
+    }
+    norm /= norm / query_dim;
+    
+    for (auto i = 0; i < query_dim; i++)
+    {
+        query_target[i] = query_vec[i] / norm;
+    }
 }
 
 

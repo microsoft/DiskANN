@@ -35,7 +35,7 @@ template <typename data_t> class AbstractDataStore
         return _num_pts;
     }
 
-    virtual void get_distance(const T *query, const location_t *locations, const uint32_t location_count,
+    virtual void get_distance(const data_t *query, const location_t *locations, const uint32_t location_count,
                       float *distances) = 0;
 
 
