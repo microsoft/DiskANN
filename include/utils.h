@@ -1070,6 +1070,11 @@ inline void clean_up_artifacts(tsl::robin_set<std::string> paths_to_clean, tsl::
     {
         for (const auto &path : paths_to_clean)
         {
+            if (path_suffixes.empty())
+            {
+                if (std::remove(path.c_str()) != 0)
+                    diskann::cout << "Warning: Unable to remove file :" << path << std::endl;
+            }
             for (const auto &suffix : path_suffixes)
             {
                 std::string curr_path_to_clean(path + "_" + suffix);

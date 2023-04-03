@@ -20,6 +20,7 @@
 #include "index.h"
 #include "memory_mapper.h"
 #include "utils.h"
+#include "index_factory.h"
 
 namespace po = boost::program_options;
 
@@ -370,6 +371,29 @@ int main(int argc, char **argv)
 
     try
     {
+        // Using_a_prebuilt_index
+        size_t query_num, query_dim;
+        diskann::get_bin_metadata(query_file, query_num, query_dim);
+        diskann::IndexConfig config;
+        config.data_file = "";
+        config.metric = metric;
+        config.dimension = query_dim;
+        config.max_points = 10000;
+        config.label_file = "";
+        config.index_type = diskann::MEMORY;
+        diskann::Parameters search_params;
+        search_params.Set<uint32_t>("num_threads", num_threads);
+        search_params.Set<uint32_t>("K", K);
+        search_params.Set<std::vector<uint32_t>>("Lvec", Lvec);
+        search_params.Set<std::string>("gt_file", gt_file);
+        search_params.Set<bool>("show_qps_per_thread", show_qps_per_thread);
+        search_params.Set<bool>("print_all_recalls", print_all_recalls);
+        search_params.Set<float>("fail_if_recall_below", fail_if_recall_below);
+        auto index_factory = diskann::IndexFactory<float>(config);
+        auto index = index_factory.instance();
+        index->search_prebuilt_index(index_path_prefix, query_file, search_params, query_filters);
+        return 0;
+
         if (!query_filters.empty() && label_type == "ushort")
         {
             if (data_type == std::string("int8"))

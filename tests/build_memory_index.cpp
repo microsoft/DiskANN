@@ -17,6 +17,7 @@
 
 #include "memory_mapper.h"
 #include "ann_exception.h"
+#include "index_factory.h"
 
 namespace po = boost::program_options;
 
@@ -154,6 +155,30 @@ int main(int argc, char **argv)
     {
         diskann::cout << "Starting index build with R: " << R << "  Lbuild: " << L << "  alpha: " << alpha
                       << "  #threads: " << num_threads << std::endl;
+
+        
+        size_t data_num, data_dim;
+        diskann::get_bin_metadata(data_path, data_num, data_dim);
+        diskann::IndexConfig config;
+        config.data_file = data_path;
+        config.metric = metric;
+        config.dimension = data_dim;
+        config.max_points = data_num;
+        config.label_file = label_file;
+        config.index_type = diskann::MEMORY;
+        diskann::Parameters build_params;
+        build_params.Set<uint32_t>("R", R);
+        build_params.Set<uint32_t>("L", L);
+        build_params.Set<uint32_t>("Lf", Lf);
+        build_params.Set<uint32_t>("C", 750); // maximum candidate set size during pruning procedure
+        build_params.Set<float>("alpha", alpha);
+        build_params.Set<bool>("saturate_graph", 0);
+        build_params.Set<uint32_t>("num_threads", num_threads);
+        auto index_factory = diskann::IndexFactory<float>(config);
+        auto index = index_factory.instance();
+        index->build(index_path_prefix, build_params);
+        return 0;
+
         if (label_file != "" && label_type == "ushort")
         {
             if (data_type == std::string("int8"))
