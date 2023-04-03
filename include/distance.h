@@ -15,15 +15,30 @@ enum Metric
 template <typename T> class Distance
 {
   public:
+    Distance(diskann::Metric dist_metric) : _distance_metric(dist_metric) 
+    {
+    }
+
     // distance comparison function
     virtual float compare(const T *a, const T *b, uint32_t length) const = 0;
+
+    //Needed only for COSINE-BYTE and INNER_PRODUCT-BYTE
+    virtual float compare(const T *a, const T *b, const float normA, const float normB, uint32_t length) const
+    {
+        return std::numeric_limits<float>::max();
+    }
 
     // For MIPS, normalization => a new dimension gets added to the vectors.
     // This function lets callers know if the normalization process
     // changes the dimension.
-    virtual uint32_t new_dimension(uint32_t orig_dimension) const
+    virtual uint32_t post_processed_dimension(uint32_t orig_dimension) const
     {
         return orig_dimension;
+    }
+
+    virtual diskann::Metric get_metric() const
+    {
+        return _distance_metric;
     }
 
     // This is for efficiency. If no normalization is required, the callers
@@ -38,20 +53,14 @@ template <typename T> class Distance
     // 
     // if (metric->normalization_required()){
     //    T* normalized_data_batch; 
-    //    if ( metric->new_dimension() == orig_dim ) {
-    //        normalized_data_batch = nullptr;
-    //        modify_data = true; 
-    //     } else {
-    //        normalized_data_batch = new T[batch_size * metric->new_dimension()];
-    //        modify_data = false;
-    //     }
     //     Split data into batches of batch_size and for each, call:
-    //      metric->normalize_data_for_build(data_batch, batch_size, orig_dim
-    //                                        normalized_data_batch, modify_data);
-    //The default implementation is correct but very inefficient!
-    virtual void normalize_data_for_build(const T *original_data, 
-                                          const uint32_t num_points, const uint32_t orig_dim,
-                                          T *normalized_data, bool modify_data = true)
+    //      metric->normalize_data_for_build(data_batch, batch_size);
+    //
+    // TODO: This does not take into account the case for SSD inner product
+    // where the dimensions change after normalization.
+    //
+    virtual void normalize_data_for_build(T *original_data, 
+                                          const uint32_t num_points)
     {
     }
 
@@ -69,6 +78,9 @@ template <typename T> class Distance
     virtual ~Distance() 
     {
     }
+
+  protected:
+    diskann::Metric _distance_metric;
 };
 
 class DistanceCosineInt8 : public Distance<int8_t>

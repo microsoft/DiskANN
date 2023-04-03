@@ -15,19 +15,20 @@
 
 namespace diskann
 {
-template <typename data_t, typename id_t> class InMemDataStore : public AbstractDataStore<data_t, id_t>
+template <typename data_t> class InMemDataStore : public AbstractDataStore<data_t>
 {
   public:
-    InMemDataStore(const location_t max_pts, const location_t num_frozen_pts, const size_t dim);
-    ~InMemDataStore();
+    InMemDataStore(const location_t max_pts, const size_t dim, std::shared_ptr<Distance<data_t>> distance_metric);
+    virtual ~InMemDataStore();
 
     void load(const std::string &filename);
     void store(const std::string &filename);
 
-    data_t *get_vector(location_t i);
-    data_t *get_vector_by_UID(id_t uid);
+    virtual data_t *get_vector(location_t i);
+    virtual void set_vector(const location_t i, const data_t *const vector);
 
-    void set_vector(const location_t i, const data_t *const vector);
+    virtual void get_distance(const data_t *query, const location_t *locations, const uint32_t location_count,
+                      const shared_ptr<Distance<data_t>> &metric, float *distances);
 
   protected:
     location_t load_data(const std::string &filename);
@@ -53,6 +54,14 @@ template <typename data_t, typename id_t> class InMemDataStore : public Abstract
     std::unique_ptr<tsl::robin_set<location_t>> _delete_set;
 
     std::shared_timed_mutex _lock; // Takes please of Index::_tag_lock
+
+    // It may seem weird to put distance metric along with the data store class, but
+    // this gives us perf benefits as the datastore can do distance computations during
+    // search and compute norms of vectors internally without have to copy
+    // data back and forth. 
+    shared_ptr<Distance<data_t>> _distance_fn;
+
+    shared_ptr<float[]> _pre_computed_norms;
 };
 
 } // namespace diskann
