@@ -1773,7 +1773,7 @@ void Index<T, TagT, LabelT>::build(const char *filename, const size_t num_points
         auto pq_pivots_file = std::string(filename) + suffix + "_pivots.bin";
         auto pq_compressed_file = std::string(filename) + suffix + "_compressed.bin";
         generate_quantized_data<T>(std::string(filename), pq_pivots_file, pq_compressed_file, _dist_metric, p_val,
-                                   _num_pq_chunks, _use_opq, "");
+                                   _num_pq_chunks, _use_opq);
 
         copy_aligned_data_from_file<uint8_t>(pq_compressed_file.c_str(), _pq_data, file_num_points, _num_pq_chunks,
                                              _num_pq_chunks);
