@@ -254,6 +254,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
                       const tsl::robin_set<uint32_t> *const delete_set_ptr = nullptr);
 
     // add reverse links from all the visited nodes to node n.
+
     void inter_insert(uint32_t n, std::vector<uint32_t> &pruned_list, const uint32_t range,
                       InMemQueryScratch<T> *scratch);
 

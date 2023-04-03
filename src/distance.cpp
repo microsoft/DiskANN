@@ -522,7 +522,7 @@ float AVXDistanceInnerProductFloat::compare(const float *a, const float *b, uint
     return -result;
 }
 
-uint32_t AVXNormalizedCosineDistanceFloat::new_dimension(uint32_t orig_dimension)
+uint32_t AVXNormalizedCosineDistanceFloat::post_processed_dimension(uint32_t orig_dimension) const
 {
     return orig_dimension;
 }
@@ -530,17 +530,11 @@ bool AVXNormalizedCosineDistanceFloat::normalization_required() const
 {
     return true;
 }
-void AVXNormalizedCosineDistanceFloat::normalize_data_for_build(const float *original_data, const uint32_t num_points,
-                                                        const uint32_t orig_dim, float *normalized_data,
-                                                        bool modify_orig)
+void AVXNormalizedCosineDistanceFloat::normalize_data_for_build(float *original_data, const uint32_t orig_dim, const uint32_t num_points)
 {
-    if (!modify_orig)
-    {
-        throw diskann::ANNException("For cosine distance, modify_orig should be set to true for efficiency.", -1);
-    }
     for (auto i = 0; i < num_points; i++)
     {
-        normalize(original_data + i * orig_dim, orig_dim);
+        normalize((float *)(original_data + i * orig_dim), orig_dim);
     }
 }
 
@@ -553,13 +547,9 @@ void AVXNormalizedCosineDistanceFloat::normalize_vector_for_search(const float *
 void AVXNormalizedCosineDistanceFloat::normalize_and_copy(const float *query_vec, const uint32_t query_dim,
                                                           float *query_target) const
 {
-    float norm = 0.0f;
-    for (auto i = 0; i < query_dim; i++)
-    {
-        norm += query_vec[i];
-    }
-    norm /= norm / query_dim;
-    
+  
+    float norm = get_norm(query_vec, query_dim);
+   
     for (auto i = 0; i < query_dim; i++)
     {
         query_target[i] = query_vec[i] / norm;
