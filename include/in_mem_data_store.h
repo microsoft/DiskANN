@@ -2,6 +2,7 @@
 // Licensed under the MIT license.
 
 #include <shared_mutex>
+#include <memory>
 
 #include "tsl/robin_map.h"
 #include "tsl/robin_set.h"
@@ -10,12 +11,14 @@
 
 #include "abstract_data_store.h"
 
+#include "distance.h"
 #include "natural_number_map.h"
 #include "natural_number_set.h"
 
 namespace diskann
 {
-template <typename data_t> class InMemDataStore : public AbstractDataStore<data_t>
+template <typename data_t> 
+class InMemDataStore : public AbstractDataStore<data_t>
 {
   public:
     InMemDataStore(const location_t max_pts, const size_t dim, std::shared_ptr<Distance<data_t>> distance_metric);
@@ -27,8 +30,7 @@ template <typename data_t> class InMemDataStore : public AbstractDataStore<data_
     virtual data_t *get_vector(location_t i);
     virtual void set_vector(const location_t i, const data_t *const vector);
 
-    virtual void get_distance(const data_t *query, const location_t *locations, const uint32_t location_count,
-                      const shared_ptr<Distance<data_t>> &metric, float *distances);
+    virtual void get_distance(const data_t *query, const location_t *locations, const uint32_t location_count,  float *distances);
 
   protected:
     location_t load_data(const std::string &filename);
@@ -43,8 +45,8 @@ template <typename data_t> class InMemDataStore : public AbstractDataStore<data_
 
     // lazy_delete removes entry from _location_to_tag and _tag_to_location. If
     // _location_to_tag does not resolve a location, infer that it was deleted.
-    tsl::sparse_map<id_t, location_t> _tag_to_location;
-    natural_number_map<location_t, id_t> _location_to_tag;
+    //tsl::sparse_map<id_t, location_t> _tag_to_location;
+    //natural_number_map<location_t, id_t> _location_to_tag;
 
     // _empty_slots has unallocated slots and those freed by consolidate_delete.
     // _delete_set has locations marked deleted by lazy_delete. Will not be
@@ -59,9 +61,9 @@ template <typename data_t> class InMemDataStore : public AbstractDataStore<data_
     // this gives us perf benefits as the datastore can do distance computations during
     // search and compute norms of vectors internally without have to copy
     // data back and forth. 
-    shared_ptr<Distance<data_t>> _distance_fn;
+    std::shared_ptr<Distance<data_t>> _distance_fn;
 
-    shared_ptr<float[]> _pre_computed_norms;
+    std::shared_ptr<float[]> _pre_computed_norms;
 };
 
 } // namespace diskann
