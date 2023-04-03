@@ -10,7 +10,7 @@
 #define MAX_OPQ_ITERS 20
 #define NUM_KMEANS_REPS_PQ 12
 #define MAX_PQ_TRAINING_SET_SIZE 256000
-#define MAX_PQ_CHUNKS 384
+#define MAX_PQ_CHUNKS 512
 
 namespace diskann
 {
