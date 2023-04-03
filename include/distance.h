@@ -59,7 +59,7 @@ template <typename T> class Distance
     // TODO: This does not take into account the case for SSD inner product
     // where the dimensions change after normalization.
     //
-    virtual void normalize_data_for_build(T *original_data, 
+    virtual void normalize_data_for_build(T *original_data, const uint32_t orig_dim,
                                           const uint32_t num_points)
     {
     }
@@ -250,16 +250,14 @@ class AVXNormalizedCosineDistanceFloat : public Distance<float>
         // This will ensure that cosine is between -1 and 1.
         return 1.0f + _innerProduct.compare(a, b, length);
     }
-    DISKANN_DLLEXPORT virtual uint32_t new_dimension(uint32_t orig_dimension);
+    DISKANN_DLLEXPORT virtual uint32_t post_processed_dimension(uint32_t orig_dimension) const override;
 
     DISKANN_DLLEXPORT virtual bool normalization_required() const;
 
-    DISKANN_DLLEXPORT virtual void normalize_data_for_build(const float *original_data, const uint32_t num_points,
-                                                            const uint32_t orig_dim, float *normalized_data,
-                                                            bool modify_orig);
+    DISKANN_DLLEXPORT virtual void normalize_data_for_build(float *original_data,  const uint32_t orig_dim, const uint32_t num_points) override;
 
     DISKANN_DLLEXPORT virtual void normalize_vector_for_search(const float *query_vec, const uint32_t query_dim,
-                                                               float* scratch_query_vector);
+                                                               float *scratch_query_vector) override;
 };
 
 template <typename T> Distance<T> *get_distance_function(Metric m);
