@@ -1038,8 +1038,9 @@ void create_disk_layout(const std::string base_file, const std::string mem_index
 
 template <typename T, typename LabelT>
 int build_disk_index(const char *dataFilePath, const char *indexFilePath, const char *indexBuildParameters,
-                     diskann::Metric compareMetric, bool use_opq, const std::string &codebook_prefix, bool use_filters, const std::string &label_file,
-                     const std::string &universal_label, const uint32_t filter_threshold, const uint32_t Lf)
+                     diskann::Metric compareMetric, bool use_opq, const std::string &codebook_prefix, bool use_filters,
+                     const std::string &label_file, const std::string &universal_label, const uint32_t filter_threshold,
+                     const uint32_t Lf)
 {
     std::stringstream parser;
     parser << std::string(indexBuildParameters);
@@ -1345,39 +1346,45 @@ template DISKANN_DLLEXPORT uint32_t optimize_beamwidth<float, uint16_t>(
 
 template DISKANN_DLLEXPORT int build_disk_index<int8_t, uint32_t>(const char *dataFilePath, const char *indexFilePath,
                                                                   const char *indexBuildParameters,
-                                                                  diskann::Metric compareMetric, bool use_opq, const std::string& codebook_prefix,
-                                                                  bool use_filters, const std::string &label_file,
+                                                                  diskann::Metric compareMetric, bool use_opq,
+                                                                  const std::string &codebook_prefix, bool use_filters,
+                                                                  const std::string &label_file,
                                                                   const std::string &universal_label,
                                                                   const uint32_t filter_threshold, const uint32_t Lf);
 template DISKANN_DLLEXPORT int build_disk_index<uint8_t, uint32_t>(const char *dataFilePath, const char *indexFilePath,
                                                                    const char *indexBuildParameters,
-                                                                   diskann::Metric compareMetric, bool use_opq, const std::string& codebook_prefix,
-                                                                   bool use_filters, const std::string &label_file,
+                                                                   diskann::Metric compareMetric, bool use_opq,
+                                                                   const std::string &codebook_prefix, bool use_filters,
+                                                                   const std::string &label_file,
                                                                    const std::string &universal_label,
                                                                    const uint32_t filter_threshold, const uint32_t Lf);
 template DISKANN_DLLEXPORT int build_disk_index<float, uint32_t>(const char *dataFilePath, const char *indexFilePath,
                                                                  const char *indexBuildParameters,
-                                                                 diskann::Metric compareMetric, bool use_opq, const std::string& codebook_prefix,
-                                                                 bool use_filters, const std::string &label_file,
+                                                                 diskann::Metric compareMetric, bool use_opq,
+                                                                 const std::string &codebook_prefix, bool use_filters,
+                                                                 const std::string &label_file,
                                                                  const std::string &universal_label,
                                                                  const uint32_t filter_threshold, const uint32_t Lf);
 // LabelT = uint16
 template DISKANN_DLLEXPORT int build_disk_index<int8_t, uint16_t>(const char *dataFilePath, const char *indexFilePath,
                                                                   const char *indexBuildParameters,
-                                                                  diskann::Metric compareMetric, bool use_opq, const std::string& codebook_prefix,
-                                                                  bool use_filters, const std::string &label_file,
+                                                                  diskann::Metric compareMetric, bool use_opq,
+                                                                  const std::string &codebook_prefix, bool use_filters,
+                                                                  const std::string &label_file,
                                                                   const std::string &universal_label,
                                                                   const uint32_t filter_threshold, const uint32_t Lf);
 template DISKANN_DLLEXPORT int build_disk_index<uint8_t, uint16_t>(const char *dataFilePath, const char *indexFilePath,
                                                                    const char *indexBuildParameters,
-                                                                   diskann::Metric compareMetric, bool use_opq, const std::string& codebook_prefix,
-                                                                   bool use_filters, const std::string &label_file,
+                                                                   diskann::Metric compareMetric, bool use_opq,
+                                                                   const std::string &codebook_prefix, bool use_filters,
+                                                                   const std::string &label_file,
                                                                    const std::string &universal_label,
                                                                    const uint32_t filter_threshold, const uint32_t Lf);
 template DISKANN_DLLEXPORT int build_disk_index<float, uint16_t>(const char *dataFilePath, const char *indexFilePath,
                                                                  const char *indexBuildParameters,
-                                                                 diskann::Metric compareMetric, bool use_opq, const std::string& codebook_prefix,
-                                                                 bool use_filters, const std::string &label_file,
+                                                                 diskann::Metric compareMetric, bool use_opq,
+                                                                 const std::string &codebook_prefix, bool use_filters,
+                                                                 const std::string &label_file,
                                                                  const std::string &universal_label,
                                                                  const uint32_t filter_threshold, const uint32_t Lf);
 

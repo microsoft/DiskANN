@@ -981,12 +981,12 @@ void generate_quantized_data(const std::string data_file_to_use, const std::stri
         if (!use_opq)
         {
             generate_pq_pivots(train_data, train_size, (uint32_t)train_dim, NUM_PQ_CENTROIDS, (uint32_t)num_pq_chunks,
-                NUM_KMEANS_REPS_PQ, pq_pivots_path, make_zero_mean);
+                               NUM_KMEANS_REPS_PQ, pq_pivots_path, make_zero_mean);
         }
         else
         {
             generate_opq_pivots(train_data, train_size, (uint32_t)train_dim, NUM_PQ_CENTROIDS, (uint32_t)num_pq_chunks,
-                pq_pivots_path, make_zero_mean);
+                                pq_pivots_path, make_zero_mean);
         }
         delete[] train_data;
     }

@@ -14,7 +14,8 @@ namespace po = boost::program_options;
 
 int main(int argc, char **argv)
 {
-    std::string data_type, dist_fn, data_path, index_path_prefix, codebook_prefix, label_file, universal_label, label_type;
+    std::string data_type, dist_fn, data_path, index_path_prefix, codebook_prefix, label_file, universal_label,
+        label_type;
     uint32_t num_threads, R, L, disk_PQ, build_PQ, QD, Lf, filter_threshold;
     float B, M;
     bool append_reorder_data = false;
