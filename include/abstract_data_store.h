@@ -37,10 +37,14 @@ template <typename data_t, typename id_t> class AbstractDataStore
         return _num_pts;
     }
 
-    location_t get_num_frozen_pts()
-    {
-        return _num_frozen_pts;
-    }
+    //location_t get_num_frozen_pts()
+    //{
+    //    return _num_frozen_pts;
+    //}
+
+    virtual void get_distance(const T *query, const location_t *locations, const uint32_t location_count, const shared_ptr<Distance<T>> &metric,
+                      float *distances) = 0;
+
 
     size_t get_dims()
     {

@@ -19,20 +19,22 @@ template <typename data_t, typename id_t> class InMemDataStore : public Abstract
 {
   public:
     InMemDataStore(const location_t max_pts, const location_t num_frozen_pts, const size_t dim);
-    ~InMemDataStore();
+    virtual ~InMemDataStore();
 
-    void load(const std::string &filename);
-    void store(const std::string &filename);
+    virtual void load(const std::string &filename);
+    virtual void store(const std::string &filename);
 
-    data_t *get_vector(location_t i);
-    data_t *get_vector_by_UID(id_t uid);
+    virtual data_t *get_vector(location_t i);
+    virtual data_t *get_vector_by_UID(id_t uid);
 
-    void set_vector(const location_t i, const data_t *const vector);
+    virtual void set_vector(const location_t i, const data_t *const vector);
+    virtual void get_distance(const T *query, const location_t *locations, const uint32_t location_count,
+                      const shared_ptr<Distance<T>> &metric, float *distances);
 
   protected:
-    location_t load_data(const std::string &filename);
+    virtual location_t load_data(const std::string &filename);
 #ifdef EXEC_ENV_OLS
-    location_t load_data(AlignedFileReader &reader);
+    virtual location_t load_data(AlignedFileReader &reader);
 #endif
 
   private:

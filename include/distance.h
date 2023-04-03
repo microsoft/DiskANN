@@ -1,6 +1,7 @@
 #pragma once
 #include "windows_customizations.h"
 
+
 namespace diskann
 {
 enum Metric
@@ -14,8 +15,58 @@ enum Metric
 template <typename T> class Distance
 {
   public:
+    // distance comparison function
     virtual float compare(const T *a, const T *b, uint32_t length) const = 0;
-    virtual ~Distance()
+
+    // For MIPS, normalization => a new dimension gets added to the vectors.
+    // This function lets callers know if the normalization process
+    // changes the dimension.
+    virtual uint32_t new_dimension(uint32_t orig_dimension) const
+    {
+        return orig_dimension;
+    }
+
+    // This is for efficiency. If no normalization is required, the callers
+    //can simply ignore the normalize_data_for_build() function.
+    virtual bool normalization_required() const
+    {
+        return false;
+    }
+    
+    //Check the normalization_required() function before calling this. 
+    //Clients can call the function like this: 
+    // 
+    // if (metric->normalization_required()){
+    //    T* normalized_data_batch; 
+    //    if ( metric->new_dimension() == orig_dim ) {
+    //        normalized_data_batch = nullptr;
+    //        modify_data = true; 
+    //     } else {
+    //        normalized_data_batch = new T[batch_size * metric->new_dimension()];
+    //        modify_data = false;
+    //     }
+    //     Split data into batches of batch_size and for each, call:
+    //      metric->normalize_data_for_build(data_batch, batch_size, orig_dim
+    //                                        normalized_data_batch, modify_data);
+    //The default implementation is correct but very inefficient!
+    virtual void normalize_data_for_build(const T *original_data, 
+                                          const uint32_t num_points, const uint32_t orig_dim,
+                                          T *normalized_data, bool modify_data = true)
+    {
+    }
+
+    //Invokes normalization for a single vector during search. The scratch space
+    //has to be created by the caller keeping track of the fact that normalization
+    //might change the dimension of the query vector. 
+    virtual void normalize_vector_for_search(const T *query_vec, const uint32_t query_dim, 
+                                             T* scratch_query) 
+    {
+        memcpy(scratch_query, query_vec, query_dim * sizeof(T));
+    }
+
+    //Providing a default implementation for the virtual destructor because we don't 
+    //expect most metric implementations to need it. 
+    virtual ~Distance() 
     {
     }
 };
@@ -137,6 +188,16 @@ class AVXNormalizedCosineDistanceFloat : public Distance<float>
         // This will ensure that cosine is between -1 and 1.
         return 1.0f + _innerProduct.compare(a, b, length);
     }
+    DISKANN_DLLEXPORT virtual uint32_t new_dimension(uint32_t orig_dimension);
+
+    DISKANN_DLLEXPORT virtual bool normalization_required() const;
+
+    DISKANN_DLLEXPORT virtual void normalize_data_for_build(const float *original_data, const uint32_t num_points,
+                                                            const uint32_t orig_dim, float *normalized_data,
+                                                            bool modify_orig);
+
+    DISKANN_DLLEXPORT virtual void normalize_vector_for_search(const float *query_vec, const uint32_t query_dim,
+                                                               float* scratch_query_vector);
 };
 
 template <typename T> Distance<T> *get_distance_function(Metric m);
