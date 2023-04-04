@@ -138,7 +138,6 @@ int main(int argc, char **argv)
                          std::string(std::to_string(append_reorder_data)) + " " +
                          std::string(std::to_string(build_PQ)) + " " + std::string(std::to_string(QD));
 
-
     diskann::IndexConfig config;
     config.build_type = diskann::DISK;
     config.data_type = data_type;
@@ -146,7 +145,7 @@ int main(int argc, char **argv)
     config.use_opq = use_opq;
     config.filtered_build = use_filters;
     config.metric = metric;
-    
+
     diskann::Parameters build_parameters;
     build_parameters.Set<std::string>("label_file", label_file);
     build_parameters.Set<std::string>("universal_label", universal_label);
@@ -156,11 +155,8 @@ int main(int argc, char **argv)
 
     diskann::IndexFactory factory = diskann::IndexFactory(config);
     auto index = factory.instance();
-    index->build(data_path,build_parameters,index_path_prefix);
+    index->build(data_path, build_parameters, index_path_prefix);
     return 0;
-
-
-
 
     try
     {
