@@ -26,13 +26,36 @@ template <typename data_t> InMemDataStore<data_t>::~InMemDataStore()
     }
 }
 
-template <typename data_t> void InMemDataStore<data_t>::load(const std::string &filename)
+template <typename data_t> location_t InMemDataStore<data_t>::load(const std::string &filename)
 {
     load_data(filename);
 }
 
 template <typename data_t> void InMemDataStore<data_t>::store(const std::string &filename)
 {
+}
+
+template <typename data_t> void InMemDataStore<data_t>::populate_data(const data_t *vectors, const location_t num_pts)
+{
+    for (auto i = 0; i < num_pts; i++)
+    {
+        memset(_data + i * _aligned_dim, 0, _aligned_dim * sizeof(data_t));
+        std::memmove(_data + i * _aligned_dim, vectors + i * _dim, _dim * sizeof(data_t));
+    }
+
+    if (_distance_metric->normalization_required())
+    {
+        _distance_metric->normalize(_data, num_pts);
+    }
+}
+
+template<typename data_t> void InMemDataStore<data_t>::populate_data(const std::string &filename, const size_t offset)
+{
+    copy_aligned_data_from_file(filename.c_str(), _data, _num_points, _dim, _aligned_dim, offset);
+    if (_distance_metric->normalization_required())
+    {
+        _distance_metric->normalize(_data, _num_points);
+    }
 }
 
 #ifdef EXEC_ENV_OLS
@@ -101,15 +124,37 @@ location_t InMemDataStore<data_t>::load_data(const std::string &filename)
     return file_num_points;
 }
 
-template <typename data_t> data_t *InMemDataStore<data_t>::get_vector(location_t i)
+template <typename data_t> 
+void InMemDataStore<data_t>::get_vector(const location_t i, data_t* dest) const 
 {
-    return _data + i * _aligned_dim;
+    memcpy(dest, _data + i * _aligned_dim, this->_dim * sizeof(data_t));
 }
 
 template <typename data_t>
 void InMemDataStore<data_t>::set_vector(const location_t loc, const data_t *const vector)
 {
-    memcpy(_data + loc * _aligned_dim, vector, this->_dim * sizeof(data_t));
+    size_t offset_in_data = loc * _aligned_dim;
+    memset(_data + offset_in_data, 0, _aligned_dim * sizeof(data_t));
+    memcpy(_data + offset_in_data, vector, this->_dim * sizeof(data_t));
+    if (_distance_metric->normalization_required())
+    {
+        _distance_metric->normalize(_data + offset_in_data, _aligned_dim);
+    }
+}
+
+template<typename data_t>
+void InMemDataStore<data_t>::get_distance(const data_t *query, const location_t *locations, const uint32_t location_count, float *distances) const
+{
+    for (auto i = 0; i < location_count; i++)
+    {
+        distances[i] = _distance_metric->compare(query, _data + locations[i] * _aligned_dim, this->_aligned_dim);
+    }
+}
+
+template <typename data_t> 
+float InMemDataStore<data_t>::get_distance(const location_t loc1, const location_t loc2) const
+{
+    return _distance_metric->compare(_data + loc1 * _aligned_dim, _data + loc2 * _aligned_dim, this->_aligned_dim);
 }
 
 } // namespace diskann
