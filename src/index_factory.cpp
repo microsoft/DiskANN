@@ -17,15 +17,17 @@ template <typename T> void IndexFactory<T>::parse_config(const std::string &conf
 }
 template <typename T> std::shared_ptr<AbstractIndex<T>> IndexFactory<T>::instance()
 {
-    switch (_config.index_type)
+    switch (_config.load_store_stratagy)
     {
     case MEMORY:
         return std::make_shared<MemoryIndex<T>>(_config);
     case DISK:
-        // return new DiskIndex(_config);
+        //return std::make_shared<MemoryIndex<T>> (_config);
+        break;
+    case SSD:
         break;
     default:
-        // throw diskann::ANNException("Index Type not supported");
+        // throw diskann::ANNException("Load Store Stratagy not supported");
         break;
     }
     return nullptr;

@@ -10,24 +10,22 @@ namespace diskann
 {
 template <typename T, typename TagT, typename LabelT> class MemoryIndex;
 template <typename T, typename TagT, typename LabelT> class DiskIndex;
-enum IndexType
+enum LoadStoreStratagy
 {
     MEMORY,
-    DISK
+    DISK,
+    SSD
 };
 
 struct IndexConfig
 {
-    IndexType index_type;
-    std::string data_file;
+    LoadStoreStratagy load_store_stratagy;
     Metric metric;
     Parameters buildParams;
-    size_t dimension;
-    bool filtered;
+    bool filtered_build;
     std::string label_file;
     std::string universal_label;
     bool enable_tags = false;
-    size_t max_points = 1;
     bool dynamic_index = false;
     bool pq_dist_build = false;
     size_t num_pq_chunks = 0;
@@ -37,6 +35,7 @@ struct IndexConfig
     bool load_on_build = false;
 };
 
+/* Abstract class to expose all functions of Index via a neat api.*/
 template <typename T> class AbstractIndex
 {
   public:
@@ -46,13 +45,14 @@ template <typename T> class AbstractIndex
     virtual ~AbstractIndex()
     {
     }
-    virtual void build(const std::string &save_path, Parameters &build_params) = 0;
+    virtual void build(const std::string &data_file, Parameters &build_params, const std::string &save_path) = 0;
     virtual void search(const std::string &query_file, Parameters &search_params,
-                        std::vector<std::string> &query_filters) = 0;
+                        const std::vector<std::string> &query_filters) = 0;
     virtual int search_prebuilt_index(const std::string &index_file, const std::string &query_file,
-                                       Parameters &search_params, std::vector<std::string> &query_filters) = 0;
+                                      Parameters &search_params, std::vector<std::string> &query_filters) = 0;
 };
 
+/*Index Factory to create an instance of index with provided IndexConfig*/
 template <typename T> class IndexFactory
 {
   public:
@@ -73,22 +73,23 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 {
   public:
     DISKANN_DLLEXPORT MemoryIndex(IndexConfig &config);
-    DISKANN_DLLEXPORT void build(const std::string &save_path, Parameters &build_params);
+    DISKANN_DLLEXPORT void build(const std::string &data_file, Parameters &build_params, const std::string &save_path);
     DISKANN_DLLEXPORT void search(const std::string &query_file, Parameters &search_params,
-                                  std::vector<std::string> &query_filters = {});
+                                  const std::vector<std::string> &query_filters = {});
     DISKANN_DLLEXPORT int search_prebuilt_index(const std::string &index_file, const std::string &query_file,
-                                                 Parameters &search_params,
-                                                 std::vector<std::string> &query_filters = {});
+                                                Parameters &search_params,
+                                                std::vector<std::string> &query_filters = {});
 
   private:
     std::unique_ptr<Index<T, TagT, LabelT>> _index;
     IndexConfig &_config;
 
-    void build_filtered_index(Parameters &build_params, const std::string &save_path);
-    void build_unfiltered_index(Parameters &build_params);
-    void search_filtered_index(const std::string &query_file, Parameters &search_params,
-                               std::vector<std::string> query_filters);
-    void search_unfiltered_index(const std::string &query_file, Parameters &search_params);
+    const std::string &_data_path = "";
+
+    void initialize_index(size_t dimension, size_t max_points, size_t frozen_points=0);
+
+    void build_filtered_index(const std::string &data_file,Parameters &build_params, const std::string &save_path);
+    void build_unfiltered_index(const std::string &data_file,Parameters &build_params);
 };
 
 } // namespace diskann

@@ -8,43 +8,75 @@ namespace diskann
 template <typename T, typename TagT, typename LabelT>
 MemoryIndex<T, TagT, LabelT>::MemoryIndex(IndexConfig &config) : _config(config)
 {
-    _index = std::make_unique<Index<T, TagT>>(config.metric, config.dimension, config.max_points, config.dynamic_index,
-                                              config.enable_tags, config.concurrent_consolidate, config.pq_dist_build,
-                                              config.num_pq_chunks, config.use_opq);
+}
+
+/*Initialize Index class with provided Dimenrion and max points*/
+template <typename T, typename TagT, typename LabelT>
+void MemoryIndex<T, TagT, LabelT>::initialize_index(size_t dimension, size_t max_points, size_t frozen_points)
+{
+
+    _index = std::make_unique<Index<T, TagT>>(
+        _config.metric, dimension, max_points, _config.dynamic_index, _config.enable_tags,
+        _config.concurrent_consolidate, _config.pq_dist_build, _config.num_pq_chunks, _config.use_opq, frozen_points);
 }
 
 template <typename T, typename TagT, typename LabelT>
-void MemoryIndex<T, TagT, LabelT>::build(const std::string &save_path, Parameters &build_params)
+void MemoryIndex<T, TagT, LabelT>::build(const std::string &data_file, Parameters &build_params,
+                                         const std::string &save_path)
 {
+    // Initialize index
     size_t data_num, data_dim;
-    diskann::get_bin_metadata(_config.data_file, data_num, data_dim);
-    if (_config.dimension != data_dim || _config.max_points != data_num)
+    diskann::get_bin_metadata(data_file, data_num, data_dim);
+    if (data_dim == 0 || data_num == 0)
     {
         throw ANNException("ERROR: Data Dimenrion mismatch", -1, __FUNCSIG__, __FILE__, __LINE__);
     }
+    initialize_index(data_dim, data_num);
+
+    // Build index
     auto s = std::chrono::high_resolution_clock::now();
-    if (_config.filtered && _config.label_file != "")
+    if (_config.filtered_build && _config.label_file != "")
     {
-        build_filtered_index(build_params, save_path);
+        build_filtered_index(data_file, build_params, save_path);
     }
     else
     {
-        build_unfiltered_index(build_params);
+        build_unfiltered_index(data_file, build_params);
     }
     std::chrono::duration<double> diff = std::chrono::high_resolution_clock::now() - s;
     std::cout << "Indexing time: " << diff.count() << "\n";
-
+    // Save index
     _index->save(save_path.c_str());
 
     if (_config.load_on_build)
     {
+        _data_path = save_path;
     }
 }
 
 template <typename T, typename TagT, typename LabelT>
 void MemoryIndex<T, TagT, LabelT>::search(const std::string &query_file, Parameters &search_params,
-                                          std::vector<std::string> &query_filters)
+                                          const std::vector<std::string> &query_filters)
 {
+    if (_data_path == "")
+    {
+        std::cout << "Error. load on build was not set, try using search_prebuilt_index() with index path. " << std::endl;
+        return -1; // To return -1 or some other error handling?
+    }
+    std::string truthset_file;
+    uint32_t recall_at, num_threads;
+    bool show_qps_per_thread, print_all_recalls, fail_if_recall_below;
+    std::vector<uint32_t> Lvec;
+    truthset_file = search_params.Get<std::string>("gt_file");
+    recall_at = search_params.Get<uint32_t>("K");
+    num_threads = search_params.Get<uint32_t>("num_threads");
+    show_qps_per_thread = search_params.Get<bool>("show_qps_per_thread");
+    fail_if_recall_below = search_params.Get<bool>("fail_if_recall_below");
+    Lvec = search_params.Get<std::vector<uint32_t>>("Lvec");
+
+    _index->load(_data_path.c_str(), num_threads, *(std::max_element(Lvec.begin(), Lvec.end())));
+
+
 }
 
 template <typename T, typename TagT, typename LabelT>
@@ -52,13 +84,7 @@ int MemoryIndex<T, TagT, LabelT>::search_prebuilt_index(const std::string &index
                                                         Parameters &search_params,
                                                         std::vector<std::string> &query_filters)
 {
-    // Load the query file
-    T *query = nullptr;
-    uint32_t *gt_ids = nullptr;
-    float *gt_dists = nullptr;
-    size_t query_num, query_dim, query_aligned_dim, gt_num, gt_dim;
-    diskann::load_aligned_bin<T>(query_file, query, query_num, query_dim, query_aligned_dim);
-
+    // Load Params
     std::string truthset_file;
     uint32_t recall_at, num_threads;
     bool show_qps_per_thread, print_all_recalls, fail_if_recall_below;
@@ -71,6 +97,15 @@ int MemoryIndex<T, TagT, LabelT>::search_prebuilt_index(const std::string &index
     Lvec = search_params.Get<std::vector<uint32_t>>("Lvec");
     print_all_recalls = search_params.Get<bool>("print_all_recalls");
 
+    // Load the query file
+    T *query = nullptr;
+    size_t query_num, query_dim, query_aligned_dim;
+    diskann::load_aligned_bin<T>(query_file, query, query_num, query_dim, query_aligned_dim);
+
+    // Load Truthset
+    uint32_t *gt_ids = nullptr;
+    float *gt_dists = nullptr;
+    size_t gt_num, gt_dim;
     // Check for ground truth
     bool calc_recall_flag = false;
     if (truthset_file != std::string("null") && file_exists(truthset_file))
@@ -87,6 +122,7 @@ int MemoryIndex<T, TagT, LabelT>::search_prebuilt_index(const std::string &index
         diskann::cout << " Truthset file " << truthset_file << " not found. Not computing recall." << std::endl;
     }
 
+    // is this a filtered search
     bool filtered_search = false;
     if (!query_filters.empty())
     {
@@ -98,20 +134,19 @@ int MemoryIndex<T, TagT, LabelT>::search_prebuilt_index(const std::string &index
         }
     }
 
-    using IndexType = diskann::Index<T, TagT, LabelT>;
-    const size_t num_frozen_pts = IndexType::get_graph_num_frozen_points(index_file);
+    // init index class
+    const size_t num_frozen_pts = diskann::Index<T, TagT, LabelT>::get_graph_num_frozen_points(index_file);
     _index.release();
-    _index = std::make_unique<Index<T, TagT>>(_config.metric, query_dim, 0, _config.dynamic_index, _config.enable_tags,
-                                              _config.concurrent_consolidate, _config.pq_dist_build,
-                                              _config.num_pq_chunks, _config.use_opq, num_frozen_pts);
+    initialize_index(query_dim, 0, num_frozen_pts);
 
+    // load index
     _index->load(index_file.c_str(), num_threads, *(std::max_element(Lvec.begin(), Lvec.end())));
     std::cout << "Index loaded" << std::endl;
     if (_config.metric == diskann::FAST_L2)
         _index->optimize_index_layout();
 
     std::cout << "Using " << num_threads << " threads to search" << std::endl;
-    // diskann::Parameters paras;
+
     std::cout.setf(std::ios_base::fixed, std::ios_base::floatfield);
     std::cout.precision(2);
     const std::string qps_title = show_qps_per_thread ? "QPS/thread" : "QPS";
@@ -282,7 +317,8 @@ int MemoryIndex<T, TagT, LabelT>::search_prebuilt_index(const std::string &index
 }
 
 template <typename T, typename TagT, typename LabelT>
-void MemoryIndex<T, TagT, LabelT>::build_filtered_index(Parameters &build_params, const std::string &save_path)
+void MemoryIndex<T, TagT, LabelT>::build_filtered_index(const std::string &data_file, Parameters &build_params,
+                                                        const std::string &save_path)
 {
     std::string labels_file_to_use = save_path + "_label_formatted.txt";
     std::string mem_labels_int_map_file = save_path + "_labels_map.txt";
@@ -293,7 +329,7 @@ void MemoryIndex<T, TagT, LabelT>::build_filtered_index(Parameters &build_params
         LabelT unv_label_as_num = 0;
         _index->set_universal_label(unv_label_as_num);
     }
-    _index->build_filtered_index(_config.data_file.c_str(), labels_file_to_use, _config.max_points, build_params);
+    _index->build_filtered_index(data_file.c_str(), labels_file_to_use, _index->get_max_points(), build_params);
 
     if (_config.label_file != "")
     {
@@ -302,9 +338,9 @@ void MemoryIndex<T, TagT, LabelT>::build_filtered_index(Parameters &build_params
 }
 
 template <typename T, typename TagT, typename LabelT>
-void MemoryIndex<T, TagT, LabelT>::build_unfiltered_index(Parameters &build_params)
+void MemoryIndex<T, TagT, LabelT>::build_unfiltered_index(const std::string &data_file, Parameters &build_params)
 {
-    _index->build(_config.data_file.c_str(), _config.max_points, build_params);
+    _index->build(data_file.c_str(), _index->get_max_points(), build_params);
 }
 
 template DISKANN_DLLEXPORT class MemoryIndex<float>;

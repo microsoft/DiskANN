@@ -373,15 +373,11 @@ int main(int argc, char **argv)
     try
     {
         // Using_a_prebuilt_index
-        size_t query_num, query_dim;
-        diskann::get_bin_metadata(query_file, query_num, query_dim);
         diskann::IndexConfig config;
-        config.data_file = "";
         config.metric = metric;
-        config.dimension = query_dim;
-        config.max_points = 10000;
         config.label_file = "";
-        config.index_type = diskann::MEMORY;
+        config.filtered_build = false; 
+        config.load_store_stratagy = diskann::MEMORY;
         diskann::Parameters search_params;
         search_params.Set<uint32_t>("num_threads", num_threads);
         search_params.Set<uint32_t>("K", K);
