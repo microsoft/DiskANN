@@ -59,7 +59,8 @@ void MemoryIndex<T, TagT, LabelT>::search(const std::string &query_file, Paramet
 template <typename T, typename TagT, typename LabelT>
 int MemoryIndex<T, TagT, LabelT>::search_prebuilt_index(const std::string &index_file, const std::string &query_file,
                                                         Parameters &search_params,
-                                                        std::vector<std::string> &query_filters)
+                                                        std::vector<std::string> &query_filters,
+                                                        const std::string &result_path_prefix)
 {
     // Load Params
     auto search_param_obj = parse_to_search_params(search_params);

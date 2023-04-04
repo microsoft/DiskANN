@@ -390,7 +390,7 @@ int main(int argc, char **argv)
         search_params.Set<float>("fail_if_recall_below", fail_if_recall_below);
         auto index_factory = diskann::IndexFactory(config);
         auto index = index_factory.instance();
-        index->search_prebuilt_index(index_path_prefix, query_file, search_params, query_filters);
+        index->search_prebuilt_index(index_path_prefix, query_file, search_params, query_filters, "");
         return 0;
 
         /*if (!query_filters.empty() && label_type == "ushort")

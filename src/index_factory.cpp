@@ -42,7 +42,27 @@ std::shared_ptr<AbstractIndex> IndexFactory::instance()
             throw new ANNException("Data type of : " + _config.data_type + " is not supported.", -1, __FUNCSIG__,
                                    __FILE__, __LINE__);
     case DISK:
-        // return std::make_shared<MemoryIndex<T>> (_config);
+        if (_config.label_type == "ushort")
+        {
+            if (_config.data_type == "float")
+                return std::make_shared<DiskIndex<float, uint32_t, uint16_t>>(_config);
+            else if (_config.data_type == "uint8")
+                return std::make_shared<DiskIndex<uint8_t, uint32_t, uint16_t>>(_config);
+            else if (_config.data_type == "int8")
+                return std::make_shared<DiskIndex<int8_t, uint32_t, uint16_t>>(_config);
+            else
+                throw new ANNException("Data type of : " + _config.data_type + " is not supported.", -1, __FUNCSIG__,
+                                       __FILE__, __LINE__);
+        }
+        if (_config.data_type == "float")
+            return std::make_shared<DiskIndex<float>>(_config);
+        else if (_config.data_type == "uint8")
+            return std::make_shared<DiskIndex<uint8_t>>(_config);
+        else if (_config.data_type == "int8")
+            return std::make_shared<DiskIndex<int8_t>>(_config);
+        else
+            throw new ANNException("Data type of : " + _config.data_type + " is not supported.", -1, __FUNCSIG__,
+                                   __FILE__, __LINE__);
         break;
     case SSD:
         break;
