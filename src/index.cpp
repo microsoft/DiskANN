@@ -810,8 +810,12 @@ template <typename T, typename TagT, typename LabelT> int Index<T, TagT, LabelT>
         return -1;
     }
 
-    size_t location = _tag_to_location[tag];
-    memcpy((void *)vec, (void *)(_data + location * _aligned_dim), (size_t)_dim * sizeof(T));
+    location_t location = _tag_to_location[tag];
+    _data_store->get_vector(location, vec);
+
+    //REFACTOR
+    //size_t location = _tag_to_location[tag];
+    //memcpy((void *)vec, (void *)(_data + location * _aligned_dim), (size_t)_dim * sizeof(T));
     return 0;
 }
 
@@ -824,49 +828,54 @@ template <typename T, typename TagT, typename LabelT> uint32_t Index<T, TagT, La
         return (uint32_t)(r % (size_t)_nd);
     }
 
-    // allocate and init centroid
-    float *center = new float[_aligned_dim]();
-    for (size_t j = 0; j < _aligned_dim; j++)
-        center[j] = 0;
-
-    for (size_t i = 0; i < _nd; i++)
-        for (size_t j = 0; j < _aligned_dim; j++)
-            center[j] += (float)_data[i * _aligned_dim + j];
-
-    for (size_t j = 0; j < _aligned_dim; j++)
-        center[j] /= (float)_nd;
-
-    // compute all to one distance
-    float *distances = new float[_nd]();
-#pragma omp parallel for schedule(static, 65536)
-    for (int64_t i = 0; i < (int64_t)_nd; i++)
-    {
-        // extract point and distance reference
-        float &dist = distances[i];
-        const T *cur_vec = _data + (i * (size_t)_aligned_dim);
-        dist = 0;
-        float diff = 0;
-        for (size_t j = 0; j < _aligned_dim; j++)
-        {
-            diff = (center[j] - (float)cur_vec[j]) * (center[j] - (float)cur_vec[j]);
-            dist += diff;
-        }
-    }
-    // find imin
-    uint32_t min_idx = 0;
-    float min_dist = distances[0];
-    for (uint32_t i = 1; i < _nd; i++)
-    {
-        if (distances[i] < min_dist)
-        {
-            min_idx = i;
-            min_dist = distances[i];
-        }
-    }
-
-    delete[] distances;
-    delete[] center;
-    return min_idx;
+    //TODO: This function does not support multi-threaded calculation of medoid. 
+    //Must revisit if perf is a concern.
+    return _data_store->calculate_medoid();
+    
+//    //REFACTOR
+//    // allocate and init centroid
+//    float *center = new float[_aligned_dim]();
+//    for (size_t j = 0; j < _aligned_dim; j++)
+//        center[j] = 0;
+//
+//    for (size_t i = 0; i < _nd; i++)
+//        for (size_t j = 0; j < _aligned_dim; j++)
+//            center[j] += (float)_data[i * _aligned_dim + j];
+//
+//    for (size_t j = 0; j < _aligned_dim; j++)
+//        center[j] /= (float)_nd;
+//
+//    // compute all to one distance
+//    float *distances = new float[_nd]();
+//#pragma omp parallel for schedule(static, 65536)
+//    for (int64_t i = 0; i < (int64_t)_nd; i++)
+//    {
+//        // extract point and distance reference
+//        float &dist = distances[i];
+//        const T *cur_vec = _data + (i * (size_t)_aligned_dim);
+//        dist = 0;
+//        float diff = 0;
+//        for (size_t j = 0; j < _aligned_dim; j++)
+//        {
+//            diff = (center[j] - (float)cur_vec[j]) * (center[j] - (float)cur_vec[j]);
+//            dist += diff;
+//        }
+//    }
+//    // find imin
+//    uint32_t min_idx = 0;
+//    float min_dist = distances[0];
+//    for (uint32_t i = 1; i < _nd; i++)
+//    {
+//        if (distances[i] < min_dist)
+//        {
+//            min_idx = i;
+//            min_dist = distances[i];
+//        }
+//    }
+//
+//    delete[] distances;
+//    delete[] center;
+//    return min_idx;
 }
 
 template <typename T, typename TagT, typename LabelT> std::vector<uint32_t> Index<T, TagT, LabelT>::get_init_ids()
@@ -1007,9 +1016,16 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
 
             float distance;
             if (_pq_dist)
+            {
                 pq_dist_lookup(pq_coord_scratch, 1, this->_num_pq_chunks, pq_dists, &distance);
+            }
             else
-                distance = _distance->compare(_data + _aligned_dim * (size_t)id, aligned_query, (uint32_t)_aligned_dim);
+            {
+                _data_store->get_distance(aligned_query, id);
+                // REFACTOR
+                // distance = _distance->compare(_data + _aligned_dim * (size_t)id, aligned_query,
+                // (uint32_t)_aligned_dim);
+            }
             Neighbor nn = Neighbor(id, distance);
             best_L_nodes.insert(nn);
         }
@@ -1540,7 +1556,7 @@ void Index<T, TagT, LabelT>::prune_all_neighbors(const uint32_t max_degree, cons
                 {
                     if (dummy_visited.find(cur_nbr) == dummy_visited.end() && cur_nbr != node)
                     {
-                        float dist = _data_store->compare(node, cur_nbr);
+                        float dist = _data_store->get_distance(node, cur_nbr);
                         //REFACTOR
                         //float dist = _distance->compare(_data + _aligned_dim * (size_t)node,
                         //                                _data + _aligned_dim * (size_t)cur_nbr, (uint32_t)_aligned_dim);
@@ -1640,7 +1656,8 @@ void Index<T, TagT, LabelT>::build_with_data_populated(IndexWriteParameters &par
         stream << "ERROR: Driver requests loading " << _nd << " points from file,"
                << "but tags vector is of size " << tags.size() << "." << std::endl;
         diskann::cerr << stream.str() << std::endl;
-        aligned_free(_data);
+        //REFACTOR
+        //aligned_free(_data);
         throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
     }
     if (_enable_tags)
@@ -1659,7 +1676,10 @@ void Index<T, TagT, LabelT>::build_with_data_populated(IndexWriteParameters &par
 
     if (_query_scratch.size() == 0)
     {
-        initialize_query_scratch(5 + num_threads_index, index_L, index_L, index_R, maxc, _aligned_dim);
+        //REFACTOR
+        //initialize_query_scratch(5 + num_threads_index, index_L, index_L, index_R, maxc, _aligned_dim);
+        //Comment: Why 5+?
+        initialize_query_scratch(5 + num_threads_index, index_L, index_L, index_R, maxc, _data_store->get_aligned_dim());
     }
 
     generate_frozen_point();
@@ -2276,7 +2296,9 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
     }
     else
     {
-        memcpy(_data + _max_points * _aligned_dim, _data + res * _aligned_dim, _aligned_dim * sizeof(T));
+        _data_store->copy_points(res, _max_points, 1);
+        //REFACTOR
+        //memcpy(_data + _max_points * _aligned_dim, _data + res * _aligned_dim, _aligned_dim * sizeof(T));
     }
 }
 
@@ -2726,12 +2748,8 @@ void Index<T, TagT, LabelT>::reposition_points(uint32_t old_location_start, uint
             mem_clear_loc_end_limit = new_location_start;
         }
     }
+    _data_store->reposition_points(old_location_start, new_location_start, num_locations);
 
-    // Use memmove to handle overlapping ranges.
-    memmove(_data + _aligned_dim * new_location_start, _data + _aligned_dim * old_location_start,
-            sizeof(T) * _aligned_dim * num_locations);
-    memset(_data + _aligned_dim * mem_clear_loc_start, 0,
-           sizeof(T) * _aligned_dim * (mem_clear_loc_end_limit - mem_clear_loc_start));
 }
 
 template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT>::reposition_frozen_point_to_end()
@@ -2744,6 +2762,7 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
         diskann::cout << "Not repositioning frozen point as it is already at the end." << std::endl;
         return;
     }
+
 
     reposition_points((uint32_t)_nd, (uint32_t)_max_points, (uint32_t)_num_frozen_pts);
     _start = (uint32_t)_max_points;

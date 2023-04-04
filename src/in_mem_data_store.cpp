@@ -114,7 +114,7 @@ location_t InMemDataStore<data_t>::load_data(const std::string &filename)
         throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
     }
 
-    if (file_num_points > this->get_max_points())
+    if (file_num_points > this->capacity())
     {
         resize(file_num_points);
     }
@@ -142,6 +142,11 @@ void InMemDataStore<data_t>::set_vector(const location_t loc, const data_t *cons
     }
 }
 
+template<typename data_t> float InMemDataStore<data_t>::get_distance(const data_t *query, const location_t loc) const
+{
+    return _distance_metric->compare(query, _data + _aligned_dim * loc, _aligned_dim);
+}
+
 template<typename data_t>
 void InMemDataStore<data_t>::get_distance(const data_t *query, const location_t *locations, const uint32_t location_count, float *distances) const
 {
@@ -155,6 +160,114 @@ template <typename data_t>
 float InMemDataStore<data_t>::get_distance(const location_t loc1, const location_t loc2) const
 {
     return _distance_metric->compare(_data + loc1 * _aligned_dim, _data + loc2 * _aligned_dim, this->_aligned_dim);
+}
+
+template<typename data_t>
+void InMemDataStore<data_t>::reposition_points(const location_t old_location_start, const location_t new_location_start, const location_t num_locations)
+{
+    if (num_locations == 0 || old_location_start == new_location_start)
+    {
+        return;
+    }
+
+    // Update pointers to the moved nodes. Note: the computation is correct even
+    // when new_location_start < old_location_start given the C++ uint32_t
+    // integer arithmetic rules.
+    const uint32_t location_delta = new_location_start - old_location_start;
+
+    // The [start, end) interval which will contain obsolete points to be
+    // cleared.
+    uint32_t mem_clear_loc_start = old_location_start;
+    uint32_t mem_clear_loc_end_limit = old_location_start + num_locations;
+
+    // Move the adjacency lists. Make sure that overlapping ranges are handled
+    // correctly.
+    if (new_location_start < old_location_start)
+    {
+        // If ranges are overlapping, make sure not to clear the newly copied
+        // data.
+        if (mem_clear_loc_start < new_location_start + num_locations)
+        {
+            // Clear only after the end of the new range.
+            mem_clear_loc_start = new_location_start + num_locations;
+        }
+    }
+    else
+    {
+        // If ranges are overlapping, make sure not to clear the newly copied
+        // data.
+        if (mem_clear_loc_end_limit > new_location_start)
+        {
+            // Clear only up to the beginning of the new range.
+            mem_clear_loc_end_limit = new_location_start;
+        }
+    }
+
+    // Use memmove to handle overlapping ranges.
+    copy_points(old_location_start, new_location_start, num_locations);
+    memset(_data + _aligned_dim * mem_clear_loc_start, 0,
+           sizeof(data_t) * _aligned_dim * (mem_clear_loc_end_limit - mem_clear_loc_start));
+}
+
+template<typename data_t>
+void InMemDataStore<data_t>::copy_points(const location_t from_loc, const location_t to_loc,
+                                         const location_t num_points)
+{
+    assert(from_loc < _capacity);
+    assert(to_loc < _capacity);
+    assert(num_points < _capacity);
+    memmove(_data + _aligned_dim * to_loc, _data + _aligned_dim * from_loc, num_points * _aligned_dim * sizeof(data_t));
+}
+
+template <typename data_t> location_t InMemDataStore<data_t>::calculate_medoid() const
+{
+    // allocate and init centroid
+    float *center = new float[_aligned_dim];
+    for (size_t j = 0; j < _aligned_dim; j++)
+        center[j] = 0;
+
+    for (size_t i = 0; i < _num_points; i++)
+        for (size_t j = 0; j < _aligned_dim; j++)
+            center[j] += (float)_data[i * _aligned_dim + j];
+
+    for (size_t j = 0; j < _aligned_dim; j++)
+        center[j] /= (float)_num_points;
+
+    // compute all to one distance
+    float *distances = new float[_num_points];
+
+//TODO: REFACTOR. Removing pragma might make this slow. Must revisit. 
+// Problem is that we need to pass num_threads here, it is not clear
+// if data store must be aware of threads!
+//#pragma omp parallel for schedule(static, 65536) 
+    for (int64_t i = 0; i < (int64_t)_num_points; i++)
+    {
+        // extract point and distance reference
+        float &dist = distances[i];
+        const data_t *cur_vec = _data + (i * (size_t)_aligned_dim);
+        dist = 0;
+        float diff = 0;
+        for (size_t j = 0; j < _aligned_dim; j++)
+        {
+            diff = (center[j] - (float)cur_vec[j]) * (center[j] - (float)cur_vec[j]);
+            dist += diff;
+        }
+    }
+    // find imin
+    uint32_t min_idx = 0;
+    float min_dist = distances[0];
+    for (uint32_t i = 1; i < _num_points; i++)
+    {
+        if (distances[i] < min_dist)
+        {
+            min_idx = i;
+            min_dist = distances[i];
+        }
+    }
+
+    delete[] distances;
+    delete[] center;
+    return min_idx;
 }
 
 } // namespace diskann
