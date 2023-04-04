@@ -714,8 +714,9 @@ int generate_opq_pivots(const float *passed_train_data, size_t num_train, uint32
 // If the numbber of centers is < 256, it stores as byte vector, else as
 // 4-byte vector in binary format.
 template <typename T>
-int generate_pq_data_from_pivots(const std::string data_file, uint32_t num_centers, uint32_t num_pq_chunks,
-                                 std::string pq_pivots_path, std::string pq_compressed_vectors_path, bool use_opq)
+int generate_pq_data_from_pivots(const std::string &data_file, uint32_t num_centers, uint32_t num_pq_chunks,
+                                 const std::string &pq_pivots_path, const std::string &pq_compressed_vectors_path,
+                                 bool use_opq)
 {
     size_t read_blk_size = 64 * 1024 * 1024;
     cached_ifstream base_reader(data_file, read_blk_size);
@@ -931,8 +932,8 @@ int generate_pq_data_from_pivots(const std::string data_file, uint32_t num_cente
 }
 
 template <typename T>
-void generate_disk_quantized_data(const std::string data_file_to_use, const std::string disk_pq_pivots_path,
-                                  const std::string disk_pq_compressed_vectors_path, diskann::Metric compareMetric,
+void generate_disk_quantized_data(const std::string &data_file_to_use, const std::string &disk_pq_pivots_path,
+                                  const std::string &disk_pq_compressed_vectors_path, diskann::Metric compareMetric,
                                   const double p_val, size_t &disk_pq_dims)
 {
     size_t train_size, train_dim;
@@ -949,20 +950,20 @@ void generate_disk_quantized_data(const std::string data_file_to_use, const std:
     generate_pq_pivots(train_data, train_size, (uint32_t)train_dim, 256, (uint32_t)disk_pq_dims, NUM_KMEANS_REPS_PQ,
                        disk_pq_pivots_path, false);
     if (compareMetric == diskann::Metric::INNER_PRODUCT)
-        generate_pq_data_from_pivots<float>(data_file_to_use.c_str(), 256, (uint32_t)disk_pq_dims, disk_pq_pivots_path,
+        generate_pq_data_from_pivots<float>(data_file_to_use, 256, (uint32_t)disk_pq_dims, disk_pq_pivots_path,
                                             disk_pq_compressed_vectors_path);
     else
-        generate_pq_data_from_pivots<T>(data_file_to_use.c_str(), 256, (uint32_t)disk_pq_dims, disk_pq_pivots_path,
+        generate_pq_data_from_pivots<T>(data_file_to_use, 256, (uint32_t)disk_pq_dims, disk_pq_pivots_path,
                                         disk_pq_compressed_vectors_path);
 
     delete[] train_data;
 }
 
 template <typename T>
-void generate_quantized_data(const std::string data_file_to_use, const std::string pq_pivots_path,
-                             const std::string pq_compressed_vectors_path, diskann::Metric compareMetric,
+void generate_quantized_data(const std::string &data_file_to_use, const std::string &pq_pivots_path,
+                             const std::string &pq_compressed_vectors_path, diskann::Metric compareMetric,
                              const double p_val, const size_t num_pq_chunks, const bool use_opq,
-                             const std::string codebook_prefix)
+                             const std::string &codebook_prefix)
 {
     size_t train_size, train_dim;
     float *train_data;
@@ -994,61 +995,63 @@ void generate_quantized_data(const std::string data_file_to_use, const std::stri
     {
         diskann::cout << "Skip Training with predefined pivots in: " << pq_pivots_path << std::endl;
     }
-    generate_pq_data_from_pivots<T>(data_file_to_use.c_str(), NUM_PQ_CENTROIDS, (uint32_t)num_pq_chunks, pq_pivots_path,
+    generate_pq_data_from_pivots<T>(data_file_to_use, NUM_PQ_CENTROIDS, (uint32_t)num_pq_chunks, pq_pivots_path,
                                     pq_compressed_vectors_path, use_opq);
 }
 
 // Instantations of supported templates
 
-template DISKANN_DLLEXPORT int generate_pq_data_from_pivots<int8_t>(const std::string data_file, uint32_t num_centers,
-                                                                    uint32_t num_pq_chunks, std::string pq_pivots_path,
-                                                                    std::string pq_compressed_vectors_path,
+template DISKANN_DLLEXPORT int generate_pq_data_from_pivots<int8_t>(const std::string &data_file, uint32_t num_centers,
+                                                                    uint32_t num_pq_chunks,
+                                                                    const std::string &pq_pivots_path,
+                                                                    const std::string &pq_compressed_vectors_path,
                                                                     bool use_opq);
-template DISKANN_DLLEXPORT int generate_pq_data_from_pivots<uint8_t>(const std::string data_file, uint32_t num_centers,
-                                                                     uint32_t num_pq_chunks, std::string pq_pivots_path,
-                                                                     std::string pq_compressed_vectors_path,
+template DISKANN_DLLEXPORT int generate_pq_data_from_pivots<uint8_t>(const std::string &data_file, uint32_t num_centers,
+                                                                     uint32_t num_pq_chunks,
+                                                                     const std::string &pq_pivots_path,
+                                                                     const std::string &pq_compressed_vectors_path,
                                                                      bool use_opq);
-template DISKANN_DLLEXPORT int generate_pq_data_from_pivots<float>(const std::string data_file, uint32_t num_centers,
-                                                                   uint32_t num_pq_chunks, std::string pq_pivots_path,
-                                                                   std::string pq_compressed_vectors_path,
+template DISKANN_DLLEXPORT int generate_pq_data_from_pivots<float>(const std::string &data_file, uint32_t num_centers,
+                                                                   uint32_t num_pq_chunks,
+                                                                   const std::string &pq_pivots_path,
+                                                                   const std::string &pq_compressed_vectors_path,
                                                                    bool use_opq);
 
-template DISKANN_DLLEXPORT void generate_disk_quantized_data<int8_t>(const std::string data_file_to_use,
-                                                                     const std::string disk_pq_pivots_path,
-                                                                     const std::string disk_pq_compressed_vectors_path,
+template DISKANN_DLLEXPORT void generate_disk_quantized_data<int8_t>(const std::string &data_file_to_use,
+                                                                     const std::string &disk_pq_pivots_path,
+                                                                     const std::string &disk_pq_compressed_vectors_path,
                                                                      diskann::Metric compareMetric, const double p_val,
                                                                      size_t &disk_pq_dims);
 
-template DISKANN_DLLEXPORT void generate_disk_quantized_data<uint8_t>(const std::string data_file_to_use,
-                                                                      const std::string disk_pq_pivots_path,
-                                                                      const std::string disk_pq_compressed_vectors_path,
-                                                                      diskann::Metric compareMetric, const double p_val,
-                                                                      size_t &disk_pq_dims);
+template DISKANN_DLLEXPORT void generate_disk_quantized_data<uint8_t>(
+    const std::string &data_file_to_use, const std::string &disk_pq_pivots_path,
+    const std::string &disk_pq_compressed_vectors_path, diskann::Metric compareMetric, const double p_val,
+    size_t &disk_pq_dims);
 
-template DISKANN_DLLEXPORT void generate_disk_quantized_data<float>(const std::string data_file_to_use,
-                                                                    const std::string disk_pq_pivots_path,
-                                                                    const std::string disk_pq_compressed_vectors_path,
+template DISKANN_DLLEXPORT void generate_disk_quantized_data<float>(const std::string &data_file_to_use,
+                                                                    const std::string &disk_pq_pivots_path,
+                                                                    const std::string &disk_pq_compressed_vectors_path,
                                                                     diskann::Metric compareMetric, const double p_val,
                                                                     size_t &disk_pq_dims);
 
-template DISKANN_DLLEXPORT void generate_quantized_data<int8_t>(const std::string data_file_to_use,
-                                                                const std::string pq_pivots_path,
-                                                                const std::string pq_compressed_vectors_path,
+template DISKANN_DLLEXPORT void generate_quantized_data<int8_t>(const std::string &data_file_to_use,
+                                                                const std::string &pq_pivots_path,
+                                                                const std::string &pq_compressed_vectors_path,
                                                                 diskann::Metric compareMetric, const double p_val,
                                                                 const size_t num_pq_chunks, const bool use_opq,
-                                                                const std::string codebook_prefix);
+                                                                const std::string &codebook_prefix);
 
-template DISKANN_DLLEXPORT void generate_quantized_data<uint8_t>(const std::string data_file_to_use,
-                                                                 const std::string pq_pivots_path,
-                                                                 const std::string pq_compressed_vectors_path,
+template DISKANN_DLLEXPORT void generate_quantized_data<uint8_t>(const std::string &data_file_to_use,
+                                                                 const std::string &pq_pivots_path,
+                                                                 const std::string &pq_compressed_vectors_path,
                                                                  diskann::Metric compareMetric, const double p_val,
                                                                  const size_t num_pq_chunks, const bool use_opq,
-                                                                 const std::string codebook_prefix);
+                                                                 const std::string &codebook_prefix);
 
-template DISKANN_DLLEXPORT void generate_quantized_data<float>(const std::string data_file_to_use,
-                                                               const std::string pq_pivots_path,
-                                                               const std::string pq_compressed_vectors_path,
+template DISKANN_DLLEXPORT void generate_quantized_data<float>(const std::string &data_file_to_use,
+                                                               const std::string &pq_pivots_path,
+                                                               const std::string &pq_compressed_vectors_path,
                                                                diskann::Metric compareMetric, const double p_val,
                                                                const size_t num_pq_chunks, const bool use_opq,
-                                                               const std::string codebook_prefix);
+                                                               const std::string &codebook_prefix);
 } // namespace diskann
