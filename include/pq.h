@@ -108,13 +108,13 @@ DISKANN_DLLEXPORT int generate_opq_pivots(const float *train_data, size_t num_tr
                                           bool make_zero_mean = false);
 
 template <typename T>
-int generate_pq_data_from_pivots(const std::string data_file, unsigned num_centers, unsigned num_pq_chunks,
-                                 std::string pq_pivots_path, std::string pq_compressed_vectors_path,
+int generate_pq_data_from_pivots(const std::string &data_file, unsigned num_centers, unsigned num_pq_chunks,
+                                 const std::string &pq_pivots_path, const std::string &pq_compressed_vectors_path,
                                  bool use_opq = false);
 
 template <typename T>
-void generate_disk_quantized_data(const std::string data_file_to_use, const std::string disk_pq_pivots_path,
-                                  const std::string disk_pq_compressed_vectors_path,
+void generate_disk_quantized_data(const std::string &data_file_to_use, const std::string &disk_pq_pivots_path,
+                                  const std::string &disk_pq_compressed_vectors_path,
                                   const diskann::Metric compareMetric, const double p_val, size_t &disk_pq_dims);
 
 template <typename T>
