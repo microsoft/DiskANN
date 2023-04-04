@@ -152,10 +152,10 @@ def build_disk_index_from_vector_file(
         raise ValueError("search_memory_maximum must be larger than 0")
     if build_memory_maximum <= 0:
         raise ValueError("build_memory_maximum must be larger than 0")
-    if num_threads <= 0:
-        raise ValueError("num_threads must be a positive integer")
+    if num_threads < 0:
+        raise ValueError("num_threads must be a nonnegative integer")
     if pq_disk_bytes < 0:
-        raise ValueError("pq_disk_bytes must be nonnegative")
+        raise ValueError("pq_disk_bytes must be nonnegative integer")
 
     index = _DTYPE_TO_NATIVE_INDEX[vector_dtype](dap_metric)
     index.build(
@@ -266,7 +266,7 @@ class DiskIndex:
         :type vector_dtype: Type[numpy.single], Type[numpy.byte], Type[numpy.ubyte]
         :param index_path: Path on disk where the disk index is stored
         :type index_path: str
-        :param num_threads: Number of threads used to load the index (> 0)
+        :param num_threads: Number of threads used to load the index (>= 0)
         :type num_threads: int
         :param num_nodes_to_cache: Number of nodes to cache in memory (> -1)
         :type num_nodes_to_cache: int
@@ -281,8 +281,8 @@ class DiskIndex:
             raise ValueError(
                 f"vector_dtype {vector_dtype} is not in list of valid dtypes supported: {_VALID_DTYPES}"
             )
-        if num_threads <= 0:
-            raise ValueError("num_threads must be a positive integer")
+        if num_threads < 0:
+            raise ValueError("num_threads must be a non-negative integer")
         if num_nodes_to_cache < 0:
             raise ValueError("num_nodes_to_cache must be a non-negative integer")
         self._vector_dtype = vector_dtype
@@ -330,8 +330,8 @@ class DiskIndex:
             raise ValueError("k_neighbors must be a positive integer")
         if list_size <= 0:
             raise ValueError("list_size must be a positive integer")
-        if beam_width < 0:
-            raise ValueError("beam_width must be a nonnegative integer")
+        if beam_width <= 0:
+            raise ValueError("beam_width must be a positive integer")
 
         if k_neighbors > list_size:
             warnings.warn(
@@ -370,7 +370,7 @@ class DiskIndex:
         :param list_size: Size of list to use while searching. List size increases accuracy at the cost of latency. Must
             be at least k_neighbors in size.
         :type list_size: int
-        :param num_threads: Number of threads to use when searching this index. (> 0)
+        :param num_threads: Number of threads to use when searching this index. (>= 0), 0 = num_threads in system
         :type num_threads: int
         :param beam_width: The beamwidth to be used for search. This is the maximum number of IO requests each query
             will issue per iteration of search code. Larger beamwidth will result in fewer IO round-trips per query,
@@ -395,8 +395,8 @@ class DiskIndex:
             raise ValueError("k_neighbors must be a positive integer")
         if list_size <= 0:
             raise ValueError("list_size must be a positive integer")
-        if num_threads <= 0:
-            raise ValueError("num_threads must be a positive integer")
+        if num_threads < 0:
+            raise ValueError("num_threads must be a nonnegative integer")
         if beam_width <= 0:
             raise ValueError("beam_width must be a positive integer")
 
