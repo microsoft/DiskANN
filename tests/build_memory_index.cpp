@@ -160,12 +160,10 @@ int main(int argc, char **argv)
         size_t data_num, data_dim;
         diskann::get_bin_metadata(data_path, data_num, data_dim);
         diskann::IndexConfig config;
-        config.data_file = data_path;
         config.metric = metric;
-        config.dimension = data_dim;
-        config.max_points = data_num;
         config.label_file = label_file;
-        config.index_type = diskann::MEMORY;
+        config.filtered_build = label_file == "" ? false : true;
+        config.load_store_stratagy = diskann::MEMORY;
         diskann::Parameters build_params;
         build_params.Set<uint32_t>("R", R);
         build_params.Set<uint32_t>("L", L);
@@ -174,9 +172,10 @@ int main(int argc, char **argv)
         build_params.Set<float>("alpha", alpha);
         build_params.Set<bool>("saturate_graph", 0);
         build_params.Set<uint32_t>("num_threads", num_threads);
+        build_params.Set<std::string>("label_type", label_type);
         auto index_factory = diskann::IndexFactory<float>(config);
         auto index = index_factory.instance();
-        index->build(index_path_prefix, build_params);
+        index->build(data_path, build_params, index_path_prefix);
         return 0;
 
         if (label_file != "" && label_type == "ushort")
