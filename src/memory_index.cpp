@@ -15,7 +15,7 @@ template <typename T, typename TagT, typename LabelT>
 void MemoryIndex<T, TagT, LabelT>::initialize_index(size_t dimension, size_t max_points, size_t frozen_points)
 {
 
-    _index = std::make_unique<Index<T, TagT>>(
+    _index = std::make_unique<Index<T, TagT, LabelT>>(
         _config.metric, dimension, max_points, _config.dynamic_index, _config.enable_tags,
         _config.concurrent_consolidate, _config.pq_dist_build, _config.num_pq_chunks, _config.use_opq, frozen_points);
 }
@@ -35,7 +35,7 @@ void MemoryIndex<T, TagT, LabelT>::build(const std::string &data_file, Parameter
 
     // Build index
     auto s = std::chrono::high_resolution_clock::now();
-    if (_config.filtered_build && _config.label_file != "")
+    if (_config.filtered_build)
     {
         build_filtered_index(data_file, build_params, save_path);
     }
@@ -47,36 +47,13 @@ void MemoryIndex<T, TagT, LabelT>::build(const std::string &data_file, Parameter
     std::cout << "Indexing time: " << diff.count() << "\n";
     // Save index
     _index->save(save_path.c_str());
-
-    if (_config.load_on_build)
-    {
-        _data_path = save_path;
-    }
 }
 
 template <typename T, typename TagT, typename LabelT>
 void MemoryIndex<T, TagT, LabelT>::search(const std::string &query_file, Parameters &search_params,
                                           const std::vector<std::string> &query_filters)
 {
-    if (_data_path == "")
-    {
-        std::cout << "Error. load on build was not set, try using search_prebuilt_index() with index path. " << std::endl;
-        return -1; // To return -1 or some other error handling?
-    }
-    std::string truthset_file;
-    uint32_t recall_at, num_threads;
-    bool show_qps_per_thread, print_all_recalls, fail_if_recall_below;
-    std::vector<uint32_t> Lvec;
-    truthset_file = search_params.Get<std::string>("gt_file");
-    recall_at = search_params.Get<uint32_t>("K");
-    num_threads = search_params.Get<uint32_t>("num_threads");
-    show_qps_per_thread = search_params.Get<bool>("show_qps_per_thread");
-    fail_if_recall_below = search_params.Get<bool>("fail_if_recall_below");
-    Lvec = search_params.Get<std::vector<uint32_t>>("Lvec");
-
-    _index->load(_data_path.c_str(), num_threads, *(std::max_element(Lvec.begin(), Lvec.end())));
-
-
+    // NEED to implament code...
 }
 
 template <typename T, typename TagT, typename LabelT>
@@ -85,17 +62,13 @@ int MemoryIndex<T, TagT, LabelT>::search_prebuilt_index(const std::string &index
                                                         std::vector<std::string> &query_filters)
 {
     // Load Params
-    std::string truthset_file;
-    uint32_t recall_at, num_threads;
-    bool show_qps_per_thread, print_all_recalls, fail_if_recall_below;
-    std::vector<uint32_t> Lvec;
-    truthset_file = search_params.Get<std::string>("gt_file");
-    recall_at = search_params.Get<uint32_t>("K");
-    num_threads = search_params.Get<uint32_t>("num_threads");
-    show_qps_per_thread = search_params.Get<bool>("show_qps_per_thread");
-    fail_if_recall_below = search_params.Get<bool>("fail_if_recall_below");
-    Lvec = search_params.Get<std::vector<uint32_t>>("Lvec");
-    print_all_recalls = search_params.Get<bool>("print_all_recalls");
+    auto search_param_obj = parse_to_search_params(search_params);
+    std::string truthset_file = search_param_obj.gt_file;
+    uint32_t recall_at = search_param_obj.K, num_threads = search_param_obj.num_threads;
+    bool show_qps_per_thread = search_param_obj.show_qps_per_thread,
+         print_all_recalls = search_param_obj.print_all_recalls,
+         fail_if_recall_below = search_param_obj.fail_if_recall_below;
+    std::vector<uint32_t> Lvec = search_param_obj.Lvec;
 
     // Load the query file
     T *query = nullptr;
@@ -320,18 +293,26 @@ template <typename T, typename TagT, typename LabelT>
 void MemoryIndex<T, TagT, LabelT>::build_filtered_index(const std::string &data_file, Parameters &build_params,
                                                         const std::string &save_path)
 {
+    auto paramObj = parse_to_build_params(build_params);
+
+    if (paramObj.label_file != "" && !file_exists(paramObj.label_file))
+    {
+        diskann::cout << "Error: for filtered_build you need to provide path to label_file in params." << std::endl;
+        exit(-1);
+    }
+
     std::string labels_file_to_use = save_path + "_label_formatted.txt";
     std::string mem_labels_int_map_file = save_path + "_labels_map.txt";
-    convert_labels_string_to_int(_config.label_file.c_str(), labels_file_to_use, mem_labels_int_map_file,
-                                 _config.universal_label);
-    if (_config.universal_label != "")
+    convert_labels_string_to_int(paramObj.label_file.c_str(), labels_file_to_use, mem_labels_int_map_file,
+                                 paramObj.uinversal_label);
+    if (paramObj.uinversal_label != "")
     {
         LabelT unv_label_as_num = 0;
         _index->set_universal_label(unv_label_as_num);
     }
     _index->build_filtered_index(data_file.c_str(), labels_file_to_use, _index->get_max_points(), build_params);
 
-    if (_config.label_file != "")
+    if (paramObj.label_file != "")
     {
         clean_up_artifacts({labels_file_to_use}, {});
     }
@@ -343,8 +324,12 @@ void MemoryIndex<T, TagT, LabelT>::build_unfiltered_index(const std::string &dat
     _index->build(data_file.c_str(), _index->get_max_points(), build_params);
 }
 
-template DISKANN_DLLEXPORT class MemoryIndex<float>;
-template DISKANN_DLLEXPORT class MemoryIndex<uint8_t>;
-template DISKANN_DLLEXPORT class MemoryIndex<int8_t>;
+template DISKANN_DLLEXPORT class MemoryIndex<float, uint32_t, uint16_t>;
+template DISKANN_DLLEXPORT class MemoryIndex<uint8_t, uint32_t, uint16_t>;
+template DISKANN_DLLEXPORT class MemoryIndex<int8_t, uint32_t, uint16_t>;
+
+template DISKANN_DLLEXPORT class MemoryIndex<float, uint32_t, uint32_t>;
+template DISKANN_DLLEXPORT class MemoryIndex<uint8_t, uint32_t, uint32_t>;
+template DISKANN_DLLEXPORT class MemoryIndex<int8_t, uint32_t, uint32_t>;
 
 } // namespace diskann

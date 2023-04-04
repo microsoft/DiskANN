@@ -4,25 +4,45 @@
 namespace diskann
 {
 
-template <typename T> IndexFactory<T>::IndexFactory(IndexConfig &config) : _config(config)
+IndexFactory::IndexFactory(IndexConfig &config) : _config(config)
 {
     checkConfig();
 }
 
-template <typename T> void IndexFactory<T>::parse_config(const std::string &config_path)
+void IndexFactory::parse_config(const std::string &config_path)
 {
     if (!file_exists(config_path))
         throw ANNException("Unable to find config file: " + config_path, -1, __FUNCSIG__, __FILE__, __LINE__);
-    
 }
-template <typename T> std::shared_ptr<AbstractIndex<T>> IndexFactory<T>::instance()
+std::shared_ptr<AbstractIndex> IndexFactory::instance()
 {
-    switch (_config.load_store_stratagy)
+
+    switch (_config.build_type)
     {
     case MEMORY:
-        return std::make_shared<MemoryIndex<T>>(_config);
+        if (_config.label_type == "ushort")
+        {
+            if (_config.data_type == "float")
+                return std::make_shared<MemoryIndex<float, uint32_t, uint16_t>>(_config);
+            else if (_config.data_type == "uint8")
+                return std::make_shared<MemoryIndex<uint8_t, uint32_t, uint16_t>>(_config);
+            else if (_config.data_type == "int8")
+                return std::make_shared<MemoryIndex<int8_t, uint32_t, uint16_t>>(_config);
+            else
+                throw new ANNException("Data type of : " + _config.data_type + " is not supported.", -1, __FUNCSIG__,
+                                       __FILE__, __LINE__);
+        }
+        if (_config.data_type == "float")
+            return std::make_shared<MemoryIndex<float>>(_config);
+        else if (_config.data_type == "uint8")
+            return std::make_shared<MemoryIndex<uint8_t>>(_config);
+        else if (_config.data_type == "int8")
+            return std::make_shared<MemoryIndex<int8_t>>(_config);
+        else
+            throw new ANNException("Data type of : " + _config.data_type + " is not supported.", -1, __FUNCSIG__,
+                                   __FILE__, __LINE__);
     case DISK:
-        //return std::make_shared<MemoryIndex<T>> (_config);
+        // return std::make_shared<MemoryIndex<T>> (_config);
         break;
     case SSD:
         break;
@@ -33,7 +53,7 @@ template <typename T> std::shared_ptr<AbstractIndex<T>> IndexFactory<T>::instanc
     return nullptr;
 }
 
-template <typename T> void IndexFactory<T>::checkConfig()
+void IndexFactory::checkConfig()
 {
     if (_config.dynamic_index && !_config.enable_tags)
     {
@@ -53,13 +73,5 @@ template <typename T> void IndexFactory<T>::checkConfig()
                                -1, __FUNCSIG__, __FILE__, __LINE__);
     }
 }
-
-template DISKANN_DLLEXPORT class IndexFactory<float>;
-template DISKANN_DLLEXPORT class IndexFactory<uint8_t>;
-template DISKANN_DLLEXPORT class IndexFactory<int8_t>;
-
-template DISKANN_DLLEXPORT class AbstractIndex<float>;
-template DISKANN_DLLEXPORT class AbstractIndex<uint8_t>;
-template DISKANN_DLLEXPORT class AbstractIndex<int8_t>;
 
 } // namespace diskann
