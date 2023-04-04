@@ -12,6 +12,7 @@
 #include "pq_flash_index.h"
 #include "timer.h"
 #include "percentile_stats.h"
+#include "index_factory.h"
 
 #ifndef _WINDOWS
 #include <sys/mman.h>
@@ -429,7 +430,33 @@ int main(int argc, char **argv)
 
     try
     {
-        if (!query_filters.empty() && label_type == "ushort")
+
+        diskann::IndexConfig config;
+        config.metric = metric;
+        config.filtered_build = false;
+        config.build_type = diskann::DISK;
+        config.data_type = data_type;
+        config.label_type = label_type;
+
+        diskann::Parameters search_params;
+        search_params.Set<uint32_t>("num_threads", num_threads);
+        search_params.Set<uint32_t>("K", K);
+        search_params.Set<std::vector<uint32_t>>("Lvec", Lvec);
+        search_params.Set<std::string>("gt_file", gt_file);
+        search_params.Set<bool>("show_qps_per_thread", false);
+        search_params.Set<bool>("print_all_recalls", false);
+        search_params.Set<uint32_t>("W", W);
+        search_params.Set<uint32_t>("num_nodes_to_cache", num_nodes_to_cache);
+        search_params.Set<uint32_t>("search_io_limit", search_io_limit);
+        search_params.Set<bool>("use_reorder_data", use_reorder_data);
+        search_params.Set<float>("fail_if_recall_below", fail_if_recall_below);
+        auto index_factory = diskann::IndexFactory(config);
+        auto index = index_factory.instance();
+        index->search_prebuilt_index(index_path_prefix, query_file, search_params, query_filters, result_path_prefix);
+        return 0;
+
+
+        /*if (!query_filters.empty() && label_type == "ushort")
         {
             if (data_type == std::string("float"))
                 return search_disk_index<float, uint16_t>(
@@ -468,7 +495,7 @@ int main(int argc, char **argv)
                 std::cerr << "Unsupported data type. Use float or int8 or uint8" << std::endl;
                 return -1;
             }
-        }
+        }*/
     }
     catch (const std::exception &e)
     {

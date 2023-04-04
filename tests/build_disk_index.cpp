@@ -8,6 +8,7 @@
 #include "disk_utils.h"
 #include "math_utils.h"
 #include "index.h"
+#include "index_factory.h"
 #include "partition.h"
 
 namespace po = boost::program_options;
@@ -136,6 +137,30 @@ int main(int argc, char **argv)
                          std::string(std::to_string(num_threads)) + " " + std::string(std::to_string(disk_PQ)) + " " +
                          std::string(std::to_string(append_reorder_data)) + " " +
                          std::string(std::to_string(build_PQ)) + " " + std::string(std::to_string(QD));
+
+
+    diskann::IndexConfig config;
+    config.build_type = diskann::DISK;
+    config.data_type = data_type;
+    config.label_type = label_type;
+    config.use_opq = use_opq;
+    config.filtered_build = use_filters;
+    config.metric = metric;
+    
+    diskann::Parameters build_parameters;
+    build_parameters.Set<std::string>("label_file", label_file);
+    build_parameters.Set<std::string>("universal_label", universal_label);
+    build_parameters.Set<uint32_t>("filter_threshold", filter_threshold);
+    build_parameters.Set<uint32_t>("Lf", Lf);
+    build_parameters.Set<std::string>("disk_params", params);
+
+    diskann::IndexFactory factory = diskann::IndexFactory(config);
+    auto index = factory.instance();
+    index->build(data_path,build_parameters,index_path_prefix);
+    return 0;
+
+
+
 
     try
     {
