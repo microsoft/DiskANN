@@ -375,9 +375,11 @@ int main(int argc, char **argv)
         // Using_a_prebuilt_index
         diskann::IndexConfig config;
         config.metric = metric;
-        config.label_file = "";
-        config.filtered_build = false; 
-        config.load_store_stratagy = diskann::MEMORY;
+        config.filtered_build = false;
+        config.build_type = diskann::MEMORY;
+        config.data_type = data_type;
+        config.label_type = label_type;
+
         diskann::Parameters search_params;
         search_params.Set<uint32_t>("num_threads", num_threads);
         search_params.Set<uint32_t>("K", K);
@@ -386,12 +388,12 @@ int main(int argc, char **argv)
         search_params.Set<bool>("show_qps_per_thread", show_qps_per_thread);
         search_params.Set<bool>("print_all_recalls", print_all_recalls);
         search_params.Set<float>("fail_if_recall_below", fail_if_recall_below);
-        auto index_factory = diskann::IndexFactory<float>(config);
+        auto index_factory = diskann::IndexFactory(config);
         auto index = index_factory.instance();
         index->search_prebuilt_index(index_path_prefix, query_file, search_params, query_filters);
         return 0;
 
-        if (!query_filters.empty() && label_type == "ushort")
+        /*if (!query_filters.empty() && label_type == "ushort")
         {
             if (data_type == std::string("int8"))
             {
@@ -442,7 +444,7 @@ int main(int argc, char **argv)
                 std::cout << "Unsupported type. Use float/int8/uint8" << std::endl;
                 return -1;
             }
-        }
+        }*/
     }
     catch (std::exception &e)
     {
