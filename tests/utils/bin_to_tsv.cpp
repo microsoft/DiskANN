@@ -4,13 +4,14 @@
 #include <iostream>
 #include "utils.h"
 
-template <class T> void block_convert(std::ofstream &writer, std::ifstream &reader, T *read_buf, _u64 npts, _u64 ndims)
+template <class T>
+void block_convert(std::ofstream &writer, std::ifstream &reader, T *read_buf, size_t npts, size_t ndims)
 {
     reader.read((char *)read_buf, npts * ndims * sizeof(float));
 
-    for (_u64 i = 0; i < npts; i++)
+    for (size_t i = 0; i < npts; i++)
     {
-        for (_u64 d = 0; d < ndims; d++)
+        for (size_t d = 0; d < ndims; d++)
         {
             writer << read_buf[d + i * ndims];
             if (d < ndims - 1)
@@ -36,22 +37,22 @@ int main(int argc, char **argv)
     }
 
     std::ifstream reader(argv[2], std::ios::binary);
-    _u32 npts_u32;
-    _u32 ndims_u32;
-    reader.read((char *)&npts_u32, sizeof(_s32));
-    reader.read((char *)&ndims_u32, sizeof(_s32));
+    uint32_t npts_u32;
+    uint32_t ndims_u32;
+    reader.read((char *)&npts_u32, sizeof(uint32_t));
+    reader.read((char *)&ndims_u32, sizeof(uint32_t));
     size_t npts = npts_u32;
     size_t ndims = ndims_u32;
     std::cout << "Dataset: #pts = " << npts << ", # dims = " << ndims << std::endl;
 
-    _u64 blk_size = 131072;
-    _u64 nblks = ROUND_UP(npts, blk_size) / blk_size;
+    size_t blk_size = 131072;
+    size_t nblks = ROUND_UP(npts, blk_size) / blk_size;
 
     std::ofstream writer(argv[3]);
     char *read_buf = new char[blk_size * ndims * 4];
-    for (_u64 i = 0; i < nblks; i++)
+    for (size_t i = 0; i < nblks; i++)
     {
-        _u64 cblk_size = std::min(npts - i * blk_size, blk_size);
+        size_t cblk_size = std::min(npts - i * blk_size, blk_size);
         if (type_string == std::string("float"))
             block_convert<float>(writer, reader, (float *)read_buf, cblk_size, ndims);
         else if (type_string == std::string("int8"))

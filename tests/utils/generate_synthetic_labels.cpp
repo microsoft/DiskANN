@@ -91,7 +91,7 @@ class ZipfDistribution
 int main(int argc, char **argv)
 {
     std::string output_file, distribution_type;
-    _u64 num_labels, num_points;
+    size_t num_labels, num_points;
 
     try
     {

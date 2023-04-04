@@ -176,7 +176,7 @@ template <typename T>
 SearchResult PQFlashSearch<T>::search(const T *query, const unsigned int dimensions, const unsigned int K,
                                       const unsigned int Ls)
 {
-    _u64 *indices_u64 = new _u64[K];
+    uint64_t *indices_u64 = new uint64_t[K];
     unsigned *indices = new unsigned[K];
     float *distances = new float[K];
 

@@ -37,8 +37,8 @@ inline void load_aligned_bin_part(const std::string &bin_file, T *data, size_t o
     int npts_i32, dim_i32;
     reader.read((char *)&npts_i32, sizeof(int));
     reader.read((char *)&dim_i32, sizeof(int));
-    size_t npts = (unsigned)npts_i32;
-    size_t dim = (unsigned)dim_i32;
+    size_t npts = (uint32_t)npts_i32;
+    size_t dim = (uint32_t)dim_i32;
 
     size_t expected_actual_file_size = npts * dim * sizeof(T) + 2 * sizeof(uint32_t);
     if (actual_file_size != expected_actual_file_size)
@@ -135,9 +135,9 @@ void delete_from_beginning(diskann::Index<T, TagT> &index, diskann::IndexWritePa
 }
 
 template <typename T>
-void build_incremental_index(const std::string &data_path, const unsigned L, const unsigned R, const float alpha,
-                             const unsigned thread_count, size_t points_to_skip, size_t max_points_to_insert,
-                             size_t beginning_index_size, float start_point_norm, unsigned num_start_pts,
+void build_incremental_index(const std::string &data_path, const uint32_t L, const uint32_t R, const float alpha,
+                             const uint32_t thread_count, size_t points_to_skip, size_t max_points_to_insert,
+                             size_t beginning_index_size, float start_point_norm, uint32_t num_start_pts,
                              size_t points_per_checkpoint, size_t checkpoints_per_snapshot,
                              const std::string &save_path, size_t points_to_delete_from_beginning,
                              size_t start_deletes_after, bool concurrent)
@@ -146,9 +146,9 @@ void build_incremental_index(const std::string &data_path, const unsigned L, con
     diskann::IndexWriteParameters params = diskann::IndexWriteParametersBuilder(L, R)
                                                .with_max_occlusion_size(500) // C = 500
                                                .with_alpha(alpha)
-                                               .with_max_occlusion_size(1)
-                                               .with_max_occlusion_size(thread_count)
-                                               .with_max_occlusion_size(num_start_pts)
+                                               .with_num_rounds(1)
+                                               .with_num_threads(thread_count)
+                                               .with_num_frozen_points(num_start_pts)
                                                .build();
 
     diskann::IndexReadParameters read_params(L, thread_count);
@@ -227,7 +227,7 @@ void build_incremental_index(const std::string &data_path, const unsigned L, con
 
     if (points_to_delete_from_beginning > max_points_to_insert)
     {
-        points_to_delete_from_beginning = static_cast<unsigned>(max_points_to_insert);
+        points_to_delete_from_beginning = static_cast<uint32_t>(max_points_to_insert);
         std::cerr << "WARNING: Reducing points to delete from beginning to " << points_to_delete_from_beginning
                   << " points since the data file has only that many" << std::endl;
     }
@@ -327,7 +327,7 @@ void build_incremental_index(const std::string &data_path, const unsigned L, con
 int main(int argc, char **argv)
 {
     std::string data_type, dist_fn, data_path, index_path_prefix;
-    unsigned num_threads, R, L, num_start_pts;
+    uint32_t num_threads, R, L, num_start_pts;
     float alpha, start_point_norm;
     size_t points_to_skip, max_points_to_insert, beginning_index_size, points_per_checkpoint, checkpoints_per_snapshot,
         points_to_delete_from_beginning, start_deletes_after;
@@ -347,7 +347,8 @@ int main(int argc, char **argv)
         desc.add_options()("Lbuild,L", po::value<uint32_t>(&L)->default_value(100),
                            "Build complexity, higher value results in better graphs");
         desc.add_options()("alpha", po::value<float>(&alpha)->default_value(1.2f),
-                           "alpha controls density and diameter of graph, set 1 for sparse graph, "
+                           "alpha controls density and diameter of graph, set "
+                           "1 for sparse graph, "
                            "1.2 or 1.4 for denser graphs with lower diameter");
         desc.add_options()("num_threads,T", po::value<uint32_t>(&num_threads)->default_value(omp_get_num_procs()),
                            "Number of threads used for building index (defaults to "
@@ -369,8 +370,9 @@ int main(int argc, char **argv)
         desc.add_options()("start_deletes_after", po::value<uint64_t>(&start_deletes_after)->default_value(0), "");
         desc.add_options()("start_point_norm", po::value<float>(&start_point_norm)->default_value(0),
                            "Set the start point to a random point on a sphere of this radius");
-        desc.add_options()("num_start_points", po::value<unsigned>(&num_start_pts)->default_value(0),
-                           "Set the number of random start (frozen) points to use when inserting and searching");
+        desc.add_options()("num_start_points", po::value<uint32_t>(&num_start_pts)->default_value(0),
+                           "Set the number of random start (frozen) points to use when "
+                           "inserting and searching");
 
         po::variables_map vm;
         po::store(po::parse_command_line(argc, argv, desc), vm);
@@ -383,7 +385,8 @@ int main(int argc, char **argv)
         if (beginning_index_size == 0)
             if (start_point_norm == 0)
             {
-                std::cout << "When beginning_index_size is 0, use a start point with  "
+                std::cout << "When beginning_index_size is 0, use a start "
+                             "point with  "
                              "appropriate norm"
                           << std::endl;
                 return -1;

@@ -6,11 +6,11 @@
 #include <random>
 #include <cmath>
 
-inline float aggregate_recall(const unsigned k_aggr, const unsigned k, const unsigned npart, unsigned *count,
+inline float aggregate_recall(const uint32_t k_aggr, const uint32_t k, const uint32_t npart, uint32_t *count,
                               const std::vector<float> &recalls)
 {
     float found = 0;
-    for (unsigned i = 0; i < npart; ++i)
+    for (uint32_t i = 0; i < npart; ++i)
     {
         size_t max_found = std::min(count[i], k);
         found += recalls[max_found - 1] * max_found;
@@ -18,23 +18,23 @@ inline float aggregate_recall(const unsigned k_aggr, const unsigned k, const uns
     return found / (float)k_aggr;
 }
 
-void simulate(const unsigned k_aggr, const unsigned k, const unsigned npart, const unsigned nsim,
+void simulate(const uint32_t k_aggr, const uint32_t k, const uint32_t npart, const uint32_t nsim,
               const std::vector<float> &recalls)
 {
     std::random_device r;
     std::default_random_engine randeng(r());
     std::uniform_int_distribution<int> uniform_dist(0, npart - 1);
 
-    unsigned *count = new unsigned[npart];
+    uint32_t *count = new uint32_t[npart];
     double aggr_recall = 0;
 
-    for (unsigned i = 0; i < nsim; ++i)
+    for (uint32_t i = 0; i < nsim; ++i)
     {
-        for (unsigned p = 0; p < npart; ++p)
+        for (uint32_t p = 0; p < npart; ++p)
         {
             count[p] = 0;
         }
-        for (unsigned t = 0; t < k_aggr; ++t)
+        for (uint32_t t = 0; t < k_aggr; ++t)
         {
             count[uniform_dist(randeng)]++;
         }
@@ -53,10 +53,10 @@ int main(int argc, char **argv)
         exit(-1);
     }
 
-    const unsigned k_aggr = atoi(argv[1]);
-    const unsigned k = atoi(argv[2]);
-    const unsigned npart = atoi(argv[3]);
-    const unsigned nsim = atoi(argv[4]);
+    const uint32_t k_aggr = atoi(argv[1]);
+    const uint32_t k = atoi(argv[2]);
+    const uint32_t npart = atoi(argv[3]);
+    const uint32_t nsim = atoi(argv[4]);
 
     std::vector<float> recalls;
     for (int ctr = 5; ctr < argc; ctr++)

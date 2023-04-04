@@ -51,8 +51,8 @@ void print_stats(std::string category, std::vector<float> percentiles, std::vect
 
 template <typename T, typename LabelT = uint32_t>
 int search_disk_index(diskann::Metric &metric, const std::string &index_path_prefix, const std::string &query_file,
-                      std::string &gt_file, const unsigned num_threads, const float search_range,
-                      const unsigned beamwidth, const unsigned num_nodes_to_cache, const std::vector<unsigned> &Lvec)
+                      std::string &gt_file, const uint32_t num_threads, const float search_range,
+                      const uint32_t beamwidth, const uint32_t num_nodes_to_cache, const std::vector<uint32_t> &Lvec)
 {
     std::string pq_prefix = index_path_prefix + "_pq";
     std::string disk_index_file = index_path_prefix + "_disk.index";
@@ -66,7 +66,7 @@ int search_disk_index(diskann::Metric &metric, const std::string &index_path_pre
 
     // load query bin
     T *query = nullptr;
-    std::vector<std::vector<_u32>> groundtruth_ids;
+    std::vector<std::vector<uint32_t>> groundtruth_ids;
     size_t query_num, query_dim, query_aligned_dim, gt_num;
     diskann::load_aligned_bin<T>(query_file, query, query_num, query_dim, query_aligned_dim);
 
@@ -110,7 +110,8 @@ int search_disk_index(diskann::Metric &metric, const std::string &index_path_pre
     diskann::cout << "Caching " << num_nodes_to_cache << " BFS nodes around medoid(s)" << std::endl;
     _pFlashIndex->cache_bfs_levels(num_nodes_to_cache, node_list);
     //  _pFlashIndex->generate_cache_list_from_sample_queries(
-    //      warmup_query_file, 15, 6, num_nodes_to_cache, num_threads, node_list);
+    //      warmup_query_file, 15, 6, num_nodes_to_cache, num_threads,
+    //      node_list);
     _pFlashIndex->load_cache_list(node_list);
     node_list.clear();
     node_list.shrink_to_fit();
@@ -129,7 +130,7 @@ int search_disk_index(diskann::Metric &metric, const std::string &index_path_pre
         }
         else
         {
-            warmup_num = (std::min)((_u32)150000, (_u32)15000 * num_threads);
+            warmup_num = (std::min)((uint32_t)150000, (uint32_t)15000 * num_threads);
             warmup_dim = query_dim;
             warmup_aligned_dim = query_aligned_dim;
             diskann::alloc_aligned(((void **)&warmup), warmup_num * warmup_aligned_dim * sizeof(T), 8 * sizeof(T));
@@ -150,7 +151,7 @@ int search_disk_index(diskann::Metric &metric, const std::string &index_path_pre
         std::vector<float> warmup_result_dists(warmup_num, 0);
 
 #pragma omp parallel for schedule(dynamic, 1)
-        for (_s64 i = 0; i < (int64_t)warmup_num; i++)
+        for (int64_t i = 0; i < (int64_t)warmup_num; i++)
         {
             _pFlashIndex->cached_beam_search(warmup + (i * warmup_aligned_dim), 1, warmup_L,
                                              warmup_result_ids_64.data() + (i * 1),
@@ -183,7 +184,7 @@ int search_disk_index(diskann::Metric &metric, const std::string &index_path_pre
 
     for (uint32_t test_id = 0; test_id < Lvec.size(); test_id++)
     {
-        _u64 L = Lvec[test_id];
+        uint64_t L = Lvec[test_id];
 
         if (beamwidth <= 0)
         {
@@ -200,15 +201,16 @@ int search_disk_index(diskann::Metric &metric, const std::string &index_path_pre
 
         auto s = std::chrono::high_resolution_clock::now();
 #pragma omp parallel for schedule(dynamic, 1)
-        for (_s64 i = 0; i < (int64_t)query_num; i++)
+        for (int64_t i = 0; i < (int64_t)query_num; i++)
         {
-            std::vector<_u64> indices;
+            std::vector<uint64_t> indices;
             std::vector<float> distances;
-            _u32 res_count = _pFlashIndex->range_search(query + (i * query_aligned_dim), search_range, L, max_list_size,
-                                                        indices, distances, optimized_beamwidth, stats + i);
+            uint32_t res_count =
+                _pFlashIndex->range_search(query + (i * query_aligned_dim), search_range, L, max_list_size, indices,
+                                           distances, optimized_beamwidth, stats + i);
             query_result_ids[test_id][i].reserve(res_count);
             query_result_ids[test_id][i].resize(res_count);
-            for (_u32 idx = 0; idx < res_count; idx++)
+            for (uint32_t idx = 0; idx < res_count; idx++)
                 query_result_ids[test_id][i][idx] = indices[idx];
         }
         auto e = std::chrono::high_resolution_clock::now();
@@ -221,7 +223,7 @@ int search_disk_index(diskann::Metric &metric, const std::string &index_path_pre
         auto latency_999 = diskann::get_percentile_stats<float>(
             stats, query_num, 0.999, [](const diskann::QueryStats &stats) { return stats.total_us; });
 
-        auto mean_ios = diskann::get_mean_stats<unsigned>(stats, query_num,
+        auto mean_ios = diskann::get_mean_stats<uint32_t>(stats, query_num,
                                                           [](const diskann::QueryStats &stats) { return stats.n_ios; });
 
         float mean_cpuus = diskann::get_mean_stats<float>(
@@ -233,9 +235,9 @@ int search_disk_index(diskann::Metric &metric, const std::string &index_path_pre
         {
             recall = diskann::calculate_range_search_recall(query_num, groundtruth_ids, query_result_ids[test_id]);
 
-            _u32 total_true_positive = 0;
-            _u32 total_positive = 0;
-            for (_u32 i = 0; i < query_num; i++)
+            uint32_t total_true_positive = 0;
+            uint32_t total_positive = 0;
+            for (uint32_t i = 0; i < query_num; i++)
             {
                 total_true_positive += query_result_ids[test_id][i].size();
                 total_positive += groundtruth_ids[i].size();
@@ -266,8 +268,8 @@ int search_disk_index(diskann::Metric &metric, const std::string &index_path_pre
 int main(int argc, char **argv)
 {
     std::string data_type, dist_fn, index_path_prefix, result_path_prefix, query_file, gt_file;
-    unsigned num_threads, W, num_nodes_to_cache;
-    std::vector<unsigned> Lvec;
+    uint32_t num_threads, W, num_nodes_to_cache;
+    std::vector<uint32_t> Lvec;
     float range;
 
     po::options_description desc{"Arguments"};
@@ -285,7 +287,7 @@ int main(int argc, char **argv)
                            "ground truth file for the queryset");
         desc.add_options()("range_threshold,K", po::value<float>(&range)->required(),
                            "Number of neighbors to be returned");
-        desc.add_options()("search_list,L", po::value<std::vector<unsigned>>(&Lvec)->multitoken(),
+        desc.add_options()("search_list,L", po::value<std::vector<uint32_t>>(&Lvec)->multitoken(),
                            "List of L values of search");
         desc.add_options()("beamwidth,W", po::value<uint32_t>(&W)->default_value(2), "Beamwidth for search");
         desc.add_options()("num_nodes_to_cache", po::value<uint32_t>(&num_nodes_to_cache)->default_value(100000),

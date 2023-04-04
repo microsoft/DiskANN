@@ -36,8 +36,8 @@ inline void load_aligned_bin_part(const std::string &bin_file, T *data, size_t o
     int npts_i32, dim_i32;
     reader.read((char *)&npts_i32, sizeof(int));
     reader.read((char *)&dim_i32, sizeof(int));
-    size_t npts = (unsigned)npts_i32;
-    size_t dim = (unsigned)dim_i32;
+    size_t npts = (uint32_t)npts_i32;
+    size_t dim = (uint32_t)dim_i32;
 
     size_t expected_actual_file_size = npts * dim * sizeof(T) + 2 * sizeof(uint32_t);
     if (actual_file_size != expected_actual_file_size)
@@ -165,21 +165,21 @@ void delete_and_consolidate(diskann::Index<T, TagT, LabelT> &index, diskann::Ind
 }
 
 template <typename T>
-void build_incremental_index(const std::string &data_path, const unsigned L, const unsigned R, const float alpha,
-                             const unsigned insert_threads, const unsigned consolidate_threads,
+void build_incremental_index(const std::string &data_path, const uint32_t L, const uint32_t R, const float alpha,
+                             const uint32_t insert_threads, const uint32_t consolidate_threads,
                              size_t max_points_to_insert, size_t active_window, size_t consolidate_interval,
-                             const float start_point_norm, unsigned num_start_pts, const std::string &save_path)
+                             const float start_point_norm, uint32_t num_start_pts, const std::string &save_path)
 {
-    const unsigned C = 500;
+    const uint32_t C = 500;
     const bool saturate_graph = false;
 
     diskann::IndexWriteParameters params = diskann::IndexWriteParametersBuilder(L, R)
                                                .with_max_occlusion_size(C)
                                                .with_alpha(alpha)
                                                .with_saturate_graph(saturate_graph)
-                                               .with_max_occlusion_size(1)
-                                               .with_max_occlusion_size(insert_threads)
-                                               .with_max_occlusion_size(num_start_pts)
+                                               .with_num_rounds(1)
+                                               .with_num_threads(insert_threads)
+                                               .with_num_frozen_points(num_start_pts)
                                                .build();
 
     diskann::IndexReadParameters search_params = diskann::IndexReadParameters(L, insert_threads);
@@ -188,8 +188,8 @@ void build_incremental_index(const std::string &data_path, const unsigned L, con
                                                       .with_max_occlusion_size(C)
                                                       .with_alpha(alpha)
                                                       .with_saturate_graph(saturate_graph)
-                                                      .with_max_occlusion_size(1)
-                                                      .with_max_occlusion_size(consolidate_threads)
+                                                      .with_num_rounds(1)
+                                                      .with_num_threads(consolidate_threads)
                                                       .build();
 
     size_t dim, aligned_dim;
@@ -207,8 +207,9 @@ void build_incremental_index(const std::string &data_path, const unsigned L, con
         throw diskann::ANNException("num_points < max_points_to_insert", -1, __FUNCSIG__, __FILE__, __LINE__);
 
     if (max_points_to_insert < active_window + consolidate_interval)
-        throw diskann::ANNException("ERROR: max_points_to_insert < active_window + consolidate_interval", -1,
-                                    __FUNCSIG__, __FILE__, __LINE__);
+        throw diskann::ANNException("ERROR: max_points_to_insert < "
+                                    "active_window + consolidate_interval",
+                                    -1, __FUNCSIG__, __FILE__, __LINE__);
 
     if (consolidate_interval < max_points_to_insert / 1000)
         throw diskann::ANNException("ERROR: consolidate_interval is too small", -1, __FUNCSIG__, __FILE__, __LINE__);
@@ -274,8 +275,8 @@ void build_incremental_index(const std::string &data_path, const unsigned L, con
 int main(int argc, char **argv)
 {
     std::string data_type, dist_fn, data_path, index_path_prefix;
-    unsigned insert_threads, consolidate_threads;
-    unsigned R, L, num_start_pts;
+    uint32_t insert_threads, consolidate_threads;
+    uint32_t R, L, num_start_pts;
     float alpha, start_point_norm;
     size_t max_points_to_insert, active_window, consolidate_interval;
 
@@ -293,7 +294,8 @@ int main(int argc, char **argv)
         desc.add_options()("Lbuild,L", po::value<uint32_t>(&L)->default_value(100),
                            "Build complexity, higher value results in better graphs");
         desc.add_options()("alpha", po::value<float>(&alpha)->default_value(1.2f),
-                           "alpha controls density and diameter of graph, set 1 for sparse graph, "
+                           "alpha controls density and diameter of graph, set "
+                           "1 for sparse graph, "
                            "1.2 or 1.4 for denser graphs with lower diameter");
         desc.add_options()("insert_threads",
                            po::value<uint32_t>(&insert_threads)->default_value(omp_get_num_procs() / 2),
@@ -305,17 +307,20 @@ int main(int argc, char **argv)
                            "the index (defaults to omp_get_num_procs()/2)");
 
         desc.add_options()("max_points_to_insert", po::value<uint64_t>(&max_points_to_insert)->default_value(0),
-                           "The number of points from the file that the program streams over ");
+                           "The number of points from the file that the program streams "
+                           "over ");
         desc.add_options()("active_window", po::value<uint64_t>(&active_window)->required(),
                            "Program maintains an index over an active window of "
                            "this size that slides through the data");
         desc.add_options()("consolidate_interval", po::value<uint64_t>(&consolidate_interval)->required(),
-                           "The program simultaneously adds this number of points to the right of "
+                           "The program simultaneously adds this number of points to the "
+                           "right of "
                            "the window while deleting the same number from the left");
         desc.add_options()("start_point_norm", po::value<float>(&start_point_norm)->required(),
                            "Set the start point to a random point on a sphere of this radius");
-        desc.add_options()("num_start_points", po::value<unsigned>(&num_start_pts)->default_value(0),
-                           "Set the number of random start (frozen) points to use when inserting and searching");
+        desc.add_options()("num_start_points", po::value<uint32_t>(&num_start_pts)->default_value(0),
+                           "Set the number of random start (frozen) points to use when "
+                           "inserting and searching");
 
         po::variables_map vm;
         po::store(po::parse_command_line(argc, argv, desc), vm);
