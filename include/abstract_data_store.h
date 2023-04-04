@@ -13,8 +13,8 @@ namespace diskann
 template <typename data_t> class AbstractDataStore
 {
   public:
-    AbstractDataStore(const location_t max_pts, const size_t dim)
-        : _max_points(max_pts), _num_points(0), _dim(dim) 
+    AbstractDataStore(const location_t capacity, const size_t dim)
+        : _capacity(capacity), _num_points(0), _dim(dim) 
     {
     }
 
@@ -31,28 +31,37 @@ template <typename data_t> class AbstractDataStore
 
     virtual void reposition_points(const location_t start_loc, const location_t end_loc,
                                    const location_t num_points) = 0;
+    virtual void copy_points(const location_t from_loc, const location_t to_loc, const location_t num_points) = 0;
+    //Returns the point in the dataset that is closest to the mean of all points in the dataset
+    virtual location_t calculate_medoid() const = 0;
 
-    location_t get_max_points() const 
+    virtual location_t capacity() const 
     {
-        return _max_points;
+        return _capacity;
     }
-    location_t get_num_points() const
+    virtual location_t get_num_points() const
     {
         return _num_points;
     }
 
+    virtual float get_distance(const data_t* query, const location_t loc) const = 0;
     virtual void get_distance(const data_t *query, const location_t *locations, const uint32_t location_count,
                       float *distances) const = 0;
     virtual float get_distance(const location_t loc1, const location_t loc2) const = 0;
 
 
-    size_t get_dims() const 
+    virtual size_t get_dims() const 
+    {
+        return _dim;
+    }
+
+    virtual size_t get_aligned_dim() const
     {
         return _dim;
     }
 
   protected:
-    location_t _max_points;
+    location_t _capacity;
     location_t _num_points;
 
     const size_t _dim;
