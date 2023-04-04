@@ -303,3 +303,12 @@ jobs:
       env:
         CIBW_ARCHS_WINDOWS: AMD64
         CIBW_ARCHS_LINUX: x86_64
+    - name: Run Python Unit tests
+      if: ${{ matrix.os == 'ubuntu-latest' }}
+      run: |
+        pip install dist/*.whl
+        LD_PRELOAD="/lib/x86_64-linux-gnu/libmkl_intel_thread.so:/lib/x86_64-linux-gnu/libmkl_intel_ilp64.so:/lib/x86_64-linux-gnu/libmkl_core.so:/lib/x86_64-linux-gnu/libiomp5.so:/lib/x86_64-linux-gnu/libmkl_avx2.so:/lib/x86_64-linux-gnu/libmkl_def.so" python -m unittest discover python/tests
+    - uses: actions/upload-artifact@v3
+      with:
+        name: wheelhouse
+        path: ./wheelhouse/*.whl

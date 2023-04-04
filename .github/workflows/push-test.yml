@@ -53,3 +53,7 @@ jobs:
       run: python -m pip install build
     - name: Python Build
       run: python -m build
+    - uses: actions/upload-artifact@v3
+      with:
+        name: wheelhouse
+        path: dist/*.whl

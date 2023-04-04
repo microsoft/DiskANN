@@ -8,7 +8,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest]
     steps:
       - uses: actions/checkout@v3
         with:
@@ -19,7 +19,6 @@ jobs:
       - name: build wheels
         run: python -m cibuildwheel --output-dir wheelhouse
         env:
-          CIBW_ARCHS_WINDOWS: AMD64
           CIBW_ARCHS_LINUX: x86_64
       - uses: actions/upload-artifact@v3
         with:
