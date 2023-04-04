@@ -24,13 +24,21 @@ class InMemDataStore : public AbstractDataStore<data_t>
     InMemDataStore(const location_t max_pts, const size_t dim, std::shared_ptr<Distance<data_t>> distance_metric);
     virtual ~InMemDataStore();
 
-    void load(const std::string &filename);
-    void store(const std::string &filename);
+    virtual location_t load(const std::string &filename) override;
+    virtual void store(const std::string &filename) override;
 
-    virtual data_t *get_vector(location_t i);
-    virtual void set_vector(const location_t i, const data_t *const vector);
+    //Populate internal data from unaligned data while doing alignment and any normalization that is required.
+    virtual void populate_data(const data_t *vectors, const location_t num_pts) override;
+    virtual void populate_data(const std::string &filename, const size_t offset) override;
 
-    virtual void get_distance(const data_t *query, const location_t *locations, const uint32_t location_count,  float *distances);
+    virtual void get_vector(const location_t i, data_t *target) const override;
+    virtual void set_vector(const location_t i, const data_t *const vector) override;
+
+    virtual void reposition_points(const location_t start_loc, const location_t end_loc,
+                                   const location_t num_points) override;
+
+    virtual void get_distance(const data_t *query, const location_t *locations, const uint32_t location_count,  float *distances) const override ;
+    virtual float get_distance(const location_t loc1, const location_t loc2) const override;
 
   protected:
     location_t load_data(const std::string &filename);

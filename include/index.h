@@ -18,6 +18,7 @@
 #include "utils.h"
 #include "windows_customizations.h"
 #include "scratch.h"
+#include "in_mem_data_store.h"
 
 #define OVERHEAD_FACTOR 1.1
 #define EXPAND_IF_FULL 0
@@ -315,7 +316,8 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     Distance<T> *_distance = nullptr;
 
     // Data
-    T *_data = nullptr;
+    //T *_data = nullptr;
+    std::shared_ptr<InMemDataStore<T>> _data_store;
     char *_opt_graph = nullptr;
 
     // Graph related data structures
@@ -323,7 +325,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 
     // Dimensions
     size_t _dim = 0;
-    size_t _aligned_dim = 0;
+    //size_t _aligned_dim = 0;
     size_t _nd = 0;         // number of active points i.e. existing in the graph
     size_t _max_points = 0; // total number of points in given data set
     // Number of points which are used as initial candidates when iterating to
