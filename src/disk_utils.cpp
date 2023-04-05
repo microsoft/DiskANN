@@ -634,20 +634,20 @@ int build_merged_vamana_index(std::string base_file, diskann::Metric compareMetr
                                                   .with_saturate_graph(!use_filters)
                                                   .build();
         using TagT = uint32_t;
-        diskann::Index<T, TagT, LabelT> _pvamanaIndex(compareMetric, base_dim, base_num, false, false, false,
+        diskann::Index<T, TagT, LabelT> _index(compareMetric, base_dim, base_num, false, false, false,
                                                       build_pq_bytes > 0, build_pq_bytes, use_opq);
         if (!use_filters)
-            _pvamanaIndex.build(base_file.c_str(), base_num, paras);
+            _index.build(base_file.c_str(), base_num, paras);
         else
         {
             if (universal_label != "")
             { //  indicates no universal label
                 LabelT unv_label_as_num = 0;
-                _pvamanaIndex.set_universal_label(unv_label_as_num);
+                _index.set_universal_label(unv_label_as_num);
             }
-            _pvamanaIndex.build_filtered_index(base_file.c_str(), label_file, base_num, paras);
+            _index.build_filtered_index(base_file.c_str(), label_file, base_num, paras);
         }
-        _pvamanaIndex.save(mem_index_path.c_str());
+        _index.save(mem_index_path.c_str());
 
         if (use_filters)
         {
@@ -695,11 +695,11 @@ int build_merged_vamana_index(std::string base_file, diskann::Metric compareMetr
 
         uint64_t shard_base_dim, shard_base_pts;
         get_bin_metadata(shard_base_file, shard_base_pts, shard_base_dim);
-        diskann::Index<T> _pvamanaIndex(compareMetric, shard_base_dim, shard_base_pts, false, false, false,
+        diskann::Index<T> _index(compareMetric, shard_base_dim, shard_base_pts, false, false, false,
                                         build_pq_bytes > 0, build_pq_bytes, use_opq);
         if (!use_filters)
         {
-            _pvamanaIndex.build(shard_base_file.c_str(), shard_base_pts, paras);
+            _index.build(shard_base_file.c_str(), shard_base_pts, paras);
         }
         else
         {
@@ -707,11 +707,11 @@ int build_merged_vamana_index(std::string base_file, diskann::Metric compareMetr
             if (universal_label != "")
             { //  indicates no universal label
                 LabelT unv_label_as_num = 0;
-                _pvamanaIndex.set_universal_label(unv_label_as_num);
+                _index.set_universal_label(unv_label_as_num);
             }
-            _pvamanaIndex.build_filtered_index(shard_base_file.c_str(), shard_labels_file, shard_base_pts, paras);
+            _index.build_filtered_index(shard_base_file.c_str(), shard_labels_file, shard_base_pts, paras);
         }
-        _pvamanaIndex.save(shard_index_file.c_str());
+        _index.save(shard_index_file.c_str());
         // copy universal label file from first shard to the final destination
         // index, since all shards anyway share the universal label
         if (p == 0)
