@@ -305,8 +305,8 @@ void MemoryIndex<T, TagT, LabelT>::build_filtered_index(const std::string &data_
     std::string labels_file_to_use = save_path + "_label_formatted.txt";
     std::string mem_labels_int_map_file = save_path + "_labels_map.txt";
     convert_labels_string_to_int(paramObj.label_file.c_str(), labels_file_to_use, mem_labels_int_map_file,
-                                 paramObj.uinversal_label);
-    if (paramObj.uinversal_label != "")
+                                 paramObj.universal_label);
+    if (paramObj.universal_label != "")
     {
         LabelT unv_label_as_num = 0;
         _index->set_universal_label(unv_label_as_num);
