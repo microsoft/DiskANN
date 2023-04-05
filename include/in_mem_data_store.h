@@ -51,6 +51,7 @@ class InMemDataStore : public AbstractDataStore<data_t>
         return _aligned_dim;
     }
 
+
   protected:
     location_t load_data(const std::string &filename);
 #ifdef EXEC_ENV_OLS
