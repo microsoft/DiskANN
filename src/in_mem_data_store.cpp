@@ -142,6 +142,11 @@ void InMemDataStore<data_t>::set_vector(const location_t loc, const data_t *cons
     }
 }
 
+template<typename data_t> void InMemDataStore<data_t>::prefetch_vector(const location_t loc)
+{
+    diskann::prefetch_vector((const char *)_data + _aligned_dim * (size_t)loc, sizeof(T) * _aligned_dim);
+}
+
 template<typename data_t> float InMemDataStore<data_t>::get_distance(const data_t *query, const location_t loc) const
 {
     return _distance_metric->compare(query, _data + _aligned_dim * loc, _aligned_dim);
@@ -160,6 +165,21 @@ template <typename data_t>
 float InMemDataStore<data_t>::get_distance(const location_t loc1, const location_t loc2) const
 {
     return _distance_metric->compare(_data + loc1 * _aligned_dim, _data + loc2 * _aligned_dim, this->_aligned_dim);
+}
+
+template <typename data_t> void InMemDataStore<data_t>::resize(const location_t new_size)
+{
+#ifndef _WINDOWS
+    data_t *new_data;
+    alloc_aligned((void **)&new_data, new_size * _aligned_dim * sizeof(data_t), 8 * sizeof(data_t));
+    memcpy(new_data, _data, (_max_points + _num_frozen_pts) * _aligned_dim * sizeof(data_t));
+    aligned_free(_data);
+    _data = new_data;
+#else
+    realloc_aligned((void **)&_data, new_size * _aligned_dim * sizeof(data_t), 8 * sizeof(data_t));
+#endif
+    _capacity = new_size;
+
 }
 
 template<typename data_t>

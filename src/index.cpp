@@ -1126,12 +1126,16 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                 if (m + 1 < id_scratch.size())
                 {
                     auto nextn = id_scratch[m + 1];
-                    diskann::prefetch_vector((const char *)_data + _aligned_dim * (size_t)nextn,
-                                             sizeof(T) * _aligned_dim);
+                    _data_store->prefetch_vector(nextn);
+                    //REFACTOR
+                    //diskann::prefetch_vector((const char *)_data + _aligned_dim * (size_t)nextn,
+                    //                         sizeof(T) * _aligned_dim);
                 }
 
-                dist_scratch.push_back(
-                    _distance->compare(aligned_query, _data + _aligned_dim * (size_t)id, (uint32_t)_aligned_dim));
+                dist_scratch.push_back(_data_store->get_distance(aligned_query, id));
+                //REFACTOR
+                //dist_scratch.push_back(
+                //    _distance->compare(aligned_query, _data + _aligned_dim * (size_t)id, (uint32_t)_aligned_dim));
             }
         }
         cmps += id_scratch.size();
@@ -1156,16 +1160,25 @@ void Index<T, TagT, LabelT>::search_for_point_and_prune(int location, uint32_t L
 
     if (!use_filter)
     {
-        iterate_to_fixed_point(_data + _aligned_dim * location, Lindex, init_ids, scratch, false, unused_filter_label,
-                               false);
+        _data_store->get_vector(location, scratch->aligned_query());
+        iterate_to_fixed_point(scratch->aligned_query(), Lindex, init_ids, scratch, false, unused_filter_label, false);
+
+        //REFACTOR
+        //iterate_to_fixed_point(_data + _aligned_dim * location, Lindex, init_ids, scratch, false, unused_filter_label,
+        //                       false);
     }
     else
     {
         std::vector<uint32_t> filter_specific_start_nodes;
         for (auto &x : _pts_to_labels[location])
             filter_specific_start_nodes.emplace_back(_label_to_medoid_id[x]);
-        iterate_to_fixed_point(_data + _aligned_dim * location, filteredLindex, filter_specific_start_nodes, scratch,
+
+        _data_store->get_vector(location, scratch->aligned_query());
+        iterate_to_fixed_point(scratch->aligned_query(), filteredLindex, filter_specific_start_nodes, scratch,
                                true, _pts_to_labels[location], false);
+        //REFACTOR
+        //iterate_to_fixed_point(_data + _aligned_dim * location, filteredLindex, filter_specific_start_nodes, scratch,
+        //                       true, _pts_to_labels[location], false);
     }
 
     auto &pool = scratch->pool();
@@ -1261,8 +1274,10 @@ void Index<T, TagT, LabelT>::occlude_list(const uint32_t location, std::vector<N
                 if (!prune_allowed)
                     continue;
 
-                float djk = _distance->compare(_data + _aligned_dim * (size_t)iter2->id,
-                                               _data + _aligned_dim * (size_t)iter->id, (uint32_t)_aligned_dim);
+                float djk = _data_store->get_distance(iter2->id, iter->id);
+                //REFACTOR
+                //float djk = _distance->compare(_data + _aligned_dim * (size_t)iter2->id,
+                //                               _data + _aligned_dim * (size_t)iter->id, (uint32_t)_aligned_dim);
                 if (_dist_metric == diskann::Metric::L2 || _dist_metric == diskann::Metric::COSINE)
                 {
                     occlude_factor[t] = (djk == 0) ? std::numeric_limits<float>::max()
@@ -1309,8 +1324,10 @@ void Index<T, TagT, LabelT>::prune_neighbors(const uint32_t location, std::vecto
     if (_pq_dist)
     {
         for (auto &ngh : pool)
-            ngh.distance = _distance->compare(_data + _aligned_dim * (size_t)ngh.id,
-                                              _data + _aligned_dim * (size_t)location, (uint32_t)_aligned_dim);
+            ngh.distance = _data_store->get_distance(ngh.id, location);
+            //REFACTOR
+            //ngh.distance = _distance->compare(_data + _aligned_dim * (size_t)ngh.id,
+            //                                  _data + _aligned_dim * (size_t)location, (uint32_t)_aligned_dim);
     }
 
     // sort the pool based on distance to query and prune it with occlude_list
@@ -1381,8 +1398,10 @@ void Index<T, TagT, LabelT>::inter_insert(uint32_t n, std::vector<uint32_t> &pru
             {
                 if (dummy_visited.find(cur_nbr) == dummy_visited.end() && cur_nbr != des)
                 {
-                    float dist = _distance->compare(_data + _aligned_dim * (size_t)des,
-                                                    _data + _aligned_dim * (size_t)cur_nbr, (uint32_t)_aligned_dim);
+                    float dist = _data_store->get_distance(des, cur_nbr);
+                    //REFACTOR
+                    //float dist = _distance->compare(_data + _aligned_dim * (size_t)des,
+                    //                                _data + _aligned_dim * (size_t)cur_nbr, (uint32_t)_aligned_dim);
                     dummy_pool.emplace_back(Neighbor(cur_nbr, dist));
                     dummy_visited.insert(cur_nbr);
                 }
@@ -1505,8 +1524,10 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
             {
                 if (dummy_visited.find(cur_nbr) == dummy_visited.end() && cur_nbr != node)
                 {
-                    float dist = _distance->compare(_data + _aligned_dim * (size_t)node,
-                                                    _data + _aligned_dim * (size_t)cur_nbr, (uint32_t)_aligned_dim);
+                    float dist = _data_store->get_distance(node, cur_nbr);
+                    //REFACTOR
+                    //float dist = _distance->compare(_data + _aligned_dim * (size_t)node,
+                    //                                _data + _aligned_dim * (size_t)cur_nbr, (uint32_t)_aligned_dim);
                     dummy_pool.emplace_back(Neighbor(cur_nbr, dist));
                     dummy_visited.insert(cur_nbr);
                 }
@@ -2583,8 +2604,10 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
                 assert(new_location[old] < old);
                 _final_graph[new_location[old]].swap(_final_graph[old]);
 
-                memcpy((void *)(_data + _aligned_dim * (size_t)new_location[old]),
-                       (void *)(_data + _aligned_dim * (size_t)old), _aligned_dim * sizeof(T));
+                _data_store->copy_points(old, new_location[old], 1);
+                //REFACTOR
+                //memcpy((void *)(_data + _aligned_dim * (size_t)new_location[old]),
+                //       (void *)(_data + _aligned_dim * (size_t)old), _aligned_dim * sizeof(T));
             }
         }
         else
@@ -2770,15 +2793,17 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
     auto start = std::chrono::high_resolution_clock::now();
     assert(_empty_slots.size() == 0); // should not resize if there are empty slots.
 
-#ifndef _WINDOWS
-    T *new_data;
-    alloc_aligned((void **)&new_data, new_internal_points * _aligned_dim * sizeof(T), 8 * sizeof(T));
-    memcpy(new_data, _data, (_max_points + _num_frozen_pts) * _aligned_dim * sizeof(T));
-    aligned_free(_data);
-    _data = new_data;
-#else
-    realloc_aligned((void **)&_data, new_internal_points * _aligned_dim * sizeof(T), 8 * sizeof(T));
-#endif
+    _data_store->resize(new_internal_points);
+    //REFACTOR
+//#ifndef _WINDOWS
+//    T *new_data;
+//    alloc_aligned((void **)&new_data, new_internal_points * _aligned_dim * sizeof(T), 8 * sizeof(T));
+//    memcpy(new_data, _data, (_max_points + _num_frozen_pts) * _aligned_dim * sizeof(T));
+//    aligned_free(_data);
+//    _data = new_data;
+//#else
+//    realloc_aligned((void **)&_data, new_internal_points * _aligned_dim * sizeof(T), 8 * sizeof(T));
+//#endif
     _final_graph.resize(new_internal_points);
     _locks = std::vector<non_recursive_mutex>(new_internal_points);
 

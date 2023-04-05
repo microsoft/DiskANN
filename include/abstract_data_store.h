@@ -27,14 +27,17 @@ template <typename data_t> class AbstractDataStore
     
     virtual void get_vector(const location_t i, data_t* dest) const = 0;
     virtual void set_vector(const location_t i, const data_t *const vector)  = 0;
+    virtual void prefetch_vector(const location_t loc) = 0;
 
+
+    virtual void resize(const location_t new_size) = 0;
 
     virtual void reposition_points(const location_t start_loc, const location_t end_loc,
                                    const location_t num_points) = 0;
     virtual void copy_points(const location_t from_loc, const location_t to_loc, const location_t num_points) = 0;
     //Returns the point in the dataset that is closest to the mean of all points in the dataset
     virtual location_t calculate_medoid() const = 0;
-
+    
     virtual location_t capacity() const 
     {
         return _capacity;
