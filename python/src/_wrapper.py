@@ -30,13 +30,13 @@ _DTYPE_TO_NATIVE_INDEX = {
 
 _DTYPE_TO_NATIVE_INMEM_DYNAMIC_INDEX = {
     np.single: _native_dap.DiskANNDynamicInMemFloatIndex,
-    np.ubyte: _native_dap.DiskANNDynamicInMemUInt8Index,
+    np.ubyte: _native_dap.DiskANNDynamicInMemUint8Index,
     np.byte: _native_dap.DiskANNDynamicInMemInt8Index,
 }
 
 _DTYPE_TO_NATIVE_INMEM_STATIC_INDEX = {
     np.single: _native_dap.DiskANNStaticInMemFloatIndex,
-    np.ubyte: _native_dap.DiskANNStaticInMemUInt8Index,
+    np.ubyte: _native_dap.DiskANNStaticInMemUint8Index,
     np.byte: _native_dap.DiskANNStaticInMemInt8Index,
 }
 
