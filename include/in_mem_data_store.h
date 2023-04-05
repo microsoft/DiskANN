@@ -33,6 +33,9 @@ class InMemDataStore : public AbstractDataStore<data_t>
 
     virtual void get_vector(const location_t i, data_t *target) const override;
     virtual void set_vector(const location_t i, const data_t *const vector) override;
+    virtual void prefetch_vector(const location_t loc) override;
+
+    virtual void resize(const location_t new_size) override;
 
     virtual void reposition_points(const location_t old_location_start, const location_t new_location_start,
                                    const location_t num_points) override;
