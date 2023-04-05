@@ -26,14 +26,12 @@ int build_in_memory_index(const diskann::Metric &metric, const std::string &data
                           const bool use_pq_build, const size_t num_pq_bytes, const bool use_opq,
                           const std::string &label_file, const std::string &universal_label, const uint32_t Lf)
 {
-    diskann::Parameters paras;
-    paras.Set<uint32_t>("R", R);
-    paras.Set<uint32_t>("L", L);
-    paras.Set<uint32_t>("Lf", Lf);
-    paras.Set<uint32_t>("C", 750); // maximum candidate set size during pruning procedure
-    paras.Set<float>("alpha", alpha);
-    paras.Set<bool>("saturate_graph", 0);
-    paras.Set<uint32_t>("num_threads", num_threads);
+    diskann::IndexWriteParameters paras = diskann::IndexWriteParametersBuilder(L, R)
+                                              .with_filter_list_size(Lf)
+                                              .with_alpha(alpha)
+                                              .with_saturate_graph(false)
+                                              .with_num_threads(num_threads)
+                                              .build();
     std::string labels_file_to_use = save_path + "_label_formatted.txt";
     std::string mem_labels_int_map_file = save_path + "_labels_map.txt";
 

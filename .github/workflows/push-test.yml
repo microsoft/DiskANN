@@ -23,6 +23,15 @@ jobs:
       run: python -m pip install build
     - name: Python Build
       run: python -m build
+    - name: Run Python Unit tests
+      run: |
+        pip install scikit-learn
+        pip install dist/*.whl
+        LD_PRELOAD="/lib/x86_64-linux-gnu/libmkl_intel_thread.so:/lib/x86_64-linux-gnu/libmkl_intel_ilp64.so:/lib/x86_64-linux-gnu/libmkl_core.so:/lib/x86_64-linux-gnu/libiomp5.so:/lib/x86_64-linux-gnu/libmkl_avx2.so:/lib/x86_64-linux-gnu/libmkl_def.so" python -m unittest discover python/tests
+    - uses: actions/upload-artifact@v3
+      with:
+        name: wheelhouse
+        path: dist/*.whl
 
   docker-container-build:
     runs-on: ubuntu-latest
@@ -54,11 +63,3 @@ jobs:
       run: |
         mkdir build && cd build && cmake .. && msbuild diskann.sln /m /nologo /t:Build /p:Configuration="Release" /property:Platform="x64" -consoleloggerparameters:"ErrorsOnly;Summary"
       shell: cmd
-
-    - uses: actions/setup-python@v3
-      with:
-        python-version: "3.10"
-    - name: Install Python Build Module
-      run: python -m pip install build
-    - name: Python Build
-      run: python -m build

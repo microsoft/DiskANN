@@ -27,14 +27,11 @@ template <typename T>
 void generate_label_indices(path input_data_path, path final_index_path_prefix, label_set all_labels, uint32_t R,
                             uint32_t L, float alpha, uint32_t num_threads)
 {
-    diskann::Parameters label_index_build_parameters;
-    label_index_build_parameters.Set<uint32_t>("R", R);
-    label_index_build_parameters.Set<uint32_t>("L", L);
-    label_index_build_parameters.Set<uint32_t>("C", 750);
-    label_index_build_parameters.Set<uint32_t>("Lf", 0);
-    label_index_build_parameters.Set<bool>("saturate_graph", 0);
-    label_index_build_parameters.Set<float>("alpha", alpha);
-    label_index_build_parameters.Set<uint32_t>("num_threads", num_threads);
+    diskann::IndexWriteParameters label_index_build_parameters = diskann::IndexWriteParametersBuilder(L, R)
+                                                                     .with_saturate_graph(false)
+                                                                     .with_alpha(alpha)
+                                                                     .with_num_threads(num_threads)
+                                                                     .build();
 
     std::cout << "Generating indices per label..." << std::endl;
     // for each label, build an index on resp. points

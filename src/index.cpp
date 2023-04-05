@@ -28,24 +28,23 @@ namespace diskann
 // (bin), and initialize max_points
 template <typename T, typename TagT, typename LabelT>
 Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_points, const bool dynamic_index,
-                              const Parameters &indexParams, const Parameters &searchParams, const bool enable_tags,
-                              const bool concurrent_consolidate, const bool pq_dist_build, const size_t num_pq_chunks,
-                              const bool use_opq)
+                              const IndexWriteParameters &indexParams, const uint32_t initial_search_list_size,
+                              const uint32_t search_threads, const bool enable_tags, const bool concurrent_consolidate,
+                              const bool pq_dist_build, const size_t num_pq_chunks, const bool use_opq)
     : Index(m, dim, max_points, dynamic_index, enable_tags, concurrent_consolidate, pq_dist_build, num_pq_chunks,
-            use_opq, indexParams.Get<uint32_t>("num_frozen_pts", 0))
+            use_opq, indexParams.num_frozen_points)
 {
-    _indexingQueueSize = indexParams.Get<uint32_t>("L");
-    _indexingRange = indexParams.Get<uint32_t>("R");
-    _indexingMaxC = indexParams.Get<uint32_t>("C");
-    _indexingAlpha = indexParams.Get<float>("alpha");
-    _filterIndexingQueueSize = indexParams.Get<uint32_t>("Lf");
+    _indexingQueueSize = indexParams.search_list_size;
+    _indexingRange = indexParams.max_degree;
+    _indexingMaxC = indexParams.max_occlusion_size;
+    _indexingAlpha = indexParams.alpha;
+    _filterIndexingQueueSize = indexParams.filter_list_size;
 
-    uint32_t num_threads_srch = searchParams.Get<uint32_t>("num_threads");
-    uint32_t num_threads_indx = indexParams.Get<uint32_t>("num_threads");
-    uint32_t num_scratch_spaces = num_threads_srch + num_threads_indx;
-    uint32_t search_l = searchParams.Get<uint32_t>("L");
+    uint32_t num_threads_indx = indexParams.num_threads;
+    uint32_t num_scratch_spaces = search_threads + num_threads_indx;
 
-    initialize_query_scratch(num_scratch_spaces, search_l, _indexingQueueSize, _indexingRange, _indexingMaxC, dim);
+    initialize_query_scratch(num_scratch_spaces, initial_search_list_size, _indexingQueueSize, _indexingRange,
+                             _indexingMaxC, dim);
 }
 
 template <typename T, typename TagT, typename LabelT>
@@ -1380,22 +1379,23 @@ void Index<T, TagT, LabelT>::inter_insert(uint32_t n, std::vector<uint32_t> &pru
     inter_insert(n, pruned_list, _indexingRange, scratch);
 }
 
-template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT>::link(Parameters &parameters)
+template <typename T, typename TagT, typename LabelT>
+void Index<T, TagT, LabelT>::link(IndexWriteParameters &parameters)
 {
-    uint32_t num_threads = parameters.Get<uint32_t>("num_threads");
+    uint32_t num_threads = parameters.num_threads;
     if (num_threads != 0)
         omp_set_num_threads(num_threads);
 
-    _saturate_graph = parameters.Get<bool>("saturate_graph");
+    _saturate_graph = parameters.saturate_graph;
 
     if (num_threads != 0)
         omp_set_num_threads(num_threads);
 
-    _indexingQueueSize = parameters.Get<uint32_t>("L"); // Search list size
-    _filterIndexingQueueSize = parameters.Get<uint32_t>("Lf");
-    _indexingRange = parameters.Get<uint32_t>("R");
-    _indexingMaxC = parameters.Get<uint32_t>("C");
-    _indexingAlpha = parameters.Get<float>("alpha");
+    _indexingQueueSize = parameters.search_list_size;
+    _filterIndexingQueueSize = parameters.filter_list_size;
+    _indexingRange = parameters.max_degree;
+    _indexingMaxC = parameters.max_occlusion_size;
+    _indexingAlpha = parameters.alpha;
 
     /* visit_order is a vector that is initialized to the entire graph */
     std::vector<uint32_t> visit_order;
@@ -1501,11 +1501,11 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
 }
 
 template <typename T, typename TagT, typename LabelT>
-void Index<T, TagT, LabelT>::prune_all_nbrs(const Parameters &parameters)
+void Index<T, TagT, LabelT>::prune_all_neighbors(const uint32_t max_degree, const uint32_t max_occlusion_size,
+                                                 const float alpha)
 {
-    const uint32_t range = parameters.Get<uint32_t>("R");
-    const uint32_t maxc = parameters.Get<uint32_t>("C");
-    const float alpha = parameters.Get<uint32_t>("alpha");
+    const uint32_t range = max_degree;
+    const uint32_t maxc = max_occlusion_size;
     _filtered_index = true;
 
     diskann::Timer timer;
@@ -1611,7 +1611,7 @@ void Index<T, TagT, LabelT>::set_start_points_at_random(T radius, uint32_t rando
 }
 
 template <typename T, typename TagT, typename LabelT>
-void Index<T, TagT, LabelT>::build_with_data_populated(Parameters &parameters, const std::vector<TagT> &tags)
+void Index<T, TagT, LabelT>::build_with_data_populated(IndexWriteParameters &parameters, const std::vector<TagT> &tags)
 {
     diskann::cout << "Starting index build with " << _nd << " points... " << std::endl;
 
@@ -1636,10 +1636,10 @@ void Index<T, TagT, LabelT>::build_with_data_populated(Parameters &parameters, c
         }
     }
 
-    uint32_t index_R = parameters.Get<uint32_t>("R");
-    uint32_t num_threads_index = parameters.Get<uint32_t>("num_threads");
-    uint32_t index_L = parameters.Get<uint32_t>("L");
-    uint32_t maxc = parameters.Get<uint32_t>("C");
+    uint32_t index_R = parameters.max_degree;
+    uint32_t num_threads_index = parameters.num_threads;
+    uint32_t index_L = parameters.search_list_size;
+    uint32_t maxc = parameters.max_occlusion_size;
 
     if (_query_scratch.size() == 0)
     {
@@ -1667,7 +1667,7 @@ void Index<T, TagT, LabelT>::build_with_data_populated(Parameters &parameters, c
 }
 
 template <typename T, typename TagT, typename LabelT>
-void Index<T, TagT, LabelT>::build(const T *data, const size_t num_points_to_load, Parameters &parameters,
+void Index<T, TagT, LabelT>::build(const T *data, const size_t num_points_to_load, IndexWriteParameters &parameters,
                                    const std::vector<TagT> &tags)
 {
     if (num_points_to_load == 0)
@@ -1701,8 +1701,8 @@ void Index<T, TagT, LabelT>::build(const T *data, const size_t num_points_to_loa
 }
 
 template <typename T, typename TagT, typename LabelT>
-void Index<T, TagT, LabelT>::build(const char *filename, const size_t num_points_to_load, Parameters &parameters,
-                                   const std::vector<TagT> &tags)
+void Index<T, TagT, LabelT>::build(const char *filename, const size_t num_points_to_load,
+                                   IndexWriteParameters &parameters, const std::vector<TagT> &tags)
 {
     std::unique_lock<std::shared_timed_mutex> ul(_update_lock);
     if (num_points_to_load == 0)
@@ -1805,8 +1805,8 @@ void Index<T, TagT, LabelT>::build(const char *filename, const size_t num_points
 }
 
 template <typename T, typename TagT, typename LabelT>
-void Index<T, TagT, LabelT>::build(const char *filename, const size_t num_points_to_load, Parameters &parameters,
-                                   const char *tag_filename)
+void Index<T, TagT, LabelT>::build(const char *filename, const size_t num_points_to_load,
+                                   IndexWriteParameters &parameters, const char *tag_filename)
 {
     std::vector<TagT> tags;
 
@@ -1942,7 +1942,7 @@ void Index<T, TagT, LabelT>::set_universal_label(const LabelT &label)
 
 template <typename T, typename TagT, typename LabelT>
 void Index<T, TagT, LabelT>::build_filtered_index(const char *filename, const std::string &label_file,
-                                                  const size_t num_points_to_load, Parameters &parameters,
+                                                  const size_t num_points_to_load, IndexWriteParameters &parameters,
                                                   const std::vector<TagT> &tags)
 {
     _labels_file = label_file;
@@ -2350,7 +2350,7 @@ inline void Index<T, TagT, LabelT>::process_delete(const tsl::robin_set<uint32_t
 
 // Returns number of live points left after consolidation
 template <typename T, typename TagT, typename LabelT>
-consolidation_report Index<T, TagT, LabelT>::consolidate_deletes(const Parameters &params)
+consolidation_report Index<T, TagT, LabelT>::consolidate_deletes(const IndexWriteParameters &params)
 {
     if (!_enable_tags)
         throw diskann::ANNException("Point tag array not instantiated", -1, __FUNCSIG__, __FILE__, __LINE__);
@@ -2405,11 +2405,10 @@ consolidation_report Index<T, TagT, LabelT>::consolidate_deletes(const Parameter
         throw diskann::ANNException("ERROR: start node has been deleted", -1, __FUNCSIG__, __FILE__, __LINE__);
     }
 
-    const uint32_t range = params.Get<uint32_t>("R");
-    const uint32_t maxc = params.Get<uint32_t>("C");
-    const float alpha = params.Get<float>("alpha");
-    const uint32_t num_threads =
-        params.Get<uint32_t>("num_threads") == 0 ? omp_get_num_threads() : params.Get<uint32_t>("num_threads");
+    const uint32_t range = params.max_degree;
+    const uint32_t maxc = params.max_occlusion_size;
+    const float alpha = params.alpha;
+    const uint32_t num_threads = params.num_threads == 0 ? omp_get_num_threads() : params.num_threads;
 
     uint32_t num_calls_to_process_delete = 0;
     diskann::Timer timer;
