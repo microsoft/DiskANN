@@ -1,6 +1,15 @@
 name: DiskANN Pull Request Build and Test
 on: [pull_request]
 jobs:
+  docker-container-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v2
+      - name: Docker build
+        run: |
+          docker build .
+
   build-and-run:
     name: Build and run tests for ${{ matrix.os }}
     runs-on: ${{ matrix.os }}

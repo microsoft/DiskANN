@@ -24,6 +24,15 @@ jobs:
     - name: Python Build
       run: python -m build
 
+  docker-container-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v2
+      - name: Docker build
+        run: |
+          docker build .
+
   windows-build:
     name: Build for ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
