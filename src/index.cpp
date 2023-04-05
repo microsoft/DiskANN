@@ -449,7 +449,8 @@ size_t Index<T, TagT, LabelT>::load_data(std::string filename)
         std::stringstream stream;
         stream << "ERROR: data file " << filename << " does not exist." << std::endl;
         diskann::cerr << stream.str() << std::endl;
-        aligned_free(_data);
+        //REFACTOR
+        //aligned_free(_data);
         throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
     }
     diskann::get_bin_metadata(filename, file_num_points, file_dim);
@@ -464,7 +465,8 @@ size_t Index<T, TagT, LabelT>::load_data(std::string filename)
         stream << "ERROR: Driver requests loading " << _dim << " dimension,"
                << "but file has " << file_dim << " dimension." << std::endl;
         diskann::cerr << stream.str() << std::endl;
-        aligned_free(_data);
+        //REFACTOR
+        //aligned_free(_data);
         throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
     }
 
@@ -475,9 +477,13 @@ size_t Index<T, TagT, LabelT>::load_data(std::string filename)
     }
 
 #ifdef EXEC_ENV_OLS
+
+    //REFACTOR TODO: Must figure out how to support aligned reader in a clean manner.
     copy_aligned_data_from_file<T>(reader, _data, file_num_points, file_dim, _aligned_dim);
 #else
-    copy_aligned_data_from_file<T>(filename.c_str(), _data, file_num_points, file_dim, _aligned_dim);
+    _data_store->populate_data(filename, 0); //offset == 0.
+    //REFACTOR
+    //copy_aligned_data_from_file<T>(filename.c_str(), _data, file_num_points, file_dim, _aligned_dim);
 #endif
     return file_num_points;
 }
@@ -720,7 +726,8 @@ size_t Index<T, TagT, LabelT>::load_graph(std::string filename, size_t expected_
                    << std::endl;
         }
         diskann::cerr << stream.str() << std::endl;
-        aligned_free(_data);
+        //REFACTOR
+        //aligned_free(_data);
         throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
     }
 
@@ -2398,9 +2405,12 @@ inline void Index<T, TagT, LabelT>::process_delete(const tsl::robin_set<uint32_t
             expanded_nghrs_vec.reserve(expanded_nodes_set.size());
             for (auto &ngh : expanded_nodes_set)
             {
-                expanded_nghrs_vec.emplace_back(
-                    ngh,
-                    _distance->compare(_data + _aligned_dim * loc, _data + _aligned_dim * ngh, (uint32_t)_aligned_dim));
+                expanded_nghrs_vec.emplace_back(ngh, _data_store->get_distance(loc, ngh));
+
+                //REFACTOR
+                //expanded_nghrs_vec.emplace_back(
+                //    ngh,
+                //    _distance->compare(_data + _aligned_dim * loc, _data + _aligned_dim * ngh, (uint32_t)_aligned_dim));
             }
             std::sort(expanded_nghrs_vec.begin(), expanded_nghrs_vec.end());
             std::vector<uint32_t> &occlude_list_output = scratch->occlude_list_output();
