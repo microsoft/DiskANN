@@ -8,8 +8,8 @@
 #include "disk_utils.h"
 #include "math_utils.h"
 #include "index.h"
-#include "index_factory.h"
 #include "partition.h"
+#include "index_factory.h"
 
 namespace po = boost::program_options;
 
@@ -138,68 +138,68 @@ int main(int argc, char **argv)
                          std::string(std::to_string(append_reorder_data)) + " " +
                          std::string(std::to_string(build_PQ)) + " " + std::string(std::to_string(QD));
 
-    diskann::IndexConfig config;
-    config.build_type = diskann::DISK;
-    config.data_type = data_type;
-    config.label_type = label_type;
-    config.use_opq = use_opq;
-    config.filtered_build = use_filters;
-    config.metric = metric;
-
-    diskann::Parameters build_parameters;
-    build_parameters.Set<std::string>("label_file", label_file);
-    build_parameters.Set<std::string>("universal_label", universal_label);
-    build_parameters.Set<uint32_t>("filter_threshold", filter_threshold);
-    build_parameters.Set<uint32_t>("Lf", Lf);
-    build_parameters.Set<std::string>("disk_params", params);
-
-    diskann::IndexFactory factory = diskann::IndexFactory(config);
-    auto index = factory.instance();
-    index->build(data_path, build_parameters, index_path_prefix);
-    return 0;
-
     try
     {
-        if (label_file != "" && label_type == "ushort")
-        {
-            if (data_type == std::string("int8"))
-                return diskann::build_disk_index<int8_t>(data_path.c_str(), index_path_prefix.c_str(), params.c_str(),
-                                                         metric, use_opq, codebook_prefix, use_filters, label_file,
-                                                         universal_label, filter_threshold, Lf);
-            else if (data_type == std::string("uint8"))
-                return diskann::build_disk_index<uint8_t, uint16_t>(
-                    data_path.c_str(), index_path_prefix.c_str(), params.c_str(), metric, use_opq, codebook_prefix,
-                    use_filters, label_file, universal_label, filter_threshold, Lf);
-            else if (data_type == std::string("float"))
-                return diskann::build_disk_index<float, uint16_t>(
-                    data_path.c_str(), index_path_prefix.c_str(), params.c_str(), metric, use_opq, codebook_prefix,
-                    use_filters, label_file, universal_label, filter_threshold, Lf);
-            else
-            {
-                diskann::cerr << "Error. Unsupported data type" << std::endl;
-                return -1;
-            }
-        }
-        else
-        {
-            if (data_type == std::string("int8"))
-                return diskann::build_disk_index<int8_t>(data_path.c_str(), index_path_prefix.c_str(), params.c_str(),
-                                                         metric, use_opq, codebook_prefix, use_filters, label_file,
-                                                         universal_label, filter_threshold, Lf);
-            else if (data_type == std::string("uint8"))
-                return diskann::build_disk_index<uint8_t>(data_path.c_str(), index_path_prefix.c_str(), params.c_str(),
-                                                          metric, use_opq, codebook_prefix, use_filters, label_file,
-                                                          universal_label, filter_threshold, Lf);
-            else if (data_type == std::string("float"))
-                return diskann::build_disk_index<float>(data_path.c_str(), index_path_prefix.c_str(), params.c_str(),
-                                                        metric, use_opq, codebook_prefix, use_filters, label_file,
-                                                        universal_label, filter_threshold, Lf);
-            else
-            {
-                diskann::cerr << "Error. Unsupported data type" << std::endl;
-                return -1;
-            }
-        }
+        diskann::IndexConfig config;
+        config.build_type = diskann::DISK;
+        config.data_type = data_type;
+        config.label_type = label_type;
+        config.use_opq = use_opq;
+        config.filtered_build = use_filters;
+        config.metric = metric;
+
+        diskann::Parameters build_parameters;
+        build_parameters.Set<std::string>("label_file", label_file);
+        build_parameters.Set<std::string>("universal_label", universal_label);
+        build_parameters.Set<uint32_t>("filter_threshold", filter_threshold);
+        build_parameters.Set<uint32_t>("Lf", Lf);
+        build_parameters.Set<std::string>("disk_params", params);
+
+        diskann::IndexFactory factory = diskann::IndexFactory(config);
+        auto index = factory.instance();
+        index->build(data_path, build_parameters, index_path_prefix);
+        return 0;
+
+        /* if (label_file != "" && label_type == "ushort")
+         {
+             if (data_type == std::string("int8"))
+                 return diskann::build_disk_index<int8_t, uint16_t>(data_path.c_str(), index_path_prefix.c_str(),
+                                                                    params.c_str(), metric, use_opq, use_filters,
+                                                                    label_file, universal_label, filter_threshold, Lf);
+             else if (data_type == std::string("uint8"))
+                 return diskann::build_disk_index<uint8_t, uint16_t>(data_path.c_str(), index_path_prefix.c_str(),
+                                                                     params.c_str(), metric, use_opq, use_filters,
+                                                                     label_file, universal_label, filter_threshold, Lf);
+             else if (data_type == std::string("float"))
+                 return diskann::build_disk_index<float, uint16_t>(data_path.c_str(), index_path_prefix.c_str(),
+                                                                   params.c_str(), metric, use_opq, use_filters,
+                                                                   label_file, universal_label, filter_threshold, Lf);
+             else
+             {
+                 diskann::cerr << "Error. Unsupported data type" << std::endl;
+                 return -1;
+             }
+         }
+         else
+         {
+             if (data_type == std::string("int8"))
+                 return diskann::build_disk_index<int8_t>(data_path.c_str(), index_path_prefix.c_str(), params.c_str(),
+                                                          metric, use_opq, use_filters, label_file, universal_label,
+                                                          filter_threshold, Lf);
+             else if (data_type == std::string("uint8"))
+                 return diskann::build_disk_index<uint8_t>(data_path.c_str(), index_path_prefix.c_str(), params.c_str(),
+                                                           metric, use_opq, use_filters, label_file, universal_label,
+                                                           filter_threshold, Lf);
+             else if (data_type == std::string("float"))
+                 return diskann::build_disk_index<float>(data_path.c_str(), index_path_prefix.c_str(), params.c_str(),
+                                                         metric, use_opq, use_filters, label_file, universal_label,
+                                                         filter_threshold, Lf);
+             else
+             {
+                 diskann::cerr << "Error. Unsupported data type" << std::endl;
+                 return -1;
+             }
+         }*/
     }
     catch (const std::exception &e)
     {

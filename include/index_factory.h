@@ -9,7 +9,7 @@
 namespace diskann
 {
 template <typename T, typename TagT, typename LabelT> class MemoryIndex;
-template <typename T, typename TagT, typename LabelT> class DiskIndex;
+template <typename T, typename LabelT> class DiskIndex;
 enum BuildType
 {
     MEMORY,
@@ -169,7 +169,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     void build_unfiltered_index(const std::string &data_file, Parameters &build_params);
 };
 
-template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> class DiskIndex : public AbstractIndex
+template <typename T, typename LabelT = uint32_t> class DiskIndex : public AbstractIndex
 {
   public:
     DISKANN_DLLEXPORT DiskIndex(IndexConfig &config);
