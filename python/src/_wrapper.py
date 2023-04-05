@@ -28,6 +28,18 @@ _DTYPE_TO_NATIVE_INDEX = {
     np.byte: _native_dap.DiskANNInt8Index,
 }
 
+_DTYPE_TO_NATIVE_INMEM_DYNAMIC_INDEX = {
+    np.single: _native_dap.DiskANNDynamicInMemFloatIndex,
+    np.ubyte: _native_dap.DiskANNDynamicInMemUInt8Index,
+    np.byte: _native_dap.DiskANNDynamicInMemInt8Index,
+}
+
+_DTYPE_TO_NATIVE_INMEM_STATIC_INDEX = {
+    np.single: _native_dap.DiskANNStaticInMemFloatIndex,
+    np.ubyte: _native_dap.DiskANNStaticInMemUInt8Index,
+    np.byte: _native_dap.DiskANNStaticInMemInt8Index,
+}
+
 
 VectorDType = TypeVar("VectorDType", Type[np.single], Type[np.ubyte], Type[np.byte])
 
@@ -340,7 +352,6 @@ class DiskIndex:
             list_size = k_neighbors
         return self._index.search(
             query=query,
-            dim=query.shape[0],
             knn=k_neighbors,
             l_search=list_size,
             beam_width=beam_width,
@@ -409,7 +420,6 @@ class DiskIndex:
         num_queries, dim = queries.shape
         return self._index.batch_search(
             queries=queries,
-            dim=dim,
             num_queries=num_queries,
             knn=k_neighbors,
             l_search=list_size,
