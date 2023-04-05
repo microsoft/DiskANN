@@ -38,7 +38,7 @@ void DiskIndex<T, TagT, LabelT>::build(const std::string &data_file, Parameters 
     auto build_param_obj = parse_to_build_params(build_params);
     diskann::build_disk_index<T, LabelT>(data_file.c_str(), save_path.c_str(), build_param_obj.disk_params.c_str(),
                                          _config.metric, _config.use_opq, _config.filtered_build,
-                                         build_param_obj.label_file, build_param_obj.uinversal_label,
+                                         build_param_obj.label_file, build_param_obj.universal_label,
                                          build_param_obj.filter_threshold, build_param_obj.Lf);
 }
 

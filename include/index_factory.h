@@ -54,7 +54,7 @@ struct BuildParams
     float alpha;
     bool saturate_graph;
     std::string label_file = "";
-    std::string uinversal_label = "";
+    std::string universal_label = "";
     uint32_t filter_threshold = 0;
 
     std::string disk_params = "";
@@ -105,7 +105,7 @@ class AbstractIndex
         param.num_threads = build_parameters.Get<uint32_t>("num_threads", omp_get_num_procs());
         param.saturate_graph = build_parameters.Get<bool>("saturate_graph", false);
         param.label_file = build_parameters.Get<std::string>("label_file", "");
-        param.uinversal_label = build_parameters.Get<std::string>("universal_label", "");
+        param.universal_label = build_parameters.Get<std::string>("universal_label", "");
         param.filter_threshold = build_parameters.Get<uint32_t>("filter_threshold", 0);
         param.disk_params = build_parameters.Get<std::string>("disk_params", "");
         return param;
