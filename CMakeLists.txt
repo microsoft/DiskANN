@@ -119,38 +119,56 @@ endif()
 
 include_directories(${Boost_INCLUDE_DIR})
 
-#MKL Config
-if (MSVC)
-    # Only the DiskANN DLL and one of the tools need MKL libraries. Additionally, only a small part of MKL is used.
-    # Given that and given that MKL DLLs are huge, use static linking to end up with no MKL DLL dependencies and with
-    # significantly smaller disk footprint.
-    #
-    # The compile options are not modified as there's already an unconditional -DMKL_ILP64 define below
-    # for all architectures, which is all that's needed.
-    set(DISKANN_MKL_INCLUDE_DIRECTORIES "${DISKANN_MSVC_PACKAGES}/intelmkl.static.win-x64/lib/native/include")
-    set(DISKANN_MKL_LIB_PATH "${DISKANN_MSVC_PACKAGES}/intelmkl.static.win-x64/lib/native/win-x64")
+#CBLAS Config
 
-    set(DISKANN_MKL_LINK_LIBRARIES
-        "${DISKANN_MKL_LIB_PATH}/mkl_intel_ilp64.lib"
-        "${DISKANN_MKL_LIB_PATH}/mkl_core.lib"
-        "${DISKANN_MKL_LIB_PATH}/mkl_intel_thread.lib")
-else()
-    # expected path for manual intel mkl installs
-    set(OMP_PATH /opt/intel/oneapi/compiler/2022.0.2/linux/compiler/lib/intel64_lin/ CACHE PATH "Intel OneAPI OpenMP library implementation path")
-    set(MKL_ROOT /opt/intel/oneapi/mkl/latest CACHE PATH "Intel OneAPI MKL library implementation path")
-    link_directories(${OMP_PATH} ${MKL_ROOT}/lib/intel64)
-    include_directories(${MKL_ROOT}/include)
+find_package(BLAS REQUIRED)
+message(STATUS BLAS found: ${BLAS_LIBRARIES} )
+list(FIND BLAS_LIBRARIES Intel10_64ilp found_Intel10_64ilp )
+list(FIND BLAS_LIBRARIES OpenBLAS found_OpenBLAS)
 
-    # expected path for apt packaged intel mkl installs
-    link_directories(/usr/lib/x86_64-linux-gnu/mkl)
-    include_directories(/usr/include/mkl)
+if (USE_OPENBLAS)
+    if (EQUAL found_OpenBLAS -1)
+        message(FATAL_ERROR "OpenBLAS not found")
+    endif()
 
-    # compile flags and link libraries
-    add_compile_options(-m64 -Wl,--no-as-needed)
-    link_libraries(mkl_intel_ilp64 mkl_intel_thread mkl_core iomp5 pthread m dl)
-endif()
 
-add_definitions(-DMKL_ILP64)
+elseif (found_Intel10_64ilp)
+message (STATUS "Using Intel10_64ilp for BLAS")
+add_compile_definitions(USE_MKL_BLAS)
+
+    if(MSVC)
+        # Only the DiskANN DLL and one of the tools need MKL libraries. Additionally, only a small part of MKL is used.
+        # Given that and given that MKL DLLs are huge, use static linking to end up with no MKL DLL dependencies and with
+        # significantly smaller disk footprint.
+        #
+        # The compile options are not modified as there's already an unconditional -DMKL_ILP64 define below
+        # for all architectures, which is all that's needed.
+        set(DISKANN_MKL_INCLUDE_DIRECTORIES "${DISKANN_MSVC_PACKAGES}/intelmkl.static.win-x64/lib/native/include")
+        set(DISKANN_MKL_LIB_PATH "${DISKANN_MSVC_PACKAGES}/intelmkl.static.win-x64/lib/native/win-x64")
+
+        set(DISKANN_MKL_LINK_LIBRARIES
+            "${DISKANN_MKL_LIB_PATH}/mkl_intel_ilp64.lib"
+            "${DISKANN_MKL_LIB_PATH}/mkl_core.lib"
+            "${DISKANN_MKL_LIB_PATH}/mkl_intel_thread.lib")
+    else()
+        # expected path for manual intel mkl installs
+        set(OMP_PATH /opt/intel/oneapi/compiler/2022.0.2/linux/compiler/lib/intel64_lin/ CACHE PATH "Intel OneAPI OpenMP library implementation path")
+        set(MKL_ROOT /opt/intel/oneapi/mkl/latest CACHE PATH "Intel OneAPI MKL library implementation path")
+        link_directories(${OMP_PATH} ${MKL_ROOT}/lib/intel64)
+        include_directories(${MKL_ROOT}/include)
+
+        # expected path for apt packaged intel mkl installs
+        link_directories(/usr/lib/x86_64-linux-gnu/mkl)
+        include_directories(/usr/include/mkl)
+
+        # compile flags and link libraries
+        add_compile_options(-m64 -Wl,--no-as-needed)
+        link_libraries(mkl_intel_ilp64 mkl_intel_thread mkl_core iomp5 pthread m dl)
+    endif()
+    add_definitions(-DMKL_ILP64) 
+ else()
+        message(ERROR "No BLAS library implementation specified")
+ endif()
 
 # Section for tcmalloc. The DiskANN tools are always linked to tcmalloc. For Windows, they also need to
 # force-include the _tcmalloc symbol for enabling tcmalloc.
