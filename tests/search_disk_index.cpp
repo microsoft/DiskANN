@@ -12,7 +12,6 @@
 #include "pq_flash_index.h"
 #include "timer.h"
 #include "percentile_stats.h"
-#include "index_factory.h"
 
 #ifndef _WINDOWS
 #include <sys/mman.h>
@@ -26,6 +25,7 @@
 #include "windows_aligned_file_reader.h"
 #endif
 #endif
+#include "index_factory.h"
 
 #define WARMUP false
 

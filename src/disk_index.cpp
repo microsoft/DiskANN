@@ -2,12 +2,12 @@
 #include "index.h"
 #include "disk_utils.h"
 #include "math_utils.h"
-#include "memory_mapper.h"
 #include "partition.h"
 #include "pq_flash_index.h"
 #include "timer.h"
 #include "percentile_stats.h"
 #include "index_factory.h"
+
 #ifndef _WINDOWS
 #include <sys/mman.h>
 #include <sys/stat.h>
@@ -26,14 +26,12 @@
 namespace diskann
 {
 
-template <typename T, typename TagT, typename LabelT>
-DiskIndex<T, TagT, LabelT>::DiskIndex(IndexConfig &config) : _config(config)
+template <typename T, typename LabelT> DiskIndex<T, LabelT>::DiskIndex(IndexConfig &config) : _config(config)
 {
 }
 
-template <typename T, typename TagT, typename LabelT>
-void DiskIndex<T, TagT, LabelT>::build(const std::string &data_file, Parameters &build_params,
-                                       const std::string &save_path)
+template <typename T, typename LabelT>
+void DiskIndex<T, LabelT>::build(const std::string &data_file, Parameters &build_params, const std::string &save_path)
 {
     auto build_param_obj = parse_to_build_params(build_params);
     diskann::build_disk_index<T, LabelT>(data_file.c_str(), save_path.c_str(), build_param_obj.disk_params.c_str(),
@@ -42,18 +40,17 @@ void DiskIndex<T, TagT, LabelT>::build(const std::string &data_file, Parameters 
                                          build_param_obj.filter_threshold, build_param_obj.Lf);
 }
 
-template <typename T, typename TagT, typename LabelT>
-void DiskIndex<T, TagT, LabelT>::search(const std::string &query_file, Parameters &search_params,
-                                        const std::vector<std::string> &query_filters)
+template <typename T, typename LabelT>
+void DiskIndex<T, LabelT>::search(const std::string &query_file, Parameters &search_params,
+                                  const std::vector<std::string> &query_filters)
 {
     // NEED to implament code...
 }
 
-template <typename T, typename TagT, typename LabelT>
-int DiskIndex<T, TagT, LabelT>::search_prebuilt_index(const std::string &index_path, const std::string &query_file,
-                                                      Parameters &search_params,
-                                                      std::vector<std::string> &query_filters,
-                                                      const std::string &result_path_prefix)
+template <typename T, typename LabelT>
+int DiskIndex<T, LabelT>::search_prebuilt_index(const std::string &index_path, const std::string &query_file,
+                                                Parameters &search_params, std::vector<std::string> &query_filters,
+                                                const std::string &result_path_prefix)
 {
     auto search_param_obj = parse_to_search_params(search_params);
     auto beamwidth = search_param_obj.W;
@@ -319,23 +316,23 @@ int DiskIndex<T, TagT, LabelT>::search_prebuilt_index(const std::string &index_p
     return best_recall >= fail_if_recall_below ? 0 : -1;
 }
 
-template <typename T, typename TagT, typename LabelT>
-void DiskIndex<T, TagT, LabelT>::build_filtered_index(const std::string &data_file, Parameters &build_params,
-                                                      const std::string &save_path)
+template <typename T, typename LabelT>
+void DiskIndex<T, LabelT>::build_filtered_index(const std::string &data_file, Parameters &build_params,
+                                                const std::string &save_path)
 {
 }
 
-template <typename T, typename TagT, typename LabelT>
-void DiskIndex<T, TagT, LabelT>::build_unfiltered_index(const std::string &data_file, Parameters &build_params)
+template <typename T, typename LabelT>
+void DiskIndex<T, LabelT>::build_unfiltered_index(const std::string &data_file, Parameters &build_params)
 {
 }
 
-template DISKANN_DLLEXPORT class DiskIndex<float, uint32_t, uint16_t>;
-template DISKANN_DLLEXPORT class DiskIndex<uint8_t, uint32_t, uint16_t>;
-template DISKANN_DLLEXPORT class DiskIndex<int8_t, uint32_t, uint16_t>;
+template DISKANN_DLLEXPORT class DiskIndex<float, uint16_t>;
+template DISKANN_DLLEXPORT class DiskIndex<uint8_t, uint16_t>;
+template DISKANN_DLLEXPORT class DiskIndex<int8_t, uint16_t>;
 
-template DISKANN_DLLEXPORT class DiskIndex<float, uint32_t, uint32_t>;
-template DISKANN_DLLEXPORT class DiskIndex<uint8_t, uint32_t, uint32_t>;
-template DISKANN_DLLEXPORT class DiskIndex<int8_t, uint32_t, uint32_t>;
+template DISKANN_DLLEXPORT class DiskIndex<float, uint32_t>;
+template DISKANN_DLLEXPORT class DiskIndex<uint8_t, uint32_t>;
+template DISKANN_DLLEXPORT class DiskIndex<int8_t, uint32_t>;
 
 } // namespace diskann
