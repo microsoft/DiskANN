@@ -34,6 +34,12 @@ _DTYPE_TO_NATIVE_INMEM_DYNAMIC_INDEX = {
     np.byte: _native_dap.DiskANNDynamicInMemInt8Index,
 }
 
+_DTYPE_TO_NATIVE_INMEM_STATIC_INDEX = {
+    np.single: _native_dap.DiskANNStaticInMemFloatIndex,
+    np.ubyte: _native_dap.DiskANNStaticInMemUInt8Index,
+    np.byte: _native_dap.DiskANNStaticInMemInt8Index,
+}
+
 
 VectorDType = TypeVar("VectorDType", Type[np.single], Type[np.ubyte], Type[np.byte])
 
