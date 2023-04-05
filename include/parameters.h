@@ -121,21 +121,4 @@ class IndexWriteParametersBuilder
     uint32_t _num_frozen_points{defaults::NUM_FROZEN_POINTS};
 };
 
-class IndexReadParameters
-{
-    /**
-     * Parameters used for reading/searching the index.
-     * Simple constructor and properties because they're < 4 properties
-     *
-     */
-  public:
-    const uint32_t search_list_size;
-    const uint32_t num_threads;
-    IndexReadParameters(const uint32_t search_list_size, const uint32_t num_threads)
-        : search_list_size(search_list_size), num_threads(num_threads)
-    {
-    }
-
-    IndexReadParameters &operator=(const IndexReadParameters &) = delete;
-};
 } // namespace diskann

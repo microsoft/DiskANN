@@ -151,8 +151,6 @@ void build_incremental_index(const std::string &data_path, const uint32_t L, con
                                                .with_num_frozen_points(num_start_pts)
                                                .build();
 
-    diskann::IndexReadParameters read_params(L, thread_count);
-
     size_t dim, aligned_dim;
     size_t num_points;
 
@@ -179,7 +177,7 @@ void build_incremental_index(const std::string &data_path, const uint32_t L, con
     using TagT = uint32_t;
     const bool enable_tags = true;
 
-    diskann::Index<T, TagT> index(diskann::L2, dim, max_points_to_insert, true, params, read_params, enable_tags,
+    diskann::Index<T, TagT> index(diskann::L2, dim, max_points_to_insert, true, params, L, thread_count, enable_tags,
                                   concurrent);
 
     size_t current_point_offset = points_to_skip;

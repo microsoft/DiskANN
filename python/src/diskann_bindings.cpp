@@ -154,14 +154,17 @@ template <class T> struct DynamicInMemIndex
     const IndexWriteParameters write_params;
 
     DynamicInMemIndex(Metric m, const size_t dim, const size_t max_points, const IndexWriteParameters &index_parameters,
-                      const IndexReadParameters &search_parameters, const bool concurrent_consolidate)
+                      const uint32_t initial_search_list_size, const uint32_t search_threads,
+                      const bool concurrent_consolidate)
         : write_params(index_parameters)
     {
         _index = new Index<T>(m, dim, max_points,
-                              true,              // dynamic_index
-                              index_parameters,  // used for insert
-                              search_parameters, // used for searching
-                              true,              // enable_tags
+                              true,                     // dynamic_index
+                              index_parameters,         // used for insert
+                              initial_search_list_size, // used to prepare the scratch space for searching. can / may be
+                                                        // expanded if the search asks for a larger L.
+                              search_threads,           // also used for the scratch space
+                              true,                     // enable_tags
                               concurrent_consolidate,
                               false,  // pq_dist_build
                               0,      // num_pq_chunks
@@ -314,10 +317,11 @@ PYBIND11_MODULE(_diskannpy, m)
 
     py::class_<DynamicInMemIndex<float>>(m, "DiskANNDynamicInMemFloatIndex")
         .def(py::init([](diskann::Metric metric, const size_t dim, const size_t max_points,
-                         const IndexWriteParameters &index_parameters, const IndexReadParameters &search_parameters,
-                         const bool concurrent_consolidate) {
-            return std::unique_ptr<DynamicInMemIndex<float>>(new DynamicInMemIndex<float>(
-                metric, dim, max_points, index_parameters, search_parameters, concurrent_consolidate));
+                         const IndexWriteParameters &index_parameters, const uint32_t initial_search_list_size,
+                         const uint32_t search_threads, const bool concurrent_consolidate) {
+            return std::unique_ptr<DynamicInMemIndex<float>>(
+                new DynamicInMemIndex<float>(metric, dim, max_points, index_parameters, initial_search_list_size,
+                                             search_threads, concurrent_consolidate));
         }))
         .def("search", &DynamicInMemIndex<float>::search, py::arg("query"), py::arg("knn"), py::arg("l_search"))
         .def("batch_search", &DynamicInMemIndex<float>::batch_search, py::arg("queries"), py::arg("num_queries"),
@@ -328,10 +332,11 @@ PYBIND11_MODULE(_diskannpy, m)
 
     py::class_<DynamicInMemIndex<int8_t>>(m, "DiskANNDynamicInMemInt8Index")
         .def(py::init([](diskann::Metric metric, const size_t dim, const size_t max_points,
-                         const IndexWriteParameters &index_parameters, const IndexReadParameters &search_parameters,
-                         const bool concurrent_consolidate) {
-            return std::unique_ptr<DynamicInMemIndex<int8_t>>(new DynamicInMemIndex<int8_t>(
-                metric, dim, max_points, index_parameters, search_parameters, concurrent_consolidate));
+                         const IndexWriteParameters &index_parameters, const uint32_t initial_search_list_size,
+                         const uint32_t search_threads, const bool concurrent_consolidate) {
+            return std::unique_ptr<DynamicInMemIndex<int8_t>>(
+                new DynamicInMemIndex<int8_t>(metric, dim, max_points, index_parameters, initial_search_list_size,
+                                              search_threads, concurrent_consolidate));
         }))
         .def("search", &DynamicInMemIndex<int8_t>::search, py::arg("query"), py::arg("knn"), py::arg("l_search"))
         .def("batch_search", &DynamicInMemIndex<int8_t>::batch_search, py::arg("queries"), py::arg("num_queries"),
@@ -342,10 +347,11 @@ PYBIND11_MODULE(_diskannpy, m)
 
     py::class_<DynamicInMemIndex<uint8_t>>(m, "DiskANNDynamicInMemUint8Index")
         .def(py::init([](diskann::Metric metric, const size_t dim, const size_t max_points,
-                         const IndexWriteParameters &index_parameters, const IndexReadParameters &search_parameters,
-                         const bool concurrent_consolidate) {
-            return std::unique_ptr<DynamicInMemIndex<uint8_t>>(new DynamicInMemIndex<uint8_t>(
-                metric, dim, max_points, index_parameters, search_parameters, concurrent_consolidate));
+                         const IndexWriteParameters &index_parameters, const uint32_t initial_search_list_size,
+                         const uint32_t search_threads, const bool concurrent_consolidate) {
+            return std::unique_ptr<DynamicInMemIndex<uint8_t>>(
+                new DynamicInMemIndex<uint8_t>(metric, dim, max_points, index_parameters, initial_search_list_size,
+                                               search_threads, concurrent_consolidate));
         }))
         .def("search", &DynamicInMemIndex<uint8_t>::search, py::arg("query"), py::arg("knn"), py::arg("l_search"))
         .def("batch_search", &DynamicInMemIndex<uint8_t>::batch_search, py::arg("queries"), py::arg("num_queries"),

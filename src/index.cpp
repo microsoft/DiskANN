@@ -28,9 +28,9 @@ namespace diskann
 // (bin), and initialize max_points
 template <typename T, typename TagT, typename LabelT>
 Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_points, const bool dynamic_index,
-                              const IndexWriteParameters &indexParams, const IndexReadParameters &searchParams,
-                              const bool enable_tags, const bool concurrent_consolidate, const bool pq_dist_build,
-                              const size_t num_pq_chunks, const bool use_opq)
+                              const IndexWriteParameters &indexParams, const uint32_t initial_search_list_size,
+                              const uint32_t search_threads, const bool enable_tags, const bool concurrent_consolidate,
+                              const bool pq_dist_build, const size_t num_pq_chunks, const bool use_opq)
     : Index(m, dim, max_points, dynamic_index, enable_tags, concurrent_consolidate, pq_dist_build, num_pq_chunks,
             use_opq, indexParams.num_frozen_points)
 {
@@ -40,12 +40,11 @@ Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_point
     _indexingAlpha = indexParams.alpha;
     _filterIndexingQueueSize = indexParams.filter_list_size;
 
-    uint32_t num_threads_srch = searchParams.num_threads;
     uint32_t num_threads_indx = indexParams.num_threads;
-    uint32_t num_scratch_spaces = num_threads_srch + num_threads_indx;
-    uint32_t search_l = searchParams.search_list_size;
+    uint32_t num_scratch_spaces = search_threads + num_threads_indx;
 
-    initialize_query_scratch(num_scratch_spaces, search_l, _indexingQueueSize, _indexingRange, _indexingMaxC, dim);
+    initialize_query_scratch(num_scratch_spaces, initial_search_list_size, _indexingQueueSize, _indexingRange,
+                             _indexingMaxC, dim);
 }
 
 template <typename T, typename TagT, typename LabelT>

@@ -182,8 +182,6 @@ void build_incremental_index(const std::string &data_path, const uint32_t L, con
                                                .with_num_frozen_points(num_start_pts)
                                                .build();
 
-    diskann::IndexReadParameters search_params = diskann::IndexReadParameters(L, insert_threads);
-
     diskann::IndexWriteParameters delete_params = diskann::IndexWriteParametersBuilder(L, R)
                                                       .with_max_occlusion_size(C)
                                                       .with_alpha(alpha)
@@ -218,8 +216,8 @@ void build_incremental_index(const std::string &data_path, const uint32_t L, con
     using LabelT = uint32_t;
     const bool enable_tags = true;
 
-    diskann::Index<T, TagT, LabelT> index(diskann::L2, dim, active_window + 4 * consolidate_interval, true, params,
-                                          search_params, enable_tags, true);
+    diskann::Index<T, TagT, LabelT> index(diskann::L2, dim, active_window + 4 * consolidate_interval, true, params, L,
+                                          insert_threads, enable_tags, true);
     index.set_start_points_at_random(static_cast<T>(start_point_norm));
     index.enable_delete();
 
