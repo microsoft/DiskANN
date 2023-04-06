@@ -30,36 +30,38 @@ PYBIND11_MAKE_OPAQUE(std::vector<uint8_t>);
 namespace py = pybind11;
 using namespace diskann;
 
+#ifdef _WINDOWS
+typedef WindowsAlignedFileReader PlatformSpecificAlignedFileReader;
+#else
+typedef LinuxAlignedFileReader PlatformSpecificAlignedFileReader;
+#endif
+
 template <class T> struct DiskANNIndex
 {
-    PQFlashIndex<T> *pq_flash_index;
+    PQFlashIndex<T> *_pq_flash_index;
     std::shared_ptr<AlignedFileReader> reader;
 
     DiskANNIndex(diskann::Metric metric)
     {
-#ifdef _WINDOWS
-        reader = std::make_shared<WindowsAlignedFileReader>();
-#else
-        reader = std::make_shared<LinuxAlignedFileReader>();
-#endif
-        pq_flash_index = new PQFlashIndex<T>(reader, metric);
+        reader = std::make_shared<PlatformSpecificAlignedFileReader>();
+        _pq_flash_index = new PQFlashIndex<T>(reader, metric);
     }
 
     ~DiskANNIndex()
     {
-        delete pq_flash_index;
+        delete _pq_flash_index;
     }
 
     auto get_metric()
     {
-        return pq_flash_index->get_metric();
+        return _pq_flash_index->get_metric();
     }
 
     void cache_bfs_levels(size_t num_nodes_to_cache)
     {
         std::vector<uint32_t> node_list;
-        pq_flash_index->cache_bfs_levels(num_nodes_to_cache, node_list);
-        pq_flash_index->load_cache_list(node_list);
+        _pq_flash_index->cache_bfs_levels(num_nodes_to_cache, node_list);
+        _pq_flash_index->load_cache_list(node_list);
     }
 
     void cache_sample_paths(size_t num_nodes_to_cache, const std::string &warmup_query_file, uint32_t num_threads)
@@ -70,15 +72,15 @@ template <class T> struct DiskANNIndex
         }
 
         std::vector<uint32_t> node_list;
-        pq_flash_index->generate_cache_list_from_sample_queries(warmup_query_file, 15, 4, num_nodes_to_cache,
-                                                                num_threads, node_list);
-        pq_flash_index->load_cache_list(node_list);
+        _pq_flash_index->generate_cache_list_from_sample_queries(warmup_query_file, 15, 4, num_nodes_to_cache,
+                                                                 num_threads, node_list);
+        _pq_flash_index->load_cache_list(node_list);
     }
 
     int load_index(const std::string &index_path_prefix, const int num_threads, const size_t num_nodes_to_cache,
                    int cache_mechanism)
     {
-        int load_success = pq_flash_index->load(num_threads, index_path_prefix.c_str());
+        int load_success = _pq_flash_index->load(num_threads, index_path_prefix.c_str());
         if (load_success != 0)
         {
             throw std::runtime_error("load_index failed.");
@@ -109,8 +111,8 @@ template <class T> struct DiskANNIndex
         std::vector<uint64_t> u64_ids(knn);
         QueryStats stats;
 
-        pq_flash_index->cached_beam_search(query.data(), knn, l_search, u64_ids.data(), dists.mutable_data(),
-                                           beam_width, false, &stats);
+        _pq_flash_index->cached_beam_search(query.data(), knn, l_search, u64_ids.data(), dists.mutable_data(),
+                                            beam_width, false, &stats);
 
         auto r = ids.mutable_unchecked<1>();
         for (uint64_t i = 0; i < knn; ++i)
@@ -132,8 +134,8 @@ template <class T> struct DiskANNIndex
 #pragma omp parallel for schedule(dynamic, 1)
         for (int64_t i = 0; i < (int64_t)num_queries; i++)
         {
-            pq_flash_index->cached_beam_search(queries.data(i), knn, l_search, u64_ids.data() + i * knn,
-                                               dists.mutable_data(i), beam_width);
+            _pq_flash_index->cached_beam_search(queries.data(i), knn, l_search, u64_ids.data() + i * knn,
+                                                dists.mutable_data(i), beam_width);
         }
 
         auto r = ids.mutable_unchecked();
@@ -151,16 +153,28 @@ typedef uint32_t filterT;
 template <class T> struct DynamicInMemIndex
 {
     Index<T, IdT, filterT> *_index;
-    const IndexWriteParameters write_params;
+    IndexWriteParameters write_params;
 
-    DynamicInMemIndex(Metric m, const size_t dim, const size_t max_points, const IndexWriteParameters &index_parameters,
+    DynamicInMemIndex(Metric m, const size_t dim, const size_t max_points, const uint32_t l_build,
+                      const uint32_t build_max_degree, const bool saturate_graph, const uint32_t max_occlusion_size,
+                      const float alpha, const uint32_t num_rounds, const uint32_t num_threads,
+                      const uint32_t filter_list_size, const uint32_t num_frozen_points,
                       const uint32_t initial_search_list_size, const uint32_t search_threads,
                       const bool concurrent_consolidate)
-        : write_params(index_parameters)
+        : write_params(IndexWriteParametersBuilder(l_build, build_max_degree)
+                           .with_saturate_graph(saturate_graph)
+                           .with_max_occlusion_size(max_occlusion_size)
+                           .with_alpha(alpha)
+                           .with_num_rounds(num_rounds)
+                           .with_num_threads(num_threads)
+                           .with_filter_list_size(filter_list_size)
+                           .with_num_frozen_points(num_frozen_points)
+                           .build())
     {
+
         _index = new Index<T>(m, dim, max_points,
                               true,                     // dynamic_index
-                              index_parameters,         // used for insert
+                              write_params,             // used for insert
                               initial_search_list_size, // used to prepare the scratch space for searching. can / may be
                                                         // expanded if the search asks for a larger L.
                               search_threads,           // also used for the scratch space
@@ -225,7 +239,7 @@ template <class T> struct StaticInMemIndex
 {
     Index<T, IdT, filterT> *_index;
 
-    StaticInMemIndex(Metric m, const std::string &data_path, IndexWriteParameters &index_parameters)
+    StaticInMemIndex(Metric m, const std::string &data_path)
     {
         size_t ndims, npoints;
         diskann::get_bin_metadata(data_path, npoints, ndims);
@@ -237,7 +251,6 @@ template <class T> struct StaticInMemIndex
                               0,     // num_pq_chunks
                               false, // use_opq = false
                               0);    // num_frozen_pts = 0
-        _index->build(data_path.c_str(), npoints, index_parameters);
     }
 
     ~StaticInMemIndex()
@@ -289,27 +302,24 @@ PYBIND11_MODULE(_diskannpy, m)
         .export_values();
 
     py::class_<StaticInMemIndex<float>>(m, "DiskANNStaticInMemFloatIndex")
-        .def(py::init([](diskann::Metric metric, const std::string &data_path, IndexWriteParameters &index_parameters) {
-            return std::unique_ptr<StaticInMemIndex<float>>(
-                new StaticInMemIndex<float>(metric, data_path, index_parameters));
+        .def(py::init([](diskann::Metric metric, const std::string &data_path) {
+            return std::unique_ptr<StaticInMemIndex<float>>(new StaticInMemIndex<float>(metric, data_path));
         }))
         .def("search", &StaticInMemIndex<float>::search, py::arg("query"), py::arg("knn"), py::arg("l_search"))
         .def("batch_search", &StaticInMemIndex<float>::batch_search, py::arg("queries"), py::arg("num_queries"),
              py::arg("knn"), py::arg("l_search"), py::arg("num_threads"));
 
     py::class_<StaticInMemIndex<int8_t>>(m, "DiskANNStaticInMemInt8Index")
-        .def(py::init([](diskann::Metric metric, const std::string &data_path, IndexWriteParameters &index_parameters) {
-            return std::unique_ptr<StaticInMemIndex<int8_t>>(
-                new StaticInMemIndex<int8_t>(metric, data_path, index_parameters));
+        .def(py::init([](diskann::Metric metric, const std::string &data_path) {
+            return std::unique_ptr<StaticInMemIndex<int8_t>>(new StaticInMemIndex<int8_t>(metric, data_path));
         }))
         .def("search", &StaticInMemIndex<int8_t>::search, py::arg("query"), py::arg("knn"), py::arg("l_search"))
         .def("batch_search", &StaticInMemIndex<int8_t>::batch_search, py::arg("queries"), py::arg("num_queries"),
              py::arg("knn"), py::arg("l_search"), py::arg("num_threads"));
 
-    py::class_<StaticInMemIndex<uint8_t>>(m, "DiskANNStaticInMemUint8Index")
-        .def(py::init([](diskann::Metric metric, const std::string &data_path, IndexWriteParameters &index_parameters) {
-            return std::unique_ptr<StaticInMemIndex<uint8_t>>(
-                new StaticInMemIndex<uint8_t>(metric, data_path, index_parameters));
+    py::class_<StaticInMemIndex<uint8_t>>(m, "DiskANNStaticInMemUInt8Index")
+        .def(py::init([](diskann::Metric metric, const std::string &data_path) {
+            return std::unique_ptr<StaticInMemIndex<uint8_t>>(new StaticInMemIndex<uint8_t>(metric, data_path));
         }))
         .def("search", &StaticInMemIndex<uint8_t>::search, py::arg("query"), py::arg("knn"), py::arg("l_search"))
         .def("batch_search", &StaticInMemIndex<uint8_t>::batch_search, py::arg("queries"), py::arg("num_queries"),
@@ -317,11 +327,21 @@ PYBIND11_MODULE(_diskannpy, m)
 
     py::class_<DynamicInMemIndex<float>>(m, "DiskANNDynamicInMemFloatIndex")
         .def(py::init([](diskann::Metric metric, const size_t dim, const size_t max_points,
-                         const IndexWriteParameters &index_parameters, const uint32_t initial_search_list_size,
-                         const uint32_t search_threads, const bool concurrent_consolidate) {
-            return std::unique_ptr<DynamicInMemIndex<float>>(
-                new DynamicInMemIndex<float>(metric, dim, max_points, index_parameters, initial_search_list_size,
-                                             search_threads, concurrent_consolidate));
+                         const uint32_t l_build,          // L
+                         const uint32_t build_max_degree, // R
+                         const bool saturate_graph = diskann::defaults::SATURATE_GRAPH,
+                         const uint32_t max_occlusion_size = diskann::defaults::MAX_OCCLUSION_SIZE, // C
+                         const float alpha = diskann::defaults::ALPHA,
+                         const uint32_t num_rounds = diskann::defaults::NUM_ROUNDS,
+                         const uint32_t num_threads = diskann::defaults::NUM_THREADS,
+                         const uint32_t filter_list_size = diskann::defaults::FILTER_LIST_SIZE, // Lf
+                         const uint32_t num_frozen_points = diskann::defaults::NUM_FROZEN_POINTS,
+                         const uint32_t initial_search_list_size = 0, const uint32_t search_threads = 1,
+                         const bool concurrent_consolidate = true) {
+            return std::unique_ptr<DynamicInMemIndex<float>>(new DynamicInMemIndex<float>(
+                metric, dim, max_points, l_build, build_max_degree, saturate_graph, max_occlusion_size, alpha,
+                num_rounds, num_threads, filter_list_size, num_frozen_points, initial_search_list_size, search_threads,
+                concurrent_consolidate));
         }))
         .def("search", &DynamicInMemIndex<float>::search, py::arg("query"), py::arg("knn"), py::arg("l_search"))
         .def("batch_search", &DynamicInMemIndex<float>::batch_search, py::arg("queries"), py::arg("num_queries"),
@@ -332,11 +352,21 @@ PYBIND11_MODULE(_diskannpy, m)
 
     py::class_<DynamicInMemIndex<int8_t>>(m, "DiskANNDynamicInMemInt8Index")
         .def(py::init([](diskann::Metric metric, const size_t dim, const size_t max_points,
-                         const IndexWriteParameters &index_parameters, const uint32_t initial_search_list_size,
-                         const uint32_t search_threads, const bool concurrent_consolidate) {
-            return std::unique_ptr<DynamicInMemIndex<int8_t>>(
-                new DynamicInMemIndex<int8_t>(metric, dim, max_points, index_parameters, initial_search_list_size,
-                                              search_threads, concurrent_consolidate));
+                         const uint32_t l_build,          // L
+                         const uint32_t build_max_degree, // R
+                         const bool saturate_graph = diskann::defaults::SATURATE_GRAPH,
+                         const uint32_t max_occlusion_size = diskann::defaults::MAX_OCCLUSION_SIZE, // C
+                         const float alpha = diskann::defaults::ALPHA,
+                         const uint32_t num_rounds = diskann::defaults::NUM_ROUNDS,
+                         const uint32_t num_threads = diskann::defaults::NUM_THREADS,
+                         const uint32_t filter_list_size = diskann::defaults::FILTER_LIST_SIZE, // Lf
+                         const uint32_t num_frozen_points = diskann::defaults::NUM_FROZEN_POINTS,
+                         const uint32_t initial_search_list_size = 0, const uint32_t search_threads = 1,
+                         const bool concurrent_consolidate = true) {
+            return std::unique_ptr<DynamicInMemIndex<int8_t>>(new DynamicInMemIndex<int8_t>(
+                metric, dim, max_points, l_build, build_max_degree, saturate_graph, max_occlusion_size, alpha,
+                num_rounds, num_threads, filter_list_size, num_frozen_points, initial_search_list_size, search_threads,
+                concurrent_consolidate));
         }))
         .def("search", &DynamicInMemIndex<int8_t>::search, py::arg("query"), py::arg("knn"), py::arg("l_search"))
         .def("batch_search", &DynamicInMemIndex<int8_t>::batch_search, py::arg("queries"), py::arg("num_queries"),
@@ -345,13 +375,23 @@ PYBIND11_MODULE(_diskannpy, m)
         .def("mark_deleted", &DynamicInMemIndex<int8_t>::mark_deleted, py::arg("id"))
         .def("consolidate_delete", &DynamicInMemIndex<int8_t>::consolidate_delete);
 
-    py::class_<DynamicInMemIndex<uint8_t>>(m, "DiskANNDynamicInMemUint8Index")
+    py::class_<DynamicInMemIndex<uint8_t>>(m, "DiskANNDynamicInMemUInt8Index")
         .def(py::init([](diskann::Metric metric, const size_t dim, const size_t max_points,
-                         const IndexWriteParameters &index_parameters, const uint32_t initial_search_list_size,
-                         const uint32_t search_threads, const bool concurrent_consolidate) {
-            return std::unique_ptr<DynamicInMemIndex<uint8_t>>(
-                new DynamicInMemIndex<uint8_t>(metric, dim, max_points, index_parameters, initial_search_list_size,
-                                               search_threads, concurrent_consolidate));
+                         const uint32_t l_build,          // L
+                         const uint32_t build_max_degree, // R
+                         const bool saturate_graph = diskann::defaults::SATURATE_GRAPH,
+                         const uint32_t max_occlusion_size = diskann::defaults::MAX_OCCLUSION_SIZE, // C
+                         const float alpha = diskann::defaults::ALPHA,
+                         const uint32_t num_rounds = diskann::defaults::NUM_ROUNDS,
+                         const uint32_t num_threads = diskann::defaults::NUM_THREADS,
+                         const uint32_t filter_list_size = diskann::defaults::FILTER_LIST_SIZE, // Lf
+                         const uint32_t num_frozen_points = diskann::defaults::NUM_FROZEN_POINTS,
+                         const uint32_t initial_search_list_size = 0, const uint32_t search_threads = 1,
+                         const bool concurrent_consolidate = true) {
+            return std::unique_ptr<DynamicInMemIndex<uint8_t>>(new DynamicInMemIndex<uint8_t>(
+                metric, dim, max_points, l_build, build_max_degree, saturate_graph, max_occlusion_size, alpha,
+                num_rounds, num_threads, filter_list_size, num_frozen_points, initial_search_list_size, search_threads,
+                concurrent_consolidate));
         }))
         .def("search", &DynamicInMemIndex<uint8_t>::search, py::arg("query"), py::arg("knn"), py::arg("l_search"))
         .def("batch_search", &DynamicInMemIndex<uint8_t>::batch_search, py::arg("queries"), py::arg("num_queries"),
