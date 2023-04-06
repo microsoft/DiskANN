@@ -30,7 +30,21 @@ template <typename data_t> class AbstractDataStore
     virtual void prefetch_vector(const location_t loc) = 0;
 
 
-    virtual void resize(const location_t new_size) = 0;
+    virtual void resize(const location_t num_points) 
+    {
+        if (num_points > _capacity)
+        {
+            expand(num_points);
+        }
+        else if (num_point < _capacity)
+        {
+            shrink(num_points);
+        }
+        else
+        {
+            //ignore.
+        }
+    }
 
     virtual void reposition_points(const location_t start_loc, const location_t end_loc,
                                    const location_t num_points) = 0;
@@ -41,10 +55,6 @@ template <typename data_t> class AbstractDataStore
     virtual location_t capacity() const 
     {
         return _capacity;
-    }
-    virtual location_t get_num_points() const
-    {
-        return _num_points;
     }
 
     virtual float get_distance(const data_t* query, const location_t loc) const = 0;
@@ -64,9 +74,14 @@ template <typename data_t> class AbstractDataStore
     }
 
   protected:
-    location_t _capacity;
-    location_t _num_points;
+    // Expand the datastore to new_num_points.
+    virtual void expand(const location_t new_num_points) = 0;
+    // Shrink the datastore to new_num_points. This function should be called after compaction to free unused memory.
+    virtual void shrink(const location_t new_num_points) = 0;
 
+
+
+    location_t _capacity;
     const size_t _dim;
 };
 

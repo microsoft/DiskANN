@@ -480,7 +480,7 @@ size_t Index<T, TagT, LabelT>::load_data(std::string filename)
     //REFACTOR TODO: Must figure out how to support aligned reader in a clean manner.
     copy_aligned_data_from_file<T>(reader, _data, file_num_points, file_dim, _aligned_dim);
 #else
-    _data_store->populate_data(filename, 0); //offset == 0.
+    _data_store->populate_data(filename, 0U); //offset == 0.
     //REFACTOR
     //copy_aligned_data_from_file<T>(filename.c_str(), _data, file_num_points, file_dim, _aligned_dim);
 #endif
@@ -2652,7 +2652,6 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
     {
         _empty_slots.insert((uint32_t)i);
     }
-
     _data_compacted = true;
     diskann::cout << "Time taken for compact_data: " << timer.elapsed() / 1000000. << "s." << std::endl;
 }

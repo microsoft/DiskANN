@@ -9,13 +9,13 @@ namespace diskann
 {
 
 template <typename data_t>
-InMemDataStore<data_t>::InMemDataStore(const location_t max_pts, 
+InMemDataStore<data_t>::InMemDataStore(const location_t capacity, 
                                              const size_t dim, std::shared_ptr<Distance<data_t>> distance_metric)
-    : AbstractDataStore<data_t>(max_pts, dim), _aligned_dim(ROUND_UP(dim, 8)), 
+    : AbstractDataStore<data_t>(capacity, dim), _aligned_dim(ROUND_UP(dim, 8)), 
       _distance_metric(distance_metric)
 {
-    alloc_aligned(((void **)&_data), max_pts * _aligned_dim * sizeof(data_t), 8 * sizeof(data_t));
-    std::memset(_data, 0, max_pts * _aligned_dim * sizeof(data_t));
+    alloc_aligned(((void **)&_data), capacity * _aligned_dim * sizeof(data_t), 8 * sizeof(data_t));
+    std::memset(_data, 0, capacity * _aligned_dim * sizeof(data_t));
 }
 
 template <typename data_t> InMemDataStore<data_t>::~InMemDataStore()
@@ -33,6 +33,7 @@ template <typename data_t> location_t InMemDataStore<data_t>::load(const std::st
 
 template <typename data_t> void InMemDataStore<data_t>::store(const std::string &filename)
 {
+
 }
 
 template <typename data_t> void InMemDataStore<data_t>::populate_data(const data_t *vectors, const location_t num_pts)
@@ -167,7 +168,7 @@ float InMemDataStore<data_t>::get_distance(const location_t loc1, const location
     return _distance_metric->compare(_data + loc1 * _aligned_dim, _data + loc2 * _aligned_dim, this->_aligned_dim);
 }
 
-template <typename data_t> void InMemDataStore<data_t>::resize(const location_t new_size)
+template <typename data_t> void InMemDataStore<data_t>::expand(const location_t new_size)
 {
 #ifndef _WINDOWS
     data_t *new_data;
@@ -180,6 +181,19 @@ template <typename data_t> void InMemDataStore<data_t>::resize(const location_t 
 #endif
     _capacity = new_size;
 
+}
+
+template <typename data_t> void InMemDataStore<data_t>::shrink(const location_t new_size)
+{
+#ifndef _WINDOWS
+    data_t *new_data;
+    alloc_aligned((void **)&new_data, new_size * _aligned_dim * sizeof(data_t), 8 * sizeof(data_t));
+    memcpy(new_data, _data, new_size * _aligned_dim * sizeof(data_t));
+    aligned_free(_data);
+    _data = new_data;
+#else
+    realloc_aligned((void **)&_data, new_size * _aligned_dim * sizeof(data_t), 8 * sizeof(data_t));
+#endif
 }
 
 template<typename data_t>

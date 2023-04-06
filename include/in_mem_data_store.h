@@ -7,7 +7,7 @@
 #include "tsl/robin_map.h"
 #include "tsl/robin_set.h"
 #include "tsl/sparse_map.h"
-#include "boost/dynamic_bitset.hpp"
+//#include "boost/dynamic_bitset.hpp"
 
 #include "abstract_data_store.h"
 
@@ -35,8 +35,6 @@ class InMemDataStore : public AbstractDataStore<data_t>
     virtual void set_vector(const location_t i, const data_t *const vector) override;
     virtual void prefetch_vector(const location_t loc) override;
 
-    virtual void resize(const location_t new_size) override;
-
     virtual void reposition_points(const location_t old_location_start, const location_t new_location_start,
                                    const location_t num_points) override;
     virtual void copy_points(const location_t from_loc, const location_t to_loc, const location_t num_points) override;
@@ -53,6 +51,10 @@ class InMemDataStore : public AbstractDataStore<data_t>
 
 
   protected:
+    virtual void expand(const location_t new_size) override;
+    virtual void shrink(const location_t new_size) override;
+
+
     virtual location_t load_data(const std::string &filename);
 #ifdef EXEC_ENV_OLS
     virtual location_t load_data(AlignedFileReader &reader);
