@@ -397,7 +397,8 @@ int aux_main(const std::string &input_file,
                       << std::endl;
 
         // 2. histogram of fanouts
-        constexpr size_t    max_interesting_fanout = 30;
+        const size_t max_interesting_fanout =
+            (mode == "from_ground_truth") ? K : 1.5 * K;
         std::vector<size_t> num_queries_with_fanout(max_interesting_fanout + 1,
                                                     0);
         for (size_t query_id = 0; query_id < num_queries; ++query_id) {
