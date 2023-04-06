@@ -205,7 +205,7 @@ template <typename data_t> void InMemDataStore<data_t>::expand(const location_t 
 #ifndef _WINDOWS
     data_t *new_data;
     alloc_aligned((void **)&new_data, new_size * _aligned_dim * sizeof(data_t), 8 * sizeof(data_t));
-    memcpy(new_data, _data, (_max_points + _num_frozen_pts) * _aligned_dim * sizeof(data_t));
+    memcpy(new_data, _data, new_size * _aligned_dim * sizeof(data_t));
     aligned_free(_data);
     _data = new_data;
 #else

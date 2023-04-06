@@ -1646,6 +1646,14 @@ void Index<T, TagT, LabelT>::prune_all_neighbors(const uint32_t max_degree, cons
 //    diskann::cout << "Index start points set: #" << _num_frozen_pts << std::endl;
 //}
 //
+
+// REFACTOR: added dummy implementation for now.
+template <typename T, typename TagT, typename LabelT>
+void Index<T, TagT, LabelT>::set_start_points_at_random(T radius, uint32_t random_seed) {
+
+}
+
+
 //template <typename T, typename TagT, typename LabelT>
 //void Index<T, TagT, LabelT>::set_start_points_at_random(T radius, uint32_t random_seed)
 //{
@@ -3091,6 +3099,11 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
     delete[] bfs_sets;
 }
 
+//REFACTOR: This should be an OptimizedDataStore class, dummy impl here for compiling sake
+template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT>::optimize_index_layout()
+{ // use after build or load
+}
+
 //REFACTOR: This should be an OptimizedDataStore class
 //template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT>::optimize_index_layout()
 //{ // use after build or load
@@ -3121,7 +3134,12 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
 //    _final_graph.clear();
 //    _final_graph.shrink_to_fit();
 //}
-//
+// REFACTOR: once optimized layout becomes its own Data+Graph store, we should just invoke regular search
+template <typename T, typename TagT, typename LabelT>
+void Index<T, TagT, LabelT>::search_with_optimized_layout(const T *query, size_t K, size_t L, uint32_t *indices)
+{
+}
+
 //template <typename T, typename TagT, typename LabelT>
 //void Index<T, TagT, LabelT>::search_with_optimized_layout(const T *query, size_t K, size_t L, uint32_t *indices)
 //{

@@ -1,6 +1,6 @@
 #pragma once
 #include "windows_customizations.h"
-
+#include <cstring>
 
 namespace diskann
 {
@@ -70,7 +70,7 @@ template <typename T> class Distance
     virtual void normalize_vector_for_search(const T *query_vec, const uint32_t query_dim, 
                                              T* scratch_query) 
     {
-        memcpy(scratch_query, query_vec, query_dim * sizeof(T));
+        std::memcpy(scratch_query, query_vec, query_dim * sizeof(T));
     }
 
     //Providing a default implementation for the virtual destructor because we don't 
