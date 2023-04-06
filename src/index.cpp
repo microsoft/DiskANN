@@ -101,8 +101,6 @@ Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_point
     //REFACTOR
     //alloc_aligned(((void **)&_data), total_internal_points * _aligned_dim * sizeof(T), 8 * sizeof(T));
     //std::memset(_data, 0, total_internal_points * _aligned_dim * sizeof(T));
-    //REFACTOR: This should move to a factory method.
-    _data_store = std::make_shared<diskann::InMemDataStore<T>>(total_internal_points, _dim);
 
     _start = (uint32_t)_max_points;
 
@@ -112,7 +110,7 @@ Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_point
     if (m == diskann::Metric::COSINE && std::is_floating_point<T>::value)
     {
         // This is safe because T is float inside the if block.
-        this->_distance = (Distance<T> *)new AVXNormalizedCosineDistanceFloat();
+        this->_distance.reset((Distance<T>*)new AVXNormalizedCosineDistanceFloat());
         this->_normalize_vecs = true;
         diskann::cout << "Normalizing vectors and using L2 for cosine "
                          "AVXNormalizedCosineDistanceFloat()."
@@ -120,8 +118,12 @@ Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_point
     }
     else
     {
-        this->_distance = get_distance_function<T>(m);
+        this->_distance.reset((Distance<T> *)get_distance_function<T>(m));
     }
+    // REFACTOR: TODO This should move to a factory method.
+
+    _data_store = std::make_shared<diskann::InMemDataStore<T>>((location_t)total_internal_points, _dim, this->_distance);
+
 
     _locks = std::vector<non_recursive_mutex>(total_internal_points);
 
@@ -145,11 +147,11 @@ template <typename T, typename TagT, typename LabelT> Index<T, TagT, LabelT>::~I
         LockGuard lg(lock);
     }
 
-    if (this->_distance != nullptr)
-    {
-        delete this->_distance;
-        this->_distance = nullptr;
-    }
+    //if (this->_distance != nullptr)
+    //{
+    //    delete this->_distance;
+    //    this->_distance = nullptr;
+    //}
     //REFACTOR
     //if (this->_data != nullptr)
     //{
@@ -222,7 +224,9 @@ template <typename T, typename TagT, typename LabelT> size_t Index<T, TagT, Labe
     // Note: at this point, either _nd == _max_points or any frozen points have
     // been temporarily moved to _nd, so _nd + _num_frozen_points is the valid
     // location limit.
-    return save_data_in_base_dimensions(data_file, _data, _nd + _num_frozen_pts, _dim, _aligned_dim);
+    return _data_store->save(data_file, _nd + _num_frozen_pts);
+    // REFACTOR
+    //return save_data_in_base_dimensions(data_file, _data, _nd + _num_frozen_pts, _dim, _aligned_dim);
 }
 
 // save the graph index on a file as an adjacency list. For each point,

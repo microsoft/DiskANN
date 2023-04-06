@@ -25,7 +25,7 @@ class InMemDataStore : public AbstractDataStore<data_t>
     virtual ~InMemDataStore();
 
     virtual location_t load(const std::string &filename) override;
-    virtual void store(const std::string &filename) override;
+    virtual size_t save(const std::string &filename, const location_t num_points) override;
 
     //Populate internal data from unaligned data while doing alignment and any normalization that is required.
     virtual void populate_data(const data_t *vectors, const location_t num_pts) override;
@@ -41,8 +41,9 @@ class InMemDataStore : public AbstractDataStore<data_t>
     virtual location_t calculate_medoid() const override;
 
     virtual float get_distance(const data_t *query, const location_t loc) const override;
-    virtual void get_distance(const data_t *query, const location_t *locations, const uint32_t location_count,  float *distances) const override ;
     virtual float get_distance(const location_t loc1, const location_t loc2) const override;
+    virtual void  get_distance(const data_t *query, const location_t *locations, const uint32_t location_count,  float *distances) const override ;
+    
 
     virtual size_t get_aligned_dim() const override
     {

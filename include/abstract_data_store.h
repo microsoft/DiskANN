@@ -14,13 +14,18 @@ template <typename data_t> class AbstractDataStore
 {
   public:
     AbstractDataStore(const location_t capacity, const size_t dim)
-        : _capacity(capacity), _num_points(0), _dim(dim) 
+        : _capacity(capacity), _dim(dim) 
     {
     }
 
     // Return number of points returned
     virtual location_t load(const std::string &filename) = 0;
-    virtual void store(const std::string &filename) = 0;
+
+    //Why does store take num_pts? Since store only has capacity, but we allow resizing
+    //we can end up in a situation where the store has spare capacity. To optimize disk
+    //utilization, we pass the number of points that are "true" points, so that the store
+    //can discard the empty locations before saving. 
+    virtual size_t save(const std::string &filename, const location_t num_pts) = 0;
 
     virtual void populate_data(const data_t * vectors, const location_t num_pts) = 0;
     virtual void populate_data(const std::string &filename, const size_t offset) = 0;
@@ -32,11 +37,11 @@ template <typename data_t> class AbstractDataStore
 
     virtual void resize(const location_t num_points) 
     {
-        if (num_points > _capacity)
+        if (num_points > _capacity) 
         {
             expand(num_points);
         }
-        else if (num_point < _capacity)
+        else if (num_points < _capacity)
         {
             shrink(num_points);
         }
@@ -82,7 +87,7 @@ template <typename data_t> class AbstractDataStore
 
 
     location_t _capacity;
-    const size_t _dim;
+    size_t _dim;
 };
 
 } // namespace diskann

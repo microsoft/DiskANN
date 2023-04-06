@@ -1,6 +1,7 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT license.
 
+#include <memory>
 #include "in_mem_data_store.h"
 
 #include "utils.h"
@@ -9,13 +10,13 @@ namespace diskann
 {
 
 template <typename data_t>
-InMemDataStore<data_t>::InMemDataStore(const location_t capacity, 
+InMemDataStore<data_t>::InMemDataStore(const location_t num_points, 
                                              const size_t dim, std::shared_ptr<Distance<data_t>> distance_metric)
-    : AbstractDataStore<data_t>(capacity, dim), _aligned_dim(ROUND_UP(dim, 8)), 
-      _distance_metric(distance_metric)
+    : AbstractDataStore<data_t>(num_points, dim), _aligned_dim(ROUND_UP(dim, 8)), 
+      _distance_fn(distance_metric)
 {
-    alloc_aligned(((void **)&_data), capacity * _aligned_dim * sizeof(data_t), 8 * sizeof(data_t));
-    std::memset(_data, 0, capacity * _aligned_dim * sizeof(data_t));
+    alloc_aligned(((void **)&_data), this->_capacity * _aligned_dim * sizeof(data_t), 8 * sizeof(data_t));
+    std::memset(_data, 0, this->_capacity * _aligned_dim * sizeof(data_t));
 }
 
 template <typename data_t> InMemDataStore<data_t>::~InMemDataStore()
@@ -28,12 +29,13 @@ template <typename data_t> InMemDataStore<data_t>::~InMemDataStore()
 
 template <typename data_t> location_t InMemDataStore<data_t>::load(const std::string &filename)
 {
-    load_data(filename);
+    return load_data(filename);
 }
 
-template <typename data_t> void InMemDataStore<data_t>::store(const std::string &filename)
+template <typename data_t> size_t InMemDataStore<data_t>::save(const std::string &filename, const location_t num_points)
 {
-
+    shrink(num_points);
+    return save_data_in_base_dimensions(filename, _data, num_points, this->get_dims(), this->get_aligned_dim(), 0U);
 }
 
 template <typename data_t> void InMemDataStore<data_t>::populate_data(const data_t *vectors, const location_t num_pts)
@@ -41,21 +43,40 @@ template <typename data_t> void InMemDataStore<data_t>::populate_data(const data
     for (auto i = 0; i < num_pts; i++)
     {
         memset(_data + i * _aligned_dim, 0, _aligned_dim * sizeof(data_t));
-        std::memmove(_data + i * _aligned_dim, vectors + i * _dim, _dim * sizeof(data_t));
+        std::memmove(_data + i * _aligned_dim, vectors + i * this->_dim, this->_dim * sizeof(data_t));
     }
 
-    if (_distance_metric->normalization_required())
+    if (_distance_fn->normalization_required())
     {
-        _distance_metric->normalize(_data, num_pts);
+        _distance_fn->normalize_data_for_build(_data, this->_dim, num_pts);
     }
 }
 
 template<typename data_t> void InMemDataStore<data_t>::populate_data(const std::string &filename, const size_t offset)
 {
-    copy_aligned_data_from_file(filename.c_str(), _data, _num_points, _dim, _aligned_dim, offset);
-    if (_distance_metric->normalization_required())
+    size_t npts, ndim;
+    copy_aligned_data_from_file(filename.c_str(), _data, npts, ndim, _aligned_dim, offset);
+
+    if ((location_t)npts > this->capacity())
     {
-        _distance_metric->normalize(_data, _num_points);
+        std::stringstream ss;
+        ss << "Number of points in the file: " << filename
+           << " is greater than the capacity of data store: " << this->capacity()
+           << ". Must invoke resize before calling populate_data()" << std::endl;
+        throw diskann::ANNException(ss.str(), -1);
+    }
+
+    if ((location_t)ndim != this->get_dims())
+    {
+        std::stringstream ss;
+        ss << "Number of dimensions of a point in the file: " << filename
+           << " is not equal to dimensions of data store: " << this->capacity() << "." << std::endl;
+        throw diskann::ANNException(ss.str(), -1);
+    }
+
+    if (_distance_fn->normalization_required())
+    {
+        _distance_fn->normalize_data_for_build(_data, this->_dim, this->capacity());
     }
 }
 
@@ -117,7 +138,7 @@ location_t InMemDataStore<data_t>::load_data(const std::string &filename)
 
     if (file_num_points > this->capacity())
     {
-        resize(file_num_points);
+        this->resize(file_num_points);
     }
 
     copy_aligned_data_from_file<data_t>(filename.c_str(), _data, file_num_points, file_dim, _aligned_dim);
@@ -137,20 +158,20 @@ void InMemDataStore<data_t>::set_vector(const location_t loc, const data_t *cons
     size_t offset_in_data = loc * _aligned_dim;
     memset(_data + offset_in_data, 0, _aligned_dim * sizeof(data_t));
     memcpy(_data + offset_in_data, vector, this->_dim * sizeof(data_t));
-    if (_distance_metric->normalization_required())
+    if (_distance_fn->normalization_required())
     {
-        _distance_metric->normalize(_data + offset_in_data, _aligned_dim);
+        _distance_fn->normalize_data_for_build(_data + offset_in_data, _aligned_dim, 1);
     }
 }
 
 template<typename data_t> void InMemDataStore<data_t>::prefetch_vector(const location_t loc)
 {
-    diskann::prefetch_vector((const char *)_data + _aligned_dim * (size_t)loc, sizeof(T) * _aligned_dim);
+    diskann::prefetch_vector((const char *)_data + _aligned_dim * (size_t)loc, sizeof(data_t) * _aligned_dim);
 }
 
 template<typename data_t> float InMemDataStore<data_t>::get_distance(const data_t *query, const location_t loc) const
 {
-    return _distance_metric->compare(query, _data + _aligned_dim * loc, _aligned_dim);
+    return _distance_fn->compare(query, _data + _aligned_dim * loc, _aligned_dim);
 }
 
 template<typename data_t>
@@ -158,18 +179,29 @@ void InMemDataStore<data_t>::get_distance(const data_t *query, const location_t 
 {
     for (auto i = 0; i < location_count; i++)
     {
-        distances[i] = _distance_metric->compare(query, _data + locations[i] * _aligned_dim, this->_aligned_dim);
+        distances[i] = _distance_fn->compare(query, _data + locations[i] * _aligned_dim, this->_aligned_dim);
     }
 }
 
 template <typename data_t> 
 float InMemDataStore<data_t>::get_distance(const location_t loc1, const location_t loc2) const
 {
-    return _distance_metric->compare(_data + loc1 * _aligned_dim, _data + loc2 * _aligned_dim, this->_aligned_dim);
+    return _distance_fn->compare(_data + loc1 * _aligned_dim, _data + loc2 * _aligned_dim, this->_aligned_dim);
 }
 
 template <typename data_t> void InMemDataStore<data_t>::expand(const location_t new_size)
 {
+    if (new_size == this->capacity())
+    {
+        return;
+    }
+    else if (new_size < this->capacity())
+    {
+        std::stringstream ss;
+        ss << "Cannot 'expand' datastore when new capacity (" << new_size << ") < existing capacity(" << this->capacity()
+           << ")" << std::endl;
+        throw diskann::ANNException(ss.str(), -1);
+    }
 #ifndef _WINDOWS
     data_t *new_data;
     alloc_aligned((void **)&new_data, new_size * _aligned_dim * sizeof(data_t), 8 * sizeof(data_t));
@@ -179,12 +211,23 @@ template <typename data_t> void InMemDataStore<data_t>::expand(const location_t 
 #else
     realloc_aligned((void **)&_data, new_size * _aligned_dim * sizeof(data_t), 8 * sizeof(data_t));
 #endif
-    _capacity = new_size;
+    this->_capacity = new_size;
 
 }
 
 template <typename data_t> void InMemDataStore<data_t>::shrink(const location_t new_size)
 {
+    if (new_size == this->capacity())
+    {
+        return;
+    }
+    else if (new_size > this->capacity())
+    {
+        std::stringstream ss;
+        ss << "Cannot 'shrink' datastore when new capacity (" << new_size << ") > existing capacity(" << this->capacity()
+           << ")" << std::endl;
+        throw diskann::ANNException(ss.str(), -1);
+    }
 #ifndef _WINDOWS
     data_t *new_data;
     alloc_aligned((void **)&new_data, new_size * _aligned_dim * sizeof(data_t), 8 * sizeof(data_t));
@@ -247,9 +290,9 @@ template<typename data_t>
 void InMemDataStore<data_t>::copy_points(const location_t from_loc, const location_t to_loc,
                                          const location_t num_points)
 {
-    assert(from_loc < _capacity);
-    assert(to_loc < _capacity);
-    assert(num_points < _capacity);
+    assert(from_loc < this->_capacity);
+    assert(to_loc < this->_capacity);
+    assert(num_points < this->_capacity);
     memmove(_data + _aligned_dim * to_loc, _data + _aligned_dim * from_loc, num_points * _aligned_dim * sizeof(data_t));
 }
 
@@ -260,21 +303,21 @@ template <typename data_t> location_t InMemDataStore<data_t>::calculate_medoid()
     for (size_t j = 0; j < _aligned_dim; j++)
         center[j] = 0;
 
-    for (size_t i = 0; i < _num_points; i++)
+    for (size_t i = 0; i < this->capacity(); i++)
         for (size_t j = 0; j < _aligned_dim; j++)
             center[j] += (float)_data[i * _aligned_dim + j];
 
     for (size_t j = 0; j < _aligned_dim; j++)
-        center[j] /= (float)_num_points;
+        center[j] /= (float)this->capacity();
 
     // compute all to one distance
-    float *distances = new float[_num_points];
+    float *distances = new float[this->capacity()];
 
 //TODO: REFACTOR. Removing pragma might make this slow. Must revisit. 
 // Problem is that we need to pass num_threads here, it is not clear
 // if data store must be aware of threads!
 //#pragma omp parallel for schedule(static, 65536) 
-    for (int64_t i = 0; i < (int64_t)_num_points; i++)
+    for (int64_t i = 0; i < (int64_t)this->capacity(); i++)
     {
         // extract point and distance reference
         float &dist = distances[i];
@@ -290,7 +333,7 @@ template <typename data_t> location_t InMemDataStore<data_t>::calculate_medoid()
     // find imin
     uint32_t min_idx = 0;
     float min_dist = distances[0];
-    for (uint32_t i = 1; i < _num_points; i++)
+    for (uint32_t i = 1; i < this->capacity(); i++)
     {
         if (distances[i] < min_dist)
         {
@@ -303,5 +346,10 @@ template <typename data_t> location_t InMemDataStore<data_t>::calculate_medoid()
     delete[] center;
     return min_idx;
 }
+
+template DISKANN_DLLEXPORT class InMemDataStore<float>;
+template DISKANN_DLLEXPORT class InMemDataStore<int8_t>;
+template DISKANN_DLLEXPORT class InMemDataStore<uint8_t>;
+
 
 } // namespace diskann
