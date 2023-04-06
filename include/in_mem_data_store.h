@@ -53,9 +53,9 @@ class InMemDataStore : public AbstractDataStore<data_t>
 
 
   protected:
-    location_t load_data(const std::string &filename);
+    virtual location_t load_data(const std::string &filename);
 #ifdef EXEC_ENV_OLS
-    location_t load_data(AlignedFileReader &reader);
+    virtual location_t load_data(AlignedFileReader &reader);
 #endif
 
   private:
