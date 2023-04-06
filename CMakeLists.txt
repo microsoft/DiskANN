@@ -21,11 +21,18 @@ cmake_minimum_required(VERSION 3.15)
 
 set(CMAKE_STANDARD 14)
 
-if(NOT MSVC)
+if(APPLE)
+    message(FATAL_ERROR "Max build currently not supported")
+elseif(NOT MSVC AND NOT UNIX)
+    message(FATAL_ERROR "Non-Windows and Linux currently not supported")
+endif()
+
+if(UNIX AND NOT APPLE)
 	set(CMAKE_CXX_COMPILER g++)
 endif()
 
-# Install nuget packages for dependencies.
+
+# Install nuget packages for Windows dependencies.
 if (MSVC)
     find_program(NUGET_EXE NAMES nuget)
 
@@ -47,7 +54,9 @@ if (MSVC)
     message(STATUS "Finished setting up nuget dependencies")
 endif()
 
+
 include_directories(${PROJECT_SOURCE_DIR}/include)
+
 
 # It's necessary to include tcmalloc headers only if calling into MallocExtension interface.
 # For using tcmalloc in DiskANN tools, it's enough to just link with tcmalloc.
@@ -58,6 +67,7 @@ if (DISKANN_RELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS)
         include_directories(${PROJECT_SOURCE_DIR}/gperftools/src/windows)
     endif()
 endif()
+
 
 #OpenMP
 if (MSVC)
@@ -72,7 +82,7 @@ if (MSVC)
     set(OPENMP_WINDOWS_RUNTIME_FILES
         "${DISKANN_MSVC_PACKAGES}/intelopenmp.redist.win/runtimes/win-x64/native/libiomp5md.dll"
         "${DISKANN_MSVC_PACKAGES}/intelopenmp.redist.win/runtimes/win-x64/native/libiomp5md.pdb")
-else()
+elseif(UNIX AND NOT APPLE)
     find_package(OpenMP)
 
     if (OPENMP_FOUND)
@@ -83,6 +93,7 @@ else()
     endif()
 endif()
 
+# Boost program-options config
 # DiskANN core uses header-only libraries. Only DiskANN tools need program_options which has a linker library,
 # but its size is small. Reduce number of dependent DLLs by linking statically.
 if (MSVC)
@@ -119,8 +130,8 @@ endif()
 
 include_directories(${Boost_INCLUDE_DIR})
 
-#CBLAS Config
 
+# BLAS library Config
 find_package(BLAS REQUIRED)
 message(STATUS BLAS found: ${BLAS_LIBRARIES} )
 list(FIND BLAS_LIBRARIES Intel10_64ilp found_Intel10_64ilp )
@@ -131,10 +142,11 @@ if (USE_OPENBLAS)
         message(FATAL_ERROR "OpenBLAS not found")
     endif()
 
+    #target_link_libraries(my_caffe_test ${OpenBLAS_LIB})
 
 elseif (found_Intel10_64ilp)
-message (STATUS "Using Intel10_64ilp for BLAS")
-add_compile_definitions(USE_MKL_BLAS)
+    message (STATUS "Using Intel10_64ilp for BLAS")
+    add_compile_definitions(USE_MKL_BLAS)
 
     if(MSVC)
         # Only the DiskANN DLL and one of the tools need MKL libraries. Additionally, only a small part of MKL is used.
@@ -150,7 +162,7 @@ add_compile_definitions(USE_MKL_BLAS)
             "${DISKANN_MKL_LIB_PATH}/mkl_intel_ilp64.lib"
             "${DISKANN_MKL_LIB_PATH}/mkl_core.lib"
             "${DISKANN_MKL_LIB_PATH}/mkl_intel_thread.lib")
-    else()
+    elseif(UNIX AND NOT APPLE)
         # expected path for manual intel mkl installs
         set(OMP_PATH /opt/intel/oneapi/compiler/2022.0.2/linux/compiler/lib/intel64_lin/ CACHE PATH "Intel OneAPI OpenMP library implementation path")
         set(MKL_ROOT /opt/intel/oneapi/mkl/latest CACHE PATH "Intel OneAPI MKL library implementation path")
@@ -170,7 +182,8 @@ add_compile_definitions(USE_MKL_BLAS)
         message(ERROR "No BLAS library implementation specified")
  endif()
 
-# Section for tcmalloc. The DiskANN tools are always linked to tcmalloc. For Windows, they also need to
+
+# tcmalloc config. The DiskANN tools are always linked to tcmalloc. For Windows, they also need to
 # force-include the _tcmalloc symbol for enabling tcmalloc.
 #
 # The DLL itself needs to be linked to tcmalloc only if DISKANN_RELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS
@@ -211,7 +224,7 @@ if (MSVC)
     add_dependencies(libtcmalloc_minimal_for_exe build_libtcmalloc_minimal)
 
     set(DISKANN_TOOLS_TCMALLOC_LINK_OPTIONS libtcmalloc_minimal_for_exe)
-else()
+elseif(UNIX AND NOT APPLE)
     set(DISKANN_TOOLS_TCMALLOC_LINK_OPTIONS "-ltcmalloc")
 endif()
 
@@ -227,7 +240,9 @@ if (NOT MSVC)
     set(DISKANN_ASYNC_LIB aio)
 endif()
 
-#Main compiler/linker settings 
+
+
+# Main compiler/linker settings 
 if(MSVC)
 	#language options
 	add_compile_options(/permissive- /openmp:experimental /Zc:twoPhase- /Zc:inline /WX- /std:c++14 /Gd /W3 /MP /Zi /FC /nologo)
@@ -248,7 +263,7 @@ if(MSVC)
 	set(CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE ${PROJECT_SOURCE_DIR}/x64/Release)
 	set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE ${PROJECT_SOURCE_DIR}/x64/Release)
 	set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY_RELEASE ${PROJECT_SOURCE_DIR}/x64/Release)
-else()
+elseif(UNIX AND NOT APPLE)
 	set(ENV{TCMALLOC_LARGE_ALLOC_REPORT_THRESHOLD} 500000000000)
     #	set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -g -DDEBUG -O0 -fsanitize=address -fsanitize=leak -fsanitize=undefined")
     set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -g -DDEBUG -Wall -Wextra")
