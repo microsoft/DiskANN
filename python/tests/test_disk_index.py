@@ -7,9 +7,8 @@ from tempfile import mkdtemp
 
 import diskannpy as dap
 import numpy as np
-from sklearn.neighbors import NearestNeighbors
-
 from fixtures import calculate_recall, random_vectors, vectors_as_temp_file
+from sklearn.neighbors import NearestNeighbors
 
 
 class TestBuildIndex(unittest.TestCase):

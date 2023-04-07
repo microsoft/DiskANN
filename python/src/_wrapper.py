@@ -58,10 +58,11 @@ def _get_valid_metric(metric: str) -> _native_dap.Metric:
 
 
 def _validate_dtype(vectors: np.ndarray):
-    _assert(vectors.dtype in _VALID_DTYPES,
-            f"vectors provided had dtype {vectors.dtype}, but must be single precision float "
-            f"(numpy.single), unsigned 8bit integer (numpy.ubyte), or signed 8bit integer (numpy.byte)."
-        )
+    _assert(
+        vectors.dtype in _VALID_DTYPES,
+        f"vectors provided had dtype {vectors.dtype}, but must be single precision float "
+        f"(numpy.single), unsigned 8bit integer (numpy.ubyte), or signed 8bit integer (numpy.byte).",
+    )
 
 
 def _validate_shape(vectors: np.ndarray):
@@ -72,11 +73,17 @@ __MAX_INT_VAL = 4_294_967_295
 
 
 def _assert_is_positive_uint32(test_value: int, parameter: str):
-    _assert(0 < test_value < __MAX_INT_VAL, f"{parameter} must be a positive integer in the uint32 range")
+    _assert(
+        0 < test_value < __MAX_INT_VAL,
+        f"{parameter} must be a positive integer in the uint32 range",
+    )
 
 
 def _assert_is_nonnegative_uint32(test_value: int, parameter: str):
-    _assert(-1 < test_value < __MAX_INT_VAL, f"{parameter} must be a non-negative integer in the uint32 range")
+    _assert(
+        -1 < test_value < __MAX_INT_VAL,
+        f"{parameter} must be a non-negative integer in the uint32 range",
+    )
 
 
 def _assert(statement_eval: bool, message: str):
@@ -170,7 +177,7 @@ def build_disk_index_from_vector_file(
     dap_metric = _get_valid_metric(metric)
     _assert(
         vector_dtype in _VALID_DTYPES,
-        f"vector_dtype {vector_dtype} is not in list of valid dtypes supported: {_VALID_DTYPES}"
+        f"vector_dtype {vector_dtype} is not in list of valid dtypes supported: {_VALID_DTYPES}",
     )
     _assert_is_positive_uint32(list_size, "list_size")
     _assert_is_positive_uint32(max_degree, "max_degree")
@@ -301,7 +308,7 @@ class DiskIndex:
         dap_metric = _get_valid_metric(metric)
         _assert(
             vector_dtype in _VALID_DTYPES,
-            f"vector_dtype {vector_dtype} is not in list of valid dtypes supported: {_VALID_DTYPES}"
+            f"vector_dtype {vector_dtype} is not in list of valid dtypes supported: {_VALID_DTYPES}",
         )
         _assert_is_nonnegative_uint32(num_threads, "num_threads")
         _assert_is_nonnegative_uint32(num_nodes_to_cache, "num_nodes_to_cache")
@@ -344,7 +351,7 @@ class DiskIndex:
         _assert(
             query.dtype == self._vector_dtype,
             f"DiskIndex was built expecting a dtype of {self._vector_dtype}, but the query vectors are of dtype "
-            f"{query.dtype}"
+            f"{query.dtype}",
         )
         _assert_is_positive_uint32(k_neighbors, "k_neighbors")
         _assert_is_positive_uint32(list_size, "list_size")
@@ -405,7 +412,7 @@ class DiskIndex:
         _assert(
             queries.dtype == self._vector_dtype,
             f"DiskIndex was built expecting a dtype of {self._vector_dtype}, but the query vectors are of dtype "
-            f"{queries.dtype}"
+            f"{queries.dtype}",
         )
         _assert_is_positive_uint32(k_neighbors, "k_neighbors")
         _assert_is_positive_uint32(list_size, "list_size")
@@ -449,7 +456,7 @@ class StaticMemoryIndex:
         dap_metric = _get_valid_metric(metric)
         _assert(
             vector_dtype in _VALID_DTYPES,
-            f"vector_dtype {vector_dtype} is not in list of valid dtypes supported: {_VALID_DTYPES}"
+            f"vector_dtype {vector_dtype} is not in list of valid dtypes supported: {_VALID_DTYPES}",
         )
 
         self._vector_dtype = vector_dtype
@@ -485,7 +492,7 @@ class StaticMemoryIndex:
         _assert(
             query.dtype == self._vector_dtype,
             f"StaticMemoryIndex was built expecting a dtype of {self._vector_dtype}, but the query vector is of dtype "
-            f"{query.dtype}"
+            f"{query.dtype}",
         )
         _assert_is_positive_uint32(k_neighbors, "k_neighbors")
         _assert_is_nonnegative_uint32(list_size, "list_size")
@@ -527,7 +534,7 @@ class StaticMemoryIndex:
         _assert(
             queries.dtype == self._vector_dtype,
             f"StaticMemoryIndex was built expecting a dtype of {self._vector_dtype}, but the query vectors are of dtype "
-            f"{queries.dtype}"
+            f"{queries.dtype}",
         )
         _assert_is_positive_uint32(k_neighbors, "k_neighbors")
         _assert_is_positive_uint32(list_size, "list_size")
@@ -623,7 +630,7 @@ class DynamicMemoryIndex:
         dap_metric = _get_valid_metric(metric)
         _assert(
             vector_dtype in _VALID_DTYPES,
-            f"vector_dtype {vector_dtype} is not in list of valid dtypes supported: {_VALID_DTYPES}"
+            f"vector_dtype {vector_dtype} is not in list of valid dtypes supported: {_VALID_DTYPES}",
         )
         self._vector_dtype = vector_dtype
 
@@ -637,7 +644,9 @@ class DynamicMemoryIndex:
         _assert_is_nonnegative_uint32(num_threads, "num_threads")
         _assert_is_nonnegative_uint32(filter_list_size, "filter_list_size")
         _assert_is_nonnegative_uint32(num_frozen_points, "num_frozen_points")
-        _assert_is_nonnegative_uint32(initial_search_list_size, "initial_search_list_size")
+        _assert_is_nonnegative_uint32(
+            initial_search_list_size, "initial_search_list_size"
+        )
         _assert_is_nonnegative_uint32(initial_search_threads, "initial_search_threads")
 
         self._dims = dims
@@ -688,7 +697,7 @@ class DynamicMemoryIndex:
         _assert(
             query.dtype == self._vector_dtype,
             f"DynamicMemoryIndex was built expecting a dtype of {self._vector_dtype}, but the query vector is of dtype "
-            f"{query.dtype}"
+            f"{query.dtype}",
         )
         _assert_is_positive_uint32(k_neighbors, "k_neighbors")
         _assert_is_nonnegative_uint32(list_size, "list_size")
@@ -730,7 +739,7 @@ class DynamicMemoryIndex:
         _assert(
             queries.dtype == self._vector_dtype,
             f"StaticMemoryIndex was built expecting a dtype of {self._vector_dtype}, but the query vectors are of dtype "
-            f"{queries.dtype}"
+            f"{queries.dtype}",
         )
         _assert_is_positive_uint32(k_neighbors, "k_neighbors")
         _assert_is_positive_uint32(list_size, "list_size")
@@ -756,7 +765,7 @@ class DynamicMemoryIndex:
         _assert(
             vector.dtype == self._vector_dtype,
             f"DynamicMemoryIndex was built expecting a dtype of {self._vector_dtype}, but the insert vector is of dtype "
-            f"{vector.dtype}"
+            f"{vector.dtype}",
         )
         _assert_is_nonnegative_uint32(vector_id, "vector_id")
         self._index.insert(vector, vector_id)
