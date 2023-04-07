@@ -156,8 +156,7 @@ int main(int argc, char **argv)
         diskann::cout << "Starting index build with R: " << R << "  Lbuild: " << L << "  alpha: " << alpha
                       << "  #threads: " << num_threads << std::endl;
 
-        size_t data_num, data_dim;
-        diskann::get_bin_metadata(data_path, data_num, data_dim);
+        // Config for index
         diskann::IndexConfig config;
         config.metric = metric;
         config.filtered_build = label_file == "" ? false : true;
@@ -165,16 +164,18 @@ int main(int argc, char **argv)
         config.data_type = data_type;
         config.label_type = label_type;
 
-        diskann::Parameters build_params;
-        build_params.Set<uint32_t>("R", R);
-        build_params.Set<uint32_t>("L", L);
-        build_params.Set<uint32_t>("Lf", Lf);
-        build_params.Set<uint32_t>("C", 750); // maximum candidate set size during pruning procedure
-        build_params.Set<float>("alpha", alpha);
-        build_params.Set<bool>("saturate_graph", 0);
-        build_params.Set<uint32_t>("num_threads", num_threads);
-        build_params.Set<std::string>("universal_label", universal_label);
-        build_params.Set<std::string>("label_file", label_file);
+        // Build params for speific build from instance
+        diskann::IndexWriteParameters paras = diskann::IndexWriteParametersBuilder(L, R)
+                                                  .with_filter_list_size(Lf)
+                                                  .with_alpha(alpha)
+                                                  .with_saturate_graph(false)
+                                                  .with_num_threads(num_threads)
+                                                  .build();
+
+        diskann::BuildParams build_params(paras);
+        build_params.C = 750; // maximum candidate set size during pruning procedure
+        build_params.universal_label = universal_label;
+        build_params.label_file = label_file;
 
         auto index_factory = diskann::IndexFactory(config);
         auto index = index_factory.instance();

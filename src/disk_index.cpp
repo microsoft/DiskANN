@@ -31,17 +31,16 @@ template <typename T, typename LabelT> DiskIndex<T, LabelT>::DiskIndex(IndexConf
 }
 
 template <typename T, typename LabelT>
-void DiskIndex<T, LabelT>::build(const std::string &data_file, Parameters &build_params, const std::string &save_path)
+void DiskIndex<T, LabelT>::build(const std::string &data_file, BuildParams &build_params, const std::string &save_path)
 {
-    auto build_param_obj = parse_to_build_params(build_params);
-    diskann::build_disk_index<T, LabelT>(data_file.c_str(), save_path.c_str(), build_param_obj.disk_params.c_str(),
-                                         _config.metric, _config.use_opq, _config.filtered_build,
-                                         build_param_obj.label_file, build_param_obj.universal_label,
-                                         build_param_obj.filter_threshold, build_param_obj.Lf);
+    diskann::build_disk_index<T, LabelT>(
+        data_file.c_str(), save_path.c_str(), build_params.disk_params.c_str(), _config.metric, _config.use_opq,
+        build_params.codebook_prefix, _config.filtered_build, build_params.label_file, build_params.universal_label,
+        build_params.filter_threshold, build_params.index_write_params.filter_list_size);
 }
 
 template <typename T, typename LabelT>
-void DiskIndex<T, LabelT>::search(const std::string &query_file, Parameters &search_params,
+void DiskIndex<T, LabelT>::search(const std::string &query_file, SearchParams &search_params,
                                   const std::vector<std::string> &query_filters)
 {
     // NEED to implament code...
@@ -49,19 +48,18 @@ void DiskIndex<T, LabelT>::search(const std::string &query_file, Parameters &sea
 
 template <typename T, typename LabelT>
 int DiskIndex<T, LabelT>::search_prebuilt_index(const std::string &index_path, const std::string &query_file,
-                                                Parameters &search_params, std::vector<std::string> &query_filters,
+                                                SearchParams &search_params, std::vector<std::string> &query_filters,
                                                 const std::string &result_path_prefix)
 {
-    auto search_param_obj = parse_to_search_params(search_params);
-    auto beamwidth = search_param_obj.W;
-    auto search_io_limit = search_param_obj.search_io_limit;
-    auto gt_file = search_param_obj.gt_file;
-    auto num_nodes_to_cache = search_param_obj.num_nodes_to_cache;
-    auto num_threads = search_param_obj.num_threads;
-    auto recall_at = search_param_obj.K;
-    auto Lvec = search_param_obj.Lvec;
-    auto fail_if_recall_below = search_param_obj.fail_if_recall_below;
-    bool use_reorder_data = search_param_obj.use_reorder_data;
+    auto beamwidth = search_params.W;
+    auto search_io_limit = search_params.search_io_limit;
+    auto gt_file = search_params.gt_file;
+    auto num_nodes_to_cache = search_params.num_nodes_to_cache;
+    auto num_threads = search_params.num_threads;
+    auto recall_at = search_params.K;
+    auto Lvec = search_params.Lvec;
+    auto fail_if_recall_below = search_params.fail_if_recall_below;
+    bool use_reorder_data = search_params.use_reorder_data;
 
     diskann::cout << "Search parameters: #threads: " << num_threads << ", ";
     if (beamwidth <= 0)
@@ -118,7 +116,7 @@ int DiskIndex<T, LabelT>::search_prebuilt_index(const std::string &index_path, c
     std::unique_ptr<diskann::PQFlashIndex<T, LabelT>> _pFlashIndex(
         new diskann::PQFlashIndex<T, LabelT>(reader, _config.metric));
 
-    int res = _pFlashIndex->load(search_param_obj.num_threads, index_path.c_str());
+    int res = _pFlashIndex->load(search_params.num_threads, index_path.c_str());
 
     if (res != 0)
     {
@@ -317,13 +315,13 @@ int DiskIndex<T, LabelT>::search_prebuilt_index(const std::string &index_path, c
 }
 
 template <typename T, typename LabelT>
-void DiskIndex<T, LabelT>::build_filtered_index(const std::string &data_file, Parameters &build_params,
+void DiskIndex<T, LabelT>::build_filtered_index(const std::string &data_file, BuildParams &build_params,
                                                 const std::string &save_path)
 {
 }
 
 template <typename T, typename LabelT>
-void DiskIndex<T, LabelT>::build_unfiltered_index(const std::string &data_file, Parameters &build_params)
+void DiskIndex<T, LabelT>::build_unfiltered_index(const std::string &data_file, BuildParams &build_params)
 {
 }
 
