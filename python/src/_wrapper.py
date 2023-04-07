@@ -438,7 +438,7 @@ class DiskIndex:
 
 class StaticMemoryIndex:
     def __init__(
-        self, metric: Literal["l2", "mips"], vector_dtype: VectorDType, index_path: str
+        self, metric: Literal["l2", "mips"], vector_dtype: VectorDType, index_path: str, l_build: int, graph_degree: int
     ):
         """
         The diskannpy.StaticMemoryIndex represents our python API into a static DiskANN InMemory Index library.
@@ -461,7 +461,7 @@ class StaticMemoryIndex:
 
         self._vector_dtype = vector_dtype
         self._index = _DTYPE_TO_NATIVE_INMEM_STATIC_INDEX[vector_dtype](
-            dap_metric, index_path
+            dap_metric, index_path, l_build, graph_degree
         )
 
     def search(self, query: np.ndarray, k_neighbors: int, list_size: int):
