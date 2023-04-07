@@ -105,7 +105,8 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 
     // Batch build from a file. Optionally pass tags vector.
     DISKANN_DLLEXPORT void build(const char *filename, const size_t num_points_to_load,
-                                 const IndexWriteParameters &parameters, const std::vector<TagT> &tags = std::vector<TagT>());
+                                 const IndexWriteParameters &parameters,
+                                 const std::vector<TagT> &tags = std::vector<TagT>());
 
     // Batch build from a file. Optionally pass tags file.
     DISKANN_DLLEXPORT void build(const char *filename, const size_t num_points_to_load,

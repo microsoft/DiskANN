@@ -1611,7 +1611,8 @@ void Index<T, TagT, LabelT>::set_start_points_at_random(T radius, uint32_t rando
 }
 
 template <typename T, typename TagT, typename LabelT>
-void Index<T, TagT, LabelT>::build_with_data_populated(const IndexWriteParameters &parameters, const std::vector<TagT> &tags)
+void Index<T, TagT, LabelT>::build_with_data_populated(const IndexWriteParameters &parameters,
+                                                       const std::vector<TagT> &tags)
 {
     diskann::cout << "Starting index build with " << _nd << " points... " << std::endl;
 
@@ -1667,8 +1668,8 @@ void Index<T, TagT, LabelT>::build_with_data_populated(const IndexWriteParameter
 }
 
 template <typename T, typename TagT, typename LabelT>
-void Index<T, TagT, LabelT>::build(const T *data, const size_t num_points_to_load, const IndexWriteParameters &parameters,
-                                   const std::vector<TagT> &tags)
+void Index<T, TagT, LabelT>::build(const T *data, const size_t num_points_to_load,
+                                   const IndexWriteParameters &parameters, const std::vector<TagT> &tags)
 {
     if (num_points_to_load == 0)
     {
