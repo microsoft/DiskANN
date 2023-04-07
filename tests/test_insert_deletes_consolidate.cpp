@@ -146,7 +146,6 @@ void build_incremental_index(const std::string &data_path, const uint32_t L, con
     diskann::IndexWriteParameters params = diskann::IndexWriteParametersBuilder(L, R)
                                                .with_max_occlusion_size(500) // C = 500
                                                .with_alpha(alpha)
-                                               .with_num_rounds(1)
                                                .with_num_threads(thread_count)
                                                .with_num_frozen_points(num_start_pts)
                                                .build();

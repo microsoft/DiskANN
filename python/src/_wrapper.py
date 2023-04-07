@@ -58,16 +58,30 @@ def _get_valid_metric(metric: str) -> _native_dap.Metric:
 
 
 def _validate_dtype(vectors: np.ndarray):
-    if vectors.dtype not in _VALID_DTYPES:
-        raise ValueError(
+    _assert(vectors.dtype in _VALID_DTYPES,
             f"vectors provided had dtype {vectors.dtype}, but must be single precision float "
             f"(numpy.single), unsigned 8bit integer (numpy.ubyte), or signed 8bit integer (numpy.byte)."
         )
 
 
 def _validate_shape(vectors: np.ndarray):
-    if len(vectors.shape) != 2:
-        raise ValueError("vectors must be 2d numpy array")
+    _assert(len(vectors.shape) == 2, "vectors must be 2d numpy array")
+
+
+__MAX_INT_VAL = 4_294_967_295
+
+
+def _assert_is_positive_uint32(test_value: int, parameter: str):
+    _assert(0 < test_value < __MAX_INT_VAL, f"{parameter} must be a positive integer in the uint32 range")
+
+
+def _assert_is_nonnegative_uint32(test_value: int, parameter: str):
+    _assert(-1 < test_value < __MAX_INT_VAL, f"{parameter} must be a non-negative integer in the uint32 range")
+
+
+def _assert(statement_eval: bool, message: str):
+    if not statement_eval:
+        raise ValueError(message)
 
 
 def _numpy_to_diskann_file(
@@ -154,22 +168,16 @@ def build_disk_index_from_vector_file(
     :raises ValueError: If any numeric parameter is in an invalid range.
     """
     dap_metric = _get_valid_metric(metric)
-    if vector_dtype not in _VALID_DTYPES:
-        raise ValueError(
-            f"vector_dtype {vector_dtype} is not in list of valid dtypes supported: {_VALID_DTYPES}"
-        )
-    if list_size <= 0:
-        raise ValueError("list_size must be a positive integer")
-    if max_degree <= 0:
-        raise ValueError("max_degree must be a positive integer")
-    if search_memory_maximum <= 0:
-        raise ValueError("search_memory_maximum must be larger than 0")
-    if build_memory_maximum <= 0:
-        raise ValueError("build_memory_maximum must be larger than 0")
-    if num_threads < 0:
-        raise ValueError("num_threads must be a nonnegative integer")
-    if pq_disk_bytes < 0:
-        raise ValueError("pq_disk_bytes must be nonnegative integer")
+    _assert(
+        vector_dtype in _VALID_DTYPES,
+        f"vector_dtype {vector_dtype} is not in list of valid dtypes supported: {_VALID_DTYPES}"
+    )
+    _assert_is_positive_uint32(list_size, "list_size")
+    _assert_is_positive_uint32(max_degree, "max_degree")
+    _assert(search_memory_maximum > 0, "search_memory_maximum must be larger than 0")
+    _assert(build_memory_maximum > 0, "build_memory_maximum must be larger than 0")
+    _assert_is_nonnegative_uint32(num_threads, "num_threads")
+    _assert_is_nonnegative_uint32(pq_disk_bytes, "pq_disk_bytes")
 
     index = _DTYPE_TO_NATIVE_INDEX[vector_dtype](dap_metric)
     index.build(
@@ -208,7 +216,7 @@ def build_disk_index_from_vectors(
     :type metric: str
     :param index_path: The path on disk that the index will be created in.
     :type index_path: str
-    :param max_degree: The degree of the graph index, typically between 60 and 50. A larger maximum degree will
+    :param max_degree: The degree of the graph index, typically between 60 and 150. A larger maximum degree will
         result in larger indices and longer indexing times, but better search quality.
     :type max_degree: int
     :param list_size: The size of queue to use when building the index for search. Values between 75 and 200 are
@@ -291,14 +299,13 @@ class DiskIndex:
         :raises ValueError: If num_threads or num_nodes_to_cache is an invalid range.
         """
         dap_metric = _get_valid_metric(metric)
-        if vector_dtype not in _VALID_DTYPES:
-            raise ValueError(
-                f"vector_dtype {vector_dtype} is not in list of valid dtypes supported: {_VALID_DTYPES}"
-            )
-        if num_threads < 0:
-            raise ValueError("num_threads must be a non-negative integer")
-        if num_nodes_to_cache < 0:
-            raise ValueError("num_nodes_to_cache must be a non-negative integer")
+        _assert(
+            vector_dtype in _VALID_DTYPES,
+            f"vector_dtype {vector_dtype} is not in list of valid dtypes supported: {_VALID_DTYPES}"
+        )
+        _assert_is_nonnegative_uint32(num_threads, "num_threads")
+        _assert_is_nonnegative_uint32(num_nodes_to_cache, "num_nodes_to_cache")
+
         self._vector_dtype = vector_dtype
         self._index = _DTYPE_TO_NATIVE_INDEX[vector_dtype](dap_metric)
         self._index.load_index(
@@ -333,25 +340,22 @@ class DiskIndex:
         :return: Returns a tuple of 1-d numpy ndarrays; the first including the indices of the approximate nearest
             neighbors, the second their distances. These are aligned arrays.
         """
-        if len(query.shape) != 1:
-            raise ValueError("query vector must be 1-d")
-        if query.dtype != self._vector_dtype:
-            raise ValueError(
-                f"DiskIndex was built expecting a dtype of {self._vector_dtype}, but the query vector is "
-                f"of dtype {query.dtype}"
-            )
-        if k_neighbors <= 0:
-            raise ValueError("k_neighbors must be a positive integer")
-        if list_size <= 0:
-            raise ValueError("list_size must be a positive integer")
-        if beam_width <= 0:
-            raise ValueError("beam_width must be a positive integer")
+        _assert(len(query.shape) == 1, "query vector must be 1-d")
+        _assert(
+            query.dtype == self._vector_dtype,
+            f"DiskIndex was built expecting a dtype of {self._vector_dtype}, but the query vectors are of dtype "
+            f"{query.dtype}"
+        )
+        _assert_is_positive_uint32(k_neighbors, "k_neighbors")
+        _assert_is_positive_uint32(list_size, "list_size")
+        _assert_is_positive_uint32(beam_width, "beam_width")
 
         if k_neighbors > list_size:
             warnings.warn(
                 f"k_neighbors={k_neighbors} asked for, but list_size={list_size} was smaller. Increasing {list_size} to {k_neighbors}"
             )
             list_size = k_neighbors
+
         return self._index.search(
             query=query,
             knn=k_neighbors,
@@ -397,21 +401,16 @@ class DiskIndex:
             contains the distances, of the same form: row index will match query index, column index refers to
             1..k_neighbors distance. These are aligned arrays.
         """
-        if len(queries.shape) != 2:
-            raise ValueError("queries must must be 2-d np array")
-        if queries.dtype != self._vector_dtype:
-            raise ValueError(
-                f"DiskIndex was built expecting a dtype of {self._vector_dtype}, but the query vectors "
-                f"are of dtype {queries.dtype}"
-            )
-        if k_neighbors <= 0:
-            raise ValueError("k_neighbors must be a positive integer")
-        if list_size <= 0:
-            raise ValueError("list_size must be a positive integer")
-        if num_threads < 0:
-            raise ValueError("num_threads must be a nonnegative integer")
-        if beam_width <= 0:
-            raise ValueError("beam_width must be a positive integer")
+        _assert(len(queries.shape) == 2, "queries must must be 2-d np array")
+        _assert(
+            queries.dtype == self._vector_dtype,
+            f"DiskIndex was built expecting a dtype of {self._vector_dtype}, but the query vectors are of dtype "
+            f"{queries.dtype}"
+        )
+        _assert_is_positive_uint32(k_neighbors, "k_neighbors")
+        _assert_is_positive_uint32(list_size, "list_size")
+        _assert_is_nonnegative_uint32(num_threads, "num_threads")
+        _assert_is_positive_uint32(beam_width, "beam_width")
 
         if k_neighbors > list_size:
             warnings.warn(
@@ -434,11 +433,25 @@ class StaticMemoryIndex:
     def __init__(
         self, metric: Literal["l2", "mips"], vector_dtype: VectorDType, index_path: str
     ):
+        """
+        The diskannpy.StaticMemoryIndex represents our python API into a static DiskANN InMemory Index library.
+
+        This static index is treated exactly like the DiskIndex, in that it can only be loaded and searched.
+
+        :param metric: One of {"l2", "mips"}. L2 is supported for all 3 vector dtypes, but MIPS is only
+            available for single point floating numbers (numpy.single)
+        :type metric: str
+        :param vector_dtype: The vector dtype this index will be exposing.
+        :type vector_dtype: Type[numpy.single], Type[numpy.byte], Type[numpy.ubyte]
+        :param index_path: Path on disk where the disk index is stored
+        :type index_path: str
+        """
         dap_metric = _get_valid_metric(metric)
-        if vector_dtype not in _VALID_DTYPES:
-            raise ValueError(
-                f"vector_dtype {vector_dtype} is not in list of valid dtypes supported: {_VALID_DTYPES}"
-            )
+        _assert(
+            vector_dtype in _VALID_DTYPES,
+            f"vector_dtype {vector_dtype} is not in list of valid dtypes supported: {_VALID_DTYPES}"
+        )
+
         self._vector_dtype = vector_dtype
         self._index = _DTYPE_TO_NATIVE_INMEM_STATIC_INDEX[vector_dtype](
             dap_metric, index_path
@@ -468,17 +481,14 @@ class StaticMemoryIndex:
         :return: Returns a tuple of 1-d numpy ndarrays; the first including the indices of the approximate nearest
             neighbors, the second their distances. These are aligned arrays.
         """
-        if len(query.shape) != 1:
-            raise ValueError("query vector must be 1-d")
-        if query.dtype != self._vector_dtype:
-            raise ValueError(
-                f"DiskIndex was built expecting a dtype of {self._vector_dtype}, but the query vector is "
-                f"of dtype {query.dtype}"
-            )
-        if k_neighbors <= 0:
-            raise ValueError("k_neighbors must be a positive integer")
-        if list_size <= 0:
-            raise ValueError("list_size must be a positive integer")
+        _assert(len(query.shape) == 1, "query vector must be 1-d")
+        _assert(
+            query.dtype == self._vector_dtype,
+            f"StaticMemoryIndex was built expecting a dtype of {self._vector_dtype}, but the query vector is of dtype "
+            f"{query.dtype}"
+        )
+        _assert_is_positive_uint32(k_neighbors, "k_neighbors")
+        _assert_is_nonnegative_uint32(list_size, "list_size")
 
         if k_neighbors > list_size:
             warnings.warn(
@@ -513,19 +523,15 @@ class StaticMemoryIndex:
             contains the distances, of the same form: row index will match query index, column index refers to
             1..k_neighbors distance. These are aligned arrays.
         """
-        if len(queries.shape) != 2:
-            raise ValueError("queries must must be 2-d np array")
-        if queries.dtype != self._vector_dtype:
-            raise ValueError(
-                f"DiskIndex was built expecting a dtype of {self._vector_dtype}, but the query vectors "
-                f"are of dtype {queries.dtype}"
-            )
-        if k_neighbors <= 0:
-            raise ValueError("k_neighbors must be a positive integer")
-        if list_size <= 0:
-            raise ValueError("list_size must be a positive integer")
-        if num_threads < 0:
-            raise ValueError("num_threads must be a nonnegative integer")
+        _assert(len(queries.shape) != 2, "queries must must be 2-d np array")
+        _assert(
+            queries.dtype == self._vector_dtype,
+            f"StaticMemoryIndex was built expecting a dtype of {self._vector_dtype}, but the query vectors are of dtype "
+            f"{queries.dtype}"
+        )
+        _assert_is_positive_uint32(k_neighbors, "k_neighbors")
+        _assert_is_positive_uint32(list_size, "list_size")
+        _assert_is_nonnegative_uint32(num_threads, "num_threads")
 
         if k_neighbors > list_size:
             warnings.warn(
@@ -555,7 +561,6 @@ class DynamicMemoryIndex:
         saturate_graph: bool = False,
         max_occlusion_size: int = 750,
         alpha: float = 1.2,
-        num_rounds: int = 2,
         num_threads: int = 0,
         filter_list_size: int = 0,
         num_frozen_points: int = 0,
@@ -564,16 +569,76 @@ class DynamicMemoryIndex:
         concurrent_consolidation: bool = True,
         index_path: Optional[str] = None,
     ):
+        """
+        The diskannpy.DynamicMemoryIndex represents our python API into a dynamic DiskANN InMemory Index library.
+
+        This dynamic index is unlike the DiskIndex and StaticMemoryIndex, in that after loading it you can continue
+        to insert and delete vectors.
+
+        Deletions are completed lazily, until the user executes `DynamicMemoryIndex.consolidate_deletes()`
+
+        :param metric: One of {"l2", "mips"}. L2 is supported for all 3 vector dtypes, but MIPS is only
+            available for single point floating numbers (numpy.single)
+        :type metric: str
+        :param vector_dtype: The vector dtype this index will be exposing.
+        :type vector_dtype: Type[numpy.single], Type[numpy.byte], Type[numpy.ubyte]
+        :param dims: The vector dimensionality of this index. All new vectors inserted must be the same dimensionality.
+        :type dims: int
+        :param max_points: Capacity of the data store for future insertions
+        :type max_points: int
+        :param max_degree: The degree of the graph index, typically between 60 and 150. A larger maximum degree will
+            result in larger indices and longer indexing times, but better search quality.
+        :type max_degree: int
+        :param saturate_graph:
+        :type saturate_graph: bool
+        :param max_occlusion_size:
+        :type max_occlusion_size: int
+        :param alpha:
+        :type alpha: float
+        :param num_threads:
+        :type num_threads: int
+        :param filter_list_size:
+        :type filter_list_size: int
+        :param num_frozen_points:
+        :type num_frozen_points: int
+        :param initial_search_list_size: The working scratch memory allocated is predicated off of
+            initial_search_list_size * initial_search_threads. If a larger list_size * num_threads value is
+            ultimately provided by the individual action executed in `batch_query` than provided in this constructor,
+            the scratch space is extended. If a smaller list_size * num_threads is provided by the action than the
+            constructor, the pre-allocated scratch space is used as-is.
+        :type initial_search_list_size: int
+        :param initial_search_threads: Should be set to the most common batch_query num_threads size. The working
+            scratch memory allocated is predicated off of initial_search_list_size * initial_search_threads. If a
+            larger list_size * num_threads value is ultimately provided by the individual action executed in
+            `batch_query` than provided in this constructor, the scratch space is extended. If a smaller
+            list_size * num_threads is provided by the action than the constructor, the pre-allocated scratch space
+            is used as-is.
+        :type initial_search_threads: int
+        :param concurrent_consolidation:
+        :type concurrent_consolidation: bool
+        :param index_path: Path on disk where the disk index is stored. Default is `None`.
+        :type index_path: Optional[str]
+        """
         # TODO: expose default values in C++ and reference them here instead of manually keeping them in sync
         dap_metric = _get_valid_metric(metric)
-        if vector_dtype not in _VALID_DTYPES:
-            raise ValueError(
-                f"vector_dtype {vector_dtype} is not in list of valid dtypes supported: {_VALID_DTYPES}"
-            )
+        _assert(
+            vector_dtype in _VALID_DTYPES,
+            f"vector_dtype {vector_dtype} is not in list of valid dtypes supported: {_VALID_DTYPES}"
+        )
         self._vector_dtype = vector_dtype
 
         # check dims, max_points, list_size, max_degree, max_occlusion_size, alpha, num_rounds, num_threads,
         # filter_list_size, num_frozen_points, initial_search_list_size, initial_search_threads
+        _assert_is_positive_uint32(dims, "dims")
+        _assert_is_positive_uint32(max_points, "max_points")
+        _assert_is_positive_uint32(list_size, "list_size")
+        _assert_is_positive_uint32(max_degree, "max_degree")
+        _assert_is_nonnegative_uint32(max_occlusion_size, "max_occlusion_size")
+        _assert_is_nonnegative_uint32(num_threads, "num_threads")
+        _assert_is_nonnegative_uint32(filter_list_size, "filter_list_size")
+        _assert_is_nonnegative_uint32(num_frozen_points, "num_frozen_points")
+        _assert_is_nonnegative_uint32(initial_search_list_size, "initial_search_list_size")
+        _assert_is_nonnegative_uint32(initial_search_threads, "initial_search_threads")
 
         self._dims = dims
 
@@ -586,7 +651,6 @@ class DynamicMemoryIndex:
             saturate_graph=saturate_graph,
             max_occlusion_size=max_occlusion_size,
             alpha=alpha,
-            num_rounds=num_rounds,
             num_threads=num_threads,
             filter_list_size=filter_list_size,
             num_frozen_points=num_frozen_points,
@@ -617,29 +681,17 @@ class DynamicMemoryIndex:
         :param list_size: Size of list to use while searching. List size increases accuracy at the cost of latency. Must
             be at least k_neighbors in size.
         :type list_size: int
-        :param beam_width: The beamwidth to be used for search. This is the maximum number of IO requests each query
-            will issue per iteration of search code. Larger beamwidth will result in fewer IO round-trips per query,
-            but might result in slightly higher total number of IO requests to SSD per query. For the highest query
-            throughput with a fixed SSD IOps rating, use W=1. For best latency, use W=4,8 or higher complexity search.
-            Specifying 0 will optimize the beamwidth depending on the number of threads performing search, but will
-            involve some tuning overhead.
-        :type beam_width: int
         :return: Returns a tuple of 1-d numpy ndarrays; the first including the indices of the approximate nearest
             neighbors, the second their distances. These are aligned arrays.
         """
-        if len(query.shape) != 1:
-            raise ValueError("query vector must be 1-d")
-        if query.dtype != self._vector_dtype:
-            raise ValueError(
-                f"DiskIndex was built expecting a dtype of {self._vector_dtype}, but the query vector is "
-                f"of dtype {query.dtype}"
-            )
-        if k_neighbors <= 0:
-            raise ValueError("k_neighbors must be a positive integer")
-        if list_size <= 0:
-            raise ValueError("list_size must be a positive integer")
-        if beam_width <= 0:
-            raise ValueError("beam_width must be a positive integer")
+        _assert(len(query.shape) == 1, "query vector must be 1-d")
+        _assert(
+            query.dtype == self._vector_dtype,
+            f"DynamicMemoryIndex was built expecting a dtype of {self._vector_dtype}, but the query vector is of dtype "
+            f"{query.dtype}"
+        )
+        _assert_is_positive_uint32(k_neighbors, "k_neighbors")
+        _assert_is_nonnegative_uint32(list_size, "list_size")
 
         if k_neighbors > list_size:
             warnings.warn(
@@ -674,19 +726,15 @@ class DynamicMemoryIndex:
             contains the distances, of the same form: row index will match query index, column index refers to
             1..k_neighbors distance. These are aligned arrays.
         """
-        if len(queries.shape) != 2:
-            raise ValueError("queries must must be 2-d np array")
-        if queries.dtype != self._vector_dtype:
-            raise ValueError(
-                f"DiskIndex was built expecting a dtype of {self._vector_dtype}, but the query vectors "
-                f"are of dtype {queries.dtype}"
-            )
-        if k_neighbors <= 0:
-            raise ValueError("k_neighbors must be a positive integer")
-        if list_size <= 0:
-            raise ValueError("list_size must be a positive integer")
-        if num_threads < 0:
-            raise ValueError("num_threads must be a nonnegative integer")
+        _assert(len(queries.shape) != 2, "queries must must be 2-d np array")
+        _assert(
+            queries.dtype == self._vector_dtype,
+            f"StaticMemoryIndex was built expecting a dtype of {self._vector_dtype}, but the query vectors are of dtype "
+            f"{queries.dtype}"
+        )
+        _assert_is_positive_uint32(k_neighbors, "k_neighbors")
+        _assert_is_positive_uint32(list_size, "list_size")
+        _assert_is_nonnegative_uint32(num_threads, "num_threads")
 
         if k_neighbors > list_size:
             warnings.warn(
@@ -704,21 +752,17 @@ class DynamicMemoryIndex:
         )
 
     def insert(self, vector: np.ndarray, vector_id: int):
-        # todo: verify id is within range
-        if vector.shape[0] != self._dims:
-            raise ValueError(
-                f"DynamicMemoryIndex was built with vectors of dimensionality {self._dims}, but the insert vector "
-                f"is of dimensionality {vector.shape[0]}"
-            )
-        if vector.dtype != self._vector_dtype:
-            raise ValueError(
-                f"DynamicMemoryIndex was built expecting a dtype of {self._vector_dtype}, but the insert vector "
-                f"is of dtype {vector.dtype}"
-            )
+        _assert(len(vector.shape) == 1, "insert vector must be 1-d")
+        _assert(
+            vector.dtype == self._vector_dtype,
+            f"DynamicMemoryIndex was built expecting a dtype of {self._vector_dtype}, but the insert vector is of dtype "
+            f"{vector.dtype}"
+        )
+        _assert_is_nonnegative_uint32(vector_id, "vector_id")
         self._index.insert(vector, vector_id)
 
     def mark_deleted(self, vector_id: int):
-        # todo: verify id is within range
+        _assert_is_nonnegative_uint32(vector_id, "vector_id")
         self._index.mark_deleted(vector_id)
 
     def consolidate_delete(self):

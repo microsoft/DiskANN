@@ -157,15 +157,13 @@ template <class T> struct DynamicInMemIndex
 
     DynamicInMemIndex(Metric m, const size_t dim, const size_t max_points, const uint32_t l_build,
                       const uint32_t build_max_degree, const bool saturate_graph, const uint32_t max_occlusion_size,
-                      const float alpha, const uint32_t num_rounds, const uint32_t num_threads,
-                      const uint32_t filter_list_size, const uint32_t num_frozen_points,
-                      const uint32_t initial_search_list_size, const uint32_t search_threads,
-                      const bool concurrent_consolidate)
+                      const float alpha, const uint32_t num_threads, const uint32_t filter_list_size,
+                      const uint32_t num_frozen_points, const uint32_t initial_search_list_size,
+                      const uint32_t search_threads, const bool concurrent_consolidate)
         : write_params(IndexWriteParametersBuilder(l_build, build_max_degree)
                            .with_saturate_graph(saturate_graph)
                            .with_max_occlusion_size(max_occlusion_size)
                            .with_alpha(alpha)
-                           .with_num_rounds(num_rounds)
                            .with_num_threads(num_threads)
                            .with_filter_list_size(filter_list_size)
                            .with_num_frozen_points(num_frozen_points)
@@ -332,7 +330,6 @@ PYBIND11_MODULE(_diskannpy, m)
                          const bool saturate_graph = diskann::defaults::SATURATE_GRAPH,
                          const uint32_t max_occlusion_size = diskann::defaults::MAX_OCCLUSION_SIZE, // C
                          const float alpha = diskann::defaults::ALPHA,
-                         const uint32_t num_rounds = diskann::defaults::NUM_ROUNDS,
                          const uint32_t num_threads = diskann::defaults::NUM_THREADS,
                          const uint32_t filter_list_size = diskann::defaults::FILTER_LIST_SIZE, // Lf
                          const uint32_t num_frozen_points = diskann::defaults::NUM_FROZEN_POINTS,
@@ -340,7 +337,7 @@ PYBIND11_MODULE(_diskannpy, m)
                          const bool concurrent_consolidate = true) {
             return std::unique_ptr<DynamicInMemIndex<float>>(new DynamicInMemIndex<float>(
                 metric, dim, max_points, l_build, build_max_degree, saturate_graph, max_occlusion_size, alpha,
-                num_rounds, num_threads, filter_list_size, num_frozen_points, initial_search_list_size, search_threads,
+                num_threads, filter_list_size, num_frozen_points, initial_search_list_size, search_threads,
                 concurrent_consolidate));
         }))
         .def("search", &DynamicInMemIndex<float>::search, py::arg("query"), py::arg("knn"), py::arg("l_search"))
@@ -357,7 +354,6 @@ PYBIND11_MODULE(_diskannpy, m)
                          const bool saturate_graph = diskann::defaults::SATURATE_GRAPH,
                          const uint32_t max_occlusion_size = diskann::defaults::MAX_OCCLUSION_SIZE, // C
                          const float alpha = diskann::defaults::ALPHA,
-                         const uint32_t num_rounds = diskann::defaults::NUM_ROUNDS,
                          const uint32_t num_threads = diskann::defaults::NUM_THREADS,
                          const uint32_t filter_list_size = diskann::defaults::FILTER_LIST_SIZE, // Lf
                          const uint32_t num_frozen_points = diskann::defaults::NUM_FROZEN_POINTS,
@@ -365,7 +361,7 @@ PYBIND11_MODULE(_diskannpy, m)
                          const bool concurrent_consolidate = true) {
             return std::unique_ptr<DynamicInMemIndex<int8_t>>(new DynamicInMemIndex<int8_t>(
                 metric, dim, max_points, l_build, build_max_degree, saturate_graph, max_occlusion_size, alpha,
-                num_rounds, num_threads, filter_list_size, num_frozen_points, initial_search_list_size, search_threads,
+                num_threads, filter_list_size, num_frozen_points, initial_search_list_size, search_threads,
                 concurrent_consolidate));
         }))
         .def("search", &DynamicInMemIndex<int8_t>::search, py::arg("query"), py::arg("knn"), py::arg("l_search"))
@@ -382,7 +378,6 @@ PYBIND11_MODULE(_diskannpy, m)
                          const bool saturate_graph = diskann::defaults::SATURATE_GRAPH,
                          const uint32_t max_occlusion_size = diskann::defaults::MAX_OCCLUSION_SIZE, // C
                          const float alpha = diskann::defaults::ALPHA,
-                         const uint32_t num_rounds = diskann::defaults::NUM_ROUNDS,
                          const uint32_t num_threads = diskann::defaults::NUM_THREADS,
                          const uint32_t filter_list_size = diskann::defaults::FILTER_LIST_SIZE, // Lf
                          const uint32_t num_frozen_points = diskann::defaults::NUM_FROZEN_POINTS,
@@ -390,7 +385,7 @@ PYBIND11_MODULE(_diskannpy, m)
                          const bool concurrent_consolidate = true) {
             return std::unique_ptr<DynamicInMemIndex<uint8_t>>(new DynamicInMemIndex<uint8_t>(
                 metric, dim, max_points, l_build, build_max_degree, saturate_graph, max_occlusion_size, alpha,
-                num_rounds, num_threads, filter_list_size, num_frozen_points, initial_search_list_size, search_threads,
+                num_threads, filter_list_size, num_frozen_points, initial_search_list_size, search_threads,
                 concurrent_consolidate));
         }))
         .def("search", &DynamicInMemIndex<uint8_t>::search, py::arg("query"), py::arg("knn"), py::arg("l_search"))

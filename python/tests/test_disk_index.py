@@ -52,7 +52,7 @@ class TestBuildIndex(unittest.TestCase):
             kwargs = good_ranges.copy()
             kwargs[bad_value_key] = bad_ranges[bad_value_key]
             with self.subTest(
-                    f"testing bad value key: {bad_value_key} with bad value: {bad_ranges[bad_value_key]}"
+                f"testing bad value key: {bad_value_key} with bad value: {bad_ranges[bad_value_key]}"
             ):
                 with self.assertRaises(ValueError):
                     dap.build_disk_index_from_vector_file(
@@ -127,7 +127,7 @@ class TestDiskIndex(unittest.TestCase):
                     self.assertTrue(
                         calculate_recall(diskann_neighbors, knn_indices, k) > 0.70,
                         "Recall was not over 0.7",
-                        )
+                    )
 
     def test_single(self):
         for metric, dtype, query_vectors, index_vectors, ann_dir in self._test_matrix:

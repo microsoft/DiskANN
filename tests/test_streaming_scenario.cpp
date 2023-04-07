@@ -177,7 +177,6 @@ void build_incremental_index(const std::string &data_path, const uint32_t L, con
                                                .with_max_occlusion_size(C)
                                                .with_alpha(alpha)
                                                .with_saturate_graph(saturate_graph)
-                                               .with_num_rounds(1)
                                                .with_num_threads(insert_threads)
                                                .with_num_frozen_points(num_start_pts)
                                                .build();
@@ -186,7 +185,6 @@ void build_incremental_index(const std::string &data_path, const uint32_t L, con
                                                       .with_max_occlusion_size(C)
                                                       .with_alpha(alpha)
                                                       .with_saturate_graph(saturate_graph)
-                                                      .with_num_rounds(1)
                                                       .with_num_threads(consolidate_threads)
                                                       .build();
 
