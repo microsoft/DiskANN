@@ -628,34 +628,26 @@ int build_merged_vamana_index(std::string base_file, diskann::Metric compareMetr
     {
         diskann::cout << "Full index fits in RAM budget, should consume at most "
                       << full_index_ram / (1024 * 1024 * 1024) << "GiBs, so building in one shot" << std::endl;
-        diskann::Parameters paras;
-        paras.Set<uint32_t>("L", (uint32_t)L);
-        paras.Set<uint32_t>("Lf", (uint32_t)Lf);
-        paras.Set<uint32_t>("R", (uint32_t)R);
-        paras.Set<uint32_t>("C", 750);
-        paras.Set<float>("alpha", 1.2f);
-        paras.Set<uint32_t>("num_rnds", 2);
-        if (!use_filters)
-            paras.Set<bool>("saturate_graph", 1);
-        else
-            paras.Set<bool>("saturate_graph", 0);
+
+        diskann::IndexWriteParameters paras = diskann::IndexWriteParametersBuilder(L, R)
+                                                  .with_filter_list_size(Lf)
+                                                  .with_saturate_graph(!use_filters)
+                                                  .build();
         using TagT = uint32_t;
-        paras.Set<std::string>("save_path", mem_index_path);
-        std::unique_ptr<diskann::Index<T, TagT, LabelT>> _pvamanaIndex =
-            std::unique_ptr<diskann::Index<T, TagT, LabelT>>(new diskann::Index<T, TagT, LabelT>(
-                compareMetric, base_dim, base_num, false, false, false, build_pq_bytes > 0, build_pq_bytes, use_opq));
+        diskann::Index<T, TagT, LabelT> _index(compareMetric, base_dim, base_num, false, false, false,
+                                               build_pq_bytes > 0, build_pq_bytes, use_opq);
         if (!use_filters)
-            _pvamanaIndex->build(base_file.c_str(), base_num, paras);
+            _index.build(base_file.c_str(), base_num, paras);
         else
         {
             if (universal_label != "")
             { //  indicates no universal label
                 LabelT unv_label_as_num = 0;
-                _pvamanaIndex->set_universal_label(unv_label_as_num);
+                _index.set_universal_label(unv_label_as_num);
             }
-            _pvamanaIndex->build_filtered_index(base_file.c_str(), label_file, base_num, paras);
+            _index.build_filtered_index(base_file.c_str(), label_file, base_num, paras);
         }
-        _pvamanaIndex->save(mem_index_path.c_str());
+        _index.save(mem_index_path.c_str());
 
         if (use_filters)
         {
@@ -698,24 +690,16 @@ int build_merged_vamana_index(std::string base_file, diskann::Metric compareMetr
 
         std::string shard_index_file = merged_index_prefix + "_subshard-" + std::to_string(p) + "_mem.index";
 
-        diskann::Parameters paras;
-        paras.Set<uint32_t>("L", L);
-        paras.Set<uint32_t>("Lf", Lf);
-        paras.Set<uint32_t>("R", (2 * (R / 3)));
-        paras.Set<uint32_t>("C", 750);
-        paras.Set<float>("alpha", 1.2f);
-        paras.Set<uint32_t>("num_rnds", 2);
-        paras.Set<bool>("saturate_graph", 0);
-        paras.Set<std::string>("save_path", shard_index_file);
+        diskann::IndexWriteParameters paras =
+            diskann::IndexWriteParametersBuilder(L, (2 * R / 3)).with_filter_list_size(Lf).build();
 
         uint64_t shard_base_dim, shard_base_pts;
         get_bin_metadata(shard_base_file, shard_base_pts, shard_base_dim);
-        std::unique_ptr<diskann::Index<T>> _pvamanaIndex = std::unique_ptr<diskann::Index<T>>(
-            new diskann::Index<T>(compareMetric, shard_base_dim, shard_base_pts, false, false, false,
-                                  build_pq_bytes > 0, build_pq_bytes, use_opq));
+        diskann::Index<T> _index(compareMetric, shard_base_dim, shard_base_pts, false, false, false, build_pq_bytes > 0,
+                                 build_pq_bytes, use_opq);
         if (!use_filters)
         {
-            _pvamanaIndex->build(shard_base_file.c_str(), shard_base_pts, paras);
+            _index.build(shard_base_file.c_str(), shard_base_pts, paras);
         }
         else
         {
@@ -723,11 +707,11 @@ int build_merged_vamana_index(std::string base_file, diskann::Metric compareMetr
             if (universal_label != "")
             { //  indicates no universal label
                 LabelT unv_label_as_num = 0;
-                _pvamanaIndex->set_universal_label(unv_label_as_num);
+                _index.set_universal_label(unv_label_as_num);
             }
-            _pvamanaIndex->build_filtered_index(shard_base_file.c_str(), shard_labels_file, shard_base_pts, paras);
+            _index.build_filtered_index(shard_base_file.c_str(), shard_labels_file, shard_base_pts, paras);
         }
-        _pvamanaIndex->save(shard_index_file.c_str());
+        _index.save(shard_index_file.c_str());
         // copy universal label file from first shard to the final destination
         // index, since all shards anyway share the universal label
         if (p == 0)
@@ -1038,8 +1022,9 @@ void create_disk_layout(const std::string base_file, const std::string mem_index
 
 template <typename T, typename LabelT>
 int build_disk_index(const char *dataFilePath, const char *indexFilePath, const char *indexBuildParameters,
-                     diskann::Metric compareMetric, bool use_opq, bool use_filters, const std::string &label_file,
-                     const std::string &universal_label, const uint32_t filter_threshold, const uint32_t Lf)
+                     diskann::Metric compareMetric, bool use_opq, const std::string &codebook_prefix, bool use_filters,
+                     const std::string &label_file, const std::string &universal_label, const uint32_t filter_threshold,
+                     const uint32_t Lf)
 {
     std::stringstream parser;
     parser << std::string(indexBuildParameters);
@@ -1049,7 +1034,7 @@ int build_disk_index(const char *dataFilePath, const char *indexFilePath, const 
     {
         param_list.push_back(cur_param);
     }
-    if (param_list.size() < 5 || param_list.size() > 8)
+    if (param_list.size() < 5 || param_list.size() > 9)
     {
         diskann::cout << "Correct usage of parameters is R (max degree)\n"
                          "L (indexing list size, better if >= R)\n"
@@ -1061,7 +1046,8 @@ int build_disk_index(const char *dataFilePath, const char *indexFilePath, const 
                          "reorder (set true to include full precision in data file"
                          ": optional paramter, use only when using disk PQ\n"
                          "build_PQ_byte (number of PQ bytes for inde build; set 0 to use "
-                         "full precision vectors)"
+                         "full precision vectors)\n"
+                         "QD Quantized Dimension to overwrite the derived dim from B "
                       << std::endl;
         return -1;
     }
@@ -1099,7 +1085,7 @@ int build_disk_index(const char *dataFilePath, const char *indexFilePath, const 
         }
     }
 
-    if (param_list.size() == 8)
+    if (param_list.size() >= 8)
     {
         build_pq_bytes = atoi(param_list[7].c_str());
     }
@@ -1109,7 +1095,9 @@ int build_disk_index(const char *dataFilePath, const char *indexFilePath, const 
     std::string labels_file_original = label_file;
     std::string index_prefix_path(indexFilePath);
     std::string labels_file_to_use = index_prefix_path + "_label_formatted.txt";
-    std::string pq_pivots_path = index_prefix_path + "_pq_pivots.bin";
+    std::string pq_pivots_path_base = codebook_prefix;
+    std::string pq_pivots_path = file_exists(pq_pivots_path_base) ? pq_pivots_path_base + "_pq_pivots.bin"
+                                                                  : index_prefix_path + "_pq_pivots.bin";
     std::string pq_compressed_vectors_path = index_prefix_path + "_pq_compressed.bin";
     std::string mem_index_path = index_prefix_path + "_mem.index";
     std::string disk_index_path = index_prefix_path + "_disk.index";
@@ -1219,11 +1207,18 @@ int build_disk_index(const char *dataFilePath, const char *indexFilePath, const 
     num_pq_chunks = num_pq_chunks > dim ? dim : num_pq_chunks;
     num_pq_chunks = num_pq_chunks > MAX_PQ_CHUNKS ? MAX_PQ_CHUNKS : num_pq_chunks;
 
+    if (param_list.size() >= 9 && atoi(param_list[8].c_str()) <= MAX_PQ_CHUNKS && atoi(param_list[8].c_str()) > 0)
+    {
+        std::cout << "Use quantized dimension (QD) to overwrite derived quantized dimension from search_DRAM_budget (B)"
+                  << std::endl;
+        num_pq_chunks = atoi(param_list[8].c_str());
+    }
+
     diskann::cout << "Compressing " << dim << "-dimensional data into " << num_pq_chunks << " bytes per vector."
                   << std::endl;
 
     generate_quantized_data<T>(data_file_to_use, pq_pivots_path, pq_compressed_vectors_path, compareMetric, p_val,
-                               num_pq_chunks, use_opq);
+                               num_pq_chunks, use_opq, codebook_prefix);
     diskann::cout << timer.elapsed_seconds_for_step("generating quantized data") << std::endl;
 
 // Gopal. Splitting diskann_dll into separate DLLs for search and build.
@@ -1338,38 +1333,44 @@ template DISKANN_DLLEXPORT uint32_t optimize_beamwidth<float, uint16_t>(
 template DISKANN_DLLEXPORT int build_disk_index<int8_t, uint32_t>(const char *dataFilePath, const char *indexFilePath,
                                                                   const char *indexBuildParameters,
                                                                   diskann::Metric compareMetric, bool use_opq,
-                                                                  bool use_filters, const std::string &label_file,
+                                                                  const std::string &codebook_prefix, bool use_filters,
+                                                                  const std::string &label_file,
                                                                   const std::string &universal_label,
                                                                   const uint32_t filter_threshold, const uint32_t Lf);
 template DISKANN_DLLEXPORT int build_disk_index<uint8_t, uint32_t>(const char *dataFilePath, const char *indexFilePath,
                                                                    const char *indexBuildParameters,
                                                                    diskann::Metric compareMetric, bool use_opq,
-                                                                   bool use_filters, const std::string &label_file,
+                                                                   const std::string &codebook_prefix, bool use_filters,
+                                                                   const std::string &label_file,
                                                                    const std::string &universal_label,
                                                                    const uint32_t filter_threshold, const uint32_t Lf);
 template DISKANN_DLLEXPORT int build_disk_index<float, uint32_t>(const char *dataFilePath, const char *indexFilePath,
                                                                  const char *indexBuildParameters,
                                                                  diskann::Metric compareMetric, bool use_opq,
-                                                                 bool use_filters, const std::string &label_file,
+                                                                 const std::string &codebook_prefix, bool use_filters,
+                                                                 const std::string &label_file,
                                                                  const std::string &universal_label,
                                                                  const uint32_t filter_threshold, const uint32_t Lf);
 // LabelT = uint16
 template DISKANN_DLLEXPORT int build_disk_index<int8_t, uint16_t>(const char *dataFilePath, const char *indexFilePath,
                                                                   const char *indexBuildParameters,
                                                                   diskann::Metric compareMetric, bool use_opq,
-                                                                  bool use_filters, const std::string &label_file,
+                                                                  const std::string &codebook_prefix, bool use_filters,
+                                                                  const std::string &label_file,
                                                                   const std::string &universal_label,
                                                                   const uint32_t filter_threshold, const uint32_t Lf);
 template DISKANN_DLLEXPORT int build_disk_index<uint8_t, uint16_t>(const char *dataFilePath, const char *indexFilePath,
                                                                    const char *indexBuildParameters,
                                                                    diskann::Metric compareMetric, bool use_opq,
-                                                                   bool use_filters, const std::string &label_file,
+                                                                   const std::string &codebook_prefix, bool use_filters,
+                                                                   const std::string &label_file,
                                                                    const std::string &universal_label,
                                                                    const uint32_t filter_threshold, const uint32_t Lf);
 template DISKANN_DLLEXPORT int build_disk_index<float, uint16_t>(const char *dataFilePath, const char *indexFilePath,
                                                                  const char *indexBuildParameters,
                                                                  diskann::Metric compareMetric, bool use_opq,
-                                                                 bool use_filters, const std::string &label_file,
+                                                                 const std::string &codebook_prefix, bool use_filters,
+                                                                 const std::string &label_file,
                                                                  const std::string &universal_label,
                                                                  const uint32_t filter_threshold, const uint32_t Lf);
 

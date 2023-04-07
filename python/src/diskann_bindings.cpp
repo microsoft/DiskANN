@@ -4,6 +4,7 @@
 #include <omp.h>
 #include <string>
 #include <memory>
+#include <stdexcept>
 
 #include <pybind11/numpy.h>
 #include <pybind11/pybind11.h>
@@ -18,6 +19,7 @@
 #endif
 
 #include "disk_utils.h"
+#include "index.h"
 #include "pq_flash_index.h"
 
 PYBIND11_MAKE_OPAQUE(std::vector<unsigned>);
@@ -76,11 +78,10 @@ template <class T> struct DiskANNIndex
     int load_index(const std::string &index_path_prefix, const int num_threads, const size_t num_nodes_to_cache,
                    int cache_mechanism)
     {
-        const std::string index_path = index_path_prefix + std::string("_disk.index");
-        int load_success = pq_flash_index->load(num_threads, index_path.c_str());
+        int load_success = pq_flash_index->load(num_threads, index_path_prefix.c_str());
         if (load_success != 0)
         {
-            return load_success;
+            throw std::runtime_error("load_index failed.");
         }
         if (cache_mechanism == 0)
         {
@@ -98,47 +99,8 @@ template <class T> struct DiskANNIndex
         return 0;
     }
 
-    void search(std::vector<T> &query, const uint64_t query_idx, const uint64_t dim, const uint64_t num_queries,
-                const uint64_t knn, const uint64_t l_search, const uint64_t beam_width, std::vector<unsigned> &ids,
-                std::vector<float> &dists)
-    {
-        QueryStats stats;
-        if (ids.size() < knn * num_queries)
-        {
-            ids.resize(knn * num_queries);
-            dists.resize(knn * num_queries);
-        }
-        std::vector<uint64_t> _u64_ids(knn);
-        pq_flash_index->cached_beam_search(query.data() + (query_idx * dim), knn, l_search, _u64_ids.data(),
-                                           dists.data() + (query_idx * knn), beam_width, &stats);
-        for (uint64_t i = 0; i < knn; i++)
-            ids[(query_idx * knn) + i] = _u64_ids[i];
-    }
-
-    void batch_search(std::vector<T> &queries, const uint64_t dim, const uint64_t num_queries, const uint64_t knn,
-                      const uint64_t l_search, const uint64_t beam_width, std::vector<unsigned> &ids,
-                      std::vector<float> &dists, const int num_threads)
-    {
-        if (ids.size() < knn * num_queries)
-        {
-            ids.resize(knn * num_queries);
-            dists.resize(knn * num_queries);
-        }
-        omp_set_num_threads(num_threads);
-#pragma omp parallel for schedule(dynamic, 1)
-        for (int64_t q = 0; q < num_queries; ++q)
-        {
-            std::vector<uint64_t> u64_ids(knn);
-
-            pq_flash_index->cached_beam_search(queries.data() + q * dim, knn, l_search, u64_ids.data(),
-                                               dists.data() + q * knn, beam_width);
-            for (uint64_t i = 0; i < knn; i++)
-                ids[(q * knn) + i] = u64_ids[i];
-        }
-    }
-
-    auto search_numpy_input(py::array_t<T, py::array::c_style | py::array::forcecast> &query, const uint64_t dim,
-                            const uint64_t knn, const uint64_t l_search, const uint64_t beam_width)
+    auto search(py::array_t<T, py::array::c_style | py::array::forcecast> &query, const uint64_t knn,
+                const uint64_t l_search, const uint64_t beam_width)
     {
         py::array_t<unsigned> ids(knn);
         py::array_t<float> dists(knn);
@@ -148,7 +110,7 @@ template <class T> struct DiskANNIndex
         QueryStats stats;
 
         pq_flash_index->cached_beam_search(query.data(), knn, l_search, u64_ids.data(), dists.mutable_data(),
-                                           beam_width, &stats);
+                                           beam_width, false, &stats);
 
         auto r = ids.mutable_unchecked<1>();
         for (uint64_t i = 0; i < knn; ++i)
@@ -157,21 +119,21 @@ template <class T> struct DiskANNIndex
         return std::make_pair(ids, dists);
     }
 
-    auto batch_search_numpy_input(py::array_t<T, py::array::c_style | py::array::forcecast> &queries,
-                                  const uint64_t dim, const uint64_t num_queries, const uint64_t knn,
-                                  const uint64_t l_search, const uint64_t beam_width, const int num_threads)
+    auto batch_search(py::array_t<T, py::array::c_style | py::array::forcecast> &queries, const uint64_t num_queries,
+                      const uint64_t knn, const uint64_t l_search, const uint64_t beam_width, const int num_threads)
     {
         py::array_t<unsigned> ids({num_queries, knn});
         py::array_t<float> dists({num_queries, knn});
 
+        omp_set_num_threads(num_threads);
+
         std::vector<uint64_t> u64_ids(knn * num_queries);
-        diskann::QueryStats *stats = new diskann::QueryStats[num_queries];
 
 #pragma omp parallel for schedule(dynamic, 1)
-        for (int64_t i = 0; i < num_queries; i++)
+        for (int64_t i = 0; i < (int64_t)num_queries; i++)
         {
             pq_flash_index->cached_beam_search(queries.data(i), knn, l_search, u64_ids.data() + i * knn,
-                                               dists.mutable_data(i), beam_width, stats + i);
+                                               dists.mutable_data(i), beam_width);
         }
 
         auto r = ids.mutable_unchecked();
@@ -179,79 +141,140 @@ template <class T> struct DiskANNIndex
             for (uint64_t j = 0; j < knn; ++j)
                 r(i, j) = (unsigned)u64_ids[i * knn + j];
 
-        std::unordered_map<std::string, double> collective_stats;
-        collective_stats["mean_latency"] = diskann::get_mean_stats<double>(
-            stats, num_queries, [](const diskann::QueryStats &stats) { return stats.total_us; });
-        collective_stats["latency_999"] = diskann::get_percentile_stats<double>(
-            stats, num_queries, 0.999, [](const diskann::QueryStats &stats) { return stats.total_us; });
-        collective_stats["mean_ssd_ios"] = diskann::get_mean_stats<double>(
-            stats, num_queries, [](const diskann::QueryStats &stats) { return stats.n_ios; });
-        collective_stats["mean_dist_comps"] = diskann::get_mean_stats<double>(
-            stats, num_queries, [](const diskann::QueryStats &stats) { return stats.n_cmps; });
-        delete[] stats;
-        return std::make_pair(std::make_pair(ids, dists), collective_stats);
-    }
-
-    auto batch_range_search_numpy_input(py::array_t<T, py::array::c_style | py::array::forcecast> &queries,
-                                        const uint64_t dim, const uint64_t num_queries, const double range,
-                                        const uint64_t min_list_size, const uint64_t max_list_size,
-                                        const uint64_t beam_width, const int num_threads)
-    {
-        py::array_t<unsigned> offsets(num_queries + 1);
-
-        std::vector<std::vector<uint64_t>> u64_ids(num_queries);
-        std::vector<std::vector<float>> dists(num_queries);
-
-        auto offsets_mutable = offsets.mutable_unchecked();
-        offsets_mutable(0) = 0;
-
-        diskann::QueryStats *stats = new diskann::QueryStats[num_queries];
-
-#pragma omp parallel for schedule(dynamic, 1)
-        for (int64_t i = 0; i < num_queries; i++)
-        {
-            uint32_t res_count = pq_flash_index->range_search(queries.data(i), range, min_list_size, max_list_size,
-                                                              u64_ids[i], dists[i], beam_width, stats + i);
-            offsets_mutable(i + 1) = res_count;
-        }
-
-        uint64_t total_res_count = 0;
-        for (uint64_t i = 0; i < num_queries; ++i)
-        {
-            total_res_count += offsets_mutable(i + 1);
-        }
-
-        py::array_t<unsigned> ids(total_res_count);
-        py::array_t<float> res_dists(total_res_count);
-
-        auto ids_mutable = ids.mutable_unchecked();
-        auto res_dists_mutable = res_dists.mutable_unchecked();
-        size_t pos = 0;
-        for (uint64_t i = 0; i < num_queries; ++i)
-        {
-            for (uint64_t j = 0; j < offsets_mutable(i + 1); ++j)
-            {
-                ids_mutable(pos) = (unsigned)u64_ids[i][j];
-                res_dists_mutable(pos++) = dists[i][j];
-            }
-            offsets_mutable(i + 1) = offsets_mutable(i) + offsets_mutable(i + 1);
-        }
-
-        std::unordered_map<std::string, double> collective_stats;
-        collective_stats["mean_latency"] = diskann::get_mean_stats<double>(
-            stats, num_queries, [](const diskann::QueryStats &stats) { return stats.total_us; });
-        collective_stats["latency_999"] = diskann::get_percentile_stats<double>(
-            stats, num_queries, 0.999, [](const diskann::QueryStats &stats) { return stats.total_us; });
-        collective_stats["mean_ssd_ios"] = diskann::get_mean_stats<double>(
-            stats, num_queries, [](const diskann::QueryStats &stats) { return stats.n_ios; });
-        collective_stats["mean_dist_comps"] = diskann::get_mean_stats<double>(
-            stats, num_queries, [](const diskann::QueryStats &stats) { return stats.n_cmps; });
-        delete[] stats;
-        return std::make_pair(std::make_pair(offsets, std::make_pair(ids, res_dists)), collective_stats);
+        return std::make_pair(ids, dists);
     }
 };
 
-PYBIND11_MODULE(diskannpy, m)
+typedef uint32_t IdT;
+typedef uint32_t filterT;
+
+template <class T> struct DynamicInMemIndex
+{
+    Index<T, IdT, filterT> *_index;
+    const IndexWriteParameters write_params;
+
+    DynamicInMemIndex(Metric m, const size_t dim, const size_t max_points, const IndexWriteParameters &index_parameters,
+                      const uint32_t initial_search_list_size, const uint32_t search_threads,
+                      const bool concurrent_consolidate)
+        : write_params(index_parameters)
+    {
+        _index = new Index<T>(m, dim, max_points,
+                              true,                     // dynamic_index
+                              index_parameters,         // used for insert
+                              initial_search_list_size, // used to prepare the scratch space for searching. can / may be
+                                                        // expanded if the search asks for a larger L.
+                              search_threads,           // also used for the scratch space
+                              true,                     // enable_tags
+                              concurrent_consolidate,
+                              false,  // pq_dist_build
+                              0,      // num_pq_chunks
+                              false); // use_opq = false
+    }
+
+    ~DynamicInMemIndex()
+    {
+        delete _index;
+    }
+
+    int insert(py::array_t<T, py::array::c_style | py::array::forcecast> &vector, const IdT id)
+    {
+        return _index->insert_point(vector.data(), id);
+    }
+
+    int mark_deleted(const IdT id)
+    {
+        return _index->lazy_delete(id);
+    }
+
+    auto search(py::array_t<T, py::array::c_style | py::array::forcecast> &query, const uint64_t knn,
+                const uint64_t l_search)
+    {
+        py::array_t<IdT> ids(knn);
+        py::array_t<float> dists(knn);
+        std::vector<T *> empty_vector;
+        _index->search_with_tags(query.data(), knn, l_search, ids.mutable_data(), dists.mutable_data(), empty_vector);
+        return std::make_pair(ids, dists);
+    }
+
+    auto batch_search(py::array_t<T, py::array::c_style | py::array::forcecast> &queries, const uint64_t num_queries,
+                      const uint64_t knn, const uint64_t l_search, const int num_threads)
+    {
+        py::array_t<unsigned> ids({num_queries, knn});
+        py::array_t<float> dists({num_queries, knn});
+        std::vector<T *> empty_vector;
+
+        omp_set_num_threads(num_threads);
+
+#pragma omp parallel for schedule(dynamic, 1)
+        for (int64_t i = 0; i < (int64_t)num_queries; i++)
+        {
+            _index->search_with_tags(queries.data(i), knn, l_search, ids.mutable_data(i), dists.mutable_data(i),
+                                     empty_vector);
+        }
+
+        return std::make_pair(ids, dists);
+    }
+
+    auto consolidate_delete()
+    {
+        return _index->consolidate_deletes(write_params);
+    }
+};
+
+template <class T> struct StaticInMemIndex
+{
+    Index<T, IdT, filterT> *_index;
+
+    StaticInMemIndex(Metric m, const std::string &data_path, IndexWriteParameters &index_parameters)
+    {
+        size_t ndims, npoints;
+        diskann::get_bin_metadata(data_path, npoints, ndims);
+        _index = new Index<T>(m, ndims, npoints,
+                              false, // not a dynamic_index
+                              false, // no enable_tags/ids
+                              false, // no concurrent_consolidate,
+                              false, // pq_dist_build
+                              0,     // num_pq_chunks
+                              false, // use_opq = false
+                              0);    // num_frozen_pts = 0
+        _index->build(data_path.c_str(), npoints, index_parameters);
+    }
+
+    ~StaticInMemIndex()
+    {
+        delete _index;
+    }
+
+    auto search(py::array_t<T, py::array::c_style | py::array::forcecast> &query, const uint64_t knn,
+                const uint64_t l_search)
+    {
+        py::array_t<IdT> ids(knn);
+        py::array_t<float> dists(knn);
+        std::vector<T *> empty_vector;
+        _index->search(query.data(), knn, l_search, ids.mutable_data(), dists.mutable_data());
+        return std::make_pair(ids, dists);
+    }
+
+    auto batch_search(py::array_t<T, py::array::c_style | py::array::forcecast> &queries, const uint64_t num_queries,
+                      const uint64_t knn, const uint64_t l_search, const int num_threads)
+    {
+        py::array_t<unsigned> ids({num_queries, knn});
+        py::array_t<float> dists({num_queries, knn});
+        std::vector<T *> empty_vector;
+
+        omp_set_num_threads(num_threads);
+
+#pragma omp parallel for schedule(dynamic, 1)
+        for (int64_t i = 0; i < (int64_t)num_queries; i++)
+        {
+            _index->search(queries.data(i), knn, l_search, ids.mutable_data(i), dists.mutable_data(i));
+        }
+
+        return std::make_pair(ids, dists);
+    }
+};
+
+PYBIND11_MODULE(_diskannpy, m)
 {
     m.doc() = "DiskANN Python Bindings";
 #ifdef VERSION_INFO
@@ -260,179 +283,82 @@ PYBIND11_MODULE(diskannpy, m)
     m.attr("__version__") = "dev";
 #endif
 
-    py::bind_vector<std::vector<unsigned>>(m, "VectorUnsigned");
-    py::bind_vector<std::vector<float>>(m, "VectorFloat");
-    py::bind_vector<std::vector<int8_t>>(m, "VectorInt8");
-    py::bind_vector<std::vector<uint8_t>>(m, "VectorUInt8");
-
     py::enum_<Metric>(m, "Metric")
         .value("L2", Metric::L2)
         .value("INNER_PRODUCT", Metric::INNER_PRODUCT)
         .export_values();
 
-    py::class_<Parameters>(m, "Parameters")
-        .def(py::init<>())
-        .def(
-            "set",
-            [](Parameters &self, const std::string &name, py::object value) {
-                if (py::isinstance<py::bool_>(value))
-                {
-                    return self.Set(name, py::cast<bool>(value));
-                }
-                else if (py::isinstance<py::int_>(value))
-                {
-                    return self.Set(name, py::cast<unsigned>(value));
-                }
-                else if (py::isinstance<py::float_>(value))
-                {
-                    return self.Set(name, py::cast<float>(value));
-                }
-            },
-            py::arg("name"), py::arg("value"));
+    py::class_<StaticInMemIndex<float>>(m, "DiskANNStaticInMemFloatIndex")
+        .def(py::init([](diskann::Metric metric, const std::string &data_path, IndexWriteParameters &index_parameters) {
+            return std::unique_ptr<StaticInMemIndex<float>>(
+                new StaticInMemIndex<float>(metric, data_path, index_parameters));
+        }))
+        .def("search", &StaticInMemIndex<float>::search, py::arg("query"), py::arg("knn"), py::arg("l_search"))
+        .def("batch_search", &StaticInMemIndex<float>::batch_search, py::arg("queries"), py::arg("num_queries"),
+             py::arg("knn"), py::arg("l_search"), py::arg("num_threads"));
 
-    py::class_<Neighbor>(m, "Neighbor")
-        .def(py::init<>())
-        .def(py::init<unsigned, float>())
-        .def(py::self < py::self)
-        .def(py::self == py::self);
+    py::class_<StaticInMemIndex<int8_t>>(m, "DiskANNStaticInMemInt8Index")
+        .def(py::init([](diskann::Metric metric, const std::string &data_path, IndexWriteParameters &index_parameters) {
+            return std::unique_ptr<StaticInMemIndex<int8_t>>(
+                new StaticInMemIndex<int8_t>(metric, data_path, index_parameters));
+        }))
+        .def("search", &StaticInMemIndex<int8_t>::search, py::arg("query"), py::arg("knn"), py::arg("l_search"))
+        .def("batch_search", &StaticInMemIndex<int8_t>::batch_search, py::arg("queries"), py::arg("num_queries"),
+             py::arg("knn"), py::arg("l_search"), py::arg("num_threads"));
 
-    py::class_<AlignedFileReader>(m, "AlignedFileReader");
+    py::class_<StaticInMemIndex<uint8_t>>(m, "DiskANNStaticInMemUint8Index")
+        .def(py::init([](diskann::Metric metric, const std::string &data_path, IndexWriteParameters &index_parameters) {
+            return std::unique_ptr<StaticInMemIndex<uint8_t>>(
+                new StaticInMemIndex<uint8_t>(metric, data_path, index_parameters));
+        }))
+        .def("search", &StaticInMemIndex<uint8_t>::search, py::arg("query"), py::arg("knn"), py::arg("l_search"))
+        .def("batch_search", &StaticInMemIndex<uint8_t>::batch_search, py::arg("queries"), py::arg("num_queries"),
+             py::arg("knn"), py::arg("l_search"), py::arg("num_threads"));
 
-#ifdef _WINDOWS
-    py::class_<WindowsAlignedFileReader>(m, "WindowsAlignedFileReader").def(py::init<>());
-#else
-    py::class_<LinuxAlignedFileReader>(m, "LinuxAlignedFileReader").def(py::init<>());
-#endif
+    py::class_<DynamicInMemIndex<float>>(m, "DiskANNDynamicInMemFloatIndex")
+        .def(py::init([](diskann::Metric metric, const size_t dim, const size_t max_points,
+                         const IndexWriteParameters &index_parameters, const uint32_t initial_search_list_size,
+                         const uint32_t search_threads, const bool concurrent_consolidate) {
+            return std::unique_ptr<DynamicInMemIndex<float>>(
+                new DynamicInMemIndex<float>(metric, dim, max_points, index_parameters, initial_search_list_size,
+                                             search_threads, concurrent_consolidate));
+        }))
+        .def("search", &DynamicInMemIndex<float>::search, py::arg("query"), py::arg("knn"), py::arg("l_search"))
+        .def("batch_search", &DynamicInMemIndex<float>::batch_search, py::arg("queries"), py::arg("num_queries"),
+             py::arg("knn"), py::arg("l_search"), py::arg("num_threads"))
+        .def("insert", &DynamicInMemIndex<float>::insert, py::arg("vector"), py::arg("id"))
+        .def("mark_deleted", &DynamicInMemIndex<float>::mark_deleted, py::arg("id"))
+        .def("consolidate_delete", &DynamicInMemIndex<float>::consolidate_delete);
 
-    m.def(
-        "omp_set_num_threads", [](const size_t num_threads) { omp_set_num_threads(num_threads); },
-        py::arg("num_threads") = 1);
+    py::class_<DynamicInMemIndex<int8_t>>(m, "DiskANNDynamicInMemInt8Index")
+        .def(py::init([](diskann::Metric metric, const size_t dim, const size_t max_points,
+                         const IndexWriteParameters &index_parameters, const uint32_t initial_search_list_size,
+                         const uint32_t search_threads, const bool concurrent_consolidate) {
+            return std::unique_ptr<DynamicInMemIndex<int8_t>>(
+                new DynamicInMemIndex<int8_t>(metric, dim, max_points, index_parameters, initial_search_list_size,
+                                              search_threads, concurrent_consolidate));
+        }))
+        .def("search", &DynamicInMemIndex<int8_t>::search, py::arg("query"), py::arg("knn"), py::arg("l_search"))
+        .def("batch_search", &DynamicInMemIndex<int8_t>::batch_search, py::arg("queries"), py::arg("num_queries"),
+             py::arg("knn"), py::arg("l_search"), py::arg("num_threads"))
+        .def("insert", &DynamicInMemIndex<int8_t>::insert, py::arg("vector"), py::arg("id"))
+        .def("mark_deleted", &DynamicInMemIndex<int8_t>::mark_deleted, py::arg("id"))
+        .def("consolidate_delete", &DynamicInMemIndex<int8_t>::consolidate_delete);
 
-    m.def("omp_get_max_threads", []() { return omp_get_max_threads(); });
-
-    m.def(
-        "load_aligned_bin_float",
-        [](const std::string &path, std::vector<float> &data) {
-            float *data_ptr = nullptr;
-            size_t num, dims, aligned_dims;
-            load_aligned_bin<float>(path, data_ptr, num, dims, aligned_dims);
-            data.assign(data_ptr, data_ptr + num * aligned_dims);
-            auto l = py::list(3);
-            l[0] = py::int_(num);
-            l[1] = py::int_(dims);
-            l[2] = py::int_(aligned_dims);
-            aligned_free(data_ptr);
-            return l;
-        },
-        py::arg("path"), py::arg("data"));
-
-    m.def(
-        "load_truthset",
-        [](const std::string &path, std::vector<unsigned> &ids, std::vector<float> &distances) {
-            unsigned *id_ptr = nullptr;
-            float *dist_ptr = nullptr;
-            size_t num, dims;
-            load_truthset(path, id_ptr, dist_ptr, num, dims);
-            // TODO: Remove redundant copies.
-            ids.assign(id_ptr, id_ptr + num * dims);
-            distances.assign(dist_ptr, dist_ptr + num * dims);
-            auto l = py::list(2);
-            l[0] = py::int_(num);
-            l[1] = py::int_(dims);
-            delete[] id_ptr;
-            delete[] dist_ptr;
-            return l;
-        },
-        py::arg("path"), py::arg("ids"), py::arg("distances"));
-
-    m.def(
-        "calculate_recall",
-        [](const unsigned num_queries, std::vector<unsigned> &ground_truth_ids, std::vector<float> &ground_truth_dists,
-           const unsigned ground_truth_dims, std::vector<unsigned> &results, const unsigned result_dims,
-           const unsigned recall_at) {
-            unsigned *gti_ptr = ground_truth_ids.data();
-            float *gtd_ptr = ground_truth_dists.data();
-            unsigned *r_ptr = results.data();
-
-            double total_recall = 0;
-            std::set<unsigned> gt, res;
-            for (size_t i = 0; i < num_queries; i++)
-            {
-                gt.clear();
-                res.clear();
-                size_t tie_breaker = recall_at;
-                if (gtd_ptr != nullptr)
-                {
-                    tie_breaker = recall_at - 1;
-                    float *gt_dist_vec = gtd_ptr + ground_truth_dims * i;
-                    while (tie_breaker < ground_truth_dims && gt_dist_vec[tie_breaker] == gt_dist_vec[recall_at - 1])
-                        tie_breaker++;
-                }
-
-                gt.insert(gti_ptr + ground_truth_dims * i, gti_ptr + ground_truth_dims * i + tie_breaker);
-                res.insert(r_ptr + result_dims * i, r_ptr + result_dims * i + recall_at);
-                unsigned cur_recall = 0;
-                for (auto &v : gt)
-                {
-                    if (res.find(v) != res.end())
-                    {
-                        cur_recall++;
-                    }
-                }
-                total_recall += cur_recall;
-            }
-            return py::float_(total_recall / (num_queries) * (100.0 / recall_at));
-        },
-        py::arg("num_queries"), py::arg("ground_truth_ids"), py::arg("ground_truth_dists"),
-        py::arg("ground_truth_dims"), py::arg("results"), py::arg("result_dims"), py::arg("recall_at"));
-
-    m.def(
-        "calculate_recall_numpy_input",
-        [](const unsigned num_queries, std::vector<unsigned> &ground_truth_ids, std::vector<float> &ground_truth_dists,
-           const unsigned ground_truth_dims, py::array_t<unsigned, py::array::c_style | py::array::forcecast> &results,
-           const unsigned result_dims, const unsigned recall_at) {
-            unsigned *gti_ptr = ground_truth_ids.data();
-            float *gtd_ptr = ground_truth_dists.data();
-            unsigned *r_ptr = results.mutable_data();
-
-            double total_recall = 0;
-            std::set<unsigned> gt, res;
-            for (size_t i = 0; i < num_queries; i++)
-            {
-                gt.clear();
-                res.clear();
-                size_t tie_breaker = recall_at;
-                if (gtd_ptr != nullptr)
-                {
-                    tie_breaker = recall_at - 1;
-                    float *gt_dist_vec = gtd_ptr + ground_truth_dims * i;
-                    while (tie_breaker < ground_truth_dims && gt_dist_vec[tie_breaker] == gt_dist_vec[recall_at - 1])
-                        tie_breaker++;
-                }
-
-                gt.insert(gti_ptr + ground_truth_dims * i, gti_ptr + ground_truth_dims * i + tie_breaker);
-                res.insert(r_ptr + result_dims * i, r_ptr + result_dims * i + recall_at);
-                unsigned cur_recall = 0;
-                for (auto &v : gt)
-                {
-                    if (res.find(v) != res.end())
-                    {
-                        cur_recall++;
-                    }
-                }
-                total_recall += cur_recall;
-            }
-            return py::float_(total_recall / (num_queries) * (100.0 / recall_at));
-        },
-        py::arg("num_queries"), py::arg("ground_truth_ids"), py::arg("ground_truth_dists"),
-        py::arg("ground_truth_dims"), py::arg("results"), py::arg("result_dims"), py::arg("recall_at"));
-
-    m.def(
-        "save_bin_u32",
-        [](const std::string &file_name, std::vector<unsigned> &data, size_t npts, size_t dims) {
-            save_bin<uint32_t>(file_name, data.data(), npts, dims);
-        },
-        py::arg("file_name"), py::arg("data"), py::arg("npts"), py::arg("dims"));
+    py::class_<DynamicInMemIndex<uint8_t>>(m, "DiskANNDynamicInMemUint8Index")
+        .def(py::init([](diskann::Metric metric, const size_t dim, const size_t max_points,
+                         const IndexWriteParameters &index_parameters, const uint32_t initial_search_list_size,
+                         const uint32_t search_threads, const bool concurrent_consolidate) {
+            return std::unique_ptr<DynamicInMemIndex<uint8_t>>(
+                new DynamicInMemIndex<uint8_t>(metric, dim, max_points, index_parameters, initial_search_list_size,
+                                               search_threads, concurrent_consolidate));
+        }))
+        .def("search", &DynamicInMemIndex<uint8_t>::search, py::arg("query"), py::arg("knn"), py::arg("l_search"))
+        .def("batch_search", &DynamicInMemIndex<uint8_t>::batch_search, py::arg("queries"), py::arg("num_queries"),
+             py::arg("knn"), py::arg("l_search"), py::arg("num_threads"))
+        .def("insert", &DynamicInMemIndex<uint8_t>::insert, py::arg("vector"), py::arg("id"))
+        .def("mark_deleted", &DynamicInMemIndex<uint8_t>::mark_deleted, py::arg("id"))
+        .def("consolidate_delete", &DynamicInMemIndex<uint8_t>::consolidate_delete);
 
     py::class_<DiskANNIndex<float>>(m, "DiskANNFloatIndex")
         .def(py::init([](diskann::Metric metric) {
@@ -441,20 +367,10 @@ PYBIND11_MODULE(diskannpy, m)
         .def("cache_bfs_levels", &DiskANNIndex<float>::cache_bfs_levels, py::arg("num_nodes_to_cache"))
         .def("load_index", &DiskANNIndex<float>::load_index, py::arg("index_path_prefix"), py::arg("num_threads"),
              py::arg("num_nodes_to_cache"), py::arg("cache_mechanism") = 1)
-        .def("search", &DiskANNIndex<float>::search, py::arg("query"), py::arg("query_idx"), py::arg("dim"),
-             py::arg("num_queries"), py::arg("knn"), py::arg("l_search"), py::arg("beam_width"), py::arg("ids"),
-             py::arg("dists"))
-        .def("batch_search", &DiskANNIndex<float>::batch_search, py::arg("queries"), py::arg("dim"),
-             py::arg("num_queries"), py::arg("knn"), py::arg("l_search"), py::arg("beam_width"), py::arg("ids"),
-             py::arg("dists"), py::arg("num_threads"))
-        .def("search_numpy_input", &DiskANNIndex<float>::search_numpy_input, py::arg("query"), py::arg("dim"),
-             py::arg("knn"), py::arg("l_search"), py::arg("beam_width"))
-        .def("batch_search_numpy_input", &DiskANNIndex<float>::batch_search_numpy_input, py::arg("queries"),
-             py::arg("dim"), py::arg("num_queries"), py::arg("knn"), py::arg("l_search"), py::arg("beam_width"),
-             py::arg("num_threads"))
-        .def("batch_range_search_numpy_input", &DiskANNIndex<float>::batch_range_search_numpy_input, py::arg("queries"),
-             py::arg("dim"), py::arg("num_queries"), py::arg("range"), py::arg("min_list_size"),
-             py::arg("max_list_size"), py::arg("beam_width"), py::arg("num_threads"))
+        .def("search", &DiskANNIndex<float>::search, py::arg("query"), py::arg("knn"), py::arg("l_search"),
+             py::arg("beam_width"))
+        .def("batch_search", &DiskANNIndex<float>::batch_search, py::arg("queries"), py::arg("num_queries"),
+             py::arg("knn"), py::arg("l_search"), py::arg("beam_width"), py::arg("num_threads"))
         .def(
             "build",
             [](DiskANNIndex<float> &self, const char *data_file_path, const char *index_prefix_path, unsigned R,
@@ -480,20 +396,10 @@ PYBIND11_MODULE(diskannpy, m)
         .def("cache_bfs_levels", &DiskANNIndex<int8_t>::cache_bfs_levels, py::arg("num_nodes_to_cache"))
         .def("load_index", &DiskANNIndex<int8_t>::load_index, py::arg("index_path_prefix"), py::arg("num_threads"),
              py::arg("num_nodes_to_cache"), py::arg("cache_mechanism") = 1)
-        .def("search", &DiskANNIndex<int8_t>::search, py::arg("query"), py::arg("query_idx"), py::arg("dim"),
-             py::arg("num_queries"), py::arg("knn"), py::arg("l_search"), py::arg("beam_width"), py::arg("ids"),
-             py::arg("dists"))
-        .def("batch_search", &DiskANNIndex<int8_t>::batch_search, py::arg("queries"), py::arg("dim"),
-             py::arg("num_queries"), py::arg("knn"), py::arg("l_search"), py::arg("beam_width"), py::arg("ids"),
-             py::arg("dists"), py::arg("num_threads"))
-        .def("search_numpy_input", &DiskANNIndex<int8_t>::search_numpy_input, py::arg("query"), py::arg("dim"),
-             py::arg("knn"), py::arg("l_search"), py::arg("beam_width"))
-        .def("batch_search_numpy_input", &DiskANNIndex<int8_t>::batch_search_numpy_input, py::arg("queries"),
-             py::arg("dim"), py::arg("num_queries"), py::arg("knn"), py::arg("l_search"), py::arg("beam_width"),
-             py::arg("num_threads"))
-        .def("batch_range_search_numpy_input", &DiskANNIndex<int8_t>::batch_range_search_numpy_input,
-             py::arg("queries"), py::arg("dim"), py::arg("num_queries"), py::arg("range"), py::arg("min_list_size"),
-             py::arg("max_list_size"), py::arg("beam_width"), py::arg("num_threads"))
+        .def("search", &DiskANNIndex<int8_t>::search, py::arg("query"), py::arg("knn"), py::arg("l_search"),
+             py::arg("beam_width"))
+        .def("batch_search", &DiskANNIndex<int8_t>::batch_search, py::arg("queries"), py::arg("num_queries"),
+             py::arg("knn"), py::arg("l_search"), py::arg("beam_width"), py::arg("num_threads"))
         .def(
             "build",
             [](DiskANNIndex<int8_t> &self, const char *data_file_path, const char *index_prefix_path, unsigned R,
@@ -517,20 +423,10 @@ PYBIND11_MODULE(diskannpy, m)
         .def("cache_bfs_levels", &DiskANNIndex<uint8_t>::cache_bfs_levels, py::arg("num_nodes_to_cache"))
         .def("load_index", &DiskANNIndex<uint8_t>::load_index, py::arg("index_path_prefix"), py::arg("num_threads"),
              py::arg("num_nodes_to_cache"), py::arg("cache_mechanism") = 1)
-        .def("search", &DiskANNIndex<uint8_t>::search, py::arg("query"), py::arg("query_idx"), py::arg("dim"),
-             py::arg("num_queries"), py::arg("knn"), py::arg("l_search"), py::arg("beam_width"), py::arg("ids"),
-             py::arg("dists"))
-        .def("batch_search", &DiskANNIndex<uint8_t>::batch_search, py::arg("queries"), py::arg("dim"),
-             py::arg("num_queries"), py::arg("knn"), py::arg("l_search"), py::arg("beam_width"), py::arg("ids"),
-             py::arg("dists"), py::arg("num_threads"))
-        .def("search_numpy_input", &DiskANNIndex<uint8_t>::search_numpy_input, py::arg("query"), py::arg("dim"),
-             py::arg("knn"), py::arg("l_search"), py::arg("beam_width"))
-        .def("batch_search_numpy_input", &DiskANNIndex<uint8_t>::batch_search_numpy_input, py::arg("queries"),
-             py::arg("dim"), py::arg("num_queries"), py::arg("knn"), py::arg("l_search"), py::arg("beam_width"),
-             py::arg("num_threads"))
-        .def("batch_range_search_numpy_input", &DiskANNIndex<uint8_t>::batch_range_search_numpy_input,
-             py::arg("queries"), py::arg("dim"), py::arg("num_queries"), py::arg("range"), py::arg("min_list_size"),
-             py::arg("max_list_size"), py::arg("beam_width"), py::arg("num_threads"))
+        .def("search", &DiskANNIndex<uint8_t>::search, py::arg("query"), py::arg("knn"), py::arg("l_search"),
+             py::arg("beam_width"))
+        .def("batch_search", &DiskANNIndex<uint8_t>::batch_search, py::arg("queries"), py::arg("num_queries"),
+             py::arg("knn"), py::arg("l_search"), py::arg("beam_width"), py::arg("num_threads"))
         .def(
             "build",
             [](DiskANNIndex<uint8_t> &self, const char *data_file_path, const char *index_prefix_path, unsigned R,

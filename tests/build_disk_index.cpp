@@ -15,8 +15,9 @@ namespace po = boost::program_options;
 
 int main(int argc, char **argv)
 {
-    std::string data_type, dist_fn, data_path, index_path_prefix, label_file, universal_label, label_type;
-    uint32_t num_threads, R, L, disk_PQ, build_PQ, Lf, filter_threshold;
+    std::string data_type, dist_fn, data_path, index_path_prefix, codebook_prefix, label_file, universal_label,
+        label_type;
+    uint32_t num_threads, R, L, disk_PQ, build_PQ, QD, Lf, filter_threshold;
     float B, M;
     bool append_reorder_data = false;
     bool use_opq = false;
@@ -42,6 +43,9 @@ int main(int argc, char **argv)
         desc.add_options()("num_threads,T", po::value<uint32_t>(&num_threads)->default_value(omp_get_num_procs()),
                            "Number of threads used for building index (defaults to "
                            "omp_get_num_procs())");
+        desc.add_options()("QD", po::value<uint32_t>(&QD)->default_value(0), " Quantized Dimension for compression");
+        desc.add_options()("codebook_prefix", po::value<std::string>(&codebook_prefix)->default_value(""),
+                           "Path prefix for pre-trained codebook");
         desc.add_options()("PQ_disk_bytes", po::value<uint32_t>(&disk_PQ)->default_value(0),
                            "Number of bytes to which vectors should be compressed "
                            "on SSD; 0 for no compression");
@@ -131,7 +135,8 @@ int main(int argc, char **argv)
     std::string params = std::string(std::to_string(R)) + " " + std::string(std::to_string(L)) + " " +
                          std::string(std::to_string(B)) + " " + std::string(std::to_string(M)) + " " +
                          std::string(std::to_string(num_threads)) + " " + std::string(std::to_string(disk_PQ)) + " " +
-                         std::string(std::to_string(append_reorder_data)) + " " + std::string(std::to_string(build_PQ));
+                         std::string(std::to_string(append_reorder_data)) + " " +
+                         std::string(std::to_string(build_PQ)) + " " + std::string(std::to_string(QD));
 
     try
     {

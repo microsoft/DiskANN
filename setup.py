@@ -6,9 +6,8 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-from typing import List
 
-from setuptools import Extension, setup
+from setuptools import Extension, find_packages, setup
 from setuptools.command.build_ext import build_ext
 
 # Convert distutils Windows platform specifiers to CMake -A arguments
@@ -127,7 +126,9 @@ class CMakeBuild(build_ext):
 
 
 setup(
-    ext_modules=[CMakeExtension("diskannpy", ".")],
+    ext_modules=[CMakeExtension("diskannpy._diskannpy", ".")],
     cmdclass={"build_ext": CMakeBuild},
-    zip_safe=False
+    zip_safe=False,
+    package_dir = {"diskannpy": "python/src"},
+    exclude_package_data={"diskannpy": ["diskann_bindings.cpp"]}
 )

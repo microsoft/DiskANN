@@ -280,14 +280,9 @@ void prune_and_save(path final_index_path_prefix, path full_index_path_prefix, p
     // not searching this index, set search_l to 0
     index.load(full_index_path_prefix.c_str(), num_threads, 1);
 
-    diskann::Parameters paras;
-    paras.Set<uint32_t>("R", stitched_R);
-    paras.Set<uint32_t>("C", 750); // maximum candidate set size during pruning procedure
-    paras.Set<float>("alpha", 1.2);
-    paras.Set<bool>("saturate_graph", 1);
     std::cout << "parsing labels" << std::endl;
 
-    index.prune_all_nbrs(paras);
+    index.prune_all_neighbors(stitched_R, 750, 1.2);
     index.save((final_index_path_prefix).c_str());
 
     diskann::cout.rdbuf(diskann_cout_buffer);
