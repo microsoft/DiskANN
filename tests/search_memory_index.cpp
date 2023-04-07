@@ -379,14 +379,14 @@ int main(int argc, char **argv)
         config.data_type = data_type;
         config.label_type = label_type;
 
-        diskann::Parameters search_params;
-        search_params.Set<uint32_t>("num_threads", num_threads);
-        search_params.Set<uint32_t>("K", K);
-        search_params.Set<std::vector<uint32_t>>("Lvec", Lvec);
-        search_params.Set<std::string>("gt_file", gt_file);
-        search_params.Set<bool>("show_qps_per_thread", show_qps_per_thread);
-        search_params.Set<bool>("print_all_recalls", print_all_recalls);
-        search_params.Set<float>("fail_if_recall_below", fail_if_recall_below);
+        diskann::SearchParams search_params;
+        search_params.num_threads = num_threads;
+        search_params.K = K;
+        search_params.Lvec = Lvec;
+        search_params.gt_file = gt_file;
+        search_params.show_qps_per_thread = show_qps_per_thread;
+        search_params.print_all_recalls = print_all_recalls;
+        search_params.fail_if_recall_below = fail_if_recall_below;
         auto index_factory = diskann::IndexFactory(config);
         auto index = index_factory.instance();
         index->search_prebuilt_index(index_path_prefix, query_file, search_params, query_filters, "");

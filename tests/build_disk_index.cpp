@@ -147,13 +147,17 @@ int main(int argc, char **argv)
         config.use_opq = use_opq;
         config.filtered_build = use_filters;
         config.metric = metric;
+        diskann::IndexWriteParameters paras = diskann::IndexWriteParametersBuilder(L, R)
+                                                  .with_filter_list_size(Lf)
+                                                  .with_saturate_graph(false)
+                                                  .with_num_threads(num_threads)
+                                                  .build();
 
-        diskann::Parameters build_parameters;
-        build_parameters.Set<std::string>("label_file", label_file);
-        build_parameters.Set<std::string>("universal_label", universal_label);
-        build_parameters.Set<uint32_t>("filter_threshold", filter_threshold);
-        build_parameters.Set<uint32_t>("Lf", Lf);
-        build_parameters.Set<std::string>("disk_params", params);
+        diskann::BuildParams build_parameters(paras);
+        build_parameters.label_file = label_file;
+        build_parameters.universal_label = universal_label;
+        build_parameters.filter_threshold = filter_threshold;
+        build_parameters.disk_params = params;
 
         diskann::IndexFactory factory = diskann::IndexFactory(config);
         auto index = factory.instance();
