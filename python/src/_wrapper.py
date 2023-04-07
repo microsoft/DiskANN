@@ -5,7 +5,7 @@ import os
 import shutil
 import tempfile
 import warnings
-from typing import BinaryIO, Literal, Tuple, Type, TypeVar, Union
+from typing import BinaryIO, Literal, Optional, Tuple, Type, TypeVar, Union
 
 import numpy as np
 
@@ -17,6 +17,7 @@ __ALL__ = [
     "numpy_to_diskann_file",
     "VectorDType",
     "DiskIndex",
+    "DynamicMemoryIndex",
     "StaticMemoryIndex",
 ]
 
@@ -543,4 +544,182 @@ class StaticMemoryIndex:
 
 
 class DynamicMemoryIndex:
-    pass
+    def __init__(
+        self,
+        metric: Literal["l2", "mips"],
+        vector_dtype: VectorDType,
+        dims: int,
+        max_points: int,
+        list_size: int,
+        max_degree: int,
+        saturate_graph: bool = False,
+        max_occlusion_size: int = 750,
+        alpha: float = 1.2,
+        num_rounds: int = 2,
+        num_threads: int = 0,
+        filter_list_size: int = 0,
+        num_frozen_points: int = 0,
+        initial_search_list_size: int = 0,
+        initial_search_threads: int = 0,
+        concurrent_consolidation: bool = True,
+        index_path: Optional[str] = None,
+    ):
+        # TODO: expose default values in C++ and reference them here instead of manually keeping them in sync
+        dap_metric = _get_valid_metric(metric)
+        if vector_dtype not in _VALID_DTYPES:
+            raise ValueError(
+                f"vector_dtype {vector_dtype} is not in list of valid dtypes supported: {_VALID_DTYPES}"
+            )
+        self._vector_dtype = vector_dtype
+
+        # check dims, max_points, list_size, max_degree, max_occlusion_size, alpha, num_rounds, num_threads,
+        # filter_list_size, num_frozen_points, initial_search_list_size, initial_search_threads
+
+        self._dims = dims
+
+        self._index = _DTYPE_TO_NATIVE_INMEM_DYNAMIC_INDEX[vector_dtype](
+            dap_metric,
+            dim=dims,
+            max_points=max_points,
+            l_build=list_size,
+            build_max_degree=max_degree,
+            saturate_graph=saturate_graph,
+            max_occlusion_size=max_occlusion_size,
+            alpha=alpha,
+            num_rounds=num_rounds,
+            num_threads=num_threads,
+            filter_list_size=filter_list_size,
+            num_frozen_points=num_frozen_points,
+            initial_search_list_size=initial_search_list_size,
+            initial_search_threads=initial_search_threads,
+            concurrent_consolidation=concurrent_consolidation,
+        )
+
+        if index_path is not None:
+            warnings.warn(
+                "Unable to load index path as capability is not yet implemented"
+            )
+            # note: temporary, to be replaced prior to merge to main
+
+    def search(
+        self, query: np.ndarray, k_neighbors: int, list_size: int
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Searches the disk index by a single query vector in a 1d numpy array.
+
+        numpy array dtype must match index.
+
+        :param query: 1d numpy array of the same dimensionality and dtype of the index.
+        :type query: numpy.ndarray
+        :param k_neighbors: Number of neighbors to be returned. If query vector exists in index, it almost definitely
+            will be returned as well, so adjust your ``k_neighbors`` as appropriate. (> 0)
+        :type k_neighbors: int
+        :param list_size: Size of list to use while searching. List size increases accuracy at the cost of latency. Must
+            be at least k_neighbors in size.
+        :type list_size: int
+        :param beam_width: The beamwidth to be used for search. This is the maximum number of IO requests each query
+            will issue per iteration of search code. Larger beamwidth will result in fewer IO round-trips per query,
+            but might result in slightly higher total number of IO requests to SSD per query. For the highest query
+            throughput with a fixed SSD IOps rating, use W=1. For best latency, use W=4,8 or higher complexity search.
+            Specifying 0 will optimize the beamwidth depending on the number of threads performing search, but will
+            involve some tuning overhead.
+        :type beam_width: int
+        :return: Returns a tuple of 1-d numpy ndarrays; the first including the indices of the approximate nearest
+            neighbors, the second their distances. These are aligned arrays.
+        """
+        if len(query.shape) != 1:
+            raise ValueError("query vector must be 1-d")
+        if query.dtype != self._vector_dtype:
+            raise ValueError(
+                f"DiskIndex was built expecting a dtype of {self._vector_dtype}, but the query vector is "
+                f"of dtype {query.dtype}"
+            )
+        if k_neighbors <= 0:
+            raise ValueError("k_neighbors must be a positive integer")
+        if list_size <= 0:
+            raise ValueError("list_size must be a positive integer")
+        if beam_width <= 0:
+            raise ValueError("beam_width must be a positive integer")
+
+        if k_neighbors > list_size:
+            warnings.warn(
+                f"k_neighbors={k_neighbors} asked for, but list_size={list_size} was smaller. Increasing {list_size} to {k_neighbors}"
+            )
+            list_size = k_neighbors
+        return self._index.search(query=query, knn=k_neighbors, l_search=list_size)
+
+    def batch_search(
+        self, queries: np.ndarray, k_neighbors: int, list_size: int, num_threads: int
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Searches the disk index for many query vectors in a 2d numpy array.
+
+        numpy array dtype must match index.
+
+        This search is parallelized and far more efficient than searching for each vector individually.
+
+        :param queries: 2d numpy array, with column dimensionality matching the index and row dimensionality being the
+            number of queries intended to search for in parallel. Dtype must match dtype of the index.
+        :type queries: numpy.ndarray
+        :param k_neighbors: Number of neighbors to be returned. If query vector exists in index, it almost definitely
+            will be returned as well, so adjust your ``k_neighbors`` as appropriate. (> 0)
+        :type k_neighbors: int
+        :param list_size: Size of list to use while searching. List size increases accuracy at the cost of latency. Must
+            be at least k_neighbors in size.
+        :type list_size: int
+        :param num_threads: Number of threads to use when searching this index. (>= 0), 0 = num_threads in system
+        :type num_threads: int
+        :return: Returns a tuple of 2-d numpy ndarrays; each row corresponds to the query vector in the same index,
+            and elements in row corresponding from 1..k_neighbors approximate nearest neighbors. The second ndarray
+            contains the distances, of the same form: row index will match query index, column index refers to
+            1..k_neighbors distance. These are aligned arrays.
+        """
+        if len(queries.shape) != 2:
+            raise ValueError("queries must must be 2-d np array")
+        if queries.dtype != self._vector_dtype:
+            raise ValueError(
+                f"DiskIndex was built expecting a dtype of {self._vector_dtype}, but the query vectors "
+                f"are of dtype {queries.dtype}"
+            )
+        if k_neighbors <= 0:
+            raise ValueError("k_neighbors must be a positive integer")
+        if list_size <= 0:
+            raise ValueError("list_size must be a positive integer")
+        if num_threads < 0:
+            raise ValueError("num_threads must be a nonnegative integer")
+
+        if k_neighbors > list_size:
+            warnings.warn(
+                f"k_neighbors={k_neighbors} asked for, but list_size={list_size} was smaller. Increasing {list_size} to {k_neighbors}"
+            )
+            list_size = k_neighbors
+
+        num_queries, dim = queries.shape
+        return self._index.batch_search(
+            queries=queries,
+            num_queries=num_queries,
+            knn=k_neighbors,
+            l_search=list_size,
+            num_threads=num_threads,
+        )
+
+    def insert(self, vector: np.ndarray, vector_id: int):
+        # todo: verify id is within range
+        if vector.shape[0] != self._dims:
+            raise ValueError(
+                f"DynamicMemoryIndex was built with vectors of dimensionality {self._dims}, but the insert vector "
+                f"is of dimensionality {vector.shape[0]}"
+            )
+        if vector.dtype != self._vector_dtype:
+            raise ValueError(
+                f"DynamicMemoryIndex was built expecting a dtype of {self._vector_dtype}, but the insert vector "
+                f"is of dtype {vector.dtype}"
+            )
+        self._index.insert(vector, vector_id)
+
+    def mark_deleted(self, vector_id: int):
+        # todo: verify id is within range
+        self._index.mark_deleted(vector_id)
+
+    def consolidate_delete(self):
+        self._index.consolidate_delete()
