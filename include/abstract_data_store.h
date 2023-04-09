@@ -27,13 +27,28 @@ template <typename data_t> class AbstractDataStore
     //can discard the empty locations before saving. 
     virtual size_t save(const std::string &filename, const location_t num_pts) = 0;
 
+    virtual location_t capacity() const 
+    {
+        return _capacity;
+    }
+
+    virtual size_t get_dims() const 
+    {
+        return _dim;
+    }
+
+// by default, aligned dim = dim, some stores can align the data differently, so we may have different values
+    virtual size_t get_aligned_dim() const
+    {
+        return _dim;
+    }
+
+// populate the store with bulk vectors (either as pointer or bin file), potentially after normalizing the vectors if the metric deems so
     virtual void populate_data(const data_t * vectors, const location_t num_pts) = 0;
     virtual void populate_data(const std::string &filename, const size_t offset) = 0;
-    
-    virtual void get_vector(const location_t i, data_t* dest) const = 0;
-    virtual void set_vector(const location_t i, const data_t *const vector)  = 0;
-    virtual void prefetch_vector(const location_t loc) = 0;
 
+// reverse of populate, save the first num_pts many points back to bin file
+    virtual void save_data_to_bin(const std::string &filename, const location_t num_pts);
 
     virtual void resize(const location_t num_points) 
     {
@@ -51,39 +66,32 @@ template <typename data_t> class AbstractDataStore
         }
     }
 
+// operations on vectors
+    virtual void get_vector(const location_t i, data_t* dest) const = 0;
+    virtual void set_vector(const location_t i, const data_t *const vector)  = 0;
+    virtual void prefetch_vector(const location_t loc) = 0;
+
+// internal shuffle operations to move around vectors
     virtual void reposition_points(const location_t start_loc, const location_t end_loc,
                                    const location_t num_points) = 0;
     virtual void copy_points(const location_t from_loc, const location_t to_loc, const location_t num_points) = 0;
-    //Returns the point in the dataset that is closest to the mean of all points in the dataset
-    virtual location_t calculate_medoid() const = 0;
     
-    virtual location_t capacity() const 
-    {
-        return _capacity;
-    }
+// metric specific operations
 
     virtual float get_distance(const data_t* query, const location_t loc) const = 0;
     virtual void get_distance(const data_t *query, const location_t *locations, const uint32_t location_count,
                       float *distances) const = 0;
     virtual float get_distance(const location_t loc1, const location_t loc2) const = 0;
 
-
-    virtual size_t get_dims() const 
-    {
-        return _dim;
-    }
-
-    virtual size_t get_aligned_dim() const
-    {
-        return _dim;
-    }
+// stats of the data stored in store
+    //Returns the point in the dataset that is closest to the mean of all points in the dataset
+    virtual location_t calculate_medoid() const = 0;
 
   protected:
     // Expand the datastore to new_num_points.
     virtual void expand(const location_t new_num_points) = 0;
     // Shrink the datastore to new_num_points. This function should be called after compaction to free unused memory.
     virtual void shrink(const location_t new_num_points) = 0;
-
 
 
     location_t _capacity;

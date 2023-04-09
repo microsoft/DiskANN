@@ -32,9 +32,72 @@ template <typename data_t> location_t InMemDataStore<data_t>::load(const std::st
     return load_data(filename);
 }
 
+#ifdef EXEC_ENV_OLS
+template <typename data_t> location_t Index<data_t>::load_data(AlignedFileReader &reader)
+{
+    size_t file_dim, file_num_points;
+
+    diskann::get_bin_metadata(reader, file_num_points, file_dim);
+
+    if (file_dim != _dim)
+    {
+        std::stringstream stream;
+        stream << "ERROR: Driver requests loading " << _dim << " dimension,"
+               << "but file has " << file_dim << " dimension." << std::endl;
+        diskann::cerr << stream.str() << std::endl;
+        aligned_free(_data);
+        throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
+    }
+
+    if (file_num_points > _max_points + _num_frozen_pts)
+    {
+        resize(file_num_points - _num_frozen_pts);
+    }
+
+    return file_num_points;
+}
+#endif
+
+template <typename data_t>
+location_t InMemDataStore<data_t>::load_data(const std::string &filename)
+{
+    size_t file_dim, file_num_points;
+    if (!file_exists(filename))
+    {
+        std::stringstream stream;
+        stream << "ERROR: data file " << filename << " does not exist." << std::endl;
+        diskann::cerr << stream.str() << std::endl;
+        aligned_free(_data);
+        throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
+    }
+    diskann::get_bin_metadata(filename, file_num_points, file_dim);
+
+    // since we are loading a new dataset, _empty_slots must be cleared
+//    _empty_slots.clear();
+
+    if (file_dim != this->_dim)
+    {
+        std::stringstream stream;
+        stream << "ERROR: Driver requests loading " << this->_dim << " dimension,"
+               << "but file has " << file_dim << " dimension." << std::endl;
+        diskann::cerr << stream.str() << std::endl;
+        aligned_free(_data);
+        throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
+    }
+
+    if (file_num_points > this->capacity())
+    {
+        this->resize(file_num_points);
+    }
+
+    copy_aligned_data_from_file<data_t>(filename.c_str(), _data, file_num_points, file_dim, _aligned_dim);
+
+    return file_num_points;
+}
+
+
 template <typename data_t> size_t InMemDataStore<data_t>::save(const std::string &filename, const location_t num_points)
 {
-    shrink(num_points);
     return save_data_in_base_dimensions(filename, _data, num_points, this->get_dims(), this->get_aligned_dim(), 0U);
 }
 
@@ -80,71 +143,12 @@ template<typename data_t> void InMemDataStore<data_t>::populate_data(const std::
     }
 }
 
-#ifdef EXEC_ENV_OLS
-template <typename data_t> location_t Index<data_t>::load_data(AlignedFileReader &reader)
+template <typename data_t> void InMemDataStore<data_t>::save_data_to_bin(const std::string &filename, const location_t num_points)
 {
-    size_t file_dim, file_num_points;
-
-    diskann::get_bin_metadata(reader, file_num_points, file_dim);
-
-    // since we are loading a new dataset, _empty_slots must be cleared
-    _empty_slots.clear();
-
-    if (file_dim != _dim)
-    {
-        std::stringstream stream;
-        stream << "ERROR: Driver requests loading " << _dim << " dimension,"
-               << "but file has " << file_dim << " dimension." << std::endl;
-        diskann::cerr << stream.str() << std::endl;
-        aligned_free(_data);
-        throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
-    }
-
-    if (file_num_points > _max_points + _num_frozen_pts)
-    {
-        resize(file_num_points - _num_frozen_pts);
-    }
-
-    return file_num_points;
+    save_data_in_base_dimensions(filename, _data, num_points, this->get_dims(), this->get_aligned_dim(), 0U);
 }
-#endif
 
-template <typename data_t>
-location_t InMemDataStore<data_t>::load_data(const std::string &filename)
-{
-    size_t file_dim, file_num_points;
-    if (!file_exists(filename))
-    {
-        std::stringstream stream;
-        stream << "ERROR: data file " << filename << " does not exist." << std::endl;
-        diskann::cerr << stream.str() << std::endl;
-        aligned_free(_data);
-        throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
-    }
-    diskann::get_bin_metadata(filename, file_num_points, file_dim);
 
-    // since we are loading a new dataset, _empty_slots must be cleared
-    _empty_slots.clear();
-
-    if (file_dim != this->_dim)
-    {
-        std::stringstream stream;
-        stream << "ERROR: Driver requests loading " << this->_dim << " dimension,"
-               << "but file has " << file_dim << " dimension." << std::endl;
-        diskann::cerr << stream.str() << std::endl;
-        aligned_free(_data);
-        throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
-    }
-
-    if (file_num_points > this->capacity())
-    {
-        this->resize(file_num_points);
-    }
-
-    copy_aligned_data_from_file<data_t>(filename.c_str(), _data, file_num_points, file_dim, _aligned_dim);
-
-    return file_num_points;
-}
 
 template <typename data_t> 
 void InMemDataStore<data_t>::get_vector(const location_t i, data_t* dest) const 
