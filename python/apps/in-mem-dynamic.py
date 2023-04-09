@@ -7,7 +7,10 @@ import numpy as np
 import utils
 
 
-def insert_and_search(dtype_str, indexdata_file, querydata_file, Lb, graph_degree, K, Ls, num_threads):
+def insert_and_search(dtype_str, indexdata_file, querydata_file,
+                      Lb, graph_degree,
+                      K, Ls, num_threads,
+                      gt_file):
     npts, ndims = utils.get_bin_metadata(indexdata_file)
 
     if dtype_str == "float":
@@ -29,6 +32,10 @@ def insert_and_search(dtype_str, indexdata_file, querydata_file, Lb, graph_degre
         index.insert(data(i), i) 
     ids, dists = index.batch_search(queries, K, Ls, num_threads)
 
+    if gt_file != '':
+        recall = utils.calculate_recall_from_gt_file(K, ids, gt_file)
+        print(f'recall@{K} is {recall}')
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(prog='in-mem-dynamic', 
                                      description='Inserts points dynamically and search from vectors sn a file')
@@ -41,7 +48,11 @@ if __name__ == '__main__':
     parser.add_argument('-R', '--graph_degree', default=32)
     parser.add_argument('-T', '--num_threads', default=8)
     parser.add_argument('-K', default=10)
+    parser.add_argument('--gt_file', default='')
     args = parser.parse_args()
 
     insert_and_search(args.data_type, args.indexdata_file, args.querydata_file,
-                      args.Lbuild,  args.graph_degree, args.K, args.Lsearch, args.num_threads)
+                      args.Lbuild,  args.graph_degree, # Build args
+                     args.K, args.Lsearch, args.num_threads, # search args
+                     args.gt_file) 
+
