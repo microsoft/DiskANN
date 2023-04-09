@@ -1032,7 +1032,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
             }
             else
             {
-                _data_store->get_distance(aligned_query, id);
+                distance = _data_store->get_distance(aligned_query, id);
                 // REFACTOR
                 // distance = _distance->compare(_data + _aligned_dim * (size_t)id, aligned_query,
                 // (uint32_t)_aligned_dim);
