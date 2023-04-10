@@ -61,9 +61,9 @@ class InMemDataStore : public AbstractDataStore<data_t>
     virtual void shrink(const location_t new_size) override;
 
 
-    virtual location_t load_data(const std::string &filename);
+    virtual location_t load_impl(const std::string &filename);
 #ifdef EXEC_ENV_OLS
-    virtual location_t load_data(AlignedFileReader &reader);
+    virtual location_t load_impl(AlignedFileReader &reader);
 #endif
 
   private:

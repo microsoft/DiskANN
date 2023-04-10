@@ -29,11 +29,11 @@ template <typename data_t> InMemDataStore<data_t>::~InMemDataStore()
 
 template <typename data_t> location_t InMemDataStore<data_t>::load(const std::string &filename)
 {
-    return load_data(filename);
+    return load_impl(filename);
 }
 
 #ifdef EXEC_ENV_OLS
-template <typename data_t> location_t Index<data_t>::load_data(AlignedFileReader &reader)
+template <typename data_t> location_t Index<data_t>::load_impl(AlignedFileReader &reader)
 {
     size_t file_dim, file_num_points;
 
@@ -59,7 +59,7 @@ template <typename data_t> location_t Index<data_t>::load_data(AlignedFileReader
 #endif
 
 template <typename data_t>
-location_t InMemDataStore<data_t>::load_data(const std::string &filename)
+location_t InMemDataStore<data_t>::load_impl(const std::string &filename)
 {
     size_t file_dim, file_num_points;
     if (!file_exists(filename))
@@ -209,7 +209,7 @@ template <typename data_t> void InMemDataStore<data_t>::expand(const location_t 
 #ifndef _WINDOWS
     data_t *new_data;
     alloc_aligned((void **)&new_data, new_size * _aligned_dim * sizeof(data_t), 8 * sizeof(data_t));
-    memcpy(new_data, _data, new_size * _aligned_dim * sizeof(data_t));
+    memcpy(new_data, _data, this->capacity() * _aligned_dim * sizeof(data_t));
     aligned_free(_data);
     _data = new_data;
 #else
