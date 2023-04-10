@@ -272,9 +272,8 @@ void build_incremental_index(const std::string &data_path, const uint32_t L, con
 
 int main(int argc, char **argv)
 {
-    std::string data_type, dist_fn, data_path, index_path_prefix;
-    uint32_t insert_threads, consolidate_threads;
-    uint32_t R, L, num_start_pts;
+    std::string data_type, dist_fn, data_path, index_path_prefix, label_file, universal_label, label_type;
+    uint32_t insert_threads, consolidate_threads, R, L, num_start_pts, Lf;
     float alpha, start_point_norm;
     size_t max_points_to_insert, active_window, consolidate_interval;
 
@@ -319,6 +318,20 @@ int main(int argc, char **argv)
         desc.add_options()("num_start_points", po::value<uint32_t>(&num_start_pts)->default_value(0),
                            "Set the number of random start (frozen) points to use when "
                            "inserting and searching");
+
+        // Args for building index of labeled data
+        desc.add_options()("label_file", po::value<std::string>(&label_file)->default_value(""),
+                           "Input label file in txt format for Filtered Index search. "
+                           "The file should contain comma separated filters for each node "
+                           "with each line corresponding to a graph node");
+        desc.add_options()("universal_label", po::value<std::string>(&universal_label)->default_value(""),
+                           "Universal label, if using it, only in conjunction with labels_file");
+        desc.add_options()("FilteredLbuild,Lf", po::value<uint32_t>(&Lf)->default_value(0),
+                           "Build complexity for filtered points, higher value "
+                           "results in better graphs");
+        desc.add_options()("label_type", po::value<std::string>(&label_type)->default_value("uint"),
+                           "Storage type of Labels <uint/ushort>, default value is uint which "
+                           "will consume memory 4 bytes per filter");
 
         po::variables_map vm;
         po::store(po::parse_command_line(argc, argv, desc), vm);
