@@ -2,6 +2,7 @@
 // Licensed under the MIT license.
 
 #include "in_mem_graph_store.h"
+#include "utils.h"
 
 namespace diskann
 {

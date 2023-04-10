@@ -530,7 +530,8 @@ bool AVXNormalizedCosineDistanceFloat::normalization_required() const
 {
     return true;
 }
-void AVXNormalizedCosineDistanceFloat::normalize_data_for_build(float *original_data, const uint32_t orig_dim, const uint32_t num_points)
+void AVXNormalizedCosineDistanceFloat::normalize_data_for_build(float *original_data, const uint32_t orig_dim,
+                                                                const uint32_t num_points)
 {
     for (auto i = 0; i < num_points; i++)
     {
@@ -547,15 +548,14 @@ void AVXNormalizedCosineDistanceFloat::normalize_vector_for_search(const float *
 void AVXNormalizedCosineDistanceFloat::normalize_and_copy(const float *query_vec, const uint32_t query_dim,
                                                           float *query_target) const
 {
-  
+
     float norm = get_norm(query_vec, query_dim);
-   
+
     for (auto i = 0; i < query_dim; i++)
     {
         query_target[i] = query_vec[i] / norm;
     }
 }
-
 
 // Get the right distance function for the given metric.
 template <> diskann::Distance<float> *get_distance_function(diskann::Metric m)
