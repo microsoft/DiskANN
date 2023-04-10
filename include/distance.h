@@ -15,14 +15,14 @@ enum Metric
 template <typename T> class Distance
 {
   public:
-    Distance(diskann::Metric dist_metric) : _distance_metric(dist_metric) 
+    Distance(diskann::Metric dist_metric) : _distance_metric(dist_metric)
     {
     }
 
     // distance comparison function
     virtual float compare(const T *a, const T *b, uint32_t length) const = 0;
 
-    //Needed only for COSINE-BYTE and INNER_PRODUCT-BYTE
+    // Needed only for COSINE-BYTE and INNER_PRODUCT-BYTE
     virtual float compare(const T *a, const T *b, const float normA, const float normB, uint32_t length) const
     {
         return std::numeric_limits<float>::max();
@@ -42,40 +42,38 @@ template <typename T> class Distance
     }
 
     // This is for efficiency. If no normalization is required, the callers
-    //can simply ignore the normalize_data_for_build() function.
+    // can simply ignore the normalize_data_for_build() function.
     virtual bool normalization_required() const
     {
         return false;
     }
-    
-    //Check the normalization_required() function before calling this. 
-    //Clients can call the function like this: 
-    // 
-    // if (metric->normalization_required()){
-    //    T* normalized_data_batch; 
-    //     Split data into batches of batch_size and for each, call:
-    //      metric->normalize_data_for_build(data_batch, batch_size);
+
+    // Check the normalization_required() function before calling this.
+    // Clients can call the function like this:
     //
-    // TODO: This does not take into account the case for SSD inner product
-    // where the dimensions change after normalization.
+    //  if (metric->normalization_required()){
+    //     T* normalized_data_batch;
+    //      Split data into batches of batch_size and for each, call:
+    //       metric->normalize_data_for_build(data_batch, batch_size);
     //
-    virtual void normalize_data_for_build(T *original_data, const uint32_t orig_dim,
-                                          const uint32_t num_points)
+    //  TODO: This does not take into account the case for SSD inner product
+    //  where the dimensions change after normalization.
+    //
+    virtual void normalize_data_for_build(T *original_data, const uint32_t orig_dim, const uint32_t num_points)
     {
     }
 
-    //Invokes normalization for a single vector during search. The scratch space
-    //has to be created by the caller keeping track of the fact that normalization
-    //might change the dimension of the query vector. 
-    virtual void normalize_vector_for_search(const T *query_vec, const uint32_t query_dim, 
-                                             T* scratch_query) 
+    // Invokes normalization for a single vector during search. The scratch space
+    // has to be created by the caller keeping track of the fact that normalization
+    // might change the dimension of the query vector.
+    virtual void normalize_vector_for_search(const T *query_vec, const uint32_t query_dim, T *scratch_query)
     {
         std::memcpy(scratch_query, query_vec, query_dim * sizeof(T));
     }
 
-    //Providing a default implementation for the virtual destructor because we don't 
-    //expect most metric implementations to need it. 
-    virtual ~Distance() 
+    // Providing a default implementation for the virtual destructor because we don't
+    // expect most metric implementations to need it.
+    virtual ~Distance()
     {
     }
 
@@ -126,7 +124,7 @@ class DistanceL2Float : public Distance<float>
     DistanceL2Float() : Distance<float>(diskann::Metric::L2)
     {
     }
-    
+
 #ifdef _WINDOWS
     DISKANN_DLLEXPORT virtual float compare(const float *a, const float *b, uint32_t size) const;
 #else
@@ -195,7 +193,7 @@ template <typename T> class DistanceInnerProduct : public Distance<T>
     DistanceInnerProduct() : Distance<T>(diskann::Metric::INNER_PRODUCT)
     {
     }
-    
+
     DistanceInnerProduct(diskann::Metric metric) : Distance<T>(metric)
     {
     }
@@ -238,7 +236,7 @@ class AVXNormalizedCosineDistanceFloat : public Distance<float>
     AVXDistanceInnerProductFloat _innerProduct;
 
   protected:
-    void normalize_and_copy(const float *a, uint32_t length, float *a_norm ) const;
+    void normalize_and_copy(const float *a, uint32_t length, float *a_norm) const;
 
   public:
     AVXNormalizedCosineDistanceFloat() : Distance<float>(diskann::Metric::COSINE)
@@ -254,7 +252,8 @@ class AVXNormalizedCosineDistanceFloat : public Distance<float>
 
     DISKANN_DLLEXPORT virtual bool normalization_required() const;
 
-    DISKANN_DLLEXPORT virtual void normalize_data_for_build(float *original_data,  const uint32_t orig_dim, const uint32_t num_points) override;
+    DISKANN_DLLEXPORT virtual void normalize_data_for_build(float *original_data, const uint32_t orig_dim,
+                                                            const uint32_t num_points) override;
 
     DISKANN_DLLEXPORT virtual void normalize_vector_for_search(const float *query_vec, const uint32_t query_dim,
                                                                float *scratch_query_vector) override;
