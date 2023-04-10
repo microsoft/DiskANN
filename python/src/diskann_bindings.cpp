@@ -236,8 +236,10 @@ template <class T> struct DynamicInMemIndex
 template <class T> struct StaticInMemIndex
 {
     Index<T, IdT, filterT> *_index;
+    const IndexWriteParameters write_params;
 
-    StaticInMemIndex(Metric m, const std::string &data_path)
+    StaticInMemIndex(Metric m, const std::string &data_path, const uint32_t l_build, const uint32_t graph_degree)
+        : write_params(diskann::IndexWriteParametersBuilder(l_build, graph_degree).build())
     {
         size_t ndims, npoints;
         diskann::get_bin_metadata(data_path, npoints, ndims);
@@ -249,6 +251,7 @@ template <class T> struct StaticInMemIndex
                               0,     // num_pq_chunks
                               false, // use_opq = false
                               0);    // num_frozen_pts = 0
+        _index->build(data_path.c_str(), npoints, write_params);
     }
 
     ~StaticInMemIndex()
@@ -300,24 +303,36 @@ PYBIND11_MODULE(_diskannpy, m)
         .export_values();
 
     py::class_<StaticInMemIndex<float>>(m, "DiskANNStaticInMemFloatIndex")
-        .def(py::init([](diskann::Metric metric, const std::string &data_path) {
-            return std::unique_ptr<StaticInMemIndex<float>>(new StaticInMemIndex<float>(metric, data_path));
+        .def(py::init([](diskann::Metric metric,
+                         const std::string &data_path, // File location of vectors to be indexed
+                         const uint32_t l_build = diskann::defaults::BUILD_LIST_SIZE, // L build parameter
+                         const uint32_t build_max_degree = diskann::defaults::MAX_DEGREE) {
+            return std::unique_ptr<StaticInMemIndex<float>>(
+                new StaticInMemIndex<float>(metric, data_path, l_build, build_max_degree));
         }))
         .def("search", &StaticInMemIndex<float>::search, py::arg("query"), py::arg("knn"), py::arg("l_search"))
         .def("batch_search", &StaticInMemIndex<float>::batch_search, py::arg("queries"), py::arg("num_queries"),
              py::arg("knn"), py::arg("l_search"), py::arg("num_threads"));
 
     py::class_<StaticInMemIndex<int8_t>>(m, "DiskANNStaticInMemInt8Index")
-        .def(py::init([](diskann::Metric metric, const std::string &data_path) {
-            return std::unique_ptr<StaticInMemIndex<int8_t>>(new StaticInMemIndex<int8_t>(metric, data_path));
+        .def(py::init([](diskann::Metric metric,
+                         const std::string &data_path, // File location of vectors to be indexed
+                         const uint32_t l_build = diskann::defaults::BUILD_LIST_SIZE, // L build parameter
+                         const uint32_t build_max_degree = diskann::defaults::MAX_DEGREE) {
+            return std::unique_ptr<StaticInMemIndex<int8_t>>(
+                new StaticInMemIndex<int8_t>(metric, data_path, l_build, build_max_degree));
         }))
         .def("search", &StaticInMemIndex<int8_t>::search, py::arg("query"), py::arg("knn"), py::arg("l_search"))
         .def("batch_search", &StaticInMemIndex<int8_t>::batch_search, py::arg("queries"), py::arg("num_queries"),
              py::arg("knn"), py::arg("l_search"), py::arg("num_threads"));
 
     py::class_<StaticInMemIndex<uint8_t>>(m, "DiskANNStaticInMemUInt8Index")
-        .def(py::init([](diskann::Metric metric, const std::string &data_path) {
-            return std::unique_ptr<StaticInMemIndex<uint8_t>>(new StaticInMemIndex<uint8_t>(metric, data_path));
+        .def(py::init([](diskann::Metric metric,
+                         const std::string &data_path, // File location of vectors to be indexed
+                         const uint32_t l_build = diskann::defaults::BUILD_LIST_SIZE, // L build parameter
+                         const uint32_t build_max_degree = diskann::defaults::MAX_DEGREE) {
+            return std::unique_ptr<StaticInMemIndex<uint8_t>>(
+                new StaticInMemIndex<uint8_t>(metric, data_path, l_build, build_max_degree));
         }))
         .def("search", &StaticInMemIndex<uint8_t>::search, py::arg("query"), py::arg("knn"), py::arg("l_search"))
         .def("batch_search", &StaticInMemIndex<uint8_t>::batch_search, py::arg("queries"), py::arg("num_queries"),
