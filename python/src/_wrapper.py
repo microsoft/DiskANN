@@ -652,7 +652,7 @@ class DynamicMemoryIndex:
         self._dims = dims
 
         self._index = _DTYPE_TO_NATIVE_INMEM_DYNAMIC_INDEX[vector_dtype](
-            dap_metric,
+            metric=dap_metric,
             dim=dims,
             max_points=max_points,
             l_build=list_size,
@@ -664,8 +664,8 @@ class DynamicMemoryIndex:
             filter_list_size=filter_list_size,
             num_frozen_points=num_frozen_points,
             initial_search_list_size=initial_search_list_size,
-            initial_search_threads=initial_search_threads,
-            concurrent_consolidation=concurrent_consolidation,
+            search_threads=initial_search_threads,
+            concurrent_consolidate=concurrent_consolidation,
         )
 
         if index_path is not None:
