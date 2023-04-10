@@ -8,5 +8,6 @@ from ._wrapper import (
     VectorDType,
     build_disk_index_from_vector_file,
     build_disk_index_from_vectors,
+    build_memory_index_from_vector_file,
     numpy_to_diskann_file,
 )

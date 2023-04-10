@@ -14,6 +14,7 @@ from . import _diskannpy as _native_dap
 __ALL__ = [
     "build_disk_index_from_vector_file",
     "build_disk_index_from_vectors",
+    "build_memory_index_from_vector_file",
     "numpy_to_diskann_file",
     "VectorDType",
     "DiskIndex",
@@ -271,6 +272,55 @@ def build_disk_index_from_vectors(
             )
     finally:
         shutil.rmtree(_temp_work_dir)
+
+
+def build_memory_index_from_vector_file(
+        vector_bin_file: str,
+        metric: Literal["l2", "mips"],
+        vector_dtype: VectorDType,
+        index_path: str,
+        graph_degree: int,
+        complexity: int,
+        alpha: float,
+        num_threads: int,
+        use_pq_build: bool,
+        num_pq_bytes: int,
+        use_opq: bool,
+        label_file: str = "",
+        universal_label: str = "",
+        filter_complexity: int = 0
+):
+    dap_metric = _get_valid_metric(metric)
+    _assert(
+        vector_dtype in _VALID_DTYPES,
+        f"vector_dtype {vector_dtype} is not in list of valid dtypes supported: {_VALID_DTYPES}",
+        )
+    _assert_is_positive_uint32(complexity, "complexity")
+    _assert_is_positive_uint32(graph_degree, "graph_degree")
+    _assert_is_nonnegative_uint32(num_threads, "num_threads")
+    _assert_is_nonnegative_uint32(num_pq_bytes, "num_pq_bytes")
+    _assert_is_nonnegative_uint32(filter_complexity, "filter_complexity")
+    if vector_dtype is np.single:
+        _builder = _native_dap.build_in_memory_float_index
+    elif vector_dtype is np.ubyte:
+        _builder = _native_dap.build_in_memory_uint8_index
+    else:
+        _builder = _native_dap.build_in_memory_int8_index
+    _builder(
+        metric=dap_metric,
+        data_file_path=vector_bin_file,
+        index_output_path=index_path,
+        graph_degree=graph_degree,
+        complexity=complexity,
+        alpha=alpha,
+        num_threads=num_threads,
+        use_pq_build=use_pq_build,
+        num_pq_bytes=num_pq_bytes,
+        use_opq=use_opq,
+        label_file=label_file,
+        universal_label=universal_label,
+        filter_complexity=filter_complexity
+    )
 
 
 class DiskIndex:

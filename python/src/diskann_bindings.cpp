@@ -21,6 +21,7 @@
 #include "disk_utils.h"
 #include "index.h"
 #include "pq_flash_index.h"
+#include "utils.h"
 
 PYBIND11_MAKE_OPAQUE(std::vector<unsigned>);
 PYBIND11_MAKE_OPAQUE(std::vector<float>);
@@ -288,6 +289,42 @@ template <class T> struct StaticInMemIndex
     }
 };
 
+template <typename T, typename TagT = IdT, typename LabelT = filterT>
+void build_in_memory_index(const diskann::Metric &metric, const std::string &vector_bin_path,
+                           const std::string &index_output_path, const uint32_t graph_degree, const uint32_t complexity,
+                           const float alpha, const uint32_t num_threads, const bool use_pq_build,
+                           const size_t num_pq_bytes, const bool use_opq, const std::string &label_file,
+                           const std::string &universal_label, const uint32_t filter_complexity)
+{
+    diskann::IndexWriteParameters index_build_params = diskann::IndexWriteParametersBuilder(complexity, graph_degree)
+                                                           .with_filter_list_size(filter_complexity)
+                                                           .with_alpha(alpha)
+                                                           .with_saturate_graph(false)
+                                                           .with_num_threads(num_threads)
+                                                           .build();
+    size_t data_num, data_dim;
+    diskann::get_bin_metadata(vector_bin_path, data_num, data_dim);
+    diskann::Index<float, TagT, LabelT> index(metric, data_dim, data_num, false, false, false, use_pq_build,
+                                              num_pq_bytes, use_opq);
+    if (label_file == "")
+    {
+        index.build(vector_bin_path.c_str(), data_num, index_build_params);
+    }
+    else
+    {
+        std::string labels_file_to_use = index_output_path + "_label_formatted.txt";
+        std::string mem_labels_int_map_file = index_output_path + "_labels_map.txt";
+        convert_labels_string_to_int(label_file, labels_file_to_use, mem_labels_int_map_file, universal_label);
+        if (universal_label != "")
+        {
+            filterT unv_label_as_num = 0;
+            index.set_universal_label(unv_label_as_num);
+        }
+        index.build_filtered_index(index_output_path.c_str(), labels_file_to_use, data_num, index_build_params);
+    }
+    index.save(index_output_path.c_str());
+}
+
 PYBIND11_MODULE(_diskannpy, m)
 {
     m.doc() = "DiskANN Python Bindings";
@@ -296,6 +333,19 @@ PYBIND11_MODULE(_diskannpy, m)
 #else
     m.attr("__version__") = "dev";
 #endif
+
+    m.def("build_in_memory_float_index", &build_in_memory_index<float>, py::arg("metric"), py::arg("data_file_path"),
+          py::arg("index_output_path"), py::arg("graph_degree"), py::arg("complexity"), py::arg("alpha"),
+          py::arg("num_threads"), py::arg("use_pq_build"), py::arg("num_pq_bytes"), py::arg("use_opq"),
+          py::arg("label_file") = "", py::arg("universal_label") = "", py::arg("filter_complexity") = 0);
+    m.def("build_in_memory_int8_index", &build_in_memory_index<int8_t>, py::arg("metric"), py::arg("data_file_path"),
+          py::arg("index_output_path"), py::arg("graph_degree"), py::arg("complexity"), py::arg("alpha"),
+          py::arg("num_threads"), py::arg("use_pq_build"), py::arg("num_pq_bytes"), py::arg("use_opq"),
+          py::arg("label_file") = "", py::arg("universal_label") = "", py::arg("filter_complexity") = 0);
+    m.def("build_in_memory_uint8_index", &build_in_memory_index<uint8_t>, py::arg("metric"), py::arg("data_file_path"),
+          py::arg("index_output_path"), py::arg("graph_degree"), py::arg("complexity"), py::arg("alpha"),
+          py::arg("num_threads"), py::arg("use_pq_build"), py::arg("num_pq_bytes"), py::arg("use_opq"),
+          py::arg("label_file") = "", py::arg("universal_label") = "", py::arg("filter_complexity") = 0);
 
     py::enum_<Metric>(m, "Metric")
         .value("L2", Metric::L2)
