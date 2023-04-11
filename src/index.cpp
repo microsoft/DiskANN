@@ -1522,57 +1522,54 @@ void Index<T, TagT, LabelT>::prune_all_neighbors(const uint32_t max_degree, cons
     }
 }
 
-// REFACTOR
-// template <typename T, typename TagT, typename LabelT>
-// void Index<T, TagT, LabelT>::set_start_points(const T *data, size_t data_count)
-//{
-//     std::unique_lock<std::shared_timed_mutex> ul(_update_lock);
-//     std::unique_lock<std::shared_timed_mutex> tl(_tag_lock);
-//     if (_nd > 0)
-//         throw ANNException("Can not set starting point for a non-empty index", -1, __FUNCSIG__, __FILE__, __LINE__);
-//
-//     if (data_count != _num_frozen_pts * _aligned_dim)
-//         throw ANNException("Invalid number of points", -1, __FUNCSIG__, __FILE__, __LINE__);
-//
-//     memcpy(_data + _aligned_dim * _max_points, data, _aligned_dim * sizeof(T) * _num_frozen_pts);
-//     _has_built = true;
-//     diskann::cout << "Index start points set: #" << _num_frozen_pts << std::endl;
-// }
-//
-
-// REFACTOR: added dummy implementation for now.
-template <typename T, typename TagT, typename LabelT>
-void Index<T, TagT, LabelT>::set_start_points_at_random(T radius, uint32_t random_seed)
+ //REFACTOR
+ template <typename T, typename TagT, typename LabelT>
+ void Index<T, TagT, LabelT>::set_start_points(const T *data, size_t data_count)
 {
-}
+     std::unique_lock<std::shared_timed_mutex> ul(_update_lock);
+     std::unique_lock<std::shared_timed_mutex> tl(_tag_lock);
+     if (_nd > 0)
+         throw ANNException("Can not set starting point for a non-empty index", -1, __FUNCSIG__, __FILE__, __LINE__);
 
-// template <typename T, typename TagT, typename LabelT>
-// void Index<T, TagT, LabelT>::set_start_points_at_random(T radius, uint32_t random_seed)
-//{
-//     std::mt19937 gen{random_seed};
-//     std::normal_distribution<> d{0.0, 1.0};
-//
-//     std::vector<T> points_data;
-//     points_data.reserve(_aligned_dim * _num_frozen_pts);
-//     std::vector<double> real_vec(_aligned_dim);
-//
-//     for (size_t frozen_point = 0; frozen_point < _num_frozen_pts; frozen_point++)
-//     {
-//         double norm_sq = 0.0;
-//         for (size_t i = 0; i < _dim; ++i)
-//         {
-//             auto r = d(gen);
-//             real_vec[i] = r;
-//             norm_sq += r * r;
-//         }
-//
-//         const double norm = std::sqrt(norm_sq);
-//         for (auto iter : real_vec)
-//             points_data.push_back(static_cast<T>(iter * radius / norm));
-//     }
-//
-//     set_start_points(points_data.data(), points_data.size());
-// }
+     if (data_count != _num_frozen_pts * _dim)
+         throw ANNException("Invalid number of points", -1, __FUNCSIG__, __FILE__, __LINE__);
+
+//     memcpy(_data + _aligned_dim * _max_points, data, _aligned_dim * sizeof(T) * _num_frozen_pts);
+    for (location_t i = _max_points; i < _max_points + _num_frozen_pts; i++) {
+        _data_store->set_vector(i, data + i*_dim);
+    }
+     _has_built = true;
+     diskann::cout << "Index start points set: #" << _num_frozen_pts << std::endl;
+ }
+
+
+ template <typename T, typename TagT, typename LabelT>
+ void Index<T, TagT, LabelT>::set_start_points_at_random(T radius, uint32_t random_seed)
+{
+     std::mt19937 gen{random_seed};
+     std::normal_distribution<> d{0.0, 1.0};
+
+     std::vector<T> points_data;
+     points_data.reserve(_dim * _num_frozen_pts);
+     std::vector<double> real_vec(_dim);
+
+     for (size_t frozen_point = 0; frozen_point < _num_frozen_pts; frozen_point++)
+     {
+         double norm_sq = 0.0;
+         for (size_t i = 0; i < _dim; ++i)
+         {
+             auto r = d(gen);
+             real_vec[i] = r;
+             norm_sq += r * r;
+         }
+
+         const double norm = std::sqrt(norm_sq);
+         for (auto iter : real_vec)
+             points_data.push_back(static_cast<T>(iter * radius / norm));
+     }
+
+     set_start_points(points_data.data(), points_data.size());
+ }
 
 template <typename T, typename TagT, typename LabelT>
 void Index<T, TagT, LabelT>::build_with_data_populated(IndexWriteParameters &parameters, const std::vector<TagT> &tags)
@@ -2934,128 +2931,133 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
 }
 
 // REFACTOR: This should be an OptimizedDataStore class, dummy impl here for compiling sake
-template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT>::optimize_index_layout()
-{ // use after build or load
-}
+//template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT>::optimize_index_layout()
+//{ // use after build or load
+//}
 
 // REFACTOR: This should be an OptimizedDataStore class
-// template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT>::optimize_index_layout()
-//{ // use after build or load
-//     if (_dynamic_index)
-//     {
-//         throw diskann::ANNException("Optimize_index_layout not implemented for dyanmic indices", -1, __FUNCSIG__,
-//                                     __FILE__, __LINE__);
-//     }
-//
-//     _data_len = (_aligned_dim + 1) * sizeof(float);
-//     _neighbor_len = (_max_observed_degree + 1) * sizeof(uint32_t);
-//     _node_size = _data_len + _neighbor_len;
-//     _opt_graph = new char[_node_size * _nd];
-//     DistanceFastL2<T> *dist_fast = (DistanceFastL2<T> *)_distance;
-//     for (uint32_t i = 0; i < _nd; i++)
-//     {
-//         char *cur_node_offset = _opt_graph + i * _node_size;
-//         float cur_norm = dist_fast->norm(_data + i * _aligned_dim, _aligned_dim);
-//         std::memcpy(cur_node_offset, &cur_norm, sizeof(float));
-//         std::memcpy(cur_node_offset + sizeof(float), _data + i * _aligned_dim, _data_len - sizeof(float));
-//
-//         cur_node_offset += _data_len;
-//         uint32_t k = _final_graph[i].size();
-//         std::memcpy(cur_node_offset, &k, sizeof(uint32_t));
-//         std::memcpy(cur_node_offset + sizeof(uint32_t), _final_graph[i].data(), k * sizeof(uint32_t));
-//         std::vector<uint32_t>().swap(_final_graph[i]);
-//     }
-//     _final_graph.clear();
-//     _final_graph.shrink_to_fit();
-// }
-//  REFACTOR: once optimized layout becomes its own Data+Graph store, we should just invoke regular search
-template <typename T, typename TagT, typename LabelT>
-void Index<T, TagT, LabelT>::search_with_optimized_layout(const T *query, size_t K, size_t L, uint32_t *indices)
-{
-}
+ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT>::optimize_index_layout()
+{ // use after build or load
+     if (_dynamic_index)
+     {
+         throw diskann::ANNException("Optimize_index_layout not implemented for dyanmic indices", -1, __FUNCSIG__,
+                                     __FILE__, __LINE__);
+     }
 
-// template <typename T, typename TagT, typename LabelT>
-// void Index<T, TagT, LabelT>::search_with_optimized_layout(const T *query, size_t K, size_t L, uint32_t *indices)
+    float* cur_vec = new float[_data_store->get_aligned_dim()];
+    std::memset(cur_vec, 0, _data_store->get_aligned_dim()*sizeof(float));
+     _data_len = (_data_store->get_aligned_dim() + 1) * sizeof(float);
+     _neighbor_len = (_max_observed_degree + 1) * sizeof(uint32_t);
+     _node_size = _data_len + _neighbor_len;
+     _opt_graph = new char[_node_size * _nd];
+     DistanceFastL2<T> *dist_fast = (DistanceFastL2<T> *)_data_store->get_dist_fn();
+     for (uint32_t i = 0; i < _nd; i++)
+     {
+         char *cur_node_offset = _opt_graph + i * _node_size;
+         _data_store->get_vector(i, (T*) cur_vec);
+         float cur_norm = dist_fast->norm((T*) cur_vec, _data_store->get_aligned_dim());
+         std::memcpy(cur_node_offset, &cur_norm, sizeof(float));
+         std::memcpy(cur_node_offset + sizeof(float), cur_vec, _data_len - sizeof(float));
+
+         cur_node_offset += _data_len;
+         uint32_t k = _final_graph[i].size();
+         std::memcpy(cur_node_offset, &k, sizeof(uint32_t));
+         std::memcpy(cur_node_offset + sizeof(uint32_t), _final_graph[i].data(), k * sizeof(uint32_t));
+         std::vector<uint32_t>().swap(_final_graph[i]);
+     }
+     _final_graph.clear();
+     _final_graph.shrink_to_fit();
+     delete[] cur_vec;
+ }
+
+//  REFACTOR: once optimized layout becomes its own Data+Graph store, we should just invoke regular search
+//template <typename T, typename TagT, typename LabelT>
+//void Index<T, TagT, LabelT>::search_with_optimized_layout(const T *query, size_t K, size_t L, uint32_t *indices)
 //{
-//     DistanceFastL2<T> *dist_fast = (DistanceFastL2<T> *)_distance;
-//
-//     NeighborPriorityQueue retset(L);
-//     std::vector<uint32_t> init_ids(L);
-//
-//     boost::dynamic_bitset<> flags{_nd, 0};
-//     uint32_t tmp_l = 0;
-//     uint32_t *neighbors = (uint32_t *)(_opt_graph + _node_size * _start + _data_len);
-//     uint32_t MaxM_ep = *neighbors;
-//     neighbors++;
-//
-//     for (; tmp_l < L && tmp_l < MaxM_ep; tmp_l++)
-//     {
-//         init_ids[tmp_l] = neighbors[tmp_l];
-//         flags[init_ids[tmp_l]] = true;
-//     }
-//
-//     while (tmp_l < L)
-//     {
-//         uint32_t id = rand() % _nd;
-//         if (flags[id])
-//             continue;
-//         flags[id] = true;
-//         init_ids[tmp_l] = id;
-//         tmp_l++;
-//     }
-//
-//     for (uint32_t i = 0; i < init_ids.size(); i++)
-//     {
-//         uint32_t id = init_ids[i];
-//         if (id >= _nd)
-//             continue;
-//         _mm_prefetch(_opt_graph + _node_size * id, _MM_HINT_T0);
-//     }
-//     L = 0;
-//     for (uint32_t i = 0; i < init_ids.size(); i++)
-//     {
-//         uint32_t id = init_ids[i];
-//         if (id >= _nd)
-//             continue;
-//         T *x = (T *)(_opt_graph + _node_size * id);
-//         float norm_x = *x;
-//         x++;
-//         float dist = dist_fast->compare(x, query, norm_x, (uint32_t)_aligned_dim);
-//         retset.insert(Neighbor(id, dist));
-//         flags[id] = true;
-//         L++;
-//     }
-//
-//     while (retset.has_unexpanded_node())
-//     {
-//         auto nbr = retset.closest_unexpanded();
-//         auto n = nbr.id;
-//         _mm_prefetch(_opt_graph + _node_size * n + _data_len, _MM_HINT_T0);
-//         neighbors = (uint32_t *)(_opt_graph + _node_size * n + _data_len);
-//         uint32_t MaxM = *neighbors;
-//         neighbors++;
-//         for (uint32_t m = 0; m < MaxM; ++m)
-//             _mm_prefetch(_opt_graph + _node_size * neighbors[m], _MM_HINT_T0);
-//         for (uint32_t m = 0; m < MaxM; ++m)
-//         {
-//             uint32_t id = neighbors[m];
-//             if (flags[id])
-//                 continue;
-//             flags[id] = 1;
-//             T *data = (T *)(_opt_graph + _node_size * id);
-//             float norm = *data;
-//             data++;
-//             float dist = dist_fast->compare(query, data, norm, (uint32_t)_aligned_dim);
-//             Neighbor nn(id, dist);
-//             retset.insert(nn);
-//         }
-//     }
-//
-//     for (size_t i = 0; i < K; i++)
-//     {
-//         indices[i] = retset[i].id;
-//     }
-// }
+//}
+
+ template <typename T, typename TagT, typename LabelT>
+ void Index<T, TagT, LabelT>::search_with_optimized_layout(const T *query, size_t K, size_t L, uint32_t *indices)
+{
+     DistanceFastL2<T> *dist_fast = (DistanceFastL2<T> *) _data_store->get_dist_fn();
+
+     NeighborPriorityQueue retset(L);
+     std::vector<uint32_t> init_ids(L);
+
+     boost::dynamic_bitset<> flags{_nd, 0};
+     uint32_t tmp_l = 0;
+     uint32_t *neighbors = (uint32_t *)(_opt_graph + _node_size * _start + _data_len);
+     uint32_t MaxM_ep = *neighbors;
+     neighbors++;
+
+     for (; tmp_l < L && tmp_l < MaxM_ep; tmp_l++)
+     {
+         init_ids[tmp_l] = neighbors[tmp_l];
+         flags[init_ids[tmp_l]] = true;
+     }
+
+     while (tmp_l < L)
+     {
+         uint32_t id = rand() % _nd;
+         if (flags[id])
+             continue;
+         flags[id] = true;
+         init_ids[tmp_l] = id;
+         tmp_l++;
+     }
+
+     for (uint32_t i = 0; i < init_ids.size(); i++)
+     {
+         uint32_t id = init_ids[i];
+         if (id >= _nd)
+             continue;
+         _mm_prefetch(_opt_graph + _node_size * id, _MM_HINT_T0);
+     }
+     L = 0;
+     for (uint32_t i = 0; i < init_ids.size(); i++)
+     {
+         uint32_t id = init_ids[i];
+         if (id >= _nd)
+             continue;
+         T *x = (T *)(_opt_graph + _node_size * id);
+         float norm_x = *x;
+         x++;
+         float dist = dist_fast->compare(x, query, norm_x, (uint32_t)_data_store->get_aligned_dim());
+         retset.insert(Neighbor(id, dist));
+         flags[id] = true;
+         L++;
+     }
+
+     while (retset.has_unexpanded_node())
+     {
+         auto nbr = retset.closest_unexpanded();
+         auto n = nbr.id;
+         _mm_prefetch(_opt_graph + _node_size * n + _data_len, _MM_HINT_T0);
+         neighbors = (uint32_t *)(_opt_graph + _node_size * n + _data_len);
+         uint32_t MaxM = *neighbors;
+         neighbors++;
+         for (uint32_t m = 0; m < MaxM; ++m)
+             _mm_prefetch(_opt_graph + _node_size * neighbors[m], _MM_HINT_T0);
+         for (uint32_t m = 0; m < MaxM; ++m)
+         {
+             uint32_t id = neighbors[m];
+             if (flags[id])
+                 continue;
+             flags[id] = 1;
+             T *data = (T *)(_opt_graph + _node_size * id);
+             float norm = *data;
+             data++;
+             float dist = dist_fast->compare(query, data, norm, (uint32_t)_data_store->get_aligned_dim());
+             Neighbor nn(id, dist);
+             retset.insert(nn);
+         }
+     }
+
+     for (size_t i = 0; i < K; i++)
+     {
+         indices[i] = retset[i].id;
+     }
+ }
 
 /*  Internals of the library */
 template <typename T, typename TagT, typename LabelT> const float Index<T, TagT, LabelT>::INDEX_GROWTH_FACTOR = 1.5f;
