@@ -343,6 +343,11 @@ template <typename data_t> location_t InMemDataStore<data_t>::calculate_medoid()
     return min_idx;
 }
 
+template <typename data_t> 
+Distance<data_t>* InMemDataStore<data_t>::get_dist_fn()  {
+    return this->_distance_fn.get();
+}
+
 template DISKANN_DLLEXPORT class InMemDataStore<float>;
 template DISKANN_DLLEXPORT class InMemDataStore<int8_t>;
 template DISKANN_DLLEXPORT class InMemDataStore<uint8_t>;
