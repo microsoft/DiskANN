@@ -70,9 +70,6 @@ template <typename data_t> location_t InMemDataStore<data_t>::load_impl(const st
     }
     diskann::get_bin_metadata(filename, file_num_points, file_dim);
 
-    // since we are loading a new dataset, _empty_slots must be cleared
-    //    _empty_slots.clear();
-
     if (file_dim != this->_dim)
     {
         std::stringstream stream;

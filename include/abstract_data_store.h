@@ -42,8 +42,8 @@ template <typename data_t> class AbstractDataStore
         return _dim;
     }
 
-    // populate the store with bulk vectors (either as pointer or bin file), potentially after normalizing the vectors
-    // if the metric deems so
+    // populate the store with vectors (either from a pointer or bin file),
+    // potentially after normalizing the vectors if the metric deems so
     virtual void populate_data(const data_t *vectors, const location_t num_pts) = 0;
     virtual void populate_data(const std::string &filename, const size_t offset) = 0;
 

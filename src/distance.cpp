@@ -522,7 +522,7 @@ float AVXDistanceInnerProductFloat::compare(const float *a, const float *b, uint
     return -result;
 }
 
-uint32_t AVXNormalizedCosineDistanceFloat::post_processed_dimension(uint32_t orig_dimension) const
+uint32_t AVXNormalizedCosineDistanceFloat::post_normalization_dimension(uint32_t orig_dimension) const
 {
     return orig_dimension;
 }

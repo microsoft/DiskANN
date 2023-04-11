@@ -8,7 +8,6 @@
 #include <vector>
 
 #include <boost/dynamic_bitset.hpp>
-// #include "boost_dynamic_bitset_fwd.h"
 
 namespace diskann
 {

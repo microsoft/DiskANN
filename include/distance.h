@@ -28,10 +28,10 @@ template <typename T> class Distance
         return std::numeric_limits<float>::max();
     }
 
-    // For MIPS, normalization => a new dimension gets added to the vectors.
+    // For MIPS, normalization adds an extra dimension to the vectors.
     // This function lets callers know if the normalization process
     // changes the dimension.
-    virtual uint32_t post_processed_dimension(uint32_t orig_dimension) const
+    virtual uint32_t post_normalization_dimension(uint32_t orig_dimension) const
     {
         return orig_dimension;
     }
@@ -248,7 +248,7 @@ class AVXNormalizedCosineDistanceFloat : public Distance<float>
         // This will ensure that cosine is between -1 and 1.
         return 1.0f + _innerProduct.compare(a, b, length);
     }
-    DISKANN_DLLEXPORT virtual uint32_t post_processed_dimension(uint32_t orig_dimension) const override;
+    DISKANN_DLLEXPORT virtual uint32_t post_normalization_dimension(uint32_t orig_dimension) const override;
 
     DISKANN_DLLEXPORT virtual bool normalization_required() const;
 
