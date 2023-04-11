@@ -1522,57 +1522,54 @@ void Index<T, TagT, LabelT>::prune_all_neighbors(const uint32_t max_degree, cons
     }
 }
 
-// REFACTOR
-// template <typename T, typename TagT, typename LabelT>
-// void Index<T, TagT, LabelT>::set_start_points(const T *data, size_t data_count)
-//{
-//     std::unique_lock<std::shared_timed_mutex> ul(_update_lock);
-//     std::unique_lock<std::shared_timed_mutex> tl(_tag_lock);
-//     if (_nd > 0)
-//         throw ANNException("Can not set starting point for a non-empty index", -1, __FUNCSIG__, __FILE__, __LINE__);
-//
-//     if (data_count != _num_frozen_pts * _aligned_dim)
-//         throw ANNException("Invalid number of points", -1, __FUNCSIG__, __FILE__, __LINE__);
-//
-//     memcpy(_data + _aligned_dim * _max_points, data, _aligned_dim * sizeof(T) * _num_frozen_pts);
-//     _has_built = true;
-//     diskann::cout << "Index start points set: #" << _num_frozen_pts << std::endl;
-// }
-//
-
-// REFACTOR: added dummy implementation for now.
-template <typename T, typename TagT, typename LabelT>
-void Index<T, TagT, LabelT>::set_start_points_at_random(T radius, uint32_t random_seed)
+ //REFACTOR
+ template <typename T, typename TagT, typename LabelT>
+ void Index<T, TagT, LabelT>::set_start_points(const T *data, size_t data_count)
 {
-}
+     std::unique_lock<std::shared_timed_mutex> ul(_update_lock);
+     std::unique_lock<std::shared_timed_mutex> tl(_tag_lock);
+     if (_nd > 0)
+         throw ANNException("Can not set starting point for a non-empty index", -1, __FUNCSIG__, __FILE__, __LINE__);
 
-// template <typename T, typename TagT, typename LabelT>
-// void Index<T, TagT, LabelT>::set_start_points_at_random(T radius, uint32_t random_seed)
-//{
-//     std::mt19937 gen{random_seed};
-//     std::normal_distribution<> d{0.0, 1.0};
-//
-//     std::vector<T> points_data;
-//     points_data.reserve(_aligned_dim * _num_frozen_pts);
-//     std::vector<double> real_vec(_aligned_dim);
-//
-//     for (size_t frozen_point = 0; frozen_point < _num_frozen_pts; frozen_point++)
-//     {
-//         double norm_sq = 0.0;
-//         for (size_t i = 0; i < _dim; ++i)
-//         {
-//             auto r = d(gen);
-//             real_vec[i] = r;
-//             norm_sq += r * r;
-//         }
-//
-//         const double norm = std::sqrt(norm_sq);
-//         for (auto iter : real_vec)
-//             points_data.push_back(static_cast<T>(iter * radius / norm));
-//     }
-//
-//     set_start_points(points_data.data(), points_data.size());
-// }
+     if (data_count != _num_frozen_pts * _dim)
+         throw ANNException("Invalid number of points", -1, __FUNCSIG__, __FILE__, __LINE__);
+
+//     memcpy(_data + _aligned_dim * _max_points, data, _aligned_dim * sizeof(T) * _num_frozen_pts);
+    for (location_t i = _max_points; i < _max_points + _num_frozen_pts; i++) {
+        _data_store->set_vector(i, data + i*_dim);
+    }
+     _has_built = true;
+     diskann::cout << "Index start points set: #" << _num_frozen_pts << std::endl;
+ }
+
+
+ template <typename T, typename TagT, typename LabelT>
+ void Index<T, TagT, LabelT>::set_start_points_at_random(T radius, uint32_t random_seed)
+{
+     std::mt19937 gen{random_seed};
+     std::normal_distribution<> d{0.0, 1.0};
+
+     std::vector<T> points_data;
+     points_data.reserve(_dim * _num_frozen_pts);
+     std::vector<double> real_vec(_dim);
+
+     for (size_t frozen_point = 0; frozen_point < _num_frozen_pts; frozen_point++)
+     {
+         double norm_sq = 0.0;
+         for (size_t i = 0; i < _dim; ++i)
+         {
+             auto r = d(gen);
+             real_vec[i] = r;
+             norm_sq += r * r;
+         }
+
+         const double norm = std::sqrt(norm_sq);
+         for (auto iter : real_vec)
+             points_data.push_back(static_cast<T>(iter * radius / norm));
+     }
+
+     set_start_points(points_data.data(), points_data.size());
+ }
 
 template <typename T, typename TagT, typename LabelT>
 void Index<T, TagT, LabelT>::build_with_data_populated(IndexWriteParameters &parameters, const std::vector<TagT> &tags)
