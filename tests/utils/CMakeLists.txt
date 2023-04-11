@@ -22,7 +22,7 @@ add_executable(tsv_to_bin tsv_to_bin.cpp)
 add_executable(bin_to_tsv bin_to_tsv.cpp)
 
 add_executable(generate_PQ_data generate_PQ_data.cpp)
-target_link_libraries(generate_PQ_data $${PROJECT_NAME} Boost::program_options)
+target_link_libraries(generate_PQ_data ${PROJECT_NAME} Boost::program_options)
 
 add_executable(int8_to_float int8_to_float.cpp)
 target_link_libraries(int8_to_float ${PROJECT_NAME})
