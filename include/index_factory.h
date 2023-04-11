@@ -13,19 +13,20 @@ template <typename T, typename LabelT> class DiskIndex;
 enum BuildType
 {
     MEMORY,
-    DISK,
-    SSD
+    DISK
 };
 
 enum LoadStoreStratagy
 {
+    GraphStore,
+    DataStore
 };
 
 struct IndexConfig
 {
     BuildType build_type;
     Metric metric;
-    LoadStoreStratagy load_store_stratagy; // load and store stratagy when we have abstract data or abstract graph
+    LoadStoreStratagy load_store_stratagy; // load and store stratagy when we have abstract data or abstract graph store
 
     bool filtered_build;
     std::string label_type;
@@ -110,7 +111,6 @@ class IndexFactory
     IndexConfig &_config;
 };
 
-// DEF's for Memory and Disk Index.
 template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> class MemoryIndex : public AbstractIndex
 {
   public:
