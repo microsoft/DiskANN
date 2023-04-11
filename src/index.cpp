@@ -707,9 +707,25 @@ namespace diskann {
   }
 
   template<typename T, typename TagT>
-  std::pair<uint32_t, uint32_t> Index<T, TagT>::iterate_to_fixed_point(
+  float Index<T, TagT>::compute_distance(const T* x, const T* y,
+      const unsigned* qids, const size_t num_query) {
+    float distance = _distance->compare(x, y, (unsigned) _aligned_dim);
+    if (num_query == 0 || qids == nullptr)
+      return distance;
+    float distance_q = 0;
+    for (uint64_t i = 0; i < num_query; i++) {
+      distance_q += _distance->compare(x,
+                                        _query_data + _aligned_dim * (size_t) qids[i], 
+                                        (unsigned) _aligned_dim);
+    }
+    return (1 - _lambda) * distance + _lambda * (distance_q / num_query);
+  }
+
+  template<typename T, typename TagT>
+  std::pair<uint32_t, uint32_t> Index<T, TagT>::iterate_to_fixed_point_with_query(
       const T *query, const unsigned Lsize,
       const std::vector<unsigned> &init_ids, InMemQueryScratch<T> *scratch,
+      const unsigned *qids, const size_t num_query,
       bool ret_frozen, bool search_invocation) {
     std::vector<Neighbor> &expanded_nodes = scratch->pool();
     NeighborPriorityQueue &best_L_nodes = scratch->best_l_nodes();
@@ -810,9 +826,9 @@ namespace diskann {
         if (_pq_dist)
           pq_dist_lookup(pq_coord_scratch, 1, this->_num_pq_chunks, pq_dists,
                          &distance);
-        else
-          distance = _distance->compare(_data + _aligned_dim * (size_t) id,
-                                        aligned_query, (unsigned) _aligned_dim);
+        else 
+          distance = compute_distance(_data + _aligned_dim * (size_t) id, 
+                                      aligned_query, qids, num_query);
         Neighbor nn = Neighbor(id, distance);
         best_L_nodes.insert(nn);
       }
@@ -871,9 +887,8 @@ namespace diskann {
                 sizeof(T) * _aligned_dim);
           }
 
-          dist_scratch.push_back( _distance->compare(
-              aligned_query, _data + _aligned_dim * (size_t) id,
-              (unsigned) _aligned_dim));
+          dist_scratch.push_back(compute_distance(_data + _aligned_dim * (size_t) id, 
+                                                  aligned_query, qids, num_query));
         }
       }
       cmps += id_scratch.size();
@@ -887,14 +902,29 @@ namespace diskann {
   }
 
   template<typename T, typename TagT>
+  std::pair<uint32_t, uint32_t> Index<T, TagT>::iterate_to_fixed_point(
+      const T *query, const unsigned Lsize,
+      const std::vector<unsigned> &init_ids, InMemQueryScratch<T> *scratch,
+      bool ret_frozen, bool search_invocation) {
+    return iterate_to_fixed_point_with_query(query, Lsize, init_ids, scratch,
+                                            nullptr, 0, 
+                                            ret_frozen, search_invocation);
+  }
+
+  template<typename T, typename TagT>
   void Index<T, TagT>::search_for_point_and_prune(
       int location, _u32 Lindex, std::vector<unsigned> &pruned_list,
-      InMemQueryScratch<T> *scratch) {
+      InMemQueryScratch<T> *scratch,
+      const unsigned* qids, const size_t num_query) {
     std::vector<unsigned> init_ids;
     init_ids.emplace_back(_start);
 
-    iterate_to_fixed_point(_data + _aligned_dim * location, Lindex, init_ids,
-                           scratch, true, false);
+    if (num_query == 0 || qids == nullptr)
+      iterate_to_fixed_point(_data + _aligned_dim * location, Lindex, init_ids,
+                            scratch, true, false);
+    else 
+      iterate_to_fixed_point_with_query(_data + _aligned_dim * location, Lindex, init_ids,
+                            scratch, qids, num_query, true, false);
 
     auto &pool = scratch->pool();
 
@@ -908,6 +938,17 @@ namespace diskann {
     if (pruned_list.size() > 0) {
       throw diskann::ANNException("ERROR: non-empty pruned_list passed", -1,
                                   __FUNCSIG__, __FILE__, __LINE__);
+    }
+
+    // revise neighbor distances when required
+    if (num_query > 0 && qids != nullptr) {
+      for (auto& p : pool) {
+        unsigned id = p.id;
+        p.distance = _distance->compare(
+                      _data + _aligned_dim * location, 
+                      _data + _aligned_dim * (size_t) id,
+                      (unsigned) _aligned_dim);
+      }
     }
 
     prune_neighbors(location, pool, pruned_list, scratch);
@@ -1120,6 +1161,7 @@ namespace diskann {
     _indexingRange = parameters.Get<unsigned>("R");
     _indexingMaxC = parameters.Get<unsigned>("C");
     _indexingAlpha = parameters.Get<float>("alpha");
+    _lambda = parameters.Get<float>("lambda");
 
     /* visit_order is a vector that is initialized to the entire graph */
     std::vector<unsigned>          visit_order;
@@ -1158,8 +1200,13 @@ namespace diskann {
       auto scratch = manager.scratch_space();
 
       std::vector<unsigned> pruned_list;
-      search_for_point_and_prune(node, _indexingQueueSize, pruned_list,
-                                 scratch);
+      if (!_qids.empty() && !_qids[node].empty())
+        search_for_point_and_prune(node, _indexingQueueSize, pruned_list,
+                                  scratch, _qids[node].data(), _qids[node].size());
+      else
+        search_for_point_and_prune(node, _indexingQueueSize, pruned_list,
+                                  scratch);
+
       {
         LockGuard guard(_locks[node]);
         _final_graph[node].reserve(
@@ -1446,6 +1493,78 @@ namespace diskann {
   }
 
   template<typename T, typename TagT>
+  void Index<T, TagT>::build(const char              *filename,
+                             const size_t             num_points_to_load,
+                             const char              *query_filename,
+                             const size_t             num_query,
+                             const std::string       &nnids_filename,
+                             const size_t             max_num_query_per_base,
+                             Parameters              &parameters,
+                             const std::vector<TagT> &tags) {
+    if (!file_exists(query_filename)) {
+      std::cout << "WARNING: Query data file " << query_filename << " does not exist."
+             << std::endl;
+      std::cout << "Continuing without query data." << std::endl;
+      build(filename, num_points_to_load, parameters, tags);
+      return;
+    }
+
+    if (!file_exists(nnids_filename)) {
+      std::cout << "WARNING: Query data file " << nnids_filename << " does not exist."
+             << std::endl;
+      std::cout << "Continuing without query data." << std::endl;
+      build(filename, num_points_to_load, parameters, tags);
+      return;
+    }
+
+    size_t query_file_num_points, query_file_dim;
+    diskann::get_bin_metadata(query_filename, query_file_num_points, query_file_dim);
+    if (query_file_dim != _dim) {
+      std::cout << "WARNING: Query and base dimensions do not match."
+             << std::endl;
+      std::cout << "Continuing without query data." << std::endl;
+      build(filename, num_points_to_load, parameters, tags);
+      return;
+    }
+
+    size_t num_nnids, k;
+    unsigned* nnids = nullptr;
+    diskann::get_bin_metadata(nnids_filename, num_nnids, k);
+    if (num_nnids != query_file_num_points) {
+      std::cout << "WARNING: Query data file " << query_filename << " and " << nnids_filename 
+             << " do not have same number of items." << std::endl;
+      std::cout << "Continuing without query data." << std::endl;
+    }
+
+    _nq = std::min(query_file_num_points, num_query);
+    _max_nq_per_node = max_num_query_per_base;
+    std::cout << "Using " << _nq << " query items to build the graph." << std::endl;
+    load_aligned_bin<T>(query_filename, _query_data, _nq, _dim,
+                                  _aligned_dim);
+    if (_normalize_vecs) {
+      for (uint64_t i = 0; i < query_file_num_points; i++) {
+        normalize(_data + _aligned_dim * i, _aligned_dim);
+      }
+    }
+
+    _qids.resize(_max_points);
+    for (uint64_t i = 0; i < _max_points; i++) {
+      _qids[i].reserve(max_num_query_per_base);
+    }
+
+    load_bin<unsigned>(nnids_filename, nnids, _nq, k);
+    for (uint64_t i = 0; i < _nq; i++) {
+      for (uint64_t j = 0; j < k; j++) {
+        unsigned id = nnids[i * k + j];
+        if (_qids[id].size() > _max_nq_per_node)
+          continue;
+        _qids[id].emplace_back((unsigned) i);
+      }
+    }
+    build(filename, num_points_to_load, parameters, tags);
+  }
+
+  template<typename T, typename TagT>
   void Index<T, TagT>::build(const char  *filename,
                              const size_t num_points_to_load,
                              Parameters &parameters, const char *tag_filename) {
@@ -1483,6 +1602,52 @@ namespace diskann {
       }
     }
     build(filename, num_points_to_load, parameters, tags);
+  }
+
+  template<typename T, typename TagT>
+  void Index<T, TagT>::build(const char  *filename,
+                             const size_t num_points_to_load,
+                             const char  *query_filename, 
+                             const size_t num_query,
+                             const std::string &nnids_filename,
+                             const size_t max_num_query_per_base,
+                             Parameters &parameters, const char *tag_filename) {
+    std::vector<TagT> tags;
+
+    if (_enable_tags) {
+      std::unique_lock<std::shared_timed_mutex> tl(_tag_lock);
+      if (tag_filename == nullptr) {
+        throw ANNException("Tag filename is null, while _enable_tags is set",
+                           -1, __FUNCSIG__, __FILE__, __LINE__);
+      } else {
+        if (file_exists(tag_filename)) {
+          diskann::cout << "Loading tags from " << tag_filename
+                        << " for vamana index build" << std::endl;
+          TagT  *tag_data = nullptr;
+          size_t npts, ndim;
+          diskann::load_bin(tag_filename, tag_data, npts, ndim);
+          if (npts < num_points_to_load) {
+            std::stringstream sstream;
+            sstream << "Loaded " << npts
+                    << " tags, insufficient to populate tags for "
+                    << num_points_to_load << "  points to load";
+            throw diskann::ANNException(sstream.str(), -1, __FUNCSIG__,
+                                        __FILE__, __LINE__);
+          }
+          for (size_t i = 0; i < num_points_to_load; i++) {
+            tags.push_back(tag_data[i]);
+          }
+          delete[] tag_data;
+        } else {
+          throw diskann::ANNException(
+              std::string("Tag file") + tag_filename + " does not exist", -1,
+              __FUNCSIG__, __FILE__, __LINE__);
+        }
+      }
+    }
+    build(filename, num_points_to_load,  
+          query_filename, num_query, nnids_filename, max_num_query_per_base, 
+          parameters, tags);
   }
 
   template<typename T, typename TagT>
