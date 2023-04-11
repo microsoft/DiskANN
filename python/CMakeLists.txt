@@ -26,14 +26,14 @@ execute_process(COMMAND ${Python3_EXECUTABLE} -c "import numpy; print(numpy.get_
 # pybind11_add_module(diskannpy MODULE src/diskann_bindings.cpp)
 # the following is fairly synonymous with pybind11_add_module, but we need more target_link_libraries
 # see https://pybind11.readthedocs.io/en/latest/compiling.html#advanced-interface-library-targets for more details
-add_library(diskannpy MODULE src/diskann_bindings.cpp)
+add_library(_diskannpy MODULE src/diskann_bindings.cpp)
 
 if (MSVC)
-	target_compile_options(diskannpy PRIVATE /U_WINDLL)
+    target_compile_options(_diskannpy PRIVATE /U_WINDLL)
 endif()
 
 target_link_libraries(
-        diskannpy
+        _diskannpy
         PRIVATE
         pybind11::module
         pybind11::lto
@@ -43,13 +43,13 @@ target_link_libraries(
         ${DISKANN_ASYNC_LIB}
 )
 
-pybind11_extension(diskannpy)
+pybind11_extension(_diskannpy)
 if(NOT MSVC AND NOT ${CMAKE_BUILD_TYPE} MATCHES Debug|RelWithDebInfo)
     # Strip unnecessary sections of the binary on Linux/macOS
-    pybind11_strip(diskannpy)
+    pybind11_strip(_diskannpy)
 endif()
 
-set_target_properties(diskannpy PROPERTIES CXX_VISIBILITY_PRESET "hidden"
+set_target_properties(_diskannpy PROPERTIES CXX_VISIBILITY_PRESET "hidden"
         CUDA_VISIBILITY_PRESET "hidden")
 
 # generally, the VERSION_INFO flag is set by pyproject.toml, by way of setup.py.
@@ -59,4 +59,4 @@ set_target_properties(diskannpy PROPERTIES CXX_VISIBILITY_PRESET "hidden"
 if(NOT VERSION_INFO)
     set(VERSION_INFO "0.0.0dev")
 endif()
-target_compile_definitions(diskannpy PRIVATE VERSION_INFO="${VERSION_INFO}")
+target_compile_definitions(_diskannpy PRIVATE VERSION_INFO="${VERSION_INFO}")

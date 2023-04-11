@@ -44,10 +44,14 @@ add_executable(simulate_aggregate_recall simulate_aggregate_recall.cpp)
 add_executable(calculate_recall calculate_recall.cpp)
 target_link_libraries(calculate_recall ${PROJECT_NAME} ${DISKANN_ASYNC_LIB} ${DISKANN_TOOLS_TCMALLOC_LINK_OPTIONS})
 
-# This is the only thing outside of DiskANN main source that depends on MKL.
+# Compute ground truth thing outside of DiskANN main source that depends on MKL.
 add_executable(compute_groundtruth compute_groundtruth.cpp)
 target_include_directories(compute_groundtruth PRIVATE ${DISKANN_MKL_INCLUDE_DIRECTORIES})
 target_link_libraries(compute_groundtruth ${PROJECT_NAME} ${DISKANN_MKL_LINK_LIBRARIES} ${DISKANN_ASYNC_LIB} Boost::program_options)
+
+add_executable(compute_groundtruth_for_filters compute_groundtruth_for_filters.cpp)
+target_include_directories(compute_groundtruth_for_filters PRIVATE ${DISKANN_MKL_INCLUDE_DIRECTORIES})
+target_link_libraries(compute_groundtruth_for_filters ${PROJECT_NAME} ${DISKANN_MKL_LINK_LIBRARIES} ${DISKANN_ASYNC_LIB} Boost::program_options)
 
 
 add_executable(generate_pq generate_pq.cpp)
@@ -66,3 +70,8 @@ target_link_libraries(merge_shards ${PROJECT_NAME} ${DISKANN_TOOLS_TCMALLOC_LINK
 add_executable(create_disk_layout create_disk_layout.cpp)
 target_link_libraries(create_disk_layout ${PROJECT_NAME} ${DISKANN_ASYNC_LIB} ${DISKANN_TOOLS_TCMALLOC_LINK_OPTIONS})
 
+add_executable(generate_synthetic_labels generate_synthetic_labels.cpp)
+target_link_libraries(generate_synthetic_labels ${PROJECT_NAME} Boost::program_options)
+
+add_executable(stats_label_data stats_label_data.cpp)
+target_link_libraries(stats_label_data ${PROJECT_NAME} Boost::program_options)

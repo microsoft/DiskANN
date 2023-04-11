@@ -3,14 +3,14 @@ requires = [
     "setuptools>=59.6",
     "pybind11>=2.10.0",
     "cmake>=3.22",
-    "numpy>=1.21", 
+    "numpy>=1.21",
     "wheel",
 ]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "diskannpy"
-version = "0.4.0"
+version = "0.5.0"
 
 description = "DiskANN Python extension module"
 # readme = "../README.md"
@@ -24,11 +24,14 @@ authors = [
     {name = "Dax Pryce", email = "daxpryce@microsoft.com"}
 ]
 
+[tool.setuptools]
+package-dir = {"" = "python/src"}
+
 [tool.cibuildwheel]
 manylinux-x86_64-image = "manylinux_2_24"
+test-requires = ["scikit-learn~=1.2"]
 build-frontend = "build"
 skip = "pp* *musllinux*"
-test-command = "python -m unittest discover -s {package}/tests"
 
 
 [tool.cibuildwheel.linux]
