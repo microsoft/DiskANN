@@ -17,6 +17,7 @@
 
 #include "memory_mapper.h"
 #include "ann_exception.h"
+#include "index_factory.h"
 
 namespace po = boost::program_options;
 
@@ -154,46 +155,71 @@ int main(int argc, char **argv)
     {
         diskann::cout << "Starting index build with R: " << R << "  Lbuild: " << L << "  alpha: " << alpha
                       << "  #threads: " << num_threads << std::endl;
-        if (label_file != "" && label_type == "ushort")
-        {
-            if (data_type == std::string("int8"))
-                return build_in_memory_index<int8_t, uint32_t, uint16_t>(
-                    metric, data_path, R, L, alpha, index_path_prefix, num_threads, use_pq_build, build_PQ_bytes,
-                    use_opq, label_file, universal_label, Lf);
-            else if (data_type == std::string("uint8"))
-                return build_in_memory_index<uint8_t, uint32_t, uint16_t>(
-                    metric, data_path, R, L, alpha, index_path_prefix, num_threads, use_pq_build, build_PQ_bytes,
-                    use_opq, label_file, universal_label, Lf);
-            else if (data_type == std::string("float"))
-                return build_in_memory_index<float, uint32_t, uint16_t>(
-                    metric, data_path, R, L, alpha, index_path_prefix, num_threads, use_pq_build, build_PQ_bytes,
-                    use_opq, label_file, universal_label, Lf);
-            else
-            {
-                std::cout << "Unsupported type. Use one of int8, uint8 or float." << std::endl;
-                return -1;
-            }
-        }
-        else
-        {
-            if (data_type == std::string("int8"))
-                return build_in_memory_index<int8_t>(metric, data_path, R, L, alpha, index_path_prefix, num_threads,
+
+        // Config for index
+        diskann::IndexConfig config;
+        config.metric = metric;
+        config.filtered_build = label_file == "" ? false : true;
+        config.build_type = diskann::MEMORY;
+        config.data_type = data_type;
+        config.label_type = label_type;
+
+        // Build params for speific build from instance
+        diskann::IndexWriteParameters paras = diskann::IndexWriteParametersBuilder(L, R)
+                                                  .with_filter_list_size(Lf)
+                                                  .with_alpha(alpha)
+                                                  .with_saturate_graph(false)
+                                                  .with_num_threads(num_threads)
+                                                  .build();
+
+        diskann::BuildParams build_params(paras);
+        build_params.C = 750; // maximum candidate set size during pruning procedure
+        build_params.universal_label = universal_label;
+        build_params.label_file = label_file;
+
+        auto index_factory = diskann::IndexFactory(config);
+        auto index = index_factory.instance();
+        index->build(data_path, build_params, index_path_prefix);
+        return 0;
+
+        /* if (label_file != "" && label_type == "ushort")
+         {
+             if (data_type == std::string("int8"))
+                 return build_in_memory_index<int8_t, uint32_t, uint16_t>(
+                     metric, data_path, R, L, alpha, index_path_prefix, num_threads, use_pq_build, build_PQ_bytes,
+                     use_opq, label_file, universal_label, Lf);
+             else if (data_type == std::string("uint8"))
+                 return build_in_memory_index<uint8_t, uint32_t, uint16_t>(
+                     metric, data_path, R, L, alpha, index_path_prefix, num_threads, use_pq_build, build_PQ_bytes,
+                     use_opq, label_file, universal_label, Lf);
+             else if (data_type == std::string("float"))
+                 return build_in_memory_index<float, uint32_t, uint16_t>(
+                     metric, data_path, R, L, alpha, index_path_prefix, num_threads, use_pq_build, build_PQ_bytes,
+                     use_opq, label_file, universal_label, Lf);
+             else
+             {
+                 std::cout << "Unsupported type. Use one of int8, uint8 or float." << std::endl;
+                 return -1;
+             }
+         }
+         else
+         {
+             if (data_type == std::string("int8"))
+                 return build_in_memory_index<int8_t>(metric, data_path, R, L, alpha, index_path_prefix, num_threads,
+                                                      use_pq_build, build_PQ_bytes, use_opq, label_file,
+         universal_label, Lf); else if (data_type == std::string("uint8")) return build_in_memory_index<uint8_t>(metric,
+         data_path, R, L, alpha, index_path_prefix, num_threads, use_pq_build, build_PQ_bytes, use_opq, label_file,
+                                                       universal_label, Lf);
+             else if (data_type == std::string("float"))
+                 return build_in_memory_index<float>(metric, data_path, R, L, alpha, index_path_prefix, num_threads,
                                                      use_pq_build, build_PQ_bytes, use_opq, label_file, universal_label,
                                                      Lf);
-            else if (data_type == std::string("uint8"))
-                return build_in_memory_index<uint8_t>(metric, data_path, R, L, alpha, index_path_prefix, num_threads,
-                                                      use_pq_build, build_PQ_bytes, use_opq, label_file,
-                                                      universal_label, Lf);
-            else if (data_type == std::string("float"))
-                return build_in_memory_index<float>(metric, data_path, R, L, alpha, index_path_prefix, num_threads,
-                                                    use_pq_build, build_PQ_bytes, use_opq, label_file, universal_label,
-                                                    Lf);
-            else
-            {
-                std::cout << "Unsupported type. Use one of int8, uint8 or float." << std::endl;
-                return -1;
-            }
-        }
+             else
+             {
+                 std::cout << "Unsupported type. Use one of int8, uint8 or float." << std::endl;
+                 return -1;
+             }
+         }*/
     }
     catch (const std::exception &e)
     {

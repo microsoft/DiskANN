@@ -25,6 +25,7 @@
 #include "windows_aligned_file_reader.h"
 #endif
 #endif
+#include "index_factory.h"
 
 #define WARMUP false
 
@@ -429,7 +430,32 @@ int main(int argc, char **argv)
 
     try
     {
-        if (!query_filters.empty() && label_type == "ushort")
+
+        diskann::IndexConfig config;
+        config.metric = metric;
+        config.filtered_build = false;
+        config.build_type = diskann::DISK;
+        config.data_type = data_type;
+        config.label_type = label_type;
+
+        diskann::SearchParams search_params;
+        search_params.num_threads = num_threads;
+        search_params.K = K;
+        search_params.Lvec = Lvec;
+        search_params.gt_file = gt_file;
+        search_params.show_qps_per_thread = false;
+        search_params.print_all_recalls = false;
+        search_params.W = W;
+        search_params.num_nodes_to_cache = num_nodes_to_cache;
+        search_params.search_io_limit = search_io_limit;
+        search_params.use_reorder_data = use_reorder_data;
+        search_params.fail_if_recall_below = fail_if_recall_below;
+        auto index_factory = diskann::IndexFactory(config);
+        auto index = index_factory.instance();
+        index->search_prebuilt_index(index_path_prefix, query_file, search_params, query_filters, result_path_prefix);
+        return 0;
+
+        /*if (!query_filters.empty() && label_type == "ushort")
         {
             if (data_type == std::string("float"))
                 return search_disk_index<float, uint16_t>(
@@ -468,7 +494,7 @@ int main(int argc, char **argv)
                 std::cerr << "Unsupported data type. Use float or int8 or uint8" << std::endl;
                 return -1;
             }
-        }
+        }*/
     }
     catch (const std::exception &e)
     {
