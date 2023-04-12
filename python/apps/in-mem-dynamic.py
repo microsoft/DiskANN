@@ -29,7 +29,7 @@ def insert_and_search(dtype_str, indexdata_file, querydata_file,
         raise ValueError("data_type must be float, int8 or uint8")
    
     for i in range(npts):
-        index.insert(data[i], i)
+        index.insert(data[i], i+1)
     ids, dists = index.batch_search(queries, K, Ls, num_threads)
 
     if gt_file != '':
