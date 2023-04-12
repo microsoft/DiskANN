@@ -6,6 +6,7 @@
 #include "timer.h"
 #include "pq_flash_index.h"
 #include "cosine_similarity.h"
+#include <limits>
 
 #ifdef _WINDOWS
 #include "windows_aligned_file_reader.h"
@@ -490,11 +491,9 @@ LabelT PQFlashIndex<T, LabelT>::get_converted_label(const std::string &filter_la
     {
         return _label_map[filter_label];
     }
-    std::stringstream stream;
-    stream << "Unable to find label in the Label Map";
-    diskann::cerr << stream.str() << std::endl;
-    throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
-    exit(-1);
+    
+    // invalid label
+    return std::numeric_limits<LabelT>::max();
 }
 
 template <typename T, typename LabelT>

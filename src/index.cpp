@@ -19,6 +19,7 @@
 #include <xmmintrin.h>
 #endif
 #include "index.h"
+#include <limits>
 
 #define MAX_POINTS_FOR_USING_BITSET 10000000
 
@@ -1868,11 +1869,9 @@ LabelT Index<T, TagT, LabelT>::get_converted_label(const std::string &raw_label)
     {
         return _label_map[raw_label];
     }
-    std::stringstream stream;
-    stream << "Unable to find label in the Label Map";
-    diskann::cerr << stream.str() << std::endl;
-    throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
-    exit(-1);
+
+    // invalid label
+    return std::numeric_limits<LabelT>::max();
 }
 
 template <typename T, typename TagT, typename LabelT>
