@@ -38,5 +38,5 @@ def calculate_recall(
     return found / (result_set_indices.shape[0] * recall_at)
 
 def calculate_recall_from_gt_file(K, ids, gt_file) -> float:
-    gt_ids, gt_dists = utils.read_gt_file(gt_file)
-    return utils.calculate_recall(ids, gt_ids, K)
+    gt_ids, gt_dists = read_gt_file(gt_file)
+    return calculate_recall(ids, gt_ids, K)

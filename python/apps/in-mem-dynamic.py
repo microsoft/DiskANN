@@ -14,7 +14,7 @@ def insert_and_search(dtype_str, indexdata_file, querydata_file,
     npts, ndims = utils.get_bin_metadata(indexdata_file)
 
     if dtype_str == "float":
-        index = diskannpy.DynamicMemoryIndex("l2", np.float32, ndims, npts, Lb, graph_degree)
+        index = diskannpy.DynamicMemoryIndex("l2", np.float32, ndims, npts, Lb, graph_degree, False)
         queries = utils.bin_to_numpy(np.float32, querydata_file)
         data = utils.bin_to_numpy(np.float32, indexdata_file)
     elif dtype_str == "int8":
@@ -30,10 +30,11 @@ def insert_and_search(dtype_str, indexdata_file, querydata_file,
    
     for i in range(npts):
         index.insert(data[i], i+1)
-    ids, dists = index.batch_search(queries, K, Ls, num_threads)
+    tags, dists = index.batch_search(queries, K, Ls, num_threads)
+    res_ids = tags - 1
 
     if gt_file != '':
-        recall = utils.calculate_recall_from_gt_file(K, ids, gt_file)
+        recall = utils.calculate_recall_from_gt_file(K, res_ids, gt_file)
         print(f'recall@{K} is {recall}')
 
 if __name__ == '__main__':
