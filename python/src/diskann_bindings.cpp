@@ -170,7 +170,6 @@ template <class T> struct DynamicInMemIndex
                            .with_num_frozen_points(num_frozen_points)
                            .build())
     {
-
         _index = new Index<T>(m, dim, max_points,
                               true,                     // dynamic_index
                               write_params,             // used for insert
@@ -402,7 +401,9 @@ PYBIND11_MODULE(_diskannpy, m)
                          const bool concurrent_consolidate = true) {
             return std::unique_ptr<DynamicInMemIndex<float>>(new DynamicInMemIndex<float>(
                 metric, dim, max_points, l_build, build_max_degree, saturate_graph, max_occlusion_size, alpha,
-                num_threads, filter_list_size, num_frozen_points, initial_search_list_size, search_threads,
+                num_threads, filter_list_size, num_frozen_points,
+                initial_search_list_size == 0 ? l_build : initial_search_list_size,
+                search_threads == 0 ? omp_get_num_threads() : search_threads,
                 concurrent_consolidate));
         }))
         .def("search", &DynamicInMemIndex<float>::search, py::arg("query"), py::arg("knn"), py::arg("l_search"))
@@ -426,7 +427,8 @@ PYBIND11_MODULE(_diskannpy, m)
                          const bool concurrent_consolidate = true) {
             return std::unique_ptr<DynamicInMemIndex<int8_t>>(new DynamicInMemIndex<int8_t>(
                 metric, dim, max_points, l_build, build_max_degree, saturate_graph, max_occlusion_size, alpha,
-                num_threads, filter_list_size, num_frozen_points, initial_search_list_size, search_threads,
+                num_threads, filter_list_size, num_frozen_points, initial_search_list_size == 0 ? l_build : initial_search_list_size,
+                search_threads == 0 ? omp_get_num_threads() : search_threads,
                 concurrent_consolidate));
         }))
         .def("search", &DynamicInMemIndex<int8_t>::search, py::arg("query"), py::arg("knn"), py::arg("l_search"))
@@ -450,7 +452,9 @@ PYBIND11_MODULE(_diskannpy, m)
                          const bool concurrent_consolidate = true) {
             return std::unique_ptr<DynamicInMemIndex<uint8_t>>(new DynamicInMemIndex<uint8_t>(
                 metric, dim, max_points, l_build, build_max_degree, saturate_graph, max_occlusion_size, alpha,
-                num_threads, filter_list_size, num_frozen_points, initial_search_list_size, search_threads,
+                num_threads, filter_list_size, num_frozen_points,
+                initial_search_list_size == 0 ? l_build : initial_search_list_size,
+                search_threads == 0 ? omp_get_num_threads() : search_threads,
                 concurrent_consolidate));
         }))
         .def("search", &DynamicInMemIndex<uint8_t>::search, py::arg("query"), py::arg("knn"), py::arg("l_search"))
