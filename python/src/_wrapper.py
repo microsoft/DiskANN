@@ -584,7 +584,7 @@ class StaticMemoryIndex:
             contains the distances, of the same form: row index will match query index, column index refers to
             1..k_neighbors distance. These are aligned arrays.
         """
-        _assert(len(queries.shape) != 2, "queries must must be 2-d np array")
+        _assert(len(queries.shape) == 2, "queries must must be 2-d np array")
         _assert(
             queries.dtype == self._vector_dtype,
             f"StaticMemoryIndex was built expecting a dtype of {self._vector_dtype}, but the query vectors are of dtype "
@@ -789,7 +789,7 @@ class DynamicMemoryIndex:
             contains the distances, of the same form: row index will match query index, column index refers to
             1..k_neighbors distance. These are aligned arrays.
         """
-        _assert(len(queries.shape) != 2, "queries must must be 2-d np array")
+        _assert(len(queries.shape) == 2, "queries must must be 2-d np array")
         _assert(
             queries.dtype == self._vector_dtype,
             f"StaticMemoryIndex was built expecting a dtype of {self._vector_dtype}, but the query vectors are of dtype "
