@@ -26,21 +26,19 @@ template <typename data_t> class AbstractDataStore
     // can discard the empty locations before saving.
     virtual size_t save(const std::string &filename, const location_t num_pts) = 0;
 
-    virtual location_t capacity() const
-    {
+    virtual location_t capacity() const{
         return _capacity;
     }
 
-    virtual size_t get_dims() const
-    {
+    virtual size_t get_dims() const {
         return _dim;
     }
 
-    // by default, aligned dim = dim, some stores can align the data differently, so we may have different values
-    virtual size_t get_aligned_dim() const
-    {
-        return _dim;
-    }
+    // Implementers can choose to return _dim if they are not 
+    // concerned about memory alignment.
+    // Returns _dim aligned to a 8-byte value. Used for allocating
+    // aligned memory for efficiency/simplicity of code.
+    virtual size_t get_aligned_dim() const = 0;
 
     // populate the store with vectors (either from a pointer or bin file),
     // potentially after normalizing the vectors if the metric deems so
@@ -50,19 +48,22 @@ template <typename data_t> class AbstractDataStore
     // reverse of populate, save the first num_pts many points back to bin file
     virtual void save_data_to_bin(const std::string &filename, const location_t num_pts) = 0;
 
-    virtual void resize(const location_t num_points)
+    //Returns the updated capacity of the datastore. Clients should check
+    //if resize actually changed the capacity to new_num_points before
+    //proceeding with operations. See the code below:
+    // auto new_capcity = data_store->resize(new_num_points);
+    // if ( new_capacity >= new_num_points) {
+    //  //PROCEED
+    // else 
+    //   //ERROR.
+    virtual location_t resize(const location_t new_num_points)
     {
-        if (num_points > _capacity)
-        {
-            expand(num_points);
-        }
-        else if (num_points < _capacity)
-        {
-            shrink(num_points);
-        }
-        else
-        {
-            // ignore.
+        if (new_num_points > _capacity) {
+            return expand(new_num_points);
+        } else if (new_num_points < _capacity) {
+            return shrink(new_num_points);
+        } else {
+            return _capacity;
         }
     }
 
@@ -88,10 +89,15 @@ template <typename data_t> class AbstractDataStore
     virtual location_t calculate_medoid() const = 0;
 
   protected:
-    // Expand the datastore to new_num_points.
-    virtual void expand(const location_t new_num_points) = 0;
-    // Shrink the datastore to new_num_points. This function should be called after compaction to free unused memory.
-    virtual void shrink(const location_t new_num_points) = 0;
+    // Expand the datastore to new_num_points. Returns the new capacity created, which should be == new_num_points
+    // in the normal case. Implementers can also return _capacity to indicate that there are not implementing this
+    // method. 
+    virtual location_t expand(const location_t new_num_points) = 0;
+
+    // Shrink the datastore to new_num_points. It is NOT an error if shrink doesn't reduce the capacity
+    // so callers need to check this correctly. See also for "default" implementation
+    virtual location_t shrink(const location_t new_num_points) = 0;
+
 
     location_t _capacity;
     size_t _dim;

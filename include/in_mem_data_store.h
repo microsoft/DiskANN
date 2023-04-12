@@ -55,8 +55,8 @@ template <typename data_t> class InMemDataStore : public AbstractDataStore<data_
     virtual Distance<data_t> * get_dist_fn();
 
   protected:
-    virtual void expand(const location_t new_size) override;
-    virtual void shrink(const location_t new_size) override;
+    virtual location_t expand(const location_t new_size) override;
+    virtual location_t shrink(const location_t new_size) override;
 
     virtual location_t load_impl(const std::string &filename);
 #ifdef EXEC_ENV_OLS

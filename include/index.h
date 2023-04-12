@@ -315,7 +315,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     std::shared_ptr<Distance<T>> _distance;
 
     // Data
-    std::shared_ptr<InMemDataStore<T>> _data_store;
+    std::unique_ptr<InMemDataStore<T>> _data_store;
     char *_opt_graph = nullptr;
 
     // Graph related data structures

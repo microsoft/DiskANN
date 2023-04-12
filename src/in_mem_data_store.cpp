@@ -185,11 +185,11 @@ float InMemDataStore<data_t>::get_distance(const location_t loc1, const location
     return _distance_fn->compare(_data + loc1 * _aligned_dim, _data + loc2 * _aligned_dim, this->_aligned_dim);
 }
 
-template <typename data_t> void InMemDataStore<data_t>::expand(const location_t new_size)
+template <typename data_t> location_t InMemDataStore<data_t>::expand(const location_t new_size)
 {
     if (new_size == this->capacity())
     {
-        return;
+        return this->capacity();
     }
     else if (new_size < this->capacity())
     {
@@ -208,13 +208,14 @@ template <typename data_t> void InMemDataStore<data_t>::expand(const location_t 
     realloc_aligned((void **)&_data, new_size * _aligned_dim * sizeof(data_t), 8 * sizeof(data_t));
 #endif
     this->_capacity = new_size;
+    return this->_capacity;
 }
 
-template <typename data_t> void InMemDataStore<data_t>::shrink(const location_t new_size)
+template <typename data_t> location_t InMemDataStore<data_t>::shrink(const location_t new_size)
 {
     if (new_size == this->capacity())
     {
-        return;
+        return this->capacity();
     }
     else if (new_size > this->capacity())
     {
@@ -232,6 +233,8 @@ template <typename data_t> void InMemDataStore<data_t>::shrink(const location_t 
 #else
     realloc_aligned((void **)&_data, new_size * _aligned_dim * sizeof(data_t), 8 * sizeof(data_t));
 #endif
+    this->_capacity = new_size;
+    return this->_capacity;
 }
 
 template <typename data_t>
@@ -253,8 +256,6 @@ void InMemDataStore<data_t>::reposition_points(const location_t old_location_sta
     uint32_t mem_clear_loc_start = old_location_start;
     uint32_t mem_clear_loc_end_limit = old_location_start + num_locations;
 
-    // Move the adjacency lists. Make sure that overlapping ranges are handled
-    // correctly.
     if (new_location_start < old_location_start)
     {
         // If ranges are overlapping, make sure not to clear the newly copied
