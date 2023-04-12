@@ -186,6 +186,7 @@ def build_disk_index_from_vector_file(
     _assert(build_memory_maximum > 0, "build_memory_maximum must be larger than 0")
     _assert_is_nonnegative_uint32(num_threads, "num_threads")
     _assert_is_nonnegative_uint32(pq_disk_bytes, "pq_disk_bytes")
+    _assert(index_prefix != "", "index_prefix cannot be an empty string")
 
     index = _DTYPE_TO_NATIVE_INDEX[vector_dtype](dap_metric)
     index.build(
@@ -288,7 +289,8 @@ def build_memory_index_from_vector_file(
         use_opq: bool,
         label_file: str = "",
         universal_label: str = "",
-        filter_complexity: int = 0
+        filter_complexity: int = 0,
+        index_prefix: str = "ann",
 ):
     dap_metric = _get_valid_metric(metric)
     _assert(
@@ -300,16 +302,18 @@ def build_memory_index_from_vector_file(
     _assert_is_nonnegative_uint32(num_threads, "num_threads")
     _assert_is_nonnegative_uint32(num_pq_bytes, "num_pq_bytes")
     _assert_is_nonnegative_uint32(filter_complexity, "filter_complexity")
+    _assert(index_prefix != "", "index_prefix cannot be an empty string")
     if vector_dtype is np.single:
         _builder = _native_dap.build_in_memory_float_index
     elif vector_dtype is np.ubyte:
         _builder = _native_dap.build_in_memory_uint8_index
     else:
         _builder = _native_dap.build_in_memory_int8_index
+
     _builder(
         metric=dap_metric,
         data_file_path=vector_bin_file,
-        index_output_path=index_path,
+        index_output_path=os.path.join(index_path, index_prefix),
         graph_degree=graph_degree,
         complexity=complexity,
         alpha=alpha,
@@ -702,20 +706,20 @@ class DynamicMemoryIndex:
         self._dims = dims
 
         self._index = _DTYPE_TO_NATIVE_INMEM_DYNAMIC_INDEX[vector_dtype](
-            metric=dap_metric,
-            dim=dims,
-            max_points=max_points,
-            l_build=list_size,
-            build_max_degree=max_degree,
-            saturate_graph=saturate_graph,
-            max_occlusion_size=max_occlusion_size,
-            alpha=alpha,
-            num_threads=num_threads,
-            filter_list_size=filter_list_size,
-            num_frozen_points=num_frozen_points,
-            initial_search_list_size=initial_search_list_size,
-            search_threads=initial_search_threads,
-            concurrent_consolidate=concurrent_consolidation,
+            dap_metric,
+            dims,
+            max_points,
+            list_size,
+            max_degree,
+            saturate_graph,
+            max_occlusion_size,
+            alpha,
+            num_threads,
+            filter_list_size,
+            num_frozen_points,
+            initial_search_list_size,
+            initial_search_threads,
+
         )
 
         if index_path is not None:
