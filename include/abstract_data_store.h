@@ -4,6 +4,7 @@
 #pragma once
 
 #include <vector>
+#include <string>
 
 #include "types.h"
 
@@ -13,9 +14,7 @@ namespace diskann
 template <typename data_t> class AbstractDataStore
 {
   public:
-    AbstractDataStore(const location_t capacity, const size_t dim) : _capacity(capacity), _dim(dim)
-    {
-    }
+    AbstractDataStore(const location_t capacity, const size_t dim);
 
     // Return number of points returned
     virtual location_t load(const std::string &filename) = 0;
@@ -26,13 +25,9 @@ template <typename data_t> class AbstractDataStore
     // can discard the empty locations before saving.
     virtual size_t save(const std::string &filename, const location_t num_pts) = 0;
 
-    virtual location_t capacity() const{
-        return _capacity;
-    }
+    virtual location_t capacity() const;
 
-    virtual size_t get_dims() const {
-        return _dim;
-    }
+    virtual size_t get_dims() const;
 
     // Implementers can choose to return _dim if they are not 
     // concerned about memory alignment.
@@ -56,16 +51,7 @@ template <typename data_t> class AbstractDataStore
     //  //PROCEED
     // else 
     //   //ERROR.
-    virtual location_t resize(const location_t new_num_points)
-    {
-        if (new_num_points > _capacity) {
-            return expand(new_num_points);
-        } else if (new_num_points < _capacity) {
-            return shrink(new_num_points);
-        } else {
-            return _capacity;
-        }
-    }
+    virtual location_t resize(const location_t new_num_points);
 
     // operations on vectors
     virtual void get_vector(const location_t i, data_t *dest) const = 0;
