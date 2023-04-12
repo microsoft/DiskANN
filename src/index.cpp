@@ -30,9 +30,9 @@ template <typename T, typename TagT, typename LabelT>
 Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_points, const bool dynamic_index,
                               const IndexWriteParameters &indexParams, const uint32_t initial_search_list_size,
                               const uint32_t search_threads, const bool enable_tags, const bool concurrent_consolidate,
-                              const bool pq_dist_build, const size_t num_pq_chunks, const bool use_opq)
+                              const bool pq_dist_build, const size_t num_pq_chunks, const bool use_opq, LoadStoreStratagy load_store_stratagy)
     : Index(m, dim, max_points, dynamic_index, enable_tags, concurrent_consolidate, pq_dist_build, num_pq_chunks,
-            use_opq, indexParams.num_frozen_points)
+            use_opq, indexParams.num_frozen_points, load_store_stratagy)
 {
     _indexingQueueSize = indexParams.search_list_size;
     _indexingRange = indexParams.max_degree;
@@ -50,7 +50,7 @@ Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_point
 template <typename T, typename TagT, typename LabelT>
 Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_points, const bool dynamic_index,
                               const bool enable_tags, const bool concurrent_consolidate, const bool pq_dist_build,
-                              const size_t num_pq_chunks, const bool use_opq, const size_t num_frozen_pts)
+                              const size_t num_pq_chunks, const bool use_opq, const size_t num_frozen_pts, LoadStoreStratagy load_store_stratagy)
     : _dist_metric(m), _dim(dim), _num_frozen_pts(num_frozen_pts), _max_points(max_points),
       _dynamic_index(dynamic_index), _enable_tags(enable_tags), _indexingMaxC(DEFAULT_MAXC), _query_scratch(nullptr),
       _conc_consolidate(concurrent_consolidate), _delete_set(new tsl::robin_set<uint32_t>), _pq_dist(pq_dist_build),
@@ -113,7 +113,7 @@ Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_point
         this->_distance.reset((Distance<T> *)get_distance_function<T>(m));
     }
     // REFACTOR: TODO This should move to a factory method.
-
+    // use load_store_stratagy arg to construct this from a factory class.
     _data_store =
         std::make_shared<diskann::InMemDataStore<T>>((location_t)total_internal_points, _dim, this->_distance);
 

@@ -8,6 +8,7 @@ namespace diskann
 template <typename T, typename TagT, typename LabelT>
 MemoryIndex<T, TagT, LabelT>::MemoryIndex(IndexConfig &config) : _config(config)
 {
+    //TODO: validate config
 }
 
 /*Initialize Index class with provided Dimenrion and max points*/

@@ -391,59 +391,6 @@ int main(int argc, char **argv)
         auto index = index_factory.instance();
         index->search_prebuilt_index(index_path_prefix, query_file, search_params, query_filters, "");
         return 0;
-
-        /*if (!query_filters.empty() && label_type == "ushort")
-        {
-            if (data_type == std::string("int8"))
-            {
-                return search_memory_index<int8_t, uint16_t>(
-                    metric, index_path_prefix, result_path, query_file, gt_file, num_threads, K, print_all_recalls,
-                    Lvec, dynamic, tags, show_qps_per_thread, query_filters, fail_if_recall_below);
-            }
-            else if (data_type == std::string("uint8"))
-            {
-                return search_memory_index<uint8_t, uint16_t>(
-                    metric, index_path_prefix, result_path, query_file, gt_file, num_threads, K, print_all_recalls,
-                    Lvec, dynamic, tags, show_qps_per_thread, query_filters, fail_if_recall_below);
-            }
-            else if (data_type == std::string("float"))
-            {
-                return search_memory_index<float, uint16_t>(metric, index_path_prefix, result_path, query_file, gt_file,
-                                                            num_threads, K, print_all_recalls, Lvec, dynamic, tags,
-                                                            show_qps_per_thread, query_filters, fail_if_recall_below);
-            }
-            else
-            {
-                std::cout << "Unsupported type. Use float/int8/uint8" << std::endl;
-                return -1;
-            }
-        }
-        else
-        {
-            if (data_type == std::string("int8"))
-            {
-                return search_memory_index<int8_t>(metric, index_path_prefix, result_path, query_file, gt_file,
-                                                   num_threads, K, print_all_recalls, Lvec, dynamic, tags,
-                                                   show_qps_per_thread, query_filters, fail_if_recall_below);
-            }
-            else if (data_type == std::string("uint8"))
-            {
-                return search_memory_index<uint8_t>(metric, index_path_prefix, result_path, query_file, gt_file,
-                                                    num_threads, K, print_all_recalls, Lvec, dynamic, tags,
-                                                    show_qps_per_thread, query_filters, fail_if_recall_below);
-            }
-            else if (data_type == std::string("float"))
-            {
-                return search_memory_index<float>(metric, index_path_prefix, result_path, query_file, gt_file,
-                                                  num_threads, K, print_all_recalls, Lvec, dynamic, tags,
-                                                  show_qps_per_thread, query_filters, fail_if_recall_below);
-            }
-            else
-            {
-                std::cout << "Unsupported type. Use float/int8/uint8" << std::endl;
-                return -1;
-            }
-        }*/
     }
     catch (std::exception &e)
     {

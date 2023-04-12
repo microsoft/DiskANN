@@ -163,6 +163,7 @@ int main(int argc, char **argv)
         config.build_type = diskann::MEMORY;
         config.data_type = data_type;
         config.label_type = label_type;
+        config.load_store_stratagy = diskann::DataStore;
 
         // Build params for speific build from instance
         diskann::IndexWriteParameters paras = diskann::IndexWriteParametersBuilder(L, R)
@@ -181,45 +182,6 @@ int main(int argc, char **argv)
         auto index = index_factory.instance();
         index->build(data_path, build_params, index_path_prefix);
         return 0;
-
-        /* if (label_file != "" && label_type == "ushort")
-         {
-             if (data_type == std::string("int8"))
-                 return build_in_memory_index<int8_t, uint32_t, uint16_t>(
-                     metric, data_path, R, L, alpha, index_path_prefix, num_threads, use_pq_build, build_PQ_bytes,
-                     use_opq, label_file, universal_label, Lf);
-             else if (data_type == std::string("uint8"))
-                 return build_in_memory_index<uint8_t, uint32_t, uint16_t>(
-                     metric, data_path, R, L, alpha, index_path_prefix, num_threads, use_pq_build, build_PQ_bytes,
-                     use_opq, label_file, universal_label, Lf);
-             else if (data_type == std::string("float"))
-                 return build_in_memory_index<float, uint32_t, uint16_t>(
-                     metric, data_path, R, L, alpha, index_path_prefix, num_threads, use_pq_build, build_PQ_bytes,
-                     use_opq, label_file, universal_label, Lf);
-             else
-             {
-                 std::cout << "Unsupported type. Use one of int8, uint8 or float." << std::endl;
-                 return -1;
-             }
-         }
-         else
-         {
-             if (data_type == std::string("int8"))
-                 return build_in_memory_index<int8_t>(metric, data_path, R, L, alpha, index_path_prefix, num_threads,
-                                                      use_pq_build, build_PQ_bytes, use_opq, label_file,
-         universal_label, Lf); else if (data_type == std::string("uint8")) return build_in_memory_index<uint8_t>(metric,
-         data_path, R, L, alpha, index_path_prefix, num_threads, use_pq_build, build_PQ_bytes, use_opq, label_file,
-                                                       universal_label, Lf);
-             else if (data_type == std::string("float"))
-                 return build_in_memory_index<float>(metric, data_path, R, L, alpha, index_path_prefix, num_threads,
-                                                     use_pq_build, build_PQ_bytes, use_opq, label_file, universal_label,
-                                                     Lf);
-             else
-             {
-                 std::cout << "Unsupported type. Use one of int8, uint8 or float." << std::endl;
-                 return -1;
-             }
-         }*/
     }
     catch (const std::exception &e)
     {

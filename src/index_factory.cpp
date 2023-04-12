@@ -64,8 +64,6 @@ std::shared_ptr<AbstractIndex> IndexFactory::instance()
             throw new ANNException("Data type of : " + _config.data_type + " is not supported.", -1, __FUNCSIG__,
                                    __FILE__, __LINE__);
         break;
-    case SSD:
-        break;
     default:
         // throw diskann::ANNException("Load Store Stratagy not supported");
         break;

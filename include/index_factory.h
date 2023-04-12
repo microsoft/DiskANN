@@ -16,12 +16,6 @@ enum BuildType
     DISK
 };
 
-enum LoadStoreStratagy
-{
-    GraphStore,
-    DataStore
-};
-
 struct IndexConfig
 {
     BuildType build_type;
