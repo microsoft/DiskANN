@@ -82,14 +82,16 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     DISKANN_DLLEXPORT Index(Metric m, const size_t dim, const size_t max_points = 1, const bool dynamic_index = false,
                             const bool enable_tags = false, const bool concurrent_consolidate = false,
                             const bool pq_dist_build = false, const size_t num_pq_chunks = 0,
-                            const bool use_opq = false, const size_t num_frozen_pts = 0, LoadStoreStratagy load_store_stratagy=DataStore);
+                            const bool use_opq = false, const size_t num_frozen_pts = 0,
+                            LoadStoreStratagy load_store_stratagy = DataStore);
 
     // Constructor for incremental index
     DISKANN_DLLEXPORT Index(Metric m, const size_t dim, const size_t max_points, const bool dynamic_index,
                             const IndexWriteParameters &indexParameters, const uint32_t initial_search_list_size,
                             const uint32_t search_threads, const bool enable_tags = false,
                             const bool concurrent_consolidate = false, const bool pq_dist_build = false,
-                            const size_t num_pq_chunks = 0, const bool use_opq = false, LoadStoreStratagy load_store_stratagy=DataStore);
+                            const size_t num_pq_chunks = 0, const bool use_opq = false,
+                            LoadStoreStratagy load_store_stratagy = DataStore);
 
     DISKANN_DLLEXPORT ~Index();
 
@@ -332,7 +334,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     size_t _nd = 0;         // number of active points i.e. existing in the graph
     size_t _max_points = 0; // total number of points in given data set
 
-    // _num_frozen_pts is the number of points which are used as initial candidates 
+    // _num_frozen_pts is the number of points which are used as initial candidates
     // when iterating to closest point(s). These are not visible externally and won't
     // be returned by search. At least 1 frozen point is needed for a dynamic index.
     // The frozen points have consecutive locations. See also _start below.
