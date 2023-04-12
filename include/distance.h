@@ -32,7 +32,6 @@ template <typename T> class Distance
     DISKANN_DLLEXPORT virtual uint32_t post_normalization_dimension(uint32_t orig_dimension) const;
 
     DISKANN_DLLEXPORT virtual diskann::Metric get_metric() const;
-  
 
     // This is for efficiency. If no normalization is required, the callers
     // can simply ignore the normalize_data_for_build() function.
@@ -49,13 +48,13 @@ template <typename T> class Distance
     //  TODO: This does not take into account the case for SSD inner product
     //  where the dimensions change after normalization.
     DISKANN_DLLEXPORT virtual void normalize_data_for_build(T *original_data, const uint32_t orig_dim,
-                                                           const uint32_t num_points);
+                                                            const uint32_t num_points);
 
     // Invokes normalization for a single vector during search. The scratch space
     // has to be created by the caller keeping track of the fact that normalization
     // might change the dimension of the query vector.
     DISKANN_DLLEXPORT virtual void normalize_vector_for_search(const T *query_vec, const uint32_t query_dim,
-                                                              T *scratch_query);
+                                                               T *scratch_query);
 
     // Providing a default implementation for the virtual destructor because we don't
     // expect most metric implementations to need it.
@@ -125,8 +124,7 @@ class AVXDistanceL2Float : public Distance<float>
     DISKANN_DLLEXPORT virtual float compare(const float *a, const float *b, uint32_t length) const;
 };
 
-template<typename T>
-class SlowDistanceL2 : public Distance<T>
+template <typename T> class SlowDistanceL2 : public Distance<T>
 {
   public:
     SlowDistanceL2() : Distance<T>(diskann::Metric::L2)

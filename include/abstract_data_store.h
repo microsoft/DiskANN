@@ -29,7 +29,7 @@ template <typename data_t> class AbstractDataStore
 
     virtual size_t get_dims() const;
 
-    // Implementers can choose to return _dim if they are not 
+    // Implementers can choose to return _dim if they are not
     // concerned about memory alignment.
     // Returns _dim aligned to a 8-byte value. Used for allocating
     // aligned memory for efficiency/simplicity of code.
@@ -43,14 +43,14 @@ template <typename data_t> class AbstractDataStore
     // reverse of populate, save the first num_pts many points back to bin file
     virtual void save_data_to_bin(const std::string &filename, const location_t num_pts) = 0;
 
-    //Returns the updated capacity of the datastore. Clients should check
-    //if resize actually changed the capacity to new_num_points before
-    //proceeding with operations. See the code below:
-    // auto new_capcity = data_store->resize(new_num_points);
-    // if ( new_capacity >= new_num_points) {
-    //  //PROCEED
-    // else 
-    //   //ERROR.
+    // Returns the updated capacity of the datastore. Clients should check
+    // if resize actually changed the capacity to new_num_points before
+    // proceeding with operations. See the code below:
+    //  auto new_capcity = data_store->resize(new_num_points);
+    //  if ( new_capacity >= new_num_points) {
+    //   //PROCEED
+    //  else
+    //    //ERROR.
     virtual location_t resize(const location_t new_num_points);
 
     // operations on vectors
@@ -77,13 +77,12 @@ template <typename data_t> class AbstractDataStore
   protected:
     // Expand the datastore to new_num_points. Returns the new capacity created, which should be == new_num_points
     // in the normal case. Implementers can also return _capacity to indicate that there are not implementing this
-    // method. 
+    // method.
     virtual location_t expand(const location_t new_num_points) = 0;
 
     // Shrink the datastore to new_num_points. It is NOT an error if shrink doesn't reduce the capacity
     // so callers need to check this correctly. See also for "default" implementation
     virtual location_t shrink(const location_t new_num_points) = 0;
-
 
     location_t _capacity;
     size_t _dim;

@@ -52,7 +52,7 @@ template <typename data_t> class InMemDataStore : public AbstractDataStore<data_
 
     virtual location_t calculate_medoid() const override;
 
-    virtual Distance<data_t> * get_dist_fn();
+    virtual Distance<data_t> *get_dist_fn();
 
   protected:
     virtual location_t expand(const location_t new_size) override;

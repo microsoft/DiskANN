@@ -326,7 +326,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     size_t _nd = 0;         // number of active points i.e. existing in the graph
     size_t _max_points = 0; // total number of points in given data set
 
-    // _num_frozen_pts is the number of points which are used as initial candidates 
+    // _num_frozen_pts is the number of points which are used as initial candidates
     // when iterating to closest point(s). These are not visible externally and won't
     // be returned by search. At least 1 frozen point is needed for a dynamic index.
     // The frozen points have consecutive locations. See also _start below.

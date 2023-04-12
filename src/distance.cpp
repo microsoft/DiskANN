@@ -61,7 +61,6 @@ template <typename T> Distance<T>::~Distance()
 {
 }
 
-
 //
 // Cosine distance functions.
 //
@@ -221,8 +220,7 @@ float DistanceL2Float::compare(const float *a, const float *b, uint32_t size) co
     return result;
 }
 
-template<typename T>
-float SlowDistanceL2<T>::compare(const T *a, const T *b, uint32_t length) const
+template <typename T> float SlowDistanceL2<T>::compare(const T *a, const T *b, uint32_t length) const
 {
     float result = 0.0f;
     for (uint32_t i = 0; i < length; i++)
@@ -597,9 +595,6 @@ void AVXNormalizedCosineDistanceFloat::normalize_and_copy(const float *query_vec
         query_target[i] = query_vec[i] / norm;
     }
 }
-
-
-
 
 // Get the right distance function for the given metric.
 template <> diskann::Distance<float> *get_distance_function(diskann::Metric m)
