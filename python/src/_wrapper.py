@@ -719,7 +719,7 @@ class DynamicMemoryIndex:
             num_frozen_points,
             initial_search_list_size,
             initial_search_threads,
-
+            concurrent_consolidation
         )
 
         if index_path is not None:
