@@ -53,7 +53,7 @@ int build_in_memory_index(const diskann::Metric &metric, const std::string &data
         if (universal_label != "")
         {
             LabelT unv_label_as_num = 0;
-            index.set_universal_label(unv_label_as_num);
+            index.set_universal_label();
         }
         index.build_filtered_index(data_path.c_str(), labels_file_to_use, data_num, paras);
     }

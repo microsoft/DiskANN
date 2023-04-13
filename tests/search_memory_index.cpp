@@ -28,7 +28,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
                         const std::string &query_file, const std::string &truthset_file, const unsigned num_threads,
                         const unsigned recall_at, const bool print_all_recalls, const std::vector<unsigned> &Lvec,
                         const bool dynamic, const bool tags, const bool show_qps_per_thread,
-                        const std::string &filter_label, const float fail_if_recall_below)
+                        const std::string &raw_label, const float fail_if_recall_below)
 {
     // Load the query file
     T *query = nullptr;
@@ -54,7 +54,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
     }
 
     bool filtered_search = false;
-    if (filter_label != "")
+    if (raw_label != "")
     {
         filtered_search = true;
     }
@@ -136,9 +136,8 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
         {
             auto qs = std::chrono::high_resolution_clock::now();
             if (filtered_search)
-            {
-                LabelT filter_label_as_num = index.get_converted_label(filter_label);
-                auto retval = index.search_with_filters(query + i * query_aligned_dim, filter_label_as_num, recall_at,
+            {                
+                auto retval = index.search_with_filters(query + i * query_aligned_dim, raw_label, recall_at,
                                                         L, query_result_ids[test_id].data() + i * recall_at,
                                                         query_result_dists[test_id].data() + i * recall_at);
                 cmp_stats[i] = retval.second;

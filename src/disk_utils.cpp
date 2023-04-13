@@ -651,7 +651,7 @@ int build_merged_vamana_index(std::string base_file, diskann::Metric compareMetr
             if (universal_label != "")
             { //  indicates no universal label
                 LabelT unv_label_as_num = 0;
-                _pvamanaIndex->set_universal_label(unv_label_as_num);
+                _pvamanaIndex->set_universal_label();
             }
             _pvamanaIndex->build_filtered_index(base_file.c_str(), label_file, base_num, paras);
         }
@@ -722,7 +722,7 @@ int build_merged_vamana_index(std::string base_file, diskann::Metric compareMetr
             if (universal_label != "")
             { //  indicates no universal label
                 LabelT unv_label_as_num = 0;
-                _pvamanaIndex->set_universal_label(unv_label_as_num);
+                _pvamanaIndex->set_universal_label();
             }
             _pvamanaIndex->build_filtered_index(shard_base_file.c_str(), shard_labels_file, shard_base_pts, paras);
         }

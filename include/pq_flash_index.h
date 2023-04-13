@@ -67,7 +67,7 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
 
     DISKANN_DLLEXPORT void cached_beam_search(const T *query, const _u64 k_search, const _u64 l_search, _u64 *res_ids,
                                               float *res_dists, const _u64 beam_width, const bool use_filter,
-                                              const LabelT &filter_label, const bool use_reorder_data = false,
+                                              const std::string &filter_label, const bool use_reorder_data = false,
                                               QueryStats *stats = nullptr);
 
     DISKANN_DLLEXPORT void cached_beam_search(const T *query, const _u64 k_search, const _u64 l_search, _u64 *res_ids,
@@ -76,7 +76,7 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
 
     DISKANN_DLLEXPORT void cached_beam_search(const T *query, const _u64 k_search, const _u64 l_search, _u64 *res_ids,
                                               float *res_dists, const _u64 beam_width, const bool use_filter,
-                                              const LabelT &filter_label, const _u32 io_limit,
+                                              const std::string &filter_label, const _u32 io_limit,
                                               const bool use_reorder_data = false, QueryStats *stats = nullptr);
 
     DISKANN_DLLEXPORT LabelT get_converted_label(const std::string &filter_label);
@@ -96,15 +96,14 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
     DISKANN_DLLEXPORT void use_medoids_data_as_centroids();
     DISKANN_DLLEXPORT void setup_thread_data(_u64 nthreads, _u64 visited_reserve = 4096);
 
-    DISKANN_DLLEXPORT void set_universal_label(const LabelT &label);
+    DISKANN_DLLEXPORT void set_universal_label();
 
   private:
-    DISKANN_DLLEXPORT inline bool point_has_label(_u32 point_id, _u32 label_id);
+    DISKANN_DLLEXPORT inline bool point_has_label(_u32 point_id, LabelT label_id);
     std::unordered_map<std::string, LabelT> load_label_map(const std::string &map_file);
     DISKANN_DLLEXPORT void parse_label_file(const std::string &map_file, size_t &num_pts_labels);
     DISKANN_DLLEXPORT void get_label_file_metadata(std::string map_file, _u32 &num_pts, _u32 &num_total_labels);
-    DISKANN_DLLEXPORT inline int32_t get_filter_number(const LabelT &filter_label);
-
+    
     // index info
     // nhood of node `i` is in sector: [i / nnodes_per_sector]
     // offset in sector: [(i % nnodes_per_sector) * max_node_len]
@@ -187,7 +186,7 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
     tsl::robin_set<LabelT> _labels;
     std::unordered_map<LabelT, _u32> _filter_to_medoid_id;
     bool _use_universal_label;
-    _u32 _universal_filter_num;
+    LabelT _universal_label = 0;
     std::vector<LabelT> _filter_list;
     tsl::robin_set<_u32> _dummy_pts;
     tsl::robin_set<_u32> _has_dummy_pts;

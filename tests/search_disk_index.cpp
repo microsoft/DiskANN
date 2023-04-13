@@ -220,16 +220,15 @@ int search_disk_index(diskann::Metric &metric, const std::string &index_path_pre
             if (!filtered_search)
             {
                 _pFlashIndex->cached_beam_search(query + (i * query_aligned_dim), recall_at, L,
-                                                 query_result_ids_64.data() + (i * recall_at),
-                                                 query_result_dists[test_id].data() + (i * recall_at),
-                                                 optimized_beamwidth, use_reorder_data, stats + i);
+                                                query_result_ids_64.data() + (i * recall_at),
+                                                query_result_dists[test_id].data() + (i * recall_at),
+                                                optimized_beamwidth, use_reorder_data, stats + i);
             }
             else
-            {
-                LabelT label_for_search = _pFlashIndex->get_converted_label(filter_label);
+            {                    
                 _pFlashIndex->cached_beam_search(
                     query + (i * query_aligned_dim), recall_at, L, query_result_ids_64.data() + (i * recall_at),
-                    query_result_dists[test_id].data() + (i * recall_at), optimized_beamwidth, true, label_for_search,
+                    query_result_dists[test_id].data() + (i * recall_at), optimized_beamwidth, true, filter_label,
                     use_reorder_data, stats + i);
             }
         }
