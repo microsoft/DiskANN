@@ -7,11 +7,13 @@
 #include <string>
 
 #include "types.h"
+#include "windows_customizations.h"
 
 namespace diskann
 {
 
-template <typename data_t> class AbstractDataStore
+template <typename data_t> 
+class AbstractDataStore
 {
   public:
     AbstractDataStore(const location_t capacity, const size_t dim);
@@ -25,9 +27,9 @@ template <typename data_t> class AbstractDataStore
     // can discard the empty locations before saving.
     virtual size_t save(const std::string &filename, const location_t num_pts) = 0;
 
-    virtual location_t capacity() const;
+    DISKANN_DLLEXPORT virtual location_t capacity() const;
 
-    virtual size_t get_dims() const;
+    DISKANN_DLLEXPORT virtual size_t get_dims() const;
 
     // Implementers can choose to return _dim if they are not
     // concerned about memory alignment.

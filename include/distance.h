@@ -24,7 +24,7 @@ template <typename T> class Distance
 
     // Needed only for COSINE-BYTE and INNER_PRODUCT-BYTE
     DISKANN_DLLEXPORT virtual float compare(const T *a, const T *b, const float normA, const float normB,
-                                            uint32_t length) const = 0;
+                                            uint32_t length) const;
 
     // For MIPS, normalization adds an extra dimension to the vectors.
     // This function lets callers know if the normalization process
