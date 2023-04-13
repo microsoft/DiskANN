@@ -21,14 +21,15 @@
 namespace po = boost::program_options;
 
 template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t>
-int build_in_memory_index(const diskann::Metric &metric, const std::string &data_path, const uint32_t R,
-                          const uint32_t L, const float alpha, const std::string &save_path, const uint32_t num_threads,
+int build_in_memory_index(const diskann::Metric &metric, const std::string &data_path, const std::string &query_path, const std::string &nnids_path,
+                          const uint32_t R, const uint32_t L, const float alpha, const float lambda, const std::string &save_path, const uint32_t num_threads,
                           const bool use_pq_build, const size_t num_pq_bytes, const bool use_opq,
                           const std::string &label_file, const std::string &universal_label, const uint32_t Lf)
 {
     diskann::IndexWriteParameters paras = diskann::IndexWriteParametersBuilder(L, R)
                                               .with_filter_list_size(Lf)
                                               .with_alpha(alpha)
+                                              .with_lambda(lambda)
                                               .with_saturate_graph(false)
                                               .with_num_threads(num_threads)
                                               .build();
@@ -43,7 +44,17 @@ int build_in_memory_index(const diskann::Metric &metric, const std::string &data
     auto s = std::chrono::high_resolution_clock::now();
     if (label_file == "")
     {
-        index.build(data_path.c_str(), data_num, paras);
+        if (query_path != std::string("null") && file_exists(query_path) &&
+            nnids_path != std::string("null") && file_exists(nnids_path)) {
+            size_t max_nq_per_node = 5;
+            size_t query_num, query_dim;
+            diskann::get_bin_metadata(query_path, query_num, query_dim);
+            query_num = std::min(query_num, data_num / 100);
+            index.build(data_path.c_str(), data_num, query_path.c_str(), query_num, nnids_path, max_nq_per_node, paras);
+        }
+        else {
+            index.build(data_path.c_str(), data_num, paras);
+        }
     }
     else
     {
@@ -66,9 +77,9 @@ int build_in_memory_index(const diskann::Metric &metric, const std::string &data
 
 int main(int argc, char **argv)
 {
-    std::string data_type, dist_fn, data_path, index_path_prefix, label_file, universal_label, label_type;
+    std::string data_type, dist_fn, data_path, query_path, nnids_path, index_path_prefix, label_file, universal_label, label_type;
     uint32_t num_threads, R, L, Lf, build_PQ_bytes;
-    float alpha;
+    float alpha, lambda;
     bool use_pq_build, use_opq;
 
     po::options_description desc{"Arguments"};
@@ -79,6 +90,10 @@ int main(int argc, char **argv)
         desc.add_options()("dist_fn", po::value<std::string>(&dist_fn)->required(), "distance function <l2/mips>");
         desc.add_options()("data_path", po::value<std::string>(&data_path)->required(),
                            "Input data file in bin format");
+        desc.add_options()("query_path", po::value<std::string>(&query_path)->default_value("null"),
+                           "Input query file in bin format");
+        desc.add_options()("nnid_path", po::value<std::string>(&nnids_path)->default_value("null"),
+                           "Input nnid file in bin format");
         desc.add_options()("index_path_prefix", po::value<std::string>(&index_path_prefix)->required(),
                            "Path prefix for saving index file components");
         desc.add_options()("max_degree,R", po::value<uint32_t>(&R)->default_value(64), "Maximum graph degree");
@@ -88,6 +103,9 @@ int main(int argc, char **argv)
                            "alpha controls density and diameter of graph, set "
                            "1 for sparse graph, "
                            "1.2 or 1.4 for denser graphs with lower diameter");
+        desc.add_options()("lambda", po::value<float>(&lambda)->default_value(0.75f),
+                           "lamda controls relative weights of distance components in the modified distance metric, "
+                           "0 for unmodified distance metric");
         desc.add_options()("num_threads,T", po::value<uint32_t>(&num_threads)->default_value(omp_get_num_procs()),
                            "Number of threads used for building index (defaults to "
                            "omp_get_num_procs())");
@@ -158,15 +176,18 @@ int main(int argc, char **argv)
         {
             if (data_type == std::string("int8"))
                 return build_in_memory_index<int8_t, uint32_t, uint16_t>(
-                    metric, data_path, R, L, alpha, index_path_prefix, num_threads, use_pq_build, build_PQ_bytes,
+                    metric, data_path, query_path, nnids_path, 
+                    R, L, alpha, lambda, index_path_prefix, num_threads, use_pq_build, build_PQ_bytes,
                     use_opq, label_file, universal_label, Lf);
             else if (data_type == std::string("uint8"))
                 return build_in_memory_index<uint8_t, uint32_t, uint16_t>(
-                    metric, data_path, R, L, alpha, index_path_prefix, num_threads, use_pq_build, build_PQ_bytes,
+                    metric, data_path, query_path, nnids_path,
+                    R, L, alpha, lambda, index_path_prefix, num_threads, use_pq_build, build_PQ_bytes,
                     use_opq, label_file, universal_label, Lf);
             else if (data_type == std::string("float"))
                 return build_in_memory_index<float, uint32_t, uint16_t>(
-                    metric, data_path, R, L, alpha, index_path_prefix, num_threads, use_pq_build, build_PQ_bytes,
+                    metric, data_path, query_path, nnids_path,
+                    R, L, alpha, lambda, index_path_prefix, num_threads, use_pq_build, build_PQ_bytes,
                     use_opq, label_file, universal_label, Lf);
             else
             {
@@ -177,15 +198,18 @@ int main(int argc, char **argv)
         else
         {
             if (data_type == std::string("int8"))
-                return build_in_memory_index<int8_t>(metric, data_path, R, L, alpha, index_path_prefix, num_threads,
+                return build_in_memory_index<int8_t>(metric, data_path, query_path, nnids_path,
+                                                     R, L, alpha, lambda, index_path_prefix, num_threads,
                                                      use_pq_build, build_PQ_bytes, use_opq, label_file, universal_label,
                                                      Lf);
             else if (data_type == std::string("uint8"))
-                return build_in_memory_index<uint8_t>(metric, data_path, R, L, alpha, index_path_prefix, num_threads,
+                return build_in_memory_index<uint8_t>(metric, data_path, query_path, nnids_path, 
+                                                      R, L, alpha, lambda, index_path_prefix, num_threads,
                                                       use_pq_build, build_PQ_bytes, use_opq, label_file,
                                                       universal_label, Lf);
             else if (data_type == std::string("float"))
-                return build_in_memory_index<float>(metric, data_path, R, L, alpha, index_path_prefix, num_threads,
+                return build_in_memory_index<float>(metric, data_path, query_path, nnids_path, 
+                                                    R, L, alpha, lambda, index_path_prefix, num_threads,
                                                     use_pq_build, build_PQ_bytes, use_opq, label_file, universal_label,
                                                     Lf);
             else

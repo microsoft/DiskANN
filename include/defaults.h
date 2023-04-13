@@ -9,6 +9,7 @@ namespace diskann
 namespace defaults
 {
 const float ALPHA = 1.2f;
+const float LAMBDA = 0.75f;
 const uint32_t NUM_THREADS = 0;
 const uint32_t NUM_ROUNDS = 2;
 const uint32_t MAX_OCCLUSION_SIZE = 750;

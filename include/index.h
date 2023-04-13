@@ -107,8 +107,18 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     DISKANN_DLLEXPORT void build(const char *filename, const size_t num_points_to_load,
                                  IndexWriteParameters &parameters, const std::vector<TagT> &tags = std::vector<TagT>());
 
+    DISKANN_DLLEXPORT void build(const char *filename, const size_t num_points_to_load,
+                                 const char *query_filename, const size_t num_query,
+                                 const std::string  &nnids_filename, const size_t max_num_query_per_base,
+                                 IndexWriteParameters &parameters, const std::vector<TagT> &tags = std::vector<TagT>());
+
     // Batch build from a file. Optionally pass tags file.
     DISKANN_DLLEXPORT void build(const char *filename, const size_t num_points_to_load,
+                                 IndexWriteParameters &parameters, const char *tag_filename);
+
+    DISKANN_DLLEXPORT void build(const char *filename, const size_t num_points_to_load,
+                                 const char *query_filename, const size_t num_query,
+                                 const std::string  &nnids_filename, const size_t max_num_query_per_base,
                                  IndexWriteParameters &parameters, const char *tag_filename);
 
     // Batch build from a data array, which must pad vectors to aligned_dim
@@ -223,22 +233,30 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     // determines navigating node of the graph by calculating medoid of datafopt
     uint32_t calculate_entry_point();
 
-    void parse_label_file(const std::string &label_file, size_t &num_pts_labels);
-
-    std::unordered_map<std::string, LabelT> load_label_map(const std::string &map_file);
+    float compute_distance(const T* x, const T* y,
+                        const unsigned* qids, const size_t num_query);
 
     // Returns the locations of start point and frozen points suitable for use
     // with iterate_to_fixed_point.
     std::vector<uint32_t> get_init_ids();
 
-    std::pair<uint32_t, uint32_t> iterate_to_fixed_point(const T *node_coords, const uint32_t Lindex,
-                                                         const std::vector<uint32_t> &init_ids,
-                                                         InMemQueryScratch<T> *scratch, bool use_filter,
-                                                         const std::vector<LabelT> &filters, bool search_invocation);
+    std::pair<uint32_t, uint32_t> iterate_to_fixed_point(const T *node_coords, const unsigned Lindex,
+                                                        const std::vector<unsigned> &init_ids, InMemQueryScratch<T> *scratch,
+                                                        bool use_filter, const std::vector<LabelT> &filters, bool search_invocation,
+                                                        const unsigned *qids = nullptr, const size_t num_query = 0);
+
+    void parse_label_file(const std::string &label_file, size_t &num_pts_labels);
+
+    std::unordered_map<std::string, LabelT> load_label_map(const std::string &map_file);
 
     void search_for_point_and_prune(int location, uint32_t Lindex, std::vector<uint32_t> &pruned_list,
                                     InMemQueryScratch<T> *scratch, bool use_filter = false,
                                     uint32_t filteredLindex = 0);
+
+    void search_for_point_and_prune(int location, uint32_t Lindex, std::vector<uint32_t> &pruned_list,
+                                    InMemQueryScratch<T> *scratch,
+                                    const unsigned* qids, const size_t num_query, 
+                                    bool use_filter = false, uint32_t filteredLindex = 0);
 
     void prune_neighbors(const uint32_t location, std::vector<Neighbor> &pool, std::vector<uint32_t> &pruned_list,
                          InMemQueryScratch<T> *scratch);
@@ -317,6 +335,10 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     T *_data = nullptr;
     char *_opt_graph = nullptr;
 
+    // Query data
+    T    *_query_data = nullptr;   
+    std::vector<std::vector<unsigned>> _qids;
+
     // Graph related data structures
     std::vector<std::vector<uint32_t>> _final_graph;
 
@@ -334,6 +356,8 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     size_t _node_size;
     size_t _data_len;
     size_t _neighbor_len;
+    size_t _nq = 0;
+    size_t _max_nq_per_node = 0;
 
     uint32_t _max_observed_degree = 0;
     // Start point of the search. When _num_frozen_pts is greater than zero,
@@ -366,6 +390,9 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     uint32_t _indexingRange;
     uint32_t _indexingMaxC;
     float _indexingAlpha;
+
+    // query-based building params
+    float _indexingLambda = 0.75;
 
     // Query scratch data structures
     ConcurrentQueue<InMemQueryScratch<T> *> _query_scratch;
