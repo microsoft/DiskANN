@@ -157,8 +157,6 @@ inline void convert_labels_string_to_int(const std::string &inFileName, const st
     std::unordered_map<std::string, uint32_t> string_int_map;
     std::ofstream label_writer(outFileName);
     std::ifstream label_reader(inFileName);
-    if (unv_label != "")
-        string_int_map[unv_label] = 0;
     std::string line, token;
     while (std::getline(label_reader, line))
     {
@@ -170,8 +168,15 @@ inline void convert_labels_string_to_int(const std::string &inFileName, const st
             token.erase(std::remove(token.begin(), token.end(), '\r'), token.end());
             if (string_int_map.find(token) == string_int_map.end())
             {
-                uint32_t nextId = (uint32_t)string_int_map.size() + 1;
-                string_int_map[token] = nextId;
+                if (unv_label != "" && unv_label == token)
+                {
+                    string_int_map[unv_label] = 0;
+                }
+                else
+                {
+                    uint32_t nextId = (uint32_t)string_int_map.size() + 1;
+                    string_int_map[token] = nextId;
+                }
             }
             lbls.push_back(string_int_map[token]);
         }
