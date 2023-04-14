@@ -155,6 +155,7 @@ template <class T> struct DynamicInMemIndex
 {
     Index<T, IdT, filterT> *_index;
     IndexWriteParameters _write_params;
+    const std::string &_index_path;
 
     DynamicInMemIndex(Metric m, const size_t dim, const size_t max_points, const uint32_t complexity,
                       const uint32_t graph_degree, const bool saturate_graph, const uint32_t max_occlusion_size,
@@ -169,7 +170,8 @@ template <class T> struct DynamicInMemIndex
                             .with_num_threads(num_threads)
                             .with_filter_list_size(filter_complexity)
                             .with_num_frozen_points(num_frozen_points)
-                            .build())
+                            .build()),
+          _index_path(index_path)
     {
         const uint32_t _initial_search_complexity =
             initial_search_complexity != 0 ? initial_search_complexity : complexity;
@@ -187,7 +189,7 @@ template <class T> struct DynamicInMemIndex
                               false,  // pq_dist_build
                               0,      // num_pq_chunks
                               false); // use_opq = false
-        if (index_path != "")
+        if (!index_path.empty())
         {
             _index->load(index_path.c_str(), _write_params.num_threads, complexity);
         }
@@ -206,6 +208,18 @@ template <class T> struct DynamicInMemIndex
     int mark_deleted(const IdT id)
     {
         return _index->lazy_delete(id);
+    }
+
+    void save(const std::string &save_path = "", const bool compact_before_save = false)
+    {
+        const std::string path = !save_path.empty() ? save_path : _index_path;
+        if (path.empty())
+        {
+            throw std::runtime_error(
+                "A save_path must be provided if a starting index was not provided in the DynamicMemoryIndex "
+                "constructor via the index_path parameter");
+        }
+        _index->save(path.c_str(), compact_before_save);
     }
 
     auto search(py::array_t<T, py::array::c_style | py::array::forcecast> &query, const uint64_t knn,
@@ -406,6 +420,7 @@ inline void add_variant(py::module_ &m, const std::string &build_name, const std
         .def("search", &DynamicInMemIndex<T>::search, py::arg("query"), py::arg("knn"), py::arg("complexity"))
         .def("batch_search", &DynamicInMemIndex<T>::batch_search, py::arg("queries"), py::arg("num_queries"),
              py::arg("knn"), py::arg("complexity"), py::arg("num_threads"))
+        .def("save", &DynamicInMemIndex<T>::save, py::arg("save_path") = "", py::arg("compact_before_save") = false)
         .def("insert", &DynamicInMemIndex<T>::insert, py::arg("vector"), py::arg("id"))
         .def("mark_deleted", &DynamicInMemIndex<T>::mark_deleted, py::arg("id"))
         .def("consolidate_delete", &DynamicInMemIndex<T>::consolidate_delete);
