@@ -9,9 +9,17 @@ from . import _diskannpy as _native_dap
 
 __ALL__ = ["VectorDType"]
 
-_VALID_DTYPES = [np.single, np.byte, np.ubyte]
+_VALID_DTYPES = [np.single, np.float32, np.byte, np.int8, np.ubyte, np.uint8]
 
-VectorDType = TypeVar("VectorDType", Type[np.single], Type[np.ubyte], Type[np.byte])
+VectorDType = TypeVar(
+    "VectorDType",
+    Type[np.single],
+    Type[np.float32],
+    Type[np.ubyte],
+    Type[np.uint8],
+    Type[np.byte],
+    Type[np.int8],
+)
 
 
 def _get_valid_metric(metric: str) -> _native_dap.Metric:
@@ -25,10 +33,11 @@ def _get_valid_metric(metric: str) -> _native_dap.Metric:
         raise ValueError("metric must be one of 'l2' or 'mips'")
 
 
-def _assert_dtype(vectors, name: str):
+def _assert_dtype(vectors: np.dtype, name: str):
     _assert(
         vectors in _VALID_DTYPES,
-        f"{name} must be of one of type np.single, np.byte, or np.ubyte",
+        name
+        + " must be of one of type {(np.singlem, np.float32), (np.byte, np.int8), (np.ubyte, np.uint8)}",
     )
 
 

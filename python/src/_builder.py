@@ -4,7 +4,7 @@
 import os
 import shutil
 import tempfile
-from typing import BinaryIO, Literal, Union
+from typing import BinaryIO, Literal
 
 import numpy as np
 
@@ -20,38 +20,22 @@ from ._common import (
 )
 
 
-def _numpy_to_diskann_file(
-    vectors: np.ndarray,
-    file_handler: BinaryIO,
-):
-    _assert_2d(vectors, "vectors")
-    _assert_dtype(vectors, "vectors")
-
-    _ = file_handler.write(np.array(vectors.shape, dtype=np.int32).tobytes())
-    _ = file_handler.write(vectors.tobytes())
-
-
-def numpy_to_diskann_file(vectors: np.ndarray, output_path: Union[str, BinaryIO]):
+def numpy_to_diskann_file(vectors: np.ndarray, file_handler: BinaryIO):
     """
     Utility function that writes a DiskANN binary vector formatted file to the location of your choosing.
 
     :param vectors: A 2d array of dtype ``numpy.single``, ``numpy.ubyte``, or ``numpy.byte``
     :type vectors: numpy.ndarray, dtype in set {numpy.single, numpy.ubyte, numpy.byte}
-    :param output_path: Where to write the file. If a string is provided, a binary writer will be opened at that
-        location. Otherwise it is presumed ``output_path`` is a BinaryIO file handler and will write to it.
-    :type output_path: Union[str, io.BinaryIO]
+    :param file_handler: An open binary file handler (typing.BinaryIO).
+    :type file_handler: io.BinaryIO
     :raises ValueError: If vectors are the wrong shape or an unsupported dtype
     :raises ValueError: If output_path is not a str or ``io.BinaryIO``
     """
-    if isinstance(output_path, BinaryIO):
-        _numpy_to_diskann_file(vectors, output_path)
-    elif isinstance(output_path, str):
-        with open(output_path, "wb") as binary_out:
-            _numpy_to_diskann_file(vectors, binary_out)
-    else:
-        raise ValueError(
-            "output_path must be either a str or an open binary file handler (e.g. `handler = open('my_file_path', 'wb')`)"
-        )
+    _assert_2d(vectors, "vectors")
+    _assert_dtype(vectors.dtype, "vectors.dtype")
+
+    _ = file_handler.write(np.array(vectors.shape, dtype=np.int32).tobytes())
+    _ = file_handler.write(vectors.tobytes())
 
 
 def build_disk_index_from_vector_file(
@@ -114,9 +98,9 @@ def build_disk_index_from_vector_file(
     _assert_is_nonnegative_uint32(pq_disk_bytes, "pq_disk_bytes")
     _assert(index_prefix != "", "index_prefix cannot be an empty string")
 
-    if vector_dtype is np.single:
+    if vector_dtype == np.single:
         _builder = _native_dap.build_disk_float_index
-    elif vector_dtype is np.ubyte:
+    elif vector_dtype == np.ubyte:
         _builder = _native_dap.build_disk_uint8_index
     else:
         _builder = _native_dap.build_disk_int8_index
@@ -184,7 +168,7 @@ def build_disk_index_from_vectors(
     :raises ValueError: If any numeric value is in an invalid range
     """
     _assert_2d(vectors, "vectors")
-    _assert_dtype(vectors, "vectors")
+    _assert_dtype(vectors.dtype, "vectors.dtype")
 
     _temp_work_dir = tempfile.mkdtemp()
     try:
@@ -233,9 +217,9 @@ def build_memory_index_from_vector_file(
     _assert_is_nonnegative_uint32(num_pq_bytes, "num_pq_bytes")
     _assert_is_nonnegative_uint32(filter_complexity, "filter_complexity")
     _assert(index_prefix != "", "index_prefix cannot be an empty string")
-    if vector_dtype is np.single:
+    if vector_dtype == np.single:
         _builder = _native_dap.build_in_memory_float_index
-    elif vector_dtype is np.ubyte:
+    elif vector_dtype == np.ubyte:
         _builder = _native_dap.build_in_memory_uint8_index
     else:
         _builder = _native_dap.build_in_memory_int8_index
