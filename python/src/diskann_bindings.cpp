@@ -42,10 +42,25 @@ template <class T> struct DiskIndex
     PQFlashIndex<T> *_pq_flash_index;
     std::shared_ptr<AlignedFileReader> reader;
 
-    DiskIndex(diskann::Metric metric)
+    DiskIndex(const diskann::Metric metric, const std::string &index_path_prefix, const uint32_t num_threads,
+              const size_t num_nodes_to_cache, const uint32_t cache_mechanism)
     {
         reader = std::make_shared<PlatformSpecificAlignedFileReader>();
         _pq_flash_index = new PQFlashIndex<T>(reader, metric);
+        int load_success = _pq_flash_index->load(num_threads, index_path_prefix.c_str());
+        if (load_success != 0)
+        {
+            throw std::runtime_error("index load failed.");
+        }
+        if (cache_mechanism == 1)
+        {
+            std::string sample_file = index_path_prefix + std::string("_sample_data.bin");
+            cache_sample_paths(num_nodes_to_cache, sample_file, num_threads);
+        }
+        else if (cache_mechanism == 2)
+        {
+            cache_bfs_levels(num_nodes_to_cache);
+        }
     }
 
     ~DiskIndex()
@@ -53,19 +68,15 @@ template <class T> struct DiskIndex
         delete _pq_flash_index;
     }
 
-    auto get_metric()
-    {
-        return _pq_flash_index->get_metric();
-    }
-
-    void cache_bfs_levels(size_t num_nodes_to_cache)
+    void cache_bfs_levels(const size_t num_nodes_to_cache)
     {
         std::vector<uint32_t> node_list;
         _pq_flash_index->cache_bfs_levels(num_nodes_to_cache, node_list);
         _pq_flash_index->load_cache_list(node_list);
     }
 
-    void cache_sample_paths(size_t num_nodes_to_cache, const std::string &warmup_query_file, uint32_t num_threads)
+    void cache_sample_paths(const size_t num_nodes_to_cache, const std::string &warmup_query_file,
+                            const uint32_t num_threads)
     {
         if (!file_exists(warmup_query_file))
         {
@@ -76,30 +87,6 @@ template <class T> struct DiskIndex
         _pq_flash_index->generate_cache_list_from_sample_queries(warmup_query_file, 15, 4, num_nodes_to_cache,
                                                                  num_threads, node_list);
         _pq_flash_index->load_cache_list(node_list);
-    }
-
-    int load_index(const std::string &index_path_prefix, const int num_threads, const size_t num_nodes_to_cache,
-                   int cache_mechanism)
-    {
-        int load_success = _pq_flash_index->load(num_threads, index_path_prefix.c_str());
-        if (load_success != 0)
-        {
-            throw std::runtime_error("load_index failed.");
-        }
-        if (cache_mechanism == 0)
-        {
-            // Nothing to do
-        }
-        else if (cache_mechanism == 1)
-        {
-            std::string sample_file = index_path_prefix + std::string("_sample_data.bin");
-            cache_sample_paths(num_nodes_to_cache, sample_file, num_threads);
-        }
-        else if (cache_mechanism == 2)
-        {
-            cache_bfs_levels(num_nodes_to_cache);
-        }
-        return 0;
     }
 
     auto search(py::array_t<T, py::array::c_style | py::array::forcecast> &query, const uint64_t knn,
@@ -157,7 +144,7 @@ template <class T> struct DynamicInMemIndex
     IndexWriteParameters _write_params;
     const std::string &_index_path;
 
-    DynamicInMemIndex(Metric m, const size_t dim, const size_t max_points, const uint32_t complexity,
+    DynamicInMemIndex(const Metric m, const size_t dim, const size_t max_points, const uint32_t complexity,
                       const uint32_t graph_degree, const bool saturate_graph, const uint32_t max_occlusion_size,
                       const float alpha, const uint32_t num_threads, const uint32_t filter_complexity,
                       const uint32_t num_frozen_points, const uint32_t initial_search_complexity,
@@ -427,12 +414,14 @@ inline void add_variant(py::module_ &m, const std::string &build_name, const std
 
     const std::string disk_name = "Disk" + class_name + "Index";
     py::class_<DiskIndex<T>>(m, disk_name.c_str())
-        .def(py::init(
-                 [](const diskann::Metric metric) { return std::unique_ptr<DiskIndex<T>>(new DiskIndex<T>(metric)); }),
-             py::arg("metric"))
+        .def(py::init([](const diskann::Metric metric, const std::string &index_path_prefix, const uint32_t num_threads,
+                         const size_t num_nodes_to_cache, const uint32_t cache_mechanism) {
+                 return std::unique_ptr<DiskIndex<T>>(
+                     new DiskIndex<T>(metric, index_path_prefix, num_threads, num_nodes_to_cache, cache_mechanism));
+             }),
+             py::arg("metric"), py::arg("index_path_prefix"), py::arg("num_threads"), py::arg("num_nodes_to_cache"),
+             py::arg("cache_mechanism") = 1)
         .def("cache_bfs_levels", &DiskIndex<T>::cache_bfs_levels, py::arg("num_nodes_to_cache"))
-        .def("load_index", &DiskIndex<T>::load_index, py::arg("index_path_prefix"), py::arg("num_threads"),
-             py::arg("num_nodes_to_cache"), py::arg("cache_mechanism") = 1)
         .def("search", &DiskIndex<T>::search, py::arg("query"), py::arg("knn"), py::arg("complexity"),
              py::arg("beam_width"))
         .def("batch_search", &DiskIndex<T>::batch_search, py::arg("queries"), py::arg("num_queries"), py::arg("knn"),

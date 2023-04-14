@@ -29,6 +29,7 @@ class DiskIndex:
         index_path: str,
         num_threads: int,
         num_nodes_to_cache: int,
+        cache_mechanism: int = 1,
         index_prefix: str = "ann",
     ):
         """
@@ -47,6 +48,9 @@ class DiskIndex:
         :type num_threads: int
         :param num_nodes_to_cache: Number of nodes to cache in memory (> -1)
         :type num_nodes_to_cache: int
+        :param cache_mechanism: 1 -> use the generated sample_data.bin file for
+            the index to initialize a set of cached nodes, up to ``num_nodes_to_cache``, 2 -> ready the cache for up to
+            ``num_nodes_to_cache``, but do not initialize it with any nodes. Any other value disables node caching.
         :param index_prefix: A shared prefix that all files in this index will use. Default is "ann".
         :type index_prefix: str
         :raises ValueError: If metric is not a valid metric
@@ -65,7 +69,13 @@ class DiskIndex:
             _index = _native_dap.DiskUInt8Index
         else:
             _index = _native_dap.DiskInt8Index
-        self._index = _index(dap_metric)
+        self._index = _index(
+            metric=dap_metric,
+            index_path_prefix=os.path.join(index_path, index_prefix),
+            num_threads=num_threads,
+            num_nodes_to_cache=num_nodes_to_cache,
+            cache_mechanism=cache_mechanism
+        )
         self._index.load_index(
             index_path_prefix=os.path.join(index_path, index_prefix),
             num_threads=num_threads,
