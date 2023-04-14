@@ -110,7 +110,7 @@ class DynamicMemoryIndex:
         _assert_is_nonnegative_uint32(search_threads, "search_threads")
 
         self._dims = dim
-        _index_path = index_path if index_path is not None else ""
+        self._index_path = index_path if index_path is not None else ""
 
         if vector_dtype == np.single:
             _index = _native_dap.DynamicMemoryFloatIndex
@@ -133,7 +133,7 @@ class DynamicMemoryIndex:
             initial_search_complexity=initial_search_complexity,
             search_threads=search_threads,
             concurrent_consolidation=concurrent_consolidation,
-            index_path=_index_path,
+            index_path=self._index_path,
         )
 
     def search(
@@ -221,6 +221,11 @@ class DynamicMemoryIndex:
             complexity=complexity,
             num_threads=num_threads,
         )
+
+    def save(self, save_path: str = "", compact_before_save: bool = False):
+        if save_path == "" and self._index_path == "":
+            raise ValueError("save_path cannot be empty if index_path is not set to a valid path in the constructor")
+        self._index.save(save_path=save_path, compact_before_save=compact_before_save)
 
     def insert(self, vector: np.ndarray, vector_id: int):
         _assert(len(vector.shape) == 1, "insert vector must be 1-d")
