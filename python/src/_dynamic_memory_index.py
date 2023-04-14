@@ -224,7 +224,9 @@ class DynamicMemoryIndex:
 
     def save(self, save_path: str = "", compact_before_save: bool = False):
         if save_path == "" and self._index_path == "":
-            raise ValueError("save_path cannot be empty if index_path is not set to a valid path in the constructor")
+            raise ValueError(
+                "save_path cannot be empty if index_path is not set to a valid path in the constructor"
+            )
         self._index.save(save_path=save_path, compact_before_save=compact_before_save)
 
     def insert(self, vector: np.ndarray, vector_id: int):

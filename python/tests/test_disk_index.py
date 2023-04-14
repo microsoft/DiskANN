@@ -16,15 +16,11 @@ class TestBuildIndex(unittest.TestCase):
         rng = np.random.default_rng(12345)
         rando = rng.random((1000, 100, 5), dtype=np.single)
         with self.assertRaises(ValueError):
-            dap.build_disk_index_from_vectors(
-                rando, "l2", "test", 5, 5, 0.01, 0.01, 1, 0
-            )
+            dap.build_disk_index(rando, "l2", "test", 5, 5, 0.01, 0.01, 1, 0)
 
         rando = rng.random(1000, dtype=np.single)
         with self.assertRaises(ValueError):
-            dap.build_disk_index_from_vectors(
-                rando, "l2", "test", 5, 5, 0.01, 0.01, 1, 0
-            )
+            dap.build_disk_index(rando, "l2", "test", 5, 5, 0.01, 0.01, 1, 0)
 
     def test_value_ranges_build(self):
         good_ranges = {
@@ -54,8 +50,8 @@ class TestBuildIndex(unittest.TestCase):
                 f"testing bad value key: {bad_value_key} with bad value: {bad_ranges[bad_value_key]}"
             ):
                 with self.assertRaises(ValueError):
-                    dap.build_disk_index_from_vector_file(
-                        vector_bin_file="test", index_path="test", **kwargs
+                    dap.build_disk_index(
+                        vector_path_or_np_array="test", index_path="test", **kwargs
                     )
 
 
@@ -64,8 +60,8 @@ def _build_random_vectors_and_index(dtype, metric):
     index_vectors = random_vectors(10000, 10, dtype=dtype)
     with vectors_as_temp_file(index_vectors) as vector_temp:
         ann_dir = mkdtemp()
-        dap.build_disk_index_from_vector_file(
-            vector_bin_file=vector_temp,
+        dap.build_disk_index(
+            vector_path_or_np_array=vector_temp,
             metric=metric,
             vector_dtype=dtype,
             index_path=ann_dir,

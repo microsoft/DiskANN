@@ -74,12 +74,7 @@ class DiskIndex:
             index_path_prefix=os.path.join(index_path, index_prefix),
             num_threads=num_threads,
             num_nodes_to_cache=num_nodes_to_cache,
-            cache_mechanism=cache_mechanism
-        )
-        self._index.load_index(
-            index_path_prefix=os.path.join(index_path, index_prefix),
-            num_threads=num_threads,
-            num_nodes_to_cache=num_nodes_to_cache,
+            cache_mechanism=cache_mechanism,
         )
 
     def search(
