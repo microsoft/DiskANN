@@ -246,11 +246,11 @@ void InMemDataStore<data_t>::reposition_points(const location_t old_location_sta
         return;
     }
 
-/*    // Update pointers to the moved nodes. Note: the computation is correct even
-    // when new_location_start < old_location_start given the C++ uint32_t
-    // integer arithmetic rules.
-    const uint32_t location_delta = new_location_start - old_location_start;
-*/
+    /*    // Update pointers to the moved nodes. Note: the computation is correct even
+        // when new_location_start < old_location_start given the C++ uint32_t
+        // integer arithmetic rules.
+        const uint32_t location_delta = new_location_start - old_location_start;
+    */
     // The [start, end) interval which will contain obsolete points to be
     // cleared.
     uint32_t mem_clear_loc_start = old_location_start;
