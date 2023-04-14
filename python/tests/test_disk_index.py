@@ -30,8 +30,8 @@ class TestBuildIndex(unittest.TestCase):
         good_ranges = {
             "vector_dtype": np.single,
             "metric": "l2",
-            "max_degree": 5,
-            "list_size": 5,
+            "graph_degree": 5,
+            "complexity": 5,
             "search_memory_maximum": 0.01,
             "build_memory_maximum": 0.01,
             "num_threads": 1,
@@ -40,8 +40,8 @@ class TestBuildIndex(unittest.TestCase):
         bad_ranges = {
             "vector_dtype": np.float64,
             "metric": "soups this time",
-            "max_degree": -1,
-            "list_size": -1,
+            "graph_degree": -1,
+            "complexity": -1,
             "search_memory_maximum": 0,
             "build_memory_maximum": 0,
             "num_threads": -1,
@@ -69,8 +69,8 @@ def _build_random_vectors_and_index(dtype, metric):
             metric=metric,
             vector_dtype=dtype,
             index_path=ann_dir,
-            max_degree=16,
-            list_size=32,
+            graph_degree=16,
+            complexity=32,
             search_memory_maximum=0.00003,
             build_memory_maximum=1,
             num_threads=1,
@@ -113,7 +113,7 @@ class TestDiskIndex(unittest.TestCase):
                 diskann_neighbors, diskann_distances = index.batch_search(
                     query_vectors,
                     k_neighbors=k,
-                    list_size=5,
+                    complexity=5,
                     beam_width=2,
                     num_threads=16,
                 )
@@ -141,7 +141,7 @@ class TestDiskIndex(unittest.TestCase):
 
                 k = 5
                 ids, dists = index.search(
-                    query_vectors[0], k_neighbors=k, list_size=5, beam_width=2
+                    query_vectors[0], k_neighbors=k, complexity=5, beam_width=2
                 )
                 self.assertEqual(ids.shape[0], k)
                 self.assertEqual(dists.shape[0], k)
@@ -211,8 +211,8 @@ class TestDiskIndex(unittest.TestCase):
                     )
 
     def test_value_ranges_search(self):
-        good_ranges = {"list_size": 5, "k_neighbors": 10, "beam_width": 2}
-        bad_ranges = {"list_size": -1, "k_neighbors": 0, "beam_width": 0}
+        good_ranges = {"complexity": 5, "k_neighbors": 10, "beam_width": 2}
+        bad_ranges = {"complexity": -1, "k_neighbors": 0, "beam_width": 0}
         for bad_value_key in good_ranges.keys():
             kwargs = good_ranges.copy()
             kwargs[bad_value_key] = bad_ranges[bad_value_key]
@@ -229,13 +229,13 @@ class TestDiskIndex(unittest.TestCase):
 
     def test_value_ranges_batch_search(self):
         good_ranges = {
-            "list_size": 5,
+            "complexity": 5,
             "k_neighbors": 10,
             "beam_width": 2,
             "num_threads": 5,
         }
         bad_ranges = {
-            "list_size": 0,
+            "complexity": 0,
             "k_neighbors": 0,
             "beam_width": -1,
             "num_threads": -1,

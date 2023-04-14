@@ -77,7 +77,7 @@ class IndexWriteParametersBuilder
 
     IndexWriteParametersBuilder &with_filter_list_size(const uint32_t filter_list_size)
     {
-        _filter_list_size = filter_list_size;
+        _filter_list_size = filter_list_size == 0 ? _search_list_size : filter_list_size;
         return *this;
     }
 
