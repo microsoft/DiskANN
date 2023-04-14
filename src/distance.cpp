@@ -572,7 +572,7 @@ bool AVXNormalizedCosineDistanceFloat::normalization_required() const
 void AVXNormalizedCosineDistanceFloat::normalize_data_for_build(float *original_data, const uint32_t orig_dim,
                                                                 const uint32_t num_points)
 {
-    for (auto i = 0; i < num_points; i++)
+    for (uint32_t i = 0; i < num_points; i++)
     {
         normalize((float *)(original_data + i * orig_dim), orig_dim);
     }
@@ -590,7 +590,7 @@ void AVXNormalizedCosineDistanceFloat::normalize_and_copy(const float *query_vec
 
     float norm = get_norm(query_vec, query_dim);
 
-    for (auto i = 0; i < query_dim; i++)
+    for (uint32_t i = 0; i < query_dim; i++)
     {
         query_target[i] = query_vec[i] / norm;
     }
