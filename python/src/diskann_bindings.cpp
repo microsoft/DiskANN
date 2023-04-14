@@ -306,9 +306,9 @@ template <class T> struct StaticInMemIndex
 
 template <typename T>
 void build_disk_index2(const diskann::Metric metric, const std::string &data_file_path,
-                      const std::string &index_prefix_path, const uint32_t complexity, const uint32_t graph_degree,
-                      const double final_index_ram_limit, const double indexing_ram_budget, const uint32_t num_threads,
-                      const uint32_t pq_disk_bytes)
+                       const std::string &index_prefix_path, const uint32_t complexity, const uint32_t graph_degree,
+                       const double final_index_ram_limit, const double indexing_ram_budget, const uint32_t num_threads,
+                       const uint32_t pq_disk_bytes)
 {
     std::string params = std::to_string(graph_degree) + " " + std::to_string(complexity) + " " +
                          std::to_string(final_index_ram_limit) + " " + std::to_string(indexing_ram_budget) + " " +
@@ -354,13 +354,14 @@ void build_in_memory_index(const diskann::Metric &metric, const std::string &vec
     index.save(index_output_path.c_str());
 }
 
-template <typename T> inline void add_variant(py::module_ &m, const std::string &build_name,
-                                const std::string &class_name) {
+template <typename T>
+inline void add_variant(py::module_ &m, const std::string &build_name, const std::string &class_name)
+{
     const std::string build_disk_name = "build_disk_" + build_name + "_index";
-    m.def(build_disk_name.c_str(), &build_disk_index2<T>,
-          py::arg("metric"), py::arg("data_file_path"), py::arg("index_prefix_path"), py::arg("complexity"),
-          py::arg("graph_degree"), py::arg("final_index_ram_limit"), py::arg("indexing_ram_budget"),
-          py::arg("num_threads"), py::arg("pq_disk_bytes"));
+    m.def(build_disk_name.c_str(), &build_disk_index2<T>, py::arg("metric"), py::arg("data_file_path"),
+          py::arg("index_prefix_path"), py::arg("complexity"), py::arg("graph_degree"),
+          py::arg("final_index_ram_limit"), py::arg("indexing_ram_budget"), py::arg("num_threads"),
+          py::arg("pq_disk_bytes"));
 
     const std::string build_in_memory_name = "build_in_memory_" + build_name + "_index";
     m.def(build_in_memory_name.c_str(), &build_in_memory_index<float>, py::arg("metric"), py::arg("data_file_path"),
@@ -368,59 +369,59 @@ template <typename T> inline void add_variant(py::module_ &m, const std::string 
           py::arg("num_threads"), py::arg("use_pq_build"), py::arg("num_pq_bytes"), py::arg("use_opq"),
           py::arg("label_file") = "", py::arg("universal_label") = "", py::arg("filter_complexity") = 0);
 
-        const std::string static_index = "StaticMemory" + class_name + "Index";
-        py::class_<StaticInMemIndex<T>>(m, static_index.c_str())
-            .def(py::init([](const diskann::Metric metric, const std::string &data_path, const std::string &index_path,
-                             const uint32_t num_threads, const uint32_t initial_search_complexity) {
-                     return std::unique_ptr<StaticInMemIndex<T>>(new StaticInMemIndex<T>(
-                         metric, data_path, index_path, num_threads, initial_search_complexity));
-                 }),
-                 py::arg("metric"), py::arg("data_path"), py::arg("index_path"), py::arg("num_threads"),
-                 py::arg("initial_search_complexity"))
-            .def("search", &StaticInMemIndex<T>::search, py::arg("query"), py::arg("knn"), py::arg("complexity"))
-            .def("batch_search", &StaticInMemIndex<T>::batch_search, py::arg("queries"), py::arg("num_queries"),
-                 py::arg("knn"), py::arg("complexity"), py::arg("num_threads"));
+    const std::string static_index = "StaticMemory" + class_name + "Index";
+    py::class_<StaticInMemIndex<T>>(m, static_index.c_str())
+        .def(py::init([](const diskann::Metric metric, const std::string &data_path, const std::string &index_path,
+                         const uint32_t num_threads, const uint32_t initial_search_complexity) {
+                 return std::unique_ptr<StaticInMemIndex<T>>(
+                     new StaticInMemIndex<T>(metric, data_path, index_path, num_threads, initial_search_complexity));
+             }),
+             py::arg("metric"), py::arg("data_path"), py::arg("index_path"), py::arg("num_threads"),
+             py::arg("initial_search_complexity"))
+        .def("search", &StaticInMemIndex<T>::search, py::arg("query"), py::arg("knn"), py::arg("complexity"))
+        .def("batch_search", &StaticInMemIndex<T>::batch_search, py::arg("queries"), py::arg("num_queries"),
+             py::arg("knn"), py::arg("complexity"), py::arg("num_threads"));
 
-        const std::string dynamic_index = "DynamicMemory" + class_name + "Index";
-        py::class_<DynamicInMemIndex<T>>(m, dynamic_index.c_str())
-            .def(py::init([](const diskann::Metric metric, const size_t dim, const size_t max_points,
-                             const uint32_t complexity, const uint32_t graph_degree, const bool saturate_graph,
-                             const uint32_t max_occlusion_size, const float alpha, const uint32_t num_threads,
-                             const uint32_t filter_complexity, const uint32_t num_frozen_points,
-                             const uint32_t initial_search_complexity, const uint32_t search_threads,
-                             const bool concurrent_consolidation, const std::string &index_path) {
-                     return std::unique_ptr<DynamicInMemIndex<T>>(new DynamicInMemIndex<T>(
-                         metric, dim, max_points, complexity, graph_degree, saturate_graph, max_occlusion_size, alpha,
-                         num_threads, filter_complexity, num_frozen_points, initial_search_complexity, search_threads,
-                         concurrent_consolidation, index_path));
-                 }),
-                 py::arg("metric"), py::arg("dim"), py::arg("max_points"), py::arg("complexity"), py::arg("graph_degree"),
-                 py::arg("saturate_graph") = diskann::defaults::SATURATE_GRAPH,
-                 py::arg("max_occlusion_size") = diskann::defaults::MAX_OCCLUSION_SIZE,
-                 py::arg("alpha") = diskann::defaults::ALPHA, py::arg("num_threads") = diskann::defaults::NUM_THREADS,
-                 py::arg("filter_complexity") = diskann::defaults::FILTER_LIST_SIZE,
-                 py::arg("num_frozen_points") = diskann::defaults::NUM_FROZEN_POINTS,
-                 py::arg("initial_search_complexity") = 0, py::arg("search_threads") = 0,
-                 py::arg("concurrent_consolidation") = true, py::arg("index_path") = "")
-            .def("search", &DynamicInMemIndex<T>::search, py::arg("query"), py::arg("knn"), py::arg("complexity"))
-            .def("batch_search", &DynamicInMemIndex<T>::batch_search, py::arg("queries"), py::arg("num_queries"),
-                 py::arg("knn"), py::arg("complexity"), py::arg("num_threads"))
-            .def("insert", &DynamicInMemIndex<T>::insert, py::arg("vector"), py::arg("id"))
-            .def("mark_deleted", &DynamicInMemIndex<T>::mark_deleted, py::arg("id"))
-            .def("consolidate_delete", &DynamicInMemIndex<T>::consolidate_delete);
+    const std::string dynamic_index = "DynamicMemory" + class_name + "Index";
+    py::class_<DynamicInMemIndex<T>>(m, dynamic_index.c_str())
+        .def(py::init([](const diskann::Metric metric, const size_t dim, const size_t max_points,
+                         const uint32_t complexity, const uint32_t graph_degree, const bool saturate_graph,
+                         const uint32_t max_occlusion_size, const float alpha, const uint32_t num_threads,
+                         const uint32_t filter_complexity, const uint32_t num_frozen_points,
+                         const uint32_t initial_search_complexity, const uint32_t search_threads,
+                         const bool concurrent_consolidation, const std::string &index_path) {
+                 return std::unique_ptr<DynamicInMemIndex<T>>(new DynamicInMemIndex<T>(
+                     metric, dim, max_points, complexity, graph_degree, saturate_graph, max_occlusion_size, alpha,
+                     num_threads, filter_complexity, num_frozen_points, initial_search_complexity, search_threads,
+                     concurrent_consolidation, index_path));
+             }),
+             py::arg("metric"), py::arg("dim"), py::arg("max_points"), py::arg("complexity"), py::arg("graph_degree"),
+             py::arg("saturate_graph") = diskann::defaults::SATURATE_GRAPH,
+             py::arg("max_occlusion_size") = diskann::defaults::MAX_OCCLUSION_SIZE,
+             py::arg("alpha") = diskann::defaults::ALPHA, py::arg("num_threads") = diskann::defaults::NUM_THREADS,
+             py::arg("filter_complexity") = diskann::defaults::FILTER_LIST_SIZE,
+             py::arg("num_frozen_points") = diskann::defaults::NUM_FROZEN_POINTS,
+             py::arg("initial_search_complexity") = 0, py::arg("search_threads") = 0,
+             py::arg("concurrent_consolidation") = true, py::arg("index_path") = "")
+        .def("search", &DynamicInMemIndex<T>::search, py::arg("query"), py::arg("knn"), py::arg("complexity"))
+        .def("batch_search", &DynamicInMemIndex<T>::batch_search, py::arg("queries"), py::arg("num_queries"),
+             py::arg("knn"), py::arg("complexity"), py::arg("num_threads"))
+        .def("insert", &DynamicInMemIndex<T>::insert, py::arg("vector"), py::arg("id"))
+        .def("mark_deleted", &DynamicInMemIndex<T>::mark_deleted, py::arg("id"))
+        .def("consolidate_delete", &DynamicInMemIndex<T>::consolidate_delete);
 
-        const std::string disk_name = "Disk" + class_name + "Index";
-        py::class_<DiskIndex<T>>(m, disk_name.c_str())
-            .def(py::init([](const diskann::Metric metric) {
-                return std::unique_ptr<DiskIndex<T>>(new DiskIndex<T>(metric));
-            }), py::arg("metric"))
-            .def("cache_bfs_levels", &DiskIndex<T>::cache_bfs_levels, py::arg("num_nodes_to_cache"))
-            .def("load_index", &DiskIndex<T>::load_index, py::arg("index_path_prefix"), py::arg("num_threads"),
-                 py::arg("num_nodes_to_cache"), py::arg("cache_mechanism") = 1)
-            .def("search", &DiskIndex<T>::search, py::arg("query"), py::arg("knn"), py::arg("complexity"),
-                 py::arg("beam_width"))
-            .def("batch_search", &DiskIndex<T>::batch_search, py::arg("queries"), py::arg("num_queries"),
-                 py::arg("knn"), py::arg("complexity"), py::arg("beam_width"), py::arg("num_threads"));
+    const std::string disk_name = "Disk" + class_name + "Index";
+    py::class_<DiskIndex<T>>(m, disk_name.c_str())
+        .def(py::init(
+                 [](const diskann::Metric metric) { return std::unique_ptr<DiskIndex<T>>(new DiskIndex<T>(metric)); }),
+             py::arg("metric"))
+        .def("cache_bfs_levels", &DiskIndex<T>::cache_bfs_levels, py::arg("num_nodes_to_cache"))
+        .def("load_index", &DiskIndex<T>::load_index, py::arg("index_path_prefix"), py::arg("num_threads"),
+             py::arg("num_nodes_to_cache"), py::arg("cache_mechanism") = 1)
+        .def("search", &DiskIndex<T>::search, py::arg("query"), py::arg("knn"), py::arg("complexity"),
+             py::arg("beam_width"))
+        .def("batch_search", &DiskIndex<T>::batch_search, py::arg("queries"), py::arg("num_queries"), py::arg("knn"),
+             py::arg("complexity"), py::arg("beam_width"), py::arg("num_threads"));
 }
 
 PYBIND11_MODULE(_diskannpy, m)
