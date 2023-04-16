@@ -1965,7 +1965,7 @@ void Index<T, TagT, LabelT>::build_filtered_index(const char *filename, const st
 
     std::unordered_map<LabelT, std::vector<uint32_t>> label_to_points;
 
-    for (int lbl = 0; lbl < _labels.size(); lbl++)
+    for (tsl::robin_set<LabelT>::size_type lbl = 0; lbl < _labels.size(); lbl++)
     {
         auto itr = _labels.begin();
         std::advance(itr, lbl);
