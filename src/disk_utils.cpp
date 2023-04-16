@@ -302,8 +302,8 @@ int merge_shards(const std::string &vamana_prefix, const std::string &vamana_suf
             {
                 std::istringstream iss(line);
                 uint32_t cnt = 0;
-                uint32_t medoid;
-                uint32_t label;
+                uint32_t medoid = 0;
+                uint32_t label = 0;
                 while (std::getline(iss, token, ','))
                 {
                     token.erase(std::remove(token.begin(), token.end(), '\n'), token.end());
