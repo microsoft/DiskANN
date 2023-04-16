@@ -1292,6 +1292,10 @@ void Index<T, TagT, LabelT>::prune_neighbors(const uint32_t location, std::vecto
     std::sort(pool.begin(), pool.end());
     pruned_list.clear();
     pruned_list.reserve(range);
+    if (pool.begin()->distance == 0)
+    {
+        diskann::cerr << "Warning: a candidate with distance 0 found in prune_neighbors" << std::endl;
+    }
     occlude_list(location, pool, alpha, range, max_candidate_size, pruned_list, scratch);
     assert(pruned_list.size() <= range);
 
