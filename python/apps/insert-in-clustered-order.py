@@ -42,19 +42,10 @@ def insert_and_search(
     else:
         raise ValueError("data_type must be float, int8 or uint8")
 
-    tags = np.zeros(npts, dtype=int)
+    offsets, permutation = utils.cluster_and_permute(dtype_str, npts, ndims, data, 20)
+
     for i in range(npts):
-        tags[i] = i+1
-    index.batch_insert(data, tags, npts, num_threads)
-
-    delete_tags = np.random.choice(range(1,npts+1,1), size=0.5*npts, replace=False)
-    for tag in delete_tags:
-        index.mark_deleted(tag)
-    index.consolidate_delete()
-
-    for tag in delete_tags:
-        index.insert(data[tag-1, :], tag)    
-
+        index.insert(data[permutation[i], :], permutation[i]+1)
     tags, dists = index.batch_search(queries, K, Ls, num_threads)
     res_ids = tags - 1
 

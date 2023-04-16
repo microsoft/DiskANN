@@ -192,6 +192,26 @@ template <class T> struct DynamicInMemIndex
         return _index->insert_point(vector.data(), id);
     }
 
+    auto batch_insert(py::array_t<T, py::array::c_style | py::array::forcecast> &queries,
+                      py::array_t<IdT, py::array::c_style | py::array::forcecast> &ids, const uint64_t num_inserts,
+                      const int num_threads = 0)
+    {
+        if (num_threads == 0)
+            omp_set_num_threads(omp_get_num_procs());
+        else
+            omp_set_num_threads(num_threads);
+        py::array_t<int> insert_retvals({num_inserts});
+
+#pragma omp parallel for schedule(dynamic, 1)
+        for (int64_t i = 0; i < (int64_t)num_inserts; i++)
+        {
+            insert_retvals.mutable_data(i) = _index->insert_point(queries.data(i), ids(i));
+        }
+
+        return insert_retvals;
+    }
+        
+
     int mark_deleted(const IdT id)
     {
         return _index->lazy_delete(id);
@@ -226,7 +246,10 @@ template <class T> struct DynamicInMemIndex
         py::array_t<float> dists({num_queries, knn});
         std::vector<T *> empty_vector;
 
-        omp_set_num_threads(num_threads);
+        if (num_threads == 0)
+            omp_set_num_threads(omp_get_num_procs());
+        else
+            omp_set_num_threads(num_threads);
 
 #pragma omp parallel for schedule(dynamic, 1)
         for (int64_t i = 0; i < (int64_t)num_queries; i++)
