@@ -614,8 +614,7 @@ template <typename T, typename LabelT>
 int build_merged_vamana_index(std::string base_file, diskann::Metric compareMetric, uint32_t L, uint32_t R,
                               double sampling_rate, double ram_budget, std::string mem_index_path,
                               std::string medoids_file, std::string centroids_file, size_t build_pq_bytes, bool use_opq,
-                              uint32_t num_threads,
-                              bool use_filters, const std::string &label_file,
+                              uint32_t num_threads, bool use_filters, const std::string &label_file,
                               const std::string &labels_to_medoids_file, const std::string &universal_label,
                               const uint32_t Lf)
 {

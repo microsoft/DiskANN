@@ -252,7 +252,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     void occlude_list(const uint32_t location, std::vector<Neighbor> &pool, const float alpha, const uint32_t degree,
                       const uint32_t maxc, std::vector<uint32_t> &result, InMemQueryScratch<T> *scratch,
                       const tsl::robin_set<uint32_t> *const delete_set_ptr = nullptr,
-                      std::vector<uint32_t>* skipped_result = nullptr);
+                      std::vector<uint32_t> *skipped_result = nullptr);
 
     // add reverse links from all the visited nodes to node n.
     void inter_insert(uint32_t n, std::vector<uint32_t> &pruned_list, const uint32_t range,
