@@ -42,10 +42,10 @@ def insert_and_search(
     else:
         raise ValueError("data_type must be float, int8 or uint8")
 
-    offsets, permutation = utils.cluster_and_permute(dtype_str, data, 20)
+    offsets, permutation = utils.cluster_and_permute(dtype_str, npts, ndims, data, 20)
 
     for i in range(npts):
-        index.insert(data[permutation[i]], i+1)
+        index.insert(data[permutation[i], :], permutation[i]+1)
     tags, dists = index.batch_search(queries, K, Ls, num_threads)
     res_ids = tags - 1
 
@@ -57,7 +57,7 @@ def insert_and_search(
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         prog="in-mem-dynamic",
-        description="Inserts points dynamically and search from vectors sn a file",
+        description="Inserts points dynamically in a clustered order and search from vectors in a file.",
     )
 
     parser.add_argument("-d", "--data_type", required=True)

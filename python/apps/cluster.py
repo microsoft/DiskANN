@@ -14,9 +14,13 @@ if __name__ == '__main__':
     parser.add_argument('-k', '--num_clusters', type=int, required=True)
     args = parser.parse_args()
 
-    offsets, permutation = utils.cluster_and_permute(args.data_type, args.indexdata_file, args.num_clusters)
+    npts, ndims = get_bin_metadata(indexdata_file)
 
     data = utils.bin_to_numpy(args.data_type, args.indexdata_file)
+
+
+    offsets, permutation = utils.cluster_and_permute(args.data_type, npts, ndims, data, args.num_clusters)
+
 
     permuted_data = data[permutation]
 

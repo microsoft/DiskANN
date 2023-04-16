@@ -3,14 +3,20 @@
 
 import numpy as np
 from scipy.cluster.vq import vq, kmeans2
+from typing import Tuple
 
 
-def get_bin_metadata(bin_file):
+def get_bin_metadata(
+    bin_file
+) -> Tuple[int, int]:
     array = np.fromfile(file=bin_file, dtype=np.uint32, count=2)
     return array[0], array[1]
 
 
-def bin_to_numpy(dtype, bin_file):
+def bin_to_numpy(
+    dtype, 
+    bin_file
+) -> np.ndarray:
     npts, ndims = get_bin_metadata(bin_file)
     return np.fromfile(file=bin_file, dtype=dtype, offset=8).reshape(npts, ndims)
 
@@ -25,7 +31,12 @@ def numpy_to_bin(array, out_file):
     f.write(array.tobytes())
     f.close()
 
-def read_gt_file(gt_file):
+def read_gt_file(
+    gt_file
+) -> Tuple[np.ndarray[int], np.ndarray[float]]:
+    """
+    Return ids and distances to queries
+    """
     nq, K = get_bin_metadata(gt_file)
     ids = np.fromfile(file=gt_file, dtype=np.uint32, offset=8, count=nq * K).reshape(
         nq, K
@@ -37,7 +48,9 @@ def read_gt_file(gt_file):
 
 
 def calculate_recall(
-    result_set_indices: np.ndarray, truth_set_indices: np.ndarray, recall_at: int = 5
+    result_set_indices: np.ndarray[int], 
+    truth_set_indices: np.ndarray[int], 
+    recall_at: int = 5
 ) -> float:
     """
     result_set_indices and truth_set_indices correspond by row index. the columns in each row contain the indices of
@@ -56,23 +69,25 @@ def calculate_recall(
     return found / (result_set_indices.shape[0] * recall_at)
 
 
-def calculate_recall_from_gt_file(K, ids, gt_file) -> float:
+def calculate_recall_from_gt_file(
+    K: int,
+    ids: np.ndarray[int],
+    gt_file: str
+) -> float:
+    """
+    Calculate recall from ids returned from search and those read from file
+    """
     gt_ids, gt_dists = read_gt_file(gt_file)
     return calculate_recall(ids, gt_ids, K)
 
 
-def cluster_and_permute(dtype_str, indexdata_file, num_clusters):
-    npts, ndims = get_bin_metadata(indexdata_file)
-
-    if dtype_str == "float":
-        data = bin_to_numpy(np.float32, indexdata_file)
-    elif dtype_str == "int8":
-        data = bin_to_numpy(np.int8, indexdata_file)
-    elif dtype_str == "uint8":
-        data = bin_to_numpy(np.uint8, indexdata_file)
-    else:
-        raise ValueError("data_type must be float, int8 or uint8")
-
+def cluster_and_permute(
+    dtype_str, npts, ndims, data, num_clusters
+) -> Tuple[np.ndarray[int], np.ndarray[int]]:
+    """
+    Cluster the data and return permutation of row indices 
+    that would group indices of the same cluster together
+    """
     sample_size = min(100000, npts)
     sample_indices = np.random.choice(range(npts), size = sample_size, replace=False)
     sampled_data = data[sample_indices,:]
@@ -90,7 +105,7 @@ def cluster_and_permute(dtype_str, indexdata_file, num_clusters):
     for i in range(1,num_clusters,1):
         offsets[i] = offsets[i-1] + count[i-1]
 
-    permutation = np.zeros(npts)
+    permutation = np.zeros(npts, dtype=int)
     for i in range(npts):
         label = labels[i]
         row = offsets[label] + counters[label]
