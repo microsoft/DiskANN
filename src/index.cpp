@@ -1388,9 +1388,6 @@ void Index<T, TagT, LabelT>::link(IndexWriteParameters &parameters)
 
     _saturate_graph = parameters.saturate_graph;
 
-    if (num_threads != 0)
-        omp_set_num_threads(num_threads);
-
     _indexingQueueSize = parameters.search_list_size;
     _filterIndexingQueueSize = parameters.filter_list_size;
     _indexingRange = parameters.max_degree;
