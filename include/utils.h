@@ -105,12 +105,14 @@ inline void open_file_to_write(std::ofstream &writer, const std::string &filenam
     {
         char buff[1024];
 #ifdef _WINDOWS
-        strerror_s(buff, 1024, errno);
+        auto ret = strerror_s(buff, 1024, errno);
 #else
-        strerror_r(errno, buff, 1024);
+        auto ret = strerror_r(errno, buff, 1024);
 #endif
-        diskann::cerr << std::string("Failed to open file") + filename + " for write because " + buff << std::endl;
-        throw diskann::ANNException(std::string("Failed to open file ") + filename + " for write because: " + buff, -1);
+        auto message =
+            std::string("Failed to open file") + filename + " for write because " + buff + ", ret=" + std::to_string(ret);
+        diskann::cerr << message << std::endl;
+        throw diskann::ANNException(message, -1);
     }
 }
 
