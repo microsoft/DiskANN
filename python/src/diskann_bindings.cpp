@@ -192,6 +192,25 @@ template <class T> struct DynamicInMemIndex
         return _index->insert_point(vector.data(), id);
     }
 
+    auto batch_insert(py::array_t<T, py::array::c_style | py::array::forcecast> &vectors,
+                      py::array_t<IdT, py::array::c_style | py::array::forcecast> &ids, const size_t num_inserts,
+                      const int num_threads = 0)
+    {
+        if (num_threads == 0)
+            omp_set_num_threads(omp_get_num_procs());
+        else
+            omp_set_num_threads(num_threads);
+        py::array_t<int> insert_retvals(num_inserts);
+
+#pragma omp parallel for schedule(dynamic, 1)
+        for (size_t i = 0; i < num_inserts; i++)
+        {
+            insert_retvals.mutable_data()[i] = _index->insert_point(vectors.data(i), *(ids.data(i)));
+        }
+
+        return insert_retvals;
+    }
+
     int mark_deleted(const IdT id)
     {
         return _index->lazy_delete(id);
@@ -226,7 +245,10 @@ template <class T> struct DynamicInMemIndex
         py::array_t<float> dists({num_queries, knn});
         std::vector<T *> empty_vector;
 
-        omp_set_num_threads(num_threads);
+        if (num_threads == 0)
+            omp_set_num_threads(omp_get_num_procs());
+        else
+            omp_set_num_threads(num_threads);
 
 #pragma omp parallel for schedule(dynamic, 1)
         for (int64_t i = 0; i < (int64_t)num_queries; i++)
@@ -407,6 +429,8 @@ inline void add_variant(py::module_ &m, const std::string &build_name, const std
         .def("search", &DynamicInMemIndex<T>::search, py::arg("query"), py::arg("knn"), py::arg("complexity"))
         .def("batch_search", &DynamicInMemIndex<T>::batch_search, py::arg("queries"), py::arg("num_queries"),
              py::arg("knn"), py::arg("complexity"), py::arg("num_threads"))
+        .def("batch_insert", &DynamicInMemIndex<T>::batch_insert, py::arg("vectors"), py::arg("ids"),
+             py::arg("num_inserts"), py::arg("num_threads"))
         .def("save", &DynamicInMemIndex<T>::save, py::arg("save_path") = "", py::arg("compact_before_save") = false)
         .def("insert", &DynamicInMemIndex<T>::insert, py::arg("vector"), py::arg("id"))
         .def("mark_deleted", &DynamicInMemIndex<T>::mark_deleted, py::arg("id"))
