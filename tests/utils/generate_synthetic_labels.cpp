@@ -13,8 +13,8 @@ class ZipfDistribution
 {
   public:
     ZipfDistribution(int num_points, int num_labels)
-        : uniform_zero_to_one(std::uniform_real_distribution<>(0.0, 1.0)), num_points(num_points),
-          num_labels(num_labels)
+        : num_labels(num_labels), num_points(num_points),
+          uniform_zero_to_one(std::uniform_real_distribution<>(0.0, 1.0))
     {
     }
 
@@ -32,7 +32,6 @@ class ZipfDistribution
     int writeDistribution(std::ofstream &outfile)
     {
         auto distribution_map = createDistributionMap();
-        auto primary_label_frequency = num_points * distribution_factor;
         for (int i{0}; i < num_points; i++)
         {
             bool label_written = false;
@@ -152,10 +151,10 @@ int main(int argc, char **argv)
         }
         else if (distribution_type == "random")
         {
-            for (int i = 0; i < num_points; i++)
+            for (size_t i = 0; i < num_points; i++)
             {
                 bool label_written = false;
-                for (int j = 1; j <= num_labels; j++)
+                for (size_t j = 1; j <= num_labels; j++)
                 {
                     // 50% chance to assign each label
                     if (rand() > (RAND_MAX / 2))
@@ -184,7 +183,7 @@ int main(int argc, char **argv)
             std::mt19937 gen(rd());                               // seed the generator
             std::uniform_int_distribution<> distr(0, num_labels); // define the range
 
-            for (int i = 0; i < num_points; i++)
+            for (size_t i = 0; i < num_points; i++)
             {
                 outfile << distr(gen);
                 if (i != num_points - 1)

@@ -855,10 +855,10 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
         normalize((float *)aligned_query, _dim);
     }
 
-    float *query_float;
-    float *query_rotated;
-    float *pq_dists;
-    uint8_t *pq_coord_scratch;
+    float *query_float = nullptr;
+    float *query_rotated = nullptr;
+    float *pq_dists = nullptr;
+    uint8_t *pq_coord_scratch = nullptr;
     // Intialize PQ related scratch to use PQ based distances
     if (_pq_dist)
     {
@@ -1250,6 +1250,11 @@ void Index<T, TagT, LabelT>::prune_neighbors(const uint32_t location, std::vecto
     std::sort(pool.begin(), pool.end());
     pruned_list.clear();
     pruned_list.reserve(range);
+
+    if (pool.begin()->distance == 0)
+    {
+        diskann::cerr << "Warning: a candidate with distance 0 found in prune_neighbors" << std::endl;
+    }
     occlude_list(location, pool, alpha, range, max_candidate_size, pruned_list, scratch);
     assert(pruned_list.size() <= range);
 
@@ -1344,9 +1349,6 @@ void Index<T, TagT, LabelT>::link(IndexWriteParameters &parameters)
         omp_set_num_threads(num_threads);
 
     _saturate_graph = parameters.saturate_graph;
-
-    if (num_threads != 0)
-        omp_set_num_threads(num_threads);
 
     _indexingQueueSize = parameters.search_list_size;
     _filterIndexingQueueSize = parameters.filter_list_size;
@@ -1828,7 +1830,6 @@ LabelT Index<T, TagT, LabelT>::get_converted_label(const std::string &raw_label)
     stream << "Unable to find label in the Label Map";
     diskann::cerr << stream.str() << std::endl;
     throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
-    exit(-1);
 }
 
 template <typename T, typename TagT, typename LabelT>
@@ -1903,7 +1904,7 @@ void Index<T, TagT, LabelT>::build_filtered_index(const char *filename, const st
 
     std::unordered_map<LabelT, std::vector<uint32_t>> label_to_points;
 
-    for (uint32_t lbl = 0; lbl < _labels.size(); lbl++)
+    for (typename tsl::robin_set<LabelT>::size_type lbl = 0; lbl < _labels.size(); lbl++)
     {
         auto itr = _labels.begin();
         std::advance(itr, lbl);

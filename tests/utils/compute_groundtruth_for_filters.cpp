@@ -766,7 +766,7 @@ int main(int argc, char **argv)
         tsl::robin_map<std::string, uint32_t> labels_to_number_of_queries;
 
         label_set all_labels;
-        for (int i = 0; i < filter_labels.size(); i++)
+        for (size_t i = 0; i < filter_labels.size(); i++)
         {
             std::string label = filter_labels[i];
             all_labels.insert(label);
@@ -881,7 +881,7 @@ int main(int argc, char **argv)
             query_num += labels_to_number_of_queries[lbl];
         }
 
-        for (size_t i = 0; i < query_num; i++)
+        for (int i = 0; i < query_num; i++)
         {
             final_gt_ids.push_back(std::vector<int32_t>(K));
             final_gt_dists.push_back(std::vector<float>(K));
@@ -895,7 +895,7 @@ int main(int argc, char **argv)
             for (int i = 0; i < labels_to_number_of_queries[lbl]; i++)
             {
                 int orig_query_id = label_query_id_to_orig_id[lbl][i];
-                for (int j = 0; j < K; j++)
+                for (uint64_t j = 0; j < K; j++)
                 {
                     final_gt_ids[orig_query_id][j] = label_id_to_orig_id[lbl][gt_ids[i * K + j]];
                     final_gt_dists[orig_query_id][j] = gt_dists[i * K + j];
