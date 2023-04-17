@@ -1302,12 +1302,12 @@ void Index<T, TagT, LabelT>::prune_neighbors(const uint32_t location, std::vecto
 
     if (_saturate_graph && alpha > 1)
     {
-        std::unordered_set<uint32_t> inserted_nodes(pruned_list.begin(), pruned_list.end());
         for (const auto &node : pool)
         {
             if (pruned_list.size() >= range)
                 break;
-            if (node.id != location && inserted_nodes.emplace(node.id).second)
+            if ((std::find(pruned_list.begin(), pruned_list.end(), node.id) == pruned_list.end()) &&
+                node.id != location)
                 pruned_list.push_back(node.id);
         }
     }
