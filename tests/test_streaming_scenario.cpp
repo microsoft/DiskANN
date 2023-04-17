@@ -202,7 +202,9 @@ void build_incremental_index(const std::string &data_path, const uint32_t L, con
     }
 
     if (num_points < max_points_to_insert)
-        throw diskann::ANNException("num_points < max_points_to_insert", -1, __FUNCSIG__, __FILE__, __LINE__);
+        throw diskann::ANNException(std::string("num_points(") + std::to_string(num_points) +
+                                        ") < max_points_to_insert(" + std::to_string(max_points_to_insert) + ")",
+                                    -1, __FUNCSIG__, __FILE__, __LINE__);
 
     if (max_points_to_insert < active_window + consolidate_interval)
         throw diskann::ANNException("ERROR: max_points_to_insert < "

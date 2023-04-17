@@ -712,7 +712,7 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
                 {
                     std::istringstream iss(line);
                     uint32_t cnt = 0;
-                    uint32_t medoid;
+                    uint32_t medoid = 0;
                     LabelT label;
                     while (std::getline(iss, token, ','))
                     {
