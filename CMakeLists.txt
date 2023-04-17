@@ -15,15 +15,16 @@
 #   Contact for this feature: gopalrs.
 
 # Some variables like MSVC are defined only after project(), so put that first.
-project(diskann)
-
 cmake_minimum_required(VERSION 3.15)
+project(diskann)
 
 set(CMAKE_STANDARD 14)
 
 if(NOT MSVC)
 	set(CMAKE_CXX_COMPILER g++)
 endif()
+
+set(CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake;${CMAKE_MODULE_PATH}")
 
 # Install nuget packages for dependencies.
 if (MSVC)
@@ -42,7 +43,7 @@ if (MSVC)
     if (RESTAPI)
 	    set(DISKANN_MSVC_RESTAPI_PACKAGES_CONFIG ${CMAKE_BINARY_DIR}/restapi/packages.config)
 	    configure_file(${PROJECT_SOURCE_DIR}/windows/packages_restapi.config.in ${DISKANN_MSVC_RESTAPI_PACKAGES_CONFIG})
-	    exec_program(${NUGET_EXE} ARGS install \"${DISKANN_MSVC_RESTAPI_PACKAGES_CONFIG}\" -ExcludeVersion -OutputDirectory \"${DISKANN_MSVC_PACKAGES}\")
+        exec_program(${NUGET_EXE} ARGS install \"${DISKANN_MSVC_RESTAPI_PACKAGES_CONFIG}\" -ExcludeVersion -OutputDirectory \"${DISKANN_MSVC_PACKAGES}\")
     endif()
     message(STATUS "Finished setting up nuget dependencies")
 endif()
@@ -140,6 +141,8 @@ else()
     set(MKL_ROOT /opt/intel/oneapi/mkl/latest CACHE PATH "Intel OneAPI MKL library implementation path")
     link_directories(${OMP_PATH} ${MKL_ROOT}/lib/intel64)
     include_directories(${MKL_ROOT}/include)
+    # todo: make sure that the link_directories and include_directories for mkl also include paths that are used
+    # when using a RH derivative distro (for python build through cibuildwheel)
 
     # expected path for apt packaged intel mkl installs
     link_directories(/usr/lib/x86_64-linux-gnu/mkl)
@@ -242,8 +245,10 @@ else()
 endif()
 
 add_subdirectory(src)
-add_subdirectory(tests)
-add_subdirectory(tests/utils)
+if (NOT PYBIND)
+    add_subdirectory(apps)
+    add_subdirectory(apps/utils)
+endif()
 
 if (MSVC)
     message(STATUS "The ${PROJECT_NAME}.sln has been created, opened it from VisualStudio to build Release or Debug configurations.\n"
@@ -258,11 +263,10 @@ if (RESTAPI)
         link_libraries("${DISKANN_CPPRESTSDK}/x64/lib/cpprest142_2_10.lib")
         include_directories("${DISKANN_CPPRESTSDK}/include")
     endif()
-    add_subdirectory(tests/restapi)
+    add_subdirectory(apps/restapi)
 endif()
 
 include(clang-format.cmake)
-
 
 if(PYBIND)
     add_subdirectory(python)

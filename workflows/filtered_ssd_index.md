@@ -1,7 +1,7 @@
 **Usage for filtered indices**
 ================================
 
-To generate an SSD-friendly index, use the `tests/build_disk_index` program. 
+To generate an SSD-friendly index, use the `apps/build_disk_index` program. 
 ----------------------------------------------------------------------------
 
 ## Building a SSD based filtered Index
@@ -27,7 +27,7 @@ To generate an SSD-friendly index, use the `tests/build_disk_index` program.
 
 
 ## Computing a groundtruth file for a filtered index
-In order to evaluate the performance of our algorithms, we can compare its results (i.e. the top `k` neighbors found for each query) against the results found by an exact nearest neighbor search. We provide the program `tests/utils/compute_groundtruth.cpp` to provide the results for the latter:
+In order to evaluate the performance of our algorithms, we can compare its results (i.e. the top `k` neighbors found for each query) against the results found by an exact nearest neighbor search. We provide the program `apps/utils/compute_groundtruth.cpp` to provide the results for the latter:
 
 1. **`--data_type`** The type of dataset you built an index with. float(32 bit), signed int8 and unsigned uint8 are supported. 
 2. **`--dist_fn`**: There are two distance functions supported: l2 and mips.
@@ -41,7 +41,7 @@ In order to evaluate the performance of our algorithms, we can compare its resul
 
 ## Searching a Filtered Index
 
-Searching a filtered index uses the `tests/search_disk_index.cpp`:
+Searching a filtered index uses the `apps/search_disk_index.cpp`:
 
 1. **--data_type**: The type of dataset you wish to build an index on. float(32 bit), signed int8 and unsigned uint8 are supported. Use the same data type as in arg (1) above used in building the index.
 2.  **--dist_fn**: There are two distance functions supported: minimum Euclidean distance (l2) and maximum inner product (mips). Use the same distance as in arg (2) above used in building the index.
@@ -50,7 +50,7 @@ Searching a filtered index uses the `tests/search_disk_index.cpp`:
 5. **-T (--num_threads)** (default is to get_omp_num_procs()): The number of threads used for searching. Threads run in parallel and one thread handles one query at a time. More threads will result in higher aggregate query throughput, but will also use more IOs/second across the system, which may lead to higher per-query latency. So find the balance depending on the maximum number of IOPs supported by the SSD.
 6. **-W (--beamwidth)** (default is 2): The beamwidth to be used for search. This is the maximum number of IO requests each query will issue per iteration of search code. Larger beamwidth will result in fewer IO round-trips per query, but might result in slightly higher total number of IO requests to SSD per query. For the highest query throughput with a fixed SSD IOps rating, use `W=1`. For best latency, use `W=4,8` or higher complexity search. Specifying 0 will optimize the beamwidth depending on the number of threads performing search, but will involve some tuning overhead. 
 7. **--query_file**: The queries to be searched on in same binary file format as the data file in arg (2) above. The query file must be the same type as argument (1).
-8. **--gt_file**: The ground truth file for the queries in arg (7) and data file used in index construction.  The binary file must start with *n*, the number of queries (4 bytes), followed by *d*, the number of ground truth elements per query (4 bytes), followed by `n*d` entries per query representing the d closest IDs per query in integer format,  followed by `n*d` entries representing the corresponding distances (float). Total file size is `8 + 4*n*d + 4*n*d` bytes. The groundtruth file, if not available, can be calculated using the program `tests/utils/compute_groundtruth`. Use "null" if you do not have this file and if you do not want to compute recall.
+8. **--gt_file**: The ground truth file for the queries in arg (7) and data file used in index construction.  The binary file must start with *n*, the number of queries (4 bytes), followed by *d*, the number of ground truth elements per query (4 bytes), followed by `n*d` entries per query representing the d closest IDs per query in integer format,  followed by `n*d` entries representing the corresponding distances (float). Total file size is `8 + 4*n*d + 4*n*d` bytes. The groundtruth file, if not available, can be calculated using the program `apps/utils/compute_groundtruth`. Use "null" if you do not have this file and if you do not want to compute recall.
 9. **-K**: search for *K* neighbors and measure *K*-recall@*K*, meaning the intersection between the retrieved top-*K* nearest neighbors and ground truth *K* nearest neighbors.
 10. **--result_path**: Search results will be stored in files with specified prefix, in bin format.
 11. **-L (--search_list)**: A list of search_list sizes to perform search with. Larger parameters will result in slower latencies, but higher accuracies. Must be atleast the value of *K* in arg (9).
@@ -60,22 +60,22 @@ Searching a filtered index uses the `tests/search_disk_index.cpp`:
 Example with SIFT10K:
 --------------------
 We demonstrate how to work through this pipeline using the SIFT10K dataset (http://corpus-texmex.irisa.fr/). Before starting, make sure you have compiled diskANN according to the instructions in the README and can see the following binaries (paths with respect to repository root):
-- `build/tests/utils/compute_groundtruth`
-- `build/tests/utils/fvecs_to_bin`
-- `build/tests/build_disk_index`
-- `build/tests/search_disk_index`
+- `build/apps/utils/compute_groundtruth`
+- `build/apps/utils/fvecs_to_bin`
+- `build/apps/build_disk_index`
+- `build/apps/search_disk_index`
 
 Now, download the base and query set and convert the data to binary format:
 ```bash
 wget ftp://ftp.irisa.fr/local/texmex/corpus/siftsmall.tar.gz
 tar -zxvf siftsmall.tar.gz
-build/tests/utils/fvecs_to_bin float siftsmall/siftsmall_base.fvecs siftsmall/siftsmall_base.bin
-build/tests/utils/fvecs_to_bin float siftsmall/siftsmall_query.fvecs siftsmall/siftsmall_query.bin
+build/apps/utils/fvecs_to_bin float siftsmall/siftsmall_base.fvecs siftsmall/siftsmall_base.bin
+build/apps/utils/fvecs_to_bin float siftsmall/siftsmall_query.fvecs siftsmall/siftsmall_query.bin
 ```
 
 We now need to make label file for our vectors. For convenience, we've included a synthetic label generator through which we can generate label file as follow
 ```bash
-  build/tests/utils/generate_synthetic_labels  --num_labels 50 --num_points 10000  --output_file ./rand_labels_50_10K.txt --distribution_type zipf
+  build/apps/utils/generate_synthetic_labels  --num_labels 50 --num_points 10000  --output_file ./rand_labels_50_10K.txt --distribution_type zipf
 ```
 Note : `distribution_type` can be `rand` or `zipf`
 
@@ -83,9 +83,9 @@ This will genearate label file with 10000 data points with 50 distinct labels, r
 
 Now build and search the index and measure the recall using ground truth computed using bruteforce. We search for results with the filter 35.
 ```bash
-build/tests/utils/compute_groundtruth --data_type float --dist_fn l2 --base_file siftsmall/siftsmall_base.bin --query_file siftsmall/siftsmall_query.bin --gt_file siftsmall_gt_35.bin --K 100 --label_file rand_labels_50_10K.txt --filter_label 35 --universal_label 0
-build/tests/build_disk_index --data_type float --dist_fn l2 --data_path siftsmall/siftsmall_base.bin --index_path_prefix data/sift/siftsmall_R32_L50_filtered -R 32 --FilteredLbuild 50 -B 1 -M 1 --label_file rand_labels_50_10K.txt --universal_label 0 -F 0
-build/tests/search_disk_index --data_type float --dist_fn l2 --index_path_prefix data/sift/siftsmall_R32_L50_filtered --result_path siftsmall/search_35 --query_file siftsmall/siftsmall_query.bin --gt_file siftsmall_gt_35.bin -K 10 -L 10 20 30 40 50 100 --filter_label 35 -W 4 -T 8
+build/apps/utils/compute_groundtruth --data_type float --dist_fn l2 --base_file siftsmall/siftsmall_base.bin --query_file siftsmall/siftsmall_query.bin --gt_file siftsmall_gt_35.bin --K 100 --label_file rand_labels_50_10K.txt --filter_label 35 --universal_label 0
+build/apps/build_disk_index --data_type float --dist_fn l2 --data_path siftsmall/siftsmall_base.bin --index_path_prefix data/sift/siftsmall_R32_L50_filtered -R 32 --FilteredLbuild 50 -B 1 -M 1 --label_file rand_labels_50_10K.txt --universal_label 0 -F 0
+build/apps/search_disk_index --data_type float --dist_fn l2 --index_path_prefix data/sift/siftsmall_R32_L50_filtered --result_path siftsmall/search_35 --query_file siftsmall/siftsmall_query.bin --gt_file siftsmall_gt_35.bin -K 10 -L 10 20 30 40 50 100 --filter_label 35 -W 4 -T 8
 ```
 
  The output of both searches is listed below. The throughput (Queries/sec) as well as mean and 99.9 latency in microseconds for each `L` parameter provided. (Measured on a physical machine with a 11th Gen Intel(R) Core(TM) i7-1185G7 CPU and 32 GB RAM)
