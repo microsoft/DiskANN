@@ -46,14 +46,19 @@ def insert_and_search(
     for i in range(npts):
         tags[i] = i+1
     index.batch_insert(data, tags, npts, num_threads)
+    print("batch_insert complete")
 
-    delete_tags = np.random.choice(range(1,npts+1,1), size=0.5*npts, replace=False)
+    delete_tags = np.random.choice(range(1,npts+1,1), size=int(0.5*npts), replace=False)
     for tag in delete_tags:
         index.mark_deleted(tag)
+    print("mark deletion completed")
+
     index.consolidate_delete()
+    print("consolidation completed")
 
     for tag in delete_tags:
         index.insert(data[tag-1, :], tag)    
+    print("re-insertion completed")
 
     tags, dists = index.batch_search(queries, K, Ls, num_threads)
     res_ids = tags - 1
