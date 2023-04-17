@@ -497,7 +497,6 @@ LabelT PQFlashIndex<T, LabelT>::get_converted_label(const std::string &filter_la
     stream << "Unable to find label in the Label Map";
     diskann::cerr << stream.str() << std::endl;
     throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
-    exit(-1);
 }
 
 template <typename T, typename LabelT>
@@ -713,7 +712,7 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
                 {
                     std::istringstream iss(line);
                     uint32_t cnt = 0;
-                    uint32_t medoid;
+                    uint32_t medoid = 0;
                     LabelT label;
                     while (std::getline(iss, token, ','))
                     {

@@ -302,8 +302,8 @@ int merge_shards(const std::string &vamana_prefix, const std::string &vamana_suf
             {
                 std::istringstream iss(line);
                 uint32_t cnt = 0;
-                uint32_t medoid;
-                uint32_t label;
+                uint32_t medoid = 0;
+                uint32_t label = 0;
                 while (std::getline(iss, token, ','))
                 {
                     token.erase(std::remove(token.begin(), token.end(), '\n'), token.end());
@@ -614,7 +614,7 @@ template <typename T, typename LabelT>
 int build_merged_vamana_index(std::string base_file, diskann::Metric compareMetric, uint32_t L, uint32_t R,
                               double sampling_rate, double ram_budget, std::string mem_index_path,
                               std::string medoids_file, std::string centroids_file, size_t build_pq_bytes, bool use_opq,
-                              bool use_filters, const std::string &label_file,
+                              uint32_t num_threads, bool use_filters, const std::string &label_file,
                               const std::string &labels_to_medoids_file, const std::string &universal_label,
                               const uint32_t Lf)
 {
@@ -632,6 +632,7 @@ int build_merged_vamana_index(std::string base_file, diskann::Metric compareMetr
         diskann::IndexWriteParameters paras = diskann::IndexWriteParametersBuilder(L, R)
                                                   .with_filter_list_size(Lf)
                                                   .with_saturate_graph(!use_filters)
+                                                  .with_num_threads(num_threads)
                                                   .build();
         using TagT = uint32_t;
         diskann::Index<T, TagT, LabelT> _index(compareMetric, base_dim, base_num, false, false, false,
@@ -1230,7 +1231,7 @@ int build_disk_index(const char *dataFilePath, const char *indexFilePath, const 
     timer.reset();
     diskann::build_merged_vamana_index<T, LabelT>(data_file_to_use.c_str(), diskann::Metric::L2, L, R, p_val,
                                                   indexing_ram_budget, mem_index_path, medoids_path, centroids_path,
-                                                  build_pq_bytes, use_opq, use_filters, labels_file_to_use,
+                                                  build_pq_bytes, use_opq, num_threads, use_filters, labels_file_to_use,
                                                   labels_to_medoids_path, universal_label, Lf);
     diskann::cout << timer.elapsed_seconds_for_step("building merged vamana index") << std::endl;
 
@@ -1377,32 +1378,32 @@ template DISKANN_DLLEXPORT int build_disk_index<float, uint16_t>(const char *dat
 template DISKANN_DLLEXPORT int build_merged_vamana_index<int8_t, uint32_t>(
     std::string base_file, diskann::Metric compareMetric, uint32_t L, uint32_t R, double sampling_rate,
     double ram_budget, std::string mem_index_path, std::string medoids_path, std::string centroids_file,
-    size_t build_pq_bytes, bool use_opq, bool use_filters, const std::string &label_file,
+    size_t build_pq_bytes, bool use_opq, uint32_t num_threads, bool use_filters, const std::string &label_file,
     const std::string &labels_to_medoids_file, const std::string &universal_label, const uint32_t Lf);
 template DISKANN_DLLEXPORT int build_merged_vamana_index<float, uint32_t>(
     std::string base_file, diskann::Metric compareMetric, uint32_t L, uint32_t R, double sampling_rate,
     double ram_budget, std::string mem_index_path, std::string medoids_path, std::string centroids_file,
-    size_t build_pq_bytes, bool use_opq, bool use_filters, const std::string &label_file,
+    size_t build_pq_bytes, bool use_opq, uint32_t num_threads, bool use_filters, const std::string &label_file,
     const std::string &labels_to_medoids_file, const std::string &universal_label, const uint32_t Lf);
 template DISKANN_DLLEXPORT int build_merged_vamana_index<uint8_t, uint32_t>(
     std::string base_file, diskann::Metric compareMetric, uint32_t L, uint32_t R, double sampling_rate,
     double ram_budget, std::string mem_index_path, std::string medoids_path, std::string centroids_file,
-    size_t build_pq_bytes, bool use_opq, bool use_filters, const std::string &label_file,
+    size_t build_pq_bytes, bool use_opq, uint32_t num_threads, bool use_filters, const std::string &label_file,
     const std::string &labels_to_medoids_file, const std::string &universal_label, const uint32_t Lf);
 // Label=16_t
 template DISKANN_DLLEXPORT int build_merged_vamana_index<int8_t, uint16_t>(
     std::string base_file, diskann::Metric compareMetric, uint32_t L, uint32_t R, double sampling_rate,
     double ram_budget, std::string mem_index_path, std::string medoids_path, std::string centroids_file,
-    size_t build_pq_bytes, bool use_opq, bool use_filters, const std::string &label_file,
+    size_t build_pq_bytes, bool use_opq, uint32_t num_threads, bool use_filters, const std::string &label_file,
     const std::string &labels_to_medoids_file, const std::string &universal_label, const uint32_t Lf);
 template DISKANN_DLLEXPORT int build_merged_vamana_index<float, uint16_t>(
     std::string base_file, diskann::Metric compareMetric, uint32_t L, uint32_t R, double sampling_rate,
     double ram_budget, std::string mem_index_path, std::string medoids_path, std::string centroids_file,
-    size_t build_pq_bytes, bool use_opq, bool use_filters, const std::string &label_file,
+    size_t build_pq_bytes, bool use_opq, uint32_t num_threads, bool use_filters, const std::string &label_file,
     const std::string &labels_to_medoids_file, const std::string &universal_label, const uint32_t Lf);
 template DISKANN_DLLEXPORT int build_merged_vamana_index<uint8_t, uint16_t>(
     std::string base_file, diskann::Metric compareMetric, uint32_t L, uint32_t R, double sampling_rate,
     double ram_budget, std::string mem_index_path, std::string medoids_path, std::string centroids_file,
-    size_t build_pq_bytes, bool use_opq, bool use_filters, const std::string &label_file,
+    size_t build_pq_bytes, bool use_opq, uint32_t num_threads, bool use_filters, const std::string &label_file,
     const std::string &labels_to_medoids_file, const std::string &universal_label, const uint32_t Lf);
 }; // namespace diskann
