@@ -1038,6 +1038,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
     catch (const ANNException &e)
     {
         diskann::cerr << "Error: " << e.what() << std::endl;
+        return;
     }
 
     if (beam_width > MAX_N_SECTOR_READS)

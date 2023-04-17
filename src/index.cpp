@@ -2086,6 +2086,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
     catch (const ANNException &e)
     {
         diskann::cerr << "Error: " << e.what() << std::endl;
+        return std::make_pair(0,0);
     }
     if (K > (uint64_t)L)
     {
