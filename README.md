@@ -23,7 +23,7 @@ sudo apt install make cmake g++ libaio-dev libgoogle-perftools-dev clang-format 
 ```
 
 ### Install Intel MKL
-#### Ubuntu 20.04
+#### Ubuntu 20.04 or newer
 ```bash
 sudo apt install libmkl-full-dev
 ```
