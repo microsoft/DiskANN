@@ -1169,8 +1169,7 @@ template <typename T, typename TagT, typename LabelT>
 void Index<T, TagT, LabelT>::occlude_list(const uint32_t location, std::vector<Neighbor> &pool, const float alpha,
                                           const uint32_t degree, const uint32_t maxc, std::vector<uint32_t> &result,
                                           InMemQueryScratch<T> *scratch,
-                                          const tsl::robin_set<uint32_t> *const delete_set_ptr,
-                                          std::vector<uint32_t> *skipped_result)
+                                          const tsl::robin_set<uint32_t> *const delete_set_ptr)
 {
     if (pool.size() == 0)
         return;
@@ -1198,10 +1197,6 @@ void Index<T, TagT, LabelT>::occlude_list(const uint32_t location, std::vector<N
         {
             if (occlude_factor[iter - pool.begin()] > cur_alpha)
             {
-                if (skipped_result != nullptr)
-                {
-                    skipped_result->push_back(iter->id);
-                }
                 continue;
             }
             // Set the entry to float::max so that is not considered again
@@ -1297,27 +1292,19 @@ void Index<T, TagT, LabelT>::prune_neighbors(const uint32_t location, std::vecto
     std::sort(pool.begin(), pool.end());
     pruned_list.clear();
     pruned_list.reserve(range);
-    std::unique_ptr<std::vector<uint32_t>> skipped_result(nullptr);
-    if (_saturate_graph && alpha > 1)
-    {
-        skipped_result = std::make_unique<std::vector<uint32_t>>();
-        skipped_result->reserve(range);
-    }
 
-    occlude_list(location, pool, alpha, range, max_candidate_size, pruned_list, scratch,
-                 /*delete_set_ptr*/ nullptr, skipped_result.get());
+    occlude_list(location, pool, alpha, range, max_candidate_size, pruned_list, scratch);
     assert(pruned_list.size() <= range);
 
     if (_saturate_graph && alpha > 1)
     {
-        for (const auto node : *skipped_result)
+        std::unordered_set<uint32_t> inserted_nodes(pruned_list.begin(), pruned_list.end());
+        for (const auto &node : pool)
         {
             if (pruned_list.size() >= range)
                 break;
-            if (node != location)
-            {
-                pruned_list.push_back(node);
-            }
+            if (node.id != location && inserted_nodes.emplace(node.id).second)
+                pruned_list.push_back(node.id);
         }
     }
 }
