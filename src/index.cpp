@@ -1991,10 +1991,9 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search(const T *query, con
 
     std::shared_lock<std::shared_timed_mutex> lock(_update_lock);
 
-    if (_distance->preprocessing_required()){
-        _distance->preprocess_query(query, _data_store->get_dims(), scratch->aligned_query());
-    }
-    auto retval = iterate_to_fixed_point(query, L, init_ids, scratch, false, unused_filter_label, true);
+    _distance->preprocess_query(query, _data_store->get_dims(), scratch->aligned_query());
+    auto retval =
+        iterate_to_fixed_point(scratch->aligned_query(), L, init_ids, scratch, false, unused_filter_label, true);
 
     NeighborPriorityQueue &best_L_nodes = scratch->best_l_nodes();
 
@@ -2068,10 +2067,11 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
     }
     filter_vec.emplace_back(filter_label);
 
-    T *aligned_query = scratch->aligned_query();
-    memcpy(aligned_query, query, _dim * sizeof(T));
-
-    auto retval = iterate_to_fixed_point(aligned_query, L, init_ids, scratch, true, filter_vec, true);
+    //REFACTOR
+    //T *aligned_query = scratch->aligned_query();
+    //memcpy(aligned_query, query, _dim * sizeof(T));
+    _distance->preprocess_query(query, _data_store->get_dims(), scratch->aligned_query());
+    auto retval = iterate_to_fixed_point(scratch->aligned_query(), L, init_ids, scratch, true, filter_vec, true);
 
     auto best_L_nodes = scratch->best_l_nodes();
 
@@ -2130,7 +2130,9 @@ size_t Index<T, TagT, LabelT>::search_with_tags(const T *query, const uint64_t K
     const std::vector<uint32_t> init_ids = get_init_ids();
     const std::vector<LabelT> unused_filter_label;
 
-    iterate_to_fixed_point(query, L, init_ids, scratch, false, unused_filter_label, true);
+    _distance->preprocess_query(query, _data_store->get_dims(), scratch->aligned_query());
+    iterate_to_fixed_point(scratch->aligned_query(), L, init_ids, scratch, false, unused_filter_label, true);
+
     NeighborPriorityQueue &best_L_nodes = scratch->best_l_nodes();
     assert(best_L_nodes.size() <= L);
 

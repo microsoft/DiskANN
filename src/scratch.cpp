@@ -61,6 +61,7 @@ template <typename T> void InMemQueryScratch<T>::clear()
     _expanded_nodes_set.clear();
     _expanded_nghrs_vec.clear();
     _occlude_list_output.clear();
+
 }
 
 template <typename T> void InMemQueryScratch<T>::resize_for_new_L(uint32_t new_l)
