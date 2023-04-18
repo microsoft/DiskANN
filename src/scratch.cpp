@@ -13,6 +13,7 @@ namespace diskann
 //
 template <typename T>
 InMemQueryScratch<T>::InMemQueryScratch(uint32_t search_l, uint32_t indexing_l, uint32_t r, uint32_t maxc, size_t dim,
+                                        size_t aligned_dim, size_t alignment_factor,
                                         bool init_pq_scratch)
     : _L(0), _R(r), _maxc(maxc)
 {
@@ -24,8 +25,12 @@ InMemQueryScratch<T>::InMemQueryScratch(uint32_t search_l, uint32_t indexing_l, 
         throw diskann::ANNException(ss.str(), -1);
     }
 
-    auto aligned_dim = ROUND_UP(dim, 8);
-    alloc_aligned(((void **)&_aligned_query), aligned_dim * sizeof(T), 8 * sizeof(T));
+    //REFACTOR
+    //auto aligned_dim = ROUND_UP(dim, 8);
+    //alloc_aligned(((void **)&_aligned_query), aligned_dim * sizeof(T), 8 * sizeof(T));
+    //memset(_aligned_query, 0, aligned_dim * sizeof(T));
+
+    alloc_aligned(((void **)&_aligned_query), aligned_dim * sizeof(T), alignment_factor * sizeof(T));
     memset(_aligned_query, 0, aligned_dim * sizeof(T));
 
     if (init_pq_scratch)

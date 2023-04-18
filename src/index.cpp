@@ -164,7 +164,7 @@ void Index<T, TagT, LabelT>::initialize_query_scratch(uint32_t num_threads, uint
 {
     for (uint32_t i = 0; i < num_threads; i++)
     {
-        auto scratch = new InMemQueryScratch<T>(search_l, indexing_l, r, maxc, dim, _pq_dist);
+        auto scratch = new InMemQueryScratch<T>(search_l, indexing_l, r, maxc, dim, _data_store->get_aligned_dim(), _data_store->get_alignment_factor(), _pq_dist);
         _query_scratch.push(scratch);
     }
 }
@@ -854,6 +854,8 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
     {
         normalize((float *)aligned_query, _dim);
     }
+
+    
 
     float *query_float = nullptr;
     float *query_rotated = nullptr;

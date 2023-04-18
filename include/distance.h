@@ -56,12 +56,19 @@ template <typename T> class Distance
     DISKANN_DLLEXPORT virtual void normalize_vector_for_search(const T *query_vec, const uint32_t query_dim,
                                                                T *scratch_query);
 
+    //If an algorithm has a requirement that some data be aligned to a certain boundary
+    //it can use this function to indicate that requirement. Currently, we are setting it to 8
+    //because that works well for AVX2. If we have AVX512 implementations of distance algos,
+    //they might have to set this to 16 (depending on how they are implemented)
+    DISKANN_DLLEXPORT virtual size_t get_required_alignment() const;
+
     // Providing a default implementation for the virtual destructor because we don't
     // expect most metric implementations to need it.
     DISKANN_DLLEXPORT virtual ~Distance();
 
   protected:
     diskann::Metric _distance_metric;
+    size_t _alignment_factor = 8; 
 };
 
 class DistanceCosineInt8 : public Distance<int8_t>

@@ -57,6 +57,11 @@ void Distance<T>::normalize_vector_for_search(const T *query_vec, const uint32_t
     std::memcpy(scratch_query, query_vec, query_dim * sizeof(T));
 }
 
+template <typename T> size_t Distance<T>::get_required_alignment() const
+{
+    return _alignment_factor;
+}
+
 template <typename T> Distance<T>::~Distance()
 {
 }

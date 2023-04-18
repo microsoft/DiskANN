@@ -75,6 +75,9 @@ template <typename data_t> class AbstractDataStore
     // Returns the point in the dataset that is closest to the mean of all points in the dataset
     virtual location_t calculate_medoid() const = 0;
 
+    //search helpers 
+    virtual size_t get_alignment_factor() const = 0;
+
   protected:
     // Expand the datastore to new_num_points. Returns the new capacity created, which should be == new_num_points
     // in the normal case. Implementers can also return _capacity to indicate that there are not implementing this
