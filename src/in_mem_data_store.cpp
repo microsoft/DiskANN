@@ -114,9 +114,9 @@ template <typename data_t> void InMemDataStore<data_t>::populate_data(const data
         std::memmove(_data + i * _aligned_dim, vectors + i * this->_dim, this->_dim * sizeof(data_t));
     }
 
-    if (_distance_fn->normalization_required())
+    if (_distance_fn->preprocessing_required())
     {
-        _distance_fn->normalize_data_for_build(_data, this->_dim, num_pts);
+        _distance_fn->preprocess_base_points(_data, this->_dim, num_pts);
     }
 }
 
@@ -142,9 +142,9 @@ template <typename data_t> void InMemDataStore<data_t>::populate_data(const std:
         throw diskann::ANNException(ss.str(), -1);
     }
 
-    if (_distance_fn->normalization_required())
+    if (_distance_fn->preprocessing_required())
     {
-        _distance_fn->normalize_data_for_build(_data, this->_dim, this->capacity());
+        _distance_fn->preprocess_base_points(_data, this->_dim, this->capacity());
     }
 }
 
@@ -164,9 +164,9 @@ template <typename data_t> void InMemDataStore<data_t>::set_vector(const locatio
     size_t offset_in_data = loc * _aligned_dim;
     memset(_data + offset_in_data, 0, _aligned_dim * sizeof(data_t));
     memcpy(_data + offset_in_data, vector, this->_dim * sizeof(data_t));
-    if (_distance_fn->normalization_required())
+    if (_distance_fn->preprocessing_required())
     {
-        _distance_fn->normalize_data_for_build(_data + offset_in_data, _aligned_dim, 1);
+        _distance_fn->preprocess_base_points(_data + offset_in_data, _aligned_dim, 1);
     }
 }
 

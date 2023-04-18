@@ -41,18 +41,18 @@ template <typename T> diskann::Metric Distance<T>::get_metric() const
     return _distance_metric;
 }
 
-template <typename T> bool Distance<T>::normalization_required() const
+template <typename T> bool Distance<T>::preprocessing_required() const
 {
     return false;
 }
 
 template <typename T>
-void Distance<T>::normalize_data_for_build(T *original_data, const uint32_t orig_dim, const uint32_t num_points)
+void Distance<T>::preprocess_base_points(T *original_data, const size_t orig_dim, const size_t num_points)
 {
 }
 
 template <typename T>
-void Distance<T>::normalize_vector_for_search(const T *query_vec, const uint32_t query_dim, T *scratch_query)
+void Distance<T>::preprocess_query(const T *query_vec, const size_t query_dim, T *scratch_query)
 {
     std::memcpy(scratch_query, query_vec, query_dim * sizeof(T));
 }
@@ -570,12 +570,12 @@ uint32_t AVXNormalizedCosineDistanceFloat::post_normalization_dimension(uint32_t
 {
     return orig_dimension;
 }
-bool AVXNormalizedCosineDistanceFloat::normalization_required() const
+bool AVXNormalizedCosineDistanceFloat::preprocessing_required() const
 {
     return true;
 }
-void AVXNormalizedCosineDistanceFloat::normalize_data_for_build(float *original_data, const uint32_t orig_dim,
-                                                                const uint32_t num_points)
+void AVXNormalizedCosineDistanceFloat::preprocess_base_points(float *original_data, const size_t orig_dim,
+                                                                const size_t num_points)
 {
     for (uint32_t i = 0; i < num_points; i++)
     {
@@ -583,7 +583,7 @@ void AVXNormalizedCosineDistanceFloat::normalize_data_for_build(float *original_
     }
 }
 
-void AVXNormalizedCosineDistanceFloat::normalize_vector_for_search(const float *query_vec, const uint32_t query_dim,
+void AVXNormalizedCosineDistanceFloat::preprocess_query(const float *query_vec, const size_t query_dim,
                                                                    float *query_scratch)
 {
     normalize_and_copy(query_vec, query_dim, query_scratch);

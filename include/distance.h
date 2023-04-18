@@ -35,25 +35,25 @@ template <typename T> class Distance
 
     // This is for efficiency. If no normalization is required, the callers
     // can simply ignore the normalize_data_for_build() function.
-    DISKANN_DLLEXPORT virtual bool normalization_required() const;
+    DISKANN_DLLEXPORT virtual bool preprocessing_required() const;
 
-    // Check the normalization_required() function before calling this.
+    // Check the preprocessing_required() function before calling this.
     // Clients can call the function like this:
     //
-    //  if (metric->normalization_required()){
+    //  if (metric->preprocessing_required()){
     //     T* normalized_data_batch;
     //      Split data into batches of batch_size and for each, call:
-    //       metric->normalize_data_for_build(data_batch, batch_size);
+    //       metric->preprocess_base_points(data_batch, batch_size);
     //
     //  TODO: This does not take into account the case for SSD inner product
     //  where the dimensions change after normalization.
-    DISKANN_DLLEXPORT virtual void normalize_data_for_build(T *original_data, const uint32_t orig_dim,
-                                                            const uint32_t num_points);
+    DISKANN_DLLEXPORT virtual void preprocess_base_points(T *original_data, const size_t orig_dim,
+                                                            const size_t num_points);
 
     // Invokes normalization for a single vector during search. The scratch space
     // has to be created by the caller keeping track of the fact that normalization
     // might change the dimension of the query vector.
-    DISKANN_DLLEXPORT virtual void normalize_vector_for_search(const T *query_vec, const uint32_t query_dim,
+    DISKANN_DLLEXPORT virtual void preprocess_query(const T *query_vec, const size_t query_dim,
                                                                T *scratch_query);
 
     //If an algorithm has a requirement that some data be aligned to a certain boundary
@@ -221,12 +221,12 @@ class AVXNormalizedCosineDistanceFloat : public Distance<float>
     }
     DISKANN_DLLEXPORT virtual uint32_t post_normalization_dimension(uint32_t orig_dimension) const override;
 
-    DISKANN_DLLEXPORT virtual bool normalization_required() const;
+    DISKANN_DLLEXPORT virtual bool preprocessing_required() const;
 
-    DISKANN_DLLEXPORT virtual void normalize_data_for_build(float *original_data, const uint32_t orig_dim,
-                                                            const uint32_t num_points) override;
+    DISKANN_DLLEXPORT virtual void preprocess_base_points(float *original_data, const size_t orig_dim,
+                                                            const size_t num_points) override;
 
-    DISKANN_DLLEXPORT virtual void normalize_vector_for_search(const float *query_vec, const uint32_t query_dim,
+    DISKANN_DLLEXPORT virtual void preprocess_query(const float *query_vec, const size_t query_dim,
                                                                float *scratch_query_vector) override;
 };
 

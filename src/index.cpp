@@ -848,14 +848,16 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
     std::vector<uint32_t> &id_scratch = scratch->id_scratch();
     std::vector<float> &dist_scratch = scratch->dist_scratch();
     assert(id_scratch.size() == 0);
-    T *aligned_query = scratch->aligned_query();
-    memcpy(aligned_query, query, _dim * sizeof(T));
-    if (_normalize_vecs)
-    {
-        normalize((float *)aligned_query, _dim);
-    }
 
-    
+    //REFACTOR
+    //T *aligned_query = scratch->aligned_query();
+    //memcpy(aligned_query, query, _dim * sizeof(T));
+    //if (_normalize_vecs)
+    //{
+    //    normalize((float *)aligned_query, _dim);
+    //}
+
+    T* aligned_query = scratch->aligned_query();
 
     float *query_float = nullptr;
     float *query_rotated = nullptr;
@@ -1989,6 +1991,9 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search(const T *query, con
 
     std::shared_lock<std::shared_timed_mutex> lock(_update_lock);
 
+    if (_distance->preprocessing_required()){
+        _distance->preprocess_query(query, _data_store->get_dims(), scratch->aligned_query());
+    }
     auto retval = iterate_to_fixed_point(query, L, init_ids, scratch, false, unused_filter_label, true);
 
     NeighborPriorityQueue &best_L_nodes = scratch->best_l_nodes();
