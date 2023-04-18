@@ -6,8 +6,7 @@
 #endif
 #include "Windows.h"
 
-namespace diskann
-{
+namespace diskann {
 // A thin C++ wrapper around Windows exclusive functionality of Windows
 // SlimReaderWriterLock.
 //
@@ -18,55 +17,42 @@ namespace diskann
 //
 // Full documentation can be found at.
 // https://msdn.microsoft.com/en-us/library/windows/desktop/aa904937(v=vs.85).aspx
-class windows_exclusive_slim_lock
-{
-  public:
-    windows_exclusive_slim_lock() : _lock(SRWLOCK_INIT)
-    {
-    }
+class windows_exclusive_slim_lock {
+ public:
+  windows_exclusive_slim_lock() : _lock(SRWLOCK_INIT) {}
 
-    // The lock is non-copyable. This also disables move constructor/operator=.
-    windows_exclusive_slim_lock(const windows_exclusive_slim_lock &) = delete;
-    windows_exclusive_slim_lock &operator=(const windows_exclusive_slim_lock &) = delete;
+  // The lock is non-copyable. This also disables move constructor/operator=.
+  windows_exclusive_slim_lock(const windows_exclusive_slim_lock &) = delete;
+  windows_exclusive_slim_lock &operator=(const windows_exclusive_slim_lock &) =
+      delete;
 
-    void lock()
-    {
-        return AcquireSRWLockExclusive(&_lock);
-    }
+  void lock() { return AcquireSRWLockExclusive(&_lock); }
 
-    bool try_lock()
-    {
-        return TryAcquireSRWLockExclusive(&_lock) != FALSE;
-    }
+  bool try_lock() { return TryAcquireSRWLockExclusive(&_lock) != FALSE; }
 
-    void unlock()
-    {
-        return ReleaseSRWLockExclusive(&_lock);
-    }
+  void unlock() { return ReleaseSRWLockExclusive(&_lock); }
 
-  private:
-    SRWLOCK _lock;
+ private:
+  SRWLOCK _lock;
 };
 
 // An exclusive lock over a SlimReaderWriterLock.
-class windows_exclusive_slim_lock_guard
-{
-  public:
-    windows_exclusive_slim_lock_guard(windows_exclusive_slim_lock &p_lock) : _lock(p_lock)
-    {
-        _lock.lock();
-    }
+class windows_exclusive_slim_lock_guard {
+ public:
+  windows_exclusive_slim_lock_guard(windows_exclusive_slim_lock &p_lock)
+      : _lock(p_lock) {
+    _lock.lock();
+  }
 
-    // The lock is non-copyable. This also disables move constructor/operator=.
-    windows_exclusive_slim_lock_guard(const windows_exclusive_slim_lock_guard &) = delete;
-    windows_exclusive_slim_lock_guard &operator=(const windows_exclusive_slim_lock_guard &) = delete;
+  // The lock is non-copyable. This also disables move constructor/operator=.
+  windows_exclusive_slim_lock_guard(const windows_exclusive_slim_lock_guard &) =
+      delete;
+  windows_exclusive_slim_lock_guard &operator=(
+      const windows_exclusive_slim_lock_guard &) = delete;
 
-    ~windows_exclusive_slim_lock_guard()
-    {
-        _lock.unlock();
-    }
+  ~windows_exclusive_slim_lock_guard() { _lock.unlock(); }
 
-  private:
-    windows_exclusive_slim_lock &_lock;
+ private:
+  windows_exclusive_slim_lock &_lock;
 };
-} // namespace diskann
+}  // namespace diskann
