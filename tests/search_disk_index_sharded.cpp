@@ -49,6 +49,16 @@ void apply_max(T1& x, T2& y) {
     if (x < y) x = y;
 }
 
+/*
+uint32_t get_num_pts_in_bin_file(const std::string& filename) {
+    std::ifstream reader(filename.c_str(), std::ios::binary);
+    uint32_t      npts32;
+    reader.read((char*) &npts32, sizeof(uint32_t));
+    reader.close();
+    return npts32;
+}
+*/
+
 void sort_and_leave_best_K(std::vector<std::pair<float, uint32_t>>& vec,
                            const unsigned                           K) {
     std::sort(vec.begin(), vec.end());
@@ -375,18 +385,22 @@ int search_disk_index_sharded(
           index_path_prefix + "_ids_uint32.bin";
       std::vector<unsigned> local_id_to_global_id;
       diskann::read_idmap(local_id_to_global_id_file, local_id_to_global_id);
-      // TODO check if local_id_to_global_id_num == number of points in index
+      // TODO check if local_id_to_global_id.size() == number of points in index
       // shard?
 
       // cache bfs levels
+      const unsigned num_nodes_to_cache_this_shard =
+          num_nodes_to_cache < local_id_to_global_id.size()
+              ? num_nodes_to_cache
+              : local_id_to_global_id.size();
       std::vector<uint32_t> node_list;
-      diskann::cout << "Caching " << num_nodes_to_cache
+      diskann::cout << "Caching " << num_nodes_to_cache_this_shard
                     << " BFS nodes around medoid(s)" << std::endl;
-      //_pFlashIndex->cache_bfs_levels(num_nodes_to_cache, node_list);
       std::string warmup_query_file = index_path_prefix + "_sample_data.bin";
-      if (num_nodes_to_cache > 0)
+      if (num_nodes_to_cache_this_shard > 0)
         _pFlashIndex->generate_cache_list_from_sample_queries(
-            warmup_query_file, 15, 6, num_nodes_to_cache, num_threads,
+            warmup_query_file, 15, 6, num_nodes_to_cache_this_shard,
+            num_threads,
             node_list);
       _pFlashIndex->load_cache_list(node_list);
       node_list.clear();
