@@ -1005,21 +1005,49 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
 template <typename T, typename LabelT>
 void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t k_search, const uint64_t l_search,
                                                  uint64_t *indices, float *distances, const uint64_t beam_width,
-                                                 const bool use_filter, const std::string &filter_label,
-                                                 const bool use_reorder_data, QueryStats *stats)
+                                                 const uint32_t io_limit, const bool use_reorder_data,
+                                                 QueryStats *stats)
 {
-    cached_beam_search(query1, k_search, l_search, indices, distances, beam_width, use_filter, filter_label,
+    LabelT dummy_filter = 0;
+    cached_beam_search(query1, k_search, l_search, indices, distances, beam_width, false, dummy_filter,
                        std::numeric_limits<uint32_t>::max(), use_reorder_data, stats);
 }
 
 template <typename T, typename LabelT>
 void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t k_search, const uint64_t l_search,
                                                  uint64_t *indices, float *distances, const uint64_t beam_width,
-                                                 const uint32_t io_limit, const bool use_reorder_data,
-                                                 QueryStats *stats)
+                                                 const bool use_filter, const std::string &raw_label,
+                                                 const bool use_reorder_data, QueryStats *stats)
 {
-    std::string dummy_filter = "";
-    cached_beam_search(query1, k_search, l_search, indices, distances, beam_width, false, dummy_filter,
+    LabelT label = 0;
+    if (use_filter)
+    {
+        try
+        {
+            label = get_converted_label(raw_label);
+            cached_beam_search(query1, k_search, l_search, indices, distances, beam_width, use_filter, label,
+                               std::numeric_limits<uint32_t>::max(), use_reorder_data, stats);
+        }
+        catch (const ANNException &e)
+        {
+            diskann::cerr << "Error: " << e.what() << std::endl;
+            return;
+        }
+    }
+    else
+    {
+        cached_beam_search(query1, k_search, l_search, indices, distances, beam_width, use_filter, label,
+                           std::numeric_limits<uint32_t>::max(), use_reorder_data, stats);
+    }
+}
+
+template <typename T, typename LabelT>
+void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t k_search, const uint64_t l_search,
+                                                 uint64_t *indices, float *distances, const uint64_t beam_width,
+                                                 const bool use_filter, const LabelT &filter_label,
+                                                 const bool use_reorder_data, QueryStats *stats)
+{
+    cached_beam_search(query1, k_search, l_search, indices, distances, beam_width, use_filter, filter_label,
                        std::numeric_limits<uint32_t>::max(), use_reorder_data, stats);
 }
 
@@ -1030,17 +1058,34 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
                                                  const uint32_t io_limit, const bool use_reorder_data,
                                                  QueryStats *stats)
 {
-    LabelT label;
-    try
+    LabelT label = 0;
+    if (use_filter)
     {
-        label = get_converted_label(raw_label);
+        try
+        {
+            label = get_converted_label(raw_label);
+            cached_beam_search(query1, k_search, l_search, indices, distances, beam_width, use_filter, label, io_limit,
+                               use_reorder_data, stats);
+        }
+        catch (const ANNException &e)
+        {
+            diskann::cerr << "Error: " << e.what() << std::endl;
+            return;
+        }
     }
-    catch (const ANNException &e)
+    else
     {
-        diskann::cerr << "Error: " << e.what() << std::endl;
-        return;
+        cached_beam_search(query1, k_search, l_search, indices, distances, beam_width, use_filter, label, io_limit,
+                           use_reorder_data, stats);
     }
+}
 
+template <typename T, typename LabelT>
+void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t k_search, const uint64_t l_search,
+                                                 uint64_t *indices, float *distances, const uint64_t beam_width,
+                                                 const bool use_filter, const LabelT &label, const uint32_t io_limit,
+                                                 const bool use_reorder_data, QueryStats *stats)
+{
     if (beam_width > MAX_N_SECTOR_READS)
         throw ANNException("Beamwidth can not be higher than MAX_N_SECTOR_READS", -1, __FUNCSIG__, __FILE__, __LINE__);
 
