@@ -49,6 +49,11 @@ void apply_max(T1& x, T2& y) {
     if (x < y) x = y;
 }
 
+template<typename T1, typename T2>
+T1 min(T1 a, T2 b) {
+    return a < b ? a : b;
+}
+
 /*
 uint32_t get_num_pts_in_bin_file(const std::string& filename) {
     std::ifstream reader(filename.c_str(), std::ios::binary);
@@ -474,7 +479,8 @@ int search_disk_index_sharded(
 
         // we DO NOT ignore L < K in the sharded version
 
-        const unsigned minKL = L < recall_at ? L : recall_at;
+        const unsigned local_K =
+            min(min(L, recall_at), local_id_to_global_id.size());
         const size_t   query_num_this_shard =
             query_ids_for_shard[test_id][shard_id].size();
 
@@ -486,26 +492,26 @@ int search_disk_index_sharded(
         } else
           optimized_beamwidth = beamwidth;
 
-        shard_query_result_local_ids[test_id].resize(minKL *
+        shard_query_result_local_ids[test_id].resize(local_K *
                                                      query_num_this_shard);
-        shard_query_result_global_ids[test_id].resize(minKL *
+        shard_query_result_global_ids[test_id].resize(local_K *
                                                       query_num_this_shard);
-        shard_query_result_dists[test_id].resize(minKL * query_num_this_shard);
+        shard_query_result_dists[test_id].resize(local_K * query_num_this_shard);
 
         auto local_stats =
             std::make_unique<diskann::QueryStats[]>(query_num_this_shard);
 
         std::vector<uint64_t> shard_query_result_local_ids_64(
-            minKL * query_num_this_shard);
+            local_K * query_num_this_shard);
         auto s = std::chrono::high_resolution_clock::now();
 
 #pragma omp parallel for schedule(dynamic, 1)
         for (_s64 j = 0; j < (_s64) query_num_this_shard; ++j) {
           const _s64 i = query_ids_for_shard[test_id][shard_id][j];
           _pFlashIndex->cached_beam_search(
-              query + (i * query_aligned_dim), minKL, L,
-              shard_query_result_local_ids_64.data() + (j * minKL),
-              shard_query_result_dists[test_id].data() + (j * minKL),
+              query + (i * query_aligned_dim), local_K, L,
+              shard_query_result_local_ids_64.data() + (j * local_K),
+              shard_query_result_dists[test_id].data() + (j * local_K),
               optimized_beamwidth, search_io_limit, use_reorder_data,
               local_stats.get() + j);
         }
@@ -518,11 +524,11 @@ int search_disk_index_sharded(
         diskann::convert_types<uint64_t, uint32_t>(
             shard_query_result_local_ids_64.data(),
             shard_query_result_local_ids[test_id].data(), query_num_this_shard,
-            minKL);
+            local_K);
 
         // renumber shard_query_result_local_ids to
         // shard_query_result_global_ids
-        for (_s64 j = 0; j < (int64_t) query_num_this_shard * minKL; ++j) {
+        for (_s64 j = 0; j < (int64_t) query_num_this_shard * local_K; ++j) {
           shard_query_result_global_ids[test_id][j] =
               local_id_to_global_id[shard_query_result_local_ids[test_id][j]];
         }
@@ -531,10 +537,10 @@ int search_disk_index_sharded(
         // global_query_result_topK[test_id]
         for (size_t j = 0; j < query_num_this_shard; ++j) {
           const size_t i = query_ids_for_shard[test_id][shard_id][j];
-          for (unsigned k = 0; k < minKL; ++k) {
+          for (unsigned k = 0; k < local_K; ++k) {
             global_query_result_topK[test_id][i].emplace_back(
-                shard_query_result_dists[test_id][j * minKL + k],
-                shard_query_result_global_ids[test_id][j * minKL + k]);
+                shard_query_result_dists[test_id][j * local_K + k],
+                shard_query_result_global_ids[test_id][j * local_K + k]);
           }
           sort_and_leave_best_K(global_query_result_topK[test_id][i], recall_at);
         }
