@@ -11,6 +11,7 @@
 #include <future>
 
 #include "utils.h"
+#include "filter_utils.h"
 
 #ifndef _WINDOWS
 #include <sys/mman.h>
@@ -94,6 +95,8 @@ void insert_next_batch(diskann::Index<T, TagT, LabelT> &index, size_t start, siz
 #pragma omp parallel for num_threads(insert_threads) schedule(dynamic) reduction(+ : num_failed)
         for (int64_t j = start; j < (int64_t)end; j++)
         {
+            // TODO: Need to parse label file to get pts_to_labels mapping for insert_batch
+            // TODO: Update insert_point to take label data
             if (index.insert_point(&data[(j - start) * aligned_dim], 1 + static_cast<TagT>(j)) != 0)
             {
                 std::cerr << "Insert failed " << j << std::endl;
@@ -176,6 +179,7 @@ void build_incremental_index(const std::string &data_path, const uint32_t L, con
     bool is_labeled = label_file != "";
     std::string labels_file_to_use = save_path + "_label_formatted.txt";
     std::string mem_labels_int_map_file = save_path + "_labels_map.txt";
+    parse_label_file_return_values label_data;
 
     diskann::IndexWriteParameters params = diskann::IndexWriteParametersBuilder(L, R)
                                                .with_max_occlusion_size(C)
@@ -222,19 +226,20 @@ void build_incremental_index(const std::string &data_path, const uint32_t L, con
 
     const bool enable_tags = true;
 
+    // TODO: Update Index to initialize filter-specific data structs if it's a labeled index (medoid map, ext-to-int mapping, universal label)
     diskann::Index<T, TagT, LabelT> index(diskann::L2, dim, active_window + 4 * consolidate_interval, true, params, L,
                                           insert_threads, enable_tags, true);
 
-    convert_labels_string_to_int(label_file, labels_file_to_use, mem_labels_int_map_file, universal_label);
-    if (universal_label != "")
+    if (is_labeled)
     {
-        LabelT unv_label_as_num = 0;
-        index.set_universal_label(unv_label_as_num);
+        label_data = diskann::parse_label_file(label_file, universal_label);
+        convert_labels_string_to_int(label_file, labels_file_to_use, mem_labels_int_map_file, universal_label);
+        if (universal_label != "")
+        {
+            LabelT unv_label_as_num = 0;
+            index.set_universal_label(unv_label_as_num);
+        }
     }
-
-    // TODO: Left off here...What else do we need to do to prep index for building index for filter support?
-    // Does insert into streaming index require medoids? We do not have all points at start
-    // We don't have whole label file while inserting batch of points
 
     index.set_start_points_at_random(static_cast<T>(start_point_norm));
     index.enable_delete();
