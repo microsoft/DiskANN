@@ -452,21 +452,6 @@ template <typename T, typename LabelT> void PQFlashIndex<T, LabelT>::use_medoids
 }
 
 template <typename T, typename LabelT>
-inline int32_t PQFlashIndex<T, LabelT>::get_filter_number(const LabelT &filter_label)
-{
-    int idx = -1;
-    for (uint32_t i = 0; i < _filter_list.size(); i++)
-    {
-        if (_filter_list[i] == filter_label)
-        {
-            idx = i;
-            break;
-        }
-    }
-    return idx;
-}
-
-template <typename T, typename LabelT>
 std::unordered_map<std::string, LabelT> PQFlashIndex<T, LabelT>::load_label_map(const std::string &labels_map_file)
 {
     std::unordered_map<std::string, LabelT> string_to_int_mp;
@@ -493,10 +478,10 @@ LabelT PQFlashIndex<T, LabelT>::get_converted_label(const std::string &filter_la
     {
         return _label_map[filter_label];
     }
-    std::stringstream stream;
-    stream << "Unable to find label in the Label Map";
-    diskann::cerr << stream.str() << std::endl;
-    throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
+    if (_use_universal_label)
+        return _universal_label;
+    else
+        throw ANNException("Invalid Label provided for filter search.", 4);
 }
 
 template <typename T, typename LabelT>
@@ -526,7 +511,7 @@ void PQFlashIndex<T, LabelT>::get_label_file_metadata(std::string map_file, uint
 }
 
 template <typename T, typename LabelT>
-inline bool PQFlashIndex<T, LabelT>::point_has_label(uint32_t point_id, uint32_t label_id)
+inline bool PQFlashIndex<T, LabelT>::point_has_label(uint32_t point_id, LabelT label_id)
 {
     uint32_t start_vec = _pts_to_label_offsets[point_id];
     uint32_t num_lbls = _pts_to_labels[start_vec];
@@ -582,13 +567,8 @@ void PQFlashIndex<T, LabelT>::parse_label_file(const std::string &label_file, si
             {
                 _filter_list.emplace_back(token_as_num);
             }
-            int32_t filter_num = get_filter_number(token_as_num);
-            if (filter_num == -1)
-            {
-                diskann::cout << "Error!! " << std::endl;
-                exit(-1);
-            }
-            _pts_to_labels[counter++] = filter_num;
+            _pts_to_labels[counter++] = token_as_num;
+            ;
             num_lbls_in_cur_pt++;
             _labels.insert(token_as_num);
         }
@@ -604,18 +584,9 @@ void PQFlashIndex<T, LabelT>::parse_label_file(const std::string &label_file, si
     num_points_labels = line_cnt;
 }
 
-template <typename T, typename LabelT> void PQFlashIndex<T, LabelT>::set_universal_label(const LabelT &label)
+template <typename T, typename LabelT> void PQFlashIndex<T, LabelT>::set_universal_label()
 {
-    int32_t temp_filter_num = get_filter_number(label);
-    if (temp_filter_num == -1)
-    {
-        diskann::cout << "Error, could not find universal label." << std::endl;
-    }
-    else
-    {
-        _use_universal_label = true;
-        _universal_filter_num = (uint32_t)temp_filter_num;
-    }
+    _use_universal_label = true;
 }
 
 #ifdef EXEC_ENV_OLS
@@ -739,7 +710,7 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
             universal_label_reader >> univ_label;
             universal_label_reader.close();
             LabelT label_as_num = std::stoul(univ_label);
-            set_universal_label(label_as_num);
+            set_universal_label();
         }
         if (file_exists(dummy_map_file))
         {
@@ -1034,16 +1005,6 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
 template <typename T, typename LabelT>
 void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t k_search, const uint64_t l_search,
                                                  uint64_t *indices, float *distances, const uint64_t beam_width,
-                                                 const bool use_filter, const LabelT &filter_label,
-                                                 const bool use_reorder_data, QueryStats *stats)
-{
-    cached_beam_search(query1, k_search, l_search, indices, distances, beam_width, use_filter, filter_label,
-                       std::numeric_limits<uint32_t>::max(), use_reorder_data, stats);
-}
-
-template <typename T, typename LabelT>
-void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t k_search, const uint64_t l_search,
-                                                 uint64_t *indices, float *distances, const uint64_t beam_width,
                                                  const uint32_t io_limit, const bool use_reorder_data,
                                                  QueryStats *stats)
 {
@@ -1055,27 +1016,76 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
 template <typename T, typename LabelT>
 void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t k_search, const uint64_t l_search,
                                                  uint64_t *indices, float *distances, const uint64_t beam_width,
+                                                 const bool use_filter, const std::string &raw_label,
+                                                 const bool use_reorder_data, QueryStats *stats)
+{
+    LabelT label = 0;
+    if (use_filter)
+    {
+        try
+        {
+            label = get_converted_label(raw_label);
+            cached_beam_search(query1, k_search, l_search, indices, distances, beam_width, use_filter, label,
+                               std::numeric_limits<uint32_t>::max(), use_reorder_data, stats);
+        }
+        catch (const ANNException &e)
+        {
+            diskann::cerr << "Error: " << e.what() << std::endl;
+            return;
+        }
+    }
+    else
+    {
+        cached_beam_search(query1, k_search, l_search, indices, distances, beam_width, use_filter, label,
+                           std::numeric_limits<uint32_t>::max(), use_reorder_data, stats);
+    }
+}
+
+template <typename T, typename LabelT>
+void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t k_search, const uint64_t l_search,
+                                                 uint64_t *indices, float *distances, const uint64_t beam_width,
                                                  const bool use_filter, const LabelT &filter_label,
+                                                 const bool use_reorder_data, QueryStats *stats)
+{
+    cached_beam_search(query1, k_search, l_search, indices, distances, beam_width, use_filter, filter_label,
+                       std::numeric_limits<uint32_t>::max(), use_reorder_data, stats);
+}
+
+template <typename T, typename LabelT>
+void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t k_search, const uint64_t l_search,
+                                                 uint64_t *indices, float *distances, const uint64_t beam_width,
+                                                 const bool use_filter, const std::string &raw_label,
                                                  const uint32_t io_limit, const bool use_reorder_data,
                                                  QueryStats *stats)
 {
-    int32_t filter_num = 0;
+    LabelT label = 0;
     if (use_filter)
     {
-        filter_num = get_filter_number(filter_label);
-        if (filter_num < 0)
+        try
         {
-            if (!_use_universal_label)
-            {
-                return;
-            }
-            else
-            {
-                filter_num = _universal_filter_num;
-            }
+            label = get_converted_label(raw_label);
+            cached_beam_search(query1, k_search, l_search, indices, distances, beam_width, use_filter, label, io_limit,
+                               use_reorder_data, stats);
+        }
+        catch (const ANNException &e)
+        {
+            diskann::cerr << "Error: " << e.what() << std::endl;
+            return;
         }
     }
+    else
+    {
+        cached_beam_search(query1, k_search, l_search, indices, distances, beam_width, use_filter, label, io_limit,
+                           use_reorder_data, stats);
+    }
+}
 
+template <typename T, typename LabelT>
+void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t k_search, const uint64_t l_search,
+                                                 uint64_t *indices, float *distances, const uint64_t beam_width,
+                                                 const bool use_filter, const LabelT &label, const uint32_t io_limit,
+                                                 const bool use_reorder_data, QueryStats *stats)
+{
     if (beam_width > MAX_N_SECTOR_READS)
         throw ANNException("Beamwidth can not be higher than MAX_N_SECTOR_READS", -1, __FUNCSIG__, __FILE__, __LINE__);
 
@@ -1170,9 +1180,9 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
             }
         }
     }
-    else if (_filter_to_medoid_id.find(filter_label) != _filter_to_medoid_id.end())
+    else if (_filter_to_medoid_id.find(label) != _filter_to_medoid_id.end())
     {
-        best_medoid = _filter_to_medoid_id[filter_label];
+        best_medoid = _filter_to_medoid_id[label];
     }
     else
     {
@@ -1305,7 +1315,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
                     if (!use_filter && _dummy_pts.find(id) != _dummy_pts.end())
                         continue;
 
-                    if (use_filter && !point_has_label(id, filter_num) && !point_has_label(id, _universal_filter_num))
+                    if (use_filter && !point_has_label(id, label) && !point_has_label(id, _universal_label))
                         continue;
                     cmps++;
                     float dist = dist_scratch[m];
@@ -1373,7 +1383,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
                     if (!use_filter && _dummy_pts.find(id) != _dummy_pts.end())
                         continue;
 
-                    if (use_filter && !point_has_label(id, filter_num) && !point_has_label(id, _universal_filter_num))
+                    if (use_filter && !point_has_label(id, label) && !point_has_label(id, _universal_label))
                         continue;
                     cmps++;
                     float dist = dist_scratch[m];
