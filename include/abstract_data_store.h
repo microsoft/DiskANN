@@ -12,8 +12,7 @@
 namespace diskann
 {
 
-template <typename data_t> 
-class AbstractDataStore
+template <typename data_t> class AbstractDataStore
 {
   public:
     AbstractDataStore(const location_t capacity, const size_t dim);

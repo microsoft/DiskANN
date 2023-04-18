@@ -37,7 +37,7 @@ void stats_analysis(const std::string labels_file, std::string univeral_label, u
     uint32_t max_points = 0;
     long long sum = 0;
     long long point_cnt = 0;
-    float avg_labels_per_pt, avg_labels_per_pt_incl_0, mean_label_size, mean_label_size_incl_0;
+    float avg_labels_per_pt, mean_label_size;
 
     std::vector<uint32_t> labels_per_point;
     uint32_t dense_pts = 0;

@@ -381,9 +381,8 @@ template <typename T>
 int aux_main(const std::string &base_file, const std::string &query_file, const std::string &gt_file, size_t k,
              const diskann::Metric &metric, const std::string &tags_file = std::string(""))
 {
-    size_t npoints, nqueries, dim, npoints_filt;
+    size_t npoints, nqueries, dim;
 
-    float *base_data;
     float *query_data;
 
     load_bin_as_float<T>(query_file.c_str(), query_data, nqueries, dim, 0);

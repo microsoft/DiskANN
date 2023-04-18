@@ -97,7 +97,7 @@ template <typename data_t> size_t InMemDataStore<data_t>::save(const std::string
 
 template <typename data_t> void InMemDataStore<data_t>::populate_data(const data_t *vectors, const location_t num_pts)
 {
-    for (auto i = 0; i < num_pts; i++)
+    for (location_t i = 0; i < num_pts; i++)
     {
         memset(_data + i * _aligned_dim, 0, _aligned_dim * sizeof(data_t));
         std::memmove(_data + i * _aligned_dim, vectors + i * this->_dim, this->_dim * sizeof(data_t));
@@ -173,7 +173,7 @@ template <typename data_t>
 void InMemDataStore<data_t>::get_distance(const data_t *query, const location_t *locations,
                                           const uint32_t location_count, float *distances) const
 {
-    for (auto i = 0; i < location_count; i++)
+    for (location_t i = 0; i < location_count; i++)
     {
         distances[i] = _distance_fn->compare(query, _data + locations[i] * _aligned_dim, this->_aligned_dim);
     }
@@ -246,11 +246,11 @@ void InMemDataStore<data_t>::reposition_points(const location_t old_location_sta
         return;
     }
 
-    // Update pointers to the moved nodes. Note: the computation is correct even
-    // when new_location_start < old_location_start given the C++ uint32_t
-    // integer arithmetic rules.
-    const uint32_t location_delta = new_location_start - old_location_start;
-
+    /*    // Update pointers to the moved nodes. Note: the computation is correct even
+        // when new_location_start < old_location_start given the C++ uint32_t
+        // integer arithmetic rules.
+        const uint32_t location_delta = new_location_start - old_location_start;
+    */
     // The [start, end) interval which will contain obsolete points to be
     // cleared.
     uint32_t mem_clear_loc_start = old_location_start;
