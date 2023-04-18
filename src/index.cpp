@@ -38,6 +38,8 @@ Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_point
     _indexingRange = indexParams.max_degree;
     _indexingMaxC = indexParams.max_occlusion_size;
     _indexingAlpha = indexParams.alpha;
+    _slack_factor = indexParams.slack_factor;
+
     _filterIndexingQueueSize = indexParams.filter_list_size;
 
     uint32_t num_threads_indx = indexParams.num_threads;
@@ -167,7 +169,7 @@ void Index<T, TagT, LabelT>::initialize_query_scratch(uint32_t num_threads, uint
 {
     for (uint32_t i = 0; i < num_threads; i++)
     {
-        auto scratch = new InMemQueryScratch<T>(search_l, indexing_l, r, maxc, dim, _pq_dist);
+        auto scratch = new InMemQueryScratch<T>(search_l, indexing_l, r, maxc, dim, _slack_factor, _pq_dist);
         _query_scratch.push(scratch);
     }
 }
@@ -1328,7 +1330,7 @@ void Index<T, TagT, LabelT>::inter_insert(uint32_t n, std::vector<uint32_t> &pru
             auto &des_pool = _final_graph[des];
             if (std::find(des_pool.begin(), des_pool.end(), n) == des_pool.end())
             {
-                if (des_pool.size() < (uint64_t)(GRAPH_SLACK_FACTOR * range))
+                if (des_pool.size() < (uint64_t)(_slack_factor * range))
                 {
                     des_pool.emplace_back(n);
                     prune_needed = false;
@@ -1348,7 +1350,7 @@ void Index<T, TagT, LabelT>::inter_insert(uint32_t n, std::vector<uint32_t> &pru
             tsl::robin_set<uint32_t> dummy_visited(0);
             std::vector<Neighbor> dummy_pool(0);
 
-            size_t reserveSize = (size_t)(std::ceil(1.05 * GRAPH_SLACK_FACTOR * range));
+            size_t reserveSize = (size_t)(std::ceil(1.05 * _slack_factor * range));
             dummy_visited.reserve(reserveSize);
             dummy_pool.reserve(reserveSize);
 
@@ -1421,7 +1423,7 @@ void Index<T, TagT, LabelT>::link(IndexWriteParameters &parameters)
 
     for (size_t p = 0; p < _nd; p++)
     {
-        _final_graph[p].reserve((size_t)(std::ceil(_indexingRange * GRAPH_SLACK_FACTOR * 1.05)));
+        _final_graph[p].reserve((size_t)(std::ceil(_indexingRange * _slack_factor * 1.05)));
     }
 
     diskann::Timer link_timer;
@@ -1446,7 +1448,7 @@ void Index<T, TagT, LabelT>::link(IndexWriteParameters &parameters)
         }
         {
             LockGuard guard(_locks[node]);
-            _final_graph[node].reserve((size_t)(_indexingRange * GRAPH_SLACK_FACTOR * 1.05));
+            _final_graph[node].reserve((size_t)(_indexingRange * _slack_factor * 1.05));
             _final_graph[node] = pruned_list;
             assert(_final_graph[node].size() <= _indexingRange);
         }
@@ -2860,7 +2862,7 @@ int Index<T, TagT, LabelT>::insert_point(const T *point, const TagT tag)
 
         LockGuard guard(_locks[location]);
         _final_graph[location].clear();
-        _final_graph[location].reserve((size_t)(_indexingRange * GRAPH_SLACK_FACTOR * 1.05));
+        _final_graph[location].reserve((size_t)(_indexingRange * _slack_factor * 1.05));
 
         for (auto link : pruned_list)
         {

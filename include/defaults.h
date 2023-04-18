@@ -14,11 +14,13 @@ const uint32_t NUM_ROUNDS = 2;
 const uint32_t MAX_OCCLUSION_SIZE = 750;
 const uint32_t FILTER_LIST_SIZE = 0;
 const uint32_t NUM_FROZEN_POINTS = 0;
+const float SLACK_FACTOR = 1.3;
 // following constants should always be specified, but are useful as a
 // sensible default at cli / python boundaries
 const uint32_t MAX_DEGREE = 64;
 const uint32_t BUILD_LIST_SIZE = 100;
 const uint32_t SATURATE_GRAPH = false;
+// Search defaults
 const uint32_t SEARCH_LIST_SIZE = 100;
 } // namespace defaults
 } // namespace diskann

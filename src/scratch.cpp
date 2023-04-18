@@ -13,7 +13,7 @@ namespace diskann
 //
 template <typename T>
 InMemQueryScratch<T>::InMemQueryScratch(uint32_t search_l, uint32_t indexing_l, uint32_t r, uint32_t maxc, size_t dim,
-                                        bool init_pq_scratch)
+                                        float slack_factor, bool init_pq_scratch)
     : _L(0), _R(r), _maxc(maxc)
 {
     if (search_l == 0 || indexing_l == 0 || r == 0 || dim == 0)
@@ -35,8 +35,8 @@ InMemQueryScratch<T>::InMemQueryScratch(uint32_t search_l, uint32_t indexing_l, 
 
     _occlude_factor.reserve(maxc);
     _inserted_into_pool_bs = new boost::dynamic_bitset<>();
-    _id_scratch.reserve(std::ceil(1.5 * GRAPH_SLACK_FACTOR * _R));
-    _dist_scratch.reserve(std::ceil(1.5 * GRAPH_SLACK_FACTOR * _R));
+    _id_scratch.reserve(std::ceil(1.5 * slack_factor * _R));
+    _dist_scratch.reserve(std::ceil(1.5 * slack_factor * _R));
 
     resize_for_new_L(std::max(search_l, indexing_l));
 }
