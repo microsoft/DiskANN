@@ -154,8 +154,8 @@ void InMemDataStore<data_t>::populate_data(const std::string &filename,
 }
 
 template <typename data_t>
-void InMemDataStore<data_t>::save_data_to_bin(const std::string &filename,
-                                              const location_t num_points) {
+void InMemDataStore<data_t>::extract_data_to_bin(const std::string &filename,
+                                                 const location_t num_points) {
   save_data_in_base_dimensions(filename, _data, num_points, this->get_dims(),
                                this->get_aligned_dim(), 0U);
 }
@@ -259,9 +259,9 @@ location_t InMemDataStore<data_t>::shrink(const location_t new_size) {
 }
 
 template <typename data_t>
-void InMemDataStore<data_t>::reposition_points(
-    const location_t old_location_start, const location_t new_location_start,
-    const location_t num_locations) {
+void InMemDataStore<data_t>::move_vectors(const location_t old_location_start,
+                                          const location_t new_location_start,
+                                          const location_t num_locations) {
   if (num_locations == 0 || old_location_start == new_location_start) {
     return;
   }
@@ -294,16 +294,16 @@ void InMemDataStore<data_t>::reposition_points(
   }
 
   // Use memmove to handle overlapping ranges.
-  copy_points(old_location_start, new_location_start, num_locations);
+  copy_vectors(old_location_start, new_location_start, num_locations);
   memset(_data + _aligned_dim * mem_clear_loc_start, 0,
          sizeof(data_t) * _aligned_dim *
              (mem_clear_loc_end_limit - mem_clear_loc_start));
 }
 
 template <typename data_t>
-void InMemDataStore<data_t>::copy_points(const location_t from_loc,
-                                         const location_t to_loc,
-                                         const location_t num_points) {
+void InMemDataStore<data_t>::copy_vectors(const location_t from_loc,
+                                          const location_t to_loc,
+                                          const location_t num_points) {
   assert(from_loc < this->_capacity);
   assert(to_loc < this->_capacity);
   assert(num_points < this->_capacity);

@@ -36,19 +36,19 @@ class InMemDataStore : public AbstractDataStore<data_t> {
   virtual void populate_data(const std::string &filename,
                              const size_t offset) override;
 
-  virtual void save_data_to_bin(const std::string &filename,
-                                const location_t num_pts) override;
+  virtual void extract_data_to_bin(const std::string &filename,
+                                   const location_t num_pts) override;
 
   virtual void get_vector(const location_t i, data_t *target) const override;
   virtual void set_vector(const location_t i,
                           const data_t *const vector) override;
   virtual void prefetch_vector(const location_t loc) override;
 
-  virtual void reposition_points(const location_t old_location_start,
-                                 const location_t new_location_start,
-                                 const location_t num_points) override;
-  virtual void copy_points(const location_t from_loc, const location_t to_loc,
-                           const location_t num_points) override;
+  virtual void move_vectors(const location_t old_location_start,
+                            const location_t new_location_start,
+                            const location_t num_points) override;
+  virtual void copy_vectors(const location_t from_loc, const location_t to_loc,
+                            const location_t num_points) override;
 
   virtual float get_distance(const data_t *query,
                              const location_t loc) const override;

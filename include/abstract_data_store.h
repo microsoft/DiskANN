@@ -32,20 +32,23 @@ class AbstractDataStore {
 
   // Implementers can choose to return _dim if they are not
   // concerned about memory alignment.
-  // Returns _dim aligned to a 8-byte value. Used for allocating
-  // aligned memory for efficiency/simplicity of code.
+  // Some distance metrics (like l2) need data vectors to be aligned, so we
+  // align the dimension by padding zeros.
   virtual size_t get_aligned_dim() const = 0;
 
   // populate the store with vectors (either from a pointer or bin file),
-  // potentially after normalizing the vectors if the metric deems so
+  // potentially after pre-processing the vectors if the metric deems so
+  // e.g., normalizing vectors for cosine distance over floating-point vectors
+  // useful for bulk or static index building.
   virtual void populate_data(const data_t *vectors,
                              const location_t num_pts) = 0;
   virtual void populate_data(const std::string &filename,
                              const size_t offset) = 0;
 
-  // reverse of populate, save the first num_pts many points back to bin file
-  virtual void save_data_to_bin(const std::string &filename,
-                                const location_t num_pts) = 0;
+  // save the first num_pts many vectors back to bin file
+  // note: cannot undo the pre-processing done in populate data
+  virtual void extract_data_to_bin(const std::string &filename,
+                                   const location_t num_pts) = 0;
 
   // Returns the updated capacity of the datastore. Clients should check
   // if resize actually changed the capacity to new_num_points before
@@ -58,16 +61,24 @@ class AbstractDataStore {
   virtual location_t resize(const location_t new_num_points);
 
   // operations on vectors
+  // like populate_data function, but over one vector at a time useful for
+  // streaming setting
   virtual void get_vector(const location_t i, data_t *dest) const = 0;
   virtual void set_vector(const location_t i, const data_t *const vector) = 0;
   virtual void prefetch_vector(const location_t loc) = 0;
 
   // internal shuffle operations to move around vectors
-  virtual void reposition_points(const location_t start_loc,
-                                 const location_t end_loc,
-                                 const location_t num_points) = 0;
-  virtual void copy_points(const location_t from_loc, const location_t to_loc,
-                           const location_t num_points) = 0;
+  // will bulk-move all the vectors in [old_start_loc, old_start_loc +
+  // num_points) to [new_start_loc, new_start_loc + num_points) and set the old
+  // positions to zero vectors.
+  virtual void move_vectors(const location_t old_start_loc,
+                            const location_t new_start_loc,
+                            const location_t num_points) = 0;
+
+  // same as above, without resetting the vectors in [from_loc, from_loc +
+  // num_points) to zero
+  virtual void copy_vectors(const location_t from_loc, const location_t to_loc,
+                            const location_t num_points) = 0;
 
   // metric specific operations
 
@@ -85,6 +96,8 @@ class AbstractDataStore {
   virtual location_t calculate_medoid() const = 0;
 
   // search helpers
+  // if the base data is aligned per the request of the metric, this will tell
+  // how to align the query vector in a consistent manner
   virtual size_t get_alignment_factor() const = 0;
 
  protected:

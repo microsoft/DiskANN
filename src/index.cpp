@@ -458,7 +458,7 @@ size_t Index<T, TagT, LabelT>::load_data(std::string filename) {
   copy_aligned_data_from_file<T>(reader, _data, file_num_points, file_dim,
                                  _aligned_dim);
 #else
-  _data_store->populate_data(filename, 0U);  // offset == 0.
+  _data_store->load(filename);  // offset == 0.
 #endif
   return file_num_points;
 }
@@ -2112,7 +2112,7 @@ void Index<T, TagT, LabelT>::generate_frozen_point() {
            _pq_data + res * _num_pq_chunks,
            _num_pq_chunks * DIV_ROUND_UP(NUM_PQ_BITS, 8));
   } else {
-    _data_store->copy_points(res, _max_points, 1);
+    _data_store->copy_vectors(res, _max_points, 1);
   }
 }
 
@@ -2388,7 +2388,7 @@ void Index<T, TagT, LabelT>::compact_data() {
         assert(new_location[old] < old);
         _final_graph[new_location[old]].swap(_final_graph[old]);
 
-        _data_store->copy_points(old, new_location[old], 1);
+        _data_store->copy_vectors(old, new_location[old], 1);
       }
     } else {
       _final_graph[old].clear();
@@ -2536,8 +2536,8 @@ void Index<T, TagT, LabelT>::reposition_points(uint32_t old_location_start,
       mem_clear_loc_end_limit = new_location_start;
     }
   }
-  _data_store->reposition_points(old_location_start, new_location_start,
-                                 num_locations);
+  _data_store->move_vectors(old_location_start, new_location_start,
+                            num_locations);
 }
 
 template <typename T, typename TagT, typename LabelT>
