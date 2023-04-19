@@ -339,6 +339,15 @@ int aux_main(const std::string &input_file,
           diskann::cout << "closest_centroids_ivf[" << i
                         << "] = " << closest_centroids_ivf[i] << std::endl;
         }
+        for (int c : {37, 84}) {
+          diskann::cout << "distance from query 5 to centroid " << c << " is "
+                        << math_utils::calc_distance(
+                               queries_float.get() + X * query_dim,
+                               centroids.get() + c * query_dim, query_dim)
+                        << std::endl;
+          diskann::cout << "first coord of centroid " << c << " is "
+                        << centroids[c * query_dim] << std::endl;
+        }
         for (size_t query_id = 0; query_id < num_queries; ++query_id) {
           query_to_shards.emplace_back();
           for (int i = 0; i < num_shards_to_order; ++i) {

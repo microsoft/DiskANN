@@ -75,6 +75,12 @@ void brute_force_compute_closest_centers(float* query, size_t query_num,
           dists[c] = std::make_pair(
             math_utils::calc_distance(query + q * dim, centroids + c * dim, dim),
             c);
+          if (q == 5 && (c == 37 || c == 84)) {
+              diskann::cout << "BF dists[" << c << "] = " << dists[c].first
+						  << " to q5" << std::endl;
+              diskann::cout << "first coord of centroid " << c << " is "
+                          << centroids[c * dim] << std::endl;
+          }
 	    }
 		std::sort(dists.begin(), dists.end());
         for (size_t k = 0; k < num_closest_shards; ++k) {
