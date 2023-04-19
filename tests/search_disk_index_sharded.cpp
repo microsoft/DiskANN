@@ -350,7 +350,14 @@ int search_disk_index_sharded(
     }
 
     for (unsigned shard_id = 0; shard_id < num_shards; ++shard_id) {
-      if (query_ids_for_shard[0][shard_id][0] == 0) {
+        bool contains_zero = false;
+        for (const auto& it : query_ids_for_shard[0][shard_id]) {
+		  if (it == 0) {
+			contains_zero = true;
+			break;
+		  }
+		}
+        if (contains_zero) {
         diskann::cout << "Shard " << shard_id << " will be asked for query 0"
                       << std::endl;
       }
