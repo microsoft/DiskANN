@@ -109,8 +109,8 @@ int search_disk_index_sharded(
     const std::string& result_output_prefix, const std::string& query_file,
     std::string& gt_file, const unsigned num_threads, const unsigned recall_at,
     const unsigned beamwidth, const unsigned num_nodes_to_cache,
-    const _u32 search_io_limit, std::vector<unsigned>& Lvec,
-    const bool use_reorder_data, const std::string& mode, unsigned num_closest_shards) {
+    const _u32 search_io_limit, const std::vector<unsigned>& Lvec,
+    const bool use_reorder_data, const std::string& mode, const unsigned num_closest_shards) {
   diskann::cout << "Search parameters: #threads: " << num_threads << ", ";
   if (beamwidth <= 0)
     diskann::cout << "beamwidth to be optimized for each L value" << std::flush;
@@ -141,24 +141,6 @@ int search_disk_index_sharded(
     }
     calc_recall_flag = true;
   }
-
-  /*
-  if (mode == "kmeans" || mode == "kmeans_voronoi") {
-    // filter away those L for which we would get fewer than K points per
-    // query
-    const size_t Lvec_size_before_filtering = Lvec.size();
-    Lvec.erase(std::remove_if(Lvec.begin(), Lvec.end(),
-                              [&](const _u64& L) {
-                                return L * num_closest_shards < recall_at;
-                              }),
-               Lvec.end());
-    if (Lvec.size() != Lvec_size_before_filtering) {
-      diskann::cout
-          << "WARNING: removing those L for which L * num_closest_shards < K"
-          << std::endl;
-    }
-  }
-  */
 
   std::vector<std::vector<std::vector<std::pair<float, uint32_t>>>>
       global_query_result_topK(
