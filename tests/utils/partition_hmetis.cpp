@@ -348,6 +348,10 @@ int aux_main(const std::string &input_file,
           diskann::cout << "first coord of centroid " << c << " is "
                         << centroids[c * query_dim] << std::endl;
         }
+        for (int q : {0, 5}) {
+          diskann::cout << "first coordinate of query " << q << " is "
+                        << queries_float[q * dim] << std::endl;
+        }
         for (size_t query_id = 0; query_id < num_queries; ++query_id) {
           query_to_shards.emplace_back();
           for (int i = 0; i < num_shards_to_order; ++i) {

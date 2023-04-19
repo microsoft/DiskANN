@@ -71,6 +71,10 @@ void brute_force_compute_closest_centers(float* query, size_t query_num,
     uint32_t* closest_centers, std::vector<size_t>* query_ids_for_shard) {
     std::vector<std::pair<float, uint32_t>> dists(num_centroids);
     for (size_t q = 0; q < query_num; ++q) {
+        if (q == 0 || q == 5) {
+            diskann::cout << "first coordinate of query " << q << " is "
+                    << query[q * dim] << std::endl;
+        }
 	    for (size_t c = 0; c < num_centroids; ++c) {
           dists[c] = std::make_pair(
             math_utils::calc_distance(query + q * dim, centroids + c * dim, dim),
