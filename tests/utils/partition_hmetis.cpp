@@ -451,6 +451,9 @@ int aux_main(const std::string &input_file,
              j < query_fanout && j < query_to_shards[query_id].size(); ++j) {
           const size_t shard_id = query_to_shards[query_id][j].first;
           queries_routed_to_shard[shard_id].push_back(query_id);
+          if (query_id == 0) {
+            diskann::cout << "query 0 routed to shard " << shard_id << std::endl;
+          }
         }
       }      
 
