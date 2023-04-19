@@ -333,25 +333,6 @@ int aux_main(const std::string &input_file,
         math_utils::compute_closest_centers(
             queries_float.get(), num_queries, dim, centroids.get(), num_shards,
             num_shards_to_order, closest_centroids_ivf.get());
-        constexpr int X = 5;
-        for (int i = X * num_shards_to_order; i < (X + 1) * num_shards_to_order;
-             ++i) {
-          diskann::cout << "closest_centroids_ivf[" << i
-                        << "] = " << closest_centroids_ivf[i] << std::endl;
-        }
-        for (int c : {37, 84}) {
-          diskann::cout << "distance from query 5 to centroid " << c << " is "
-                        << math_utils::calc_distance(
-                               queries_float.get() + X * query_dim,
-                               centroids.get() + c * query_dim, query_dim)
-                        << std::endl;
-          diskann::cout << "first coord of centroid " << c << " is "
-                        << centroids[c * query_dim] << std::endl;
-        }
-        for (int q : {0, 5}) {
-          diskann::cout << "first coordinate of query " << q << " is "
-                        << queries_float[q * dim] << std::endl;
-        }
         for (size_t query_id = 0; query_id < num_queries; ++query_id) {
           query_to_shards.emplace_back();
           for (int i = 0; i < num_shards_to_order; ++i) {
@@ -470,9 +451,6 @@ int aux_main(const std::string &input_file,
              j < query_fanout && j < query_to_shards[query_id].size(); ++j) {
           const size_t shard_id = query_to_shards[query_id][j].first;
           queries_routed_to_shard[shard_id].push_back(query_id);
-          if (query_id == 0) {
-            diskann::cout << "query 0 routed to shard " << shard_id << std::endl;
-          }
         }
       }      
 

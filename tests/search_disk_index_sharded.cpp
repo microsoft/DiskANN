@@ -64,40 +64,6 @@ uint32_t get_num_pts_in_bin_file(const std::string& filename) {
 }
 */
 
-
-
-void brute_force_compute_closest_centers(float* query, size_t query_num,
-    size_t dim, float* centroids, size_t num_centroids, size_t num_closest_shards,
-    uint32_t* closest_centers, std::vector<size_t>* query_ids_for_shard) {
-    std::vector<std::pair<float, uint32_t>> dists(num_centroids);
-    for (size_t q = 0; q < query_num; ++q) {
-        if (q == 0 || q == 5) {
-            diskann::cout << "first coordinate of query " << q << " is "
-                    << query[q * dim] << std::endl;
-        }
-	    for (size_t c = 0; c < num_centroids; ++c) {
-          dists[c] = std::make_pair(
-            math_utils::calc_distance(query + q * dim, centroids + c * dim, dim),
-            c);
-          if (q == 5 && (c == 37 || c == 84)) {
-              diskann::cout << "BF dists[" << c << "] = " << dists[c].first
-						  << " to q5" << std::endl;
-              diskann::cout << "first coord of centroid " << c << " is "
-                          << centroids[c * dim] << std::endl;
-          }
-	    }
-		std::sort(dists.begin(), dists.end());
-        for (size_t k = 0; k < num_closest_shards; ++k) {
-			closest_centers[q * num_closest_shards + k] = dists[k].second;
-            query_ids_for_shard[dists[k].second].push_back(q);
-            if (q == 5) {
-              diskann::cout << "BF Adding point " << q << " to center "
-                            << dists[k].second << std::endl;
-            }
-		}
-	}
-}
-
 void sort_and_leave_best_K(std::vector<std::pair<float, uint32_t>>& vec,
                            const unsigned                           K) {
     std::sort(vec.begin(), vec.end());
@@ -143,7 +109,7 @@ int search_disk_index_sharded(
     const std::string& result_output_prefix, const std::string& query_file,
     std::string& gt_file, const unsigned num_threads, const unsigned recall_at,
     const unsigned beamwidth, const unsigned num_nodes_to_cache,
-    const _u32 search_io_limit, const std::vector<unsigned>& Lvec,
+    const _u32 search_io_limit, std::vector<unsigned>& Lvec,
     const bool use_reorder_data, const std::string& mode, unsigned num_closest_shards) {
   diskann::cout << "Search parameters: #threads: " << num_threads << ", ";
   if (beamwidth <= 0)
@@ -159,8 +125,9 @@ int search_disk_index_sharded(
   T*        query = nullptr;
   unsigned* gt_ids = nullptr;
   float*    gt_dists = nullptr;
-  size_t    query_num, query_dim, gt_num, gt_dim;
-  diskann::load_bin<T>(query_file, query, query_num, query_dim);
+  size_t    query_num, query_dim, query_aligned_dim, gt_num, gt_dim;
+  diskann::load_aligned_bin<T>(query_file, query, query_num, query_dim,
+                               query_aligned_dim);
 
   bool calc_recall_flag = false;
   if (gt_file != std::string("null") && gt_file != std::string("NULL") &&
@@ -174,6 +141,24 @@ int search_disk_index_sharded(
     }
     calc_recall_flag = true;
   }
+
+  /*
+  if (mode == "kmeans" || mode == "kmeans_voronoi") {
+    // filter away those L for which we would get fewer than K points per
+    // query
+    const size_t Lvec_size_before_filtering = Lvec.size();
+    Lvec.erase(std::remove_if(Lvec.begin(), Lvec.end(),
+                              [&](const _u64& L) {
+                                return L * num_closest_shards < recall_at;
+                              }),
+               Lvec.end());
+    if (Lvec.size() != Lvec_size_before_filtering) {
+      diskann::cout
+          << "WARNING: removing those L for which L * num_closest_shards < K"
+          << std::endl;
+    }
+  }
+  */
 
   std::vector<std::vector<std::vector<std::pair<float, uint32_t>>>>
       global_query_result_topK(
@@ -239,24 +224,14 @@ int search_disk_index_sharded(
           std::make_unique<float[]>(query_num * query_dim);
       diskann::convert_types<T, float>(query, query_float.get(), query_num,
                                        query_dim);
-      for (int q : {0, 5}) {
-        diskann::cout << "first coordinate of query " << q << " is "
-                      << query[q * query_dim] << " then "
-                      << query_float[q * query_dim] << std::endl;
-      }
       std::unique_ptr<uint32_t[]> closest_centers_ivf =
           std::make_unique<uint32_t[]>(query_num *
                                           num_closest_shards);  // won't be used in phase 1
       if (phase == 1) {
-        brute_force_compute_closest_centers(
+        math_utils::compute_closest_centers(
             query_float.get(), query_num, query_dim, centroids.get(),
             num_centroids, (size_t) num_closest_shards,
             closest_centers_ivf.get(), query_ids_for_shard[0].data());
-        constexpr int X = 5;
-        for (int i = X * num_closest_shards; i < (X+1) * num_closest_shards; ++i) {
-          diskann::cout << "closest_centers_ivf[" << i
-                        << "] = " << closest_centers_ivf[i] << std::endl;
-        }
         // this will be later copied from 0 to all test_ids
       } else {
         // phase == 2, kmeans_voronoi
@@ -375,11 +350,6 @@ int search_disk_index_sharded(
             query_ids_for_this_shard_32.begin(),
             query_ids_for_this_shard_32.end());
       }
-      diskann::cout << "number of queries per shard:";
-      for (const auto& it : query_ids_for_shard[0]) {
-        diskann::cout << " " << it.size();
-      }
-      diskann::cout << std::endl;
       // this will be later copied from 0 to all test_ids
     } else {
       diskann::cout << "Implementation error: unsupported mode?" << std::endl;
@@ -390,20 +360,6 @@ int search_disk_index_sharded(
       // we have only filled out query_ids_for_shard[0], so now propagate the same for all test_ids
       for (uint32_t test_id = 1; test_id < Lvec.size(); test_id++) {
         query_ids_for_shard[test_id] = query_ids_for_shard[0];
-      }
-    }
-
-    for (unsigned shard_id = 0; shard_id < num_shards; ++shard_id) {
-        bool contains_five = false;
-        for (const auto& it : query_ids_for_shard[0][shard_id]) {
-		  if (it == 5) {
-          contains_five = true;
-			break;
-		  }
-		}
-        if (contains_five) {
-        diskann::cout << "Shard " << shard_id << " will be asked for query 5"
-                      << std::endl;
       }
     }
 
@@ -466,6 +422,45 @@ int search_disk_index_sharded(
 
       omp_set_num_threads(num_threads);
 
+      uint64_t warmup_L = 20;
+      uint64_t warmup_num = 0, warmup_dim = 0, warmup_aligned_dim = 0;
+      T*       warmup = nullptr;
+
+      if (WARMUP) {
+        if (file_exists(warmup_query_file)) {
+          diskann::load_aligned_bin<T>(warmup_query_file, warmup, warmup_num,
+                                       warmup_dim, warmup_aligned_dim);
+        } else {
+          warmup_num = (std::min)((_u32) 150000, (_u32) 15000 * num_threads);
+          warmup_dim = query_dim;
+          warmup_aligned_dim = query_aligned_dim;
+          diskann::alloc_aligned(((void**) &warmup),
+                                 warmup_num * warmup_aligned_dim * sizeof(T),
+                                 8 * sizeof(T));
+          std::memset(warmup, 0, warmup_num * warmup_aligned_dim * sizeof(T));
+          std::random_device              rd;
+          std::mt19937                    gen(rd());
+          std::uniform_int_distribution<> dis(-128, 127);
+          for (uint32_t i = 0; i < warmup_num; i++) {
+            for (uint32_t d = 0; d < warmup_dim; d++) {
+              warmup[i * warmup_aligned_dim + d] = (T) dis(gen);
+            }
+          }
+        }
+        diskann::cout << "Warming up index... " << std::flush;
+        std::vector<uint64_t> warmup_result_ids_64(warmup_num, 0);
+        std::vector<float>    warmup_result_dists(warmup_num, 0);
+
+#pragma omp parallel for schedule(dynamic, 1)
+        for (_s64 i = 0; i < (int64_t) warmup_num; i++) {
+          _pFlashIndex->cached_beam_search(
+              warmup + (i * warmup_aligned_dim), 1, warmup_L,
+              warmup_result_ids_64.data() + (i * 1),
+              warmup_result_dists.data() + (i * 1), 4);
+        }
+        diskann::cout << "..done" << std::endl;
+      }
+
       diskann::cout.setf(std::ios_base::fixed, std::ios_base::floatfield);
       diskann::cout.precision(2);
 
@@ -498,7 +493,13 @@ int search_disk_index_sharded(
         const size_t   query_num_this_shard =
             query_ids_for_shard[test_id][shard_id].size();
 
-        optimized_beamwidth = beamwidth;
+        if (beamwidth <= 0) {
+          diskann::cout << "Tuning beamwidth.." << std::endl;
+          optimized_beamwidth =
+              optimize_beamwidth(_pFlashIndex, warmup, warmup_num,
+                                 warmup_aligned_dim, L, optimized_beamwidth);
+        } else
+          optimized_beamwidth = beamwidth;
 
         shard_query_result_local_ids[test_id].resize(local_K *
                                                      query_num_this_shard);
@@ -517,7 +518,7 @@ int search_disk_index_sharded(
         for (_s64 j = 0; j < (_s64) query_num_this_shard; ++j) {
           const _s64 i = query_ids_for_shard[test_id][shard_id][j];
           _pFlashIndex->cached_beam_search(
-              query + (i * query_dim), local_K, L,
+              query + (i * query_aligned_dim), local_K, L,
               shard_query_result_local_ids_64.data() + (j * local_K),
               shard_query_result_dists[test_id].data() + (j * local_K),
               optimized_beamwidth, search_io_limit, use_reorder_data,
@@ -593,6 +594,9 @@ int search_disk_index_sharded(
                       << std::setw(16) << local_mean_cpuus;
         diskann::cout << std::endl;
       }  // end loop over L-values
+
+      if (warmup != nullptr)
+        diskann::aligned_free(warmup);
 
     }  // end loop over shards
 
