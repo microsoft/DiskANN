@@ -335,6 +335,11 @@ int search_disk_index_sharded(
         query_ids_for_shard[0][shard_id].assign(
             query_ids_for_this_shard_32.begin(),
             query_ids_for_this_shard_32.end());
+        diskann::cout << "number of queries per shard:";
+        for (const auto& it : query_ids_for_shard[0]) {
+          diskann::cout << " " << it.size();
+        }
+        diskann::cout << std::endl;
       }
       // this will be later copied from 0 to all test_ids
     } else {
