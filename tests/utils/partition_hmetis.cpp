@@ -333,7 +333,9 @@ int aux_main(const std::string &input_file,
         math_utils::compute_closest_centers(
             queries_float.get(), num_queries, dim, centroids.get(), num_shards,
             num_shards_to_order, closest_centroids_ivf.get());
-        for (int i = 0; i < num_shards_to_order; ++i) {
+        constexpr int X = 5;
+        for (int i = X * num_shards_to_order; i < (X + 1) * num_shards_to_order;
+             ++i) {
           diskann::cout << "closest_centroids_ivf[" << i
                         << "] = " << closest_centroids_ivf[i] << std::endl;
         }

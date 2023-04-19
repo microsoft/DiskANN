@@ -188,7 +188,7 @@ namespace math_utils {
           if (inverted_index != NULL) {
 #pragma omp critical
             inverted_index[this_center_id].push_back(j);
-            if (j == 0) {
+            if (j == 5) {
 			  diskann::cout << "Adding point " << j << " to center "
 							<< this_center_id << std::endl;
 			}

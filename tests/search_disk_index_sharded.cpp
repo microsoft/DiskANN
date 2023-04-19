@@ -214,7 +214,8 @@ int search_disk_index_sharded(
             query_float.get(), query_num, query_dim, centroids.get(),
             num_centroids, (size_t) num_closest_shards,
             closest_centers_ivf.get(), query_ids_for_shard[0].data());
-        for (int i = 0; i < num_closest_shards; ++i) {
+        constexpr int X = 5;
+        for (int i = X * num_closest_shards; i < (X+1) * num_closest_shards; ++i) {
           diskann::cout << "closest_centers_ivf[" << i
                         << "] = " << closest_centers_ivf[i] << std::endl;
         }
@@ -335,12 +336,12 @@ int search_disk_index_sharded(
         query_ids_for_shard[0][shard_id].assign(
             query_ids_for_this_shard_32.begin(),
             query_ids_for_this_shard_32.end());
-        diskann::cout << "number of queries per shard:";
-        for (const auto& it : query_ids_for_shard[0]) {
-          diskann::cout << " " << it.size();
-        }
-        diskann::cout << std::endl;
       }
+      diskann::cout << "number of queries per shard:";
+      for (const auto& it : query_ids_for_shard[0]) {
+        diskann::cout << " " << it.size();
+      }
+      diskann::cout << std::endl;
       // this will be later copied from 0 to all test_ids
     } else {
       diskann::cout << "Implementation error: unsupported mode?" << std::endl;
@@ -355,14 +356,14 @@ int search_disk_index_sharded(
     }
 
     for (unsigned shard_id = 0; shard_id < num_shards; ++shard_id) {
-        bool contains_zero = false;
+        bool contains_five = false;
         for (const auto& it : query_ids_for_shard[0][shard_id]) {
-		  if (it == 0) {
-			contains_zero = true;
+		  if (it == 5) {
+          contains_five = true;
 			break;
 		  }
 		}
-        if (contains_zero) {
+        if (contains_five) {
         diskann::cout << "Shard " << shard_id << " will be asked for query 0"
                       << std::endl;
       }
