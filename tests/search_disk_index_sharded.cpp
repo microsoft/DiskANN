@@ -380,16 +380,28 @@ int search_disk_index_sharded(
 
       const std::string index_path_prefix =
           index_group_path_prefix + "_subshard-" + std::to_string(shard_id);
+      const std::string local_id_to_global_id_file =
+          index_path_prefix + "_ids_uint32.bin";
+      
+      std::vector<unsigned> local_id_to_global_id;
+      diskann::read_idmap(local_id_to_global_id_file, local_id_to_global_id);
+
+      if (local_id_to_global_id.size() <= 4) {
+        // this is a hack to avoid a crash when there are too few points in the shard
+        // (there was probably already a crash when trying to build the index,
+        //  and the index file might not exist)
+        // just skip this shard
+        diskann::cout << "Skipping shard " << shard_id
+                      << " because it has too few points" << std::endl;
+        continue;
+      }
+
       int res = _pFlashIndex->load(num_threads, index_path_prefix.c_str());
 
       if (res != 0) {
         return res;
       }
 
-      const std::string local_id_to_global_id_file =
-          index_path_prefix + "_ids_uint32.bin";
-      std::vector<unsigned> local_id_to_global_id;
-      diskann::read_idmap(local_id_to_global_id_file, local_id_to_global_id);
       // TODO check if local_id_to_global_id.size() == number of points in index
       // shard?
 
