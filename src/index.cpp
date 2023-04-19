@@ -520,7 +520,6 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
 
     std::string mem_index_file(filename);
     std::string labels_file = mem_index_file + "_labels.txt";
-    std::string labels_file_formatted = mem_index_file + "_label_formatted.txt";
     std::string labels_to_medoids = mem_index_file + "_labels_to_medoids.txt";
     std::string labels_map_file = mem_index_file + "_labels_map.txt";
 
@@ -567,8 +566,7 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
     if (file_exists(labels_file))
     {
         _label_map = load_label_map(labels_map_file);
-        // TODO: Check this is correct (formatted vs raw)
-        std::tie(_pts_to_labels, _labels) = parse_formatted_label_file<LabelT>(labels_file_formatted);
+        std::tie(_pts_to_labels, _labels) = parse_formatted_label_file<LabelT>(labels_file);
         assert(_pts_to_labels.size() == data_file_num_pts);
         if (file_exists(labels_to_medoids))
         {
