@@ -154,8 +154,8 @@ struct DynamicInMemIndex {
         initial_search_list_size,  // used to prepare the scratch space for
                                    // searching. can / may be expanded if the
                                    // search asks for a larger L.
-        search_threads,  // also used for the scratch space
-        true,            // enable_tags
+        search_threads,            // also used for the scratch space
+        true,                      // enable_tags
         concurrent_consolidate,
         false,   // pq_dist_build
         0,       // num_pq_chunks
