@@ -64,18 +64,6 @@ uint32_t get_num_pts_in_bin_file(const std::string& filename) {
 }
 */
 
-/*
-brute_force_compute_closest_centers(
-            query_float.get(), query_num, query_dim, centroids.get(),
-            num_centroids, (size_t) num_closest_shards,
-            closest_centers_ivf.get(), query_ids_for_shard[0].data());
-            
-            
-            float* data, size_t num_points, size_t dim,
-                               float* pivot_data, size_t num_centers, size_t k,
-                               uint32_t*            closest_centers_ivf,
-                               std::vector<size_t>* inverted_index,*/
-
 
 
 void brute_force_compute_closest_centers(float* query, size_t query_num,
@@ -93,7 +81,7 @@ void brute_force_compute_closest_centers(float* query, size_t query_num,
 			closest_centers[q * num_closest_shards + k] = dists[k].second;
             query_ids_for_shard[dists[k].second].push_back(q);
             if (q == 5) {
-              diskann::cout << "Adding point " << q << " to center "
+              diskann::cout << "BF Adding point " << q << " to center "
                             << dists[k].second << std::endl;
             }
 		}
