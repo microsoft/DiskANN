@@ -214,6 +214,10 @@ int search_disk_index_sharded(
             query_float.get(), query_num, query_dim, centroids.get(),
             num_centroids, (size_t) num_closest_shards,
             closest_centers_ivf.get(), query_ids_for_shard[0].data());
+        for (int i = 0; i < num_closest_shards; ++i) {
+          diskann::cout << "closest_centers_ivf[" << i
+                        << "] = " << closest_centers_ivf[i] << std::endl;
+        }
         // this will be later copied from 0 to all test_ids
       } else {
         // phase == 2, kmeans_voronoi
