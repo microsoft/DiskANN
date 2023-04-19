@@ -240,6 +240,11 @@ int search_disk_index_sharded(
           std::make_unique<float[]>(query_num * query_dim);
       diskann::convert_types<T, float>(query, query_float.get(), query_num,
                                        query_dim);
+      for (int q : {0, 5}) {
+        diskann::cout << "first coordinate of query " << q << " is "
+                      << query[q * query_dim] << " then "
+                      << query_float[q * query_dim] << std::endl;
+      }
       std::unique_ptr<uint32_t[]> closest_centers_ivf =
           std::make_unique<uint32_t[]>(query_num *
                                           num_closest_shards);  // won't be used in phase 1
