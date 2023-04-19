@@ -340,7 +340,7 @@ int main(int argc, char **argv)
     label_set all_labels;
 
     std::tie(point_ids_to_labels, labels_to_number_of_points, all_labels) =
-        diskann::parse_label_file(labels_file_to_use, universal_label);
+        diskann::parse_raw_label_file(labels_file_to_use, universal_label);
 
     // 3. for each label, make a separate data file
     tsl::robin_map<std::string, std::vector<uint32_t>> label_id_to_orig_id_map;

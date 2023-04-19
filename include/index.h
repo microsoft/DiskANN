@@ -16,6 +16,7 @@
 #include "neighbor.h"
 #include "parameters.h"
 #include "utils.h"
+#include "filter_utils.h"
 #include "windows_customizations.h"
 #include "scratch.h"
 
@@ -227,8 +228,6 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     // determines navigating node of the graph by calculating medoid of datafopt
     uint32_t calculate_entry_point();
 
-    void parse_label_file(const std::string &label_file, size_t &num_pts_labels);
-
     std::unordered_map<std::string, LabelT> load_label_map(const std::string &map_file);
 
     // Returns the locations of start point and frozen points suitable for use
@@ -357,7 +356,6 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     bool _filtered_index = false;
     std::vector<std::vector<LabelT>> _pts_to_labels;
     tsl::robin_set<LabelT> _labels;
-    std::string _labels_file;
     std::unordered_map<LabelT, uint32_t> _label_to_medoid_id;
     std::unordered_map<uint32_t, uint32_t> _medoid_counts;
     bool _use_universal_label = false;

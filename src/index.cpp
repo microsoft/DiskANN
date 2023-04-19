@@ -520,6 +520,7 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
 
     std::string mem_index_file(filename);
     std::string labels_file = mem_index_file + "_labels.txt";
+    std::string labels_file_formatted = mem_index_file + "_label_formatted.txt";
     std::string labels_to_medoids = mem_index_file + "_labels_to_medoids.txt";
     std::string labels_map_file = mem_index_file + "_labels_map.txt";
 
@@ -566,8 +567,9 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
     if (file_exists(labels_file))
     {
         _label_map = load_label_map(labels_map_file);
-        parse_label_file(labels_file, label_num_pts);
-        assert(label_num_pts == data_file_num_pts);
+        // TODO: Check this is correct (formatted vs raw)
+        std::tie(_pts_to_labels, _labels) = parse_formatted_label_file<LabelT>(labels_file_formatted);
+        assert(_pts_to_labels.size() == data_file_num_pts);
         if (file_exists(labels_to_medoids))
         {
             std::ifstream medoid_stream(labels_to_medoids);
@@ -1883,57 +1885,6 @@ LabelT Index<T, TagT, LabelT>::get_converted_label(const std::string &raw_label)
         throw ANNException("Invalid Label provided for filter search.", 4);
 }
 
-template <typename T, typename TagT, typename LabelT>
-void Index<T, TagT, LabelT>::parse_label_file(const std::string &label_file, size_t &num_points)
-{
-    // Format of Label txt file: filters with comma separators
-
-    std::ifstream infile(label_file);
-    if (infile.fail())
-    {
-        throw diskann::ANNException(std::string("Failed to open file ") + label_file, -1);
-    }
-
-    std::string line, token;
-    uint32_t line_cnt = 0;
-
-    while (std::getline(infile, line))
-    {
-        line_cnt++;
-    }
-    _pts_to_labels.resize(line_cnt, std::vector<LabelT>());
-
-    infile.clear();
-    infile.seekg(0, std::ios::beg);
-    line_cnt = 0;
-
-    while (std::getline(infile, line))
-    {
-        std::istringstream iss(line);
-        std::vector<LabelT> lbls(0);
-        getline(iss, token, '\t');
-        std::istringstream new_iss(token);
-        while (getline(new_iss, token, ','))
-        {
-            token.erase(std::remove(token.begin(), token.end(), '\n'), token.end());
-            token.erase(std::remove(token.begin(), token.end(), '\r'), token.end());
-            LabelT token_as_num = std::stoul(token);
-            lbls.push_back(token_as_num);
-            _labels.insert(token_as_num);
-        }
-        if (lbls.size() <= 0)
-        {
-            diskann::cout << "No label found";
-            exit(-1);
-        }
-        std::sort(lbls.begin(), lbls.end());
-        _pts_to_labels[line_cnt] = lbls;
-        line_cnt++;
-    }
-    num_points = (size_t)line_cnt;
-    diskann::cout << "Identified " << _labels.size() << " distinct label(s)" << std::endl;
-}
-
 template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT>::set_universal_label()
 {
     _use_universal_label = true;
@@ -1944,13 +1895,10 @@ void Index<T, TagT, LabelT>::build_filtered_index(const char *filename, const st
                                                   const size_t num_points_to_load, IndexWriteParameters &parameters,
                                                   const std::vector<TagT> &tags)
 {
-    _labels_file = label_file;
     _filtered_index = true;
     _label_to_medoid_id.clear();
-    size_t num_points_labels = 0;
-    parse_label_file(label_file,
-                     num_points_labels); // determines medoid for each label and
-                                         // identifies the points to label mapping
+
+    std::tie(_pts_to_labels, _labels) = parse_formatted_label_file<LabelT>(label_file);
 
     std::unordered_map<LabelT, std::vector<uint32_t>> label_to_points;
 
