@@ -125,9 +125,8 @@ int search_disk_index_sharded(
   T*        query = nullptr;
   unsigned* gt_ids = nullptr;
   float*    gt_dists = nullptr;
-  size_t    query_num, query_dim, query_aligned_dim, gt_num, gt_dim;
-  diskann::load_aligned_bin<T>(query_file, query, query_num, query_dim,
-                               query_aligned_dim);
+  size_t    query_num, query_dim, gt_num, gt_dim;
+  diskann::load_bin<T>(query_file, query, query_num, query_dim);
 
   bool calc_recall_flag = false;
   if (gt_file != std::string("null") && gt_file != std::string("NULL") &&
@@ -404,45 +403,6 @@ int search_disk_index_sharded(
 
       omp_set_num_threads(num_threads);
 
-      uint64_t warmup_L = 20;
-      uint64_t warmup_num = 0, warmup_dim = 0, warmup_aligned_dim = 0;
-      T*       warmup = nullptr;
-
-      if (WARMUP) {
-        if (file_exists(warmup_query_file)) {
-          diskann::load_aligned_bin<T>(warmup_query_file, warmup, warmup_num,
-                                       warmup_dim, warmup_aligned_dim);
-        } else {
-          warmup_num = (std::min)((_u32) 150000, (_u32) 15000 * num_threads);
-          warmup_dim = query_dim;
-          warmup_aligned_dim = query_aligned_dim;
-          diskann::alloc_aligned(((void**) &warmup),
-                                 warmup_num * warmup_aligned_dim * sizeof(T),
-                                 8 * sizeof(T));
-          std::memset(warmup, 0, warmup_num * warmup_aligned_dim * sizeof(T));
-          std::random_device              rd;
-          std::mt19937                    gen(rd());
-          std::uniform_int_distribution<> dis(-128, 127);
-          for (uint32_t i = 0; i < warmup_num; i++) {
-            for (uint32_t d = 0; d < warmup_dim; d++) {
-              warmup[i * warmup_aligned_dim + d] = (T) dis(gen);
-            }
-          }
-        }
-        diskann::cout << "Warming up index... " << std::flush;
-        std::vector<uint64_t> warmup_result_ids_64(warmup_num, 0);
-        std::vector<float>    warmup_result_dists(warmup_num, 0);
-
-#pragma omp parallel for schedule(dynamic, 1)
-        for (_s64 i = 0; i < (int64_t) warmup_num; i++) {
-          _pFlashIndex->cached_beam_search(
-              warmup + (i * warmup_aligned_dim), 1, warmup_L,
-              warmup_result_ids_64.data() + (i * 1),
-              warmup_result_dists.data() + (i * 1), 4);
-        }
-        diskann::cout << "..done" << std::endl;
-      }
-
       diskann::cout.setf(std::ios_base::fixed, std::ios_base::floatfield);
       diskann::cout.precision(2);
 
@@ -476,10 +436,10 @@ int search_disk_index_sharded(
             query_ids_for_shard[test_id][shard_id].size();
 
         if (beamwidth <= 0) {
-          diskann::cout << "Tuning beamwidth.." << std::endl;
-          optimized_beamwidth =
-              optimize_beamwidth(_pFlashIndex, warmup, warmup_num,
-                                 warmup_aligned_dim, L, optimized_beamwidth);
+          diskann::cout
+              << "Warmup was removed so tuning beamwidth is not possible"
+              << std::endl;
+          return -1;
         } else
           optimized_beamwidth = beamwidth;
 
@@ -500,7 +460,7 @@ int search_disk_index_sharded(
         for (_s64 j = 0; j < (_s64) query_num_this_shard; ++j) {
           const _s64 i = query_ids_for_shard[test_id][shard_id][j];
           _pFlashIndex->cached_beam_search(
-              query + (i * query_aligned_dim), local_K, L,
+              query + (i * query_dim), local_K, L,
               shard_query_result_local_ids_64.data() + (j * local_K),
               shard_query_result_dists[test_id].data() + (j * local_K),
               optimized_beamwidth, search_io_limit, use_reorder_data,
@@ -576,9 +536,6 @@ int search_disk_index_sharded(
                       << std::setw(16) << local_mean_cpuus;
         diskann::cout << std::endl;
       }  // end loop over L-values
-
-      if (warmup != nullptr)
-        diskann::aligned_free(warmup);
 
     }  // end loop over shards
 
