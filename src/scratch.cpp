@@ -24,11 +24,6 @@ InMemQueryScratch<T>::InMemQueryScratch(uint32_t search_l, uint32_t indexing_l, 
         throw diskann::ANNException(ss.str(), -1);
     }
 
-    // REFACTOR
-    // auto aligned_dim = ROUND_UP(dim, 8);
-    // alloc_aligned(((void **)&_aligned_query), aligned_dim * sizeof(T), 8 *
-    // sizeof(T)); memset(_aligned_query, 0, aligned_dim * sizeof(T));
-
     alloc_aligned(((void **)&_aligned_query), aligned_dim * sizeof(T), alignment_factor * sizeof(T));
     memset(_aligned_query, 0, aligned_dim * sizeof(T));
 
