@@ -302,7 +302,7 @@ std::tuple<std::vector<std::vector<LabelT>>, tsl::robin_set<LabelT>> parse_forma
         {
             token.erase(std::remove(token.begin(), token.end(), '\n'), token.end());
             token.erase(std::remove(token.begin(), token.end(), '\r'), token.end());
-            LabelT token_as_num = std::stoul(token);
+            LabelT token_as_num = static_cast<LabelT>(std::stoul(token));
             lbls.push_back(token_as_num);
             labels.insert(token_as_num);
         }
