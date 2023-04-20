@@ -1966,7 +1966,7 @@ void Index<T, TagT, LabelT>::build_filtered_index(const char *filename, const st
 
             bool pt_has_univ_lbl =
                 (_universal_label_exists && (std::find(_pts_to_labels[point_id].begin(), _pts_to_labels[point_id].end(),
-                                                    _universal_label) != _pts_to_labels[point_id].end()));
+                                                       _universal_label) != _pts_to_labels[point_id].end()));
 
             if (pt_has_lbl || pt_has_univ_lbl)
             {
