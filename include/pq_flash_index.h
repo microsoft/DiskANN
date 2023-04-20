@@ -62,35 +62,35 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
                                             const bool shuffle = false);
 
     DISKANN_DLLEXPORT ANNErrorCode cached_beam_search(const T *query, const uint64_t k_search, const uint64_t l_search,
-                                              uint64_t *res_ids, float *res_dists, const uint64_t beam_width,
-                                              const bool use_reorder_data = false, QueryStats *stats = nullptr);
+                                                      uint64_t *res_ids, float *res_dists, const uint64_t beam_width,
+                                                      const bool use_reorder_data = false, QueryStats *stats = nullptr);
 
     DISKANN_DLLEXPORT ANNErrorCode cached_beam_search(const T *query, const uint64_t k_search, const uint64_t l_search,
-                                              uint64_t *res_ids, float *res_dists, const uint64_t beam_width,
-                                              const uint32_t io_limit, const bool use_reorder_data = false,
-                                              QueryStats *stats = nullptr);
+                                                      uint64_t *res_ids, float *res_dists, const uint64_t beam_width,
+                                                      const uint32_t io_limit, const bool use_reorder_data = false,
+                                                      QueryStats *stats = nullptr);
 
     DISKANN_DLLEXPORT ANNErrorCode cached_beam_search(const T *query, const uint64_t k_search, const uint64_t l_search,
-                                              uint64_t *res_ids, float *res_dists, const uint64_t beam_width,
-                                              const bool use_filter, const std::string &filter_label,
-                                              const bool use_reorder_data = false, QueryStats *stats = nullptr);
+                                                      uint64_t *res_ids, float *res_dists, const uint64_t beam_width,
+                                                      const bool use_filter, const std::string &filter_label,
+                                                      const bool use_reorder_data = false, QueryStats *stats = nullptr);
 
     DISKANN_DLLEXPORT ANNErrorCode cached_beam_search(const T *query, const uint64_t k_search, const uint64_t l_search,
-                                              uint64_t *res_ids, float *res_dists, const uint64_t beam_width,
-                                              const bool use_filter, const LabelT &filter_label,
-                                              const bool use_reorder_data = false, QueryStats *stats = nullptr);
+                                                      uint64_t *res_ids, float *res_dists, const uint64_t beam_width,
+                                                      const bool use_filter, const LabelT &filter_label,
+                                                      const bool use_reorder_data = false, QueryStats *stats = nullptr);
 
     DISKANN_DLLEXPORT ANNErrorCode cached_beam_search(const T *query, const uint64_t k_search, const uint64_t l_search,
-                                              uint64_t *res_ids, float *res_dists, const uint64_t beam_width,
-                                              const bool use_filter, const std::string &filter_label,
-                                              const uint32_t io_limit, const bool use_reorder_data = false,
-                                              QueryStats *stats = nullptr);
+                                                      uint64_t *res_ids, float *res_dists, const uint64_t beam_width,
+                                                      const bool use_filter, const std::string &filter_label,
+                                                      const uint32_t io_limit, const bool use_reorder_data = false,
+                                                      QueryStats *stats = nullptr);
 
     DISKANN_DLLEXPORT ANNErrorCode cached_beam_search(const T *query, const uint64_t k_search, const uint64_t l_search,
-                                              uint64_t *res_ids, float *res_dists, const uint64_t beam_width,
-                                              const bool use_filter, const LabelT &filter_label,
-                                              const uint32_t io_limit, const bool use_reorder_data = false,
-                                              QueryStats *stats = nullptr);
+                                                      uint64_t *res_ids, float *res_dists, const uint64_t beam_width,
+                                                      const bool use_filter, const LabelT &filter_label,
+                                                      const uint32_t io_limit, const bool use_reorder_data = false,
+                                                      QueryStats *stats = nullptr);
 
     DISKANN_DLLEXPORT std::pair<ANNErrorCode, LabelT> get_converted_label(const std::string &filter_label);
 

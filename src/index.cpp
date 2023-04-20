@@ -1875,14 +1875,14 @@ std::pair<ANNErrorCode, LabelT> Index<T, TagT, LabelT>::get_converted_label(cons
 {
     if (_label_map.find(raw_label) != _label_map.end())
     {
-        return std::make_pair(ANNErrorCode::Value::SUCCESS,_label_map[raw_label]);
+        return std::make_pair(ANNErrorCode::Value::SUCCESS, _label_map[raw_label]);
     }
     if (_use_universal_label)
     {
-        return std::make_pair(ANNErrorCode::Value::SUCCESS,_universal_label);
+        return std::make_pair(ANNErrorCode::Value::SUCCESS, _universal_label);
     }
     else
-        return std::make_pair(ANNErrorCode::Value::INVALID_LABEL, _universal_label); 
+        return std::make_pair(ANNErrorCode::Value::INVALID_LABEL, _universal_label);
 }
 
 template <typename T, typename TagT, typename LabelT>
@@ -2076,13 +2076,14 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search(const T *query, con
 
 template <typename T, typename TagT, typename LabelT>
 template <typename IdType>
-std::pair<ANNErrorCode, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const T *query, const std::string &raw_label,
-                                                                          const size_t K, const uint32_t L,
-                                                                          IdType *indices, float *distances)
-{    
+std::pair<ANNErrorCode, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const T *query,
+                                                                              const std::string &raw_label,
+                                                                              const size_t K, const uint32_t L,
+                                                                              IdType *indices, float *distances)
+{
     auto internal_label = get_converted_label(raw_label);
     ANNErrorCode labelStatus = internal_label.first;
-    if(internal_label.first.getErrorCode() != ANNErrorCode::Value::SUCCESS)
+    if (internal_label.first.getErrorCode() != ANNErrorCode::Value::SUCCESS)
         return std::make_pair(internal_label.first, 0);
     search_with_filters(query, internal_label.second, K, L, indices, distances);
 }
@@ -2090,8 +2091,8 @@ std::pair<ANNErrorCode, uint32_t> Index<T, TagT, LabelT>::search_with_filters(co
 template <typename T, typename TagT, typename LabelT>
 template <typename IdType>
 std::pair<ANNErrorCode, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const T *query, const LabelT &label,
-                                                                          const size_t K, const uint32_t L,
-                                                                          IdType *indices, float *distances)
+                                                                              const size_t K, const uint32_t L,
+                                                                              IdType *indices, float *distances)
 {
     if (K > (uint64_t)L)
     {

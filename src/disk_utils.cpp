@@ -1174,7 +1174,7 @@ int build_disk_index(const char *dataFilePath, const char *indexFilePath, const 
     if (use_filters)
     {
         diskann::convert_labels_string_to_int(labels_file_original, labels_file_to_use, disk_labels_int_map_file,
-                                     universal_label);
+                                              universal_label);
         augmented_data_file = index_prefix_path + "_augmented_data.bin";
         augmented_labels_file = index_prefix_path + "_augmented_labels.txt";
         if (filter_threshold != 0)

@@ -152,8 +152,9 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
                                                         query_result_ids[test_id].data() + i * recall_at,
                                                         query_result_dists[test_id].data() + i * recall_at);
                 diskann::ANNErrorCode result = retval.first;
-                if(result.getErrorCode() != diskann::ANNErrorCode::Value::SUCCESS){
-                    diskann::cerr<<retval.first.getErrorDescription();
+                if (result.getErrorCode() != diskann::ANNErrorCode::Value::SUCCESS)
+                {
+                    diskann::cerr << retval.first.getErrorDescription();
                 }
                 cmp_stats[i] = retval.second;
             }

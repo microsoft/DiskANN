@@ -218,7 +218,7 @@ inline void convert_labels_string_to_int(const std::string &inFileName, const st
     std::ofstream label_writer(outFileName);
     std::ifstream label_reader(inFileName);
     std::string line, token;
-    uint32_t num_unique_labels =  0;
+    uint32_t num_unique_labels = 0;
     while (std::getline(label_reader, line))
     {
         std::istringstream new_iss(line);
