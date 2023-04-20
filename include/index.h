@@ -123,7 +123,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     DISKANN_DLLEXPORT void set_universal_label();
 
     // Get converted integer label from string to int map (_label_map)
-    DISKANN_DLLEXPORT LabelT get_converted_label(const std::string &raw_label);
+    DISKANN_DLLEXPORT std::pair<ANNErrorCode, LabelT> get_converted_label(const std::string &raw_label);
 
     // Set starting point of an index before inserting any points incrementally.
     // The data count should be equal to _num_frozen_pts * _aligned_dim.
@@ -151,11 +151,11 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 
     // Filter support search
     template <typename IndexType>
-    DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> search_with_filters(const T *query, const std::string &filter_label,
+    DISKANN_DLLEXPORT std::pair<ANNErrorCode, uint32_t> search_with_filters(const T *query, const std::string &filter_label,
                                                                         const size_t K, const uint32_t L,
                                                                         IndexType *indices, float *distances);
     template <typename IndexType>
-    DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> search_with_filters(const T *query, const LabelT &filter_label,
+    DISKANN_DLLEXPORT std::pair<ANNErrorCode, uint32_t> search_with_filters(const T *query, const LabelT &filter_label,
                                                                         const size_t K, const uint32_t L,
                                                                         IndexType *indices, float *distances);
 
@@ -361,7 +361,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     std::unordered_map<LabelT, uint32_t> _label_to_medoid_id;
     std::unordered_map<uint32_t, uint32_t> _medoid_counts;
     bool _use_universal_label = false;
-    LabelT _universal_label = 0;
+    LabelT _universal_label = static_cast<LabelT>(defaults::UNIVERSAL_LABEL);
     uint32_t _filterIndexingQueueSize;
     std::unordered_map<std::string, LabelT> _label_map;
 

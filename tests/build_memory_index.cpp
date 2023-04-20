@@ -7,6 +7,7 @@
 
 #include "index.h"
 #include "utils.h"
+#include "filter_utils.h"
 
 #ifndef _WINDOWS
 #include <sys/mman.h>
@@ -17,6 +18,7 @@
 
 #include "memory_mapper.h"
 #include "ann_exception.h"
+#include "ann_errorcode.h"
 
 namespace po = boost::program_options;
 
@@ -47,7 +49,7 @@ int build_in_memory_index(const diskann::Metric &metric, const std::string &data
     }
     else
     {
-        convert_labels_string_to_int(label_file, labels_file_to_use, mem_labels_int_map_file, universal_label);
+        diskann::convert_labels_string_to_int(label_file, labels_file_to_use, mem_labels_int_map_file, universal_label);
         if (universal_label != "")
         {
             index.set_universal_label();

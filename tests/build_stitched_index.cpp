@@ -332,7 +332,7 @@ int main(int argc, char **argv)
     path labels_file_to_use = final_index_path_prefix + "_label_formatted.txt";
     path labels_map_file = final_index_path_prefix + "_labels_map.txt";
 
-    convert_labels_string_to_int(label_data_path, labels_file_to_use, labels_map_file, universal_label);
+    diskann::convert_labels_string_to_int(label_data_path, labels_file_to_use, labels_map_file, universal_label);
 
     // 2. parse label file and create necessary data structures
     std::vector<label_set> point_ids_to_labels;

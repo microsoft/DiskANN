@@ -29,6 +29,7 @@ typedef int FileHandle;
 #include "common_includes.h"
 
 #include "utils.h"
+#include "filter_utils.h"
 #include "windows_customizations.h"
 
 namespace diskann

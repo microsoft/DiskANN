@@ -20,6 +20,7 @@
 #include "index.h"
 #include "memory_mapper.h"
 #include "utils.h"
+#include "ann_errorcode.h"
 
 namespace po = boost::program_options;
 
@@ -150,6 +151,10 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
                 auto retval = index.search_with_filters(query + i * query_aligned_dim, raw_label, recall_at, L,
                                                         query_result_ids[test_id].data() + i * recall_at,
                                                         query_result_dists[test_id].data() + i * recall_at);
+                diskann::ANNErrorCode result = retval.first;
+                if(result.getErrorCode() != diskann::ANNErrorCode::Value::SUCCESS){
+                    diskann::cerr<<retval.first.getErrorDescription();
+                }
                 cmp_stats[i] = retval.second;
             }
             else if (metric == diskann::FAST_L2)

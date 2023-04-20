@@ -24,6 +24,7 @@ typedef int FileHandle;
 #include "logger.h"
 #include "cached_io.h"
 #include "ann_exception.h"
+#include "ann_errorcode.h"
 #include "windows_customizations.h"
 #include "tsl/robin_set.h"
 #include "types.h"
@@ -150,58 +151,6 @@ inline int delete_file(const std::string &fileName)
     {
         return 0;
     }
-}
-
-inline void convert_labels_string_to_int(const std::string &inFileName, const std::string &outFileName,
-                                         const std::string &mapFileName, const std::string &unv_label)
-{
-    std::unordered_map<std::string, uint32_t> string_int_map;
-    std::ofstream label_writer(outFileName);
-    std::ifstream label_reader(inFileName);
-    std::string line, token;
-    while (std::getline(label_reader, line))
-    {
-        std::istringstream new_iss(line);
-        std::vector<uint32_t> lbls;
-        while (getline(new_iss, token, ','))
-        {
-            token.erase(std::remove(token.begin(), token.end(), '\n'), token.end());
-            token.erase(std::remove(token.begin(), token.end(), '\r'), token.end());
-            if (string_int_map.find(token) == string_int_map.end())
-            {
-                if (unv_label != "" && unv_label == token)
-                {
-                    string_int_map[unv_label] = 0;
-                }
-                else
-                {
-                    uint32_t nextId = (uint32_t)string_int_map.size() + 1;
-                    string_int_map[token] = nextId;
-                }
-            }
-            lbls.push_back(string_int_map[token]);
-        }
-        if (lbls.size() <= 0)
-        {
-            std::cout << "No label found";
-            exit(-1);
-        }
-        for (size_t j = 0; j < lbls.size(); j++)
-        {
-            if (j != lbls.size() - 1)
-                label_writer << lbls[j] << ",";
-            else
-                label_writer << lbls[j] << std::endl;
-        }
-    }
-    label_writer.close();
-
-    std::ofstream map_writer(mapFileName);
-    for (auto mp : string_int_map)
-    {
-        map_writer << mp.first << "\t" << mp.second << std::endl;
-    }
-    map_writer.close();
 }
 
 #ifdef EXEC_ENV_OLS

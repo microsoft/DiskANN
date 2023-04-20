@@ -20,10 +20,6 @@ class ANNException : public std::runtime_error
     DISKANN_DLLEXPORT ANNException(const std::string &message, int errorCode);
     DISKANN_DLLEXPORT ANNException(const std::string &message, int errorCode, const std::string &funcSig,
                                    const std::string &fileName, uint32_t lineNum);
-    DISKANN_DLLEXPORT int getExceptionErrorCode()
-    {
-        return _errorCode;
-    }
 
   private:
     int _errorCode;

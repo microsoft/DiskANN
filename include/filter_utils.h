@@ -16,6 +16,7 @@
 #include <string>
 #include <tsl/robin_map.h>
 #include <tsl/robin_set.h>
+#include <defaults.h>
 #ifdef __APPLE__
 #else
 #include <malloc.h>
@@ -208,6 +209,59 @@ inline std::vector<uint32_t> loadTags(const std::string &tags_file, const std::s
         delete[] tag_data;
     }
     return location_to_tag;
+}
+
+inline void convert_labels_string_to_int(const std::string &inFileName, const std::string &outFileName,
+                                         const std::string &mapFileName, const std::string &unv_label)
+{
+    std::unordered_map<std::string, uint32_t> string_int_map;
+    std::ofstream label_writer(outFileName);
+    std::ifstream label_reader(inFileName);
+    std::string line, token;
+    uint32_t num_unique_labels =  0;
+    while (std::getline(label_reader, line))
+    {
+        std::istringstream new_iss(line);
+        std::vector<uint32_t> lbls;
+        while (getline(new_iss, token, ','))
+        {
+            token.erase(std::remove(token.begin(), token.end(), '\n'), token.end());
+            token.erase(std::remove(token.begin(), token.end(), '\r'), token.end());
+            if (string_int_map.find(token) == string_int_map.end())
+            {
+                if (unv_label != "" && unv_label == token)
+                {
+                    string_int_map[unv_label] = defaults::UNIVERSAL_LABEL;
+                }
+                else
+                {
+                    num_unique_labels++;
+                    string_int_map[token] = num_unique_labels;
+                }
+            }
+            lbls.push_back(string_int_map[token]);
+        }
+        if (lbls.size() <= 0)
+        {
+            std::cout << "No label found";
+            exit(-1);
+        }
+        for (size_t j = 0; j < lbls.size(); j++)
+        {
+            if (j != lbls.size() - 1)
+                label_writer << lbls[j] << ",";
+            else
+                label_writer << lbls[j] << std::endl;
+        }
+    }
+    label_writer.close();
+
+    std::ofstream map_writer(mapFileName);
+    for (auto mp : string_int_map)
+    {
+        map_writer << mp.first << "\t" << mp.second << std::endl;
+    }
+    map_writer.close();
 }
 
 } // namespace diskann

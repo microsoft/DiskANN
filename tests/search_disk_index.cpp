@@ -234,10 +234,13 @@ int search_disk_index(diskann::Metric &metric, const std::string &index_path_pre
             else
             {
                 std::string raw_label = (query_filters.size() == 1) ? query_filters[0] : query_filters[i];
-                _pFlashIndex->cached_beam_search(query + (i * query_aligned_dim), recall_at, L,
+                auto retval = _pFlashIndex->cached_beam_search(query + (i * query_aligned_dim), recall_at, L,
                                                  query_result_ids_64.data() + (i * recall_at),
                                                  query_result_dists[test_id].data() + (i * recall_at),
                                                  optimized_beamwidth, true, raw_label, use_reorder_data, stats + i);
+                if(retval.getErrorCode() != diskann::ANNErrorCode::Value::SUCCESS){
+                    diskann::cerr<<retval.getErrorDescription();
+                }
             }
         }
         auto e = std::chrono::high_resolution_clock::now();
