@@ -572,7 +572,6 @@ void PQFlashIndex<T, LabelT>::parse_label_file(const std::string &label_file, si
                 _filter_list.emplace_back(token_as_num);
             }
             _pts_to_labels[counter++] = token_as_num;
-            ;
             num_lbls_in_cur_pt++;
             _labels.insert(token_as_num);
         }
