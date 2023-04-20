@@ -109,8 +109,6 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
     DISKANN_DLLEXPORT void use_medoids_data_as_centroids();
     DISKANN_DLLEXPORT void setup_thread_data(uint64_t nthreads, uint64_t visited_reserve = 4096);
 
-    DISKANN_DLLEXPORT void set_universal_label();
-
   private:
     DISKANN_DLLEXPORT inline bool point_has_label(uint32_t point_id, LabelT label_id);
     std::unordered_map<std::string, LabelT> load_label_map(const std::string &map_file);
@@ -198,7 +196,7 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
     uint32_t *_pts_to_labels = nullptr;
     tsl::robin_set<LabelT> _labels;
     std::unordered_map<LabelT, uint32_t> _filter_to_medoid_id;
-    bool _use_universal_label;
+    bool _universal_label_exists = false;
     LabelT _universal_label = 0;
     std::vector<LabelT> _filter_list;
     tsl::robin_set<uint32_t> _dummy_pts;
