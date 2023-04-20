@@ -39,6 +39,7 @@ Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_point
     _indexingMaxC = indexParams.max_occlusion_size;
     _indexingAlpha = indexParams.alpha;
     _filterIndexingQueueSize = indexParams.filter_list_size;
+    _universal_label_exists = indexParams.universal_label_exists;
 
     uint32_t num_threads_indx = indexParams.num_threads;
     uint32_t num_scratch_spaces = search_threads + num_threads_indx;
@@ -311,7 +312,7 @@ void Index<T, TagT, LabelT>::save(const char *filename, bool compact_before_save
                 medoid_writer.close();
             }
 
-            if (_use_universal_label)
+            if (_universal_label_exists)
             {
                 std::ofstream universal_label_writer(std::string(filename) + "_universal_label.txt");
                 assert(universal_label_writer.is_open());
@@ -604,7 +605,7 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
         {
             std::ifstream universal_label_reader(universal_label_file);
             universal_label_reader >> _universal_label;
-            _use_universal_label = true;
+            _universal_label_exists = true;
             universal_label_reader.close();
         }
     }
@@ -975,7 +976,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
             auto &x = _pts_to_labels[id];
             std::set_intersection(filter_label.begin(), filter_label.end(), x.begin(), x.end(),
                                   std::back_inserter(common_filters));
-            if (_use_universal_label)
+            if (_universal_label_exists)
             {
                 if (std::find(filter_label.begin(), filter_label.end(), _universal_label) != filter_label.end() ||
                     std::find(x.begin(), x.end(), _universal_label) != x.end())
@@ -1050,7 +1051,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                     auto &x = _pts_to_labels[id];
                     std::set_intersection(filter_label.begin(), filter_label.end(), x.begin(), x.end(),
                                           std::back_inserter(common_filters));
-                    if (_use_universal_label)
+                    if (_universal_label_exists)
                     {
                         if (std::find(filter_label.begin(), filter_label.end(), _universal_label) !=
                                 filter_label.end() ||
@@ -1877,7 +1878,7 @@ std::pair<ANNErrorCode, LabelT> Index<T, TagT, LabelT>::get_converted_label(cons
     {
         return std::make_pair(ANNErrorCode::Value::SUCCESS, _label_map[raw_label]);
     }
-    if (_use_universal_label)
+    if (_universal_label_exists)
     {
         return std::make_pair(ANNErrorCode::Value::SUCCESS, _universal_label);
     }
@@ -1936,11 +1937,6 @@ void Index<T, TagT, LabelT>::parse_label_file(const std::string &label_file, siz
     diskann::cout << "Identified " << _labels.size() << " distinct label(s)" << std::endl;
 }
 
-template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT>::set_universal_label()
-{
-    _use_universal_label = true;
-}
-
 template <typename T, typename TagT, typename LabelT>
 void Index<T, TagT, LabelT>::build_filtered_index(const char *filename, const std::string &label_file,
                                                   const size_t num_points_to_load, IndexWriteParameters &parameters,
@@ -1969,7 +1965,7 @@ void Index<T, TagT, LabelT>::build_filtered_index(const char *filename, const st
                               _pts_to_labels[point_id].end();
 
             bool pt_has_univ_lbl =
-                (_use_universal_label && (std::find(_pts_to_labels[point_id].begin(), _pts_to_labels[point_id].end(),
+                (_universal_label_exists && (std::find(_pts_to_labels[point_id].begin(), _pts_to_labels[point_id].end(),
                                                     _universal_label) != _pts_to_labels[point_id].end()));
 
             if (pt_has_lbl || pt_has_univ_lbl)

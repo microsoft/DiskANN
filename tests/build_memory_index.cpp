@@ -33,6 +33,7 @@ int build_in_memory_index(const diskann::Metric &metric, const std::string &data
                                               .with_alpha(alpha)
                                               .with_saturate_graph(false)
                                               .with_num_threads(num_threads)
+                                              .with_universal_label_exists(universal_label != "")
                                               .build();
     std::string labels_file_to_use = save_path + "_label_formatted.txt";
     std::string mem_labels_int_map_file = save_path + "_labels_map.txt";
@@ -50,10 +51,6 @@ int build_in_memory_index(const diskann::Metric &metric, const std::string &data
     else
     {
         diskann::convert_labels_string_to_int(label_file, labels_file_to_use, mem_labels_int_map_file, universal_label);
-        if (universal_label != "")
-        {
-            index.set_universal_label();
-        }
         index.build_filtered_index(data_path.c_str(), labels_file_to_use, data_num, paras);
     }
     std::chrono::duration<double> diff = std::chrono::high_resolution_clock::now() - s;

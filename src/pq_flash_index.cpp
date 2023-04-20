@@ -478,7 +478,7 @@ std::pair<ANNErrorCode, LabelT> PQFlashIndex<T, LabelT>::get_converted_label(con
     {
         return std::make_pair(ANNErrorCode::Value::SUCCESS, _label_map[raw_label]);
     }
-    if (_use_universal_label)
+    if (_universal_label_exists)
     {
         return std::make_pair(ANNErrorCode::Value::SUCCESS, _universal_label);
     }
@@ -586,11 +586,6 @@ void PQFlashIndex<T, LabelT>::parse_label_file(const std::string &label_file, si
     }
     infile.close();
     num_points_labels = line_cnt;
-}
-
-template <typename T, typename LabelT> void PQFlashIndex<T, LabelT>::set_universal_label()
-{
-    _use_universal_label = true;
 }
 
 #ifdef EXEC_ENV_OLS
@@ -713,8 +708,8 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
             std::string univ_label;
             universal_label_reader >> univ_label;
             universal_label_reader.close();
-            LabelT label_as_num = std::stoul(univ_label);
-            set_universal_label();
+            LabelT label_as_num = static_cast<LabelT>(std::stoul(univ_label));
+            _universal_label_exists = true;
         }
         if (file_exists(dummy_map_file))
         {

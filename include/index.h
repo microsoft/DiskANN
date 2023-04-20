@@ -16,6 +16,7 @@
 #include "neighbor.h"
 #include "parameters.h"
 #include "utils.h"
+#include "defaults.h"
 #include "windows_customizations.h"
 #include "scratch.h"
 
@@ -119,8 +120,6 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     DISKANN_DLLEXPORT void build_filtered_index(const char *filename, const std::string &label_file,
                                                 const size_t num_points_to_load, IndexWriteParameters &parameters,
                                                 const std::vector<TagT> &tags = std::vector<TagT>());
-
-    DISKANN_DLLEXPORT void set_universal_label();
 
     // Get converted integer label from string to int map (_label_map)
     DISKANN_DLLEXPORT std::pair<ANNErrorCode, LabelT> get_converted_label(const std::string &raw_label);
@@ -361,8 +360,8 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     std::string _labels_file;
     std::unordered_map<LabelT, uint32_t> _label_to_medoid_id;
     std::unordered_map<uint32_t, uint32_t> _medoid_counts;
-    bool _use_universal_label = false;
-    LabelT _universal_label = static_cast<LabelT>(defaults::UNIVERSAL_LABEL);
+    bool _universal_label_exists;
+    LabelT _universal_label = 0;
     uint32_t _filterIndexingQueueSize;
     std::unordered_map<std::string, LabelT> _label_map;
 
