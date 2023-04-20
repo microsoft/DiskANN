@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <cstddef>
 
-namespace diskann {
+namespace diskann
+{
 typedef uint32_t location_t;
-}  // namespace diskann
+} // namespace diskann

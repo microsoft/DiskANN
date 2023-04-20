@@ -1,5 +1,5 @@
 ---
-BasedOnStyle:  Google
+BasedOnStyle:  Microsoft
 ---
 Language: Cpp
 SortIncludes: false

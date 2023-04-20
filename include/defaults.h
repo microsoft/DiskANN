@@ -4,8 +4,10 @@
 #pragma once
 #include <stdint.h>
 
-namespace diskann {
-namespace defaults {
+namespace diskann
+{
+namespace defaults
+{
 const float ALPHA = 1.2f;
 const uint32_t NUM_THREADS = 0;
 const uint32_t NUM_ROUNDS = 2;
@@ -18,5 +20,5 @@ const uint32_t MAX_DEGREE = 64;
 const uint32_t BUILD_LIST_SIZE = 100;
 const uint32_t SATURATE_GRAPH = false;
 const uint32_t SEARCH_LIST_SIZE = 100;
-}  // namespace defaults
-}  // namespace diskann
+} // namespace defaults
+} // namespace diskann

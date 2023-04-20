@@ -7,7 +7,8 @@
 #include "windows_slim_lock.h"
 #endif
 
-namespace diskann {
+namespace diskann
+{
 #ifdef _WINDOWS
 using non_recursive_mutex = windows_exclusive_slim_lock;
 using LockGuard = windows_exclusive_slim_lock_guard;
@@ -15,4 +16,4 @@ using LockGuard = windows_exclusive_slim_lock_guard;
 using non_recursive_mutex = std::mutex;
 using LockGuard = std::lock_guard<non_recursive_mutex>;
 #endif
-}  // namespace diskann
+} // namespace diskann
