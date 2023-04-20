@@ -196,8 +196,8 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
     uint32_t *_pts_to_labels = nullptr;
     tsl::robin_set<LabelT> _labels;
     std::unordered_map<LabelT, uint32_t> _filter_to_medoid_id;
-    bool _universal_label_exists = false;
-    LabelT _universal_label = 0;
+    bool _universal_label_exists = defaults::UNIVERSAL_LABEL_EXISTS;
+    LabelT _universal_label = defaults::UNIVERSAL_LABEL;
     std::vector<LabelT> _filter_list;
     tsl::robin_set<uint32_t> _dummy_pts;
     tsl::robin_set<uint32_t> _has_dummy_pts;
