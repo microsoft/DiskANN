@@ -22,6 +22,5 @@ const uint32_t MAX_DEGREE = 64;
 const uint32_t BUILD_LIST_SIZE = 100;
 const uint32_t SATURATE_GRAPH = false;
 const uint32_t SEARCH_LIST_SIZE = 100;
-const uint32_t UNIVERSAL_LABEL = 0;
 } // namespace defaults
 } // namespace diskann
