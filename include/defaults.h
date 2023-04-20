@@ -15,6 +15,7 @@ const uint32_t MAX_OCCLUSION_SIZE = 750;
 const uint32_t FILTER_LIST_SIZE = 0;
 const uint32_t NUM_FROZEN_POINTS = 0;
 const bool UNIVERSAL_LABEL_EXISTS = false;
+const uint16_t UNIVERSAL_LABEL = 0;
 // following constants should always be specified, but are useful as a
 // sensible default at cli / python boundaries
 const uint32_t MAX_DEGREE = 64;
