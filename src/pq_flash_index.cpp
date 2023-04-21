@@ -1110,7 +1110,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
 
         for (size_t i = 0; i < this->data_dim - 1; i++)
         {
-            aligned_query_T[i] = (T)(aligned_query_T[i]  / query_norm);
+            aligned_query_T[i] = (T)(aligned_query_T[i] / query_norm);
         }
         pq_query_scratch->set(this->data_dim, aligned_query_T);
     }
