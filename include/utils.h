@@ -1083,7 +1083,7 @@ inline void clean_up_artifacts(tsl::robin_set<std::string> paths_to_clean, tsl::
     }
     catch (const std::exception &e)
     {
-        diskann::cout << "Warning: Unable to clean all artifacts" << std::endl;
+        diskann::cout << "Warning: Unable to clean all artifacts " << e.what() << std::endl;
     }
 }
 
