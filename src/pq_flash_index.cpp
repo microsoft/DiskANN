@@ -704,10 +704,8 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
         {
             std::ifstream universal_label_reader(univ_label_file);
             assert(universal_label_reader.is_open());
-            std::string univ_label;
-            universal_label_reader >> univ_label;
+            universal_label_reader >> _universal_label;
             universal_label_reader.close();
-            LabelT label_as_num = static_cast<LabelT>(std::stoul(univ_label));
             _universal_label_exists = true;
         }
         if (file_exists(dummy_map_file))

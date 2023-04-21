@@ -229,7 +229,7 @@ inline void convert_labels_string_to_int(const std::string &inFileName, const st
             token.erase(std::remove(token.begin(), token.end(), '\r'), token.end());
             if (string_int_map.find(token) == string_int_map.end())
             {
-                if (unv_label != "" && unv_label == token)
+                if (unv_label == token && unv_label != "")
                 {
                     string_int_map[unv_label] = defaults::UNIVERSAL_LABEL;
                 }
