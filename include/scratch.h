@@ -16,9 +16,6 @@
 #include "pq.h"
 #include "aligned_file_reader.h"
 
-// In-mem index related limits
-#define GRAPH_SLACK_FACTOR 1.3
-
 // SSD Index related limits
 #define MAX_GRAPH_DEGREE 512
 #define MAX_N_CMPS 16384
@@ -34,7 +31,7 @@ template <typename T> class InMemQueryScratch
 {
   public:
     ~InMemQueryScratch();
-    InMemQueryScratch(uint32_t search_l, uint32_t indexing_l, uint32_t r, uint32_t maxc, size_t dim,
+    InMemQueryScratch(uint32_t search_l, uint32_t indexing_l, uint32_t r, uint32_t maxc, size_t dim, float slack_factor,
                       bool init_pq_scratch = false);
     void resize_for_new_L(uint32_t new_search_l);
     void clear();

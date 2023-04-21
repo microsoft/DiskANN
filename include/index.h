@@ -26,10 +26,10 @@
 namespace diskann
 {
 
-inline double estimate_ram_usage(size_t size, uint32_t dim, uint32_t datasize, uint32_t degree)
+inline double estimate_ram_usage(size_t size, uint32_t dim, uint32_t datasize, uint32_t degree, float slack_factor)
 {
     double size_of_data = ((double)size) * ROUND_UP(dim, 8) * datasize;
-    double size_of_graph = ((double)size) * degree * sizeof(uint32_t) * GRAPH_SLACK_FACTOR;
+    double size_of_graph = ((double)size) * degree * sizeof(uint32_t) * slack_factor;
     double size_of_locks = ((double)size) * sizeof(non_recursive_mutex);
     double size_of_outer_vector = ((double)size) * sizeof(ptrdiff_t);
 
@@ -366,6 +366,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     uint32_t _indexingRange;
     uint32_t _indexingMaxC;
     float _indexingAlpha;
+    float _slack_factor;
 
     // Query scratch data structures
     ConcurrentQueue<InMemQueryScratch<T> *> _query_scratch;

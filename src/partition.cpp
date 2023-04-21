@@ -575,7 +575,8 @@ int partition_with_ram_budget(const std::string data_file, const double sampling
             // to account for the fact that p is the size of the shard over the
             // testing sample.
             p = (uint64_t)(p / sampling_rate);
-            double cur_shard_ram_estimate = diskann::estimate_ram_usage(p, train_dim, sizeof(T), graph_degree);
+            double cur_shard_ram_estimate =
+                diskann::estimate_ram_usage(p, train_dim, sizeof(T), graph_degree, diskann::defaults::SLACK_FACTOR);
 
             if (cur_shard_ram_estimate > max_ram_usage)
                 max_ram_usage = cur_shard_ram_estimate;
