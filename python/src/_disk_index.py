@@ -3,6 +3,7 @@
 
 import os
 import warnings
+from pathlib import Path
 from typing import Literal, Tuple
 
 import numpy as np
@@ -26,7 +27,7 @@ class DiskIndex:
         self,
         metric: Literal["l2", "mips"],
         vector_dtype: VectorDType,
-        index_path: str,
+        index_directory: str,
         num_threads: int,
         num_nodes_to_cache: int,
         cache_mechanism: int = 1,
@@ -42,8 +43,8 @@ class DiskIndex:
         :type metric: str
         :param vector_dtype: The vector dtype this index will be exposing.
         :type vector_dtype: Type[numpy.single], Type[numpy.byte], Type[numpy.ubyte]
-        :param index_path: Path on disk where the disk index is stored
-        :type index_path: str
+        :param index_directory: Path on disk where the disk index is stored
+        :type index_directory: str
         :param num_threads: Number of threads used to load the index (>= 0)
         :type num_threads: int
         :param num_nodes_to_cache: Number of nodes to cache in memory (> -1)
@@ -61,6 +62,8 @@ class DiskIndex:
         _assert_dtype(vector_dtype, "vector_dtype")
         _assert_is_nonnegative_uint32(num_threads, "num_threads")
         _assert_is_nonnegative_uint32(num_nodes_to_cache, "num_nodes_to_cache")
+        index_path = Path(index_directory)
+        _assert(index_path.exists() and index_path.is_dir(), "index_directory must both exist and be a directory")
 
         self._vector_dtype = vector_dtype
         if vector_dtype == np.single:
@@ -71,7 +74,7 @@ class DiskIndex:
             _index = _native_dap.DiskInt8Index
         self._index = _index(
             metric=dap_metric,
-            index_path_prefix=os.path.join(index_path, index_prefix),
+            index_path_prefix=os.path.join(index_directory, index_prefix),
             num_threads=num_threads,
             num_nodes_to_cache=num_nodes_to_cache,
             cache_mechanism=cache_mechanism,

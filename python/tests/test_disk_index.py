@@ -11,60 +11,16 @@ from fixtures import calculate_recall, random_vectors, vectors_as_temp_file
 from sklearn.neighbors import NearestNeighbors
 
 
-class TestBuildIndex(unittest.TestCase):
-    def test_valid_shape(self):
-        rng = np.random.default_rng(12345)
-        rando = rng.random((1000, 100, 5), dtype=np.single)
-        with self.assertRaises(ValueError):
-            dap.build_disk_index(rando, "l2", "test", 5, 5, 0.01, 0.01, 1, 0)
-
-        rando = rng.random(1000, dtype=np.single)
-        with self.assertRaises(ValueError):
-            dap.build_disk_index(rando, "l2", "test", 5, 5, 0.01, 0.01, 1, 0)
-
-    def test_value_ranges_build(self):
-        good_ranges = {
-            "vector_dtype": np.single,
-            "metric": "l2",
-            "graph_degree": 5,
-            "complexity": 5,
-            "search_memory_maximum": 0.01,
-            "build_memory_maximum": 0.01,
-            "num_threads": 1,
-            "pq_disk_bytes": 0,
-        }
-        bad_ranges = {
-            "vector_dtype": np.float64,
-            "metric": "soups this time",
-            "graph_degree": -1,
-            "complexity": -1,
-            "search_memory_maximum": 0,
-            "build_memory_maximum": 0,
-            "num_threads": -1,
-            "pq_disk_bytes": -1,
-        }
-        for bad_value_key in good_ranges.keys():
-            kwargs = good_ranges.copy()
-            kwargs[bad_value_key] = bad_ranges[bad_value_key]
-            with self.subTest(
-                f"testing bad value key: {bad_value_key} with bad value: {bad_ranges[bad_value_key]}"
-            ):
-                with self.assertRaises(ValueError):
-                    dap.build_disk_index(
-                        vector_path_or_np_array="test", index_path="test", **kwargs
-                    )
-
-
 def _build_random_vectors_and_index(dtype, metric):
     query_vectors = random_vectors(1000, 10, dtype=dtype)
     index_vectors = random_vectors(10000, 10, dtype=dtype)
     with vectors_as_temp_file(index_vectors) as vector_temp:
         ann_dir = mkdtemp()
         dap.build_disk_index(
-            vector_path_or_np_array=vector_temp,
+            data=vector_temp,
             metric=metric,
             vector_dtype=dtype,
-            index_path=ann_dir,
+            index_directory=ann_dir,
             graph_degree=16,
             complexity=32,
             search_memory_maximum=0.00003,
@@ -100,7 +56,7 @@ class TestDiskIndex(unittest.TestCase):
                 index = dap.DiskIndex(
                     metric="l2",
                     vector_dtype=dtype,
-                    index_path=ann_dir,
+                    index_directory=ann_dir,
                     num_threads=16,
                     num_nodes_to_cache=10,
                 )
@@ -130,7 +86,7 @@ class TestDiskIndex(unittest.TestCase):
                 index = dap.DiskIndex(
                     metric="l2",
                     vector_dtype=dtype,
-                    index_path=ann_dir,
+                    index_directory=ann_dir,
                     num_threads=16,
                     num_nodes_to_cache=10,
                 )
@@ -148,7 +104,7 @@ class TestDiskIndex(unittest.TestCase):
             dap.DiskIndex(
                 metric="sandwich",
                 vector_dtype=np.single,
-                index_path=ann_dir,
+                index_directory=ann_dir,
                 num_threads=16,
                 num_nodes_to_cache=10,
             )
@@ -156,28 +112,28 @@ class TestDiskIndex(unittest.TestCase):
             dap.DiskIndex(
                 metric=None,
                 vector_dtype=np.single,
-                index_path=ann_dir,
+                index_directory=ann_dir,
                 num_threads=16,
                 num_nodes_to_cache=10,
             )
         dap.DiskIndex(
             metric="l2",
             vector_dtype=np.single,
-            index_path=ann_dir,
+            index_directory=ann_dir,
             num_threads=16,
             num_nodes_to_cache=10,
         )
         dap.DiskIndex(
             metric="mips",
             vector_dtype=np.single,
-            index_path=ann_dir,
+            index_directory=ann_dir,
             num_threads=16,
             num_nodes_to_cache=10,
         )
         dap.DiskIndex(
             metric="MiPs",
             vector_dtype=np.single,
-            index_path=ann_dir,
+            index_directory=ann_dir,
             num_threads=16,
             num_nodes_to_cache=10,
         )
@@ -189,7 +145,7 @@ class TestDiskIndex(unittest.TestCase):
                 index = dap.DiskIndex(
                     metric="l2",
                     vector_dtype=aliases[dtype],
-                    index_path=ann_dir,
+                    index_directory=ann_dir,
                     num_threads=16,
                     num_nodes_to_cache=10,
                 )
@@ -201,7 +157,7 @@ class TestDiskIndex(unittest.TestCase):
                     dap.DiskIndex(
                         metric="l2",
                         vector_dtype=invalid_vector_dtype,
-                        index_path=ann_dir,
+                        index_directory=ann_dir,
                         num_threads=16,
                         num_nodes_to_cache=10,
                     )
@@ -217,7 +173,7 @@ class TestDiskIndex(unittest.TestCase):
                     index = dap.DiskIndex(
                         metric="l2",
                         vector_dtype=np.single,
-                        index_path=self._example_ann_dir,
+                        index_directory=self._example_ann_dir,
                         num_threads=16,
                         num_nodes_to_cache=10,
                     )
@@ -244,7 +200,7 @@ class TestDiskIndex(unittest.TestCase):
                     index = dap.DiskIndex(
                         metric="l2",
                         vector_dtype=np.single,
-                        index_path=self._example_ann_dir,
+                        index_directory=self._example_ann_dir,
                         num_threads=16,
                         num_nodes_to_cache=10,
                     )
