@@ -154,7 +154,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
                 diskann::ANNErrorCode result = retval.first;
                 if (result.getErrorCode() != diskann::ANNErrorCode::Value::SUCCESS)
                 {
-                    diskann::cerr << retval.first.getErrorDescription();
+                    continue;
                 }
                 cmp_stats[i] = retval.second;
             }

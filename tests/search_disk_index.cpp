@@ -240,7 +240,7 @@ int search_disk_index(diskann::Metric &metric, const std::string &index_path_pre
                     use_reorder_data, stats + i);
                 if (retval.getErrorCode() != diskann::ANNErrorCode::Value::SUCCESS)
                 {
-                    diskann::cerr << retval.getErrorDescription();
+                    continue;
                 }
             }
         }
