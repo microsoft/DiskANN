@@ -183,7 +183,6 @@ def build_memory_index(
         "vector_dtype is required if data is a str representing a path to the vector bin file",
     )
     dap_metric = _get_valid_metric(metric)
-    _assert_dtype(vector_dtype, "vector_dtype")
     _assert_is_positive_uint32(complexity, "complexity")
     _assert_is_positive_uint32(graph_degree, "graph_degree")
     _assert_is_nonnegative_uint32(num_threads, "num_threads")
@@ -194,11 +193,11 @@ def build_memory_index(
     index_path = Path(index_directory)
     _assert(index_path.exists() and index_path.is_dir(), "index_directory must both exist and be a directory")
 
-    vector_bin_path, vector_dtype_actual = _valid_path_and_dtype(data, vector_dtype, index_prefix)
+    vector_bin_path, vector_dtype_actual = _valid_path_and_dtype(data, vector_dtype, index_directory)
 
-    if vector_dtype == np.single:
+    if vector_dtype_actual == np.single:
         _builder = _native_dap.build_in_memory_float_index
-    elif vector_dtype == np.ubyte:
+    elif vector_dtype_actual == np.ubyte:
         _builder = _native_dap.build_in_memory_uint8_index
     else:
         _builder = _native_dap.build_in_memory_int8_index

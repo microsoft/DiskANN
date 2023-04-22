@@ -15,6 +15,8 @@ from ._common import (
     _assert_is_nonnegative_uint32,
     _assert_is_positive_uint32,
     _get_valid_metric,
+    _assert_existing_directory,
+    _assert_existing_file
 )
 
 __ALL__ = ["StaticMemoryIndex"]
@@ -25,9 +27,11 @@ class StaticMemoryIndex:
         self,
         metric: Literal["l2", "mips"],
         vector_dtype: VectorDType,
-        index_path: str,
-        complexity: int,
-        graph_degree: int,
+        data_path: str,
+        index_directory: str,
+        num_threads: int,
+        initial_search_complexity: int,
+        index_prefix: str = "ann"
     ):
         """
         The diskannpy.StaticMemoryIndex represents our python API into a static DiskANN InMemory Index library.
@@ -39,14 +43,20 @@ class StaticMemoryIndex:
         :type metric: str
         :param vector_dtype: The vector dtype this index will be exposing.
         :type vector_dtype: Type[numpy.single], Type[numpy.byte], Type[numpy.ubyte]
-        :param index_path: Path on disk where the disk index is stored
-        :type index_path: str
+        :param data_path:
+        :param index_directory:
+        :param initial_search_complexity:
+        :param index_prefix:
         """
         dap_metric = _get_valid_metric(metric)
         _assert(
             vector_dtype in _VALID_DTYPES,
             f"vector_dtype {vector_dtype} is not in list of valid dtypes supported: {_VALID_DTYPES}",
         )
+        _assert_existing_file(data_path, "data_path")
+        _assert(index_prefix != "", "index_prefix cannot be an empty string")
+
+        _assert_existing_directory(index_directory, "index_directory")
 
         self._vector_dtype = vector_dtype
         if vector_dtype == np.single:
@@ -55,7 +65,13 @@ class StaticMemoryIndex:
             _index = _native_dap.StaticMemoryUInt8Index
         else:
             _index = _native_dap.StaticMemoryInt8Index
-        self._index = _index(dap_metric, index_path, complexity, graph_degree)
+        self._index = _index(
+            metric=dap_metric,
+            data_path=data_path,
+            index_path=os.path.join(index_directory, index_prefix),
+            num_threads=num_threads,
+            initial_search_complexity=initial_search_complexity
+        )
 
     def search(self, query: np.ndarray, k_neighbors: int, complexity: int):
         """

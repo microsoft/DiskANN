@@ -8,6 +8,7 @@ import numpy as np
 from ._common import VectorDType
 
 def numpy_to_diskann_file(vectors: np.ndarray, file_handler: BinaryIO): ...
+
 @overload
 def build_disk_index(
     data: str,
@@ -22,6 +23,7 @@ def build_disk_index(
     vector_dtype: VectorDType,
     index_prefix: str = "ann",
 ): ...
+
 @overload
 def build_disk_index(
     data: np.ndarray,
@@ -53,8 +55,6 @@ def build_memory_index(
     filter_complexity: int = 0,
     index_prefix: str = "ann",
 ): ...
-
-
 
 @overload
 def build_memory_index(

@@ -356,7 +356,7 @@ void build_in_memory_index(const diskann::Metric &metric, const std::string &vec
                                                            .build();
     size_t data_num, data_dim;
     diskann::get_bin_metadata(vector_bin_path, data_num, data_dim);
-    diskann::Index<float, TagT, LabelT> index(metric, data_dim, data_num, false, false, false, use_pq_build,
+    diskann::Index<T, TagT, LabelT> index(metric, data_dim, data_num, false, false, false, use_pq_build,
                                               num_pq_bytes, use_opq);
     if (label_file == "")
     {
@@ -387,7 +387,7 @@ inline void add_variant(py::module_ &m, const std::string &build_name, const std
           py::arg("pq_disk_bytes"));
 
     const std::string build_in_memory_name = "build_in_memory_" + build_name + "_index";
-    m.def(build_in_memory_name.c_str(), &build_in_memory_index<float>, py::arg("metric"), py::arg("data_file_path"),
+    m.def(build_in_memory_name.c_str(), &build_in_memory_index<T>, py::arg("metric"), py::arg("data_file_path"),
           py::arg("index_output_path"), py::arg("graph_degree"), py::arg("complexity"), py::arg("alpha"),
           py::arg("num_threads"), py::arg("use_pq_build"), py::arg("num_pq_bytes"), py::arg("use_opq"),
           py::arg("label_file") = "", py::arg("universal_label") = "", py::arg("filter_complexity") = 0);
