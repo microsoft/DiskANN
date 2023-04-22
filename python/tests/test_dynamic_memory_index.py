@@ -1,7 +1,6 @@
 # Copyright (c) Microsoft Corporation. All rights reserved.
 # Licensed under the MIT license.
 
-import os
 import shutil
 import unittest
 
@@ -36,7 +35,7 @@ class TestStaticMemoryIndex(unittest.TestCase):
                 index = dap.StaticMemoryIndex(
                     metric="l2",
                     vector_dtype=dtype,
-                    data_path=os.path.join(ann_dir, "vectors.bin"),
+                    data_path=vector_bin_file,
                     index_directory=ann_dir,
                     num_threads=16,
                     initial_search_complexity=32
@@ -66,7 +65,7 @@ class TestStaticMemoryIndex(unittest.TestCase):
                 index = dap.StaticMemoryIndex(
                     metric="l2",
                     vector_dtype=dtype,
-                    data_path=os.path.join(ann_dir, "vectors.bin"),
+                    data_path=vector_bin_file,
                     index_directory=ann_dir,
                     num_threads=16,
                     initial_search_complexity=32
