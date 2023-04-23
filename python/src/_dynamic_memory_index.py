@@ -36,7 +36,7 @@ class DynamicMemoryIndex:
         alpha: float = defaults.ALPHA,
         num_threads: int = defaults.NUM_THREADS,
         filter_complexity: int = defaults.FILTER_COMPLEXITY,
-        num_frozen_points: int = defaults.NUM_FROZEN_POINTS,
+        num_frozen_points: int = defaults.NUM_FROZEN_POINTS_DYNAMIC,
         initial_search_complexity: int = 0,
         search_threads: int = 0,
         concurrent_consolidation: bool = True,

@@ -423,7 +423,7 @@ inline void add_variant(py::module_ &m, const std::string &build_name, const std
              py::arg("max_occlusion_size") = diskann::defaults::MAX_OCCLUSION_SIZE,
              py::arg("alpha") = diskann::defaults::ALPHA, py::arg("num_threads") = diskann::defaults::NUM_THREADS,
              py::arg("filter_complexity") = diskann::defaults::FILTER_LIST_SIZE,
-             py::arg("num_frozen_points") = diskann::defaults::NUM_FROZEN_POINTS,
+             py::arg("num_frozen_points") = diskann::defaults::NUM_FROZEN_POINTS_DYNAMIC,
              py::arg("initial_search_complexity") = 0, py::arg("search_threads") = 0,
              py::arg("concurrent_consolidation") = true, py::arg("index_path") = "")
         .def("search", &DynamicInMemIndex<T>::search, py::arg("query"), py::arg("knn"), py::arg("complexity"))
@@ -472,7 +472,8 @@ PYBIND11_MODULE(_diskannpy, m)
     default_values.attr("NUM_THREADS") = diskann::defaults::NUM_THREADS;
     default_values.attr("MAX_OCCLUSION_SIZE") = diskann::defaults::MAX_OCCLUSION_SIZE;
     default_values.attr("FILTER_COMPLEXITY") = diskann::defaults::FILTER_LIST_SIZE;
-    default_values.attr("NUM_FROZEN_POINTS") = diskann::defaults::NUM_FROZEN_POINTS;
+    default_values.attr("NUM_FROZEN_POINTS_STATIC") = diskann::defaults::NUM_FROZEN_POINTS_STATIC;
+    default_values.attr("NUM_FROZEN_POINTS_DYNAMIC") = diskann::defaults::NUM_FROZEN_POINTS_DYNAMIC;
     default_values.attr("SATURATE_GRAPH") = diskann::defaults::SATURATE_GRAPH;
     default_values.attr("GRAPH_DEGREE") = diskann::defaults::MAX_DEGREE;
     default_values.attr("COMPLEXITY") = diskann::defaults::BUILD_LIST_SIZE;
