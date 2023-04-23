@@ -194,7 +194,7 @@ template <class T> struct DynamicInMemIndex
     }
 
     auto batch_insert(py::array_t<T, py::array::c_style | py::array::forcecast> &vectors,
-                      py::array_t<IdT, py::array::c_style | py::array::forcecast> &ids,
+                      py::array_t<IdT, py::array::c_style | py::array::forcecast> &ids, const size_t num_inserts,
                       const int num_threads = 0)
     {
         if (num_threads == 0)
@@ -431,7 +431,7 @@ inline void add_variant(py::module_ &m, const std::string &build_name, const std
         .def("batch_search", &DynamicInMemIndex<T>::batch_search, py::arg("queries"), py::arg("num_queries"),
              py::arg("knn"), py::arg("complexity"), py::arg("num_threads"))
         .def("batch_insert", &DynamicInMemIndex<T>::batch_insert, py::arg("vectors"), py::arg("ids"),
-             py::arg("num_threads"))
+             py::arg("num_inserts"), py::arg("num_threads"))
         .def("save", &DynamicInMemIndex<T>::save, py::arg("save_path") = "", py::arg("compact_before_save") = false)
         .def("insert", &DynamicInMemIndex<T>::insert, py::arg("vector"), py::arg("id"))
         .def("mark_deleted", &DynamicInMemIndex<T>::mark_deleted, py::arg("id"))

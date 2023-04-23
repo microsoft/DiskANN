@@ -257,7 +257,7 @@ class DynamicMemoryIndex:
         )
         _assert(vectors.shape[0] == vector_ids.shape[0], "#vectors must be equal to #ids")
         # Add a check on ID values
-        return self._index.batch_insert(vectors, vector_ids, num_threads)
+        return self._index.batch_insert(vectors, vector_ids, vector_ids.shapep[0], num_threads)
 
     def mark_deleted(self, vector_id: int):
         _assert_is_positive_uint32(vector_id, "vector_id")
