@@ -180,6 +180,7 @@ template <class T> struct DynamicInMemIndex
         {
             _index->load(index_path.c_str(), _write_params.num_threads, complexity);
         }
+        _index->enable_delete();
     }
 
     ~DynamicInMemIndex()
@@ -262,7 +263,7 @@ template <class T> struct DynamicInMemIndex
 
     auto consolidate_delete()
     {
-        return _index->consolidate_deletes(_write_params);
+        _index->consolidate_deletes(_write_params);
     }
 };
 

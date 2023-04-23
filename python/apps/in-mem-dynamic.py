@@ -24,10 +24,10 @@ def insert_and_search(
     if dtype_str == "float":
         index = diskannpy.DynamicMemoryIndex(
             "l2", np.float32, ndims, npts, Lb, graph_degree, False, 
-            num_threads =8
+            num_threads =8,
             num_frozen_points = 1,
             concurrent_consolidation = False,
-            num_search_threads = 8
+            search_threads = 8
         )
         queries = utils.bin_to_numpy(np.float32, querydata_file)
         data = utils.bin_to_numpy(np.float32, indexdata_file)
