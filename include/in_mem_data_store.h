@@ -20,7 +20,7 @@ namespace diskann
 template <typename data_t> class InMemDataStore : public AbstractDataStore<data_t>
 {
   public:
-    InMemDataStore(const location_t capacity, const size_t dim, std::shared_ptr<Distance<data_t>> distance_metric);
+    InMemDataStore(const location_t capacity, const size_t dim, std::shared_ptr<Distance<data_t>> distance_fn);
     virtual ~InMemDataStore();
 
     virtual location_t load(const std::string &filename) override;
