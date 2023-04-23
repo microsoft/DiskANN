@@ -45,7 +45,7 @@ def insert_and_search(
     tags = np.zeros(npts, dtype=int)
     for i in range(npts):
         tags[i] = i+1
-    index.batch_insert(data, tags, npts, num_insert_threads)
+    index.batch_insert(data, tags, num_insert_threads)
     print("batch_insert complete")
 
     delete_tags = np.random.choice(range(1,npts+1,1), size=int(0.5*npts), replace=False)
