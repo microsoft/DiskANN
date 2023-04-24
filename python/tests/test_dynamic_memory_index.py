@@ -38,7 +38,10 @@ class TestStaticMemoryIndex(unittest.TestCase):
             ann_dir,
             vector_bin_file,
         ) in self._test_matrix:
+            rng = np.random.default_rng(12345)
             with self.subTest():
+                generated_tags = np.arange(start=1, stop=10001, dtype=np.uint32)
+                rng.shuffle(generated_tags)
                 index = dap.DynamicMemoryIndex(
                     metric="l2",
                     vector_dtype=dtype,
@@ -47,8 +50,8 @@ class TestStaticMemoryIndex(unittest.TestCase):
                     complexity=64,
                     graph_degree=32,
                     num_threads=16,
-                    index_directory=ann_dir,
                 )
+                index.batch_insert(vectors=index_vectors, vector_ids=generated_tags)
 
                 k = 5
                 diskann_neighbors, diskann_distances = index.batch_search(
@@ -63,9 +66,10 @@ class TestStaticMemoryIndex(unittest.TestCase):
                     )
                     knn.fit(index_vectors)
                     knn_distances, knn_indices = knn.kneighbors(query_vectors)
+                    recall = calculate_recall(diskann_neighbors, knn_indices, k)
                     self.assertTrue(
-                        calculate_recall(diskann_neighbors, knn_indices, k) > 0.70,
-                        "Recall was not over 0.7",
+                        recall > 0.70,
+                        f"Recall [{recall}] was not over 0.7",
                     )
 
     def test_single(self):

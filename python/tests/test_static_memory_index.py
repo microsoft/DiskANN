@@ -62,10 +62,11 @@ class TestStaticMemoryIndex(unittest.TestCase):
                     )
                     knn.fit(index_vectors)
                     knn_distances, knn_indices = knn.kneighbors(query_vectors)
+                    recall = calculate_recall(diskann_neighbors, knn_indices, k)
                     self.assertTrue(
-                        calculate_recall(diskann_neighbors, knn_indices, k) > 0.70,
-                        "Recall was not over 0.7",
-                    )
+                        recall > 0.70,
+                        f"Recall [{recall}] was not over 0.7",
+                        )
 
     def test_single(self):
         for (

@@ -39,7 +39,7 @@ class DynamicMemoryIndex:
         num_frozen_points: int = defaults.NUM_FROZEN_POINTS_DYNAMIC,
         initial_search_complexity: int = 0,
         search_threads: int = 0,
-        concurrent_consolidation: bool = True,
+        concurrent_consolidation: bool = True
     ):
         """
         The diskannpy.DynamicMemoryIndex represents our python API into a dynamic DiskANN InMemory Index library.
@@ -129,7 +129,6 @@ class DynamicMemoryIndex:
             initial_search_complexity=initial_search_complexity,
             search_threads=search_threads,
             concurrent_consolidation=concurrent_consolidation,
-            index_path=""
         )
 
     def search(
