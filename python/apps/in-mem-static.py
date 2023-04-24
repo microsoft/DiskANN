@@ -40,7 +40,11 @@ def build_and_search(
         complexity=Lb,
         graph_degree=graph_degree,
         num_threads=num_threads,
-        index_prefix=index_prefix
+        index_prefix=index_prefix,
+        alpha=1.2,
+        use_pq_build=False,
+        num_pq_bytes=8,
+        use_opq=False,
     )
 
     # ready search object
