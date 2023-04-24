@@ -472,22 +472,23 @@ std::unordered_map<std::string, LabelT> PQFlashIndex<T, LabelT>::load_label_map(
 }
 
 template <typename T, typename LabelT>
-std::pair<std::unique_ptr<ANNErrorCode>, LabelT> PQFlashIndex<T, LabelT>::get_converted_label(const std::string &raw_label)
+std::pair<std::unique_ptr<ANNErrorCode>, LabelT> PQFlashIndex<T, LabelT>::get_converted_label(
+    const std::string &raw_label)
 {
     std::unique_ptr<ANNErrorCode> ANNFilterStatus;
     if (_label_map.find(raw_label) != _label_map.end())
     {
-        ANNFilterStatus = std::make_unique<ANNErrorCode>();        
+        ANNFilterStatus = std::make_unique<ANNErrorCode>();
         return std::make_pair(std::move(ANNFilterStatus), _label_map[raw_label]);
     }
     if (_universal_label_exists)
     {
-        ANNFilterStatus = std::make_unique<ANNErrorCode>();        
+        ANNFilterStatus = std::make_unique<ANNErrorCode>();
         return std::make_pair(std::move(ANNFilterStatus), _universal_label);
     }
     else
     {
-        ANNFilterStatus = std::make_unique<ANNErrorCode>(ANNErrorCode::Value::INVALID_LABEL);        
+        ANNFilterStatus = std::make_unique<ANNErrorCode>(ANNErrorCode::Value::INVALID_LABEL);
         return std::make_pair(std::move(ANNFilterStatus), _universal_label);
     }
 }
@@ -995,19 +996,19 @@ bool getNextCompletedRequest(const IOContext &ctx, size_t size, int &completedIn
 
 template <typename T, typename LabelT>
 std::unique_ptr<ANNErrorCode> PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t k_search,
-                                                         const uint64_t l_search, uint64_t *indices, float *distances,
-                                                         const uint64_t beam_width, const bool use_reorder_data,
-                                                         QueryStats *stats)
+                                                                          const uint64_t l_search, uint64_t *indices,
+                                                                          float *distances, const uint64_t beam_width,
+                                                                          const bool use_reorder_data,
+                                                                          QueryStats *stats)
 {
     return cached_beam_search(query1, k_search, l_search, indices, distances, beam_width,
                               std::numeric_limits<uint32_t>::max(), use_reorder_data, stats);
 }
 
 template <typename T, typename LabelT>
-std::unique_ptr<ANNErrorCode> PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t k_search,
-                                                         const uint64_t l_search, uint64_t *indices, float *distances,
-                                                         const uint64_t beam_width, const uint32_t io_limit,
-                                                         const bool use_reorder_data, QueryStats *stats)
+std::unique_ptr<ANNErrorCode> PQFlashIndex<T, LabelT>::cached_beam_search(
+    const T *query1, const uint64_t k_search, const uint64_t l_search, uint64_t *indices, float *distances,
+    const uint64_t beam_width, const uint32_t io_limit, const bool use_reorder_data, QueryStats *stats)
 {
     LabelT dummy_filter = 0;
     return cached_beam_search(query1, k_search, l_search, indices, distances, beam_width, false, dummy_filter, io_limit,
@@ -1015,11 +1016,10 @@ std::unique_ptr<ANNErrorCode> PQFlashIndex<T, LabelT>::cached_beam_search(const 
 }
 
 template <typename T, typename LabelT>
-std::unique_ptr<ANNErrorCode> PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t k_search,
-                                                         const uint64_t l_search, uint64_t *indices, float *distances,
-                                                         const uint64_t beam_width, const bool use_filter,
-                                                         const std::string &raw_label, const bool use_reorder_data,
-                                                         QueryStats *stats)
+std::unique_ptr<ANNErrorCode> PQFlashIndex<T, LabelT>::cached_beam_search(
+    const T *query1, const uint64_t k_search, const uint64_t l_search, uint64_t *indices, float *distances,
+    const uint64_t beam_width, const bool use_filter, const std::string &raw_label, const bool use_reorder_data,
+    QueryStats *stats)
 {
     if (use_filter)
     {
@@ -1040,22 +1040,20 @@ std::unique_ptr<ANNErrorCode> PQFlashIndex<T, LabelT>::cached_beam_search(const 
 }
 
 template <typename T, typename LabelT>
-std::unique_ptr<ANNErrorCode> PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t k_search,
-                                                         const uint64_t l_search, uint64_t *indices, float *distances,
-                                                         const uint64_t beam_width, const bool use_filter,
-                                                         const LabelT &filter_label, const bool use_reorder_data,
-                                                         QueryStats *stats)
+std::unique_ptr<ANNErrorCode> PQFlashIndex<T, LabelT>::cached_beam_search(
+    const T *query1, const uint64_t k_search, const uint64_t l_search, uint64_t *indices, float *distances,
+    const uint64_t beam_width, const bool use_filter, const LabelT &filter_label, const bool use_reorder_data,
+    QueryStats *stats)
 {
     return cached_beam_search(query1, k_search, l_search, indices, distances, beam_width, use_filter, filter_label,
                               std::numeric_limits<uint32_t>::max(), use_reorder_data, stats);
 }
 
 template <typename T, typename LabelT>
-std::unique_ptr<ANNErrorCode> PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t k_search,
-                                                         const uint64_t l_search, uint64_t *indices, float *distances,
-                                                         const uint64_t beam_width, const bool use_filter,
-                                                         const std::string &raw_label, const uint32_t io_limit,
-                                                         const bool use_reorder_data, QueryStats *stats)
+std::unique_ptr<ANNErrorCode> PQFlashIndex<T, LabelT>::cached_beam_search(
+    const T *query1, const uint64_t k_search, const uint64_t l_search, uint64_t *indices, float *distances,
+    const uint64_t beam_width, const bool use_filter, const std::string &raw_label, const uint32_t io_limit,
+    const bool use_reorder_data, QueryStats *stats)
 {
     LabelT label = 0;
     if (use_filter)
@@ -1077,11 +1075,10 @@ std::unique_ptr<ANNErrorCode> PQFlashIndex<T, LabelT>::cached_beam_search(const 
 }
 
 template <typename T, typename LabelT>
-std::unique_ptr<ANNErrorCode> PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t k_search,
-                                                         const uint64_t l_search, uint64_t *indices, float *distances,
-                                                         const uint64_t beam_width, const bool use_filter,
-                                                         const LabelT &label, const uint32_t io_limit,
-                                                         const bool use_reorder_data, QueryStats *stats)
+std::unique_ptr<ANNErrorCode> PQFlashIndex<T, LabelT>::cached_beam_search(
+    const T *query1, const uint64_t k_search, const uint64_t l_search, uint64_t *indices, float *distances,
+    const uint64_t beam_width, const bool use_filter, const LabelT &label, const uint32_t io_limit,
+    const bool use_reorder_data, QueryStats *stats)
 {
     if (beam_width > MAX_N_SECTOR_READS)
         throw ANNException("Beamwidth can not be higher than MAX_N_SECTOR_READS", -1, __FUNCSIG__, __FILE__, __LINE__);
