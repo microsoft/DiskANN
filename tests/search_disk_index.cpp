@@ -238,7 +238,7 @@ int search_disk_index(diskann::Metric &metric, const std::string &index_path_pre
                     query + (i * query_aligned_dim), recall_at, L, query_result_ids_64.data() + (i * recall_at),
                     query_result_dists[test_id].data() + (i * recall_at), optimized_beamwidth, true, raw_label,
                     use_reorder_data, stats + i);
-                if (retval.getErrorCode() != diskann::ANNErrorCode::Value::SUCCESS)
+                if (retval->getErrorCode() != diskann::ANNErrorCode::Value::SUCCESS)
                 {
                     continue;
                 }

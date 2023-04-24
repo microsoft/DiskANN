@@ -1872,18 +1872,22 @@ std::unordered_map<std::string, LabelT> Index<T, TagT, LabelT>::load_label_map(c
 }
 
 template <typename T, typename TagT, typename LabelT>
-std::pair<ANNErrorCode, LabelT> Index<T, TagT, LabelT>::get_converted_label(const std::string &raw_label)
-{
+std::pair<std::unique_ptr<ANNErrorCode>, LabelT> Index<T, TagT, LabelT>::get_converted_label(const std::string &raw_label)
+{    
     if (_label_map.find(raw_label) != _label_map.end())
     {
-        return std::make_pair(ANNErrorCode::Value::SUCCESS, _label_map[raw_label]);
+         std::pair<std::unique_ptr<ANNErrorCode>, int> actualLabel{std::make_unique<ANNErrorCode>(), _label_map[raw_label]};
+        return actualLabel;
     }
     if (_universal_label_exists)
     {
-        return std::make_pair(ANNErrorCode::Value::SUCCESS, _universal_label);
+        std::pair<std::unique_ptr<ANNErrorCode>, int> actualLabel{std::make_unique<ANNErrorCode>(), _universal_label};
+        return actualLabel;
     }
-    else
-        return std::make_pair(ANNErrorCode::Value::INVALID_LABEL, _universal_label);
+    else{
+        std::pair<std::unique_ptr<ANNErrorCode>, int> actualLabel{std::make_unique<ANNErrorCode>(ANNErrorCode::Value::INVALID_LABEL), _universal_label};
+        return actualLabel;
+    }
 }
 
 template <typename T, typename TagT, typename LabelT>
@@ -2072,21 +2076,20 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search(const T *query, con
 
 template <typename T, typename TagT, typename LabelT>
 template <typename IdType>
-std::pair<ANNErrorCode, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const T *query,
+std::pair<std::unique_ptr<ANNErrorCode>, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const T *query,
                                                                               const std::string &raw_label,
                                                                               const size_t K, const uint32_t L,
                                                                               IdType *indices, float *distances)
-{
-    auto internal_label = get_converted_label(raw_label);
-    ANNErrorCode labelStatus = internal_label.first;
-    if (internal_label.first.getErrorCode() != ANNErrorCode::Value::SUCCESS)
-        return std::make_pair(internal_label.first, 0);
-    search_with_filters(query, internal_label.second, K, L, indices, distances);
+{    
+    std::pair<std::unique_ptr<ANNErrorCode>, LabelT> internal_label = get_converted_label(raw_label);
+    if (internal_label.first->getErrorCode() != ANNErrorCode::Value::SUCCESS)
+        return std::make_pair(std::move(internal_label.first), 0);
+    return search_with_filters(query, internal_label.second, K, L, indices, distances);
 }
 
 template <typename T, typename TagT, typename LabelT>
 template <typename IdType>
-std::pair<ANNErrorCode, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const T *query, const LabelT &label,
+std::pair<std::unique_ptr<ANNErrorCode>, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const T *query, const LabelT &label,
                                                                               const size_t K, const uint32_t L,
                                                                               IdType *indices, float *distances)
 {
@@ -2157,8 +2160,8 @@ std::pair<ANNErrorCode, uint32_t> Index<T, TagT, LabelT>::search_with_filters(co
     {
         diskann::cerr << "Found fewer than K elements for query" << std::endl;
     }
-    ANNErrorCode invalidLabel(ANNErrorCode::Value::INVALID_LABEL);
-    return std::make_pair(invalidLabel, retval.second);
+    std::unique_ptr<ANNErrorCode> ANNSuccess = std::make_unique<ANNErrorCode>();
+    return std::make_pair(std::move(ANNSuccess), retval.second);
 }
 
 template <typename T, typename TagT, typename LabelT>
@@ -3187,79 +3190,79 @@ template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<int8_t, uint32_t,
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<int8_t, uint32_t, uint32_t>::search<uint32_t>(
     const int8_t *query, const size_t K, const uint32_t L, uint32_t *indices, float *distances);
 
-template DISKANN_DLLEXPORT std::pair<ANNErrorCode, uint32_t> Index<float, uint64_t, uint32_t>::search_with_filters<
+template DISKANN_DLLEXPORT std::pair<std::unique_ptr<ANNErrorCode>, uint32_t> Index<float, uint64_t, uint32_t>::search_with_filters<
     uint64_t>(const float *query, const std::string &filter_label, const size_t K, const uint32_t L, uint64_t *indices,
               float *distances);
-template DISKANN_DLLEXPORT std::pair<ANNErrorCode, uint32_t> Index<float, uint64_t, uint32_t>::search_with_filters<
+template DISKANN_DLLEXPORT std::pair<std::unique_ptr<ANNErrorCode>, uint32_t> Index<float, uint64_t, uint32_t>::search_with_filters<
     uint32_t>(const float *query, const std::string &filter_label, const size_t K, const uint32_t L, uint32_t *indices,
               float *distances);
-template DISKANN_DLLEXPORT std::pair<ANNErrorCode, uint32_t> Index<uint8_t, uint64_t, uint32_t>::search_with_filters<
+template DISKANN_DLLEXPORT std::pair<std::unique_ptr<ANNErrorCode>, uint32_t> Index<uint8_t, uint64_t, uint32_t>::search_with_filters<
     uint64_t>(const uint8_t *query, const std::string &filter_label, const size_t K, const uint32_t L,
               uint64_t *indices, float *distances);
-template DISKANN_DLLEXPORT std::pair<ANNErrorCode, uint32_t> Index<uint8_t, uint64_t, uint32_t>::search_with_filters<
+template DISKANN_DLLEXPORT std::pair<std::unique_ptr<ANNErrorCode>, uint32_t> Index<uint8_t, uint64_t, uint32_t>::search_with_filters<
     uint32_t>(const uint8_t *query, const std::string &filter_label, const size_t K, const uint32_t L,
               uint32_t *indices, float *distances);
-template DISKANN_DLLEXPORT std::pair<ANNErrorCode, uint32_t> Index<int8_t, uint64_t, uint32_t>::search_with_filters<
+template DISKANN_DLLEXPORT std::pair<std::unique_ptr<ANNErrorCode>, uint32_t> Index<int8_t, uint64_t, uint32_t>::search_with_filters<
     uint64_t>(const int8_t *query, const std::string &filter_label, const size_t K, const uint32_t L, uint64_t *indices,
               float *distances);
-template DISKANN_DLLEXPORT std::pair<ANNErrorCode, uint32_t> Index<int8_t, uint64_t, uint32_t>::search_with_filters<
+template DISKANN_DLLEXPORT std::pair<std::unique_ptr<ANNErrorCode>, uint32_t> Index<int8_t, uint64_t, uint32_t>::search_with_filters<
     uint32_t>(const int8_t *query, const std::string &filter_label, const size_t K, const uint32_t L, uint32_t *indices,
               float *distances);
 // TagT==uint32_t
-template DISKANN_DLLEXPORT std::pair<ANNErrorCode, uint32_t> Index<float, uint32_t, uint32_t>::search_with_filters<
+template DISKANN_DLLEXPORT std::pair<std::unique_ptr<ANNErrorCode>, uint32_t> Index<float, uint32_t, uint32_t>::search_with_filters<
     uint64_t>(const float *query, const std::string &filter_label, const size_t K, const uint32_t L, uint64_t *indices,
               float *distances);
-template DISKANN_DLLEXPORT std::pair<ANNErrorCode, uint32_t> Index<float, uint32_t, uint32_t>::search_with_filters<
+template DISKANN_DLLEXPORT std::pair<std::unique_ptr<ANNErrorCode>, uint32_t> Index<float, uint32_t, uint32_t>::search_with_filters<
     uint32_t>(const float *query, const std::string &filter_label, const size_t K, const uint32_t L, uint32_t *indices,
               float *distances);
-template DISKANN_DLLEXPORT std::pair<ANNErrorCode, uint32_t> Index<uint8_t, uint32_t, uint32_t>::search_with_filters<
+template DISKANN_DLLEXPORT std::pair<std::unique_ptr<ANNErrorCode>, uint32_t> Index<uint8_t, uint32_t, uint32_t>::search_with_filters<
     uint64_t>(const uint8_t *query, const std::string &filter_label, const size_t K, const uint32_t L,
               uint64_t *indices, float *distances);
-template DISKANN_DLLEXPORT std::pair<ANNErrorCode, uint32_t> Index<uint8_t, uint32_t, uint32_t>::search_with_filters<
+template DISKANN_DLLEXPORT std::pair<std::unique_ptr<ANNErrorCode>, uint32_t> Index<uint8_t, uint32_t, uint32_t>::search_with_filters<
     uint32_t>(const uint8_t *query, const std::string &filter_label, const size_t K, const uint32_t L,
               uint32_t *indices, float *distances);
-template DISKANN_DLLEXPORT std::pair<ANNErrorCode, uint32_t> Index<int8_t, uint32_t, uint32_t>::search_with_filters<
+template DISKANN_DLLEXPORT std::pair<std::unique_ptr<ANNErrorCode>, uint32_t> Index<int8_t, uint32_t, uint32_t>::search_with_filters<
     uint64_t>(const int8_t *query, const std::string &filter_label, const size_t K, const uint32_t L, uint64_t *indices,
               float *distances);
-template DISKANN_DLLEXPORT std::pair<ANNErrorCode, uint32_t> Index<int8_t, uint32_t, uint32_t>::search_with_filters<
+template DISKANN_DLLEXPORT std::pair<std::unique_ptr<ANNErrorCode>, uint32_t> Index<int8_t, uint32_t, uint32_t>::search_with_filters<
     uint32_t>(const int8_t *query, const std::string &filter_label, const size_t K, const uint32_t L, uint32_t *indices,
               float *distances);
 
-template DISKANN_DLLEXPORT std::pair<ANNErrorCode, uint32_t> Index<float, uint64_t, uint32_t>::search_with_filters<
+template DISKANN_DLLEXPORT std::pair<std::unique_ptr<ANNErrorCode>, uint32_t> Index<float, uint64_t, uint32_t>::search_with_filters<
     uint64_t>(const float *query, const uint32_t &filter_label, const size_t K, const uint32_t L, uint64_t *indices,
               float *distances);
-template DISKANN_DLLEXPORT std::pair<ANNErrorCode, uint32_t> Index<float, uint64_t, uint32_t>::search_with_filters<
+template DISKANN_DLLEXPORT std::pair<std::unique_ptr<ANNErrorCode>, uint32_t> Index<float, uint64_t, uint32_t>::search_with_filters<
     uint32_t>(const float *query, const uint32_t &filter_label, const size_t K, const uint32_t L, uint32_t *indices,
               float *distances);
-template DISKANN_DLLEXPORT std::pair<ANNErrorCode, uint32_t> Index<uint8_t, uint64_t, uint32_t>::search_with_filters<
+template DISKANN_DLLEXPORT std::pair<std::unique_ptr<ANNErrorCode>, uint32_t> Index<uint8_t, uint64_t, uint32_t>::search_with_filters<
     uint64_t>(const uint8_t *query, const uint32_t &filter_label, const size_t K, const uint32_t L, uint64_t *indices,
               float *distances);
-template DISKANN_DLLEXPORT std::pair<ANNErrorCode, uint32_t> Index<uint8_t, uint64_t, uint32_t>::search_with_filters<
+template DISKANN_DLLEXPORT std::pair<std::unique_ptr<ANNErrorCode>, uint32_t> Index<uint8_t, uint64_t, uint32_t>::search_with_filters<
     uint32_t>(const uint8_t *query, const uint32_t &filter_label, const size_t K, const uint32_t L, uint32_t *indices,
               float *distances);
-template DISKANN_DLLEXPORT std::pair<ANNErrorCode, uint32_t> Index<int8_t, uint64_t, uint32_t>::search_with_filters<
+template DISKANN_DLLEXPORT std::pair<std::unique_ptr<ANNErrorCode>, uint32_t> Index<int8_t, uint64_t, uint32_t>::search_with_filters<
     uint64_t>(const int8_t *query, const uint32_t &filter_label, const size_t K, const uint32_t L, uint64_t *indices,
               float *distances);
-template DISKANN_DLLEXPORT std::pair<ANNErrorCode, uint32_t> Index<int8_t, uint64_t, uint32_t>::search_with_filters<
+template DISKANN_DLLEXPORT std::pair<std::unique_ptr<ANNErrorCode>, uint32_t> Index<int8_t, uint64_t, uint32_t>::search_with_filters<
     uint32_t>(const int8_t *query, const uint32_t &filter_label, const size_t K, const uint32_t L, uint32_t *indices,
               float *distances);
 // TagT==uint32_t
-template DISKANN_DLLEXPORT std::pair<ANNErrorCode, uint32_t> Index<float, uint32_t, uint32_t>::search_with_filters<
+template DISKANN_DLLEXPORT std::pair<std::unique_ptr<ANNErrorCode>, uint32_t> Index<float, uint32_t, uint32_t>::search_with_filters<
     uint64_t>(const float *query, const uint32_t &filter_label, const size_t K, const uint32_t L, uint64_t *indices,
               float *distances);
-template DISKANN_DLLEXPORT std::pair<ANNErrorCode, uint32_t> Index<float, uint32_t, uint32_t>::search_with_filters<
+template DISKANN_DLLEXPORT std::pair<std::unique_ptr<ANNErrorCode>, uint32_t> Index<float, uint32_t, uint32_t>::search_with_filters<
     uint32_t>(const float *query, const uint32_t &filter_label, const size_t K, const uint32_t L, uint32_t *indices,
               float *distances);
-template DISKANN_DLLEXPORT std::pair<ANNErrorCode, uint32_t> Index<uint8_t, uint32_t, uint32_t>::search_with_filters<
+template DISKANN_DLLEXPORT std::pair<std::unique_ptr<ANNErrorCode>, uint32_t> Index<uint8_t, uint32_t, uint32_t>::search_with_filters<
     uint64_t>(const uint8_t *query, const uint32_t &filter_label, const size_t K, const uint32_t L, uint64_t *indices,
               float *distances);
-template DISKANN_DLLEXPORT std::pair<ANNErrorCode, uint32_t> Index<uint8_t, uint32_t, uint32_t>::search_with_filters<
+template DISKANN_DLLEXPORT std::pair<std::unique_ptr<ANNErrorCode>, uint32_t> Index<uint8_t, uint32_t, uint32_t>::search_with_filters<
     uint32_t>(const uint8_t *query, const uint32_t &filter_label, const size_t K, const uint32_t L, uint32_t *indices,
               float *distances);
-template DISKANN_DLLEXPORT std::pair<ANNErrorCode, uint32_t> Index<int8_t, uint32_t, uint32_t>::search_with_filters<
+template DISKANN_DLLEXPORT std::pair<std::unique_ptr<ANNErrorCode>, uint32_t> Index<int8_t, uint32_t, uint32_t>::search_with_filters<
     uint64_t>(const int8_t *query, const uint32_t &filter_label, const size_t K, const uint32_t L, uint64_t *indices,
               float *distances);
-template DISKANN_DLLEXPORT std::pair<ANNErrorCode, uint32_t> Index<int8_t, uint32_t, uint32_t>::search_with_filters<
+template DISKANN_DLLEXPORT std::pair<std::unique_ptr<ANNErrorCode>, uint32_t> Index<int8_t, uint32_t, uint32_t>::search_with_filters<
     uint32_t>(const int8_t *query, const uint32_t &filter_label, const size_t K, const uint32_t L, uint32_t *indices,
               float *distances);
 
@@ -3289,79 +3292,79 @@ template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<int8_t, uint32_t,
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<int8_t, uint32_t, uint16_t>::search<uint32_t>(
     const int8_t *query, const size_t K, const uint32_t L, uint32_t *indices, float *distances);
 
-template DISKANN_DLLEXPORT std::pair<ANNErrorCode, uint32_t> Index<float, uint64_t, uint16_t>::search_with_filters<
+template DISKANN_DLLEXPORT std::pair<std::unique_ptr<ANNErrorCode>, uint32_t> Index<float, uint64_t, uint16_t>::search_with_filters<
     uint64_t>(const float *query, const std::string &filter_label, const size_t K, const uint32_t L, uint64_t *indices,
               float *distances);
-template DISKANN_DLLEXPORT std::pair<ANNErrorCode, uint32_t> Index<float, uint64_t, uint16_t>::search_with_filters<
+template DISKANN_DLLEXPORT std::pair<std::unique_ptr<ANNErrorCode>, uint32_t> Index<float, uint64_t, uint16_t>::search_with_filters<
     uint32_t>(const float *query, const std::string &filter_label, const size_t K, const uint32_t L, uint32_t *indices,
               float *distances);
-template DISKANN_DLLEXPORT std::pair<ANNErrorCode, uint32_t> Index<uint8_t, uint64_t, uint16_t>::search_with_filters<
+template DISKANN_DLLEXPORT std::pair<std::unique_ptr<ANNErrorCode>, uint32_t> Index<uint8_t, uint64_t, uint16_t>::search_with_filters<
     uint64_t>(const uint8_t *query, const std::string &filter_label, const size_t K, const uint32_t L,
               uint64_t *indices, float *distances);
-template DISKANN_DLLEXPORT std::pair<ANNErrorCode, uint32_t> Index<uint8_t, uint64_t, uint16_t>::search_with_filters<
+template DISKANN_DLLEXPORT std::pair<std::unique_ptr<ANNErrorCode>, uint32_t> Index<uint8_t, uint64_t, uint16_t>::search_with_filters<
     uint32_t>(const uint8_t *query, const std::string &filter_label, const size_t K, const uint32_t L,
               uint32_t *indices, float *distances);
-template DISKANN_DLLEXPORT std::pair<ANNErrorCode, uint32_t> Index<int8_t, uint64_t, uint16_t>::search_with_filters<
+template DISKANN_DLLEXPORT std::pair<std::unique_ptr<ANNErrorCode>, uint32_t> Index<int8_t, uint64_t, uint16_t>::search_with_filters<
     uint64_t>(const int8_t *query, const std::string &filter_label, const size_t K, const uint32_t L, uint64_t *indices,
               float *distances);
-template DISKANN_DLLEXPORT std::pair<ANNErrorCode, uint32_t> Index<int8_t, uint64_t, uint16_t>::search_with_filters<
+template DISKANN_DLLEXPORT std::pair<std::unique_ptr<ANNErrorCode>, uint32_t> Index<int8_t, uint64_t, uint16_t>::search_with_filters<
     uint32_t>(const int8_t *query, const std::string &filter_label, const size_t K, const uint32_t L, uint32_t *indices,
               float *distances);
 // TagT==uint32_t
-template DISKANN_DLLEXPORT std::pair<ANNErrorCode, uint32_t> Index<float, uint32_t, uint16_t>::search_with_filters<
+template DISKANN_DLLEXPORT std::pair<std::unique_ptr<ANNErrorCode>, uint32_t> Index<float, uint32_t, uint16_t>::search_with_filters<
     uint64_t>(const float *query, const std::string &filter_label, const size_t K, const uint32_t L, uint64_t *indices,
               float *distances);
-template DISKANN_DLLEXPORT std::pair<ANNErrorCode, uint32_t> Index<float, uint32_t, uint16_t>::search_with_filters<
+template DISKANN_DLLEXPORT std::pair<std::unique_ptr<ANNErrorCode>, uint32_t> Index<float, uint32_t, uint16_t>::search_with_filters<
     uint32_t>(const float *query, const std::string &filter_label, const size_t K, const uint32_t L, uint32_t *indices,
               float *distances);
-template DISKANN_DLLEXPORT std::pair<ANNErrorCode, uint32_t> Index<uint8_t, uint32_t, uint16_t>::search_with_filters<
+template DISKANN_DLLEXPORT std::pair<std::unique_ptr<ANNErrorCode>, uint32_t> Index<uint8_t, uint32_t, uint16_t>::search_with_filters<
     uint64_t>(const uint8_t *query, const std::string &filter_label, const size_t K, const uint32_t L,
               uint64_t *indices, float *distances);
-template DISKANN_DLLEXPORT std::pair<ANNErrorCode, uint32_t> Index<uint8_t, uint32_t, uint16_t>::search_with_filters<
+template DISKANN_DLLEXPORT std::pair<std::unique_ptr<ANNErrorCode>, uint32_t> Index<uint8_t, uint32_t, uint16_t>::search_with_filters<
     uint32_t>(const uint8_t *query, const std::string &filter_label, const size_t K, const uint32_t L,
               uint32_t *indices, float *distances);
-template DISKANN_DLLEXPORT std::pair<ANNErrorCode, uint32_t> Index<int8_t, uint32_t, uint16_t>::search_with_filters<
+template DISKANN_DLLEXPORT std::pair<std::unique_ptr<ANNErrorCode>, uint32_t> Index<int8_t, uint32_t, uint16_t>::search_with_filters<
     uint64_t>(const int8_t *query, const std::string &filter_label, const size_t K, const uint32_t L, uint64_t *indices,
               float *distances);
-template DISKANN_DLLEXPORT std::pair<ANNErrorCode, uint32_t> Index<int8_t, uint32_t, uint16_t>::search_with_filters<
+template DISKANN_DLLEXPORT std::pair<std::unique_ptr<ANNErrorCode>, uint32_t> Index<int8_t, uint32_t, uint16_t>::search_with_filters<
     uint32_t>(const int8_t *query, const std::string &filter_label, const size_t K, const uint32_t L, uint32_t *indices,
               float *distances);
 
-template DISKANN_DLLEXPORT std::pair<ANNErrorCode, uint32_t> Index<float, uint64_t, uint16_t>::search_with_filters<
+template DISKANN_DLLEXPORT std::pair<std::unique_ptr<ANNErrorCode>, uint32_t> Index<float, uint64_t, uint16_t>::search_with_filters<
     uint64_t>(const float *query, const uint16_t &filter_label, const size_t K, const uint32_t L, uint64_t *indices,
               float *distances);
-template DISKANN_DLLEXPORT std::pair<ANNErrorCode, uint32_t> Index<float, uint64_t, uint16_t>::search_with_filters<
+template DISKANN_DLLEXPORT std::pair<std::unique_ptr<ANNErrorCode>, uint32_t> Index<float, uint64_t, uint16_t>::search_with_filters<
     uint32_t>(const float *query, const uint16_t &filter_label, const size_t K, const uint32_t L, uint32_t *indices,
               float *distances);
-template DISKANN_DLLEXPORT std::pair<ANNErrorCode, uint32_t> Index<uint8_t, uint64_t, uint16_t>::search_with_filters<
+template DISKANN_DLLEXPORT std::pair<std::unique_ptr<ANNErrorCode>, uint32_t> Index<uint8_t, uint64_t, uint16_t>::search_with_filters<
     uint64_t>(const uint8_t *query, const uint16_t &filter_label, const size_t K, const uint32_t L, uint64_t *indices,
               float *distances);
-template DISKANN_DLLEXPORT std::pair<ANNErrorCode, uint32_t> Index<uint8_t, uint64_t, uint16_t>::search_with_filters<
+template DISKANN_DLLEXPORT std::pair<std::unique_ptr<ANNErrorCode>, uint32_t> Index<uint8_t, uint64_t, uint16_t>::search_with_filters<
     uint32_t>(const uint8_t *query, const uint16_t &filter_label, const size_t K, const uint32_t L, uint32_t *indices,
               float *distances);
-template DISKANN_DLLEXPORT std::pair<ANNErrorCode, uint32_t> Index<int8_t, uint64_t, uint16_t>::search_with_filters<
+template DISKANN_DLLEXPORT std::pair<std::unique_ptr<ANNErrorCode>, uint32_t> Index<int8_t, uint64_t, uint16_t>::search_with_filters<
     uint64_t>(const int8_t *query, const uint16_t &filter_label, const size_t K, const uint32_t L, uint64_t *indices,
               float *distances);
-template DISKANN_DLLEXPORT std::pair<ANNErrorCode, uint32_t> Index<int8_t, uint64_t, uint16_t>::search_with_filters<
+template DISKANN_DLLEXPORT std::pair<std::unique_ptr<ANNErrorCode>, uint32_t> Index<int8_t, uint64_t, uint16_t>::search_with_filters<
     uint32_t>(const int8_t *query, const uint16_t &filter_label, const size_t K, const uint32_t L, uint32_t *indices,
               float *distances);
 // TagT==uint32_t
-template DISKANN_DLLEXPORT std::pair<ANNErrorCode, uint32_t> Index<float, uint32_t, uint16_t>::search_with_filters<
+template DISKANN_DLLEXPORT std::pair<std::unique_ptr<ANNErrorCode>, uint32_t> Index<float, uint32_t, uint16_t>::search_with_filters<
     uint64_t>(const float *query, const uint16_t &filter_label, const size_t K, const uint32_t L, uint64_t *indices,
               float *distances);
-template DISKANN_DLLEXPORT std::pair<ANNErrorCode, uint32_t> Index<float, uint32_t, uint16_t>::search_with_filters<
+template DISKANN_DLLEXPORT std::pair<std::unique_ptr<ANNErrorCode>, uint32_t> Index<float, uint32_t, uint16_t>::search_with_filters<
     uint32_t>(const float *query, const uint16_t &filter_label, const size_t K, const uint32_t L, uint32_t *indices,
               float *distances);
-template DISKANN_DLLEXPORT std::pair<ANNErrorCode, uint32_t> Index<uint8_t, uint32_t, uint16_t>::search_with_filters<
+template DISKANN_DLLEXPORT std::pair<std::unique_ptr<ANNErrorCode>, uint32_t> Index<uint8_t, uint32_t, uint16_t>::search_with_filters<
     uint64_t>(const uint8_t *query, const uint16_t &filter_label, const size_t K, const uint32_t L, uint64_t *indices,
               float *distances);
-template DISKANN_DLLEXPORT std::pair<ANNErrorCode, uint32_t> Index<uint8_t, uint32_t, uint16_t>::search_with_filters<
+template DISKANN_DLLEXPORT std::pair<std::unique_ptr<ANNErrorCode>, uint32_t> Index<uint8_t, uint32_t, uint16_t>::search_with_filters<
     uint32_t>(const uint8_t *query, const uint16_t &filter_label, const size_t K, const uint32_t L, uint32_t *indices,
               float *distances);
-template DISKANN_DLLEXPORT std::pair<ANNErrorCode, uint32_t> Index<int8_t, uint32_t, uint16_t>::search_with_filters<
+template DISKANN_DLLEXPORT std::pair<std::unique_ptr<ANNErrorCode>, uint32_t> Index<int8_t, uint32_t, uint16_t>::search_with_filters<
     uint64_t>(const int8_t *query, const uint16_t &filter_label, const size_t K, const uint32_t L, uint64_t *indices,
               float *distances);
-template DISKANN_DLLEXPORT std::pair<ANNErrorCode, uint32_t> Index<int8_t, uint32_t, uint16_t>::search_with_filters<
+template DISKANN_DLLEXPORT std::pair<std::unique_ptr<ANNErrorCode>, uint32_t> Index<int8_t, uint32_t, uint16_t>::search_with_filters<
     uint32_t>(const int8_t *query, const uint16_t &filter_label, const size_t K, const uint32_t L, uint32_t *indices,
               float *distances);
 
