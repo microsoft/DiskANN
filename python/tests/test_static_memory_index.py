@@ -152,6 +152,38 @@ class TestStaticMemoryIndex(unittest.TestCase):
                         initial_search_complexity=32,
                     )
 
+    def test_value_ranges_ctor(self):
+        metric, dtype, query_vectors, index_vectors, ann_dir, vector_bin_file = build_random_vectors_and_memory_index(
+            np.single,
+            "l2",
+            "not_ann"
+        )
+        good_ranges = {
+            "metric": "l2",
+            "vector_dtype": np.single,
+            "data_path": vector_bin_file,
+            "index_directory": ann_dir,
+            "num_threads": 16,
+            "initial_search_complexity": 32,
+            "index_prefix": "not_ann"
+        }
+
+        bad_ranges = {
+            "metric": "l200000",
+            "vector_dtype": np.double,
+            "data_path": "I do not exist.bin",
+            "index_directory": "sandwiches",
+            "num_threads": -100,
+            "initial_search_complexity": 0,
+            "index_prefix": ""
+        }
+        for bad_value_key in good_ranges.keys():
+            kwargs = good_ranges.copy()
+            kwargs[bad_value_key] = bad_ranges[bad_value_key]
+            with self.subTest():
+                with self.assertRaises(ValueError):
+                    index = dap.StaticMemoryIndex(**kwargs)
+
     def test_value_ranges_search(self):
         good_ranges = {"complexity": 5, "k_neighbors": 10}
         bad_ranges = {"complexity": -1, "k_neighbors": 0}
