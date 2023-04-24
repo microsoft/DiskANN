@@ -193,7 +193,7 @@ int write_shards_to_disk(const std::string& output_file_prefix, const size_t num
     }
     
     // for write_hmetis_file
-    std::unordered_map<size_t, int> shard_of_point;
+    std::map<size_t, int> shard_of_point;
 
     for (size_t piece_id = 0; piece_id < pieces.size(); ++piece_id) {
       const size_t shard_id = piece_to_shard[piece_id];
@@ -288,6 +288,8 @@ int aux_main(const std::string &input_file,
     // bin-pack pieces into shards
     diskann::cout << "LSH partitioning finished. Now bin-packing pieces into shards..." << std::endl;
     const std::vector<size_t> piece_to_shard = bin_packing(pieces, max_shard_size);
+
+    // if bin_packing changes, this should be replaced by taking max
     const size_t num_shards = piece_to_shard.back() + 1;
 
     // write shards to disk
