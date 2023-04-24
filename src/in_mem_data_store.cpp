@@ -108,9 +108,9 @@ template <typename data_t> size_t InMemDataStore<data_t>::save(const std::string
 
 template <typename data_t> void InMemDataStore<data_t>::populate_data(const data_t *vectors, const location_t num_pts)
 {
+    memset(_data, 0, _aligned_dim * sizeof(data_t) * num_pts);
     for (location_t i = 0; i < num_pts; i++)
     {
-        memset(_data + i * _aligned_dim, 0, _aligned_dim * sizeof(data_t));
         std::memmove(_data + i * _aligned_dim, vectors + i * this->_dim, this->_dim * sizeof(data_t));
     }
 

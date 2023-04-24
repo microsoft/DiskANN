@@ -1017,7 +1017,7 @@ template <typename T> inline float get_norm(T *arr, const size_t dim)
 }
 
 // This function is valid only for float data type.
-template <typename T> inline void normalize(T *arr, const size_t dim)
+template <typename T = float> inline void normalize(T *arr, const size_t dim)
 {
     float norm = get_norm(arr, dim);
     for (uint32_t i = 0; i < dim; i++)
