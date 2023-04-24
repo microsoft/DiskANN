@@ -77,20 +77,20 @@ if __name__ == "__main__":
     parser.add_argument("-id", "--index_directory", required=False, default=".")
     parser.add_argument("-i", "--indexdata_file", required=True)
     parser.add_argument("-q", "--querydata_file", required=True)
-    parser.add_argument("-Lb", "--Lbuild", default=50)
-    parser.add_argument("-Ls", "--Lsearch", default=50)
-    parser.add_argument("-R", "--graph_degree", default=32)
-    parser.add_argument("-T", "--num_threads", default=8)
-    parser.add_argument("-K", default=10)
+    parser.add_argument("-Lb", "--Lbuild", default=50, type=int)
+    parser.add_argument("-Ls", "--Lsearch", default=50, type=int)
+    parser.add_argument("-R", "--graph_degree", default=32, type=int)
+    parser.add_argument("-T", "--num_threads", default=8, type=int)
+    parser.add_argument("-K", default=10, type=int)
     parser.add_argument("--gt_file", default="")
     parser.add_argument("-ip", "--index_prefix", required=False, default="ann")
     args = parser.parse_args()
 
     build_and_search(
         args.data_type,
-        args.index_directory,
-        args.indexdata_file,
-        args.querydata_file,
+        args.index_directory.strip(),
+        args.indexdata_file.strip(),
+        args.querydata_file.strip(),
         args.Lbuild,
         args.graph_degree,  # Build args
         args.K,
