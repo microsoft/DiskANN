@@ -55,8 +55,8 @@ Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_point
                               LoadStoreStratagy load_store_stratagy)
     : _dist_metric(m), _dim(dim), _num_frozen_pts(num_frozen_pts), _max_points(max_points),
       _dynamic_index(dynamic_index), _enable_tags(enable_tags), _indexingMaxC(DEFAULT_MAXC), _query_scratch(nullptr),
-      _conc_consolidate(concurrent_consolidate), _delete_set(new tsl::robin_set<uint32_t>), _pq_dist(pq_dist_build),
-      _use_opq(use_opq), _num_pq_chunks(num_pq_chunks)
+      _pq_dist(pq_dist_build), _use_opq(use_opq), _num_pq_chunks(num_pq_chunks),
+      _delete_set(new tsl::robin_set<uint32_t>), _conc_consolidate(concurrent_consolidate)
 {
     if (dynamic_index && !enable_tags)
     {
@@ -117,7 +117,7 @@ Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_point
     // REFACTOR: TODO This should move to a factory method.
     // use load_store_stratagy arg to construct this from a factory class.
     _data_store =
-        std::make_shared<diskann::InMemDataStore<T>>((location_t)total_internal_points, _dim, this->_distance);
+        std::make_unique<diskann::InMemDataStore<T>>((location_t)total_internal_points, _dim, this->_distance);
 
     _locks = std::vector<non_recursive_mutex>(total_internal_points);
 
@@ -166,7 +166,8 @@ void Index<T, TagT, LabelT>::initialize_query_scratch(uint32_t num_threads, uint
 {
     for (uint32_t i = 0; i < num_threads; i++)
     {
-        auto scratch = new InMemQueryScratch<T>(search_l, indexing_l, r, maxc, dim, _pq_dist);
+        auto scratch = new InMemQueryScratch<T>(search_l, indexing_l, r, maxc, dim, _data_store->get_aligned_dim(),
+                                                _data_store->get_alignment_factor(), _pq_dist);
         _query_scratch.push(scratch);
     }
 }
@@ -465,10 +466,11 @@ size_t Index<T, TagT, LabelT>::load_data(std::string filename)
 
 #ifdef EXEC_ENV_OLS
 
-    // REFACTOR TODO: Must figure out how to support aligned reader in a clean manner.
+    // REFACTOR TODO: Must figure out how to support aligned reader in a clean
+    // manner.
     copy_aligned_data_from_file<T>(reader, _data, file_num_points, file_dim, _aligned_dim);
 #else
-    _data_store->populate_data(filename, 0U); // offset == 0.
+    _data_store->load(filename); // offset == 0.
 #endif
     return file_num_points;
 }
@@ -850,17 +852,21 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
     std::vector<uint32_t> &id_scratch = scratch->id_scratch();
     std::vector<float> &dist_scratch = scratch->dist_scratch();
     assert(id_scratch.size() == 0);
-    T *aligned_query = scratch->aligned_query();
-    memcpy(aligned_query, query, _dim * sizeof(T));
-    if (_normalize_vecs)
-    {
-        normalize((float *)aligned_query, _dim);
-    }
 
-    float *query_float;
-    float *query_rotated;
-    float *pq_dists;
-    uint8_t *pq_coord_scratch;
+    // REFACTOR
+    // T *aligned_query = scratch->aligned_query();
+    // memcpy(aligned_query, query, _dim * sizeof(T));
+    // if (_normalize_vecs)
+    //{
+    //     normalize((float *)aligned_query, _dim);
+    // }
+
+    T *aligned_query = scratch->aligned_query();
+
+    float *query_float = nullptr;
+    float *query_rotated = nullptr;
+    float *pq_dists = nullptr;
+    uint8_t *pq_coord_scratch = nullptr;
     // Intialize PQ related scratch to use PQ based distances
     if (_pq_dist)
     {
@@ -1252,6 +1258,7 @@ void Index<T, TagT, LabelT>::prune_neighbors(const uint32_t location, std::vecto
     std::sort(pool.begin(), pool.end());
     pruned_list.clear();
     pruned_list.reserve(range);
+
     occlude_list(location, pool, alpha, range, max_candidate_size, pruned_list, scratch);
     assert(pruned_list.size() <= range);
 
@@ -1346,9 +1353,6 @@ void Index<T, TagT, LabelT>::link(IndexWriteParameters &parameters)
         omp_set_num_threads(num_threads);
 
     _saturate_graph = parameters.saturate_graph;
-
-    if (num_threads != 0)
-        omp_set_num_threads(num_threads);
 
     _indexingQueueSize = parameters.search_list_size;
     _filterIndexingQueueSize = parameters.filter_list_size;
@@ -1830,7 +1834,6 @@ LabelT Index<T, TagT, LabelT>::get_converted_label(const std::string &raw_label)
     stream << "Unable to find label in the Label Map";
     diskann::cerr << stream.str() << std::endl;
     throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
-    exit(-1);
 }
 
 template <typename T, typename TagT, typename LabelT>
@@ -1901,11 +1904,12 @@ void Index<T, TagT, LabelT>::build_filtered_index(const char *filename, const st
     _label_to_medoid_id.clear();
     size_t num_points_labels = 0;
     parse_label_file(label_file,
-                     num_points_labels); // determines medoid for each label and identifies the points to label mapping
+                     num_points_labels); // determines medoid for each label and identifies
+                                         // the points to label mapping
 
     std::unordered_map<LabelT, std::vector<uint32_t>> label_to_points;
 
-    for (int lbl = 0; lbl < _labels.size(); lbl++)
+    for (typename tsl::robin_set<LabelT>::size_type lbl = 0; lbl < _labels.size(); lbl++)
     {
         auto itr = _labels.begin();
         std::advance(itr, lbl);
@@ -1988,7 +1992,9 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search(const T *query, con
 
     std::shared_lock<std::shared_timed_mutex> lock(_update_lock);
 
-    auto retval = iterate_to_fixed_point(query, L, init_ids, scratch, false, unused_filter_label, true);
+    _distance->preprocess_query(query, _data_store->get_dims(), scratch->aligned_query());
+    auto retval =
+        iterate_to_fixed_point(scratch->aligned_query(), L, init_ids, scratch, false, unused_filter_label, true);
 
     NeighborPriorityQueue &best_L_nodes = scratch->best_l_nodes();
 
@@ -2062,10 +2068,11 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
     }
     filter_vec.emplace_back(filter_label);
 
-    T *aligned_query = scratch->aligned_query();
-    memcpy(aligned_query, query, _dim * sizeof(T));
-
-    auto retval = iterate_to_fixed_point(aligned_query, L, init_ids, scratch, true, filter_vec, true);
+    // REFACTOR
+    // T *aligned_query = scratch->aligned_query();
+    // memcpy(aligned_query, query, _dim * sizeof(T));
+    _distance->preprocess_query(query, _data_store->get_dims(), scratch->aligned_query());
+    auto retval = iterate_to_fixed_point(scratch->aligned_query(), L, init_ids, scratch, true, filter_vec, true);
 
     auto best_L_nodes = scratch->best_l_nodes();
 
@@ -2124,7 +2131,9 @@ size_t Index<T, TagT, LabelT>::search_with_tags(const T *query, const uint64_t K
     const std::vector<uint32_t> init_ids = get_init_ids();
     const std::vector<LabelT> unused_filter_label;
 
-    iterate_to_fixed_point(query, L, init_ids, scratch, false, unused_filter_label, true);
+    _distance->preprocess_query(query, _data_store->get_dims(), scratch->aligned_query());
+    iterate_to_fixed_point(scratch->aligned_query(), L, init_ids, scratch, false, unused_filter_label, true);
+
     NeighborPriorityQueue &best_L_nodes = scratch->best_l_nodes();
     assert(best_L_nodes.size() <= L);
 
@@ -2201,7 +2210,7 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
     }
     else
     {
-        _data_store->copy_points(res, _max_points, 1);
+        _data_store->copy_vectors(res, _max_points, 1);
     }
 }
 
@@ -2488,7 +2497,7 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
                 assert(new_location[old] < old);
                 _final_graph[new_location[old]].swap(_final_graph[old]);
 
-                _data_store->copy_points(old, new_location[old], 1);
+                _data_store->copy_vectors(old, new_location[old], 1);
             }
         }
         else
@@ -2647,7 +2656,7 @@ void Index<T, TagT, LabelT>::reposition_points(uint32_t old_location_start, uint
             mem_clear_loc_end_limit = new_location_start;
         }
     }
-    _data_store->reposition_points(old_location_start, new_location_start, num_locations);
+    _data_store->move_vectors(old_location_start, new_location_start, num_locations);
 }
 
 template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT>::reposition_frozen_point_to_end()
@@ -2932,8 +2941,9 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
     delete[] bfs_sets;
 }
 
-// REFACTOR: This should be an OptimizedDataStore class, dummy impl here for compiling sake
-// template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT>::optimize_index_layout()
+// REFACTOR: This should be an OptimizedDataStore class, dummy impl here for
+// compiling sake template <typename T, typename TagT, typename LabelT> void
+// Index<T, TagT, LabelT>::optimize_index_layout()
 //{ // use after build or load
 //}
 
@@ -2972,9 +2982,11 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
     delete[] cur_vec;
 }
 
-//  REFACTOR: once optimized layout becomes its own Data+Graph store, we should just invoke regular search
+//  REFACTOR: once optimized layout becomes its own Data+Graph store, we should
+//  just invoke regular search
 // template <typename T, typename TagT, typename LabelT>
-// void Index<T, TagT, LabelT>::search_with_optimized_layout(const T *query, size_t K, size_t L, uint32_t *indices)
+// void Index<T, TagT, LabelT>::search_with_optimized_layout(const T *query,
+// size_t K, size_t L, uint32_t *indices)
 //{
 //}
 

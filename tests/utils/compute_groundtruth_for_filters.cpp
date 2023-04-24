@@ -670,8 +670,10 @@ int main(int argc, char **argv)
         desc.add_options()("universal_label", po::value<std::string>(&universal_label)->default_value(""),
                            "Universal label, if using it, only in conjunction with label_file");
         desc.add_options()("gt_file", po::value<std::string>(&gt_file)->required(),
-                           "File name for the writing ground truth in binary format, please don' append .bin at end if "
-                           "no filter_label or filter_label_file is provided it will save the file with '.bin' at end."
+                           "File name for the writing ground truth in binary "
+                           "format, please don' append .bin at end if "
+                           "no filter_label or filter_label_file is provided it "
+                           "will save the file with '.bin' at end."
                            "else it will save the file as filename_label.bin");
         desc.add_options()("K", po::value<uint64_t>(&K)->required(),
                            "Number of ground truth nearest neighbors to compute");
@@ -766,7 +768,7 @@ int main(int argc, char **argv)
         tsl::robin_map<std::string, uint32_t> labels_to_number_of_queries;
 
         label_set all_labels;
-        for (int i = 0; i < filter_labels.size(); i++)
+        for (size_t i = 0; i < filter_labels.size(); i++)
         {
             std::string label = filter_labels[i];
             all_labels.insert(label);
@@ -881,7 +883,7 @@ int main(int argc, char **argv)
             query_num += labels_to_number_of_queries[lbl];
         }
 
-        for (size_t i = 0; i < query_num; i++)
+        for (int i = 0; i < query_num; i++)
         {
             final_gt_ids.push_back(std::vector<int32_t>(K));
             final_gt_dists.push_back(std::vector<float>(K));
@@ -895,7 +897,7 @@ int main(int argc, char **argv)
             for (int i = 0; i < labels_to_number_of_queries[lbl]; i++)
             {
                 int orig_query_id = label_query_id_to_orig_id[lbl][i];
-                for (int j = 0; j < K; j++)
+                for (uint64_t j = 0; j < K; j++)
                 {
                     final_gt_ids[orig_query_id][j] = label_id_to_orig_id[lbl][gt_ids[i * K + j]];
                     final_gt_dists[orig_query_id][j] = gt_dists[i * K + j];

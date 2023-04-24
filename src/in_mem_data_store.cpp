@@ -11,9 +11,10 @@ namespace diskann
 
 template <typename data_t>
 InMemDataStore<data_t>::InMemDataStore(const location_t num_points, const size_t dim,
-                                       std::shared_ptr<Distance<data_t>> distance_metric)
-    : AbstractDataStore<data_t>(num_points, dim), _aligned_dim(ROUND_UP(dim, 8)), _distance_fn(distance_metric)
+                                       std::shared_ptr<Distance<data_t>> distance_fn)
+    : AbstractDataStore<data_t>(num_points, dim), _distance_fn(distance_fn)
 {
+    _aligned_dim = ROUND_UP(dim, _distance_fn->get_required_alignment());
     alloc_aligned(((void **)&_data), this->_capacity * _aligned_dim * sizeof(data_t), 8 * sizeof(data_t));
     std::memset(_data, 0, this->_capacity * _aligned_dim * sizeof(data_t));
 }
@@ -24,6 +25,16 @@ template <typename data_t> InMemDataStore<data_t>::~InMemDataStore()
     {
         aligned_free(this->_data);
     }
+}
+
+template <typename data_t> size_t InMemDataStore<data_t>::get_aligned_dim() const
+{
+    return _aligned_dim;
+}
+
+template <typename data_t> size_t InMemDataStore<data_t>::get_alignment_factor() const
+{
+    return _distance_fn->get_required_alignment();
 }
 
 template <typename data_t> location_t InMemDataStore<data_t>::load(const std::string &filename)
@@ -97,15 +108,15 @@ template <typename data_t> size_t InMemDataStore<data_t>::save(const std::string
 
 template <typename data_t> void InMemDataStore<data_t>::populate_data(const data_t *vectors, const location_t num_pts)
 {
-    for (auto i = 0; i < num_pts; i++)
+    for (location_t i = 0; i < num_pts; i++)
     {
         memset(_data + i * _aligned_dim, 0, _aligned_dim * sizeof(data_t));
         std::memmove(_data + i * _aligned_dim, vectors + i * this->_dim, this->_dim * sizeof(data_t));
     }
 
-    if (_distance_fn->normalization_required())
+    if (_distance_fn->preprocessing_required())
     {
-        _distance_fn->normalize_data_for_build(_data, this->_dim, num_pts);
+        _distance_fn->preprocess_base_points(_data, this->_aligned_dim, num_pts);
     }
 }
 
@@ -131,14 +142,14 @@ template <typename data_t> void InMemDataStore<data_t>::populate_data(const std:
         throw diskann::ANNException(ss.str(), -1);
     }
 
-    if (_distance_fn->normalization_required())
+    if (_distance_fn->preprocessing_required())
     {
-        _distance_fn->normalize_data_for_build(_data, this->_dim, this->capacity());
+        _distance_fn->preprocess_base_points(_data, this->_aligned_dim, this->capacity());
     }
 }
 
 template <typename data_t>
-void InMemDataStore<data_t>::save_data_to_bin(const std::string &filename, const location_t num_points)
+void InMemDataStore<data_t>::extract_data_to_bin(const std::string &filename, const location_t num_points)
 {
     save_data_in_base_dimensions(filename, _data, num_points, this->get_dims(), this->get_aligned_dim(), 0U);
 }
@@ -153,9 +164,9 @@ template <typename data_t> void InMemDataStore<data_t>::set_vector(const locatio
     size_t offset_in_data = loc * _aligned_dim;
     memset(_data + offset_in_data, 0, _aligned_dim * sizeof(data_t));
     memcpy(_data + offset_in_data, vector, this->_dim * sizeof(data_t));
-    if (_distance_fn->normalization_required())
+    if (_distance_fn->preprocessing_required())
     {
-        _distance_fn->normalize_data_for_build(_data + offset_in_data, _aligned_dim, 1);
+        _distance_fn->preprocess_base_points(_data + offset_in_data, _aligned_dim, 1);
     }
 }
 
@@ -173,7 +184,7 @@ template <typename data_t>
 void InMemDataStore<data_t>::get_distance(const data_t *query, const location_t *locations,
                                           const uint32_t location_count, float *distances) const
 {
-    for (auto i = 0; i < location_count; i++)
+    for (location_t i = 0; i < location_count; i++)
     {
         distances[i] = _distance_fn->compare(query, _data + locations[i] * _aligned_dim, this->_aligned_dim);
     }
@@ -185,11 +196,11 @@ float InMemDataStore<data_t>::get_distance(const location_t loc1, const location
     return _distance_fn->compare(_data + loc1 * _aligned_dim, _data + loc2 * _aligned_dim, this->_aligned_dim);
 }
 
-template <typename data_t> void InMemDataStore<data_t>::expand(const location_t new_size)
+template <typename data_t> location_t InMemDataStore<data_t>::expand(const location_t new_size)
 {
     if (new_size == this->capacity())
     {
-        return;
+        return this->capacity();
     }
     else if (new_size < this->capacity())
     {
@@ -208,13 +219,14 @@ template <typename data_t> void InMemDataStore<data_t>::expand(const location_t 
     realloc_aligned((void **)&_data, new_size * _aligned_dim * sizeof(data_t), 8 * sizeof(data_t));
 #endif
     this->_capacity = new_size;
+    return this->_capacity;
 }
 
-template <typename data_t> void InMemDataStore<data_t>::shrink(const location_t new_size)
+template <typename data_t> location_t InMemDataStore<data_t>::shrink(const location_t new_size)
 {
     if (new_size == this->capacity())
     {
-        return;
+        return this->capacity();
     }
     else if (new_size > this->capacity())
     {
@@ -232,29 +244,30 @@ template <typename data_t> void InMemDataStore<data_t>::shrink(const location_t 
 #else
     realloc_aligned((void **)&_data, new_size * _aligned_dim * sizeof(data_t), 8 * sizeof(data_t));
 #endif
+    this->_capacity = new_size;
+    return this->_capacity;
 }
 
 template <typename data_t>
-void InMemDataStore<data_t>::reposition_points(const location_t old_location_start, const location_t new_location_start,
-                                               const location_t num_locations)
+void InMemDataStore<data_t>::move_vectors(const location_t old_location_start, const location_t new_location_start,
+                                          const location_t num_locations)
 {
     if (num_locations == 0 || old_location_start == new_location_start)
     {
         return;
     }
 
-    // Update pointers to the moved nodes. Note: the computation is correct even
-    // when new_location_start < old_location_start given the C++ uint32_t
-    // integer arithmetic rules.
-    const uint32_t location_delta = new_location_start - old_location_start;
-
+    /*    // Update pointers to the moved nodes. Note: the computation is correct
+       even
+        // when new_location_start < old_location_start given the C++ uint32_t
+        // integer arithmetic rules.
+        const uint32_t location_delta = new_location_start - old_location_start;
+    */
     // The [start, end) interval which will contain obsolete points to be
     // cleared.
     uint32_t mem_clear_loc_start = old_location_start;
     uint32_t mem_clear_loc_end_limit = old_location_start + num_locations;
 
-    // Move the adjacency lists. Make sure that overlapping ranges are handled
-    // correctly.
     if (new_location_start < old_location_start)
     {
         // If ranges are overlapping, make sure not to clear the newly copied
@@ -277,14 +290,14 @@ void InMemDataStore<data_t>::reposition_points(const location_t old_location_sta
     }
 
     // Use memmove to handle overlapping ranges.
-    copy_points(old_location_start, new_location_start, num_locations);
+    copy_vectors(old_location_start, new_location_start, num_locations);
     memset(_data + _aligned_dim * mem_clear_loc_start, 0,
            sizeof(data_t) * _aligned_dim * (mem_clear_loc_end_limit - mem_clear_loc_start));
 }
 
 template <typename data_t>
-void InMemDataStore<data_t>::copy_points(const location_t from_loc, const location_t to_loc,
-                                         const location_t num_points)
+void InMemDataStore<data_t>::copy_vectors(const location_t from_loc, const location_t to_loc,
+                                          const location_t num_points)
 {
     assert(from_loc < this->_capacity);
     assert(to_loc < this->_capacity);

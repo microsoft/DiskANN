@@ -323,7 +323,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     std::shared_ptr<Distance<T>> _distance;
 
     // Data
-    std::shared_ptr<InMemDataStore<T>> _data_store;
+    std::unique_ptr<InMemDataStore<T>> _data_store;
     char *_opt_graph = nullptr;
 
     // Graph related data structures
@@ -334,10 +334,11 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     size_t _nd = 0;         // number of active points i.e. existing in the graph
     size_t _max_points = 0; // total number of points in given data set
 
-    // _num_frozen_pts is the number of points which are used as initial candidates
-    // when iterating to closest point(s). These are not visible externally and won't
-    // be returned by search. At least 1 frozen point is needed for a dynamic index.
-    // The frozen points have consecutive locations. See also _start below.
+    // _num_frozen_pts is the number of points which are used as initial
+    // candidates when iterating to closest point(s). These are not visible
+    // externally and won't be returned by search. At least 1 frozen point is
+    // needed for a dynamic index. The frozen points have consecutive locations.
+    // See also _start below.
     size_t _num_frozen_pts = 0;
     size_t _max_range_of_loaded_graph = 0;
     size_t _node_size;
