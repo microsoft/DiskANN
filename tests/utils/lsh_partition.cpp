@@ -157,7 +157,8 @@ template <typename T>
 int write_shards_to_disk(const std::string& output_file_prefix, const size_t num_shards,
                          const bool writing_queries, T* points, const size_t dim,
                          const std::vector<std::vector<uint32_t>>& pieces,
-                         const std::vector<size_t>& piece_to_shard) {
+                         const std::vector<size_t>& piece_to_shard,
+                         const bool write_hmetis_file) {
     std::unique_ptr<size_t[]> shard_counts =
         std::make_unique<size_t[]>(num_shards);
     std::vector<std::ofstream> shard_data_writer(num_shards);
@@ -190,6 +191,9 @@ int write_shards_to_disk(const std::string& output_file_prefix, const size_t num
       shard_idmap_writer[i].write((char*) &dummy_size, sizeof(uint32_t));
       shard_idmap_writer[i].write((char*) &const_one, sizeof(uint32_t));
     }
+    
+    // for write_hmetis_file
+    std::unordered_map<size_t, int> shard_of_point;
 
     for (size_t piece_id = 0; piece_id < pieces.size(); ++piece_id) {
       const size_t shard_id = piece_to_shard[piece_id];
@@ -198,6 +202,11 @@ int write_shards_to_disk(const std::string& output_file_prefix, const size_t num
           // write point
           shard_data_writer[shard_id].write((char*) (points + point_id * dim),
                                             sizeof(T) * dim);
+        }
+      }
+      if (write_hmetis_file) {
+        for (const size_t point_id : pieces[piece_id]) {
+          shard_of_point[point_id] = shard_id;
         }
       }
       // write ids
@@ -225,6 +234,24 @@ int write_shards_to_disk(const std::string& output_file_prefix, const size_t num
       shard_idmap_writer[i].close();
     }
     diskann::cout << "Total count: " << total_count << std::endl;
+
+    if (write_hmetis_file) {
+      std::string   hmetis_filename = output_file_prefix + "_partition.hmetis";
+      std::ofstream hmetis(hmetis_filename);
+      diskann::cout << "writing .hmetis file..." << std::endl;
+      size_t next_expected_id = 0;
+      for (const std::pair<size_t, int>& p : shard_of_point) {
+        if (p.first != next_expected_id) {
+          diskann::cout << "the partitioned points are not contiguous?"
+                        << std::endl;
+          return -1;
+        }
+        ++next_expected_id;
+		hmetis << p.second << std::endl;
+	  }
+      diskann::cout << "done writing .hmetis file." << std::endl;
+    }
+
     return 0;
 }
 
@@ -234,7 +261,8 @@ int aux_main(const std::string &input_file,
              const std::string &output_file_prefix,
              const std::string& query_file,
              const unsigned max_shard_size,
-             const unsigned query_fanout) {
+             const unsigned query_fanout,
+             const bool write_hmetis_file) {
 
     // load dataset
     // TODO for later: handle datasets that don't fit in memory
@@ -265,7 +293,8 @@ int aux_main(const std::string &input_file,
     // write shards to disk
     diskann::cout << "Writing shards to disk..." << std::endl;
     int ret = write_shards_to_disk<T>(output_file_prefix, num_shards, false,
-                                   points.get(), dim, pieces, piece_to_shard);
+                                      points.get(), dim, pieces, piece_to_shard,
+                                      write_hmetis_file);
     if (ret != 0)
       return ret;
 
@@ -336,7 +365,7 @@ int aux_main(const std::string &input_file,
       diskann::cout << "Writing query assignments to disk..." << std::endl;
       int ret =
           write_shards_to_disk<T>(output_file_prefix, num_shards, true, nullptr,
-                                  dim, query_pieces, piece_to_shard);
+                                  dim, query_pieces, piece_to_shard, false);
       if (ret != 0)
         return ret;
     }
@@ -356,6 +385,7 @@ int aux_main(const std::string &input_file,
 int main(int argc, char** argv) {
   std::string input_file, output_file_prefix, query_file;
   unsigned max_shard_size, query_fanout;
+  bool        write_hmetis_file;
 
   std::string data_type;
 
@@ -384,6 +414,10 @@ int main(int argc, char** argv) {
       desc.add_options()("query_fanout",
                          po::value<unsigned>(&query_fanout)->default_value(0),
                          "The fanout of each query (multi-probe LSH)");
+      desc.add_options()(
+          "write_hmetis_file",
+          po::value<bool>(&write_hmetis_file)->default_value(false),
+          "Also output the partition as a .hmetis format file (optional)");
     
     po::variables_map vm;
     po::store(po::parse_command_line(argc, argv, desc), vm);
@@ -407,13 +441,13 @@ int main(int argc, char** argv) {
   try {
     if (data_type == std::string("float")) {
       return aux_main<float>(input_file, output_file_prefix, query_file,
-                             max_shard_size, query_fanout);
+                             max_shard_size, query_fanout, write_hmetis_file);
     } else if (data_type == std::string("int8")) {
       return aux_main<int8_t>(input_file, output_file_prefix, query_file,
-                              max_shard_size, query_fanout);
+                              max_shard_size, query_fanout, write_hmetis_file);
     } else if (data_type == std::string("uint8")) {
       return aux_main<uint8_t>(input_file, output_file_prefix, query_file,
-                               max_shard_size, query_fanout);
+                               max_shard_size, query_fanout, write_hmetis_file);
     } else {
       std::cerr << "Unsupported data type. Use float or int8 or uint8"
                 << std::endl;
