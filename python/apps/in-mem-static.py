@@ -11,6 +11,7 @@ import utils
 
 def build_and_search(
     dtype_str,
+    index_directory,
     indexdata_file,
     querydata_file,
     Lb,
@@ -19,24 +20,41 @@ def build_and_search(
     Ls,
     num_threads,
     gt_file,
+    index_prefix
 ):
     if dtype_str == "float":
-        index = diskannpy.StaticMemoryIndex(
-            "l2", np.float32, indexdata_file, Lb, graph_degree
-        )
-        queries = utils.bin_to_numpy(np.float32, querydata_file)
+        dtype = np.single
     elif dtype_str == "int8":
-        index = diskannpy.StaticMemoryIndex(
-            "l2", np.int8, indexdata_file, Lb, graph_degree
-        )
-        queries = utils.bin_to_numpy(np.int8, querydata_file)
+        dtype = np.byte
     elif dtype_str == "uint8":
-        index = diskannpy.StaticMemoryIndex(
-            "l2", np.uint8, indexdata_file, Lb, graph_degree
-        )
-        queries = utils.bin_to_numpy(np.uint8, querydata_file)
+        dtype = np.ubyte
     else:
         raise ValueError("data_type must be float, int8 or uint8")
+
+    # build index
+    diskannpy.build_memory_index(
+        data=indexdata_file,
+        metric="l2",
+        vector_dtype=dtype,
+        index_directory=index_directory,
+        complexity=Lb,
+        graph_degree=graph_degree,
+        num_threads=num_threads,
+        index_prefix=index_prefix
+    )
+
+    # ready search object
+    index = diskannpy.StaticMemoryIndex(
+        metric="l2",
+        vector_dtype=dtype,
+        data_path=indexdata_file,
+        index_directory=index_directory,
+        num_threads=num_threads,  # this can be different at search time if you would like
+        initial_search_complexity=Ls,
+        index_prefix=index_prefix
+    )
+
+    queries = utils.bin_to_numpy(dtype, querydata_file)
 
     ids, dists = index.batch_search(queries, 10, Ls, num_threads)
 
@@ -52,6 +70,7 @@ if __name__ == "__main__":
     )
 
     parser.add_argument("-d", "--data_type", required=True)
+    parser.add_argument("-id", "--index_directory", required=False, default=".")
     parser.add_argument("-i", "--indexdata_file", required=True)
     parser.add_argument("-q", "--querydata_file", required=True)
     parser.add_argument("-Lb", "--Lbuild", default=50)
@@ -60,10 +79,12 @@ if __name__ == "__main__":
     parser.add_argument("-T", "--num_threads", default=8)
     parser.add_argument("-K", default=10)
     parser.add_argument("--gt_file", default="")
+    parser.add_argument("-ip", "--index_prefix", required=False, default="ann")
     args = parser.parse_args()
 
     build_and_search(
         args.data_type,
+        args.index_directory,
         args.indexdata_file,
         args.querydata_file,
         args.Lbuild,
@@ -72,4 +93,5 @@ if __name__ == "__main__":
         args.Lsearch,
         args.num_threads,  # search args
         args.gt_file,
+        args.index_prefix
     )
