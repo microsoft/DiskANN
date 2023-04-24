@@ -63,7 +63,10 @@ class DiskIndex:
         _assert_is_nonnegative_uint32(num_threads, "num_threads")
         _assert_is_nonnegative_uint32(num_nodes_to_cache, "num_nodes_to_cache")
         index_path = Path(index_directory)
-        _assert(index_path.exists() and index_path.is_dir(), "index_directory must both exist and be a directory")
+        _assert(
+            index_path.exists() and index_path.is_dir(),
+            "index_directory must both exist and be a directory",
+        )
 
         self._vector_dtype = vector_dtype
         if vector_dtype == np.single:

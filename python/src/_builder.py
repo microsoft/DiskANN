@@ -39,9 +39,7 @@ def numpy_to_diskann_file(vectors: np.ndarray, file_handler: BinaryIO):
 
 
 def _valid_path_and_dtype(
-        data: Union[str, np.ndarray],
-        vector_dtype: Optional[VectorDType],
-        index_path: str
+    data: Union[str, np.ndarray], vector_dtype: Optional[VectorDType], index_path: str
 ) -> Tuple[str, VectorDType]:
     if isinstance(data, np.ndarray):
         _assert_2d(data, "data")
@@ -49,7 +47,9 @@ def _valid_path_and_dtype(
 
         vector_bin_path = os.path.join(index_path, "vectors.bin")
         if Path(vector_bin_path).exists():
-            raise ValueError(f"The path {vector_bin_path} already exists. Remove it and try again.")
+            raise ValueError(
+                f"The path {vector_bin_path} already exists. Remove it and try again."
+            )
         with open(vector_bin_path, "wb") as temp_vector_bin:
             numpy_to_diskann_file(data, temp_vector_bin)
         vector_dtype_actual = data.dtype
@@ -57,24 +57,24 @@ def _valid_path_and_dtype(
         vector_bin_path = data
         _assert(
             Path(data).exists() and Path(data).is_file(),
-            "if data is of type `str`, it must both exist and be a file"
+            "if data is of type `str`, it must both exist and be a file",
         )
         vector_dtype_actual = vector_dtype
     return vector_bin_path, vector_dtype_actual
 
 
 def build_disk_index(
-        data: Union[str, np.ndarray],
-        metric: Literal["l2", "mips"],
-        index_directory: str,
-        complexity: int,
-        graph_degree: int,
-        search_memory_maximum: float,
-        build_memory_maximum: float,
-        num_threads: int,
-        pq_disk_bytes: int,
-        vector_dtype: Optional[VectorDType] = None,
-        index_prefix: str = "ann",
+    data: Union[str, np.ndarray],
+    metric: Literal["l2", "mips"],
+    index_directory: str,
+    complexity: int,
+    graph_degree: int,
+    search_memory_maximum: float,
+    build_memory_maximum: float,
+    num_threads: int,
+    pq_disk_bytes: int,
+    vector_dtype: Optional[VectorDType] = None,
+    index_prefix: str = "ann",
 ):
     """
     This function will construct a DiskANN Disk Index and save it to disk.
@@ -136,9 +136,14 @@ def build_disk_index(
     _assert(index_prefix != "", "index_prefix cannot be an empty string")
 
     index_path = Path(index_directory)
-    _assert(index_path.exists() and index_path.is_dir(), "index_directory must both exist and be a directory")
+    _assert(
+        index_path.exists() and index_path.is_dir(),
+        "index_directory must both exist and be a directory",
+    )
 
-    vector_bin_path, vector_dtype_actual = _valid_path_and_dtype(data, vector_dtype, index_prefix)
+    vector_bin_path, vector_dtype_actual = _valid_path_and_dtype(
+        data, vector_dtype, index_prefix
+    )
 
     if vector_dtype_actual == np.single:
         _builder = _native_dap.build_disk_float_index
@@ -161,21 +166,21 @@ def build_disk_index(
 
 
 def build_memory_index(
-        data: Union[str, np.ndarray],
-        metric: Literal["l2", "mips"],
-        index_directory: str,
-        complexity: int,
-        graph_degree: int,
-        alpha: float,
-        num_threads: int,
-        use_pq_build: bool,
-        num_pq_bytes: int,
-        use_opq: bool,
-        vector_dtype: Optional[VectorDType] = None,
-        label_file: str = "",
-        universal_label: str = "",
-        filter_complexity: int = 0,
-        index_prefix: str = "ann",
+    data: Union[str, np.ndarray],
+    metric: Literal["l2", "mips"],
+    index_directory: str,
+    complexity: int,
+    graph_degree: int,
+    alpha: float,
+    num_threads: int,
+    use_pq_build: bool,
+    num_pq_bytes: int,
+    use_opq: bool,
+    vector_dtype: Optional[VectorDType] = None,
+    label_file: str = "",
+    universal_label: str = "",
+    filter_complexity: int = 0,
+    index_prefix: str = "ann",
 ):
     _assert(
         (isinstance(data, str) and vector_dtype is not None)
@@ -191,9 +196,14 @@ def build_memory_index(
     _assert(index_prefix != "", "index_prefix cannot be an empty string")
 
     index_path = Path(index_directory)
-    _assert(index_path.exists() and index_path.is_dir(), "index_directory must both exist and be a directory")
+    _assert(
+        index_path.exists() and index_path.is_dir(),
+        "index_directory must both exist and be a directory",
+    )
 
-    vector_bin_path, vector_dtype_actual = _valid_path_and_dtype(data, vector_dtype, index_directory)
+    vector_bin_path, vector_dtype_actual = _valid_path_and_dtype(
+        data, vector_dtype, index_directory
+    )
 
     if vector_dtype_actual == np.single:
         _builder = _native_dap.build_in_memory_float_index

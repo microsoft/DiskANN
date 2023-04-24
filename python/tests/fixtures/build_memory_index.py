@@ -27,6 +27,13 @@ def build_random_vectors_and_memory_index(dtype, metric, index_prefix="ann"):
         num_pq_bytes=8,
         use_opq=False,
         filter_complexity=32,
-        index_prefix=index_prefix
+        index_prefix=index_prefix,
     )
-    return metric, dtype, query_vectors, index_vectors, ann_dir, os.path.join(ann_dir, "vectors.bin")
+    return (
+        metric,
+        dtype,
+        query_vectors,
+        index_vectors,
+        ann_dir,
+        os.path.join(ann_dir, "vectors.bin"),
+    )

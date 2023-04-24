@@ -357,8 +357,8 @@ void build_in_memory_index(const diskann::Metric &metric, const std::string &vec
                                                            .build();
     size_t data_num, data_dim;
     diskann::get_bin_metadata(vector_bin_path, data_num, data_dim);
-    diskann::Index<T, TagT, LabelT> index(metric, data_dim, data_num, false, false, false, use_pq_build,
-                                              num_pq_bytes, use_opq);
+    diskann::Index<T, TagT, LabelT> index(metric, data_dim, data_num, false, false, false, use_pq_build, num_pq_bytes,
+                                          use_opq);
     if (label_file == "")
     {
         index.build(vector_bin_path.c_str(), data_num, index_build_params);

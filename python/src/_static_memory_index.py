@@ -16,7 +16,7 @@ from ._common import (
     _assert_is_positive_uint32,
     _get_valid_metric,
     _assert_existing_directory,
-    _assert_existing_file
+    _assert_existing_file,
 )
 
 __ALL__ = ["StaticMemoryIndex"]
@@ -31,7 +31,7 @@ class StaticMemoryIndex:
         index_directory: str,
         num_threads: int,
         initial_search_complexity: int,
-        index_prefix: str = "ann"
+        index_prefix: str = "ann",
     ):
         """
         The diskannpy.StaticMemoryIndex represents our python API into a static DiskANN InMemory Index library.
@@ -74,7 +74,7 @@ class StaticMemoryIndex:
             data_path=data_path,
             index_path=os.path.join(index_directory, index_prefix),
             num_threads=num_threads,
-            initial_search_complexity=initial_search_complexity
+            initial_search_complexity=initial_search_complexity,
         )
 
     def search(self, query: np.ndarray, k_neighbors: int, complexity: int):

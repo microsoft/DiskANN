@@ -31,7 +31,14 @@ class TestStaticMemoryIndex(unittest.TestCase):
                 pass
 
     def test_recall_and_batch(self):
-        for metric, dtype, query_vectors, index_vectors, ann_dir, vector_bin_file in self._test_matrix:
+        for (
+            metric,
+            dtype,
+            query_vectors,
+            index_vectors,
+            ann_dir,
+            vector_bin_file,
+        ) in self._test_matrix:
             with self.subTest():
                 index = dap.StaticMemoryIndex(
                     metric="l2",
@@ -39,7 +46,7 @@ class TestStaticMemoryIndex(unittest.TestCase):
                     data_path=os.path.join(ann_dir, "vectors.bin"),
                     index_directory=ann_dir,
                     num_threads=16,
-                    initial_search_complexity=32
+                    initial_search_complexity=32,
                 )
 
                 k = 5
@@ -61,7 +68,14 @@ class TestStaticMemoryIndex(unittest.TestCase):
                     )
 
     def test_single(self):
-        for metric, dtype, query_vectors, index_vectors, ann_dir, vector_bin_file in self._test_matrix:
+        for (
+            metric,
+            dtype,
+            query_vectors,
+            index_vectors,
+            ann_dir,
+            vector_bin_file,
+        ) in self._test_matrix:
             with self.subTest():
                 index = dap.StaticMemoryIndex(
                     metric="l2",
@@ -69,13 +83,11 @@ class TestStaticMemoryIndex(unittest.TestCase):
                     data_path=vector_bin_file,
                     index_directory=ann_dir,
                     num_threads=16,
-                    initial_search_complexity=32
+                    initial_search_complexity=32,
                 )
 
                 k = 5
-                ids, dists = index.search(
-                    query_vectors[0], k_neighbors=k, complexity=5
-                )
+                ids, dists = index.search(query_vectors[0], k_neighbors=k, complexity=5)
                 self.assertEqual(ids.shape[0], k)
                 self.assertEqual(dists.shape[0], k)
 
@@ -89,7 +101,7 @@ class TestStaticMemoryIndex(unittest.TestCase):
                 data_path=vector_bin_file,
                 index_directory=ann_dir,
                 num_threads=16,
-                initial_search_complexity=32
+                initial_search_complexity=32,
             )
         with self.assertRaises(ValueError):
             dap.StaticMemoryIndex(
@@ -98,7 +110,7 @@ class TestStaticMemoryIndex(unittest.TestCase):
                 data_path=vector_bin_file,
                 index_directory=ann_dir,
                 num_threads=16,
-                initial_search_complexity=32
+                initial_search_complexity=32,
             )
         dap.StaticMemoryIndex(
             metric="l2",
@@ -106,7 +118,7 @@ class TestStaticMemoryIndex(unittest.TestCase):
             data_path=vector_bin_file,
             index_directory=ann_dir,
             num_threads=16,
-            initial_search_complexity=32
+            initial_search_complexity=32,
         )
         dap.StaticMemoryIndex(
             metric="mips",
@@ -114,7 +126,7 @@ class TestStaticMemoryIndex(unittest.TestCase):
             data_path=vector_bin_file,
             index_directory=ann_dir,
             num_threads=16,
-            initial_search_complexity=32
+            initial_search_complexity=32,
         )
         dap.StaticMemoryIndex(
             metric="MiPs",
@@ -122,12 +134,19 @@ class TestStaticMemoryIndex(unittest.TestCase):
             data_path=vector_bin_file,
             index_directory=ann_dir,
             num_threads=16,
-            initial_search_complexity=32
+            initial_search_complexity=32,
         )
 
     def test_valid_vector_dtype(self):
         aliases = {np.single: np.float32, np.byte: np.int8, np.ubyte: np.uint8}
-        for metric, dtype, query_vectors, index_vectors, ann_dir, vector_bin_file in self._test_matrix:
+        for (
+            metric,
+            dtype,
+            query_vectors,
+            index_vectors,
+            ann_dir,
+            vector_bin_file,
+        ) in self._test_matrix:
             with self.subTest():
                 index = dap.StaticMemoryIndex(
                     metric="l2",
@@ -153,11 +172,14 @@ class TestStaticMemoryIndex(unittest.TestCase):
                     )
 
     def test_value_ranges_ctor(self):
-        metric, dtype, query_vectors, index_vectors, ann_dir, vector_bin_file = build_random_vectors_and_memory_index(
-            np.single,
-            "l2",
-            "not_ann"
-        )
+        (
+            metric,
+            dtype,
+            query_vectors,
+            index_vectors,
+            ann_dir,
+            vector_bin_file,
+        ) = build_random_vectors_and_memory_index(np.single, "l2", "not_ann")
         good_ranges = {
             "metric": "l2",
             "vector_dtype": np.single,
@@ -165,7 +187,7 @@ class TestStaticMemoryIndex(unittest.TestCase):
             "index_directory": ann_dir,
             "num_threads": 16,
             "initial_search_complexity": 32,
-            "index_prefix": "not_ann"
+            "index_prefix": "not_ann",
         }
 
         bad_ranges = {
@@ -175,7 +197,7 @@ class TestStaticMemoryIndex(unittest.TestCase):
             "index_directory": "sandwiches",
             "num_threads": -100,
             "initial_search_complexity": 0,
-            "index_prefix": ""
+            "index_prefix": "",
         }
         for bad_value_key in good_ranges.keys():
             kwargs = good_ranges.copy()

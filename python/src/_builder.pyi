@@ -8,7 +8,6 @@ import numpy as np
 from ._common import VectorDType
 
 def numpy_to_diskann_file(vectors: np.ndarray, file_handler: BinaryIO): ...
-
 @overload
 def build_disk_index(
     data: str,
@@ -23,7 +22,6 @@ def build_disk_index(
     vector_dtype: VectorDType,
     index_prefix: str = "ann",
 ): ...
-
 @overload
 def build_disk_index(
     data: np.ndarray,
@@ -37,7 +35,6 @@ def build_disk_index(
     pq_disk_bytes: int,
     index_prefix: str = "ann",
 ): ...
-
 @overload
 def build_memory_index(
     data: np.ndarray,
@@ -55,22 +52,21 @@ def build_memory_index(
     filter_complexity: int = 0,
     index_prefix: str = "ann",
 ): ...
-
 @overload
 def build_memory_index(
-        data: str,
-        metric: Literal["l2", "mips"],
-        index_directory: str,
-        complexity: int,
-        graph_degree: int,
-        alpha: float,
-        num_threads: int,
-        use_pq_build: bool,
-        num_pq_bytes: int,
-        use_opq: bool,
-        vector_dtype: VectorDType,
-        label_file: str = "",
-        universal_label: str = "",
-        filter_complexity: int = 0,
-        index_prefix: str = "ann",
+    data: str,
+    metric: Literal["l2", "mips"],
+    index_directory: str,
+    complexity: int,
+    graph_degree: int,
+    alpha: float,
+    num_threads: int,
+    use_pq_build: bool,
+    num_pq_bytes: int,
+    use_opq: bool,
+    vector_dtype: VectorDType,
+    label_file: str = "",
+    universal_label: str = "",
+    filter_complexity: int = 0,
+    index_prefix: str = "ann",
 ): ...

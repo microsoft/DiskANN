@@ -24,7 +24,8 @@ def insert_and_search(
 
     if dtype_str == "float":
         index = diskannpy.DynamicMemoryIndex(
-            "l2", np.float32, ndims, npts, Lb, graph_degree)
+            "l2", np.float32, ndims, npts, Lb, graph_degree
+        )
         queries = utils.bin_to_numpy(np.float32, querydata_file)
         data = utils.bin_to_numpy(np.float32, indexdata_file)
     elif dtype_str == "int8":
@@ -44,11 +45,13 @@ def insert_and_search(
 
     tags = np.zeros(npts, dtype=int)
     for i in range(npts):
-        tags[i] = i+1
+        tags[i] = i + 1
     index.batch_insert(data, tags, num_insert_threads)
     print("batch_insert complete")
 
-    delete_tags = np.random.choice(range(1,npts+1,1), size=int(0.5*npts), replace=False)
+    delete_tags = np.random.choice(
+        range(1, npts + 1, 1), size=int(0.5 * npts), replace=False
+    )
     for tag in delete_tags:
         index.mark_deleted(tag)
     print("mark deletion completed")
@@ -56,8 +59,8 @@ def insert_and_search(
     index.consolidate_delete()
     print("consolidation completed")
 
-    deleted_data = data[delete_tags-1,:]
-        
+    deleted_data = data[delete_tags - 1, :]
+
     index.batch_insert(deleted_data, delete_tags, num_insert_threads)
     print("re-insertion completed")
 

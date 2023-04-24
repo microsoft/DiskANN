@@ -70,7 +70,9 @@ def _assert_is_nonnegative_uint32(test_value: int, parameter: str):
 
 def _assert_existing_directory(path: str, parameter: str):
     _path = Path(path)
-    _assert(_path.exists() and _path.is_dir(), f"{parameter} must be an existing directory")
+    _assert(
+        _path.exists() and _path.is_dir(), f"{parameter} must be an existing directory"
+    )
 
 
 def _assert_existing_file(path: str, parameter: str):

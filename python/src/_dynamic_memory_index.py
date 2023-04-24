@@ -247,12 +247,9 @@ class DynamicMemoryIndex:
         return self._index.insert(vector, vector_id)
 
     def batch_insert(
-        self,
-        vectors: np.ndarray,
-        vector_ids: np.ndarray,
-        num_threads: int = 0
+        self, vectors: np.ndarray, vector_ids: np.ndarray, num_threads: int = 0
     ):
-        """       
+        """
         :param num_threads: Number of threads to use when searching this index. (>= 0), 0 = num_threads in system
         :type num_threads: int
         """
@@ -262,9 +259,13 @@ class DynamicMemoryIndex:
             f"DynamicMemoryIndex was built expecting a dtype of {self._vector_dtype}, but the insert vector is of dtype "
             f"{vectors.dtype}",
         )
-        _assert(vectors.shape[0] == vector_ids.shape[0], "#vectors must be equal to #ids")
+        _assert(
+            vectors.shape[0] == vector_ids.shape[0], "#vectors must be equal to #ids"
+        )
         # Add a check on ID values
-        return self._index.batch_insert(vectors, vector_ids, vector_ids.shape[0], num_threads)
+        return self._index.batch_insert(
+            vectors, vector_ids, vector_ids.shape[0], num_threads
+        )
 
     def mark_deleted(self, vector_id: int):
         _assert_is_positive_uint32(vector_id, "vector_id")

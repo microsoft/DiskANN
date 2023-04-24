@@ -21,7 +21,7 @@ class TestBuildDiskIndex(unittest.TestCase):
                 search_memory_maximum=0.01,
                 build_memory_maximum=0.01,
                 num_threads=1,
-                pq_disk_bytes=0
+                pq_disk_bytes=0,
             )
 
         rando = rng.random(1000, dtype=np.single)
@@ -35,7 +35,7 @@ class TestBuildDiskIndex(unittest.TestCase):
                 search_memory_maximum=0.01,
                 build_memory_maximum=0.01,
                 num_threads=1,
-                pq_disk_bytes=0
+                pq_disk_bytes=0,
             )
 
     def test_value_ranges_build(self):
@@ -84,7 +84,7 @@ class TestBuildMemoryIndex(unittest.TestCase):
                 num_threads=1,
                 use_pq_build=False,
                 num_pq_bytes=0,
-                use_opq=False
+                use_opq=False,
             )
 
         rando = rng.random(1000, dtype=np.single)
@@ -99,7 +99,7 @@ class TestBuildMemoryIndex(unittest.TestCase):
                 num_threads=1,
                 use_pq_build=False,
                 num_pq_bytes=0,
-                use_opq=False
+                use_opq=False,
             )
 
     def test_value_ranges_build(self):
@@ -125,7 +125,13 @@ class TestBuildMemoryIndex(unittest.TestCase):
             kwargs = good_ranges.copy()
             kwargs[bad_value_key] = bad_ranges[bad_value_key]
             with self.subTest(
-                    f"testing bad value key: {bad_value_key} with bad value: {bad_ranges[bad_value_key]}"
+                f"testing bad value key: {bad_value_key} with bad value: {bad_ranges[bad_value_key]}"
             ):
                 with self.assertRaises(ValueError):
-                    dap.build_memory_index(data="test", index_directory="test", use_pq_build=True, use_opq=False, **kwargs)
+                    dap.build_memory_index(
+                        data="test",
+                        index_directory="test",
+                        use_pq_build=True,
+                        use_opq=False,
+                        **kwargs,
+                    )
