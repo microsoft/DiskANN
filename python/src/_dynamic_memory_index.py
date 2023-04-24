@@ -97,6 +97,7 @@ class DynamicMemoryIndex:
         _assert_is_positive_uint32(max_points, "max_points")
         _assert_is_positive_uint32(complexity, "complexity")
         _assert_is_positive_uint32(graph_degree, "graph_degree")
+        _assert(alpha >= 1, "alpha must be >= 1, and realistically should be kept between [1.0, 2.0)")
         _assert_is_nonnegative_uint32(max_occlusion_size, "max_occlusion_size")
         _assert_is_nonnegative_uint32(num_threads, "num_threads")
         _assert_is_nonnegative_uint32(filter_complexity, "filter_complexity")

@@ -214,28 +214,40 @@ class TestDynamicMemoryIndex(unittest.TestCase):
         good_ranges = {
             "metric": "l2",
             "vector_dtype": np.single,
-            "data_path": vector_bin_file,
-            "index_directory": ann_dir,
+            "dim": 10,
+            "max_points": 11_000,
+            "complexity": 64,
+            "graph_degree": 32,
+            "max_occlusion_size": 10,
+            "alpha": 1.2,
             "num_threads": 16,
+            "filter_complexity": 10,
+            "num_frozen_points": 10,
             "initial_search_complexity": 32,
-            "index_prefix": "not_ann",
+            "search_threads": 0
         }
 
         bad_ranges = {
             "metric": "l200000",
             "vector_dtype": np.double,
-            "data_path": "I do not exist.bin",
-            "index_directory": "sandwiches",
-            "num_threads": -100,
-            "initial_search_complexity": 0,
-            "index_prefix": "",
+            "dim": -1,
+            "max_points": -1,
+            "complexity": 0,
+            "graph_degree": 0,
+            "max_occlusion_size": -1,
+            "alpha": -1,
+            "num_threads": -1,
+            "filter_complexity": -1,
+            "num_frozen_points": -1,
+            "initial_search_complexity": -1,
+            "search_threads": -1,
         }
         for bad_value_key in good_ranges.keys():
             kwargs = good_ranges.copy()
             kwargs[bad_value_key] = bad_ranges[bad_value_key]
             with self.subTest():
-                with self.assertRaises(ValueError):
-                    index = dap.StaticMemoryIndex(**kwargs)
+                with self.assertRaises(ValueError, msg=f"expected to fail with parameter {bad_value_key}={bad_ranges[bad_value_key]}"):
+                    index = dap.DynamicMemoryIndex(saturate_graph=False, **kwargs)
 
     def test_value_ranges_search(self):
         good_ranges = {"complexity": 5, "k_neighbors": 10}

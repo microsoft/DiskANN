@@ -190,6 +190,7 @@ def build_memory_index(
     dap_metric = _get_valid_metric(metric)
     _assert_is_positive_uint32(complexity, "complexity")
     _assert_is_positive_uint32(graph_degree, "graph_degree")
+    _assert(alpha >= 1, "alpha must be >= 1, and realistically should be kept between [1.0, 2.0)")
     _assert_is_nonnegative_uint32(num_threads, "num_threads")
     _assert_is_nonnegative_uint32(num_pq_bytes, "num_pq_bytes")
     _assert_is_nonnegative_uint32(filter_complexity, "filter_complexity")
