@@ -53,10 +53,14 @@ class StaticMemoryIndex:
             vector_dtype in _VALID_DTYPES,
             f"vector_dtype {vector_dtype} is not in list of valid dtypes supported: {_VALID_DTYPES}",
         )
+        _assert_is_nonnegative_uint32(num_threads, "num_threads")
+        _assert_is_positive_uint32(
+            initial_search_complexity, "initial_search_complexity"
+        )
         _assert_existing_file(data_path, "data_path")
-        _assert(index_prefix != "", "index_prefix cannot be an empty string")
-
         _assert_existing_directory(index_directory, "index_directory")
+
+        _assert(index_prefix != "", "index_prefix cannot be an empty string")
 
         self._vector_dtype = vector_dtype
         if vector_dtype == np.single:

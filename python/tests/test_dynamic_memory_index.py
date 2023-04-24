@@ -32,7 +32,7 @@ class TestStaticMemoryIndex(unittest.TestCase):
     def test_recall_and_batch(self):
         for metric, dtype, query_vectors, index_vectors, ann_dir, vector_bin_file in self._test_matrix:
             with self.subTest():
-                index = dap.StaticMemoryIndex(
+                index = dap.DynamicMemoryIndex(
                     metric="l2",
                     vector_dtype=dtype,
                     data_path=os.path.join(ann_dir, "vectors.bin"),
