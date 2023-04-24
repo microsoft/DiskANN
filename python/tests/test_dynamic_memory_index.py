@@ -42,10 +42,12 @@ class TestStaticMemoryIndex(unittest.TestCase):
                 index = dap.DynamicMemoryIndex(
                     metric="l2",
                     vector_dtype=dtype,
-                    data_path=os.path.join(ann_dir, "vectors.bin"),
-                    index_directory=ann_dir,
+                    dim=10,
+                    max_points=11_000,
+                    complexity=64,
+                    graph_degree=32,
                     num_threads=16,
-                    initial_search_complexity=32,
+                    index_directory=ann_dir,
                 )
 
                 k = 5

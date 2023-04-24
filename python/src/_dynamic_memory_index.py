@@ -40,8 +40,6 @@ class DynamicMemoryIndex:
         initial_search_complexity: int = 0,
         search_threads: int = 0,
         concurrent_consolidation: bool = True,
-        index_directory: Optional[str] = None,
-        index_prefix: str = "ann",
     ):
         """
         The diskannpy.DynamicMemoryIndex represents our python API into a dynamic DiskANN InMemory Index library.
@@ -90,10 +88,6 @@ class DynamicMemoryIndex:
         :type search_threads: int
         :param concurrent_consolidation:
         :type concurrent_consolidation: bool
-        :param index_directory: Directory on disk where the memory index is stored. Default is `None`.
-        :type index_directory: Optional[str]
-        :param index_prefix: Directory on disk where the memory index is stored. Default is `None`.
-        :type index_prefix: Ostr
         """
         dap_metric = _get_valid_metric(metric)
         _assert_dtype(vector_dtype, "vector_dtype")
@@ -113,11 +107,6 @@ class DynamicMemoryIndex:
         _assert_is_nonnegative_uint32(search_threads, "search_threads")
 
         self._dims = dim
-        if index_directory is not None:
-            _assert(index_prefix != "", "index_prefix cannot be an empty string")
-            self._index_path = os.path.join(index_directory, index_prefix)
-        else:
-            self._index_path = ""
 
         if vector_dtype == np.single:
             _index = _native_dap.DynamicMemoryFloatIndex
@@ -140,7 +129,7 @@ class DynamicMemoryIndex:
             initial_search_complexity=initial_search_complexity,
             search_threads=search_threads,
             concurrent_consolidation=concurrent_consolidation,
-            index_path=self._index_path,
+            index_path=""
         )
 
     def search(
