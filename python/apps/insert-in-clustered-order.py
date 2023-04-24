@@ -14,9 +14,11 @@ def insert_and_search(
     querydata_file,
     Lb,
     graph_degree,
+    num_clusters,
+    num_insert_threads,
     K,
     Ls,
-    num_threads,
+    num_search_threads,
     gt_file,
 ):
     npts, ndims = utils.get_bin_metadata(indexdata_file)
@@ -42,11 +44,15 @@ def insert_and_search(
     else:
         raise ValueError("data_type must be float, int8 or uint8")
 
-    offsets, permutation = utils.cluster_and_permute(dtype_str, npts, ndims, data, 20)
+    offsets, permutation = utils.cluster_and_permute(dtype_str, npts, ndims, data, num_clusters)
 
-    for i in range(npts):
-        index.insert(data[permutation[i], :], permutation[i]+1)
-    tags, dists = index.batch_search(queries, K, Ls, num_threads)
+    i = 0
+    for c in range(num_clusters):
+        cluster_index_range = range(offsets[c],offsets[c+1])
+        cluster_indices = permutation[cluster_index_range]
+        cluster_data = data[cluster_indices,:]
+        index.insert(cluster_data, cluster_indices+1, num_insert_threads)
+    tags, dists = index.batch_search(queries, K, Ls, num_search_threads)
     res_ids = tags - 1
 
     if gt_file != "":
@@ -66,7 +72,9 @@ if __name__ == "__main__":
     parser.add_argument("-Lb", "--Lbuild", default=50)
     parser.add_argument("-Ls", "--Lsearch", default=50)
     parser.add_argument("-R", "--graph_degree", default=32)
-    parser.add_argument("-T", "--num_threads", default=8)
+    parser.add_argument("-TI", "--num_insert_threads", default=8)
+    parser.add_argument("-TS", "--num_search_threads", default=8)
+    parser.add_argument("-C", "--num_clusters", default=32)
     parser.add_argument("-K", default=10)
     parser.add_argument("--gt_file", default="")
     args = parser.parse_args()
@@ -77,8 +85,10 @@ if __name__ == "__main__":
         args.querydata_file,
         args.Lbuild,
         args.graph_degree,  # Build args
+        args.num_clusters,
+        args.num_insert_threads,
         args.K,
         args.Lsearch,
-        args.num_threads,  # search args
+        args.num_search_threads,  # search args
         args.gt_file,
     )

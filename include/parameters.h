@@ -110,7 +110,7 @@ class IndexWriteParametersBuilder
     float _alpha{defaults::ALPHA};
     uint32_t _num_threads{defaults::NUM_THREADS};
     uint32_t _filter_list_size{defaults::FILTER_LIST_SIZE};
-    uint32_t _num_frozen_points{defaults::NUM_FROZEN_POINTS};
+    uint32_t _num_frozen_points{defaults::NUM_FROZEN_POINTS_STATIC};
 };
 
 } // namespace diskann

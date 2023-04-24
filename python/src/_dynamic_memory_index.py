@@ -36,7 +36,7 @@ class DynamicMemoryIndex:
         alpha: float = defaults.ALPHA,
         num_threads: int = defaults.NUM_THREADS,
         filter_complexity: int = defaults.FILTER_COMPLEXITY,
-        num_frozen_points: int = defaults.NUM_FROZEN_POINTS,
+        num_frozen_points: int = defaults.NUM_FROZEN_POINTS_DYNAMIC,
         initial_search_complexity: int = 0,
         search_threads: int = 0,
         concurrent_consolidation: bool = True,
@@ -243,7 +243,6 @@ class DynamicMemoryIndex:
         self,
         vectors: np.ndarray,
         vector_ids: np.ndarray,
-        num_vectors: int,
         num_threads: int = 0
     ):
         """       
@@ -258,7 +257,7 @@ class DynamicMemoryIndex:
         )
         _assert(vectors.shape[0] == vector_ids.shape[0], "#vectors must be equal to #ids")
         # Add a check on ID values
-        return self._index.batch_insert(vectors, vector_ids, num_vectors, num_threads)
+        return self._index.batch_insert(vectors, vector_ids, vector_ids.shape[0], num_threads)
 
     def mark_deleted(self, vector_id: int):
         _assert_is_positive_uint32(vector_id, "vector_id")

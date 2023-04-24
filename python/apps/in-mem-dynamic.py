@@ -16,15 +16,15 @@ def insert_and_search(
     graph_degree,
     K,
     Ls,
-    num_threads,
+    num_insert_threads,
+    num_search_threads,
     gt_file,
 ):
     npts, ndims = utils.get_bin_metadata(indexdata_file)
 
     if dtype_str == "float":
         index = diskannpy.DynamicMemoryIndex(
-            "l2", np.float32, ndims, npts, Lb, graph_degree, False
-        )
+            "l2", np.float32, ndims, npts, Lb, graph_degree)
         queries = utils.bin_to_numpy(np.float32, querydata_file)
         data = utils.bin_to_numpy(np.float32, indexdata_file)
     elif dtype_str == "int8":
@@ -45,7 +45,7 @@ def insert_and_search(
     tags = np.zeros(npts, dtype=int)
     for i in range(npts):
         tags[i] = i+1
-    index.batch_insert(data, tags, npts, num_threads)
+    index.batch_insert(data, tags, num_insert_threads)
     print("batch_insert complete")
 
     delete_tags = np.random.choice(range(1,npts+1,1), size=int(0.5*npts), replace=False)
@@ -56,11 +56,12 @@ def insert_and_search(
     index.consolidate_delete()
     print("consolidation completed")
 
-    for tag in delete_tags:
-        index.insert(data[tag-1, :], tag)    
+    deleted_data = data[delete_tags-1,:]
+        
+    index.batch_insert(deleted_data, delete_tags, num_insert_threads)
     print("re-insertion completed")
 
-    tags, dists = index.batch_search(queries, K, Ls, num_threads)
+    tags, dists = index.batch_search(queries, K, Ls, num_search_threads)
     res_ids = tags - 1
 
     if gt_file != "":
@@ -80,7 +81,8 @@ if __name__ == "__main__":
     parser.add_argument("-Lb", "--Lbuild", default=50)
     parser.add_argument("-Ls", "--Lsearch", default=50)
     parser.add_argument("-R", "--graph_degree", default=32)
-    parser.add_argument("-T", "--num_threads", default=8)
+    parser.add_argument("-TI", "--num_insert_threads", default=8)
+    parser.add_argument("-TS", "--num_search_threads", default=8)
     parser.add_argument("-K", default=10)
     parser.add_argument("--gt_file", default="")
     args = parser.parse_args()
@@ -93,6 +95,7 @@ if __name__ == "__main__":
         args.graph_degree,  # Build args
         args.K,
         args.Lsearch,
-        args.num_threads,  # search args
+        args.num_insert_threads,
+        args.num_search_threads,  # search args
         args.gt_file,
     )
