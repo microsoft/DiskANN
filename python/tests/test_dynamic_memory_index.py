@@ -10,6 +10,23 @@ from fixtures import build_random_vectors_and_memory_index, calculate_recall
 from sklearn.neighbors import NearestNeighbors
 
 
+def _calculate_recall(
+        result_set_tags: np.ndarray,
+        original_indices_to_tags: np.ndarray,
+        truth_set_indices: np.ndarray,
+        recall_at: int = 5
+) -> float:
+
+    found = 0
+    for i in range(0, result_set_tags.shape[0]):
+        result_set_set = set(result_set_tags[i][0:recall_at])
+        truth_set_set = set()
+        for knn_index in truth_set_indices[i][0:recall_at]:
+            truth_set_set.add(original_indices_to_tags[knn_index])  # mapped into our tag number instead
+        found += len(result_set_set.intersection(truth_set_set))
+    return found / (result_set_tags.shape[0] * recall_at)
+
+
 class TestStaticMemoryIndex(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -66,7 +83,7 @@ class TestStaticMemoryIndex(unittest.TestCase):
                     )
                     knn.fit(index_vectors)
                     knn_distances, knn_indices = knn.kneighbors(query_vectors)
-                    recall = calculate_recall(diskann_neighbors, knn_indices, k)
+                    recall = _calculate_recall(diskann_neighbors, generated_tags, knn_indices, k)
                     self.assertTrue(
                         recall > 0.70,
                         f"Recall [{recall}] was not over 0.7",
