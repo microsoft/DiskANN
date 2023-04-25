@@ -3021,7 +3021,7 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
     for (uint32_t i = 0; i < _nd; i++)
     {
         char *cur_node_offset = _opt_graph + i * _node_size;
-        float cur_norm = dist_fast->norm(_data + i * _aligned_dim, (unsigned int)_aligned_dim);
+        float cur_norm = dist_fast->norm(_data + i * _aligned_dim, (uint32_t)_aligned_dim);
         std::memcpy(cur_node_offset, &cur_norm, sizeof(float));
         std::memcpy(cur_node_offset + sizeof(float), _data + i * _aligned_dim, _data_len - sizeof(float));
 

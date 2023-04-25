@@ -1292,7 +1292,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
             compute_dists(node_nbrs, nnbrs, dist_scratch);
             if (stats != nullptr)
             {
-                stats->n_cmps += (unsigned int)nnbrs;
+                stats->n_cmps += (uint32_t)nnbrs;
                 stats->cpu_us += (float)cpu_timer.elapsed();
             }
 
@@ -1359,7 +1359,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
             compute_dists(node_nbrs, nnbrs, dist_scratch);
             if (stats != nullptr)
             {
-                stats->n_cmps += (unsigned int)nnbrs;
+                stats->n_cmps += (uint32_t)nnbrs;
                 stats->cpu_us += (float)cpu_timer.elapsed();
             }
 
