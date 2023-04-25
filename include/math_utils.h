@@ -83,7 +83,8 @@ namespace kmeans {
   // vector<size_t> [num_centers], and closest_center = new size_t[num_points]
   // Final centers are output in centers as row major num_centers * dim
   //
-  float run_lloyds(float* data, size_t num_points, size_t dim, float* centers,
+  DISKANN_DLLEXPORT float run_lloyds(float* data, size_t num_points, size_t dim,
+                                    float* centers,
                    const size_t num_centers, const size_t max_reps,
                    std::vector<size_t>* closest_docs, uint32_t* closest_center);
 
@@ -92,6 +93,7 @@ namespace kmeans {
   void selecting_pivots(float* data, size_t num_points, size_t dim,
                         float* pivot_data, size_t num_centers);
 
-  void kmeanspp_selecting_pivots(float* data, size_t num_points, size_t dim,
+  DISKANN_DLLEXPORT void kmeanspp_selecting_pivots(float* data,
+                                                  size_t num_points, size_t dim,
                                  float* pivot_data, size_t num_centers);
 }  // namespace kmeans

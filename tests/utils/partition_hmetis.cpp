@@ -4,19 +4,24 @@
 #include "common_includes.h"
 #include "math_utils.h"
 #include <unordered_map>
+#include <unordered_set>
 #include <boost/program_options.hpp>
 
 #include "disk_utils.h"
 
 namespace po = boost::program_options;
 
+void assign_junk(const size_t dim, float* centroid) {
+  for (int i = 0; i < dim; ++i) {
+	centroid[i] = 1e15;  // give it some stupid centroid
+  }
+}
+
 template<typename T>
 void compute_centroid(const size_t dim, const T* points,
                       const std::vector<uint32_t>& point_ids, float* centroid) {
   if (point_ids.empty()) {
-    for (int i = 0; i < dim; ++i) {
-      centroid[i] = 1e15;  // give it some stupid centroid
-    }
+    assign_junk(dim, centroid);
   } else {
     for (int i = 0; i < dim; ++i) {
       centroid[i] = 0.0;
@@ -33,12 +38,39 @@ void compute_centroid(const size_t dim, const T* points,
 }
 
 template<typename T>
+void compute_subcentroids(const size_t dim, const T* points,
+                          const std::vector<uint32_t>& point_ids,
+                          float* subcentroids, const unsigned num_subcentroids) {
+  if (point_ids.empty()) {
+    for (int i = 0; i < num_subcentroids; ++i) {
+      assign_junk(dim, subcentroids + i * dim);
+    }
+  } else {
+    // run kmeans
+    std::unique_ptr<float[]> train_data_float =
+        std::make_unique<float[]>(point_ids.size() * dim);
+    for (size_t i = 0; i < point_ids.size(); ++i) {
+      for (int j = 0; j < dim; ++j) {
+		train_data_float[i * dim + j] = points[point_ids[i] * dim + j];
+	  }
+    }
+
+    // hope it won't crash if point_ids.size() < num_subcentroids...
+
+    kmeans::kmeanspp_selecting_pivots(train_data_float.get(), point_ids.size(),
+                                      dim, subcentroids, num_subcentroids);
+
+    constexpr size_t max_reps = 15;
+    kmeans::run_lloyds(train_data_float.get(), point_ids.size(), dim,
+                       subcentroids, num_subcentroids, max_reps, NULL, NULL);
+  }
+}
+
+template<typename T>
 void compute_geomedian(const size_t dim, const T* points,
                       const std::vector<uint32_t>& point_ids, float* geomedian) {
   if (point_ids.empty()) {
-    for (int i = 0; i < dim; ++i) {
-      geomedian[i] = 1e15;  // give it some stupid geomedian
-    }
+    assign_junk(dim, geomedian);
   } else if (point_ids.size() == 1) {
     for (int i = 0; i < dim; ++i) {
 	  geomedian[i] = points[point_ids[0] * dim + i];
@@ -175,8 +207,8 @@ int aux_main(const std::string &input_file,
              const std::string &output_file_prefix,
              const std::string& query_file, const std::string& gt_file,
              const std::string& hmetis_file, const std::string& mode,
-    const unsigned K,
-             const unsigned query_fanout) {
+             const unsigned K, const unsigned query_fanout,
+             const unsigned num_subcentroids) {
 
     // load dataset
     // TODO for later: handle datasets that don't fit in memory
@@ -267,6 +299,20 @@ int aux_main(const std::string &input_file,
                                dim);
       // done computing centroids/geomedians
 
+      std::unique_ptr<float[]> subcentroids;
+      if (mode == "multicentroids") {
+        subcentroids =
+            std::make_unique<float[]>(num_shards * num_subcentroids * dim);
+        for (size_t shard_id = 0; shard_id < num_shards; ++num_shards) {
+          compute_subcentroids<T>(
+              dim, points.get(), points_routed_to_shard[shard_id],
+              subcentroids.get() + shard_id * num_subcentroids * dim,
+              num_subcentroids);
+        }
+        diskann::cout << "computed subcentroids" << std::endl;
+      }
+      // subcentroids do not get saved to a file
+
       std::vector<std::unordered_map<size_t, size_t>> shard_to_count_of_GT_pts(
           num_queries);
       if (gt_file != "") {
@@ -340,13 +386,46 @@ int aux_main(const std::string &input_file,
                 closest_centroids_ivf[query_id * num_shards_to_order + i];
             query_to_shards[query_id].emplace_back(
                 shard_id, shard_to_count_of_GT_pts[query_id][shard_id]);
-            // shard_to_count_of_GT_pts[query_id][shard_id] will be(come) 0 if wasn't present
+            // shard_to_count_of_GT_pts[query_id][shard_id] will be(come) 0 if
+            // wasn't present
           }
         }
 
         diskann::cout << "Computed the query -> shard assignment using "
                          "approximation by centroids"
                       << std::endl;
+      } else if (mode == "multicentroids") {
+
+        std::unique_ptr<float[]> queries_float =
+            std::make_unique<float[]>(num_queries * dim);
+        diskann::convert_types<T, float>(queries.get(), queries_float.get(),
+                                         num_queries, dim);
+        const size_t num_subcenters = num_shards * num_subcentroids;
+        std::unique_ptr<uint32_t[]> closest_centroids_ivf =
+            std::make_unique<uint32_t[]>(num_queries * num_subcenters);
+        math_utils::compute_closest_centers(
+            queries_float.get(), num_queries, dim, subcentroids.get(),
+            num_subcenters, num_subcenters, closest_centroids_ivf.get());
+        for (size_t query_id = 0; query_id < num_queries; ++query_id) {
+          query_to_shards.emplace_back();
+          std::unordered_set<size_t> seen_shards;
+          for (int i = 0; i < num_subcenters; ++i) {
+            const size_t shard_id =
+                closest_centroids_ivf[query_id * num_subcenters + i] /
+                num_subcentroids;
+            if (seen_shards.insert(shard_id).second == true) {
+              query_to_shards[query_id].emplace_back(
+                  shard_id, shard_to_count_of_GT_pts[query_id][shard_id]);
+              // shard_to_count_of_GT_pts[query_id][shard_id] will be(come) 0 if
+              // wasn't present
+            }
+          }
+        }
+
+        diskann::cout << "Computed the query -> shard assignment using "
+                         "approximation by MULTIcentroids"
+                      << std::endl;
+
       } else {
         diskann::cout << "unsupported mode?" << std::endl;
         return -1;
@@ -477,7 +556,7 @@ int aux_main(const std::string &input_file,
 
 int main(int argc, char** argv) {
   std::string input_file, output_file_prefix, query_file, gt_file, hmetis_file, mode;
-  unsigned K, query_fanout;
+  unsigned K, query_fanout, num_subcentroids;
 
   std::string data_type;
 
@@ -502,7 +581,7 @@ int main(int argc, char** argv) {
                          po::value<std::string>(&mode)->default_value(
                              std::string("centroids")),
                          "How to route queries to shards (from_ground_truth / "
-                         "centroids / geomedian)");
+                         "centroids / multicentroids / geomedian)");
       desc.add_options()("K,recall_at", po::value<unsigned>(&K)->default_value(0),
                          "Number of points returned per query");
       desc.add_options()(
@@ -513,11 +592,13 @@ int main(int argc, char** argv) {
           "output_file_prefix",
           po::value<std::string>(&output_file_prefix)->required(),
           "Output file prefix. Will generate files like this_subshard-0.bin "
-          "and "
-          "this_subshard-0_ids_uint32.bin");
+          "and this_subshard-0_ids_uint32.bin");
       desc.add_options()("query_fanout",
                          po::value<unsigned>(&query_fanout)->default_value(0),
                          "The fanout of each query");
+      desc.add_options()("num_subcentroids",
+                         po::value<unsigned>(&num_subcentroids)->default_value(0),
+                         "The number of subcentroids (for multicentroids mode)");
     
     po::variables_map vm;
     po::store(po::parse_command_line(argc, argv, desc), vm);
@@ -538,8 +619,10 @@ int main(int argc, char** argv) {
     return -1;
   }
 
-  if (mode != "centroids" && mode != "geomedian" && mode != "from_ground_truth") {
-    diskann::cout << "mode must be centroids, geomedian or from_ground_truth"
+  if (mode != "centroids" && mode != "multicentroids" && mode != "geomedian" &&
+      mode != "from_ground_truth") {
+    diskann::cout << "mode must be centroids, multicentroids, geomedian or "
+                     "from_ground_truth"
                   << std::endl;
     return -1;
   }
@@ -556,16 +639,25 @@ int main(int argc, char** argv) {
     return -1;
   }
 
+  if (mode == "multicentroids" && num_subcentroids == 0) {
+    diskann::cout << "if multicentroids mode, must specify num_subcentroids"
+                  << std::endl;
+	return -1;
+  }
+
   try {
     if (data_type == std::string("float")) {
       return aux_main<float>(input_file, output_file_prefix, query_file,
-                             gt_file, hmetis_file, mode, K, query_fanout);
+                             gt_file, hmetis_file, mode, K, query_fanout,
+                             num_subcentroids);
     } else if (data_type == std::string("int8")) {
       return aux_main<int8_t>(input_file, output_file_prefix, query_file,
-                              gt_file, hmetis_file, mode, K, query_fanout);
+                              gt_file, hmetis_file, mode, K, query_fanout,
+                              num_subcentroids);
     } else if (data_type == std::string("uint8")) {
       return aux_main<uint8_t>(input_file, output_file_prefix, query_file,
-                               gt_file, hmetis_file, mode, K, query_fanout);
+                               gt_file, hmetis_file, mode, K, query_fanout,
+                               num_subcentroids);
     } else {
       std::cerr << "Unsupported data type. Use float or int8 or uint8"
                 << std::endl;
