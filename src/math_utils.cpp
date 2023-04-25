@@ -335,8 +335,8 @@ namespace kmeans {
 
       if (((i != 0) && ((old_residual - residual) / residual) < 0.00001) ||
           (residual < std::numeric_limits<float>::epsilon())) {
-        diskann::cout << "Residuals unchanged: " << old_residual << " becomes "
-                      << residual << ". Early termination." << std::endl;
+        //diskann::cout << "Residuals unchanged: " << old_residual << " becomes "
+        //              << residual << ". Early termination." << std::endl;
         break;
       }
     }
