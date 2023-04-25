@@ -472,23 +472,23 @@ std::unordered_map<std::string, LabelT> PQFlashIndex<T, LabelT>::load_label_map(
 }
 
 template <typename T, typename LabelT>
-std::pair<std::unique_ptr<ANNErrorCode>, LabelT> PQFlashIndex<T, LabelT>::get_converted_label(
+std::pair<std::unique_ptr<ANNReturnCode>, LabelT> PQFlashIndex<T, LabelT>::get_converted_label(
     const std::string &raw_label)
 {
-    std::unique_ptr<ANNErrorCode> ANNFilterStatus;
+    std::unique_ptr<ANNReturnCode> ANNFilterStatus;
     if (_label_map.find(raw_label) != _label_map.end())
     {
-        ANNFilterStatus = std::make_unique<ANNErrorCode>();
+        ANNFilterStatus = std::make_unique<ANNReturnCode>();
         return std::make_pair(std::move(ANNFilterStatus), _label_map[raw_label]);
     }
     if (_universal_label_exists)
     {
-        ANNFilterStatus = std::make_unique<ANNErrorCode>();
+        ANNFilterStatus = std::make_unique<ANNReturnCode>();
         return std::make_pair(std::move(ANNFilterStatus), _universal_label);
     }
     else
     {
-        ANNFilterStatus = std::make_unique<ANNErrorCode>(ANNErrorCode::Value::INVALID_LABEL);
+        ANNFilterStatus = std::make_unique<ANNReturnCode>(ANNReturnCode::Value::INVALID_LABEL);
         return std::make_pair(std::move(ANNFilterStatus), _universal_label);
     }
 }
@@ -995,7 +995,7 @@ bool getNextCompletedRequest(const IOContext &ctx, size_t size, int &completedIn
 #endif
 
 template <typename T, typename LabelT>
-std::unique_ptr<ANNErrorCode> PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t k_search,
+std::unique_ptr<ANNReturnCode> PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t k_search,
                                                                           const uint64_t l_search, uint64_t *indices,
                                                                           float *distances, const uint64_t beam_width,
                                                                           const bool use_reorder_data,
@@ -1006,7 +1006,7 @@ std::unique_ptr<ANNErrorCode> PQFlashIndex<T, LabelT>::cached_beam_search(const 
 }
 
 template <typename T, typename LabelT>
-std::unique_ptr<ANNErrorCode> PQFlashIndex<T, LabelT>::cached_beam_search(
+std::unique_ptr<ANNReturnCode> PQFlashIndex<T, LabelT>::cached_beam_search(
     const T *query1, const uint64_t k_search, const uint64_t l_search, uint64_t *indices, float *distances,
     const uint64_t beam_width, const uint32_t io_limit, const bool use_reorder_data, QueryStats *stats)
 {
@@ -1016,17 +1016,17 @@ std::unique_ptr<ANNErrorCode> PQFlashIndex<T, LabelT>::cached_beam_search(
 }
 
 template <typename T, typename LabelT>
-std::unique_ptr<ANNErrorCode> PQFlashIndex<T, LabelT>::cached_beam_search(
+std::unique_ptr<ANNReturnCode> PQFlashIndex<T, LabelT>::cached_beam_search(
     const T *query1, const uint64_t k_search, const uint64_t l_search, uint64_t *indices, float *distances,
     const uint64_t beam_width, const bool use_filter, const std::string &raw_label, const bool use_reorder_data,
     QueryStats *stats)
 {
     if (use_filter)
     {
-        std::unique_ptr<ANNErrorCode> ANNFilterStatus;
-        std::pair<std::unique_ptr<ANNErrorCode>, LabelT> internal_label = get_converted_label(raw_label);
-        ANNFilterStatus = std::make_unique<ANNErrorCode>();
-        if (ANNFilterStatus->getErrorCode() != ANNErrorCode::Value::SUCCESS)
+        std::unique_ptr<ANNReturnCode> ANNFilterStatus;
+        std::pair<std::unique_ptr<ANNReturnCode>, LabelT> internal_label = get_converted_label(raw_label);
+        ANNFilterStatus = std::make_unique<ANNReturnCode>();
+        if (ANNFilterStatus->getReturnCode() != ANNReturnCode::Value::SUCCESS)
             return ANNFilterStatus;
         return cached_beam_search(query1, k_search, l_search, indices, distances, beam_width, use_filter,
                                   internal_label.second, std::numeric_limits<uint32_t>::max(), use_reorder_data, stats);
@@ -1040,7 +1040,7 @@ std::unique_ptr<ANNErrorCode> PQFlashIndex<T, LabelT>::cached_beam_search(
 }
 
 template <typename T, typename LabelT>
-std::unique_ptr<ANNErrorCode> PQFlashIndex<T, LabelT>::cached_beam_search(
+std::unique_ptr<ANNReturnCode> PQFlashIndex<T, LabelT>::cached_beam_search(
     const T *query1, const uint64_t k_search, const uint64_t l_search, uint64_t *indices, float *distances,
     const uint64_t beam_width, const bool use_filter, const LabelT &filter_label, const bool use_reorder_data,
     QueryStats *stats)
@@ -1050,7 +1050,7 @@ std::unique_ptr<ANNErrorCode> PQFlashIndex<T, LabelT>::cached_beam_search(
 }
 
 template <typename T, typename LabelT>
-std::unique_ptr<ANNErrorCode> PQFlashIndex<T, LabelT>::cached_beam_search(
+std::unique_ptr<ANNReturnCode> PQFlashIndex<T, LabelT>::cached_beam_search(
     const T *query1, const uint64_t k_search, const uint64_t l_search, uint64_t *indices, float *distances,
     const uint64_t beam_width, const bool use_filter, const std::string &raw_label, const uint32_t io_limit,
     const bool use_reorder_data, QueryStats *stats)
@@ -1058,10 +1058,10 @@ std::unique_ptr<ANNErrorCode> PQFlashIndex<T, LabelT>::cached_beam_search(
     LabelT label = 0;
     if (use_filter)
     {
-        std::unique_ptr<ANNErrorCode> ANNFilterStatus;
-        std::pair<std::unique_ptr<ANNErrorCode>, LabelT> internal_label = get_converted_label(raw_label);
-        ANNFilterStatus = std::make_unique<ANNErrorCode>(internal_label.first->getErrorCode());
-        if (ANNFilterStatus->getErrorCode() != ANNErrorCode::Value::SUCCESS)
+        std::unique_ptr<ANNReturnCode> ANNFilterStatus;
+        std::pair<std::unique_ptr<ANNReturnCode>, LabelT> internal_label = get_converted_label(raw_label);
+        ANNFilterStatus = std::make_unique<ANNReturnCode>(internal_label.first->getReturnCode());
+        if (ANNFilterStatus->getReturnCode() != ANNReturnCode::Value::SUCCESS)
             return ANNFilterStatus;
         label = internal_label.second;
         return cached_beam_search(query1, k_search, l_search, indices, distances, beam_width, use_filter,
@@ -1075,7 +1075,7 @@ std::unique_ptr<ANNErrorCode> PQFlashIndex<T, LabelT>::cached_beam_search(
 }
 
 template <typename T, typename LabelT>
-std::unique_ptr<ANNErrorCode> PQFlashIndex<T, LabelT>::cached_beam_search(
+std::unique_ptr<ANNReturnCode> PQFlashIndex<T, LabelT>::cached_beam_search(
     const T *query1, const uint64_t k_search, const uint64_t l_search, uint64_t *indices, float *distances,
     const uint64_t beam_width, const bool use_filter, const LabelT &label, const uint32_t io_limit,
     const bool use_reorder_data, QueryStats *stats)
@@ -1484,7 +1484,7 @@ std::unique_ptr<ANNErrorCode> PQFlashIndex<T, LabelT>::cached_beam_search(
     {
         stats->total_us = (double)query_timer.elapsed();
     }
-    std::unique_ptr<ANNErrorCode> ANNSuccess = std::make_unique<ANNErrorCode>();
+    std::unique_ptr<ANNReturnCode> ANNSuccess = std::make_unique<ANNReturnCode>();
     return ANNSuccess;
 }
 

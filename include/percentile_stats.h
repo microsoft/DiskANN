@@ -35,6 +35,12 @@ struct QueryStats
     unsigned n_hops = 0;       // # search hops
 };
 
+struct QueryStatsMemory
+{
+    uint32_t n_hops = 0;
+    uint32_t n_cmps = 0;
+};
+
 template <typename T>
 inline T get_percentile_stats(QueryStats *stats, uint64_t len, float percentile,
                               const std::function<T(const QueryStats &)> &member_fn)

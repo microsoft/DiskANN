@@ -8,7 +8,7 @@
 namespace diskann
 {
 
-class ANNErrorCode
+class ANNReturnCode
 {
   public:
     enum class Value
@@ -19,7 +19,7 @@ class ANNErrorCode
 
     DISKANN_DLLEXPORT const char *getErrorDescription()
     {
-        switch (_errorCode)
+        switch (_returncode)
         {
         case Value::SUCCESS:
             return "Success";
@@ -29,20 +29,20 @@ class ANNErrorCode
             return "Unknown error";
         }
     }
-    DISKANN_DLLEXPORT Value getErrorCode()
+    DISKANN_DLLEXPORT Value getReturnCode()
     {
-        return _errorCode;
+        return _returncode;
     }
 
-    ANNErrorCode() : _errorCode(ANNErrorCode::Value::SUCCESS)
+    ANNReturnCode() : _returncode(ANNReturnCode::Value::SUCCESS)
     {
     }
-    ANNErrorCode(Value value) : _errorCode(value)
+    ANNReturnCode(Value value) : _returncode(value)
     {
     }
 
   private:
-    Value _errorCode;
+    Value _returncode;
 };
 
 } // namespace diskann

@@ -19,6 +19,7 @@
 #include "defaults.h"
 #include "windows_customizations.h"
 #include "scratch.h"
+#include "percentile_stats.h"
 
 #define OVERHEAD_FACTOR 1.1
 #define EXPAND_IF_FULL 0
@@ -122,7 +123,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
                                                 const std::vector<TagT> &tags = std::vector<TagT>());
 
     // Get converted integer label from string to int map (_label_map)
-    DISKANN_DLLEXPORT std::pair<std::unique_ptr<ANNErrorCode>, LabelT> get_converted_label(
+    DISKANN_DLLEXPORT std::pair<std::unique_ptr<ANNReturnCode>, LabelT> get_converted_label(
         const std::string &raw_label);
 
     // Set starting point of an index before inserting any points incrementally.
@@ -151,13 +152,13 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 
     // Filter support search
     template <typename IndexType>
-    DISKANN_DLLEXPORT std::pair<std::unique_ptr<ANNErrorCode>, uint32_t> search_with_filters(
+    DISKANN_DLLEXPORT std::unique_ptr<ANNReturnCode> search_with_filters(
         const T *query, const std::string &filter_label, const size_t K, const uint32_t L, IndexType *indices,
-        float *distances);
+        float *distances, QueryStatsMemory *stats = nullptr);
     template <typename IndexType>
-    DISKANN_DLLEXPORT std::pair<std::unique_ptr<ANNErrorCode>, uint32_t> search_with_filters(
+    DISKANN_DLLEXPORT std::unique_ptr<ANNReturnCode> search_with_filters(
         const T *query, const LabelT &filter_label, const size_t K, const uint32_t L, IndexType *indices,
-        float *distances);
+        float *distances, QueryStatsMemory *stats = nullptr);
 
     // Will fail if tag already in the index or if tag=0.
     DISKANN_DLLEXPORT int insert_point(const T *point, const TagT tag);
