@@ -1540,9 +1540,9 @@ void Index<T, TagT, LabelT>::set_start_points(const T *data, size_t data_count)
 
     //     memcpy(_data + _aligned_dim * _max_points, data, _aligned_dim *
     //     sizeof(T) * _num_frozen_pts);
-    for (location_t i = _max_points; i < _max_points + _num_frozen_pts; i++)
+    for (location_t i = 0; i < _num_frozen_pts; i++)
     {
-        _data_store->set_vector(i, data + i * _dim);
+        _data_store->set_vector(i + _max_points, data + i * _dim);
     }
     _has_built = true;
     diskann::cout << "Index start points set: #" << _num_frozen_pts << std::endl;
