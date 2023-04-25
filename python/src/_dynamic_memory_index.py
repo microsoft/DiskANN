@@ -108,7 +108,7 @@ class DynamicMemoryIndex:
         )
         _assert_is_nonnegative_uint32(search_threads, "search_threads")
 
-        index_path = ""
+        self._index_path = ""
 
         self._dims = dim
 
@@ -133,7 +133,7 @@ class DynamicMemoryIndex:
             initial_search_complexity=initial_search_complexity,
             search_threads=search_threads,
             concurrent_consolidation=concurrent_consolidation,
-            index_path=index_path
+            index_path=self._index_path
         )
 
     def search(
@@ -222,7 +222,13 @@ class DynamicMemoryIndex:
             num_threads=num_threads,
         )
 
-    def save(self, save_path: str = "", compact_before_save: bool = False):
+    def save(self, save_path: str, compact_before_save: bool = False):
+        """
+        Saves this index to file.
+        :param save_path: The path to save these index files to.
+        :type save_path: str
+        :param compact_before_save:
+        """
         if save_path == "" and self._index_path == "":
             raise ValueError(
                 "save_path cannot be empty if index_path is not set to a valid path in the constructor"
@@ -230,6 +236,12 @@ class DynamicMemoryIndex:
         self._index.save(save_path=save_path, compact_before_save=compact_before_save)
 
     def insert(self, vector: np.ndarray, vector_id: int):
+        """
+        Inserts a single vector into the index with the provided vector_id.
+        :param vector: The vector to insert. Note that dtype must match.
+        :type vector: np.ndarray
+        :param vector_id: The vector_id to use for this vector. 
+        """
         _assert(len(vector.shape) == 1, "insert vector must be 1-d")
         _assert(
             vector.dtype == self._vector_dtype,
@@ -243,7 +255,12 @@ class DynamicMemoryIndex:
         self, vectors: np.ndarray, vector_ids: np.ndarray, num_threads: int = 0
     ):
         """
-        :param num_threads: Number of threads to use when searching this index. (>= 0), 0 = num_threads in system
+        :param vectors: The 2d numpy array of vectors to insert.
+        :type vectors: np.ndarray
+        :param vector_ids: The 1d array of vector ids to use. This array must have the same number of elements as
+            the vectors array has rows. The dtype of vector_ids must be ``np.uintc`` (or any alias that is your
+            platform's equivalent)
+        :param num_threads: Number of threads to use when inserting into this index. (>= 0), 0 = num_threads in system
         :type num_threads: int
         """
         _assert(len(vectors.shape) == 2, "vectors must be a 2-d array")
@@ -255,14 +272,24 @@ class DynamicMemoryIndex:
         _assert(
             vectors.shape[0] == vector_ids.shape[0], "#vectors must be equal to #ids"
         )
-        # Add a check on ID values
+        _assert(vector_ids.dtype == np.uintc, "vector_ids must have a dtype of np.uintc (32 bit, unsigned integer)")
         return self._index.batch_insert(
             vectors, vector_ids, vector_ids.shape[0], num_threads
         )
 
     def mark_deleted(self, vector_id: int):
+        """
+        Mark vector for deletion. This is a soft delete that won't return the vector id in any results, but does not
+        remove it from the underlying index files or memory structure. To execute a hard delete, call this method and
+        then call the much more expensive ``consolidate_delete`` method on this index.
+        :param vector_id: The vector id to delete. Must be a uint32.
+        :type vector_id: int
+        """
         _assert_is_positive_uint32(vector_id, "vector_id")
         self._index.mark_deleted(vector_id)
 
     def consolidate_delete(self):
+        """
+        This method actually restructures the DiskANN index to remove the items that have been marked for deletion.
+        """
         self._index.consolidate_delete()

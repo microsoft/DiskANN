@@ -43,10 +43,19 @@ class StaticMemoryIndex:
         :type metric: str
         :param vector_dtype: The vector dtype this index will be exposing.
         :type vector_dtype: Type[numpy.single], Type[numpy.byte], Type[numpy.ubyte]
-        :param data_path:
-        :param index_directory:
-        :param initial_search_complexity:
-        :param index_prefix:
+        :param data_path: The path to the vector bin file that created this index. Note that if you use a numpy
+            array to build the index, you will still need to save this array as well via the
+            ``diskannpy.numpy_to_diskann_file`` and provide the path to it here.
+        :type data_path: str
+        :param index_directory: The directory the index files reside in
+        :type index_directory: str
+        :param initial_search_complexity: A positive integer that tunes how much work should be completed in the
+            conduct of a search. This can be overridden on a per search basis, but this initial value allows us
+            to pre-allocate a search scratch space. It is suggested that you set this value to the P95 of your
+            search complexity values.
+        :type initial_search_complexity: int
+        :param index_prefix: A shared prefix that all files in this index will use. Default is "ann".
+        :type index_prefix: str
         """
         dap_metric = _get_valid_metric(metric)
         _assert(

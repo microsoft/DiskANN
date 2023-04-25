@@ -74,7 +74,7 @@ def build_disk_index(
     search_memory_maximum: float,
     build_memory_maximum: float,
     num_threads: int,
-    pq_disk_bytes: int = 0,
+    pq_disk_bytes: int = defaults.PQ_DISK_BYTES,
     vector_dtype: Optional[VectorDType] = None,
     index_prefix: str = "ann",
 ):
@@ -107,7 +107,8 @@ def build_disk_index(
     :type search_memory_maximum: float
     :param build_memory_maximum: Build index using at most ``build_memory_maximum``
     :type build_memory_maximum: float
-    :param num_threads: Number of threads to use when creating this index.
+    :param num_threads: Number of threads to use when creating this index.0 indicates we should use all available
+        system threads.
     :type num_threads: int
     :param pq_disk_bytes:  Use 0 to store uncompressed data on SSD. This allows the index to asymptote to 100%
         recall. If your vectors are too large to store in SSD, this parameter provides the option to compress the
@@ -184,6 +185,45 @@ def build_memory_index(
     filter_complexity: int = defaults.FILTER_COMPLEXITY,
     index_prefix: str = "ann"
 ):
+    """
+    Builds a memory index and saves it to disk to be loaded into ``StaticMemoryIndex``.
+
+    :param data: Either a ``str`` representing a path to a DiskANN vector bin file, or a numpy.ndarray,
+        of a supported dtype, in 2 dimensions. Note that vector_dtype must be provided if vector_path_or_np_array is a
+        ``str``
+    :type data: Union[str, numpy.ndarray]
+    :param metric: One of {"l2", "mips"}. L2 is supported for all 3 vector dtypes, but MIPS is only
+        available for single point floating numbers (numpy.single)
+    :type metric: str
+    :param index_directory: The path on disk that the index will be created in.
+    :type index_directory: str
+    :param complexity: The size of queue to use when building the index for search. Values between 75 and 200 are
+        typical. Larger values will take more time to build but result in indices that provide higher recall for
+        the same search complexity. Use a value that is at least as large as R unless you are prepared to
+        somewhat compromise on quality
+    :type complexity: int
+    :param graph_degree: The degree of the graph index, typically between 60 and 150. A larger maximum degree will
+        result in larger indices and longer indexing times, but better search quality.
+    :type graph_degree int
+    :param num_threads: Number of threads to use when creating this index. 0 indicates we should use all available
+        system threads.
+    :type num_threads: int
+    :param alpha:
+    :param use_pq_build:
+    :param num_pq_bytes:
+    :param use_opq:
+    :param vector_dtype: Required if the provided ``vector_path_or_np_array`` is of type ``str``, else we use the
+        ``vector_path_or_np_array.dtype`` if np array.
+    :type vector_dtype: Optional[VectorDType], default is ``None``.
+    :param label_file: Defaults to ""
+    :type label_file: str
+    :param universal_label: Defaults to ""
+    :param filter_complexity: Complexity to use when using filters. Default is 0.
+    :type filter_complexity: int
+    :param index_prefix: The prefix to give your index files. Defaults to ``ann``.
+    :type index_prefix: str, default="ann"
+    :return:
+    """
     _assert(
         (isinstance(data, str) and vector_dtype is not None)
         or isinstance(data, np.ndarray),
