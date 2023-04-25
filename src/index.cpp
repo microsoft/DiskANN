@@ -1952,6 +1952,7 @@ void Index<T, TagT, LabelT>::build_filtered_index(const char *filename, const st
 {
     _labels_file = label_file;
     _filtered_index = true;
+    _universal_label_exists = parameters.universal_label_exists;
     _label_to_medoid_id.clear();
     size_t num_points_labels = 0;
     parse_label_file(label_file,
