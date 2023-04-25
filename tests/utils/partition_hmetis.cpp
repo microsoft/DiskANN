@@ -40,7 +40,11 @@ void compute_centroid(const size_t dim, const T* points,
 template<typename T>
 void compute_subcentroids(const size_t dim, const T* points,
                           const std::vector<uint32_t>& point_ids,
-                          float* subcentroids, const unsigned num_subcentroids) {
+                          float* subcentroids, uint32_t* subcluster_counts,
+                          const unsigned num_subcentroids) {
+  for (int i = 0; i < num_subcentroids; ++i) {
+    subcluster_counts[i] = 0;
+  }
   if (point_ids.empty()) {
     for (int i = 0; i < num_subcentroids; ++i) {
       assign_junk(dim, subcentroids + i * dim);
@@ -63,6 +67,16 @@ void compute_subcentroids(const size_t dim, const T* points,
     constexpr size_t max_reps = 15;
     kmeans::run_lloyds(train_data_float.get(), point_ids.size(), dim,
                        subcentroids, num_subcentroids, max_reps, NULL, NULL);
+
+    // fill out subcluster_counts[]
+    std::unique_ptr<uint32_t[]> closest_centers_ivf =
+        std::make_unique<uint32_t[]>(point_ids.size());
+    math_utils::compute_closest_centers(
+        train_data_float.get(), point_ids.size(), dim, subcentroids,
+        num_subcentroids, 1, closest_centers_ivf.get());
+    for (int i = 0; i < point_ids.size(); ++i) {
+      subcluster_counts[closest_centers_ivf[i]]++;
+    }
   }
 }
 
@@ -300,13 +314,17 @@ int aux_main(const std::string &input_file,
       // done computing centroids/geomedians
 
       std::unique_ptr<float[]> subcentroids;
+      std::unique_ptr<uint32_t[]> subcluster_counts;
       if (mode == "multicentroids") {
         subcentroids =
             std::make_unique<float[]>(num_shards * num_subcentroids * dim);
+        subcluster_counts =
+            std::make_unique<uint32_t[]>(num_shards * num_subcentroids);
         for (size_t shard_id = 0; shard_id < num_shards; ++shard_id) {
           compute_subcentroids<T>(
               dim, points.get(), points_routed_to_shard[shard_id],
               subcentroids.get() + shard_id * num_subcentroids * dim,
+              subcluster_counts.get() + shard_id * num_subcentroids,
               num_subcentroids);
         }
         diskann::cout << "computed subcentroids" << std::endl;
@@ -397,14 +415,13 @@ int aux_main(const std::string &input_file,
       } else if (mode == "multicentroids") {
 
         constexpr int submode = 2;
-        // 1: order shards by min-distance subcentroid
-        // 2: order shards by sum_subcentroid 1/distance
 
         std::unique_ptr<float[]> queries_float =
             std::make_unique<float[]>(num_queries * dim);
         diskann::convert_types<T, float>(queries.get(), queries_float.get(),
                                          num_queries, dim);
         if (submode == 1) {
+          // 1: order shards by min-distance subcentroid
           const size_t num_subcenters = num_shards * num_subcentroids;
           std::unique_ptr<uint32_t[]> closest_centroids_ivf =
               std::make_unique<uint32_t[]>(num_queries * num_subcenters);
@@ -427,6 +444,8 @@ int aux_main(const std::string &input_file,
             }
           }
         } else if (submode == 2) {
+          // 2: order shards by sum_subcentroid 1/distance
+          // (actually, better: sum (# pts in subcluster) / distance)
           for (size_t query_id = 0; query_id < num_queries; ++query_id) {
             std::vector<std::pair<float, size_t>> shards_with_scores;
             for (size_t shard_id = 0; shard_id < num_shards; ++shard_id) {
@@ -438,7 +457,9 @@ int aux_main(const std::string &input_file,
                     subcentroids.get() + shard_id * num_subcentroids * dim +
                         i * dim,
                     dim));
-                score += 1.0 / dist;
+                const uint32_t count_pts_in_subcluster =
+                    subcluster_counts[shard_id * num_subcentroids + i];
+                score += 1.0 * count_pts_in_subcluster / dist;
               }
               shards_with_scores.emplace_back(-score, shard_id);
             }
