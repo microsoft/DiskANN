@@ -20,7 +20,7 @@ def build_disk_index(
     num_threads: int,
     pq_disk_bytes: int,
     vector_dtype: VectorDType,
-    index_prefix: str = "ann",
+    index_prefix: str,
 ): ...
 @overload
 def build_disk_index(
@@ -33,7 +33,7 @@ def build_disk_index(
     build_memory_maximum: float,
     num_threads: int,
     pq_disk_bytes: int,
-    index_prefix: str = "ann",
+    index_prefix: str,
 ): ...
 @overload
 def build_memory_index(
@@ -47,26 +47,63 @@ def build_memory_index(
     use_pq_build: bool,
     num_pq_bytes: int,
     use_opq: bool,
-    label_file: str = "",
-    universal_label: str = "",
-    filter_complexity: int = 0,
-    index_prefix: str = "ann",
+    label_file: str,
+    universal_label: str,
+    filter_complexity: int,
+    index_prefix: str,
 ): ...
 @overload
 def build_memory_index(
-    data: str,
-    metric: Literal["l2", "mips"],
-    index_directory: str,
-    complexity: int,
-    graph_degree: int,
-    alpha: float,
-    num_threads: int,
-    use_pq_build: bool,
-    num_pq_bytes: int,
-    use_opq: bool,
-    vector_dtype: VectorDType,
-    label_file: str = "",
-    universal_label: str = "",
-    filter_complexity: int = 0,
-    index_prefix: str = "ann",
+        data: np.ndarray,
+        metric: Literal["l2", "mips"],
+        index_directory: str,
+        complexity: int,
+        graph_degree: int,
+        alpha: float,
+        num_threads: int,
+        use_pq_build: bool,
+        num_pq_bytes: int,
+        use_opq: bool,
+        label_file: str,
+        universal_label: str,
+        filter_complexity: int,
+        index_prefix: str,
+        tags: np.ndarray
+): ...
+@overload
+def build_memory_index(
+        data: str,
+        metric: Literal["l2", "mips"],
+        index_directory: str,
+        complexity: int,
+        graph_degree: int,
+        alpha: float,
+        num_threads: int,
+        use_pq_build: bool,
+        num_pq_bytes: int,
+        use_opq: bool,
+        vector_dtype: VectorDType,
+        label_file: str,
+        universal_label: str,
+        filter_complexity: int,
+        index_prefix: str,
+): ...
+@overload
+def build_memory_index(
+        data: str,
+        metric: Literal["l2", "mips"],
+        index_directory: str,
+        complexity: int,
+        graph_degree: int,
+        alpha: float,
+        num_threads: int,
+        use_pq_build: bool,
+        num_pq_bytes: int,
+        use_opq: bool,
+        vector_dtype: VectorDType,
+        label_file: str,
+        universal_label: str,
+        filter_complexity: int,
+        index_prefix: str,
+        tags: str
 ): ...

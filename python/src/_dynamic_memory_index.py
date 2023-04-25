@@ -3,7 +3,7 @@
 
 import os
 import warnings
-from typing import Literal, Optional, Tuple
+from typing import Literal, Tuple
 
 import numpy as np
 
@@ -13,6 +13,7 @@ from ._common import (
     _assert,
     _assert_2d,
     _assert_dtype,
+    _assert_existing_directory,
     _assert_is_nonnegative_uint32,
     _assert_is_positive_uint32,
     _get_valid_metric,
@@ -39,7 +40,9 @@ class DynamicMemoryIndex:
         num_frozen_points: int = defaults.NUM_FROZEN_POINTS_DYNAMIC,
         initial_search_complexity: int = 0,
         search_threads: int = 0,
-        concurrent_consolidation: bool = True
+        concurrent_consolidation: bool = True,
+        index_directory: str = "",
+        index_prefix: str = "ann"
     ):
         """
         The diskannpy.DynamicMemoryIndex represents our python API into a dynamic DiskANN InMemory Index library.
@@ -106,6 +109,11 @@ class DynamicMemoryIndex:
             initial_search_complexity, "initial_search_complexity"
         )
         _assert_is_nonnegative_uint32(search_threads, "search_threads")
+        index_path = ""
+        if index_directory != "":
+            _assert_existing_directory(index_directory, "index_directory")
+            _assert(index_prefix != "", "index_prefix cannot be an empty string")
+            index_path = os.path.join(index_directory, index_prefix)
 
         self._dims = dim
 
@@ -130,6 +138,7 @@ class DynamicMemoryIndex:
             initial_search_complexity=initial_search_complexity,
             search_threads=search_threads,
             concurrent_consolidation=concurrent_consolidation,
+            index_path=index_path
         )
 
     def search(

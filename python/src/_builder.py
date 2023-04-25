@@ -14,10 +14,12 @@ from ._common import (
     _assert,
     _assert_2d,
     _assert_dtype,
+    _assert_existing_file,
     _assert_is_nonnegative_uint32,
     _assert_is_positive_uint32,
     _get_valid_metric,
 )
+from ._diskannpy import defaults
 
 
 def numpy_to_diskann_file(vectors: np.ndarray, file_handler: BinaryIO):
@@ -34,7 +36,7 @@ def numpy_to_diskann_file(vectors: np.ndarray, file_handler: BinaryIO):
     _assert_2d(vectors, "vectors")
     _assert_dtype(vectors.dtype, "vectors.dtype")
 
-    _ = file_handler.write(np.array(vectors.shape, dtype=np.int32).tobytes())
+    _ = file_handler.write(np.array(vectors.shape, dtype=np.intc).tobytes())
     _ = file_handler.write(vectors.tobytes())
 
 
@@ -72,7 +74,7 @@ def build_disk_index(
     search_memory_maximum: float,
     build_memory_maximum: float,
     num_threads: int,
-    pq_disk_bytes: int,
+    pq_disk_bytes: int = 0,
     vector_dtype: Optional[VectorDType] = None,
     index_prefix: str = "ann",
 ):
@@ -171,16 +173,17 @@ def build_memory_index(
     index_directory: str,
     complexity: int,
     graph_degree: int,
-    alpha: float,
     num_threads: int,
-    use_pq_build: bool,
-    num_pq_bytes: int,
-    use_opq: bool,
+    alpha: float = defaults.ALPHA,
+    use_pq_build: bool = defaults.USE_PQ_BUILD,
+    num_pq_bytes: int = defaults.NUM_PQ_BYTES,
+    use_opq: bool = defaults.USE_OPQ,
     vector_dtype: Optional[VectorDType] = None,
     label_file: str = "",
     universal_label: str = "",
-    filter_complexity: int = 0,
+    filter_complexity: int = defaults.FILTER_COMPLEXITY,
     index_prefix: str = "ann",
+    tags: Optional[Union[str, np.ndarray]] = None
 ):
     _assert(
         (isinstance(data, str) and vector_dtype is not None)
@@ -206,6 +209,29 @@ def build_memory_index(
         data, vector_dtype, index_directory
     )
 
+    output_path_prefix = os.path.join(index_directory, index_prefix)
+    use_tags = tags is not None
+    if use_tags:
+        if isinstance(tags, np.ndarray):
+            _assert(tags.dtype == np.uintc, "tags must have a dtype of np.uintc - an unsigned, 32 bit integer")
+            _assert(len(tags.shape) == 1, "tags must be a 1d numpy array")
+            with open(f"{output_path_prefix}.tags", "wb") as tags_output:
+                shape = np.array((tags.shape[0], 1), dtype=np.intc)
+                _ = tags_output.write(shape.tobytes())
+                _ = tags_output.write(tags.tobytes())
+
+            shutil.copyfile(f"{output_path_prefix}.tags", "/home/daxpryce/inspect.tags")
+            raise RuntimeError(f"from dax: {index_path}, {os.listdir(index_path)}")
+        else:
+            _assert(isinstance(tags, str), "tags must be either an np.ndarray or a str")
+            _assert_existing_file(tags, "tags")
+            # we need this in our index_directory, if it is already there we're in good shape
+            # if not we need to copy it in
+            resolved_index_path = index_path.resolve(strict=True)
+            resolved_tag_dir_path = Path(tags).resolve(strict=True).parent
+            if resolved_index_path != resolved_tag_dir_path:
+                shutil.copyfile(tags, index_path)
+
     if vector_dtype_actual == np.single:
         _builder = _native_dap.build_in_memory_float_index
     elif vector_dtype_actual == np.ubyte:
@@ -216,7 +242,7 @@ def build_memory_index(
     _builder(
         metric=dap_metric,
         data_file_path=vector_bin_path,
-        index_output_path=os.path.join(index_directory, index_prefix),
+        index_output_path=output_path_prefix,
         complexity=complexity,
         graph_degree=graph_degree,
         alpha=alpha,
@@ -227,4 +253,5 @@ def build_memory_index(
         label_file=label_file,
         universal_label=universal_label,
         filter_complexity=filter_complexity,
+        use_tags=use_tags
     )

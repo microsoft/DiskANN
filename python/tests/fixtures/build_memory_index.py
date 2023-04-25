@@ -42,6 +42,7 @@ def build_random_vectors_and_memory_index(
         use_opq=False,
         filter_complexity=32,
         index_prefix=index_prefix,
+        tags=tags
     )
     return (
         metric,
