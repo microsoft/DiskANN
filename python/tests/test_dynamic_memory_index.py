@@ -66,7 +66,7 @@ class TestDynamicMemoryIndex(unittest.TestCase):
                     graph_degree=32,
                     num_threads=16,
                 )
-                #index.batch_insert(vectors=index_vectors, vector_ids=generated_tags)
+                index.batch_insert(vectors=index_vectors, vector_ids=generated_tags)
 
                 k = 5
                 diskann_neighbors, diskann_distances = index.batch_search(
@@ -107,7 +107,7 @@ class TestDynamicMemoryIndex(unittest.TestCase):
                     graph_degree=32,
                     num_threads=16,
                 )
-                #index.batch_insert(vectors=index_vectors, vector_ids=generated_tags)
+                index.batch_insert(vectors=index_vectors, vector_ids=generated_tags)
 
                 k = 5
                 ids, dists = index.search(query_vectors[0], k_neighbors=k, complexity=5)

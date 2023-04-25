@@ -41,8 +41,6 @@ class DynamicMemoryIndex:
         initial_search_complexity: int = 0,
         search_threads: int = 0,
         concurrent_consolidation: bool = True,
-        index_directory: str = "",
-        index_prefix: str = "ann"
     ):
         """
         The diskannpy.DynamicMemoryIndex represents our python API into a dynamic DiskANN InMemory Index library.
@@ -109,11 +107,8 @@ class DynamicMemoryIndex:
             initial_search_complexity, "initial_search_complexity"
         )
         _assert_is_nonnegative_uint32(search_threads, "search_threads")
+
         index_path = ""
-        if index_directory != "":
-            _assert_existing_directory(index_directory, "index_directory")
-            _assert(index_prefix != "", "index_prefix cannot be an empty string")
-            index_path = os.path.join(index_directory, index_prefix)
 
         self._dims = dim
 

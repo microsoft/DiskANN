@@ -54,24 +54,6 @@ def build_memory_index(
 ): ...
 @overload
 def build_memory_index(
-        data: np.ndarray,
-        metric: Literal["l2", "mips"],
-        index_directory: str,
-        complexity: int,
-        graph_degree: int,
-        alpha: float,
-        num_threads: int,
-        use_pq_build: bool,
-        num_pq_bytes: int,
-        use_opq: bool,
-        label_file: str,
-        universal_label: str,
-        filter_complexity: int,
-        index_prefix: str,
-        tags: np.ndarray
-): ...
-@overload
-def build_memory_index(
         data: str,
         metric: Literal["l2", "mips"],
         index_directory: str,
@@ -88,22 +70,4 @@ def build_memory_index(
         filter_complexity: int,
         index_prefix: str,
 ): ...
-@overload
-def build_memory_index(
-        data: str,
-        metric: Literal["l2", "mips"],
-        index_directory: str,
-        complexity: int,
-        graph_degree: int,
-        alpha: float,
-        num_threads: int,
-        use_pq_build: bool,
-        num_pq_bytes: int,
-        use_opq: bool,
-        vector_dtype: VectorDType,
-        label_file: str,
-        universal_label: str,
-        filter_complexity: int,
-        index_prefix: str,
-        tags: str
-): ...
+
