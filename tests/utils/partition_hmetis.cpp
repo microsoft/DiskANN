@@ -396,30 +396,64 @@ int aux_main(const std::string &input_file,
                       << std::endl;
       } else if (mode == "multicentroids") {
 
+        constexpr int submode = 2;
+        // 1: order shards by min-distance subcentroid
+        // 2: order shards by sum_subcentroid 1/distance
+
         std::unique_ptr<float[]> queries_float =
             std::make_unique<float[]>(num_queries * dim);
         diskann::convert_types<T, float>(queries.get(), queries_float.get(),
                                          num_queries, dim);
-        const size_t num_subcenters = num_shards * num_subcentroids;
-        std::unique_ptr<uint32_t[]> closest_centroids_ivf =
-            std::make_unique<uint32_t[]>(num_queries * num_subcenters);
-        math_utils::compute_closest_centers(
-            queries_float.get(), num_queries, dim, subcentroids.get(),
-            num_subcenters, num_subcenters, closest_centroids_ivf.get());
-        for (size_t query_id = 0; query_id < num_queries; ++query_id) {
-          query_to_shards.emplace_back();
-          std::unordered_set<size_t> seen_shards;
-          for (int i = 0; i < num_subcenters; ++i) {
-            const size_t shard_id =
+        if (submode == 1) {
+          const size_t num_subcenters = num_shards * num_subcentroids;
+          std::unique_ptr<uint32_t[]> closest_centroids_ivf =
+              std::make_unique<uint32_t[]>(num_queries * num_subcenters);
+          math_utils::compute_closest_centers(
+              queries_float.get(), num_queries, dim, subcentroids.get(),
+              num_subcenters, num_subcenters, closest_centroids_ivf.get());
+          for (size_t query_id = 0; query_id < num_queries; ++query_id) {
+            query_to_shards.emplace_back();
+            std::unordered_set<size_t> seen_shards;
+            for (int i = 0; i < num_subcenters; ++i) {
+              const size_t shard_id =
                 closest_centroids_ivf[query_id * num_subcenters + i] /
                 num_subcentroids;
-            if (seen_shards.insert(shard_id).second == true) {
+              if (seen_shards.insert(shard_id).second == true) {
+                query_to_shards[query_id].emplace_back(
+                    shard_id, shard_to_count_of_GT_pts[query_id][shard_id]);
+                // shard_to_count_of_GT_pts[query_id][shard_id] will be(come) 0 if
+                // wasn't present
+              }
+            }
+          }
+        } else if (submode == 2) {
+          for (size_t query_id = 0; query_id < num_queries; ++query_id) {
+            std::vector<std::pair<float, size_t>> shards_with_scores;
+            for (size_t shard_id = 0; shard_id < num_shards; ++shard_id) {
+              // compute score of shard_id for query_id
+              float score = 0.0;
+              for (int i = 0; i < num_subcentroids; ++i) {
+                const float dist = sqrt(math_utils::calc_distance(
+                    queries_float.get() + query_id * dim,
+                    subcentroids.get() + shard_id * num_subcentroids * dim +
+                        i * dim,
+                    dim));
+                score += 1.0 / dist;
+              }
+              shards_with_scores.emplace_back(-score, shard_id);
+            }
+            sort(shards_with_scores.begin(), shards_with_scores.end());
+            for (int i = 0; i < num_shards; ++i) {
+              const size_t shard_id = shards_with_scores[i].second;
               query_to_shards[query_id].emplace_back(
                   shard_id, shard_to_count_of_GT_pts[query_id][shard_id]);
               // shard_to_count_of_GT_pts[query_id][shard_id] will be(come) 0 if
               // wasn't present
             }
           }
+        } else {
+          diskann::cout << "what submode?" << std::endl;
+          return -1;
         }
 
         diskann::cout << "Computed the query -> shard assignment using "
