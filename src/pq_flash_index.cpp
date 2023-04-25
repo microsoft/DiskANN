@@ -996,10 +996,10 @@ bool getNextCompletedRequest(const IOContext &ctx, size_t size, int &completedIn
 
 template <typename T, typename LabelT>
 std::unique_ptr<ANNReturnCode> PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t k_search,
-                                                                          const uint64_t l_search, uint64_t *indices,
-                                                                          float *distances, const uint64_t beam_width,
-                                                                          const bool use_reorder_data,
-                                                                          QueryStats *stats)
+                                                                           const uint64_t l_search, uint64_t *indices,
+                                                                           float *distances, const uint64_t beam_width,
+                                                                           const bool use_reorder_data,
+                                                                           QueryStats *stats)
 {
     return cached_beam_search(query1, k_search, l_search, indices, distances, beam_width,
                               std::numeric_limits<uint32_t>::max(), use_reorder_data, stats);

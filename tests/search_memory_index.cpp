@@ -153,12 +153,12 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
                 std::string raw_label = (query_filters.size() == 1) ? query_filters[0] : query_filters[i];
                 auto retval = index.search_with_filters(query + i * query_aligned_dim, raw_label, recall_at, L,
                                                         query_result_ids[test_id].data() + i * recall_at,
-                                                        query_result_dists[test_id].data() + i * recall_at, stats+i);
+                                                        query_result_dists[test_id].data() + i * recall_at, stats + i);
                 if (retval->getReturnCode() != diskann::ANNReturnCode::Value::SUCCESS)
                 {
                     continue;
                 }
-                cmp_stats[i] = (stats+i)->n_cmps;
+                cmp_stats[i] = (stats + i)->n_cmps;
             }
             else if (metric == diskann::FAST_L2)
             {

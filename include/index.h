@@ -150,15 +150,21 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     DISKANN_DLLEXPORT size_t search_with_tags(const T *query, const uint64_t K, const uint32_t L, TagT *tags,
                                               float *distances, std::vector<T *> &res_vectors);
 
+    // Filter support search String interface for converting to integer
+    template <typename IndexType>
+    DISKANN_DLLEXPORT std::unique_ptr<ANNReturnCode> search_with_filters(const T *query,
+                                                                         const std::string &filter_label,
+                                                                         const size_t K, const uint32_t L,
+                                                                         IndexType *indices, float *distances,
+                                                                         QueryStatsMemory *stats = nullptr);
+
     // Filter support search
+    // ANNReturnCode - Default is Success
     template <typename IndexType>
-    DISKANN_DLLEXPORT std::unique_ptr<ANNReturnCode> search_with_filters(
-        const T *query, const std::string &filter_label, const size_t K, const uint32_t L, IndexType *indices,
-        float *distances, QueryStatsMemory *stats = nullptr);
-    template <typename IndexType>
-    DISKANN_DLLEXPORT std::unique_ptr<ANNReturnCode> search_with_filters(
-        const T *query, const LabelT &filter_label, const size_t K, const uint32_t L, IndexType *indices,
-        float *distances, QueryStatsMemory *stats = nullptr);
+    DISKANN_DLLEXPORT std::unique_ptr<ANNReturnCode> search_with_filters(const T *query, const LabelT &filter_label,
+                                                                         const size_t K, const uint32_t L,
+                                                                         IndexType *indices, float *distances,
+                                                                         QueryStatsMemory *stats = nullptr);
 
     // Will fail if tag already in the index or if tag=0.
     DISKANN_DLLEXPORT int insert_point(const T *point, const TagT tag);
