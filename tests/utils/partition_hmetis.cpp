@@ -443,6 +443,7 @@ int aux_main(const std::string &input_file,
               shards_with_scores.emplace_back(-score, shard_id);
             }
             sort(shards_with_scores.begin(), shards_with_scores.end());
+            query_to_shards.emplace_back();
             for (int i = 0; i < num_shards; ++i) {
               const size_t shard_id = shards_with_scores[i].second;
               query_to_shards[query_id].emplace_back(
