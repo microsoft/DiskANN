@@ -452,14 +452,14 @@ int aux_main(const std::string &input_file,
               // compute score of shard_id for query_id
               float score = 0.0;
               for (int i = 0; i < num_subcentroids; ++i) {
-                const float dist = sqrt(math_utils::calc_distance(
+                const float distsq = math_utils::calc_distance(
                     queries_float.get() + query_id * dim,
                     subcentroids.get() + shard_id * num_subcentroids * dim +
                         i * dim,
-                    dim));
+                    dim);
                 const uint32_t count_pts_in_subcluster =
                     subcluster_counts[shard_id * num_subcentroids + i];
-                score += 1.0 * count_pts_in_subcluster / dist;
+                score += 1.0 * count_pts_in_subcluster / distsq;
               }
               shards_with_scores.emplace_back(-score, shard_id);
             }
