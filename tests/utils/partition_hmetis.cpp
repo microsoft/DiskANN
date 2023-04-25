@@ -303,7 +303,7 @@ int aux_main(const std::string &input_file,
       if (mode == "multicentroids") {
         subcentroids =
             std::make_unique<float[]>(num_shards * num_subcentroids * dim);
-        for (size_t shard_id = 0; shard_id < num_shards; ++num_shards) {
+        for (size_t shard_id = 0; shard_id < num_shards; ++shard_id) {
           compute_subcentroids<T>(
               dim, points.get(), points_routed_to_shard[shard_id],
               subcentroids.get() + shard_id * num_subcentroids * dim,
