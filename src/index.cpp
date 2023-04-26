@@ -2082,7 +2082,7 @@ template <typename IdType>
 std::unique_ptr<ANNReturnCode> Index<T, TagT, LabelT>::search_with_filters(const T *query, const std::string &raw_label,
                                                                            const size_t K, const uint32_t L,
                                                                            IdType *indices, float *distances,
-                                                                           QueryStatsMemory *stats)
+                                                                           TraversalStats *stats)
 {
     std::pair<std::unique_ptr<ANNReturnCode>, LabelT> internal_label = get_converted_label(raw_label);
     if (internal_label.first->getReturnCode() != ANNReturnCode::Value::SUCCESS)
@@ -2095,7 +2095,7 @@ template <typename IdType>
 std::unique_ptr<ANNReturnCode> Index<T, TagT, LabelT>::search_with_filters(const T *query, const LabelT &label,
                                                                            const size_t K, const uint32_t L,
                                                                            IdType *indices, float *distances,
-                                                                           QueryStatsMemory *stats)
+                                                                           TraversalStats *stats)
 {
     if (K > (uint64_t)L)
     {
@@ -3200,79 +3200,79 @@ template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<int8_t, uint32_t,
 
 template DISKANN_DLLEXPORT std::unique_ptr<ANNReturnCode> Index<float, uint64_t, uint32_t>::search_with_filters<
     uint64_t>(const float *query, const std::string &filter_label, const size_t K, const uint32_t L, uint64_t *indices,
-              float *distances, QueryStatsMemory *stats);
+              float *distances, TraversalStats *stats);
 template DISKANN_DLLEXPORT std::unique_ptr<ANNReturnCode> Index<float, uint64_t, uint32_t>::search_with_filters<
     uint32_t>(const float *query, const std::string &filter_label, const size_t K, const uint32_t L, uint32_t *indices,
-              float *distances, QueryStatsMemory *stats);
+              float *distances, TraversalStats *stats);
 template DISKANN_DLLEXPORT std::unique_ptr<ANNReturnCode> Index<uint8_t, uint64_t, uint32_t>::search_with_filters<
     uint64_t>(const uint8_t *query, const std::string &filter_label, const size_t K, const uint32_t L,
-              uint64_t *indices, float *distances, QueryStatsMemory *stats);
+              uint64_t *indices, float *distances, TraversalStats *stats);
 template DISKANN_DLLEXPORT std::unique_ptr<ANNReturnCode> Index<uint8_t, uint64_t, uint32_t>::search_with_filters<
     uint32_t>(const uint8_t *query, const std::string &filter_label, const size_t K, const uint32_t L,
-              uint32_t *indices, float *distances, QueryStatsMemory *stats);
+              uint32_t *indices, float *distances, TraversalStats *stats);
 template DISKANN_DLLEXPORT std::unique_ptr<ANNReturnCode> Index<int8_t, uint64_t, uint32_t>::search_with_filters<
     uint64_t>(const int8_t *query, const std::string &filter_label, const size_t K, const uint32_t L, uint64_t *indices,
-              float *distances, QueryStatsMemory *stats);
+              float *distances, TraversalStats *stats);
 template DISKANN_DLLEXPORT std::unique_ptr<ANNReturnCode> Index<int8_t, uint64_t, uint32_t>::search_with_filters<
     uint32_t>(const int8_t *query, const std::string &filter_label, const size_t K, const uint32_t L, uint32_t *indices,
-              float *distances, QueryStatsMemory *stats);
+              float *distances, TraversalStats *stats);
 // TagT==uint32_t
 template DISKANN_DLLEXPORT std::unique_ptr<ANNReturnCode> Index<float, uint32_t, uint32_t>::search_with_filters<
     uint64_t>(const float *query, const std::string &filter_label, const size_t K, const uint32_t L, uint64_t *indices,
-              float *distances, QueryStatsMemory *stats);
+              float *distances, TraversalStats *stats);
 template DISKANN_DLLEXPORT std::unique_ptr<ANNReturnCode> Index<float, uint32_t, uint32_t>::search_with_filters<
     uint32_t>(const float *query, const std::string &filter_label, const size_t K, const uint32_t L, uint32_t *indices,
-              float *distances, QueryStatsMemory *stats);
+              float *distances, TraversalStats *stats);
 template DISKANN_DLLEXPORT std::unique_ptr<ANNReturnCode> Index<uint8_t, uint32_t, uint32_t>::search_with_filters<
     uint64_t>(const uint8_t *query, const std::string &filter_label, const size_t K, const uint32_t L,
-              uint64_t *indices, float *distances, QueryStatsMemory *stats);
+              uint64_t *indices, float *distances, TraversalStats *stats);
 template DISKANN_DLLEXPORT std::unique_ptr<ANNReturnCode> Index<uint8_t, uint32_t, uint32_t>::search_with_filters<
     uint32_t>(const uint8_t *query, const std::string &filter_label, const size_t K, const uint32_t L,
-              uint32_t *indices, float *distances, QueryStatsMemory *stats);
+              uint32_t *indices, float *distances, TraversalStats *stats);
 template DISKANN_DLLEXPORT std::unique_ptr<ANNReturnCode> Index<int8_t, uint32_t, uint32_t>::search_with_filters<
     uint64_t>(const int8_t *query, const std::string &filter_label, const size_t K, const uint32_t L, uint64_t *indices,
-              float *distances, QueryStatsMemory *stats);
+              float *distances, TraversalStats *stats);
 template DISKANN_DLLEXPORT std::unique_ptr<ANNReturnCode> Index<int8_t, uint32_t, uint32_t>::search_with_filters<
     uint32_t>(const int8_t *query, const std::string &filter_label, const size_t K, const uint32_t L, uint32_t *indices,
-              float *distances, QueryStatsMemory *stats);
+              float *distances, TraversalStats *stats);
 
 template DISKANN_DLLEXPORT std::unique_ptr<ANNReturnCode> Index<float, uint64_t, uint32_t>::search_with_filters<
     uint64_t>(const float *query, const uint32_t &filter_label, const size_t K, const uint32_t L, uint64_t *indices,
-              float *distances, QueryStatsMemory *stats);
+              float *distances, TraversalStats *stats);
 template DISKANN_DLLEXPORT std::unique_ptr<ANNReturnCode> Index<float, uint64_t, uint32_t>::search_with_filters<
     uint32_t>(const float *query, const uint32_t &filter_label, const size_t K, const uint32_t L, uint32_t *indices,
-              float *distances, QueryStatsMemory *stats);
+              float *distances, TraversalStats *stats);
 template DISKANN_DLLEXPORT std::unique_ptr<ANNReturnCode> Index<uint8_t, uint64_t, uint32_t>::search_with_filters<
     uint64_t>(const uint8_t *query, const uint32_t &filter_label, const size_t K, const uint32_t L, uint64_t *indices,
-              float *distances, QueryStatsMemory *stats);
+              float *distances, TraversalStats *stats);
 template DISKANN_DLLEXPORT std::unique_ptr<ANNReturnCode> Index<uint8_t, uint64_t, uint32_t>::search_with_filters<
     uint32_t>(const uint8_t *query, const uint32_t &filter_label, const size_t K, const uint32_t L, uint32_t *indices,
-              float *distances, QueryStatsMemory *stats);
+              float *distances, TraversalStats *stats);
 template DISKANN_DLLEXPORT std::unique_ptr<ANNReturnCode> Index<int8_t, uint64_t, uint32_t>::search_with_filters<
     uint64_t>(const int8_t *query, const uint32_t &filter_label, const size_t K, const uint32_t L, uint64_t *indices,
-              float *distances, QueryStatsMemory *stats);
+              float *distances, TraversalStats *stats);
 template DISKANN_DLLEXPORT std::unique_ptr<ANNReturnCode> Index<int8_t, uint64_t, uint32_t>::search_with_filters<
     uint32_t>(const int8_t *query, const uint32_t &filter_label, const size_t K, const uint32_t L, uint32_t *indices,
-              float *distances, QueryStatsMemory *stats);
+              float *distances, TraversalStats *stats);
 // TagT==uint32_t
 template DISKANN_DLLEXPORT std::unique_ptr<ANNReturnCode> Index<float, uint32_t, uint32_t>::search_with_filters<
     uint64_t>(const float *query, const uint32_t &filter_label, const size_t K, const uint32_t L, uint64_t *indices,
-              float *distances, QueryStatsMemory *stats);
+              float *distances, TraversalStats *stats);
 template DISKANN_DLLEXPORT std::unique_ptr<ANNReturnCode> Index<float, uint32_t, uint32_t>::search_with_filters<
     uint32_t>(const float *query, const uint32_t &filter_label, const size_t K, const uint32_t L, uint32_t *indices,
-              float *distances, QueryStatsMemory *stats);
+              float *distances, TraversalStats *stats);
 template DISKANN_DLLEXPORT std::unique_ptr<ANNReturnCode> Index<uint8_t, uint32_t, uint32_t>::search_with_filters<
     uint64_t>(const uint8_t *query, const uint32_t &filter_label, const size_t K, const uint32_t L, uint64_t *indices,
-              float *distances, QueryStatsMemory *stats);
+              float *distances, TraversalStats *stats);
 template DISKANN_DLLEXPORT std::unique_ptr<ANNReturnCode> Index<uint8_t, uint32_t, uint32_t>::search_with_filters<
     uint32_t>(const uint8_t *query, const uint32_t &filter_label, const size_t K, const uint32_t L, uint32_t *indices,
-              float *distances, QueryStatsMemory *stats);
+              float *distances, TraversalStats *stats);
 template DISKANN_DLLEXPORT std::unique_ptr<ANNReturnCode> Index<int8_t, uint32_t, uint32_t>::search_with_filters<
     uint64_t>(const int8_t *query, const uint32_t &filter_label, const size_t K, const uint32_t L, uint64_t *indices,
-              float *distances, QueryStatsMemory *stats);
+              float *distances, TraversalStats *stats);
 template DISKANN_DLLEXPORT std::unique_ptr<ANNReturnCode> Index<int8_t, uint32_t, uint32_t>::search_with_filters<
     uint32_t>(const int8_t *query, const uint32_t &filter_label, const size_t K, const uint32_t L, uint32_t *indices,
-              float *distances, QueryStatsMemory *stats);
+              float *distances, TraversalStats *stats);
 
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<float, uint64_t, uint16_t>::search<uint64_t>(
     const float *query, const size_t K, const uint32_t L, uint64_t *indices, float *distances);
@@ -3302,78 +3302,78 @@ template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<int8_t, uint32_t,
 
 template DISKANN_DLLEXPORT std::unique_ptr<ANNReturnCode> Index<float, uint64_t, uint16_t>::search_with_filters<
     uint64_t>(const float *query, const std::string &filter_label, const size_t K, const uint32_t L, uint64_t *indices,
-              float *distances, QueryStatsMemory *stats);
+              float *distances, TraversalStats *stats);
 template DISKANN_DLLEXPORT std::unique_ptr<ANNReturnCode> Index<float, uint64_t, uint16_t>::search_with_filters<
     uint32_t>(const float *query, const std::string &filter_label, const size_t K, const uint32_t L, uint32_t *indices,
-              float *distances, QueryStatsMemory *stats);
+              float *distances, TraversalStats *stats);
 template DISKANN_DLLEXPORT std::unique_ptr<ANNReturnCode> Index<uint8_t, uint64_t, uint16_t>::search_with_filters<
     uint64_t>(const uint8_t *query, const std::string &filter_label, const size_t K, const uint32_t L,
-              uint64_t *indices, float *distances, QueryStatsMemory *stats);
+              uint64_t *indices, float *distances, TraversalStats *stats);
 template DISKANN_DLLEXPORT std::unique_ptr<ANNReturnCode> Index<uint8_t, uint64_t, uint16_t>::search_with_filters<
     uint32_t>(const uint8_t *query, const std::string &filter_label, const size_t K, const uint32_t L,
-              uint32_t *indices, float *distances, QueryStatsMemory *stats);
+              uint32_t *indices, float *distances, TraversalStats *stats);
 template DISKANN_DLLEXPORT std::unique_ptr<ANNReturnCode> Index<int8_t, uint64_t, uint16_t>::search_with_filters<
     uint64_t>(const int8_t *query, const std::string &filter_label, const size_t K, const uint32_t L, uint64_t *indices,
-              float *distances, QueryStatsMemory *stats);
+              float *distances, TraversalStats *stats);
 template DISKANN_DLLEXPORT std::unique_ptr<ANNReturnCode> Index<int8_t, uint64_t, uint16_t>::search_with_filters<
     uint32_t>(const int8_t *query, const std::string &filter_label, const size_t K, const uint32_t L, uint32_t *indices,
-              float *distances, QueryStatsMemory *stats);
+              float *distances, TraversalStats *stats);
 // TagT==uint32_t
 template DISKANN_DLLEXPORT std::unique_ptr<ANNReturnCode> Index<float, uint32_t, uint16_t>::search_with_filters<
     uint64_t>(const float *query, const std::string &filter_label, const size_t K, const uint32_t L, uint64_t *indices,
-              float *distances, QueryStatsMemory *stats);
+              float *distances, TraversalStats *stats);
 template DISKANN_DLLEXPORT std::unique_ptr<ANNReturnCode> Index<float, uint32_t, uint16_t>::search_with_filters<
     uint32_t>(const float *query, const std::string &filter_label, const size_t K, const uint32_t L, uint32_t *indices,
-              float *distances, QueryStatsMemory *stats);
+              float *distances, TraversalStats *stats);
 template DISKANN_DLLEXPORT std::unique_ptr<ANNReturnCode> Index<uint8_t, uint32_t, uint16_t>::search_with_filters<
     uint64_t>(const uint8_t *query, const std::string &filter_label, const size_t K, const uint32_t L,
-              uint64_t *indices, float *distances, QueryStatsMemory *stats);
+              uint64_t *indices, float *distances, TraversalStats *stats);
 template DISKANN_DLLEXPORT std::unique_ptr<ANNReturnCode> Index<uint8_t, uint32_t, uint16_t>::search_with_filters<
     uint32_t>(const uint8_t *query, const std::string &filter_label, const size_t K, const uint32_t L,
-              uint32_t *indices, float *distances, QueryStatsMemory *stats);
+              uint32_t *indices, float *distances, TraversalStats *stats);
 template DISKANN_DLLEXPORT std::unique_ptr<ANNReturnCode> Index<int8_t, uint32_t, uint16_t>::search_with_filters<
     uint64_t>(const int8_t *query, const std::string &filter_label, const size_t K, const uint32_t L, uint64_t *indices,
-              float *distances, QueryStatsMemory *stats);
+              float *distances, TraversalStats *stats);
 template DISKANN_DLLEXPORT std::unique_ptr<ANNReturnCode> Index<int8_t, uint32_t, uint16_t>::search_with_filters<
     uint32_t>(const int8_t *query, const std::string &filter_label, const size_t K, const uint32_t L, uint32_t *indices,
-              float *distances, QueryStatsMemory *stats);
+              float *distances, TraversalStats *stats);
 
 template DISKANN_DLLEXPORT std::unique_ptr<ANNReturnCode> Index<float, uint64_t, uint16_t>::search_with_filters<
     uint64_t>(const float *query, const uint16_t &filter_label, const size_t K, const uint32_t L, uint64_t *indices,
-              float *distances, QueryStatsMemory *stats);
+              float *distances, TraversalStats *stats);
 template DISKANN_DLLEXPORT std::unique_ptr<ANNReturnCode> Index<float, uint64_t, uint16_t>::search_with_filters<
     uint32_t>(const float *query, const uint16_t &filter_label, const size_t K, const uint32_t L, uint32_t *indices,
-              float *distances, QueryStatsMemory *stats);
+              float *distances, TraversalStats *stats);
 template DISKANN_DLLEXPORT std::unique_ptr<ANNReturnCode> Index<uint8_t, uint64_t, uint16_t>::search_with_filters<
     uint64_t>(const uint8_t *query, const uint16_t &filter_label, const size_t K, const uint32_t L, uint64_t *indices,
-              float *distances, QueryStatsMemory *stats);
+              float *distances, TraversalStats *stats);
 template DISKANN_DLLEXPORT std::unique_ptr<ANNReturnCode> Index<uint8_t, uint64_t, uint16_t>::search_with_filters<
     uint32_t>(const uint8_t *query, const uint16_t &filter_label, const size_t K, const uint32_t L, uint32_t *indices,
-              float *distances, QueryStatsMemory *stats);
+              float *distances, TraversalStats *stats);
 template DISKANN_DLLEXPORT std::unique_ptr<ANNReturnCode> Index<int8_t, uint64_t, uint16_t>::search_with_filters<
     uint64_t>(const int8_t *query, const uint16_t &filter_label, const size_t K, const uint32_t L, uint64_t *indices,
-              float *distances, QueryStatsMemory *stats);
+              float *distances, TraversalStats *stats);
 template DISKANN_DLLEXPORT std::unique_ptr<ANNReturnCode> Index<int8_t, uint64_t, uint16_t>::search_with_filters<
     uint32_t>(const int8_t *query, const uint16_t &filter_label, const size_t K, const uint32_t L, uint32_t *indices,
-              float *distances, QueryStatsMemory *stats);
+              float *distances, TraversalStats *stats);
 // TagT==uint32_t
 template DISKANN_DLLEXPORT std::unique_ptr<ANNReturnCode> Index<float, uint32_t, uint16_t>::search_with_filters<
     uint64_t>(const float *query, const uint16_t &filter_label, const size_t K, const uint32_t L, uint64_t *indices,
-              float *distances, QueryStatsMemory *stats);
+              float *distances, TraversalStats *stats);
 template DISKANN_DLLEXPORT std::unique_ptr<ANNReturnCode> Index<float, uint32_t, uint16_t>::search_with_filters<
     uint32_t>(const float *query, const uint16_t &filter_label, const size_t K, const uint32_t L, uint32_t *indices,
-              float *distances, QueryStatsMemory *stats);
+              float *distances, TraversalStats *stats);
 template DISKANN_DLLEXPORT std::unique_ptr<ANNReturnCode> Index<uint8_t, uint32_t, uint16_t>::search_with_filters<
     uint64_t>(const uint8_t *query, const uint16_t &filter_label, const size_t K, const uint32_t L, uint64_t *indices,
-              float *distances, QueryStatsMemory *stats);
+              float *distances, TraversalStats *stats);
 template DISKANN_DLLEXPORT std::unique_ptr<ANNReturnCode> Index<uint8_t, uint32_t, uint16_t>::search_with_filters<
     uint32_t>(const uint8_t *query, const uint16_t &filter_label, const size_t K, const uint32_t L, uint32_t *indices,
-              float *distances, QueryStatsMemory *stats);
+              float *distances, TraversalStats *stats);
 template DISKANN_DLLEXPORT std::unique_ptr<ANNReturnCode> Index<int8_t, uint32_t, uint16_t>::search_with_filters<
     uint64_t>(const int8_t *query, const uint16_t &filter_label, const size_t K, const uint32_t L, uint64_t *indices,
-              float *distances, QueryStatsMemory *stats);
+              float *distances, TraversalStats *stats);
 template DISKANN_DLLEXPORT std::unique_ptr<ANNReturnCode> Index<int8_t, uint32_t, uint16_t>::search_with_filters<
     uint32_t>(const int8_t *query, const uint16_t &filter_label, const size_t K, const uint32_t L, uint32_t *indices,
-              float *distances, QueryStatsMemory *stats);
+              float *distances, TraversalStats *stats);
 
 } // namespace diskann

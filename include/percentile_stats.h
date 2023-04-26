@@ -18,27 +18,27 @@
 
 namespace diskann
 {
+
+struct TraversalStats
+{
+    uint32_t n_hops = 0; // # search hops
+    uint32_t n_cmps = 0; // # cmps
+};
+
 struct QueryStats
 {
     float total_us = 0; // total time to process query in micros
     float io_us = 0;    // total time spent in IO
     float cpu_us = 0;   // total time spent in CPU
 
-    unsigned n_4k = 0;         // # of 4kB reads
-    unsigned n_8k = 0;         // # of 8kB reads
-    unsigned n_12k = 0;        // # of 12kB reads
-    unsigned n_ios = 0;        // total # of IOs issued
-    unsigned read_size = 0;    // total # of bytes read
-    unsigned n_cmps_saved = 0; // # cmps saved
-    unsigned n_cmps = 0;       // # cmps
-    unsigned n_cache_hits = 0; // # cache_hits
-    unsigned n_hops = 0;       // # search hops
-};
-
-struct QueryStatsMemory
-{
-    uint32_t n_hops = 0;
-    uint32_t n_cmps = 0;
+    uint32_t n_4k = 0;         // # of 4kB reads
+    uint32_t n_8k = 0;         // # of 8kB reads
+    uint32_t n_12k = 0;        // # of 12kB reads
+    uint32_t n_ios = 0;        // total # of IOs issued
+    uint32_t read_size = 0;    // total # of bytes read
+    uint32_t n_cmps_saved = 0; // # cmps saved
+    uint32_t n_cache_hits = 0; // # cache_hits
+    TraversalStats traversal_stats;
 };
 
 template <typename T>

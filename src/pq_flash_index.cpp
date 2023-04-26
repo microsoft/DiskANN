@@ -1238,7 +1238,7 @@ std::unique_ptr<ANNReturnCode> PQFlashIndex<T, LabelT>::cached_beam_search(
         if (!frontier.empty())
         {
             if (stats != nullptr)
-                stats->n_hops++;
+                stats->traversal_stats.n_hops++;
             for (uint64_t i = 0; i < frontier.size(); i++)
             {
                 auto id = frontier[i];
@@ -1296,7 +1296,7 @@ std::unique_ptr<ANNReturnCode> PQFlashIndex<T, LabelT>::cached_beam_search(
             compute_dists(node_nbrs, nnbrs, dist_scratch);
             if (stats != nullptr)
             {
-                stats->n_cmps += (double)nnbrs;
+                stats->traversal_stats.n_cmps += (double)nnbrs;
                 stats->cpu_us += (double)cpu_timer.elapsed();
             }
 
@@ -1363,7 +1363,7 @@ std::unique_ptr<ANNReturnCode> PQFlashIndex<T, LabelT>::cached_beam_search(
             compute_dists(node_nbrs, nnbrs, dist_scratch);
             if (stats != nullptr)
             {
-                stats->n_cmps += (double)nnbrs;
+                stats->traversal_stats.n_cmps += (double)nnbrs;
                 stats->cpu_us += (double)cpu_timer.elapsed();
             }
 
@@ -1383,7 +1383,7 @@ std::unique_ptr<ANNReturnCode> PQFlashIndex<T, LabelT>::cached_beam_search(
                     float dist = dist_scratch[m];
                     if (stats != nullptr)
                     {
-                        stats->n_cmps++;
+                        stats->traversal_stats.n_cmps++;
                     }
 
                     Neighbor nn(id, dist);
