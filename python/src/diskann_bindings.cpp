@@ -161,8 +161,9 @@ template <class T> struct DynamicInMemIndex
         _index = new Index<T>(m, dim, max_points,
                               true,                     // dynamic_index
                               index_parameters,         // used for insert
-                              initial_search_list_size, // used to prepare the scratch space for searching. can / may be
-                                                        // expanded if the search asks for a larger L.
+                              initial_search_list_size, // used to prepare the scratch space for
+                                                        // searching. can / may be expanded if the
+                                                        // search asks for a larger L.
                               search_threads,           // also used for the scratch space
                               true,                     // enable_tags
                               concurrent_consolidate,

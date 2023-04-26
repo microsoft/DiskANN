@@ -505,8 +505,10 @@ int main(int argc, char **argv)
         desc.add_options()("query_file", po::value<std::string>(&query_file)->required(),
                            "File containing the query vectors in binary format");
         desc.add_options()("gt_file", po::value<std::string>(&gt_file)->required(),
-                           "File name for the writing ground truth in binary format, please don' append .bin at end if "
-                           "no filter_label or filter_label_file is provided it will save the file with '.bin' at end."
+                           "File name for the writing ground truth in binary "
+                           "format, please don' append .bin at end if "
+                           "no filter_label or filter_label_file is provided it "
+                           "will save the file with '.bin' at end."
                            "else it will save the file as filename_label.bin");
         desc.add_options()("K", po::value<uint64_t>(&K)->required(),
                            "Number of ground truth nearest neighbors to compute");

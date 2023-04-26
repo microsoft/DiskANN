@@ -18,6 +18,7 @@
 #include "utils.h"
 #include "windows_customizations.h"
 #include "scratch.h"
+#include "in_mem_data_store.h"
 
 #define OVERHEAD_FACTOR 1.1
 #define EXPAND_IF_FULL 0
@@ -311,10 +312,10 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
   private:
     // Distance functions
     Metric _dist_metric = diskann::L2;
-    Distance<T> *_distance = nullptr;
+    std::shared_ptr<Distance<T>> _distance;
 
     // Data
-    T *_data = nullptr;
+    std::unique_ptr<InMemDataStore<T>> _data_store;
     char *_opt_graph = nullptr;
 
     // Graph related data structures
@@ -322,13 +323,14 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 
     // Dimensions
     size_t _dim = 0;
-    size_t _aligned_dim = 0;
     size_t _nd = 0;         // number of active points i.e. existing in the graph
     size_t _max_points = 0; // total number of points in given data set
-    // Number of points which are used as initial candidates when iterating to
-    // closest point(s). These are not visible externally and won't be returned
-    // by search. DiskANN forces at least 1 frozen point for dynamic index.
-    // The frozen points have consecutive locations. See also _start below.
+
+    // _num_frozen_pts is the number of points which are used as initial
+    // candidates when iterating to closest point(s). These are not visible
+    // externally and won't be returned by search. At least 1 frozen point is
+    // needed for a dynamic index. The frozen points have consecutive locations.
+    // See also _start below.
     size_t _num_frozen_pts = 0;
     size_t _max_range_of_loaded_graph = 0;
     size_t _node_size;
@@ -395,7 +397,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     std::unique_ptr<tsl::robin_set<uint32_t>> _delete_set;
 
     bool _data_compacted = true;    // true if data has been compacted
-    bool _is_saved = false;         // Gopal. Checking if the index is already saved.
+    bool _is_saved = false;         // Checking if the index is already saved.
     bool _conc_consolidate = false; // use _lock while searching
 
     // Acquire locks in the order below when acquiring multiple locks
