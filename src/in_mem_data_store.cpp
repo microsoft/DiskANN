@@ -193,7 +193,8 @@ void InMemDataStore<data_t>::get_distance(const data_t *query, const location_t 
 template <typename data_t>
 float InMemDataStore<data_t>::get_distance(const location_t loc1, const location_t loc2) const
 {
-    return _distance_fn->compare(_data + loc1 * _aligned_dim, _data + loc2 * _aligned_dim, (uint32_t)this->_aligned_dim);
+    return _distance_fn->compare(_data + loc1 * _aligned_dim, _data + loc2 * _aligned_dim,
+                                 (uint32_t)this->_aligned_dim);
 }
 
 template <typename data_t> location_t InMemDataStore<data_t>::expand(const location_t new_size)
