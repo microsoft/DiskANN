@@ -480,7 +480,7 @@ std::unordered_map<std::string, LabelT> PQFlashIndex<T, LabelT>::load_label_map(
         getline(iss, token, '\t');
         label_str = token;
         getline(iss, token, '\t');
-        token_as_num = std::stoul(token);
+        token_as_num = (LabelT)std::stoul(token);
         string_to_int_mp[label_str] = token_as_num;
     }
     return string_to_int_mp;
@@ -577,7 +577,7 @@ void PQFlashIndex<T, LabelT>::parse_label_file(const std::string &label_file, si
         {
             token.erase(std::remove(token.begin(), token.end(), '\n'), token.end());
             token.erase(std::remove(token.begin(), token.end(), '\r'), token.end());
-            LabelT token_as_num = std::stoul(token);
+            LabelT token_as_num = (LabelT)std::stoul(token);
             if (_labels.find(token_as_num) == _labels.end())
             {
                 _filter_list.emplace_back(token_as_num);
@@ -717,7 +717,7 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
                     while (std::getline(iss, token, ','))
                     {
                         if (cnt == 0)
-                            label = std::stoul(token);
+                            label = (LabelT)std::stoul(token);
                         else
                             medoid = (uint32_t)stoul(token);
                         cnt++;
@@ -738,7 +738,7 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
             std::string univ_label;
             universal_label_reader >> univ_label;
             universal_label_reader.close();
-            LabelT label_as_num = std::stoul(univ_label);
+            LabelT label_as_num = (LabelT)std::stoul(univ_label);
             set_universal_label(label_as_num);
         }
         if (file_exists(dummy_map_file))
@@ -1110,7 +1110,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
 
         for (size_t i = 0; i < this->data_dim - 1; i++)
         {
-            aligned_query_T[i] /= query_norm;
+            aligned_query_T[i] = (T)(aligned_query_T[i] / query_norm);
         }
         pq_query_scratch->set(this->data_dim, aligned_query_T);
     }
@@ -1260,7 +1260,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
 #endif
             if (stats != nullptr)
             {
-                stats->io_us += (double)io_timer.elapsed();
+                stats->io_us += (float)io_timer.elapsed();
             }
         }
 
@@ -1292,8 +1292,8 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
             compute_dists(node_nbrs, nnbrs, dist_scratch);
             if (stats != nullptr)
             {
-                stats->n_cmps += (double)nnbrs;
-                stats->cpu_us += (double)cpu_timer.elapsed();
+                stats->n_cmps += (uint32_t)nnbrs;
+                stats->cpu_us += (float)cpu_timer.elapsed();
             }
 
             // process prefetched nhood
@@ -1359,8 +1359,8 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
             compute_dists(node_nbrs, nnbrs, dist_scratch);
             if (stats != nullptr)
             {
-                stats->n_cmps += (double)nnbrs;
-                stats->cpu_us += (double)cpu_timer.elapsed();
+                stats->n_cmps += (uint32_t)nnbrs;
+                stats->cpu_us += (float)cpu_timer.elapsed();
             }
 
             cpu_timer.reset();
@@ -1389,7 +1389,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
 
             if (stats != nullptr)
             {
-                stats->cpu_us += (double)cpu_timer.elapsed();
+                stats->cpu_us += (float)cpu_timer.elapsed();
             }
         }
 
@@ -1441,7 +1441,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
         {
             auto id = full_retset[i].id;
             auto location = (sector_scratch + i * SECTOR_LEN) + VECTOR_SECTOR_OFFSET(id);
-            full_retset[i].distance = dist_cmp->compare(aligned_query_T, (T *)location, this->data_dim);
+            full_retset[i].distance = dist_cmp->compare(aligned_query_T, (T *)location, (uint32_t)this->data_dim);
         }
 
         std::sort(full_retset.begin(), full_retset.end());
@@ -1451,10 +1451,10 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
     for (uint64_t i = 0; i < k_search; i++)
     {
         indices[i] = full_retset[i].id;
-
-        if (_dummy_pts.find(indices[i]) != _dummy_pts.end())
+        auto key = (uint32_t)indices[i];
+        if (_dummy_pts.find(key) != _dummy_pts.end())
         {
-            indices[i] = _dummy_to_real_map[indices[i]];
+            indices[i] = _dummy_to_real_map[key];
         }
 
         if (distances != nullptr)
@@ -1478,7 +1478,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
 
     if (stats != nullptr)
     {
-        stats->total_us = (double)query_timer.elapsed();
+        stats->total_us = (float)query_timer.elapsed();
     }
 }
 
@@ -1495,7 +1495,7 @@ uint32_t PQFlashIndex<T, LabelT>::range_search(const T *query1, const double ran
 
     bool stop_flag = false;
 
-    uint32_t l_search = min_l_search; // starting size of the candidate list
+    uint32_t l_search = (uint32_t)min_l_search; // starting size of the candidate list
     while (!stop_flag)
     {
         indices.resize(l_search);

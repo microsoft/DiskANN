@@ -44,8 +44,9 @@ void WindowsAlignedFileReader::register_thread()
         FILE_ATTRIBUTE_READONLY | FILE_FLAG_NO_BUFFERING | FILE_FLAG_OVERLAPPED | FILE_FLAG_RANDOM_ACCESS, NULL);
     if (ctx.fhandle == INVALID_HANDLE_VALUE)
     {
-        diskann::cout << "Error opening " << std::string(m_filename.begin(), m_filename.end())
-                      << " -- error=" << GetLastError() << std::endl;
+        std::stringstream ss;
+        ss << m_filename.c_str();
+        diskann::cout << "Error opening " << ss.str() << " -- error=" << GetLastError() << std::endl;
     }
 
     // create IOCompletionPort
@@ -120,7 +121,7 @@ void WindowsAlignedFileReader::read(std::vector<AlignedRead> &read_reqs, IOConte
             os.Offset = offset & 0xffffffff;
             os.OffsetHigh = (offset >> 32);
 
-            BOOL ret = ReadFile(ctx.fhandle, read_buf, nbytes, NULL, &os);
+            BOOL ret = ReadFile(ctx.fhandle, read_buf, (DWORD)nbytes, NULL, &os);
             if (ret == FALSE)
             {
                 auto error = GetLastError();
