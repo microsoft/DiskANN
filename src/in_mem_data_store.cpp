@@ -93,12 +93,12 @@ template <typename data_t> location_t InMemDataStore<data_t>::load_impl(const st
 
     if (file_num_points > this->capacity())
     {
-        this->resize(file_num_points);
+        this->resize((location_t)file_num_points);
     }
 
     copy_aligned_data_from_file<data_t>(filename.c_str(), _data, file_num_points, file_dim, _aligned_dim);
 
-    return file_num_points;
+    return (location_t)file_num_points;
 }
 
 template <typename data_t> size_t InMemDataStore<data_t>::save(const std::string &filename, const location_t num_points)
@@ -177,7 +177,7 @@ template <typename data_t> void InMemDataStore<data_t>::prefetch_vector(const lo
 
 template <typename data_t> float InMemDataStore<data_t>::get_distance(const data_t *query, const location_t loc) const
 {
-    return _distance_fn->compare(query, _data + _aligned_dim * loc, _aligned_dim);
+    return _distance_fn->compare(query, _data + _aligned_dim * loc, (uint32_t)_aligned_dim);
 }
 
 template <typename data_t>
@@ -186,14 +186,14 @@ void InMemDataStore<data_t>::get_distance(const data_t *query, const location_t 
 {
     for (location_t i = 0; i < location_count; i++)
     {
-        distances[i] = _distance_fn->compare(query, _data + locations[i] * _aligned_dim, this->_aligned_dim);
+        distances[i] = _distance_fn->compare(query, _data + locations[i] * _aligned_dim, (uint32_t)this->_aligned_dim);
     }
 }
 
 template <typename data_t>
 float InMemDataStore<data_t>::get_distance(const location_t loc1, const location_t loc2) const
 {
-    return _distance_fn->compare(_data + loc1 * _aligned_dim, _data + loc2 * _aligned_dim, this->_aligned_dim);
+    return _distance_fn->compare(_data + loc1 * _aligned_dim, _data + loc2 * _aligned_dim, (uint32_t)this->_aligned_dim);
 }
 
 template <typename data_t> location_t InMemDataStore<data_t>::expand(const location_t new_size)

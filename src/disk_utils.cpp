@@ -621,7 +621,7 @@ int build_merged_vamana_index(std::string base_file, diskann::Metric compareMetr
     size_t base_num, base_dim;
     diskann::get_bin_metadata(base_file, base_num, base_dim);
 
-    double full_index_ram = estimate_ram_usage(base_num, base_dim, sizeof(T), R);
+    double full_index_ram = estimate_ram_usage(base_num, (uint32_t)base_dim, sizeof(T), R);
 
     // TODO: Make this honest when there is filter support
     if (full_index_ram < ram_budget * 1024 * 1024 * 1024)
