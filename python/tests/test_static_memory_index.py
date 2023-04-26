@@ -38,6 +38,7 @@ class TestStaticMemoryIndex(unittest.TestCase):
             index_vectors,
             ann_dir,
             vector_bin_file,
+            _
         ) in self._test_matrix:
             with self.subTest():
                 index = dap.StaticMemoryIndex(
@@ -76,6 +77,7 @@ class TestStaticMemoryIndex(unittest.TestCase):
             index_vectors,
             ann_dir,
             vector_bin_file,
+            _
         ) in self._test_matrix:
             with self.subTest():
                 index = dap.StaticMemoryIndex(
@@ -147,6 +149,7 @@ class TestStaticMemoryIndex(unittest.TestCase):
             index_vectors,
             ann_dir,
             vector_bin_file,
+            _
         ) in self._test_matrix:
             with self.subTest():
                 index = dap.StaticMemoryIndex(
@@ -180,6 +183,7 @@ class TestStaticMemoryIndex(unittest.TestCase):
             index_vectors,
             ann_dir,
             vector_bin_file,
+            _
         ) = build_random_vectors_and_memory_index(np.single, "l2", "not_ann")
         good_ranges = {
             "metric": "l2",
