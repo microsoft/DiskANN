@@ -4,6 +4,7 @@
 import numpy as np
 from scipy.cluster.vq import vq, kmeans2
 from typing import Tuple
+from time import perf_counter
 
 
 def get_bin_metadata(bin_file) -> Tuple[int, int]:
@@ -14,6 +15,15 @@ def get_bin_metadata(bin_file) -> Tuple[int, int]:
 def bin_to_numpy(dtype, bin_file) -> np.ndarray:
     npts, ndims = get_bin_metadata(bin_file)
     return np.fromfile(file=bin_file, dtype=dtype, offset=8).reshape(npts, ndims)
+
+class timer:
+    last = perf_counter()
+
+    def elapsed(self):
+        new = perf_counter()
+        elapsed_time = new - self.last
+        self.last = new
+        return elapsed_time
 
 
 def numpy_to_bin(array, out_file):
