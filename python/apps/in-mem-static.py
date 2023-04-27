@@ -65,8 +65,8 @@ def build_and_search(
     timer = utils.timer()
     ids, dists = index.batch_search(queries, 10, Ls, num_threads)
     query_time = timer.elapsed()
-    qps = queries.shape[0]/query_time
-    print('Batch searched', query_time, 'in', timer.elapsed(), 's @', qps)
+    qps = round(queries.shape[0]/query_time, 1)
+    print('Batch searched', queries.shape[0], 'in', query_time, 's @', qps, 'QPS')
 
     if gt_file != "":
         recall = utils.calculate_recall_from_gt_file(K, ids, gt_file)
@@ -90,7 +90,7 @@ if __name__ == "__main__":
     parser.add_argument("-K", default=10, type=int)
     parser.add_argument("-G", "--gt_file", default="")
     parser.add_argument("-ip", "--index_prefix", required=False, default="ann")
-    parser.add_argument("--search_only", required=False, default=True)
+    parser.add_argument("--search_only", required=False, default=False)
     args = parser.parse_args()
 
     build_and_search(
@@ -104,6 +104,6 @@ if __name__ == "__main__":
         args.Lsearch,
         args.num_threads,  # search args
         args.gt_file,
-        args.index_prefix
+        args.index_prefix,
         args.search_only
     )
