@@ -60,7 +60,43 @@ struct consolidation_report
     }
 };
 
-template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> class Index
+class AbstractIndex
+{
+};
+
+enum LoadStoreStratagy
+{
+    DISK,
+    MEMORY
+};
+
+struct IndexConfig
+{
+    LoadStoreStratagy graph_store;
+    LoadStoreStratagy data_store;
+    LoadStoreStratagy filtered_data_store;
+
+    Metric metric;
+    bool filtered_build;
+    std::string label_type;
+
+    bool enable_tags = false;
+    std::string tag_type;
+
+    bool dynamic_index = false;
+
+    bool pq_dist_build = false;
+    size_t num_pq_chunks = 0;
+    bool use_opq = false;
+    size_t num_frozen_pts = 0;
+    bool concurrent_consolidate = false;
+    bool load_on_build = false;
+    std::string data_type;
+
+    std::string data_path;
+};
+
+template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> class Index : public AbstractIndex
 {
     /**************************************************************************
      *
@@ -84,6 +120,9 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
                             const uint32_t search_threads, const bool enable_tags = false,
                             const bool concurrent_consolidate = false, const bool pq_dist_build = false,
                             const size_t num_pq_chunks = 0, const bool use_opq = false);
+
+    DISKANN_DLLEXPORT Index(IndexConfig &index_config, std::shared_ptr<AbstractDataStore<T>> data_store
+                            /* std::unique_ptr<AbstractGraphStore> graph_store*/);
 
     DISKANN_DLLEXPORT ~Index();
 

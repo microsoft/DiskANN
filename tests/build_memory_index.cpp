@@ -17,6 +17,7 @@
 
 #include "memory_mapper.h"
 #include "ann_exception.h"
+#include "index_factory.h"
 
 namespace po = boost::program_options;
 

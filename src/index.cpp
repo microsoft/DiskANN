@@ -113,7 +113,6 @@ Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_point
         this->_distance.reset((Distance<T> *)get_distance_function<T>(m));
     }
     // REFACTOR: TODO This should move to a factory method.
-
     _data_store =
         std::make_unique<diskann::InMemDataStore<T>>((location_t)total_internal_points, _dim, this->_distance);
 
@@ -124,6 +123,16 @@ Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_point
         _location_to_tag.reserve(total_internal_points);
         _tag_to_location.reserve(total_internal_points);
     }
+}
+
+template <typename T, typename TagT, typename LabelT>
+Index<T, TagT, LabelT>::Index(IndexConfig &index_config, std::shared_ptr<AbstractDataStore<T>> data_store)
+    : Index(index_config.metric, data_store->get_dims(), data_store->capacity(), index_config.dynamic_index, index_config.enable_tags,
+            index_config.concurrent_consolidate,
+            index_config.pq_dist_build, index_config.num_pq_chunks,
+            index_config.use_opq, index_config.num_frozen_pts)
+{
+    //_data_store = data_store; // assign _data_store when we do abstractdatastore
 }
 
 template <typename T, typename TagT, typename LabelT> Index<T, TagT, LabelT>::~Index()
