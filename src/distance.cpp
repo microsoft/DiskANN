@@ -585,7 +585,7 @@ void AVXNormalizedCosineDistanceFloat::preprocess_base_points(float *original_da
 void AVXNormalizedCosineDistanceFloat::preprocess_query(const float *query_vec, const size_t query_dim,
                                                         float *query_scratch)
 {
-    normalize_and_copy(query_vec, query_dim, query_scratch);
+    normalize_and_copy(query_vec, (uint32_t)query_dim, query_scratch);
 }
 
 void AVXNormalizedCosineDistanceFloat::normalize_and_copy(const float *query_vec, const uint32_t query_dim,

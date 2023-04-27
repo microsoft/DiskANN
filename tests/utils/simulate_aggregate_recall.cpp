@@ -61,7 +61,7 @@ int main(int argc, char **argv)
     std::vector<float> recalls;
     for (int ctr = 5; ctr < argc; ctr++)
     {
-        recalls.push_back(atof(argv[ctr]));
+        recalls.push_back((float)atof(argv[ctr]));
     }
 
     if (recalls.size() != k)
