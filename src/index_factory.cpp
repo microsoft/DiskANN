@@ -131,6 +131,9 @@ std::shared_ptr<AbstractDataStore<data_t>> IndexFactory::construct_datastore(Loa
     default:
         break;
     }
+
+    // default return (just to remove warnings)
+    return nullptr;
 }
 
 std::unique_ptr<AbstractGraphStore> IndexFactory::construct_graphstore(LoadStoreStratagy stratagy, size_t size)
