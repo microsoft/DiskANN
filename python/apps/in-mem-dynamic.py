@@ -47,7 +47,7 @@ def insert_and_search(
     for i in range(npts):
         tags[i] = i + 1
     index.batch_insert(data, tags, num_insert_threads)
-    print('batch_insert complete in', timer.elapsed(), 's')
+    print('batch_insert complete in ', timer.elapsed(), 's')
 
     delete_tags = np.random.choice(
         np.array(range(1, npts + 1, 1), dtype=np.uintc),
@@ -56,19 +56,20 @@ def insert_and_search(
     )
     for tag in delete_tags:
         index.mark_deleted(tag)
-    print('mark deletion completed in', timer.elapsed(), 's')
+    print('mark deletion completed in ', timer.elapsed(), 's')
 
     index.consolidate_delete()
-    print('consolidation completed in', timer.elapsed(), 's')
+    print('consolidation completed in ', timer.elapsed(), 's')
 
     deleted_data = data[delete_tags - 1, :]
 
     index.batch_insert(deleted_data, delete_tags, num_insert_threads)
-    print('re-insertion completed in', timer.elapsed(), 's')
+    print('re-insertion completed in ', timer.elapsed(), 's')
 
     tags, dists = index.batch_search(queries, K, Ls, num_search_threads)
-    res_ids = tags - 1
+    print('Batch searched ', queries.shape[0], ' queries in ', timer.elapsed(), 's')
 
+    res_ids = tags - 1
     if gt_file != "":
         recall = utils.calculate_recall_from_gt_file(K, res_ids, gt_file)
         print(f"recall@{K} is {recall}")

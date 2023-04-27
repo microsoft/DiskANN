@@ -55,8 +55,9 @@ def insert_and_search(
         cluster_indices = np.array(permutation[cluster_index_range], dtype=np.uintc)
         cluster_data = data[cluster_indices, :]
         index.batch_insert(cluster_data, cluster_indices + 1, num_insert_threads)
-        print('Inserted cluster', c, ' in ', timer.elapsed(), 's')
+        print('Inserted cluster ', c, ' in ', timer.elapsed(), 's')
     tags, dists = index.batch_search(queries, K, Ls, num_search_threads)
+    print('Batch searched ', queries.shape[0], ' queries in ', timer.elapsed(), 's')
     res_ids = tags - 1
 
     if gt_file != "":
