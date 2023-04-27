@@ -60,7 +60,11 @@ def build_and_search(
 
     queries = utils.bin_to_numpy(dtype, querydata_file)
 
+    timer = utils.timer()
     ids, dists = index.batch_search(queries, 10, Ls, num_threads)
+    query_time = timer.elapsed()
+    qps = queries.shape[0]/query_time
+    print('Batch searched', query_time, 'in', timer.elapsed(), 's @', qps)
 
     if gt_file != "":
         recall = utils.calculate_recall_from_gt_file(K, ids, gt_file)
