@@ -88,14 +88,13 @@ void IndexFactory::checkConfig()
                                -1, __FUNCSIG__, __FILE__, __LINE__);
     }
 
-    // check if data path is valid
     if (!file_exists(_config.data_path))
     {
         throw ANNException("ERROR: data_path : " + _config.data_path + " is invalid.", -1);
     }
 
     // check if data_type is valid
-    if (_config.data_type != "float" || _config.data_type != "uint8" || _config.data_type != "int8")
+    if (_config.data_type != "float" && _config.data_type != "uint8" && _config.data_type != "int8")
     {
         throw ANNException("ERROR: invalid data type : + " + _config.data_type +
                                " is not supported. please select from [float, int8, uint8]",

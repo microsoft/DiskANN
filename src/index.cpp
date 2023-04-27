@@ -281,9 +281,12 @@ void Index<T, TagT, LabelT>::save(const char *filename, bool compact_before_save
     diskann::Timer timer;
 
     // save label and mapping file
-    std::string labels_file_to_use = std::string(filename) + "_label_formatted.txt";
-    std::string mem_labels_int_map_file = std::string(filename) + "_labels_map.txt";
-    convert_labels_string_to_int(_labels_file, labels_file_to_use, mem_labels_int_map_file, _universal_label_raw);
+    if (!_labels_file.empty() && _labels_file != "")
+    {
+        std::string labels_file_to_use = std::string(filename) + "_label_formatted.txt";
+        std::string mem_labels_int_map_file = std::string(filename) + "_labels_map.txt";
+        convert_labels_string_to_int(_labels_file, labels_file_to_use, mem_labels_int_map_file, _universal_label_raw);
+    }
 
     std::unique_lock<std::shared_timed_mutex> ul(_update_lock);
     std::unique_lock<std::shared_timed_mutex> cl(_consolidate_lock);

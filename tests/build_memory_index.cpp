@@ -165,6 +165,7 @@ int main(int argc, char **argv)
         config.graph_store = diskann::MEMORY;
         config.data_type = data_type;
         config.label_type = label_type;
+        config.data_path = data_path;
 
         // Build params for speific build from instance
         diskann::IndexWriteParameters paras = diskann::IndexWriteParametersBuilder(L, R)
