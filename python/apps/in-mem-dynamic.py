@@ -42,7 +42,7 @@ def insert_and_search(
     else:
         raise ValueError("data_type must be float, int8 or uint8")
 
-    tags = np.zeros(npts, dtype=int)
+    tags = np.zeros(npts, dtype=np.uintc)
     timer = utils.timer()
     for i in range(npts):
         tags[i] = i + 1
