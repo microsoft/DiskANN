@@ -19,11 +19,11 @@ def bin_to_numpy(dtype, bin_file) -> np.ndarray:
 class timer:
     last = perf_counter()
 
-    def elapsed(self, round:int = 3):
+    def elapsed(self, round_digit:int = 3):
         new = perf_counter()
         elapsed_time = new - self.last
         self.last = new
-        return round(elapsed_time, round_precision)
+        return round(elapsed_time, round_digit)
 
 
 def numpy_to_bin(array, out_file):
