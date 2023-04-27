@@ -491,9 +491,10 @@ LabelT PQFlashIndex<T, LabelT>::get_converted_label(const std::string &filter_la
     {
         return _label_map[filter_label];
     }
-    
-    // invalid label
-    return std::numeric_limits<LabelT>::max();
+    else
+    {
+        return static_cast<LabelT>(_universal_filter_num);
+    }
 }
 
 template <typename T, typename LabelT>

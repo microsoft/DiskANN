@@ -1869,9 +1869,10 @@ LabelT Index<T, TagT, LabelT>::get_converted_label(const std::string &raw_label)
     {
         return _label_map[raw_label];
     }
-
-    // invalid label
-    return std::numeric_limits<LabelT>::max();
+    else
+    {
+        return _universal_label;
+    }
 }
 
 template <typename T, typename TagT, typename LabelT>
