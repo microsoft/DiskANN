@@ -52,9 +52,9 @@ def insert_and_search(
     timer = utils.timer()
     for c in range(num_clusters):
         cluster_index_range = range(offsets[c], offsets[c + 1])
-        cluster_indices = permutation[cluster_index_range]
+        cluster_indices = np.array(permutation[cluster_index_range], dtype=np.uintc)
         cluster_data = data[cluster_indices, :]
-        index.insert(cluster_data, cluster_indices + 1, num_insert_threads)
+        index.batch_insert(cluster_data, cluster_indices + 1, num_insert_threads)
         print('Inserted cluster', c, ' in ', timer.elapsed(), 's')
     tags, dists = index.batch_search(queries, K, Ls, num_search_threads)
     res_ids = tags - 1

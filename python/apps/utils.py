@@ -100,12 +100,12 @@ def cluster_and_permute(
     print("Cluster counts")
     print(count)
 
-    offsets = np.zeros(num_clusters, dtype=int)
-    counters = np.zeros(num_clusters, dtype=int)
-    for i in range(1, num_clusters, 1):
-        offsets[i] = offsets[i - 1] + count[i - 1]
+    offsets = np.zeros(num_clusters + 1, dtype=int)
+    for i in range(0, num_clusters, 1):
+        offsets[i + 1] = offsets[i] + count[i]
 
     permutation = np.zeros(npts, dtype=int)
+    counters = np.zeros(num_clusters, dtype=int)
     for i in range(npts):
         label = labels[i]
         row = offsets[label] + counters[label]
