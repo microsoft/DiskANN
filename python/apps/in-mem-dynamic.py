@@ -7,7 +7,6 @@ import diskannpy
 import numpy as np
 import utils
 
-
 def insert_and_search(
     dtype_str,
     indexdata_file,
@@ -44,25 +43,26 @@ def insert_and_search(
         raise ValueError("data_type must be float, int8 or uint8")
 
     tags = np.zeros(npts, dtype=int)
+    timer = utils.timer()
     for i in range(npts):
         tags[i] = i + 1
     index.batch_insert(data, tags, num_insert_threads)
-    print("batch_insert complete")
+    print('batch_insert complete in', timer.elapsed(), 's')
 
     delete_tags = np.random.choice(
         range(1, npts + 1, 1), size=int(0.5 * npts), replace=False
     )
     for tag in delete_tags:
         index.mark_deleted(tag)
-    print("mark deletion completed")
+    print('mark deletion completed in', timer.elapsed(), 's')
 
     index.consolidate_delete()
-    print("consolidation completed")
+    print('consolidation completed in', timer.elapsed(), 's')
 
     deleted_data = data[delete_tags - 1, :]
 
     index.batch_insert(deleted_data, delete_tags, num_insert_threads)
-    print("re-insertion completed")
+    print('re-insertion completed in', timer.elapsed(), 's')
 
     tags, dists = index.batch_search(queries, K, Ls, num_search_threads)
     res_ids = tags - 1

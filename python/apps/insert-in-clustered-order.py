@@ -49,11 +49,13 @@ def insert_and_search(
     )
 
     i = 0
+    timer = utils.timer()
     for c in range(num_clusters):
         cluster_index_range = range(offsets[c], offsets[c + 1])
         cluster_indices = permutation[cluster_index_range]
         cluster_data = data[cluster_indices, :]
         index.insert(cluster_data, cluster_indices + 1, num_insert_threads)
+        print('Inserted cluster', c, ' in ', timer.elapsed(), 's')
     tags, dists = index.batch_search(queries, K, Ls, num_search_threads)
     res_ids = tags - 1
 
@@ -71,13 +73,13 @@ if __name__ == "__main__":
     parser.add_argument("-d", "--data_type", required=True)
     parser.add_argument("-i", "--indexdata_file", required=True)
     parser.add_argument("-q", "--querydata_file", required=True)
-    parser.add_argument("-Lb", "--Lbuild", default=50)
-    parser.add_argument("-Ls", "--Lsearch", default=50)
-    parser.add_argument("-R", "--graph_degree", default=32)
-    parser.add_argument("-TI", "--num_insert_threads", default=8)
-    parser.add_argument("-TS", "--num_search_threads", default=8)
-    parser.add_argument("-C", "--num_clusters", default=32)
-    parser.add_argument("-K", default=10)
+    parser.add_argument("-Lb", "--Lbuild", default=50, type=int)
+    parser.add_argument("-Ls", "--Lsearch", default=50, type=int)
+    parser.add_argument("-R", "--graph_degree", default=32, type=int)
+    parser.add_argument("-TI", "--num_insert_threads", default=8, type=int)
+    parser.add_argument("-TS", "--num_search_threads", default=8, type=int)
+    parser.add_argument("-C", "--num_clusters", default=32, type=int)
+    parser.add_argument("-K", default=10, type=int)
     parser.add_argument("--gt_file", default="")
     args = parser.parse_args()
 
