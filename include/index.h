@@ -106,14 +106,15 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 
     // Batch build from a file. Optionally pass tags vector.
     DISKANN_DLLEXPORT void build(const char *filename, const size_t num_points_to_load,
-                                 IndexWriteParameters &parameters, const std::vector<TagT> &tags = std::vector<TagT>());
+                                 const IndexWriteParameters &parameters,
+                                 const std::vector<TagT> &tags = std::vector<TagT>());
 
     // Batch build from a file. Optionally pass tags file.
     DISKANN_DLLEXPORT void build(const char *filename, const size_t num_points_to_load,
-                                 IndexWriteParameters &parameters, const char *tag_filename);
+                                 const IndexWriteParameters &parameters, const char *tag_filename);
 
     // Batch build from a data array, which must pad vectors to aligned_dim
-    DISKANN_DLLEXPORT void build(const T *data, const size_t num_points_to_load, IndexWriteParameters &parameters,
+    DISKANN_DLLEXPORT void build(const T *data, const size_t num_points_to_load, const IndexWriteParameters &parameters,
                                  const std::vector<TagT> &tags);
 
     // Filtered Support
@@ -215,7 +216,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 
     // Use after _data and _nd have been populated
     // Acquire exclusive _update_lock before calling
-    void build_with_data_populated(IndexWriteParameters &parameters, const std::vector<TagT> &tags);
+    void build_with_data_populated(const IndexWriteParameters &parameters, const std::vector<TagT> &tags);
 
     // generates 1 frozen point that will never be deleted from the graph
     // This is not visible to the user
@@ -261,7 +262,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     void inter_insert(uint32_t n, std::vector<uint32_t> &pruned_list, InMemQueryScratch<T> *scratch);
 
     // Acquire exclusive _update_lock before calling
-    void link(IndexWriteParameters &parameters);
+    void link(const IndexWriteParameters &parameters);
 
     // Acquire exclusive _tag_lock and _delete_lock before calling
     int reserve_location();

@@ -1,43 +1,23 @@
 # Copyright (c) Microsoft Corporation. All rights reserved.
 # Licensed under the MIT license.
 
+import os
 import shutil
 import unittest
-from tempfile import mkdtemp
 
 import diskannpy as dap
 import numpy as np
-from fixtures import calculate_recall, random_vectors, vectors_as_temp_file
+from fixtures import build_random_vectors_and_memory_index, calculate_recall
 from sklearn.neighbors import NearestNeighbors
 
 
-def _build_random_vectors_and_index(dtype, metric):
-    query_vectors = random_vectors(1000, 10, dtype=dtype)
-    index_vectors = random_vectors(10000, 10, dtype=dtype)
-    with vectors_as_temp_file(index_vectors) as vector_temp:
-        ann_dir = mkdtemp()
-        dap.build_disk_index(
-            data=vector_temp,
-            metric=metric,
-            vector_dtype=dtype,
-            index_directory=ann_dir,
-            graph_degree=16,
-            complexity=32,
-            search_memory_maximum=0.00003,
-            build_memory_maximum=1,
-            num_threads=1,
-            pq_disk_bytes=0,
-        )
-    return metric, dtype, query_vectors, index_vectors, ann_dir
-
-
-class TestDiskIndex(unittest.TestCase):
+class TestStaticMemoryIndex(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls._test_matrix = [
-            _build_random_vectors_and_index(np.single, "l2"),
-            _build_random_vectors_and_index(np.ubyte, "l2"),
-            _build_random_vectors_and_index(np.byte, "l2"),
+            build_random_vectors_and_memory_index(np.single, "l2"),
+            build_random_vectors_and_memory_index(np.ubyte, "l2"),
+            build_random_vectors_and_memory_index(np.byte, "l2"),
         ]
         cls._example_ann_dir = cls._test_matrix[0][4]
 
@@ -45,20 +25,29 @@ class TestDiskIndex(unittest.TestCase):
     def tearDownClass(cls) -> None:
         for test in cls._test_matrix:
             try:
-                _, _, _, _, ann_dir = test
+                ann_dir = test[4]
                 shutil.rmtree(ann_dir, ignore_errors=True)
             except:
                 pass
 
     def test_recall_and_batch(self):
-        for metric, dtype, query_vectors, index_vectors, ann_dir in self._test_matrix:
+        for (
+            metric,
+            dtype,
+            query_vectors,
+            index_vectors,
+            ann_dir,
+            vector_bin_file,
+            _
+        ) in self._test_matrix:
             with self.subTest():
-                index = dap.DiskIndex(
+                index = dap.StaticMemoryIndex(
                     metric="l2",
                     vector_dtype=dtype,
+                    data_path=os.path.join(ann_dir, "vectors.bin"),
                     index_directory=ann_dir,
                     num_threads=16,
-                    num_nodes_to_cache=10,
+                    initial_search_complexity=32,
                 )
 
                 k = 5
@@ -66,7 +55,6 @@ class TestDiskIndex(unittest.TestCase):
                     query_vectors,
                     k_neighbors=k,
                     complexity=5,
-                    beam_width=2,
                     num_threads=16,
                 )
                 if metric == "l2":
@@ -79,104 +67,166 @@ class TestDiskIndex(unittest.TestCase):
                     self.assertTrue(
                         recall > 0.70,
                         f"Recall [{recall}] was not over 0.7",
-                    )
+                        )
 
     def test_single(self):
-        for metric, dtype, query_vectors, index_vectors, ann_dir in self._test_matrix:
+        for (
+            metric,
+            dtype,
+            query_vectors,
+            index_vectors,
+            ann_dir,
+            vector_bin_file,
+            _
+        ) in self._test_matrix:
             with self.subTest():
-                index = dap.DiskIndex(
+                index = dap.StaticMemoryIndex(
                     metric="l2",
                     vector_dtype=dtype,
+                    data_path=vector_bin_file,
                     index_directory=ann_dir,
                     num_threads=16,
-                    num_nodes_to_cache=10,
+                    initial_search_complexity=32,
                 )
 
                 k = 5
-                ids, dists = index.search(
-                    query_vectors[0], k_neighbors=k, complexity=5, beam_width=2
-                )
+                ids, dists = index.search(query_vectors[0], k_neighbors=k, complexity=5)
                 self.assertEqual(ids.shape[0], k)
                 self.assertEqual(dists.shape[0], k)
 
     def test_valid_metric(self):
         ann_dir = self._example_ann_dir
+        vector_bin_file = self._test_matrix[0][5]
         with self.assertRaises(ValueError):
-            dap.DiskIndex(
+            dap.StaticMemoryIndex(
                 metric="sandwich",
                 vector_dtype=np.single,
+                data_path=vector_bin_file,
                 index_directory=ann_dir,
                 num_threads=16,
-                num_nodes_to_cache=10,
+                initial_search_complexity=32,
             )
         with self.assertRaises(ValueError):
-            dap.DiskIndex(
+            dap.StaticMemoryIndex(
                 metric=None,
                 vector_dtype=np.single,
+                data_path=vector_bin_file,
                 index_directory=ann_dir,
                 num_threads=16,
-                num_nodes_to_cache=10,
+                initial_search_complexity=32,
             )
-        dap.DiskIndex(
+        dap.StaticMemoryIndex(
             metric="l2",
             vector_dtype=np.single,
+            data_path=vector_bin_file,
             index_directory=ann_dir,
             num_threads=16,
-            num_nodes_to_cache=10,
+            initial_search_complexity=32,
         )
-        dap.DiskIndex(
+        dap.StaticMemoryIndex(
             metric="mips",
             vector_dtype=np.single,
+            data_path=vector_bin_file,
             index_directory=ann_dir,
             num_threads=16,
-            num_nodes_to_cache=10,
+            initial_search_complexity=32,
         )
-        dap.DiskIndex(
+        dap.StaticMemoryIndex(
             metric="MiPs",
             vector_dtype=np.single,
+            data_path=vector_bin_file,
             index_directory=ann_dir,
             num_threads=16,
-            num_nodes_to_cache=10,
+            initial_search_complexity=32,
         )
 
     def test_valid_vector_dtype(self):
         aliases = {np.single: np.float32, np.byte: np.int8, np.ubyte: np.uint8}
-        for metric, dtype, query_vectors, index_vectors, ann_dir in self._test_matrix:
+        for (
+            metric,
+            dtype,
+            query_vectors,
+            index_vectors,
+            ann_dir,
+            vector_bin_file,
+            _
+        ) in self._test_matrix:
             with self.subTest():
-                index = dap.DiskIndex(
+                index = dap.StaticMemoryIndex(
                     metric="l2",
                     vector_dtype=aliases[dtype],
+                    data_path=vector_bin_file,
                     index_directory=ann_dir,
                     num_threads=16,
-                    num_nodes_to_cache=10,
+                    initial_search_complexity=32,
                 )
         ann_dir = self._example_ann_dir
+        vector_bin_file = self._test_matrix[0][5]
         invalid = [np.double, np.float64, np.ulonglong, np.float16]
         for invalid_vector_dtype in invalid:
             with self.subTest():
                 with self.assertRaises(ValueError):
-                    dap.DiskIndex(
+                    dap.StaticMemoryIndex(
                         metric="l2",
                         vector_dtype=invalid_vector_dtype,
+                        data_path=vector_bin_file,
                         index_directory=ann_dir,
                         num_threads=16,
-                        num_nodes_to_cache=10,
+                        initial_search_complexity=32,
                     )
 
-    def test_value_ranges_search(self):
-        good_ranges = {"complexity": 5, "k_neighbors": 10, "beam_width": 2}
-        bad_ranges = {"complexity": -1, "k_neighbors": 0, "beam_width": 0}
+    def test_value_ranges_ctor(self):
+        (
+            metric,
+            dtype,
+            query_vectors,
+            index_vectors,
+            ann_dir,
+            vector_bin_file,
+            _
+        ) = build_random_vectors_and_memory_index(np.single, "l2", "not_ann")
+        good_ranges = {
+            "metric": "l2",
+            "vector_dtype": np.single,
+            "data_path": vector_bin_file,
+            "index_directory": ann_dir,
+            "num_threads": 16,
+            "initial_search_complexity": 32,
+            "index_prefix": "not_ann",
+        }
+
+        bad_ranges = {
+            "metric": "l200000",
+            "vector_dtype": np.double,
+            "data_path": "I do not exist.bin",
+            "index_directory": "sandwiches",
+            "num_threads": -100,
+            "initial_search_complexity": 0,
+            "index_prefix": "",
+        }
         for bad_value_key in good_ranges.keys():
             kwargs = good_ranges.copy()
             kwargs[bad_value_key] = bad_ranges[bad_value_key]
             with self.subTest():
                 with self.assertRaises(ValueError):
-                    index = dap.DiskIndex(
+                    index = dap.StaticMemoryIndex(**kwargs)
+
+    def test_value_ranges_search(self):
+        good_ranges = {"complexity": 5, "k_neighbors": 10}
+        bad_ranges = {"complexity": -1, "k_neighbors": 0}
+        vector_bin_file = self._test_matrix[0][5]
+        for bad_value_key in good_ranges.keys():
+            kwargs = good_ranges.copy()
+            kwargs[bad_value_key] = bad_ranges[bad_value_key]
+            with self.subTest():
+                with self.assertRaises(ValueError):
+                    index = dap.StaticMemoryIndex(
                         metric="l2",
                         vector_dtype=np.single,
+                        data_path=vector_bin_file,
                         index_directory=self._example_ann_dir,
                         num_threads=16,
-                        num_nodes_to_cache=10,
+                        initial_search_complexity=32,
                     )
                     index.search(query=np.array([], dtype=np.single), **kwargs)
 
@@ -184,26 +234,26 @@ class TestDiskIndex(unittest.TestCase):
         good_ranges = {
             "complexity": 5,
             "k_neighbors": 10,
-            "beam_width": 2,
             "num_threads": 5,
         }
         bad_ranges = {
             "complexity": 0,
             "k_neighbors": 0,
-            "beam_width": -1,
             "num_threads": -1,
         }
+        vector_bin_file = self._test_matrix[0][5]
         for bad_value_key in good_ranges.keys():
             kwargs = good_ranges.copy()
             kwargs[bad_value_key] = bad_ranges[bad_value_key]
             with self.subTest():
                 with self.assertRaises(ValueError):
-                    index = dap.DiskIndex(
+                    index = dap.StaticMemoryIndex(
                         metric="l2",
                         vector_dtype=np.single,
+                        data_path=vector_bin_file,
                         index_directory=self._example_ann_dir,
                         num_threads=16,
-                        num_nodes_to_cache=10,
+                        initial_search_complexity=32,
                     )
                     index.batch_search(
                         queries=np.array([[]], dtype=np.single), **kwargs

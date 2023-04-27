@@ -177,7 +177,6 @@ void build_incremental_index(const std::string &data_path, const uint32_t L, con
                                                .with_max_occlusion_size(C)
                                                .with_alpha(alpha)
                                                .with_saturate_graph(saturate_graph)
-                                               .with_num_rounds(1)
                                                .with_num_threads(insert_threads)
                                                .with_num_frozen_points(num_start_pts)
                                                .build();
@@ -186,7 +185,6 @@ void build_incremental_index(const std::string &data_path, const uint32_t L, con
                                                       .with_max_occlusion_size(C)
                                                       .with_alpha(alpha)
                                                       .with_saturate_graph(saturate_graph)
-                                                      .with_num_rounds(1)
                                                       .with_num_threads(consolidate_threads)
                                                       .build();
 
@@ -320,9 +318,11 @@ int main(int argc, char **argv)
                            "the window while deleting the same number from the left");
         desc.add_options()("start_point_norm", po::value<float>(&start_point_norm)->required(),
                            "Set the start point to a random point on a sphere of this radius");
-        desc.add_options()("num_start_points", po::value<uint32_t>(&num_start_pts)->default_value(0),
-                           "Set the number of random start (frozen) points to use when "
-                           "inserting and searching");
+        desc.add_options()(
+            "num_start_points",
+            po::value<uint32_t>(&num_start_pts)->default_value(diskann::defaults::NUM_FROZEN_POINTS_DYNAMIC),
+            "Set the number of random start (frozen) points to use when "
+            "inserting and searching");
 
         po::variables_map vm;
         po::store(po::parse_command_line(argc, argv, desc), vm);
