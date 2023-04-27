@@ -19,11 +19,11 @@ def bin_to_numpy(dtype, bin_file) -> np.ndarray:
 class timer:
     last = perf_counter()
 
-    def elapsed(self, round_digits:int = 3):
+    def elapsed(self, round:int = 3):
         new = perf_counter()
         elapsed_time = new - self.last
         self.last = new
-        return round(elapsed_time, round_digits)
+        return round(elapsed_time, round_precision)
 
 
 def numpy_to_bin(array, out_file):
@@ -70,7 +70,7 @@ def calculate_recall(
         result_set_set = set(result_set_indices[i][0:recall_at])
         truth_set_set = set(truth_set_indices[i][0:recall_at])
         found += len(result_set_set.intersection(truth_set_set))
-    return found / (result_set _indices.shape[0] * recall_at)
+    return found / (result_set_indices.shape[0] * recall_at)
 
 
 def calculate_recall_from_gt_file(K: int, ids: np.ndarray[int], gt_file: str) -> float:
