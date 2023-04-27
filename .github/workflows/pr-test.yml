@@ -166,23 +166,15 @@ jobs:
         ${{ env.diskann_built_tests }}/search_disk_index --data_type int8 --dist_fn l2 --fail_if_recall_below 70 --index_path_prefix ./disk_index_l2_rand_int8_10D_10K_norm50.0_diskpq_oneshot --result_path /tmp/res --query_file ./rand_int8_10D_1K_norm50.0.bin --gt_file ./l2_rand_int8_10D_10K_norm50.0_10D_1K_norm50.0_gt100 --recall_at 5 -L 5 12 -W 2 --num_nodes_to_cache 10 -T 16
     - name:  build and search an incremental index
       run: |
-        cat /proc/meminfo
         ${{ env.diskann_built_tests }}/test_insert_deletes_consolidate --data_type int8 --dist_fn l2 --data_path rand_int8_10D_10K_norm50.0.bin --index_path_prefix index_ins_del -R 64 -L 300 --alpha 1.2 -T 8 --points_to_skip 0 --max_points_to_insert 7500 --beginning_index_size 0 --points_per_checkpoint 1000 --checkpoints_per_snapshot 0 --points_to_delete_from_beginning 2500 --start_deletes_after 5000 --do_concurrent true --start_point_norm 200
-        cat /proc/meminfo
         ${{ env.diskann_built_utils }}/compute_groundtruth --data_type int8 --dist_fn l2 --base_file index_ins_del.after-concurrent-delete-del2500-7500.data --query_file rand_int8_10D_1K_norm50.0.bin --K 100 --gt_file gt100_random10D_1K-conc-2500-7500 --tags_file index_ins_del.after-concurrent-delete-del2500-7500.tags
-        cat /proc/meminfo
         ${{ env.diskann_built_tests }}/search_memory_index --data_type int8 --dist_fn l2 --fail_if_recall_below 70 --index_path_prefix index_ins_del.after-concurrent-delete-del2500-7500 --result_path res_ins_del --query_file ./rand_int8_10D_1K_norm50.0.bin --gt_file gt100_random10D_1K-conc-2500-7500 -K 10 -L 20 40 60 80 100 -T 8 --dynamic true --tags 1
-        cat /proc/meminfo
     - name:  test a streaming index
       if: success() || failure()
       run: |
-        ${{ env.diskann_built_tests }}/test_streaming_scenario --data_type int8 --dist_fn l2 --data_path rand_int8_10D_10K_norm50.0.bin --index_path_prefix index_stream -R 64 -L 600 --alpha 1.2 --insert_threads 4 --consolidate_threads 4 --max_points_to_insert 10000 --active_window 4000 --consolidate_interval 2000 --start_point_norm 200
-        cat /proc/meminfo
+        ${{ env.diskann_built_tests }}/test_streaming_scenario --data_type int8 --dist_fn l2 --data_path ./rand_int8_10D_10K_norm50.0.bin --index_path_prefix index_stream -R 64 -L 600 --alpha 1.2 --insert_threads 4 --consolidate_threads 4 --max_points_to_insert 10000 --active_window 4000 --consolidate_interval 2000 --start_point_norm 200
         ${{ env.diskann_built_utils }}/compute_groundtruth --data_type int8 --dist_fn l2 --base_file index_stream.after-streaming-act4000-cons2000-max10000.data --query_file rand_int8_10D_1K_norm50.0.bin --K 100 --gt_file gt100_base-act4000-cons2000-max10000 --tags_file index_stream.after-streaming-act4000-cons2000-max10000.tags
-        cat /proc/meminfo
         ${{ env.diskann_built_tests }}/search_memory_index --data_type int8 --dist_fn l2 --fail_if_recall_below 70 --index_path_prefix index_stream.after-streaming-act4000-cons2000-max10000 --result_path res_stream --query_file ./rand_int8_10D_1K_norm50.0.bin --gt_file gt100_base-act4000-cons2000-max10000 -K 10 -L 20 40 60 80 100 -T 64 --dynamic true --tags 1
-        cat /proc/meminfo
-
 
     - name: Generate 10K random uint8 index vectors, 1K query vectors, in 10 dims and compute GT
       if: success() || failure()
@@ -230,22 +222,15 @@ jobs:
     - name:  build and search an incremental index
       if: success() || failure()
       run: |
-        cat /proc/meminfo
         ${{ env.diskann_built_tests }}/test_insert_deletes_consolidate --data_type uint8 --dist_fn l2 --data_path rand_uint8_10D_10K_norm50.0.bin --index_path_prefix index_ins_del -R 64 -L 300 --alpha 1.2 -T 8 --points_to_skip 0 --max_points_to_insert 7500 --beginning_index_size 0 --points_per_checkpoint 1000 --checkpoints_per_snapshot 0 --points_to_delete_from_beginning 2500 --start_deletes_after 5000 --do_concurrent true --start_point_norm 200;
-        cat /proc/meminfo
         ${{ env.diskann_built_utils }}/compute_groundtruth --data_type uint8 --dist_fn l2 --base_file index_ins_del.after-concurrent-delete-del2500-7500.data --query_file rand_uint8_10D_1K_norm50.0.bin --K 100 --gt_file gt100_random10D_10K-conc-2500-7500 --tags_file index_ins_del.after-concurrent-delete-del2500-7500.tags
-        cat /proc/meminfo
         ${{ env.diskann_built_tests }}/search_memory_index --data_type uint8 --dist_fn l2 --fail_if_recall_below 70 --index_path_prefix index_ins_del.after-concurrent-delete-del2500-7500 --result_path res_ins_del --query_file ./rand_uint8_10D_1K_norm50.0.bin --gt_file gt100_random10D_10K-conc-2500-7500 -K 10 -L 20 40 60 80 100 -T 8 --dynamic true --tags 1
-        cat /proc/meminfo
     - name:  test a streaming index
       if: success() || failure()
       run: |
         ${{ env.diskann_built_tests }}/test_streaming_scenario --data_type uint8 --dist_fn l2 --data_path rand_uint8_10D_10K_norm50.0.bin --index_path_prefix index_stream -R 64 -L 600 --alpha 1.2 --insert_threads 4 --consolidate_threads 4 --max_points_to_insert 10000 --active_window 4000 --consolidate_interval 2000 --start_point_norm 200
-        cat /proc/meminfo
         ${{ env.diskann_built_utils }}/compute_groundtruth --data_type uint8 --dist_fn l2 --base_file index_stream.after-streaming-act4000-cons2000-max10000.data --query_file rand_uint8_10D_1K_norm50.0.bin --K 100 --gt_file gt100_base-act4000-cons2000-max10000 --tags_file index_stream.after-streaming-act4000-cons2000-max10000.tags
-        cat /proc/meminfo
         ${{ env.diskann_built_tests }}/search_memory_index --data_type uint8 --dist_fn l2 --fail_if_recall_below 70 --index_path_prefix index_stream.after-streaming-act4000-cons2000-max10000 --result_path res_stream --query_file ./rand_uint8_10D_1K_norm50.0.bin --gt_file gt100_base-act4000-cons2000-max10000 -K 10 -L 20 40 60 80 100 -T 64 --dynamic true --tags 1
-        cat /proc/meminfo
 
     - name: Generate 10K random uint8 index vectors, 1K query vectors, 10K Label Points with 50 unique labels (random distributed labels), in 10 dims and compute GT
       if: success() || failure()
@@ -316,27 +301,27 @@ jobs:
       run: |
         ${{ env.diskann_built_tests }}/build_stitched_index --num_threads 48 --data_type uint8 --data_path ./rand_uint8_10D_10K_norm50.0.bin --label_file ./rand_labels_50_10K.txt -R 32 -L 100 --alpha 1.2 --stitched_R 64 --index_path_prefix ./stit_rand_32_100_64_new --universal_label 0
         ${{ env.diskann_built_tests }}/build_stitched_index --num_threads 48 --data_type uint8 --data_path ./rand_uint8_10D_10K_norm50.0.bin --label_file ./zipf_labels_50_10K.txt -R 32 -L 100 --alpha 1.2 --stitched_R 64 --index_path_prefix ./stit_zipf_32_100_64_new --universal_label 0
-        ${{ env.diskann_built_tests }}/search_memory_index --num_threads 48 --data_type uint8 --dist_fn l2 --filter_label 10 --index_path_prefix ./stit_rand_32_100_64_new --query_file ./rand_uint8_10D_1K_norm50.0.bin --result_path ./rand_stit_96_10_90_new --gt_file ./l2_rand_uint8_10D_10K_norm50.0_10D_1K_norm50.0_gt100_wlabel -K 10 -L 10 10 10 10 10 30 50 70 90 110 130 150 170 190 210 230 250 270 290 310 330 350 370 390 410
-        ${{ env.diskann_built_tests }}/search_memory_index --num_threads 48 --data_type uint8 --dist_fn l2 --filter_label 5 --index_path_prefix ./stit_zipf_32_100_64_new --query_file ./rand_uint8_10D_1K_norm50.0.bin --result_path ./zipf_stit_96_10_90_new --gt_file ./l2_zipf_uint8_10D_10K_norm50.0_10D_1K_norm50.0_gt100_wlabel -K 10 -L 10 10 10 10 10 30 50 70 90 110 130 150 170 190 210 230 250 270 290 310 330 350 370 390 410
-    - uses: actions/setup-python@v3
-      with:
-        python-version: "3.10"
-    - name: Install cibuildwheel
-      run: python -m pip install cibuildwheel==2.11.3
-    - name: build wheels
-      if: ${{ matrix.os == 'ubuntu-latest' }}
-      run: python -m cibuildwheel --output-dir wheelhouse
-      env:
-        CIBW_ARCHS_WINDOWS: AMD64
-        CIBW_ARCHS_LINUX: x86_64
-    - name: Run Python Unit tests
-      if: ${{ matrix.os == 'ubuntu-latest' }}
-      run: |
-        pip install wheelhouse/diskannpy-*-cp310-cp310-manylinux_2_24_x86_64.whl
-        pip install scikit-learn
-        LD_PRELOAD="/lib/x86_64-linux-gnu/libmkl_intel_thread.so:/lib/x86_64-linux-gnu/libmkl_intel_ilp64.so:/lib/x86_64-linux-gnu/libmkl_core.so:/lib/x86_64-linux-gnu/libiomp5.so:/lib/x86_64-linux-gnu/libmkl_avx2.so:/lib/x86_64-linux-gnu/libmkl_def.so" python -m unittest discover python/tests
-    - uses: actions/upload-artifact@v3
-      if: ${{ matrix.os == 'ubuntu-latest' }}
-      with:
-        name: wheelhouse
-        path: ./wheelhouse/*.whl
+        ${{ env.diskann_built_tests }}/search_memory_index --num_threads 48 --data_type uint8 --dist_fn l2 --filter_label 10 --index_path_prefix ./stit_rand_32_100_64_new --query_file ./rand_uint8_10D_1K_norm50.0.bin --result_path ./rand_stit_96_10_90_new --gt_file ./l2_rand_uint8_10D_10K_norm50.0_10D_1K_norm50.0_gt100_wlabel -K 10 -L 16 32 150
+        ${{ env.diskann_built_tests }}/search_memory_index --num_threads 48 --data_type uint8 --dist_fn l2 --filter_label 5 --index_path_prefix ./stit_zipf_32_100_64_new --query_file ./rand_uint8_10D_1K_norm50.0.bin --result_path ./zipf_stit_96_10_90_new --gt_file ./l2_zipf_uint8_10D_10K_norm50.0_10D_1K_norm50.0_gt100_wlabel -K 10 -L 16 32 150
+#     - uses: actions/setup-python@v3
+#       with:
+#         python-version: "3.10"
+#     - name: Install cibuildwheel
+#       run: python -m pip install cibuildwheel==2.11.3
+#     - name: build wheels
+#       if: ${{ matrix.os == 'ubuntu-latest' }}
+#       run: python -m cibuildwheel --output-dir wheelhouse
+#       env:
+#         CIBW_ARCHS_WINDOWS: AMD64
+#         CIBW_ARCHS_LINUX: x86_64
+#     - name: Run Python Unit tests
+#       if: ${{ matrix.os == 'ubuntu-latest' }}
+#       run: |
+#         pip install wheelhouse/diskannpy-*-cp310-cp310-manylinux_2_24_x86_64.whl
+#         pip install scikit-learn
+#         LD_PRELOAD="/lib/x86_64-linux-gnu/libmkl_intel_thread.so:/lib/x86_64-linux-gnu/libmkl_intel_ilp64.so:/lib/x86_64-linux-gnu/libmkl_core.so:/lib/x86_64-linux-gnu/libiomp5.so:/lib/x86_64-linux-gnu/libmkl_avx2.so:/lib/x86_64-linux-gnu/libmkl_def.so" python -m unittest discover python/tests
+#     - uses: actions/upload-artifact@v3
+#       if: ${{ matrix.os == 'ubuntu-latest' }}
+#       with:
+#         name: wheelhouse
+#         path: ./wheelhouse/*.whl

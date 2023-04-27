@@ -105,12 +105,13 @@ inline void open_file_to_write(std::ofstream &writer, const std::string &filenam
     {
         char buff[1024];
 #ifdef _WINDOWS
-        strerror_s(buff, 1024, errno);
+        auto ret = std::to_string(strerror_s(buff, 1024, errno));
 #else
-        strerror_r(errno, buff, 1024);
+        auto ret = std::string(strerror_r(errno, buff, 1024));
 #endif
-        diskann::cerr << std::string("Failed to open file") + filename + " for write because " + buff << std::endl;
-        throw diskann::ANNException(std::string("Failed to open file ") + filename + " for write because: " + buff, -1);
+        auto message = std::string("Failed to open file") + filename + " for write because " + buff + ", ret=" + ret;
+        diskann::cerr << message << std::endl;
+        throw diskann::ANNException(message, -1);
     }
 }
 
@@ -657,11 +658,12 @@ inline void open_file_to_write(std::ofstream &writer, const std::string &filenam
     {
         char buff[1024];
 #ifdef _WINDOWS
-        strerror_s(buff, 1024, errno);
+        auto ret = std::to_string(strerror_s(buff, 1024, errno));
 #else
-        strerror_r(errno, buff, 1024);
+        auto ret = std::string(strerror_r(errno, buff, 1024));
 #endif
-        std::string error_message = std::string("Failed to open file") + filename + " for write because " + buff;
+        std::string error_message =
+            std::string("Failed to open file") + filename + " for write because " + buff + ", ret=" + ret;
         diskann::cerr << error_message << std::endl;
         throw diskann::ANNException(error_message, -1);
     }
@@ -1004,18 +1006,23 @@ inline bool validate_index_file_size(std::ifstream &in)
     return true;
 }
 
-// This function is valid only for float data type.
-template <typename T> inline void normalize(T *arr, size_t dim)
+template <typename T> inline float get_norm(T *arr, const size_t dim)
 {
     float sum = 0.0f;
     for (uint32_t i = 0; i < dim; i++)
     {
         sum += arr[i] * arr[i];
     }
-    sum = sqrt(sum);
+    return sqrt(sum);
+}
+
+// This function is valid only for float data type.
+template <typename T = float> inline void normalize(T *arr, const size_t dim)
+{
+    float norm = get_norm(arr, dim);
     for (uint32_t i = 0; i < dim; i++)
     {
-        arr[i] = (T)(arr[i] / sum);
+        arr[i] = (T)(arr[i] / norm);
     }
 }
 
@@ -1081,7 +1088,7 @@ inline void clean_up_artifacts(tsl::robin_set<std::string> paths_to_clean, tsl::
     }
     catch (const std::exception &e)
     {
-        diskann::cout << "Warning: Unable to clean all artifacts" << std::endl;
+        diskann::cout << "Warning: Unable to clean all artifacts " << e.what() << std::endl;
     }
 }
 

@@ -142,7 +142,6 @@ void build_incremental_index(const std::string &data_path, const uint32_t L, con
                              const std::string &save_path, size_t points_to_delete_from_beginning,
                              size_t start_deletes_after, bool concurrent)
 {
-
     diskann::IndexWriteParameters params = diskann::IndexWriteParametersBuilder(L, R)
                                                .with_max_occlusion_size(500) // C = 500
                                                .with_alpha(alpha)
