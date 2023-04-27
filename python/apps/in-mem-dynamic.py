@@ -50,7 +50,9 @@ def insert_and_search(
     print('batch_insert complete in', timer.elapsed(), 's')
 
     delete_tags = np.random.choice(
-        range(1, npts + 1, 1), size=int(0.5 * npts), replace=False
+        np.array(range(1, npts + 1, 1), dtype=np.uintc),
+        size=int(0.5 * npts),
+        replace=False
     )
     for tag in delete_tags:
         index.mark_deleted(tag)
