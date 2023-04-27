@@ -156,7 +156,36 @@ int main(int argc, char **argv)
     {
         diskann::cout << "Starting index build with R: " << R << "  Lbuild: " << L << "  alpha: " << alpha
                       << "  #threads: " << num_threads << std::endl;
-        if (label_file != "" && label_type == "ushort")
+
+        // with refactored code
+        diskann::IndexConfig config;
+        config.metric = metric;
+        config.filtered_build = label_file == "" ? false : true;
+        config.data_store = diskann::MEMORY;
+        config.graph_store = diskann::MEMORY;
+        config.data_type = data_type;
+        config.label_type = label_type;
+
+        // Build params for speific build from instance
+        diskann::IndexWriteParameters paras = diskann::IndexWriteParametersBuilder(L, R)
+                                                  .with_filter_list_size(Lf)
+                                                  .with_alpha(alpha)
+                                                  .with_saturate_graph(false)
+                                                  .with_num_threads(num_threads)
+                                                  .build();
+
+        diskann::IndexBuildParams build_params(paras);
+        build_params.universal_label = universal_label;
+        build_params.label_file = label_file;
+        build_params.data_file = data_path;
+
+        auto index_factory = diskann::IndexFactory(config);
+        auto index = index_factory.instance();
+        index->build(build_params);
+        index->save(index_path_prefix.c_str());
+        return 0;
+
+        /*if (label_file != "" && label_type == "ushort")
         {
             if (data_type == std::string("int8"))
                 return build_in_memory_index<int8_t, uint32_t, uint16_t>(
@@ -195,7 +224,7 @@ int main(int argc, char **argv)
                 std::cout << "Unsupported type. Use one of int8, uint8 or float." << std::endl;
                 return -1;
             }
-        }
+        }*/
     }
     catch (const std::exception &e)
     {

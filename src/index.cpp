@@ -127,10 +127,9 @@ Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_point
 
 template <typename T, typename TagT, typename LabelT>
 Index<T, TagT, LabelT>::Index(IndexConfig &index_config, std::shared_ptr<AbstractDataStore<T>> data_store)
-    : Index(index_config.metric, data_store->get_dims(), data_store->capacity(), index_config.dynamic_index, index_config.enable_tags,
-            index_config.concurrent_consolidate,
-            index_config.pq_dist_build, index_config.num_pq_chunks,
-            index_config.use_opq, index_config.num_frozen_pts)
+    : Index(index_config.metric, data_store->get_dims(), data_store->capacity(), index_config.dynamic_index,
+            index_config.enable_tags, index_config.concurrent_consolidate, index_config.pq_dist_build,
+            index_config.num_pq_chunks, index_config.use_opq, index_config.num_frozen_pts)
 {
     //_data_store = data_store; // assign _data_store when we do abstractdatastore
 }
@@ -280,6 +279,11 @@ template <typename T, typename TagT, typename LabelT>
 void Index<T, TagT, LabelT>::save(const char *filename, bool compact_before_save)
 {
     diskann::Timer timer;
+
+    // save label and mapping file
+    std::string labels_file_to_use = std::string(filename) + "_label_formatted.txt";
+    std::string mem_labels_int_map_file = std::string(filename) + "_labels_map.txt";
+    convert_labels_string_to_int(_labels_file, labels_file_to_use, mem_labels_int_map_file, _universal_label_raw);
 
     std::unique_lock<std::shared_timed_mutex> ul(_update_lock);
     std::unique_lock<std::shared_timed_mutex> cl(_consolidate_lock);
@@ -1681,7 +1685,11 @@ template <typename T, typename TagT, typename LabelT>
 void Index<T, TagT, LabelT>::build(const char *filename, const size_t num_points_to_load,
                                    IndexWriteParameters &parameters, const std::vector<TagT> &tags)
 {
+    // idealy this should call build_filtered_index based on params passed
+
     std::unique_lock<std::shared_timed_mutex> ul(_update_lock);
+
+    // error checks
     if (num_points_to_load == 0)
         throw ANNException("Do not call build with 0 points", -1, __FUNCSIG__, __FILE__, __LINE__);
 
@@ -1809,6 +1817,40 @@ void Index<T, TagT, LabelT>::build(const char *filename, const size_t num_points
         }
     }
     build(filename, num_points_to_load, parameters, tags);
+}
+
+template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT>::build(IndexBuildParams &build_params)
+{
+    std::string labels_file_to_use = build_params.data_file + "_generated_label_formatted.txt";
+    std::string mem_labels_int_map_file = build_params.data_file + "_generated_labels_map.txt";
+
+    size_t points_to_load = build_params.num_points_to_load == 0 ? _max_points : build_params.num_points_to_load;
+
+    auto s = std::chrono::high_resolution_clock::now();
+    if (build_params.label_file == "")
+    {
+        this->build(build_params.data_file.c_str(), points_to_load, build_params.index_write_params);
+    }
+    else
+    {
+        convert_labels_string_to_int(build_params.label_file, labels_file_to_use, mem_labels_int_map_file,
+                                     build_params.universal_label);
+        if (build_params.universal_label != "")
+        {
+            LabelT unv_label_as_num = 0;
+            this->set_universal_label(unv_label_as_num);
+            _universal_label_raw = build_params.universal_label;
+        }
+        this->build_filtered_index(build_params.data_file.c_str(), labels_file_to_use, points_to_load,
+                                   build_params.index_write_params);
+    }
+    std::chrono::duration<double> diff = std::chrono::high_resolution_clock::now() - s;
+    std::cout << "Indexing time: " << diff.count() << "\n";
+    // cleanup
+    if (build_params.label_file != "")
+    {
+        clean_up_artifacts({labels_file_to_use, mem_labels_int_map_file}, {});
+    }
 }
 
 template <typename T, typename TagT, typename LabelT>

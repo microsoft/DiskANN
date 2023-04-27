@@ -60,10 +60,6 @@ struct consolidation_report
     }
 };
 
-class AbstractIndex
-{
-};
-
 enum LoadStoreStratagy
 {
     DISK,
@@ -94,6 +90,30 @@ struct IndexConfig
     std::string data_type;
 
     std::string data_path;
+};
+
+struct IndexBuildParams
+{
+    IndexBuildParams(diskann::IndexWriteParameters &paras) : index_write_params(paras){};
+    diskann::IndexWriteParameters index_write_params;
+    std::string data_file = "";
+    std::string label_file = "";
+    std::string universal_label = "";
+    uint32_t filter_threshold = 0;
+    size_t num_points_to_load = 0;
+};
+
+class AbstractIndex
+{
+  public:
+    DISKANN_DLLEXPORT AbstractIndex()
+    {
+    }
+    virtual ~AbstractIndex()
+    {
+    }
+    virtual void build(IndexBuildParams &build_params) = 0;
+    virtual void save(const char *filename, bool compact_before_save = false) = 0;
 };
 
 template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> class Index : public AbstractIndex
@@ -154,6 +174,8 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     // Batch build from a data array, which must pad vectors to aligned_dim
     DISKANN_DLLEXPORT void build(const T *data, const size_t num_points_to_load, IndexWriteParameters &parameters,
                                  const std::vector<TagT> &tags);
+
+    DISKANN_DLLEXPORT void build(IndexBuildParams &build_params);
 
     // Filtered Support
     DISKANN_DLLEXPORT void build_filtered_index(const char *filename, const std::string &label_file,
@@ -399,6 +421,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     std::unordered_map<uint32_t, uint32_t> _medoid_counts;
     bool _use_universal_label = false;
     LabelT _universal_label = 0;
+    std::string _universal_label_raw;
     uint32_t _filterIndexingQueueSize;
     std::unordered_map<std::string, LabelT> _label_map;
 
