@@ -20,7 +20,8 @@ def build_and_search(
     Ls,
     num_threads,
     gt_file,
-    index_prefix
+    index_prefix,
+    search_only
 ):
     if dtype_str == "float":
         dtype = np.single
@@ -32,20 +33,21 @@ def build_and_search(
         raise ValueError("data_type must be float, int8 or uint8")
 
     # build index
-    diskannpy.build_memory_index(
-        data=indexdata_file,
-        metric="l2",
-        vector_dtype=dtype,
-        index_directory=index_directory,
-        complexity=Lb,
-        graph_degree=graph_degree,
-        num_threads=num_threads,
-        index_prefix=index_prefix,
-        alpha=1.2,
-        use_pq_build=False,
-        num_pq_bytes=8,
-        use_opq=False,
-    )
+    if not search_only:
+        diskannpy.build_memory_index(
+            data=indexdata_file,
+            metric="l2",
+            vector_dtype=dtype,
+            index_directory=index_directory,
+            complexity=Lb,
+            graph_degree=graph_degree,
+            num_threads=num_threads,
+            index_prefix=index_prefix,
+            alpha=1.2,
+            use_pq_build=False,
+            num_pq_bytes=8,
+            use_opq=False,
+        )
 
     # ready search object
     index = diskannpy.StaticMemoryIndex(
@@ -86,8 +88,9 @@ if __name__ == "__main__":
     parser.add_argument("-R", "--graph_degree", default=32, type=int)
     parser.add_argument("-T", "--num_threads", default=8, type=int)
     parser.add_argument("-K", default=10, type=int)
-    parser.add_argument("--gt_file", default="")
+    parser.add_argument("-G", "--gt_file", default="")
     parser.add_argument("-ip", "--index_prefix", required=False, default="ann")
+    parser.add_argument("--search_only", required=False, default=True)
     args = parser.parse_args()
 
     build_and_search(
@@ -102,4 +105,5 @@ if __name__ == "__main__":
         args.num_threads,  # search args
         args.gt_file,
         args.index_prefix
+        args.search_only
     )
