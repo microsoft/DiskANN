@@ -97,7 +97,9 @@ void IndexFactory::checkConfig()
     // check if data_type is valid
     if (_config.data_type != "float" || _config.data_type != "uint8" || _config.data_type != "int8")
     {
-        throw ANNException("ERROR: invalid data type : + " + _config.data_type + " is not supported. please select from [float, int8, uint8]", -1);
+        throw ANNException("ERROR: invalid data type : + " + _config.data_type +
+                               " is not supported. please select from [float, int8, uint8]",
+                           -1);
     }
 
     // check if label type is valid
