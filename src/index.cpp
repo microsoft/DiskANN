@@ -281,14 +281,6 @@ void Index<T, TagT, LabelT>::save(const char *filename, bool compact_before_save
 {
     diskann::Timer timer;
 
-    // save label and mapping file
-    if (!_labels_file.empty() && _labels_file != "")
-    {
-        std::string labels_file_to_use = std::string(filename) + "_label_formatted.txt";
-        std::string mem_labels_int_map_file = std::string(filename) + "_labels_map.txt";
-        convert_labels_string_to_int(_labels_file, labels_file_to_use, mem_labels_int_map_file, _universal_label_raw);
-    }
-
     std::unique_lock<std::shared_timed_mutex> ul(_update_lock);
     std::unique_lock<std::shared_timed_mutex> cl(_consolidate_lock);
     std::unique_lock<std::shared_timed_mutex> tl(_tag_lock);
@@ -1825,8 +1817,8 @@ void Index<T, TagT, LabelT>::build(const char *filename, const size_t num_points
 
 template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT>::build(IndexBuildParams &build_params)
 {
-    std::string labels_file_to_use = build_params.data_file + "_generated_label_formatted.txt";
-    std::string mem_labels_int_map_file = build_params.data_file + "_generated_labels_map.txt";
+    std::string labels_file_to_use = build_params.save_path + "_label_formatted.txt";
+    std::string mem_labels_int_map_file = build_params.save_path + "_labels_map.txt";
 
     size_t points_to_load = build_params.num_points_to_load == 0 ? _max_points : build_params.num_points_to_load;
 
@@ -1837,6 +1829,7 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
     }
     else
     {
+        // TODO: this should ideally happen in save()
         convert_labels_string_to_int(build_params.label_file, labels_file_to_use, mem_labels_int_map_file,
                                      build_params.universal_label);
         if (build_params.universal_label != "")
@@ -1853,7 +1846,7 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
     // cleanup
     if (build_params.label_file != "")
     {
-        clean_up_artifacts({labels_file_to_use, mem_labels_int_map_file}, {});
+        // clean_up_artifacts({labels_file_to_use, mem_labels_int_map_file}, {});
     }
 }
 

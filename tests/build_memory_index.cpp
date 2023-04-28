@@ -179,6 +179,7 @@ int main(int argc, char **argv)
         build_params.universal_label = universal_label;
         build_params.label_file = label_file;
         build_params.data_file = data_path;
+        build_params.save_path = index_path_prefix;
 
         auto index_factory = diskann::IndexFactory(config);
         auto index = index_factory.instance();

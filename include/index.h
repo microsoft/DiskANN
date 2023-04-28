@@ -97,6 +97,7 @@ struct IndexBuildParams
     IndexBuildParams(diskann::IndexWriteParameters &paras) : index_write_params(paras){};
     diskann::IndexWriteParameters index_write_params;
     std::string data_file = "";
+    std::string save_path = "";
     std::string label_file = "";
     std::string universal_label = "";
     uint32_t filter_threshold = 0;
