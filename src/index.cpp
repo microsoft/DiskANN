@@ -98,11 +98,12 @@ Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_point
 
     _final_graph.resize(total_internal_points);
 
-    // This should come from a factory.
+    // Note: A factory is already made to inject data store, keeping this for backward compatibility.
+    // distance is owned by data_store
     if (m == diskann::Metric::COSINE && std::is_floating_point<T>::value)
     {
         // This is safe because T is float inside the if block.
-        // this->_distance.reset((Distance<T> *)new AVXNormalizedCosineDistanceFloat());
+        this->_distance.reset((Distance<T> *)new AVXNormalizedCosineDistanceFloat());
         this->_normalize_vecs = true;
         diskann::cout << "Normalizing vectors and using L2 for cosine "
                          "AVXNormalizedCosineDistanceFloat()."
@@ -110,11 +111,11 @@ Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_point
     }
     else
     {
-        // this->_distance.reset((Distance<T> *)get_distance_function<T>(m));
+        this->_distance.reset((Distance<T> *)get_distance_function<T>(m));
     }
-    // REFACTOR: TODO This should move to a factory method.
-    //_data_store = std::make_unique<diskann::InMemDataStore<T>>((location_t)total_internal_points, _dim,
-    //this->_distance);
+    // Note: moved this to factory, keeping this for backward compatibility.
+    _data_store =
+        std::make_unique<diskann::InMemDataStore<T>>((location_t)total_internal_points, _dim, this->_distance);
 
     _locks = std::vector<non_recursive_mutex>(total_internal_points);
 
@@ -131,7 +132,7 @@ Index<T, TagT, LabelT>::Index(IndexConfig &index_config, std::unique_ptr<Abstrac
             index_config.enable_tags, index_config.concurrent_consolidate, index_config.pq_dist_build,
             index_config.num_pq_chunks, index_config.use_opq, index_config.num_frozen_pts)
 {
-    _data_store = std::move(data_store);
+    _data_store.reset(std::move(data_store));
 }
 
 template <typename T, typename TagT, typename LabelT> Index<T, TagT, LabelT>::~Index()
