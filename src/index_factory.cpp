@@ -23,8 +23,8 @@ std::shared_ptr<AbstractIndex> IndexFactory::instance()
     if (_config.data_type == "float")
     {
         // datastore and graph store objects to be passed to index
-        auto data_store = construct_datastore<float>(_config.data_store, num_points, dim);
-        auto graph_store = construct_graphstore(_config.graph_store, num_points);
+        auto data_store = construct_datastore<float>(_config.data_load_store_stratagy, num_points, dim);
+        auto graph_store = construct_graphstore(_config.graph_load_store_stratagy, num_points);
 
         if (_config.label_type == "ushort")
         {
@@ -37,28 +37,28 @@ std::shared_ptr<AbstractIndex> IndexFactory::instance()
     }
     else if (_config.data_type == "uint8")
     {
-        auto data_store = construct_datastore<uint8_t>(_config.data_store, num_points, dim);
-        auto graph_store = construct_graphstore(_config.graph_store, num_points);
+        auto data_store = construct_datastore<uint8_t>(_config.data_load_store_stratagy, num_points, dim);
+        auto graph_store = construct_graphstore(_config.graph_load_store_stratagy, num_points);
         if (_config.label_type == "ushort")
         {
-            return std::make_shared<diskann::Index<uint8_t, uint32_t, uint16_t>>(_config, data_store);
+            return std::make_shared<diskann::Index<uint8_t, uint32_t, uint16_t>>(_config, std::move(data_store));
         }
         else
         {
-            return std::make_shared<diskann::Index<uint8_t>>(_config, data_store);
+            return std::make_shared<diskann::Index<uint8_t>>(_config, std::move(data_store));
         }
     }
     else if (_config.data_type == "int8")
     {
-        auto data_store = construct_datastore<int8_t>(_config.data_store, num_points, dim);
-        auto graph_store = construct_graphstore(_config.graph_store, num_points);
+        auto data_store = construct_datastore<int8_t>(_config.data_load_store_stratagy, num_points, dim);
+        auto graph_store = construct_graphstore(_config.graph_load_store_stratagy, num_points);
         if (_config.label_type == "ushort")
         {
-            return std::make_shared<diskann::Index<int8_t, uint32_t, uint16_t>>(_config, data_store);
+            return std::make_shared<diskann::Index<int8_t, uint32_t, uint16_t>>(_config, std::move(data_store));
         }
         else
         {
-            return std::make_shared<diskann::Index<int8_t>>(_config, data_store);
+            return std::make_shared<diskann::Index<int8_t>>(_config, std::move(data_store));
         }
     }
     else
@@ -105,7 +105,7 @@ void IndexFactory::checkConfig()
 }
 
 template <typename data_t>
-std::shared_ptr<AbstractDataStore<data_t>> IndexFactory::construct_datastore(LoadStoreStratagy stratagy,
+std::unique_ptr<AbstractDataStore<data_t>> IndexFactory::construct_datastore(LoadStoreStratagy stratagy,
                                                                              size_t num_points, size_t dimension)
 {
     const size_t total_internal_points = num_points + _config.num_frozen_pts;
@@ -116,13 +116,13 @@ std::shared_ptr<AbstractDataStore<data_t>> IndexFactory::construct_datastore(Loa
         if (_config.metric == diskann::Metric::COSINE && std::is_floating_point<data_t>::value)
         {
             distance.reset((Distance<data_t> *)new AVXNormalizedCosineDistanceFloat());
-            return std::make_shared<diskann::InMemDataStore<data_t>>((location_t)total_internal_points, dimension,
+            return std::make_unique<diskann::InMemDataStore<data_t>>((location_t)total_internal_points, dimension,
                                                                      distance);
         }
         else
         {
             distance.reset((Distance<data_t> *)get_distance_function<data_t>(_config.metric));
-            return std::make_shared<diskann::InMemDataStore<data_t>>((location_t)total_internal_points, dimension,
+            return std::make_unique<diskann::InMemDataStore<data_t>>((location_t)total_internal_points, dimension,
                                                                      distance);
         }
         break;

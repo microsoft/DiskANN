@@ -68,9 +68,9 @@ enum LoadStoreStratagy
 
 struct IndexConfig
 {
-    LoadStoreStratagy graph_store;
-    LoadStoreStratagy data_store;
-    LoadStoreStratagy filtered_data_store;
+    LoadStoreStratagy graph_load_store_stratagy;
+    LoadStoreStratagy data_load_store_stratagy;
+    LoadStoreStratagy filtered_data_load_store_stratagy;
 
     Metric metric;
     bool filtered_build;
@@ -141,7 +141,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
                             const bool concurrent_consolidate = false, const bool pq_dist_build = false,
                             const size_t num_pq_chunks = 0, const bool use_opq = false);
 
-    DISKANN_DLLEXPORT Index(IndexConfig &index_config, std::shared_ptr<AbstractDataStore<T>> data_store
+    DISKANN_DLLEXPORT Index(IndexConfig &index_config, std::unique_ptr<AbstractDataStore<T>> data_store
                             /* std::unique_ptr<AbstractGraphStore> graph_store*/);
 
     DISKANN_DLLEXPORT ~Index();
@@ -376,7 +376,8 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     std::shared_ptr<Distance<T>> _distance;
 
     // Data
-    std::unique_ptr<InMemDataStore<T>> _data_store;
+    // std::unique_ptr<InMemDataStore<T>> _data_store;
+    std::unique_ptr<AbstractDataStore<T>> _data_store;
     char *_opt_graph = nullptr;
 
     // Graph related data structures

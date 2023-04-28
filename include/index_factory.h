@@ -15,7 +15,7 @@ class IndexFactory
   private:
     void checkConfig();
     template <typename data_t>
-    std::shared_ptr<AbstractDataStore<data_t>> construct_datastore(LoadStoreStratagy stratagy, size_t num_points,
+    std::unique_ptr<AbstractDataStore<data_t>> construct_datastore(LoadStoreStratagy stratagy, size_t num_points,
                                                                    size_t dimension);
     std::unique_ptr<AbstractGraphStore> construct_graphstore(LoadStoreStratagy stratagy, size_t size);
 

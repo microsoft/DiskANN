@@ -161,8 +161,8 @@ int main(int argc, char **argv)
         diskann::IndexConfig config;
         config.metric = metric;
         config.filtered_build = label_file == "" ? false : true;
-        config.data_store = diskann::MEMORY;
-        config.graph_store = diskann::MEMORY;
+        config.data_load_store_stratagy = diskann::MEMORY;
+        config.graph_load_store_stratagy = diskann::MEMORY;
         config.data_type = data_type;
         config.label_type = label_type;
         config.data_path = data_path;
