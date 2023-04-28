@@ -10,6 +10,7 @@ import utils
 
 
 def build_and_search(
+    metric,
     dtype_str,
     index_directory,
     indexdata_file,
@@ -36,7 +37,7 @@ def build_and_search(
     if not search_only:
         diskannpy.build_memory_index(
             data=indexdata_file,
-            metric="l2",
+            metric=metric,
             vector_dtype=dtype,
             index_directory=index_directory,
             complexity=Lb,
@@ -51,7 +52,7 @@ def build_and_search(
 
     # ready search object
     index = diskannpy.StaticMemoryIndex(
-        metric="l2",
+        metric=metric,
         vector_dtype=dtype,
         data_path=indexdata_file,
         index_directory=index_directory,
@@ -79,6 +80,7 @@ if __name__ == "__main__":
         description="Static in-memory build and search from vectors in a file",
     )
 
+    parser.add_argument("-m", "--metric", required=False, default="l2")
     parser.add_argument("-d", "--data_type", required=True)
     parser.add_argument("-id", "--index_directory", required=False, default=".")
     parser.add_argument("-i", "--indexdata_file", required=True)
@@ -94,6 +96,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     build_and_search(
+        args.metric,
         args.data_type,
         args.index_directory.strip(),
         args.indexdata_file.strip(),
