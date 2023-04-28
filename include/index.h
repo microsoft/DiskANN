@@ -140,8 +140,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
                             const uint32_t search_threads, const bool enable_tags = false,
                             const bool concurrent_consolidate = false, const bool pq_dist_build = false,
                             const size_t num_pq_chunks = 0, const bool use_opq = false);
-    
-    // Constructor for building with config.
+
     DISKANN_DLLEXPORT Index(IndexConfig &index_config, std::unique_ptr<AbstractDataStore<T>> data_store
                             /* std::unique_ptr<AbstractGraphStore> graph_store*/);
 
