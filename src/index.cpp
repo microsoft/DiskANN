@@ -132,7 +132,7 @@ Index<T, TagT, LabelT>::Index(IndexConfig &index_config, std::unique_ptr<Abstrac
             index_config.enable_tags, index_config.concurrent_consolidate, index_config.pq_dist_build,
             index_config.num_pq_chunks, index_config.use_opq, index_config.num_frozen_pts)
 {
-    _data_store.reset(std::move(data_store));
+    //_data_store.reset(std::move(data_store));
 }
 
 template <typename T, typename TagT, typename LabelT> Index<T, TagT, LabelT>::~Index()
