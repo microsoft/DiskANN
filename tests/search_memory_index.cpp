@@ -125,11 +125,11 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
         query_result_tags.resize(recall_at * query_num);
     }
 
-    float best_recall = 0.0;
+    double best_recall = 0.0;
 
     for (uint32_t test_id = 0; test_id < Lvec.size(); test_id++)
     {
-        uint64_t L = Lvec[test_id];
+        uint32_t L = Lvec[test_id];
         if (L < recall_at)
         {
             diskann::cout << "Ignoring search with L:" << L << " since it's smaller than K:" << recall_at << std::endl;
@@ -185,28 +185,28 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
             }
             auto qe = std::chrono::high_resolution_clock::now();
             std::chrono::duration<double> diff = qe - qs;
-            latency_stats[i] = diff.count() * 1000000;
+            latency_stats[i] = (float)(diff.count() * 1000000);
         }
         std::chrono::duration<double> diff = std::chrono::high_resolution_clock::now() - s;
 
-        float displayed_qps = static_cast<float>(query_num) / diff.count();
+        double displayed_qps = query_num / diff.count();
 
         if (show_qps_per_thread)
             displayed_qps /= num_threads;
 
-        std::vector<float> recalls;
+        std::vector<double> recalls;
         if (calc_recall_flag)
         {
             recalls.reserve(recalls_to_print);
             for (uint32_t curr_recall = first_recall; curr_recall <= recall_at; curr_recall++)
             {
-                recalls.push_back(diskann::calculate_recall(query_num, gt_ids, gt_dists, gt_dim,
+                recalls.push_back(diskann::calculate_recall((uint32_t)query_num, gt_ids, gt_dists, (uint32_t)gt_dim,
                                                             query_result_ids[test_id].data(), recall_at, curr_recall));
             }
         }
 
         std::sort(latency_stats.begin(), latency_stats.end());
-        float mean_latency =
+        double mean_latency =
             std::accumulate(latency_stats.begin(), latency_stats.end(), 0.0) / static_cast<float>(query_num);
 
         float avg_cmps = (float)std::accumulate(cmp_stats.begin(), cmp_stats.end(), 0) / (float)query_num;
@@ -222,7 +222,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
                       << std::setw(20) << (float)mean_latency << std::setw(15)
                       << (float)latency_stats[(uint64_t)(0.999 * query_num)];
         }
-        for (float recall : recalls)
+        for (double recall : recalls)
         {
             std::cout << std::setw(12) << recall;
             best_recall = std::max(recall, best_recall);

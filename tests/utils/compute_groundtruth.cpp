@@ -70,13 +70,13 @@ inline bool custom_dist(const std::pair<uint32_t, float> &a, const std::pair<uin
     return a.second < b.second;
 }
 
-void compute_l2sq(float *const points_l2sq, const float *const matrix, const int64_t num_points, const int dim)
+void compute_l2sq(float *const points_l2sq, const float *const matrix, const int64_t num_points, const uint64_t dim)
 {
     assert(points_l2sq != NULL);
 #pragma omp parallel for schedule(static, 65536)
     for (int64_t d = 0; d < num_points; ++d)
-        points_l2sq[d] =
-            cblas_sdot(dim, matrix + (ptrdiff_t)d * (ptrdiff_t)dim, 1, matrix + (ptrdiff_t)d * (ptrdiff_t)dim, 1);
+        points_l2sq[d] = cblas_sdot((int64_t)dim, matrix + (ptrdiff_t)d * (ptrdiff_t)dim, 1,
+                                    matrix + (ptrdiff_t)d * (ptrdiff_t)dim, 1);
 }
 
 void distsq_to_points(const size_t dim,
@@ -214,11 +214,11 @@ void exact_knn(const size_t dim, const size_t k,
         {
             maxPQIFCS point_dist;
             for (size_t p = 0; p < k; p++)
-                point_dist.emplace(p, dist_matrix[(ptrdiff_t)p + (ptrdiff_t)(q - q_b) * (ptrdiff_t)npoints]);
+                point_dist.emplace((int32_t)p, dist_matrix[(ptrdiff_t)p + (ptrdiff_t)(q - q_b) * (ptrdiff_t)npoints]);
             for (size_t p = k; p < npoints; p++)
             {
                 if (point_dist.top().second > dist_matrix[(ptrdiff_t)p + (ptrdiff_t)(q - q_b) * (ptrdiff_t)npoints])
-                    point_dist.emplace(p, dist_matrix[(ptrdiff_t)p + (ptrdiff_t)(q - q_b) * (ptrdiff_t)npoints]);
+                    point_dist.emplace((int32_t)p, dist_matrix[(ptrdiff_t)p + (ptrdiff_t)(q - q_b) * (ptrdiff_t)npoints]);
                 if (point_dist.size() > k)
                     point_dist.pop();
             }
@@ -257,7 +257,8 @@ template <typename T> inline int get_num_parts(const char *filename)
     reader.read((char *)&ndims_i32, sizeof(int));
     std::cout << "#pts = " << npts_i32 << ", #dims = " << ndims_i32 << std::endl;
     reader.close();
-    int num_parts = (npts_i32 % PARTSIZE) == 0 ? npts_i32 / PARTSIZE : std::floor(npts_i32 / PARTSIZE) + 1;
+    uint32_t num_parts =
+        (npts_i32 % PARTSIZE) == 0 ? npts_i32 / PARTSIZE : (uint32_t)std::floor(npts_i32 / PARTSIZE) + 1;
     std::cout << "Number of parts: " << num_parts << std::endl;
     return num_parts;
 }
@@ -351,8 +352,7 @@ std::vector<std::vector<std::pair<uint32_t, float>>> processUnfilteredParts(cons
         int *closest_points_part = new int[nqueries * k];
         float *dist_closest_points_part = new float[nqueries * k];
 
-        uint32_t part_k;
-        part_k = k < npoints ? k : npoints;
+        auto part_k = k < npoints ? k : npoints;
         exact_knn(dim, part_k, closest_points_part, dist_closest_points_part, npoints, base_data, nqueries, query_data,
                   metric);
 

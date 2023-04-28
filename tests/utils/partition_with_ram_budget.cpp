@@ -23,7 +23,7 @@ int main(int argc, char **argv)
 
     const std::string data_path(argv[2]);
     const std::string prefix_path(argv[3]);
-    const float sampling_rate = atof(argv[4]);
+    const float sampling_rate = (float)atof(argv[4]);
     const double ram_budget = (double)std::atof(argv[5]);
     const size_t graph_degree = (size_t)std::atoi(argv[6]);
     const size_t k_index = (size_t)std::atoi(argv[7]);

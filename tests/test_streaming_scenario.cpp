@@ -91,7 +91,7 @@ void insert_next_batch(diskann::Index<T, TagT, LabelT> &index, size_t start, siz
         std::cout << std::endl << "Inserting from " << start << " to " << end << std::endl;
 
         size_t num_failed = 0;
-#pragma omp parallel for num_threads(insert_threads) schedule(dynamic) reduction(+ : num_failed)
+#pragma omp parallel for num_threads((int32_t)insert_threads) schedule(dynamic) reduction(+ : num_failed)
         for (int64_t j = start; j < (int64_t)end; j++)
         {
             if (index.insert_point(&data[(j - start) * aligned_dim], 1 + static_cast<TagT>(j)) != 0)
@@ -121,7 +121,7 @@ void delete_and_consolidate(diskann::Index<T, TagT, LabelT> &index, diskann::Ind
     {
         std::cout << std::endl << "Lazy deleting points " << start << " to " << end << "... ";
         for (size_t i = start; i < end; ++i)
-            index.lazy_delete(1 + i);
+            index.lazy_delete(static_cast<TagT>(1 + i));
         std::cout << "lazy delete done." << std::endl;
 
         auto report = index.consolidate_deletes(delete_params);

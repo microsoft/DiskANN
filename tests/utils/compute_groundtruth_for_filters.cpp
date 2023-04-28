@@ -71,13 +71,13 @@ inline bool custom_dist(const std::pair<uint32_t, float> &a, const std::pair<uin
     return a.second < b.second;
 }
 
-void compute_l2sq(float *const points_l2sq, const float *const matrix, const int64_t num_points, const int dim)
+void compute_l2sq(float *const points_l2sq, const float *const matrix, const int64_t num_points, const uint64_t dim)
 {
     assert(points_l2sq != NULL);
 #pragma omp parallel for schedule(static, 65536)
     for (int64_t d = 0; d < num_points; ++d)
-        points_l2sq[d] =
-            cblas_sdot(dim, matrix + (ptrdiff_t)d * (ptrdiff_t)dim, 1, matrix + (ptrdiff_t)d * (ptrdiff_t)dim, 1);
+        points_l2sq[d] = cblas_sdot((int64_t)dim, matrix + (ptrdiff_t)d * (ptrdiff_t)dim, 1,
+                                    matrix + (ptrdiff_t)d * (ptrdiff_t)dim, 1);
 }
 
 void distsq_to_points(const size_t dim,
@@ -215,11 +215,11 @@ void exact_knn(const size_t dim, const size_t k,
         {
             maxPQIFCS point_dist;
             for (uint64_t p = 0; p < k; p++)
-                point_dist.emplace(p, dist_matrix[(ptrdiff_t)p + (ptrdiff_t)(q - q_b) * (ptrdiff_t)npoints]);
+                point_dist.emplace((int32_t)p, dist_matrix[(ptrdiff_t)p + (ptrdiff_t)(q - q_b) * (ptrdiff_t)npoints]);
             for (size_t p = k; p < npoints; p++)
             {
                 if (point_dist.top().second > dist_matrix[(ptrdiff_t)p + (ptrdiff_t)(q - q_b) * (ptrdiff_t)npoints])
-                    point_dist.emplace(p, dist_matrix[(ptrdiff_t)p + (ptrdiff_t)(q - q_b) * (ptrdiff_t)npoints]);
+                    point_dist.emplace((int32_t)p, dist_matrix[(ptrdiff_t)p + (ptrdiff_t)(q - q_b) * (ptrdiff_t)npoints]);
                 if (point_dist.size() > k)
                     point_dist.pop();
             }
@@ -258,7 +258,7 @@ template <typename T> inline int get_num_parts(const char *filename)
     reader.read((char *)&ndims_i32, sizeof(int));
     std::cout << "#pts = " << npts_i32 << ", #dims = " << ndims_i32 << std::endl;
     reader.close();
-    int num_parts = (npts_i32 % PARTSIZE) == 0 ? npts_i32 / PARTSIZE : std::floor(npts_i32 / PARTSIZE) + 1;
+    int num_parts = (npts_i32 % PARTSIZE) == 0 ? npts_i32 / PARTSIZE : (uint32_t)std::floor(npts_i32 / PARTSIZE) + 1;
     std::cout << "Number of parts: " << num_parts << std::endl;
     return num_parts;
 }
@@ -445,8 +445,7 @@ std::vector<std::vector<std::pair<uint32_t, float>>> processUnfilteredParts(cons
         int *closest_points_part = new int[nqueries * k];
         float *dist_closest_points_part = new float[nqueries * k];
 
-        uint32_t part_k;
-        part_k = k < npoints ? k : npoints;
+        auto part_k = k < npoints ? k : npoints;
         exact_knn(dim, part_k, closest_points_part, dist_closest_points_part, npoints, base_data, nqueries, query_data,
                   metric);
 
@@ -496,8 +495,7 @@ std::vector<std::vector<std::pair<uint32_t, float>>> processFilteredParts(
         int *closest_points_part = new int[nqueries * k];
         float *dist_closest_points_part = new float[nqueries * k];
 
-        uint32_t part_k;
-        part_k = k < npoints_filt ? k : npoints_filt;
+        auto part_k = k < npoints_filt ? k : npoints_filt;
         if (npoints_filt > 0)
         {
             exact_knn(dim, part_k, closest_points_part, dist_closest_points_part, npoints_filt, base_data, nqueries,
@@ -530,9 +528,8 @@ int aux_main(const std::string &base_file, const std::string &label_file, const 
              const std::string &gt_file, size_t k, const std::string &universal_label, const diskann::Metric &metric,
              const std::string &filter_label, const std::string &tags_file = std::string(""))
 {
-    size_t npoints, nqueries, dim, npoints_filt;
+    size_t npoints, nqueries, dim;
 
-    float *base_data;
     float *query_data;
 
     load_bin_as_float<T>(query_file.c_str(), query_data, nqueries, dim, 0);
@@ -877,13 +874,13 @@ int main(int argc, char **argv)
         std::vector<std::vector<int32_t>> final_gt_ids;
         std::vector<std::vector<float>> final_gt_dists;
 
-        int query_num = 0;
+        uint32_t query_num = 0;
         for (const auto &lbl : all_labels)
         {
             query_num += labels_to_number_of_queries[lbl];
         }
 
-        for (int i = 0; i < query_num; i++)
+        for (uint32_t i = 0; i < query_num; i++)
         {
             final_gt_ids.push_back(std::vector<int32_t>(K));
             final_gt_dists.push_back(std::vector<float>(K));
@@ -894,9 +891,9 @@ int main(int argc, char **argv)
             std::string filtered_gt_file = gt_file + "_" + lbl;
             load_truthset(filtered_gt_file, gt_ids, gt_dists, gt_num, gt_dim);
 
-            for (int i = 0; i < labels_to_number_of_queries[lbl]; i++)
+            for (uint32_t i = 0; i < labels_to_number_of_queries[lbl]; i++)
             {
-                int orig_query_id = label_query_id_to_orig_id[lbl][i];
+                uint32_t orig_query_id = label_query_id_to_orig_id[lbl][i];
                 for (uint64_t j = 0; j < K; j++)
                 {
                     final_gt_ids[orig_query_id][j] = label_id_to_orig_id[lbl][gt_ids[i * K + j]];
@@ -908,9 +905,9 @@ int main(int argc, char **argv)
         int32_t *closest_points = new int32_t[query_num * K];
         float *dist_closest_points = new float[query_num * K];
 
-        for (int i = 0; i < query_num; i++)
+        for (uint32_t i = 0; i < query_num; i++)
         {
-            for (int j = 0; j < K; j++)
+            for (uint32_t j = 0; j < K; j++)
             {
                 closest_points[i * K + j] = final_gt_ids[i][j];
                 dist_closest_points[i * K + j] = final_gt_dists[i][j];
