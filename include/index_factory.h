@@ -1,6 +1,5 @@
 #include "index.h"
 #include "abstract_graph_store.h"
-#include "common_includes.h"
 #include "in_mem_graph_store.h"
 
 namespace diskann
