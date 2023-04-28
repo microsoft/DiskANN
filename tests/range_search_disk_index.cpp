@@ -233,7 +233,8 @@ int search_disk_index(diskann::Metric &metric, const std::string &index_path_pre
         double ratio_of_sums = 0;
         if (calc_recall_flag)
         {
-            recall = diskann::calculate_range_search_recall((uint32_t)query_num, groundtruth_ids, query_result_ids[test_id]);
+            recall =
+                diskann::calculate_range_search_recall((uint32_t)query_num, groundtruth_ids, query_result_ids[test_id]);
 
             uint32_t total_true_positive = 0;
             uint32_t total_positive = 0;

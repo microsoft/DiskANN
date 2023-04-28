@@ -219,7 +219,8 @@ void exact_knn(const size_t dim, const size_t k,
             for (size_t p = k; p < npoints; p++)
             {
                 if (point_dist.top().second > dist_matrix[(ptrdiff_t)p + (ptrdiff_t)(q - q_b) * (ptrdiff_t)npoints])
-                    point_dist.emplace((int32_t)p, dist_matrix[(ptrdiff_t)p + (ptrdiff_t)(q - q_b) * (ptrdiff_t)npoints]);
+                    point_dist.emplace((int32_t)p,
+                                       dist_matrix[(ptrdiff_t)p + (ptrdiff_t)(q - q_b) * (ptrdiff_t)npoints]);
                 if (point_dist.size() > k)
                     point_dist.pop();
             }
