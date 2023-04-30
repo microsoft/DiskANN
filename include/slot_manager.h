@@ -14,9 +14,14 @@ template <typename tag_t> class SlotManager : AbstractSlotManager<tag_t>
   public:
     SlotManager(const location_t capacity);
     virtual location_t capacity() const override;
-    virtual location_t size() const override;
+    virtual location_t number_of_used_locations() const override;
 
-    virtual void load(const std::string &filename) override;
+    virtual void reposition_frozen_point(const location_t new_loc) override;
+    virtual location_t get_frozen_point_location() const override;
+
+
+
+    virtual location_t load(const std::string &filename) override;
     virtual size_t save(const std::string &filename) override;
 
     virtual location_t resize(const location_t new_num_points) override;

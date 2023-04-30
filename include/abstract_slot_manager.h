@@ -16,10 +16,18 @@ namespace diskann
          TagDoesNotExist = -3
 
       };
-      virtual ~AbstractSlotManager() = default;
-      virtual location_t capacity() const = 0;
-      virtual location_t size() const = 0;
 
+      virtual ~AbstractSlotManager() = default;
+
+      virtual location_t capacity() const = 0;
+      virtual location_t number_of_frozen_points() const = 0;
+      virtual location_t number_of_used_locations() const = 0;
+      virtual location_t number_of_deleted_points() const = 0;
+      virtual location_t number_of_available_slots() const = 0;
+
+      virtual void reposition_frozen_point(const location_t new_loc) = 0;
+      virtual location_t get_frozen_point_location() const = 0;
+      
       //Returns the number of tags loaded from the file.
       virtual location_t load(const std::string& filename) = 0;
 

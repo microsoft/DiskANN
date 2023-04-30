@@ -12,7 +12,7 @@ template <typename tag_t> location_t SlotManager<tag_t>::capacity() const
 {
     return _capacity;
 }
-template <typename tag_t> location_t SlotManager<tag_t>::size() const
+template <typename tag_t> location_t SlotManager<tag_t>::number_of_used_locations() const
 {
     return _tags_to_location.size();
 }
@@ -23,7 +23,16 @@ template <typename tag_t> location_t SlotManager<tag_t>::load(const std::string 
     //Any point that is present in tags file but is also in the delete set will be discarded.
     load_delete_set(filename);
     load_tags(filename);
+    _capacity = _tags_to_location.size();
     return _tags_to_location.size(); 
+}
+
+template <typename tag_t>
+size_t SlotManager<tag_t>::save(const std::string& filename)
+{
+    size_t bytes_written = save_tags(filename);
+    bytes_written += save_delete_set(filename);
+    return bytes_written;
 }
 
 template <typename tag_t> void SlotManager<tag_t>::load_tags(const std::string &tag_filename)
@@ -31,8 +40,10 @@ template <typename tag_t> void SlotManager<tag_t>::load_tags(const std::string &
     // REFACTOR: This had _enable_tags in an AND condition earlier.
     if (!file_exists(tag_filename))
     {
-        diskann::cerr << "Tag file " << tag_filename << " does not exist !" << std::endl;
-        throw diskann::ANNException("Tag file provided does not exist!", -1, __FUNCSIG__, __FILE__, __LINE__);
+        std::stringstream ss;
+        ss << "Tag file " << tag_filename << " does not exist !" << std::endl;
+        diskann::cerr << ss.str() << std::endl;
+        throw diskann::ANNException(ss.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
     }
 
     // REFACTOR
@@ -159,11 +170,26 @@ template <typename tag_t> void SlotManager<tag_t>::save_delete_set(const std::st
     return save_bin<uint32_t>(filename, delete_list.get(), _delete_set->size(), 1);
 }
 
-template <typename tag_t> location_t SlotManager<tag_t>::resize(const location_t new_num_points);
+template <typename tag_t> location_t SlotManager<tag_t>::resize(const location_t new_num_points)
+{
+    if (new_num_points > _tag_to_location.size())
+    {
+        _location_to_tag.reserve(new_num_points);
+        _tag_to_location.reserve(new_num_points);
+    }
+    //REFACTOR TODO: It is not clear if we should support shrink as well, but currently, we will not.
+    return _tag_to_location.size();
+}
+   
+template <typename tag_t> location_t SlotManager<tag_t>::get_location_for_tag(const tag_t &tag)
+{
+  return _tag_to_location[tag];
+}
 
-template <typename tag_t> location_t SlotManager<tag_t>::get_location_for_tag(const tag_t &tag);
-
-template <typename tag_t> tag_t SlotManager<tag_t>::get_tag_at_location(location_t slot);
+template <typename tag_t> tag_t SlotManager<tag_t>::get_tag_at_location(location_t slot)
+{
+  return _location_to_tag[slot];
+}
 // Add a new tag into the slot manager. If the tag was added successfully,
 // it fills the location of the tag in the "location" argument and returns
 // Success. If the tag already exists, it returns TagAlreadyExists and if
