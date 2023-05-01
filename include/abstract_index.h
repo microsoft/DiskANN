@@ -85,16 +85,12 @@ class IndexBuildParamsBuilder
 
     IndexBuildParamsBuilder &with_label_file(std::string &label_file)
     {
-        if (!file_exists(label_file))
-            throw ANNException("Error: label_file " + label_file + " does not exist.", -1);
         this->label_file = label_file;
         return *this;
     }
 
     IndexBuildParamsBuilder &with_universal_label(std::string &univeral_label)
     {
-        if (univeral_label.empty() || universal_label == "")
-            throw ANNException("Error: universal label" + univeral_label + " is empty", -1);
         this->universal_label = univeral_label;
         return *this;
     }
