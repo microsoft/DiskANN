@@ -1838,7 +1838,7 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
             this->set_universal_label(unv_label_as_num);
             _universal_label_raw = build_params.universal_label;
         }
-        this->build_filtered_index(build_params.data_file.c_str(), build_params.label_file, points_to_load,
+        this->build_filtered_index(build_params.data_file.c_str(), labels_file_to_use, points_to_load,
                                    build_params.index_write_params);
     }
     std::chrono::duration<double> diff = std::chrono::high_resolution_clock::now() - s;
