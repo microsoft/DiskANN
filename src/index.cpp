@@ -1817,8 +1817,8 @@ void Index<T, TagT, LabelT>::build(const char *filename, const size_t num_points
 
 template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT>::build(IndexBuildParams &build_params)
 {
-    std::string labels_file_to_use = build_params.save_path + "_label_formatted.txt";
-    std::string mem_labels_int_map_file = build_params.save_path + "_labels_map.txt";
+    std::string labels_file_to_use = build_params.save_path_prefix + "_label_formatted.txt";
+    std::string mem_labels_int_map_file = build_params.save_path_prefix + "_labels_map.txt";
 
     size_t points_to_load = build_params.num_points_to_load == 0 ? _max_points : build_params.num_points_to_load;
 
@@ -1838,7 +1838,7 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
             this->set_universal_label(unv_label_as_num);
             _universal_label_raw = build_params.universal_label;
         }
-        this->build_filtered_index(build_params.data_file.c_str(), labels_file_to_use, points_to_load,
+        this->build_filtered_index(build_params.data_file.c_str(), build_params.label_file, points_to_load,
                                    build_params.index_write_params);
     }
     std::chrono::duration<double> diff = std::chrono::high_resolution_clock::now() - s;
@@ -1946,10 +1946,11 @@ void Index<T, TagT, LabelT>::build_filtered_index(const char *filename, const st
                                                   const size_t num_points_to_load, IndexWriteParameters &parameters,
                                                   const std::vector<TagT> &tags)
 {
-    _labels_file = label_file;
+    _labels_file = label_file; // original label file
     _filtered_index = true;
     _label_to_medoid_id.clear();
     size_t num_points_labels = 0;
+
     parse_label_file(label_file,
                      num_points_labels); // determines medoid for each label and identifies
                                          // the points to label mapping

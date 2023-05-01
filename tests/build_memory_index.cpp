@@ -160,7 +160,6 @@ int main(int argc, char **argv)
         // with refactored code
         diskann::IndexConfig config;
         config.metric = metric;
-        config.filtered_build = label_file == "" ? false : true;
         config.data_load_store_stratagy = diskann::MEMORY;
         config.graph_load_store_stratagy = diskann::MEMORY;
         config.data_type = data_type;
@@ -175,11 +174,12 @@ int main(int argc, char **argv)
                                                   .with_num_threads(num_threads)
                                                   .build();
 
-        diskann::IndexBuildParams build_params(paras);
-        build_params.universal_label = universal_label;
-        build_params.label_file = label_file;
-        build_params.data_file = data_path;
-        build_params.save_path = index_path_prefix;
+        auto build_params = diskann::IndexBuildParamsBuilder(paras)
+                                .with_universal_label(universal_label)
+                                .with_label_file(label_file)
+                                .with_data_file(data_path)
+                                .with_save_path_prefix(index_path_prefix)
+                                .build();
 
         auto index_factory = diskann::IndexFactory(config);
         auto index = index_factory.instance();
