@@ -99,8 +99,7 @@ class IndexWriteParametersBuilder
     IndexWriteParameters build() const
     {
         return IndexWriteParameters(_search_list_size, _max_degree, _saturate_graph, _max_occlusion_size, _alpha,
-                                    _num_threads, _filter_list_size, _num_frozen_points,
-                                    _universal_label_exists);
+                                    _num_threads, _filter_list_size, _num_frozen_points, _universal_label_exists);
     }
 
     IndexWriteParametersBuilder(const IndexWriteParameters &wp)
@@ -122,7 +121,7 @@ class IndexWriteParametersBuilder
     uint32_t _num_threads{defaults::NUM_THREADS};
     uint32_t _filter_list_size{defaults::FILTER_LIST_SIZE};
     uint32_t _num_frozen_points{defaults::NUM_FROZEN_POINTS_STATIC};
-    bool _universal_label_exists{ defaults::UNIVERSAL_LABEL_EXISTS };
+    bool _universal_label_exists{defaults::UNIVERSAL_LABEL_EXISTS};
 };
 
 } // namespace diskann

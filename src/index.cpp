@@ -2090,7 +2090,7 @@ std::unique_ptr<ANNReturnCode> Index<T, TagT, LabelT>::search_with_filters(const
     // memcpy(aligned_query, query, _dim * sizeof(T));
     _distance->preprocess_query(query, _data_store->get_dims(), scratch->aligned_query());
 
-    auto retval = iterate_to_fixed_point(aligned_query, L, init_ids, scratch, true, filter_vec, true);
+    auto retval = iterate_to_fixed_point(scratch->aligned_query(), L, init_ids, scratch, true, filter_vec, true);
     if (stats != nullptr)
     {
         stats->n_hops = retval.first;
