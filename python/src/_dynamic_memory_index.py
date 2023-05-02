@@ -1,7 +1,6 @@
 # Copyright (c) Microsoft Corporation. All rights reserved.
 # Licensed under the MIT license.
 
-import os
 import warnings
 from typing import Literal, Tuple
 
@@ -9,13 +8,19 @@ import numpy as np
 
 from . import _diskannpy as _native_dap
 from ._common import (
+    QueryResponse,
+    QueryResponseBatch,
     VectorDType,
+    VectorIdentifier,
+    VectorIdentifierBatch,
+    VectorLike,
+    VectorLikeBatch,
     _assert,
     _assert_2d,
     _assert_dtype,
-    _assert_existing_directory,
     _assert_is_nonnegative_uint32,
     _assert_is_positive_uint32,
+    _castable_dtype_or_raise,
     _get_valid_metric,
 )
 from ._diskannpy import defaults
@@ -26,7 +31,7 @@ __ALL__ = ["DynamicMemoryIndex"]
 class DynamicMemoryIndex:
     def __init__(
         self,
-        metric: Literal["l2", "mips"],
+        metric: Literal["l2", "mips", "cosine"],
         vector_dtype: VectorDType,
         dim: int,
         max_points: int,
@@ -91,7 +96,7 @@ class DynamicMemoryIndex:
         :type concurrent_consolidation: bool
         """
         dap_metric = _get_valid_metric(metric)
-        _assert_dtype(vector_dtype, "vector_dtype")
+        _assert_dtype(vector_dtype)
         self._vector_dtype = vector_dtype
 
         _assert_is_positive_uint32(dim, "dim")
@@ -137,15 +142,15 @@ class DynamicMemoryIndex:
         )
 
     def search(
-        self, query: np.ndarray, k_neighbors: int, complexity: int
-    ) -> Tuple[np.ndarray, np.ndarray]:
+        self, query: VectorLike, k_neighbors: int, complexity: int
+    ) -> QueryResponse:
         """
         Searches the disk index by a single query vector in a 1d numpy array.
 
         numpy array dtype must match index.
 
         :param query: 1d numpy array of the same dimensionality and dtype of the index.
-        :type query: numpy.ndarray
+        :type query: VectorLike
         :param k_neighbors: Number of neighbors to be returned. If query vector exists in index, it almost definitely
             will be returned as well, so adjust your ``k_neighbors`` as appropriate. (> 0)
         :type k_neighbors: int
@@ -155,12 +160,12 @@ class DynamicMemoryIndex:
         :return: Returns a tuple of 1-d numpy ndarrays; the first including the indices of the approximate nearest
             neighbors, the second their distances. These are aligned arrays.
         """
-        _assert(len(query.shape) == 1, "query vector must be 1-d")
-        _assert(
-            query.dtype == self._vector_dtype,
-            f"DynamicMemoryIndex was built expecting a dtype of {self._vector_dtype}, but the query vector is of dtype "
-            f"{query.dtype}",
+        _query = _castable_dtype_or_raise(
+            query,
+            expected=self._vector_dtype,
+            message=f"StaticMemoryIndex expected a query vector of dtype of {self._vector_dtype}"
         )
+        _assert(len(_query.shape) == 1, "query vector must be 1-d")
         _assert_is_positive_uint32(k_neighbors, "k_neighbors")
         _assert_is_nonnegative_uint32(complexity, "complexity")
 
@@ -169,11 +174,11 @@ class DynamicMemoryIndex:
                 f"k_neighbors={k_neighbors} asked for, but list_size={complexity} was smaller. Increasing {complexity} to {k_neighbors}"
             )
             complexity = k_neighbors
-        return self._index.search(query=query, knn=k_neighbors, complexity=complexity)
+        return self._index.search(query=_query, knn=k_neighbors, complexity=complexity)
 
     def batch_search(
-        self, queries: np.ndarray, k_neighbors: int, complexity: int, num_threads: int
-    ) -> Tuple[np.ndarray, np.ndarray]:
+        self, queries: VectorLikeBatch, k_neighbors: int, complexity: int, num_threads: int
+    ) -> QueryResponseBatch:
         """
         Searches the disk index for many query vectors in a 2d numpy array.
 
@@ -183,7 +188,7 @@ class DynamicMemoryIndex:
 
         :param queries: 2d numpy array, with column dimensionality matching the index and row dimensionality being the
             number of queries intended to search for in parallel. Dtype must match dtype of the index.
-        :type queries: numpy.ndarray
+        :type queries: VectorLike
         :param k_neighbors: Number of neighbors to be returned. If query vector exists in index, it almost definitely
             will be returned as well, so adjust your ``k_neighbors`` as appropriate. (> 0)
         :type k_neighbors: int
@@ -197,12 +202,9 @@ class DynamicMemoryIndex:
             contains the distances, of the same form: row index will match query index, column index refers to
             1..k_neighbors distance. These are aligned arrays.
         """
-        _assert_2d(queries, "queries")
-        _assert(
-            queries.dtype == self._vector_dtype,
-            f"StaticMemoryIndex was built expecting a dtype of {self._vector_dtype}, but the query vectors are of dtype "
-            f"{queries.dtype}",
-        )
+        _query = _castable_dtype_or_raise(queries, expected=self._vector_dtype, message=f"DynamicMemoryIndex expected a query vector of dtype of {self._vector_dtype}")
+        _assert_2d(_query, "queries")
+
         _assert_is_positive_uint32(k_neighbors, "k_neighbors")
         _assert_is_positive_uint32(complexity, "complexity")
         _assert_is_nonnegative_uint32(num_threads, "num_threads")
@@ -215,7 +217,7 @@ class DynamicMemoryIndex:
 
         num_queries, dim = queries.shape
         return self._index.batch_search(
-            queries=queries,
+            queries=_query,
             num_queries=num_queries,
             knn=k_neighbors,
             complexity=complexity,
@@ -235,24 +237,20 @@ class DynamicMemoryIndex:
             )
         self._index.save(save_path=save_path, compact_before_save=compact_before_save)
 
-    def insert(self, vector: np.ndarray, vector_id: int):
+    def insert(self, vector: VectorLike, vector_id: VectorIdentifier):
         """
         Inserts a single vector into the index with the provided vector_id.
         :param vector: The vector to insert. Note that dtype must match.
-        :type vector: np.ndarray
+        :type vector: VectorLike
         :param vector_id: The vector_id to use for this vector. 
         """
+        _vector = _castable_dtype_or_raise(vector, expected=self._vector_dtype, message=f"DynamicMemoryIndex expected a query vector of dtype of {self._vector_dtype}")
         _assert(len(vector.shape) == 1, "insert vector must be 1-d")
-        _assert(
-            vector.dtype == self._vector_dtype,
-            f"DynamicMemoryIndex was built expecting a dtype of {self._vector_dtype}, but the insert vector is of dtype "
-            f"{vector.dtype}",
-        )
         _assert_is_positive_uint32(vector_id, "vector_id")
-        return self._index.insert(vector, vector_id)
+        return self._index.insert(_vector, np.uintc(vector_id))
 
     def batch_insert(
-        self, vectors: np.ndarray, vector_ids: np.ndarray, num_threads: int = 0
+        self, vectors: VectorLikeBatch, vector_ids: VectorIdentifierBatch, num_threads: int = 0
     ):
         """
         :param vectors: The 2d numpy array of vectors to insert.
@@ -263,21 +261,19 @@ class DynamicMemoryIndex:
         :param num_threads: Number of threads to use when inserting into this index. (>= 0), 0 = num_threads in system
         :type num_threads: int
         """
+        _query = _castable_dtype_or_raise(vectors, expected=self._vector_dtype, message=f"DynamicMemoryIndex expected a query vector of dtype of {self._vector_dtype}")
         _assert(len(vectors.shape) == 2, "vectors must be a 2-d array")
         _assert(
-            vectors.dtype == self._vector_dtype,
-            f"DynamicMemoryIndex was built expecting a dtype of {self._vector_dtype}, but the insert vector is of dtype "
-            f"{vectors.dtype}",
+            vectors.shape[0] == vector_ids.shape[0], "Number of vectors must be equal to number of ids"
         )
-        _assert(
-            vectors.shape[0] == vector_ids.shape[0], "#vectors must be equal to #ids"
-        )
-        _assert(vector_ids.dtype == np.uintc, "vector_ids must have a dtype of np.uintc (32 bit, unsigned integer)")
+        _vectors = vectors.astype(dtype=self._vector_dtype, casting="safe", copy=False)
+        _vector_ids = vector_ids.astype(dtype=np.uintc, casting="safe", copy=False)
+
         return self._index.batch_insert(
-            vectors, vector_ids, vector_ids.shape[0], num_threads
+            _vectors, _vector_ids, _vector_ids.shape[0], num_threads
         )
 
-    def mark_deleted(self, vector_id: int):
+    def mark_deleted(self, vector_id: VectorIdentifier):
         """
         Mark vector for deletion. This is a soft delete that won't return the vector id in any results, but does not
         remove it from the underlying index files or memory structure. To execute a hard delete, call this method and
@@ -286,7 +282,7 @@ class DynamicMemoryIndex:
         :type vector_id: int
         """
         _assert_is_positive_uint32(vector_id, "vector_id")
-        self._index.mark_deleted(vector_id)
+        self._index.mark_deleted(np.uintc(vector_id))
 
     def consolidate_delete(self):
         """

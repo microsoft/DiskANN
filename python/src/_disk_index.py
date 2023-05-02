@@ -10,12 +10,17 @@ import numpy as np
 
 from . import _diskannpy as _native_dap
 from ._common import (
+    QueryResponse,
+    QueryResponseBatch,
     VectorDType,
+    VectorLike,
+    VectorLikeBatch,
     _assert,
     _assert_2d,
     _assert_dtype,
     _assert_is_nonnegative_uint32,
     _assert_is_positive_uint32,
+    _castable_dtype_or_raise,
     _get_valid_metric,
 )
 
@@ -25,7 +30,7 @@ __ALL__ = ["DiskIndex"]
 class DiskIndex:
     def __init__(
         self,
-        metric: Literal["l2", "mips"],
+        metric: Literal["l2", "mips", "cosine"],
         vector_dtype: VectorDType,
         index_directory: str,
         num_threads: int,
@@ -59,7 +64,7 @@ class DiskIndex:
         :raises ValueError: If num_threads or num_nodes_to_cache is an invalid range.
         """
         dap_metric = _get_valid_metric(metric)
-        _assert_dtype(vector_dtype, "vector_dtype")
+        _assert_dtype(vector_dtype)
         _assert_is_nonnegative_uint32(num_threads, "num_threads")
         _assert_is_nonnegative_uint32(num_nodes_to_cache, "num_nodes_to_cache")
         index_path = Path(index_directory)
@@ -84,8 +89,8 @@ class DiskIndex:
         )
 
     def search(
-        self, query: np.ndarray, k_neighbors: int, complexity: int, beam_width: int = 2
-    ) -> Tuple[np.ndarray, np.ndarray]:
+        self, query: VectorLike, k_neighbors: int, complexity: int, beam_width: int = 2
+    ) -> QueryResponse:
         """
         Searches the disk index by a single query vector in a 1d numpy array.
 
@@ -109,20 +114,24 @@ class DiskIndex:
         :return: Returns a tuple of 1-d numpy ndarrays; the first including the indices of the approximate nearest
             neighbors, the second their distances. These are aligned arrays.
         """
-        _assert(len(query.shape) == 1, "query vector must be 1-d")
-        _assert_dtype(query.dtype, "query.dtype")
+        _query = _castable_dtype_or_raise(
+            query,
+            expected=self._vector_dtype,
+            message=f"DiskIndex expected a query vector of dtype of {self._vector_dtype}"
+        )
+        _assert(len(_query.shape) == 1, "query vector must be 1-d")
         _assert_is_positive_uint32(k_neighbors, "k_neighbors")
         _assert_is_positive_uint32(complexity, "complexity")
         _assert_is_positive_uint32(beam_width, "beam_width")
 
         if k_neighbors > complexity:
             warnings.warn(
-                f"k_neighbors={k_neighbors} asked for, but list_size={complexity} was smaller. Increasing {complexity} to {k_neighbors}"
+                f"{k_neighbors=} asked for, but {complexity=} was smaller. Increasing {complexity} to {k_neighbors}"
             )
             complexity = k_neighbors
 
         return self._index.search(
-            query=query,
+            query=_query,
             knn=k_neighbors,
             complexity=complexity,
             beam_width=beam_width,
@@ -130,12 +139,12 @@ class DiskIndex:
 
     def batch_search(
         self,
-        queries: np.ndarray,
+        queries: VectorLikeBatch,
         k_neighbors: int,
         complexity: int,
         num_threads: int,
         beam_width: int = 2,
-    ) -> Tuple[np.ndarray, np.ndarray]:
+    ) -> QueryResponseBatch:
         """
         Searches the disk index for many query vectors in a 2d numpy array.
 
@@ -166,12 +175,12 @@ class DiskIndex:
             contains the distances, of the same form: row index will match query index, column index refers to
             1..k_neighbors distance. These are aligned arrays.
         """
-        _assert_2d(queries, "queries")
-        _assert(
-            queries.dtype == self._vector_dtype,
-            f"DiskIndex was built expecting a dtype of {self._vector_dtype}, but the query vectors are of dtype "
-            f"{queries.dtype}",
+        _queries = _castable_dtype_or_raise(
+            queries,
+            expected=self._vector_dtype,
+            message=f"DiskIndex expected a query vector of dtype of {self._vector_dtype}"
         )
+        _assert_2d(_queries, "queries")
         _assert_is_positive_uint32(k_neighbors, "k_neighbors")
         _assert_is_positive_uint32(complexity, "complexity")
         _assert_is_nonnegative_uint32(num_threads, "num_threads")
@@ -179,13 +188,13 @@ class DiskIndex:
 
         if k_neighbors > complexity:
             warnings.warn(
-                f"k_neighbors={k_neighbors} asked for, but list_size={complexity} was smaller. Increasing {complexity} to {k_neighbors}"
+                f"{k_neighbors=} asked for, but {complexity=} was smaller. Increasing {complexity} to {k_neighbors}"
             )
             complexity = k_neighbors
 
-        num_queries, dim = queries.shape
+        num_queries, dim = _queries.shape
         return self._index.batch_search(
-            queries=queries,
+            queries=_queries,
             num_queries=num_queries,
             knn=k_neighbors,
             complexity=complexity,

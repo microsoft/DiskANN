@@ -162,7 +162,7 @@ class TestStaticMemoryIndex(unittest.TestCase):
                 )
         ann_dir = self._example_ann_dir
         vector_bin_file = self._test_matrix[0][5]
-        invalid = [np.double, np.float64, np.ulonglong, np.float16]
+        invalid = [np.double, np.float64, np.ulonglong]
         for invalid_vector_dtype in invalid:
             with self.subTest():
                 with self.assertRaises(ValueError):

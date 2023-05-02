@@ -24,7 +24,7 @@ def build_random_vectors_and_memory_index(
 
     if with_tags:
         rng = np.random.default_rng(seed)
-        tags = np.arange(start=1, stop=10001, dtype=np.uint32)
+        tags = np.arange(start=1, stop=10001, dtype=np.uintc)
         rng.shuffle(tags)
     else:
         tags = None

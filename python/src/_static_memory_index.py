@@ -3,20 +3,25 @@
 
 import os
 import warnings
-from typing import Literal, Tuple
+from typing import Literal
 
 import numpy as np
 
 from . import _diskannpy as _native_dap
 from ._common import (
-    _VALID_DTYPES,
+    QueryResponse,
+    QueryResponseBatch,
     VectorDType,
+    VectorLike,
+    VectorLikeBatch,
     _assert,
-    _assert_is_nonnegative_uint32,
-    _assert_is_positive_uint32,
-    _get_valid_metric,
+    _assert_dtype,
     _assert_existing_directory,
     _assert_existing_file,
+    _assert_is_nonnegative_uint32,
+    _assert_is_positive_uint32,
+    _castable_dtype_or_raise,
+    _get_valid_metric,
 )
 
 __ALL__ = ["StaticMemoryIndex"]
@@ -25,7 +30,7 @@ __ALL__ = ["StaticMemoryIndex"]
 class StaticMemoryIndex:
     def __init__(
         self,
-        metric: Literal["l2", "mips"],
+        metric: Literal["l2", "mips", "cosine"],
         vector_dtype: VectorDType,
         data_path: str,
         index_directory: str,
@@ -58,10 +63,7 @@ class StaticMemoryIndex:
         :type index_prefix: str
         """
         dap_metric = _get_valid_metric(metric)
-        _assert(
-            vector_dtype in _VALID_DTYPES,
-            f"vector_dtype {vector_dtype} is not in list of valid dtypes supported: {_VALID_DTYPES}",
-        )
+        _assert_dtype(vector_dtype)
         _assert_is_nonnegative_uint32(num_threads, "num_threads")
         _assert_is_positive_uint32(
             initial_search_complexity, "initial_search_complexity"
@@ -86,7 +88,7 @@ class StaticMemoryIndex:
             initial_search_complexity=initial_search_complexity,
         )
 
-    def search(self, query: np.ndarray, k_neighbors: int, complexity: int):
+    def search(self, query: VectorLike, k_neighbors: int, complexity: int) -> QueryResponse:
         """
         Searches the static in memory index by a single query vector in a 1d numpy array.
 
@@ -110,12 +112,12 @@ class StaticMemoryIndex:
         :return: Returns a tuple of 1-d numpy ndarrays; the first including the indices of the approximate nearest
             neighbors, the second their distances. These are aligned arrays.
         """
-        _assert(len(query.shape) == 1, "query vector must be 1-d")
-        _assert(
-            query.dtype == self._vector_dtype,
-            f"StaticMemoryIndex was built expecting a dtype of {self._vector_dtype}, but the query vector is of dtype "
-            f"{query.dtype}",
+        _query = _castable_dtype_or_raise(
+            query,
+            expected=self._vector_dtype,
+            message=f"StaticMemoryIndex expected a query vector of dtype of {self._vector_dtype}"
         )
+        _assert(len(_query.shape) == 1, "query vector must be 1-d")
         _assert_is_positive_uint32(k_neighbors, "k_neighbors")
         _assert_is_nonnegative_uint32(complexity, "complexity")
 
@@ -124,11 +126,11 @@ class StaticMemoryIndex:
                 f"k_neighbors={k_neighbors} asked for, but list_size={complexity} was smaller. Increasing {complexity} to {k_neighbors}"
             )
             complexity = k_neighbors
-        return self._index.search(query=query, knn=k_neighbors, complexity=complexity)
+        return self._index.search(query=_query, knn=k_neighbors, complexity=complexity)
 
     def batch_search(
-        self, queries: np.ndarray, k_neighbors: int, complexity: int, num_threads: int
-    ) -> Tuple[np.ndarray, np.ndarray]:
+        self, queries: VectorLikeBatch, k_neighbors: int, complexity: int, num_threads: int
+    ) -> QueryResponseBatch:
         """
         Searches the static, in memory index for many query vectors in a 2d numpy array.
 
@@ -152,12 +154,9 @@ class StaticMemoryIndex:
             contains the distances, of the same form: row index will match query index, column index refers to
             1..k_neighbors distance. These are aligned arrays.
         """
-        _assert(len(queries.shape) == 2, "queries must must be 2-d np array")
-        _assert(
-            queries.dtype == self._vector_dtype,
-            f"StaticMemoryIndex was built expecting a dtype of {self._vector_dtype}, but the query vectors are of dtype "
-            f"{queries.dtype}",
-        )
+
+        _queries = _castable_dtype_or_raise(queries, expected=self._vector_dtype, message=f"StaticMemoryIndex expected a query vector of dtype of {self._vector_dtype}")
+        _assert(len(_queries.shape) == 2, "queries must must be 2-d np array")
         _assert_is_positive_uint32(k_neighbors, "k_neighbors")
         _assert_is_positive_uint32(complexity, "complexity")
         _assert_is_nonnegative_uint32(num_threads, "num_threads")
@@ -168,9 +167,9 @@ class StaticMemoryIndex:
             )
             complexity = k_neighbors
 
-        num_queries, dim = queries.shape
+        num_queries, dim = _queries.shape
         return self._index.batch_search(
-            queries=queries,
+            queries=_queries,
             num_queries=num_queries,
             knn=k_neighbors,
             complexity=complexity,

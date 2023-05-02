@@ -34,6 +34,9 @@ class TestDynamicMemoryIndex(unittest.TestCase):
             build_random_vectors_and_memory_index(np.single, "l2", with_tags=True),
             build_random_vectors_and_memory_index(np.ubyte, "l2", with_tags=True),
             build_random_vectors_and_memory_index(np.byte, "l2", with_tags=True),
+            build_random_vectors_and_memory_index(np.single, "cosine", with_tags=True),
+            build_random_vectors_and_memory_index(np.ubyte, "cosine", with_tags=True),
+            build_random_vectors_and_memory_index(np.byte, "cosine", with_tags=True),
         ]
         cls._example_ann_dir = cls._test_matrix[0][4]
 
@@ -58,7 +61,7 @@ class TestDynamicMemoryIndex(unittest.TestCase):
         ) in self._test_matrix:
             with self.subTest():
                 index = dap.DynamicMemoryIndex(
-                    metric="l2",
+                    metric=metric,
                     vector_dtype=dtype,
                     dim=10,
                     max_points=11_000,
@@ -75,9 +78,9 @@ class TestDynamicMemoryIndex(unittest.TestCase):
                     complexity=5,
                     num_threads=16,
                 )
-                if metric == "l2":
+                if metric == "l2" or metric == "cosine":
                     knn = NearestNeighbors(
-                        n_neighbors=100, algorithm="auto", metric="l2"
+                        n_neighbors=100, algorithm="auto", metric=metric
                     )
                     knn.fit(index_vectors)
                     knn_distances, knn_indices = knn.kneighbors(query_vectors)
@@ -187,10 +190,10 @@ class TestDynamicMemoryIndex(unittest.TestCase):
                     num_threads=16,
                 )
 
-        invalid = [np.double, np.float64, np.ulonglong, np.float16]
+        invalid = [np.double, np.float64, np.ulonglong]
         for invalid_vector_dtype in invalid:
             with self.subTest():
-                with self.assertRaises(ValueError):
+                with self.assertRaises(ValueError, msg=invalid_vector_dtype):
                     dap.DynamicMemoryIndex(
                         metric="l2",
                         vector_dtype=invalid_vector_dtype,

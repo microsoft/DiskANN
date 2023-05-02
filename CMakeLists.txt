@@ -152,7 +152,20 @@ else()
 
     # compile flags and link libraries
     add_compile_options(-m64 -Wl,--no-as-needed)
-    link_libraries(mkl_intel_ilp64 mkl_intel_thread mkl_core iomp5 pthread m dl)
+    if (NOT PYBIND)
+        link_libraries(mkl_intel_ilp64 mkl_intel_thread mkl_core iomp5 pthread m dl)
+    else()
+        link_libraries(
+                /lib/x86_64-linux-gnu/libmkl_intel_ilp64.a
+                /lib/x86_64-linux-gnu/libmkl_intel_thread.a
+                /lib/x86_64-linux-gnu/libmkl_core.a
+                /lib/x86_64-linux-gnu/libmkl_def.so
+                iomp5
+                pthread
+                m
+                dl
+        )
+    endif()
 endif()
 
 add_definitions(-DMKL_ILP64)
@@ -239,11 +252,14 @@ else()
 	set(ENV{TCMALLOC_LARGE_ALLOC_REPORT_THRESHOLD} 500000000000)
     #	set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -g -DDEBUG -O0 -fsanitize=address -fsanitize=leak -fsanitize=undefined")
     set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -g -DDEBUG -Wall -Wextra")
-	set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -Ofast -DNDEBUG -march=native -mtune=native -ftree-vectorize")
-	add_compile_options(-march=native -Wall -fno-builtin-malloc -fno-builtin-calloc -fno-builtin-realloc -fno-builtin-free -fopenmp -fopenmp-simd -funroll-loops -Wfatal-errors -DUSE_AVX2)
-    if (PYBIND)
+    if (NOT PYBIND)
+	    set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -Ofast -DNDEBUG -march=native -mtune=native -ftree-vectorize")
+    else()
+        #-Ofast is super problematic for python.  see: https://moyix.blogspot.com/2022/09/someones-been-messing-with-my-subnormals.html
+        set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -DNDEBUG -march=native -mtune=native -ftree-vectorize")
         add_compile_options(-fPIC)
     endif()
+	add_compile_options(-march=native -Wall -fno-builtin-malloc -fno-builtin-calloc -fno-builtin-realloc -fno-builtin-free -fopenmp -fopenmp-simd -funroll-loops -Wfatal-errors -DUSE_AVX2)
 endif()
 
 add_subdirectory(src)

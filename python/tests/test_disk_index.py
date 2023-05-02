@@ -151,7 +151,7 @@ class TestDiskIndex(unittest.TestCase):
                     num_nodes_to_cache=10,
                 )
         ann_dir = self._example_ann_dir
-        invalid = [np.double, np.float64, np.ulonglong, np.float16]
+        invalid = [np.double, np.float64, np.ulonglong]
         for invalid_vector_dtype in invalid:
             with self.subTest():
                 with self.assertRaises(ValueError):

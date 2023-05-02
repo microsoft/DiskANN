@@ -11,7 +11,7 @@ def numpy_to_diskann_file(vectors: np.ndarray, file_handler: BinaryIO): ...
 @overload
 def build_disk_index(
     data: str,
-    metric: Literal["l2", "mips"],
+    metric: Literal["l2", "mips", "cosine"],
     index_directory: str,
     complexity: int,
     graph_degree: int,
@@ -25,7 +25,7 @@ def build_disk_index(
 @overload
 def build_disk_index(
     data: np.ndarray,
-    metric: Literal["l2", "mips"],
+    metric: Literal["l2", "mips", "cosine"],
     index_directory: str,
     complexity: int,
     graph_degree: int,
@@ -38,7 +38,7 @@ def build_disk_index(
 @overload
 def build_memory_index(
     data: np.ndarray,
-    metric: Literal["l2", "mips"],
+    metric: Literal["l2", "mips", "cosine"],
     index_directory: str,
     complexity: int,
     graph_degree: int,
@@ -55,7 +55,7 @@ def build_memory_index(
 @overload
 def build_memory_index(
         data: str,
-        metric: Literal["l2", "mips"],
+        metric: Literal["l2", "mips", "cosine"],
         index_directory: str,
         complexity: int,
         graph_degree: int,

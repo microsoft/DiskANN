@@ -492,5 +492,6 @@ PYBIND11_MODULE(_diskannpy, m)
     py::enum_<Metric>(m, "Metric")
         .value("L2", Metric::L2)
         .value("INNER_PRODUCT", Metric::INNER_PRODUCT)
+        .value("COSINE", Metric::COSINE)
         .export_values();
 }

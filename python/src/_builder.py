@@ -2,7 +2,6 @@
 # Licensed under the MIT license.
 
 import os
-import shutil
 from pathlib import Path
 from typing import BinaryIO, Literal, Optional, Tuple, Union
 
@@ -11,10 +10,11 @@ import numpy as np
 from . import _diskannpy as _native_dap
 from ._common import (
     VectorDType,
+    VectorLikeBatch,
     _assert,
     _assert_2d,
     _assert_dtype,
-    _assert_existing_file,
+    _castable_dtype_or_raise,
     _assert_is_nonnegative_uint32,
     _assert_is_positive_uint32,
     _get_valid_metric,
@@ -22,7 +22,7 @@ from ._common import (
 from ._diskannpy import defaults
 
 
-def numpy_to_diskann_file(vectors: np.ndarray, file_handler: BinaryIO):
+def numpy_to_diskann_file(vectors: VectorLikeBatch, dtype: VectorDType, file_handler: BinaryIO):
     """
     Utility function that writes a DiskANN binary vector formatted file to the location of your choosing.
 
@@ -33,41 +33,40 @@ def numpy_to_diskann_file(vectors: np.ndarray, file_handler: BinaryIO):
     :raises ValueError: If vectors are the wrong shape or an unsupported dtype
     :raises ValueError: If output_path is not a str or ``io.BinaryIO``
     """
+    _assert_dtype(dtype)
+    _vectors = _castable_dtype_or_raise(vectors, expected=dtype, message=f"Unable to cast vectors to numpy array of type {dtype}")
     _assert_2d(vectors, "vectors")
-    _assert_dtype(vectors.dtype, "vectors.dtype")
 
-    _ = file_handler.write(np.array(vectors.shape, dtype=np.intc).tobytes())
-    _ = file_handler.write(vectors.tobytes())
+    _ = file_handler.write(np.array(_vectors.shape, dtype=np.intc).tobytes())
+    _ = file_handler.write(_vectors.tobytes())
 
 
 def _valid_path_and_dtype(
-    data: Union[str, np.ndarray], vector_dtype: Optional[VectorDType], index_path: str
+    data: Union[str, VectorLikeBatch], vector_dtype: VectorDType, index_path: str
 ) -> Tuple[str, VectorDType]:
-    if isinstance(data, np.ndarray):
-        _assert_2d(data, "data")
-        _assert_dtype(data.dtype, "data.dtype")
-
+    if isinstance(data, str):
+        vector_bin_path = data
+        _assert(
+            Path(data).exists() and Path(data).is_file(),
+            "if data is of type `str`, it must both exist and be a file",
+            )
+        vector_dtype_actual = vector_dtype
+    else:
         vector_bin_path = os.path.join(index_path, "vectors.bin")
         if Path(vector_bin_path).exists():
             raise ValueError(
                 f"The path {vector_bin_path} already exists. Remove it and try again."
             )
         with open(vector_bin_path, "wb") as temp_vector_bin:
-            numpy_to_diskann_file(data, temp_vector_bin)
+            numpy_to_diskann_file(vectors=data, dtype=data.dtype, file_handler=temp_vector_bin)
         vector_dtype_actual = data.dtype
-    else:
-        vector_bin_path = data
-        _assert(
-            Path(data).exists() and Path(data).is_file(),
-            "if data is of type `str`, it must both exist and be a file",
-        )
-        vector_dtype_actual = vector_dtype
+
     return vector_bin_path, vector_dtype_actual
 
 
 def build_disk_index(
-    data: Union[str, np.ndarray],
-    metric: Literal["l2", "mips"],
+    data: Union[str, VectorLikeBatch],
+    metric: Literal["l2", "mips", "cosine"],
     index_directory: str,
     complexity: int,
     graph_degree: int,
@@ -145,7 +144,7 @@ def build_disk_index(
     )
 
     vector_bin_path, vector_dtype_actual = _valid_path_and_dtype(
-        data, vector_dtype, index_prefix
+        data, vector_dtype, index_directory
     )
 
     if vector_dtype_actual == np.single:
@@ -169,8 +168,8 @@ def build_disk_index(
 
 
 def build_memory_index(
-    data: Union[str, np.ndarray],
-    metric: Literal["l2", "mips"],
+    data: Union[str, VectorLikeBatch],
+    metric: Literal["l2", "mips", "cosine"],
     index_directory: str,
     complexity: int,
     graph_degree: int,

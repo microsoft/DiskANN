@@ -2,9 +2,10 @@
 # Licensed under the MIT license.
 
 from pathlib import Path
-from typing import Type, TypeVar
+from typing import List, NamedTuple, Type, TypeVar
 
 import numpy as np
+import numpy.typing as npt
 
 from . import _diskannpy as _native_dap
 
@@ -15,12 +16,56 @@ _VALID_DTYPES = [np.single, np.float32, np.byte, np.int8, np.ubyte, np.uint8]
 VectorDType = TypeVar(
     "VectorDType",
     Type[np.single],
-    Type[np.float32],
     Type[np.ubyte],
-    Type[np.uint8],
     Type[np.byte],
-    Type[np.int8],
 )
+
+VectorLike = TypeVar(
+    "VectorLike",
+    Type[List[int]],
+    Type[List[float]],
+    Type[npt.NDArray[VectorDType]]
+)
+
+VectorLikeBatch = TypeVar(
+    "VectorLikeBatch",
+    Type[List[List[int]]],
+    Type[List[List[float]]],
+    Type[npt.NDArray[VectorDType]]
+)
+
+VectorIdentifier = TypeVar(
+    "VectorIdentifier",
+    Type[int],
+    Type[np.uintc]
+)
+
+VectorIdentifierBatch = TypeVar(
+    "VectorIdentifierBatch",
+    Type[List[int]],
+    Type[List[np.uintc]],
+    Type[npt.NDArray[np.uintc]]
+)
+
+
+class QueryResponse(NamedTuple):
+    distances: np.ndarray
+    indices: np.ndarray
+
+
+class QueryResponseBatch(NamedTuple):
+    distances: np.ndarray
+    indices: np.ndarray
+
+
+def valid_dtype(dtype: str) -> VectorDType:
+    _assert_dtype(dtype)
+    if np.can_cast(dtype, np.ubyte):
+        return np.ubyte
+    if np.can_cast(dtype, np.byte):
+        return np.byte
+    if np.can_cast(dtype, np.single):
+        return np.single
 
 
 def _assert(statement_eval: bool, message: str):
@@ -35,16 +80,33 @@ def _get_valid_metric(metric: str) -> _native_dap.Metric:
         return _native_dap.L2
     elif metric.lower() == "mips":
         return _native_dap.INNER_PRODUCT
+    elif metric.lower() == "cosine":
+        return _native_dap.COSINE
     else:
-        raise ValueError("metric must be one of 'l2' or 'mips'")
+        raise ValueError("metric must be one of 'l2', 'mips', or 'cosine'")
 
 
-def _assert_dtype(vectors: np.dtype, name: str):
+def _assert_dtype(dtype: np.dtype):
     _assert(
-        vectors in _VALID_DTYPES,
-        name
-        + " must be of one of type {(np.single, np.float32), (np.byte, np.int8), (np.ubyte, np.uint8)}",
+        any(np.can_cast(dtype, _dtype) for _dtype in _VALID_DTYPES),
+        f"Vector dtype must be of one of type {{(np.single, np.float32), (np.byte, np.int8), (np.ubyte, np.uint8)}}",
     )
+
+
+def _castable_dtype_or_raise(
+        data: VectorLike,
+        expected: np.dtype,
+        message: str
+) -> np.ndarray:
+    _assert_dtype(expected)
+    if isinstance(data, list):
+        return np.array(data, dtype=expected)  # may result in an overflow and invalid data, but at least warns
+    try:
+        _vectors = data.astype(dtype=expected, casting="safe", copy=False)  # we would prefer no copy
+    except TypeError as e:
+        e.args = (message, *e.args)
+        raise
+    return _vectors
 
 
 def _assert_2d(vectors: np.ndarray, name: str):
