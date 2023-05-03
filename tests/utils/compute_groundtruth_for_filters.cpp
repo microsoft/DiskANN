@@ -46,7 +46,7 @@ template <class T> T div_round_up(const T numerator, const T denominator)
     return (numerator % denominator == 0) ? (numerator / denominator) : 1 + (numerator / denominator);
 }
 
-using pairIF = std::pair<int, float>;
+using pairIF = std::pair<size_t, float>;
 struct cmpmaxstruct
 {
     bool operator()(const pairIF &l, const pairIF &r)
@@ -125,7 +125,7 @@ void inner_prod_to_points(const size_t dim,
 }
 
 void exact_knn(const size_t dim, const size_t k,
-               int *const closest_points,        // k * num_queries preallocated, col
+               size_t *const closest_points,        // k * num_queries preallocated, col
                                                  // major, queries columns
                float *const dist_closest_points, // k * num_queries
                                                  // preallocated, Dist to
@@ -214,12 +214,12 @@ void exact_knn(const size_t dim, const size_t k,
         for (long long q = q_b; q < q_e; q++)
         {
             maxPQIFCS point_dist;
-            for (uint64_t p = 0; p < k; p++)
-                point_dist.emplace((int32_t)p, dist_matrix[(ptrdiff_t)p + (ptrdiff_t)(q - q_b) * (ptrdiff_t)npoints]);
+            for (size_t p = 0; p < k; p++)
+                point_dist.emplace(p, dist_matrix[(ptrdiff_t)p + (ptrdiff_t)(q - q_b) * (ptrdiff_t)npoints]);
             for (size_t p = k; p < npoints; p++)
             {
                 if (point_dist.top().second > dist_matrix[(ptrdiff_t)p + (ptrdiff_t)(q - q_b) * (ptrdiff_t)npoints])
-                    point_dist.emplace((int32_t)p,
+                    point_dist.emplace(p,
                                        dist_matrix[(ptrdiff_t)p + (ptrdiff_t)(q - q_b) * (ptrdiff_t)npoints]);
                 if (point_dist.size() > k)
                     point_dist.pop();
@@ -443,7 +443,7 @@ std::vector<std::vector<std::pair<uint32_t, float>>> processUnfilteredParts(cons
         size_t start_id = p * PARTSIZE;
         load_bin_as_float<T>(base_file.c_str(), base_data, npoints, dim, p);
 
-        int *closest_points_part = new int[nqueries * k];
+        size_t *closest_points_part = new size_t[nqueries * k];
         float *dist_closest_points_part = new float[nqueries * k];
 
         auto part_k = k < npoints ? k : npoints;
@@ -493,7 +493,7 @@ std::vector<std::vector<std::pair<uint32_t, float>>> processFilteredParts(
         if (filter_label != "")
             rev_map = load_filtered_bin_as_float<T>(base_file.c_str(), base_data, npoints, dim, p, label_file.c_str(),
                                                     filter_label, universal_label, npoints_filt, pts_to_labels);
-        int *closest_points_part = new int[nqueries * k];
+        size_t *closest_points_part = new size_t[nqueries * k];
         float *dist_closest_points_part = new float[nqueries * k];
 
         auto part_k = k < npoints_filt ? k : npoints_filt;
