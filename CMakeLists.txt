@@ -139,27 +139,40 @@ if (MSVC)
         "${DISKANN_MKL_LIB_PATH}/mkl_intel_thread.lib")
 else()
     # expected path for manual intel mkl installs
-    set(OMP_PATH /opt/intel/oneapi/compiler/2022.0.2/linux/compiler/lib/intel64_lin/ CACHE PATH "Intel OneAPI OpenMP library implementation path")
-    set(MKL_ROOT /opt/intel/oneapi/mkl/latest CACHE PATH "Intel OneAPI MKL library implementation path")
-    link_directories(${OMP_PATH} ${MKL_ROOT}/lib/intel64)
-    include_directories(${MKL_ROOT}/include)
-    # todo: make sure that the link_directories and include_directories for mkl also include paths that are used
-    # when using a RH derivative distro (for python build through cibuildwheel)
+    if (EXISTS /opt/intel/oneapi/compiler/latest/linux/compiler/lib/intel64_lin/)
+        set(OMP_PATH /opt/intel/oneapi/compiler/latest/linux/compiler/lib/intel64_lin/)
+    elseif(EXISTS /usr/lib/x86_64-linux-gnu/libiomp5.so)
+        set(OMP_PATH /usr/lib/x86_64-linux-gnu/)
+    elseif(NOT OMP_PATH)
+        message(FATAL_ERROR "Could not find Intel OMP in standard locations; use -DOMP_PATH to specify the install location for your environment")
+    endif()
+    link_directories(${OMP_PATH})
 
-    # expected path for apt packaged intel mkl installs
-    link_directories(/usr/lib/x86_64-linux-gnu/mkl)
-    include_directories(/usr/include/mkl)
+    if (EXISTS /opt/intel/oneapi/mkl/latest/latest/lib/intel64 AND EXISTS /opt/intel/oneapi/mkl/latest/include)
+        set(MKL_PATH /opt/intel/oneapi/mkl/latest/lib/intel64)
+        set(MKL_INCLUDE_PATH /opt/intel/oneapi/mkl/latest/include)
+    elseif(EXISTS /usr/lib/x86_64-linux-gnu/libmkl_core.so AND EXISTS /usr/include/mkl)
+        set(MKL_PATH /usr/lib/x86_64-linux-gnu/)
+        set(MKL_INCLUDE_PATH /usr/include/mkl)
+    elseif(NOT MKL_PATH)
+        message(FATAL_ERROR "Could not find Intel MKL in standard locations; use -DMKL_PATH to specify the install location for your environment")
+    elseif(NOT MKL_INCLUDE_PATH)
+        message(FATAL_ERROR "Could not find Intel MKL in standard locations; use -DMKL_INCLUDE_PATH to specify the install location for headers for your environment")
+    endif()
+    link_directories(${MKL_PATH})
+    include_directories(${MKL_INCLUDE_PATH})
 
     # compile flags and link libraries
     add_compile_options(-m64 -Wl,--no-as-needed)
     if (NOT PYBIND)
         link_libraries(mkl_intel_ilp64 mkl_intel_thread mkl_core iomp5 pthread m dl)
     else()
+        # static linking for python so as to minimize customer dependency issues
         link_libraries(
-                /lib/x86_64-linux-gnu/libmkl_intel_ilp64.a
-                /lib/x86_64-linux-gnu/libmkl_intel_thread.a
-                /lib/x86_64-linux-gnu/libmkl_core.a
-                /lib/x86_64-linux-gnu/libmkl_def.so
+                ${MKL_PATH}/libmkl_intel_ilp64.a
+                ${MKL_PATH}/libmkl_intel_thread.a
+                ${MKL_PATH}/libmkl_core.a
+                ${MKL_PATH}/libmkl_def.so
                 iomp5
                 pthread
                 m

@@ -1,6 +1,7 @@
 # Copyright (c) Microsoft Corporation. All rights reserved.
 # Licensed under the MIT license.
 
+import os
 import warnings
 from typing import Literal, Tuple
 
@@ -46,6 +47,8 @@ class DynamicMemoryIndex:
         initial_search_complexity: int = 0,
         search_threads: int = 0,
         concurrent_consolidation: bool = True,
+        index_directory: str = "",
+        index_prefix: str = "ann"
     ):
         """
         The diskannpy.DynamicMemoryIndex represents our python API into a dynamic DiskANN InMemory Index library.
@@ -113,7 +116,7 @@ class DynamicMemoryIndex:
         )
         _assert_is_nonnegative_uint32(search_threads, "search_threads")
 
-        self._index_path = ""
+        self._index_path = os.path.join(index_directory, index_prefix) if index_directory != "" else ""
 
         self._dims = dim
 
