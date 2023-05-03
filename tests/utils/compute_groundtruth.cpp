@@ -124,7 +124,7 @@ void inner_prod_to_points(const size_t dim,
 }
 
 void exact_knn(const size_t dim, const size_t k,
-               size_t *const closest_points,        // k * num_queries preallocated, col
+               size_t *const closest_points,     // k * num_queries preallocated, col
                                                  // major, queries columns
                float *const dist_closest_points, // k * num_queries
                                                  // preallocated, Dist to
@@ -218,8 +218,7 @@ void exact_knn(const size_t dim, const size_t k,
             for (size_t p = k; p < npoints; p++)
             {
                 if (point_dist.top().second > dist_matrix[(ptrdiff_t)p + (ptrdiff_t)(q - q_b) * (ptrdiff_t)npoints])
-                    point_dist.emplace(p,
-                                       dist_matrix[(ptrdiff_t)p + (ptrdiff_t)(q - q_b) * (ptrdiff_t)npoints]);
+                    point_dist.emplace(p, dist_matrix[(ptrdiff_t)p + (ptrdiff_t)(q - q_b) * (ptrdiff_t)npoints]);
                 if (point_dist.size() > k)
                     point_dist.pop();
             }
