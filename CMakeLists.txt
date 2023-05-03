@@ -151,13 +151,22 @@ else()
     if (EXISTS /opt/intel/oneapi/mkl/latest/lib/intel64 AND EXISTS /opt/intel/oneapi/mkl/latest/include)
         set(MKL_PATH /opt/intel/oneapi/mkl/latest/lib/intel64)
         set(MKL_INCLUDE_PATH /opt/intel/oneapi/mkl/latest/include)
+        set(MKL_DEF_SO ${MKL_PATH}/libmkl_def.so.2)
     elseif(EXISTS /usr/lib/x86_64-linux-gnu/libmkl_core.so AND EXISTS /usr/include/mkl)
         set(MKL_PATH /usr/lib/x86_64-linux-gnu/)
         set(MKL_INCLUDE_PATH /usr/include/mkl)
+        set(MKL_DEF_SO ${MKL_PATH}/libmkl_def.so)
     elseif(NOT MKL_PATH)
         message(FATAL_ERROR "Could not find Intel MKL in standard locations; use -DMKL_PATH to specify the install location for your environment")
     elseif(NOT MKL_INCLUDE_PATH)
         message(FATAL_ERROR "Could not find Intel MKL in standard locations; use -DMKL_INCLUDE_PATH to specify the install location for headers for your environment")
+    endif()
+    if (EXISTS ${MKL_PATH}/libmkl_def.so.2)
+        set(MKL_DEF_SO ${MKL_PATH}/libmkl_def.so.2)
+    elseif(EXISTS ${MKL_PATH}/libmkl_def.so)
+        set(MKL_DEF_SO ${MKL_PATH}/libmkl_def.so)
+    else()
+        message(FATAL_ERROR "Despite finding MKL, libmkl_def.so was not found in expected locations.")
     endif()
     link_directories(${MKL_PATH})
     include_directories(${MKL_INCLUDE_PATH})
@@ -172,7 +181,7 @@ else()
                 ${MKL_PATH}/libmkl_intel_ilp64.a
                 ${MKL_PATH}/libmkl_intel_thread.a
                 ${MKL_PATH}/libmkl_core.a
-                ${MKL_PATH}/libmkl_def.so
+                ${MKL_DEF_SO}
                 iomp5
                 pthread
                 m
