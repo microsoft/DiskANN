@@ -148,7 +148,7 @@ else()
     endif()
     link_directories(${OMP_PATH})
 
-    if (EXISTS /opt/intel/oneapi/mkl/latest/latest/lib/intel64 AND EXISTS /opt/intel/oneapi/mkl/latest/include)
+    if (EXISTS /opt/intel/oneapi/mkl/latest/lib/intel64 AND EXISTS /opt/intel/oneapi/mkl/latest/include)
         set(MKL_PATH /opt/intel/oneapi/mkl/latest/lib/intel64)
         set(MKL_INCLUDE_PATH /opt/intel/oneapi/mkl/latest/include)
     elseif(EXISTS /usr/lib/x86_64-linux-gnu/libmkl_core.so AND EXISTS /usr/include/mkl)
