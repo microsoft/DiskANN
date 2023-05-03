@@ -435,7 +435,7 @@ std::vector<std::vector<std::pair<uint32_t, float>>> processUnfilteredParts(cons
                                                                             const diskann::Metric &metric,
                                                                             std::vector<uint32_t> &location_to_tag)
 {
-    float *base_data;
+    float *base_data = nullptr;
     int num_parts = get_num_parts<T>(base_file.c_str());
     std::vector<std::vector<std::pair<uint32_t, float>>> res(nqueries);
     for (int p = 0; p < num_parts; p++)
@@ -477,8 +477,8 @@ std::vector<std::vector<std::pair<uint32_t, float>>> processFilteredParts(
     const std::string &universal_label, size_t &nqueries, size_t &npoints, size_t &dim, size_t &k, float *query_data,
     const diskann::Metric &metric, std::vector<uint32_t> &location_to_tag)
 {
-    size_t npoints_filt;
-    float *base_data;
+    size_t npoints_filt = 0;
+    float *base_data = nullptr;
     std::vector<std::vector<std::pair<uint32_t, float>>> res(nqueries);
     int num_parts = get_num_parts<T>(base_file.c_str());
 
@@ -531,7 +531,7 @@ int aux_main(const std::string &base_file, const std::string &label_file, const 
 {
     size_t npoints, nqueries, dim;
 
-    float *query_data;
+    float *query_data = nullptr;
 
     load_bin_as_float<T>(query_file.c_str(), query_data, nqueries, dim, 0);
     if (nqueries > PARTSIZE)

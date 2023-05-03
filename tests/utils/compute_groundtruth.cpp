@@ -342,7 +342,7 @@ std::vector<std::vector<std::pair<uint32_t, float>>> processUnfilteredParts(cons
                                                                             const diskann::Metric &metric,
                                                                             std::vector<uint32_t> &location_to_tag)
 {
-    float *base_data;
+    float *base_data = nullptr;
     int num_parts = get_num_parts<T>(base_file.c_str());
     std::vector<std::vector<std::pair<uint32_t, float>>> res(nqueries);
     for (int p = 0; p < num_parts; p++)
