@@ -19,6 +19,8 @@ struct IndexConfig
     LoadStoreStratagy filtered_data_load_store_stratagy;
 
     Metric metric;
+    size_t dimension;
+    size_t max_points;
 
     std::string label_type;
     std::string tag_type;
@@ -31,8 +33,6 @@ struct IndexConfig
     bool use_opq = false;
     size_t num_frozen_pts = 0;
     bool concurrent_consolidate = false;
-
-    std::string data_path; // required here to get dims and max_points to initialize the index
 };
 
 struct IndexBuildParams
@@ -57,6 +57,21 @@ struct IndexBuildParams
     }
 
     friend class IndexBuildParamsBuilder;
+};
+
+struct IndexSearchParams
+{
+    std::string result_path = "";
+    std::string query_file = "";
+    std::string gt_file = "";
+    bool print_all_recalls;
+    bool show_qps_per_thread;
+    float fail_if_recall_below{70.0f};
+    size_t K{0};
+    std::vector<uint32_t> Lvec;
+    std::string filter_label = "";
+    std::string query_filter_file = "";
+    uint32_t num_threads{20}; // or some other default val
 };
 
 class IndexBuildParamsBuilder
@@ -137,6 +152,15 @@ class AbstractIndex
     }
     virtual void build(IndexBuildParams &build_params) = 0;
     virtual void save(const char *filename, bool compact_before_save = false) = 0;
+
+#ifdef EXEC_ENV_OLS
+    virtual void load(AlignedFileReader &reader, uint32_t num_threads, uint32_t search_l) = 0;
+#else
+    // Reads the number of frozen points from graph's metadata file section.
+    virtual void load(const char *index_file, uint32_t num_threads, uint32_t search_l) = 0;
+#endif
+
+    virtual std::pair<uint32_t, uint32_t> search(IndexSearchParams &search_params) = 0;
 
     // TODO: add other methods as api promise to end user.
 };

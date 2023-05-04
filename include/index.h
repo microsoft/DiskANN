@@ -162,6 +162,9 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
                                                                         const size_t K, const uint32_t L,
                                                                         IndexType *indices, float *distances);
 
+    // Reafactored search
+    DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> search(IndexSearchParams &search_params);
+
     // Will fail if tag already in the index or if tag=0.
     DISKANN_DLLEXPORT int insert_point(const T *point, const TagT tag);
 

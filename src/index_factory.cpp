@@ -18,12 +18,14 @@ void IndexFactory::parse_config(const std::string &config_path)
 std::shared_ptr<AbstractIndex> IndexFactory::instance()
 {
     // calculate points and dimension of data
-    size_t num_points, dim;
-    diskann::get_bin_metadata(_config.data_path, num_points, dim);
+    size_t num_points = _config.max_points;
+    size_t dim = _config.dimension;
     if (_config.data_type == "float")
     {
         // datastore and graph store objects to be passed to index
         auto data_store = construct_datastore<float>(_config.data_load_store_stratagy, num_points, dim);
+        //if (_pq_dist_build)
+        // pq_data_store  = construct_datastore<float>(...);
         auto graph_store = construct_graphstore(_config.graph_load_store_stratagy, num_points);
 
         if (_config.label_type == "ushort")
@@ -86,11 +88,6 @@ void IndexFactory::checkConfig()
                                "with PQ distance "
                                "base index",
                                -1, __FUNCSIG__, __FILE__, __LINE__);
-    }
-
-    if (!file_exists(_config.data_path))
-    {
-        throw ANNException("ERROR: data_path : " + _config.data_path + " is invalid.", -1);
     }
 
     // check if data_type is valid

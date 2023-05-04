@@ -20,6 +20,7 @@
 #include "index.h"
 #include "memory_mapper.h"
 #include "utils.h"
+#include "index_factory.h"
 
 namespace po = boost::program_options;
 
@@ -372,6 +373,34 @@ int main(int argc, char **argv)
 
     try
     {
+        // trying to refactor search()
+        /*diskann::IndexConfig config;
+        config.metric = metric;
+        config.data_load_store_stratagy = diskann::MEMORY;
+        config.graph_load_store_stratagy = diskann::MEMORY;
+        config.data_type = data_type;
+        config.label_type = label_type;
+        config.dynamic_index = dynamic;
+        config.max_points = 0;
+
+        diskann::IndexSearchParams search_param;
+        search_param.K = K;
+        search_param.query_file = query_file;
+        search_param.query_filter_file = query_filters_file;
+        search_param.gt_file = gt_file;
+        search_param.Lvec = Lvec;
+        search_param.num_threads = num_threads;
+        search_param.result_path = result_path;
+        search_param.print_all_recalls = print_all_recalls;
+        search_param.show_qps_per_thread = show_qps_per_thread;
+
+        auto index_factory = diskann::IndexFactory(config);
+        auto index = index_factory.instance();
+        index->load(index_path_prefix.c_str(), num_threads, *(std::max_element(Lvec.begin(), Lvec.end())));
+        index->search(search_param);
+        return 0;*/
+
+
         if (!query_filters.empty() && label_type == "ushort")
         {
             if (data_type == std::string("int8"))

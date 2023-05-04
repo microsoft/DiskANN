@@ -157,6 +157,9 @@ int main(int argc, char **argv)
         diskann::cout << "Starting index build with R: " << R << "  Lbuild: " << L << "  alpha: " << alpha
                       << "  #threads: " << num_threads << std::endl;
 
+        size_t data_num, data_dim;
+        diskann::get_bin_metadata(data_path, data_num, data_dim);
+
         // with refactored code
         diskann::IndexConfig config;
         config.metric = metric;
@@ -164,7 +167,8 @@ int main(int argc, char **argv)
         config.graph_load_store_stratagy = diskann::MEMORY;
         config.data_type = data_type;
         config.label_type = label_type;
-        config.data_path = data_path;
+        config.dimension = data_dim;
+        config.max_points = data_num;
 
         // Build params for speific build from instance
         diskann::IndexWriteParameters paras = diskann::IndexWriteParametersBuilder(L, R)
