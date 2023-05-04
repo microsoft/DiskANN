@@ -173,7 +173,7 @@ void build_incremental_index(const std::string &data_path, const uint32_t L, con
 {
     const uint32_t C = 500;
     const bool saturate_graph = false;
-    bool is_labeled = label_file != "";
+    bool has_labels = label_file != "";
     std::string labels_file_to_use = save_path + "_label_formatted.txt";
     std::string mem_labels_int_map_file = save_path + "_labels_map.txt";
 
@@ -183,7 +183,7 @@ void build_incremental_index(const std::string &data_path, const uint32_t L, con
                                                .with_saturate_graph(saturate_graph)
                                                .with_num_threads(insert_threads)
                                                .with_num_frozen_points(num_start_pts)
-                                               .with_data_is_labeled(is_labeled)
+                                               .with_labels(has_labels)
                                                .with_filter_list_size(Lf)
                                                .build();
 
@@ -192,7 +192,7 @@ void build_incremental_index(const std::string &data_path, const uint32_t L, con
                                                       .with_alpha(alpha)
                                                       .with_saturate_graph(saturate_graph)
                                                       .with_num_threads(consolidate_threads)
-                                                      .with_data_is_labeled(is_labeled)
+                                                      .with_labels(has_labels)
                                                       .with_filter_list_size(Lf)
                                                       .build();
 
