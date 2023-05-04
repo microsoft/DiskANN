@@ -39,7 +39,7 @@ Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_point
     _indexingMaxC = indexParams.max_occlusion_size;
     _indexingAlpha = indexParams.alpha;
     _filterIndexingQueueSize = indexParams.filter_list_size;
-    _filtered_index = indexParams.data_is_labeled;
+    _filtered_index = indexParams.has_labels;
 
     uint32_t num_threads_indx = indexParams.num_threads;
     uint32_t num_scratch_spaces = search_threads + num_threads_indx;
