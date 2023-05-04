@@ -24,8 +24,8 @@ std::shared_ptr<AbstractIndex> IndexFactory::instance()
     {
         // datastore and graph store objects to be passed to index
         auto data_store = construct_datastore<float>(_config.data_load_store_stratagy, num_points, dim);
-        //if (_pq_dist_build)
-        // pq_data_store  = construct_datastore<float>(...);
+        // if (_pq_dist_build)
+        //  pq_data_store  = construct_datastore<float>(...);
         auto graph_store = construct_graphstore(_config.graph_load_store_stratagy, num_points);
 
         if (_config.label_type == "ushort")

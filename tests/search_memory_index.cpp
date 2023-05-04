@@ -400,7 +400,6 @@ int main(int argc, char **argv)
         index->search(search_param);
         return 0;*/
 
-
         if (!query_filters.empty() && label_type == "ushort")
         {
             if (data_type == std::string("int8"))
