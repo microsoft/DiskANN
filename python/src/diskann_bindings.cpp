@@ -204,7 +204,7 @@ template <class T> struct DynamicInMemIndex
         py::array_t<int> insert_retvals(num_inserts);
 
 #pragma omp parallel for schedule(dynamic, 1)
-        for (size_t i = 0; i < num_inserts; i++)
+        for (int64_t i = 0; i < num_inserts; i++)
         {
             insert_retvals.mutable_data()[i] = _index->insert_point(vectors.data(i), *(ids.data(i)));
         }
