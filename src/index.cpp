@@ -2047,11 +2047,6 @@ SearchResult Index<T, TagT, LabelT>::search(IndexSearchParams &search_params)
         }
     }
 
-    // if (_dist_metric == diskann::FAST_L2 /* && this->has_loaded*/)
-    //{
-    //     this->optimize_index_layout();
-    // }
-
     std::cout << "Using " << search_params.num_threads << " threads to search" << std::endl;
 
     // query results
@@ -2070,6 +2065,11 @@ SearchResult Index<T, TagT, LabelT>::search(IndexSearchParams &search_params)
     if (not _enable_tags)
     {
         cmp_stats = std::vector<uint32_t>(query_num, 0);
+    }
+
+    if (_dist_metric == diskann::FAST_L2 /* && this->has_loaded*/)
+    {
+        this->optimize_index_layout();
     }
 
     // search for each L value
@@ -2109,8 +2109,6 @@ SearchResult Index<T, TagT, LabelT>::search(IndexSearchParams &search_params)
             }
             else if (_dist_metric == diskann::FAST_L2)
             {
-                // optimize for fast_l2
-                this->optimize_index_layout();
                 this->search_with_optimized_layout(query + i * query_aligned_dim, recall_at, L,
                                                    query_result_ids[test_id].data() + i * recall_at);
             }
