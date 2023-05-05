@@ -2051,8 +2051,8 @@ SearchResult Index<T, TagT, LabelT>::search(IndexSearchParams &search_params)
 
     // query results
     auto recall_at = search_params.K;
-    std::vector<std::vector<uint32_t>> &query_result_ids = result.query_result_ids;  // vector ids?
-    std::vector<std::vector<float>> &query_result_dists = result.query_result_dists; // distances
+    std::vector<std::vector<uint32_t>> &query_result_ids = result.query_result_ids;
+    std::vector<std::vector<float>> &query_result_dists = result.query_result_dists;
     std::vector<TagT> query_result_tags;
     if (_enable_tags)
     {
@@ -2067,7 +2067,7 @@ SearchResult Index<T, TagT, LabelT>::search(IndexSearchParams &search_params)
         cmp_stats = std::vector<uint32_t>(query_num, 0);
     }
 
-    if (_dist_metric == diskann::FAST_L2 /* && this->has_loaded*/)
+    if (_dist_metric == diskann::FAST_L2)
     {
         this->optimize_index_layout();
     }
@@ -2149,7 +2149,6 @@ SearchResult Index<T, TagT, LabelT>::search(IndexSearchParams &search_params)
         test_id++;
     }
     diskann::aligned_free(query);
-
     return result;
 }
 

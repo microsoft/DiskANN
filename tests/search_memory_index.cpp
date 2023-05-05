@@ -464,22 +464,11 @@ int main(int argc, char **argv)
         return -1;
     }
 
-    std::vector<std::string> query_filters;
-    if (filter_label != "")
-    {
-        query_filters.push_back(filter_label);
-    }
-    else if (query_filters_file != "")
-    {
-        query_filters = read_file_to_vector_of_strings(query_filters_file);
-    }
-
     try
     {
         size_t query_num, query_dim;
         diskann::get_bin_metadata(query_file, query_num, query_dim);
 
-        // trying to refactor search()
         diskann::IndexConfig config;
         config.metric = metric;
         config.data_load_store_stratagy = diskann::MEMORY;
