@@ -494,6 +494,7 @@ int main(int argc, char **argv)
         diskann::IndexSearchParams search_param;
         search_param.K = K;
         search_param.query_file = query_file;
+        search_param.filter_label = filter_label;
         search_param.query_filter_file = query_filters_file;
         search_param.Lvec = Lvec;
         search_param.num_threads = num_threads;
