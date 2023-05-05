@@ -34,13 +34,13 @@ FixedChunkPQTable::~FixedChunkPQTable()
 }
 
 #ifdef EXEC_ENV_OLS
-uint64_t FixedChunkPQTable::load_pq_centroid_bin(MemoryMappedFiles &files, const char *pq_table_file, size_t num_chunks)
+void FixedChunkPQTable::load_pq_centroid_bin(MemoryMappedFiles &files, const char *pq_table_file, size_t num_chunks)
 {
 #else
-uint64_t FixedChunkPQTable::load_pq_centroid_bin(const char *pq_table_file, size_t num_chunks)
+void FixedChunkPQTable::load_pq_centroid_bin(const char *pq_table_file, size_t num_chunks)
 {
 #endif
-    uint64_t memory_in_bytes = 0;
+
     uint64_t nr, nc;
     std::string rotmat_file = std::string(pq_table_file) + "_rotation_matrix.bin";
 
@@ -82,9 +82,9 @@ uint64_t FixedChunkPQTable::load_pq_centroid_bin(const char *pq_table_file, size
 
 #ifdef EXEC_ENV_OLS
 
-    memory_in_bytes += diskann::load_bin<float>(files, pq_table_file, tables, nr, nc, file_offset_data[0]);
+    diskann::load_bin<float>(files, pq_table_file, tables, nr, nc, file_offset_data[0]);
 #else
-    memory_in_bytes += diskann::load_bin<float>(pq_table_file, tables, nr, nc, file_offset_data[0]);
+    diskann::load_bin<float>(pq_table_file, tables, nr, nc, file_offset_data[0]);
 #endif
 
     if ((nr != NUM_PQ_CENTROIDS))
@@ -98,9 +98,9 @@ uint64_t FixedChunkPQTable::load_pq_centroid_bin(const char *pq_table_file, size
     this->ndims = nc;
 
 #ifdef EXEC_ENV_OLS
-    memory_in_bytes += diskann::load_bin<float>(files, pq_table_file, centroid, nr, nc, file_offset_data[1]);
+    diskann::load_bin<float>(files, pq_table_file, centroid, nr, nc, file_offset_data[1]);
 #else
-    memory_in_bytes += diskann::load_bin<float>(pq_table_file, centroid, nr, nc, file_offset_data[1]);
+    diskann::load_bin<float>(pq_table_file, centroid, nr, nc, file_offset_data[1]);
 #endif
 
     if ((nr != this->ndims) || (nc != 1))
@@ -117,11 +117,9 @@ uint64_t FixedChunkPQTable::load_pq_centroid_bin(const char *pq_table_file, size
         chunk_offsets_index = 3;
     }
 #ifdef EXEC_ENV_OLS
-    memory_in_bytes +=
-        diskann::load_bin<uint32_t>(files, pq_table_file, chunk_offsets, nr, nc, file_offset_data[chunk_offsets_index]);
+    diskann::load_bin<uint32_t>(files, pq_table_file, chunk_offsets, nr, nc, file_offset_data[chunk_offsets_index]);
 #else
-    memory_in_bytes +=
-        diskann::load_bin<uint32_t>(pq_table_file, chunk_offsets, nr, nc, file_offset_data[chunk_offsets_index]);
+    diskann::load_bin<uint32_t>(pq_table_file, chunk_offsets, nr, nc, file_offset_data[chunk_offsets_index]);
 #endif
 
     if (nc != 1 || (nr != num_chunks + 1 && num_chunks != 0))
@@ -138,9 +136,9 @@ uint64_t FixedChunkPQTable::load_pq_centroid_bin(const char *pq_table_file, size
     if (file_exists(rotmat_file))
     {
 #ifdef EXEC_ENV_OLS
-        memory_in_bytes += diskann::load_bin<float>(files, rotmat_file, (float *&)rotmat_tr, nr, nc);
+        diskann::load_bin<float>(files, rotmat_file, (float *&)rotmat_tr, nr, nc);
 #else
-        memory_in_bytes += diskann::load_bin<float>(rotmat_file, rotmat_tr, nr, nc);
+        diskann::load_bin<float>(rotmat_file, rotmat_tr, nr, nc);
 #endif
         if (nr != this->ndims || nc != this->ndims)
         {
@@ -152,7 +150,6 @@ uint64_t FixedChunkPQTable::load_pq_centroid_bin(const char *pq_table_file, size
 
     // alloc and compute transpose
     tables_tr = new float[256 * this->ndims];
-    memory_in_bytes += sizeof(float) * 256 * this->ndims;
     for (size_t i = 0; i < 256; i++)
     {
         for (size_t j = 0; j < this->ndims; j++)
@@ -160,8 +157,6 @@ uint64_t FixedChunkPQTable::load_pq_centroid_bin(const char *pq_table_file, size
             tables_tr[j * 256 + i] = tables[i * this->ndims + j];
         }
     }
-
-    return memory_in_bytes;
 }
 
 uint32_t FixedChunkPQTable::get_num_chunks()

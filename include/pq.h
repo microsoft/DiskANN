@@ -31,9 +31,9 @@ class FixedChunkPQTable
     virtual ~FixedChunkPQTable();
 
 #ifdef EXEC_ENV_OLS
-    uint64_t load_pq_centroid_bin(MemoryMappedFiles &files, const char *pq_table_file, size_t num_chunks);
+    void load_pq_centroid_bin(MemoryMappedFiles &files, const char *pq_table_file, size_t num_chunks);
 #else
-    uint64_t load_pq_centroid_bin(const char *pq_table_file, size_t num_chunks);
+    void load_pq_centroid_bin(const char *pq_table_file, size_t num_chunks);
 #endif
 
     uint32_t get_num_chunks();
@@ -60,20 +60,16 @@ template <typename T> struct PQScratch
     uint8_t *aligned_pq_coord_scratch = nullptr;   // MUST BE AT LEAST  [N_CHUNKS * MAX_DEGREE]
     float *rotated_query = nullptr;
     float *aligned_query_float = nullptr;
-    uint64_t memory_in_bytes = 0;
 
     PQScratch(size_t graph_degree, size_t aligned_dim)
     {
-        memory_in_bytes = diskann::alloc_aligned((void **)&aligned_pq_coord_scratch,
-                                                 (size_t)graph_degree * (size_t)MAX_PQ_CHUNKS * sizeof(uint8_t), 256);
-        memory_in_bytes += diskann::alloc_aligned((void **)&aligned_pqtable_dist_scratch,
-                                                  256 * (size_t)MAX_PQ_CHUNKS * sizeof(float), 256);
-        memory_in_bytes +=
-            diskann::alloc_aligned((void **)&aligned_dist_scratch, (size_t)graph_degree * sizeof(float), 256);
-        memory_in_bytes +=
-            diskann::alloc_aligned((void **)&aligned_query_float, aligned_dim * sizeof(float), 8 * sizeof(float));
-        memory_in_bytes +=
-            diskann::alloc_aligned((void **)&rotated_query, aligned_dim * sizeof(float), 8 * sizeof(float));
+        diskann::alloc_aligned((void **)&aligned_pq_coord_scratch,
+                               (size_t)graph_degree * (size_t)MAX_PQ_CHUNKS * sizeof(uint8_t), 256);
+        diskann::alloc_aligned((void **)&aligned_pqtable_dist_scratch, 256 * (size_t)MAX_PQ_CHUNKS * sizeof(float),
+                               256);
+        diskann::alloc_aligned((void **)&aligned_dist_scratch, (size_t)graph_degree * sizeof(float), 256);
+        diskann::alloc_aligned((void **)&aligned_query_float, aligned_dim * sizeof(float), 8 * sizeof(float));
+        diskann::alloc_aligned((void **)&rotated_query, aligned_dim * sizeof(float), 8 * sizeof(float));
 
         memset(aligned_query_float, 0, aligned_dim * sizeof(float));
         memset(rotated_query, 0, aligned_dim * sizeof(float));

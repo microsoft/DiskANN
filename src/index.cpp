@@ -54,7 +54,7 @@ Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_point
     : _dist_metric(m), _dim(dim), _max_points(max_points), _num_frozen_pts(num_frozen_pts),
       _dynamic_index(dynamic_index), _enable_tags(enable_tags), _indexingMaxC(DEFAULT_MAXC), _query_scratch(nullptr),
       _pq_dist(pq_dist_build), _use_opq(use_opq), _num_pq_chunks(num_pq_chunks),
-      _delete_set(new tsl::robin_set<uint32_t>), _conc_consolidate(concurrent_consolidate), _memory_in_bytes(0)
+      _delete_set(new tsl::robin_set<uint32_t>), _conc_consolidate(concurrent_consolidate)
 {
     if (dynamic_index && !enable_tags)
     {
@@ -90,10 +90,12 @@ Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_point
     {
         if (_num_pq_chunks > _dim)
             throw diskann::ANNException("ERROR: num_pq_chunks > dim", -1, __FUNCSIG__, __FILE__, __LINE__);
-        _memory_in_bytes += alloc_aligned(((void **)&_pq_data), total_internal_points * _num_pq_chunks * sizeof(char),
-                                          8 * sizeof(char));
+
+        alloc_aligned(((void **)&_pq_data), total_internal_points * _num_pq_chunks * sizeof(char), 8 * sizeof(char));
         std::memset(_pq_data, 0, total_internal_points * _num_pq_chunks * sizeof(char));
     }
+    alloc_aligned(((void **)&_data), total_internal_points * _aligned_dim * sizeof(T), 8 * sizeof(T));
+    std::memset(_data, 0, total_internal_points * _aligned_dim * sizeof(T));
 
     _start = (uint32_t)_max_points;
 
@@ -595,8 +597,6 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
                 _label_to_medoid_id[label] = medoid;
                 line_cnt++;
             }
-
-            _memory_in_bytes += (sizeof(LabelT) + sizeof(uint32_t)) * _label_to_medoid_id.size();
         }
 
         std::string universal_label_file(filename);
@@ -788,7 +788,6 @@ size_t Index<T, TagT, LabelT>::load_graph(std::string filename, size_t expected_
     }
 #endif
 
-    _memory_in_bytes += cc * sizeof(uint32_t);
     diskann::cout << "done. Index has " << nodes_read << " nodes and " << cc << " out-edges, _start is set to "
                   << _start << std::endl;
     return nodes_read;
@@ -2280,11 +2279,6 @@ template <typename T, typename TagT, typename LabelT> size_t Index<T, TagT, Labe
 {
     std::shared_lock<std::shared_timed_mutex> tl(_tag_lock);
     return _max_points;
-}
-
-template <typename T, typename TagT, typename LabelT> uint64_t Index<T, TagT, LabelT>::get_memory_in_bytes()
-{
-    return _memory_in_bytes;
 }
 
 template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT>::generate_frozen_point()
