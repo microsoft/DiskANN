@@ -169,6 +169,7 @@ int main(int argc, char **argv)
         config.label_type = label_type;
         config.dimension = data_dim;
         config.max_points = data_num;
+        config.enable_tags = false;
 
         // Build params for speific build from instance
         diskann::IndexWriteParameters paras = diskann::IndexWriteParametersBuilder(L, R)

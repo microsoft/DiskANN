@@ -489,6 +489,7 @@ int main(int argc, char **argv)
         config.dynamic_index = dynamic;
         config.max_points = 0;
         config.dimension = query_dim;
+        config.enable_tags = tags;
 
         diskann::IndexSearchParams search_param;
         search_param.K = K;
