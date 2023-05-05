@@ -2047,26 +2047,25 @@ SearchResult Index<T, TagT, LabelT>::search(IndexSearchParams &search_params)
         }
     }
 
-    
-    //if (_dist_metric == diskann::FAST_L2 /* && this->has_loaded*/)
+    // if (_dist_metric == diskann::FAST_L2 /* && this->has_loaded*/)
     //{
-    //    this->optimize_index_layout();
-    //}
+    //     this->optimize_index_layout();
+    // }
 
     std::cout << "Using " << search_params.num_threads << " threads to search" << std::endl;
 
     // query results
     auto recall_at = search_params.K;
-    std::vector<std::vector<uint32_t>>& query_result_ids = result.query_result_ids; // vector ids?
-    std::vector<std::vector<float>>& query_result_dists = result.query_result_dists;  // distances
+    std::vector<std::vector<uint32_t>> &query_result_ids = result.query_result_ids;  // vector ids?
+    std::vector<std::vector<float>> &query_result_dists = result.query_result_dists; // distances
     std::vector<TagT> query_result_tags;
     if (_enable_tags)
     {
         query_result_tags.resize(recall_at * query_num);
     }
 
-    std::vector<float>& latency_stats = result.stats.latency_stats;
-    std::vector<uint32_t>& cmp_stats = result.stats.cmp_stats;
+    std::vector<float> &latency_stats = result.stats.latency_stats;
+    std::vector<uint32_t> &cmp_stats = result.stats.cmp_stats;
     latency_stats.resize(query_num, 0);
     if (not _enable_tags)
     {
