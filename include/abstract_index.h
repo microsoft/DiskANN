@@ -63,15 +63,35 @@ struct IndexSearchParams
 {
     std::string result_path = "";
     std::string query_file = "";
-    std::string gt_file = "";
-    bool print_all_recalls;
-    bool show_qps_per_thread;
     float fail_if_recall_below{70.0f};
     size_t K{0};
     std::vector<uint32_t> Lvec;
     std::string filter_label = "";
     std::string query_filter_file = "";
     uint32_t num_threads{20}; // or some other default val
+};
+
+struct QuerySearchStats
+{
+    std::vector<std::chrono::duration<double>> diff_stats;
+    std::vector<uint32_t> cmp_stats;
+    std::vector<float> latency_stats;
+};
+struct SearchResult
+{
+    SearchResult()
+    {
+    }
+    void init(uint64_t lvec_size)
+    {
+        stats.diff_stats.resize(lvec_size);
+
+        query_result_ids.resize(lvec_size);
+        query_result_dists.resize(lvec_size);
+    };
+    std::vector<std::vector<uint32_t>> query_result_ids;
+    std::vector<std::vector<float>> query_result_dists;
+    QuerySearchStats stats;
 };
 
 class IndexBuildParamsBuilder
@@ -160,7 +180,7 @@ class AbstractIndex
     virtual void load(const char *index_file, uint32_t num_threads, uint32_t search_l) = 0;
 #endif
 
-    virtual std::pair<uint32_t, uint32_t> search(IndexSearchParams &search_params) = 0;
+    virtual SearchResult search(IndexSearchParams &search_params) = 0;
 
     // TODO: add other methods as api promise to end user.
 };

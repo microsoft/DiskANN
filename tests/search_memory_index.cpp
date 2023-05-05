@@ -24,6 +24,109 @@
 
 namespace po = boost::program_options;
 
+float print_search_results(diskann::SearchResult &search_result, std::string &gt_file, uint32_t recall_at,
+                           std::vector<uint32_t> Lvec, bool show_qps_per_thread, bool tags_enabled,
+                           bool print_all_recalls, uint32_t num_threads)
+{
+    size_t query_num = search_result.stats.latency_stats.size();
+    bool calc_recall_flag = false;
+    uint32_t *gt_ids = nullptr;
+    float *gt_dists = nullptr;
+    size_t gt_num, gt_dim;
+    if (gt_file != std::string("null") && file_exists(gt_file))
+    {
+        diskann::load_truthset(gt_file, gt_ids, gt_dists, gt_num, gt_dim);
+        if (gt_num != query_num)
+        {
+            throw diskann::ANNException("Error. Mismatch in number of queries and ground truth data", -1);
+        }
+        calc_recall_flag = true;
+    }
+    else
+    {
+        diskann::cout << " Truthset file " << gt_file << " not found. Not computing recall." << std::endl;
+    }
+
+    std::cout.setf(std::ios_base::fixed, std::ios_base::floatfield);
+    std::cout.precision(2);
+    const std::string qps_title = show_qps_per_thread ? "QPS/thread" : "QPS";
+    uint32_t table_width = 0;
+    if (tags_enabled)
+    {
+        std::cout << std::setw(4) << "Ls" << std::setw(12) << qps_title << std::setw(20) << "Mean Latency (mus)"
+                  << std::setw(15) << "99.9 Latency";
+        table_width += 4 + 12 + 20 + 15;
+    }
+    else
+    {
+        std::cout << std::setw(4) << "Ls" << std::setw(12) << qps_title << std::setw(18) << "Avg dist cmps"
+                  << std::setw(20) << "Mean Latency (mus)" << std::setw(15) << "99.9 Latency";
+        table_width += 4 + 12 + 18 + 20 + 15;
+    }
+    uint32_t recalls_to_print = 0;
+    const uint32_t first_recall = print_all_recalls ? 1 : recall_at;
+    if (calc_recall_flag)
+    {
+        for (uint32_t curr_recall = first_recall; curr_recall <= recall_at; curr_recall++)
+        {
+            std::cout << std::setw(12) << ("Recall@" + std::to_string(curr_recall));
+        }
+        recalls_to_print = (uint32_t)recall_at + 1 - first_recall;
+        table_width += recalls_to_print * 12;
+    }
+    std::cout << std::endl;
+    std::cout << std::string(table_width, '=') << std::endl;
+
+    float best_recall = 0.0;
+
+    std::vector<std::chrono::duration<double>> diff_stats = search_result.stats.diff_stats;
+    std::vector<std::vector<uint32_t>> query_result_ids = search_result.query_result_ids;
+    auto latency_stats = search_result.stats.latency_stats;
+    auto cmp_stats = search_result.stats.cmp_stats;
+    for (int i = 0; i < Lvec.size(); i++)
+    {
+        float displayed_qps = static_cast<float>(query_num) / (float)diff_stats[i].count();
+        if (show_qps_per_thread)
+            displayed_qps /= num_threads;
+
+        std::vector<float> recalls;
+        if (calc_recall_flag)
+        {
+            recalls.reserve(recalls_to_print);
+            for (uint32_t curr_recall = first_recall; curr_recall <= recall_at; curr_recall++)
+            {
+                recalls.push_back(diskann::calculate_recall(query_num, gt_ids, gt_dists, gt_dim,
+                                                            query_result_ids[i].data(), recall_at, curr_recall));
+            }
+        }
+
+        std::sort(latency_stats.begin(), latency_stats.end());
+        float mean_latency =
+            std::accumulate(latency_stats.begin(), latency_stats.end(), 0.0) / static_cast<float>(query_num);
+
+        float avg_cmps = (float)std::accumulate(cmp_stats.begin(), cmp_stats.end(), 0) / (float)query_num;
+
+        if (tags_enabled)
+        {
+            std::cout << std::setw(4) << Lvec[i] << std::setw(12) << displayed_qps << std::setw(20)
+                      << (float)mean_latency << std::setw(15) << (float)latency_stats[(uint64_t)(0.999 * query_num)];
+        }
+        else
+        {
+            std::cout << std::setw(4) << Lvec[i] << std::setw(12) << displayed_qps << std::setw(18) << avg_cmps
+                      << std::setw(20) << (float)mean_latency << std::setw(15)
+                      << (float)latency_stats[(uint64_t)(0.999 * query_num)];
+        }
+        for (float recall : recalls)
+        {
+            std::cout << std::setw(12) << recall;
+            best_recall = std::max(recall, best_recall);
+        }
+        std::cout << std::endl;
+    }
+    return best_recall;
+}
+
 template <typename T, typename LabelT = uint32_t>
 int search_memory_index(diskann::Metric &metric, const std::string &index_path, const std::string &result_path_prefix,
                         const std::string &query_file, const std::string &truthset_file, const uint32_t num_threads,
@@ -373,8 +476,11 @@ int main(int argc, char **argv)
 
     try
     {
+        size_t query_num, query_dim;
+        diskann::get_bin_metadata(query_file, query_num, query_dim);
+
         // trying to refactor search()
-        /*diskann::IndexConfig config;
+        diskann::IndexConfig config;
         config.metric = metric;
         config.data_load_store_stratagy = diskann::MEMORY;
         config.graph_load_store_stratagy = diskann::MEMORY;
@@ -382,76 +488,23 @@ int main(int argc, char **argv)
         config.label_type = label_type;
         config.dynamic_index = dynamic;
         config.max_points = 0;
+        config.dimension = query_dim;
 
         diskann::IndexSearchParams search_param;
         search_param.K = K;
         search_param.query_file = query_file;
         search_param.query_filter_file = query_filters_file;
-        search_param.gt_file = gt_file;
         search_param.Lvec = Lvec;
         search_param.num_threads = num_threads;
         search_param.result_path = result_path;
-        search_param.print_all_recalls = print_all_recalls;
-        search_param.show_qps_per_thread = show_qps_per_thread;
 
         auto index_factory = diskann::IndexFactory(config);
         auto index = index_factory.instance();
         index->load(index_path_prefix.c_str(), num_threads, *(std::max_element(Lvec.begin(), Lvec.end())));
-        index->search(search_param);
-        return 0;*/
-
-        if (!query_filters.empty() && label_type == "ushort")
-        {
-            if (data_type == std::string("int8"))
-            {
-                return search_memory_index<int8_t, uint16_t>(
-                    metric, index_path_prefix, result_path, query_file, gt_file, num_threads, K, print_all_recalls,
-                    Lvec, dynamic, tags, show_qps_per_thread, query_filters, fail_if_recall_below);
-            }
-            else if (data_type == std::string("uint8"))
-            {
-                return search_memory_index<uint8_t, uint16_t>(
-                    metric, index_path_prefix, result_path, query_file, gt_file, num_threads, K, print_all_recalls,
-                    Lvec, dynamic, tags, show_qps_per_thread, query_filters, fail_if_recall_below);
-            }
-            else if (data_type == std::string("float"))
-            {
-                return search_memory_index<float, uint16_t>(metric, index_path_prefix, result_path, query_file, gt_file,
-                                                            num_threads, K, print_all_recalls, Lvec, dynamic, tags,
-                                                            show_qps_per_thread, query_filters, fail_if_recall_below);
-            }
-            else
-            {
-                std::cout << "Unsupported type. Use float/int8/uint8" << std::endl;
-                return -1;
-            }
-        }
-        else
-        {
-            if (data_type == std::string("int8"))
-            {
-                return search_memory_index<int8_t>(metric, index_path_prefix, result_path, query_file, gt_file,
-                                                   num_threads, K, print_all_recalls, Lvec, dynamic, tags,
-                                                   show_qps_per_thread, query_filters, fail_if_recall_below);
-            }
-            else if (data_type == std::string("uint8"))
-            {
-                return search_memory_index<uint8_t>(metric, index_path_prefix, result_path, query_file, gt_file,
-                                                    num_threads, K, print_all_recalls, Lvec, dynamic, tags,
-                                                    show_qps_per_thread, query_filters, fail_if_recall_below);
-            }
-            else if (data_type == std::string("float"))
-            {
-                return search_memory_index<float>(metric, index_path_prefix, result_path, query_file, gt_file,
-                                                  num_threads, K, print_all_recalls, Lvec, dynamic, tags,
-                                                  show_qps_per_thread, query_filters, fail_if_recall_below);
-            }
-            else
-            {
-                std::cout << "Unsupported type. Use float/int8/uint8" << std::endl;
-                return -1;
-            }
-        }
+        auto res = index->search(search_param);
+        auto best_recall =
+            print_search_results(res, gt_file, K, Lvec, show_qps_per_thread, tags, print_all_recalls, num_threads);
+        return best_recall >= fail_if_recall_below ? 0 : -1;
     }
     catch (std::exception &e)
     {

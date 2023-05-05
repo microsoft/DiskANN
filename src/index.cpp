@@ -2016,31 +2016,16 @@ void Index<T, TagT, LabelT>::build_filtered_index(const char *filename, const st
 
 // Refactored search
 template <typename T, typename TagT, typename LabelT>
-std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search(IndexSearchParams &search_params)
+SearchResult Index<T, TagT, LabelT>::search(IndexSearchParams &search_params)
 {
+
+    SearchResult result;
+    result.init(search_params.Lvec.size());
+
     // Load query file
     T *query = nullptr;
     size_t query_num, query_dim, query_aligned_dim;
     diskann::load_aligned_bin<T>(search_params.query_file, query, query_num, query_dim, query_aligned_dim);
-
-    // Load ground truth
-    bool calc_recall_flag = false;
-    uint32_t *gt_ids = nullptr;
-    float *gt_dists = nullptr;
-    size_t gt_num, gt_dim;
-    if (search_params.gt_file != std::string("null") && file_exists(search_params.gt_file))
-    {
-        diskann::load_truthset(search_params.gt_file, gt_ids, gt_dists, gt_num, gt_dim);
-        if (gt_num != query_num)
-        {
-            throw ANNException("Error. Mismatch in number of queries and ground truth data", -1);
-        }
-        calc_recall_flag = true;
-    }
-    else
-    {
-        diskann::cout << " Truthset file " << search_params.gt_file << " not found. Not computing recall." << std::endl;
-    }
 
     // filter search
     bool filtered_search = false;
@@ -2062,63 +2047,31 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search(IndexSearchParams &
         }
     }
 
-    // optimize for fast_l2
-    if (_dist_metric == diskann::FAST_L2 /* && this->has_loaded*/)
-    {
-        this->optimize_index_layout();
-    }
+    
+    //if (_dist_metric == diskann::FAST_L2 /* && this->has_loaded*/)
+    //{
+    //    this->optimize_index_layout();
+    //}
 
     std::cout << "Using " << search_params.num_threads << " threads to search" << std::endl;
 
-    /*std::cout.setf(std::ios_base::fixed, std::ios_base::floatfield);
-    std::cout.precision(2);
-    const std::string qps_title = search_params.show_qps_per_thread ? "QPS/thread" : "QPS";
-    uint32_t table_width = 0;
-    if (this->_enable_tags)
-    {
-        std::cout << std::setw(4) << "Ls" << std::setw(12) << qps_title << std::setw(20) << "Mean Latency (mus)"
-                  << std::setw(15) << "99.9 Latency";
-        table_width += 4 + 12 + 20 + 15;
-    }
-    else
-    {
-        std::cout << std::setw(4) << "Ls" << std::setw(12) << qps_title << std::setw(18) << "Avg dist cmps"
-                  << std::setw(20) << "Mean Latency (mus)" << std::setw(15) << "99.9 Latency";
-        table_width += 4 + 12 + 18 + 20 + 15;
-    }
-    uint32_t recalls_to_print = 0;
-    const uint32_t first_recall = search_params.print_all_recalls ? 1 : (uint32_t)recall_at;
-    if (calc_recall_flag)
-    {
-        for (uint32_t curr_recall = first_recall; curr_recall <= recall_at; curr_recall++)
-        {
-            std::cout << std::setw(12) << ("Recall@" + std::to_string(curr_recall));
-        }
-        recalls_to_print = (uint32_t)recall_at + 1 - first_recall;
-        table_width += recalls_to_print * 12;
-    }
-    std::cout << std::endl;
-    std::cout << std::string(table_width, '=') << std::endl;*/
-
     // query results
     auto recall_at = search_params.K;
-    std::vector<std::vector<uint32_t>> query_result_ids(search_params.Lvec.size()); // vector ids?
-    std::vector<std::vector<float>> query_result_dists(search_params.Lvec.size());  // distances
+    std::vector<std::vector<uint32_t>>& query_result_ids = result.query_result_ids; // vector ids?
+    std::vector<std::vector<float>>& query_result_dists = result.query_result_dists;  // distances
     std::vector<TagT> query_result_tags;
     if (_enable_tags)
     {
         query_result_tags.resize(recall_at * query_num);
     }
 
-    // stats
-    /*std::vector<float> latency_stats(query_num, 0);
-    std::vector<uint32_t> cmp_stats;
+    std::vector<float>& latency_stats = result.stats.latency_stats;
+    std::vector<uint32_t>& cmp_stats = result.stats.cmp_stats;
+    latency_stats.resize(query_num, 0);
     if (not _enable_tags)
     {
         cmp_stats = std::vector<uint32_t>(query_num, 0);
-    }*/
-
-    // float best_recall = 0.0;
+    }
 
     // search for each L value
     for (uint32_t test_id = 0; test_id < search_params.Lvec.size(); test_id++)
@@ -2153,10 +2106,12 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search(IndexSearchParams &
                 auto retval = this->search_with_filters(query + i * query_aligned_dim, filter_label_as_num, recall_at,
                                                         (uint32_t)L, query_result_ids[test_id].data() + i * recall_at,
                                                         query_result_dists[test_id].data() + i * recall_at);
-                // cmp_stats[i] = retval.second;
+                cmp_stats[i] = retval.second;
             }
             else if (_dist_metric == diskann::FAST_L2)
             {
+                // optimize for fast_l2
+                this->optimize_index_layout();
                 this->search_with_optimized_layout(query + i * query_aligned_dim, recall_at, L,
                                                    query_result_ids[test_id].data() + i * recall_at);
             }
@@ -2174,54 +2129,13 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search(IndexSearchParams &
             {
                 auto retval = this->search(query + i * query_aligned_dim, recall_at, (uint32_t)L,
                                            query_result_ids[test_id].data() + i * recall_at);
-                // cmp_stats[i] = retval.second;
+                cmp_stats[i] = retval.second;
             }
-            /*auto qe = std::chrono::high_resolution_clock::now();
+            auto qe = std::chrono::high_resolution_clock::now();
             std::chrono::duration<double> diff = qe - qs;
-            latency_stats[i] = (float)diff.count() * 1000000;*/
+            latency_stats[i] = (float)diff.count() * 1000000;
         }
-
-        /*std::chrono::duration<double> diff = std::chrono::high_resolution_clock::now() - s;
-
-        float displayed_qps = static_cast<float>(query_num) / (float)diff.count();
-
-        if (search_params.show_qps_per_thread)
-            displayed_qps /= search_params.num_threads;*/
-
-        /*std::vector<float> recalls;
-        if (calc_recall_flag)
-        {
-            recalls.reserve(recalls_to_print);
-            for (uint32_t curr_recall = first_recall; curr_recall <= recall_at; curr_recall++)
-            {
-                recalls.push_back(diskann::calculate_recall(query_num, gt_ids, gt_dists, gt_dim,
-                                                            query_result_ids[test_id].data(), recall_at, curr_recall));
-            }
-        }
-
-        std::sort(latency_stats.begin(), latency_stats.end());
-        float mean_latency =
-            std::accumulate(latency_stats.begin(), latency_stats.end(), 0.0) / static_cast<float>(query_num);
-
-        float avg_cmps = (float)std::accumulate(cmp_stats.begin(), cmp_stats.end(), 0) / (float)query_num;*/
-
-        /*   if (_enable_tags)
-           {
-               std::cout << std::setw(4) << L << std::setw(12) << displayed_qps << std::setw(20) << (float)mean_latency
-                         << std::setw(15) << (float)latency_stats[(uint64_t)(0.999 * query_num)];
-           }
-           else
-           {
-               std::cout << std::setw(4) << L << std::setw(12) << displayed_qps << std::setw(18) << avg_cmps
-                         << std::setw(20) << (float)mean_latency << std::setw(15)
-                         << (float)latency_stats[(uint64_t)(0.999 * query_num)];
-           }
-           for (float recall : recalls)
-           {
-               std::cout << std::setw(12) << recall;
-               best_recall = std::max(recall, best_recall);
-           }
-           std::cout << std::endl;*/
+        result.stats.diff_stats[test_id] = std::chrono::high_resolution_clock::now() - s;
     }
 
     std::cout << "Done searching. Now saving results " << std::endl;
@@ -2237,10 +2151,9 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search(IndexSearchParams &
         diskann::save_bin<uint32_t>(cur_result_path, query_result_ids[test_id].data(), query_num, recall_at);
         test_id++;
     }
-
     diskann::aligned_free(query);
 
-    // return best_recall >= search_params.fail_if_recall_below ? 0 : -1;
+    return result;
 }
 
 template <typename T, typename TagT, typename LabelT>
