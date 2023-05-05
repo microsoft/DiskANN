@@ -102,6 +102,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     // get some private variables
     DISKANN_DLLEXPORT size_t get_num_points();
     DISKANN_DLLEXPORT size_t get_max_points();
+    DISKANN_DLLEXPORT uint64_t get_memory_in_bytes();
 
     // Batch build from a file. Optionally pass tags vector.
     DISKANN_DLLEXPORT void build(const char *filename, const size_t num_points_to_load,
@@ -377,6 +378,8 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     uint8_t *_pq_data = nullptr;
     bool _pq_generated = false;
     FixedChunkPQTable _pq_table;
+
+    uint64_t _memory_in_bytes;
 
     //
     // Data structures, locks and flags for dynamic indexing and tags
