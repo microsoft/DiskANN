@@ -228,18 +228,20 @@ void build_incremental_index(const std::string &data_path, const uint32_t L, con
                                           insert_threads, enable_tags, true);
 
     convert_labels_string_to_int(label_file, labels_file_to_use, mem_labels_int_map_file, universal_label);
+    // Parse internal labels into memory so they can be fed to insert_point
     if (universal_label != "")
     {
         LabelT unv_label_as_num = 0;
         index.set_universal_label(unv_label_as_num);
     }
 
-    // TODO: Left off here...What else do we need to do to prep index for building index for filter support?
-    // Does insert into streaming index require medoids? We do not have all points at start
-    // We don't have whole label file while inserting batch of points
-
     index.set_start_points_at_random(static_cast<T>(start_point_norm));
-    index.enable_delete();
+
+    // TODO: Is this necessary?
+    if (!has_labels)
+    {
+        index.enable_delete();
+    }
 
     T *data = nullptr;
     diskann::alloc_aligned((void **)&data, std::max(consolidate_interval, active_window) * aligned_dim * sizeof(T),
@@ -264,19 +266,27 @@ void build_incremental_index(const std::string &data_path, const uint32_t L, con
         auto end = std::min(start + consolidate_interval, max_points_to_insert);
         auto insert_task = std::async(std::launch::async, [&]() {
             load_aligned_bin_part(data_path, data, start, end - start);
+            // TODO: Get labels if exists
             insert_next_batch(index, start, end, params.num_threads, data, aligned_dim);
         });
         insert_task.wait();
 
-        if (delete_tasks.size() > 0)
-            delete_tasks[delete_tasks.size() - 1].wait();
-        if (start >= active_window + consolidate_interval)
+        if (!has_labels)
         {
-            auto start_del = start - active_window - consolidate_interval;
-            auto end_del = start - active_window;
+            if (delete_tasks.size() > 0)
+                delete_tasks[delete_tasks.size() - 1].wait();
+            if (start >= active_window + consolidate_interval)
+            {
+                auto start_del = start - active_window - consolidate_interval;
+                auto end_del = start - active_window;
 
-            delete_tasks.emplace_back(std::async(
-                std::launch::async, [&]() { delete_and_consolidate(index, delete_params, start_del, end_del); }));
+                delete_tasks.emplace_back(std::async(
+                    std::launch::async, [&]() { delete_and_consolidate(index, delete_params, start_del, end_del); }));
+            }
+        }
+        else
+        {
+            std::cout << "Warning: Deleting points is not yet supported for labeled data"
         }
     }
     if (delete_tasks.size() > 0)
