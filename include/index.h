@@ -160,6 +160,9 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     // Will fail if tag already in the index or if tag=0.
     DISKANN_DLLEXPORT int insert_point(const T *point, const TagT tag);
 
+    // Will fail if tag already in the index or if tag=0.
+    DISKANN_DLLEXPORT int insert_point(const T *point, const TagT tag, const std::vector<LabelT> &label);
+
     // call this before issuing deletions to sets relevant flags
     DISKANN_DLLEXPORT int enable_delete();
 

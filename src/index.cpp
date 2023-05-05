@@ -2706,6 +2706,28 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
 template <typename T, typename TagT, typename LabelT>
 int Index<T, TagT, LabelT>::insert_point(const T *point, const TagT tag)
 {
+    std::vector<LabelT> no_labels{0};
+    return insert_point(point, tag, no_labels);
+}
+
+template <typename T, typename TagT, typename LabelT>
+int Index<T, TagT, LabelT>::insert_point(const T *point, const TagT tag, const std::vector<LabelT> &labels)
+{
+    if (_filtered_index)
+    {
+        // TODO: Make this thread safe
+        size_t point_id = _pts_to_labels.size() + 1;
+        _pts_to_labels.emplace_back(labels);
+
+        for (auto label : labels)
+        {
+            if (_labels.find(label) == _labels.end())
+            {
+                _labels.insert(label);
+                _label_to_medoid_id[label] = (uint32_t)point_id;
+            }
+        }
+    }
     assert(_has_built);
     if (tag == static_cast<TagT>(0))
     {
