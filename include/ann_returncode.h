@@ -17,7 +17,7 @@ class ANNReturnCode
         INVALID_LABEL
     };
 
-    DISKANN_DLLEXPORT const char *getErrorDescription()
+    const char *getErrorDescription()
     {
         switch (_returncode)
         {
@@ -29,7 +29,7 @@ class ANNReturnCode
             return "Unknown error";
         }
     }
-    DISKANN_DLLEXPORT Value getReturnCode()
+    Value getReturnCode()
     {
         return _returncode;
     }
