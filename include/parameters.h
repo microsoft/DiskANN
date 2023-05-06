@@ -144,18 +144,19 @@ enum State : uint8_t
 template <typename LabelT = uint32_t> class IndexSearchContext
 {
   public:
-    IndexSearchContext(LabelT label, bool use_filter = false, uint32_t time_limit_in_microseconds = 0u,
+    IndexSearchContext(LabelT label, bool use_filter, uint32_t time_limit_in_microseconds = 0u,
                        uint32_t io_limit = UINT32_MAX)
         : IndexSearchContext(time_limit_in_microseconds, io_limit)
     {
-        _label = label;
         _use_filter = use_filter;
+        _label = label;
     }
 
     IndexSearchContext(uint32_t time_limit_in_microseconds = 0u, uint32_t io_limit = UINT32_MAX)
         : _time_limit_in_microseconds(time_limit_in_microseconds), _io_limit(io_limit), _result_state(State::Unknown)
     {
         _use_filter = false;
+        _label = (LabelT)0;
     }
 
     /// <summary>
@@ -220,5 +221,4 @@ template <typename LabelT = uint32_t> class IndexSearchContext
     bool _use_filter;
 };
 
-template DISKANN_DLLEXPORT class IndexSearchContext<UINT32>;
 } // namespace diskann
