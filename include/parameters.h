@@ -214,11 +214,11 @@ template <typename LabelT = uint32_t> class IndexSearchContext
 
   private:
     uint32_t _time_limit_in_microseconds;
-    State _result_state;
-    Timer _timer;
     uint32_t _io_limit;
-    LabelT _label;
+    State _result_state;
     bool _use_filter;
+    LabelT _label;
+    Timer _timer;
 };
 
 } // namespace diskann
