@@ -93,7 +93,8 @@ Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_point
     {
         if (_num_pq_chunks > _dim)
             throw diskann::ANNException("ERROR: num_pq_chunks > dim", -1, __FUNCSIG__, __FILE__, __LINE__);
-        _memory_in_bytes += alloc_aligned(((void **)&_pq_data), total_internal_points * _num_pq_chunks * sizeof(char), 8 * sizeof(char));
+        _memory_in_bytes += alloc_aligned(((void **)&_pq_data), total_internal_points * _num_pq_chunks * sizeof(char),
+                                          8 * sizeof(char));
         std::memset(_pq_data, 0, total_internal_points * _num_pq_chunks * sizeof(char));
     }
     _memory_in_bytes +=
@@ -886,7 +887,8 @@ template <typename T, typename TagT, typename LabelT> std::vector<uint32_t> Inde
 template <typename T, typename TagT, typename LabelT>
 std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
     const T *query, const uint32_t Lsize, const std::vector<uint32_t> &init_ids, InMemQueryScratch<T> *scratch,
-    bool use_filter, const std::vector<LabelT> &filter_label, bool search_invocation, IndexSearchContext<LabelT>* context)
+    bool use_filter, const std::vector<LabelT> &filter_label, bool search_invocation,
+    IndexSearchContext<LabelT> *context)
 {
     if (context != nullptr && context->CheckTimeout())
     {
@@ -2128,15 +2130,16 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
                                                                           const size_t K, const uint32_t L,
                                                                           IdType *indices, float *distances)
 {
-    IndexSearchContext<LabelT> context(filter_label, /*use_filter*/true);
+    IndexSearchContext<LabelT> context(filter_label, /*use_filter*/ true);
     return search_with_filters(query, K, L, indices, distances, context);
 }
 
 template <typename T, typename TagT, typename LabelT>
 template <typename IdType>
-std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(
-    const T *query, const size_t K, const uint32_t L, IdType *indices, float *distances,
-    IndexSearchContext<LabelT> &context)
+std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const T *query, const size_t K,
+                                                                          const uint32_t L, IdType *indices,
+                                                                          float *distances,
+                                                                          IndexSearchContext<LabelT> &context)
 {
     if (context.CheckTimeout())
     {
