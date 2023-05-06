@@ -7,6 +7,8 @@
 #include <unordered_map>
 
 #include "defaults.h"
+#include "timer.h"
+#include "windows_customizations.h"
 
 namespace diskann
 {
@@ -121,4 +123,102 @@ class IndexWriteParametersBuilder
     uint32_t _num_frozen_points{defaults::NUM_FROZEN_POINTS};
 };
 
+/// <summary>
+/// Search state
+/// </summary>
+enum State : uint8_t
+{
+    Unknown = 0,
+    Success = 1,
+    Failure = 2,
+    FailureTimeout = 3,      // Fail because of timeout
+    FailureException = 4,    // Fail because of Exception
+    FailureInvalidLabel = 5, // Fail because of invalid label
+    StateCount = 6           // The number of state
+};
+
+/// <summary>
+/// Use this class to pass in/out searching parameters/result
+/// </summary>
+
+template <typename LabelT = uint32_t> class IndexSearchContext
+{
+  public:
+    IndexSearchContext(LabelT label, bool use_filter = false, uint32_t time_limit_in_microseconds = 0u,
+                       uint32_t io_limit = UINT32_MAX)
+        : IndexSearchContext(time_limit_in_microseconds, io_limit)
+    {
+        _label = label;
+        _use_filter = use_filter;
+    }
+
+    IndexSearchContext(uint32_t time_limit_in_microseconds = 0u, uint32_t io_limit = UINT32_MAX)
+        : _time_limit_in_microseconds(time_limit_in_microseconds), _io_limit(io_limit), _result_state(State::Unknown)
+    {
+        _use_filter = false;
+    }
+
+    /// <summary>
+    /// Set stats(compare count, IO count, compare time, IO time .etc)
+    /// </summary>
+    /// <param name=""></param>
+    virtual void SetCounter(const std::string & /*name*/, uint64_t /*value*/)
+    {
+    }
+
+    /// <summary>
+    /// Set the searching result
+    /// </summary>
+    /// <param name="status"></param>
+    virtual void SetState(State state)
+    {
+        _result_state = state;
+    }
+
+    State GetState() const
+    {
+        return _result_state;
+    }
+
+    LabelT GetLabel() const
+    {
+        return _label;
+    }
+
+    uint32_t GetIOLimit() const
+    {
+        return _io_limit;
+    }
+
+    bool UseFilter() const
+    {
+        return _use_filter;
+    }
+
+    bool IsSuccess() const
+    {
+        return _result_state == State::Success;
+    }
+
+    bool CheckTimeout()
+    {
+        if (_time_limit_in_microseconds > 0 && _time_limit_in_microseconds < _timer.elapsed())
+        {
+            SetState(State::FailureTimeout);
+            return true;
+        }
+
+        return false;
+    }
+
+  private:
+    uint32_t _time_limit_in_microseconds;
+    State _result_state;
+    Timer _timer;
+    uint32_t _io_limit;
+    LabelT _label;
+    bool _use_filter;
+};
+
+template DISKANN_DLLEXPORT class IndexSearchContext<UINT32>;
 } // namespace diskann

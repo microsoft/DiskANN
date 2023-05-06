@@ -886,8 +886,12 @@ template <typename T, typename TagT, typename LabelT> std::vector<uint32_t> Inde
 template <typename T, typename TagT, typename LabelT>
 std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
     const T *query, const uint32_t Lsize, const std::vector<uint32_t> &init_ids, InMemQueryScratch<T> *scratch,
-    bool use_filter, const std::vector<LabelT> &filter_label, bool search_invocation)
+    bool use_filter, const std::vector<LabelT> &filter_label, bool search_invocation, IndexSearchContext<LabelT>* context)
 {
+    if (context != nullptr && context->CheckTimeout())
+    {
+        return std::make_pair(0, 0);
+    }
     std::vector<Neighbor> &expanded_nodes = scratch->pool();
     NeighborPriorityQueue &best_L_nodes = scratch->best_l_nodes();
     best_L_nodes.reserve(Lsize);
@@ -928,6 +932,10 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
         _pq_table.populate_chunk_distances(query_rotated, pq_dists);
 
         pq_coord_scratch = pq_query_scratch->aligned_pq_coord_scratch;
+        if (context != nullptr && context->CheckTimeout())
+        {
+            return std::make_pair(0, 0);
+        }
     }
 
     if (expanded_nodes.size() > 0 || id_scratch.size() > 0)
@@ -1009,6 +1017,11 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
             Neighbor nn = Neighbor(id, distance);
             best_L_nodes.insert(nn);
         }
+    }
+
+    if (context != nullptr && context->CheckTimeout())
+    {
+        return std::make_pair(0, 0);
     }
 
     uint32_t hops = 0;
@@ -1120,7 +1133,18 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
         {
             best_L_nodes.insert(Neighbor(id_scratch[m], dist_scratch[m]));
         }
+
+        if (context != nullptr && context->CheckTimeout())
+        {
+            return std::make_pair(hops, cmps);
+        }
     }
+
+    if (context != nullptr && context->CheckTimeout())
+    {
+        return std::make_pair(hops, cmps);
+    }
+
     return std::make_pair(hops, cmps);
 }
 
@@ -2018,6 +2042,21 @@ template <typename IdType>
 std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search(const T *query, const size_t K, const uint32_t L,
                                                              IdType *indices, float *distances)
 {
+    IndexSearchContext<LabelT> context;
+    return search(query, K, L, indices, distances, context);
+}
+
+template <typename T, typename TagT, typename LabelT>
+template <typename IdType>
+std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search(const T *query, const size_t K, const uint32_t L,
+                                                             IdType *indices, float *distances,
+                                                             IndexSearchContext<LabelT> &context)
+{
+    if (context.UseFilter())
+    {
+        return search_with_filters(query, K, L, indices, distances, context);
+    }
+
     if (K > (uint64_t)L)
     {
         throw ANNException("Set L to a value of at least K", -1, __FUNCSIG__, __FILE__, __LINE__);
@@ -2039,7 +2078,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search(const T *query, con
 
     std::shared_lock<std::shared_timed_mutex> lock(_update_lock);
 
-    auto retval = iterate_to_fixed_point(query, L, init_ids, scratch, false, unused_filter_label, true);
+    auto retval = iterate_to_fixed_point(query, L, init_ids, scratch, false, unused_filter_label, true, &context);
 
     NeighborPriorityQueue &best_L_nodes = scratch->best_l_nodes();
 
@@ -2066,11 +2105,20 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search(const T *query, con
         if (pos == K)
             break;
     }
+
+    if (context.CheckTimeout())
+    {
+        return retval;
+    }
+
     if (pos < K)
     {
+        context.SetState(State::Failure);
         diskann::cerr << "Found fewer than K elements for query" << std::endl;
     }
 
+    context.SetCounter("hops", retval.first);
+    context.SetCounter("cmps", retval.second);
     return retval;
 }
 
@@ -2080,6 +2128,20 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
                                                                           const size_t K, const uint32_t L,
                                                                           IdType *indices, float *distances)
 {
+    IndexSearchContext<LabelT> context(filter_label, /*use_filter*/true);
+    return search_with_filters(query, K, L, indices, distances, context);
+}
+
+template <typename T, typename TagT, typename LabelT>
+template <typename IdType>
+std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(
+    const T *query, const size_t K, const uint32_t L, IdType *indices, float *distances,
+    IndexSearchContext<LabelT> &context)
+{
+    if (context.CheckTimeout())
+    {
+        return std::make_pair(0, 0);
+    }
     if (K > (uint64_t)L)
     {
         throw ANNException("Set L to a value of at least K", -1, __FUNCSIG__, __FILE__, __LINE__);
@@ -2087,6 +2149,10 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
 
     ScratchStoreManager<InMemQueryScratch<T>> manager(_query_scratch);
     auto scratch = manager.scratch_space();
+    if (context.CheckTimeout())
+    {
+        return std::make_pair(0, 0);
+    }
 
     if (L > scratch->get_L())
     {
@@ -2100,7 +2166,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
     std::vector<uint32_t> init_ids = get_init_ids();
 
     std::shared_lock<std::shared_timed_mutex> lock(_update_lock);
-
+    auto filter_label = context.GetLabel();
     if (_label_to_medoid_id.find(filter_label) != _label_to_medoid_id.end())
     {
         init_ids.emplace_back(_label_to_medoid_id[filter_label]);
@@ -2116,7 +2182,16 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
     T *aligned_query = scratch->aligned_query();
     memcpy(aligned_query, query, _dim * sizeof(T));
 
-    auto retval = iterate_to_fixed_point(aligned_query, L, init_ids, scratch, true, filter_vec, true);
+    if (context.CheckTimeout())
+    {
+        return std::make_pair(0, 0);
+    }
+
+    auto retval = iterate_to_fixed_point(aligned_query, L, init_ids, scratch, true, filter_vec, true, &context);
+    if (context.CheckTimeout())
+    {
+        return retval;
+    }
 
     auto best_L_nodes = scratch->best_l_nodes();
 
@@ -2145,6 +2220,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
     }
     if (pos < K)
     {
+        context.SetState(State::Failure);
         diskann::cerr << "Found fewer than K elements for query" << std::endl;
     }
 
@@ -3169,6 +3245,9 @@ template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<int8_t, uint64_t,
     const int8_t *query, const size_t K, const uint32_t L, uint64_t *indices, float *distances);
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<int8_t, uint64_t, uint32_t>::search<uint32_t>(
     const int8_t *query, const size_t K, const uint32_t L, uint32_t *indices, float *distances);
+template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<int8_t, uint64_t, uint32_t>::search<uint32_t>(
+    const int8_t *query, const size_t K, const uint32_t L, uint32_t *indices, float *distances,
+    IndexSearchContext<uint32_t> &context);
 // TagT==uint32_t
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<float, uint32_t, uint32_t>::search<uint64_t>(
     const float *query, const size_t K, const uint32_t L, uint64_t *indices, float *distances);
@@ -3182,6 +3261,9 @@ template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<int8_t, uint32_t,
     const int8_t *query, const size_t K, const uint32_t L, uint64_t *indices, float *distances);
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<int8_t, uint32_t, uint32_t>::search<uint32_t>(
     const int8_t *query, const size_t K, const uint32_t L, uint32_t *indices, float *distances);
+template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<int8_t, uint32_t, uint32_t>::search<uint32_t>(
+    const int8_t *query, const size_t K, const uint32_t L, uint32_t *indices, float *distances,
+    IndexSearchContext<uint32_t> &context);
 
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<float, uint64_t, uint32_t>::search_with_filters<
     uint64_t>(const float *query, const uint32_t &filter_label, const size_t K, const uint32_t L, uint64_t *indices,

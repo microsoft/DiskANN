@@ -1064,6 +1064,20 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
                                                  const uint32_t io_limit, const bool use_reorder_data,
                                                  QueryStats *stats)
 {
+    IndexSearchContext<LabelT> context(filter_label, use_filter);
+    return cached_beam_search(query1, k_search, l_search, indices, distances, beam_width, context, use_reorder_data,
+                              stats);
+}
+
+template <typename T, typename LabelT>
+void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t k_search, const uint64_t l_search,
+                                                 uint64_t *indices, float *distances, const uint64_t beam_width,
+                                                 IndexSearchContext<LabelT> &context, const bool use_reorder_data,
+                                                 QueryStats *stats)
+{
+    auto use_filter = context.UseFilter();
+    auto filter_label = context.GetLabel();
+    auto io_limit = context.GetIOLimit();
     int32_t filter_num = 0;
     if (use_filter)
     {
@@ -1089,6 +1103,11 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
     IOContext &ctx = data->ctx;
     auto query_scratch = &(data->scratch);
     auto pq_query_scratch = query_scratch->_pq_scratch;
+
+    if (context.CheckTimeout())
+    {
+        return;
+    }
 
     // reset query scratch
     query_scratch->reset();
@@ -1202,6 +1221,10 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
     std::vector<std::pair<uint32_t, std::pair<uint32_t, uint32_t *>>> cached_nhoods;
     cached_nhoods.reserve(2 * beam_width);
 
+    if (context.CheckTimeout())
+    {
+        return;
+    }
     while (retset.has_unexpanded_node() && num_ios < io_limit)
     {
         // clear iteration state
@@ -1233,6 +1256,11 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
             {
                 reinterpret_cast<std::atomic<uint32_t> &>(this->node_visit_counter[nbr.id].second).fetch_add(1);
             }
+        }
+
+        if (context.CheckTimeout())
+        {
+            return;
         }
 
         // read nhoods of frontier ids
@@ -1269,6 +1297,10 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
             }
         }
 
+        if (context.CheckTimeout())
+        {
+            return;
+        }
         // process cached nhoods
         for (auto &cached_nhood : cached_nhoods)
         {
@@ -1399,6 +1431,10 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
         }
 
         hops++;
+        if (context.CheckTimeout())
+        {
+            return;
+        }
     }
 
     // re-sort by distance
@@ -1431,6 +1467,10 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
             }
         }
 
+        if (context.CheckTimeout())
+        {
+            return;
+        }
         io_timer.reset();
 #ifdef USE_BING_INFRA
         reader->read(vec_read_reqs, ctx, false); // sync reader windows.
@@ -1484,6 +1524,13 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
     if (stats != nullptr)
     {
         stats->total_us = (float)query_timer.elapsed();
+        context.SetCounter("CPUTime", (uint64_t)stats->cpu_us);
+        context.SetCounter("IOTime", (uint64_t)stats->io_us);
+        context.SetCounter("CacheHits", stats->n_cache_hits);
+        context.SetCounter("cmps", stats->n_cmps);
+        context.SetCounter("hops", stats->n_hops);
+        context.SetCounter("IOCount", stats->n_ios);
+        context.SetCounter("TotalTime", (uint64_t)stats->total_us);
     }
 }
 
