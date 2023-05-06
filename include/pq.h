@@ -65,10 +65,9 @@ template <typename T> struct PQScratch
     PQScratch(size_t graph_degree, size_t aligned_dim)
     {
         memory_in_bytes = diskann::alloc_aligned((void **)&aligned_pq_coord_scratch,
-                               (size_t)graph_degree * (size_t)MAX_PQ_CHUNKS * sizeof(uint8_t), 256);
+                                                 (size_t)graph_degree * (size_t)MAX_PQ_CHUNKS * sizeof(uint8_t), 256);
         memory_in_bytes += diskann::alloc_aligned((void **)&aligned_pqtable_dist_scratch,
-                                                 256 * (size_t)MAX_PQ_CHUNKS * sizeof(float),
-                               256);
+                                                  256 * (size_t)MAX_PQ_CHUNKS * sizeof(float), 256);
         memory_in_bytes +=
             diskann::alloc_aligned((void **)&aligned_dist_scratch, (size_t)graph_degree * sizeof(float), 256);
         memory_in_bytes +=
