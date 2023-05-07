@@ -1147,6 +1147,8 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
         return std::make_pair(hops, cmps);
     }
 
+    context->GetStats().n_hops = hops;
+    context->GetStats().n_cmps = cmps;
     return std::make_pair(hops, cmps);
 }
 
@@ -2064,8 +2066,10 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search(const T *query, con
         throw ANNException("Set L to a value of at least K", -1, __FUNCSIG__, __FILE__, __LINE__);
     }
 
+    Timer timer;
     ScratchStoreManager<InMemQueryScratch<T>> manager(_query_scratch);
     auto scratch = manager.scratch_space();
+    context.GetStats().scratch_us = (float)timer.elapsed();
 
     if (L > scratch->get_L())
     {
@@ -2081,6 +2085,11 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search(const T *query, con
     std::shared_lock<std::shared_timed_mutex> lock(_update_lock);
 
     auto retval = iterate_to_fixed_point(query, L, init_ids, scratch, false, unused_filter_label, true, &context);
+
+    if (context.CheckTimeout())
+    {
+        return retval;
+    }
 
     NeighborPriorityQueue &best_L_nodes = scratch->best_l_nodes();
 
@@ -2108,19 +2117,12 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search(const T *query, con
             break;
     }
 
-    if (context.CheckTimeout())
-    {
-        return retval;
-    }
-
     if (pos < K)
     {
         context.SetState(State::Failure);
         diskann::cerr << "Found fewer than K elements for query" << std::endl;
     }
 
-    context.SetCounter("hops", retval.first);
-    context.SetCounter("cmps", retval.second);
     return retval;
 }
 

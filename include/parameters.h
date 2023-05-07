@@ -9,6 +9,7 @@
 #include "defaults.h"
 #include "timer.h"
 #include "windows_customizations.h"
+#include "percentile_stats.h"
 
 namespace diskann
 {
@@ -160,14 +161,6 @@ template <typename LabelT = uint32_t> class IndexSearchContext
     }
 
     /// <summary>
-    /// Set stats(compare count, IO count, compare time, IO time .etc)
-    /// </summary>
-    /// <param name=""></param>
-    virtual void SetCounter(const std::string & /*name*/, uint64_t /*value*/)
-    {
-    }
-
-    /// <summary>
     /// Set the searching result
     /// </summary>
     /// <param name="status"></param>
@@ -212,6 +205,11 @@ template <typename LabelT = uint32_t> class IndexSearchContext
         return false;
     }
 
+    QueryStats &GetStats()
+    {
+        return _stats;
+    }
+
   private:
     uint32_t _time_limit_in_microseconds;
     uint32_t _io_limit;
@@ -219,6 +217,7 @@ template <typename LabelT = uint32_t> class IndexSearchContext
     bool _use_filter;
     LabelT _label;
     Timer _timer;
+    QueryStats _stats;
 };
 
 } // namespace diskann

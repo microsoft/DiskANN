@@ -1099,11 +1099,20 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
     if (beam_width > MAX_N_SECTOR_READS)
         throw ANNException("Beamwidth can not be higher than MAX_N_SECTOR_READS", -1, __FUNCSIG__, __FILE__, __LINE__);
 
+    Timer query_timer, io_timer, cpu_timer;
     ScratchStoreManager<SSDThreadData<T>> manager(this->thread_data);
     auto data = manager.scratch_space();
     IOContext &ctx = data->ctx;
     auto query_scratch = &(data->scratch);
     auto pq_query_scratch = query_scratch->_pq_scratch;
+    if (stats == nullptr)
+    {
+        stats = &context.GetStats();
+    }
+    if (stats != nullptr)
+    {
+        stats->scratch_us = (float)query_timer.elapsed();
+    }
 
     if (context.CheckTimeout())
     {
@@ -1173,7 +1182,6 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
         diskann::aggregate_coords(ids, n_ids, this->data, this->n_chunks, pq_coord_scratch);
         diskann::pq_dist_lookup(pq_coord_scratch, n_ids, this->n_chunks, pq_dists, dists_out);
     };
-    Timer query_timer, io_timer, cpu_timer;
 
     tsl::robin_set<uint64_t> &visited = query_scratch->visited;
     NeighborPriorityQueue &retset = query_scratch->retset;
@@ -1525,13 +1533,6 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
     if (stats != nullptr)
     {
         stats->total_us = (float)query_timer.elapsed();
-        context.SetCounter("CPUTime", (uint64_t)stats->cpu_us);
-        context.SetCounter("IOTime", (uint64_t)stats->io_us);
-        context.SetCounter("CacheHits", stats->n_cache_hits);
-        context.SetCounter("cmps", stats->n_cmps);
-        context.SetCounter("hops", stats->n_hops);
-        context.SetCounter("IOCount", stats->n_ios);
-        context.SetCounter("TotalTime", (uint64_t)stats->total_us);
     }
 }
 

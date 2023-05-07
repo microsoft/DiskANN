@@ -20,9 +20,10 @@ namespace diskann
 {
 struct QueryStats
 {
-    float total_us = 0; // total time to process query in micros
-    float io_us = 0;    // total time spent in IO
-    float cpu_us = 0;   // total time spent in CPU
+    float total_us = 0;   // total time to process query in micros
+    float io_us = 0;      // total time spent in IO
+    float cpu_us = 0;     // total time spent in CPU
+    float scratch_us = 0; // time spent to allocate scratch
 
     unsigned n_4k = 0;         // # of 4kB reads
     unsigned n_8k = 0;         // # of 8kB reads
