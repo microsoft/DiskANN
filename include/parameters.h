@@ -139,20 +139,12 @@ enum State : uint8_t
 };
 
 /// <summary>
-/// Use this class to pass in/out searching parameters/result
+/// Use this class to pass in searching parameters and pass out searching result
 /// </summary>
 
 template <typename LabelT = uint32_t> class IndexSearchContext
 {
   public:
-    IndexSearchContext(LabelT label, bool use_filter, uint32_t time_limit_in_microseconds = 0u,
-                       uint32_t io_limit = UINT32_MAX)
-        : IndexSearchContext(time_limit_in_microseconds, io_limit)
-    {
-        _use_filter = use_filter;
-        _label = label;
-    }
-
     IndexSearchContext(uint32_t time_limit_in_microseconds = 0u, uint32_t io_limit = UINT32_MAX)
         : _time_limit_in_microseconds(time_limit_in_microseconds), _io_limit(io_limit), _result_state(State::Unknown)
     {
@@ -160,11 +152,13 @@ template <typename LabelT = uint32_t> class IndexSearchContext
         _label = (LabelT)0;
     }
 
-    /// <summary>
-    /// Set the searching result
-    /// </summary>
-    /// <param name="status"></param>
-    virtual void SetState(State state)
+    void SetLabel(LabelT label, bool use_filter)
+    {
+        _label = label;
+        _use_filter = use_filter;
+    }
+
+    void SetState(State state)
     {
         _result_state = state;
     }

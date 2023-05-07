@@ -1065,7 +1065,8 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
                                                  const uint32_t io_limit, const bool use_reorder_data,
                                                  QueryStats *stats)
 {
-    IndexSearchContext<LabelT> context(filter_label, use_filter);
+    IndexSearchContext<LabelT> context;
+    context.SetLabel(filter_label, use_filter);
     return cached_beam_search(query1, k_search, l_search, indices, distances, beam_width, context, use_reorder_data,
                               stats);
 }

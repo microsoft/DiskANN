@@ -2132,7 +2132,8 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
                                                                           const size_t K, const uint32_t L,
                                                                           IdType *indices, float *distances)
 {
-    IndexSearchContext<LabelT> context(filter_label, /*use_filter*/ true);
+    IndexSearchContext<LabelT> context;
+    context.SetLabel(filter_label, /*use_filter*/ true);
     return search_with_filters(query, K, L, indices, distances, context);
 }
 
