@@ -138,13 +138,13 @@ class InstallCMakeLibs(install_lib):
         self.skip_build = True
 
         # we only need to move the windows build output
-        bin_dir = os.path.join('.', 'x64', 'Release')
+        windows_build_output_dir = Path('.') / 'x64' / 'Release'
 
-        if os.path.exists(bin_dir):
+        if windows_build_output_dir.exists():
             libs = [
-                os.path.join(bin_dir, _lib) for _lib in
-                os.listdir(bin_dir) if
-                os.path.isfile(os.path.join(bin_dir, _lib)) and
+                os.path.join(windows_build_output_dir, _lib) for _lib in
+                os.listdir(windows_build_output_dir) if
+                os.path.isfile(os.path.join(windows_build_output_dir, _lib)) and
                 os.path.splitext(_lib)[1] in [".dll", '.lib', '.pyd', '.exp']
             ]
 
