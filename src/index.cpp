@@ -1147,8 +1147,12 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
         return std::make_pair(hops, cmps);
     }
 
-    context->GetStats().n_hops = hops;
-    context->GetStats().n_cmps = cmps;
+    if (context != nullptr)
+    {
+        context->GetStats().n_hops = hops;
+        context->GetStats().n_cmps = cmps;
+    }
+
     return std::make_pair(hops, cmps);
 }
 
