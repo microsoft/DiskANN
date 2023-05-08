@@ -191,47 +191,6 @@ int main(int argc, char **argv)
         index->build(build_params);
         index->save(index_path_prefix.c_str());
         return 0;
-
-        /*if (label_file != "" && label_type == "ushort")
-        {
-            if (data_type == std::string("int8"))
-                return build_in_memory_index<int8_t, uint32_t, uint16_t>(
-                    metric, data_path, R, L, alpha, index_path_prefix, num_threads, use_pq_build, build_PQ_bytes,
-                    use_opq, label_file, universal_label, Lf);
-            else if (data_type == std::string("uint8"))
-                return build_in_memory_index<uint8_t, uint32_t, uint16_t>(
-                    metric, data_path, R, L, alpha, index_path_prefix, num_threads, use_pq_build, build_PQ_bytes,
-                    use_opq, label_file, universal_label, Lf);
-            else if (data_type == std::string("float"))
-                return build_in_memory_index<float, uint32_t, uint16_t>(
-                    metric, data_path, R, L, alpha, index_path_prefix, num_threads, use_pq_build, build_PQ_bytes,
-                    use_opq, label_file, universal_label, Lf);
-            else
-            {
-                std::cout << "Unsupported type. Use one of int8, uint8 or float." << std::endl;
-                return -1;
-            }
-        }
-        else
-        {
-            if (data_type == std::string("int8"))
-                return build_in_memory_index<int8_t>(metric, data_path, R, L, alpha, index_path_prefix, num_threads,
-                                                     use_pq_build, build_PQ_bytes, use_opq, label_file, universal_label,
-                                                     Lf);
-            else if (data_type == std::string("uint8"))
-                return build_in_memory_index<uint8_t>(metric, data_path, R, L, alpha, index_path_prefix, num_threads,
-                                                      use_pq_build, build_PQ_bytes, use_opq, label_file,
-                                                      universal_label, Lf);
-            else if (data_type == std::string("float"))
-                return build_in_memory_index<float>(metric, data_path, R, L, alpha, index_path_prefix, num_threads,
-                                                    use_pq_build, build_PQ_bytes, use_opq, label_file, universal_label,
-                                                    Lf);
-            else
-            {
-                std::cout << "Unsupported type. Use one of int8, uint8 or float." << std::endl;
-                return -1;
-            }
-        }*/
     }
     catch (const std::exception &e)
     {
