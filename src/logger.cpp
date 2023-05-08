@@ -16,7 +16,7 @@ DISKANN_DLLEXPORT ANNStreamBuf cerrBuff(stderr);
 DISKANN_DLLEXPORT std::basic_ostream<char> cout(&coutBuff);
 DISKANN_DLLEXPORT std::basic_ostream<char> cerr(&cerrBuff);
 
-#if defined(EXEC_ENV_OLS) || defined(ENABLE_CUSTOM_LOGGER)
+#ifdef ENABLE_CUSTOM_LOGGER
 std::function<void(LogLevel, const char *)> g_logger;
 
 void SetCustomLogger(std::function<void(LogLevel, const char *)> logger)
