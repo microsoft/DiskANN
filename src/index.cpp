@@ -90,7 +90,8 @@ Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_point
     {
         if (_num_pq_chunks > _dim)
             throw diskann::ANNException("ERROR: num_pq_chunks > dim", -1, __FUNCSIG__, __FILE__, __LINE__);
-        _memory_in_bytes += alloc_aligned(((void **)&_pq_data), total_internal_points * _num_pq_chunks * sizeof(char), 8 * sizeof(char));
+        _memory_in_bytes += alloc_aligned(((void **)&_pq_data), total_internal_points * _num_pq_chunks * sizeof(char),
+                                          8 * sizeof(char));
         std::memset(_pq_data, 0, total_internal_points * _num_pq_chunks * sizeof(char));
     }
 

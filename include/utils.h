@@ -359,7 +359,8 @@ template <typename T> inline std::string getValues(T *data, size_t num)
 
 // load_bin functions START
 template <typename T>
-inline uint64_t load_bin_impl(std::basic_istream<char> &reader, T *&data, size_t &npts, size_t &dim, size_t file_offset = 0)
+inline uint64_t load_bin_impl(std::basic_istream<char> &reader, T *&data, size_t &npts, size_t &dim,
+                              size_t file_offset = 0)
 {
     int npts_i32, dim_i32;
 

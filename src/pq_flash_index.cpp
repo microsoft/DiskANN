@@ -136,7 +136,8 @@ template <typename T, typename LabelT> void PQFlashIndex<T, LabelT>::load_cache_
     memory_in_bytes += sizeof(uint32_t) * nhood_cache_buf_size;
 
     size_t coord_cache_buf_len = num_cached_nodes * aligned_dim;
-    memory_in_bytes += diskann::alloc_aligned((void **)&coord_cache_buf, coord_cache_buf_len * sizeof(T), 8 * sizeof(T));
+    memory_in_bytes +=
+        diskann::alloc_aligned((void **)&coord_cache_buf, coord_cache_buf_len * sizeof(T), 8 * sizeof(T));
     memset(coord_cache_buf, 0, coord_cache_buf_len * sizeof(T));
 
     size_t BLOCK_SIZE = 8;
