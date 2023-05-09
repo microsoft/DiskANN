@@ -382,8 +382,6 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     bool _pq_generated = false;
     FixedChunkPQTable _pq_table;
 
-    uint64_t _memory_in_bytes;
-
     //
     // Data structures, locks and flags for dynamic indexing and tags
     //
@@ -403,6 +401,8 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     bool _data_compacted = true;    // true if data has been compacted
     bool _is_saved = false;         // Checking if the index is already saved.
     bool _conc_consolidate = false; // use _lock while searching
+
+    uint64_t _memory_in_bytes;
 
     // Acquire locks in the order below when acquiring multiple locks
     std::shared_timed_mutex // RW mutex between save/load (exclusive lock) and
