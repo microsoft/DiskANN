@@ -27,6 +27,7 @@
 
 namespace diskann
 {
+
 //
 // Scratch space for in-memory index based search
 //
@@ -34,8 +35,9 @@ template <typename T> class InMemQueryScratch
 {
   public:
     ~InMemQueryScratch();
-    InMemQueryScratch(uint32_t search_l, uint32_t indexing_l, uint32_t r, uint32_t maxc, size_t dim,
-                      bool init_pq_scratch = false);
+    // REFACTOR TODO: move all parameters to a new class.
+    InMemQueryScratch(uint32_t search_l, uint32_t indexing_l, uint32_t r, uint32_t maxc, size_t dim, size_t aligned_dim,
+                      size_t alignment_factor, bool init_pq_scratch = false);
     void resize_for_new_L(uint32_t new_search_l);
     void clear();
 

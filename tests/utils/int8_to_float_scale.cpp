@@ -42,8 +42,8 @@ int main(int argc, char **argv)
     std::ofstream writer(argv[2], std::ios::binary);
     auto read_buf = new int8_t[blk_size * ndims];
     auto write_buf = new float[blk_size * ndims];
-    float bias = atof(argv[3]);
-    float scale = atof(argv[4]);
+    float bias = (float)atof(argv[3]);
+    float scale = (float)atof(argv[4]);
 
     writer.write((char *)(&npts_u32), sizeof(uint32_t));
     writer.write((char *)(&ndims_u32), sizeof(uint32_t));

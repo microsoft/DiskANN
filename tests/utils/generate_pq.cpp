@@ -22,16 +22,16 @@ bool generate_pq(const std::string &data_path, const std::string &index_prefix_p
 
     if (opq)
     {
-        diskann::generate_opq_pivots(train_data, train_size, train_dim, num_pq_centers, num_pq_chunks, pq_pivots_path,
-                                     true);
+        diskann::generate_opq_pivots(train_data, train_size, (uint32_t)train_dim, (uint32_t)num_pq_centers,
+                                     (uint32_t)num_pq_chunks, pq_pivots_path, true);
     }
     else
     {
-        diskann::generate_pq_pivots(train_data, train_size, train_dim, num_pq_centers, num_pq_chunks,
-                                    KMEANS_ITERS_FOR_PQ, pq_pivots_path);
+        diskann::generate_pq_pivots(train_data, train_size, (uint32_t)train_dim, (uint32_t)num_pq_centers,
+                                    (uint32_t)num_pq_chunks, KMEANS_ITERS_FOR_PQ, pq_pivots_path);
     }
-    diskann::generate_pq_data_from_pivots<T>(data_path, num_pq_centers, num_pq_chunks, pq_pivots_path,
-                                             pq_compressed_vectors_path, true);
+    diskann::generate_pq_data_from_pivots<T>(data_path, (uint32_t)num_pq_centers, (uint32_t)num_pq_chunks,
+                                             pq_pivots_path, pq_compressed_vectors_path, true);
 
     delete[] train_data;
 
@@ -55,7 +55,7 @@ int main(int argc, char **argv)
         const std::string index_prefix_path(argv[3]);
         const size_t num_pq_centers = 256;
         const size_t num_pq_chunks = (size_t)atoi(argv[4]);
-        const float sampling_rate = atof(argv[5]);
+        const float sampling_rate = (float)atof(argv[5]);
         const bool opq = atoi(argv[6]) == 0 ? false : true;
 
         if (std::string(argv[1]) == std::string("float"))
