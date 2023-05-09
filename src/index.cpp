@@ -94,8 +94,6 @@ Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_point
         alloc_aligned(((void **)&_pq_data), total_internal_points * _num_pq_chunks * sizeof(char), 8 * sizeof(char));
         std::memset(_pq_data, 0, total_internal_points * _num_pq_chunks * sizeof(char));
     }
-    alloc_aligned(((void **)&_data), total_internal_points * _aligned_dim * sizeof(T), 8 * sizeof(T));
-    std::memset(_data, 0, total_internal_points * _aligned_dim * sizeof(T));
 
     _start = (uint32_t)_max_points;
 
