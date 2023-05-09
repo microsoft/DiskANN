@@ -1098,7 +1098,10 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
     }
 
     if (beam_width > MAX_N_SECTOR_READS)
+    {
+        context->SetState(State::FailureException);
         throw ANNException("Beamwidth can not be higher than MAX_N_SECTOR_READS", -1, __FUNCSIG__, __FILE__, __LINE__);
+    }
 
     Timer query_timer, io_timer, cpu_timer;
     ScratchStoreManager<SSDThreadData<T>> manager(this->thread_data);
