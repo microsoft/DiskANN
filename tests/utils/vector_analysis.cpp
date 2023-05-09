@@ -36,7 +36,7 @@ template <typename T> int analyze_norm(std::string base_file)
     }
     std::sort(norms.begin(), norms.end());
     for (int p = 0; p < 100; p += 5)
-        std::cout << "percentile " << p << ": " << norms[std::floor((p / 100.0) * npts)] << std::endl;
+        std::cout << "percentile " << p << ": " << norms[(uint64_t)(std::floor((p / 100.0) * npts))] << std::endl;
     std::cout << "percentile 100"
               << ": " << norms[npts - 1] << std::endl;
     delete[] data;
@@ -58,7 +58,7 @@ template <typename T> int normalize_base(std::string base_file, std::string out_
             pt_norm += data[i * ndims + d] * data[i * ndims + d];
         pt_norm = std::sqrt(pt_norm);
         for (size_t d = 0; d < ndims; d++)
-            data[i * ndims + d] = data[i * ndims + d] / pt_norm;
+            data[i * ndims + d] = static_cast<T>(data[i * ndims + d] / pt_norm);
     }
     diskann::save_bin<T>(out_file, data, npts, ndims);
     delete[] data;
@@ -92,11 +92,11 @@ template <typename T> int augment_base(std::string base_file, std::string out_fi
         {
             for (size_t j = 0; j < ndims; j++)
             {
-                new_data[i * newdims + j] = data[i * ndims + j] / max_norm;
+                new_data[i * newdims + j] = static_cast<T>(data[i * ndims + j] / max_norm);
             }
             float diff = 1 - (norms[i] / (max_norm * max_norm));
             diff = diff <= 0 ? 0 : std::sqrt(diff);
-            new_data[i * newdims + ndims] = diff;
+            new_data[i * newdims + ndims] = static_cast<T>(diff);
             if (diff <= 0)
             {
                 std::cout << i << " has large max norm, investigate if needed. diff = " << diff << std::endl;
@@ -106,7 +106,7 @@ template <typename T> int augment_base(std::string base_file, std::string out_fi
         {
             for (size_t j = 0; j < ndims; j++)
             {
-                new_data[i * newdims + j] = data[i * ndims + j] / std::sqrt(norms[i]);
+                new_data[i * newdims + j] = static_cast<T>(data[i * ndims + j] / std::sqrt(norms[i]));
             }
             new_data[i * newdims + ndims] = 0;
         }

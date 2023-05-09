@@ -194,11 +194,11 @@ int search_disk_index(diskann::Metric &metric, const std::string &index_path_pre
 
     uint32_t optimized_beamwidth = 2;
 
-    float best_recall = 0.0;
+    double best_recall = 0.0;
 
     for (uint32_t test_id = 0; test_id < Lvec.size(); test_id++)
     {
-        uint64_t L = Lvec[test_id];
+        uint32_t L = Lvec[test_id];
 
         if (L < recall_at)
         {
@@ -252,7 +252,7 @@ int search_disk_index(diskann::Metric &metric, const std::string &index_path_pre
         }
         auto e = std::chrono::high_resolution_clock::now();
         std::chrono::duration<double> diff = e - s;
-        float qps = (1.0 * query_num) / (1.0 * diff.count());
+        double qps = (1.0 * query_num) / (1.0 * diff.count());
 
         diskann::convert_types<uint64_t, uint32_t>(query_result_ids_64.data(), query_result_ids[test_id].data(),
                                                    query_num, recall_at);
@@ -269,11 +269,11 @@ int search_disk_index(diskann::Metric &metric, const std::string &index_path_pre
         auto mean_cpuus = diskann::get_mean_stats<float>(stats, query_num,
                                                          [](const diskann::QueryStats &stats) { return stats.cpu_us; });
 
-        float recall = 0;
+        double recall = 0;
         if (calc_recall_flag)
         {
-            recall = diskann::calculate_recall(query_num, gt_ids, gt_dists, gt_dim, query_result_ids[test_id].data(),
-                                               recall_at, recall_at);
+            recall = diskann::calculate_recall((uint32_t)query_num, gt_ids, gt_dists, (uint32_t)gt_dim,
+                                               query_result_ids[test_id].data(), recall_at, recall_at);
             best_recall = std::max(recall, best_recall);
         }
 
