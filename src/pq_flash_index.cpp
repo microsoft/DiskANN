@@ -1535,6 +1535,8 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
     {
         stats->total_us = (float)query_timer.elapsed();
     }
+
+    context.SetState(State::Success);
 }
 
 // range search returns results of all neighbors within distance of range.

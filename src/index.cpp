@@ -2084,6 +2084,10 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search(const T *query, con
         context.SetState(State::Failure);
         diskann::cerr << "Found fewer than K elements for query" << std::endl;
     }
+    else
+    {
+        context.SetState(State::Success);
+    }
 
     return retval;
 }
@@ -2192,6 +2196,10 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
     {
         context.SetState(State::Failure);
         diskann::cerr << "Found fewer than K elements for query" << std::endl;
+    }
+    else
+    {
+        context.SetState(State::Success);
     }
 
     return retval;
