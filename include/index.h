@@ -425,8 +425,6 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     // Per node lock, cardinality=_max_points
     std::vector<non_recursive_mutex> _locks;
 
-    uint64_t _memory_in_bytes;
-
     static const float INDEX_GROWTH_FACTOR;
 };
 } // namespace diskann
