@@ -194,7 +194,7 @@ template <class T> struct DynamicInMemIndex
     }
 
     auto batch_insert(py::array_t<T, py::array::c_style | py::array::forcecast> &vectors,
-                      py::array_t<IdT, py::array::c_style | py::array::forcecast> &ids, const size_t num_inserts,
+                      py::array_t<IdT, py::array::c_style | py::array::forcecast> &ids, const int64_t num_inserts,
                       const int num_threads = 0)
     {
         if (num_threads == 0)
