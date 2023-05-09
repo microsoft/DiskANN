@@ -23,6 +23,49 @@ namespace diskann
 {
 
 //
+// Base Class Implementatons
+//
+template <typename T>
+float Distance<T>::compare(const T *a, const T *b, const float normA, const float normB, uint32_t length) const
+{
+    throw std::logic_error("This function is not implemented.");
+}
+
+template <typename T> uint32_t Distance<T>::post_normalization_dimension(uint32_t orig_dimension) const
+{
+    return orig_dimension;
+}
+
+template <typename T> diskann::Metric Distance<T>::get_metric() const
+{
+    return _distance_metric;
+}
+
+template <typename T> bool Distance<T>::preprocessing_required() const
+{
+    return false;
+}
+
+template <typename T>
+void Distance<T>::preprocess_base_points(T *original_data, const size_t orig_dim, const size_t num_points)
+{
+}
+
+template <typename T> void Distance<T>::preprocess_query(const T *query_vec, const size_t query_dim, T *scratch_query)
+{
+    std::memcpy(scratch_query, query_vec, query_dim * sizeof(T));
+}
+
+template <typename T> size_t Distance<T>::get_required_alignment() const
+{
+    return _alignment_factor;
+}
+
+template <typename T> Distance<T>::~Distance()
+{
+}
+
+//
 // Cosine distance functions.
 //
 
@@ -181,12 +224,12 @@ float DistanceL2Float::compare(const float *a, const float *b, uint32_t size) co
     return result;
 }
 
-float SlowDistanceL2Float::compare(const float *a, const float *b, uint32_t length) const
+template <typename T> float SlowDistanceL2<T>::compare(const T *a, const T *b, uint32_t length) const
 {
     float result = 0.0f;
     for (uint32_t i = 0; i < length; i++)
     {
-        result += (a[i] - b[i]) * (a[i] - b[i]);
+        result += ((float)(a[i] - b[i])) * (a[i] - b[i]);
     }
     return result;
 }
@@ -522,6 +565,40 @@ float AVXDistanceInnerProductFloat::compare(const float *a, const float *b, uint
     return -result;
 }
 
+uint32_t AVXNormalizedCosineDistanceFloat::post_normalization_dimension(uint32_t orig_dimension) const
+{
+    return orig_dimension;
+}
+bool AVXNormalizedCosineDistanceFloat::preprocessing_required() const
+{
+    return true;
+}
+void AVXNormalizedCosineDistanceFloat::preprocess_base_points(float *original_data, const size_t orig_dim,
+                                                              const size_t num_points)
+{
+    for (uint32_t i = 0; i < num_points; i++)
+    {
+        normalize((float *)(original_data + i * orig_dim), orig_dim);
+    }
+}
+
+void AVXNormalizedCosineDistanceFloat::preprocess_query(const float *query_vec, const size_t query_dim,
+                                                        float *query_scratch)
+{
+    normalize_and_copy(query_vec, (uint32_t)query_dim, query_scratch);
+}
+
+void AVXNormalizedCosineDistanceFloat::normalize_and_copy(const float *query_vec, const uint32_t query_dim,
+                                                          float *query_target) const
+{
+    float norm = get_norm(query_vec, query_dim);
+
+    for (uint32_t i = 0; i < query_dim; i++)
+    {
+        query_target[i] = query_vec[i] / norm;
+    }
+}
+
 // Get the right distance function for the given metric.
 template <> diskann::Distance<float> *get_distance_function(diskann::Metric m)
 {
@@ -540,7 +617,7 @@ template <> diskann::Distance<float> *get_distance_function(diskann::Metric m)
         else
         {
             diskann::cout << "L2: Older CPU. Using slow distance computation" << std::endl;
-            return new diskann::SlowDistanceL2Float();
+            return new diskann::SlowDistanceL2<float>();
         }
     }
     else if (m == diskann::Metric::COSINE)
@@ -592,7 +669,7 @@ template <> diskann::Distance<int8_t> *get_distance_function(diskann::Metric m)
             diskann::cout << "Older CPU. Using slow distance computation "
                              "SlowDistanceL2Int<int8_t>."
                           << std::endl;
-            return new diskann::SlowDistanceL2Int<int8_t>();
+            return new diskann::SlowDistanceL2<int8_t>();
         }
     }
     else if (m == diskann::Metric::COSINE)
@@ -648,5 +725,9 @@ template DISKANN_DLLEXPORT class DistanceInnerProduct<uint8_t>;
 template DISKANN_DLLEXPORT class DistanceFastL2<float>;
 template DISKANN_DLLEXPORT class DistanceFastL2<int8_t>;
 template DISKANN_DLLEXPORT class DistanceFastL2<uint8_t>;
+
+template DISKANN_DLLEXPORT class SlowDistanceL2<float>;
+template DISKANN_DLLEXPORT class SlowDistanceL2<int8_t>;
+template DISKANN_DLLEXPORT class SlowDistanceL2<uint8_t>;
 
 } // namespace diskann

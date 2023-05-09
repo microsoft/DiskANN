@@ -184,7 +184,7 @@ int search_disk_index(diskann::Metric &metric, const std::string &index_path_pre
 
     for (uint32_t test_id = 0; test_id < Lvec.size(); test_id++)
     {
-        uint64_t L = Lvec[test_id];
+        uint32_t L = Lvec[test_id];
 
         if (beamwidth <= 0)
         {
@@ -211,7 +211,7 @@ int search_disk_index(diskann::Metric &metric, const std::string &index_path_pre
             query_result_ids[test_id][i].reserve(res_count);
             query_result_ids[test_id][i].resize(res_count);
             for (uint32_t idx = 0; idx < res_count; idx++)
-                query_result_ids[test_id][i][idx] = indices[idx];
+                query_result_ids[test_id][i][idx] = (uint32_t)indices[idx];
         }
         auto e = std::chrono::high_resolution_clock::now();
         std::chrono::duration<double> diff = e - s;
@@ -226,21 +226,22 @@ int search_disk_index(diskann::Metric &metric, const std::string &index_path_pre
         auto mean_ios = diskann::get_mean_stats<uint32_t>(stats, query_num,
                                                           [](const diskann::QueryStats &stats) { return stats.n_ios; });
 
-        float mean_cpuus = diskann::get_mean_stats<float>(
+        double mean_cpuus = diskann::get_mean_stats<float>(
             stats, query_num, [](const diskann::QueryStats &stats) { return stats.cpu_us; });
 
-        float recall = 0;
-        float ratio_of_sums = 0;
+        double recall = 0;
+        double ratio_of_sums = 0;
         if (calc_recall_flag)
         {
-            recall = diskann::calculate_range_search_recall(query_num, groundtruth_ids, query_result_ids[test_id]);
+            recall =
+                diskann::calculate_range_search_recall((uint32_t)query_num, groundtruth_ids, query_result_ids[test_id]);
 
             uint32_t total_true_positive = 0;
             uint32_t total_positive = 0;
             for (uint32_t i = 0; i < query_num; i++)
             {
-                total_true_positive += query_result_ids[test_id][i].size();
-                total_positive += groundtruth_ids[i].size();
+                total_true_positive += (uint32_t)query_result_ids[test_id][i].size();
+                total_positive += (uint32_t)groundtruth_ids[i].size();
             }
 
             ratio_of_sums = (1.0 * total_true_positive) / (1.0 * total_positive);

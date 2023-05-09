@@ -1006,18 +1006,23 @@ inline bool validate_index_file_size(std::ifstream &in)
     return true;
 }
 
-// This function is valid only for float data type.
-template <typename T> inline void normalize(T *arr, size_t dim)
+template <typename T> inline float get_norm(T *arr, const size_t dim)
 {
     float sum = 0.0f;
     for (uint32_t i = 0; i < dim; i++)
     {
         sum += arr[i] * arr[i];
     }
-    sum = sqrt(sum);
+    return sqrt(sum);
+}
+
+// This function is valid only for float data type.
+template <typename T = float> inline void normalize(T *arr, const size_t dim)
+{
+    float norm = get_norm(arr, dim);
     for (uint32_t i = 0; i < dim; i++)
     {
-        arr[i] = (T)(arr[i] / sum);
+        arr[i] = (T)(arr[i] / norm);
     }
 }
 
