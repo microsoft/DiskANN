@@ -1043,20 +1043,42 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                 if (use_filter)
                 {
                     // NOTE: NEED TO CHECK IF THIS CORRECT WITH NEW LOCKS.
-                    std::vector<LabelT> common_filters;
+                //    std::vector<LabelT> common_filters;
                     auto &x = _pts_to_labels[id];
-                    std::set_intersection(filter_label.begin(), filter_label.end(), x.begin(), x.end(),
-                                          std::back_inserter(common_filters));
-                    if (_use_universal_label)
+                    auto ret = false;
+                    for (const auto& query_label : filter_label)
                     {
-                        if (std::find(filter_label.begin(), filter_label.end(), _universal_label) !=
-                                filter_label.end() ||
-                            std::find(x.begin(), x.end(), _universal_label) != x.end())
-                            common_filters.emplace_back(_universal_label);
+                        ret = is_label_existed(x, query_label);
+                        if (ret)
+                        {
+                            break;
+                        }
+                    }
+                    if (!ret && _use_universal_label)
+                    {
+                        ret = is_label_existed(filter_label, _universal_label);
+                        if (!ret)
+                        {
+                            ret = is_label_existed(x, _universal_label);
+                        }
                     }
 
-                    if (common_filters.size() == 0)
+                    if (!ret)
+                    {
                         continue;
+                    }
+                    //std::set_intersection(filter_label.begin(), filter_label.end(), x.begin(), x.end(),
+                    //                      std::back_inserter(common_filters));
+                    //if (_use_universal_label)
+                    //{
+                    //    if (std::find(filter_label.begin(), filter_label.end(), _universal_label) !=
+                    //            filter_label.end() ||
+                    //        std::find(x.begin(), x.end(), _universal_label) != x.end())
+                    //        common_filters.emplace_back(_universal_label);
+                    //}
+
+                    //if (common_filters.size() == 0)
+                    //    continue;
                 }
 
                 if (is_not_visited(id))

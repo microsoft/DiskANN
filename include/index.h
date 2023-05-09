@@ -36,6 +36,20 @@ inline double estimate_ram_usage(_u64 size, _u32 dim, _u32 datasize, _u32 degree
     return OVERHEAD_FACTOR * (size_of_data + size_of_graph + size_of_locks + size_of_outer_vector);
 }
 
+template<typename LabelT>
+inline bool is_label_existed(const std::vector<LabelT>& node_labels, const LabelT& input_label)
+{
+    for (const auto& node_label : node_labels)
+    {
+        if (node_label == input_label)
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 struct consolidation_report
 {
     enum status_code
