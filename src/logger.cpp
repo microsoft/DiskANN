@@ -22,7 +22,6 @@ std::function<void(LogLevel, const char *)> g_logger;
 void SetCustomLogger(std::function<void(LogLevel, const char *)> logger)
 {
     g_logger = logger;
-    cout << "Setted Custom Logger" << std::endl;
 }
 #endif
 
