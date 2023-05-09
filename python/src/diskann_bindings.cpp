@@ -194,7 +194,7 @@ template <class T> struct DynamicInMemIndex
     }
 
     auto batch_insert(py::array_t<T, py::array::c_style | py::array::forcecast> &vectors,
-                      py::array_t<IdT, py::array::c_style | py::array::forcecast> &ids, const size_t num_inserts,
+                      py::array_t<IdT, py::array::c_style | py::array::forcecast> &ids, const int32_t num_inserts,
                       const int num_threads = 0)
     {
         if (num_threads == 0)
@@ -204,7 +204,7 @@ template <class T> struct DynamicInMemIndex
         py::array_t<int> insert_retvals(num_inserts);
 
 #pragma omp parallel for schedule(dynamic, 1)
-        for (size_t i = 0; i < num_inserts; i++)
+        for (int32_t i = 0; i < num_inserts; i++)
         {
             insert_retvals.mutable_data()[i] = _index->insert_point(vectors.data(i), *(ids.data(i)));
         }

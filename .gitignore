@@ -371,3 +371,5 @@ wheelhouse/*
 dist/*
 venv*/**
 *.swp
+
+gperftools
