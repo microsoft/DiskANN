@@ -45,7 +45,7 @@ template <class T> T div_round_up(const T numerator, const T denominator)
     return (numerator % denominator == 0) ? (numerator / denominator) : 1 + (numerator / denominator);
 }
 
-using pairIF = std::pair<int, float>;
+using pairIF = std::pair<size_t, float>;
 struct cmpmaxstruct
 {
     bool operator()(const pairIF &l, const pairIF &r)
@@ -70,13 +70,13 @@ inline bool custom_dist(const std::pair<uint32_t, float> &a, const std::pair<uin
     return a.second < b.second;
 }
 
-void compute_l2sq(float *const points_l2sq, const float *const matrix, const int64_t num_points, const int dim)
+void compute_l2sq(float *const points_l2sq, const float *const matrix, const int64_t num_points, const uint64_t dim)
 {
     assert(points_l2sq != NULL);
 #pragma omp parallel for schedule(static, 65536)
     for (int64_t d = 0; d < num_points; ++d)
-        points_l2sq[d] =
-            cblas_sdot(dim, matrix + (ptrdiff_t)d * (ptrdiff_t)dim, 1, matrix + (ptrdiff_t)d * (ptrdiff_t)dim, 1);
+        points_l2sq[d] = cblas_sdot((int64_t)dim, matrix + (ptrdiff_t)d * (ptrdiff_t)dim, 1,
+                                    matrix + (ptrdiff_t)d * (ptrdiff_t)dim, 1);
 }
 
 void distsq_to_points(const size_t dim,
@@ -124,7 +124,7 @@ void inner_prod_to_points(const size_t dim,
 }
 
 void exact_knn(const size_t dim, const size_t k,
-               int *const closest_points,        // k * num_queries preallocated, col
+               size_t *const closest_points,     // k * num_queries preallocated, col
                                                  // major, queries columns
                float *const dist_closest_points, // k * num_queries
                                                  // preallocated, Dist to
@@ -257,7 +257,8 @@ template <typename T> inline int get_num_parts(const char *filename)
     reader.read((char *)&ndims_i32, sizeof(int));
     std::cout << "#pts = " << npts_i32 << ", #dims = " << ndims_i32 << std::endl;
     reader.close();
-    int num_parts = (npts_i32 % PARTSIZE) == 0 ? npts_i32 / PARTSIZE : std::floor(npts_i32 / PARTSIZE) + 1;
+    uint32_t num_parts =
+        (npts_i32 % PARTSIZE) == 0 ? npts_i32 / PARTSIZE : (uint32_t)std::floor(npts_i32 / PARTSIZE) + 1;
     std::cout << "Number of parts: " << num_parts << std::endl;
     return num_parts;
 }
@@ -340,7 +341,7 @@ std::vector<std::vector<std::pair<uint32_t, float>>> processUnfilteredParts(cons
                                                                             const diskann::Metric &metric,
                                                                             std::vector<uint32_t> &location_to_tag)
 {
-    float *base_data;
+    float *base_data = nullptr;
     int num_parts = get_num_parts<T>(base_file.c_str());
     std::vector<std::vector<std::pair<uint32_t, float>>> res(nqueries);
     for (int p = 0; p < num_parts; p++)
@@ -348,11 +349,10 @@ std::vector<std::vector<std::pair<uint32_t, float>>> processUnfilteredParts(cons
         size_t start_id = p * PARTSIZE;
         load_bin_as_float<T>(base_file.c_str(), base_data, npoints, dim, p);
 
-        int *closest_points_part = new int[nqueries * k];
+        size_t *closest_points_part = new size_t[nqueries * k];
         float *dist_closest_points_part = new float[nqueries * k];
 
-        uint32_t part_k;
-        part_k = k < npoints ? k : npoints;
+        auto part_k = k < npoints ? k : npoints;
         exact_knn(dim, part_k, closest_points_part, dist_closest_points_part, npoints, base_data, nqueries, query_data,
                   metric);
 

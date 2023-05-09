@@ -23,7 +23,7 @@ int block_write_float(std::ofstream &writer, size_t ndims, size_t npts, float no
     {
         float sum = 0;
         for (size_t d = 0; d < ndims; ++d)
-            vec[d] = normal_rand(gen);
+            vec[d] = (float)normal_rand(gen);
         for (size_t d = 0; d < ndims; ++d)
             sum += vec[d] * vec[d];
         for (size_t d = 0; d < ndims; ++d)
@@ -49,7 +49,7 @@ int block_write_int8(std::ofstream &writer, size_t ndims, size_t npts, float nor
     {
         float sum = 0;
         for (size_t d = 0; d < ndims; ++d)
-            vec[d] = normal_rand(gen);
+            vec[d] = (float)normal_rand(gen);
         for (size_t d = 0; d < ndims; ++d)
             sum += vec[d] * vec[d];
         for (size_t d = 0; d < ndims; ++d)
@@ -57,7 +57,7 @@ int block_write_int8(std::ofstream &writer, size_t ndims, size_t npts, float nor
 
         for (size_t d = 0; d < ndims; ++d)
         {
-            vec_T[d] = std::round<int>(vec[d]);
+            vec_T[d] = (int8_t)std::round(vec[d]);
         }
 
         writer.write((char *)vec_T, ndims * sizeof(int8_t));
@@ -81,7 +81,7 @@ int block_write_uint8(std::ofstream &writer, size_t ndims, size_t npts, float no
     {
         float sum = 0;
         for (size_t d = 0; d < ndims; ++d)
-            vec[d] = normal_rand(gen);
+            vec[d] = (float)normal_rand(gen);
         for (size_t d = 0; d < ndims; ++d)
             sum += vec[d] * vec[d];
         for (size_t d = 0; d < ndims; ++d)
@@ -89,7 +89,7 @@ int block_write_uint8(std::ofstream &writer, size_t ndims, size_t npts, float no
 
         for (size_t d = 0; d < ndims; ++d)
         {
-            vec_T[d] = 128 + std::round<int>(vec[d]);
+            vec_T[d] = 128 + (int8_t)std::round(vec[d]);
         }
 
         writer.write((char *)vec_T, ndims * sizeof(uint8_t));

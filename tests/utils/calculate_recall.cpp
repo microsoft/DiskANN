@@ -47,7 +47,8 @@ int main(int argc, char **argv)
         return -1;
     }
     std::cout << "Calculating recall@" << recall_at << std::endl;
-    float recall_val = diskann::calculate_recall(points_num, gold_std, gs_dist, dim_gs, our_results, dim_or, recall_at);
+    double recall_val = diskann::calculate_recall((uint32_t)points_num, gold_std, gs_dist, (uint32_t)dim_gs,
+                                                  our_results, (uint32_t)dim_or, (uint32_t)recall_at);
 
     //  double avg_recall = (recall*1.0)/(points_num*1.0);
     std::cout << "Avg. recall@" << recall_at << " is " << recall_val << "\n";
