@@ -16,12 +16,13 @@ DISKANN_DLLEXPORT ANNStreamBuf cerrBuff(stderr);
 DISKANN_DLLEXPORT std::basic_ostream<char> cout(&coutBuff);
 DISKANN_DLLEXPORT std::basic_ostream<char> cerr(&cerrBuff);
 
-#ifdef EXEC_ENV_OLS
+#ifdef ENABLE_CUSTOM_LOGGER
 std::function<void(LogLevel, const char *)> g_logger;
 
 void SetCustomLogger(std::function<void(LogLevel, const char *)> logger)
 {
     g_logger = logger;
+    diskann::cout << "Set Custom Logger" << std::endl;
 }
 #endif
 
@@ -37,7 +38,7 @@ ANNStreamBuf::ANNStreamBuf(FILE *fp)
     }
     _fp = fp;
     _logLevel = (_fp == stdout) ? LogLevel::LL_Info : LogLevel::LL_Error;
-#ifdef EXEC_ENV_OLS
+#ifdef ENABLE_CUSTOM_LOGGER
     _buf = new char[BUFFER_SIZE + 1]; // See comment in the header
 #else
     _buf = new char[BUFFER_SIZE]; // See comment in the header
@@ -87,7 +88,7 @@ int ANNStreamBuf::flush()
 }
 void ANNStreamBuf::logImpl(char *str, int num)
 {
-#ifdef EXEC_ENV_OLS
+#ifdef ENABLE_CUSTOM_LOGGER
     str[num] = '\0'; // Safe. See the c'tor.
     // Invoke the OLS custom logging function.
     if (g_logger)

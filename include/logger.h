@@ -6,6 +6,12 @@
 #include <iostream>
 #include "windows_customizations.h"
 
+#ifdef EXEC_ENV_OLS
+#ifndef ENABLE_CUSTOM_LOGGER
+#define ENABLE_CUSTOM_LOGGER
+#endif // !ENABLE_CUSTOM_LOGGER
+#endif // EXEC_ENV_OLS
+
 namespace diskann
 {
 DISKANN_DLLEXPORT extern std::basic_ostream<char> cout;
@@ -18,7 +24,7 @@ enum class DISKANN_DLLEXPORT LogLevel
     LL_Count
 };
 
-#ifdef EXEC_ENV_OLS
+#ifdef ENABLE_CUSTOM_LOGGER
 DISKANN_DLLEXPORT void SetCustomLogger(std::function<void(LogLevel, const char *)> logger);
 #endif
 } // namespace diskann
