@@ -24,9 +24,9 @@
 
 namespace po = boost::program_options;
 
-float print_search_results(diskann::SearchResult &search_result, std::string &gt_file, uint32_t recall_at,
-                           std::vector<uint32_t> Lvec, bool show_qps_per_thread, bool tags_enabled,
-                           bool print_all_recalls, uint32_t num_threads)
+double print_search_results(diskann::SearchResult &search_result, std::string &gt_file, const uint32_t recall_at,
+                            std::vector<uint32_t> Lvec, bool show_qps_per_thread, bool tags_enabled,
+                            bool print_all_recalls, uint32_t num_threads)
 {
     size_t query_num = search_result.stats.latency_stats.size();
     bool calc_recall_flag = false;
@@ -77,32 +77,33 @@ float print_search_results(diskann::SearchResult &search_result, std::string &gt
     std::cout << std::endl;
     std::cout << std::string(table_width, '=') << std::endl;
 
-    float best_recall = 0.0;
+    double best_recall = 0.0;
 
     std::vector<std::chrono::duration<double>> diff_stats = search_result.stats.diff_stats;
     std::vector<std::vector<uint32_t>> query_result_ids = search_result.query_result_ids;
     auto latency_stats = search_result.stats.latency_stats;
     auto cmp_stats = search_result.stats.cmp_stats;
-    for (int i = 0; i < Lvec.size(); i++)
+    for (uint32_t i = 0; i < Lvec.size(); i++)
     {
-        float displayed_qps = static_cast<float>(query_num) / (float)diff_stats[i].count();
+        double displayed_qps = static_cast<double>(query_num) / (double)diff_stats[i].count();
         if (show_qps_per_thread)
             displayed_qps /= num_threads;
 
-        std::vector<float> recalls;
+        std::vector<double> recalls;
         if (calc_recall_flag)
         {
             recalls.reserve(recalls_to_print);
             for (uint32_t curr_recall = first_recall; curr_recall <= recall_at; curr_recall++)
             {
-                recalls.push_back(diskann::calculate_recall(query_num, gt_ids, gt_dists, gt_dim,
-                                                            query_result_ids[i].data(), recall_at, curr_recall));
+                recalls.push_back(diskann::calculate_recall((uint32_t)query_num, gt_ids, gt_dists, (uint32_t)gt_dim,
+                                                            query_result_ids[i].data(), (unsigned)recall_at,
+                                                            curr_recall));
             }
         }
 
         std::sort(latency_stats.begin(), latency_stats.end());
-        float mean_latency =
-            std::accumulate(latency_stats.begin(), latency_stats.end(), 0.0) / static_cast<float>(query_num);
+        double mean_latency =
+            std::accumulate(latency_stats.begin(), latency_stats.end(), 0.0f) / static_cast<float>(query_num);
 
         float avg_cmps = (float)std::accumulate(cmp_stats.begin(), cmp_stats.end(), 0) / (float)query_num;
 
@@ -117,7 +118,7 @@ float print_search_results(diskann::SearchResult &search_result, std::string &gt
                       << std::setw(20) << (float)mean_latency << std::setw(15)
                       << (float)latency_stats[(uint64_t)(0.999 * query_num)];
         }
-        for (float recall : recalls)
+        for (double recall : recalls)
         {
             std::cout << std::setw(12) << recall;
             best_recall = std::max(recall, best_recall);
