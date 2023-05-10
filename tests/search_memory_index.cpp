@@ -489,13 +489,40 @@ int main(int argc, char **argv)
         search_param.num_threads = num_threads;
         search_param.result_path = result_path;
 
-        auto index_factory = diskann::IndexFactory(config);
-        auto index = index_factory.instance();
-        index->load(index_path_prefix.c_str(), num_threads, *(std::max_element(Lvec.begin(), Lvec.end())));
-        auto res = index->search(search_param);
-        auto best_recall =
-            print_search_results(res, gt_file, K, Lvec, show_qps_per_thread, tags, print_all_recalls, num_threads);
-        return best_recall >= fail_if_recall_below ? 0 : -1;
+        if (data_type == "float")
+        {
+            auto index_factory = diskann::IndexFactory<float, uint32_t, uint32_t>(config);
+            auto index = index_factory.instance();
+            index->load(index_path_prefix.c_str(), num_threads, *(std::max_element(Lvec.begin(), Lvec.end())));
+            auto res = index->search(search_param);
+            auto best_recall =
+                print_search_results(res, gt_file, K, Lvec, show_qps_per_thread, tags, print_all_recalls, num_threads);
+            return best_recall >= fail_if_recall_below ? 0 : -1;
+        }
+        else if (data_type == "uint8")
+        {
+            auto index_factory = diskann::IndexFactory<uint8_t, uint32_t, uint32_t>(config);
+            auto index = index_factory.instance();
+            index->load(index_path_prefix.c_str(), num_threads, *(std::max_element(Lvec.begin(), Lvec.end())));
+            auto res = index->search(search_param);
+            auto best_recall =
+                print_search_results(res, gt_file, K, Lvec, show_qps_per_thread, tags, print_all_recalls, num_threads);
+            return best_recall >= fail_if_recall_below ? 0 : -1;
+        }
+        else if (data_type == "int8")
+        {
+            auto index_factory = diskann::IndexFactory<int8_t, uint32_t, uint32_t>(config);
+            auto index = index_factory.instance();
+            index->load(index_path_prefix.c_str(), num_threads, *(std::max_element(Lvec.begin(), Lvec.end())));
+            auto res = index->search(search_param);
+            auto best_recall =
+                print_search_results(res, gt_file, K, Lvec, show_qps_per_thread, tags, print_all_recalls, num_threads);
+            return best_recall >= fail_if_recall_below ? 0 : -1;
+        }
+        else
+        {
+            throw new std::exception(std::string("Error: data_type " + data_type + " is not supported.").c_str(), -1);
+        }
     }
     catch (std::exception &e)
     {

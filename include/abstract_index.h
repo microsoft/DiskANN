@@ -161,28 +161,29 @@ class IndexBuildParamsBuilder
     size_t num_points_to_load = 0;
 };
 
-class AbstractIndex
-{
-  public:
-    DISKANN_DLLEXPORT AbstractIndex()
-    {
-    }
-    virtual ~AbstractIndex()
-    {
-    }
-    virtual void build(IndexBuildParams &build_params) = 0;
-    virtual void save(const char *filename, bool compact_before_save = false) = 0;
-
-#ifdef EXEC_ENV_OLS
-    virtual void load(AlignedFileReader &reader, uint32_t num_threads, uint32_t search_l) = 0;
-#else
-    // Reads the number of frozen points from graph's metadata file section.
-    virtual void load(const char *index_file, uint32_t num_threads, uint32_t search_l) = 0;
-#endif
-
-    virtual SearchResult search(IndexSearchParams &search_params) = 0;
-
-    // TODO: add other methods as api promise to end user.
-};
-
+// class AbstractIndex
+//{
+//   public:
+//     AbstractIndex()
+//     {
+//     }
+//     virtual ~AbstractIndex()
+//     {
+//     }
+//     virtual void build(IndexBuildParams &build_params) = 0;
+//     virtual void save(const char *filename, bool compact_before_save = false) = 0;
+//
+// #ifdef EXEC_ENV_OLS
+//     virtual void load(AlignedFileReader &reader, uint32_t num_threads, uint32_t search_l) = 0;
+// #else
+//     // Reads the number of frozen points from graph's metadata file section.
+//     virtual void load(const char *index_file, uint32_t num_threads, uint32_t search_l) = 0;
+// #endif
+//
+//     virtual SearchResult search(IndexSearchParams &search_params) = 0;
+//
+//     // virtual int insert_point(const T *point, const TagT tag) = 0;
+//
+//     // TODO: add other methods as api promise to end user.
+// };
 } // namespace diskann

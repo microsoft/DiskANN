@@ -61,7 +61,7 @@ struct consolidation_report
     }
 };
 
-template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> class Index : public AbstractIndex
+template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> class Index
 {
     /**************************************************************************
      *
