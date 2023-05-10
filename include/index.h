@@ -88,7 +88,7 @@ class bitmask_wrapper
 public:
     bitmask_wrapper(size_t totalBits)
     {
-        size_t count = (totalBits / 64) + (totalBits % 64);
+        size_t count = (totalBits / 64) + ((totalBits % 64) == 0 ? 0 : 1);
         _bitsets.resize(count);
     }
 
