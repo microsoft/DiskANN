@@ -10,6 +10,7 @@
 #endif
 
 #include "distance.h"
+#include "index_search_context.h"
 #include "locking.h"
 #include "natural_number_map.h"
 #include "natural_number_set.h"

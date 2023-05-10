@@ -6,6 +6,7 @@
 
 #include "aligned_file_reader.h"
 #include "concurrent_queue.h"
+#include "index_search_context.h"
 #include "neighbor.h"
 #include "parameters.h"
 #include "percentile_stats.h"

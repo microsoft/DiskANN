@@ -8,9 +8,6 @@
 #include <unordered_map>
 
 #include "defaults.h"
-#include "timer.h"
-#include "windows_customizations.h"
-#include "percentile_stats.h"
 
 namespace diskann
 {
@@ -115,96 +112,6 @@ class IndexWriteParametersBuilder
     uint32_t _num_threads{defaults::NUM_THREADS};
     uint32_t _filter_list_size{defaults::FILTER_LIST_SIZE};
     uint32_t _num_frozen_points{defaults::NUM_FROZEN_POINTS_STATIC};
-};
-
-/// <summary>
-/// Search state
-/// </summary>
-enum State : uint8_t
-{
-    Unknown = 0,
-    Success = 1,
-    Failure = 2,
-    FailureTimeout = 3,      // Fail because of timeout
-    FailureException = 4,    // Fail because of Exception
-    FailureInvalidLabel = 5, // Fail because of invalid label
-    StateCount = 6           // The number of state
-};
-
-/// <summary>
-/// Use this class to pass in searching parameters and pass out searching result
-/// </summary>
-
-template <typename LabelT = uint32_t> class IndexSearchContext
-{
-  public:
-    IndexSearchContext(uint32_t time_limit_in_microseconds = 0u, uint32_t io_limit = UINT32_MAX)
-        : _time_limit_in_microseconds(time_limit_in_microseconds), _io_limit(io_limit), _result_state(State::Unknown)
-    {
-        _use_filter = false;
-        _label = (LabelT)0;
-    }
-
-    void SetLabel(LabelT label, bool use_filter)
-    {
-        _label = label;
-        _use_filter = use_filter;
-    }
-
-    void SetState(State state)
-    {
-        _result_state = state;
-    }
-
-    State GetState() const
-    {
-        return _result_state;
-    }
-
-    LabelT GetLabel() const
-    {
-        return _label;
-    }
-
-    uint32_t GetIOLimit() const
-    {
-        return _io_limit;
-    }
-
-    bool UseFilter() const
-    {
-        return _use_filter;
-    }
-
-    bool IsSuccess() const
-    {
-        return _result_state == State::Success;
-    }
-
-    bool CheckTimeout()
-    {
-        if (_time_limit_in_microseconds > 0 && _time_limit_in_microseconds < _timer.elapsed())
-        {
-            SetState(State::FailureTimeout);
-            return true;
-        }
-
-        return false;
-    }
-
-    QueryStats &GetStats()
-    {
-        return _stats;
-    }
-
-  private:
-    uint32_t _time_limit_in_microseconds;
-    uint32_t _io_limit;
-    State _result_state;
-    bool _use_filter;
-    LabelT _label;
-    Timer _timer;
-    QueryStats _stats;
 };
 
 } // namespace diskann
