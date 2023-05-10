@@ -1353,7 +1353,7 @@ void Index<T, TagT, LabelT>::inter_insert(uint32_t n, std::vector<uint32_t> &pru
 }
 
 template <typename T, typename TagT, typename LabelT>
-void Index<T, TagT, LabelT>::link(IndexWriteParameters &parameters)
+void Index<T, TagT, LabelT>::link(const IndexWriteParameters &parameters)
 {
     uint32_t num_threads = parameters.num_threads;
     if (num_threads != 0)
@@ -1586,7 +1586,8 @@ void Index<T, TagT, LabelT>::set_start_points_at_random(T radius, uint32_t rando
 }
 
 template <typename T, typename TagT, typename LabelT>
-void Index<T, TagT, LabelT>::build_with_data_populated(IndexWriteParameters &parameters, const std::vector<TagT> &tags)
+void Index<T, TagT, LabelT>::build_with_data_populated(const IndexWriteParameters &parameters,
+                                                       const std::vector<TagT> &tags)
 {
     diskann::cout << "Starting index build with " << _nd << " points... " << std::endl;
 
@@ -1642,8 +1643,8 @@ void Index<T, TagT, LabelT>::build_with_data_populated(IndexWriteParameters &par
 }
 
 template <typename T, typename TagT, typename LabelT>
-void Index<T, TagT, LabelT>::build(const T *data, const size_t num_points_to_load, IndexWriteParameters &parameters,
-                                   const std::vector<TagT> &tags)
+void Index<T, TagT, LabelT>::build(const T *data, const size_t num_points_to_load,
+                                   const IndexWriteParameters &parameters, const std::vector<TagT> &tags)
 {
     if (num_points_to_load == 0)
     {
@@ -1679,7 +1680,7 @@ void Index<T, TagT, LabelT>::build(const T *data, const size_t num_points_to_loa
 
 template <typename T, typename TagT, typename LabelT>
 void Index<T, TagT, LabelT>::build(const char *filename, const size_t num_points_to_load,
-                                   IndexWriteParameters &parameters, const std::vector<TagT> &tags)
+                                   const IndexWriteParameters &parameters, const std::vector<TagT> &tags)
 {
     // idealy this should call build_filtered_index based on params passed
 
@@ -1773,7 +1774,7 @@ void Index<T, TagT, LabelT>::build(const char *filename, const size_t num_points
 
 template <typename T, typename TagT, typename LabelT>
 void Index<T, TagT, LabelT>::build(const char *filename, const size_t num_points_to_load,
-                                   IndexWriteParameters &parameters, const char *tag_filename)
+                                   const IndexWriteParameters &parameters, const char *tag_filename)
 {
     std::vector<TagT> tags;
 

@@ -90,8 +90,8 @@ std::string get_save_filename(const std::string &save_path, size_t points_to_ski
 }
 
 template <typename T, typename TagT>
-void insert_till_next_checkpoint(diskann::Index<T, TagT> &index, size_t start, size_t end, size_t thread_count, T *data,
-                                 size_t aligned_dim)
+void insert_till_next_checkpoint(diskann::Index<T, TagT> &index, size_t start, size_t end, int32_t thread_count,
+                                 T *data, size_t aligned_dim)
 {
     diskann::Timer insert_timer;
 
@@ -115,7 +115,7 @@ void delete_from_beginning(diskann::Index<T, TagT> &index, diskann::IndexWritePa
                   << "Lazy deleting points " << points_to_skip << " to "
                   << points_to_skip + points_to_delete_from_beginning << "... ";
         for (size_t i = points_to_skip; i < points_to_skip + points_to_delete_from_beginning; ++i)
-            index.lazy_delete(i + 1); // Since tags are data location + 1
+            index.lazy_delete(static_cast<TagT>(i + 1)); // Since tags are data location + 1
         std::cout << "done." << std::endl;
 
         auto report = index.consolidate_deletes(delete_params);
@@ -145,7 +145,6 @@ void build_incremental_index(const std::string &data_path, const uint32_t L, con
     diskann::IndexWriteParameters params = diskann::IndexWriteParametersBuilder(L, R)
                                                .with_max_occlusion_size(500) // C = 500
                                                .with_alpha(alpha)
-                                               .with_num_rounds(1)
                                                .with_num_threads(thread_count)
                                                .with_num_frozen_points(num_start_pts)
                                                .build();
@@ -231,7 +230,7 @@ void build_incremental_index(const std::string &data_path, const uint32_t L, con
 
     if (concurrent)
     {
-        int sub_threads = (thread_count + 1) / 2;
+        int32_t sub_threads = (thread_count + 1) / 2;
         bool delete_launched = false;
         std::future<void> delete_task;
 
@@ -280,7 +279,7 @@ void build_incremental_index(const std::string &data_path, const uint32_t L, con
             std::cout << std::endl << "Inserting from " << start << " to " << end << std::endl;
 
             load_aligned_bin_part(data_path, data, start, end - start);
-            insert_till_next_checkpoint(index, start, end, thread_count, data, aligned_dim);
+            insert_till_next_checkpoint(index, start, end, (int32_t)thread_count, data, aligned_dim);
 
             if (checkpoints_per_snapshot > 0 && --num_checkpoints_till_snapshot == 0)
             {
@@ -367,9 +366,11 @@ int main(int argc, char **argv)
         desc.add_options()("start_deletes_after", po::value<uint64_t>(&start_deletes_after)->default_value(0), "");
         desc.add_options()("start_point_norm", po::value<float>(&start_point_norm)->default_value(0),
                            "Set the start point to a random point on a sphere of this radius");
-        desc.add_options()("num_start_points", po::value<uint32_t>(&num_start_pts)->default_value(0),
-                           "Set the number of random start (frozen) points to use when "
-                           "inserting and searching");
+        desc.add_options()(
+            "num_start_points",
+            po::value<uint32_t>(&num_start_pts)->default_value(diskann::defaults::NUM_FROZEN_POINTS_DYNAMIC),
+            "Set the number of random start (frozen) points to use when "
+            "inserting and searching");
 
         po::variables_map vm;
         po::store(po::parse_command_line(argc, argv, desc), vm);

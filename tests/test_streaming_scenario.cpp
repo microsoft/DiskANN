@@ -91,7 +91,7 @@ void insert_next_batch(diskann::Index<T, TagT, LabelT> &index, size_t start, siz
         std::cout << std::endl << "Inserting from " << start << " to " << end << std::endl;
 
         size_t num_failed = 0;
-#pragma omp parallel for num_threads(insert_threads) schedule(dynamic) reduction(+ : num_failed)
+#pragma omp parallel for num_threads((int32_t)insert_threads) schedule(dynamic) reduction(+ : num_failed)
         for (int64_t j = start; j < (int64_t)end; j++)
         {
             if (index.insert_point(&data[(j - start) * aligned_dim], 1 + static_cast<TagT>(j)) != 0)
@@ -121,7 +121,7 @@ void delete_and_consolidate(diskann::Index<T, TagT, LabelT> &index, diskann::Ind
     {
         std::cout << std::endl << "Lazy deleting points " << start << " to " << end << "... ";
         for (size_t i = start; i < end; ++i)
-            index.lazy_delete(1 + i);
+            index.lazy_delete(static_cast<TagT>(1 + i));
         std::cout << "lazy delete done." << std::endl;
 
         auto report = index.consolidate_deletes(delete_params);
@@ -177,7 +177,6 @@ void build_incremental_index(const std::string &data_path, const uint32_t L, con
                                                .with_max_occlusion_size(C)
                                                .with_alpha(alpha)
                                                .with_saturate_graph(saturate_graph)
-                                               .with_num_rounds(1)
                                                .with_num_threads(insert_threads)
                                                .with_num_frozen_points(num_start_pts)
                                                .build();
@@ -186,7 +185,6 @@ void build_incremental_index(const std::string &data_path, const uint32_t L, con
                                                       .with_max_occlusion_size(C)
                                                       .with_alpha(alpha)
                                                       .with_saturate_graph(saturate_graph)
-                                                      .with_num_rounds(1)
                                                       .with_num_threads(consolidate_threads)
                                                       .build();
 
@@ -320,9 +318,11 @@ int main(int argc, char **argv)
                            "the window while deleting the same number from the left");
         desc.add_options()("start_point_norm", po::value<float>(&start_point_norm)->required(),
                            "Set the start point to a random point on a sphere of this radius");
-        desc.add_options()("num_start_points", po::value<uint32_t>(&num_start_pts)->default_value(0),
-                           "Set the number of random start (frozen) points to use when "
-                           "inserting and searching");
+        desc.add_options()(
+            "num_start_points",
+            po::value<uint32_t>(&num_start_pts)->default_value(diskann::defaults::NUM_FROZEN_POINTS_DYNAMIC),
+            "Set the number of random start (frozen) points to use when "
+            "inserting and searching");
 
         po::variables_map vm;
         po::store(po::parse_command_line(argc, argv, desc), vm);
