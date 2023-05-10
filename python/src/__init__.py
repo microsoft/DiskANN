@@ -7,6 +7,7 @@ from ._builder import (
     numpy_to_diskann_file,
 )
 from ._common import (
+    DistanceMetric,
     QueryResponse,
     QueryResponseBatch,
     VectorDType,
@@ -17,7 +18,7 @@ from ._common import (
     valid_dtype
 )
 from ._disk_index import DiskIndex
-from ._diskannpy import INNER_PRODUCT, L2, Metric, defaults
+from ._diskannpy import defaults
 from ._dynamic_memory_index import DynamicMemoryIndex
 from ._files import vectors_from_binary, vector_file_metadata
 from ._static_memory_index import StaticMemoryIndex

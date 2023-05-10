@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation. All rights reserved.
+# Licensed under the MIT license.
 
 import numpy as np
 import numpy.typing as npt
@@ -8,8 +10,8 @@ from ._common import VectorDType, _assert_existing_file
 
 
 class Metadata(NamedTuple):
-    points: int
-    dims: int
+    num_points: int
+    dimensions: int
 
 
 def vector_file_metadata(vector_file: str) -> Metadata:

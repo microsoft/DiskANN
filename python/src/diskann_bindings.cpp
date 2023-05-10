@@ -144,7 +144,7 @@ template <class T> struct DynamicInMemIndex
     IndexWriteParameters _write_params;
     const std::string &_index_path;
 
-    DynamicInMemIndex(const Metric m, const size_t dim, const size_t max_points, const uint32_t complexity,
+    DynamicInMemIndex(const Metric m, const size_t dimensions, const size_t max_points, const uint32_t complexity,
                       const uint32_t graph_degree, const bool saturate_graph, const uint32_t max_occlusion_size,
                       const float alpha, const uint32_t num_threads, const uint32_t filter_complexity,
                       const uint32_t num_frozen_points, const uint32_t initial_search_complexity,
@@ -165,7 +165,7 @@ template <class T> struct DynamicInMemIndex
         const uint32_t _initial_search_threads =
             initial_search_threads != 0 ? initial_search_threads : omp_get_num_threads();
 
-        _index = new Index<T>(m, dim, max_points,
+        _index = new Index<T>(m, dimensions, max_points,
                               true,                       // dynamic_index
                               _write_params,              // used for insert
                               _initial_search_complexity, // used to prepare the scratch space for searching. can / may
@@ -271,7 +271,7 @@ template <class T> struct StaticInMemIndex
 {
     Index<T, IdT, filterT> *_index;
 
-    StaticInMemIndex(const Metric m, const std::string &data_path, const std::string &index_prefix,
+    StaticInMemIndex(const Metric m, const std::string &index_prefix, const size_t num_points, const size_t dimensions,
                      const uint32_t num_threads, const uint32_t initial_search_complexity)
     {
         const uint32_t _num_threads = num_threads != 0 ? num_threads : omp_get_num_threads();
@@ -280,9 +280,7 @@ template <class T> struct StaticInMemIndex
             throw std::runtime_error("initial_search_complexity must be a positive uint32_t");
         }
 
-        size_t ndims, npoints;
-        diskann::get_bin_metadata(data_path, npoints, ndims);
-        _index = new Index<T>(m, ndims, npoints,
+        _index = new Index<T>(m, dimensions, num_points,
                               false, // not a dynamic_index
                               false, // no enable_tags/ids
                               false, // no concurrent_consolidate,
@@ -397,12 +395,12 @@ inline void add_variant(py::module_ &m, const std::string &build_name, const std
 
     const std::string static_index = "StaticMemory" + class_name + "Index";
     py::class_<StaticInMemIndex<T>>(m, static_index.c_str())
-        .def(py::init([](const diskann::Metric metric, const std::string &data_path, const std::string &index_path,
-                         const uint32_t num_threads, const uint32_t initial_search_complexity) {
+        .def(py::init([](const diskann::Metric metric, const std::string &index_path, const size_t num_points,
+                         const size_t dimensions, const uint32_t num_threads, const uint32_t initial_search_complexity) {
                  return std::unique_ptr<StaticInMemIndex<T>>(
-                     new StaticInMemIndex<T>(metric, data_path, index_path, num_threads, initial_search_complexity));
+                     new StaticInMemIndex<T>(metric, index_path, num_points, dimensions, num_threads, initial_search_complexity));
              }),
-             py::arg("metric"), py::arg("data_path"), py::arg("index_path"), py::arg("num_threads"),
+             py::arg("metric"), py::arg("index_path"), py::arg("num_points"), py::arg("dimensions"), py::arg("num_threads"),
              py::arg("initial_search_complexity"))
         .def("search", &StaticInMemIndex<T>::search, py::arg("query"), py::arg("knn"), py::arg("complexity"))
         .def("batch_search", &StaticInMemIndex<T>::batch_search, py::arg("queries"), py::arg("num_queries"),
@@ -410,18 +408,18 @@ inline void add_variant(py::module_ &m, const std::string &build_name, const std
 
     const std::string dynamic_index = "DynamicMemory" + class_name + "Index";
     py::class_<DynamicInMemIndex<T>>(m, dynamic_index.c_str())
-        .def(py::init([](const diskann::Metric metric, const size_t dim, const size_t max_points,
+        .def(py::init([](const diskann::Metric metric, const size_t dimensions, const size_t max_points,
                          const uint32_t complexity, const uint32_t graph_degree, const bool saturate_graph,
                          const uint32_t max_occlusion_size, const float alpha, const uint32_t num_threads,
                          const uint32_t filter_complexity, const uint32_t num_frozen_points,
                          const uint32_t initial_search_complexity, const uint32_t search_threads,
                          const bool concurrent_consolidation, const std::string &index_path) {
                  return std::unique_ptr<DynamicInMemIndex<T>>(new DynamicInMemIndex<T>(
-                     metric, dim, max_points, complexity, graph_degree, saturate_graph, max_occlusion_size, alpha,
+                     metric, dimensions, max_points, complexity, graph_degree, saturate_graph, max_occlusion_size, alpha,
                      num_threads, filter_complexity, num_frozen_points, initial_search_complexity, search_threads,
                      concurrent_consolidation, index_path));
              }),
-             py::arg("metric"), py::arg("dim"), py::arg("max_points"), py::arg("complexity"), py::arg("graph_degree"),
+             py::arg("metric"), py::arg("dimensions"), py::arg("max_points"), py::arg("complexity"), py::arg("graph_degree"),
              py::arg("saturate_graph") = diskann::defaults::SATURATE_GRAPH,
              py::arg("max_occlusion_size") = diskann::defaults::MAX_OCCLUSION_SIZE,
              py::arg("alpha") = diskann::defaults::ALPHA, py::arg("num_threads") = diskann::defaults::NUM_THREADS,

@@ -3,7 +3,6 @@
 
 import os
 import warnings
-from typing import Literal
 
 import numpy as np
 
@@ -11,17 +10,14 @@ from . import _diskannpy as _native_dap
 from ._common import (
     QueryResponse,
     QueryResponseBatch,
-    VectorDType,
     VectorLike,
     VectorLikeBatch,
     _assert,
-    _assert_dtype,
-    _assert_existing_directory,
-    _assert_existing_file,
     _assert_is_nonnegative_uint32,
     _assert_is_positive_uint32,
     _castable_dtype_or_raise,
-    _get_valid_metric,
+    _read_index_metadata,
+    _valid_index_prefix
 )
 
 __ALL__ = ["StaticMemoryIndex"]
@@ -30,28 +26,16 @@ __ALL__ = ["StaticMemoryIndex"]
 class StaticMemoryIndex:
     def __init__(
         self,
-        metric: Literal["l2", "mips", "cosine"],
-        vector_dtype: VectorDType,
-        data_path: str,
         index_directory: str,
         num_threads: int,
         initial_search_complexity: int,
-        index_prefix: str = "ann",
+        index_prefix: str = "ann"
     ):
         """
         The diskannpy.StaticMemoryIndex represents our python API into a static DiskANN InMemory Index library.
 
-        This static index is treated exactly like the DiskIndex, in that it can only be loaded and searched.
+        This static index is intended for searching.
 
-        :param metric: One of {"l2", "mips"}. L2 is supported for all 3 vector dtypes, but MIPS is only
-            available for single point floating numbers (numpy.single)
-        :type metric: str
-        :param vector_dtype: The vector dtype this index will be exposing.
-        :type vector_dtype: Type[numpy.single], Type[numpy.byte], Type[numpy.ubyte]
-        :param data_path: The path to the vector bin file that created this index. Note that if you use a numpy
-            array to build the index, you will still need to save this array as well via the
-            ``diskannpy.numpy_to_diskann_file`` and provide the path to it here.
-        :type data_path: str
         :param index_directory: The directory the index files reside in
         :type index_directory: str
         :param initial_search_complexity: A positive integer that tunes how much work should be completed in the
@@ -62,18 +46,17 @@ class StaticMemoryIndex:
         :param index_prefix: A shared prefix that all files in this index will use. Default is "ann".
         :type index_prefix: str
         """
-        dap_metric = _get_valid_metric(metric)
-        _assert_dtype(vector_dtype)
+        index_prefix = _valid_index_prefix(index_directory, index_prefix)
+        vector_dtype, dap_metric, num_vectors, dimensions = _read_index_metadata(index_prefix)
+
         _assert_is_nonnegative_uint32(num_threads, "num_threads")
         _assert_is_positive_uint32(
             initial_search_complexity, "initial_search_complexity"
         )
-        _assert_existing_file(data_path, "data_path")
-        _assert_existing_directory(index_directory, "index_directory")
-
-        _assert(index_prefix != "", "index_prefix cannot be an empty string")
 
         self._vector_dtype = vector_dtype
+        self._dimensions = dimensions
+
         if vector_dtype == np.single:
             _index = _native_dap.StaticMemoryFloatIndex
         elif vector_dtype == np.ubyte:
@@ -82,7 +65,8 @@ class StaticMemoryIndex:
             _index = _native_dap.StaticMemoryInt8Index
         self._index = _index(
             metric=dap_metric,
-            data_path=data_path,
+            num_points=num_vectors,
+            dimensions=dimensions,
             index_path=os.path.join(index_directory, index_prefix),
             num_threads=num_threads,
             initial_search_complexity=initial_search_complexity,
@@ -118,6 +102,11 @@ class StaticMemoryIndex:
             message=f"StaticMemoryIndex expected a query vector of dtype of {self._vector_dtype}"
         )
         _assert(len(_query.shape) == 1, "query vector must be 1-d")
+        _assert(
+            _query.shape[0] == self._dimensions,
+            f"query vector must have the same dimensionality as the index; index dimensionality: {self._dimensions}, "
+            f"query dimensionality: {_query.shape[0]}"
+        )
         _assert_is_positive_uint32(k_neighbors, "k_neighbors")
         _assert_is_nonnegative_uint32(complexity, "complexity")
 
@@ -157,6 +146,11 @@ class StaticMemoryIndex:
 
         _queries = _castable_dtype_or_raise(queries, expected=self._vector_dtype, message=f"StaticMemoryIndex expected a query vector of dtype of {self._vector_dtype}")
         _assert(len(_queries.shape) == 2, "queries must must be 2-d np array")
+        _assert(
+            _queries.shape[1] == self._dimensions,
+            f"query vectors must have the same dimensionality as the index; index dimensionality: {self._dimensions}, "
+            f"query dimensionality: {_queries.shape[1]}"
+        )
         _assert_is_positive_uint32(k_neighbors, "k_neighbors")
         _assert_is_positive_uint32(complexity, "complexity")
         _assert_is_nonnegative_uint32(num_threads, "num_threads")

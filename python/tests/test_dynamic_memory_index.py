@@ -63,7 +63,7 @@ class TestDynamicMemoryIndex(unittest.TestCase):
                 index = dap.DynamicMemoryIndex(
                     metric=metric,
                     vector_dtype=dtype,
-                    dim=10,
+                    dimensions=10,
                     max_points=11_000,
                     complexity=64,
                     graph_degree=32,
@@ -104,7 +104,7 @@ class TestDynamicMemoryIndex(unittest.TestCase):
                 index = dap.DynamicMemoryIndex(
                     metric="l2",
                     vector_dtype=dtype,
-                    dim=10,
+                    dimensions=10,
                     max_points=11_000,
                     complexity=64,
                     graph_degree=32,
@@ -124,7 +124,7 @@ class TestDynamicMemoryIndex(unittest.TestCase):
             dap.DynamicMemoryIndex(
                 metric="sandwich",
                 vector_dtype=np.single,
-                dim=10,
+                dimensions=10,
                 max_points=11_000,
                 complexity=64,
                 graph_degree=32,
@@ -134,7 +134,7 @@ class TestDynamicMemoryIndex(unittest.TestCase):
             dap.DynamicMemoryIndex(
                 metric=None,
                 vector_dtype=np.single,
-                dim=10,
+                dimensions=10,
                 max_points=11_000,
                 complexity=64,
                 graph_degree=32,
@@ -143,7 +143,7 @@ class TestDynamicMemoryIndex(unittest.TestCase):
         dap.DynamicMemoryIndex(
             metric="l2",
             vector_dtype=np.single,
-            dim=10,
+            dimensions=10,
             max_points=11_000,
             complexity=64,
             graph_degree=32,
@@ -152,7 +152,7 @@ class TestDynamicMemoryIndex(unittest.TestCase):
         dap.DynamicMemoryIndex(
             metric="mips",
             vector_dtype=np.single,
-            dim=10,
+            dimensions=10,
             max_points=11_000,
             complexity=64,
             graph_degree=32,
@@ -161,7 +161,7 @@ class TestDynamicMemoryIndex(unittest.TestCase):
         dap.DynamicMemoryIndex(
             metric="MiPs",
             vector_dtype=np.single,
-            dim=10,
+            dimensions=10,
             max_points=11_000,
             complexity=64,
             graph_degree=32,
@@ -183,7 +183,7 @@ class TestDynamicMemoryIndex(unittest.TestCase):
                 index = dap.DynamicMemoryIndex(
                     metric="l2",
                     vector_dtype=aliases[dtype],
-                    dim=10,
+                    dimensions=10,
                     max_points=11_000,
                     complexity=64,
                     graph_degree=32,
@@ -197,7 +197,7 @@ class TestDynamicMemoryIndex(unittest.TestCase):
                     dap.DynamicMemoryIndex(
                         metric="l2",
                         vector_dtype=invalid_vector_dtype,
-                        dim=10,
+                        dimensions=10,
                         max_points=11_000,
                         complexity=64,
                         graph_degree=32,
@@ -217,7 +217,7 @@ class TestDynamicMemoryIndex(unittest.TestCase):
         good_ranges = {
             "metric": "l2",
             "vector_dtype": np.single,
-            "dim": 10,
+            "dimensions": 10,
             "max_points": 11_000,
             "complexity": 64,
             "graph_degree": 32,
@@ -233,7 +233,7 @@ class TestDynamicMemoryIndex(unittest.TestCase):
         bad_ranges = {
             "metric": "l200000",
             "vector_dtype": np.double,
-            "dim": -1,
+            "dimensions": -1,
             "max_points": -1,
             "complexity": 0,
             "graph_degree": 0,
@@ -255,19 +255,20 @@ class TestDynamicMemoryIndex(unittest.TestCase):
     def test_value_ranges_search(self):
         good_ranges = {"complexity": 5, "k_neighbors": 10}
         bad_ranges = {"complexity": -1, "k_neighbors": 0}
-        vector_bin_file = self._test_matrix[0][5]
         for bad_value_key in good_ranges.keys():
             kwargs = good_ranges.copy()
             kwargs[bad_value_key] = bad_ranges[bad_value_key]
-            with self.subTest():
+            with self.subTest(msg=f"Test value ranges search with {kwargs=}"):
                 with self.assertRaises(ValueError):
-                    index = dap.StaticMemoryIndex(
+                    index = dap.DynamicMemoryIndex(
                         metric="l2",
                         vector_dtype=np.single,
-                        data_path=vector_bin_file,
                         index_directory=self._example_ann_dir,
                         num_threads=16,
                         initial_search_complexity=32,
+                        max_points=10001,
+                        complexity=64,
+                        graph_degree=32
                     )
                     index.search(query=np.array([], dtype=np.single), **kwargs)
 
@@ -282,19 +283,19 @@ class TestDynamicMemoryIndex(unittest.TestCase):
             "k_neighbors": 0,
             "num_threads": -1,
         }
-        vector_bin_file = self._test_matrix[0][5]
         for bad_value_key in good_ranges.keys():
             kwargs = good_ranges.copy()
             kwargs[bad_value_key] = bad_ranges[bad_value_key]
-            with self.subTest():
+            with self.subTest(msg=f"Testing value ranges batch search with {kwargs=}"):
                 with self.assertRaises(ValueError):
-                    index = dap.StaticMemoryIndex(
+                    index = dap.DynamicMemoryIndex(
                         metric="l2",
                         vector_dtype=np.single,
-                        data_path=vector_bin_file,
-                        index_directory=self._example_ann_dir,
                         num_threads=16,
                         initial_search_complexity=32,
+                        max_points=10001,
+                        complexity=64,
+                        graph_degree=32
                     )
                     index.batch_search(
                         queries=np.array([[]], dtype=np.single), **kwargs

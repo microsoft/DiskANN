@@ -3,12 +3,14 @@
 
 import os
 import warnings
-from typing import Literal, Tuple
 
 import numpy as np
 
+from typing import Optional
+
 from . import _diskannpy as _native_dap
 from ._common import (
+    DistanceMetric,
     QueryResponse,
     QueryResponseBatch,
     VectorDType,
@@ -22,7 +24,9 @@ from ._common import (
     _assert_is_nonnegative_uint32,
     _assert_is_positive_uint32,
     _castable_dtype_or_raise,
-    _get_valid_metric,
+    _read_index_metadata,
+    _valid_metric,
+    _valid_index_prefix,
 )
 from ._diskannpy import defaults
 
@@ -32,9 +36,6 @@ __ALL__ = ["DynamicMemoryIndex"]
 class DynamicMemoryIndex:
     def __init__(
         self,
-        metric: Literal["l2", "mips", "cosine"],
-        vector_dtype: VectorDType,
-        dim: int,
         max_points: int,
         complexity: int,
         graph_degree: int,
@@ -47,7 +48,10 @@ class DynamicMemoryIndex:
         initial_search_complexity: int = 0,
         search_threads: int = 0,
         concurrent_consolidation: bool = True,
-        index_directory: str = "",
+        metric: Optional[DistanceMetric] = None,
+        vector_dtype: Optional[VectorDType] = None,
+        dimensions: Optional[int] = None,
+        index_directory: Optional[str] = None,
         index_prefix: str = "ann"
     ):
         """
@@ -58,13 +62,6 @@ class DynamicMemoryIndex:
 
         Deletions are completed lazily, until the user executes `DynamicMemoryIndex.consolidate_deletes()`
 
-        :param metric: One of {"l2", "mips"}. L2 is supported for all 3 vector dtypes, but MIPS is only
-            available for single point floating numbers (numpy.single)
-        :type metric: str
-        :param vector_dtype: The vector dtype this index will be exposing.
-        :type vector_dtype: Type[numpy.single], Type[numpy.byte], Type[numpy.ubyte]
-        :param dim: The vector dimensionality of this index. All new vectors inserted must be the same dimensionality.
-        :type dim: int
         :param max_points: Capacity of the data store for future insertions
         :type max_points: int
         :param graph_degree: The degree of the graph index, typically between 60 and 150. A larger maximum degree will
@@ -97,12 +94,28 @@ class DynamicMemoryIndex:
         :type search_threads: int
         :param concurrent_consolidation:
         :type concurrent_consolidation: bool
+        :param metric: If it exists, must be one of {"l2", "mips", "cosine"}. L2 is supported for all 3 vector dtypes,
+            but MIPS is only available for single point floating numbers (numpy.single). Default is ``None``.
+        :type metric: Optional[str]
+        :param vector_dtype: The vector dtype this index will be exposing. Default is ``None``
+        :type vector_dtype: Optional[Union[Type[numpy.single], Type[numpy.byte], Type[numpy.ubyte]]]
+        :param dimensions: The vector dimensionality of this index. All new vectors inserted must be the same
+            dimensionality. Default is ``None``.
+        :type dimensions: Optional[int]
         """
-        dap_metric = _get_valid_metric(metric)
-        _assert_dtype(vector_dtype)
-        self._vector_dtype = vector_dtype
+        if index_directory is not None and index_directory != "":
+            index_prefix = _valid_index_prefix(index_directory, index_prefix)
+            vector_dtype, dap_metric, num_points, dimensions = _read_index_metadata(index_prefix)
+            self._index_path = index_prefix
+        else:
+            dap_metric = _valid_metric(metric)
+            _assert_dtype(vector_dtype)
+            _assert_is_positive_uint32(dimensions, "dimensions")
+            self._index_path = ""
 
-        _assert_is_positive_uint32(dim, "dim")
+        self._vector_dtype = vector_dtype
+        self._dimensions = dimensions
+
         _assert_is_positive_uint32(max_points, "max_points")
         _assert_is_positive_uint32(complexity, "complexity")
         _assert_is_positive_uint32(graph_degree, "graph_degree")
@@ -116,10 +129,6 @@ class DynamicMemoryIndex:
         )
         _assert_is_nonnegative_uint32(search_threads, "search_threads")
 
-        self._index_path = os.path.join(index_directory, index_prefix) if index_directory != "" else ""
-
-        self._dims = dim
-
         if vector_dtype == np.single:
             _index = _native_dap.DynamicMemoryFloatIndex
         elif vector_dtype == np.ubyte:
@@ -128,7 +137,7 @@ class DynamicMemoryIndex:
             _index = _native_dap.DynamicMemoryInt8Index
         self._index = _index(
             metric=dap_metric,
-            dim=dim,
+            dimensions=dimensions,
             max_points=max_points,
             complexity=complexity,
             graph_degree=graph_degree,
@@ -169,6 +178,11 @@ class DynamicMemoryIndex:
             message=f"StaticMemoryIndex expected a query vector of dtype of {self._vector_dtype}"
         )
         _assert(len(_query.shape) == 1, "query vector must be 1-d")
+        _assert(
+            _query.shape[0] == self._dimensions,
+            f"query vector must have the same dimensionality as the index; index dimensionality: {self._dimensions}, "
+            f"query dimensionality: {_query.shape[0]}"
+        )
         _assert_is_positive_uint32(k_neighbors, "k_neighbors")
         _assert_is_nonnegative_uint32(complexity, "complexity")
 
@@ -205,8 +219,13 @@ class DynamicMemoryIndex:
             contains the distances, of the same form: row index will match query index, column index refers to
             1..k_neighbors distance. These are aligned arrays.
         """
-        _query = _castable_dtype_or_raise(queries, expected=self._vector_dtype, message=f"DynamicMemoryIndex expected a query vector of dtype of {self._vector_dtype}")
-        _assert_2d(_query, "queries")
+        _queries = _castable_dtype_or_raise(queries, expected=self._vector_dtype, message=f"DynamicMemoryIndex expected a query vector of dtype of {self._vector_dtype}")
+        _assert_2d(_queries, "queries")
+        _assert(
+            _queries.shape[1] == self._dimensions,
+            f"query vectors must have the same dimensionality as the index; index dimensionality: {self._dimensions}, "
+            f"query dimensionality: {_queries.shape[1]}"
+        )
 
         _assert_is_positive_uint32(k_neighbors, "k_neighbors")
         _assert_is_positive_uint32(complexity, "complexity")
@@ -220,7 +239,7 @@ class DynamicMemoryIndex:
 
         num_queries, dim = queries.shape
         return self._index.batch_search(
-            queries=_query,
+            queries=_queries,
             num_queries=num_queries,
             knn=k_neighbors,
             complexity=complexity,

@@ -9,6 +9,7 @@ import numpy as np
 
 from . import _diskannpy as _native_dap
 from ._common import (
+    DistanceMetric,
     VectorDType,
     VectorLikeBatch,
     _assert,
@@ -17,8 +18,10 @@ from ._common import (
     _castable_dtype_or_raise,
     _assert_is_nonnegative_uint32,
     _assert_is_positive_uint32,
-    _get_valid_metric,
+    _valid_metric,
+    _write_index_metadata
 )
+from ._files import vector_file_metadata
 from ._diskannpy import defaults
 
 
@@ -66,7 +69,7 @@ def _valid_path_and_dtype(
 
 def build_disk_index(
     data: Union[str, VectorLikeBatch],
-    metric: Literal["l2", "mips", "cosine"],
+    metric: DistanceMetric,
     index_directory: str,
     complexity: int,
     graph_degree: int,
@@ -128,7 +131,7 @@ def build_disk_index(
         or isinstance(data, np.ndarray),
         "vector_dtype is required if data is a str representing a path to the vector bin file",
     )
-    dap_metric = _get_valid_metric(metric)
+    dap_metric = _valid_metric(metric)
     _assert_is_positive_uint32(complexity, "complexity")
     _assert_is_positive_uint32(graph_degree, "graph_degree")
     _assert(search_memory_maximum > 0, "search_memory_maximum must be larger than 0")
@@ -147,6 +150,8 @@ def build_disk_index(
         data, vector_dtype, index_directory
     )
 
+    num_points, dimensions = vector_file_metadata(vector_bin_path)
+
     if vector_dtype_actual == np.single:
         _builder = _native_dap.build_disk_float_index
     elif vector_dtype_actual == np.ubyte:
@@ -154,10 +159,12 @@ def build_disk_index(
     else:
         _builder = _native_dap.build_disk_int8_index
 
+    index_prefix_path = os.path.join(index_directory, index_prefix)
+
     _builder(
         metric=dap_metric,
         data_file_path=vector_bin_path,
-        index_prefix_path=os.path.join(index_directory, index_prefix),
+        index_prefix_path=index_prefix_path,
         complexity=complexity,
         graph_degree=graph_degree,
         final_index_ram_limit=search_memory_maximum,
@@ -165,6 +172,7 @@ def build_disk_index(
         num_threads=num_threads,
         pq_disk_bytes=pq_disk_bytes,
     )
+    _write_index_metadata(index_prefix_path, vector_dtype_actual, dap_metric, num_points, dimensions)
 
 
 def build_memory_index(
@@ -228,7 +236,7 @@ def build_memory_index(
         or isinstance(data, np.ndarray),
         "vector_dtype is required if data is a str representing a path to the vector bin file",
     )
-    dap_metric = _get_valid_metric(metric)
+    dap_metric = _valid_metric(metric)
     _assert_is_positive_uint32(complexity, "complexity")
     _assert_is_positive_uint32(graph_degree, "graph_degree")
     _assert(alpha >= 1, "alpha must be >= 1, and realistically should be kept between [1.0, 2.0)")
@@ -247,6 +255,8 @@ def build_memory_index(
         data, vector_dtype, index_directory
     )
 
+    num_points, dimensions = vector_file_metadata(vector_bin_path)
+
     if vector_dtype_actual == np.single:
         _builder = _native_dap.build_in_memory_float_index
     elif vector_dtype_actual == np.ubyte:
@@ -254,10 +264,12 @@ def build_memory_index(
     else:
         _builder = _native_dap.build_in_memory_int8_index
 
+    index_prefix_path = os.path.join(index_directory, index_prefix)
+
     _builder(
         metric=dap_metric,
         data_file_path=vector_bin_path,
-        index_output_path=os.path.join(index_directory, index_prefix),
+        index_output_path=index_prefix_path,
         complexity=complexity,
         graph_degree=graph_degree,
         alpha=alpha,
@@ -269,3 +281,4 @@ def build_memory_index(
         universal_label=universal_label,
         filter_complexity=filter_complexity
     )
+    _write_index_metadata(index_prefix_path, vector_dtype_actual, dap_metric, num_points, dimensions)

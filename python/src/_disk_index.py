@@ -21,7 +21,7 @@ from ._common import (
     _assert_is_nonnegative_uint32,
     _assert_is_positive_uint32,
     _castable_dtype_or_raise,
-    _get_valid_metric,
+    _valid_metric,
 )
 
 __ALL__ = ["DiskIndex"]
@@ -63,7 +63,7 @@ class DiskIndex:
         :raises ValueError: If vector dtype is not a supported dtype
         :raises ValueError: If num_threads or num_nodes_to_cache is an invalid range.
         """
-        dap_metric = _get_valid_metric(metric)
+        dap_metric = _valid_metric(metric)
         _assert_dtype(vector_dtype)
         _assert_is_nonnegative_uint32(num_threads, "num_threads")
         _assert_is_nonnegative_uint32(num_nodes_to_cache, "num_nodes_to_cache")
