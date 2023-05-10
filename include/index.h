@@ -18,6 +18,7 @@
 #include "utils.h"
 #include "windows_customizations.h"
 #include "scratch.h"
+#include <bitset>
 
 #define OVERHEAD_FACTOR 1.1
 #define EXPAND_IF_FULL 0
@@ -71,6 +72,41 @@ struct consolidation_report
           _num_calls_to_process_delete(num_calls_to_process_delete), _time(time_secs)
     {
     }
+};
+
+class IBitSet
+{
+public:
+    virtual bool test(size_t pos) const = 0;
+    
+    virtual void set(size_t pos) = 0;
+};
+
+
+class bitmask_wrapper
+{
+public:
+    bitmask_wrapper(size_t totalBits)
+    {
+        size_t count = (totalBits / 64) + (totalBits % 64);
+        _bitsets.resize(count);
+    }
+
+    bool test(size_t pos) const
+    {
+        size_t index = pos / 64;
+        
+        return _bitsets[index].test(pos);
+    }
+
+    void set(size_t pos)
+    {
+        size_t index = pos / 64;
+        _bitsets[index].set(pos);
+    }
+
+private:
+    std::vector<std::bitset<64>> _bitsets;
 };
 
 template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> class Index
@@ -237,6 +273,8 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     unsigned calculate_entry_point();
 
     void parse_label_file(const std::string &label_file, size_t &num_pts_labels);
+
+    void parse_label_file_in_bitset(const std::string& label_file, size_t& num_points, size_t num_labels);
 
     std::unordered_map<std::string, LabelT> load_label_map(const std::string &map_file);
 
@@ -420,6 +458,8 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 
     // Per node lock, cardinality=_max_points
     std::vector<non_recursive_mutex> _locks;
+
+    std::vector<bitmask_wrapper> _pts_label_bitsets;
 
     static const float INDEX_GROWTH_FACTOR;
 };

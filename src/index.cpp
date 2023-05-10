@@ -563,7 +563,9 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
     if (file_exists(labels_file))
     {
         _label_map = load_label_map(labels_map_file);
-        parse_label_file(labels_file, label_num_pts);
+    //    parse_label_file(labels_file, label_num_pts);
+        parse_label_file_in_bitset(labels_file, label_num_pts, _label_map.size());
+
         assert(label_num_pts == data_file_num_pts);
         if (file_exists(labels_to_medoids))
         {
@@ -956,6 +958,20 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
         diskann::pq_dist_lookup(pq_coord_scratch, ids.size(), this->_num_pq_chunks, pq_dists, dists_out);
     };
 
+    // check if input labels contain universal label
+    bool input_contain_universal_label = false;
+    if (_use_universal_label)
+    {
+        for (size_t i = 0; i < filter_label.size(); i++)
+        {
+            if (filter_label[i] == _universal_label)
+            {
+                input_contain_universal_label = true;
+                break;
+            }
+        }
+    }
+
     // Initialize the candidate pool with starting points
     for (auto id : init_ids)
     {
@@ -966,20 +982,20 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                                         __LINE__);
         }
 
-        if (use_filter)
+        if (use_filter && !input_contain_universal_label)
         {
-            std::vector<LabelT> common_filters;
-            auto &x = _pts_to_labels[id];
-            std::set_intersection(filter_label.begin(), filter_label.end(), x.begin(), x.end(),
-                                  std::back_inserter(common_filters));
-            if (_use_universal_label)
+            bool ret = false;
+            for (size_t i = 0; i < filter_label.size(); i++)
             {
-                if (std::find(filter_label.begin(), filter_label.end(), _universal_label) != filter_label.end() ||
-                    std::find(x.begin(), x.end(), _universal_label) != x.end())
-                    common_filters.emplace_back(_universal_label);
+                if (_pts_label_bitsets[id].test(filter_label[i] - 1)
+                    || (_use_universal_label && _pts_label_bitsets[id].test(_universal_label - 1)))
+                {
+                    ret = true;
+                    break;
+                }
             }
 
-            if (common_filters.size() == 0)
+            if (!ret)
                 continue;
         }
 
@@ -1040,45 +1056,23 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
             {
                 assert(id < _max_points + _num_frozen_pts);
 
-                if (use_filter)
+                if (use_filter && !input_contain_universal_label)
                 {
                     // NOTE: NEED TO CHECK IF THIS CORRECT WITH NEW LOCKS.
                 //    std::vector<LabelT> common_filters;
-                    auto &x = _pts_to_labels[id];
-                    auto ret = false;
-                    for (const auto& query_label : filter_label)
+                    bool ret = false;
+                    for (size_t i = 0; i < filter_label.size(); i++)
                     {
-                        ret = is_label_existed(x, query_label);
-                        if (ret)
+                        if (_pts_label_bitsets[id].test(filter_label[i] - 1)
+                            || (_use_universal_label && _pts_label_bitsets[id].test(_universal_label - 1)))
                         {
+                            ret = true;
                             break;
-                        }
-                    }
-                    if (!ret && _use_universal_label)
-                    {
-                        ret = is_label_existed(filter_label, _universal_label);
-                        if (!ret)
-                        {
-                            ret = is_label_existed(x, _universal_label);
                         }
                     }
 
                     if (!ret)
-                    {
                         continue;
-                    }
-                    //std::set_intersection(filter_label.begin(), filter_label.end(), x.begin(), x.end(),
-                    //                      std::back_inserter(common_filters));
-                    //if (_use_universal_label)
-                    //{
-                    //    if (std::find(filter_label.begin(), filter_label.end(), _universal_label) !=
-                    //            filter_label.end() ||
-                    //        std::find(x.begin(), x.end(), _universal_label) != x.end())
-                    //        common_filters.emplace_back(_universal_label);
-                    //}
-
-                    //if (common_filters.size() == 0)
-                    //    continue;
                 }
 
                 if (is_not_visited(id))
@@ -1942,6 +1936,58 @@ void Index<T, TagT, LabelT>::parse_label_file(const std::string &label_file, siz
         }
         std::sort(lbls.begin(), lbls.end());
         _pts_to_labels[line_cnt] = lbls;
+        line_cnt++;
+    }
+    num_points = (size_t)line_cnt;
+    diskann::cout << "Identified " << _labels.size() << " distinct label(s)" << std::endl;
+}
+
+template <typename T, typename TagT, typename LabelT>
+void Index<T, TagT, LabelT>::parse_label_file_in_bitset(const std::string& label_file, size_t& num_points, size_t num_labels)
+{
+    std::ifstream infile(label_file);
+    if (infile.fail())
+    {
+        throw diskann::ANNException(std::string("Failed to open file ") + label_file, -1);
+    }
+
+    std::string line, token;
+    unsigned line_cnt = 0;
+
+    while (std::getline(infile, line))
+    {
+        line_cnt++;
+    }
+
+    _pts_label_bitsets.resize(line_cnt, num_labels);
+    
+    infile.clear();
+    infile.seekg(0, std::ios::beg);
+    line_cnt = 0;
+
+    while (std::getline(infile, line))
+    {
+        std::istringstream iss(line);
+        std::vector<LabelT> lbls(0);
+        getline(iss, token, '\t');
+        std::istringstream new_iss(token);
+        while (getline(new_iss, token, ','))
+        {
+            token.erase(std::remove(token.begin(), token.end(), '\n'), token.end());
+            token.erase(std::remove(token.begin(), token.end(), '\r'), token.end());
+            LabelT token_as_num = std::stoul(token);
+            _pts_label_bitsets[line_cnt].set(token_as_num - 1);
+
+        //    lbls.push_back(token_as_num);
+            _labels.insert(token_as_num);
+        }
+        //if (lbls.size() <= 0)
+        //{
+        //    diskann::cout << "No label found";
+        //    exit(-1);
+        //}
+    //    std::sort(lbls.begin(), lbls.end());
+    //    _pts_to_labels[line_cnt] = lbls;
         line_cnt++;
     }
     num_points = (size_t)line_cnt;
