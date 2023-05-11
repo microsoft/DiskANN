@@ -1065,7 +1065,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                 {
                     continue;
                 }
-
+                cmps++;
                 //if (use_filter && !input_contain_universal_label)
                 //{
                 //    // NOTE: NEED TO CHECK IF THIS CORRECT WITH NEW LOCKS.
@@ -1122,7 +1122,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                     _distance->compare(aligned_query, _data + _aligned_dim * (size_t)id, (unsigned)_aligned_dim));
             }
         }
-        cmps += id_scratch.size();
+//        cmps += id_scratch.size();
 
         // Insert <id, dist> pairs into the pool of candidates
         for (size_t m = 0; m < id_scratch.size(); ++m)
