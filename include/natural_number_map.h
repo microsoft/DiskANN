@@ -7,7 +7,7 @@
 #include <type_traits>
 #include <vector>
 
-#include "boost_dynamic_bitset_fwd.h"
+#include <boost/dynamic_bitset.hpp>
 
 namespace diskann
 {

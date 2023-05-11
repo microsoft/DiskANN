@@ -10,10 +10,10 @@ namespace defaults
 {
 const float ALPHA = 1.2f;
 const uint32_t NUM_THREADS = 0;
-const uint32_t NUM_ROUNDS = 2;
 const uint32_t MAX_OCCLUSION_SIZE = 750;
 const uint32_t FILTER_LIST_SIZE = 0;
-const uint32_t NUM_FROZEN_POINTS = 0;
+const uint32_t NUM_FROZEN_POINTS_STATIC = 0;
+const uint32_t NUM_FROZEN_POINTS_DYNAMIC = 1;
 const bool UNIVERSAL_LABEL_EXISTS = false;
 const uint16_t UNIVERSAL_LABEL = 0;
 // following constants should always be specified, but are useful as a

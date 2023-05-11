@@ -105,8 +105,8 @@ void stats_analysis(const std::string labels_file, std::string univeral_label, u
         std::cout << "Third common label "
                   << "\t" << label_count_vec[label_count_vec.size() - 3].first
                   << " with count=" << label_count_vec[label_count_vec.size() - 3].second << std::endl;
-    avg_labels_per_pt = (sum) / (float)point_cnt;
-    mean_label_size = (sum) / label_counts.size();
+    avg_labels_per_pt = sum / (float)point_cnt;
+    mean_label_size = sum / (float)label_counts.size();
     std::cout << "Total number of points = " << point_cnt << ", number of labels = " << label_counts.size()
               << std::endl;
     std::cout << "Average number of labels per point = " << avg_labels_per_pt << std::endl;

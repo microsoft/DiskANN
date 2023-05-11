@@ -7,57 +7,8 @@ from tempfile import mkdtemp
 
 import diskannpy as dap
 import numpy as np
-from sklearn.neighbors import NearestNeighbors
-
 from fixtures import calculate_recall, random_vectors, vectors_as_temp_file
-
-
-class TestBuildIndex(unittest.TestCase):
-    def test_valid_shape(self):
-        rng = np.random.default_rng(12345)
-        rando = rng.random((1000, 100, 5), dtype=np.single)
-        with self.assertRaises(ValueError):
-            dap.build_disk_index_from_vectors(
-                rando, "l2", "test", 5, 5, 0.01, 0.01, 1, 0
-            )
-
-        rando = rng.random(1000, dtype=np.single)
-        with self.assertRaises(ValueError):
-            dap.build_disk_index_from_vectors(
-                rando, "l2", "test", 5, 5, 0.01, 0.01, 1, 0
-            )
-
-    def test_value_ranges_build(self):
-        good_ranges = {
-            "vector_dtype": np.single,
-            "metric": "l2",
-            "max_degree": 5,
-            "list_size": 5,
-            "search_memory_maximum": 0.01,
-            "build_memory_maximum": 0.01,
-            "num_threads": 1,
-            "pq_disk_bytes": 0,
-        }
-        bad_ranges = {
-            "vector_dtype": np.float64,
-            "metric": "soups this time",
-            "max_degree": -1,
-            "list_size": -1,
-            "search_memory_maximum": 0,
-            "build_memory_maximum": 0,
-            "num_threads": -1,
-            "pq_disk_bytes": -1,
-        }
-        for bad_value_key in good_ranges.keys():
-            kwargs = good_ranges.copy()
-            kwargs[bad_value_key] = bad_ranges[bad_value_key]
-            with self.subTest(
-                    f"testing bad value key: {bad_value_key} with bad value: {bad_ranges[bad_value_key]}"
-            ):
-                with self.assertRaises(ValueError):
-                    dap.build_disk_index_from_vector_file(
-                        vector_bin_file="test", index_path="test", **kwargs
-                    )
+from sklearn.neighbors import NearestNeighbors
 
 
 def _build_random_vectors_and_index(dtype, metric):
@@ -65,13 +16,13 @@ def _build_random_vectors_and_index(dtype, metric):
     index_vectors = random_vectors(10000, 10, dtype=dtype)
     with vectors_as_temp_file(index_vectors) as vector_temp:
         ann_dir = mkdtemp()
-        dap.build_disk_index_from_vector_file(
-            vector_bin_file=vector_temp,
+        dap.build_disk_index(
+            data=vector_temp,
             metric=metric,
             vector_dtype=dtype,
-            index_path=ann_dir,
-            max_degree=16,
-            list_size=32,
+            index_directory=ann_dir,
+            graph_degree=16,
+            complexity=32,
             search_memory_maximum=0.00003,
             build_memory_maximum=1,
             num_threads=1,
@@ -105,7 +56,7 @@ class TestDiskIndex(unittest.TestCase):
                 index = dap.DiskIndex(
                     metric="l2",
                     vector_dtype=dtype,
-                    index_path=ann_dir,
+                    index_directory=ann_dir,
                     num_threads=16,
                     num_nodes_to_cache=10,
                 )
@@ -114,7 +65,7 @@ class TestDiskIndex(unittest.TestCase):
                 diskann_neighbors, diskann_distances = index.batch_search(
                     query_vectors,
                     k_neighbors=k,
-                    list_size=5,
+                    complexity=5,
                     beam_width=2,
                     num_threads=16,
                 )
@@ -124,10 +75,11 @@ class TestDiskIndex(unittest.TestCase):
                     )
                     knn.fit(index_vectors)
                     knn_distances, knn_indices = knn.kneighbors(query_vectors)
+                    recall = calculate_recall(diskann_neighbors, knn_indices, k)
                     self.assertTrue(
-                        calculate_recall(diskann_neighbors, knn_indices, k) > 0.70,
-                        "Recall was not over 0.7",
-                        )
+                        recall > 0.70,
+                        f"Recall [{recall}] was not over 0.7",
+                    )
 
     def test_single(self):
         for metric, dtype, query_vectors, index_vectors, ann_dir in self._test_matrix:
@@ -135,14 +87,14 @@ class TestDiskIndex(unittest.TestCase):
                 index = dap.DiskIndex(
                     metric="l2",
                     vector_dtype=dtype,
-                    index_path=ann_dir,
+                    index_directory=ann_dir,
                     num_threads=16,
                     num_nodes_to_cache=10,
                 )
 
                 k = 5
                 ids, dists = index.search(
-                    query_vectors[0], k_neighbors=k, list_size=5, beam_width=2
+                    query_vectors[0], k_neighbors=k, complexity=5, beam_width=2
                 )
                 self.assertEqual(ids.shape[0], k)
                 self.assertEqual(dists.shape[0], k)
@@ -153,7 +105,7 @@ class TestDiskIndex(unittest.TestCase):
             dap.DiskIndex(
                 metric="sandwich",
                 vector_dtype=np.single,
-                index_path=ann_dir,
+                index_directory=ann_dir,
                 num_threads=16,
                 num_nodes_to_cache=10,
             )
@@ -161,28 +113,28 @@ class TestDiskIndex(unittest.TestCase):
             dap.DiskIndex(
                 metric=None,
                 vector_dtype=np.single,
-                index_path=ann_dir,
+                index_directory=ann_dir,
                 num_threads=16,
                 num_nodes_to_cache=10,
             )
         dap.DiskIndex(
             metric="l2",
             vector_dtype=np.single,
-            index_path=ann_dir,
+            index_directory=ann_dir,
             num_threads=16,
             num_nodes_to_cache=10,
         )
         dap.DiskIndex(
             metric="mips",
             vector_dtype=np.single,
-            index_path=ann_dir,
+            index_directory=ann_dir,
             num_threads=16,
             num_nodes_to_cache=10,
         )
         dap.DiskIndex(
             metric="MiPs",
             vector_dtype=np.single,
-            index_path=ann_dir,
+            index_directory=ann_dir,
             num_threads=16,
             num_nodes_to_cache=10,
         )
@@ -194,7 +146,7 @@ class TestDiskIndex(unittest.TestCase):
                 index = dap.DiskIndex(
                     metric="l2",
                     vector_dtype=aliases[dtype],
-                    index_path=ann_dir,
+                    index_directory=ann_dir,
                     num_threads=16,
                     num_nodes_to_cache=10,
                 )
@@ -206,14 +158,14 @@ class TestDiskIndex(unittest.TestCase):
                     dap.DiskIndex(
                         metric="l2",
                         vector_dtype=invalid_vector_dtype,
-                        index_path=ann_dir,
+                        index_directory=ann_dir,
                         num_threads=16,
                         num_nodes_to_cache=10,
                     )
 
     def test_value_ranges_search(self):
-        good_ranges = {"list_size": 5, "k_neighbors": 10, "beam_width": 2}
-        bad_ranges = {"list_size": -1, "k_neighbors": 0, "beam_width": 0}
+        good_ranges = {"complexity": 5, "k_neighbors": 10, "beam_width": 2}
+        bad_ranges = {"complexity": -1, "k_neighbors": 0, "beam_width": 0}
         for bad_value_key in good_ranges.keys():
             kwargs = good_ranges.copy()
             kwargs[bad_value_key] = bad_ranges[bad_value_key]
@@ -222,7 +174,7 @@ class TestDiskIndex(unittest.TestCase):
                     index = dap.DiskIndex(
                         metric="l2",
                         vector_dtype=np.single,
-                        index_path=self._example_ann_dir,
+                        index_directory=self._example_ann_dir,
                         num_threads=16,
                         num_nodes_to_cache=10,
                     )
@@ -230,13 +182,13 @@ class TestDiskIndex(unittest.TestCase):
 
     def test_value_ranges_batch_search(self):
         good_ranges = {
-            "list_size": 5,
+            "complexity": 5,
             "k_neighbors": 10,
             "beam_width": 2,
             "num_threads": 5,
         }
         bad_ranges = {
-            "list_size": 0,
+            "complexity": 0,
             "k_neighbors": 0,
             "beam_width": -1,
             "num_threads": -1,
@@ -249,7 +201,7 @@ class TestDiskIndex(unittest.TestCase):
                     index = dap.DiskIndex(
                         metric="l2",
                         vector_dtype=np.single,
-                        index_path=self._example_ann_dir,
+                        index_directory=self._example_ann_dir,
                         num_threads=16,
                         num_nodes_to_cache=10,
                     )

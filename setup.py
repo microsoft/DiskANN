@@ -3,12 +3,14 @@
 
 import os
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
 
-from setuptools import Extension, find_packages, setup
+from setuptools import Extension, setup
 from setuptools.command.build_ext import build_ext
+from setuptools.command.install_lib import install_lib
 
 # Convert distutils Windows platform specifiers to CMake -A arguments
 PLAT_TO_CMAKE = {
@@ -44,7 +46,7 @@ class CMakeBuild(build_ext):
             f"-DCMAKE_LIBRARY_OUTPUT_DIRECTORY={extdir}{os.sep}",
             f"-DPYTHON_EXECUTABLE={sys.executable}",
             f"-DCMAKE_BUILD_TYPE={cfg}",  # not used on MSVC, but no harm
-            f"-DVERSION_INFO={self.distribution.get_version()}" # commented out because we want this set in the CMake file
+            f"-DVERSION_INFO={self.distribution.get_version()}"  # commented out, we want this set in the CMake file
         ]
         build_args = []
         # Adding CMake arguments set as environment variable
@@ -125,10 +127,43 @@ class CMakeBuild(build_ext):
         )
 
 
+class InstallCMakeLibs(install_lib):
+    def run(self):
+        """
+        Windows only copy from the x64/Release directory and place them in the package
+        """
+
+        self.announce("Moving library files", level=3)
+
+        self.skip_build = True
+
+        # we only need to move the windows build output
+        windows_build_output_dir = Path('.') / 'x64' / 'Release'
+
+        if windows_build_output_dir.exists():
+            libs = [
+                os.path.join(windows_build_output_dir, _lib) for _lib in
+                os.listdir(windows_build_output_dir) if
+                os.path.isfile(os.path.join(windows_build_output_dir, _lib)) and
+                os.path.splitext(_lib)[1] in [".dll", '.lib', '.pyd', '.exp']
+            ]
+
+            for lib in libs:
+                shutil.move(
+                    lib,
+                    os.path.join(self.build_dir, 'diskannpy', os.path.basename(lib))
+                )
+
+        super().run()
+
+
 setup(
     ext_modules=[CMakeExtension("diskannpy._diskannpy", ".")],
-    cmdclass={"build_ext": CMakeBuild},
+    cmdclass={
+        "build_ext": CMakeBuild,
+        'install_lib': InstallCMakeLibs
+    },
     zip_safe=False,
-    package_dir = {"diskannpy": "python/src"},
+    package_dir={"diskannpy": "python/src"},
     exclude_package_data={"diskannpy": ["diskann_bindings.cpp"]}
 )

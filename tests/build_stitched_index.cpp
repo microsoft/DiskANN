@@ -173,7 +173,7 @@ void save_full_index(path final_index_path_prefix, path input_data_path, uint64_
     size_t bytes_written = METADATA;
     for (uint32_t node_point = 0; node_point < stitched_graph.size(); node_point++)
     {
-        uint32_t current_node_num_neighbors = stitched_graph[node_point].size();
+        uint32_t current_node_num_neighbors = (uint32_t)stitched_graph[node_point].size();
         std::vector<uint32_t> current_node_neighbors = stitched_graph[node_point];
         stitched_graph_writer.write((char *)&current_node_num_neighbors, sizeof(uint32_t));
         bytes_written += sizeof(uint32_t);
@@ -226,7 +226,7 @@ stitch_indices_return_values stitch_label_indices(
 
         std::tie(curr_label_index, curr_label_index_size) =
             diskann::load_label_index(curr_label_index_path, labels_to_number_of_points[lbl]);
-        curr_label_entry_point = random(0, curr_label_index.size());
+        curr_label_entry_point = (uint32_t)random(0, curr_label_index.size());
         label_entry_points[lbl] = label_id_to_orig_id_map[lbl][curr_label_entry_point];
 
         for (uint32_t node_point = 0; node_point < curr_label_index.size(); node_point++)
@@ -344,7 +344,7 @@ int main(int argc, char **argv)
 
     // 3. for each label, make a separate data file
     tsl::robin_map<std::string, std::vector<uint32_t>> label_id_to_orig_id_map;
-    uint32_t total_number_of_points = point_ids_to_labels.size();
+    uint32_t total_number_of_points = (uint32_t)point_ids_to_labels.size();
 
 #ifndef _WINDOWS
     if (data_type == "uint8")
