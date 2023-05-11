@@ -972,6 +972,9 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
         }
     }
 
+    // only support one filter label
+    auto bitmask_val = simple_bitmask::get_bitmask_val(filter_label[0] - 1);
+    auto universal_bitmask_val = simple_bitmask::get_bitmask_val(_universal_label - 1);
     // Initialize the candidate pool with starting points
     for (auto id : init_ids)
     {
@@ -984,19 +987,11 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
 
         if (use_filter && !input_contain_universal_label)
         {
-            bool ret = false;
-            for (size_t i = 0; i < filter_label.size(); i++)
+            if (!_pts_label_bitsets[id].test_mask_val(bitmask_val)
+                && (_use_universal_label && !_pts_label_bitsets[id].test_mask_val(universal_bitmask_val)))
             {
-                if (_pts_label_bitsets[id].test(filter_label[i] - 1)
-                    || (_use_universal_label && _pts_label_bitsets[id].test(_universal_label - 1)))
-                {
-                    ret = true;
-                    break;
-                }
-            }
-
-            if (!ret)
                 continue;
+            }
         }
 
         if (is_not_visited(id))
@@ -1060,19 +1055,11 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                 {
                     // NOTE: NEED TO CHECK IF THIS CORRECT WITH NEW LOCKS.
                 //    std::vector<LabelT> common_filters;
-                    bool ret = false;
-                    for (size_t i = 0; i < filter_label.size(); i++)
+                    if (!_pts_label_bitsets[id].test_mask_val(bitmask_val)
+                        && (_use_universal_label && !_pts_label_bitsets[id].test_mask_val(universal_bitmask_val)))
                     {
-                        if (_pts_label_bitsets[id].test(filter_label[i] - 1)
-                            || (_use_universal_label && _pts_label_bitsets[id].test(_universal_label - 1)))
-                        {
-                            ret = true;
-                            break;
-                        }
-                    }
-
-                    if (!ret)
                         continue;
+                    }
                 }
 
                 if (is_not_visited(id))

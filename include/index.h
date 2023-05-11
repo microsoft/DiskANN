@@ -82,11 +82,16 @@ public:
     virtual void set(size_t pos) = 0;
 };
 
+struct simple_bitmask_val
+{
+    size_t _index = 0;
+    std::uint64_t _mask = 0;
+};
 
-class bitmask_wrapper
+class simple_bitmask
 {
 public:
-    bitmask_wrapper(size_t totalBits)
+    simple_bitmask(size_t totalBits)
     {
         std::uint64_t bytes = (totalBits + 7) / 8;
         std::uint64_t aligned_bytes = bytes + sizeof(std::uint64_t) - 1;
@@ -103,6 +108,19 @@ public:
         size_t index = pos / 8 / sizeof(std::uint64_t);
         std::uint64_t val = _bitsets[index];
         return 0 != (val & mask);
+    }
+
+    static simple_bitmask_val get_bitmask_val(size_t pos)
+    {
+        simple_bitmask_val bitmask_val;
+        bitmask_val._mask = (std::uint64_t)1 << (pos & (8 * sizeof(std::uint64_t) - 1));
+        bitmask_val._index = pos / 8 / sizeof(std::uint64_t);
+    }
+
+    bool test_mask_val(const simple_bitmask_val& bitmask_val) const
+    {
+        std::uint64_t val = _bitsets[bitmask_val._index];
+        return 0 != (val & bitmask_val._mask);
     }
 
     void set(size_t pos)
@@ -467,7 +485,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     // Per node lock, cardinality=_max_points
     std::vector<non_recursive_mutex> _locks;
 
-    std::vector<bitmask_wrapper> _pts_label_bitsets;
+    std::vector<simple_bitmask> _pts_label_bitsets;
 
     static const float INDEX_GROWTH_FACTOR;
 };
