@@ -1056,6 +1056,11 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
             {
                 assert(id < _max_points + _num_frozen_pts);
 
+                if (!is_not_visited(id))
+                {
+                    continue;
+                }
+
                 if (use_filter && !input_contain_universal_label)
                 {
                     // NOTE: NEED TO CHECK IF THIS CORRECT WITH NEW LOCKS.
@@ -1068,10 +1073,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                     }
                 }
 
-                if (is_not_visited(id))
-                {
-                    id_scratch.push_back(id);
-                }
+                id_scratch.push_back(id);
             }
 
             if (_dynamic_index)
