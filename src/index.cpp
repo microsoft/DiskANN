@@ -1959,7 +1959,11 @@ void Index<T, TagT, LabelT>::parse_label_file_in_bitset(const std::string& label
         line_cnt++;
     }
 
-    _pts_label_bitsets.resize(line_cnt, num_labels);
+    _pts_label_bitsets.reserve(line_cnt);
+    for (size_t i = 0; i < line_cnt; i++)
+    {
+        _pts_label_bitsets.push_back(num_labels);
+    }
     
     infile.clear();
     infile.seekg(0, std::ios::beg);
