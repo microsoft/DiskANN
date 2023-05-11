@@ -1052,6 +1052,36 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
                        std::numeric_limits<uint32_t>::max(), use_reorder_data, stats);
 }
 
+
+template <typename T, typename LabelT>
+void PQFlashIndex<T, LabelT>::cached_beam_search_post_process(const T *query1, const uint64_t k_search, const uint64_t l_search,
+                                                 uint64_t *indices, float *distances, const uint64_t beam_width, const LabelT &filter_label,
+                                                 const bool use_reorder_data, QueryStats *stats)
+{
+    LabelT dummy_filter = 0;
+    int filter_num = get_filter_number(filter_label);
+    std::vector<uint64_t> pre_indices(l_search);
+    std::vector<float> pre_dists(l_search);
+
+    cached_beam_search(query1, k_search, l_search, indices, distances, beam_width, false, dummy_filter,
+                       std::numeric_limits<uint32_t>::max(), use_reorder_data, stats);
+    
+    uint32_t res_loc = 0;
+    for (uint32_t i = 0; i < l_search; i++) {
+    auto id = pre_indices[i];
+    if (!point_has_label(id, filter_num) && !point_has_label(id, _universal_filter_num))
+        continue;
+    indices[res_loc] = id;
+    distances[res_loc] = pre_dists[i]; 
+    res_loc++;
+    if (res_loc == k_search)
+        break;
+    }
+
+}
+
+
+
 template <typename T, typename LabelT>
 void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t k_search, const uint64_t l_search,
                                                  uint64_t *indices, float *distances, const uint64_t beam_width,

@@ -65,6 +65,11 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
                                               uint64_t *res_ids, float *res_dists, const uint64_t beam_width,
                                               const bool use_reorder_data = false, QueryStats *stats = nullptr);
 
+    DISKANN_DLLEXPORT void cached_beam_search_post_process(const T *query1, const uint64_t k_search, const uint64_t l_search,
+                                                 uint64_t *indices, float *distances, const uint64_t beam_width, const LabelT &filter_label,
+                                                 const bool use_reorder_data, QueryStats *stats);
+
+
     DISKANN_DLLEXPORT void cached_beam_search(const T *query, const uint64_t k_search, const uint64_t l_search,
                                               uint64_t *res_ids, float *res_dists, const uint64_t beam_width,
                                               const bool use_filter, const LabelT &filter_label,
