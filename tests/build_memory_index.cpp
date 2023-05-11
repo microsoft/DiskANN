@@ -170,6 +170,8 @@ int main(int argc, char **argv)
         config.dimension = data_dim;
         config.max_points = data_num;
         config.enable_tags = false;
+        config.use_opq = use_opq;
+        config.pq_dist_build = use_pq_build;
 
         // Build params for speific build from instance
         diskann::IndexWriteParameters paras = diskann::IndexWriteParametersBuilder(L, R)
