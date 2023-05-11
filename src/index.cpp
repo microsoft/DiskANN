@@ -974,7 +974,11 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
 
     // only support one filter label
     auto bitmask_val = simple_bitmask::get_bitmask_val(filter_label[0] - 1);
-    auto universal_bitmask_val = simple_bitmask::get_bitmask_val(_universal_label - 1);
+    simple_bitmask_val universal_bitmask_val;
+    if (_use_universal_label)
+    {
+        universal_bitmask_val = simple_bitmask::get_bitmask_val(_universal_label - 1);
+    }
     // Initialize the candidate pool with starting points
     for (auto id : init_ids)
     {
@@ -988,7 +992,8 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
         if (use_filter && !input_contain_universal_label)
         {
             if (!_pts_label_bitsets[id].test_mask_val(bitmask_val)
-                && (_use_universal_label && !_pts_label_bitsets[id].test_mask_val(universal_bitmask_val)))
+                && (!_use_universal_label 
+                    || (_use_universal_label && !_pts_label_bitsets[id].test_mask_val(universal_bitmask_val))))
             {
                 continue;
             }
@@ -1056,7 +1061,8 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                     // NOTE: NEED TO CHECK IF THIS CORRECT WITH NEW LOCKS.
                 //    std::vector<LabelT> common_filters;
                     if (!_pts_label_bitsets[id].test_mask_val(bitmask_val)
-                        && (_use_universal_label && !_pts_label_bitsets[id].test_mask_val(universal_bitmask_val)))
+                        && (!_use_universal_label || 
+                            (_use_universal_label && !_pts_label_bitsets[id].test_mask_val(universal_bitmask_val))))
                     {
                         continue;
                     }
