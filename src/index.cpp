@@ -1066,17 +1066,17 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                     continue;
                 }
                 cmps++;
-                //if (use_filter && !input_contain_universal_label)
-                //{
-                //    // NOTE: NEED TO CHECK IF THIS CORRECT WITH NEW LOCKS.
-                ////    std::vector<LabelT> common_filters;
-                //    if (!_pts_label_bitsets[id].test_mask_val(bitmask_val)
-                //        && (!_use_universal_label || 
-                //            (_use_universal_label && !_pts_label_bitsets[id].test_mask_val(universal_bitmask_val))))
-                //    {
-                //        continue;
-                //    }
-                //}
+                if (use_filter && !input_contain_universal_label)
+                {
+                    // NOTE: NEED TO CHECK IF THIS CORRECT WITH NEW LOCKS.
+                //    std::vector<LabelT> common_filters;
+                    if (!_pts_label_bitsets[id].test_mask_val(bitmask_val)
+                        && (!_use_universal_label || 
+                            (_use_universal_label && !_pts_label_bitsets[id].test_mask_val(universal_bitmask_val))))
+                    {
+                        continue;
+                    }
+                }
 
                 id_scratch.push_back(id);
             }
