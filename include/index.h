@@ -115,6 +115,8 @@ public:
         simple_bitmask_val bitmask_val;
         bitmask_val._mask = (std::uint64_t)1 << (pos & (8 * sizeof(std::uint64_t) - 1));
         bitmask_val._index = pos / 8 / sizeof(std::uint64_t);
+
+        return bitmask_val;
     }
 
     bool test_mask_val(const simple_bitmask_val& bitmask_val) const
