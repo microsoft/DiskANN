@@ -1026,6 +1026,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
 
     uint32_t hops = 0;
     uint32_t cmps = 0;
+    cmps += static_cast<uint32_t>(init_ids.size());
 
     while (best_L_nodes.has_unexpanded_node())
     {
