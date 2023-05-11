@@ -1074,6 +1074,15 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                         && (!_use_universal_label || 
                             (_use_universal_label && !_pts_label_bitsets[id].test_mask_val(universal_bitmask_val))))
                     {
+                        if (fast_iterate)
+                        {
+                            inserted_into_pool_bs[id] = 1;
+                        }
+                        else
+                        {
+                            inserted_into_pool_rs.insert(id);
+                        }
+
                         continue;
                     }
                 }
