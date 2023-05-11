@@ -88,25 +88,33 @@ class bitmask_wrapper
 public:
     bitmask_wrapper(size_t totalBits)
     {
-        size_t count = (totalBits / 64) + ((totalBits % 64) == 0 ? 0 : 1);
-        _bitsets.resize(count);
+        std::uint64_t bytes = (totalBits + 7) / 8;
+        std::uint64_t aligned_bytes = bytes + sizeof(std::uint64_t) - 1;
+        aligned_bytes = aligned_bytes - (aligned_bytes % sizeof(std::uint64_t));
+        _size = aligned_bytes / sizeof(std::uint64_t);
+
+        _bitsets = (std::uint64_t*)malloc(aligned_bytes);
+        memset(_bitsets, 0, aligned_bytes);
     }
 
     bool test(size_t pos) const
     {
-        size_t index = pos / 64;
-        
-        return _bitsets[index].test(pos);
+        std::uint64_t mask = (std::uint64_t)1 << (pos & (8 * sizeof(std::uint64_t) - 1));
+        size_t index = pos / 8 / sizeof(std::uint64_t);
+        std::uint64_t val = _bitsets[index];
+        return 0 != (val & mask);
     }
 
     void set(size_t pos)
     {
-        size_t index = pos / 64;
-        _bitsets[index].set(pos);
+        std::uint64_t mask = (std::uint64_t)1 << (pos & (8 * sizeof(std::uint64_t) - 1));
+        size_t index = pos / 8 / sizeof(std::uint64_t);
+        _bitsets[index] |= mask;
     }
 
 private:
-    std::vector<std::bitset<64>> _bitsets;
+    std::uint64_t* _bitsets;
+    std::uint64_t _size;
 };
 
 template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> class Index
