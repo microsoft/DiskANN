@@ -522,7 +522,8 @@ int main(int argc, char **argv)
         }
         else
         {
-            throw new std::exception(std::string("Error: data_type " + data_type + " is not supported.").c_str(), -1);
+            std::cout << "Unsupported type. Use one of int8, uint8 or float." << std::endl;
+            return -1;
         }
     }
     catch (std::exception &e)
