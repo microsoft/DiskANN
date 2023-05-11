@@ -172,6 +172,7 @@ int main(int argc, char **argv)
         config.enable_tags = false;
         config.use_opq = use_opq;
         config.pq_dist_build = use_pq_build;
+        config.num_pq_chunks = build_PQ_bytes;
 
         // Build params for speific build from instance
         diskann::IndexWriteParameters paras = diskann::IndexWriteParametersBuilder(L, R)
@@ -188,7 +189,7 @@ int main(int argc, char **argv)
                                 .with_save_path_prefix(index_path_prefix)
                                 .build();
 
-        if (label_type == "ushort")
+        if (label_type == "ushort" && label_file != "")
         {
             if (data_type == std::string("int8"))
             {
