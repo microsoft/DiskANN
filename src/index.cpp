@@ -973,7 +973,11 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
     }
 
     // only support one filter label
-    auto bitmask_val = simple_bitmask::get_bitmask_val(filter_label[0] - 1);
+    simple_bitmask_val bitmask_val;
+    if (filter_label.size() > 0)
+    {
+        bitmask_val = simple_bitmask::get_bitmask_val(filter_label[0] - 1);
+    }
     simple_bitmask_val universal_bitmask_val;
     if (_use_universal_label)
     {
