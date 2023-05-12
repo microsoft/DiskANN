@@ -64,7 +64,7 @@ void compute_subcentroids(const size_t dim, const T* points,
     kmeans::kmeanspp_selecting_pivots(train_data_float.get(), point_ids.size(),
                                       dim, subcentroids, num_subcentroids);
 
-    constexpr size_t max_reps = 15;
+    constexpr size_t max_reps = 49;
     kmeans::run_lloyds(train_data_float.get(), point_ids.size(), dim,
                        subcentroids, num_subcentroids, max_reps, NULL, NULL);
 
