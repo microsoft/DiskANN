@@ -1026,10 +1026,17 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                                           std::back_inserter(common_filters));
                     if (_use_universal_label)
                     {
-                        if (std::find(filter_label.begin(), filter_label.end(), _universal_label) !=
-                                filter_label.end() ||
-                            std::find(x.begin(), x.end(), _universal_label) != x.end())
-                            common_filters.emplace_back(_universal_label);
+                        if (!search_invocation)
+                        {
+                            if (std::find(filter_label.begin(), filter_label.end(), _universal_label) !=
+                                    filter_label.end() ||
+                                std::find(x.begin(), x.end(), _universal_label) != x.end())
+                                common_filters.emplace_back(_universal_label);
+                        }
+                        else{
+                            if(std::find(x.begin(), x.end(), _universal_label) != x.end())
+                                common_filters.emplace_back(_universal_label);
+                        }
                     }
 
                     if (common_filters.size() == 0)
