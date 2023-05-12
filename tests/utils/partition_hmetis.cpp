@@ -414,7 +414,7 @@ int aux_main(const std::string &input_file,
                       << std::endl;
       } else if (mode == "multicentroids") {
 
-        constexpr int submode = 2;
+        constexpr int submode = 1;
 
         std::unique_ptr<float[]> queries_float =
             std::make_unique<float[]>(num_queries * dim);
