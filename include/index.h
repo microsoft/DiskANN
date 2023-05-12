@@ -512,7 +512,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     // Per node lock, cardinality=_max_points
     std::vector<non_recursive_mutex> _locks;
 
-    std::vector<simple_bitmask> _pts_label_bitsets;
+//    std::vector<simple_bitmask> _pts_label_bitsets;
 
     simple_bitmask_buf _bitmask_buf;
 
