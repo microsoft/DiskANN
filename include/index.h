@@ -88,18 +88,35 @@ struct simple_bitmask_val
     std::uint64_t _mask = 0;
 };
 
+struct simple_bitmask_buf
+{
+    std::uint64_t* get_bitmask(std::uint64_t index)
+    {
+        return _buf.data() + index * _bitmask_size;
+    }
+
+    std::vector<std::uint64_t> _buf;
+    std::uint64_t _bitmask_size = 0;
+
+};
+
 class simple_bitmask
 {
 public:
-    simple_bitmask(size_t totalBits)
-    {
-        std::uint64_t bytes = (totalBits + 7) / 8;
-        std::uint64_t aligned_bytes = bytes + sizeof(std::uint64_t) - 1;
-        aligned_bytes = aligned_bytes - (aligned_bytes % sizeof(std::uint64_t));
-        _size = aligned_bytes / sizeof(std::uint64_t);
+    //simple_bitmask(size_t totalBits)
+    //{
+    //    std::uint64_t bytes = (totalBits + 7) / 8;
+    //    std::uint64_t aligned_bytes = bytes + sizeof(std::uint64_t) - 1;
+    //    aligned_bytes = aligned_bytes - (aligned_bytes % sizeof(std::uint64_t));
+    //    _size = aligned_bytes / sizeof(std::uint64_t);
 
-        _bitsets = (std::uint64_t*)malloc(aligned_bytes);
-        memset(_bitsets, 0, aligned_bytes);
+    //    _bitsets = (std::uint64_t*)malloc(aligned_bytes);
+    //    memset(_bitsets, 0, aligned_bytes);
+    //}
+
+    simple_bitmask(std::uint64_t* bitsets)
+        : _bitsets(bitsets)
+    {
     }
 
     bool test(size_t pos) const
@@ -119,6 +136,14 @@ public:
         return bitmask_val;
     }
 
+    static std::uint64_t get_bitmask_size(std::uint64_t totalBits)
+    {
+        std::uint64_t bytes = (totalBits + 7) / 8;
+        std::uint64_t aligned_bytes = bytes + sizeof(std::uint64_t) - 1;
+        aligned_bytes = aligned_bytes - (aligned_bytes % sizeof(std::uint64_t));
+        return aligned_bytes / sizeof(std::uint64_t);
+    }
+
     bool test_mask_val(const simple_bitmask_val& bitmask_val) const
     {
         std::uint64_t val = _bitsets[bitmask_val._index];
@@ -134,7 +159,7 @@ public:
 
 private:
     std::uint64_t* _bitsets;
-    std::uint64_t _size;
+//    std::uint64_t _size;
 };
 
 template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> class Index
@@ -487,7 +512,9 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     // Per node lock, cardinality=_max_points
     std::vector<non_recursive_mutex> _locks;
 
-    std::vector<simple_bitmask> _pts_label_bitsets;
+//    std::vector<simple_bitmask> _pts_label_bitsets;
+
+    simple_bitmask_buf _bitmask_buf;
 
     static const float INDEX_GROWTH_FACTOR;
 };
