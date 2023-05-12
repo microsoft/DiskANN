@@ -74,18 +74,24 @@ struct consolidation_report
     }
 };
 
-class IBitSet
-{
-public:
-    virtual bool test(size_t pos) const = 0;
-    
-    virtual void set(size_t pos) = 0;
-};
-
 struct simple_bitmask_val
 {
     size_t _index = 0;
     std::uint64_t _mask = 0;
+};
+
+struct simple_bitmask_full_val
+{
+    simple_bitmask_full_val()
+    {
+    }
+
+    void merge_bitmask_val(simple_bitmask_val& bitmask_val)
+    {
+        _mask[bitmask_val._index] |= bitmask_val._mask;
+    }
+
+    std::uint64_t* _mask = nullptr;
 };
 
 struct simple_bitmask_buf
@@ -114,8 +120,9 @@ public:
     //    memset(_bitsets, 0, aligned_bytes);
     //}
 
-    simple_bitmask(std::uint64_t* bitsets)
+    simple_bitmask(std::uint64_t* bitsets, std::uint64_t bitmask_size)
         : _bitsets(bitsets)
+        , _bitmask_size(bitmask_size)
     {
     }
 
@@ -150,6 +157,19 @@ public:
         return 0 != (val & bitmask_val._mask);
     }
 
+    bool test_full_mask_val(const simple_bitmask_full_val& bitmask_full_val) const
+    {
+        for (size_t i = 0; i < _bitmask_size; i++)
+        {
+            if ((bitmask_full_val._mask[i] & _bitsets[i]) != 0)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     void set(size_t pos)
     {
         std::uint64_t mask = (std::uint64_t)1 << (pos & (8 * sizeof(std::uint64_t) - 1));
@@ -159,7 +179,7 @@ public:
 
 private:
     std::uint64_t* _bitsets;
-//    std::uint64_t _size;
+    std::uint64_t _bitmask_size;
 };
 
 template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> class Index
@@ -389,7 +409,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
                         const unsigned maxc, const float alpha, InMemQueryScratch<T> *scratch);
 
     void initialize_query_scratch(uint32_t num_threads, uint32_t search_l, uint32_t indexing_l, uint32_t r,
-                                  uint32_t maxc, size_t dim);
+                                  uint32_t maxc, size_t dim, size_t bitmask_size = 0);
 
     // Do not call without acquiring appropriate locks
     // call public member functions save and load to invoke these.

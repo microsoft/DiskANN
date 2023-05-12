@@ -35,7 +35,7 @@ template <typename T> class InMemQueryScratch
   public:
     ~InMemQueryScratch();
     InMemQueryScratch(uint32_t search_l, uint32_t indexing_l, uint32_t r, uint32_t maxc, size_t dim,
-                      bool init_pq_scratch = false);
+                      bool init_pq_scratch = false, size_t bitmask_size = 0);
     void resize_for_new_L(uint32_t new_search_l);
     void clear();
 
@@ -100,6 +100,11 @@ template <typename T> class InMemQueryScratch
         return _occlude_list_output;
     }
 
+    inline std::vector<std::uint64_t>& query_label_bitmask()
+    {
+        return _query_label_bitmask;
+    }
+
   private:
     uint32_t _L;
     uint32_t _R;
@@ -142,6 +147,9 @@ template <typename T> class InMemQueryScratch
     tsl::robin_set<unsigned> _expanded_nodes_set;
     std::vector<Neighbor> _expanded_nghrs_vec;
     std::vector<unsigned> _occlude_list_output;
+
+    // bitmask buffer in searching time
+    std::vector<std::uint64_t> _query_label_bitmask;
 };
 
 //

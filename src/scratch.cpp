@@ -13,7 +13,7 @@ namespace diskann
 //
 template <typename T>
 InMemQueryScratch<T>::InMemQueryScratch(uint32_t search_l, uint32_t indexing_l, uint32_t r, uint32_t maxc, size_t dim,
-                                        bool init_pq_scratch)
+                                        bool init_pq_scratch, size_t bitmask_size)
     : _L(0), _R(r), _maxc(maxc)
 {
     if (search_l == 0 || indexing_l == 0 || r == 0 || dim == 0)
@@ -39,6 +39,11 @@ InMemQueryScratch<T>::InMemQueryScratch(uint32_t search_l, uint32_t indexing_l, 
     _dist_scratch.reserve(std::ceil(1.5 * GRAPH_SLACK_FACTOR * _R));
 
     resize_for_new_L(std::max(search_l, indexing_l));
+
+    if (bitmask_size > 0)
+    {
+        _query_label_bitmask.resize(bitmask_size, 0);
+    }
 }
 
 template <typename T> void InMemQueryScratch<T>::clear()
@@ -56,6 +61,7 @@ template <typename T> void InMemQueryScratch<T>::clear()
     _expanded_nodes_set.clear();
     _expanded_nghrs_vec.clear();
     _occlude_list_output.clear();
+    _query_label_bitmask.clear();
 }
 
 template <typename T> void InMemQueryScratch<T>::resize_for_new_L(uint32_t new_l)

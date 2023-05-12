@@ -164,11 +164,11 @@ template <typename T, typename TagT, typename LabelT> Index<T, TagT, LabelT>::~I
 
 template <typename T, typename TagT, typename LabelT>
 void Index<T, TagT, LabelT>::initialize_query_scratch(uint32_t num_threads, uint32_t search_l, uint32_t indexing_l,
-                                                      uint32_t r, uint32_t maxc, size_t dim)
+                                                      uint32_t r, uint32_t maxc, size_t dim, size_t bitmask_size)
 {
     for (uint32_t i = 0; i < num_threads; i++)
     {
-        auto scratch = new InMemQueryScratch<T>(search_l, indexing_l, r, maxc, dim, _pq_dist);
+        auto scratch = new InMemQueryScratch<T>(search_l, indexing_l, r, maxc, dim, _pq_dist, bitmask_size);
         _query_scratch.push(scratch);
     }
 }
@@ -629,7 +629,7 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
     if (_query_scratch.size() == 0)
     {
         initialize_query_scratch(num_threads, search_l, search_l, (uint32_t)_max_range_of_loaded_graph, _indexingMaxC,
-                                 _dim);
+                                 _dim, _bitmask_buf._bitmask_size);
     }
 }
 
@@ -898,6 +898,8 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
         normalize((float *)aligned_query, _dim);
     }
 
+    std::vector<std::uint64_t>& query_bitmask_buf = scratch->query_label_bitmask();
+    
     float *query_float;
     float *query_rotated;
     float *pq_dists;
@@ -973,16 +975,33 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
     }
 
     // only support one filter label
-    simple_bitmask_val bitmask_val;
-    if (filter_label.size() > 0)
+    simple_bitmask_full_val bitmask_full_val;
+    if (use_filter)
     {
-        bitmask_val = simple_bitmask::get_bitmask_val(filter_label[0] - 1);
+        query_bitmask_buf.resize(_bitmask_buf._bitmask_size, 0);
+        bitmask_full_val._mask = query_bitmask_buf.data();
+        for (size_t i = 0; i < filter_label.size(); i++)
+        {
+            auto bitmask_val = simple_bitmask::get_bitmask_val(filter_label[i] - 1);
+            bitmask_full_val.merge_bitmask_val(bitmask_val);
+        }
+
+        if (_use_universal_label)
+        {
+            auto bitmask_val = simple_bitmask::get_bitmask_val(_universal_label - 1);
+            bitmask_full_val.merge_bitmask_val(bitmask_val);
+        }
     }
-    simple_bitmask_val universal_bitmask_val;
-    if (_use_universal_label)
-    {
-        universal_bitmask_val = simple_bitmask::get_bitmask_val(_universal_label - 1);
-    }
+    //simple_bitmask_val bitmask_val;
+    //if (filter_label.size() > 0)
+    //{
+    //    bitmask_val = simple_bitmask::get_bitmask_val(filter_label[0] - 1);
+    //}
+    //simple_bitmask_val universal_bitmask_val;
+    //if (_use_universal_label)
+    //{
+    //    universal_bitmask_val = simple_bitmask::get_bitmask_val(_universal_label - 1);
+    //}
     // Initialize the candidate pool with starting points
     for (auto id : init_ids)
     {
@@ -995,11 +1014,9 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
 
         if (use_filter && !input_contain_universal_label)
         {
-            simple_bitmask bm(_bitmask_buf.get_bitmask(id));
+            simple_bitmask bm(_bitmask_buf.get_bitmask(id), _bitmask_buf._bitmask_size);
             
-            if (!bm.test_mask_val(bitmask_val)
-                && (!_use_universal_label 
-                    || (_use_universal_label && !bm.test_mask_val(universal_bitmask_val))))
+            if (!bm.test_full_mask_val(bitmask_full_val))
             {
                 continue;
             }
@@ -1072,11 +1089,9 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                 {
                     // NOTE: NEED TO CHECK IF THIS CORRECT WITH NEW LOCKS.
                 //    std::vector<LabelT> common_filters;
-                    simple_bitmask bm(_bitmask_buf.get_bitmask(id));
+                    simple_bitmask bm(_bitmask_buf.get_bitmask(id), _bitmask_buf._bitmask_size);
 
-                    if (!bm.test_mask_val(bitmask_val)
-                        && (!_use_universal_label || 
-                            (_use_universal_label && !bm.test_mask_val(universal_bitmask_val))))
+                    if (!bm.test_full_mask_val(bitmask_full_val))
                     {
                         continue;
                     }
@@ -1987,7 +2002,7 @@ void Index<T, TagT, LabelT>::parse_label_file_in_bitset(const std::string& label
             token.erase(std::remove(token.begin(), token.end(), '\r'), token.end());
             LabelT token_as_num = std::stoul(token);
         //    _pts_label_bitsets[line_cnt].set(token_as_num - 1);
-            simple_bitmask bm(_bitmask_buf.get_bitmask(line_cnt));
+            simple_bitmask bm(_bitmask_buf.get_bitmask(line_cnt), _bitmask_buf._bitmask_size);
             bm.set(token_as_num - 1);
         //    lbls.push_back(token_as_num);
             _labels.insert(token_as_num);
