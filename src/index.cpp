@@ -2895,18 +2895,8 @@ int Index<T, TagT, LabelT>::insert_point(const DataType &point, const TagType &t
 {
     try
     {
-        TagT underlying_tag;
-        if (tag.type() == typeid(uint16_t))
-        {
-            underlying_tag = boost::any_cast<uint16_t>(tag);
-        }
-        else if (tag.type() == typeid(uint32_t))
-        {
-            underlying_tag = boost::any_cast<uint32_t>(tag);
-        }
-
+        TagT underlying_tag = boost::any_cast<TagT>(tag);
         const T *data = boost::any_cast<T *>(point);
-
         return this->insert_point(data, underlying_tag);
     }
     catch (const boost::bad_any_cast &anycast_e)
