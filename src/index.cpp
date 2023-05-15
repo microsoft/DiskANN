@@ -1087,9 +1087,18 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
         {
             if (_dynamic_index)
                 _locks[n].lock();
-            for (auto id : _final_graph[n])
+//            for (auto id : _final_graph[n])
+            for (size_t i = 0; i < _final_graph[n].size(); i++)
             {
+                auto id = _final_graph[n][i];
                 assert(id < _max_points + _num_frozen_pts);
+
+                if (i < _final_graph[n].size() - 1)
+                {
+                    auto nextId = _final_graph[n][i + 1];
+                    diskann::prefetch_vector((const char*)_bitmask_buf.get_bitmask(nextId),
+                        _bitmask_buf._bitmask_size * sizeof(std::uint64_t));
+                }
 
                 if (!is_not_visited(id))
                 {
