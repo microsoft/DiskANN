@@ -2,10 +2,11 @@
 # Licensed under the MIT license.
 
 import os
+import warnings
 
 from enum import Enum
 from pathlib import Path
-from typing import List, Literal, NamedTuple, Tuple, Type, Union
+from typing import List, Literal, NamedTuple, Optional, Tuple, Type, Union
 
 import numpy as np
 import numpy.typing as npt
@@ -68,7 +69,7 @@ def _assert(statement_eval: bool, message: str):
 
 def _valid_metric(metric: str) -> _native_dap.Metric:
     if not isinstance(metric, str):
-        raise ValueError("metric must be a string")
+        raise ValueError("distance_metric must be a string")
     if metric.lower() == "l2":
         return _native_dap.L2
     elif metric.lower() == "mips":
@@ -76,7 +77,7 @@ def _valid_metric(metric: str) -> _native_dap.Metric:
     elif metric.lower() == "cosine":
         return _native_dap.COSINE
     else:
-        raise ValueError("metric must be one of 'l2', 'mips', or 'cosine'")
+        raise ValueError("distance_metric must be one of 'l2', 'mips', or 'cosine'")
 
 
 def _assert_dtype(dtype: Type):
@@ -87,19 +88,21 @@ def _assert_dtype(dtype: Type):
 
 
 def _castable_dtype_or_raise(
-    data: VectorLike,
+    data: Union[VectorLike, VectorLikeBatch, VectorIdentifierBatch],
     expected: np.dtype,
     message: str
 ) -> np.ndarray:
-    _assert_dtype(expected)
     if isinstance(data, list):
         return np.array(data, dtype=expected)  # may result in an overflow and invalid data, but at least warns
-    try:
-        _vectors = data.astype(dtype=expected, casting="safe", copy=False)  # we would prefer no copy
-    except TypeError as e:
-        e.args = (message, *e.args)
-        raise
-    return _vectors
+    elif isinstance(data, np.ndarray):
+        try:
+            _vectors = data.astype(dtype=expected, casting="safe", copy=False)  # we would prefer no copy
+        except TypeError as e:
+            e.args = (message, *e.args)
+            raise
+        return _vectors
+    else:
+        raise TypeError(f"expecting a VectorLike, VectorLikeBatch, or VectorIdentifierBatch, not a {type(data)}")
 
 
 def _assert_2d(vectors: np.ndarray, name: str):
@@ -187,6 +190,14 @@ class _Metric(Enum):
         if self is _Metric.COSINE:
             return _native_dap.COSINE
 
+    def to_str(self) -> _native_dap.Metric:
+        if self is _Metric.L2:
+            return "l2"
+        if self is _Metric.MIPS:
+            return "mips"
+        if self is _Metric.COSINE:
+            return "cosine"
+
 
 def _build_metadata_path(index_path_and_prefix: str) -> str:
     return index_path_and_prefix + "_metadata.bin"
@@ -205,14 +216,51 @@ def _write_index_metadata(
     ).tofile(_build_metadata_path(index_path_and_prefix))
 
 
-def _read_index_metadata(index_path_and_prefix: str) -> Tuple[VectorDType, _native_dap.Metric, np.uint64, np.uint64]:
+def _read_index_metadata(index_path_and_prefix: str) -> Optional[Tuple[VectorDType, str, np.uint64, np.uint64]]:
     path = _build_metadata_path(index_path_and_prefix)
-    _assert_existing_file(path, "internal error: metadata path")
-    metadata = np.fromfile(path, dtype=np.uint64, count=-1)
-    return _DataType(int(metadata[0])).to_type(), _Metric(int(metadata[1])).to_native(), metadata[2], metadata[3]
+    if not Path(path).exists():
+        return None
+    else:
+        metadata = np.fromfile(path, dtype=np.uint64, count=-1)
+        return _DataType(int(metadata[0])).to_type(), _Metric(int(metadata[1])).to_str(), metadata[2], metadata[3]
+
+
+def _ensure_index_metadata(
+    index_path_and_prefix: str,
+    vector_dtype: Optional[VectorDType],
+    distance_metric: Optional[DistanceMetric],
+    max_vectors: int,
+    dimensions: Optional[int],
+) -> Tuple[VectorDType, str, np.uint64, np.uint64]:
+    possible_metadata = _read_index_metadata(index_path_and_prefix)
+    if possible_metadata is None:
+        _assert(
+            all([vector_dtype, distance_metric, dimensions]),
+            "distance_metric, vector_dtype, and dimensions must provided if a corresponding metadata file has not "
+            "been built for this index, such as when an index was built via the CLI tools or prior to the addition "
+            "of a metadata file"
+        )
+        _assert_dtype(vector_dtype)
+        _assert_is_positive_uint32(max_vectors, "max_vectors")
+        _assert_is_positive_uint32(dimensions, "dimensions")
+        return vector_dtype, distance_metric, max_vectors, dimensions  # type: ignore
+    else:
+        vector_dtype, distance_metric, num_vectors, dimensions = possible_metadata
+        if num_vectors > max_vectors:
+            warnings.warn(
+                "The number of vectors in the saved index exceeds the max_vectors parameter. "
+                "max_vectors is being adjusted to accommodate the dataset, but any insertions will fail."
+            )
+            max_vectors = num_vectors
+        if num_vectors == max_vectors:
+            warnings.warn(
+                "The number of vectors in the saved index equals max_vectors parameter. Any insertions will fail."
+            )
+        return possible_metadata
 
 
 def _valid_index_prefix(index_directory: str, index_prefix: str) -> str:
+    _assert(index_directory is not None and index_directory != "", "index_directory cannot be None or empty")
     _assert_existing_directory(index_directory, "index_directory")
     _assert(index_prefix != "", "index_prefix cannot be an empty string")
     return os.path.join(index_directory, index_prefix)

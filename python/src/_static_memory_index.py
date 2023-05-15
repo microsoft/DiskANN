@@ -6,18 +6,23 @@ import warnings
 
 import numpy as np
 
+from typing import Optional
+
 from . import _diskannpy as _native_dap
 from ._common import (
+    DistanceMetric,
     QueryResponse,
     QueryResponseBatch,
+    VectorDType,
     VectorLike,
     VectorLikeBatch,
     _assert,
     _assert_is_nonnegative_uint32,
     _assert_is_positive_uint32,
     _castable_dtype_or_raise,
-    _read_index_metadata,
-    _valid_index_prefix
+    _ensure_index_metadata,
+    _valid_index_prefix,
+    _valid_metric
 )
 
 __ALL__ = ["StaticMemoryIndex"]
@@ -29,7 +34,10 @@ class StaticMemoryIndex:
         index_directory: str,
         num_threads: int,
         initial_search_complexity: int,
-        index_prefix: str = "ann"
+        index_prefix: str = "ann",
+        distance_metric: Optional[DistanceMetric] = None,
+        vector_dtype: Optional[VectorDType] = None,
+        dimensions: Optional[int] = None,
     ):
         """
         The diskannpy.StaticMemoryIndex represents our python API into a static DiskANN InMemory Index library.
@@ -47,7 +55,14 @@ class StaticMemoryIndex:
         :type index_prefix: str
         """
         index_prefix = _valid_index_prefix(index_directory, index_prefix)
-        vector_dtype, dap_metric, num_vectors, dimensions = _read_index_metadata(index_prefix)
+        vector_dtype, metric, _, _ = _ensure_index_metadata(
+            index_prefix,
+            vector_dtype,
+            distance_metric,
+            1,  # it doesn't matter because we don't need it in this context anyway
+            dimensions
+        )
+        dap_metric = _valid_metric(metric)
 
         _assert_is_nonnegative_uint32(num_threads, "num_threads")
         _assert_is_positive_uint32(

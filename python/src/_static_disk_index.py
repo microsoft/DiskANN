@@ -3,13 +3,13 @@
 
 import os
 import warnings
-from pathlib import Path
-from typing import Literal, Tuple
+from typing import Optional
 
 import numpy as np
 
 from . import _diskannpy as _native_dap
 from ._common import (
+    DistanceMetric,
     QueryResponse,
     QueryResponseBatch,
     VectorDType,
@@ -17,25 +17,27 @@ from ._common import (
     VectorLikeBatch,
     _assert,
     _assert_2d,
-    _assert_dtype,
     _assert_is_nonnegative_uint32,
     _assert_is_positive_uint32,
     _castable_dtype_or_raise,
+    _ensure_index_metadata,
+    _valid_index_prefix,
     _valid_metric,
 )
 
-__ALL__ = ["DiskIndex"]
+__ALL__ = ["StaticDiskIndex"]
 
 
-class DiskIndex:
+class StaticDiskIndex:
     def __init__(
         self,
-        metric: Literal["l2", "mips", "cosine"],
-        vector_dtype: VectorDType,
         index_directory: str,
         num_threads: int,
         num_nodes_to_cache: int,
         cache_mechanism: int = 1,
+        distance_metric: Optional[DistanceMetric] = None,
+        vector_dtype: Optional[VectorDType] = None,
+        dimensions: Optional[int] = None,
         index_prefix: str = "ann",
     ):
         """
@@ -63,15 +65,18 @@ class DiskIndex:
         :raises ValueError: If vector dtype is not a supported dtype
         :raises ValueError: If num_threads or num_nodes_to_cache is an invalid range.
         """
+        index_prefix = _valid_index_prefix(index_directory, index_prefix)
+        vector_dtype, metric, _, _ = _ensure_index_metadata(
+            index_prefix,
+            vector_dtype,
+            distance_metric,
+            1,  # it doesn't matter because we don't need it in this context anyway
+            dimensions
+        )
         dap_metric = _valid_metric(metric)
-        _assert_dtype(vector_dtype)
+
         _assert_is_nonnegative_uint32(num_threads, "num_threads")
         _assert_is_nonnegative_uint32(num_nodes_to_cache, "num_nodes_to_cache")
-        index_path = Path(index_directory)
-        _assert(
-            index_path.exists() and index_path.is_dir(),
-            "index_directory must both exist and be a directory",
-        )
 
         self._vector_dtype = vector_dtype
         if vector_dtype == np.single:
@@ -81,7 +86,7 @@ class DiskIndex:
         else:
             _index = _native_dap.DiskInt8Index
         self._index = _index(
-            metric=dap_metric,
+            distance_metric=dap_metric,
             index_path_prefix=os.path.join(index_directory, index_prefix),
             num_threads=num_threads,
             num_nodes_to_cache=num_nodes_to_cache,

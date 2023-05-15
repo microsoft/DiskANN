@@ -17,8 +17,8 @@ from ._common import (
     VectorLikeBatch,
     valid_dtype
 )
-from ._disk_index import DiskIndex
 from ._diskannpy import defaults
 from ._dynamic_memory_index import DynamicMemoryIndex
 from ._files import vectors_from_binary, vector_file_metadata
+from ._static_disk_index import StaticDiskIndex
 from ._static_memory_index import StaticMemoryIndex

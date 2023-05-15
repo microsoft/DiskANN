@@ -10,7 +10,7 @@ from ._common import VectorDType, _assert_existing_file
 
 
 class Metadata(NamedTuple):
-    num_points: int
+    num_vectors: int
     dimensions: int
 
 

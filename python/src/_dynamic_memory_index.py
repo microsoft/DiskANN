@@ -1,11 +1,11 @@
 # Copyright (c) Microsoft Corporation. All rights reserved.
 # Licensed under the MIT license.
 
-import os
 import warnings
 
 import numpy as np
 
+from pathlib import Path
 from typing import Optional
 
 from . import _diskannpy as _native_dap
@@ -24,7 +24,7 @@ from ._common import (
     _assert_is_nonnegative_uint32,
     _assert_is_positive_uint32,
     _castable_dtype_or_raise,
-    _read_index_metadata,
+    _ensure_index_metadata,
     _valid_metric,
     _valid_index_prefix,
 )
@@ -34,9 +34,12 @@ __ALL__ = ["DynamicMemoryIndex"]
 
 
 class DynamicMemoryIndex:
-    def __init__(
-        self,
-        max_points: int,
+
+    @classmethod
+    def from_file(
+        cls,
+        index_directory: str,
+        max_vectors: int,
         complexity: int,
         graph_degree: int,
         saturate_graph: bool = defaults.SATURATE_GRAPH,
@@ -48,11 +51,61 @@ class DynamicMemoryIndex:
         initial_search_complexity: int = 0,
         search_threads: int = 0,
         concurrent_consolidation: bool = True,
-        metric: Optional[DistanceMetric] = None,
+        index_prefix: str = "ann",
+        distance_metric: Optional[DistanceMetric] = None,
         vector_dtype: Optional[VectorDType] = None,
         dimensions: Optional[int] = None,
-        index_directory: Optional[str] = None,
-        index_prefix: str = "ann"
+    ) -> "DynamicMemoryIndex":
+        index_prefix_path = _valid_index_prefix(index_directory, index_prefix)
+
+        # do tags exist?
+        tags_file = index_prefix_path + ".tags"
+        _assert(Path(tags_file).exists(), f"The file {tags_file} does not exist in {index_directory}")
+        vector_dtype, dap_metric, num_vectors, dimensions = _ensure_index_metadata(
+            index_prefix_path,
+            vector_dtype,
+            distance_metric,
+            max_vectors,
+            dimensions
+        )
+
+        index = cls(
+            distance_metric=dap_metric,  # type: ignore
+            vector_dtype=vector_dtype,
+            dimensions=dimensions,
+            max_vectors=max_vectors,
+            complexity=complexity,
+            graph_degree=graph_degree,
+            saturate_graph=saturate_graph,
+            max_occlusion_size=max_occlusion_size,
+            alpha=alpha,
+            num_threads=num_threads,
+            filter_complexity=filter_complexity,
+            num_frozen_points=num_frozen_points,
+            initial_search_complexity=initial_search_complexity,
+            search_threads=search_threads,
+            concurrent_consolidation=concurrent_consolidation
+        )
+        index._index.load(index_prefix_path)
+        return index
+
+    def __init__(
+        self,
+        distance_metric: DistanceMetric,
+        vector_dtype: VectorDType,
+        dimensions: int,
+        max_vectors: int,
+        complexity: int,
+        graph_degree: int,
+        saturate_graph: bool = defaults.SATURATE_GRAPH,
+        max_occlusion_size: int = defaults.MAX_OCCLUSION_SIZE,
+        alpha: float = defaults.ALPHA,
+        num_threads: int = defaults.NUM_THREADS,
+        filter_complexity: int = defaults.FILTER_COMPLEXITY,
+        num_frozen_points: int = defaults.NUM_FROZEN_POINTS_DYNAMIC,
+        initial_search_complexity: int = 0,
+        search_threads: int = 0,
+        concurrent_consolidation: bool = True
     ):
         """
         The diskannpy.DynamicMemoryIndex represents our python API into a dynamic DiskANN InMemory Index library.
@@ -61,7 +114,14 @@ class DynamicMemoryIndex:
         to insert and delete vectors.
 
         Deletions are completed lazily, until the user executes `DynamicMemoryIndex.consolidate_deletes()`
-
+        :param distance_metric: If it exists, must be one of {"l2", "mips", "cosine"}. L2 is supported for all 3 vector dtypes,
+            but MIPS is only available for single point floating numbers (numpy.single). Default is ``None``.
+        :type distance_metric: str
+        :param vector_dtype: The vector dtype this index will be exposing.
+        :type vector_dtype: Union[Type[numpy.single], Type[numpy.byte], Type[numpy.ubyte]]
+        :param dimensions: The vector dimensionality of this index. All new vectors inserted must be the same
+            dimensionality.
+        :type dimensions: int
         :param max_points: Capacity of the data store for future insertions
         :type max_points: int
         :param graph_degree: The degree of the graph index, typically between 60 and 150. A larger maximum degree will
@@ -94,29 +154,17 @@ class DynamicMemoryIndex:
         :type search_threads: int
         :param concurrent_consolidation:
         :type concurrent_consolidation: bool
-        :param metric: If it exists, must be one of {"l2", "mips", "cosine"}. L2 is supported for all 3 vector dtypes,
-            but MIPS is only available for single point floating numbers (numpy.single). Default is ``None``.
-        :type metric: Optional[str]
-        :param vector_dtype: The vector dtype this index will be exposing. Default is ``None``
-        :type vector_dtype: Optional[Union[Type[numpy.single], Type[numpy.byte], Type[numpy.ubyte]]]
-        :param dimensions: The vector dimensionality of this index. All new vectors inserted must be the same
-            dimensionality. Default is ``None``.
-        :type dimensions: Optional[int]
+
         """
-        if index_directory is not None and index_directory != "":
-            index_prefix = _valid_index_prefix(index_directory, index_prefix)
-            vector_dtype, dap_metric, num_points, dimensions = _read_index_metadata(index_prefix)
-            self._index_path = index_prefix
-        else:
-            dap_metric = _valid_metric(metric)
-            _assert_dtype(vector_dtype)
-            _assert_is_positive_uint32(dimensions, "dimensions")
-            self._index_path = ""
+
+        dap_metric = _valid_metric(distance_metric)
+        _assert_dtype(vector_dtype)
+        _assert_is_positive_uint32(dimensions, "dimensions")
 
         self._vector_dtype = vector_dtype
         self._dimensions = dimensions
 
-        _assert_is_positive_uint32(max_points, "max_points")
+        _assert_is_positive_uint32(max_vectors, "max_vectors")
         _assert_is_positive_uint32(complexity, "complexity")
         _assert_is_positive_uint32(graph_degree, "graph_degree")
         _assert(alpha >= 1, "alpha must be >= 1, and realistically should be kept between [1.0, 2.0)")
@@ -136,9 +184,9 @@ class DynamicMemoryIndex:
         else:
             _index = _native_dap.DynamicMemoryInt8Index
         self._index = _index(
-            metric=dap_metric,
+            distance_metric=dap_metric,
             dimensions=dimensions,
-            max_points=max_points,
+            max_vectors=max_vectors,
             complexity=complexity,
             graph_degree=graph_degree,
             saturate_graph=saturate_graph,
@@ -149,8 +197,7 @@ class DynamicMemoryIndex:
             num_frozen_points=num_frozen_points,
             initial_search_complexity=initial_search_complexity,
             search_threads=search_threads,
-            concurrent_consolidation=concurrent_consolidation,
-            index_path=self._index_path
+            concurrent_consolidation=concurrent_consolidation
         )
 
     def search(
@@ -246,17 +293,15 @@ class DynamicMemoryIndex:
             num_threads=num_threads,
         )
 
-    def save(self, save_path: str, compact_before_save: bool = False):
+    def save(self, save_path: str, compact_before_save: bool = True):
         """
         Saves this index to file.
         :param save_path: The path to save these index files to.
         :type save_path: str
         :param compact_before_save:
         """
-        if save_path == "" and self._index_path == "":
-            raise ValueError(
-                "save_path cannot be empty if index_path is not set to a valid path in the constructor"
-            )
+        if save_path == "":
+            raise ValueError("save_path cannot be empty")
         self._index.save(save_path=save_path, compact_before_save=compact_before_save)
 
     def insert(self, vector: VectorLike, vector_id: VectorIdentifier):

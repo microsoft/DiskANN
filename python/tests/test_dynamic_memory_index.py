@@ -1,6 +1,7 @@
 # Copyright (c) Microsoft Corporation. All rights reserved.
 # Licensed under the MIT license.
 
+import os
 import shutil
 import unittest
 
@@ -60,16 +61,13 @@ class TestDynamicMemoryIndex(unittest.TestCase):
             generated_tags
         ) in self._test_matrix:
             with self.subTest():
-                index = dap.DynamicMemoryIndex(
-                    metric=metric,
-                    vector_dtype=dtype,
-                    dimensions=10,
-                    max_points=11_000,
+                index = dap.DynamicMemoryIndex.from_file(
+                    index_directory=ann_dir,
+                    max_vectors=11_000,
                     complexity=64,
                     graph_degree=32,
                     num_threads=16,
                 )
-                index.batch_insert(vectors=index_vectors, vector_ids=generated_tags)
 
                 k = 5
                 diskann_neighbors, diskann_distances = index.batch_search(
@@ -102,10 +100,10 @@ class TestDynamicMemoryIndex(unittest.TestCase):
         ) in self._test_matrix:
             with self.subTest():
                 index = dap.DynamicMemoryIndex(
-                    metric="l2",
+                    distance_metric="l2",
                     vector_dtype=dtype,
                     dimensions=10,
-                    max_points=11_000,
+                    max_vectors=11_000,
                     complexity=64,
                     graph_degree=32,
                     num_threads=16,
@@ -116,53 +114,54 @@ class TestDynamicMemoryIndex(unittest.TestCase):
                 ids, dists = index.search(query_vectors[0], k_neighbors=k, complexity=5)
                 self.assertEqual(ids.shape[0], k)
                 self.assertEqual(dists.shape[0], k)
+                ids, dists = index.search(query_vectors[0].tolist(), k_neighbors=k, complexity=5)
+                self.assertEqual(ids.shape[0], k)
+                self.assertEqual(dists.shape[0], k)
 
     def test_valid_metric(self):
-        ann_dir = self._example_ann_dir
-        vector_bin_file = self._test_matrix[0][5]
         with self.assertRaises(ValueError):
             dap.DynamicMemoryIndex(
-                metric="sandwich",
+                distance_metric="sandwich",
                 vector_dtype=np.single,
                 dimensions=10,
-                max_points=11_000,
+                max_vectors=11_000,
                 complexity=64,
                 graph_degree=32,
                 num_threads=16,
             )
         with self.assertRaises(ValueError):
             dap.DynamicMemoryIndex(
-                metric=None,
+                distance_metric=None,
                 vector_dtype=np.single,
                 dimensions=10,
-                max_points=11_000,
+                max_vectors=11_000,
                 complexity=64,
                 graph_degree=32,
                 num_threads=16,
             )
         dap.DynamicMemoryIndex(
-            metric="l2",
+            distance_metric="l2",
             vector_dtype=np.single,
             dimensions=10,
-            max_points=11_000,
+            max_vectors=11_000,
             complexity=64,
             graph_degree=32,
             num_threads=16,
         )
         dap.DynamicMemoryIndex(
-            metric="mips",
+            distance_metric="mips",
             vector_dtype=np.single,
             dimensions=10,
-            max_points=11_000,
+            max_vectors=11_000,
             complexity=64,
             graph_degree=32,
             num_threads=16,
         )
         dap.DynamicMemoryIndex(
-            metric="MiPs",
+            distance_metric="MiPs",
             vector_dtype=np.single,
             dimensions=10,
-            max_points=11_000,
+            max_vectors=11_000,
             complexity=64,
             graph_degree=32,
             num_threads=16,
@@ -181,10 +180,10 @@ class TestDynamicMemoryIndex(unittest.TestCase):
         ) in self._test_matrix:
             with self.subTest():
                 index = dap.DynamicMemoryIndex(
-                    metric="l2",
+                    distance_metric="l2",
                     vector_dtype=aliases[dtype],
                     dimensions=10,
-                    max_points=11_000,
+                    max_vectors=11_000,
                     complexity=64,
                     graph_degree=32,
                     num_threads=16,
@@ -195,10 +194,10 @@ class TestDynamicMemoryIndex(unittest.TestCase):
             with self.subTest():
                 with self.assertRaises(ValueError, msg=invalid_vector_dtype):
                     dap.DynamicMemoryIndex(
-                        metric="l2",
+                        distance_metric="l2",
                         vector_dtype=invalid_vector_dtype,
                         dimensions=10,
-                        max_points=11_000,
+                        max_vectors=11_000,
                         complexity=64,
                         graph_degree=32,
                         num_threads=16,
@@ -215,10 +214,10 @@ class TestDynamicMemoryIndex(unittest.TestCase):
             generated_tags
         ) = build_random_vectors_and_memory_index(np.single, "l2", with_tags=True, index_prefix="not_ann")
         good_ranges = {
-            "metric": "l2",
+            "distance_metric": "l2",
             "vector_dtype": np.single,
             "dimensions": 10,
-            "max_points": 11_000,
+            "max_vectors": 11_000,
             "complexity": 64,
             "graph_degree": 32,
             "max_occlusion_size": 10,
@@ -231,10 +230,10 @@ class TestDynamicMemoryIndex(unittest.TestCase):
         }
 
         bad_ranges = {
-            "metric": "l200000",
+            "distance_metric": "l200000",
             "vector_dtype": np.double,
             "dimensions": -1,
-            "max_points": -1,
+            "max_vectors": -1,
             "complexity": 0,
             "graph_degree": 0,
             "max_occlusion_size": -1,
@@ -260,13 +259,11 @@ class TestDynamicMemoryIndex(unittest.TestCase):
             kwargs[bad_value_key] = bad_ranges[bad_value_key]
             with self.subTest(msg=f"Test value ranges search with {kwargs=}"):
                 with self.assertRaises(ValueError):
-                    index = dap.DynamicMemoryIndex(
-                        metric="l2",
-                        vector_dtype=np.single,
+                    index = dap.DynamicMemoryIndex.from_file(
                         index_directory=self._example_ann_dir,
                         num_threads=16,
                         initial_search_complexity=32,
-                        max_points=10001,
+                        max_vectors=10001,
                         complexity=64,
                         graph_degree=32
                     )
@@ -288,12 +285,11 @@ class TestDynamicMemoryIndex(unittest.TestCase):
             kwargs[bad_value_key] = bad_ranges[bad_value_key]
             with self.subTest(msg=f"Testing value ranges batch search with {kwargs=}"):
                 with self.assertRaises(ValueError):
-                    index = dap.DynamicMemoryIndex(
-                        metric="l2",
-                        vector_dtype=np.single,
+                    index = dap.DynamicMemoryIndex.from_file(
+                        index_directory=self._example_ann_dir,
                         num_threads=16,
                         initial_search_complexity=32,
-                        max_points=10001,
+                        max_vectors=10001,
                         complexity=64,
                         graph_degree=32
                     )
