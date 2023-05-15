@@ -3,6 +3,7 @@
 
 #include <type_traits>
 #include <omp.h>
+#include <array>
 
 #include "tsl/robin_set.h"
 #include "tsl/robin_map.h"
