@@ -61,7 +61,7 @@ struct consolidation_report
     }
 };
 
-template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> class Index
+template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> class Index : public AbstractIndex
 {
     /**************************************************************************
      *
@@ -168,6 +168,8 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 
     // Will fail if tag already in the index or if tag=0.
     DISKANN_DLLEXPORT int insert_point(const T *point, const TagT tag);
+
+    DISKANN_DLLEXPORT int insert_point(const DataType &data_point, const TagType &tag);
 
     // call this before issuing deletions to sets relevant flags
     DISKANN_DLLEXPORT int enable_delete();

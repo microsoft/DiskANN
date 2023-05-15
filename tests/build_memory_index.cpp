@@ -188,65 +188,11 @@ int main(int argc, char **argv)
                                 .with_data_file(data_path)
                                 .with_save_path_prefix(index_path_prefix)
                                 .build();
-
-        if (label_type == "ushort" && label_file != "")
-        {
-            if (data_type == std::string("int8"))
-            {
-                auto index_factory = diskann::IndexFactory<int8_t, uint32_t, uint16_t>(config);
-                auto index = index_factory.instance();
-                index->build(build_params);
-                index->save(index_path_prefix.c_str());
-            }
-            else if (data_type == std::string("uint8"))
-            {
-                auto index_factory = diskann::IndexFactory<uint8_t, uint32_t, uint16_t>(config);
-                auto index = index_factory.instance();
-                index->build(build_params);
-                index->save(index_path_prefix.c_str());
-            }
-            else if (data_type == std::string("float"))
-            {
-                auto index_factory = diskann::IndexFactory<float, uint32_t, uint16_t>(config);
-                auto index = index_factory.instance();
-                index->build(build_params);
-                index->save(index_path_prefix.c_str());
-            }
-            else
-            {
-                std::cout << "Unsupported type. Use one of int8, uint8 or float." << std::endl;
-                return -1;
-            }
-        }
-        else
-        {
-            if (data_type == std::string("int8"))
-            {
-                auto index_factory = diskann::IndexFactory<int8_t, uint32_t, uint32_t>(config);
-                auto index = index_factory.instance();
-                index->build(build_params);
-                index->save(index_path_prefix.c_str());
-            }
-            else if (data_type == std::string("uint8"))
-            {
-                auto index_factory = diskann::IndexFactory<uint8_t, uint32_t, uint32_t>(config);
-                auto index = index_factory.instance();
-                index->build(build_params);
-                index->save(index_path_prefix.c_str());
-            }
-            else if (data_type == std::string("float"))
-            {
-                auto index_factory = diskann::IndexFactory<float, uint32_t, uint32_t>(config);
-                auto index = index_factory.instance();
-                index->build(build_params);
-                index->save(index_path_prefix.c_str());
-            }
-            else
-            {
-                std::cout << "Unsupported type. Use one of int8, uint8 or float." << std::endl;
-                return -1;
-            }
-        }
+        auto index_factory = diskann::IndexFactory(config);
+        auto index = index_factory.instance();
+        index->build(build_params);
+        index->save(index_path_prefix.c_str());
+        return 0;
     }
     catch (const std::exception &e)
     {

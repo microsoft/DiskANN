@@ -1,10 +1,13 @@
 #pragma once
+#include "boost/any.hpp"
 #include "distance.h"
 #include "parameters.h"
 #include "utils.h"
 
 namespace diskann
 {
+using DataType = boost::any;
+using TagType = boost::any;
 
 enum LoadStoreStratagy
 {
@@ -22,17 +25,19 @@ struct IndexConfig
     size_t dimension;
     size_t max_points;
 
+    bool dynamic_index = false;
+    bool enable_tags = false;
+    bool pq_dist_build = false;
+    bool concurrent_consolidate = false;
+    bool use_opq = false;
+
+    size_t num_pq_chunks = 0;
+    size_t num_frozen_pts = 0;
+
+    // type info to make DiskANN config driven
     std::string label_type;
     std::string tag_type;
     std::string data_type;
-
-    bool enable_tags = false;
-    bool dynamic_index = false;
-    bool pq_dist_build = false;
-    size_t num_pq_chunks = 0;
-    bool use_opq = false;
-    size_t num_frozen_pts = 0;
-    bool concurrent_consolidate = false;
 };
 
 struct IndexBuildParams
@@ -161,29 +166,29 @@ class IndexBuildParamsBuilder
     size_t num_points_to_load = 0;
 };
 
-// class AbstractIndex
-//{
-//   public:
-//     AbstractIndex()
-//     {
-//     }
-//     virtual ~AbstractIndex()
-//     {
-//     }
-//     virtual void build(IndexBuildParams &build_params) = 0;
-//     virtual void save(const char *filename, bool compact_before_save = false) = 0;
-//
-// #ifdef EXEC_ENV_OLS
-//     virtual void load(AlignedFileReader &reader, uint32_t num_threads, uint32_t search_l) = 0;
-// #else
-//     // Reads the number of frozen points from graph's metadata file section.
-//     virtual void load(const char *index_file, uint32_t num_threads, uint32_t search_l) = 0;
-// #endif
-//
-//     virtual SearchResult search(IndexSearchParams &search_params) = 0;
-//
-//     // virtual int insert_point(const T *point, const TagT tag) = 0;
-//
-//     // TODO: add other methods as api promise to end user.
-// };
+class AbstractIndex
+{
+  public:
+    AbstractIndex()
+    {
+    }
+    virtual ~AbstractIndex()
+    {
+    }
+    virtual void build(IndexBuildParams &build_params) = 0;
+    virtual void save(const char *filename, bool compact_before_save = false) = 0;
+
+#ifdef EXEC_ENV_OLS
+    virtual void load(AlignedFileReader &reader, uint32_t num_threads, uint32_t search_l) = 0;
+#else
+    // Reads the number of frozen points from graph's metadata file section.
+    virtual void load(const char *index_file, uint32_t num_threads, uint32_t search_l) = 0;
+#endif
+
+    virtual SearchResult search(IndexSearchParams &search_params) = 0;
+
+    virtual int insert_point(const DataType &data_point, const TagType &tag) = 0;
+
+    // TODO: add other methods as api promise to end user.
+};
 } // namespace diskann

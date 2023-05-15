@@ -34,6 +34,7 @@ Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_point
     : Index(m, dim, max_points, dynamic_index, enable_tags, concurrent_consolidate, pq_dist_build, num_pq_chunks,
             use_opq, indexParams.num_frozen_points)
 {
+    // why we initialize search_query_scratch in index constructor
     _indexingQueueSize = indexParams.search_list_size;
     _indexingRange = indexParams.max_degree;
     _indexingMaxC = indexParams.max_occlusion_size;
@@ -2887,6 +2888,35 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
 
     auto stop = std::chrono::high_resolution_clock::now();
     diskann::cout << "Resizing took: " << std::chrono::duration<double>(stop - start).count() << "s" << std::endl;
+}
+
+template <typename T, typename TagT, typename LabelT>
+int Index<T, TagT, LabelT>::insert_point(const DataType &point, const TagType &tag)
+{
+    try
+    {
+        TagT underlying_tag;
+        if (tag.type() == typeid(uint16_t))
+        {
+            underlying_tag = boost::any_cast<uint16_t>(tag);
+        }
+        else if (tag.type() == typeid(uint32_t))
+        {
+            underlying_tag = boost::any_cast<uint32_t>(tag);
+        }
+
+        const T *data = boost::any_cast<T *>(point);
+
+        return this->insert_point(data, underlying_tag);
+    }
+    catch (const boost::bad_any_cast &anycast_e)
+    {
+        throw new ANNException("Error:Trying to insert invalid data type" + std::string(anycast_e.what()), -1);
+    }
+    catch (const std::exception &e)
+    {
+        throw new ANNException("Error:" + std::string(e.what()), -1);
+    }
 }
 
 template <typename T, typename TagT, typename LabelT>

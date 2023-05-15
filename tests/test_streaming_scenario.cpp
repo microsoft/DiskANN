@@ -9,6 +9,7 @@
 #include <timer.h>
 #include <boost/program_options.hpp>
 #include <future>
+#include <index_factory.h>
 
 #include "utils.h"
 
@@ -149,7 +150,7 @@ void delete_and_consolidate(diskann::Index<T, TagT, LabelT> &index, diskann::Ind
         }
         auto points_processed = report._active_points + report._slots_released;
         auto deletion_rate = points_processed / report._time;
-        std::cout << "#active points: " << report._active_points << std::endl
+        std::cout << "#active   points: " << report._active_points << std::endl
                   << "max points: " << report._max_points << std::endl
                   << "empty slots: " << report._empty_slots << std::endl
                   << "deletes processed: " << report._slots_released << std::endl
@@ -348,6 +349,24 @@ int main(int argc, char **argv)
 
     try
     {
+        // uisng index factory to do the same
+        // size_t dim, num_points;
+        // diskann::get_bin_metadata(data_path, num_points, dim);
+
+        // diskann::IndexConfig index_config;
+        // index_config.metric = diskann::L2;
+        // index_config.data_load_store_stratagy = diskann::MEMORY;
+        // index_config.graph_load_store_stratagy = diskann::MEMORY;
+        // index_config.data_type = data_type;
+        //// config.label_type = label_type;
+        // index_config.enable_tags = true;
+        // index_config.dynamic_index = true;
+        // index_config.max_points = 0;
+        // index_config.dimension = dim;
+
+        // diskann::IndexFactory index_factory = diskann::IndexFactory(index_config);
+        // auto index = index_factory.instance();
+
         if (data_type == std::string("int8"))
             build_incremental_index<int8_t>(data_path, L, R, alpha, insert_threads, consolidate_threads,
                                             max_points_to_insert, active_window, consolidate_interval, start_point_norm,
