@@ -975,11 +975,21 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
     }
 
     // only support one filter label
+    std::array<std::uint64_t, 10> local_buf;
     simple_bitmask_full_val bitmask_full_val;
     if (use_filter)
     {
-        query_bitmask_buf.resize(_bitmask_buf._bitmask_size, 0);
-        bitmask_full_val._mask = query_bitmask_buf.data();
+        if (_bitmask_buf._bitmask_size <= 10)
+        {
+            local_buf.assign(0);
+            bitmask_full_val._mask = local_buf.data();
+        }
+        else
+        {
+            query_bitmask_buf.resize(_bitmask_buf._bitmask_size, 0);
+            bitmask_full_val._mask = query_bitmask_buf.data();
+        }
+        
         for (size_t i = 0; i < filter_label.size(); i++)
         {
             auto bitmask_val = simple_bitmask::get_bitmask_val(filter_label[i] - 1);
