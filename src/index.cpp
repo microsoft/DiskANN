@@ -982,7 +982,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
     {
         if (_bitmask_buf._bitmask_size <= 10)
         {
-            local_buf.assign(0);
+            local_buf.fill(0);
             bitmask_full_val._mask = local_buf.data();
         }
         else
