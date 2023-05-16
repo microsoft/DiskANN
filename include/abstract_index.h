@@ -60,6 +60,9 @@ struct IndexConfig
         this->concurrent_consolidate = concurrent_consolidate;
         this->use_opq = use_opq;
 
+        this->num_pq_chunks = num_pq_chunks;
+        this->num_frozen_pts = num_frozen_points;
+
         this->data_type = data_type;
         this->tag_type = tag_type;
         this->label_type = label_type;
