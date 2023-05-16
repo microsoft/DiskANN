@@ -9,7 +9,7 @@ namespace diskann
 using DataType = boost::any;
 using TagType = boost::any;
 
-enum LoadStoreStratagy
+enum LoadStoreStrategy
 {
     DISK,
     MEMORY
@@ -17,9 +17,9 @@ enum LoadStoreStratagy
 
 struct IndexConfig
 {
-    LoadStoreStratagy graph_load_store_stratagy;
-    LoadStoreStratagy data_load_store_stratagy;
-    LoadStoreStratagy filtered_data_load_store_stratagy;
+    LoadStoreStrategy graph_load_store_strategy;
+    LoadStoreStrategy data_load_store_strategy;
+    LoadStoreStrategy filtered_data_load_store_strategy;
 
     Metric metric;
     size_t dimension;
@@ -38,6 +38,34 @@ struct IndexConfig
     std::string label_type;
     std::string tag_type;
     std::string data_type;
+
+  private:
+    IndexConfig(LoadStoreStrategy data_store_strategy, LoadStoreStrategy graph_store_strategy,
+                LoadStoreStrategy filtered_data_store_strategy, Metric metric, size_t dimension, size_t max_points,
+                size_t num_pq_chunks, size_t num_frozen_points, bool dynamic_index, bool enable_tags,
+                bool pq_dist_build, bool concurrent_consolidate, bool use_opq, std::string &data_type,
+                std::string &tag_type, std::string &label_type)
+    {
+        this->data_load_store_strategy = data_store_strategy;
+        this->graph_load_store_strategy = graph_store_strategy;
+        this->filtered_data_load_store_strategy = filtered_data_store_strategy;
+
+        this->metric = metric;
+        this->dimension = dimension;
+        this->max_points = max_points;
+
+        this->dynamic_index = dynamic_index;
+        this->enable_tags = enable_tags;
+        this->pq_dist_build = pq_dist_build;
+        this->concurrent_consolidate = concurrent_consolidate;
+        this->use_opq = use_opq;
+
+        this->data_type = data_type;
+        this->tag_type = tag_type;
+        this->label_type = label_type;
+    }
+
+    friend class IndexConfigBuilder;
 };
 
 struct IndexBuildParams
@@ -68,9 +96,6 @@ struct IndexSearchParams
 {
     std::string result_path = "";
     size_t query_num, query_dim, query_aligned_dim;
-    // std::string query_file = "";
-    // float fail_if_recall_below{70.0f};
-    // size_t K{0};
     std::vector<uint32_t> Lvec;
     std::string filter_label = "";
     std::string query_filter_file = "";
@@ -165,6 +190,143 @@ class IndexBuildParamsBuilder
     std::string universal_label;
     uint32_t filter_threshold = 0;
     size_t num_points_to_load = 0;
+};
+
+class IndexConfigBuilder
+{
+  public:
+    IndexConfigBuilder()
+    {
+    }
+    IndexConfigBuilder &with_metric(Metric m)
+    {
+        this->metric = m;
+        return *this;
+    }
+
+    // Populate fields
+    IndexConfigBuilder &with_graph_load_store_strategy(LoadStoreStrategy lss)
+    {
+        this->graph_load_store_strategy = lss;
+        return *this;
+    }
+
+    IndexConfigBuilder &with_data_load_store_strategy(LoadStoreStrategy lss)
+    {
+        this->data_load_store_strategy = lss;
+        return *this;
+    }
+
+    IndexConfigBuilder &with_filtered_data_load_store_strategy(LoadStoreStrategy lss)
+    {
+        this->filtered_data_load_store_strategy = lss;
+        return *this;
+    }
+
+    IndexConfigBuilder &with_dimension(size_t dim)
+    {
+        this->dimension = dim;
+        return *this;
+    }
+
+    IndexConfigBuilder &with_max_points(size_t maxPts)
+    {
+        this->max_points = maxPts;
+        return *this;
+    }
+
+    IndexConfigBuilder &is_dynamic_index(bool dynamicIdx)
+    {
+        this->dynamic_index = dynamicIdx;
+        return *this;
+    }
+
+    IndexConfigBuilder &is_enable_tags(bool enableTags)
+    {
+        this->enable_tags = enableTags;
+        return *this;
+    }
+
+    IndexConfigBuilder &is_pq_dist_build(bool pqDistBuild)
+    {
+        this->pq_dist_build = pqDistBuild;
+        return *this;
+    }
+
+    IndexConfigBuilder &is_concurrent_consolidate(bool concurrentConsolidate)
+    {
+        this->concurrent_consolidate = concurrentConsolidate;
+        return *this;
+    }
+
+    IndexConfigBuilder &is_use_opq(bool useOPQ)
+    {
+        this->use_opq = useOPQ;
+        return *this;
+    }
+
+    IndexConfigBuilder &with_num_pq_chunks(size_t numPqChunks)
+    {
+        this->num_pq_chunks = numPqChunks;
+        return *this;
+    }
+
+    IndexConfigBuilder &with_num_frozen_pts(size_t numFrozenPts)
+    {
+        this->num_frozen_pts = numFrozenPts;
+        return *this;
+    }
+
+    IndexConfigBuilder &with_label_type(const std::string &labelType)
+    {
+        this->label_type = labelType;
+        return *this;
+    }
+
+    IndexConfigBuilder &with_tag_type(const std::string &tagType)
+    {
+        this->tag_type = tagType;
+        return *this;
+    }
+
+    IndexConfigBuilder &with_data_type(const std::string &dataType)
+    {
+        this->data_type = dataType;
+        return *this;
+    }
+
+    IndexConfig build()
+    {
+        return IndexConfig(data_load_store_strategy, graph_load_store_strategy, filtered_data_load_store_strategy,
+                           metric, dimension, max_points, num_pq_chunks, num_frozen_pts, dynamic_index, enable_tags,
+                           pq_dist_build, concurrent_consolidate, use_opq, data_type, tag_type, label_type);
+    }
+
+    IndexConfigBuilder(const IndexConfigBuilder &) = delete;
+    IndexConfigBuilder &operator=(const IndexConfigBuilder &) = delete;
+
+  private:
+    LoadStoreStrategy graph_load_store_strategy;
+    LoadStoreStrategy data_load_store_strategy;
+    LoadStoreStrategy filtered_data_load_store_strategy;
+
+    Metric metric;
+    size_t dimension;
+    size_t max_points;
+
+    bool dynamic_index = false;
+    bool enable_tags = false;
+    bool pq_dist_build = false;
+    bool concurrent_consolidate = false;
+    bool use_opq = false;
+
+    size_t num_pq_chunks = 0;
+    size_t num_frozen_pts = 0;
+
+    // type info to make DiskANN config driven
+    std::string label_type;
+    std::string tag_type;
+    std::string data_type;
 };
 
 class AbstractIndex

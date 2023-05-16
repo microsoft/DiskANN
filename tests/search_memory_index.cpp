@@ -473,22 +473,19 @@ int main(int argc, char **argv)
         size_t query_num, query_dim, query_aligned_dim;
         diskann::load_aligned_bin(query_file, query, query_num, query_dim, query_aligned_dim, data_type);
 
-        // diskann::get_bin_metadata(query_file, query_num, query_dim);
-
-        diskann::IndexConfig config;
-        config.metric = metric;
-        config.data_load_store_stratagy = diskann::MEMORY;
-        config.graph_load_store_stratagy = diskann::MEMORY;
-        config.data_type = data_type;
-        config.label_type = label_type;
-        config.dynamic_index = dynamic;
-        config.max_points = 0;
-        config.dimension = query_dim;
-        config.enable_tags = tags;
+        auto config = diskann::IndexConfigBuilder()
+                          .with_metric(metric)
+                          .with_dimension(query_dim)
+                          .with_max_points(0)
+                          .with_data_load_store_strategy(diskann::MEMORY)
+                          .with_graph_load_store_strategy(diskann::MEMORY)
+                          .with_data_type(data_type)
+                          .with_label_type(label_type)
+                          .is_dynamic_index(dynamic)
+                          .is_enable_tags(tags)
+                          .build();
 
         diskann::IndexSearchParams search_param;
-        // search_param.K = K;
-        // search_param.query_file = query_file;
         search_param.filter_label = filter_label;
         search_param.query_filter_file = query_filters_file;
         search_param.Lvec = Lvec;

@@ -160,19 +160,20 @@ int main(int argc, char **argv)
         size_t data_num, data_dim;
         diskann::get_bin_metadata(data_path, data_num, data_dim);
 
-        // with refactored code
-        diskann::IndexConfig config;
-        config.metric = metric;
-        config.data_load_store_stratagy = diskann::MEMORY;
-        config.graph_load_store_stratagy = diskann::MEMORY;
-        config.data_type = data_type;
-        config.label_type = label_type;
-        config.dimension = data_dim;
-        config.max_points = data_num;
-        config.enable_tags = false;
-        config.use_opq = use_opq;
-        config.pq_dist_build = use_pq_build;
-        config.num_pq_chunks = build_PQ_bytes;
+        auto config = diskann::IndexConfigBuilder()
+                          .with_metric(metric)
+                          .with_dimension(data_dim)
+                          .with_max_points(data_num)
+                          .with_data_load_store_strategy(diskann::MEMORY)
+                          .with_graph_load_store_strategy(diskann::MEMORY)
+                          .with_data_type(data_type)
+                          .with_label_type(label_type)
+                          .is_dynamic_index(false)
+                          .is_enable_tags(false)
+                          .is_use_opq(use_opq)
+                          .is_pq_dist_build(use_pq_build)
+                          .with_num_pq_chunks(build_PQ_bytes)
+                          .build();
 
         // Build params for speific build from instance
         diskann::IndexWriteParameters paras = diskann::IndexWriteParametersBuilder(L, R)

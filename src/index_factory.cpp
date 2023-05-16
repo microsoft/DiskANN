@@ -25,8 +25,8 @@ std::shared_ptr<AbstractIndex> IndexFactory::instance()
     if (_config.data_type == "float")
     {
         // datastore and graph store objects to be passed to index
-        auto data_store = construct_datastore<float>(_config.data_load_store_stratagy, num_points, dim);
-        auto graph_store = construct_graphstore(_config.graph_load_store_stratagy, num_points);
+        auto data_store = construct_datastore<float>(_config.data_load_store_strategy, num_points, dim);
+        auto graph_store = construct_graphstore(_config.graph_load_store_strategy, num_points);
 
         if (_config.label_type == "ushort")
         {
@@ -39,8 +39,8 @@ std::shared_ptr<AbstractIndex> IndexFactory::instance()
     }
     else if (_config.data_type == "uint8")
     {
-        auto data_store = construct_datastore<uint8_t>(_config.data_load_store_stratagy, num_points, dim);
-        auto graph_store = construct_graphstore(_config.graph_load_store_stratagy, num_points);
+        auto data_store = construct_datastore<uint8_t>(_config.data_load_store_strategy, num_points, dim);
+        auto graph_store = construct_graphstore(_config.graph_load_store_strategy, num_points);
         if (_config.label_type == "ushort")
         {
             return std::make_shared<diskann::Index<uint8_t, uint32_t, uint16_t>>(_config, std::move(data_store));
@@ -52,8 +52,8 @@ std::shared_ptr<AbstractIndex> IndexFactory::instance()
     }
     else if (_config.data_type == "int8")
     {
-        auto data_store = construct_datastore<int8_t>(_config.data_load_store_stratagy, num_points, dim);
-        auto graph_store = construct_graphstore(_config.graph_load_store_stratagy, num_points);
+        auto data_store = construct_datastore<int8_t>(_config.data_load_store_strategy, num_points, dim);
+        auto graph_store = construct_graphstore(_config.graph_load_store_strategy, num_points);
         if (_config.label_type == "ushort")
         {
             return std::make_shared<diskann::Index<int8_t, uint32_t, uint16_t>>(_config, std::move(data_store));
@@ -108,12 +108,12 @@ void IndexFactory::checkConfig()
 }
 
 template <typename T>
-std::unique_ptr<AbstractDataStore<T>> IndexFactory::construct_datastore(LoadStoreStratagy stratagy, size_t num_points,
+std::unique_ptr<AbstractDataStore<T>> IndexFactory::construct_datastore(LoadStoreStrategy strategy, size_t num_points,
                                                                         size_t dimension)
 {
     const size_t total_internal_points = num_points + _config.num_frozen_pts;
     std::shared_ptr<Distance<T>> distance;
-    switch (stratagy)
+    switch (strategy)
     {
     case MEMORY:
         if (_config.metric == diskann::Metric::COSINE && std::is_floating_point<T>::value)
@@ -137,10 +137,10 @@ std::unique_ptr<AbstractDataStore<T>> IndexFactory::construct_datastore(LoadStor
     return nullptr;
 }
 
-std::unique_ptr<AbstractGraphStore> IndexFactory::construct_graphstore(LoadStoreStratagy stratagy, size_t size)
+std::unique_ptr<AbstractGraphStore> IndexFactory::construct_graphstore(LoadStoreStrategy strategy, size_t size)
 {
     // TODO : Return once the concrete classes are implemented
-    switch (stratagy)
+    switch (strategy)
     {
     case MEMORY:
         break;
@@ -151,31 +151,5 @@ std::unique_ptr<AbstractGraphStore> IndexFactory::construct_graphstore(LoadStore
     }
     return std::make_unique<InMemGraphStore>(size);
 }
-
-// template DISKANN_DLLEXPORT class IndexFactory<float, int32_t, uint32_t>;
-// template DISKANN_DLLEXPORT class IndexFactory<int8_t, int32_t, uint32_t>;
-// template DISKANN_DLLEXPORT class IndexFactory<uint8_t, int32_t, uint32_t>;
-// template DISKANN_DLLEXPORT class IndexFactory<float, uint32_t, uint32_t>;
-// template DISKANN_DLLEXPORT class IndexFactory<int8_t, uint32_t, uint32_t>;
-// template DISKANN_DLLEXPORT class IndexFactory<uint8_t, uint32_t, uint32_t>;
-// template DISKANN_DLLEXPORT class IndexFactory<float, int64_t, uint32_t>;
-// template DISKANN_DLLEXPORT class IndexFactory<int8_t, int64_t, uint32_t>;
-// template DISKANN_DLLEXPORT class IndexFactory<uint8_t, int64_t, uint32_t>;
-// template DISKANN_DLLEXPORT class IndexFactory<float, uint64_t, uint32_t>;
-// template DISKANN_DLLEXPORT class IndexFactory<int8_t, uint64_t, uint32_t>;
-// template DISKANN_DLLEXPORT class IndexFactory<uint8_t, uint64_t, uint32_t>;
-//// Label with short int 2 byte
-// template DISKANN_DLLEXPORT class IndexFactory<float, int32_t, uint16_t>;
-// template DISKANN_DLLEXPORT class IndexFactory<int8_t, int32_t, uint16_t>;
-// template DISKANN_DLLEXPORT class IndexFactory<uint8_t, int32_t, uint16_t>;
-// template DISKANN_DLLEXPORT class IndexFactory<float, uint32_t, uint16_t>;
-// template DISKANN_DLLEXPORT class IndexFactory<int8_t, uint32_t, uint16_t>;
-// template DISKANN_DLLEXPORT class IndexFactory<uint8_t, uint32_t, uint16_t>;
-// template DISKANN_DLLEXPORT class IndexFactory<float, int64_t, uint16_t>;
-// template DISKANN_DLLEXPORT class IndexFactory<int8_t, int64_t, uint16_t>;
-// template DISKANN_DLLEXPORT class IndexFactory<uint8_t, int64_t, uint16_t>;
-// template DISKANN_DLLEXPORT class IndexFactory<float, uint64_t, uint16_t>;
-// template DISKANN_DLLEXPORT class IndexFactory<int8_t, uint64_t, uint16_t>;
-// template DISKANN_DLLEXPORT class IndexFactory<uint8_t, uint64_t, uint16_t>;
 
 } // namespace diskann
