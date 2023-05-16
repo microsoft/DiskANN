@@ -67,9 +67,10 @@ struct IndexBuildParams
 struct IndexSearchParams
 {
     std::string result_path = "";
-    std::string query_file = "";
-    float fail_if_recall_below{70.0f};
-    size_t K{0};
+    size_t query_num, query_dim, query_aligned_dim;
+    // std::string query_file = "";
+    // float fail_if_recall_below{70.0f};
+    // size_t K{0};
     std::vector<uint32_t> Lvec;
     std::string filter_label = "";
     std::string query_filter_file = "";
@@ -185,7 +186,7 @@ class AbstractIndex
     virtual void load(const char *index_file, uint32_t num_threads, uint32_t search_l) = 0;
 #endif
 
-    virtual SearchResult search(IndexSearchParams &search_params) = 0;
+    virtual SearchResult search(const DataType &query, size_t K, IndexSearchParams &search_params) = 0;
 
     virtual int insert_point(const DataType &data_point, const TagType &tag) = 0;
 

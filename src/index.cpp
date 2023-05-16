@@ -2018,16 +2018,33 @@ void Index<T, TagT, LabelT>::build_filtered_index(const char *filename, const st
 
 // Refactored search
 template <typename T, typename TagT, typename LabelT>
-SearchResult Index<T, TagT, LabelT>::search(IndexSearchParams &search_params)
+SearchResult Index<T, TagT, LabelT>::search(const diskann::DataType &q, size_t K, IndexSearchParams &search_params)
 {
 
     SearchResult result;
     result.init(search_params.Lvec.size());
 
     // Load query file
-    T *query = nullptr;
+    /*T *query = nullptr;
     size_t query_num, query_dim, query_aligned_dim;
-    diskann::load_aligned_bin<T>(search_params.query_file, query, query_num, query_dim, query_aligned_dim);
+    diskann::load_aligned_bin<T>(search_params.query_file, query, query_num, query_dim, query_aligned_dim);*/
+
+    T *query = boost::any_cast<T *>(q);
+    size_t query_num = search_params.query_num;
+    size_t query_dim = search_params.query_dim;
+    size_t query_aligned_dim = search_params.query_aligned_dim;
+
+    // // a little tester code
+    ///* T *o_q = nullptr;
+    // size_t o_query_num, o_query_dim, o_query_aligned_dim;*/
+    // diskann::load_aligned_bin<T>(search_params.query_file, query, query_num,
+    //                              query_dim, query_aligned_dim);
+
+    /*for (int i = 0; i < o_query_num; i++)
+    {
+        std::cout << query[i] << " , " << o_q[i] << " : " << (query[i] == o_q[i]) << std::endl;
+    }
+    query = o_q;*/
 
     // filter search
     bool filtered_search = false;
@@ -2052,7 +2069,7 @@ SearchResult Index<T, TagT, LabelT>::search(IndexSearchParams &search_params)
     std::cout << "Using " << search_params.num_threads << " threads to search" << std::endl;
 
     // query results
-    auto recall_at = search_params.K;
+    auto recall_at = K;
     std::vector<std::vector<uint32_t>> &query_result_ids = result.query_result_ids;
     std::vector<std::vector<float>> &query_result_dists = result.query_result_dists;
     std::vector<TagT> query_result_tags;

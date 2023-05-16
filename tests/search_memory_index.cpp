@@ -467,8 +467,13 @@ int main(int argc, char **argv)
 
     try
     {
-        size_t query_num, query_dim;
-        diskann::get_bin_metadata(query_file, query_num, query_dim);
+        // load data
+
+        diskann::DataType query;
+        size_t query_num, query_dim, query_aligned_dim;
+        diskann::load_aligned_bin(query_file, query, query_num, query_dim, query_aligned_dim, data_type);
+
+        // diskann::get_bin_metadata(query_file, query_num, query_dim);
 
         diskann::IndexConfig config;
         config.metric = metric;
@@ -482,20 +487,27 @@ int main(int argc, char **argv)
         config.enable_tags = tags;
 
         diskann::IndexSearchParams search_param;
-        search_param.K = K;
-        search_param.query_file = query_file;
+        // search_param.K = K;
+        // search_param.query_file = query_file;
         search_param.filter_label = filter_label;
         search_param.query_filter_file = query_filters_file;
         search_param.Lvec = Lvec;
         search_param.num_threads = num_threads;
         search_param.result_path = result_path;
+        search_param.query_dim = query_dim;
+        search_param.query_num = query_num;
+        search_param.query_aligned_dim = query_aligned_dim;
 
         auto index_factory = diskann::IndexFactory(config);
         auto index = index_factory.instance();
+        // load index
         index->load(index_path_prefix.c_str(), num_threads, *(std::max_element(Lvec.begin(), Lvec.end())));
-        auto res = index->search(search_param);
+
+        // search index
+        auto res = index->search(query, K, search_param);
         auto best_recall =
             print_search_results(res, gt_file, K, Lvec, show_qps_per_thread, tags, print_all_recalls, num_threads);
+        query.clear();
         return best_recall >= fail_if_recall_below ? 0 : -1;
     }
     catch (std::exception &e)

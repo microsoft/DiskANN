@@ -27,6 +27,7 @@ typedef int FileHandle;
 #include "windows_customizations.h"
 #include "tsl/robin_set.h"
 #include "types.h"
+#include <boost/any.hpp>
 
 #ifdef EXEC_ENV_OLS
 #include "content_buf.h"
@@ -777,6 +778,59 @@ inline void load_aligned_bin(const std::string &bin_file, T *&data, size_t &npts
     catch (std::system_error &e)
     {
         throw FileException(bin_file, e, __FUNCSIG__, __FILE__, __LINE__);
+    }
+}
+
+inline void load_aligned_bin(const std::string &bin_file, boost::any &data, size_t &npts, size_t &dim,
+                             size_t &rounded_dim, const std::string &data_type)
+{
+    try
+    {
+        if (data_type == std::string("float"))
+        {
+            if (data.empty())
+            {
+                float *var = nullptr;
+                data = var;
+            }
+            if (auto *ptr = boost::any_cast<float *>(&data))
+            {
+                load_aligned_bin<float>(bin_file, *ptr, npts, dim, rounded_dim);
+            }
+        }
+        else if (data_type == std::string("uint8"))
+        {
+            if (data.empty())
+            {
+                uint8_t *var = nullptr;
+                data = var;
+            }
+            if (auto *ptr = boost::any_cast<uint8_t *>(&data))
+            {
+                load_aligned_bin<uint8_t>(bin_file, *ptr, npts, dim, rounded_dim);
+            }
+        }
+        else if (data_type == std::string("int8"))
+        {
+            if (data.empty())
+            {
+                int8_t *var = nullptr;
+                data = var;
+            }
+            if (auto *ptr = boost::any_cast<int8_t *>(&data))
+            {
+                load_aligned_bin<int8_t>(bin_file, *ptr, npts, dim, rounded_dim);
+            }
+        }
+        else
+        {
+            throw new ANNException(
+                "Error: Invalid data_type " + data_type + ". Valid data types are <float/int8/uint8>", -1);
+        }
+    }
+    catch (const boost::bad_any_cast &e)
+    {
+        throw e;
     }
 }
 
