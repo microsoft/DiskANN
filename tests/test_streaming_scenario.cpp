@@ -179,6 +179,7 @@ void build_incremental_index(const std::string &data_path, const uint32_t L, con
                                                .with_saturate_graph(saturate_graph)
                                                .with_num_threads(insert_threads)
                                                .with_num_frozen_points(num_start_pts)
+                                               .with_universal_label_exists(false)
                                                .build();
 
     diskann::IndexWriteParameters delete_params = diskann::IndexWriteParametersBuilder(L, R)
@@ -186,6 +187,7 @@ void build_incremental_index(const std::string &data_path, const uint32_t L, con
                                                       .with_alpha(alpha)
                                                       .with_saturate_graph(saturate_graph)
                                                       .with_num_threads(consolidate_threads)
+                                                      .with_universal_label_exists(false)
                                                       .build();
 
     size_t dim, aligned_dim;

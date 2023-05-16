@@ -20,6 +20,8 @@
 #include "index.h"
 #include "memory_mapper.h"
 #include "utils.h"
+#include "ann_returncode.h"
+#include "percentile_stats.h"
 
 namespace po = boost::program_options;
 
@@ -114,6 +116,8 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
     std::vector<std::vector<float>> query_result_dists(Lvec.size());
     std::vector<float> latency_stats(query_num, 0);
     std::vector<uint32_t> cmp_stats;
+    auto stats = new diskann::TraversalStats[query_num];
+
     if (not tags)
     {
         cmp_stats = std::vector<uint32_t>(query_num, 0);
@@ -148,19 +152,15 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
             auto qs = std::chrono::high_resolution_clock::now();
             if (filtered_search)
             {
-                LabelT filter_label_as_num;
-                if (query_filters.size() == 1)
+                std::string raw_label = (query_filters.size() == 1) ? query_filters[0] : query_filters[i];
+                auto retval = index.search_with_filters(query + i * query_aligned_dim, raw_label, recall_at, L,
+                                                        query_result_ids[test_id].data() + i * recall_at,
+                                                        query_result_dists[test_id].data() + i * recall_at, stats + i);
+                if (retval->getReturnCode() != diskann::ANNReturnCode::Value::SUCCESS)
                 {
-                    filter_label_as_num = index.get_converted_label(query_filters[0]);
+                    continue;
                 }
-                else
-                {
-                    filter_label_as_num = index.get_converted_label(query_filters[i]);
-                }
-                auto retval = index.search_with_filters(query + i * query_aligned_dim, filter_label_as_num, recall_at,
-                                                        L, query_result_ids[test_id].data() + i * recall_at,
-                                                        query_result_dists[test_id].data() + i * recall_at);
-                cmp_stats[i] = retval.second;
+                cmp_stats[i] = (stats + i)->n_cmps;
             }
             else if (metric == diskann::FAST_L2)
             {

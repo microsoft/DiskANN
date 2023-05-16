@@ -16,9 +16,11 @@
 #include "neighbor.h"
 #include "parameters.h"
 #include "utils.h"
+#include "defaults.h"
 #include "windows_customizations.h"
 #include "scratch.h"
 #include "in_mem_data_store.h"
+#include "percentile_stats.h"
 
 #define OVERHEAD_FACTOR 1.1
 #define EXPAND_IF_FULL 0
@@ -122,10 +124,9 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
                                                 const size_t num_points_to_load, IndexWriteParameters &parameters,
                                                 const std::vector<TagT> &tags = std::vector<TagT>());
 
-    DISKANN_DLLEXPORT void set_universal_label(const LabelT &label);
-
     // Get converted integer label from string to int map (_label_map)
-    DISKANN_DLLEXPORT LabelT get_converted_label(const std::string &raw_label);
+    DISKANN_DLLEXPORT std::pair<std::unique_ptr<ANNReturnCode>, LabelT> get_converted_label(
+        const std::string &raw_label);
 
     // Set starting point of an index before inserting any points incrementally.
     // The data count should be equal to _num_frozen_pts * _aligned_dim.
@@ -151,11 +152,21 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     DISKANN_DLLEXPORT size_t search_with_tags(const T *query, const uint64_t K, const uint32_t L, TagT *tags,
                                               float *distances, std::vector<T *> &res_vectors);
 
-    // Filter support search
+    // Filter support search String interface for converting to integer
     template <typename IndexType>
-    DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> search_with_filters(const T *query, const LabelT &filter_label,
-                                                                        const size_t K, const uint32_t L,
-                                                                        IndexType *indices, float *distances);
+    DISKANN_DLLEXPORT std::unique_ptr<ANNReturnCode> search_with_filters(const T *query,
+                                                                         const std::string &filter_label,
+                                                                         const size_t K, const uint32_t L,
+                                                                         IndexType *indices, float *distances,
+                                                                         TraversalStats *stats = nullptr);
+
+    // Filter support search
+    // ANNReturnCode - Default is Success
+    template <typename IndexType>
+    DISKANN_DLLEXPORT std::unique_ptr<ANNReturnCode> search_with_filters(const T *query, const LabelT &filter_label,
+                                                                         const size_t K, const uint32_t L,
+                                                                         IndexType *indices, float *distances,
+                                                                         TraversalStats *stats = nullptr);
 
     // Will fail if tag already in the index or if tag=0.
     DISKANN_DLLEXPORT int insert_point(const T *point, const TagT tag);
@@ -359,8 +370,8 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     std::string _labels_file;
     std::unordered_map<LabelT, uint32_t> _label_to_medoid_id;
     std::unordered_map<uint32_t, uint32_t> _medoid_counts;
-    bool _use_universal_label = false;
-    LabelT _universal_label = 0;
+    bool _universal_label_exists = defaults::UNIVERSAL_LABEL_EXISTS;
+    LabelT _universal_label = defaults::UNIVERSAL_LABEL;
     uint32_t _filterIndexingQueueSize;
     std::unordered_map<std::string, LabelT> _label_map;
 

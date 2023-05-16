@@ -235,19 +235,15 @@ int search_disk_index(diskann::Metric &metric, const std::string &index_path_pre
             }
             else
             {
-                LabelT label_for_search;
-                if (query_filters.size() == 1)
-                { // one label for all queries
-                    label_for_search = _pFlashIndex->get_converted_label(query_filters[0]);
-                }
-                else
-                { // one label for each query
-                    label_for_search = _pFlashIndex->get_converted_label(query_filters[i]);
-                }
-                _pFlashIndex->cached_beam_search(
+                std::string raw_label = (query_filters.size() == 1) ? query_filters[0] : query_filters[i];
+                auto retval = _pFlashIndex->cached_beam_search(
                     query + (i * query_aligned_dim), recall_at, L, query_result_ids_64.data() + (i * recall_at),
-                    query_result_dists[test_id].data() + (i * recall_at), optimized_beamwidth, true, label_for_search,
+                    query_result_dists[test_id].data() + (i * recall_at), optimized_beamwidth, true, raw_label,
                     use_reorder_data, stats + i);
+                if (retval->getReturnCode() != diskann::ANNReturnCode::Value::SUCCESS)
+                {
+                    continue;
+                }
             }
         }
         auto e = std::chrono::high_resolution_clock::now();
