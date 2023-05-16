@@ -838,11 +838,11 @@ template <typename T, typename TagT, typename LabelT> std::vector<uint32_t> Inde
 }
 
 template <typename T, typename TagT, typename LabelT>
-const std::vector<LabelT> Index<T, TagT, LabelT>::find_common_filters(uint32_t point_id, bool search_invocation,
-                                                                      const std::vector<LabelT> &incoming_labels)
+size_t Index<T, TagT, LabelT>::find_common_filters(uint32_t point_id, bool search_invocation,
+                                                   const std::vector<LabelT> &incoming_labels)
 {
-    std::vector<LabelT> common_filters;
     auto &curr_node_labels = _pts_to_labels[point_id];
+    std::vector<LabelT> common_filters;
     std::set_intersection(incoming_labels.begin(), incoming_labels.end(), curr_node_labels.begin(),
                           curr_node_labels.end(), std::back_inserter(common_filters));
     if (_use_universal_label)
@@ -859,7 +859,7 @@ const std::vector<LabelT> Index<T, TagT, LabelT>::find_common_filters(uint32_t p
                 common_filters.push_back(_universal_label);
         }
     }
-    return common_filters;
+    return common_filters.size();
 }
 
 template <typename T, typename TagT, typename LabelT>
@@ -958,8 +958,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
 
         if (use_filter)
         {
-            std::vector<LabelT> common_filters = find_common_filters(id, search_invocation, filter_label);
-            if (common_filters.size() == 0)
+            if (find_common_filters(id, search_invocation, filter_label) == 0)
                 continue;
         }
 
@@ -1027,8 +1026,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                 if (use_filter)
                 {
                     // NOTE: NEED TO CHECK IF THIS CORRECT WITH NEW LOCKS.
-                    std::vector<LabelT> common_filters = find_common_filters(id, search_invocation, filter_label);
-                    if (common_filters.size() == 0)
+                    if (find_common_filters(id, search_invocation, filter_label) == 0)
                         continue;
                 }
 
