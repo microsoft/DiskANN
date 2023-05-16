@@ -2031,20 +2031,7 @@ SearchResult Index<T, TagT, LabelT>::search(const diskann::DataType &q, size_t K
 
     T *query = boost::any_cast<T *>(q);
     size_t query_num = search_params.query_num;
-    size_t query_dim = search_params.query_dim;
     size_t query_aligned_dim = search_params.query_aligned_dim;
-
-    // // a little tester code
-    ///* T *o_q = nullptr;
-    // size_t o_query_num, o_query_dim, o_query_aligned_dim;*/
-    // diskann::load_aligned_bin<T>(search_params.query_file, query, query_num,
-    //                              query_dim, query_aligned_dim);
-
-    /*for (int i = 0; i < o_query_num; i++)
-    {
-        std::cout << query[i] << " , " << o_q[i] << " : " << (query[i] == o_q[i]) << std::endl;
-    }
-    query = o_q;*/
 
     // filter search
     bool filtered_search = false;
