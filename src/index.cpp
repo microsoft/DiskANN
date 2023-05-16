@@ -564,7 +564,6 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
     if (file_exists(labels_file))
     {
         _label_map = load_label_map(labels_map_file);
-    //    parse_label_file(labels_file, label_num_pts);
         parse_label_file_in_bitset(labels_file, label_num_pts, _label_map.size());
 
         assert(label_num_pts == data_file_num_pts);
@@ -1003,16 +1002,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
             bitmask_full_val.merge_bitmask_val(bitmask_val);
         }
     }
-    //simple_bitmask_val bitmask_val;
-    //if (filter_label.size() > 0)
-    //{
-    //    bitmask_val = simple_bitmask::get_bitmask_val(filter_label[0] - 1);
-    //}
-    //simple_bitmask_val universal_bitmask_val;
-    //if (_use_universal_label)
-    //{
-    //    universal_bitmask_val = simple_bitmask::get_bitmask_val(_universal_label - 1);
-    //}
+
     // Initialize the candidate pool with starting points
     for (auto id : init_ids)
     {
@@ -1099,7 +1089,6 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                 if (use_filter && !input_contain_universal_label)
                 {
                     // NOTE: NEED TO CHECK IF THIS CORRECT WITH NEW LOCKS.
-                //    std::vector<LabelT> common_filters;
                     simple_bitmask bm(_bitmask_buf.get_bitmask(id), _bitmask_buf._bitmask_size);
 
                     if (!bm.test_full_mask_val(bitmask_full_val))
@@ -1991,11 +1980,6 @@ void Index<T, TagT, LabelT>::parse_label_file_in_bitset(const std::string& label
 
     _bitmask_buf._bitmask_size = simple_bitmask::get_bitmask_size(num_labels);
     _bitmask_buf._buf.resize(line_cnt * _bitmask_buf._bitmask_size, 0);
-    //_pts_label_bitsets.reserve(line_cnt);
-    //for (size_t i = 0; i < line_cnt; i++)
-    //{
-    //    _pts_label_bitsets.push_back(_bitmask_buf.get_bitmask(i));
-    //}
     
     infile.clear();
     infile.seekg(0, std::ios::beg);
@@ -2012,19 +1996,10 @@ void Index<T, TagT, LabelT>::parse_label_file_in_bitset(const std::string& label
             token.erase(std::remove(token.begin(), token.end(), '\n'), token.end());
             token.erase(std::remove(token.begin(), token.end(), '\r'), token.end());
             LabelT token_as_num = std::stoul(token);
-        //    _pts_label_bitsets[line_cnt].set(token_as_num - 1);
             simple_bitmask bm(_bitmask_buf.get_bitmask(line_cnt), _bitmask_buf._bitmask_size);
             bm.set(token_as_num - 1);
-        //    lbls.push_back(token_as_num);
             _labels.insert(token_as_num);
         }
-        //if (lbls.size() <= 0)
-        //{
-        //    diskann::cout << "No label found";
-        //    exit(-1);
-        //}
-    //    std::sort(lbls.begin(), lbls.end());
-    //    _pts_to_labels[line_cnt] = lbls;
         line_cnt++;
     }
     num_points = (size_t)line_cnt;

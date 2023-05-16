@@ -37,19 +37,6 @@ inline double estimate_ram_usage(_u64 size, _u32 dim, _u32 datasize, _u32 degree
     return OVERHEAD_FACTOR * (size_of_data + size_of_graph + size_of_locks + size_of_outer_vector);
 }
 
-template<typename LabelT>
-inline bool is_label_existed(const std::vector<LabelT>& node_labels, const LabelT& input_label)
-{
-    for (const auto& node_label : node_labels)
-    {
-        if (node_label == input_label)
-        {
-            return true;
-        }
-    }
-
-    return false;
-}
 
 struct consolidation_report
 {
@@ -109,17 +96,6 @@ struct simple_bitmask_buf
 class simple_bitmask
 {
 public:
-    //simple_bitmask(size_t totalBits)
-    //{
-    //    std::uint64_t bytes = (totalBits + 7) / 8;
-    //    std::uint64_t aligned_bytes = bytes + sizeof(std::uint64_t) - 1;
-    //    aligned_bytes = aligned_bytes - (aligned_bytes % sizeof(std::uint64_t));
-    //    _size = aligned_bytes / sizeof(std::uint64_t);
-
-    //    _bitsets = (std::uint64_t*)malloc(aligned_bytes);
-    //    memset(_bitsets, 0, aligned_bytes);
-    //}
-
     simple_bitmask(std::uint64_t* bitsets, std::uint64_t bitmask_size)
         : _bitsets(bitsets)
         , _bitmask_size(bitmask_size)
@@ -531,8 +507,6 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 
     // Per node lock, cardinality=_max_points
     std::vector<non_recursive_mutex> _locks;
-
-//    std::vector<simple_bitmask> _pts_label_bitsets;
 
     simple_bitmask_buf _bitmask_buf;
 
