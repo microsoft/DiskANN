@@ -147,6 +147,7 @@ void build_incremental_index(const std::string &data_path, const uint32_t L, con
                                                .with_alpha(alpha)
                                                .with_num_threads(thread_count)
                                                .with_num_frozen_points(num_start_pts)
+                                               .with_universal_label_exists(false)
                                                .build();
 
     size_t dim, aligned_dim;
