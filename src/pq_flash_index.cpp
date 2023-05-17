@@ -1060,7 +1060,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
                                                  QueryStats *stats)
 {
     IndexSearchContext<LabelT> context(/*time_limit_in_microseconds*/ 0u, io_limit);
-    context.SetLabel(filter_label, use_filter);
+    context.set_filter_label(filter_label, use_filter);
     return cached_beam_search(query1, k_search, l_search, indices, distances, beam_width, context, use_reorder_data,
                               stats);
 }
@@ -1071,9 +1071,9 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
                                                  IndexSearchContext<LabelT> &context, const bool use_reorder_data,
                                                  QueryStats *stats)
 {
-    auto use_filter = context.UseFilter();
-    auto filter_label = context.GetLabel();
-    auto io_limit = context.GetIOLimit();
+    auto use_filter = context.use_filter();
+    auto filter_label = context.get_filter_label();
+    auto io_limit = context.get_io_limit();
     int32_t filter_num = 0;
     if (use_filter)
     {
@@ -1093,7 +1093,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
 
     if (beam_width > MAX_N_SECTOR_READS)
     {
-        context.SetState(State::FailureException);
+        context.set_state(State::FailureException);
         throw ANNException("Beamwidth can not be higher than MAX_N_SECTOR_READS", -1, __FUNCSIG__, __FILE__, __LINE__);
     }
 
@@ -1105,14 +1105,14 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
     auto pq_query_scratch = query_scratch->_pq_scratch;
     if (stats == nullptr)
     {
-        stats = &context.GetStats();
+        stats = &context.get_stats();
     }
     if (stats != nullptr)
     {
         stats->scratch_us = (float)query_timer.elapsed();
     }
 
-    if (context.CheckTimeout())
+    if (context.check_timeout())
     {
         return;
     }
@@ -1228,7 +1228,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
     std::vector<std::pair<uint32_t, std::pair<uint32_t, uint32_t *>>> cached_nhoods;
     cached_nhoods.reserve(2 * beam_width);
 
-    if (context.CheckTimeout())
+    if (context.check_timeout())
     {
         return;
     }
@@ -1265,7 +1265,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
             }
         }
 
-        if (context.CheckTimeout())
+        if (context.check_timeout())
         {
             return;
         }
@@ -1304,7 +1304,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
             }
         }
 
-        if (context.CheckTimeout())
+        if (context.check_timeout())
         {
             return;
         }
@@ -1438,7 +1438,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
         }
 
         hops++;
-        if (context.CheckTimeout())
+        if (context.check_timeout())
         {
             return;
         }
@@ -1474,7 +1474,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
             }
         }
 
-        if (context.CheckTimeout())
+        if (context.check_timeout())
         {
             return;
         }
@@ -1533,7 +1533,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
         stats->total_us = (float)query_timer.elapsed();
     }
 
-    context.SetState(State::Success);
+    context.set_state(State::Success);
 }
 
 // range search returns results of all neighbors within distance of range.

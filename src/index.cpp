@@ -843,7 +843,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
     bool use_filter, const std::vector<LabelT> &filter_label, bool search_invocation,
     IndexSearchContext<LabelT> *context)
 {
-    if (context != nullptr && context->CheckTimeout())
+    if (context != nullptr && context->check_timeout())
     {
         return std::make_pair(0, 0);
     }
@@ -891,7 +891,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
         _pq_table.populate_chunk_distances(query_rotated, pq_dists);
 
         pq_coord_scratch = pq_query_scratch->aligned_pq_coord_scratch;
-        if (context != nullptr && context->CheckTimeout())
+        if (context != nullptr && context->check_timeout())
         {
             return std::make_pair(0, 0);
         }
@@ -982,7 +982,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
         }
     }
 
-    if (context != nullptr && context->CheckTimeout())
+    if (context != nullptr && context->check_timeout())
     {
         return std::make_pair(0, 0);
     }
@@ -1095,21 +1095,22 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
             best_L_nodes.insert(Neighbor(id_scratch[m], dist_scratch[m]));
         }
 
-        if (context != nullptr && context->CheckTimeout())
+        if (context != nullptr && context->check_timeout())
         {
             return std::make_pair(hops, cmps);
         }
     }
 
-    if (context != nullptr && context->CheckTimeout())
+    if (context != nullptr && context->check_timeout())
     {
         return std::make_pair(hops, cmps);
     }
 
     if (context != nullptr)
     {
-        context->GetStats().n_hops = hops;
-        context->GetStats().n_cmps = cmps;
+        auto &stats = context->get_stats();
+        stats.n_hops = hops;
+        stats.n_cmps = cmps;
     }
 
     return std::make_pair(hops, cmps);
@@ -2012,7 +2013,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search(const T *query, con
                                                              IdType *indices, float *distances,
                                                              IndexSearchContext<LabelT> &context)
 {
-    if (context.UseFilter())
+    if (context.use_filter())
     {
         return search_with_filters(query, K, L, indices, distances, context);
     }
@@ -2025,7 +2026,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search(const T *query, con
     Timer timer;
     ScratchStoreManager<InMemQueryScratch<T>> manager(_query_scratch);
     auto scratch = manager.scratch_space();
-    context.GetStats().scratch_us = (float)timer.elapsed();
+    context.get_stats().scratch_us = (float)timer.elapsed();
 
     if (L > scratch->get_L())
     {
@@ -2044,7 +2045,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search(const T *query, con
     auto retval = iterate_to_fixed_point(scratch->aligned_query(), L, init_ids, scratch, false, unused_filter_label,
                                          true, &context);
 
-    if (context.CheckTimeout())
+    if (context.check_timeout())
     {
         return retval;
     }
@@ -2077,12 +2078,12 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search(const T *query, con
 
     if (pos < K)
     {
-        context.SetState(State::Failure);
+        context.set_state(State::Failure);
         diskann::cerr << "Found fewer than K elements for query" << std::endl;
     }
     else
     {
-        context.SetState(State::Success);
+        context.set_state(State::Success);
     }
 
     return retval;
@@ -2095,7 +2096,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
                                                                           IdType *indices, float *distances)
 {
     IndexSearchContext<LabelT> context;
-    context.SetLabel(filter_label, /*use_filter*/ true);
+    context.set_filter_label(filter_label, /*use_filter*/ true);
     return search_with_filters(query, K, L, indices, distances, context);
 }
 
@@ -2106,7 +2107,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
                                                                           float *distances,
                                                                           IndexSearchContext<LabelT> &context)
 {
-    if (context.CheckTimeout())
+    if (context.check_timeout())
     {
         return std::make_pair(0, 0);
     }
@@ -2117,7 +2118,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
 
     ScratchStoreManager<InMemQueryScratch<T>> manager(_query_scratch);
     auto scratch = manager.scratch_space();
-    if (context.CheckTimeout())
+    if (context.check_timeout())
     {
         return std::make_pair(0, 0);
     }
@@ -2134,7 +2135,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
     std::vector<uint32_t> init_ids = get_init_ids();
 
     std::shared_lock<std::shared_timed_mutex> lock(_update_lock);
-    auto filter_label = context.GetLabel();
+    auto filter_label = context.get_filter_label();
     if (_label_to_medoid_id.find(filter_label) != _label_to_medoid_id.end())
     {
         init_ids.emplace_back(_label_to_medoid_id[filter_label]);
@@ -2147,7 +2148,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
     }
     filter_vec.emplace_back(filter_label);
 
-    if (context.CheckTimeout())
+    if (context.check_timeout())
     {
         return std::make_pair(0, 0);
     }
@@ -2158,7 +2159,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
     _distance->preprocess_query(query, _data_store->get_dims(), scratch->aligned_query());
     auto retval =
         iterate_to_fixed_point(scratch->aligned_query(), L, init_ids, scratch, true, filter_vec, true, &context);
-    if (context.CheckTimeout())
+    if (context.check_timeout())
     {
         return retval;
     }
@@ -2190,12 +2191,12 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
     }
     if (pos < K)
     {
-        context.SetState(State::Failure);
+        context.set_state(State::Failure);
         diskann::cerr << "Found fewer than K elements for query" << std::endl;
     }
     else
     {
-        context.SetState(State::Success);
+        context.set_state(State::Success);
     }
 
     return retval;

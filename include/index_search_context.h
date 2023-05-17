@@ -18,10 +18,9 @@ enum State : uint8_t
     Unknown = 0,
     Success = 1,
     Failure = 2,
-    FailureTimeout = 3,      // Fail because of timeout
-    FailureException = 4,    // Fail because of Exception
-    FailureInvalidLabel = 5, // Fail because of invalid label
-    StateCount = 6           // The number of state
+    FailureTimeout = 3,   // Fail because of timeout
+    FailureException = 4, // Fail because of Exception
+    StateCount = 5        // The number of state
 };
 
 /// <summary>
@@ -35,33 +34,33 @@ template <typename LabelT = uint32_t> class IndexSearchContext
         : _time_limit_in_microseconds(time_limit_in_microseconds), _io_limit(io_limit), _result_state(State::Unknown)
     {
         _use_filter = false;
-        _label = (LabelT)0;
+        _filter_label = (LabelT)0;
     }
 
-    DISKANN_DLLEXPORT void SetLabel(LabelT label, bool use_filter);
+    DISKANN_DLLEXPORT void set_filter_label(const LabelT &filter_label, bool use_filter);
 
-    void SetState(State state);
+    void set_state(State state);
 
-    DISKANN_DLLEXPORT State GetState() const;
+    DISKANN_DLLEXPORT State get_state() const;
 
-    LabelT GetLabel() const;
+    LabelT get_filter_label() const;
 
-    uint32_t GetIOLimit() const;
+    uint32_t get_io_limit() const;
 
-    bool UseFilter() const;
+    bool use_filter() const;
 
-    DISKANN_DLLEXPORT bool IsSuccess() const;
+    DISKANN_DLLEXPORT bool is_success() const;
 
-    bool CheckTimeout();
+    bool check_timeout();
 
-    DISKANN_DLLEXPORT QueryStats &GetStats();
+    DISKANN_DLLEXPORT QueryStats &get_stats();
 
   private:
     uint32_t _time_limit_in_microseconds;
     uint32_t _io_limit;
     State _result_state;
     bool _use_filter;
-    LabelT _label;
+    LabelT _filter_label;
     Timer _timer;
     QueryStats _stats;
 };
