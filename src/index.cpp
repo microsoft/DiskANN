@@ -837,9 +837,9 @@ template <typename T, typename TagT, typename LabelT> std::vector<uint32_t> Inde
     return init_ids;
 }
 
-// Find common filter between 2 nodes
+// Find common filter between a node's labels and a given set of labels, while taking into account universal label
 template <typename T, typename TagT, typename LabelT>
-size_t Index<T, TagT, LabelT>::find_common_filters(uint32_t point_id, bool search_invocation,
+bool Index<T, TagT, LabelT>::detect_common_filters(uint32_t point_id, bool search_invocation,
                                                    const std::vector<LabelT> &incoming_labels)
 {
     auto &curr_node_labels = _pts_to_labels[point_id];
@@ -850,7 +850,7 @@ size_t Index<T, TagT, LabelT>::find_common_filters(uint32_t point_id, bool searc
     {
         // This is to reduce the repetitive calls. If common_filters size is > 0 , we dont need to check further for
         // universal label
-        return common_filters.size();
+        return true;
     }
     if (_use_universal_label)
     {
@@ -866,7 +866,7 @@ size_t Index<T, TagT, LabelT>::find_common_filters(uint32_t point_id, bool searc
                 common_filters.push_back(_universal_label);
         }
     }
-    return common_filters.size();
+    return (common_filters.size() > 0);
 }
 
 template <typename T, typename TagT, typename LabelT>
@@ -965,7 +965,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
 
         if (use_filter)
         {
-            if (find_common_filters(id, search_invocation, filter_label) == 0)
+            if (!detect_common_filters(id, search_invocation, filter_label))
                 continue;
         }
 
@@ -1033,7 +1033,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                 if (use_filter)
                 {
                     // NOTE: NEED TO CHECK IF THIS CORRECT WITH NEW LOCKS.
-                    if (find_common_filters(id, search_invocation, filter_label) == 0)
+                    if (!detect_common_filters(id, search_invocation, filter_label))
                         continue;
                 }
 
