@@ -37,7 +37,7 @@ namespace diskann
       virtual location_t resize(const location_t new_num_points) = 0;
 
       virtual location_t get_location_for_tag(const TagT& tag) = 0;
-      virtual TagT get_tag_at_location(location_t slot) = 0;
+      virtual TagT get_tag_at_location(const location_t slot) = 0;
 
       // Add a new tag into the slot manager. If the tag was added successfully,
       // it fills the location of the tag in the "location" argument and returns

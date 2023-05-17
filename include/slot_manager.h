@@ -12,13 +12,12 @@ namespace diskann
 template <typename tag_t> class SlotManager : AbstractSlotManager<tag_t>
 {
   public:
-    SlotManager(const location_t capacity);
+    SlotManager(const location_t capacity, const location_t num_frozen_points);
     virtual location_t capacity() const override;
     virtual location_t number_of_used_locations() const override;
 
     virtual void reposition_frozen_point(const location_t new_loc) override;
     virtual location_t get_frozen_point_location() const override;
-
 
 
     virtual location_t load(const std::string &filename) override;
@@ -27,7 +26,7 @@ template <typename tag_t> class SlotManager : AbstractSlotManager<tag_t>
     virtual location_t resize(const location_t new_num_points) override;
 
     virtual location_t get_location_for_tag(const tag_t &tag) override;
-    virtual tag_t get_tag_at_location(location_t slot) override;
+    virtual tag_t get_tag_at_location(const location_t slot) override;
 
     // Add a new tag into the slot manager. If the tag was added successfully,
     // it fills the location of the tag in the "location" argument and returns
@@ -59,6 +58,9 @@ protected:
 
   private:
     location_t _capacity;
+    location_t _num_frozen_points;
+    location_t _num_active_points;
+
     
     // lazy_delete removes entry from _location_to_tag and _tag_to_location. If
     // _location_to_tag does not resolve a location, infer that it was deleted.

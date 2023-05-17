@@ -2,7 +2,9 @@
 
 namespace diskann
 {
-template <typename tag_t> SlotManager<tag_t>::SlotManager(const uint32_t capacity) : _capacity(capacity)
+template <typename tag_t>
+SlotManager<tag_t>::SlotManager(const location_t capacity, const location_t num_frozen_points)
+    : _capacity(capacity), _num_frozen_points(num_frozen_points), _num_active_points(0)
 {
     _tag_to_location.reserve(capacity);
     _location_to_tag.reserve(capacity);
@@ -19,16 +21,15 @@ template <typename tag_t> location_t SlotManager<tag_t>::number_of_used_location
 
 template <typename tag_t> location_t SlotManager<tag_t>::load(const std::string &filename)
 {
-    //We must load the delete set first because during save we don't remove deleted points.
-    //Any point that is present in tags file but is also in the delete set will be discarded.
+    // We must load the delete set first because during save we don't remove deleted points.
+    // Any point that is present in tags file but is also in the delete set will be discarded.
     load_delete_set(filename);
     load_tags(filename);
     _capacity = _tags_to_location.size();
-    return _tags_to_location.size(); 
+    return _tags_to_location.size();
 }
 
-template <typename tag_t>
-size_t SlotManager<tag_t>::save(const std::string& filename)
+template <typename tag_t> size_t SlotManager<tag_t>::save(const std::string &filename)
 {
     size_t bytes_written = save_tags(filename);
     bytes_written += save_delete_set(filename);
@@ -101,7 +102,7 @@ template <typename tag_t> void SlotManager<tag_t>::save_tags(const std::string &
     size_t tag_bytes_written;
 
     // REFACTOR
-    //TagT *tag_data = new TagT[_nd + _num_frozen_pts];
+    // TagT *tag_data = new TagT[_nd + _num_frozen_pts];
     TagT *tag_data = new TagT[_tags_to_location.size()];
     for (uint32_t i = 0; i < _tags_to_location.size(); i++)
     {
@@ -126,8 +127,8 @@ template <typename tag_t> void SlotManager<tag_t>::save_tags(const std::string &
     // }
     try
     {
-        //REFACTOR
-        //tag_bytes_written = save_bin<TagT>(tags_filename, tag_data, _nd + _num_frozen_pts, 1);
+        // REFACTOR
+        // tag_bytes_written = save_bin<TagT>(tags_filename, tag_data, _nd + _num_frozen_pts, 1);
         tag_bytes_written = save_bin<TagT>(tags_filename, tag_data, _nd, 1);
     }
     catch (std::system_error &e)
@@ -138,7 +139,7 @@ template <typename tag_t> void SlotManager<tag_t>::save_tags(const std::string &
     return tag_bytes_written;
 }
 
-template <typename tag_t> void SlotManager<tag_t>::load_delete_set(const std::string& filename)
+template <typename tag_t> void SlotManager<tag_t>::load_delete_set(const std::string &filename)
 {
     std::unique_ptr<uint32_t[]> delete_list;
     size_t npts, ndim;
@@ -177,18 +178,18 @@ template <typename tag_t> location_t SlotManager<tag_t>::resize(const location_t
         _location_to_tag.reserve(new_num_points);
         _tag_to_location.reserve(new_num_points);
     }
-    //REFACTOR TODO: It is not clear if we should support shrink as well, but currently, we will not.
+    // REFACTOR TODO: It is not clear if we should support shrink as well, but currently, we will not.
     return _tag_to_location.size();
 }
-   
+
 template <typename tag_t> location_t SlotManager<tag_t>::get_location_for_tag(const tag_t &tag)
 {
-  return _tag_to_location[tag];
+    return _tag_to_location[tag];
 }
 
-template <typename tag_t> tag_t SlotManager<tag_t>::get_tag_at_location(location_t slot)
+template <typename tag_t> tag_t SlotManager<tag_t>::get_tag_at_location(const location_t slot)
 {
-  return _location_to_tag[slot];
+    return _location_to_tag[slot];
 }
 // Add a new tag into the slot manager. If the tag was added successfully,
 // it fills the location of the tag in the "location" argument and returns
