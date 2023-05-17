@@ -846,6 +846,12 @@ size_t Index<T, TagT, LabelT>::find_common_filters(uint32_t point_id, bool searc
     std::vector<LabelT> common_filters;
     std::set_intersection(incoming_labels.begin(), incoming_labels.end(), curr_node_labels.begin(),
                           curr_node_labels.end(), std::back_inserter(common_filters));
+    if (common_filters.size() > 0)
+    {
+        // This is to reduce the repetitive calls. If common_filters size is > 0 , we dont need to check further for
+        // universal label
+        return common_filters.size();
+    }
     if (_use_universal_label)
     {
         if (!search_invocation)
