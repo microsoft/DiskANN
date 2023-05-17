@@ -992,13 +992,13 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
         
         for (size_t i = 0; i < filter_label.size(); i++)
         {
-            auto bitmask_val = simple_bitmask::get_bitmask_val(filter_label[i] - 1);
+            auto bitmask_val = simple_bitmask::get_bitmask_val(filter_label[i]);
             bitmask_full_val.merge_bitmask_val(bitmask_val);
         }
 
         if (_use_universal_label)
         {
-            auto bitmask_val = simple_bitmask::get_bitmask_val(_universal_label - 1);
+            auto bitmask_val = simple_bitmask::get_bitmask_val(_universal_label);
             bitmask_full_val.merge_bitmask_val(bitmask_val);
         }
     }
@@ -1978,7 +1978,7 @@ void Index<T, TagT, LabelT>::convert_pts_label_to_bitmask(std::vector<std::vecto
         for (size_t j = 0; j < pts_to_labels[i].size(); j++)
         {
             simple_bitmask bm(_bitmask_buf.get_bitmask(i), _bitmask_buf._bitmask_size);
-            bm.set(pts_to_labels[i][j] - 1);
+            bm.set(pts_to_labels[i][j]);
         }
     }
 }
@@ -2019,7 +2019,7 @@ void Index<T, TagT, LabelT>::parse_label_file_in_bitset(const std::string& label
             token.erase(std::remove(token.begin(), token.end(), '\r'), token.end());
             LabelT token_as_num = std::stoul(token);
             simple_bitmask bm(_bitmask_buf.get_bitmask(line_cnt), _bitmask_buf._bitmask_size);
-            bm.set(token_as_num - 1);
+            bm.set(token_as_num);
             _labels.insert(token_as_num);
         }
         line_cnt++;
@@ -2063,11 +2063,11 @@ void Index<T, TagT, LabelT>::build_filtered_index(const char *filename, const st
 
         simple_bitmask_full_val bitmask_full_val;
         bitmask_full_val._mask = label_bitmask.data();
-        auto bitmask_val = simple_bitmask::get_bitmask_val(x - 1);
+        auto bitmask_val = simple_bitmask::get_bitmask_val(x);
         bitmask_full_val.merge_bitmask_val(bitmask_val);
         if (_use_universal_label)
         {
-            auto bitmask_val = simple_bitmask::get_bitmask_val(_universal_label - 1);
+            auto bitmask_val = simple_bitmask::get_bitmask_val(_universal_label);
             bitmask_full_val.merge_bitmask_val(bitmask_val);
         }
 
