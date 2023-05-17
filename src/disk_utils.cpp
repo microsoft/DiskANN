@@ -1184,8 +1184,9 @@ int build_disk_index(const char *dataFilePath, const char *indexFilePath, const 
     std::string augmented_data_file, augmented_labels_file;
     if (use_filters)
     {
+        std::uint32_t universal_label_id = 0;
         convert_labels_string_to_int(labels_file_original, labels_file_to_use, disk_labels_int_map_file,
-                                     universal_label);
+                                     universal_label, universal_label_id);
         augmented_data_file = index_prefix_path + "_augmented_data.bin";
         augmented_labels_file = index_prefix_path + "_augmented_labels.txt";
         if (filter_threshold != 0)
