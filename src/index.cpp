@@ -2059,9 +2059,10 @@ void Index<T, TagT, LabelT>::build_filtered_index(const char *filename, const st
         auto &x = *itr;
         
         label_bitmask.clear();
-        label_bitmask.resize(_bitmask_buf._bitmask_size);
+        label_bitmask.resize(_bitmask_buf._bitmask_size, 0);
 
         simple_bitmask_full_val bitmask_full_val;
+        bitmask_full_val._mask = label_bitmask.data();
         auto bitmask_val = simple_bitmask::get_bitmask_val(x - 1);
         bitmask_full_val.merge_bitmask_val(bitmask_val);
         if (_use_universal_label)
