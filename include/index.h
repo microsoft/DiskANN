@@ -146,6 +146,20 @@ public:
         return false;
     }
 
+    bool test_full_mask_contain(const simple_bitmask& bitmask_full_val) const
+    {
+        for (size_t i = 0; i < _bitmask_size; i++)
+        {
+            auto mask = bitmask_full_val._bitsets[i];
+            if ((mask & _bitsets[i]) != mask)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     void set(size_t pos)
     {
         std::uint64_t mask = (std::uint64_t)1 << (pos & (8 * sizeof(std::uint64_t) - 1));
@@ -324,6 +338,8 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     void parse_label_file(const std::string &label_file, size_t &num_pts_labels);
 
     void parse_label_file_in_bitset(const std::string& label_file, size_t& num_points, size_t num_labels);
+
+    void convert_pts_label_to_bitmask(std::vector<std::vector<LabelT>>& pts_to_labels, simple_bitmask_buf& bitmask_buf, size_t num_labels);
 
     std::unordered_map<std::string, LabelT> load_label_map(const std::string &map_file);
 

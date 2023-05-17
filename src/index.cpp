@@ -961,18 +961,18 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
     };
 
     // check if input labels contain universal label
-    bool input_contain_universal_label = false;
-    if (_use_universal_label)
-    {
-        for (size_t i = 0; i < filter_label.size(); i++)
-        {
-            if (filter_label[i] == _universal_label)
-            {
-                input_contain_universal_label = true;
-                break;
-            }
-        }
-    }
+    //bool input_contain_universal_label = false;
+    //if (_use_universal_label)
+    //{
+    //    for (size_t i = 0; i < filter_label.size(); i++)
+    //    {
+    //        if (filter_label[i] == _universal_label)
+    //        {
+    //            input_contain_universal_label = true;
+    //            break;
+    //        }
+    //    }
+    //}
 
     // only support one filter label
     std::array<std::uint64_t, 10> local_buf;
@@ -1013,7 +1013,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                                         __LINE__);
         }
 
-        if (use_filter && !input_contain_universal_label)
+        if (use_filter /*&& !input_contain_universal_label*/)
         {
             simple_bitmask bm(_bitmask_buf.get_bitmask(id), _bitmask_buf._bitmask_size);
             
@@ -1086,7 +1086,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                     continue;
                 }
                 cmps++;
-                if (use_filter && !input_contain_universal_label)
+                if (use_filter /*&& !input_contain_universal_label*/)
                 {
                     // NOTE: NEED TO CHECK IF THIS CORRECT WITH NEW LOCKS.
                     simple_bitmask bm(_bitmask_buf.get_bitmask(id), _bitmask_buf._bitmask_size);
@@ -1254,7 +1254,13 @@ void Index<T, TagT, LabelT>::occlude_list(const unsigned location, std::vector<N
                 {
                     _u32 a = iter->id;
                     _u32 b = iter2->id;
-                    for (auto &x : _pts_to_labels[b])
+                    
+                    simple_bitmask bm1(_bitmask_buf.get_bitmask(a), _bitmask_buf._bitmask_size);
+                    simple_bitmask bm2(_bitmask_buf.get_bitmask(b), _bitmask_buf._bitmask_size);
+
+                    prune_allowed = bm1.test_full_mask_contain(bm2);
+
+  /*                  for (auto &x : _pts_to_labels[b])
                     {
                         if (std::find(_pts_to_labels[a].begin(), _pts_to_labels[a].end(), x) == _pts_to_labels[a].end())
                         {
@@ -1262,7 +1268,7 @@ void Index<T, TagT, LabelT>::occlude_list(const unsigned location, std::vector<N
                         }
                         if (!prune_allowed)
                             break;
-                    }
+                    }*/
                 }
                 if (!prune_allowed)
                     continue;
@@ -1962,6 +1968,22 @@ void Index<T, TagT, LabelT>::parse_label_file(const std::string &label_file, siz
 }
 
 template <typename T, typename TagT, typename LabelT>
+void Index<T, TagT, LabelT>::convert_pts_label_to_bitmask(std::vector<std::vector<LabelT>>& pts_to_labels, simple_bitmask_buf& bitmask_buf, size_t num_labels)
+{
+    _bitmask_buf._bitmask_size = simple_bitmask::get_bitmask_size(num_labels);
+    _bitmask_buf._buf.resize(pts_to_labels.size() * _bitmask_buf._bitmask_size, 0);
+
+    for (size_t i = 0; i < pts_to_labels.size(); i++)
+    {
+        for (size_t j = 0; j < pts_to_labels[i].size(); j++)
+        {
+            simple_bitmask bm(_bitmask_buf.get_bitmask(i), _bitmask_buf._bitmask_size);
+            bm.set(pts_to_labels[i][j] - 1);
+        }
+    }
+}
+
+template <typename T, typename TagT, typename LabelT>
 void Index<T, TagT, LabelT>::parse_label_file_in_bitset(const std::string& label_file, size_t& num_points, size_t num_labels)
 {
     std::ifstream infile(label_file);
@@ -2026,25 +2048,42 @@ void Index<T, TagT, LabelT>::build_filtered_index(const char *filename, const st
                      num_points_labels); // determines medoid for each label and
                                          // identifies the points to label mapping
 
-    std::unordered_map<LabelT, std::vector<_u32>> label_to_points;
+    convert_pts_label_to_bitmask(_pts_to_labels, _bitmask_buf, _labels.size());
 
+    std::unordered_map<LabelT, std::vector<_u32>> label_to_points;
+    std::vector<std::uint64_t> label_bitmask;
     for (int lbl = 0; lbl < _labels.size(); lbl++)
     {
         auto itr = _labels.begin();
         std::advance(itr, lbl);
         auto &x = *itr;
+        
+        label_bitmask.clear();
+        label_bitmask.resize(_bitmask_buf._bitmask_size);
+
+        simple_bitmask_full_val bitmask_full_val;
+        auto bitmask_val = simple_bitmask::get_bitmask_val(x - 1);
+        bitmask_full_val.merge_bitmask_val(bitmask_val);
+        if (_use_universal_label)
+        {
+            auto bitmask_val = simple_bitmask::get_bitmask_val(_universal_label - 1);
+            bitmask_full_val.merge_bitmask_val(bitmask_val);
+        }
 
         std::vector<_u32> labeled_points;
         for (_u32 point_id = 0; point_id < num_points_to_load; point_id++)
         {
-            bool pt_has_lbl = std::find(_pts_to_labels[point_id].begin(), _pts_to_labels[point_id].end(), x) !=
-                              _pts_to_labels[point_id].end();
+            simple_bitmask bm(_bitmask_buf.get_bitmask(point_id), _bitmask_buf._bitmask_size);
+            bool pt_has_lbl = bm.test_full_mask_val(bitmask_full_val);
 
-            bool pt_has_univ_lbl =
-                (_use_universal_label && (std::find(_pts_to_labels[point_id].begin(), _pts_to_labels[point_id].end(),
-                                                    _universal_label) != _pts_to_labels[point_id].end()));
+            //bool pt_has_lbl = std::find(_pts_to_labels[point_id].begin(), _pts_to_labels[point_id].end(), x) !=
+            //                  _pts_to_labels[point_id].end();
 
-            if (pt_has_lbl || pt_has_univ_lbl)
+            //bool pt_has_univ_lbl =
+            //    (_use_universal_label && (std::find(_pts_to_labels[point_id].begin(), _pts_to_labels[point_id].end(),
+            //                                        _universal_label) != _pts_to_labels[point_id].end()));
+
+            if (pt_has_lbl)
             {
                 labeled_points.emplace_back(point_id);
             }

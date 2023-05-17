@@ -159,13 +159,14 @@ inline int delete_file(const std::string &fileName)
 }
 
 inline void convert_labels_string_to_int(const std::string &inFileName, const std::string &outFileName,
-                                         const std::string &mapFileName, const std::string &unv_label)
+                                         const std::string &mapFileName, const std::string &unv_label,
+                                        _u32& unv_label_id)
 {
     std::unordered_map<std::string, _u32> string_int_map;
     std::ofstream label_writer(outFileName);
     std::ifstream label_reader(inFileName);
-    if (unv_label != "")
-        string_int_map[unv_label] = 0;
+    //if (unv_label != "")
+    //    string_int_map[unv_label] = 0;
     std::string line, token;
     while (std::getline(label_reader, line))
     {
@@ -196,6 +197,11 @@ inline void convert_labels_string_to_int(const std::string &inFileName, const st
         }
     }
     label_writer.close();
+
+    if (unv_label != "")
+    {
+        unv_label_id = string_int_map[unv_label];
+    }
 
     std::ofstream map_writer(mapFileName);
     for (auto mp : string_int_map)
