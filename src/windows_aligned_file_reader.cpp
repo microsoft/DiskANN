@@ -81,33 +81,25 @@ void WindowsAlignedFileReader::read(std::vector<AlignedRead> &read_reqs, IOConte
     using namespace std::chrono_literals;
     // execute each request sequentially
     size_t n_reqs = read_reqs.size();
-    uint64_t n_batches = ROUND_UP(n_reqs, MAX_IO_DEPTH) / MAX_IO_DEPTH;
-    for (uint64_t i = 0; i < n_batches; i++)
+    // uint64_t n_batches = ROUND_UP(n_reqs, MAX_IO_DEPTH) / MAX_IO_DEPTH;
+    //  for (uint64_t i = 0; i < n_batches; i++)
     {
         // reset all OVERLAPPED objects
-        for (auto &os : ctx.reqs)
+        if (ctx.reqs.size() < n_reqs)
         {
-            // HANDLE evt = os.hEvent;
-            memset(&os, 0, sizeof(os));
-            // os.hEvent = evt;
-
-            /*
-              if (ResetEvent(os.hEvent) == 0) {
-                diskann::cerr << "ResetEvent failed" << std::endl;
-                exit(-3);
-              }
-            */
+            ctx.reqs.resize(n_reqs);
         }
 
         // batch start/end
-        uint64_t batch_start = MAX_IO_DEPTH * i;
-        uint64_t batch_size = std::min((uint64_t)(n_reqs - batch_start), (uint64_t)MAX_IO_DEPTH);
+        // uint64_t batch_start = MAX_IO_DEPTH * i;
+        // uint64_t batch_size = std::min((uint64_t)(n_reqs - batch_start), (uint64_t)MAX_IO_DEPTH);
 
         // fill OVERLAPPED and issue them
-        for (uint64_t j = 0; j < batch_size; j++)
+        for (uint64_t j = 0; j < n_reqs; j++)
         {
-            AlignedRead &req = read_reqs[batch_start + j];
+            AlignedRead &req = read_reqs[j];
             OVERLAPPED &os = ctx.reqs[j];
+            memset(&os, 0, sizeof(os));
 
             uint64_t offset = req.offset;
             uint64_t nbytes = req.len;
@@ -138,7 +130,7 @@ void WindowsAlignedFileReader::read(std::vector<AlignedRead> &read_reqs, IOConte
         uint64_t n_complete = 0;
         ULONG_PTR completion_key = 0;
         OVERLAPPED *lp_os;
-        while (n_complete < batch_size)
+        while (n_complete < n_reqs)
         {
             if (GetQueuedCompletionStatus(ctx.iocp, &n_read, &completion_key, &lp_os, INFINITE) != 0)
             {
@@ -161,7 +153,7 @@ void WindowsAlignedFileReader::read(std::vector<AlignedRead> &read_reqs, IOConte
                     }
                     // no completion packet dequeued ==> sleep for 5us and try
                     // again
-                    std::this_thread::sleep_for(5us);
+                    std::this_thread::yield();
                 }
                 else
                 {
