@@ -60,5 +60,6 @@ template <typename LabelT> QueryStats &IndexSearchContext<LabelT>::get_stats()
 
 template DISKANN_DLLEXPORT class IndexSearchContext<uint16_t>;
 template DISKANN_DLLEXPORT class IndexSearchContext<uint32_t>;
+template DISKANN_DLLEXPORT class IndexSearchContext<uint64_t>;
 
 } // namespace diskann

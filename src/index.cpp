@@ -843,10 +843,6 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
     bool use_filter, const std::vector<LabelT> &filter_label, bool search_invocation,
     IndexSearchContext<LabelT> *context)
 {
-    if (context != nullptr && context->check_timeout())
-    {
-        return std::make_pair(0, 0);
-    }
     std::vector<Neighbor> &expanded_nodes = scratch->pool();
     NeighborPriorityQueue &best_L_nodes = scratch->best_l_nodes();
     best_L_nodes.reserve(Lsize);
@@ -891,10 +887,6 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
         _pq_table.populate_chunk_distances(query_rotated, pq_dists);
 
         pq_coord_scratch = pq_query_scratch->aligned_pq_coord_scratch;
-        if (context != nullptr && context->check_timeout())
-        {
-            return std::make_pair(0, 0);
-        }
     }
 
     if (expanded_nodes.size() > 0 || id_scratch.size() > 0)
@@ -980,11 +972,6 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
             Neighbor nn = Neighbor(id, distance);
             best_L_nodes.insert(nn);
         }
-    }
-
-    if (context != nullptr && context->check_timeout())
-    {
-        return std::make_pair(0, 0);
     }
 
     uint32_t hops = 0;
@@ -2107,10 +2094,6 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
                                                                           float *distances,
                                                                           IndexSearchContext<LabelT> &context)
 {
-    if (context.check_timeout())
-    {
-        return std::make_pair(0, 0);
-    }
     if (K > (uint64_t)L)
     {
         throw ANNException("Set L to a value of at least K", -1, __FUNCSIG__, __FILE__, __LINE__);
