@@ -837,6 +837,7 @@ template <typename T, typename TagT, typename LabelT> std::vector<uint32_t> Inde
     return init_ids;
 }
 
+//Find common filter between 2 nodes
 template <typename T, typename TagT, typename LabelT>
 size_t Index<T, TagT, LabelT>::find_common_filters(uint32_t point_id, bool search_invocation,
                                                    const std::vector<LabelT> &incoming_labels)
