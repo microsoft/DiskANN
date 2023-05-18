@@ -7,9 +7,9 @@
 namespace diskann
 {
 
-size_t MemoryManager::get_memory_used() const
+size_t MemoryManager::get_memory_used_in_bytes() const
 {
-    return _memory_used;
+    return _memory_used_in_bytes;
 }
 
 void MemoryManager::alloc_aligned(void **ptr, size_t size, size_t align)
@@ -61,7 +61,7 @@ void MemoryManager::aligned_free(void *ptr)
 
 template <typename T> Allocator<T> MemoryManager::create_allocator()
 {
-    return Allocator<T>(&_memory_used);
+    return Allocator<T>(&_memory_used_in_bytes);
 }
 
 template Allocator<uint32_t> MemoryManager::create_allocator();

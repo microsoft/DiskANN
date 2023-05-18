@@ -5,6 +5,8 @@
 #include <atomic>
 #include <memory>
 #include <vector>
+#include <unordered_map>
+#include "tsl/robin_set.h"
 
 namespace diskann
 {
@@ -27,38 +29,38 @@ template <class _Ty> class Allocator : public std::allocator<_Ty>
 
     constexpr Allocator(std::atomic<size_t> *memory_used) noexcept
     {
-        _memory_used = memory_used;
+        _memory_used_in_bytes = memory_used;
     }
 
     constexpr Allocator() noexcept
     {
-        _memory_used = nullptr;
+        _memory_used_in_bytes = nullptr;
     }
 
     constexpr Allocator(const Allocator &a) noexcept
     {
-        _memory_used = a._memory_used;
+        _memory_used_in_bytes = a._memory_used_in_bytes;
     }
 
     template <class _Other> constexpr Allocator(const Allocator<_Other> &a) noexcept
     {
-        _memory_used = a._memory_used;
+        _memory_used_in_bytes = a._memory_used_in_bytes;
     }
 
     _CONSTEXPR20 Allocator &operator=(const Allocator &a)
     {
-        _memory_used = a._memory_used;
+        _memory_used_in_bytes = a._memory_used_in_bytes;
     }
 
     _CONSTEXPR20 void deallocate(_Ty *const _Ptr, const size_t _Count)
     {
         Base::deallocate(_Ptr, _Count);
         #ifdef FORCE_TO_TRACK_MEMORY_IN_ALLOCATOR
-        _STL_ASSERT(_memory_used != nullptr, "_memory_used should not be nullptr");
+        _STL_ASSERT(_memory_used_in_bytes != nullptr, "_memory_used_in_bytes should not be nullptr");
         #endif
-        if (_memory_used != nullptr)
+        if (_memory_used_in_bytes != nullptr)
         {
-            *_memory_used -= _Count * sizeof(_Ty);
+            *_memory_used_in_bytes -= _Count * sizeof(_Ty);
         }
     }
 
@@ -66,11 +68,11 @@ template <class _Ty> class Allocator : public std::allocator<_Ty>
     {
         auto ret = Base::allocate(_Count);
 #ifdef FORCE_TO_TRACK_MEMORY_IN_ALLOCATOR
-        _STL_ASSERT(_memory_used != nullptr, "_memory_used should not be nullptr");
+        _STL_ASSERT(_memory_used_in_bytes != nullptr, "_memory_used_in_bytes should not be nullptr");
 #endif
-        if (_memory_used != nullptr)
+        if (_memory_used_in_bytes != nullptr)
         {
-            *_memory_used += _Count * sizeof(_Ty);
+            *_memory_used_in_bytes += _Count * sizeof(_Ty);
         }
         return ret;
     }
@@ -92,23 +94,29 @@ template <class _Ty> class Allocator : public std::allocator<_Ty>
 
 #endif // _HAS_DEPRECATED_ALLOCATOR_MEMBERS
 
-    std::atomic<size_t>* _memory_used;
+    std::atomic<size_t> *_memory_used_in_bytes;
 };
 
-template <class T>
-using vector = std::vector<T, Allocator<T>>;
+template <class _Ty, class _Alloc = Allocator<_Ty>>
+using vector = std::vector<_Ty, _Alloc>;
 
-//template <class T>
-//using robin_set = std::vector<T, Allocator<T>>;
+template <class Key, class Hash = std::hash<Key>, class KeyEqual = std::equal_to<Key>,
+          class Allocator = Allocator<Key>, bool StoreHash = false,
+          class GrowthPolicy = tsl::rh::power_of_two_growth_policy<2>>
+using robin_set = tsl::robin_set<Key, Hash, KeyEqual, Allocator, StoreHash, GrowthPolicy>;
+
+template <class _Kty, class _Ty, class _Hasher = std::hash<_Kty>, class _Keyeq = std::equal_to<_Kty>,
+          class _Alloc = Allocator<std::pair<const _Kty, _Ty>>>
+using unordered_map = std::unordered_map<_Kty, _Ty, _Hasher, _Keyeq, _Alloc>;
 
 class MemoryManager
 {
   public:
-    MemoryManager() : _memory_used(0)
+    MemoryManager() : _memory_used_in_bytes(0)
     {
     }
 
-    size_t get_memory_used() const;
+    size_t get_memory_used_in_bytes() const;
     void alloc_aligned(void **ptr, size_t size, size_t align);
 
     void realloc_aligned(void **ptr, size_t size, size_t align);
@@ -119,7 +127,7 @@ class MemoryManager
 
 
   private:
-    std::atomic<size_t> _memory_used;
+    std::atomic<size_t> _memory_used_in_bytes;
 };
 
 } // namespace diskann

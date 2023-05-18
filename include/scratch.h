@@ -5,6 +5,7 @@
 
 #include <vector>
 
+#include "allocator.h"
 #include "boost_dynamic_bitset_fwd.h"
 //#include "boost/dynamic_bitset.hpp"
 #include "tsl/robin_set.h"
@@ -36,7 +37,7 @@ template <typename T> class InMemQueryScratch
   public:
     ~InMemQueryScratch();
     // REFACTOR TODO: move all parameters to a new class.
-    InMemQueryScratch(uint32_t search_l, uint32_t indexing_l, uint32_t r, uint32_t maxc, size_t dim, size_t aligned_dim,
+    InMemQueryScratch(MemoryManager& memoryManager, uint32_t search_l, uint32_t indexing_l, uint32_t r, uint32_t maxc, size_t dim, size_t aligned_dim,
                       size_t alignment_factor, bool init_pq_scratch = false);
     void resize_for_new_L(uint32_t new_search_l);
     void clear();
@@ -97,7 +98,7 @@ template <typename T> class InMemQueryScratch
     {
         return _expanded_nghrs_vec;
     }
-    inline std::vector<uint32_t> &occlude_list_output()
+    inline diskann::vector<uint32_t> &occlude_list_output()
     {
         return _occlude_list_output;
     }
@@ -143,7 +144,7 @@ template <typename T> class InMemQueryScratch
     //  Buffers used in process delete, capacity increases as needed
     tsl::robin_set<uint32_t> _expanded_nodes_set;
     std::vector<Neighbor> _expanded_nghrs_vec;
-    std::vector<uint32_t> _occlude_list_output;
+    diskann::vector<uint32_t> _occlude_list_output;
 };
 
 //

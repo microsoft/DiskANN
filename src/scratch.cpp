@@ -12,9 +12,9 @@ namespace diskann
 // Functions to manage scratch space for in-memory index based search
 //
 template <typename T>
-InMemQueryScratch<T>::InMemQueryScratch(uint32_t search_l, uint32_t indexing_l, uint32_t r, uint32_t maxc, size_t dim,
+InMemQueryScratch<T>::InMemQueryScratch(MemoryManager& memory_manager, uint32_t search_l, uint32_t indexing_l, uint32_t r, uint32_t maxc, size_t dim,
                                         size_t aligned_dim, size_t alignment_factor, bool init_pq_scratch)
-    : _L(0), _R(r), _maxc(maxc)
+    : _L(0), _R(r), _maxc(maxc), _occlude_list_output(memory_manager.create_allocator<uint32_t>())
 {
     if (search_l == 0 || indexing_l == 0 || r == 0 || dim == 0)
     {
