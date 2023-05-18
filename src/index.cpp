@@ -960,20 +960,6 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
         diskann::pq_dist_lookup(pq_coord_scratch, ids.size(), this->_num_pq_chunks, pq_dists, dists_out);
     };
 
-    // check if input labels contain universal label
-    //bool input_contain_universal_label = false;
-    //if (_use_universal_label)
-    //{
-    //    for (size_t i = 0; i < filter_label.size(); i++)
-    //    {
-    //        if (filter_label[i] == _universal_label)
-    //        {
-    //            input_contain_universal_label = true;
-    //            break;
-    //        }
-    //    }
-    //}
-
     // only support one filter label
     std::array<std::uint64_t, 10> local_buf;
     simple_bitmask_full_val bitmask_full_val;
@@ -1013,7 +999,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                                         __LINE__);
         }
 
-        if (use_filter /*&& !input_contain_universal_label*/)
+        if (use_filter)
         {
             simple_bitmask bm(_bitmask_buf.get_bitmask(id), _bitmask_buf._bitmask_size);
             
@@ -1086,7 +1072,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                     continue;
                 }
                 cmps++;
-                if (use_filter /*&& !input_contain_universal_label*/)
+                if (use_filter)
                 {
                     // NOTE: NEED TO CHECK IF THIS CORRECT WITH NEW LOCKS.
                     simple_bitmask bm(_bitmask_buf.get_bitmask(id), _bitmask_buf._bitmask_size);
@@ -1259,16 +1245,6 @@ void Index<T, TagT, LabelT>::occlude_list(const unsigned location, std::vector<N
                     simple_bitmask bm2(_bitmask_buf.get_bitmask(b), _bitmask_buf._bitmask_size);
 
                     prune_allowed = bm1.test_full_mask_contain(bm2);
-
-  /*                  for (auto &x : _pts_to_labels[b])
-                    {
-                        if (std::find(_pts_to_labels[a].begin(), _pts_to_labels[a].end(), x) == _pts_to_labels[a].end())
-                        {
-                            prune_allowed = false;
-                        }
-                        if (!prune_allowed)
-                            break;
-                    }*/
                 }
                 if (!prune_allowed)
                     continue;
@@ -2080,13 +2056,6 @@ void Index<T, TagT, LabelT>::build_filtered_index(const char *filename, const st
         {
             simple_bitmask bm(_bitmask_buf.get_bitmask(point_id), _bitmask_buf._bitmask_size);
             bool pt_has_lbl = bm.test_full_mask_val(bitmask_full_val);
-
-            //bool pt_has_lbl = std::find(_pts_to_labels[point_id].begin(), _pts_to_labels[point_id].end(), x) !=
-            //                  _pts_to_labels[point_id].end();
-
-            //bool pt_has_univ_lbl =
-            //    (_use_universal_label && (std::find(_pts_to_labels[point_id].begin(), _pts_to_labels[point_id].end(),
-            //                                        _universal_label) != _pts_to_labels[point_id].end()));
 
             if (pt_has_lbl)
             {
