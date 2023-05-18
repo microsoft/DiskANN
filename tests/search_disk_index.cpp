@@ -8,6 +8,7 @@
 #include "disk_utils.h"
 #include "math_utils.h"
 #include "memory_mapper.h"
+#include "memory_manager.h"
 #include "partition.h"
 #include "pq_flash_index.h"
 #include "timer.h"
@@ -66,12 +67,13 @@ int search_disk_index(diskann::Metric &metric, const std::string &index_path_pre
 
     std::string warmup_query_file = index_path_prefix + "_sample_data.bin";
 
+    diskann::MemoryManager memory_manager;
     // load query bin
     T *query = nullptr;
     uint32_t *gt_ids = nullptr;
     float *gt_dists = nullptr;
     size_t query_num, query_dim, query_aligned_dim, gt_num, gt_dim;
-    diskann::load_aligned_bin<T>(query_file, query, query_num, query_dim, query_aligned_dim);
+    diskann::load_aligned_bin<T>(memory_manager, query_file, query, query_num, query_dim, query_aligned_dim);
 
     bool filtered_search = false;
     if (!query_filters.empty())
@@ -138,14 +140,14 @@ int search_disk_index(diskann::Metric &metric, const std::string &index_path_pre
     {
         if (file_exists(warmup_query_file))
         {
-            diskann::load_aligned_bin<T>(warmup_query_file, warmup, warmup_num, warmup_dim, warmup_aligned_dim);
+            diskann::load_aligned_bin<T>(memory_manager, warmup_query_file, warmup, warmup_num, warmup_dim, warmup_aligned_dim);
         }
         else
         {
             warmup_num = (std::min)((uint32_t)150000, (uint32_t)15000 * num_threads);
             warmup_dim = query_dim;
             warmup_aligned_dim = query_aligned_dim;
-            diskann::alloc_aligned(((void **)&warmup), warmup_num * warmup_aligned_dim * sizeof(T), 8 * sizeof(T));
+            memory_manager.alloc_aligned(((void **)&warmup), warmup_num * warmup_aligned_dim * sizeof(T), 8 * sizeof(T));
             std::memset(warmup, 0, warmup_num * warmup_aligned_dim * sizeof(T));
             std::random_device rd;
             std::mt19937 gen(rd());
@@ -303,9 +305,9 @@ int search_disk_index(diskann::Metric &metric, const std::string &index_path_pre
         diskann::save_bin<float>(cur_result_path, query_result_dists[test_id++].data(), query_num, recall_at);
     }
 
-    diskann::aligned_free(query);
+    memory_manager.aligned_free(query);
     if (warmup != nullptr)
-        diskann::aligned_free(warmup);
+        memory_manager.aligned_free(warmup);
     return best_recall >= fail_if_recall_below ? 0 : -1;
 }
 

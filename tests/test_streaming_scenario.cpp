@@ -190,7 +190,7 @@ void build_incremental_index(const std::string &data_path, const uint32_t L, con
 
     size_t dim, aligned_dim;
     size_t num_points;
-
+    diskann::MemoryManager memory_manager;
     diskann::get_bin_metadata(data_path, num_points, dim);
     diskann::cout << "metadata: file " << data_path << " has " << num_points << " points in " << dim << " dims"
                   << std::endl;
@@ -224,7 +224,7 @@ void build_incremental_index(const std::string &data_path, const uint32_t L, con
     index.enable_delete();
 
     T *data = nullptr;
-    diskann::alloc_aligned((void **)&data, std::max(consolidate_interval, active_window) * aligned_dim * sizeof(T),
+    memory_manager.alloc_aligned((void **)&data, std::max(consolidate_interval, active_window) * aligned_dim * sizeof(T),
                            8 * sizeof(T));
 
     std::vector<TagT> tags(max_points_to_insert);
@@ -269,7 +269,7 @@ void build_incremental_index(const std::string &data_path, const uint32_t L, con
         get_save_filename(save_path + ".after-streaming-", active_window, consolidate_interval, max_points_to_insert);
     index.save(save_path_inc.c_str(), true);
 
-    diskann::aligned_free(data);
+    memory_manager.aligned_free(data);
 }
 
 int main(int argc, char **argv)

@@ -10,12 +10,12 @@ namespace diskann
 {
 
 template <typename data_t>
-InMemDataStore<data_t>::InMemDataStore(const location_t num_points, const size_t dim,
+InMemDataStore<data_t>::InMemDataStore(MemoryManager& memory_manager, const location_t num_points, const size_t dim,
                                        std::shared_ptr<Distance<data_t>> distance_fn)
-    : AbstractDataStore<data_t>(num_points, dim), _distance_fn(distance_fn)
+    : _memory_manager(memory_manager), AbstractDataStore<data_t>(num_points, dim), _distance_fn(distance_fn)
 {
     _aligned_dim = ROUND_UP(dim, _distance_fn->get_required_alignment());
-    alloc_aligned(((void **)&_data), this->_capacity * _aligned_dim * sizeof(data_t), 8 * sizeof(data_t));
+    _memory_manager.alloc_aligned(((void **)&_data), this->_capacity * _aligned_dim * sizeof(data_t), 8 * sizeof(data_t));
     std::memset(_data, 0, this->_capacity * _aligned_dim * sizeof(data_t));
 }
 
@@ -23,7 +23,7 @@ template <typename data_t> InMemDataStore<data_t>::~InMemDataStore()
 {
     if (_data != nullptr)
     {
-        aligned_free(this->_data);
+        _memory_manager.aligned_free(this->_data);
     }
 }
 
@@ -55,7 +55,7 @@ template <typename data_t> location_t Index<data_t>::load_impl(AlignedFileReader
         stream << "ERROR: Driver requests loading " << _dim << " dimension,"
                << "but file has " << file_dim << " dimension." << std::endl;
         diskann::cerr << stream.str() << std::endl;
-        aligned_free(_data);
+        _memory_manager.aligned_free(_data);
         throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
     }
 
@@ -76,7 +76,7 @@ template <typename data_t> location_t InMemDataStore<data_t>::load_impl(const st
         std::stringstream stream;
         stream << "ERROR: data file " << filename << " does not exist." << std::endl;
         diskann::cerr << stream.str() << std::endl;
-        aligned_free(_data);
+        _memory_manager.aligned_free(_data);
         throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
     }
     diskann::get_bin_metadata(filename, file_num_points, file_dim);
@@ -87,7 +87,7 @@ template <typename data_t> location_t InMemDataStore<data_t>::load_impl(const st
         stream << "ERROR: Driver requests loading " << this->_dim << " dimension,"
                << "but file has " << file_dim << " dimension." << std::endl;
         diskann::cerr << stream.str() << std::endl;
-        aligned_free(_data);
+        _memory_manager.aligned_free(_data);
         throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
     }
 
@@ -212,12 +212,12 @@ template <typename data_t> location_t InMemDataStore<data_t>::expand(const locat
     }
 #ifndef _WINDOWS
     data_t *new_data;
-    alloc_aligned((void **)&new_data, new_size * _aligned_dim * sizeof(data_t), 8 * sizeof(data_t));
+    _memory_manager.alloc_aligned((void **)&new_data, new_size * _aligned_dim * sizeof(data_t), 8 * sizeof(data_t));
     memcpy(new_data, _data, this->capacity() * _aligned_dim * sizeof(data_t));
-    aligned_free(_data);
+    _memory_manager.aligned_free(_data);
     _data = new_data;
 #else
-    realloc_aligned((void **)&_data, new_size * _aligned_dim * sizeof(data_t), 8 * sizeof(data_t));
+    _memory_manager.realloc_aligned((void **)&_data, new_size * _aligned_dim * sizeof(data_t), 8 * sizeof(data_t));
 #endif
     this->_capacity = new_size;
     return this->_capacity;
@@ -238,12 +238,12 @@ template <typename data_t> location_t InMemDataStore<data_t>::shrink(const locat
     }
 #ifndef _WINDOWS
     data_t *new_data;
-    alloc_aligned((void **)&new_data, new_size * _aligned_dim * sizeof(data_t), 8 * sizeof(data_t));
+    _memory_manager.alloc_aligned((void **)&new_data, new_size * _aligned_dim * sizeof(data_t), 8 * sizeof(data_t));
     memcpy(new_data, _data, new_size * _aligned_dim * sizeof(data_t));
-    aligned_free(_data);
+    _memory_manager.aligned_free(_data);
     _data = new_data;
 #else
-    realloc_aligned((void **)&_data, new_size * _aligned_dim * sizeof(data_t), 8 * sizeof(data_t));
+    _memory_manager.realloc_aligned((void **)&_data, new_size * _aligned_dim * sizeof(data_t), 8 * sizeof(data_t));
 #endif
     this->_capacity = new_size;
     return this->_capacity;

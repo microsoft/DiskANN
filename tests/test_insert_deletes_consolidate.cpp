@@ -19,6 +19,7 @@
 #endif
 
 #include "memory_mapper.h"
+#include "memory_manager.h"
 
 namespace po = boost::program_options;
 
@@ -151,6 +152,7 @@ void build_incremental_index(const std::string &data_path, const uint32_t L, con
 
     size_t dim, aligned_dim;
     size_t num_points;
+    diskann::MemoryManager memory_manager;
 
     diskann::get_bin_metadata(data_path, num_points, dim);
     aligned_dim = ROUND_UP(dim, 8);
@@ -194,7 +196,7 @@ void build_incremental_index(const std::string &data_path, const uint32_t L, con
     }
 
     T *data = nullptr;
-    diskann::alloc_aligned(
+    memory_manager.alloc_aligned(
         (void **)&data, std::max(points_per_checkpoint, beginning_index_size) * aligned_dim * sizeof(T), 8 * sizeof(T));
 
     std::vector<TagT> tags(beginning_index_size);
@@ -317,7 +319,7 @@ void build_incremental_index(const std::string &data_path, const uint32_t L, con
         index.save(save_path_inc.c_str(), true);
     }
 
-    diskann::aligned_free(data);
+    memory_manager.aligned_free(data);
 }
 
 int main(int argc, char **argv)

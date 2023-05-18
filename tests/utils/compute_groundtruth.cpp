@@ -335,7 +335,7 @@ inline void save_groundtruth_as_one_file(const std::string filename, int32_t *da
 }
 
 template <typename T>
-std::vector<std::vector<std::pair<uint32_t, float>>> processUnfilteredParts(const std::string &base_file,
+std::vector<std::vector<std::pair<uint32_t, float>>> processUnfilteredParts(diskann::MemoryManager& memory_manager, const std::string &base_file,
                                                                             size_t &nqueries, size_t &npoints,
                                                                             size_t &dim, size_t &k, float *query_data,
                                                                             const diskann::Metric &metric,
@@ -372,7 +372,7 @@ std::vector<std::vector<std::pair<uint32_t, float>>> processUnfilteredParts(cons
         delete[] closest_points_part;
         delete[] dist_closest_points_part;
 
-        diskann::aligned_free(base_data);
+        memory_manager.aligned_free(base_data);
     }
     return res;
 };
@@ -394,11 +394,12 @@ int aux_main(const std::string &base_file, const std::string &query_file, const 
     const bool tags_enabled = tags_file.empty() ? false : true;
     std::vector<uint32_t> location_to_tag = diskann::loadTags(tags_file, base_file);
 
+    diskann::MemoryManager memory_manager;
     int *closest_points = new int[nqueries * k];
     float *dist_closest_points = new float[nqueries * k];
 
     std::vector<std::vector<std::pair<uint32_t, float>>> results =
-        processUnfilteredParts<T>(base_file, nqueries, npoints, dim, k, query_data, metric, location_to_tag);
+        processUnfilteredParts<T>(memory_manager, base_file, nqueries, npoints, dim, k, query_data, metric, location_to_tag);
 
     for (size_t i = 0; i < nqueries; i++)
     {
@@ -433,7 +434,7 @@ int aux_main(const std::string &base_file, const std::string &query_file, const 
     save_groundtruth_as_one_file(gt_file, closest_points, dist_closest_points, nqueries, k);
     delete[] closest_points;
     delete[] dist_closest_points;
-    diskann::aligned_free(query_data);
+    memory_manager.aligned_free(query_data);
 
     return 0;
 }

@@ -10,6 +10,7 @@
 // #include "boost/dynamic_bitset.hpp"
 
 #include "abstract_data_store.h"
+#include "memory_manager.h"
 
 #include "distance.h"
 #include "natural_number_map.h"
@@ -20,7 +21,8 @@ namespace diskann
 template <typename data_t> class InMemDataStore : public AbstractDataStore<data_t>
 {
   public:
-    InMemDataStore(const location_t capacity, const size_t dim, std::shared_ptr<Distance<data_t>> distance_fn);
+    InMemDataStore(MemoryManager &memory_manager, const location_t capacity, const size_t dim,
+                   std::shared_ptr<Distance<data_t>> distance_fn);
     virtual ~InMemDataStore();
 
     virtual location_t load(const std::string &filename) override;
@@ -64,6 +66,7 @@ template <typename data_t> class InMemDataStore : public AbstractDataStore<data_
 #endif
 
   private:
+    MemoryManager& _memory_manager;
     data_t *_data = nullptr;
 
     size_t _aligned_dim;

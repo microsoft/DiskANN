@@ -41,7 +41,7 @@ namespace diskann
 
 template <typename T, typename LabelT>
 PQFlashIndex<T, LabelT>::PQFlashIndex(std::shared_ptr<AlignedFileReader> &fileReader, diskann::Metric m)
-    : reader(fileReader), metric(m), memory_in_bytes(0)
+    : reader(fileReader), metric(m)
 {
     if (m == diskann::Metric::COSINE || m == diskann::Metric::INNER_PRODUCT)
     {
@@ -74,12 +74,12 @@ template <typename T, typename LabelT> PQFlashIndex<T, LabelT>::~PQFlashIndex()
 #endif
 
     if (centroid_data != nullptr)
-        aligned_free(centroid_data);
+        _memory_manager.aligned_free(centroid_data);
     // delete backing bufs for nhood and coord cache
     if (nhood_cache_buf != nullptr)
     {
         delete[] nhood_cache_buf;
-        diskann::aligned_free(coord_cache_buf);
+        _memory_manager.aligned_free(coord_cache_buf);
     }
 
     if (load_flag)
@@ -111,7 +111,7 @@ void PQFlashIndex<T, LabelT>::setup_thread_data(uint64_t nthreads, uint64_t visi
     {
 #pragma omp critical
         {
-            SSDThreadData<T> *data = new SSDThreadData<T>(this->aligned_dim, visited_reserve);
+            SSDThreadData<T> *data = new SSDThreadData<T>(_memory_manager, this->aligned_dim, visited_reserve);
             this->reader->register_thread();
             data->ctx = this->reader->get_ctx();
             this->thread_data.push(data);
@@ -133,11 +133,9 @@ template <typename T, typename LabelT> void PQFlashIndex<T, LabelT>::load_cache_
     auto nhood_cache_buf_size = num_cached_nodes * (max_degree + 1);
     nhood_cache_buf = new uint32_t[nhood_cache_buf_size];
     memset(nhood_cache_buf, 0, nhood_cache_buf_size);
-    memory_in_bytes += sizeof(uint32_t) * nhood_cache_buf_size;
 
     size_t coord_cache_buf_len = num_cached_nodes * aligned_dim;
-    memory_in_bytes +=
-        diskann::alloc_aligned((void **)&coord_cache_buf, coord_cache_buf_len * sizeof(T), 8 * sizeof(T));
+        _memory_manager.alloc_aligned((void **)&coord_cache_buf, coord_cache_buf_len * sizeof(T), 8 * sizeof(T));
     memset(coord_cache_buf, 0, coord_cache_buf_len * sizeof(T));
 
     size_t BLOCK_SIZE = 8;
@@ -153,7 +151,7 @@ template <typename T, typename LabelT> void PQFlashIndex<T, LabelT>::load_cache_
         {
             AlignedRead read;
             char *buf = nullptr;
-            alloc_aligned((void **)&buf, SECTOR_LEN, SECTOR_LEN);
+            _memory_manager.alloc_aligned((void **)&buf, SECTOR_LEN, SECTOR_LEN);
             nhoods.push_back(std::make_pair(node_list[node_idx], buf));
             read.len = SECTOR_LEN;
             read.buf = buf;
@@ -179,7 +177,6 @@ template <typename T, typename LabelT> void PQFlashIndex<T, LabelT>::load_cache_
             T *cached_coords = coord_cache_buf + node_idx * aligned_dim;
             memcpy(cached_coords, node_coords, disk_bytes_per_point);
             coord_cache.insert(std::make_pair(nhood.first, cached_coords));
-            memory_in_bytes += disk_bytes_per_point;
 
             // insert node nhood into nhood_cache
             uint32_t *node_nhood = OFFSET_TO_NODE_NHOOD(node_buf);
@@ -191,8 +188,7 @@ template <typename T, typename LabelT> void PQFlashIndex<T, LabelT>::load_cache_
             cnhood.second = nhood_cache_buf + node_idx * (max_degree + 1);
             memcpy(cnhood.second, nbrs, nnbrs * sizeof(uint32_t));
             nhood_cache.insert(std::make_pair(nhood.first, cnhood));
-            memory_in_bytes += nnbrs * sizeof(uint32_t);
-            aligned_free(nhood.second);
+            _memory_manager.aligned_free(nhood.second);
             node_idx++;
         }
     }
@@ -234,7 +230,7 @@ void PQFlashIndex<T, LabelT>::generate_cache_list_from_sample_queries(std::strin
 #else
     if (file_exists(sample_bin))
     {
-        diskann::load_aligned_bin<T>(sample_bin, samples, sample_num, sample_dim, sample_aligned_dim);
+        diskann::load_aligned_bin<T>(_memory_manager, sample_bin, samples, sample_num, sample_dim, sample_aligned_dim);
     }
 #endif
     else
@@ -266,7 +262,7 @@ void PQFlashIndex<T, LabelT>::generate_cache_list_from_sample_queries(std::strin
     }
     this->count_visited_nodes = false;
 
-    diskann::aligned_free(samples);
+    _memory_manager.aligned_free(samples);
 }
 
 template <typename T, typename LabelT>
@@ -343,7 +339,7 @@ void PQFlashIndex<T, LabelT>::cache_bfs_levels(uint64_t num_nodes_to_cache, std:
             for (size_t cur_pt = start; cur_pt < end; cur_pt++)
             {
                 char *buf = nullptr;
-                alloc_aligned((void **)&buf, SECTOR_LEN, SECTOR_LEN);
+                _memory_manager.alloc_aligned((void **)&buf, SECTOR_LEN, SECTOR_LEN);
                 nhoods.emplace_back(nodes_to_expand[cur_pt], buf);
                 AlignedRead read;
                 read.len = SECTOR_LEN;
@@ -384,7 +380,7 @@ void PQFlashIndex<T, LabelT>::cache_bfs_levels(uint64_t num_nodes_to_cache, std:
                         finish_flag = true;
                     }
                 }
-                aligned_free(nhood.second);
+                _memory_manager.aligned_free(nhood.second);
             }
         }
 
@@ -412,8 +408,8 @@ void PQFlashIndex<T, LabelT>::cache_bfs_levels(uint64_t num_nodes_to_cache, std:
 template <typename T, typename LabelT> void PQFlashIndex<T, LabelT>::use_medoids_data_as_centroids()
 {
     if (centroid_data != nullptr)
-        aligned_free(centroid_data);
-    memory_in_bytes += alloc_aligned(((void **)&centroid_data), num_medoids * aligned_dim * sizeof(float), 32);
+        _memory_manager.aligned_free(centroid_data);
+    _memory_manager.alloc_aligned(((void **)&centroid_data), num_medoids * aligned_dim * sizeof(float), 32);
     std::memset(centroid_data, 0, num_medoids * aligned_dim * sizeof(float));
 
     // borrow ctx
@@ -426,7 +422,7 @@ template <typename T, typename LabelT> void PQFlashIndex<T, LabelT>::use_medoids
         auto medoid = medoids[cur_m];
         // read medoid nhood
         char *medoid_buf = nullptr;
-        alloc_aligned((void **)&medoid_buf, SECTOR_LEN, SECTOR_LEN);
+        _memory_manager.alloc_aligned((void **)&medoid_buf, SECTOR_LEN, SECTOR_LEN);
         std::vector<AlignedRead> medoid_read(1);
         medoid_read[0].len = SECTOR_LEN;
         medoid_read[0].buf = medoid_buf;
@@ -451,7 +447,7 @@ template <typename T, typename LabelT> void PQFlashIndex<T, LabelT>::use_medoids
             disk_pq_table.inflate_vector((uint8_t *)medoid_coords, (centroid_data + cur_m * aligned_dim));
         }
 
-        aligned_free(medoid_buf);
+        _memory_manager.aligned_free(medoid_buf);
         delete[] medoid_coords;
     }
 }
@@ -699,7 +695,6 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
 
     this->num_points = npts_u64;
     this->n_chunks = nchunks_u64;
-    memory_in_bytes += npts_u64 * nchunks_u64;
     if (file_exists(labels_file))
     {
         parse_label_file(labels_file, num_pts_in_label_file);
@@ -782,9 +777,9 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
     }
 
 #ifdef EXEC_ENV_OLS
-    memory_in_bytes += pq_table.load_pq_centroid_bin(files, pq_table_bin.c_str(), nchunks_u64);
+    pq_table.load_pq_centroid_bin(files, pq_table_bin.c_str(), nchunks_u64);
 #else
-    memory_in_bytes += pq_table.load_pq_centroid_bin(pq_table_bin.c_str(), nchunks_u64);
+    pq_table.load_pq_centroid_bin(pq_table_bin.c_str(), nchunks_u64);
 #endif
     diskann::cout << "Loaded PQ centroids and in-memory compressed vectors. #points: " << num_points
                   << " #dim: " << data_dim << " #aligned_dim: " << aligned_dim << " #chunks: " << n_chunks << std::endl;
@@ -954,9 +949,8 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
             diskann::load_aligned_bin<float>(files, centroids_file, centroid_data, num_centroids, tmp_dim,
                                              aligned_tmp_dim);
 #else
-            diskann::load_aligned_bin<float>(centroids_file, centroid_data, num_centroids, tmp_dim, aligned_tmp_dim);
+            diskann::load_aligned_bin<float>(_memory_manager, centroids_file, centroid_data, num_centroids, tmp_dim, aligned_tmp_dim);
 #endif
-            memory_in_bytes += sizeof(float) * num_centroids * aligned_tmp_dim;
             if (aligned_tmp_dim != aligned_dim || num_centroids != num_medoids)
             {
                 std::stringstream stream;
@@ -1542,9 +1536,9 @@ template <typename T, typename LabelT> diskann::Metric PQFlashIndex<T, LabelT>::
     return this->metric;
 }
 
-template <typename T, typename LabelT> uint64_t PQFlashIndex<T, LabelT>::get_memory_in_bytes()
+template <typename T, typename LabelT> uint64_t PQFlashIndex<T, LabelT>::get_memory_used_in_bytes()
 {
-    return this->memory_in_bytes;
+    return this->_memory_manager.get_memory_used_in_bytes();
 }
 
 #ifdef EXEC_ENV_OLS

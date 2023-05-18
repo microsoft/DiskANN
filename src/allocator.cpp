@@ -6,66 +6,35 @@
 
 namespace diskann
 {
-
-size_t MemoryManager::get_memory_used_in_bytes() const
+template <class _Ty> _CONSTEXPR20 void Allocator<_Ty>::deallocate(_Ty *const _Ptr, const size_t _Count)
 {
-    return _memory_used_in_bytes;
-}
-
-void MemoryManager::alloc_aligned(void **ptr, size_t size, size_t align)
-{
-    *ptr = nullptr;
-    if (IS_ALIGNED(size, align) == 0)
-        report_misalignment_of_requested_size(align);
-#ifndef _WINDOWS
-    *ptr = ::aligned_alloc(align, size);
-#else
-    *ptr = ::_aligned_malloc(size, align); // note the swapped arguments!
+    Base::deallocate(_Ptr, _Count);
+#ifdef FORCE_TO_TRACK_MEMORY_IN_ALLOCATOR
+    _STL_ASSERT(_memory_used_in_bytes != nullptr, "_memory_used_in_bytes should not be nullptr");
 #endif
-    if (*ptr == nullptr)
+    if (_memory_used_in_bytes != nullptr)
     {
-        report_memory_allocation_failure();
-        return;
+        *_memory_used_in_bytes -= _Count * sizeof(_Ty);
     }
 }
 
-void MemoryManager::realloc_aligned(void **ptr, size_t size, size_t align)
+template <class _Ty>
+_NODISCARD_RAW_PTR_ALLOC _CONSTEXPR20 __declspec(allocator) _Ty *Allocator<_Ty>::allocate(
+    _CRT_GUARDOVERFLOW const size_t _Count)
 {
-    if (IS_ALIGNED(size, align) == 0)
-        report_misalignment_of_requested_size(align);
-#ifdef _WINDOWS
-    *ptr = ::_aligned_realloc(*ptr, size, align);
-#else
-    diskann::cerr << "No aligned realloc on GCC. Must malloc and mem_align, "
-                     "left it out for now."
-                  << std::endl;
+    auto ret = Base::allocate(_Count);
+#ifdef FORCE_TO_TRACK_MEMORY_IN_ALLOCATOR
+    _STL_ASSERT(_memory_used_in_bytes != nullptr, "_memory_used_in_bytes should not be nullptr");
 #endif
-    if (*ptr == nullptr)
-        report_memory_allocation_failure();
-}
-
-void MemoryManager::aligned_free(void *ptr)
-{
-    // Gopal. Must have a check here if the pointer was actually allocated by
-    // _alloc_aligned
-    if (ptr == nullptr)
+    if (_memory_used_in_bytes != nullptr)
     {
-        return;
+        *_memory_used_in_bytes += _Count * sizeof(_Ty);
     }
-#ifndef _WINDOWS
-    free(ptr);
-#else
-    ::_aligned_free(ptr);
-#endif
+    return ret;
 }
 
-template <typename T> Allocator<T> MemoryManager::create_allocator()
-{
-    return Allocator<T>(&_memory_used_in_bytes);
-}
-
-template Allocator<uint32_t> MemoryManager::create_allocator();
-template Allocator<int> MemoryManager::create_allocator();
-template Allocator<diskann::vector<uint32_t>> MemoryManager::create_allocator();
+template class Allocator<uint32_t>;
+template class Allocator<diskann::vector<uint32_t>>;
+template class Allocator<std::_Container_proxy>;
 
 } // namespace diskann

@@ -132,13 +132,13 @@ size_t calculate_num_pq_chunks(double final_index_ram_limit, size_t points_num, 
     return num_pq_chunks;
 }
 
-template <typename T> T *generateRandomWarmup(uint64_t warmup_num, uint64_t warmup_dim, uint64_t warmup_aligned_dim)
+template <typename T> T *generateRandomWarmup(MemoryManager& memory_manager, uint64_t warmup_num, uint64_t warmup_dim, uint64_t warmup_aligned_dim)
 {
     T *warmup = nullptr;
     warmup_num = 100000;
     diskann::cout << "Generating random warmup file with dim " << warmup_dim << " and aligned dim "
                   << warmup_aligned_dim << std::flush;
-    diskann::alloc_aligned(((void **)&warmup), warmup_num * warmup_aligned_dim * sizeof(T), 8 * sizeof(T));
+    memory_manager.alloc_aligned(((void **)&warmup), warmup_num * warmup_aligned_dim * sizeof(T), 8 * sizeof(T));
     std::memset(warmup, 0, warmup_num * warmup_aligned_dim * sizeof(T));
     std::random_device rd;
     std::mt19937 gen(rd());
@@ -188,7 +188,7 @@ T *load_warmup(MemoryMappedFiles &files, const std::string &cache_warmup_file, u
 #endif
 
 template <typename T>
-T *load_warmup(const std::string &cache_warmup_file, uint64_t &warmup_num, uint64_t warmup_dim,
+T *load_warmup(MemoryManager& memory_manager, const std::string &cache_warmup_file, uint64_t &warmup_num, uint64_t warmup_dim,
                uint64_t warmup_aligned_dim)
 {
     T *warmup = nullptr;
@@ -208,7 +208,7 @@ T *load_warmup(const std::string &cache_warmup_file, uint64_t &warmup_num, uint6
     }
     else
     {
-        warmup = generateRandomWarmup<T>(warmup_num, warmup_dim, warmup_aligned_dim);
+        warmup = generateRandomWarmup<T>(memory_manager, warmup_num, warmup_dim, warmup_aligned_dim);
     }
     return warmup;
 }

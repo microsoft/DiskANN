@@ -19,6 +19,7 @@
 
 #include "index.h"
 #include "memory_mapper.h"
+#include "memory_manager.h"
 #include "utils.h"
 
 namespace po = boost::program_options;
@@ -35,7 +36,8 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
     uint32_t *gt_ids = nullptr;
     float *gt_dists = nullptr;
     size_t query_num, query_dim, query_aligned_dim, gt_num, gt_dim;
-    diskann::load_aligned_bin<T>(query_file, query, query_num, query_dim, query_aligned_dim);
+    diskann::MemoryManager memory_manager;
+    diskann::load_aligned_bin<T>(memory_manager, query_file, query, query_num, query_dim, query_aligned_dim);
 
     // Check for ground truth
     bool calc_recall_flag = false;
@@ -244,7 +246,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
         test_id++;
     }
 
-    diskann::aligned_free(query);
+    memory_manager.aligned_free(query);
 
     return best_recall >= fail_if_recall_below ? 0 : -1;
 }

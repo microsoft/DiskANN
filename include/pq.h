@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include "allocator.h"
 #include "utils.h"
 
 #define NUM_PQ_BITS 8
@@ -61,15 +62,16 @@ template <typename T> struct PQScratch
     float *rotated_query = nullptr;
     float *aligned_query_float = nullptr;
 
-    PQScratch(size_t graph_degree, size_t aligned_dim)
+    PQScratch(MemoryManager& memory_manager, size_t graph_degree, size_t aligned_dim)
     {
-        diskann::alloc_aligned((void **)&aligned_pq_coord_scratch,
+        memory_manager.alloc_aligned((void **)&aligned_pq_coord_scratch,
                                (size_t)graph_degree * (size_t)MAX_PQ_CHUNKS * sizeof(uint8_t), 256);
-        diskann::alloc_aligned((void **)&aligned_pqtable_dist_scratch, 256 * (size_t)MAX_PQ_CHUNKS * sizeof(float),
+        memory_manager.alloc_aligned((void **)&aligned_pqtable_dist_scratch,
+                                     256 * (size_t)MAX_PQ_CHUNKS * sizeof(float),
                                256);
-        diskann::alloc_aligned((void **)&aligned_dist_scratch, (size_t)graph_degree * sizeof(float), 256);
-        diskann::alloc_aligned((void **)&aligned_query_float, aligned_dim * sizeof(float), 8 * sizeof(float));
-        diskann::alloc_aligned((void **)&rotated_query, aligned_dim * sizeof(float), 8 * sizeof(float));
+        memory_manager.alloc_aligned((void **)&aligned_dist_scratch, (size_t)graph_degree * sizeof(float), 256);
+        memory_manager.alloc_aligned((void **)&aligned_query_float, aligned_dim * sizeof(float), 8 * sizeof(float));
+        memory_manager.alloc_aligned((void **)&rotated_query, aligned_dim * sizeof(float), 8 * sizeof(float));
 
         memset(aligned_query_float, 0, aligned_dim * sizeof(float));
         memset(rotated_query, 0, aligned_dim * sizeof(float));

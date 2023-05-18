@@ -94,7 +94,7 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
 
     DISKANN_DLLEXPORT diskann::Metric get_metric();
 
-    DISKANN_DLLEXPORT uint64_t get_memory_in_bytes();
+    DISKANN_DLLEXPORT uint64_t get_memory_used_in_bytes();
 
   protected:
     DISKANN_DLLEXPORT void use_medoids_data_as_centroids();
@@ -108,6 +108,8 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
     DISKANN_DLLEXPORT void parse_label_file(const std::string &map_file, size_t &num_pts_labels);
     DISKANN_DLLEXPORT void get_label_file_metadata(std::string map_file, uint32_t &num_pts, uint32_t &num_total_labels);
     DISKANN_DLLEXPORT inline int32_t get_filter_number(const LabelT &filter_label);
+
+    MemoryManager _memory_manager;
 
     // index info
     // nhood of node `i` is in sector: [i / nnodes_per_sector]
@@ -135,7 +137,6 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
                                 // PQ for disk data (very large dimensionality)
     uint64_t aligned_dim = 0;
     uint64_t disk_bytes_per_point = 0;
-    uint64_t memory_in_bytes = 0;
 
     std::string disk_index_file;
     std::vector<std::pair<uint32_t, uint32_t>> node_visit_counter;

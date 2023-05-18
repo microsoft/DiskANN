@@ -28,6 +28,7 @@
 #endif
 
 #include "filter_utils.h"
+#include "memory_manager.h"
 #include "utils.h"
 
 // WORKS FOR UPTO 2 BILLION POINTS (as we use INT INSTEAD OF UNSIGNED)
@@ -428,7 +429,7 @@ inline void parse_label_file_into_vec(size_t &line_cnt, const std::string &map_f
 }
 
 template <typename T>
-std::vector<std::vector<std::pair<uint32_t, float>>> processUnfilteredParts(const std::string &base_file,
+std::vector<std::vector<std::pair<uint32_t, float>>> processUnfilteredParts(diskann::MemoryManager& memory_manager, const std::string &base_file,
                                                                             size_t &nqueries, size_t &npoints,
                                                                             size_t &dim, size_t &k, float *query_data,
                                                                             const diskann::Metric &metric,
@@ -465,13 +466,14 @@ std::vector<std::vector<std::pair<uint32_t, float>>> processUnfilteredParts(cons
         delete[] closest_points_part;
         delete[] dist_closest_points_part;
 
-        diskann::aligned_free(base_data);
+        memory_manager.aligned_free(base_data);
     }
     return res;
 };
 
 template <typename T>
 std::vector<std::vector<std::pair<uint32_t, float>>> processFilteredParts(
+    diskann::MemoryManager& memory_manager,
     const std::string &base_file, const std::string &label_file, const std::string &filter_label,
     const std::string &universal_label, size_t &nqueries, size_t &npoints, size_t &dim, size_t &k, float *query_data,
     const diskann::Metric &metric, std::vector<uint32_t> &location_to_tag)
@@ -518,7 +520,7 @@ std::vector<std::vector<std::pair<uint32_t, float>>> processFilteredParts(
         delete[] closest_points_part;
         delete[] dist_closest_points_part;
 
-        diskann::aligned_free(base_data);
+        memory_manager.aligned_free(base_data);
     }
     return res;
 };
@@ -528,6 +530,7 @@ int aux_main(const std::string &base_file, const std::string &label_file, const 
              const std::string &gt_file, size_t k, const std::string &universal_label, const diskann::Metric &metric,
              const std::string &filter_label, const std::string &tags_file = std::string(""))
 {
+    diskann::MemoryManager memory_manager;
     size_t npoints, nqueries, dim;
 
     float *query_data = nullptr;
@@ -547,11 +550,11 @@ int aux_main(const std::string &base_file, const std::string &label_file, const 
     std::vector<std::vector<std::pair<uint32_t, float>>> results;
     if (filter_label == "")
     {
-        results = processUnfilteredParts<T>(base_file, nqueries, npoints, dim, k, query_data, metric, location_to_tag);
+        results = processUnfilteredParts<T>(memory_manager, base_file, nqueries, npoints, dim, k, query_data, metric, location_to_tag);
     }
     else
     {
-        results = processFilteredParts<T>(base_file, label_file, filter_label, universal_label, nqueries, npoints, dim,
+        results = processFilteredParts<T>(memory_manager, base_file, label_file, filter_label, universal_label, nqueries, npoints, dim,
                                           k, query_data, metric, location_to_tag);
     }
 
@@ -588,7 +591,7 @@ int aux_main(const std::string &base_file, const std::string &label_file, const 
     save_groundtruth_as_one_file(gt_file, closest_points, dist_closest_points, nqueries, k);
     delete[] closest_points;
     delete[] dist_closest_points;
-    diskann::aligned_free(query_data);
+    memory_manager.aligned_free(query_data);
 
     return 0;
 }

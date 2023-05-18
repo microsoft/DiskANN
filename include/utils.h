@@ -24,6 +24,7 @@ typedef int FileHandle;
 #include "logger.h"
 #include "cached_io.h"
 #include "ann_exception.h"
+#include "memory_manager.h"
 #include "windows_customizations.h"
 #include "tsl/robin_set.h"
 #include "types.h"
@@ -213,54 +214,18 @@ inline void print_error_and_terminate(std::stringstream &error_stream)
     throw diskann::ANNException(error_stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
 }
 
-inline void report_memory_allocation_failure()
+inline void report_memory_allocation_failure(size_t size, size_t align)
 {
     std::stringstream stream;
-    stream << "Memory Allocation Failed.";
+    stream << "Memory Allocation Failed for size=" << size << ", align=" << align;
     print_error_and_terminate(stream);
 }
 
-inline void report_misalignment_of_requested_size(size_t align)
+inline void report_misalignment_of_requested_size(size_t size, size_t align)
 {
     std::stringstream stream;
-    stream << "Requested memory size is not a multiple of " << align << ". Can not be allocated.";
+    stream << "Requested memory size " << size << " is not a multiple of " << align << ". Can not be allocated.";
     print_error_and_terminate(stream);
-}
-
-inline uint64_t alloc_aligned(void **ptr, size_t size, size_t align)
-{
-    *ptr = nullptr;
-    if (IS_ALIGNED(size, align) == 0)
-        report_misalignment_of_requested_size(align);
-#ifndef _WINDOWS
-    *ptr = ::aligned_alloc(align, size);
-#else
-    *ptr = ::_aligned_malloc(size, align); // note the swapped arguments!
-#endif
-    if (*ptr == nullptr)
-    {
-        report_memory_allocation_failure();
-        return 0;
-    }
-    else
-    {
-        return size;
-    }
-}
-
-inline void realloc_aligned(void **ptr, size_t size, size_t align)
-{
-    if (IS_ALIGNED(size, align) == 0)
-        report_misalignment_of_requested_size(align);
-#ifdef _WINDOWS
-    *ptr = ::_aligned_realloc(*ptr, size, align);
-#else
-    diskann::cerr << "No aligned realloc on GCC. Must malloc and mem_align, "
-                     "left it out for now."
-                  << std::endl;
-#endif
-    if (*ptr == nullptr)
-        report_memory_allocation_failure();
 }
 
 inline void check_stop(std::string arnd)
@@ -268,21 +233,6 @@ inline void check_stop(std::string arnd)
     int brnd;
     diskann::cout << arnd << std::endl;
     std::cin >> brnd;
-}
-
-inline void aligned_free(void *ptr)
-{
-    // Gopal. Must have a check here if the pointer was actually allocated by
-    // _alloc_aligned
-    if (ptr == nullptr)
-    {
-        return;
-    }
-#ifndef _WINDOWS
-    free(ptr);
-#else
-    ::_aligned_free(ptr);
-#endif
 }
 
 inline void GenRandom(std::mt19937 &rng, unsigned *addr, unsigned size, unsigned N)
@@ -712,7 +662,7 @@ inline void print_progress(double percentage)
 // load_aligned_bin functions START
 
 template <typename T>
-inline void load_aligned_bin_impl(std::basic_istream<char> &reader, size_t actual_file_size, T *&data, size_t &npts,
+inline void load_aligned_bin_impl(MemoryManager& memory_manager, std::basic_istream<char> &reader, size_t actual_file_size, T *&data, size_t &npts,
                                   size_t &dim, size_t &rounded_dim)
 {
     int npts_i32, dim_i32;
@@ -736,7 +686,7 @@ inline void load_aligned_bin_impl(std::basic_istream<char> &reader, size_t actua
                   << std::flush;
     size_t allocSize = npts * rounded_dim * sizeof(T);
     diskann::cout << "allocating aligned memory of " << allocSize << " bytes... " << std::flush;
-    alloc_aligned(((void **)&data), allocSize, 8 * sizeof(T));
+    memory_manager.alloc_aligned(((void **)&data), allocSize, 8 * sizeof(T));
     diskann::cout << "done. Copying data to mem_aligned buffer..." << std::flush;
 
     for (size_t i = 0; i < npts; i++)
@@ -770,7 +720,7 @@ inline void load_aligned_bin(MemoryMappedFiles &files, const std::string &bin_fi
 #endif
 
 template <typename T>
-inline void load_aligned_bin(const std::string &bin_file, T *&data, size_t &npts, size_t &dim, size_t &rounded_dim)
+inline void load_aligned_bin(MemoryManager& memory_manager, const std::string &bin_file, T *&data, size_t &npts, size_t &dim, size_t &rounded_dim)
 {
     std::ifstream reader;
     reader.exceptions(std::ifstream::failbit | std::ifstream::badbit);
@@ -782,7 +732,7 @@ inline void load_aligned_bin(const std::string &bin_file, T *&data, size_t &npts
 
         uint64_t fsize = reader.tellg();
         reader.seekg(0);
-        load_aligned_bin_impl(reader, fsize, data, npts, dim, rounded_dim);
+        load_aligned_bin_impl(memory_manager, reader, fsize, data, npts, dim, rounded_dim);
     }
     catch (std::system_error &e)
     {

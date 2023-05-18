@@ -91,9 +91,9 @@ Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_point
     {
         if (_num_pq_chunks > _dim)
             throw diskann::ANNException("ERROR: num_pq_chunks > dim", -1, __FUNCSIG__, __FILE__, __LINE__);
-        _memory_manager.alloc_aligned(((void **)&_pq_data), total_internal_points * _num_pq_chunks * sizeof(char),
-                                          8 * sizeof(char));
-        std::memset(_pq_data, 0, total_internal_points * _num_pq_chunks * sizeof(char));
+        _memory_manager.alloc_aligned(((void **)&_pq_data), total_internal_points * _num_pq_chunks * sizeof(uint8_t),
+                                      8 * sizeof(uint8_t));
+        std::memset(_pq_data, 0, total_internal_points * _num_pq_chunks * sizeof(uint8_t));
     }
 
     _start = (uint32_t)_max_points;
@@ -117,7 +117,7 @@ Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_point
     // REFACTOR: TODO This should move to a factory method.
 
     _data_store =
-        std::make_unique<diskann::InMemDataStore<T>>((location_t)total_internal_points, _dim, this->_distance);
+        std::make_unique<diskann::InMemDataStore<T>>(_memory_manager, (location_t)total_internal_points, _dim, this->_distance);
 
     _locks = std::vector<non_recursive_mutex>(total_internal_points);
 
@@ -1702,7 +1702,7 @@ void Index<T, TagT, LabelT>::build(const char *filename, const size_t num_points
                << "index can support only " << _max_points << " points as specified in constructor." << std::endl;
 
         if (_pq_dist)
-            aligned_free(_pq_data);
+            _memory_manager.aligned_free(_pq_data);
         throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
     }
 
@@ -1713,7 +1713,7 @@ void Index<T, TagT, LabelT>::build(const char *filename, const size_t num_points
                << file_num_points << " points." << std::endl;
 
         if (_pq_dist)
-            aligned_free(_pq_data);
+            _memory_manager.aligned_free(_pq_data);
         throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
     }
 
@@ -1725,7 +1725,7 @@ void Index<T, TagT, LabelT>::build(const char *filename, const size_t num_points
         diskann::cerr << stream.str() << std::endl;
 
         if (_pq_dist)
-            aligned_free(_pq_data);
+            _memory_manager.aligned_free(_pq_data);
         throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
     }
 
