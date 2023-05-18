@@ -121,7 +121,14 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     DISKANN_DLLEXPORT void build(const T *data, const size_t num_points_to_load, const IndexWriteParameters &parameters,
                                  const std::vector<TagT> &tags);
 
+    // Exposed with Abstract Index
     DISKANN_DLLEXPORT void build(IndexBuildParams &build_params);
+
+    DISKANN_DLLEXPORT SearchResult search(const diskann::DataType &query, size_t K, IndexSearchParams &search_params);
+
+    DISKANN_DLLEXPORT int insert_point(const DataType &data_point, const TagType &tag);
+
+    DISKANN_DLLEXPORT int lazy_delete(const TagType &tag);
 
     // Filtered Support
     DISKANN_DLLEXPORT void build_filtered_index(const char *filename, const std::string &label_file,
@@ -163,13 +170,8 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
                                                                         const size_t K, const uint32_t L,
                                                                         IndexType *indices, float *distances);
 
-    // Reafactored search
-    DISKANN_DLLEXPORT SearchResult search(const diskann::DataType &query, size_t K, IndexSearchParams &search_params);
-
     // Will fail if tag already in the index or if tag=0.
     DISKANN_DLLEXPORT int insert_point(const T *point, const TagT tag);
-
-    DISKANN_DLLEXPORT int insert_point(const DataType &data_point, const TagType &tag);
 
     // call this before issuing deletions to sets relevant flags
     DISKANN_DLLEXPORT int enable_delete();

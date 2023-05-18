@@ -3026,6 +3026,11 @@ int Index<T, TagT, LabelT>::insert_point(const T *point, const TagT tag)
     return 0;
 }
 
+template <typename T, typename TagT, typename LabelT> int Index<T, TagT, LabelT>::lazy_delete(const TagType &tag)
+{
+    return lazy_delete(boost::any_cast<TagT>(tag));
+}
+
 template <typename T, typename TagT, typename LabelT> int Index<T, TagT, LabelT>::lazy_delete(const TagT &tag)
 {
     std::shared_lock<std::shared_timed_mutex> ul(_update_lock);

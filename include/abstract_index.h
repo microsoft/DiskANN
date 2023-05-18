@@ -8,13 +8,16 @@ namespace diskann
 {
 using DataType = boost::any;
 using TagType = boost::any;
+using LabelType = boost::any;
 
+// Enum to store load store stratagy for data_store and graph_store.
 enum LoadStoreStrategy
 {
     DISK,
     MEMORY
 };
 
+// config object to initialize Index via IndexFcatory.
 struct IndexConfig
 {
     LoadStoreStrategy graph_load_store_strategy;
@@ -71,6 +74,7 @@ struct IndexConfig
     friend class IndexConfigBuilder;
 };
 
+// Build params for building index.
 struct IndexBuildParams
 {
   public:
@@ -95,6 +99,7 @@ struct IndexBuildParams
     friend class IndexBuildParamsBuilder;
 };
 
+// Search params for searching indedx.
 struct IndexSearchParams
 {
     std::string result_path = "";
@@ -105,12 +110,15 @@ struct IndexSearchParams
     uint32_t num_threads{20}; // or some other default val
 };
 
+// Stats produced while searching index
 struct QuerySearchStats
 {
     std::vector<std::chrono::duration<double>> diff_stats;
     std::vector<uint32_t> cmp_stats;
     std::vector<float> latency_stats;
 };
+
+// results from search.
 struct SearchResult
 {
     SearchResult()
@@ -354,6 +362,8 @@ class AbstractIndex
     virtual SearchResult search(const DataType &query, size_t K, IndexSearchParams &search_params) = 0;
 
     virtual int insert_point(const DataType &data_point, const TagType &tag) = 0;
+
+    virtual int lazy_delete(const TagType &tag) = 0;
 
     // TODO: add other methods as api promise to end user.
 };
