@@ -11,6 +11,7 @@
 #include <future>
 
 #include "utils.h"
+#include "filter_utils.h"
 
 #ifndef _WINDOWS
 #include <sys/mman.h>
@@ -83,7 +84,7 @@ std::string get_save_filename(const std::string &save_path, size_t active_window
 
 template <typename T, typename TagT, typename LabelT>
 void insert_next_batch(diskann::Index<T, TagT, LabelT> &index, size_t start, size_t end, size_t insert_threads, T *data,
-                       size_t aligned_dim)
+                       size_t aligned_dim, std::vector<std::vector<LabelT>> &labels)
 {
     try
     {
@@ -94,7 +95,18 @@ void insert_next_batch(diskann::Index<T, TagT, LabelT> &index, size_t start, siz
 #pragma omp parallel for num_threads(insert_threads) schedule(dynamic) reduction(+ : num_failed)
         for (int64_t j = start; j < (int64_t)end; j++)
         {
-            if (index.insert_point(&data[(j - start) * aligned_dim], 1 + static_cast<TagT>(j)) != 0)
+            int insert_result = -1;
+            if (labels.size() > 0)
+            {
+                insert_result =
+                    index.insert_point(&data[(j - start) * aligned_dim], 1 + static_cast<TagT>(j), labels[j - start]);
+            }
+            else
+            {
+                insert_result = index.insert_point(&data[(j - start) * aligned_dim], 1 + static_cast<TagT>(j));
+            }
+
+            if (insert_result != 0)
             {
                 std::cerr << "Insert failed " << j << std::endl;
                 num_failed++;
@@ -199,6 +211,15 @@ void build_incremental_index(const std::string &data_path, const uint32_t L, con
     size_t dim, aligned_dim;
     size_t num_points;
 
+    std::vector<std::vector<LabelT>> labels;
+
+    if (has_labels)
+    {
+        convert_labels_string_to_int(label_file, labels_file_to_use, mem_labels_int_map_file, universal_label);
+        auto parse_result = diskann::parse_formatted_label_file<LabelT>(labels_file_to_use);
+        labels = std::get<0>(parse_result);
+    }
+
     diskann::get_bin_metadata(data_path, num_points, dim);
     diskann::cout << "metadata: file " << data_path << " has " << num_points << " points in " << dim << " dims"
                   << std::endl;
@@ -227,8 +248,6 @@ void build_incremental_index(const std::string &data_path, const uint32_t L, con
     diskann::Index<T, TagT, LabelT> index(diskann::L2, dim, active_window + 4 * consolidate_interval, true, params, L,
                                           insert_threads, enable_tags, true);
 
-    convert_labels_string_to_int(label_file, labels_file_to_use, mem_labels_int_map_file, universal_label);
-    // Parse internal labels into memory so they can be fed to insert_point
     if (universal_label != "")
     {
         LabelT unv_label_as_num = 0;
@@ -256,7 +275,7 @@ void build_incremental_index(const std::string &data_path, const uint32_t L, con
 
     auto insert_task = std::async(std::launch::async, [&]() {
         load_aligned_bin_part(data_path, data, 0, active_window);
-        insert_next_batch(index, 0, active_window, params.num_threads, data, aligned_dim);
+        insert_next_batch(index, 0, active_window, params.num_threads, data, aligned_dim, labels);
     });
     insert_task.wait();
 
@@ -266,8 +285,7 @@ void build_incremental_index(const std::string &data_path, const uint32_t L, con
         auto end = std::min(start + consolidate_interval, max_points_to_insert);
         auto insert_task = std::async(std::launch::async, [&]() {
             load_aligned_bin_part(data_path, data, start, end - start);
-            // TODO: Get labels if exists
-            insert_next_batch(index, start, end, params.num_threads, data, aligned_dim);
+            insert_next_batch(index, start, end, params.num_threads, data, aligned_dim, labels);
         });
         insert_task.wait();
 

@@ -57,6 +57,10 @@ DISKANN_DLLEXPORT void generate_label_indices(path input_data_path, path final_i
 DISKANN_DLLEXPORT load_label_index_return_values load_label_index(path label_index_path,
                                                                   uint32_t label_number_of_points);
 
+template <typename LabelT>
+DISKANN_DLLEXPORT std::tuple<std::vector<std::vector<LabelT>>, tsl::robin_set<LabelT>> parse_formatted_label_file(
+    path label_file);
+
 DISKANN_DLLEXPORT parse_label_file_return_values parse_label_file(path label_data_path, std::string universal_label);
 
 template <typename T>
