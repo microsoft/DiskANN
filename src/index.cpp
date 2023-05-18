@@ -2726,10 +2726,10 @@ int Index<T, TagT, LabelT>::insert_point(const T *point, const TagT tag, const s
     if (_filtered_index)
     {
         // TODO: Make this thread safe
-        size_t point_id = _pts_to_labels.size() + 1;
+        size_t point_id = _pts_to_labels.size();
         _pts_to_labels.emplace_back(labels);
 
-        for (auto label : labels)
+        for (LabelT label : labels)
         {
             if (_labels.find(label) == _labels.end())
             {
@@ -2738,6 +2738,7 @@ int Index<T, TagT, LabelT>::insert_point(const T *point, const TagT tag, const s
             }
         }
     }
+
     assert(_has_built);
     if (tag == static_cast<TagT>(0))
     {
