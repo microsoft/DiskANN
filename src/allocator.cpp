@@ -6,19 +6,6 @@
 
 namespace diskann
 {
-template <typename T>
-typename Allocator<T>::pointer Allocator<T>::allocate(Allocator<T>::size_type nElements,
-                                             std::allocator<void>::const_pointer)
-{
-    _memory_used += nElements * sizeof(T);
-    return Base::allocate(nElements);
-}
-
-template <typename T> void Allocator<T>::deallocate(Allocator<T>::pointer pAddress, Allocator<T>::size_type nElements)
-{
-    _memory_used -= nElements * sizeof(T);
-    Base::deallocate(pAddress, nElements);
-}
 
 size_t MemoryManager::get_memory_used() const
 {
@@ -74,7 +61,7 @@ void MemoryManager::aligned_free(void *ptr)
 
 template <typename T> Allocator<T> MemoryManager::create_allocator()
 {
-    return Allocator<T>(_memory_used);
+    return Allocator<T>(&_memory_used);
 }
 
 template Allocator<uint32_t> MemoryManager::create_allocator();

@@ -4,6 +4,9 @@
 set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_COMPILE_WARNING_AS_ERROR ON)
 
+# Assume below test projects are only for offline, so define FORCE_TO_TRACK_MEMORY_IN_ALLOCATOR to catch missing-tracked memory
+add_definitions(-DFORCE_TO_TRACK_MEMORY_IN_ALLOCATOR)
+
 add_executable(build_memory_index build_memory_index.cpp)
 target_link_libraries(build_memory_index ${PROJECT_NAME} ${DISKANN_TOOLS_TCMALLOC_LINK_OPTIONS} Boost::program_options)
 
