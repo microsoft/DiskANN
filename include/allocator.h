@@ -76,12 +76,10 @@ template <class _Ty> class Allocator : public std::allocator<_Ty>
     std::atomic<size_t> *_memory_used_in_bytes;
 };
 
-template <class _Ty, class _Alloc = Allocator<_Ty>>
-using vector = std::vector<_Ty, _Alloc>;
+template <class _Ty, class _Alloc = Allocator<_Ty>> using vector = std::vector<_Ty, _Alloc>;
 
-template <class Key, class Hash = std::hash<Key>, class KeyEqual = std::equal_to<Key>,
-          class Allocator = Allocator<Key>, bool StoreHash = false,
-          class GrowthPolicy = tsl::rh::power_of_two_growth_policy<2>>
+template <class Key, class Hash = std::hash<Key>, class KeyEqual = std::equal_to<Key>, class Allocator = Allocator<Key>,
+          bool StoreHash = false, class GrowthPolicy = tsl::rh::power_of_two_growth_policy<2>>
 using robin_set = tsl::robin_set<Key, Hash, KeyEqual, Allocator, StoreHash, GrowthPolicy>;
 
 template <class _Kty, class _Ty, class _Hasher = std::hash<_Kty>, class _Keyeq = std::equal_to<_Kty>,

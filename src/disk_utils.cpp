@@ -132,7 +132,9 @@ size_t calculate_num_pq_chunks(double final_index_ram_limit, size_t points_num, 
     return num_pq_chunks;
 }
 
-template <typename T> T *generateRandomWarmup(MemoryManager& memory_manager, uint64_t warmup_num, uint64_t warmup_dim, uint64_t warmup_aligned_dim)
+template <typename T>
+T *generateRandomWarmup(MemoryManager &memory_manager, uint64_t warmup_num, uint64_t warmup_dim,
+                        uint64_t warmup_aligned_dim)
 {
     T *warmup = nullptr;
     warmup_num = 100000;
@@ -188,8 +190,8 @@ T *load_warmup(MemoryMappedFiles &files, const std::string &cache_warmup_file, u
 #endif
 
 template <typename T>
-T *load_warmup(MemoryManager& memory_manager, const std::string &cache_warmup_file, uint64_t &warmup_num, uint64_t warmup_dim,
-               uint64_t warmup_aligned_dim)
+T *load_warmup(MemoryManager &memory_manager, const std::string &cache_warmup_file, uint64_t &warmup_num,
+               uint64_t warmup_dim, uint64_t warmup_aligned_dim)
 {
     T *warmup = nullptr;
     uint64_t file_dim, file_aligned_dim;

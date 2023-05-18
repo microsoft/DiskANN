@@ -135,7 +135,7 @@ template <typename T, typename LabelT> void PQFlashIndex<T, LabelT>::load_cache_
     memset(nhood_cache_buf, 0, nhood_cache_buf_size);
 
     size_t coord_cache_buf_len = num_cached_nodes * aligned_dim;
-        _memory_manager.alloc_aligned((void **)&coord_cache_buf, coord_cache_buf_len * sizeof(T), 8 * sizeof(T));
+    _memory_manager.alloc_aligned((void **)&coord_cache_buf, coord_cache_buf_len * sizeof(T), 8 * sizeof(T));
     memset(coord_cache_buf, 0, coord_cache_buf_len * sizeof(T));
 
     size_t BLOCK_SIZE = 8;
@@ -949,7 +949,8 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
             diskann::load_aligned_bin<float>(files, centroids_file, centroid_data, num_centroids, tmp_dim,
                                              aligned_tmp_dim);
 #else
-            diskann::load_aligned_bin<float>(_memory_manager, centroids_file, centroid_data, num_centroids, tmp_dim, aligned_tmp_dim);
+            diskann::load_aligned_bin<float>(_memory_manager, centroids_file, centroid_data, num_centroids, tmp_dim,
+                                             aligned_tmp_dim);
 #endif
             if (aligned_tmp_dim != aligned_dim || num_centroids != num_medoids)
             {

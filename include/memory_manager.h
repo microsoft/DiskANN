@@ -26,7 +26,6 @@ class MemoryManager
 
     template <typename T> Allocator<T> create_allocator();
 
-
   private:
     std::atomic<size_t> _memory_used_in_bytes;
 };

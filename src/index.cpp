@@ -52,10 +52,10 @@ Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_point
                               const bool enable_tags, const bool concurrent_consolidate, const bool pq_dist_build,
                               const size_t num_pq_chunks, const bool use_opq, const size_t num_frozen_pts)
     : _dist_metric(m), _dim(dim), _max_points(max_points), _num_frozen_pts(num_frozen_pts),
-      _final_graph(_memory_manager.create_allocator<diskann::vector<uint32_t>>()),
-      _dynamic_index(dynamic_index), _enable_tags(enable_tags), _indexingMaxC(DEFAULT_MAXC), _query_scratch(nullptr),
-      _pq_dist(pq_dist_build), _use_opq(use_opq), _num_pq_chunks(num_pq_chunks),
-      _delete_set(new tsl::robin_set<uint32_t>), _conc_consolidate(concurrent_consolidate)
+      _final_graph(_memory_manager.create_allocator<diskann::vector<uint32_t>>()), _dynamic_index(dynamic_index),
+      _enable_tags(enable_tags), _indexingMaxC(DEFAULT_MAXC), _query_scratch(nullptr), _pq_dist(pq_dist_build),
+      _use_opq(use_opq), _num_pq_chunks(num_pq_chunks), _delete_set(new tsl::robin_set<uint32_t>),
+      _conc_consolidate(concurrent_consolidate)
 {
     if (dynamic_index && !enable_tags)
     {
@@ -116,8 +116,8 @@ Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_point
     }
     // REFACTOR: TODO This should move to a factory method.
 
-    _data_store =
-        std::make_unique<diskann::InMemDataStore<T>>(_memory_manager, (location_t)total_internal_points, _dim, this->_distance);
+    _data_store = std::make_unique<diskann::InMemDataStore<T>>(_memory_manager, (location_t)total_internal_points, _dim,
+                                                               this->_distance);
 
     _locks = std::vector<non_recursive_mutex>(total_internal_points);
 
@@ -166,8 +166,9 @@ void Index<T, TagT, LabelT>::initialize_query_scratch(uint32_t num_threads, uint
 {
     for (uint32_t i = 0; i < num_threads; i++)
     {
-        auto scratch = new InMemQueryScratch<T>(_memory_manager, search_l, indexing_l, r, maxc, dim, _data_store->get_aligned_dim(),
-                                                _data_store->get_alignment_factor(), _pq_dist);
+        auto scratch =
+            new InMemQueryScratch<T>(_memory_manager, search_l, indexing_l, r, maxc, dim,
+                                     _data_store->get_aligned_dim(), _data_store->get_alignment_factor(), _pq_dist);
         _query_scratch.push(scratch);
     }
 }
@@ -729,7 +730,8 @@ size_t Index<T, TagT, LabelT>::load_graph(std::string filename, size_t expected_
         diskann::cout << "Number of points in data: " << expected_max_points
                       << " is greater than max_points: " << _max_points
                       << " Setting max points to: " << expected_max_points << std::endl;
-        _final_graph.resize(expected_max_points + _num_frozen_pts, diskann::vector<uint32_t>(_memory_manager.create_allocator<uint32_t>()));
+        _final_graph.resize(expected_max_points + _num_frozen_pts,
+                            diskann::vector<uint32_t>(_memory_manager.create_allocator<uint32_t>()));
         _max_points = expected_max_points;
     }
 #ifdef EXEC_ENV_OLS
@@ -1340,7 +1342,8 @@ void Index<T, TagT, LabelT>::inter_insert(uint32_t n, diskann::vector<uint32_t> 
 }
 
 template <typename T, typename TagT, typename LabelT>
-void Index<T, TagT, LabelT>::inter_insert(uint32_t n, diskann::vector<uint32_t> &pruned_list, InMemQueryScratch<T> *scratch)
+void Index<T, TagT, LabelT>::inter_insert(uint32_t n, diskann::vector<uint32_t> &pruned_list,
+                                          InMemQueryScratch<T> *scratch)
 {
     inter_insert(n, pruned_list, _indexingRange, scratch);
 }

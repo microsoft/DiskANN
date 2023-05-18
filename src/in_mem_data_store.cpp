@@ -10,12 +10,13 @@ namespace diskann
 {
 
 template <typename data_t>
-InMemDataStore<data_t>::InMemDataStore(MemoryManager& memory_manager, const location_t num_points, const size_t dim,
+InMemDataStore<data_t>::InMemDataStore(MemoryManager &memory_manager, const location_t num_points, const size_t dim,
                                        std::shared_ptr<Distance<data_t>> distance_fn)
     : _memory_manager(memory_manager), AbstractDataStore<data_t>(num_points, dim), _distance_fn(distance_fn)
 {
     _aligned_dim = ROUND_UP(dim, _distance_fn->get_required_alignment());
-    _memory_manager.alloc_aligned(((void **)&_data), this->_capacity * _aligned_dim * sizeof(data_t), 8 * sizeof(data_t));
+    _memory_manager.alloc_aligned(((void **)&_data), this->_capacity * _aligned_dim * sizeof(data_t),
+                                  8 * sizeof(data_t));
     std::memset(_data, 0, this->_capacity * _aligned_dim * sizeof(data_t));
 }
 
