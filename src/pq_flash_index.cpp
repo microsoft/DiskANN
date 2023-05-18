@@ -491,9 +491,13 @@ LabelT PQFlashIndex<T, LabelT>::get_converted_label(const std::string &filter_la
     {
         return _label_map[filter_label];
     }
-    else
+    else if (_use_universal_label)
     {
         return static_cast<LabelT>(_universal_filter_num);
+    }
+    else
+    {
+        return std::numeric_limits<LabelT>::max();
     }
 }
 

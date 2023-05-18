@@ -1910,9 +1910,13 @@ LabelT Index<T, TagT, LabelT>::get_converted_label(const std::string &raw_label)
     {
         return _label_map[raw_label];
     }
-    else
+    else if (_use_universal_label)
     {
         return _universal_label;
+    }
+    else
+    {
+        return std::numeric_limits<LabelT>::max();
     }
 }
 
