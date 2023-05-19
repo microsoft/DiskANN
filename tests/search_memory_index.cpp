@@ -504,7 +504,6 @@ int main(int argc, char **argv)
         auto res = index->search(query, K, search_param);
         auto best_recall =
             print_search_results(res, gt_file, K, Lvec, show_qps_per_thread, tags, print_all_recalls, num_threads);
-        query.clear();
         return best_recall >= fail_if_recall_below ? 0 : -1;
     }
     catch (std::exception &e)

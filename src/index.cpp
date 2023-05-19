@@ -2029,7 +2029,7 @@ SearchResult Index<T, TagT, LabelT>::search(const diskann::DataType &q, size_t K
     size_t query_num, query_dim, query_aligned_dim;
     diskann::load_aligned_bin<T>(search_params.query_file, query, query_num, query_dim, query_aligned_dim);*/
 
-    T *query = boost::any_cast<T *>(q);
+    T *query = std::any_cast<T *>(q);
     size_t query_num = search_params.query_num;
     size_t query_aligned_dim = search_params.query_aligned_dim;
 
@@ -2899,11 +2899,11 @@ int Index<T, TagT, LabelT>::insert_point(const DataType &point, const TagType &t
 {
     try
     {
-        TagT underlying_tag = boost::any_cast<TagT>(tag);
-        const T *data = boost::any_cast<T *>(point);
+        TagT underlying_tag = std::any_cast<TagT>(tag);
+        const T *data = std::any_cast<T *>(point);
         return this->insert_point(data, underlying_tag);
     }
-    catch (const boost::bad_any_cast &anycast_e)
+    catch (const std::bad_any_cast &anycast_e)
     {
         throw new ANNException("Error:Trying to insert invalid data type" + std::string(anycast_e.what()), -1);
     }
@@ -3028,7 +3028,7 @@ int Index<T, TagT, LabelT>::insert_point(const T *point, const TagT tag)
 
 template <typename T, typename TagT, typename LabelT> int Index<T, TagT, LabelT>::lazy_delete(const TagType &tag)
 {
-    return lazy_delete(boost::any_cast<TagT>(tag));
+    return lazy_delete(std::any_cast<TagT>(tag));
 }
 
 template <typename T, typename TagT, typename LabelT> int Index<T, TagT, LabelT>::lazy_delete(const TagT &tag)

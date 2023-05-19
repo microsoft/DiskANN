@@ -1,14 +1,14 @@
 #pragma once
-#include "boost/any.hpp"
 #include "distance.h"
 #include "parameters.h"
 #include "utils.h"
+#include <any>
 
 namespace diskann
 {
-using DataType = boost::any;
-using TagType = boost::any;
-using LabelType = boost::any;
+using DataType = std::any;
+using TagType = std::any;
+using LabelType = std::any;
 
 // Enum to store load store stratagy for data_store and graph_store.
 enum LoadStoreStrategy
