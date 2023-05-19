@@ -19,7 +19,7 @@ template <class _Ty> _CONSTEXPR20 void Allocator<_Ty>::deallocate(_Ty *const _Pt
 }
 
 template <class _Ty>
-_NODISCARD_RAW_PTR_ALLOC _CONSTEXPR20 __declspec(allocator) _Ty *Allocator<_Ty>::allocate(
+_NODISCARD_RAW_PTR_ALLOC _CONSTEXPR20 __declspec(Allocator) _Ty *Allocator<_Ty>::allocate(
     _CRT_GUARDOVERFLOW const size_t _Count)
 {
     auto ret = Base::allocate(_Count);
