@@ -335,11 +335,9 @@ inline void save_groundtruth_as_one_file(const std::string filename, int32_t *da
 }
 
 template <typename T>
-std::vector<std::vector<std::pair<uint32_t, float>>> processUnfilteredParts(diskann::MemoryManager& memory_manager, const std::string &base_file,
-                                                                            size_t &nqueries, size_t &npoints,
-                                                                            size_t &dim, size_t &k, float *query_data,
-                                                                            const diskann::Metric &metric,
-                                                                            std::vector<uint32_t> &location_to_tag)
+std::vector<std::vector<std::pair<uint32_t, float>>> processUnfilteredParts(
+    diskann::MemoryManager &memory_manager, const std::string &base_file, size_t &nqueries, size_t &npoints,
+    size_t &dim, size_t &k, float *query_data, const diskann::Metric &metric, std::vector<uint32_t> &location_to_tag)
 {
     float *base_data = nullptr;
     int num_parts = get_num_parts<T>(base_file.c_str());
@@ -390,16 +388,16 @@ int aux_main(const std::string &base_file, const std::string &query_file, const 
         std::cerr << "WARNING: #Queries provided (" << nqueries << ") is greater than " << PARTSIZE
                   << ". Computing GT only for the first " << PARTSIZE << " queries." << std::endl;
 
+    diskann::MemoryManager memory_manager;
     // load tags
     const bool tags_enabled = tags_file.empty() ? false : true;
-    std::vector<uint32_t> location_to_tag = diskann::loadTags(tags_file, base_file);
+    std::vector<uint32_t> location_to_tag = diskann::loadTags(memory_manager, tags_file, base_file);
 
-    diskann::MemoryManager memory_manager;
     int *closest_points = new int[nqueries * k];
     float *dist_closest_points = new float[nqueries * k];
 
-    std::vector<std::vector<std::pair<uint32_t, float>>> results =
-        processUnfilteredParts<T>(memory_manager, base_file, nqueries, npoints, dim, k, query_data, metric, location_to_tag);
+    std::vector<std::vector<std::pair<uint32_t, float>>> results = processUnfilteredParts<T>(
+        memory_manager, base_file, nqueries, npoints, dim, k, query_data, metric, location_to_tag);
 
     for (size_t i = 0; i < nqueries; i++)
     {

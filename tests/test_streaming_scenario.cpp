@@ -224,8 +224,8 @@ void build_incremental_index(const std::string &data_path, const uint32_t L, con
     index.enable_delete();
 
     T *data = nullptr;
-    memory_manager.alloc_aligned((void **)&data, std::max(consolidate_interval, active_window) * aligned_dim * sizeof(T),
-                           8 * sizeof(T));
+    memory_manager.alloc_aligned(
+        (void **)&data, std::max(consolidate_interval, active_window) * aligned_dim * sizeof(T), 8 * sizeof(T));
 
     std::vector<TagT> tags(max_points_to_insert);
     std::iota(tags.begin(), tags.end(), static_cast<TagT>(0));

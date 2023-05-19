@@ -41,7 +41,7 @@ namespace diskann
 
 template <typename T, typename LabelT>
 PQFlashIndex<T, LabelT>::PQFlashIndex(std::shared_ptr<AlignedFileReader> &fileReader, diskann::Metric m)
-    : reader(fileReader), metric(m)
+    : reader(fileReader), metric(m), pq_table(_memory_manager), disk_pq_table(_memory_manager)
 {
     if (m == diskann::Metric::COSINE || m == diskann::Metric::INNER_PRODUCT)
     {
@@ -131,7 +131,7 @@ template <typename T, typename LabelT> void PQFlashIndex<T, LabelT>::load_cache_
     IOContext &ctx = this_thread_data->ctx;
 
     auto nhood_cache_buf_size = num_cached_nodes * (max_degree + 1);
-    nhood_cache_buf = new uint32_t[nhood_cache_buf_size];
+    nhood_cache_buf = _memory_manager.new_array<uint32_t>(nhood_cache_buf_size);
     memset(nhood_cache_buf, 0, nhood_cache_buf_size);
 
     size_t coord_cache_buf_len = num_cached_nodes * aligned_dim;
@@ -433,7 +433,7 @@ template <typename T, typename LabelT> void PQFlashIndex<T, LabelT>::use_medoids
         char *medoid_node_buf = OFFSET_TO_NODE(medoid_buf, medoid);
 
         // add medoid coords to `coord_cache`
-        T *medoid_coords = new T[data_dim];
+        T *medoid_coords = _memory_manager.new_array<T>(data_dim);
         T *medoid_disk_coords = OFFSET_TO_NODE_COORDS(medoid_node_buf);
         memcpy(medoid_coords, medoid_disk_coords, disk_bytes_per_point);
 
@@ -559,8 +559,8 @@ void PQFlashIndex<T, LabelT>::parse_label_file(const std::string &label_file, si
     uint32_t num_total_labels;
     get_label_file_metadata(label_file, num_pts_in_label_file, num_total_labels);
 
-    _pts_to_label_offsets = new uint32_t[num_pts_in_label_file];
-    _pts_to_labels = new uint32_t[num_pts_in_label_file + num_total_labels];
+    _pts_to_label_offsets = _memory_manager.new_array<uint32_t>(num_pts_in_label_file);
+    _pts_to_labels = _memory_manager.new_array<uint32_t>(num_pts_in_label_file + num_total_labels);
     uint32_t counter = 0;
 
     while (std::getline(infile, line))
@@ -688,9 +688,9 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
 
     size_t npts_u64, nchunks_u64;
 #ifdef EXEC_ENV_OLS
-    diskann::load_bin<uint8_t>(files, pq_compressed_vectors, this->data, npts_u64, nchunks_u64);
+    diskann::load_bin<uint8_t>(_memory_manager, files, pq_compressed_vectors, this->data, npts_u64, nchunks_u64);
 #else
-    diskann::load_bin<uint8_t>(pq_compressed_vectors, this->data, npts_u64, nchunks_u64);
+    diskann::load_bin<uint8_t>(_memory_manager, pq_compressed_vectors, this->data, npts_u64, nchunks_u64);
 #endif
 
     this->num_points = npts_u64;
@@ -914,12 +914,12 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
     if (files.fileExists(medoids_file))
     {
         size_t tmp_dim;
-        diskann::load_bin<uint32_t>(files, medoids_file, medoids, num_medoids, tmp_dim);
+        diskann::load_bin<uint32_t>(memory_manager, files, medoids_file, medoids, num_medoids, tmp_dim);
 #else
     if (file_exists(medoids_file))
     {
         size_t tmp_dim;
-        diskann::load_bin<uint32_t>(medoids_file, medoids, num_medoids, tmp_dim);
+        diskann::load_bin<uint32_t>(_memory_manager, medoids_file, medoids, num_medoids, tmp_dim);
 #endif
 
         if (tmp_dim != 1)
@@ -968,7 +968,7 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
     else
     {
         num_medoids = 1;
-        medoids = new uint32_t[1];
+        medoids = _memory_manager.new_array<uint32_t>(1);
         medoids[0] = (uint32_t)(medoid_id_on_file);
         use_medoids_data_as_centroids();
     }
@@ -979,7 +979,7 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
     {
         uint64_t dumr, dumc;
         float *norm_val;
-        diskann::load_bin<float>(norm_file, norm_val, dumr, dumc);
+        diskann::load_bin<float>(_memory_manager, norm_file, norm_val, dumr, dumc);
         this->max_base_norm = norm_val[0];
         diskann::cout << "Setting re-scaling factor of base vectors to " << this->max_base_norm << std::endl;
         delete[] norm_val;
@@ -1547,7 +1547,7 @@ template <typename T, typename LabelT> char *PQFlashIndex<T, LabelT>::getHeaderB
 {
     IOContext &ctx = reader->get_ctx();
     AlignedRead readReq;
-    readReq.buf = new char[PQFlashIndex<T, LabelT>::HEADER_SIZE];
+    readReq.buf = _memory_manager.new_array<char>(PQFlashIndex<T, LabelT>::HEADER_SIZE);
     readReq.len = PQFlashIndex<T, LabelT>::HEADER_SIZE;
     readReq.offset = 0;
 

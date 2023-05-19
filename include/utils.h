@@ -309,7 +309,7 @@ template <typename T> inline std::string getValues(T *data, size_t num)
 
 // load_bin functions START
 template <typename T>
-inline uint64_t load_bin_impl(std::basic_istream<char> &reader, T *&data, size_t &npts, size_t &dim,
+inline void load_bin_impl(diskann::MemoryManager& memory_manager, std::basic_istream<char> &reader, T *&data, size_t &npts, size_t &dim,
                               size_t file_offset = 0)
 {
     int npts_i32, dim_i32;
@@ -323,9 +323,8 @@ inline uint64_t load_bin_impl(std::basic_istream<char> &reader, T *&data, size_t
     std::cout << "Metadata: #pts = " << npts << ", #dims = " << dim << "..." << std::endl;
 
     auto size = npts * dim;
-    data = new T[size];
+    data = memory_manager.new_array<T>(size);
     reader.read((char *)data, size * sizeof(T));
-    return size * sizeof(T);
 }
 
 #ifdef EXEC_ENV_OLS
@@ -366,7 +365,7 @@ template <typename T> DISKANN_DLLEXPORT void read_value(AlignedFileReader &reade
 #endif
 
 template <typename T>
-inline uint64_t load_bin(const std::string &bin_file, T *&data, size_t &npts, size_t &dim, size_t offset = 0)
+inline void load_bin(diskann::MemoryManager& memory_manager, const std::string &bin_file, T *&data, size_t &npts, size_t &dim, size_t offset = 0)
 {
     diskann::cout << "Reading bin file " << bin_file.c_str() << " ..." << std::endl;
     std::ifstream reader;
@@ -377,7 +376,7 @@ inline uint64_t load_bin(const std::string &bin_file, T *&data, size_t &npts, si
         diskann::cout << "Opening bin file " << bin_file.c_str() << "... " << std::endl;
         reader.open(bin_file, std::ios::binary | std::ios::ate);
         reader.seekg(0);
-        return load_bin_impl<T>(reader, data, npts, dim, offset);
+        load_bin_impl<T>(memory_manager, reader, data, npts, dim, offset);
     }
     catch (std::system_error &e)
     {
@@ -598,11 +597,11 @@ DISKANN_DLLEXPORT double calculate_range_search_recall(unsigned num_queries,
                                                        std::vector<std::vector<uint32_t>> &our_results);
 
 template <typename T>
-inline void load_bin(const std::string &bin_file, std::unique_ptr<T[]> &data, size_t &npts, size_t &dim,
+inline void load_bin(diskann::MemoryManager& memory_manager, const std::string &bin_file, std::unique_ptr<T[]> &data, size_t &npts, size_t &dim,
                      size_t offset = 0)
 {
     T *ptr;
-    load_bin<T>(bin_file, ptr, npts, dim, offset);
+    load_bin<T>(memory_manager, bin_file, ptr, npts, dim, offset);
     data.reset(ptr);
 }
 

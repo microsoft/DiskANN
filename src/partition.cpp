@@ -428,7 +428,7 @@ int retrieve_shard_data_from_ids(const std::string data_file, std::string idmap_
 
     uint32_t *shard_ids;
     uint64_t shard_size, tmp;
-    diskann::load_bin<uint32_t>(idmap_filename, shard_ids, shard_size, tmp);
+    diskann::load_bin<uint32_t>(diskann::MemoryManager::get_instance(), idmap_filename, shard_ids, shard_size, tmp);
 
     uint32_t cur_pos = 0;
     uint32_t num_written = 0;

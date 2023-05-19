@@ -55,7 +55,7 @@ Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_point
       _final_graph(_memory_manager.create_allocator<diskann::vector<uint32_t>>()), _dynamic_index(dynamic_index),
       _enable_tags(enable_tags), _indexingMaxC(DEFAULT_MAXC), _query_scratch(nullptr), _pq_dist(pq_dist_build),
       _use_opq(use_opq), _num_pq_chunks(num_pq_chunks), _delete_set(new tsl::robin_set<uint32_t>),
-      _conc_consolidate(concurrent_consolidate)
+      _conc_consolidate(concurrent_consolidate), _pq_table(_memory_manager)
 {
     if (dynamic_index && !enable_tags)
     {
@@ -181,7 +181,7 @@ template <typename T, typename TagT, typename LabelT> size_t Index<T, TagT, Labe
         return 0;
     }
     size_t tag_bytes_written;
-    TagT *tag_data = new TagT[_nd + _num_frozen_pts];
+    TagT *tag_data = _memory_manager.new_array<TagT>(_nd + _num_frozen_pts);
     for (uint32_t i = 0; i < _nd; i++)
     {
         TagT tag;
@@ -395,7 +395,7 @@ size_t Index<T, TagT, LabelT>::load_tags(const std::string tag_filename)
 #ifdef EXEC_ENV_OLS
     load_bin<TagT>(reader, tag_data, file_num_points, file_dim);
 #else
-    load_bin<TagT>(std::string(tag_filename), tag_data, file_num_points, file_dim);
+    load_bin<TagT>(_memory_manager, std::string(tag_filename), tag_data, file_num_points, file_dim);
 #endif
 
     if (file_dim != 1)
@@ -489,9 +489,9 @@ size_t Index<T, TagT, LabelT>::load_delete_set(const std::string &filename)
     size_t npts, ndim;
 
 #ifdef EXEC_ENV_OLS
-    diskann::load_bin<uint32_t>(reader, delete_list, npts, ndim);
+    diskann::load_bin<uint32_t>(_memory_manager, reader, delete_list, npts, ndim);
 #else
-    diskann::load_bin<uint32_t>(filename, delete_list, npts, ndim);
+    diskann::load_bin<uint32_t>(_memory_manager, filename, delete_list, npts, ndim);
 #endif
     assert(ndim == 1);
     for (uint32_t i = 0; i < npts; i++)
@@ -1784,7 +1784,7 @@ void Index<T, TagT, LabelT>::build(const char *filename, const size_t num_points
                 diskann::cout << "Loading tags from " << tag_filename << " for vamana index build" << std::endl;
                 TagT *tag_data = nullptr;
                 size_t npts, ndim;
-                diskann::load_bin(tag_filename, tag_data, npts, ndim);
+                diskann::load_bin(_memory_manager, tag_filename, tag_data, npts, ndim);
                 if (npts < num_points_to_load)
                 {
                     std::stringstream sstream;
@@ -2967,12 +2967,12 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
                                     __FILE__, __LINE__);
     }
 
-    float *cur_vec = new float[_data_store->get_aligned_dim()];
+    float *cur_vec = _memory_manager.new_array<float>(_data_store->get_aligned_dim());
     std::memset(cur_vec, 0, _data_store->get_aligned_dim() * sizeof(float));
     _data_len = (_data_store->get_aligned_dim() + 1) * sizeof(float);
     _neighbor_len = (_max_observed_degree + 1) * sizeof(uint32_t);
     _node_size = _data_len + _neighbor_len;
-    _opt_graph = new char[_node_size * _nd];
+    _opt_graph = _memory_manager.new_array<char>(_node_size * _nd);
     DistanceFastL2<T> *dist_fast = (DistanceFastL2<T> *)_data_store->get_dist_fn();
     for (uint32_t i = 0; i < _nd; i++)
     {
@@ -2990,7 +2990,7 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
     }
     _final_graph.clear();
     _final_graph.shrink_to_fit();
-    delete[] cur_vec;
+    _memory_manager.delete_array(cur_vec);
 }
 
 //  REFACTOR: once optimized layout becomes its own Data+Graph store, we should

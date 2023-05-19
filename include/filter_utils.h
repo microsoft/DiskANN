@@ -180,7 +180,7 @@ inline tsl::robin_map<std::string, std::vector<uint32_t>> generate_label_specifi
     return label_id_to_orig_id;
 }
 
-inline std::vector<uint32_t> loadTags(const std::string &tags_file, const std::string &base_file)
+inline std::vector<uint32_t> loadTags(diskann::MemoryManager& memory_manager, const std::string &tags_file, const std::string &base_file)
 {
     const bool tags_enabled = tags_file.empty() ? false : true;
     std::vector<uint32_t> location_to_tag;
@@ -188,7 +188,7 @@ inline std::vector<uint32_t> loadTags(const std::string &tags_file, const std::s
     {
         size_t tag_file_ndims, tag_file_npts;
         std::uint32_t *tag_data;
-        diskann::load_bin<std::uint32_t>(tags_file, tag_data, tag_file_npts, tag_file_ndims);
+        diskann::load_bin<std::uint32_t>(memory_manager, tags_file, tag_data, tag_file_npts, tag_file_ndims);
         if (tag_file_ndims != 1)
         {
             diskann::cerr << "tags file error" << std::endl;
@@ -205,7 +205,7 @@ inline std::vector<uint32_t> loadTags(const std::string &tags_file, const std::s
         }
 
         location_to_tag.assign(tag_data, tag_data + tag_file_npts);
-        delete[] tag_data;
+        memory_manager.delete_array(tag_data);
     }
     return location_to_tag;
 }

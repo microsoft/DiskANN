@@ -25,7 +25,7 @@ template <typename T> int analyze_norm(std::string base_file)
     std::cout << "Analyzing data norms" << std::endl;
     T *data;
     size_t npts, ndims;
-    diskann::load_bin<T>(base_file, data, npts, ndims);
+    diskann::load_bin<T>(diskann::MemoryManager::get_instance(), base_file, data, npts, ndims);
     std::vector<float> norms(npts, 0);
 #pragma omp parallel for schedule(dynamic)
     for (int64_t i = 0; i < (int64_t)npts; i++)
@@ -48,7 +48,7 @@ template <typename T> int normalize_base(std::string base_file, std::string out_
     std::cout << "Normalizing base" << std::endl;
     T *data;
     size_t npts, ndims;
-    diskann::load_bin<T>(base_file, data, npts, ndims);
+    diskann::load_bin<T>(diskann::MemoryManager::get_instance(), base_file, data, npts, ndims);
     //  std::vector<float> norms(npts, 0);
 #pragma omp parallel for schedule(dynamic)
     for (int64_t i = 0; i < (int64_t)npts; i++)
@@ -70,7 +70,7 @@ template <typename T> int augment_base(std::string base_file, std::string out_fi
     std::cout << "Analyzing data norms" << std::endl;
     T *data;
     size_t npts, ndims;
-    diskann::load_bin<T>(base_file, data, npts, ndims);
+    diskann::load_bin<T>(diskann::MemoryManager::get_instance(), base_file, data, npts, ndims);
     std::vector<float> norms(npts, 0);
     float max_norm = 0;
 #pragma omp parallel for schedule(dynamic)

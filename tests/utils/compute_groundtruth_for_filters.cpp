@@ -429,11 +429,9 @@ inline void parse_label_file_into_vec(size_t &line_cnt, const std::string &map_f
 }
 
 template <typename T>
-std::vector<std::vector<std::pair<uint32_t, float>>> processUnfilteredParts(diskann::MemoryManager& memory_manager, const std::string &base_file,
-                                                                            size_t &nqueries, size_t &npoints,
-                                                                            size_t &dim, size_t &k, float *query_data,
-                                                                            const diskann::Metric &metric,
-                                                                            std::vector<uint32_t> &location_to_tag)
+std::vector<std::vector<std::pair<uint32_t, float>>> processUnfilteredParts(
+    diskann::MemoryManager &memory_manager, const std::string &base_file, size_t &nqueries, size_t &npoints,
+    size_t &dim, size_t &k, float *query_data, const diskann::Metric &metric, std::vector<uint32_t> &location_to_tag)
 {
     float *base_data = nullptr;
     int num_parts = get_num_parts<T>(base_file.c_str());
@@ -473,10 +471,9 @@ std::vector<std::vector<std::pair<uint32_t, float>>> processUnfilteredParts(disk
 
 template <typename T>
 std::vector<std::vector<std::pair<uint32_t, float>>> processFilteredParts(
-    diskann::MemoryManager& memory_manager,
-    const std::string &base_file, const std::string &label_file, const std::string &filter_label,
-    const std::string &universal_label, size_t &nqueries, size_t &npoints, size_t &dim, size_t &k, float *query_data,
-    const diskann::Metric &metric, std::vector<uint32_t> &location_to_tag)
+    diskann::MemoryManager &memory_manager, const std::string &base_file, const std::string &label_file,
+    const std::string &filter_label, const std::string &universal_label, size_t &nqueries, size_t &npoints, size_t &dim,
+    size_t &k, float *query_data, const diskann::Metric &metric, std::vector<uint32_t> &location_to_tag)
 {
     size_t npoints_filt = 0;
     float *base_data = nullptr;
@@ -542,7 +539,7 @@ int aux_main(const std::string &base_file, const std::string &label_file, const 
 
     // load tags
     const bool tags_enabled = tags_file.empty() ? false : true;
-    std::vector<uint32_t> location_to_tag = diskann::loadTags(tags_file, base_file);
+    std::vector<uint32_t> location_to_tag = diskann::loadTags(memory_manager, tags_file, base_file);
 
     int *closest_points = new int[nqueries * k];
     float *dist_closest_points = new float[nqueries * k];
@@ -550,12 +547,13 @@ int aux_main(const std::string &base_file, const std::string &label_file, const 
     std::vector<std::vector<std::pair<uint32_t, float>>> results;
     if (filter_label == "")
     {
-        results = processUnfilteredParts<T>(memory_manager, base_file, nqueries, npoints, dim, k, query_data, metric, location_to_tag);
+        results = processUnfilteredParts<T>(memory_manager, base_file, nqueries, npoints, dim, k, query_data, metric,
+                                            location_to_tag);
     }
     else
     {
-        results = processFilteredParts<T>(memory_manager, base_file, label_file, filter_label, universal_label, nqueries, npoints, dim,
-                                          k, query_data, metric, location_to_tag);
+        results = processFilteredParts<T>(memory_manager, base_file, label_file, filter_label, universal_label,
+                                          nqueries, npoints, dim, k, query_data, metric, location_to_tag);
     }
 
     for (size_t i = 0; i < nqueries; i++)

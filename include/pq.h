@@ -25,16 +25,17 @@ class FixedChunkPQTable
     float *centroid = nullptr;
     float *tables_tr = nullptr; // same as pq_tables, but col-major
     float *rotmat_tr = nullptr;
+    MemoryManager& _memory_manager;
 
   public:
-    FixedChunkPQTable();
+    FixedChunkPQTable(MemoryManager& memory_manager);
 
     virtual ~FixedChunkPQTable();
 
 #ifdef EXEC_ENV_OLS
-    uint64_t load_pq_centroid_bin(MemoryMappedFiles &files, const char *pq_table_file, size_t num_chunks);
+    void load_pq_centroid_bin(MemoryMappedFiles &files, const char *pq_table_file, size_t num_chunks);
 #else
-    uint64_t load_pq_centroid_bin(const char *pq_table_file, size_t num_chunks);
+    void load_pq_centroid_bin(const char *pq_table_file, size_t num_chunks);
 #endif
 
     uint32_t get_num_chunks();

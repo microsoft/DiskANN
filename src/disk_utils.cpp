@@ -26,7 +26,7 @@ void add_new_file_to_single_index(std::string index_file, std::string new_file)
 {
     std::unique_ptr<uint64_t[]> metadata;
     uint64_t nr, nc;
-    diskann::load_bin<uint64_t>(index_file, metadata, nr, nc);
+    diskann::load_bin<uint64_t>(diskann::MemoryManager::get_instance(), index_file, metadata, nr, nc);
     if (nc != 1)
     {
         std::stringstream stream;
@@ -498,7 +498,7 @@ void breakup_dense_points(const std::string data_file, const std::string labels_
     std::ifstream labels_stream(labels_file);
     T *data;
     uint64_t npts, ndims;
-    diskann::load_bin<T>(data_file, data, npts, ndims);
+    diskann::load_bin<T>(diskann::MemoryManager::get_instance(), data_file, data, npts, ndims);
 
     std::unordered_map<uint32_t, uint32_t> dummy_pt_ids;
     uint32_t next_dummy_id = (uint32_t)npts;
@@ -583,7 +583,7 @@ void extract_shard_labels(const std::string &in_label_file, const std::string &s
 
     uint32_t *ids = nullptr;
     uint64_t num_ids, tmp_dim;
-    diskann::load_bin(shard_ids_bin, ids, num_ids, tmp_dim);
+    diskann::load_bin(diskann::MemoryManager::get_instance(), shard_ids_bin, ids, num_ids, tmp_dim);
 
     uint32_t counter = 0, shard_counter = 0;
     std::string cur_line;

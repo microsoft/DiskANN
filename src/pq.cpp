@@ -3,6 +3,7 @@
 
 #include "mkl.h"
 
+#include "memory_manager.h"
 #include "pq.h"
 #include "partition.h"
 #include "math_utils.h"
@@ -13,7 +14,7 @@
 
 namespace diskann
 {
-FixedChunkPQTable::FixedChunkPQTable()
+FixedChunkPQTable::FixedChunkPQTable(MemoryManager &memory_manager) : _memory_manager(memory_manager)
 {
 }
 
@@ -21,36 +22,35 @@ FixedChunkPQTable::~FixedChunkPQTable()
 {
 #ifndef EXEC_ENV_OLS
     if (tables != nullptr)
-        delete[] tables;
+        _memory_manager.delete_array(tables);
     if (tables_tr != nullptr)
-        delete[] tables_tr;
+        _memory_manager.delete_array(tables_tr);
     if (chunk_offsets != nullptr)
-        delete[] chunk_offsets;
+        _memory_manager.delete_array(chunk_offsets);
     if (centroid != nullptr)
-        delete[] centroid;
+        _memory_manager.delete_array(centroid);
     if (rotmat_tr != nullptr)
-        delete[] rotmat_tr;
+        _memory_manager.delete_array(rotmat_tr);
 #endif
 }
 
 #ifdef EXEC_ENV_OLS
-uint64_t FixedChunkPQTable::load_pq_centroid_bin(MemoryMappedFiles &files, const char *pq_table_file, size_t num_chunks)
+void FixedChunkPQTable::load_pq_centroid_bin(MemoryMappedFiles &files, const char *pq_table_file, size_t num_chunks)
 {
 #else
-uint64_t FixedChunkPQTable::load_pq_centroid_bin(const char *pq_table_file, size_t num_chunks)
+void FixedChunkPQTable::load_pq_centroid_bin(const char *pq_table_file, size_t num_chunks)
 {
 #endif
-    uint64_t memory_in_bytes = 0;
     uint64_t nr, nc;
     std::string rotmat_file = std::string(pq_table_file) + "_rotation_matrix.bin";
 
 #ifdef EXEC_ENV_OLS
     size_t *file_offset_data; // since load_bin only sets the pointer, no need
                               // to delete.
-    diskann::load_bin<size_t>(files, pq_table_file, file_offset_data, nr, nc);
+    diskann::load_bin<size_t>(_memory_manager, files, pq_table_file, file_offset_data, nr, nc);
 #else
     std::unique_ptr<size_t[]> file_offset_data;
-    diskann::load_bin<size_t>(pq_table_file, file_offset_data, nr, nc);
+    diskann::load_bin<size_t>(_memory_manager, pq_table_file, file_offset_data, nr, nc);
 #endif
 
     bool use_old_filetype = false;
@@ -82,9 +82,9 @@ uint64_t FixedChunkPQTable::load_pq_centroid_bin(const char *pq_table_file, size
 
 #ifdef EXEC_ENV_OLS
 
-    memory_in_bytes += diskann::load_bin<float>(files, pq_table_file, tables, nr, nc, file_offset_data[0]);
+    diskann::load_bin<float>(_memory_manager, files, pq_table_file, tables, nr, nc, file_offset_data[0]);
 #else
-    memory_in_bytes += diskann::load_bin<float>(pq_table_file, tables, nr, nc, file_offset_data[0]);
+    diskann::load_bin<float>(_memory_manager, pq_table_file, tables, nr, nc, file_offset_data[0]);
 #endif
 
     if ((nr != NUM_PQ_CENTROIDS))
@@ -98,9 +98,9 @@ uint64_t FixedChunkPQTable::load_pq_centroid_bin(const char *pq_table_file, size
     this->ndims = nc;
 
 #ifdef EXEC_ENV_OLS
-    memory_in_bytes += diskann::load_bin<float>(files, pq_table_file, centroid, nr, nc, file_offset_data[1]);
+    diskann::load_bin<float>(_memory_manager, files, pq_table_file, centroid, nr, nc, file_offset_data[1]);
 #else
-    memory_in_bytes += diskann::load_bin<float>(pq_table_file, centroid, nr, nc, file_offset_data[1]);
+    diskann::load_bin<float>(_memory_manager, pq_table_file, centroid, nr, nc, file_offset_data[1]);
 #endif
 
     if ((nr != this->ndims) || (nc != 1))
@@ -117,11 +117,11 @@ uint64_t FixedChunkPQTable::load_pq_centroid_bin(const char *pq_table_file, size
         chunk_offsets_index = 3;
     }
 #ifdef EXEC_ENV_OLS
-    memory_in_bytes +=
-        diskann::load_bin<uint32_t>(files, pq_table_file, chunk_offsets, nr, nc, file_offset_data[chunk_offsets_index]);
+    diskann::load_bin<uint32_t>(_memory_manager, files, pq_table_file, chunk_offsets, nr, nc,
+                                file_offset_data[chunk_offsets_index]);
 #else
-    memory_in_bytes +=
-        diskann::load_bin<uint32_t>(pq_table_file, chunk_offsets, nr, nc, file_offset_data[chunk_offsets_index]);
+    diskann::load_bin<uint32_t>(_memory_manager, pq_table_file, chunk_offsets, nr, nc,
+                                file_offset_data[chunk_offsets_index]);
 #endif
 
     if (nc != 1 || (nr != num_chunks + 1 && num_chunks != 0))
@@ -138,9 +138,9 @@ uint64_t FixedChunkPQTable::load_pq_centroid_bin(const char *pq_table_file, size
     if (file_exists(rotmat_file))
     {
 #ifdef EXEC_ENV_OLS
-        memory_in_bytes += diskann::load_bin<float>(files, rotmat_file, (float *&)rotmat_tr, nr, nc);
+        diskann::load_bin<float>(_memory_manager, files, rotmat_file, (float *&)rotmat_tr, nr, nc);
 #else
-        memory_in_bytes += diskann::load_bin<float>(rotmat_file, rotmat_tr, nr, nc);
+        diskann::load_bin<float>(_memory_manager, rotmat_file, rotmat_tr, nr, nc);
 #endif
         if (nr != this->ndims || nc != this->ndims)
         {
@@ -151,8 +151,7 @@ uint64_t FixedChunkPQTable::load_pq_centroid_bin(const char *pq_table_file, size
     }
 
     // alloc and compute transpose
-    tables_tr = new float[256 * this->ndims];
-    memory_in_bytes += sizeof(float) * 256 * this->ndims;
+    tables_tr = _memory_manager.new_array<float>(256 * this->ndims);
     for (size_t i = 0; i < 256; i++)
     {
         for (size_t j = 0; j < this->ndims; j++)
@@ -160,8 +159,6 @@ uint64_t FixedChunkPQTable::load_pq_centroid_bin(const char *pq_table_file, size
             tables_tr[j * 256 + i] = tables[i * this->ndims + j];
         }
     }
-
-    return memory_in_bytes;
 }
 
 uint32_t FixedChunkPQTable::get_num_chunks()
@@ -368,7 +365,9 @@ int generate_pq_pivots(const float *const passed_train_data, size_t num_train, u
     if (file_exists(pq_pivots_path))
     {
         size_t file_dim, file_num_centers;
-        diskann::load_bin<float>(pq_pivots_path, full_pivot_data, file_num_centers, file_dim, METADATA_SIZE);
+        diskann::MemoryManager memory_manager;
+        diskann::load_bin<float>(memory_manager, pq_pivots_path, full_pivot_data, file_num_centers, file_dim,
+                                 METADATA_SIZE);
         if (file_dim == dim && file_num_centers == num_centers)
         {
             diskann::cout << "PQ pivot file exists. Not generating again" << std::endl;
@@ -749,7 +748,8 @@ int generate_pq_data_from_pivots(const std::string &data_file, uint32_t num_cent
         size_t nr, nc;
         std::unique_ptr<size_t[]> file_offset_data;
 
-        diskann::load_bin<size_t>(pq_pivots_path.c_str(), file_offset_data, nr, nc, 0);
+        diskann::load_bin<size_t>(diskann::MemoryManager::get_instance(), pq_pivots_path.c_str(), file_offset_data, nr,
+                                  nc, 0);
 
         if (nr != 4)
         {
@@ -759,7 +759,8 @@ int generate_pq_data_from_pivots(const std::string &data_file, uint32_t num_cent
                                         __LINE__);
         }
 
-        diskann::load_bin<float>(pq_pivots_path.c_str(), full_pivot_data, nr, nc, file_offset_data[0]);
+        diskann::load_bin<float>(diskann::MemoryManager::get_instance(), pq_pivots_path.c_str(), full_pivot_data, nr,
+                                 nc, file_offset_data[0]);
 
         if ((nr != num_centers) || (nc != dim))
         {
@@ -770,7 +771,8 @@ int generate_pq_data_from_pivots(const std::string &data_file, uint32_t num_cent
                                         __LINE__);
         }
 
-        diskann::load_bin<float>(pq_pivots_path.c_str(), centroid, nr, nc, file_offset_data[1]);
+        diskann::load_bin<float>(diskann::MemoryManager::get_instance(), pq_pivots_path.c_str(), centroid, nr, nc,
+                                 file_offset_data[1]);
 
         if ((nr != dim) || (nc != 1))
         {
@@ -780,7 +782,8 @@ int generate_pq_data_from_pivots(const std::string &data_file, uint32_t num_cent
                                         __LINE__);
         }
 
-        diskann::load_bin<uint32_t>(pq_pivots_path.c_str(), chunk_offsets, nr, nc, file_offset_data[2]);
+        diskann::load_bin<uint32_t>(diskann::MemoryManager::get_instance(), pq_pivots_path.c_str(), chunk_offsets, nr,
+                                    nc, file_offset_data[2]);
 
         if (nr != (uint64_t)num_pq_chunks + 1 || nc != 1)
         {
@@ -793,7 +796,7 @@ int generate_pq_data_from_pivots(const std::string &data_file, uint32_t num_cent
         if (use_opq)
         {
             std::string rotmat_path = pq_pivots_path + "_rotation_matrix.bin";
-            diskann::load_bin<float>(rotmat_path.c_str(), rotmat_tr, nr, nc);
+            diskann::load_bin<float>(diskann::MemoryManager::get_instance(), rotmat_path.c_str(), rotmat_tr, nr, nc);
             if (nr != (uint64_t)dim || nc != dim)
             {
                 diskann::cout << "Error reading rotation matrix file." << std::endl;

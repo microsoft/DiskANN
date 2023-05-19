@@ -140,14 +140,16 @@ int search_disk_index(diskann::Metric &metric, const std::string &index_path_pre
     {
         if (file_exists(warmup_query_file))
         {
-            diskann::load_aligned_bin<T>(memory_manager, warmup_query_file, warmup, warmup_num, warmup_dim, warmup_aligned_dim);
+            diskann::load_aligned_bin<T>(memory_manager, warmup_query_file, warmup, warmup_num, warmup_dim,
+                                         warmup_aligned_dim);
         }
         else
         {
             warmup_num = (std::min)((uint32_t)150000, (uint32_t)15000 * num_threads);
             warmup_dim = query_dim;
             warmup_aligned_dim = query_aligned_dim;
-            memory_manager.alloc_aligned(((void **)&warmup), warmup_num * warmup_aligned_dim * sizeof(T), 8 * sizeof(T));
+            memory_manager.alloc_aligned(((void **)&warmup), warmup_num * warmup_aligned_dim * sizeof(T),
+                                         8 * sizeof(T));
             std::memset(warmup, 0, warmup_num * warmup_aligned_dim * sizeof(T));
             std::random_device rd;
             std::mt19937 gen(rd());
