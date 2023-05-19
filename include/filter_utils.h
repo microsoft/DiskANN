@@ -180,7 +180,8 @@ inline tsl::robin_map<std::string, std::vector<uint32_t>> generate_label_specifi
     return label_id_to_orig_id;
 }
 
-inline std::vector<uint32_t> loadTags(diskann::MemoryManager& memory_manager, const std::string &tags_file, const std::string &base_file)
+inline std::vector<uint32_t> loadTags(diskann::MemoryManager &memory_manager, const std::string &tags_file,
+                                      const std::string &base_file)
 {
     const bool tags_enabled = tags_file.empty() ? false : true;
     std::vector<uint32_t> location_to_tag;

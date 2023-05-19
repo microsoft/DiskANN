@@ -38,7 +38,7 @@ class MemoryManager
     MemoryManager &operator=(const MemoryManager &) = delete;
 
     void insert_block(void *ptr, size_t size);
-    void erase_block(void* ptr);
+    void erase_block(void *ptr);
 
     std::atomic<size_t> _memory_used_in_bytes;
     Concurrency::concurrent_unordered_map<void *, size_t> _block_to_size;

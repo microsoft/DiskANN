@@ -7,7 +7,7 @@
 
 #include "allocator.h"
 #include "boost_dynamic_bitset_fwd.h"
-//#include "boost/dynamic_bitset.hpp"
+// #include "boost/dynamic_bitset.hpp"
 #include "tsl/robin_set.h"
 #include "tsl/robin_map.h"
 #include "tsl/sparse_map.h"
@@ -37,8 +37,8 @@ template <typename T> class InMemQueryScratch
   public:
     ~InMemQueryScratch();
     // REFACTOR TODO: move all parameters to a new class.
-    InMemQueryScratch(MemoryManager& memory_manager, uint32_t search_l, uint32_t indexing_l, uint32_t r, uint32_t maxc, size_t dim, size_t aligned_dim,
-                      size_t alignment_factor, bool init_pq_scratch = false);
+    InMemQueryScratch(MemoryManager &memory_manager, uint32_t search_l, uint32_t indexing_l, uint32_t r, uint32_t maxc,
+                      size_t dim, size_t aligned_dim, size_t alignment_factor, bool init_pq_scratch = false);
     void resize_for_new_L(uint32_t new_search_l);
     void clear();
 
@@ -104,7 +104,7 @@ template <typename T> class InMemQueryScratch
     }
 
   private:
-    MemoryManager& _memory_manager;
+    MemoryManager &_memory_manager;
     uint32_t _L;
     uint32_t _R;
     uint32_t _maxc;
@@ -174,8 +174,8 @@ template <typename T> class SSDQueryScratch
 
     void reset();
 
-private:
-    MemoryManager & _memory_manager;
+  private:
+    MemoryManager &_memory_manager;
 };
 
 template <typename T> class SSDThreadData

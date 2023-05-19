@@ -66,7 +66,7 @@ template <typename data_t> class InMemDataStore : public AbstractDataStore<data_
 #endif
 
   private:
-    MemoryManager& _memory_manager;
+    MemoryManager &_memory_manager;
     data_t *_data = nullptr;
 
     size_t _aligned_dim;

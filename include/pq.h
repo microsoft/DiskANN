@@ -25,10 +25,10 @@ class FixedChunkPQTable
     float *centroid = nullptr;
     float *tables_tr = nullptr; // same as pq_tables, but col-major
     float *rotmat_tr = nullptr;
-    MemoryManager& _memory_manager;
+    MemoryManager &_memory_manager;
 
   public:
-    FixedChunkPQTable(MemoryManager& memory_manager);
+    FixedChunkPQTable(MemoryManager &memory_manager);
 
     virtual ~FixedChunkPQTable();
 
@@ -63,13 +63,12 @@ template <typename T> struct PQScratch
     float *rotated_query = nullptr;
     float *aligned_query_float = nullptr;
 
-    PQScratch(MemoryManager& memory_manager, size_t graph_degree, size_t aligned_dim)
+    PQScratch(MemoryManager &memory_manager, size_t graph_degree, size_t aligned_dim)
     {
         memory_manager.alloc_aligned((void **)&aligned_pq_coord_scratch,
-                               (size_t)graph_degree * (size_t)MAX_PQ_CHUNKS * sizeof(uint8_t), 256);
+                                     (size_t)graph_degree * (size_t)MAX_PQ_CHUNKS * sizeof(uint8_t), 256);
         memory_manager.alloc_aligned((void **)&aligned_pqtable_dist_scratch,
-                                     256 * (size_t)MAX_PQ_CHUNKS * sizeof(float),
-                               256);
+                                     256 * (size_t)MAX_PQ_CHUNKS * sizeof(float), 256);
         memory_manager.alloc_aligned((void **)&aligned_dist_scratch, (size_t)graph_degree * sizeof(float), 256);
         memory_manager.alloc_aligned((void **)&aligned_query_float, aligned_dim * sizeof(float), 8 * sizeof(float));
         memory_manager.alloc_aligned((void **)&rotated_query, aligned_dim * sizeof(float), 8 * sizeof(float));

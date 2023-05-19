@@ -309,8 +309,8 @@ template <typename T> inline std::string getValues(T *data, size_t num)
 
 // load_bin functions START
 template <typename T>
-inline void load_bin_impl(diskann::MemoryManager& memory_manager, std::basic_istream<char> &reader, T *&data, size_t &npts, size_t &dim,
-                              size_t file_offset = 0)
+inline void load_bin_impl(diskann::MemoryManager &memory_manager, std::basic_istream<char> &reader, T *&data,
+                          size_t &npts, size_t &dim, size_t file_offset = 0)
 {
     int npts_i32, dim_i32;
 
@@ -365,7 +365,8 @@ template <typename T> DISKANN_DLLEXPORT void read_value(AlignedFileReader &reade
 #endif
 
 template <typename T>
-inline void load_bin(diskann::MemoryManager& memory_manager, const std::string &bin_file, T *&data, size_t &npts, size_t &dim, size_t offset = 0)
+inline void load_bin(diskann::MemoryManager &memory_manager, const std::string &bin_file, T *&data, size_t &npts,
+                     size_t &dim, size_t offset = 0)
 {
     diskann::cout << "Reading bin file " << bin_file.c_str() << " ..." << std::endl;
     std::ifstream reader;
@@ -597,8 +598,8 @@ DISKANN_DLLEXPORT double calculate_range_search_recall(unsigned num_queries,
                                                        std::vector<std::vector<uint32_t>> &our_results);
 
 template <typename T>
-inline void load_bin(diskann::MemoryManager& memory_manager, const std::string &bin_file, std::unique_ptr<T[]> &data, size_t &npts, size_t &dim,
-                     size_t offset = 0)
+inline void load_bin(diskann::MemoryManager &memory_manager, const std::string &bin_file, std::unique_ptr<T[]> &data,
+                     size_t &npts, size_t &dim, size_t offset = 0)
 {
     T *ptr;
     load_bin<T>(memory_manager, bin_file, ptr, npts, dim, offset);
@@ -661,8 +662,8 @@ inline void print_progress(double percentage)
 // load_aligned_bin functions START
 
 template <typename T>
-inline void load_aligned_bin_impl(MemoryManager& memory_manager, std::basic_istream<char> &reader, size_t actual_file_size, T *&data, size_t &npts,
-                                  size_t &dim, size_t &rounded_dim)
+inline void load_aligned_bin_impl(MemoryManager &memory_manager, std::basic_istream<char> &reader,
+                                  size_t actual_file_size, T *&data, size_t &npts, size_t &dim, size_t &rounded_dim)
 {
     int npts_i32, dim_i32;
     reader.read((char *)&npts_i32, sizeof(int));
@@ -719,7 +720,8 @@ inline void load_aligned_bin(MemoryMappedFiles &files, const std::string &bin_fi
 #endif
 
 template <typename T>
-inline void load_aligned_bin(MemoryManager& memory_manager, const std::string &bin_file, T *&data, size_t &npts, size_t &dim, size_t &rounded_dim)
+inline void load_aligned_bin(MemoryManager &memory_manager, const std::string &bin_file, T *&data, size_t &npts,
+                             size_t &dim, size_t &rounded_dim)
 {
     std::ifstream reader;
     reader.exceptions(std::ifstream::failbit | std::ifstream::badbit);
