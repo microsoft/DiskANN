@@ -49,7 +49,7 @@ jobs:
       # Build code
     - name: build
       if: runner.os != 'Windows'
-      id: ububtubuild
+      id: ubuntubuild
       run: |
         cd build && make -j
 
@@ -77,8 +77,8 @@ jobs:
         echo "diskann_built_utils=./x64/Release" >> $GITHUB_ENV
 
       # if any of the build failed do not execute workflow
-    - name: check if build succeeded
-      if: steps.windowsbuild.outcome != 'success' || steps.ubuntubuild.outcome != 'success'
+    - name: check on failure
+      if: (steps.windowsbuild.outcome != 'success') || (steps.ubuntubuild.outcome != 'success')
       run: exit 1
 
     - name: Generate 10K random float32 index vectors, 1K query vectors, in 10 dims and compute GT
