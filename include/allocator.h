@@ -49,6 +49,11 @@ template <class T> inline bool operator==(const Allocator<T> &a, const Allocator
     return a._memory_used_in_bytes_ptr == b._memory_used_in_bytes_ptr;
 }
 
+template <class T> inline bool operator!=(const Allocator<T> &a, const Allocator<T> &b)
+{
+    return a._memory_used_in_bytes_ptr != b._memory_used_in_bytes_ptr;
+}
+
 template <class _Ty, class _Alloc = Allocator<_Ty>> using vector = std::vector<_Ty, _Alloc>;
 
 template <class Key, class Hash = std::hash<Key>, class KeyEqual = std::equal_to<Key>, class Allocator = Allocator<Key>,
