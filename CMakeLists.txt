@@ -244,6 +244,7 @@ endif()
 add_subdirectory(src)
 if (NOT PYBIND)
     add_subdirectory(tests)
+    add_subdirectory(tests/unittests)
     add_subdirectory(tests/utils)
 endif()
 

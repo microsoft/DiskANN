@@ -130,26 +130,64 @@ template <typename T> Allocator<T> MemoryManager::create_allocator()
     return Allocator<T>(&_memory_used_in_bytes);
 }
 
+template DISKANN_DLLEXPORT unsigned char *MemoryManager::new_array(size_t);
+template DISKANN_DLLEXPORT uint8_t *MemoryManager::new_array(size_t);
+template DISKANN_DLLEXPORT uint16_t *MemoryManager::new_array(size_t);
+template DISKANN_DLLEXPORT uint32_t *MemoryManager::new_array(size_t);
+template DISKANN_DLLEXPORT uint64_t *MemoryManager::new_array(size_t);
+
 template DISKANN_DLLEXPORT char *MemoryManager::new_array(size_t);
 template DISKANN_DLLEXPORT int8_t *MemoryManager::new_array(size_t);
-template DISKANN_DLLEXPORT uint8_t *MemoryManager::new_array(size_t);
-template DISKANN_DLLEXPORT uint32_t *MemoryManager::new_array(size_t);
+template DISKANN_DLLEXPORT int16_t *MemoryManager::new_array(size_t);
 template DISKANN_DLLEXPORT int32_t *MemoryManager::new_array(size_t);
-template DISKANN_DLLEXPORT uint64_t *MemoryManager::new_array(size_t);
 template DISKANN_DLLEXPORT int64_t *MemoryManager::new_array(size_t);
+
 template DISKANN_DLLEXPORT float *MemoryManager::new_array(size_t);
+template DISKANN_DLLEXPORT double *MemoryManager::new_array(size_t);
+
+template DISKANN_DLLEXPORT void MemoryManager::delete_array(unsigned char *);
+template DISKANN_DLLEXPORT void MemoryManager::delete_array(uint8_t *);
+template DISKANN_DLLEXPORT void MemoryManager::delete_array(uint16_t *);
+template DISKANN_DLLEXPORT void MemoryManager::delete_array(uint32_t *);
+template DISKANN_DLLEXPORT void MemoryManager::delete_array(uint64_t *);
 
 template DISKANN_DLLEXPORT void MemoryManager::delete_array(char *);
 template DISKANN_DLLEXPORT void MemoryManager::delete_array(int8_t *);
-template DISKANN_DLLEXPORT void MemoryManager::delete_array(uint8_t *);
-template DISKANN_DLLEXPORT void MemoryManager::delete_array(uint32_t *);
+template DISKANN_DLLEXPORT void MemoryManager::delete_array(int16_t *);
 template DISKANN_DLLEXPORT void MemoryManager::delete_array(int32_t *);
-template DISKANN_DLLEXPORT void MemoryManager::delete_array(uint64_t *);
 template DISKANN_DLLEXPORT void MemoryManager::delete_array(int64_t *);
-template DISKANN_DLLEXPORT void MemoryManager::delete_array(float *);
 
+template DISKANN_DLLEXPORT void MemoryManager::delete_array(float *);
+template DISKANN_DLLEXPORT void MemoryManager::delete_array(double *);
+
+template DISKANN_DLLEXPORT Allocator<unsigned char> MemoryManager::create_allocator();
+template DISKANN_DLLEXPORT Allocator<uint8_t> MemoryManager::create_allocator();
+template DISKANN_DLLEXPORT Allocator<uint16_t> MemoryManager::create_allocator();
 template DISKANN_DLLEXPORT Allocator<uint32_t> MemoryManager::create_allocator();
-template DISKANN_DLLEXPORT Allocator<int> MemoryManager::create_allocator();
+template DISKANN_DLLEXPORT Allocator<uint64_t> MemoryManager::create_allocator();
+
+template DISKANN_DLLEXPORT Allocator<char> MemoryManager::create_allocator();
+template DISKANN_DLLEXPORT Allocator<int8_t> MemoryManager::create_allocator();
+template DISKANN_DLLEXPORT Allocator<int16_t> MemoryManager::create_allocator();
+template DISKANN_DLLEXPORT Allocator<int32_t> MemoryManager::create_allocator();
+template DISKANN_DLLEXPORT Allocator<int64_t> MemoryManager::create_allocator();
+
+template DISKANN_DLLEXPORT Allocator<float> MemoryManager::create_allocator();
+template DISKANN_DLLEXPORT Allocator<double> MemoryManager::create_allocator();
+
+template DISKANN_DLLEXPORT Allocator<diskann::vector<unsigned char>> MemoryManager::create_allocator();
+template DISKANN_DLLEXPORT Allocator<diskann::vector<uint8_t>> MemoryManager::create_allocator();
+template DISKANN_DLLEXPORT Allocator<diskann::vector<uint16_t>> MemoryManager::create_allocator();
 template DISKANN_DLLEXPORT Allocator<diskann::vector<uint32_t>> MemoryManager::create_allocator();
+template DISKANN_DLLEXPORT Allocator<diskann::vector<uint64_t>> MemoryManager::create_allocator();
+
+template DISKANN_DLLEXPORT Allocator<diskann::vector<char>> MemoryManager::create_allocator();
+template DISKANN_DLLEXPORT Allocator<diskann::vector<int8_t>> MemoryManager::create_allocator();
+template DISKANN_DLLEXPORT Allocator<diskann::vector<int16_t>> MemoryManager::create_allocator();
+template DISKANN_DLLEXPORT Allocator<diskann::vector<int32_t>> MemoryManager::create_allocator();
+template DISKANN_DLLEXPORT Allocator<diskann::vector<int64_t>> MemoryManager::create_allocator();
+
+template DISKANN_DLLEXPORT Allocator<diskann::vector<float>> MemoryManager::create_allocator();
+template DISKANN_DLLEXPORT Allocator<diskann::vector<double>> MemoryManager::create_allocator();
 
 } // namespace diskann
