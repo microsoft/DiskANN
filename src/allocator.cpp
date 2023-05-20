@@ -68,6 +68,8 @@ template class Allocator<diskann::vector<int64_t>>;
 template class Allocator<diskann::vector<float>>;
 template class Allocator<diskann::vector<double>>;
 
+#ifdef _WINDOWS
 template class Allocator<std::_Container_proxy>;
+#endif // _WINDOWS
 
 } // namespace diskann
