@@ -11,7 +11,7 @@ jobs:
         sudo apt install cmake g++ libaio-dev libgoogle-perftools-dev libunwind-dev clang-format libboost-dev libboost-program-options-dev libmkl-full-dev libcpprest-dev
     - name: Clang Format Check
       run: |
-        mkdir build && cd build && cmake -DRESTAPI=True -DCMAKE_BUILD_TYPE=Release ..
+        mkdir build && cd build && cmake -DRESTAPI=True -DCMAKE_BUILD_TYPE=Release -DFORCE_TO_TRACK_MEMORY_IN_ALLOCATOR=True ..
         make checkformat
     - name: build
       run: |
@@ -61,5 +61,5 @@ jobs:
 
     - name: Run configure and build
       run: |
-        mkdir build && cd build && cmake .. && msbuild diskann.sln /m /nologo /t:Build /p:Configuration="Release" /p:FORCE_TO_TRACK_MEMORY_IN_ALLOCATOR="1" /property:Platform="x64" -consoleloggerparameters:"ErrorsOnly;Summary" && ctest
+        mkdir build && cd build && cmake .. -DFORCE_TO_TRACK_MEMORY_IN_ALLOCATOR=True && msbuild diskann.sln /m /nologo /t:Build /p:Configuration="Release" /property:Platform="x64" -consoleloggerparameters:"ErrorsOnly;Summary" && ctest
       shell: cmd

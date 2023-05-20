@@ -151,6 +151,9 @@ else()
 endif()
 
 add_definitions(-DMKL_ILP64)
+if (FORCE_TO_TRACK_MEMORY_IN_ALLOCATOR)
+    add_definitions(-DFORCE_TO_TRACK_MEMORY_IN_ALLOCATOR)
+endif()
 
 # Section for tcmalloc. The DiskANN tools are always linked to tcmalloc. For Windows, they also need to
 # force-include the _tcmalloc symbol for enabling tcmalloc.
