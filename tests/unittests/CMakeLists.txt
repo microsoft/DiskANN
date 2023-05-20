@@ -3,8 +3,6 @@
 
 set(CMAKE_COMPILE_WARNING_AS_ERROR ON)
 
-enable_testing()
-
 find_package(Boost COMPONENTS unit_test_framework)
 
 # For Windows, fall back to nuget version if find_package didn't find it.

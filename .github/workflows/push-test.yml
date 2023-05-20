@@ -15,7 +15,7 @@ jobs:
         make checkformat
     - name: build
       run: |
-        cd build && make -j && ctest
+        cd build && make -j && ctest -C Release
 #     - uses: actions/setup-python@v3
 #       with:
 #         python-version: "3.10"
@@ -61,5 +61,5 @@ jobs:
 
     - name: Run configure and build
       run: |
-        mkdir build && cd build && cmake .. -DFORCE_TO_TRACK_MEMORY_IN_ALLOCATOR=True && msbuild diskann.sln /m /nologo /t:Build /p:Configuration="Release" /property:Platform="x64" -consoleloggerparameters:"ErrorsOnly;Summary" && ctest
+        mkdir build && cd build && cmake .. -DFORCE_TO_TRACK_MEMORY_IN_ALLOCATOR=True && msbuild diskann.sln /m /nologo /t:Build /p:Configuration="Release" /property:Platform="x64" -consoleloggerparameters:"ErrorsOnly;Summary" && ctest -C Release
       shell: cmd

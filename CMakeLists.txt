@@ -244,6 +244,8 @@ else()
     endif()
 endif()
 
+enable_testing()
+
 add_subdirectory(src)
 if (NOT PYBIND)
     add_subdirectory(tests)
