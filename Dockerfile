@@ -7,7 +7,7 @@ RUN apt update
 RUN apt install -y software-properties-common
 RUN add-apt-repository -y ppa:git-core/ppa
 RUN apt update
-RUN DEBIAN_FRONTEND=noninteractive apt install -y git make cmake g++ libaio-dev libgoogle-perftools-dev libunwind-dev clang-format libboost-dev libboost-program-options-dev libboost-unit-test-framework-dev libmkl-full-dev libcpprest-dev python3.10
+RUN DEBIAN_FRONTEND=noninteractive apt install -y git make cmake g++ libaio-dev libgoogle-perftools-dev libunwind-dev clang-format libboost-dev libboost-program-options-dev libboost-test-dev libmkl-full-dev libcpprest-dev python3.10
 
 WORKDIR /app
 RUN git clone https://github.com/microsoft/DiskANN.git 
