@@ -22,26 +22,21 @@ template <class T> class Allocator
     using propagate_on_container_move_assignment = std::true_type;
     using is_always_equal = std::true_type;
 
-    Allocator(std::atomic<size_t> *memory_used = nullptr)
+    Allocator(std::atomic<size_t> *memory_used_in_bytes_ptr = nullptr)
     {
-        _memory_used_in_bytes = memory_used;
+        _memory_used_in_bytes_ptr = memory_used_in_bytes_ptr;
     }
 
-    template <class U = T> Allocator(const Allocator<U> &a)
+    template <class U> Allocator(const Allocator<U> &a)
     {
-        _memory_used_in_bytes = a._memory_used_in_bytes;
-    }
-
-    Allocator &operator=(const Allocator &a)
-    {
-        _memory_used_in_bytes = a._memory_used_in_bytes;
+        _memory_used_in_bytes_ptr = a._memory_used_in_bytes_ptr;
     }
 
     DISKANN_DLLEXPORT T *allocate(std::size_t count, const T *hint = nullptr);
 
     DISKANN_DLLEXPORT void deallocate(T *ptr, std::size_t count);
 
-    std::atomic<size_t> *_memory_used_in_bytes;
+    std::atomic<size_t> *_memory_used_in_bytes_ptr;
 
   private:
     void update_memory_usage(std::size_t count, bool is_allocation);
@@ -51,7 +46,7 @@ template <class T> class Allocator
 
 template <class T> inline bool operator==(const Allocator<T> &a, const Allocator<T> &b)
 {
-    return a._memory_used_in_bytes == b._memory_used_in_bytes;
+    return a._memory_used_in_bytes_ptr == b._memory_used_in_bytes_ptr;
 }
 
 template <class _Ty, class _Alloc = Allocator<_Ty>> using vector = std::vector<_Ty, _Alloc>;

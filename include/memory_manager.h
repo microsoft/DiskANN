@@ -19,7 +19,7 @@ class MemoryManager
 
     // only use to build index offline
     DISKANN_DLLEXPORT static MemoryManager &get_instance();
-    size_t get_memory_used_in_bytes() const;
+    DISKANN_DLLEXPORT size_t get_memory_used_in_bytes() const;
     DISKANN_DLLEXPORT void alloc_aligned(void **ptr, size_t size, size_t align);
 
     DISKANN_DLLEXPORT void realloc_aligned(void **ptr, size_t size, size_t align);

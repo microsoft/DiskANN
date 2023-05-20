@@ -148,8 +148,8 @@ template DISKANN_DLLEXPORT void MemoryManager::delete_array(uint64_t *);
 template DISKANN_DLLEXPORT void MemoryManager::delete_array(int64_t *);
 template DISKANN_DLLEXPORT void MemoryManager::delete_array(float *);
 
-template Allocator<uint32_t> MemoryManager::create_allocator();
-template Allocator<int> MemoryManager::create_allocator();
-template Allocator<diskann::vector<uint32_t>> MemoryManager::create_allocator();
+template DISKANN_DLLEXPORT Allocator<uint32_t> MemoryManager::create_allocator();
+template DISKANN_DLLEXPORT Allocator<int> MemoryManager::create_allocator();
+template DISKANN_DLLEXPORT Allocator<diskann::vector<uint32_t>> MemoryManager::create_allocator();
 
 } // namespace diskann
