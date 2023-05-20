@@ -36,7 +36,7 @@ jobs:
     - name: Ubuntu CMake Configure
       if: runner.os != 'Windows'
       run: |
-        mkdir build && cd build && cmake -DCMAKE_BUILD_TYPE=Release -DFORCE_TO_TRACK_MEMORY_IN_ALLOCATOR=True ..
+        mkdir build && cd build && cmake -DCMAKE_BUILD_TYPE=Release -DFORCE_TO_TRACK_MEMORY_IN_ALLOCATOR=True .. && ctest -C Release
 
     - name: Clang Format Check
       if: ${{ matrix.os == 'ubuntu-latest' }}
@@ -55,7 +55,7 @@ jobs:
     - name: Run configure and build for Windows
       if: runner.os == 'Windows'
       run: |
-        mkdir build && cd build && cmake .. -DFORCE_TO_TRACK_MEMORY_IN_ALLOCATOR=True && msbuild diskann.sln /m /nologo /t:Build /p:Configuration="Release" /property:Platform="x64" -consoleloggerparameters:"ErrorsOnly;Summary"
+        mkdir build && cd build && cmake .. -DFORCE_TO_TRACK_MEMORY_IN_ALLOCATOR=True && msbuild diskann.sln /m /nologo /t:Build /p:Configuration="Release" /property:Platform="x64" -consoleloggerparameters:"ErrorsOnly;Summary" && ctest -C Release
       shell: cmd
 
     - name: Set environment variables for running the tests on ${{ runner.os }}

@@ -11,11 +11,11 @@ jobs:
         sudo apt install cmake g++ libaio-dev libgoogle-perftools-dev libunwind-dev clang-format libboost-dev libboost-program-options-dev libboost-test-dev libmkl-full-dev libcpprest-dev
     - name: Clang Format Check
       run: |
-        mkdir build && cd build && cmake -DRESTAPI=True -DCMAKE_BUILD_TYPE=Release -DFORCE_TO_TRACK_MEMORY_IN_ALLOCATOR=True ..
+        mkdir build && cd build && cmake -DRESTAPI=True -DCMAKE_BUILD_TYPE=Release ..
         make checkformat
     - name: build
       run: |
-        cd build && make -j && ctest -C Release
+        cd build && make -j
 #     - uses: actions/setup-python@v3
 #       with:
 #         python-version: "3.10"
@@ -61,5 +61,5 @@ jobs:
 
     - name: Run configure and build
       run: |
-        mkdir build && cd build && cmake .. -DFORCE_TO_TRACK_MEMORY_IN_ALLOCATOR=True && msbuild diskann.sln /m /nologo /t:Build /p:Configuration="Release" /property:Platform="x64" -consoleloggerparameters:"ErrorsOnly;Summary" && ctest -C Release
+        mkdir build && cd build && cmake .. && msbuild diskann.sln /m /nologo /t:Build /p:Configuration="Release" /property:Platform="x64" -consoleloggerparameters:"ErrorsOnly;Summary"
       shell: cmd

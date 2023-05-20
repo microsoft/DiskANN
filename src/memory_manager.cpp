@@ -7,12 +7,6 @@
 namespace diskann
 {
 
-MemoryManager &MemoryManager::get_instance()
-{
-    static MemoryManager instance;
-    return instance;
-}
-
 size_t MemoryManager::get_memory_used_in_bytes() const
 {
     return _memory_used_in_bytes;

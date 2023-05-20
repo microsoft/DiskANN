@@ -1,10 +1,8 @@
 #Copyright(c) Microsoft Corporation.All rights reserved.
 #Licensed under the MIT                        license.
 
-add_library(${PROJECT_NAME} SHARED dllmain.cpp ../abstract_data_store.cpp ../allocator.cpp ../memory_manager.cpp ../partition.cpp ../pq.cpp ../pq_flash_index.cpp ../logger.cpp ../utils.cpp 
-    ../windows_aligned_file_reader.cpp ../distance.cpp ../memory_mapper.cpp ../index.cpp 
-    ../in_mem_data_store.cpp ../in_mem_graph_store.cpp ../math_utils.cpp ../disk_utils.cpp ../filter_utils.cpp 
-    ../ann_exception.cpp ../natural_number_set.cpp ../natural_number_map.cpp ../scratch.cpp)
+file(GLOB CPP_SOURCES ../*.cpp)
+add_library(${PROJECT_NAME} SHARED dllmain.cpp ${CPP_SOURCES})
 
 set(TARGET_DIR "$<$<CONFIG:Debug>:${CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG}>$<$<CONFIG:Release>:${CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE}>")
 set(DISKANN_DLL_IMPLIB "${TARGET_DIR}/${PROJECT_NAME}.lib")

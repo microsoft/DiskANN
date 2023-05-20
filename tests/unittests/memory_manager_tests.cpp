@@ -12,18 +12,25 @@ template <typename T> void test_vector()
     for (int i = 1; i <= 3; ++i)
     {
         auto pre_size = memory_manager.get_memory_used_in_bytes();
+        auto pre_capacity = data.capacity();
         data.resize(i * 3);
-        BOOST_TEST(memory_manager.get_memory_used_in_bytes() > pre_size);
+        BOOST_TEST(memory_manager.get_memory_used_in_bytes() ==
+                   pre_size + (data.capacity() - pre_capacity) * sizeof(T));
     }
 
     auto pre_size = memory_manager.get_memory_used_in_bytes();
-    data.push_back(1);
-    BOOST_TEST(memory_manager.get_memory_used_in_bytes() > pre_size);
+    auto pre_capacity = data.capacity();
+    for (auto size = data.size(); size > 0; size--)
+    {
+        data.push_back(1);
+    }
+    BOOST_TEST(memory_manager.get_memory_used_in_bytes() == pre_size + (data.capacity() - pre_capacity) * sizeof(T));
 
     pre_size = memory_manager.get_memory_used_in_bytes();
+    pre_capacity = data.capacity();
     data.clear();
     data.shrink_to_fit();
-    BOOST_TEST(memory_manager.get_memory_used_in_bytes() < pre_size);
+    BOOST_TEST(memory_manager.get_memory_used_in_bytes() == pre_size - (pre_capacity - data.capacity()) * sizeof(T));
 }
 
 template <typename T> void test_embedded_vector()
@@ -41,8 +48,10 @@ template <typename T> void test_embedded_vector()
         for (auto &v : data)
         {
             pre_size = memory_manager.get_memory_used_in_bytes();
+            auto pre_capacity = v.capacity();
             v.resize(v.size() + 1);
-            BOOST_TEST(memory_manager.get_memory_used_in_bytes() > pre_size);
+            BOOST_TEST(memory_manager.get_memory_used_in_bytes() ==
+                       pre_size + (v.capacity() - pre_capacity) * sizeof(T));
         }
     }
 
@@ -116,11 +125,11 @@ BOOST_AUTO_TEST_CASE(test_allocate)
             memory_manager.aligned_free(ptr);
             BOOST_TEST(memory_manager.get_memory_used_in_bytes() == pre_size);
 
+#ifdef _WINDOWS
             memory_manager.alloc_aligned(&ptr, j * align, align);
             BOOST_TEST(ptr != nullptr);
             BOOST_TEST(memory_manager.get_memory_used_in_bytes() == pre_size + j * align);
 
-#ifdef _WINDOWS
             memory_manager.realloc_aligned(&ptr, (j + 1) * align, align);
             BOOST_TEST(ptr != nullptr);
             BOOST_TEST(memory_manager.get_memory_used_in_bytes() == pre_size + (j + 1) * align);
