@@ -50,7 +50,7 @@ class ANNStreamBuf : public std::basic_streambuf<char>
 // overflows/missing text are not a concern).
 // This implies calling code _must_ either print std::endl or std::flush
 // to ensure that the message is written immediately.
-#ifdef EXEC_ENV_OLS
+#ifdef ENABLE_CUSTOM_LOGGER
     static const int BUFFER_SIZE = 1024;
 #else
     // Allocating an arbitrarily small buffer here because the overflow() and

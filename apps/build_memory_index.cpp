@@ -76,7 +76,8 @@ int main(int argc, char **argv)
     {
         desc.add_options()("help,h", "Print information on arguments");
         desc.add_options()("data_type", po::value<std::string>(&data_type)->required(), "data type <int8/uint8/float>");
-        desc.add_options()("dist_fn", po::value<std::string>(&dist_fn)->required(), "distance function <l2/mips>");
+        desc.add_options()("dist_fn", po::value<std::string>(&dist_fn)->required(),
+                           "distance function <l2/mips/cosine>");
         desc.add_options()("data_path", po::value<std::string>(&data_path)->required(),
                            "Input data file in bin format");
         desc.add_options()("index_path_prefix", po::value<std::string>(&index_path_prefix)->required(),

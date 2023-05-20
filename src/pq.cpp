@@ -673,9 +673,9 @@ int generate_opq_pivots(const float *passed_train_data, size_t num_train, uint32
 
         // compute the SVD of the correlation matrix to help determine the new
         // rotation matrix
-        uint32_t errcode =
-            LAPACKE_sgesdd(LAPACK_ROW_MAJOR, 'A', (MKL_INT)dim, (MKL_INT)dim, correlation_matrix.get(), (MKL_INT)dim,
-                           singular_values.get(), Umat.get(), (MKL_INT)dim, Vmat_T.get(), (MKL_INT)dim);
+        uint32_t errcode = (uint32_t)LAPACKE_sgesdd(LAPACK_ROW_MAJOR, 'A', (MKL_INT)dim, (MKL_INT)dim,
+                                                    correlation_matrix.get(), (MKL_INT)dim, singular_values.get(),
+                                                    Umat.get(), (MKL_INT)dim, Vmat_T.get(), (MKL_INT)dim);
 
         if (errcode > 0)
         {
