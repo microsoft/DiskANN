@@ -5,7 +5,7 @@
 
 #include <cpprest/base_uri.h>
 #include <restapi/search_wrapper.h>
-
+#undef U
 namespace diskann
 {
 // Constants

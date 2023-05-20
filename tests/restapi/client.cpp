@@ -26,7 +26,8 @@ template <typename T>
 void query_loop(const std::string &ip_addr_port, const std::string &query_file, const unsigned nq, const unsigned Ls,
                 const unsigned k_value)
 {
-    web::http::client::http_client client(U(ip_addr_port));
+    uri _ip_addr_port(utility::conversions::to_string_t(ip_addr_port));
+    web::http::client::http_client client(_ip_addr_port);
 
     T *data;
     size_t npts = 1, ndims = 128, rounded_dim = 128;
@@ -37,12 +38,12 @@ void query_loop(const std::string &ip_addr_port, const std::string &query_file, 
         T *vec = data + i * rounded_dim;
         web::http::http_request http_query(methods::POST);
         web::json::value queryJson = web::json::value::object();
-        queryJson[QUERY_ID_KEY] = i;
-        queryJson[K_KEY] = k_value;
-        queryJson[L_KEY] = Ls;
+        queryJson[utility::conversions::to_string_t(QUERY_ID_KEY)] = i;
+        queryJson[utility::conversions::to_string_t(K_KEY)] = k_value;
+        queryJson[utility::conversions::to_string_t(L_KEY)] = Ls;
         for (size_t i = 0; i < ndims; ++i)
         {
-            queryJson[VECTOR_KEY][i] = web::json::value::number(vec[i]);
+            queryJson[utility::conversions::to_string_t(VECTOR_KEY)][i] = web::json::value::number(vec[i]);
         }
         http_query.set_body(queryJson);
 
@@ -58,7 +59,7 @@ void query_loop(const std::string &ip_addr_port, const std::string &query_file, 
             .then([](pplx::task<utility::string_t> previousTask) {
                 try
                 {
-                    std::cout << previousTask.get() << std::endl;
+                    std::cout << previousTask.get().c_str() << std::endl;
                 }
                 catch (http_exception const &e)
                 {

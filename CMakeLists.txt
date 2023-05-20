@@ -24,6 +24,7 @@ set(CMAKE_STANDARD 14)
 if(NOT MSVC)
 	set(CMAKE_CXX_COMPILER g++)
 endif()
+set(RESTAPI ON)
 
 # Install nuget packages for dependencies.
 if (MSVC)

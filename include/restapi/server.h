@@ -5,6 +5,7 @@
 
 #include <restapi/common.h>
 #include <cpprest/http_listener.h>
+#undef U
 
 namespace diskann
 {

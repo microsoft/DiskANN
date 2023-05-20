@@ -23,7 +23,7 @@ void setup(const utility::string_t &address, const std::string &typestring)
     web::http::uri_builder uriBldr(address);
     auto uri = uriBldr.to_uri();
 
-    std::cout << "Attempting to start server on " << uri.to_string() << std::endl;
+    std::cout << "Attempting to start server on " << uri.to_string().c_str() << std::endl;
 
     g_httpServer = std::unique_ptr<Server>(new Server(uri, g_ssdSearch, typestring));
     std::cout << "Created a server object" << std::endl;
@@ -110,17 +110,19 @@ int main(int argc, char *argv[])
         exit(-1);
     }
 
+    auto wAddress = utility::conversions::to_string_t(address);
+
     while (1)
     {
         try
         {
-            setup(address, data_type);
+            setup(wAddress, data_type);
             std::cout << "Type 'exit' (case-sensitive) to exit" << std::endl;
             std::string line;
             std::getline(std::cin, line);
             if (line == "exit")
             {
-                teardown(address);
+                teardown(wAddress);
                 g_httpServer->close().wait();
                 exit(0);
             }
@@ -129,13 +131,13 @@ int main(int argc, char *argv[])
         {
             std::cerr << "Exception occurred: " << ex.what() << std::endl;
             std::cerr << "Restarting HTTP server";
-            teardown(address);
+            teardown(wAddress);
         }
         catch (...)
         {
             std::cerr << "Unknown exception occurreed" << std::endl;
             std::cerr << "Restarting HTTP server";
-            teardown(address);
+            teardown(wAddress);
         }
     }
 }
