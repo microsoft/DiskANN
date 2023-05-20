@@ -150,7 +150,7 @@ template <typename T, typename TagT, typename LabelT> Index<T, TagT, LabelT>::~I
 
     if (_opt_graph != nullptr)
     {
-        delete[] _opt_graph;
+        _memory_manager.delete_array(_opt_graph);
     }
 
     if (!_query_scratch.empty())

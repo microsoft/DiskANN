@@ -6,31 +6,38 @@
 
 namespace diskann
 {
-template <class _Ty> _CONSTEXPR20 void Allocator<_Ty>::deallocate(_Ty *const _Ptr, const size_t _Count)
+
+template <class T> T *Allocator<T>::allocate(std::size_t count, const T *hint)
 {
-    Base::deallocate(_Ptr, _Count);
-#ifdef FORCE_TO_TRACK_MEMORY_IN_ALLOCATOR
-    _STL_ASSERT(_memory_used_in_bytes != nullptr, "_memory_used_in_bytes should not be nullptr");
-#endif
-    if (_memory_used_in_bytes != nullptr)
-    {
-        *_memory_used_in_bytes -= _Count * sizeof(_Ty);
-    }
+    auto ret = _allocator.allocate(count, hint);
+    update_memory_usage(count, /*is_allocation*/ true);
+    return ret;
 }
 
-template <class _Ty>
-_NODISCARD_RAW_PTR_ALLOC _CONSTEXPR20 __declspec(Allocator) _Ty *Allocator<_Ty>::allocate(
-    _CRT_GUARDOVERFLOW const size_t _Count)
+template <class T> void Allocator<T>::deallocate(T *ptr, std::size_t count)
 {
-    auto ret = Base::allocate(_Count);
+    _allocator.deallocate(ptr, count);
+    update_memory_usage(count, /*is_allocation*/ false);
+}
+
+template <class T> void Allocator<T>::update_memory_usage(std::size_t count, bool is_allocation)
+{
 #ifdef FORCE_TO_TRACK_MEMORY_IN_ALLOCATOR
-    _STL_ASSERT(_memory_used_in_bytes != nullptr, "_memory_used_in_bytes should not be nullptr");
-#endif
-    if (_memory_used_in_bytes != nullptr)
+    assert(_memory_used_in_bytes != nullptr);
+#endif //  FORCE_TO_TRACK_MEMORY_IN_ALLOCATOR
+    if (_memory_used_in_bytes == nullptr)
     {
-        *_memory_used_in_bytes += _Count * sizeof(_Ty);
+        return;
     }
-    return ret;
+
+    if (is_allocation)
+    {
+        *_memory_used_in_bytes += sizeof(T) * count;
+    }
+    else
+    {
+        *_memory_used_in_bytes -= sizeof(T) * count;
+    }
 }
 
 template class Allocator<uint32_t>;

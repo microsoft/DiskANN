@@ -7,74 +7,52 @@
 #include <vector>
 #include <unordered_map>
 #include "tsl/robin_set.h"
+#include "windows_customizations.h"
 
 namespace diskann
 {
 
 /// <summary>
-/// Below class overrides the allocate\deallocate method of std::allocator<_Ty> to track memory usage
+/// The wrapper of std::allocator which tracks the memory usage
 /// </summary>
-template <class _Ty> class Allocator : public std::allocator<_Ty>
+template <class T> class Allocator
 {
   public:
-    using Base = std::allocator<_Ty>;
+    using value_type = T;
+    using propagate_on_container_move_assignment = std::true_type;
+    using is_always_equal = std::true_type;
 
-#if _HAS_DEPRECATED_ALLOCATOR_MEMBERS
-    template <class _Other> struct _CXX17_DEPRECATE_OLD_ALLOCATOR_MEMBERS rebind
-    {
-        using other = Allocator<_Other>;
-    };
-
-#endif // _HAS_DEPRECATED_ALLOCATOR_MEMBERS
-
-    constexpr Allocator(std::atomic<size_t> *memory_used) noexcept
+    Allocator(std::atomic<size_t> *memory_used = nullptr)
     {
         _memory_used_in_bytes = memory_used;
     }
 
-    constexpr Allocator() noexcept
-    {
-        _memory_used_in_bytes = nullptr;
-    }
-
-    constexpr Allocator(const Allocator &a) noexcept
+    template <class U = T> Allocator(const Allocator<U> &a)
     {
         _memory_used_in_bytes = a._memory_used_in_bytes;
     }
 
-    template <class _Other> constexpr Allocator(const Allocator<_Other> &a) noexcept
+    Allocator &operator=(const Allocator &a)
     {
         _memory_used_in_bytes = a._memory_used_in_bytes;
     }
 
-    _CONSTEXPR20 Allocator &operator=(const Allocator &a)
-    {
-        _memory_used_in_bytes = a._memory_used_in_bytes;
-    }
+    DISKANN_DLLEXPORT T *allocate(std::size_t count, const T *hint = nullptr);
 
-    _CONSTEXPR20 void deallocate(_Ty *const _Ptr, const size_t _Count);
-
-    _NODISCARD_RAW_PTR_ALLOC _CONSTEXPR20 __declspec(allocator) _Ty *allocate(_CRT_GUARDOVERFLOW const size_t _Count);
-
-#if _HAS_CXX23
-    _NODISCARD_RAW_PTR_ALLOC constexpr allocation_result<_Ty *> allocate_at_least(
-        _CRT_GUARDOVERFLOW const size_t _Count)
-    {
-        return {allocate(_Count), _Count};
-    }
-#endif // _HAS_CXX23
-
-#if _HAS_DEPRECATED_ALLOCATOR_MEMBERS
-    _CXX17_DEPRECATE_OLD_ALLOCATOR_MEMBERS _NODISCARD_RAW_PTR_ALLOC __declspec(allocator) _Ty *allocate(
-        _CRT_GUARDOVERFLOW const size_t _Count, const void *)
-    {
-        return allocate(_Count);
-    }
-
-#endif // _HAS_DEPRECATED_ALLOCATOR_MEMBERS
+    DISKANN_DLLEXPORT void deallocate(T *ptr, std::size_t count);
 
     std::atomic<size_t> *_memory_used_in_bytes;
+
+  private:
+    void update_memory_usage(std::size_t count, bool is_allocation);
+
+    std::allocator<T> _allocator;
 };
+
+template <class T> inline bool operator==(const Allocator<T> &a, const Allocator<T> &b)
+{
+    return a._memory_used_in_bytes == b._memory_used_in_bytes;
+}
 
 template <class _Ty, class _Alloc = Allocator<_Ty>> using vector = std::vector<_Ty, _Alloc>;
 
