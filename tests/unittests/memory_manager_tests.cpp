@@ -19,6 +19,11 @@ template <typename T> void test_vector()
     auto pre_size = memory_manager.get_memory_used_in_bytes();
     data.push_back(1);
     BOOST_TEST(memory_manager.get_memory_used_in_bytes() > pre_size);
+
+    pre_size = memory_manager.get_memory_used_in_bytes();
+    data.clear();
+    data.shrink_to_fit();
+    BOOST_TEST(memory_manager.get_memory_used_in_bytes() < pre_size);
 }
 
 template <typename T> void test_embedded_vector()
@@ -40,6 +45,14 @@ template <typename T> void test_embedded_vector()
             BOOST_TEST(memory_manager.get_memory_used_in_bytes() > pre_size);
         }
     }
+
+    auto pre_size = memory_manager.get_memory_used_in_bytes();
+    data.clear();
+    BOOST_TEST(memory_manager.get_memory_used_in_bytes() < pre_size);
+
+    pre_size = memory_manager.get_memory_used_in_bytes();
+    data.shrink_to_fit();
+    BOOST_TEST(memory_manager.get_memory_used_in_bytes() < pre_size);
 }
 
 template <typename T> void test_new_array()
@@ -57,6 +70,8 @@ template <typename T> void test_new_array()
         memory_manager.delete_array(ptr);
         BOOST_TEST(memory_manager.get_memory_used_in_bytes() == pre_size);
     }
+
+    BOOST_TEST(memory_manager.get_memory_used_in_bytes() == 0);
 }
 
 template <typename T> void test_basic_data_func()
@@ -68,7 +83,6 @@ template <typename T> void test_basic_data_func()
 
 BOOST_AUTO_TEST_CASE(test_basic_data)
 {
-    test_basic_data_func<unsigned char>();
     test_basic_data_func<uint8_t>();
     test_basic_data_func<uint16_t>();
     test_basic_data_func<uint32_t>();
@@ -116,6 +130,7 @@ BOOST_AUTO_TEST_CASE(test_allocate)
 #endif
         }
     }
+    BOOST_TEST(memory_manager.get_memory_used_in_bytes() == 0);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

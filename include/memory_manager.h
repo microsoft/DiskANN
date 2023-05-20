@@ -10,6 +10,9 @@
 namespace diskann
 {
 
+/// <summary>
+/// Use this class to allocate\dellocate memory in all places, so we could track the memory usage
+/// </summary>
 class MemoryManager
 {
   public:
