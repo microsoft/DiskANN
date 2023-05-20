@@ -74,40 +74,61 @@ void MemoryManager::aligned_free(void *ptr)
 
 void MemoryManager::insert_block(void *ptr, size_t size)
 {
+#ifdef FORCE_TO_TRACK_MEMORY_IN_ALLOCATOR
+    assert(ptr != nullptr);
+#endif //  FORCE_TO_TRACK_MEMORY_IN_ALLOCATOR
     if (ptr == nullptr)
     {
         diskann::cerr << "block address should not be null" << std::endl;
         return;
     }
 
-    auto it = _block_to_size.find(ptr);
-    if (it != _block_to_size.end())
     {
-        diskann::cerr << "block address " << ptr << " conflicts" << std::endl;
-        return;
+        std::lock_guard<std::mutex> lock(_mutex);
+        auto it = _block_to_size.find(ptr);
+#ifdef FORCE_TO_TRACK_MEMORY_IN_ALLOCATOR
+        assert(it == _block_to_size.end());
+#endif //  FORCE_TO_TRACK_MEMORY_IN_ALLOCATOR
+        if (it != _block_to_size.end())
+        {
+            diskann::cerr << "block address " << ptr << " conflicts" << std::endl;
+            return;
+        }
+
+        _block_to_size[ptr] = size;
     }
 
-    _block_to_size[ptr] = size;
     _memory_used_in_bytes += size;
 }
 
 void MemoryManager::erase_block(void *ptr)
 {
+#ifdef FORCE_TO_TRACK_MEMORY_IN_ALLOCATOR
+    assert(ptr != nullptr);
+#endif //  FORCE_TO_TRACK_MEMORY_IN_ALLOCATOR
     if (ptr == nullptr)
     {
         diskann::cerr << "block address should not be null" << std::endl;
         return;
     }
 
-    auto it = _block_to_size.find(ptr);
-    if (it == _block_to_size.end())
+    size_t size = 0;
     {
-        diskann::cerr << "can not find block address " << ptr << " in _block_to_size" << std::endl;
-        return;
+        std::lock_guard<std::mutex> lock(_mutex);
+        auto it = _block_to_size.find(ptr);
+#ifdef FORCE_TO_TRACK_MEMORY_IN_ALLOCATOR
+        assert(it != _block_to_size.end());
+#endif //  FORCE_TO_TRACK_MEMORY_IN_ALLOCATOR
+        if (it == _block_to_size.end())
+        {
+            diskann::cerr << "can not find block address " << ptr << " in _block_to_size" << std::endl;
+            return;
+        }
+
+        size = it->second;
+        _block_to_size.erase(it);
     }
 
-    auto size = it->second;
-    _block_to_size.unsafe_erase(ptr);
     _memory_used_in_bytes -= size;
 }
 

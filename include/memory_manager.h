@@ -3,7 +3,7 @@
 
 #pragma once
 #include <atomic>
-#include <concurrent_unordered_map.h>
+#include <mutex>
 #include "allocator.h"
 #include "windows_customizations.h"
 
@@ -39,7 +39,8 @@ class MemoryManager
     void erase_block(void *ptr);
 
     std::atomic<size_t> _memory_used_in_bytes;
-    Concurrency::concurrent_unordered_map<void *, size_t> _block_to_size;
+    std::mutex _mutex;
+    std::unordered_map<void *, size_t> _block_to_size;
 };
 
 } // namespace diskann
