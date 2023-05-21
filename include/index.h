@@ -105,9 +105,6 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     DISKANN_DLLEXPORT size_t get_max_points();
     DISKANN_DLLEXPORT uint64_t get_memory_in_bytes();
 
-    DISKANN_DLLEXPORT size_t find_common_filters(uint32_t point_id, bool search_invocation,
-                                                 const std::vector<LabelT> &incoming_labels);
-
     // Batch build from a file. Optionally pass tags vector.
     DISKANN_DLLEXPORT void build(const char *filename, const size_t num_points_to_load,
                                  const IndexWriteParameters &parameters,
@@ -237,6 +234,9 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     void parse_label_file(const std::string &label_file, size_t &num_pts_labels);
 
     std::unordered_map<std::string, LabelT> load_label_map(const std::string &map_file);
+
+    // Find common filter between a node's labels and a given set of labels, while taking into account universal label
+    bool detect_common_filters(uint32_t point_id, bool search_invocation, const std::vector<LabelT> &incoming_labels);
 
     // Returns the locations of start point and frozen points suitable for use
     // with iterate_to_fixed_point.
