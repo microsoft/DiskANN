@@ -36,7 +36,7 @@ jobs:
     - name: Ubuntu CMake Configure
       if: runner.os != 'Windows'
       run: |
-        mkdir build && cd build && cmake -DCMAKE_BUILD_TYPE=Release -DFORCE_TO_TRACK_MEMORY_IN_ALLOCATOR=True .. && ctest -C Release
+        mkdir build && cd build && cmake -DCMAKE_BUILD_TYPE=Release -DFORCE_TO_TRACK_MEMORY_IN_ALLOCATOR=True ..
 
     - name: Clang Format Check
       if: ${{ matrix.os == 'ubuntu-latest' }}
@@ -46,7 +46,7 @@ jobs:
     - name: build
       if: runner.os != 'Windows'
       run: |
-        cd build && make -j
+        cd build && make -j && ctest -C Release
 
     - name: Add VisualStudio command line tools into path
       if: runner.os == 'Windows'
