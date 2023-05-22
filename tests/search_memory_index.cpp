@@ -489,7 +489,6 @@ int main(int argc, char **argv)
         search_param.filter_label = filter_label;
         search_param.query_filter_file = query_filters_file;
         search_param.query_filter_file = query_filters_file;
-        search_param.Lvec = Lvec;
         search_param.num_threads = num_threads;
         search_param.result_path = result_path;
         search_param.query_dim = query_dim;
@@ -502,7 +501,7 @@ int main(int argc, char **argv)
         index->load(index_path_prefix.c_str(), num_threads, *(std::max_element(Lvec.begin(), Lvec.end())));
 
         // search index
-        auto res = index->search(query, K, search_param);
+        auto res = index->batch_search(query, K, Lvec, search_param);
         auto best_recall =
             print_search_results(res, gt_file, K, Lvec, show_qps_per_thread, tags, print_all_recalls, num_threads);
         return best_recall >= fail_if_recall_below ? 0 : -1;

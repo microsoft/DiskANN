@@ -6,9 +6,32 @@
 
 namespace diskann
 {
+
+struct AnyVector
+{
+    template <typename T> AnyVector(const std::vector<T> &vector) : data(std::make_shared<std::vector<T>>(vector))
+    {
+    }
+
+    template <typename T> const std::vector<T> &get() const
+    {
+        auto sharedVector = std::any_cast<std::shared_ptr<std::vector<T>>>(&data);
+        if (sharedVector)
+        {
+            return *(*sharedVector);
+        }
+
+        throw std::bad_any_cast();
+    }
+
+  private:
+    std::any data;
+};
+
 using DataType = std::any;
 using TagType = std::any;
 using LabelType = std::any;
+using TagVector = AnyVector;
 
 // Enum to store load store stratagy for data_store and graph_store.
 enum LoadStoreStrategy
@@ -104,7 +127,6 @@ struct IndexSearchParams
 {
     std::string result_path = "";
     size_t query_num, query_dim, query_aligned_dim;
-    std::vector<uint32_t> Lvec;
     std::string filter_label = "";
     std::string query_filter_file = "";
     uint32_t num_threads{20}; // or some other default val
@@ -359,11 +381,14 @@ class AbstractIndex
     virtual void load(const char *index_file, uint32_t num_threads, uint32_t search_l) = 0;
 #endif
 
-    virtual SearchResult search(const DataType &query, size_t K, IndexSearchParams &search_params) = 0;
+    virtual SearchResult batch_search(const DataType &query, size_t K, std::vector<uint32_t> &Lvec,
+                                      IndexSearchParams &search_params) = 0;
 
     virtual int insert_point(const DataType &data_point, const TagType &tag) = 0;
 
     virtual int lazy_delete(const TagType &tag) = 0;
+
+    virtual void lazy_delete(const TagVector &tags, TagVector &failed_tags) = 0;
 
     // TODO: add other methods as api promise to end user.
 };

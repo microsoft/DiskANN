@@ -124,11 +124,15 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     // Exposed with Abstract Index
     DISKANN_DLLEXPORT void build(IndexBuildParams &build_params);
 
-    DISKANN_DLLEXPORT SearchResult search(const diskann::DataType &query, size_t K, IndexSearchParams &search_params);
+    DISKANN_DLLEXPORT SearchResult batch_search(const diskann::DataType &query, size_t K, std::vector<uint32_t> &Lvec,
+                                                IndexSearchParams &search_params);
 
+    // TODO: Add indivudial search when yinli's PR to consolidate search
     DISKANN_DLLEXPORT int insert_point(const DataType &data_point, const TagType &tag);
 
     DISKANN_DLLEXPORT int lazy_delete(const TagType &tag);
+
+    DISKANN_DLLEXPORT void lazy_delete(const TagVector &tags, TagVector &failed_tags);
 
     // Filtered Support
     DISKANN_DLLEXPORT void build_filtered_index(const char *filename, const std::string &label_file,

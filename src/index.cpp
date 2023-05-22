@@ -2018,11 +2018,12 @@ void Index<T, TagT, LabelT>::build_filtered_index(const char *filename, const st
 
 // Refactored search
 template <typename T, typename TagT, typename LabelT>
-SearchResult Index<T, TagT, LabelT>::search(const diskann::DataType &q, size_t K, IndexSearchParams &search_params)
+SearchResult Index<T, TagT, LabelT>::batch_search(const diskann::DataType &q, size_t K, std::vector<uint32_t> &Lvec,
+                                                  IndexSearchParams &search_params)
 {
 
     SearchResult result;
-    result.init(search_params.Lvec.size());
+    result.init(Lvec.size());
 
     // Load query file
     /*T *query = nullptr;
@@ -2079,9 +2080,9 @@ SearchResult Index<T, TagT, LabelT>::search(const diskann::DataType &q, size_t K
     }
 
     // search for each L value
-    for (uint32_t test_id = 0; test_id < search_params.Lvec.size(); test_id++)
+    for (uint32_t test_id = 0; test_id < Lvec.size(); test_id++)
     {
-        uint64_t L = search_params.Lvec[test_id];
+        uint64_t L = Lvec[test_id];
         if (L < recall_at)
         {
             diskann::cout << "Ignoring search with L:" << L << " since it's smaller than K:" << recall_at << std::endl;
@@ -2143,7 +2144,7 @@ SearchResult Index<T, TagT, LabelT>::search(const diskann::DataType &q, size_t K
 
     std::cout << "Done searching. Now saving results " << std::endl;
     uint64_t test_id = 0;
-    for (auto L : search_params.Lvec)
+    for (auto L : Lvec)
     {
         if (L < recall_at)
         {
@@ -3028,7 +3029,22 @@ int Index<T, TagT, LabelT>::insert_point(const T *point, const TagT tag)
 
 template <typename T, typename TagT, typename LabelT> int Index<T, TagT, LabelT>::lazy_delete(const TagType &tag)
 {
-    return lazy_delete(std::any_cast<TagT>(tag));
+    try
+    {
+        return lazy_delete(std::any_cast<TagT>(tag));
+    }
+    catch (const std::bad_any_cast &e)
+    {
+        throw ANNException(std::string("Error: ") + e.what(), -1);
+    }
+}
+
+template <typename T, typename TagT, typename LabelT>
+void Index<T, TagT, LabelT>::lazy_delete(const TagVector &tags, TagVector &failed_tags)
+{
+    const auto &tags_vec = tags.get<TagT>();
+    auto failed_tags_vec = failed_tags.get<TagT>();
+    this->lazy_delete(tags_vec, failed_tags_vec);
 }
 
 template <typename T, typename TagT, typename LabelT> int Index<T, TagT, LabelT>::lazy_delete(const TagT &tag)
