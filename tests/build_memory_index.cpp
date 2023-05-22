@@ -175,6 +175,8 @@ int main(int argc, char **argv)
                           .with_num_pq_chunks(build_PQ_bytes)
                           .build();
 
+        auto yamlConfig = diskann::IndexFactory::parse_config("D:/DiskANN/x64/Release/config/index_config.yaml");
+
         // Build params for speific build from instance
         diskann::IndexWriteParameters paras = diskann::IndexWriteParametersBuilder(L, R)
                                                   .with_filter_list_size(Lf)

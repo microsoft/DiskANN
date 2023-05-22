@@ -13,6 +13,8 @@ struct AnyVector
     {
     }
 
+    // std::shard_ptr lookup -> ctor pointer aliasing
+
     template <typename T> const std::vector<T> &get() const
     {
         auto sharedVector = std::any_cast<std::shared_ptr<std::vector<T>>>(&data);
