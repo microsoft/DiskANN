@@ -9,20 +9,20 @@ While eager deletes can be supported by DiskANN, `lazy_deletes` are the preferre
 A sequence of lazy deletions must be followed by an invocation of the `consolidate_deletes` method that frees up slots in the index and edits the graph to maintain good recall.
 
 
-The program `tests/test_insert_deletes_consolidate` demonstrates this functionality. It allows the user to specify which points from the data file will be used
+The program `apps/test_insert_deletes_consolidate` demonstrates this functionality. It allows the user to specify which points from the data file will be used
 to initially build the index, which points will be deleted from the index, and which points will be inserted into the index.
 Insertions, searches and lazy deletions can be performed concurrently.
 Conslolidation of lazy deletes can be performed synchnronously or concurrently with insertions and deletions.
 When modifying the index sequentially, the user has the ability to take *snapshots*--
 that is, save the index to memory for every *m* insertions or deletions instead of only at the end of the build.
 
-The program `tests/test_streaming_scenario` simulates a scenario where the index actively maintains a sliding window of active points from a larger dataset.
+The program `apps/test_streaming_scenario` simulates a scenario where the index actively maintains a sliding window of active points from a larger dataset.
 The program starts with an index build over the first `active_window` set of points from a data file. 
 The program then simultaneously inserts newer points drawn from the file and deletes older points from the index
 in chunks of `consolidate_interval` points so that the number of active points in the index is approximately `active_window`.
 It terminates when the end of data file is reached, and the final index has `active_window + consolidate_interval` number of points.
 
-`tests/test_insert_deletes_consolidate` to try inserting, lazy deletes and consolidate_delete 
+`apps/test_insert_deletes_consolidate` to try inserting, lazy deletes and consolidate_delete 
 ---------------------------------------------------------------------------------------------
 
 The arguments are as follows:
@@ -44,7 +44,7 @@ The arguments are as follows:
 15. **--start_point_norm**: Set the starting node to a random point on a sphere of this radius. A reasonable choice is to set this to the average norm of the data set. Use when starting an index with zero points. 
 16. **--do_concurrent** (default false): whether to perform conslidate_deletes and other updates concurrently or sequentially. If concurrent is specified, half the threads are used for insertions and half the threads are used for processing deletes. Note that insertions are performed before deletions if this flag is set to false, so in this case is possible to delete more than beginning_index_size points.
 
-`tests/test_streaming_scenario` to try inserting, lazy deletes and consolidate_delete 
+`apps/test_streaming_scenario` to try inserting, lazy deletes and consolidate_delete 
 ---------------------------------------------------------------------------------------------
 
 The arguments are as follows:
@@ -65,7 +65,7 @@ The arguments are as follows:
 
 
 
-To search the generated index, use the `tests/search_memory_index` program:
+To search the generated index, use the `apps/search_memory_index` program:
 ---------------------------------------------------------------------------
 
 
@@ -76,7 +76,7 @@ The arguments are as follows:
 3. **memory_index_path**: index built above in argument (4).
 4. **T**: The number of threads used for searching. Threads run in parallel and one thread handles one query at a time. More threads will result in higher aggregate query throughput, but may lead to higher per-query latency, especially if the DRAM bandwidth is a bottleneck. So find the balance depending on throughput and latency required for your application.
 5. **query_bin**: The queries to be searched on in same binary file format as the data file (ii) above. The query file must be the same type as in argument (1).
-6. **truthset.bin**: The ground truth file for the queries in arg (7) and data file used in index construction.  The binary file must start with *n*, the number of queries (4 bytes), followed by *d*, the number of ground truth elements per query (4 bytes), followed by `n*d` entries per query representing the d closest IDs per query in integer format,  followed by `n*d` entries representing the corresponding distances (float). Total file size is `8 + 4*n*d + 4*n*d` bytes. The groundtruth file, if not available, can be calculated using the program `tests/utils/compute_groundtruth`. Use "null" if you do not have this file and if you do not want to compute recall.
+6. **truthset.bin**: The ground truth file for the queries in arg (7) and data file used in index construction.  The binary file must start with *n*, the number of queries (4 bytes), followed by *d*, the number of ground truth elements per query (4 bytes), followed by `n*d` entries per query representing the d closest IDs per query in integer format,  followed by `n*d` entries representing the corresponding distances (float). Total file size is `8 + 4*n*d + 4*n*d` bytes. The groundtruth file, if not available, can be calculated using the program `apps/utils/compute_groundtruth`. Use "null" if you do not have this file and if you do not want to compute recall.
 7. **K**: search for *K* neighbors and measure *K*-recall@*K*, meaning the intersection between the retrieved top-*K* nearest neighbors and ground truth *K* nearest neighbors.
 8. **result_output_prefix**: search results will be stored in files, one per L value (see next arg), with specified prefix, in binary format.
 9. **-L (--search_list)**: A list of search_list sizes to perform search with. Larger parameters will result in slower latencies, but higher accuracies. Must be at least the value of *K* in (7).
@@ -95,8 +95,8 @@ mkdir -p DiskANN/build/data && cd DiskANN/build/data
 wget ftp://ftp.irisa.fr/local/texmex/corpus/sift.tar.gz
 tar -xf sift.tar.gz
 cd ..
-./tests/utils/fvecs_to_bin float data/sift/sift_learn.fvecs data/sift/sift_learn.fbin
-./tests/utils/fvecs_to_bin float data/sift/sift_query.fvecs data/sift/sift_query.fbin
+./apps/utils/fvecs_to_bin float data/sift/sift_learn.fvecs data/sift/sift_learn.fbin
+./apps/utils/fvecs_to_bin float data/sift/sift_query.fvecs data/sift/sift_query.fbin
 ```
 
 The example below tests the following scenario: using a file with 100000 points, the index is incrementally constructed point by point. After the first 50000 ponts are inserted, another concurrent job deletes the first 25000 points from the index and consolidates the index (edit the graph and cleans up resources). At the same time an additional 25000 points (i.e. points 50001 to 75000) are concurrently inserted into the index. Note that the index should be built **before** calculating the ground truth, since the memory index returns the slice of the sift100K dataset that was used to build the final graph (that is, points 25001-75000 in the original index).
@@ -115,15 +115,15 @@ thr=64
 index=${index_prefix}.after-concurrent-delete-del${deletes}-${inserts}
 gt_file=data/sift/gt100_learn-conc-${deletes}-${inserts}
 
- ~/DiskANN/build/tests/test_insert_deletes_consolidate  --data_type ${type} --dist_fn l2 --data_path ${data}  --index_path_prefix ${index_prefix} -R 64 -L 300 --alpha 1.2 -T ${thr} --points_to_skip 0 --max_points_to_insert ${inserts} --beginning_index_size ${begin} --points_per_checkpoint ${pts_per_checkpoint} --checkpoints_per_snapshot 0 --points_to_delete_from_beginning ${deletes} --start_deletes_after ${deletes_after} --do_concurrent true;
+ ~/DiskANN/build/apps/test_insert_deletes_consolidate  --data_type ${type} --dist_fn l2 --data_path ${data}  --index_path_prefix ${index_prefix} -R 64 -L 300 --alpha 1.2 -T ${thr} --points_to_skip 0 --max_points_to_insert ${inserts} --beginning_index_size ${begin} --points_per_checkpoint ${pts_per_checkpoint} --checkpoints_per_snapshot 0 --points_to_delete_from_beginning ${deletes} --start_deletes_after ${deletes_after} --do_concurrent true;
 
- ~/DiskANN/build/tests/utils/compute_groundtruth --data_type ${type} --dist_fn l2 --base_file ${index}.data  --query_file ${query}  --K 100 --gt_file ${gt_file} --tags_file  ${index}.tags
+ ~/DiskANN/build/apps/utils/compute_groundtruth --data_type ${type} --dist_fn l2 --base_file ${index}.data  --query_file ${query}  --K 100 --gt_file ${gt_file} --tags_file  ${index}.tags
 
-~/DiskANN/build/tests/search_memory_index  --data_type ${type} --dist_fn l2 --index_path_prefix ${index} --result_path ${result} --query_file ${query}  --gt_file ${gt_file}  -K 10 -L 20 40 60 80 100 -T ${thr} --dynamic true --tags 1
+~/DiskANN/build/apps/search_memory_index  --data_type ${type} --dist_fn l2 --index_path_prefix ${index} --result_path ${result} --query_file ${query}  --gt_file ${gt_file}  -K 10 -L 20 40 60 80 100 -T ${thr} --dynamic true --tags 1
  ```
 
  The example below tests the following scenario: using a file with 100000 points, insert 10000 points at a time. After the first 40000
-are inserted, start deleteing the first 10000 points while inserting points 40000--50000.  Then delete points 10000--20000 while inserting
+are inserted, start deleting the first 10000 points while inserting points 40000--50000.  Then delete points 10000--20000 while inserting
 points 50000--60000 and so until the index is left with points 60000-100000.
 
 ```
@@ -140,7 +140,7 @@ cons_int=10000
 index=${index_prefix}.after-streaming-act${active}-cons${cons_int}-max${inserts}
 gt=data/sift/gt100_learn-act${active}-cons${cons_int}-max${inserts}
 
-./tests/test_streaming_scenario  --data_type ${type} --dist_fn l2 --data_path ${data}  --index_path_prefix ${index_prefix} -R 64 -L 600 --alpha 1.2 --insert_threads ${ins_thr} --consolidate_threads ${cons_thr}  --max_points_to_insert ${inserts}  --active_window ${active} --consolidate_interval ${cons_int} --start_point_norm 508;
-./tests/utils/compute_groundtruth --data_type ${type} --dist_fn l2 --base_file ${index}.data  --query_file ${query}  --K 100 --gt_file ${gt} --tags_file  ${index}.tags
-./tests/search_memory_index  --data_type ${type} --dist_fn l2 --index_path_prefix ${index} --result_path ${result} --query_file ${query}  --gt_file ${gt}  -K 10 -L 20 40 60 80 100 -T 64 --dynamic true --tags 1
+./apps/test_streaming_scenario  --data_type ${type} --dist_fn l2 --data_path ${data}  --index_path_prefix ${index_prefix} -R 64 -L 600 --alpha 1.2 --insert_threads ${ins_thr} --consolidate_threads ${cons_thr}  --max_points_to_insert ${inserts}  --active_window ${active} --consolidate_interval ${cons_int} --start_point_norm 508;
+./apps/utils/compute_groundtruth --data_type ${type} --dist_fn l2 --base_file ${index}.data  --query_file ${query}  --K 100 --gt_file ${gt} --tags_file  ${index}.tags
+./apps/search_memory_index  --data_type ${type} --dist_fn l2 --index_path_prefix ${index} --result_path ${result} --query_file ${query}  --gt_file ${gt}  -K 10 -L 20 40 60 80 100 -T 64 --dynamic true --tags 1
 ```
