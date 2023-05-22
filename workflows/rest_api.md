@@ -20,10 +20,10 @@ Follow the instructions for [building an in-memory DiskANN index](/workflows/in_
 
 ```bash
 # To start serving an in-memory index
-./tests/restapi/inmem_server --address <http://ip_addr:port> --data_type <float/int8/uint8> --data_file <data_file> --index_path_prefix <index_file> --num_threads <number of threads> --l_search <Value for L> --tags_file [tags_file]
+./apps/restapi/inmem_server --address <http://ip_addr:port> --data_type <float/int8/uint8> --data_file <data_file> --index_path_prefix <index_file> --num_threads <number of threads> --l_search <Value for L> --tags_file [tags_file]
 
 # To start serving an SSD-based index.
-./tests/restapi/ssd_server --address <http://ip_addr:port> --data_type <float/int8/uint8> --index_path_prefix <index_file_prefix> --num_nodes_to_cache <num_nodes_to_cache> --num_threads <num_threads> --tags_file [tags_file]
+./apps/restapi/ssd_server --address <http://ip_addr:port> --data_type <float/int8/uint8> --index_path_prefix <index_file_prefix> --num_nodes_to_cache <num_nodes_to_cache> --num_threads <num_threads> --tags_file [tags_file]
 ```
 The `data_type` and the `data_file` should be the same as those used in the construction of the index. The server returns the ids and distances of the closests vector in the index to the query. The ids are implicitly defined by the order of the vector in the data file. If you wish to assign a different numbering or GUID or URL to the vectors in the index, use the optional `tags_file`. This should be a file which lists a "tag" string for each vector in the index. The file should contain one string per line. The string on the line `n` is considered the tag corresponding to the vector `n` in the index (in the implicit order defined in the `data_file`).
 
