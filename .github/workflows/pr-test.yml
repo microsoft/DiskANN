@@ -80,7 +80,7 @@ jobs:
 
       # if any of the build failed do not execute workflow
     - name: check on failure
-      if: (runner.os == 'Windows' && steps.windowsbuild.outcome != 'success') || ( runner.os != 'Windows' && steps.ubuntubuild.outcome != 'success')
+      if: ${{ (runner.os == 'Windows' && steps.windowsbuild.outcome != 'success') || ( runner.os != 'Windows' && steps.ubuntubuild.outcome != 'success') }}
       run: exit 1
 
     - name: Generate 10K random float32 index vectors, 1K query vectors, in 10 dims and compute GT
