@@ -22,7 +22,7 @@ template <class T> class Allocator
     using propagate_on_container_move_assignment = std::true_type;
     using is_always_equal = std::true_type;
 
-    Allocator(std::atomic<size_t> *memory_used_in_bytes_ptr = nullptr)
+    Allocator(std::shared_ptr<std::atomic<size_t>> &memory_used_in_bytes_ptr = nullptr)
     {
         _memory_used_in_bytes_ptr = memory_used_in_bytes_ptr;
     }
@@ -36,7 +36,7 @@ template <class T> class Allocator
 
     DISKANN_DLLEXPORT void deallocate(T *ptr, std::size_t count);
 
-    std::atomic<size_t> *_memory_used_in_bytes_ptr;
+    std::shared_ptr<std::atomic<size_t>> _memory_used_in_bytes_ptr;
 
   private:
     void update_memory_usage(std::size_t count, bool is_allocation);

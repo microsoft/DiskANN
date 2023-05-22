@@ -16,8 +16,9 @@ namespace diskann
 class MemoryManager
 {
   public:
-    MemoryManager() : _memory_used_in_bytes(0)
+    MemoryManager()
     {
+        _memory_used_in_bytes_ptr = std::make_shared<std::atomic<size_t>>(0);
     }
 
     DISKANN_DLLEXPORT size_t get_memory_used_in_bytes() const;
@@ -38,7 +39,7 @@ class MemoryManager
     void insert_block(void *ptr, size_t size);
     void erase_block(void *ptr);
 
-    std::atomic<size_t> _memory_used_in_bytes;
+    std::shared_ptr<std::atomic<size_t>> _memory_used_in_bytes_ptr;
     std::mutex _mutex;
     std::unordered_map<void *, size_t> _block_to_size;
 };

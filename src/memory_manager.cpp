@@ -9,7 +9,7 @@ namespace diskann
 
 size_t MemoryManager::get_memory_used_in_bytes() const
 {
-    return _memory_used_in_bytes;
+    return *_memory_used_in_bytes_ptr;
 }
 
 void MemoryManager::alloc_aligned(void **ptr, size_t size, size_t align)
@@ -92,7 +92,7 @@ void MemoryManager::insert_block(void *ptr, size_t size)
         _block_to_size[ptr] = size;
     }
 
-    _memory_used_in_bytes += size;
+    *_memory_used_in_bytes_ptr += size;
 }
 
 void MemoryManager::erase_block(void *ptr)
@@ -123,7 +123,7 @@ void MemoryManager::erase_block(void *ptr)
         _block_to_size.erase(it);
     }
 
-    _memory_used_in_bytes -= size;
+    *_memory_used_in_bytes_ptr -= size;
 }
 
 template <typename T> T *MemoryManager::new_array(size_t array_size)
@@ -142,7 +142,7 @@ template <typename T> void MemoryManager::delete_array(T *ptr)
 
 template <typename T> Allocator<T> MemoryManager::create_allocator()
 {
-    return Allocator<T>(&_memory_used_in_bytes);
+    return Allocator<T>(_memory_used_in_bytes_ptr);
 }
 
 template DISKANN_DLLEXPORT uint8_t *MemoryManager::new_array(size_t);
