@@ -498,6 +498,10 @@ LabelT PQFlashIndex<T, LabelT>::get_converted_label(const std::string &filter_la
     {
         return _label_map[filter_label];
     }
+    if (_use_universal_label)
+    {
+        return _universal_filter_num;
+    }
     std::stringstream stream;
     stream << "Unable to find label in the Label Map";
     diskann::cerr << stream.str() << std::endl;
