@@ -29,7 +29,7 @@ authors = [
 package-dir = {"" = "python/src"}
 
 [tool.cibuildwheel]
-manylinux-x86_64-image = "manylinux_2_24"
+manylinux-x86_64-image = "manylinux_2_28"
 test-requires = ["scikit-learn~=1.2"]
 build-frontend = "build"
 skip = "pp* *musllinux*"
@@ -37,9 +37,14 @@ skip = "pp* *musllinux*"
 
 [tool.cibuildwheel.linux]
 before-all = """\
-    apt-get update && \
-    apt-get -y upgrade && \
-    apt-get install -y wget make cmake g++ libaio-dev libgoogle-perftools-dev libunwind-dev clang-format libboost-dev libboost-program-options-dev && \
-    wget https://registrationcenter-download.intel.com/akdlm/irc_nas/18487/l_BaseKit_p_2022.1.2.146.sh && \
-    sh l_BaseKit_p_2022.1.2.146.sh -a --components intel.oneapi.lin.mkl.devel --action install --eula accept -s --ignore-errors \
+    dnf makecache --refresh && \
+    dnf install -y epel-release && \
+    dnf config-manager -y --add-repo https://yum.repos.intel.com/mkl/setup/intel-mkl.repo && \
+    rpm --import https://yum.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS-2019.PUB && \
+    dnf makecache --refresh -y && \
+    dnf install -y wget make cmake gcc-c++ libaio-devel gperftools-libs libunwind-devel clang-tools-extra boost-devel boost-program-options intel-mkl-2020.4-912
+"""
+
+test-command = """\
+LD_PRELOAD="/lib/x86_64-linux-gnu/libmkl_intel_thread.so:/lib/x86_64-linux-gnu/libmkl_intel_ilp64.so:/lib/x86_64-linux-gnu/libmkl_core.so:/lib/x86_64-linux-gnu/libiomp5.so:/lib/x86_64-linux-gnu/libmkl_avx2.so:/lib/x86_64-linux-gnu/libmkl_def.so" python -m unittest discover python/tests
 """

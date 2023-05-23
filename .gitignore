@@ -357,6 +357,7 @@ MigrationBackup/
 cscope*
 
 build/
+!.github/actions/build
 
 # jetbrains specific stuff
 .idea/
@@ -371,3 +372,5 @@ wheelhouse/*
 dist/*
 venv*/**
 *.swp
+
+gperftools
