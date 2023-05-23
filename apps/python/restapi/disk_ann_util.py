@@ -20,7 +20,7 @@ def output_vectors(
     # there is probably a clever way to have numpy write out C++ friendly floats, so feel free to remove this in
     # favor of something more sane later
     vectors_as_bin_path = os.path.join(temporary_file_path, "vectors.bin")
-    tsv_to_bin_path = os.path.join(diskann_build_path, "tests", "utils", "tsv_to_bin")
+    tsv_to_bin_path = os.path.join(diskann_build_path, "apps", "utils", "tsv_to_bin")
 
     number_of_points, dimensions = vectors.shape
     args = [
@@ -45,7 +45,7 @@ def build_ssd_index(
 ):
     vectors_as_bin_path = output_vectors(diskann_build_path, temporary_file_path, vectors, timeout=per_process_timeout)
 
-    ssd_builder_path = os.path.join(diskann_build_path, "tests", "build_disk_index")
+    ssd_builder_path = os.path.join(diskann_build_path, "apps", "build_disk_index")
     args = [
         ssd_builder_path,
         "--data_type", "float",

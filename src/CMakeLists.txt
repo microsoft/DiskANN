@@ -20,4 +20,7 @@ else()
     add_library(${PROJECT_NAME} ${CPP_SOURCES})
     add_library(${PROJECT_NAME}_s STATIC ${CPP_SOURCES})
 endif()
-install()
+
+if (NOT MSVC)
+    install(TARGETS ${PROJECT_NAME} LIBRARY)
+endif()

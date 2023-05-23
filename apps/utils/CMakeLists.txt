@@ -77,3 +77,34 @@ target_link_libraries(generate_synthetic_labels ${PROJECT_NAME} Boost::program_o
 
 add_executable(stats_label_data stats_label_data.cpp)
 target_link_libraries(stats_label_data ${PROJECT_NAME} Boost::program_options)
+
+if (NOT MSVC)
+    include(GNUInstallDirs)
+    install(TARGETS fvecs_to_bin
+            fvecs_to_bvecs
+            rand_data_gen
+            float_bin_to_int8
+            ivecs_to_bin
+            count_bfs_levels
+            tsv_to_bin
+            bin_to_tsv
+            int8_to_float
+            int8_to_float_scale
+            uint8_to_float
+            uint32_to_uint8
+            vector_analysis
+            gen_random_slice
+            simulate_aggregate_recall
+            calculate_recall
+            compute_groundtruth
+            compute_groundtruth_for_filters
+            generate_pq
+            partition_data
+            partition_with_ram_budget
+            merge_shards
+            create_disk_layout
+            generate_synthetic_labels
+            stats_label_data
+            RUNTIME
+    )
+endif()
