@@ -36,7 +36,7 @@ YamlNode ParseYaml(const std::string &filename)
         while (std::getline(file, line))
         {
             int indentLevel = 0;
-            while (indentLevel < line.size() && line[indentLevel] == ' ')
+            while (indentLevel < (int)(line.size()) && line[indentLevel] == ' ')
             {
                 indentLevel++;
             }
