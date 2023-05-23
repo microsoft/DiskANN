@@ -35,6 +35,7 @@ template <class T> class Allocator
     Allocator &operator=(const Allocator &a)
     {
         _memory_used_in_bytes_ptr = a._memory_used_in_bytes_ptr;
+        return *this;
     }
 
     DISKANN_DLLEXPORT T *allocate(std::size_t count);
