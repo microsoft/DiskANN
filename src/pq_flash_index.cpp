@@ -259,6 +259,7 @@ void PQFlashIndex<T, LabelT>::generate_cache_list_from_sample_queries(std::strin
               });
     node_list.clear();
     node_list.shrink_to_fit();
+    num_nodes_to_cache = std::min(num_nodes_to_cache, this->num_points);
     node_list.reserve(num_nodes_to_cache);
     for (uint64_t i = 0; i < num_nodes_to_cache; i++)
     {
@@ -497,6 +498,10 @@ LabelT PQFlashIndex<T, LabelT>::get_converted_label(const std::string &filter_la
     if (_label_map.find(filter_label) != _label_map.end())
     {
         return _label_map[filter_label];
+    }
+    if (_use_universal_label)
+    {
+        return _universal_filter_num;
     }
     std::stringstream stream;
     stream << "Unable to find label in the Label Map";
