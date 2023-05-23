@@ -9,7 +9,7 @@ class IndexFactory
   public:
     DISKANN_DLLEXPORT explicit IndexFactory(IndexConfig &config);
     DISKANN_DLLEXPORT std::shared_ptr<AbstractIndex> instance();
-    DISKANN_DLLEXPORT static IndexConfig parse_config(const std::string &config_path);
+    DISKANN_DLLEXPORT static void parse_config(const std::string &config_path);
 
   private:
     void checkConfig();

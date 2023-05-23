@@ -11,16 +11,10 @@ IndexFactory::IndexFactory(IndexConfig &config) : _config(config)
 
 // TODO: Parse the yml config to IndexConfig object
 
-IndexConfig IndexFactory::parse_config(const std::string &config_path)
+void IndexFactory::parse_config(const std::string &config_path)
 {
     if (!file_exists(config_path))
         throw ANNException("Unable to find config file: " + config_path, -1, __FUNCSIG__, __FILE__, __LINE__);
-    // incomplete implemenattion
-    YamlNode rootNode = ParseYaml(config_path);
-
-    std::cout << "use_opq" << rootNode.mapValue["index"].mapValue["use_opq"].value << std::endl;
-    // parse from yml config to IndexConfig object
-    return diskann::IndexConfigBuilder().build();
 }
 
 std::shared_ptr<AbstractIndex> IndexFactory::instance()
