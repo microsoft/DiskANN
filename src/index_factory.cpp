@@ -15,19 +15,10 @@ IndexConfig IndexFactory::parse_config(const std::string &config_path)
 {
     if (!file_exists(config_path))
         throw ANNException("Unable to find config file: " + config_path, -1, __FUNCSIG__, __FILE__, __LINE__);
-    
-    auto yp = YAMLParser(config_path);
-    yp.parse();
-    auto node = yp.getRootNode();
-    try
-    {
-        std::string value = node.get("index").get("use_opq").value();
-        std::cout << "Value for key hierarchy \"index.use_opq\": " << value << std::endl;
-    }
-    catch (const std::runtime_error &e)
-    {
-        std::cout << e.what() << std::endl;
-    }
+    // incomplete implemenattion
+    YamlNode rootNode = ParseYaml(config_path);
+
+    std::cout << "use_opq" << rootNode.mapValue["index"].mapValue["use_opq"].value << std::endl;
     // parse from yml config to IndexConfig object
     return diskann::IndexConfigBuilder().build();
 }

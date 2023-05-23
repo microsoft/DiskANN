@@ -3043,7 +3043,7 @@ template <typename T, typename TagT, typename LabelT>
 void Index<T, TagT, LabelT>::lazy_delete(const TagVector &tags, TagVector &failed_tags)
 {
     const auto &tags_vec = tags.get<TagT>();
-    auto failed_tags_vec = failed_tags.get<TagT>();
+    auto &failed_tags_vec = failed_tags.get<TagT>();
     this->lazy_delete(tags_vec, failed_tags_vec);
 }
 
@@ -3100,6 +3100,13 @@ void Index<T, TagT, LabelT>::lazy_delete(const std::vector<TagT> &tags, std::vec
 template <typename T, typename TagT, typename LabelT> bool Index<T, TagT, LabelT>::is_index_saved()
 {
     return _is_saved;
+}
+
+template <typename T, typename TagT, typename LabelT>
+void Index<T, TagT, LabelT>::get_active_tags(TagRobinSet &active_tags)
+{
+    auto &current_tags = active_tags.get<TagT>();
+    this->get_active_tags(current_tags);
 }
 
 template <typename T, typename TagT, typename LabelT>
