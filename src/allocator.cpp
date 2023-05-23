@@ -7,9 +7,9 @@
 namespace diskann
 {
 
-template <class T> T *Allocator<T>::allocate(std::size_t count, const T *hint)
+template <class T> T *Allocator<T>::allocate(std::size_t count)
 {
-    auto ret = _allocator.allocate(count, hint);
+    auto ret = _allocator.allocate(count);
     update_memory_usage(count, /*is_allocation*/ true);
     return ret;
 }

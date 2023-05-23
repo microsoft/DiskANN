@@ -32,7 +32,12 @@ template <class T> class Allocator
         _memory_used_in_bytes_ptr = a._memory_used_in_bytes_ptr;
     }
 
-    DISKANN_DLLEXPORT T *allocate(std::size_t count, const T *hint = nullptr);
+    Allocator &operator=(const Allocator &a)
+    {
+        _memory_used_in_bytes_ptr = a._memory_used_in_bytes_ptr;
+    }
+
+    DISKANN_DLLEXPORT T *allocate(std::size_t count);
 
     DISKANN_DLLEXPORT void deallocate(T *ptr, std::size_t count);
 
