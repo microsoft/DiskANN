@@ -44,7 +44,7 @@ void WindowsAlignedFileReader::register_thread()
     if (ctx.fhandle == INVALID_HANDLE_VALUE)
     {
         std::stringstream ss;
-        ss << m_filename.c_str();
+        ss << std::string(m_filename.begin(), m_filename.end());
         diskann::cout << "Error opening " << ss.str() << " -- error=" << GetLastError() << std::endl;
     }
 
